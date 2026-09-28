@@ -19,8 +19,8 @@ import { CONFORMANCE_DIR } from "../config.mjs";
 import { resolveFireemuBinary } from "../evidence.mjs";
 import { limitedFetch } from "./hosting.mjs";
 import { discoveryDocument, jwksDocument } from "./idp.mjs";
-import { makeCertificate, prepareKeys } from "./run.mjs";
-import { LIMITS, recordCampaign, scanFixture } from "./record.mjs";
+import { makeCertificate, prepareKeys, prepareSamlSigners } from "./run.mjs";
+import { profileOf, recordCampaign, scanFixture } from "./record.mjs";
 
 const RUN_DIR = join(CONFORMANCE_DIR, ".runs", "auth-federation");
 const HOSTING = "firebasehosting.googleapis.com";
@@ -134,8 +134,23 @@ export function rehearsalFetch(origin, hosting) {
 /** Inside `fireemu exec`: the recording against the local emulator and the fake. */
 async function sessionRehearsal() {
   const prepared = JSON.parse(await readFile(process.env.REHEARSAL_IN, "utf8"));
+  const profile = profileOf(prepared.packet);
   const { privateKey, jwk } = prepared.keys.run;
   const { createPrivateKey } = await import("node:crypto");
+  const signers = prepared.saml && {
+    certificates: prepared.saml.certificates,
+    runCertificates: prepared.saml.runCertificates,
+    keys: {
+      run: {
+        privateKey: createPrivateKey(prepared.saml.keyPems.run),
+        certificatePem: prepared.saml.certificates["saml-a"],
+      },
+      expired: {
+        privateKey: createPrivateKey(prepared.saml.keyPems.expired),
+        certificatePem: prepared.saml.certificates["saml-expired"],
+      },
+    },
+  };
   const keys = {
     run: { privateKey: createPrivateKey(privateKey), jwk },
     other: {
@@ -148,7 +163,7 @@ async function sessionRehearsal() {
     `http://${process.env.FIREBASE_AUTH_EMULATOR_HOST}`,
     hosting,
   );
-  const { call, used } = limitedFetch(fetchImpl, { run: prepared.run, limits: LIMITS });
+  const { call, used } = limitedFetch(fetchImpl, { run: prepared.run, limits: profile.limits });
   const ledger = [];
   let fixture;
   const entry = await recordCampaign({
@@ -156,6 +171,8 @@ async function sessionRehearsal() {
     run: prepared.run,
     keys,
     certificatePem: prepared.certificatePem,
+    signers,
+    profile,
     meta: {
       adminToken: "owner",
       apiKey: "fake-api-key",
@@ -169,7 +186,7 @@ async function sessionRehearsal() {
     writeFixture: async (built) => {
       const text = `${JSON.stringify(built, null, 2)}\n`;
       // Only local fakes are in it: kept even when the scan refuses it, to see why.
-      await writeFile(join(RUN_DIR, "rehearsal-fixture.json"), text);
+      await writeFile(join(RUN_DIR, `rehearsal-${profile.packet}-fixture.json`), text);
       scanFixture(text, ["fake-api-key", "123456789012"]);
       fixture = built;
     },
@@ -190,26 +207,35 @@ async function sessionRehearsal() {
   );
 }
 
-async function rehearse() {
+async function rehearse(packet = "record-oidc") {
+  profileOf(packet);
   await mkdir(RUN_DIR, { recursive: true, mode: 0o700 });
   const run = createHash("sha256").update(String(Date.now())).digest("hex").slice(0, 6);
   const keys = prepareKeys();
   const secretDir = await mkdtemp(join(tmpdir(), "fireemu-rehearsal-"));
   try {
-    const certificatePem = await makeCertificate(secretDir, "saml-a");
+    const saml = packet === "record-saml" ? await prepareSamlSigners(secretDir) : undefined;
+    const certificatePem = saml ? undefined : await makeCertificate(secretDir, "saml-a");
     const issuer = `https://${SANDBOX_PROJECT}--fed-${run}-rehearse.web.app/oidc/${run}`;
     const exportKey = (key) => ({
       privateKey: key.privateKey.export({ format: "pem", type: "pkcs8" }),
       jwk: key.jwk,
     });
     const inPath = join(secretDir, "in.json");
-    const outPath = join(RUN_DIR, "rehearsal.json");
+    const outPath = join(RUN_DIR, `rehearsal-${packet}.json`);
     const configPath = join(secretDir, "fireemu.config.json");
     await writeFile(
       inPath,
       JSON.stringify({
         run,
+        packet,
         certificatePem,
+        // Private material stays in this temporary directory (mode 600), removed after.
+        saml: saml && {
+          keyPems: saml.keyPems,
+          certificates: saml.certificates,
+          runCertificates: saml.runCertificates,
+        },
         keys: { run: exportKey(keys.run), other: exportKey(keys.other) },
       }),
       { mode: 0o600 },
@@ -296,5 +322,6 @@ async function rehearse() {
 
 const mode = process.argv[1] === fileURLToPath(import.meta.url) ? process.argv[2] : undefined;
 if (mode === "session") await sessionRehearsal();
+else if (mode === "record-saml") await rehearse("record-saml");
 else if (mode === undefined && process.argv[1] === fileURLToPath(import.meta.url)) await rehearse();
 else if (mode !== undefined) throw new Error(`unknown mode ${mode}`);

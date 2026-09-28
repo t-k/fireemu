@@ -247,12 +247,24 @@ export function createInterpreter(program, deps) {
     // Every command carries its own id, so a result row can name its op.
     fields.id = step.commandId ?? `${step.op}-${client.sent}`;
     client.ops.set(fields.id, step.op);
-    const pending = client.sdk.send(step.op, fields);
+    if (step.op === "transaction") client.transactions.set(step.name, fields.id);
+    const isCapped = () => client.sdk.events.some((e) => e.event === "wire-refused");
+    // A client ended by its cap answers every later command as failed; its rows are marked.
+    const pending = client.sdk.send(step.op, fields).catch((error) => {
+      if (!isCapped()) throw error;
+      return { event: "result", id: fields.id, ok: false, code: "client-ended-by-cap" };
+    });
     note(step.client, { op: step.op });
-    if (step.await === false) return;
+    if (step.await === false) {
+      pending.catch(() => {});
+      return;
+    }
     const result = await pending;
     note(step.client, { result: step.op, ok: result.ok, code: result.code ?? null });
-    if (!result.ok && (step.op === "signIn" || step.op === "listen"))
+    // A client that cannot sign in or listen makes the rest of its scenario meaningless, unless
+    // its request cap refused something: then its rows already show the harness's limit, and the
+    // run goes on.
+    if (!result.ok && (step.op === "signIn" || step.op === "listen") && !isCapped())
       throw new Error(`${step.client} ${step.op} failed: ${result.code ?? result.error}`);
   }
 
@@ -367,7 +379,13 @@ export function createInterpreter(program, deps) {
     stream: openStream,
     async client(step) {
       const sdk = spawnClient(step.transport, { ...sdkConfig, wireCap: step.wireCap });
-      clients.set(step.client, { sdk, transport: step.transport, ops: new Map(), sent: 0 });
+      clients.set(step.client, {
+        sdk,
+        transport: step.transport,
+        ops: new Map(),
+        transactions: new Map(),
+        sent: 0,
+      });
       await sdk.ready();
       note(step.client, { spawned: step.transport });
     },
@@ -377,11 +395,23 @@ export function createInterpreter(program, deps) {
     },
     async await(step) {
       const client = clients.get(step.client);
+      // A transaction that fails before its reads (its request refused, say) never reports
+      // them: its own result ends the wait instead, and the steps that follow record it.
+      const transaction = client.transactions.get(step.name);
       const match =
         step.event === "result"
           ? (e) => e.event === "result" && e.id === step.commandId
-          : (e) => e.event === step.event && e.name === step.name;
-      const event = await client.sdk.waitFor(match);
+          : (e) =>
+              (e.event === step.event && e.name === step.name) ||
+              (e.event === "result" && e.id === transaction && !e.ok);
+      let event;
+      try {
+        event = await client.sdk.waitFor(match);
+      } catch (error) {
+        // A client ended by its cap never answers: its rows are marked, the run goes on.
+        if (!client.sdk.events.some((e) => e.event === "wire-refused")) throw error;
+        event = { event: "result", id: step.commandId, ok: false, code: "client-ended-by-cap" };
+      }
       note(step.client, { awaited: step.event, ok: event.ok ?? null });
       if (step.id) {
         const mark = marks.get(step.since) ?? takeMark();

@@ -26,7 +26,13 @@ installWireGuard(
         path,
         principal: bearer === null ? null : (tokenOwner.get(bearer) ?? "unknown"),
       }),
-    // A refused request marks the rows of this client as the harness's limit, not behavior.
-    onRefuse: ({ host, path, reason }) => emit({ event: "wire-refused", host, path, reason }),
+    // A refused request marks the rows of this client as the harness's limit, not behavior, and
+    // ends the client: its SDK would otherwise retry at once, without end.
+    onRefuse: ({ host, path, reason }) => {
+      process.stdout.write(
+        `${JSON.stringify({ event: "wire-refused", host, path, reason })}\n`,
+        () => process.exit(3),
+      );
+    },
   }),
 );

@@ -25,19 +25,31 @@ export const bearerHash = (value) => {
 
 /**
  * A request ledger: `admit(host, path, authorization)` refuses a host outside `hosts` or a request
- * past `cap`, and records the rest. `onRecord` sees each record as it is made, `onRefuse` each
- * refusal (host, path and reason, never the bearer).
+ * past `cap`, and records the rest. The first refusal closes the ledger: every later request and
+ * connection is refused at once, and `onRefuse` hears only that first one (host, path and reason,
+ * never the bearer). An SDK retries a refused request immediately, so a ledger that stayed open
+ * would let it open connections without end.
  */
 export function createWireLedger({ hosts, cap, onRecord = () => {}, onRefuse = () => {} }) {
   const allowed = new Set(hosts);
   const records = [];
+  let closed = false;
   const refuse = (host, path, reason) => {
-    onRefuse({ host, path, reason });
+    if (!closed) {
+      closed = true;
+      onRefuse({ host, path, reason });
+    }
     throw new Error(`wire: ${reason}`);
   };
   return {
     records,
+    closed: () => closed,
+    /** Refuses a new connection once the ledger is closed. */
+    connect(host) {
+      if (closed) refuse(host, "", "the client is closed after a refused request");
+    },
     admit(host, path, authorization) {
+      if (closed) refuse(host, path, "the client is closed after a refused request");
       if (!allowed.has(host)) refuse(host, path, `${host} is not an allowed host`);
       if (records.length >= cap) refuse(host, path, `request cap ${cap} reached`);
       const record = { n: records.length + 1, host, path, bearer: bearerHash(authorization) };
@@ -66,6 +78,8 @@ export function installWireGuard(ledger, { fetchImpl = globalThis.fetch } = {}) 
   const originalConnect = http2.connect;
   http2.connect = function connect(authority, ...rest) {
     const host = hostOf(String(authority));
+    // No connection is opened for a client whose ledger is closed.
+    ledger.connect(host);
     const session = originalConnect.call(this, authority, ...rest);
     const request = session.request.bind(session);
     session.request = (headers = {}, options) => {

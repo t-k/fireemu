@@ -40,6 +40,8 @@ export function spawnSdk(
       deliver({ event: "unparsable-output", length: line.length });
     }
   });
+  // A driver that ended (a refused request ends it) must not crash the parent on a late write.
+  child.stdin.on("error", () => {});
   const stderr = [];
   child.stderr.on("data", (chunk) => stderr.push(String(chunk)));
   child.on("exit", (code, signal) => {
@@ -71,6 +73,7 @@ export function spawnSdk(
   /** Sends a command and resolves with its result event (never rejects on an SDK error). */
   function send(op, fields = {}, options) {
     next += 1;
+    if (exited) return Promise.reject(new Error("sdk driver has exited"));
     const id = fields.id ?? `c${next}`;
     const from = events.length;
     child.stdin.write(`${JSON.stringify({ ...fields, id, op })}\n`);

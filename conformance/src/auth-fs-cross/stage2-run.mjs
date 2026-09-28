@@ -11,7 +11,8 @@
 //   node src/auth-fs-cross/stage2-run.mjs check [--rows <fireemu.json>]
 //                                                         run the window against fireemu (or
 //                                                         read a saved local run) and compare
-//   node src/auth-fs-cross/stage2-run.mjs local [--smoke [--with-browser] [--skip-clients a,b]]
+//   node src/auth-fs-cross/stage2-run.mjs local [--smoke [--with-browser] [--skip-clients a,b]
+//                                                         [--cap-client name=n,...]]
 //                                                         run the window against fireemu only
 //
 // A local run keeps production's timeline in real time (decision D3): about 65 minutes. The
@@ -59,7 +60,7 @@ export async function checkedProgram() {
  * waits for the tokens' expiry, and none of the clients named in `skip`. Only for trying the
  * rest locally; its rows are never compared.
  */
-export function smokeProgram(program, skip = [], { browser = false } = {}) {
+export function smokeProgram(program, skip = [], { browser = false, caps = {} } = {}) {
   const dropped = new Set([
     ...program.steps
       .filter((s) => !browser && s.do === "client" && s.transport === "browser")
@@ -73,6 +74,9 @@ export function smokeProgram(program, skip = [], { browser = false } = {}) {
     if (dropped.has(step.client)) continue;
     if (!browser && step.id?.startsWith("b-")) continue;
     const trimmed = { ...step };
+    // A lowered cap shows, in a real run, how rows of a client refused by its cap are marked.
+    if (step.do === "client" && caps[step.client] !== undefined)
+      trimmed.wireCap = caps[step.client];
     if (step.observe) trimmed.observe = step.observe.filter(kept);
     if (step.clients) trimmed.clients = step.clients.filter(kept);
     const watches = (trimmed.observe?.length ?? 0) + (trimmed.clients?.length ?? 0);
@@ -318,8 +322,21 @@ async function main([command, ...args]) {
       if (skip.length && !smoke) throw new Error("--skip-clients is a smoke option");
       console.log(JSON.stringify({ smoke, skip, cost }));
       const browser = args.includes("--with-browser");
+      const capAt = args.indexOf("--cap-client");
+      const caps = Object.fromEntries(
+        (capAt >= 0
+          ? String(args[capAt + 1] ?? "")
+              .split(",")
+              .filter(Boolean)
+          : []
+        ).map((pair) => {
+          const [name, value] = pair.split("=");
+          return [name, Number(value)];
+        }),
+      );
+      if (Object.keys(caps).length && !smoke) throw new Error("--cap-client is a smoke option");
       if (browser && !smoke) throw new Error("--with-browser is a smoke option");
-      const out = await runLocal(smoke ? smokeProgram(program, skip, { browser }) : program);
+      const out = await runLocal(smoke ? smokeProgram(program, skip, { browser, caps }) : program);
       const path = join(RUN_DIR, "rows.json");
       await writeFile(path, JSON.stringify(out, null, 2));
       console.log(JSON.stringify({ rows: Object.keys(out.rows ?? {}).length, path }));

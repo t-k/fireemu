@@ -178,7 +178,10 @@ export async function browserKeyProbe(sdkConfig, { spawn = spawnSdk } = {}) {
   );
   try {
     await sdk.ready();
-    const result = await sdk.send("probeKey", {});
+    // A driver ended by a refused request never answers; its events say why.
+    const result = await sdk
+      .send("probeKey", {})
+      .catch(() => ({ ok: false, code: "driver-exited" }));
     // Any request the page tried outside the allowed hosts, or any page or driver error, would
     // mark every browser row of the window as the harness's limit: the run stops here instead.
     const trouble = sdk.events.find((e) =>

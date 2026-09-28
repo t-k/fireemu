@@ -72,7 +72,14 @@ const FILES = {
 async function main() {
   const config = JSON.parse(process.env.AFC_SDK_CONFIG);
   const tokenOwner = new Map();
+  // Replaced once the browser is up; before that there is nothing to close but the process.
+  let close = async (code) => process.exit(code);
   const ledger = createWireLedger({
+    // The first refusal is reported once, then the client ends: a page would retry at once.
+    onRefuse: ({ host, path, reason }) => {
+      emit({ event: "wire-refused", host, path, reason });
+      setImmediate(() => close(3));
+    },
     hosts: allowedHosts(config),
     cap: config.wireCap ?? 100,
     onRecord: ({ n, host, path, bearer }) =>
@@ -101,15 +108,15 @@ async function main() {
   const context = await browser.newContext();
   const page = await context.newPage();
   let closing = false;
-  const close = async () => {
+  close = async (code = 0) => {
     if (closing) return;
     closing = true;
     await browser.close().catch(() => {});
     server.close();
-    process.exit(0);
+    process.exit(code);
   };
-  process.stdin.on("close", close);
-  process.on("SIGTERM", close);
+  process.stdin.on("close", () => close(0));
+  process.on("SIGTERM", () => close(0));
 
   const served = new Set();
   await page.route("**/*", async (route) => {
@@ -119,13 +126,12 @@ async function main() {
     if (url.startsWith(GSTATIC)) {
       const file = url.slice(GSTATIC.length);
       if (!BUNDLES.includes(file)) {
-        emit({
-          event: "wire-refused",
-          host: "www.gstatic.com",
-          path: `/${file}`,
-          reason: "not a pinned bundle",
-        });
-        return route.abort("blockedbyclient");
+        // Not an allowed host of the ledger: refused, reported and the client ends.
+        try {
+          ledger.admit("www.gstatic.com", `/${file}`);
+        } catch {
+          return route.abort("blockedbyclient");
+        }
       }
       const body = readFileSync(join(FIREBASE, file));
       if (!served.has(file)) {
@@ -143,13 +149,8 @@ async function main() {
         parsed.pathname,
         headers.authorization ?? webChannelBearer(url, body) ?? undefined,
       );
-    } catch (error) {
-      emit({
-        event: "wire-refused",
-        host: parsed.host,
-        path: parsed.pathname,
-        reason: error.message,
-      });
+    } catch {
+      // The ledger reported the first refusal and ends the client.
       return route.abort("blockedbyclient");
     }
     return route.continue();
@@ -158,7 +159,7 @@ async function main() {
     tokenOwner.set(hash, uid);
   });
   await page.exposeFunction("afcEmit", (event) => {
-    if (event?.event === "page-closed") return close();
+    if (event?.event === "page-closed") return close(0);
     return emit(event);
   });
   await page.addInitScript((value) => {

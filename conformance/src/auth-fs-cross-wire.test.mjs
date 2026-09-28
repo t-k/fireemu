@@ -85,7 +85,7 @@ test("every HTTP/2 request goes through the ledger with its bearer hashed", asyn
   ]);
 });
 
-test("each refusal is reported with its host, path and reason, never its bearer", () => {
+test("the first refusal is reported once and closes the ledger to every later request", () => {
   const refused = [];
   const ledger = createWireLedger({
     hosts: ["a.example"],
@@ -93,14 +93,23 @@ test("each refusal is reported with its host, path and reason, never its bearer"
     onRefuse: (r) => refused.push(r),
   });
   ledger.admit("a.example", "/one", "Bearer SECRET");
+  assert.equal(ledger.closed(), false);
+  ledger.connect("a.example");
   assert.throws(() => ledger.admit("a.example", "/two", "Bearer SECRET"), /request cap 1 reached/);
-  assert.throws(
-    () => ledger.admit("b.example", "/three", "Bearer SECRET"),
-    /b.example is not an allowed host/,
-  );
-  assert.deepEqual(refused, [
-    { host: "a.example", path: "/two", reason: "request cap 1 reached" },
-    { host: "b.example", path: "/three", reason: "b.example is not an allowed host" },
-  ]);
+  assert.equal(ledger.closed(), true);
+  // Every later request and connection is refused at once, and not reported again.
+  assert.throws(() => ledger.admit("a.example", "/three"), /client is closed/);
+  assert.throws(() => ledger.connect("a.example"), /client is closed/);
+  assert.deepEqual(refused, [{ host: "a.example", path: "/two", reason: "request cap 1 reached" }]);
+  assert.equal(JSON.stringify(refused).includes("SECRET"), false);
   assert.equal(ledger.records.length, 1);
+  // A host outside the list closes it the same way.
+  const other = createWireLedger({
+    hosts: ["a.example"],
+    cap: 9,
+    onRefuse: (r) => refused.push(r),
+  });
+  assert.throws(() => other.admit("b.example", "/x"), /b.example is not an allowed host/);
+  assert.throws(() => other.admit("a.example", "/y"), /client is closed/);
+  assert.equal(refused.length, 2);
 });

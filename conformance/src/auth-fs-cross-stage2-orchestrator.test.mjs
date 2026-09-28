@@ -745,3 +745,151 @@ test("an owner's read of a client's writes is marked when that client was capped
   assert.equal("capped" in rows.before, false);
   assert.deepEqual(rows.after.capped, ["p"]);
 });
+
+test("a failed sign-in stops the run, unless the client's cap refused something before", async () => {
+  const failing = () => {
+    const client = fakeClient({ hold: ["signIn"] });
+    const send = client.send.bind(client);
+    client.send = (op, fields) => {
+      const pending = send(op, fields);
+      if (op === "signIn")
+        client.deliver({ event: "result", id: fields.id, ok: false, code: "wire" });
+      return pending;
+    };
+    return client;
+  };
+  const program = {
+    steps: [
+      { do: "client", client: "c", transport: "node-sdk" },
+      { do: "sdk", client: "c", op: "signIn", as: "a" },
+      { do: "server", id: "s", condition: "X", client: "c", docs: ["afc2-pending/x"] },
+    ],
+  };
+  const run = (client) =>
+    createInterpreter(program, {
+      session: fakeSession({ principals: { a: { uid: "uid-a" } } }),
+      ctx,
+      spawnClient: () => client,
+      openListen: () => {},
+      sdkConfig: {},
+    }).run();
+  await assert.rejects(run(failing()), /c signIn failed: wire/);
+  const capped = failing();
+  capped.deliver({ event: "wire-refused", host: "h", path: "/p", reason: "request cap 2 reached" });
+  const rows = await run(capped);
+  assert.deepEqual(rows.s.capped, ["c"]);
+});
+
+test("a transaction that fails before its reads ends the wait for them, and its row records it", async () => {
+  const client = fakeClient({ hold: ["transaction"] });
+  const session = fakeSession({ principals: { alice: { uid: "uid-alice" } } });
+  const program = {
+    steps: [
+      { do: "client", client: "c", transport: "node-sdk" },
+      {
+        do: "sdk",
+        client: "c",
+        op: "transaction",
+        await: false,
+        mark: "t",
+        commandId: "tx-1",
+        name: "t1",
+        reads: ["afc2-tx/a"],
+        write: { path: "afc2-tx/a", data: {} },
+      },
+      { do: "await", client: "c", event: "transaction-read", name: "t1" },
+      { do: "sdk", client: "c", op: "continueTransaction", name: "t1" },
+      {
+        do: "await",
+        id: "tx/result",
+        condition: "X",
+        client: "c",
+        event: "result",
+        commandId: "tx-1",
+        since: "t",
+      },
+    ],
+  };
+  const interpreter = createInterpreter(program, {
+    session,
+    ctx,
+    spawnClient: () => client,
+    openListen: () => {},
+    sdkConfig: {},
+  });
+  const running = interpreter.run();
+  await new Promise((r) => setImmediate(r));
+  client.deliver({ event: "result", id: "tx-1", ok: false, code: "unavailable", attempts: 1 });
+  const rows = await running;
+  assert.deepEqual(rows["tx/result"].result, {
+    kind: "result",
+    op: "transaction",
+    ok: false,
+    code: "unavailable",
+    attempts: 1,
+  });
+});
+
+test("a client ended by its cap answers later commands as failed, and the run goes on", async () => {
+  const client = fakeClient({ hold: ["transaction"] });
+  const session = fakeSession({ principals: { a: { uid: "uid-a" } } });
+  const program = {
+    steps: [
+      { do: "client", client: "c", transport: "node-sdk" },
+      { do: "sdk", client: "c", op: "signIn", as: "a" },
+      {
+        do: "sdk",
+        client: "c",
+        op: "transaction",
+        await: false,
+        mark: "t",
+        commandId: "tx-1",
+        name: "t1",
+        reads: ["afc2-tx/a"],
+        write: { path: "afc2-tx/a", data: {} },
+      },
+      { do: "await", client: "c", event: "transaction-read", name: "t1" },
+      { do: "sdk", client: "c", op: "signIn", as: "a" },
+      {
+        do: "await",
+        id: "tx/result",
+        condition: "X",
+        client: "c",
+        event: "result",
+        commandId: "tx-1",
+        since: "t",
+      },
+      { do: "server", id: "s", condition: "X", client: "c", docs: ["afc2-tx/a"] },
+    ],
+  };
+  // After the first sign-in, the cap refuses a request and the driver ends.
+  const send = client.send.bind(client);
+  let sends = 0;
+  client.send = (op, fields) => {
+    sends += 1;
+    if (sends === 2) {
+      client.deliver({
+        event: "wire-refused",
+        host: "h",
+        path: "/p",
+        reason: "request cap 3 reached",
+      });
+      client.exited = true;
+    }
+    if (client.exited) return Promise.reject(new Error("sdk driver has exited"));
+    return send(op, fields);
+  };
+  const waitFor = client.waitFor.bind(client);
+  client.waitFor = (match) =>
+    client.exited ? Promise.reject(new Error("sdk driver has exited")) : waitFor(match);
+  const rows = await createInterpreter(program, {
+    session,
+    ctx,
+    spawnClient: () => client,
+    openListen: () => {},
+    sdkConfig: {},
+  }).run();
+  assert.deepEqual(rows["tx/result"].result.code, "client-ended-by-cap");
+  assert.deepEqual(rows["tx/result"].capped, ["c"]);
+  assert.deepEqual(rows.s.capped, ["c"]);
+});

@@ -128,7 +128,11 @@ test("caller mutation after validation cannot change nested claims or wire exten
 
 test("wire envelope extensions and non-callable toJSON data survive materialization", () => {
   const raw = JSON.parse('{"userRecord":{"customClaims":{"__proto__":{"role":"value"},"toJSON":"data"},"updateMask":"customClaims"},"extra":true}');
-  assert.deepEqual(encode(result(raw)), raw);
+  // The runner adds the claims' own JSON.stringify text (blocking-response.mjs).
+  assert.deepEqual(encode(result(raw)), {
+    ...raw,
+    fireemuCustomClaimsText: JSON.stringify(raw.userRecord.customClaims),
+  });
   assert.equal({}.role, undefined);
 });
 
@@ -183,7 +187,7 @@ test("unreadable or non-serializable results fail with fixed non-secret diagnost
 test("ordinary literal responses stay byte-for-byte compatible", () => {
   const actual = result({ displayName: "Guest", photoURL: "https://example.invalid/photo", disabled: false,
     emailVerified: true, customClaims: { plan: "basic" }, sessionClaims: { loggedIn: true } });
-  assert.equal(JSON.stringify(actual), '{"userRecord":{"displayName":"Guest","photoUrl":"https://example.invalid/photo","disabled":false,"emailVerified":true,"customClaims":{"plan":"basic"},"sessionClaims":{"loggedIn":true},"updateMask":"displayName,photoUrl,disabled,emailVerified,customClaims,sessionClaims"}}');
+  assert.equal(JSON.stringify(actual), '{"userRecord":{"displayName":"Guest","photoUrl":"https://example.invalid/photo","disabled":false,"emailVerified":true,"customClaims":{"plan":"basic"},"sessionClaims":{"loggedIn":true},"updateMask":"displayName,photoUrl,disabled,emailVerified,customClaims,sessionClaims"},"fireemuCustomClaimsText":"{\\"plan\\":\\"basic\\"}"}');
 });
 
 test("public error message is the exact message that was checked", () => {

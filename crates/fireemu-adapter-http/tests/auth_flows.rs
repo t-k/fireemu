@@ -9117,3 +9117,50 @@ fn a_sign_up_disabled_at_before_create_keeps_its_issuance_time_as_production() {
     assert_eq!(lookup["users"][0]["disabled"], true, "{lookup}");
     assert!(lookup["users"][0]["lastRefreshAt"].is_string(), "{lookup}");
 }
+
+/// A blocking function's custom claims read back as the runner's text of them, key order
+/// included, when that text parses to the same claims (AUTH-TENANT-BLOCKING recording
+/// 2026-09-28, rollback#lookup-refused-at-sign-in); otherwise, and for empty claims, as before.
+#[test]
+fn blocking_custom_claims_read_back_in_the_functions_key_order() {
+    let lookup = |claims: Value, text: Value| {
+        let mut s = state();
+        s.blocking = Some(Arc::new(FixedBeforeCreateHook {
+            response: json!({
+                "userRecord": {"updateMask": "customClaims", "customClaims": claims},
+                "fireemuCustomClaimsText": text,
+            }),
+        }));
+        let (status, created) = post(
+            &s,
+            &format!("{V1}/accounts:signUp"),
+            &json!({"email": "ordered@example.com", "password": "hunter22", "returnSecureToken": true}),
+        );
+        assert_eq!(status, 200, "{created}");
+        let (_, lookup) = admin(
+            &s,
+            &format!("{V1}/projects/demo-app/accounts:lookup"),
+            &json!({"localId": [created["localId"]]}),
+        );
+        lookup["users"][0].get("customAttributes").cloned()
+    };
+    let ordered = r#"{"b":1,"a":{"d":[2,"x"],"c":null}}"#;
+    let claims = json!({"b": 1, "a": {"d": [2, "x"], "c": null}});
+    assert_eq!(lookup(claims.clone(), json!(ordered)), Some(json!(ordered)));
+    let canonical = json!(r#"{"a":{"c":null,"d":[2,"x"]},"b":1}"#);
+    // A text of other claims, of reserved claims, or not text at all is not used.
+    for text in [
+        json!(r#"{"b":2,"a":{"d":[2,"x"],"c":null}}"#),
+        json!(r#"{"b":1}"#),
+        json!(r#"{"sub":"x"}"#),
+        json!(7),
+        json!("{"),
+    ] {
+        assert_eq!(
+            lookup(claims.clone(), text.clone()),
+            Some(canonical.clone()),
+            "{text}"
+        );
+    }
+    assert_eq!(lookup(json!({}), json!("{}")), None);
+}

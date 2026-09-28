@@ -1956,6 +1956,27 @@ fn claim_value_to_json(value: &ClaimValue) -> Option<Value> {
     serde_json::from_str(&encoded).ok()
 }
 
+/// The member the runner adds to a blocking response with the `customClaims` text as the
+/// function's `JSON.stringify` gave it (`tools/runner-node/blocking-response.mjs`).
+const BLOCKING_CUSTOM_CLAIMS_TEXT: &str = "fireemuCustomClaimsText";
+
+/// The claims, remembered as set from the runner's text when that text parses to exactly these
+/// claims: production reads the claims back as the function's text, key order included
+/// (AUTH-TENANT-BLOCKING recording 2026-09-28, rollback#lookup-refused-at-sign-in). Empty claims
+/// keep reading back as none, as before (production's answer for them is not observed).
+fn with_blocking_claims_text(claims: CustomClaims, response: &Value) -> CustomClaims {
+    let Some(text) = response
+        .get(BLOCKING_CUSTOM_CLAIMS_TEXT)
+        .and_then(Value::as_str)
+    else {
+        return claims;
+    };
+    match CustomClaims::parse_attributes(text) {
+        Ok(parsed) if parsed == claims && !claims.entries().is_empty() => claims.with_source(text),
+        _ => claims,
+    }
+}
+
 fn apply_blocking_response(
     store: &mut AuthStore,
     uid: &LocalId,
@@ -2013,7 +2034,7 @@ fn apply_blocking_response(
     validate_combined_blocking_claims(custom_claims.as_ref(), session_claims.as_ref())?;
     if let Some(claims) = custom_claims {
         store
-            .set_custom_claims(uid, claims.claims)
+            .set_custom_claims(uid, with_blocking_claims_text(claims.claims, response))
             .map_err(|error| {
                 format!("BLOCKING_FUNCTION_ERROR_RESPONSE : ((Invalid customClaims: {error}.))")
             })?;

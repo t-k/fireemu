@@ -103,6 +103,20 @@ function freezeResponse(snapshot) {
   return snapshot;
 }
 
+// The customClaims text as the function's JSON.stringify gives it: what the Functions SDK sends
+// Identity Platform, which production reads back as `customAttributes` with its key order
+// (AUTH-TENANT-BLOCKING recording 2026-09-28). The runner owns this member; the daemon uses the
+// text only when it parses to the claims it applies.
+const CUSTOM_CLAIMS_TEXT = "fireemuCustomClaimsText";
+
+function attachCustomClaimsText(snapshot) {
+  delete snapshot[CUSTOM_CLAIMS_TEXT];
+  // validateBlockingResult has admitted only an object, null or no claims.
+  const claims = snapshot.userRecord.customClaims;
+  if (claims != null) snapshot[CUSTOM_CLAIMS_TEXT] = JSON.stringify(claims);
+  return snapshot;
+}
+
 export function blockingResult(value, eventType, HttpsError) {
   // Preserve the runner's established no-result behaviour.
   if (!value || typeof value !== "object") return {};
@@ -142,5 +156,5 @@ export function blockingResult(value, eventType, HttpsError) {
   }
   const snapshot = snapshotResponse(candidate, HttpsError);
   validateBlockingResult(snapshot, eventType, HttpsError);
-  return freezeResponse(snapshot);
+  return freezeResponse(attachCustomClaimsText(snapshot));
 }

@@ -152,6 +152,25 @@ fn strict_answers_saml_configs_in_productions_shape() {
     let (status, read) = admin(&s, "GET", "inboundSamlConfigs/saml.run-a", &Value::Null);
     assert_eq!(status, 200, "{read}");
     assert_eq!(read, saml_answer("saml.run-a", true));
+    // A true signRequest is answered (provider-config/saml#patch-sign-request); production's SP
+    // certificate that comes with it is not implemented.
+    let (status, signing) = admin(
+        &s,
+        "PATCH",
+        "inboundSamlConfigs/saml.run-b?updateMask=idpConfig.signRequest",
+        &json!({"idpConfig": {"signRequest": true}}),
+    );
+    assert_eq!(status, 200, "{signing}");
+    let mut expected = saml_answer("saml.run-b", false);
+    expected["idpConfig"]["signRequest"] = json!(true);
+    assert_eq!(signing, expected);
+    let (status, unsigned) = admin(
+        &s,
+        "PATCH",
+        "inboundSamlConfigs/saml.run-b?updateMask=idpConfig.signRequest",
+        &json!({"idpConfig": {"signRequest": false}}),
+    );
+    assert_eq!((status, unsigned), (200, saml_answer("saml.run-b", false)));
     // Lists name the project by number too, and an empty one is `{}`, as for OIDC.
     let (status, listed) = admin(&s, "GET", "inboundSamlConfigs", &Value::Null);
     assert_eq!(status, 200, "{listed}");

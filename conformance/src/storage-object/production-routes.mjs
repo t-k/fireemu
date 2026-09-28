@@ -204,6 +204,7 @@ export function resolveProductionControlRoute(kind, boundary, suppliedParameters
       "owner-exchange": ["POST", "oauth2", "/token", "none", "owner-refresh"],
       "owner-tokeninfo": ["POST", "oauth2", "/tokeninfo", "admin", "owner-tokeninfo"],
       "project-binding": ["GET", "cloudresourcemanager", `/v1/${project}`, "admin", "owner-json"],
+      "bucket-config": ["GET", "storage", `/storage/v1/b/${config.bucket}`, "admin", "owner-json"],
       "default-bucket": [
         "GET",
         "firebasestorage",

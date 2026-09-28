@@ -401,6 +401,7 @@ export function createStage3RequestCounter(plan, { onStart, onReserve, recipeLif
         recordings: recordings.map((item) => ({ subject: item.subject, cleanup: item.cleanup })),
         recovery,
         mode,
+        ...(production ? { recording: recording + 1 } : {}),
         ...(lifecycle
           ? {
               completedRecipes: [...completedRecipes],

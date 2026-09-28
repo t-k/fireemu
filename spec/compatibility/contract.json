@@ -993,6 +993,10 @@
               "precision": "exact-for-local-semantics"
             },
             {
+              "behaviour": "Listen frames a new target as production and the official emulator do (ADD, documents, CURRENT with the target's token, the global boundary; no NO_CHANGE for the target just made current), and answers a resume from a retained token as production does (AUTH-FS-CROSS stage 2, packet v7, same and other principal): ADD, a global boundary with the resume point's token and the snapshot's read time, what changed since, CURRENT with a token, the global boundary, and no existence filter; the official emulator (v1.22.0) answers a resume with RESET and a full replay instead, but framing is not a refusal and no fixture pins the emulator's, so both profiles follow production; per-target NO_CHANGE for other, unchanged targets is kept (not observed)",
+              "precision": "exact-for-local-semantics"
+            },
+            {
               "behaviour": "a strict-profile Listen stream of an end user ends with INTERNAL 3,600 s after it opened, without waiting for a commit, as production closed all twelve held native streams of the AUTH-FS-CROSS stage-2 packet-v7 recordings (2026-09-28) 3,600.17-3,600.19 s after opening (0.65-2.67 s past their tokens' exp, so not at exp); production resets the HTTP/2 stream (RST_STREAM INTERNAL_ERROR), which clients report as INTERNAL with their own text; unobserved and left as they were: a stream opened with an older token (no close is added at its exp), owner and anonymous streams; one earlier close (packet v6, recording 2, stream t2, before exp-60 s) is an unexplained single observation not reproduced in the twelve; the emulator profile keeps the stream, as the official emulator does",
               "precision": "exact-for-local-semantics"
             }

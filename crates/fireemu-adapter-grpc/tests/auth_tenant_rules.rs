@@ -480,7 +480,7 @@ mod listeners {
                                 pb::target_change::TargetChangeType::NoChange as i32
                             );
                             let expected = if initial {
-                                vec!["add", "document", "current", "no-change"]
+                                vec!["add", "document", "current"]
                             } else {
                                 vec!["document", "no-change"]
                             };

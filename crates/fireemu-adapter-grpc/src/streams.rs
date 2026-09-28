@@ -6,10 +6,12 @@
 //! database snapshot; the diff against its last known `(path, version)` set becomes
 //! `DocumentChange` / `DocumentDelete` / `DocumentRemove` messages, followed by one global
 //! `NO_CHANGE` boundary carrying the snapshot read time and a resume token derived from
-//! the snapshot version. A target added with a resume token (or a read time) replays only
-//! what changed since that version: the target's state at the token is recomputed from the
-//! retained history and diffed against the current snapshot, followed by an
-//! `ExistenceFilter` with the current count (production's post-resume check).
+//! the snapshot version; a target made current in that snapshot gets its token with
+//! `CURRENT` instead of a `NO_CHANGE` of its own. A target added with a resume token (or a
+//! read time) replays only what changed since that version: a global boundary with the resume
+//! point's token comes first, then the target's state at the token is recomputed from the
+//! retained history and diffed against the current snapshot, with no existence filter
+//! (production's framing, AUTH-FS-CROSS stage 2).
 //!
 //! A token is only honoured while the store can still reproduce its version exactly
 //! (`FirestoreState::is_retained`: not compacted away by the one-hour retention window, not
@@ -865,6 +867,7 @@ fn refresh_all(
             let token = resume_token(version, &binding);
             let delta_paths = complete_delta_paths(&input, version);
             let mut removed = Vec::new();
+            let mut made_current = BTreeSet::new();
             for (id, state) in targets.iter_mut() {
                 let refreshed = authorize_target(ctx, &principal, db, state).and_then(|()| {
                     if state.current && state.resume.is_none() {
@@ -874,13 +877,14 @@ fn refresh_all(
                             }
                         }
                     }
-                    refresh_target_full(db, *id, state, read_time)
+                    refresh_target_full(db, *id, state, read_time, &binding)
                 });
                 match refreshed {
                     Ok(()) => {
                         out.append(&mut state.pending);
                         if !state.current {
                             state.current = true;
+                            made_current.insert(*id);
                             let bound = TokenBinding {
                                 target: state.target_hash,
                                 ..binding
@@ -900,9 +904,10 @@ fn refresh_all(
                     }
                 }
             }
-            Ok((read_time, token, removed, version, binding))
+            Ok((read_time, token, removed, version, binding, made_current))
         });
-    let (read_time, token, removed, version, binding) = match snapshot.and_then(|r| r) {
+    let (read_time, token, removed, version, binding, made_current) = match snapshot.and_then(|r| r)
+    {
         Ok(s) => s,
         Err(e) => {
             for id in targets.keys() {
@@ -919,7 +924,9 @@ fn refresh_all(
     if targets.is_empty() {
         return Ok(());
     }
-    for (id, state) in &*targets {
+    // A target that became current in this snapshot got its token with CURRENT: no NO_CHANGE
+    // follows it, as production and the official emulator frame it (AUTH-FS-CROSS stage 2).
+    for (id, state) in targets.iter().filter(|(id, _)| !made_current.contains(*id)) {
         let bound = TokenBinding {
             target: state.target_hash,
             ..binding
@@ -990,13 +997,27 @@ fn authorize_target(
 }
 
 /// Recomputes one target and appends the diff against its last known state.
+///
+/// A resumed target starts with a global boundary, as production answers a resume
+/// (AUTH-FS-CROSS stage 2, packet v7): its token is `boundary`'s for the resume point, so a
+/// stream that drops before the diff resumes from there again, and its read time is the
+/// snapshot's, so the client's snapshot version never goes back. The client raises its
+/// snapshot from its cache there, not current, until `CURRENT`.
 fn refresh_target_full(
     db: &fireemu_core_firestore::store::FirestoreState,
     id: i32,
     state: &mut TargetState,
     read_time: prost_types::Timestamp,
+    boundary: &TokenBinding,
 ) -> Result<(), Status> {
-    let resumed = resolve_resume(db, id, state)?;
+    if let Some(from) = resolve_resume(db, id, state)? {
+        state.pending.push(target_change(
+            pb::target_change::TargetChangeType::NoChange,
+            vec![],
+            Some(resume_token(from, boundary)),
+            Some(read_time),
+        ));
+    }
     let current: Vec<Document> = match &state.kind {
         TargetKind::Documents(paths) => paths
             .iter()
@@ -1020,19 +1041,6 @@ fn refresh_target_full(
         out_removal(db, path, id, read_time, &mut state.pending);
     }
     state.known = next_known;
-    if resumed {
-        // Production follows a resume with the current count so the client can verify its
-        // cache; the diff above already made it exact.
-        state.pending.push(pb::ListenResponse {
-            response_type: Some(pb::listen_response::ResponseType::Filter(
-                pb::ExistenceFilter {
-                    target_id: id,
-                    count: i32::try_from(current.len()).unwrap_or(i32::MAX),
-                    unchanged_names: None,
-                },
-            )),
-        });
-    }
     Ok(())
 }
 
@@ -1134,7 +1142,7 @@ fn out_removal(
 
 /// Resume: the target's state at the token becomes the known state, so the diff carries
 /// exactly what changed since; a token this daemon cannot honour resets the target.
-/// Returns whether the target resumed.
+/// Returns the version the target resumed from.
 ///
 /// "Cannot honour" includes a version the store compacted away: history older than the
 /// retention window is gone, and replaying a target against a version the store can no
@@ -1144,9 +1152,9 @@ fn resolve_resume(
     db: &fireemu_core_firestore::store::FirestoreState,
     id: i32,
     state: &mut TargetState,
-) -> Result<bool, Status> {
+) -> Result<Option<CommitVersion>, Status> {
     let Some(resume) = state.resume.take() else {
-        return Ok(false);
+        return Ok(None);
     };
     let version = match resume {
         Resume::Version(v) => Some(v),
@@ -1156,7 +1164,7 @@ fn resolve_resume(
     .filter(|v| db.is_retained(*v));
     if let Some(v) = version {
         state.known = known_at(db, &state.kind, v)?;
-        return Ok(true);
+        return Ok(Some(v));
     }
     state.pending.push(target_change(
         pb::target_change::TargetChangeType::Reset,
@@ -1164,7 +1172,7 @@ fn resolve_resume(
         None,
         None,
     ));
-    Ok(false)
+    Ok(None)
 }
 
 /// What a resume token is bound to besides its version.

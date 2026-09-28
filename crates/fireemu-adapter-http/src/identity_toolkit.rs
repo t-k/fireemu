@@ -2730,7 +2730,12 @@ fn dispatch_with_blocking_hook(
         let Ok(mut live) = store_arc.lock() else {
             return error(500, "INTERNAL");
         };
-        if live.reset_generation() != reset_generation {
+        // Strict: accounts cleared while the function ran refuse the paused request, fireemu's
+        // own guard. The emulator profile commits it into the cleared state, as the official Auth
+        // emulator does (its account wipe leaves an in-flight sign-up alone; closure re-review
+        // M1', 2026-09-28).
+        let cleared = live.reset_generation() != reset_generation;
+        if revision_guarded && cleared {
             return error(409, "AUTH_STATE_RESET");
         }
         if tenant.is_none() {
@@ -2753,7 +2758,13 @@ fn dispatch_with_blocking_hook(
                             *ticket,
                         )
                     {
-                        return error(409, "AUTH_STATE_CHANGED");
+                        // A reservation of the generation before a clear no longer holds; the
+                        // emulator profile creates the account with the uid the function saw,
+                        // which the clear left free.
+                        if revision_guarded || !cleared || committed.user_by_id(uid).is_some() {
+                            return error(409, "AUTH_STATE_CHANGED");
+                        }
+                        committed.use_reserved_generated_local_id(uid);
                     }
                 }
             }

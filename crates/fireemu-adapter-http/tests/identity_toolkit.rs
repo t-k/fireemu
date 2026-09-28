@@ -4292,62 +4292,79 @@ fn blocking_auth_revision_drift_after_callback_before_commit_is_rejected() {
     }
 }
 
+/// Accounts cleared while a blocking function runs: the strict profile refuses the paused
+/// candidate with 409 `AUTH_STATE_RESET`, fireemu's own guard; the emulator profile commits it into
+/// the cleared state, as the official Auth emulator (whose account wipe leaves an in-flight
+/// sign-up alone) does (closure re-review M1', 2026-09-28). Either way a fresh sign-up works.
 #[test]
 fn emulator_clear_rejects_a_paused_blocking_candidate_and_allows_a_fresh_id() {
-    use std::sync::mpsc::sync_channel;
-    use std::time::Duration;
+    for strict in [true, false] {
+        use std::sync::mpsc::sync_channel;
+        use std::time::Duration;
 
-    let hook = Arc::new(DelayedBlockingHook {
-        entered: AtomicUsize::new(0),
-        active: AtomicUsize::new(0),
-        limit: 1,
-        release: AtomicBool::new(false),
-    });
-    let mut auth = state();
-    auth.blocking = Some(hook.clone());
-    let state = Arc::new(auth);
-    let (sender, receiver) = sync_channel(1);
-    let request_state = state.clone();
-    std::thread::spawn(move || {
-        sender
-            .send(post(
-                &request_state,
-                &format!("{V1}/accounts:signUp"),
-                &json!({"email": "stale@example.com", "password": "hunter22"}),
-            ))
-            .unwrap();
-    });
-    let deadline = std::time::Instant::now() + Duration::from_secs(1);
-    while hook.entered.load(Ordering::SeqCst) == 0 {
-        assert!(
-            std::time::Instant::now() < deadline,
-            "blocking hook did not pause the candidate"
+        let hook = Arc::new(DelayedBlockingHook {
+            entered: AtomicUsize::new(0),
+            active: AtomicUsize::new(0),
+            limit: 1,
+            release: AtomicBool::new(false),
+        });
+        let mut auth = if strict { strict_state() } else { state() };
+        auth.blocking = Some(hook.clone());
+        let state = Arc::new(auth);
+        let (sender, receiver) = sync_channel(1);
+        let request_state = state.clone();
+        std::thread::spawn(move || {
+            sender
+                .send(post(
+                    &request_state,
+                    &format!("{V1}/accounts:signUp"),
+                    &json!({"email": "stale@example.com", "password": "hunter22"}),
+                ))
+                .unwrap();
+        });
+        let deadline = std::time::Instant::now() + Duration::from_secs(1);
+        while hook.entered.load(Ordering::SeqCst) == 0 {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "blocking hook did not pause the candidate"
+            );
+            std::thread::yield_now();
+        }
+
+        let cleared = handle(
+            &state,
+            "DELETE",
+            "/emulator/v1/projects/demo-app/accounts",
+            &Value::Null,
         );
-        std::thread::yield_now();
+        assert_eq!(cleared.status, 200, "{}", cleared.body);
+        hook.release.store(true, Ordering::SeqCst);
+        let (status, body) = receiver
+            .recv_timeout(Duration::from_secs(1))
+            .expect("paused candidate must finish after clear");
+        if strict {
+            assert_eq!(status, 409, "{body}");
+            assert_eq!(body["error"]["message"], "AUTH_STATE_RESET");
+            assert_eq!(state.store.lock().unwrap().user_count(), 0);
+        } else {
+            assert_eq!(status, 200, "{body}");
+            assert!(state
+                .store
+                .lock()
+                .unwrap()
+                .user_by_email("stale@example.com")
+                .is_some_and(|user| user.local_id.as_str() == body["localId"].as_str().unwrap()));
+        }
+        let before = state.store.lock().unwrap().user_count();
+
+        let (status, body) = post(
+            &state,
+            &format!("{V1}/accounts:signUp"),
+            &json!({"email": "fresh@example.com", "password": "hunter22"}),
+        );
+        assert_eq!(status, 200, "{body}");
+        assert_eq!(state.store.lock().unwrap().user_count(), before + 1);
     }
-
-    let cleared = handle(
-        &state,
-        "DELETE",
-        "/emulator/v1/projects/demo-app/accounts",
-        &Value::Null,
-    );
-    assert_eq!(cleared.status, 200, "{}", cleared.body);
-    hook.release.store(true, Ordering::SeqCst);
-    let (status, body) = receiver
-        .recv_timeout(Duration::from_secs(1))
-        .expect("paused candidate must finish after clear");
-    assert_eq!(status, 409, "{body}");
-    assert_eq!(body["error"]["message"], "AUTH_STATE_RESET");
-    assert_eq!(state.store.lock().unwrap().user_count(), 0);
-
-    let (status, body) = post(
-        &state,
-        &format!("{V1}/accounts:signUp"),
-        &json!({"email": "fresh@example.com", "password": "hunter22"}),
-    );
-    assert_eq!(status, 200, "{body}");
-    assert_eq!(state.store.lock().unwrap().user_count(), 1);
 }
 
 /// A function switched on after admission: a retryable 409 in the strict profile; the

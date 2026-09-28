@@ -5185,6 +5185,16 @@ fn federated_totp_finalize_preserves_attributes_and_blocking_context() {
             .and_then(|credential| credential.claims.as_ref()),
         Some(&oidc)
     );
+    // The identity provider of the first factor is the event's additional user info, with its
+    // profile, for an account that is not new (closure re-review S1', 2026-09-28).
+    let info = recorded[0]
+        .1
+        .additional_user_info
+        .as_ref()
+        .expect("an identity-provider first factor names its provider");
+    assert_eq!(info.provider_id, "oidc.corp");
+    assert_eq!(info.profile.as_ref(), Some(&oidc));
+    assert!(!info.is_new_user);
 }
 
 #[test]

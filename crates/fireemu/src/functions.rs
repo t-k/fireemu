@@ -5327,6 +5327,8 @@ mod tests {
         }
         let create = token(&create);
         assert_eq!(create["event_type"], "beforeCreate");
+        // Issued at the runtime clock's second (the clock stands at 1_788_004_860).
+        assert_eq!(create["iat"], 1_788_004_860);
         assert_eq!(create["sub"], uid.as_str());
         let sign_in = token(&sign_in);
         assert_eq!(sign_in["event_type"], "beforeSignIn");

@@ -400,6 +400,7 @@ test("stage-2 comparison evidence binds the recording harness and the fireemu ar
   const bindings = {
     artifactSha256: "f".repeat(64),
     harnessCommit: "a".repeat(40),
+    harnessDigestAtCommit: "h",
     fireemuCommit: "b".repeat(40),
   };
   const evidence = stage2Evidence({ comparison, fixtureText, ...bindings });
@@ -432,5 +433,10 @@ test("stage-2 comparison evidence binds the recording harness and the fireemu ar
   assert.throws(
     () => stage2Evidence({ comparison, fixtureText, ...bindings, harnessCommit: "abc" }),
     /full commit/,
+  );
+  // The named commit's harness must be the one that recorded the fixture.
+  assert.throws(
+    () => stage2Evidence({ comparison, fixtureText, ...bindings, harnessDigestAtCommit: "x" }),
+    /harness of a\{40\}|not the harness that recorded/,
   );
 });

@@ -226,11 +226,19 @@ export function buildFixture({ recordings, metas, programDigest, harnessDigest }
 
 /**
  * The committed evidence of one stage-2 comparison: the harness that recorded production (its
- * commit and digests, from the fixture) and the fireemu artifact compared (its commit and
- * sha256) are bound apart, since a later harness commit may change only how a run stops. Only
- * passing rows are accepted, and the summary must be what the rows add up to.
+ * commit, whose harness digest the caller computed from that commit's files, must be the
+ * fixture's) and the fireemu artifact compared (its commit and sha256) are bound apart, since a
+ * later harness commit may change only how a run stops. Only passing rows are accepted, and the
+ * summary must be what the rows add up to.
  */
-export function stage2Evidence({ comparison, fixtureText, artifactSha256, harnessCommit, fireemuCommit }) {
+export function stage2Evidence({
+  comparison,
+  fixtureText,
+  artifactSha256,
+  harnessCommit,
+  harnessDigestAtCommit,
+  fireemuCommit,
+}) {
   for (const [name, commit] of [
     ["harness", harnessCommit],
     ["fireemu", fireemuCommit],
@@ -246,6 +254,8 @@ export function stage2Evidence({ comparison, fixtureText, artifactSha256, harnes
     .map(({ row }) => row);
   if (failing.length) throw new Error(`not passing: ${failing.join(", ")}`);
   const fixture = JSON.parse(fixtureText);
+  if (harnessDigestAtCommit !== fixture.harnessDigest)
+    throw new Error(`the harness of ${harnessCommit} is not the harness that recorded the fixture`);
   return {
     kind: "auth-fs-cross-stage2-comparison-v1",
     harness: {

@@ -290,11 +290,14 @@ async function exportStage2Comparison(args) {
       "usage: export-comparison <comparison.json> <out.json> --artifact <binary> --harness-commit <sha> --fireemu-commit <sha>",
     );
   const { createHash } = await import("node:crypto");
+  const { stage2HarnessDigestAt } = await import("./stage2-record.mjs");
+  const harnessCommit = flag("--harness-commit");
   const evidence = stage2Evidence({
     comparison: JSON.parse(await readFile(comparisonPath, "utf8")),
     fixtureText: await readFile(FIXTURE, "utf8"),
     artifactSha256: createHash("sha256").update(await readFile(artifact)).digest("hex"),
-    harnessCommit: flag("--harness-commit"),
+    harnessCommit,
+    harnessDigestAtCommit: await stage2HarnessDigestAt(harnessCommit),
     fireemuCommit: flag("--fireemu-commit"),
   });
   await writeFile(out, `${JSON.stringify(evidence, null, 2)}\n`);

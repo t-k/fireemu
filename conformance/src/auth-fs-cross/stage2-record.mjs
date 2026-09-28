@@ -97,11 +97,23 @@ const HARNESS_FILES = [
   "auth-fs-cross/browser-page.mjs",
 ];
 
-export async function stage2HarnessDigest() {
-  const sources = await Promise.all(
-    HARNESS_FILES.map((file) => readFile(join(CONFORMANCE_DIR, "src", file), "utf8")),
-  );
+export async function stage2HarnessDigest(
+  read = (file) => readFile(join(CONFORMANCE_DIR, "src", file), "utf8"),
+) {
+  const sources = await Promise.all(HARNESS_FILES.map(read));
   return sha256(`${sources.join("\n")}\n${JSON.stringify(STAGE2_PRINCIPALS)}`);
+}
+
+/** The harness digest of the files at `commit` (the principals are this checkout's). */
+export async function stage2HarnessDigestAt(commit) {
+  return stage2HarnessDigest(async (file) => {
+    const { stdout } = await execFileAsync(
+      "git",
+      ["show", `${commit}:conformance/src/${file}`],
+      { cwd: CONFORMANCE_DIR, maxBuffer: 64 * 1024 * 1024 },
+    );
+    return stdout;
+  });
 }
 
 /** The program's digest covers its JSON and the rules it runs under. */

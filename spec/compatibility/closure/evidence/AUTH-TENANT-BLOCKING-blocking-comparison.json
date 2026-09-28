@@ -1,13 +1,12 @@
 {
   "kind": "auth-tenant-blocking-comparison-v1",
-  "artifactSha256": "a01b1831938f816ee3a36a96372f18b7fae18bc47ac0639d8d53e0c56984779f",
+  "artifactSha256": "1087af08e80da080438e6326f46bbd84a1f6cee30325e4cc1f923fc3945f32d6",
   "fixtureSha256": "99679371f97e17fb12912bb54513424a80c502b19ba40b0f5c2aa4d7ed9a639b",
-  "runnerSha256": "99d40d71bc9c68a36b05a4c449455de38d34909f44fe6894cf45d73dbd7f938d",
-  "sourceCommit": "247a8f2c6b2d2e37f74da69efe7769421d18f269",
+  "runnerSha256": "874e01c9322193f689e99568089baf0bafaacb8734c3945f8187b9fa7e8a71bd",
+  "sourceCommit": "40a1be87d28e7d99dc18e290daea3dde57b0fc8b",
   "treeClean": true,
   "summary": {
-    "MATCH": 88,
-    "INDETERMINATE": 1
+    "MATCH": 89
   },
   "rows": [
     {
@@ -220,7 +219,7 @@
     },
     {
       "row": "atb/blocking/timeout#sign-in-slow",
-      "status": "INDETERMINATE"
+      "status": "MATCH"
     },
     {
       "row": "atb/blocking/timeout#lookup-slow-sign-in",

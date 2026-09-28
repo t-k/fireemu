@@ -1,4 +1,10 @@
 import { MAX_RESPONSE_BODY_BYTES } from "./wire-limits.mjs";
+import { types } from "node:util";
+
+const typedArrayByteLength = Object.getOwnPropertyDescriptor(
+  Object.getPrototypeOf(Uint8Array.prototype),
+  "byteLength",
+).get;
 
 const FRAMING_HEADERS = new Set([
   "host",
@@ -33,7 +39,15 @@ export function loopbackHttpOrigin(value) {
 /** Deterministic HTTP/1.1 plaintext, with no implicit framing headers or unresolved body. */
 export function serializeLocalHttpRequest(value, init, origins) {
   try {
-    const allowed = origins.map(loopbackHttpOrigin);
+    return serializeBoundedHttpRequest(value, init, origins.map(loopbackHttpOrigin));
+  } catch {
+    throw new Error("invalid wire request");
+  }
+}
+
+/** Factories supply already validated bare origins to the shared plaintext framing implementation. */
+export function serializeBoundedHttpRequest(value, init, allowed) {
+  try {
     const url = new URL(value);
     const method = init.method ?? "GET";
     if (
@@ -47,9 +61,21 @@ export function serializeLocalHttpRequest(value, init, origins) {
       throw new Error();
     let body;
     if (init.body === undefined) body = Buffer.alloc(0);
-    else if (Buffer.isBuffer(init.body) || typeof init.body === "string") {
+    else if (typeof init.body === "string") {
       if (Buffer.byteLength(init.body) > MAX_RESPONSE_BODY_BYTES) throw new Error();
       body = Buffer.from(init.body);
+    } else if (!types.isProxy(init.body) && Buffer.isBuffer(init.body)) {
+      if (
+        Object.getPrototypeOf(init.body) !== Buffer.prototype ||
+        ["length", "byteLength", "byteOffset", "buffer"].some((key) =>
+          Object.hasOwn(init.body, key),
+        )
+      )
+        throw new Error();
+      const length = typedArrayByteLength.call(init.body);
+      if (length > MAX_RESPONSE_BODY_BYTES) throw new Error();
+      body = Buffer.alloc(length);
+      Uint8Array.prototype.set.call(body, init.body);
     } else throw new Error();
     const headers = [
       "Host",

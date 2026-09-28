@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "parent": "FUNCTIONS-HTTP",
-  "parentStatus": "IMPLEMENTING",
+  "parentStatus": "COMPAT_VERIFIED",
   "inventoryStatus": "FROZEN",
   "frozenOn": "2026-09-25",
   "freezeAuthority": "docs.local/instructions/2026-09-25-codex-closure-freeze-go.md",
@@ -12,7 +12,7 @@
     "generation": 2
   },
   "closureReview": {
-    "decision": "PENDING",
+    "decision": "APPROVED",
     "submittedSourceCommit": "8959805113f67ded6d537b9aa78ac685a1f0efa4",
     "submittedFinalArtifactSha256": "4918b2201852364d6f20cf4be7bf63cb3efcea6588f030be77dd552977cb2940",
     "submittedComparisonSha256": "0e021b4cf185ff58252ea33b8b65d4ba3f2ee19bf2a9d62456ad89aad402662a",
@@ -44,7 +44,12 @@
       "localVerification": "Callable OPTIONS delegates to the pinned SDK CORS wrapper without Auth or App Check admission. The final binary passed 224 local requests covering cors:false, single and multiple Origin lists, loopback/external/LAN Origins, and cross-site preflights requesting GET or arbitrary headers. No new production recording is claimed.",
       "privateCorsReceipt": "docs.local/runs/functions-http-final-20260928-rereview3/cors-receipt.json",
       "privateCorsReceiptSha256": "abe6cff3a7111e659610662ad8ec1404feaf1bacd0a8cdb95fa5038516e95c1b"
-    }
+    },
+    "decidedOn": "2026-09-28",
+    "decider": "project coordinator (delegated by the owner)",
+    "decisionRef": "docs.local/instructions/owner-decisions.md (2026-09-28 FUNCTIONS-HTTP promotion)",
+    "reviewer": "Independent clean-context closure re-reviews (rounds 1, 2 and 3): docs.local/reviews/2026-09-28-functions-http-closure-rereview.md (SHA-256 91eaa87de41297cbbb985aad8e894f5b9144df490f99914a4c4ce453efe3f5b3); docs.local/reviews/2026-09-28-functions-http-closure-rereview2.md (SHA-256 9e5e396bbb1c914708157de89a0d64fef09026e6def507274e434d8aefaec996); docs.local/reviews/2026-09-28-functions-http-closure-rereview3.md (SHA-256 d3252184eab092d54ede38c9abd0facc44b3341bf0bc79801192502c9e52886a)",
+    "reviewedCommit": "e8f49a57e973f7c9be2e7b05d2bc916e20a0edf1"
   },
   "scopeDecisions": [
     {
@@ -817,7 +822,51 @@
       "cases": [
         "independent-coordinator-approval"
       ],
-      "status": "PENDING_REVIEW"
+      "status": "VERIFIED",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-27T13:59:44Z",
+            "project": "fireemu-oracle-query",
+            "corpusDigest": "836c138ba213546428e700e7ecb51644089bb5b0cdc91946eb9904a648106bea",
+            "pass": 1
+          },
+          {
+            "recordedAt": "2026-09-27T13:59:45Z",
+            "project": "fireemu-oracle-query",
+            "corpusDigest": "836c138ba213546428e700e7ecb51644089bb5b0cdc91946eb9904a648106bea",
+            "pass": 2
+          }
+        ],
+        "sourceCommit": "8959805113f67ded6d537b9aa78ac685a1f0efa4",
+        "finalArtifactSha256": "4918b2201852364d6f20cf4be7bf63cb3efcea6588f030be77dd552977cb2940",
+        "runnerTreeSha256": "c70c6d835dae46d525b513bcf6828cb1fe551289d8aa231fa4f52a8d6fac4cce",
+        "comparisonPath": "spec/compatibility/closure/evidence/FUNCTIONS-HTTP-comparison.json",
+        "comparisonSha256": "0e021b4cf185ff58252ea33b8b65d4ba3f2ee19bf2a9d62456ad89aad402662a",
+        "strictProductionRows": {
+          "MATCH": 68
+        },
+        "workspaceNextestPassed": 3521,
+        "nodeRunnerPassed": 747,
+        "nodeRunnerSkipped": 2,
+        "workspaceNextestSkipped": 99,
+        "reviewedCommit": "e8f49a57e973f7c9be2e7b05d2bc916e20a0edf1",
+        "reviewReports": [
+          {
+            "path": "docs.local/reviews/2026-09-28-functions-http-closure-rereview.md",
+            "sha256": "91eaa87de41297cbbb985aad8e894f5b9144df490f99914a4c4ce453efe3f5b3"
+          },
+          {
+            "path": "docs.local/reviews/2026-09-28-functions-http-closure-rereview2.md",
+            "sha256": "9e5e396bbb1c914708157de89a0d64fef09026e6def507274e434d8aefaec996"
+          },
+          {
+            "path": "docs.local/reviews/2026-09-28-functions-http-closure-rereview3.md",
+            "sha256": "d3252184eab092d54ede38c9abd0facc44b3341bf0bc79801192502c9e52886a"
+          }
+        ],
+        "decisionRef": "docs.local/instructions/owner-decisions.md (2026-09-28 FUNCTIONS-HTTP promotion)"
+      }
     }
   ]
 }

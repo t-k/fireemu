@@ -275,7 +275,6 @@ fn signed_oidc_refuses_claim_boundaries_without_mutating_existing_accounts() {
         ("exp", json!("9999999999")),
         ("sub", json!("")),
         ("nonce", json!("unbound")),
-        ("azp", json!("wrong")),
     ] {
         let mut c = claims();
         c[name] = value;
@@ -298,6 +297,7 @@ fn signed_oidc_accepts_the_claims_production_accepts() {
         ("nbf", json!(NOW + 1)),
         ("nbf", Value::Null),
         ("aud", json!(["local-client", "other"])),
+        ("azp", json!("wrong")),
     ] {
         let mut c = claims();
         c[name] = value;

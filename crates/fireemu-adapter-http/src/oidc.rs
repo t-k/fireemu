@@ -158,7 +158,9 @@ impl LocalOidcTrust {
                 return Err(DUPLICATE_REFUSAL.to_owned());
             }
             if *nonce != format!("{:x}", Sha256::digest(raw.as_bytes())) {
-                return Err(UNOBSERVED_REFUSAL.to_owned());
+                return Err(format!(
+                    "MISSING_OR_INVALID_NONCE : The nonce in ID Token \"{nonce}\" does not match the SHA256 hash of the raw nonce \"{raw}\" in the request."
+                ));
             }
         }
         Ok(verified)
@@ -182,7 +184,8 @@ impl LocalOidcTrust {
             ));
         }
         // Production accepts a token for several audiences that include the client, with or
-        // without `azp` (record-oidc 39209e); an `azp` naming another party is refused.
+        // without `azp`, and with an `azp` naming another party (record-oidc 39209e,
+        // record-saml 7789f0).
         let audiences: Vec<&str> = match claims.get("aud") {
             Some(Value::String(aud)) => vec![aud.as_str()],
             Some(Value::Array(aud)) => aud.iter().filter_map(Value::as_str).collect(),
@@ -194,12 +197,6 @@ impl LocalOidcTrust {
                 audiences.join(", "),
                 self.client_id
             ));
-        }
-        if claims
-            .get("azp")
-            .is_some_and(|azp| azp.as_str() != Some(self.client_id.as_str()))
-        {
-            return Err(unobserved());
         }
         let Some(subject) = claims
             .get("sub")

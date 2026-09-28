@@ -11983,6 +11983,15 @@ fn strict_idp_trust(
         return Err(refused(crate::oidc::NOT_FOUND_REFUSAL));
     }
     let Some(config) = store.oidc_config(provider_id) else {
+        // A configured google.com with an ID token that does not parse (record-saml 7789f0);
+        // other configured built-in providers and SAML are unobserved.
+        if provider_id == "google.com" && store.default_idp_config(provider_id).is_some() {
+            if let Some(token) = params.get("id_token").filter(|t| jws_kid(t).is_err()) {
+                return Err(refused(&format!(
+                    "INVALID_IDP_RESPONSE : Unable to parse Google id_token: {token}"
+                )));
+            }
+        }
         if store.default_idp_config(provider_id).is_some()
             || store.saml_config(provider_id).is_some()
         {

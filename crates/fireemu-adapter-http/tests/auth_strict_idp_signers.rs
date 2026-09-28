@@ -578,7 +578,15 @@ fn strict_accepts_what_production_accepts() {
     let mut not_yet = claims();
     not_yet["nbf"] = json!(NOW + 3600);
     not_yet["sub"] = json!("not-yet");
-    for (case, claims) in [("several audiences", several), ("future nbf", not_yet)] {
+    // An `azp` naming another party (record-saml 7789f0).
+    let mut other_party = claims();
+    other_party["azp"] = json!("other-client");
+    other_party["sub"] = json!("other-party");
+    for (case, claims) in [
+        ("several audiences", several),
+        ("future nbf", not_yet),
+        ("azp of another party", other_party),
+    ] {
         let response = sign_in(&s, &request(&token(&claims)));
         assert_eq!(response.status, 200, "{case}: {}", response.body);
     }
@@ -635,11 +643,18 @@ fn strict_checks_the_nonce_as_production_does() {
     other["sub"] = json!("other-subject");
     let response = sign_in(&s, &with_nonce(&token(&other), Some("nonce-a")));
     assert_eq!(response.status, 200, "{}", response.body);
-    // A nonce that does not match (production's message for it is unobserved).
+    // A nonce that does not match (record-saml 7789f0).
     let mut fresh = claims();
     fresh["nonce"] = json!(hashed("nonce-c"));
     fresh["sub"] = json!("fresh-subject");
-    assert_refused_after(&s, &with_nonce(&token(&fresh), Some("nonce-d")), UNOBSERVED);
+    assert_refused_after(
+        &s,
+        &with_nonce(&token(&fresh), Some("nonce-d")),
+        &format!(
+            "MISSING_OR_INVALID_NONCE : The nonce in ID Token \"{}\" does not match the SHA256 hash of the raw nonce \"nonce-d\" in the request.",
+            hashed("nonce-c")
+        ),
+    );
     // Without a nonce, the same token signs in again (production's replay rows).
     let again = sign_in(&s, &request(&token(&claims())));
     assert_eq!(again.status, 200, "{}", again.body);
@@ -1000,4 +1015,25 @@ fn create_auth_uri_without_an_authorization_endpoint_stays_unimplemented() {
         &json!({"providerId": PROVIDER, "continueUri": CONTINUE}),
     );
     assert_eq!(answer.status, 501, "{}", answer.body);
+}
+
+#[test]
+fn strict_refuses_a_configured_google_provider_it_cannot_verify_as_production_does() {
+    // record-saml 7789f0: a garbage ID token for a configured google.com.
+    let s = strict_state();
+    assert!(s.store.lock().unwrap().create_default_idp_config(
+        fireemu_core_auth::store::DefaultIdpConfig {
+            id: "google.com".into(),
+            enabled: true,
+            client_id: Some("fireemu-client".into()),
+            client_secret: Some("fireemu-secret".into()),
+            apple_sign_in_config: None,
+        }
+    ));
+    assert_refused(
+        &s,
+        &request_for("google.com", "fireemu-garbage"),
+        "INVALID_IDP_RESPONSE : Unable to parse Google id_token: fireemu-garbage",
+        "configured google.com",
+    );
 }

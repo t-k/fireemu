@@ -22,6 +22,9 @@ const PROVIDER: &str = "saml.strict";
 const SIGNATURE_REFUSAL: &str =
     "INVALID_IDP_RESPONSE : Failed to verify the signature in SAMLResponse";
 const CALLBACK: &str = "https://demo-app.firebaseapp.com/__/auth/handler";
+// Production's configuration refusals (record-oidc 39209e, the same for every provider type).
+const NOT_FOUND: &str = "OPERATION_NOT_ALLOWED : The identity provider configuration is not found.";
+const DISABLED: &str = "OPERATION_NOT_ALLOWED : The identity provider configuration is disabled.";
 
 fn fixture(name: &str) -> String {
     std::fs::read_to_string(format!(
@@ -201,24 +204,24 @@ fn strict_refuses_what_it_cannot_verify() {
             json!({"requestUri": CALLBACK, "postBody": format!("providerId={PROVIDER}&id_token=%7B%22sub%22%3A%22x%22%7D"), "returnSecureToken": true}),
         ),
         ("not base64", request_for(PROVIDER, "%%%")),
-        (
-            "a provider named in another case",
-            request_for(
-                "saml.Strict",
-                &base64_standard(fixture("assertion-signed.xml").as_bytes()),
-            ),
-        ),
-        (
-            "an unconfigured provider",
-            request_for(
-                "saml.unconfigured",
-                &base64_standard(fixture("assertion-signed.xml").as_bytes()),
-            ),
-        ),
         ("no NameID", request(&fixture("no-name-id.xml"))),
     ];
     for (case, body) in cases {
         assert_refused(&s, &body, "INVALID_IDP_RESPONSE", case);
+    }
+    for (case, provider) in [
+        ("a provider named in another case", "saml.Strict"),
+        ("an unconfigured provider", "saml.unconfigured"),
+    ] {
+        assert_refused(
+            &s,
+            &request_for(
+                provider,
+                &base64_standard(fixture("assertion-signed.xml").as_bytes()),
+            ),
+            NOT_FOUND,
+            case,
+        );
     }
     // Even with a configuration stored under the mixed-case ID: the credential parser
     // lowercases the provider, so the verified provider would not be the one recorded.
@@ -231,7 +234,7 @@ fn strict_refuses_what_it_cannot_verify() {
             "saml.Strict",
             &base64_standard(fixture("assertion-signed.xml").as_bytes()),
         ),
-        "INVALID_IDP_RESPONSE",
+        NOT_FOUND,
         "a mixed-case provider with a configuration",
     );
     s.store
@@ -241,7 +244,7 @@ fn strict_refuses_what_it_cannot_verify() {
     assert_refused(
         &s,
         &request(&fixture("assertion-signed.xml")),
-        "INVALID_IDP_RESPONSE",
+        DISABLED,
         "a disabled provider",
     );
     // Another provider's certificate: the signature does not verify.

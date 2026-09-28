@@ -3,27 +3,36 @@
 //! key is ever fetched from an issuer.
 
 use std::collections::BTreeMap;
+use std::sync::{Arc, Mutex};
 
 use serde_json::Value;
 
 /// Private members a JWK must not carry: a signer set holds public keys only.
 const PRIVATE_MEMBERS: &[&str] = &["d", "p", "q", "dp", "dq", "qi", "oth", "k"];
 
-/// Issuers and their RS256 public keys, by `kid`.
+/// Issuers and their RS256 public keys, by `kid`, and the nonce-bearing credentials strict
+/// sign-ins used (production refuses one used again).
 #[derive(Debug, Clone, Default)]
 pub struct IdpSignerTrust {
     issuers: BTreeMap<String, BTreeMap<String, Value>>,
+    /// Each issuer's `authorization_endpoint`, as its discovery document gives it.
+    authorization_endpoints: BTreeMap<String, String>,
+    used: Arc<Mutex<UsedCredentials>>,
 }
 
 impl IdpSignerTrust {
-    /// Reads `{"<issuer>": {"keys": [<RS256 RSA public JWK with a kid>, …]}}`.
+    /// Reads `{"<issuer>": {"keys": [<RS256 RSA public JWK with a kid>, …],
+    /// "authorization_endpoint"?: "<https URL>"}}` (the endpoint as the issuer's discovery
+    /// document names it, for `createAuthUri`).
     ///
     /// # Errors
     /// A message naming the first issuer that is not an https URL without a query or fragment,
     /// or whose set is empty, holds a key that is not an RS256 RSA public key of at least 2048
-    /// bits, carries private members, or lacks a unique `kid`.
+    /// bits, carries private members, or lacks a unique `kid`, or whose
+    /// `authorization_endpoint` is not an https URL without a query or fragment.
     pub fn from_jwks(signers: &serde_json::Map<String, Value>) -> Result<Self, String> {
         let mut issuers = BTreeMap::new();
+        let mut authorization_endpoints = BTreeMap::new();
         for (issuer, jwks) in signers {
             if !valid_issuer(issuer) {
                 return Err(format!(
@@ -54,8 +63,23 @@ impl IdpSignerTrust {
                 }
             }
             issuers.insert(issuer.clone(), by_kid);
+            if let Some(endpoint) = jwks.get("authorization_endpoint") {
+                let endpoint = endpoint
+                    .as_str()
+                    .filter(|endpoint| valid_issuer(endpoint))
+                    .ok_or_else(|| {
+                        format!(
+                            "{issuer}: authorization_endpoint must be an https URL without a query or fragment"
+                        )
+                    })?;
+                authorization_endpoints.insert(issuer.clone(), endpoint.to_owned());
+            }
         }
-        Ok(Self { issuers })
+        Ok(Self {
+            issuers,
+            authorization_endpoints,
+            used: Arc::default(),
+        })
     }
 
     /// The public JWK of `issuer` named `kid`.
@@ -64,10 +88,89 @@ impl IdpSignerTrust {
         self.issuers.get(issuer)?.get(kid)
     }
 
+    /// The authorization endpoint configured for `issuer`, if any.
+    #[must_use]
+    pub fn authorization_endpoint(&self, issuer: &str) -> Option<&str> {
+        self.authorization_endpoints.get(issuer).map(String::as_str)
+    }
+
     /// Whether any key of `issuer` is configured.
     #[must_use]
     pub fn knows(&self, issuer: &str) -> bool {
         self.issuers.contains_key(issuer)
+    }
+
+    /// Whether a sign-in already used the credential `key` (still unexpired at `now`).
+    pub(crate) fn credential_used(&self, key: &str, now: i64) -> bool {
+        self.used
+            .lock()
+            .map_or(true, |mut used| used.contains(key, now))
+    }
+
+    /// Records that a sign-in used the credential `key`, valid until `expires`.
+    pub(crate) fn record_credential(&self, key: String, expires: i64, now: i64) {
+        if let Ok(mut used) = self.used.lock() {
+            used.record(key, expires, now);
+        }
+    }
+}
+
+/// The most credentials remembered in a daemon session. Past it, the one expiring first is
+/// forgotten (an emulator bound, not production's).
+const USED_CREDENTIALS_CAPACITY: usize = 10_000;
+
+/// Used credentials by key, each until its token's expiry (a later use is refused as expired
+/// anyway), within a fixed capacity.
+#[derive(Debug)]
+pub(crate) struct UsedCredentials {
+    expiries: BTreeMap<String, i64>,
+    capacity: usize,
+}
+
+impl Default for UsedCredentials {
+    fn default() -> Self {
+        Self::with_capacity(USED_CREDENTIALS_CAPACITY)
+    }
+}
+
+impl UsedCredentials {
+    fn with_capacity(capacity: usize) -> Self {
+        Self {
+            expiries: BTreeMap::new(),
+            capacity,
+        }
+    }
+
+    fn sweep(&mut self, now: i64) {
+        self.expiries.retain(|_, expires| *expires > now);
+    }
+
+    fn contains(&mut self, key: &str, now: i64) -> bool {
+        self.sweep(now);
+        self.expiries.contains_key(key)
+    }
+
+    fn record(&mut self, key: String, expires: i64, now: i64) {
+        self.sweep(now);
+        if expires <= now {
+            return;
+        }
+        if !self.expiries.contains_key(&key) && self.expiries.len() >= self.capacity {
+            let first = self
+                .expiries
+                .iter()
+                .min_by_key(|(_, expires)| **expires)
+                .map(|(key, _)| key.clone());
+            if let Some(first) = first {
+                self.expiries.remove(&first);
+            }
+        }
+        self.expiries.insert(key, expires);
+    }
+
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.expiries.len()
     }
 }
 
@@ -96,6 +199,47 @@ fn valid_issuer(issuer: &str) -> bool {
         let host = rest.split('/').next().unwrap_or_default();
         !host.is_empty() && !rest.contains(['?', '#']) && !rest.contains(char::is_whitespace)
     })
+}
+
+#[cfg(test)]
+mod used_credentials_tests {
+    use super::UsedCredentials;
+
+    #[test]
+    fn a_credential_is_remembered_until_its_token_expires() {
+        let mut used = UsedCredentials::with_capacity(4);
+        used.record("a".into(), 100, 10);
+        assert!(used.contains("a", 99));
+        assert!(!used.contains("a", 100));
+        assert_eq!(used.len(), 0, "an expired credential is dropped");
+        // One already expired is not recorded.
+        used.record("b".into(), 50, 50);
+        assert_eq!(used.len(), 0);
+        assert!(!used.contains("b", 49));
+    }
+
+    #[test]
+    fn the_capacity_bounds_what_is_remembered() {
+        let mut used = UsedCredentials::with_capacity(3);
+        used.record("late".into(), 300, 0);
+        used.record("first".into(), 100, 0);
+        used.record("middle".into(), 200, 0);
+        used.record("late".into(), 400, 0);
+        assert_eq!(used.len(), 3, "recording a key again does not grow it");
+        used.record("new".into(), 500, 0);
+        assert_eq!(used.len(), 3);
+        assert!(
+            !used.contains("first", 1),
+            "the one expiring first is forgotten"
+        );
+        for key in ["middle", "late", "new"] {
+            assert!(used.contains(key, 1), "{key}");
+        }
+        assert_eq!(
+            UsedCredentials::default().capacity,
+            super::USED_CREDENTIALS_CAPACITY
+        );
+    }
 }
 
 #[cfg(test)]
@@ -138,6 +282,38 @@ mod tests {
         assert_eq!(trust.key(issuer, "k1"), Some(&key));
         assert_eq!(trust.key(issuer, "k2"), None);
         assert_eq!(trust.key("https://other.example", "k1"), None);
+    }
+
+    #[test]
+    fn an_issuer_may_name_its_authorization_endpoint() {
+        // What the issuer's discovery document says, for createAuthUri (never fetched).
+        let issuer = "https://idp.example/oidc/run";
+        let key = public_jwk(3, "k1");
+        let endpoint = "https://idp.example/oidc/run/authorize";
+        let trust = IdpSignerTrust::from_jwks(&signers(&[(
+            issuer,
+            json!({"keys": [key.clone()], "authorization_endpoint": endpoint}),
+        )]))
+        .expect("trust");
+        assert_eq!(trust.authorization_endpoint(issuer), Some(endpoint));
+        let without =
+            IdpSignerTrust::from_jwks(&signers(&[(issuer, json!({"keys": [key.clone()]}))]))
+                .expect("trust");
+        assert_eq!(without.authorization_endpoint(issuer), None);
+        for bad in [
+            json!("http://idp.example/authorize"),
+            json!("https://idp.example/authorize?x=1"),
+            json!("https://idp.example/authorize#f"),
+            json!(""),
+            json!(7),
+        ] {
+            let error = IdpSignerTrust::from_jwks(&signers(&[(
+                issuer,
+                json!({"keys": [key.clone()], "authorization_endpoint": bad}),
+            )]))
+            .expect_err("refused");
+            assert!(error.contains("authorization_endpoint"), "{error}");
+        }
     }
 
     #[test]

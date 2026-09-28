@@ -18,7 +18,13 @@ import { SANDBOX_PROJECT } from "../auth-account/harness.mjs";
 import { PROGRAMS, resolveCorpus } from "./corpus.mjs";
 import { guardHttp, validateFederationCorpus } from "./guard.mjs";
 import { normalizeHttp } from "./harness.mjs";
-import { generateSigningKey, jwksDocument, saveSigningKey, signIdToken } from "./idp.mjs";
+import {
+  discoveryDocument,
+  generateSigningKey,
+  jwksDocument,
+  saveSigningKey,
+  signIdToken,
+} from "./idp.mjs";
 
 const execFileAsync = promisify(execFile);
 const RUN_DIR = join(CONFORMANCE_DIR, ".runs", "auth-federation");
@@ -410,7 +416,13 @@ async function runLocal() {
           idTokenSigning: "session-rsa",
           apiKeys: ["fake-api-key"],
           // Strict verifies the run's ID tokens with the key its issuer would publish (O4).
-          idpSigners: { [prepared.issuer]: jwksDocument(...prepared.jwks) },
+          // The authorization endpoint of the discovery document the recording publishes.
+          idpSigners: {
+            [prepared.issuer]: {
+              ...jwksDocument(...prepared.jwks),
+              authorization_endpoint: discoveryDocument(prepared.issuer).authorization_endpoint,
+            },
+          },
         },
       }),
     );

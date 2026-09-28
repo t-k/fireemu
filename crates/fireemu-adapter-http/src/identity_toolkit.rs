@@ -1184,6 +1184,11 @@ fn issue_tokens_replacing(
         None => store.issue_refresh_session(uid, at, issue.provider, refresh_claims, second),
     }
     .map_err(|e| auth_error(&e))?;
+    if let Some(attributes) = issue.sign_in_attributes {
+        store
+            .set_refresh_sign_in_attributes(&refresh, Some(attributes.clone()))
+            .map_err(|e| auth_error(&e))?;
+    }
     Ok(json!({
         "idToken": encode_with(&claims, None),
         "refreshToken": refresh,
@@ -3161,14 +3166,28 @@ fn handle_with_policy(
     };
     let dispatch_body = saml_body.as_ref().unwrap_or(body);
     let idp_trust = oidc_trust.or(strict_idp_trust.as_ref());
+    // A strict sign-in's nonce-bearing credential, remembered once the sign-in succeeds.
+    let mut used_credential = None;
     if route.handler == routes::Handler::SignInWithIdp {
         if let Some(trust) = idp_trust {
             let params = normalized_idp_params(
                 str_field(body, "requestUri").unwrap_or_default(),
                 str_field(body, "postBody"),
             );
-            if !trust.accepts(&store, &params, at) {
-                return error(400, "INVALID_IDP_RESPONSE");
+            let now = i64::try_from(at.as_nanos().div_euclid(1_000_000_000)).unwrap_or(i64::MAX);
+            let used = |token: &crate::oidc::VerifiedIdToken| {
+                strict_signers.is_some_and(|signers| {
+                    used_credential_key(&store, trust, token)
+                        .is_some_and(|key| signers.credential_used(&key, now))
+                })
+            };
+            match trust.check(&store, &params, at, &used) {
+                Ok(token) => {
+                    used_credential = strict_signers
+                        .zip(used_credential_key(&store, trust, &token))
+                        .map(|(signers, key)| (signers, key, token.expires, now));
+                }
+                Err(message) => return error(400, &message),
             }
         }
     }
@@ -3222,7 +3241,9 @@ fn handle_with_policy(
         } else {
             response
         };
-        return finish_token_response(response, signer.as_deref(), &store_arc, at);
+        let response = finish_token_response(response, signer.as_deref(), &store_arc, at);
+        record_used_credential(used_credential, &response);
+        return response;
     }
     let signer = store.signer_arc();
     if !blocking_auth
@@ -3343,6 +3364,7 @@ fn handle_with_policy(
     if let Some(trust) = &strict_saml_trust {
         trust.shape_answer(&mut response);
     }
+    record_used_credential(used_credential, &response);
     if let Some(reservation) = quota_reservation.take() {
         // Blocking dispatch commits a successful new-account reservation at its typed
         // per-request creation boundary. Any reservation left here belongs to a failed or
@@ -3380,7 +3402,12 @@ fn handle_with_policy(
                     == Some(true)
                 || matches!(
                     response.body.get("errorMessage").and_then(Value::as_str),
-                    Some("EMAIL_EXISTS" | "FEDERATED_USER_ID_ALREADY_LINKED")
+                    Some(
+                        "EMAIL_EXISTS"
+                            | "FEDERATED_USER_ID_ALREADY_LINKED"
+                            // Strict OIDC's link refusal carries one too (record-oidc 39209e).
+                            | "PROVIDER_ALREADY_LINKED"
+                    )
                 ));
         if continuation_response {
             if let Ok(mut live) = store_arc.lock() {
@@ -3485,6 +3512,8 @@ struct DispatchOptions {
     legacy_tokens: bool,
     query_limits: AuthQueryLimits,
     inbound_credential_policy: fireemu_core_functions::manifest::BlockingAuthTokenPolicy,
+    /// The strict daemon's OIDC issuers (keys and authorization endpoints).
+    idp_signers: Option<Arc<IdpSignerTrust>>,
 }
 
 /// The options of a request whose blocking trigger is selected: it keeps secure tokens.
@@ -3504,6 +3533,10 @@ impl From<&AuthState> for DispatchOptions {
             custom_token_trust: state.custom_token_trust.clone(),
             legacy_tokens: !state.stateless_refresh_tokens,
             query_limits: state.query_limits,
+            idp_signers: match &state.idp_assertions {
+                IdpAssertionPolicy::SignedOidc(signers) => Some(signers.clone()),
+                IdpAssertionPolicy::Fixture => None,
+            },
             inbound_credential_policy: state.blocking.as_deref().map_or_else(
                 fireemu_core_functions::manifest::BlockingAuthTokenPolicy::default,
                 |blocking| {
@@ -3593,10 +3626,19 @@ fn dispatch(
             send_verification_code(store, body, at)
         }
         Handler::SignInWithPhoneNumber => sign_in_with_phone_number(store, body, at),
-        Handler::SignInWithIdp => {
-            sign_in_with_idp(store, body, at, options.inbound_credential_policy)
-        }
-        Handler::CreateAuthUri => create_auth_uri(store, body, !options.stateless_refresh_tokens),
+        Handler::SignInWithIdp => sign_in_with_idp(
+            store,
+            body,
+            at,
+            options.inbound_credential_policy,
+            !options.stateless_refresh_tokens,
+        ),
+        Handler::CreateAuthUri => create_auth_uri(
+            store,
+            body,
+            !options.stateless_refresh_tokens,
+            options.idp_signers.as_deref(),
+        ),
         Handler::Projects => client_project_config(store, !options.stateless_refresh_tokens),
         Handler::RecaptchaParams => {
             let mut body = json!({
@@ -8054,7 +8096,7 @@ fn user_json(store: &AuthStore, uid: &LocalId) -> Value {
     // `providerUserInfo`, `emailVerified` only with an address. `disabled` and `validSince`
     // are present for an account the Admin API created (the sandbox recording of 2026-09-23),
     // and otherwise `disabled` only when true and `validSince` once tokens were ever revoked
-    // or a password set. The password hash is the
+    // or a password set, and for an account an OIDC sign-in created (record-oidc 39209e). The password hash is the
     // redacted marker production sends a caller without hash-config permission
     // (conformance/auth-production-matrix.json, password/sign-up-and-sign-in#lookup).
     let has_password = store.has_password(uid);
@@ -8062,7 +8104,8 @@ fn user_json(store: &AuthStore, uid: &LocalId) -> Value {
         || u.tokens_revoked
         || u.admin_created
         || u.custom_auth
-        || u.email_link_created)
+        || u.email_link_created
+        || matches!(&u.provider, fireemu_core_auth::store::Provider::Federated(id) if id.starts_with("oidc.")))
         .then_some(u.tokens_valid_after);
     json!({
         "localId": u.local_id.as_str(),
@@ -10369,7 +10412,16 @@ fn refresh(
         Err(e) => return auth_error(&e),
     };
     match store.id_token_claims_for_session(&session, at) {
-        Ok(claims) => {
+        Ok(mut claims) => {
+            // Strict carries an OIDC sign-in's attributes into refreshed tokens, as production
+            // does (record-oidc 39209e); other providers' refreshes are unobserved, and the
+            // emulator profile keeps the official emulator's.
+            if !stateless_refresh_tokens && claims.firebase.sign_in_provider.starts_with("oidc.") {
+                claims
+                    .firebase
+                    .sign_in_attributes
+                    .clone_from(&session.sign_in_attributes);
+            }
             let id_token = encode_with(&claims, None);
             JsonResponse {
                 status: 200,
@@ -11905,33 +11957,56 @@ fn idp_continuation_authority(
 /// errors answered before O4 and without mutation.
 ///
 /// # Errors
-/// `INVALID_IDP_RESPONSE` (production's code for this route is unobserved) for any provider
-/// other than an existing `oidc.*` configuration whose issuer has startup keys, and for a token
-/// whose `kid` names none of them. [`crate::oidc::LocalOidcTrust::accepts`] checks the rest.
+/// Production's refusals (record-oidc 39209e): a provider without a configuration (a name in
+/// another case, which the credential parser would lowercase, included) or disabled, an issuer
+/// without startup keys (production cannot reach it), no ID token, one that does not parse, and
+/// one whose `kid` names none of the issuer's keys. A provider with a configuration strict cannot
+/// verify (a built-in provider, SAML) is `INVALID_IDP_RESPONSE` (unobserved).
+/// [`crate::oidc::LocalOidcTrust::check`] checks the rest.
 fn strict_idp_trust(
     signers: &IdpSignerTrust,
     store: &AuthStore,
     body: &Value,
 ) -> Result<Option<crate::oidc::LocalOidcTrust>, JsonResponse> {
-    let refused = || error(400, "INVALID_IDP_RESPONSE");
+    let refused = |message: &str| error(400, message);
     let Some(request_uri) = str_field(body, "requestUri").filter(|uri| uri_is_absolute(uri)) else {
         return Ok(None);
     };
-    let params = normalized_idp_params(request_uri, str_field(body, "postBody"));
+    let post_body = str_field(body, "postBody");
+    let params = normalized_idp_params(request_uri, post_body);
     let Some(provider_id) = params.get("providerId").filter(|id| !id.is_empty()) else {
         return Ok(None);
     };
     // The credential parser lowercases the provider; the verified one must be the recorded one.
-    // `LocalOidcTrust::accepts` refuses a provider other than `oidc.*`.
     if *provider_id != provider_id.to_lowercase() {
-        return Err(refused());
+        return Err(refused(crate::oidc::NOT_FOUND_REFUSAL));
     }
-    let config = store.oidc_config(provider_id).ok_or_else(refused)?;
-    let kid = params
-        .get("id_token")
-        .and_then(|token| jws_kid(token))
-        .ok_or_else(refused)?;
-    let jwk = signers.key(&config.issuer, &kid).ok_or_else(refused)?;
+    let Some(config) = store.oidc_config(provider_id) else {
+        if store.default_idp_config(provider_id).is_some()
+            || store.saml_config(provider_id).is_some()
+        {
+            return Err(refused("INVALID_IDP_RESPONSE"));
+        }
+        return Err(refused(crate::oidc::NOT_FOUND_REFUSAL));
+    };
+    if !config.enabled {
+        return Err(refused(crate::oidc::DISABLED_REFUSAL));
+    }
+    if !signers.knows(&config.issuer) {
+        return Err(refused(
+            "INVALID_IDP_RESPONSE : Error connecting to the given credential's issuer.",
+        ));
+    }
+    let Some(token) = params.get("id_token") else {
+        return Err(refused(&format!(
+            "INVALID_CREDENTIAL_OR_PROVIDER_ID : Invalid IdP response/credential: {request_uri}?{}",
+            post_body.unwrap_or_default()
+        )));
+    };
+    let kid = jws_kid(token)?;
+    let jwk = signers
+        .key(&config.issuer, &kid)
+        .ok_or_else(|| refused(crate::oidc::SIGNATURE_REFUSAL))?;
     Ok(Some(crate::oidc::LocalOidcTrust {
         project_id: store.project_id().to_owned(),
         tenant_id: store.tenant_id().map(str::to_owned),
@@ -11943,15 +12018,61 @@ fn strict_idp_trust(
 }
 
 /// The `kid` of a compact JWS header, read before any verification only to select a key.
-fn jws_kid(token: &str) -> Option<String> {
+///
+/// # Errors
+/// Production's refusals: a token whose header does not parse, and one without a `kid`
+/// (no key could verify it).
+fn jws_kid(token: &str) -> Result<String, JsonResponse> {
+    let unparsable = || error(400, crate::oidc::UNPARSABLE_REFUSAL);
     // The verifier's bound, applied before decoding anything (verification refuses it too).
-    if token.len() > 65_536 {
-        return None;
+    if token.len() > 65_536 || token.split('.').count() != 3 {
+        return Err(unparsable());
     }
-    let header = token.split('.').next()?;
-    let header: Value =
-        serde_json::from_slice(&fireemu_core_auth::jwt::base64url_decode(header).ok()?).ok()?;
-    header.get("kid")?.as_str().map(str::to_owned)
+    let header = token.split('.').next().unwrap_or_default();
+    let header: Value = fireemu_core_auth::jwt::base64url_decode(header)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .ok_or_else(unparsable)?;
+    header
+        .get("kid")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .ok_or_else(|| error(400, crate::oidc::SIGNATURE_REFUSAL))
+}
+
+/// Remembers a strict sign-in's nonce-bearing credential once the sign-in succeeded.
+fn record_used_credential(
+    used: Option<(&IdpSignerTrust, String, i64, i64)>,
+    response: &JsonResponse,
+) {
+    if response.status == 200 {
+        if let Some((signers, key, expires, now)) = used {
+            signers.record_credential(key, expires, now);
+        }
+    }
+}
+
+/// The key under which a strict sign-in's nonce-bearing credential is remembered: the auth
+/// namespace and its reset generation (a reset forgets it), the issuer and client, the subject
+/// and the nonce. Production's exact key is unobserved; this one refuses least.
+fn used_credential_key(
+    store: &AuthStore,
+    trust: &crate::oidc::LocalOidcTrust,
+    token: &crate::oidc::VerifiedIdToken,
+) -> Option<String> {
+    let nonce = token.nonce.as_ref()?;
+    Some(
+        json!([
+            store.project_id(),
+            store.tenant_id(),
+            store.reset_generation(),
+            trust.issuer,
+            trust.client_id,
+            token.subject,
+            nonce,
+        ])
+        .to_string(),
+    )
 }
 
 /// Resolve pendingToken *before* signup admission and assertion verification. A caller
@@ -12091,15 +12212,21 @@ fn sign_in_with_idp(
     body: &Value,
     at: LogicalInstant,
     inbound_credential_policy: fireemu_core_functions::manifest::BlockingAuthTokenPolicy,
+    strict: bool,
 ) -> JsonResponse {
     let ResolvedIdp {
         provider_id,
-        info,
+        mut info,
         mut base,
     } = match resolve_idp_credential(body) {
         Ok(resolved) => resolved,
         Err(r) => return r,
     };
+    // Production's answer shape is recorded for OIDC only (record-oidc 39209e).
+    let strict_oidc = strict && provider_id.starts_with("oidc.");
+    if strict_oidc {
+        strict_oidc_answer(&provider_id, &mut info, &mut base);
+    }
     let identity = FederatedIdentity {
         provider_id: provider_id.clone(),
         raw_id: info.raw_id.clone(),
@@ -12110,22 +12237,16 @@ fn sign_in_with_idp(
 
     // Linking to the session's user (`idToken` present) or a create-or-link sign-in.
     let (uid, is_new) = if body.get("idToken").is_some_and(|t| !t.is_null()) {
-        let uid = match verify(store, body, at) {
-            Ok(uid) => uid,
+        match link_idp_identity(store, body, at, &base, &info, identity, strict_oidc) {
+            Ok(uid) => (uid, false),
             Err(r) => return r,
-        };
-        // The identity may not already be linked to a different account.
-        if store
-            .user_by_federated(&provider_id, &info.raw_id)
-            .is_some_and(|u| u.local_id != uid)
-        {
-            return maybe_idp_credential_error(body, &base, "FEDERATED_USER_ID_ALREADY_LINKED");
         }
-        if let Err(e) = store.link_federated(&uid, identity) {
-            return auth_error(&e);
-        }
-        (uid, false)
     } else {
+        let identity = if strict_oidc {
+            stored_identity_or(store, identity)
+        } else {
+            identity
+        };
         match store.sign_in_with_idp(identity, info.email_verified, at) {
             Ok(fireemu_core_auth::store::IdpSignIn::SignedIn {
                 uid,
@@ -12144,7 +12265,16 @@ fn sign_in_with_idp(
                 // No tokens and no state change: the client must confirm the account.
                 base.push(("localId", json!(uid.as_str())));
                 base.push(("needConfirmation", json!(true)));
-                base.push(("verifiedProvider", json!(verified_providers)));
+                // Production leaves an empty list out (record-oidc 39209e).
+                let omit = strict_oidc && verified_providers.is_empty();
+                base.push((
+                    "verifiedProvider",
+                    if omit {
+                        Value::Null
+                    } else {
+                        json!(verified_providers)
+                    },
+                ));
                 let mut obj = serde_json::Map::new();
                 for (k, v) in base {
                     obj.insert((*k).to_owned(), v);
@@ -12157,18 +12287,17 @@ fn sign_in_with_idp(
             Err(e) => return auth_error(&e),
         }
     };
-    base.push(("isNewUser", json!(is_new)));
+    // Production answers `isNewUser` only when it is true (record-oidc 39209e).
+    base.push((
+        "isNewUser",
+        if strict_oidc && !is_new {
+            Value::Null
+        } else {
+            json!(is_new)
+        },
+    ));
 
-    // The stored account decides the final emailVerified when its email is the assertion's.
-    if let Some(u) = store.user(&uid) {
-        if u.email == info.email {
-            for entry in &mut base {
-                if entry.0 == "emailVerified" {
-                    entry.1 = json!(u.email_verified);
-                }
-            }
-        }
-    }
+    stored_email_verified(store, &uid, &info, &mut base);
 
     let inbound_credentials = inbound_credential_policy
         .any()
@@ -12183,6 +12312,211 @@ fn sign_in_with_idp(
         info.sign_in_attributes.as_ref(),
         inbound_credentials.as_ref(),
     )
+}
+
+/// Links `identity` to the account of the request's `idToken`.
+///
+/// # Errors
+/// The session's refusal, `FEDERATED_USER_ID_ALREADY_LINKED` for an identity another account
+/// links, strict OIDC's link refusals, and the store's.
+fn link_idp_identity(
+    store: &mut AuthStore,
+    body: &Value,
+    at: LogicalInstant,
+    base: &IdpBase,
+    info: &IdpUserInfo,
+    identity: FederatedIdentity,
+    strict_oidc: bool,
+) -> Result<LocalId, JsonResponse> {
+    let uid = verify(store, body, at)?;
+    // The identity may not already be linked to a different account.
+    if store
+        .user_by_federated(&identity.provider_id, &info.raw_id)
+        .is_some_and(|u| u.local_id != uid)
+    {
+        return Err(maybe_idp_credential_error(
+            body,
+            base,
+            "FEDERATED_USER_ID_ALREADY_LINKED",
+        ));
+    }
+    if strict_oidc {
+        if let Some(refusal) = strict_oidc_link_refusal(store, &uid, &identity.provider_id, info) {
+            return Err(maybe_idp_credential_error(body, base, refusal));
+        }
+    }
+    store
+        .link_federated(&uid, identity)
+        .map_err(|e| auth_error(&e))?;
+    Ok(uid)
+}
+
+/// The identity an account already links for `identity`'s provider and subject, or `identity`
+/// itself: production leaves a returning account's profile and provider information as they
+/// were (record-oidc 39209e), so the stored identity signs in unchanged.
+fn stored_identity_or(store: &AuthStore, identity: FederatedIdentity) -> FederatedIdentity {
+    store
+        .user_by_federated(&identity.provider_id, &identity.raw_id)
+        .and_then(|user| {
+            user.federated
+                .iter()
+                .find(|f| f.provider_id == identity.provider_id && f.raw_id == identity.raw_id)
+                .cloned()
+        })
+        .unwrap_or(identity)
+}
+
+/// Production's refusals of a verified OIDC link (record-oidc 39209e): an identity whose email
+/// another account holds (`EMAIL_EXISTS`, checked first), and another identity of a provider
+/// the account already has (`PROVIDER_ALREADY_LINKED`; the account keeps its identity).
+fn strict_oidc_link_refusal(
+    store: &AuthStore,
+    uid: &LocalId,
+    provider_id: &str,
+    info: &IdpUserInfo,
+) -> Option<&'static str> {
+    if info
+        .email
+        .as_deref()
+        .and_then(|email| store.user_by_email(&canonicalize_email(email)))
+        .is_some_and(|owner| owner.local_id != *uid)
+    {
+        return Some("EMAIL_EXISTS");
+    }
+    store
+        .user(uid)
+        .is_some_and(|user| {
+            user.federated
+                .iter()
+                .any(|f| f.provider_id == provider_id && f.raw_id != info.raw_id)
+        })
+        .then_some("PROVIDER_ALREADY_LINKED")
+}
+
+/// The stored account decides the final `emailVerified` when its email is the assertion's.
+fn stored_email_verified(store: &AuthStore, uid: &LocalId, info: &IdpUserInfo, base: &mut IdpBase) {
+    if let Some(u) = store.user(uid) {
+        if u.email == info.email {
+            for entry in base.iter_mut() {
+                if entry.0 == "emailVerified" {
+                    entry.1 = json!(u.email_verified);
+                }
+            }
+        }
+    }
+}
+
+/// Production's `createAuthUri` for an OIDC provider (record-oidc 39209e): the issuer's
+/// authorization endpoint with the ID-token flow's parameters (the continue URI as the redirect
+/// URI, a state, `openid` scope and the SHA-256 of a raw nonce the service keeps), and a
+/// session ID. A sign-in reads neither back (production signed in with a wrong or no session).
+/// `None` for a provider strict does not answer: not OIDC, an issuer without a configured
+/// authorization endpoint (no discovery document is fetched), or the code flow.
+fn strict_oidc_auth_uri(
+    store: &mut AuthStore,
+    provider_id: &str,
+    body: &Value,
+    signers: Option<&IdpSignerTrust>,
+) -> Option<JsonResponse> {
+    let config = store.oidc_config(provider_id)?.clone();
+    let Some(continue_uri) = str_field(body, "continueUri").filter(|uri| !uri.is_empty()) else {
+        return Some(error(400, "MISSING_CONTINUE_URI"));
+    };
+    if !uri_is_absolute(continue_uri) {
+        return Some(error(400, "INVALID_CONTINUE_URI"));
+    }
+    if !config.enabled {
+        return Some(error(400, crate::oidc::DISABLED_REFUSAL));
+    }
+    let endpoint = signers?.authorization_endpoint(&config.issuer)?;
+    if !config.response_type.id_token {
+        return None;
+    }
+    let state = store.next_opaque_value();
+    let raw_nonce = store.next_opaque_value();
+    let nonce = fireemu_core_types::hash::hex_lower(&fireemu_core_types::hash::sha256(
+        raw_nonce.as_bytes(),
+    ));
+    let session_id = store.next_opaque_value();
+    Some(JsonResponse {
+        status: 200,
+        body: json!({
+            "kind": "identitytoolkit#CreateAuthUriResponse",
+            "authUri": format!(
+                "{endpoint}?response_type=id_token&client_id={}&redirect_uri={continue_uri}&state={state}&scope=openid&nonce={nonce}",
+                config.client_id
+            ),
+            "providerId": provider_id,
+            "sessionId": session_id,
+        }),
+    })
+}
+
+/// The OIDC claims that are not sign-in attributes: the ID token's own and the standard user
+/// claims (production kept a custom claim and left out `iss`, `aud`, `sub`, `iat`, `exp`,
+/// `email`, `email_verified`, `name` and `picture`, record-oidc 39209e; the rest of the list
+/// follows the OIDC core specification and is unobserved).
+const OIDC_STANDARD_CLAIMS: &[&str] = &[
+    "iss",
+    "sub",
+    "aud",
+    "exp",
+    "iat",
+    "auth_time",
+    "nonce",
+    "acr",
+    "amr",
+    "azp",
+    "at_hash",
+    "c_hash",
+    "nbf",
+    "jti",
+    "sid",
+    "name",
+    "given_name",
+    "family_name",
+    "middle_name",
+    "nickname",
+    "preferred_username",
+    "profile",
+    "picture",
+    "website",
+    "email",
+    "email_verified",
+    "gender",
+    "birthdate",
+    "zoneinfo",
+    "locale",
+    "phone_number",
+    "phone_number_verified",
+    "address",
+    "updated_at",
+];
+
+/// Production's answer to a verified OIDC sign-in (record-oidc 39209e): the federated ID names
+/// the provider, no context, raw ID or access token for an ID-token credential, and the
+/// sign-in attributes are the claims beyond the standard ones (none: no attributes).
+fn strict_oidc_answer(provider_id: &str, info: &mut IdpUserInfo, base: &mut IdpBase) {
+    let federated_id = format!("{provider_id}/{}", info.raw_id);
+    for (key, value) in base.iter_mut() {
+        match *key {
+            "federatedId" => *value = json!(federated_id),
+            "context" | "rawId" | "oauthAccessToken" => *value = Value::Null,
+            _ => {}
+        }
+    }
+    let custom: serde_json::Map<String, Value> = serde_json::from_str::<Value>(&info.raw_user_info)
+        .ok()
+        .and_then(|claims| claims.as_object().cloned())
+        .into_iter()
+        .flatten()
+        .filter(|(name, _)| !OIDC_STANDARD_CLAIMS.contains(&name.as_str()))
+        .collect();
+    info.sign_in_attributes = if custom.is_empty() {
+        None
+    } else {
+        idp_claim_value(&Value::Object(custom))
+    };
 }
 
 /// When `returnIdpCredential` is set the client wants the credential and the error together, so
@@ -12281,7 +12615,12 @@ fn normalized_idp_params(request_uri: &str, post_body: Option<&str>) -> BTreeMap
 /// `accounts:createAuthUri`. Strict answers as production does (sandbox recording
 /// 2026-09-25, auth-config-sdk/email-privacy): a provider that is not configured is refused,
 /// and empty provider lists are left out.
-fn create_auth_uri(store: &AuthStore, body: &Value, strict: bool) -> JsonResponse {
+fn create_auth_uri(
+    store: &mut AuthStore,
+    body: &Value,
+    strict: bool,
+    signers: Option<&IdpSignerTrust>,
+) -> JsonResponse {
     let session_id = str_field(body, "sessionId")
         .filter(|s| !s.is_empty())
         .unwrap_or("fireemu-session")
@@ -12298,6 +12637,13 @@ fn create_auth_uri(store: &AuthStore, body: &Value, strict: bool) -> JsonRespons
                 400,
                 "OPERATION_NOT_ALLOWED : The identity provider configuration is not found.",
             );
+        }
+        if strict {
+            if let Some(answer) =
+                strict_oidc_auth_uri(store, provider.as_str().unwrap_or_default(), body, signers)
+            {
+                return answer;
+            }
         }
         return not_implemented("Sign-in with IDP is not yet supported.");
     }

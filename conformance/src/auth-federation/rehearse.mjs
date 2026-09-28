@@ -18,7 +18,7 @@ import { SANDBOX_PROJECT } from "../auth-account/harness.mjs";
 import { CONFORMANCE_DIR } from "../config.mjs";
 import { resolveFireemuBinary } from "../evidence.mjs";
 import { limitedFetch } from "./hosting.mjs";
-import { jwksDocument } from "./idp.mjs";
+import { discoveryDocument, jwksDocument } from "./idp.mjs";
 import { makeCertificate, prepareKeys } from "./run.mjs";
 import { LIMITS, recordCampaign, scanFixture } from "./record.mjs";
 
@@ -223,7 +223,12 @@ async function rehearse() {
         auth: {
           idTokenSigning: "session-rsa",
           apiKeys: ["fake-api-key"],
-          idpSigners: { [issuer]: jwksDocument(keys.run.jwk) },
+          idpSigners: {
+            [issuer]: {
+              ...jwksDocument(keys.run.jwk),
+              authorization_endpoint: discoveryDocument(issuer).authorization_endpoint,
+            },
+          },
         },
       }),
     );

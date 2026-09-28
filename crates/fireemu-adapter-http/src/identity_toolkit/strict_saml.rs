@@ -71,10 +71,10 @@ pub(super) fn names_saml_provider(body: &Value) -> bool {
 ///
 /// # Errors
 /// `INVALID_IDP_RESPONSE : Failed to verify the signature in SAMLResponse` when no configured
-/// certificate verifies a signature covering the assertion; `INVALID_IDP_RESPONSE` for a
-/// provider that is missing, disabled or named in another case, a missing or unreadable
-/// response, one without a `NameID`, or a form this verifier does not implement (codes
-/// unobserved).
+/// certificate verifies a signature covering the assertion; production's configuration
+/// messages for a provider that is missing, named in another case or disabled;
+/// `INVALID_IDP_RESPONSE` for a missing or unreadable response, one without a `NameID`, or a
+/// form this verifier does not implement (codes unobserved).
 pub(super) fn strict_saml(
     store: &AuthStore,
     body: &Value,
@@ -88,8 +88,17 @@ pub(super) fn strict_saml(
         return Ok(None);
     };
     // The credential parser lowercases the provider; the verified one must be the recorded one.
+    // A provider without a configuration, or disabled, is refused with production's
+    // configuration messages (record-oidc 39209e, as for OIDC and built-in providers).
     if *provider_id != provider_id.to_lowercase() {
-        return Err(refused());
+        return Err(error(400, crate::oidc::NOT_FOUND_REFUSAL));
+    }
+    match store.saml_config(provider_id) {
+        None => return Err(error(400, crate::oidc::NOT_FOUND_REFUSAL)),
+        Some(config) if !config.enabled => {
+            return Err(error(400, crate::oidc::DISABLED_REFUSAL));
+        }
+        Some(_) => {}
     }
     let encoded = params
         .get("SAMLResponse")

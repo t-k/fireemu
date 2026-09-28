@@ -317,6 +317,31 @@ fn duplicate_email_mode_refuses_password_duplicates_and_admits_idp_accounts() {
 }
 
 #[test]
+fn a_verified_idp_email_recycling_an_account_keeps_its_password_change_time() {
+    // AUTH-FEDERATION record-oidc 39209e: production's lookup of the recycled account still
+    // reports `passwordUpdatedAt`, as after an Admin password removal.
+    let mut s = store();
+    let owner = s
+        .create_user_with_password(NewUser::email("owner@example.com"), "hunter22", t(1))
+        .unwrap();
+    let changed = s.password_updated_at(&owner);
+    assert!(changed.is_some());
+    let result = s
+        .sign_in_with_idp(
+            federated("oidc.partner", "subject-1", Some("owner@example.com")),
+            true,
+            t(2),
+        )
+        .unwrap();
+    let fireemu_core_auth::store::IdpSignIn::SignedIn { uid, .. } = result else {
+        panic!("expected a completed IdP sign-in");
+    };
+    assert_eq!(uid, owner, "the unverified account is recycled");
+    assert!(!s.has_password(&owner));
+    assert_eq!(s.password_updated_at(&owner), changed);
+}
+
+#[test]
 fn duplicate_email_active_owner_follows_updates_and_any_owner_deletion_clears_it() {
     let mut s = store();
     s.set_config(ProjectAuthConfig {
@@ -589,6 +614,36 @@ fn refresh_tokens_and_id_tokens_respect_revocation_and_disablement() {
     ] {
         assert!(!e.to_string().is_empty());
     }
+}
+
+#[test]
+fn a_refresh_session_keeps_the_sign_in_attributes_recorded_for_it() {
+    use fireemu_core_auth::claims::ClaimValue;
+
+    let mut s = store();
+    let uid = s
+        .create_user(NewUser::email("attributes@example.com"), t0())
+        .unwrap();
+    let token = s.issue_refresh_token(&uid, t(1)).unwrap();
+    assert_eq!(s.refresh_session(&token).unwrap().sign_in_attributes, None);
+    let attributes = ClaimValue::Map(
+        [(
+            "department".to_owned(),
+            ClaimValue::String("fireemu".to_owned()),
+        )]
+        .into_iter()
+        .collect(),
+    );
+    s.set_refresh_sign_in_attributes(&token, Some(attributes.clone()))
+        .unwrap();
+    assert_eq!(
+        s.refresh_session(&token).unwrap().sign_in_attributes,
+        Some(attributes.clone())
+    );
+    assert_eq!(
+        s.set_refresh_sign_in_attributes("unknown", Some(attributes)),
+        Err(AuthError::InvalidRefreshToken)
+    );
 }
 
 #[test]

@@ -593,24 +593,6 @@
         "approvalRecord": "capability manifest APPCHECK-FUNCTIONS-1, \"callable Authorization integrity\" (crates/fireemu/src/control.rs); docs/specifications/firebase-app-check.md section 25 decision 3"
       }
     },
-    "functions/http-routing-cors-and-timeouts#preflight-on-a-callable-from-a-loopback-origin": {
-      "documents": "capability manifest FN-HTTP-1 (crates/fireemu/src/capabilities.json)",
-      "reason": "The official emulator varies its callable preflight response only on Origin and Access-Control-Request-Headers. fireemu also names Access-Control-Request-Method, Sec-Fetch-Site and Sec-Fetch-Mode because those request fields participate in its loopback callable admission decision; this prevents a shared cache from replaying an admitted response for a request that the proxy would refuse.",
-      "authority": {
-        "kind": "official-emulator",
-        "sourceUrls": [
-          "https://firebase.google.com/docs/functions/http-events",
-          "https://github.com/firebase/firebase-tools/tree/v15.28.2"
-        ],
-        "checkedOn": "2026-09-05",
-        "officialBaseline": {
-          "package": "firebase-tools",
-          "version": "15.28.2"
-        },
-        "fixture": "conformance/fixtures/functions/http-routing-cors-and-timeouts.json#preflight-on-a-callable-from-a-loopback-origin",
-        "approvalRecord": "capability manifest FN-HTTP-1 (crates/fireemu/src/capabilities.json)"
-      }
-    },
     "pubsub-probe/seek-to-time#replayed": {
       "documents": "README.md, \"Pub/Sub\"; capability manifest PUBSUB-WIRE-1 (crates/fireemu/src/capabilities.json)",
       "reason": "After a subscription is seeked to a timestamp before a message was published, fireemu redelivers that message even though it was already acknowledged and the subscription did not set retainAckedMessages. fireemu retains acked messages for seek unconditionally; the official emulator retains them only when retainAckedMessages is true, so it does not replay here. This is a fireemu superset: a seek never sees fewer messages than the official emulator returns.",

@@ -255,6 +255,17 @@ fn request_origin(headers: &hyper::HeaderMap) -> Result<Option<String>, Refusal>
     Ok(origins.into_iter().next())
 }
 
+fn function_origin(
+    headers: &hyper::HeaderMap,
+    callable_preflight: bool,
+) -> Result<Option<String>, Refusal> {
+    if callable_preflight {
+        Ok(None)
+    } else {
+        request_origin(headers)
+    }
+}
+
 /// A forwarded response.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProxiedResponse {
@@ -1372,11 +1383,11 @@ async fn respond(
 ) -> Result<Response<OutBody>, std::io::Error> {
     let path = req.uri().path().to_owned();
     let query = req.uri().query().map(str::to_owned);
-    let origin = match request_origin(req.headers()) {
-        Ok(origin) => origin,
-        Err(refusal) => return Ok(*refusal),
-    };
     if surface != HttpSurface::Functions {
+        let origin = match request_origin(req.headers()) {
+            Ok(origin) => origin,
+            Err(refusal) => return Ok(*refusal),
+        };
         if origin
             .as_deref()
             .is_some_and(|value| !origin_is_local(value))
@@ -1400,11 +1411,17 @@ async fn respond(
     }
     let method = req.method().as_str().to_owned();
     let (callable, _plain_http, streaming_callable) = http_trigger_kinds(&runtime, function);
-    let streaming = streaming_callable && accepts_callable_stream(req.headers());
-    if let Some(answer) = function_preflight(callable, &method, req.headers()) {
-        return Ok(answer);
-    }
-    if callable && profile == FunctionsHttpProfile::Strict {
+    let callable_preflight = callable && method == "OPTIONS";
+    // The SDK's CORS middleware owns every callable OPTIONS response, including
+    // explicit cors:false and origin lists. Preflights do not authenticate or invoke
+    // the callable handler, so strip credentials without admitting them.
+    let origin = match function_origin(req.headers(), callable_preflight) {
+        Ok(origin) => origin,
+        Err(refusal) => return Ok(*refusal),
+    };
+    let streaming =
+        !callable_preflight && streaming_callable && accepts_callable_stream(req.headers());
+    if callable && !callable_preflight && profile == FunctionsHttpProfile::Strict {
         if let Some(denial) = strict_callable_bearer_refusal(&runtime, req.headers()) {
             drain_refused_body(req.into_body()).await;
             return Ok(denial);
@@ -1419,15 +1436,22 @@ async fn respond(
                 .map(|v| (k.as_str().to_owned(), v.to_owned()))
         })
         .collect();
-    let mut headers = match sanitize_credentials(&runtime, function, req.headers(), headers) {
-        Ok(headers) => headers,
-        Err(denial) => {
-            drain_refused_body(req.into_body()).await;
-            return Ok(callable_credential_refusal(
-                *denial,
-                streaming,
-                origin.as_deref(),
-            ));
+    let mut headers = if callable_preflight {
+        headers
+            .into_iter()
+            .filter(|(name, _)| !crate::callable::is_owned(name))
+            .collect()
+    } else {
+        match sanitize_credentials(&runtime, function, req.headers(), headers) {
+            Ok(headers) => headers,
+            Err(denial) => {
+                drain_refused_body(req.into_body()).await;
+                return Ok(callable_credential_refusal(
+                    *denial,
+                    streaming,
+                    origin.as_deref(),
+                ));
+            }
         }
     };
     if profile == FunctionsHttpProfile::Strict {
@@ -1469,109 +1493,6 @@ fn field_values(headers: &hyper::HeaderMap, name: &str) -> Vec<String> {
         .iter()
         .map(|v| v.to_str().map_or_else(|_| String::new(), str::to_owned))
         .collect()
-}
-
-fn function_preflight(
-    callable: bool,
-    method: &str,
-    headers: &hyper::HeaderMap,
-) -> Option<Response<OutBody>> {
-    if callable && method == "OPTIONS" {
-        return Some(
-            callable_preflight(headers)
-                .unwrap_or_else(|| simple(StatusCode::FORBIDDEN, "forbidden callable preflight")),
-        );
-    }
-    None
-}
-
-/// A proxy-owned callable preflight response.
-///
-/// Callable preflights never reach Auth/App Check admission or the runner. Non-loopback
-/// origins receive the SDK's default callable CORS response. Loopback preflights retain
-/// the local protocol and Fetch Metadata checks, with every admission field in `Vary`.
-fn callable_preflight(headers: &hyper::HeaderMap) -> Option<Response<OutBody>> {
-    let origins = field_values(headers, "origin");
-    let [origin] = origins.as_slice() else {
-        return None;
-    };
-    if !origin_is_local(origin) {
-        let requested_fields = field_values(headers, "access-control-request-headers");
-        if requested_fields.len() > 1 {
-            return None;
-        }
-        let mut builder = Response::builder()
-            .status(StatusCode::NO_CONTENT)
-            .header("access-control-allow-origin", origin)
-            .header("access-control-allow-methods", "POST")
-            .header("vary", "Origin, Access-Control-Request-Headers")
-            .header("content-length", "0");
-        if let Some(fields) = requested_fields.first().filter(|fields| !fields.is_empty()) {
-            builder = builder.header("access-control-allow-headers", fields);
-        }
-        return builder.body(full(Bytes::new())).ok();
-    }
-    let requested_method = field_values(headers, "access-control-request-method");
-    if requested_method.len() != 1 || !requested_method[0].eq_ignore_ascii_case("POST") {
-        return None;
-    }
-    let fetch_site = field_values(headers, "sec-fetch-site");
-    if fetch_site.len() > 1
-        || fetch_site.first().is_some_and(|site| {
-            !matches!(
-                site.to_ascii_lowercase().as_str(),
-                "same-origin" | "same-site" | "none"
-            )
-        })
-    {
-        return None;
-    }
-    let fetch_mode = field_values(headers, "sec-fetch-mode");
-    if fetch_mode.len() > 1
-        || fetch_mode
-            .first()
-            .is_some_and(|mode| !mode.eq_ignore_ascii_case("cors"))
-    {
-        return None;
-    }
-
-    let requested_fields = field_values(headers, "access-control-request-headers");
-    if requested_fields.len() > 1 {
-        return None;
-    }
-    let mut admitted = Vec::new();
-    if let Some(fields) = requested_fields.first() {
-        for field in fields.split(',') {
-            let field = field.trim().to_ascii_lowercase();
-            if field.is_empty()
-                || !matches!(
-                    field.as_str(),
-                    "authorization"
-                        | "content-type"
-                        | "firebase-instance-id-token"
-                        | "x-firebase-appcheck"
-                )
-                || admitted.contains(&field)
-            {
-                return None;
-            }
-            admitted.push(field);
-        }
-    }
-
-    let mut builder = Response::builder()
-        .status(StatusCode::NO_CONTENT)
-        .header("access-control-allow-origin", origin)
-        .header("access-control-allow-methods", "POST")
-        .header(
-            "vary",
-            "Origin, Access-Control-Request-Method, Access-Control-Request-Headers, Sec-Fetch-Site, Sec-Fetch-Mode",
-        )
-        .header("content-length", "0");
-    if !admitted.is_empty() {
-        builder = builder.header("access-control-allow-headers", admitted.join(","));
-    }
-    builder.body(full(Bytes::new())).ok()
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]

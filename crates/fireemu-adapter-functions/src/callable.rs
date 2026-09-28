@@ -55,7 +55,7 @@ pub const ALWAYS_STRIPPED: &[&str] = &[
 ];
 
 /// Whether a field name is one the daemon owns on a callable request.
-fn is_owned(name: &str) -> bool {
+pub(crate) fn is_owned(name: &str) -> bool {
     OWNED_FIELDS.iter().any(|f| name.eq_ignore_ascii_case(f))
 }
 

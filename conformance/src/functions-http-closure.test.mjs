@@ -86,6 +86,20 @@ const httpsErrorCodes = new Set([
 const readRepo = (path) =>
   JSON.parse(readFileSync(fileURLToPath(new URL(`../../${path}`, import.meta.url)), "utf8"));
 
+test("FN-HTTP-001 reflects the approved Functions Origin policy in the generated inventory", () => {
+  const requirement = readRepo("verification/requirements/requirements.json")
+    .requirements.find(({ id }) => id === "FN-HTTP-001");
+  assert.ok(requirement);
+  assert.doesNotMatch(requirement.statement, /refus\w*[^.]*non-loopback\s+Origin/i);
+  assert.ok(requirement.artifacts.integration.includes(
+    "crates/fireemu-adapter-functions/tests/app_check_callable.rs",
+  ));
+  const inventory = readFileSync(fileURLToPath(new URL(
+    "../../docs/compatibility/requirements.md", import.meta.url,
+  )), "utf8");
+  assert.ok(inventory.includes(requirement.statement));
+});
+
 test("FUNCTIONS-HTTP closure keeps every declared condition and scope decision", () => {
   const closure = JSON.parse(readFileSync(closurePath, "utf8"));
   assert.equal(closure.parent, "FUNCTIONS-HTTP");

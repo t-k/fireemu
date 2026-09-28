@@ -134,31 +134,13 @@ fn exec_with_profile(source: &Path, project: &str, profile: &str) -> Output {
         .unwrap()
 }
 
-#[test]
-#[ignore = "requires tools/sdk-smoke dependencies; the SDK workflow runs this test"]
-fn on_request_cors_follows_the_selected_profile_and_explicit_option() {
-    assert!(have_sdk(), "install tools/sdk-smoke dependencies first");
-    let source = scratch_codebase("cors-profile");
-    write(
-        &source,
-        "index.js",
-        r"
-const { onRequest, onCall } = require('firebase-functions/v2/https');
-const handler = (request, response) => response.json({ method: request.method });
-exports.defaultCors = onRequest(handler);
-exports.disabledCors = onRequest({ cors: false }, handler);
-exports.enabledCors = onRequest({ cors: true }, handler);
-exports.listedCors = onRequest({ cors: ['https://allowed.example'] }, handler);
-exports.defaultCallable = onCall(request => ({ data: request.data }));
-",
-    );
-    let project = "demo-cors-profile";
-    let script = r"
+const CORS_PROFILE_PROBE: &str = r"
 const assert = require('node:assert/strict');
 (async () => {
   const base = `http://${process.env.FIREEMU_FUNCTIONS_HOST}/demo-cors-profile/us-central1`;
   const profile = process.argv[1];
-  for (const origin of ['http://localhost:3000', 'https://evil.example', 'http://192.168.1.20:5173']) {
+  let runs = 0;
+  for (const origin of ['http://localhost:3000', 'https://evil.example', 'http://192.168.1.20:5173', 'https://allowed.example']) {
   for (const name of ['defaultCors', 'disabledCors', 'enabledCors', 'listedCors']) {
     const preflight = await fetch(`${base}/${name}`, {
       method: 'OPTIONS',
@@ -176,23 +158,69 @@ const assert = require('node:assert/strict');
     assert.equal(get.headers.get('access-control-allow-origin'), wrapped ? allowedOrigin : null);
     assert.deepEqual(await get.json(), { method: 'GET' });
   }
-  const callablePreflight = await fetch(`${base}/defaultCallable`, {
-    method: 'OPTIONS',
-    headers: { origin, 'access-control-request-method': 'POST', 'access-control-request-headers': 'content-type' },
-  });
-  assert.equal(callablePreflight.status, 204);
-  assert.equal(callablePreflight.headers.get('access-control-allow-origin'), origin);
-  assert.equal(callablePreflight.headers.get('access-control-allow-methods'), 'POST');
-  assert.equal(callablePreflight.headers.get('access-control-allow-headers'), 'content-type');
-  const callable = await fetch(`${base}/defaultCallable`, {
-    method: 'POST', headers: { origin, 'content-type': 'application/json' }, body: JSON.stringify({ data: 'cors' }),
-  });
-  assert.equal(callable.status, 200);
-  assert.equal(callable.headers.get('access-control-allow-origin'), origin);
-  assert.deepEqual(await callable.json(), { result: { data: 'cors' } });
+  for (const name of ['defaultCallable', 'disabledCallable', 'listedCallable', 'multiListedCallable']) {
+    const enabled = name !== 'disabledCallable';
+    const allowedOrigin = !enabled ? null : profile === 'strict' && name === 'listedCallable'
+      ? 'https://allowed.example' : profile === 'strict' && name === 'multiListedCallable'
+        && origin !== 'https://allowed.example' ? null : origin;
+    for (const requestedMethod of ['POST', 'GET']) {
+      const callablePreflight = await fetch(`${base}/${name}`, {
+        method: 'OPTIONS',
+        headers: {
+          origin,
+          'access-control-request-method': requestedMethod,
+          'access-control-request-headers': 'content-type,x-client-header',
+          'sec-fetch-site': 'cross-site',
+          'sec-fetch-mode': 'cors',
+          authorization: 'Bearer malformed',
+          'x-firebase-appcheck': 'malformed',
+        },
+      });
+      assert.equal(callablePreflight.status, enabled ? 204 : 400, `${profile} ${name} ${origin} ${requestedMethod}`);
+      assert.equal(callablePreflight.headers.get('access-control-allow-origin'), allowedOrigin);
+      assert.equal(callablePreflight.headers.get('access-control-allow-methods'), enabled ? 'POST' : null);
+      assert.equal(callablePreflight.headers.get('access-control-allow-headers'), enabled ? 'content-type,x-client-header' : null);
+      if (enabled) assert.equal(await callablePreflight.text(), '');
+      else assert.deepEqual(await callablePreflight.json(), { error: { message: 'Bad Request', status: 'INVALID_ARGUMENT' } });
+      assert.deepEqual(await (await fetch(`${base}/callableCount`)).json(), { runs }, 'OPTIONS must not run the callable handler');
+    }
+    const callable = await fetch(`${base}/${name}`, {
+      method: 'POST', headers: { origin, 'content-type': 'application/json' }, body: JSON.stringify({ data: 'cors' }),
+    });
+    assert.equal(callable.status, 200);
+    assert.equal(callable.headers.get('access-control-allow-origin'), allowedOrigin);
+    assert.deepEqual(await callable.json(), { result: { data: 'cors', runs: ++runs } });
+  }
   }
 })().catch(error => { console.error(error); process.exitCode = 1; });
 ";
+
+#[test]
+#[ignore = "requires tools/sdk-smoke dependencies; the SDK workflow runs this test"]
+fn on_request_cors_follows_the_selected_profile_and_explicit_option() {
+    assert!(have_sdk(), "install tools/sdk-smoke dependencies first");
+    let source = scratch_codebase("cors-profile");
+    write(
+        &source,
+        "index.js",
+        r"
+const { onRequest, onCall } = require('firebase-functions/v2/https');
+const handler = (request, response) => response.json({ method: request.method });
+exports.defaultCors = onRequest(handler);
+exports.disabledCors = onRequest({ cors: false }, handler);
+exports.enabledCors = onRequest({ cors: true }, handler);
+exports.listedCors = onRequest({ cors: ['https://allowed.example'] }, handler);
+let callableRuns = 0;
+const callableHandler = request => ({ data: request.data, runs: ++callableRuns });
+exports.defaultCallable = onCall(callableHandler);
+exports.disabledCallable = onCall({ cors: false }, callableHandler);
+exports.listedCallable = onCall({ cors: ['https://allowed.example'] }, callableHandler);
+exports.multiListedCallable = onCall({ cors: ['https://allowed.example', 'https://second.example'] }, callableHandler);
+exports.callableCount = onRequest({ cors: false }, (_request, response) => response.json({ runs: callableRuns }));
+",
+    );
+    let project = "demo-cors-profile";
+
     for profile in ["emulator", "strict"] {
         let config = source.join(format!("fireemu-{profile}.json"));
         write(
@@ -209,7 +237,7 @@ const assert = require('node:assert/strict');
                 "--",
                 "node",
                 "-e",
-                script,
+                CORS_PROFILE_PROBE,
                 profile,
             ])
             .stdin(Stdio::null())

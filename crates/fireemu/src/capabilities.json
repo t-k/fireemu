@@ -430,8 +430,7 @@
       "the real Firebase Web SDK .stream() acceptance test covers ordinary onCall and onCallGenkit chunks, final results, HttpsError after a chunk, non-streaming sendChunk, downstream cancellation, and admission release",
       "streaming accepts only an absent or identity Content-Encoding because the production 10 MiB quota is measured on uncompressed response data; refusing an encoded local runner response prevents compressed data from bypassing the limit",
       "conformance: functions/callable-error-envelope, functions/callable-auth-context, functions/http-routing-cors-and-timeouts (conformance/README.md); this records agreement with the official Local Emulator Suite, never with production",
-      "loopback callable preflights vary on every request field used for admission (Origin, method, requested headers, Fetch Metadata site and mode), while the official emulator varies only on Origin and requested headers; the extra members keep a shared cache from replaying an admitted response for a request the proxy would refuse",
-      "both profiles admit callable requests from non-loopback origins, including LAN origins, and preserve the Origin for the SDK callable wrapper; non-loopback preflights return the default callable CORS response without Auth or App Check admission",
+      "both profiles admit callable requests from loopback, external and LAN origins; callable OPTIONS reaches the SDK CORS wrapper without Auth or App Check admission, respecting cors:false and profile-specific Origin lists, with the SDK response and Vary forwarded unchanged",
       "the timeout does not kill the runner; the official emulator kills the runtime process of the one trigger it runs per process, and one fireemu runner serves a whole codebase"
     ],
     "status": "implemented"

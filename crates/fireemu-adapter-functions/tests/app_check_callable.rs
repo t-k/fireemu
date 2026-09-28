@@ -1163,118 +1163,83 @@ async fn eventarc_publish_rejects_amplified_fanout_without_partial_enqueue() {
 }
 
 #[tokio::test]
-async fn an_enforced_callable_answers_a_genuine_local_preflight_without_admission_or_invocation() {
-    let h = start(true).await;
-    let response = h
-        .request(
-            "OPTIONS",
-            "guarded",
-            &[
-                ("origin", "http://127.0.0.1:5173"),
-                ("access-control-request-method", "POST"),
-                (
-                    "access-control-request-headers",
-                    "authorization,content-type,x-firebase-appcheck",
-                ),
-                ("sec-fetch-site", "same-site"),
-                ("sec-fetch-mode", "cors"),
-            ],
-        )
-        .await;
-    assert_eq!(response.status, 204);
-    assert_eq!(
-        response_header(&response, "access-control-allow-origin"),
-        Some("http://127.0.0.1:5173")
-    );
-    assert_eq!(
-        response_header(&response, "access-control-allow-methods"),
-        Some("POST")
-    );
-    assert_eq!(
-        response_header(&response, "access-control-allow-headers"),
-        Some("authorization,content-type,x-firebase-appcheck")
-    );
-    assert_eq!(
-        response_header(&response, "vary"),
-        Some("Origin, Access-Control-Request-Method, Access-Control-Request-Headers, Sec-Fetch-Site, Sec-Fetch-Mode")
-    );
-    assert!(response.body.is_empty());
-    assert!(
-        h.gate
-            .registry()
-            .read()
-            .unwrap()
-            .observations(PROJECT)
-            .is_empty(),
-        "a preflight is not an App Check admission"
-    );
-
-    let token = h.token();
-    let (_, bearer) = h.user("preflight@example.com");
-    let (status, body) = h
-        .call(
-            "guarded",
-            &[
-                ("origin", "http://127.0.0.1:5173"),
-                ("authorization", &bearer),
-                ("x-firebase-appcheck", &token),
-            ],
-        )
-        .await;
-    assert_eq!(status, 200, "{body}");
-    assert_eq!(echoed(&body, "authorization"), vec![bearer]);
-    assert_eq!(echoed(&body, "x-firebase-appcheck"), vec![token]);
-    h.stop().await;
+async fn callable_preflights_delegate_response_to_the_runner_in_the_emulator_profile() {
+    assert_callable_preflights_reach_the_runner(
+        fireemu_adapter_functions::http::FunctionsHttpProfile::Emulator,
+    )
+    .await;
 }
 
 #[tokio::test]
-async fn callable_preflight_rejects_malformed_local_browser_requests() {
-    let h = start(true).await;
+async fn callable_preflights_delegate_response_to_the_runner_in_the_strict_profile() {
+    assert_callable_preflights_reach_the_runner(
+        fireemu_adapter_functions::http::FunctionsHttpProfile::Strict,
+    )
+    .await;
+}
+
+async fn assert_callable_preflights_reach_the_runner(
+    profile: fireemu_adapter_functions::http::FunctionsHttpProfile,
+) {
+    let h = start_with_consume_profile(true, "disabled", profile).await;
+    for origin in [
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "https://evil.example",
+        "http://192.168.1.20:5173",
+        "null",
+    ] {
+        for fields in [
+            vec![],
+            vec![("access-control-request-method", "GET")],
+            vec![
+                ("access-control-request-method", "POST"),
+                ("access-control-request-method", "GET"),
+            ],
+            vec![("access-control-request-headers", "x-client-header")],
+            vec![
+                ("access-control-request-headers", "content-type"),
+                ("access-control-request-headers", "authorization"),
+            ],
+            vec![
+                ("sec-fetch-site", "cross-site"),
+                ("sec-fetch-mode", "navigate"),
+            ],
+        ] {
+            let mut headers = vec![("origin", origin)];
+            headers.extend(fields.iter().copied());
+            let response = h.request("OPTIONS", "guarded", &headers).await;
+            assert_eq!(response.status, 200, "{profile:?} {headers:?}");
+            let body: Value = serde_json::from_slice(&response.body).unwrap();
+            assert_eq!(body["method"], "OPTIONS");
+            assert_eq!(echoed(&body, "origin"), vec![origin]);
+            for (name, _) in &fields {
+                let expected: Vec<String> = fields
+                    .iter()
+                    .filter(|(field, _)| field == name)
+                    .map(|(_, value)| (*value).to_owned())
+                    .collect();
+                assert_eq!(echoed(&body, name), expected, "{headers:?}");
+            }
+        }
+    }
     for headers in [
         vec![("access-control-request-method", "POST")],
-        vec![("origin", "http://localhost:5173")],
         vec![
             ("origin", "http://localhost:5173"),
-            ("access-control-request-method", "PUT"),
-        ],
-        vec![
-            ("origin", "http://localhost:5173"),
-            ("access-control-request-method", "POST"),
-            ("access-control-request-headers", "x-fireemu-runner-secret"),
-        ],
-        vec![
-            ("origin", "http://localhost:5173"),
-            ("access-control-request-method", "POST"),
-            ("sec-fetch-site", "cross-site"),
-        ],
-        vec![
-            ("origin", "http://localhost:5173"),
-            ("access-control-request-method", "POST"),
-            ("sec-fetch-mode", "navigate"),
-        ],
-        vec![
-            ("origin", "http://localhost:5173"),
-            ("access-control-request-method", "POST"),
-            ("access-control-request-method", "POST"),
-        ],
-        vec![
-            ("origin", "http://localhost:5173"),
-            ("access-control-request-method", "POST"),
-            ("access-control-request-headers", "content-type"),
-            ("access-control-request-headers", "authorization"),
-        ],
-        vec![
-            ("origin", "http://localhost:5173"),
-            ("origin", "http://127.0.0.1:5173"),
-            ("access-control-request-method", "POST"),
+            ("origin", "https://evil.example"),
         ],
     ] {
         let response = h.request("OPTIONS", "guarded", &headers).await;
-        assert_ne!(response.status, 204, "{headers:?}");
-        assert!(
-            response_header(&response, "access-control-allow-origin").is_none(),
-            "a refused preflight has no CORS grant: {headers:?}"
-        );
+        assert_eq!(response.status, 200, "{headers:?}");
+        let body: Value = serde_json::from_slice(&response.body).unwrap();
+        assert_eq!(body["method"], "OPTIONS");
+        let expected: Vec<String> = headers
+            .iter()
+            .filter(|(name, _)| *name == "origin")
+            .map(|(_, value)| (*value).to_owned())
+            .collect();
+        assert_eq!(echoed(&body, "origin"), expected);
     }
     assert!(h
         .gate
@@ -1287,11 +1252,85 @@ async fn callable_preflight_rejects_malformed_local_browser_requests() {
 }
 
 #[tokio::test]
+async fn callable_preflights_strip_credentials_without_auth_or_app_check_admission() {
+    for profile in [
+        fireemu_adapter_functions::http::FunctionsHttpProfile::Emulator,
+        fireemu_adapter_functions::http::FunctionsHttpProfile::Strict,
+    ] {
+        let h = start_with_consume_profile(true, "disabled", profile).await;
+        for headers in [
+            vec![],
+            vec![
+                ("authorization", "Bearer malformed"),
+                ("x-firebase-appcheck", "malformed"),
+            ],
+            vec![
+                ("authorization", "Bearer malformed"),
+                ("Authorization", "Bearer owner"),
+                ("x-firebase-appcheck", "malformed"),
+                ("X-Firebase-AppCheck", "also-malformed"),
+                ("x-callable-context-auth", "forged"),
+                ("x-original-auth", "forged"),
+                ("x-fireemu-runner-secret", "forged"),
+                ("accept", "text/event-stream"),
+            ],
+        ] {
+            let response = h.request("OPTIONS", "guarded", &headers).await;
+            assert_eq!(response.status, 200, "{profile:?} {headers:?}");
+            let body: Value = serde_json::from_slice(&response.body).unwrap();
+            assert_eq!(body["method"], "OPTIONS");
+            for name in [
+                "authorization",
+                "x-firebase-appcheck",
+                "x-callable-context-auth",
+                "x-original-auth",
+            ] {
+                assert!(echoed(&body, name).is_empty(), "{name}: {body}");
+            }
+            assert_eq!(
+                echoed(&body, "x-fireemu-runner-secret"),
+                vec!["runner-secret"]
+            );
+        }
+        assert!(h
+            .gate
+            .registry()
+            .read()
+            .unwrap()
+            .observations(PROJECT)
+            .is_empty());
+        h.stop().await;
+    }
+}
+
+#[tokio::test]
 async fn callable_origin_post_reaches_the_handler_in_the_emulator_profile() {
     assert_callable_origins_reach_the_handler(
         fireemu_adapter_functions::http::FunctionsHttpProfile::Emulator,
     )
     .await;
+}
+
+#[tokio::test]
+async fn ordinary_function_requests_keep_the_existing_ambiguous_origin_refusal() {
+    let h = start(true).await;
+    for function in ["add", "echo"] {
+        for method in ["POST", "GET"] {
+            let response = h
+                .request(
+                    method,
+                    function,
+                    &[
+                        ("origin", "http://localhost:5173"),
+                        ("origin", "https://evil.example"),
+                    ],
+                )
+                .await;
+            assert_eq!(response.status, 403);
+            assert_eq!(response.body, b"forbidden origin");
+        }
+    }
+    h.stop().await;
 }
 
 #[tokio::test]
@@ -1324,111 +1363,6 @@ async fn assert_callable_origins_reach_the_handler(
             assert_eq!(body["method"], "POST");
         }
     }
-    h.stop().await;
-}
-
-#[tokio::test]
-async fn callable_origin_preflight_uses_default_cors_in_the_emulator_profile() {
-    assert_remote_callable_preflight(
-        fireemu_adapter_functions::http::FunctionsHttpProfile::Emulator,
-    )
-    .await;
-}
-
-#[tokio::test]
-async fn callable_origin_preflight_uses_default_cors_in_the_strict_profile() {
-    assert_remote_callable_preflight(fireemu_adapter_functions::http::FunctionsHttpProfile::Strict)
-        .await;
-}
-
-async fn assert_remote_callable_preflight(
-    profile: fireemu_adapter_functions::http::FunctionsHttpProfile,
-) {
-    let h = start_with_consume_profile(true, "disabled", profile).await;
-    for origin in ["https://evil.example", "http://192.168.1.20:5173", "null"] {
-        let response = h
-            .request(
-                "OPTIONS",
-                "guarded",
-                &[
-                    ("origin", origin),
-                    ("access-control-request-method", "POST"),
-                    (
-                        "access-control-request-headers",
-                        "content-type,authorization,x-client-header",
-                    ),
-                    ("sec-fetch-site", "cross-site"),
-                    ("sec-fetch-mode", "cors"),
-                ],
-            )
-            .await;
-        assert_eq!(
-            response.status, 204,
-            "the default callable CORS admits {origin}"
-        );
-        assert_eq!(
-            response_header(&response, "access-control-allow-origin"),
-            Some(origin)
-        );
-        assert_eq!(
-            response_header(&response, "access-control-allow-methods"),
-            Some("POST")
-        );
-        assert_eq!(
-            response_header(&response, "access-control-allow-headers"),
-            Some("content-type,authorization,x-client-header")
-        );
-        assert_eq!(
-            response_header(&response, "vary"),
-            Some("Origin, Access-Control-Request-Headers")
-        );
-        assert!(response.body.is_empty());
-        let without_requested_headers = h
-            .request(
-                "OPTIONS",
-                "guarded",
-                &[
-                    ("origin", origin),
-                    ("access-control-request-method", "POST"),
-                ],
-            )
-            .await;
-        assert_eq!(without_requested_headers.status, 204);
-        assert_eq!(
-            response_header(&without_requested_headers, "access-control-allow-origin"),
-            Some(origin)
-        );
-        assert!(
-            response_header(&without_requested_headers, "access-control-allow-headers").is_none()
-        );
-        assert_eq!(
-            response_header(&without_requested_headers, "vary"),
-            Some("Origin, Access-Control-Request-Headers")
-        );
-        let duplicate_requested_headers = h
-            .request(
-                "OPTIONS",
-                "guarded",
-                &[
-                    ("origin", origin),
-                    ("access-control-request-method", "POST"),
-                    ("access-control-request-headers", "content-type"),
-                    ("access-control-request-headers", "authorization"),
-                ],
-            )
-            .await;
-        assert_eq!(duplicate_requested_headers.status, 403);
-        assert!(
-            response_header(&duplicate_requested_headers, "access-control-allow-origin").is_none()
-        );
-    }
-    assert!(h
-        .gate
-        .registry()
-        .read()
-        .unwrap()
-        .observations(PROJECT)
-        .is_empty());
     h.stop().await;
 }
 

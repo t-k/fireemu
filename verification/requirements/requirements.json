@@ -1640,13 +1640,15 @@
     },
     {
       "id": "FN-HTTP-001",
-      "statement": "The functions port answers the official emulator's two 404s, its timeout answer and the CORS a loopback origin gets, and refuses a non-loopback Origin.",
+      "statement": "The Functions port answers the official emulator's two 404s and its timeout answer. Both profiles admit loopback, external and LAN Origins and delegate callable OPTIONS to the SDK CORS wrapper before Auth or App Check admission, respecting explicit cors:false and the selected profile's Origin-list behavior.",
       "criticality": "important",
       "owner": "adapter-functions",
       "status": "implemented",
       "artifacts": {
         "integration": [
-          "crates/fireemu-adapter-functions/tests/runtime.rs"
+          "crates/fireemu-adapter-functions/tests/runtime.rs",
+          "crates/fireemu-adapter-functions/tests/app_check_callable.rs",
+          "crates/fireemu/tests/functions_environment.rs"
         ],
         "conformance": "conformance/fixtures/functions/http-routing-cors-and-timeouts.json"
       }

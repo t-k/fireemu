@@ -93,6 +93,7 @@ function comparableForm(row) {
       late: row.probes.filter((p) => !p.onTime).map((p) => p.doc),
     };
   if (row.docs) return { docs: row.docs };
+  if (row.resumes) return { first: row.first, resumes: row.resumes };
   if (row.streams) return { streams: row.streams, listeners: row.listeners };
   return {
     ...(row.result ? { result: clientSummary([row.result]).results } : {}),

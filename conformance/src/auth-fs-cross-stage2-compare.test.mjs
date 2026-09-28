@@ -182,6 +182,24 @@ test("a row matches only when both recordings agree with fireemu and every timer
   );
 });
 
+test("a resume row is compared by its frames and how each resume ended", () => {
+  const boundary = { kind: "boundary", resumeToken: true };
+  const row = (frames) => ({
+    id: "resume/open",
+    conditions: ["C"],
+    first: [boundary],
+    resumes: { same: { frames, end: null }, switch: { frames, end: { reason: "error", code: 16 } } },
+  });
+  assert.deepEqual(comparable(row([boundary])), {
+    first: [boundary],
+    resumes: {
+      same: { frames: [boundary], end: null },
+      switch: { frames: [boundary], end: { reason: "error", code: 16 } },
+    },
+  });
+  assert.notDeepEqual(comparable(row([boundary])), comparable(row([])));
+});
+
 test("a fixture keeps each recording's stream ends, without their status texts", () => {
   const metas = [
     { recording: 1, programDigest: "p", harness: "h", startedAt: "t1", sha: "s" },

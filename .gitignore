@@ -6,6 +6,7 @@ CLAUDE.local.md
 /target/
 **/target/
 .claude/agent-dags/
+.claude/
 junit.xml
 verification/tla/states/
 verification/tla/**/states/

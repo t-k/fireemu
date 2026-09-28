@@ -3886,6 +3886,44 @@ impl AuthBlockingHook for CreatingAdminHook {
     }
 }
 
+/// Clears the accounts while beforeCreate runs and gives the created account's uid to another
+/// account right after.
+struct ClearingThenTakingHook {
+    state: std::sync::Weak<AuthState>,
+}
+
+impl AuthBlockingHook for ClearingThenTakingHook {
+    fn invoke(
+        &self,
+        event: BlockingAuthEvent,
+        user: &fireemu_core_auth::store::UserRecord,
+    ) -> Result<Value, BlockingFunctionFailure> {
+        if event == BlockingAuthEvent::BeforeCreate {
+            let state = self
+                .state
+                .upgrade()
+                .ok_or_else(BlockingFunctionFailure::unhandled)?;
+            let cleared = handle(
+                &state,
+                "DELETE",
+                "/emulator/v1/projects/demo-app/accounts",
+                &Value::Null,
+            );
+            let taken = handle_with(
+                &state,
+                "POST",
+                &format!("{ADMIN}/accounts"),
+                &owner(),
+                &json!({"localId": user.local_id.as_str(), "email": "taker@example.com"}),
+            );
+            if cleared.status != 200 || taken.status != 200 {
+                return Err(BlockingFunctionFailure::unhandled());
+            }
+        }
+        Ok(json!({}))
+    }
+}
+
 impl AuthBlockingHook for ReentrantAdminHook {
     fn invoke(
         &self,
@@ -4297,7 +4335,7 @@ fn blocking_auth_revision_drift_after_callback_before_commit_is_rejected() {
 /// the cleared state, as the official Auth emulator (whose account wipe leaves an in-flight
 /// sign-up alone) does (closure re-review M1', 2026-09-28). Either way a fresh sign-up works.
 #[test]
-fn emulator_clear_rejects_a_paused_blocking_candidate_and_allows_a_fresh_id() {
+fn a_clear_during_a_blocking_hook_is_refused_in_strict_and_committed_in_the_emulator() {
     for strict in [true, false] {
         use std::sync::mpsc::sync_channel;
         use std::time::Duration;
@@ -4364,6 +4402,37 @@ fn emulator_clear_rejects_a_paused_blocking_candidate_and_allows_a_fresh_id() {
         );
         assert_eq!(status, 200, "{body}");
         assert_eq!(state.store.lock().unwrap().user_count(), before + 1);
+    }
+}
+
+/// A request whose uid another account took after a clear is refused in both profiles: the
+/// emulator profile commits across a clear only with the uid the clear left free (closure
+/// re-review S1', 2026-09-28).
+#[test]
+fn a_cleared_request_does_not_take_a_uid_another_account_took() {
+    for strict in [true, false] {
+        let state = Arc::new_cyclic(|weak| {
+            let mut state = if strict { strict_state() } else { state() };
+            state.blocking = Some(Arc::new(ClearingThenTakingHook {
+                state: weak.clone(),
+            }));
+            state
+        });
+        let (status, body) = post(
+            &state,
+            &format!("{V1}/accounts:signUp"),
+            &json!({"email": "wiped@example.com", "password": "hunter22"}),
+        );
+        assert_eq!(status, 409, "strict {strict}: {body}");
+        let expected = if strict {
+            "AUTH_STATE_RESET"
+        } else {
+            "AUTH_STATE_CHANGED"
+        };
+        assert_eq!(body["error"]["message"], expected, "strict {strict}");
+        let store = state.store.lock().unwrap();
+        assert!(store.user_by_email("taker@example.com").is_some());
+        assert!(store.user_by_email("wiped@example.com").is_none());
     }
 }
 

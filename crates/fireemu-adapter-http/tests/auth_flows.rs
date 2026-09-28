@@ -5174,7 +5174,14 @@ fn federated_totp_finalize_preserves_attributes_and_blocking_context() {
     assert_eq!(token["firebase"]["sign_in_provider"], "oidc.corp");
     assert_eq!(token["firebase"]["sign_in_attributes"], oidc);
     assert_eq!(token["selectedRole"], "auditor");
-    let recorded = contexts.lock().unwrap();
+    assert_idp_totp_before_sign_in(&contexts.lock().unwrap(), &oidc);
+}
+
+/// The one beforeSignIn event of an identity-provider first factor finalized with TOTP.
+fn assert_idp_totp_before_sign_in(
+    recorded: &[(BlockingAuthEvent, AuthBlockingContext)],
+    oidc: &Value,
+) {
     assert_eq!(recorded.len(), 1);
     assert_eq!(recorded[0].0, BlockingAuthEvent::BeforeSignIn);
     assert_eq!(
@@ -5183,7 +5190,7 @@ fn federated_totp_finalize_preserves_attributes_and_blocking_context() {
             .credential
             .as_ref()
             .and_then(|credential| credential.claims.as_ref()),
-        Some(&oidc)
+        Some(oidc)
     );
     // The identity provider of the first factor is the event's additional user info, with its
     // profile, for an account that is not new (closure re-review S1', 2026-09-28).
@@ -5193,8 +5200,57 @@ fn federated_totp_finalize_preserves_attributes_and_blocking_context() {
         .as_ref()
         .expect("an identity-provider first factor names its provider");
     assert_eq!(info.provider_id, "oidc.corp");
-    assert_eq!(info.profile.as_ref(), Some(&oidc));
+    assert_eq!(info.profile.as_ref(), Some(oidc));
     assert!(!info.is_new_user);
+    // The account's enrolled factor and its provider reach the event (B9).
+    let factors = &recorded[0].1.enrolled_factors;
+    assert_eq!(factors.len(), 1);
+    assert_eq!(factors[0].factor_id, "totp");
+    assert_eq!(factors[0].phone_number, None);
+    assert!(factors[0].enrollment_time.is_some());
+    assert!(recorded[0]
+        .1
+        .provider_data
+        .iter()
+        .any(|provider| provider.provider_id == "oidc.corp"));
+}
+
+/// The event of a sign-in names the account's providers as an account lookup lists them, the
+/// phone number first and the password provider for an address with a password
+/// (AUTH-TENANT-BLOCKING recording 2026-09-28, B9; closure re-review S1').
+#[test]
+fn a_blocking_event_names_the_account_providers_as_a_lookup_lists_them() {
+    let contexts = Arc::new(Mutex::new(Vec::new()));
+    let mut s = state();
+    let user = sign_up(&s, "providers@example.com");
+    let (status, updated) = admin(
+        &s,
+        &format!("{V1}/projects/demo-app/accounts:update"),
+        &json!({"localId": user["localId"], "phoneNumber": "+15550001234"}),
+    );
+    assert_eq!(status, 200, "{updated}");
+    s.blocking = Some(Arc::new(RawCredentialBlockingHook {
+        contexts: Arc::clone(&contexts),
+        forward_inbound_credentials: false,
+        token_policy: None,
+    }));
+    let (status, signed) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithPassword"),
+        &json!({"email": "providers@example.com", "password": "hunter22"}),
+    );
+    assert_eq!(status, 200, "{signed}");
+    let recorded = contexts.lock().unwrap();
+    assert_eq!(recorded.len(), 1);
+    let providers = &recorded[0].1.provider_data;
+    let ids: Vec<&str> = providers.iter().map(|p| p.provider_id.as_str()).collect();
+    assert_eq!(ids, ["phone", "password"]);
+    assert_eq!(providers[0].phone_number.as_deref(), Some("+15550001234"));
+    assert_eq!(providers[0].uid, "+15550001234");
+    assert_eq!(providers[1].email.as_deref(), Some("providers@example.com"));
+    assert_eq!(providers[1].uid, "providers@example.com");
+    assert_eq!(providers[1].phone_number, None);
+    assert!(recorded[0].1.enrolled_factors.is_empty());
 }
 
 #[test]
@@ -9207,4 +9263,47 @@ fn a_blocking_response_applies_photo_url_but_not_the_sdk_photo_url_name() {
         assert_eq!(user["displayName"], "Named", "{field}: {lookup}");
         assert_eq!(user.get("photoUrl").is_some(), applied, "{field}: {lookup}");
     }
+}
+
+/// An account without a password lists the password provider once it has signed in with an
+/// email link, whatever created it, as production's record does (closure re-review S1',
+/// 2026-09-28: a survivor in `account_providers`).
+#[test]
+fn an_email_link_sign_in_lists_the_password_provider_for_an_account_without_one() {
+    let s = state();
+    let (status, created) = admin(
+        &s,
+        &format!("{V1}/projects/demo-app/accounts"),
+        &json!({"email": "link-later@example.com"}),
+    );
+    assert_eq!(status, 200, "{created}");
+    let lookup = |s: &AuthState| {
+        admin(
+            s,
+            &format!("{V1}/projects/demo-app/accounts:lookup"),
+            &json!({"localId": [created["localId"]]}),
+        )
+        .1
+    };
+    assert!(lookup(&s)["users"][0].get("providerUserInfo").is_none());
+    let (status, sent) = post(
+        &s,
+        &format!("{V1}/accounts:sendOobCode"),
+        &json!({"requestType": "EMAIL_SIGNIN", "email": "link-later@example.com"}),
+    );
+    assert_eq!(status, 200, "{sent}");
+    let code = issued_code(&s, "EMAIL_SIGNIN");
+    let (status, signed) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithEmailLink"),
+        &json!({"email": "link-later@example.com", "oobCode": code}),
+    );
+    assert_eq!(status, 200, "{signed}");
+    assert_eq!(signed["localId"], created["localId"]);
+    let providers = lookup(&s)["users"][0]["providerUserInfo"].clone();
+    assert_eq!(
+        providers,
+        json!([{"providerId": "password", "rawId": "link-later@example.com", "federatedId": "link-later@example.com", "email": "link-later@example.com"}]),
+        "{providers}"
+    );
 }

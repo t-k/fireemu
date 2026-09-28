@@ -5,8 +5,8 @@
     "project": "<project>",
     "note": "Two recordings per program. The run's issuer host, run tag, project and project number are placeholders; tokens are recorded as their header and claims with times relative to iat; refresh, access and pending tokens, session IDs, local IDs and certificates are masked. `second` holds the other recording of rows that differed.",
     "renormalized": {
-      "harnessDigest": "c472378fb1951c1b14c949a70db3126270d18a6ef0af602ebc8d39b110f6b8b9",
-      "note": "Re-normalized after recording: the authorization state of an authUri and a nonce the service made became placeholders, Unix times in error messages were masked, and claims quoted in messages became relative to iat. The rows are otherwise as recorded (harnessDigest per program is the recording harness)."
+      "harnessDigest": "2d1888b8ed9b5999de06b0f1b70d93842e790df629de46861ad7235210025c7b",
+      "note": "Re-normalized after recording: the authorization state of an authUri and a nonce the service made became placeholders, Unix times in error messages were masked, claims quoted in messages became relative to iat, and the key ID of every recorded token header was masked. The rows are otherwise as recorded (harnessDigest per program is the recording harness)."
     }
   },
   "programs": {
@@ -43,8 +43,8 @@
               "<jwt>": {
                 "header": {
                   "alg": "RS256",
-                  "kid": "801d4a207307b4f356acdb85ca717ee7ba0dbf7e",
-                  "typ": "JWT"
+                  "typ": "JWT",
+                  "kid": "<kid>"
                 },
                 "claims": {
                   "name": "Fed User",
@@ -79,7 +79,7 @@
                 "header": {
                   "alg": "RS256",
                   "typ": "JWT",
-                  "kid": "78450a961d12a26b"
+                  "kid": "<kid>"
                 },
                 "claims": {
                   "iss": "https://<issuer-host>/oidc/<run>",
@@ -153,8 +153,8 @@
               "<jwt>": {
                 "header": {
                   "alg": "RS256",
-                  "kid": "801d4a207307b4f356acdb85ca717ee7ba0dbf7e",
-                  "typ": "JWT"
+                  "typ": "JWT",
+                  "kid": "<kid>"
                 },
                 "claims": {
                   "iss": "https://securetoken.google.com/<project>",
@@ -187,7 +187,7 @@
                 "header": {
                   "alg": "RS256",
                   "typ": "JWT",
-                  "kid": "78450a961d12a26b"
+                  "kid": "<kid>"
                 },
                 "claims": {
                   "iss": "https://<issuer-host>/oidc/<run>",
@@ -227,8 +227,8 @@
               "<jwt>": {
                 "header": {
                   "alg": "RS256",
-                  "kid": "801d4a207307b4f356acdb85ca717ee7ba0dbf7e",
-                  "typ": "JWT"
+                  "typ": "JWT",
+                  "kid": "<kid>"
                 },
                 "claims": {
                   "iss": "https://securetoken.google.com/<project>",
@@ -256,7 +256,7 @@
                 "header": {
                   "alg": "RS256",
                   "typ": "JWT",
-                  "kid": "78450a961d12a26b"
+                  "kid": "<kid>"
                 },
                 "claims": {
                   "iss": "https://<issuer-host>/oidc/<run>",
@@ -313,8 +313,8 @@
               "<jwt>": {
                 "header": {
                   "alg": "RS256",
-                  "kid": "801d4a207307b4f356acdb85ca717ee7ba0dbf7e",
-                  "typ": "JWT"
+                  "typ": "JWT",
+                  "kid": "<kid>"
                 },
                 "claims": {
                   "iss": "https://securetoken.google.com/<project>",
@@ -347,7 +347,7 @@
                 "header": {
                   "alg": "RS256",
                   "typ": "JWT",
-                  "kid": "78450a961d12a26b"
+                  "kid": "<kid>"
                 },
                 "claims": {
                   "iss": "https://<issuer-host>/oidc/<run>",
@@ -390,8 +390,8 @@
               "<jwt>": {
                 "header": {
                   "alg": "RS256",
-                  "kid": "801d4a207307b4f356acdb85ca717ee7ba0dbf7e",
-                  "typ": "JWT"
+                  "typ": "JWT",
+                  "kid": "<kid>"
                 },
                 "claims": {
                   "iss": "https://securetoken.google.com/<project>",
@@ -424,7 +424,7 @@
                 "header": {
                   "alg": "RS256",
                   "typ": "JWT",
-                  "kid": "78450a961d12a26b"
+                  "kid": "<kid>"
                 },
                 "claims": {
                   "iss": "https://<issuer-host>/oidc/<run>",
@@ -513,8 +513,8 @@
               "<jwt>": {
                 "header": {
                   "alg": "RS256",
-                  "kid": "801d4a207307b4f356acdb85ca717ee7ba0dbf7e",
-                  "typ": "JWT"
+                  "typ": "JWT",
+                  "kid": "<kid>"
                 },
                 "claims": {
                   "name": "Claims User",
@@ -551,7 +551,7 @@
                 "header": {
                   "alg": "RS256",
                   "typ": "JWT",
-                  "kid": "78450a961d12a26b"
+                  "kid": "<kid>"
                 },
                 "claims": {
                   "iss": "https://<issuer-host>/oidc/<run>",
@@ -591,8 +591,8 @@
               "<jwt>": {
                 "header": {
                   "alg": "RS256",
-                  "kid": "801d4a207307b4f356acdb85ca717ee7ba0dbf7e",
-                  "typ": "JWT"
+                  "typ": "JWT",
+                  "kid": "<kid>"
                 },
                 "claims": {
                   "name": "Claims User",
@@ -629,8 +629,8 @@
               "<jwt>": {
                 "header": {
                   "alg": "RS256",
-                  "kid": "801d4a207307b4f356acdb85ca717ee7ba0dbf7e",
-                  "typ": "JWT"
+                  "typ": "JWT",
+                  "kid": "<kid>"
                 },
                 "claims": {
                   "name": "Claims User",
@@ -698,8 +698,8 @@
               "<jwt>": {
                 "header": {
                   "alg": "RS256",
-                  "kid": "801d4a207307b4f356acdb85ca717ee7ba0dbf7e",
-                  "typ": "JWT"
+                  "typ": "JWT",
+                  "kid": "<kid>"
                 },
                 "claims": {
                   "name": "Claims User",
@@ -736,7 +736,7 @@
                 "header": {
                   "alg": "RS256",
                   "typ": "JWT",
-                  "kid": "78450a961d12a26b"
+                  "kid": "<kid>"
                 },
                 "claims": {
                   "iss": "https://<issuer-host>/oidc/<run>",
@@ -776,8 +776,8 @@
               "<jwt>": {
                 "header": {
                   "alg": "RS256",
-                  "kid": "801d4a207307b4f356acdb85ca717ee7ba0dbf7e",
-                  "typ": "JWT"
+                  "typ": "JWT",
+                  "kid": "<kid>"
                 },
                 "claims": {
                   "name": "Claims User",
@@ -814,8 +814,8 @@
               "<jwt>": {
                 "header": {
                   "alg": "RS256",
-                  "kid": "801d4a207307b4f356acdb85ca717ee7ba0dbf7e",
-                  "typ": "JWT"
+                  "typ": "JWT",
+                  "kid": "<kid>"
                 },
                 "claims": {
                   "name": "Claims User",
@@ -856,7 +856,7 @@
               "<jwt>": {
                 "header": {
                   "alg": "RS256",
-                  "kid": "KgkHcg"
+                  "kid": "<kid>"
                 },
                 "claims": {
                   "iss": "https://session.firebase.google.com/<project>",
@@ -895,7 +895,7 @@
               "<jwt>": {
                 "header": {
                   "alg": "RS256",
-                  "kid": "KgkHcg"
+                  "kid": "<kid>"
                 },
                 "claims": {
                   "iss": "https://session.firebase.google.com/<project>",
@@ -961,8 +961,8 @@
               "<jwt>": {
                 "header": {
                   "alg": "RS256",
-                  "kid": "801d4a207307b4f356acdb85ca717ee7ba0dbf7e",
-                  "typ": "JWT"
+                  "typ": "JWT",
+                  "kid": "<kid>"
                 },
                 "claims": {
                   "name": "Claims User",
@@ -999,7 +999,7 @@
                 "header": {
                   "alg": "RS256",
                   "typ": "JWT",
-                  "kid": "78450a961d12a26b"
+                  "kid": "<kid>"
                 },
                 "claims": {
                   "iss": "https://<issuer-host>/oidc/<run>",
@@ -1074,7 +1074,7 @@
                 "header": {
                   "alg": "RS256",
                   "typ": "JWT",
-                  "kid": "78450a961d12a26b"
+                  "kid": "<kid>"
                 },
                 "claims": {
                   "iss": "https://<issuer-host>/oidc/<run>",
@@ -1168,8 +1168,8 @@
               "<jwt>": {
                 "header": {
                   "alg": "RS256",
-                  "kid": "801d4a207307b4f356acdb85ca717ee7ba0dbf7e",
-                  "typ": "JWT"
+                  "typ": "JWT",
+                  "kid": "<kid>"
                 },
                 "claims": {
                   "iss": "https://securetoken.google.com/<project>",
@@ -1202,7 +1202,7 @@
                 "header": {
                   "alg": "RS256",
                   "typ": "JWT",
-                  "kid": "78450a961d12a26b"
+                  "kid": "<kid>"
                 },
                 "claims": {
                   "iss": "https://<issuer-host>/oidc/<run>",
@@ -1350,8 +1350,8 @@
               "<jwt>": {
                 "header": {
                   "alg": "RS256",
-                  "kid": "801d4a207307b4f356acdb85ca717ee7ba0dbf7e",
-                  "typ": "JWT"
+                  "typ": "JWT",
+                  "kid": "<kid>"
                 },
                 "claims": {
                   "iss": "https://securetoken.google.com/<project>",
@@ -1379,7 +1379,7 @@
                 "header": {
                   "alg": "RS256",
                   "typ": "JWT",
-                  "kid": "78450a961d12a26b"
+                  "kid": "<kid>"
                 },
                 "claims": {
                   "iss": "https://<issuer-host>/oidc/<run>",
@@ -1466,8 +1466,8 @@
               "<jwt>": {
                 "header": {
                   "alg": "RS256",
-                  "kid": "801d4a207307b4f356acdb85ca717ee7ba0dbf7e",
-                  "typ": "JWT"
+                  "typ": "JWT",
+                  "kid": "<kid>"
                 },
                 "claims": {
                   "iss": "https://securetoken.google.com/<project>",
@@ -1500,7 +1500,7 @@
                 "header": {
                   "alg": "RS256",
                   "typ": "JWT",
-                  "kid": "78450a961d12a26b"
+                  "kid": "<kid>"
                 },
                 "claims": {
                   "iss": "https://<issuer-host>/oidc/<run>",
@@ -1556,7 +1556,7 @@
                 "header": {
                   "alg": "RS256",
                   "typ": "JWT",
-                  "kid": "78450a961d12a26b"
+                  "kid": "<kid>"
                 },
                 "claims": {
                   "iss": "https://<issuer-host>/oidc/<run>",
@@ -1617,7 +1617,7 @@
                 "header": {
                   "alg": "RS256",
                   "typ": "JWT",
-                  "kid": "78450a961d12a26b"
+                  "kid": "<kid>"
                 },
                 "claims": {
                   "iss": "https://<issuer-host>/oidc/<run>",
@@ -1670,7 +1670,7 @@
                 "header": {
                   "alg": "RS256",
                   "typ": "JWT",
-                  "kid": "78450a961d12a26b"
+                  "kid": "<kid>"
                 },
                 "claims": {
                   "iss": "https://<issuer-host>/oidc/<run>",
@@ -1730,8 +1730,8 @@
               "<jwt>": {
                 "header": {
                   "alg": "RS256",
-                  "kid": "801d4a207307b4f356acdb85ca717ee7ba0dbf7e",
-                  "typ": "JWT"
+                  "typ": "JWT",
+                  "kid": "<kid>"
                 },
                 "claims": {
                   "iss": "https://securetoken.google.com/<project>",
@@ -1759,7 +1759,7 @@
                 "header": {
                   "alg": "RS256",
                   "typ": "JWT",
-                  "kid": "78450a961d12a26b"
+                  "kid": "<kid>"
                 },
                 "claims": {
                   "iss": "https://<issuer-host>/oidc/<run>",
@@ -1829,8 +1829,8 @@
               "<jwt>": {
                 "header": {
                   "alg": "RS256",
-                  "kid": "801d4a207307b4f356acdb85ca717ee7ba0dbf7e",
-                  "typ": "JWT"
+                  "typ": "JWT",
+                  "kid": "<kid>"
                 },
                 "claims": {
                   "iss": "https://securetoken.google.com/<project>",
@@ -1858,7 +1858,7 @@
                 "header": {
                   "alg": "RS256",
                   "typ": "JWT",
-                  "kid": "78450a961d12a26b"
+                  "kid": "<kid>"
                 },
                 "claims": {
                   "iss": "https://<issuer-host>/oidc/<run>",
@@ -1932,8 +1932,8 @@
               "<jwt>": {
                 "header": {
                   "alg": "RS256",
-                  "kid": "801d4a207307b4f356acdb85ca717ee7ba0dbf7e",
-                  "typ": "JWT"
+                  "typ": "JWT",
+                  "kid": "<kid>"
                 },
                 "claims": {
                   "iss": "https://securetoken.google.com/<project>",
@@ -1961,7 +1961,7 @@
                 "header": {
                   "alg": "RS256",
                   "typ": "JWT",
-                  "kid": "78450a961d12a26b"
+                  "kid": "<kid>"
                 },
                 "claims": {
                   "iss": "https://<issuer-host>/oidc/<run>",
@@ -1997,8 +1997,8 @@
               "<jwt>": {
                 "header": {
                   "alg": "RS256",
-                  "kid": "801d4a207307b4f356acdb85ca717ee7ba0dbf7e",
-                  "typ": "JWT"
+                  "typ": "JWT",
+                  "kid": "<kid>"
                 },
                 "claims": {
                   "iss": "https://securetoken.google.com/<project>",
@@ -2026,7 +2026,7 @@
                 "header": {
                   "alg": "RS256",
                   "typ": "JWT",
-                  "kid": "78450a961d12a26b"
+                  "kid": "<kid>"
                 },
                 "claims": {
                   "iss": "https://<issuer-host>/oidc/<run>",
@@ -2082,8 +2082,8 @@
               "<jwt>": {
                 "header": {
                   "alg": "RS256",
-                  "kid": "801d4a207307b4f356acdb85ca717ee7ba0dbf7e",
-                  "typ": "JWT"
+                  "typ": "JWT",
+                  "kid": "<kid>"
                 },
                 "claims": {
                   "iss": "https://securetoken.google.com/<project>",
@@ -2116,7 +2116,7 @@
                 "header": {
                   "alg": "RS256",
                   "typ": "JWT",
-                  "kid": "78450a961d12a26b"
+                  "kid": "<kid>"
                 },
                 "claims": {
                   "iss": "https://<issuer-host>/oidc/<run>",
@@ -2220,8 +2220,8 @@
               "<jwt>": {
                 "header": {
                   "alg": "RS256",
-                  "kid": "801d4a207307b4f356acdb85ca717ee7ba0dbf7e",
-                  "typ": "JWT"
+                  "typ": "JWT",
+                  "kid": "<kid>"
                 },
                 "claims": {
                   "iss": "https://securetoken.google.com/<project>",
@@ -2249,7 +2249,7 @@
                 "header": {
                   "alg": "RS256",
                   "typ": "JWT",
-                  "kid": "78450a961d12a26b"
+                  "kid": "<kid>"
                 },
                 "claims": {
                   "iss": "https://<issuer-host>/oidc/<run>",
@@ -2323,8 +2323,8 @@
               "<jwt>": {
                 "header": {
                   "alg": "RS256",
-                  "kid": "801d4a207307b4f356acdb85ca717ee7ba0dbf7e",
-                  "typ": "JWT"
+                  "typ": "JWT",
+                  "kid": "<kid>"
                 },
                 "claims": {
                   "iss": "https://securetoken.google.com/<project>",
@@ -2352,7 +2352,7 @@
                 "header": {
                   "alg": "RS256",
                   "typ": "JWT",
-                  "kid": "78450a961d12a26b"
+                  "kid": "<kid>"
                 },
                 "claims": {
                   "iss": "https://<issuer-host>/oidc/<run>",
@@ -2519,8 +2519,8 @@
               "<jwt>": {
                 "header": {
                   "alg": "RS256",
-                  "kid": "801d4a207307b4f356acdb85ca717ee7ba0dbf7e",
-                  "typ": "JWT"
+                  "typ": "JWT",
+                  "kid": "<kid>"
                 },
                 "claims": {
                   "iss": "https://securetoken.google.com/<project>",
@@ -2553,7 +2553,7 @@
                 "header": {
                   "alg": "RS256",
                   "typ": "JWT",
-                  "kid": "78450a961d12a26b"
+                  "kid": "<kid>"
                 },
                 "claims": {
                   "iss": "https://<issuer-host>/oidc/<run>",
@@ -2594,8 +2594,8 @@
               "<jwt>": {
                 "header": {
                   "alg": "RS256",
-                  "kid": "801d4a207307b4f356acdb85ca717ee7ba0dbf7e",
-                  "typ": "JWT"
+                  "typ": "JWT",
+                  "kid": "<kid>"
                 },
                 "claims": {
                   "iss": "https://securetoken.google.com/<project>",
@@ -2628,7 +2628,7 @@
                 "header": {
                   "alg": "RS256",
                   "typ": "JWT",
-                  "kid": "78450a961d12a26b"
+                  "kid": "<kid>"
                 },
                 "claims": {
                   "iss": "https://<issuer-host>/oidc/<run>",
@@ -2668,8 +2668,8 @@
               "<jwt>": {
                 "header": {
                   "alg": "RS256",
-                  "kid": "801d4a207307b4f356acdb85ca717ee7ba0dbf7e",
-                  "typ": "JWT"
+                  "typ": "JWT",
+                  "kid": "<kid>"
                 },
                 "claims": {
                   "iss": "https://securetoken.google.com/<project>",
@@ -2702,7 +2702,7 @@
                 "header": {
                   "alg": "RS256",
                   "typ": "JWT",
-                  "kid": "78450a961d12a26b"
+                  "kid": "<kid>"
                 },
                 "claims": {
                   "iss": "https://<issuer-host>/oidc/<run>",
@@ -3137,8 +3137,8 @@
               "<jwt>": {
                 "header": {
                   "alg": "RS256",
-                  "kid": "801d4a207307b4f356acdb85ca717ee7ba0dbf7e",
-                  "typ": "JWT"
+                  "typ": "JWT",
+                  "kid": "<kid>"
                 },
                 "claims": {
                   "iss": "https://securetoken.google.com/<project>",
@@ -3166,7 +3166,7 @@
                 "header": {
                   "alg": "RS256",
                   "typ": "JWT",
-                  "kid": "78450a961d12a26b"
+                  "kid": "<kid>"
                 },
                 "claims": {
                   "iss": "https://<issuer-host>/oidc/<run>",
@@ -3258,8 +3258,8 @@
               "<jwt>": {
                 "header": {
                   "alg": "RS256",
-                  "kid": "801d4a207307b4f356acdb85ca717ee7ba0dbf7e",
-                  "typ": "JWT"
+                  "typ": "JWT",
+                  "kid": "<kid>"
                 },
                 "claims": {
                   "iss": "https://securetoken.google.com/<project>",
@@ -3287,7 +3287,7 @@
                 "header": {
                   "alg": "RS256",
                   "typ": "JWT",
-                  "kid": "78450a961d12a26b"
+                  "kid": "<kid>"
                 },
                 "claims": {
                   "iss": "https://<issuer-host>/oidc/<run>",
@@ -3323,8 +3323,8 @@
               "<jwt>": {
                 "header": {
                   "alg": "RS256",
-                  "kid": "801d4a207307b4f356acdb85ca717ee7ba0dbf7e",
-                  "typ": "JWT"
+                  "typ": "JWT",
+                  "kid": "<kid>"
                 },
                 "claims": {
                   "iss": "https://securetoken.google.com/<project>",
@@ -3352,7 +3352,7 @@
                 "header": {
                   "alg": "RS256",
                   "typ": "JWT",
-                  "kid": "78450a961d12a26b"
+                  "kid": "<kid>"
                 },
                 "claims": {
                   "iss": "https://<issuer-host>/oidc/<run>",
@@ -3387,8 +3387,8 @@
               "<jwt>": {
                 "header": {
                   "alg": "RS256",
-                  "kid": "801d4a207307b4f356acdb85ca717ee7ba0dbf7e",
-                  "typ": "JWT"
+                  "typ": "JWT",
+                  "kid": "<kid>"
                 },
                 "claims": {
                   "iss": "https://securetoken.google.com/<project>",
@@ -3416,7 +3416,7 @@
                 "header": {
                   "alg": "RS256",
                   "typ": "JWT",
-                  "kid": "78450a961d12a26b"
+                  "kid": "<kid>"
                 },
                 "claims": {
                   "iss": "https://<issuer-host>/oidc/<run>",
@@ -3451,8 +3451,8 @@
               "<jwt>": {
                 "header": {
                   "alg": "RS256",
-                  "kid": "801d4a207307b4f356acdb85ca717ee7ba0dbf7e",
-                  "typ": "JWT"
+                  "typ": "JWT",
+                  "kid": "<kid>"
                 },
                 "claims": {
                   "iss": "https://securetoken.google.com/<project>",
@@ -3480,7 +3480,7 @@
                 "header": {
                   "alg": "RS256",
                   "typ": "JWT",
-                  "kid": "78450a961d12a26b"
+                  "kid": "<kid>"
                 },
                 "claims": {
                   "iss": "https://<issuer-host>/oidc/<run>",

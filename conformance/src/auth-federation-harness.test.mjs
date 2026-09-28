@@ -529,3 +529,25 @@ test("recordings keep no per-request value: the authorization state and times in
     message: "code 400, 12 attempts, 1234567",
   });
 });
+
+test("recordings keep no key ID: a token's kid names a key of that run or service", async () => {
+  const { normalize } = await import("./auth-federation/harness.mjs");
+  const ctx = { run: RUN, project: SANDBOX_PROJECT };
+  const jwt = (header) =>
+    [header, { iat: 1_790_528_974, exp: 1_790_532_574 }, {}]
+      .map((part) => Buffer.from(JSON.stringify(part)).toString("base64url"))
+      .join(".");
+  for (const key of ["idToken", "id_token", "access_token", "sessionCookie", "oauthIdToken"]) {
+    assert.deepEqual(
+      normalize({ [key]: jwt({ alg: "RS256", kid: "801d4a207307b4f3", typ: "JWT" }) }, ctx)[key][
+        "<jwt>"
+      ].header,
+      { alg: "RS256", kid: "<kid>", typ: "JWT" },
+      key,
+    );
+  }
+  // A header without a kid stays without one.
+  assert.deepEqual(normalize({ idToken: jwt({ alg: "none" }) }, ctx).idToken["<jwt>"].header, {
+    alg: "none",
+  });
+});

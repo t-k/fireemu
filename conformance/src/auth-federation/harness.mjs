@@ -4,8 +4,8 @@
 //   its number and the Web API key become placeholders;
 // - certificates (the run's IdP certificate, the service's SP certificates) become
 //   placeholders with their count kept;
-// - ID tokens and session cookies are recorded as their header and claims (times relative to
-//   `iat`), never as the token.
+// - ID tokens and session cookies are recorded as their header (the key ID masked) and claims
+//   (times relative to `iat`), never as the token.
 
 // Secure Token answers a refresh with the new ID token as `access_token` (and `id_token`).
 const TOKEN_KEYS = new Set([
@@ -67,7 +67,10 @@ function decodeToken(token) {
   const [header, payload] = String(token).split(".");
   try {
     const decode = (part) => JSON.parse(Buffer.from(part, "base64url").toString("utf8"));
-    return { "<jwt>": { header: decode(header), claims: relativeTimes(decode(payload)) } };
+    // The key ID names a key of the run's issuer or of the service: it differs per key.
+    const { kid, ...rest } = decode(header);
+    const recorded = kid === undefined ? rest : { ...rest, kid: "<kid>" };
+    return { "<jwt>": { header: recorded, claims: relativeTimes(decode(payload)) } };
   } catch {
     return "<unparsable-token>";
   }

@@ -65,14 +65,26 @@ function relativeTimes(claims) {
   return out;
 }
 
-function decodeToken(token) {
+/**
+ * Tokens minted after the sign-in: a refresh's (`id_token`, `access_token`) and a session
+ * cookie. Their `auth_time` is the sign-in's, and whether it falls in their own second or an
+ * earlier one depends on when they were sent, so it is recorded only as not after `iat`
+ * (AUTH-FEDERATION Q1, 2026-09-29). A later `auth_time` stays as it is.
+ */
+const MINTED_LATER = new Set(["id_token", "access_token", "sessionCookie"]);
+
+function decodeToken(token, key) {
   const [header, payload] = String(token).split(".");
   try {
     const decode = (part) => JSON.parse(Buffer.from(part, "base64url").toString("utf8"));
     // The key ID names a key of the run's issuer or of the service: it differs per key.
     const { kid, ...rest } = decode(header);
     const recorded = kid === undefined ? rest : { ...rest, kid: "<kid>" };
-    return { "<jwt>": { header: recorded, claims: relativeTimes(decode(payload)) } };
+    const claims = relativeTimes(decode(payload));
+    if (MINTED_LATER.has(key) && /^iat(\+0|-\d+)$/.test(String(claims.auth_time))) {
+      claims.auth_time = "<=iat";
+    }
+    return { "<jwt>": { header: recorded, claims } };
   } catch {
     return "<unparsable-token>";
   }
@@ -144,7 +156,7 @@ export function normalize(value, ctx, key = "") {
     return "<time>";
   }
   if (typeof value === "string") {
-    if (TOKEN_KEYS.has(key)) return normalize(decodeToken(value), ctx);
+    if (TOKEN_KEYS.has(key)) return normalize(decodeToken(value, key), ctx);
     if (MASKED[key]) return MASKED[key];
     if (KEPT_ONLY[key]) return KEPT_ONLY[key](value);
     // The service's authorization state, and the nonce it makes when none is given, differ

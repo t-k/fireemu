@@ -502,28 +502,27 @@ test("recordings keep no per-request value: the authorization state and times in
   const ctx = { run: RUN, project: SANDBOX_PROJECT, issuerHost: CHANNEL };
   const authUri = `https://${CHANNEL}/oidc/${RUN}/authorize?response_type=id_token&client_id=client-q&state=AMbdmDmLyPCC-x_y&scope=openid&nonce=n-1`;
   assert.deepEqual(normalize({ authUri }, ctx), {
-    authUri: "https://<issuer-host>/oidc/<run>/authorize?response_type=id_token&client_id=client-q&state=<state>&scope=openid&nonce=n-1",
+    authUri:
+      "https://<issuer-host>/oidc/<run>/authorize?response_type=id_token&client_id=client-q&state=<state>&scope=openid&nonce=n-1",
   });
   // A nonce the service made (64 hex digits) is masked with its form kept; another is kept.
   const generated = `${authUri.replace("nonce=n-1", `nonce=${"9d".repeat(32)}`)}#x`;
   assert.deepEqual(normalize({ authUri: generated }, ctx), {
-    authUri: "https://<issuer-host>/oidc/<run>/authorize?response_type=id_token&client_id=client-q&state=<state>&scope=openid&nonce=<nonce:hex64>#x",
+    authUri:
+      "https://<issuer-host>/oidc/<run>/authorize?response_type=id_token&client_id=client-q&state=<state>&scope=openid&nonce=<nonce:hex64>#x",
   });
   const stale = "INVALID_IDP_RESPONSE : ID Token issued at 1790552633 is stale to sign-in.";
   const unnamed = `INVALID_IDP_RESPONSE : ID Token does not contain user's identity in 'sub' claim: {"aud":"client-v","exp":1790563433,"iat":1790559833,"iss":"https://${CHANNEL}/oidc/${RUN}"}`;
-  assert.deepEqual(
-    normalize({ error: { message: stale, errors: [{ message: unnamed }] } }, ctx),
-    {
-      error: {
-        message: "INVALID_IDP_RESPONSE : ID Token issued at <time> is stale to sign-in.",
-        errors: [
-          {
-            message: `INVALID_IDP_RESPONSE : ID Token does not contain user's identity in 'sub' claim: {"aud":"client-v","exp":"iat+3600","iat":"<iat>","iss":"https://<issuer-host>/oidc/<run>"}`,
-          },
-        ],
-      },
+  assert.deepEqual(normalize({ error: { message: stale, errors: [{ message: unnamed }] } }, ctx), {
+    error: {
+      message: "INVALID_IDP_RESPONSE : ID Token issued at <time> is stale to sign-in.",
+      errors: [
+        {
+          message: `INVALID_IDP_RESPONSE : ID Token does not contain user's identity in 'sub' claim: {"aud":"client-v","exp":"iat+3600","iat":"<iat>","iss":"https://<issuer-host>/oidc/<run>"}`,
+        },
+      ],
     },
-  );
+  });
   // Numbers that are not plausible Unix times stay as answered.
   assert.deepEqual(normalize({ message: "code 400, 12 attempts, 1234567" }, ctx), {
     message: "code 400, 12 attempts, 1234567",
@@ -552,6 +551,32 @@ test("recordings keep no key ID: a token's kid names a key of that run or servic
   });
 });
 
+test("a token minted after the sign-in records auth_time only as not after iat", async () => {
+  const { normalize } = await import("./auth-federation/harness.mjs");
+  const ctx = { run: RUN, project: SANDBOX_PROJECT };
+  const iat = 1_790_528_974;
+  const jwt = (authTime) =>
+    [{ alg: "RS256", typ: "JWT" }, { iat, exp: iat + 3600, auth_time: authTime }, {}]
+      .map((part) => Buffer.from(JSON.stringify(part)).toString("base64url"))
+      .join(".");
+  const authTime = (key, value) =>
+    normalize({ [key]: jwt(value) }, ctx)[key]["<jwt>"].claims.auth_time;
+  // A refresh or session cookie may be minted in the sign-in's second or a later one: which
+  // depends on when it was sent (AUTH-FEDERATION Q1, 2026-09-29).
+  for (const key of ["id_token", "access_token", "sessionCookie"]) {
+    assert.equal(authTime(key, iat), "<=iat", key);
+    assert.equal(authTime(key, iat - 1), "<=iat", key);
+    assert.equal(authTime(key, iat - 7200), "<=iat", key);
+    // An auth_time after the token's iat stays visible.
+    assert.equal(authTime(key, iat + 2), "iat+2", key);
+  }
+  // The sign-in's own token keeps its exact offset, and so does the IdP's.
+  for (const key of ["idToken", "oauthIdToken"]) {
+    assert.equal(authTime(key, iat), "iat+0", key);
+    assert.equal(authTime(key, iat - 1), "iat-1", key);
+  }
+});
+
 test("a SAMLResponse is the run's only when every certificate it carries is the run's", () => {
   const response = (...certificates) =>
     Buffer.from(
@@ -568,7 +593,10 @@ test("a SAMLResponse is the run's only when every certificate it carries is the 
   const body = (value) =>
     send(ctx, "POST", "/v1/accounts:signInWithIdp", {
       requestUri: `https://${SANDBOX_PROJECT}.firebaseapp.com/__/auth/handler`,
-      postBody: new URLSearchParams({ providerId: `saml.fireemu-${RUN}-s`, SAMLResponse: value }).toString(),
+      postBody: new URLSearchParams({
+        providerId: `saml.fireemu-${RUN}-s`,
+        SAMLResponse: value,
+      }).toString(),
     });
   assert.doesNotThrow(() => body(response("UlVOLUNFUlQ=")));
   assert.throws(() => body(response("T1RIRVI=")), /SAMLResponse is not a credential this run made/);
@@ -580,7 +608,12 @@ test("a $saml value is a response signed at the step, naming the AuthnRequest it
   const { deflateRawSync } = await import("node:zlib");
   const { privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
   const saml = {
-    keys: { run: { privateKey, certificatePem: "-----BEGIN CERTIFICATE-----\nUlVOLUNFUlQ=\n-----END CERTIFICATE-----" } },
+    keys: {
+      run: {
+        privateKey,
+        certificatePem: "-----BEGIN CERTIFICATE-----\nUlVOLUNFUlQ=\n-----END CERTIFICATE-----",
+      },
+    },
     now: () => 1_790_000_000,
   };
   const request =
@@ -626,7 +659,10 @@ test("a $saml value is a response signed at the step, naming the AuthnRequest it
   assert.ok(other.includes('Value="urn:oasis:names:tc:SAML:2.0:status:Requester"'), other);
   // The relay state the AuthnRequest came with, and a key the run did not make is refused.
   assert.equal(materialize({ $relayState: "auth-uri" }, raw, {}, saml), "relay-1");
-  assert.throws(() => materialize({ $saml: { ...spec, key: "missing" } }, raw, {}, saml), /key missing/);
+  assert.throws(
+    () => materialize({ $saml: { ...spec, key: "missing" } }, raw, {}, saml),
+    /key missing/,
+  );
 });
 
 test("a run stops before a step that could create an account past its limit", async () => {
@@ -690,7 +726,10 @@ test("the run's SAML signers are a current and an expired certificate with their
     assert.ok(current.checkPrivateKey(signers.keys.run.privateKey));
     assert.ok(expired.checkPrivateKey(signers.keys.expired.privateKey));
     // The run's certificates as a SAMLResponse carries them (base64 of the DER).
-    assert.deepEqual(signers.runCertificates, [current.raw.toString("base64"), expired.raw.toString("base64")]);
+    assert.deepEqual(signers.runCertificates, [
+      current.raw.toString("base64"),
+      expired.raw.toString("base64"),
+    ]);
     // Nothing is left on disk: the keys live in memory for the run only.
     assert.deepEqual(await readdir(dir), []);
   } finally {
@@ -741,7 +780,8 @@ test("recordings mask ISO times in messages and an AuthnRequest ID of any hex le
         Buffer.from(`<saml2p:AuthnRequest ID="${id}" IssueInstant="2026-09-28T07:36:05.177Z"/>`),
       ).toString("base64"),
     )}&RelayState=r`;
-  const request = (id) => normalize({ authUri: uri(id) }, ctx).authUri["<saml-authn-request>"].request;
+  const request = (id) =>
+    normalize({ authUri: uri(id) }, ctx).authUri["<saml-authn-request>"].request;
   assert.equal(request(`_${"a".repeat(32)}`), request(`_${"b".repeat(31)}`));
   assert.ok(request(`_${"a".repeat(32)}`).includes('ID="<id:_hex>"'));
 });

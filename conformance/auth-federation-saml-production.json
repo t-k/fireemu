@@ -4,10 +4,16 @@
     "target": "production Identity Toolkit, Secure Token and Admin v2 REST, Identity Platform sandbox; the SAML responses signed locally with the run's certificates at each step, the OIDC issuer the run's preview channel of the sandbox's Hosting (owner decisions O1, O5)",
     "project": "<project>",
     "note": "Two recordings per program. The run's issuer host, run tag, project and project number are placeholders; tokens are recorded as their header and claims with times relative to iat; refresh, access and pending tokens, session IDs, local IDs and certificates are masked. `second` holds the other recording of rows that differed.",
-    "renormalized": {
-      "harnessDigest": "64a30d2f7af073e0337b1aae0b8f380dd6b6ab2a1cb8cf28c5010c880e8f738c",
-      "note": "Re-normalized after recording: ISO times quoted in error messages became <time>, and an AuthnRequest ID became <id:_hex> whatever its hex length (the recording harness had written <id:_hex32> for 32 hex digits and <id> otherwise; the raw IDs were not kept, so the <id> ones are taken to be the service dropping a leading zero). The rows are otherwise as recorded (harnessDigest per program is the recording harness)."
-    }
+    "renormalized": [
+      {
+        "harnessDigest": "64a30d2f7af073e0337b1aae0b8f380dd6b6ab2a1cb8cf28c5010c880e8f738c",
+        "note": "Re-normalized after recording: ISO times quoted in error messages became <time>, and an AuthnRequest ID became <id:_hex> whatever its hex length (the recording harness had written <id:_hex32> for 32 hex digits and <id> otherwise; the raw IDs were not kept, so the <id> ones are taken to be the service dropping a leading zero). The rows are otherwise as recorded (harnessDigest per program is the recording harness)."
+      },
+      {
+        "harnessDigest": "f437b1a5806d4149be0a96b6bde5647e360d19c26fcadb1317398fb3e8c59ead",
+        "note": "Re-normalized after recording (AUTH-FEDERATION Q1, 2026-09-29): in tokens minted after the sign-in (a refresh's id_token and access_token, and session cookies) an auth_time not after iat became <=iat, since which second it falls in depends on when the request was sent. The sign-in's idToken keeps its exact offset. Rows are otherwise as recorded."
+      }
+    ]
   },
   "programs": {
     "auth-federation/duplicate-email-lookup": {
@@ -1676,7 +1682,7 @@
                 "claims": {
                   "iss": "https://securetoken.google.com/<project>",
                   "aud": "<project>",
-                  "auth_time": "iat-1",
+                  "auth_time": "<=iat",
                   "user_id": "<local-id>",
                   "sub": "<subject>",
                   "iat": "<iat>",
@@ -1713,7 +1719,7 @@
                 "claims": {
                   "iss": "https://securetoken.google.com/<project>",
                   "aud": "<project>",
-                  "auth_time": "iat-1",
+                  "auth_time": "<=iat",
                   "user_id": "<local-id>",
                   "sub": "<subject>",
                   "iat": "<iat>",

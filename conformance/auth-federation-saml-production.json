@@ -3,7 +3,11 @@
   "recordedAgainst": {
     "target": "production Identity Toolkit, Secure Token and Admin v2 REST, Identity Platform sandbox; the SAML responses signed locally with the run's certificates at each step, the OIDC issuer the run's preview channel of the sandbox's Hosting (owner decisions O1, O5)",
     "project": "<project>",
-    "note": "Two recordings per program. The run's issuer host, run tag, project and project number are placeholders; tokens are recorded as their header and claims with times relative to iat; refresh, access and pending tokens, session IDs, local IDs and certificates are masked. `second` holds the other recording of rows that differed."
+    "note": "Two recordings per program. The run's issuer host, run tag, project and project number are placeholders; tokens are recorded as their header and claims with times relative to iat; refresh, access and pending tokens, session IDs, local IDs and certificates are masked. `second` holds the other recording of rows that differed.",
+    "renormalized": {
+      "harnessDigest": "64a30d2f7af073e0337b1aae0b8f380dd6b6ab2a1cb8cf28c5010c880e8f738c",
+      "note": "Re-normalized after recording: ISO times quoted in error messages became <time>, and an AuthnRequest ID became <id:_hex> whatever its hex length (the recording harness had written <id:_hex32> for 32 hex digits and <id> otherwise; the raw IDs were not kept, so the <id> ones are taken to be the service dropping a leading zero). The rows are otherwise as recorded (harnessDigest per program is the recording harness)."
+    }
   },
   "programs": {
     "auth-federation/duplicate-email-lookup": {
@@ -755,24 +759,7 @@
             "authUri": {
               "<saml-authn-request>": {
                 "endpoint": "https://<project>.web.app/saml/<run>/sso",
-                "request": "<?xml version=\"1.0\" encoding=\"UTF-8\"?><saml2p:AuthnRequest xmlns:saml2p=\"urn:oasis:names:tc:SAML:2.0:protocol\" AssertionConsumerServiceURL=\"https://<project>.web.app/__/auth/handler\" Destination=\"https://<project>.web.app/saml/<run>/sso\" ID=\"<id>\" IssueInstant=\"<time:millis>\" ProtocolBinding=\"urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST\" Version=\"2.0\"><saml2:Issuer xmlns:saml2=\"urn:oasis:names:tc:SAML:2.0:assertion\">https://<project>.firebaseapp.com/saml/<run></saml2:Issuer></saml2p:AuthnRequest>",
-                "relayState": "<relay-state>"
-              }
-            },
-            "providerId": "saml.fireemu-<run>-ac",
-            "sessionId": "<session-id>"
-          }
-        }
-      },
-      "second": {
-        "other-continue": {
-          "status": 200,
-          "body": {
-            "kind": "identitytoolkit#CreateAuthUriResponse",
-            "authUri": {
-              "<saml-authn-request>": {
-                "endpoint": "https://<project>.web.app/saml/<run>/sso",
-                "request": "<?xml version=\"1.0\" encoding=\"UTF-8\"?><saml2p:AuthnRequest xmlns:saml2p=\"urn:oasis:names:tc:SAML:2.0:protocol\" AssertionConsumerServiceURL=\"https://<project>.web.app/__/auth/handler\" Destination=\"https://<project>.web.app/saml/<run>/sso\" ID=\"<id:_hex32>\" IssueInstant=\"<time:millis>\" ProtocolBinding=\"urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST\" Version=\"2.0\"><saml2:Issuer xmlns:saml2=\"urn:oasis:names:tc:SAML:2.0:assertion\">https://<project>.firebaseapp.com/saml/<run></saml2:Issuer></saml2p:AuthnRequest>",
+                "request": "<?xml version=\"1.0\" encoding=\"UTF-8\"?><saml2p:AuthnRequest xmlns:saml2p=\"urn:oasis:names:tc:SAML:2.0:protocol\" AssertionConsumerServiceURL=\"https://<project>.web.app/__/auth/handler\" Destination=\"https://<project>.web.app/saml/<run>/sso\" ID=\"<id:_hex>\" IssueInstant=\"<time:millis>\" ProtocolBinding=\"urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST\" Version=\"2.0\"><saml2:Issuer xmlns:saml2=\"urn:oasis:names:tc:SAML:2.0:assertion\">https://<project>.firebaseapp.com/saml/<run></saml2:Issuer></saml2p:AuthnRequest>",
                 "relayState": "<relay-state>"
               }
             },
@@ -815,7 +802,7 @@
             "authUri": {
               "<saml-authn-request>": {
                 "endpoint": "https://<project>.web.app/saml/<run>/sso",
-                "request": "<?xml version=\"1.0\" encoding=\"UTF-8\"?><saml2p:AuthnRequest xmlns:saml2p=\"urn:oasis:names:tc:SAML:2.0:protocol\" AssertionConsumerServiceURL=\"https://<project>.firebaseapp.com/__/auth/handler\" Destination=\"https://<project>.web.app/saml/<run>/sso\" ID=\"<id:_hex32>\" IssueInstant=\"<time:millis>\" ProtocolBinding=\"urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST\" Version=\"2.0\"><saml2:Issuer xmlns:saml2=\"urn:oasis:names:tc:SAML:2.0:assertion\">https://<project>.firebaseapp.com/saml/<run></saml2:Issuer></saml2p:AuthnRequest>",
+                "request": "<?xml version=\"1.0\" encoding=\"UTF-8\"?><saml2p:AuthnRequest xmlns:saml2p=\"urn:oasis:names:tc:SAML:2.0:protocol\" AssertionConsumerServiceURL=\"https://<project>.firebaseapp.com/__/auth/handler\" Destination=\"https://<project>.web.app/saml/<run>/sso\" ID=\"<id:_hex>\" IssueInstant=\"<time:millis>\" ProtocolBinding=\"urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST\" Version=\"2.0\"><saml2:Issuer xmlns:saml2=\"urn:oasis:names:tc:SAML:2.0:assertion\">https://<project>.firebaseapp.com/saml/<run></saml2:Issuer></saml2p:AuthnRequest>",
                 "relayState": "<relay-state>"
               }
             },
@@ -893,7 +880,7 @@
             "authUri": {
               "<saml-authn-request>": {
                 "endpoint": "https://<project>.web.app/saml/<run>/sso",
-                "request": "<?xml version=\"1.0\" encoding=\"UTF-8\"?><saml2p:AuthnRequest xmlns:saml2p=\"urn:oasis:names:tc:SAML:2.0:protocol\" AssertionConsumerServiceURL=\"https://<project>.firebaseapp.com/__/auth/handler\" Destination=\"https://<project>.web.app/saml/<run>/sso\" ID=\"<id:_hex32>\" IssueInstant=\"<time:millis>\" ProtocolBinding=\"urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST\" Version=\"2.0\"><saml2:Issuer xmlns:saml2=\"urn:oasis:names:tc:SAML:2.0:assertion\">https://<project>.firebaseapp.com/saml/<run></saml2:Issuer></saml2p:AuthnRequest>",
+                "request": "<?xml version=\"1.0\" encoding=\"UTF-8\"?><saml2p:AuthnRequest xmlns:saml2p=\"urn:oasis:names:tc:SAML:2.0:protocol\" AssertionConsumerServiceURL=\"https://<project>.firebaseapp.com/__/auth/handler\" Destination=\"https://<project>.web.app/saml/<run>/sso\" ID=\"<id:_hex>\" IssueInstant=\"<time:millis>\" ProtocolBinding=\"urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST\" Version=\"2.0\"><saml2:Issuer xmlns:saml2=\"urn:oasis:names:tc:SAML:2.0:assertion\">https://<project>.firebaseapp.com/saml/<run></saml2:Issuer></saml2p:AuthnRequest>",
                 "relayState": "<relay-state>"
               }
             },
@@ -999,7 +986,7 @@
             "authUri": {
               "<saml-authn-request>": {
                 "endpoint": "https://<project>.web.app/saml/<run>/sso",
-                "request": "<?xml version=\"1.0\" encoding=\"UTF-8\"?><saml2p:AuthnRequest xmlns:saml2p=\"urn:oasis:names:tc:SAML:2.0:protocol\" AssertionConsumerServiceURL=\"https://<project>.firebaseapp.com/__/auth/handler\" Destination=\"https://<project>.web.app/saml/<run>/sso\" ID=\"<id:_hex32>\" IssueInstant=\"<time:millis>\" ProtocolBinding=\"urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST\" Version=\"2.0\"><saml2:Issuer xmlns:saml2=\"urn:oasis:names:tc:SAML:2.0:assertion\">https://<project>.firebaseapp.com/saml/<run></saml2:Issuer></saml2p:AuthnRequest>",
+                "request": "<?xml version=\"1.0\" encoding=\"UTF-8\"?><saml2p:AuthnRequest xmlns:saml2p=\"urn:oasis:names:tc:SAML:2.0:protocol\" AssertionConsumerServiceURL=\"https://<project>.firebaseapp.com/__/auth/handler\" Destination=\"https://<project>.web.app/saml/<run>/sso\" ID=\"<id:_hex>\" IssueInstant=\"<time:millis>\" ProtocolBinding=\"urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST\" Version=\"2.0\"><saml2:Issuer xmlns:saml2=\"urn:oasis:names:tc:SAML:2.0:assertion\">https://<project>.firebaseapp.com/saml/<run></saml2:Issuer></saml2p:AuthnRequest>",
                 "relayState": "<relay-state>"
               }
             },
@@ -1089,7 +1076,7 @@
             "authUri": {
               "<saml-authn-request>": {
                 "endpoint": "https://<project>.web.app/saml/<run>/sso",
-                "request": "<?xml version=\"1.0\" encoding=\"UTF-8\"?><saml2p:AuthnRequest xmlns:saml2p=\"urn:oasis:names:tc:SAML:2.0:protocol\" AssertionConsumerServiceURL=\"https://<project>.firebaseapp.com/__/auth/handler\" Destination=\"https://<project>.web.app/saml/<run>/sso\" ID=\"<id:_hex32>\" IssueInstant=\"<time:millis>\" ProtocolBinding=\"urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST\" Version=\"2.0\"><saml2:Issuer xmlns:saml2=\"urn:oasis:names:tc:SAML:2.0:assertion\">https://<project>.firebaseapp.com/saml/<run></saml2:Issuer></saml2p:AuthnRequest>",
+                "request": "<?xml version=\"1.0\" encoding=\"UTF-8\"?><saml2p:AuthnRequest xmlns:saml2p=\"urn:oasis:names:tc:SAML:2.0:protocol\" AssertionConsumerServiceURL=\"https://<project>.firebaseapp.com/__/auth/handler\" Destination=\"https://<project>.web.app/saml/<run>/sso\" ID=\"<id:_hex>\" IssueInstant=\"<time:millis>\" ProtocolBinding=\"urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST\" Version=\"2.0\"><saml2:Issuer xmlns:saml2=\"urn:oasis:names:tc:SAML:2.0:assertion\">https://<project>.firebaseapp.com/saml/<run></saml2:Issuer></saml2p:AuthnRequest>",
                 "relayState": "<relay-state>"
               }
             },
@@ -1151,7 +1138,7 @@
             "authUri": {
               "<saml-authn-request>": {
                 "endpoint": "https://<project>.web.app/saml/<run>/sso",
-                "request": "<?xml version=\"1.0\" encoding=\"UTF-8\"?><saml2p:AuthnRequest xmlns:saml2p=\"urn:oasis:names:tc:SAML:2.0:protocol\" AssertionConsumerServiceURL=\"https://<project>.firebaseapp.com/__/auth/handler\" Destination=\"https://<project>.web.app/saml/<run>/sso\" ID=\"<id:_hex32>\" IssueInstant=\"<time:millis>\" ProtocolBinding=\"urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST\" Version=\"2.0\"><saml2:Issuer xmlns:saml2=\"urn:oasis:names:tc:SAML:2.0:assertion\">https://<project>.firebaseapp.com/saml/<run></saml2:Issuer></saml2p:AuthnRequest>",
+                "request": "<?xml version=\"1.0\" encoding=\"UTF-8\"?><saml2p:AuthnRequest xmlns:saml2p=\"urn:oasis:names:tc:SAML:2.0:protocol\" AssertionConsumerServiceURL=\"https://<project>.firebaseapp.com/__/auth/handler\" Destination=\"https://<project>.web.app/saml/<run>/sso\" ID=\"<id:_hex>\" IssueInstant=\"<time:millis>\" ProtocolBinding=\"urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST\" Version=\"2.0\"><saml2:Issuer xmlns:saml2=\"urn:oasis:names:tc:SAML:2.0:assertion\">https://<project>.firebaseapp.com/saml/<run></saml2:Issuer></saml2p:AuthnRequest>",
                 "relayState": "<relay-state>"
               }
             },
@@ -1182,7 +1169,7 @@
             "authUri": {
               "<saml-authn-request>": {
                 "endpoint": "https://<project>.web.app/saml/<run>/sso",
-                "request": "<?xml version=\"1.0\" encoding=\"UTF-8\"?><saml2p:AuthnRequest xmlns:saml2p=\"urn:oasis:names:tc:SAML:2.0:protocol\" AssertionConsumerServiceURL=\"https://<project>.firebaseapp.com/__/auth/handler\" Destination=\"https://<project>.web.app/saml/<run>/sso\" ID=\"<id:_hex32>\" IssueInstant=\"<time:millis>\" ProtocolBinding=\"urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST\" Version=\"2.0\"><saml2:Issuer xmlns:saml2=\"urn:oasis:names:tc:SAML:2.0:assertion\">https://<project>.firebaseapp.com/saml/<run></saml2:Issuer></saml2p:AuthnRequest>",
+                "request": "<?xml version=\"1.0\" encoding=\"UTF-8\"?><saml2p:AuthnRequest xmlns:saml2p=\"urn:oasis:names:tc:SAML:2.0:protocol\" AssertionConsumerServiceURL=\"https://<project>.firebaseapp.com/__/auth/handler\" Destination=\"https://<project>.web.app/saml/<run>/sso\" ID=\"<id:_hex>\" IssueInstant=\"<time:millis>\" ProtocolBinding=\"urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST\" Version=\"2.0\"><saml2:Issuer xmlns:saml2=\"urn:oasis:names:tc:SAML:2.0:assertion\">https://<project>.firebaseapp.com/saml/<run></saml2:Issuer></saml2p:AuthnRequest>",
                 "relayState": "<relay-state>"
               }
             },
@@ -1213,7 +1200,7 @@
             "authUri": {
               "<saml-authn-request>": {
                 "endpoint": "https://<project>.web.app/saml/<run>/sso",
-                "request": "<?xml version=\"1.0\" encoding=\"UTF-8\"?><saml2p:AuthnRequest xmlns:saml2p=\"urn:oasis:names:tc:SAML:2.0:protocol\" AssertionConsumerServiceURL=\"https://<project>.firebaseapp.com/__/auth/handler\" Destination=\"https://<project>.web.app/saml/<run>/sso\" ID=\"<id:_hex32>\" IssueInstant=\"<time:millis>\" ProtocolBinding=\"urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST\" Version=\"2.0\"><saml2:Issuer xmlns:saml2=\"urn:oasis:names:tc:SAML:2.0:assertion\">https://<project>.firebaseapp.com/saml/<run></saml2:Issuer></saml2p:AuthnRequest>",
+                "request": "<?xml version=\"1.0\" encoding=\"UTF-8\"?><saml2p:AuthnRequest xmlns:saml2p=\"urn:oasis:names:tc:SAML:2.0:protocol\" AssertionConsumerServiceURL=\"https://<project>.firebaseapp.com/__/auth/handler\" Destination=\"https://<project>.web.app/saml/<run>/sso\" ID=\"<id:_hex>\" IssueInstant=\"<time:millis>\" ProtocolBinding=\"urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST\" Version=\"2.0\"><saml2:Issuer xmlns:saml2=\"urn:oasis:names:tc:SAML:2.0:assertion\">https://<project>.firebaseapp.com/saml/<run></saml2:Issuer></saml2p:AuthnRequest>",
                 "relayState": "<relay-state>"
               }
             },
@@ -1274,7 +1261,7 @@
             "authUri": {
               "<saml-authn-request>": {
                 "endpoint": "https://<project>.web.app/saml/<run>/sso",
-                "request": "<?xml version=\"1.0\" encoding=\"UTF-8\"?><saml2p:AuthnRequest xmlns:saml2p=\"urn:oasis:names:tc:SAML:2.0:protocol\" AssertionConsumerServiceURL=\"https://<project>.firebaseapp.com/__/auth/handler\" Destination=\"https://<project>.web.app/saml/<run>/sso\" ID=\"<id:_hex32>\" IssueInstant=\"<time:millis>\" ProtocolBinding=\"urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST\" Version=\"2.0\"><saml2:Issuer xmlns:saml2=\"urn:oasis:names:tc:SAML:2.0:assertion\">https://<project>.firebaseapp.com/saml/<run></saml2:Issuer></saml2p:AuthnRequest>",
+                "request": "<?xml version=\"1.0\" encoding=\"UTF-8\"?><saml2p:AuthnRequest xmlns:saml2p=\"urn:oasis:names:tc:SAML:2.0:protocol\" AssertionConsumerServiceURL=\"https://<project>.firebaseapp.com/__/auth/handler\" Destination=\"https://<project>.web.app/saml/<run>/sso\" ID=\"<id:_hex>\" IssueInstant=\"<time:millis>\" ProtocolBinding=\"urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST\" Version=\"2.0\"><saml2:Issuer xmlns:saml2=\"urn:oasis:names:tc:SAML:2.0:assertion\">https://<project>.firebaseapp.com/saml/<run></saml2:Issuer></saml2p:AuthnRequest>",
                 "relayState": "<relay-state>"
               }
             },
@@ -1287,10 +1274,10 @@
           "body": {
             "error": {
               "code": 400,
-              "message": "INVALID_IDP_RESPONSE : Current instant, 2026-09-28T07:36:05.177Z, is before NotBefore attribute, 2026-09-28T07:46:04.000Z",
+              "message": "INVALID_IDP_RESPONSE : Current instant, <time>, is before NotBefore attribute, <time>",
               "errors": [
                 {
-                  "message": "INVALID_IDP_RESPONSE : Current instant, 2026-09-28T07:36:05.177Z, is before NotBefore attribute, 2026-09-28T07:46:04.000Z",
+                  "message": "INVALID_IDP_RESPONSE : Current instant, <time>, is before NotBefore attribute, <time>",
                   "domain": "global",
                   "reason": "invalid"
                 }
@@ -1305,7 +1292,7 @@
             "authUri": {
               "<saml-authn-request>": {
                 "endpoint": "https://<project>.web.app/saml/<run>/sso",
-                "request": "<?xml version=\"1.0\" encoding=\"UTF-8\"?><saml2p:AuthnRequest xmlns:saml2p=\"urn:oasis:names:tc:SAML:2.0:protocol\" AssertionConsumerServiceURL=\"https://<project>.firebaseapp.com/__/auth/handler\" Destination=\"https://<project>.web.app/saml/<run>/sso\" ID=\"<id:_hex32>\" IssueInstant=\"<time:millis>\" ProtocolBinding=\"urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST\" Version=\"2.0\"><saml2:Issuer xmlns:saml2=\"urn:oasis:names:tc:SAML:2.0:assertion\">https://<project>.firebaseapp.com/saml/<run></saml2:Issuer></saml2p:AuthnRequest>",
+                "request": "<?xml version=\"1.0\" encoding=\"UTF-8\"?><saml2p:AuthnRequest xmlns:saml2p=\"urn:oasis:names:tc:SAML:2.0:protocol\" AssertionConsumerServiceURL=\"https://<project>.firebaseapp.com/__/auth/handler\" Destination=\"https://<project>.web.app/saml/<run>/sso\" ID=\"<id:_hex>\" IssueInstant=\"<time:millis>\" ProtocolBinding=\"urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST\" Version=\"2.0\"><saml2:Issuer xmlns:saml2=\"urn:oasis:names:tc:SAML:2.0:assertion\">https://<project>.firebaseapp.com/saml/<run></saml2:Issuer></saml2p:AuthnRequest>",
                 "relayState": "<relay-state>"
               }
             },
@@ -1318,10 +1305,10 @@
           "body": {
             "error": {
               "code": 400,
-              "message": "INVALID_IDP_RESPONSE : Current instant, 2026-09-28T07:36:05.871Z, is on or after NotOnOrAfter attribute, 2026-09-28T07:26:05.000Z",
+              "message": "INVALID_IDP_RESPONSE : Current instant, <time>, is on or after NotOnOrAfter attribute, <time>",
               "errors": [
                 {
-                  "message": "INVALID_IDP_RESPONSE : Current instant, 2026-09-28T07:36:05.871Z, is on or after NotOnOrAfter attribute, 2026-09-28T07:26:05.000Z",
+                  "message": "INVALID_IDP_RESPONSE : Current instant, <time>, is on or after NotOnOrAfter attribute, <time>",
                   "domain": "global",
                   "reason": "invalid"
                 }
@@ -1336,7 +1323,7 @@
             "authUri": {
               "<saml-authn-request>": {
                 "endpoint": "https://<project>.web.app/saml/<run>/sso",
-                "request": "<?xml version=\"1.0\" encoding=\"UTF-8\"?><saml2p:AuthnRequest xmlns:saml2p=\"urn:oasis:names:tc:SAML:2.0:protocol\" AssertionConsumerServiceURL=\"https://<project>.firebaseapp.com/__/auth/handler\" Destination=\"https://<project>.web.app/saml/<run>/sso\" ID=\"<id:_hex32>\" IssueInstant=\"<time:millis>\" ProtocolBinding=\"urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST\" Version=\"2.0\"><saml2:Issuer xmlns:saml2=\"urn:oasis:names:tc:SAML:2.0:assertion\">https://<project>.firebaseapp.com/saml/<run></saml2:Issuer></saml2p:AuthnRequest>",
+                "request": "<?xml version=\"1.0\" encoding=\"UTF-8\"?><saml2p:AuthnRequest xmlns:saml2p=\"urn:oasis:names:tc:SAML:2.0:protocol\" AssertionConsumerServiceURL=\"https://<project>.firebaseapp.com/__/auth/handler\" Destination=\"https://<project>.web.app/saml/<run>/sso\" ID=\"<id:_hex>\" IssueInstant=\"<time:millis>\" ProtocolBinding=\"urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST\" Version=\"2.0\"><saml2:Issuer xmlns:saml2=\"urn:oasis:names:tc:SAML:2.0:assertion\">https://<project>.firebaseapp.com/saml/<run></saml2:Issuer></saml2p:AuthnRequest>",
                 "relayState": "<relay-state>"
               }
             },
@@ -1349,10 +1336,10 @@
           "body": {
             "error": {
               "code": 400,
-              "message": "INVALID_IDP_RESPONSE : Current instant, 2026-09-28T07:36:06.591Z, is on or after NotOnOrAfter attribute, 2026-09-28T07:26:06.000Z",
+              "message": "INVALID_IDP_RESPONSE : Current instant, <time>, is on or after NotOnOrAfter attribute, <time>",
               "errors": [
                 {
-                  "message": "INVALID_IDP_RESPONSE : Current instant, 2026-09-28T07:36:06.591Z, is on or after NotOnOrAfter attribute, 2026-09-28T07:26:06.000Z",
+                  "message": "INVALID_IDP_RESPONSE : Current instant, <time>, is on or after NotOnOrAfter attribute, <time>",
                   "domain": "global",
                   "reason": "invalid"
                 }
@@ -1367,7 +1354,7 @@
             "authUri": {
               "<saml-authn-request>": {
                 "endpoint": "https://<project>.web.app/saml/<run>/sso",
-                "request": "<?xml version=\"1.0\" encoding=\"UTF-8\"?><saml2p:AuthnRequest xmlns:saml2p=\"urn:oasis:names:tc:SAML:2.0:protocol\" AssertionConsumerServiceURL=\"https://<project>.firebaseapp.com/__/auth/handler\" Destination=\"https://<project>.web.app/saml/<run>/sso\" ID=\"<id:_hex32>\" IssueInstant=\"<time:millis>\" ProtocolBinding=\"urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST\" Version=\"2.0\"><saml2:Issuer xmlns:saml2=\"urn:oasis:names:tc:SAML:2.0:assertion\">https://<project>.firebaseapp.com/saml/<run></saml2:Issuer></saml2p:AuthnRequest>",
+                "request": "<?xml version=\"1.0\" encoding=\"UTF-8\"?><saml2p:AuthnRequest xmlns:saml2p=\"urn:oasis:names:tc:SAML:2.0:protocol\" AssertionConsumerServiceURL=\"https://<project>.firebaseapp.com/__/auth/handler\" Destination=\"https://<project>.web.app/saml/<run>/sso\" ID=\"<id:_hex>\" IssueInstant=\"<time:millis>\" ProtocolBinding=\"urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST\" Version=\"2.0\"><saml2:Issuer xmlns:saml2=\"urn:oasis:names:tc:SAML:2.0:assertion\">https://<project>.firebaseapp.com/saml/<run></saml2:Issuer></saml2p:AuthnRequest>",
                 "relayState": "<relay-state>"
               }
             },
@@ -1398,7 +1385,7 @@
             "authUri": {
               "<saml-authn-request>": {
                 "endpoint": "https://<project>.web.app/saml/<run>/sso",
-                "request": "<?xml version=\"1.0\" encoding=\"UTF-8\"?><saml2p:AuthnRequest xmlns:saml2p=\"urn:oasis:names:tc:SAML:2.0:protocol\" AssertionConsumerServiceURL=\"https://<project>.firebaseapp.com/__/auth/handler\" Destination=\"https://<project>.web.app/saml/<run>/sso\" ID=\"<id:_hex32>\" IssueInstant=\"<time:millis>\" ProtocolBinding=\"urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST\" Version=\"2.0\"><saml2:Issuer xmlns:saml2=\"urn:oasis:names:tc:SAML:2.0:assertion\">https://<project>.firebaseapp.com/saml/<run></saml2:Issuer></saml2p:AuthnRequest>",
+                "request": "<?xml version=\"1.0\" encoding=\"UTF-8\"?><saml2p:AuthnRequest xmlns:saml2p=\"urn:oasis:names:tc:SAML:2.0:protocol\" AssertionConsumerServiceURL=\"https://<project>.firebaseapp.com/__/auth/handler\" Destination=\"https://<project>.web.app/saml/<run>/sso\" ID=\"<id:_hex>\" IssueInstant=\"<time:millis>\" ProtocolBinding=\"urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST\" Version=\"2.0\"><saml2:Issuer xmlns:saml2=\"urn:oasis:names:tc:SAML:2.0:assertion\">https://<project>.firebaseapp.com/saml/<run></saml2:Issuer></saml2p:AuthnRequest>",
                 "relayState": "<relay-state>"
               }
             },
@@ -1429,7 +1416,7 @@
             "authUri": {
               "<saml-authn-request>": {
                 "endpoint": "https://<project>.web.app/saml/<run>/sso",
-                "request": "<?xml version=\"1.0\" encoding=\"UTF-8\"?><saml2p:AuthnRequest xmlns:saml2p=\"urn:oasis:names:tc:SAML:2.0:protocol\" AssertionConsumerServiceURL=\"https://<project>.firebaseapp.com/__/auth/handler\" Destination=\"https://<project>.web.app/saml/<run>/sso\" ID=\"<id>\" IssueInstant=\"<time:millis>\" ProtocolBinding=\"urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST\" Version=\"2.0\"><saml2:Issuer xmlns:saml2=\"urn:oasis:names:tc:SAML:2.0:assertion\">https://<project>.firebaseapp.com/saml/<run></saml2:Issuer></saml2p:AuthnRequest>",
+                "request": "<?xml version=\"1.0\" encoding=\"UTF-8\"?><saml2p:AuthnRequest xmlns:saml2p=\"urn:oasis:names:tc:SAML:2.0:protocol\" AssertionConsumerServiceURL=\"https://<project>.firebaseapp.com/__/auth/handler\" Destination=\"https://<project>.web.app/saml/<run>/sso\" ID=\"<id:_hex>\" IssueInstant=\"<time:millis>\" ProtocolBinding=\"urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST\" Version=\"2.0\"><saml2:Issuer xmlns:saml2=\"urn:oasis:names:tc:SAML:2.0:assertion\">https://<project>.firebaseapp.com/saml/<run></saml2:Issuer></saml2p:AuthnRequest>",
                 "relayState": "<relay-state>"
               }
             },
@@ -1460,7 +1447,7 @@
             "authUri": {
               "<saml-authn-request>": {
                 "endpoint": "https://<project>.web.app/saml/<run>/sso",
-                "request": "<?xml version=\"1.0\" encoding=\"UTF-8\"?><saml2p:AuthnRequest xmlns:saml2p=\"urn:oasis:names:tc:SAML:2.0:protocol\" AssertionConsumerServiceURL=\"https://<project>.firebaseapp.com/__/auth/handler\" Destination=\"https://<project>.web.app/saml/<run>/sso\" ID=\"<id:_hex32>\" IssueInstant=\"<time:millis>\" ProtocolBinding=\"urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST\" Version=\"2.0\"><saml2:Issuer xmlns:saml2=\"urn:oasis:names:tc:SAML:2.0:assertion\">https://<project>.firebaseapp.com/saml/<run></saml2:Issuer></saml2p:AuthnRequest>",
+                "request": "<?xml version=\"1.0\" encoding=\"UTF-8\"?><saml2p:AuthnRequest xmlns:saml2p=\"urn:oasis:names:tc:SAML:2.0:protocol\" AssertionConsumerServiceURL=\"https://<project>.firebaseapp.com/__/auth/handler\" Destination=\"https://<project>.web.app/saml/<run>/sso\" ID=\"<id:_hex>\" IssueInstant=\"<time:millis>\" ProtocolBinding=\"urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST\" Version=\"2.0\"><saml2:Issuer xmlns:saml2=\"urn:oasis:names:tc:SAML:2.0:assertion\">https://<project>.firebaseapp.com/saml/<run></saml2:Issuer></saml2p:AuthnRequest>",
                 "relayState": "<relay-state>"
               }
             },
@@ -1482,86 +1469,6 @@
                 }
               ]
             }
-          }
-        }
-      },
-      "second": {
-        "destination-other-auth-uri": {
-          "status": 200,
-          "body": {
-            "kind": "identitytoolkit#CreateAuthUriResponse",
-            "authUri": {
-              "<saml-authn-request>": {
-                "endpoint": "https://<project>.web.app/saml/<run>/sso",
-                "request": "<?xml version=\"1.0\" encoding=\"UTF-8\"?><saml2p:AuthnRequest xmlns:saml2p=\"urn:oasis:names:tc:SAML:2.0:protocol\" AssertionConsumerServiceURL=\"https://<project>.firebaseapp.com/__/auth/handler\" Destination=\"https://<project>.web.app/saml/<run>/sso\" ID=\"<id>\" IssueInstant=\"<time:millis>\" ProtocolBinding=\"urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST\" Version=\"2.0\"><saml2:Issuer xmlns:saml2=\"urn:oasis:names:tc:SAML:2.0:assertion\">https://<project>.firebaseapp.com/saml/<run></saml2:Issuer></saml2p:AuthnRequest>",
-                "relayState": "<relay-state>"
-              }
-            },
-            "providerId": "saml.fireemu-<run>-co",
-            "sessionId": "<session-id>"
-          }
-        },
-        "not-yet-valid": {
-          "status": 400,
-          "body": {
-            "error": {
-              "code": 400,
-              "message": "INVALID_IDP_RESPONSE : Current instant, 2026-09-28T07:36:42.611Z, is before NotBefore attribute, 2026-09-28T07:46:42.000Z",
-              "errors": [
-                {
-                  "message": "INVALID_IDP_RESPONSE : Current instant, 2026-09-28T07:36:42.611Z, is before NotBefore attribute, 2026-09-28T07:46:42.000Z",
-                  "domain": "global",
-                  "reason": "invalid"
-                }
-              ]
-            }
-          }
-        },
-        "expired-conditions": {
-          "status": 400,
-          "body": {
-            "error": {
-              "code": 400,
-              "message": "INVALID_IDP_RESPONSE : Current instant, 2026-09-28T07:36:43.702Z, is on or after NotOnOrAfter attribute, 2026-09-28T07:26:42.000Z",
-              "errors": [
-                {
-                  "message": "INVALID_IDP_RESPONSE : Current instant, 2026-09-28T07:36:43.702Z, is on or after NotOnOrAfter attribute, 2026-09-28T07:26:42.000Z",
-                  "domain": "global",
-                  "reason": "invalid"
-                }
-              ]
-            }
-          }
-        },
-        "expired-confirmation": {
-          "status": 400,
-          "body": {
-            "error": {
-              "code": 400,
-              "message": "INVALID_IDP_RESPONSE : Current instant, 2026-09-28T07:36:44.729Z, is on or after NotOnOrAfter attribute, 2026-09-28T07:26:44.000Z",
-              "errors": [
-                {
-                  "message": "INVALID_IDP_RESPONSE : Current instant, 2026-09-28T07:36:44.729Z, is on or after NotOnOrAfter attribute, 2026-09-28T07:26:44.000Z",
-                  "domain": "global",
-                  "reason": "invalid"
-                }
-              ]
-            }
-          }
-        },
-        "issuer-other-auth-uri": {
-          "status": 200,
-          "body": {
-            "kind": "identitytoolkit#CreateAuthUriResponse",
-            "authUri": {
-              "<saml-authn-request>": {
-                "endpoint": "https://<project>.web.app/saml/<run>/sso",
-                "request": "<?xml version=\"1.0\" encoding=\"UTF-8\"?><saml2p:AuthnRequest xmlns:saml2p=\"urn:oasis:names:tc:SAML:2.0:protocol\" AssertionConsumerServiceURL=\"https://<project>.firebaseapp.com/__/auth/handler\" Destination=\"https://<project>.web.app/saml/<run>/sso\" ID=\"<id:_hex32>\" IssueInstant=\"<time:millis>\" ProtocolBinding=\"urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST\" Version=\"2.0\"><saml2:Issuer xmlns:saml2=\"urn:oasis:names:tc:SAML:2.0:assertion\">https://<project>.firebaseapp.com/saml/<run></saml2:Issuer></saml2p:AuthnRequest>",
-                "relayState": "<relay-state>"
-              }
-            },
-            "providerId": "saml.fireemu-<run>-co",
-            "sessionId": "<session-id>"
           }
         }
       }
@@ -1599,7 +1506,7 @@
             "authUri": {
               "<saml-authn-request>": {
                 "endpoint": "https://<project>.web.app/saml/<run>/sso",
-                "request": "<?xml version=\"1.0\" encoding=\"UTF-8\"?><saml2p:AuthnRequest xmlns:saml2p=\"urn:oasis:names:tc:SAML:2.0:protocol\" AssertionConsumerServiceURL=\"https://<project>.firebaseapp.com/__/auth/handler\" Destination=\"https://<project>.web.app/saml/<run>/sso\" ID=\"<id:_hex32>\" IssueInstant=\"<time:millis>\" ProtocolBinding=\"urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST\" Version=\"2.0\"><saml2:Issuer xmlns:saml2=\"urn:oasis:names:tc:SAML:2.0:assertion\">https://<project>.firebaseapp.com/saml/<run></saml2:Issuer></saml2p:AuthnRequest>",
+                "request": "<?xml version=\"1.0\" encoding=\"UTF-8\"?><saml2p:AuthnRequest xmlns:saml2p=\"urn:oasis:names:tc:SAML:2.0:protocol\" AssertionConsumerServiceURL=\"https://<project>.firebaseapp.com/__/auth/handler\" Destination=\"https://<project>.web.app/saml/<run>/sso\" ID=\"<id:_hex>\" IssueInstant=\"<time:millis>\" ProtocolBinding=\"urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST\" Version=\"2.0\"><saml2:Issuer xmlns:saml2=\"urn:oasis:names:tc:SAML:2.0:assertion\">https://<project>.firebaseapp.com/saml/<run></saml2:Issuer></saml2p:AuthnRequest>",
                 "relayState": "<relay-state>"
               }
             },
@@ -1669,7 +1576,7 @@
             "authUri": {
               "<saml-authn-request>": {
                 "endpoint": "https://<project>.web.app/saml/<run>/sso",
-                "request": "<?xml version=\"1.0\" encoding=\"UTF-8\"?><saml2p:AuthnRequest xmlns:saml2p=\"urn:oasis:names:tc:SAML:2.0:protocol\" AssertionConsumerServiceURL=\"https://<project>.firebaseapp.com/__/auth/handler\" Destination=\"https://<project>.web.app/saml/<run>/sso\" ID=\"<id:_hex32>\" IssueInstant=\"<time:millis>\" ProtocolBinding=\"urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST\" Version=\"2.0\"><saml2:Issuer xmlns:saml2=\"urn:oasis:names:tc:SAML:2.0:assertion\">https://<project>.firebaseapp.com/saml/<run></saml2:Issuer></saml2p:AuthnRequest>",
+                "request": "<?xml version=\"1.0\" encoding=\"UTF-8\"?><saml2p:AuthnRequest xmlns:saml2p=\"urn:oasis:names:tc:SAML:2.0:protocol\" AssertionConsumerServiceURL=\"https://<project>.firebaseapp.com/__/auth/handler\" Destination=\"https://<project>.web.app/saml/<run>/sso\" ID=\"<id:_hex>\" IssueInstant=\"<time:millis>\" ProtocolBinding=\"urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST\" Version=\"2.0\"><saml2:Issuer xmlns:saml2=\"urn:oasis:names:tc:SAML:2.0:assertion\">https://<project>.firebaseapp.com/saml/<run></saml2:Issuer></saml2p:AuthnRequest>",
                 "relayState": "<relay-state>"
               }
             },

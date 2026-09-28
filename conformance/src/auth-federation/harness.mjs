@@ -85,7 +85,8 @@ function decodeToken(token) {
 function samlAuthUri(value, ctx) {
   const { xml } = readAuthnRequest(value);
   const request = xml
-    .replace(/(\sID=")_[0-9a-f]{32}"/, '$1<id:_hex32>"')
+    // The service drops a leading zero of the hex ID now and then (record-saml 7789f0).
+    .replace(/(\sID=")_[0-9a-f]{1,32}"/, '$1<id:_hex>"')
     .replace(/(\sID=")(?!<id)[^"]*"/, '$1<id>"')
     .replace(/(\sIssueInstant=")\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z"/, '$1<time:millis>"')
     .replace(/(\sIssueInstant=")(?!<time)[^"]*"/, '$1<time>"');
@@ -118,7 +119,9 @@ function normalizeMessage(message, ctx) {
       // Not a JSON tail: only the times below.
     }
   }
-  return placeholders(out.replace(UNIX_SECONDS, "<time>"), ctx);
+  // SAML's time checks quote the current instant and the attribute's (record-saml 7789f0).
+  const isoTimes = /\b\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?Z\b/g;
+  return placeholders(out.replace(UNIX_SECONDS, "<time>").replace(isoTimes, "<time>"), ctx);
 }
 
 /** `text` with the run's identifiers as placeholders (the issuer host first: it holds both). */

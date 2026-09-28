@@ -710,9 +710,38 @@ test("a SAML authUri is recorded as its AuthnRequest, the request ID, time and r
       "<saml-authn-request>": {
         endpoint: "https://<project>.web.app/saml/<run>/sso",
         request:
-          '<?xml version="1.0" encoding="UTF-8"?><saml2p:AuthnRequest xmlns:saml2p="urn:oasis:names:tc:SAML:2.0:protocol" AssertionConsumerServiceURL="https://<project>.firebaseapp.com/__/auth/handler" Destination="https://<project>.web.app/saml/<run>/sso" ID="<id:_hex32>" IssueInstant="<time:millis>" ProtocolBinding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST" Version="2.0"><saml2:Issuer xmlns:saml2="urn:oasis:names:tc:SAML:2.0:assertion">fireemu-<run>-sp</saml2:Issuer></saml2p:AuthnRequest>',
+          '<?xml version="1.0" encoding="UTF-8"?><saml2p:AuthnRequest xmlns:saml2p="urn:oasis:names:tc:SAML:2.0:protocol" AssertionConsumerServiceURL="https://<project>.firebaseapp.com/__/auth/handler" Destination="https://<project>.web.app/saml/<run>/sso" ID="<id:_hex>" IssueInstant="<time:millis>" ProtocolBinding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST" Version="2.0"><saml2:Issuer xmlns:saml2="urn:oasis:names:tc:SAML:2.0:assertion">fireemu-<run>-sp</saml2:Issuer></saml2p:AuthnRequest>',
         relayState: "<relay-state>",
       },
     },
   });
+});
+
+test("recordings mask ISO times in messages and an AuthnRequest ID of any hex length", async () => {
+  const { normalize } = await import("./auth-federation/harness.mjs");
+  const { deflateRawSync } = await import("node:zlib");
+  const ctx = { run: RUN, project: SANDBOX_PROJECT };
+  assert.deepEqual(
+    normalize(
+      {
+        message:
+          "INVALID_IDP_RESPONSE : Current instant, 2026-09-28T07:36:05.177Z, is before NotBefore attribute, 2026-09-28T07:46:04.000Z",
+      },
+      ctx,
+    ),
+    {
+      message:
+        "INVALID_IDP_RESPONSE : Current instant, <time>, is before NotBefore attribute, <time>",
+    },
+  );
+  // A request ID whose leading zero the service dropped is the same shape.
+  const uri = (id) =>
+    `https://${SANDBOX_PROJECT}.web.app/saml/${RUN}/sso?SAMLRequest=${encodeURIComponent(
+      deflateRawSync(
+        Buffer.from(`<saml2p:AuthnRequest ID="${id}" IssueInstant="2026-09-28T07:36:05.177Z"/>`),
+      ).toString("base64"),
+    )}&RelayState=r`;
+  const request = (id) => normalize({ authUri: uri(id) }, ctx).authUri["<saml-authn-request>"].request;
+  assert.equal(request(`_${"a".repeat(32)}`), request(`_${"b".repeat(31)}`));
+  assert.ok(request(`_${"a".repeat(32)}`).includes('ID="<id:_hex>"'));
 });

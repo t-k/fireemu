@@ -44,7 +44,9 @@ use crate::rest::json::{
     write_response_to_json, JsonError,
 };
 use crate::rest::{error_response, RestState};
-use crate::streams::{listen_stream_observed, write_stream, ListenObserver, StreamContext};
+use crate::streams::{
+    listen_stream_observed, write_stream, ListenObserver, ListenTransport, StreamContext,
+};
 
 /// Sessions without an attached back channel and without requests longer than this are
 /// closed.
@@ -2188,7 +2190,13 @@ fn spawn_stream(
                     state: Mutex::new(ListenTraceState::default()),
                 }) as Arc<dyn ListenObserver>
             });
-            tokio::spawn(listen_stream_observed(ctx, inbound, tx, observer));
+            tokio::spawn(listen_stream_observed(
+                ctx,
+                inbound,
+                tx,
+                observer,
+                ListenTransport::WebChannel,
+            ));
         }
         StreamKind::Write => {
             let inbound = MappedStream {

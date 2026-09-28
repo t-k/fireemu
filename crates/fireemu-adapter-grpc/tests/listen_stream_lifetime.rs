@@ -308,3 +308,42 @@ async fn the_emulator_profile_keeps_a_held_stream_past_its_hour() {
     assert!(held.within(NOTICE).await.is_none());
     held.input.take();
 }
+
+/// The hour is the deadline: a stream is gone at exactly 3,600 s after it opened.
+#[tokio::test]
+async fn a_held_stream_ends_at_exactly_its_hour() {
+    let mut held = Held::open(Profile::Strict, 0).await;
+    held.clock_at(LIFETIME_SECONDS);
+    assert_eq!(held.end_within(NOTICE).await, Some(Code::Internal));
+}
+
+/// A stream opened with an older token still meets that token's end the way it did before the
+/// hour was introduced: the first commit after the token's Firestore allowance (exp + 30 s),
+/// within the stream's hour, removes the target and ends the stream as unauthenticated. So a
+/// stream is never open longer than it was before the hour.
+#[tokio::test]
+async fn an_older_token_ends_the_stream_at_the_first_commit_past_its_allowance() {
+    let mut held = Held::open(Profile::Strict, 600).await;
+    held.clock_at(LIFETIME_SECONDS + 31);
+    assert!(
+        held.within(NOTICE).await.is_none(),
+        "no end without a commit"
+    );
+    commit(&held.backend, "past-allowance");
+    let removal = held
+        .within(NOTICE)
+        .await
+        .expect("a response")
+        .expect("the stream is open")
+        .expect("a removal first");
+    let Some(pb::listen_response::ResponseType::TargetChange(change)) = removal.response_type
+    else {
+        panic!("a target change");
+    };
+    assert_eq!(
+        change.target_change_type,
+        pb::target_change::TargetChangeType::Remove as i32
+    );
+    assert_eq!(change.cause.unwrap().code, Code::Unauthenticated as i32);
+    assert_eq!(held.end_within(NOTICE).await, Some(Code::Unauthenticated));
+}

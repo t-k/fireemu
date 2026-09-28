@@ -1344,3 +1344,98 @@ async fn a_missing_index_on_the_opening_target_reaches_the_first_back_channel() 
     }));
     assert_eq!(status, 200, "the session is still known: {ack}");
 }
+
+/// Production closed held native gRPC streams an hour after they opened (AUTH-FS-CROSS stage 2);
+/// no `WebChannel` was held that long, so the strict profile keeps a `WebChannel` `Listen` open
+/// past the hour, as before.
+#[tokio::test]
+async fn a_webchannel_listen_is_not_closed_at_the_hour() {
+    let gateway = Gateway {
+        enforce_limits: true,
+        ctx: PlanningContext {
+            edition: FirestoreEdition::Standard,
+            api_mode: FirestoreApiMode::Native,
+            policy: IndexValidationPolicy::Production,
+        },
+        indexes: IndexSet::default(),
+    };
+    let start = LogicalInstant::from_unix_seconds(1_788_004_860);
+    let clock = Arc::new(Mutex::new(VirtualClock::new(start)));
+    let local = Arc::new(LocalBackend::new(gateway.clone(), clock.clone(), 7));
+    let auth = Arc::new(Mutex::new(AuthStore::new(
+        "demo-app",
+        SplitMix64::new(3),
+        TotpPolicy::default(),
+    )));
+    let token = {
+        let mut store = auth.lock().unwrap();
+        let uid = store
+            .create_user_with_id(
+                fireemu_core_auth::store::NewUser::email("held@example.com"),
+                Some("held"),
+                start,
+            )
+            .unwrap();
+        fireemu_core_auth::jwt::encode_unsigned(&store.id_token_claims(&uid, None, start).unwrap())
+    };
+    let enforcer = RulesEnforcer::new(
+        Arc::new(RulesetSlot::new(
+            LoadedRules::from_source(RULES_ALLOW_ALL).unwrap(),
+        )),
+        auth,
+        clock.clone(),
+    )
+    .with_token_semantics(TokenSemantics::Firestore)
+    .with_token_acceptance(TokenAcceptance::Verified)
+    .with_listen_stream_lifetime(true);
+    let hub = Hub::new(Arc::new(RestState {
+        local: local.clone(),
+        gateway: Arc::new(gateway),
+        rules: Some(Arc::new(enforcer)),
+        app_check: None,
+        control_token: None,
+    }));
+    commit(&local, vec![set_write("held/a", 0)]);
+    let (status, headers, _) = full(hub.handle(&ChannelRequest {
+        kind: StreamKind::Listen,
+        method: "POST".to_owned(),
+        params: params(&[("database", DB), ("VER", "8"), ("RID", "1")]),
+        authorization: Some(format!("Bearer {token}")),
+        app_check: Vec::new(),
+        origin: None,
+        body: form(&[
+            ("count", "1"),
+            ("ofs", "0"),
+            ("req0___data__", &listen_target(3, "held")),
+        ]),
+    }));
+    assert_eq!(status, 200);
+    let sid = headers
+        .into_iter()
+        .find(|(key, _)| *key == "x-http-session-id")
+        .map(|(_, value)| value)
+        .unwrap();
+    let initial = read_long_poll(&hub, &sid, 0).await;
+    let initial_aid = last_array_id(&initial);
+    // Past the hour (and the token's allowance is not what is tested: the clock stops short
+    // of exp + 30 s). A gRPC stream would end within a second.
+    clock
+        .lock()
+        .unwrap()
+        .advance_to(
+            start
+                .checked_add(fireemu_core_types::time::LogicalDuration::from_seconds(
+                    3_610,
+                ))
+                .unwrap(),
+        )
+        .unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(2_500)).await;
+    commit(&local, vec![set_write("held/b", 1)]);
+    let later = read_long_poll(&hub, &sid, initial_aid).await;
+    assert!(response_payloads(&later).iter().any(|payload| {
+        payload["documentChange"]["document"]["name"]
+            .as_str()
+            .is_some_and(|name| name.ends_with("/held/b"))
+    }));
+}

@@ -385,7 +385,18 @@ pub async fn listen_stream(
     inbound: impl tokio_stream::Stream<Item = Result<pb::ListenRequest, Status>> + Unpin + Send,
     tx: mpsc::Sender<Result<pb::ListenResponse, Status>>,
 ) {
-    listen_stream_observed(ctx, inbound, tx, None).await;
+    listen_stream_observed(ctx, inbound, tx, None, ListenTransport::Grpc).await;
+}
+
+/// Which transport carries a `Listen` stream. Production's one-hour close was observed on native
+/// gRPC streams only (AUTH-FS-CROSS stage 2), so only they take it; a `WebChannel` keeps its
+/// stream as before.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ListenTransport {
+    /// A native gRPC `Listen`.
+    Grpc,
+    /// A `Listen` over `WebChannel`.
+    WebChannel,
 }
 
 /// Runs `Listen` with an optional transport observer. The observer sees a completed response
@@ -397,6 +408,7 @@ pub(crate) async fn listen_stream_observed(
     mut inbound: impl tokio_stream::Stream<Item = Result<pb::ListenRequest, Status>> + Unpin + Send,
     tx: mpsc::Sender<Result<pb::ListenResponse, Status>>,
     observer: Option<Arc<dyn ListenObserver>>,
+    transport: ListenTransport,
 ) {
     let mut parent: Option<Parent> = None;
     let mut targets: BTreeMap<i32, TargetState> = BTreeMap::new();
@@ -406,6 +418,7 @@ pub(crate) async fn listen_stream_observed(
     let stream_deadline = ctx
         .rules
         .as_ref()
+        .filter(|_| transport == ListenTransport::Grpc)
         .and_then(|rules| rules.listen_stream_deadline(&ctx.principal));
     loop {
         let mut out: Vec<pb::ListenResponse> = Vec::new();

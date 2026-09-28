@@ -5288,8 +5288,9 @@ fn batch_import_treats_null_optional_fields_as_unset() {
     assert!(imported.get("mfaInfo").is_none());
     assert!(imported.get("lastLoginAt").is_none());
 
-    // `allowOverwrite: null` follows the omitted/default false path, and production replaces an
-    // existing localId on that path too (sandbox recording 2026-09-23).
+    // `allowOverwrite: null` follows the omitted/default false path. Under the emulator
+    // profile a duplicate localId is reported without replacing the already imported account,
+    // as the official emulator does (strict replaces it, as production does).
     let (status, response) = admin(
         &s,
         "POST",
@@ -5304,7 +5305,11 @@ fn batch_import_treats_null_optional_fields_as_unset() {
         }),
     );
     assert_eq!(status, 200, "{response}");
-    assert!(response.get("error").is_none(), "{response}");
+    assert_eq!(
+        response["error"].as_array().map(Vec::len),
+        Some(1),
+        "{response}"
+    );
     let (status, lookup) = admin(
         &s,
         "POST",
@@ -5312,8 +5317,8 @@ fn batch_import_treats_null_optional_fields_as_unset() {
         &json!({"localId": ["batch-null-fields"]}),
     );
     assert_eq!(status, 200, "{lookup}");
-    assert_eq!(lookup["users"][0]["email"], "replacement@example.com");
-    assert_eq!(lookup["users"][0]["displayName"], "must-not-replace");
+    assert_eq!(lookup["users"][0]["email"], "batch-null-fields@example.com");
+    assert_ne!(lookup["users"][0]["displayName"], "must-not-replace");
 }
 
 #[test]
@@ -16627,6 +16632,203 @@ fn batch_create_upserts_and_checks_duplicates_like_production() {
     assert_eq!(status, 400, "{body}");
     assert_eq!(body["error"]["message"], "DUPLICATE_EMAIL : i8@example.com");
     assert!(lookup("i8").is_null());
+    // Production accepts an existing localId whose new address belongs to another account,
+    // and under sanityCheck an address owned by an account outside the request.
+    let (status, body) =
+        import(json!({"users": [{"localId": "i2", "email": "i1-new@example.com"}]}));
+    assert_eq!((status, body.get("error").is_none()), (200, true), "{body}");
+    assert_eq!(lookup("i2")["email"], "i1-new@example.com");
+    let (status, body) = import(
+        json!({"sanityCheck": true, "users": [{"localId": "i10", "email": "i6b@example.com"}]}),
+    );
+    assert_eq!((status, body.get("error").is_none()), (200, true), "{body}");
+    assert_eq!(lookup("i10")["email"], "i6b@example.com");
+}
+
+fn batch_import(s: &AuthState, body: &Value) -> (u16, Value) {
+    admin(s, "POST", &format!("{ADMIN}/accounts:batchCreate"), body)
+}
+
+fn looked_up(s: &AuthState, id: &str) -> Value {
+    admin(
+        s,
+        "POST",
+        &format!("{ADMIN}/accounts:lookup"),
+        &json!({"localId": [id]}),
+    )
+    .1["users"][0]
+        .clone()
+}
+
+fn row_errors(body: &Value) -> Vec<Value> {
+    body["error"].as_array().cloned().unwrap_or_default()
+}
+
+const EMULATOR_OVERWRITE_REFUSAL: &str =
+    "localId belongs to an existing account - can not overwrite.";
+
+/// batchCreate's localId rules under the emulator profile, as the official emulator answers
+/// them (firebase-tools 15.28.2, `operations.js` `batchCreate`; conformance fixture
+/// `auth/admin-account-lifecycle#import-users`): without allowOverwrite a localId repeated in
+/// the request refuses the request and an existing localId refuses its row; allowOverwrite
+/// replaces the account row by row.
+#[test]
+fn emulator_batch_create_refuses_existing_and_repeated_local_ids_like_the_official_emulator() {
+    let s = state();
+    let (status, body) = batch_import(
+        &s,
+        &json!({"users": [{"localId": "e1", "email": "e1@example.com"}]}),
+    );
+    assert_eq!((status, body.get("error").is_none()), (200, true), "{body}");
+
+    // An existing localId without allowOverwrite: the row is refused and the account kept,
+    // while a new row of the same request is imported.
+    let (status, body) = batch_import(
+        &s,
+        &json!({"users": [{"localId": "e3", "email": "e3@example.com"}, {"localId": "e1", "email": "e1-new@example.com", "displayName": "must-not-replace"}]}),
+    );
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(
+        row_errors(&body),
+        [json!({"index": 1, "message": EMULATOR_OVERWRITE_REFUSAL})],
+        "{body}"
+    );
+    assert_eq!(looked_up(&s, "e1")["email"], "e1@example.com");
+    assert!(looked_up(&s, "e1").get("displayName").is_none());
+    assert_eq!(looked_up(&s, "e3")["email"], "e3@example.com");
+    let (status, body) = batch_import(
+        &s,
+        &json!({"allowOverwrite": false, "users": [{"localId": "e1", "email": "e1@example.com"}]}),
+    );
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(
+        row_errors(&body),
+        [json!({"index": 0, "message": EMULATOR_OVERWRITE_REFUSAL})],
+        "{body}"
+    );
+
+    // A localId repeated inside the request refuses the whole request.
+    let (status, body) = batch_import(
+        &s,
+        &json!({"users": [{"localId": "e4", "email": "e4@example.com"}, {"localId": "e4", "email": "e4b@example.com"}]}),
+    );
+    assert_eq!(status, 400, "{body}");
+    assert_eq!(body["error"]["message"], "DUPLICATE_LOCAL_ID : e4");
+    assert_eq!(
+        body["error"]["errors"][0]["message"],
+        "DUPLICATE_LOCAL_ID : e4"
+    );
+    assert!(looked_up(&s, "e4").is_null());
+
+    // allowOverwrite replaces the account, keeping its own address; a localId repeated in the
+    // request is then imported row by row, the later row winning.
+    let (status, body) = batch_import(
+        &s,
+        &json!({"allowOverwrite": true, "users": [{"localId": "e1", "email": "e1@example.com", "displayName": "Replaced"}]}),
+    );
+    assert_eq!((status, body.get("error").is_none()), (200, true), "{body}");
+    assert_eq!(looked_up(&s, "e1")["displayName"], "Replaced");
+    let (status, body) = batch_import(
+        &s,
+        &json!({"allowOverwrite": true, "users": [{"localId": "e6", "email": "e6@example.com"}, {"localId": "e6", "email": "e6b@example.com"}]}),
+    );
+    assert_eq!((status, body.get("error").is_none()), (200, true), "{body}");
+    assert_eq!(looked_up(&s, "e6")["email"], "e6b@example.com");
+}
+
+/// batchCreate's address rules under the emulator profile, as the official emulator answers
+/// them (firebase-tools 15.28.2, `operations.js` `batchCreate`): an address owned by another
+/// account refuses its row, before the existing-localId check and whatever allowOverwrite
+/// says, with a message that depends on sanityCheck; sanityCheck refuses an address repeated
+/// inside the request before anything is imported.
+#[test]
+fn emulator_batch_create_refuses_shared_addresses_like_the_official_emulator() {
+    let s = state();
+    let (status, body) = batch_import(
+        &s,
+        &json!({"users": [{"localId": "e1", "email": "e1@example.com"}, {"localId": "e2", "email": "e2@example.com"}]}),
+    );
+    assert_eq!((status, body.get("error").is_none()), (200, true), "{body}");
+    let shared = |email: &str| json!({"index": 0, "message": format!("((Auth Emulator does not support importing duplicate email: {email}))")});
+    let (status, body) = batch_import(
+        &s,
+        &json!({"users": [{"localId": "e5", "email": "e1@example.com"}]}),
+    );
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(row_errors(&body), [shared("e1@example.com")], "{body}");
+    assert!(looked_up(&s, "e5").is_null());
+    // An existing localId taking another account's address: the address refusal comes first.
+    let (status, body) = batch_import(
+        &s,
+        &json!({"users": [{"localId": "e2", "email": "e1@example.com"}]}),
+    );
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(row_errors(&body), [shared("e1@example.com")], "{body}");
+    assert_eq!(looked_up(&s, "e2")["email"], "e2@example.com");
+    // allowOverwrite does not let a row take another account's address.
+    let (status, body) = batch_import(
+        &s,
+        &json!({"allowOverwrite": true, "users": [{"localId": "e1", "email": "e2@example.com"}]}),
+    );
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(row_errors(&body), [shared("e2@example.com")], "{body}");
+    assert_eq!(looked_up(&s, "e1")["email"], "e1@example.com");
+    // Under sanityCheck the same refusal says the address exists in another account.
+    let (status, body) = batch_import(
+        &s,
+        &json!({"sanityCheck": true, "users": [{"localId": "e5", "email": "e1@example.com"}]}),
+    );
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(
+        row_errors(&body),
+        [json!({"index": 0, "message": "email exists in other account in database"})],
+        "{body}"
+    );
+    // sanityCheck refuses an address repeated inside the request before anything is imported.
+    let (status, body) = batch_import(
+        &s,
+        &json!({"sanityCheck": true, "users": [{"localId": "e8", "email": "e8@example.com"}, {"localId": "e9", "email": "e8@example.com"}]}),
+    );
+    assert_eq!(status, 400, "{body}");
+    assert_eq!(body["error"]["message"], "DUPLICATE_EMAIL : e8@example.com");
+    assert!(looked_up(&s, "e8").is_null());
+}
+
+/// Without sanityCheck an address repeated inside the request is refused row by row under the
+/// emulator profile (the official emulator imports the first row and refuses the next), and
+/// under allowDuplicateEmails fireemu keeps importing a shared address, sanityCheck or not.
+#[test]
+fn emulator_batch_create_checks_repeated_addresses_row_by_row() {
+    let s = state();
+    let (status, body) = batch_import(
+        &s,
+        &json!({"users": [{"localId": "r1", "email": "r@example.com"}, {"localId": "r2", "email": "r@example.com"}]}),
+    );
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(
+        row_errors(&body),
+        [
+            json!({"index": 1, "message": "((Auth Emulator does not support importing duplicate email: r@example.com))"})
+        ],
+        "{body}"
+    );
+    assert_eq!(looked_up(&s, "r1")["email"], "r@example.com");
+    assert!(looked_up(&s, "r2").is_null());
+
+    let (status, config) = admin(
+        &s,
+        "PATCH",
+        "/identitytoolkit.googleapis.com/admin/v2/projects/demo-app/config?updateMask=signIn.allowDuplicateEmails",
+        &json!({"signIn": {"allowDuplicateEmails": true}}),
+    );
+    assert_eq!(status, 200, "{config}");
+    let (status, body) = batch_import(
+        &s,
+        &json!({"sanityCheck": true, "users": [{"localId": "r3", "email": "r@example.com"}, {"localId": "r4", "email": "r@example.com"}]}),
+    );
+    assert_eq!((status, body.get("error").is_none()), (200, true), "{body}");
+    assert_eq!(looked_up(&s, "r3")["email"], "r@example.com");
+    assert_eq!(looked_up(&s, "r4")["email"], "r@example.com");
 }
 
 /// The project config carries its authorized domains: the domains a new Firebase project

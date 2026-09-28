@@ -3596,7 +3596,9 @@ fn dispatch(
             delete_account(store, body, at, true, !options.stateless_refresh_tokens)
         }
         Handler::AdminBatchGet => admin_batch_get(store, query, body),
-        Handler::AdminBatchCreate => admin_batch_create(store, body, at),
+        Handler::AdminBatchCreate => {
+            admin_batch_create(store, body, at, !options.stateless_refresh_tokens)
+        }
         Handler::AdminBatchDelete => {
             admin_batch_delete(store, body, !options.stateless_refresh_tokens)
         }
@@ -9874,7 +9876,14 @@ fn decode_batch_rows(rows: &[Value]) -> Result<(), JsonResponse> {
     Ok(())
 }
 
-fn admin_batch_create(store: &mut AuthStore, body: &Value, at: LogicalInstant) -> JsonResponse {
+/// Admin `accounts:batchCreate` (`importUsers`). Strict follows production's upsert and
+/// duplicate rules; the emulator profile follows the official emulator's refusals.
+fn admin_batch_create(
+    store: &mut AuthStore,
+    body: &Value,
+    at: LogicalInstant,
+    strict: bool,
+) -> JsonResponse {
     let Some(rows) = body
         .get("users")
         .and_then(Value::as_array)
@@ -9887,20 +9896,19 @@ fn admin_batch_create(store: &mut AuthStore, body: &Value, at: LogicalInstant) -
         Some(Value::Bool(value)) => *value,
         Some(_) => return error(400, "INVALID_ARGUMENT : allowOverwrite must be a boolean"),
     };
-    // Production upserts rows by localId whatever allowOverwrite says: a repeated localId in
-    // the request is replaced by its later row and an existing account is replaced without an
-    // error (sandbox recording 2026-09-23). The field is still type-checked above.
-    let _ = allow_overwrite;
-    // sanityCheck refuses an address repeated inside the request, before anything is imported.
-    if body.get("sanityCheck").and_then(Value::as_bool) == Some(true) {
-        let mut seen = std::collections::BTreeSet::new();
-        for row in rows {
-            if let Some(email) = str_field(row, "email").filter(|e| !e.is_empty()) {
-                if !seen.insert(canonicalize_email(email)) {
-                    return error(400, &format!("DUPLICATE_EMAIL : {email}"));
-                }
-            }
-        }
+    let sanity_check = body.get("sanityCheck").and_then(Value::as_bool) == Some(true);
+    let request_refusal = if strict {
+        production_batch_request_refusal(rows, sanity_check)
+    } else {
+        emulator_batch_request_refusal(
+            rows,
+            sanity_check,
+            allow_overwrite,
+            store.config().allow_duplicate_emails,
+        )
+    };
+    if let Some(response) = request_refusal {
+        return response;
     }
     if let Err(response) = decode_batch_rows(rows) {
         return response;
@@ -9929,7 +9937,16 @@ fn admin_batch_create(store: &mut AuthStore, body: &Value, at: LogicalInstant) -
             }
         };
         let imported_password = user.imported_password.is_some() || user.password.is_some();
-        let import_result = if store.user_by_id(&user.local_id).is_some() {
+        let exists = store.user_by_id(&user.local_id).is_some();
+        if !strict {
+            if let Some(message) =
+                emulator_batch_row_refusal(store, &user, exists, allow_overwrite, sanity_check)
+            {
+                errors.push(refused(message));
+                continue;
+            }
+        }
+        let import_result = if exists {
             // Validate and install a replacement on a copy first. A row can fail after the
             // UID collision check (for example because its email belongs to another account),
             // and a failed import must leave the existing account untouched.
@@ -9961,6 +9978,87 @@ fn admin_batch_create(store: &mut AuthStore, body: &Value, at: LogicalInstant) -
             json!({"kind": "identitytoolkit#UploadAccountResponse", "error": errors})
         },
     }
+}
+
+/// Production's request-level batchCreate refusal: it upserts rows by localId whatever
+/// allowOverwrite says (a repeated localId in the request is replaced by its later row and an
+/// existing account is replaced without an error), and sanityCheck refuses an address repeated
+/// inside the request, before anything is imported (sandbox recording 2026-09-23). The
+/// allowOverwrite field is still type-checked by the caller.
+fn production_batch_request_refusal(rows: &[Value], sanity_check: bool) -> Option<JsonResponse> {
+    if sanity_check {
+        let mut seen = std::collections::BTreeSet::new();
+        for row in rows {
+            if let Some(email) = str_field(row, "email").filter(|e| !e.is_empty()) {
+                if !seen.insert(canonicalize_email(email)) {
+                    return Some(error(400, &format!("DUPLICATE_EMAIL : {email}")));
+                }
+            }
+        }
+    }
+    None
+}
+
+/// The official emulator's request-level batchCreate refusals (firebase-tools 15.28.2,
+/// `operations.js` `batchCreate`): sanityCheck refuses an address repeated inside the request
+/// while one account per address is enforced, and without allowOverwrite a localId repeated
+/// inside the request refuses the request. Rows without a localId are left to their own
+/// per-row refusal, as fireemu did before production's rules were adopted for strict.
+fn emulator_batch_request_refusal(
+    rows: &[Value],
+    sanity_check: bool,
+    allow_overwrite: bool,
+    allow_duplicate_emails: bool,
+) -> Option<JsonResponse> {
+    if sanity_check && !allow_duplicate_emails {
+        let mut seen = std::collections::BTreeSet::new();
+        for row in rows {
+            if let Some(email) = str_field(row, "email").filter(|e| !e.is_empty()) {
+                if !seen.insert(email) {
+                    return Some(error(400, &format!("DUPLICATE_EMAIL : {email}")));
+                }
+            }
+        }
+    }
+    if !allow_overwrite {
+        let mut seen = std::collections::BTreeSet::new();
+        for row in rows {
+            if let Some(id) = str_field(row, "localId").filter(|id| !id.is_empty()) {
+                if !seen.insert(id) {
+                    return Some(error(400, &format!("DUPLICATE_LOCAL_ID : {id}")));
+                }
+            }
+        }
+    }
+    None
+}
+
+/// The official emulator's per-row batchCreate refusals that production does not make: an
+/// address owned by another account (checked first, and only while one account per address is
+/// enforced; fireemu keeps importing a shared address under allowDuplicateEmails), then an
+/// existing localId without allowOverwrite.
+fn emulator_batch_row_refusal(
+    store: &AuthStore,
+    user: &fireemu_core_auth::store::ImportedUser,
+    exists: bool,
+    allow_overwrite: bool,
+    sanity_check: bool,
+) -> Option<String> {
+    if let Some(email) = user.email.as_deref() {
+        let owned_by_other = store
+            .users_by_email(email)
+            .iter()
+            .any(|owner| owner.local_id.as_str() != user.local_id);
+        if owned_by_other && !store.config().allow_duplicate_emails {
+            return Some(if sanity_check {
+                "email exists in other account in database".to_owned()
+            } else {
+                format!("((Auth Emulator does not support importing duplicate email: {email}))")
+            });
+        }
+    }
+    (exists && !allow_overwrite)
+        .then(|| "localId belongs to an existing account - can not overwrite.".to_owned())
 }
 
 /// Admin `accounts:batchGet` (`listUsers`): `GET ?maxResults=&nextPageToken=`, users in

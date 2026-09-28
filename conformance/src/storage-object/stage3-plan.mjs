@@ -16,7 +16,7 @@ const EXPECTED_REMAINING = [
 
 const digest = (value) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 
-/** A deterministic, non-sending draft for reviewing the two production recordings. */
+/** The historical local draft retains its local recovery budget. */
 export function buildStage3DraftPlan({ projectId, bucket, runIds } = {}) {
   if (
     !Array.isArray(runIds) ||
@@ -122,5 +122,17 @@ export function buildStage3DraftPlan({ projectId, bucket, runIds } = {}) {
     maxPerResponseWireBytes: MAX_RESPONSE_WIRE_BYTES,
     budgetStatus: "PROPOSED_NOT_APPROVED",
     sendAuthorized: false,
+  };
+}
+
+/** Production preparation reserves two independent recordings; recovery needs a separate reviewed packet. */
+export function buildProductionStage3DraftPlan(input) {
+  return {
+    ...buildStage3DraftPlan(input),
+    status: "PRODUCTION_DRAFT_NO_SEND",
+    maxRequests: 2 * PER_RECORDING_CAP,
+    recoveryReserveRequests: 0,
+    recoveryPolicy: "SEPARATE_REVIEWED_PACKET",
+    recordingAdmission: "FRESH_PER_RECORDING_30_MINUTES",
   };
 }

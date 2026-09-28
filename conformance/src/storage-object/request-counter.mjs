@@ -1,6 +1,7 @@
 import { estimateStage3Budget } from "./budget-model.mjs";
 import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
+import { buildProductionStage3DraftPlan } from "./stage3-plan.mjs";
 
 const recipeContextClaims = new WeakMap();
 
@@ -16,6 +17,9 @@ export function createStage3RequestCounter(plan, { onStart, onReserve, recipeLif
   if (typeof onStart !== "function" || typeof onReserve !== "function")
     throw new Error("durable started and request-reservation writers are required");
   plan = structuredClone(plan);
+  const production = plan?.status === "PRODUCTION_DRAFT_NO_SEND";
+  const productionStartsAttempted = new Set();
+  let productionAdmissionFailed = false;
   let lifecycle = null;
   if (recipeLifecycle !== undefined) {
     const keys = ["recipeIds", "onBegin", "onFinish", "verifyTerminal"];
@@ -65,8 +69,20 @@ export function createStage3RequestCounter(plan, { onStart, onReserve, recipeLif
   ];
 
   function checkEnvelope() {
-    if (plan?.status !== "LOCAL_DRAFT_NO_SEND" || plan.recordings?.length !== 2)
+    if ((!production && plan?.status !== "LOCAL_DRAFT_NO_SEND") || plan.recordings?.length !== 2)
       throw new Error("invalid two-recording plan");
+    if (
+      production &&
+      !isDeepStrictEqual(
+        plan,
+        buildProductionStage3DraftPlan({
+          projectId: plan.projectId,
+          bucket: plan.bucket,
+          runIds: plan.recordings.map((row) => row.runId),
+        }),
+      )
+    )
+      throw new Error("production plan differs from its canonical pins");
     estimateStage3Budget(plan);
     const reserved =
       plan.recordings.reduce((sum, item) => sum + item.maxRequests, 0) +
@@ -87,6 +103,25 @@ export function createStage3RequestCounter(plan, { onStart, onReserve, recipeLif
     if (mode === "recovery") return plan.recoveryReserveRequests;
     const item = plan.recordings[recording];
     return mode === "subject" ? item.subjectCapRequests : item.cleanupReserveRequests;
+  }
+
+  function startedEvent(index) {
+    return {
+      maxRequests: production ? plan.recordings[index].maxRequests : plan.maxRequests,
+      recordings: production ? 1 : 2,
+      estimatedUsd: plan.estimatedUsd,
+      maxUsdReservation: plan.maxUsdReservation,
+      ...(production
+        ? {
+            recording: index + 1,
+            runId: plan.recordings[index].runId,
+            prefix: plan.recordings[index].prefix,
+            taskMaxRequests: plan.maxRequests,
+            subjectCapRequests: plan.recordings[index].subjectCapRequests,
+            cleanupReserveRequests: plan.recordings[index].cleanupReserveRequests,
+          }
+        : {}),
+    };
   }
 
   function currentCount() {
@@ -190,15 +225,16 @@ export function createStage3RequestCounter(plan, { onStart, onReserve, recipeLif
     async start() {
       if (mode !== "not-started" || busy) throw new Error("counter already started");
       checkEnvelope();
+      if (production && productionStartsAttempted.has(0))
+        throw new Error("production start was already attempted");
       busy = true;
+      if (production) productionStartsAttempted.add(0);
       try {
-        await onStart({
-          maxRequests: plan.maxRequests,
-          recordings: 2,
-          estimatedUsd: plan.estimatedUsd,
-          maxUsdReservation: plan.maxUsdReservation,
-        });
+        await onStart(startedEvent(0));
         mode = "subject";
+      } catch (error) {
+        if (production) productionAdmissionFailed = true;
+        throw error;
       } finally {
         busy = false;
       }
@@ -206,6 +242,7 @@ export function createStage3RequestCounter(plan, { onStart, onReserve, recipeLif
     async send(operationId, transport, recipeToken) {
       if (mode === "not-started") throw new Error("no durable started row");
       if (mode === "closed") throw new Error("counter is closed");
+      if (productionAdmissionFailed) throw new Error("production recording admission failed");
       requireRecipeCapability(recipeToken);
       if (busy) throw new Error("concurrent request dispatch is forbidden");
       if (
@@ -309,6 +346,7 @@ export function createStage3RequestCounter(plan, { onStart, onReserve, recipeLif
       mode = "cleanup";
     },
     nextRecording() {
+      if (production) throw new Error("fresh production recording admission is required");
       if (lifecycle && (activeRecipe || completedRecipes[0] !== lifecycle.recipeIds.length))
         throw new Error("incomplete recording cannot advance");
       if (busy || mode !== "cleanup" || recording !== 0)
@@ -316,12 +354,38 @@ export function createStage3RequestCounter(plan, { onStart, onReserve, recipeLif
       recording = 1;
       mode = "subject";
     },
+    async startNextProductionRecording() {
+      if (
+        !production ||
+        busy ||
+        mode !== "cleanup" ||
+        recording !== 0 ||
+        productionStartsAttempted.has(1) ||
+        (lifecycle && (activeRecipe || completedRecipes[0] !== lifecycle.recipeIds.length))
+      )
+        throw new Error("second recording cannot start now");
+      busy = true;
+      productionStartsAttempted.add(1);
+      try {
+        await onStart(startedEvent(1));
+        recording = 1;
+        mode = "subject";
+      } catch (error) {
+        productionAdmissionFailed = true;
+        throw error;
+      } finally {
+        busy = false;
+      }
+    },
     enterRecovery() {
+      if (production) throw new Error("recovery requires a separate reviewed packet");
       if (busy || mode === "not-started" || mode === "closed")
         throw new Error("recovery cannot start now");
       mode = "recovery";
     },
     close() {
+      if (production && recording !== 1)
+        throw new Error("both production recordings must finish before closing");
       if (
         lifecycle &&
         (activeRecipe || completedRecipes.some((count) => count !== lifecycle.recipeIds.length))

@@ -9164,3 +9164,34 @@ fn blocking_custom_claims_read_back_in_the_functions_key_order() {
     }
     assert_eq!(lookup(json!({}), json!("{}")), None);
 }
+
+/// A blocking response's `photoURL`, the name the Functions SDK sends a function's photoURL
+/// under, is not applied; `photoUrl` is (AUTH-TENANT-BLOCKING recording 2026-09-28,
+/// ordering#lookup-profile; the official Auth emulator reads `photoUrl` only too).
+#[test]
+fn a_blocking_response_applies_photo_url_but_not_the_sdk_photo_url_name() {
+    for (field, applied) in [("photoURL", false), ("photoUrl", true)] {
+        let mut s = state();
+        s.blocking = Some(Arc::new(FixedBeforeCreateHook {
+            response: json!({"userRecord": {
+                "updateMask": format!("displayName,{field}"),
+                "displayName": "Named",
+                field: "https://example.com/p.png",
+            }}),
+        }));
+        let (status, created) = post(
+            &s,
+            &format!("{V1}/accounts:signUp"),
+            &json!({"email": "photo@example.com", "password": "hunter22", "returnSecureToken": true}),
+        );
+        assert_eq!(status, 200, "{created}");
+        let (_, lookup) = admin(
+            &s,
+            &format!("{V1}/projects/demo-app/accounts:lookup"),
+            &json!({"localId": [created["localId"]]}),
+        );
+        let user = &lookup["users"][0];
+        assert_eq!(user["displayName"], "Named", "{field}: {lookup}");
+        assert_eq!(user.get("photoUrl").is_some(), applied, "{field}: {lookup}");
+    }
+}

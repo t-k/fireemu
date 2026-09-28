@@ -34,9 +34,12 @@ for (const publicName of [
 }
 
 test("explicit null, false and empty strings are not omitted", () => {
+  // photoURL keeps its public name, as the Functions SDK's generateResponsePayload sends it;
+  // Identity Platform does not apply that name (AUTH-TENANT-BLOCKING recording 2026-09-28,
+  // ordering#lookup-profile).
   assert.deepEqual(result({ displayName: null, photoURL: "", disabled: false, emailVerified: false }), {
-    userRecord: { displayName: null, photoUrl: "", disabled: false, emailVerified: false,
-      updateMask: "displayName,photoUrl,disabled,emailVerified" },
+    userRecord: { displayName: null, photoURL: "", disabled: false, emailVerified: false,
+      updateMask: "displayName,photoURL,disabled,emailVerified" },
   });
 });
 
@@ -187,7 +190,7 @@ test("unreadable or non-serializable results fail with fixed non-secret diagnost
 test("ordinary literal responses stay byte-for-byte compatible", () => {
   const actual = result({ displayName: "Guest", photoURL: "https://example.invalid/photo", disabled: false,
     emailVerified: true, customClaims: { plan: "basic" }, sessionClaims: { loggedIn: true } });
-  assert.equal(JSON.stringify(actual), '{"userRecord":{"displayName":"Guest","photoUrl":"https://example.invalid/photo","disabled":false,"emailVerified":true,"customClaims":{"plan":"basic"},"sessionClaims":{"loggedIn":true},"updateMask":"displayName,photoUrl,disabled,emailVerified,customClaims,sessionClaims"},"fireemuCustomClaimsText":"{\\"plan\\":\\"basic\\"}"}');
+  assert.equal(JSON.stringify(actual), '{"userRecord":{"displayName":"Guest","photoURL":"https://example.invalid/photo","disabled":false,"emailVerified":true,"customClaims":{"plan":"basic"},"sessionClaims":{"loggedIn":true},"updateMask":"displayName,photoURL,disabled,emailVerified,customClaims,sessionClaims"},"fireemuCustomClaimsText":"{\\"plan\\":\\"basic\\"}"}');
 });
 
 test("public error message is the exact message that was checked", () => {

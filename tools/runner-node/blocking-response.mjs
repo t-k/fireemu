@@ -131,21 +131,25 @@ export function blockingResult(value, eventType, HttpsError) {
     } else {
       const userRecord = {};
       const updateMask = [];
-      for (const [publicName, wireName] of [
-        ["displayName", "displayName"],
-        ["photoURL", "photoUrl"],
-        ["disabled", "disabled"],
-        ["emailVerified", "emailVerified"],
-        ["customClaims", "customClaims"],
-        ["sessionClaims", "sessionClaims"],
+      // Each field goes under its public name, as the Functions SDK's generateResponsePayload
+      // sends it: Identity Platform does not apply `photoURL` (it reads `photoUrl`), so a
+      // function's photoURL is ignored (AUTH-TENANT-BLOCKING recording 2026-09-28,
+      // ordering#lookup-profile; the official Auth emulator reads `photoUrl` only too).
+      for (const name of [
+        "displayName",
+        "photoURL",
+        "disabled",
+        "emailVerified",
+        "customClaims",
+        "sessionClaims",
       ]) {
-        if (Object.prototype.hasOwnProperty.call(value, publicName)) {
-          const field = value[publicName];
+        if (Object.prototype.hasOwnProperty.call(value, name)) {
+          const field = value[name];
           // Like the Functions SDK's getUpdateMask, undefined means no update;
           // null, false, and an empty string are still explicit updates.
           if (field === undefined) continue;
-          userRecord[wireName] = field;
-          updateMask.push(wireName);
+          userRecord[name] = field;
+          updateMask.push(name);
         }
       }
       if (updateMask.length === 0) return {};

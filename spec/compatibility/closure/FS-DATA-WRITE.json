@@ -1,15 +1,40 @@
 {
   "schemaVersion": 1,
   "parent": "FS-DATA-WRITE",
-  "parentStatus": "WAITING_ORACLE",
+  "parentStatus": "COMPAT_VERIFIED",
   "oracleTrack": "disposable-sandbox",
   "closureReview": {
-    "decision": "PENDING",
+    "decision": "APPROVED",
+    "decidedOn": "2026-09-28",
+    "decider": "project coordinator (delegated by the owner)",
     "candidateComparisonPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-current-comparison.json",
     "candidateSourceHead": "da47b5e137a275576d00f6cd75be7e29e5aaa160",
     "candidateExecutableSha256": "eec383e576e5de8c63fd934ef55dde6592bb6b69888a7f00bb4129c6a9338593",
     "approvedKnownDifferenceCount": 0,
-    "pendingOracleDifferenceCount": 0
+    "pendingOracleDifferenceCount": 0,
+    "reviewedCommit": "680042d37ae613919641d2d3b557b09e7e130a8c",
+    "finalArtifactSha256": "eec383e576e5de8c63fd934ef55dde6592bb6b69888a7f00bb4129c6a9338593",
+    "reviews": [
+      {
+        "reviewer": "independent clean-context closure review (read-only subagent, Opus)",
+        "scope": "07d34c273a89f2f5e68d13aefdf3b06b8cb64674",
+        "reportSha256": "e95b0f33a10ac7616343a61c974df30fe33f4b3a55cb90bff1aa09dbd2ce1657",
+        "outcome": "APPROVE WITH CHANGES (no Must)"
+      },
+      {
+        "reviewer": "independent clean-context review of the fix diff (read-only subagent, Opus)",
+        "scope": "07d34c273..686189e8f",
+        "reportSha256": "8ebef0c0d9fa661fbd012418c493b6bf0bbfb324da04889a1baae0657dce76c7",
+        "outcome": "APPROVE WITH CHANGES (no Must)"
+      },
+      {
+        "reviewer": "independent clean-context review of the closing change (read-only subagent, Opus)",
+        "scope": "680042d37 plus the closing change",
+        "reportSha256": "8d7586f0bc7e47b61352676f560b69379f09cbf1814f940a5d638aa94576a17c",
+        "outcome": "APPROVE WITH CHANGES (no Must)"
+      }
+    ],
+    "followUps": "Non-blocking items tracked outside the closure: a strict delete of a stored document over the index-entry limits is refused rather than priced; WebChannel form bodies can hold up to 16 MiB each under the request work limiter; the limits-catalog request-bytes note keeps one stale sentence, fixed at the next product rebuild because the note is compiled into the release binary; the ten retired historical REST recipes are no longer compared; the historical rows emulator/routes#get-database and emulator/routes#list-databases answer 200 in production on the real Admin databases API, and databases.get and databases.list are compared against production only by FS-CONFIG-LIFECYCLE/database-projection on its own branch and artifact, not on this release artifact (here they differ from the recording by the per-resource etag and uid, and the list also holds the databases the earlier steps of the emulator/routes program created and an empty unreachable field the recording lacks); these two API behaviours belong to the FS-CONFIG-LIFECYCLE scope and are closed by rerunning the comparisons of both parents on the first release after integration."
   },
   "conditions": [
     {
@@ -1239,7 +1264,17 @@
         "pnpm -C conformance fs-data-write:check"
       ],
       "boundaryStatus": "NOT_APPLICABLE",
-      "status": "PENDING_REVIEW"
+      "status": "VERIFIED",
+      "evidence": {
+        "finalArtifactSha256": "eec383e576e5de8c63fd934ef55dde6592bb6b69888a7f00bb4129c6a9338593",
+        "sourceHead": "da47b5e137a275576d00f6cd75be7e29e5aaa160",
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-historical-regression.json",
+        "comparisonSha256": "6eff816d88db718e40fcce2257107f6deed9895055161f79f292aa4cd4b34fc9",
+        "currentComparisonPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-current-comparison.json",
+        "currentComparisonSha256": "582c9004b55e5c0c0ac8a1731584c90a67981f9eefe1c8a97b37340cd5f22678",
+        "releaseArtifactPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-release-artifact.json",
+        "releaseArtifactSha256": "f27452fe06f6fabbd63aa5b5dfbd93dacd2ab5040aa6d7d12c73af4fe33daa98"
+      }
     },
     {
       "conditionId": "FS-DATA-WRITE/closure-review",
@@ -1248,7 +1283,16 @@
         "FS-DATA-WRITE"
       ],
       "boundaryStatus": "NOT_APPLICABLE",
-      "status": "PENDING_REVIEW"
+      "status": "VERIFIED",
+      "evidence": {
+        "reviewedCommit": "680042d37ae613919641d2d3b557b09e7e130a8c",
+        "finalArtifactSha256": "eec383e576e5de8c63fd934ef55dde6592bb6b69888a7f00bb4129c6a9338593",
+        "reviewReportSha256": [
+          "e95b0f33a10ac7616343a61c974df30fe33f4b3a55cb90bff1aa09dbd2ce1657",
+          "8ebef0c0d9fa661fbd012418c493b6bf0bbfb324da04889a1baae0657dce76c7",
+          "8d7586f0bc7e47b61352676f560b69379f09cbf1814f940a5d638aa94576a17c"
+        ]
+      }
     },
     {
       "conditionId": "FS-DATA-WRITE-LIST/list-documents-rest",

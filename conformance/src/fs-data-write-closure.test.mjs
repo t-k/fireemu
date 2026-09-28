@@ -50,6 +50,18 @@ const listComparisonPath = fileURLToPath(
     import.meta.url,
   ),
 );
+const historicalRegressionPath = fileURLToPath(
+  new URL(
+    "../../spec/compatibility/closure/evidence/FS-DATA-WRITE-historical-regression.json",
+    import.meta.url,
+  ),
+);
+const releaseBundlePath = fileURLToPath(
+  new URL(
+    "../../spec/compatibility/closure/evidence/FS-DATA-WRITE-release-artifact.json",
+    import.meta.url,
+  ),
+);
 const terminalConditionPath = fileURLToPath(
   new URL(
     "../../spec/compatibility/closure/evidence/FS-DATA-WRITE-terminal-local-digests.json",
@@ -369,6 +381,13 @@ test("conditions bound to older comparisons are covered by the release compariso
   const covered = [];
   for (const condition of closure.conditions) {
     if (!["VERIFIED", "KNOWN_DIFFERENCE_APPROVED"].includes(condition.status)) continue;
+    if (
+      ["FS-DATA-WRITE/final-artifact-regression", "FS-DATA-WRITE/closure-review"].includes(
+        condition.conditionId,
+      )
+    ) {
+      continue; // The release regression and the review record themselves.
+    }
     if (releaseBound.has(condition.evidence?.comparisonPath)) {
       assert.equal(condition.evidence.currentCoverage, undefined, condition.conditionId);
       continue;
@@ -656,6 +675,17 @@ function verifyAcceptedCondition(condition) {
   if (approvedTerminal && terminalBoundary === "NONDETERMINISTIC_BAND") {
     assert.equal(condition.terminalOwnerDecision, "2026-09-25 FS-DATA-WRITE A");
   }
+  // The two closing conditions bind the release regression and the review record, which have
+  // no production recording pair of their own (their own tests check their bindings).
+  if (
+    ["FS-DATA-WRITE/final-artifact-regression", "FS-DATA-WRITE/closure-review"].includes(
+      condition.conditionId,
+    )
+  ) {
+    assert.equal(condition.boundaryStatus, "NOT_APPLICABLE");
+    assert.match(condition.evidence?.finalArtifactSha256 ?? "", /^[0-9a-f]{64}$/);
+    return;
+  }
   if (condition.conditionId === "FS-DATA-WRITE/stream-transaction-precedence") {
     assert.equal(condition.boundaryStatus, "NOT_APPLICABLE");
     assert.match(condition.evidence?.productionReceiptSha256 ?? "", /^[0-9a-f]{64}$/);
@@ -750,8 +780,8 @@ test("integrated list conditions retain exact recipe ownership", () => {
   }
   assert.equal(recipeIds.length, 201);
   assert.equal(new Set(recipeIds).size, 201, "each proposed recipe must belong to one condition");
-  assert.equal(closure.parentStatus, "WAITING_ORACLE");
-  assert.equal(closure.closureReview.decision, "PENDING");
+  assert.equal(closure.parentStatus, "COMPAT_VERIFIED");
+  assert.equal(closure.closureReview.decision, "APPROVED");
 });
 
 test("verified conditions are bound to their saved comparisons", async () => {
@@ -791,6 +821,13 @@ test("verified conditions are bound to their saved comparisons", async () => {
     assert.ok(verified.some((condition) => condition.conditionId === conditionId));
   }
   for (const condition of verified) {
+    if (
+      ["FS-DATA-WRITE/final-artifact-regression", "FS-DATA-WRITE/closure-review"].includes(
+        condition.conditionId,
+      )
+    ) {
+      continue; // Bound by their own tests.
+    }
     const comparisonPath = fileURLToPath(
       new URL(`../../${condition.evidence.comparisonPath}`, import.meta.url),
     );
@@ -1012,8 +1049,9 @@ test("10 MiB accepted samples and strict 11 MiB Commit probes keep separate reci
   }
 });
 
-test("final artifact closure names both saved production regression commands", () => {
+test("final artifact regression binds both saved production regression commands to the release", () => {
   const closure = JSON.parse(readFileSync(closurePath, "utf8"));
+  const bundle = JSON.parse(readFileSync(releaseBundlePath, "utf8"));
   const condition = closure.conditions.find(
     ({ conditionId }) => conditionId === "FS-DATA-WRITE/final-artifact-regression",
   );
@@ -1021,7 +1059,51 @@ test("final artifact closure names both saved production regression commands", (
     "pnpm -C conformance firestore:check-production",
     "pnpm -C conformance fs-data-write:check",
   ]);
-  assert.notEqual(condition.status, "VERIFIED");
+  assert.equal(condition.status, "VERIFIED");
+  const digest = (path) => createHash("sha256").update(readFileSync(path)).digest("hex");
+  assert.deepEqual(condition.evidence, {
+    finalArtifactSha256: bundle.binarySha256,
+    sourceHead: bundle.sourceCommit,
+    comparisonPath: "spec/compatibility/closure/evidence/FS-DATA-WRITE-historical-regression.json",
+    comparisonSha256: digest(historicalRegressionPath),
+    currentComparisonPath:
+      "spec/compatibility/closure/evidence/FS-DATA-WRITE-current-comparison.json",
+    currentComparisonSha256: digest(reviewCandidatePath),
+    releaseArtifactPath: "spec/compatibility/closure/evidence/FS-DATA-WRITE-release-artifact.json",
+    releaseArtifactSha256: digest(releaseBundlePath),
+  });
+  const historical = JSON.parse(readFileSync(historicalRegressionPath, "utf8"));
+  assert.equal(historical.counts.newMismatches, 0);
+  assert.equal(historical.counts.newIndeterminateRows, 0);
+  const current = JSON.parse(readFileSync(reviewCandidatePath, "utf8"));
+  assert.equal(current.comparisonExitCode, 0);
+});
+
+test("closure review names the independent reviews and the decision taken on them", () => {
+  const closure = JSON.parse(readFileSync(closurePath, "utf8"));
+  const bundle = JSON.parse(readFileSync(releaseBundlePath, "utf8"));
+  const review = closure.closureReview;
+  assert.equal(review.decision, "APPROVED");
+  assert.equal(review.finalArtifactSha256, bundle.binarySha256);
+  assert.match(review.reviewedCommit, /^[0-9a-f]{9,40}$/);
+  assert.ok(review.reviews.length >= 1);
+  for (const entry of review.reviews) {
+    assert.ok(entry.reviewer.length > 0);
+    assert.match(entry.reportSha256, /^[0-9a-f]{64}$/);
+    assert.match(entry.outcome, /^APPROVE/);
+  }
+  // Recorded by the coordinator after its own check of the review.
+  assert.match(review.decidedOn ?? "", /^\d{4}-\d{2}-\d{2}$/);
+  assert.ok((review.decider ?? "").length > 0);
+  const condition = closure.conditions.find(
+    ({ conditionId }) => conditionId === "FS-DATA-WRITE/closure-review",
+  );
+  assert.equal(condition.status, "VERIFIED");
+  assert.deepEqual(condition.evidence, {
+    reviewedCommit: review.reviewedCommit,
+    finalArtifactSha256: review.finalArtifactSha256,
+    reviewReportSha256: review.reviews.map(({ reportSha256 }) => reportSha256),
+  });
 });
 
 test("request-byte transports are bracketed per route, with WebChannel inferred and the stream bound approved", () => {
@@ -1061,7 +1143,7 @@ test("request-byte transports are bracketed per route, with WebChannel inferred 
 test("VERIFIED evidence never depends on a private path", () => {
   const closure = JSON.parse(readFileSync(closurePath, "utf8"));
   const verified = closure.conditions.filter(({ status }) => status === "VERIFIED");
-  assert.equal(verified.length, 34);
+  assert.equal(verified.length, 36);
   for (const condition of verified) {
     assert.ok(
       !JSON.stringify(condition.evidence ?? {}).includes("docs.local/"),
@@ -1220,7 +1302,7 @@ test("half-close accepts the source-bound current run without rewriting historic
   );
   assert.equal(trailingMetadata.status, "VERIFIED");
   assert.equal(emptyResponse.status, "VERIFIED");
-  assert.equal(finalRegression.status, "PENDING_REVIEW");
+  assert.equal(finalRegression.status, "VERIFIED");
   assert.equal(comparison.result.wholeRunKnownMismatchRows, 9);
   assert.equal(comparison.result.wholeRunPendingStreams, 5);
   assert.notEqual(historical.artifactSha256, comparison.artifactSha256);

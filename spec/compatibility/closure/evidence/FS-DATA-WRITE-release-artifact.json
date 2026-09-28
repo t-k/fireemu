@@ -42,6 +42,10 @@
     "savedTransaction": {
       "reportPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-stream-transaction-current-saved-replay.json",
       "reportSha256": "38a70a39fd893f02aa08efe6a38bc9782ea7b14bb27cb074168c9086b0c523d4"
+    },
+    "historical": {
+      "reportPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-historical-regression.json",
+      "reportSha256": "6eff816d88db718e40fcce2257107f6deed9895055161f79f292aa4cd4b34fc9"
     }
   }
 }

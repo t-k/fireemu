@@ -600,6 +600,15 @@ async fn start_with_consume_profile(
     consume: &str,
     profile: fireemu_adapter_functions::http::FunctionsHttpProfile,
 ) -> Harness {
+    start_with_serve_entry(trusted, consume, profile, false).await
+}
+
+async fn start_with_serve_entry(
+    trusted: bool,
+    consume: &str,
+    profile: fireemu_adapter_functions::http::FunctionsHttpProfile,
+    default_entry: bool,
+) -> Harness {
     let script = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fake_runner.py");
     let spec = SpawnSpec {
         command: vec!["python3".to_owned(), script.to_owned()],
@@ -655,14 +664,22 @@ async fn start_with_consume_profile(
         .await
         .expect("bind");
     let addr = listener.local_addr().expect("a local address");
-    let server = tokio::spawn(
-        fireemu_adapter_functions::http::serve_functions_with_profile(
-            listener,
-            runtime.clone(),
-            fireemu_adapter_functions::http::HttpAdmission::new(),
-            profile,
-        ),
-    );
+    let server_runtime = runtime.clone();
+    let server = tokio::spawn(async move {
+        let admission = fireemu_adapter_functions::http::HttpAdmission::new();
+        if default_entry {
+            fireemu_adapter_functions::http::serve_functions(listener, server_runtime, admission)
+                .await
+        } else {
+            fireemu_adapter_functions::http::serve_functions_with_profile(
+                listener,
+                server_runtime,
+                admission,
+                profile,
+            )
+            .await
+        }
+    });
     Harness {
         addr,
         gate,
@@ -1479,6 +1496,109 @@ async fn strict_callable_ingress_checks_bearer_when_app_check_is_not_selected() 
         200
     );
     h.stop().await;
+}
+
+#[tokio::test]
+async fn default_functions_http_entry_serves_requests_with_the_emulator_profile() {
+    let h = start_with_serve_entry(
+        true,
+        "disabled",
+        fireemu_adapter_functions::http::FunctionsHttpProfile::Emulator,
+        true,
+    )
+    .await;
+    assert_eq!(h.request("GET", "echo", &[]).await.status, 200);
+    let response = h
+        .request("POST", "add", &[("authorization", "Bearer malformed")])
+        .await;
+    assert_eq!(response.status, 200);
+    let body: Value =
+        serde_json::from_slice(&response.body).expect("the handler responds with JSON");
+    assert!(
+        body.get("headers").is_some(),
+        "the handler was reached: {body}"
+    );
+    h.stop().await;
+}
+
+#[tokio::test]
+async fn strict_callable_bearer_refusal_leaves_other_schemes_and_empty_tokens_to_the_handler() {
+    let h = start_with_consume_profile(
+        false,
+        "disabled",
+        fireemu_adapter_functions::http::FunctionsHttpProfile::Strict,
+    )
+    .await;
+    for authorization in ["Basic YQ==", "Bearer "] {
+        let response = h
+            .request("POST", "add", &[("authorization", authorization)])
+            .await;
+        assert_eq!(response.status, 200, "{authorization}");
+    }
+    h.stop().await;
+}
+
+#[tokio::test]
+async fn http_faults_close_only_drop_connection_requests_for_buffered_and_streaming_handlers() {
+    use fireemu_core_session::fault::{FaultAction, FaultMatch, FaultPlan, FaultRule, FaultState};
+    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+
+    for (function, accept) in [("echo", ""), ("guardedV2", "accept: text/event-stream\r\n")] {
+        for (action, closes_connection) in [
+            (FaultAction::DropConnection, true),
+            (FaultAction::DeadLetter, false),
+        ] {
+            let h = start_with_consume_profile(
+                false,
+                "disabled",
+                fireemu_adapter_functions::http::FunctionsHttpProfile::Strict,
+            )
+            .await;
+            let faults = Arc::new(Mutex::new(FaultState::default()));
+            faults.lock().unwrap().install(FaultPlan {
+                seed: 1,
+                rules: vec![FaultRule {
+                    matches: FaultMatch {
+                        operation: "functions.invoke".into(),
+                        nth: Some(1),
+                        function: Some(function.into()),
+                        event_type: None,
+                    },
+                    action,
+                }],
+            });
+            h.runtime.set_faults(faults);
+            let body = br#"{"data":{}}"#;
+            let request = format!(
+                "POST /{PROJECT}/us-central1/{function} HTTP/1.1\r\nhost: {}\r\n{accept}content-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+                h.addr,
+                body.len()
+            );
+            let mut stream = tokio::net::TcpStream::connect(h.addr).await.unwrap();
+            stream.write_all(request.as_bytes()).await.unwrap();
+            stream.write_all(body).await.unwrap();
+            stream.flush().await.unwrap();
+            let mut raw = Vec::new();
+            let read = tokio::time::timeout(Duration::from_secs(3), stream.read_to_end(&mut raw))
+                .await
+                .expect("the fault response completes");
+            if let Err(error) = read {
+                assert_eq!(error.kind(), std::io::ErrorKind::ConnectionReset);
+            }
+            if closes_connection {
+                assert!(
+                    raw.is_empty(),
+                    "{function}: dropConnection returned HTTP bytes"
+                );
+            } else {
+                let response = fireemu_adapter_functions::http::parse_response(&raw, "POST")
+                    .expect("a non-drop fault has an HTTP response");
+                assert_eq!(response.status, 502, "{function}");
+                assert_eq!(response.body, b"fault plan: deadLetter");
+            }
+            h.stop().await;
+        }
+    }
 }
 
 #[tokio::test]

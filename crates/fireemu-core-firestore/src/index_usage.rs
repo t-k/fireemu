@@ -61,6 +61,13 @@ const DELETE_COMMIT_NUM: u64 = 1_151_316_928;
 /// smallest recorded refusal; 5,530 is unobserved.
 pub const SINGLE_FIELD_ENTRY_BYTES: u64 = 5_530;
 
+/// The largest document name size (`document_name_size`, 17 bytes over the relative name)
+/// production accepts, even for an empty document: it accepted
+/// `writes/limits/empty-document-name/4627` (4,644) and refused `/4628` (4,645) with "Index entry
+/// is too large." (FS-DATA-WRITE partial recording, 2026-09-25; owner decision, 2026-09-28).
+/// The documented entry formulas do not explain this refusal; the bound is fitted to that pair.
+pub const DOCUMENT_NAME_ENTRY_BYTES: u64 = 4_644;
+
 /// The largest entry accepted per entry kind. Only single-field (collection scope) entries have
 /// a recorded production refusal. The published 7,680 bytes is not enforced for the others:
 /// production's single-field threshold shows that figure does not match its own accounting,
@@ -204,13 +211,9 @@ impl IndexSet {
     ) -> Result<IndexUsage, FirestoreError> {
         let mut usage = IndexUsage::default();
         let parent = document.parent_document();
-        // The saved production corpus accepts a 4,622-byte relative name and rejects
-        // 5,000 bytes, even for an empty document. The exact transition is not yet
-        // recorded; avoid rejecting the unobserved interval until it is bracketed.
-        // document_name_size includes 17 bytes beyond the relative name length.
         let name_bytes = document_name_size(document)
             .map_err(|error| FirestoreError::InvalidArgument(error.to_string()))?;
-        if enforce && name_bytes >= 5_017 {
+        if enforce && name_bytes > DOCUMENT_NAME_ENTRY_BYTES {
             return Err(index_entry_too_large());
         }
         self.automatic_usage(document, fields, &mut Vec::new(), &mut usage, enforce)?;

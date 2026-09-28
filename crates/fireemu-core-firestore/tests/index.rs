@@ -380,47 +380,52 @@ fn single_field_entries_follow_the_recorded_production_threshold() {
         .is_ok());
 }
 
-/// Exploratory production points only; this deliberately ignored diagnostic pins the saved
-/// default-database empty-document pair without treating one exploratory recording as closure
-/// evidence. Enable it only after corpus v3 reproduces the point and a reviewed formula replaces
-/// the current conservative name guard.
+/// The document-name guard follows the recorded empty-document pair: production accepted
+/// `empty-document-name/4627` (name size 4,644) and refused `/4628` (4,645) with "Index entry is
+/// too large." (FS-DATA-WRITE partial recording, 2026-09-25; owner decision, 2026-09-28). The
+/// pinned official emulator accepts both, so only the strict scope refuses.
 #[test]
-#[ignore = "exploratory sbx point; awaiting corpus-v3 reproduction and reviewed formula"]
-fn exploratory_default_empty_document_index_entry_pair() {
+fn document_name_guard_follows_the_recorded_empty_document_pair() {
     use fireemu_core_firestore::path::DocumentPath;
+    use fireemu_core_firestore::size::document_name_size;
+    use fireemu_core_firestore::store::LimitScope;
     use fireemu_core_types::ids::{DatabaseId, ProjectId};
     use std::collections::BTreeMap;
 
-    let project = ProjectId::try_new("demo-app").unwrap();
-    let database = DatabaseId::default_database();
-    let path = |relative_bytes: usize| {
-        let segment_bytes = relative_bytes - 11;
-        let base = segment_bytes / 4;
-        let remainder = segment_bytes % 4;
-        let segments: Vec<String> = (0..4)
-            .map(|index| "x".repeat(base + usize::from(index < remainder)))
-            .collect();
+    // The recorded shape: four pairs under collection `c`; the extra byte is in the first ID.
+    let path = |first_id: usize| {
+        let id = |bytes: usize| "d".repeat(bytes);
         DocumentPath::parse(
-            &project,
-            &database,
+            &ProjectId::try_new("demo-app").unwrap(),
+            &DatabaseId::default_database(),
             &format!(
                 "c/{}/c/{}/c/{}/c/{}",
-                segments[0], segments[1], segments[2], segments[3]
+                id(first_id),
+                id(1154),
+                id(1154),
+                id(1154)
             ),
         )
         .unwrap()
     };
+    let (accepted, refused) = (path(1154), path(1155));
+    assert_eq!(document_name_size(&accepted).unwrap(), 4_644);
+    assert_eq!(document_name_size(&refused).unwrap(), 4_645);
     let indexes = IndexSet::default();
-    assert!(indexes
-        .document_index_usage(&path(4627), &BTreeMap::new())
-        .is_ok());
+    let empty = BTreeMap::new();
+    assert!(indexes.document_index_usage(&accepted, &empty).is_ok());
     assert_eq!(
         indexes
-            .document_index_usage(&path(4628), &BTreeMap::new())
+            .document_index_usage(&refused, &empty)
             .unwrap_err()
             .to_string(),
         "invalid argument: Index entry is too large."
     );
+    for document in [&accepted, &refused] {
+        assert!(indexes
+            .document_index_usage_in(document, &empty, LimitScope::OfficialEmulator)
+            .is_ok());
+    }
 }
 
 /// Exploratory production points only; these default-database transaction-size pairs are

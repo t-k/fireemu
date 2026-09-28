@@ -20,6 +20,8 @@ test("two distinct recordings retain the frozen corpus and a single total reques
   assert.equal(plan.maxRequestBytes, 32 * 1024 * 1024);
   assert.equal(plan.maxResponseBytes, 256 * 1024 * 1024);
   assert.equal(plan.maxOwnedAuthAccounts, 8);
+  assert.equal(plan.responseReadUnitBytes, 8192);
+  assert.equal(plan.maxPerResponseWireBytes, 2 * 1024 * 1024 + 64 * 1024);
   assert.equal(plan.recoveryReserveRequests, 600);
   assert.equal(
     plan.recordings.reduce((sum, record) => sum + record.maxRequests, 0),

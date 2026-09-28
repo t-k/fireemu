@@ -23,11 +23,15 @@ export function estimateStage3Budget(plan) {
   boundedInteger(plan.maxRequestBytes);
   const responseBytes = boundedInteger(plan.maxResponseBytes);
   const accounts = boundedInteger(plan.maxOwnedAuthAccounts);
+  if (plan.responseReadUnitBytes !== HTTP_RESPONSE_READ_UNIT_BYTES)
+    throw new Error("invalid response read-unit budget bound");
   if (!requests || !plan.maxRequestBytes || !responseBytes || !accounts)
     throw new Error("empty budget bound");
   // Conservative Standard Class A, ingress-to-client and Tier 1 MAU inputs reviewed on 2026-09-28.
   const requestMicroUsd = boundedInteger(requests * 13);
-  const responseMicroUsd = Math.ceil(boundedInteger(responseBytes * 230_000) / GIB);
+  const responseMicroUsd = Math.ceil(
+    boundedInteger((responseBytes + HTTP_RESPONSE_READ_UNIT_BYTES) * 230_000) / GIB,
+  );
   const storageAllowanceMicroUsd = 100_000;
   const authMicroUsd = boundedInteger(accounts * 5500);
   const totalMicroUsd = boundedInteger(
@@ -50,3 +54,4 @@ export function estimateStage3Budget(plan) {
     status: "PLANNED_COST_BOUND_NOT_BILLING_PROOF",
   });
 }
+import { HTTP_RESPONSE_READ_UNIT_BYTES } from "./wire-limits.mjs";

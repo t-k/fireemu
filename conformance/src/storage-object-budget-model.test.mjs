@@ -13,10 +13,10 @@ const plan = () =>
 test("the whole planned quote includes every request, ingress, storage and owned account", () => {
   assert.deepEqual(estimateStage3Budget(plan()), {
     requestMicroUsd: 85800,
-    responseMicroUsd: 57500,
+    responseMicroUsd: 57502,
     storageAllowanceMicroUsd: 100000,
     authMicroUsd: 44000,
-    totalMicroUsd: 287300,
+    totalMicroUsd: 287302,
     estimatedMicroUsd: 300000,
     reservedMicroUsd: 1000000,
     status: "PLANNED_COST_BOUND_NOT_BILLING_PROOF",
@@ -24,6 +24,7 @@ test("the whole planned quote includes every request, ingress, storage and owned
 });
 
 for (const [key, value] of [
+  ["responseReadUnitBytes", 8193],
   ["maxRequests", -1],
   ["maxRequests", 1.5],
   ["maxRequestBytes", NaN],

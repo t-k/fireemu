@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { FIXED_PRODUCTION_RULES_SHA256, buildSymbolicStorageAuthPlan } from "./auth-plan.mjs";
 import { buildAuthCorpus } from "./auth-corpus.mjs";
 import { buildCorpus } from "./corpus.mjs";
+import { HTTP_RESPONSE_READ_UNIT_BYTES, MAX_RESPONSE_WIRE_BYTES } from "./wire-limits.mjs";
 
 const PER_RECORDING_CAP = 3000;
 const PER_RECORDING_CLEANUP_RESERVE = 1000;
@@ -117,6 +118,8 @@ export function buildStage3DraftPlan({ projectId, bucket, runIds } = {}) {
     maxRequestBytes: 32 * 1024 * 1024,
     maxResponseBytes: 256 * 1024 * 1024,
     maxOwnedAuthAccounts: 8,
+    responseReadUnitBytes: HTTP_RESPONSE_READ_UNIT_BYTES,
+    maxPerResponseWireBytes: MAX_RESPONSE_WIRE_BYTES,
     budgetStatus: "PROPOSED_NOT_APPROVED",
     sendAuthorized: false,
   };

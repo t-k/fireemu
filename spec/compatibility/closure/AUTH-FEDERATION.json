@@ -119,7 +119,9 @@
       "conditionId": "AUTH-FEDERATION/oidc-token-verification",
       "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
       "recipeIds": [
-        "auth-federation/oidc/verification"
+        "auth-federation/oidc/verification",
+        "auth-federation/oidc/stale",
+        "auth-federation/oidc/azp"
       ],
       "configProjections": [
         "strict"
@@ -131,7 +133,8 @@
       "conditionId": "AUTH-FEDERATION/oidc-nonce",
       "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
       "recipeIds": [
-        "auth-federation/oidc/nonce"
+        "auth-federation/oidc/nonce",
+        "auth-federation/oidc/nonce-mismatch"
       ],
       "configProjections": [
         "strict"
@@ -155,7 +158,9 @@
       "conditionId": "AUTH-FEDERATION/saml-response-verification",
       "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
       "recipeIds": [
-        "auth-federation/saml/verification"
+        "auth-federation/saml/sign-in",
+        "auth-federation/saml/conditions",
+        "auth-federation/saml/certificate"
       ],
       "configProjections": [
         "strict"
@@ -179,7 +184,8 @@
       "conditionId": "AUTH-FEDERATION/create-auth-uri-provider",
       "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
       "recipeIds": [
-        "auth-federation/create-auth-uri"
+        "auth-federation/create-auth-uri",
+        "auth-federation/saml/acs"
       ],
       "configProjections": [
         "strict"
@@ -263,7 +269,8 @@
       "conditionId": "AUTH-FEDERATION/duplicate-email-mode",
       "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
       "recipeIds": [
-        "auth-federation/duplicate-email"
+        "auth-federation/duplicate-email",
+        "auth-federation/duplicate-email-lookup"
       ],
       "configProjections": [
         "strict"
@@ -323,7 +330,8 @@
       "conditionId": "AUTH-FEDERATION/third-party-refusals",
       "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
       "recipeIds": [
-        "auth-federation/third-party-refusals"
+        "auth-federation/third-party-refusals",
+        "auth-federation/third-party-configured"
       ],
       "configProjections": [
         "strict"

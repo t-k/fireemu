@@ -56,6 +56,7 @@ const readJson = (path) =>
 // recorded row of that fixture: a re-recorded fixture or a dropped row breaks the binding.
 const FIXTURES = {
   "auth-federation-comparison-v1": "conformance/auth-federation-production.json",
+  "auth-federation-saml-comparison-v1": "conformance/auth-federation-saml-production.json",
   "auth-config-sdk-comparison-v1": "conformance/auth-config-sdk-production.json",
   "auth-action-comparison-v1": "conformance/auth-action-production.json",
   "auth-credential-comparison-v1": "conformance/auth-credential-production.json",
@@ -241,8 +242,15 @@ test("parent promotion requires every condition and an approved closure review",
   );
 });
 
-test("closure recipes and corpus programs cover each other", async () => {
+/** Both corpora: record-oidc's and record-saml's programs. */
+async function corpusPrograms() {
   const { PROGRAMS } = await import("./auth-federation/corpus.mjs");
+  const { SAML_PROGRAMS } = await import("./auth-federation/corpus-saml.mjs");
+  return [...PROGRAMS, ...SAML_PROGRAMS];
+}
+
+test("closure recipes and corpus programs cover each other", async () => {
+  const PROGRAMS = await corpusPrograms();
   const recipes = load().conditions.flatMap(({ recipeIds }) => recipeIds);
   const covers = (recipe, programId) => programId === recipe || programId.startsWith(`${recipe}/`);
   const own = recipes.filter((id) => id.startsWith("auth-federation/"));
@@ -265,7 +273,7 @@ test("closure recipes and corpus programs cover each other", async () => {
 });
 
 test("each program runs under the projection its condition names", async () => {
-  const { PROGRAMS } = await import("./auth-federation/corpus.mjs");
+  const PROGRAMS = await corpusPrograms();
   const conditions = load().conditions.filter(({ recipeIds }) =>
     recipeIds.every((id) => id.startsWith("auth-federation/")),
   );

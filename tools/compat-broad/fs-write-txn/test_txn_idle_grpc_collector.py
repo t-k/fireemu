@@ -192,6 +192,40 @@ def test_early_returning_sleep_cannot_claim_idle_wait_completed():
     assert not any(row['site'] == 'live/commit' for row in collector.rows)
 
 
+def test_invalidated_token_requires_owned_expected_state_readback():
+    collector, wire, _budget, _journal, _clock = fixture(cleanup_code=10, cleanup_details='The referenced transaction has expired or is no longer valid.')
+    send = wire.send
+    def missing(method, request, **kwargs):
+        if method == 'GetDocument' and len(wire.calls) == 25: wire.document = None
+        return send(method, request, **kwargs)
+    wire.send = missing
+    receipt = collector.run()
+    assert receipt['complete'] is False and receipt['unrecovered'] is True
+    with pytest.raises(ValueError): projection(receipt)
+
+
+def test_slow_responsibility_fsync_cannot_dispatch_after_phase_deadline():
+    collector, wire, _budget, journal, clock = fixture()
+    def slow(state):
+        journal.append(copy.deepcopy(state))
+        if len(journal) == 1: clock.sleep(901)
+    collector.save = slow
+    receipt = collector.run()
+    assert receipt['complete'] is False
+    assert wire.calls == []
+
+
+def test_freeze_rejects_forged_absence_without_invalidated_state_readback():
+    collector, _wire, _budget, _journal, _clock = fixture(cleanup_code=10, cleanup_details='The referenced transaction has expired or is no longer valid.')
+    receipt = collector.run()
+    receipt['cleanupSteps'] = receipt['cleanupSteps'][:2]
+    receipt['cleanupSteps'][-1]['result'].update(code=5, response=None)
+    receipt['expectedStateReadback'] = False
+    receipt['phaseRequests']['documentCleanup'] = 1
+    receipt['sandboxRequests'] -= 2
+    with pytest.raises(ValueError): projection(receipt)
+
+
 @pytest.mark.parametrize('mutation', ['timing', 'wait', 'unknown', 'terminal', 'delete'])
 def test_freeze_rederives_time_responsibility_and_cleanup(mutation):
     collector, _wire, _budget, _journal, _clock = fixture(cleanup_code=10, cleanup_details='The referenced transaction has expired or is no longer valid.')

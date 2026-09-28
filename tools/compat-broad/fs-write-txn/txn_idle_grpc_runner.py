@@ -64,6 +64,9 @@ class SessionBudget(RequestBudget):
         except (Exception, KeyboardInterrupt):
             self.failed = True
             raise
+        self.check()
+        if deadline - time.monotonic() < 13:
+            raise TimeoutError('P10-A dispatch no longer fits after charged-count journal')
 
 
 def run_once(index, nonce, owner_id, directory, *, baseline, runtime, check):
@@ -87,6 +90,8 @@ def run_once(index, nonce, owner_id, directory, *, baseline, runtime, check):
         collector = Collector(plan, budget, wire, bearer, save=journal, before_send=check, observation_deadline=budget.observation_deadline)
         receipt = collector.run()
         receipt['metadata'] = preflight
+        if receipt.get('journalFailure') or budget.failed:
+            raise ValueError('P10-A journal failed; metadata postflight is forbidden')
         budget.begin_recovery()
         receipt['postflight'] = metadata.postflight()
         check()

@@ -93,6 +93,7 @@ def test_control_clock_receipt_cannot_be_production_recording(tmp_path):
     def control(*args):
         receipt = record(*args)
         receipt['timingMode'] = 'control-clock'
+        receipt['timingSource'] = 'local-control-clock'
         return receipt
     kwargs['record_once'] = control
     with pytest.raises(ValueError): record_twice(**kwargs)
@@ -107,3 +108,52 @@ def test_count_journal_failure_blocks_later_requests(monkeypatch):
     with pytest.raises(OSError): budget.charge('observation')
     with pytest.raises(ValueError): budget.charge('documentCleanup')
     assert budget.total == 1
+
+
+def test_slow_count_fsync_is_rechecked_before_external_dispatch(monkeypatch):
+    import txn_idle_grpc_runner as runner
+    clock = Clock(); monkeypatch.setattr(runner.time, 'monotonic', clock.now)
+    budget = runner.SessionBudget(compile_plan('a' * 32, 'b' * 32), lambda: None, lambda _value: clock.sleep(901))
+    with pytest.raises(TimeoutError): budget.charge('management')
+
+
+def test_responsibility_journal_failure_blocks_metadata_postflight(tmp_path, monkeypatch):
+    import txn_idle_grpc_runner as runner
+    clock = Clock(); monkeypatch.setattr(runner.time, 'monotonic', clock.now)
+    post_requests = []
+    class Metadata:
+        def __init__(self, _bearer, _baseline, budget, **kwargs): self.budget = budget
+        def preflight(self):
+            for _ in range(5): self.budget.charge('management')
+            return {'rulesetName': 'fixed', 'rulesSourceSha256': 'd' * 64}
+        def postflight(self):
+            for name in ['project', 'database']:
+                self.budget.charge('management'); post_requests.append(name)
+            return {}
+    monkeypatch.setattr(runner, 'MetadataSession', Metadata)
+    monkeypatch.setattr(runner, 'refresh', lambda *_args, **_kwargs: 'owner')
+    monkeypatch.setattr(runner, 'NodeWire', lambda _runtime: FakeWire(clock))
+    collector = runner.Collector
+    monkeypatch.setattr(runner, 'Collector', lambda *args, **kwargs: collector(*args, **kwargs, monotonic=clock.now, utc=clock.utc, sleep=clock.sleep))
+    save = runner.save_private
+    failed = False
+    def once(path, value):
+        nonlocal failed
+        if value.get('kind') == 'txn-p10-responsibility-v1' and not failed:
+            failed = True; raise OSError('transient fsync failure')
+        return save(path, value)
+    monkeypatch.setattr(runner, 'save_private', once)
+    receipt = runner.run_once(0, 'a' * 32, 'b' * 32, tmp_path, baseline={}, runtime={}, check=lambda: None)
+    assert receipt['journalFailure'] is True and receipt['complete'] is False
+    assert post_requests == []
+
+
+def test_collector_journal_failure_disables_shared_session_budget(monkeypatch):
+    import txn_idle_grpc_runner as runner
+    clock = Clock(); monkeypatch.setattr(runner.time, 'monotonic', clock.now)
+    plan = compile_plan('a' * 32, 'b' * 32)
+    budget = runner.SessionBudget(plan, lambda: None, lambda _value: None)
+    def failed(_value): raise OSError('responsibility fsync failed')
+    receipt = Collector(plan, budget, FakeWire(clock), 'owner', save=failed, monotonic=clock.now, utc=clock.utc, sleep=clock.sleep).run()
+    assert receipt['journalFailure'] is True
+    with pytest.raises(ValueError): budget.charge('management')

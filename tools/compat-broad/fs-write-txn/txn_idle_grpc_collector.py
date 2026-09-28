@@ -68,6 +68,7 @@ class Collector:
         self.waits = []
         self.expected_state = None
         self.expired_refused = False
+        self.cleanup_readback = False
         self.unknown_commits = set()
         self.observation_deadline = observation_deadline or monotonic() + plan['observationSeconds']
         self.deadline = self.observation_deadline
@@ -89,6 +90,7 @@ class Collector:
             self.save(self._state())
         except (Exception, KeyboardInterrupt):
             self.journal_failure = True
+            self.budget.failed = True
             raise
 
     def _rpc(self, site, method, request, phase, *, step=None):
@@ -110,6 +112,10 @@ class Collector:
                     if entry['state'] == 'open': entry['state'] = 'unconfirmed-release'
         if site == 'setup/create': self.document_status = 'possibly-owned'
         self._persist()
+        self.before_send()
+        remaining = self.deadline - self.monotonic()
+        if remaining < 13:
+            raise TimeoutError('P10-A dispatch no longer fits after durable journal')
         timing = {'dispatchMonotonic': self.monotonic(), 'dispatchUtc': self.utc()}
         result = self.wire.send(method, request, nonce=self.plan['nonce'], owner_id=self.plan['ownerId'], bearer=self.bearer, deadline_ms=max(1, min(10000, int(remaining * 1000))))
         timing.update(responseMonotonic=self.monotonic(), responseUtc=self.utc())
@@ -240,6 +246,7 @@ class Collector:
             if read['code'] != 0: return False
             if self._owned(read['response']) != self.expected_state:
                 raise ValueError('P10-A cleanup final state differs')
+            self.cleanup_readback = True
             stamp = read['response'].get('updateTime')
             if not isinstance(stamp, dict) or not isinstance(stamp.get('seconds'), str):
                 raise ValueError('P10-A cleanup requires native updateTime')
@@ -265,8 +272,9 @@ class Collector:
         absent = self._cleanup()
         open_tokens = [role for role, entry in self.tokens.items() if entry['state'] in ['open', 'unconfirmed-release']]
         observations = [row for row in self.rows if row.get('caseId')]
-        complete = graph_complete and failure is None and absent and not open_tokens and not self.unknown_starts and not self.unknown_rollbacks and not self.unknown_commits and not self.journal_failure and [row['caseId'] for row in observations] == self.plan['cases']
-        return {'kind': 'txn-p10-recording-v1', 'complete': complete, 'graphComplete': graph_complete, 'program': self.plan['program'], 'sourceDigest': self.plan['sourceDigest'], 'corpusDigest': self.plan['corpusDigest'], 'nonce': self.plan['nonce'], 'ownerId': self.plan['ownerId'], 'observations': observations, 'steps': copy.deepcopy(self.rows), 'cleanupSteps': copy.deepcopy(self.cleanup_rows), 'tokens': copy.deepcopy(self.tokens), 'unknownStarts': sorted(self.unknown_starts), 'unknownRollbacks': sorted(self.unknown_rollbacks), 'unknownCommits': sorted(self.unknown_commits), 'waits': copy.deepcopy(self.waits), 'timingMode': self.timing_mode, 'timingSource': 'parent-wire-envelope' if self.timing_mode == 'wall-clock' else 'local-control-clock', 'expectedState': self.expected_state, 'openTokens': open_tokens, 'journalFailure': self.journal_failure, 'cleanup': {'absent': absent}, 'unrecovered': bool(open_tokens or self.unknown_starts or self.unknown_rollbacks or self.unknown_commits or not absent or self.journal_failure), 'failureType': failure, 'sandboxRequests': self.budget.total, 'phaseRequests': dict(self.budget.used)}
+        missing_readback = any(entry['state'] == 'invalidated' for entry in self.tokens.values()) and not self.cleanup_readback
+        complete = graph_complete and failure is None and absent and not missing_readback and not open_tokens and not self.unknown_starts and not self.unknown_rollbacks and not self.unknown_commits and not self.journal_failure and [row['caseId'] for row in observations] == self.plan['cases']
+        return {'kind': 'txn-p10-recording-v1', 'complete': complete, 'graphComplete': graph_complete, 'program': self.plan['program'], 'sourceDigest': self.plan['sourceDigest'], 'corpusDigest': self.plan['corpusDigest'], 'nonce': self.plan['nonce'], 'ownerId': self.plan['ownerId'], 'observations': observations, 'steps': copy.deepcopy(self.rows), 'cleanupSteps': copy.deepcopy(self.cleanup_rows), 'tokens': copy.deepcopy(self.tokens), 'unknownStarts': sorted(self.unknown_starts), 'unknownRollbacks': sorted(self.unknown_rollbacks), 'unknownCommits': sorted(self.unknown_commits), 'waits': copy.deepcopy(self.waits), 'timingMode': self.timing_mode, 'timingSource': 'parent-wire-envelope' if self.timing_mode == 'wall-clock' else 'local-control-clock', 'expectedState': self.expected_state, 'expectedStateReadback': self.cleanup_readback, 'openTokens': open_tokens, 'journalFailure': self.journal_failure, 'cleanup': {'absent': absent}, 'unrecovered': bool(missing_readback or open_tokens or self.unknown_starts or self.unknown_rollbacks or self.unknown_commits or not absent or self.journal_failure), 'failureType': failure, 'sandboxRequests': self.budget.total, 'phaseRequests': dict(self.budget.used)}
 
 
 def projection(receipt):
@@ -357,6 +365,7 @@ def projection(receipt):
     cleanup = receipt.get('cleanupSteps')
     if not isinstance(cleanup, list) or len(cleanup) != counts['tokenCleanup'] + counts['documentCleanup']: raise ValueError('P10-A cleanup count differs')
     marker_time = None
+    expected_readback = False
     released = set()
     for row in cleanup:
         result = native(row)
@@ -380,6 +389,7 @@ def projection(receipt):
                     raise ValueError('P10-A cleanup owner proof differs')
                 if (fields.get('state') or {}).get('stringValue') != expected_state:
                     raise ValueError('P10-A cleanup final state differs')
+                expected_readback = True
                 stamp = document.get('updateTime', {}); marker_time = {'seconds': stamp.get('seconds'), 'nanos': stamp.get('nanos', 0)}
         elif row.get('rpc') == 'DeleteDocument':
             if row.get('site') != 'cleanup/delete-version' or marker_time is None or request != {'name': plan['document'], 'currentDocument': {'updateTime': marker_time}} or result['code'] != 0:
@@ -391,6 +401,8 @@ def projection(receipt):
         raise ValueError('P10-A cleanup ordering or derived terminal token state differs')
     if any(entry.get('start') != starts[role] or entry.get('lastUse') != last_uses[role] for role, entry in tokens.items()):
         raise ValueError('P10-A token start or last-use timing differs')
+    if receipt.get('expectedStateReadback') is not expected_readback or any(state == 'invalidated' for state in terminal_states.values()) and not expected_readback:
+        raise ValueError('P10-A invalidated token has no expected document readback')
     if not document_rows or document_rows[-1]['rpc'] != 'GetDocument' or document_rows[-1]['result']['code'] != 5:
         raise ValueError('P10-A typed document absence missing')
     def details(row):

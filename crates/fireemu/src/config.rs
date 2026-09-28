@@ -967,6 +967,9 @@ pub struct RuntimeConfig {
     /// typically within 24 hours and within 72 hours at worst, so the default is 24 hours
     /// and the accepted range ends at the documented outer bound.
     pub ttl_sweep_interval: LogicalDuration,
+    /// `firestore.deletedDatabaseIdCooldownSeconds`: how long a deleted database id stays
+    /// unavailable. `None` keeps production's 300 seconds.
+    pub deleted_database_id_cooldown: Option<i64>,
     /// When the daemon's databases were created (`firestore.databaseCreateTime`): the
     /// `createTime` they report and the instant before which a `read_time` is refused. Unset,
     /// it is the daemon's start; a run compared with a production database names that
@@ -974,6 +977,11 @@ pub struct RuntimeConfig {
     pub database_create_time: Option<LogicalInstant>,
     /// Only `demo-` project IDs are accepted.
     pub require_demo_prefix: bool,
+    /// `projects.unknownProjects = "refuse"`: under the strict profile only the daemon's
+    /// project exists, and a request naming another is refused as production refuses a
+    /// project the credential cannot use (scope decision C11). Default: every project is
+    /// served in its own session.
+    pub refuse_unknown_projects: bool,
     /// Initial virtual clock instant.
     pub clock_start: LogicalInstant,
     /// Whether `daemon.clockStart` pinned it. Without it the daemon starts its virtual
@@ -1295,8 +1303,10 @@ impl Default for RuntimeConfig {
             refuse_without_ruleset: profile.refuse_without_ruleset(),
             end_user_transactions: profile.end_user_transactions(),
             ttl_sweep_interval: fireemu_core_firestore::ttl::DEFAULT_SWEEP_INTERVAL,
+            deleted_database_id_cooldown: None,
             database_create_time: None,
             require_demo_prefix: true,
+            refuse_unknown_projects: false,
             clock_start: LogicalInstant::from_unix_seconds(1_788_004_860),
             clock_start_pinned: false,
             seed: 42,
@@ -3206,6 +3216,16 @@ impl RuntimeConfig {
                         .map_err(|e| ConfigError(format!("firestore.databaseCreateTime: {e}")))?,
                 );
             }
+            if let Some(value) = fs.get("deletedDatabaseIdCooldownSeconds") {
+                let seconds = value.as_u64().filter(|s| *s <= 300).ok_or_else(|| {
+                    ConfigError(
+                        "firestore.deletedDatabaseIdCooldownSeconds must be a whole number of \
+                         seconds from 0 to production's 300"
+                            .to_owned(),
+                    )
+                })?;
+                cfg.deleted_database_id_cooldown = i64::try_from(seconds).ok();
+            }
             if let Some(value) = fs.get("ttlSweepIntervalSeconds") {
                 let seconds = value.as_u64().ok_or_else(|| {
                     ConfigError(
@@ -3239,6 +3259,16 @@ impl RuntimeConfig {
         if let Some(p) = obj.get("projects").and_then(Value::as_object) {
             if let Some(b) = p.get("requireDemoPrefix").and_then(Value::as_bool) {
                 cfg.require_demo_prefix = b;
+            }
+            match p.get("unknownProjects") {
+                None => {}
+                Some(Value::String(v)) if v == "serve" => cfg.refuse_unknown_projects = false,
+                Some(Value::String(v)) if v == "refuse" => cfg.refuse_unknown_projects = true,
+                Some(_) => {
+                    return Err(ConfigError(
+                        "projects.unknownProjects must be \"serve\" or \"refuse\"".into(),
+                    ))
+                }
             }
         }
         if let Some(d) = obj.get("daemon").and_then(Value::as_object) {
@@ -3577,6 +3607,49 @@ mod tests {
             base.insert(k, v);
         }
         RuntimeConfig::from_json(&json)
+    }
+
+    #[test]
+    fn the_deleted_database_id_cooldown_is_production_s_unless_shortened() {
+        let parse = |firestore: Value| {
+            RuntimeConfig::from_json(&json!({"schemaVersion": 1, "firestore": firestore}))
+        };
+        assert_eq!(parse(json!({})).unwrap().deleted_database_id_cooldown, None);
+        assert_eq!(
+            parse(json!({"deletedDatabaseIdCooldownSeconds": 5}))
+                .unwrap()
+                .deleted_database_id_cooldown,
+            Some(5)
+        );
+        for bad in [json!(301), json!(-1), json!("5")] {
+            let error = parse(json!({"deletedDatabaseIdCooldownSeconds": bad})).unwrap_err();
+            assert!(
+                error.0.contains("deletedDatabaseIdCooldownSeconds"),
+                "{error}"
+            );
+        }
+    }
+
+    #[test]
+    fn unknown_projects_are_served_unless_the_config_refuses_them() {
+        let parse = |projects: Value| {
+            RuntimeConfig::from_json(&json!({"schemaVersion": 1, "projects": projects}))
+        };
+        assert!(!parse(json!({})).unwrap().refuse_unknown_projects);
+        assert!(
+            !parse(json!({"unknownProjects": "serve"}))
+                .unwrap()
+                .refuse_unknown_projects
+        );
+        assert!(
+            parse(json!({"unknownProjects": "refuse"}))
+                .unwrap()
+                .refuse_unknown_projects
+        );
+        for bad in [json!("deny"), json!(true)] {
+            let error = parse(json!({"unknownProjects": bad})).unwrap_err();
+            assert!(error.0.contains("projects.unknownProjects"), "{error}");
+        }
     }
 
     #[test]

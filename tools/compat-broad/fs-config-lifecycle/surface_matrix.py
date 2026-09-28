@@ -96,6 +96,10 @@ _EXPORT_FS = "crates/fireemu-core-export/src/firestore.rs"
 _IDS = "crates/fireemu-core-types/src/ids.rs"
 _FIELDS = "crates/fireemu-adapter-grpc/src/rest/admin_fields.rs"
 _TTL = "crates/fireemu-core-firestore/src/ttl.rs"
+_INDEX_REST = "crates/fireemu-adapter-grpc/src/admin/index_rest.rs"
+_INDEX_REGISTRY = "crates/fireemu-adapter-grpc/src/admin/indexes.rs"
+_FIELD_REGISTRY = "crates/fireemu-adapter-grpc/src/admin/fields.rs"
+COMMIT_RUNTIME_FIELD_PATCH = "74e9c8c31528a4696d3e17ae1ded280cbe1e2bb4"
 
 
 def _at(path: str, anchor: str) -> str:
@@ -229,7 +233,7 @@ _METHODS: tuple[tuple[str, str, str, str, str, tuple[str, ...]], ...] = (
         _EXTENSION,
         (
             _at(_IMPORT_EXPORT, "pub fn export("),
-            f"{_EXPORT_FS}:480",
+            _at(_EXPORT_FS, "pub fn write_managed_entity("),
             f"{_METADATA}:142",
         ),
     ),
@@ -248,40 +252,40 @@ _METHODS: tuple[tuple[str, str, str, str, str, tuple[str, ...]], ...] = (
         DATA_PLANE,
         "Composite index existence decides whether a query is accepted or refused with "
         "FAILED_PRECONDITION, so index creation directly determines data-plane results.",
-        "Without this method an index can only be declared through configuration, so a "
-        "caller cannot reach the accepted state a production query depends on.",
-        _EXTENSION,
-        (f"{_CONTROL}:48", f"{_CONTROL}:88"),
+        "An index created through the Admin API is CREATING, then READY and used by the "
+        "planner; a query that needs it while it builds is refused as production refuses it.",
+        _IMPLEMENTED,
+        (_at(_INDEX_REST, "pub(crate) fn route("), _at(_INDEX_REGISTRY, "pub fn create(")),
     ),
     _row(
         "databases.collectionGroups.indexes.get",
         DATA_PLANE,
         "Index state is how a caller learns that a query will now be accepted; the "
         "CREATING to READY transition is observable from the data plane.",
-        "A missing readback leaves index-dependent query acceptance untestable against "
-        "the same contract production exposes.",
-        _NOT_SERVED,
-        (),
+        "An index reads back CREATING then READY, as production reports it, so "
+        "index-dependent query acceptance is testable against the same contract.",
+        _IMPLEMENTED,
+        (_at(_INDEX_REST, "pub(crate) fn route("), _at(_INDEX_REGISTRY, "pub fn view(")),
     ),
     _row(
         "databases.collectionGroups.indexes.list",
         DATA_PLANE,
         "Enumeration is the denominator for index-merge and index-selection decisions "
         "that the query planner then makes on the data plane.",
-        "Local index selection is driven by configuration instead, so the two catalogs "
-        "can diverge without any request revealing it.",
-        _EXTENSION,
-        (f"{_INDEX}:949", f"{_INDEX}:597"),
+        "The list names the index file's indexes and those the Admin API created, which "
+        "are exactly the ones the planner uses.",
+        _IMPLEMENTED,
+        (_at(_INDEX_REGISTRY, "pub fn view("), _at(_LOCAL, "fn planning_indexes(")),
     ),
     _row(
         "databases.collectionGroups.indexes.delete",
         DATA_PLANE,
         "Deleting an index flips previously accepted queries back to refusal, which is a "
         "data-plane observable transition.",
-        "Without deletion the refusal direction of the transition cannot be reached at "
-        "runtime.",
-        _NOT_SERVED,
-        (),
+        "Deleting an index, including one the index file declares, withdraws it from the "
+        "planner, so the refusal direction of the transition is reachable at runtime.",
+        _IMPLEMENTED,
+        (_at(_INDEX_REGISTRY, "pub fn remove("), _at(_INDEX_REGISTRY, "pub fn retracted(")),
     ),
     _row(
         "databases.collectionGroups.fields.get",
@@ -318,16 +322,16 @@ _METHODS: tuple[tuple[str, str, str, str, str, tuple[str, ...]], ...] = (
         "Patching ttlConfig schedules server-side document deletion and patching "
         "indexConfig exempts a field from single-field indexing; both change what later "
         "reads and queries return.",
-        "The ttlConfig transition is driven at runtime and an expiry sweep applies it. "
-        "The indexConfig transition is refused with UNIMPLEMENTED: the local runtime "
-        "still accepts exemptions only from static configuration, so that half of the "
-        "surface cannot be driven at runtime.",
-        _PARTIAL,
+        "Both halves are driven at runtime: the ttlConfig transition, which an expiry "
+        "sweep applies, and the indexConfig transition, which answers production's "
+        "operation and readbacks and changes which queries the planner accepts once it is "
+        "applied.",
+        _IMPLEMENTED,
         (
             _at(_FIELDS, "fn patch_field("),
+            _at(_FIELD_REGISTRY, "pub struct FieldRegistry {"),
             _at(_TTL, "    pub fn enable("),
             _at(_LOCAL, "fn sweep_ttl("),
-            _at(_CONTROL, "fn parse_field_overrides("),
         ),
     ),
     _row(
@@ -588,7 +592,12 @@ _LOCAL_SURFACES: tuple[tuple[str, str, str, str, str, tuple[str, ...]], ...] = (
         "An exemption changes which single-field queries are refused, so the two paths "
         "must agree on the resulting refusal even though the transition differs.",
         _IMPLEMENTED,
-        (f"{_CONTROL}:148", f"{_CONTROL}:215", f"{_INDEX}:133", f"{_INDEX}:157"),
+        (
+            f"{_CONTROL}:148",
+            f"{_CONTROL}:215",
+            _at(_INDEX, "pub struct IndexSet {"),
+            _at(_INDEX, "pub fn add_exemption("),
+        ),
     ),
     _row(
         "cli.exportImport",
@@ -625,7 +634,7 @@ _LOCAL_SURFACES: tuple[tuple[str, str, str, str, str, tuple[str, ...]], ...] = (
         "A request against an uncreated named database succeeds locally and fails in "
         "production, which is recorded as an open repair ticket rather than a fix here.",
         _IMPLEMENTED,
-        (f"{_LOCAL}:2629", f"{_IDS}:183"),
+        (_at(_LOCAL, "fn with_implicit_database_creation("), f"{_IDS}:183"),
     ),
     _row(
         "control.textIndexLifecycle",
@@ -996,6 +1005,12 @@ _REPAIR_TICKETS: tuple[dict[str, Any], ...] = (
             _at(_INDEX, "pub fn single_field_override("),
         ),
         DATA_PLANE,
+        status=TICKET_FIXED,
+        fixed_at=COMMIT_RUNTIME_FIELD_PATCH,
+        resolution="A patch of indexConfig is applied at runtime through an operation: it "
+        "reads back the configuration it asks for while pending and changes which queries "
+        "are refused once applied, matching production as recorded on 2026-09-24 "
+        "(FS-CONFIG-LIFECYCLE field-index-config).",
     ),
     _ticket(
         "FS-CONFIG-RT-005",

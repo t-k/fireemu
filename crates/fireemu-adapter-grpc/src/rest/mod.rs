@@ -192,7 +192,7 @@ pub const TEXT_KEY: &str = "fireemuText";
 
 /// `404 Not Found` as plain text: what the official emulator's HTTP adapter answers for a
 /// path or method it has no route for, before any JSON error envelope exists.
-fn not_found_text() -> RestResponse {
+pub(crate) fn not_found_text() -> RestResponse {
     RestResponse {
         status: 404,
         body: json!({TEXT_KEY: "Not Found\n"}),
@@ -856,6 +856,9 @@ impl RestState {
 
     /// Handles one request.
     pub fn handle(&self, req: &RestRequest) -> RestResponse {
+        if let Some(refused) = crate::admin::rest::foreign_project(self, &req.path) {
+            return refused;
+        }
         match self.dispatch(req) {
             Ok(r) => r,
             Err(s) => {
@@ -957,6 +960,57 @@ impl RestState {
         }
     }
 
+    /// The database inventory, field-configuration and operation routes, which live under
+    /// the database resource and carry no `/documents` segment.
+    fn database_subroute(
+        &self,
+        req: &RestRequest,
+        path: &str,
+        segments: &[&str],
+        action: Option<&str>,
+        params: &BTreeMap<String, Vec<String>>,
+    ) -> Option<Result<RestResponse, Status>> {
+        if req.method == "GET"
+            && action.is_none()
+            && matches!(
+                segments,
+                ["projects", _, "databases"] | ["projects", _, "databases", _]
+            )
+        {
+            return Some(self.admin_inventory_route(req, path, params));
+        }
+        // The field-configuration and operation routes live under the database resource and
+        // carry no `/documents` segment, so they are matched before the document-route guard.
+        if action.is_none()
+            && matches!(
+                segments,
+                [
+                    "projects",
+                    _,
+                    "databases",
+                    _,
+                    "collectionGroups",
+                    _,
+                    "fields",
+                    ..
+                ]
+            )
+        {
+            return Some(self.admin_fields_route(req, segments, params));
+        }
+        if req.method == "GET"
+            && action.is_none()
+            && matches!(
+                segments,
+                ["projects", _, "databases", _, "operations"]
+                    | ["projects", _, "databases", _, "operations", _]
+            )
+        {
+            return Some(self.admin_operations_route(req, segments));
+        }
+        None
+    }
+
     fn dispatch(&self, req: &RestRequest) -> Result<RestResponse, Status> {
         // The custom-method suffix is recognised on the raw path (an encoded colon inside a
         // document ID is data, not routing syntax); segments are decoded afterwards.
@@ -964,6 +1018,10 @@ impl RestState {
             if let Some(rest) = decode_path(&req.path)?.strip_prefix("/emulator/v1/projects/") {
                 return self.emulator_route(req, rest);
             }
+        }
+        // The Admin API's database, location and operation routes (FS-CONFIG-LIFECYCLE).
+        if let Some(response) = crate::admin::rest::route(self, req) {
+            return Ok(response);
         }
         let (raw_resource, action) = match req.path.rsplit_once(':') {
             // The query methods' templates need a document below `documents`; with one
@@ -993,43 +1051,8 @@ impl RestState {
         };
         let params = query_params(&req.query);
         let segments: Vec<&str> = path.split('/').collect();
-        if req.method == "GET"
-            && action.is_none()
-            && matches!(
-                segments.as_slice(),
-                ["projects", _, "databases"] | ["projects", _, "databases", _]
-            )
-        {
-            return self.admin_inventory_route(req, path, &params);
-        }
-        // The field-configuration and operation routes live under the database resource and
-        // carry no `/documents` segment, so they are matched before the document-route guard.
-        if action.is_none()
-            && matches!(
-                segments.as_slice(),
-                [
-                    "projects",
-                    _,
-                    "databases",
-                    _,
-                    "collectionGroups",
-                    _,
-                    "fields",
-                    ..
-                ]
-            )
-        {
-            return self.admin_fields_route(req, &segments, &params);
-        }
-        if req.method == "GET"
-            && action.is_none()
-            && matches!(
-                segments.as_slice(),
-                ["projects", _, "databases", _, "operations"]
-                    | ["projects", _, "databases", _, "operations", _]
-            )
-        {
-            return self.admin_operations_route(req, &segments);
+        if let Some(response) = self.database_subroute(req, path, &segments, action, &params) {
+            return response;
         }
         if !path.contains("/documents") {
             return Ok(not_found_text());
@@ -1829,7 +1852,7 @@ impl RestState {
 /// an escape that would introduce a `/` changes the structure and is refused.
 const ENCODED_SLASH_PATH_ERROR: &str = "encoded '/' in a path segment";
 
-fn decode_path(path: &str) -> Result<String, Status> {
+pub(crate) fn decode_path(path: &str) -> Result<String, Status> {
     let mut out = String::with_capacity(path.len());
     for (i, segment) in path.split('/').enumerate() {
         if i > 0 {

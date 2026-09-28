@@ -650,6 +650,13 @@ fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
         storage_admin_capability.clone(),
         control_token.clone(),
     )?;
+    // Managed export and import (the Firestore Admin API) write to and read from this
+    // Storage emulator.
+    backend
+        .admin()
+        .set_managed_storage(Arc::new(crate::managed_storage::StorageBridge::new(
+            storage.clone(),
+        )));
     if let Some(runtime) = &functions_runtime {
         runtime.set_faults(faults.for_project(runtime.project()));
         if let Some(gate) = &app_check_gate {
@@ -1025,13 +1032,19 @@ async fn serve_suite(
             "gRPC",
             serve_multiplexed(
                 listener,
-                FirestoreServer::new(firestore_service)
-                    .max_decoding_message_size(fireemu_adapter_grpc::serve::MAX_GRPC_MESSAGE_BYTES)
-                    // Not a catalog limit: the request bound is FS-LIMIT-API-REQUEST-BYTES,
-                    // the response bound is a local memory guard.
-                    .max_encoding_message_size(
-                        fireemu_adapter_grpc::serve::MAX_GRPC_RESPONSE_BYTES,
-                    ),
+                // The Firestore Admin and long-running-operation services share the port.
+                fireemu_adapter_grpc::admin::grpc::AdminRouter::new(
+                    FirestoreServer::new(firestore_service)
+                        .max_decoding_message_size(
+                            fireemu_adapter_grpc::serve::MAX_GRPC_MESSAGE_BYTES,
+                        )
+                        // Not a catalog limit: the request bound is FS-LIMIT-API-REQUEST-BYTES,
+                        // the response bound is a local memory guard.
+                        .max_encoding_message_size(
+                            fireemu_adapter_grpc::serve::MAX_GRPC_RESPONSE_BYTES,
+                        ),
+                    rest.clone(),
+                ),
                 rest.clone(),
             )
         );
@@ -1373,7 +1386,7 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
                 None => IndexSet::default(),
             },
         };
-        let backend = Arc::new(if cfg.clock_start_pinned {
+        let backend = if cfg.clock_start_pinned {
             LocalBackend::new(gateway.clone(), clock.clone(), cfg.seed)
                 .with_contention_wait(fireemu_adapter_grpc::local::DEFAULT_CONTENTION_WAIT)
         } else {
@@ -1387,7 +1400,21 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
         .with_declared_databases(cfg.firestore_databases.keys().cloned())
         .with_ttl_sweep_interval(cfg.ttl_sweep_interval)
         .with_created_at(created_at)
-        .with_implicit_database_creation(cfg.implicit_database_creation));
+        .with_implicit_database_creation(cfg.implicit_database_creation);
+        // Scope decision C11: under the strict profile, projects.unknownProjects = "refuse"
+        // makes the daemon's project the only one that exists.
+        if let Some(seconds) = cfg.deleted_database_id_cooldown {
+            backend.admin().set_deleted_id_cooldown(seconds);
+        }
+        let backend = Arc::new(
+            if cfg.refuse_unknown_projects
+                && cfg.profile == crate::config::CompatibilityProfile::Strict
+            {
+                backend.with_project_boundary(cfg.auth_project.clone())
+            } else {
+                backend
+            },
+        );
         for (database, files) in &cfg.firestore_databases {
             if database != fireemu_core_types::ids::DatabaseId::DEFAULT {
                 if let Some(path) = &files.indexes {

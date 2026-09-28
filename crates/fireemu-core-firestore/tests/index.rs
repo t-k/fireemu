@@ -2003,3 +2003,41 @@ fn an_order_on_an_equality_field_disables_the_merge() {
         IndexDecision::MissingRequired { .. }
     ));
 }
+
+#[test]
+fn a_removed_composite_no_longer_serves_and_only_that_one_is_removed() {
+    let definition = |second: &str| IndexDefinition {
+        collection_group: CollectionId::try_new("items").unwrap(),
+        query_scope: IndexQueryScope::Collection,
+        fields: vec![
+            IndexField {
+                path: fp("a"),
+                mode: IndexFieldMode::Ascending,
+            },
+            IndexField {
+                path: fp(second),
+                mode: IndexFieldMode::Descending,
+            },
+        ],
+    };
+    let mut set = IndexSet::default();
+    set.add_composite(definition("b"));
+    set.add_composite(definition("c"));
+    assert!(set.remove_composite(&definition("b")));
+    assert_eq!(set.composites(), &[definition("c")]);
+    assert!(
+        !set.remove_composite(&definition("b")),
+        "a second removal finds nothing"
+    );
+}
+
+#[test]
+fn a_cleared_single_field_override_inherits_again() {
+    let group = CollectionId::try_new("items").unwrap();
+    let mut set = IndexSet::default();
+    set.set_single_field_indexes(&group, &fp("nx"), Vec::new());
+    assert!(set.single_field_modes(&group, &fp("nx")).is_empty());
+    assert!(set.clear_single_field_override(&group, &fp("nx")));
+    assert_eq!(set.single_field_modes(&group, &fp("nx")).len(), 3);
+    assert!(!set.clear_single_field_override(&group, &fp("nx")));
+}

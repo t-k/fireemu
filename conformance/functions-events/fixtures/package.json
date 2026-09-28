@@ -3,10 +3,12 @@
   "private": true,
   "main": "index.js",
   "engines": {
-    "node": "22"
+    "node": "22",
+    "pnpm": "10.19.0"
   },
   "dependencies": {
     "firebase-admin": "14.3.0",
     "firebase-functions": "7.3.2"
-  }
+  },
+  "packageManager": "pnpm@10.19.0"
 }

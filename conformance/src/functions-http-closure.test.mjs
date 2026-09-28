@@ -143,7 +143,7 @@ test("FUNCTIONS-HTTP closure keeps every declared condition and scope decision",
 
     const runs = condition.evidence?.productionRecordings ?? [];
     assert.equal(runs.length, 2, `${label}: exactly two production recordings`);
-    assert.notEqual(runs[0].recordedAt, runs[1].recordedAt, `${label}: distinct recordings`);
+    assert.deepEqual(runs.map(({ pass }) => pass), [1, 2], `${label}: distinct corpus passes`);
     for (const run of runs) {
       assert.equal(run.project, "fireemu-oracle-query", label);
       assert.match(run.corpusDigest, /^[0-9a-f]{64}$/, label);

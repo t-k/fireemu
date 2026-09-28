@@ -2857,13 +2857,15 @@ mod config_reload_tests {
 
     #[test]
     fn unpinned_clock_start_preserves_subsecond_wall_time() {
+        // A multiple of 100 ns: Windows keeps SystemTime in 100 ns ticks, so a finer instant
+        // would already be truncated when the wall time is built, before the conversion runs.
         let wall_time = std::time::UNIX_EPOCH
-            .checked_add(std::time::Duration::new(1_800_000_000, 123_456_789))
+            .checked_add(std::time::Duration::new(1_800_000_000, 123_456_700))
             .unwrap();
 
         assert_eq!(
             logical_system_time(wall_time),
-            LogicalInstant::from_nanos(1_800_000_000_123_456_789)
+            LogicalInstant::from_nanos(1_800_000_000_123_456_700)
         );
     }
 

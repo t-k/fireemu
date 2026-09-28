@@ -175,7 +175,7 @@
         "productionRecordings": [
           {
             "recordedAt": "2026-09-27T17:28:05.738Z",
-            "gitSha": "51f1910b7684938829d839384ccd9a1ee4f3bba3",
+            "gitSha": "6b090ef7e2e02b671f2d0a6bc9896a4a6644ca26",
             "recordings": 2,
             "project": "fireemu-oracle-idp"
           }
@@ -224,7 +224,7 @@
         "productionRecordings": [
           {
             "recordedAt": "2026-09-27T17:28:05.738Z",
-            "gitSha": "51f1910b7684938829d839384ccd9a1ee4f3bba3",
+            "gitSha": "6b090ef7e2e02b671f2d0a6bc9896a4a6644ca26",
             "recordings": 2,
             "project": "fireemu-oracle-idp"
           }
@@ -273,7 +273,7 @@
         "productionRecordings": [
           {
             "recordedAt": "2026-09-27T17:28:05.738Z",
-            "gitSha": "51f1910b7684938829d839384ccd9a1ee4f3bba3",
+            "gitSha": "6b090ef7e2e02b671f2d0a6bc9896a4a6644ca26",
             "recordings": 2,
             "project": "fireemu-oracle-idp"
           }

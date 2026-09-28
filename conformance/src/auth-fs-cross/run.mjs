@@ -12,7 +12,7 @@
 //   node src/auth-fs-cross/run.mjs export-comparison <out.json>
 //
 // Copied from conformance/src/fs-rules/run.mjs at commit
-// fd6d3aac89443cfc866cec75819cdfef7e95a42b (file SHA-256
+// 3cab6f31ac7327f27849645fe1199f775c96d6a4 (file SHA-256
 // a5985ed27f3b5e3448ab0340cc0cef7d38bf3b7f685ec96b478b183e37e4bf54) and changed only where this
 // lane differs: its task, fixture, rulesets, principals and session, no custom-token signer, and
 // the other project whose ID token the foreign-project program presents (X9).

@@ -1,7 +1,7 @@
 // Executes AUTH-FS-CROSS programs against one target and returns what it answered.
 //
 // Copied from conformance/src/fs-rules/session.mjs at commit
-// 6df00dbe87f905f68f89cf03e944dc4861a4fa75 (file SHA-256
+// 9470cf85c4092445c9f8114a754e5840eb400008 (file SHA-256
 // de4ecf3a55818e4ac5c4db1366bb57ec04b06677cf4bf487e4309d60a2c3ae29) and changed only where
 // AUTH-FS-CROSS needs it: two tenants and a tenant deleted during a program, accounts created by
 // the administrator with one local id in the project and in both tenants, an ID token of another

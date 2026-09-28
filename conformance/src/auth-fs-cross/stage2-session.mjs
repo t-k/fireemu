@@ -2,8 +2,8 @@
 // Auth state changes the stage-2 orchestrator drives.
 //
 // Copied from conformance/src/auth-fs-cross/session.mjs at commit
-// eb6f1af2bfa4acee6d30c6cbd5772a6bc8cc1792 (file SHA-256
-// 90c552c2aeaebda213ac9af6392299d4d6cd34673c618a8560ed701291cd5aea) and changed only where
+// 9a4450c05014b572f8807f0e3ea7c795921ade10 (file SHA-256
+// 99a9e57520c47e23ccf116bd4e0ceda00f651beed68ac45292a3f80996955927) and changed only where
 // stage 2 needs it: the stage-2 rulesets, waits that sleep in real time on both targets (the
 // local run keeps the production timeline, decision D3), owner reads of single documents, and
 // the harness pieces the orchestrator calls directly. Stage 1 keeps its copy unchanged, because

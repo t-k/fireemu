@@ -10,7 +10,7 @@
       "corpusDigest": "0df056bda7b9078a1fbc78ae174a89f1073bde1076791b7e7a9f495215da5ea8",
       "harnessDigest": "1c527d0c14ece64e0207e118da92fdd749e96dc800ffa49cda54d667a9e4db7b",
       "recordedAt": "2026-09-27T17:28:05.738Z",
-      "gitSha": "51f1910b7684938829d839384ccd9a1ee4f3bba3",
+      "gitSha": "6b090ef7e2e02b671f2d0a6bc9896a4a6644ca26",
       "steps": {
         "foreign-open-rest": {
           "status": 403,
@@ -105,7 +105,7 @@
       "corpusDigest": "8ccadce5f5f1078f21c498d55f9a47ab5326442c715e6b37fbd132ed9b42b350",
       "harnessDigest": "1c527d0c14ece64e0207e118da92fdd749e96dc800ffa49cda54d667a9e4db7b",
       "recordedAt": "2026-09-27T17:28:05.738Z",
-      "gitSha": "51f1910b7684938829d839384ccd9a1ee4f3bba3",
+      "gitSha": "6b090ef7e2e02b671f2d0a6bc9896a4a6644ca26",
       "steps": {
         "begin-read-only": {
           "status": 200,
@@ -373,7 +373,7 @@
       "corpusDigest": "371ba878c17b0472c1134666f8443bb0b4d78d10ab88a50694b48847deeec121",
       "harnessDigest": "1c527d0c14ece64e0207e118da92fdd749e96dc800ffa49cda54d667a9e4db7b",
       "recordedAt": "2026-09-27T17:28:05.738Z",
-      "gitSha": "51f1910b7684938829d839384ccd9a1ee4f3bba3",
+      "gitSha": "6b090ef7e2e02b671f2d0a6bc9896a4a6644ca26",
       "steps": {
         "t1-own-doc-before": {
           "status": 200,
@@ -777,7 +777,7 @@
       "corpusDigest": "89131a9861dd46d8309512a035136862040515993bb55aa3e28fec2db9335fad",
       "harnessDigest": "1c527d0c14ece64e0207e118da92fdd749e96dc800ffa49cda54d667a9e4db7b",
       "recordedAt": "2026-09-27T17:28:05.738Z",
-      "gitSha": "51f1910b7684938829d839384ccd9a1ee4f3bba3",
+      "gitSha": "6b090ef7e2e02b671f2d0a6bc9896a4a6644ca26",
       "steps": {
         "get-p-as-same-project-rest": {
           "status": 200,

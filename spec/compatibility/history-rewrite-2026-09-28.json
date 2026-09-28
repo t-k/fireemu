@@ -2780,6 +2780,147 @@
             ]
           }
         }
+      },
+      {
+        "date": "2026-09-29",
+        "branch": "work/auth-fs-cross",
+        "baseCommit": "fc7731274dc9b12f60803685af43fb86b0e98af2",
+        "branchDiffBase": "44a0db62ed4a0fad8156e3f92401afaa0ec6cdbc",
+        "commitReplacements": 10,
+        "digestReplacements": 2,
+        "digestRounds": [
+          [
+            {
+              "path": "conformance/auth-fs-cross-production.json",
+              "from": "9c9c8ef104a35d06cf27908e05ecdda5c80b67125a94748798b9a6abca3e485b",
+              "to": "0f2fec6c5d80010ad470251cd921ae23c2a0803f62e838cab2c34a4f13c4e80b"
+            },
+            {
+              "path": "conformance/src/auth-fs-cross/session.mjs",
+              "from": "90c552c2aeaebda213ac9af6392299d4d6cd34673c618a8560ed701291cd5aea",
+              "to": "99a9e57520c47e23ccf116bd4e0ceda00f651beed68ac45292a3f80996955927"
+            }
+          ],
+          [
+            {
+              "path": null,
+              "from": "b4f282ac4677b4adeb3c85f7c81abec220ffd751cf17641de0254fb14bbf479a",
+              "to": "ad41b84221e4b6a6f92a2dece0ff7ecc9f3ae0417b744b2dce1f4403c14e98e4",
+              "derivation": "prior-rebind rebind.files conformance/fs-rules-production.json"
+            }
+          ]
+        ],
+        "labels": [],
+        "referencedOutsideHistory": [],
+        "files": {
+          "conformance/auth-fs-cross-production.json": {
+            "preRebindSha256": "9c9c8ef104a35d06cf27908e05ecdda5c80b67125a94748798b9a6abca3e485b",
+            "postRebindSha256": "0f2fec6c5d80010ad470251cd921ae23c2a0803f62e838cab2c34a4f13c4e80b",
+            "replacements": [
+              [
+                752,
+                "51f1910b7684938829d839384ccd9a1ee4f3bba3",
+                "6b090ef7e2e02b671f2d0a6bc9896a4a6644ca26"
+              ],
+              [
+                3620,
+                "51f1910b7684938829d839384ccd9a1ee4f3bba3",
+                "6b090ef7e2e02b671f2d0a6bc9896a4a6644ca26"
+              ],
+              [
+                11415,
+                "51f1910b7684938829d839384ccd9a1ee4f3bba3",
+                "6b090ef7e2e02b671f2d0a6bc9896a4a6644ca26"
+              ],
+              [
+                23179,
+                "51f1910b7684938829d839384ccd9a1ee4f3bba3",
+                "6b090ef7e2e02b671f2d0a6bc9896a4a6644ca26"
+              ]
+            ]
+          },
+          "conformance/src/auth-fs-cross/run.mjs": {
+            "preRebindSha256": "4cb7275d63524be895911979e599d16c9eee321e30a9e5247dad1b080f7e97d3",
+            "postRebindSha256": "24b09c26ffbfc139aba4576d2b5493ab43a1bb2b6d5d61e42b65196f5e4d17e1",
+            "replacements": [
+              [
+                972,
+                "fd6d3aac89443cfc866cec75819cdfef7e95a42b",
+                "3cab6f31ac7327f27849645fe1199f775c96d6a4"
+              ]
+            ]
+          },
+          "conformance/src/auth-fs-cross/session.mjs": {
+            "preRebindSha256": "90c552c2aeaebda213ac9af6392299d4d6cd34673c618a8560ed701291cd5aea",
+            "postRebindSha256": "99a9e57520c47e23ccf116bd4e0ceda00f651beed68ac45292a3f80996955927",
+            "replacements": [
+              [
+                152,
+                "6df00dbe87f905f68f89cf03e944dc4861a4fa75",
+                "9470cf85c4092445c9f8114a754e5840eb400008"
+              ]
+            ]
+          },
+          "conformance/src/auth-fs-cross/stage2-session.mjs": {
+            "preRebindSha256": "f27f73f2edff1b5b0e005e283a78b160f4bd42676211a825af425fd037410065",
+            "postRebindSha256": "0fb69c2418fc0fd476057df9c1b483203b9eebcff49369f9d45d7cf0497a9c44",
+            "replacements": [
+              [
+                224,
+                "eb6f1af2bfa4acee6d30c6cbd5772a6bc8cc1792",
+                "9a4450c05014b572f8807f0e3ea7c795921ade10"
+              ],
+              [
+                282,
+                "90c552c2aeaebda213ac9af6392299d4d6cd34673c618a8560ed701291cd5aea",
+                "99a9e57520c47e23ccf116bd4e0ceda00f651beed68ac45292a3f80996955927"
+              ]
+            ]
+          },
+          "spec/compatibility/closure/AUTH-FS-CROSS.json": {
+            "preRebindSha256": "79bcd887f21a5f6b638c6b6205c6d07f63498e324248fd438ae72e72a40adf5d",
+            "postRebindSha256": "d779a9e9e7f31b676124cadd458c603ab7f6cb5090ebab06681848f9d7c8509c",
+            "replacements": [
+              [
+                10091,
+                "51f1910b7684938829d839384ccd9a1ee4f3bba3",
+                "6b090ef7e2e02b671f2d0a6bc9896a4a6644ca26"
+              ],
+              [
+                12498,
+                "51f1910b7684938829d839384ccd9a1ee4f3bba3",
+                "6b090ef7e2e02b671f2d0a6bc9896a4a6644ca26"
+              ],
+              [
+                14697,
+                "51f1910b7684938829d839384ccd9a1ee4f3bba3",
+                "6b090ef7e2e02b671f2d0a6bc9896a4a6644ca26"
+              ]
+            ]
+          },
+          "spec/compatibility/closure/evidence/AUTH-FS-CROSS-fs-rules-regression.json": {
+            "preRebindSha256": "95bd6eb95fab73903a11623ddfb0b0a3334f28df94d94b69aa7edde3b1bc3f7d",
+            "postRebindSha256": "d2426eb9fa84d3e97ac8b34d53eafe63588439757034dc537c4d11c5cb20094a",
+            "replacements": [
+              [
+                146,
+                "b4f282ac4677b4adeb3c85f7c81abec220ffd751cf17641de0254fb14bbf479a",
+                "ad41b84221e4b6a6f92a2dece0ff7ecc9f3ae0417b744b2dce1f4403c14e98e4"
+              ]
+            ]
+          },
+          "spec/compatibility/closure/evidence/AUTH-FS-CROSS-stage1-comparison.json": {
+            "preRebindSha256": "67e89e9ffd232604f0427f40545046472f1d91c862e34ac3f79da1b353e9f585",
+            "postRebindSha256": "d2550cc15e22ee7b10396bd469ef15ecd6ce86dda11ad2b2faaee3d1b3b9a4e0",
+            "replacements": [
+              [
+                151,
+                "9c9c8ef104a35d06cf27908e05ecdda5c80b67125a94748798b9a6abca3e485b",
+                "0f2fec6c5d80010ad470251cd921ae23c2a0803f62e838cab2c34a4f13c4e80b"
+              ]
+            ]
+          }
+        }
       }
     ]
   }

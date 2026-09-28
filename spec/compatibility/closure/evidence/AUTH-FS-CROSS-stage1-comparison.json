@@ -1,7 +1,7 @@
 {
   "kind": "auth-fs-cross-comparison-v1",
   "artifactSha256": "890a38d8b8827ca3980522151b69c9bbad4230a674ccf73a7123470910094021",
-  "fixtureSha256": "9c9c8ef104a35d06cf27908e05ecdda5c80b67125a94748798b9a6abca3e485b",
+  "fixtureSha256": "0f2fec6c5d80010ad470251cd921ae23c2a0803f62e838cab2c34a4f13c4e80b",
   "summary": {
     "MATCH": 89
   },

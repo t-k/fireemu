@@ -63,8 +63,8 @@ export function buildStage3DraftPlan({ projectId, bucket, runIds } = {}) {
     if (
       authCorpus.recipeIds.length !== 2 ||
       JSON.stringify(authCorpus.recipeIds) !== JSON.stringify(EXPECTED_REMAINING) ||
-      authCorpus.requestsPerRecording !== 194 ||
-      authCorpus.subjectEntries !== 138 ||
+      authCorpus.requestsPerRecording !== 212 ||
+      authCorpus.subjectEntries !== 156 ||
       authCorpus.cleanupEntries !== 56
     )
       throw new Error("auth corpus changed; review its budget before planning a send");

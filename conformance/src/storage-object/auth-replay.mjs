@@ -3,6 +3,21 @@ import { isDeepStrictEqual } from "node:util";
 
 const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
 
+/** Reduce a typed token field to a public existence flag without exposing its value. */
+export function seedTokenPresent(metadata, service) {
+  if (!["gcs-json", "firebase-storage"].includes(service))
+    throw new Error("invalid seed observation service");
+  const tokens =
+    service === "firebase-storage"
+      ? metadata.downloadTokens
+      : metadata.metadata?.firebaseStorageDownloadTokens;
+  if (tokens === undefined) return false;
+  if (typeof tokens === "string") return tokens.length > 0;
+  if (Array.isArray(tokens) && tokens.every((token) => typeof token === "string"))
+    return tokens.some((token) => token.length > 0);
+  throw new Error("initial Auth seed token observation is malformed");
+}
+
 function readSet(rows, { name, bucket, present }) {
   const [metadata, media, prefix] = rows;
   if (
@@ -52,6 +67,7 @@ export async function replayLocalAuth({ sender, recipe, bucket, prefix, onCaptur
   if (typeof onCapture !== "function") throw new Error("private Auth capture is required");
   const owned = new Set(),
     controls = [],
+    initialSeedObservations = [],
     cleanupFailures = [];
   let failure = null,
     currentId = "initial-prefix-list",
@@ -114,6 +130,35 @@ export async function replayLocalAuth({ sender, recipe, bucket, prefix, onCaptur
         currentId = step.id;
         if ((await send(step)).status !== 200) throw new Error("local Auth seed failed");
         mutationId = step.id;
+        const initial = [];
+        for (const row of probe.seedReadbacks) {
+          const observationStep = storageStep(row, `${recipe.id}/${probe.id}/${row.id}`);
+          currentId = observationStep.id;
+          const response = await send(observationStep);
+          let metadata;
+          try {
+            metadata = JSON.parse(response.raw.toString("utf8"));
+          } catch {
+            throw new Error("initial Auth seed observation is malformed");
+          }
+          if (
+            response.status !== 200 ||
+            metadata?.bucket !== bucket ||
+            metadata.name !== probe.objectName ||
+            typeof metadata.metageneration !== "string" ||
+            !/^[1-9][0-9]{0,19}$/.test(metadata.metageneration)
+          )
+            throw new Error("initial Auth seed observation differs");
+          initial.push(metadata);
+        }
+        initialSeedObservations.push({
+          probeId: probe.id,
+          metagenerations: initial.map((metadata) => metadata.metageneration),
+          hasDownloadToken: initial.map((metadata, index) =>
+            seedTokenPresent(metadata, probe.seedReadbacks[index].service),
+          ),
+          gcsMetadataChanged: !isDeepStrictEqual(initial[0], initial[2]),
+        });
       }
       const before = await reads(probe, probe.before, "before", probe.action === "read");
       if (probe.seed) {
@@ -238,6 +283,7 @@ export async function replayLocalAuth({ sender, recipe, bucket, prefix, onCaptur
           ? "LOCAL_BLOCKED"
           : "LOCAL_COMPLETE",
     controls,
+    initialSeedObservations,
     requests: sender.snapshot().total,
     failure,
     cleanupFailures,

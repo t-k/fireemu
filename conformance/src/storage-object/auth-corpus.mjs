@@ -150,6 +150,41 @@ export function buildAuthCorpus({ projectId, bucket, runId } = {}) {
                   body: { base64: SEED_BYTES },
                 }
               : null,
+          seedReadbacks:
+            probe.action === "read"
+              ? [
+                  {
+                    id: "owner-seed-before-first-firebase",
+                    service: "gcs-json",
+                    method: "GET",
+                    bucket,
+                    objectName: name,
+                    path: gcsObjectPath(name),
+                    query: {},
+                    credential: "owner",
+                  },
+                  {
+                    id: "owner-seed-first-firebase",
+                    service: "firebase-storage",
+                    method: "GET",
+                    bucket,
+                    objectName: name,
+                    path: firebaseObjectPath(name),
+                    query: {},
+                    credential: "owner",
+                  },
+                  {
+                    id: "owner-seed-after-first-firebase",
+                    service: "gcs-json",
+                    method: "GET",
+                    bucket,
+                    objectName: name,
+                    path: gcsObjectPath(name),
+                    query: {},
+                    credential: "owner",
+                  },
+                ]
+              : [],
           before: gcsReads(name, "before"),
           subject: {
             id: "subject",
@@ -198,14 +233,22 @@ export function buildAuthCorpus({ projectId, bucket, runId } = {}) {
       recipe.accountSetup.length +
       recipe.probes.reduce(
         (probeSum, probe) =>
-          probeSum + probe.initial.length + (probe.seed ? 1 : 0) + probe.before.length + 1 + probe.after.length,
+          probeSum +
+          probe.initial.length +
+          (probe.seed ? 1 : 0) +
+          probe.seedReadbacks.length +
+          probe.before.length +
+          1 +
+          probe.after.length,
         0,
       ),
     0,
   );
   const cleanupEntries = recipes.reduce(
     (sum, recipe) =>
-      sum + recipe.accountCleanup.length + recipe.probes.reduce((probeSum, probe) => probeSum + probe.cleanup.length, 0),
+      sum +
+      recipe.accountCleanup.length +
+      recipe.probes.reduce((probeSum, probe) => probeSum + probe.cleanup.length, 0),
     0,
   );
   return {

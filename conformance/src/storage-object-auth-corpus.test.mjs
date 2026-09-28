@@ -12,14 +12,17 @@ test("both pending recipes declare sequential per-program accounts and twelve bo
   const corpus = buildAuthCorpus(options);
   assert.equal(corpus.status, "DECLARED_NO_SEND");
   assert.equal(corpus.sendAuthorized, false);
-  assert.deepEqual(corpus.recipes.map((recipe) => recipe.id), [
-    "storage-object/errors/authorization",
-    "storage-object/auth/firebase-id-token",
-  ]);
-  assert.deepEqual(corpus.recipes.map((recipe) => recipe.probes.length), [8, 4]);
-  assert.equal(corpus.subjectEntries, 138);
+  assert.deepEqual(
+    corpus.recipes.map((recipe) => recipe.id),
+    ["storage-object/errors/authorization", "storage-object/auth/firebase-id-token"],
+  );
+  assert.deepEqual(
+    corpus.recipes.map((recipe) => recipe.probes.length),
+    [8, 4],
+  );
+  assert.equal(corpus.subjectEntries, 156);
   assert.equal(corpus.cleanupEntries, 56);
-  assert.equal(corpus.requestsPerRecording, 194);
+  assert.equal(corpus.requestsPerRecording, 212);
   assert.notEqual(corpus.recipes[0].accounts.valid.ref, corpus.recipes[1].accounts.valid.ref);
   for (const recipe of corpus.recipes) {
     assert.equal(recipe.accountSetup.length, 6);
@@ -71,4 +74,25 @@ test("token and API-key values are typed references rather than serialized secre
 test("an invalid destination cannot create auth requests", () => {
   assert.throws(() => buildAuthCorpus({ ...options, runId: "../outside" }));
   assert.throws(() => buildAuthCorpus({ ...options, bucket: "other/bucket" }));
+});
+
+test("owner seed readbacks preserve the first Firebase metadata observation before Auth subjects", () => {
+  const corpus = buildAuthCorpus(options);
+  const reads = corpus.recipes
+    .flatMap((recipe) => recipe.probes)
+    .filter((probe) => probe.action === "read");
+  assert.equal(reads.length, 6);
+  for (const probe of reads) {
+    assert.deepEqual(
+      probe.seedReadbacks.map((step) => step.service),
+      ["gcs-json", "firebase-storage", "gcs-json"],
+    );
+    for (const step of probe.seedReadbacks) {
+      assert.equal(step.method, "GET");
+      assert.equal(step.objectName, probe.objectName);
+      assert.equal(step.credential, "owner");
+      assert.deepEqual(step.query, {});
+    }
+  }
+  assert.equal(corpus.requestsPerRecording, 212);
 });

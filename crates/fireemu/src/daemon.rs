@@ -333,29 +333,6 @@ type BlockingAuthBridgeSettings = (
     Option<fireemu_core_functions::manifest::BlockingAuthTokenPolicy>,
 );
 
-fn configure_blocking_auth_bridge(
-    cfg: &RuntimeConfig,
-    runtime: &fireemu_adapter_functions::runtime::FunctionsRuntime,
-) -> Result<BlockingAuthBridgeSettings, String> {
-    let settings = blocking_auth_bridge_settings(cfg);
-    for (event, selection) in [
-        (
-            fireemu_core_functions::manifest::BlockingAuthEvent::BeforeCreate,
-            &settings.0.before_create,
-        ),
-        (
-            fireemu_core_functions::manifest::BlockingAuthEvent::BeforeSignIn,
-            &settings.0.before_sign_in,
-        ),
-    ] {
-        runtime
-            .manifest()
-            .blocking_auth_target(event, selection)
-            .map_err(|error| format!("auth.blockingFunctions: {error}"))?;
-    }
-    Ok(settings)
-}
-
 fn blocking_auth_bridge_settings(cfg: &RuntimeConfig) -> BlockingAuthBridgeSettings {
     let Some(config) = cfg.auth_blocking_functions.as_ref() else {
         return (
@@ -596,8 +573,9 @@ fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
             .then(|| auth_notice_sink(log_bus.clone(), clock.clone())),
         blocking: match functions_runtime.as_ref() {
             Some(runtime) => {
-                let (selections, forward, restrictions) =
-                    configure_blocking_auth_bridge(&cfg, runtime)?;
+                let (selections, forward, restrictions) = blocking_auth_bridge_settings(&cfg);
+                functions::check_blocking_auth_selections(runtime.manifest(), &selections)
+                    .map_err(|error| format!("auth.blockingFunctions: {error}"))?;
                 Some(Arc::new(
                     functions::BlockingAuthBridge::try_new_with_selections_and_forwarding_policy(
                         runtime.clone(),
@@ -606,7 +584,7 @@ fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
                         restrictions,
                     )
                     .map_err(|error| format!("auth.blockingFunctions: {error}"))?
-                    .with_send_events(cfg.profile == crate::config::CompatibilityProfile::Strict),
+                    .with_send_events(functions::serves_send_blocking_events(cfg.profile)),
                 )
                     as Arc<
                         dyn fireemu_adapter_http::identity_toolkit::AuthBlockingHook,

@@ -2370,9 +2370,30 @@ fn serve_blocking_events_for(
     profile: CompatibilityProfile,
     manifest: &mut fireemu_core_functions::manifest::FunctionManifest,
 ) {
-    if profile == CompatibilityProfile::Emulator {
+    if !serves_send_blocking_events(profile) {
         ignore_send_blocking_events(manifest);
     }
+}
+
+/// Whether `profile` serves Identity Platform's email and SMS blocking events: the strict
+/// profile does, as production does; the emulator profile does not, as the official emulator
+/// does not.
+pub(crate) const fn serves_send_blocking_events(profile: CompatibilityProfile) -> bool {
+    matches!(profile, CompatibilityProfile::Strict)
+}
+
+/// Refuses a selection the manifest cannot serve: an explicit function it does not export, or
+/// one that is ambiguous or handles another event.
+pub(crate) fn check_blocking_auth_selections(
+    manifest: &fireemu_core_functions::manifest::FunctionManifest,
+    selections: &fireemu_core_functions::manifest::BlockingAuthSelections,
+) -> Result<(), String> {
+    for event in fireemu_core_functions::manifest::BlockingAuthEvent::ALL {
+        manifest
+            .blocking_auth_target(event, selections.for_event(event))
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(())
 }
 
 /// Keeps Identity Platform's email and SMS blocking functions out of service, as the official
@@ -5307,6 +5328,37 @@ mod tests {
         for absent in ["sub", "user_record", "tenant_id", "sign_in_method"] {
             assert!(!claims.contains_key(absent), "{absent}");
         }
+    }
+
+    /// Only the strict profile serves the email and SMS events, and a local selection is
+    /// checked against the manifest before the bridge is built.
+    #[test]
+    fn the_strict_profile_serves_send_events_and_selections_are_checked() {
+        use fireemu_core_functions::manifest::{BlockingAuthSelection, BlockingAuthSelections};
+
+        assert!(super::serves_send_blocking_events(
+            super::CompatibilityProfile::Strict
+        ));
+        assert!(!super::serves_send_blocking_events(
+            super::CompatibilityProfile::Emulator
+        ));
+        let manifest = parse_manifest(&json!({"functions": [
+            {"name": "create", "trigger": {"type": "blockingAuth", "eventType": "providers/cloud.auth/eventTypes/user.beforeCreate"}},
+        ]}))
+        .unwrap();
+        let explicit = |function: &str| BlockingAuthSelections {
+            before_create: BlockingAuthSelection::Explicit {
+                function: function.to_owned(),
+                region: None,
+            },
+            ..BlockingAuthSelections::default()
+        };
+        super::check_blocking_auth_selections(&manifest, &BlockingAuthSelections::default())
+            .unwrap();
+        super::check_blocking_auth_selections(&manifest, &explicit("create")).unwrap();
+        let error =
+            super::check_blocking_auth_selections(&manifest, &explicit("missing")).unwrap_err();
+        assert!(error.contains("missing"), "{error}");
     }
 
     /// The emulator profile keeps the email and SMS functions in the ignored inventory, with

@@ -29,6 +29,8 @@ import { validateTenantCorpus } from "./auth-tenant-blocking/guard.mjs";
 
 const PROJECT = "fireemu-oracle-idp";
 const NUMBER = "637500000000";
+const SOURCES_BUCKET = `gcf-v2-sources-${NUMBER}-us-central1`;
+const UPLOADS_BUCKET = `gcf-v2-uploads-${NUMBER}.us-central1.cloudfunctions.appspot.com`;
 const fn = (name) => ({ functionUri: `https://${name.toLowerCase()}-abc123-uc.a.run.app` });
 
 test("deployment subprocesses do not inherit the recording lock capability", () => {
@@ -69,6 +71,8 @@ function fakeCloud({
   deployingReads = 0,
   // When each object was created (default: after any test's `since`).
   created = {},
+  // Buckets that do not exist ("sources", "uploads").
+  absentBuckets = [],
 } = {}) {
   let deploying = deployingReads;
   let lag = repositoryLag;
@@ -128,7 +132,10 @@ function fakeCloud({
     }
     if (hostname === "storage.googleapis.com") {
       const bucket = pathname.split("/b/")[1].split("/")[0];
-      const key = bucket.startsWith("gcf-v2-uploads") ? "uploads" : "sources";
+      // Production's names (read on the sandbox 2026-09-28): the sources bucket is
+      // hyphen-separated, the uploads bucket dot-separated; any other name does not exist.
+      const key = { [SOURCES_BUCKET]: "sources", [UPLOADS_BUCKET]: "uploads" }[bucket];
+      if (!key || absentBuckets.includes(key)) return json(404, {});
       if (method === "DELETE") {
         const name = decodeURIComponent(pathname.split("/o/")[1]);
         if (!deleteSticks) state[key] = state[key].filter((o) => o !== name);
@@ -715,6 +722,37 @@ test("a restore without the recording's start removes no upload object (review-2
   assert.deepEqual(state.functions, []);
   assert.throws(() => deployer.adoptLeftovers(new Date(Number.NaN)), /start as a Date/);
   assert.throws(() => deployer.adoptLeftovers("2026-09-28"), /start as a Date/);
+});
+
+test("the deployment's upload object is found in production's uploads bucket and removed", async () => {
+  // The dot-separated bucket a 2nd gen upload lands in (issue
+  // blocking-fixture-removal-misses-upload-objects).
+  const { deployer, state } = fakeCloud({ uploads: ["before.zip"] });
+  const dir = await buildDir();
+  await deployer.preflight();
+  await deployer.deploy(source, dir);
+  assert.deepEqual(state.uploads, ["before.zip", "d6b1a2c3-random.zip"]);
+  const removed = await deployer.remove(dir);
+  assert.deepEqual(state.uploads, ["before.zip"]);
+  assert.equal(removed.sources, 1 + 1, "the fixture source and the upload");
+});
+
+test("a bucket the removal cannot find fails it instead of reading as empty", async () => {
+  for (const bucket of ["uploads", "sources"]) {
+    const { deployer } = fakeCloud({
+      functions: Object.values(FIXTURE_FUNCTIONS),
+      absentBuckets: [bucket],
+    });
+    deployer.adoptLeftovers(new Date(0));
+    await assert.rejects(deployer.remove(await buildDir()), /bucket .* not found/, bucket);
+  }
+});
+
+test("a preflight before any upload bucket exists deploys (the first deployment creates it)", async () => {
+  const { deployer, runs } = fakeCloud({ absentBuckets: ["uploads"] });
+  await deployer.preflight();
+  await deployer.deploy(source, await buildDir());
+  assert.ok(runs.some((run) => run.startsWith("firebase deploy")));
 });
 
 test("the pinned CLI starts without sending anything (allowance zero)", async () => {

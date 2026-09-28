@@ -205,6 +205,13 @@ test("each recorded condition is backed by committed comparisons of one artifact
     for (const comparison of comparisons) {
       assert.equal(comparison.artifactSha256, artifact, `${label}: bound to the final artifact`);
       assertBoundToFixture(comparison, label);
+      if (comparison.kind === "auth-tenant-blocking-comparison-v1") {
+        // This parent's comparisons name the runner and the clean source tree they ran
+        // (closure review S4).
+        assert.match(comparison.runnerSha256 ?? "", /^[0-9a-f]{64}$/, `${label}: runner digest`);
+        assert.equal(comparison.sourceCommit, evidence.sourceCommit, `${label}: source commit`);
+        assert.equal(comparison.treeClean, true, `${label}: compared on a clean tree`);
+      }
     }
     const rows = comparisons.flatMap(({ rows: all }) =>
       all.filter(({ row }) =>
@@ -222,6 +229,18 @@ test("each recorded condition is backed by committed comparisons of one artifact
       assert.equal(divergence.decidedBy, "owner", `${label}: ${divergence.row}`);
       assert.ok(divergence.decidedOn && divergence.reason && divergence.kind, divergence.row);
       assert.ok(decided.has(divergence.scopeDecision), `${label}: ${divergence.row}`);
+      if (divergence.kind === "message-text") {
+        // A message-text divergence differs in its messages only (closure review).
+        const compared = rows.filter(({ row }) => row === divergence.row);
+        assert.equal(compared.length, 1, `${label}: ${divergence.row} is compared`);
+        const [{ status, sameErrorCode, differences }] = compared;
+        assert.equal(status, "MISMATCH", divergence.row);
+        assert.equal(sameErrorCode, true, divergence.row);
+        assert.ok(
+          differences.length > 0 && differences.every((path) => /(^|\.)message$/.test(path)),
+          `${divergence.row}: only messages differ (${differences})`,
+        );
+      }
     }
     const documented = new Set(divergences.map(({ row }) => row));
     const off = rows
@@ -229,8 +248,9 @@ test("each recorded condition is backed by committed comparisons of one artifact
       .map(({ row }) => row)
       .toSorted();
     const pending = evidence.pendingAfterIntegration ?? [];
-    for (const { row, awaits } of pending) {
+    for (const { row, awaits, reason } of pending) {
       assert.ok(AWAITED_LANES.has(awaits), `${label}: ${row} waits for a named lane`);
+      assert.ok(typeof reason === "string" && reason.length > 0, `${label}: ${row} says why`);
     }
     if (condition.status === "VERIFIED") {
       assert.deepEqual(off, [], `${label}: every row matches production`);
@@ -257,7 +277,12 @@ test("the local-only conditions name the tests that pin them", () => {
     const local = condition.evidence?.localEvidence;
     assert.ok(local?.tests?.length > 0 && local?.fixedIn?.length > 0, label);
     for (const { path, name } of local.tests) {
-      assert.match(repoText(path), new RegExp(`fn ${name}\\(`), `${label}: ${path} ${name}`);
+      const text = repoText(path);
+      const at = text.search(new RegExp(`fn ${name}\\(`));
+      assert.ok(at >= 0, `${label}: ${path} ${name}`);
+      // The attributes right above the function: an ignored test pins nothing.
+      const above = text.slice(0, at).split("\n").slice(-6).join("\n");
+      assert.doesNotMatch(above, /#\[ignore/, `${label}: ${name} runs`);
     }
   }
 });

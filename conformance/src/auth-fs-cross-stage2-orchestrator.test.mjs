@@ -317,6 +317,209 @@ test("a probe records only what arrived after its commit, and a stream's end in 
   ]);
 });
 
+test("a listener's awaited first snapshot is in the first row that observes it, and only there", async () => {
+  const client = fakeClient();
+  const snapshot = (n) => ({
+    event: "snapshot",
+    name: "doc",
+    fromCache: false,
+    hasPendingWrites: false,
+    docs: [{ path: "afc2-owned/a", exists: true, data: { n } }],
+  });
+  const send = client.send.bind(client);
+  // The listen answers after its first snapshot, as the SDK operation does.
+  client.send = (op, fields) => {
+    if (op === "listen") client.deliver(snapshot(0));
+    return send(op, fields);
+  };
+  let n = 0;
+  const session = fakeSession({
+    principals: { a: { uid: "uid-a", idToken: token(100) } },
+    onSeed: () => {
+      n += 1;
+      client.deliver(snapshot(n));
+    },
+  });
+  const probe = (id) => ({
+    do: "probe",
+    id,
+    condition: "X",
+    writes: [{ doc: "afc2-owned/a" }],
+    observe: ["c/doc"],
+  });
+  const program = {
+    steps: [
+      { do: "client", client: "c", transport: "node-sdk" },
+      { do: "sdk", client: "c", op: "signIn", as: "a" },
+      { do: "sdk", client: "c", op: "listen", name: "doc", path: "afc2-owned/a" },
+      { do: "sdk", client: "c", op: "offline" },
+      probe("first"),
+      probe("second"),
+    ],
+  };
+  const rows = await createInterpreter(program, {
+    session,
+    ctx,
+    spawnClient: () => client,
+    openListen: () => fakeRecorder(),
+    sdkConfig: {},
+  }).run();
+  const seen = (id) => rows[id].listeners["c/doc"].events.map((e) => e.docs[0].n);
+  assert.deepEqual(seen("first"), [0, 1]);
+  assert.deepEqual(seen("second"), [2]);
+});
+
+test("each native stream's end is kept with its time since opening and against its token's expiry", async () => {
+  const ended = fakeRecorder();
+  const open = fakeRecorder();
+  const recorders = [ended, open];
+  let clock = 1_000_000;
+  const session = fakeSession({
+    principals: {
+      a: { uid: "uid-a", idToken: token(4_600) },
+      b: { uid: "uid-b", idToken: token(4_700) },
+    },
+  });
+  const program = {
+    steps: [
+      { do: "stream", name: "grpc-a", as: "a", targets: [{ targetId: 1, document: "afc2-owned/a" }] },
+      { do: "stream", name: "grpc-b", as: "b", targets: [{ targetId: 1, document: "afc2-owned/b" }] },
+    ],
+  };
+  const interpreter = createInterpreter(program, {
+    session,
+    ctx,
+    spawnClient: () => fakeClient(),
+    openListen: () => {
+      clock += 500;
+      return recorders.shift();
+    },
+    now: () => clock,
+    sdkConfig: {},
+  });
+  await interpreter.run();
+  // grpc-a opened at 1,000,500 ms; it ended 3,540 s later, 40 s before its exp (4,600 s).
+  ended.end({ at: 3_540_000, reason: "error", code: 13, details: "x" });
+  assert.deepEqual(interpreter.streamEnds(), {
+    "grpc-a": {
+      reason: "error",
+      code: 13,
+      details: "x",
+      openedAtMs: 500,
+      sinceOpenedMs: 3_540_000,
+      vsExpiryMs: 1_000_500 + 3_540_000 - 4_600_000,
+    },
+    "grpc-b": null,
+  });
+});
+
+test("a resume probe reopens a listener from its resume token, as its own and as another principal", async () => {
+  const change = (type, targetIds = [1], resumeToken) => ({
+    kind: "targetChange",
+    targetChange: { targetChangeType: type, targetIds, ...(resumeToken ? { resumeToken } : {}) },
+  });
+  const doc = (n) => ({
+    kind: "documentChange",
+    documentChange: {
+      document: { name: `${ROOT}/afc2-open/resume`, fields: { n: { integerValue: String(n) } } },
+      targetIds: [1],
+    },
+  });
+  const opened = [];
+  const recorders = [];
+  const session = fakeSession({
+    principals: {
+      a: { uid: "uid-a", idToken: token(100) },
+      b: { uid: "uid-b", idToken: token(100) },
+    },
+  });
+  const interpreter = createInterpreter(
+    {
+      steps: [
+        {
+          do: "resume-probe",
+          id: "resume/open",
+          condition: "X",
+          as: "a",
+          document: "afc2-open/resume",
+          write: { doc: "afc2-open/resume", fields: { n: { integerValue: "1" } } },
+          resumes: [
+            { name: "same", as: "a" },
+            { name: "switch", as: "b" },
+          ],
+        },
+      ],
+    },
+    {
+      session,
+      ctx,
+      spawnClient: () => fakeClient(),
+      openListen: (args) => {
+        opened.push(args);
+        const recorder = fakeRecorder();
+        recorders.push(recorder);
+        if (recorders.length === 1)
+          recorder.frames.push(
+            change("ADD"),
+            doc(0),
+            change("CURRENT"),
+            change("NO_CHANGE", [], "dG9rZW4="),
+          );
+        else
+          recorder.frames.push(
+            change("ADD"),
+            change("NO_CHANGE", []),
+            change("NO_CHANGE", []),
+            doc(1),
+            change("CURRENT", [1], "dG9rZW4y"),
+            change("NO_CHANGE", [], "dG9rZW4z"),
+          );
+        return recorder;
+      },
+      sdkConfig: {},
+    },
+  );
+  const rows = await interpreter.run();
+  // The first stream is closed before the write; each resume carries the token it gave.
+  assert.equal(opened.length, 3);
+  assert.equal(opened[0].metadata.get("authorization")[0], "Bearer a");
+  assert.equal(opened[2].metadata.get("authorization")[0], "Bearer b");
+  assert.deepEqual(opened[1].targets, [
+    {
+      targetId: 1,
+      documents: { documents: [`${ROOT}/afc2-open/resume`] },
+      resumeToken: "dG9rZW4=",
+    },
+  ]);
+  assert.ok(recorders.every((r) => r.ended()));
+  assert.deepEqual(
+    session.calls.filter(([k]) => k === "seed"),
+    [["seed", ["afc2-open/resume"]]],
+  );
+  // Boundaries are kept (collapsed when repeated), with whether a token or read time came.
+  const resumed = [
+    { kind: "targetChange", type: "ADD", targetIds: [1], cause: null, resumeToken: false },
+    { kind: "boundary", resumeToken: false },
+    { kind: "documentChange", doc: "afc2-open/resume", n: "1", targetIds: [1], removedTargetIds: [] },
+    { kind: "targetChange", type: "CURRENT", targetIds: [1], cause: null, resumeToken: true },
+    { kind: "boundary", resumeToken: true },
+  ];
+  assert.deepEqual(rows["resume/open"], {
+    id: "resume/open",
+    conditions: ["X"],
+    first: [
+      { kind: "targetChange", type: "ADD", targetIds: [1], cause: null, resumeToken: false },
+      { kind: "documentChange", doc: "afc2-open/resume", n: "0", targetIds: [1], removedTargetIds: [] },
+      { kind: "targetChange", type: "CURRENT", targetIds: [1], cause: null, resumeToken: false },
+      { kind: "boundary", resumeToken: true },
+    ],
+    resumes: {
+      same: { frames: resumed, end: null },
+      switch: { frames: resumed, end: null },
+    },
+  });
+});
+
 test("placeholders resolve before a command leaves, and a transaction's result row names its op", async () => {
   const client = fakeClient({ hold: ["transaction"] });
   const session = fakeSession({

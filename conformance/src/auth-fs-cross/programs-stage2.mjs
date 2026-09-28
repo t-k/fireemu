@@ -481,6 +481,7 @@ function seedDocuments() {
     docs.push({ doc: ownDoc("bob", tag, "ab"), fields: ownFields("bob", tag, "ab", 0) });
   }
   docs.push({ doc: "afc2-claim/n", fields: { via: string("n"), n: integer(0) } });
+  docs.push({ doc: RESUME_DOC, fields: openFields(0) });
   for (const variant of ["control", "signout", "switch"])
     docs.push({ doc: `afc2-tx/${variant}`, fields: { by: string("seed"), n: integer(0) } });
   return docs;
@@ -541,6 +542,28 @@ function heldSteps() {
 }
 
 const everyHeld = HELD.flatMap(heldListeners);
+
+/** The document the resume probe listens to: one any signed-in principal may read. */
+const RESUME_DOC = "afc2-open/resume";
+
+/**
+ * listen-sign-out-and-switch (F3): a native Listen resumed from its resume token after a write,
+ * by the principal that got the token and by another one, as a Web SDK re-listens after a user
+ * change. The SDK rows after a switch show production raising a snapshot from the cache first;
+ * this records the frames that make it.
+ */
+const resumeProbe = {
+  do: "resume-probe",
+  id: "resume/open",
+  condition: CONDITION.switch,
+  as: "alice",
+  document: RESUME_DOC,
+  write: { doc: RESUME_DOC, fields: openFields(1) },
+  resumes: [
+    { name: "same", as: "alice" },
+    { name: "switch", as: "bob" },
+  ],
+};
 
 const EXPIRY_CONDITIONS = [CONDITION.revocation, CONDITION.tenant, CONDITION.refresh];
 const nativeProbe = (held, n) => ({
@@ -614,6 +637,7 @@ export const STAGE2_PROGRAM = {
     ...transactionSteps(),
     ...signOutSteps("n"),
     ...switchSteps("n"),
+    resumeProbe,
     ...pendingSteps("n", "ab"),
     ...pendingSteps("n", "out"),
     ...signOutSteps("b"),

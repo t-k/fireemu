@@ -182,6 +182,47 @@ test("a row matches only when both recordings agree with fireemu and every timer
   );
 });
 
+test("a fixture keeps each recording's stream ends, without their status texts", () => {
+  const metas = [
+    { recording: 1, programDigest: "p", harness: "h", startedAt: "t1", sha: "s" },
+    { recording: 2, programDigest: "p", harness: "h", startedAt: "t2", sha: "s" },
+  ];
+  const end = (vsExpiryMs) => ({
+    reason: "error",
+    code: 13,
+    details: "a text that may name the project",
+    openedAtMs: 500,
+    sinceOpenedMs: 3_540_000,
+    vsExpiryMs,
+  });
+  const fixture = buildFixture({
+    recordings: [
+      { rows: {}, streamEnds: { "grpc-a": end(-40_000), "grpc-b": null } },
+      { rows: {} },
+    ],
+    metas,
+    programDigest: "p",
+    harnessDigest: "h",
+  });
+  assert.deepEqual(
+    fixture.recordings.map((r) => r.streamEnds),
+    [
+      {
+        "grpc-a": {
+          reason: "error",
+          code: 13,
+          openedAtMs: 500,
+          sinceOpenedMs: 3_540_000,
+          vsExpiryMs: -40_000,
+        },
+        "grpc-b": null,
+      },
+      {},
+    ],
+  );
+  assert.equal(JSON.stringify(fixture).includes("may name the project"), false);
+});
+
 test("a fixture keeps recording 2 only where it differs, and refuses recordings of another program", () => {
   const row = (n) => ({
     conditions: ["C"],

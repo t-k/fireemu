@@ -20,7 +20,7 @@
 // the program can be tried in a few minutes; its rows are never compared.
 
 import { spawn } from "node:child_process";
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { CONFORMANCE_DIR } from "../config.mjs";
@@ -156,18 +156,43 @@ async function sessionLocal() {
   );
 }
 
-export async function runLocal(program, { profile = "strict" } = {}) {
-  await rm(RUN_DIR, { recursive: true, force: true });
-  await mkdir(RUN_DIR, { recursive: true, mode: 0o700 });
+/** A new private directory under `root` named by `now` (and a count when the name is taken). */
+export async function newRunDir({ root = RUN_DIR, now = new Date() } = {}) {
+  await mkdir(root, { recursive: true, mode: 0o700 });
+  const stamp = now.toISOString().replaceAll(":", "-");
+  for (let n = 1; ; n += 1) {
+    const dir = join(root, n === 1 ? stamp : `${stamp}-${n}`);
+    try {
+      await mkdir(dir, { mode: 0o700 });
+      return dir;
+    } catch (error) {
+      if (error.code !== "EEXIST") throw error;
+    }
+  }
+}
+
+/**
+ * A new private directory under `root` for one local run, named by its start time, with the
+ * run's inputs written. An earlier run's directory (its rows, its comparison) is never touched:
+ * a run that is stopped early leaves the earlier results as they were.
+ */
+export async function prepareRunDir({ root = RUN_DIR, now = new Date(), program, config }) {
+  const dir = await newRunDir({ root, now });
   const paths = {
-    in: join(RUN_DIR, "program.json"),
-    out: join(RUN_DIR, "fireemu.json"),
-    config: join(RUN_DIR, "fireemu.config.json"),
-    firebase: join(RUN_DIR, "firebase.json"),
+    in: join(dir, "program.json"),
+    out: join(dir, "fireemu.json"),
+    config: join(dir, "fireemu.config.json"),
+    firebase: join(dir, "firebase.json"),
   };
   await writeFile(paths.firebase, JSON.stringify({ firestore: [{ database: "(default)" }] }));
-  await writeFile(paths.config, JSON.stringify(localConfig(profile)));
+  await writeFile(paths.config, JSON.stringify(config));
   await writeFile(paths.in, JSON.stringify(program));
+  return { dir, paths };
+}
+
+export async function runLocal(program, { profile = "strict" } = {}) {
+  const { dir, paths } = await prepareRunDir({ program, config: localConfig(profile) });
+  console.log(JSON.stringify({ runDir: dir }));
   const binary = resolveFireemuBinary();
   const ports = [
     "--http-port",
@@ -196,7 +221,7 @@ export async function runLocal(program, { profile = "strict" } = {}) {
       "session-local",
     ],
     {
-      cwd: RUN_DIR,
+      cwd: dir,
       stdio: ["ignore", "inherit", "inherit"],
       env: { ...process.env, AFC2_IN: paths.in, AFC2_OUT: paths.out, AFC2_RUN: String(Date.now()) },
     },
@@ -204,7 +229,7 @@ export async function runLocal(program, { profile = "strict" } = {}) {
   const code = await new Promise((resolve) => child.once("exit", resolve));
   const out = JSON.parse(await readFile(paths.out, "utf8").catch(() => "{}"));
   if (code !== 0) throw Object.assign(new Error(`fireemu session exited ${code}`), { out });
-  return { binary, ...out };
+  return { binary, runDir: dir, ...out };
 }
 
 /** Builds the fixture from the private run directories of recordings 1 and 2. */
@@ -271,11 +296,14 @@ async function check(args) {
   });
   const summary = {};
   for (const { status } of rows) summary[status] = (summary[status] ?? 0) + 1;
-  await mkdir(RUN_DIR, { recursive: true, mode: 0o700 });
+  // Next to the rows it compares: the fresh run's directory, or a new one for saved rows.
+  const dir = local.runDir ?? (await newRunDir());
+  const compared = rowsAt >= 0 ? args[rowsAt + 1] : join(dir, "fireemu.json");
   await writeFile(
-    join(RUN_DIR, "comparison.json"),
-    `${JSON.stringify({ summary, cleanupErrors: local.cleanupErrors ?? [], rows }, null, 2)}\n`,
+    join(dir, "comparison.json"),
+    `${JSON.stringify({ summary, compared, cleanupErrors: local.cleanupErrors ?? [], rows }, null, 2)}\n`,
   );
+  console.log(JSON.stringify({ comparison: join(dir, "comparison.json") }));
   // A row whose varying part stayed inside its allowed set passes; the output shows both
   // production recordings and fireemu for it all the same.
   const passing = new Set(["MATCH", "MATCH_NONDETERMINISTIC"]);
@@ -350,7 +378,7 @@ async function main([command, ...args]) {
       if (Object.keys(caps).length && !smoke) throw new Error("--cap-client is a smoke option");
       if (browser && !smoke) throw new Error("--with-browser is a smoke option");
       const out = await runLocal(smoke ? smokeProgram(program, skip, { browser, caps }) : program);
-      const path = join(RUN_DIR, "rows.json");
+      const path = join(out.runDir, "rows.json");
       await writeFile(path, JSON.stringify(out, null, 2));
       console.log(JSON.stringify({ rows: Object.keys(out.rows ?? {}).length, path }));
       return undefined;

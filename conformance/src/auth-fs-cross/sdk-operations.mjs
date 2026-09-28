@@ -9,18 +9,54 @@ function tokenTimes(token, decodeBase64Url) {
   return { iat, exp };
 }
 
-export function createOperations({ fb, auth, db, emit, onToken, decodeBase64Url, exit }) {
+/** How long an operation waits for the event that completes it (a snapshot, a token change). */
+const WAIT_MS = 20_000;
+
+export function createOperations({
+  fb,
+  auth,
+  db,
+  emit,
+  onToken,
+  decodeBase64Url,
+  exit,
+  waitMs = WAIT_MS,
+}) {
+  // Each reported token change, numbered: an operation that changes the Auth state answers
+  // after the report of its own change, so every client (Node and browser alike) has reported
+  // it before the parent's next step. The report stays among the events.
+  let authReports = 0;
+  const authWaiters = [];
+  const reportAuth = (event) => {
+    authReports += 1;
+    emit(event);
+    for (const waiter of authWaiters.splice(0)) waiter(event.uid);
+  };
   fb.onIdTokenChanged(auth, async (user) => {
-    if (!user) return emit({ event: "auth", uid: null });
+    if (!user) return reportAuth({ event: "auth", uid: null });
     const token = await user.getIdToken();
     await onToken(token, user.uid);
-    emit({
+    return reportAuth({
       event: "auth",
       uid: user.uid,
       tenant: user.tenantId ?? null,
       ...tokenTimes(token, decodeBase64Url),
     });
   });
+  /** Resolves `true` at the first report of `uid` after report number `after`, or `false`. */
+  function authReported(uid, after) {
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => resolve(false), waitMs);
+      const check = (reported) => {
+        if (authReports > after && reported === uid) {
+          clearTimeout(timer);
+          resolve(true);
+        } else authWaiters.push(check);
+      };
+      if (authReports > after) check(uid);
+      else authWaiters.push(check);
+    });
+  }
 
   const listeners = new Map();
   const pausedTransactions = new Map();
@@ -33,6 +69,11 @@ export function createOperations({ fb, auth, db, emit, onToken, decodeBase64Url,
     hasPendingWrites: snapshot.metadata.hasPendingWrites,
   });
 
+  /**
+   * Starts a listener and resolves with how its first answer from the server came: its first
+   * snapshot not from the cache, its error, or nothing within the wait. Every snapshot and the
+   * error are events, the awaited one included.
+   */
   function listen({ name, path, collection: collectionPath, where: filters = [] }) {
     const target = path
       ? fb.doc(db, path)
@@ -40,20 +81,32 @@ export function createOperations({ fb, auth, db, emit, onToken, decodeBase64Url,
           fb.collection(db, collectionPath),
           ...filters.map(([f, op, v]) => fb.where(f, op, v)),
         );
-    const stop = fb.onSnapshot(
-      target,
-      { includeMetadataChanges: true },
-      (snapshot) =>
-        emit({
-          event: "snapshot",
-          name,
-          fromCache: snapshot.metadata.fromCache,
-          hasPendingWrites: snapshot.metadata.hasPendingWrites,
-          docs: path ? [plainDoc(snapshot)] : snapshot.docs.map(plainDoc),
-        }),
-      (error) => emit({ event: "listen-error", name, code: error.code, message: error.message }),
-    );
-    listeners.set(name, stop);
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => resolve("timeout"), waitMs);
+      const settle = (first) => {
+        clearTimeout(timer);
+        resolve(first);
+      };
+      const stop = fb.onSnapshot(
+        target,
+        { includeMetadataChanges: true },
+        (snapshot) => {
+          emit({
+            event: "snapshot",
+            name,
+            fromCache: snapshot.metadata.fromCache,
+            hasPendingWrites: snapshot.metadata.hasPendingWrites,
+            docs: path ? [plainDoc(snapshot)] : snapshot.docs.map(plainDoc),
+          });
+          if (!snapshot.metadata.fromCache) settle("snapshot");
+        },
+        (error) => {
+          emit({ event: "listen-error", name, code: error.code, message: error.message });
+          settle("error");
+        },
+      );
+      listeners.set(name, stop);
+    });
   }
 
   async function transact({ name, reads, write, pauseAttempts = 1 }) {
@@ -82,8 +135,9 @@ export function createOperations({ fb, auth, db, emit, onToken, decodeBase64Url,
   const operations = {
     signIn: async ({ email, password, tenantId }) => {
       auth.tenantId = tenantId ?? null;
+      const before = authReports;
       const { user } = await fb.signInWithEmailAndPassword(auth, email, password);
-      return { uid: user.uid };
+      return { uid: user.uid, authReported: await authReported(user.uid, before) };
     },
     /**
      * A read that uses the API key from this client's origin (the password policy), before the
@@ -94,17 +148,17 @@ export function createOperations({ fb, auth, db, emit, onToken, decodeBase64Url,
       return {};
     },
     signOut: async () => {
+      const before = authReports;
       await fb.signOut(auth);
-      return {};
+      return { authReported: await authReported(null, before) };
     },
     refreshToken: async () => {
+      const before = authReports;
       await auth.currentUser.getIdToken(true);
-      return { uid: auth.currentUser.uid };
+      const { uid } = auth.currentUser;
+      return { uid, authReported: await authReported(uid, before) };
     },
-    listen: async (command) => {
-      listen(command);
-      return {};
-    },
+    listen: async (command) => ({ first: await listen(command) }),
     unlisten: async ({ name }) => {
       listeners.get(name)?.();
       listeners.delete(name);

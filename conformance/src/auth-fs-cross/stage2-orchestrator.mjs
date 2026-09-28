@@ -69,6 +69,32 @@ export function frameRow(frame, documentsRoot) {
   }
 }
 
+/**
+ * A resumed Listen's frames as a row compares them (AUTH-FS-CROSS stage 2, F3): the global
+ * `NO_CHANGE` boundaries are kept, since a client raises its snapshot at them, but a run of them
+ * counts once (heartbeats depend only on time); every target change and boundary says whether a
+ * resume token came, never the token.
+ */
+export function resumeRows(frames, documentsRoot) {
+  const rows = [];
+  for (const frame of frames) {
+    const change = frame.kind === "targetChange" ? (frame.targetChange ?? {}) : null;
+    const global =
+      change &&
+      (change.targetChangeType ?? "NO_CHANGE") === "NO_CHANGE" &&
+      (change.targetIds ?? []).length === 0;
+    if (global) {
+      const boundary = { kind: "boundary", resumeToken: Boolean(change.resumeToken) };
+      if (rows.at(-1)?.kind === "boundary") rows[rows.length - 1] = boundary;
+      else rows.push(boundary);
+      continue;
+    }
+    const row = frameRow(frame, documentsRoot);
+    rows.push(change ? { ...row, resumeToken: Boolean(change.resumeToken) } : row);
+  }
+  return rows;
+}
+
 /** An SDK listener's event as a row compares it. */
 export function listenerRow(event) {
   if (event.event === "listen-error") return { kind: "error", code: event.code };
@@ -168,10 +194,20 @@ export function createInterpreter(program, deps) {
     };
   }
 
+  /**
+   * Where each SDK listener started: a `listen` answers after the listener's first answer from
+   * the server, so that answer lands before the next step's mark. The first row that observes
+   * the listener reads from its start instead, so the awaited snapshot (or error) is recorded.
+   */
+  const listenerStarts = new Map();
+
   function listenerEvents(ref, mark) {
     const [name, listener] = ref.split("/");
     const client = clients.get(name);
-    const from = mark.clients.get(name) ?? client.sdk.events.length;
+    const marked = mark.clients.get(name) ?? client.sdk.events.length;
+    const started = listenerStarts.get(ref);
+    listenerStarts.delete(ref);
+    const from = started === undefined ? marked : Math.min(started, marked);
     return {
       events: client.sdk.events
         .slice(from)
@@ -243,6 +279,7 @@ export function createInterpreter(program, deps) {
     if (step.where) fields.where = step.where.map(([f, op, v]) => [f, op, session.resolve(v)]);
     if (step.data) fields.data = session.resolve(step.data);
     if (step.write) fields.write = { ...step.write, data: session.resolve(step.write.data) };
+    if (step.op === "listen") listenerStarts.set(`${step.client}/${step.name}`, client.sdk.events.length);
     client.sent += 1;
     // Every command carries its own id, so a result row can name its op.
     fields.id = step.commandId ?? `${step.op}-${client.sent}`;
@@ -268,6 +305,65 @@ export function createInterpreter(program, deps) {
       throw new Error(`${step.client} ${step.op} failed: ${result.code ?? result.error}`);
   }
 
+  /** Opens one native Listen as `as` (a harness request, counted under its ceiling). */
+  function openNative(as, targets) {
+    const database = `projects/${ctx.project}/databases/(default)`;
+    session.chargeHarness();
+    return openListen({
+      client: session.grpcClient,
+      protos: session.protos,
+      database,
+      targets,
+      metadata: listenMetadata(session.bearerFor(as), database),
+    });
+  }
+
+  /** Resolves once `ready(frames)` holds, or after `limitMs` with `false`. */
+  async function framesReady(recorder, ready, limitMs = 30_000) {
+    const until = now() + limitMs;
+    while (!ready(recorder.frames)) {
+      if (recorder.ended() || now() >= until) return false;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    return true;
+  }
+
+  /**
+   * listen-sign-out-and-switch (F3): what production sends when a Listen resumes from a resume
+   * token, by the principal that got it and by another one (as a Web SDK does after a user
+   * change). The first stream is closed at its first boundary with a token; the document is
+   * written; each resume opens from that token and is watched for one window.
+   */
+  async function resumeProbe(step) {
+    const documents = { documents: [`${documentsRoot}/${step.document}`] };
+    const first = openNative(step.as, [{ targetId: 1, documents }]);
+    const tokenOf = (frames) =>
+      frames.find(
+        (f) =>
+          f.kind === "targetChange" &&
+          (f.targetChange?.targetIds ?? []).length === 0 &&
+          f.targetChange?.resumeToken,
+      )?.targetChange.resumeToken;
+    await framesReady(first, (frames) => tokenOf(frames) !== undefined);
+    await first.close();
+    const resumeToken = tokenOf(first.frames);
+    if (resumeToken === undefined) throw fatal(`${step.id}: no resume token`);
+    await session.seed([step.write]);
+    const resumes = {};
+    for (const resume of step.resumes) {
+      const recorder = openNative(resume.as, [{ targetId: 1, documents, resumeToken }]);
+      note(step.id, { resume: resume.name });
+      await session.pause(windowOf(step));
+      const end = recorder.ended();
+      await recorder.close();
+      resumes[resume.name] = {
+        frames: resumeRows(recorder.frames, documentsRoot),
+        end: end ? { reason: end.reason, code: end.code } : null,
+      };
+    }
+    record(step, { first: resumeRows(first.frames, documentsRoot), resumes });
+  }
+
   async function openStream(step) {
     const targets = step.targets.map((target) =>
       target.document
@@ -286,17 +382,17 @@ export function createInterpreter(program, deps) {
             },
           },
     );
-    const database = `projects/${ctx.project}/databases/(default)`;
     // A stream is one request of the harness, counted under its ceiling like any other.
-    session.chargeHarness();
-    const recorder = openListen({
-      client: session.grpcClient,
-      protos: session.protos,
-      database,
-      targets,
-      metadata: listenMetadata(session.bearerFor(step.as), database),
+    const recorder = openNative(step.as, targets);
+    const opened = now();
+    const exp = decodeJwt(session.principals.get(step.as)?.idToken ?? "")?.claims?.exp;
+    streams.set(step.name, {
+      recorder,
+      as: step.as,
+      openedAtMs: opened - started,
+      openedWallMs: opened,
+      expMs: typeof exp === "number" ? exp * 1000 : null,
     });
-    streams.set(step.name, { recorder, as: step.as });
     note(step.name, { opened: true });
   }
 
@@ -466,6 +562,7 @@ export function createInterpreter(program, deps) {
       client.closed = true;
     },
     "close-all": closeAll,
+    "resume-probe": resumeProbe,
   };
 
   return {
@@ -487,6 +584,28 @@ export function createInterpreter(program, deps) {
           name,
           c.sdk.events.filter((e) => e.event === "wire").length,
         ]),
+      ),
+    /**
+     * How each native stream ended: when (since it opened, and against its token's `exp`), with
+     * what status. Evidence of when production closes a stream; rows do not compare it.
+     */
+    streamEnds: () =>
+      Object.fromEntries(
+        [...streams].map(([name, { recorder, openedAtMs, openedWallMs, expMs }]) => {
+          const end = recorder.ended();
+          if (!end) return [name, null];
+          return [
+            name,
+            {
+              reason: end.reason,
+              code: end.code ?? null,
+              details: end.details ?? null,
+              openedAtMs,
+              sinceOpenedMs: end.at,
+              vsExpiryMs: expMs === null ? null : openedWallMs + end.at - expMs,
+            },
+          ];
+        }),
       ),
     /** The connections each client opened. */
     connectionCounts: () =>
@@ -572,6 +691,7 @@ export async function runStage2Window(program, ctx, options = {}) {
     timeline: interpreter?.timeline() ?? [],
     wire: interpreter?.wireCounts() ?? {},
     connections: interpreter?.connectionCounts() ?? {},
+    streamEnds: session.mask(interpreter?.streamEnds() ?? {}),
     cleanupErrors,
     ...session.evidence(),
     ...session.counts(),

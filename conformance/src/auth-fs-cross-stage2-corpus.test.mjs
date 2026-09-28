@@ -26,12 +26,35 @@ const indexOf = (program, match) => program.steps.findIndex(match);
 test("the stage-2 program passes its guard and covers every closure transport", () => {
   assert.deepEqual(Object.keys(closure).toSorted(), [...STAGE2_CONDITIONS].toSorted());
   assert.deepEqual(validate(STAGE2_PROGRAM), {
-    commits: 43,
+    commits: 44,
     reads: 15,
-    rows: 56,
+    rows: 57,
     maxWire: 2_200,
     maxConnections: 380,
+    streams: 9,
   });
+});
+
+test("a resume probe resumes as a known principal, on this lane's document, at most twice", () => {
+  const at = indexOf(STAGE2_PROGRAM, (step) => step.do === "resume-probe");
+  assert.ok(at > 0);
+  const probe = STAGE2_PROGRAM.steps[at];
+  assert.deepEqual(
+    probe.resumes.map((r) => r.as),
+    [probe.as, "bob"],
+  );
+  for (const [change, message] of [
+    [(step) => (step.as = "nobody"), /unknown principal nobody/],
+    [(step) => (step.resumes[1].as = "nobody"), /unknown principal nobody/],
+    [(step) => (step.document = "users/x"), /users\/x/],
+    [(step) => (step.write.doc = "users/x"), /users\/x/],
+    [(step) => step.resumes.push({ name: "third", as: "alice" }), /one or two resumes/],
+    [(step) => (step.resumes = []), /one or two resumes/],
+  ]) {
+    const program = copy();
+    change(program.steps[at]);
+    assert.throws(() => validate(program), message);
+  }
 });
 
 test("every held principal's change comes after the short conditions and before its probes", () => {

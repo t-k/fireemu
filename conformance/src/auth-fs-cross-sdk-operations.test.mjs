@@ -19,9 +19,14 @@ function fakeSdk(overrides = {}) {
     },
     signInWithEmailAndPassword: async (auth, email) => {
       calls.push(["signIn", auth.tenantId, email]);
+      // The Web SDK reports the new token after the call resolves (the browser's order).
+      setImmediate(() => state.tokenListener?.({ uid: "u1", getIdToken: async () => TOKEN }));
       return { user: { uid: "u1" } };
     },
-    signOut: async () => calls.push(["signOut"]),
+    signOut: async () => {
+      calls.push(["signOut"]);
+      setImmediate(() => state.tokenListener?.(null));
+    },
     doc: (db, path) => ({ path }),
     collection: (db, path) => ({ collection: path }),
     where: (f, op, v) => ({ where: [f, op, v] }),
@@ -54,13 +59,20 @@ function fakeSdk(overrides = {}) {
   let exited = false;
   const auth = {
     tenantId: null,
-    currentUser: { uid: "u1", getIdToken: async (force) => calls.push(["getIdToken", force]) },
+    currentUser: {
+      uid: "u1",
+      getIdToken: async (force) => {
+        calls.push(["getIdToken", force]);
+        setImmediate(() => state.tokenListener?.({ uid: "u1", getIdToken: async () => TOKEN }));
+      },
+    },
   };
   const tokens = [];
   const run = createOperations({
     fb,
     auth,
     db: {},
+    waitMs: overrides.waitMs ?? 1_000,
     emit: (event) => events.push(event),
     onToken: (token, uid) => tokens.push([token, uid]),
     decodeBase64Url: (text) => Buffer.from(text, "base64url").toString("utf8"),
@@ -100,7 +112,7 @@ test("sign-in names its tenant, and every command is answered by its own result"
     ],
   );
   assert.deepEqual(
-    sdk.events.map((e) => [e.id, e.ok, e.error ?? null]),
+    sdk.events.filter((e) => e.event === "result").map((e) => [e.id, e.ok, e.error ?? null]),
     [
       ["a", true, null],
       ["b", true, null],
@@ -110,8 +122,42 @@ test("sign-in names its tenant, and every command is answered by its own result"
   );
 });
 
-test("listeners report snapshots and errors by name, and a query carries its filters", async () => {
+test("a sign-in, sign-out or refresh answers only after its token change is reported", async () => {
   const sdk = fakeSdk();
+  // A report of the same uid from before the call does not count.
+  await sdk.state.tokenListener({ uid: "u1", getIdToken: async () => TOKEN });
+  sdk.events.length = 0;
+  await sdk.run({ id: "a", op: "signIn", email: "e@example.com", password: "p" });
+  await sdk.run({ id: "b", op: "refreshToken" });
+  await sdk.run({ id: "c", op: "signOut" });
+  assert.deepEqual(
+    sdk.events.map((e) => (e.event === "auth" ? ["auth", e.uid] : ["result", e.id])),
+    [
+      ["auth", "u1"],
+      ["result", "a"],
+      ["auth", "u1"],
+      ["result", "b"],
+      ["auth", null],
+      ["result", "c"],
+    ],
+  );
+  assert.deepEqual(
+    sdk.events.filter((e) => e.event === "result").map((e) => e.authReported),
+    [true, true, true],
+  );
+});
+
+test("a sign-in whose token change never comes answers after the wait, saying so", async () => {
+  const sdk = fakeSdk({
+    waitMs: 20,
+    signInWithEmailAndPassword: async () => ({ user: { uid: "u1" } }),
+  });
+  await sdk.run({ id: "a", op: "signIn", email: "e@example.com", password: "p" });
+  assert.deepEqual(sdk.events, [{ event: "result", id: "a", ok: true, uid: "u1", authReported: false }]);
+});
+
+test("listeners report snapshots and errors by name, and a query carries its filters", async () => {
+  const sdk = fakeSdk({ waitMs: 20 });
   await sdk.run({
     id: "a",
     op: "listen",
@@ -136,6 +182,7 @@ test("listeners report snapshots and errors by name, and a query carries its fil
     ],
   });
   sdk.state.snapshotError({ code: "permission-denied", message: "no" });
+  assert.deepEqual(sdk.events.slice(0, 1), [{ event: "result", id: "a", ok: true, first: "timeout" }]);
   assert.deepEqual(sdk.events.slice(1), [
     {
       event: "snapshot",
@@ -148,6 +195,50 @@ test("listeners report snapshots and errors by name, and a query carries its fil
   ]);
   await sdk.run({ id: "b", op: "unlisten", name: "q" });
   assert.equal(sdk.calls.at(-1)[0], "unsubscribe");
+});
+
+const snapshotOf = (fromCache, n) => ({
+  metadata: { fromCache, hasPendingWrites: false },
+  ref: { path: "afc2-open/x" },
+  exists: () => true,
+  data: () => ({ n }),
+});
+
+test("a listen answers after its first server snapshot, which stays among the events", async () => {
+  const sdk = fakeSdk();
+  const answered = sdk.run({ id: "a", op: "listen", name: "d", path: "afc2-open/x" });
+  await tick();
+  sdk.state.snapshot(snapshotOf(true, 0));
+  await tick();
+  assert.equal(sdk.events.filter((e) => e.event === "result").length, 0);
+  sdk.state.snapshot(snapshotOf(false, 0));
+  await answered;
+  sdk.state.snapshot(snapshotOf(false, 1));
+  assert.deepEqual(
+    sdk.events.map((e) => [e.event, e.fromCache ?? null, e.docs?.[0].data.n ?? e.first ?? null]),
+    [
+      ["snapshot", true, 0],
+      ["snapshot", false, 0],
+      ["result", null, "snapshot"],
+      ["snapshot", false, 1],
+    ],
+  );
+});
+
+test("a refused listen answers after its error, which stays among the events", async () => {
+  const sdk = fakeSdk();
+  const answered = sdk.run({ id: "a", op: "listen", name: "d", path: "afc2-open/x" });
+  await tick();
+  sdk.state.snapshotError({ code: "permission-denied", message: "no" });
+  await answered;
+  assert.deepEqual(
+    sdk.events.map((e) => [e.event, e.code ?? e.first]),
+    [
+      ["listen-error", "permission-denied"],
+      ["result", "error"],
+    ],
+  );
+  assert.equal(sdk.events.at(-1).ok, true);
 });
 
 test("a write left pending reports how it settled later", async () => {

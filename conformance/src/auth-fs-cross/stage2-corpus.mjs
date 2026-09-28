@@ -78,7 +78,7 @@ export function validateStage2(program, { principals = STAGE2_PRINCIPALS, closur
   const commands = new Set();
   const rows = new Set();
   const covered = new Map(STAGE2_CONDITIONS.map((c) => [c, new Set()]));
-  const cost = { commits: 1, reads: 0, rows: 0, maxWire: 0, maxConnections: 0 };
+  const cost = { commits: 1, reads: 0, rows: 0, maxWire: 0, maxConnections: 0, streams: 0 };
 
   const principal = (where, name) => {
     if (!known.has(name)) fail(where, `unknown principal ${name}`);
@@ -161,6 +161,7 @@ export function validateStage2(program, { principals = STAGE2_PRINCIPALS, closur
             fail(where, `${target.collection} is not a collection of this lane`);
         }
         streams.set(step.name, { as: step.as });
+        cost.streams += 1;
         return;
       }
       case "client":
@@ -263,6 +264,19 @@ export function validateStage2(program, { principals = STAGE2_PRINCIPALS, closur
           fail(where, "expiry groups name at least one group");
         for (const group of step.groups) expiryProbes(`${where}/${group.id}`, group);
         return;
+      case "resume-probe": {
+        principal(where, step.as);
+        checkDoc(where, step.document);
+        checkDoc(where, step.write?.doc);
+        if (!Array.isArray(step.resumes) || step.resumes.length < 1 || step.resumes.length > 2)
+          fail(where, "a resume probe has one or two resumes");
+        for (const resume of step.resumes) principal(where, resume.as);
+        windowOf(where, step);
+        cost.commits += 1;
+        cost.streams += 1 + step.resumes.length;
+        row(where, step, ["grpc"]);
+        return;
+      }
       case "close-client":
         openClient(where, step.client).closed = true;
         return;

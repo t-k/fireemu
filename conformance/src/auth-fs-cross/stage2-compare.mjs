@@ -204,7 +204,20 @@ export function buildFixture({ recordings, metas, programDigest, harnessDigest }
     },
     programDigest,
     harnessDigest,
-    recordings: metas.map(({ recording, startedAt, sha }) => ({ recording, startedAt, sha })),
+    // When each native stream ended, as evidence (rows do not compare it); status texts stay in
+    // the private recordings.
+    recordings: metas.map(({ recording, startedAt, sha }, i) => ({
+      recording,
+      startedAt,
+      sha,
+      streamEnds: Object.fromEntries(
+        Object.entries(recordings[i].streamEnds ?? {}).map(([name, end]) => {
+          if (end === null) return [name, null];
+          const { details: _details, ...kept } = end;
+          return [name, kept];
+        }),
+      ),
+    })),
     rows,
   };
 }

@@ -130,6 +130,14 @@ function assertHost(value, ctx, key) {
 export function isRunCredential(value, ctx) {
   if (typeof value !== "string" || value === "") return true;
   if (value.startsWith("fireemu-")) return true;
+  // A SAMLResponse (base64 XML): every certificate it carries is one this run made.
+  const xml = Buffer.from(value, "base64").toString("utf8");
+  if (xml.includes("<samlp:Response")) {
+    const carried = [...xml.matchAll(/<ds:X509Certificate>([^<]*)<\/ds:X509Certificate>/g)].map(
+      (match) => match[1].replaceAll(/\s/g, ""),
+    );
+    return carried.length > 0 && carried.every((c) => ctx.runCertificates?.includes(c) ?? false);
+  }
   const [header] = value.split(".");
   try {
     const { kid } = JSON.parse(Buffer.from(header, "base64url").toString("utf8"));

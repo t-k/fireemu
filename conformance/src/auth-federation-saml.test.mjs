@@ -208,3 +208,50 @@ test("a prefix that is not declared is refused", () => {
     /no ID/,
   );
 });
+
+test("a response departs from the default only where a field asks it to", async () => {
+  const { serializeDocument } = await import("./auth-federation/saml.mjs");
+  const fields = {
+    responseId: "_r1",
+    assertionId: "_a1",
+    issuer: "https://idp.example/saml",
+    audience: "sp-entity",
+    destination: "https://sp.example/__/auth/handler",
+    inResponseTo: "_req1",
+    nameId: "user@example.com",
+    now: 1790000000,
+    attributes: { role: "reader" },
+  };
+  // The defaults are the document the smoke and the Rust vectors were made with.
+  assert.equal(serializeDocument(samlResponse(fields).response), "<?xml version=\"1.0\" encoding=\"UTF-8\"?><samlp:Response xmlns:samlp=\"urn:oasis:names:tc:SAML:2.0:protocol\" xmlns:saml=\"urn:oasis:names:tc:SAML:2.0:assertion\" Destination=\"https://sp.example/__/auth/handler\" ID=\"_r1\" InResponseTo=\"_req1\" IssueInstant=\"2026-09-21T14:13:20Z\" Version=\"2.0\"><saml:Issuer>https://idp.example/saml</saml:Issuer><samlp:Status><samlp:StatusCode Value=\"urn:oasis:names:tc:SAML:2.0:status:Success\"></samlp:StatusCode></samlp:Status><saml:Assertion xmlns:saml=\"urn:oasis:names:tc:SAML:2.0:assertion\" ID=\"_a1\" IssueInstant=\"2026-09-21T14:13:20Z\" Version=\"2.0\"><saml:Issuer>https://idp.example/saml</saml:Issuer><saml:Subject><saml:NameID Format=\"urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress\">user@example.com</saml:NameID><saml:SubjectConfirmation Method=\"urn:oasis:names:tc:SAML:2.0:cm:bearer\"><saml:SubjectConfirmationData InResponseTo=\"_req1\" NotOnOrAfter=\"2026-09-21T14:18:20Z\" Recipient=\"https://sp.example/__/auth/handler\"></saml:SubjectConfirmationData></saml:SubjectConfirmation></saml:Subject><saml:Conditions NotBefore=\"2026-09-21T14:12:20Z\" NotOnOrAfter=\"2026-09-21T14:18:20Z\"><saml:AudienceRestriction><saml:Audience>sp-entity</saml:Audience></saml:AudienceRestriction></saml:Conditions><saml:AuthnStatement AuthnInstant=\"2026-09-21T14:13:20Z\" SessionIndex=\"_a1\"><saml:AuthnContext><saml:AuthnContextClassRef>urn:oasis:names:tc:SAML:2.0:ac:classes:PasswordProtectedTransport</saml:AuthnContextClassRef></saml:AuthnContext></saml:AuthnStatement><saml:AttributeStatement><saml:Attribute Name=\"role\"><saml:AttributeValue>reader</saml:AttributeValue></saml:Attribute></saml:AttributeStatement></saml:Assertion></samlp:Response>");
+  const xml = serializeDocument(
+    samlResponse({
+      ...fields,
+      recipient: "https://other.example/acs",
+      conditionsNotBefore: 1790000600,
+      conditionsNotOnOrAfter: 1789999400,
+      confirmationNotOnOrAfter: 1789999500,
+      statusCode: "urn:oasis:names:tc:SAML:2.0:status:Requester",
+      assertionIssuer: "https://other-idp.example/saml",
+      nameIdFormat: "urn:oasis:names:tc:SAML:2.0:nameid-format:persistent",
+      attributes: { groups: ["a", "b"] },
+    }).response,
+  );
+  for (const expected of [
+    'Recipient="https://other.example/acs"',
+    'NotBefore="2026-09-21T14:23:20Z"',
+    '<saml:Conditions NotBefore="2026-09-21T14:23:20Z" NotOnOrAfter="2026-09-21T14:03:20Z">',
+    'NotOnOrAfter="2026-09-21T14:05:00Z" Recipient=',
+    'Value="urn:oasis:names:tc:SAML:2.0:status:Requester"',
+    "<saml:Issuer>https://other-idp.example/saml</saml:Issuer><saml:Subject>",
+    'Format="urn:oasis:names:tc:SAML:2.0:nameid-format:persistent"',
+    '<saml:Attribute Name="groups"><saml:AttributeValue>a</saml:AttributeValue><saml:AttributeValue>b</saml:AttributeValue></saml:Attribute>',
+  ]) {
+    assert.ok(xml.includes(expected), `${expected} in ${xml}`);
+  }
+  // The response keeps the IdP's issuer; only the assertion's changes.
+  assert.ok(xml.includes('Version="2.0"><saml:Issuer>https://idp.example/saml</saml:Issuer><samlp:Status>'), xml);
+  // No InResponseTo at all (an IdP-initiated response).
+  const unsolicited = serializeDocument(samlResponse({ ...fields, inResponseTo: null }).response);
+  assert.ok(!unsolicited.includes("InResponseTo"), unsolicited);
+});

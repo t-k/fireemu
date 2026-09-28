@@ -551,3 +551,121 @@ test("recordings keep no key ID: a token's kid names a key of that run or servic
     alg: "none",
   });
 });
+
+test("a SAMLResponse is the run's only when every certificate it carries is the run's", () => {
+  const response = (...certificates) =>
+    Buffer.from(
+      `<samlp:Response>${certificates
+        .map((c) => `<ds:X509Certificate>${c}</ds:X509Certificate>`)
+        .join("")}</samlp:Response>`,
+    ).toString("base64");
+  const ctx = production({ runCertificates: ["UlVOLUNFUlQ=", "RVhQSVJFRA=="] });
+  assert.ok(isRunCredential(response("UlVOLUNFUlQ="), ctx));
+  assert.ok(isRunCredential(response("UlVOLUNFUlQ=", "RVhQSVJFRA=="), ctx));
+  assert.ok(!isRunCredential(response("UlVOLUNFUlQ=", "T1RIRVI="), ctx), "a foreign certificate");
+  assert.ok(!isRunCredential(response(), ctx), "no certificate");
+  assert.ok(!isRunCredential(response("UlVOLUNFUlQ="), production()), "no run certificates");
+  const body = (value) =>
+    send(ctx, "POST", "/v1/accounts:signInWithIdp", {
+      requestUri: `https://${SANDBOX_PROJECT}.firebaseapp.com/__/auth/handler`,
+      postBody: new URLSearchParams({ providerId: `saml.fireemu-${RUN}-s`, SAMLResponse: value }).toString(),
+    });
+  assert.doesNotThrow(() => body(response("UlVOLUNFUlQ=")));
+  assert.throws(() => body(response("T1RIRVI=")), /SAMLResponse is not a credential this run made/);
+});
+
+test("a $saml value is a response signed at the step, naming the AuthnRequest it answers", async () => {
+  const { materialize } = await import("./auth-federation/run.mjs");
+  const { generateKeyPairSync } = await import("node:crypto");
+  const { deflateRawSync } = await import("node:zlib");
+  const { privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+  const saml = {
+    keys: { run: { privateKey, certificatePem: "-----BEGIN CERTIFICATE-----\nUlVOLUNFUlQ=\n-----END CERTIFICATE-----" } },
+    now: () => 1_790_000_000,
+  };
+  const request =
+    '<samlp:AuthnRequest xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" ID="_req42" AssertionConsumerServiceURL="https://sp.example/acs"><saml:Issuer xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion">sp</saml:Issuer></samlp:AuthnRequest>';
+  const authUri = `https://idp.example/sso?SAMLRequest=${encodeURIComponent(deflateRawSync(Buffer.from(request)).toString("base64"))}&RelayState=relay-1`;
+  const raw = new Map([["auth-uri", { authUri, sessionId: "s-1" }]]);
+  const spec = {
+    request: "auth-uri",
+    issuer: "https://idp.example/saml",
+    audience: "sp",
+    destination: "https://sp.example/acs",
+    nameId: "user@example.com",
+  };
+  const decode = (value) => Buffer.from(value, "base64").toString("utf8");
+  const xml = decode(materialize({ $saml: spec }, raw, {}, saml));
+  assert.ok(xml.includes('InResponseTo="_req42"'), xml);
+  assert.ok(xml.includes("<saml:Audience>sp</saml:Audience>"), xml);
+  assert.ok(xml.includes('Recipient="https://sp.example/acs"'), xml);
+  assert.ok(xml.includes('IssueInstant="2026-09-21T14:13:20Z"'), xml);
+  assert.ok(xml.includes("<ds:X509Certificate>UlVOLUNFUlQ=</ds:X509Certificate>"), xml);
+  // Overrides, relative times and an absent InResponseTo.
+  const other = decode(
+    materialize(
+      {
+        $saml: {
+          ...spec,
+          inResponseTo: null,
+          audience: "other-sp",
+          conditions: { notBefore: 600 },
+          confirmationNotOnOrAfter: -600,
+          status: "urn:oasis:names:tc:SAML:2.0:status:Requester",
+        },
+      },
+      raw,
+      {},
+      saml,
+    ),
+  );
+  assert.ok(!other.includes("InResponseTo"), other);
+  assert.ok(other.includes("<saml:Audience>other-sp</saml:Audience>"), other);
+  assert.ok(other.includes('<saml:Conditions NotBefore="2026-09-21T14:23:20Z"'), other);
+  assert.ok(other.includes('NotOnOrAfter="2026-09-21T14:03:20Z" Recipient='), other);
+  assert.ok(other.includes('Value="urn:oasis:names:tc:SAML:2.0:status:Requester"'), other);
+  // The relay state the AuthnRequest came with, and a key the run did not make is refused.
+  assert.equal(materialize({ $relayState: "auth-uri" }, raw, {}, saml), "relay-1");
+  assert.throws(() => materialize({ $saml: { ...spec, key: "missing" } }, raw, {}, saml), /key missing/);
+});
+
+test("a run stops before a step that could create an account past its limit", async () => {
+  const { runPrograms } = await import("./auth-federation/run.mjs");
+  const sent = [];
+  let next = 0;
+  const fetchImpl = async (url, init = {}) => {
+    sent.push(`${init.method ?? "GET"} ${new URL(url).pathname}`);
+    const body = url.includes(":signInWithIdp") ? { localId: `local-${(next += 1)}` } : {};
+    return new Response(JSON.stringify(body), { status: 200 });
+  };
+  const signInStep = (id) => ({
+    id,
+    auth: "key",
+    path: "v1/accounts:signInWithIdp",
+    body: {
+      requestUri: "http://localhost",
+      postBody: { $form: { providerId: `oidc.fireemu-${RUN}-a`, id_token: "fireemu-token" } },
+      returnSecureToken: true,
+    },
+  });
+  const programs = [
+    { id: "p1", steps: [signInStep("first")] },
+    { id: "p2", steps: [signInStep("second")] },
+  ];
+  const origin = "http://127.0.0.1:9";
+  await assert.rejects(
+    runPrograms(programs, {
+      run: RUN,
+      project: SANDBOX_PROJECT,
+      issuerHost: CHANNEL,
+      apiKey: "fake",
+      adminAuthorization: "Bearer owner",
+      origin,
+      target: { kind: "local", origin },
+      fetch: fetchImpl,
+      accountLimit: 1,
+    }),
+    /account limit 1/,
+  );
+  assert.equal(sent.filter((line) => line.includes(":signInWithIdp")).length, 1, sent.join("\n"));
+});

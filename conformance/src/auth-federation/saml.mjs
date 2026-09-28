@@ -169,9 +169,17 @@ export function signEnveloped(target, { privateKey, certificatePem, inScope = {}
 
 const isoSeconds = (seconds) => new Date(seconds * 1000).toISOString().replace(/\.\d{3}Z$/, "Z");
 
+/** `attrs` without the members whose value is undefined or null. */
+const present = (attrs) =>
+  Object.fromEntries(Object.entries(attrs).filter(([, value]) => value !== undefined && value !== null));
+
 /**
  * The Response and Assertion an IdP sends for an SP-initiated sign-in. Times are unix seconds;
- * `attributes` maps names to string values (one AttributeValue each).
+ * `attributes` maps names to a string value or an array of them (one AttributeValue each).
+ * Each field below departs from the default document only when given: `recipient` (the
+ * destination), `conditionsNotBefore` and `conditionsNotOnOrAfter`, `confirmationNotOnOrAfter`,
+ * `statusCode` (Success), `assertionIssuer` (the issuer), `nameIdFormat` (emailAddress), and
+ * `inResponseTo: null` for an unsolicited response.
  */
 export function samlResponse({
   responseId,
@@ -184,33 +192,48 @@ export function samlResponse({
   now,
   lifetime = 300,
   attributes = {},
+  recipient = destination,
+  conditionsNotBefore = now - 60,
+  conditionsNotOnOrAfter = now + lifetime,
+  confirmationNotOnOrAfter = now + lifetime,
+  statusCode = "urn:oasis:names:tc:SAML:2.0:status:Success",
+  assertionIssuer = issuer,
+  nameIdFormat = "urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress",
 }) {
   const at = isoSeconds(now);
-  const until = isoSeconds(now + lifetime);
   const assertion = el(
     "saml:Assertion",
     { ns: { saml: NS.saml }, attrs: { ID: assertionId, IssueInstant: at, Version: "2.0" } },
     [
-      el("saml:Issuer", {}, [issuer]),
+      el("saml:Issuer", {}, [assertionIssuer]),
       el("saml:Subject", {}, [
-        el(
-          "saml:NameID",
-          { attrs: { Format: "urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress" } },
-          [nameId],
-        ),
+        el("saml:NameID", { attrs: { Format: nameIdFormat } }, [nameId]),
         el(
           "saml:SubjectConfirmation",
           { attrs: { Method: "urn:oasis:names:tc:SAML:2.0:cm:bearer" } },
           [
             el("saml:SubjectConfirmationData", {
-              attrs: { InResponseTo: inResponseTo, NotOnOrAfter: until, Recipient: destination },
+              attrs: present({
+                InResponseTo: inResponseTo,
+                NotOnOrAfter: isoSeconds(confirmationNotOnOrAfter),
+                Recipient: recipient,
+              }),
             }),
           ],
         ),
       ]),
-      el("saml:Conditions", { attrs: { NotBefore: isoSeconds(now - 60), NotOnOrAfter: until } }, [
-        el("saml:AudienceRestriction", {}, [el("saml:Audience", {}, [audience])]),
-      ]),
+      el(
+        "saml:Conditions",
+        {
+          attrs: {
+            NotBefore: isoSeconds(conditionsNotBefore),
+            NotOnOrAfter: isoSeconds(conditionsNotOnOrAfter),
+          },
+        },
+        [
+          el("saml:AudienceRestriction", {}, [el("saml:Audience", {}, [audience])]),
+        ],
+      ),
       el("saml:AuthnStatement", { attrs: { AuthnInstant: at, SessionIndex: assertionId } }, [
         el("saml:AuthnContext", {}, [
           el("saml:AuthnContextClassRef", {}, [
@@ -224,9 +247,11 @@ export function samlResponse({
               "saml:AttributeStatement",
               {},
               Object.entries(attributes).map(([name, value]) =>
-                el("saml:Attribute", { attrs: { Name: name } }, [
-                  el("saml:AttributeValue", {}, [String(value)]),
-                ]),
+                el(
+                  "saml:Attribute",
+                  { attrs: { Name: name } },
+                  [value].flat().map((one) => el("saml:AttributeValue", {}, [String(one)])),
+                ),
               ),
             ),
           ]
@@ -237,18 +262,18 @@ export function samlResponse({
     "samlp:Response",
     {
       ns: { samlp: NS.samlp, saml: NS.saml },
-      attrs: {
+      attrs: present({
         Destination: destination,
         ID: responseId,
         InResponseTo: inResponseTo,
         IssueInstant: at,
         Version: "2.0",
-      },
+      }),
     },
     [
       el("saml:Issuer", {}, [issuer]),
       el("samlp:Status", {}, [
-        el("samlp:StatusCode", { attrs: { Value: "urn:oasis:names:tc:SAML:2.0:status:Success" } }),
+        el("samlp:StatusCode", { attrs: { Value: statusCode } }),
       ]),
       assertion,
     ],

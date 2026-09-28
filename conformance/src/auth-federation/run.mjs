@@ -18,6 +18,7 @@ import { SANDBOX_PROJECT } from "../auth-account/harness.mjs";
 import { PROGRAMS, resolveCorpus } from "./corpus.mjs";
 import { guardHttp, validateFederationCorpus } from "./guard.mjs";
 import { normalizeHttp } from "./harness.mjs";
+import { readAuthnRequest, signedSamlResponse } from "./saml.mjs";
 import {
   discoveryDocument,
   generateSigningKey,
@@ -156,24 +157,70 @@ function fromRaw(raw, reference) {
   return found;
 }
 
-/** A request value with `$from`, `$token` and `$form` (URL-encoded postBody) resolved. */
-export function materialize(value, raw, minted) {
-  if (Array.isArray(value)) return value.map((v) => materialize(v, raw, minted));
+/**
+ * A SAMLResponse signed now with one of the run's SAML keys (`saml.keys[key]`), answering the
+ * AuthnRequest of the step `request` unless `inResponseTo` names another ID (or `null`: an
+ * unsolicited response). Times are relative to `saml.now()`: `conditions.notBefore` (-60),
+ * `conditions.notOnOrAfter` (300), `confirmationNotOnOrAfter` (300).
+ */
+function samlValue(spec, raw, saml) {
+  const signer = saml?.keys?.[spec.key ?? "run"];
+  if (!signer) throw new Error(`the run made no SAML key ${spec.key ?? "run"}`);
+  const now = saml.now();
+  const authUri = spec.request === undefined ? undefined : fromRaw(raw, `${spec.request}:authUri`);
+  const inResponseTo =
+    spec.inResponseTo !== undefined ? spec.inResponseTo : readAuthnRequest(authUri).id;
+  const suffix = randomBytes(8).toString("hex");
+  const { base64 } = signedSamlResponse(
+    {
+      responseId: `_r${suffix}`,
+      assertionId: `_a${suffix}`,
+      issuer: spec.issuer,
+      assertionIssuer: spec.assertionIssuer,
+      audience: spec.audience,
+      destination: spec.destination,
+      recipient: spec.recipient,
+      inResponseTo,
+      nameId: spec.nameId,
+      nameIdFormat: spec.nameIdFormat,
+      attributes: spec.attributes,
+      statusCode: spec.status,
+      now,
+      conditionsNotBefore: now + (spec.conditions?.notBefore ?? -60),
+      conditionsNotOnOrAfter: now + (spec.conditions?.notOnOrAfter ?? 300),
+      confirmationNotOnOrAfter: now + (spec.confirmationNotOnOrAfter ?? 300),
+    },
+    { ...signer, sign: spec.sign ?? "assertion" },
+  );
+  return base64;
+}
+
+/**
+ * A request value with `$from`, `$token`, `$form` (URL-encoded postBody), `$saml` (a signed
+ * SAMLResponse, see `samlValue`) and `$relayState` (the relay state of a step's AuthnRequest)
+ * resolved.
+ */
+export function materialize(value, raw, minted, saml) {
+  if (Array.isArray(value)) return value.map((v) => materialize(v, raw, minted, saml));
   if (value && typeof value === "object") {
     if (typeof value.$from === "string") return fromRaw(raw, value.$from);
+    if (value.$saml && typeof value.$saml === "object") return samlValue(value.$saml, raw, saml);
+    if (typeof value.$relayState === "string") {
+      return readAuthnRequest(fromRaw(raw, `${value.$relayState}:authUri`)).relayState;
+    }
     if (typeof value.$token === "string") {
       if (minted[value.$token] === undefined) throw new Error(`token ${value.$token} not minted`);
       return minted[value.$token];
     }
     if (value.$form && typeof value.$form === "object") {
       const form = new URLSearchParams();
-      for (const [k, v] of Object.entries(materialize(value.$form, raw, minted))) {
+      for (const [k, v] of Object.entries(materialize(value.$form, raw, minted, saml))) {
         if (v !== undefined) form.set(k, String(v));
       }
       return form.toString();
     }
     return Object.fromEntries(
-      Object.entries(value).map(([k, v]) => [k, materialize(v, raw, minted)]),
+      Object.entries(value).map(([k, v]) => [k, materialize(v, raw, minted, saml)]),
     );
   }
   return value;
@@ -191,10 +238,21 @@ function localIds(value, into = new Set()) {
   return into;
 }
 
-/** Sends every step of `programs` to `origin` and returns the recorded rows. */
+/** Whether a step may create an account (a sign-in, a sign-up or an Admin create). */
+const mayCreateAccount = (step) =>
+  /accounts:(signInWithIdp|signUp)$/.test(step.path) ||
+  /^v1\/projects\/[^/]+\/accounts$/.test(step.path);
+
+/**
+ * Sends every step of `programs` to `origin` and returns the recorded rows. With
+ * `ctx.accountLimit`, the run stops (throws) before a step that may create an account once
+ * that many distinct accounts were named: an account costs an MAU even when deleted.
+ * `ctx.saml` holds the run's SAML keys and clock for `$saml` values.
+ */
 export async function runPrograms(programs, ctx) {
   const results = {};
   const failures = [];
+  const named = new Set();
   let requests = 0;
   // Every account an answer named (the MAU a production pass costs).
   let accountsDeleted = 0;
@@ -228,12 +286,21 @@ export async function runPrograms(programs, ctx) {
         : "identitytoolkit.googleapis.com";
       const url = urlFor(ctx, host, `${step.path}${query.size ? `?${query}` : ""}`);
       const method = step.method ?? "POST";
+      if (
+        ctx.accountLimit !== undefined &&
+        mayCreateAccount(step) &&
+        named.size >= ctx.accountLimit
+      ) {
+        throw new Error(
+          `account limit ${ctx.accountLimit} reached before ${program.id}#${step.id}`,
+        );
+      }
       let body;
       try {
         body =
           step.body === undefined
             ? undefined
-            : JSON.stringify(materialize(step.body, raw, program.minted ?? {}));
+            : JSON.stringify(materialize(step.body, raw, program.minted ?? {}, ctx.saml));
       } catch (error) {
         // A value an earlier answer did not give: the row is recorded as not sent.
         steps[step.id] = { status: -1, skipped: error.message };
@@ -259,6 +326,7 @@ export async function runPrograms(programs, ctx) {
         const parsed = JSON.parse(text);
         raw.set(step.id, parsed);
         localIds(parsed, accounts);
+        localIds(parsed, named);
       } catch {
         raw.set(step.id, undefined);
       }

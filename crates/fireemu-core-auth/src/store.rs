@@ -1195,6 +1195,9 @@ pub struct AuthStore {
     /// hour, the other kinds longer, and an expired code is refused as expired. Otherwise every
     /// code lives an hour and then disappears (the emulator profile's local policy).
     production_oob_lifetimes: bool,
+    /// Whether second factors follow production's project rules (the strict profile): the
+    /// project's `mfa` config decides whether a sign-in asks for one.
+    production_mfa: bool,
     oob_codes: Arc<BTreeMap<String, OobCode>>,
     verification_codes: Arc<BTreeMap<String, VerificationCode>>,
     /// Outstanding phone `temporaryProof`s: proof to the verified number and its issue time.
@@ -1203,6 +1206,8 @@ pub struct AuthStore {
     /// credential is resolved directly rather than by scanning every user
     /// (`AUTH-TRANSIENT-04`). Kept in step with the users' own pending maps.
     pending_sign_in_owners: Arc<BTreeMap<String, LocalId>>,
+    /// Pending sign-ins of deleted accounts and when they started (production's rules).
+    orphaned_pending_sign_ins: Arc<BTreeMap<String, LogicalInstant>>,
     /// Process-local raw `IdP` requests; detached from default snapshots and restore.
     pending_idp: PendingIdpCache,
     /// Generated IDs held by in-flight blocking Auth candidates, grouped by reset generation and
@@ -1228,6 +1233,8 @@ pub struct AuthStore {
     config: ProjectAuthConfig,
     /// The project's sign-in providers and test phone numbers.
     sign_in: SignInConfig,
+    /// The project's multi-factor configuration (Admin v2 `Config.mfa`).
+    mfa_config: crate::mfa_config::MfaProjectConfig,
     /// Deterministic, local-only sign-up quota state. Admin/import paths do not use it unless
     /// their caller explicitly requests a reservation through the typed API.
     signup_quota: SignupQuota,
@@ -1356,6 +1363,36 @@ pub const OBSERVED_LONG_OOB_CODE_SECONDS: i64 = 3_900;
 pub const EXPIRED_OOB_CODE_RETENTION_SECONDS: i64 = 86_400;
 /// Phone verification codes expire after ten minutes of virtual time.
 pub const SMS_CODE_TTL_SECONDS: i64 = 600;
+/// Under production's second-factor rules a phone enrollment session does not expire:
+/// production enrolled with sessions of every age it was shown, up to about 1803 seconds
+/// (sandbox recording 2026-09-24, `auth-mfa/lifetime#aged-session-s1800`, both recordings; the
+/// run waits 1800 seconds and a 3-second margin), and never refused one. Its lifetime is
+/// unobserved, so it is not refused as expired (owner decision M12, as AUTH-ACTION's long
+/// codes). An account holds a bounded number of them (`bound_phone_enrollment_sessions`).
+pub const OBSERVED_MFA_PHONE_ENROLLMENT_SECONDS: i64 = 1_805;
+/// Under production's second-factor rules a TOTP sign-in whose pending credential is at least
+/// this old is `TOTP_CHALLENGE_TIMEOUT`: production accepted one 293 seconds old and refused
+/// one 303 seconds old (sandbox recordings 2026-09-24, `auth-mfa/lifetime-short#aged-pending-q290`
+/// and `auth-mfa/lifetime#aged-pending-p300`). Those ages run from one request's send to the
+/// next's, so the age the server saw differs from them by the two requests' latencies; the
+/// boundary sits one second below the refusal to absorb that, well above the accepted 293.
+/// Younger ages are unobserved and stay accepted.
+pub const OBSERVED_TOTP_CHALLENGE_TIMEOUT_SECONDS: i64 = 302;
+/// Under production's second-factor rules a TOTP enrollment start whose session signed in at
+/// least this long ago is `CREDENTIAL_TOO_OLD_LOGIN_AGAIN`: production started one with a
+/// sign-in 244 seconds old and refused one 333 seconds old (sandbox recording 2026-09-24,
+/// `auth-mfa/lifetime-short#aged-token-start-r240` and `-r330`). Refused from the youngest
+/// refused age only; `auth_time` is whole seconds cut down from the sign-in, which makes the
+/// age the server computes up to a second older than the one the harness measured.
+pub const OBSERVED_TOTP_ENROLLMENT_LOGIN_AGE_SECONDS: i64 = 333;
+/// Under production's second-factor rules an SMS step started for a pending credential at least
+/// this old is `INVALID_MFA_PENDING_CREDENTIAL : MFA pending credential is expired.`:
+/// production started one about 453 seconds old and refused one about 603 seconds old (sandbox
+/// recording 2026-09-25, `auth-mfa/lifetime-sms`, response to response). As
+/// [`OBSERVED_TOTP_CHALLENGE_TIMEOUT_SECONDS`], the boundary sits one second below the refusal
+/// to absorb the requests' latency (the coordinator's delegated decision under the owner's M9
+/// exception). A finalize after an accepted start is not refused, as that was not observed.
+pub const OBSERVED_SMS_PENDING_START_SECONDS: i64 = 602;
 /// A pending second-factor sign-in (`mfaPendingCredential`) expires after an hour of virtual
 /// time. The official emulator's credential is stateless and never expires; this is a local
 /// lifecycle policy, not a claimed production value.
@@ -1516,10 +1553,12 @@ impl AuthStore {
             lifecycle_epoch: None,
             legacy_tokens_issued: false,
             production_oob_lifetimes: false,
+            production_mfa: false,
             oob_codes: Arc::new(BTreeMap::new()),
             verification_codes: Arc::new(BTreeMap::new()),
             temporary_proofs: BTreeMap::new(),
             pending_sign_in_owners: Arc::new(BTreeMap::new()),
+            orphaned_pending_sign_ins: Arc::new(BTreeMap::new()),
             pending_idp: PendingIdpCache::default(),
             generated_local_id_reservations: Arc::new(Mutex::new(BTreeMap::new())),
             generated_local_id_reservation_ticket: Arc::new(AtomicU64::new(0)),
@@ -1530,6 +1569,7 @@ impl AuthStore {
             credential_notices: Vec::new(),
             config: ProjectAuthConfig::default(),
             sign_in: SignInConfig::default(),
+            mfa_config: crate::mfa_config::MfaProjectConfig::default(),
             signup_quota: SignupQuota::default(),
             oidc_configs: BTreeMap::new(),
             oidc_order: Vec::new(),
@@ -1797,6 +1837,20 @@ impl AuthStore {
             }
         }
         self.remove_refresh_tokens_for(&key);
+        // Production answers a deleted account's pending credential USER_NOT_FOUND (sandbox
+        // recording 2026-09-24, auth-mfa/interactions#finalize-y-deleted); the ids are kept
+        // for the pending lifetime only.
+        if self.second_factor_rules_are_production() {
+            let started: Vec<(String, LogicalInstant)> = user
+                .mfa
+                .pending_sign_in_ids_and_starts()
+                .into_iter()
+                .collect();
+            if !started.is_empty() {
+                let orphaned = Arc::make_mut(&mut self.orphaned_pending_sign_ins);
+                orphaned.extend(started);
+            }
+        }
         Arc::make_mut(&mut self.pending_sign_in_owners).retain(|_, owner| *owner != key);
         self.pending_user_ids.remove(&key);
         Arc::make_mut(&mut self.verification_codes).retain(|_, c| match &c.purpose {
@@ -1824,6 +1878,7 @@ impl AuthStore {
         self.verification_codes = Arc::new(BTreeMap::new());
         self.temporary_proofs.clear();
         self.pending_sign_in_owners = Arc::new(BTreeMap::new());
+        self.orphaned_pending_sign_ins = Arc::new(BTreeMap::new());
         self.pending_idp = PendingIdpCache::default();
         self.reset_generation.fetch_add(1, Ordering::AcqRel);
         self.pending_user_ids.clear();
@@ -1856,18 +1911,39 @@ impl AuthStore {
             Arc::make_mut(&mut self.oob_codes)
                 .retain(|_, code| !Self::oob_code_swept(production, code, now));
         }
+        let production = self.second_factor_rules_are_production();
         if self
             .verification_codes
             .values()
-            .any(|code| Self::expired(code.created_at, SMS_CODE_TTL_SECONDS, now))
+            .any(|code| Self::phone_code_expired(production, code, now))
         {
             Arc::make_mut(&mut self.verification_codes)
-                .retain(|_, code| !Self::expired(code.created_at, SMS_CODE_TTL_SECONDS, now));
+                .retain(|_, code| !Self::phone_code_expired(production, code, now));
         }
         self.temporary_proofs
             .retain(|_, (_, issued)| !Self::expired(*issued, TEMPORARY_PROOF_TTL_SECONDS, now));
         let sign_in_ttl = LogicalDuration::from_seconds(PENDING_SIGN_IN_TTL_SECONDS);
-        let enrollment_grace = self.policy.enrollment_session_ttl;
+        if self.orphaned_pending_sign_ins.values().any(|started| {
+            started
+                .checked_add(sign_in_ttl)
+                .unwrap_or(LogicalInstant::MAX)
+                < now
+        }) {
+            Arc::make_mut(&mut self.orphaned_pending_sign_ins).retain(|_, started| {
+                started
+                    .checked_add(sign_in_ttl)
+                    .unwrap_or(LogicalInstant::MAX)
+                    >= now
+            });
+        }
+        // Production still answers SESSION_EXPIRED twice the lifetime later (sandbox recording
+        // 2026-09-24, auth-mfa/lifetime at 1805 s), so its expired sessions stay a day; the
+        // per-user budget bounds them.
+        let enrollment_grace = if self.second_factor_rules_are_production() {
+            LogicalDuration::from_seconds(86_400)
+        } else {
+            self.policy.enrollment_session_ttl
+        };
         let candidates: Vec<LocalId> = self.pending_user_ids.iter().cloned().collect();
         for uid in candidates {
             let mut remains_pending = false;
@@ -2005,6 +2081,26 @@ impl AuthStore {
     #[must_use]
     pub const fn sign_in_config(&self) -> &SignInConfig {
         &self.sign_in
+    }
+
+    /// The project's multi-factor configuration.
+    #[must_use]
+    pub const fn mfa_config(&self) -> &crate::mfa_config::MfaProjectConfig {
+        &self.mfa_config
+    }
+
+    /// Accepted TOTP steps on either side of the current one: the project config's
+    /// `adjacentIntervals` while it enables TOTP with one, else the store's policy.
+    #[must_use]
+    pub fn totp_window(&self) -> u8 {
+        self.mfa_config
+            .totp_window()
+            .unwrap_or(self.policy.window_steps)
+    }
+
+    /// Replaces the project's multi-factor configuration (the adapter validates it).
+    pub fn set_mfa_config(&mut self, config: crate::mfa_config::MfaProjectConfig) {
+        self.mfa_config = config;
     }
 
     /// The project's authorized domains: the configured list, or the one a new Firebase
@@ -3171,6 +3267,36 @@ impl AuthStore {
         }
     }
 
+    /// Switches second factors to production's project rules (see `production_mfa`).
+    pub fn set_production_mfa(&mut self, production: bool) {
+        self.production_mfa = production;
+    }
+
+    /// Whether a sign-in of `uid`, an account with enrolled factors, must ask for one: always
+    /// under the official emulator's rules and while the project's MFA is on. Under
+    /// production's rules with the project's MFA off, production was seen to skip only a phone
+    /// factor (sandbox recording 2026-09-24, `auth-mfa/disabled#sign-in-a-with-factor`), so an
+    /// account with a TOTP factor is still asked (fail closed; AUTH-MFA follow-up directive).
+    #[must_use]
+    pub fn second_factor_required_for(&self, uid: &LocalId) -> bool {
+        // A tenant's own MFA config belongs to AUTH-TENANT-BLOCKING (scope decision M2); a
+        // tenant keeps asking for enrolled factors.
+        !self.second_factor_rules_are_production()
+            || self.mfa_config.state.is_on()
+            || self
+                .users
+                .get(uid)
+                .is_some_and(|user| !user.mfa.totp_factors().is_empty())
+    }
+
+    /// Whether second factors follow production's project rules (the strict profile).
+    #[must_use]
+    pub const fn second_factor_rules_are_production(&self) -> bool {
+        // A tenant's second factors belong to AUTH-TENANT-BLOCKING (scope decision M2): they
+        // keep the rules they had.
+        self.production_mfa && self.tenant_id.is_none()
+    }
+
     /// Switches action codes to production's lifetimes (see `production_oob_lifetimes`).
     pub fn set_production_oob_lifetimes(&mut self, production: bool) {
         self.production_oob_lifetimes = production;
@@ -3254,6 +3380,108 @@ impl AuthStore {
         now.as_nanos() - created_at.as_nanos() > i128::from(ttl_seconds) * 1_000_000_000
     }
 
+    /// Under production's rules, where finished pending entries are kept for their answers,
+    /// drops one of them when `user` is at [`crate::mfa::MAX_PENDING_PER_USER`], so the budget
+    /// refuses only live, unfinished flows (safety review 2026-09-25, MF-2). A dropped pending
+    /// credential is then unknown (`INVALID_PENDING_TOKEN`) and a dropped expired enrollment
+    /// session `INVALID_SESSION_INFO`; this local bound is not a production quota.
+    fn make_pending_room(
+        user: &mut UserRecord,
+        owners: &mut Arc<BTreeMap<String, LocalId>>,
+        now: LogicalInstant,
+    ) {
+        if user.mfa.pending_count() < crate::mfa::MAX_PENDING_PER_USER {
+            return;
+        }
+        if let Some(sign_in) = user.mfa.drop_one_finished(now) {
+            Arc::make_mut(owners).remove(&sign_in);
+        }
+    }
+
+    /// Whether `now` is at least `seconds` after `since` (an observed refusal age).
+    fn expired_at(since: LogicalInstant, seconds: i64, now: LogicalInstant) -> bool {
+        now.as_nanos() - since.as_nanos() >= i128::from(seconds) * 1_000_000_000
+    }
+
+    /// Whether the SMS step of `pending` is refused as expired under production's rules (see
+    /// [`OBSERVED_SMS_PENDING_START_SECONDS`]).
+    #[must_use]
+    pub fn sms_pending_start_expired(
+        &self,
+        pending: &PendingSignInId,
+        now: LogicalInstant,
+    ) -> bool {
+        if !self.second_factor_rules_are_production() {
+            return false;
+        }
+        let Some(uid) = self.pending_sign_in_owners.get(&pending.0) else {
+            return false;
+        };
+        self.users
+            .get(uid)
+            .and_then(|user| user.mfa.pending_sign_in(&pending.0))
+            .is_some_and(|p| {
+                Self::expired_at(p.started_at, OBSERVED_SMS_PENDING_START_SECONDS, now)
+            })
+    }
+
+    /// Whether a TOTP enrollment start is refused for its session's sign-in time
+    /// (`auth_time`, Unix seconds): under production's second-factor rules, at
+    /// [`OBSERVED_TOTP_ENROLLMENT_LOGIN_AGE_SECONDS`] or older.
+    #[must_use]
+    pub fn totp_enrollment_login_too_old(&self, auth_time: i64, now: LogicalInstant) -> bool {
+        self.second_factor_rules_are_production()
+            && Self::expired_at(
+                LogicalInstant::from_unix_seconds(auth_time),
+                OBSERVED_TOTP_ENROLLMENT_LOGIN_AGE_SECONDS,
+                now,
+            )
+    }
+
+    /// Whether a phone code is past its lifetime: never for a phone enrollment under
+    /// production's second-factor rules (see [`OBSERVED_MFA_PHONE_ENROLLMENT_SECONDS`]), else
+    /// after [`SMS_CODE_TTL_SECONDS`].
+    fn phone_code_expired(production: bool, code: &VerificationCode, now: LogicalInstant) -> bool {
+        match code.purpose {
+            VerificationPurpose::Enrollment { .. } if production => false,
+            _ => Self::expired(code.created_at, SMS_CODE_TTL_SECONDS, now),
+        }
+    }
+
+    /// Under production's rules a phone enrollment session never leaves by age, so `uid` holds
+    /// at most [`crate::mfa::MAX_PENDING_PER_USER`] of them. At that number, or at the
+    /// project's [`MAX_OUTSTANDING_CODES`], its own oldest session older than production's
+    /// observed ages makes room; another account's sessions are never dropped. Refused when
+    /// the account is at its bound with no session that old.
+    fn bound_phone_enrollment_sessions(
+        &mut self,
+        uid: &LocalId,
+        now: LogicalInstant,
+    ) -> Result<(), AuthError> {
+        let own = |code: &&VerificationCode| matches!(&code.purpose, VerificationPurpose::Enrollment { uid: owner } if owner == uid);
+        let held = self.verification_codes.values().filter(own).count();
+        let full = held >= crate::mfa::MAX_PENDING_PER_USER;
+        if full || self.verification_codes.len() >= MAX_OUTSTANDING_CODES {
+            let oldest = self
+                .verification_codes
+                .values()
+                .filter(own)
+                .filter(|code| {
+                    Self::expired(code.created_at, OBSERVED_MFA_PHONE_ENROLLMENT_SECONDS, now)
+                })
+                .min_by_key(|code| (code.created_at, code.sequence))
+                .map(|code| code.session_info.clone());
+            match oldest {
+                Some(oldest) => {
+                    Arc::make_mut(&mut self.verification_codes).remove(&oldest);
+                }
+                None if full => return Err(AuthError::TooManyOutstandingCodes),
+                None => {}
+            }
+        }
+        Ok(())
+    }
+
     /// Creates a phone verification code for `phone` (a deterministic six-digit code).
     /// Expired codes are swept first; at [`MAX_OUTSTANDING_CODES`] outstanding codes the
     /// request is refused and creates nothing.
@@ -3265,6 +3493,11 @@ impl AuthStore {
     ) -> Result<VerificationCode, AuthError> {
         Self::validate_phone_number(phone)?;
         self.sweep_transient_credentials(now);
+        if let VerificationPurpose::Enrollment { uid } = &purpose {
+            if self.second_factor_rules_are_production() {
+                self.bound_phone_enrollment_sessions(uid, now)?;
+            }
+        }
         if self.verification_codes.len() >= MAX_OUTSTANDING_CODES {
             return Err(AuthError::TooManyOutstandingCodes);
         }
@@ -3348,7 +3581,7 @@ impl AuthStore {
             .verification_codes
             .get(session_info)
             .ok_or(AuthError::InvalidSessionInfo)?;
-        if Self::expired(entry.created_at, SMS_CODE_TTL_SECONDS, now) {
+        if Self::phone_code_expired(self.second_factor_rules_are_production(), entry, now) {
             return Err(AuthError::InvalidSessionInfo);
         }
         if entry.code != code {
@@ -3689,11 +3922,23 @@ impl AuthStore {
         display_name: Option<String>,
         now: LogicalInstant,
     ) -> Result<EnrolledFactor, MfaError> {
+        self.enroll_phone_factor_by(uid, phone, display_name, now, false)
+    }
+
+    fn enroll_phone_factor_by(
+        &mut self,
+        uid: &LocalId,
+        phone: &str,
+        display_name: Option<String>,
+        now: LogicalInstant,
+        by_admin: bool,
+    ) -> Result<EnrolledFactor, MfaError> {
+        let now = self.factor_time(now, by_admin);
         AuthStore::validate_phone_number(phone).map_err(|_| MfaError::InvalidCode)?;
         // Before the enrollment id is drawn: a refused request must not advance the random
         // stream or touch the account.
         crate::mfa::validate_factor_display_name(display_name.as_deref())?;
-        let enrollment_id = self.random_id28();
+        let enrollment_id = self.new_enrollment_id();
         let user = self
             .users
             .get_mut(uid)
@@ -3770,11 +4015,14 @@ impl AuthStore {
         now: LogicalInstant,
     ) -> Result<(), MfaError> {
         self.check_phone_factors(uid, &factors)?;
+        // The list replaces every factor, TOTP ones included (production clears them all,
+        // sandbox recording 2026-09-24, auth-mfa/interactions#finalize-x-after-factors-cleared).
         if let Some(user) = self.users.get_mut(uid).map(Arc::make_mut) {
             user.mfa.phone_factors_mut().clear();
+            user.mfa.totp_factors_mut().clear();
         }
         for (phone, display_name) in factors {
-            self.enroll_phone_factor(uid, &phone, display_name, now)?;
+            self.enroll_phone_factor_by(uid, &phone, display_name, now, true)?;
         }
         self.activate_email_owner(uid);
         Ok(())
@@ -3813,6 +4061,7 @@ impl AuthStore {
         enrollment_id: &str,
         now: LogicalInstant,
     ) -> Result<SecondFactorAssertion, MfaError> {
+        let production = self.second_factor_rules_are_production();
         let user = self
             .users
             .get_mut(uid)
@@ -3834,10 +4083,18 @@ impl AuthStore {
         {
             return Err(MfaError::NoEnrolledFactor);
         }
-        user.mfa.pending_sign_ins_mut().remove(&pending.0);
-        Arc::make_mut(&mut self.pending_sign_in_owners).remove(&pending.0);
-        if user.mfa.pending_count() == 0 {
-            self.pending_user_ids.remove(uid);
+        // Production keeps the pending credential after success (sandbox recording
+        // 2026-09-24, auth-mfa/sms#sign-in-finalize-again).
+        if production {
+            if let Some(kept) = user.mfa.pending_sign_ins_mut().get_mut(&pending.0) {
+                kept.completed = true;
+            }
+        } else {
+            user.mfa.pending_sign_ins_mut().remove(&pending.0);
+            Arc::make_mut(&mut self.pending_sign_in_owners).remove(&pending.0);
+            if user.mfa.pending_count() == 0 {
+                self.pending_user_ids.remove(uid);
+            }
         }
         user.last_sign_in_at = Some(now);
         self.activate_email_owner(uid);
@@ -4490,6 +4747,14 @@ impl AuthStore {
         // Expired sessions are swept before the budget is measured, so an abandoned flow
         // frees its slot on expiry; a refused start creates no secret and no session.
         self.sweep_transient_credentials(now);
+        if self.second_factor_rules_are_production() {
+            let user = self
+                .users
+                .get_mut(uid)
+                .map(Arc::make_mut)
+                .ok_or(MfaError::UserNotFound)?;
+            Self::make_pending_room(user, &mut self.pending_sign_in_owners, now);
+        }
         let user = self.users.get(uid).ok_or(MfaError::UserNotFound)?;
         if user.mfa.pending_count() >= crate::mfa::MAX_PENDING_PER_USER {
             return Err(MfaError::TooManyPending);
@@ -4512,14 +4777,24 @@ impl AuthStore {
             .get_mut(uid)
             .map(Arc::make_mut)
             .ok_or(MfaError::UserNotFound)?;
-        user.mfa
-            .pending_enrollments_mut()
-            .insert(session_id, PendingEnrollment { secret, expires_at });
+        user.mfa.pending_enrollments_mut().insert(
+            session_id,
+            PendingEnrollment {
+                secret,
+                expires_at,
+                attempts: 0,
+                completed: false,
+            },
+        );
         self.pending_user_ids.insert(uid.clone());
         Ok(material)
     }
 
     /// Finalizes enrollment with a code generated from the proposed secret.
+    ///
+    /// Under production's rules the session counts its attempts
+    /// ([`crate::mfa::MAX_ENROLLMENT_ATTEMPTS`]) and stays after it succeeds, so offering it
+    /// again is refused as complete; under the official emulator's it is gone.
     pub fn finalize_totp_enrollment(
         &mut self,
         uid: &LocalId,
@@ -4527,8 +4802,22 @@ impl AuthStore {
         code: u32,
         now: LogicalInstant,
     ) -> Result<EnrolledFactor, MfaError> {
+        self.finalize_totp_enrollment_named(uid, session_id, code, None, now)
+    }
+
+    /// [`Self::finalize_totp_enrollment`] with the factor's display name.
+    pub fn finalize_totp_enrollment_named(
+        &mut self,
+        uid: &LocalId,
+        session_id: &str,
+        code: u32,
+        display_name: Option<String>,
+        now: LogicalInstant,
+    ) -> Result<EnrolledFactor, MfaError> {
         let policy = self.policy;
-        let enrollment_id = self.random_id28();
+        let window = self.totp_window();
+        let production = self.second_factor_rules_are_production();
+        let enrollment_id = self.new_enrollment_id();
         let user = self
             .users
             .get_mut(uid)
@@ -4541,11 +4830,26 @@ impl AuthStore {
             .cloned()
             .ok_or(MfaError::EnrollmentSessionUnknown)?;
         if now > pending.expires_at {
-            user.mfa.pending_enrollments_mut().remove(session_id);
-            if user.mfa.pending_count() == 0 {
-                self.pending_user_ids.remove(uid);
+            // Production keeps an expired session (the sweep reaps it much later) so that it
+            // keeps answering SESSION_EXPIRED; the official emulator's rules drop it here.
+            if !production {
+                user.mfa.pending_enrollments_mut().remove(session_id);
+                if user.mfa.pending_count() == 0 {
+                    self.pending_user_ids.remove(uid);
+                }
             }
             return Err(MfaError::EnrollmentSessionExpired);
+        }
+        if production {
+            if pending.attempts >= crate::mfa::MAX_ENROLLMENT_ATTEMPTS {
+                return Err(MfaError::TooManyEnrollmentAttempts);
+            }
+            if pending.completed {
+                return Err(MfaError::EnrollmentAlreadyComplete);
+            }
+            if let Some(entry) = user.mfa.pending_enrollments_mut().get_mut(session_id) {
+                entry.attempts = entry.attempts.saturating_add(1);
+            }
         }
         // Disabled while the enrollment was pending: refused before the code is matched, so
         // the pending enrollment survives a later re-enablement. Same class as the sign-in
@@ -4553,35 +4857,97 @@ impl AuthStore {
         if user.disabled {
             return Err(MfaError::UserDisabled);
         }
-        let step = match match_code(
-            &pending.secret,
-            &policy.params(),
-            policy.window_steps,
-            None,
-            code,
-            now,
-        ) {
+        let step = match match_code(&pending.secret, &policy.params(), window, None, code, now) {
             CodeMatch::Accepted { step } => step,
             CodeMatch::Replayed | CodeMatch::NoMatch => return Err(MfaError::InvalidCode),
         };
-        user.mfa.pending_enrollments_mut().remove(session_id);
-        if user.mfa.pending_count() == 0 {
-            self.pending_user_ids.remove(uid);
+        if production {
+            if let Some(entry) = user.mfa.pending_enrollments_mut().get_mut(session_id) {
+                entry.completed = true;
+            }
+        } else {
+            user.mfa.pending_enrollments_mut().remove(session_id);
+            if user.mfa.pending_count() == 0 {
+                self.pending_user_ids.remove(uid);
+            }
         }
+        let enrolled_at = if production {
+            LogicalInstant::from_nanos(now.as_nanos().div_euclid(1_000) * 1_000)
+        } else {
+            now
+        };
         let factor = TotpFactor {
             mfa_enrollment_id: enrollment_id.clone(),
-            display_name: None,
+            display_name: display_name.clone(),
             secret: pending.secret,
-            enrolled_at: now,
+            enrolled_at,
             last_accepted_step: Some(step),
         };
         user.mfa.totp_factors_mut().push(factor);
         self.activate_email_owner(uid);
         Ok(EnrolledFactor {
             mfa_enrollment_id: enrollment_id,
-            display_name: None,
-            enrolled_at: now,
+            display_name,
+            enrolled_at,
         })
+    }
+
+    /// Whether `session_id` names an enrollment session of `uid` (expired or not).
+    #[must_use]
+    pub fn has_enrollment_session(&self, uid: &LocalId, session_id: &str) -> bool {
+        self.users
+            .get(uid)
+            .is_some_and(|user| user.mfa.has_enrollment_session(session_id))
+    }
+
+    /// A factor's enrollment time at the precision production keeps (sandbox recording
+    /// 2026-09-24, auth-mfa): microseconds when the user enrolls it, milliseconds when the
+    /// Admin API writes it. Unchanged under the official emulator's rules.
+    fn factor_time(&self, now: LogicalInstant, by_admin: bool) -> LogicalInstant {
+        if !self.second_factor_rules_are_production() {
+            return now;
+        }
+        let unit: i128 = if by_admin { 1_000_000 } else { 1_000 };
+        LogicalInstant::from_nanos(now.as_nanos().div_euclid(unit) * unit)
+    }
+
+    /// The id and time of a factor an admin imports without them (`batchCreate`): under
+    /// production's rules a version-4 UUID and `now` in milliseconds (sandbox recording
+    /// 2026-09-24, `auth-mfa/admin-factors#admin-lookup-imported`); `None` keeps the caller's
+    /// own defaults.
+    pub fn imported_factor_defaults(
+        &mut self,
+        now: LogicalInstant,
+    ) -> Option<(String, LogicalInstant)> {
+        self.second_factor_rules_are_production()
+            .then(|| (self.new_enrollment_id(), self.factor_time(now, true)))
+    }
+
+    /// A new factor's enrollment id: a version-4 UUID under production's rules (production
+    /// issues them, sandbox recording 2026-09-24), else the 28-character id of the official
+    /// shape. It names a factor and is not a secret, so it follows the seeded stream.
+    fn new_enrollment_id(&mut self) -> String {
+        if !self.second_factor_rules_are_production() {
+            return self.random_id28();
+        }
+        let mut bytes = [0_u8; 16];
+        bytes[..8].copy_from_slice(&self.rng.next_u64().to_be_bytes());
+        bytes[8..].copy_from_slice(&self.rng.next_u64().to_be_bytes());
+        bytes[6] = (bytes[6] & 0x0f) | 0x40;
+        bytes[8] = (bytes[8] & 0x3f) | 0x80;
+        let hex = bytes.iter().fold(String::with_capacity(32), |mut out, b| {
+            use core::fmt::Write as _;
+            let _ = write!(out, "{b:02x}");
+            out
+        });
+        format!(
+            "{}-{}-{}-{}-{}",
+            &hex[..8],
+            &hex[8..12],
+            &hex[12..16],
+            &hex[16..20],
+            &hex[20..]
+        )
     }
 
     /// Starts the second-factor step of a sign-in.
@@ -4602,6 +4968,7 @@ impl AuthStore {
         context: PendingSignInContext,
     ) -> Result<PendingSignInId, MfaError> {
         self.sweep_transient_credentials(now);
+        let production = self.second_factor_rules_are_production();
         let pending_id = self.next_id("signin-");
         let user = self
             .users
@@ -4614,6 +4981,9 @@ impl AuthStore {
         if user.mfa.is_empty() {
             return Err(MfaError::NoEnrolledFactor);
         }
+        if production {
+            Self::make_pending_room(user, &mut self.pending_sign_in_owners, now);
+        }
         if user.mfa.pending_count() >= crate::mfa::MAX_PENDING_PER_USER {
             return Err(MfaError::TooManyPending);
         }
@@ -4622,11 +4992,19 @@ impl AuthStore {
             PendingSignIn {
                 started_at: now,
                 context,
+                completed: false,
             },
         );
         Arc::make_mut(&mut self.pending_sign_in_owners).insert(pending_id.clone(), uid.clone());
         self.pending_user_ids.insert(uid.clone());
         Ok(PendingSignInId(pending_id))
+    }
+
+    /// Whether `pending` was a pending sign-in of an account deleted since (production's
+    /// rules, within the pending lifetime).
+    #[must_use]
+    pub fn pending_sign_in_orphaned(&self, pending: &PendingSignInId) -> bool {
+        self.orphaned_pending_sign_ins.contains_key(&pending.0)
     }
 
     /// User that owns a pending sign-in, if any: a direct lookup in the ownership index,
@@ -4680,18 +5058,26 @@ impl AuthStore {
         now: LogicalInstant,
     ) -> Result<SecondFactorAssertion, MfaError> {
         let policy = self.policy;
+        let window = self.totp_window();
         let (accepted_identifier, accepted_step) = {
             let user = self
                 .users
                 .get(uid)
                 .map(Arc::as_ref)
                 .ok_or(MfaError::UserNotFound)?;
-            if user.mfa.pending_sign_in(&pending.0).is_none() {
+            let Some(started) = user.mfa.pending_sign_in(&pending.0).map(|p| p.started_at) else {
                 return Err(MfaError::PendingSignInUnknown);
+            };
+            if self.second_factor_rules_are_production()
+                && Self::expired_at(started, OBSERVED_TOTP_CHALLENGE_TIMEOUT_SECONDS, now)
+            {
+                return Err(MfaError::TotpChallengeTimeout);
             }
             // Disabled after the first factor: refused before the code is matched, so
-            // neither the pending credential nor the code's step is consumed.
-            if user.disabled {
+            // neither the pending credential nor the code's step is consumed. Production
+            // completes the sign-in of an account disabled after its first factor (sandbox
+            // recording 2026-09-24, auth-mfa/interactions#finalize-x-disabled).
+            if user.disabled && !self.second_factor_rules_are_production() {
                 return Err(MfaError::UserDisabled);
             }
 
@@ -4706,7 +5092,7 @@ impl AuthStore {
             match match_code(
                 &factor.secret,
                 &policy.params(),
-                policy.window_steps,
+                window,
                 factor.last_accepted_step,
                 code,
                 now,
@@ -4724,17 +5110,27 @@ impl AuthStore {
             })?
         };
 
+        let production = self.second_factor_rules_are_production();
         let user = self
             .users
             .get_mut(uid)
             .map(Arc::make_mut)
             .ok_or(MfaError::UserNotFound)?;
-        if user.mfa.pending_sign_ins_mut().remove(&pending.0).is_none() {
-            return Err(MfaError::PendingSignInUnknown);
-        }
-        Arc::make_mut(&mut self.pending_sign_in_owners).remove(&pending.0);
-        if user.mfa.pending_count() == 0 {
-            self.pending_user_ids.remove(uid);
+        // Production keeps a pending credential usable after it succeeded, until it expires
+        // (sandbox recording 2026-09-24, auth-mfa/totp/sign-in#pending-1-again).
+        if production {
+            let Some(kept) = user.mfa.pending_sign_ins_mut().get_mut(&pending.0) else {
+                return Err(MfaError::PendingSignInUnknown);
+            };
+            kept.completed = true;
+        } else {
+            if user.mfa.pending_sign_ins_mut().remove(&pending.0).is_none() {
+                return Err(MfaError::PendingSignInUnknown);
+            }
+            Arc::make_mut(&mut self.pending_sign_in_owners).remove(&pending.0);
+            if user.mfa.pending_count() == 0 {
+                self.pending_user_ids.remove(uid);
+            }
         }
         let factor = user
             .mfa
@@ -4992,6 +5388,7 @@ impl AuthSnapshot {
             // silently transfer those settings.
             restored.config = live.config;
             restored.sign_in = live.sign_in.clone();
+            restored.mfa_config = live.mfa_config.clone();
             // A temporary proof is a credential of the captured namespace.
             restored.temporary_proofs.clear();
             // The local sign-up quota is namespace-owned control state as well. Preserve both
@@ -7076,6 +7473,21 @@ impl AuthRegistry {
         })
         .ok()
         .flatten()
+    }
+
+    /// Replaces a project's multi-factor configuration under the project's operation gate;
+    /// `None` when the project has no store.
+    pub fn update_project_mfa_config(
+        &self,
+        project: &str,
+        config: crate::mfa_config::MfaProjectConfig,
+    ) -> Option<crate::mfa_config::MfaProjectConfig> {
+        let gate = self.operation_gate(project, None)?;
+        let _operation = gate.lock().ok()?;
+        let parent = self.project_store(project)?;
+        let mut parent = parent.lock().ok()?;
+        parent.set_mfa_config(config.clone());
+        Some(config)
     }
 
     /// Replaces a project's sign-in configuration under the project's operation gate.

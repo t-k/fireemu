@@ -5413,6 +5413,7 @@ fn oob_authorization_state(strict: bool) -> (AuthState, Arc<Mutex<Vec<String>>>)
         s.query_limits = fireemu_adapter_http::identity_toolkit::AuthQueryLimits::ProductionBounded;
         s.fake_custom_token_expiry =
             fireemu_adapter_http::identity_toolkit::FakeCustomTokenExpiry::Reject;
+        enable_project_sms_mfa(&s);
     }
     (s, lines)
 }
@@ -5490,7 +5491,10 @@ fn pending_retry_preserves_sms_after_a_mismatched_pending_credential() {
         );
         assert_eq!(status, 200, "{lookup}");
         assert_eq!(lookup["users"][0]["localId"], user["localId"]);
-        assert_eq!(s.store.lock().unwrap().pending_sign_in_count(), count - 1);
+        assert_eq!(
+            s.store.lock().unwrap().pending_sign_in_count(),
+            count - 1 + usize::from(strict)
+        );
         assert_ne!(finalize_mfa(&s, &json!({"mfaPendingCredential": a["mfaPendingCredential"], "phoneVerificationInfo": phone})).0, 200);
     }
 }
@@ -5579,7 +5583,8 @@ fn pending_retry_preserves_sms_codes_across_purpose_mismatches() {
             let remaining = store.verification_codes();
             assert_eq!(remaining.len(), 1);
             assert_eq!(remaining[0].session_info, plain_session);
-            assert_eq!(store.pending_sign_in_count(), count - 1);
+            let kept = usize::from(strict);
+            assert_eq!(store.pending_sign_in_count(), count - 1 + kept);
         }
         let (status, lookup) = post(
             &s,
@@ -5695,7 +5700,11 @@ fn pending_retry_survives_sms_expiry_while_the_pending_credential_lives() {
         let (status, signed) = finalize_phone_step(&s, &pending, &phone);
         assert_eq!(status, 200, "{signed}");
         assert!(s.store.lock().unwrap().verification_codes().is_empty());
-        assert_eq!(s.store.lock().unwrap().pending_sign_in_count(), 0);
+        // Production keeps the pending credential after success (auth-mfa/sms).
+        assert_eq!(
+            s.store.lock().unwrap().pending_sign_in_count(),
+            usize::from(strict)
+        );
 
         // One second past it the code is refused, but the pending credential is kept: the
         // same pending credential can start a fresh code and finalize with it.
@@ -5707,7 +5716,11 @@ fn pending_retry_survives_sms_expiry_while_the_pending_credential_lives() {
         assert_eq!(refused["error"]["message"], "INVALID_SESSION_INFO");
         assert!(refused.get("idToken").is_none());
         assert!(s.store.lock().unwrap().verification_codes().is_empty());
-        assert_eq!(s.store.lock().unwrap().pending_sign_in_count(), 1);
+        // The pending credential of the first sign-in above is kept under production's rules.
+        assert_eq!(
+            s.store.lock().unwrap().pending_sign_in_count(),
+            1 + usize::from(strict)
+        );
         let fresh = start_phone_code(&s, &pending);
         assert_ne!(fresh["sessionInfo"], phone["sessionInfo"]);
         assert_ne!(
@@ -5724,16 +5737,47 @@ fn pending_retry_survives_sms_expiry_while_the_pending_credential_lives() {
         );
         assert_eq!(status, 200, "{lookup}");
         assert_eq!(lookup["users"][0]["localId"], user["localId"]);
-        assert_eq!(s.store.lock().unwrap().pending_sign_in_count(), 0);
+        // Both pending credentials of this test are kept under production's rules.
+        assert_eq!(
+            s.store.lock().unwrap().pending_sign_in_count(),
+            2 * usize::from(strict)
+        );
     }
 }
 
 #[test]
 fn pending_retry_ends_when_the_pending_credential_expires() {
-    use fireemu_core_auth::store::PENDING_SIGN_IN_TTL_SECONDS;
-    for strict in [false, true] {
+    use fireemu_core_auth::store::{
+        OBSERVED_SMS_PENDING_START_SECONDS, PENDING_SIGN_IN_TTL_SECONDS,
+    };
+    // Under production's rules the SMS step starts only before the observed limit (sandbox
+    // recording 2026-09-25, auth-mfa/lifetime-sms), and after the hour the swept credential is
+    // unknown.
+    {
         let email = "pending-lifetime@example.com";
-        let (s, _) = pending_expiry_state(strict, email);
+        let (s, _) = pending_expiry_state(true, email);
+        let pending = pending_login(&s, email);
+        advance_clock(&s, OBSERVED_SMS_PENDING_START_SECONDS - 1);
+        let phone = start_phone_code(&s, &pending);
+        let (status, signed) = finalize_phone_step(&s, &pending, &phone);
+        assert_eq!(status, 200, "{signed}");
+        let pending = pending_login(&s, email);
+        advance_clock(&s, OBSERVED_SMS_PENDING_START_SECONDS);
+        let (status, refused) = start_phone_step(&s, &pending);
+        assert_eq!(status, 400, "{refused}");
+        assert_eq!(
+            refused["error"]["message"],
+            "INVALID_MFA_PENDING_CREDENTIAL : MFA pending credential is expired."
+        );
+        advance_clock(&s, PENDING_SIGN_IN_TTL_SECONDS);
+        let (status, refused) = start_phone_step(&s, &pending);
+        assert_eq!(status, 400, "{refused}");
+        assert_eq!(refused["error"]["message"], "INVALID_PENDING_TOKEN");
+    }
+    // The official emulator's rules: the pending credential's hour.
+    {
+        let email = "pending-lifetime@example.com";
+        let (s, _) = pending_expiry_state(false, email);
         // At the pending lifetime a fresh code still finalizes; one second past it the
         // pending credential is gone, its code with it, and start is refused as well.
         let pending = pending_login(&s, email);
@@ -5785,7 +5829,11 @@ fn pending_and_sms_expiry_matrix_keeps_expiry_causes_separate() {
         let (status, signed) = finalize_phone_step(&s, &pending, &phone);
         assert_eq!(status, 200, "{signed}");
         assert!(signed["idToken"].is_string());
-        assert_eq!(s.store.lock().unwrap().pending_sign_in_count(), 0);
+        // Production keeps the pending credential after success (auth-mfa/sms).
+        assert_eq!(
+            s.store.lock().unwrap().pending_sign_in_count(),
+            usize::from(strict)
+        );
         let (status, lookup) = post(
             &s,
             &format!("{V1}/accounts:lookup"),
@@ -5806,30 +5854,45 @@ fn pending_and_sms_expiry_matrix_keeps_expiry_causes_separate() {
         let fresh = start_phone_code(&s, &pending);
         let (status, signed) = finalize_phone_step(&s, &pending, &fresh);
         assert_eq!(status, 200, "{signed}");
-        assert_eq!(s.store.lock().unwrap().pending_sign_in_count(), 0);
+        assert_eq!(
+            s.store.lock().unwrap().pending_sign_in_count(),
+            usize::from(strict)
+        );
 
         let (s, _) = pending_expiry_state(strict, "expiry-matrix-pending@example.com");
         let pending = pending_login(&s, "expiry-matrix-pending@example.com");
         advance_clock(&s, PENDING_SIGN_IN_TTL_SECONDS - 1);
-        let phone = start_phone_code(&s, &pending);
-        advance_clock(&s, 2);
-        let at = s.clock.lock().unwrap().now_for_test();
-        assert!(s
-            .store
-            .lock()
-            .unwrap()
-            .check_phone_code(
-                phone["sessionInfo"].as_str().unwrap(),
-                phone["code"].as_str().unwrap(),
-                at,
-            )
-            .is_ok());
-        let (status, refused) = finalize_phone_step(&s, &pending, &phone);
-        assert_eq!(status, 400, "{refused}");
-        assert_eq!(refused["error"]["message"], "INVALID_SESSION_INFO");
-        assert!(refused.get("idToken").is_none());
-        assert_eq!(s.store.lock().unwrap().pending_sign_in_count(), 0);
-        assert!(s.store.lock().unwrap().verification_codes().is_empty());
+        if strict {
+            // Production refuses the SMS step of a pending credential from about 603 seconds
+            // (sandbox recording 2026-09-25, auth-mfa/lifetime-sms), so under its rules a
+            // pending credential cannot outlive a code started for it.
+            let (status, refused) = start_phone_step(&s, &pending);
+            assert_eq!(status, 400, "{refused}");
+            assert_eq!(
+                refused["error"]["message"],
+                "INVALID_MFA_PENDING_CREDENTIAL : MFA pending credential is expired."
+            );
+        } else {
+            let phone = start_phone_code(&s, &pending);
+            advance_clock(&s, 2);
+            let at = s.clock.lock().unwrap().now_for_test();
+            assert!(s
+                .store
+                .lock()
+                .unwrap()
+                .check_phone_code(
+                    phone["sessionInfo"].as_str().unwrap(),
+                    phone["code"].as_str().unwrap(),
+                    at,
+                )
+                .is_ok());
+            let (status, refused) = finalize_phone_step(&s, &pending, &phone);
+            assert_eq!(status, 400, "{refused}");
+            assert_eq!(refused["error"]["message"], "INVALID_SESSION_INFO");
+            assert!(refused.get("idToken").is_none());
+            assert_eq!(s.store.lock().unwrap().pending_sign_in_count(), 0);
+            assert!(s.store.lock().unwrap().verification_codes().is_empty());
+        }
 
         let (s, _) = pending_expiry_state(strict, "expiry-matrix-both@example.com");
         let pending = pending_login(&s, "expiry-matrix-both@example.com");
@@ -5957,8 +6020,15 @@ fn pending_retry_refuses_finalize_after_the_account_is_disabled() {
         );
         assert_eq!(status, 200, "{lookup}");
         assert_eq!(lookup["users"][0]["localId"], user["localId"]);
-        assert!(s.store.lock().unwrap().verification_codes().is_empty());
-        assert_eq!(s.store.lock().unwrap().pending_sign_in_count(), count - 1);
+        // Production keeps the pending credential after success, and with it the codes it
+        // started (auth-mfa/sms#sign-in-finalize-again).
+        if !strict {
+            assert!(s.store.lock().unwrap().verification_codes().is_empty());
+        }
+        assert_eq!(
+            s.store.lock().unwrap().pending_sign_in_count(),
+            count - 1 + usize::from(strict)
+        );
     }
 }
 
@@ -6323,9 +6393,11 @@ fn pending_retry_observes_hook_time_delete_revoke_and_factor_changes() {
                 assert_eq!(status, 200, "{response}");
                 assert!(response["idToken"].is_string(), "{response}");
                 assert!(response["refreshToken"].is_string(), "{response}");
+                // This mutation runs under production's rules, which keep the pending
+                // credential after success (auth-mfa/sms#sign-in-finalize-again).
                 assert_eq!(
                     s.store.lock().unwrap().pending_sign_in_count(),
-                    before_pending - 1
+                    before_pending
                 );
                 assert_eq!(
                     get(&s, &format!("{EMU}/verificationCodes")).1["verificationCodes"],
@@ -8779,5 +8851,63 @@ fn generated_saml_json_shape_corpus_is_executed_by_the_native_fixture_handler() 
         if status != 200 {
             assert!(body.get("pendingToken").is_none());
         }
+    }
+}
+
+/// Switches the project's SMS second factors on: under production's rules (the strict
+/// profile) an enrolled factor is asked for only while the project enables MFA.
+fn enable_project_sms_mfa(s: &AuthState) {
+    let r = handle_with(
+        s,
+        "PATCH",
+        "/identitytoolkit.googleapis.com/admin/v2/projects/demo-app/config?updateMask=mfa",
+        &owner(),
+        &json!({"mfa": {"state": "ENABLED", "enabledProviders": ["PHONE_SMS"]}}),
+    );
+    assert_eq!(r.status, 200, "{}", r.body);
+}
+
+/// A routed project's store is installed by any successful kind of config update: the password
+/// policy, the sign-in config, the sign-up quota and the multi-factor config each on their own
+/// (mutation follow-up, docs.local/mutation/auth-mfa/20260925).
+#[test]
+fn routed_project_config_installs_its_store_for_each_kind_of_update() {
+    for (mask, body) in [
+        (
+            "passwordPolicyConfig",
+            json!({"passwordPolicyConfig": {"passwordPolicyEnforcementState": "ENFORCE",
+                "passwordPolicyVersions": [{"customStrengthOptions": {"minPasswordLength": 12}}]}}),
+        ),
+        (
+            "signIn.allowDuplicateEmails",
+            json!({"signIn": {"allowDuplicateEmails": true}}),
+        ),
+        (
+            "quota.signUpQuotaConfig",
+            json!({"quota": {"signUpQuotaConfig": {"quota": "10", "startTime": "2026-09-25T00:00:00Z", "quotaDuration": "3600s"}}}),
+        ),
+        (
+            "mfa",
+            json!({"mfa": {"state": "ENABLED", "enabledProviders": ["PHONE_SMS"]}}),
+        ),
+    ] {
+        let mut state = state();
+        let registry = Arc::new(fireemu_core_auth::store::AuthRegistry::new(
+            "demo-app",
+            state.store.clone(),
+        ));
+        state.registry = Some(registry.clone());
+        state.allow_routed_projects = true;
+        let project = "worker-config";
+        let path = format!("/identitytoolkit.googleapis.com/admin/v2/projects/{project}/config");
+        let updated = handle_with(
+            &state,
+            "PATCH",
+            &format!("{path}?updateMask={mask}"),
+            &owner(),
+            &body,
+        );
+        assert_eq!(updated.status, 200, "{mask}: {}", updated.body);
+        assert!(registry.routed_store_for(project).is_some(), "{mask}");
     }
 }

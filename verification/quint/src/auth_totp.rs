@@ -508,6 +508,10 @@ fn classified_mfa_error(error: &MfaError) -> anyhow::Error {
         MfaError::InvalidCode => "InvalidCode",
         MfaError::CodeAlreadyUsed => "CodeAlreadyUsed",
         MfaError::EnrollmentSessionExpired => "EnrollmentSessionExpired",
+        // Production's rules only; this driver runs the official emulator's.
+        MfaError::TooManyEnrollmentAttempts => "TooManyEnrollmentAttempts",
+        MfaError::EnrollmentAlreadyComplete => "EnrollmentAlreadyComplete",
+        MfaError::TotpChallengeTimeout => "TotpChallengeTimeout",
         MfaError::EnrollmentSessionUnknown => "EnrollmentSessionUnknown",
         MfaError::PendingSignInUnknown => "PendingSignInUnknown",
         MfaError::NoEnrolledFactor => "NoEnrolledFactor",

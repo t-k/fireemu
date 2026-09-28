@@ -67,6 +67,7 @@ const SIGNUP_QUOTA_FIELDS: [&str; 3] = ["quota", "startTime", "quotaDuration"];
 mod custom_token;
 pub use custom_token::{CustomTokenRefusal, CustomTokenTrust};
 mod password_hash;
+mod project_mfa;
 pub use password_hash::restorable_spec as restorable_imported_hash_spec;
 mod routes;
 pub mod widget;
@@ -1016,6 +1017,17 @@ fn mfa_error(e: &MfaError) -> JsonResponse {
         MfaError::InvalidCode => error(400, "INVALID_CODE"),
         MfaError::CodeAlreadyUsed => error(400, "INVALID_CODE : verification code already used"),
         MfaError::EnrollmentSessionExpired => error(400, "SESSION_EXPIRED"),
+        MfaError::TooManyEnrollmentAttempts => {
+            error(400, "TOO_MANY_ENROLLMENT_ATTEMPTS : restart enrollment")
+        }
+        MfaError::EnrollmentAlreadyComplete => error(
+            400,
+            "MFA_ENROLLMENT_ALREADY_COMPLETE : This MFA enrollment has already been completed.",
+        ),
+        MfaError::TotpChallengeTimeout => error(
+            400,
+            "TOTP_CHALLENGE_TIMEOUT : TOTP challenge timeout, provide first factor again.",
+        ),
         MfaError::EnrollmentSessionUnknown | MfaError::PendingSignInUnknown => {
             error(400, "INVALID_SESSION_INFO")
         }
@@ -1191,6 +1203,8 @@ fn verify_honouring_legacy(
 /// whose behaviour depends on the first factor).
 struct Session {
     uid: LocalId,
+    /// The token's `auth_time` (Unix seconds), when it carries one.
+    auth_time: Option<i64>,
     provider: String,
     second_factor: Option<SecondFactorAssertion>,
     extra_claims: CustomClaims,
@@ -1299,6 +1313,7 @@ fn verify_session_accepting(
         .user_by_id(&v.uid)
         .map(|u| Session {
             uid: u.local_id.clone(),
+            auth_time: decoded.payload.get("auth_time").and_then(JsonValue::as_i64),
             provider,
             second_factor,
             extra_claims,
@@ -2477,6 +2492,7 @@ fn dispatch_with_blocking_hook(
                 };
                 Some(Session {
                     uid: session.uid,
+                    auth_time: Some(claims.auth_time),
                     provider: claims.firebase.sign_in_provider,
                     second_factor: session.second_factor,
                     extra_claims: claims.custom,
@@ -3081,6 +3097,7 @@ fn handle_with_policy(
     // Strict (stateful refresh sessions) follows production's action-code lifetimes: a reset
     // code lives an hour and is then refused as expired (sandbox recording 2026-09-24).
     store.set_production_oob_lifetimes(!state.stateless_refresh_tokens);
+    store.set_production_mfa(!state.stateless_refresh_tokens);
     // Expired transient credentials are swept before every request is served, so nothing
     // past its lifetime is observable (`AUTH-TRANSIENT-01`, `-02`).
     store.sweep_transient_credentials(at);
@@ -3516,13 +3533,33 @@ fn dispatch(
             ),
             !options.stateless_refresh_tokens,
         ),
-        Handler::MfaEnrollmentFinalize => mfa_enrollment_finalize(store, body, at),
-        Handler::MfaEnrollmentWithdraw => v2_error_shape(
-            mfa_enrollment_withdraw(store, body, at),
+        Handler::MfaEnrollmentFinalize => v2_error_shape(
+            mfa_enrollment_finalize(store, body, at),
             !options.stateless_refresh_tokens,
         ),
-        Handler::MfaSignInStart => mfa_sign_in_start(store, body, at),
-        Handler::MfaSignInFinalize => mfa_sign_in_finalize(store, body, at),
+        Handler::MfaEnrollmentWithdraw => v2_error_shape(
+            if store.second_factor_rules_are_production() {
+                mfa_enrollment_withdraw_production(store, body, at)
+            } else {
+                mfa_enrollment_withdraw(store, body, at)
+            },
+            !options.stateless_refresh_tokens,
+        ),
+        Handler::MfaSignInStart => v2_error_shape(
+            {
+                let production = store.second_factor_rules_are_production();
+                mfa_sign_in_start(store, body, at, production)
+            },
+            !options.stateless_refresh_tokens,
+        ),
+        Handler::MfaSignInFinalize => v2_error_shape(
+            if store.second_factor_rules_are_production() {
+                mfa_sign_in_finalize_production(store, body, at)
+            } else {
+                mfa_sign_in_finalize(store, body, at)
+            },
+            !options.stateless_refresh_tokens,
+        ),
         Handler::Token => {
             secure_token_error_shape(refresh(store, body, at, options.stateless_refresh_tokens))
         }
@@ -3582,6 +3619,39 @@ fn dispatch(
             emulator_action(store, query, headers, at, options.stateless_refresh_tokens)
         }
     }
+}
+
+/// Production's answers to a refused `mfa` value (sandbox recording 2026-09-24,
+/// `auth-mfa/config`): the v2 Admin API's shape, without the v1 `errors` list.
+fn mfa_config_refusal(refusal: &project_mfa::MfaConfigRefusal) -> JsonResponse {
+    use project_mfa::MfaConfigRefusal;
+    let body = match refusal {
+        MfaConfigRefusal::InvalidEnum {
+            field,
+            type_name,
+            value,
+        } => {
+            let message = format!(
+                "Invalid value at '{field}' (type.googleapis.com/google.cloud.identitytoolkit.admin.v2.{type_name}), \"{value}\""
+            );
+            json!({"error": {
+                "code": 400,
+                "message": message,
+                "status": "INVALID_ARGUMENT",
+                "details": [{
+                    "@type": "type.googleapis.com/google.rpc.BadRequest",
+                    "fieldViolations": [{"field": field, "description": message}],
+                }],
+            }})
+        }
+        MfaConfigRefusal::AdjacentIntervalRange => json!({"error": {
+            "code": 400,
+            "message": "INVALID_ADJACENT_INTERVAL_RANGE : Allowed number of adjacent intervals must be between 0 and 10, inclusive",
+            "status": "INVALID_ARGUMENT",
+        }}),
+        MfaConfigRefusal::Shape => return error(400, "INVALID_ARGUMENT"),
+    };
+    JsonResponse { status: 400, body }
 }
 
 fn install_routed_candidate(
@@ -3660,6 +3730,8 @@ fn apply_project_config_fields(
                     &["client", "permissions", "disabledUserDeletion"],
                 )?);
             }
+            // Decoded whole by `project_mfa`, like the sign-in providers.
+            "mfa" => {}
             field
                 if field == "passwordPolicyConfig"
                     || field.starts_with("passwordPolicyConfig.")
@@ -3935,7 +4007,8 @@ fn apply_project_config_parent_path(
 fn valid_project_config_field(field: &str) -> bool {
     matches!(
         field,
-        "signIn"
+        "mfa"
+            | "signIn"
             | "signIn.allowDuplicateEmails"
             | "emailPrivacyConfig"
             | "emailPrivacyConfig.enableImprovedEmailPrivacy"
@@ -4590,6 +4663,7 @@ fn validate_project_config_payload(body: &Value) -> Result<(), JsonResponse> {
                 | "quota"
                 | "blockingFunctions"
                 | "authorizedDomains"
+                | "mfa"
         ) {
             return Err(error(400, "INVALID_ARGUMENT"));
         }
@@ -4818,6 +4892,7 @@ fn project_config_management(
             store.signup_quota().config(),
         );
         add_sign_in_config_json(&mut body, store.sign_in_config());
+        body["mfa"] = project_mfa::mfa_config_json(store.mfa_config());
         body["authorizedDomains"] = json!(store.authorized_domains());
         if let Some(blocking) = state
             .blocking
@@ -4884,6 +4959,9 @@ fn project_config_management(
             {
                 fields.push("authorizedDomains".to_owned());
             }
+            if body.get("mfa").is_some_and(|value| !value.is_null()) {
+                fields.push("mfa".to_owned());
+            }
             fields
         }
         Err(response) => return response,
@@ -4902,6 +4980,15 @@ fn project_config_management(
     if let Err(response) = apply_project_config_fields(&mut patch, body, &fields) {
         return response;
     }
+    // The masked `mfa` member replaces the project's whole multi-factor configuration.
+    let mfa_update = if fields.iter().any(|field| field == "mfa") {
+        match project_mfa::mfa_config_from_json(body.get("mfa").unwrap_or(&Value::Null)) {
+            Ok(config) => Some(config),
+            Err(refusal) => return mfa_config_refusal(&refusal),
+        }
+    } else {
+        None
+    };
     // Decode the sign-in providers before anything changes; they are applied after the rest.
     let updates_sign_in = match sign_in_config_from_update(&SignInConfig::default(), body, &fields)
     {
@@ -4957,6 +5044,11 @@ fn project_config_management(
             },
         ) {
             Ok(Some(config)) => {
+                if let Some(mfa) = mfa_update.clone() {
+                    if registry.update_project_mfa_config(project, mfa).is_none() {
+                        return rollback_blocking(error(500, "INTERNAL"));
+                    }
+                }
                 if updates_sign_in {
                     match registry.update_project_sign_in_config(project, |current| {
                         sign_in_config_from_update(current, body, &fields)
@@ -4995,6 +5087,10 @@ fn project_config_management(
         let has_policy = password_policy.is_some();
         let has_quota = signup_quota.is_some();
         let has_sign_in = sign_in.is_some();
+        let has_mfa = mfa_update.is_some();
+        if let Some(mfa) = mfa_update {
+            store.set_mfa_config(mfa);
+        }
         let config = patch.apply_to(store.config());
         if !patch.is_empty() {
             store.set_config(config);
@@ -5013,7 +5109,7 @@ fn project_config_management(
             }
         }
         drop(store);
-        if !patch.is_empty() || has_policy || has_quota || has_sign_in {
+        if !patch.is_empty() || has_policy || has_quota || has_sign_in || has_mfa {
             if let Some(project) = pending_project {
                 if let Err(response) = install_routed_candidate(state, project, selected_store) {
                     return rollback_blocking(response);
@@ -5034,6 +5130,7 @@ fn project_config_management(
                 store.signup_quota().config(),
             );
             add_sign_in_config_json(&mut body, store.sign_in_config());
+            body["mfa"] = project_mfa::mfa_config_json(store.mfa_config());
             body["authorizedDomains"] = json!(store.authorized_domains());
             if let Some(blocking) = state
                 .blocking
@@ -7342,7 +7439,8 @@ fn finish_sign_in_with_attributes_and_credentials(
     inbound_credentials: Option<&PendingSignInCredentials>,
 ) -> JsonResponse {
     let factors = mfa_info(store, uid, true);
-    if !factors.is_empty() {
+    if !factors.is_empty() && store.second_factor_required_for(uid) {
+        let strict = store.second_factor_rules_are_production();
         // Second factor required: no ID token yet, only a pending credential.
         let email = store.user(uid).and_then(|u| u.email.clone());
         let sign_in_provider = provider
@@ -7365,13 +7463,17 @@ fn finish_sign_in_with_attributes_and_credentials(
                 let mut body = json!({"mfaPendingCredential": pending.as_str(), "mfaInfo": factors, "localId": uid.as_str(), "email": email});
                 for (k, v) in extra {
                     // The pending-second-factor answer carries no profile fields on the
-                    // official emulator (conformance/fixtures/auth/mfa-enrollment-eligibility);
-                    // production's shape for it is unobserved, so the token answer alone
-                    // carries `displayName`.
-                    if *k == "displayName" {
-                        continue;
+                    // official emulator (conformance/fixtures/auth/mfa-enrollment-eligibility).
+                    // Production keeps a password sign-in's `displayName` and leaves out an
+                    // email link's `isNewUser` (sandbox recording 2026-09-24, auth-mfa).
+                    let dropped = if strict {
+                        *k == "isNewUser"
+                    } else {
+                        *k == "displayName"
+                    };
+                    if !dropped {
+                        body[*k] = v.clone();
                     }
-                    body[*k] = v.clone();
                 }
                 JsonResponse { status: 200, body }
             }
@@ -7817,13 +7919,24 @@ fn parse_phone_factors(entries: &Value) -> Result<Vec<(String, Option<String>)>,
     };
     let mut out = Vec::with_capacity(items.len());
     for item in items {
+        // An entry with `phoneInfo` is a phone factor whatever else it carries, as the official
+        // emulator reads it. Production's words for an entry with only `totpInfo` (sandbox
+        // recording 2026-09-24, auth-mfa/admin-factors#admin-set-totp-factor-ia and
+        // #admin-set-invalid-phone-ia); one with both is unobserved and stays accepted.
         let Some(phone) = str_field(item, "phoneInfo") else {
+            if item.get("totpInfo").is_some_and(|v| !v.is_null()) {
+                return Err(error(
+                    400,
+                    "UNSUPPORTED_SECOND_FACTOR : attempting to add a new TOTP enrollment",
+                ));
+            }
             return Err(error(
                 400,
                 "INVALID_ARGUMENT : only phone second factors (phoneInfo) can be enrolled by an admin",
             ));
         };
-        AuthStore::validate_phone_number(phone).map_err(|e| auth_error(&e))?;
+        AuthStore::validate_phone_number(phone)
+            .map_err(|_| error(400, "INVALID_PHONE_NUMBER : Invalid format."))?;
         out.push((
             phone.to_owned(),
             opt_str(item, "displayName")?.map(str::to_owned),
@@ -8067,9 +8180,14 @@ fn parse_update(body: &Value) -> Result<UpdatePlan, JsonResponse> {
         None | Some(Value::Null) => None,
         Some(v) => Some(parse_identity(v)?),
     };
-    let phone_factors = match body.get("mfa").and_then(|m| m.get("enrollments")) {
+    // `mfa` replaces every factor; without `enrollments` it clears them, as production does
+    // (sandbox recording 2026-09-24, auth-mfa/admin-factors#admin-lookup-cleared).
+    let phone_factors = match body.get("mfa") {
         None | Some(Value::Null) => None,
-        Some(v) => Some(parse_phone_factors(v)?),
+        Some(mfa) => match mfa.get("enrollments") {
+            None | Some(Value::Null) => Some(Vec::new()),
+            Some(v) => Some(parse_phone_factors(v)?),
+        },
     };
     let revoke_at = parse_valid_since(body)?;
     Ok(UpdatePlan {
@@ -9137,12 +9255,16 @@ fn validate_batch_row_shapes(row: &Value) -> Result<(), JsonResponse> {
 /// The second factors of a `batchCreate` row: phone factors as the official emulator
 /// imports them, and TOTP factors in fireemu's own export shape
 /// (`totpInfo.sharedSecretKey`), which the official emulator has no equivalent for.
+///
+/// Under production's second-factor rules every TOTP factor is refused with production's words
+/// and a factor without an id or a time takes [`AuthStore::imported_factor_defaults`].
 fn batch_row_factors(
     row: &Value,
     local_id: &str,
     has_email: bool,
     email_verified: bool,
     at: LogicalInstant,
+    store: &mut AuthStore,
 ) -> Result<
     (
         Vec<fireemu_core_auth::mfa::TotpFactor>,
@@ -9171,13 +9293,21 @@ fn batch_row_factors(
         }
     }
     for (index, item) in items.iter().enumerate() {
+        if store.second_factor_rules_are_production()
+            && item.get("totpInfo").is_some_and(|v| !v.is_null())
+        {
+            return Err(error(400, "Importing TOTP MFA is not supported."));
+        }
+        let (default_id, default_at) = store
+            .imported_factor_defaults(at)
+            .unwrap_or_else(|| (format!("{local_id}-mfa-{index}"), at));
         let enrollment_id = opt_str(item, "mfaEnrollmentId")?
             .filter(|id| !id.is_empty())
-            .map_or_else(|| format!("{local_id}-mfa-{index}"), str::to_owned);
+            .map_or(default_id, str::to_owned);
         let display_name = opt_str(item, "displayName")?.map(str::to_owned);
         let enrolled_at = opt_str(item, "enrolledAt")?
             .and_then(|t| LogicalInstant::parse_rfc3339(t).ok())
-            .unwrap_or(at);
+            .unwrap_or(default_at);
         if let Some(phone) = opt_str(item, "phoneInfo")? {
             AuthStore::validate_phone_number(phone)
                 .map_err(|_| error(400, "Phone number format is invalid"))?;
@@ -9213,6 +9343,7 @@ fn batch_row_user(
     row: &Value,
     at: LogicalInstant,
     hash_spec: Option<&password_hash::HashSpec>,
+    store: &mut AuthStore,
 ) -> Result<fireemu_core_auth::store::ImportedUser, JsonResponse> {
     use fireemu_core_auth::store::{ImportedUser, Provider};
     validate_batch_row_shapes(row)?;
@@ -9259,7 +9390,7 @@ fn batch_row_user(
     }
     let email_verified = opt_bool(row, "emailVerified")?.unwrap_or(false);
     let (totp_factors, phone_factors) =
-        batch_row_factors(row, local_id, email.is_some(), email_verified, at)?;
+        batch_row_factors(row, local_id, email.is_some(), email_verified, at, store)?;
     let password = batch_row_password(row)?;
     let imported_password = if password.is_none() {
         batch_row_imported_hash(row, hash_spec)?
@@ -9418,7 +9549,7 @@ fn admin_batch_create(store: &mut AuthStore, body: &Value, at: LogicalInstant) -
     let mut errors = Vec::new();
     for (index, row) in rows.iter().enumerate() {
         let refused = |message: String| json!({"index": index, "message": message});
-        let user = match batch_row_user(row, at, hash_spec.as_ref()) {
+        let user = match batch_row_user(row, at, hash_spec.as_ref(), store) {
             Ok(u) => u,
             Err(r) => {
                 let message = r.body["error"]["message"]
@@ -9591,6 +9722,35 @@ fn verify_enrollment_session(
     verify_session_accepting(store, body, at, jwt_error, LegacyTokens::Honoured)
 }
 
+/// Production's answers to an enrollment start's shape and to a full phone slate (sandbox
+/// recording 2026-09-24, auth-mfa/totp/enroll#start-without-info,
+/// interactions#start-both-kinds and #phone-start-at-limit).
+fn production_enrollment_start_refusal(
+    store: &AuthStore,
+    uid: &LocalId,
+    body: &Value,
+) -> Option<JsonResponse> {
+    let totp = body.get("totpEnrollmentInfo").is_some_and(|v| !v.is_null());
+    let phone = body
+        .get("phoneEnrollmentInfo")
+        .is_some_and(|v| !v.is_null());
+    if totp && phone {
+        return Some(oneof_already_set("enrollment_info", "phoneEnrollmentInfo"));
+    }
+    if !totp && !phone {
+        return Some(error(400, "Request contains an invalid argument."));
+    }
+    let full = store
+        .user(uid)
+        .is_some_and(|u| u.mfa.factor_count() >= fireemu_core_auth::mfa::MAX_FACTORS_PER_USER);
+    (phone && full).then(|| {
+        error(
+            400,
+            "SECOND_FACTOR_LIMIT_EXCEEDED : Too many second factors enrolled for this account.",
+        )
+    })
+}
+
 fn mfa_enrollment_start(
     store: &mut AuthStore,
     body: &Value,
@@ -9603,7 +9763,21 @@ fn mfa_enrollment_start(
         Err(r) => return r,
     };
     let uid = session.uid.clone();
+    // Production's second-factor rules (strict, outside tenants, whose second factors keep
+    // their earlier rules under scope decision M2).
+    let production = store.second_factor_rules_are_production();
+    if production {
+        if let Some(refusal) = production_enrollment_start_refusal(store, &uid, body) {
+            return refusal;
+        }
+    }
     if let Some(phone) = body.get("phoneEnrollmentInfo") {
+        // Strict: production refuses a phone factor while the project does not enable SMS
+        // second factors (sandbox recording 2026-09-24, auth-mfa/disabled#phone-start); the
+        // official emulator always enrolls one.
+        if production && !store.mfa_config().sms_enabled() {
+            return error(400, "OPERATION_NOT_ALLOWED : SMS based MFA not enabled.");
+        }
         let number = str_field(phone, "phoneNumber").unwrap_or("");
         if let Some(refusal) = phone_enrollment_refusal(store, &session, Some(number), true) {
             return refusal;
@@ -9629,7 +9803,11 @@ fn mfa_enrollment_start(
             "INVALID_ARGUMENT : totpEnrollmentInfo or phoneEnrollmentInfo is required",
         );
     }
-    if !totp_extension_enabled {
+    // TOTP is on when the project's `mfa` config enables it (production). The fireemu
+    // `auth.totp` extension turns it on too, except under production's rules, where only the
+    // project config does (`auth-mfa/disabled#totp-start`; AUTH-MFA follow-up directive).
+    let extension = totp_extension_enabled && !production;
+    if !extension && !store.mfa_config().totp_enabled() {
         return error(
             400,
             if strict {
@@ -9642,24 +9820,58 @@ fn mfa_enrollment_start(
     if let Some(refusal) = phone_enrollment_refusal(store, &session, None, true) {
         return refusal;
     }
+    if session
+        .auth_time
+        .is_some_and(|auth_time| store.totp_enrollment_login_too_old(auth_time, at))
+    {
+        return error(400, "CREDENTIAL_TOO_OLD_LOGIN_AGAIN");
+    }
     match store.start_totp_enrollment(&uid, at) {
         Ok(material) => {
             let policy = *store.policy();
             JsonResponse {
                 status: 200,
+                // Production's members: `SHA1` and a deadline in microseconds (sandbox
+                // recording 2026-09-24, auth-mfa/totp/enroll#start).
                 body: json!({
                     "totpSessionInfo": {
                         "sharedSecretKey": base32::encode(material.secret_for_test()),
                         "verificationCodeLength": policy.digits,
-                        "hashingAlgorithm": "HMAC_SHA1",
+                        "hashingAlgorithm": "SHA1",
                         "periodSec": policy.period_seconds,
                         "sessionInfo": material.session_id,
-                        "finalizeEnrollmentTime": LogicalInstant::to_rfc3339(material.expires_at).unwrap_or_default(),
+                        "finalizeEnrollmentTime": proto_timestamp(LogicalInstant::from_nanos(
+                            material.expires_at.as_nanos().div_euclid(1_000) * 1_000,
+                        )),
                     }
                 }),
             }
         }
+        Err(e) if production && matches!(e, MfaError::LimitExceeded(_)) => error(
+            400,
+            "SECOND_FACTOR_LIMIT_EXCEEDED : Too many TOTP based second factors enrolled for this account.",
+        ),
         Err(e) => mfa_error(&e),
+    }
+}
+
+/// Production's parse-time refusal of a second member of a oneof (sandbox recording
+/// 2026-09-24, auth-mfa/interactions#start-both-kinds).
+fn oneof_already_set(oneof: &str, member: &str) -> JsonResponse {
+    let message = format!(
+        "Invalid value (oneof), oneof field '{oneof}' is already set. Cannot set '{member}'"
+    );
+    JsonResponse {
+        status: 400,
+        body: json!({"error": {
+            "code": 400,
+            "message": message,
+            "status": "INVALID_ARGUMENT",
+            "details": [{
+                "@type": "type.googleapis.com/google.rpc.BadRequest",
+                "fieldViolations": [{"description": message}],
+            }],
+        }}),
     }
 }
 
@@ -9696,6 +9908,21 @@ fn mfa_enrollment_finalize(
     let session = info
         .and_then(|i| i.get("sessionInfo"))
         .and_then(Value::as_str);
+    let display_name = str_field(body, "displayName")
+        .filter(|name| !name.is_empty())
+        .map(str::to_owned);
+    // Production checks the session, then the display name, then the code (sandbox recording
+    // 2026-09-24, auth-mfa/totp/enroll#finalize-missing-session and #finalize-missing-code);
+    // tenants keep their earlier rules (scope decision M2).
+    let production = store.second_factor_rules_are_production();
+    if production {
+        if session.is_none_or(|session| !store.has_enrollment_session(&uid, session)) {
+            return error(400, "INVALID_SESSION_INFO");
+        }
+        if display_name.is_none() {
+            return error(400, "MISSING_DISPLAY_NAME : display name cannot be empty");
+        }
+    }
     let code = parse_code(info.and_then(|i| i.get("verificationCode")));
     let (Some(session), Some(code)) = (session, code) else {
         return error(
@@ -9703,7 +9930,7 @@ fn mfa_enrollment_finalize(
             "INVALID_CODE : missing sessionInfo or verificationCode",
         );
     };
-    match store.finalize_totp_enrollment(&uid, session, code, at) {
+    match store.finalize_totp_enrollment_named(&uid, session, code, display_name, at) {
         Ok(factor) => {
             let assertion = SecondFactorAssertion {
                 sign_in_second_factor: "totp".to_owned(),
@@ -9711,7 +9938,15 @@ fn mfa_enrollment_finalize(
                 verified_at: at,
             };
             match issue_tokens(store, &uid, Some(&assertion), at) {
-                Ok(tokens) => token_only_response(&tokens, false),
+                Ok(tokens) => {
+                    let mut response = token_only_response(&tokens, false);
+                    // Production's TOTP answer names its factor kind (sandbox recording
+                    // 2026-09-24, auth-mfa/totp/enroll#finalize).
+                    if production {
+                        response.body["totpAuthInfo"] = json!({});
+                    }
+                    response
+                }
                 Err(r) => r,
             }
         }
@@ -9780,6 +10015,80 @@ fn mfa_sign_in_finalize(store: &mut AuthStore, body: &Value, at: LogicalInstant)
     }
 }
 
+/// Strict `mfaSignIn:finalize`: production's refusals and their order (sandbox recording
+/// 2026-09-24, auth-mfa/totp/sign-in, interactions): the request's shape first (`Request
+/// contains an invalid argument.`), then the pending credential (`INVALID_PENDING_TOKEN`, or
+/// `USER_NOT_FOUND` once its account is gone), then the factor (`INVALID_MFA_ENROLLMENT_ID`),
+/// then the code. The store keeps the pending credential after success and completes the
+/// sign-in of an account disabled after its first factor, as production does.
+fn mfa_sign_in_finalize_production(
+    store: &mut AuthStore,
+    body: &Value,
+    at: LogicalInstant,
+) -> JsonResponse {
+    let invalid = || error(400, "Request contains an invalid argument.");
+    let Some(pending) = str_field(body, "mfaPendingCredential").filter(|p| !p.is_empty()) else {
+        return invalid();
+    };
+    if let Some(phone) = body.get("phoneVerificationInfo").filter(|v| !v.is_null()) {
+        return finalize_phone_sign_in(store, pending, phone, at);
+    }
+    let Some(enrollment_id) = str_field(body, "mfaEnrollmentId").filter(|id| !id.is_empty()) else {
+        return invalid();
+    };
+    let Some(code) = parse_code(
+        body.get("totpVerificationInfo")
+            .and_then(|i| i.get("verificationCode")),
+    ) else {
+        return invalid();
+    };
+    let Some(pending_id) = PendingSignInId::parse(pending) else {
+        return error(400, "INVALID_PENDING_TOKEN");
+    };
+    let Some(uid) = store.pending_sign_in_user(&pending_id) else {
+        return error(
+            400,
+            if store.pending_sign_in_orphaned(&pending_id) {
+                "USER_NOT_FOUND"
+            } else {
+                "INVALID_PENDING_TOKEN"
+            },
+        );
+    };
+    if !store.user(&uid).is_some_and(|u| {
+        u.mfa
+            .totp_factors()
+            .iter()
+            .any(|f| f.mfa_enrollment_id == enrollment_id)
+    }) {
+        return error(400, "INVALID_MFA_ENROLLMENT_ID");
+    }
+    let first_factor = store.pending_sign_in_context(&pending_id).cloned();
+    match store.finalize_mfa_sign_in_for_factor(&uid, &pending_id, enrollment_id, code, at) {
+        Ok(assertion) => match issue_tokens_with_sign_in_attributes(
+            store,
+            &uid,
+            Some(&assertion),
+            at,
+            None,
+            first_factor
+                .as_ref()
+                .and_then(PendingSignInContext::sign_in_provider)
+                .map(provider_from_id),
+            first_factor
+                .as_ref()
+                .and_then(PendingSignInContext::sign_in_attributes),
+        ) {
+            Ok(tokens) => token_only_response(&tokens, false),
+            Err(r) => r,
+        },
+        // A code already used is a plain INVALID_CODE (auth-mfa/totp/sign-in
+        // #replayed-sign-in-code).
+        Err(MfaError::CodeAlreadyUsed) => error(400, "INVALID_CODE"),
+        Err(e) => mfa_error(&e),
+    }
+}
+
 fn refresh(
     store: &mut AuthStore,
     body: &Value,
@@ -9832,21 +10141,56 @@ fn mfa_info(store: &AuthStore, uid: &LocalId, redacted: bool) -> Vec<Value> {
     let Some(u) = store.user(uid) else {
         return Vec::new();
     };
-    let mut out: Vec<Value> = u
+    // Production writes a factor's time as a protobuf Timestamp and lists factors in the order
+    // they were enrolled, whatever their kind (sandbox recording 2026-09-24,
+    // auth-mfa/admin-factors#admin-lookup-m).
+    let strict = store.second_factor_rules_are_production();
+    let time = |at: LogicalInstant| {
+        if strict {
+            proto_timestamp(at)
+        } else {
+            LogicalInstant::to_rfc3339(at).unwrap_or_default()
+        }
+    };
+    let mut entries: Vec<(LogicalInstant, Value)> = u
         .mfa
         .totp_factors()
         .iter()
-        .map(|f| json!({"mfaEnrollmentId": f.mfa_enrollment_id, "displayName": f.display_name, "enrolledAt": LogicalInstant::to_rfc3339(f.enrolled_at).unwrap_or_default(), "totpInfo": {}}))
+        .map(|f| (f.enrolled_at, json!({"mfaEnrollmentId": f.mfa_enrollment_id, "displayName": f.display_name, "enrolledAt": time(f.enrolled_at), "totpInfo": {}})))
         .collect();
-    out.extend(u.mfa.phone_factors().iter().map(|f| {
+    entries.extend(u.mfa.phone_factors().iter().map(|f| {
         let phone = if redacted {
             obfuscate_phone_number(&f.phone_number)
         } else {
             f.phone_number.clone()
         };
-        json!({"mfaEnrollmentId": f.mfa_enrollment_id, "displayName": f.display_name, "enrolledAt": LogicalInstant::to_rfc3339(f.enrolled_at).unwrap_or_default(), "phoneInfo": phone})
+        (f.enrolled_at, json!({"mfaEnrollmentId": f.mfa_enrollment_id, "displayName": f.display_name, "enrolledAt": time(f.enrolled_at), "phoneInfo": phone}))
     }));
-    out
+    entries.sort_by_key(|(at, _)| *at);
+    entries.into_iter().map(|(_, entry)| entry).collect()
+}
+
+/// An instant as protobuf's JSON Timestamp: RFC 3339 with 0, 3, 6 or 9 fraction digits, the
+/// fewest that keep its precision.
+fn proto_timestamp(at: LogicalInstant) -> String {
+    let full = LogicalInstant::to_rfc3339(at).unwrap_or_default();
+    let Some(body) = full.strip_suffix('Z') else {
+        return full;
+    };
+    let (seconds, fraction) = body.split_once('.').unwrap_or((body, ""));
+    let mut fraction: String = fraction
+        .chars()
+        .chain(std::iter::repeat('0'))
+        .take(9)
+        .collect();
+    while !fraction.is_empty() && fraction.ends_with("000") {
+        fraction.truncate(fraction.len() - 3);
+    }
+    if fraction.is_empty() {
+        format!("{seconds}Z")
+    } else {
+        format!("{seconds}.{fraction}Z")
+    }
 }
 
 /// The action link of an email action (what the Emulator's console prints).
@@ -10169,6 +10513,19 @@ fn reset_password(
     if entry.request_type != OobRequestType::PasswordReset {
         return error(400, "INVALID_OOB_CODE");
     }
+    // The official `resetPassword` checks the new password before it spends the code and
+    // looks the address up; strict keeps the order observed so far (the lookup first).
+    let validate = |store: &AuthStore| {
+        store.validate_password_for(
+            fireemu_core_auth::password_policy::Operation::Reset,
+            new_password,
+        )
+    };
+    if !strict {
+        if let Err(e) = validate(store) {
+            return auth_error(&e);
+        }
+    }
     // The code names an address, and the account that owns it now is reset: production does
     // so (sandbox recordings 2026-09-24, password-reset#reset-e-after-email-change and
     // auth-action/address-reuse), and so does the official emulator's `resetPassword`. Nobody
@@ -10182,11 +10539,10 @@ fn reset_password(
             return error(400, "INVALID_OOB_CODE");
         }
     };
-    if let Err(e) = store.validate_password_for(
-        fireemu_core_auth::password_policy::Operation::Reset,
-        new_password,
-    ) {
-        return auth_error(&e);
+    if strict {
+        if let Err(e) = validate(store) {
+            return auth_error(&e);
+        }
     }
     if store.user(&uid).is_none_or(|u| u.disabled) {
         // Strict: the refusal spends the code (sandbox recording 2026-09-24,
@@ -11652,10 +12008,24 @@ fn finalize_phone_enrollment(
     {
         return refusal;
     }
-    store.consume_phone_code(session_info);
+    // Production accepts a test number's enrollment session again, and then refuses it as the
+    // number now enrolled (sandbox recording 2026-09-24, auth-mfa/sms#finalize-again).
+    let test_number = store
+        .sign_in_config()
+        .test_phone_numbers
+        .contains_key(&verified.phone_number);
+    if !(store.second_factor_rules_are_production() && test_number) {
+        store.consume_phone_code(session_info);
+    }
     let display_name = str_field(body, "displayName").map(str::to_owned);
     match store.enroll_phone_factor(uid, &verified.phone_number, display_name, at) {
         Ok(factor) => {
+            // Production ends the sessions before a phone enrollment (validSince moves;
+            // sandbox recording 2026-09-24, auth-mfa/sms#admin-lookup-s and
+            // lifetime#control-start-s450); a TOTP enrollment leaves them.
+            if store.second_factor_rules_are_production() {
+                let _ = store.revoke_tokens(uid, at);
+            }
             let assertion = SecondFactorAssertion {
                 sign_in_second_factor: "phone".to_owned(),
                 second_factor_identifier: factor.mfa_enrollment_id.clone(),
@@ -11693,8 +12063,102 @@ fn mfa_enrollment_withdraw(
     }
 }
 
+/// Strict `mfaEnrollment:withdraw` (sandbox recording 2026-09-24, auth-mfa/totp/withdraw and
+/// sms#withdraw-first-phone): a missing token is `INVALID_ID_TOKEN` and a missing factor id
+/// `MFA_ENROLLMENT_NOT_FOUND`; a withdrawal ends every session before it (`validSince`), and
+/// the new session keeps the second factor of the one that asked, unless that factor is the
+/// one withdrawn. The answer carries no `expiresIn`.
+fn mfa_enrollment_withdraw_production(
+    store: &mut AuthStore,
+    body: &Value,
+    at: LogicalInstant,
+) -> JsonResponse {
+    if str_field(body, "idToken").is_none_or(str::is_empty) {
+        return error(400, "INVALID_ID_TOKEN");
+    }
+    let uid = match verify_honouring_legacy(store, body, at) {
+        Ok(uid) => uid,
+        Err(r) => return r,
+    };
+    let Some(id) = str_field(body, "mfaEnrollmentId").filter(|id| !id.is_empty()) else {
+        return error(400, "MFA_ENROLLMENT_NOT_FOUND");
+    };
+    // The token was verified above; read its claims with the store's own signer.
+    let signer = store.signer_arc();
+    let kept = str_field(body, "idToken")
+        .and_then(|token| fireemu_core_auth::jwt::decode_token(token, signer.as_deref()).ok())
+        .and_then(|decoded| serde_json::from_str::<Value>(&decoded.payload_json).ok())
+        .and_then(|claims| {
+            let firebase = claims.get("firebase")?;
+            let factor = firebase.get("sign_in_second_factor")?.as_str()?;
+            let identifier = firebase.get("second_factor_identifier")?.as_str()?;
+            (identifier != id).then(|| SecondFactorAssertion {
+                sign_in_second_factor: factor.to_owned(),
+                second_factor_identifier: identifier.to_owned(),
+                verified_at: at,
+            })
+        });
+    match store.unenroll_factor(&uid, id) {
+        Ok(true) => {
+            let _ = store.revoke_tokens(&uid, at);
+            match issue_tokens(store, &uid, kept.as_ref(), at) {
+                Ok(tokens) => token_only_response(&tokens, false),
+                Err(r) => r,
+            }
+        }
+        Ok(false) => error(400, "MFA_ENROLLMENT_NOT_FOUND"),
+        Err(e) => mfa_error(&e),
+    }
+}
+
 /// `mfaSignIn:start`: sends the code of the chosen phone factor (TOTP has no start step).
-fn mfa_sign_in_start(store: &mut AuthStore, body: &Value, at: LogicalInstant) -> JsonResponse {
+fn mfa_sign_in_start(
+    store: &mut AuthStore,
+    body: &Value,
+    at: LogicalInstant,
+    strict: bool,
+) -> JsonResponse {
+    // Strict: production's answers (sandbox recording 2026-09-24, auth-mfa/totp/sign-in
+    // #start-totp and #start-totp-as-phone, sms#sign-in-start-without-info).
+    if strict {
+        let invalid = || error(400, "Request contains an invalid argument.");
+        let (Some(pending), Some(enrollment_id)) = (
+            str_field(body, "mfaPendingCredential").filter(|p| !p.is_empty()),
+            str_field(body, "mfaEnrollmentId").filter(|e| !e.is_empty()),
+        ) else {
+            return invalid();
+        };
+        if body.get("phoneSignInInfo").is_none_or(Value::is_null) {
+            return invalid();
+        }
+        let Some(pending_id) = PendingSignInId::parse(pending) else {
+            return error(400, "INVALID_PENDING_TOKEN");
+        };
+        let Some(uid) = store.pending_sign_in_user(&pending_id) else {
+            return error(
+                400,
+                if store.pending_sign_in_orphaned(&pending_id) {
+                    "USER_NOT_FOUND"
+                } else {
+                    "INVALID_PENDING_TOKEN"
+                },
+            );
+        };
+        if store.user(&uid).is_some_and(|u| {
+            u.mfa
+                .totp_factors()
+                .iter()
+                .any(|f| f.mfa_enrollment_id == enrollment_id)
+        }) {
+            return error(400, "INVALID_PHONE_NUMBER : Invalid format.");
+        }
+        if store.sms_pending_start_expired(&pending_id, at) {
+            return error(
+                400,
+                "INVALID_MFA_PENDING_CREDENTIAL : MFA pending credential is expired.",
+            );
+        }
+    }
     // The official order: both request fields first, then the credential, then the factor.
     let Some(pending) = str_field(body, "mfaPendingCredential").filter(|p| !p.is_empty()) else {
         return error(
@@ -11780,9 +12244,17 @@ fn finalize_phone_sign_in(
         return error(400, "INVALID_MFA_PENDING_CREDENTIAL");
     }
     let first_factor = store.pending_sign_in_context(&pending_id).cloned();
+    let test_number = store
+        .sign_in_config()
+        .test_phone_numbers
+        .contains_key(&verified.phone_number);
     match store.finalize_phone_mfa_sign_in(&uid, &pending_id, &enrollment_id, at) {
         Ok(assertion) => {
-            store.consume_phone_code(session);
+            // Production accepts a test number's session again (sandbox recording
+            // 2026-09-24, auth-mfa/sms#sign-in-finalize-again).
+            if !(store.second_factor_rules_are_production() && test_number) {
+                store.consume_phone_code(session);
+            }
             match issue_tokens_with_sign_in_attributes(
                 store,
                 &uid,

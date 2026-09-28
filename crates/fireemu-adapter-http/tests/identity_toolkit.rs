@@ -18,7 +18,7 @@ use fireemu_core_auth::totp::{totp_at, TotpParams};
 use fireemu_core_functions::manifest::BlockingAuthEvent;
 use fireemu_core_session::clock::VirtualClock;
 use fireemu_core_session::tenancy::Tenancy;
-use fireemu_core_types::determinism::SplitMix64;
+use fireemu_core_types::determinism::{Clock as _, SplitMix64};
 use fireemu_core_types::time::{LogicalDuration, LogicalInstant};
 use serde_json::{json, Value};
 
@@ -2403,7 +2403,7 @@ fn totp_enrollment_and_second_factor_sign_in_on_the_virtual_clock() {
     );
     assert_eq!(status, 200, "{start}");
     let info = &start["totpSessionInfo"];
-    assert_eq!(info["hashingAlgorithm"], "HMAC_SHA1");
+    assert_eq!(info["hashingAlgorithm"], "SHA1");
     assert_eq!(info["periodSec"], 30);
     assert_eq!(info["verificationCodeLength"], 6);
     let secret = base32::decode(info["sharedSecretKey"].as_str().unwrap()).unwrap();
@@ -2592,7 +2592,8 @@ fn expired_enrollment_session_and_disabled_user() {
         .as_str()
         .unwrap()
         .to_owned();
-    let late = advance(&s, 301);
+    // Production's lifetime is 900 s.
+    let late = advance(&s, 901);
     let code = totp_at(
         &secret,
         &TotpParams {
@@ -16678,6 +16679,48 @@ fn strict_the_action_page_treats_an_expired_code_as_gone() {
     );
 }
 
+// ---- AUTH-MFA: the project's `mfa` config (conformance/auth-mfa-production.json) ----
+
+/// The Admin config API reads back a new project's MFA as disabled, replaces it with a masked
+/// PATCH, and changes nothing on a refused value (sandbox exploration 2026-09-24).
+#[test]
+fn the_project_mfa_config_is_read_back_and_replaced_whole() {
+    for s in [strict_state(), state()] {
+        let read = |s: &AuthState| admin(s, "GET", PROJECT_CONFIG, &Value::Null).1["mfa"].clone();
+        assert_eq!(read(&s), json!({"state": "DISABLED"}));
+        let enabled = json!({
+            "state": "ENABLED",
+            "enabledProviders": ["PHONE_SMS"],
+            "providerConfigs": [{"state": "ENABLED", "totpProviderConfig": {"adjacentIntervals": 5}}],
+        });
+        let (status, body) = admin(
+            &s,
+            "PATCH",
+            &format!("{PROJECT_CONFIG}?updateMask=mfa"),
+            &json!({"mfa": enabled}),
+        );
+        assert_eq!(status, 200, "{body}");
+        assert_eq!(body["mfa"], enabled);
+        assert_eq!(read(&s), enabled);
+        let (status, _) = admin(
+            &s,
+            "PATCH",
+            &format!("{PROJECT_CONFIG}?updateMask=mfa"),
+            &json!({"mfa": {"state": "NOT_A_STATE"}}),
+        );
+        assert_eq!(status, 400);
+        assert_eq!(read(&s), enabled, "a refused value changes nothing");
+        let (status, body) = admin(
+            &s,
+            "PATCH",
+            &format!("{PROJECT_CONFIG}?updateMask=mfa"),
+            &json!({"mfa": {"state": "DISABLED"}}),
+        );
+        assert_eq!(status, 200, "{body}");
+        assert_eq!(read(&s), json!({"state": "DISABLED"}));
+    }
+}
+
 /// Strict: an email change applied from the emulator's action page follows the same rules as
 /// `accounts:update` with the code: earlier sessions are revoked, the replaced address is
 /// recorded as `initialEmail`, and the replaced address's verification codes are void. The
@@ -16749,6 +16792,65 @@ fn strict_the_action_page_applies_an_email_change_like_the_api() {
             strict,
             "{label}: the replaced address's verification code is void"
         );
+    }
+}
+
+fn set_project_mfa(s: &AuthState, mfa: &Value) {
+    let (status, body) = admin(
+        s,
+        "PATCH",
+        &format!("{PROJECT_CONFIG}?updateMask=mfa"),
+        &json!({ "mfa": mfa }),
+    );
+    assert_eq!(status, 200, "{body}");
+}
+
+/// A verified password account's ID token.
+fn verified_session(s: &AuthState, email: &str) -> String {
+    create(
+        s,
+        &json!({"email": email, "password": "password123", "emailVerified": true}),
+    );
+    let (status, body) = post(
+        s,
+        &format!("{V1}/accounts:signInWithPassword"),
+        &json!({"email": email, "password": "password123", "returnSecureToken": true}),
+    );
+    assert_eq!(status, 200, "{body}");
+    body["idToken"].as_str().unwrap().to_owned()
+}
+
+/// The project's `mfa` config enables TOTP enrollment without the `auth.totp` extension, in
+/// either profile (the emulator profile accepts more than the official emulator here, a
+/// fireemu-only extension; it refuses nothing new). Switched off again, it refuses as before.
+#[test]
+fn the_project_mfa_config_enables_totp_enrollment() {
+    for (strict, s) in [(true, strict_state()), (false, state())] {
+        assert!(!s.totp_extension_enabled);
+        let start = |token: &str| {
+            post(
+                &s,
+                &format!("{V2}/accounts/mfaEnrollment:start"),
+                &json!({"idToken": token, "totpEnrollmentInfo": {}}),
+            )
+        };
+        let token = verified_session(&s, "totp@example.com");
+        let (status, _) = start(&token);
+        assert_eq!(status, 400, "strict={strict}: TOTP is off by default");
+        set_project_mfa(
+            &s,
+            &json!({"state": "ENABLED", "providerConfigs": [{"state": "ENABLED", "totpProviderConfig": {"adjacentIntervals": 5}}]}),
+        );
+        let (status, body) = start(&token);
+        assert_eq!(status, 200, "strict={strict} {body}");
+        assert!(
+            body["totpSessionInfo"]["sharedSecretKey"].is_string(),
+            "{body}"
+        );
+        set_project_mfa(&s, &json!({"state": "DISABLED"}));
+        let other = verified_session(&s, "totp-off@example.com");
+        let (status, _) = start(&other);
+        assert_eq!(status, 400, "strict={strict}: switched off again");
     }
 }
 
@@ -16919,4 +17021,1543 @@ fn a_code_acts_on_the_account_that_owns_its_address_now() {
             "{label}"
         );
     }
+}
+
+/// Emulator profile, as the official `resetPassword` and `setAccountInfo` do: a code whose
+/// address nobody owns is spent with `INVALID_OOB_CODE`, and a reset checks the new password's
+/// length before anything else, keeping the code (confirmation review 2026-09-25, S1 and S2).
+#[test]
+fn the_emulator_profile_spends_an_unowned_code_after_checking_the_password() {
+    let s = state();
+    let (_, _, reset_gone, verify_gone) = codes_whose_addresses_moved(&s);
+    let (status, body) = post(
+        &s,
+        &format!("{V1}/accounts:resetPassword"),
+        &json!({"oobCode": reset_gone, "newPassword": "12345"}),
+    );
+    assert_eq!(status, 400, "{body}");
+    assert!(
+        message(&body).is_some_and(|m| m.starts_with("WEAK_PASSWORD")),
+        "{body}"
+    );
+    assert!(
+        s.store.lock().unwrap().oob_code(&reset_gone).is_some(),
+        "kept"
+    );
+    for (path, body) in [
+        (
+            "accounts:resetPassword",
+            json!({"oobCode": reset_gone, "newPassword": "password456"}),
+        ),
+        ("accounts:update", json!({"oobCode": verify_gone})),
+    ] {
+        let (status, answer) = post(&s, &format!("{V1}/{path}"), &body);
+        assert_eq!((status, message(&answer)), (400, Some("INVALID_OOB_CODE")));
+    }
+    let store = s.store.lock().unwrap();
+    assert!(
+        store.oob_code(&reset_gone).is_none(),
+        "the reset code is spent"
+    );
+    assert!(
+        store.oob_code(&verify_gone).is_none(),
+        "the verification code is spent"
+    );
+}
+
+/// Strict: with the project's MFA switched off, a phone enrollment is refused and an account
+/// that holds a factor (written by the Admin API) signs in without a second factor (sandbox
+/// recording 2026-09-24, `auth-mfa/disabled`). The emulator profile keeps the official
+/// emulator's answers: it enrolls phones and always asks for the second factor.
+#[test]
+fn a_project_with_mfa_off_asks_for_no_second_factor_in_strict() {
+    for strict in [true, false] {
+        let s = if strict { strict_state() } else { state() };
+        let token = verified_session(&s, "off@example.com");
+        let (status, body) = post(
+            &s,
+            &format!("{V2}/accounts/mfaEnrollment:start"),
+            &json!({"idToken": token, "phoneEnrollmentInfo": {"phoneNumber": "+16505550101"}}),
+        );
+        if strict {
+            assert_eq!(
+                (status, message(&body)),
+                (
+                    400,
+                    Some("OPERATION_NOT_ALLOWED : SMS based MFA not enabled.")
+                )
+            );
+        } else {
+            assert_eq!(status, 200, "{body}");
+        }
+        let (_, user) = post(
+            &s,
+            &format!("{V1}/accounts:lookup"),
+            &json!({"idToken": token}),
+        );
+        let uid = user["users"][0]["localId"].clone();
+        let (status, _) = admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}/accounts:update"),
+            &json!({"localId": uid, "mfa": {"enrollments": [{"phoneInfo": "+16505550102", "displayName": "Admin"}]}}),
+        );
+        assert_eq!(status, 200);
+        let (status, body) = post(
+            &s,
+            &format!("{V1}/accounts:signInWithPassword"),
+            &json!({"email": "off@example.com", "password": "password123", "returnSecureToken": true}),
+        );
+        assert_eq!(status, 200, "{body}");
+        assert_eq!(
+            body["idToken"].is_string(),
+            strict,
+            "strict={strict} {body}"
+        );
+        assert_eq!(body["mfaPendingCredential"].is_string(), !strict, "{body}");
+    }
+}
+
+/// Strict: the answer that asks for a second factor has production's members: a password
+/// sign-in keeps `displayName` and `registered` (sandbox recording 2026-09-24,
+/// `auth-mfa/totp/sign-in#pending-1`).
+#[test]
+fn strict_the_pending_answer_has_production_members() {
+    let s = strict_state();
+    set_project_mfa(
+        &s,
+        &json!({"state": "ENABLED", "enabledProviders": ["PHONE_SMS"]}),
+    );
+    let token = verified_session(&s, "pending@example.com");
+    let (status, started) = post(
+        &s,
+        &format!("{V2}/accounts/mfaEnrollment:start"),
+        &json!({"idToken": token, "phoneEnrollmentInfo": {"phoneNumber": "+16505550101"}}),
+    );
+    assert_eq!(status, 200, "{started}");
+    let (status, body) = post(
+        &s,
+        &format!("{V2}/accounts/mfaEnrollment:finalize"),
+        &json!({"idToken": token, "displayName": "Phone", "phoneVerificationInfo": {"sessionInfo": started["phoneSessionInfo"]["sessionInfo"], "code": phone_code(&s)}}),
+    );
+    assert_eq!(status, 200, "{body}");
+    let (status, body) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithPassword"),
+        &json!({"email": "pending@example.com", "password": "password123", "returnSecureToken": true}),
+    );
+    assert_eq!(status, 200, "{body}");
+    let mut members: Vec<&str> = body
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    members.sort_unstable();
+    assert_eq!(
+        members,
+        [
+            "displayName",
+            "email",
+            "kind",
+            "localId",
+            "mfaInfo",
+            "mfaPendingCredential",
+            "registered"
+        ]
+    );
+    assert_eq!(body["displayName"], "");
+}
+
+/// The code of the newest outstanding phone verification.
+fn phone_code(s: &AuthState) -> String {
+    s.store
+        .lock()
+        .unwrap()
+        .verification_codes()
+        .last()
+        .expect("a code was sent")
+        .code
+        .clone()
+}
+
+// ---- AUTH-MFA strict: TOTP enrollment (sandbox recording 2026-09-24, auth-mfa/totp/enroll) ----
+
+const MFA_ON: &str = r#"{"state": "ENABLED", "enabledProviders": ["PHONE_SMS"], "providerConfigs": [{"state": "ENABLED", "totpProviderConfig": {"adjacentIntervals": 5}}]}"#;
+
+fn strict_mfa_state() -> AuthState {
+    let s = strict_state();
+    set_project_mfa(&s, &serde_json::from_str(MFA_ON).unwrap());
+    s
+}
+
+fn start_totp(s: &AuthState, token: &str) -> Value {
+    let (status, body) = post(
+        s,
+        &format!("{V2}/accounts/mfaEnrollment:start"),
+        &json!({"idToken": token, "totpEnrollmentInfo": {}}),
+    );
+    assert_eq!(status, 200, "{body}");
+    body
+}
+
+/// The code of an enrollment start's secret at the store's clock, `offset` steps away.
+fn totp_code_of(s: &AuthState, started: &Value, offset: i64) -> String {
+    let secret = base32::decode(
+        started["totpSessionInfo"]["sharedSecretKey"]
+            .as_str()
+            .unwrap(),
+    )
+    .unwrap();
+    let now = s.clock.lock().unwrap().now();
+    let at = now
+        .checked_add(LogicalDuration::from_seconds(30 * offset))
+        .unwrap();
+    let params = TotpParams {
+        period_seconds: 30,
+        digits: 6,
+    };
+    format!("{:06}", totp_at(&secret, &params, at))
+}
+
+fn finalize_totp(
+    s: &AuthState,
+    token: &str,
+    started: &Value,
+    code: &str,
+    name: Option<&str>,
+) -> (u16, Value) {
+    let mut body = json!({"idToken": token, "totpVerificationInfo": {"sessionInfo": started["totpSessionInfo"]["sessionInfo"], "verificationCode": code}});
+    if let Some(name) = name {
+        body["displayName"] = json!(name);
+    }
+    post(s, &format!("{V2}/accounts/mfaEnrollment:finalize"), &body)
+}
+
+fn v2_refusal(body: &Value) -> (&str, bool) {
+    (
+        body["error"]["message"].as_str().unwrap_or_default(),
+        body["error"].get("errors").is_none() && body["error"]["status"] == "INVALID_ARGUMENT",
+    )
+}
+
+#[test]
+fn strict_totp_enrollment_answers_as_production() {
+    let s = strict_mfa_state();
+    // Production's clock has a fraction; microsecond precision shows as six digits.
+    s.clock
+        .lock()
+        .unwrap()
+        .advance(LogicalDuration::from_nanos(123_456_789))
+        .unwrap();
+    let token = verified_session(&s, "enroll@example.com");
+    let (status, body) = post(
+        &s,
+        &format!("{V2}/accounts/mfaEnrollment:start"),
+        &json!({"idToken": token}),
+    );
+    assert_eq!(
+        (status, v2_refusal(&body)),
+        (400, ("Request contains an invalid argument.", true))
+    );
+    let (status, body) = post(
+        &s,
+        &format!("{V2}/accounts/mfaEnrollment:start"),
+        &json!({"idToken": token, "totpEnrollmentInfo": {}, "phoneEnrollmentInfo": {"phoneNumber": "+16505550101"}}),
+    );
+    assert_eq!(status, 400);
+    assert_eq!(
+        body["error"]["message"],
+        "Invalid value (oneof), oneof field 'enrollment_info' is already set. Cannot set 'phoneEnrollmentInfo'"
+    );
+    assert_eq!(
+        body["error"]["details"][0]["@type"],
+        "type.googleapis.com/google.rpc.BadRequest"
+    );
+    let started = start_totp(&s, &token);
+    let info = &started["totpSessionInfo"];
+    assert_eq!(info["hashingAlgorithm"], "SHA1");
+    let deadline = info["finalizeEnrollmentTime"].as_str().unwrap();
+    let fraction = deadline.rsplit('.').next().unwrap().trim_end_matches('Z');
+    assert_eq!(fraction.len(), 6, "{deadline}");
+    let now = s.clock.lock().unwrap().now();
+    let expected = now.checked_add(LogicalDuration::from_seconds(900)).unwrap();
+    assert_eq!(
+        &deadline[..19],
+        &LogicalInstant::to_rfc3339(expected).unwrap()[..19]
+    );
+}
+
+#[test]
+fn strict_totp_enrollment_finalize_answers_as_production() {
+    let s = strict_mfa_state();
+    s.clock
+        .lock()
+        .unwrap()
+        .advance(LogicalDuration::from_nanos(123_456_789))
+        .unwrap();
+    let token = verified_session(&s, "finalize@example.com");
+    let started = start_totp(&s, &token);
+    // The session first, then the display name, then the code.
+    let (status, body) = post(
+        &s,
+        &format!("{V2}/accounts/mfaEnrollment:finalize"),
+        &json!({"idToken": token, "totpVerificationInfo": {"verificationCode": "123456"}}),
+    );
+    assert_eq!(
+        (status, v2_refusal(&body)),
+        (400, ("INVALID_SESSION_INFO", true))
+    );
+    let good = totp_code_of(&s, &started, 0);
+    let (status, body) = finalize_totp(&s, &token, &started, &good, None);
+    assert_eq!(
+        (status, v2_refusal(&body)),
+        (
+            400,
+            ("MISSING_DISPLAY_NAME : display name cannot be empty", true)
+        )
+    );
+    let (status, body) = finalize_totp(&s, &token, &started, &good, Some("Authenticator"));
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["totpAuthInfo"], json!({}));
+    let mut members: Vec<&str> = body
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    members.sort_unstable();
+    assert_eq!(members, ["idToken", "refreshToken", "totpAuthInfo"]);
+    // A refused display name is not an attempt (production accepted the code after it and
+    // two wrong ones); the finalized session offered again is complete.
+    let again = totp_code_of(&s, &started, 1);
+    let fresh = body["idToken"].as_str().unwrap().to_owned();
+    let (status, body) = finalize_totp(&s, &fresh, &started, &again, Some("A"));
+    assert_eq!(
+        (status, v2_refusal(&body)),
+        (
+            400,
+            (
+                "MFA_ENROLLMENT_ALREADY_COMPLETE : This MFA enrollment has already been completed.",
+                true
+            )
+        )
+    );
+    let (_, user) = post(
+        &s,
+        &format!("{V1}/accounts:lookup"),
+        &json!({"idToken": token}),
+    );
+    let factor = &user["users"][0]["mfaInfo"][0];
+    assert_eq!(factor["displayName"], "Authenticator");
+    let enrolled = factor["enrolledAt"].as_str().unwrap();
+    assert_eq!(
+        enrolled
+            .rsplit('.')
+            .next()
+            .unwrap()
+            .trim_end_matches('Z')
+            .len(),
+        6,
+        "{enrolled}"
+    );
+    assert_eq!(factor["mfaEnrollmentId"].as_str().unwrap().len(), 36);
+    let (status, body) = post(
+        &s,
+        &format!("{V2}/accounts/mfaEnrollment:start"),
+        &json!({"idToken": token, "totpEnrollmentInfo": {}}),
+    );
+    assert_eq!(
+        (status, v2_refusal(&body)),
+        (400, ("SECOND_FACTOR_LIMIT_EXCEEDED : Too many TOTP based second factors enrolled for this account.", true))
+    );
+}
+
+#[test]
+fn strict_an_enrollment_session_used_three_times_must_be_restarted() {
+    let s = strict_mfa_state();
+    let token = verified_session(&s, "attempts@example.com");
+    let started = start_totp(&s, &token);
+    for _ in 0..2 {
+        let (status, body) = finalize_totp(&s, &token, &started, "000000", Some("A"));
+        assert_eq!(
+            (status, v2_refusal(&body)),
+            (400, ("INVALID_CODE", true)),
+            "{body}"
+        );
+    }
+    let (status, body) = finalize_totp(
+        &s,
+        &token,
+        &started,
+        &totp_code_of(&s, &started, 0),
+        Some("A"),
+    );
+    assert_eq!(status, 200, "{body}");
+    let (status, body) = finalize_totp(
+        &s,
+        &token,
+        &started,
+        &totp_code_of(&s, &started, 1),
+        Some("A"),
+    );
+    assert_eq!(
+        (status, v2_refusal(&body)),
+        (
+            400,
+            ("TOO_MANY_ENROLLMENT_ATTEMPTS : restart enrollment", true)
+        )
+    );
+}
+
+#[test]
+fn strict_a_phone_start_beyond_five_factors_is_refused() {
+    let s = strict_mfa_state();
+    let token = verified_session(&s, "limit@example.com");
+    let (_, user) = post(
+        &s,
+        &format!("{V1}/accounts:lookup"),
+        &json!({"idToken": token}),
+    );
+    let enrollments: Vec<Value> = (1..=5)
+        .map(|n| json!({"phoneInfo": format!("+1650555010{n}"), "displayName": format!("Phone {n}")}))
+        .collect();
+    let (status, _) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:update"),
+        &json!({"localId": user["users"][0]["localId"], "mfa": {"enrollments": enrollments}}),
+    );
+    assert_eq!(status, 200);
+    let (status, body) = post(
+        &s,
+        &format!("{V2}/accounts/mfaEnrollment:start"),
+        &json!({"idToken": token, "phoneEnrollmentInfo": {"phoneNumber": "+16505550106"}}),
+    );
+    assert_eq!(
+        (status, v2_refusal(&body)),
+        (
+            400,
+            (
+                "SECOND_FACTOR_LIMIT_EXCEEDED : Too many second factors enrolled for this account.",
+                true
+            )
+        )
+    );
+}
+
+// ---- AUTH-MFA strict: second-factor sign-in (auth-mfa/totp/sign-in, sms, interactions) ----
+
+/// A verified account with one TOTP factor; answers `(started, first-factor token, uid)`.
+fn totp_enrolled(s: &AuthState, email: &str) -> (Value, String, Value) {
+    let token = verified_session(s, email);
+    let started = start_totp(s, &token);
+    let (status, body) = finalize_totp(
+        s,
+        &token,
+        &started,
+        &totp_code_of(s, &started, 0),
+        Some("Authenticator"),
+    );
+    assert_eq!(status, 200, "{body}");
+    let (_, user) = post(
+        s,
+        &format!("{V1}/accounts:lookup"),
+        &json!({"idToken": token}),
+    );
+    (started, token, user["users"][0]["localId"].clone())
+}
+
+fn pending_of(s: &AuthState, email: &str) -> Value {
+    let (status, body) = post(
+        s,
+        &format!("{V1}/accounts:signInWithPassword"),
+        &json!({"email": email, "password": "password123", "returnSecureToken": true}),
+    );
+    assert_eq!(status, 200, "{body}");
+    assert!(body["mfaPendingCredential"].is_string(), "{body}");
+    body
+}
+
+fn totp_sign_in(s: &AuthState, pending: &Value, enrollment: &Value, code: &str) -> (u16, Value) {
+    post(
+        s,
+        &format!("{V2}/accounts/mfaSignIn:finalize"),
+        &json!({"mfaPendingCredential": pending["mfaPendingCredential"], "mfaEnrollmentId": enrollment, "totpVerificationInfo": {"verificationCode": code}}),
+    )
+}
+
+#[test]
+fn strict_totp_sign_in_answers_as_production() {
+    let s = strict_mfa_state();
+    let (started, _, _) = totp_enrolled(&s, "sign@example.com");
+    let pending = pending_of(&s, "sign@example.com");
+    let factor = pending["mfaInfo"][0]["mfaEnrollmentId"].clone();
+    let invalid = ("Request contains an invalid argument.", true);
+    let start = |extra: Value| {
+        let mut body = json!({"mfaPendingCredential": pending["mfaPendingCredential"], "mfaEnrollmentId": factor});
+        for (k, v) in extra.as_object().unwrap() {
+            body[k] = v.clone();
+        }
+        post(&s, &format!("{V2}/accounts/mfaSignIn:start"), &body)
+    };
+    let (status, body) = start(json!({}));
+    assert_eq!((status, v2_refusal(&body)), (400, invalid));
+    let (status, body) = start(json!({"phoneSignInInfo": {}}));
+    assert_eq!(
+        (status, v2_refusal(&body)),
+        (400, ("INVALID_PHONE_NUMBER : Invalid format.", true))
+    );
+    let finalize = |body: Value| post(&s, &format!("{V2}/accounts/mfaSignIn:finalize"), &body);
+    let code = totp_code_of(&s, &started, 1);
+    let (status, body) = finalize(
+        json!({"mfaEnrollmentId": factor, "totpVerificationInfo": {"verificationCode": code}}),
+    );
+    assert_eq!((status, v2_refusal(&body)), (400, invalid));
+    let (status, body) = finalize(
+        json!({"mfaPendingCredential": "not-a-pending-credential", "mfaEnrollmentId": factor, "totpVerificationInfo": {"verificationCode": code}}),
+    );
+    assert_eq!(
+        (status, v2_refusal(&body)),
+        (400, ("INVALID_PENDING_TOKEN", true))
+    );
+    let (status, body) = finalize(
+        json!({"mfaPendingCredential": pending["mfaPendingCredential"], "mfaEnrollmentId": factor, "totpVerificationInfo": {}}),
+    );
+    assert_eq!((status, v2_refusal(&body)), (400, invalid));
+    let (status, body) = finalize(
+        json!({"mfaPendingCredential": pending["mfaPendingCredential"], "totpVerificationInfo": {"verificationCode": code}}),
+    );
+    assert_eq!((status, v2_refusal(&body)), (400, invalid));
+    let (status, body) = totp_sign_in(&s, &pending, &json!("not-an-enrollment"), &code);
+    assert_eq!(
+        (status, v2_refusal(&body)),
+        (400, ("INVALID_MFA_ENROLLMENT_ID", true))
+    );
+    let (status, body) = totp_sign_in(&s, &pending, &factor, &code);
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body.as_object().unwrap().len(), 2, "{body}");
+    // The pending credential stays usable after it succeeded; a code already used is refused.
+    let (status, body) = totp_sign_in(&s, &pending, &factor, &code);
+    assert_eq!((status, v2_refusal(&body)), (400, ("INVALID_CODE", true)));
+    let (status, body) = totp_sign_in(&s, &pending, &factor, &totp_code_of(&s, &started, 2));
+    assert_eq!(status, 200, "{body}");
+}
+
+#[test]
+fn strict_a_pending_credential_across_account_changes() {
+    let s = strict_mfa_state();
+    // Disabled after the first factor: production still completes the sign-in.
+    let (started, _, uid) = totp_enrolled(&s, "disabled@example.com");
+    let pending = pending_of(&s, "disabled@example.com");
+    let factor = pending["mfaInfo"][0]["mfaEnrollmentId"].clone();
+    let update = |fields: Value| {
+        let mut body = json!({"localId": uid});
+        for (k, v) in fields.as_object().unwrap() {
+            body[k] = v.clone();
+        }
+        assert_eq!(
+            admin(&s, "POST", &format!("{ADMIN}/accounts:update"), &body).0,
+            200
+        );
+    };
+    update(json!({"disableUser": true}));
+    let (status, body) = totp_sign_in(&s, &pending, &factor, &totp_code_of(&s, &started, 1));
+    assert_eq!(status, 200, "{body}");
+    update(json!({"disableUser": false}));
+    // Its factors cleared: the factor is no longer the account's.
+    let pending = pending_of(&s, "disabled@example.com");
+    update(json!({"mfa": {}}));
+    let (status, body) = totp_sign_in(&s, &pending, &factor, &totp_code_of(&s, &started, 2));
+    assert_eq!(
+        (status, v2_refusal(&body)),
+        (400, ("INVALID_MFA_ENROLLMENT_ID", true))
+    );
+    // Deleted: the pending credential names an account that is gone.
+    let (started, _, uid) = totp_enrolled(&s, "deleted@example.com");
+    let pending = pending_of(&s, "deleted@example.com");
+    let factor = pending["mfaInfo"][0]["mfaEnrollmentId"].clone();
+    assert_eq!(
+        admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}/accounts:delete"),
+            &json!({"localId": uid})
+        )
+        .0,
+        200
+    );
+    let (status, body) = totp_sign_in(&s, &pending, &factor, &totp_code_of(&s, &started, 1));
+    assert_eq!((status, v2_refusal(&body)), (400, ("USER_NOT_FOUND", true)));
+}
+
+#[test]
+fn strict_an_sms_sign_in_to_a_test_number_can_be_repeated() {
+    let s = strict_mfa_state();
+    let (status, body) = patch_sign_in(
+        &s,
+        "signIn.phoneNumber.testPhoneNumbers",
+        &json!({"signIn": {"phoneNumber": {"testPhoneNumbers": {"+16505550101": "123456"}}}}),
+    );
+    assert_eq!(status, 200, "{body}");
+    let token = verified_session(&s, "sms@example.com");
+    let (status, started) = post(
+        &s,
+        &format!("{V2}/accounts/mfaEnrollment:start"),
+        &json!({"idToken": token, "phoneEnrollmentInfo": {"phoneNumber": "+16505550101"}}),
+    );
+    assert_eq!(status, 200, "{started}");
+    let enroll = json!({"idToken": token, "displayName": "Phone", "phoneVerificationInfo": {"sessionInfo": started["phoneSessionInfo"]["sessionInfo"], "code": "123456"}});
+    let (status, body) = post(
+        &s,
+        &format!("{V2}/accounts/mfaEnrollment:finalize"),
+        &enroll,
+    );
+    assert_eq!(status, 200, "{body}");
+    // The enrollment session again: the number is enrolled now.
+    let fresh = body["idToken"].as_str().unwrap();
+    let mut again = enroll.clone();
+    again["idToken"] = json!(fresh);
+    let (status, body) = post(&s, &format!("{V2}/accounts/mfaEnrollment:finalize"), &again);
+    assert_eq!(
+        (status, v2_refusal(&body)),
+        (400, ("SECOND_FACTOR_EXISTS : Phone number already enrolled as second factor for this account.", true))
+    );
+    let pending = pending_of(&s, "sms@example.com");
+    let factor = pending["mfaInfo"][0]["mfaEnrollmentId"].clone();
+    let (status, body) = post(
+        &s,
+        &format!("{V2}/accounts/mfaSignIn:start"),
+        &json!({"mfaPendingCredential": pending["mfaPendingCredential"], "mfaEnrollmentId": factor}),
+    );
+    assert_eq!(
+        (status, v2_refusal(&body)),
+        (400, ("Request contains an invalid argument.", true))
+    );
+    let (status, sent) = post(
+        &s,
+        &format!("{V2}/accounts/mfaSignIn:start"),
+        &json!({"mfaPendingCredential": pending["mfaPendingCredential"], "mfaEnrollmentId": factor, "phoneSignInInfo": {}}),
+    );
+    assert_eq!(status, 200, "{sent}");
+    let finalize = json!({"mfaPendingCredential": pending["mfaPendingCredential"], "mfaEnrollmentId": factor, "phoneVerificationInfo": {"sessionInfo": sent["phoneResponseInfo"]["sessionInfo"], "code": "123456"}});
+    for attempt in 0..2 {
+        let (status, body) = post(&s, &format!("{V2}/accounts/mfaSignIn:finalize"), &finalize);
+        assert_eq!(status, 200, "attempt {attempt}: {body}");
+    }
+}
+
+// ---- AUTH-MFA strict: withdrawal and what it revokes (auth-mfa/totp/withdraw, sms) ----
+
+/// The `firebase` claims of a token, whatever signs it (the payload segment, unverified).
+fn second_factor_claims(token: &str) -> Value {
+    let payload = token.split('.').nth(1).unwrap();
+    let payload = fireemu_core_auth::jwt::base64url_decode(payload).unwrap();
+    serde_json::from_slice::<Value>(&payload).unwrap()["firebase"].clone()
+}
+
+/// Under RS256 (session-rsa, as `fireemu` runs strict) too: the kept factor is read from the
+/// signed token (sandbox recording, `auth-mfa/sms#withdraw-first-phone`).
+#[test]
+fn strict_a_withdrawal_revokes_earlier_sessions_and_keeps_the_other_factor() {
+    let s = strict_mfa_state();
+    s.store
+        .lock()
+        .unwrap()
+        .set_signer(RsaSigner::from_seed(45).unwrap());
+    let (status, body) = patch_sign_in(
+        &s,
+        "signIn.phoneNumber.testPhoneNumbers",
+        &json!({"signIn": {"phoneNumber": {"testPhoneNumbers": {"+16505550101": "123456", "+16505550102": "123456"}}}}),
+    );
+    assert_eq!(status, 200, "{body}");
+    let (started, first_factor_token, _) = totp_enrolled(&s, "withdraw@example.com");
+    let pending = pending_of(&s, "withdraw@example.com");
+    let totp_factor = pending["mfaInfo"][0]["mfaEnrollmentId"].clone();
+    let (status, signed) = totp_sign_in(&s, &pending, &totp_factor, &totp_code_of(&s, &started, 1));
+    assert_eq!(status, 200, "{signed}");
+    let session = signed["idToken"].as_str().unwrap().to_owned();
+    let withdraw = |body: Value| post(&s, &format!("{V2}/accounts/mfaEnrollment:withdraw"), &body);
+    let (status, body) = withdraw(json!({"mfaEnrollmentId": totp_factor}));
+    assert_eq!(
+        (status, v2_refusal(&body)),
+        (400, ("INVALID_ID_TOKEN", true))
+    );
+    let (status, body) = withdraw(json!({"idToken": session}));
+    assert_eq!(
+        (status, v2_refusal(&body)),
+        (400, ("MFA_ENROLLMENT_NOT_FOUND", true))
+    );
+    // A phone factor next to the TOTP one; the session signed in with TOTP withdraws the phone.
+    let (status, phone) = post(
+        &s,
+        &format!("{V2}/accounts/mfaEnrollment:start"),
+        &json!({"idToken": session, "phoneEnrollmentInfo": {"phoneNumber": "+16505550102"}}),
+    );
+    assert_eq!(status, 200, "{phone}");
+    advance(&s, 2);
+    let (status, enrolled) = post(
+        &s,
+        &format!("{V2}/accounts/mfaEnrollment:finalize"),
+        &json!({"idToken": session, "displayName": "Phone", "phoneVerificationInfo": {"sessionInfo": phone["phoneSessionInfo"]["sessionInfo"], "code": "123456"}}),
+    );
+    assert_eq!(status, 200, "{enrolled}");
+    // A phone enrollment ends the sessions before it (production: validSince later).
+    let (status, body) = post(
+        &s,
+        &format!("{V1}/accounts:lookup"),
+        &json!({"idToken": session}),
+    );
+    assert_eq!((status, message(&body)), (400, Some("TOKEN_EXPIRED")));
+    let session = enrolled["idToken"].as_str().unwrap().to_owned();
+    let phone_factor = second_factor_claims(&session)["second_factor_identifier"].clone();
+    // The enrollment token names the phone; withdraw the TOTP factor with it.
+    advance(&s, 2);
+    let (status, body) = withdraw(json!({"idToken": session, "mfaEnrollmentId": totp_factor}));
+    assert_eq!(status, 200, "{body}");
+    let mut members: Vec<&str> = body
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    members.sort_unstable();
+    assert_eq!(members, ["idToken", "refreshToken"]);
+    let fresh = body["idToken"].as_str().unwrap();
+    assert_eq!(
+        second_factor_claims(fresh)["sign_in_second_factor"],
+        "phone"
+    );
+    assert_eq!(
+        second_factor_claims(fresh)["second_factor_identifier"],
+        phone_factor
+    );
+    for token in [&session, &first_factor_token] {
+        let (status, body) = post(
+            &s,
+            &format!("{V1}/accounts:lookup"),
+            &json!({"idToken": token}),
+        );
+        assert_eq!((status, message(&body)), (400, Some("TOKEN_EXPIRED")));
+    }
+    let (status, body) = post(
+        &s,
+        &format!("{V1}/accounts:lookup"),
+        &json!({"idToken": fresh}),
+    );
+    assert_eq!(status, 200, "{body}");
+    // Withdrawing the factor the session used leaves no second factor in the new token.
+    advance(&s, 2);
+    let (status, body) = withdraw(json!({"idToken": fresh, "mfaEnrollmentId": phone_factor}));
+    assert_eq!(status, 200, "{body}");
+    assert!(second_factor_claims(body["idToken"].as_str().unwrap())
+        .get("sign_in_second_factor")
+        .is_none());
+}
+
+// ---- AUTH-MFA strict: second factors imported by batchCreate (auth-mfa/admin-factors) ----
+
+fn import_factors(s: &AuthState) -> Value {
+    let (status, body) = admin(
+        s,
+        "POST",
+        &format!("{ADMIN}/accounts:batchCreate"),
+        &json!({"users": [
+            {"localId": "ia", "email": "ia@example.com", "emailVerified": true,
+             "mfaInfo": [{"phoneInfo": "+16505550101", "displayName": "Imported", "enrolledAt": "2020-01-02T03:04:05Z"}]},
+            {"localId": "ib", "email": "ib@example.com", "emailVerified": true,
+             "mfaInfo": [{"phoneInfo": "+16505550102", "displayName": "Imported with id", "mfaEnrollmentId": "imported-factor-1"}]},
+            {"localId": "it", "email": "it@example.com", "emailVerified": true,
+             "mfaInfo": [{"totpInfo": {}, "displayName": "Imported TOTP"}]},
+            {"localId": "iu", "email": "iu@example.com", "emailVerified": true,
+             "mfaInfo": [{"totpInfo": {"sharedSecretKey": "JBSWY3DPEHPK3PXP"}, "displayName": "Imported TOTP"}]},
+        ]}),
+    );
+    assert_eq!(status, 200, "{body}");
+    body
+}
+
+fn imported_factor(s: &AuthState, local_id: &str) -> Value {
+    let (status, body) = admin(
+        s,
+        "POST",
+        &format!("{ADMIN}/accounts:lookup"),
+        &json!({"localId": [local_id]}),
+    );
+    assert_eq!(status, 200, "{body}");
+    body["users"][0]["mfaInfo"][0].clone()
+}
+
+/// Production refuses every imported TOTP factor, names a factor without an id with a UUID and
+/// stamps one without a time with the import time in milliseconds (sandbox recording
+/// 2026-09-24, `#batch-create` and `#admin-lookup-imported`).
+#[test]
+fn strict_batch_create_imports_phone_factors_as_production_does() {
+    let s = strict_mfa_state();
+    s.clock
+        .lock()
+        .unwrap()
+        .advance(LogicalDuration::from_nanos(123_456_789))
+        .unwrap();
+    let body = import_factors(&s);
+    assert_eq!(
+        body["error"],
+        json!([
+            {"index": 2, "message": "Importing TOTP MFA is not supported."},
+            {"index": 3, "message": "Importing TOTP MFA is not supported."},
+        ])
+    );
+    let ia = imported_factor(&s, "ia");
+    let id = ia["mfaEnrollmentId"].as_str().unwrap();
+    assert_eq!((id.len(), &id[14..15]), (36, "4"), "a version-4 UUID: {id}");
+    assert_eq!(ia["enrolledAt"], "2020-01-02T03:04:05Z");
+    let ib = imported_factor(&s, "ib");
+    assert_eq!(ib["mfaEnrollmentId"], "imported-factor-1");
+    let at = ib["enrolledAt"].as_str().unwrap();
+    assert_eq!(at.rsplit('.').next(), Some("123Z"), "milliseconds: {at}");
+}
+
+/// The emulator profile keeps its ids, times and the TOTP export shape.
+#[test]
+fn emulator_batch_create_keeps_its_own_factor_import() {
+    let s = state();
+    let body = import_factors(&s);
+    assert_eq!(
+        body["error"],
+        json!([{"index": 2, "message": "Second factor not supported."}])
+    );
+    assert_eq!(imported_factor(&s, "ia")["mfaEnrollmentId"], "ia-mfa-0");
+    assert_eq!(imported_factor(&s, "iu")["mfaEnrollmentId"], "iu-mfa-0");
+}
+
+/// A phone enrollment moves `validSince` to its own second, so a session signed in that same
+/// second survives it and one from an earlier second does not; production answered a later
+/// start both ways by the timing alone (sandbox recordings 2026-09-24,
+/// `auth-mfa/lifetime#control-start-s600`).
+#[test]
+fn strict_a_phone_enrollment_revokes_only_sessions_from_earlier_seconds() {
+    for (gap, survives) in [(0, true), (1, false)] {
+        let s = strict_mfa_state();
+        let (status, body) = patch_sign_in(
+            &s,
+            "signIn.phoneNumber.testPhoneNumbers",
+            &json!({"signIn": {"phoneNumber": {"testPhoneNumbers": {"+16505550101": "123456"}}}}),
+        );
+        assert_eq!(status, 200, "{body}");
+        let session = verified_session(&s, "same-second@example.com");
+        let (status, started) = post(
+            &s,
+            &format!("{V2}/accounts/mfaEnrollment:start"),
+            &json!({"idToken": session, "phoneEnrollmentInfo": {"phoneNumber": "+16505550101"}}),
+        );
+        assert_eq!(status, 200, "{started}");
+        advance(&s, gap);
+        let (status, enrolled) = post(
+            &s,
+            &format!("{V2}/accounts/mfaEnrollment:finalize"),
+            &json!({"idToken": session, "phoneVerificationInfo": {"sessionInfo": started["phoneSessionInfo"]["sessionInfo"], "code": "123456"}}),
+        );
+        assert_eq!(status, 200, "{enrolled}");
+        let (status, body) = post(
+            &s,
+            &format!("{V2}/accounts/mfaEnrollment:start"),
+            &json!({"idToken": session, "phoneEnrollmentInfo": {"phoneNumber": "+16505550101"}}),
+        );
+        let expected = if survives {
+            "SECOND_FACTOR_EXISTS : Phone number already enrolled as second factor for this account."
+        } else {
+            "TOKEN_EXPIRED"
+        };
+        assert_eq!((status, message(&body)), (400, Some(expected)), "gap {gap}");
+    }
+}
+
+// ---- AUTH-MFA strict: short lifetimes (auth-mfa/lifetime, auth-mfa/lifetime-short) ----------
+
+/// A TOTP sign-in finalized `age` seconds after its pending credential was issued.
+fn totp_sign_in_aged(s: &AuthState, email: &str, age: i64) -> (u16, Value) {
+    let (started, _, _) = totp_enrolled(s, email);
+    advance(s, 60);
+    let pending = pending_of(s, email);
+    let factor = pending["mfaInfo"][0]["mfaEnrollmentId"].clone();
+    advance(s, age);
+    totp_sign_in(s, &pending, &factor, &totp_code_of(s, &started, 0))
+}
+
+/// Production accepted a TOTP pending credential 293 seconds old and refused one 303 seconds
+/// old with `TOTP_CHALLENGE_TIMEOUT`, both measured from send to send. Strict refuses from 302
+/// seconds, one second below the refusal to absorb the two requests' differing latencies; the
+/// ages below stay accepted.
+#[test]
+fn strict_a_totp_pending_credential_times_out_where_production_refused() {
+    for (age, refused) in [
+        (293, false),
+        (301, false),
+        (302, true),
+        (303, true),
+        (1_800, true),
+    ] {
+        let s = strict_mfa_state();
+        let (status, body) = totp_sign_in_aged(&s, "pending-age@example.com", age);
+        if refused {
+            assert_eq!(
+                (status, v2_refusal(&body)),
+                (
+                    400,
+                    (
+                        "TOTP_CHALLENGE_TIMEOUT : TOTP challenge timeout, provide first factor again.",
+                        true
+                    )
+                ),
+                "{age}"
+            );
+        } else {
+            assert_eq!(status, 200, "{age} {body}");
+        }
+    }
+    // The emulator profile keeps its hour.
+    let s = state_with_totp_extension();
+    let (status, body) = totp_sign_in_aged(&s, "pending-age@example.com", 1_800);
+    assert_eq!(status, 200, "{body}");
+}
+
+/// A TOTP enrollment started with a session signed in `age` seconds earlier.
+fn totp_start_aged(s: &AuthState, email: &str, age: i64) -> (u16, Value) {
+    let token = verified_session(s, email);
+    advance(s, age);
+    post(
+        s,
+        &format!("{V2}/accounts/mfaEnrollment:start"),
+        &json!({"idToken": token, "totpEnrollmentInfo": {}}),
+    )
+}
+
+/// Production started a TOTP enrollment with a sign-in 244 seconds old and refused one 333
+/// seconds old with `CREDENTIAL_TOO_OLD_LOGIN_AGAIN`. Strict refuses from the youngest refused
+/// age only. A phone enrollment's need for a recent sign-in is unobserved, so it is not asked.
+#[test]
+fn strict_a_totp_enrollment_needs_a_sign_in_as_recent_as_production_asked() {
+    for (age, refused) in [(244, false), (332, false), (333, true), (1_800, true)] {
+        let s = strict_mfa_state();
+        let (status, body) = totp_start_aged(&s, "recent@example.com", age);
+        if refused {
+            assert_eq!(
+                (status, v2_refusal(&body)),
+                (400, ("CREDENTIAL_TOO_OLD_LOGIN_AGAIN", true)),
+                "{age}"
+            );
+        } else {
+            assert_eq!(status, 200, "{age} {body}");
+        }
+    }
+    let s = strict_mfa_state();
+    let (status, body) = patch_sign_in(
+        &s,
+        "signIn.phoneNumber.testPhoneNumbers",
+        &json!({"signIn": {"phoneNumber": {"testPhoneNumbers": {"+16505550101": "123456"}}}}),
+    );
+    assert_eq!(status, 200, "{body}");
+    let token = verified_session(&s, "recent-phone@example.com");
+    advance(&s, 1_800);
+    let (status, body) = post(
+        &s,
+        &format!("{V2}/accounts/mfaEnrollment:start"),
+        &json!({"idToken": token, "phoneEnrollmentInfo": {"phoneNumber": "+16505550101"}}),
+    );
+    assert_eq!(status, 200, "{body}");
+    // The emulator profile asks for no recent sign-in.
+    let s = state_with_totp_extension();
+    let (status, body) = totp_start_aged(&s, "recent@example.com", 1_800);
+    assert_eq!(status, 200, "{body}");
+}
+
+// ---- AUTH-MFA strict: the per-user pending budget (safety review 2026-09-25, MF-2) ---------
+
+/// Production keeps a pending credential after it succeeds, but a user signing in again and
+/// again is never refused for it: a credential that succeeded makes room at the budget.
+#[test]
+fn strict_repeated_mfa_sign_ins_are_not_refused_by_the_pending_budget() {
+    let s = strict_mfa_state();
+    let (status, body) = patch_sign_in(
+        &s,
+        "signIn.phoneNumber.testPhoneNumbers",
+        &json!({"signIn": {"phoneNumber": {"testPhoneNumbers": {"+16505550101": "123456"}}}}),
+    );
+    assert_eq!(status, 200, "{body}");
+    create(
+        &s,
+        &json!({"email": "again@example.com", "password": "password123", "emailVerified": true,
+            "mfaInfo": [{"phoneInfo": "+16505550101"}]}),
+    );
+    let budget = fireemu_core_auth::mfa::MAX_PENDING_PER_USER;
+    for round in 0..budget + 8 {
+        let pending = pending_of(&s, "again@example.com");
+        let (status, started) = post(
+            &s,
+            &format!("{V2}/accounts/mfaSignIn:start"),
+            &json!({"mfaPendingCredential": pending["mfaPendingCredential"],
+                "mfaEnrollmentId": pending["mfaInfo"][0]["mfaEnrollmentId"], "phoneSignInInfo": {}}),
+        );
+        assert_eq!(status, 200, "round {round}: {started}");
+        let (status, signed_in) = post(
+            &s,
+            &format!("{V2}/accounts/mfaSignIn:finalize"),
+            &json!({"mfaPendingCredential": pending["mfaPendingCredential"],
+                "phoneVerificationInfo": {"sessionInfo": started["phoneResponseInfo"]["sessionInfo"], "code": "123456"}}),
+        );
+        assert_eq!(status, 200, "round {round}: {signed_in}");
+    }
+}
+
+/// Expired enrollment sessions, which production's rules keep for a day so a late finalize is
+/// `SESSION_EXPIRED`, make room at the budget; live ones still fill it.
+#[test]
+fn strict_expired_enrollment_sessions_do_not_hold_the_pending_budget() {
+    let s = strict_mfa_state();
+    let token = verified_session(&s, "sessions@example.com");
+    let budget = fireemu_core_auth::mfa::MAX_PENDING_PER_USER;
+    let start = |token: &str| {
+        post(
+            &s,
+            &format!("{V2}/accounts/mfaEnrollment:start"),
+            &json!({"idToken": token, "totpEnrollmentInfo": {}}),
+        )
+    };
+    for _ in 0..budget {
+        let (status, body) = start(&token);
+        assert_eq!(status, 200, "{body}");
+    }
+    let (status, body) = start(&token);
+    assert_eq!(status, 400, "live sessions fill the budget: {body}");
+    // At exactly its deadline a session is still live (it still finalizes), so none makes room.
+    advance(&s, 900);
+    let (status, signed_in) = password_sign_in(&s, "sessions@example.com", "password123");
+    assert_eq!(status, 200, "{signed_in}");
+    let (status, body) = start(signed_in["idToken"].as_str().unwrap());
+    assert_eq!(status, 400, "at the deadline: {body}");
+    advance(&s, 1);
+    let (status, signed_in) = password_sign_in(&s, "sessions@example.com", "password123");
+    assert_eq!(status, 200, "{signed_in}");
+    let (status, body) = start(signed_in["idToken"].as_str().unwrap());
+    assert_eq!(status, 200, "{body}");
+}
+
+/// An Admin factor entry with `phoneInfo` is a phone factor whatever else it carries, as the
+/// official emulator reads it (`getMfaEnrollmentsFromRequest` checks `phoneInfo` only).
+/// Production refused an entry with only `totpInfo`; one with both is unobserved, so neither
+/// profile refuses it (safety review 2026-09-25, SF-2).
+#[test]
+fn an_admin_factor_entry_with_phone_info_is_a_phone_factor_in_both_profiles() {
+    for s in [state(), strict_mfa_state()] {
+        let (status, created) = admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}/accounts"),
+            &json!({"email": "both@example.com", "emailVerified": true}),
+        );
+        assert_eq!(status, 200, "{created}");
+        let (status, body) = admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}/accounts:update"),
+            &json!({"localId": created["localId"], "mfa": {"enrollments": [
+                {"phoneInfo": "+16505550101", "totpInfo": {}, "displayName": "Both"}]}}),
+        );
+        assert_eq!(status, 200, "{body}");
+        let (status, body) = admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}/accounts:update"),
+            &json!({"localId": created["localId"], "mfa": {"enrollments": [
+                {"totpInfo": {}, "displayName": "TOTP only"}]}}),
+        );
+        assert_eq!(
+            (status, message(&body)),
+            (
+                400,
+                Some("UNSUPPORTED_SECOND_FACTOR : attempting to add a new TOTP enrollment")
+            )
+        );
+        let (_, found) = admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}/accounts:lookup"),
+            &json!({"localId": [created["localId"]]}),
+        );
+        assert_eq!(found["users"][0]["mfaInfo"][0]["phoneInfo"], "+16505550101");
+    }
+}
+
+// ---- AUTH-MFA strict: where the widened acceptance stops (safety review 2026-09-25, SF-3) ----
+
+/// Enrolls a phone factor on a non-test number and returns the account's email.
+fn real_number_phone_account(s: &AuthState, email: &str) -> (u16, Value) {
+    let token = verified_session(s, email);
+    let (status, started) = post(
+        s,
+        &format!("{V2}/accounts/mfaEnrollment:start"),
+        &json!({"idToken": token, "phoneEnrollmentInfo": {"phoneNumber": "+16505550199"}}),
+    );
+    assert_eq!(status, 200, "{started}");
+    let finalize = json!({"idToken": token, "phoneVerificationInfo": {
+        "sessionInfo": started["phoneSessionInfo"]["sessionInfo"], "code": phone_code(s)}});
+    let (status, enrolled) = post(
+        s,
+        &format!("{V2}/accounts/mfaEnrollment:finalize"),
+        &finalize,
+    );
+    assert_eq!(status, 200, "{enrolled}");
+    post(
+        s,
+        &format!("{V2}/accounts/mfaEnrollment:finalize"),
+        &finalize,
+    )
+}
+
+/// Only a configured test number's SMS session can be used again: a real number's enrollment
+/// and sign-in sessions are spent by their success (SF-3 a).
+#[test]
+fn strict_a_real_numbers_sms_session_is_single_use() {
+    let s = strict_mfa_state();
+    let (status, again) = real_number_phone_account(&s, "real@example.com");
+    assert_eq!(
+        (status, v2_refusal(&again).0),
+        (400, "INVALID_SESSION_INFO"),
+        "enrollment session again: {again}"
+    );
+    let pending = pending_of(&s, "real@example.com");
+    let (status, started) = post(
+        &s,
+        &format!("{V2}/accounts/mfaSignIn:start"),
+        &json!({"mfaPendingCredential": pending["mfaPendingCredential"],
+            "mfaEnrollmentId": pending["mfaInfo"][0]["mfaEnrollmentId"], "phoneSignInInfo": {}}),
+    );
+    assert_eq!(status, 200, "{started}");
+    let finalize = json!({"mfaPendingCredential": pending["mfaPendingCredential"],
+        "phoneVerificationInfo": {"sessionInfo": started["phoneResponseInfo"]["sessionInfo"], "code": phone_code(&s)}});
+    let (status, body) = post(&s, &format!("{V2}/accounts/mfaSignIn:finalize"), &finalize);
+    assert_eq!(status, 200, "{body}");
+    let (status, body) = post(&s, &format!("{V2}/accounts/mfaSignIn:finalize"), &finalize);
+    assert_eq!(status, 400, "sign-in session again: {body}");
+}
+
+/// The TOTP challenge timeout is TOTP's: a phone second factor completes a pending credential
+/// 303 and 453 seconds old (auth-mfa/lifetime-short#aged-pending-m300,
+/// auth-mfa/lifetime-sms#aged-pending-m450; SF-3 c). Its own limit is pinned by
+/// `strict_an_sms_pending_credential_expires_where_production_refused`.
+#[test]
+fn strict_an_sms_pending_credential_has_no_totp_challenge_timeout() {
+    for age in [303, 453] {
+        let s = strict_mfa_state();
+        let (status, _) = real_number_phone_account(&s, "sms-pending@example.com");
+        assert_eq!(status, 400);
+        let pending = pending_of(&s, "sms-pending@example.com");
+        advance(&s, age);
+        let (status, started) = post(
+            &s,
+            &format!("{V2}/accounts/mfaSignIn:start"),
+            &json!({"mfaPendingCredential": pending["mfaPendingCredential"],
+                "mfaEnrollmentId": pending["mfaInfo"][0]["mfaEnrollmentId"], "phoneSignInInfo": {}}),
+        );
+        assert_eq!(status, 200, "{age}: {started}");
+        let (status, body) = post(
+            &s,
+            &format!("{V2}/accounts/mfaSignIn:finalize"),
+            &json!({"mfaPendingCredential": pending["mfaPendingCredential"],
+                "phoneVerificationInfo": {"sessionInfo": started["phoneResponseInfo"]["sessionInfo"], "code": phone_code(&s)}}),
+        );
+        assert_eq!(status, 200, "{age}: {body}");
+    }
+}
+
+// ---- AUTH-MFA: mutation follow-ups (docs.local/mutation/auth-mfa/20260925) --------------------
+
+/// Without an update mask a non-null `mfa` member is part of the update and a null one is not.
+#[test]
+fn a_maskless_config_update_reads_a_non_null_mfa_member_only() {
+    let s = state();
+    let mfa: Value = serde_json::from_str(MFA_ON).unwrap();
+    let (status, body) = admin(&s, "PATCH", PROJECT_CONFIG, &json!({ "mfa": mfa }));
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["mfa"]["state"], "ENABLED", "{body}");
+    let (status, body) = admin(
+        &s,
+        "PATCH",
+        PROJECT_CONFIG,
+        &json!({"mfa": null, "signIn": {"allowDuplicateEmails": true}}),
+    );
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["mfa"]["state"], "ENABLED", "{body}");
+}
+
+/// Strict: the answer that asks for a second factor keeps a password sign-in's display name.
+#[test]
+fn strict_the_pending_answer_keeps_the_display_name() {
+    let s = strict_mfa_state();
+    create(
+        &s,
+        &json!({"email": "named@example.com", "password": "password123", "emailVerified": true,
+            "displayName": "Named", "mfaInfo": [{"phoneInfo": "+16505550101"}]}),
+    );
+    let pending = pending_of(&s, "named@example.com");
+    assert_eq!(pending["displayName"], "Named", "{pending}");
+    assert!(pending.get("isNewUser").is_none(), "{pending}");
+}
+
+/// Strict with a test-number phone factor on `email`.
+fn strict_phone_account(email: &str) -> AuthState {
+    let s = strict_mfa_state();
+    let (status, body) = patch_sign_in(
+        &s,
+        "signIn.phoneNumber.testPhoneNumbers",
+        &json!({"signIn": {"phoneNumber": {"testPhoneNumbers": {"+16505550101": "123456"}}}}),
+    );
+    assert_eq!(status, 200, "{body}");
+    create(
+        &s,
+        &json!({"email": email, "password": "password123", "emailVerified": true,
+            "mfaInfo": [{"phoneInfo": "+16505550101"}]}),
+    );
+    s
+}
+
+/// Completes a pending credential with the test number's code.
+fn complete_phone(s: &AuthState, pending: &Value) -> (u16, Value) {
+    let (status, started) = post(
+        s,
+        &format!("{V2}/accounts/mfaSignIn:start"),
+        &json!({"mfaPendingCredential": pending["mfaPendingCredential"],
+            "mfaEnrollmentId": pending["mfaInfo"][0]["mfaEnrollmentId"], "phoneSignInInfo": {}}),
+    );
+    if status != 200 {
+        return (status, started);
+    }
+    post(
+        s,
+        &format!("{V2}/accounts/mfaSignIn:finalize"),
+        &json!({"mfaPendingCredential": pending["mfaPendingCredential"],
+            "phoneVerificationInfo": {"sessionInfo": started["phoneResponseInfo"]["sessionInfo"], "code": "123456"}}),
+    )
+}
+
+/// Unfinished pending credentials still fill the budget: none is dropped to make room, the
+/// next first factor is refused and the oldest one still completes (safety confirmation
+/// review 2026-09-25, SF-2).
+#[test]
+fn strict_unfinished_pending_credentials_still_fill_the_budget() {
+    let s = strict_phone_account("unfinished@example.com");
+    let budget = fireemu_core_auth::mfa::MAX_PENDING_PER_USER;
+    let first = pending_of(&s, "unfinished@example.com");
+    for _ in 1..budget {
+        pending_of(&s, "unfinished@example.com");
+    }
+    let (status, body) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithPassword"),
+        &json!({"email": "unfinished@example.com", "password": "password123"}),
+    );
+    assert_eq!(status, 400, "{body}");
+    assert!(
+        message(&body).is_some_and(|m| m.starts_with("QUOTA_EXCEEDED")),
+        "{body}"
+    );
+    let (status, body) = complete_phone(&s, &first);
+    assert_eq!(status, 200, "{body}");
+}
+
+/// What a dropped entry answers (CHANGELOG): a completed pending credential dropped at the
+/// budget is `INVALID_PENDING_TOKEN`, and an expired enrollment session dropped at the budget
+/// is `INVALID_SESSION_INFO`.
+#[test]
+fn strict_entries_dropped_at_the_budget_answer_as_unknown() {
+    let s = strict_phone_account("dropped@example.com");
+    let budget = fireemu_core_auth::mfa::MAX_PENDING_PER_USER;
+    let completed = pending_of(&s, "dropped@example.com");
+    let (status, body) = complete_phone(&s, &completed);
+    assert_eq!(status, 200, "{body}");
+    for _ in 1..=budget {
+        pending_of(&s, "dropped@example.com");
+    }
+    let (status, body) = complete_phone(&s, &completed);
+    assert_eq!(status, 400, "{body}");
+    assert_eq!(v2_refusal(&body).0, "INVALID_PENDING_TOKEN", "{body}");
+
+    let s = strict_mfa_state();
+    let token = verified_session(&s, "dropped-session@example.com");
+    let start = |token: &str| {
+        post(
+            &s,
+            &format!("{V2}/accounts/mfaEnrollment:start"),
+            &json!({"idToken": token, "totpEnrollmentInfo": {}}),
+        )
+    };
+    let (status, oldest) = start(&token);
+    assert_eq!(status, 200, "{oldest}");
+    // The oldest session expires first, so it is the one dropped.
+    advance(&s, 1);
+    for _ in 1..budget {
+        assert_eq!(start(&token).0, 200);
+    }
+    advance(&s, 901);
+    let (status, signed_in) = password_sign_in(&s, "dropped-session@example.com", "password123");
+    assert_eq!(status, 200, "{signed_in}");
+    let fresh = signed_in["idToken"].as_str().unwrap();
+    assert_eq!(start(fresh).0, 200);
+    let (status, body) =
+        finalize_totp(&s, fresh, &oldest, &totp_code_of(&s, &oldest, 0), Some("A"));
+    assert_eq!(status, 400, "{body}");
+    assert_eq!(v2_refusal(&body).0, "INVALID_SESSION_INFO", "{body}");
+}
+
+/// The emulator profile spends a test number's enrollment session too, as the official
+/// emulator spends every session (mutation follow-up, docs.local/mutation/auth-mfa/20260925).
+#[test]
+fn emulator_a_test_numbers_enrollment_session_is_single_use() {
+    let s = state();
+    let (status, body) = patch_sign_in(
+        &s,
+        "signIn.phoneNumber.testPhoneNumbers",
+        &json!({"signIn": {"phoneNumber": {"testPhoneNumbers": {"+16505550101": "123456"}}}}),
+    );
+    assert_eq!(status, 200, "{body}");
+    let token = verified_session(&s, "emulator-test-number@example.com");
+    let (status, started) = post(
+        &s,
+        &format!("{V2}/accounts/mfaEnrollment:start"),
+        &json!({"idToken": token, "phoneEnrollmentInfo": {"phoneNumber": "+16505550101"}}),
+    );
+    assert_eq!(status, 200, "{started}");
+    let finalize = json!({"idToken": token, "phoneVerificationInfo": {
+        "sessionInfo": started["phoneSessionInfo"]["sessionInfo"], "code": "123456"}});
+    let (status, enrolled) = post(
+        &s,
+        &format!("{V2}/accounts/mfaEnrollment:finalize"),
+        &finalize,
+    );
+    assert_eq!(status, 200, "{enrolled}");
+    let (status, again) = post(
+        &s,
+        &format!("{V2}/accounts/mfaEnrollment:finalize"),
+        &finalize,
+    );
+    assert_eq!(status, 400, "{again}");
+    assert!(
+        message(&again).is_some_and(|m| m.starts_with("INVALID_SESSION_INFO")),
+        "{again}"
+    );
+}
+
+/// A masked `mfa` update without a value resets the project's multi-factor config to its
+/// default, as a field mask clears a field the request leaves out (mutation follow-up,
+/// docs.local/mutation/auth-mfa/20260925).
+#[test]
+fn a_masked_mfa_update_without_a_value_resets_the_config() {
+    for body in [json!({"mfa": null}), json!({})] {
+        let s = strict_mfa_state();
+        let (status, body) = admin(
+            &s,
+            "PATCH",
+            &format!("{PROJECT_CONFIG}?updateMask=mfa"),
+            &body,
+        );
+        assert_eq!(status, 200, "{body}");
+        assert_eq!(body["mfa"], json!({"state": "DISABLED"}), "{body}");
+    }
+}
+
+/// Strict checks the session before the display name: an unknown session without a display
+/// name is `INVALID_SESSION_INFO` (auth-mfa/totp/enroll#finalize-missing-session; mutation
+/// follow-up, docs.local/mutation/auth-mfa/20260925).
+#[test]
+fn strict_an_unknown_enrollment_session_is_refused_before_the_display_name() {
+    let s = strict_mfa_state();
+    let token = verified_session(&s, "unknown-session@example.com");
+    start_totp(&s, &token);
+    let (status, body) = post(
+        &s,
+        &format!("{V2}/accounts/mfaEnrollment:finalize"),
+        &json!({"idToken": token, "totpVerificationInfo": {"sessionInfo": "enroll-not-a-session", "verificationCode": "123456"}}),
+    );
+    assert_eq!(
+        (status, v2_refusal(&body).0),
+        (400, "INVALID_SESSION_INFO"),
+        "{body}"
+    );
+}
+
+/// A deleted account's pending credential answers `USER_NOT_FOUND` for the hour a pending
+/// credential lives and is unknown after it; the sweep drops only the expired ones (mutation
+/// follow-up, docs.local/mutation/auth-mfa/20260925).
+#[test]
+fn strict_a_deleted_accounts_pending_credential_is_known_for_its_hour() {
+    let refusal = |s: &AuthState, pending: &Value| {
+        let (status, body) = totp_sign_in(s, pending, &json!("any-factor"), "123456");
+        assert_eq!(status, 400, "{body}");
+        v2_refusal(&body).0.to_owned()
+    };
+    let delete = |s: &AuthState, pending: &Value| {
+        let (status, body) = admin(
+            s,
+            "POST",
+            &format!("{ADMIN}/accounts:delete"),
+            &json!({"localId": pending["localId"]}),
+        );
+        assert_eq!(status, 200, "{body}");
+    };
+    // One orphan, past its hour: swept.
+    let s = strict_phone_account("orphan@example.com");
+    let pending = pending_of(&s, "orphan@example.com");
+    delete(&s, &pending);
+    advance(&s, 3_600);
+    assert_eq!(refusal(&s, &pending), "USER_NOT_FOUND");
+    advance(&s, 1);
+    assert_eq!(refusal(&s, &pending), "INVALID_PENDING_TOKEN");
+    // Two orphans half an hour apart: when the first is swept the second stays.
+    let s = strict_phone_account("first-orphan@example.com");
+    create(
+        &s,
+        &json!({"email": "second-orphan@example.com", "password": "password123", "emailVerified": true,
+            "mfaInfo": [{"phoneInfo": "+16505550101"}]}),
+    );
+    let first = pending_of(&s, "first-orphan@example.com");
+    delete(&s, &first);
+    advance(&s, 1_800);
+    let second = pending_of(&s, "second-orphan@example.com");
+    delete(&s, &second);
+    advance(&s, 1_801);
+    assert_eq!(refusal(&s, &first), "INVALID_PENDING_TOKEN");
+    assert_eq!(refusal(&s, &second), "USER_NOT_FOUND");
+}
+
+/// Emulator profile: a pending sign-in is reaped after its hour, also when another pending
+/// sign-in of the same user succeeded with its phone factor first (mutation follow-up,
+/// docs.local/mutation/auth-mfa/20260925).
+#[test]
+fn emulator_a_pending_sign_in_is_reaped_after_its_sibling_succeeds_by_phone() {
+    let s = state();
+    let (status, body) = patch_sign_in(
+        &s,
+        "signIn.phoneNumber.testPhoneNumbers",
+        &json!({"signIn": {"phoneNumber": {"testPhoneNumbers": {"+16505550101": "123456"}}}}),
+    );
+    assert_eq!(status, 200, "{body}");
+    create(
+        &s,
+        &json!({"email": "siblings@example.com", "password": "password123", "emailVerified": true,
+            "mfaInfo": [{"phoneInfo": "+16505550101"}]}),
+    );
+    let first = pending_of(&s, "siblings@example.com");
+    let second = pending_of(&s, "siblings@example.com");
+    let (status, body) = complete_phone(&s, &first);
+    assert_eq!(status, 200, "{body}");
+    advance(&s, 3_601);
+    let (status, body) = complete_phone(&s, &second);
+    assert_eq!(status, 400, "{body}");
+}
+
+// ---- AUTH-MFA follow-up directive (2026-09-25), Must 1: strict with auth.totp fails closed ----
+
+/// Strict: the fireemu-only `auth.totp` extension alone does not turn TOTP on; production
+/// refuses a TOTP start while the project's `mfa` config does not enable it
+/// (`auth-mfa/disabled#totp-start`).
+#[test]
+fn strict_auth_totp_alone_does_not_enable_totp_enrollment() {
+    let s = AuthState {
+        totp_extension_enabled: true,
+        ..strict_state()
+    };
+    let token = verified_session(&s, "extension-only@example.com");
+    let (status, body) = post(
+        &s,
+        &format!("{V2}/accounts/mfaEnrollment:start"),
+        &json!({"idToken": token, "totpEnrollmentInfo": {}}),
+    );
+    assert_eq!(
+        (status, v2_refusal(&body).0),
+        (400, "OPERATION_NOT_ALLOWED : TOTP based MFA not enabled."),
+        "{body}"
+    );
+}
+
+/// Strict fails closed: an account with a TOTP factor is asked for it even while the project's
+/// `mfa` config is off. Production skips an enrolled factor only in the observed case, a phone
+/// factor under an off config (`auth-mfa/disabled#sign-in-a-with-factor`).
+#[test]
+fn strict_an_enrolled_totp_factor_is_asked_for_while_mfa_is_off() {
+    let s = strict_mfa_state();
+    let (_, _, _) = totp_enrolled(&s, "totp-then-off@example.com");
+    set_project_mfa(&s, &json!({"state": "DISABLED"}));
+    let (status, body) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithPassword"),
+        &json!({"email": "totp-then-off@example.com", "password": "password123", "returnSecureToken": true}),
+    );
+    assert_eq!(status, 200, "{body}");
+    assert!(body["mfaPendingCredential"].is_string(), "{body}");
+    assert!(body.get("idToken").is_none(), "{body}");
+    // The observed case stays: a phone factor alone is not asked for while MFA is off.
+    create(
+        &s,
+        &json!({"email": "phone-while-off@example.com", "password": "password123", "emailVerified": true,
+            "mfaInfo": [{"phoneInfo": "+16505550101"}]}),
+    );
+    let (status, body) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithPassword"),
+        &json!({"email": "phone-while-off@example.com", "password": "password123", "returnSecureToken": true}),
+    );
+    assert_eq!(status, 200, "{body}");
+    assert!(body["idToken"].is_string(), "{body}");
+}
+
+// ---- AUTH-MFA follow-up directive, Must 2: the SMS pending credential's lifetime -------------
+
+/// Starts the SMS step of a pending credential `age` seconds after it was issued.
+fn sms_start_aged(s: &AuthState, email: &str, age: i64) -> (u16, Value) {
+    let pending = pending_of(s, email);
+    advance(s, age);
+    post(
+        s,
+        &format!("{V2}/accounts/mfaSignIn:start"),
+        &json!({"mfaPendingCredential": pending["mfaPendingCredential"],
+            "mfaEnrollmentId": pending["mfaInfo"][0]["mfaEnrollmentId"], "phoneSignInInfo": {}}),
+    )
+}
+
+/// Production started the SMS step of a pending credential about 453 seconds old and refused
+/// one about 603 seconds old as expired (sandbox recording 2026-09-25,
+/// `auth-mfa/lifetime-sms`). Strict refuses from 602 seconds, one second below the refusal, as
+/// M9; the emulator profile keeps its hour.
+#[test]
+fn strict_an_sms_pending_credential_expires_where_production_refused() {
+    for (age, refused) in [(453, false), (601, false), (602, true), (1_803, true)] {
+        let s = strict_phone_account("sms-age@example.com");
+        let (status, body) = sms_start_aged(&s, "sms-age@example.com", age);
+        if refused {
+            assert_eq!(
+                (status, v2_refusal(&body).0),
+                (
+                    400,
+                    "INVALID_MFA_PENDING_CREDENTIAL : MFA pending credential is expired."
+                ),
+                "{age}: {body}"
+            );
+        } else {
+            assert_eq!(status, 200, "{age}: {body}");
+        }
+    }
+    let s = state();
+    let (status, body) = patch_sign_in(
+        &s,
+        "signIn.phoneNumber.testPhoneNumbers",
+        &json!({"signIn": {"phoneNumber": {"testPhoneNumbers": {"+16505550101": "123456"}}}}),
+    );
+    assert_eq!(status, 200, "{body}");
+    create(
+        &s,
+        &json!({"email": "sms-age@example.com", "password": "password123", "emailVerified": true,
+            "mfaInfo": [{"phoneInfo": "+16505550101"}]}),
+    );
+    let (status, body) = sms_start_aged(&s, "sms-age@example.com", 1_803);
+    assert_eq!(status, 200, "{body}");
 }

@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
   "kind": "FS-DATA-WRITE-release-artifact",
-  "sourceCommit": "a2aec9fbc12c3bd6e35547c6239e46527fb55cd2",
-  "binarySha256": "5c92dbc39f1b9bd5d78ff9cf37e3717e5295c64c7277d918d174bc340ab93aa3",
+  "sourceCommit": "da47b5e137a275576d00f6cd75be7e29e5aaa160",
+  "binarySha256": "eec383e576e5de8c63fd934ef55dde6592bb6b69888a7f00bb4129c6a9338593",
   "buildProfile": "release",
   "buildCommand": [
     "cargo",
@@ -13,35 +13,35 @@
     "fireemu",
     "--message-format=json"
   ],
-  "privateBuildReceiptSha256": "e5ec8dcba6e53df94b26e86e4f4fcf4c043348b3d7e66da8f4462a0fb8aebff7",
-  "buildJsonlSha256": "104d4bdeb9bb6ca910c1cdd306b6c4781e4fad118b8114eac4565d7076d2acda",
-  "buildStderrSha256": "8cd3604460e5bdab26d26cc7c78e2c5a38320f0218a6869d5eb3d9cff819506f",
+  "privateBuildReceiptSha256": "359c76cdcacfbba9a2851587a6be0e46433b16d76fe1b67a3c4c1062351e6c4c",
+  "buildJsonlSha256": "066f7b899b51cb0adf149c4d184584830b3c3a224acc947755ce9d38b23cb732",
+  "buildStderrSha256": "bc1ac4ae5714eb1a7e719d617933f3484274dbd9ef0dfd0f2d2710da68be1b53",
   "series": {
     "write": {
       "reportPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-current-comparison.json",
-      "reportSha256": "84ebab06f35c4bbcbd32a431836522d6fa2470fab5e8dfbf25ed3747cf556abe",
+      "reportSha256": "582c9004b55e5c0c0ac8a1731584c90a67981f9eefe1c8a97b37340cd5f22678",
       "acceptedPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-current-accepted-conditions.json",
-      "acceptedSha256": "f4a4ecc2dd860725ca450b447a5003ecda70cc84806bcb30e5f7a3f0d7200241"
+      "acceptedSha256": "f5468d57749b41f0bf577a729601dba914f204d119ebbe5236a56cd4288b2d0a"
     },
     "list": {
       "reportPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-LIST-comparison.json",
-      "reportSha256": "07f25db234442c5786eea9ab0c754b862e90452a9b31b31c82add275fcf256ba",
+      "reportSha256": "0a555ce6cd84fefe5d5278067dcc0d5b5fa96dcb86971d332191ecdf15df4754",
       "localProjectionPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-LIST-release-local-rows.json",
-      "localProjectionSha256": "1d03b40887d08a9c084c86dfa2e811448f12688c6f0ff816b6bf779fb4ec428c",
-      "privateResultSha256": "6bfe50743d33a933f1e78a79ad1736da73d48e42eec2cdcb0dd9bf53b86ab141",
+      "localProjectionSha256": "fa7886ac358cd3b4763d489147560f113de8247422dc12c03df64d2474e35581",
+      "privateResultSha256": "fa23b02d5be95957f32f91a4556c688d6e4344924cc3cc7f290a6531c8eac4d6",
       "fixtureSha256": "1d70589d2ffc50b837dc92574ea0daf502677f08804d6227a4b5cbe4641f87f4"
     },
     "query": {
       "reportPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-query-regression-comparison.json",
-      "reportSha256": "6587989acaa7f0aa4d75641092f8d2a48eb7ee0793dcc8fa5162fd49a39201aa",
+      "reportSha256": "f1b17e9cfe1ea519c899fc168fe528e6fc937dabbd91e1191185270eb1275e1b",
       "localProjectionPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-query-regression-local-rows.json",
-      "localProjectionSha256": "f61345a8b04b69660ea9a888b19b756494a169c1e3c39ac9608afe52c9ceaa14",
-      "privateResultSha256": "e8853860a6f03912c1b6feee672c8cb41bbc97c81b8e11d09f00bd79946c9e6f",
+      "localProjectionSha256": "3ae431aec486335dba3bfd9c0b71f59ad47a5e8e862f6d7e9c6c8e5ee2279c56",
+      "privateResultSha256": "dd164162ac1afae970a8e248c6c29131f9ca96ef245fea9c0b1c3aefbcba94bc",
       "fixtureSha256": "8df55045119be7c30e63e9109ad614dae2be0cbc3a644b54c60f98cc962110d3"
     },
     "savedTransaction": {
       "reportPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-stream-transaction-current-saved-replay.json",
-      "reportSha256": "53a5e9ada6c17acf49619576977d0efcdfa9b1219e32239d5d7787043e974c72"
+      "reportSha256": "38a70a39fd893f02aa08efe6a38bc9782ea7b14bb27cb074168c9086b0c523d4"
     }
   }
 }

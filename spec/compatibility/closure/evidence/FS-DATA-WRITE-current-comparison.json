@@ -2,18 +2,18 @@
   "schemaVersion": 1,
   "task": "FS-DATA-WRITE",
   "decision": "PENDING_REVIEW",
-  "sourceHead": "a2aec9fbc12c3bd6e35547c6239e46527fb55cd2",
-  "executableSha256": "5c92dbc39f1b9bd5d78ff9cf37e3717e5295c64c7277d918d174bc340ab93aa3",
+  "sourceHead": "da47b5e137a275576d00f6cd75be7e29e5aaa160",
+  "executableSha256": "eec383e576e5de8c63fd934ef55dde6592bb6b69888a7f00bb4129c6a9338593",
   "configSha256": "0f15f02dbfef3f0ee5cd6302684e8bb547b8c49dea5a825deeb57b2938545f0b",
   "runtimeInputs": {
     "Cargo.toml": "ae1c67986785f5d1184e3f6b0fc5aa3894d9d0bb8154e7be436df943ff1d7b41",
     "Cargo.lock": "7a3d792e7607b50fd5701daf95d2c4085d856a0c65f35df1a5109fa6a02326f6",
-    "conformance/src/fs-data-write-sandbox-run.mjs": "3ddde7e7a4e83bfe9bad6cd9bf8010d84e5326acb9e969c7d72afdcd7798eb90",
-    "conformance/src/firestore-probe/sandbox-session.mjs": "39ff8cd741a73a7e4f6f845695478fb3d0c2a298e06a45618417dba0a3c40bf0"
+    "conformance/src/fs-data-write-sandbox-run.mjs": "447b73d80144e37dcf48bf5c4e14656d86b47bd73f18408c3c1908c2752a3953",
+    "conformance/src/firestore-probe/sandbox-session.mjs": "ca29b500fbc4be4e6f256b1974891fbe9349a63551b8d7e2a58d030b33be245f"
   },
-  "corpusSha256": "4d1966b0caf5db85437e2afeaa52ef74586043eb930dc4d6173bd7636a589e30",
-  "comparedRestPrograms": 74,
-  "comparedGrpcStreams": 7,
+  "corpusSha256": "85534af4366b2a815754fd2d37a374056e84b1ea3058ccc7fb6944b4ff15ab72",
+  "comparedRestPrograms": 106,
+  "comparedGrpcStreams": 9,
   "pendingRestIds": [],
   "pendingStreamIds": [],
   "retiredRestIds": [
@@ -29,28 +29,14 @@
     "writes/limits/index-entry-sum/500-19999"
   ],
   "retiredStreamIds": [],
-  "approvedKnownDifferenceIds": [
-    "writes/limits/empty-document-name/4628#readback",
-    "writes/limits/empty-document-name/4628#write",
-    "writes/limits/index-entry-bytes#observation-0",
-    "writes/limits/index-entry-bytes#observation-1",
-    "writes/limits/index-entry-bytes#observation-2",
-    "writes/limits/index-entry-bytes#observation-3",
-    "writes/limits/index-entry-sum-per-document#observation-0",
-    "writes/limits/index-entry-sum-per-document#observation-1",
-    "writes/limits/index-entry-sum-per-document#observation-2",
-    "writes/limits/index-entry-sum-per-document#observation-3"
-  ],
-  "pendingOracleDifferenceIds": [
-    "writes/limits/grpc-stream-request-bytes/10485760#grpc",
-    "writes/limits/grpc-stream-request-bytes/10485761#grpc"
-  ],
+  "approvedKnownDifferenceIds": [],
+  "pendingOracleDifferenceIds": [],
   "otherDifferenceIds": [],
-  "comparisonExitCode": 1,
+  "comparisonExitCode": 0,
   "localResultDigests": {
-    "restSha256": "763d734307808e4d1095a0115d8122547dddb44ff286eb0f205ed00f6de55248",
-    "streamSha256": "d7f049a8d75484d2fcf74f9c27f25e628d8b032b859d5994a6b225f53fc8c9f6",
-    "bindingSha256": "5e3686b48d1491e9e5f5431b2abc50b2574edfaf7ece74b0e7f52faa2b947f20"
+    "restSha256": "ef7fccfd053e820c604c1768050d06fb6a68099e5fe3dc251f4bd5a9347d91b3",
+    "streamSha256": "3d922aa149231f10616bbd34bb4528ff75e8a60786f0e0d9709a0ed8f12de54a",
+    "bindingSha256": "2eddb7e0353868fd7dae9be050846bcec6845ac4a9b290aceffe8f894d5e64f6"
   },
   "productionFixtures": [
     {
@@ -62,11 +48,11 @@
       ]
     },
     {
-      "path": "conformance/fs-data-write-production-supplements/partial-7bfd51026a2ac56617d81504.json",
-      "sha256": "975d1f9775373c4704707c7b5bcc7c97067bcf5267911b9a38cc4c02f541f70c",
+      "path": "conformance/fs-data-write-production-supplements/bracket-fb886aa8eed899746ecf607b.json",
+      "sha256": "065d51be06a9287386f81e5d229eb65cbf29cc8e8265937d8399431bc21c0c83",
       "recordingDigests": [
-        "aee842159a37e001bcab5710eb49be8d0804dd53fa7b79521aa05a018048fee1",
-        "aee842159a37e001bcab5710eb49be8d0804dd53fa7b79521aa05a018048fee1"
+        "c1088a2b2cb864dc32cd06c231802c8a042b13b606b274a7d733b32359a5e5b8",
+        "c1088a2b2cb864dc32cd06c231802c8a042b13b606b274a7d733b32359a5e5b8"
       ]
     },
     {
@@ -76,12 +62,35 @@
         "2522c51a52ca00b46b92dc7ac776029dc93e6c6ffcfbeac588ac1b62ae30575f",
         "74f98b04241975ffe4b0f3a20da4c7b90a679eb761fc0b18d4f919b6ea07b106"
       ]
+    },
+    {
+      "path": "conformance/fs-data-write-production-supplements/followup-b0aeefc97b4c48765db4a9a1-indexed.json",
+      "sha256": "f86db2f3f65e49966daea134cd15e1318b6379e63830b5b69e5f3bf6b7e43cea",
+      "recordingDigests": [
+        "45a754c835d85bbbb0c566468cdfedfd0e60fea2e3f7575f7ef1affe82c67c2e",
+        "45a754c835d85bbbb0c566468cdfedfd0e60fea2e3f7575f7ef1affe82c67c2e"
+      ]
+    },
+    {
+      "path": "conformance/fs-data-write-production-supplements/followup-b0aeefc97b4c48765db4a9a1-webchannel.json",
+      "sha256": "4cfdc75c0795fc39a011df290c292dfa66c2fa5016cb7b3de301201aa60bb882",
+      "recordingDigests": [
+        "de6fd1fdb034d8506ac257b5e0c1b3ded925b5d04a4543332b6f4c9e8463ce73",
+        "de6fd1fdb034d8506ac257b5e0c1b3ded925b5d04a4543332b6f4c9e8463ce73"
+      ]
+    },
+    {
+      "path": "conformance/fs-data-write-production-supplements/partial-7bfd51026a2ac56617d81504.json",
+      "sha256": "975d1f9775373c4704707c7b5bcc7c97067bcf5267911b9a38cc4c02f541f70c",
+      "recordingDigests": [
+        "aee842159a37e001bcab5710eb49be8d0804dd53fa7b79521aa05a018048fee1",
+        "aee842159a37e001bcab5710eb49be8d0804dd53fa7b79521aa05a018048fee1"
+      ]
     }
   ],
   "reviewNotes": [
-    "The owner approved the ten B1 index-entry differences as known divergences on 2026-09-25; their observations remain visible and unmodified.",
-    "The two gRPC Write stream token differences require the owner-approved D5 oracle probe and are unresolved.",
-    "The ten retired REST recipes remain in the historical fixture and are outside the current corpus and closure recipe IDs.",
-    "The integrated LIST rows and FS-QUERY-INDEX regression were compared with the same release artifact; the historical 322-row run remains private auxiliary evidence without an independent launch receipt."
+    "Every current FS-DATA-WRITE row matches production: the strict index-entry rules follow the recorded thresholds (owner decisions, 2026-09-28), so the former D3 rows are no longer differences.",
+    "The integrated LIST rows and the FS-QUERY-INDEX regression were compared with the same release artifact.",
+    "The ten retired REST recipes remain in the historical fixture and are outside the current corpus and closure recipe IDs."
   ]
 }

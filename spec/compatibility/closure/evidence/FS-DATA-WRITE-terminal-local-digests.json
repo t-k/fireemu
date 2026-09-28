@@ -1,9 +1,9 @@
 {
   "schemaVersion": 1,
   "kind": "fs-data-write-terminal-local-digests",
-  "sourceHead": "a2aec9fbc12c3bd6e35547c6239e46527fb55cd2",
-  "binarySha256": "5c92dbc39f1b9bd5d78ff9cf37e3717e5295c64c7277d918d174bc340ab93aa3",
-  "sourceResultSha256": "763d734307808e4d1095a0115d8122547dddb44ff286eb0f205ed00f6de55248",
+  "sourceHead": "da47b5e137a275576d00f6cd75be7e29e5aaa160",
+  "binarySha256": "eec383e576e5de8c63fd934ef55dde6592bb6b69888a7f00bb4129c6a9338593",
+  "sourceResultSha256": "ef7fccfd053e820c604c1768050d06fb6a68099e5fe3dc251f4bd5a9347d91b3",
   "conditions": {
     "FS-DATA-WRITE/near-limit-delete-refusal": {
       "programs": {
@@ -59,86 +59,6 @@
             "delete": "a52016763acf6aefacaff85ceb62ef80a6a54755049a2bc2f134e7440676679a",
             "after-delete": "0cab8f5c67d1940b0cc20c0b3645b7379c48105f687941224d73bd1139f4a606",
             "group-after-delete": "92639f708cf36df6f61c17be32fa7e1f572b3c3201b2126cdd39dd7a59ff2886"
-          }
-        }
-      }
-    },
-    "FS-LIMIT-API-REQUEST-BYTES/non-commit-rest": {
-      "programs": {
-        "writes/limits/non-commit-rest-request-bytes/batch-write/10485760": {
-          "steps": {
-            "write": "c2e23bdd1d85ee9564461c1ea28bd5b068ef71b3f45e297ded191b6842fe1a73",
-            "readback": "a3e04ad345f824018a2fe56d7a92291ec85b99a15e1952cf58bfaac8d30875c9"
-          }
-        },
-        "writes/limits/non-commit-rest-request-bytes/batch-write/10485761": {
-          "steps": {
-            "write": "c2e23bdd1d85ee9564461c1ea28bd5b068ef71b3f45e297ded191b6842fe1a73",
-            "readback": "9844d024178285659448a02e3db953832d77c01d9d62b92084d5153d5adebd4c"
-          }
-        },
-        "writes/limits/non-commit-rest-request-bytes/batch-get/10485760": {
-          "steps": {
-            "seed": "babe82abc55e34dc6a27a285a0babaa4832ae91ce80a7892c9df7a8090ca56da",
-            "probe": "191660b4f782faa1a586315c376c74f6099368d603079d5cd9dfff786f0019ec"
-          }
-        },
-        "writes/limits/non-commit-rest-request-bytes/batch-get/10485761": {
-          "steps": {
-            "seed": "babe82abc55e34dc6a27a285a0babaa4832ae91ce80a7892c9df7a8090ca56da",
-            "probe": "ae439a723692fa5f1ad1b638d85f10e71b3601ed4c01d093a6f0eadc9883fc6f"
-          }
-        },
-        "writes/limits/non-commit-rest-request-bytes/run-query/10485760": {
-          "steps": {
-            "seed": "babe82abc55e34dc6a27a285a0babaa4832ae91ce80a7892c9df7a8090ca56da",
-            "probe": "d5835275fe394c633af1be833aff7638aee2f2bf5ce4bc4ea76602fa8854351b"
-          }
-        },
-        "writes/limits/non-commit-rest-request-bytes/run-query/10485761": {
-          "steps": {
-            "seed": "babe82abc55e34dc6a27a285a0babaa4832ae91ce80a7892c9df7a8090ca56da",
-            "probe": "7f7af3c9e9ff9a1ce8bac4ad6822b92299d8086d52ebc94c1bf9c056f5f73afc"
-          }
-        },
-        "writes/limits/non-commit-rest-request-bytes/create/10485760": {
-          "steps": {
-            "probe": "4f07dd29fae0d3b26c40b524bb54ac0cd260bfb61ed39bd42837845c3bb7db6e",
-            "readback": "4f07dd29fae0d3b26c40b524bb54ac0cd260bfb61ed39bd42837845c3bb7db6e"
-          }
-        },
-        "writes/limits/non-commit-rest-request-bytes/create/10485761": {
-          "steps": {
-            "probe": "f9cf3e76efe7e35e8aaf709932a45c303a7c734e39c232def149daecfa4bde6c",
-            "readback": "f9cf3e76efe7e35e8aaf709932a45c303a7c734e39c232def149daecfa4bde6c"
-          }
-        },
-        "writes/limits/non-commit-rest-request-bytes/patch/10485760": {
-          "steps": {
-            "seed": "babe82abc55e34dc6a27a285a0babaa4832ae91ce80a7892c9df7a8090ca56da",
-            "probe": "bc258d739347031fa23a488edbbd55a35296451df7dbe7e35f842a66efa565eb",
-            "readback": "bc258d739347031fa23a488edbbd55a35296451df7dbe7e35f842a66efa565eb"
-          }
-        },
-        "writes/limits/non-commit-rest-request-bytes/patch/10485761": {
-          "steps": {
-            "seed": "babe82abc55e34dc6a27a285a0babaa4832ae91ce80a7892c9df7a8090ca56da",
-            "probe": "216bcf93f3bfee40032dd586f969670bc16934ef5886507c1537bcf85db73b46",
-            "readback": "216bcf93f3bfee40032dd586f969670bc16934ef5886507c1537bcf85db73b46"
-          }
-        }
-      }
-    },
-    "FS-LIMIT-API-REQUEST-BYTES/webchannel": {
-      "programs": {
-        "writes/limits/webchannel-request-bytes/10485760": {
-          "steps": {
-            "unknown-session": "832190b6738fe358703e2c1ba0f526dc5c8de0ba7cef815c1ab810f5a6ed21af"
-          }
-        },
-        "writes/limits/webchannel-request-bytes/10485761": {
-          "steps": {
-            "unknown-session": "832190b6738fe358703e2c1ba0f526dc5c8de0ba7cef815c1ab810f5a6ed21af"
           }
         }
       }

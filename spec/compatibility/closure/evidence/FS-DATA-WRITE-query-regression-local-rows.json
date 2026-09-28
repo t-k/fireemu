@@ -1,9 +1,9 @@
 {
   "schemaVersion": 1,
   "kind": "fs-data-write-query-release-local-projection",
-  "sourceCommit": "a2aec9fbc12c3bd6e35547c6239e46527fb55cd2",
-  "binarySha256": "5c92dbc39f1b9bd5d78ff9cf37e3717e5295c64c7277d918d174bc340ab93aa3",
-  "sourceResultSha256": "e8853860a6f03912c1b6feee672c8cb41bbc97c81b8e11d09f00bd79946c9e6f",
+  "sourceCommit": "da47b5e137a275576d00f6cd75be7e29e5aaa160",
+  "binarySha256": "eec383e576e5de8c63fd934ef55dde6592bb6b69888a7f00bb4129c6a9338593",
+  "sourceResultSha256": "dd164162ac1afae970a8e248c6c29131f9ca96ef245fea9c0b1c3aefbcba94bc",
   "rows": {
     "fs-query-index/field-filters/equality#eq-full-documents": {
       "status": 200,

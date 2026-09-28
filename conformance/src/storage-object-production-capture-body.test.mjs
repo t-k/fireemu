@@ -20,6 +20,128 @@ const sanitize = (bytes, options = {}) => {
   });
 };
 
+test("new capability values cannot escape through another leaf in the same response", () => {
+  const token = "SYNTHETIC_DYNAMIC_CAPABILITY_/abc+def=123456789";
+  const mixed = encodeURIComponent(token).replaceAll("%2F", "%2f");
+  const copies = [
+    token,
+    encodeURIComponent(token),
+    mixed,
+    Buffer.from(token).toString("base64"),
+    Buffer.from(mixed).toString("base64"),
+    Buffer.from(mixed).toString("base64url"),
+  ];
+  for (const copy of copies)
+    for (const publicFirst of [true, false]) {
+      const fields = publicFirst
+        ? { contentDisposition: copy, downloadTokens: [token] }
+        : { downloadTokens: [token], contentDisposition: copy };
+      const original = JSON.stringify({ name: "owned/object", ...fields });
+      const result = sanitize(original);
+      assert.equal(result.mode, "COMMITMENT_ONLY");
+      assert.equal(result.body, null);
+      assert.equal(result.originalSha256, digest(original));
+    }
+  const escaped = JSON.stringify({
+    name: "owned/object",
+    contentDisposition: token,
+    downloadTokens: [token],
+  }).replace(
+    `"contentDisposition":${JSON.stringify(token)}`,
+    `"contentDisposition":"${[...token].map((character) => `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`).join("")}"`,
+  );
+  assert.equal(sanitize(escaped).mode, "COMMITMENT_ONLY");
+  assert.equal(
+    sanitize(
+      JSON.stringify({
+        name: "owned/object",
+        contentDisposition: token,
+        metadata: { firebaseStorageDownloadTokens: `${token},SECOND_DYNAMIC_TOKEN` },
+      }),
+    ).mode,
+    "COMMITMENT_ONLY",
+  );
+  assert.equal(
+    sanitize(
+      JSON.stringify({
+        kind: "storage#objects",
+        nextPageToken: token,
+        items: [{ name: "owned/object", contentDisposition: token }],
+      }),
+    ).mode,
+    "COMMITMENT_ONLY",
+  );
+  assert.equal(
+    sanitize(
+      JSON.stringify({
+        kind: "storage#rewriteResponse",
+        rewriteToken: token,
+        resource: { name: "owned/object", contentDisposition: token },
+      }),
+    ).mode,
+    "COMMITMENT_ONLY",
+  );
+});
+
+test("local capability discovery is bounded and retains safe field replacement within the bound", () => {
+  for (const count of [64, 65]) {
+    const result = sanitize(
+      JSON.stringify({
+        name: "owned/object",
+        downloadTokens: Array.from(
+          { length: count },
+          (_, index) => `SYNTHETIC_BOUND_CAPABILITY_${index}_abcdefgh`,
+        ),
+      }),
+    );
+    assert.equal(result.mode, count === 64 ? "CAPABILITY_FIELDS_REPLACED" : "COMMITMENT_ONLY");
+    assert.equal(result.body === null, count === 65);
+  }
+});
+
+test("canonical encoded copies embedded in a metadata wrapper cannot persist", () => {
+  const token = "SYNTHETIC_EMBEDDED_CAPABILITY_/abc+def=123456789";
+  const mixed = encodeURIComponent(token).replaceAll("%2F", "%2f");
+  for (const encoding of ["base64", "base64url"])
+    for (const publicFirst of [true, false]) {
+      const encoded = Buffer.from(mixed).toString(encoding);
+      for (const wrapper of [
+        `attachment; filename="${encoded}"`,
+        `attachment; filename="prefix_${encoded}"`,
+      ]) {
+        const fields = publicFirst
+          ? { contentDisposition: wrapper, downloadTokens: [token] }
+          : { downloadTokens: [token], contentDisposition: wrapper };
+        const original = JSON.stringify({ name: "owned/object", ...fields });
+        const result = sanitize(original);
+        assert.equal(result.mode, "COMMITMENT_ONLY");
+        assert.equal(result.body, null);
+        assert.equal(result.originalSha256, digest(original));
+      }
+    }
+});
+
+test("embedded reversible capabilities cannot escape detection through Base64 alphabet suffixes", () => {
+  for (let padding = 0; padding < 3; padding++) {
+    const token = `SYNTHETIC_EMBEDDED_CAPABILITY_/abc+def=123456789${"x".repeat(padding)}`;
+    const mixed = encodeURIComponent(token).replaceAll("%2F", "%2f");
+    for (const encoding of ["base64", "base64url"])
+      for (const prefix of ["", "prefix_"])
+        for (const suffix of ["x", "xx", "xxx", "backup"])
+          for (const publicFirst of [true, false]) {
+            const wrapper = `attachment; filename="${prefix}${Buffer.from(mixed).toString(encoding)}${suffix}"`;
+            const fields = publicFirst
+              ? { contentDisposition: wrapper, downloadTokens: [token] }
+              : { downloadTokens: [token], contentDisposition: wrapper };
+            const original = JSON.stringify({ name: "owned/object", ...fields });
+            const result = sanitize(original);
+            assert.equal(result.mode, "COMMITMENT_ONLY");
+            assert.equal(result.body, null);
+            assert.equal(result.originalSha256, digest(original));
+          }
+  }
+});
+
 test("a known nonsecret metadata body preserves every original byte", () => {
   const original = '{ "name" : "owned/object", "generation":"1", "metadata":{"marker":"first"} }\n';
   const result = sanitize(original);

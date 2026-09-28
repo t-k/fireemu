@@ -3,6 +3,8 @@ import {
   sanitizeStorageCaptureBody,
   parseCaptureJsonSpans,
   captureStringIsWellFormed,
+  captureSecretForms,
+  captureHasSecretCopy,
 } from "./production-capture-body.mjs";
 
 const ORIGINS = new Set([
@@ -72,6 +74,7 @@ const SECRET_QUERY = new Set([
   "key",
   "access_token",
   "token",
+  "delete_token",
   "upload_id",
   "pageToken",
   "rewriteToken",
@@ -372,26 +375,56 @@ export function sanitizeProductionCapture({
     const url = new URL(value);
     if (!ORIGINS.has(url.origin) || url.username || url.password || url.hash)
       throw new Error("invalid capture origin");
+    const contextSet = new Set();
+    let contextUnavailable = false;
+    const learnContext = (secret) => {
+      if (!secret || contextSet.has(secret)) return;
+      if (contextSet.size >= 64) {
+        contextUnavailable = true;
+        return;
+      }
+      contextSet.add(secret);
+    };
+    const learnUri = (uri) => {
+      learnContext(uri);
+      try {
+        for (const [key, child] of new URL(uri).searchParams)
+          if (SECRET_QUERY.has(key)) learnContext(child);
+      } catch {
+        /* An opaque secret header is still committed as a whole. */
+      }
+    };
+    for (const [key, child] of url.searchParams) if (SECRET_QUERY.has(key)) learnContext(child);
+    for (const [name, child] of headers) {
+      const key = name.toLowerCase();
+      if (!SECRET_HEADERS.has(key)) continue;
+      learnContext(child);
+      if (["authorization", "proxy-authorization"].includes(key)) {
+        const token = /^(?:Bearer|Firebase) +([\x21-\x7e]+)$/i.exec(child)?.[1];
+        if (token) learnContext(token);
+        else contextUnavailable = true;
+      }
+      if (["location", "x-goog-upload-url", "x-goog-upload-control-url"].includes(key))
+        learnUri(child);
+      if (key === "x-firebase-storage-download-tokens")
+        for (const token of child.split(",")) learnContext(token);
+    }
+    const contextSecrets = [...contextSet];
     const captured = sanitizeStorageCaptureBody(body, {
       knownSecrets,
+      contextSecrets,
       approvedBodySha256,
-      complete,
+      complete: complete && !contextUnavailable,
       expectedObjectNames,
       expectedBucket,
       bodyKind,
     });
-    const forms = knownSecrets.flatMap((secret) => [
-      secret,
-      encodeURIComponent(secret),
-      new URLSearchParams({ v: secret }).toString().slice(2),
-      Buffer.from(secret).toString("base64"),
-      JSON.stringify(secret).slice(1, -1),
-    ]);
-    const unsafe = (text) =>
-      CREDENTIAL_FORM.test(text) || forms.some((secret) => text.includes(secret));
+    const forms = [...knownSecrets, ...contextSecrets].flatMap(captureSecretForms);
+    const unsafe = (text) => CREDENTIAL_FORM.test(text) || captureHasSecretCopy(text, forms);
     let path = url.pathname;
     try {
       if (
+        contextUnavailable ||
         !rawPathAllowed(url, expectedBucket, expectedObjectNames) ||
         unsafe(decodeURIComponent(path))
       )
@@ -403,6 +436,7 @@ export function sanitizeProductionCapture({
     try {
       query = strictPairs(url.search.slice(1)).map(([key, child]) => [
         PUBLIC_QUERY.has(key) || SECRET_QUERY.has(key) ? key : commitment(key),
+        contextUnavailable ||
         SECRET_QUERY.has(key) ||
         !PUBLIC_QUERY.has(key) ||
         unsafe(child) ||
@@ -418,6 +452,7 @@ export function sanitizeProductionCapture({
       const key = name.toLowerCase();
       const known = PUBLIC_HEADERS.has(key) || SECRET_HEADERS.has(key);
       if (
+        contextUnavailable ||
         !known ||
         SECRET_HEADERS.has(key) ||
         unsafe(child) ||
@@ -444,7 +479,7 @@ export function sanitizeProductionCapture({
       headers: savedHeaders,
       replacedHeaders,
       observation:
-        mode === "COMMITMENT_ONLY" && complete
+        mode === "COMMITMENT_ONLY" && complete && !contextUnavailable
           ? typedObservation(body, headers, unsafe, { url, direction, expectedEmails })
           : null,
     };

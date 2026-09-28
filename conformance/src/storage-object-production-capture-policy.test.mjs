@@ -23,6 +23,99 @@ const sanitize = (changes = {}) => {
   });
 };
 
+test("secrets first observed in a header or query also protect the same capture body", () => {
+  const token = "SYNTHETIC_CONTEXT_CAPABILITY_/abc+def=123456789";
+  const session = `https://storage.googleapis.com/upload/storage/v1/b/fixture/o?uploadType=resumable&upload_id=${encodeURIComponent(token).replaceAll("%2F", "%2f")}`;
+  const cases = [
+    { headers: [["Authorization", `Bearer ${token}`]], secret: token },
+    { headers: [["Location", session]], secret: session },
+    { headers: [["X-Goog-Upload-URL", session]], secret: token },
+    { headers: [["X-Guploader-Uploadid", token]], secret: token },
+    { headers: [["X-Firebase-Storage-Download-Tokens", `${token},SECOND_TOKEN`]], secret: token },
+    { url: `${storageUrl}?token=${encodeURIComponent(token)}`, secret: token },
+    { url: `${storageUrl}?pageToken=${encodeURIComponent(token)}`, secret: token },
+    { url: `${storageUrl}?rewriteToken=${encodeURIComponent(token)}`, secret: token },
+  ];
+  for (const { secret, ...changes } of cases)
+    for (const copy of [
+      secret,
+      encodeURIComponent(secret),
+      encodeURIComponent(secret).replaceAll("%2F", "%2f"),
+      Buffer.from(secret).toString("base64"),
+      Buffer.from(encodeURIComponent(secret).replaceAll("%2F", "%2f")).toString("base64"),
+    ]) {
+      const result = sanitize({
+        ...changes,
+        body: Buffer.from(JSON.stringify({ name: "owned/object", contentDisposition: copy })),
+      });
+      assert.equal(result.mode, "COMMITMENT_ONLY");
+      assert.equal(result.body, null);
+      assert.deepEqual(result.observation, {
+        byteLength: result.originalByteLength,
+        sha256: result.originalSha256,
+      });
+      assert.ok(!JSON.stringify(result).includes(secret));
+    }
+});
+
+test("context discovery overflow commits every value and suppresses typed observations", () => {
+  for (const count of [64, 65]) {
+    const result = sanitize({
+      url: `${storageUrl}?alt=media`,
+      headers: [
+        ["Content-Type", "application/json"],
+        ...Array.from({ length: count }, (_, index) => [
+          "X-Guploader-Uploadid",
+          `SYNTHETIC_CONTEXT_BOUND_${index}_abcdefgh`,
+        ]),
+      ],
+    });
+    assert.equal(result.mode, count === 64 ? "RAW_BODY" : "COMMITMENT_ONLY");
+    assert.equal(result.body === null, count === 65);
+    assert.equal(result.observation, null);
+    if (count === 65) {
+      assert.equal(typeof result.url.pathname, "object");
+      assert.equal(typeof result.url.query[0][1], "object");
+      assert.ok(result.headers.every(([, value]) => typeof value === "object"));
+    }
+  }
+});
+
+test("Authorization schemes and separators cannot leave an unrecognized credential body raw", () => {
+  const token = "SYNTHETIC_SCHEME_SECRET_abcdefgh123456789";
+  for (const scheme of ["Bearer", "bearer", "BEARER", "Firebase", "firebase", "FIREBASE"])
+    for (const separator of [" ", "  ", "\t"])
+      for (const name of ["Authorization", "proxy-authorization"]) {
+        const result = sanitize({
+          headers: [[name, `${scheme}${separator}${token}`]],
+          body: Buffer.from(JSON.stringify({ name: "owned/object", contentDisposition: token })),
+        });
+        assert.equal(result.mode, "COMMITMENT_ONLY");
+        assert.equal(result.body, null);
+        assert.ok(!JSON.stringify(result).includes(token));
+        if (separator !== "\t") {
+          const safe = sanitize({ headers: [[name, `${scheme}${separator}${token}`]] });
+          assert.equal(safe.mode, "RAW_BODY");
+          assert.deepEqual(safe.body, Buffer.from('{"name":"owned/object","generation":"1"}'));
+        }
+      }
+  for (const value of [
+    `Basic ${Buffer.from("user:secret").toString("base64")}`,
+    `DPoP ${token}`,
+    "UnrecognizedShape",
+    `Bearer ${token} trailing`,
+    `Bearer ${token} `,
+  ]) {
+    const result = sanitize({
+      headers: [["Authorization", value]],
+      body: Buffer.from(JSON.stringify({ name: "owned/object", contentDisposition: token })),
+    });
+    assert.equal(result.mode, "COMMITMENT_ONLY");
+    assert.equal(result.body, null);
+    assert.equal(result.observation, null);
+  }
+});
+
 test("Storage preserves body bytes and ordered headers while hashing an authorization value", () => {
   const original = Buffer.from('{ "name" : "owned/object" }\n');
   const result = sanitize({

@@ -4,6 +4,59 @@ import { MAX_RESPONSE_BODY_BYTES } from "./wire-limits.mjs";
 const digest = (value) => createHash("sha256").update(value).digest("hex");
 export const captureStringIsWellFormed = (value) => Buffer.from(value).toString("utf8") === value;
 const wellFormed = captureStringIsWellFormed;
+
+export function captureSecretForms(value) {
+  if (typeof value !== "string" || !wellFormed(value)) throw new Error("invalid capture secret");
+  if (!value) return [];
+  const encoded = encodeURIComponent(value),
+    form = new URLSearchParams({ v: value }).toString().slice(2);
+  return [
+    ...new Set([
+      value,
+      encoded,
+      encoded.replace(/%[a-fA-F0-9]{2}/g, (part) => part.toLowerCase()),
+      form,
+      form.replace(/%[a-fA-F0-9]{2}/g, (part) => part.toLowerCase()),
+      Buffer.from(value).toString("base64"),
+      JSON.stringify(value).slice(1, -1),
+    ]),
+  ];
+}
+
+/** Inspect bounded plain, percent/form and embedded Base64 copies before persistence. */
+export function captureHasSecretCopy(text, forms) {
+  const percent = (value) =>
+    value.replace(/(?:%[a-fA-F0-9]{2})+/g, (part) => {
+      try {
+        return decodeURIComponent(part);
+      } catch {
+        return part;
+      }
+    });
+  const candidates = new Set([text, percent(text), percent(text.replaceAll("+", "%20"))]);
+  const contains = (value) => forms.some((secret) => value.includes(secret));
+  for (const value of candidates) {
+    if (contains(value)) return true;
+    for (const pattern of [/[A-Za-z0-9+/]{4,}={0,2}/g, /[A-Za-z0-9_-]{4,}/g]) {
+      for (const [segment] of value.matchAll(pattern)) {
+        for (let offset = 0; offset < 4 && segment.length - offset >= 4; offset++) {
+          const encoded = segment.slice(offset),
+            bytes = Buffer.from(encoded, "base64");
+          // Prefix/suffix alphabet characters can make the enclosing run noncanonical.
+          // Its decoded complete bytes still contain a canonical embedded capability.
+          const decoded = bytes.toString("utf8");
+          if (
+            contains(decoded) ||
+            contains(percent(decoded)) ||
+            contains(percent(decoded.replaceAll("+", "%20")))
+          )
+            return true;
+        }
+      }
+    }
+  }
+  return false;
+}
 // Unknown response fields, including unsupported optional Storage features, remain commitments.
 const SCHEMAS = {
   object: {
@@ -211,6 +264,7 @@ export function sanitizeStorageCaptureBody(
   bytes,
   {
     knownSecrets = [],
+    contextSecrets = [],
     approvedBodySha256 = [],
     complete = true,
     bodyKind = "json",
@@ -221,14 +275,17 @@ export function sanitizeStorageCaptureBody(
   if (
     !Buffer.isBuffer(bytes) ||
     bytes.length > MAX_RESPONSE_BODY_BYTES ||
-    !Array.isArray(knownSecrets) ||
-    knownSecrets.length > 64 ||
-    knownSecrets.some(
-      (value) =>
-        typeof value !== "string" ||
-        value.length === 0 ||
-        value.length > 262144 ||
-        !wellFormed(value),
+    [knownSecrets, contextSecrets].some(
+      (secrets) =>
+        !Array.isArray(secrets) ||
+        secrets.length > 64 ||
+        secrets.some(
+          (value) =>
+            typeof value !== "string" ||
+            value.length === 0 ||
+            value.length > 262144 ||
+            !wellFormed(value),
+        ),
     ) ||
     !Array.isArray(approvedBodySha256) ||
     approvedBodySha256.some((value) => !/^[a-f0-9]{64}$/.test(value)) ||
@@ -247,15 +304,8 @@ export function sanitizeStorageCaptureBody(
     replacedFields: [],
   };
   if (!complete) return base;
-  const secretForms = knownSecrets.flatMap((value) => [
-    value,
-    encodeURIComponent(value),
-    new URLSearchParams({ v: value }).toString().slice(2),
-    Buffer.from(value).toString("base64"),
-    JSON.stringify(value).slice(1, -1),
-  ]);
-  const unsafe = (text) =>
-    CREDENTIAL_FORM.test(text) || secretForms.some((value) => text.includes(value));
+  const secretForms = [...knownSecrets, ...contextSecrets].flatMap(captureSecretForms);
+  const unsafe = (text) => CREDENTIAL_FORM.test(text) || captureHasSecretCopy(text, secretForms);
   if (bytes.length === 0 && bodyKind === "json")
     return { ...base, mode: "RAW_BODY", body: Buffer.from(bytes) };
   if (
@@ -271,6 +321,15 @@ export function sanitizeStorageCaptureBody(
     const root = parseCaptureJsonSpans(text);
     if (root.type !== "object") return base;
     const replacements = [];
+    const discoveredCapabilities = new Set(),
+      publicStrings = [];
+    const learnCapability = (value) => {
+      if (!value || discoveredCapabilities.has(value)) return;
+      if (value.length > 8192 || discoveredCapabilities.size >= 64)
+        throw new Error("capability discovery bound exceeded");
+      discoveredCapabilities.add(value);
+      secretForms.push(...captureSecretForms(value));
+    };
     const names = new Set(expectedObjectNames);
     const prefixes = new Set(
       expectedObjectNames.flatMap((name) =>
@@ -293,6 +352,9 @@ export function sanitizeStorageCaptureBody(
         for (const [index, token] of tokens.entries()) {
           if (token.type !== "string" || !wellFormed(token.value))
             throw new Error("unknown capability shape");
+          learnCapability(token.value);
+          if (path.endsWith("/metadata/firebaseStorageDownloadTokens"))
+            for (const part of token.value.split(",")) learnCapability(part);
           const tokenPath = node.type === "array" ? `${path}/${index}` : path;
           const observation = valueCommitment(token.value);
           replacements.push({ start: token.start, end: token.end, path: tokenPath, observation });
@@ -330,6 +392,7 @@ export function sanitizeStorageCaptureBody(
       if (shape === "remove-marker" && value === null) return;
       if (node.type !== "string" || !wellFormed(value) || unsafe(value))
         throw new Error("secret or unknown string value");
+      publicStrings.push(value);
       const valid = {
         text: () => true,
         url: () => safeStorageUrl(value, expectedBucket, names, unsafe),
@@ -385,6 +448,7 @@ export function sanitizeStorageCaptureBody(
           ? "rewrite"
           : "object";
     walk(root, "", rootShape);
+    if (publicStrings.some(unsafe)) return base;
     let offset = 0;
     const parts = [];
     for (const replacement of replacements) {

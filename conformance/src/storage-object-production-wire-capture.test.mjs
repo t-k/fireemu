@@ -93,6 +93,48 @@ function assertAbsent(directory, secrets) {
   }
 }
 
+test("the file producer commits a newly learned capability echoed outside its secret field", () => {
+  const token = "SYNTHETIC_FILE_CAPABILITY_/abc+def=123456789";
+  const uri = `https://storage.googleapis.com/upload/storage/v1/b/fixture/o?uploadType=resumable&upload_id=${encodeURIComponent(token).replaceAll("%2F", "%2f")}`;
+  const copy = Buffer.from(encodeURIComponent(token).replaceAll("%2F", "%2f")).toString("base64url");
+  const encoded = `attachment; filename="${copy}xx"`;
+  for (const header of [null, ["Location", uri], ["X-Goog-Upload-URL", uri]])
+    withDirectory((directory) => {
+      const attempt = create(directory);
+      const body = Buffer.from(
+        JSON.stringify({
+          name: "owned/object",
+          contentDisposition: encoded,
+          ...(header ? {} : { downloadTokens: [token] }),
+        }),
+      );
+      const headers = [["Content-Type", "application/json"], ...(header ? [header] : [])];
+      const wire = Buffer.concat([
+        Buffer.from(
+          `HTTP/1.1 200 OK\r\n${headers.map(([name, value]) => `${name}: ${value}\r\n`).join("")}\r\n`,
+        ),
+        body,
+      ]);
+      attempt.appendResponse(wire.subarray(0, 37));
+      attempt.appendResponse(wire.subarray(37, wire.length - 19));
+      attempt.appendResponse(wire.subarray(wire.length - 19));
+      finish(attempt, {
+        rawResponseHeaders: headers.flat(),
+        responseObservedBytes: wire.length,
+        responseBodyBase64: body.toString("base64"),
+      });
+      const saved = readJson(attempt.files.result);
+      assert.equal(saved.response.mode, "COMMITMENT_ONLY");
+      assert.equal(saved.response.bodyBase64, null);
+      assert.equal(saved.response.originalSha256, digest(body));
+      assert.equal(saved.responseWire.sha256, digest(wire));
+      assert.equal(readdirSync(directory).length, 4);
+      assertAbsent(directory, ["OWNER_SECRET", token, uri, encoded]);
+      for (const file of Object.values(attempt.files))
+        assert.equal(statSync(file).mode & 0o777, 0o600);
+    });
+});
+
 test("production persistence retains safe Storage body bytes and only original wire commitments", () =>
   withDirectory((directory) => {
     const attempt = create(directory);

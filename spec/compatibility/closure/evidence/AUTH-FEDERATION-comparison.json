@@ -1,0 +1,485 @@
+{
+  "kind": "auth-federation-comparison-v1",
+  "artifactSha256": "ff883a9bcd577ba7f7f12619c26c8e80596777ca551a69f47e18034269336de0",
+  "fixtureSha256": "cb7d394acfa2bb8a2a763ba87d404bb154ae2098b87655bd8affc5d467098471",
+  "summary": {
+    "MATCH": 115,
+    "MISMATCH": 2
+  },
+  "rows": [
+    {
+      "row": "auth-federation/provider-config/oidc#create",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/provider-config/oidc#create-duplicate",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/provider-config/oidc#create-without-prefix",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/provider-config/oidc#create-without-client",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/provider-config/oidc#create-both-responses",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/provider-config/oidc#create-code-without-secret",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/provider-config/oidc#create-http-issuer",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/provider-config/oidc#get",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/provider-config/oidc#list",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/provider-config/oidc#patch-display-name",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/provider-config/oidc#patch-secret",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/provider-config/oidc#get-after-secret",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/provider-config/oidc#delete",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/provider-config/oidc#get-deleted",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/provider-config/saml#create",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/provider-config/saml#create-bad-certificate",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/provider-config/saml#get",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/provider-config/saml#patch-sign-request",
+      "status": "MISMATCH",
+      "differences": [
+        "body.spConfig.spCertificates"
+      ]
+    },
+    {
+      "row": "auth-federation/provider-config/saml#get-after-sign-request",
+      "status": "MISMATCH",
+      "differences": [
+        "body.spConfig.spCertificates"
+      ]
+    },
+    {
+      "row": "auth-federation/provider-config/saml#delete",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/provider-config/default-supported#list-supported",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/provider-config/default-supported#list",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/provider-config/default-supported#create",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/provider-config/default-supported#get",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/provider-config/default-supported#patch-enabled",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/provider-config/default-supported#delete",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/provider-config/default-supported#get-deleted",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/third-party-refusals#google-garbage-id-token",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/third-party-refusals#facebook-garbage-access-token",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/third-party-refusals#unconfigured-oidc",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/third-party-refusals#create-disabled",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/third-party-refusals#disabled-oidc",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/third-party-refusals#create-auth-uri-disabled",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/third-party-refusals#delete-disabled",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/oidc/verification#create-provider",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/oidc/verification#valid",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/oidc/verification#other-key",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/oidc/verification#unknown-kid",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/oidc/verification#wrong-issuer",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/oidc/verification#wrong-audience",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/oidc/verification#several-audiences",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/oidc/verification#expired",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/oidc/verification#issued-in-future",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/oidc/verification#not-yet-valid",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/oidc/verification#without-subject",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/oidc/verification#hs256-header",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/oidc/verification#garbage",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/oidc/verification#missing-token",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/oidc/verification#mixed-case-provider",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/oidc/verification#create-unpublished",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/oidc/verification#unpublished-issuer",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/oidc/nonce#create-provider",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/oidc/nonce#matching-nonce",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/oidc/nonce#other-nonce",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/oidc/nonce#token-nonce-only",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/oidc/nonce#request-nonce-only",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/oidc/replay#create-provider",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/oidc/replay#first",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/oidc/replay#again",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/accounts/new#create-provider",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/accounts/new#profile",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/accounts/new#lookup-profile",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/accounts/new#unverified-email",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/accounts/new#without-email",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/accounts/returning#create-provider",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/accounts/returning#first",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/accounts/returning#second",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/accounts/returning#lookup-after-second",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/collision/verified#create-provider",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/collision/verified#create-owner",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/collision/verified#verified-email",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/collision/verified#lookup-owner",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/collision/unverified#create-provider",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/collision/unverified#create-owner",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/collision/unverified#unverified-email",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/collision/unverified#lookup-owner",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/link#create-provider",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/link#first",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/link#create-other",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/link#create-taken",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/link#link-second",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/link#lookup-linked",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/link#link-linked-elsewhere",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/link#link-linked-elsewhere-without-credential",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/link#link-taken-email",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/duplicate-email#create-provider",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/duplicate-email#allow-duplicates",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/duplicate-email#create-owner",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/duplicate-email#sign-in-with-duplicates-allowed",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/duplicate-email#lookup-owner",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/pending-token#create-provider",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/pending-token#first",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/pending-token#pending-token",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/pending-token#pending-token-again",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/claims/sign-in#create-provider",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/claims/sign-in#sign-in",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/claims/refresh#create-provider",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/claims/refresh#sign-in",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/claims/refresh#refresh",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/claims/session-cookie#create-provider",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/claims/session-cookie#sign-in",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/claims/session-cookie#refresh",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/claims/session-cookie#cookie-from-sign-in",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/claims/session-cookie#cookie-from-refresh",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/create-auth-uri#create-provider",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/create-auth-uri#create-auth-uri",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/create-auth-uri#create-auth-uri-without-continue",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/request-uri#create-provider",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/request-uri#create-auth-uri",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/request-uri#with-session",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/request-uri#with-wrong-session",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/request-uri#with-other-request-uri",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/request-uri#without-session",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/provider-enablement#create-provider",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/provider-enablement#enabled",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/provider-enablement#disable",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/provider-enablement#disabled",
+      "status": "MATCH"
+    }
+  ]
+}

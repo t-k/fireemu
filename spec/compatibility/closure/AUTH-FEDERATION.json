@@ -75,8 +75,27 @@
       "configProjections": [
         "strict"
       ],
-      "status": "PENDING_CORPUS",
-      "note": "Project oauthIdpConfigs create, get, list (paging), update by mask and delete: the ID rule, required members, the issuer form, the code flow and its secret, the response type, how clientSecret is returned, duplicates and missing resources."
+      "status": "VERIFIED",
+      "note": "Project oauthIdpConfigs create, get, list (paging), update by mask and delete: the ID rule, required members, the issuer form, the code flow and its secret, the response type, how clientSecret is returned, duplicates and missing resources.",
+      "limits": "When several creation refusals apply at once, which is answered is fireemu's order (each was observed alone). An issuer is refused unless it is an https URL; production refused an http:// one.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-28T01:43:42.183Z",
+            "gitSha": "94d7251e3bfedddc489022f8c358527ef545a0db",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "ff883a9bcd577ba7f7f12619c26c8e80596777ca551a69f47e18034269336de0",
+        "sourceCommit": "34e893e72c2072af51fea118d3d697db8e1cf232",
+        "comparisonPaths": [
+          "spec/compatibility/closure/evidence/AUTH-FEDERATION-comparison.json"
+        ],
+        "rows": {
+          "MATCH": 14
+        }
+      }
     },
     {
       "conditionId": "AUTH-FEDERATION/provider-config-saml",
@@ -87,8 +106,28 @@
       "configProjections": [
         "strict"
       ],
-      "status": "PENDING_CORPUS",
-      "note": "Project inboundSamlConfigs create, get, update by mask and delete: certificate PEM validation, spConfig, signRequest and the spCertificates the service adds."
+      "status": "MISMATCH",
+      "note": "Project inboundSamlConfigs create, get, update by mask and delete: certificate PEM validation, spConfig, signRequest and the spCertificates the service adds.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-28T01:43:42.183Z",
+            "gitSha": "94d7251e3bfedddc489022f8c358527ef545a0db",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "ff883a9bcd577ba7f7f12619c26c8e80596777ca551a69f47e18034269336de0",
+        "sourceCommit": "34e893e72c2072af51fea118d3d697db8e1cf232",
+        "comparisonPaths": [
+          "spec/compatibility/closure/evidence/AUTH-FEDERATION-comparison.json"
+        ],
+        "rows": {
+          "MATCH": 4,
+          "MISMATCH": 2
+        }
+      },
+      "pendingDecision": "provider-config/saml#patch-sign-request and #get-after-sign-request differ only in spConfig.spCertificates, which fireemu does not generate (it makes no SP key). Whether this is an approved known difference or is implemented is the owner's decision (Q2, asked 2026-09-29)."
     },
     {
       "conditionId": "AUTH-FEDERATION/provider-config-default-supported",
@@ -99,8 +138,27 @@
       "configProjections": [
         "strict"
       ],
-      "status": "PENDING_CORPUS",
-      "note": "Project defaultSupportedIdpConfigs create by idpId, get, list, update by mask and delete, and defaultSupportedIdps.list. A default IdP the program writes must be absent at its start."
+      "status": "VERIFIED",
+      "note": "Project defaultSupportedIdpConfigs create by idpId, get, list, update by mask and delete, and defaultSupportedIdps.list. A default IdP the program writes must be absent at its start.",
+      "limits": "GET /v2/defaultSupportedIdps answers production's ten identity providers whole; its paging is unobserved. Which idpId a defaultSupportedIdpConfigs create accepts is unobserved.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-28T01:43:42.183Z",
+            "gitSha": "94d7251e3bfedddc489022f8c358527ef545a0db",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "ff883a9bcd577ba7f7f12619c26c8e80596777ca551a69f47e18034269336de0",
+        "sourceCommit": "34e893e72c2072af51fea118d3d697db8e1cf232",
+        "comparisonPaths": [
+          "spec/compatibility/closure/evidence/AUTH-FEDERATION-comparison.json"
+        ],
+        "rows": {
+          "MATCH": 7
+        }
+      }
     },
     {
       "conditionId": "AUTH-FEDERATION/provider-enablement",
@@ -112,8 +170,26 @@
       "configProjections": [
         "strict"
       ],
-      "status": "PENDING_CORPUS",
-      "note": "signInWithIdp and createAuthUri for an unconfigured, a disabled and an enabled provider (OPERATION_NOT_ALLOWED, INVALID_PROVIDER_ID and the like). Strict refuses an unconfigured and a disabled provider with INVALID_IDP_RESPONSE since O4 (f5d0831ff) without a production observation; third-party-refusals steps unconfigured-oidc and disabled-oidc and provider-enablement step disabled observe the code."
+      "status": "VERIFIED",
+      "note": "signInWithIdp and createAuthUri for an unconfigured, a disabled and an enabled provider. Strict answers production's configuration messages (record-oidc 39209e): OPERATION_NOT_ALLOWED : The identity provider configuration is not found. for a provider without a configuration (also one named in another case, and a built-in provider without one), and ... is disabled. for a disabled one; the same for SAML providers.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-28T01:43:42.183Z",
+            "gitSha": "94d7251e3bfedddc489022f8c358527ef545a0db",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "ff883a9bcd577ba7f7f12619c26c8e80596777ca551a69f47e18034269336de0",
+        "sourceCommit": "34e893e72c2072af51fea118d3d697db8e1cf232",
+        "comparisonPaths": [
+          "spec/compatibility/closure/evidence/AUTH-FEDERATION-comparison.json"
+        ],
+        "rows": {
+          "MATCH": 11
+        }
+      }
     },
     {
       "conditionId": "AUTH-FEDERATION/oidc-token-verification",
@@ -126,8 +202,34 @@
       "configProjections": [
         "strict"
       ],
-      "status": "PENDING_CORPUS",
-      "note": "A controlled OIDC IdP (O1): ID tokens signed with the run's key and published through the sandbox's Hosting; the signature, iss, aud (clientId), exp, iat, nbf, alg and kid matrix and malformed tokens. Strict refusals added by O4 (f5d0831ff) without a production observation, each answered INVALID_IDP_RESPONSE, whose code this recipe checks: a mixed-case providerId (step mixed-case-provider) and an issuer without configured keys, observed as an issuer that publishes nothing (step unpublished-issuer; production fetches discovery where fireemu reads auth.idpSigners, so a difference in the answer is a known divergence of O4, not a defect)."
+      "status": "VERIFIED",
+      "note": "A controlled OIDC IdP (O1): ID tokens signed with the run's key and published through the sandbox's Hosting; the signature, iss, aud (clientId), exp, iat, nbf, alg and kid matrix and malformed tokens (record-oidc 39209e), and stale iat, azp and several audiences (record-saml 7789f0). Each refusal carries production's message. An issuer without configured keys answers production's INVALID_IDP_RESPONSE : Error connecting to the given credential's issuer. (step unpublished-issuer): fireemu reads auth.idpSigners where production fetches the issuer's keys (O4).",
+      "limits": "The exact width of production's staleness window is unobserved: rows at iat 300 to 7200 seconds back with a future exp were accepted, and the refusal was observed for exp and a future iat.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-28T01:43:42.183Z",
+            "gitSha": "94d7251e3bfedddc489022f8c358527ef545a0db",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          },
+          {
+            "recordedAt": "2026-09-28T07:35:45.406Z",
+            "gitSha": "fe5314b0b9bfa063833501251d141a63f2e9dd16",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "ff883a9bcd577ba7f7f12619c26c8e80596777ca551a69f47e18034269336de0",
+        "sourceCommit": "34e893e72c2072af51fea118d3d697db8e1cf232",
+        "comparisonPaths": [
+          "spec/compatibility/closure/evidence/AUTH-FEDERATION-comparison.json",
+          "spec/compatibility/closure/evidence/AUTH-FEDERATION-saml-comparison.json"
+        ],
+        "rows": {
+          "MATCH": 26
+        }
+      }
     },
     {
       "conditionId": "AUTH-FEDERATION/oidc-nonce",
@@ -139,8 +241,33 @@
       "configProjections": [
         "strict"
       ],
-      "status": "PENDING_CORPUS",
-      "note": "The nonce: absent and present, matching and not (the SHA-256 of the raw nonce in postBody)."
+      "status": "VERIFIED",
+      "note": "The nonce: absent and present, matching and not (the SHA-256 of the raw nonce in postBody).",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-28T01:43:42.183Z",
+            "gitSha": "94d7251e3bfedddc489022f8c358527ef545a0db",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          },
+          {
+            "recordedAt": "2026-09-28T07:35:45.406Z",
+            "gitSha": "fe5314b0b9bfa063833501251d141a63f2e9dd16",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "ff883a9bcd577ba7f7f12619c26c8e80596777ca551a69f47e18034269336de0",
+        "sourceCommit": "34e893e72c2072af51fea118d3d697db8e1cf232",
+        "comparisonPaths": [
+          "spec/compatibility/closure/evidence/AUTH-FEDERATION-comparison.json",
+          "spec/compatibility/closure/evidence/AUTH-FEDERATION-saml-comparison.json"
+        ],
+        "rows": {
+          "MATCH": 7
+        }
+      }
     },
     {
       "conditionId": "AUTH-FEDERATION/oidc-replay",
@@ -151,8 +278,26 @@
       "configProjections": [
         "strict"
       ],
-      "status": "PENDING_CORPUS",
-      "note": "The same ID token used twice."
+      "status": "VERIFIED",
+      "note": "The same ID token used twice.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-28T01:43:42.183Z",
+            "gitSha": "94d7251e3bfedddc489022f8c358527ef545a0db",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "ff883a9bcd577ba7f7f12619c26c8e80596777ca551a69f47e18034269336de0",
+        "sourceCommit": "34e893e72c2072af51fea118d3d697db8e1cf232",
+        "comparisonPaths": [
+          "spec/compatibility/closure/evidence/AUTH-FEDERATION-comparison.json"
+        ],
+        "rows": {
+          "MATCH": 3
+        }
+      }
     },
     {
       "conditionId": "AUTH-FEDERATION/saml-response-verification",
@@ -165,8 +310,27 @@
       "configProjections": [
         "strict"
       ],
-      "status": "PENDING_CORPUS",
-      "note": "A controlled SAML IdP (O1): responses signed with the run's certificate; the signature placement, Audience, Destination and Recipient, NotOnOrAfter, InResponseTo and an IdP-initiated response. Subject to the O5 feasibility check; if production takes no locally signed response, the owner is asked to move this condition out of scope. Stage A (saml-smoke, 2026-09-27) found production accepting a locally signed response in all three positions and refusing a tampered signature with INVALID_IDP_RESPONSE : Failed to verify the signature in SAMLResponse; stage B (R2, owner-approved 2026-09-28) verifies signed responses in strict (crates/fireemu-adapter-http/src/saml.rs). Refusals rest on that observation and the public documentation (a missing signature or NameID); audience, destination, recipient, time windows, InResponseTo, issuer and the SHA-1 algorithms are not enforced until a record-saml recording observes them (list U1-U18)."
+      "status": "VERIFIED",
+      "note": "A controlled SAML IdP (O1): SP-initiated responses signed with the run's certificate (record-saml 7789f0). The signature in each position, and a tampered or missing one refused with INVALID_IDP_RESPONSE : Failed to verify the signature in SAMLResponse (saml-smoke efe0ef); a response without NameID refused. Strict refuses, with production's messages, a status other than success, a Destination other than the callback URL, an assertion Issuer other than the IdP entity ID, audience restrictions without the SP entity ID, Conditions not yet valid or expired, an expired bearer confirmation, and an InResponseTo missing from or other than the request. The Recipient and an expired IdP certificate are accepted, as production accepted them.",
+      "limits": "The signature refusal (a tampered or missing signature: INVALID_IDP_RESPONSE : Failed to verify the signature in SAMLResponse) rests on the single saml-smoke run efe0ef (2026-09-27), not on a fixture recorded twice; the recorded rows here are the conditions, attributes and certificate programs of record-saml 7789f0. The InResponseTo check applies only to a sign-in naming a sessionId that fireemu's createAuthUri issued within the last hour; a sign-in without one is unobserved and not refused. Unobserved: which refusal wins when several conditions fail, and a time that does not parse (not checked). The verifier does not implement inclusive canonicalization, other transforms, EncryptedAssertion, or responses past its size and namespace limits; those are refused with INVALID_IDP_RESPONSE.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-28T07:35:45.406Z",
+            "gitSha": "fe5314b0b9bfa063833501251d141a63f2e9dd16",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "ff883a9bcd577ba7f7f12619c26c8e80596777ca551a69f47e18034269336de0",
+        "sourceCommit": "34e893e72c2072af51fea118d3d697db8e1cf232",
+        "comparisonPaths": [
+          "spec/compatibility/closure/evidence/AUTH-FEDERATION-saml-comparison.json"
+        ],
+        "rows": {
+          "MATCH": 33
+        }
+      }
     },
     {
       "conditionId": "AUTH-FEDERATION/saml-nameid-and-attributes",
@@ -177,8 +341,26 @@
       "configProjections": [
         "strict"
       ],
-      "status": "PENDING_CORPUS",
-      "note": "NameID formats and the email of the ID token; the shape of firebase.sign_in_attributes, multi-valued attributes included. Subject to O5 as saml-response-verification."
+      "status": "VERIFIED",
+      "note": "NameID formats (an email and a persistent one) and the email of the ID token; the shape of firebase.sign_in_attributes and rawUserInfo, multi-valued attributes included (record-saml 7789f0).",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-28T07:35:45.406Z",
+            "gitSha": "fe5314b0b9bfa063833501251d141a63f2e9dd16",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "ff883a9bcd577ba7f7f12619c26c8e80596777ca551a69f47e18034269336de0",
+        "sourceCommit": "34e893e72c2072af51fea118d3d697db8e1cf232",
+        "comparisonPaths": [
+          "spec/compatibility/closure/evidence/AUTH-FEDERATION-saml-comparison.json"
+        ],
+        "rows": {
+          "MATCH": 6
+        }
+      }
     },
     {
       "conditionId": "AUTH-FEDERATION/create-auth-uri-provider",
@@ -190,8 +372,34 @@
       "configProjections": [
         "strict"
       ],
-      "status": "PENDING_CORPUS",
-      "note": "createAuthUri of a configured OIDC and SAML provider: authUri, sessionId and providerId."
+      "status": "VERIFIED",
+      "note": "createAuthUri of a configured OIDC and SAML provider: authUri, sessionId and providerId.",
+      "limits": "The OIDC scope is the issuer's configured scopes_supported, or openid without it: inferred from two answers (record-oidc's issuer, and accounts.google.com in AUTH-TENANT-BLOCKING). Not implemented (501): the code flow, an issuer without a configured authorization_endpoint (no discovery document is fetched), and a SAML provider whose requests are signed.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-28T01:43:42.183Z",
+            "gitSha": "94d7251e3bfedddc489022f8c358527ef545a0db",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          },
+          {
+            "recordedAt": "2026-09-28T07:35:45.406Z",
+            "gitSha": "fe5314b0b9bfa063833501251d141a63f2e9dd16",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "ff883a9bcd577ba7f7f12619c26c8e80596777ca551a69f47e18034269336de0",
+        "sourceCommit": "34e893e72c2072af51fea118d3d697db8e1cf232",
+        "comparisonPaths": [
+          "spec/compatibility/closure/evidence/AUTH-FEDERATION-comparison.json",
+          "spec/compatibility/closure/evidence/AUTH-FEDERATION-saml-comparison.json"
+        ],
+        "rows": {
+          "MATCH": 5
+        }
+      }
     },
     {
       "conditionId": "AUTH-FEDERATION/request-uri-session",
@@ -202,8 +410,26 @@
       "configProjections": [
         "strict"
       ],
-      "status": "PENDING_CORPUS",
-      "note": "How requestUri, sessionId and continueUri are bound: a mismatch, a missing and another session."
+      "status": "VERIFIED",
+      "note": "How requestUri, sessionId and continueUri are bound: a mismatch, a missing and another session.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-28T01:43:42.183Z",
+            "gitSha": "94d7251e3bfedddc489022f8c358527ef545a0db",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "ff883a9bcd577ba7f7f12619c26c8e80596777ca551a69f47e18034269336de0",
+        "sourceCommit": "34e893e72c2072af51fea118d3d697db8e1cf232",
+        "comparisonPaths": [
+          "spec/compatibility/closure/evidence/AUTH-FEDERATION-comparison.json"
+        ],
+        "rows": {
+          "MATCH": 6
+        }
+      }
     },
     {
       "conditionId": "AUTH-FEDERATION/idp-new-account",
@@ -214,8 +440,26 @@
       "configProjections": [
         "strict"
       ],
-      "status": "PENDING_CORPUS",
-      "note": "An account an IdP sign-in creates: isNewUser, emailVerified, profile members, providerUserInfo and the answer members."
+      "status": "VERIFIED",
+      "note": "An account an IdP sign-in creates: isNewUser, emailVerified, profile members, providerUserInfo and the answer members.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-28T01:43:42.183Z",
+            "gitSha": "94d7251e3bfedddc489022f8c358527ef545a0db",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "ff883a9bcd577ba7f7f12619c26c8e80596777ca551a69f47e18034269336de0",
+        "sourceCommit": "34e893e72c2072af51fea118d3d697db8e1cf232",
+        "comparisonPaths": [
+          "spec/compatibility/closure/evidence/AUTH-FEDERATION-comparison.json"
+        ],
+        "rows": {
+          "MATCH": 5
+        }
+      }
     },
     {
       "conditionId": "AUTH-FEDERATION/idp-returning-account",
@@ -226,8 +470,26 @@
       "configProjections": [
         "strict"
       ],
-      "status": "PENDING_CORPUS",
-      "note": "A second sign-in with the same raw ID."
+      "status": "VERIFIED",
+      "note": "A second sign-in with the same raw ID.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-28T01:43:42.183Z",
+            "gitSha": "94d7251e3bfedddc489022f8c358527ef545a0db",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "ff883a9bcd577ba7f7f12619c26c8e80596777ca551a69f47e18034269336de0",
+        "sourceCommit": "34e893e72c2072af51fea118d3d697db8e1cf232",
+        "comparisonPaths": [
+          "spec/compatibility/closure/evidence/AUTH-FEDERATION-comparison.json"
+        ],
+        "rows": {
+          "MATCH": 4
+        }
+      }
     },
     {
       "conditionId": "AUTH-FEDERATION/collision-verified-email",
@@ -238,8 +500,26 @@
       "configProjections": [
         "strict"
       ],
-      "status": "PENDING_CORPUS",
-      "note": "A verified IdP email that an existing account holds (linking, emailRecycled)."
+      "status": "VERIFIED",
+      "note": "A verified IdP email that an existing account holds (linking, emailRecycled).",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-28T01:43:42.183Z",
+            "gitSha": "94d7251e3bfedddc489022f8c358527ef545a0db",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "ff883a9bcd577ba7f7f12619c26c8e80596777ca551a69f47e18034269336de0",
+        "sourceCommit": "34e893e72c2072af51fea118d3d697db8e1cf232",
+        "comparisonPaths": [
+          "spec/compatibility/closure/evidence/AUTH-FEDERATION-comparison.json"
+        ],
+        "rows": {
+          "MATCH": 4
+        }
+      }
     },
     {
       "conditionId": "AUTH-FEDERATION/collision-unverified-email",
@@ -250,8 +530,26 @@
       "configProjections": [
         "strict"
       ],
-      "status": "PENDING_CORPUS",
-      "note": "An unverified IdP email that an existing account holds (needConfirmation, verifiedProvider)."
+      "status": "VERIFIED",
+      "note": "An unverified IdP email that an existing account holds (needConfirmation, verifiedProvider).",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-28T01:43:42.183Z",
+            "gitSha": "94d7251e3bfedddc489022f8c358527ef545a0db",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "ff883a9bcd577ba7f7f12619c26c8e80596777ca551a69f47e18034269336de0",
+        "sourceCommit": "34e893e72c2072af51fea118d3d697db8e1cf232",
+        "comparisonPaths": [
+          "spec/compatibility/closure/evidence/AUTH-FEDERATION-comparison.json"
+        ],
+        "rows": {
+          "MATCH": 4
+        }
+      }
     },
     {
       "conditionId": "AUTH-FEDERATION/link-with-id-token",
@@ -262,8 +560,26 @@
       "configProjections": [
         "strict"
       ],
-      "status": "PENDING_CORPUS",
-      "note": "Linking with an ID token: FEDERATED_USER_ID_ALREADY_LINKED and EMAIL_EXISTS, with and without returnIdpCredential."
+      "status": "VERIFIED",
+      "note": "Linking with an ID token: FEDERATED_USER_ID_ALREADY_LINKED and EMAIL_EXISTS, with and without returnIdpCredential.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-28T01:43:42.183Z",
+            "gitSha": "94d7251e3bfedddc489022f8c358527ef545a0db",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "ff883a9bcd577ba7f7f12619c26c8e80596777ca551a69f47e18034269336de0",
+        "sourceCommit": "34e893e72c2072af51fea118d3d697db8e1cf232",
+        "comparisonPaths": [
+          "spec/compatibility/closure/evidence/AUTH-FEDERATION-comparison.json"
+        ],
+        "rows": {
+          "MATCH": 9
+        }
+      }
     },
     {
       "conditionId": "AUTH-FEDERATION/duplicate-email-mode",
@@ -275,8 +591,34 @@
       "configProjections": [
         "strict"
       ],
-      "status": "PENDING_CORPUS",
-      "note": "IdP sign-in with signIn.allowDuplicateEmails on and off (the only config path this parent writes)."
+      "status": "VERIFIED",
+      "note": "IdP sign-in with signIn.allowDuplicateEmails on and off (the only config path this parent writes).",
+      "limits": "A new account whose email another account holds is created without the email for OIDC, as observed; the SAML case is unobserved and keeps the email.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-28T01:43:42.183Z",
+            "gitSha": "94d7251e3bfedddc489022f8c358527ef545a0db",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          },
+          {
+            "recordedAt": "2026-09-28T07:35:45.406Z",
+            "gitSha": "fe5314b0b9bfa063833501251d141a63f2e9dd16",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "ff883a9bcd577ba7f7f12619c26c8e80596777ca551a69f47e18034269336de0",
+        "sourceCommit": "34e893e72c2072af51fea118d3d697db8e1cf232",
+        "comparisonPaths": [
+          "spec/compatibility/closure/evidence/AUTH-FEDERATION-comparison.json",
+          "spec/compatibility/closure/evidence/AUTH-FEDERATION-saml-comparison.json"
+        ],
+        "rows": {
+          "MATCH": 12
+        }
+      }
     },
     {
       "conditionId": "AUTH-FEDERATION/pending-token",
@@ -287,8 +629,26 @@
       "configProjections": [
         "strict"
       ],
-      "status": "PENDING_CORPUS",
-      "note": "pendingToken reuse, lifetime and whether it is single-use."
+      "status": "VERIFIED",
+      "note": "pendingToken reuse, lifetime and whether it is single-use.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-28T01:43:42.183Z",
+            "gitSha": "94d7251e3bfedddc489022f8c358527ef545a0db",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "ff883a9bcd577ba7f7f12619c26c8e80596777ca551a69f47e18034269336de0",
+        "sourceCommit": "34e893e72c2072af51fea118d3d697db8e1cf232",
+        "comparisonPaths": [
+          "spec/compatibility/closure/evidence/AUTH-FEDERATION-comparison.json"
+        ],
+        "rows": {
+          "MATCH": 4
+        }
+      }
     },
     {
       "conditionId": "AUTH-FEDERATION/idp-claims-sign-in",
@@ -299,8 +659,26 @@
       "configProjections": [
         "strict"
       ],
-      "status": "PENDING_CORPUS",
-      "note": "Moved from AUTH-CREDENTIAL C7: the ID token of an IdP sign-in: firebase.identities, sign_in_provider and sign_in_attributes."
+      "status": "VERIFIED",
+      "note": "Moved from AUTH-CREDENTIAL C7: the ID token of an IdP sign-in: firebase.identities, sign_in_provider and sign_in_attributes.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-28T01:43:42.183Z",
+            "gitSha": "94d7251e3bfedddc489022f8c358527ef545a0db",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "ff883a9bcd577ba7f7f12619c26c8e80596777ca551a69f47e18034269336de0",
+        "sourceCommit": "34e893e72c2072af51fea118d3d697db8e1cf232",
+        "comparisonPaths": [
+          "spec/compatibility/closure/evidence/AUTH-FEDERATION-comparison.json"
+        ],
+        "rows": {
+          "MATCH": 2
+        }
+      }
     },
     {
       "conditionId": "AUTH-FEDERATION/idp-claims-refresh",
@@ -311,8 +689,27 @@
       "configProjections": [
         "strict"
       ],
-      "status": "PENDING_CORPUS",
-      "note": "Moved from AUTH-CREDENTIAL C7: the claims after a Secure Token refresh (whether sign_in_attributes survives)."
+      "status": "VERIFIED",
+      "note": "Moved from AUTH-CREDENTIAL C7: the claims after a Secure Token refresh (whether sign_in_attributes survives).",
+      "limits": "A refreshed token's auth_time is compared as not after its iat (coordinator's decision Q1, 2026-09-29): whether it falls in the refresh's second depends on send time.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-28T01:43:42.183Z",
+            "gitSha": "94d7251e3bfedddc489022f8c358527ef545a0db",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "ff883a9bcd577ba7f7f12619c26c8e80596777ca551a69f47e18034269336de0",
+        "sourceCommit": "34e893e72c2072af51fea118d3d697db8e1cf232",
+        "comparisonPaths": [
+          "spec/compatibility/closure/evidence/AUTH-FEDERATION-comparison.json"
+        ],
+        "rows": {
+          "MATCH": 3
+        }
+      }
     },
     {
       "conditionId": "AUTH-FEDERATION/idp-claims-session-cookie",
@@ -323,8 +720,27 @@
       "configProjections": [
         "strict"
       ],
-      "status": "PENDING_CORPUS",
-      "note": "Moved from AUTH-CREDENTIAL C7: the claims of session cookies made from the original and the refreshed ID token. The cookie's auth_time is the sign-in's and its iat the cookie's: recorded relative to the cookie's iat, it is iat+0 or iat-1 by the second boundary (rehearsal, 2026-09-28) and may be lower in production, so the comparison accepts any auth_time <= iat on these rows instead of the exact value (pre-send review 2 of record-oidc)."
+      "status": "VERIFIED",
+      "note": "Moved from AUTH-CREDENTIAL C7: the claims of session cookies made from the original and the refreshed ID token. The cookie's auth_time is the sign-in's and its iat the cookie's, so which second it falls in depends on when the cookie was made: it is recorded as <=iat when not after iat (coordinator's decision Q1, 2026-09-29; both fixtures re-normalized in place).",
+      "limits": "A session cookie's auth_time is compared as not after its iat (coordinator's decision Q1, 2026-09-29).",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-28T01:43:42.183Z",
+            "gitSha": "94d7251e3bfedddc489022f8c358527ef545a0db",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "ff883a9bcd577ba7f7f12619c26c8e80596777ca551a69f47e18034269336de0",
+        "sourceCommit": "34e893e72c2072af51fea118d3d697db8e1cf232",
+        "comparisonPaths": [
+          "spec/compatibility/closure/evidence/AUTH-FEDERATION-comparison.json"
+        ],
+        "rows": {
+          "MATCH": 5
+        }
+      }
     },
     {
       "conditionId": "AUTH-FEDERATION/third-party-refusals",
@@ -336,8 +752,33 @@
       "configProjections": [
         "strict"
       ],
-      "status": "PENDING_CORPUS",
-      "note": "Providers this parent does not sign in with (F3, F5): malformed and synthetic credentials for google.com and the other built-in providers, and their configuration. Strict refuses every built-in provider with INVALID_IDP_RESPONSE since O4 (f5d0831ff), unobserved; steps google-garbage-id-token and facebook-garbage-access-token observe production's answer to credentials it cannot verify. A genuine built-in credential cannot be observed (F3), so accepting one stays a known divergence: fireemu fetches no Google or Facebook key."
+      "status": "VERIFIED",
+      "note": "Providers this parent does not sign in with (F3, F5): malformed and synthetic credentials for google.com and the other built-in providers. Without a configuration, production's OPERATION_NOT_ALLOWED : The identity provider configuration is not found. (record-oidc 39209e); with google.com configured, its INVALID_IDP_RESPONSE : Unable to parse Google id_token: <token> for a garbage ID token (record-saml 7789f0). A genuine built-in credential cannot be observed (F3), so accepting one stays a known divergence: fireemu fetches no Google or Facebook key.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-28T01:43:42.183Z",
+            "gitSha": "94d7251e3bfedddc489022f8c358527ef545a0db",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          },
+          {
+            "recordedAt": "2026-09-28T07:35:45.406Z",
+            "gitSha": "fe5314b0b9bfa063833501251d141a63f2e9dd16",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "ff883a9bcd577ba7f7f12619c26c8e80596777ca551a69f47e18034269336de0",
+        "sourceCommit": "34e893e72c2072af51fea118d3d697db8e1cf232",
+        "comparisonPaths": [
+          "spec/compatibility/closure/evidence/AUTH-FEDERATION-comparison.json",
+          "spec/compatibility/closure/evidence/AUTH-FEDERATION-saml-comparison.json"
+        ],
+        "rows": {
+          "MATCH": 10
+        }
+      }
     },
     {
       "conditionId": "AUTH-FEDERATION/final-artifact-regression",
@@ -352,7 +793,7 @@
       "configProjections": [
         "strict"
       ],
-      "status": "PENDING_CORPUS",
+      "status": "PENDING_REVIEW",
       "note": "Every AUTH-FEDERATION row and the AUTH-ACCOUNT, AUTH-CREDENTIAL, AUTH-ACTION and AUTH-CONFIG-SDK regressions on one artifact, with the workspace tests and clippy."
     },
     {
@@ -364,7 +805,7 @@
       "configProjections": [
         "strict"
       ],
-      "status": "PENDING_CORPUS",
+      "status": "PENDING_REVIEW",
       "note": "An independent closure review and a safety review of the final artifact (no cargo-mutants in the reviews; the lane's own mutation evidence is checked). The safety review focuses on strict IdP verification (O4, f5d0831ff): the signature check, key selection by kid, alg, the exp, iat, nbf, aud, azp, iss and nonce checks, the key size bounds, auth.idpSigners validation, the re-verification in the blocking-function commit and the continuation authority."
     }
   ]

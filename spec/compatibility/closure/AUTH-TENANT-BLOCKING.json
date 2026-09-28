@@ -919,7 +919,7 @@
             },
             {
               "path": "crates/fireemu-adapter-http/tests/identity_toolkit.rs",
-              "name": "a_cleared_request_does_not_take_a_uid_another_account_took"
+              "name": "a_request_whose_uid_another_account_took_is_a_duplicate"
             }
           ]
         }

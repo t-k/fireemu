@@ -3890,6 +3890,16 @@ impl AuthBlockingHook for CreatingAdminHook {
 /// account right after.
 struct ClearingThenTakingHook {
     state: std::sync::Weak<AuthState>,
+    /// Clear the accounts before anything else.
+    clear: bool,
+    /// Then create an account with the event's uid through the Admin API.
+    take: bool,
+}
+
+impl ClearingThenTakingHook {
+    fn new(state: std::sync::Weak<AuthState>, clear: bool, take: bool) -> Self {
+        Self { state, clear, take }
+    }
 }
 
 impl AuthBlockingHook for ClearingThenTakingHook {
@@ -3903,21 +3913,28 @@ impl AuthBlockingHook for ClearingThenTakingHook {
                 .state
                 .upgrade()
                 .ok_or_else(BlockingFunctionFailure::unhandled)?;
-            let cleared = handle(
-                &state,
-                "DELETE",
-                "/emulator/v1/projects/demo-app/accounts",
-                &Value::Null,
-            );
-            let taken = handle_with(
-                &state,
-                "POST",
-                &format!("{ADMIN}/accounts"),
-                &owner(),
-                &json!({"localId": user.local_id.as_str(), "email": "taker@example.com"}),
-            );
-            if cleared.status != 200 || taken.status != 200 {
-                return Err(BlockingFunctionFailure::unhandled());
+            if self.clear {
+                let cleared = handle(
+                    &state,
+                    "DELETE",
+                    "/emulator/v1/projects/demo-app/accounts",
+                    &Value::Null,
+                );
+                if cleared.status != 200 {
+                    return Err(BlockingFunctionFailure::unhandled());
+                }
+            }
+            if self.take {
+                let taken = handle_with(
+                    &state,
+                    "POST",
+                    &format!("{ADMIN}/accounts"),
+                    &owner(),
+                    &json!({"localId": user.local_id.as_str(), "email": "taker@example.com"}),
+                );
+                if taken.status != 200 {
+                    return Err(BlockingFunctionFailure::unhandled());
+                }
             }
         }
         Ok(json!({}))
@@ -4405,17 +4422,21 @@ fn a_clear_during_a_blocking_hook_is_refused_in_strict_and_committed_in_the_emul
     }
 }
 
-/// A request whose uid another account took after a clear is refused in both profiles: the
-/// emulator profile commits across a clear only with the uid the clear left free (closure
-/// re-review S1', 2026-09-28).
+/// A request whose uid another account took while its function ran answers 400
+/// `DUPLICATE_LOCAL_ID`, as the official emulator's signUp does, whether or not the accounts were
+/// cleared in between; only the strict profile's own guard answers a clear first, with 409
+/// `AUTH_STATE_RESET`. The account that took the uid stays (closure re-reviews S1' and S1'',
+/// 2026-09-28).
 #[test]
-fn a_cleared_request_does_not_take_a_uid_another_account_took() {
-    for strict in [true, false] {
+fn a_request_whose_uid_another_account_took_is_a_duplicate() {
+    for (strict, clear) in [(true, false), (false, false), (true, true), (false, true)] {
         let state = Arc::new_cyclic(|weak| {
             let mut state = if strict { strict_state() } else { state() };
-            state.blocking = Some(Arc::new(ClearingThenTakingHook {
-                state: weak.clone(),
-            }));
+            state.blocking = Some(Arc::new(ClearingThenTakingHook::new(
+                weak.clone(),
+                clear,
+                true,
+            )));
             state
         });
         let (status, body) = post(
@@ -4423,13 +4444,19 @@ fn a_cleared_request_does_not_take_a_uid_another_account_took() {
             &format!("{V1}/accounts:signUp"),
             &json!({"email": "wiped@example.com", "password": "hunter22"}),
         );
-        assert_eq!(status, 409, "strict {strict}: {body}");
-        let expected = if strict {
-            "AUTH_STATE_RESET"
+        let expected = if strict && clear {
+            (409, "AUTH_STATE_RESET")
         } else {
-            "AUTH_STATE_CHANGED"
+            (400, "DUPLICATE_LOCAL_ID")
         };
-        assert_eq!(body["error"]["message"], expected, "strict {strict}");
+        assert_eq!(
+            (
+                status,
+                body["error"]["message"].as_str().unwrap_or_default()
+            ),
+            expected,
+            "strict {strict}, clear {clear}: {body}"
+        );
         let store = state.store.lock().unwrap();
         assert!(store.user_by_email("taker@example.com").is_some());
         assert!(store.user_by_email("wiped@example.com").is_none());

@@ -2759,9 +2759,12 @@ fn dispatch_with_blocking_hook(
                         )
                     {
                         // A reservation of the generation before a clear no longer holds; the
-                        // emulator profile creates the account with the uid the function saw,
-                        // which the clear left free.
-                        if revision_guarded || !cleared || committed.user_by_id(uid).is_some() {
+                        // emulator profile creates the account with the uid the function saw.
+                        // If another account took that uid after the clear, the creation below
+                        // answers 400 DUPLICATE_LOCAL_ID, as it does when no clear came between
+                        // and as the official emulator's signUp does (closure re-review S1'',
+                        // 2026-09-28).
+                        if revision_guarded || !cleared {
                             return error(409, "AUTH_STATE_CHANGED");
                         }
                         committed.use_reserved_generated_local_id(uid);

@@ -17900,6 +17900,55 @@ fn the_project_mfa_config_is_read_back_and_replaced_whole() {
     }
 }
 
+/// Without a registry, a PATCH refused for one member leaves `mfa` and the config as they were,
+/// because every refusal is decided before the first write.
+#[test]
+fn a_refused_project_config_update_changes_neither_mfa_nor_the_config() {
+    let policy = json!({
+        "passwordPolicyEnforcementState": "ENFORCE",
+        "passwordPolicyVersions": [{"customStrengthOptions": {"minPasswordLength": 5}}],
+    });
+    for (member, value) in [
+        ("passwordPolicyConfig", policy),
+        ("authorizedDomains", json!([""])),
+        (
+            "signIn.phoneNumber.testPhoneNumbers",
+            json!({"not-a-number": "123456"}),
+        ),
+        (
+            "signIn.phoneNumber.testPhoneNumbers",
+            Value::Object(
+                (0..11)
+                    .map(|n| (format!("+1650555{n:04}"), json!("123456")))
+                    .collect(),
+            ),
+        ),
+    ] {
+        for s in [strict_state(), state()] {
+            let mut body = json!({
+                "mfa": {"state": "ENABLED", "enabledProviders": ["PHONE_SMS"]},
+                "signIn": {"allowDuplicateEmails": true},
+            });
+            if let Some(numbers) = member.strip_prefix("signIn.phoneNumber.") {
+                body["signIn"]["phoneNumber"] = json!({ numbers: value });
+            } else {
+                body[member] = value.clone();
+            }
+            let (status, body) = admin(
+                &s,
+                "PATCH",
+                &format!("{PROJECT_CONFIG}?updateMask=mfa,signIn.allowDuplicateEmails,{member}"),
+                &body,
+            );
+            assert_eq!(status, 400, "{member}: {body}");
+            let store = s.store.lock().unwrap();
+            assert!(!store.mfa_config().sms_enabled(), "{member}");
+            assert!(!store.config().allow_duplicate_emails, "{member}");
+            assert!(!store.password_policy().configured, "{member}");
+        }
+    }
+}
+
 /// Strict: an email change applied from the emulator's action page follows the same rules as
 /// `accounts:update` with the code: earlier sessions are revoked, the replaced address is
 /// recorded as `initialEmail`, and the replaced address's verification codes are void. The

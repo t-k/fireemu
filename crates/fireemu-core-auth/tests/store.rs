@@ -2,6 +2,7 @@
 //! credentials, refresh sessions and token validity.
 
 use fireemu_core_auth::mfa::TotpPolicy;
+use fireemu_core_auth::mfa_config::{MfaConfigState, MfaProjectConfig};
 use fireemu_core_auth::signup_quota::SignupQuotaConfig;
 use fireemu_core_auth::store::{
     AuthError, AuthRegistry, AuthStore, LocalId, NewUser, PendingSignInId, ProjectAuthConfig,
@@ -89,6 +90,90 @@ fn project_config_transaction_publishes_a_valid_sign_in_candidate() {
             .expect("project store")
             .sign_in_config()
             .email_enabled
+    );
+}
+
+fn sms_mfa() -> MfaProjectConfig {
+    MfaProjectConfig {
+        state: MfaConfigState::Enabled,
+        phone_sms: true,
+        totp: None,
+    }
+}
+
+/// The project `mfa` config is published by the config transaction under the same parent lock
+/// as the other members, and an update of `mfa` alone is not taken for an empty one.
+#[test]
+fn project_config_transaction_publishes_the_mfa_config_with_the_other_members() {
+    let shared = Arc::new(Mutex::new(store()));
+    let registry = AuthRegistry::new("demo-app", Arc::clone(&shared));
+    let result = registry.patch_project_config_transaction(
+        "demo-app",
+        ProjectAuthConfigPatch::default(),
+        |_| {
+            Ok::<_, ()>(ProjectConfigStoreUpdate {
+                mfa: Some(sms_mfa()),
+                ..ProjectConfigStoreUpdate::default()
+            })
+        },
+    );
+    assert!(matches!(result, Ok(Some(_))));
+    assert_eq!(
+        shared.lock().expect("project store").mfa_config(),
+        &sms_mfa()
+    );
+
+    let sign_in = fireemu_core_auth::store::SignInConfig {
+        email_enabled: false,
+        ..fireemu_core_auth::store::SignInConfig::default()
+    };
+    let result = registry.patch_project_config_transaction(
+        "demo-app",
+        ProjectAuthConfigPatch::default(),
+        |_| {
+            Ok::<_, ()>(ProjectConfigStoreUpdate {
+                sign_in: Some(sign_in),
+                mfa: Some(MfaProjectConfig::default()),
+                ..ProjectConfigStoreUpdate::default()
+            })
+        },
+    );
+    assert!(matches!(result, Ok(Some(_))));
+    let current = shared.lock().expect("project store");
+    assert!(!current.sign_in_config().email_enabled);
+    assert_eq!(current.mfa_config(), &MfaProjectConfig::default());
+}
+
+/// A refused config transaction leaves the project `mfa` config as it was.
+#[test]
+fn a_refused_project_config_transaction_keeps_the_mfa_config() {
+    let shared = Arc::new(Mutex::new(store()));
+    let registry = AuthRegistry::new("demo-app", Arc::clone(&shared));
+    let quota = SignupQuotaConfig {
+        default_quota_per_hour: 1_000_001,
+        ..SignupQuotaConfig::default()
+    };
+    let result = registry.patch_project_config_transaction(
+        "demo-app",
+        ProjectAuthConfigPatch::default(),
+        |_| {
+            Ok::<_, ()>(ProjectConfigStoreUpdate {
+                signup_quota: Some(quota),
+                mfa: Some(sms_mfa()),
+                ..ProjectConfigStoreUpdate::default()
+            })
+        },
+    );
+    assert!(matches!(result, Ok(None)));
+    let refused = registry.patch_project_config_transaction(
+        "demo-app",
+        ProjectAuthConfigPatch::default(),
+        |_| Err::<ProjectConfigStoreUpdate, _>("refused"),
+    );
+    assert!(matches!(refused, Err("refused")));
+    assert_eq!(
+        shared.lock().expect("project store").mfa_config(),
+        &MfaProjectConfig::default()
     );
 }
 

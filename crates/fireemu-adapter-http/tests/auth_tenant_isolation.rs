@@ -2070,6 +2070,54 @@ fn a_registry_project_config_update_sets_the_mfa_config() {
     }
 }
 
+/// With a registry, `mfa` is written in the config transaction with the other members: a
+/// combined PATCH applies both, and a PATCH refused for either leaves both as they were.
+#[test]
+fn a_registry_project_config_update_writes_mfa_with_the_other_members() {
+    let enabled = json!({"state": "ENABLED", "enabledProviders": ["PHONE_SMS"]});
+    for (profile, state, registry) in profiles() {
+        let store = registry.store_for("demo-app").unwrap();
+        let (status, body) = admin(
+            &state,
+            "PATCH",
+            &format!("{PROJECT_CONFIG}?updateMask=mfa,signIn.allowDuplicateEmails"),
+            &json!({"mfa": enabled, "signIn": {"allowDuplicateEmails": true}}),
+        );
+        assert_eq!(status, 200, "{profile}: {body}");
+        assert_eq!(body["mfa"], enabled, "{profile}: {body}");
+        {
+            let current = store.lock().unwrap();
+            assert!(current.mfa_config().sms_enabled(), "{profile}");
+            assert!(current.config().allow_duplicate_emails, "{profile}");
+        }
+
+        let (status, body) = admin(
+            &state,
+            "PATCH",
+            &format!("{PROJECT_CONFIG}?updateMask=mfa,passwordPolicyConfig"),
+            &json!({
+                "mfa": {"state": "DISABLED"},
+                "passwordPolicyConfig": {
+                    "passwordPolicyEnforcementState": "ENFORCE",
+                    "passwordPolicyVersions": [{"customStrengthOptions": {"minPasswordLength": 5}}],
+                },
+            }),
+        );
+        assert_eq!(status, 400, "{profile}: {body}");
+        let (status, body) = admin(
+            &state,
+            "PATCH",
+            &format!("{PROJECT_CONFIG}?updateMask=mfa,signIn.allowDuplicateEmails"),
+            &json!({"mfa": {"state": "NOT_A_STATE"}, "signIn": {"allowDuplicateEmails": false}}),
+        );
+        assert_eq!(status, 400, "{profile}: {body}");
+        let current = store.lock().unwrap();
+        assert!(current.mfa_config().sms_enabled(), "{profile}");
+        assert!(current.config().allow_duplicate_emails, "{profile}");
+        assert!(!current.password_policy().configured, "{profile}");
+    }
+}
+
 /// A strict tenant keeps its earlier second-factor rules (scope decision M2): `auth.totp` still
 /// enables its TOTP enrollment, and an enrolled factor is asked for while the project's `mfa`
 /// config is off (follow-up confirmation SF-2).

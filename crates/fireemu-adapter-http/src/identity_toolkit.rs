@@ -5268,16 +5268,10 @@ fn project_config_management(
                 signup_quota,
                 sign_in,
                 stored_members,
+                mfa: mfa_update.clone(),
             })
         }) {
-            Ok(Some(_)) => {
-                // The multi-factor configuration is replaced after the rest, as AUTH-MFA applies it.
-                if let Some(mfa) = mfa_update.clone() {
-                    if registry.update_project_mfa_config(project, mfa).is_none() {
-                        return rollback_blocking(error(500, "INTERNAL"));
-                    }
-                }
-            }
+            Ok(Some(_)) => {}
             Ok(None) => return rollback_blocking(error(500, "INTERNAL")),
             Err(response) => return rollback_blocking(response),
         }
@@ -5306,13 +5300,39 @@ fn project_config_management(
             Ok(sign_in) => sign_in,
             Err(response) => return rollback_blocking(response),
         };
+        // Every refusal is decided before the first write, so a refused PATCH changes nothing.
+        if signup_quota
+            .as_ref()
+            .is_some_and(|quota| quota.validate().is_err())
+            || sign_in.as_ref().is_some_and(|sign_in| !sign_in.is_valid())
+        {
+            return rollback_blocking(error(400, "INVALID_ARGUMENT"));
+        }
+        let has_members = stored_members.is_some() || derives_members;
+        let members = if has_members {
+            // From the members as they are under this lock, so a concurrent write is kept.
+            let Ok(next) = project_config::apply_stored_members(
+                store.stored_config_members(),
+                body,
+                &fields,
+                project,
+            ) else {
+                return rollback_blocking(error(400, "INVALID_ARGUMENT"));
+            };
+            let mut next = next.unwrap_or_else(|| store.stored_config_members().clone());
+            let configured = password_policy
+                .as_ref()
+                .unwrap_or(store.password_policy())
+                .configured;
+            with_derived_members(&mut next, body, &fields, configured, written_at.as_deref());
+            Some(next)
+        } else {
+            None
+        };
         let has_policy = password_policy.is_some();
         let has_quota = signup_quota.is_some();
         let has_sign_in = sign_in.is_some();
         let has_mfa = mfa_update.is_some();
-        if let Some(mfa) = mfa_update {
-            store.set_mfa_config(mfa);
-        }
         let config = patch.apply_to(store.config());
         if !patch.is_empty() {
             store.set_config(config);
@@ -5330,21 +5350,11 @@ fn project_config_management(
                 return rollback_blocking(error(400, "INVALID_ARGUMENT"));
             }
         }
-        let has_members = stored_members.is_some() || derives_members;
-        if has_members {
-            // From the members as they are under this lock, so a concurrent write is kept.
-            let Ok(next) = project_config::apply_stored_members(
-                store.stored_config_members(),
-                body,
-                &fields,
-                project,
-            ) else {
-                return rollback_blocking(error(400, "INVALID_ARGUMENT"));
-            };
-            let mut next = next.unwrap_or_else(|| store.stored_config_members().clone());
-            let configured = store.password_policy().configured;
-            with_derived_members(&mut next, body, &fields, configured, written_at.as_deref());
-            store.set_stored_config_members(next);
+        if let Some(members) = members {
+            store.set_stored_config_members(members);
+        }
+        if let Some(mfa) = mfa_update {
+            store.set_mfa_config(mfa);
         }
         drop(store);
         if !patch.is_empty() || has_policy || has_quota || has_sign_in || has_members || has_mfa {

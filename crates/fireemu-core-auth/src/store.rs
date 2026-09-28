@@ -735,6 +735,8 @@ pub struct ProjectConfigStoreUpdate {
     pub sign_in: Option<SignInConfig>,
     /// Written and derived project config members, if the request writes them.
     pub stored_members: Option<crate::config_members::StoredConfigMembers>,
+    /// A replacement multi-factor configuration, if the request writes it.
+    pub mfa: Option<crate::mfa_config::MfaProjectConfig>,
 }
 
 /// The trust boundary used by operations affected by client permission settings.
@@ -7518,21 +7520,6 @@ impl AuthRegistry {
         .flatten()
     }
 
-    /// Replaces a project's multi-factor configuration under the project's operation gate;
-    /// `None` when the project has no store.
-    pub fn update_project_mfa_config(
-        &self,
-        project: &str,
-        config: crate::mfa_config::MfaProjectConfig,
-    ) -> Option<crate::mfa_config::MfaProjectConfig> {
-        let gate = self.operation_gate(project, None)?;
-        let _operation = gate.lock().ok()?;
-        let parent = self.project_store(project)?;
-        let mut parent = parent.lock().ok()?;
-        parent.set_mfa_config(config.clone());
-        Some(config)
-    }
-
     /// Replaces a project's sign-in configuration under the project's operation gate.
     /// `update` computes the new configuration from the current one; an invalid result is
     /// refused (`Ok(None)`) and changes nothing.
@@ -7637,10 +7624,11 @@ impl AuthRegistry {
         Ok(self.patch_project_config_under_gate(
             project,
             patch,
-            password_policy,
-            signup_quota,
-            None,
-            None,
+            ProjectConfigStoreUpdate {
+                password_policy,
+                signup_quota,
+                ..ProjectConfigStoreUpdate::default()
+            },
         ))
     }
 
@@ -7682,14 +7670,7 @@ impl AuthRegistry {
         {
             return Ok(None);
         }
-        Ok(self.patch_project_config_under_gate(
-            project,
-            patch,
-            update.password_policy,
-            update.signup_quota,
-            update.sign_in,
-            update.stored_members,
-        ))
+        Ok(self.patch_project_config_under_gate(project, patch, update))
     }
 
     /// Registers a non-password Auth config override without creating the project namespace.
@@ -7934,15 +7915,20 @@ impl AuthRegistry {
         true
     }
 
+    #[allow(clippy::too_many_lines)]
     fn patch_project_config_under_gate(
         &self,
         project: &str,
         patch: ProjectAuthConfigPatch,
-        password_policy: Option<PasswordPolicy>,
-        signup_quota: Option<SignupQuotaConfig>,
-        sign_in: Option<SignInConfig>,
-        stored_members: Option<crate::config_members::StoredConfigMembers>,
+        update: ProjectConfigStoreUpdate,
     ) -> Option<ProjectAuthConfig> {
+        let ProjectConfigStoreUpdate {
+            password_policy,
+            signup_quota,
+            sign_in,
+            stored_members,
+            mfa,
+        } = update;
         let projects = self.projects.lock().ok()?;
         let parent = if project == self.default_project {
             &self.default
@@ -7957,6 +7943,7 @@ impl AuthRegistry {
             && signup_quota.is_none()
             && sign_in.is_none()
             && stored_members.is_none()
+            && mfa.is_none()
         {
             return Some(parent.lock().ok()?.config());
         }
@@ -8028,6 +8015,7 @@ impl AuthRegistry {
                 signup_quota,
                 sign_in,
                 stored_members,
+                mfa,
             )?;
             return Some(config);
         }
@@ -8044,7 +8032,13 @@ impl AuthRegistry {
                 .expect("a password policy patch holds the override lock")
                 .insert(project.to_owned(), password_policy);
         }
-        Self::publish_project_config_members(&mut parent, signup_quota, sign_in, stored_members)?;
+        Self::publish_project_config_members(
+            &mut parent,
+            signup_quota,
+            sign_in,
+            stored_members,
+            mfa,
+        )?;
         Some(config)
     }
 
@@ -8053,6 +8047,7 @@ impl AuthRegistry {
         signup_quota: Option<SignupQuotaConfig>,
         sign_in: Option<SignInConfig>,
         stored_members: Option<crate::config_members::StoredConfigMembers>,
+        mfa: Option<crate::mfa_config::MfaProjectConfig>,
     ) -> Option<()> {
         if let Some(quota) = signup_quota {
             parent.set_signup_quota_config(quota).ok()?;
@@ -8062,6 +8057,9 @@ impl AuthRegistry {
         }
         if let Some(stored_members) = stored_members {
             parent.set_stored_config_members(stored_members);
+        }
+        if let Some(mfa) = mfa {
+            parent.set_mfa_config(mfa);
         }
         Some(())
     }

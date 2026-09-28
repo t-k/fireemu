@@ -44,7 +44,9 @@ export function spawnSdk(
   child.stdin.on("error", () => {});
   const stderr = [];
   child.stderr.on("data", (chunk) => stderr.push(String(chunk)));
-  child.on("exit", (code, signal) => {
+  // `close` comes after the driver's output is drained, so its last event (a refusal, say) is
+  // always seen before the waits are failed.
+  child.on("close", (code, signal) => {
     exited = { code, signal };
     deliver({ event: "exit", code, signal });
     for (const waiter of waiters) {

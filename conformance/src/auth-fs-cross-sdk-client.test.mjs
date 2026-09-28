@@ -14,7 +14,7 @@ function fakeSpawn() {
   child.killed = [];
   child.kill = (signal) => {
     child.killed.push(signal);
-    child.emit("exit", null, signal);
+    child.emit("close", null, signal);
   };
   const commands = [];
   child.stdin.on("data", (chunk) => {
@@ -65,7 +65,7 @@ test("an exit fails every wait, and close kills a driver that does not stop", as
   const fake = fakeSpawn();
   const sdk = spawnSdk({}, { spawnImpl: fake.spawnImpl, timeoutMs: 1_000 });
   const waiting = sdk.waitFor((e) => e.event === "never");
-  fake.child.emit("exit", 1, null);
+  fake.child.emit("close", 1, null);
   await assert.rejects(waiting, /exited/);
 
   const stuck = fakeSpawn();

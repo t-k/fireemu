@@ -893,3 +893,33 @@ test("a client ended by its cap answers later commands as failed, and the run go
   assert.deepEqual(rows["tx/result"].capped, ["c"]);
   assert.deepEqual(rows.s.capped, ["c"]);
 });
+
+test("the runner keeps going when its console's reader is gone", async () => {
+  const { spawn } = await import("node:child_process");
+  const { fileURLToPath } = await import("node:url");
+  const runner = fileURLToPath(new URL("./auth-fs-cross/stage2-run.mjs", import.meta.url));
+  // A child that keeps logging after its reader went away (as a stopped `tee` leaves it), then
+  // reports whether it reached the end of its work through a channel of its own (stderr).
+  const script = (guarded) => `
+    ${guarded ? `const { keepRunningWithoutConsole } = await import(${JSON.stringify(runner)}); keepRunningWithoutConsole([process.stdout]);` : ""}
+    for (let i = 0; i < 40; i += 1) {
+      console.log("step " + i);
+      await new Promise((r) => setTimeout(r, 5));
+    }
+    process.stderr.write("finished");
+  `;
+  const run = (guarded) =>
+    new Promise((resolve) => {
+      const child = spawn(process.execPath, ["--input-type=module", "-e", script(guarded)], {
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      let stderr = "";
+      child.stderr.on("data", (chunk) => {
+        stderr += chunk;
+      });
+      child.stdout.once("data", () => child.stdout.destroy());
+      child.on("close", () => resolve(stderr));
+    });
+  assert.match(await run(true), /finished$/);
+  assert.doesNotMatch(await run(false), /finished$/);
+});

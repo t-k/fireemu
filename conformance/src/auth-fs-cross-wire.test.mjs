@@ -153,7 +153,8 @@ test("the connection past the cap is destroyed before it connects, and closes th
   }
   // The server may see a connection a moment after the client did: wait for it, then count.
   const until = Date.now() + 2_000;
-  while (accepted < 2 && Date.now() < until)
+  const seenByServer = () => accepted;
+  while (seenByServer() < 2 && Date.now() < until)
     await new Promise((resolve) => setTimeout(resolve, 10));
   await new Promise((resolve) => setTimeout(resolve, 50));
   server.close();

@@ -360,7 +360,16 @@ async function main([command, ...args]) {
   }
 }
 
+/**
+ * A console whose reader is gone (a stopped `tee`) must not end the run mid-cleanup: the ledger
+ * and the private files are files, and the run finishes them without the console.
+ */
+export function keepRunningWithoutConsole(streams = [process.stdout, process.stderr]) {
+  for (const stream of streams) stream.on("error", () => {});
+}
+
 if (import.meta.url === `file://${process.argv[1]}`) {
+  keepRunningWithoutConsole();
   main(process.argv.slice(2)).catch((error) => {
     console.error(error?.stack ?? error);
     process.exitCode = 1;

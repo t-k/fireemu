@@ -350,3 +350,64 @@ fn a_tenant_token_of_another_project_is_refused_under_a_foreign_key() {
         assert_eq!(found["users"][0]["localId"], alpha["localId"], "{case}");
     }
 }
+
+/// The routing picks the token's tenant store only; the token is then verified there as every
+/// ID token is. An expired, revoked or disabled tenant user's token is refused on the routed
+/// calls, and nothing of the account changes.
+#[test]
+fn expired_revoked_and_disabled_tenant_tokens_are_refused_on_the_routed_calls() {
+    for (case, state, _registry) in cases() {
+        let accounts = |state: &AuthState| tenant_accounts(state, "demo-app", TENANT_A);
+        let a = sign_up(&state, KEY, TENANT_A, "revoked@example.com");
+        let b = sign_up(&state, KEY, TENANT_A, "disabled@example.com");
+        let c = sign_up(&state, KEY, TENANT_A, "expired@example.com");
+        let now = state.clock.lock().unwrap().now_for_test();
+        let valid_since = now.as_nanos() / 1_000_000_000 + 1;
+        for (user, change) in [
+            (&a, json!({"validSince": valid_since.to_string()})),
+            (&b, json!({"disableUser": true})),
+        ] {
+            let mut body = change;
+            body["localId"] = user["localId"].clone();
+            let (status, updated) = admin(
+                &state,
+                "POST",
+                &format!("{V1}/projects/demo-app/tenants/{TENANT_A}/accounts:update"),
+                &body,
+            );
+            assert_eq!(status, 200, "{case}: {updated}");
+        }
+        state
+            .clock
+            .lock()
+            .unwrap()
+            .advance(fireemu_core_types::time::LogicalDuration::from_seconds(2))
+            .unwrap();
+        let before = accounts(&state);
+        // Past exp and Identity Toolkit's 300 s allowance (AUTH-CREDENTIAL).
+        let expired_at = fireemu_core_types::time::LogicalDuration::from_seconds(4_000);
+        for (label, token, advance) in [
+            ("revoked", &a["idToken"], None),
+            ("disabled", &b["idToken"], None),
+            ("expired", &c["idToken"], Some(expired_at)),
+        ] {
+            if let Some(by) = advance {
+                state.clock.lock().unwrap().advance(by).unwrap();
+            }
+            for route in ["accounts:lookup", "accounts:update", "accounts:delete"] {
+                let (status, refused) = sdk_call(
+                    &state,
+                    route,
+                    &json!({"idToken": token, "displayName": "x"}),
+                );
+                assert_eq!(status, 400, "{case} {label} {route}: {refused}");
+                assert!(
+                    !class(&refused).is_empty(),
+                    "{case} {label} {route}: {refused}"
+                );
+            }
+        }
+        let after = accounts(&state);
+        assert_eq!(after["users"], before["users"], "{case}: nothing changed");
+    }
+}

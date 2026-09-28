@@ -146,7 +146,9 @@ fn decode_response(encoded: &str) -> Option<String> {
 /// The body the credential parser reads for a verified response: the same request with its
 /// `postBody` replaced by the provider, the `NameID` as the subject, and the assertion's
 /// subject and attributes as the emulator's SAML form. Nothing of the original `postBody`
-/// is kept (the response was the only credential it carried).
+/// is kept (the response was the only credential it carried), and the `requestUri` loses its
+/// query and fragment, which the parser reads as parameters too (the fragment over the
+/// `postBody`): a subject or email there would replace the verified `NameID`.
 fn credential_body(
     body: &Value,
     provider_id: &str,
@@ -177,8 +179,11 @@ fn credential_body(
         form_encode(&claims.to_string()),
         form_encode(&assertion.to_string()),
     );
+    let request_uri = str_field(body, "requestUri").unwrap_or_default();
+    let bare_uri = request_uri.split(['?', '#']).next().unwrap_or_default();
     let mut rewritten = body.clone();
     if let Some(object) = rewritten.as_object_mut() {
+        object.insert("requestUri".to_owned(), json!(bare_uri));
         object.insert("postBody".to_owned(), json!(post_body));
     }
     rewritten

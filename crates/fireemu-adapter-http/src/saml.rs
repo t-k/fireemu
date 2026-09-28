@@ -33,6 +33,13 @@ const ENVELOPED: &str = "http://www.w3.org/2000/09/xmldsig#enveloped-signature";
 pub const MAX_RESPONSE_BYTES: usize = 256 * 1024;
 const MAX_NODES: u32 = 20_000;
 const MAX_DEPTH: usize = 64;
+/// Bounds on the canonicalization input no identity provider comes near, so that its cost
+/// stays linear in the document: namespaces in scope of an element, distinct prefixes of an
+/// `InclusiveNamespaces` list, and nodes of a `SignedInfo` (canonicalized before its signature
+/// is known to verify). Beyond them a response is [`SamlError::Unsupported`].
+const MAX_NAMESPACES: usize = 64;
+const MAX_INCLUSIVE_PREFIXES: usize = 64;
+const MAX_SIGNED_INFO_NODES: usize = 128;
 
 /// Why a response is refused.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -113,6 +120,14 @@ pub fn verify_saml_response(xml: &str, certificates: &[String]) -> Result<Verifi
     {
         return Err(SamlError::Malformed("the response nests too deeply"));
     }
+    if doc
+        .descendants()
+        .any(|node| node.namespaces().len() > MAX_NAMESPACES)
+    {
+        return Err(SamlError::Unsupported(format!(
+            "more than {MAX_NAMESPACES} namespaces in scope"
+        )));
+    }
     let response = doc.root_element();
     if !response.has_tag_name((PROTOCOL, "Response")) {
         return Err(SamlError::Malformed("not a samlp:Response"));
@@ -175,8 +190,8 @@ fn algorithm<'a>(node: Option<Node<'a, '_>>) -> Option<&'a str> {
     node?.attribute("Algorithm")
 }
 
-/// The exclusive canonicalization of an `Algorithm`: with comments or not, and the
-/// `InclusiveNamespaces` prefix list a transform names.
+/// The exclusive canonicalization of an `Algorithm`: with comments or not, and the distinct
+/// prefixes of the `InclusiveNamespaces` list a transform names.
 fn exclusive_c14n(method: Node) -> Result<(bool, Vec<String>), SamlError> {
     let comments = match method.attribute("Algorithm") {
         Some(EXC_C14N) => false,
@@ -187,18 +202,26 @@ fn exclusive_c14n(method: Node) -> Result<(bool, Vec<String>), SamlError> {
             )))
         }
     };
-    let prefixes = method
+    let mut prefixes: Vec<String> = method
         .children()
         .find(|node| node.is_element() && node.tag_name().name() == "InclusiveNamespaces")
         .and_then(|node| node.attribute("PrefixList"))
         .map(|list| list.split_whitespace().map(str::to_owned).collect())
         .unwrap_or_default();
+    prefixes.sort_unstable();
+    prefixes.dedup();
+    if prefixes.len() > MAX_INCLUSIVE_PREFIXES {
+        return Err(SamlError::Unsupported(format!(
+            "more than {MAX_INCLUSIVE_PREFIXES} inclusive namespace prefixes"
+        )));
+    }
     Ok((comments, prefixes))
 }
 
 /// Verifies the enveloped `signature` of `element`: one reference to the element's `ID`, the
-/// enveloped-signature and exclusive canonicalization transforms, the digest of the element
-/// without the signature, and the signature value over the canonical `SignedInfo`.
+/// enveloped-signature and exclusive canonicalization transforms, the signature value over the
+/// canonical `SignedInfo`, then the digest of the element without the signature (the element,
+/// of any size, is canonicalized only once a configured key has signed how to digest it).
 fn verify_enveloped(
     input: &str,
     element: Node,
@@ -207,6 +230,11 @@ fn verify_enveloped(
 ) -> Result<(), SamlError> {
     let malformed = |what| SamlError::Malformed(what);
     let signed_info = child(signature, DSIG, "SignedInfo").ok_or(malformed("no SignedInfo"))?;
+    if signed_info.descendants().count() > MAX_SIGNED_INFO_NODES {
+        return Err(SamlError::Unsupported(format!(
+            "a SignedInfo of more than {MAX_SIGNED_INFO_NODES} nodes"
+        )));
+    }
     let (info_comments, info_prefixes) = exclusive_c14n(
         child(signed_info, DSIG, "CanonicalizationMethod")
             .ok_or(malformed("no CanonicalizationMethod"))?,
@@ -251,17 +279,17 @@ fn verify_enveloped(
     let digest_hash = HashAlgorithm::of_digest(algorithm(child(*reference, DSIG, "DigestMethod")))?;
     let expected = base64_content(child(*reference, DSIG, "DigestValue"))
         .ok_or(malformed("no DigestValue"))?;
-    let digested = canonicalize(input, element, Some(signature.id()), &prefixes, comments)?;
-    if digest_hash.digest(digested.as_bytes()) != expected {
-        return Err(SamlError::Signature);
-    }
     let value = base64_content(child(signature, DSIG, "SignatureValue"))
         .ok_or(malformed("no SignatureValue"))?;
     let signed = canonicalize(input, signed_info, None, &info_prefixes, info_comments)?;
-    if keys
+    if !keys
         .iter()
         .any(|key| signature_hash.verify(key, signed.as_bytes(), &value))
     {
+        return Err(SamlError::Signature);
+    }
+    let digested = canonicalize(input, element, Some(signature.id()), &prefixes, comments)?;
+    if digest_hash.digest(digested.as_bytes()) == expected {
         Ok(())
     } else {
         Err(SamlError::Signature)
@@ -270,7 +298,17 @@ fn verify_enveloped(
 
 /// The base64 text of an element (whitespace ignored).
 fn base64_content(node: Option<Node>) -> Option<Vec<u8>> {
-    decode_base64(node?.text().unwrap_or_default())
+    decode_base64(&signed_text(node?))
+}
+
+/// The text of an element as its canonical form signs it: every child text node, concatenated
+/// (a comment splits the text in the tree but not in the signed form, so reading the first text
+/// node alone would read less than was signed).
+fn signed_text(node: Node) -> String {
+    node.children()
+        .filter(Node::is_text)
+        .filter_map(|text| text.text())
+        .collect()
 }
 
 /// Standard base64 (padding optional, whitespace ignored), through the base64url decoder.
@@ -421,7 +459,7 @@ fn read_assertion(
     response_signed: bool,
     assertion_signed: bool,
 ) -> VerifiedSaml {
-    let text = |node: Option<Node>| node.and_then(|n| n.text()).map(|t| t.trim().to_owned());
+    let text = |node: Option<Node>| node.map(|n| signed_text(n).trim().to_owned());
     let subject = child(assertion, ASSERTION, "Subject");
     let name_id = subject.and_then(|s| child(s, ASSERTION, "NameID"));
     let data = subject
@@ -460,7 +498,7 @@ fn read_assertion(
             let values = attribute
                 .children()
                 .filter(|n| n.has_tag_name((ASSERTION, "AttributeValue")))
-                .map(|v| v.text().unwrap_or_default().to_owned());
+                .map(signed_text);
             attributes
                 .entry(name.to_owned())
                 .or_default()
@@ -648,6 +686,45 @@ fn escape_attribute(value: &str, out: &mut String) {
             '\n' => out.push_str("&#xA;"),
             '\r' => out.push_str("&#xD;"),
             _ => out.push(c),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::der_element;
+
+    #[test]
+    fn der_lengths_are_read_in_the_definite_forms_only() {
+        // Short form, and long forms of one to four length octets.
+        assert_eq!(
+            der_element(&[0x04, 0x01, 0xaa, 0xbb]),
+            Some((0x04, &[0x04, 0x01, 0xaa][..], &[0xaa][..], &[0xbb][..]))
+        );
+        assert_eq!(
+            der_element(&[0x04, 0x81, 0x00]),
+            Some((0x04, &[0x04, 0x81, 0x00][..], &[][..], &[][..]))
+        );
+        assert_eq!(
+            der_element(&[0x04, 0x84, 0, 0, 0, 1, 0xaa]),
+            Some((
+                0x04,
+                &[0x04, 0x84, 0, 0, 0, 1, 0xaa][..],
+                &[0xaa][..],
+                &[][..]
+            ))
+        );
+        // Indefinite, more than four length octets, truncated length or content.
+        let mut indefinite = vec![0x30, 0x80];
+        indefinite.extend([0; 130]);
+        for input in [
+            &indefinite[..],
+            &[0x04, 0x85, 0, 0, 0, 0, 1, 0xaa][..],
+            &[0x04, 0x82, 0x00][..],
+            &[0x04, 0x02, 0xaa][..],
+            &[0x04][..],
+        ] {
+            assert_eq!(der_element(input), None, "{input:02x?}");
         }
     }
 }

@@ -4,6 +4,8 @@
 //! canonicalization is checked against an independent implementation. The same signed
 //! documents written differently (reordered namespaces and attributes, redundant and unused
 //! declarations, padded and self-closed tags, character references) verify too.
+use std::fmt::Write as _;
+
 use fireemu_adapter_http::saml::{
     canonicalize, certificate_key, verify_saml_response, SamlError, MAX_RESPONSE_BYTES,
 };
@@ -272,4 +274,226 @@ fn signature_wrapping_forms_are_read_by_the_enveloping_element_only() {
         verify_saml_response(&namespaced, &idp()),
         Err(SamlError::Signature)
     );
+}
+
+#[test]
+fn a_comment_inside_a_signed_value_does_not_shorten_what_is_read() {
+    // Exclusive canonicalization without comments signs the text on both sides of a comment
+    // as one string, so a comment inserted into a signed value keeps the signature valid. The
+    // value read is that whole string, never the text before the comment.
+    let signed = fixture("assertion-signed.xml");
+    for (from, to) in [
+        (
+            ">fixture-user@example.com<",
+            ">fixture-user@example<!---->.com<",
+        ),
+        (
+            ">fixture-user@example.com<",
+            "><!---->fixture-user@example.com<",
+        ),
+        (
+            ">fixture-user@example.com<",
+            ">fixture-user@<!--a-->example<!--b-->.com<",
+        ),
+        (
+            ">https://idp.example.test/saml/fixture<",
+            ">https://idp.example.test<!---->/saml/fixture<",
+        ),
+        (">fireemu-fixture-sp<", ">fireemu-<!---->fixture-sp<"),
+        (">Fixture \"User\"<", ">Fixture <!---->\"User\"<"),
+    ] {
+        let commented = signed.replace(from, to);
+        assert_ne!(commented, signed, "{to}");
+        let verified =
+            verify_saml_response(&commented, &idp()).unwrap_or_else(|e| panic!("{to}: {e:?}"));
+        assert_eq!(
+            verified.name_id.as_deref(),
+            Some("fixture-user@example.com"),
+            "{to}"
+        );
+        assert_eq!(
+            verified.issuer.as_deref(),
+            Some("https://idp.example.test/saml/fixture"),
+            "{to}"
+        );
+        assert_eq!(verified.audiences, ["fireemu-fixture-sp"], "{to}");
+        assert_eq!(
+            verified.attributes["display name"],
+            ["Fixture \"User\""],
+            "{to}"
+        );
+    }
+}
+
+/// `assertion-signed.xml` with `extra` inside the signed assertion and the reference's
+/// exclusive canonicalization naming `prefixes`: the signed information changes, so the
+/// signature no longer verifies.
+fn heavy_response(extra: &str, prefixes: &str) -> String {
+    let signed = fixture("assertion-signed.xml");
+    let transform =
+        "<ds:Transform Algorithm=\"http://www.w3.org/2001/10/xml-exc-c14n#\"></ds:Transform>";
+    assert!(signed.contains(transform));
+    signed
+        .replace(
+            transform,
+            &format!(
+                "<ds:Transform Algorithm=\"http://www.w3.org/2001/10/xml-exc-c14n#\"><ec:InclusiveNamespaces xmlns:ec=\"http://www.w3.org/2001/10/xml-exc-c14n#\" PrefixList=\"{prefixes}\"></ec:InclusiveNamespaces></ds:Transform>"
+            ),
+        )
+        .replace("</saml:Assertion>", &format!("{extra}</saml:Assertion>"))
+}
+
+/// `assertion-signed.xml` with `count` more namespaces declared on the response.
+fn declared(count: usize) -> String {
+    let declarations = (0..count).fold(String::new(), |mut out, n| {
+        let _ = write!(out, " xmlns:p{n}=\"urn:p{n}\"");
+        out
+    });
+    fixture("assertion-signed.xml").replacen(
+        "<samlp:Response ",
+        &format!("<samlp:Response{declarations} "),
+        1,
+    )
+}
+
+/// An `InclusiveNamespaces` list of `count` distinct prefixes.
+fn prefix_list(count: usize) -> String {
+    (0..count).fold(String::new(), |mut out, n| {
+        let _ = write!(out, "p{n} ");
+        out
+    })
+}
+
+#[test]
+fn no_canonicalization_of_the_signed_element_runs_before_its_signed_info_verifies() {
+    // Unauthenticated input sized to cost minutes when the element is canonicalized before
+    // the signature over `SignedInfo` is checked: every element of the assertion would carry
+    // the whole prefix list.
+    let response = heavy_response(&"<a/>".repeat(19_000), &"saml ".repeat(30_000));
+    assert!(response.len() <= MAX_RESPONSE_BYTES);
+    let started = std::time::Instant::now();
+    assert_eq!(
+        verify_saml_response(&response, &idp()),
+        Err(SamlError::Signature)
+    );
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(2),
+        "{:?}",
+        started.elapsed()
+    );
+}
+
+#[test]
+fn namespace_and_prefix_counts_beyond_any_saml_response_are_not_canonicalized() {
+    // A known limit of this verifier, not a production refusal: more namespaces in scope of
+    // an element, or more distinct inclusive prefixes, than any identity provider writes.
+    assert!(matches!(
+        verify_saml_response(&declared(65), &idp()),
+        Err(SamlError::Unsupported(_))
+    ));
+    assert!(matches!(
+        verify_saml_response(&heavy_response("", &prefix_list(65)), &idp()),
+        Err(SamlError::Unsupported(_))
+    ));
+    // Repeated prefixes count once.
+    assert_eq!(
+        verify_saml_response(&heavy_response("", &"saml ".repeat(1_000)), &idp()),
+        Err(SamlError::Signature)
+    );
+}
+
+#[test]
+fn the_size_node_and_depth_limits_are_exact() {
+    let signed = fixture("assertion-signed.xml");
+    let at_limit = format!("{signed}{}", " ".repeat(MAX_RESPONSE_BYTES - signed.len()));
+    assert!(verify_saml_response(&at_limit, &idp()).is_ok());
+    let nested = |depth: usize| {
+        format!(
+            "<samlp:Response xmlns:samlp=\"urn:oasis:names:tc:SAML:2.0:protocol\">{}{}</samlp:Response>",
+            "<x>".repeat(depth),
+            "</x>".repeat(depth)
+        )
+    };
+    // The document, the response and 62 elements: 64 levels are read (and, unsigned, refused).
+    assert_eq!(
+        verify_saml_response(&nested(62), &idp()),
+        Err(SamlError::Signature)
+    );
+    assert!(matches!(
+        verify_saml_response(&nested(63), &idp()),
+        Err(SamlError::Malformed(_))
+    ));
+    let crowded = format!(
+        "<samlp:Response xmlns:samlp=\"urn:oasis:names:tc:SAML:2.0:protocol\">{}</samlp:Response>",
+        "<a/>".repeat(20_000)
+    );
+    assert!(matches!(
+        verify_saml_response(&crowded, &idp()),
+        Err(SamlError::Malformed(_))
+    ));
+}
+
+#[test]
+fn the_canonicalization_limits_are_exact() {
+    let signed = fixture("assertion-signed.xml");
+    // In scope of the assertion's signature besides the declarations: samlp, saml and ds.
+    assert!(verify_saml_response(&declared(61), &idp()).is_ok());
+    assert!(matches!(
+        verify_saml_response(&declared(62), &idp()),
+        Err(SamlError::Unsupported(_))
+    ));
+    assert_eq!(
+        verify_saml_response(&heavy_response("", &prefix_list(64)), &idp()),
+        Err(SamlError::Signature)
+    );
+    // The list is the `InclusiveNamespaces` child, wherever it stands among the transform's
+    // children.
+    let preceded = heavy_response("", &prefix_list(65)).replace(
+        "<ec:InclusiveNamespaces",
+        "<ec:Other xmlns:ec=\"http://www.w3.org/2001/10/xml-exc-c14n#\"></ec:Other><ec:InclusiveNamespaces",
+    );
+    assert!(matches!(
+        verify_saml_response(&preceded, &idp()),
+        Err(SamlError::Unsupported(_))
+    ));
+    // `SignedInfo` and its ten nodes (elements and the digest's text) plus padding.
+    let padded = |count: usize| {
+        signed.replacen(
+            "<ds:SignedInfo>",
+            &format!("<ds:SignedInfo>{}", "<x/>".repeat(count)),
+            1,
+        )
+    };
+    assert_eq!(
+        verify_saml_response(&padded(118), &idp()),
+        Err(SamlError::Signature)
+    );
+    assert!(matches!(
+        verify_saml_response(&padded(119), &idp()),
+        Err(SamlError::Unsupported(_))
+    ));
+}
+
+#[test]
+fn canonicalization_renders_only_namespaces_in_use_and_escapes_attributes() {
+    let cases = [
+        // `xml:` attributes declare nothing; an unprefixed attribute uses no default namespace.
+        (
+            "<p:a xmlns=\"urn:d\" xmlns:p=\"urn:p\" xml:lang=\"en\" b=\"1\"/>",
+            "<p:a xmlns:p=\"urn:p\" b=\"1\" xml:lang=\"en\"></p:a>",
+        ),
+        (
+            "<a b=\"x&#xD;y&#x9;z&#xA;\"/>",
+            "<a b=\"x&#xD;y&#x9;z&#xA;\"></a>",
+        ),
+        ("<a><?t?><?t v?></a>", "<a><?t?><?t v?></a>"),
+    ];
+    for (input, expected) in cases {
+        let doc = roxmltree::Document::parse(input).unwrap();
+        assert_eq!(
+            canonicalize(input, doc.root_element(), None, &[], false).unwrap(),
+            expected,
+            "{input}"
+        );
+    }
 }

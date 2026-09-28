@@ -364,5 +364,123 @@ fn a_saml_sign_up_counts_toward_the_sign_up_quota() {
     let response = sign_in(&s, &request(&fixture("assertion-signed.xml")));
     assert_eq!(response.status, 400, "{}", response.body);
     assert_eq!(response.body["error"]["message"], "SIGNUP_QUOTA_EXCEEDED");
+    assert!(
+        response.body.get("federatedId").is_none(),
+        "{}",
+        response.body
+    );
     assert_eq!(s.store.lock().unwrap().user_count(), 1);
+}
+
+#[test]
+fn nothing_outside_the_verified_response_names_the_subject() {
+    // The credential parser reads the `requestUri` query and fragment too (the fragment over
+    // `postBody`): a subject or email there must not replace the verified `NameID`.
+    let injected =
+        "%7B%22sub%22%3A%22victim-subject%22%2C%22email%22%3A%22victim%40example.com%22%7D";
+    let mut s = state(true);
+    s.idp_continuations = IdpContinuationPolicy::LocalBounded;
+    let genuine = sign_in(&s, &request(&fixture("assertion-signed.xml")));
+    assert_eq!(genuine.status, 200, "{}", genuine.body);
+    for suffix in [
+        format!("#id_token={injected}"),
+        format!("?id_token={injected}"),
+        format!("#id_token=x&access_token={injected}"),
+        format!("?access_token={injected}#id_token={injected}"),
+    ] {
+        let mut body = request(&fixture("assertion-signed.xml"));
+        body["requestUri"] = json!(format!("{CALLBACK}{suffix}"));
+        for (step, response) in [
+            ("sign-in", sign_in(&s, &body)),
+            ("continuation", {
+                let first = sign_in(&s, &body);
+                assert_eq!(first.status, 200, "{suffix}: {}", first.body);
+                let mut resume = continuation(&first.body["pendingToken"]);
+                resume["requestUri"] = body["requestUri"].clone();
+                sign_in(&s, &resume)
+            }),
+        ] {
+            assert_eq!(response.status, 200, "{suffix} {step}: {}", response.body);
+            assert_eq!(
+                response.body["localId"], genuine.body["localId"],
+                "{suffix} {step}"
+            );
+            assert_eq!(
+                response.body["email"], "fixture-user@example.com",
+                "{suffix} {step}"
+            );
+            assert_eq!(
+                claims(&response.body["idToken"])["firebase"]["identities"][PROVIDER],
+                json!(["fixture-user@example.com"]),
+                "{suffix} {step}"
+            );
+        }
+    }
+    assert_eq!(s.store.lock().unwrap().user_count(), 1);
+}
+
+#[test]
+fn a_blocking_function_that_leaves_the_provider_alone_commits_the_sign_in() {
+    let mut s = state(true);
+    s.blocking = Some(Arc::new(LeaveProviderAlone));
+    let response = sign_in(&s, &request(&fixture("assertion-signed.xml")));
+    assert_eq!(response.status, 200, "{}", response.body);
+    assert_eq!(s.store.lock().unwrap().user_count(), 1);
+}
+
+/// A blocking hook that allows the sign-in and changes nothing.
+struct LeaveProviderAlone;
+
+impl fireemu_adapter_http::identity_toolkit::AuthBlockingHook for LeaveProviderAlone {
+    fn invoke(
+        &self,
+        _event: fireemu_core_functions::manifest::BlockingAuthEvent,
+        _user: &UserRecord,
+    ) -> Result<Value, fireemu_adapter_http::identity_toolkit::BlockingFunctionFailure> {
+        Ok(json!({}))
+    }
+
+    fn invoke_for_with_context(
+        &self,
+        _project: &str,
+        _tenant: Option<&str>,
+        _event: fireemu_core_functions::manifest::BlockingAuthEvent,
+        _user: &UserRecord,
+        _context: &fireemu_adapter_http::identity_toolkit::AuthBlockingContext,
+    ) -> Result<Option<Value>, fireemu_adapter_http::identity_toolkit::BlockingFunctionFailure>
+    {
+        Ok(Some(json!({})))
+    }
+}
+
+#[test]
+fn the_encoded_response_limit_counts_what_is_sent() {
+    // Whitespace in the encoded response (line breaks of a MIME encoder) is ignored when
+    // decoding but counts toward the limit of what is read.
+    const MAX_ENCODED: usize = fireemu_adapter_http::saml::MAX_RESPONSE_BYTES / 3 * 4 + 4;
+    let encoded = base64_standard(fixture("assertion-signed.xml").as_bytes());
+    let padded = |length: usize| {
+        let body = request_for(PROVIDER, "");
+        let post_body = body["postBody"].as_str().unwrap().to_owned();
+        let mut body = body.clone();
+        body["postBody"] = json!(format!(
+            "{post_body}{}{}",
+            encoded
+                .replace('+', "%2B")
+                .replace('/', "%2F")
+                .replace('=', "%3D"),
+            "%0A".repeat(length - encoded.len())
+        ));
+        body
+    };
+    let s = state(true);
+    let response = sign_in(&s, &padded(MAX_ENCODED));
+    assert_eq!(response.status, 200, "{}", response.body);
+    let s = state(true);
+    assert_refused(
+        &s,
+        &padded(MAX_ENCODED + 1),
+        "INVALID_IDP_RESPONSE",
+        "one character over",
+    );
 }

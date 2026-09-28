@@ -9,6 +9,7 @@ bytes that reach the runner, not on the daemon's intent.
 
 FIREEMU_FAKE_CONSUME=enabled|undetermined makes the guarded callable declare that
 consumeAppCheckToken value, for the fail-closed discovery tests.
+FIREEMU_FAKE_EXIT_BEFORE_HELLO=1 records the start and exits without a hello.
 """
 import http.server
 import json
@@ -23,6 +24,13 @@ if probe := os.environ.get("FIREEMU_SANDBOX_PROBE"):
         os.environ.get("CLOUDSDK_CONFIG", ""),
         encoding="utf-8",
     )
+
+if probe := os.environ.get("FIREEMU_FAKE_START_PROBE"):
+    with open(probe, "a", encoding="utf-8") as starts:
+        starts.write(f"{os.getpid()}\n")
+
+if os.environ.get("FIREEMU_FAKE_EXIT_BEFORE_HELLO") == "1":
+    sys.exit(17)
 
 
 def send(msg):
@@ -83,6 +91,19 @@ class Echo(http.server.BaseHTTPRequestHandler):
             self.send_response(204)
             self.end_headers()
             return
+        if self.path.endswith("/status204"):
+            self.send_response(204)
+            self.end_headers()
+            return
+        if self.path.endswith("/stream") or self.path.endswith("/stream-explicit"):
+            payload = b'data: {"result":{"ok":true}}\n\n'
+            self.send_response(200)
+            if self.path.endswith("/stream-explicit"):
+                self.send_header("content-type", "text/event-stream")
+            self.send_header("content-length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+            return
         payload = json.dumps(
             {
                 "method": self.command,
@@ -100,6 +121,7 @@ class Echo(http.server.BaseHTTPRequestHandler):
 
     do_GET = do_POST
     do_PUT = do_POST
+    do_OPTIONS = do_POST
 
     def log_message(self, *_args):
         pass
@@ -128,6 +150,8 @@ send({
             {"name": "fail", "trigger": {"type": "firestore", "eventType": "google.cloud.firestore.document.v1.written", "document": "items/{id}"}, "retry": True},
             {"name": "slow", "trigger": {"type": "storage", "eventType": "google.cloud.storage.object.v1.finalized"}, "timeoutSeconds": 1},
             {"name": "tick", "trigger": {"type": "schedule", "schedule": "every 5 minutes"}},
+            {"name": "crashOnce", "trigger": {"type": "pubsub", "topic": "crash-once"}},
+            {"name": "crashAlways", "trigger": {"type": "pubsub", "topic": "crash-always"}},
             # A cron schedule (03:00 UTC daily). The tests start at 12:01 UTC, so it only
             # comes due for clock advances of a day or more.
             {"name": "nightly", "trigger": {"type": "schedule", "schedule": "0 3 * * *"}},
@@ -152,7 +176,12 @@ while True:
     if msg.get("type") != "invoke":
         continue
     name = msg["function"]
-    if "crash" in name:
+    if name == "crashOnce":
+        marker = pathlib.Path(os.environ["FIREEMU_FAKE_CRASH_ONCE_MARKER"])
+        if not marker.exists():
+            marker.write_text("crashed", encoding="utf-8")
+            sys.exit(3)
+    elif "crash" in name:
         sys.exit(3)
     if "slow" in name:
         continue

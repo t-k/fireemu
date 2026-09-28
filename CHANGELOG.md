@@ -41,6 +41,13 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ### Changed
 
+Functions HTTP and callable behavior was compared with two production recordings of 68 cases on 2026-09-27 (FUNCTIONS-HTTP). The coordinator approved the frozen 19-condition closure on 2026-09-28 after independent review.
+
+- Both profiles: an `onRequest` function receives cross-origin requests and their `Origin` header; an empty request body reaches the handler as `{}`. The emulator profile enables the official emulator's default CORS wrapper, including a 204 preflight for an `onRequest` function with no `cors` option. An explicit `cors: false` disables that wrapper. The strict profile leaves a default `onRequest` preflight to the handler, as observed in production.
+- Both profiles: callable requests from loopback, external and LAN browser origins reach the SDK wrapper. Callable preflights delegate to the SDK's CORS middleware before Auth or App Check admission, respecting `cors: false` and profile-specific Origin lists. Requested methods, arbitrary requested headers and Fetch Metadata introduce no additional proxy CORS refusal. These options are checked locally against the pinned SDK. The four profile and callable-trust debug configurations are covered by ordinary unit tests.
+- Strict profile: Functions ingress supplies one observed client hop in `X-Forwarded-For` and `https` in `X-Forwarded-Proto`, replacing client-supplied values. A 204 response and a callable stream without a declared Content-Type use the recorded `text/html` default.
+- Strict profile: a callable request with an invalid Bearer token gets production's 401 HTML response, malformed JSON gets its generic 400 HTML response, and a timed-out HTTP function gets its 504 text response. The emulator profile keeps the official emulator's malformed JSON and timeout outcomes. Its pre-existing 401 JSON refusal for invalid callable Bearer tokens differs from the official emulator's 200 but has the same status as production.
+
 Auth: the Auth items below were measured against a real Identity Platform project on 2026-09-24 and 2026-09-25 (AUTH-CREDENTIAL, AUTH-ACTION, AUTH-MFA and AUTH-CONFIG-SDK). Each item names the profiles it affects; "unlike the official emulator" marks where the emulator profile now differs from the Firebase Emulator Suite.
 
 - Both profiles: a tenant created with a display name of the documented form (4-20 letters, digits and hyphens, beginning with a letter) is named as production names it: the display name, `-` and five characters of `[a-z0-9]`, drawn reproducibly from the creation sequence. A tenant without such a display name keeps the `fireemu-<sequence>` name.

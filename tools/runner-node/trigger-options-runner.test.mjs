@@ -330,7 +330,7 @@ for(const platform of ['gcfv1','gcfv2','legacy']) {
       const req=request({host:'127.0.0.1',port:f.hello.httpPort,path:'/demo-options/us-central1/subject',method:'POST',headers:{'x-fireemu-runner-secret':'fixture-proxy','content-type':'application/json','content-length':2}},res=>{const chunks=[];res.on('data',b=>chunks.push(b));res.on('end',()=>resolve({status:res.statusCode,body:Buffer.concat(chunks).toString()}));});
       req.setTimeout(3000,()=>req.destroy(Error('HTTP fixture timeout')));req.on('error',reject);req.end('{}');
     });
-    assert.equal(result.status,200);assert.deepEqual(JSON.parse(result.body),{ok:true,name:'subject'});
+    assert.equal(result.status,200,result.body);assert.deepEqual(JSON.parse(result.body),{ok:true,name:'subject'});
     const called=await f.called();assert.equal(called.signature,'http');assert.deepEqual(called.seen,{reads:{attempts:1,rate:1},evaluations:{attempts:1,rate:1},json:{}});
   });
 }

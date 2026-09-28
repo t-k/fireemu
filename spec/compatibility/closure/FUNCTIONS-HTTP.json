@@ -1,0 +1,872 @@
+{
+  "schemaVersion": 1,
+  "parent": "FUNCTIONS-HTTP",
+  "parentStatus": "COMPAT_VERIFIED",
+  "inventoryStatus": "FROZEN",
+  "frozenOn": "2026-09-25",
+  "freezeAuthority": "docs.local/instructions/2026-09-25-codex-closure-freeze-go.md",
+  "oracleTrack": "disposable-sandbox",
+  "oracle": {
+    "project": "fireemu-oracle-query",
+    "region": "us-central1",
+    "generation": 2
+  },
+  "closureReview": {
+    "decision": "APPROVED",
+    "submittedSourceCommit": "8959805113f67ded6d537b9aa78ac685a1f0efa4",
+    "submittedFinalArtifactSha256": "4918b2201852364d6f20cf4be7bf63cb3efcea6588f030be77dd552977cb2940",
+    "submittedComparisonSha256": "0e021b4cf185ff58252ea33b8b65d4ba3f2ee19bf2a9d62456ad89aad402662a",
+    "finalArtifactSha256": "4918b2201852364d6f20cf4be7bf63cb3efcea6588f030be77dd552977cb2940",
+    "ownerPolicyDecision": {
+      "decision": "APPROVED_RETAIN_401",
+      "decidedOn": "2026-09-28",
+      "decisionRef": "docs.local/instructions/owner-decisions.md (2026-09-28 FUNCTIONS-HTTP B7, row 353)"
+    },
+    "callableOriginPolicyDecision": {
+      "decision": "APPROVED_ALLOW_NON_LOOPBACK",
+      "profiles": [
+        "emulator",
+        "strict"
+      ],
+      "decidedOn": "2026-09-28",
+      "decisionRef": "docs.local/instructions/owner-decisions.md (2026-09-28 FUNCTIONS-HTTP callable non-loopback Origin)",
+      "localVerification": "External HTTPS and LAN callable Origins are admitted in both profiles. Default callable CORS is checked against the pinned SDK and the retained official emulator fixture; no new production recording is claimed."
+    },
+    "callablePreflightPolicyDecision": {
+      "decision": "APPROVED_SDK_CORS_WRAPPER",
+      "profiles": [
+        "emulator",
+        "strict"
+      ],
+      "decidedOn": "2026-09-28",
+      "decider": "project coordinator (delegated by the owner)",
+      "decisionRef": "docs.local/instructions/owner-decisions.md (2026-09-28 FUNCTIONS-HTTP loopback Origin refusals)",
+      "localVerification": "Callable OPTIONS delegates to the pinned SDK CORS wrapper without Auth or App Check admission. The final binary passed 224 local requests covering cors:false, single and multiple Origin lists, loopback/external/LAN Origins, and cross-site preflights requesting GET or arbitrary headers. No new production recording is claimed.",
+      "privateCorsReceipt": "docs.local/runs/functions-http-final-20260928-rereview3/cors-receipt.json",
+      "privateCorsReceiptSha256": "abe6cff3a7111e659610662ad8ec1404feaf1bacd0a8cdb95fa5038516e95c1b"
+    },
+    "decidedOn": "2026-09-28",
+    "decider": "project coordinator (delegated by the owner)",
+    "decisionRef": "docs.local/instructions/owner-decisions.md (2026-09-28 FUNCTIONS-HTTP promotion)",
+    "reviewer": "Independent clean-context closure re-reviews (rounds 1, 2 and 3): docs.local/reviews/2026-09-28-functions-http-closure-rereview.md (SHA-256 91eaa87de41297cbbb985aad8e894f5b9144df490f99914a4c4ce453efe3f5b3); docs.local/reviews/2026-09-28-functions-http-closure-rereview2.md (SHA-256 9e5e396bbb1c914708157de89a0d64fef09026e6def507274e434d8aefaec996); docs.local/reviews/2026-09-28-functions-http-closure-rereview3.md (SHA-256 d3252184eab092d54ede38c9abd0facc44b3341bf0bc79801192502c9e52886a)",
+    "reviewedCommit": "e8f49a57e973f7c9be2e7b05d2bc916e20a0edf1"
+  },
+  "scopeDecisions": [
+    {
+      "id": "H1",
+      "decision": "Observe Node.js 2nd gen onRequest and onCall exports from the same pinned firebase-functions fixture in production and fireemu, in us-central1.",
+      "rationale": "This is the parent named in the owner directive; one source and one region keep runtime differences attributable to the service under test.",
+      "status": "FROZEN",
+      "decidedBy": "coordinator (delegated by owner)",
+      "decidedOn": "2026-09-25",
+      "decisionRef": "docs.local/instructions/owner-decisions.md (2026-09-25 FUNCTIONS-HTTP H1/H6)"
+    },
+    {
+      "id": "H2",
+      "decision": "Event triggers, scheduled functions, task queues, Blocking Auth, 1st gen, cold-start latency, scaling and billing are outside FUNCTIONS-HTTP.",
+      "rationale": "These have separate parents or are explicitly excluded by the owner directive.",
+      "status": "FROZEN",
+      "decidedBy": "owner",
+      "decidedOn": "2026-09-25",
+      "decisionRef": "docs.local/instructions/owner-decisions.md (2026-09-25 FUNCTIONS-HTTP H2/H3)"
+    },
+    {
+      "id": "H3",
+      "decision": "App Check validation, enforcement and request.app are outside FUNCTIONS-HTTP; no App Check token is sent in this corpus.",
+      "rationale": "App Check is outside the current parent set and is recorded as a candidate for a future parent; this closure does not claim App Check behavior.",
+      "status": "FROZEN",
+      "decidedBy": "owner",
+      "decidedOn": "2026-09-25",
+      "decisionRef": "docs.local/instructions/owner-decisions.md (2026-09-25 FUNCTIONS-HTTP H2/H3)"
+    },
+    {
+      "id": "H4",
+      "decision": "Use same-project Firebase Auth ID tokens from email/password test users under @example.com. Enable Firebase Authentication once, with a restricted API key and no Identity Platform upgrade or signing grants, only after pre-send coordinator approval. Create and delete the users per program.",
+      "rationale": "A different project's token would test cross-project refusal rather than the required authenticated request context.",
+      "status": "FROZEN",
+      "decidedBy": "owner",
+      "decidedOn": "2026-09-25",
+      "decisionRef": "docs.local/instructions/owner-decisions.md (2026-09-25 FUNCTIONS-HTTP / STORAGE-OBJECT Auth setup)"
+    },
+    {
+      "id": "H5",
+      "decision": "Allow one side-effect-free, secret-free HTTP fixture and one side-effect-free, secret-free callable fixture to be invoked by allUsers for at most about one hour per program. Read back the invoker policy, then delete both functions and their images after the program and verify deletion.",
+      "rationale": "The corpus must separate public transport behavior from Firebase Auth ID token handling.",
+      "status": "FROZEN",
+      "decidedBy": "owner",
+      "decidedOn": "2026-09-25",
+      "decisionRef": "docs.local/instructions/owner-decisions.md (2026-09-25 FUNCTIONS-HTTP allUsers fixtures)"
+    },
+    {
+      "id": "H6",
+      "decision": "Compare deterministic request and response fields, status and ordered stream chunks; retain raw volatile proxy headers and execution IDs privately and normalize their values only after both recordings expose the variation.",
+      "rationale": "Proxy IDs and timestamps can change between recordings, while header presence and handler-visible meaning remain observable.",
+      "status": "FROZEN",
+      "decidedBy": "coordinator (delegated by owner)",
+      "decidedOn": "2026-09-25",
+      "decisionRef": "docs.local/instructions/owner-decisions.md (2026-09-25 FUNCTIONS-HTTP H1/H6)"
+    }
+  ],
+  "conditions": [
+    {
+      "conditionId": "FUNCTIONS-HTTP/http-method-path-query",
+      "source": "https://firebase.google.com/docs/functions/http-events",
+      "recipeIds": [
+        "functions-http/http/request-shape"
+      ],
+      "cases": [
+        "GET",
+        "POST",
+        "HEAD",
+        "nested-path",
+        "repeated-query-key",
+        "encoded-query"
+      ],
+      "status": "VERIFIED",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-27T13:59:44Z",
+            "project": "fireemu-oracle-query",
+            "corpusDigest": "836c138ba213546428e700e7ecb51644089bb5b0cdc91946eb9904a648106bea",
+            "pass": 1
+          },
+          {
+            "recordedAt": "2026-09-27T13:59:45Z",
+            "project": "fireemu-oracle-query",
+            "corpusDigest": "836c138ba213546428e700e7ecb51644089bb5b0cdc91946eb9904a648106bea",
+            "pass": 2
+          }
+        ],
+        "sourceCommit": "8959805113f67ded6d537b9aa78ac685a1f0efa4",
+        "finalArtifactSha256": "4918b2201852364d6f20cf4be7bf63cb3efcea6588f030be77dd552977cb2940",
+        "runnerTreeSha256": "c70c6d835dae46d525b513bcf6828cb1fe551289d8aa231fa4f52a8d6fac4cce",
+        "comparisonPath": "spec/compatibility/closure/evidence/FUNCTIONS-HTTP-comparison.json",
+        "comparisonSha256": "0e021b4cf185ff58252ea33b8b65d4ba3f2ee19bf2a9d62456ad89aad402662a",
+        "strictRecordingSha256": "92e9ea008073ae16897015e552ae7b58cb1560d2d55de14092c3ca71e8fea39f",
+        "rows": {
+          "MATCH": 6
+        }
+      }
+    },
+    {
+      "conditionId": "FUNCTIONS-HTTP/http-request-headers",
+      "source": "spec/compatibility/contract.json#FN-CLAIM-HTTP",
+      "recipeIds": [
+        "functions-http/http/request-headers"
+      ],
+      "cases": [
+        "custom-request-header",
+        "x-forwarded-for",
+        "x-forwarded-proto",
+        "function-execution-id-presence"
+      ],
+      "status": "VERIFIED",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-27T13:59:44Z",
+            "project": "fireemu-oracle-query",
+            "corpusDigest": "836c138ba213546428e700e7ecb51644089bb5b0cdc91946eb9904a648106bea",
+            "pass": 1
+          },
+          {
+            "recordedAt": "2026-09-27T13:59:45Z",
+            "project": "fireemu-oracle-query",
+            "corpusDigest": "836c138ba213546428e700e7ecb51644089bb5b0cdc91946eb9904a648106bea",
+            "pass": 2
+          }
+        ],
+        "sourceCommit": "8959805113f67ded6d537b9aa78ac685a1f0efa4",
+        "finalArtifactSha256": "4918b2201852364d6f20cf4be7bf63cb3efcea6588f030be77dd552977cb2940",
+        "runnerTreeSha256": "c70c6d835dae46d525b513bcf6828cb1fe551289d8aa231fa4f52a8d6fac4cce",
+        "comparisonPath": "spec/compatibility/closure/evidence/FUNCTIONS-HTTP-comparison.json",
+        "comparisonSha256": "0e021b4cf185ff58252ea33b8b65d4ba3f2ee19bf2a9d62456ad89aad402662a",
+        "strictRecordingSha256": "92e9ea008073ae16897015e552ae7b58cb1560d2d55de14092c3ca71e8fea39f",
+        "rows": {
+          "MATCH": 4
+        }
+      }
+    },
+    {
+      "conditionId": "FUNCTIONS-HTTP/http-request-bodies",
+      "source": "https://firebase.google.com/docs/functions/http-events",
+      "recipeIds": [
+        "functions-http/http/request-bodies"
+      ],
+      "cases": [
+        "json",
+        "raw-text",
+        "form-urlencoded",
+        "empty",
+        "malformed-json"
+      ],
+      "status": "VERIFIED",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-27T13:59:44Z",
+            "project": "fireemu-oracle-query",
+            "corpusDigest": "836c138ba213546428e700e7ecb51644089bb5b0cdc91946eb9904a648106bea",
+            "pass": 1
+          },
+          {
+            "recordedAt": "2026-09-27T13:59:45Z",
+            "project": "fireemu-oracle-query",
+            "corpusDigest": "836c138ba213546428e700e7ecb51644089bb5b0cdc91946eb9904a648106bea",
+            "pass": 2
+          }
+        ],
+        "sourceCommit": "8959805113f67ded6d537b9aa78ac685a1f0efa4",
+        "finalArtifactSha256": "4918b2201852364d6f20cf4be7bf63cb3efcea6588f030be77dd552977cb2940",
+        "runnerTreeSha256": "c70c6d835dae46d525b513bcf6828cb1fe551289d8aa231fa4f52a8d6fac4cce",
+        "comparisonPath": "spec/compatibility/closure/evidence/FUNCTIONS-HTTP-comparison.json",
+        "comparisonSha256": "0e021b4cf185ff58252ea33b8b65d4ba3f2ee19bf2a9d62456ad89aad402662a",
+        "strictRecordingSha256": "92e9ea008073ae16897015e552ae7b58cb1560d2d55de14092c3ca71e8fea39f",
+        "rows": {
+          "MATCH": 5
+        }
+      }
+    },
+    {
+      "conditionId": "FUNCTIONS-HTTP/http-response-status-headers",
+      "source": "https://firebase.google.com/docs/functions/http-events",
+      "recipeIds": [
+        "functions-http/http/response-shape"
+      ],
+      "cases": [
+        "custom-status",
+        "custom-header",
+        "content-type",
+        "no-content"
+      ],
+      "status": "VERIFIED",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-27T13:59:44Z",
+            "project": "fireemu-oracle-query",
+            "corpusDigest": "836c138ba213546428e700e7ecb51644089bb5b0cdc91946eb9904a648106bea",
+            "pass": 1
+          },
+          {
+            "recordedAt": "2026-09-27T13:59:45Z",
+            "project": "fireemu-oracle-query",
+            "corpusDigest": "836c138ba213546428e700e7ecb51644089bb5b0cdc91946eb9904a648106bea",
+            "pass": 2
+          }
+        ],
+        "sourceCommit": "8959805113f67ded6d537b9aa78ac685a1f0efa4",
+        "finalArtifactSha256": "4918b2201852364d6f20cf4be7bf63cb3efcea6588f030be77dd552977cb2940",
+        "runnerTreeSha256": "c70c6d835dae46d525b513bcf6828cb1fe551289d8aa231fa4f52a8d6fac4cce",
+        "comparisonPath": "spec/compatibility/closure/evidence/FUNCTIONS-HTTP-comparison.json",
+        "comparisonSha256": "0e021b4cf185ff58252ea33b8b65d4ba3f2ee19bf2a9d62456ad89aad402662a",
+        "strictRecordingSha256": "92e9ea008073ae16897015e552ae7b58cb1560d2d55de14092c3ca71e8fea39f",
+        "rows": {
+          "MATCH": 4
+        }
+      }
+    },
+    {
+      "conditionId": "FUNCTIONS-HTTP/http-large-response",
+      "source": "spec/compatibility/contract.json#FN-CLAIM-HTTP",
+      "recipeIds": [
+        "functions-http/http/large-response"
+      ],
+      "cases": [
+        "one-mib-response-length-and-sha256"
+      ],
+      "status": "VERIFIED",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-27T13:59:44Z",
+            "project": "fireemu-oracle-query",
+            "corpusDigest": "836c138ba213546428e700e7ecb51644089bb5b0cdc91946eb9904a648106bea",
+            "pass": 1
+          },
+          {
+            "recordedAt": "2026-09-27T13:59:45Z",
+            "project": "fireemu-oracle-query",
+            "corpusDigest": "836c138ba213546428e700e7ecb51644089bb5b0cdc91946eb9904a648106bea",
+            "pass": 2
+          }
+        ],
+        "sourceCommit": "8959805113f67ded6d537b9aa78ac685a1f0efa4",
+        "finalArtifactSha256": "4918b2201852364d6f20cf4be7bf63cb3efcea6588f030be77dd552977cb2940",
+        "runnerTreeSha256": "c70c6d835dae46d525b513bcf6828cb1fe551289d8aa231fa4f52a8d6fac4cce",
+        "comparisonPath": "spec/compatibility/closure/evidence/FUNCTIONS-HTTP-comparison.json",
+        "comparisonSha256": "0e021b4cf185ff58252ea33b8b65d4ba3f2ee19bf2a9d62456ad89aad402662a",
+        "strictRecordingSha256": "92e9ea008073ae16897015e552ae7b58cb1560d2d55de14092c3ca71e8fea39f",
+        "rows": {
+          "MATCH": 1
+        }
+      }
+    },
+    {
+      "conditionId": "FUNCTIONS-HTTP/http-streaming",
+      "source": "spec/compatibility/contract.json#FN-CLAIM-HTTP",
+      "recipeIds": [
+        "functions-http/http/streaming"
+      ],
+      "cases": [
+        "ordered-chunks-before-completion",
+        "completed-stream",
+        "client-disconnect"
+      ],
+      "status": "VERIFIED",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-27T13:59:44Z",
+            "project": "fireemu-oracle-query",
+            "corpusDigest": "836c138ba213546428e700e7ecb51644089bb5b0cdc91946eb9904a648106bea",
+            "pass": 1
+          },
+          {
+            "recordedAt": "2026-09-27T13:59:45Z",
+            "project": "fireemu-oracle-query",
+            "corpusDigest": "836c138ba213546428e700e7ecb51644089bb5b0cdc91946eb9904a648106bea",
+            "pass": 2
+          }
+        ],
+        "sourceCommit": "8959805113f67ded6d537b9aa78ac685a1f0efa4",
+        "finalArtifactSha256": "4918b2201852364d6f20cf4be7bf63cb3efcea6588f030be77dd552977cb2940",
+        "runnerTreeSha256": "c70c6d835dae46d525b513bcf6828cb1fe551289d8aa231fa4f52a8d6fac4cce",
+        "comparisonPath": "spec/compatibility/closure/evidence/FUNCTIONS-HTTP-comparison.json",
+        "comparisonSha256": "0e021b4cf185ff58252ea33b8b65d4ba3f2ee19bf2a9d62456ad89aad402662a",
+        "strictRecordingSha256": "92e9ea008073ae16897015e552ae7b58cb1560d2d55de14092c3ca71e8fea39f",
+        "rows": {
+          "MATCH": 3
+        }
+      }
+    },
+    {
+      "conditionId": "FUNCTIONS-HTTP/http-cors-preflight",
+      "source": "spec/compatibility/contract.json#FN-CLAIM-HTTP",
+      "recipeIds": [
+        "functions-http/http/cors"
+      ],
+      "cases": [
+        "options-preflight",
+        "cross-origin-post"
+      ],
+      "status": "VERIFIED",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-27T13:59:44Z",
+            "project": "fireemu-oracle-query",
+            "corpusDigest": "836c138ba213546428e700e7ecb51644089bb5b0cdc91946eb9904a648106bea",
+            "pass": 1
+          },
+          {
+            "recordedAt": "2026-09-27T13:59:45Z",
+            "project": "fireemu-oracle-query",
+            "corpusDigest": "836c138ba213546428e700e7ecb51644089bb5b0cdc91946eb9904a648106bea",
+            "pass": 2
+          }
+        ],
+        "sourceCommit": "8959805113f67ded6d537b9aa78ac685a1f0efa4",
+        "finalArtifactSha256": "4918b2201852364d6f20cf4be7bf63cb3efcea6588f030be77dd552977cb2940",
+        "runnerTreeSha256": "c70c6d835dae46d525b513bcf6828cb1fe551289d8aa231fa4f52a8d6fac4cce",
+        "comparisonPath": "spec/compatibility/closure/evidence/FUNCTIONS-HTTP-comparison.json",
+        "comparisonSha256": "0e021b4cf185ff58252ea33b8b65d4ba3f2ee19bf2a9d62456ad89aad402662a",
+        "strictRecordingSha256": "92e9ea008073ae16897015e552ae7b58cb1560d2d55de14092c3ca71e8fea39f",
+        "rows": {
+          "MATCH": 2
+        },
+        "scopeNote": "The recorded corpus observes onRequest with cors: false. Default and explicit cors: true behavior are checked separately by the pinned SDK regression and official-emulator conformance fixture."
+      }
+    },
+    {
+      "conditionId": "FUNCTIONS-HTTP/http-throw",
+      "source": "spec/compatibility/contract.json#FN-CLAIM-HTTP",
+      "recipeIds": [
+        "functions-http/http/failures"
+      ],
+      "cases": [
+        "synchronous-throw",
+        "rejected-promise"
+      ],
+      "status": "VERIFIED",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-27T13:59:44Z",
+            "project": "fireemu-oracle-query",
+            "corpusDigest": "836c138ba213546428e700e7ecb51644089bb5b0cdc91946eb9904a648106bea",
+            "pass": 1
+          },
+          {
+            "recordedAt": "2026-09-27T13:59:45Z",
+            "project": "fireemu-oracle-query",
+            "corpusDigest": "836c138ba213546428e700e7ecb51644089bb5b0cdc91946eb9904a648106bea",
+            "pass": 2
+          }
+        ],
+        "sourceCommit": "8959805113f67ded6d537b9aa78ac685a1f0efa4",
+        "finalArtifactSha256": "4918b2201852364d6f20cf4be7bf63cb3efcea6588f030be77dd552977cb2940",
+        "runnerTreeSha256": "c70c6d835dae46d525b513bcf6828cb1fe551289d8aa231fa4f52a8d6fac4cce",
+        "comparisonPath": "spec/compatibility/closure/evidence/FUNCTIONS-HTTP-comparison.json",
+        "comparisonSha256": "0e021b4cf185ff58252ea33b8b65d4ba3f2ee19bf2a9d62456ad89aad402662a",
+        "strictRecordingSha256": "92e9ea008073ae16897015e552ae7b58cb1560d2d55de14092c3ca71e8fea39f",
+        "rows": {
+          "MATCH": 2
+        }
+      }
+    },
+    {
+      "conditionId": "FUNCTIONS-HTTP/http-timeout",
+      "source": "spec/compatibility/contract.json#FN-CLAIM-HTTP",
+      "recipeIds": [
+        "functions-http/http/failures"
+      ],
+      "cases": [
+        "handler-exceeds-one-second-timeout"
+      ],
+      "status": "VERIFIED",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-27T13:59:44Z",
+            "project": "fireemu-oracle-query",
+            "corpusDigest": "836c138ba213546428e700e7ecb51644089bb5b0cdc91946eb9904a648106bea",
+            "pass": 1
+          },
+          {
+            "recordedAt": "2026-09-27T13:59:45Z",
+            "project": "fireemu-oracle-query",
+            "corpusDigest": "836c138ba213546428e700e7ecb51644089bb5b0cdc91946eb9904a648106bea",
+            "pass": 2
+          }
+        ],
+        "sourceCommit": "8959805113f67ded6d537b9aa78ac685a1f0efa4",
+        "finalArtifactSha256": "4918b2201852364d6f20cf4be7bf63cb3efcea6588f030be77dd552977cb2940",
+        "runnerTreeSha256": "c70c6d835dae46d525b513bcf6828cb1fe551289d8aa231fa4f52a8d6fac4cce",
+        "comparisonPath": "spec/compatibility/closure/evidence/FUNCTIONS-HTTP-comparison.json",
+        "comparisonSha256": "0e021b4cf185ff58252ea33b8b65d4ba3f2ee19bf2a9d62456ad89aad402662a",
+        "strictRecordingSha256": "92e9ea008073ae16897015e552ae7b58cb1560d2d55de14092c3ca71e8fea39f",
+        "rows": {
+          "MATCH": 1
+        }
+      }
+    },
+    {
+      "conditionId": "FUNCTIONS-HTTP/http-no-response",
+      "source": "spec/compatibility/contract.json#FN-CLAIM-HTTP",
+      "recipeIds": [
+        "functions-http/http/failures"
+      ],
+      "cases": [
+        "handler-returns-without-sending-response"
+      ],
+      "status": "VERIFIED",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-27T13:59:44Z",
+            "project": "fireemu-oracle-query",
+            "corpusDigest": "836c138ba213546428e700e7ecb51644089bb5b0cdc91946eb9904a648106bea",
+            "pass": 1
+          },
+          {
+            "recordedAt": "2026-09-27T13:59:45Z",
+            "project": "fireemu-oracle-query",
+            "corpusDigest": "836c138ba213546428e700e7ecb51644089bb5b0cdc91946eb9904a648106bea",
+            "pass": 2
+          }
+        ],
+        "sourceCommit": "8959805113f67ded6d537b9aa78ac685a1f0efa4",
+        "finalArtifactSha256": "4918b2201852364d6f20cf4be7bf63cb3efcea6588f030be77dd552977cb2940",
+        "runnerTreeSha256": "c70c6d835dae46d525b513bcf6828cb1fe551289d8aa231fa4f52a8d6fac4cce",
+        "comparisonPath": "spec/compatibility/closure/evidence/FUNCTIONS-HTTP-comparison.json",
+        "comparisonSha256": "0e021b4cf185ff58252ea33b8b65d4ba3f2ee19bf2a9d62456ad89aad402662a",
+        "strictRecordingSha256": "92e9ea008073ae16897015e552ae7b58cb1560d2d55de14092c3ca71e8fea39f",
+        "rows": {
+          "MATCH": 1
+        }
+      }
+    },
+    {
+      "conditionId": "FUNCTIONS-HTTP/callable-success-envelope",
+      "source": "https://firebase.google.com/docs/functions/callable-reference",
+      "recipeIds": [
+        "functions-http/callable/success"
+      ],
+      "cases": [
+        "object-result",
+        "scalar-result",
+        "null-result",
+        "data-envelope"
+      ],
+      "status": "VERIFIED",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-27T13:59:44Z",
+            "project": "fireemu-oracle-query",
+            "corpusDigest": "836c138ba213546428e700e7ecb51644089bb5b0cdc91946eb9904a648106bea",
+            "pass": 1
+          },
+          {
+            "recordedAt": "2026-09-27T13:59:45Z",
+            "project": "fireemu-oracle-query",
+            "corpusDigest": "836c138ba213546428e700e7ecb51644089bb5b0cdc91946eb9904a648106bea",
+            "pass": 2
+          }
+        ],
+        "sourceCommit": "8959805113f67ded6d537b9aa78ac685a1f0efa4",
+        "finalArtifactSha256": "4918b2201852364d6f20cf4be7bf63cb3efcea6588f030be77dd552977cb2940",
+        "runnerTreeSha256": "c70c6d835dae46d525b513bcf6828cb1fe551289d8aa231fa4f52a8d6fac4cce",
+        "comparisonPath": "spec/compatibility/closure/evidence/FUNCTIONS-HTTP-comparison.json",
+        "comparisonSha256": "0e021b4cf185ff58252ea33b8b65d4ba3f2ee19bf2a9d62456ad89aad402662a",
+        "strictRecordingSha256": "92e9ea008073ae16897015e552ae7b58cb1560d2d55de14092c3ca71e8fea39f",
+        "rows": {
+          "MATCH": 4
+        }
+      }
+    },
+    {
+      "conditionId": "FUNCTIONS-HTTP/callable-https-errors",
+      "source": "https://firebase.google.com/docs/functions/callable-reference",
+      "recipeIds": [
+        "functions-http/callable/https-errors"
+      ],
+      "cases": [
+        "ok",
+        "cancelled",
+        "unknown",
+        "invalid-argument",
+        "deadline-exceeded",
+        "not-found",
+        "already-exists",
+        "permission-denied",
+        "resource-exhausted",
+        "failed-precondition",
+        "aborted",
+        "out-of-range",
+        "unimplemented",
+        "internal",
+        "unavailable",
+        "data-loss",
+        "unauthenticated",
+        "details",
+        "unhandled-error"
+      ],
+      "status": "VERIFIED",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-27T13:59:44Z",
+            "project": "fireemu-oracle-query",
+            "corpusDigest": "836c138ba213546428e700e7ecb51644089bb5b0cdc91946eb9904a648106bea",
+            "pass": 1
+          },
+          {
+            "recordedAt": "2026-09-27T13:59:45Z",
+            "project": "fireemu-oracle-query",
+            "corpusDigest": "836c138ba213546428e700e7ecb51644089bb5b0cdc91946eb9904a648106bea",
+            "pass": 2
+          }
+        ],
+        "sourceCommit": "8959805113f67ded6d537b9aa78ac685a1f0efa4",
+        "finalArtifactSha256": "4918b2201852364d6f20cf4be7bf63cb3efcea6588f030be77dd552977cb2940",
+        "runnerTreeSha256": "c70c6d835dae46d525b513bcf6828cb1fe551289d8aa231fa4f52a8d6fac4cce",
+        "comparisonPath": "spec/compatibility/closure/evidence/FUNCTIONS-HTTP-comparison.json",
+        "comparisonSha256": "0e021b4cf185ff58252ea33b8b65d4ba3f2ee19bf2a9d62456ad89aad402662a",
+        "strictRecordingSha256": "92e9ea008073ae16897015e552ae7b58cb1560d2d55de14092c3ca71e8fea39f",
+        "rows": {
+          "MATCH": 19
+        }
+      }
+    },
+    {
+      "conditionId": "FUNCTIONS-HTTP/callable-malformed-requests",
+      "source": "https://firebase.google.com/docs/functions/callable-reference",
+      "recipeIds": [
+        "functions-http/callable/malformed"
+      ],
+      "cases": [
+        "wrong-method",
+        "wrong-content-type",
+        "missing-data",
+        "extra-field",
+        "malformed-json"
+      ],
+      "status": "VERIFIED",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-27T13:59:44Z",
+            "project": "fireemu-oracle-query",
+            "corpusDigest": "836c138ba213546428e700e7ecb51644089bb5b0cdc91946eb9904a648106bea",
+            "pass": 1
+          },
+          {
+            "recordedAt": "2026-09-27T13:59:45Z",
+            "project": "fireemu-oracle-query",
+            "corpusDigest": "836c138ba213546428e700e7ecb51644089bb5b0cdc91946eb9904a648106bea",
+            "pass": 2
+          }
+        ],
+        "sourceCommit": "8959805113f67ded6d537b9aa78ac685a1f0efa4",
+        "finalArtifactSha256": "4918b2201852364d6f20cf4be7bf63cb3efcea6588f030be77dd552977cb2940",
+        "runnerTreeSha256": "c70c6d835dae46d525b513bcf6828cb1fe551289d8aa231fa4f52a8d6fac4cce",
+        "comparisonPath": "spec/compatibility/closure/evidence/FUNCTIONS-HTTP-comparison.json",
+        "comparisonSha256": "0e021b4cf185ff58252ea33b8b65d4ba3f2ee19bf2a9d62456ad89aad402662a",
+        "strictRecordingSha256": "92e9ea008073ae16897015e552ae7b58cb1560d2d55de14092c3ca71e8fea39f",
+        "rows": {
+          "MATCH": 5
+        }
+      }
+    },
+    {
+      "conditionId": "FUNCTIONS-HTTP/callable-auth-context",
+      "source": "https://firebase.google.com/docs/reference/functions/2nd-gen/node/firebase-functions.https.callablerequest",
+      "recipeIds": [
+        "functions-http/callable/auth-context"
+      ],
+      "cases": [
+        "no-authorization",
+        "valid-project-id-token",
+        "uid-and-claims"
+      ],
+      "status": "VERIFIED",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-27T13:59:44Z",
+            "project": "fireemu-oracle-query",
+            "corpusDigest": "836c138ba213546428e700e7ecb51644089bb5b0cdc91946eb9904a648106bea",
+            "pass": 1
+          },
+          {
+            "recordedAt": "2026-09-27T13:59:45Z",
+            "project": "fireemu-oracle-query",
+            "corpusDigest": "836c138ba213546428e700e7ecb51644089bb5b0cdc91946eb9904a648106bea",
+            "pass": 2
+          }
+        ],
+        "sourceCommit": "8959805113f67ded6d537b9aa78ac685a1f0efa4",
+        "finalArtifactSha256": "4918b2201852364d6f20cf4be7bf63cb3efcea6588f030be77dd552977cb2940",
+        "runnerTreeSha256": "c70c6d835dae46d525b513bcf6828cb1fe551289d8aa231fa4f52a8d6fac4cce",
+        "comparisonPath": "spec/compatibility/closure/evidence/FUNCTIONS-HTTP-comparison.json",
+        "comparisonSha256": "0e021b4cf185ff58252ea33b8b65d4ba3f2ee19bf2a9d62456ad89aad402662a",
+        "strictRecordingSha256": "92e9ea008073ae16897015e552ae7b58cb1560d2d55de14092c3ca71e8fea39f",
+        "rows": {
+          "MATCH": 3
+        }
+      }
+    },
+    {
+      "conditionId": "FUNCTIONS-HTTP/callable-auth-refusal",
+      "source": "https://firebase.google.com/docs/functions/callable-reference",
+      "recipeIds": [
+        "functions-http/callable/auth-refusal"
+      ],
+      "cases": [
+        "malformed-bearer",
+        "invalid-signature",
+        "expired-id-token"
+      ],
+      "status": "VERIFIED",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-27T13:59:44Z",
+            "project": "fireemu-oracle-query",
+            "corpusDigest": "836c138ba213546428e700e7ecb51644089bb5b0cdc91946eb9904a648106bea",
+            "pass": 1
+          },
+          {
+            "recordedAt": "2026-09-27T13:59:45Z",
+            "project": "fireemu-oracle-query",
+            "corpusDigest": "836c138ba213546428e700e7ecb51644089bb5b0cdc91946eb9904a648106bea",
+            "pass": 2
+          }
+        ],
+        "sourceCommit": "8959805113f67ded6d537b9aa78ac685a1f0efa4",
+        "finalArtifactSha256": "4918b2201852364d6f20cf4be7bf63cb3efcea6588f030be77dd552977cb2940",
+        "runnerTreeSha256": "c70c6d835dae46d525b513bcf6828cb1fe551289d8aa231fa4f52a8d6fac4cce",
+        "comparisonPath": "spec/compatibility/closure/evidence/FUNCTIONS-HTTP-comparison.json",
+        "comparisonSha256": "0e021b4cf185ff58252ea33b8b65d4ba3f2ee19bf2a9d62456ad89aad402662a",
+        "strictRecordingSha256": "92e9ea008073ae16897015e552ae7b58cb1560d2d55de14092c3ca71e8fea39f",
+        "rows": {
+          "MATCH": 3
+        }
+      }
+    },
+    {
+      "conditionId": "FUNCTIONS-HTTP/callable-streaming",
+      "source": "https://firebase.google.com/docs/functions/callable",
+      "recipeIds": [
+        "functions-http/callable/streaming"
+      ],
+      "cases": [
+        "send-chunk-order",
+        "final-result",
+        "client-disconnect"
+      ],
+      "status": "VERIFIED",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-27T13:59:44Z",
+            "project": "fireemu-oracle-query",
+            "corpusDigest": "836c138ba213546428e700e7ecb51644089bb5b0cdc91946eb9904a648106bea",
+            "pass": 1
+          },
+          {
+            "recordedAt": "2026-09-27T13:59:45Z",
+            "project": "fireemu-oracle-query",
+            "corpusDigest": "836c138ba213546428e700e7ecb51644089bb5b0cdc91946eb9904a648106bea",
+            "pass": 2
+          }
+        ],
+        "sourceCommit": "8959805113f67ded6d537b9aa78ac685a1f0efa4",
+        "finalArtifactSha256": "4918b2201852364d6f20cf4be7bf63cb3efcea6588f030be77dd552977cb2940",
+        "runnerTreeSha256": "c70c6d835dae46d525b513bcf6828cb1fe551289d8aa231fa4f52a8d6fac4cce",
+        "comparisonPath": "spec/compatibility/closure/evidence/FUNCTIONS-HTTP-comparison.json",
+        "comparisonSha256": "0e021b4cf185ff58252ea33b8b65d4ba3f2ee19bf2a9d62456ad89aad402662a",
+        "strictRecordingSha256": "92e9ea008073ae16897015e552ae7b58cb1560d2d55de14092c3ca71e8fea39f",
+        "rows": {
+          "MATCH": 3
+        }
+      }
+    },
+    {
+      "conditionId": "FUNCTIONS-HTTP/public-invocation",
+      "source": "https://firebase.google.com/docs/functions/http-events",
+      "recipeIds": [
+        "functions-http/deployment/public-invocation"
+      ],
+      "cases": [
+        "http-without-cloud-run-credentials",
+        "callable-without-cloud-run-credentials"
+      ],
+      "status": "VERIFIED",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-27T13:59:44Z",
+            "project": "fireemu-oracle-query",
+            "corpusDigest": "836c138ba213546428e700e7ecb51644089bb5b0cdc91946eb9904a648106bea",
+            "pass": 1
+          },
+          {
+            "recordedAt": "2026-09-27T13:59:45Z",
+            "project": "fireemu-oracle-query",
+            "corpusDigest": "836c138ba213546428e700e7ecb51644089bb5b0cdc91946eb9904a648106bea",
+            "pass": 2
+          }
+        ],
+        "sourceCommit": "8959805113f67ded6d537b9aa78ac685a1f0efa4",
+        "finalArtifactSha256": "4918b2201852364d6f20cf4be7bf63cb3efcea6588f030be77dd552977cb2940",
+        "runnerTreeSha256": "c70c6d835dae46d525b513bcf6828cb1fe551289d8aa231fa4f52a8d6fac4cce",
+        "comparisonPath": "spec/compatibility/closure/evidence/FUNCTIONS-HTTP-comparison.json",
+        "comparisonSha256": "0e021b4cf185ff58252ea33b8b65d4ba3f2ee19bf2a9d62456ad89aad402662a",
+        "strictRecordingSha256": "92e9ea008073ae16897015e552ae7b58cb1560d2d55de14092c3ca71e8fea39f",
+        "rows": {
+          "MATCH": 2
+        }
+      }
+    },
+    {
+      "conditionId": "FUNCTIONS-HTTP/final-artifact-regression",
+      "source": "spec/compatibility/closure/FUNCTIONS-HTTP.json",
+      "recipeIds": [
+        "functions-http/"
+      ],
+      "cases": [
+        "two-production-recordings",
+        "same-source-final-artifact-comparison",
+        "workspace-regression"
+      ],
+      "status": "VERIFIED",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-27T13:59:44Z",
+            "project": "fireemu-oracle-query",
+            "corpusDigest": "836c138ba213546428e700e7ecb51644089bb5b0cdc91946eb9904a648106bea",
+            "pass": 1
+          },
+          {
+            "recordedAt": "2026-09-27T13:59:45Z",
+            "project": "fireemu-oracle-query",
+            "corpusDigest": "836c138ba213546428e700e7ecb51644089bb5b0cdc91946eb9904a648106bea",
+            "pass": 2
+          }
+        ],
+        "sourceCommit": "8959805113f67ded6d537b9aa78ac685a1f0efa4",
+        "finalArtifactSha256": "4918b2201852364d6f20cf4be7bf63cb3efcea6588f030be77dd552977cb2940",
+        "runnerTreeSha256": "c70c6d835dae46d525b513bcf6828cb1fe551289d8aa231fa4f52a8d6fac4cce",
+        "comparisonPath": "spec/compatibility/closure/evidence/FUNCTIONS-HTTP-comparison.json",
+        "comparisonSha256": "0e021b4cf185ff58252ea33b8b65d4ba3f2ee19bf2a9d62456ad89aad402662a",
+        "strictProductionRows": {
+          "MATCH": 68
+        },
+        "workspaceNextestPassed": 3521,
+        "nodeRunnerPassed": 747,
+        "nodeRunnerSkipped": 2,
+        "workspaceNextestSkipped": 99
+      }
+    },
+    {
+      "conditionId": "FUNCTIONS-HTTP/closure-review",
+      "source": "spec/compatibility/closure/FUNCTIONS-HTTP.json",
+      "recipeIds": [
+        "functions-http/"
+      ],
+      "cases": [
+        "independent-coordinator-approval"
+      ],
+      "status": "VERIFIED",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-27T13:59:44Z",
+            "project": "fireemu-oracle-query",
+            "corpusDigest": "836c138ba213546428e700e7ecb51644089bb5b0cdc91946eb9904a648106bea",
+            "pass": 1
+          },
+          {
+            "recordedAt": "2026-09-27T13:59:45Z",
+            "project": "fireemu-oracle-query",
+            "corpusDigest": "836c138ba213546428e700e7ecb51644089bb5b0cdc91946eb9904a648106bea",
+            "pass": 2
+          }
+        ],
+        "sourceCommit": "8959805113f67ded6d537b9aa78ac685a1f0efa4",
+        "finalArtifactSha256": "4918b2201852364d6f20cf4be7bf63cb3efcea6588f030be77dd552977cb2940",
+        "runnerTreeSha256": "c70c6d835dae46d525b513bcf6828cb1fe551289d8aa231fa4f52a8d6fac4cce",
+        "comparisonPath": "spec/compatibility/closure/evidence/FUNCTIONS-HTTP-comparison.json",
+        "comparisonSha256": "0e021b4cf185ff58252ea33b8b65d4ba3f2ee19bf2a9d62456ad89aad402662a",
+        "strictProductionRows": {
+          "MATCH": 68
+        },
+        "workspaceNextestPassed": 3521,
+        "nodeRunnerPassed": 747,
+        "nodeRunnerSkipped": 2,
+        "workspaceNextestSkipped": 99,
+        "reviewedCommit": "e8f49a57e973f7c9be2e7b05d2bc916e20a0edf1",
+        "reviewReports": [
+          {
+            "path": "docs.local/reviews/2026-09-28-functions-http-closure-rereview.md",
+            "sha256": "91eaa87de41297cbbb985aad8e894f5b9144df490f99914a4c4ce453efe3f5b3"
+          },
+          {
+            "path": "docs.local/reviews/2026-09-28-functions-http-closure-rereview2.md",
+            "sha256": "9e5e396bbb1c914708157de89a0d64fef09026e6def507274e434d8aefaec996"
+          },
+          {
+            "path": "docs.local/reviews/2026-09-28-functions-http-closure-rereview3.md",
+            "sha256": "d3252184eab092d54ede38c9abd0facc44b3341bf0bc79801192502c9e52886a"
+          }
+        ],
+        "decisionRef": "docs.local/instructions/owner-decisions.md (2026-09-28 FUNCTIONS-HTTP promotion)"
+      }
+    }
+  ]
+}

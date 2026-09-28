@@ -7,6 +7,9 @@ const PINS = [
   "rulesSourceSha256",
 ];
 const COORDINATOR = "Claude（委任。枠の内の承認し直し）";
+const DELEGATED_ENVELOPE_ACTOR = "Claude（委任。オーナーの裁量の委任 2026-09-28）";
+const DELEGATION_SUBJECT = "調整役への委任（本番の送信）";
+const DELEGATION_REFERENCE = `2026-09-28 ${DELEGATION_SUBJECT}`;
 
 function closedRecord(value, keys, label) {
   if (!value || typeof value !== "object" || Object.getPrototypeOf(value) !== Object.prototype)
@@ -74,13 +77,33 @@ function ledgerRows(text, subject) {
       const separator = entry.indexOf("=");
       const key = entry.slice(0, separator).trim(),
         value = entry.slice(separator + 1).trim();
-      if (separator < 1 || !/^[A-Za-z][A-Za-z0-9]*$/.test(key) || !value)
+      if (separator < 1 || (!/^[A-Za-z][A-Za-z0-9]*$/.test(key) && key !== "根拠") || !value)
         throw new Error("malformed target ledger row");
       if (Object.hasOwn(fields, key)) throw new Error("duplicate ledger field");
       fields[key] = value;
     }
     return [{ line: index + 1, subject: columns[1], fields, actor: columns[3] }];
   });
+}
+
+function ownerDelegationLine(ledgerText) {
+  let basisLine = null;
+  for (const [index, line] of ledgerText.split("\n").entries()) {
+    const columns = line.split("|").map((value) => value.trim());
+    if (columns[1] !== DELEGATION_SUBJECT) continue;
+    if (
+      columns.length !== 5 ||
+      !/^- \d{4}-\d{2}-\d{2}$/.test(columns[0]) ||
+      !columns[2] ||
+      !columns[3] ||
+      !columns[4]
+    )
+      throw new Error("malformed owner delegation basis");
+    if (/\bREVOKED\b/.test(columns[2])) throw new Error("owner delegation revoked");
+    if (columns[0] === "- 2026-09-28" && columns[3].startsWith("オーナー")) basisLine = index + 1;
+  }
+  if (basisLine === null) throw new Error("owner delegation basis required");
+  return basisLine;
 }
 
 /** Bind supplied local approval records; the production caller must separately verify actual pins and its send assignment. */
@@ -152,7 +175,7 @@ export function validatePresendApproval(options) {
     typeof envelopeId !== "string" ||
     !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(envelopeId) ||
     envelope.line >= decision.line ||
-    !envelope.actor.startsWith("オーナー（")
+    (!envelope.actor.startsWith("オーナー（") && envelope.actor !== DELEGATED_ENVELOPE_ACTOR)
   )
     throw new Error("preceding owner envelope required");
   if (["writes", "iamConfig", "retries"].some((key) => !Object.hasOwn(envelope.fields, key)))
@@ -171,6 +194,13 @@ export function validatePresendApproval(options) {
     reservation <= 0
   )
     throw new Error("invalid envelope bound");
+  let delegationLine = null;
+  if (envelope.actor === DELEGATED_ENVELOPE_ACTOR) {
+    if (envelope.fields["根拠"] !== DELEGATION_REFERENCE)
+      throw new Error("exact delegation reference required");
+    delegationLine = ownerDelegationLine(ledgerText);
+    if (reservation > 10) throw new Error("delegated envelope reservation exceeds USD10");
+  }
   for (const limits of [packet, runner]) {
     if (
       limits.projectId !== envelope.fields.project ||
@@ -185,5 +215,6 @@ export function validatePresendApproval(options) {
     decisionLine: decision.line,
     envelopeLine: envelope.line,
     envelopeId,
+    ...(delegationLine === null ? {} : { delegationLine }),
   });
 }

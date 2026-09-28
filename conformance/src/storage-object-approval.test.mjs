@@ -265,3 +265,131 @@ test("a non-owner concrete decision and malformed SHA pins reject", () => {
     /invalid packet/,
   );
 });
+
+const delegatedEnvelopeActor = "Claude（委任。オーナーの裁量の委任 2026-09-28）";
+const delegationReference = "2026-09-28 調整役への委任（本番の送信）";
+const basisSubject = "調整役への委任（本番の送信）";
+const basis = (actor = owner, date = "2026-09-28") =>
+  `- ${date} | ${basisSubject} | decision=APPROVE; sandbox delegation within USD10 | ${actor} | delegation.md`;
+const delegatedEnvelope = (values = {}, actor = delegatedEnvelopeActor) =>
+  envelope({ 根拠: delegationReference, ...values }, actor);
+const delegatedLedger = (values = {}) => `${basis()}\n${delegatedEnvelope(values)}\n${delegated()}`;
+
+for (const actor of [owner, "オーナー"]) {
+  test(`the exact delegated envelope actor binds a real owner basis: ${actor}`, () => {
+    const result = validate(`${basis(actor)}\n${delegatedEnvelope()}\n${delegated()}`, {
+      review: inEnvelope,
+    });
+    assert.equal(result.envelopeLine, 2);
+    assert.equal(result.decisionLine, 3);
+    assert.equal(result.delegationLine, 1);
+    assert.equal(result.sendAuthorized, false);
+  });
+}
+test("the USD10 delegated envelope boundary covers a smaller concrete reservation", () => {
+  assert.equal(
+    validate(delegatedLedger({ reserveUsd: 10 }), { review: inEnvelope }).envelopeId,
+    envelopeId,
+  );
+});
+test("a delegated envelope above USD10 rejects even when the concrete packet is smaller", () => {
+  assert.throws(
+    () => validate(delegatedLedger({ reserveUsd: 10.000001 }), { review: inEnvelope }),
+    /delegated envelope reservation/,
+  );
+});
+test("owner envelopes retain their authority above the delegation ceiling", () => {
+  assert.equal(
+    validate(`${envelope({ reserveUsd: 11 })}\n${delegated()}`, { review: inEnvelope }).envelopeId,
+    envelopeId,
+  );
+});
+for (const actor of [
+  "Claude（委任）",
+  "Claude（委任。オーナーの裁量の委任2026-09-28）",
+  `${delegatedEnvelopeActor} extra`,
+]) {
+  test(`a near-match delegated envelope actor rejects: ${actor}`, () => {
+    assert.throws(
+      () =>
+        validate(`${basis()}\n${delegatedEnvelope({}, actor)}\n${delegated()}`, {
+          review: inEnvelope,
+        }),
+      /preceding owner envelope/,
+    );
+  });
+}
+for (const [label, reference] of [
+  ["wrong date", "2026-09-27 調整役への委任（本番の送信）"],
+  ["wrong subject", "2026-09-28 調整役への委任（別の送信）"],
+  ["extra suffix", `${delegationReference} extra`],
+]) {
+  test(`a delegated envelope with ${label} in its reference rejects`, () => {
+    assert.throws(
+      () => validate(delegatedLedger({ 根拠: reference }), { review: inEnvelope }),
+      /delegation reference/,
+    );
+  });
+}
+test("a delegated actor cannot omit its basis token", () => {
+  assert.throws(
+    () =>
+      validate(`${basis()}\n${envelope({}, delegatedEnvelopeActor)}\n${delegated()}`, {
+        review: inEnvelope,
+      }),
+    /delegation reference/,
+  );
+});
+for (const [label, prefix] of [
+  ["missing", ""],
+  ["non-owner", basis(coordinator)],
+  ["wrong date", basis(owner, "2026-09-27")],
+  ["wrong subject", basis().replace(basisSubject, "調整役への委任（別の送信）")],
+  ["malformed columns", basis().replace("| delegation.md", "| extra | delegation.md")],
+]) {
+  test(`a ${label} owner delegation basis rejects`, () => {
+    assert.throws(
+      () => validate(`${prefix}\n${delegatedEnvelope()}\n${delegated()}`, { review: inEnvelope }),
+      /owner delegation basis/,
+    );
+  });
+}
+test("a later owner revocation of the delegation basis rejects", () => {
+  const revoked = `- 2026-09-29 | ${basisSubject} | REVOKED | ${owner} | revoked.md`;
+  assert.throws(
+    () => validate(`${delegatedLedger()}\n${revoked}`, { review: inEnvelope }),
+    /delegation revoked/,
+  );
+});
+test("a delegated envelope still requires the concrete version actor and clean pinned review", () => {
+  assert.throws(
+    () =>
+      validate(
+        `${basis()}\n${delegatedEnvelope()}\n${decision({ envelopeId }, delegatedEnvelopeActor)}`,
+        {
+          review: inEnvelope,
+        },
+      ),
+    /owner approval/,
+  );
+  assert.throws(
+    () => validate(delegatedLedger(), { review: { ...inEnvelope, should: ["remaining"] } }),
+    /clean APPROVE/,
+  );
+});
+test("revocation and concrete limits remain binding with a delegated envelope", () => {
+  assert.throws(
+    () =>
+      validate(
+        `${delegatedLedger()}\n${row("STORAGE-OBJECT stage3-v1", { decision: "REVOKED" })}`,
+        {
+          review: inEnvelope,
+        },
+      ),
+    /revoked/,
+  );
+  assert.throws(
+    () => validate(delegatedLedger({ maxRequests: 5599 }), { review: inEnvelope }),
+    /exceeds owner envelope/,
+  );
+});

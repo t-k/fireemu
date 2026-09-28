@@ -7,6 +7,7 @@ import { FIXED_PRODUCTION_RULES_SHA256 } from "./auth-plan.mjs";
 import { replayLocalAuth } from "./auth-replay.mjs";
 import { createLocalStorageSender } from "./sender.mjs";
 import { buildStage3DraftPlan } from "./stage3-plan.mjs";
+import { createLocalWireTransport } from "./local-wire-transport.mjs";
 
 function host(name) {
   const value = process.env[name];
@@ -32,40 +33,52 @@ const projectId = "example-project",
   bucket = "example.appspot.com",
   directory = await mkdtemp(join(tmpdir(), "storage-object-auth-")),
   results = [];
-for (let index = 0; index < 2; index++) {
-  const runId = `localauth${index + 1}`,
-    plan = buildStage3DraftPlan({ projectId, bucket, runIds: [runId, `unusedauth${index + 1}`] });
-  const recipe = buildAuthCorpus({ projectId, bucket, runId }).recipes[index];
-  const eventPath = join(directory, `${runId}.jsonl`);
-  await writeFile(eventPath, "", { flag: "wx", mode: 0o600 });
-  const record = (event) => appendFile(eventPath, `${JSON.stringify(event)}\n`, { mode: 0o600 });
-  const sender = createLocalStorageSender({
-    plan,
-    origin: storageOrigin,
-    authOrigin,
-    localAuth: {
-      apiKey: "storage-object-local-key",
-      password: randomBytes(24).toString("base64url"),
-    },
-    localControl: { origin: control.origin, token: process.env.FIREEMU_CONTROL_TOKEN },
-    credentials: { admin: "Bearer owner" },
-    fetchImpl: globalThis.fetch,
-    onStart: (event) => record({ type: "started", ...event }),
-    onReserve: (event) => record({ type: "reserved", ...event }),
-    onJournal: (event) => record({ type: "ownership", ...event }),
-  });
-  const result = await replayLocalAuth({
-    sender,
-    recipe,
-    bucket,
-    prefix: plan.recordings[0].prefix,
-    onCapture: (event) => record({ type: "response", ...event }),
-  });
-  results.push(result);
-  if (result.status !== "LOCAL_COMPLETE") break;
+const bytePath = join(directory, "wire-events.jsonl");
+await writeFile(bytePath, "", { flag: "wx", mode: 0o600 });
+const wire = createLocalWireTransport({
+  origins: [storageOrigin, authOrigin, control.origin],
+  limits: buildStage3DraftPlan({ projectId, bucket, runIds: ["localwireone", "localwiretwo"] }),
+  captureDirectory: directory,
+  onByteReserve: (event) => appendFile(bytePath, `${JSON.stringify(event)}\n`, { mode: 0o600 }),
+});
+try {
+  for (let index = 0; index < 2; index++) {
+    const runId = `localauth${index + 1}`,
+      plan = buildStage3DraftPlan({ projectId, bucket, runIds: [runId, `unusedauth${index + 1}`] });
+    const recipe = buildAuthCorpus({ projectId, bucket, runId }).recipes[index];
+    const eventPath = join(directory, `${runId}.jsonl`);
+    await writeFile(eventPath, "", { flag: "wx", mode: 0o600 });
+    const record = (event) => appendFile(eventPath, `${JSON.stringify(event)}\n`, { mode: 0o600 });
+    const sender = createLocalStorageSender({
+      plan,
+      origin: storageOrigin,
+      authOrigin,
+      localAuth: {
+        apiKey: "storage-object-local-key",
+        password: randomBytes(24).toString("base64url"),
+      },
+      localControl: { origin: control.origin, token: process.env.FIREEMU_CONTROL_TOKEN },
+      credentials: { admin: "Bearer owner" },
+      fetchImpl: wire.fetch,
+      onStart: (event) => record({ type: "started", ...event }),
+      onReserve: (event) => record({ type: "reserved", ...event }),
+      onJournal: (event) => record({ type: "ownership", ...event }),
+    });
+    const result = await replayLocalAuth({
+      sender,
+      recipe,
+      bucket,
+      prefix: plan.recordings[0].prefix,
+      onCapture: (event) => record({ type: "response", ...event }),
+    });
+    results.push(result);
+    if (result.status !== "LOCAL_COMPLETE") break;
+  }
+} finally {
+  await wire.close();
 }
 process.stdout.write(
-  `${JSON.stringify({ results, eventDirectory: directory, rulesSourceSha256: FIXED_PRODUCTION_RULES_SHA256 })}\n`,
+  `${JSON.stringify({ results, eventDirectory: directory, rulesSourceSha256: FIXED_PRODUCTION_RULES_SHA256, wire: wire.snapshot() })}\n`,
 );
 if (results.length !== 2 || results.some((result) => result.status !== "LOCAL_COMPLETE"))
   process.exitCode = 2;

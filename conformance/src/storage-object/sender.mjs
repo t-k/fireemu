@@ -232,6 +232,9 @@ export function createLocalStorageSender({
         ...init,
         redirect: "manual",
         signal: AbortSignal.timeout(30_000),
+        operationId,
+        accountingPhase: counter.snapshot().mode,
+        verifyBeforeDispatch: verifyBeforeFetch,
       });
       const bytes = Buffer.from(await response.arrayBuffer());
       if (bytes.length > MAX_RESPONSE_BYTES)

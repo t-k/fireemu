@@ -107,6 +107,9 @@ def test_runtime_binding_names_the_commit_and_hashes_the_rust_inputs():
     assert binding["runtimeInputCount"] > 0
     assert isinstance(binding["runtimeInputsClean"], bool)
     assert len(binding["artifactSha256"]) == 64
+    assert binding["pythonRuntime"]["pythonVersion"] == "3.12.13"
+    assert binding["pythonRuntime"]["pythonSysVersion"] == sys.version
+    assert len(binding["pythonRuntime"]["pythonExecutableSha256"]) == 64
 
 
 def test_runtime_binding_refuses_a_missing_artifact():
@@ -116,7 +119,9 @@ def test_runtime_binding_refuses_a_missing_artifact():
 
 
 def synthetic_document(**overrides):
+    python_runtime = {"pythonVersion": "3.12.13", "pythonSysVersion": "fixture-version", "pythonExecutableSha256": "e" * 64}
     binding = {
+        "pythonRuntime": python_runtime,
         "artifactSha256": "a" * 64,
         "sourceCommit": "b" * 40,
         "sourceRoot": "/somewhere",
@@ -135,6 +140,7 @@ def synthetic_document(**overrides):
         "elapsed": 1.0,
         "child": {"stopped": True, "signal": None, "exitCode": 0},
         "receipt": {
+            "pythonRuntime": python_runtime,
             "complete": True,
             "instance": {"wrongTokenStatus": 403, "artifactSha256": "a" * 64},
         },

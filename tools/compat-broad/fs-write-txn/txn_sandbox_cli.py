@@ -21,8 +21,11 @@ import txn_expiry_cases as cases
 import txn_expiry_plan as plan_module
 import txn_sandbox_run as runner
 import txn_sandbox_session as session
+import txn_sandbox_runtime as runtime
 
 SOURCE_FILES = (
+    "tools/compat-broad/fs-write-txn/txn_sandbox_runtime.py",
+    "tools/compat-broad/fs-write-txn/txn_sandbox_launcher.py",
     "tools/compat-broad/fs-write-txn/txn_expiry_cases.py",
     "tools/compat-broad/fs-write-txn/txn_expiry_plan.py",
     "tools/compat-broad/fs-write-txn/txn_expiry_collector.py",
@@ -45,7 +48,7 @@ PACKET_FIELDS = {
     "schemaVersion", "packetId", "project", "database", "recordings",
     "requestsPerRecording", "estimatedUsdPerRecording", "sourceCommit",
     "runnerSha256", "closureSha256", "casesDigest", "planSourceDigest",
-    "baselineSha256", "packetName", "envelopeId", "envelopePath", "envelopeSha256",
+    "baselineSha256", "packetName", "envelopeId", "envelopePath", "envelopeSha256", "pythonVersion",
 }
 
 
@@ -71,6 +74,7 @@ def load_packet(
     value = json.loads(raw)
     if not isinstance(value, dict) or set(value) != PACKET_FIELDS:
         raise ValueError("closed FS-TRANSACTION packet schema required")
+    runtime.require_packet_runtime(value["pythonVersion"])
     if (
         value["schemaVersion"] != 1
         or value["project"] != "fireemu-oracle-sbx"
@@ -82,7 +86,7 @@ def load_packet(
     ):
         raise ValueError("packet scope or corpus differs from the frozen campaign")
     if (
-        value["envelopeId"] != "FS-TRANSACTION-expiry-retry-04-002"
+        value["envelopeId"] != "FS-TRANSACTION-expiry-retry-04-003"
         or not isinstance(value["envelopePath"], str)
         or value["envelopePath"] != envelope_relative
         or not value["envelopePath"].startswith("docs.local/reviews/")
@@ -169,6 +173,7 @@ def _private(path, root):
 
 
 def main(argv=None):
+    runtime.require_minimum()
     parser = argparse.ArgumentParser()
     parser.add_argument("command", choices=("plan-local", "record-production"))
     parser.add_argument("--packet")
@@ -185,6 +190,7 @@ def main(argv=None):
             "planSourceDigest": plan_module.source_digest(),
             "requestsPerRecording": 96,
             "estimatedUsdPerRecording": 0.05,
+            **runtime.evidence(),
         }, sort_keys=True))
         return 0
     if not all((args.packet, args.packet_sha256, args.review, args.review_sha256, args.baseline)):

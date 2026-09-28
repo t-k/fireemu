@@ -186,7 +186,7 @@ def valid_instant(value):
     if not isinstance(value, str) or not _UTC.fullmatch(value):
         return False
     try:
-        datetime.datetime.fromisoformat(value.replace("Z", "+00:00"))
+        datetime.datetime.fromisoformat(value[:19] + "+00:00")
     except ValueError:
         return False
     return True
@@ -237,7 +237,7 @@ def _checked_response(response, request):
             results = body.get("writeResults")
             valid = isinstance(results, list) and len(results) == len(writes)
             if valid:
-                for write, item in zip(writes, results, strict=True):
+                for write, item in zip(writes, results):
                     if not isinstance(item, dict) or "error" in item:
                         valid = False
                         break
@@ -633,6 +633,8 @@ class Collection:
             "waited": waited,
             "detail": detail,
         }
+        if type(response.get("httpStatus")) is int:
+            row["observed"]["httpStatus"] = response["httpStatus"]
         for key in ("blocked", "incomplete", "nameMismatch"):
             if response.get(key):
                 row[key] = response[key]
@@ -731,6 +733,7 @@ class Collection:
             self.failure = stop.reason
         except (Exception, KeyboardInterrupt) as error:  # noqa: BLE001 - cleanup is owed after interruption.
             self.failure = type(error).__name__
+            self._note_failure(self.current_site or "observation", type(error).__name__)
         try:
             cleanup, releases = self._cleanup()
         except (Exception, KeyboardInterrupt) as error:  # noqa: BLE001 - a receipt is owed regardless.

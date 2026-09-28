@@ -83,7 +83,7 @@ def test_recovery_uses_read_owner_check_conditional_delete_and_typed_absence():
         if len(seen) == 1:
             return {"complete": True, "code": 0, "body": document(target["name"])}
         if len(seen) == 2:
-            return {"complete": True, "code": 0, "body": {}}
+            return {"complete": True, "code": 0, "status": "OK", "body": {"writeResults": [{}]}}
         return {"complete": True, "code": 5, "body": {}}
 
     result = recovery.recover(snapshot(), send)
@@ -131,7 +131,7 @@ def fixture_context(tmp_path, monkeypatch):
     packet_sha = "c" * 64
     packet_path = "docs.local/reviews/recovery-packet.json"
     packet = {
-        "schemaVersion": 1, "packetId": "recovery-packet", "originalPacketId": "original-packet",
+        "schemaVersion": 1, "pythonVersion": "3.12.13", "packetId": "recovery-packet", "originalPacketId": "original-packet",
         "originalAttemptId": "prior-attempt", "sourceCommit": commit,
         "runnerSha256": "b" * 64, "project": "fireemu-oracle-sbx", "database": "(default)",
         "maxRequests": 23, "estimatedUsd": 0.02,

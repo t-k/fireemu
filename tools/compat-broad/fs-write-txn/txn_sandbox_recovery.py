@@ -24,6 +24,7 @@ import txn_sandbox_management as management
 import txn_sandbox_run as runner
 import txn_sandbox_session as session
 import txn_sandbox_wire as wire_module
+import txn_sandbox_runtime as runtime
 
 PROJECT = "fireemu-oracle-sbx"
 DATABASE = "(default)"
@@ -35,7 +36,7 @@ PACKET_FIELDS = {
     "schemaVersion", "packetId", "originalPacketId", "originalAttemptId",
     "sourceCommit", "runnerSha256", "project", "database", "maxRequests",
     "estimatedUsd", "snapshotPath", "snapshotSha256", "baselineSha256",
-    "lockSha256", "lockInode", "notBefore", "roles",
+    "lockSha256", "lockInode", "notBefore", "roles", "pythonVersion",
 }
 
 
@@ -139,19 +140,27 @@ def recover(snapshot, send):
         raise ValueError("bounded recovery transport required")
     requests = 0
     recovered = []
+    last_site = None
 
     def dispatch(request):
-        nonlocal requests
+        nonlocal requests, last_site
         if requests >= MAX_DATA_REQUESTS:
             raise ValueError("exact-name recovery request bound reached")
         requests += 1
+        last_site = request["site"]
         return send(request)
+
+    def unconfirmed(reason, response):
+        result = {"complete": False, "requests": requests, "recovered": recovered, "failure": reason, "failureSite": last_site}
+        if isinstance(response, dict) and type(response.get("httpStatus")) is int:
+            result["httpStatus"] = response["httpStatus"]
+        return result
 
     for item in fixed:
         role, name = item["role"], item["name"]
         read = dispatch(_request("GetDocument", name, f"cleanup/owned-read/{role}"))
         if not isinstance(read, dict) or read.get("complete") is not True:
-            return {"complete": False, "requests": requests, "recovered": recovered, "failure": "read-incomplete"}
+            return unconfirmed("read-incomplete", read)
         if read.get("code") == collector.NOT_FOUND:
             recovered.append(role)
             continue
@@ -163,7 +172,7 @@ def recover(snapshot, send):
             or body.get("name") != name
             or not collector.is_owned(body, snapshot["ownerId"], role, snapshot["nonce"])
         ):
-            return {"complete": False, "requests": requests, "recovered": recovered, "failure": "ownership-unproven"}
+            return unconfirmed("ownership-unproven", read)
         delete = dispatch(_request(
             "Commit", name, f"cleanup/conditional-delete/{role}",
             body={"writes": [{
@@ -172,10 +181,10 @@ def recover(snapshot, send):
             }]},
         ))
         if not isinstance(delete, dict) or delete.get("complete") is not True or delete.get("code") != collector.OK:
-            return {"complete": False, "requests": requests, "recovered": recovered, "failure": "delete-unconfirmed"}
+            return unconfirmed("delete-unconfirmed", delete)
         final = dispatch(_request("GetDocument", name, f"cleanup/typed-absence/{role}"))
         if not isinstance(final, dict) or final.get("complete") is not True or final.get("code") != collector.NOT_FOUND:
-            return {"complete": False, "requests": requests, "recovered": recovered, "failure": "absence-unconfirmed"}
+            return unconfirmed("absence-unconfirmed", final)
         recovered.append(role)
     return {"complete": True, "requests": requests, "recovered": recovered}
 
@@ -221,6 +230,7 @@ def verify_packet(packet, *, packet_sha, snapshot_raw, baseline_raw, lock_path,
     """Refuse any production recovery without exact bytes and a distinct owner row."""
     if not isinstance(packet, dict) or set(packet) != PACKET_FIELDS:
         raise ValueError("closed exact-name recovery packet required")
+    runtime.require_packet_runtime(packet["pythonVersion"])
     if (
         packet["schemaVersion"] != 1
         or packet["project"] != PROJECT
@@ -313,15 +323,14 @@ def verify_packet(packet, *, packet_sha, snapshot_raw, baseline_raw, lock_path,
     if not lines or lines[0] != "APPROVE" or not required_review <= set(lines):
         raise ValueError("independent exact-name recovery review is required")
     owner_rows = []
-    for line in decisions.splitlines():
-        columns = [part.strip() for part in re.sub(r"^\s*-\s*", "", line).split("|")]
-        if len(columns) != 5 or columns[1] != "FS-TRANSACTION recovery":
+    entries = admission._decision_entries(decisions)
+    for columns, tokens in entries:
+        if columns[1] != "FS-TRANSACTION recovery":
             continue
-        tokens = {part.strip() for part in columns[2].split(";")}
-        if "REVOKED" in tokens or "decision=REVOKED" in tokens:
+        if admission._revoked_packet(columns[2], packet_sha):
             raise ValueError("exact-name recovery approval was revoked")
         if (
-            columns[3].startswith("オーナー")
+            admission._authorized_actor(columns[3], entries)
             and columns[4] == packet_path
             and {
                 "decision=APPROVE", f"packetSha256={packet_sha}",
@@ -358,11 +367,12 @@ def _record_recovery_under_guard(*, packet, packet_sha, packet_path, snapshot_ra
                                  baseline_raw, lock_path, ledger_path, private_dir,
                                  now, decisions, review, credential_fn,
                                  metadata_factory, wire_factory):
+    current_now = now if callable(now) else lambda: now
     ledger_rows = admission.read_ledger(ledger_path)
     snapshot, original = verify_packet(
         packet, packet_sha=packet_sha, snapshot_raw=snapshot_raw,
         baseline_raw=baseline_raw, lock_path=lock_path, ledger_rows=ledger_rows,
-        now=now, decisions=decisions, review=review, packet_path=packet_path,
+        now=current_now(), decisions=decisions, review=review, packet_path=packet_path,
         allow_terminal_finalization=True,
     )
     lock_inode = lock_path.stat().st_ino
@@ -385,7 +395,7 @@ def _record_recovery_under_guard(*, packet, packet_sha, packet_path, snapshot_ra
         if lock_path.stat().st_ino != lock_inode or lock_path.read_bytes() != lock_raw:
             raise ValueError("project lock changed before finalization")
         final_row = {
-            **original, "ts": now.isoformat().replace("+00:00", "Z"),
+            **original, "ts": current_now().isoformat().replace("+00:00", "Z"),
             "outcome": "recovered-exact-name", "reason": "request-free-finalization",
         }
         if original["outcome"] != "recovered-exact-name":
@@ -395,6 +405,7 @@ def _record_recovery_under_guard(*, packet, packet_sha, packet_path, snapshot_ra
         except OSError:
             admission.append_ledger(ledger_path, {
                 **final_row, "outcome": "needs-recovery", "reason": "lock-release-failed",
+                "ts": current_now().isoformat().replace("+00:00", "Z"),
             })
             raise
         return result
@@ -402,7 +413,7 @@ def _record_recovery_under_guard(*, packet, packet_sha, packet_path, snapshot_ra
     result_dir.mkdir(mode=0o700)
     _fsync_directory(result_dir.parent)
     row = {
-        "ts": now.isoformat().replace("+00:00", "Z"),
+        "ts": current_now().isoformat().replace("+00:00", "Z"),
         "project": PROJECT, "database": DATABASE, "taskId": runner.TASK_ID,
         "packetId": packet["originalPacketId"], "attemptId": packet["originalAttemptId"],
         "recoveryPacketId": packet["packetId"], "runDir": original["runDir"],
@@ -410,7 +421,12 @@ def _record_recovery_under_guard(*, packet, packet_sha, packet_path, snapshot_ra
         "phase": "recovery",
         "estimatedUsd": round(original["estimatedUsd"] + packet["estimatedUsd"], 2),
         "recoveryEstimatedUsd": packet["estimatedUsd"], "requests": None,
+        **runtime.evidence(),
     }
+
+    def terminal(**values):
+        return {**row, **values, "ts": current_now().isoformat().replace("+00:00", "Z")}
+
     admission.append_ledger(ledger_path, {**row, "outcome": "reserved"})
     budget = RecoveryBudget()
     try:
@@ -424,37 +440,37 @@ def _record_recovery_under_guard(*, packet, packet_sha, packet_path, snapshot_ra
         if result["complete"] and any(before[slot] != after[slot] for slot in ("project", "database")):
             result = {**result, "complete": False, "failure": "configuration-changed"}
         result["totalRequests"] = budget.total
+        result.update(runtime.evidence())
         result_path = result_dir / "recovery.json"
         result_raw = runner._save_private(result_path, result)
         _fsync_directory(result_dir)
         if result["complete"] is not True or result["recovered"] != list(ROLES):
-            admission.append_ledger(ledger_path, {**row, "outcome": "needs-recovery", "requests": budget.total})
+            admission.append_ledger(ledger_path, terminal(outcome="needs-recovery", requests=budget.total))
             raise ValueError("exact-name recovery is incomplete")
         if lock_path.stat().st_ino != lock_inode or lock_path.read_bytes() != lock_raw:
             raise ValueError("project lock changed before verified release")
-        admission.append_ledger(ledger_path, {
-            **row, "outcome": "recovered-exact-name", "requests": budget.total,
-            "resultSha256": _sha(result_raw),
-        })
+        admission.append_ledger(ledger_path, terminal(
+            outcome="recovered-exact-name", requests=budget.total, resultSha256=_sha(result_raw),
+        ))
         try:
             lock_path.unlink()
         except OSError:
-            admission.append_ledger(ledger_path, {
-                **row, "outcome": "needs-recovery", "requests": budget.total,
-                "reason": "lock-release-failed",
-                "resultSha256": _sha(result_raw),
-            })
+            admission.append_ledger(ledger_path, terminal(
+                outcome="needs-recovery", requests=budget.total, reason="lock-release-failed",
+                resultSha256=_sha(result_raw),
+            ))
             raise
         return result
     except (Exception, KeyboardInterrupt):
         rows = admission.read_ledger(ledger_path)
         own = [entry for entry in rows if entry.get("recoveryPacketId") == packet["packetId"]]
         if own and own[-1].get("outcome") == "reserved":
-            admission.append_ledger(ledger_path, {**row, "outcome": "needs-recovery", "requests": budget.total})
+            admission.append_ledger(ledger_path, terminal(outcome="needs-recovery", requests=budget.total))
         raise
 
 
 def main(argv=None):
+    runtime.require_minimum()
     parser = argparse.ArgumentParser()
     parser.add_argument("--packet", required=True)
     parser.add_argument("--packet-sha256", required=True)
@@ -485,7 +501,7 @@ def main(argv=None):
             packet_path=packet_path.relative_to(root).as_posix(),
             snapshot_raw=snapshot_path.read_bytes(), baseline_raw=baseline_path.read_bytes(),
             lock_path=lock_path, ledger_path=root / "docs.local/runs/sandbox-ledger.jsonl",
-            private_dir=root / "docs.local/runs", now=dt.datetime.now(dt.timezone.utc),
+            private_dir=root / "docs.local/runs", now=lambda: dt.datetime.now(dt.timezone.utc),
             decisions=(root / "docs.local/instructions/owner-decisions.md").read_text(),
             review=review_raw.decode(),
         )

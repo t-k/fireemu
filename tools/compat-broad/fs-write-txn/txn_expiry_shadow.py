@@ -40,9 +40,10 @@ from broad_contract import digest
 from evidence_common import runtime_inputs
 from owned_runner import local_addresses
 import txn_wire
+import txn_sandbox_runtime as python_runtime
 
 CONTRACT = "txn-expiry-local-shadow-v1"
-PROJECT = "fireemu-test"
+PROJECT = "demo-local-shadow"
 CONFIG = {
     "schemaVersion": 1,
     "profile": "strict",
@@ -154,6 +155,7 @@ def runtime_binding(artifact, root):
         "runtimeInputsDigest": digest(inputs),
         "runtimeInputCount": len(inputs),
         "runtimeInputsClean": dirty == "",
+        "pythonRuntime": python_runtime.public_evidence(),
     }
 
 
@@ -462,6 +464,7 @@ def child(output, nonce, owner_id):
         responsibility=make_responsibility_journal(output),
     )
     receipt["localControlRequestCount"] = advance.requests
+    receipt["pythonRuntime"] = python_runtime.public_evidence()
     receipt["instance"] = {
         "pid": os.getpid(),
         "parentPid": os.getppid(),
@@ -563,6 +566,7 @@ def build_shadow_document(
     instance = (receipt or {}).get("instance") or {}
     runtime["wrongControlTokenStatus"] = instance.get("wrongTokenStatus")
     runtime["childObservedArtifactSha256"] = instance.get("artifactSha256")
+    runtime["childPythonRuntime"] = (receipt or {}).get("pythonRuntime")
     result = {
         "kind": CONTRACT,
         "campaign": cases.CAMPAIGN,
@@ -586,6 +590,9 @@ def build_shadow_document(
         runtime["artifactSha256"] == artifact_sha
         and runtime["runtimeInputsClean"] is True
         and runtime["childObservedArtifactSha256"] == artifact_sha
+        and runtime.get("pythonRuntime") is not None
+        and runtime["childPythonRuntime"] == runtime["pythonRuntime"]
+        and runtime["pythonRuntime"].get("pythonVersion") == python_runtime.PYTHON_VERSION
         and receipt
         and receipt.get("complete") is True
         and isinstance(child, dict)
@@ -604,6 +611,7 @@ def build_shadow_document(
 
 
 def run_shadow(artifact, output):
+    python_runtime.require_packet_runtime(python_runtime.PYTHON_VERSION)
     artifact = Path(artifact).resolve(strict=True)
     source_root = Path(__file__).resolve().parents[3]
     binding = runtime_binding(artifact, source_root)
@@ -659,7 +667,7 @@ def run_shadow(artifact, output):
     save(output / "launch.json", {"kind": "txn-local-launch-v1", "nonce": nonce,
                                  "ownerId": owner_id, "sourceDigest": before,
                                  "artifactSha256": artifact_sha, "productionExecuted": False,
-                                 "authorizesCleanup": False})
+                                 "authorizesCleanup": False, **python_runtime.evidence()})
     started = time.monotonic()
     process = subprocess.Popen(argv, cwd=output, env=environment)
     timed_out = False

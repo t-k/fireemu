@@ -74,6 +74,7 @@ NETWORK_RESERVE_MIB = 32
 NETWORK_RATE_MICROUSD_PER_GIB = 230_000
 
 SOURCE_FILES = (
+    "txn_sandbox_runtime.py",
     "txn_expiry_cases.py",
     "txn_expiry_plan.py",
     "txn_expiry_collector.py",

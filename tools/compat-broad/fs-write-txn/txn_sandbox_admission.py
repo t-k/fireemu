@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
 import json
 import os
 import re
@@ -14,11 +15,18 @@ from pathlib import Path
 PROJECT = "fireemu-oracle-sbx"
 TASK = "FS-TRANSACTION"
 IDLE_GAP = dt.timedelta(minutes=30)
+DELEGATED_ACTOR = "Claude（委任。オーナーの裁量の委任 2026-09-28）"
+DELEGATION_SCOPE_SHA256 = "d57a2ebb9efdcb798ff64afca7ed2bc15e28556822336342505e41fb822cad46"
+_TIMESTAMP = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]{1,9})?(?:Z|[+-][0-9]{2}:[0-9]{2})\Z")
 
 
 def _instant(value):
     if not isinstance(value, str):
         raise ValueError("sandbox ledger timestamp is missing")
+    if not _TIMESTAMP.fullmatch(value):
+        raise ValueError("sandbox ledger timestamp is invalid")
+    # Preserve microseconds while avoiding interpreter-specific fractional parsing.
+    value = re.sub(r"\.([0-9]{1,9})(?=Z|[+-])", lambda match: "." + (match[1] + "000000")[:6], value)
     try:
         parsed = dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
     except ValueError:
@@ -26,6 +34,54 @@ def _instant(value):
     if parsed.tzinfo is None:
         raise ValueError("sandbox ledger timestamp needs a timezone")
     return parsed
+
+
+def _decision_entries(decisions):
+    entries = []
+    for line in decisions.splitlines():
+        columns = [part.strip() for part in re.sub(r"^\s*-\s*", "", line).split("|")]
+        if len(columns) == 5 and re.fullmatch(r"\d{4}-\d{2}-\d{2}", columns[0]):
+            entries.append((columns, {part.strip() for part in columns[2].split(";")}))
+    return entries
+
+
+def _has_delegation(entries):
+    """Require the exact owner authority text, including its budget and exclusions."""
+    matching = []
+    for columns, _tokens in entries:
+        if columns[1] != "調整役への委任（本番の送信）":
+            continue
+        if _is_revocation(columns[2]):
+            return False
+        if (
+            columns[0] == "2026-09-28"
+            and columns[3] == "オーナー（このセッションへの直接の返答）"
+            and columns[4] == "docs.local/instructions/owner-decisions.md"
+            and hashlib.sha256(columns[2].encode()).hexdigest() == DELEGATION_SCOPE_SHA256
+        ):
+            matching.append(columns)
+    return len(matching) == 1
+
+
+def _authorized_actor(actor, entries):
+    return actor.startswith("オーナー") or actor == DELEGATED_ACTOR and _has_delegation(entries)
+
+
+def _is_revocation(decision):
+    return re.search(r"(?:^|[;\s])(?:decision=)?REVOKED(?=[;\s]|$)", decision) is not None
+
+
+def _revoked_packet(decision, packet_sha, envelope_id=None):
+    """A scoped revocation cannot revoke another packet or fall through unrecognized."""
+    if not _is_revocation(decision):
+        return False
+    packets = re.findall(r"packetSha256=([a-f0-9]{64})(?![a-f0-9])", decision)
+    if "packetSha256=" in decision:
+        return len(packets) != 1 or decision.count("packetSha256=") != 1 or packets[0] == packet_sha
+    envelopes = re.findall(r"envelopeId=([A-Za-z0-9_-]+)", decision)
+    if "envelopeId=" in decision and envelope_id is not None:
+        return len(envelopes) != 1 or decision.count("envelopeId=") != 1 or envelopes[0] == envelope_id
+    return True
 
 
 def _owner_approval(decisions, pins):
@@ -37,29 +93,12 @@ def _owner_approval(decisions, pins):
         f"estimatedUsdPerRecording={pins['estimatedUsdPerRecording']}",
         "recordings=2",
     }
-    entries = []
-    for line in decisions.splitlines():
-        columns = [part.strip() for part in re.sub(r"^\s*-\s*", "", line).split("|")]
-        if len(columns) != 5 or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", columns[0]):
-            continue
-        tokens = {part.strip() for part in columns[2].split(";")}
-        entries.append((columns, tokens))
+    entries = _decision_entries(decisions)
     named_parent = f"{TASK} {pins.get('packetName', '')}".strip()
     for columns, _tokens in entries:
         if columns[1] not in (TASK, named_parent, f"{named_parent} envelope"):
             continue
-        decision = columns[2]
-        if not re.search(r"(?:^|[;\s])(?:decision=)?REVOKED(?=[;\s]|$)", decision):
-            continue
-        packet = re.search(r"packetSha256=([a-f0-9]{64})(?![a-f0-9])", decision)
-        envelope = re.search(r"envelopeId=([A-Za-z0-9_-]+)", decision)
-        if packet is not None:
-            revoked = packet[1] == pins["packetSha256"]
-        elif envelope is not None:
-            revoked = envelope[1] == pins.get("envelopeId")
-        else:
-            revoked = True
-        if revoked:
+        if _revoked_packet(columns[2], pins["packetSha256"], pins.get("envelopeId")):
             raise ValueError("this packet or envelope was revoked")
     direct = [
         columns for columns, tokens in entries
@@ -77,14 +116,14 @@ def _owner_approval(decisions, pins):
         tokens for columns, tokens in entries
         if columns[1] == f"{named_parent} envelope"
         and columns[4] == pins.get("envelopePath")
-        and columns[3].startswith("オーナー")
+        and _authorized_actor(columns[3], entries)
         and f"envelopeId={envelope_id}" in tokens
     ]
     delegated = [
         columns for columns, tokens in entries
         if columns[1] == named_parent
         and columns[4] == pins["packetPath"]
-        and columns[3] == "Claude（委任。枠の内の承認し直し）"
+        and (columns[3] == "Claude（委任。枠の内の承認し直し）" or columns[3] == DELEGATED_ACTOR and _has_delegation(entries))
         and {"decision=APPROVE", f"envelopeId={envelope_id}"} <= tokens
         and required <= tokens
     ]

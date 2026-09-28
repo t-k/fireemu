@@ -63,4 +63,7 @@ class FixedDataWire:
             return remote._incomplete(status, "redirect")
         if content_type.split(";", 1)[0].strip().lower() != "application/json":
             return remote._incomplete(status, "invalid-media-type")
-        return remote.normalize(status, raw, request)
+        try:
+            return remote.normalize(status, raw, request)
+        except Exception as error:  # noqa: BLE001 -- the exchange completed, but its outcome is unconfirmed.
+            return remote._incomplete(status, "response-validation-" + type(error).__name__)

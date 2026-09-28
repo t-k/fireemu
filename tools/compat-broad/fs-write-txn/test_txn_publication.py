@@ -134,6 +134,7 @@ def parent_fixture(tmp_path, monkeypatch, *, mutation=None, contract_mutation=No
     artifact = tmp_path / 'artifact'; artifact.write_bytes(b'not-a-native-artifact')
     artifact_sha = hashlib.sha256(artifact.read_bytes()).hexdigest()
     binding = {'artifactSha256': artifact_sha, 'sourceCommit': 'a' * 40,
+               'pythonRuntime': {'pythonVersion': '3.12.13', 'pythonSysVersion': 'fixture-version', 'pythonExecutableSha256': 'e' * 64},
                'sourceRoot': 'repository-root', 'runtimeInputsDigest': 'b' * 64,
                'runtimeInputCount': 1, 'runtimeInputsClean': True}
     monkeypatch.setattr(shadow, 'runtime_binding', lambda *_a: binding)
@@ -151,6 +152,7 @@ def parent_fixture(tmp_path, monkeypatch, *, mutation=None, contract_mutation=No
             receipt['instance'] = {'pid': 123457, 'parentPid': self.pid,
                 'firestoreOrigin': 'http://127.0.0.1:8080', 'controlOrigin': 'http://127.0.0.1:8081',
                 'wrongTokenStatus': 403, 'artifactSha256': artifact_sha}
+            receipt['pythonRuntime'] = binding['pythonRuntime']
             contract = comparison.local_self_contract(receipt)
             assert contract['classification'] == 'MATCH'
             if mutation: mutation(receipt)

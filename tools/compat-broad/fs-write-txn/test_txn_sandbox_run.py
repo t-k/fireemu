@@ -10,6 +10,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent))
 
 import txn_sandbox_run as runner
+import txn_sandbox_runtime as runtime
 from test_txn_sandbox_admission import DECISION, LAST, NOW, PINS
 from test_txn_sandbox_contract import receipt
 
@@ -38,6 +39,7 @@ def test_exception_request_count_is_saved_without_exception_text_before_the_stop
     assert rows[-1]["requestCountBasis"] == "precharged-upper-bound"
     failure = Path(rows[-1]["runDir"]) / "failure-1.json"
     assert json.loads(failure.read_text()) == {
+        **runtime.evidence(),
         "failureType": "ValueError", "sandboxRequests": 4,
         "requestCountBasis": "precharged-upper-bound",
     }
@@ -85,6 +87,7 @@ def test_two_complete_recordings_freeze_under_one_lock(tmp_path):
     ]
     assert rows[2]["requests"] == 70 and rows[4]["requests"] == 71
     assert all(row["envelopeId"] == PINS["envelopeId"] for row in rows[1:])
+    assert all(all(row[key] == value for key, value in runtime.evidence().items()) for row in rows[1:])
 
 
 def test_incomplete_first_pass_keeps_lock_and_skips_second(tmp_path):

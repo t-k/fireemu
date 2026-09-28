@@ -13,6 +13,7 @@ import txn_expiry_plan as plan_module
 import txn_sandbox_contract as contract
 import txn_sandbox_management as management
 import txn_sandbox_wire as wire_module
+import txn_sandbox_runtime as runtime
 
 
 def assert_clean_environment(environ=None):
@@ -96,6 +97,7 @@ def run_once(
     collector_factory=collector.Collection,
 ):
     """Return one secret-free receipt; management precedes data and follows cleanup."""
+    runtime.require_packet_runtime(runtime.PYTHON_VERSION)
     plan = plan_module.compile_plan(nonce, owner_id)
     contract.validate_scope(plan)
     budget = contract.RequestBudget(plan)
@@ -138,6 +140,7 @@ def run_once(
                 receipt["complete"] = False
                 receipt["failure"] = f"postflight-{type(error).__name__}"
         receipt["sandboxRequests"] = budget.total
+        receipt.update(runtime.evidence())
         return receipt
     except (Exception, KeyboardInterrupt) as error:
         # Charges precede dispatch, so this is a conservative request upper bound.

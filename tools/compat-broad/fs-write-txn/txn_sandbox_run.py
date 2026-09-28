@@ -12,6 +12,7 @@ from pathlib import Path
 
 import txn_sandbox_admission as admission
 import txn_sandbox_contract as contract
+import txn_sandbox_runtime as runtime
 
 TASK_ID = "FS-TRANSACTION-SANDBOX"
 TASK_LIMIT_USD = 10.0
@@ -95,6 +96,7 @@ def _ledger_row(pins, attempt_id, run_dir, nonce, outcome, requests):
         "outcome": outcome,
         "requests": requests,
         "estimatedUsd": pins["estimatedUsdPerRecording"],
+        **runtime.evidence(),
     }
 
 
@@ -175,6 +177,7 @@ def record_twice(*, ledger_path, private_dir, pins, decisions, now, record_once,
                     if type(requests) is not int or not 0 <= requests <= pins["requestsPerRecording"]:
                         requests = None
                     failure = {
+                        **runtime.evidence(),
                         "failureType": type(error).__name__,
                         "sandboxRequests": requests,
                         "requestCountBasis": "precharged-upper-bound" if requests is not None else "unavailable",

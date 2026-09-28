@@ -25,7 +25,7 @@ def sha(value):
 
 def packet(baseline, envelope, *, source="b" * 40, runner="c" * 64):
     return {
-        "schemaVersion": 1,
+        "schemaVersion": 1, "pythonVersion": "3.12.13",
         "packetId": "fs-transaction-13-a",
         "project": "fireemu-oracle-sbx",
         "database": "(default)",
@@ -39,7 +39,7 @@ def packet(baseline, envelope, *, source="b" * 40, runner="c" * 64):
         "planSourceDigest": plan.source_digest(),
         "baselineSha256": sha(baseline),
         "packetName": "expiry-retry-04",
-        "envelopeId": "FS-TRANSACTION-expiry-retry-04-002",
+        "envelopeId": "FS-TRANSACTION-expiry-retry-04-003",
         "envelopePath": "docs.local/reviews/transaction-envelope.md",
         "envelopeSha256": sha(envelope),
     }

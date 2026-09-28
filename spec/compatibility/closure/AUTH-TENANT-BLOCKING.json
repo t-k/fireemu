@@ -70,224 +70,904 @@
       "decision": "Action codes in tenants and around blocking functions moved here from AUTH-ACTION.",
       "decidedBy": "owner (t-k)",
       "decidedOn": "2026-09-24"
+    },
+    {
+      "id": "A12",
+      "decision": "The gson parser message production returns for malformed customAttributes JSON is a documented message-text divergence; the INVALID_CLAIMS refusal itself must match.",
+      "decidedBy": "owner",
+      "decidedOn": "2026-09-24",
+      "inheritedFrom": "AUTH-ACCOUNT"
+    },
+    {
+      "id": "TB9",
+      "decision": "The emulator profile's blocking-function error and timeout texts follow production's form (no new refusal); the masked 503 Error code: 47 and a failure while the runner restarts are defects in both profiles.",
+      "decidedBy": "Claude under the owner's delegation to the coordinator (owner ledger, 2026-09-28, AUTH-TENANT-BLOCKING)",
+      "decidedOn": "2026-09-28"
+    },
+    {
+      "id": "TB10",
+      "decision": "beforeEmailSent (B6) and production's blockingFunctions answer (B7) are implemented in the strict profile only: the emulator profile runs no email or SMS event and keeps its own configuration form, as the official emulator does; every mail path reaches one check; beforeSmsSent is listed and never run (no SMS it would gate is recorded, TB3). The strict profile's race guards (409) are fireemu-only and recorded in the contract.",
+      "decidedBy": "Claude under the owner's delegation to the coordinator (owner ledger, 2026-09-28, AUTH-TENANT-BLOCKING)",
+      "decidedOn": "2026-09-28"
+    },
+    {
+      "id": "TB11",
+      "decision": "Two recorded rows are compared again on the integrated artifact instead of being implemented here: atb/tenant/providers#auth-uri-a (AUTH-FEDERATION, TB4) and atb/blocking/timeout#sign-in-slow (FUNCTIONS-HTTP's runner recovery). The lane is integrated after v0.8.0 and before AUTH-FEDERATION.",
+      "decidedBy": "Claude under the owner's delegation to the coordinator (owner ledger, 2026-09-28, AUTH-TENANT-BLOCKING)",
+      "decidedOn": "2026-09-28"
     }
   ],
   "conditions": [
     {
       "conditionId": "AUTH-TENANT-BLOCKING/tenant-management",
       "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
-      "recipeIds": ["atb/tenant/manage"],
-      "configProjections": ["default"],
-      "status": "PENDING_CORPUS",
-      "note": "T1: tenant create (minimal, every documented field, unknown and mistyped fields, display-name forms), get, list and its paging, PATCH with and without a mask, delete and the unknown tenant; the answer's members and the tenant id's shape."
+      "recipeIds": [
+        "atb/tenant/manage"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "VERIFIED",
+      "note": "T1: tenant create (minimal, every documented field, unknown and mistyped fields, display-name forms), get, list and its paging, PATCH with and without a mask, delete and the unknown tenant; the answer's members and the tenant id's shape.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-27T15:43:38.163Z",
+            "gitSha": "08d0cb2ee76e8bb847458fa3fa7027adfb2c34e2",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "54bdec0413d82ccbf33ee8641d8e98b9bab81b7e1ea9bf0bb2887e87a9919c63",
+        "sourceCommit": "30fac1e50c918340620be61029fae977bf1ef401",
+        "comparisonPaths": [
+          "spec/compatibility/closure/evidence/AUTH-TENANT-BLOCKING-tenant-comparison.json"
+        ],
+        "rows": {
+          "MATCH": 41
+        }
+      }
     },
     {
       "conditionId": "AUTH-TENANT-BLOCKING/multi-tenant-switch",
       "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
-      "recipeIds": ["atb/tenant/switch-off"],
-      "configProjections": ["default"],
-      "status": "PENDING_CORPUS",
-      "note": "T2: the answers to tenant management and tenant-scoped requests while multiTenant.allowTenants is off, and the config's multiTenant member."
+      "recipeIds": [
+        "atb/tenant/switch-off"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "VERIFIED",
+      "note": "T2: the answers to tenant management and tenant-scoped requests while multiTenant.allowTenants is off, and the config's multiTenant member.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-27T15:43:38.163Z",
+            "gitSha": "08d0cb2ee76e8bb847458fa3fa7027adfb2c34e2",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "54bdec0413d82ccbf33ee8641d8e98b9bab81b7e1ea9bf0bb2887e87a9919c63",
+        "sourceCommit": "30fac1e50c918340620be61029fae977bf1ef401",
+        "comparisonPaths": [
+          "spec/compatibility/closure/evidence/AUTH-TENANT-BLOCKING-tenant-comparison.json"
+        ],
+        "rows": {
+          "MATCH": 6
+        }
+      }
     },
     {
       "conditionId": "AUTH-TENANT-BLOCKING/tenant-selection",
       "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
-      "recipeIds": ["atb/tenant/selection", "atb/tenant/custom-token"],
-      "configProjections": ["default"],
-      "status": "PENDING_CORPUS",
-      "note": "T3: an unknown, empty or mistyped tenant id, and a body tenant that contradicts the ID token, the refresh token, the custom token's tenant_id or the Admin path, on client and Admin routes."
+      "recipeIds": [
+        "atb/tenant/selection",
+        "atb/tenant/custom-token"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "VERIFIED",
+      "note": "T3: an unknown, empty or mistyped tenant id, and a body tenant that contradicts the ID token, the refresh token, the custom token's tenant_id or the Admin path, on client and Admin routes.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-27T15:43:38.163Z",
+            "gitSha": "08d0cb2ee76e8bb847458fa3fa7027adfb2c34e2",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "54bdec0413d82ccbf33ee8641d8e98b9bab81b7e1ea9bf0bb2887e87a9919c63",
+        "sourceCommit": "30fac1e50c918340620be61029fae977bf1ef401",
+        "comparisonPaths": [
+          "spec/compatibility/closure/evidence/AUTH-TENANT-BLOCKING-tenant-comparison.json"
+        ],
+        "rows": {
+          "MATCH": 32
+        }
+      }
     },
     {
       "conditionId": "AUTH-TENANT-BLOCKING/credential-isolation",
       "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
-      "recipeIds": ["atb/tenant/credentials"],
-      "configProjections": ["default"],
-      "status": "PENDING_CORPUS",
-      "note": "T4: a tenant's ID token, session cookie and action code used in another tenant and in the project are refused without changing anything; the firebase.tenant claim."
+      "recipeIds": [
+        "atb/tenant/credentials"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "VERIFIED",
+      "note": "T4: a tenant's ID token, session cookie and action code used in another tenant and in the project are refused without changing anything; the firebase.tenant claim.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-27T15:43:38.163Z",
+            "gitSha": "08d0cb2ee76e8bb847458fa3fa7027adfb2c34e2",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "54bdec0413d82ccbf33ee8641d8e98b9bab81b7e1ea9bf0bb2887e87a9919c63",
+        "sourceCommit": "30fac1e50c918340620be61029fae977bf1ef401",
+        "comparisonPaths": [
+          "spec/compatibility/closure/evidence/AUTH-TENANT-BLOCKING-tenant-comparison.json"
+        ],
+        "rows": {
+          "MATCH": 14
+        }
+      }
     },
     {
       "conditionId": "AUTH-TENANT-BLOCKING/admin-accounts",
       "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
-      "recipeIds": ["atb/tenant/admin-accounts"],
-      "configProjections": ["default"],
-      "status": "PENDING_CORPUS",
-      "note": "T5: Admin account routes under a tenant path; the same uid and address in two tenants and the project; project-level Admin reads do not see tenant accounts."
+      "recipeIds": [
+        "atb/tenant/admin-accounts"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "VERIFIED",
+      "note": "T5: Admin account routes under a tenant path; the same uid and address in two tenants and the project; project-level Admin reads do not see tenant accounts.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-27T15:43:38.163Z",
+            "gitSha": "08d0cb2ee76e8bb847458fa3fa7027adfb2c34e2",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "54bdec0413d82ccbf33ee8641d8e98b9bab81b7e1ea9bf0bb2887e87a9919c63",
+        "sourceCommit": "30fac1e50c918340620be61029fae977bf1ef401",
+        "comparisonPaths": [
+          "spec/compatibility/closure/evidence/AUTH-TENANT-BLOCKING-tenant-comparison.json"
+        ],
+        "rows": {
+          "MATCH": 18
+        }
+      }
     },
     {
       "conditionId": "AUTH-TENANT-BLOCKING/tenant-sign-in-settings",
       "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
-      "recipeIds": ["atb/tenant/settings"],
-      "configProjections": ["default"],
-      "status": "PENDING_CORPUS",
-      "note": "T6: which operations allowPasswordSignup, enableEmailLinkSignin, enableAnonymousUser, disableAuth, client permissions, email privacy and tenant test phone numbers refuse, and how."
+      "recipeIds": [
+        "atb/tenant/settings"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "VERIFIED",
+      "note": "T6: which operations allowPasswordSignup, enableEmailLinkSignin, enableAnonymousUser, disableAuth, client permissions, email privacy and tenant test phone numbers refuse, and how.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-27T15:43:38.163Z",
+            "gitSha": "08d0cb2ee76e8bb847458fa3fa7027adfb2c34e2",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "54bdec0413d82ccbf33ee8641d8e98b9bab81b7e1ea9bf0bb2887e87a9919c63",
+        "sourceCommit": "30fac1e50c918340620be61029fae977bf1ef401",
+        "comparisonPaths": [
+          "spec/compatibility/closure/evidence/AUTH-TENANT-BLOCKING-tenant-comparison.json"
+        ],
+        "rows": {
+          "MATCH": 36
+        }
+      }
     },
     {
       "conditionId": "AUTH-TENANT-BLOCKING/inheritance",
       "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
-      "recipeIds": ["atb/tenant/inheritance"],
-      "configProjections": ["default"],
-      "status": "PENDING_CORPUS",
-      "note": "T7: whether a tenant follows project settings changed after it was created (email privacy, sign-up permission, duplicate addresses, MFA), and what a tenant created afterwards gets."
+      "recipeIds": [
+        "atb/tenant/inheritance"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "VERIFIED",
+      "note": "T7: whether a tenant follows project settings changed after it was created (email privacy, sign-up permission, duplicate addresses, MFA), and what a tenant created afterwards gets.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-27T15:43:38.163Z",
+            "gitSha": "08d0cb2ee76e8bb847458fa3fa7027adfb2c34e2",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "54bdec0413d82ccbf33ee8641d8e98b9bab81b7e1ea9bf0bb2887e87a9919c63",
+        "sourceCommit": "30fac1e50c918340620be61029fae977bf1ef401",
+        "comparisonPaths": [
+          "spec/compatibility/closure/evidence/AUTH-TENANT-BLOCKING-tenant-comparison.json"
+        ],
+        "rows": {
+          "MATCH": 14
+        }
+      }
     },
     {
       "conditionId": "AUTH-TENANT-BLOCKING/tenant-password-policy",
       "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
-      "recipeIds": ["atb/tenant/password-policy"],
-      "configProjections": ["default"],
-      "status": "PENDING_CORPUS",
-      "note": "T8: a tenant password policy read by clients and enforced on sign-up, update and reset, independently of the project and of another tenant."
+      "recipeIds": [
+        "atb/tenant/password-policy"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "VERIFIED",
+      "note": "T8: a tenant password policy read by clients and enforced on sign-up, update and reset, independently of the project and of another tenant.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-27T15:43:38.163Z",
+            "gitSha": "08d0cb2ee76e8bb847458fa3fa7027adfb2c34e2",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "54bdec0413d82ccbf33ee8641d8e98b9bab81b7e1ea9bf0bb2887e87a9919c63",
+        "sourceCommit": "30fac1e50c918340620be61029fae977bf1ef401",
+        "comparisonPaths": [
+          "spec/compatibility/closure/evidence/AUTH-TENANT-BLOCKING-tenant-comparison.json"
+        ],
+        "rows": {
+          "MATCH": 12
+        }
+      }
     },
     {
       "conditionId": "AUTH-TENANT-BLOCKING/tenant-mfa",
       "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
-      "recipeIds": ["atb/tenant/mfa"],
-      "configProjections": ["default"],
-      "status": "PENDING_CORPUS",
-      "note": "T9 (M2): a tenant's mfaConfig written and read back; enrollment and second-factor sign-in with it on and off; a pending credential used in another tenant; second-factor claims of a tenant session."
+      "recipeIds": [
+        "atb/tenant/mfa"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "VERIFIED",
+      "note": "T9 (M2): a tenant's mfaConfig written and read back; enrollment and second-factor sign-in with it on and off; a pending credential used in another tenant; second-factor claims of a tenant session.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-27T15:43:38.163Z",
+            "gitSha": "08d0cb2ee76e8bb847458fa3fa7027adfb2c34e2",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "54bdec0413d82ccbf33ee8641d8e98b9bab81b7e1ea9bf0bb2887e87a9919c63",
+        "sourceCommit": "30fac1e50c918340620be61029fae977bf1ef401",
+        "comparisonPaths": [
+          "spec/compatibility/closure/evidence/AUTH-TENANT-BLOCKING-tenant-comparison.json"
+        ],
+        "rows": {
+          "MATCH": 21
+        }
+      }
     },
     {
       "conditionId": "AUTH-TENANT-BLOCKING/tenant-deletion",
       "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
-      "recipeIds": ["atb/tenant/deletion"],
-      "configProjections": ["default"],
-      "status": "PENDING_CORPUS",
-      "note": "T10: tokens, action codes and Admin reads of a deleted tenant; a tenant created again under the same display name."
+      "recipeIds": [
+        "atb/tenant/deletion"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "VERIFIED",
+      "note": "T10: tokens, action codes and Admin reads of a deleted tenant; a tenant created again under the same display name.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-27T15:43:38.163Z",
+            "gitSha": "08d0cb2ee76e8bb847458fa3fa7027adfb2c34e2",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "54bdec0413d82ccbf33ee8641d8e98b9bab81b7e1ea9bf0bb2887e87a9919c63",
+        "sourceCommit": "30fac1e50c918340620be61029fae977bf1ef401",
+        "comparisonPaths": [
+          "spec/compatibility/closure/evidence/AUTH-TENANT-BLOCKING-tenant-comparison.json"
+        ],
+        "rows": {
+          "MATCH": 13
+        }
+      }
     },
     {
       "conditionId": "AUTH-TENANT-BLOCKING/tenant-actions",
       "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
-      "recipeIds": ["atb/tenant/actions"],
-      "configProjections": ["default"],
-      "status": "PENDING_CORPUS",
-      "note": "T11 (E4): verification, reset and sign-in codes issued in a tenant and applied in another tenant, in the project and in their own tenant; client action-code requests in a tenant."
+      "recipeIds": [
+        "atb/tenant/actions"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "VERIFIED",
+      "note": "T11 (E4): verification, reset and sign-in codes issued in a tenant and applied in another tenant, in the project and in their own tenant; client action-code requests in a tenant.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-27T15:43:38.163Z",
+            "gitSha": "08d0cb2ee76e8bb847458fa3fa7027adfb2c34e2",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "54bdec0413d82ccbf33ee8641d8e98b9bab81b7e1ea9bf0bb2887e87a9919c63",
+        "sourceCommit": "30fac1e50c918340620be61029fae977bf1ef401",
+        "comparisonPaths": [
+          "spec/compatibility/closure/evidence/AUTH-TENANT-BLOCKING-tenant-comparison.json"
+        ],
+        "rows": {
+          "MATCH": 14
+        }
+      }
     },
     {
       "conditionId": "AUTH-TENANT-BLOCKING/provider-isolation",
       "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
-      "recipeIds": ["atb/tenant/providers"],
-      "configProjections": ["default"],
-      "status": "PENDING_CORPUS",
-      "note": "T12: an OIDC provider configuration created in one tenant is not visible or deletable from another tenant or the project (its content and sign-in are AUTH-FEDERATION, TB4)."
+      "recipeIds": [
+        "atb/tenant/providers"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "PRODUCTION_RECORDED",
+      "note": "T12: an OIDC provider configuration created in one tenant is not visible or deletable from another tenant or the project (its content and sign-in are AUTH-FEDERATION, TB4).",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-27T15:43:38.163Z",
+            "gitSha": "08d0cb2ee76e8bb847458fa3fa7027adfb2c34e2",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "54bdec0413d82ccbf33ee8641d8e98b9bab81b7e1ea9bf0bb2887e87a9919c63",
+        "sourceCommit": "30fac1e50c918340620be61029fae977bf1ef401",
+        "comparisonPaths": [
+          "spec/compatibility/closure/evidence/AUTH-TENANT-BLOCKING-tenant-comparison.json"
+        ],
+        "rows": {
+          "MATCH": 11,
+          "INDETERMINATE": 1
+        },
+        "pendingAfterIntegration": [
+          {
+            "row": "atb/tenant/providers#auth-uri-a",
+            "awaits": "AUTH-FEDERATION",
+            "reason": "createAuthUri for a tenant OIDC provider and identity-provider sign-in are AUTH-FEDERATION scope (TB4); fireemu answers 501 until that lane is integrated, then this row is compared again with the same fixture"
+          }
+        ]
+      }
     },
     {
       "conditionId": "AUTH-TENANT-BLOCKING/event-selection",
       "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
-      "recipeIds": ["atb/blocking/events"],
-      "configProjections": ["default"],
-      "status": "PENDING_CORPUS",
-      "note": "B1: which of beforeCreate and beforeSignIn fire, in which order and with which isNewUser, for password and anonymous sign-up, password, custom-token, email-link and phone sign-in and the MFA finalize (M6); none for Admin creation, account updates, lookups and token refresh."
+      "recipeIds": [
+        "atb/blocking/events",
+        "atb/blocking/custom-token"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "VERIFIED",
+      "note": "B1: which of beforeCreate and beforeSignIn fire, in which order and with which isNewUser, for password and anonymous sign-up, password, custom-token, email-link and phone sign-in and the MFA finalize (M6); none for Admin creation, account updates, lookups and token refresh.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-28T00:48:21.242Z",
+            "gitSha": "b993d1cbf8dc42c764cb534b49233bdec4fe0808",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "54bdec0413d82ccbf33ee8641d8e98b9bab81b7e1ea9bf0bb2887e87a9919c63",
+        "sourceCommit": "30fac1e50c918340620be61029fae977bf1ef401",
+        "comparisonPaths": [
+          "spec/compatibility/closure/evidence/AUTH-TENANT-BLOCKING-blocking-comparison.json"
+        ],
+        "rows": {
+          "MATCH": 17
+        }
+      }
     },
     {
       "conditionId": "AUTH-TENANT-BLOCKING/ordering-and-visibility",
       "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
-      "recipeIds": ["atb/blocking/ordering"],
-      "configProjections": ["default"],
-      "status": "PENDING_CORPUS",
-      "note": "B2: beforeCreate's changes as beforeSignIn sees them; eventType and signInMethod per method."
+      "recipeIds": [
+        "atb/blocking/ordering"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "VERIFIED",
+      "note": "B2: beforeCreate's changes as beforeSignIn sees them; eventType and signInMethod per method.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-28T00:48:21.242Z",
+            "gitSha": "b993d1cbf8dc42c764cb534b49233bdec4fe0808",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "54bdec0413d82ccbf33ee8641d8e98b9bab81b7e1ea9bf0bb2887e87a9919c63",
+        "sourceCommit": "30fac1e50c918340620be61029fae977bf1ef401",
+        "comparisonPaths": [
+          "spec/compatibility/closure/evidence/AUTH-TENANT-BLOCKING-blocking-comparison.json"
+        ],
+        "rows": {
+          "MATCH": 3
+        }
+      }
     },
     {
       "conditionId": "AUTH-TENANT-BLOCKING/refusal",
       "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
-      "recipeIds": ["atb/blocking/refusal"],
-      "configProjections": ["default"],
-      "status": "PENDING_CORPUS",
-      "note": "B3: the client answer to each HttpsError class and to an unhandled error, for each event; nothing is committed."
+      "recipeIds": [
+        "atb/blocking/refusal"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "VERIFIED",
+      "note": "B3: the client answer to each HttpsError class and to an unhandled error, for each event; nothing is committed.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-28T00:48:21.242Z",
+            "gitSha": "b993d1cbf8dc42c764cb534b49233bdec4fe0808",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "54bdec0413d82ccbf33ee8641d8e98b9bab81b7e1ea9bf0bb2887e87a9919c63",
+        "sourceCommit": "30fac1e50c918340620be61029fae977bf1ef401",
+        "comparisonPaths": [
+          "spec/compatibility/closure/evidence/AUTH-TENANT-BLOCKING-blocking-comparison.json"
+        ],
+        "rows": {
+          "MATCH": 14
+        }
+      }
     },
     {
       "conditionId": "AUTH-TENANT-BLOCKING/rollback",
       "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
-      "recipeIds": ["atb/blocking/rollback"],
-      "configProjections": ["default"],
-      "status": "PENDING_CORPUS",
-      "note": "B4: whether an account survives a beforeSignIn refusal after beforeCreate accepted it, a sign-up after a beforeCreate refusal, and disabled:true from each event."
+      "recipeIds": [
+        "atb/blocking/rollback"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "VERIFIED",
+      "note": "B4: whether an account survives a beforeSignIn refusal after beforeCreate accepted it, a sign-up after a beforeCreate refusal, and disabled:true from each event.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-28T00:48:21.242Z",
+            "gitSha": "b993d1cbf8dc42c764cb534b49233bdec4fe0808",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "54bdec0413d82ccbf33ee8641d8e98b9bab81b7e1ea9bf0bb2887e87a9919c63",
+        "sourceCommit": "30fac1e50c918340620be61029fae977bf1ef401",
+        "comparisonPaths": [
+          "spec/compatibility/closure/evidence/AUTH-TENANT-BLOCKING-blocking-comparison.json"
+        ],
+        "rows": {
+          "MATCH": 7
+        }
+      }
     },
     {
       "conditionId": "AUTH-TENANT-BLOCKING/timeout",
       "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
-      "recipeIds": ["atb/blocking/timeout"],
-      "configProjections": ["default"],
-      "status": "PENDING_CORPUS",
-      "note": "B5: a function past the deadline, for each event, and whether the account exists afterwards."
+      "recipeIds": [
+        "atb/blocking/timeout"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "PRODUCTION_RECORDED",
+      "note": "B5: a function past the deadline, for each event, and whether the account exists afterwards.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-28T00:48:21.242Z",
+            "gitSha": "b993d1cbf8dc42c764cb534b49233bdec4fe0808",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "54bdec0413d82ccbf33ee8641d8e98b9bab81b7e1ea9bf0bb2887e87a9919c63",
+        "sourceCommit": "30fac1e50c918340620be61029fae977bf1ef401",
+        "comparisonPaths": [
+          "spec/compatibility/closure/evidence/AUTH-TENANT-BLOCKING-blocking-comparison.json"
+        ],
+        "rows": {
+          "MATCH": 4,
+          "INDETERMINATE": 1
+        },
+        "pendingAfterIntegration": [
+          {
+            "row": "atb/blocking/timeout#sign-in-slow",
+            "awaits": "FUNCTIONS-HTTP",
+            "reason": "a blocking call after an earlier one timed out waits on the runner restart; FUNCTIONS-HTTP recover_blocking_auth_runner_for recovers the runner for the next call, and this row is compared again on the integrated artifact"
+          }
+        ]
+      }
     },
     {
       "conditionId": "AUTH-TENANT-BLOCKING/claims",
       "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
-      "recipeIds": ["atb/blocking/claims"],
-      "configProjections": ["default"],
-      "status": "PENDING_CORPUS",
-      "note": "B6: customClaims saved and in the ID token; sessionClaims only in the session's tokens and after a refresh; sessionClaims from beforeCreate; the size limits; reserved names; precedence."
+      "recipeIds": [
+        "atb/blocking/claims"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "VERIFIED",
+      "note": "B6: customClaims saved and in the ID token; sessionClaims only in the session's tokens and after a refresh; sessionClaims from beforeCreate; the size limits; reserved names; precedence.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-28T00:48:21.242Z",
+            "gitSha": "b993d1cbf8dc42c764cb534b49233bdec4fe0808",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "54bdec0413d82ccbf33ee8641d8e98b9bab81b7e1ea9bf0bb2887e87a9919c63",
+        "sourceCommit": "30fac1e50c918340620be61029fae977bf1ef401",
+        "comparisonPaths": [
+          "spec/compatibility/closure/evidence/AUTH-TENANT-BLOCKING-blocking-comparison.json"
+        ],
+        "rows": {
+          "MATCH": 11
+        }
+      }
     },
     {
       "conditionId": "AUTH-TENANT-BLOCKING/response-validation",
       "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
-      "recipeIds": ["atb/blocking/response"],
-      "configProjections": ["default"],
-      "status": "PENDING_CORPUS",
-      "note": "B7: the answer to a response without updateMask, a userRecord of the wrong type, unknown members and mistyped values."
+      "recipeIds": [
+        "atb/blocking/response"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "VERIFIED",
+      "note": "B7: the answer to a response without updateMask, a userRecord of the wrong type, unknown members and mistyped values.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-28T00:48:21.242Z",
+            "gitSha": "b993d1cbf8dc42c764cb534b49233bdec4fe0808",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "54bdec0413d82ccbf33ee8641d8e98b9bab81b7e1ea9bf0bb2887e87a9919c63",
+        "sourceCommit": "30fac1e50c918340620be61029fae977bf1ef401",
+        "comparisonPaths": [
+          "spec/compatibility/closure/evidence/AUTH-TENANT-BLOCKING-blocking-comparison.json"
+        ],
+        "rows": {
+          "MATCH": 3
+        }
+      }
     },
     {
       "conditionId": "AUTH-TENANT-BLOCKING/blocking-config",
       "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
-      "recipeIds": ["atb/blocking/config"],
-      "configProjections": ["default"],
-      "status": "PENDING_CORPUS",
-      "note": "B8: blockingFunctions.triggers and forwardInboundCredentials read and written, masks, an unknown event, a request after a trigger is removed, and whether a tenant carries its own blocking configuration."
+      "recipeIds": [
+        "atb/blocking/config"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "VERIFIED",
+      "note": "B8: blockingFunctions.triggers and forwardInboundCredentials read and written, masks, an unknown event, a request after a trigger is removed, and whether a tenant carries its own blocking configuration.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-28T00:48:21.242Z",
+            "gitSha": "b993d1cbf8dc42c764cb534b49233bdec4fe0808",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "54bdec0413d82ccbf33ee8641d8e98b9bab81b7e1ea9bf0bb2887e87a9919c63",
+        "sourceCommit": "30fac1e50c918340620be61029fae977bf1ef401",
+        "comparisonPaths": [
+          "spec/compatibility/closure/evidence/AUTH-TENANT-BLOCKING-blocking-comparison.json"
+        ],
+        "rows": {
+          "MATCH": 3
+        }
+      }
     },
     {
       "conditionId": "AUTH-TENANT-BLOCKING/event-payload",
       "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
-      "recipeIds": ["atb/blocking/payload"],
-      "configProjections": ["default"],
-      "status": "PENDING_CORPUS",
-      "note": "B9 (TB5): the decoded event a function receives: user record members including multiFactor and tenantId, eventType, resource, the request-derived members (presence and shape), credential and additionalUserInfo."
+      "recipeIds": [
+        "atb/blocking/email-link",
+        "atb/blocking/mfa"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "VERIFIED",
+      "note": "B9 (TB5): the decoded event a function receives: user record members including multiFactor and tenantId, eventType, resource, the request-derived members (presence and shape), credential and additionalUserInfo.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-28T00:48:21.242Z",
+            "gitSha": "b993d1cbf8dc42c764cb534b49233bdec4fe0808",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "54bdec0413d82ccbf33ee8641d8e98b9bab81b7e1ea9bf0bb2887e87a9919c63",
+        "sourceCommit": "30fac1e50c918340620be61029fae977bf1ef401",
+        "comparisonPaths": [
+          "spec/compatibility/closure/evidence/AUTH-TENANT-BLOCKING-blocking-comparison.json"
+        ],
+        "rows": {
+          "MATCH": 11
+        }
+      }
     },
     {
       "conditionId": "AUTH-TENANT-BLOCKING/tenant-events",
       "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
-      "recipeIds": ["atb/blocking/tenant"],
-      "configProjections": ["default"],
-      "status": "PENDING_CORPUS",
-      "note": "B10: blocking events of a tenant's accounts: tenantId and the resource name."
+      "recipeIds": [
+        "atb/blocking/tenant"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "VERIFIED",
+      "note": "B10: blocking events of a tenant's accounts: tenantId and the resource name.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-28T00:48:21.242Z",
+            "gitSha": "b993d1cbf8dc42c764cb534b49233bdec4fe0808",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "54bdec0413d82ccbf33ee8641d8e98b9bab81b7e1ea9bf0bb2887e87a9919c63",
+        "sourceCommit": "30fac1e50c918340620be61029fae977bf1ef401",
+        "comparisonPaths": [
+          "spec/compatibility/closure/evidence/AUTH-TENANT-BLOCKING-blocking-comparison.json"
+        ],
+        "rows": {
+          "MATCH": 3
+        }
+      }
     },
     {
       "conditionId": "AUTH-TENANT-BLOCKING/send-email-sms",
       "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
-      "recipeIds": ["atb/blocking/send"],
-      "configProjections": ["default"],
-      "status": "PENDING_CORPUS",
-      "note": "B11 (TB3): beforeSendEmail for each action-code request, its refusal and recaptchaActionOverride; whether beforeSendSms fires for a test phone number."
+      "recipeIds": [
+        "atb/blocking/send"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "VERIFIED",
+      "note": "B11 (TB3): beforeSendEmail for each action-code request, its refusal and recaptchaActionOverride; whether beforeSendSms fires for a test phone number.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-28T00:48:21.242Z",
+            "gitSha": "b993d1cbf8dc42c764cb534b49233bdec4fe0808",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "54bdec0413d82ccbf33ee8641d8e98b9bab81b7e1ea9bf0bb2887e87a9919c63",
+        "sourceCommit": "30fac1e50c918340620be61029fae977bf1ef401",
+        "comparisonPaths": [
+          "spec/compatibility/closure/evidence/AUTH-TENANT-BLOCKING-blocking-comparison.json"
+        ],
+        "rows": {
+          "MATCH": 12
+        }
+      }
     },
     {
       "conditionId": "AUTH-TENANT-BLOCKING/session-isolation",
-      "source": "docs.local/issues/open/session-reset-and-snapshots-ignore-auth-tenant-stores.md",
-      "recipeIds": ["local/session-isolation"],
-      "configProjections": ["default"],
-      "status": "PENDING_REVIEW",
-      "note": "L1 (local only; production has no session reset): a project reset, a snapshot restore and its rollback, and the resource report include the session project's tenants (sessions.rs project_reset_removes_tenant_state_and_invalidates_held_credentials; snapshots.rs a_restore_rolls_the_scopes_tenant_namespaces_back_to_the_capture and a_rollback_puts_the_tenant_namespaces_back_as_they_were_before_the_restore; resources.rs the_auth_report_counts_tenant_users_and_tenants; core-auth tenants.rs a_tenant_restore_with_a_poisoned_store_changes_nothing)."
+      "source": "docs.local/issues/closed/session-reset-and-snapshots-ignore-auth-tenant-stores.md",
+      "recipeIds": [
+        "local/session-isolation"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "VERIFIED",
+      "note": "L1 (local only; production has no session reset): a project reset, a snapshot restore and its rollback, and the resource report include the session project's tenants (sessions.rs project_reset_removes_tenant_state_and_invalidates_held_credentials; snapshots.rs a_restore_rolls_the_scopes_tenant_namespaces_back_to_the_capture and a_rollback_puts_the_tenant_namespaces_back_as_they_were_before_the_restore; resources.rs the_auth_report_counts_tenant_users_and_tenants; core-auth tenants.rs a_tenant_restore_with_a_poisoned_store_changes_nothing).",
+      "evidence": {
+        "finalArtifactSha256": "54bdec0413d82ccbf33ee8641d8e98b9bab81b7e1ea9bf0bb2887e87a9919c63",
+        "sourceCommit": "30fac1e50c918340620be61029fae977bf1ef401",
+        "localEvidence": {
+          "fixedIn": [
+            "34f4d2c78"
+          ],
+          "tests": [
+            {
+              "path": "crates/fireemu/src/sessions.rs",
+              "name": "project_reset_removes_tenant_state_and_invalidates_held_credentials"
+            },
+            {
+              "path": "crates/fireemu/src/sessions.rs",
+              "name": "resetting_the_default_scope_removes_default_project_tenants_and_credentials"
+            },
+            {
+              "path": "crates/fireemu/src/snapshots.rs",
+              "name": "a_restore_rolls_the_scopes_tenant_namespaces_back_to_the_capture"
+            },
+            {
+              "path": "crates/fireemu-core-auth/tests/tenants.rs",
+              "name": "a_tenant_restore_with_a_poisoned_store_changes_nothing"
+            },
+            {
+              "path": "crates/fireemu/src/resources.rs",
+              "name": "the_auth_report_counts_tenant_users_and_tenants"
+            }
+          ]
+        }
+      }
     },
     {
       "conditionId": "AUTH-TENANT-BLOCKING/hook-concurrency",
-      "source": "docs.local/issues/open/blocking-hook-commit-refuses-sign-ins-after-concurrent-rng-draw.md",
-      "recipeIds": ["local/hook-concurrency"],
-      "configProjections": ["default"],
-      "status": "PENDING_CORPUS",
-      "note": "L2 (local only): requests running while a blocking function runs do not make a sign-in fail, and the emulator profile adds no refusal of fireemu's own around blocking functions."
+      "source": "docs.local/issues/closed/blocking-hook-commit-refuses-sign-ins-after-concurrent-rng-draw.md",
+      "recipeIds": [
+        "local/hook-concurrency"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "VERIFIED",
+      "note": "L2 (local only): requests running while a blocking function runs do not make a sign-in fail, and the emulator profile adds no refusal of fireemu's own around blocking functions.",
+      "evidence": {
+        "finalArtifactSha256": "54bdec0413d82ccbf33ee8641d8e98b9bab81b7e1ea9bf0bb2887e87a9919c63",
+        "sourceCommit": "30fac1e50c918340620be61029fae977bf1ef401",
+        "localEvidence": {
+          "fixedIn": [
+            "e7e9419b9"
+          ],
+          "tests": [
+            {
+              "path": "crates/fireemu-adapter-http/tests/identity_toolkit.rs",
+              "name": "an_account_created_while_before_create_runs_does_not_fail_an_email_link_sign_in"
+            },
+            {
+              "path": "crates/fireemu-adapter-http/tests/identity_toolkit.rs",
+              "name": "blocking_auth_never_replays_a_response_onto_a_different_generated_user"
+            }
+          ]
+        }
+      }
     },
     {
       "conditionId": "AUTH-TENANT-BLOCKING/final-artifact-regression",
       "source": "docs.local/instructions/2026-09-23-fs-data-write-sandbox-directive.md#4",
-      "recipeIds": ["atb", "auth-mfa", "auth-action", "auth-credential", "auth-account"],
-      "configProjections": ["default"],
-      "status": "PENDING_CORPUS",
-      "note": "This parent's comparison and the AUTH-ACCOUNT, AUTH-CREDENTIAL, AUTH-ACTION and AUTH-MFA regressions on one artifact."
+      "recipeIds": [
+        "atb",
+        "auth-mfa",
+        "auth-action",
+        "auth-credential",
+        "auth-account"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "PRODUCTION_RECORDED",
+      "note": "This parent's comparison (the tenant and the blocking suites) and, as regressions, every AUTH-MFA, AUTH-ACTION, AUTH-CREDENTIAL and AUTH-ACCOUNT row, on one artifact. Every regression row matches except auth-account/admin/custom-attributes#invalid-json, the documented A12 message-text divergence. It is verified on the integrated artifact: the two parent rows that wait for another lane (pendingAfterIntegration) are compared again then, and the workspace tests are run on it.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-27T15:43:38.163Z",
+            "gitSha": "08d0cb2ee76e8bb847458fa3fa7027adfb2c34e2",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          },
+          {
+            "recordedAt": "2026-09-28T00:48:21.242Z",
+            "gitSha": "b993d1cbf8dc42c764cb534b49233bdec4fe0808",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "54bdec0413d82ccbf33ee8641d8e98b9bab81b7e1ea9bf0bb2887e87a9919c63",
+        "sourceCommit": "30fac1e50c918340620be61029fae977bf1ef401",
+        "comparisonPaths": [
+          "spec/compatibility/closure/evidence/AUTH-TENANT-BLOCKING-tenant-comparison.json",
+          "spec/compatibility/closure/evidence/AUTH-TENANT-BLOCKING-blocking-comparison.json",
+          "spec/compatibility/closure/evidence/AUTH-TENANT-BLOCKING-account-regression.json",
+          "spec/compatibility/closure/evidence/AUTH-TENANT-BLOCKING-credential-regression.json",
+          "spec/compatibility/closure/evidence/AUTH-TENANT-BLOCKING-action-regression.json",
+          "spec/compatibility/closure/evidence/AUTH-TENANT-BLOCKING-mfa-regression.json"
+        ],
+        "rows": {
+          "MATCH": 1959,
+          "MATCH_NONDETERMINISTIC": 5,
+          "INDETERMINATE": 2,
+          "REOBSERVED_MATCH": 2,
+          "MISMATCH": 1,
+          "MATCH_TIMING_DEPENDENT": 1
+        },
+        "documentedDivergences": [
+          {
+            "row": "auth-account/admin/custom-attributes#invalid-json",
+            "kind": "message-text",
+            "decidedBy": "owner",
+            "decidedOn": "2026-09-24",
+            "scopeDecision": "A12",
+            "reason": "AUTH-ACCOUNT scope decision A12: production returns gson's parser message for malformed customAttributes JSON; the INVALID_CLAIMS refusal itself matches."
+          }
+        ],
+        "pendingAfterIntegration": [
+          {
+            "row": "atb/tenant/providers#auth-uri-a",
+            "awaits": "AUTH-FEDERATION"
+          },
+          {
+            "row": "atb/blocking/timeout#sign-in-slow",
+            "awaits": "FUNCTIONS-HTTP"
+          }
+        ],
+        "buildTree": "clean (git status --porcelain empty at build); artifact copy, sha256, source commit, fmt and clippy logs and check logs in docs.local/runs/auth-tenant-blocking-final-20260928/ (private). The comparisons run the checkout build (target/debug/fireemu, the same sha256): the daemon finds tools/runner-node next to its binary",
+        "mutation": "docs.local/logs/2026-09-28/2026-09-28-023-auth-tenant-blocking-b4-b9-ledger.md (private): cargo-mutants over each fix commit; over the beforeSendEmail, blockingFunctions and review-fix sources 65bc68d24..e422abae9 (139 mutants: 105 caught, 15 unviable, 17 timeouts rerun with a longer limit, 2 survivors killed by tests in 40139e2eb); every other survivor is killed by a test or triaged as equivalent there"
+      }
     },
     {
       "conditionId": "AUTH-TENANT-BLOCKING/closure-review",
       "source": "docs.local/instructions/2026-09-23-fs-data-write-sandbox-directive.md#4",
-      "recipeIds": ["atb"],
-      "configProjections": ["default"],
+      "recipeIds": [
+        "atb"
+      ],
+      "configProjections": [
+        "default"
+      ],
       "status": "PENDING_REVIEW",
-      "note": "Independent closure and safety review of the final artifact."
+      "note": "Independent closure and safety review of the final artifact.",
+      "evidence": {
+        "finalArtifactSha256": "54bdec0413d82ccbf33ee8641d8e98b9bab81b7e1ea9bf0bb2887e87a9919c63",
+        "sourceCommit": "30fac1e50c918340620be61029fae977bf1ef401"
+      }
     }
   ],
   "closureReview": {

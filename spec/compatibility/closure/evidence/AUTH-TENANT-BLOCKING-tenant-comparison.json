@@ -1,0 +1,943 @@
+{
+  "kind": "auth-tenant-blocking-comparison-v1",
+  "artifactSha256": "54bdec0413d82ccbf33ee8641d8e98b9bab81b7e1ea9bf0bb2887e87a9919c63",
+  "fixtureSha256": "259136913f5232749b6cf9aae1111a7f2fd2894447c30f9c45cfe81c74674d07",
+  "summary": {
+    "MATCH": 232,
+    "INDETERMINATE": 1
+  },
+  "rows": [
+    {
+      "row": "atb/tenant/switch-off#config-multi-tenant",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/switch-off#list-off",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/switch-off#get-unknown-off",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/switch-off#create-off",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/switch-off#sign-up-unknown-tenant-off",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/switch-off#admin-lookup-unknown-tenant-off",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/manage#create-minimal",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/manage#get-minimal",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/manage#create-open",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/manage#get-open",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/manage#create-mfa",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/manage#get-mfa",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/manage#create-phones",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/manage#get-phones",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/manage#create-policy",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/manage#get-policy",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/manage#create-settings",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/manage#get-settings",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/manage#create-unknown-field",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/manage#create-bad-type",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/manage#create-name-short",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/manage#create-name-digit-first",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/manage#create-name-underscore",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/manage#create-name-long",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/manage#create-name-upper",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/manage#create-no-name",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/manage#list-page-1",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/manage#list-page-2",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/manage#list-size-zero",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/manage#list-size-negative",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/manage#list-size-large",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/manage#list-bad-token",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/manage#patch-name",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/manage#patch-no-mask",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/manage#patch-unknown-mask",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/manage#patch-bad-type",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/manage#patch-bad-name",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/manage#patch-mfa",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/manage#patch-mask-omitted-value",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/manage#get-after-patch",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/manage#get-open-after-patch",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/manage#get-unknown",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/manage#patch-unknown",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/manage#delete-minimal",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/manage#get-deleted",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/manage#delete-again",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/manage#delete-unknown",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/selection#create-a1",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/selection#sign-in-a1",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/selection#sign-in-a1-in-b",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/selection#sign-in-a1-no-tenant",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/selection#sign-in-unknown-tenant",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/selection#sign-in-empty-tenant",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/selection#sign-in-number-tenant",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/selection#lookup-no-tenant",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/selection#lookup-tenant-a",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/selection#lookup-tenant-b",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/selection#lookup-unknown-tenant",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/selection#update-tenant-b",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/selection#admin-lookup-a1-after-update",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/selection#refresh-a1",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/selection#refresh-a1-tenant-b",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/selection#sign-up-a1-address-in-b",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/selection#admin-lookup-a1-in-b",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/selection#admin-lookup-a1-email-in-b",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/selection#admin-lookup-a1-in-project",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/selection#admin-lookup-a1-body-tenant",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/selection#admin-lookup-unknown-tenant",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/selection#create-auth-uri-a",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/selection#create-auth-uri-b",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/custom-token#custom-tenant-a-in-a",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/custom-token#custom-tenant-a-in-b",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/custom-token#custom-tenant-a-no-tenant",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/custom-token#custom-plain-in-a",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/custom-token#custom-plain-no-tenant",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/custom-token#custom-unknown-tenant-claim",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/custom-token#lookup-custom-a",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/custom-token#admin-lookup-custom-a",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/custom-token#admin-lookup-custom-project",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/credentials#create-a1",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/credentials#sign-in-a1",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/credentials#delete-with-tenant-b",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/credentials#admin-lookup-after-delete-b",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/credentials#verify-mail-tenant-b",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/credentials#cookie-in-b",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/credentials#cookie-in-project",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/credentials#cookie-in-a",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/credentials#reset-code-a1",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/credentials#reset-check-in-b",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/credentials#reset-check-no-tenant",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/credentials#reset-in-b",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/credentials#reset-in-a",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/credentials#sign-in-a1-new-password",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/admin-accounts#create-x-in-a",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/admin-accounts#create-x-in-b",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/admin-accounts#create-x-in-project",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/admin-accounts#lookup-email-in-a",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/admin-accounts#lookup-email-in-b",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/admin-accounts#lookup-email-in-project",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/admin-accounts#query-in-a",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/admin-accounts#query-in-project",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/admin-accounts#batch-create-in-a",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/admin-accounts#batch-get-in-a",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/admin-accounts#update-in-a",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/admin-accounts#lookup-x-in-b-after-update",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/admin-accounts#delete-in-a",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/admin-accounts#lookup-x-in-a-after-delete",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/admin-accounts#lookup-x-in-project-after-delete",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/admin-accounts#batch-delete-in-b",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/admin-accounts#lookup-x-in-b-after-batch-delete",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/admin-accounts#create-in-a-body-tenant-b",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/settings#create-s1",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/settings#sign-in-s1",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/settings#password-off",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/settings#password-off-sign-in",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/settings#password-off-sign-up",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/settings#password-off-reset-mail",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/settings#password-off-update-password",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/settings#password-on",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/settings#link-off",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/settings#link-off-mail",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/settings#anonymous-off",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/settings#anonymous-off-sign-up",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/settings#anonymous-on",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/settings#anonymous-on-sign-up",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/settings#auth-off",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/settings#auth-off-sign-in",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/settings#auth-off-refresh",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/settings#auth-off-lookup",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/settings#auth-off-admin-lookup",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/settings#auth-on",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/settings#sign-up-off",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/settings#sign-up-off-sign-up",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/settings#deletion-off",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/settings#sign-in-s1-again",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/settings#deletion-off-delete",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/settings#privacy-off",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/settings#privacy-off-wrong-password",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/settings#privacy-off-unknown-address",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/settings#privacy-off-create-auth-uri",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/settings#privacy-on",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/settings#privacy-on-wrong-password",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/settings#privacy-on-unknown-address",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/settings#tenant-test-phone",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/settings#phone-tenant-number",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/settings#phone-tenant-number-sign-in",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/settings#get-s-at-end",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/inheritance#get-before",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/inheritance#create-i1",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/inheritance#create-p1",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/inheritance#wrong-password-in-tenant",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/inheritance#wrong-password-in-project",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/inheritance#sign-up-in-tenant",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/inheritance#sign-up-in-project",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/inheritance#sign-in-i1",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/inheritance#phone-enroll-in-tenant",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/inheritance#create-dup-in-tenant",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/inheritance#create-after",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/inheritance#get-after",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/inheritance#sign-up-in-late-tenant",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/inheritance#wrong-password-in-late-tenant",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/password-policy#policy-tenant-p",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/password-policy#policy-tenant-q",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/password-policy#policy-project",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/password-policy#policy-unknown-tenant",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/password-policy#sign-up-short-in-p",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/password-policy#sign-up-long-in-p",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/password-policy#sign-up-short-in-q",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/password-policy#update-short-in-p",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/password-policy#admin-create-short-in-p",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/password-policy#reset-code-p1",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/password-policy#reset-short-in-p",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/password-policy#sign-in-p1",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/mfa#create-m1",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/mfa#sign-in-m1",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/mfa#phone-start-m1",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/mfa#phone-finalize-m1",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/mfa#second-factor-m1",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/mfa#sms-start-m1",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/mfa#sms-finalize-m1-in-n",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/mfa#sms-finalize-m1",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/mfa#lookup-m1-second-factor",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/mfa#totp-start-m1",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/mfa#totp-finalize-m1",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/mfa#create-n1",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/mfa#sign-in-n1",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/mfa#phone-start-n1",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/mfa#totp-start-n1",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/mfa#admin-factor-n1",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/mfa#sign-in-n1-with-factor",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/mfa#tenant-m-mfa-off",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/mfa#sign-in-m1-mfa-off",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/mfa#get-m-at-end",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/mfa#get-n-at-end",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/deletion#create-d1",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/deletion#sign-in-d1",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/deletion#reset-code-d1",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/deletion#delete-d",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/deletion#lookup-after-delete",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/deletion#lookup-after-delete-no-tenant",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/deletion#refresh-after-delete",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/deletion#admin-lookup-after-delete",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/deletion#sign-in-after-delete",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/deletion#reset-after-delete",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/deletion#recreate-same-name",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/deletion#get-recreated",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/deletion#admin-lookup-in-recreated",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/actions#create-a1",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/actions#verify-code-a1",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/actions#verify-in-b",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/actions#verify-no-tenant",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/actions#verify-in-a",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/actions#lookup-a1-verified",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/actions#link-code-a1",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/actions#link-in-b",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/actions#link-no-tenant",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/actions#link-in-a",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/actions#client-reset-mail-a",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/actions#client-reset-mail-unknown-tenant",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/actions#client-verify-mail-a",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/actions#project-code-for-tenant-user",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/providers#create-oidc-in-a",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/providers#list-in-a",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/providers#list-in-b",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/providers#list-in-project",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/providers#get-in-a",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/providers#get-in-b",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/providers#get-in-project",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/providers#auth-uri-a",
+      "status": "INDETERMINATE"
+    },
+    {
+      "row": "atb/tenant/providers#auth-uri-b",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/providers#delete-in-b",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/providers#delete-in-a",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/tenant/providers#get-in-a-after-delete",
+      "status": "MATCH"
+    }
+  ]
+}

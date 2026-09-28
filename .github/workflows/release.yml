@@ -255,8 +255,10 @@ jobs:
   # The artifact a user installs, not the workspace build, is what the conformance corpus is
   # replayed against: the packed launcher and the linux-x64 package are installed offline into
   # a project the way `npm install fireemu` would, run through doctor / exec / symlink /
-  # read-only checks, and then drive `pnpm -C conformance run check`. The npm SBOM of that
-  # installation is attached to the release next to the cargo one.
+  # read-only checks, and then drive `pnpm -C conformance run check`, which compares the
+  # emulator profile with the recordings of the official Local Emulator Suite. The strict
+  # profile of the same package is compared with production by `strict-production` below. The
+  # npm SBOM of that installation is attached to the release next to the cargo one.
   verify-artifact:
     needs: [plan, build]
     runs-on: ubuntu-latest
@@ -306,8 +308,93 @@ jobs:
           test -x "$FIREEMU_BIN"
           pnpm -C conformance run check
 
+  # The strict profile of the artifact a user installs, replayed against the committed
+  # production recordings: every comparison a COMPAT_VERIFIED parent's closure names in its
+  # integratedRegression is rerun on the packed linux-x64 binary and must equal the committed
+  # rows. The harnesses run in a network namespace that has only loopback, so nothing can reach
+  # production, and the job reads no secret. It blocks publication like verify-artifact.
+  strict-production:
+    needs: [plan, build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa
+        with:
+          version: 10.32.1
+      # The Functions runtime of the FUNCTIONS-HTTP fixture: the Node its production comparison
+      # was recorded with (FUNCTIONS-HTTP-comparison.json nodeVersion).
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22.22.1
+      - name: keep the Functions runtime Node
+        run: echo "FIREEMU_NODE=$(command -v node)" >> "$GITHUB_ENV"
+      # The harnesses' Node: the runtime the lanes recorded their local comparisons with.
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 24.14.0
+      # uv runs the FS-DATA-WRITE corpus exporter (standard library only) on the runner's Python.
+      - name: uv
+        run: |
+          pipx install uv==0.11.28
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: package-linux-x64
+          path: npm/platforms/build/linux-x64
+      - name: pack the two packages at the release version
+        run: |
+          node npm/scripts/stamp-version.mjs ${{ needs.plan.outputs.version }}
+          node npm/scripts/prepare-launcher.mjs
+          mkdir -p npm/dist
+          (cd npm/platforms/build/linux-x64 && npm pack --pack-destination ../../../dist)
+          (cd npm/fireemu && npm pack --pack-destination ../dist)
+          sha256sum npm/dist/*.tgz
+      - name: install it the way a user would
+        id: install
+        run: |
+          node npm/scripts/verify-install.mjs --dist npm/dist --keep | tee verify.log
+          echo "dir=$(grep '^install=' verify.log | cut -d= -f2-)" >> "$GITHUB_OUTPUT"
+      - name: the installed binary is the one publish ships
+        env:
+          FIREEMU_BIN: ${{ steps.install.outputs.dir }}/node_modules/@fireemu/linux-x64/bin/fireemu
+        run: |
+          test -x "$FIREEMU_BIN"
+          installed=$(sha256sum "$FIREEMU_BIN" | cut -d' ' -f1)
+          packaged=$(sha256sum npm/platforms/build/linux-x64/bin/fireemu | cut -d' ' -f1)
+          echo "installed $installed"; echo "packaged  $packaged"
+          test "$installed" = "$packaged"
+      - name: harness dependencies
+        run: |
+          uv --version
+          "$FIREEMU_NODE" --version
+          pnpm -C conformance install --frozen-lockfile
+          npm ci --prefix conformance/functions-http/fixtures --ignore-scripts --no-audit --no-fund
+          node --test conformance/src/integration-v0.8.0-regression.test.mjs conformance/src/release-strict-regression.test.mjs
+      - name: the strict profile against the committed production recordings (loopback only)
+        env:
+          FIREEMU_BIN: ${{ steps.install.outputs.dir }}/node_modules/@fireemu/linux-x64/bin/fireemu
+          UV_OFFLINE: "1"
+          UV_PYTHON_DOWNLOADS: never
+        run: |
+          sudo unshare --net -- env PATH="$PATH" HOME="$HOME" FIREEMU_BIN="$FIREEMU_BIN" \
+            FIREEMU_NODE="$FIREEMU_NODE" UV_OFFLINE="$UV_OFFLINE" UV_PYTHON_DOWNLOADS="$UV_PYTHON_DOWNLOADS" \
+            sh -c 'ip link set lo up && exec setpriv --reuid="$1" --regid="$2" --init-groups -- \
+              node conformance/src/release-strict-regression.mjs --out strict-regression --dist npm/dist' \
+            sh "$(id -u)" "$(id -g)"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: strict-regression
+          path: strict-regression
+          if-no-files-found: warn
+
   publish:
-    needs: [plan, build, verify-artifact, reproducible]
+    needs: [plan, build, verify-artifact, reproducible, strict-production]
     runs-on: ubuntu-latest
     environment: npm-release
     permissions:

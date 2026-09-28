@@ -42,6 +42,8 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ### Changed
 
+- Release: before publishing, the release workflow installs the packed linux-x64 package and compares its strict profile with the committed production recordings of the ten closed parents (`strict-production`), and its emulator profile with the official emulator's recordings (`verify-artifact`); a single differing row stops publication.
+
 Functions HTTP and callable behavior was compared with two production recordings of 68 cases on 2026-09-27 (FUNCTIONS-HTTP). The coordinator approved the frozen 19-condition closure on 2026-09-28 after independent review.
 
 - Both profiles: an `onRequest` function receives cross-origin requests and their `Origin` header; an empty request body reaches the handler as `{}`. The emulator profile enables the official emulator's default CORS wrapper, including a 204 preflight for an `onRequest` function with no `cors` option. An explicit `cors: false` disables that wrapper. The strict profile leaves a default `onRequest` preflight to the handler, as observed in production.

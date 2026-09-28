@@ -47,9 +47,14 @@ assert(!release_source.match?(/uses:\s+[^\s]+@(v\d+|stable)\b/), "release action
 toolchain_source = File.read(File.join(ROOT, "rust-toolchain.toml"))
 toolchain_channel = toolchain_source.match(/^channel\s*=\s*"([^"]+)"$/)&.captures&.first
 assert(toolchain_channel, "rust-toolchain.toml must declare a channel")
+# Node: every release job uses Node 24, except the strict production comparison, which pins
+# the runtimes its lanes recorded with (harness 24.14.0, Functions fixture 22.22.1).
+node_versions = Hash.new(["24"]).merge("strict-production" => ["22.22.1", "24.14.0"])
 release.fetch("jobs").each do |job, definition|
-  definition.fetch("steps", []).select { |step| step["uses"]&.start_with?("actions/setup-node@") }.each do |step|
-    assert(step.dig("with", "node-version").to_s == "24", "release #{job} must use Node 24")
+  versions = definition.fetch("steps", []).select { |step| step["uses"]&.start_with?("actions/setup-node@") }
+    .map { |step| step.dig("with", "node-version").to_s }
+  versions.each do |version|
+    assert(node_versions[job].include?(version), "release #{job} must use Node #{node_versions[job].join(' or ')}")
   end
   definition.fetch("steps", []).select { |step| step["uses"]&.start_with?("pnpm/action-setup@") }.each do |step|
     assert(step.dig("with", "version"), "release #{job} must pin the pnpm version")
@@ -71,6 +76,26 @@ assert(
   release_test_runs.include?("cargo nextest run -p fireemu --test leak_fixture --profile pr"),
   "release test job must run the process leak fixture in isolation"
 )
+strict = release.dig("jobs", "strict-production")
+assert(strict, "release must compare the strict profile of the installed artifact with the committed production recordings")
+assert(strict.fetch("needs").include?("build"), "strict-production must test the built platform package")
+assert(strict["continue-on-error"].nil?, "strict-production must block publication")
+assert(release.dig("jobs", "publish", "needs").include?("strict-production"), "release publish must depend on the strict production comparison")
+assert(release.dig("jobs", "publish", "needs").include?("verify-artifact"), "release publish must depend on verify-artifact")
+strict_timeout = strict["timeout-minutes"]
+assert(strict_timeout.is_a?(Integer) && strict_timeout.positive? && strict_timeout <= 60, "strict-production must have a timeout of at most an hour")
+assert(strict["permissions"] == { "contents" => "read" }, "strict-production must only read the repository")
+assert(!strict.key?("environment"), "strict-production must not use a deployment environment")
+assert(!YAML.dump(strict).include?("secrets."), "strict-production must not read secrets")
+strict_checkout = strict.fetch("steps").find { |step| step["uses"]&.start_with?("actions/checkout@") }
+assert(strict_checkout&.dig("with", "persist-credentials") == false, "strict-production must not leave a token in the checkout")
+assert(strict.fetch("steps").any? { |step| step["uses"]&.start_with?("actions/download-artifact@") && step.dig("with", "name") == "package-linux-x64" }, "strict-production must test the package publish ships")
+strict_runs = strict.fetch("steps").map { |step| step["run"] }.compact.join("\n")
+assert(strict_runs.include?("node npm/scripts/verify-install.mjs --dist npm/dist --keep"), "strict-production must install the packed artifact as verify-artifact does")
+assert(strict_runs.include?("sha256sum npm/platforms/build/linux-x64/bin/fireemu"), "strict-production must bind the installed binary to the platform package")
+assert(strict_runs.include?("unshare --net"), "strict-production must run the harnesses with loopback-only networking")
+assert(strict_runs.include?("node conformance/src/release-strict-regression.mjs"), "strict-production must run the committed comparison script")
+assert(!strict_runs.match?(/record-production|record-|preflight/), "strict-production must never record against production")
 assert(release.dig("jobs", "reproducible", "continue-on-error").nil?, "release reproducible job must block publication")
 assert(release.dig("jobs", "publish", "needs").include?("reproducible"), "release publish must depend on the reproducible job")
 assert(release.dig("jobs", "publish", "environment") == "npm-release", "release publish must use the protected npm-release environment")

@@ -739,6 +739,9 @@ fn password_reset_rejects_oversize_and_malformed_passwords_without_consuming_oob
     assert_eq!(status, 200, "{recovered}");
 }
 
+/// Strict: a password reset refuses the sessions before it as `TOKEN_EXPIRED`; the refresh
+/// record is kept and judged against the new `validSince` (sandbox recording 2026-09-24,
+/// auth-action/password-reset#refresh-token-before-reset).
 #[test]
 fn strict_profile_password_reset_revokes_the_existing_refresh_token() {
     let s = AuthState {
@@ -762,6 +765,11 @@ fn strict_profile_password_reset_revokes_the_existing_refresh_token() {
     assert_eq!(status, 200, "{sent}");
     let (_, codes) = get(&s, &format!("{EMU}/oobCodes"));
     let code = codes["oobCodes"][0]["oobCode"].as_str().unwrap();
+    s.clock
+        .lock()
+        .unwrap()
+        .advance(fireemu_core_types::time::LogicalDuration::from_seconds(2))
+        .unwrap();
     let (status, reset) = post(
         &s,
         &format!("{V1}/accounts:resetPassword"),
@@ -775,7 +783,7 @@ fn strict_profile_password_reset_revokes_the_existing_refresh_token() {
         &json!({"grant_type": "refresh_token", "refresh_token": refresh_token}),
     );
     assert_eq!(status, 400, "{refreshed}");
-    assert_eq!(refreshed["error"]["message"], "INVALID_REFRESH_TOKEN");
+    assert_eq!(refreshed["error"]["message"], "TOKEN_EXPIRED");
 }
 
 #[test]
@@ -7105,8 +7113,10 @@ fn oob_authorization_preserves_delivery_and_authenticated_admin_generation() {
             "VERIFY_EMAIL",
             "VERIFY_AND_CHANGE_EMAIL",
         ] {
+            // Strict needs a continue URL for a sign-in link (sandbox recording 2026-09-24).
             let mut body = json!({"requestType": request_type, "email": "oob-other@example.com",
-                "newEmail": "oob-new@example.com", "returnOobLink": false});
+                "newEmail": "oob-new@example.com", "returnOobLink": false,
+                "continueUrl": "http://localhost/"});
             let verification = matches!(request_type, "VERIFY_EMAIL" | "VERIFY_AND_CHANGE_EMAIL");
             if verification {
                 body["idToken"] = user["idToken"].clone();
@@ -8397,13 +8407,12 @@ fn routed_project_config_uses_selected_store_and_publishes_only_successful_write
     }
 }
 
-/// ITKM-5. Email enumeration protection hides an unknown address from an anonymous caller.
-/// An Admin link generator is already authenticated and reads every account, so the silent
-/// 200 only costs it the link it asked for: it gets `EMAIL_NOT_FOUND`, as it does with the
-/// protection off. Production's answer for this pair is unobserved; this is the documented
-/// Admin SDK contract (`generatePasswordResetLink` rejects an unknown address).
+/// ITKM-5. Email enumeration protection hides an unknown address from every caller, the Admin
+/// link generator included: production answers its request with 200 and no code (sandbox
+/// recording 2026-09-24, `auth-action/generate/admin#reset-link-unknown`), as the official
+/// emulator does.
 #[test]
-fn improved_email_privacy_still_reports_an_unknown_address_to_an_admin_link_generator() {
+fn improved_email_privacy_hides_an_unknown_address_from_an_admin_link_generator() {
     let s = state();
     let enabled = handle_with(
         &s,
@@ -8424,13 +8433,19 @@ fn improved_email_privacy_still_reports_an_unknown_address_to_an_admin_link_gene
     assert_eq!(hidden["email"], "nobody@example.com");
     assert!(hidden.get("oobLink").is_none(), "{hidden}");
 
-    let (status, refused) = admin(
+    let (status, hidden) = admin(
         &s,
         &format!("{V1}/projects/demo-app/accounts:sendOobCode"),
         &json!({"requestType": "PASSWORD_RESET", "email": "nobody@example.com", "returnOobLink": true}),
     );
-    assert_eq!(status, 400, "{refused}");
-    assert_eq!(refused["error"]["message"], "EMAIL_NOT_FOUND");
+    assert_eq!(status, 200, "{hidden}");
+    assert_eq!(
+        hidden,
+        json!({"kind": "identitytoolkit#GetOobConfirmationCodeResponse", "email": "nobody@example.com"})
+    );
+    assert!(get(&s, &format!("{EMU}/oobCodes")).1["oobCodes"]
+        .as_array()
+        .is_some_and(Vec::is_empty));
 
     // A known address still yields the link.
     sign_up(&s, "known@example.com");

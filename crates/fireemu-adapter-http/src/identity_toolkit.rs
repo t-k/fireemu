@@ -950,6 +950,7 @@ fn auth_error(e: &AuthError) -> JsonResponse {
         AuthError::InvalidPhoneNumber => error(400, "INVALID_PHONE_NUMBER"),
         AuthError::EmailNotFound => error(400, "EMAIL_NOT_FOUND"),
         AuthError::InvalidOobCode => error(400, "INVALID_OOB_CODE"),
+        AuthError::ExpiredOobCode => error(400, "EXPIRED_OOB_CODE"),
         AuthError::InvalidSessionInfo => error(400, "INVALID_SESSION_INFO"),
         AuthError::InvalidVerificationCode => error(400, "INVALID_CODE"),
         AuthError::FederatedUserIdAlreadyLinked => error(400, "FEDERATED_USER_ID_ALREADY_LINKED"),
@@ -1221,9 +1222,10 @@ fn verify_session_with_error(
 }
 
 /// Whether a route honours the legacy Identity Toolkit token. Production was observed to honour
-/// it on account lookup, update and delete, a verification mail, phone linking, a sign-up
-/// upgrade and MFA enrollment (sandbox recordings 2026-09-24); email-link and identity-provider linking and
-/// session-cookie creation refuse it (the last observed, the others until observed).
+/// it on account lookup, update and delete, a verification mail and an email change, phone
+/// linking, email-link linking, a sign-up upgrade and MFA enrollment (sandbox recordings
+/// 2026-09-24); identity-provider linking and session-cookie creation refuse it (the last
+/// observed, the other until observed).
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum LegacyTokens {
     Honoured,
@@ -3076,6 +3078,9 @@ fn handle_with_policy(
             }
         }
     }
+    // Strict (stateful refresh sessions) follows production's action-code lifetimes: a reset
+    // code lives an hour and is then refused as expired (sandbox recording 2026-09-24).
+    store.set_production_oob_lifetimes(!state.stateless_refresh_tokens);
     // Expired transient credentials are swept before every request is served, so nothing
     // past its lifetime is observable (`AUTH-TRANSIENT-01`, `-02`).
     store.sweep_transient_credentials(at);
@@ -3465,10 +3470,21 @@ fn dispatch(
             options.stateless_refresh_tokens,
             handler == Handler::AdminUpdate,
         ),
-        Handler::Delete => delete_account(store, body, at, false),
-        Handler::SendOobCode => send_oob_code(store, body, at, headers, false),
+        Handler::Delete => {
+            delete_account(store, body, at, false, !options.stateless_refresh_tokens)
+        }
+        Handler::SendOobCode => send_oob_code(
+            store,
+            body,
+            at,
+            headers,
+            false,
+            !options.stateless_refresh_tokens,
+        ),
         Handler::ResetPassword => reset_password(store, body, at, options.stateless_refresh_tokens),
-        Handler::SignInWithEmailLink => sign_in_with_email_link(store, body, at),
+        Handler::SignInWithEmailLink => {
+            sign_in_with_email_link(store, body, at, !options.stateless_refresh_tokens)
+        }
         Handler::SendVerificationCode => send_verification_code(store, body, at),
         Handler::SignInWithPhoneNumber => sign_in_with_phone_number(store, body, at),
         Handler::SignInWithIdp => {
@@ -3512,10 +3528,14 @@ fn dispatch(
         }
         Handler::AdminCreate => admin_create(store, body, at),
         Handler::AdminLookup => lookup(store, body, at, true),
-        Handler::AdminDelete => delete_account(store, body, at, true),
+        Handler::AdminDelete => {
+            delete_account(store, body, at, true, !options.stateless_refresh_tokens)
+        }
         Handler::AdminBatchGet => admin_batch_get(store, query, body),
         Handler::AdminBatchCreate => admin_batch_create(store, body, at),
-        Handler::AdminBatchDelete => admin_batch_delete(store, body),
+        Handler::AdminBatchDelete => {
+            admin_batch_delete(store, body, !options.stateless_refresh_tokens)
+        }
         Handler::AdminQuery => admin_query(store, body, options.query_limits),
         // Admin link generators: the code and link come back to the caller.
         Handler::AdminSendOobCode => {
@@ -3524,7 +3544,14 @@ fn dispatch(
             }
             let mut with_link = body.clone();
             with_link["returnOobLink"] = json!(true);
-            send_oob_code(store, &with_link, at, headers, true)
+            send_oob_code(
+                store,
+                &with_link,
+                at,
+                headers,
+                true,
+                !options.stateless_refresh_tokens,
+            )
         }
         // Stateful refresh sessions mark the strict profile.
         Handler::AdminCreateSessionCookie => {
@@ -3947,6 +3974,7 @@ const SIGN_IN_PROVIDER_FIELDS: &[&str] = &[
     "signIn.phoneNumber",
     "signIn.phoneNumber.enabled",
     "signIn.phoneNumber.testPhoneNumbers",
+    "authorizedDomains",
 ];
 
 /// The sign-in configuration a masked Admin config PATCH produces from `current`, or `None`
@@ -3983,6 +4011,24 @@ fn sign_in_config_from_update(
             Some(_) => Err(invalid()),
         }
     };
+    // A masked replacement: an absent or null list clears it, anything but non-empty host
+    // strings is refused.
+    let domains = || -> Result<Vec<String>, JsonResponse> {
+        match body.get("authorizedDomains") {
+            None | Some(Value::Null) => Ok(Vec::new()),
+            Some(Value::Array(entries)) => entries
+                .iter()
+                .map(|entry| {
+                    entry
+                        .as_str()
+                        .filter(|domain| !domain.is_empty())
+                        .map(str::to_owned)
+                        .ok_or_else(invalid)
+                })
+                .collect(),
+            Some(_) => Err(invalid()),
+        }
+    };
     let mut next = current.clone();
     let mut changed = false;
     for field in fields {
@@ -4009,6 +4055,7 @@ fn sign_in_config_from_update(
             "signIn.anonymous.enabled" => next.anonymous_enabled = switch("anonymous", "enabled")?,
             "signIn.phoneNumber.enabled" => next.phone_enabled = switch("phoneNumber", "enabled")?,
             "signIn.phoneNumber.testPhoneNumbers" => next.test_phone_numbers = numbers()?,
+            "authorizedDomains" => next.authorized_domains = Some(domains()?),
             _ => continue,
         }
         changed = true;
@@ -4542,6 +4589,7 @@ fn validate_project_config_payload(body: &Value) -> Result<(), JsonResponse> {
                 | "passwordPolicyConfig"
                 | "quota"
                 | "blockingFunctions"
+                | "authorizedDomains"
         ) {
             return Err(error(400, "INVALID_ARGUMENT"));
         }
@@ -4770,6 +4818,7 @@ fn project_config_management(
             store.signup_quota().config(),
         );
         add_sign_in_config_json(&mut body, store.sign_in_config());
+        body["authorizedDomains"] = json!(store.authorized_domains());
         if let Some(blocking) = state
             .blocking
             .as_ref()
@@ -4828,6 +4877,12 @@ fn project_config_management(
                 .is_some_and(contains_non_null_value)
             {
                 fields.push("blockingFunctions".to_owned());
+            }
+            if body
+                .get("authorizedDomains")
+                .is_some_and(|value| !value.is_null())
+            {
+                fields.push("authorizedDomains".to_owned());
             }
             fields
         }
@@ -4979,6 +5034,7 @@ fn project_config_management(
                 store.signup_quota().config(),
             );
             add_sign_in_config_json(&mut body, store.sign_in_config());
+            body["authorizedDomains"] = json!(store.authorized_domains());
             if let Some(blocking) = state
                 .blocking
                 .as_ref()
@@ -7374,7 +7430,10 @@ fn user_json(store: &AuthStore, uid: &LocalId) -> Value {
     // The official record lists a `password` provider for an email with a password or an
     // email-link sign-in, and nothing for an address that has neither.
     if let Some(email) = &u.email {
-        if store.has_password(uid) || u.provider == fireemu_core_auth::store::Provider::EmailLink {
+        if store.has_password(uid)
+            || u.email_link_signin
+            || u.provider == fireemu_core_auth::store::Provider::EmailLink
+        {
             providers.push(json!({"providerId": "password", "rawId": email, "federatedId": email, "email": email, "displayName": u.display_name, "photoUrl": u.photo_url}));
         }
     }
@@ -7386,7 +7445,11 @@ fn user_json(store: &AuthStore, uid: &LocalId) -> Value {
     // redacted marker production sends a caller without hash-config permission
     // (conformance/auth-production-matrix.json, password/sign-up-and-sign-in#lookup).
     let has_password = store.has_password(uid);
-    let valid_since = (has_password || u.tokens_revoked || u.admin_created || u.custom_auth)
+    let valid_since = (has_password
+        || u.tokens_revoked
+        || u.admin_created
+        || u.custom_auth
+        || u.email_link_created)
         .then_some(u.tokens_valid_after);
     json!({
         "localId": u.local_id.as_str(),
@@ -7411,6 +7474,8 @@ fn user_json(store: &AuthStore, uid: &LocalId) -> Value {
         "lastLoginAt": u.last_sign_in_at.map(|t| (t.as_nanos() / 1_000_000).to_string()),
         "validSince": valid_since.map(|t| (t.as_nanos() / 1_000_000_000).to_string()),
         "customAuth": u.custom_auth.then_some(true),
+        "emailLinkSignin": u.email_link_signin.then_some(true),
+        "initialEmail": u.initial_email,
     })
 }
 
@@ -8107,11 +8172,16 @@ fn update(
         .iter()
         .any(|field| body.get(*field).is_some());
     // `applyActionCode`: an email verification / change code instead of a session.
-    if let Some(code) = str_field(body, "oobCode") {
+    // Strict: with an ID token the request is that account's own update and the code is not
+    // applied (sandbox recording 2026-09-24, ownership#apply-a-change-with-b-token); the
+    // official emulator applies the code first.
+    let strict = !stateless_refresh_tokens;
+    let with_session = body.get("idToken").is_some_and(|token| !token.is_null());
+    if let Some(code) = str_field(body, "oobCode").filter(|_| !(strict && with_session)) {
         if has_admin_field {
             return error(400, "OPERATION_NOT_ALLOWED");
         }
-        return apply_oob_code(store, code, at);
+        return apply_oob_code(store, code, at, strict);
     }
     let self_service = !privileged;
     let local_id = if privileged {
@@ -8414,29 +8484,13 @@ fn update(
     if !stateless_refresh_tokens && removes_refresh_credential {
         store.revoke_refresh_tokens(&uid);
     }
-    let mut response =
-        json!({"localId": uid.as_str(), "kind": "identitytoolkit#SetAccountInfoResponse"});
-    if let Some(u) = store.user(&uid) {
-        response["email"] = json!(u.email);
-        // As in a lookup: with an address, and while true after one was removed; never for an
-        // account that had none (sandbox recording 2026-09-24).
-        if u.email.is_some() || u.email_verified || u.email_verified_recorded {
-            response["emailVerified"] = json!(u.email_verified);
-        }
-        response["displayName"] = json!(u.display_name);
-        response["photoUrl"] = json!(u.photo_url);
-        // Production's Admin update answer carries no `newEmail` (sandbox recording
-        // 2026-09-23, `auth-account/admin/update#change-email`).
-        if email_changed && self_service {
-            response["newEmail"] = json!(u.email);
-        }
-    }
-    let record = user_json(store, &uid);
-    for key in ["providerUserInfo", "passwordHash"] {
-        if let Some(value) = record.get(key) {
-            response[key] = value.clone();
-        }
-    }
+    // Production's Admin update answer carries no `newEmail` (sandbox recording 2026-09-23,
+    // `auth-account/admin/update#change-email`).
+    let new_email = store
+        .user(&uid)
+        .and_then(|u| u.email.clone())
+        .filter(|_| email_changed && self_service);
+    let mut response = account_update_answer(store, &uid, new_email.as_deref());
     // Tokens follow a credential change only for an account that is enabled after this
     // update: production (recorded 2026-09-12) applies an administrative password
     // replacement to a disabled account without returning tokens.
@@ -8487,6 +8541,7 @@ fn delete_account(
     body: &Value,
     at: LogicalInstant,
     admin: bool,
+    strict: bool,
 ) -> JsonResponse {
     let uid = if admin {
         match opt_str(body, "localId") {
@@ -8516,6 +8571,7 @@ fn delete_account(
             Err(r) => return r,
         }
     };
+    let email = store.user(&uid).and_then(|u| u.email.clone());
     match store.delete_user_by_id_as(
         if admin {
             AuthPrincipal::Admin
@@ -8524,11 +8580,37 @@ fn delete_account(
         },
         uid.as_str(),
     ) {
-        Ok(()) => JsonResponse {
-            status: 200,
-            body: json!({"kind": "identitytoolkit#DeleteAccountResponse"}),
-        },
+        Ok(()) => {
+            // Strict: a deleted account's codes are refused, inspected or used (sandbox
+            // recording 2026-09-24); the official emulator keeps them.
+            if strict {
+                store.void_oob_codes_of(&uid, email.as_deref());
+            }
+            JsonResponse {
+                status: 200,
+                body: json!({"kind": "identitytoolkit#DeleteAccountResponse"}),
+            }
+        }
         Err(e) => auth_error(&e),
+    }
+}
+
+/// The account an Admin create makes: a password account with an address, a phone account
+/// with only a number (its sessions carry no anonymous `provider_id`, sandbox recording
+/// 2026-09-24, generate/admin#phone-sign-in), and otherwise an anonymous one.
+fn admin_new_user(email: Option<&str>, email_verified: bool, has_phone: bool) -> NewUser {
+    match email {
+        Some(email) => NewUser {
+            email: Some(email.to_owned()),
+            email_verified,
+            provider: fireemu_core_auth::store::Provider::Password,
+        },
+        None if has_phone => NewUser {
+            email: None,
+            email_verified,
+            provider: fireemu_core_auth::store::Provider::Phone,
+        },
+        None => NewUser::anonymous(),
     }
 }
 
@@ -8596,14 +8678,7 @@ fn admin_create(store: &mut AuthStore, body: &Value, at: LogicalInstant) -> Json
     if requested_id.as_deref().is_some_and(local_id_too_long) {
         return backend_internal_error();
     }
-    let new_user = match &email {
-        Some(email) => NewUser {
-            email: Some(email.clone()),
-            email_verified,
-            provider: fireemu_core_auth::store::Provider::Password,
-        },
-        None => NewUser::anonymous(),
-    };
+    let new_user = admin_new_user(email.as_deref(), email_verified, phone.is_some());
     let uid = match store.create_user_with_id_as(
         AuthPrincipal::Admin,
         new_user,
@@ -8644,7 +8719,7 @@ fn admin_create(store: &mut AuthStore, body: &Value, at: LogicalInstant) -> Json
 /// Admin `accounts:batchDelete` (`deleteUsers`): up to 1000 ids; an enabled account is
 /// skipped with a per-row error unless `force` is set (the Admin SDK always sets it); an
 /// unknown id is silently skipped, as the official emulator does.
-fn admin_batch_delete(store: &mut AuthStore, body: &Value) -> JsonResponse {
+fn admin_batch_delete(store: &mut AuthStore, body: &Value, strict: bool) -> JsonResponse {
     let ids = match body.get("localIds") {
         Some(v) => match string_list(v, "localIds") {
             Ok(ids) => ids,
@@ -8665,7 +8740,10 @@ fn admin_batch_delete(store: &mut AuthStore, body: &Value) -> JsonResponse {
             errors.push(json!({"index": index, "localId": id, "message": "NOT_DISABLED : Disable the account before batch deletion."}));
             continue;
         }
-        let _ = store.delete_user_by_id(id);
+        let (uid, email) = (user.local_id.clone(), user.email.clone());
+        if store.delete_user_by_id(id).is_ok() && strict {
+            store.void_oob_codes_of(&uid, email.as_deref());
+        }
     }
     let mut response = json!({});
     if !errors.is_empty() {
@@ -9826,21 +9904,34 @@ fn send_oob_code(
     at: LogicalInstant,
     headers: &RequestHeaders,
     privileged: bool,
+    strict: bool,
 ) -> JsonResponse {
     let return_oob_link = match opt_bool(body, "returnOobLink") {
         Ok(Some(value)) => value,
         Ok(None) => false,
         Err(response) => return response,
     };
-    // Only the authenticated Admin route may return a credential to the caller.
-    // Check before creating a code or emitting a delivery notice.
+    // Only the authenticated Admin route may return a credential to the caller. Checked before
+    // a code is created or a delivery notice emitted; production and the official emulator
+    // answer INSUFFICIENT_PERMISSION (sandbox recording 2026-09-24).
     if !privileged && return_oob_link {
-        return error(400, "OPERATION_NOT_ALLOWED");
+        return error(400, "INSUFFICIENT_PERMISSION");
     }
     let request_type = match str_field(body, "requestType") {
+        Some("OOB_REQ_TYPE_UNSPECIFIED") if strict => return error(400, "INVALID_REQ_TYPE"),
         None | Some("" | "OOB_REQ_TYPE_UNSPECIFIED") => return error(400, "MISSING_REQ_TYPE"),
         Some(t) => match OobRequestType::parse(t) {
             Some(t) => t,
+            // Strict: production decodes the enum before anything else looks at the request.
+            None if strict => {
+                return proto_field_error(
+                    "req_type",
+                    &format!(
+                        "Invalid value at 'req_type' (type.googleapis.com/google.cloud.identitytoolkit.v1.OobReqType), {}",
+                        Value::String(t.to_owned())
+                    ),
+                )
+            }
             None => {
                 return JsonResponse {
                     status: 501,
@@ -9849,76 +9940,138 @@ fn send_oob_code(
             }
         },
     };
+    // The official emulator refuses a continue URL that is not absolute before anything else;
+    // strict checks it with production's wording once the address is known (below).
+    if !strict {
+        if let Some(url) = str_field(body, "continueUrl").filter(|url| !url.is_empty()) {
+            if !uri_is_absolute(url) {
+                return error(
+                    400,
+                    "INVALID_CONTINUE_URI : ((expected an absolute URI with valid scheme and host))",
+                );
+            }
+        }
+    }
+    let privacy = store.config().enable_improved_email_privacy;
+    let hidden = |email: &str| JsonResponse {
+        status: 200,
+        body: json!({"kind": "identitytoolkit#GetOobConfirmationCodeResponse", "email": email}),
+    };
     let (email, uid, new_email) = match request_type {
         OobRequestType::PasswordReset => {
             let Some(email) = str_field(body, "email").map(canonicalize_email) else {
                 return error(400, "MISSING_EMAIL");
             };
+            if strict && !is_valid_email(&email) {
+                return error(400, "INVALID_EMAIL");
+            }
             match store.user_by_email(&email) {
                 Some(u) => (email.clone(), Some(u.local_id.clone()), None),
                 // Improved email privacy: an unknown address is answered as if a mail had
-                // been sent, and no code is created. An Admin link generator is already
-                // authenticated and can read every account, so hiding the address from it
-                // would only withhold the link it asked for: it keeps `EMAIL_NOT_FOUND`.
-                None if store.config().enable_improved_email_privacy && !return_oob_link => {
-                    return JsonResponse {
-                        status: 200,
-                        body: json!({"kind": "identitytoolkit#GetOobConfirmationCodeResponse", "email": email}),
-                    }
-                }
+                // been sent, and no code is created, for the Admin link generator too
+                // (sandbox recording 2026-09-24; the official emulator answers the same).
+                // Production answers so before it looks at the continue URL.
+                None if privacy => return hidden(&email),
                 None => return error(400, "EMAIL_NOT_FOUND"),
             }
         }
         OobRequestType::EmailSignIn => {
+            // Strict: the Admin generator is refused while email links are off, as the client
+            // route is (sandbox recording 2026-09-24). The official emulator always reports
+            // email links as enabled (firebase-tools `state.js` `enableEmailLinkSignin`), so the
+            // emulator profile adds no rejection here.
+            let sign_in = store.sign_in_config();
+            if strict && (!sign_in.email_enabled || sign_in.password_required) {
+                return error(400, "OPERATION_NOT_ALLOWED");
+            }
             let Some(email) = str_field(body, "email").map(canonicalize_email) else {
                 return error(400, "MISSING_EMAIL");
             };
             if !email.contains('@') {
                 return error(400, "INVALID_EMAIL");
             }
-            let uid = store.user_by_email(&email).map(|u| u.local_id.clone());
+            // Strict: a sign-in link needs somewhere to continue, and a disabled owner gets
+            // none (sandbox recording 2026-09-24).
+            if strict && str_field(body, "continueUrl").is_none() {
+                return error(400, "MISSING_CONTINUE_URI");
+            }
+            // Only the Admin route was observed; a client under improved email privacy is
+            // not told that an address belongs to a disabled account.
+            let owner = store.user_by_email(&email);
+            if strict && privileged && owner.is_some_and(|u| u.disabled) {
+                return error(400, "USER_DISABLED");
+            }
+            let uid = owner.map(|u| u.local_id.clone());
             (email.clone(), uid, None)
         }
         OobRequestType::VerifyEmail | OobRequestType::VerifyAndChangeEmail => {
-            // Email-based target selection is reserved for authenticated Admin generators.
-            let uid = match (
-                privileged,
-                str_field(body, "idToken"),
-                str_field(body, "email"),
-            ) {
-                (false, _, _) | (true, Some(_), _) => {
-                    match verify_honouring_legacy(store, body, at) {
-                        Ok(uid) => uid,
-                        Err(r) => return r,
-                    }
+            let change = request_type == OobRequestType::VerifyAndChangeEmail;
+            // The Admin generator selects the account by its address, as production and the
+            // official emulator do; production's generator of an address change reads only
+            // the address, a verification also an ID token (sandbox recording 2026-09-24).
+            let by_token = if privileged {
+                str_field(body, "idToken").is_some() && !(strict && change)
+            } else {
+                true
+            };
+            let uid = if by_token {
+                match verify_honouring_legacy(store, body, at) {
+                    Ok(uid) => uid,
+                    Err(r) => return r,
                 }
-                (true, None, Some(email)) => match store.user_by_email(email) {
+            } else {
+                let Some(email) = str_field(body, "email").map(canonicalize_email) else {
+                    return error(400, "MISSING_EMAIL");
+                };
+                match store.user_by_email(&email) {
                     Some(u) => u.local_id.clone(),
-                    None => return error(400, "EMAIL_NOT_FOUND"),
-                },
-                (true, None, None) => return error(400, "MISSING_ID_TOKEN"),
+                    None => return error(400, "USER_NOT_FOUND"),
+                }
             };
             let Some(email) = store.user(&uid).and_then(|u| u.email.clone()) else {
-                return error(400, "MISSING_EMAIL : the user has no email");
+                return error(400, "MISSING_EMAIL");
             };
-            let new_email = if request_type == OobRequestType::VerifyAndChangeEmail {
+            let new_email = if change {
                 let Some(new_email) = str_field(body, "newEmail").map(canonicalize_email) else {
                     return error(400, "MISSING_NEW_EMAIL");
                 };
-                if !store.config().allow_duplicate_emails
-                    && store
-                        .user_by_email(&new_email)
-                        .is_some_and(|u| u.local_id != uid)
-                {
+                if strict && !is_valid_email(&new_email) {
+                    return error(400, "INVALID_NEW_EMAIL");
+                }
+                let taken = store
+                    .user_by_email(&new_email)
+                    .is_some_and(|u| u.local_id != uid);
+                // Strict: improved email privacy hides a taken or unchanged new address
+                // behind the answer of a sent mail (sandbox recording 2026-09-24).
+                if strict && privacy && (taken || new_email == email) {
+                    return hidden(&email);
+                }
+                if taken && !store.config().allow_duplicate_emails {
                     return error(400, "EMAIL_EXISTS");
                 }
-                Some(new_email.clone())
+                Some(new_email)
             } else {
                 None
             };
             (email, Some(uid), new_email)
         }
     };
+    // Strict: production's continue-URL checks, once the address is known.
+    if strict {
+        if let Some(url) = str_field(body, "continueUrl") {
+            if absolute_uri_host(url).is_none() {
+                return error(400, "INVALID_CONTINUE_URI : Missing domain in continue url");
+            }
+            if let Some(response) = unauthorized_continue_url(store, body) {
+                return response;
+            }
+        }
+        // A newer password reset, email change or sign-in link retires the older one; a
+        // verification link cannot be asked for twice within minutes, so its rule is unobserved.
+        if request_type != OobRequestType::VerifyEmail {
+            store.retire_oob_codes(request_type, &email);
+        }
+    }
     let code = match store.create_oob_code(request_type, &email, uid, new_email, at) {
         Ok(code) => code,
         Err(e) => return auth_error(&e),
@@ -9949,6 +10102,37 @@ fn send_oob_code(
     }
 }
 
+/// The refusal of a continue URL whose host is not one of the project's authorized domains.
+fn unauthorized_continue_url(store: &AuthStore, body: &Value) -> Option<JsonResponse> {
+    let url = str_field(body, "continueUrl")?;
+    let host = absolute_uri_host(url)?;
+    if store
+        .authorized_domains()
+        .iter()
+        .any(|domain| domain.eq_ignore_ascii_case(&host))
+    {
+        return None;
+    }
+    Some(error(
+        400,
+        "UNAUTHORIZED_DOMAIN : Domain not allowlisted by project",
+    ))
+}
+
+/// An outstanding code by value: `INVALID_OOB_CODE` for none, `EXPIRED_OOB_CODE` for one past
+/// its lifetime under production lifetimes (sandbox recording 2026-09-24, auth-action/expiry).
+fn live_oob_code(
+    store: &AuthStore,
+    code: &str,
+    at: LogicalInstant,
+) -> Result<fireemu_core_auth::store::OobCode, JsonResponse> {
+    match store.oob_code(code) {
+        None => Err(error(400, "INVALID_OOB_CODE")),
+        Some(entry) if store.oob_code_expired(entry, at) => Err(error(400, "EXPIRED_OOB_CODE")),
+        Some(entry) => Ok(entry.clone()),
+    }
+}
+
 /// `accounts:resetPassword`: verifies a `PASSWORD_RESET` code (`verifyPasswordResetCode`)
 /// and, with `newPassword`, consumes it and sets the password (`confirmPasswordReset`).
 fn reset_password(
@@ -9957,25 +10141,46 @@ fn reset_password(
     at: LogicalInstant,
     stateless_refresh_tokens: bool,
 ) -> JsonResponse {
+    let strict = !stateless_refresh_tokens;
     let Some(code) = str_field(body, "oobCode") else {
         return error(400, "MISSING_OOB_CODE");
     };
-    let Some(entry) = store.oob_code(code).cloned() else {
-        return error(400, "INVALID_OOB_CODE");
+    let entry = match live_oob_code(store, code, at) {
+        Ok(entry) => entry,
+        Err(response) => return response,
     };
     let new_password = match opt_str(body, "newPassword") {
         // Check mode (`checkActionCode` / `verifyPasswordResetCode`): describe the code
         // without consuming it, whatever its type. Only the reset itself is restricted to
-        // `PASSWORD_RESET`.
+        // `PASSWORD_RESET`. The official emulator reads an empty password as none.
         Ok(None) => return check_oob_code(&entry),
+        Ok(Some("")) if !strict => return check_oob_code(&entry),
         Ok(Some(new_password)) => new_password,
         Err(r) => return r,
     };
+    // Strict: production refuses an empty password without the length hint, and only
+    // inspects a sign-in link offered with a password (sandbox recording 2026-09-24).
+    if strict && new_password.is_empty() {
+        return error(400, "WEAK_PASSWORD");
+    }
+    if strict && entry.request_type == OobRequestType::EmailSignIn {
+        return check_oob_code(&entry);
+    }
     if entry.request_type != OobRequestType::PasswordReset {
         return error(400, "INVALID_OOB_CODE");
     }
-    let Some(uid) = entry.uid.clone() else {
-        return error(400, "INVALID_OOB_CODE");
+    // The code names an address, and the account that owns it now is reset: production does
+    // so (sandbox recordings 2026-09-24, password-reset#reset-e-after-email-change and
+    // auth-action/address-reuse), and so does the official emulator's `resetPassword`. Nobody
+    // owning it is production's USER_NOT_FOUND, or the official INVALID_OOB_CODE, which spends
+    // the code as the official handler does.
+    let uid = match store.user_by_email(&entry.email) {
+        Some(u) => u.local_id.clone(),
+        None if strict => return error(400, "USER_NOT_FOUND"),
+        None => {
+            let _ = store.consume_oob_code(code, None, at);
+            return error(400, "INVALID_OOB_CODE");
+        }
     };
     if let Err(e) = store.validate_password_for(
         fireemu_core_auth::password_policy::Operation::Reset,
@@ -9984,6 +10189,11 @@ fn reset_password(
         return auth_error(&e);
     }
     if store.user(&uid).is_none_or(|u| u.disabled) {
+        // Strict: the refusal spends the code (sandbox recording 2026-09-24,
+        // password-reset#check-f-after-refused-reset).
+        if strict {
+            let _ = store.consume_oob_code(code, Some(OobRequestType::PasswordReset), at);
+        }
         return error(400, "USER_DISABLED");
     }
     if let Err(e) = store.consume_oob_code(code, Some(OobRequestType::PasswordReset), at) {
@@ -9998,12 +10208,10 @@ fn reset_password(
         return auth_error(&e);
     }
     // A reset advances `validSince` and verifies the address (the user read the mail). The
-    // Firebase profile keeps the official emulator's stateless refresh credentials; strict
-    // mode also removes them.
+    // sessions before it are refused as TOKEN_EXPIRED: strict keeps their refresh records so
+    // a refresh answers so too (sandbox recording 2026-09-24), and the emulator profile keeps
+    // the official emulator's stateless refresh credentials.
     let _ = store.revoke_tokens(&uid, at);
-    if !stateless_refresh_tokens {
-        store.revoke_refresh_tokens(&uid);
-    }
     if let Some(u) = store.user_mut(&uid) {
         u.email_verified = true;
     }
@@ -10040,13 +10248,40 @@ fn check_oob_code(entry: &fireemu_core_auth::store::OobCode) -> JsonResponse {
 
 /// `accounts:update` with an `oobCode` (`applyActionCode`): `VERIFY_EMAIL` marks the
 /// address verified, `VERIFY_AND_CHANGE_EMAIL` switches to the new address.
-fn apply_oob_code(store: &mut AuthStore, code: &str, at: LogicalInstant) -> JsonResponse {
-    let Some(entry) = store.oob_code(code).cloned() else {
+fn apply_oob_code(
+    store: &mut AuthStore,
+    code: &str,
+    at: LogicalInstant,
+    strict: bool,
+) -> JsonResponse {
+    let entry = match live_oob_code(store, code, at) {
+        Ok(entry) => entry,
+        Err(response) => return response,
+    };
+    let Some(owner) = entry.uid.clone() else {
         return error(400, "INVALID_OOB_CODE");
     };
-    let Some(uid) = entry.uid.clone() else {
-        return error(400, "INVALID_OOB_CODE");
+    // A verification finds its account by the address it names, as production does (it
+    // answers EMAIL_NOT_FOUND once nobody owns it; sandbox recordings 2026-09-24,
+    // verify-email and auth-action/address-reuse) and as the official emulator's
+    // `setAccountInfo` does (INVALID_OOB_CODE, spending the code). Strict also refuses a
+    // disabled account (sandbox recording 2026-09-24).
+    let uid = if entry.request_type == OobRequestType::VerifyEmail {
+        match store.user_by_email(&entry.email) {
+            Some(u) => u.local_id.clone(),
+            None if strict => return error(400, "EMAIL_NOT_FOUND"),
+            None => {
+                let _ = store.consume_oob_code(code, None, at);
+                return error(400, "INVALID_OOB_CODE");
+            }
+        }
+    } else {
+        owner
     };
+    if strict && store.user(&uid).is_some_and(|u| u.disabled) {
+        return error(400, "USER_DISABLED");
+    }
+    let mut new_email_answer = None;
     match entry.request_type {
         OobRequestType::VerifyEmail => {
             if store.user(&uid).is_none() {
@@ -10063,9 +10298,9 @@ fn apply_oob_code(store: &mut AuthStore, code: &str, at: LogicalInstant) -> Json
             let Some(new_email) = entry.new_email.clone() else {
                 return error(400, "INVALID_OOB_CODE");
             };
-            if store.user(&uid).is_none() {
+            let Some(replaced) = store.user(&uid).map(|u| u.email.clone()) else {
                 return error(400, "INVALID_OOB_CODE");
-            }
+            };
             if let Err(e) = store.validate_email_update(&uid, &new_email) {
                 return auth_error(&e);
             }
@@ -10077,17 +10312,65 @@ fn apply_oob_code(store: &mut AuthStore, code: &str, at: LogicalInstant) -> Json
             }
             if let Some(u) = store.user_mut(&uid) {
                 u.email_verified = true;
+                // Strict: the address the first applied change replaced, as production
+                // records it (the official emulator records it only on a direct update).
+                if strict && u.initial_email.is_none() {
+                    u.initial_email.clone_from(&replaced);
+                }
             }
+            // Strict: the change revokes the sessions before it and voids the verification
+            // codes of the replaced address (sandbox recording 2026-09-24,
+            // change-email#lookup-token-before-change, #apply-old-verify-ch).
+            if strict {
+                let _ = store.revoke_tokens(&uid, at);
+                if let Some(replaced) = replaced.as_deref() {
+                    store.retire_oob_codes(OobRequestType::VerifyEmail, replaced);
+                }
+            }
+            new_email_answer = Some(new_email);
         }
         OobRequestType::PasswordReset | OobRequestType::EmailSignIn => {
             return error(400, "INVALID_OOB_CODE");
         }
+    }
+    if strict {
+        return JsonResponse {
+            status: 200,
+            body: account_update_answer(store, &uid, new_email_answer.as_deref()),
+        };
     }
     let email = store.user(&uid).and_then(|u| u.email.clone());
     JsonResponse {
         status: 200,
         body: json!({"kind": "identitytoolkit#SetAccountInfoResponse", "localId": uid.as_str(), "email": email, "emailVerified": true}),
     }
+}
+
+/// Production's `SetAccountInfoResponse` for an account: its address and verification, profile,
+/// providers and redacted password hash, and `newEmail` after an address change.
+fn account_update_answer(store: &AuthStore, uid: &LocalId, new_email: Option<&str>) -> Value {
+    let mut response =
+        json!({"localId": uid.as_str(), "kind": "identitytoolkit#SetAccountInfoResponse"});
+    if let Some(u) = store.user(uid) {
+        response["email"] = json!(u.email);
+        // As in a lookup: with an address, and while true after one was removed; never for an
+        // account that had none (sandbox recording 2026-09-24).
+        if u.email.is_some() || u.email_verified || u.email_verified_recorded {
+            response["emailVerified"] = json!(u.email_verified);
+        }
+        response["displayName"] = json!(u.display_name);
+        response["photoUrl"] = json!(u.photo_url);
+        if let Some(new_email) = new_email {
+            response["newEmail"] = json!(new_email);
+        }
+    }
+    let record = user_json(store, uid);
+    for key in ["providerUserInfo", "passwordHash"] {
+        if let Some(value) = record.get(key) {
+            response[key] = value.clone();
+        }
+    }
+    response
 }
 
 /// The `authEmulator` JSON document every action-link answer is wrapped in.
@@ -10172,8 +10455,12 @@ fn emulator_action(
             OobRequestType::VerifyEmail,
             continue_url,
             at,
-            ("verify your email", "Try verifying your email again."),
-            |email| json!({"success": "The email has been successfully verified.", "email": email}),
+            ApplyPage {
+                strict: !stateless_refresh_tokens,
+                what: "verify your email",
+                retry: "Try verifying your email again.",
+                success: |email| json!({"success": "The email has been successfully verified.", "email": email}),
+            },
         ),
         Some("verifyAndChangeEmail") => action_apply(
             store,
@@ -10181,12 +10468,16 @@ fn emulator_action(
             OobRequestType::VerifyAndChangeEmail,
             continue_url,
             at,
-            ("change your email", "Try changing your email again."),
-            |email| json!({"success": "The email has been successfully changed.", "newEmail": email}),
+            ApplyPage {
+                strict: !stateless_refresh_tokens,
+                what: "change your email",
+                retry: "Try changing your email again.",
+                success: |email| json!({"success": "The email has been successfully changed.", "newEmail": email}),
+            },
         ),
         Some("signIn") => {
-            if store
-                .oob_code(code)
+            if live_oob_code(store, code, at)
+                .ok()
                 .is_none_or(|entry| entry.request_type != OobRequestType::EmailSignIn)
             {
                 action_expired("sign in", "Try signing in again.")
@@ -10209,10 +10500,10 @@ fn action_reset_password(
     at: LogicalInstant,
     stateless_refresh_tokens: bool,
 ) -> JsonResponse {
-    let Some(entry) = store
-        .oob_code(code)
+    // A code past its lifetime is gone to the action page, also while strict still keeps it.
+    let Some(entry) = live_oob_code(store, code, at)
+        .ok()
         .filter(|c| c.request_type == OobRequestType::PasswordReset)
-        .cloned()
     else {
         return action_expired("reset your password", "Try resetting your password again.");
     };
@@ -10266,6 +10557,15 @@ fn action_reset_password(
     }
 }
 
+/// How the action page applies one kind of code: under which profile's rules, and the words
+/// of its refusal and of its success answer.
+struct ApplyPage<'a, F: FnOnce(&Value) -> Value> {
+    strict: bool,
+    what: &'a str,
+    retry: &'a str,
+    success: F,
+}
+
 /// `mode=verifyEmail` and `mode=verifyAndChangeEmail`: `applyActionCode`, with
 /// `INVALID_OOB_CODE` mapped to the official wording and every other API error passed
 /// through unchanged, as the official handler does.
@@ -10275,16 +10575,24 @@ fn action_apply(
     expected: OobRequestType,
     continue_url: Option<&str>,
     at: LogicalInstant,
-    (what, retry): (&str, &str),
-    success: impl FnOnce(&Value) -> Value,
+    page: ApplyPage<'_, impl FnOnce(&Value) -> Value>,
 ) -> JsonResponse {
-    if store
-        .oob_code(code)
+    let ApplyPage {
+        strict,
+        what,
+        retry,
+        success,
+    } = page;
+    if live_oob_code(store, code, at)
+        .ok()
         .is_none_or(|entry| entry.request_type != expected)
     {
         return action_expired(what, retry);
     }
-    let response = apply_oob_code(store, code, at);
+    // The page applies the code as `accounts:update` does, so strict follows the same
+    // production rules on both routes (sessions revoked, `initialEmail` recorded, the replaced
+    // address's verification codes void); only the page's own wording differs.
+    let response = apply_oob_code(store, code, at, strict);
     if response.status != 200 {
         return if response.body["error"]["message"].as_str() == Some("INVALID_OOB_CODE") {
             action_expired(what, retry)
@@ -10407,21 +10715,44 @@ fn sign_in_with_email_link(
     store: &mut AuthStore,
     body: &Value,
     at: LogicalInstant,
+    strict: bool,
 ) -> JsonResponse {
-    let (Some(email), Some(code)) = (str_field(body, "email"), str_field(body, "oobCode")) else {
+    // Production and the official emulator name a missing address before a missing code
+    // (sandbox recording 2026-09-24).
+    let Some(email) = str_field(body, "email") else {
+        return error(400, "MISSING_EMAIL");
+    };
+    let Some(code) = str_field(body, "oobCode") else {
         return error(400, "MISSING_OOB_CODE");
     };
     let email = canonicalize_email(email);
-    let matches = store
-        .oob_code(code)
-        .is_some_and(|c| c.request_type == OobRequestType::EmailSignIn && c.email == email);
-    if !matches {
-        return error(400, "INVALID_OOB_CODE");
+    let entry = match live_oob_code(store, code, at) {
+        Ok(entry) if entry.request_type == OobRequestType::EmailSignIn => entry,
+        Ok(_) => return error(400, "INVALID_OOB_CODE"),
+        Err(response) => return response,
+    };
+    if entry.email != email {
+        return error(
+            400,
+            "INVALID_EMAIL : The email provided does not match the sign-in email address.",
+        );
     }
+    let response_fields = |is_new: bool| {
+        [
+            ("kind", json!("identitytoolkit#EmailLinkSigninResponse")),
+            ("isNewUser", json!(is_new)),
+        ]
+    };
     // With a session: link the (now verified) email to that user instead. The code is
-    // consumed only once the request is known to succeed.
+    // consumed only once the request is known to succeed. Strict honours a legacy token, as
+    // production does (sandbox recording 2026-09-24, auth-action/legacy-token).
     if body.get("idToken").is_some_and(|t| !t.is_null()) {
-        let uid = match verify(store, body, at) {
+        let verified = if strict {
+            verify_honouring_legacy(store, body, at)
+        } else {
+            verify(store, body, at)
+        };
+        let uid = match verified {
             Ok(uid) => uid,
             Err(r) => return r,
         };
@@ -10440,25 +10771,50 @@ fn sign_in_with_email_link(
         }
         if let Some(u) = store.user_mut(&uid) {
             u.email_verified = true;
-        }
-        return match issue_tokens(store, &uid, None, at) {
-            Ok(mut tokens) => {
-                tokens["isNewUser"] = json!(false);
-                JsonResponse {
-                    status: 200,
-                    body: tokens,
-                }
+            u.email_link_signin = true;
+            // A linked anonymous account becomes an email-link account: its session is a
+            // `password` session and it lists the password provider, as in production and
+            // the official emulator.
+            if u.provider == fireemu_core_auth::store::Provider::Anonymous {
+                u.provider = fireemu_core_auth::store::Provider::EmailLink;
             }
-            Err(r) => r,
-        };
+        }
+        return finish_sign_in(
+            store,
+            &uid,
+            at,
+            Some(fireemu_core_auth::store::Provider::EmailLink),
+            &response_fields(false),
+        );
     }
     if let Err(e) = store.consume_oob_code(code, Some(OobRequestType::EmailSignIn), at) {
         return auth_error(&e);
     }
+    // Strict: an account whose address was never verified loses its password when the link
+    // proves the address, as production does (sandbox recording 2026-09-24).
+    let unverified_owner = store
+        .user_by_email(&email)
+        .filter(|u| !u.email_verified && !u.disabled)
+        .map(|u| u.local_id.clone());
     let (uid, is_new) = match store.sign_in_with_email_link(&email, at) {
         Ok(r) => r,
         Err(e) => return auth_error(&e),
     };
+    if strict && unverified_owner.as_ref() == Some(&uid) {
+        if let Err(e) = store.clear_password(&uid) {
+            return auth_error(&e);
+        }
+    }
+    if let Some(u) = store.user_mut(&uid) {
+        u.email_link_signin = true;
+        u.email_link_created |= is_new;
+        // Removing the password leaves an account without a provider; the link makes it an
+        // email-link account, whose sessions carry no anonymous `provider_id` (sandbox
+        // recording 2026-09-24, email-link/session#sign-in-p).
+        if u.provider == fireemu_core_auth::store::Provider::Anonymous {
+            u.provider = fireemu_core_auth::store::Provider::EmailLink;
+        }
+    }
     // The account and the pending credential keep `Provider::EmailLink`, which drives
     // `providerUserInfo`, the `createAuthUri` sign-in methods and the `emailLink` sign-in
     // method Blocking Functions see. The token claim itself is rendered as `password`.
@@ -10467,10 +10823,7 @@ fn sign_in_with_email_link(
         &uid,
         at,
         Some(fireemu_core_auth::store::Provider::EmailLink),
-        &[
-            ("kind", json!("identitytoolkit#EmailLinkSigninResponse")),
-            ("isNewUser", json!(is_new)),
-        ],
+        &response_fields(is_new),
     )
 }
 
@@ -11155,6 +11508,26 @@ fn parse_idp_claims(token: &str) -> Option<Value> {
     Some(payload)
 }
 
+/// The lower-cased host of an absolute `scheme://authority` URI, without user info or port;
+/// `None` when the URI has no scheme or no authority. A backslash ends the authority, as a
+/// browser reads it, so `https://evil.example\@allowed.host/` names `evil.example`.
+fn absolute_uri_host(uri: &str) -> Option<String> {
+    if !uri_is_absolute(uri) {
+        return None;
+    }
+    let (_, rest) = uri.split_once("://")?;
+    let authority = rest.split(['/', '\\', '?', '#']).next().unwrap_or_default();
+    let host_port = authority
+        .rsplit_once('@')
+        .map_or(authority, |(_, host)| host);
+    let host = if let Some(bracketed) = host_port.strip_prefix('[') {
+        bracketed.split_once(']').map(|(host, _)| host)?
+    } else {
+        host_port.split(':').next().unwrap_or_default()
+    };
+    (!host.is_empty()).then(|| host.to_ascii_lowercase())
+}
+
 /// Whether `uri` is an absolute URI (has a scheme), the official `parseAbsoluteUri` guard.
 fn uri_is_absolute(uri: &str) -> bool {
     match uri.find(':') {
@@ -11607,6 +11980,40 @@ mod tests {
     use super::*;
     use fireemu_core_auth::mfa::TotpPolicy;
     use fireemu_core_types::determinism::SplitMix64;
+
+    #[test]
+    fn an_absolute_uri_host_is_its_lower_cased_authority_host() {
+        for (uri, host) in [
+            (
+                "https://Demo-App.firebaseapp.com/done?x=1",
+                Some("demo-app.firebaseapp.com"),
+            ),
+            ("http://localhost:5000/done", Some("localhost")),
+            (
+                "https://user:pw@demo-app.web.app#frag",
+                Some("demo-app.web.app"),
+            ),
+            (
+                "https://demo-app.web.app?x=@evil.example.com",
+                Some("demo-app.web.app"),
+            ),
+            ("http://[::1]:8080/x", Some("::1")),
+            ("myapp://callback", Some("callback")),
+            ("not a url", None),
+            ("", None),
+            ("/relative/path", None),
+            ("https://", None),
+            ("mailto:someone@example.com", None),
+            ("http://[::1/x", None),
+            (
+                "https://evil.example\\@demo-app.firebaseapp.com/x",
+                Some("evil.example"),
+            ),
+            ("https:\\\\evil.example", None),
+        ] {
+            assert_eq!(absolute_uri_host(uri).as_deref(), host, "{uri}");
+        }
+    }
 
     struct AllBlockingHooks;
     struct BeforeCreateOnlyHook;

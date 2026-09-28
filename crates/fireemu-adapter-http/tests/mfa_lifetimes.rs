@@ -269,11 +269,14 @@ fn finalize_totp_enrollment(
     )
 }
 
-fn send_verify_email(s: &AuthState, id_token: &str) -> Value {
+/// A password reset code: the one kind whose lifetime is an hour in both profiles (the strict
+/// profile follows production, where the other kinds outlive the hour; sandbox recording
+/// 2026-09-24, auth-action/expiry).
+fn send_password_reset(s: &AuthState) -> Value {
     let (status, sent) = post(
         s,
         &format!("{V1}/accounts:sendOobCode"),
-        &json!({"requestType": "VERIFY_EMAIL", "idToken": id_token}),
+        &json!({"requestType": "PASSWORD_RESET", "email": EMAIL}),
     );
     assert_eq!(status, 200, "{sent}");
     let (_, codes) = get(s, &format!("{EMU}/oobCodes"));
@@ -281,15 +284,16 @@ fn send_verify_email(s: &AuthState, id_token: &str) -> Value {
         .as_array()
         .unwrap()
         .iter()
-        .rfind(|c| c["requestType"] == "VERIFY_EMAIL")
+        .rfind(|c| c["requestType"] == "PASSWORD_RESET")
         .map(|c| c["oobCode"].clone())
         .unwrap()
 }
 
-fn apply_oob_code(s: &AuthState, code: &Value) -> (u16, Value) {
+/// Inspects a code (`accounts:resetPassword` without a password), which leaves it usable.
+fn inspect_oob_code(s: &AuthState, code: &Value) -> (u16, Value) {
     post(
         s,
-        &format!("{V1}/accounts:update"),
+        &format!("{V1}/accounts:resetPassword"),
         &json!({"oobCode": code}),
     )
 }
@@ -380,7 +384,7 @@ struct Objects {
 
 fn create(s: &AuthState, id_token: &str, object: Object, into: &mut Objects) {
     match object {
-        Object::Oob => into.oob = send_verify_email(s, id_token),
+        Object::Oob => into.oob = send_password_reset(s),
         Object::Sms => {
             into.sms_pending = pending_login(s);
             into.sms_code = start_phone_code(s, &into.sms_pending);
@@ -438,9 +442,14 @@ fn crossing_each_lifetime_alone_leaves_the_other_objects_usable() {
             // consumes nothing observable on the account.
             match crossed {
                 Object::Oob => {
+                    // Strict refuses an expired code as production does.
                     assert_refused(
-                        &apply_oob_code(&s, &objects.oob),
-                        "INVALID_OOB_CODE",
+                        &inspect_oob_code(&s, &objects.oob),
+                        if strict {
+                            "EXPIRED_OOB_CODE"
+                        } else {
+                            "INVALID_OOB_CODE"
+                        },
                         &context,
                     );
                 }
@@ -543,15 +552,21 @@ fn crossing_each_lifetime_alone_leaves_the_other_objects_usable() {
                 assert_eq!(resumed["pendingToken"], objects.idp_token);
             }
             if crossed != Object::Oob {
-                let (status, applied) = apply_oob_code(&s, &objects.oob);
-                assert_eq!(status, 200, "{context}: oob should be live: {applied}");
-                assert_eq!(applied["localId"], local_id);
+                let (status, inspected) = inspect_oob_code(&s, &objects.oob);
+                assert_eq!(status, 200, "{context}: oob should be live: {inspected}");
+                assert_eq!(inspected["email"], EMAIL);
             }
 
-            // Post-state: only the surviving pending credential of an expired SMS code and the
-            // reusable continuation remain; the population is unchanged.
+            // Post-state: only the inspected reset code, the surviving pending credential of an
+            // expired SMS code and the reusable continuation remain; the population is
+            // unchanged. An expired reset code is swept in the emulator profile and kept in
+            // strict, which refuses it as expired rather than unknown.
             let (oob, sms, pending, idp, users) = counts(&s);
-            assert_eq!(oob, 0, "{context}");
+            assert_eq!(
+                oob,
+                usize::from(crossed != Object::Oob || strict),
+                "{context}"
+            );
             assert_eq!(sms, 0, "{context}");
             assert_eq!(pending, usize::from(crossed == Object::Sms), "{context}");
             assert_eq!(
@@ -590,8 +605,8 @@ fn crossing_each_lifetime_alone_leaves_the_other_objects_usable() {
             // Fresh control: a new object of the crossed kind, issued after the expiry, works.
             match crossed {
                 Object::Oob => {
-                    let code = send_verify_email(&s, &fresh_token);
-                    assert_eq!(apply_oob_code(&s, &code).0, 200, "{context}");
+                    let code = send_password_reset(&s);
+                    assert_eq!(inspect_oob_code(&s, &code).0, 200, "{context}");
                 }
                 Object::Sms => {
                     // The pending credential outlived its code: a fresh code completes it.

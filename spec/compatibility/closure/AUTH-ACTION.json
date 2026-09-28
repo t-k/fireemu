@@ -1,0 +1,541 @@
+{
+  "schemaVersion": 1,
+  "parent": "AUTH-ACTION",
+  "parentStatus": "COMPAT_VERIFIED",
+  "oracleTrack": "disposable-sandbox",
+  "scopeDecisions": [
+    {
+      "id": "E1",
+      "decision": "Closure is defined by these behavioral acceptance conditions, observed through the REST surface (Identity Toolkit and Secure Token) on the disposable Identity Platform sandbox, as for AUTH-ACCOUNT and AUTH-CREDENTIAL. Every action code is generated through the Admin accounts:sendOobCode with returnOobLink, which returns the code and mails no code (applying an email change may still notify the old address; every corpus address is @example.com, which publishes a null MX, so nothing is delivered); the client accounts:sendOobCode is observed only for a PASSWORD_RESET of an address that has no account. Mail delivery itself (templates, sender, localization, the message a client request would send) is not emulated by any parent: local development does not need it (owner, 2026-09-24). Client and Admin SDK paths belong to AUTH-CONFIG-SDK, as AUTH-ACCOUNT scope decision A5.",
+      "decidedBy": "owner (t-k)",
+      "decidedOn": "2026-09-24",
+      "movedTo": "AUTH-CONFIG-SDK"
+    },
+    {
+      "id": "E2",
+      "decision": "An action link is compared by its query parameters (mode, oobCode as the answer's own code, apiKey by presence, continueUrl, lang and any other). Where its handler lives is not compared: production links to the project's hosted action page and fireemu to its own /emulator/action handler, as the official emulator does, because a local link must reach the emulator. The hosted page's browser flow is out of scope.",
+      "decidedBy": "owner (t-k)",
+      "decidedOn": "2026-09-24"
+    },
+    {
+      "id": "E3",
+      "decision": "Action codes are opaque credentials: their value and length are not compared. Production codes are 54-character base64url strings; fireemu's are its own identifiers.",
+      "decidedBy": "owner (t-k)",
+      "decidedOn": "2026-09-24"
+    },
+    {
+      "id": "E4",
+      "decision": "Tenant-scoped action codes and links belong to AUTH-TENANT-BLOCKING, as AUTH-ACCOUNT scope decision A8; blocking functions (beforeSendEmail, beforeSignIn on an email-link sign-in) belong there too.",
+      "decidedBy": "owner (t-k)",
+      "decidedOn": "2026-09-24",
+      "movedTo": "AUTH-TENANT-BLOCKING"
+    },
+    {
+      "id": "E5",
+      "decision": "Mobile link settings (iOSBundleId, androidPackageName, androidInstallApp, androidMinimumVersion, dynamicLinkDomain, linkDomain) belong to AUTH-CONFIG-SDK; this parent observes continueUrl and canHandleCodeInApp.",
+      "decidedBy": "owner (t-k)",
+      "decidedOn": "2026-09-24",
+      "movedTo": "AUTH-CONFIG-SDK"
+    },
+    {
+      "id": "E6",
+      "decision": "The project's authorized domains decide whether an action-code continueUrl is accepted: the strict profile refuses one outside them with UNAUTHORIZED_DOMAIN, as production does, and the emulator profile adds no refusal (the official emulator checks no domain). fireemu's Admin config carries authorizedDomains, by default localhost and the project's firebaseapp.com and web.app domains; the harness requires the sandbox's configured list (its two Hosting domains, without localhost) in production and gives it to fireemu through the same Admin config. Email-link sign-in is observed with signIn.email.passwordRequired switched off for the email-link programs only; the harness restores and reads it back after each program and checks the whole sign-in baseline at the start and end of a recording.",
+      "decidedBy": "owner (t-k)",
+      "decidedOn": "2026-09-24"
+    },
+    {
+      "id": "E7",
+      "decision": "Any HTTP 429 or quota refusal in this corpus is classified INDETERMINATE; quotas belong to AUTH-CONFIG-SDK, as AUTH-ACCOUNT scope decision A7.",
+      "decidedBy": "owner (t-k)",
+      "decidedOn": "2026-09-24",
+      "movedTo": "AUTH-CONFIG-SDK"
+    },
+    {
+      "id": "E8",
+      "decision": "The ID-token claims and refresh of an email-link session are required conditions here (AUTH-CREDENTIAL scope decision C7); token refusals after a password reset or an email change are counted here.",
+      "decidedBy": "owner (t-k)",
+      "decidedOn": "2026-09-24"
+    },
+    {
+      "id": "E9",
+      "decision": "The final-artifact regression re-runs the AUTH-ACCOUNT and AUTH-CREDENTIAL corpora and inherits their one documented divergence: AUTH-ACCOUNT scope decision A12, the gson parser message text for malformed customAttributes JSON.",
+      "decidedBy": "owner (t-k)",
+      "decidedOn": "2026-09-24"
+    },
+    {
+      "id": "E10",
+      "decision": "A known production refusal fireemu does not implement: production refuses a second VERIFY_EMAIL link for the same address within minutes with 400 TOO_MANY_ATTEMPTS_TRY_LATER (recording 2026-09-24), while fireemu issues it. The refusal's time window cannot be observed under production's own rate limits, so it is neither implemented nor claimed as matched; it is not an E7 quota classification either, because it is a refusal of a request the corpus deliberately avoids (each verification link has an address of its own). Tracked in the unobserved-edges issue.",
+      "decidedBy": "owner (t-k)",
+      "decidedOn": "2026-09-25"
+    }
+  ],
+  "conditions": [
+    {
+      "conditionId": "AUTH-ACTION/admin-link-generation",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "auth-action/generate/admin"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "VERIFIED",
+      "note": "Admin sendOobCode with returnOobLink for every request type: answer members, link parameters, continueUrl on authorized, unauthorized, malformed and empty values, canHandleCodeInApp, unknown, disabled and mixed-case addresses, missing and unknown request types, missing and invalid addresses, the new address of an email change (missing, taken, the same, invalid), email-link generation while password sign-in is required, and codes selected by an ID token instead of an address. The Admin email-change generator reads only the address (MISSING_EMAIL for an ID token alone), so the inspection row after it records only that dependency.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-24T12:13:38.654Z",
+            "gitSha": "37e8e0e461cc91319792748c94fa402afc8a60dd",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "ca106b009c547fbe426fd7ed6ef579d5bddef023d31b6b5793381a5e514cb7ef",
+        "sourceCommit": "e292cc0e807da9d9226d772da1f6095055142402",
+        "comparisonPaths": [
+          "spec/compatibility/closure/evidence/AUTH-ACTION-comparison.json"
+        ],
+        "rows": {
+          "MATCH": 49
+        }
+      }
+    },
+    {
+      "conditionId": "AUTH-ACTION/client-send-boundary",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "auth-action/generate/client"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "VERIFIED",
+      "note": "The client sendOobCode for an address that has no account (improved email privacy on): the plain request, returnOobLink on the client route, continueUrl checks and a missing API key.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-24T12:13:38.654Z",
+            "gitSha": "37e8e0e461cc91319792748c94fa402afc8a60dd",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "ca106b009c547fbe426fd7ed6ef579d5bddef023d31b6b5793381a5e514cb7ef",
+        "sourceCommit": "e292cc0e807da9d9226d772da1f6095055142402",
+        "comparisonPaths": [
+          "spec/compatibility/closure/evidence/AUTH-ACTION-comparison.json"
+        ],
+        "rows": {
+          "MATCH": 5
+        }
+      }
+    },
+    {
+      "conditionId": "AUTH-ACTION/password-reset",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "auth-action/password-reset",
+        "auth-action/address-reuse"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "VERIFIED",
+      "note": "Password reset codes: inspection without use, weak and empty passwords, missing, unknown and truncated codes, use and reuse, a newer code retiring an older one, sign-in with the old and new password, tokens issued before the reset, the account after the reset, and codes issued before an Admin or client password change, an email change, a disable (and re-enable) and a deletion; a verification code offered as a reset code. A code whose address another account took after it was issued acts on that account, in production as in both fireemu profiles (auth-action/address-reuse, follow-up directive S1).",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-24T12:13:38.654Z",
+            "gitSha": "37e8e0e461cc91319792748c94fa402afc8a60dd",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          },
+          {
+            "recordedAt": "2026-09-24T17:27:34.229Z",
+            "gitSha": "36a07517b322aff6b31db07308f7280421ccd74c",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "ca106b009c547fbe426fd7ed6ef579d5bddef023d31b6b5793381a5e514cb7ef",
+        "sourceCommit": "e292cc0e807da9d9226d772da1f6095055142402",
+        "comparisonPaths": [
+          "spec/compatibility/closure/evidence/AUTH-ACTION-comparison.json"
+        ],
+        "rows": {
+          "MATCH": 78
+        }
+      }
+    },
+    {
+      "conditionId": "AUTH-ACTION/verify-email",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "auth-action/verify-email",
+        "auth-action/address-reuse"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "VERIFIED",
+      "note": "Email verification codes: inspection, apply and reapply, tokens and refresh after verification, unknown and truncated codes, an already verified address, codes issued before an email change, a disable (the refusal keeps the code) and a deletion, and a reset code applied as a verification. Whether a newer verification code retires an older one is unobserved: production refuses a second verification link for an address within minutes (TOO_MANY_ATTEMPTS_TRY_LATER), so the corpus gives each link an address of its own, and fireemu keeps every verification code. That refusal is a known production behavior fireemu does not implement (scope decision E10), not a matched one. A code whose address another account took after it was issued acts on that account, in production as in both fireemu profiles (auth-action/address-reuse, follow-up directive S1).",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-24T12:13:38.654Z",
+            "gitSha": "37e8e0e461cc91319792748c94fa402afc8a60dd",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          },
+          {
+            "recordedAt": "2026-09-24T17:27:34.229Z",
+            "gitSha": "36a07517b322aff6b31db07308f7280421ccd74c",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "ca106b009c547fbe426fd7ed6ef579d5bddef023d31b6b5793381a5e514cb7ef",
+        "sourceCommit": "e292cc0e807da9d9226d772da1f6095055142402",
+        "comparisonPaths": [
+          "spec/compatibility/closure/evidence/AUTH-ACTION-comparison.json"
+        ],
+        "rows": {
+          "MATCH": 61
+        }
+      }
+    },
+    {
+      "conditionId": "AUTH-ACTION/verify-and-change-email",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "auth-action/change-email"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "VERIFIED",
+      "note": "VERIFY_AND_CHANGE_EMAIL codes: inspection, a newer code and the older one, apply and reapply, sign-in by the old and new addresses, tokens and refresh issued before the change, the new address taken before use, the account's address changed, disabled or deleted before use, a change code offered as a reset code, and a verification code of the old address applied after the change.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-24T12:13:38.654Z",
+            "gitSha": "37e8e0e461cc91319792748c94fa402afc8a60dd",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "ca106b009c547fbe426fd7ed6ef579d5bddef023d31b6b5793381a5e514cb7ef",
+        "sourceCommit": "e292cc0e807da9d9226d772da1f6095055142402",
+        "comparisonPaths": [
+          "spec/compatibility/closure/evidence/AUTH-ACTION-comparison.json"
+        ],
+        "rows": {
+          "MATCH": 46
+        }
+      }
+    },
+    {
+      "conditionId": "AUTH-ACTION/email-link-sign-in",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "auth-action/email-link/sign-in"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "VERIFIED",
+      "note": "Email-link sign-in: generation (continueUrl and canHandleCodeInApp), inspection, a mismatched, missing or mixed-case address, missing and unknown codes, a new and an existing account, reuse, a newer link and the older one, a link refused for a disabled account (so its sign-in row records only that dependency) and a deleted account, linking the address to an anonymous session, to a session whose address differs, and an address another account owns, codes of the other types on the email-link route and the email-link code on the other routes, and a password reset of an account that only ever signed in by link.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-24T12:13:38.654Z",
+            "gitSha": "37e8e0e461cc91319792748c94fa402afc8a60dd",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "ca106b009c547fbe426fd7ed6ef579d5bddef023d31b6b5793381a5e514cb7ef",
+        "sourceCommit": "e292cc0e807da9d9226d772da1f6095055142402",
+        "comparisonPaths": [
+          "spec/compatibility/closure/evidence/AUTH-ACTION-comparison.json"
+        ],
+        "rows": {
+          "MATCH": 58
+        }
+      }
+    },
+    {
+      "conditionId": "AUTH-ACTION/email-link-session-claims",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "auth-action/email-link/session"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "VERIFIED",
+      "note": "The ID token of an email-link sign-in (new account, existing password account, anonymous session linked by link): header and claims including firebase.sign_in_provider and identities, the refresh of that session, a lookup, and a session cookie made from it (AUTH-CREDENTIAL scope decision C7).",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-24T14:23:20.843Z",
+            "gitSha": "268dd2569ad9aac0e62963c794609bce45f5e6d8",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "ca106b009c547fbe426fd7ed6ef579d5bddef023d31b6b5793381a5e514cb7ef",
+        "sourceCommit": "e292cc0e807da9d9226d772da1f6095055142402",
+        "comparisonPaths": [
+          "spec/compatibility/closure/evidence/AUTH-ACTION-comparison.json"
+        ],
+        "rows": {
+          "MATCH": 16
+        }
+      }
+    },
+    {
+      "conditionId": "AUTH-ACTION/legacy-token-actions",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "auth-action/legacy-token"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "VERIFIED",
+      "note": "Legacy ID tokens (a password sign-in without returnSecureToken): a VERIFY_EMAIL link selected by a legacy token on the Admin route, email-link linking with a legacy token, and the client sendOobCode of a VERIFY_AND_CHANGE_EMAIL with a legacy and with a secure token (owner decision 2026-09-24), which production accepts. The Admin route's email-change generator reads only the address (MISSING_EMAIL), so its code and application rows depend on a step that returned nothing and record only that dependency; the client row is the evidence that a legacy token selects an email change.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-24T12:13:38.654Z",
+            "gitSha": "37e8e0e461cc91319792748c94fa402afc8a60dd",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "ca106b009c547fbe426fd7ed6ef579d5bddef023d31b6b5793381a5e514cb7ef",
+        "sourceCommit": "e292cc0e807da9d9226d772da1f6095055142402",
+        "comparisonPaths": [
+          "spec/compatibility/closure/evidence/AUTH-ACTION-comparison.json"
+        ],
+        "rows": {
+          "MATCH": 17
+        }
+      }
+    },
+    {
+      "conditionId": "AUTH-ACTION/code-ownership",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "auth-action/ownership"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "VERIFIED",
+      "note": "Whose code it is: a verification or change code of one account applied with another account's ID token or a garbage token, and a reset code checked and used while naming another account's address.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-24T12:13:38.654Z",
+            "gitSha": "37e8e0e461cc91319792748c94fa402afc8a60dd",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "ca106b009c547fbe426fd7ed6ef579d5bddef023d31b6b5793381a5e514cb7ef",
+        "sourceCommit": "e292cc0e807da9d9226d772da1f6095055142402",
+        "comparisonPaths": [
+          "spec/compatibility/closure/evidence/AUTH-ACTION-comparison.json"
+        ],
+        "rows": {
+          "MATCH": 17
+        }
+      }
+    },
+    {
+      "conditionId": "AUTH-ACTION/code-expiry",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "auth-action/expiry"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "VERIFIED",
+      "note": "A PASSWORD_RESET code about ten seconds before and after its one-hour lifetime (inspection, use, a second account's code, and a new code afterwards; production answers EXPIRED_OOB_CODE); VERIFY_EMAIL, VERIFY_AND_CHANGE_EMAIL and EMAIL_SIGNIN codes inspected and used after the same hour. Their full lifetime is unobserved (owner decision 2026-09-24): the recording shows them live at about 3,610 s, the exploration at 3,900 s. No Google document states their lifetime (searched 2026-09-25: the Admin email-action-link, email-link sign-in and GetOobCodeResponse references), so fireemu's strict profile never refuses them as expired (owner decision 2026-09-25); at the per-project cap of outstanding codes the oldest of them older than 3,900 s makes room. An expired PASSWORD_RESET code is kept a day to be refused as expired (an inference). Exploration before the recording (not evidence): docs.local/runs/auth-action-explore-20260924/lifetime-*.jsonl.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-24T12:13:38.654Z",
+            "gitSha": "37e8e0e461cc91319792748c94fa402afc8a60dd",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "ca106b009c547fbe426fd7ed6ef579d5bddef023d31b6b5793381a5e514cb7ef",
+        "sourceCommit": "e292cc0e807da9d9226d772da1f6095055142402",
+        "comparisonPaths": [
+          "spec/compatibility/closure/evidence/AUTH-ACTION-comparison.json"
+        ],
+        "rows": {
+          "MATCH": 20
+        }
+      }
+    },
+    {
+      "conditionId": "AUTH-ACTION/final-artifact-regression",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "auth-action",
+        "auth-credential",
+        "auth-account",
+        "cargo:fireemu-core-auth+fireemu-adapter-http+fireemu"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "VERIFIED",
+      "note": "Every AUTH-ACTION, AUTH-CREDENTIAL and AUTH-ACCOUNT row compared on one final artifact, with the Rust workspace tests of that source.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-23T11:52:22.579Z",
+            "gitSha": "2f9128f45f0d5aeb4aea9bdfaaa0f1e1c105e31f",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          },
+          {
+            "recordedAt": "2026-09-23T12:44:15.390Z",
+            "gitSha": "3fdcb7f5350bfc24257fe448ea72be5417be26c7",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          },
+          {
+            "recordedAt": "2026-09-23T15:29:14.879Z",
+            "gitSha": "81ba4d60f0faf5268a8b6b9eacb1ef34b03e5315",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          },
+          {
+            "recordedAt": "2026-09-24T05:51:03.248Z",
+            "gitSha": "de2865c9a3ad3e3d6a8826b1291afd0e02223b75",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          },
+          {
+            "recordedAt": "2026-09-24T05:53:09.841Z",
+            "gitSha": "4092354575c2d6a33179339b627c3e5db64c854a",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          },
+          {
+            "recordedAt": "2026-09-24T08:04:46.724Z",
+            "gitSha": "092787b0e72597f66cd1fea368a6f3caa0d308be",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          },
+          {
+            "recordedAt": "2026-09-24T12:13:38.654Z",
+            "gitSha": "37e8e0e461cc91319792748c94fa402afc8a60dd",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          },
+          {
+            "recordedAt": "2026-09-24T14:23:20.843Z",
+            "gitSha": "268dd2569ad9aac0e62963c794609bce45f5e6d8",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          },
+          {
+            "recordedAt": "2026-09-24T17:27:34.229Z",
+            "gitSha": "36a07517b322aff6b31db07308f7280421ccd74c",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "ca106b009c547fbe426fd7ed6ef579d5bddef023d31b6b5793381a5e514cb7ef",
+        "sourceCommit": "e292cc0e807da9d9226d772da1f6095055142402",
+        "comparisonPaths": [
+          "spec/compatibility/closure/evidence/AUTH-ACTION-comparison.json",
+          "spec/compatibility/closure/evidence/AUTH-ACTION-credential-regression.json",
+          "spec/compatibility/closure/evidence/AUTH-ACTION-account-regression.json"
+        ],
+        "rows": {
+          "MATCH": 1198,
+          "MISMATCH": 1
+        },
+        "documentedDivergences": [
+          {
+            "row": "auth-account/admin/custom-attributes#invalid-json",
+            "kind": "message-text",
+            "decidedBy": "owner",
+            "decidedOn": "2026-09-24",
+            "scopeDecision": "E9",
+            "reason": "AUTH-ACCOUNT scope decision A12: production returns gson's parser message for malformed customAttributes JSON; the INVALID_CLAIMS refusal itself matches."
+          }
+        ],
+        "workspaceTests": {
+          "command": "cargo nextest run --workspace --profile pr",
+          "passed": 3374,
+          "failed": 0
+        },
+        "mutation": "docs.local/mutation/auth-action/head-37e8e0e46/RESULT.md covers the promoted branch (every viable mutant in fireemu-adapter-http and fireemu-core-auth caught). docs.local/mutation/auth-action/follow-up-20260925/ covers the follow-up directive's diff up to 36a07517b (40 caught; the 2 survivors in scope pinned by tests in 6643ae32e; 2 more in the fireemu binary crate, whose tests catch them). e292cc0e8 (the emulator profile resolving a code by its address) was not mutation-tested; pinning that it spends an unowned code is tracked in docs.local/issues/open/auth-action-unobserved-edges.md (private).",
+        "buildTree": "clean (git status --porcelain empty at build); artifact copy, sha256, source commit and check logs in docs.local/runs/auth-action-final-20260925/ (private)"
+      }
+    },
+    {
+      "conditionId": "AUTH-ACTION/closure-review",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "AUTH-ACTION",
+        "auth-action"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "VERIFIED",
+      "note": "Independent clean-context closure and security review of the final artifact and evidence.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-24T12:13:38.654Z",
+            "gitSha": "37e8e0e461cc91319792748c94fa402afc8a60dd",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          },
+          {
+            "recordedAt": "2026-09-24T14:23:20.843Z",
+            "gitSha": "268dd2569ad9aac0e62963c794609bce45f5e6d8",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          },
+          {
+            "recordedAt": "2026-09-24T17:27:34.229Z",
+            "gitSha": "36a07517b322aff6b31db07308f7280421ccd74c",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "ca106b009c547fbe426fd7ed6ef579d5bddef023d31b6b5793381a5e514cb7ef",
+        "sourceCommit": "e292cc0e807da9d9226d772da1f6095055142402",
+        "comparisonPaths": [
+          "spec/compatibility/closure/evidence/AUTH-ACTION-comparison.json"
+        ],
+        "rows": {
+          "MATCH": 346
+        }
+      }
+    }
+  ],
+  "closureReview": {
+    "decision": "APPROVED",
+    "decidedOn": "2026-09-25",
+    "reviewer": "independent clean-context closure review and security review of artifact bf3c6b12, a clean-context confirmation review of their follow-ups on artifact 06bbbf6f, the independent promotion review of 2026-09-25 (promotion kept, conditionally), and a clean-context confirmation review of the follow-up directive's fixes on artifact ca106b00",
+    "reviewedCommit": "8097c7c01",
+    "finalArtifactSha256": "ca106b009c547fbe426fd7ed6ef579d5bddef023d31b6b5793381a5e514cb7ef",
+    "report": "docs.local/reviews/2026-09-25-auth-action-follow-up-confirmation.md (private; earlier: 2026-09-24-auth-action-confirmation-review.md, -closure-review.md, -security-review.md, and docs.local/instructions/2026-09-24-auth-action-promotion-review.md)",
+    "followUps": "Non-blocking and tracked privately (docs.local/issues/open/auth-action-unobserved-edges.md): code lifetimes beyond one hour, VERIFY_EMAIL supersession (unobservable under production's per-address limit), sessions after an email link removes a password, a client sign-in link for a disabled account, a link sign-in of a disabled account, and a closure-test count of rows whose dependency returned nothing. After the follow-up directive: pinning that the emulator profile spends a code whose address nobody owns, and the official emulator's order of the weak-password check before the owner lookup (confirmation review S1, S2)."
+  }
+}

@@ -379,6 +379,15 @@ pub struct UserRecord {
     /// Whether a custom-token sign-in created the account. Production then reports
     /// `customAuth` and `validSince` in every read of it (sandbox recording 2026-09-24).
     pub custom_auth: bool,
+    /// Whether the account ever signed in by email link. Production then reports
+    /// `emailLinkSignin` (sandbox recording 2026-09-24, auth-action/email-link).
+    pub email_link_signin: bool,
+    /// Whether an email-link sign-in created the account: production then reports
+    /// `validSince` in every read of it (sandbox recording 2026-09-24).
+    pub email_link_created: bool,
+    /// `initialEmail`: the address an applied email change replaced first (sandbox recording
+    /// 2026-09-24, auth-action/change-email). An Admin email change does not set it.
+    pub initial_email: Option<String>,
     /// `passwordUpdatedAt` of a password credential that was since removed: production keeps
     /// reporting it (sandbox recording 2026-09-23, auth-account/provider).
     pub removed_password_updated_at: Option<LogicalInstant>,
@@ -647,6 +656,9 @@ pub struct SignInConfig {
     /// `signIn.phoneNumber.testPhoneNumbers`: E.164 number to its fixed six-digit code. No
     /// message is sent for these numbers and the code never changes.
     pub test_phone_numbers: BTreeMap<String, String>,
+    /// `authorizedDomains`: the hosts an action link's continue URL may name. `None` is the
+    /// list a new Firebase project starts with ([`AuthStore::authorized_domains`]).
+    pub authorized_domains: Option<Vec<String>>,
 }
 
 impl Default for SignInConfig {
@@ -657,6 +669,7 @@ impl Default for SignInConfig {
             anonymous_enabled: true,
             phone_enabled: true,
             test_phone_numbers: BTreeMap::new(),
+            authorized_domains: None,
         }
     }
 }
@@ -669,7 +682,10 @@ impl SignInConfig {
     /// count.
     #[must_use]
     pub fn is_valid(&self) -> bool {
-        self.test_phone_numbers.len() <= Self::MAX_TEST_PHONE_NUMBERS
+        self.authorized_domains
+            .as_ref()
+            .is_none_or(|domains| domains.iter().all(|domain| !domain.is_empty()))
+            && self.test_phone_numbers.len() <= Self::MAX_TEST_PHONE_NUMBERS
             && self.test_phone_numbers.iter().all(|(number, code)| {
                 AuthStore::validate_phone_number(number).is_ok()
                     && code.len() == 6
@@ -1003,6 +1019,8 @@ pub enum AuthError {
     EmailNotFound,
     /// Unknown, consumed or mismatched action code.
     InvalidOobCode,
+    /// An action code past its lifetime (production lifetimes only).
+    ExpiredOobCode,
     /// Unknown phone verification session.
     InvalidSessionInfo,
     /// Wrong phone verification code.
@@ -1044,6 +1062,7 @@ impl fmt::Display for AuthError {
             Self::InvalidPhoneNumber => f.write_str("invalid phone number"),
             Self::EmailNotFound => f.write_str("email not found"),
             Self::InvalidOobCode => f.write_str("invalid action code"),
+            Self::ExpiredOobCode => f.write_str("expired action code"),
             Self::InvalidSessionInfo => f.write_str("invalid verification session"),
             Self::InvalidVerificationCode => f.write_str("invalid verification code"),
             Self::ControlCharacterInText(field) => {
@@ -1172,6 +1191,10 @@ pub struct AuthStore {
     /// Whether this store has issued a legacy Identity Toolkit token. Only then does it honour
     /// one, so a store that never issues them (the emulator profile) refuses a forged one.
     legacy_tokens_issued: bool,
+    /// Whether action codes follow production's lifetimes: a password reset code lives an
+    /// hour, the other kinds longer, and an expired code is refused as expired. Otherwise every
+    /// code lives an hour and then disappears (the emulator profile's local policy).
+    production_oob_lifetimes: bool,
     oob_codes: Arc<BTreeMap<String, OobCode>>,
     verification_codes: Arc<BTreeMap<String, VerificationCode>>,
     /// Outstanding phone `temporaryProof`s: proof to the verified number and its issue time.
@@ -1302,8 +1325,35 @@ impl CredentialNotice {
     }
 }
 
+/// A source of unpredictable bytes for bearer credentials: it fills the buffer and answers
+/// whether it could. The daemon installs the operating system CSPRNG
+/// (`fireemu-adapter-support::entropy`); the core itself never touches the operating system.
+pub type CredentialEntropy = fn(&mut [u8]) -> bool;
+
+static CREDENTIAL_ENTROPY: std::sync::OnceLock<CredentialEntropy> = std::sync::OnceLock::new();
+
+/// Installs the process-wide credential entropy, once; answers whether this call installed it.
+///
+/// Action codes, verification sessions, phone proofs, MFA sessions and pending credentials,
+/// refresh tokens and TOTP secrets then draw from it instead of the seeded stream, which a
+/// client could otherwise invert from one value it was given (the seeded stream's output
+/// function is a bijection). Their shapes do not change. Identifiers that are not secrets
+/// (account and factor ids, salts) keep the seeded stream, so a seed still reproduces them.
+pub fn install_credential_entropy(source: CredentialEntropy) -> bool {
+    CREDENTIAL_ENTROPY.set(source).is_ok()
+}
+
 /// Email action codes expire after an hour of virtual time.
 pub const OOB_CODE_TTL_SECONDS: i64 = 3_600;
+/// Under production lifetimes, a verification, email-change or sign-in code outlives the hour
+/// a password reset code has: production answered all three this long after their generation
+/// (sandbox recording 2026-09-24, auth-action/expiry). Their lifetime is unobserved and no
+/// Google document states one (searched 2026-09-25), so such a code is never refused as
+/// expired (owner decision 2026-09-25): refusing earlier could refuse what production accepts.
+pub const OBSERVED_LONG_OOB_CODE_SECONDS: i64 = 3_900;
+/// Under production lifetimes an expired code is kept this long after its lifetime, so it is
+/// refused as expired rather than as unknown.
+pub const EXPIRED_OOB_CODE_RETENTION_SECONDS: i64 = 86_400;
 /// Phone verification codes expire after ten minutes of virtual time.
 pub const SMS_CODE_TTL_SECONDS: i64 = 600;
 /// A pending second-factor sign-in (`mfaPendingCredential`) expires after an hour of virtual
@@ -1465,6 +1515,7 @@ impl AuthStore {
             credential_epoch: None,
             lifecycle_epoch: None,
             legacy_tokens_issued: false,
+            production_oob_lifetimes: false,
             oob_codes: Arc::new(BTreeMap::new()),
             verification_codes: Arc::new(BTreeMap::new()),
             temporary_proofs: BTreeMap::new(),
@@ -1623,11 +1674,29 @@ impl AuthStore {
         self.local_id_for_email.remove(&email);
     }
 
+    /// 64 bits for a bearer credential: the installed credential entropy, or the seeded stream
+    /// when none is installed (unit tests and embedded stores). A source that is installed but
+    /// fails stops the request rather than falling back to a predictable value.
+    fn secret_u64(&mut self) -> u64 {
+        match CREDENTIAL_ENTROPY.get() {
+            Some(source) => {
+                let mut bytes = [0_u8; 8];
+                assert!(
+                    source(&mut bytes),
+                    "the operating system random number generator is unavailable"
+                );
+                u64::from_be_bytes(bytes)
+            }
+            None => self.rng.next_u64(),
+        }
+    }
+
+    /// A bearer credential of the shape `{prefix}{16 hex digits}{4 decimal digits}`.
     fn next_id(&mut self, prefix: &str) -> String {
         self.counter += 1;
         format!(
             "{prefix}{:016x}{:04}",
-            self.rng.next_u64(),
+            self.secret_u64(),
             self.counter % 10_000
         )
     }
@@ -1669,7 +1738,7 @@ impl AuthStore {
     fn random_secret(&mut self) -> TotpSecret {
         let mut bytes = Vec::with_capacity(20);
         for _ in 0..3 {
-            bytes.extend_from_slice(&self.rng.next_u64().to_be_bytes());
+            bytes.extend_from_slice(&self.secret_u64().to_be_bytes());
         }
         bytes.truncate(20);
         TotpSecret::new(bytes)
@@ -1781,10 +1850,11 @@ impl AuthStore {
         if self
             .oob_codes
             .values()
-            .any(|code| Self::expired(code.created_at, OOB_CODE_TTL_SECONDS, now))
+            .any(|code| Self::oob_code_swept(self.production_oob_lifetimes, code, now))
         {
+            let production = self.production_oob_lifetimes;
             Arc::make_mut(&mut self.oob_codes)
-                .retain(|_, code| !Self::expired(code.created_at, OOB_CODE_TTL_SECONDS, now));
+                .retain(|_, code| !Self::oob_code_swept(production, code, now));
         }
         if self
             .verification_codes
@@ -1935,6 +2005,19 @@ impl AuthStore {
     #[must_use]
     pub const fn sign_in_config(&self) -> &SignInConfig {
         &self.sign_in
+    }
+
+    /// The project's authorized domains: the configured list, or the one a new Firebase
+    /// project starts with (`localhost` and the project's two Firebase Hosting domains).
+    #[must_use]
+    pub fn authorized_domains(&self) -> Vec<String> {
+        self.sign_in.authorized_domains.clone().unwrap_or_else(|| {
+            vec![
+                "localhost".to_owned(),
+                format!("{}.firebaseapp.com", self.project_id),
+                format!("{}.web.app", self.project_id),
+            ]
+        })
     }
 
     /// Replaces the sign-in providers and test phone numbers; an invalid configuration is
@@ -2293,6 +2376,9 @@ impl AuthStore {
                 federated: user.federated,
                 admin_created: true,
                 custom_auth: false,
+                email_link_signin: false,
+                email_link_created: false,
+                initial_email: None,
                 removed_password_updated_at: None,
                 email_verified_recorded: true,
                 password,
@@ -2990,6 +3076,9 @@ impl AuthStore {
             federated: Vec::new(),
             admin_created: false,
             custom_auth: false,
+            email_link_signin: false,
+            email_link_created: false,
+            initial_email: None,
             removed_password_updated_at: None,
             email_verified_recorded: false,
             password: None,
@@ -3017,6 +3106,31 @@ impl AuthStore {
         let email = Self::canonicalize_email(email);
         let new_email = new_email.map(|value| Self::canonicalize_email(&value));
         self.sweep_transient_credentials(now);
+        // At the cap, codes kept past their lifetime (production lifetimes) make room first,
+        // so abandoned codes cannot hold the cap for their whole retention.
+        if self.oob_codes.len() >= MAX_OUTSTANDING_CODES {
+            let production = self.production_oob_lifetimes;
+            Arc::make_mut(&mut self.oob_codes).retain(|_, code| {
+                Self::oob_ttl(production, code.request_type)
+                    .is_none_or(|ttl| !Self::expired(code.created_at, ttl, now))
+            });
+        }
+        // A code without a lifetime never leaves by age, so at the cap the oldest one that
+        // production was not seen to answer (older than the observed lower bound) makes room.
+        if self.oob_codes.len() >= MAX_OUTSTANDING_CODES && self.production_oob_lifetimes {
+            let oldest = self
+                .oob_codes
+                .values()
+                .filter(|code| {
+                    Self::oob_ttl(true, code.request_type).is_none()
+                        && Self::expired(code.created_at, OBSERVED_LONG_OOB_CODE_SECONDS, now)
+                })
+                .min_by_key(|code| (code.created_at, code.sequence))
+                .map(|code| code.code.clone());
+            if let Some(oldest) = oldest {
+                Arc::make_mut(&mut self.oob_codes).remove(&oldest);
+            }
+        }
         if self.oob_codes.len() >= MAX_OUTSTANDING_CODES {
             return Err(AuthError::TooManyOutstandingCodes);
         }
@@ -3034,6 +3148,61 @@ impl AuthStore {
             },
         );
         Ok(code)
+    }
+
+    /// Retires every outstanding code of `request_type` for `email`: production keeps only the
+    /// newest password reset, email change and sign-in link of an address (sandbox recording
+    /// 2026-09-24).
+    pub fn retire_oob_codes(&mut self, request_type: OobRequestType, email: &str) {
+        let email = Self::canonicalize_email(email);
+        let retired = |c: &OobCode| c.request_type == request_type && c.email == email;
+        if self.oob_codes.values().any(retired) {
+            Arc::make_mut(&mut self.oob_codes).retain(|_, c| !retired(c));
+        }
+    }
+
+    /// Voids every outstanding code of a deleted account: those it owned and those for its
+    /// address (production refuses them all, sandbox recording 2026-09-24).
+    pub fn void_oob_codes_of(&mut self, uid: &LocalId, email: Option<&str>) {
+        let email = email.map(Self::canonicalize_email);
+        let voided = |c: &OobCode| c.uid.as_ref() == Some(uid) || email.as_ref() == Some(&c.email);
+        if self.oob_codes.values().any(voided) {
+            Arc::make_mut(&mut self.oob_codes).retain(|_, c| !voided(c));
+        }
+    }
+
+    /// Switches action codes to production's lifetimes (see `production_oob_lifetimes`).
+    pub fn set_production_oob_lifetimes(&mut self, production: bool) {
+        self.production_oob_lifetimes = production;
+    }
+
+    /// A code's lifetime in seconds; `None` when it has none (production lifetimes, every kind
+    /// but a password reset: see [`OBSERVED_LONG_OOB_CODE_SECONDS`]).
+    const fn oob_ttl(production: bool, request_type: OobRequestType) -> Option<i64> {
+        match request_type {
+            OobRequestType::PasswordReset => Some(OOB_CODE_TTL_SECONDS),
+            _ if production => None,
+            _ => Some(OOB_CODE_TTL_SECONDS),
+        }
+    }
+
+    const fn oob_retention(production: bool, request_type: OobRequestType) -> Option<i64> {
+        match Self::oob_ttl(production, request_type) {
+            Some(ttl) if production => Some(ttl + EXPIRED_OOB_CODE_RETENTION_SECONDS),
+            ttl => ttl,
+        }
+    }
+
+    fn oob_code_swept(production: bool, code: &OobCode, now: LogicalInstant) -> bool {
+        Self::oob_retention(production, code.request_type)
+            .is_some_and(|retention| Self::expired(code.created_at, retention, now))
+    }
+
+    /// Whether an outstanding code is past its lifetime at `now`.
+    #[must_use]
+    pub fn oob_code_expired(&self, code: &OobCode, now: LogicalInstant) -> bool {
+        Self::oob_ttl(self.production_oob_lifetimes, code.request_type)
+            .is_some_and(|ttl| Self::expired(code.created_at, ttl, now))
     }
 
     /// Outstanding email action codes, oldest first.
@@ -3067,10 +3236,14 @@ impl AuthStore {
         if self
             .oob_codes
             .get(code)
-            .is_some_and(|c| Self::expired(c.created_at, OOB_CODE_TTL_SECONDS, now))
+            .is_some_and(|c| self.oob_code_expired(c, now))
         {
             Arc::make_mut(&mut self.oob_codes).remove(code);
-            return Err(AuthError::InvalidOobCode);
+            return Err(if self.production_oob_lifetimes {
+                AuthError::ExpiredOobCode
+            } else {
+                AuthError::InvalidOobCode
+            });
         }
         Arc::make_mut(&mut self.oob_codes)
             .remove(code)
@@ -3097,7 +3270,7 @@ impl AuthStore {
         }
         let session_info = self.next_id("sms-");
         // A test number always takes its configured code (sandbox recording 2026-09-23).
-        let random = self.rng.next_u64() % 1_000_000;
+        let random = self.secret_u64() % 1_000_000;
         let code = self
             .sign_in
             .test_phone_numbers
@@ -3128,7 +3301,7 @@ impl AuthStore {
         if self.temporary_proofs.len() >= MAX_OUTSTANDING_CODES {
             return Err(AuthError::TooManyOutstandingCodes);
         }
-        let proof = format!("{}{:016x}", self.next_id("proof-"), self.rng.next_u64());
+        let proof = format!("{}{:016x}", self.next_id("proof-"), self.secret_u64());
         self.temporary_proofs
             .insert(proof.clone(), (phone.to_owned(), now));
         Ok(proof)

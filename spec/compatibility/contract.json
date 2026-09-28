@@ -587,6 +587,10 @@
             {
               "behaviour": "A PartitionQuery page token names the snapshot version it was issued at and carries a fingerprint of the request and that version, in both profiles, so a token edited to read another version is refused as foreign. fireemu before FS-QUERY-INDEX did not bind the version; this is the one refusal the emulator profile adds, a local integrity bound on a token only fireemu issues",
               "precision": "strictly-safer"
+            },
+            {
+              "behaviour": "gRPC answers are shaped as production's front end sends them in the strict profile only: an error answered trailers-only is split into headers and trailers, and a Write stream that sent a response ends with the trailer content-disposition: attachment (FS-DATA-WRITE decision 1, 2026-09-25). The emulator profile keeps tonic's answer and adds the local diagnostic trailer fireemu-reason (for example FS_GW_DECODE), which the strict profile removes. No official-emulator recording of trailer metadata exists",
+              "precision": "documented-divergence"
             }
           ],
           "productionOnly": [
@@ -803,6 +807,10 @@
             {
               "behaviour": "local memory-safety limits of 2 MiB per outbound array, 16 MiB of unacknowledged arrays per session, 4 MiB per framed backchannel batch, 4 MiB of concurrently owned replay copies per session, 64 MiB of unacknowledged arrays per Hub and 16 MiB of replay copies per Hub; overflow closes only the affected channel without weakening Security Rules",
               "precision": "resource-safety-divergence"
+            },
+            {
+              "behaviour": "a request naming an unknown WebChannel session answers HTTP 400 in both profiles; the strict profile sends production's HTML error page (its first 400 characters, owner decision D6), the emulator profile the plain text 'Error: Unknown SID', which the web SDK classifies as an unknown session and re-handshakes on. A terminate naming an unknown session is the exception: strict answers production's page (follow-up recording, 2026-09-27) and the emulator profile answers 200 as before. No official-emulator recording backs the emulator wording",
+              "precision": "documented-divergence"
             }
           ],
           "productionOnly": [],
@@ -865,7 +873,7 @@
             "conformance": []
           },
           "officialLimitations": [
-            "the official emulator enforces a subset of the production limits (document bytes via the per-value cap, nesting depth, identifier lengths, IN values, array-contains count) and not the rest (transforms per document, composite indexes, transaction budgets are unmeasured); the emulator profile refuses exactly the measured subset and observes the production-only limits as warnings"
+            "the official emulator enforces a subset of the production limits (document bytes via the per-value cap, nesting depth, identifier lengths, IN values, array-contains count) and not the rest: measured on 2026-09-27 (firebase-tools 15.28.2, Firestore emulator v1.22.0), it accepted writes over the create transaction budget, over 40,000 index entries, with a single-field index entry over 5,530 bytes, and past the document-name guard; transforms per document and composite indexes are not enforced either. The emulator profile refuses exactly the measured subset and observes the production-only limits without refusing"
           ],
           "fireemuOnly": [
             {
@@ -873,8 +881,20 @@
               "precision": "exact-for-local-semantics"
             },
             {
-              "behaviour": "two strict-profile-only write-path refusals, published here as the contract requires. First, a map or array field value whose storage size exceeds FS-LIMIT-FIELD-VALUE-BYTES (1,048,487 logical bytes): production documents that limit but has only been observed refusing a single oversized string or bytes payload, which is measured on its raw payload and refused under both profiles. Second, a field path over FS-LIMIT-FIELD-PATH-BYTES (1,500 bytes) implied through an array element: the equivalent path implied through nested maps was already refused under both profiles by automatic index accounting, which does not walk into arrays. Both are documented, production observation pending.",
+              "behaviour": "one strict-profile-only write-path refusal, published here as the contract requires: a field path over FS-LIMIT-FIELD-PATH-BYTES (1,500 bytes) implied through an array element; the equivalent path implied through nested maps was already refused under both profiles by automatic index accounting, which does not walk into arrays. Documented, production observation pending. A map or array value is not refused for its aggregate size in either profile: production accepted a map of 1,048,488 logical bytes, one over the FS-LIMIT-FIELD-VALUE-BYTES figure (FS-DATA-WRITE bracket recording, 2026-09-27), so only FS-LIMIT-DOCUMENT-BYTES bounds an aggregate value; a single string or bytes payload over 1,048,487 bytes is refused under both profiles",
               "precision": "documented-not-observed"
+            },
+            {
+              "behaviour": "two further strict-profile-only write-path refusals, both production-recorded (FS-DATA-WRITE sandbox, 2026-09-24/25). First, a direct field key over 1,494 UTF-8 bytes in a map held by an array is refused with production's 'Property <path> contains an invalid nested entity.' (bracketed 1,494 accepted, 1,495 refused), even when the implied path is under the 1,500-byte FS-LIMIT-FIELD-PATH-BYTES limit. Second, deleting a stored document whose delete transaction is over its route's budget is refused with 'Transaction too big. Decrease transaction size.' (REST DELETE and BatchWrite from 12,113 array elements under a 1,000-byte name, Commit from 12,112; production's answer inside its band is nondeterministic and the fitted charge is an estimate for other name lengths, owner decisions A and D2). The emulator profile accepts both, as no official-emulator measurement shows either refusal",
+              "precision": "documented-divergence"
+            },
+            {
+              "behaviour": "FS-LIMIT-API-REQUEST-BYTES is enforced at 11,534,336 bytes (inclusive) on REST and on gRPC unary and streamed requests, in both profiles, with production's REST Commit refusal (HTTP 400 INVALID_ARGUMENT, gRPC code 3, 'Request payload size exceeds the limit: 11534336 bytes.'). Production recorded that bound on REST Commit, the non-commit REST routes and gRPC unary (FS-DATA-WRITE bracket recording, 2026-09-27), so the catalog's 10 MiB figure is not enforced; the gRPC stream's own bound is unobservable and uses the same value (owner decision). The pinned official emulator's own REST and gRPC request bound was not measured; the emulator profile applies production's bound by decision D (2026-09-27), which only removed its former, smaller 10 MiB refusal. WebChannel form bodies have their own bound: production accepted 12,582,912 bytes on a valid session and refused 16,777,216 with its HTML 400 page, after which the session was gone (follow-up recording, 2026-09-27), so strict accepts up to 16,777,215 and answers that page and ends the session above it; the pinned official emulator accepts 16,777,216 and answers an empty 413 above it, keeping the session, and the emulator profile does the same. Only REST :commit and WebChannel drain an over-bound body before answering; on the other REST routes a body far over the bound may reset the connection instead of delivering the 400",
+              "precision": "documented-divergence"
+            },
+            {
+              "behaviour": "FS-LIMIT-INDEX-ENTRY-BYTES: strict refuses a single-field (collection scope) index entry over 5,530 bytes under the documented entry formula (own name, parent name, field name, indexed value up to 1,500 bytes, plus 32) with production's 'Index entry is too large.'. Production accepted 5,529 and refused 5,531, and every recorded FS-DATA-WRITE write agrees (2026-09-23 to 2026-09-27), well below the published 7,680. Composite and collection-group entries are unobserved in production: no refusal is recorded for them and the published figure does not match production's single-field accounting, so neither profile refuses them for their size until production is observed. The emulator profile counts entries without refusing, as the pinned official emulator does. Strict also refuses a document whose name size is over 4,644 bytes, even when empty: production accepted empty-document-name/4627 (4,644) and refused /4628 (4,645) with the same message; the documented formulas do not explain this refusal, so the bound is fitted to that pair (owner decision, 2026-09-28)",
+              "precision": "documented-divergence"
             }
           ],
           "productionOnly": [

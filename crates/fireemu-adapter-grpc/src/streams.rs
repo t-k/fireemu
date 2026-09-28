@@ -183,12 +183,65 @@ pub async fn write_stream(
                 break;
             }
         };
+        // Production evaluates an empty write after anything the client already sent: a client
+        // that half-closed right behind it gets a stream that ends OK (trailing-metadata),
+        // one still waiting for the answer gets `empty write operation`
+        // (response-before-half-close). Look once, without waiting.
+        if state.parent.is_some()
+            && req.writes.iter().any(|write| write.operation.is_none())
+            && already_half_closed(&mut inbound)
+        {
+            break;
+        }
+        // Production refuses a first message carrying a token (ABORTED) while the client keeps
+        // sending, but ends the stream OK when the client half-closes right behind it
+        // (coordinator decision D5, 2026-09-27). A large message can finish arriving just
+        // before its half-close does, so only this refusal waits, briefly, for the half-close.
+        // The grace approximates production's processing time; it is not observed.
+        if state.parent.is_none()
+            && !req.stream_token.is_empty()
+            && req.stream_id.is_empty()
+            && req.writes.is_empty()
+            && half_closes_before(
+                &mut inbound,
+                tokio::time::sleep(FIRST_TOKEN_HALF_CLOSE_GRACE),
+            )
+            .await
+        {
+            break;
+        }
         let outcome = handle_write_request(&ctx, &mut state, &req);
         let stop = outcome.is_err();
         if tx.send(outcome).await.is_err() || stop {
             break;
         }
     }
+}
+
+/// How long a refused first-message token waits for the client's half-close (decision D5).
+const FIRST_TOKEN_HALF_CLOSE_GRACE: std::time::Duration = std::time::Duration::from_millis(100);
+
+/// Whether the client ends its side before `deadline` does. The end wins a tie; a message or
+/// the deadline means the client is still sending.
+async fn half_closes_before<S, D>(inbound: &mut S, deadline: D) -> bool
+where
+    S: tokio_stream::Stream + Unpin,
+    D: std::future::Future<Output = ()>,
+{
+    tokio::select! {
+        biased;
+        next = inbound.next() => next.is_none(),
+        () = deadline => false,
+    }
+}
+
+/// Whether the client side of a stream has already ended, without waiting for it.
+fn already_half_closed<S: tokio_stream::Stream + Unpin>(inbound: &mut S) -> bool {
+    let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
+    matches!(
+        std::pin::Pin::new(inbound).poll_next(&mut cx),
+        std::task::Poll::Ready(None)
+    )
 }
 
 fn token_bytes(prefix: u64, n: u64) -> Vec<u8> {
@@ -210,10 +263,13 @@ fn handle_write_request(
                 "the first Write request must name the database",
             ));
         }
-        if !req.stream_id.is_empty() || !req.stream_token.is_empty() {
+        if !req.stream_id.is_empty() {
             return Err(Status::failed_precondition(
                 "write stream resumption is not supported; start a new stream",
             ));
+        }
+        if !req.stream_token.is_empty() {
+            return Err(Status::aborted("resuming a stream not supported"));
         }
         if !req.writes.is_empty() {
             return Err(Status::invalid_argument(
@@ -1760,5 +1816,157 @@ mod refresh_tests {
                     .expect("unbounded query stays incremental");
         }
         assert_eq!(examined, 50);
+    }
+}
+
+#[cfg(test)]
+mod empty_write_tests {
+    use super::*;
+    use fireemu_core_firestore::index::{IndexSet, IndexValidationPolicy, PlanningContext};
+    use fireemu_core_session::clock::VirtualClock;
+    use fireemu_core_types::edition::{FirestoreApiMode, FirestoreEdition};
+    use fireemu_core_types::time::LogicalInstant;
+
+    fn context() -> StreamContext {
+        let gateway = Gateway {
+            enforce_limits: true,
+            ctx: PlanningContext {
+                edition: FirestoreEdition::Standard,
+                api_mode: FirestoreApiMode::Native,
+                policy: IndexValidationPolicy::Production,
+            },
+            indexes: IndexSet::default(),
+        };
+        let clock = Arc::new(std::sync::Mutex::new(VirtualClock::new(
+            LogicalInstant::UNIX_EPOCH,
+        )));
+        let local = Arc::new(LocalBackend::new(gateway.clone(), clock, 7));
+        StreamContext {
+            local: local.clone(),
+            gateway: Arc::new(gateway),
+            rules: None,
+            principal: Principal::Owner,
+            authorization: None,
+            epoch: local.epoch(),
+            app_check: None,
+        }
+    }
+
+    /// Runs a stream over `requests`; `half_closed` drops the client side before the server
+    /// reads, as when a client half-closes right after its last message.
+    async fn run(half_closed: bool) -> Vec<Result<pb::WriteResponse, Status>> {
+        let (client, inbound) = mpsc::channel(4);
+        client
+            .send(Ok(pb::WriteRequest {
+                database: "projects/demo-app/databases/(default)".to_owned(),
+                ..Default::default()
+            }))
+            .await
+            .unwrap();
+        client
+            .send(Ok(pb::WriteRequest {
+                writes: vec![pb::Write::default()],
+                ..Default::default()
+            }))
+            .await
+            .unwrap();
+        let open = (!half_closed).then_some(client);
+        let (tx, mut rx) = mpsc::channel(4);
+        write_stream(
+            context(),
+            tokio_stream::wrappers::ReceiverStream::new(inbound),
+            tx,
+        )
+        .await;
+        drop(open);
+        let mut out = Vec::new();
+        while let Some(item) = rx.recv().await {
+            out.push(item);
+        }
+        out
+    }
+
+    /// `writes/write-stream-terminal/response-before-half-close` (recorded twice on
+    /// 2026-09-25): a client still waiting for the answer gets `empty write operation`.
+    /// `writes/write-stream-terminal/trailing-metadata`: a client that half-closed right after
+    /// the empty write gets a stream that ends OK. Production evaluates the empty write after
+    /// it has seen the half-close; which one it sees first depends on arrival order.
+    #[tokio::test]
+    async fn an_empty_write_is_refused_only_while_the_client_is_still_sending() {
+        let open = run(false).await;
+        assert_eq!(open.len(), 2, "{open:?}");
+        assert!(open[0].is_ok());
+        let refused = open[1].as_ref().unwrap_err();
+        assert_eq!(refused.code(), tonic::Code::InvalidArgument);
+        assert_eq!(refused.message(), "empty write operation");
+
+        let closed = run(true).await;
+        assert_eq!(closed.len(), 1, "{closed:?}");
+        assert!(
+            closed[0].is_ok(),
+            "only the handshake answer, then an OK end"
+        );
+    }
+
+    /// The half-close race that decides a first-message token, without time: the client's end
+    /// wins over a deadline that is ready at the same moment.
+    #[tokio::test]
+    async fn the_first_token_grace_is_decided_by_what_arrives_first() {
+        use std::future::{pending, ready};
+        let closed = || tokio_stream::iter(Vec::<u8>::new());
+        let open = || tokio_stream::pending::<u8>();
+        assert!(half_closes_before(&mut closed(), pending::<()>()).await);
+        assert!(
+            half_closes_before(&mut closed(), ready(())).await,
+            "the end wins a tie"
+        );
+        assert!(
+            !half_closes_before(&mut open(), ready(())).await,
+            "the deadline passed"
+        );
+        assert!(
+            !half_closes_before(&mut tokio_stream::iter(vec![1_u8]), pending::<()>()).await,
+            "another message means the client is still sending"
+        );
+    }
+
+    /// Production's D5 probe refused an unknown first token while the sender stayed open,
+    /// whereas both 10 MiB request-byte recordings ended OK after an immediate half-close.
+    #[tokio::test]
+    async fn an_unknown_first_token_depends_on_client_half_close() {
+        async fn run(half_closed: bool) -> Vec<Result<pb::WriteResponse, Status>> {
+            let (client, inbound) = mpsc::channel(2);
+            client
+                .send(Ok(pb::WriteRequest {
+                    database: "projects/demo-app/databases/(default)".to_owned(),
+                    stream_token: vec![7; 16],
+                    ..Default::default()
+                }))
+                .await
+                .unwrap();
+            let open = (!half_closed).then_some(client);
+            let (tx, mut rx) = mpsc::channel(2);
+            write_stream(
+                context(),
+                tokio_stream::wrappers::ReceiverStream::new(inbound),
+                tx,
+            )
+            .await;
+            drop(open);
+            let mut out = Vec::new();
+            while let Some(item) = rx.recv().await {
+                out.push(item);
+            }
+            out
+        }
+
+        let open = run(false).await;
+        assert_eq!(open.len(), 1, "{open:?}");
+        let refused = open[0].as_ref().unwrap_err();
+        assert_eq!(refused.code(), tonic::Code::Aborted);
+        assert_eq!(refused.message(), "resuming a stream not supported");
+
+        let closed = run(true).await;
+        assert!(closed.is_empty(), "{closed:?}");
     }
 }

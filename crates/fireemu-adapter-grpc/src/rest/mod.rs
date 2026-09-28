@@ -79,6 +79,8 @@ pub struct RestRequest {
     pub app_check: Vec<String>,
     /// Parsed JSON body (`{}` when empty).
     pub body: Value,
+    /// Source order of each `BatchWrite` update document's top-level `fields` map.
+    pub batch_field_order: Vec<Vec<String>>,
 }
 
 /// HTTP status + JSON body.
@@ -1016,7 +1018,7 @@ impl RestState {
             if req.method != "POST" {
                 return Ok(not_found_text());
             }
-            return self.custom_method(&principal, path, action, &req.body);
+            return self.custom_method(&principal, path, action, &req.body, &req.batch_field_order);
         }
         match (req.method.as_str(), classify(path)?) {
             ("GET", Target::Resource(name)) => self.get(&principal, &name, &params),
@@ -1223,10 +1225,11 @@ impl RestState {
         resource: &str,
         action: &str,
         body: &Value,
+        batch_field_order: &[Vec<String>],
     ) -> Result<RestResponse, Status> {
         match action {
             "commit" => self.commit(principal, resource, body),
-            "batchWrite" => self.batch_write(principal, resource, body),
+            "batchWrite" => self.batch_write(principal, resource, body, batch_field_order),
             "batchGet" => self.batch_get(principal, resource, body),
             "beginTransaction" => {
                 json::strict_keys(body, &["options", "requestOptions"]).map_err(|e| bad(&e))?;
@@ -1478,6 +1481,7 @@ impl RestState {
         principal: &Caller,
         resource: &str,
         body: &Value,
+        batch_field_order: &[Vec<String>],
     ) -> Result<RestResponse, Status> {
         if let Some(field) = json::first_unknown_key(body, &["writes", "labels"])
             .filter(|field| *field == "transaction")
@@ -1487,7 +1491,7 @@ impl RestState {
         json::strict_keys(body, &["writes", "labels"]).map_err(|e| bad(&e))?;
         let req = pb::BatchWriteRequest {
             database: database_of(resource)?,
-            writes: batch_writes_from_json(body)?,
+            writes: batch_writes_from_json(body, batch_field_order)?,
             labels: labels_from_json(body)?,
             request_options: None,
         };
@@ -1878,9 +1882,9 @@ fn database_of(resource: &str) -> Result<String, Status> {
         })
 }
 
-/// Recognizes only the strict REST Commit resource route. The custom-method suffix is
+/// Recognizes only the REST Commit resource route. The custom-method suffix is
 /// checked before decoding so encoded colons remain document data rather than routing syntax.
-pub(crate) fn is_strict_commit_route(method: &str, raw_path: &str) -> bool {
+pub(crate) fn is_commit_route(method: &str, raw_path: &str) -> bool {
     if method != "POST" {
         return false;
     }
@@ -1944,10 +1948,15 @@ fn writes_from_json(body: &Value) -> Result<Vec<pb::Write>, Status> {
     }
 }
 
-fn batch_writes_from_json(body: &Value) -> Result<Vec<pb::Write>, Status> {
+fn batch_writes_from_json(
+    body: &Value,
+    field_order: &[Vec<String>],
+) -> Result<Vec<pb::Write>, Status> {
     match body.get("writes") {
         None | Some(Value::Null) => Ok(Vec::new()),
-        Some(Value::Array(items)) => batch_write_rows_from_json(items).map_err(|e| bad(&e)),
+        Some(Value::Array(items)) => {
+            batch_write_rows_from_json(items, field_order).map_err(|e| bad(&e))
+        }
         Some(_) => Err(Status::invalid_argument("writes must be an array")),
     }
 }
@@ -1998,7 +2007,7 @@ fn precondition_from_params(
 
 #[cfg(test)]
 mod strict_commit_route_tests {
-    use super::is_strict_commit_route;
+    use super::is_commit_route;
 
     #[test]
     fn encoded_slash_path_error_uses_the_shared_contract() {
@@ -2010,23 +2019,23 @@ mod strict_commit_route_tests {
 
     #[test]
     fn recognizes_only_the_documents_root_commit_route() {
-        assert!(is_strict_commit_route(
+        assert!(is_commit_route(
             "POST",
             "/v1/projects/demo/databases/(default)/documents:commit"
         ));
-        assert!(!is_strict_commit_route(
+        assert!(!is_commit_route(
             "GET",
             "/v1/projects/demo/databases/(default)/documents:commit"
         ));
-        assert!(!is_strict_commit_route(
+        assert!(!is_commit_route(
             "POST",
             "/v1/projects/demo/databases/(default)/documents/cases:commit"
         ));
-        assert!(!is_strict_commit_route(
+        assert!(!is_commit_route(
             "POST",
             "/v1/projects/demo/databases/(default)/documents%3Acommit"
         ));
-        assert!(!is_strict_commit_route(
+        assert!(!is_commit_route(
             "POST",
             "/v1/projects/demo/databases/(default)/documents:commit?x=1"
         ));

@@ -360,6 +360,7 @@ impl Harness {
             authorization: authorization.map(str::to_owned),
             app_check: app_check.iter().map(|v| (*v).to_owned()).collect(),
             body,
+            batch_field_order: Vec::new(),
             origin: None,
             browser_metadata: false,
         });

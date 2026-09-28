@@ -164,6 +164,15 @@ async function observeCollector({
   inputCorpus,
   deltaV3 = false,
   deltaLockHeld = true,
+  partial = false,
+  operationPendingPolls = 0,
+  pendingFromOperation = 1,
+  cancelBulkDelete = false,
+  operationCancelledAtStart = false,
+  cancelledErrorCode = 1,
+  cancelledOperationId = "delta-test",
+  stuckAfterCancel = false,
+  managedPollMs = "1",
   corpusDigest = "c".repeat(64),
   hostOverride,
 } = {}) {
@@ -190,6 +199,13 @@ async function observeCollector({
   else if (initialJournalStatus)
     await writeFile(journal, JSON.stringify({ status: initialJournalStatus }));
   const requests = [];
+  let operationPolls = 0;
+  let operationsStarted = 0;
+  let operationCancelled = operationCancelledAtStart;
+  const operationDone = () =>
+    operationCancelled ||
+    operationsStarted < pendingFromOperation ||
+    operationPolls > operationPendingPolls;
   const journalAtDeleteRequests = [];
   const journalAtSeedRequests = [];
   const probeSeededNames = new Set();
@@ -234,7 +250,7 @@ async function observeCollector({
       request.on("data", (chunk) => (value += chunk));
       request.on("end", () => resolve(value));
     });
-    requests.push({ method: request.method, pathname, body });
+    requests.push({ method: request.method, pathname, body, at: Date.now() });
     if (pathname.endsWith("/documents:commit") || pathname.endsWith("/documents:batchWrite")) {
       const writes = JSON.parse(body).writes;
       if (
@@ -263,11 +279,26 @@ async function observeCollector({
       for (const record of records.values()) {
         if (requested.includes(record.collection)) record.deleted = true;
       }
+      operationsStarted += 1;
+      operationPolls = 0;
       send(200, { name: "projects/fireemu-oracle-sbx/databases/(default)/operations/delta-test" });
+    } else if (pathname.endsWith("/operations/delta-test:cancel")) {
+      // A terminal operation cannot be cancelled again.
+      if (operationDone()) {
+        send(400, { error: { code: 400, status: "FAILED_PRECONDITION", message: "done" } });
+      } else {
+        operationCancelled = !stuckAfterCancel;
+        send(200, {});
+      }
     } else if (pathname.endsWith("/operations/delta-test")) {
+      operationPolls += 1;
       send(200, {
-        name: "projects/fireemu-oracle-sbx/databases/(default)/operations/delta-test",
-        done: true,
+        name: `projects/fireemu-oracle-sbx/databases/(default)/operations/${cancelledOperationId}`,
+        ...(operationCancelled
+          ? { done: true, error: { code: cancelledErrorCode, message: "Operation was cancelled." } }
+          : operationDone()
+            ? { done: true }
+            : {}),
       });
     } else if (pathname.endsWith("/documents:listCollectionIds")) {
       send(200, {
@@ -395,7 +426,10 @@ async function observeCollector({
       } else if (writes[0].transform) {
         const name = writes[0].transform.document;
         const record = records.get(name);
-        if (failureMode === "cas") {
+        if (
+          failureMode === "cas" ||
+          (failureMode === "cas-after-seed" && probeSeededNames.has(name))
+        ) {
           send(409, { error: { status: "ABORTED", message: "stale updateTime" } });
         } else if (
           (failureMode === "halve-chunk" || failureMode === "unrelated-transform-400") &&
@@ -516,9 +550,15 @@ async function observeCollector({
         queriedCollection === records.get(scopeNames[0]).collection
       )
         matching.push(scopeNames[0]);
+      // Production answers an empty query with one row that carries only readTime.
       send(
         200,
-        matching.map((name) => ({ document: { name } })),
+        matching.length === 0
+          ? [{ readTime: "2026-09-25T00:00:00.000000Z" }]
+          : matching.map((name) => ({
+              document: { name },
+              readTime: "2026-09-25T00:00:00.000000Z",
+            })),
       );
     } else if (pathname.endsWith("/documents:batchGet")) {
       const requestedNames = JSON.parse(body).documents;
@@ -613,7 +653,11 @@ async function observeCollector({
               ),
             }
           : {}),
-        FIRESTORE_PROBE_MANAGED_POLL_MS: "1",
+        ...(partial
+          ? { FIRESTORE_PROBE_PARTIAL: "1", FIRESTORE_PROBE_PARTIAL_LOCK_HELD: "1" }
+          : {}),
+        FIRESTORE_PROBE_MANAGED_POLL_MS: managedPollMs,
+        ...(cancelBulkDelete ? { FIRESTORE_PROBE_DELTA_V3_CANCEL_BULK_DELETE: "1" } : {}),
         ...(recoveryMode || recoveryOnly
           ? { FIRESTORE_PROBE_RECOVERY_MODE: recoveryMode ?? "recover-legacy" }
           : {}),
@@ -1142,6 +1186,47 @@ test("collector completes bounded shrink and exact cleanup for all six frozen co
   }
 });
 
+test("a partial recording refuses input that is not the reviewed partial corpus before any request", async () => {
+  const boundary = {
+    id: "writes/limits/index-entry-sum/adjacent",
+    steps: names.map((name, index) => ({
+      id: `write-${index}`,
+      method: "POST",
+      path: "/v1/projects/PROJECT/databases/(default)/documents:commit",
+      body: { writes: [{ update: { name, fields: {} } }] },
+    })),
+  };
+  const deleteProgram = {
+    id: "writes/limits/near-limit-delete-refusal/rest/12112",
+    steps: [
+      { id: "seed", method: "GET", path: "/v1/projects/PROJECT/databases/(default)/documents/x/y" },
+    ],
+  };
+  const other = { id: "writes/map-key-validation/type-tag/query", steps: [] };
+  const corpus = (restPrograms, overrides = {}) => ({
+    schemaVersion: 1,
+    sourceCorpusSha256: "c".repeat(64),
+    restPrograms,
+    streamRecipes: [],
+    restRequestCount: restPrograms.reduce((total, program) => total + program.steps.length, 0),
+    ...overrides,
+  });
+  for (const [label, inputCorpus] of [
+    ["delete recipe", corpus([deleteProgram, boundary])],
+    ["boundary not last", corpus([boundary, other])],
+    ["source digest", corpus([other, boundary], { sourceCorpusSha256: "d".repeat(64) })],
+    ["request count", corpus([other, boundary], { restRequestCount: 1 })],
+  ]) {
+    const result = await observeCollector({ partial: true, inputCorpus, scopeNames: names });
+    try {
+      assert.match(String(result.failure?.stderr), /reviewed partial corpus/, label);
+      assert.equal(result.requests.length, 0, label);
+    } finally {
+      await rm(result.directory, { recursive: true, force: true });
+    }
+  }
+});
+
 test("delta-v3 loopback run uses only six source-bound names and a separate resumable bulk-delete journal", async () => {
   const { prepareSandboxCorpus } = await import("../fs-data-write-sandbox-run.mjs");
   const { corpus } = await prepareSandboxCorpus();
@@ -1246,24 +1331,23 @@ test("delta-v3 loopback run uses only six source-bound names and a separate resu
     ).length,
     0,
   );
-  const bulkDeleteRequests = result.requests.filter((request) =>
-    request.pathname.endsWith("):bulkDeleteDocuments"),
+  // A production bulk delete runs for hours, so documents that refuse a direct delete are
+  // shrunk with arrayRemove and then deleted with an updateTime precondition.
+  assert.equal(
+    result.requests.filter((request) => request.pathname.endsWith("):bulkDeleteDocuments")).length,
+    0,
   );
-  assert.ok(bulkDeleteRequests.length <= 2);
-  for (const request of bulkDeleteRequests) {
-    const collectionIds = JSON.parse(request.body).collectionIds;
-    assert.ok(collectionIds.length > 0 && collectionIds.length <= 6);
-    assert.ok(
-      collectionIds.every((id) =>
-        deltaNames.some(
-          (name) =>
-            name
-              .replaceAll("DELETE_RUN_ID", defaultDeleteRunId)
-              .split("/documents/")[1]
-              .split("/")[0] === id,
-        ),
-      ),
+  const runNames = deltaNames.map((name) => name.replaceAll("DELETE_RUN_ID", defaultDeleteRunId));
+  const cleanupWrites = result.requests
+    .filter((request) => request.pathname.endsWith("/documents:commit"))
+    .map((request) => JSON.parse(request.body).writes[0]);
+  assert.ok(cleanupWrites.some((write) => runNames.includes(write.transform?.document)));
+  for (const name of runNames) {
+    // The recipes' own delete steps carry no precondition; the cleanup's deletes do.
+    const cleanupDeletes = cleanupWrites.filter(
+      (write) => write.delete === name && typeof write.currentDocument?.updateTime === "string",
     );
+    assert.ok(cleanupDeletes.length > 0, name);
   }
   assert.ok(
     result.requests.every(
@@ -1406,8 +1490,14 @@ test("delta-v3 recovery resolves a durable candidate DELETE intent by fresh type
     });
     try {
       assert.ifError(routeResult.failure);
+      // The recipe's unconditioned delete is never replayed; the cleanup's own commits
+      // (arrayRemove and updateTime-conditioned deletes) are a different request.
+      const replayBody = JSON.stringify({ writes: [{ delete: target }] });
       assert.equal(
-        routeResult.requests.some((request) => request.pathname === path),
+        routeResult.requests.some(
+          (request) =>
+            request.pathname === path && JSON.stringify(JSON.parse(request.body)) === replayBody,
+        ),
         false,
       );
       const recovered = JSON.parse(
@@ -1509,6 +1599,299 @@ test("delta-v3 recovery re-entry polls the journaled LRO without starting anothe
     );
     assert.equal(recovered.status, "complete");
     assert.equal(recovered.bulkDeleteOperation, null);
+  } finally {
+    await rm(result.directory, { recursive: true, force: true });
+  }
+
+  // A journaled operation is polled at the managed interval, and one that outlives the
+  // polls stays named in the journal for a later recovery.
+  const paced = await observeCollector({
+    scopeNames: deltaNames,
+    visibleNames: [],
+    arrayLength: [12_112, 12_113, 12_112, 12_113, 12_112, 12_113],
+    deleteRunId: runId,
+    deltaV3: true,
+    recoveryMode: "recover-delta-v3",
+    initialDeltaJournal: journal,
+    corpusDigest: journal.corpusDigest,
+    operationPendingPolls: 3,
+    pendingFromOperation: 0,
+    managedPollMs: "40",
+  });
+  try {
+    assert.ifError(paced.failure);
+    const times = paced.requests
+      .filter((request) => request.pathname.endsWith("/operations/delta-test"))
+      .map((request) => request.at);
+    assert.equal(times.length, 4);
+    for (let index = 1; index < times.length; index += 1) {
+      assert.ok(times[index] - times[index - 1] >= 30, `poll ${index} was not paced`);
+    }
+  } finally {
+    await rm(paced.directory, { recursive: true, force: true });
+  }
+  const stuck = await observeCollector({
+    scopeNames: deltaNames,
+    visibleNames: [],
+    arrayLength: [12_112, 12_113, 12_112, 12_113, 12_112, 12_113],
+    deleteRunId: runId,
+    deltaV3: true,
+    recoveryMode: "recover-delta-v3",
+    initialDeltaJournal: journal,
+    corpusDigest: journal.corpusDigest,
+    operationPendingPolls: 100_000,
+    pendingFromOperation: 0,
+  });
+  try {
+    assert.match(String(stuck.failure?.stderr), /remains nonterminal/);
+    const kept = JSON.parse(await readFile(join(stuck.directory, "delta-cleanup.json"), "utf8"));
+    assert.notEqual(kept.status, "complete");
+    assert.equal(kept.bulkDeleteOperation, journal.bulkDeleteOperation);
+  } finally {
+    await rm(stuck.directory, { recursive: true, force: true });
+  }
+});
+
+test("delta-v3 recovery can cancel a stalled journaled LRO, then clean up in a separate run", async () => {
+  const runId = "e".repeat(32);
+  const deltaNames = allV3Names.slice(6).map((name) => name.replaceAll("DELETE_RUN_ID", runId));
+  const operation = "projects/fireemu-oracle-sbx/databases/(default)/operations/delta-test";
+  const journal = {
+    schemaVersion: 1,
+    mode: "cleanup-delta-v3",
+    status: "bulk-delete-active",
+    project: "fireemu-oracle-sbx",
+    database: "(default)",
+    runId,
+    corpusDigest: "c".repeat(64),
+    sourceGitSha: "d".repeat(40),
+    writerExclusivity: "task-lock-held; run-specific six collection groups have no external writer",
+    names: deltaNames,
+    httpRequestCount: 118,
+    managedRequestCount: 88,
+    bulkDeleteIntent: {
+      collectionIds: deltaNames.slice(1).map((name) => name.split("/documents/")[1].split("/")[0]),
+      names: deltaNames.slice(1),
+    },
+    bulkDeleteOperation: operation,
+    pendingMutation: null,
+  };
+  // Five documents are still present, as in the stalled production operation; the
+  // first was deleted by its own recipe.
+  const present = deltaNames.slice(1);
+  const counts = [12_112, 12_113, 12_112, 12_113, 12_112, 12_113];
+  const recover = (options) =>
+    observeCollector({
+      scopeNames: deltaNames,
+      visibleNames: present,
+      arrayLength: counts,
+      deleteRunId: runId,
+      deltaV3: true,
+      recoveryMode: "recover-delta-v3",
+      corpusDigest: journal.corpusDigest,
+      operationPendingPolls: 100_000,
+      pendingFromOperation: 0,
+      ...options,
+    });
+  const readJournal = async (result) =>
+    JSON.parse(await readFile(join(result.directory, "delta-cleanup.json"), "utf8"));
+  const count = (result, suffix) =>
+    result.requests.filter((request) => request.pathname.endsWith(suffix)).length;
+
+  // 1. The cancel run reads the operation, cancels it, waits for CANCELLED and stops:
+  // it never shrinks or deletes, so a slow cancel cannot strand a half-shrunk document.
+  const cancelled = await recover({ initialDeltaJournal: journal, cancelBulkDelete: true });
+  let afterCancel;
+  try {
+    assert.ifError(cancelled.failure);
+    const paths = cancelled.requests.map((request) => request.pathname);
+    assert.equal(count(cancelled, ":cancel"), 1);
+    assert.ok(paths.indexOf(paths.find((path) => path.endsWith(":cancel"))) > 0, "read first");
+    assert.ok(paths[0].endsWith("/operations/delta-test"));
+    assert.equal(count(cancelled, "/documents:commit"), 0);
+    assert.equal(count(cancelled, ":bulkDeleteDocuments"), 0);
+    afterCancel = await readJournal(cancelled);
+    assert.equal(afterCancel.status, "bulk-delete-cancelled");
+    assert.equal(afterCancel.bulkDeleteOperation, null);
+    assert.equal(afterCancel.bulkDeleteCancelled, operation);
+  } finally {
+    await rm(cancelled.directory, { recursive: true, force: true });
+  }
+
+  // 2. A plain recovery then shrinks and deletes exactly what remains.
+  const cleaned = await recover({ initialDeltaJournal: afterCancel, visibleNames: present });
+  try {
+    assert.ifError(cleaned.failure);
+    assert.equal(count(cleaned, ":cancel"), 0);
+    assert.equal(count(cleaned, "/operations/delta-test"), 0);
+    const writes = cleaned.requests
+      .filter((request) => request.pathname.endsWith("/documents:commit"))
+      .map((request) => JSON.parse(request.body).writes[0]);
+    for (const name of present) {
+      assert.ok(
+        writes.some(
+          (write) => write.delete === name && typeof write.currentDocument?.updateTime === "string",
+        ),
+        name,
+      );
+      assert.equal(cleaned.snapshot.get(name)?.deleted, true, name);
+    }
+    assert.ok(!writes.some((write) => write.delete === deltaNames[0]));
+    const done = await readJournal(cleaned);
+    assert.equal(done.status, "complete");
+    assert.equal(done.bulkDeleteCancelled, operation);
+  } finally {
+    await rm(cleaned.directory, { recursive: true, force: true });
+  }
+
+  // 3. A resume after the cancel was sent keeps the durable intent: it never re-sends
+  // the cancel, and a plain recovery accepts the CANCELLED result as its own.
+  const intentJournal = {
+    ...journal,
+    status: "request-reserved",
+    bulkDeleteCancelIntent: operation,
+  };
+  for (const cancelBulkDelete of [true, false]) {
+    const resumed = await recover({
+      initialDeltaJournal: intentJournal,
+      operationCancelledAtStart: true,
+      cancelBulkDelete,
+    });
+    try {
+      assert.ifError(resumed.failure);
+      assert.equal(count(resumed, ":cancel"), 0, String(cancelBulkDelete));
+      const kept = await readJournal(resumed);
+      assert.equal(kept.bulkDeleteCancelled, operation);
+      assert.equal(kept.status, cancelBulkDelete ? "bulk-delete-cancelled" : "complete");
+    } finally {
+      await rm(resumed.directory, { recursive: true, force: true });
+    }
+  }
+
+  // A sent cancel that is still in progress is only waited for, never sent again.
+  const pending = await recover({ initialDeltaJournal: intentJournal, cancelBulkDelete: true });
+  try {
+    assert.match(String(pending.failure?.stderr), /still cancelling/);
+    assert.equal(count(pending, ":cancel"), 0);
+    assert.equal(count(pending, "/documents:commit"), 0);
+  } finally {
+    await rm(pending.directory, { recursive: true, force: true });
+  }
+
+  // 4. An operation that already finished is not cancelled; its success is kept.
+  const finished = await recover({
+    initialDeltaJournal: journal,
+    cancelBulkDelete: true,
+    operationPendingPolls: 0,
+    visibleNames: [],
+  });
+  try {
+    assert.ifError(finished.failure);
+    assert.equal(count(finished, ":cancel"), 0);
+    const kept = await readJournal(finished);
+    assert.equal(kept.status, "bulk-delete-done");
+    assert.equal(kept.bulkDeleteCancelled, null);
+  } finally {
+    await rm(finished.directory, { recursive: true, force: true });
+  }
+
+  // 5. A cancel that does not become terminal stops after a bounded wait, with the
+  // operation and the intent kept for a later run.
+  const slow = await recover({
+    initialDeltaJournal: journal,
+    cancelBulkDelete: true,
+    cancelledErrorCode: 1,
+    stuckAfterCancel: true,
+  });
+  try {
+    assert.match(String(slow.failure?.stderr), /still cancelling/);
+    assert.ok(count(slow, "/operations/delta-test") <= 13);
+    assert.equal(count(slow, "/documents:commit"), 0);
+    const kept = await readJournal(slow);
+    assert.equal(kept.bulkDeleteOperation, operation);
+    assert.equal(kept.bulkDeleteCancelIntent, operation);
+  } finally {
+    await rm(slow.directory, { recursive: true, force: true });
+  }
+
+  // 6. Only this task's cancel of this operation, with CANCELLED, is acceptable.
+  for (const [label, options] of [
+    ["cancelled elsewhere", { initialDeltaJournal: journal, operationCancelledAtStart: true }],
+    [
+      "other error",
+      { initialDeltaJournal: journal, cancelBulkDelete: true, cancelledErrorCode: 13 },
+    ],
+    [
+      "other operation",
+      { initialDeltaJournal: journal, cancelBulkDelete: true, cancelledOperationId: "other" },
+    ],
+  ]) {
+    const refused = await recover(options);
+    try {
+      assert.ok(refused.failure, label);
+      assert.equal(count(refused, "/documents:commit"), 0, label);
+      const kept = await readJournal(refused);
+      assert.equal(kept.bulkDeleteOperation, operation, label);
+    } finally {
+      await rm(refused.directory, { recursive: true, force: true });
+    }
+  }
+
+  // 7. A cancel needs a journaled operation; it never names one of its own.
+  const nothing = await recover({
+    initialDeltaJournal: { ...journal, bulkDeleteIntent: null, bulkDeleteOperation: null },
+    cancelBulkDelete: true,
+  });
+  try {
+    assert.match(String(nothing.failure?.stderr), /no journaled bulk-delete operation to cancel/);
+    assert.equal(nothing.requests.length, 0);
+  } finally {
+    await rm(nothing.directory, { recursive: true, force: true });
+  }
+
+  // 8. Without the flag or a journaled intent, a stalled operation is only polled.
+  const unrequested = await recover({ initialDeltaJournal: journal });
+  try {
+    assert.match(String(unrequested.failure?.stderr), /remains nonterminal/);
+    assert.equal(count(unrequested, ":cancel"), 0);
+    assert.equal(count(unrequested, "/documents:commit"), 0);
+  } finally {
+    await rm(unrequested.directory, { recursive: true, force: true });
+  }
+});
+
+test("a delta-v3 recording keeps its results when the final cleanup fails", async () => {
+  const { prepareSandboxCorpus } = await import("../fs-data-write-sandbox-run.mjs");
+  const { corpus } = await prepareSandboxCorpus();
+  const digest = createHash("sha256").update(JSON.stringify(corpus)).digest("hex");
+  const ids = new Set(
+    ["rest", "commit", "batch-write"].flatMap((route) =>
+      [12112, 12113].map((count) => `writes/limits/near-limit-delete-refusal/${route}/${count}`),
+    ),
+  );
+  const restPrograms = corpus.restPrograms.filter((program) => ids.has(program.id));
+  const deltaNames = restPrograms.map((program) => program.steps[0].body.writes[0].update.name);
+  const result = await observeCollector({
+    scopeNames: deltaNames,
+    visibleNames: deltaNames,
+    arrayLength: restPrograms.map((program) => Number(program.id.split("/").at(-1))),
+    deltaV3: true,
+    corpusDigest: digest,
+    failureMode: "cas-after-seed",
+    inputCorpus: {
+      schemaVersion: 1,
+      sourceCorpusSha256: digest,
+      restPrograms,
+      streamRecipes: corpus.streamRecipes.filter(
+        (recipe) => recipe.id === "writes/write-stream-terminal/response-before-half-close",
+      ),
+      restRequestCount: 30,
+    },
+  });
+  try {
+    assert.match(String(result.failure?.stderr), /array shrink transform 409/);
+    const recorded = JSON.parse(await readFile(result.output, "utf8"));
+    assert.deepEqual(Object.keys(recorded).toSorted(), [...ids].toSorted());
   } finally {
     await rm(result.directory, { recursive: true, force: true });
   }

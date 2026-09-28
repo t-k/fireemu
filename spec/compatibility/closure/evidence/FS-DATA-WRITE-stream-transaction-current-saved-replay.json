@@ -1,0 +1,68 @@
+{
+  "schemaVersion": 1,
+  "kind": "fs-data-write-current-saved-stream-transaction-replay",
+  "conditionId": "FS-DATA-WRITE/stream-transaction-precedence",
+  "recipeId": "writes/write-stream-transaction",
+  "recipeDigest": "1299c03ce0b34ea87b01da2cd42f947b898cae10cc3bbbffdaa70fcf3747eb7b",
+  "sourceCommit": "da47b5e137a275576d00f6cd75be7e29e5aaa160",
+  "binarySha256": "eec383e576e5de8c63fd934ef55dde6592bb6b69888a7f00bb4129c6a9338593",
+  "buildManifestSha256": "b49fbcf26188206406e9aed1620df1f145e9e7910503384547813966f6595cd5",
+  "localReceiptSha256": "76ad88cb065ce666305b0d71f0763d21e0b84d4254bc5c5a17d3e62a107e0d12",
+  "localComparisonRunSha256": "8ce895f001a4b23878ab5ab60b2ec0ed326d110f57ac3e2ac6ddf3b91848b74b",
+  "runtimeInputCount": 445,
+  "runtimeInputsDigest": "0ac715b0951c5641e7a90f81c8139280c0c76ef81279e0962e62a27bea4845ef",
+  "productionReceiptSha256": "12956fbe82acefc106093eb2cd913ede9092f74aa98bd29f39e795492754b3f3",
+  "savedProductionAuthorityDigest": "431f0de31ff74ef1685a013fbb5bf6286129196a0984b58d723869fa0799991f",
+  "productionPublicResultPath": "spec/compatibility/broad-runs/fs-write-txn-dee737c14-production-result.json",
+  "productionPublicResultSha256": "04d80374d57b3bca978d3c2b71e5dee6e2add440b20975a034fcf2d2e143d1ff",
+  "savedComparisonPath": "spec/compatibility/broad-runs/fs-write-txn-567565bdd-saved-result.json",
+  "savedComparisonSha256": "22a45a9bf2e441f9ed7c675093f7bc8a130bbf58778c01c146b982ddb1131a3f",
+  "comparatorSourceSha256": {
+    "tools/compat-broad/fs-write-txn/stream_comparison.mjs": "d0d2c818c086c4770d4a724a6f83059cbc522a898d992a252e48c45d3ef946af",
+    "tools/compat-broad/fs-write-txn-recompare-v2/stream_recompare_v2.mjs": "fc90742fc7ae14f635e3abbc76c6f4071152e3ef01c5a36b9999d5090319fa28"
+  },
+  "localOuterEvidenceSha256": {
+    "execution/inputs.json": "b05b9636459e117fc0cb38e08d535b8c3b276fc617cc5452bfb58f1353da3cbf",
+    "execution/gate/state.json": "a1f65a54c42cedad4499898de1eb9f8d7f8d64a66ecbdb395d7a959edc1ed34f",
+    "execution/receipt.json": "af467ef1fbfd7d30e0659541d243767f6704cc60d15aaf288b2535c04833105a",
+    "execution/credential-preparation/binding.json": "1185abb3b9b5295e13d396b85d12d80ce11425e95b654067f3b05f5d8279d1af",
+    "execution/credential-preparation/refresh-charge.json": "e3bb0569928db5901a83837e50419c3326846a3f0dc12499ce19259077be5219",
+    "execution/credential-preparation/refresh-receipt.json": "6257225e3a1e140ede9db0ea6ce0f23d2daac879099a12f1bc9b07a23f00cae6",
+    "execution/credential-preparation/tokeninfo-charge.json": "e3d23ae454a525a860ebb4ce021e6c1db6901593161b28cf1022cf05f3db171d",
+    "execution/credential-preparation/tokeninfo-receipt.json": "388d766bfbc635bd20485ef8dfaeb862d6fa1eecd9d9c5b3327bbb5d302a7d54",
+    "execution/credential-preparation/complete.json": "2a185701936a48db5aacc9beae61622a270e045c1da1938c2d8378532315cad6",
+    "ledger/state.json": "5a29e45893e080f560049567d828c7f9de2582868a63dae3c12e6576bd26c527",
+    "config.json": "96f3bacf5f05aa6cfcb589351c1be213b815b998e08bf7881022fe0fb66b9c4b",
+    "instance.json": "ce541efd8a91717897859eacfa80137b2aa5450bc81810f80d419d91a66fe097",
+    "child-identity.json": "7b309aa1de510764db122219f0008eac757774e5b4ac7c296fdc9b0a60f5dc07"
+  },
+  "localRun": {
+    "gateEvents": 23,
+    "observations": 15,
+    "recoveryObservations": 10,
+    "resourcesAbsent": 3,
+    "processStopped": true,
+    "listenersClosed": true,
+    "reservationReleased": true,
+    "configurationUnchanged": true
+  },
+  "comparison": {
+    "v1Classification": "SEMANTIC_MISMATCH",
+    "v2Classification": "EXPECTED_NONDETERMINISM",
+    "v1ComparedSlotCount": 15,
+    "v1DifferingSlotCount": 5,
+    "v1DifferenceLeafCount": 32,
+    "indeterminate": 0
+  },
+  "newProductionRequests": 0,
+  "buildProfile": "release",
+  "buildCommand": [
+    "cargo",
+    "build",
+    "--release",
+    "--locked",
+    "-p",
+    "fireemu",
+    "--message-format=json"
+  ]
+}

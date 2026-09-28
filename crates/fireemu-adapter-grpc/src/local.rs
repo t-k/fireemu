@@ -20,6 +20,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::{Arc, Mutex, RwLock};
 
 use fireemu_core_firestore::field_path::FieldPath;
+use fireemu_core_firestore::index_usage::WriteRoute;
 use fireemu_core_firestore::path::DocumentPath;
 use fireemu_core_firestore::query::Query;
 use fireemu_core_firestore::store::{
@@ -2411,6 +2412,9 @@ impl LocalBackend {
             .unwrap_or_else(Actor::system)
     }
 
+    /// `route` is the RPC the writes arrived through; it prices a delete's transaction. Only
+    /// the three routes production was observed on are charged (owner decisions A and D2,
+    /// 2026-09-25); every other path, including the `Write` stream, is `Internal`.
     fn commit_with_events(
         &self,
         parent: &Parent,
@@ -2418,7 +2422,9 @@ impl LocalBackend {
         writes: &[Write],
         transaction: Option<&TransactionId>,
         now: fireemu_core_types::time::LogicalInstant,
+        route: WriteRoute,
     ) -> Result<CommitResult, Status> {
+        db.set_write_route(route);
         let indexes = self.indexes.read().map_err(|_| lock_poisoned())?;
         let key = (
             Some(parent.project.as_str().to_owned()),
@@ -2500,7 +2506,8 @@ impl LocalBackend {
             let now = self.write_time();
             let result = self.with_db(parent, |db| {
                 guard(db, writes, now)?;
-                let result = self.commit_with_events(parent, db, writes, None, now)?;
+                let result =
+                    self.commit_with_events(parent, db, writes, None, now, WriteRoute::Internal)?;
                 Ok(result)
             })?;
             Ok(crate::streams::WireCommit::from_result(&result))
@@ -3248,7 +3255,14 @@ impl LocalBackend {
                 if !still_expired {
                     return Ok(false);
                 }
-                self.commit_with_events(parent, db, std::slice::from_ref(&write), None, now)?;
+                self.commit_with_events(
+                    parent,
+                    db,
+                    std::slice::from_ref(&write),
+                    None,
+                    now,
+                    WriteRoute::Internal,
+                )?;
                 Ok(true)
             })
         })
@@ -4205,7 +4219,14 @@ impl LocalBackend {
         let now = self.write_time();
         let doc = self.with_db(parent, |db| {
             guard(db, std::slice::from_ref(write), now)?;
-            self.commit_with_events(parent, db, std::slice::from_ref(write), None, now)?;
+            self.commit_with_events(
+                parent,
+                db,
+                std::slice::from_ref(write),
+                None,
+                now,
+                WriteRoute::Internal,
+            )?;
             let doc = db
                 .get(&path)
                 .map(|document| encode_masked(document, mask.as_deref()))
@@ -4312,7 +4333,14 @@ impl LocalBackend {
             };
             let result = (|| {
                 guard(db, std::slice::from_ref(&write), now)?;
-                self.commit_with_events(&parent, db, std::slice::from_ref(&write), None, now)?;
+                self.commit_with_events(
+                    &parent,
+                    db,
+                    std::slice::from_ref(&write),
+                    None,
+                    now,
+                    WriteRoute::Internal,
+                )?;
                 db.get(&path)
                     .map(|document| encode_masked(document, mask.as_deref()))
                     .ok_or_else(|| Status::internal("document vanished after commit"))
@@ -4392,7 +4420,14 @@ impl LocalBackend {
         let now = self.write_time();
         self.with_db(&parent, |db| {
             guard(db, std::slice::from_ref(&write), now)?;
-            self.commit_with_events(&parent, db, std::slice::from_ref(&write), None, now)?;
+            self.commit_with_events(
+                &parent,
+                db,
+                std::slice::from_ref(&write),
+                None,
+                now,
+                WriteRoute::DeleteDocument,
+            )?;
             Ok(())
         })
     }
@@ -4489,7 +4524,14 @@ impl LocalBackend {
         let now = self.write_time();
         let result = self.with_db(&parent, |db| {
             guard(db, &writes, now)?;
-            let result = self.commit_with_events(&parent, db, &writes, txn.as_ref(), now)?;
+            let result = self.commit_with_events(
+                &parent,
+                db,
+                &writes,
+                txn.as_ref(),
+                now,
+                WriteRoute::Commit,
+            )?;
             Ok(result)
         })?;
         Ok(encode_commit(&result))
@@ -5730,7 +5772,14 @@ impl LocalBackend {
                 let now = self.write_time();
                 let outcome = (|| {
                     guard(db, std::slice::from_ref(&write), now)?;
-                    self.commit_with_events(&parent, db, std::slice::from_ref(&write), None, now)
+                    self.commit_with_events(
+                        &parent,
+                        db,
+                        std::slice::from_ref(&write),
+                        None,
+                        now,
+                        WriteRoute::BatchWrite,
+                    )
                 })();
                 match outcome {
                     Ok(result) => {

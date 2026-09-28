@@ -234,11 +234,7 @@ separately at
 run against the committed compiler and local transport inputs at 11,534,335,
 11,534,336 and 11,534,337 bytes. Both records remain immutable and distinct.
 
-The current strict REST `:commit` path uses
-`MAX_STRICT_COMMIT_RAW_BYTES = 11 * 1024 * 1024`; `API_REQUEST_BYTES` remains 10
-MiB for the other surfaces. The unit and loopback transport tests exercise the
-new boundary input and 60-second admission ceiling. These local checks do not
-create production evidence and do not change the general limits catalog.
+The REST `:commit` path uses `MAX_COMMIT_RAW_BYTES = 11 * 1024 * 1024`. Since owner decision D4 (2026-09-25) every other transport takes the same bound, `MAX_REQUEST_BYTES`, and since decision D (2026-09-27) so does the emulator profile; `API_REQUEST_BYTES` remains the catalog's 10 MiB figure and is not enforced. The unit and loopback transport tests exercise the boundary input and 60-second admission ceiling. These local checks do not create production evidence and do not change the general limits catalog.
 
 The saved production comparison cited above is existing evidence from
 `fireemu-35fe6`, not a new production run or a new sandbox observation. It
@@ -254,12 +250,7 @@ The historical local gRPC refusal row remains 10 MiB: code 3,
 10485760 bytes.` That separate observation is not changed by this REST-only
 campaign.
 
-The `emulator` profile keeps the refusal the local runtime answered before the
-limits layer implemented this condition, HTTP 413 `request body too large` on
-REST and tonic's own `OUT_OF_RANGE` on gRPC. The boundary is identical under both
-profiles. That superseded baseline stays on the record, and the shadow keeps its
-classification as a **regression** outcome: a strict-profile build answering 413
-has lost the implemented shape.
+Both profiles now answer the same bound with production's shape: HTTP 400 `INVALID_ARGUMENT` `Request payload size exceeds the limit: 11534336 bytes.` on REST, and gRPC code 3 with that message (decision D, 2026-09-27). `WebChannel` form bodies have their own bound, recorded later (FS-DATA-WRITE follow-up, 2026-09-27): strict accepts up to 16,777,215 bytes and answers production's HTML 400 page above it, and the emulator profile follows the pinned official emulator (16,777,216 accepted, an empty 413 above). The emulator profile used to answer HTTP 413 `request body too large` on REST and tonic's own `OUT_OF_RANGE` on gRPC at 10 MiB, a local refusal no official-emulator recording backed. That superseded baseline stays on the record, and the shadow keeps its classification as a **regression** outcome: a build answering 413 on REST has lost the implemented shape. Only REST `:commit` and `WebChannel` drain a body over the bound before answering; on the other REST routes a body far over it may reset the connection instead of delivering the 400.
 
 <!-- BEGIN generated evidence citation -->
 

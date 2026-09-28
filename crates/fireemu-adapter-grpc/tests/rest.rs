@@ -131,6 +131,7 @@ fn call_as(
         authorization: authorization.map(str::to_owned),
         app_check: Vec::new(),
         body,
+        batch_field_order: Vec::new(),
         origin: None,
         browser_metadata: false,
     });
@@ -588,14 +589,13 @@ fn rest_collection_create_oversize_reports_the_explicit_document_resource() {
     assert_eq!(status, 404, "{missing}");
 }
 
+// A violation inside a nested map names the top-level property, as production does for
+// `writes/limits/aggregate-map/strict-only` and for over-long keys of an array-held map.
 #[test]
-fn rest_oversized_nested_values_report_canonical_paths_without_publishing() {
+fn rest_oversized_nested_values_report_the_top_level_property_without_publishing() {
     let s = state(None);
     let oversized = "x".repeat(1_048_488);
-    for (document_id, key, expected_path) in [
-        ("dotted-key", "with.dot", "items.`with.dot`"),
-        ("quoted-key", "with\"quote", "items.`with\"quote`"),
-    ] {
+    for (document_id, key) in [("dotted-key", "with.dot"), ("quoted-key", "with\"quote")] {
         let (status, body) = call(
             &s,
             "PATCH",
@@ -614,7 +614,7 @@ fn rest_oversized_nested_values_report_canonical_paths_without_publishing() {
         assert_eq!(body["error"]["status"], "INVALID_ARGUMENT");
         assert_eq!(
             body["error"]["message"],
-            format!("The value of property \"{expected_path}\" is longer than 1048487 bytes.")
+            "Property items contains an invalid nested entity."
         );
 
         let (status, missing) = call(
@@ -4576,6 +4576,7 @@ fn the_security_rules_route_needs_the_control_token_from_a_browser() {
             browser_metadata: browser,
             app_check: Vec::new(),
             body: json!({"rules": {"files": [{"name": "firestore.rules", "content": ALLOW}]}}),
+            batch_field_order: Vec::new(),
         });
         (r.status, r.body)
     };
@@ -4644,6 +4645,7 @@ fn the_emulator_clear_route_needs_the_control_token_from_a_browser() {
                 browser_metadata: browser,
                 app_check: Vec::new(),
                 body: json!({}),
+                batch_field_order: Vec::new(),
             });
             (r.status, r.body)
         };
@@ -5444,4 +5446,201 @@ fn refusal_texts_echo_at_most_one_kibibyte_of_client_input() {
             assert!(message.contains("..."), "{what} strict={strict}");
         }
     }
+}
+
+/// `FS-DATA-WRITE/map-value-key-validation`: production answers a bad map key by context
+/// (partial supplement `partial-7bfd51026a2ac56617d81504`, recorded twice). A write refuses
+/// the enclosing property, a query filter accepts an empty key, and a `__type__` key holding an
+/// integer is a type-tag error before it is a reserved name.
+#[test]
+fn map_value_keys_are_validated_by_context_like_production() {
+    for strict in [true, false] {
+        let s = state_with_profile(strict);
+        let overlong = "k".repeat(1_501);
+        for (label, key, message) in [
+            ("empty", "", "Property m contains an invalid nested entity."),
+            (
+                "overlong",
+                overlong.as_str(),
+                "Property m contains an invalid nested entity.",
+            ),
+            ("reserved", "__bad__", "field name '__bad__' is reserved."),
+        ] {
+            let (status, body) = call(
+                &s,
+                "POST",
+                &format!("{DOCS}:commit"),
+                json!({"writes": [{"update": {
+                    "name": format!("projects/demo-app/databases/(default)/documents/mapValidation/{label}"),
+                    "fields": {"m": {"mapValue": {"fields": {key: {"integerValue": "1"}}}}}
+                }}]}),
+            );
+            assert_eq!(status, 400, "{label} {strict}: {body}");
+            assert_eq!(body["error"]["status"], "INVALID_ARGUMENT");
+            assert_eq!(body["error"]["message"], message, "{label} {strict}");
+            let (status, _) = call(
+                &s,
+                "GET",
+                &format!("{DOCS}/mapValidation/{label}"),
+                Value::Null,
+            );
+            assert_eq!(status, 404, "{label} {strict}");
+        }
+        let query = |key: &str| {
+            json!({"structuredQuery": {
+                "from": [{"collectionId": "mapValidation"}],
+                "where": {"fieldFilter": {
+                    "field": {"fieldPath": "m"},
+                    "op": "EQUAL",
+                    "value": {"mapValue": {"fields": {key: {"integerValue": "1"}}}}
+                }}
+            }})
+        };
+        let (status, body) = call(&s, "POST", &format!("{DOCS}:runQuery"), query(""));
+        assert_eq!(status, 200, "empty {strict}: {body}");
+        for (label, key, message) in [
+            (
+                "overlong",
+                overlong.as_str(),
+                "value for m is too large to be used in a query",
+            ),
+            ("reserved", "__bad__", "field name '__bad__' is reserved."),
+            (
+                "type-tag",
+                "__type__",
+                "Field __type__ must be a string; founds LONG.",
+            ),
+        ] {
+            let (status, body) = call(&s, "POST", &format!("{DOCS}:runQuery"), query(key));
+            assert_eq!(status, 400, "{label} {strict}: {body}");
+            // runQuery streams its answer, so a refusal before the first result is one element.
+            let error = if body.is_array() {
+                &body[0]["error"]
+            } else {
+                &body["error"]
+            };
+            assert_eq!(
+                error["status"], "INVALID_ARGUMENT",
+                "{label} {strict}: {body}"
+            );
+            assert_eq!(error["message"], message, "{label} {strict}");
+        }
+    }
+}
+
+/// `writes/limits/aggregate-map/strict-only`: an over-long string nested in a map is reported
+/// as an invalid nested entity of the top-level property, not by its dotted path.
+#[test]
+fn an_oversized_value_nested_in_a_map_is_an_invalid_nested_entity() {
+    let s = state_with_profile(true);
+    let (status, body) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}:commit"),
+        json!({"writes": [{"update": {
+            "name": "projects/demo-app/databases/(default)/documents/m/x",
+            "fields": {"m": {"mapValue": {"fields": {"s": {"stringValue": "x".repeat(1_048_500)}}}}}
+        }}]}),
+    );
+    assert_eq!(status, 400, "{body}");
+    assert_eq!(
+        body["error"]["message"],
+        "Property m contains an invalid nested entity."
+    );
+    let (status, _) = call(&s, "GET", &format!("{DOCS}/m/x"), Value::Null);
+    assert_eq!(status, 404);
+}
+
+/// Owner decisions A and D2 (2026-09-25): strict refuses a delete only from the smallest size
+/// every recording refused on its route. With a 1,000-byte name that is 12,113 elements for
+/// REST DELETE and `BatchWrite` and 12,112 for Commit (`near-limit-delete-refusal`, delta-v3 and
+/// the band exploration). `BatchWrite` reports the refusal per write, inside HTTP 200.
+#[test]
+fn deletes_are_refused_from_each_route_s_deterministic_minimum() {
+    // Each collection ID is 997 bytes plus a one-character suffix, so every name is 1,000 bytes.
+    let collection = "c".repeat(997);
+    let seed = |s: &RestState, id: &str, count: i64| {
+        let (status, body) = call(
+            s,
+            "PATCH",
+            &format!("{DOCS}/{collection}{id}/d"),
+            json!({"fields": {"a": {"arrayValue": {"values":
+                (0..count).map(|n| json!({"integerValue": n.to_string()})).collect::<Vec<_>>()
+            }}}}),
+        );
+        assert_eq!(status, 200, "seed {id} {count}: {body}");
+    };
+    let name =
+        |id: &str| format!("projects/demo-app/databases/(default)/documents/{collection}{id}/d");
+    let too_big = "Transaction too big. Decrease transaction size.";
+    let s = state_with_profile(true);
+
+    seed(&s, "r", 12_112);
+    let (status, body) = call(
+        &s,
+        "DELETE",
+        &format!("{DOCS}/{collection}r/d"),
+        Value::Null,
+    );
+    assert_eq!(status, 200, "REST 12,112: {body}");
+    seed(&s, "R", 12_113);
+    let (status, body) = call(
+        &s,
+        "DELETE",
+        &format!("{DOCS}/{collection}R/d"),
+        Value::Null,
+    );
+    assert_eq!(status, 400, "REST 12,113: {body}");
+    assert_eq!(body["error"]["message"], too_big);
+
+    seed(&s, "k", 12_111);
+    let (status, body) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}:commit"),
+        json!({"writes": [{"delete": name("k")}]}),
+    );
+    assert_eq!(status, 200, "Commit 12,111: {body}");
+    seed(&s, "K", 12_112);
+    let (status, body) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}:commit"),
+        json!({"writes": [{"delete": name("K")}]}),
+    );
+    assert_eq!(status, 400, "Commit 12,112: {body}");
+    assert_eq!(body["error"]["message"], too_big);
+
+    seed(&s, "w", 12_112);
+    let (status, body) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}:batchWrite"),
+        json!({"writes": [{"delete": name("w")}]}),
+    );
+    assert_eq!(status, 200, "BatchWrite 12,112: {body}");
+    assert!(body["status"][0].get("code").is_none(), "{body}");
+    seed(&s, "W", 12_113);
+    let (status, body) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}:batchWrite"),
+        json!({"writes": [{"delete": name("W")}]}),
+    );
+    assert_eq!(status, 200, "BatchWrite 12,113: {body}");
+    assert_eq!(body["status"][0]["code"], 3, "{body}");
+    assert_eq!(body["status"][0]["message"], too_big);
+    let (status, _) = call(&s, "GET", &format!("{DOCS}/{collection}W/d"), Value::Null);
+    assert_eq!(status, 200, "a refused delete keeps the document");
+
+    // The emulator profile adds no refusal the official emulator does not make.
+    let emulator = state_with_profile(false);
+    seed(&emulator, "R", 12_113);
+    let (status, body) = call(
+        &emulator,
+        "DELETE",
+        &format!("{DOCS}/{collection}R/d"),
+        Value::Null,
+    );
+    assert_eq!(status, 200, "emulator REST 12,113: {body}");
 }

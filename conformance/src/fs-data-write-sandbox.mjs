@@ -1,6 +1,11 @@
 import { createHash } from "node:crypto";
 
-import { WEBCHANNEL_PATH } from "./firestore-probe/webchannel-request-bytes.mjs";
+import {
+  WEBCHANNEL_PATH,
+  WEBCHANNEL_RESET_PHASES,
+  WEBCHANNEL_SESSION_SIZES,
+  webchannelSessionProgram,
+} from "./firestore-probe/webchannel-request-bytes.mjs";
 
 const SANDBOX_DOCUMENTS = "/v1/projects/fireemu-oracle-sbx/databases/(default)/documents";
 const RECORDED_PROJECT = "demo-firestore-probe";
@@ -11,8 +16,172 @@ const DELETE_RUN_MARKER_VALUE = "a".repeat(32);
 const DELETE_BOUNDARY_PREFIX = "writes/limits/near-limit-delete-refusal/";
 const RESOURCE_NAME = /projects\/([^/]+)\/databases\/([^/?]+)/g;
 const VOLATILE_STREAM_TRAILERS = new Set(["x-debug-tracking-id"]);
+const DELTA_V3_DRIFT = new Set(
+  ["rest", "batch-write"].flatMap((route) =>
+    ["delete", "after-delete", "group-after-delete"].map(
+      (step) => `writes/limits/near-limit-delete-refusal/${route}/12112#${step}`,
+    ),
+  ),
+);
 
 const sha256 = (value) => createHash("sha256").update(value).digest("hex");
+
+const BRACKET_SIZES = ["11534336", "11534337"];
+
+/** The bracket recording: each unobserved request or value limit measured by one byte. */
+export const BRACKET_REST_IDS = Object.freeze([
+  "writes/limits/aggregate-map/1048487",
+  "writes/limits/aggregate-map/1048488",
+  "writes/limits/indexed-field-value-bytes/5200",
+  "writes/limits/indexed-field-value-bytes/6128",
+  ...["batch-write", "batch-get", "run-query", "create", "patch"].flatMap((route) =>
+    BRACKET_SIZES.map((size) => `writes/limits/non-commit-rest-request-bytes/${route}/${size}`),
+  ),
+  ...BRACKET_SIZES.map((size) => `writes/limits/webchannel-request-bytes/${size}`),
+]);
+
+export const BRACKET_STREAM_IDS = Object.freeze(
+  BRACKET_SIZES.map((size) => `writes/limits/grpc-unary-request-bytes/${size}`),
+);
+
+const indexedPairName = (pad) =>
+  `ifvpair/r/p/${"z".repeat(800)}/p/${"z".repeat(800)}/p/${"z".repeat(pad)}/ifvtest/d`;
+
+/** Every document the bracket recipes can create; cleanup deletes exactly these. */
+export const BRACKET_OWNED_NAMES = Object.freeze(
+  [
+    ...["rawBatch", "rawBatchGet", "rawQuery", "rawCreate", "rawPatch"].flatMap((collection) =>
+      BRACKET_SIZES.map((size) => `${collection}/${size}`),
+    ),
+    "aggregatePair/m1048487",
+    "aggregatePair/m1048488",
+    indexedPairName(960),
+    indexedPairName(1424),
+  ]
+    .map((relative) => `projects/fireemu-oracle-sbx/databases/(default)/documents/${relative}`)
+    .toSorted(),
+);
+
+/**
+ * One bracket attempt: its 38 recipe requests, two preflight reads, one delete per owned name
+ * and one typed-missing read. The child refuses any other cap.
+ */
+export const BRACKET_HTTP_CAP = 55;
+
+/** The one collection a bracket probe reads whole; it must be empty before a recording. */
+export const BRACKET_QUERIED_COLLECTION = "rawQuery";
+
+/** `sandbox_expansion.name_of_length`: an even-segment relative name of exact UTF-8 length. */
+export function nameOfLength(target, tag) {
+  for (let pairs = 1; pairs < 12; pairs += 1) {
+    const documentBytes = target - (2 * pairs - 1) - pairs;
+    if (!(pairs <= documentBytes && documentBytes <= pairs * 1500)) continue;
+    const segments = [];
+    for (let index = 0; index < pairs; index += 1) {
+      const length = Math.floor(documentBytes / pairs) + (index < documentBytes % pairs ? 1 : 0);
+      segments.push("c", (index === 0 ? tag : "d").slice(0, length).padEnd(length, "d"));
+    }
+    const name = segments.join("/");
+    if (Buffer.byteLength(name) === target) return name;
+  }
+  throw new Error(`cannot form a document name of ${target} bytes`);
+}
+
+/** `sandbox_expansion.name_with_last_id`: `c/<tag padded>/c/<last>` of exact length. */
+export function nameWithLastId(target, tag, lastIdBytes) {
+  const first = target - lastIdBytes - 5;
+  if (!(first >= 1 && first <= 1500 && lastIdBytes >= 1 && lastIdBytes <= 1500)) {
+    throw new Error(`cannot form a ${target}-byte name with a ${lastIdBytes}-byte last ID`);
+  }
+  return `c/${tag.slice(0, first).padEnd(first, "d")}/c/${"d".repeat(lastIdBytes)}`;
+}
+
+/**
+ * (string bytes, relative name bytes, last document-ID bytes or null for the even split) of
+ * the indexed-string follow-up points. The last one separates a threshold on the document's
+ * own name from one on its own plus its parent's name.
+ */
+export const INDEXED_STRING_NAME_POINTS = Object.freeze([
+  [2999, 1142, null],
+  [2999, 1143, null],
+  [2999, 1500, null],
+  [2999, 1800, null],
+  [2999, 2100, null],
+  [2999, 2400, null],
+  [2999, 2606, null],
+  [2999, 2607, null],
+  [2000, 2141, null],
+  [2000, 2142, null],
+  [1500, 2642, 1500],
+]);
+
+const indexedPointName = ([stringBytes, nameBytes, lastIdBytes]) => {
+  const tag = `s${stringBytes}n${nameBytes}`;
+  return lastIdBytes === null
+    ? nameOfLength(nameBytes, tag)
+    : nameWithLastId(nameBytes, tag, lastIdBytes);
+};
+
+const FOLLOWUP_WEBCHANNEL_SIZES = [12_582_912, 16_777_216, 16_777_217, 33_554_432, 33_554_433];
+
+/** The follow-up to the bracket recording (D-2 WebChannel ladder, D-3 indexed strings). */
+export const FOLLOWUP_REST_IDS = Object.freeze([
+  ...FOLLOWUP_WEBCHANNEL_SIZES.map((size) => `writes/limits/webchannel-request-bytes/${size}`),
+  ...INDEXED_STRING_NAME_POINTS.map(
+    ([stringBytes, nameBytes]) => `writes/limits/indexed-string-name/${stringBytes}/${nameBytes}`,
+  ),
+]);
+
+const FOLLOWUP_WEBCHANNEL_IDS = FOLLOWUP_REST_IDS.filter((id) =>
+  id.startsWith("writes/limits/webchannel-request-bytes/"),
+);
+
+export const FOLLOWUP_OWNED_NAMES = Object.freeze(
+  INDEXED_STRING_NAME_POINTS.map(
+    (point) =>
+      `projects/fireemu-oracle-sbx/databases/(default)/documents/${indexedPointName(point)}`,
+  ).toSorted(),
+);
+
+/**
+ * A recording set pins its recipes, the documents its cleanup owns, its per-attempt HTTP cap
+ * and its per-attempt ledger estimate. The runner and the child both check a recording
+ * against exactly one set.
+ */
+export const RECORDING_SETS = Object.freeze({
+  bracket: Object.freeze({
+    restIds: BRACKET_REST_IDS,
+    streamIds: BRACKET_STREAM_IDS,
+    ownedNames: BRACKET_OWNED_NAMES,
+    queriedCollection: BRACKET_QUERIED_COLLECTION,
+    httpCap: BRACKET_HTTP_CAP,
+    attemptEstimateUsd: 0.5,
+    freezeGroups: Object.freeze({ all: BRACKET_REST_IDS }),
+  }),
+  // Owner-approved follow-up: US$0.10 per attempt, so that it and the bracket recording
+  // (US$1.00) stay within the owner's US$1.20 for the boundary probes.
+  followup: Object.freeze({
+    restIds: FOLLOWUP_REST_IDS,
+    streamIds: Object.freeze([]),
+    ownedNames: FOLLOWUP_OWNED_NAMES,
+    queriedCollection: null,
+    httpCap: 55,
+    attemptEstimateUsd: 0.1,
+    // A WebChannel front end may answer nondeterministically; the indexed strings freeze apart.
+    freezeGroups: Object.freeze({
+      webchannel: Object.freeze(FOLLOWUP_WEBCHANNEL_IDS),
+      indexed: Object.freeze(
+        FOLLOWUP_REST_IDS.filter((id) => !FOLLOWUP_WEBCHANNEL_IDS.includes(id)),
+      ),
+    }),
+  }),
+});
+
+export function recordingSet(name) {
+  const set = Object.hasOwn(RECORDING_SETS, name) ? RECORDING_SETS[name] : undefined;
+  if (!set) throw new Error(`unknown recording set: ${name}`);
+  return set;
+}
 
 function canonical(value) {
   if (Array.isArray(value)) return value.map(canonical);
@@ -59,6 +228,19 @@ function assertSandboxReferences(value) {
     for (const item of value) assertSandboxReferences(item);
   } else if (value && typeof value === "object") {
     for (const item of Object.values(value)) assertSandboxReferences(item);
+  }
+}
+
+/** A valid-session WebChannel program must be exactly its fixed four steps. */
+function validateWebChannelSessionProgram(program) {
+  const size = WEBCHANNEL_SESSION_SIZES.find(
+    (candidate) => program.id === `writes/limits/webchannel-request-bytes/${candidate}`,
+  );
+  if (
+    size === undefined ||
+    JSON.stringify(program) !== JSON.stringify(webchannelSessionProgram(size))
+  ) {
+    throw new Error("invalid sandbox WebChannel session program");
   }
 }
 
@@ -133,6 +315,25 @@ function validateDeleteBoundaryProgram(program) {
 }
 
 /** Refuse any corpus that could address another Firestore project or escape its budget. */
+/** Sizes whose bodies the corpus stores compact; the harness pads them before sending. */
+export const PADDED_BODY_SIZES = new Set([11_534_336, 11_534_337]);
+
+/** A compact JSON body padded with spaces before its last `}` to exactly `size` bytes. */
+export function padJsonBody(body, size) {
+  if (
+    typeof body !== "string" ||
+    !PADDED_BODY_SIZES.has(size) ||
+    !body.endsWith("}") ||
+    Buffer.byteLength(body) >= size
+  ) {
+    throw new Error("invalid padded sandbox body");
+  }
+  JSON.parse(body);
+  const padded = `${body.slice(0, -1)}${" ".repeat(size - Buffer.byteLength(body))}}`;
+  if (Buffer.byteLength(padded) !== size) throw new Error("padded sandbox body size differs");
+  return padded;
+}
+
 export function validateSandboxCorpus(corpus) {
   if (corpus?.schemaVersion !== 1 || !Array.isArray(corpus.restPrograms)) {
     throw new Error("invalid sandbox corpus schema");
@@ -149,6 +350,12 @@ export function validateSandboxCorpus(corpus) {
     }
     const isDeleteBoundary = program.id.startsWith(DELETE_BOUNDARY_PREFIX);
     if (isDeleteBoundary) validateDeleteBoundaryProgram(program);
+    const sessionProgram =
+      program.steps.some((step) => step.webchannelSession !== undefined) ||
+      WEBCHANNEL_SESSION_SIZES.some(
+        (size) => program.id === `writes/limits/webchannel-request-bytes/${size}`,
+      );
+    if (sessionProgram) validateWebChannelSessionProgram(program);
     const stepIds = new Set();
     for (const step of program.steps) {
       requestCount += 1;
@@ -163,9 +370,10 @@ export function validateSandboxCorpus(corpus) {
       ) {
         throw new Error("unsupported sandbox method");
       }
-      const webchannel = step.webchannelBodyBytes !== undefined;
+      const webchannel = sessionProgram || step.webchannelBodyBytes !== undefined;
       if (
         webchannel &&
+        !sessionProgram &&
         (![10_485_760, 10_485_761].includes(step.webchannelBodyBytes) ||
           step.method !== "POST" ||
           step.id !== "unknown-session" ||
@@ -190,9 +398,18 @@ export function validateSandboxCorpus(corpus) {
       if (step.headers && Object.keys(step.headers).length > 0) {
         throw new Error("sandbox corpus must not include credential headers");
       }
+      if (step.padToBytes !== undefined) {
+        if (
+          !program.id.startsWith("writes/limits/non-commit-rest-request-bytes/") ||
+          !["POST", "PATCH"].includes(step.method)
+        ) {
+          throw new Error("invalid padded sandbox body");
+        }
+        padJsonBody(step.body, step.padToBytes);
+      }
       if (
         step.body !== undefined &&
-        Buffer.byteLength(JSON.stringify(step.body)) > MAX_BODY_BYTES
+        (step.padToBytes ?? Buffer.byteLength(JSON.stringify(step.body))) > MAX_BODY_BYTES
       ) {
         throw new Error("sandbox request exceeds the declared raw sentinel");
       }
@@ -248,26 +465,35 @@ export function compareSandboxArtifact(production, localPrograms, localStreams, 
     ...Object.keys(expectedPrograms),
     ...Object.keys(localPrograms ?? {}),
   ])) {
-    const expectedSteps = expectedPrograms[programId]?.steps ?? {};
     const actualSteps = localPrograms?.[programId]?.steps ?? {};
-    for (const stepId of new Set([...Object.keys(expectedSteps), ...Object.keys(actualSteps)])) {
-      const expected = expectedSteps[stepId];
-      const actual = actualSteps[stepId];
-      const decision = (step) =>
-        step?.code === "OK"
-          ? {
-              status: step.status,
-              code: step.code,
-              body: comparableBody(step.body, programId, stepId),
-            }
-          : { status: step?.status, code: step?.code, message: step?.message };
-      if (
-        JSON.stringify(canonical(decision(expected))) !==
-        JSON.stringify(canonical(decision(actual)))
-      ) {
-        differences.push(`${programId}#${stepId}`);
+    const expected = expectedPrograms[programId];
+    const alternatives = expected?.alternatives ?? [expected];
+    const candidateDifferences = alternatives.map((alternative) => {
+      const expectedSteps = alternative?.steps ?? {};
+      const mismatches = [];
+      for (const stepId of new Set([...Object.keys(expectedSteps), ...Object.keys(actualSteps)])) {
+        const decision = (step) =>
+          step?.code === "OK"
+            ? {
+                status: step.status,
+                code: step.code,
+                body: comparableBody(step.body, programId, stepId),
+              }
+            : { status: step?.status, code: step?.code, message: step?.message };
+        if (
+          JSON.stringify(canonical(decision(expectedSteps[stepId]))) !==
+          JSON.stringify(canonical(decision(actualSteps[stepId])))
+        ) {
+          mismatches.push(`${programId}#${stepId}`);
+        }
       }
-    }
+      return mismatches;
+    });
+    differences.push(
+      ...candidateDifferences.reduce((best, current) =>
+        current.length < best.length ? current : best,
+      ),
+    );
   }
   const expectedStreams = production?.streams ?? {};
   for (const recipeId of new Set([
@@ -285,35 +511,34 @@ export function compareSandboxArtifact(production, localPrograms, localStreams, 
 }
 
 /** Freeze only reproducible sandbox responses; no fireemu source digest is bound here. */
-export function freezeSandboxFixture({
-  corpus,
-  first,
-  second,
-  firstStream,
-  secondStream,
-  recordedAt,
-  harnessRevision,
-  sdkVersions,
-  credentialToken,
-}) {
-  validateSandboxCorpus(corpus);
-  if (typeof credentialToken !== "string" || credentialToken.length === 0) {
-    throw new Error("credential token is required for leak inspection");
-  }
-  if (JSON.stringify({ first, second, firstStream, secondStream }).includes(credentialToken)) {
-    throw new Error("recorded response contains a credential token");
-  }
-  const differences = compareRecordings(first, second);
-  if (differences.length > 0)
-    throw new Error(`nondeterministic production rows: ${differences.join(", ")}`);
+/**
+ * One recording holds a complete, typed answer for every step and live stream of the corpus.
+ * The freeze applies it to both recordings; a runner applies it to its first recording so a
+ * failed attempt stops before the second is sent.
+ */
+export function assertCompleteRecording(corpus, rest, stream, { refuseAuthFailures = false } = {}) {
   for (const program of corpus.restPrograms) {
-    const recordedSteps = first[program.id]?.steps;
+    const recordedSteps = rest?.[program.id]?.steps;
     if (!recordedSteps || program.steps.some((step) => !recordedSteps[step.id])) {
       throw new Error(`incomplete sandbox recording: ${program.id}`);
     }
     for (const step of program.steps) {
       const result = recordedSteps[step.id];
+      // A WebChannel measured body may be answered by a dropped connection; that is a typed
+      // observation, and the freeze still requires both recordings to agree on it.
+      const typedReset =
+        step.webchannelSession === "boundary" &&
+        result.status === 0 &&
+        result.code === "connection-reset" &&
+        WEBCHANNEL_RESET_PHASES.includes(result.message) &&
+        Object.keys(result).length === 3;
+      if (typedReset) continue;
+      // A recording whose own credential stopped working (for example an expired token) has
+      // not observed the recipe; only a step that sends another credential may expect it.
+      const authFailure =
+        refuseAuthFailures && step.credential === undefined && [401, 403].includes(result.status);
       if (
+        authFailure ||
         !Number.isInteger(result.status) ||
         result.status < 200 ||
         result.status > 599 ||
@@ -327,16 +552,54 @@ export function freezeSandboxFixture({
     }
   }
   const liveStreams = (corpus.streamRecipes ?? []).filter((recipe) => recipe.transport === "grpc");
-  if (liveStreams.length > 0) {
-    if (!firstStream || !secondStream) throw new Error("incomplete stream recording");
-    for (const recipe of liveStreams) {
-      for (const recording of [firstStream, secondStream]) {
-        const result = recording[recipe.id];
-        if (!result || !Number.isInteger(result.status?.code) || !Array.isArray(result.events)) {
-          throw new Error(`incomplete stream recording: ${recipe.id}`);
-        }
-      }
+  if (liveStreams.length > 0 && !stream) throw new Error("incomplete stream recording");
+  for (const recipe of liveStreams) {
+    const result = stream[recipe.id];
+    // A unary byte probe records one status for its exact wire size; a stream records its
+    // events.
+    const complete =
+      recipe.action === "get-document-transaction-bytes"
+        ? result?.wireBytes === recipe.wireBytes
+        : Array.isArray(result?.events);
+    if (!result || !Number.isInteger(result.status?.code) || !complete) {
+      throw new Error(`incomplete stream recording: ${recipe.id}`);
     }
+  }
+}
+
+export function freezeSandboxFixture({
+  corpus,
+  first,
+  second,
+  firstStream,
+  secondStream,
+  recordedAt,
+  harnessRevision,
+  sdkVersions,
+  credentialToken,
+  mode,
+  refuseAuthFailures = false,
+}) {
+  validateSandboxCorpus(corpus);
+  if (typeof credentialToken !== "string" || credentialToken.length === 0) {
+    throw new Error("credential token is required for leak inspection");
+  }
+  if (JSON.stringify({ first, second, firstStream, secondStream }).includes(credentialToken)) {
+    throw new Error("recorded response contains a credential token");
+  }
+  const differences = compareRecordings(first, second);
+  if (
+    differences.length > 0 &&
+    (mode !== "delta-v3" || differences.some((id) => !DELTA_V3_DRIFT.has(id)))
+  )
+    throw new Error(`nondeterministic production rows: ${differences.join(", ")}`);
+  const nondeterministicPrograms = [
+    ...new Set(differences.map((id) => id.split("#", 1)[0])),
+  ].toSorted();
+  assertCompleteRecording(corpus, first, firstStream, { refuseAuthFailures });
+  assertCompleteRecording(corpus, second, secondStream, { refuseAuthFailures });
+  const liveStreams = (corpus.streamRecipes ?? []).filter((recipe) => recipe.transport === "grpc");
+  if (liveStreams.length > 0) {
     if (JSON.stringify(canonical(firstStream)) !== JSON.stringify(canonical(secondStream))) {
       throw new Error("nondeterministic stream recording");
     }
@@ -351,7 +614,7 @@ export function freezeSandboxFixture({
   if (!/^[0-9a-f]{40}$/.test(harnessRevision) || !sdkVersions || typeof sdkVersions !== "object") {
     throw new Error("harness revision and SDK versions are required");
   }
-  if (JSON.stringify({ first, firstStream }).includes("fireemu-oracle-sbx")) {
+  if (JSON.stringify({ first, second, firstStream, secondStream }).includes("fireemu-oracle-sbx")) {
     throw new Error("production project identity was not normalized");
   }
   return {
@@ -374,8 +637,16 @@ export function freezeSandboxFixture({
               sha256(JSON.stringify(canonical(firstStream))),
               sha256(JSON.stringify(canonical(secondStream))),
             ],
+      nondeterministicPrograms,
     },
-    programs: first,
+    programs: Object.fromEntries(
+      Object.entries(first).map(([id, program]) => [
+        id,
+        nondeterministicPrograms.includes(id)
+          ? { nondeterministic: true, alternatives: [program, second[id]] }
+          : program,
+      ]),
+    ),
     streams: firstStream ?? {},
   };
 }

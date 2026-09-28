@@ -66,6 +66,7 @@ fn call_as(
         authorization: authorization.map(str::to_owned),
         app_check: Vec::new(),
         body,
+        batch_field_order: Vec::new(),
         origin: None,
         browser_metadata: false,
     });

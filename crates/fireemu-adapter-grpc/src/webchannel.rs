@@ -57,8 +57,22 @@ const LONG_POLL_WAIT: Duration = Duration::from_secs(30);
 const LONG_POLL_MAX: Duration = Duration::from_secs(60);
 /// Streaming back channels send a keep-alive after this much silence.
 const KEEPALIVE: Duration = Duration::from_secs(30);
-/// Maximum accepted form body (`FS-LIMIT-API-REQUEST-BYTES`).
-pub const MAX_FORM_BYTES: usize = crate::serve::API_REQUEST_BYTES;
+/// The largest `WebChannel` form body a profile accepts. Production accepted 12,582,912 bytes on
+/// a valid session and refused 16,777,216 (FS-DATA-WRITE follow-up recording, 2026-09-27), so
+/// strict accepts everything below the refusal; the pinned official emulator accepts
+/// 16,777,216 and refuses one more byte, and the emulator profile adds no refusal to it.
+#[must_use]
+pub const fn max_form_bytes(enforce_limits: bool) -> usize {
+    if enforce_limits {
+        16_777_215
+    } else {
+        16 * 1024 * 1024
+    }
+}
+
+/// How much of an over-bound form body is read and discarded before answering, so that the
+/// refusal reaches the client (production answered even a 33,554,433-byte body).
+pub const MAX_FORM_DRAIN_BYTES: usize = 64 * 1024 * 1024;
 /// Maximum concurrent sessions.
 pub const MAX_SESSIONS: usize = 256;
 /// Maximum unacknowledged arrays per session before it is closed.
@@ -1487,16 +1501,17 @@ impl Hub {
     }
 
     fn session(&self, req: &ChannelRequest, sid: &str) -> Result<Arc<Session>, ChannelResponse> {
+        let strict = self.state.gateway.enforce_limits;
         let s = self
             .sessions
             .lock()
             .ok()
             .and_then(|m| m.get(sid).cloned())
             .filter(|s| !s.is_terminated())
-            .ok_or_else(unknown_session)?;
+            .ok_or_else(|| unknown_session(strict))?;
         // A session answers only the origin and stream kind that opened it.
         if s.kind != req.kind || s.origin != req.origin {
-            return Err(unknown_session());
+            return Err(unknown_session(strict));
         }
         s.touch();
         Ok(s)
@@ -1506,6 +1521,29 @@ impl Hub {
         let removed = self.sessions.lock().ok().and_then(|mut m| m.remove(sid));
         if let Some(s) = removed {
             s.terminate();
+        }
+    }
+
+    /// Whether this hub serves the strict profile.
+    #[must_use]
+    pub fn enforce_limits(&self) -> bool {
+        self.state.gateway.enforce_limits
+    }
+
+    /// The answer to a form body over [`max_form_bytes`]. Production answers its HTML 400 page
+    /// and the session is gone afterwards (its terminate answered the same page), so strict ends
+    /// the named session. The official emulator answers an empty 413 and keeps the session.
+    pub fn oversized_form(&self, sid: Option<&str>) -> ChannelResponse {
+        if self.enforce_limits() {
+            if let Some(sid) = sid {
+                self.remove(sid);
+            }
+            return unknown_session(true);
+        }
+        ChannelResponse::Full {
+            status: 413,
+            headers: Vec::new(),
+            body: String::new(),
         }
     }
 
@@ -1525,8 +1563,12 @@ impl Hub {
         if req.params.get("TYPE").map(String::as_str) == Some("terminate") {
             // Sent as POST, or as a GET image request when the page unloads.
             if let Some(sid) = sid {
-                if self.session(req, &sid).is_ok() {
-                    self.remove(&sid);
+                match self.session(req, &sid) {
+                    Ok(_) => self.remove(&sid),
+                    // Production answers the terminate of a session it no longer has with its
+                    // unknown-session page (FS-DATA-WRITE follow-up recording, 2026-09-27).
+                    Err(unknown) if self.enforce_limits() => return unknown,
+                    Err(_) => {}
                 }
             }
             return text_response(200, String::new());
@@ -2215,9 +2257,26 @@ fn bad_json(e: &JsonError) -> Status {
     Status::invalid_argument(e.to_string())
 }
 
-fn unknown_session() -> ChannelResponse {
-    // The client classifies this body as an unknown session and re-handshakes.
-    text_response(400, "Error: Unknown SID".to_owned())
+/// What production answers a `WebChannel` request for an unknown session: HTTP 400 with Google's
+/// HTML error page (owner decision D6, 2026-09-25; `writes/limits/webchannel-request-bytes`,
+/// recorded twice). Only the first 400 characters of that page were recorded, so this is
+/// exactly that prefix and nothing is invented past it; the rest of the page and its
+/// content type are unobserved.
+pub const STRICT_UNKNOWN_SESSION_BODY: &str = "<!DOCTYPE html>\n<html lang=en>\n  <meta charset=utf-8>\n  <meta name=viewport content=\"initial-scale=1, minimum-scale=1, width=device-width\">\n  <title>Error 400 (Bad Request)!!1</title>\n  <style>\n    *{margin:0;padding:0}html,code{font:15px/22px arial,sans-serif}html{background:#fff;color:#222;padding:15px}body{margin:7% auto 0;max-width:390px;min-height:180px;padding:30px 0 15px}* > body{background";
+
+/// The emulator profile keeps the official emulator's answer, which the web SDK classifies as
+/// an unknown session and re-handshakes on.
+pub const EMULATOR_UNKNOWN_SESSION_BODY: &str = "Error: Unknown SID";
+
+fn unknown_session(strict: bool) -> ChannelResponse {
+    if strict {
+        return ChannelResponse::Full {
+            status: 400,
+            headers: vec![("content-type", "text/html; charset=UTF-8".to_owned())],
+            body: STRICT_UNKNOWN_SESSION_BODY.to_owned(),
+        };
+    }
+    text_response(400, EMULATOR_UNKNOWN_SESSION_BODY.to_owned())
 }
 
 fn error_chunk(e: &Status) -> ChannelResponse {

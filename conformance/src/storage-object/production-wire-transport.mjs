@@ -1,4 +1,5 @@
 import { isAbsolute } from "node:path";
+import { createHash } from "node:crypto";
 import { isDeepStrictEqual, types } from "node:util";
 import { buildProductionStage3DraftPlan } from "./stage3-plan.mjs";
 import { buildSymbolicStorageAuthPlan } from "./auth-plan.mjs";
@@ -12,6 +13,11 @@ import { serializeProductionHttpRequest } from "./production-serialization.mjs";
 import { productionTlsOptions } from "./production-tls.mjs";
 import { createProductionWireAttempt } from "./production-wire-capture.mjs";
 import { createWireTransportCore } from "./wire-transport-core.mjs";
+import { buildCorpus } from "./corpus.mjs";
+import {
+  resolveProductionSessionRoute,
+  validateProductionSessionUri,
+} from "./production-session.mjs";
 
 const CONFIG_KEYS = [
   "plan",
@@ -76,7 +82,7 @@ function planCopy(value, depth = 0) {
 
 /** Closed routes, TLS, pacing and sanitized captures share one task meter. The runner must supply its live admission and credential closures. */
 export function createProductionWireTransport(input) {
-  let config, plan, boundaries, accountRefs, expectedEmails;
+  let config, plan, boundaries, accountRefs, expectedEmails, sessionPrograms;
   try {
     config = record(input);
     if (
@@ -146,15 +152,24 @@ export function createProductionWireTransport(input) {
         ),
       ),
     ];
+    sessionPrograms = boundaries.map((boundary) =>
+      buildCorpus(boundary).recipes.flatMap((recipe, index) =>
+        recipe.id.endsWith("/resumable-upload") ? [{ recipe, ordinal: index + 1 }] : [],
+      ),
+    );
   } catch {
     throw new Error("invalid production wire configuration");
   }
 
   const secrets = new Set(),
     names = new Set();
+  const sessionResponses = new WeakMap(),
+    sessionCapabilities = new WeakMap(),
+    sessionAttempts = new Set();
   const pacer = createObjectMutationPacer({ ownedPrefixes: boundaries.map((row) => row.prefix) });
   let active = null,
     busy = false,
+    binding = false,
     failed = false,
     closed = false;
   const core = createWireTransportCore({
@@ -238,6 +253,29 @@ export function createProductionWireTransport(input) {
     )
       throw new Error();
     const request = resolve(boundaries[recording - 1]);
+    if (request.sessionDeclaration) {
+      const { step, program, phase } = request.sessionDeclaration;
+      const operation = `r${recording}/p${program.ordinal}/${createHash("sha256").update(step.id).digest("hex")}`;
+      if (
+        init.operationId !== operation ||
+        init.accountingPhase !== phase ||
+        !isDeepStrictEqual(headers, step.headers ?? {})
+      )
+        throw new Error();
+      const actual = serializeProductionHttpRequest(request.route, {
+        method: init.method,
+        headers,
+        body: init.body,
+      }).body;
+      const expected = step.body?.json
+        ? Buffer.from(JSON.stringify(step.body.json))
+        : step.body?.base64
+          ? Buffer.from(step.body.base64, "base64")
+          : Buffer.alloc(0);
+      if (!actual.equals(expected)) throw new Error();
+      if (sessionAttempts.has(operation)) throw new Error();
+      sessionAttempts.add(operation);
+    }
     const context = Object.freeze({
       recording,
       phase: init.accountingPhase,
@@ -288,12 +326,49 @@ export function createProductionWireTransport(input) {
   async function dispatch(recording, init, resolve) {
     if (closed) throw new Error("PRODUCTION_WIRE_CLOSED");
     if (failed) throw new Error("PRODUCTION_WIRE_HALTED");
+    if (binding) {
+      failed = true;
+      throw new Error("PRODUCTION_WIRE_BINDING_IN_PROGRESS");
+    }
     if (busy) throw new Error("PRODUCTION_WIRE_CONCURRENT_REQUEST");
     busy = true;
     try {
       active = prepare(recording, init, resolve);
       const send = () => core.fetch(active.route, active.init);
-      return await (active.route.mutation ? pacer.dispatch(active.route.objectName, send) : send());
+      const response = await (active.route.mutation
+        ? pacer.dispatch(active.route.objectName, send)
+        : send());
+      if (active.sessionInitiation && response.status === 200) {
+        const { step, program } = active.sessionDeclaration,
+          dialect = step.dialect,
+          boundary = boundaries[recording - 1],
+          uri = response.headers.get(dialect === "gcs" ? "location" : "x-goog-upload-url"),
+          captured = validateProductionSessionUri(uri, {
+            dialect,
+            bucket: boundary.bucket,
+            prefix: boundary.prefix,
+            objectName: step.objectName,
+          });
+        const body = Buffer.from(await response.arrayBuffer());
+        if (body.length !== 0 && !body.equals(Buffer.from("OK"))) throw new Error();
+        if (dialect === "firebase" && response.headers.get("x-goog-upload-status") !== "active")
+          throw new Error();
+        sessionResponses.set(response, {
+          recording,
+          program,
+          initiateStep: step.id,
+          dialect,
+          objectName: step.objectName,
+          uri: captured.url,
+          uploadId: captured.uploadId,
+          uriSha256: captured.uriSha256,
+          wireSequence: core.snapshot().attempts,
+          responseBodySha256: createHash("sha256").update(body).digest("hex"),
+          context: active.context,
+          bound: false,
+        });
+      }
+      return response;
     } catch {
       failed = true;
       throw new Error("PRODUCTION_WIRE_REQUEST_REJECTED");
@@ -305,13 +380,87 @@ export function createProductionWireTransport(input) {
 
   return Object.freeze({
     registerSecret,
+    bindSession(recording, response) {
+      let ownsBinding = false;
+      try {
+        const captured = sessionResponses.get(response);
+        if (
+          closed ||
+          failed ||
+          busy ||
+          binding ||
+          !captured ||
+          captured.recording !== recording ||
+          captured.bound
+        )
+          throw new Error();
+        captured.bound = true;
+        binding = true;
+        ownsBinding = true;
+        const admitted = config.verifyAdmission(captured.context);
+        if (admitted !== true || closed || failed || busy || !captured.bound) throw new Error();
+        registerSecret(captured.uri);
+        registerSecret(captured.uploadId);
+        const capability = Object.freeze({ sessionUriSha256: captured.uriSha256 });
+        sessionCapabilities.set(capability, captured);
+        return capability;
+      } catch {
+        failed = true;
+        throw new Error("PRODUCTION_SESSION_BINDING_REJECTED");
+      } finally {
+        if (ownsBinding) binding = false;
+      }
+    },
+    fetchSession(recording, capability, suppliedStep, init) {
+      return dispatch(recording, init, (boundary) => {
+        const captured = sessionCapabilities.get(capability),
+          step = planCopy(suppliedStep);
+        if (!captured || captured.recording !== recording) throw new Error();
+        const subject = captured.program.recipe.steps.find((row) => row.id === step.id),
+          cleanup = captured.program.recipe.cleanup.find((row) => row.id === step.id),
+          canonical = subject ?? cleanup;
+        if (!canonical || !isDeepStrictEqual(step, canonical)) throw new Error();
+        const route = resolveProductionSessionRoute(step, {
+          dialect: captured.dialect,
+          bucket: boundary.bucket,
+          prefix: boundary.prefix,
+          objectName: captured.objectName,
+          uri: captured.uri,
+          initiateStep: captured.initiateStep,
+        });
+        return {
+          route,
+          declaration: { credential: "admin" },
+          kind: "storage",
+          quotaProject: plan.projectId,
+          media: false,
+          sessionDeclaration: {
+            step: canonical,
+            program: captured.program,
+            phase: subject ? "subject" : "cleanup",
+          },
+        };
+      });
+    },
     fetchStorage(recording, suppliedStep, init) {
       return dispatch(recording, init, (boundary) => {
-        const step = record(suppliedStep);
-        step.query = record(step.query);
-        if (step.headers !== undefined) step.headers = record(step.headers);
-        if (step.transfer !== undefined) step.transfer = record(step.transfer);
-        if (step.credentialRef !== undefined) step.credentialRef = record(step.credentialRef);
+        const step = planCopy(suppliedStep);
+        let sessionDeclaration;
+        const programs = sessionPrograms[recording - 1];
+        if (
+          step.query?.uploadType === "resumable" ||
+          step.headers?.["x-goog-upload-protocol"] === "resumable" ||
+          programs.some((program) =>
+            program.recipe.steps.some(
+              (row) => !row.sessionUriReference && row.method === "POST" && row.id === step.id,
+            ),
+          )
+        ) {
+          const program = programs.find((row) => row.recipe.objects.includes(step.objectName)),
+            canonical = program?.recipe.steps.find((row) => row.id === step.id);
+          if (!canonical || !isDeepStrictEqual(step, canonical)) throw new Error();
+          sessionDeclaration = { step: canonical, program, phase: "subject" };
+        }
         const route = resolveProductionStorageRoute(step, boundary);
         const declaration = validateProductionCredentialDeclaration(step, {
           accountRefs: accountRefs[recording - 1],
@@ -322,6 +471,7 @@ export function createProductionWireTransport(input) {
           kind: "storage",
           quotaProject: declaration.credential === "admin" ? plan.projectId : null,
           media: step.query.alt === "media",
+          ...(sessionDeclaration ? { sessionDeclaration, sessionInitiation: true } : {}),
         };
       });
     },

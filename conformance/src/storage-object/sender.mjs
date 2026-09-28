@@ -108,9 +108,20 @@ export function createProductionStorageSender(input) {
       Object.getPrototypeOf(options.verifyAdmission) !== Function.prototype
     )
       throw new Error();
+    for (const name of ["bindSession", "fetchSession"])
+      if (
+        wire[name] !== undefined &&
+        (typeof wire[name] !== "function" || types.isProxy(wire[name]))
+      )
+        throw new Error();
     const sender = createStorageSender(
       { plan: options.plan, recipeToken: options.recipeToken, onJournal: options.onJournal },
-      { fetchStorage: wire.fetchStorage, verifyAdmission: options.verifyAdmission },
+      {
+        fetchStorage: wire.fetchStorage,
+        bindSession: wire.bindSession,
+        fetchSession: wire.fetchSession,
+        verifyAdmission: options.verifyAdmission,
+      },
     );
     productionSenders.add(sender);
     return sender;
@@ -326,6 +337,7 @@ function createStorageSender(
   let runListProofSerial = 0;
   const attemptedInvalidProofNames = new Set();
   const observed = new Map();
+  const productionResponses = new WeakMap();
   const lastMutation = new Map();
   const confirmed = new Map();
   const rewriteChains = new Map(),
@@ -383,6 +395,7 @@ function createStorageSender(
     requestOrigin = base,
     verifyBeforeFetch = () => {},
     storageStep,
+    sessionCapability,
   ) {
     terminalProof = null;
     const dispatchOperationId = context?.dispatchOperationId(operationId) ?? operationId;
@@ -396,28 +409,41 @@ function createStorageSender(
       const declaration = storageStep ?? internalProductionStep(path, query, init);
       validateStorageRoute(declaration, { bucket, prefix });
       validateProductionCredentialDeclaration(declaration, { accountRefs });
+      if (sessionCapability !== undefined && typeof production.fetchSession !== "function")
+        throw new Error("production session dispatch is unavailable");
       productionAdmitted(requestContext);
       try {
         return await counter.send(operationId, async () => {
           await beforeFetch();
           verifyBeforeFetch();
           productionAdmitted(requestContext);
-          const response = await production.fetchStorage(context.recording, declaration, {
+          const request = {
             method: init.method,
             headers: init.headers ?? {},
             body: init.body,
             redirect: "manual",
             operationId: dispatchOperationId,
             accountingPhase: requestContext.phase,
-          });
+          };
+          const response =
+            sessionCapability === undefined
+              ? await production.fetchStorage(context.recording, declaration, request)
+              : await production.fetchSession(
+                  context.recording,
+                  sessionCapability,
+                  declaration,
+                  request,
+                );
           const bytes = Buffer.from(await response.arrayBuffer());
           productionAdmitted(requestContext);
           if (bytes.length > MAX_RESPONSE_BYTES) throw new Error();
-          return {
+          const result = {
             status: response.status,
             headers: Object.fromEntries(response.headers.entries()),
             raw: bytes,
           };
+          productionResponses.set(result, response);
+          return result;
         });
       } catch {
         productionFailed = true;
@@ -800,7 +826,11 @@ function createStorageSender(
       const progress = boundRewriteProgress(name);
       return Object.freeze({ done: progress.done, attempts: progress.attempts });
     },
-    bindSession({ recipe, initiateOperationId } = {}) {
+    bindSession(suppliedOptions = {}) {
+      const options = production
+        ? productionData(productionRecord(suppliedOptions, ["recipe", "initiateOperationId"]))
+        : suppliedOptions;
+      const { recipe, initiateOperationId } = options;
       const canonical = canonicalSessionRecipe(recipe);
       const captured = observed.get(initiateOperationId);
       const start = canonical.steps.find((step) => step.id === initiateOperationId);
@@ -818,16 +848,49 @@ function createStorageSender(
       )
         throw new Error("local session initiation is unproved");
       const header = start.dialect === "firebase" ? "x-goog-upload-url" : "location";
-      const uri = localSessionUrl(
-        captured.response.headers[header],
-        start.dialect,
-        start.objectName,
-        start.path,
-      );
-      const uriSha256 = createHash("sha256").update(uri.href).digest("hex");
+      let uri = null,
+        wireCapability,
+        uriSha256;
+      if (production) {
+        productionAdmitted({
+          recording: context.recording,
+          phase: "subject",
+          kind: "storage",
+          operationId: context.dispatchOperationId(initiateOperationId),
+        });
+        if (typeof production.bindSession !== "function")
+          throw new Error("production session binding is unavailable");
+        try {
+          wireCapability = production.bindSession(
+            context.recording,
+            productionResponses.get(captured.response),
+          );
+          const receipt = productionRecord(wireCapability, ["sessionUriSha256"]);
+          if (
+            !Object.isFrozen(wireCapability) ||
+            Object.keys(receipt).length !== 1 ||
+            typeof receipt.sessionUriSha256 !== "string" ||
+            !/^[a-f0-9]{64}$/.test(receipt.sessionUriSha256)
+          )
+            throw new Error();
+          uriSha256 = receipt.sessionUriSha256;
+        } catch {
+          productionFailed = true;
+          throw new Error("production session binding is unavailable");
+        }
+      } else {
+        uri = localSessionUrl(
+          captured.response.headers[header],
+          start.dialect,
+          start.objectName,
+          start.path,
+        );
+        uriSha256 = createHash("sha256").update(uri.href).digest("hex");
+      }
       sessions.set(start.objectName, {
         uri,
         uriSha256,
+        wireCapability,
         recipe: structuredClone(canonical),
         initiateOperationId,
         mutationId: initiateOperationId,
@@ -839,7 +902,11 @@ function createStorageSender(
       });
       return Object.freeze({ sessionUriSha256: uriSha256, sendAuthorized: false });
     },
-    async sendSessionStep({ recipe, stepIndex, cleanupIndex } = {}) {
+    async sendSessionStep(suppliedOptions = {}) {
+      const options = production
+        ? productionData(productionRecord(suppliedOptions, ["recipe", "stepIndex", "cleanupIndex"]))
+        : suppliedOptions;
+      const { recipe, stepIndex, cleanupIndex } = options;
       const canonical = canonicalSessionRecipe(recipe);
       const cleanup = cleanupIndex !== undefined;
       const index = cleanup ? cleanupIndex : stepIndex;
@@ -890,16 +957,19 @@ function createStorageSender(
           : !step.headers["content-range"]?.startsWith("bytes */"));
       if (mutates && (session.completed || session.cancelled))
         throw new Error("local session is already terminal");
-      const authorization = credentials[step.credential];
-      if (typeof authorization !== "string" || !/^(Bearer|Firebase) [^\s]+$/.test(authorization))
+      const authorization = production ? null : credentials[step.credential];
+      if (
+        !production &&
+        (typeof authorization !== "string" || !/^(Bearer|Firebase) [^\s]+$/.test(authorization))
+      )
         throw new Error("local credential is unresolved");
       const response = await countedFetch(
         step.id,
-        session.uri.pathname,
-        Object.fromEntries(session.uri.searchParams),
+        production ? null : session.uri.pathname,
+        production ? {} : Object.fromEntries(session.uri.searchParams),
         {
           method: step.method,
-          headers: { ...step.headers, authorization },
+          headers: { ...step.headers, ...(production ? {} : { authorization }) },
           body: encodeBody(step.body),
         },
         async () => {
@@ -919,6 +989,10 @@ function createStorageSender(
           }
           session.attempted.add(step.id);
         },
+        base,
+        () => {},
+        production ? step : undefined,
+        production ? session.wireCapability : undefined,
       );
       observed.set(step.id, { step, response, ordinal: ++ordinal, sessionBinding: session });
       if (mutates) lastMutation.set(step.objectName, ordinal);

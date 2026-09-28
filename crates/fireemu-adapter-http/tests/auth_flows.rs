@@ -8833,6 +8833,13 @@ fn saml_fixture_cookie(s: &AuthState, tenant: Option<&str>, id_token: &Value) ->
     response["sessionCookie"].clone()
 }
 
+/// The sign-in attributes a SAML sign-in answers: stateful (strict) answers leave empty ones
+/// out, as production does (record-saml 7789f0); the emulator profile keeps the official
+/// emulator's empty object.
+fn answered_attributes(stateless_refresh: bool, attributes: Option<&Value>) -> Option<&Value> {
+    attributes.filter(|a| stateless_refresh || a.as_object().is_none_or(|m| !m.is_empty()))
+}
+
 // Fixture-only SAML handoffs: these JSON assertions are not signed XML evidence.
 fn assert_saml_fixture_cookie_lifecycle(
     tenant: Option<&str>,
@@ -8886,6 +8893,7 @@ fn assert_saml_fixture_cookie_lifecycle(
             );
         };
     let cookie = |id_token: &Value| saml_fixture_cookie(&s, tenant, id_token);
+    let attributes = answered_attributes(stateless_refresh, attributes);
     assert_token(
         &signed["idToken"],
         "https://securetoken.google.com/demo-app",
@@ -8910,11 +8918,13 @@ fn assert_saml_fixture_cookie_lifecycle(
     }
     let (status, refreshed) = post(&s, "/securetoken.googleapis.com/v1/token", &refresh);
     assert_eq!(status, 200, "{refreshed}");
+    // Stateful refresh keeps a SAML sign-in's attributes (record-saml 7789f0).
+    let refreshed_attributes = attributes.filter(|_| !stateless_refresh);
     assert_token(
         &refreshed["id_token"],
         "https://securetoken.google.com/demo-app",
         SIGNED_AT + 30,
-        None,
+        refreshed_attributes,
     );
     assert_token(
         &cookie(&signed["idToken"]),
@@ -8926,7 +8936,7 @@ fn assert_saml_fixture_cookie_lifecycle(
         &cookie(&refreshed["id_token"]),
         "https://session.firebase.google.com/demo-app",
         SIGNED_AT + 30,
-        None,
+        refreshed_attributes,
     );
     // Refresh does not rewrite a cookie that was already minted.
     assert_token(

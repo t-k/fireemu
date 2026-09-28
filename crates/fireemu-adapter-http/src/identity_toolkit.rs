@@ -8106,8 +8106,9 @@ fn user_json(store: &AuthStore, uid: &LocalId) -> Value {
         || u.admin_created
         || u.custom_auth
         || u.email_link_created
-        || matches!(&u.provider, fireemu_core_auth::store::Provider::Federated(id) if id.starts_with("oidc.")))
-        .then_some(u.tokens_valid_after);
+        || matches!(&u.provider, fireemu_core_auth::store::Provider::Federated(id)
+            if id.starts_with("oidc.") || id.starts_with("saml.")))
+    .then_some(u.tokens_valid_after);
     json!({
         "localId": u.local_id.as_str(),
         "tenantId": store.tenant_id(),
@@ -10417,7 +10418,10 @@ fn refresh(
             // Strict carries an OIDC sign-in's attributes into refreshed tokens, as production
             // does (record-oidc 39209e); other providers' refreshes are unobserved, and the
             // emulator profile keeps the official emulator's.
-            if !stateless_refresh_tokens && claims.firebase.sign_in_provider.starts_with("oidc.") {
+            if !stateless_refresh_tokens
+                && (claims.firebase.sign_in_provider.starts_with("oidc.")
+                    || claims.firebase.sign_in_provider.starts_with("saml."))
+            {
                 claims
                     .firebase
                     .sign_in_attributes
@@ -12232,10 +12236,14 @@ fn sign_in_with_idp(
         Ok(resolved) => resolved,
         Err(r) => return r,
     };
-    // Production's answer shape is recorded for OIDC only (record-oidc 39209e).
+    // Production's answer shape is recorded for OIDC (record-oidc 39209e) and SAML (record-saml
+    // 7789f0); the fixture providers keep the official emulator's.
     let strict_oidc = strict && provider_id.starts_with("oidc.");
+    let strict_federated = strict_oidc || (strict && provider_id.starts_with("saml."));
     if strict_oidc {
         strict_oidc_answer(&provider_id, &mut info, &mut base);
+    } else if strict_federated {
+        strict_saml_answer(&mut info, &mut base);
     }
     let identity = FederatedIdentity {
         provider_id: provider_id.clone(),
@@ -12276,7 +12284,7 @@ fn sign_in_with_idp(
                 base.push(("localId", json!(uid.as_str())));
                 base.push(("needConfirmation", json!(true)));
                 // Production leaves an empty list out (record-oidc 39209e).
-                let omit = strict_oidc && verified_providers.is_empty();
+                let omit = strict_federated && verified_providers.is_empty();
                 base.push((
                     "verifiedProvider",
                     if omit {
@@ -12300,7 +12308,7 @@ fn sign_in_with_idp(
     // Production answers `isNewUser` only when it is true (record-oidc 39209e).
     base.push((
         "isNewUser",
-        if strict_oidc && !is_new {
+        if strict_federated && !is_new {
             Value::Null
         } else {
             json!(is_new)
@@ -12374,6 +12382,24 @@ fn stored_identity_or(store: &AuthStore, identity: FederatedIdentity) -> Federat
                 .cloned()
         })
         .unwrap_or(identity)
+}
+
+/// Production's answer to a verified SAML sign-in (record-saml 7789f0): an empty context stays,
+/// no OAuth token or raw ID, and no raw user info or sign-in attributes without attributes.
+fn strict_saml_answer(info: &mut IdpUserInfo, base: &mut IdpBase) {
+    let attributes = serde_json::from_str::<Value>(&info.raw_user_info)
+        .ok()
+        .filter(|attributes| attributes.as_object().is_some_and(|map| !map.is_empty()));
+    for (key, value) in base.iter_mut() {
+        match *key {
+            "rawId" | "oauthAccessToken" | "oauthIdToken" => *value = Value::Null,
+            "rawUserInfo" if attributes.is_none() => *value = Value::Null,
+            _ => {}
+        }
+    }
+    if attributes.is_none() {
+        info.sign_in_attributes = None;
+    }
 }
 
 /// Production's refusals of a verified OIDC link (record-oidc 39209e): an identity whose email

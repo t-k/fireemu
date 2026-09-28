@@ -575,7 +575,8 @@ fn create_auth_uri(s: &AuthState, body: &Value) -> JsonResponse {
 #[test]
 fn strict_answers_create_auth_uri_for_a_saml_provider_as_production_does() {
     // saml-smoke (run efe0ef, 2026-09-27): the provider's SSO URL with a deflated, base64
-    // AuthnRequest for the HTTP-POST binding and a relay state, and a session ID.
+    // AuthnRequest for the HTTP-POST binding and a relay state, and a session ID. The ACS is the
+    // continue URI, not the provider's callback URI (record-saml 7789f0).
     let s = state(true);
     let answer = create_auth_uri(
         &s,
@@ -614,7 +615,7 @@ fn strict_answers_create_auth_uri_for_a_saml_provider_as_production_does() {
     let (head, rest) = xml.split_once(" ID=\"_").unwrap_or_else(|| panic!("{xml}"));
     assert_eq!(
         head,
-        "<?xml version=\"1.0\" encoding=\"UTF-8\"?><saml2p:AuthnRequest xmlns:saml2p=\"urn:oasis:names:tc:SAML:2.0:protocol\" AssertionConsumerServiceURL=\"https://another.example.test/__/auth/handler\" Destination=\"https://idp.example.test/saml/fixture/sso\""
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?><saml2p:AuthnRequest xmlns:saml2p=\"urn:oasis:names:tc:SAML:2.0:protocol\" AssertionConsumerServiceURL=\"https://demo-app.firebaseapp.com/__/auth/handler\" Destination=\"https://idp.example.test/saml/fixture/sso\""
     );
     let (id, rest) = rest.split_once('"').unwrap();
     assert_eq!(id.len(), 32, "{xml}");
@@ -667,4 +668,65 @@ fn strict_create_auth_uri_for_a_saml_provider_refuses_as_for_oidc() {
         &json!({"providerId": PROVIDER, "continueUri": CALLBACK}),
     );
     assert_eq!(answer.status, 501, "{}", answer.body);
+}
+
+fn answer_keys(response: &JsonResponse) -> Vec<String> {
+    let mut keys: Vec<String> = response.body.as_object().unwrap().keys().cloned().collect();
+    keys.sort_unstable();
+    keys
+}
+
+#[test]
+fn strict_answers_a_saml_sign_in_in_productions_shape() {
+    // record-saml 7789f0: the answer keeps an empty context and carries no OAuth token or raw
+    // ID; `isNewUser` only when true.
+    let s = state(true);
+    let first = sign_in(&s, &request(&fixture("assertion-signed.xml")));
+    assert_eq!(first.status, 200, "{}", first.body);
+    assert_eq!(
+        answer_keys(&first),
+        [
+            "context",
+            "email",
+            "emailVerified",
+            "expiresIn",
+            "federatedId",
+            "idToken",
+            "isNewUser",
+            "kind",
+            "localId",
+            "providerId",
+            "rawUserInfo",
+            "refreshToken",
+        ]
+    );
+    assert_eq!(first.body["context"], "");
+    let again = sign_in(&s, &request(&fixture("assertion-signed-noisy.xml")));
+    assert_eq!(again.status, 200, "{}", again.body);
+    assert!(again.body.get("isNewUser").is_none(), "{}", again.body);
+    // The attributes survive a refresh, as production's did.
+    let refreshed = handle(
+        &s,
+        "POST",
+        "/securetoken.googleapis.com/v1/token",
+        &json!({"grant_type": "refresh_token", "refresh_token": first.body["refreshToken"]}),
+    );
+    assert_eq!(refreshed.status, 200, "{}", refreshed.body);
+    assert_eq!(
+        claims(&refreshed.body["id_token"])["firebase"]["sign_in_attributes"],
+        json!({"display name": "Fixture \"User\"", "role": "reader & <writer>"})
+    );
+    // The account an SAML sign-in created reports its validSince.
+    let lookup = handle(
+        &s,
+        "POST",
+        &format!("{V1}/accounts:lookup"),
+        &json!({"idToken": first.body["idToken"]}),
+    );
+    assert_eq!(lookup.status, 200, "{}", lookup.body);
+    assert!(
+        lookup.body["users"][0]["validSince"].is_string(),
+        "{}",
+        lookup.body
+    );
 }

@@ -200,8 +200,8 @@ fn credential_body(
 }
 
 /// Production's `createAuthUri` for a SAML provider (saml-smoke, run efe0ef): the provider's
-/// SSO URL with an unsigned `AuthnRequest` for the HTTP-POST binding (to the provider's
-/// callback URI, from its SP entity ID), raw-deflated and base64-encoded, and a relay state;
+/// SSO URL with an unsigned `AuthnRequest` for the HTTP-POST binding (to the continue URI,
+/// as production's names it (record-saml 7789f0), from the provider's SP entity ID), raw-deflated and base64-encoded, and a relay state;
 /// and a session ID. `None` for a provider whose requests are signed (fireemu makes no SP key;
 /// not implemented).
 pub(super) fn strict_saml_auth_uri(
@@ -228,7 +228,7 @@ pub(super) fn strict_saml_auth_uri(
     ));
     let request = format!(
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?><saml2p:AuthnRequest xmlns:saml2p=\"urn:oasis:names:tc:SAML:2.0:protocol\" AssertionConsumerServiceURL=\"{}\" Destination=\"{}\" ID=\"_{}\" IssueInstant=\"{}\" ProtocolBinding=\"urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST\" Version=\"2.0\"><saml2:Issuer xmlns:saml2=\"urn:oasis:names:tc:SAML:2.0:assertion\">{}</saml2:Issuer></saml2p:AuthnRequest>",
-        xml_escape(&config.callback_uri),
+        xml_escape(continue_uri),
         xml_escape(&config.sso_url),
         &id[..32],
         issue_instant(at)?,

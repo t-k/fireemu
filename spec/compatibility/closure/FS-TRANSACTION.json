@@ -7,7 +7,7 @@
   "oracleTrack": "disposable-sandbox",
   "closureReview": {
     "decision": "PENDING",
-    "note": "Draft for coordinator and owner scope review; no condition is promoted by historical production or local shadow evidence."
+    "note": "Pending complete frozen conditions and independent closure review. Recorded REST13-case partial evidence does not promote any condition or the parent."
   },
   "scopeDecisions": [
     {
@@ -133,7 +133,8 @@
         ],
         "recordingsRequired": 2
       },
-      "note": "Historical recordings are reference only. Two new sandbox recordings and a final-artifact comparison are required for this condition."
+      "note": "Historical recordings are reference only. Two new sandbox recordings and a final-artifact comparison are required for this condition. The 13-case recorded expiry/retry corpus supplies no production observation for this condition.",
+      "productionObservation": "UNOBSERVED_BY_RECORDED_CORPUS"
     },
     {
       "conditionId": "FS-TRANSACTION/read-only-snapshot",
@@ -165,7 +166,8 @@
         ],
         "recordingsRequired": 2
       },
-      "note": "Historical recordings are reference only. Two new sandbox recordings and a final-artifact comparison are required for this condition."
+      "note": "Historical recordings are reference only. Two new sandbox recordings and a final-artifact comparison are required for this condition. The 13-case recorded expiry/retry corpus supplies no production observation for this condition.",
+      "productionObservation": "UNOBSERVED_BY_RECORDED_CORPUS"
     },
     {
       "conditionId": "FS-TRANSACTION/read-time-snapshot",
@@ -198,7 +200,8 @@
         ],
         "recordingsRequired": 2
       },
-      "note": "Historical recordings are reference only. Two new sandbox recordings and a final-artifact comparison are required for this condition."
+      "note": "Historical recordings are reference only. Two new sandbox recordings and a final-artifact comparison are required for this condition. The 13-case recorded expiry/retry corpus supplies no production observation for this condition.",
+      "productionObservation": "UNOBSERVED_BY_RECORDED_CORPUS"
     },
     {
       "conditionId": "FS-TRANSACTION/token-validation-and-ownership",
@@ -232,7 +235,8 @@
         ],
         "recordingsRequired": 2
       },
-      "note": "Historical recordings are reference only. Two new sandbox recordings and a final-artifact comparison are required for this condition."
+      "note": "Historical recordings are reference only. Two new sandbox recordings and a final-artifact comparison are required for this condition. The 13-case recorded expiry/retry corpus supplies no production observation for this condition.",
+      "productionObservation": "UNOBSERVED_BY_RECORDED_CORPUS"
     },
     {
       "conditionId": "FS-TRANSACTION/read-set-conflict",
@@ -266,7 +270,8 @@
         ],
         "recordingsRequired": 2
       },
-      "note": "Historical recordings are reference only. Two new sandbox recordings and a final-artifact comparison are required for this condition."
+      "note": "Historical recordings are reference only. Two new sandbox recordings and a final-artifact comparison are required for this condition. The 13-case recorded expiry/retry corpus supplies no production observation for this condition.",
+      "productionObservation": "UNOBSERVED_BY_RECORDED_CORPUS"
     },
     {
       "conditionId": "FS-TRANSACTION/write-set-atomicity",
@@ -300,7 +305,8 @@
         ],
         "recordingsRequired": 2
       },
-      "note": "Historical recordings are reference only. Two new sandbox recordings and a final-artifact comparison are required for this condition."
+      "note": "Historical recordings are reference only. Two new sandbox recordings and a final-artifact comparison are required for this condition. The 13-case recorded expiry/retry corpus supplies no production observation for this condition.",
+      "productionObservation": "UNOBSERVED_BY_RECORDED_CORPUS"
     },
     {
       "conditionId": "FS-TRANSACTION/query-range-lock",
@@ -332,7 +338,8 @@
         ],
         "recordingsRequired": 2
       },
-      "note": "A finite sandbox corpus, two recordings, complete cleanup and final-artifact comparison remain required."
+      "note": "A finite sandbox corpus, two recordings, complete cleanup and final-artifact comparison remain required. The 13-case recorded expiry/retry corpus supplies no production observation for this condition.",
+      "productionObservation": "UNOBSERVED_BY_RECORDED_CORPUS"
     },
     {
       "conditionId": "FS-TRANSACTION/failed-commit-and-rollback",
@@ -340,8 +347,8 @@
       "recipeIds": [
         "fs-transaction/failed-commit-and-rollback"
       ],
-      "recipeStatus": "PROPOSED",
-      "status": "PENDING_CORPUS",
+      "recipeStatus": "RECORDED_PARTIAL",
+      "status": "PRODUCTION_RECORDED",
       "observation": {
         "method": "A refused commit followed by token reuse, explicit rollback, lock-release and post-state readback, with a successful-commit control. Include rollback after commit, rollback after rollback and a fresh rollback control.",
         "existingCaseOrCampaignRefs": [],
@@ -355,7 +362,8 @@
       },
       "localEvidence": {
         "references": [
-          "crates/fireemu-core-firestore/tests/store.rs"
+          "crates/fireemu-core-firestore/tests/store.rs",
+          "spec/compatibility/broad-runs/fs-transaction-expiry-retry-04-recorded-comparison-v1.json"
         ],
         "productionExecuted": false
       },
@@ -367,7 +375,22 @@
         ],
         "recordingsRequired": 2
       },
-      "note": "A finite sandbox corpus, two recordings, complete cleanup and final-artifact comparison remain required."
+      "note": "Two sandbox recordings and both fireemu profiles agree for this REST subset. The refused-commit, token-reuse, explicit-rollback and lock-release chain is not recorded. Representative gRPC is not recorded. This condition remains open.",
+      "partialEvidence": {
+        "coverage": "PARTIAL",
+        "reference": "spec/compatibility/broad-runs/fs-transaction-expiry-retry-04-recorded-comparison-v1.json",
+        "recordings": 2,
+        "transport": "rest",
+        "caseIds": [
+          "finished-token/rollback-after-begin",
+          "finished-token/rollback-after-commit",
+          "finished-token/rollback-after-rollback"
+        ],
+        "remainingBoundaries": [
+          "The refused-commit, token-reuse, explicit-rollback and lock-release chain is not recorded.",
+          "Representative gRPC is not recorded."
+        ]
+      }
     },
     {
       "conditionId": "FS-TRANSACTION/retry-token-lifecycle",
@@ -375,8 +398,8 @@
       "recipeIds": [
         "fs-transaction/retry-token-lifecycle"
       ],
-      "recipeStatus": "PROPOSED",
-      "status": "PENDING_RECORDING",
+      "recipeStatus": "RECORDED_PARTIAL",
+      "status": "PRODUCTION_RECORDED",
       "observation": {
         "method": "REST retryTransaction after rollback, commit, read-only begin, unissued and malformed tokens; compare diagnostics and post-state. Include a representative gRPC case.",
         "existingCaseOrCampaignRefs": [
@@ -394,7 +417,8 @@
       },
       "localEvidence": {
         "references": [
-          "spec/compatibility/broad-runs/fs-transaction-expiry-retry-04-local-shadow-v3.json"
+          "spec/compatibility/broad-runs/fs-transaction-expiry-retry-04-local-shadow-v3.json",
+          "spec/compatibility/broad-runs/fs-transaction-expiry-retry-04-recorded-comparison-v1.json"
         ],
         "productionExecuted": false
       },
@@ -408,7 +432,23 @@
         ],
         "recordingsRequired": 2
       },
-      "note": "Historical recordings are reference only. Two new sandbox recordings and a final-artifact comparison are required for this condition."
+      "note": "Two sandbox recordings and both fireemu profiles agree for this REST subset. Representative gRPC is not recorded. This condition remains open.",
+      "partialEvidence": {
+        "coverage": "PARTIAL",
+        "reference": "spec/compatibility/broad-runs/fs-transaction-expiry-retry-04-recorded-comparison-v1.json",
+        "recordings": 2,
+        "transport": "rest",
+        "caseIds": [
+          "retry-token/retry-with-committed-previous",
+          "retry-token/retry-with-malformed-previous",
+          "retry-token/retry-with-read-only-previous",
+          "retry-token/retry-with-rolled-back-previous",
+          "retry-token/retry-with-unissued-previous"
+        ],
+        "remainingBoundaries": [
+          "Representative gRPC is not recorded."
+        ]
+      }
     },
     {
       "conditionId": "FS-TRANSACTION/idle-expiry",
@@ -416,8 +456,8 @@
       "recipeIds": [
         "fs-transaction/idle-expiry"
       ],
-      "recipeStatus": "PROPOSED",
-      "status": "PENDING_RECORDING",
+      "recipeStatus": "RECORDED_PARTIAL",
+      "status": "PRODUCTION_RECORDED",
       "observation": {
         "method": "Wall-clock idle expiry at the declared threshold, with before-threshold and held-lock controls, followed by lock-release and absence readback.",
         "existingCaseOrCampaignRefs": [
@@ -436,7 +476,8 @@
       },
       "localEvidence": {
         "references": [
-          "spec/compatibility/broad-runs/fs-transaction-expiry-retry-04-local-shadow-v3.json"
+          "spec/compatibility/broad-runs/fs-transaction-expiry-retry-04-local-shadow-v3.json",
+          "spec/compatibility/broad-runs/fs-transaction-expiry-retry-04-recorded-comparison-v1.json"
         ],
         "productionExecuted": false
       },
@@ -448,7 +489,23 @@
         ],
         "recordingsRequired": 2
       },
-      "note": "A finite sandbox corpus, two recordings, complete cleanup and final-artifact comparison remain required."
+      "note": "Two sandbox recordings and both fireemu profiles agree for this REST subset. Representative gRPC is not recorded. The wall-clock controls do not identify the exact idle threshold. This condition remains open.",
+      "partialEvidence": {
+        "coverage": "PARTIAL",
+        "reference": "spec/compatibility/broad-runs/fs-transaction-expiry-retry-04-recorded-comparison-v1.json",
+        "recordings": 2,
+        "transport": "rest",
+        "caseIds": [
+          "idle-expiry/commit-after-idle",
+          "idle-expiry/commit-before-idle",
+          "idle-expiry/lock-held-before-idle",
+          "idle-expiry/lock-released-after-idle",
+          "idle-expiry/rollback-after-idle"
+        ],
+        "remainingBoundaries": [
+          "Representative gRPC is not recorded. The wall-clock controls do not identify the exact idle threshold."
+        ]
+      }
     },
     {
       "conditionId": "FS-TRANSACTION/total-lifetime-expiry",
@@ -479,7 +536,8 @@
         ],
         "recordingsRequired": 2
       },
-      "note": "A finite sandbox corpus, two recordings, complete cleanup and final-artifact comparison remain required."
+      "note": "A finite sandbox corpus, two recordings, complete cleanup and final-artifact comparison remain required. The 13-case recorded expiry/retry corpus supplies no production observation for this condition.",
+      "productionObservation": "UNOBSERVED_BY_RECORDED_CORPUS"
     },
     {
       "conditionId": "FS-TRANSACTION/read-time-retention",
@@ -509,7 +567,8 @@
         ],
         "recordingsRequired": 2
       },
-      "note": "A finite sandbox corpus, two recordings, complete cleanup and final-artifact comparison remain required."
+      "note": "A finite sandbox corpus, two recordings, complete cleanup and final-artifact comparison remain required. The 13-case recorded expiry/retry corpus supplies no production observation for this condition.",
+      "productionObservation": "UNOBSERVED_BY_RECORDED_CORPUS"
     },
     {
       "conditionId": "FS-TRANSACTION/web-sdk-optimistic-retry",
@@ -544,7 +603,8 @@
         "recordingsRequired": 2,
         "recordingsRequiredPerTransport": 2
       },
-      "note": "A finite sandbox corpus, two recordings, complete cleanup and final-artifact comparison remain required."
+      "note": "A finite sandbox corpus, two recordings, complete cleanup and final-artifact comparison remain required. The 13-case recorded expiry/retry corpus supplies no production observation for this condition.",
+      "productionObservation": "UNOBSERVED_BY_RECORDED_CORPUS"
     },
     {
       "conditionId": "FS-TRANSACTION/paging-and-cancellation",
@@ -574,7 +634,8 @@
         ],
         "recordingsRequired": 2
       },
-      "note": "A finite sandbox corpus, two recordings, complete cleanup and final-artifact comparison remain required."
+      "note": "A finite sandbox corpus, two recordings, complete cleanup and final-artifact comparison remain required. The 13-case recorded expiry/retry corpus supplies no production observation for this condition.",
+      "productionObservation": "UNOBSERVED_BY_RECORDED_CORPUS"
     },
     {
       "conditionId": "FS-TRANSACTION/admin-sdk-server-retry",
@@ -605,7 +666,8 @@
         "recordingsRequired": 2,
         "recordingsRequiredPerTransport": 2
       },
-      "note": "A finite sandbox corpus, two recordings, complete cleanup and final-artifact comparison remain required."
+      "note": "A finite sandbox corpus, two recordings, complete cleanup and final-artifact comparison remain required. The 13-case recorded expiry/retry corpus supplies no production observation for this condition.",
+      "productionObservation": "UNOBSERVED_BY_RECORDED_CORPUS"
     },
     {
       "conditionId": "FS-TRANSACTION/commit-atomic-visibility",
@@ -635,7 +697,8 @@
         "recordingsRequired": 2,
         "recordingsRequiredPerTransport": 2
       },
-      "note": "A finite sandbox corpus, two recordings, complete cleanup and final-artifact comparison remain required."
+      "note": "A finite sandbox corpus, two recordings, complete cleanup and final-artifact comparison remain required. The 13-case recorded expiry/retry corpus supplies no production observation for this condition.",
+      "productionObservation": "UNOBSERVED_BY_RECORDED_CORPUS"
     },
     {
       "conditionId": "FS-TRANSACTION/final-artifact-regression",
@@ -661,7 +724,8 @@
         ],
         "recordingsRequired": 0
       },
-      "note": "Independent final-artifact or closure review has no production request and remains open until its own evidence is approved."
+      "note": "Independent final-artifact or closure review has no production request and remains open until its own evidence is approved. The 13-case recorded expiry/retry corpus supplies no production observation for this condition.",
+      "productionObservation": "UNOBSERVED_BY_RECORDED_CORPUS"
     },
     {
       "conditionId": "FS-TRANSACTION/closure-review",
@@ -687,22 +751,23 @@
         ],
         "recordingsRequired": 0
       },
-      "note": "Independent final-artifact or closure review has no production request and remains open until its own evidence is approved."
+      "note": "Independent final-artifact or closure review has no production request and remains open until its own evidence is approved. The 13-case recorded expiry/retry corpus supplies no production observation for this condition.",
+      "productionObservation": "UNOBSERVED_BY_RECORDED_CORPUS"
     }
   ],
   "productionPlan": {
-    "status": "PROPOSAL_ONLY",
+    "status": "PARTIALLY_RECORDED",
     "preparedCampaign": {
       "id": "FS-TRANSACTION-EXPIRY-RETRY-04",
       "project": "fireemu-oracle-sbx",
       "database": "(default)",
-      "manifest": "spec/compatibility/broad-runs/fs-transaction-expiry-retry-04-manifest-v4.json",
+      "manifest": "spec/compatibility/broad-runs/fs-transaction-expiry-retry-04-manifest-v5.json",
       "authorizesProduction": false,
       "recordingsNeeded": 2,
-      "requestsPerRecording": 95,
-      "totalRequestEstimate": 190,
-      "estimatedUsdPerRecording": 0.016688,
-      "estimatedUsdBothRecordings": 0.033376,
+      "requestsPerRecording": 96,
+      "totalRequestEstimate": 192,
+      "estimatedUsdPerRecording": 0.05,
+      "estimatedUsdBothRecordings": 0.1,
       "maximumSequentialSeconds": 2760,
       "ownedDocumentsPerRecording": 5,
       "cleanup": "Roll back every issued token, conditionally remove the five owned documents, and read back typed absence; record unknown resources for recovery.",
@@ -711,7 +776,15 @@
         "FS-TRANSACTION/failed-commit-and-rollback": 3,
         "FS-TRANSACTION/retry-token-lifecycle": 5
       },
-      "coverageLimit": "The three finished-token rows cover only part of failed-commit-and-rollback. The 13-case campaign does not close that full condition or any other transaction condition by itself."
+      "coverageLimit": "The three finished-token rows cover only part of failed-commit-and-rollback. The 13-case campaign does not close that full condition or any other transaction condition by itself.",
+      "recordingsCompleted": 2,
+      "actualRequestsPerRecording": [
+        75,
+        75
+      ],
+      "actualTotalRequests": 150,
+      "estimateBasis": "Conservative reservation for the approved envelope; not measured billing.",
+      "recordedComparison": "spec/compatibility/broad-runs/fs-transaction-expiry-retry-04-recorded-comparison-v1.json"
     },
     "unestimatedConditions": [
       "FS-TRANSACTION/read-write-lifecycle",
@@ -729,7 +802,7 @@
       "FS-TRANSACTION/admin-sdk-server-retry",
       "FS-TRANSACTION/commit-atomic-visibility"
     ],
-    "unestimatedReason": "The 190-request arithmetic covers only the prepared 13-case expiry/retry campaign. Every other acceptance condition, including the remaining failed-commit behavior and historical-reference replay, needs a finite sandbox corpus, request cap, cost estimate and cleanup plan before permission.",
+    "unestimatedReason": "The 192-request envelope and actual 150 requests cover only the recorded REST13-case expiry/retry corpus. Representative gRPC, the remaining failed-commit chain and every other condition require separately bounded corpora before permission.",
     "prerequisites": [
       "FS-DATA-WRITE closure and exclusive sandbox scheduling",
       "New sandbox conformance corpus and source-bound runner, with clean-context review and a bounded request count",
@@ -738,7 +811,7 @@
       "Check that the sbx Web app and API key already exist before any Web SDK observation; creating one needs a separate owner decision",
       "Check the deployed Firestore Rules release before sending; do not change Rules"
     ],
-    "productionExecuted": false,
+    "productionExecuted": true,
     "notPreparedObligations": [
       "total-lifetime expiry",
       "token replay in a second named database",
@@ -751,7 +824,7 @@
       "OPTIMISTIC mode follow-up issue"
     ]
   },
-  "note": "Behavioral conditions are counted once. Server transaction observations use Admin OAuth and bypass Firestore Rules; user read-write refusal and read-only allowance belong to FS-RULES. No production recording or closure is claimed.",
+  "note": "The frozen denominator remains 18 behavioral conditions. Two sandbox recordings and source-bound strict/emulator comparisons cover only the 13-case REST subset of three conditions. The other 15 conditions, official emulator gate and parent closure remain open.",
   "profileComparison": {
     "profile": "strict",
     "emulatorCompatibilityCheck": "PENDING_LOCAL_OBSERVATION",
@@ -766,7 +839,8 @@
     "project": "fireemu-oracle-sbx",
     "database": "(default)",
     "credentials": "Admin OAuth for server transactions; unauthenticated Web SDK for optimistic transactions where deployed Rules permit",
-    "productionExecuted": false
+    "productionExecuted": true,
+    "coverage": "PARTIAL_REST_THREE_CONDITIONS"
   },
   "frozenOn": "2026-09-27"
 }

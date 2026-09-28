@@ -33,6 +33,40 @@ const statuses = new Set([
 ]);
 const requiredScopeDecisions = new Set(["T1", "T2", "T3", "T4", "T5", "T6", "T7", "T8", "T9", "OT-1"]);
 
+test("FS-TRANSACTION recorded REST subset leaves every frozen condition open", () => {
+  const closure = JSON.parse(readFileSync(closureUrl, "utf8"));
+  const partial = new Map([
+    ["FS-TRANSACTION/idle-expiry", 5],
+    ["FS-TRANSACTION/failed-commit-and-rollback", 3],
+    ["FS-TRANSACTION/retry-token-lifecycle", 5],
+  ]);
+  const reference = "spec/compatibility/broad-runs/fs-transaction-expiry-retry-04-recorded-comparison-v1.json";
+  const observed = [];
+  for (const condition of closure.conditions) {
+    assert.notEqual(condition.status, "VERIFIED");
+    if (partial.has(condition.conditionId)) {
+      assert.equal(condition.status, "PRODUCTION_RECORDED");
+      assert.equal(condition.partialEvidence.coverage, "PARTIAL");
+      assert.equal(condition.partialEvidence.reference, reference);
+      assert.equal(condition.partialEvidence.transport, "rest");
+      assert.equal(condition.partialEvidence.recordings, 2);
+      assert.equal(condition.partialEvidence.caseIds.length, partial.get(condition.conditionId));
+      assert.ok(condition.partialEvidence.remainingBoundaries.length);
+      assert.match(condition.partialEvidence.remainingBoundaries.join(" "), /gRPC/);
+      observed.push(...condition.partialEvidence.caseIds);
+    } else {
+      assert.equal(condition.productionObservation, "UNOBSERVED_BY_RECORDED_CORPUS");
+    }
+  }
+  assert.equal(observed.length, 13);
+  assert.equal(new Set(observed).size, 13);
+  assert.equal(closure.parentStatus, "IMPLEMENTING");
+  assert.equal(closure.closureReview.decision, "PENDING");
+  assert.equal(closure.profileComparison.emulatorCompatibilityCheck, "PENDING_LOCAL_OBSERVATION");
+  assert.equal(closure.productionPlan.preparedCampaign.authorizesProduction, false);
+  assert.deepEqual(closure.productionPlan.preparedCampaign.actualRequestsPerRecording, [75, 75]);
+});
+
 test("FS-TRANSACTION proposal names every acceptance boundary without claiming closure", () => {
   const closure = JSON.parse(readFileSync(closureUrl, "utf8"));
   assert.equal(closure.parent, "FS-TRANSACTION");

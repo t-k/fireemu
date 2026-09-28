@@ -26,8 +26,8 @@ PREVIOUS_MANIFEST = RUNS / "fs-transaction-expiry-retry-04-manifest-v2.json"
 PREVIOUS_MANIFEST_V3 = RUNS / "fs-transaction-expiry-retry-04-manifest-v3.json"
 PREVIOUS_MANIFEST_V4 = RUNS / "fs-transaction-expiry-retry-04-manifest-v4.json"
 MANIFEST = RUNS / "fs-transaction-expiry-retry-04-manifest-v5.json"
-# The current record. Earlier records stay byte-identical below; each one was
-# produced by the collector of its day against the prefix of its day.
+# Historical preproduction preparation. Its bytes and expectedLocal contract
+# remain unchanged after actual production observations repair the runtime.
 SHADOW = RUNS / "fs-transaction-expiry-retry-04-local-shadow-v4.json"
 HISTORICAL_SHADOW_V3 = RUNS / "fs-transaction-expiry-retry-04-local-shadow-v3.json"
 HISTORICAL_SHADOW = RUNS / "fs-transaction-expiry-retry-04-local-shadow.json"
@@ -215,23 +215,22 @@ def test_published_evidence_contains_no_absolute_filesystem_path():
             assert needle not in text, f"{path.name} records {needle}"
 
 
-def test_local_shadow_runtime_inputs_match_the_current_rust_source():
-    """The artifact must still describe the Rust source in this worktree.
+def test_historical_shadow_runtime_inputs_match_its_recorded_source_commit():
+    """Retain the preparation record without rebinding it to a repaired runtime.
 
-    The commit itself moves whenever tooling or documentation is committed, so
-    the binding that matters is the hashed Rust input set, not the SHA.
+    The current production comparison has its own current-input guard in
+    test_txn_recorded_partial_evidence.py.
     """
     import sys as _sys
 
     _sys.path.insert(0, str(ROOT / "tools/compat-inventory"))
     from broad_contract import digest
-    from evidence_common import runtime_inputs
+    from evidence_common import runtime_inputs_at_commit
 
     value = shadow()
-    assert value["runtime"]["runtimeInputsDigest"] == digest(runtime_inputs(ROOT)), (
-        "regenerate the local shadow: the recorded artifact no longer describes "
-        "the Rust source in this worktree"
-    )
+    inputs = runtime_inputs_at_commit(value["runtime"]["sourceCommit"], ROOT)
+    assert value["runtime"]["runtimeInputsDigest"] == digest(inputs)
+    assert value["runtime"]["runtimeInputCount"] == len(inputs)
 
 
 def _stable(value, volatile):

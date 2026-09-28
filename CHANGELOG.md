@@ -63,6 +63,8 @@ These follow production Firestore as recorded on 2026-09-24 (FS-QUERY-INDEX). Un
 
 ### Fixed
 
+- Both profiles: Firestore rollback after expiry or an earlier rollback succeeds without reviving the transaction. A committed transaction can seed one retry; rollback of a committed or consumed predecessor remains refused. Read-only retry uses the recorded `Cannot retry a read-only transaction` diagnostic. These outcomes match two sandbox REST recordings; the full FS-TRANSACTION closure remains open.
+
 - A refusal echoes at most 1 KiB of the value, key, path or property path it names, and a transcoder refusal lists at most 16 violations, so a large request cannot grow the response or the daemon's memory many times its size.
 - The partition page token is bound to its snapshot version.
 

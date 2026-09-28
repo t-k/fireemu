@@ -2,15 +2,29 @@
 
 ## Status
 
-`WAITING_ORACLE`. This is preparation only. No production request was sent, no
-credential was read or bound, and no parent group is promoted. The number of
-production-unobserved FS-TRANSACTION conditions is unchanged by this work.
+`IMPLEMENTING`, with recorded partial REST evidence. The preparation tables below retain the predictions made before production recording; they are historical expectations, not the current runtime's answers. The original case table, collector sources and earlier local-shadow records remain unchanged.
 
 The package is credential-free by contract: nothing here discovers, reads or
 stores an access token, a refresh token or an API key, and the comparator
 refuses a receipt that carries credential material.
 
-## What the FS-TRANSACTION row still needs
+## Recorded partial comparison (2026-09-28)
+
+Two independent sandbox recordings completed all 13 cases with 75 external requests each, confirmed absence of all five owned documents, and left no open transaction or unresolved resource. The [recorded comparison](../../spec/compatibility/broad-runs/fs-transaction-expiry-retry-04-recorded-comparison-v1.json) binds those receipts, the source build and both local profiles. It records normalized codes, diagnostics and post-state, retaining the historical preparation's four disagreements.
+
+The repaired source is `6fc6da362aab0123096d46994c542a157a8064dd`. A clean build produced artifact SHA-256 `22d98b730e6daaadefee3e10a392ab7e0f7b12e3fcf10922f866b583bcbec65d`; identical artifact bytes were copied into each profile's owned local run. Both strict and emulator agree with both production receipts on all 13 cases. Production used measured wall time; local runs used the control clock. These controls establish success before the observed expiry and failure sufficiently afterward; they do not identify the exact idle-expiry threshold.
+
+| Case | Actual recorded result in both production recordings |
+| --- | --- |
+| `idle-expiry/rollback-after-idle` | `OK` |
+| `finished-token/rollback-after-rollback` | `OK` |
+| `retry-token/retry-with-committed-previous` | `OK` |
+| `retry-token/retry-with-read-only-previous` | `INVALID_ARGUMENT`, `Cannot retry a read-only transaction` |
+| `finished-token/rollback-after-commit` | `ABORTED`, `The referenced transaction has expired or is no longer valid.` |
+
+This is partial evidence for idle-expiry, retry-token-lifecycle and the finished-token subset of failed-commit-and-rollback. Representative gRPC and the remaining failed-commit chain are not recorded. The other 15 frozen conditions receive no observation from this corpus; the [18-condition closure](../../spec/compatibility/closure/FS-TRANSACTION.json), final regression, independent closure review and official emulator profile gate remain open. No condition or parent is promoted and this comparison grants no further production permission.
+
+## Historical preparation scope
 
 The compatibility inventory records the remaining boundary as "production
 conflict/error/retention behavior and SDK retry semantics need bounded
@@ -26,10 +40,7 @@ because a large part of it is already observed:
   the happy `readWrite.retryTransaction` path, and a `read_time` before database
   creation.
 
-What no recorded production observation covers is the behavior of a transaction
-that ran out of time rather than being finished by the client, the state of a
-token after a rollback rather than a commit, and every refusal path of the retry
-token. That is this campaign's scope.
+At preparation time, the missing observations concerned a transaction that ran out of time, a token after rollback rather than commit, and the remaining retry-token refusal paths. The recorded-results section above describes the subsequent observations within this campaign's bounded scope.
 
 ## Observation cases
 
@@ -41,7 +52,7 @@ and must name the evidence it repeats. A test enforces each of those rules.
 
 ### Idle expiry
 
-| Case | Kind | Expected local result |
+| Case | Kind | Historical expected local result |
 | --- | --- | --- |
 | `idle-expiry/commit-before-idle` | control | `OK` after 20 seconds idle |
 | `idle-expiry/commit-after-idle` | observation | `ABORTED`, the referenced transaction has expired or is no longer valid |
@@ -58,18 +69,17 @@ control that cannot fail proves nothing.
 
 ### Finished tokens
 
-| Case | Kind | Expected local result |
+| Case | Kind | Historical expected local result |
 | --- | --- | --- |
 | `finished-token/rollback-after-begin` | control | `OK` |
 | `finished-token/rollback-after-commit` | observation | `ABORTED`, expired or no longer valid |
 | `finished-token/rollback-after-rollback` | observation | `ABORTED`, expired or no longer valid |
 
-Production has been observed committing a finished transaction again. It has not
-been observed rolling one back.
+At preparation time, the saved references covered committing a finished transaction again; this campaign proposed the missing rollback observations. Their subsequent results are retained above.
 
 ### Retry tokens
 
-| Case | Kind | Expected local result |
+| Case | Kind | Historical expected local result |
 | --- | --- | --- |
 | `retry-token/retry-with-rolled-back-previous` | control | `OK`, a rolled-back attempt can seed one retry |
 | `retry-token/retry-with-committed-previous` | observation | `INVALID_ARGUMENT`, invalid retry transaction |

@@ -685,7 +685,7 @@ fn blocking_auth_rejection_rolls_back_user_creation() {
     assert_eq!(status, 400, "{body}");
     assert_eq!(
         body["error"]["message"],
-        "BLOCKING_FUNCTION_ERROR_RESPONSE : HTTP Cloud Function returned an error. Code: 403, Status: \"PERMISSION_DENIED\", Message: \"denied by test\""
+        "BLOCKING_FUNCTION_ERROR_RESPONSE : HTTP Cloud Function returned an error: {\"error\":{\"message\":\"denied by test\",\"status\":\"PERMISSION_DENIED\"}}"
     );
     assert_eq!(
         *events.lock().unwrap(),
@@ -867,10 +867,10 @@ fn unhandled_blocking_auth_failure_is_unavailable_and_rolls_back_creation() {
         &json!({"email": "unavailable@example.com", "password": "hunter22"}),
     );
 
+    // Production masks an unhandled failure (recording 2026-09-28, refusal#create-unhandled).
     assert_eq!(status, 503, "{body}");
-    assert!(body["error"]["message"]
-        .as_str()
-        .is_some_and(|message| message.starts_with("BLOCKING_FUNCTION_ERROR_RESPONSE")));
+    assert_eq!(body["error"]["message"], "Error code: 47");
+    assert_eq!(body["error"]["errors"][0]["reason"], "backendError");
     assert!(s
         .store
         .lock()
@@ -903,8 +903,12 @@ fn blocking_before_sign_in_timeout_issues_no_token_and_preserves_the_user() {
         &json!({"email": "timeout@example.com", "password": "hunter22"}),
     );
 
-    assert_eq!(status, 503, "{body}");
-    assert_eq!(body["error"]["message"], "Error code: 47");
+    // Identity Platform's elapsed deadline (recording 2026-09-28, timeout#sign-in-slow).
+    assert_eq!(status, 400, "{body}");
+    assert_eq!(
+        body["error"]["message"],
+        "BLOCKING_FUNCTION_ERROR_RESPONSE : Cloud function deadline exceeded."
+    );
     assert!(body.get("idToken").is_none(), "{body}");
     assert!(body.get("refreshToken").is_none(), "{body}");
     assert_eq!(
@@ -930,7 +934,9 @@ fn production_blocking_failure_fixture_matches_identity_toolkit() {
         )
         .unwrap(),
         BlockingFunctionFailure::unhandled(),
-        BlockingFunctionFailure::timeout(),
+        // The 2026-09-02 run's function had a seven-second timeout of its own: its platform
+        // stopped it first, and production masked that answer.
+        BlockingFunctionFailure::function_timeout(),
     ];
     let steps = fixture["steps"].as_array().unwrap();
     assert_eq!(steps.len(), failures.len());

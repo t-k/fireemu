@@ -231,7 +231,8 @@ impl BlockingFunctionCode {
 pub struct BlockingFunctionFailure {
     code: BlockingFunctionCode,
     message: Box<str>,
-    opaque: bool,
+    /// The seven-second deadline elapsed: production answers that with its own message.
+    deadline: bool,
 }
 
 impl BlockingFunctionFailure {
@@ -263,7 +264,7 @@ impl BlockingFunctionFailure {
         Ok(Self {
             code,
             message,
-            opaque: false,
+            deadline: false,
         })
     }
 
@@ -273,7 +274,7 @@ impl BlockingFunctionFailure {
         Self {
             code: BlockingFunctionCode::Unavailable,
             message: "An unexpected error occurred.".into(),
-            opaque: false,
+            deadline: false,
         }
     }
 
@@ -281,33 +282,79 @@ impl BlockingFunctionFailure {
     #[must_use]
     pub fn timeout() -> Self {
         Self {
-            code: BlockingFunctionCode::Unavailable,
-            message: "Error code: 47".into(),
-            opaque: true,
+            code: BlockingFunctionCode::DeadlineExceeded,
+            message: "Cloud function deadline exceeded.".into(),
+            deadline: true,
         }
     }
 
-    /// The client-facing Identity Toolkit HTTP status.
+    /// The function's own timeout elapsed first (a function whose timeout is at most the
+    /// seven-second deadline): its platform answers a 5xx, which production masks (production
+    /// run 2026-09-02, a seven-second function sleeping eleven: 503).
+    #[must_use]
+    pub fn function_timeout() -> Self {
+        Self {
+            code: BlockingFunctionCode::DeadlineExceeded,
+            message: "Function timeout exceeded.".into(),
+            deadline: false,
+        }
+    }
+
+    /// Whether Identity Platform's own deadline elapsed ([`Self::timeout`]).
+    #[must_use]
+    pub const fn is_deadline(&self) -> bool {
+        self.deadline
+    }
+
+    /// Whether production hides the function's answer behind its opaque 503: a 429 or 5xx
+    /// function answer (AUTH-TENANT-BLOCKING recording 2026-09-28, refusal#create-unavailable,
+    /// create-resource-exhausted, create-unhandled, sign-in-internal, sign-in-unhandled).
+    const fn masked(&self) -> bool {
+        let status = self.code.function_status();
+        !self.deadline && (status == 429 || status >= 500)
+    }
+
+    /// The client-facing Identity Toolkit HTTP status: 503 for a masked answer, 400 otherwise
+    /// (an elapsed deadline included).
     #[must_use]
     pub const fn identity_status(&self) -> u16 {
-        let status = self.code.function_status();
-        if status < 500 {
-            400
+        if self.masked() {
+            503
         } else {
-            status
+            400
         }
     }
 
+    /// The client-facing message, as production words it (both profiles; recording
+    /// 2026-09-28): a refusal embeds the function's own error body.
     fn client_message(&self) -> String {
-        if self.opaque {
-            return self.message.to_string();
+        if self.deadline {
+            return format!("BLOCKING_FUNCTION_ERROR_RESPONSE : {}", self.message);
         }
-        let quoted = serde_json::to_string(&self.message).unwrap_or_else(|_| "\"\"".to_owned());
-        format!(
-            "BLOCKING_FUNCTION_ERROR_RESPONSE : HTTP Cloud Function returned an error. Code: {}, Status: \"{}\", Message: {quoted}",
-            self.code.function_status(),
-            self.code.canonical_name()
-        )
+        if self.masked() {
+            return "Error code: 47".to_owned();
+        }
+        let body =
+            json!({"error": {"message": &*self.message, "status": self.code.canonical_name()}});
+        format!("BLOCKING_FUNCTION_ERROR_RESPONSE : HTTP Cloud Function returned an error: {body}")
+    }
+
+    /// The Identity Toolkit answer: a masked failure's reason is `backendError`.
+    #[must_use]
+    pub fn response(&self) -> JsonResponse {
+        let status = self.identity_status();
+        let message = self.client_message();
+        if !self.masked() {
+            return error(status, &message);
+        }
+        JsonResponse {
+            status,
+            body: json!({"error": {
+                "code": status,
+                "message": message,
+                "errors": [{"message": message, "domain": "global", "reason": "backendError"}],
+            }}),
+        }
     }
 }
 
@@ -649,7 +696,7 @@ pub(crate) fn request_may_invoke_blocking_auth(
 
 pub(crate) fn blocking_auth_overload_response() -> JsonResponse {
     let failure = BlockingFunctionFailure::unhandled();
-    error(failure.identity_status(), &failure.client_message())
+    failure.response()
 }
 
 /// Profile-specific expiry behavior for unsigned fake custom tokens.
@@ -2393,9 +2440,7 @@ fn dispatch_with_blocking_hook(
                         &context,
                     ) {
                         Ok(value) => value,
-                        Err(failure) => {
-                            return error(failure.identity_status(), &failure.client_message())
-                        }
+                        Err(failure) => return failure.response(),
                     }
                 };
                 if let Some(value) = value {
@@ -2452,7 +2497,7 @@ fn dispatch_with_blocking_hook(
                             {
                                 return response;
                             }
-                            return error(failure.identity_status(), &failure.client_message());
+                            return failure.response();
                         }
                     }
                 };
@@ -13730,14 +13775,20 @@ mod tests {
             assert_eq!(code.canonical_name(), name);
             assert_eq!(code.function_status(), function_status);
             let failure = BlockingFunctionFailure::from_function(code, "safe").unwrap();
+            // Production hides a 429 or 5xx function answer behind an opaque 503
+            // (AUTH-TENANT-BLOCKING recording 2026-09-28, refusal#create-*, sign-in-*).
+            let masked = function_status == 429 || function_status >= 500;
+            assert_eq!(failure.identity_status(), if masked { 503 } else { 400 });
+            let response = failure.response();
+            assert_eq!(response.status, failure.identity_status());
             assert_eq!(
-                failure.identity_status(),
-                if function_status < 500 {
-                    400
-                } else {
-                    function_status
-                }
+                response.body["error"]["errors"][0]["reason"],
+                if masked { "backendError" } else { "invalid" },
+                "{name}"
             );
+            if masked {
+                assert_eq!(failure.client_message(), "Error code: 47");
+            }
         }
         assert_eq!(
             BlockingFunctionCode::from_canonical_name("unavailable"),
@@ -13879,25 +13930,47 @@ mod tests {
         )
         .unwrap();
         assert_eq!(failure.identity_status(), 400);
+        // Production embeds the function's own error body (refusal#create-permission-denied).
         assert_eq!(
             failure.client_message(),
-            "BLOCKING_FUNCTION_ERROR_RESPONSE : HTTP Cloud Function returned an error. Code: 403, Status: \"PERMISSION_DENIED\", Message: \"quoted \\\"slash\\\\ 日本語\""
+            "BLOCKING_FUNCTION_ERROR_RESPONSE : HTTP Cloud Function returned an error: {\"error\":{\"message\":\"quoted \\\"slash\\\\ 日本語\",\"status\":\"PERMISSION_DENIED\"}}"
         );
     }
 
     #[test]
-    fn elapsed_blocking_deadline_uses_the_production_opaque_unavailable_error() {
+    fn elapsed_blocking_deadline_answers_as_production() {
+        // AUTH-TENANT-BLOCKING recording 2026-09-28, timeout#sign-up-slow-create and
+        // sign-in-slow: a 400 with its own message, not the masked 503.
         let failure = BlockingFunctionFailure::timeout();
-        assert_eq!(failure.identity_status(), 503);
-        assert_eq!(failure.client_message(), "Error code: 47");
+        assert_eq!(failure.identity_status(), 400);
+        assert_eq!(
+            failure.client_message(),
+            "BLOCKING_FUNCTION_ERROR_RESPONSE : Cloud function deadline exceeded."
+        );
+        assert_eq!(
+            failure.response().body["error"]["errors"][0]["reason"],
+            "invalid"
+        );
 
         let explicit = BlockingFunctionFailure::from_function(
             BlockingFunctionCode::DeadlineExceeded,
             "explicit deadline",
         )
         .unwrap();
-        assert_eq!(explicit.identity_status(), 504);
-        assert!(explicit.client_message().contains("DEADLINE_EXCEEDED"));
+        // A function's own 504 is a 5xx answer, masked as any other.
+        assert_eq!(explicit.identity_status(), 503);
+        assert_eq!(explicit.client_message(), "Error code: 47");
+        assert!(failure.is_deadline() && !explicit.is_deadline());
+
+        // A function whose own timeout elapsed first answers the masked 503.
+        let own = BlockingFunctionFailure::function_timeout();
+        assert!(!own.is_deadline());
+        assert_eq!(own.identity_status(), 503);
+        assert_eq!(own.client_message(), "Error code: 47");
+        assert_eq!(
+            own.response().body["error"]["errors"][0]["reason"],
+            "backendError"
+        );
     }
 
     #[test]

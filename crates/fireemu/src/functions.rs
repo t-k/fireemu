@@ -3006,6 +3006,32 @@ fn with_blocking_auth_project<T, E>(
     forward()
 }
 
+/// How long a blocking call waits, and whether the function's own timeout is what elapses: a
+/// function whose timeout is within Identity Platform's deadline is stopped by its platform
+/// first (production run 2026-09-02, a seven-second function sleeping eleven); otherwise the
+/// deadline elapses first (AUTH-TENANT-BLOCKING recording 2026-09-28, timeout#*).
+fn blocking_auth_wait(timeout_seconds: u32, deadline: Duration) -> (Duration, bool) {
+    let own = Duration::from_secs(u64::from(timeout_seconds));
+    if timeout_seconds > 0 && own <= deadline {
+        (own, true)
+    } else {
+        (deadline, false)
+    }
+}
+
+/// The answer to a call whose wait elapsed: the function's own timeout is masked as its
+/// platform's 5xx answer is; Identity Platform's deadline answers its own 400.
+fn blocking_auth_elapsed(
+    failure: fireemu_adapter_http::identity_toolkit::BlockingFunctionFailure,
+    own_timeout_first: bool,
+) -> fireemu_adapter_http::identity_toolkit::BlockingFunctionFailure {
+    if failure.is_deadline() && own_timeout_first {
+        fireemu_adapter_http::identity_toolkit::BlockingFunctionFailure::function_timeout()
+    } else {
+        failure
+    }
+}
+
 fn blocking_auth_io_failure(
     error: &std::io::Error,
 ) -> fireemu_adapter_http::identity_toolkit::BlockingFunctionFailure {
@@ -3810,7 +3836,8 @@ impl BlockingAuthBridge {
         // The token the function's firebase-functions decodes into its event, as Identity
         // Platform and the official Auth emulator deliver it.
         let body = serde_json::json!({"data": {"jwt": unsigned_jwt(&claims)}}).to_string();
-        let deadline = Instant::now() + self.deadline;
+        let (wait, own_timeout_first) = blocking_auth_wait(target.timeout_seconds, self.deadline);
+        let deadline = Instant::now() + wait;
         let exchange = (|| {
             let address = target
                 .addr
@@ -3835,7 +3862,7 @@ impl BlockingAuthBridge {
             Ok(response) => response,
             Err(failure) => {
                 self.runtime.restart_runner_after_blocking_failure(&target);
-                return Err(failure);
+                return Err(blocking_auth_elapsed(failure, own_timeout_first));
             }
         };
         let Ok(value): Result<serde_json::Value, _> = serde_json::from_slice(&response.body) else {
@@ -5140,13 +5167,41 @@ mod tests {
     }
 
     #[test]
+    fn a_blocking_call_waits_for_the_timeout_that_elapses_first() {
+        use fireemu_adapter_http::identity_toolkit::BlockingFunctionFailure;
+
+        let deadline = Duration::from_secs(7);
+        assert_eq!(super::blocking_auth_wait(60, deadline), (deadline, false));
+        assert_eq!(super::blocking_auth_wait(8, deadline), (deadline, false));
+        assert_eq!(
+            super::blocking_auth_wait(7, deadline),
+            (Duration::from_secs(7), true)
+        );
+        assert_eq!(
+            super::blocking_auth_wait(3, deadline),
+            (Duration::from_secs(3), true)
+        );
+        // An unset timeout is not a zero wait.
+        assert_eq!(super::blocking_auth_wait(0, deadline), (deadline, false));
+
+        // Identity Platform's deadline answers its 400; the function's own timeout the masked
+        // 503; any other failure is unchanged.
+        let elapsed = |own| super::blocking_auth_elapsed(BlockingFunctionFailure::timeout(), own);
+        assert_eq!(elapsed(false).identity_status(), 400);
+        assert_eq!(elapsed(true).identity_status(), 503);
+        let unhandled = super::blocking_auth_elapsed(BlockingFunctionFailure::unhandled(), true);
+        assert_eq!(unhandled, BlockingFunctionFailure::unhandled());
+    }
+
+    #[test]
     fn blocking_auth_transport_bounds_and_failure_pairs_are_production_bounded() {
         assert_eq!(BLOCKING_AUTH_DEADLINE, Duration::from_secs(7));
         assert_eq!(MAX_BLOCKING_AUTH_RESPONSE_BYTES, 64 * 1024);
+        // An elapsed deadline answers production's 400 (recording 2026-09-28, timeout#*).
         assert_eq!(
             blocking_auth_io_failure(&std::io::Error::from(std::io::ErrorKind::TimedOut))
                 .identity_status(),
-            503
+            400
         );
         assert_eq!(
             blocking_auth_io_failure(&std::io::Error::from(std::io::ErrorKind::ConnectionReset))
@@ -5164,9 +5219,10 @@ mod tests {
         let explicit_deadline = json!({
             "error": {"status": "DEADLINE_EXCEEDED", "message": "explicit deadline"}
         });
+        // A function's own 5xx is masked as production's opaque 503.
         assert_eq!(
             blocking_auth_response_failure(504, &explicit_deadline).identity_status(),
-            504
+            503
         );
 
         for (status, value) in [
@@ -5281,7 +5337,7 @@ mod tests {
         .await
         .unwrap()
         .unwrap_err();
-        assert_eq!(failure.identity_status(), 503);
+        assert_eq!(failure.identity_status(), 400);
         assert!(runtime
             .try_admit_blocking_auth(BlockingAuthEvent::BeforeCreate)
             .is_err());

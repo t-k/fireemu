@@ -228,11 +228,16 @@ fn assert_mfa_finalize_refused(
 }
 
 fn assert_phone_mfa_failures_roll_back(state: &mut AuthState, body: &Value) {
-    for hook in [
-        Arc::new(RejectBeforeSignInHook { timeout: false }) as Arc<dyn AuthBlockingHook>,
-        Arc::new(RejectBeforeSignInHook { timeout: true }),
+    // An unhandled failure is production's masked 503; an elapsed deadline its 400
+    // (AUTH-TENANT-BLOCKING recording 2026-09-28).
+    for (hook, status) in [
+        (
+            Arc::new(RejectBeforeSignInHook { timeout: false }) as Arc<dyn AuthBlockingHook>,
+            503,
+        ),
+        (Arc::new(RejectBeforeSignInHook { timeout: true }), 400),
     ] {
-        assert_mfa_finalize_refused(state, body, hook, 503);
+        assert_mfa_finalize_refused(state, body, hook, status);
     }
     for response in [
         json!({"userRecord": {"updateMask": "sessionClaims", "sessionClaims": {"firebase": "reserved"}}}),
@@ -5067,7 +5072,8 @@ fn rejected_mfa_hooks_drop_raw_credentials_but_keep_retry_provenance() {
             Arc::new(RejectBeforeSignInHook { timeout: false }) as Arc<dyn AuthBlockingHook>,
             503,
         ),
-        (Arc::new(RejectBeforeSignInHook { timeout: true }), 503),
+        // Identity Platform's elapsed deadline is its 400 (recording 2026-09-28, timeout#*).
+        (Arc::new(RejectBeforeSignInHook { timeout: true }), 400),
         (
             Arc::new(FixedBeforeSignInHook {
                 response: json!({

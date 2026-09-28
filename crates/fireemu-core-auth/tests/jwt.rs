@@ -261,6 +261,7 @@ fn a_removed_tenants_token_names_a_tenant_and_is_checked_against_its_project() {
             t0(),
             TokenAcceptance::Verified,
             None,
+            None,
         )
     };
     let decoded = check(&tenant_token, &project).unwrap();

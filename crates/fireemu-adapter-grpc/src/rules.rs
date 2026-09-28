@@ -679,6 +679,7 @@ impl RulesEnforcer {
         // The token's audience names its project: verify against that project's store. A token
         // whose tenant no longer exists is checked against its project (`removed_tenant`).
         let mut removed_tenant = false;
+        let mut removed_epochs = None;
         let store_arc = match &self.registry {
             Some(registry) => {
                 let default = self
@@ -706,6 +707,7 @@ impl RulesEnforcer {
                     .and_then(|(project, tenant)| match tenant {
                         Some(tenant) => registry.tenant_store(&project, &tenant).or_else(|| {
                             removed_tenant = true;
+                            removed_epochs = registry.removed_tenant_epochs(&project, &tenant);
                             registry.store_for(&project)
                         }),
                         None => registry.store_for(&project),
@@ -726,6 +728,7 @@ impl RulesEnforcer {
                     now,
                     self.acceptance,
                     expected_project,
+                    removed_epochs.as_ref(),
                 )
             }
             (TokenSemantics::Firestore, _) => {

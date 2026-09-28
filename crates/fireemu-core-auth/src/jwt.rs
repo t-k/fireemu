@@ -695,7 +695,14 @@ pub fn verify_id_token_decoded_with_leeway(
     now: LogicalInstant,
     leeway_seconds: i64,
 ) -> Result<(TokenVerification, DecodedToken), JwtError> {
-    let decoded = verify_token_claims(token, store, now, leeway_seconds, TenantRule::Store)?;
+    let decoded = verify_token_claims(
+        token,
+        store,
+        now,
+        leeway_seconds,
+        TenantRule::Store,
+        store.lifecycle_epoch_claim(),
+    )?;
     let sub = decoded.sub().ok_or(JwtError::Malformed)?;
     let user = store.user_by_id(sub).ok_or(JwtError::UnknownUser)?;
     let auth_time = check_auth_time(&decoded, now)?;
@@ -737,6 +744,7 @@ pub fn verify_firestore_token(
         now,
         FIRESTORE_EXPIRY_LEEWAY_SECONDS,
         TenantRule::Store,
+        store.lifecycle_epoch_claim(),
     )?;
     check_auth_time(&decoded, now)?;
     Ok(decoded)
@@ -747,13 +755,23 @@ pub fn verify_firestore_token(
 /// deleted tenant was honoured about 3 s and 66 s after the deletion (AUTH-FS-CROSS stage 1,
 /// 2026-09-27). The token must still carry a tenant claim, so it never passes for the project's
 /// user of the same uid.
+///
+/// `removed` is what the registry remembered of the tenant's deletion. While the project's
+/// session epoch is still the one it had then (no reset since), the token must carry the epoch
+/// its tenant had; otherwise, or for a tenant never deleted, the project's own epoch.
 pub fn verify_firestore_rules_token_of_removed_tenant(
     token: &str,
     store: &AuthStore,
     now: LogicalInstant,
     acceptance: TokenAcceptance,
     expected_project: Option<&str>,
+    removed: Option<&crate::store::RemovedTenantEpochs>,
 ) -> Result<DecodedToken, JwtError> {
+    let project_epoch = store.lifecycle_epoch_claim();
+    let expected_epoch = match removed {
+        Some(epochs) if epochs.project == project_epoch => epochs.tenant.clone(),
+        _ => project_epoch,
+    };
     let expected_project = match expected_project {
         Some(project) => ProjectId::try_new(project.to_owned())
             .map_err(|_| JwtError::Malformed)?
@@ -767,6 +785,7 @@ pub fn verify_firestore_rules_token_of_removed_tenant(
         now,
         FIRESTORE_EXPIRY_LEEWAY_SECONDS,
         TenantRule::Removed,
+        expected_epoch,
     )
     .and_then(|decoded| check_auth_time(&decoded, now).map(|_| decoded));
     mock_fallback(token, store, acceptance, &expected_project, verified)
@@ -794,6 +813,7 @@ fn verify_token_claims(
     now: LogicalInstant,
     leeway_seconds: i64,
     tenant_rule: TenantRule,
+    expected_epoch: Option<String>,
 ) -> Result<DecodedToken, JwtError> {
     let decoded = decode_token(token, store.signer())?;
     let expected_iss = format!("https://securetoken.google.com/{}", store.project_id());
@@ -828,7 +848,7 @@ fn verify_token_claims(
             actual: actual_tenant,
         });
     }
-    if let Some(expected) = store.lifecycle_epoch_claim() {
+    if let Some(expected) = expected_epoch {
         let actual = decoded
             .payload
             .get("firebase")

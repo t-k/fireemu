@@ -1,4 +1,15 @@
 import { estimateStage3Budget } from "./budget-model.mjs";
+import { createHash } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
+
+const recipeContextClaims = new WeakMap();
+
+/** Claim one sender context from an actual active recipe capability. */
+export function claimStage3RecipeContext(token, plan) {
+  const claim = recipeContextClaims.get(token);
+  if (!claim) throw new Error("invalid recipe capability");
+  return claim(plan);
+}
 
 /** Count every outbound attempt before dispatch, with protected cleanup and recovery capacity. */
 export function createStage3RequestCounter(plan, { onStart, onReserve, recipeLifecycle } = {}) {
@@ -91,7 +102,91 @@ export function createStage3RequestCounter(plan, { onStart, onReserve, recipeLif
     }
   }
 
-  return {
+  function bindRecipeContext(token, index) {
+    const boundRecording = recording;
+    const recipeId = activeRecipe.recipeId;
+    const prefix = plan.recordings[boundRecording].prefix;
+    let claimed = false;
+    const isActive = () => activeRecipe?.token === token && recording === boundRecording;
+    function assertActive() {
+      if (!isActive()) throw new Error("invalid or expired recipe capability");
+      if (busy) throw new Error("concurrent recipe dispatch is forbidden");
+    }
+    recipeContextClaims.set(token, (suppliedPlan) => {
+      if (!isDeepStrictEqual(plan, suppliedPlan)) throw new Error("recipe context plan differs");
+      assertActive();
+      if (claimed) throw new Error("recipe capability was already claimed");
+      claimed = true;
+      let scopedMode = "not-started";
+      function dispatchOperationId(operationId) {
+        assertActive();
+        if (scopedMode === "closed") throw new Error("recipe sender is closed");
+        if (scopedMode === "not-started") throw new Error("recipe sender is not started");
+        if (mode !== scopedMode) throw new Error("recipe phase differs from the controller");
+        if (
+          typeof operationId !== "string" ||
+          !/^[A-Za-z0-9][A-Za-z0-9._/-]{0,119}$/.test(operationId)
+        )
+          throw new Error("invalid recipe operation dispatch");
+        const dispatchId = `r${boundRecording + 1}/p${index + 1}/${createHash("sha256").update(operationId).digest("hex")}`;
+        const prior = activeRecipe.operationIds.get(dispatchId);
+        if (prior !== undefined && prior !== operationId)
+          throw new Error("recipe operation digest collision");
+        activeRecipe.operationIds.set(dispatchId, operationId);
+        return dispatchId;
+      }
+      const scopedCounter = Object.freeze({
+        async start() {
+          assertActive();
+          if (scopedMode !== "not-started" || mode !== "subject")
+            throw new Error("recipe sender already started or has no durable begin");
+          scopedMode = "subject";
+        },
+        async send(operationId, transport) {
+          return counter.send(dispatchOperationId(operationId), transport, token);
+        },
+        beginCleanup() {
+          assertActive();
+          if (scopedMode !== "subject") throw new Error("recipe cleanup cannot start now");
+          counter.beginCleanup(token);
+          scopedMode = "cleanup";
+        },
+        close() {
+          assertActive();
+          if (scopedMode !== "cleanup" || mode !== "cleanup")
+            throw new Error("recipe sender cannot close now");
+          scopedMode = "closed";
+        },
+        nextRecording() {
+          throw new Error("recording transitions belong to the controller");
+        },
+        enterRecovery() {
+          throw new Error("recovery transitions belong to the controller");
+        },
+        snapshot() {
+          const snapshot = counter.snapshot();
+          return {
+            ...snapshot,
+            mode: scopedMode,
+            globalMode: snapshot.mode,
+            recording: boundRecording + 1,
+            recipeId,
+          };
+        },
+      });
+      return Object.freeze({
+        bucket: plan.bucket,
+        prefix,
+        recording: boundRecording + 1,
+        recipeId,
+        counter: scopedCounter,
+        dispatchOperationId,
+        isActive,
+      });
+    });
+  }
+
+  const counter = {
     async start() {
       if (mode !== "not-started" || busy) throw new Error("counter already started");
       checkEnvelope();
@@ -129,6 +224,9 @@ export function createStage3RequestCounter(plan, { onStart, onReserve, recipeLif
           phase: mode,
           recording: mode === "recovery" ? null : recording + 1,
           ...(lifecycle ? { recipeId: activeRecipe?.recipeId ?? null } : {}),
+          ...(activeRecipe?.operationIds.has(operationId)
+            ? { semanticOperationId: activeRecipe.operationIds.get(operationId) }
+            : {}),
         });
         total++;
         if (mode === "recovery") recovery++;
@@ -164,8 +262,10 @@ export function createStage3RequestCounter(plan, { onStart, onReserve, recipeLif
           recipeId,
           startTotal: total,
           startCounts: { ...recordings[recording] },
+          operationIds: new Map(),
         };
         mode = "subject";
+        bindRecipeContext(token, index);
         return token;
       } finally {
         busy = false;
@@ -246,4 +346,5 @@ export function createStage3RequestCounter(plan, { onStart, onReserve, recipeLif
       };
     },
   };
+  return counter;
 }

@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { createRunOwnership } from "./ownership.mjs";
-import { createStage3RequestCounter } from "./request-counter.mjs";
+import { createStage3RequestCounter, claimStage3RecipeContext } from "./request-counter.mjs";
 import { isDeepStrictEqual } from "node:util";
 import { resolveDeclaredQuery } from "./reference-resolution.mjs";
 import { evaluateRewriteProgress, validateRewriteDeclaration } from "./rewrite-attempts.mjs";
@@ -9,6 +9,12 @@ import { createLocalAuthState } from "./local-auth-state.mjs";
 import { FIXED_PRODUCTION_RULES_SHA256 } from "./auth-plan.mjs";
 
 const MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
+const senderClosureProofs = new WeakMap();
+
+/** Verify a module-private terminal proof against the actual active recipe and sequence. */
+export function verifyLocalRecipeTerminal(sender, proof) {
+  return senderClosureProofs.get(sender)?.(proof) === true;
+}
 
 function localOrigin(value) {
   const url = new URL(value);
@@ -162,6 +168,7 @@ export function validateStorageRoute(step, { bucket, prefix } = {}) {
 /** Local-only sender seam. Production entry points remain disabled separately. */
 export function createLocalStorageSender({
   plan,
+  recipeToken,
   origin,
   authOrigin,
   localAuth,
@@ -186,10 +193,13 @@ export function createLocalStorageSender({
     throw new Error("fetch and durable ownership journal writers are required");
   if (plan?.status !== "LOCAL_DRAFT_NO_SEND" || plan.recordings?.length !== 2)
     throw new Error("a reviewed two-recording draft shape is required");
-  const bucket = plan.bucket;
-  const prefix = plan.recordings[0].prefix;
+  const context = recipeToken === undefined ? null : claimStage3RecipeContext(recipeToken, plan);
+  const bucket = context?.bucket ?? plan.bucket;
+  const prefix = context?.prefix ?? plan.recordings[0].prefix;
   const ownership = createRunOwnership({ bucket, prefix });
-  const counter = createStage3RequestCounter(plan, { onStart, onReserve });
+  const counter = context?.counter ?? createStage3RequestCounter(plan, { onStart, onReserve });
+  let terminalProof = null;
+  let recipeClosed = false;
   let namespaceAdmitted = false;
   let ordinal = 0;
   let runListProofSerial = 0;
@@ -220,6 +230,8 @@ export function createLocalStorageSender({
     requestOrigin = base,
     verifyBeforeFetch = () => {},
   ) {
+    terminalProof = null;
+    const dispatchOperationId = context?.dispatchOperationId(operationId) ?? operationId;
     const url = new URL(path, requestOrigin);
     for (const [key, value] of Object.entries(query ?? {})) {
       if (typeof value !== "string") throw new Error("unresolved request query");
@@ -232,7 +244,7 @@ export function createLocalStorageSender({
         ...init,
         redirect: "manual",
         signal: AbortSignal.timeout(30_000),
-        operationId,
+        operationId: dispatchOperationId,
         accountingPhase: counter.snapshot().mode,
         verifyBeforeDispatch: verifyBeforeFetch,
       });
@@ -253,6 +265,7 @@ export function createLocalStorageSender({
       : createLocalAuthState({
           ...localAuth,
           plan,
+          recording: context ? context.recording - 1 : 0,
           onJournal,
           request: (operationId, path, query, { owner, body }, beforeFetch) =>
             countedFetch(
@@ -1132,6 +1145,8 @@ export function createLocalStorageSender({
       return deletion;
     },
     async verifyRunEmpty() {
+      if (context && (!namespaceAdmitted || counter.snapshot().mode !== "cleanup"))
+        throw new Error("admitted namespace and cleanup phase are required for terminal proof");
       if (sender.unresolved().length > 0)
         throw new Error("owned objects or sessions remain unresolved");
       const response = await countedFetch(
@@ -1142,16 +1157,42 @@ export function createLocalStorageSender({
       );
       if (response.status !== 200) throw new Error("final prefix list failed");
       const items = completePrefixList(response, bucket, prefix);
-      return ownership.verifyEmpty({
+      const empty = ownership.verifyEmpty({
         bucket,
         prefix,
         pages: [{ items, nextPageToken: null }],
       });
+      if (context) {
+        const proof = Object.freeze({
+          type: "recipe-terminal",
+          bucket,
+          prefix,
+          recording: context.recording,
+          recipeId: context.recipeId,
+          sequence: counter.snapshot().total,
+          namespaceEmpty: true,
+        });
+        await onJournal(proof);
+        if (counter.snapshot().total !== proof.sequence || sender.unresolved().length !== 0)
+          throw new Error("recipe terminal proof became stale");
+        terminalProof = Object.freeze(proof);
+      }
+      return empty;
     },
     beginCleanup: () => counter.beginCleanup(),
     nextRecording: () => counter.nextRecording(),
     enterRecovery: () => counter.enterRecovery(),
-    close: () => counter.close(),
+    close: () => {
+      if (
+        context &&
+        (!terminalProof ||
+          terminalProof.sequence !== counter.snapshot().total ||
+          sender.unresolved().length !== 0)
+      )
+        throw new Error("fresh durable recipe terminal proof required");
+      counter.close();
+      if (context) recipeClosed = true;
+    },
     unresolved: () =>
       [
         ...new Set([
@@ -1163,5 +1204,23 @@ export function createLocalStorageSender({
         ]),
       ].toSorted(),
   };
+  if (context) {
+    senderClosureProofs.set(sender, (proof) =>
+      Boolean(
+        recipeClosed &&
+        terminalProof &&
+        context.isActive() &&
+        counter.snapshot().globalMode === "cleanup" &&
+        terminalProof.sequence === counter.snapshot().total &&
+        proof?.recipeToken === recipeToken &&
+        proof.recording === context.recording &&
+        proof.recipeId === context.recipeId &&
+        proof.prefix === prefix &&
+        proof.sequence === terminalProof.sequence &&
+        sender.unresolved().length === 0,
+      ),
+    );
+    return Object.freeze(sender);
+  }
   return sender;
 }

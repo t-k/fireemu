@@ -62,6 +62,7 @@ function tokenClaims(token, account, projectId, now) {
 /** Local-only account state; every transport is supplied by the Storage counter. */
 export function createLocalAuthState({
   plan,
+  recording = 0,
   apiKey,
   password,
   now = Date.now,
@@ -74,14 +75,17 @@ export function createLocalAuthState({
     password.length < 16 ||
     typeof now !== "function" ||
     typeof request !== "function" ||
-    typeof onJournal !== "function"
+    typeof onJournal !== "function" ||
+    !Number.isInteger(recording) ||
+    recording < 0 ||
+    recording > 1
   )
     throw new Error("synthetic local Auth configuration is required");
   const projectId = plan.projectId;
   const corpus = buildAuthCorpus({
     projectId,
     bucket: plan.bucket,
-    runId: plan.recordings[0].runId,
+    runId: plan.recordings[recording].runId,
   });
   const accounts = new Map(),
     attempted = new Set();

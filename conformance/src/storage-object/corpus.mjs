@@ -702,6 +702,10 @@ export function buildCorpus({ bucket, prefix }) {
     ...readback("gcs", name, `${label}-gcs`),
     ...readback("firebase", name, `${label}-firebase`),
   ];
+  const copyReadback = (name, label) => [
+    ...readback("firebase", name, `${label}-firebase`),
+    ...readback("gcs", name, `${label}-gcs`),
+  ];
   const fieldRef = (step, field) => ({
     kind: "metadata-field",
     step,
@@ -718,9 +722,12 @@ export function buildCorpus({ bucket, prefix }) {
     update("gcs", sourceName, "source-marker", {
       metadata: { marker: "copy-source" },
     }),
-    ...bothReadback(sourceName, "source-before"),
+    metadata("gcs", sourceName, "source-first-read-before-gcs-metadata"),
+    metadata("firebase", sourceName, "source-first-read-firebase-metadata"),
+    metadata("gcs", sourceName, "source-first-read-after-gcs-metadata"),
+    ...copyReadback(sourceName, "source-before"),
     transfer("copyTo", sourceName, copiedName, "copy", sourceGuard),
-    ...bothReadback(copiedName, "copy"),
+    ...copyReadback(copiedName, "copy"),
   ];
   const rewriteSteps = Array.from({ length: 8 }, (_, index) => `rewrite-${index}`);
   for (const [index, id] of rewriteSteps.entries()) {
@@ -744,16 +751,16 @@ export function buildCorpus({ bucket, prefix }) {
     copySteps.push(step);
   }
   copySteps.push(
-    ...bothReadback(rewrittenName, "rewrite"),
-    ...bothReadback(missingSource, "copy-missing-source-before-source"),
-    ...bothReadback(missingDestination, "copy-missing-source-before-destination"),
+    ...copyReadback(rewrittenName, "rewrite"),
+    ...copyReadback(missingSource, "copy-missing-source-before-source"),
+    ...copyReadback(missingDestination, "copy-missing-source-before-destination"),
     transfer("copyTo", missingSource, missingDestination, "copy-missing-source", {
       ifGenerationMatch: "0",
     }),
-    ...bothReadback(missingSource, "copy-missing-source-after-source"),
-    ...bothReadback(missingDestination, "copy-missing-source-after-destination"),
-    ...bothReadback(rewriteMissingSource, "rewrite-missing-source-before-source"),
-    ...bothReadback(rewriteMissingDestination, "rewrite-missing-source-before-destination"),
+    ...copyReadback(missingSource, "copy-missing-source-after-source"),
+    ...copyReadback(missingDestination, "copy-missing-source-after-destination"),
+    ...copyReadback(rewriteMissingSource, "rewrite-missing-source-before-source"),
+    ...copyReadback(rewriteMissingDestination, "rewrite-missing-source-before-destination"),
     transfer(
       "rewriteTo",
       rewriteMissingSource,
@@ -763,14 +770,14 @@ export function buildCorpus({ bucket, prefix }) {
         ifGenerationMatch: "0",
       },
     ),
-    ...bothReadback(rewriteMissingSource, "rewrite-missing-source-after-source"),
-    ...bothReadback(rewriteMissingDestination, "rewrite-missing-source-after-destination"),
+    ...copyReadback(rewriteMissingSource, "rewrite-missing-source-after-source"),
+    ...copyReadback(rewriteMissingDestination, "rewrite-missing-source-after-destination"),
     upload("gcs", refusedCopy, "copy-refusal-seed", [255, 0, 127]),
-    ...bothReadback(refusedCopy, "copy-refusal-before"),
+    ...copyReadback(refusedCopy, "copy-refusal-before"),
     transfer("copyTo", sourceName, refusedCopy, "copy-refused-live-destination", sourceGuard),
-    ...bothReadback(refusedCopy, "copy-refusal-after"),
+    ...copyReadback(refusedCopy, "copy-refusal-after"),
     upload("gcs", refusedRewrite, "rewrite-refusal-seed", [128, 1, 255]),
-    ...bothReadback(refusedRewrite, "rewrite-refusal-before"),
+    ...copyReadback(refusedRewrite, "rewrite-refusal-before"),
     transfer(
       "rewriteTo",
       sourceName,
@@ -778,14 +785,23 @@ export function buildCorpus({ bucket, prefix }) {
       "rewrite-refused-live-destination",
       sourceGuard,
     ),
-    ...bothReadback(refusedRewrite, "rewrite-refusal-after"),
-    ...bothReadback(sourceName, "source-after"),
+    ...copyReadback(refusedRewrite, "rewrite-refusal-after"),
+    ...copyReadback(sourceName, "source-after"),
   );
   const copyRecipe = recipe("storage-object/gcs/copy-rewrite", copyNames, copySteps);
   copyRecipe.rewritePagination = {
     stepIds: rewriteSteps,
     maxCalls: rewriteSteps.length,
     completeOnlyWhenDone: true,
+  };
+  copyRecipe.firstFirebaseMetadataRead = {
+    stepIds: [
+      "source-first-read-before-gcs-metadata",
+      "source-first-read-firebase-metadata",
+      "source-first-read-after-gcs-metadata",
+    ],
+    tokenValues: "private-only",
+    publicFields: ["metageneration", "hasDownloadToken"],
   };
   recipes.push(copyRecipe);
 

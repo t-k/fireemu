@@ -8,6 +8,37 @@ const recipe = () =>
   buildCorpus(input).recipes.find((entry) => entry.id === "storage-object/gcs/copy-rewrite");
 const findStep = (entry, id) => entry.steps.find((step) => step.id === id);
 
+test("the first Firebase metadata read is observed before the later transfer prerequisite", () => {
+  const entry = recipe();
+  const ids = [
+    "source-first-read-before-gcs-metadata",
+    "source-first-read-firebase-metadata",
+    "source-first-read-after-gcs-metadata",
+  ];
+  assert.deepEqual(entry.firstFirebaseMetadataRead.stepIds, ids);
+  const rows = ids.map((id) => findStep(entry, id));
+  assert.deepEqual(
+    rows.map((step) => step.dialect),
+    ["gcs", "firebase", "gcs"],
+  );
+  assert.ok(
+    rows.every(
+      (step) =>
+        step.method === "GET" &&
+        step.objectName === entry.objects[0] &&
+        Object.keys(step.query).length === 0,
+    ),
+  );
+  assert.ok(
+    entry.steps.indexOf(rows[2]) <
+      entry.steps.indexOf(findStep(entry, "source-before-firebase-metadata")),
+  );
+  assert.ok(
+    entry.steps.indexOf(findStep(entry, "source-before-firebase-media")) <
+      entry.steps.indexOf(findStep(entry, "source-before-gcs-metadata")),
+  );
+});
+
 test("copy/rewrite owns distinct source, destinations and negative controls", () => {
   const entry = recipe();
   assert.deepEqual(
@@ -137,10 +168,10 @@ test("each transfer has both dialects' metadata and exact-media post-state decla
         .slice(index + offset, index + offset + 4)
         .map((step) => [step.dialect, step.method, step.objectName, step.query.alt ?? null]),
       [
-        ["gcs", "GET", destination, null],
-        ["gcs", "GET", destination, "media"],
         ["firebase", "GET", destination, null],
         ["firebase", "GET", destination, "media"],
+        ["gcs", "GET", destination, null],
+        ["gcs", "GET", destination, "media"],
       ],
     );
   }
@@ -176,14 +207,14 @@ test("source and live refusal destinations have readbacks before and after trans
         .slice(index + 1, index + 5)
         .map((step) => [step.dialect, step.objectName, step.query.alt ?? null]),
       [
-        ["gcs", name, null],
-        ["gcs", name, "media"],
         ["firebase", name, null],
         ["firebase", name, "media"],
+        ["gcs", name, null],
+        ["gcs", name, "media"],
       ],
     );
   };
-  readback("source-marker", entry.objects[0]);
+  readback("source-first-read-after-gcs-metadata", entry.objects[0]);
   readback("copy-refusal-seed", entry.objects[7]);
   readback("copy-refused-live-destination", entry.objects[7]);
   readback("rewrite-refusal-seed", entry.objects[8]);

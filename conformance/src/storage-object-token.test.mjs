@@ -113,7 +113,7 @@ test("every token use shares one typed private reference and has no literal toke
 test("token recipe increments only static request counts and leaves runtime obligations", () => {
   const value = corpus();
   assert.equal(value.recipes.length, 24);
-  assert.equal(value.requestsPerRecording, 1888);
+  assert.equal(value.requestsPerRecording, 1891);
   assert.equal(value.remainingRecipeIds.length, 2);
   assert.ok(value.remainingObligations.includes("download-token-provenance-and-authorization"));
 });

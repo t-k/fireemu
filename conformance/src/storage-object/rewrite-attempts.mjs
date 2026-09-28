@@ -19,7 +19,7 @@ function plain(value) {
 }
 
 function exactKeys(value, keys) {
-  return plain(value) && Object.keys(value).sort().join(",") === [...keys].sort().join(",");
+  return plain(value) && Object.keys(value).toSorted().join(",") === keys.toSorted().join(",");
 }
 
 function unsignedLong(value) {
@@ -141,7 +141,7 @@ function declaredSlots(recipe, bucket) {
       step.path !== expectedPath ||
       step.objectName !== first.objectName ||
       !plain(step.transfer) ||
-      Object.keys(step.transfer).sort().join(",") !== "destinationName,operation,sourceName" ||
+      Object.keys(step.transfer).toSorted().join(",") !== "destinationName,operation,sourceName" ||
       Object.entries(first.transfer).some(([key, value]) => step.transfer[key] !== value)
     )
       reject("INVALID_DECLARATION");
@@ -169,7 +169,7 @@ function declaredSlots(recipe, bucket) {
 }
 
 // This checks caller-supplied records only; it cannot establish HTTP provenance or authorize a send.
-export function evaluateRewriteAttempts({ recipe, attempts, bucket }) {
+function evaluateSequence({ recipe, attempts, bucket }, requireCompletion) {
   if (typeof bucket !== "string" || !bucket) reject("INVALID_INPUT");
   const slots = declaredSlots(recipe, bucket);
   if (!Array.isArray(attempts) || attempts.length === 0 || attempts.length > slots.length)
@@ -217,14 +217,15 @@ export function evaluateRewriteAttempts({ recipe, attempts, bucket }) {
       )
         reject("INVALID_COMPLETION");
       positiveLong(body.resource.generation);
-      return Object.freeze({
+      const result = {
         status: "MATCHED_SUPPLIED_REWRITE",
         attempts: attempts.length,
         objectSize: body.objectSize,
         destinationName: body.resource.name,
         sendAuthorized: false,
         cleanupAuthorized: false,
-      });
+      };
+      return Object.freeze(requireCompletion ? result : { ...result, done: true });
     }
     if (
       typeof body.rewriteToken !== "string" ||
@@ -235,5 +236,27 @@ export function evaluateRewriteAttempts({ recipe, attempts, bucket }) {
       reject("INVALID_CONTINUATION");
     precedingToken = body.rewriteToken;
   }
-  reject("INCOMPLETE_REWRITE");
+  if (requireCompletion) reject("INCOMPLETE_REWRITE");
+  return Object.freeze({
+    status: "MATCHED_SUPPLIED_REWRITE_PROGRESS",
+    done: false,
+    attempts: attempts.length,
+    rewriteToken: precedingToken,
+    objectSize: firstSize.toString(),
+    sendAuthorized: false,
+    cleanupAuthorized: false,
+  });
+}
+
+export function evaluateRewriteAttempts(input) {
+  return evaluateSequence(input, true);
+}
+
+/** Inspect supplied progress only. Any continuation token must remain private. */
+export function evaluateRewriteProgress(input) {
+  return evaluateSequence(input, false);
+}
+
+export function validateRewriteDeclaration({ recipe, bucket }) {
+  return Object.freeze(declaredSlots(recipe, bucket).map((step) => step.id));
 }

@@ -58,7 +58,7 @@ test("the partial corpus names the declared frozen recipes and its remaining obl
   assert.ok(corpus.recipes.every((r) => frozenRecipes.has(r.id)));
   assert.ok(corpus.remainingObligations.includes("refused-simple-upload-post-state"));
   assert.ok(corpus.remainingObligations.includes("production-two-recordings"));
-  assert.equal(corpus.requestsPerRecording, 1888);
+  assert.equal(corpus.requestsPerRecording, 1891);
   assert.deepEqual(
     new Set([...corpus.recipes.map((r) => r.id), ...corpus.remainingRecipeIds]),
     frozenRecipes,

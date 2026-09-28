@@ -1,6 +1,9 @@
 import { createHash } from "node:crypto";
 import { createRunOwnership } from "./ownership.mjs";
 import { createStage3RequestCounter } from "./request-counter.mjs";
+import { isDeepStrictEqual } from "node:util";
+import { resolveDeclaredQuery } from "./reference-resolution.mjs";
+import { evaluateRewriteProgress, validateRewriteDeclaration } from "./rewrite-attempts.mjs";
 
 const MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
 
@@ -146,6 +149,8 @@ export function createLocalStorageSender({
   const observed = new Map();
   const lastMutation = new Map();
   const confirmed = new Map();
+  const rewriteChains = new Map(),
+    rewriteDispatches = new Map();
   if (credentials === null || typeof credentials !== "object" || Array.isArray(credentials))
     throw new Error("invalid local credentials");
 
@@ -219,7 +224,26 @@ export function createLocalStorageSender({
     return { bucket, name, generation: parsed.generation, bytesSha256 };
   }
 
-  return {
+  function boundRewriteProgress(name) {
+    const chain = rewriteChains.get(name);
+    if (!chain || chain.ids.length === 0) throw new Error("rewrite response chain is missing");
+    const attempts = chain.ids.map((id) => {
+      const captured = observed.get(id);
+      if (!captured) throw new Error("rewrite response is uncertain");
+      return {
+        stepId: id,
+        query: captured.step.query,
+        status: captured.response.status,
+        bodyBase64: captured.response.raw.toString("base64"),
+      };
+    });
+    const progress = evaluateRewriteProgress({ recipe: chain.recipe, attempts, bucket });
+    if (progress.objectSize !== `${chain.sourceBytes}`)
+      throw new Error("rewrite size differs from owned source");
+    return progress;
+  }
+
+  const sender = {
     start: () => counter.start(),
     snapshot: () => counter.snapshot(),
     async admitNamespace() {
@@ -253,6 +277,12 @@ export function createLocalStorageSender({
       if (counter.snapshot().mode === "not-started") throw new Error("no durable started row");
       const route = validateStorageRoute(step, { bucket, prefix });
       if (route !== "direct") throw new Error("session reference is unresolved");
+      if (
+        step.transfer?.operation === "rewriteTo" &&
+        (step.continuation !== undefined || step.query.rewriteToken !== undefined) &&
+        !rewriteDispatches.has(operationId)
+      )
+        throw new Error("rewrite continuation lacks captured response provenance");
       if (observed.has(operationId) || operationId === "initial-prefix-list")
         throw new Error("request operation ID was already used");
       const headers = { ...step.headers };
@@ -280,14 +310,74 @@ export function createLocalStorageSender({
                 name: step.objectName,
                 operationId,
                 method: step.method,
+                ...(rewriteDispatches.get(operationId)?.previousOperationId
+                  ? { continuationOf: rewriteDispatches.get(operationId).previousOperationId }
+                  : {}),
               });
-              ownership.noteMutationAttempt(step.objectName, operationId);
+              const previous = rewriteDispatches.get(operationId)?.previousOperationId;
+              if (previous)
+                ownership.noteMutationContinuation(step.objectName, previous, operationId);
+              else ownership.noteMutationAttempt(step.objectName, operationId);
             }
           : undefined,
       );
       observed.set(operationId, { step, response, ordinal: ++ordinal });
       if (mutates) lastMutation.set(step.objectName, ordinal);
       return response;
+    },
+    async sendRewriteStep({ recipe, stepIndex } = {}) {
+      const ids = validateRewriteDeclaration({ recipe, bucket });
+      const declared = recipe.steps[stepIndex];
+      const index = ids.indexOf(declared?.id);
+      if (index < 0) throw new Error("request is not a declared rewrite slot");
+      const name = declared.objectName;
+      let chain = rewriteChains.get(name),
+        query;
+      if (index === 0) {
+        if (chain) throw new Error("rewrite sequence was already started");
+        const records = new Map(
+          [...observed].map(([id, row]) => [
+            id,
+            {
+              status: row.response.status,
+              bodyBase64: row.response.raw.toString("base64"),
+            },
+          ]),
+        );
+        query = resolveDeclaredQuery({ recipe, stepIndex, responses: records, bucket });
+        const metadataId = declared.query.ifSourceGenerationMatch.step;
+        const metadataIndex = recipe.steps.findIndex((row) => row.id === metadataId);
+        const mediaId = recipe.steps[metadataIndex + 1]?.id;
+        sender.assertOwnedReadbacks({
+          name: declared.transfer.sourceName,
+          metadataOperationId: metadataId,
+          mediaOperationId: mediaId,
+        });
+        chain = {
+          recipe: structuredClone(recipe),
+          ids: [],
+          sourceBytes: observed.get(mediaId).response.raw.length,
+        };
+        rewriteChains.set(name, chain);
+      } else {
+        if (!chain || !isDeepStrictEqual(chain.recipe, recipe) || chain.ids.length !== index)
+          throw new Error("rewrite continuation differs from the bound declaration or order");
+        const progress = boundRewriteProgress(name);
+        if (progress.done) throw new Error("rewrite already completed");
+        query = { rewriteToken: progress.rewriteToken };
+      }
+      const operationId = declared.id;
+      rewriteDispatches.set(operationId, { previousOperationId: chain.ids.at(-1) ?? null });
+      chain.ids.push(operationId);
+      try {
+        return await sender.sendStep({ ...declared, query });
+      } finally {
+        rewriteDispatches.delete(operationId);
+      }
+    },
+    rewriteProgress({ name } = {}) {
+      const progress = boundRewriteProgress(name);
+      return Object.freeze({ done: progress.done, attempts: progress.attempts });
     },
     assertOwnedReadbacks({ name, metadataOperationId, mediaOperationId } = {}) {
       const current = ownedReadbacks(name, metadataOperationId, mediaOperationId);
@@ -324,6 +414,12 @@ export function createLocalStorageSender({
         uploaded = JSON.parse(upload.response.raw.toString("utf8"));
       } catch {
         throw new Error("owned upload response is not JSON");
+      }
+      if (upload.step.transfer?.operation === "rewriteTo") {
+        const progress = boundRewriteProgress(name);
+        if (!progress.done || rewriteChains.get(name).ids.at(-1) !== uploadOperationId)
+          throw new Error("rewrite completion is not bound to the owned upload");
+        uploaded = uploaded.resource;
       }
       if (
         uploaded?.bucket !== bucket ||
@@ -626,4 +722,5 @@ export function createLocalStorageSender({
     close: () => counter.close(),
     unresolved: () => ownership.unresolved(),
   };
+  return sender;
 }

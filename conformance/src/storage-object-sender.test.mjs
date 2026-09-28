@@ -14,7 +14,7 @@ const plan = () =>
 const prefix = "storage-object/recordone/";
 const name = `${prefix}simple/object.bin`;
 
-test("all 1,888 base declarations have an owned route or an explicit session reference", () => {
+test("all 1,891 base declarations have an owned route or an explicit session reference", () => {
   const corpus = buildCorpus({ bucket: "example.appspot.com", prefix });
   const counts = { direct: 0, session: 0 };
   for (const recipe of corpus.recipes) {
@@ -23,7 +23,7 @@ test("all 1,888 base declarations have an owned route or an explicit session ref
       counts[route]++;
     }
   }
-  assert.deepEqual(counts, { direct: 1866, session: 22 });
+  assert.deepEqual(counts, { direct: 1869, session: 22 });
 });
 
 test("collection requests use a scoped prefix without inventing an object name", () => {

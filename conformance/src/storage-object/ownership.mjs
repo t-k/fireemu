@@ -104,6 +104,20 @@ export function createRunOwnership({ bucket, prefix } = {}) {
       object.state = "pending";
       object.operationId = operationId;
     },
+    noteMutationContinuation(name, previousOperationId, operationId) {
+      checkName(name);
+      const object = objects.get(name);
+      if (
+        !object ||
+        object.state !== "pending" ||
+        object.operationId !== previousOperationId ||
+        typeof operationId !== "string" ||
+        !/^[A-Za-z0-9][A-Za-z0-9._/-]{0,119}$/.test(operationId) ||
+        operationId === previousOperationId
+      )
+        throw new Error("continuation is not bound to the preceding pending mutation");
+      object.operationId = operationId;
+    },
     observeOwnedGeneration(name, response, expectedBytesSha256) {
       checkName(name);
       const object = objects.get(name);

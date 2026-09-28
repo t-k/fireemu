@@ -32,7 +32,7 @@ export function buildStage3DraftPlan({ projectId, bucket, runIds } = {}) {
     const authCorpus = buildAuthCorpus({ projectId, bucket, runId });
     if (
       corpus.recipes.length !== 24 ||
-      corpus.requestsPerRecording !== 1888 ||
+      corpus.requestsPerRecording !== 1891 ||
       JSON.stringify(corpus.remainingRecipeIds) !== JSON.stringify(EXPECTED_REMAINING)
     )
       throw new Error("the static corpus changed; review its budget before planning a send");

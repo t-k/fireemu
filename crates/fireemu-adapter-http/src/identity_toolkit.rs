@@ -483,6 +483,19 @@ impl core::fmt::Debug for AuthBlockingContext {
     }
 }
 
+/// One trigger as Identity Platform's configuration lists it: the event's effective function.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BlockingAuthTrigger {
+    /// The event.
+    pub event: fireemu_core_functions::manifest::BlockingAuthEvent,
+    /// The function's name.
+    pub function: String,
+    /// The function's region.
+    pub region: String,
+    /// When the trigger last changed.
+    pub update_time: LogicalInstant,
+}
+
 /// Synchronous bridge invoked before an Auth create or sign-in commit.
 pub trait AuthBlockingHook: Send + Sync {
     /// Maximum number of Auth requests that may occupy the synchronous bridge, including
@@ -551,6 +564,12 @@ pub trait AuthBlockingHook: Send + Sync {
         _context: &AuthBlockingContext,
     ) -> Result<Option<Value>, BlockingFunctionFailure> {
         self.invoke_for(project, tenant, event, user)
+    }
+
+    /// The events' effective functions, for the strict profile's configuration answer. Hooks
+    /// without a Functions runtime list none.
+    fn blocking_auth_triggers(&self) -> Vec<BlockingAuthTrigger> {
+        Vec::new()
     }
 
     /// Runs `beforeSendEmail` for the mail the context names (its `email` and `email_type`),
@@ -4864,6 +4883,8 @@ fn valid_project_config_field(field: &str) -> bool {
             | "blockingFunctions.triggers"
             | "blockingFunctions.triggers.beforeCreate"
             | "blockingFunctions.triggers.beforeSignIn"
+            | "blockingFunctions.triggers.beforeSendEmail"
+            | "blockingFunctions.triggers.beforeSendSms"
             | "blockingFunctions.forwardInboundCredentials"
             | "blockingFunctions.forwardInboundCredentials.idToken"
             | "blockingFunctions.forwardInboundCredentials.accessToken"
@@ -5049,6 +5070,97 @@ fn project_provider_denial(
     tenant_policy_denial_with_metadata(handler, Some(&metadata), body, false)
 }
 
+/// The strict profile's `blockingFunctions`, as production answers it (AUTH-TENANT-BLOCKING
+/// recording 2026-09-28, config#config-blocking): every event with a function, deployed or
+/// selected, under its Cloud Functions URL and the time its trigger last changed; a disabled
+/// event is left out; `forwardInboundCredentials` names its enabled tokens only, and is given
+/// with the triggers (production's `{}` after a deployment) or once configured.
+fn production_blocking_functions(hook: &dyn AuthBlockingHook, project: &str) -> Value {
+    let mut triggers = serde_json::Map::new();
+    for trigger in hook.blocking_auth_triggers() {
+        let mut value = serde_json::Map::new();
+        value.insert(
+            "functionUri".to_owned(),
+            json!(production_function_uri(
+                project,
+                &trigger.region,
+                &trigger.function
+            )),
+        );
+        if let Ok(time) = trigger.update_time.to_rfc3339() {
+            value.insert("updateTime".to_owned(), json!(time));
+        }
+        triggers.insert(trigger.event.as_str().to_owned(), Value::Object(value));
+    }
+    let configured = hook
+        .blocking_auth_settings()
+        .and_then(|settings| settings.get("forwardInboundCredentials").cloned());
+    let mut document = serde_json::Map::new();
+    if configured.is_some() || !triggers.is_empty() {
+        let enabled = configured
+            .as_ref()
+            .and_then(Value::as_object)
+            .map(|forwarding| {
+                forwarding
+                    .iter()
+                    .filter(|(_, value)| value.as_bool() == Some(true))
+                    .map(|(key, value)| (key.clone(), value.clone()))
+                    .collect::<serde_json::Map<_, _>>()
+            })
+            .unwrap_or_default();
+        if !triggers.is_empty() {
+            document.insert("triggers".to_owned(), Value::Object(triggers));
+        }
+        document.insert(
+            "forwardInboundCredentials".to_owned(),
+            Value::Object(enabled),
+        );
+    }
+    Value::Object(document)
+}
+
+/// A 1st-generation Cloud Functions URL, the form production's configuration names a
+/// blocking function by (its 2nd-generation functions too).
+fn production_function_uri(project: &str, region: &str, function: &str) -> String {
+    format!("https://{region}-{project}.cloudfunctions.net/{function}")
+}
+
+/// The local function a production-form trigger URL names, as the bridge's own
+/// `fireemu://functions/{project}/{region}/{function}` form; any other text is kept for the
+/// bridge to judge.
+fn local_function_uri(project: &str, uri: &str) -> Option<String> {
+    let rest = uri.strip_prefix("https://")?;
+    let (host, function) = rest.split_once('/')?;
+    let region = host.strip_suffix(&format!("-{project}.cloudfunctions.net"))?;
+    let valid = |part: &str| {
+        !part.is_empty()
+            && part
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
+    };
+    (valid(region) && valid(function))
+        .then(|| format!("fireemu://functions/{project}/{region}/{function}"))
+}
+
+/// A strict update's triggers in the bridge's form: a production URL becomes the local one and
+/// the output-only `updateTime` a GET answered is dropped, so a configuration read back can be
+/// written as it is.
+fn localize_blocking_triggers(candidate: &mut Value, project: &str) {
+    let Some(triggers) = candidate.get_mut("triggers").and_then(Value::as_object_mut) else {
+        return;
+    };
+    for trigger in triggers.values_mut().filter_map(Value::as_object_mut) {
+        trigger.remove("updateTime");
+        if let Some(local) = trigger
+            .get("functionUri")
+            .and_then(Value::as_str)
+            .and_then(|uri| local_function_uri(project, uri))
+        {
+            trigger.insert("functionUri".to_owned(), json!(local));
+        }
+    }
+}
+
 fn valid_blocking_config_field(field: &str) -> bool {
     matches!(
         field,
@@ -5056,6 +5168,8 @@ fn valid_blocking_config_field(field: &str) -> bool {
             | "blockingFunctions.triggers"
             | "blockingFunctions.triggers.beforeCreate"
             | "blockingFunctions.triggers.beforeSignIn"
+            | "blockingFunctions.triggers.beforeSendEmail"
+            | "blockingFunctions.triggers.beforeSendSms"
             | "blockingFunctions.forwardInboundCredentials"
             | "blockingFunctions.forwardInboundCredentials.idToken"
             | "blockingFunctions.forwardInboundCredentials.accessToken"
@@ -5119,7 +5233,9 @@ fn project_blocking_settings_update(
                 .cloned()
                 .unwrap_or_else(|| json!({})),
             "blockingFunctions.triggers.beforeCreate"
-            | "blockingFunctions.triggers.beforeSignIn" => {
+            | "blockingFunctions.triggers.beforeSignIn"
+            | "blockingFunctions.triggers.beforeSendEmail"
+            | "blockingFunctions.triggers.beforeSendSms" => {
                 let event = field
                     .strip_prefix("blockingFunctions.triggers.")
                     .expect("validated blocking trigger field");
@@ -5177,6 +5293,9 @@ fn project_blocking_settings_update(
             .as_object_mut()
             .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?;
         group_object.insert(key.to_owned(), value);
+    }
+    if !state.stateless_refresh_tokens {
+        localize_blocking_triggers(&mut candidate, project);
     }
     blocking
         .validate_blocking_auth_settings(&candidate)
@@ -5669,14 +5788,23 @@ fn validate_project_config_payload(body: &Value, one_version: bool) -> Result<()
             let triggers = triggers
                 .as_object()
                 .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?;
-            if triggers
-                .keys()
-                .any(|key| key != "beforeCreate" && key != "beforeSignIn")
-            {
+            // The strict profile names production's email and SMS events too, and takes back the
+            // output-only `updateTime` its configuration answers.
+            let events: &[&str] = if one_version {
+                &[
+                    "beforeCreate",
+                    "beforeSignIn",
+                    "beforeSendEmail",
+                    "beforeSendSms",
+                ]
+            } else {
+                &["beforeCreate", "beforeSignIn"]
+            };
+            if triggers.keys().any(|key| !events.contains(&key.as_str())) {
                 return Err(error(400, "INVALID_ARGUMENT"));
             }
-            for key in ["beforeCreate", "beforeSignIn"] {
-                let Some(value) = triggers.get(key) else {
+            for key in events {
+                let Some(value) = triggers.get(*key) else {
                     continue;
                 };
                 if value.is_null() {
@@ -5685,7 +5813,12 @@ fn validate_project_config_payload(body: &Value, one_version: bool) -> Result<()
                 let trigger = value
                     .as_object()
                     .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?;
-                if trigger.keys().any(|field| field != "functionUri")
+                if trigger
+                    .keys()
+                    .any(|field| field != "functionUri" && !(one_version && field == "updateTime"))
+                    || trigger
+                        .get("updateTime")
+                        .is_some_and(|time| !time.is_string())
                     || trigger
                         .get("functionUri")
                         .and_then(Value::as_str)
@@ -5782,7 +5915,13 @@ fn project_config_document(
             .blocking
             .as_ref()
             .filter(|hook| hook.blocking_auth_project() == Some(project))
-            .and_then(|hook| hook.blocking_auth_settings()),
+            .and_then(|hook| {
+                if state.stateless_refresh_tokens {
+                    hook.blocking_auth_settings()
+                } else {
+                    Some(production_blocking_functions(hook.as_ref(), project))
+                }
+            }),
         members: store.stored_config_members(),
     };
     let mut document = if state.stateless_refresh_tokens {

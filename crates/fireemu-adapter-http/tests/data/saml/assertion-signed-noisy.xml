@@ -1,0 +1,175 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<samlp:Response
+	 xmlns:unused='urn:fireemu:unused'
+	 xmlns:saml='urn:oasis:names:tc:SAML:2.0:assertion'
+	 xmlns:samlp='urn:oasis:names:tc:SAML:2.0:protocol'
+	 Version='2.0'
+	 IssueInstant='2027-01-15T08:00:00Z'
+	 InResponseTo='_request-1'
+	 ID='_response-1'
+	 Destination='https://demo-project.firebaseapp.com/__/auth/handler'
+><saml:Issuer
+	 xmlns:unused='urn:fireemu:unused'
+	 xmlns:saml='urn:oasis:names:tc:SAML:2.0:assertion'
+	 xmlns:samlp='urn:oasis:names:tc:SAML:2.0:protocol'
+>https://idp.ex&#97;mple.test/s&#97;ml/fixture</saml:Issuer><samlp:Status
+	 xmlns:unused='urn:fireemu:unused'
+	 xmlns:saml='urn:oasis:names:tc:SAML:2.0:assertion'
+	 xmlns:samlp='urn:oasis:names:tc:SAML:2.0:protocol'
+><samlp:StatusCode
+	 xmlns:unused='urn:fireemu:unused'
+	 xmlns:saml='urn:oasis:names:tc:SAML:2.0:assertion'
+	 xmlns:samlp='urn:oasis:names:tc:SAML:2.0:protocol'
+	 Value='urn:oasis:names:tc:SAML:2.0:status:Success' /></samlp:Status><saml:Assertion
+	 xmlns:unused='urn:fireemu:unused'
+	 xmlns:saml='urn:oasis:names:tc:SAML:2.0:assertion'
+	 xmlns:samlp='urn:oasis:names:tc:SAML:2.0:protocol'
+	 Version='2.0'
+	 IssueInstant='2027-01-15T08:00:00Z'
+	 ID='_assertion-1'
+><saml:Issuer
+	 xmlns:unused='urn:fireemu:unused'
+	 xmlns:saml='urn:oasis:names:tc:SAML:2.0:assertion'
+	 xmlns:samlp='urn:oasis:names:tc:SAML:2.0:protocol'
+>https://idp.ex&#97;mple.test/s&#97;ml/fixture</saml:Issuer><ds:Signature
+	 xmlns:unused='urn:fireemu:unused'
+	 xmlns:ds='http://www.w3.org/2000/09/xmldsig#'
+	 xmlns:saml='urn:oasis:names:tc:SAML:2.0:assertion'
+	 xmlns:samlp='urn:oasis:names:tc:SAML:2.0:protocol'
+><ds:SignedInfo
+	 xmlns:unused='urn:fireemu:unused'
+	 xmlns:ds='http://www.w3.org/2000/09/xmldsig#'
+	 xmlns:saml='urn:oasis:names:tc:SAML:2.0:assertion'
+	 xmlns:samlp='urn:oasis:names:tc:SAML:2.0:protocol'
+><ds:CanonicalizationMethod
+	 xmlns:unused='urn:fireemu:unused'
+	 xmlns:ds='http://www.w3.org/2000/09/xmldsig#'
+	 xmlns:saml='urn:oasis:names:tc:SAML:2.0:assertion'
+	 xmlns:samlp='urn:oasis:names:tc:SAML:2.0:protocol'
+	 Algorithm='http://www.w3.org/2001/10/xml-exc-c14n#' /><ds:SignatureMethod
+	 xmlns:unused='urn:fireemu:unused'
+	 xmlns:ds='http://www.w3.org/2000/09/xmldsig#'
+	 xmlns:saml='urn:oasis:names:tc:SAML:2.0:assertion'
+	 xmlns:samlp='urn:oasis:names:tc:SAML:2.0:protocol'
+	 Algorithm='http://www.w3.org/2001/04/xmldsig-more#rsa-sha256' /><ds:Reference
+	 xmlns:unused='urn:fireemu:unused'
+	 xmlns:ds='http://www.w3.org/2000/09/xmldsig#'
+	 xmlns:saml='urn:oasis:names:tc:SAML:2.0:assertion'
+	 xmlns:samlp='urn:oasis:names:tc:SAML:2.0:protocol'
+	 URI='#_assertion-1'
+><ds:Transforms
+	 xmlns:unused='urn:fireemu:unused'
+	 xmlns:ds='http://www.w3.org/2000/09/xmldsig#'
+	 xmlns:saml='urn:oasis:names:tc:SAML:2.0:assertion'
+	 xmlns:samlp='urn:oasis:names:tc:SAML:2.0:protocol'
+><ds:Transform
+	 xmlns:unused='urn:fireemu:unused'
+	 xmlns:ds='http://www.w3.org/2000/09/xmldsig#'
+	 xmlns:saml='urn:oasis:names:tc:SAML:2.0:assertion'
+	 xmlns:samlp='urn:oasis:names:tc:SAML:2.0:protocol'
+	 Algorithm='http://www.w3.org/2000/09/xmldsig#enveloped-signature' /><ds:Transform
+	 xmlns:unused='urn:fireemu:unused'
+	 xmlns:ds='http://www.w3.org/2000/09/xmldsig#'
+	 xmlns:saml='urn:oasis:names:tc:SAML:2.0:assertion'
+	 xmlns:samlp='urn:oasis:names:tc:SAML:2.0:protocol'
+	 Algorithm='http://www.w3.org/2001/10/xml-exc-c14n#' /></ds:Transforms><ds:DigestMethod
+	 xmlns:unused='urn:fireemu:unused'
+	 xmlns:ds='http://www.w3.org/2000/09/xmldsig#'
+	 xmlns:saml='urn:oasis:names:tc:SAML:2.0:assertion'
+	 xmlns:samlp='urn:oasis:names:tc:SAML:2.0:protocol'
+	 Algorithm='http://www.w3.org/2001/04/xmlenc#sha256' /><ds:DigestValue
+	 xmlns:unused='urn:fireemu:unused'
+	 xmlns:ds='http://www.w3.org/2000/09/xmldsig#'
+	 xmlns:saml='urn:oasis:names:tc:SAML:2.0:assertion'
+	 xmlns:samlp='urn:oasis:names:tc:SAML:2.0:protocol'
+>6FztNZ3CZ22FsRjdsQEbZvzj/vgzDeTylbZfXQPsNTU=</ds:DigestValue></ds:Reference></ds:SignedInfo><ds:SignatureValue
+	 xmlns:unused='urn:fireemu:unused'
+	 xmlns:ds='http://www.w3.org/2000/09/xmldsig#'
+	 xmlns:saml='urn:oasis:names:tc:SAML:2.0:assertion'
+	 xmlns:samlp='urn:oasis:names:tc:SAML:2.0:protocol'
+>PMR&#97;kPyXA4REXQPtzJncB&#97;&#97;YTtopEyrrHuHgN5GDgdYK5TqEEG8wPmdI7&#97;egCqmjnR8TSEQsHrTxlRzdY0ggFFCRbDH7FkXSQYG6AOQCo9nkk+uAAIMHoEeoR2FdEGPIIorNG0AWtLTk436xZCkmpKeV8xeD8L7yLc/PVUYhNkgLP+RWjvnBqxYpSP&#97;j&#97;xFFYjk5kBQFBc&#97;CeBFhmkEeTRDnqi5yxS6xQ25y0s8BFi633tZyIGDY13jHRMuwXVM6HCxLzveX0JWmnTDPPMGeyXQ55h9z6XN3EyFXHRY/+PZXnRC7NbjO0mzwSUF3ssd&#97;dcqQ7LjEIzoVus5nS+mRxA==</ds:SignatureValue><ds:KeyInfo
+	 xmlns:unused='urn:fireemu:unused'
+	 xmlns:ds='http://www.w3.org/2000/09/xmldsig#'
+	 xmlns:saml='urn:oasis:names:tc:SAML:2.0:assertion'
+	 xmlns:samlp='urn:oasis:names:tc:SAML:2.0:protocol'
+><ds:X509Data
+	 xmlns:unused='urn:fireemu:unused'
+	 xmlns:ds='http://www.w3.org/2000/09/xmldsig#'
+	 xmlns:saml='urn:oasis:names:tc:SAML:2.0:assertion'
+	 xmlns:samlp='urn:oasis:names:tc:SAML:2.0:protocol'
+><ds:X509Certificate
+	 xmlns:unused='urn:fireemu:unused'
+	 xmlns:ds='http://www.w3.org/2000/09/xmldsig#'
+	 xmlns:saml='urn:oasis:names:tc:SAML:2.0:assertion'
+	 xmlns:samlp='urn:oasis:names:tc:SAML:2.0:protocol'
+>MIIDKTCCAhGgAwIBAgIUPx/t6oZqPowuAVv4hfNSSKVFWuMwDQYJKoZIhvcNAQELBQAwIzEhMB8GA1UEAwwYZmlyZWVtdS1zYW1sLWZpeHR1cmUt&#97;WRwMCAXDTI2MDkyODAwMjE1M1oYDzIxMjYwOTA0MDAyMTUzWjAjMSEwHwYDVQQDDBhm&#97;XJlZW11LXNhbWwtZml4dHVyZS1pZHAwggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQDOcW8LWPFOrho4QbpPGoz1oYvbFsEZvR8kHmL2VWiuFn/Q7efzV21QY&#97;RU8cdNbz2MOUwscs2KQ452cO1Sv/41W700LpSHmr04gl99Zh7PJC7KT8RQYA84bNrjnmH5sXxzdrTUhZJmNbsAVUHCwnonZt7U+DAj0UI7Qw9jUNjWe9KkH7XA&#97;kHORT1OyqTYZHeP+OR4q9kBNGoVL59GniqE/4F7sF25p3KGYpHoJEG9ki9&#97;xzv/FB4/ZOqO4I/JA+LKmiHsyBkZ&#97;Gdsd2/91BUkS5Os7Po8+15ziuup0ssOLU2Ruu&#97;e7U37skZjh2F2x92qBJNeh+9TGhdrVruei0P/AgMBAAGjUzBRMB0GA1UdDgQWBBQp+eWSJYMwtB&#97;Ewl9/ukABL8xfSDAfBgNVHSMEGDAWgBQp+eWSJYMwtB&#97;Ewl9/ukABL8xfSDAPBgNVHRMBAf8EBTADAQH/MA0GCSqGSIb3DQEBCwUAA4IBAQC97ZtSsCrsp3BUxlyOmEPfS&#97;ZVZCDBqrLJA2GZjid0dURuY/R7dJ1ZGFUb+JpOOvKNVxrAgpPvIpVBIXG/VOM2sKTIqqJQrJXEBhSC72b064nuRsRxuLnMz/0bHsG7Xo933VtMiR2vlmDKBkzDsYB1KAlszDE&#97;cF8Lbe0No6NxdJgBz50dgtlB6oPmleW3H7mTzF/IuRTPnxSpUY1DWY+J+rfo/2wA+IQVXGj/Scfuez0q4z3wMq&#97;BplQu0A&#97;SNxRwDIYZkGR75k6vBwdIKE3DLeZAVXZKQLV2h2fbKG03I2iSjWdKdSVNmUA49iB4GWWwgwQR1&#97;pcTuC5je3yow3R</ds:X509Certificate></ds:X509Data></ds:KeyInfo></ds:Signature><saml:Subject
+	 xmlns:unused='urn:fireemu:unused'
+	 xmlns:saml='urn:oasis:names:tc:SAML:2.0:assertion'
+	 xmlns:samlp='urn:oasis:names:tc:SAML:2.0:protocol'
+><saml:NameID
+	 xmlns:unused='urn:fireemu:unused'
+	 xmlns:saml='urn:oasis:names:tc:SAML:2.0:assertion'
+	 xmlns:samlp='urn:oasis:names:tc:SAML:2.0:protocol'
+	 Format='urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress'
+>fixture-user@ex&#97;mple.com</saml:NameID><saml:SubjectConfirmation
+	 xmlns:unused='urn:fireemu:unused'
+	 xmlns:saml='urn:oasis:names:tc:SAML:2.0:assertion'
+	 xmlns:samlp='urn:oasis:names:tc:SAML:2.0:protocol'
+	 Method='urn:oasis:names:tc:SAML:2.0:cm:bearer'
+><saml:SubjectConfirmationData
+	 xmlns:unused='urn:fireemu:unused'
+	 xmlns:saml='urn:oasis:names:tc:SAML:2.0:assertion'
+	 xmlns:samlp='urn:oasis:names:tc:SAML:2.0:protocol'
+	 Recipient='https://demo-project.firebaseapp.com/__/auth/handler'
+	 NotOnOrAfter='2027-01-15T08:05:00Z'
+	 InResponseTo='_request-1' /></saml:SubjectConfirmation></saml:Subject><saml:Conditions
+	 xmlns:unused='urn:fireemu:unused'
+	 xmlns:saml='urn:oasis:names:tc:SAML:2.0:assertion'
+	 xmlns:samlp='urn:oasis:names:tc:SAML:2.0:protocol'
+	 NotOnOrAfter='2027-01-15T08:05:00Z'
+	 NotBefore='2027-01-15T07:59:00Z'
+><saml:AudienceRestriction
+	 xmlns:unused='urn:fireemu:unused'
+	 xmlns:saml='urn:oasis:names:tc:SAML:2.0:assertion'
+	 xmlns:samlp='urn:oasis:names:tc:SAML:2.0:protocol'
+><saml:Audience
+	 xmlns:unused='urn:fireemu:unused'
+	 xmlns:saml='urn:oasis:names:tc:SAML:2.0:assertion'
+	 xmlns:samlp='urn:oasis:names:tc:SAML:2.0:protocol'
+>fireemu-fixture-sp</saml:Audience></saml:AudienceRestriction></saml:Conditions><saml:AuthnStatement
+	 xmlns:unused='urn:fireemu:unused'
+	 xmlns:saml='urn:oasis:names:tc:SAML:2.0:assertion'
+	 xmlns:samlp='urn:oasis:names:tc:SAML:2.0:protocol'
+	 SessionIndex='_assertion-1'
+	 AuthnInstant='2027-01-15T08:00:00Z'
+><saml:AuthnContext
+	 xmlns:unused='urn:fireemu:unused'
+	 xmlns:saml='urn:oasis:names:tc:SAML:2.0:assertion'
+	 xmlns:samlp='urn:oasis:names:tc:SAML:2.0:protocol'
+><saml:AuthnContextClassRef
+	 xmlns:unused='urn:fireemu:unused'
+	 xmlns:saml='urn:oasis:names:tc:SAML:2.0:assertion'
+	 xmlns:samlp='urn:oasis:names:tc:SAML:2.0:protocol'
+>urn:o&#97;sis:n&#97;mes:tc:SAML:2.0:&#97;c:cl&#97;sses:P&#97;sswordProtectedTr&#97;nsport</saml:AuthnContextClassRef></saml:AuthnContext></saml:AuthnStatement><saml:AttributeStatement
+	 xmlns:unused='urn:fireemu:unused'
+	 xmlns:saml='urn:oasis:names:tc:SAML:2.0:assertion'
+	 xmlns:samlp='urn:oasis:names:tc:SAML:2.0:protocol'
+><saml:Attribute
+	 xmlns:unused='urn:fireemu:unused'
+	 xmlns:saml='urn:oasis:names:tc:SAML:2.0:assertion'
+	 xmlns:samlp='urn:oasis:names:tc:SAML:2.0:protocol'
+	 Name='role'
+><saml:AttributeValue
+	 xmlns:unused='urn:fireemu:unused'
+	 xmlns:saml='urn:oasis:names:tc:SAML:2.0:assertion'
+	 xmlns:samlp='urn:oasis:names:tc:SAML:2.0:protocol'
+>re&#97;der &amp; &lt;writer&#62;</saml:AttributeValue></saml:Attribute><saml:Attribute
+	 xmlns:unused='urn:fireemu:unused'
+	 xmlns:saml='urn:oasis:names:tc:SAML:2.0:assertion'
+	 xmlns:samlp='urn:oasis:names:tc:SAML:2.0:protocol'
+	 Name='display name'
+><saml:AttributeValue
+	 xmlns:unused='urn:fireemu:unused'
+	 xmlns:saml='urn:oasis:names:tc:SAML:2.0:assertion'
+	 xmlns:samlp='urn:oasis:names:tc:SAML:2.0:protocol'
+>Fixture "User"</saml:AttributeValue></saml:Attribute></saml:AttributeStatement></saml:Assertion></samlp:Response>

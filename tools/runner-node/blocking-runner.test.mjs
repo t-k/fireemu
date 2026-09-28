@@ -262,13 +262,15 @@ test("a blocking token reaches the handler as the SDK's parsers build it", { tim
   }
 });
 
-test("without the SDK's parsers a blocking token is refused, never parsed differently", { timeout: 20000 }, async () => {
+test("without the SDK's parsers a blocking token is parsed by their port", { timeout: 20000 }, async () => {
   const { source, child, port } = await runnerFor(undefined);
   try {
-    const body = { data: { jwt: token({ sub: "u1", event_type: "beforeSignIn", user_record: { uid: "u1", mode: "normal" } }) } };
+    // The ported parseAuthUserRecord drops members a user record does not have, such as the
+    // fixture's `mode`, so the handler sees no mode and answers nothing.
+    const body = { data: { jwt: token({ sub: "u1", event_type: "beforeSignIn", user_record: { uid: "u1", mode: "normal", provider_data: [] } }) } };
     const reply = await call(port, "v2", undefined, secret, body);
-    assert.equal(reply.status, 503);
-    assert.equal(reply.body.error.status, "UNAVAILABLE");
+    assert.equal(reply.status, 200);
+    assert.deepEqual(reply.body, {});
     // The older body keeps working.
     const legacy = await call(port, "v2", "normal");
     assert.equal(legacy.status, 200);

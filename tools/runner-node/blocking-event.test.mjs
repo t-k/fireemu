@@ -6,10 +6,17 @@ import assert from "node:assert/strict";
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
+import { existsSync } from "node:fs";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
 
-import { blockingEvent, decodeBlockingToken, loadIdentityParsers } from "./blocking-event.mjs";
+import {
+  blockingEvent,
+  decodeBlockingToken,
+  loadIdentityParsers,
+  portedIdentityParsers,
+} from "./blocking-event.mjs";
 
 const token = (payload, header = { alg: "none", typ: "JWT" }) =>
   [header, payload].map((part) => Buffer.from(JSON.stringify(part)).toString("base64url")).join(".") +
@@ -93,4 +100,55 @@ test("the parsers are loaded from the codebase's firebase-functions, or not at a
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+// The recorded AUTH-TENANT-BLOCKING fixture pins firebase-functions 7.3.2, the version the port
+// follows; the comparison runs where that fixture is installed.
+const pinnedSdk = fileURLToPath(
+  new URL("../../conformance/src/auth-tenant-blocking/function/package.json", import.meta.url),
+);
+
+const samples = [
+  {
+    iat: 1_788_004_860, event_id: "e1", event_type: "beforeCreate", sub: "u1", sign_in_method: "password",
+    locale: "en", ip_address: "127.0.0.1", user_agent: "agent",
+    user_record: {
+      uid: "u1", email: "a@example.com", email_verified: false, disabled: false,
+      provider_data: [{ provider_id: "password", uid: "a@example.com", email: "a@example.com" }],
+      metadata: { creation_time: 1_788_004_860_000 },
+    },
+  },
+  {
+    iat: 1_788_004_860, event_id: "e2", event_type: "beforeSignIn", sub: "u2", sign_in_method: "oidc.corp",
+    tenant_id: "tenant-a", raw_user_info: "{\"login\":\"x\"}", sign_in_attributes: { a: 1 },
+    oauth_access_token: "access", oauth_expires_in: 60,
+    user_record: {
+      uid: "u2", phone_number: "+15555550100", custom_claims: { role: "r" }, tenant_id: "tenant-a",
+      provider_data: [], tokens_valid_after_time: 1_788_004_000,
+      multi_factor: { enrolled_factors: [{ uid: "f1", phone_number: "+15555550100", enrollment_time: "2026-09-28T00:00:00Z" }] },
+      metadata: { creation_time: 1_788_004_000_000, last_sign_in_time: 1_788_004_860_000 },
+    },
+  },
+  { iat: 1_788_004_860, event_id: "e3", event_type: "beforeSendEmail", email_type: "PASSWORD_RESET", email: "a@example.com" },
+];
+
+test("the port builds the event firebase-functions 7.3.2 builds", { skip: !existsSync(pinnedSdk) }, () => {
+  const sdk = loadIdentityParsers(createRequire(pinnedSdk));
+  assert.ok(sdk, "the pinned SDK exposes its parsers");
+  for (const decoded of samples) {
+    const time = 1_788_004_900_000;
+    assert.deepEqual(
+      portedIdentityParsers.parseAuthEventContext(decoded, "demo-p", time),
+      sdk.parseAuthEventContext(decoded, "demo-p", time),
+      decoded.event_id,
+    );
+    if (decoded.user_record) {
+      assert.deepEqual(
+        portedIdentityParsers.parseAuthUserRecord(decoded.user_record),
+        sdk.parseAuthUserRecord(decoded.user_record),
+        decoded.event_id,
+      );
+    }
+  }
+  assert.throws(() => portedIdentityParsers.parseAuthUserRecord({}), /Invalid user response/);
 });

@@ -16,7 +16,7 @@ import { createServer } from "node:http";
 import { url as inspectorUrl } from "node:inspector";
 import { instrumentCallables } from "./callable-app-check.mjs";
 import { blockingFailure } from "./blocking-error.mjs";
-import { blockingEvent, loadIdentityParsers } from "./blocking-event.mjs";
+import { blockingEvent, loadIdentityParsers, portedIdentityParsers } from "./blocking-event.mjs";
 import { blockingResult } from "./blocking-response.mjs";
 import { boundLogMessage, createInvocationLogger } from "./log-context.mjs";
 import { invocationFailure } from "./invocation-error.mjs";
@@ -1099,13 +1099,14 @@ async function makeHttpServer(functions, manifest) {
       try {
         if (blocking) {
           // A token is parsed by the codebase's own firebase-functions, as Identity Platform's
-          // delivery is; without its parsers the token is refused, never parsed differently.
+          // delivery is, or by the port of its parsers when that SDK does not expose them.
           const hasToken = req.body?.data?.jwt !== undefined;
-          if (hasToken && !identityParsers) {
-            throw new Error("firebase-functions has no blocking token parsers");
-          }
           const parsed = hasToken
-            ? blockingEvent(req.body, identityParsers, process.env.GCLOUD_PROJECT || "")
+            ? blockingEvent(
+                req.body,
+                identityParsers || portedIdentityParsers,
+                process.env.GCLOUD_PROJECT || "",
+              )
             : undefined;
           const user = parsed ? parsed.user : req.body?.data?.user;
           const context = parsed ? parsed.context : req.body?.data?.context || {};

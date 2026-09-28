@@ -763,6 +763,19 @@ fn firestore_wall_source(
     Some(Arc::new(move || wall_clock.now()))
 }
 
+/// The Firestore enforcer's settings that follow from the compatibility profile.
+fn firestore_profile_settings(
+    enforcer: RulesEnforcer,
+    cfg: &crate::config::RuntimeConfig,
+) -> RulesEnforcer {
+    enforcer
+        .with_token_semantics(TokenSemantics::Firestore)
+        .with_token_acceptance(cfg.token_acceptance)
+        .with_refusal_without_ruleset(cfg.refuse_without_ruleset)
+        .with_end_user_transactions(cfg.end_user_transactions)
+        .with_listen_token_expiry(cfg.listen_token_expiry)
+}
+
 fn assemble_suite(assembly: ServiceAssembly, exec_mode: bool) -> Result<ReadySuite, String> {
     let ServiceAssembly {
         log_bus,
@@ -912,13 +925,9 @@ fn assemble_suite(assembly: ServiceAssembly, exec_mode: bool) -> Result<ReadySui
             None => enforcer,
         };
         Arc::new(
-            enforcer
-                .with_token_semantics(TokenSemantics::Firestore)
+            firestore_profile_settings(enforcer, &cfg)
                 .with_registry(registry.clone())
-                .with_database_rules(database_rules.clone())
-                .with_token_acceptance(cfg.token_acceptance)
-                .with_refusal_without_ruleset(cfg.refuse_without_ruleset)
-                .with_end_user_transactions(cfg.end_user_transactions),
+                .with_database_rules(database_rules.clone()),
         )
     });
     let mut service = GatewayService::local(gateway.clone(), backend.clone());
@@ -1717,6 +1726,49 @@ mod tests {
         assert!(super::firestore_wall_source(CompatibilityProfile::Strict, None).is_none());
         assert!(super::firestore_wall_source(CompatibilityProfile::Emulator, Some(wall)).is_none());
     }
+    /// Only the strict profile's Firestore ends a held `Listen` stream at its token's expiry.
+    #[test]
+    fn only_the_strict_profile_ends_a_listen_stream_at_its_token_expiry() {
+        use fireemu_adapter_grpc::rules::{Principal, RulesEnforcer};
+        use fireemu_core_rules::runtime::RulesetSlot;
+        use fireemu_core_rules::value::{AuthContext, RulesValue};
+        use fireemu_core_session::clock::VirtualClock;
+
+        let start = LogicalInstant::from_unix_seconds(1_788_004_860);
+        let user = Principal::User(AuthContext {
+            uid: "held".to_owned(),
+            token: [("exp".to_owned(), RulesValue::Int(1_788_008_460))]
+                .into_iter()
+                .collect(),
+        });
+        for (profile, deadline) in [
+            (
+                "strict",
+                Some(LogicalInstant::from_unix_seconds(1_788_008_460)),
+            ),
+            ("emulator", None),
+        ] {
+            let cfg = crate::config::RuntimeConfig::from_json(
+                &json!({"schemaVersion": 1, "profile": profile}),
+            )
+            .unwrap();
+            let enforcer = super::firestore_profile_settings(
+                RulesEnforcer::new(
+                    Arc::new(RulesetSlot::default()),
+                    Arc::new(Mutex::new(AuthStore::new(
+                        "demo-app",
+                        SplitMix64::new(1),
+                        fireemu_core_auth::mfa::TotpPolicy::default(),
+                    ))),
+                    Arc::new(Mutex::new(VirtualClock::new(start))),
+                ),
+                &cfg,
+            );
+            assert_eq!(enforcer.listen_token_deadline(&user), deadline, "{profile}");
+            assert_eq!(enforcer.listen_token_deadline(&Principal::Anonymous), None);
+        }
+    }
+
     #[test]
     fn auth_project_config_propagates_all_default_settings() {
         let cfg = crate::config::RuntimeConfig::from_json(&json!({

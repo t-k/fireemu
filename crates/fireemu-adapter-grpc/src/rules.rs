@@ -401,6 +401,9 @@ pub struct RulesEnforcer {
     /// The wall time an unpinned strict session follows; `None` keeps the clock where it is
     /// told to be.
     wall_clock: Option<WallSource>,
+    /// Whether a `Listen` stream ends on its own once its ID token expires, as production
+    /// ends it (the `strict` profile); the official emulator keeps it (the `emulator` profile).
+    listen_token_expiry: bool,
 }
 
 impl RulesEnforcer {
@@ -422,6 +425,7 @@ impl RulesEnforcer {
             end_user_transactions: true,
             token_semantics: TokenSemantics::default(),
             wall_clock: None,
+            listen_token_expiry: false,
         }
     }
 
@@ -433,6 +437,38 @@ impl RulesEnforcer {
     pub fn with_wall_clock(mut self, source: WallSource) -> Self {
         self.wall_clock = Some(source);
         self
+    }
+
+    /// Makes a `Listen` stream end on its own once its caller's ID token expires (the
+    /// `strict` profile). See [`Self::listen_token_deadline`].
+    #[must_use]
+    pub const fn with_listen_token_expiry(mut self, ends: bool) -> Self {
+        self.listen_token_expiry = ends;
+        self
+    }
+
+    /// When a `Listen` stream held by `principal` ends on its own: the `exp` of its ID token,
+    /// in a session built [`Self::with_listen_token_expiry`]. `None` for the owner, an
+    /// anonymous caller, a token without `exp`, and the `emulator` profile.
+    #[must_use]
+    pub fn listen_token_deadline(&self, principal: &Principal) -> Option<LogicalInstant> {
+        if !self.listen_token_expiry {
+            return None;
+        }
+        let Principal::User(ctx) = principal else {
+            return None;
+        };
+        match ctx.token.get("exp") {
+            Some(fireemu_core_rules::value::RulesValue::Int(exp)) => {
+                Some(LogicalInstant::from_unix_seconds(*exp))
+            }
+            _ => None,
+        }
+    }
+
+    /// The session time tokens are judged at (the wall's, in an unpinned `strict` session).
+    pub fn session_now(&self) -> Result<LogicalInstant, Status> {
+        self.now()
     }
 
     /// Sets which ID-token checks apply: the Firestore surfaces use

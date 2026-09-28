@@ -24,10 +24,12 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 
 use fireemu_core_firestore::path::DocumentPath;
 use fireemu_core_firestore::query::Query;
 use fireemu_core_firestore::store::{CommitVersion, Document, Write};
+use fireemu_core_types::time::LogicalInstant;
 use fireemu_proto_firestore::google::firestore::v1 as pb;
 use tokio::sync::mpsc;
 use tokio_stream::StreamExt;
@@ -399,14 +401,34 @@ pub(crate) async fn listen_stream_observed(
     let mut database_hash_cache = None;
     let mut last_snapshot_version = None;
     let mut events = ctx.local.subscribe();
+    let token_deadline = ctx
+        .rules
+        .as_ref()
+        .and_then(|rules| rules.listen_token_deadline(&ctx.principal));
     loop {
         let mut out: Vec<pb::ListenResponse> = Vec::new();
         let mut request = None;
+        let until_expiry = until_token_expiry(&ctx, token_deadline);
+        if until_expiry == Some(Duration::ZERO) {
+            let _ = tx.send(Err(token_expired())).await;
+            return;
+        }
+        // At most a second at a time: a pinned clock moved past the deadline is noticed without
+        // waiting for a commit, as the wall is.
+        let expiry = async {
+            match until_expiry {
+                Some(wait) => tokio::time::sleep(wait.min(TOKEN_EXPIRY_CHECK)).await,
+                None => std::future::pending().await,
+            }
+        };
         let outcome: Result<bool, Status> = tokio::select! {
             () = tx.closed() => Ok(false),
+            // Woken at the deadline or to look again: the loop's head decides.
+            () = expiry => Ok(true),
             msg = inbound.next() => match msg {
                 None => Ok(false),
                 Some(Err(e)) => Err(e),
+                Some(Ok(_)) if token_has_expired(&ctx, token_deadline) => Err(token_expired()),
                 Some(Ok(req)) => {
                     let result = handle_listen_request(
                         &ctx,
@@ -421,7 +443,11 @@ pub(crate) async fn listen_stream_observed(
                     result
                 },
             },
-            ev = events.recv() => match ev {
+            // A commit met after the deadline (a pinned clock moved past it) ends the stream
+            // as the deadline does, not through the refresh's own token check.
+            ev = events.recv() => if token_has_expired(&ctx, token_deadline) {
+                Err(token_expired())
+            } else { match ev {
                 Ok(first) => {
                     // Coalesce: every commit already queued behind this one is covered by
                     // the single refresh below.
@@ -477,7 +503,7 @@ pub(crate) async fn listen_stream_observed(
                     ).map(|()| true)
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => Ok(false),
-            },
+            }},
         };
         if let Some(observer) = observer.as_ref() {
             observer.exchange(request.as_ref(), &out);
@@ -738,6 +764,41 @@ fn decode_target(
         }
         None => Err(Status::invalid_argument("target without target_type")),
     }
+}
+
+/// The longest a held stream waits before it looks at its token's deadline again.
+const TOKEN_EXPIRY_CHECK: Duration = Duration::from_secs(1);
+
+/// How long until the stream's ID token expires on the session clock: zero once it has,
+/// `None` when the stream has no such deadline. A clock that cannot be read counts as expired.
+fn until_token_expiry(ctx: &StreamContext, deadline: Option<LogicalInstant>) -> Option<Duration> {
+    let deadline = deadline?;
+    let Some(now) = ctx
+        .rules
+        .as_ref()
+        .and_then(|rules| rules.session_now().ok())
+    else {
+        return Some(Duration::ZERO);
+    };
+    // The difference is signed: a deadline already passed is no wait at all.
+    Some(
+        deadline
+            .checked_duration_since(now)
+            .filter(|left| left.is_positive())
+            .map_or(Duration::ZERO, |left| {
+                Duration::from_nanos(u64::try_from(left.as_nanos()).unwrap_or(u64::MAX))
+            }),
+    )
+}
+
+fn token_has_expired(ctx: &StreamContext, deadline: Option<LogicalInstant>) -> bool {
+    until_token_expiry(ctx, deadline) == Some(Duration::ZERO)
+}
+
+/// How production ended every held stream around its token's expiry (AUTH-FS-CROSS stage 2:
+/// code 13, before any later commit).
+fn token_expired() -> Status {
+    Status::internal("the stream's credential expired")
 }
 
 /// Refreshes every target against one snapshot, then emits the global boundary. Targets

@@ -295,6 +295,14 @@ impl CompatibilityProfile {
     pub const fn end_user_transactions(self) -> bool {
         matches!(self, Self::Emulator)
     }
+
+    /// Whether a `Listen` stream ends on its own once its ID token expires. Production ended
+    /// every held stream with `INTERNAL` around its token's expiry without waiting for a
+    /// commit (AUTH-FS-CROSS stage 2, 2026-09-28); the official emulator never ends one.
+    #[must_use]
+    pub const fn listen_token_expiry(self) -> bool {
+        matches!(self, Self::Strict)
+    }
 }
 
 /// The Emulator Hub's official default port (`firebase-tools` `Constants.getDefaultPort`).
@@ -962,6 +970,9 @@ pub struct RuntimeConfig {
     /// Whether an end user may open a read-write transaction
     /// (profile-derived; there is no key of its own).
     pub end_user_transactions: bool,
+    /// Whether a `Listen` stream ends once its ID token expires
+    /// (profile-derived; there is no key of its own).
+    pub listen_token_expiry: bool,
     /// How long a document whose time-to-live field has expired stays readable before the
     /// expiry sweep deletes it (`firestore.ttlSweepIntervalSeconds`). Production deletes
     /// typically within 24 hours and within 72 hours at worst, so the default is 24 hours
@@ -1294,6 +1305,7 @@ impl Default for RuntimeConfig {
             implicit_database_creation: profile.implicit_database_creation(),
             refuse_without_ruleset: profile.refuse_without_ruleset(),
             end_user_transactions: profile.end_user_transactions(),
+            listen_token_expiry: profile.listen_token_expiry(),
             ttl_sweep_interval: fireemu_core_firestore::ttl::DEFAULT_SWEEP_INTERVAL,
             database_create_time: None,
             require_demo_prefix: true,
@@ -2648,6 +2660,7 @@ impl RuntimeConfig {
         self.implicit_database_creation = profile.implicit_database_creation();
         self.refuse_without_ruleset = profile.refuse_without_ruleset();
         self.end_user_transactions = profile.end_user_transactions();
+        self.listen_token_expiry = profile.listen_token_expiry();
     }
 
     fn parse_daemon(d: &serde_json::Map<String, Value>, cfg: &mut Self) -> Result<(), ConfigError> {
@@ -3624,6 +3637,7 @@ mod tests {
         assert!(emulator.implicit_database_creation);
         assert!(!emulator.refuse_without_ruleset);
         assert!(emulator.end_user_transactions);
+        assert!(!emulator.listen_token_expiry);
 
         // strict: every one of those becomes production's refusal.
         let strict = with_profile(json!({"profile": "strict"})).unwrap();
@@ -3633,6 +3647,7 @@ mod tests {
         assert!(!strict.implicit_database_creation);
         assert!(strict.refuse_without_ruleset);
         assert!(!strict.end_user_transactions);
+        assert!(strict.listen_token_expiry);
     }
 
     #[test]

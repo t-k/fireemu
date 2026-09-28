@@ -991,6 +991,10 @@
             {
               "behaviour": "a strict-profile daemon without a pinned clock judges Firestore token expiry and request.time at wall time, as production judged expiry (FS-RULES sandbox, 2026-09-25): until then only Auth requests moved the session clock, so an expired token was honoured while no Auth request came in (AUTH-FS-CROSS local run, 2026-09-28); a pinned clock, a clock advanced on purpose and the emulator profile keep moving only when told",
               "precision": "exact-for-local-semantics"
+            },
+            {
+              "behaviour": "a strict-profile Listen stream ends with INTERNAL once its ID token expires, without waiting for a later commit, as production ended every held native stream around its token's expiry (AUTH-FS-CROSS stage 2, 2026-09-28, two recordings); when production closes it relative to expiry is not settled yet (one stream ended before exp-60 s, all by exp+35 s), so fireemu closes at exp and the rule is refined after the next recording; a commit met after a pinned clock was moved past exp ends it the same way; the emulator profile keeps the stream, as the official emulator does",
+              "precision": "exact-for-local-semantics"
             }
           ],
           "productionOnly": [],

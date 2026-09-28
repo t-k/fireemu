@@ -1182,6 +1182,11 @@ fn issue_tokens_replacing(
         None => store.issue_refresh_session(uid, at, issue.provider, refresh_claims, second),
     }
     .map_err(|e| auth_error(&e))?;
+    if let Some(attributes) = issue.sign_in_attributes {
+        store
+            .set_refresh_sign_in_attributes(&refresh, Some(attributes.clone()))
+            .map_err(|e| auth_error(&e))?;
+    }
     Ok(json!({
         "idToken": encode_with(&claims, None),
         "refreshToken": refresh,
@@ -10359,7 +10364,16 @@ fn refresh(
         Err(e) => return auth_error(&e),
     };
     match store.id_token_claims_for_session(&session, at) {
-        Ok(claims) => {
+        Ok(mut claims) => {
+            // Strict carries an OIDC sign-in's attributes into refreshed tokens, as production
+            // does (record-oidc 39209e); other providers' refreshes are unobserved, and the
+            // emulator profile keeps the official emulator's.
+            if !stateless_refresh_tokens && claims.firebase.sign_in_provider.starts_with("oidc.") {
+                claims
+                    .firebase
+                    .sign_in_attributes
+                    .clone_from(&session.sign_in_attributes);
+            }
             let id_token = encode_with(&claims, None);
             JsonResponse {
                 status: 200,

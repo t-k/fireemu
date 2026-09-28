@@ -592,6 +592,36 @@ fn refresh_tokens_and_id_tokens_respect_revocation_and_disablement() {
 }
 
 #[test]
+fn a_refresh_session_keeps_the_sign_in_attributes_recorded_for_it() {
+    use fireemu_core_auth::claims::ClaimValue;
+
+    let mut s = store();
+    let uid = s
+        .create_user(NewUser::email("attributes@example.com"), t0())
+        .unwrap();
+    let token = s.issue_refresh_token(&uid, t(1)).unwrap();
+    assert_eq!(s.refresh_session(&token).unwrap().sign_in_attributes, None);
+    let attributes = ClaimValue::Map(
+        [(
+            "department".to_owned(),
+            ClaimValue::String("fireemu".to_owned()),
+        )]
+        .into_iter()
+        .collect(),
+    );
+    s.set_refresh_sign_in_attributes(&token, Some(attributes.clone()))
+        .unwrap();
+    assert_eq!(
+        s.refresh_session(&token).unwrap().sign_in_attributes,
+        Some(attributes.clone())
+    );
+    assert_eq!(
+        s.set_refresh_sign_in_attributes("unknown", Some(attributes)),
+        Err(AuthError::InvalidRefreshToken)
+    );
+}
+
+#[test]
 fn replacing_a_refresh_session_invalidates_the_provisional_token() {
     use fireemu_core_auth::claims::CustomClaims;
 

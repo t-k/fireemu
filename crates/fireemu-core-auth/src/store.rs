@@ -15,7 +15,7 @@ use fireemu_core_types::determinism::{DeterministicRng, SplitMix64};
 use fireemu_core_types::hash::sha256;
 use fireemu_core_types::time::{LogicalDuration, LogicalInstant};
 
-use crate::claims::{CustomClaims, FirebaseClaims, IdTokenClaims};
+use crate::claims::{ClaimValue, CustomClaims, FirebaseClaims, IdTokenClaims};
 use crate::federation::PendingIdpCache;
 use crate::mfa::{
     match_code, CodeMatch, EnrolledFactor, MfaError, MfaState, PendingEnrollment, PendingSignIn,
@@ -331,6 +331,9 @@ pub struct RefreshSession {
     pub claims: CustomClaims,
     /// Second factor of the session.
     pub second_factor: Option<SecondFactorAssertion>,
+    /// The sign-in's `firebase.sign_in_attributes`, for a caller that carries them into
+    /// refreshed ID tokens (production does, for an OIDC sign-in).
+    pub sign_in_attributes: Option<ClaimValue>,
 }
 
 /// User record.
@@ -4392,6 +4395,7 @@ impl AuthStore {
                 provider,
                 claims,
                 second_factor,
+                sign_in_attributes: None,
             },
         );
         Arc::make_mut(&mut self.tokens_by_user)
@@ -4432,6 +4436,22 @@ impl AuthStore {
             }
         }
         Ok(committed)
+    }
+
+    /// Records the sign-in attributes of the session behind a refresh token.
+    ///
+    /// # Errors
+    /// [`AuthError::InvalidRefreshToken`] for a token without a session.
+    pub fn set_refresh_sign_in_attributes(
+        &mut self,
+        token: &str,
+        attributes: Option<ClaimValue>,
+    ) -> Result<(), AuthError> {
+        let session = Arc::make_mut(&mut self.refresh_tokens)
+            .get_mut(token)
+            .ok_or(AuthError::InvalidRefreshToken)?;
+        session.sign_in_attributes = attributes;
+        Ok(())
     }
 
     /// The session behind a refresh token (validated like [`Self::redeem_refresh_token`]).

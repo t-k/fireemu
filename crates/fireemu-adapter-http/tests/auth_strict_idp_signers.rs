@@ -726,3 +726,47 @@ fn strict_answers_a_sign_in_in_productions_shape() {
         "only standard claims: no attributes"
     );
 }
+
+#[test]
+fn strict_keeps_the_sign_in_attributes_across_refresh_and_session_cookies() {
+    // record-oidc 39209e: a refreshed ID token, and a session cookie minted from it, carry the
+    // sign-in's attributes.
+    let s = strict_state();
+    let mut rich = claims();
+    rich["department"] = json!("fireemu");
+    let signed = sign_in(&s, &request(&token(&rich)));
+    assert_eq!(signed.status, 200, "{}", signed.body);
+    let refreshed = handle(
+        &s,
+        "POST",
+        "/securetoken.googleapis.com/v1/token",
+        &json!({"grant_type": "refresh_token", "refresh_token": signed.body["refreshToken"]}),
+    );
+    assert_eq!(refreshed.status, 200, "{}", refreshed.body);
+    let payload = |jwt: &Value| -> Value {
+        let part = jwt.as_str().unwrap().split('.').nth(1).unwrap();
+        serde_json::from_slice(&fireemu_core_auth::jwt::base64url_decode(part).unwrap()).unwrap()
+    };
+    let expected = json!({"department": "fireemu"});
+    assert_eq!(
+        payload(&refreshed.body["id_token"])["firebase"]["sign_in_attributes"],
+        expected
+    );
+    let cookie = handle_with(
+        &s,
+        "POST",
+        &format!("{V1}/projects/demo-app:createSessionCookie"),
+        &RequestHeaders {
+            authorization: Some(
+                fireemu_adapter_http::identity_toolkit::OWNER_CREDENTIAL.to_owned(),
+            ),
+            ..RequestHeaders::default()
+        },
+        &json!({"idToken": refreshed.body["id_token"], "validDuration": "3600"}),
+    );
+    assert_eq!(cookie.status, 200, "{}", cookie.body);
+    assert_eq!(
+        payload(&cookie.body["sessionCookie"])["firebase"]["sign_in_attributes"],
+        expected
+    );
+}

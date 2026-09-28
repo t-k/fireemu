@@ -84,7 +84,7 @@ function currentRecordingSelection(fixture, manifest, corpus) {
   return { base, supplemental };
 }
 
-test("final write comparison keeps the approved D3 rows explicit and nothing unresolved", () => {
+test("final write comparison has no known or unresolved difference", () => {
   const candidate = JSON.parse(readFileSync(reviewCandidatePath, "utf8"));
   assert.equal(candidate.task, "FS-DATA-WRITE");
   assert.equal(candidate.decision, "PENDING_REVIEW");
@@ -96,12 +96,9 @@ test("final write comparison keeps the approved D3 rows explicit and nothing unr
   assert.deepEqual(candidate.pendingStreamIds, []);
   assert.deepEqual(candidate.otherDifferenceIds, []);
   assert.equal(candidate.retiredRestIds.length, 10);
-  // D3 (owner decision, 2026-09-25): the documented index-entry formula explains every other
-  // former B1 row since the strict single-field threshold follows production (2026-09-28).
-  assert.deepEqual(candidate.approvedKnownDifferenceIds, [
-    "writes/limits/empty-document-name/4628#readback",
-    "writes/limits/empty-document-name/4628#write",
-  ]);
+  // The former D3 rows (owner decision, 2026-09-25) all match since the strict single-field
+  // threshold and document-name guard follow production (2026-09-28).
+  assert.deepEqual(candidate.approvedKnownDifferenceIds, []);
   assert.deepEqual(candidate.pendingOracleDifferenceIds, []);
   assert.equal(candidate.historicalRegression, undefined);
   assert.ok(candidate.reviewNotes.every((note) => !note.includes("remain pending integration")));
@@ -136,7 +133,7 @@ test("current accepted conditions bind every selected row and only D3 difference
     ["FS-LIMIT-FIELD-PATH-BYTES", "VERIFIED"],
     ["FS-DATA-WRITE/write-stream-trailing-metadata", "VERIFIED"],
     ["FS-DATA-WRITE/write-stream-empty-write-response", "VERIFIED"],
-    ["FS-LIMIT-INDEX-ENTRY-BYTES", "DIVERGENCE_APPROVED"],
+    ["FS-LIMIT-INDEX-ENTRY-BYTES", "VERIFIED"],
     ["FS-LIMIT-INDEX-ENTRY-SUM-PER-DOCUMENT", "VERIFIED"],
     ["FS-LIMIT-FIELD-VALUE-BYTES/aggregate-map", "VERIFIED"],
     ["FS-LIMIT-INDEXED-FIELD-VALUE-BYTES", "VERIFIED"],
@@ -147,7 +144,7 @@ test("current accepted conditions bind every selected row and only D3 difference
     ["FS-LIMIT-API-REQUEST-BYTES/grpc-unary", "VERIFIED"],
     // Every row matches; the status records how each bound is closed, not a row difference.
     ["FS-LIMIT-API-REQUEST-BYTES/grpc-stream", "KNOWN_DIFFERENCE_APPROVED"],
-    ["FS-LIMIT-API-REQUEST-BYTES/webchannel", "PRODUCTION_RECORDED"],
+    ["FS-LIMIT-API-REQUEST-BYTES/webchannel", "KNOWN_DIFFERENCE_APPROVED"],
   ]);
   assert.deepEqual(new Set(Object.keys(accepted.conditions)), new Set(acceptedIds.keys()));
   assert.equal(accepted.sourceHead, candidate.sourceHead);
@@ -999,12 +996,15 @@ test("request-byte transports are bracketed per route, with WebChannel inferred 
     assert.equal(condition.strictLimitEstimateBytes, undefined, id);
   }
   const webchannel = find("FS-LIMIT-API-REQUEST-BYTES/webchannel");
-  assert.equal(webchannel.status, "PRODUCTION_RECORDED");
+  assert.equal(webchannel.status, "KNOWN_DIFFERENCE_APPROVED");
   assert.equal(webchannel.boundaryStatus, "INFERRED_UPPER_BOUND");
   assert.equal(webchannel.strictLimitEstimateBytes, 16777215);
-  assert.equal(webchannel.estimateOwnerDecision, "2026-09-28 FS-DATA-WRITE D-2");
-  assert.match(webchannel.scopeNote, /\(12,582,912, 16,777,216\]/);
-  assert.match(webchannel.scopeNote, /awaits the owner/);
+  assert.match(webchannel.reason, /\(12,582,912, 16,777,216\]/);
+  assert.deepEqual(webchannel.boundaryEvidence, [
+    "writes/limits/webchannel-request-bytes/12582912#boundary",
+    "writes/limits/webchannel-request-bytes/16777216#boundary",
+  ]);
+  assert.ok(isApprovedKnownDifference(closure, webchannel));
   assert.throws(() => verifyAcceptedCondition({ ...webchannel, status: "VERIFIED" }), /boundary/);
   const stream = find("FS-LIMIT-API-REQUEST-BYTES/grpc-stream");
   assert.ok(isApprovedKnownDifference(closure, stream));
@@ -1013,7 +1013,7 @@ test("request-byte transports are bracketed per route, with WebChannel inferred 
 test("VERIFIED evidence never depends on a private path", () => {
   const closure = JSON.parse(readFileSync(closurePath, "utf8"));
   const verified = closure.conditions.filter(({ status }) => status === "VERIFIED");
-  assert.equal(verified.length, 33);
+  assert.equal(verified.length, 34);
   for (const condition of verified) {
     assert.ok(
       !JSON.stringify(condition.evidence ?? {}).includes("docs.local/"),
@@ -1242,23 +1242,31 @@ test("recorded conditions contain no changed or unrecorded runnable recipes", as
 });
 
 /**
- * The owner approved closing the parent without one condition VERIFIED: the gRPC stream's
- * request upper bound cannot be observed safely in production (owner-decisions, 2026-09-27).
- * Such a condition carries its reason and decision, and the closure lists it by name.
+ * The owner approved closing the parent without two conditions VERIFIED: the gRPC stream's
+ * request upper bound cannot be observed safely in production (owner-decisions, 2026-09-27),
+ * and WebChannel's form-body bound is an estimate inside a recorded interval (D-2,
+ * 2026-09-28). Such a condition carries its reason and decision, and the closure lists it by name.
  */
 const APPROVED_KNOWN_DIFFERENCES = new Map([
-  ["FS-LIMIT-API-REQUEST-BYTES/grpc-stream", "2026-09-27 FS-DATA-WRITE gRPC stream upper bound"],
+  [
+    "FS-LIMIT-API-REQUEST-BYTES/grpc-stream",
+    ["2026-09-27 FS-DATA-WRITE gRPC stream upper bound", "UNOBSERVABLE"],
+  ],
+  [
+    "FS-LIMIT-API-REQUEST-BYTES/webchannel",
+    ["2026-09-28 FS-DATA-WRITE D-2", "INFERRED_UPPER_BOUND"],
+  ],
 ]);
 
 function isApprovedKnownDifference(closure, condition) {
-  const decision = APPROVED_KNOWN_DIFFERENCES.get(condition.conditionId);
+  const [decision, boundaryStatus] = APPROVED_KNOWN_DIFFERENCES.get(condition.conditionId) ?? [];
   const listed = (closure.approvedKnownDifferences ?? []).filter(
     (entry) => entry.conditionId === condition.conditionId,
   );
   return (
     decision !== undefined &&
     condition.status === "KNOWN_DIFFERENCE_APPROVED" &&
-    condition.boundaryStatus === "UNOBSERVABLE" &&
+    condition.boundaryStatus === boundaryStatus &&
     condition.ownerDecision === decision &&
     typeof condition.reason === "string" &&
     condition.reason.length > 0 &&
@@ -1268,7 +1276,7 @@ function isApprovedKnownDifference(closure, condition) {
   );
 }
 
-test("only the owner-approved unobservable condition may close without VERIFIED", () => {
+test("only the owner-approved known differences may close without VERIFIED", () => {
   const condition = {
     conditionId: "FS-LIMIT-API-REQUEST-BYTES/grpc-stream",
     status: "KNOWN_DIFFERENCE_APPROVED",
@@ -1287,7 +1295,7 @@ test("only the owner-approved unobservable condition may close without VERIFIED"
   };
   assert.equal(isApprovedKnownDifference(closure, condition), true);
   for (const change of [
-    { conditionId: "FS-LIMIT-API-REQUEST-BYTES/webchannel" },
+    { conditionId: "FS-LIMIT-API-REQUEST-BYTES/grpc-unary" },
     { status: "MISMATCH" },
     { boundaryStatus: "UNBRACKETED" },
     { ownerDecision: "2026-09-27 other" },
@@ -1431,6 +1439,10 @@ test("FS-DATA-WRITE closure inventory cannot silently omit a declared condition"
     if (["BRACKETED", "RULE_TRANSITION"].includes(condition.boundaryStatus)) {
       checkBoundaryEvidence(condition, allPrograms, allStreams);
     }
+    // An inferred bound names the recorded ends of its interval: an accepted and a refused side.
+    if (condition.boundaryStatus === "INFERRED_UPPER_BOUND" && condition.boundaryEvidence) {
+      checkBoundaryEvidence({ ...condition, boundaryStatus: "BRACKETED" }, allPrograms, allStreams);
+    }
     if (condition.recipeIds.some((recipe) => allPrograms[recipe])) {
       assert.notEqual(condition.status, "PENDING_CORPUS", condition.conditionId);
     }
@@ -1459,7 +1471,8 @@ test("FS-DATA-WRITE closure inventory cannot silently omit a declared condition"
       `${conditionId}: incomplete recipe mapping`,
     );
   }
-  const approvedD3Conditions = new Set(["FS-LIMIT-INDEX-ENTRY-BYTES"]);
+  // D3's rows all match since the strict index-entry rules follow production (2026-09-28).
+  const approvedD3Conditions = new Set();
   for (const condition of closure.conditions) {
     if (condition.status === "KNOWN_DIFFERENCE_APPROVED") {
       assert.ok(isApprovedKnownDifference(closure, condition), condition.conditionId);

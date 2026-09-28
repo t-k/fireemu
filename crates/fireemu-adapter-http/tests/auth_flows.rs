@@ -4683,17 +4683,28 @@ fn blocking_auth_receives_every_non_idp_sign_in_method() {
         "password"
     );
 
-    contexts.lock().unwrap().clear();
-    let mut custom = state();
-    assert_eq!(
-        recorded_method(
-            &mut custom,
-            &contexts,
-            &format!("{V1}/accounts:signInWithCustomToken"),
-            &json!({"token": custom_token("blocking-custom")}),
+    // Identity Platform runs no blocking function for a custom-token sign-in or an anonymous
+    // sign-up (AUTH-TENANT-BLOCKING recording 2026-09-28, custom-token#custom-* and
+    // events#sign-up-anonymous).
+    for (path, body) in [
+        (
+            format!("{V1}/accounts:signInWithCustomToken"),
+            json!({"token": custom_token("blocking-custom"), "returnSecureToken": true}),
         ),
-        "custom"
-    );
+        (
+            format!("{V1}/accounts:signUp"),
+            json!({"returnSecureToken": true}),
+        ),
+    ] {
+        contexts.lock().unwrap().clear();
+        let mut state = state();
+        state.blocking = Some(Arc::new(FilteringIdpBlockingHook {
+            contexts: Arc::clone(&contexts),
+        }));
+        let (status, response) = post(&state, &path, &body);
+        assert_eq!(status, 200, "{path}: {response}");
+        assert!(contexts.lock().unwrap().is_empty(), "{path}");
+    }
 
     contexts.lock().unwrap().clear();
     let mut email_link = state();
@@ -4731,18 +4742,6 @@ fn blocking_auth_receives_every_non_idp_sign_in_method() {
             &json!({"sessionInfo": sent["sessionInfo"], "code": codes["verificationCodes"][0]["code"]}),
         ),
         "phone"
-    );
-
-    contexts.lock().unwrap().clear();
-    let mut anonymous = state();
-    assert_eq!(
-        recorded_method(
-            &mut anonymous,
-            &contexts,
-            &format!("{V1}/accounts:signUp"),
-            &json!({}),
-        ),
-        "anonymous"
     );
 }
 

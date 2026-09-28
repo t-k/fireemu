@@ -2359,10 +2359,15 @@ fn dispatch_with_blocking_hook(
         .flatten();
     let project = live_snapshot.project_id().to_owned();
     let tenant = live_snapshot.tenant_id().map(str::to_owned);
+    // Identity Platform runs no blocking function for an anonymous sign-up or a custom-token
+    // sign-in (AUTH-TENANT-BLOCKING recording 2026-09-28, events#sign-up-anonymous and
+    // custom-token#custom-*; the official Auth emulator runs none either).
+    let runs_hooks = !matches!(sign_in_method.as_deref(), Some("anonymous" | "custom"));
     let mut blocking_responses = Vec::new();
     if response.status == 200 {
         if let Some(uid) = uid {
-            if is_new
+            if runs_hooks
+                && is_new
                 && blocking
                     .handles(fireemu_core_functions::manifest::BlockingAuthEvent::BeforeCreate)
             {
@@ -2408,7 +2413,8 @@ fn dispatch_with_blocking_hook(
                     ));
                 }
             }
-            if signed_in
+            if runs_hooks
+                && signed_in
                 && blocking
                     .handles(fireemu_core_functions::manifest::BlockingAuthEvent::BeforeSignIn)
             {

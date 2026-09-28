@@ -8635,22 +8635,18 @@ fn assert_custom_token_claims(body: &Value, tenant: &str, uid: &str) {
     let claims = fireemu_core_auth::jwt::decode_unsigned(body["idToken"].as_str().unwrap())
         .unwrap()
         .payload;
+    // A custom-token sign-in runs no blocking function (AUTH-TENANT-BLOCKING recording
+    // 2026-09-28): only the token's own claims are in the ID token.
     assert_eq!(
         claims.get("role").and_then(CoreJsonValue::as_str),
-        Some("session")
+        Some("token")
     );
     assert_eq!(
         claims.get("tokenOnly").and_then(CoreJsonValue::as_bool),
         Some(true)
     );
-    assert_eq!(
-        claims.get("persistedOnly").and_then(CoreJsonValue::as_bool),
-        Some(true)
-    );
-    assert_eq!(
-        claims.get("sessionOnly").and_then(CoreJsonValue::as_bool),
-        Some(true)
-    );
+    assert!(claims.get("persistedOnly").is_none());
+    assert!(claims.get("sessionOnly").is_none());
     assert_eq!(
         claims
             .get("firebase")
@@ -8707,18 +8703,14 @@ fn assert_refreshed_claims(body: &Value, tenant: &str, uid: &str) {
     let claims = fireemu_core_auth::jwt::decode_unsigned(body["id_token"].as_str().unwrap())
         .unwrap()
         .payload;
+    // A custom-token sign-in runs no blocking function (AUTH-TENANT-BLOCKING recording
+    // 2026-09-28): only the token's own claims are in the ID token.
     assert_eq!(
         claims.get("role").and_then(CoreJsonValue::as_str),
-        Some("session")
+        Some("token")
     );
-    assert_eq!(
-        claims.get("persistedOnly").and_then(CoreJsonValue::as_bool),
-        Some(true)
-    );
-    assert_eq!(
-        claims.get("sessionOnly").and_then(CoreJsonValue::as_bool),
-        Some(true)
-    );
+    assert!(claims.get("persistedOnly").is_none());
+    assert!(claims.get("sessionOnly").is_none());
     assert_eq!(
         claims
             .get("firebase")
@@ -8797,11 +8789,10 @@ fn assert_custom_session_cookie_handoff(state: &AuthState, tenant: &str, token: 
         &json!({"localId": [uid]}),
     );
     assert_eq!(status, 200);
-    let persisted: Value =
-        serde_json::from_str(stored["users"][0]["customAttributes"].as_str().unwrap()).unwrap();
-    assert_eq!(
-        persisted,
-        json!({"role": "persistent", "persistedOnly": true})
+    // No blocking function ran on the custom-token sign-in, so no claim was saved.
+    assert!(
+        stored["users"][0].get("customAttributes").is_none(),
+        "{stored}"
     );
     for other in [
         format!("{V1}/projects/worker-alpha:createSessionCookie"),
@@ -8837,10 +8828,9 @@ fn assert_tenant_stores_after_sign_in(
         .unwrap()
         .custom_claims
         .clone();
-    assert!(stored_a.entries().contains_key("role"));
-    assert!(stored_a.entries().contains_key("persistedOnly"));
-    assert!(!stored_a.entries().contains_key("tokenOnly"));
-    assert!(!stored_a.entries().contains_key("sessionOnly"));
+    // No blocking function ran, so nothing was saved on the account; a custom token's claims
+    // are only in its ID tokens.
+    assert!(stored_a.entries().is_empty());
     for tenant in ["customer-a", "customer-b"] {
         assert_eq!(
             registry
@@ -9403,7 +9393,7 @@ fn custom_tokens_sign_in_creating_the_user_and_carry_developer_claims() {
 
 #[test]
 #[allow(clippy::too_many_lines)]
-fn custom_token_claims_compose_with_tenant_session_claims_and_refresh_stays_in_namespace() {
+fn custom_token_claims_bypass_blocking_hooks_and_refresh_stays_in_namespace() {
     use fireemu_core_auth::store::AuthRegistry;
 
     let mut s = state();
@@ -9421,6 +9411,7 @@ fn custom_token_claims_compose_with_tenant_session_claims_and_refresh_stays_in_n
         .register("worker-alpha", &[], &["worker-key".to_owned()])
         .unwrap();
     s.tenancy = Some(Arc::new(RwLock::new(tenancy)));
+    // A blocking function is configured; a custom-token sign-in does not run it.
     s.blocking = Some(Arc::new(OverlappingClaimHook));
 
     let a = sign_in_custom_token(&s, "customer-a", "custom-a");
@@ -9526,24 +9517,20 @@ fn custom_token_claims_compose_with_tenant_session_claims_and_refresh_stays_in_n
 }
 
 #[test]
-fn a_before_create_only_hook_rejects_a_new_custom_token_identity() {
+fn a_before_create_only_hook_rejects_a_new_password_account() {
+    // A custom-token sign-in runs no blocking function (AUTH-TENANT-BLOCKING recording
+    // 2026-09-28), so a password sign-up carries the new account here.
     let mut state = state();
     state.blocking = Some(Arc::new(BeforeCreateOnlyRejectingHook));
-    let token = custom_token("blocked-custom", &json!({}), 1_788_008_460);
 
     let (status, body) = post(
         &state,
-        &format!("{V1}/accounts:signInWithCustomToken"),
-        &json!({"token": token, "returnSecureToken": true}),
+        &format!("{V1}/accounts:signUp"),
+        &json!({"email": "blocked@example.com", "password": "hunter22", "returnSecureToken": true}),
     );
 
     assert_eq!(status, 400, "{body}");
-    assert!(state
-        .store
-        .lock()
-        .unwrap()
-        .user_by_id("blocked-custom")
-        .is_none());
+    assert_eq!(state.store.lock().unwrap().user_count(), 0);
 }
 
 #[test]
@@ -9551,13 +9538,10 @@ fn a_before_create_only_hook_is_not_called_for_before_sign_in_after_success() {
     let events = Arc::new(Mutex::new(Vec::new()));
     let mut state = state();
     state.blocking = Some(Arc::new(BeforeCreateOnlySuccessfulHook(events.clone())));
-    let token = custom_token("one-hook", &json!({}), 1_788_008_460);
+    let account =
+        json!({"email": "one-hook@example.com", "password": "hunter22", "returnSecureToken": true});
 
-    let (status, body) = post(
-        &state,
-        &format!("{V1}/accounts:signInWithCustomToken"),
-        &json!({"token": token, "returnSecureToken": true}),
-    );
+    let (status, body) = post(&state, &format!("{V1}/accounts:signUp"), &account);
 
     assert_eq!(status, 200, "{body}");
     assert_eq!(*events.lock().unwrap(), [BlockingAuthEvent::BeforeCreate]);
@@ -9565,8 +9549,8 @@ fn a_before_create_only_hook_is_not_called_for_before_sign_in_after_success() {
     events.lock().unwrap().clear();
     let (status, body) = post(
         &state,
-        &format!("{V1}/accounts:signInWithCustomToken"),
-        &json!({"token": token, "returnSecureToken": true}),
+        &format!("{V1}/accounts:signInWithPassword"),
+        &account,
     );
     assert_eq!(status, 200, "{body}");
     assert!(events.lock().unwrap().is_empty());

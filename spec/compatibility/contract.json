@@ -207,10 +207,20 @@
           "key": "firestore.indexValidation",
           "profileValue": "every composite index a query needs is assumed to exist and reported as FS_EMULATOR_INDEX_ASSUMED",
           "emulatorValue": "no composite index is checked",
-          "authorityRefs": [
-            "firestore/missing-composite-index#admin-equality-plus-inequality"
-          ],
-          "note": "The pinned official Firestore emulator does not check composite indexes at all, so the profile that reproduces it assumes every index a query needs and reports each assumption as FS_EMULATOR_INDEX_ASSUMED. The strict profile applies production's rules instead, verified against a real project: the same query is refused with FAILED_PRECONDITION and the firestore.indexes.json fragment, and the index merges production performs are accepted. The policy has no configuration key; it follows the profile."
+          "authority": {
+            "kind": "intentional-local-policy",
+            "sourceUrls": [
+              "https://firebase.google.com/docs/firestore/query-data/indexing",
+              "https://github.com/firebase/firebase-tools/tree/v15.28.2"
+            ],
+            "checkedOn": "2026-09-28",
+            "officialBaseline": {
+              "package": "firebase-tools",
+              "version": "15.28.2"
+            },
+            "approvalRecord": "README.md, \"Gap from the official Firebase Emulator Suite\""
+          },
+          "note": "The pinned official Firestore emulator does not check composite indexes at all, so the profile that reproduces it assumes every index a query needs, answers the query as the official emulator does (conformance/fixtures/firestore/missing-composite-index.json#admin-equality-plus-inequality is a parity row) and reports each assumption as the FS_EMULATOR_INDEX_ASSUMED diagnostic. The strict profile applies production's rules instead, verified against a real project: the same query is refused with FAILED_PRECONDITION and the console link production answers with, and the index merges production performs are accepted. The policy has no configuration key; it follows the profile."
         },
         {
           "key": "rules.idTokenVerification",

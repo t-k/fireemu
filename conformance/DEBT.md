@@ -83,7 +83,7 @@ Three kinds of row appear here, and none of them fails `pnpm -C conformance run 
 - what a real project would settle: Identity Platform issues TOTP secrets only for a project with multi-factor authentication enabled in the console; neither the official Auth emulator nor fireemu can produce the production shape, so no local run may stand in for it.
 
 
-## Documented divergences (34)
+## Documented divergences (33)
 
 - `appcheck/enforced-header-matrix#firestore-rest-no-app-check-field` -- The official emulators have no enforcement mode to configure, so they admit the request. This is the whole point of the variant: fireemu denies with 403 PERMISSION_DENIED before Security Rules and before any side effect.
   documented in: capability manifest APPCHECK-ENFORCE-1 (crates/fireemu/src/control.rs); docs/specifications/firebase-app-check.md sections 12.1 and 17
@@ -145,8 +145,6 @@ Three kinds of row appear here, and none of them fails `pnpm -C conformance run 
   documented in: conformance/ORACLE.md, "What the oracle cannot answer"
 - `auth/identity-toolkit-error-shapes#unknown-method` -- Production returns a non-JSON 404 for an unknown method; fireemu follows that response class with static HTML.
   documented in: conformance/PRODUCTION-GAP-FOLLOWUP-2026-09-07.md
-- `firestore/missing-composite-index#admin-equality-plus-inequality` -- Same policy difference for an equality plus an inequality on another field.
-  documented in: README.md, "Gap from the official Firebase Emulator Suite"
 - `firestore/rest-error-shapes#runQuery-needing-a-composite-index` -- The query itself is served on both sides since index merging landed. The official emulator ends the REST runQuery stream with `done: true` on the last response; production omits `done` (probed against the oracle project on 2026-09-08) and fireemu follows production.
   documented in: README.md, "Gap from the official Firebase Emulator Suite"
 - `functions/callable-auth-context#a-forged-bearer-token-is-not-an-identity` -- The official Functions emulator runs the runtime with token verification skipped, so any Bearer value produces a context with hasAuth true and a null uid. fireemu verifies the ID token against the target project's registry and reinserts only a resolved user, so a forged value produces no Auth context at all.

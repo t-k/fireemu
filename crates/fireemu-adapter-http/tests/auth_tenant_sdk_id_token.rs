@@ -90,6 +90,7 @@ fn cases() -> Vec<(String, AuthState, Arc<AuthRegistry>)> {
                 registry.ensure_tenant("demo-app", tenant).unwrap();
             }
             state.registry = Some(registry.clone());
+            enable_tenants(&state, "demo-app");
             if empty_tenancy {
                 state.tenancy = Some(Arc::new(RwLock::new(Tenancy::new("demo-app"))));
             }
@@ -98,6 +99,31 @@ fn cases() -> Vec<(String, AuthState, Arc<AuthRegistry>)> {
         }
     }
     out
+}
+
+/// The class a refusal has under each profile: `strict` answers as production recorded it
+/// (AUTH-TENANT-BLOCKING, 2026-09-27), `emulator` as the official Auth emulator (firebase-tools
+/// 15.28.2: `toExegesisController` takes the tenant from the ID token, and `parseIdToken` finds no
+/// user in a tenant that no longer exists).
+fn expected(case: &str, strict: &'static str, emulator: &'static str) -> &'static str {
+    if case.starts_with("strict") {
+        strict
+    } else {
+        emulator
+    }
+}
+
+/// Tenant operations need the project's `multiTenant.allowTenants`, as in production.
+fn enable_tenants(state: &AuthState, project: &str) {
+    let (status, body) = admin(
+        state,
+        "PATCH",
+        &format!(
+            "/identitytoolkit.googleapis.com/admin/v2/projects/{project}/config?updateMask=multiTenant.allowTenants"
+        ),
+        &json!({"multiTenant": {"allowTenants": true}}),
+    );
+    assert_eq!(status, 200, "{project}: {body}");
 }
 
 fn owner() -> RequestHeaders {
@@ -235,7 +261,7 @@ fn a_contradicting_body_tenant_keeps_its_refusal() {
             assert_eq!(status, 400, "{case} {route}: {refused}");
             assert_eq!(
                 class(&refused),
-                "INVALID_ID_TOKEN",
+                "TENANT_ID_MISMATCH",
                 "{case} {route}: {refused}"
             );
         }
@@ -262,7 +288,7 @@ fn a_deleted_tenants_token_keeps_its_refusal() {
             assert_eq!(status, 400, "{case} {route}: {refused}");
             assert_eq!(
                 class(&refused),
-                "INVALID_ID_TOKEN",
+                expected(&case, "TENANT_DELETED", "USER_NOT_FOUND"),
                 "{case} {route}: {refused}"
             );
         }
@@ -295,7 +321,7 @@ fn a_tenant_claim_naming_no_tenant_keeps_its_refusal() {
             assert_eq!(status, 400, "{case} {route}: {refused}");
             assert_eq!(
                 class(&refused),
-                "INVALID_ID_TOKEN",
+                expected(&case, "INVALID_TENANT_ID", "USER_NOT_FOUND"),
                 "{case} {route}: {refused}"
             );
         }
@@ -319,6 +345,9 @@ fn a_tenant_token_of_another_project_is_refused_under_a_foreign_key() {
             tenancy.register(project, &[], &[key.to_owned()]).unwrap();
         }
         state.tenancy = Some(Arc::new(RwLock::new(tenancy)));
+        for project in ["worker-alpha", "worker-beta"] {
+            enable_tenants(&state, project);
+        }
         let alpha = sign_up(&state, "alpha-key", "customer-a", "alpha@example.com");
         let before = tenant_accounts(&state, "worker-alpha", "customer-a");
 
@@ -409,5 +438,35 @@ fn expired_revoked_and_disabled_tenant_tokens_are_refused_on_the_routed_calls() 
         }
         let after = accounts(&state);
         assert_eq!(after["users"], before["users"], "{case}: nothing changed");
+    }
+}
+
+/// An empty `tenantId` names no tenant: the call reaches the token's tenant in both profiles
+/// (strict: production's `""` names the project, and the token then names its own tenant;
+/// emulator: the official emulator reads `""` as absent). A deleted tenant is then refused as
+/// each profile refuses it.
+#[test]
+fn an_empty_body_tenant_is_the_tokens_tenant() {
+    for (case, state, registry) in cases() {
+        let a = sign_up(&state, KEY, TENANT_A, "empty@example.com");
+        let (status, found) = sdk_call(
+            &state,
+            "accounts:lookup",
+            &json!({"idToken": a["idToken"], "tenantId": ""}),
+        );
+        assert_eq!(status, 200, "{case}: {found}");
+        assert_eq!(found["users"][0]["localId"], a["localId"], "{case}");
+        assert!(registry.delete_tenant("demo-app", TENANT_A), "{case}");
+        let (status, refused) = sdk_call(
+            &state,
+            "accounts:lookup",
+            &json!({"idToken": a["idToken"], "tenantId": ""}),
+        );
+        assert_eq!(status, 400, "{case}: {refused}");
+        assert_eq!(
+            class(&refused),
+            expected(&case, "TENANT_DELETED", "USER_NOT_FOUND"),
+            "{case}: {refused}"
+        );
     }
 }

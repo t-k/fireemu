@@ -9778,8 +9778,10 @@ fn custom_token_claims_bypass_blocking_hooks_and_refresh_stays_in_namespace() {
             "idToken": a["idToken"],
         }),
     );
+    // The official Auth emulator compares the body tenant with the token's first
+    // (firebase-tools 15.28.2 `toExegesisController`).
     assert_eq!(status, 400, "{refused_lookup}");
-    assert_eq!(refused_lookup["error"]["message"], "INVALID_ID_TOKEN");
+    assert_eq!(refused_lookup["error"]["message"], "TENANT_ID_MISMATCH");
     assert_tenant_stores_after_sign_in(&registry);
 
     let before_a = registry
@@ -14755,7 +14757,7 @@ fn scoped_tenant_selectors_must_match_body_and_query_before_auth_work() {
 }
 
 #[test]
-fn body_tenant_mismatch_preserves_invalid_id_token_precedence() {
+fn body_tenant_mismatch_is_refused_as_the_official_emulator_refuses_it() {
     let mut s = state();
     let registry = Arc::new(AuthRegistry::new("demo-app", s.store.clone()));
     for tenant in ["tenant-a", "tenant-b"] {
@@ -14776,9 +14778,9 @@ fn body_tenant_mismatch_preserves_invalid_id_token_precedence() {
     );
     assert_eq!(status, 200, "{created}");
 
-    // A body tenant is validated as part of the authenticated operation. Preserve the
-    // existing INVALID_ID_TOKEN precedence instead of treating it like an explicit query
-    // namespace assertion.
+    // A body tenant other than the ID token's is TENANT_ID_MISMATCH before any account work,
+    // as the official Auth emulator answers it (firebase-tools 15.28.2
+    // `toExegesisController`); nothing is created in either tenant.
     let (status, refused) = post(
         &s,
         &format!("{V1}/accounts:lookup?key=fake-api-key"),
@@ -14788,7 +14790,7 @@ fn body_tenant_mismatch_preserves_invalid_id_token_precedence() {
         }),
     );
     assert_eq!(status, 400, "{refused}");
-    assert_eq!(refused["error"]["message"], "INVALID_ID_TOKEN");
+    assert_eq!(refused["error"]["message"], "TENANT_ID_MISMATCH");
     assert_eq!(tenant_a.lock().unwrap().user_count(), 1);
     assert_eq!(tenant_b.lock().unwrap().user_count(), 0);
 }

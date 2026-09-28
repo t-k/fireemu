@@ -377,10 +377,11 @@ fn a_tenant_id_token_is_refused_on_every_other_tenant_route_without_mutation() {
                 // Strict answers a v1 account call as production does: the token's tenant is
                 // compared with the named one first (AUTH-TENANT-BLOCKING recording 2026-09-27,
                 // selection#lookup-tenant-b).
+                // The emulator profile answers a v1 account call as the official Auth emulator
+                // does (firebase-tools 15.28.2 `toExegesisController`): a body tenant other than
+                // the token's is TENANT_ID_MISMATCH whatever the API key.
                 let expected = match selector {
-                    Selector::KeyAndBody if profile == "strict" && route.contains("/v1/") => {
-                        "TENANT_ID_MISMATCH"
-                    }
+                    Selector::KeyAndBody if route.contains("/v1/") => "TENANT_ID_MISMATCH",
                     Selector::KeyAndBody => "INVALID_ID_TOKEN",
                     Selector::BodyOnly | Selector::QueryOnly => "TENANT_ID_MISMATCH",
                 };
@@ -1846,31 +1847,31 @@ fn deleting_a_tenant_invalidates_its_credentials_and_leaves_the_sibling_and_proj
             assert_eq!(class(&missing), "TENANT_NOT_FOUND");
         }
 
-        // Issued credentials of the deleted tenant no longer authenticate anywhere. The
-        // class depends on the selector: the API key resolves the named tenant and finds
-        // none; a bare body tenant is compared with the store the token still selects (the
-        // parent project, the only remaining namespace the token can name), and a bare
-        // query tenant matches the token's tenant and then the token fails verification
-        // against that parent store. Every shape is a refusal without fallback.
+        // Issued credentials of the deleted tenant no longer authenticate anywhere. An
+        // account lookup is answered as the official Auth emulator answers it: its target is
+        // the body's tenant, else the ID token's (the API key and a query tenant do not
+        // choose it), and a target that no longer exists has no user (firebase-tools 15.28.2
+        // `toExegesisController`, `parseIdToken`). A refresh keeps its selector's class. Every
+        // shape is a refusal without fallback.
         for (selector, lookup_status, lookup_class, refresh_status, refresh_class) in [
             (
                 Selector::KeyAndBody,
-                404,
-                "TENANT_NOT_FOUND",
+                400,
+                "USER_NOT_FOUND",
                 404,
                 "TENANT_NOT_FOUND",
             ),
             (
                 Selector::BodyOnly,
                 400,
-                "TENANT_ID_MISMATCH",
+                "USER_NOT_FOUND",
                 400,
                 "TENANT_NOT_FOUND",
             ),
             (
                 Selector::QueryOnly,
                 400,
-                "INVALID_ID_TOKEN",
+                "USER_NOT_FOUND",
                 404,
                 "TENANT_NOT_FOUND",
             ),
@@ -1918,7 +1919,8 @@ fn deleting_a_tenant_invalidates_its_credentials_and_leaves_the_sibling_and_proj
             );
         }
         // Without a tenant selector the token still names the deleted tenant and cannot fall
-        // back to the project or to the sibling.
+        // back to the project or to the sibling (the emulator profile: no user in the target
+        // tenant, as the official Auth emulator answers it).
         let (status, refused) = post(
             &state,
             &format!("{V1}/accounts:lookup?key={KEY}"),
@@ -1931,7 +1933,7 @@ fn deleting_a_tenant_invalidates_its_credentials_and_leaves_the_sibling_and_proj
             if strict {
                 "TENANT_DELETED"
             } else {
-                "INVALID_ID_TOKEN"
+                "USER_NOT_FOUND"
             },
             "{profile}: {refused}"
         );
@@ -1956,14 +1958,12 @@ fn deleting_a_tenant_invalidates_its_credentials_and_leaves_the_sibling_and_proj
             TENANT_B,
             json!({"idToken": token_a}),
         );
+        // Both profiles compare the named tenant with the token's first (strict: production;
+        // emulator: the official Auth emulator's `toExegesisController`).
         assert_eq!(status, 400, "{profile}: {refused}");
         assert_eq!(
             class(&refused),
-            if strict {
-                "TENANT_ID_MISMATCH"
-            } else {
-                "INVALID_ID_TOKEN"
-            },
+            "TENANT_ID_MISMATCH",
             "{profile}: {refused}"
         );
 

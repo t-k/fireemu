@@ -3214,6 +3214,108 @@ fn management_answer(
     response
 }
 
+/// The project an account request is for: its path's, else its API key's (when a project owns
+/// the key), else the session's.
+fn request_project(
+    state: &AuthState,
+    path: &str,
+    query: Option<&str>,
+) -> Result<String, JsonResponse> {
+    let key_project = query_selectors(query)
+        .ok()
+        .and_then(|(key, _)| key)
+        .and_then(|key| {
+            let tenancy = state.tenancy.as_ref()?.read().ok()?;
+            tenancy.project_of_api_key(&key).map(str::to_owned)
+        });
+    match (routes::scoped_target(path), key_project) {
+        (Some((project, _)), _) => Ok(project.to_owned()),
+        (None, Some(project)) => Ok(project),
+        (None, None) => match state.store.lock() {
+            Ok(store) => Ok(store.project_id().to_owned()),
+            Err(_) => Err(error(500, "INTERNAL")),
+        },
+    }
+}
+
+/// The tenant an account request's ID token names, answered as the official Auth emulator
+/// answers it (emulator profile; firebase-tools 15.28.2). The emulator takes the target tenant
+/// from the body, else from the ID token (`toExegesisController`): a body tenant other than the
+/// token's is `TENANT_ID_MISMATCH`, and a target tenant that no longer exists (or never did)
+/// finds no user there (`parseIdToken`: `USER_NOT_FOUND`), whatever the API key or a query
+/// tenant say. Unlike the emulator, which creates
+/// the missing tenant on the way, fireemu creates nothing. A token of another project, a signed
+/// token that does not decode, and a request without a tenant token keep their current answer.
+///
+/// `Ok(Some(body))` is the body the request continues with: an empty `tenantId` is dropped, as
+/// the emulator reads `""` as no tenant.
+fn emulator_named_tenant(
+    state: &AuthState,
+    path: &str,
+    query: Option<&str>,
+    body: &Value,
+) -> Result<Option<Value>, JsonResponse> {
+    if !state.stateless_refresh_tokens {
+        return Ok(None);
+    }
+    let Some(registry) = state.registry.as_ref() else {
+        return Ok(None);
+    };
+    let account_api = path.starts_with("/identitytoolkit.googleapis.com/v1/")
+        && !path.ends_with(":queryAccounts")
+        && !path.ends_with("/accounts:query");
+    if !account_api {
+        return Ok(None);
+    }
+    let Some((audience, Some(token_tenant))) = str_field(body, "idToken").and_then(|token| {
+        let signer = state.store.lock().ok().and_then(|s| s.signer_arc());
+        let decoded = fireemu_core_auth::jwt::decode_token(token, signer.as_deref()).ok()?;
+        let audience = decoded
+            .payload
+            .get("aud")
+            .and_then(fireemu_core_types::json::JsonValue::as_str)?
+            .to_owned();
+        let tenant = decoded
+            .payload
+            .get("firebase")
+            .and_then(|firebase| firebase.get("tenant"))
+            .and_then(fireemu_core_types::json::JsonValue::as_str)
+            .map(str::to_owned);
+        Some((audience, tenant))
+    }) else {
+        return Ok(None);
+    };
+    let project = request_project(state, path, query)?;
+    if audience != project {
+        return Ok(None);
+    }
+    // The target is the body's tenant, else the token's; `""` is no tenant to the emulator
+    // (JavaScript falsiness), so it is dropped and the token names the tenant.
+    let mut rewritten = None;
+    let target = match body.get("tenantId") {
+        Some(Value::String(named)) if !named.is_empty() => {
+            if named.as_str() != token_tenant.as_str() {
+                return Err(error(400, "TENANT_ID_MISMATCH"));
+            }
+            named.as_str()
+        }
+        None | Some(Value::Null) => token_tenant.as_str(),
+        Some(Value::String(_)) => {
+            let mut without = body.clone();
+            if let Some(object) = without.as_object_mut() {
+                object.remove("tenantId");
+            }
+            rewritten = Some(without);
+            token_tenant.as_str()
+        }
+        _ => return Ok(None),
+    };
+    if registry.tenant_store(&project, target).is_none() {
+        return Err(error(400, "USER_NOT_FOUND"));
+    }
+    Ok(rewritten)
+}
+
 /// The tenant an account or Secure Token request names, read as production reads it (strict
 /// profile; AUTH-TENANT-BLOCKING recording 2026-09-27, selection, deletion and switch-off
 /// programs):
@@ -3250,22 +3352,7 @@ fn strict_named_tenant(
         return Ok(None);
     }
     let scoped = routes::scoped_target(path);
-    // A client call's project is its API key's, when a project owns the key.
-    let key_project = query_selectors(query)
-        .ok()
-        .and_then(|(key, _)| key)
-        .and_then(|key| {
-            let tenancy = state.tenancy.as_ref()?.read().ok()?;
-            tenancy.project_of_api_key(&key).map(str::to_owned)
-        });
-    let project = match (scoped, key_project) {
-        (Some((project, _)), _) => project.to_owned(),
-        (None, Some(project)) => project,
-        (None, None) => match state.store.lock() {
-            Ok(store) => store.project_id().to_owned(),
-            Err(_) => return Err(error(500, "INTERNAL")),
-        },
-    };
+    let project = request_project(state, path, query)?;
     if secure_token {
         return strict_refreshed_tenant(registry, &project, body);
     }
@@ -3415,6 +3502,16 @@ fn handle_with_policy_inner(
         Ok(Some(rewritten)) => {
             named_tenant_body = rewritten;
             &named_tenant_body
+        }
+        Ok(None) => body,
+        Err(response) => return response,
+    };
+    // The official emulator's reading of an ID token's tenant (emulator profile).
+    let emulator_tenant_body;
+    let body = match emulator_named_tenant(state, path, query, body) {
+        Ok(Some(rewritten)) => {
+            emulator_tenant_body = rewritten;
+            &emulator_tenant_body
         }
         Ok(None) => body,
         Err(response) => return response,

@@ -1,6 +1,7 @@
 """Metadata pre/postflight is bounded, pinned and never saves credential bodies."""
 
 import hashlib
+import json
 import sys
 from pathlib import Path
 
@@ -60,6 +61,48 @@ def answer(slot):
         },
     }[slot]
     return {"complete": True, "workerReaped": True, "status": 200, "body": body}
+
+
+@pytest.mark.parametrize("slot,resource", [
+    ("rules-release", None),
+    ("ruleset-source", RULESET),
+])
+def test_default_rules_transport_uses_the_http_module_and_closes_the_connection(monkeypatch, slot, resource):
+    events = []
+    expected = answer(slot)
+
+    class Response:
+        status = 200
+
+        def read(self, limit):
+            events.append(("read", limit))
+            return json.dumps(expected["body"]).encode()
+
+    class Connection:
+        def __init__(self, host, *, timeout):
+            events.append(("connect", host, timeout))
+
+        def request(self, method, path, *, headers):
+            events.append(("request", method, path, headers))
+
+        def getresponse(self):
+            return Response()
+
+        def close(self):
+            events.append(("close",))
+
+    monkeypatch.setattr(management.http.client, "HTTPSConnection", Connection)
+    assert management._default_request(slot, TOKEN, resource) == expected
+    name = management.RULES_RELEASE if slot == "rules-release" else RULESET
+    assert events == [
+        ("connect", "firebaserules.googleapis.com", 12),
+        ("request", "GET", f"/v1/{name}", {
+            "Authorization": "Bearer " + TOKEN,
+            "x-goog-user-project": "fireemu-oracle-sbx",
+        }),
+        ("read", management.RULES_RESPONSE_LIMIT + 1),
+        ("close",),
+    ]
 
 
 def test_pre_and_postflight_use_exact_seven_management_slots_without_auth(monkeypatch):

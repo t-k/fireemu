@@ -47,11 +47,11 @@ def _default_request(slot, token, resource=None):
             timeout=12,
             receipt=True,
         )
-        http = response.get("http", {}) if isinstance(response, dict) else {}
+        http_receipt = response.get("http", {}) if isinstance(response, dict) else {}
         return {
-            "complete": http.get("complete") is True and http.get("bodyKind") == "json",
+            "complete": http_receipt.get("complete") is True and http_receipt.get("bodyKind") == "json",
             "workerReaped": True,
-            "status": http.get("status"),
+            "status": http_receipt.get("status"),
             "body": response.get("body") if isinstance(response, dict) else None,
         }
     if slot not in ("rules-release", "ruleset-source"):

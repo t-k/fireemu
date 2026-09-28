@@ -164,12 +164,28 @@ def record_twice(*, ledger_path, private_dir, pins, decisions, now, record_once,
                     _ledger_row(pins, attempt_id, run_dir, nonce, "recorded", requests),
                 )
                 receipts.append(receipt)
-            except (Exception, KeyboardInterrupt):
-                last = admission.read_ledger(ledger_path)[-1]
-                if last.get("attemptId") == attempt_id and last.get("outcome") == "reserved":
+            except (Exception, KeyboardInterrupt) as error:
+                last = next(
+                    (row for row in reversed(admission.read_ledger(ledger_path))
+                     if row.get("attemptId") == attempt_id),
+                    None,
+                )
+                if last is not None and last.get("outcome") == "reserved":
+                    requests = getattr(error, "sandbox_requests", None)
+                    if type(requests) is not int or not 0 <= requests <= pins["requestsPerRecording"]:
+                        requests = None
+                    failure = {
+                        "failureType": type(error).__name__,
+                        "sandboxRequests": requests,
+                        "requestCountBasis": "precharged-upper-bound" if requests is not None else "unavailable",
+                    }
+                    _save_private(run_dir / f"failure-{index + 1}.json", failure)
+                    stopped = _ledger_row(
+                        pins, attempt_id, run_dir, nonce, "stopped-needs-review", requests
+                    )
+                    stopped["requestCountBasis"] = failure["requestCountBasis"]
                     admission.append_ledger(
-                        ledger_path,
-                        _ledger_row(pins, attempt_id, run_dir, nonce, "stopped-needs-review", None),
+                        ledger_path, stopped,
                     )
                 raise
         try:

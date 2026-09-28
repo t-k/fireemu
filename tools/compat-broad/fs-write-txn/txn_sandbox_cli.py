@@ -82,7 +82,7 @@ def load_packet(
     ):
         raise ValueError("packet scope or corpus differs from the frozen campaign")
     if (
-        value["envelopeId"] != "FS-TRANSACTION-expiry-retry-04-001"
+        value["envelopeId"] != "FS-TRANSACTION-expiry-retry-04-002"
         or not isinstance(value["envelopePath"], str)
         or value["envelopePath"] != envelope_relative
         or not value["envelopePath"].startswith("docs.local/reviews/")

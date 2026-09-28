@@ -102,39 +102,44 @@ def run_once(
     run_dir = Path(run_dir)
     if not run_dir.is_dir():
         raise ValueError("private run directory is missing")
-    budget.charge("credential")
-    token = credential_fn()
-    metadata = metadata_factory(token, baseline, budget)
-    before = metadata.preflight()
-    data = wire_factory(token, budget)
-    options = {
-        "target": "production",
-        "host": collector.PRODUCTION_HOST,
-        "projectId": contract.PROJECT,
-        "database": contract.DATABASE,
-        "nonce": nonce,
-        "ownerId": owner_id,
-        "timing": collector.WALL_CLOCK,
-        "deadlineSeconds": plan_module.WALL_SECONDS,
-    }
-    collection = collector_factory(
-        options,
-        plan,
-        data,
-        responsibility=_responsibility_writer(run_dir / "responsibility.json"),
-    )
-    receipt = collection.run()
-    if not isinstance(receipt, dict):
-        raise ValueError("collector returned no bounded receipt")
-    if token in json.dumps(receipt, ensure_ascii=False):
-        raise ValueError("collector receipt contains the raw OAuth credential")
-    receipt["preflight"] = before
-    receipt["postflight"] = None
-    if receipt.get("complete") is True:
-        try:
-            receipt["postflight"] = metadata.postflight()
-        except Exception as error:  # noqa: BLE001 -- keep the resource receipt and stop review.
-            receipt["complete"] = False
-            receipt["failure"] = f"postflight-{type(error).__name__}"
-    receipt["sandboxRequests"] = budget.total
-    return receipt
+    try:
+        budget.charge("credential")
+        token = credential_fn()
+        metadata = metadata_factory(token, baseline, budget)
+        before = metadata.preflight()
+        data = wire_factory(token, budget)
+        options = {
+            "target": "production",
+            "host": collector.PRODUCTION_HOST,
+            "projectId": contract.PROJECT,
+            "database": contract.DATABASE,
+            "nonce": nonce,
+            "ownerId": owner_id,
+            "timing": collector.WALL_CLOCK,
+            "deadlineSeconds": plan_module.WALL_SECONDS,
+        }
+        collection = collector_factory(
+            options,
+            plan,
+            data,
+            responsibility=_responsibility_writer(run_dir / "responsibility.json"),
+        )
+        receipt = collection.run()
+        if not isinstance(receipt, dict):
+            raise ValueError("collector returned no bounded receipt")
+        if token in json.dumps(receipt, ensure_ascii=False):
+            raise ValueError("collector receipt contains the raw OAuth credential")
+        receipt["preflight"] = before
+        receipt["postflight"] = None
+        if receipt.get("complete") is True:
+            try:
+                receipt["postflight"] = metadata.postflight()
+            except Exception as error:  # noqa: BLE001 -- keep the resource receipt and stop review.
+                receipt["complete"] = False
+                receipt["failure"] = f"postflight-{type(error).__name__}"
+        receipt["sandboxRequests"] = budget.total
+        return receipt
+    except (Exception, KeyboardInterrupt) as error:
+        # Charges precede dispatch, so this is a conservative request upper bound.
+        error.sandbox_requests = budget.total
+        raise

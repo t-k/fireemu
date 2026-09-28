@@ -14,6 +14,37 @@ from test_txn_sandbox_admission import DECISION, LAST, NOW, PINS
 from test_txn_sandbox_contract import receipt
 
 
+@pytest.mark.parametrize("other_project_finishes", [False, True])
+def test_exception_request_count_is_saved_without_exception_text_before_the_stop_row(tmp_path, other_project_finishes):
+    ledger = tmp_path / "sandbox-ledger.jsonl"
+    ledger.write_text(json.dumps(LAST) + "\n")
+    ledger.chmod(0o600)
+
+    def stopped(*args):
+        if other_project_finishes:
+            runner.admission.append_ledger(ledger, {
+                "ts": "2026-09-27T15:30:00Z", "project": "fireemu-oracle-idp",
+                "taskId": "OTHER", "outcome": "recorded", "attemptId": "another-project",
+            })
+        error = ValueError("private-token-must-not-be-saved")
+        error.sandbox_requests = 4
+        raise error
+
+    with pytest.raises(ValueError):
+        runner.record_twice(ledger_path=ledger, private_dir=tmp_path, pins=PINS,
+                            decisions=DECISION, now=NOW, record_once=stopped)
+    rows = [json.loads(line) for line in ledger.read_text().splitlines()]
+    assert rows[-1]["requests"] == 4
+    assert rows[-1]["requestCountBasis"] == "precharged-upper-bound"
+    failure = Path(rows[-1]["runDir"]) / "failure-1.json"
+    assert json.loads(failure.read_text()) == {
+        "failureType": "ValueError", "sandboxRequests": 4,
+        "requestCountBasis": "precharged-upper-bound",
+    }
+    assert "private-token" not in failure.read_text() + ledger.read_text()
+    assert (tmp_path / "sandbox-locks/fireemu-oracle-sbx.lock").exists()
+
+
 def test_two_complete_recordings_freeze_under_one_lock(tmp_path):
     ledger = tmp_path / "sandbox-ledger.jsonl"
     ledger.write_text(json.dumps(LAST) + "\n")

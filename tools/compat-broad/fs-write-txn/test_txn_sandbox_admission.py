@@ -136,6 +136,47 @@ def test_parent_task_revocation_also_refuses_a_direct_approval():
         admission.verify_send_gates([LAST], NOW, DECISION + revoked, PINS)
 
 
+@pytest.mark.parametrize("prefix", ["REVOKED packetSha256=", "decision=REVOKED; packetSha256="])
+@pytest.mark.parametrize("same_packet", [False, True])
+def test_version_revocation_only_refuses_the_named_packet(prefix, same_packet):
+    revoked_sha = PACKET if same_packet else "d" * 64
+    revoked = (
+        "- 2026-09-28 | FS-TRANSACTION expiry-retry-04 | "
+        f"{prefix}{revoked_sha}（previous version） | Claude（委任） | old-packet.json\n"
+    )
+    if same_packet:
+        with pytest.raises(ValueError, match="revoked"):
+            admission.verify_send_gates([LAST], NOW, ENVELOPE + DELEGATED + revoked, PINS)
+    else:
+        assert admission.verify_send_gates([LAST], NOW, ENVELOPE + revoked + DELEGATED, PINS) == LAST["ts"]
+
+
+def test_envelope_002_accepts_a_later_path_correction_without_reusing_envelope_001():
+    pins = {**PINS, "envelopeId": "FS-TRANSACTION-expiry-retry-04-002"}
+    envelope = ENVELOPE.replace("expiry-retry-04-001", "expiry-retry-04-002")
+    historical = envelope.replace(PINS["envelopePath"], "Explanation without a packet path")
+    delegated = DELEGATED.replace("expiry-retry-04-001", "expiry-retry-04-002")
+    with pytest.raises(ValueError, match="owner envelope"):
+        admission.verify_send_gates([LAST], NOW, historical + delegated, pins)
+    assert admission.verify_send_gates([LAST], NOW, historical + envelope + delegated, pins) == LAST["ts"]
+
+
+@pytest.mark.parametrize("at_baseline", [True, False, None])
+def test_coordinator_cleanup_verified_closes_only_the_matching_attempt_at_baseline(at_baseline):
+    opened = {**LAST, "ts": "2026-09-27T14:00:00Z", "taskId": "FS-TRANSACTION-SANDBOX", "outcome": "reserved", "attemptId": "stopped"}
+    stopped = {**opened, "ts": "2026-09-27T14:01:00Z", "outcome": "stopped-needs-review", "requests": None}
+    closed = {"ts": LAST["ts"], "project": "fireemu-oracle-sbx", "taskId": opened["taskId"],
+              "attemptId": "stopped", "event": "cleanup-verified", "sandboxAtBaseline": at_baseline,
+              "requests": 4, "estimatedUsd": 0}
+    if at_baseline is True:
+        assert admission.verify_send_gates([opened, stopped, closed], NOW, DECISION, PINS) == LAST["ts"]
+        with pytest.raises(ValueError, match="open attempt"):
+            admission.verify_send_gates([opened, stopped, {**closed, "attemptId": "other"}], NOW, DECISION, PINS)
+    else:
+        with pytest.raises(ValueError, match="open attempt"):
+            admission.verify_send_gates([opened, stopped, closed], NOW, DECISION, PINS)
+
+
 def test_unkeyed_started_row_cannot_be_closed_by_unrelated_terminal():
     rows = [
         {"ts": "2026-09-27T14:00:00Z", "project": "fireemu-oracle-sbx", "event": "started"},

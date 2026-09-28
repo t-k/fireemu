@@ -45,12 +45,22 @@ def _owner_approval(decisions, pins):
         tokens = {part.strip() for part in columns[2].split(";")}
         entries.append((columns, tokens))
     named_parent = f"{TASK} {pins.get('packetName', '')}".strip()
-    if any(
-        columns[1] in (TASK, named_parent, f"{named_parent} envelope")
-        and ("REVOKED" in tokens or "decision=REVOKED" in tokens)
-        for columns, tokens in entries
-    ):
-        raise ValueError("this packet or envelope was revoked")
+    for columns, _tokens in entries:
+        if columns[1] not in (TASK, named_parent, f"{named_parent} envelope"):
+            continue
+        decision = columns[2]
+        if not re.search(r"(?:^|[;\s])(?:decision=)?REVOKED(?=[;\s]|$)", decision):
+            continue
+        packet = re.search(r"packetSha256=([a-f0-9]{64})(?![a-f0-9])", decision)
+        envelope = re.search(r"envelopeId=([A-Za-z0-9_-]+)", decision)
+        if packet is not None:
+            revoked = packet[1] == pins["packetSha256"]
+        elif envelope is not None:
+            revoked = envelope[1] == pins.get("envelopeId")
+        else:
+            revoked = True
+        if revoked:
+            raise ValueError("this packet or envelope was revoked")
     direct = [
         columns for columns, tokens in entries
         if columns[1] in (TASK, named_parent)
@@ -108,6 +118,8 @@ def _terminal(row):
     return (
         outcome in ("recorded", "prepared", "legacy-recovery-reservation-actual-requests")
         or _recovered(row)
+        or row.get("event") == "cleanup-verified" and row.get("sandboxAtBaseline") is True
+        and type(row.get("requests")) is int and row["requests"] >= 0
         or outcome == "failed" and "requests" in row and (row["requests"] is None or type(row["requests"]) is int and row["requests"] == 0)
         or row.get("event") == "finished" and outcome == "presend-cancelled-no-send"
     )

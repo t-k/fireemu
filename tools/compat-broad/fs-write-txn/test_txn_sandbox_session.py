@@ -18,6 +18,44 @@ NONCE = "0123456789abcdef0123456789abcdef"
 OWNER = "11111111222233334444555566667777"
 
 
+@pytest.mark.parametrize("phase,expected", [("credential", 1), ("metadata", 4), ("wire", 4), ("collector", 5)])
+@pytest.mark.parametrize("failure", [ValueError, KeyboardInterrupt])
+def test_session_exception_retains_the_precharged_request_upper_bound(tmp_path, phase, expected, failure):
+    def credential():
+        if phase == "credential":
+            raise failure("credential failed")
+        return "test-access-token"
+
+    class Metadata:
+        def __init__(self, token, baseline, budget):
+            self.budget = budget
+
+        def preflight(self):
+            for _ in range(3):
+                self.budget.charge("management")
+            if phase == "metadata":
+                raise failure("preflight failed")
+            return {}
+
+    def wire(token, budget):
+        if phase == "wire":
+            raise failure("wire failed")
+        return budget
+
+    class Collector:
+        def __init__(self, options, plan, wire, *, responsibility):
+            self.budget = wire
+
+        def run(self):
+            self.budget.charge("data", phase="observation")
+            raise failure("collector failed")
+
+    with pytest.raises(failure) as caught:
+        session.run_once(NONCE, OWNER, tmp_path, BASELINE, credential_fn=credential,
+                         metadata_factory=Metadata, wire_factory=wire, collector_factory=Collector)
+    assert caught.value.sandbox_requests == expected
+
+
 def test_session_counts_oauth_metadata_data_and_durable_responsibility(tmp_path):
     events = []
 

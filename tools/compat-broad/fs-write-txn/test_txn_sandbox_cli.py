@@ -39,7 +39,7 @@ def packet(baseline, envelope, *, source="b" * 40, runner="c" * 64):
         "planSourceDigest": plan.source_digest(),
         "baselineSha256": sha(baseline),
         "packetName": "expiry-retry-04",
-        "envelopeId": "FS-TRANSACTION-expiry-retry-04-001",
+        "envelopeId": "FS-TRANSACTION-expiry-retry-04-002",
         "envelopePath": "docs.local/reviews/transaction-envelope.md",
         "envelopeSha256": sha(envelope),
     }

@@ -20717,3 +20717,50 @@ fn sign_up_quotas_are_taken_and_reported_as_production_normalizes_them() {
     let (status, cleared) = admin(&s, "PATCH", CONFIG, &json!({}));
     assert_eq!((status, &cleared["quota"]), (200, &json!({})));
 }
+
+/// The emulator-only config route answers the official emulator's document in both profiles
+/// (firebase-tools 15.28.2 `getEmulatorProjectConfig`, conformance fixture
+/// `auth/client-account-flows#enable-improved-email-privacy`; owner decision K3): `signIn`
+/// and `emailPrivacyConfig`, without `client`. Production has no such route. A PATCH of
+/// `client.permissions` is still applied, as a fireemu extension.
+#[test]
+fn the_emulator_config_route_answers_the_official_emulator_document() {
+    const EMULATOR_CONFIG: &str = "/emulator/v1/projects/demo-app/config";
+    for (profile, s) in [("emulator", state()), ("strict", strict_state())] {
+        let initial = s.store.lock().unwrap().config();
+        let (status, read) = admin(&s, "GET", EMULATOR_CONFIG, &Value::Null);
+        assert_eq!(status, 200, "{profile} {read}");
+        assert_eq!(
+            read,
+            json!({
+                "signIn": {"allowDuplicateEmails": initial.allow_duplicate_emails},
+                "emailPrivacyConfig": {"enableImprovedEmailPrivacy": initial.enable_improved_email_privacy},
+            }),
+            "{profile}"
+        );
+        let (status, patched) = admin(
+            &s,
+            "PATCH",
+            EMULATOR_CONFIG,
+            &json!({
+                "signIn": {"allowDuplicateEmails": true},
+                "emailPrivacyConfig": {"enableImprovedEmailPrivacy": !initial.enable_improved_email_privacy},
+                "client": {"permissions": {"disabledUserSignup": true, "disabledUserDeletion": true}},
+            }),
+        );
+        assert_eq!(status, 200, "{profile} {patched}");
+        assert_eq!(
+            patched,
+            json!({
+                "signIn": {"allowDuplicateEmails": true},
+                "emailPrivacyConfig": {"enableImprovedEmailPrivacy": !initial.enable_improved_email_privacy},
+            }),
+            "{profile}"
+        );
+        let applied = s.store.lock().unwrap().config();
+        assert!(
+            applied.disabled_user_signup && applied.disabled_user_deletion,
+            "{profile}"
+        );
+    }
+}

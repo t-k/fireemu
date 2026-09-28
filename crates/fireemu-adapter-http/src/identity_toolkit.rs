@@ -12948,14 +12948,13 @@ fn emulator_route(
     }
 }
 
-/// The document `GET` / `PATCH /emulator/v1/projects/{p}/config` serve.
+/// The document `GET` / `PATCH /emulator/v1/projects/{p}/config` serve, in both profiles: the
+/// official emulator's `getEmulatorProjectConfig` (firebase-tools 15.28.2), which has no
+/// `client` member (owner decision K3). The route has no production counterpart. A PATCH still
+/// applies `client.permissions`, which this document does not echo.
 fn project_config_json(config: fireemu_core_auth::store::ProjectAuthConfig) -> Value {
     json!({
         "signIn": {"allowDuplicateEmails": config.allow_duplicate_emails},
-        "client": {"permissions": {
-            "disabledUserSignup": config.disabled_user_signup,
-            "disabledUserDeletion": config.disabled_user_deletion,
-        }},
         "emailPrivacyConfig": {"enableImprovedEmailPrivacy": config.enable_improved_email_privacy},
     })
 }

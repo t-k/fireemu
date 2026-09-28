@@ -2,6 +2,7 @@
   "schemaVersion": 1,
   "parent": "AUTH-TENANT-BLOCKING",
   "parentStatus": "IMPLEMENTING",
+  "parentStatusNote": "The closure review is approved (closureReview). The parent stays IMPLEMENTING only for the three conditions checked after the second integration (ATB, then AUTH-FEDERATION): provider-isolation, timeout and final-artifact-regression. It becomes COMPAT_VERIFIED when they are VERIFIED on the integrated artifact and TB12 is removed.",
   "oracleTrack": "disposable-sandbox",
   "scopeDecisions": [
     {
@@ -1020,14 +1021,24 @@
         "default"
       ],
       "status": "PENDING_REVIEW",
-      "note": "Independent closure and safety review of the final artifact.",
+      "note": "Independent closure and safety review of the final artifact. The review of the pre-integration artifact is approved (closureReview, 2026-09-28). This condition covers every row of the parent (recipe atb), so it becomes VERIFIED with provider-isolation, timeout and final-artifact-regression, when every row matches on the integrated artifact.",
       "evidence": {
         "finalArtifactSha256": "a01b1831938f816ee3a36a96372f18b7fae18bc47ac0639d8d53e0c56984779f",
-        "sourceCommit": "247a8f2c6b2d2e37f74da69efe7769421d18f269"
+        "sourceCommit": "247a8f2c6b2d2e37f74da69efe7769421d18f269",
+        "reviewReport": "docs.local/reviews/2026-09-28-auth-tenant-blocking-closure-rereview3.md",
+        "packetSha256": "893df19c3f1f28be612f4382105e57065d604243485e431bd220f35f686d5d68"
       }
     }
   ],
   "closureReview": {
-    "decision": "PENDING"
+    "decision": "APPROVED",
+    "decidedOn": "2026-09-28",
+    "decider": "project coordinator (delegated by the owner)",
+    "reviewer": "third clean-context closure re-review (APPROVE, no Must Fix, no Should Fix) of packet v4, after the closure review and its first and second re-reviews (each REQUEST_CHANGES, every item fixed)",
+    "reviewedCommit": "c785dc9e8",
+    "finalArtifactSha256": "a01b1831938f816ee3a36a96372f18b7fae18bc47ac0639d8d53e0c56984779f",
+    "packetSha256": "893df19c3f1f28be612f4382105e57065d604243485e431bd220f35f686d5d68",
+    "report": "docs.local/reviews/2026-09-28-auth-tenant-blocking-closure-rereview3.md (private; earlier: -closure-review.md, -closure-rereview.md, -closure-rereview2.md)",
+    "followUps": "Non-blocking and tracked privately (docs.local/issues/open/auth-tenant-blocking-reservation-follow-ups.md, emulator-profile-blocking-bounds-without-official-counterpart.md, blocking-path-self-deadlock-on-unregistered-routed-project.md): an override-only call in place of use_reserved_generated_local_id after a clear, the unreachable !cleared 409 branch, a restored account whose id an in-flight reservation holds, two optional tests, and the emulator profile's bounds that date from main"
   }
 }

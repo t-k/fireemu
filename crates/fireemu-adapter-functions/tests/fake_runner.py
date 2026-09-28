@@ -15,6 +15,7 @@ import http.server
 import json
 import os
 import pathlib
+import socketserver
 import sys
 import threading
 import time
@@ -127,7 +128,21 @@ class Echo(http.server.BaseHTTPRequestHandler):
         pass
 
 
-echo = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Echo)
+class LoopbackServer(http.server.ThreadingHTTPServer):
+    """Binds without HTTPServer's reverse lookup of the bind address.
+
+    http.server.HTTPServer.server_bind names the server with socket.getfqdn(host), a
+    reverse DNS query that hosted macOS runners answer only after a long resolver timeout.
+    Every spawn of this runner paid it before the hello, so a respawn took tens of seconds
+    there. The name is never used: the hello reports only the port.
+    """
+
+    def server_bind(self):
+        socketserver.TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.server_address[:2]
+
+
+echo = LoopbackServer(("127.0.0.1", 0), Echo)
 threading.Thread(target=echo.serve_forever, daemon=True).start()
 
 consume = os.environ.get("FIREEMU_FAKE_CONSUME", "disabled")

@@ -2321,7 +2321,10 @@ async fn start_codebase(
                 }
             }
         }
-        let manifest = parse_manifest(&manifest_json)?;
+        let mut manifest = parse_manifest(&manifest_json)?;
+        if cfg.profile == CompatibilityProfile::Emulator {
+            ignore_send_blocking_events(&mut manifest);
+        }
         // Before anything is served: every export the runner could not serve is either named in a
         // refusal or printed, one line each.
         let policy = UnservedTriggers::parse(&cfg.functions_unserved_triggers).unwrap_or_default();
@@ -2337,7 +2340,10 @@ async fn start_codebase(
                 .manifest
                 .clone()
                 .ok_or_else(|| "the functions runner did not discover a manifest".to_owned())?;
-            let discovered = parse_manifest(&discovered)?;
+            let mut discovered = parse_manifest(&discovered)?;
+            if cfg.profile == CompatibilityProfile::Emulator {
+                ignore_send_blocking_events(&mut discovered);
+            }
             check_manifest_agrees_on_blocking_auth(&manifest, &discovered)?;
             if callable_trusted_protocol {
                 check_manifest_agrees_on_callables(&manifest, &discovered)?;
@@ -2360,6 +2366,43 @@ async fn start_codebase(
         runner.kill_now();
     }
     configured
+}
+
+/// Keeps Identity Platform's email and SMS blocking functions out of service, as the official
+/// emulator does (firebase-tools registers `beforeCreate` and `beforeSignIn` only): they stay in
+/// the ignored inventory with the reason the runner gave before the strict profile served them.
+fn ignore_send_blocking_events(manifest: &mut fireemu_core_functions::manifest::FunctionManifest) {
+    use fireemu_core_functions::manifest::{
+        BlockingAuthEvent, IgnoredFunction, IgnoredScope, Trigger,
+    };
+
+    let (send, served) = std::mem::take(&mut manifest.functions)
+        .into_iter()
+        .partition::<Vec<_>, _>(|function| {
+            matches!(
+                function.trigger,
+                Trigger::BlockingAuth {
+                    event: BlockingAuthEvent::BeforeSendEmail | BlockingAuthEvent::BeforeSendSms,
+                    ..
+                }
+            )
+        });
+    manifest.functions = served;
+    for function in send {
+        let Trigger::BlockingAuth { event, .. } = function.trigger else {
+            continue;
+        };
+        manifest.ignored.push(IgnoredFunction {
+            name: function.name,
+            region: function.region,
+            trigger_type: "blocking".to_owned(),
+            scope: IgnoredScope::Unsupported,
+            reason: format!(
+                "blocking identity event {} is not served",
+                event.event_type()
+            ),
+        });
+    }
 }
 
 /// Refuses a configured manifest that removes or changes any discovered Blocking Auth hook.
@@ -2694,6 +2737,9 @@ pub struct BlockingAuthBridge {
     forward_inbound_credentials: bool,
     settings: Arc<RwLock<BlockingAuthSettings>>,
     settings_revision: AtomicU64,
+    /// Whether Identity Platform's email and SMS events are served (the strict profile; the
+    /// official emulator serves `beforeCreate` and `beforeSignIn` only).
+    send_events: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2706,6 +2752,15 @@ struct BlockingAuthSettings {
 }
 
 const BLOCKING_AUTH_DEADLINE: Duration = Duration::from_secs(7);
+
+/// Identity Platform's email and SMS events, which only the strict profile serves.
+const fn is_send_event(event: fireemu_core_functions::manifest::BlockingAuthEvent) -> bool {
+    matches!(
+        event,
+        fireemu_core_functions::manifest::BlockingAuthEvent::BeforeSendEmail
+            | fireemu_core_functions::manifest::BlockingAuthEvent::BeforeSendSms
+    )
+}
 const MAX_BLOCKING_AUTH_RESPONSE_BYTES: u64 = 64 * 1024;
 
 /// The request values a blocking token names, which fireemu cannot know from a loopback client:
@@ -2822,13 +2877,12 @@ fn blocking_auth_claims(
     tenant: Option<&str>,
     event: fireemu_core_functions::manifest::BlockingAuthEvent,
     request: &fireemu_adapter_http::identity_toolkit::AuthBlockingContext,
-    user: &fireemu_core_auth::store::UserRecord,
+    user: Option<&fireemu_core_auth::store::UserRecord>,
     event_id: &str,
     issued_at: i64,
     audience: &str,
 ) -> serde_json::Map<String, serde_json::Value> {
     use serde_json::{json, Map, Value};
-    let record = blocking_auth_user_record(tenant, request, user);
 
     let mut claims = Map::new();
     claims.insert(
@@ -2844,8 +2898,20 @@ fn blocking_auth_claims(
     claims.insert("user_agent".to_owned(), json!(BLOCKING_AUTH_USER_AGENT));
     claims.insert("ip_address".to_owned(), json!(BLOCKING_AUTH_IP_ADDRESS));
     claims.insert("locale".to_owned(), json!(BLOCKING_AUTH_LOCALE));
-    claims.insert("sub".to_owned(), json!(user.local_id.as_str()));
-    claims.insert("user_record".to_owned(), Value::Object(record));
+    // A mail event has no user: its token names the address and the kind of mail instead.
+    if let Some(user) = user {
+        claims.insert("sub".to_owned(), json!(user.local_id.as_str()));
+        claims.insert(
+            "user_record".to_owned(),
+            Value::Object(blocking_auth_user_record(tenant, request, user)),
+        );
+    }
+    if let Some(email) = &request.email {
+        claims.insert("email".to_owned(), json!(email));
+    }
+    if let Some(email_type) = &request.email_type {
+        claims.insert("email_type".to_owned(), json!(email_type));
+    }
     if let Some(method) = &request.sign_in_method {
         claims.insert("sign_in_method".to_owned(), json!(method));
     }
@@ -3215,7 +3281,33 @@ impl BlockingAuthBridge {
                 forwarding_restrictions,
             })),
             settings_revision: AtomicU64::new(0),
+            send_events: false,
         })
+    }
+
+    /// Serves Identity Platform's email and SMS events too, as production does (the strict
+    /// profile). `beforeSendSms` is listed but never run: no SMS it would gate is recorded.
+    #[must_use]
+    pub const fn with_send_events(mut self, enabled: bool) -> Self {
+        self.send_events = enabled;
+        self
+    }
+
+    /// The events this bridge serves, in Identity Platform's configuration order.
+    fn served_events(
+        &self,
+    ) -> impl Iterator<Item = fireemu_core_functions::manifest::BlockingAuthEvent> + '_ {
+        fireemu_core_functions::manifest::BlockingAuthEvent::ALL
+            .into_iter()
+            .filter(|event| self.send_events || !is_send_event(*event))
+    }
+
+    /// The served event a configuration key names.
+    fn served_event_named(
+        &self,
+        name: &str,
+    ) -> Option<fireemu_core_functions::manifest::BlockingAuthEvent> {
+        self.served_events().find(|event| event.as_str() == name)
     }
 
     /// Builds a bridge applying the same selection to both supported Auth events.
@@ -3232,7 +3324,9 @@ impl BlockingAuthBridge {
             runtime,
             fireemu_core_functions::manifest::BlockingAuthSelections {
                 before_create: selection.clone(),
-                before_sign_in: selection,
+                before_sign_in: selection.clone(),
+                before_send_email: selection.clone(),
+                before_send_sms: selection,
             },
             forward_inbound_credentials,
         )
@@ -3249,6 +3343,7 @@ impl BlockingAuthBridge {
                 forwarding_restrictions: None,
             })),
             settings_revision: AtomicU64::new(0),
+            send_events: false,
         }
     }
 
@@ -3333,7 +3428,7 @@ impl BlockingAuthBridge {
                             "blockingFunctions.{BLOCKING_DISCOVERY_EVENTS_MEMBER} must contain event names"
                         )
                     })?;
-                    if !matches!(event, "beforeCreate" | "beforeSignIn") {
+                    if self.served_event_named(event).is_none() {
                         return Err(format!(
                             "blockingFunctions.{BLOCKING_DISCOVERY_EVENTS_MEMBER} contains unsupported event {event:?}"
                         ));
@@ -3360,7 +3455,7 @@ impl BlockingAuthBridge {
                     .ok_or_else(|| "blockingFunctions.triggers must be an object".to_owned())?;
                 if triggers
                     .keys()
-                    .any(|key| key != "beforeCreate" && key != "beforeSignIn")
+                    .any(|key| self.served_event_named(key).is_none())
                 {
                     return Err(
                         "blockingFunctions.triggers contains an unsupported event".to_owned()
@@ -3432,10 +3527,12 @@ impl BlockingAuthBridge {
                         },
                     )
                 };
-                fireemu_core_functions::manifest::BlockingAuthSelections {
-                    before_create: parse("beforeCreate")?,
-                    before_sign_in: parse("beforeSignIn")?,
+                let mut selections =
+                    fireemu_core_functions::manifest::BlockingAuthSelections::default();
+                for event in self.served_events() {
+                    *selections.for_event_mut(event) = parse(event.as_str())?;
                 }
+                selections
             }
         };
         let forwarding_restrictions = match object.get("forwardInboundCredentials") {
@@ -3475,19 +3572,10 @@ impl BlockingAuthBridge {
             self.forward_inbound_credentials,
             forwarding_restrictions,
         )?;
-        for (event, selection) in [
-            (
-                fireemu_core_functions::manifest::BlockingAuthEvent::BeforeCreate,
-                &selections.before_create,
-            ),
-            (
-                fireemu_core_functions::manifest::BlockingAuthEvent::BeforeSignIn,
-                &selections.before_sign_in,
-            ),
-        ] {
+        for event in self.served_events() {
             self.runtime
                 .manifest()
-                .blocking_auth_target(event, selection)
+                .blocking_auth_target(event, selections.for_event(event))
                 .map_err(|error| format!("blockingFunctions: {error}"))?;
         }
         Ok(BlockingAuthSettings {
@@ -3508,18 +3596,9 @@ impl BlockingAuthBridge {
         let mut object = serde_json::Map::new();
         let mut triggers = serde_json::Map::new();
         let mut discovery = Vec::new();
-        for (event_name, event, selection) in [
-            (
-                "beforeCreate",
-                fireemu_core_functions::manifest::BlockingAuthEvent::BeforeCreate,
-                &settings.selections.before_create,
-            ),
-            (
-                "beforeSignIn",
-                fireemu_core_functions::manifest::BlockingAuthEvent::BeforeSignIn,
-                &settings.selections.before_sign_in,
-            ),
-        ] {
+        for event in self.served_events() {
+            let event_name = event.as_str();
+            let selection = settings.selections.for_event(event);
             match selection {
                 fireemu_core_functions::manifest::BlockingAuthSelection::Discovery => {
                     if preserve_discovery {
@@ -3598,19 +3677,10 @@ impl BlockingAuthBridge {
         // logical document. Keeping it in the input also rejects marker/trigger conflicts rather
         // than allowing a malformed snapshot to overwrite a concrete selection.
         let settings = self.parse_blocking_auth_settings(value)?;
-        for (event, selection) in [
-            (
-                fireemu_core_functions::manifest::BlockingAuthEvent::BeforeCreate,
-                &settings.selections.before_create,
-            ),
-            (
-                fireemu_core_functions::manifest::BlockingAuthEvent::BeforeSignIn,
-                &settings.selections.before_sign_in,
-            ),
-        ] {
+        for event in self.served_events() {
             self.runtime
                 .manifest()
-                .blocking_auth_target(event, selection)
+                .blocking_auth_target(event, settings.selections.for_event(event))
                 .map_err(|error| format!("blockingFunctions: {error}"))?;
         }
         self.install_settings(settings)
@@ -3650,8 +3720,12 @@ impl BlockingAuthBridge {
                         )?;
                         next.selections = parsed.selections;
                     }
-                    "blockingFunctions.triggers.beforeCreate"
-                    | "blockingFunctions.triggers.beforeSignIn" => {
+                    trigger_field
+                        if trigger_field
+                            .strip_prefix("blockingFunctions.triggers.")
+                            .and_then(|event| self.served_event_named(event))
+                            .is_some() =>
+                    {
                         let event = field
                             .strip_prefix("blockingFunctions.triggers.")
                             .ok_or_else(|| "invalid blocking trigger field".to_owned())?;
@@ -3666,11 +3740,11 @@ impl BlockingAuthBridge {
                         let parsed = self.parse_blocking_auth_settings(&serde_json::json!({
                             "triggers": trigger_object
                         }))?;
-                        if event == "beforeCreate" {
-                            next.selections.before_create = parsed.selections.before_create;
-                        } else {
-                            next.selections.before_sign_in = parsed.selections.before_sign_in;
-                        }
+                        let served = self
+                            .served_event_named(event)
+                            .ok_or_else(|| "invalid blocking trigger field".to_owned())?;
+                        *next.selections.for_event_mut(served) =
+                            parsed.selections.for_event(served).clone();
                     }
                     "blockingFunctions.forwardInboundCredentials" => {
                         let forwarding =
@@ -3717,19 +3791,10 @@ impl BlockingAuthBridge {
             self.forward_inbound_credentials,
             next.forwarding_restrictions,
         )?;
-        for (event, selection) in [
-            (
-                fireemu_core_functions::manifest::BlockingAuthEvent::BeforeCreate,
-                &next.selections.before_create,
-            ),
-            (
-                fireemu_core_functions::manifest::BlockingAuthEvent::BeforeSignIn,
-                &next.selections.before_sign_in,
-            ),
-        ] {
+        for event in self.served_events() {
             self.runtime
                 .manifest()
-                .blocking_auth_target(event, selection)
+                .blocking_auth_target(event, next.selections.for_event(event))
                 .map_err(|error| format!("blockingFunctions: {error}"))?;
         }
         self.install_settings(next)
@@ -3757,7 +3822,7 @@ impl BlockingAuthBridge {
         project: &str,
         tenant: Option<&str>,
         event: fireemu_core_functions::manifest::BlockingAuthEvent,
-        user: &fireemu_core_auth::store::UserRecord,
+        user: Option<&fireemu_core_auth::store::UserRecord>,
         context: &fireemu_adapter_http::identity_toolkit::AuthBlockingContext,
     ) -> Result<
         Option<serde_json::Value>,
@@ -3774,7 +3839,7 @@ impl BlockingAuthBridge {
         project: &str,
         tenant: Option<&str>,
         event: fireemu_core_functions::manifest::BlockingAuthEvent,
-        user: &fireemu_core_auth::store::UserRecord,
+        user: Option<&fireemu_core_auth::store::UserRecord>,
         context: &fireemu_adapter_http::identity_toolkit::AuthBlockingContext,
     ) -> Result<
         Option<serde_json::Value>,
@@ -3889,6 +3954,12 @@ impl fireemu_adapter_http::identity_toolkit::AuthBlockingHook for BlockingAuthBr
     }
 
     fn handles(&self, event: fireemu_core_functions::manifest::BlockingAuthEvent) -> bool {
+        // beforeSendSms is listed, never run (no SMS it would gate is recorded).
+        if event == fireemu_core_functions::manifest::BlockingAuthEvent::BeforeSendSms
+            || self.served_events().all(|served| served != event)
+        {
+            return false;
+        }
         match self.selection_for(event) {
             fireemu_core_functions::manifest::BlockingAuthSelection::Disabled => false,
             fireemu_core_functions::manifest::BlockingAuthSelection::Discovery => {
@@ -3985,7 +4056,7 @@ impl fireemu_adapter_http::identity_toolkit::AuthBlockingHook for BlockingAuthBr
             self.runtime.project(),
             None,
             event,
-            user,
+            Some(user),
             &fireemu_adapter_http::identity_toolkit::AuthBlockingContext::default(),
         )
         .map(|value| value.unwrap_or_else(|| serde_json::json!({})))
@@ -4005,7 +4076,7 @@ impl fireemu_adapter_http::identity_toolkit::AuthBlockingHook for BlockingAuthBr
             project,
             tenant,
             event,
-            user,
+            Some(user),
             &fireemu_adapter_http::identity_toolkit::AuthBlockingContext::default(),
         )
     }
@@ -4021,7 +4092,22 @@ impl fireemu_adapter_http::identity_toolkit::AuthBlockingHook for BlockingAuthBr
         Option<serde_json::Value>,
         fireemu_adapter_http::identity_toolkit::BlockingFunctionFailure,
     > {
-        self.invoke_for_namespace(project, tenant, event, user, context)
+        self.invoke_for_namespace(project, tenant, event, Some(user), context)
+    }
+
+    fn invoke_before_send_email(
+        &self,
+        project: &str,
+        context: &fireemu_adapter_http::identity_toolkit::AuthBlockingContext,
+    ) -> Result<
+        Option<serde_json::Value>,
+        fireemu_adapter_http::identity_toolkit::BlockingFunctionFailure,
+    > {
+        let event = fireemu_core_functions::manifest::BlockingAuthEvent::BeforeSendEmail;
+        if !self.handles(event) {
+            return Ok(None);
+        }
+        self.invoke_for_namespace(project, None, event, None, context)
     }
 }
 
@@ -4382,7 +4468,7 @@ mod tests {
             tenant,
             event,
             request,
-            user,
+            Some(user),
             "event-1",
             1_788_004_860,
             "http://127.0.0.1:1/demo-app/us-central1/fn",
@@ -4711,9 +4797,31 @@ mod tests {
     async fn runtime_with_blocking_auth_policy_order(
         order: &[(&str, bool, bool)],
     ) -> Arc<fireemu_adapter_functions::runtime::FunctionsRuntime> {
+        let targets = order
+            .iter()
+            .map(|(name, access_token, refresh_token)| {
+                (
+                    *name,
+                    fireemu_core_functions::manifest::BlockingAuthEvent::BeforeCreate,
+                    *access_token,
+                    *refresh_token,
+                )
+            })
+            .collect::<Vec<_>>();
+        runtime_with_blocking_auth_targets(&targets).await
+    }
+
+    async fn runtime_with_blocking_auth_targets(
+        targets: &[(
+            &str,
+            fireemu_core_functions::manifest::BlockingAuthEvent,
+            bool,
+            bool,
+        )],
+    ) -> Arc<fireemu_adapter_functions::runtime::FunctionsRuntime> {
         use fireemu_adapter_functions::runner::{Runner, SpawnSpec};
         use fireemu_adapter_functions::runtime::{FunctionsConfig, FunctionsRuntime};
-        use fireemu_core_functions::manifest::{BlockingAuthEvent, Trigger};
+        use fireemu_core_functions::manifest::Trigger;
         use fireemu_core_types::ids::SessionId;
         use fireemu_core_types::time::LogicalInstant;
 
@@ -4728,12 +4836,12 @@ mod tests {
         let runner = Runner::spawn_spec(&spec).await.unwrap();
         let mut manifest = parse_manifest(runner.hello().manifest.as_ref().unwrap()).unwrap();
         let template = manifest.get("echo").unwrap().clone();
-        for (name, access_token, refresh_token) in order {
+        for (name, event, access_token, refresh_token) in targets {
             let mut function = template.clone();
             function.name = (*name).to_owned();
             function.entry_point = (*name).to_owned();
             function.trigger = Trigger::BlockingAuth {
-                event: BlockingAuthEvent::BeforeCreate,
+                event: *event,
                 token_policy: fireemu_core_functions::manifest::BlockingAuthTokenPolicy {
                     access_token: *access_token,
                     refresh_token: *refresh_token,
@@ -4766,6 +4874,182 @@ mod tests {
         )
     }
 
+    /// Identity Platform's email and SMS events are served by the strict profile's bridge only
+    /// (the official Auth emulator registers `beforeCreate` and `beforeSignIn` only), and
+    /// `beforeSendSms` is listed but never run (AUTH-TENANT-BLOCKING recording 2026-09-28).
+    #[tokio::test(flavor = "current_thread")]
+    async fn send_events_are_served_by_the_strict_bridge_only() {
+        use fireemu_adapter_http::identity_toolkit::AuthBlockingHook;
+        use fireemu_core_functions::manifest::BlockingAuthEvent;
+
+        let runtime = runtime_with_blocking_auth_targets(&[
+            (
+                "mailGuard",
+                BlockingAuthEvent::BeforeSendEmail,
+                false,
+                false,
+            ),
+            ("smsGuard", BlockingAuthEvent::BeforeSendSms, false, false),
+        ])
+        .await;
+        let bridge = |send_events: bool| {
+            BlockingAuthBridge::new_with_selections(
+                runtime.clone(),
+                fireemu_core_functions::manifest::BlockingAuthSelections::default(),
+                false,
+            )
+            .with_send_events(send_events)
+        };
+        let (emulator, strict) = (bridge(false), bridge(true));
+        for event in [
+            BlockingAuthEvent::BeforeSendEmail,
+            BlockingAuthEvent::BeforeSendSms,
+        ] {
+            assert!(!emulator.handles(event), "{event:?}");
+        }
+        assert!(strict.handles(BlockingAuthEvent::BeforeSendEmail));
+        assert!(!strict.handles(BlockingAuthEvent::BeforeSendSms));
+
+        let explicit = json!({"triggers": {
+            "beforeSendEmail": {"functionUri": "fireemu://functions/demo-app/us-central1/mailGuard"},
+            "beforeSendSms": {"functionUri": "fireemu://functions/demo-app/us-central1/smsGuard"},
+        }});
+        let error = emulator
+            .replace_blocking_auth_settings(&explicit)
+            .expect_err("the emulator profile names no email event");
+        assert!(error.contains("unsupported event"), "{error}");
+        strict
+            .replace_blocking_auth_settings(&explicit)
+            .expect("the strict profile serves the email event");
+        let projected = strict.blocking_auth_settings_value().unwrap();
+        assert_eq!(
+            projected["triggers"]["beforeSendEmail"]["functionUri"],
+            "fireemu://functions/demo-app/us-central1/mailGuard"
+        );
+        assert_eq!(
+            projected["triggers"]["beforeSendSms"]["functionUri"],
+            "fireemu://functions/demo-app/us-central1/smsGuard"
+        );
+        assert!(projected["triggers"]["beforeCreate"].is_null());
+        assert!(!strict.handles(BlockingAuthEvent::BeforeSendSms));
+
+        strict
+            .replace_blocking_auth_settings_masked(
+                &json!({"triggers": {"beforeSendEmail": null}}),
+                &["blockingFunctions.triggers.beforeSendEmail".to_owned()],
+            )
+            .expect("one email trigger is disabled by its mask");
+        assert!(!strict.handles(BlockingAuthEvent::BeforeSendEmail));
+        assert_eq!(
+            strict.blocking_auth_settings_value().unwrap()["triggers"]["beforeSendSms"]
+                ["functionUri"],
+            "fireemu://functions/demo-app/us-central1/smsGuard"
+        );
+        // The same mask names nothing the emulator profile serves.
+        emulator
+            .replace_blocking_auth_settings_masked(
+                &json!({"triggers": {"beforeSendEmail": null}}),
+                &["blockingFunctions.triggers.beforeSendEmail".to_owned()],
+            )
+            .unwrap();
+        assert_eq!(emulator.settings_revision(), 0);
+
+        // Discovery markers round-trip the email events through an export.
+        let fresh = bridge(true);
+        let exported = fresh
+            .blocking_auth_settings_value_with_discovery_markers(true)
+            .unwrap()
+            .unwrap();
+        assert_eq!(exported, json!({}));
+        fresh
+            .replace_blocking_auth_settings(&json!({"triggers": {"beforeCreate": null}}))
+            .unwrap();
+        let exported = fresh
+            .blocking_auth_settings_value_with_discovery_markers(true)
+            .unwrap()
+            .unwrap();
+        assert_eq!(exported["triggers"]["beforeSendEmail"], json!(null));
+        runtime.shutdown().await;
+    }
+
+    /// A mail event's token names the address and the kind of mail and no user
+    /// (AUTH-TENANT-BLOCKING recording 2026-09-28, send#reset-mail-echo: `u` null, `au` email
+    /// and isNewUser).
+    #[test]
+    fn a_mail_event_token_names_the_address_and_no_user() {
+        let context = fireemu_adapter_http::identity_toolkit::AuthBlockingContext {
+            email: Some("a@example.com".to_owned()),
+            email_type: Some("PASSWORD_RESET".to_owned()),
+            ..Default::default()
+        };
+        let claims = super::blocking_auth_claims(
+            "demo-app",
+            None,
+            fireemu_core_functions::manifest::BlockingAuthEvent::BeforeSendEmail,
+            &context,
+            None,
+            "event-1",
+            1_788_004_860,
+            "http://127.0.0.1:1/demo-app/us-central1/fn",
+        );
+        assert_eq!(claims["event_type"], "beforeSendEmail");
+        assert_eq!(claims["email"], "a@example.com");
+        assert_eq!(claims["email_type"], "PASSWORD_RESET");
+        for absent in ["sub", "user_record", "tenant_id", "sign_in_method"] {
+            assert!(!claims.contains_key(absent), "{absent}");
+        }
+    }
+
+    /// The emulator profile keeps the email and SMS functions in the ignored inventory, with
+    /// the reason the runner gave before the strict profile served them.
+    #[test]
+    fn the_emulator_profile_ignores_send_blocking_functions() {
+        let mut manifest = parse_manifest(&json!({"functions": [
+            {"name": "create", "trigger": {"type": "blockingAuth", "eventType": "providers/cloud.auth/eventTypes/user.beforeCreate"}},
+            {"name": "mail", "trigger": {"type": "blockingAuth", "eventType": "providers/cloud.auth/eventTypes/user.beforeSendEmail"}},
+            {"name": "sms", "trigger": {"type": "blockingAuth", "eventType": "providers/cloud.auth/eventTypes/user.beforeSendSms"}},
+        ]}))
+        .unwrap();
+        super::ignore_send_blocking_events(&mut manifest);
+        assert_eq!(
+            manifest
+                .functions
+                .iter()
+                .map(|f| f.name.as_str())
+                .collect::<Vec<_>>(),
+            ["create"]
+        );
+        let ignored = manifest
+            .ignored
+            .iter()
+            .map(|f| {
+                (
+                    f.name.as_str(),
+                    f.trigger_type.as_str(),
+                    f.scope,
+                    f.reason.as_str(),
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            ignored,
+            [
+                (
+                    "mail",
+                    "blocking",
+                    fireemu_core_functions::manifest::IgnoredScope::Unsupported,
+                    "blocking identity event providers/cloud.auth/eventTypes/user.beforeSendEmail is not served",
+                ),
+                (
+                    "sms",
+                    "blocking",
+                    fireemu_core_functions::manifest::IgnoredScope::Unsupported,
+                    "blocking identity event providers/cloud.auth/eventTypes/user.beforeSendSms is not served",
+                ),
+            ]
+        );
+    }
+
     #[tokio::test(flavor = "current_thread")]
     async fn explicit_blocking_auth_prefilter_uses_the_selected_function_policy() {
         use fireemu_adapter_http::identity_toolkit::AuthBlockingHook;
@@ -4786,6 +5070,7 @@ mod tests {
                     region: Some("us-central1".to_owned()),
                 },
                 before_sign_in: BlockingAuthSelection::Disabled,
+                ..Default::default()
             },
             true,
         );
@@ -4849,6 +5134,7 @@ mod tests {
                     region: Some("us-central1".to_owned()),
                 },
                 before_sign_in: BlockingAuthSelection::Disabled,
+                ..Default::default()
             },
             true,
         );
@@ -4885,6 +5171,7 @@ mod tests {
                     region: Some("us-central1".to_owned()),
                 },
                 before_sign_in: BlockingAuthSelection::Disabled,
+                ..Default::default()
             },
             true,
         );
@@ -4910,6 +5197,7 @@ mod tests {
             BlockingAuthSelections {
                 before_create: BlockingAuthSelection::Discovery,
                 before_sign_in: BlockingAuthSelection::Disabled,
+                ..Default::default()
             },
             true,
         );
@@ -4935,6 +5223,7 @@ mod tests {
             BlockingAuthSelections {
                 before_create: BlockingAuthSelection::Disabled,
                 before_sign_in: BlockingAuthSelection::Disabled,
+                ..Default::default()
             },
             true,
         );
@@ -5069,6 +5358,7 @@ mod tests {
                     region: Some("us-central1".to_owned()),
                 },
                 before_sign_in: BlockingAuthSelection::Disabled,
+                ..Default::default()
             },
             false,
         );
@@ -5125,6 +5415,7 @@ mod tests {
             BlockingAuthSelections {
                 before_create: BlockingAuthSelection::Discovery,
                 before_sign_in: BlockingAuthSelection::Disabled,
+                ..Default::default()
             },
             false,
         );

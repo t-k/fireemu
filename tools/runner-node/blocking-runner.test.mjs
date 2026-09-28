@@ -232,15 +232,17 @@ exports.parseAuthUserRecord = (record) => ({ mode: record.mode, uid: record.uid 
 exports.parseAuthEventContext = (decoded, projectId) => ({ eventType: decoded.event_type, project: projectId });
 `;
 
-async function runnerFor(identity) {
+async function runnerFor(identity, functions) {
   const source = await mkdtemp(join(tmpdir(), "fireemu-blocking-token-"));
   await fixture(source, { identity });
+  if (functions !== undefined) await writeFile(join(source, "index.cjs"), functions);
   const child = spawn(process.execPath, [runner, "--source", source], {
     env: { PATH: process.env.PATH, GCLOUD_PROJECT: "demo-blocking-boundary", FIREEMU_RUNNER_SECRET: secret },
     stdio: ["pipe", "pipe", "pipe"],
   });
   child.stderr.on("data", () => {});
-  return { source, child, port: (await hello(child)).httpPort };
+  const started = await hello(child);
+  return { source, child, port: started.httpPort, started };
 }
 
 test("a blocking token reaches the handler as the SDK's parsers build it", { timeout: 20000 }, async () => {
@@ -274,6 +276,37 @@ test("without the SDK's parsers a blocking token is parsed by their port", { tim
     // The older body keeps working.
     const legacy = await call(port, "v2", "normal");
     assert.equal(legacy.status, 200);
+  } finally {
+    await stop(child);
+    await rm(source, { recursive: true, force: true });
+  }
+});
+
+// Identity Platform's email and SMS events (firebase-functions `beforeEmailSent`,
+// `beforeSmsSent`): discovered as blocking triggers; the daemon decides whether it serves them.
+const sendSource = `
+function email(){}; email.run=(event)=>({ displayName: String(event.data === undefined) });
+email.__endpoint={platform:'gcfv2',blockingTrigger:{eventType:'providers/cloud.auth/eventTypes/user.beforeSendEmail'}};
+function sms(){}; sms.run=()=>({});
+sms.__endpoint={platform:'gcfv2',blockingTrigger:{eventType:'providers/cloud.auth/eventTypes/user.beforeSendSms'}};
+module.exports={email,sms};
+`;
+
+test("email and SMS blocking functions are discovered as blocking triggers", { timeout: 20000 }, async () => {
+  const { source, child, port, started } = await runnerFor(identitySource, sendSource);
+  try {
+    const triggers = Object.fromEntries(started.manifest.functions.map((f) => [f.name, f.trigger]));
+    assert.equal(triggers.email?.type, "blockingAuth");
+    assert.match(triggers.email.eventType, /beforeSendEmail$/);
+    assert.equal(triggers.sms?.type, "blockingAuth");
+    assert.match(triggers.sms.eventType, /beforeSendSms$/);
+    assert.deepEqual(started.manifest.ignored ?? [], []);
+    const reply = await call(port, "email", undefined, secret, {
+      data: { jwt: token({ event_type: "beforeSendEmail", email_type: "EMAIL_SIGN_IN", email: "a@example.com" }) },
+    });
+    // The handler runs without a user.
+    assert.equal(reply.status, 200);
+    assert.deepEqual(reply.body, { userRecord: { displayName: "true", updateMask: "displayName" } });
   } finally {
     await stop(child);
     await rm(source, { recursive: true, force: true });

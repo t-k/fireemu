@@ -9019,6 +9019,9 @@ impl AuthBlockingHook for CreateThenRefuseSignInHook {
                 "refused",
             )
             .unwrap()),
+            BlockingAuthEvent::BeforeSendEmail | BlockingAuthEvent::BeforeSendSms => {
+                unreachable!("a mail event has no user")
+            }
         }
     }
 }

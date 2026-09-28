@@ -655,6 +655,15 @@ function callableAppCheck(instrumentation, fn) {
   };
 }
 
+// Identity Platform's blocking events. The email and SMS events are discovered as well; the
+// daemon serves them only where production parity asks for it (the official emulator serves
+// beforeCreate and beforeSignIn only).
+const BLOCKING_AUTH_EVENTS = ["beforeCreate", "beforeSignIn", "beforeSendEmail", "beforeSendSms"];
+
+function isBlockingAuthEvent(eventType) {
+  return BLOCKING_AUTH_EVENTS.some((event) => eventType.endsWith(event));
+}
+
 function blockingAuthTrigger(eventType, options) {
   return {
     type: "blockingAuth",
@@ -698,7 +707,7 @@ function describe(name, fn, instrumentation) {
     if (ep.callableTrigger) return { ...base, trigger: callable() };
     if (ep.blockingTrigger) {
       const eventType = String(ep.blockingTrigger.eventType || "");
-      if (eventType.endsWith("beforeCreate") || eventType.endsWith("beforeSignIn")) {
+      if (isBlockingAuthEvent(eventType)) {
         return {
           ...base,
           trigger: blockingAuthTrigger(eventType, ep.blockingTrigger.options),
@@ -735,7 +744,7 @@ function describe(name, fn, instrumentation) {
     }
     if (ep.blockingTrigger) {
       const eventType = String(ep.blockingTrigger.eventType || "");
-      if (eventType.endsWith("beforeCreate") || eventType.endsWith("beforeSignIn")) {
+      if (isBlockingAuthEvent(eventType)) {
         return {
           ...base,
           trigger: blockingAuthTrigger(eventType, ep.blockingTrigger.options),
@@ -833,7 +842,7 @@ function describe(name, fn, instrumentation) {
     }
     if (t.blockingTrigger) {
       const eventType = String(t.blockingTrigger.eventType || "");
-      if (eventType.endsWith("beforeCreate") || eventType.endsWith("beforeSignIn")) {
+      if (isBlockingAuthEvent(eventType)) {
         return {
           ...base,
           trigger: blockingAuthTrigger(eventType, t.blockingTrigger.options),

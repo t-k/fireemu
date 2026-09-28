@@ -193,6 +193,9 @@ impl AuthBlockingHook for OverlappingClaimHook {
                     "sessionClaims": {"role": "session", "sessionOnly": true}
                 }
             }),
+            BlockingAuthEvent::BeforeSendEmail | BlockingAuthEvent::BeforeSendSms => {
+                unreachable!("a mail event has no user")
+            }
         })
     }
 }
@@ -484,6 +487,9 @@ impl AuthBlockingHook for MalformedBeforeSignInHook {
                 }
             }),
             BlockingAuthEvent::BeforeSignIn => json!({"userRecord": []}),
+            BlockingAuthEvent::BeforeSendEmail | BlockingAuthEvent::BeforeSendSms => {
+                unreachable!("a mail event has no user")
+            }
         })
     }
 }
@@ -499,6 +505,9 @@ impl AuthBlockingHook for ClearingClaimsHook {
             BlockingAuthEvent::BeforeSignIn => json!({
                 "userRecord": {"updateMask": "customClaims", "customClaims": {}}
             }),
+            BlockingAuthEvent::BeforeSendEmail | BlockingAuthEvent::BeforeSendSms => {
+                unreachable!("a mail event has no user")
+            }
         })
     }
 }
@@ -528,6 +537,9 @@ impl AuthBlockingHook for UpdatingBlockingHook {
                     }
                 }))
             }
+            BlockingAuthEvent::BeforeSendEmail | BlockingAuthEvent::BeforeSendSms => {
+                unreachable!("a mail event has no user")
+            }
         }
     }
 }
@@ -551,6 +563,9 @@ impl AuthBlockingHook for BeforeSignInTimeoutHook {
         match event {
             BlockingAuthEvent::BeforeCreate => Ok(json!({})),
             BlockingAuthEvent::BeforeSignIn => Err(BlockingFunctionFailure::timeout()),
+            BlockingAuthEvent::BeforeSendEmail | BlockingAuthEvent::BeforeSendSms => {
+                unreachable!("a mail event has no user")
+            }
         }
     }
 }

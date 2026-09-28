@@ -345,9 +345,13 @@ fn configure_blocking_auth_bridge(
     };
     let selections = match &config.triggers {
         None => fireemu_core_functions::manifest::BlockingAuthSelections::default(),
+        // The local configuration names beforeCreate and beforeSignIn only; a trigger map it
+        // gives replaces the whole selection, as an Admin update's does.
         Some(triggers) => fireemu_core_functions::manifest::BlockingAuthSelections {
             before_create: blocking_auth_selection(triggers.before_create.as_ref()),
             before_sign_in: blocking_auth_selection(triggers.before_sign_in.as_ref()),
+            before_send_email: fireemu_core_functions::manifest::BlockingAuthSelection::Disabled,
+            before_send_sms: fireemu_core_functions::manifest::BlockingAuthSelection::Disabled,
         },
     };
     for (event, selection) in [
@@ -595,7 +599,8 @@ fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
                         forward,
                         restrictions,
                     )
-                    .map_err(|error| format!("auth.blockingFunctions: {error}"))?,
+                    .map_err(|error| format!("auth.blockingFunctions: {error}"))?
+                    .with_send_events(cfg.profile == crate::config::CompatibilityProfile::Strict),
                 )
                     as Arc<
                         dyn fireemu_adapter_http::identity_toolkit::AuthBlockingHook,

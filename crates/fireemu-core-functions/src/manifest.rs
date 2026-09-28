@@ -173,6 +173,20 @@ pub enum BlockingAuthEvent {
     BeforeCreate,
     /// Before a successful sign-in is committed.
     BeforeSignIn,
+    /// Before a password reset or email sign-in mail is sent (`beforeEmailSent`).
+    BeforeSendEmail,
+    /// Before a verification SMS is sent (`beforeSmsSent`).
+    BeforeSendSms,
+}
+
+impl BlockingAuthEvent {
+    /// Every event, in the order Identity Platform's configuration lists them.
+    pub const ALL: [Self; 4] = [
+        Self::BeforeCreate,
+        Self::BeforeSignIn,
+        Self::BeforeSendEmail,
+        Self::BeforeSendSms,
+    ];
 }
 
 /// Raw identity-provider credential fields requested by one Blocking Auth target.
@@ -219,6 +233,10 @@ pub struct BlockingAuthSelections {
     pub before_create: BlockingAuthSelection,
     /// Selection for `beforeSignIn`.
     pub before_sign_in: BlockingAuthSelection,
+    /// Selection for `beforeSendEmail`.
+    pub before_send_email: BlockingAuthSelection,
+    /// Selection for `beforeSendSms`.
+    pub before_send_sms: BlockingAuthSelection,
 }
 
 impl BlockingAuthSelections {
@@ -228,6 +246,18 @@ impl BlockingAuthSelections {
         match event {
             BlockingAuthEvent::BeforeCreate => &self.before_create,
             BlockingAuthEvent::BeforeSignIn => &self.before_sign_in,
+            BlockingAuthEvent::BeforeSendEmail => &self.before_send_email,
+            BlockingAuthEvent::BeforeSendSms => &self.before_send_sms,
+        }
+    }
+
+    /// Returns the selection for `event`, to change.
+    pub fn for_event_mut(&mut self, event: BlockingAuthEvent) -> &mut BlockingAuthSelection {
+        match event {
+            BlockingAuthEvent::BeforeCreate => &mut self.before_create,
+            BlockingAuthEvent::BeforeSignIn => &mut self.before_sign_in,
+            BlockingAuthEvent::BeforeSendEmail => &mut self.before_send_email,
+            BlockingAuthEvent::BeforeSendSms => &mut self.before_send_sms,
         }
     }
 }
@@ -370,7 +400,15 @@ impl BlockingAuthEvent {
         match self {
             Self::BeforeCreate => "beforeCreate",
             Self::BeforeSignIn => "beforeSignIn",
+            Self::BeforeSendEmail => "beforeSendEmail",
+            Self::BeforeSendSms => "beforeSendSms",
         }
+    }
+
+    /// Parses the short spelling only (a configuration key).
+    #[must_use]
+    pub fn from_short_name(value: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|event| event.as_str() == value)
     }
 
     /// Fully qualified event type exposed to a Blocking Auth handler.
@@ -379,6 +417,8 @@ impl BlockingAuthEvent {
         match self {
             Self::BeforeCreate => "providers/cloud.auth/eventTypes/user.beforeCreate",
             Self::BeforeSignIn => "providers/cloud.auth/eventTypes/user.beforeSignIn",
+            Self::BeforeSendEmail => "providers/cloud.auth/eventTypes/user.beforeSendEmail",
+            Self::BeforeSendSms => "providers/cloud.auth/eventTypes/user.beforeSendSms",
         }
     }
 
@@ -389,6 +429,10 @@ impl BlockingAuthEvent {
             Some(Self::BeforeCreate)
         } else if value.ends_with("beforeSignIn") {
             Some(Self::BeforeSignIn)
+        } else if value.ends_with("beforeSendEmail") {
+            Some(Self::BeforeSendEmail)
+        } else if value.ends_with("beforeSendSms") {
+            Some(Self::BeforeSendSms)
         } else {
             None
         }

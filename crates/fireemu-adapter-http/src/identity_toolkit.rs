@@ -462,6 +462,10 @@ pub struct AuthBlockingContext {
     pub provider_data: Vec<AuthBlockingProvider>,
     /// The account's enrolled second factors.
     pub enrolled_factors: Vec<AuthBlockingFactor>,
+    /// The address a `beforeSendEmail` mail goes to.
+    pub email: Option<String>,
+    /// The kind of that mail (`PASSWORD_RESET`, `EMAIL_SIGN_IN`).
+    pub email_type: Option<String>,
 }
 
 impl core::fmt::Debug for AuthBlockingContext {
@@ -473,6 +477,8 @@ impl core::fmt::Debug for AuthBlockingContext {
             // Addresses and phone numbers are account data: only their number is shown.
             .field("provider_data", &self.provider_data.len())
             .field("enrolled_factors", &self.enrolled_factors.len())
+            .field("email", &self.email.is_some())
+            .field("email_type", &self.email_type)
             .finish()
     }
 }
@@ -545,6 +551,16 @@ pub trait AuthBlockingHook: Send + Sync {
         _context: &AuthBlockingContext,
     ) -> Result<Option<Value>, BlockingFunctionFailure> {
         self.invoke_for(project, tenant, event, user)
+    }
+
+    /// Runs `beforeSendEmail` for the mail the context names (its `email` and `email_type`),
+    /// which has no user record. A hook that does not serve the event answers `Ok(None)`.
+    fn invoke_before_send_email(
+        &self,
+        _project: &str,
+        _context: &AuthBlockingContext,
+    ) -> Result<Option<Value>, BlockingFunctionFailure> {
+        Ok(None)
     }
 
     /// Returns the logical project-level blocking settings, when this hook is backed by a
@@ -630,7 +646,9 @@ fn handler_may_invoke_blocking_auth(
     blocking: &dyn AuthBlockingHook,
     handler: routes::Handler,
 ) -> bool {
-    use fireemu_core_functions::manifest::BlockingAuthEvent::{BeforeCreate, BeforeSignIn};
+    use fireemu_core_functions::manifest::BlockingAuthEvent::{
+        BeforeCreate, BeforeSendEmail, BeforeSignIn,
+    };
     let may_create = matches!(
         handler,
         routes::Handler::SignUp
@@ -649,8 +667,29 @@ fn handler_may_invoke_blocking_auth(
             | routes::Handler::SignInWithIdp
             | routes::Handler::MfaSignInFinalize
     );
+    let may_send_email = matches!(
+        handler,
+        routes::Handler::SendOobCode | routes::Handler::AdminSendOobCode
+    );
     (may_create && blocking.handles(BeforeCreate))
         || (may_sign_in && blocking.handles(BeforeSignIn))
+        || (may_send_email && blocking.handles(BeforeSendEmail))
+}
+
+/// Whether a request of `handler` takes the blocking path in this profile: a mail request runs
+/// `beforeSendEmail` in the strict profile only, as the official Auth emulator has no email
+/// event (the admission estimate, [`request_may_invoke_blocking_auth`], may count it anyway).
+fn handler_runs_blocking_auth(
+    state: &AuthState,
+    blocking: &dyn AuthBlockingHook,
+    handler: routes::Handler,
+) -> bool {
+    let mail = matches!(
+        handler,
+        routes::Handler::SendOobCode | routes::Handler::AdminSendOobCode
+    );
+    handler_may_invoke_blocking_auth(blocking, handler)
+        && (!mail || !state.stateless_refresh_tokens)
 }
 
 /// Returns whether a blocking hook is allowed to observe the selected Auth project.
@@ -2317,6 +2356,49 @@ impl Drop for GeneratedLocalIdReservation {
     }
 }
 
+/// Runs `beforeSendEmail` before a mail is sent: the one place every email path (the client and
+/// Admin `sendOobCode`, in a project or a tenant) reaches. Production runs it for a password
+/// reset and an email sign-in mail, not for an email verification, and a refusal answers the
+/// request (AUTH-TENANT-BLOCKING recording 2026-09-28, send#*). A mail is about to be sent when
+/// the speculative request created its code: an unknown address that improved email privacy
+/// answers without a code runs nothing. Only the strict profile calls this; the official Auth
+/// emulator has no email event. The function's answer changes nothing
+/// (`recaptchaActionOverride` needs reCAPTCHA, which fireemu does not run: send#reset-mail-blocked
+/// is answered as a sent mail).
+fn before_send_email(
+    blocking: &dyn AuthBlockingHook,
+    before: &AuthStore,
+    after: &AuthStore,
+    project: &str,
+) -> Result<(), JsonResponse> {
+    if !blocking.handles(fireemu_core_functions::manifest::BlockingAuthEvent::BeforeSendEmail) {
+        return Ok(());
+    }
+    let Some((email, email_type)) = after.oob_codes().into_iter().find_map(|code| {
+        let email_type = match code.request_type {
+            OobRequestType::PasswordReset => "PASSWORD_RESET",
+            OobRequestType::EmailSignIn => "EMAIL_SIGN_IN",
+            OobRequestType::VerifyEmail | OobRequestType::VerifyAndChangeEmail => return None,
+        };
+        before
+            .oob_code(&code.code)
+            .is_none()
+            .then(|| (code.email.clone(), email_type))
+    }) else {
+        return Ok(());
+    };
+    // The event names neither a user nor a tenant, in a tenant too (send#link-mail-echo-in-tenant).
+    let context = AuthBlockingContext {
+        email: Some(email),
+        email_type: Some(email_type.to_owned()),
+        ..AuthBlockingContext::default()
+    };
+    blocking
+        .invoke_before_send_email(project, &context)
+        .map(|_| ())
+        .map_err(|failure| failure.response())
+}
+
 /// Keeps a new account whose sign-up a blocking function refused (disabled it, or refused
 /// beforeSignIn): the account keeps its sign-in time and, as production records, its token
 /// issuance time (AUTH-TENANT-BLOCKING recording 2026-09-28, rollback#lookup-*), but no session,
@@ -2455,6 +2537,11 @@ fn dispatch_with_blocking_hook(
     // sign-in (AUTH-TENANT-BLOCKING recording 2026-09-28, events#sign-up-anonymous and
     // custom-token#custom-*; the official Auth emulator runs none either).
     let runs_hooks = !matches!(sign_in_method.as_deref(), Some("anonymous" | "custom"));
+    if response.status == 200 && !state.stateless_refresh_tokens {
+        if let Err(refusal) = before_send_email(blocking, &live_snapshot, &candidate, &project) {
+            return refusal;
+        }
+    }
     let mut blocking_responses = Vec::new();
     // beforeSignIn's refusal of a sign-up that created its account; the account is kept.
     let mut new_account_refusal = None;
@@ -3419,7 +3506,7 @@ fn handle_with_policy_inner(
         matches!(
             resolution,
             routes::Resolution::Matched { route, .. }
-                if handler_may_invoke_blocking_auth(blocking, route.handler)
+                if handler_runs_blocking_auth(state, blocking, route.handler)
         ) && blocking_hook_applies_to_project(state, blocking, &store_project)
     });
     let blocking_revision = state
@@ -3780,7 +3867,11 @@ fn handle_with_policy_inner(
     } else {
         None
     };
-    if route.class != routes::RouteClass::EndUser {
+    // The Admin link generator runs beforeSendEmail through the blocking path, as the client
+    // route does (send#admin-reset-link-echo).
+    if route.class != routes::RouteClass::EndUser
+        && !(blocking_auth && route.handler == routes::Handler::AdminSendOobCode)
+    {
         let signer = store.signer_arc();
         let response = dispatch(
             route.handler,
@@ -3819,7 +3910,7 @@ fn handle_with_policy_inner(
     if !blocking_auth
         && state.blocking.as_deref().is_some_and(|blocking| {
             blocking.blocking_auth_revision() != blocking_revision
-                || (handler_may_invoke_blocking_auth(blocking, route.handler)
+                || (handler_runs_blocking_auth(state, blocking, route.handler)
                     && blocking_hook_applies_to_project(state, blocking, &store_project))
         })
     {
@@ -3836,7 +3927,7 @@ fn handle_with_policy_inner(
         // mutable Functions manifest may change between planning and dispatch; reject that
         // transition instead of entering the hook path while retaining a guard that the commit
         // path would acquire again (or silently using a stale allow/deny decision).
-        let still_applies = handler_may_invoke_blocking_auth(blocking, route.handler)
+        let still_applies = handler_runs_blocking_auth(state, blocking, route.handler)
             && blocking_hook_applies_to_project(state, blocking, &store_project);
         if !still_applies || blocking.blocking_auth_revision() != blocking_revision {
             return error(409, "BLOCKING_FUNCTION_CONFIGURATION_CHANGED");

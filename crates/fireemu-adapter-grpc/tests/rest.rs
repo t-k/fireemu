@@ -5854,3 +5854,48 @@ fn deletes_are_refused_from_each_route_s_deterministic_minimum() {
     );
     assert_eq!(status, 200, "emulator REST 12,113: {body}");
 }
+
+/// Known edge, unobserved in production (issue: managed Admin operations use Commit-route limits
+/// in strict): a managed `bulkDeleteDocuments` deletes through the Commit route, so under strict
+/// a document inside Commit's delete window (12,112 elements under a 1,000-byte name) refuses
+/// the whole operation before it starts, and the document stays. The emulator profile deletes it.
+#[test]
+fn strict_bulk_delete_applies_the_commit_route_delete_window() {
+    let collection = format!("{}K", "c".repeat(997));
+    for strict in [true, false] {
+        let s = state_with_profile(strict);
+        let (status, body) = call(
+            &s,
+            "PATCH",
+            &format!("{DOCS}/{collection}/d"),
+            json!({"fields": {"a": {"arrayValue": {"values":
+                (0..12_112).map(|n| json!({"integerValue": n.to_string()})).collect::<Vec<_>>()
+            }}}}),
+        );
+        assert_eq!(status, 200, "strict {strict}: {body}");
+        let (status, answer) = call(
+            &s,
+            "POST",
+            "/v1/projects/demo-app/databases/(default):bulkDeleteDocuments",
+            json!({"collectionIds": [collection]}),
+        );
+        let (after, _) = call(&s, "GET", &format!("{DOCS}/{collection}/d"), Value::Null);
+        if strict {
+            assert_eq!(
+                (status, answer["error"]["message"].as_str()),
+                (400, Some("Transaction too big. Decrease transaction size."))
+            );
+            assert_eq!(after, 200, "a refused bulk delete keeps the document");
+        } else {
+            assert_eq!(status, 200, "{answer}");
+            let (_, done) = call(
+                &s,
+                "GET",
+                &format!("/v1/{}", answer["name"].as_str().unwrap()),
+                Value::Null,
+            );
+            assert_eq!(done["done"], json!(true));
+            assert_eq!(after, 404);
+        }
+    }
+}

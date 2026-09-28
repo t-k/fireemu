@@ -858,14 +858,22 @@
           "MATCH": 1549,
           "MISMATCH": 9
         },
-        "documentedDivergences": [
+        "resolvedDivergences": [
           {
             "row": "auth-account/admin/custom-attributes#invalid-json",
             "kind": "message-text",
             "decidedBy": "owner",
             "decidedOn": "2026-09-24",
             "scopeDecision": "K18",
-            "reason": "AUTH-ACCOUNT scope decision A12: production returns gson's parser message for malformed customAttributes JSON; the INVALID_CLAIMS refusal itself matches."
+            "reason": "AUTH-ACCOUNT scope decision A12: production returns gson's parser message for malformed customAttributes JSON; the INVALID_CLAIMS refusal itself matches.",
+            "resolvedOn": "2026-09-28",
+            "resolvedArtifactSha256": "c258b022c5f452a60a9bc60de68e6de26b3f5aeaf846623cf1bf7e33f28d31df",
+            "resolvedEvidence": {
+              "path": "spec/compatibility/closure/evidence/integration-v0.8.0/AUTH-ACCOUNT-comparison.json",
+              "sha256": "f5ecd67769ee337e8d34035083ade6bc233cce4c9a91cc13483f6924df6d5134",
+              "status": "MATCH"
+            },
+            "resolution": "AUTH-ACCOUNT scope decision A12 is resolved: the integrated v0.8.0 release binary answers production's message, so the row matches. The divergence stays recorded for the lane artifact this condition is bound to."
           }
         ]
       }
@@ -926,9 +934,54 @@
         "laneComparisonSha256": "40c155247b30774ea87a277f421f444d985545c0a97db96e748d1f20b6883381",
         "identicalRows": 359,
         "changedRows": []
+      },
+      {
+        "path": "spec/compatibility/closure/evidence/integration-v0.8.0/AUTH-ACCOUNT-comparison.json",
+        "sha256": "f5ecd67769ee337e8d34035083ade6bc233cce4c9a91cc13483f6924df6d5134",
+        "rows": 631,
+        "summary": {
+          "MATCH": 631
+        },
+        "laneComparisonPath": "spec/compatibility/closure/evidence/AUTH-CONFIG-SDK-account-regression.json",
+        "laneComparisonSha256": "adc3e1689d85b6a7e3cad9683081739ae20bc342c512fd8666847a7984546d5d",
+        "identicalRows": 630,
+        "changedRows": [
+          {
+            "row": "auth-account/admin/custom-attributes#invalid-json",
+            "lane": "MISMATCH",
+            "integrated": "MATCH"
+          }
+        ],
+        "inherited": "AUTH-ACCOUNT"
+      },
+      {
+        "path": "spec/compatibility/closure/evidence/integration-v0.8.0/AUTH-ACTION-comparison.json",
+        "sha256": "a01c7b1fef608c0ccf486d014172e9afe7e577212e0f55b7dd15bd1351c638f7",
+        "rows": 346,
+        "summary": {
+          "MATCH": 346
+        },
+        "laneComparisonPath": "spec/compatibility/closure/evidence/AUTH-CONFIG-SDK-action-regression.json",
+        "laneComparisonSha256": "46fbeec53b1f8a392b565609a6cd1f3d7df14c26ce4036b851a21c153dfc4318",
+        "identicalRows": 346,
+        "changedRows": [],
+        "inherited": "AUTH-ACTION"
+      },
+      {
+        "path": "spec/compatibility/closure/evidence/integration-v0.8.0/AUTH-CREDENTIAL-comparison.json",
+        "sha256": "9b68f53d7b82a9b6cd6765187c029c7d1a266e0600d3db45d90c95439565dac5",
+        "rows": 222,
+        "summary": {
+          "MATCH": 222
+        },
+        "laneComparisonPath": "spec/compatibility/closure/evidence/AUTH-CONFIG-SDK-credential-regression.json",
+        "laneComparisonSha256": "3d5c224654e03b07486a2f536eb2e31a031c7632154349852c28ccbaa923a89c",
+        "identicalRows": 222,
+        "changedRows": [],
+        "inherited": "AUTH-CREDENTIAL"
       }
     ],
-    "result": "IDENTICAL_TO_LANE",
+    "result": "IDENTICAL_EXCEPT_RESOLVED_DIVERGENCES",
     "productionRequests": 0
   }
 }

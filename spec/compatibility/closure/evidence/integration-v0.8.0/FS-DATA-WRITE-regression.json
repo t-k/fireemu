@@ -24,6 +24,28 @@
     ],
     "mismatches": 0,
     "laneComparisonPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-current-comparison.json",
+    "rawLocalResultDigests": {
+      "strict": {
+        "lane": {
+          "rest-results.json": "ef7fccfd053e820c604c1768050d06fb6a68099e5fe3dc251f4bd5a9347d91b3",
+          "stream-results.json": "3d922aa149231f10616bbd34bb4528ff75e8a60786f0e0d9709a0ed8f12de54a"
+        },
+        "integrated": {
+          "rest-results.json": "ef7fccfd053e820c604c1768050d06fb6a68099e5fe3dc251f4bd5a9347d91b3",
+          "stream-results.json": "3d922aa149231f10616bbd34bb4528ff75e8a60786f0e0d9709a0ed8f12de54a"
+        }
+      },
+      "emulator": {
+        "lane": {
+          "rest-results.json": "2a36806c9b631f01ef83f78f6268f0a72d57f77dac4b4e3d13fd6111dfdd30c6",
+          "stream-results.json": "312d3151fc0b8759f88aef3b856101fddeccf93e8bb0e1d7513d627c56569c76"
+        },
+        "integrated": {
+          "rest-results.json": "2a36806c9b631f01ef83f78f6268f0a72d57f77dac4b4e3d13fd6111dfdd30c6",
+          "stream-results.json": "312d3151fc0b8759f88aef3b856101fddeccf93e8bb0e1d7513d627c56569c76"
+        }
+      }
+    },
     "rawLocalResultsIdenticalToLane": true
   },
   "historical": {

@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
+import { resolvedDivergenceRows } from "./closure-resolved-divergences.mjs";
 
 const closurePath = fileURLToPath(
   new URL("../../spec/compatibility/closure/AUTH-MFA.json", import.meta.url),
@@ -155,7 +156,10 @@ test("AUTH-MFA closure inventory cannot silently omit a declared condition", () 
         `${label}: ${divergence.row} names a recorded scope decision`,
       );
     }
-    const documented = new Set(divergences.map(({ row }) => row));
+    const resolved = resolvedDivergenceRows(closure, (path) =>
+      readFileSync(fileURLToPath(new URL(`../../${path}`, import.meta.url))),
+    );
+    const documented = new Set([...divergences.map(({ row }) => row), ...resolved]);
     const off = rows
       .filter(({ status, row }) => !MATCHING.has(status) && !documented.has(row))
       .map(({ row }) => row);
@@ -176,9 +180,9 @@ test("AUTH-MFA closure inventory cannot silently omit a declared condition", () 
         );
       }
       const everyDocumented = new Set(
-        closure.conditions.flatMap(({ evidence }) =>
-          (evidence?.documentedDivergences ?? []).map(({ row }) => row),
-        ),
+        closure.conditions
+          .flatMap(({ evidence }) => (evidence?.documentedDivergences ?? []).map(({ row }) => row))
+          .concat([...resolved]),
       );
       assert.deepEqual(
         off.filter((row) => !everyDocumented.has(row)),
@@ -194,7 +198,24 @@ test("AUTH-MFA closure inventory cannot silently omit a declared condition", () 
 test("scope decisions are recorded, not implied", () => {
   const closure = load();
   const decided = new Set(closure.scopeDecisions.map(({ id }) => id));
-  for (const id of ["M1", "M2", "M3", "M4", "M5", "M6", "M7", "M8", "M9", "M10", "M10a", "M10b", "M11", "M12", "M13", "M14"]) {
+  for (const id of [
+    "M1",
+    "M2",
+    "M3",
+    "M4",
+    "M5",
+    "M6",
+    "M7",
+    "M8",
+    "M9",
+    "M10",
+    "M10a",
+    "M10b",
+    "M11",
+    "M12",
+    "M13",
+    "M14",
+  ]) {
     assert.ok(decided.has(id), `scope decision ${id} must be recorded`);
   }
   for (const decision of closure.scopeDecisions) {
@@ -341,7 +362,9 @@ test("the lifetime programs sample exactly the decided ages (M4, M8, M13)", asyn
   const { PROGRAMS } = await import("./auth-mfa/corpus.mjs");
   const ages = (programId, prefix) => {
     const { steps } = PROGRAMS.find(({ id }) => id === programId);
-    return steps.filter(({ id, age }) => id.startsWith(prefix) && age).map(({ age }) => age.seconds);
+    return steps
+      .filter(({ id, age }) => id.startsWith(prefix) && age)
+      .map(({ age }) => age.seconds);
   };
   assert.deepEqual(ages("auth-mfa/lifetime-short", "aged-pending-q"), [60, 120, 180, 240, 290]);
   assert.deepEqual(ages("auth-mfa/lifetime-short", "sms-start-aged-m"), [150, 300]);

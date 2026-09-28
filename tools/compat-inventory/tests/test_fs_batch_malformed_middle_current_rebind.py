@@ -1,5 +1,7 @@
+import hashlib
 import json
 import os
+import re
 import subprocess
 from pathlib import Path
 
@@ -11,6 +13,97 @@ ARTIFACT_PATH = (
     / "spec/compatibility/broad-runs/fs-batch-malformed-middle-8a0f205-current-comparison.json"
 )
 COMPARATOR_PATH = REPOSITORY / "conformance/src/fs-data-write-sandbox.mjs"
+SAVED_PATH = (
+    REPOSITORY
+    / "spec/compatibility/broad-runs/fs-batch-malformed-middle-3d7ceabb8-saved-comparison.json"
+)
+HISTORY_REWRITE_PATH = REPOSITORY / "spec/compatibility/history-rewrite-2026-09-28.json"
+REQUIRED_RUNTIME_INPUTS = {
+    "Cargo.toml",
+    "Cargo.lock",
+    "conformance/src/fs-data-write-sandbox-run.mjs",
+    "conformance/src/firestore-probe/sandbox-session.mjs",
+}
+
+
+def read_json(path: Path) -> dict:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def rewritten(commit: str) -> str:
+    """The commit a recorded SHA has after the 2026-09-28 history rewrite, if the record exists."""
+    if not HISTORY_REWRITE_PATH.exists():
+        return commit
+    for label in read_json(HISTORY_REWRITE_PATH)["labels"]:
+        if commit.startswith(label["token"]):
+            return label["new"]
+    return commit
+
+
+def source_blob_sha256(commit: str, path: str) -> str:
+    result = subprocess.run(
+        ["git", "show", f"{rewritten(commit)}:{path}"],
+        cwd=REPOSITORY,
+        check=True,
+        capture_output=True,
+    )
+    return hashlib.sha256(result.stdout).hexdigest()
+
+
+def test_the_rebind_is_bound_to_its_recorded_source_blobs_and_saved_provenance():
+    """Static provenance of the 8a0f205 rebind: it no longer needs the tree to equal that commit."""
+    artifact = read_json(ARTIFACT_PATH)
+    assert artifact["schemaVersion"] == 1
+    assert artifact["conditionId"] == "FS-WRITE-LIMITS-03/batch-malformed-middle"
+    assert artifact["sourceCommit"] == "8a0f20599bab98bb094a74e00d6b2df9f6cd60e8"
+    assert artifact["savedComparison"] == {
+        "path": "spec/compatibility/broad-runs/fs-batch-malformed-middle-3d7ceabb8-saved-comparison.json",
+        "sha256": sha256(SAVED_PATH),
+    }
+    saved = read_json(SAVED_PATH)
+    assert artifact["localIndexConfigSha256"] == saved["indexConfigSha256"]
+    assert saved["productionFixtureSha256"] == artifact["productionFixtureSha256"]
+    assert artifact["productionPrograms"] == saved["productionPrograms"]
+    assert artifact["productionRecordingDigests"][0] == artifact["productionRecordingDigests"][1]
+    assert artifact["localRunPath"] == "conformance/.runs/fs-data-write-local-DbrwFE"
+
+    binding = artifact["localRunBinding"]
+    assert binding["sourceHead"] == artifact["sourceCommit"]
+    assert binding["executablePath"] == "target/debug/fireemu"
+    assert binding["executableSha256"] == artifact["localExecutableSha256"]
+    assert binding["executableSha256After"] == artifact["localExecutableSha256"]
+    assert binding["config"] == "conformance/fs-data-write-sandbox.fireemu.json"
+    assert binding["configSha256"] == artifact["localConfigSha256"]
+    assert binding["runtimeInputs"] == artifact["localRuntimeInputs"]
+    assert set(artifact["localRuntimeInputs"]) == REQUIRED_RUNTIME_INPUTS
+    assert set(binding["commandVersions"]) == {"cargo", "node", "rustc"}
+    assert re.fullmatch(r"[0-9a-f]{64}", artifact["localRunBindingSha256"])
+    assert (
+        hashlib.sha256(f"{json.dumps(binding, indent=2)}\n".encode()).hexdigest()
+        == artifact["localRunBindingSha256"]
+    )
+    commit = artifact["sourceCommit"]
+    runtime = artifact["comparisonRuntimeInput"]
+    assert runtime["path"] == "conformance/src/fs-data-write-sandbox.mjs"
+    assert source_blob_sha256(commit, runtime["path"]) == runtime["sha256"]
+    assert source_blob_sha256(commit, binding["config"]) == binding["configSha256"]
+    assert (
+        source_blob_sha256(commit, "conformance/firestore.indexes.json")
+        == artifact["localIndexConfigSha256"]
+    )
+    for path, expected_sha in artifact["localRuntimeInputs"].items():
+        assert source_blob_sha256(commit, path) == expected_sha
+    recipes = {recipe["id"]: recipe for recipe in artifact["recipes"]}
+    assert sorted(recipes) == sorted(artifact["recipeIds"])
+    for recipe_id, recipe in recipes.items():
+        digest = hashlib.sha256(json.dumps(recipe, separators=(",", ":")).encode()).hexdigest()
+        assert artifact["recipeDigests"][recipe_id] == digest
+
+
 
 
 @pytest.fixture(scope="module")

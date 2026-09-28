@@ -619,6 +619,46 @@
         "laneComparisonSha256": "b0b767ad95602347d7eef176436427c92417e363fdf5be0d1ecaa4e94d4caac2",
         "identicalRows": 1149,
         "changedRows": []
+      },
+      {
+        "path": "spec/compatibility/closure/evidence/integration-v0.8.0/AUTH-ACCOUNT-comparison.json",
+        "sha256": "f5ecd67769ee337e8d34035083ade6bc233cce4c9a91cc13483f6924df6d5134",
+        "rows": 631,
+        "summary": {
+          "MATCH": 631
+        },
+        "laneComparisonPath": "spec/compatibility/closure/evidence/FS-RULES-auth-account-regression.json",
+        "laneComparisonSha256": "8e4bf9b804592114a17c5f08d7d1f44665a7d68893eeab5f896259bca6da0b58",
+        "identicalRows": 631,
+        "changedRows": [],
+        "inherited": "AUTH-ACCOUNT"
+      },
+      {
+        "path": "spec/compatibility/closure/evidence/integration-v0.8.0/AUTH-CREDENTIAL-comparison.json",
+        "sha256": "9b68f53d7b82a9b6cd6765187c029c7d1a266e0600d3db45d90c95439565dac5",
+        "rows": 222,
+        "summary": {
+          "MATCH": 222
+        },
+        "laneComparisonPath": "spec/compatibility/closure/evidence/FS-RULES-auth-credential-regression.json",
+        "laneComparisonSha256": "8f34542faa816bc2942da3038bd350a13662f4d0b9cdcc470678554879966641",
+        "identicalRows": 222,
+        "changedRows": [],
+        "inherited": "AUTH-CREDENTIAL"
+      },
+      {
+        "path": "spec/compatibility/closure/evidence/integration-v0.8.0/FS-QUERY-INDEX-comparison.json",
+        "sha256": "37d93ecb6b2c942dd8bf1d1bb4a1a10dbdabbfc6e0936478383b58d2914a437e",
+        "rows": 710,
+        "summary": {
+          "MATCH": 675,
+          "DIVERGENCE_APPROVED": 35
+        },
+        "laneComparisonPath": "spec/compatibility/closure/evidence/FS-RULES-fs-query-index-regression.json",
+        "laneComparisonSha256": "2972f48a501d19d746000f9a4d7c7aa1ff2c88be2e0b2df3f19c7813b4180a67",
+        "identicalRows": 710,
+        "changedRows": [],
+        "inherited": "FS-QUERY-INDEX"
       }
     ],
     "result": "IDENTICAL_TO_LANE",

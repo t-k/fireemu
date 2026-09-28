@@ -878,7 +878,7 @@
     "comparisons": [
       {
         "path": "spec/compatibility/closure/evidence/integration-v0.8.0/FUNCTIONS-HTTP-comparison.json",
-        "sha256": "b306caf27efddaacdaa6d97d17d1b4d985445366a8ac956ebc8383bbdd6f6b13",
+        "sha256": "57937a7bfc736672efb42b8b6ea3e4f43ff307253343e2609e6cf01f46c6c986",
         "rows": 68,
         "summary": {
           "MATCH": 68

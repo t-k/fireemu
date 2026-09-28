@@ -34,7 +34,17 @@
         "outcome": "APPROVE WITH CHANGES (no Must)"
       }
     ],
-    "followUps": "Non-blocking items tracked outside the closure: a strict delete of a stored document over the index-entry limits is refused rather than priced; WebChannel form bodies can hold up to 16 MiB each under the request work limiter; the limits-catalog request-bytes note keeps one stale sentence, fixed at the next product rebuild because the note is compiled into the release binary; the ten retired historical REST recipes are no longer compared; the historical rows emulator/routes#get-database and emulator/routes#list-databases answer 200 in production on the real Admin databases API, and databases.get and databases.list are compared against production only by FS-CONFIG-LIFECYCLE/database-projection on its own branch and artifact, not on this release artifact (here they differ from the recording by the per-resource etag and uid, and the list also holds the databases the earlier steps of the emulator/routes program created and an empty unreachable field the recording lacks); these two API behaviours belong to the FS-CONFIG-LIFECYCLE scope and are closed by rerunning the comparisons of both parents on the first release after integration."
+    "followUps": "Non-blocking items tracked outside the closure: a strict delete of a stored document over the index-entry limits is refused rather than priced; WebChannel form bodies can hold up to 16 MiB each under the request work limiter; the limits-catalog request-bytes note keeps one stale sentence, fixed at the next product rebuild because the note is compiled into the release binary; the ten retired historical REST recipes are no longer compared; the historical rows emulator/routes#get-database and emulator/routes#list-databases answer 200 in production on the real Admin databases API, and databases.get and databases.list are compared against production only by FS-CONFIG-LIFECYCLE/database-projection on its own branch and artifact, not on this release artifact (here they differ from the recording by the per-resource etag and uid, and the list also holds the databases the earlier steps of the emulator/routes program created and an empty unreachable field the recording lacks); these two API behaviours belong to the FS-CONFIG-LIFECYCLE scope and are closed by rerunning the comparisons of both parents on the first release after integration.",
+    "followUpStatus": {
+      "asOf": "v0.8.0 (2026-09-28)",
+      "closed": [
+        "emulator/routes#get-database and emulator/routes#list-databases: databases.get and databases.list are compared against production by FS-CONFIG-LIFECYCLE/database-projection on the same release binary as this parent (integratedRegression of both parents); the get rows are MATCH and the list rows MATCH_RELABELED, as on the lane artifact."
+      ],
+      "remaining": [
+        "The limits-catalog request-bytes note still carries the stale sentence: it is compiled into the release binary, so correcting it would have changed the artifact every comparison was rerun on; it moves to the next product change.",
+        "The strict delete pricing over the index-entry limits, the WebChannel form-body memory bound and the ten retired historical REST recipes stay as listed above."
+      ]
+    }
   },
   "conditions": [
     {
@@ -1601,9 +1611,10 @@
     "comparisons": [
       {
         "path": "spec/compatibility/closure/evidence/integration-v0.8.0/FS-DATA-WRITE-regression.json",
-        "sha256": "73d65d9277b7071344c27c1d925834b8bc362779300d43634381e7ce31bee381",
+        "sha256": "33b905fb57fbd498e1f0cdce5839df53720559c434ecde93f4581119f5f129fc",
         "rows": 115,
         "laneComparisonPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-current-comparison.json",
+        "laneComparisonSha256": "582c9004b55e5c0c0ac8a1731584c90a67981f9eefe1c8a97b37340cd5f22678",
         "identicalRows": 115,
         "changedRows": []
       },

@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
+import { resolvedDivergenceRows } from "./closure-resolved-divergences.mjs";
 
 const closurePath = fileURLToPath(
   new URL("../../spec/compatibility/closure/AUTH-CONFIG-SDK.json", import.meta.url),
@@ -183,7 +184,10 @@ test("AUTH-CONFIG-SDK closure inventory cannot silently omit a declared conditio
         `${label}: ${divergence.row} names a recorded scope decision`,
       );
     }
-    const documented = new Set(divergences.map(({ row }) => row));
+    const resolved = resolvedDivergenceRows(closure, (path) =>
+      readFileSync(fileURLToPath(new URL(`../../${path}`, import.meta.url))),
+    );
+    const documented = new Set([...divergences.map(({ row }) => row), ...resolved]);
     const off = rows
       .filter(({ status, row }) => status !== "MATCH" && !documented.has(row))
       .map(({ row }) => row);
@@ -204,9 +208,9 @@ test("AUTH-CONFIG-SDK closure inventory cannot silently omit a declared conditio
         );
       }
       const everyDocumented = new Set(
-        closure.conditions.flatMap(({ evidence }) =>
-          (evidence?.documentedDivergences ?? []).map(({ row }) => row),
-        ),
+        closure.conditions
+          .flatMap(({ evidence }) => (evidence?.documentedDivergences ?? []).map(({ row }) => row))
+          .concat([...resolved]),
       );
       assert.deepEqual(
         off.filter((row) => !everyDocumented.has(row)),

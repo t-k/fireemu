@@ -14,8 +14,12 @@ use crate::local::LocalBackend;
 use crate::rest::{RestRequest, RestState};
 
 fn state() -> (RestState, Arc<Mutex<VirtualClock>>) {
+    state_with_limits(true)
+}
+
+fn state_with_limits(enforce_limits: bool) -> (RestState, Arc<Mutex<VirtualClock>>) {
     let gateway = Gateway {
-        enforce_limits: true,
+        enforce_limits,
         ctx: PlanningContext {
             edition: FirestoreEdition::Standard,
             api_mode: FirestoreApiMode::Native,
@@ -1584,4 +1588,94 @@ fn refused_queries_leave_the_admin_index_registry_unchanged() {
         call(&bounded, "POST", &path, query.clone());
     }
     assert_eq!(bounded.local.admin().indexes().entry_count(), before);
+}
+
+/// Known edge, unobserved in production (issue: managed Admin operations use Commit-route limits
+/// in strict): a managed import writes through the Commit route, so under strict it applies the
+/// data plane's limits. An export the emulator profile wrote may hold a document strict refuses to
+/// write, here a name over the recorded index-entry bound, and strict then refuses the import
+/// before it starts. The emulator profile imports the same export.
+#[test]
+fn strict_import_applies_commit_route_limits_to_exported_documents() {
+    let storage = Arc::new(MemoryStorage::default());
+    let (emulator, _emulator_clock) = state_with_limits(false);
+    let (strict, _strict_clock) = state_with_limits(true);
+    for (target, db) in [
+        (&emulator, "srcdb"),
+        (&strict, "dstdb"),
+        (&emulator, "copydb"),
+    ] {
+        target
+            .local
+            .admin()
+            .set_managed_storage(Arc::clone(&storage) as _);
+        call(
+            target,
+            "POST",
+            &format!("/v1/projects/p/databases?databaseId={db}"),
+            native(),
+        );
+    }
+    let name = format!(
+        "{}/{}/{}/{}",
+        "a".repeat(1_500),
+        "b".repeat(1_500),
+        "c".repeat(1_500),
+        "d".repeat(200)
+    );
+    let (status, body) = call(
+        &emulator,
+        "PATCH",
+        &format!("/v1/projects/p/databases/srcdb/documents/{name}"),
+        json!({"fields": {}}),
+    );
+    assert_eq!(status, 200, "{body}");
+    let (status, body) = call(
+        &strict,
+        "PATCH",
+        &format!("/v1/projects/p/databases/dstdb/documents/{name}"),
+        json!({"fields": {}}),
+    );
+    assert_eq!(
+        (status, body["error"]["message"].as_str()),
+        (400, Some("Index entry is too large."))
+    );
+    let (status, _) = call(
+        &emulator,
+        "POST",
+        "/v1/projects/p/databases/srcdb:exportDocuments",
+        json!({"outputUriPrefix": "gs://run-bucket/x/all"}),
+    );
+    assert_eq!(status, 200);
+    let (status, answer) = call(
+        &strict,
+        "POST",
+        "/v1/projects/p/databases/dstdb:importDocuments",
+        json!({"inputUriPrefix": "gs://run-bucket/x/all"}),
+    );
+    assert_eq!(
+        (status, answer["error"]["message"].as_str()),
+        (400, Some("Index entry is too large."))
+    );
+    let (status, _) = call(
+        &strict,
+        "GET",
+        &format!("/v1/projects/p/databases/dstdb/documents/{name}"),
+        Value::Null,
+    );
+    assert_eq!(status, 404, "a refused import publishes nothing");
+    let (status, operation) = call(
+        &emulator,
+        "POST",
+        "/v1/projects/p/databases/copydb:importDocuments",
+        json!({"inputUriPrefix": "gs://run-bucket/x/all"}),
+    );
+    assert_eq!(status, 200, "{operation}");
+    let (status, _) = call(
+        &emulator,
+        "GET",
+        &format!("/v1/projects/p/databases/copydb/documents/{name}"),
+        Value::Null,
+    );
+    assert_eq!(status, 200);
 }

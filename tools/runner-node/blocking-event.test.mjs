@@ -130,7 +130,33 @@ const samples = [
     },
   },
   { iat: 1_788_004_860, event_id: "e3", event_type: "beforeSendEmail", email_type: "PASSWORD_RESET", email: "a@example.com" },
+  // Edges: an unset validity time, an empty factor list, a GitHub profile, an email link, and a
+  // credential of sign-in attributes only (runner manual mutation, closure review M2).
+  {
+    iat: 1_788_004_860, event_id: "e4", event_type: "beforeSignIn", sub: "u4", sign_in_method: "github.com",
+    raw_user_info: "{\"login\":\"octo\"}", sign_in_attributes: { a: 1 },
+    user_record: { uid: "u4", provider_data: [], tokens_valid_after_time: 0, multi_factor: { enrolled_factors: [] } },
+  },
+  {
+    iat: 1_788_004_860, event_id: "e5", event_type: "beforeCreate", sub: "u5", sign_in_method: "emailLink",
+    user_record: { uid: "u5", provider_data: [] },
+  },
 ];
+
+test("the port answers the edges as firebase-functions 7.3.2 does, without the SDK", () => {
+  const time = 1_788_004_900_000;
+  const [github, link] = samples.slice(3);
+  const record = portedIdentityParsers.parseAuthUserRecord(github.user_record);
+  assert.equal(record.tokensValidAfterTime, null);
+  assert.equal(record.multiFactor, null);
+  const context = portedIdentityParsers.parseAuthEventContext(github, "demo-p", time);
+  assert.equal(context.additionalUserInfo.username, "octo");
+  assert.deepEqual(context.credential.claims, { a: 1 });
+  assert.equal(context.credential.providerId, "github.com");
+  const linked = portedIdentityParsers.parseAuthEventContext(link, "demo-p", time);
+  assert.equal(linked.additionalUserInfo.providerId, "password");
+  assert.equal(linked.credential, null);
+});
 
 test("the port builds the event firebase-functions 7.3.2 builds", { skip: !existsSync(pinnedSdk) }, () => {
   const sdk = loadIdentityParsers(createRequire(pinnedSdk));

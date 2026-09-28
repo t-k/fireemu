@@ -1020,3 +1020,45 @@ test("a blocking restore adopts the leftovers of the recording that stopped (rev
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test("a comparison of blocking programs needs every fixture function served (closure review S4)", async () => {
+  const { fixtureExports, unservedFixtureFunctions } =
+    await import("./auth-tenant-blocking/run.mjs");
+  const exported = fixtureExports(
+    await readFile(join(import.meta.dirname, "auth-tenant-blocking/function/index.js"), "utf8"),
+  );
+  assert.deepEqual(exported, [
+    "atbBeforeCreate",
+    "atbBeforeSendEmail",
+    "atbBeforeSendSms",
+    "atbBeforeSignIn",
+  ]);
+  const all =
+    "functions loaded: atbBeforeCreate, atbBeforeSignIn, atbBeforeSendEmail, atbBeforeSendSms\n";
+  assert.equal(unservedFixtureFunctions(all, exported), undefined);
+  // Another runner that ignores the mail functions, or a codebase without its dependencies.
+  assert.match(
+    unservedFixtureFunctions("functions loaded: atbBeforeCreate, atbBeforeSignIn\n", exported),
+    /atbBeforeSendEmail, atbBeforeSendSms/,
+  );
+  assert.match(unservedFixtureFunctions("runner exited\n", exported), /loaded no functions/);
+});
+
+test("a comparison's evidence is bound to the fixture it was checked against (closure review S4)", async () => {
+  const { comparisonEvidence } = await import("./auth-tenant-blocking/run.mjs");
+  const comparison = {
+    artifactSha256: "a".repeat(64),
+    fixtureSha256: "f".repeat(64),
+    runnerSha256: "r".repeat(64),
+    sourceCommit: "c".repeat(40),
+    treeClean: true,
+    summary: { MATCH: 1 },
+    rows: [{ row: "atb/tenant/manage#x", status: "MATCH", production: {}, fireemu: {} }],
+  };
+  const evidence = comparisonEvidence(comparison, "f".repeat(64));
+  assert.equal(evidence.fixtureSha256, "f".repeat(64));
+  assert.equal(evidence.runnerSha256, "r".repeat(64));
+  assert.equal(evidence.sourceCommit, "c".repeat(40));
+  assert.deepEqual(evidence.rows, [{ row: "atb/tenant/manage#x", status: "MATCH" }]);
+  assert.throws(() => comparisonEvidence(comparison, "e".repeat(64)), /fixture changed/);
+});

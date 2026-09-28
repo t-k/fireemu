@@ -104,6 +104,78 @@ const PROGRAMS = SUITE === "blocking" ? BLOCKING_PROGRAMS : TENANT_PROGRAMS;
 const ALL_PROGRAMS = [...TENANT_PROGRAMS, ...BLOCKING_PROGRAMS];
 /** The blocking fixture's source, served locally by fireemu and deployed to production. */
 const FIXTURE_SOURCE = join(CONFORMANCE_DIR, "src", "auth-tenant-blocking", "function");
+
+/**
+ * This checkout's Functions runner. A local session runs it explicitly: a fireemu binary finds
+ * its runner next to itself, so a copy outside the checkout would run another one (closure
+ * review S4, 2026-09-28).
+ */
+const RUNNER_DIR = join(CONFORMANCE_DIR, "..", "tools", "runner-node");
+
+/** The fixture's exported functions, as `exports.<name> =` in its source. */
+export function fixtureExports(source) {
+  return [...source.matchAll(/^exports\.(\w+)\s*=/gm)].map(([, name]) => name).toSorted();
+}
+
+/**
+ * Why the daemon's start did not serve every fixture function (its `functions loaded:` line),
+ * or undefined: a comparison of blocking programs is refused rather than run without them.
+ */
+export function unservedFixtureFunctions(daemonOutput, expected) {
+  const line = /functions loaded: ([^\n]*)/.exec(daemonOutput)?.[1];
+  if (line === undefined) return "the daemon loaded no functions";
+  const loaded = new Set(line.split(",").map((name) => name.trim()));
+  const missing = expected.filter((name) => !loaded.has(name));
+  return missing.length ? `the daemon did not serve ${missing.join(", ")}` : undefined;
+}
+
+/** A digest of the runner's own sources (its tests and dependencies aside). */
+async function runnerSha256() {
+  const { readdir } = await import("node:fs/promises");
+  const files = (await readdir(RUNNER_DIR))
+    .filter((file) => file.endsWith(".mjs") && !file.endsWith(".test.mjs"))
+    .toSorted();
+  const hash = createHash("sha256");
+  for (const file of files) {
+    hash.update(`${file}\n`);
+    hash.update(await readFile(join(RUNNER_DIR, file)));
+  }
+  return hash.digest("hex");
+}
+
+/** The commit the comparison ran on, and whether its tree was clean. */
+async function sourceTree() {
+  const { stdout: commit } = await execFileAsync("git", ["rev-parse", "HEAD"], {
+    cwd: CONFORMANCE_DIR,
+  });
+  const { stdout: status } = await execFileAsync("git", ["status", "--porcelain"], {
+    cwd: CONFORMANCE_DIR,
+  });
+  return { sourceCommit: commit.trim(), treeClean: status.trim() === "" };
+}
+
+/**
+ * The public evidence of a comparison, refused when the fixture changed after the check: the
+ * digest is the one the check compared against (closure review S4).
+ */
+export function comparisonEvidence(comparison, currentFixtureSha256) {
+  if (comparison.fixtureSha256 !== currentFixtureSha256)
+    throw new Error("the fixture changed after the check; run the check again");
+  return {
+    kind: "auth-tenant-blocking-comparison-v1",
+    artifactSha256: comparison.artifactSha256,
+    fixtureSha256: comparison.fixtureSha256,
+    runnerSha256: comparison.runnerSha256,
+    sourceCommit: comparison.sourceCommit,
+    treeClean: comparison.treeClean,
+    summary: comparison.summary,
+    rows: comparison.rows.map(({ row, status, production, fireemu }) =>
+      status === "MISMATCH"
+        ? Object.assign({ row, status }, differenceSummary(production, fireemu))
+        : { row, status },
+    ),
+  };
+}
 /** How long the fixture's services may stay public in one recording (TB1: about an hour). */
 const PUBLIC_MINUTES = 45;
 const sha256 = (text) => createHash("sha256").update(text).digest("hex");
@@ -1259,9 +1331,10 @@ async function runLocalSession(programs) {
     ],
     {
       cwd: CONFORMANCE_DIR,
-      stdio: ["ignore", "inherit", "inherit"],
+      stdio: ["ignore", "inherit", "pipe"],
       env: {
         ...withoutLockCapability(),
+        ...(functions ? { FIREEMU_RUNNER_NODE: join(RUNNER_DIR, "index.mjs") } : {}),
         AUTH_TENANT_IN: inPath,
         AUTH_TENANT_OUT: outPath,
         AUTH_TENANT_SIGNERS: signersPath,
@@ -1270,8 +1343,23 @@ async function runLocalSession(programs) {
       },
     },
   );
+  let daemonOutput = "";
+  child.stderr.on("data", (chunk) => {
+    daemonOutput += chunk;
+    process.stderr.write(chunk);
+  });
   const code = await new Promise((resolve) => child.once("exit", resolve));
   if (code !== 0) throw new Error(`fireemu session exited ${code}`);
+  if (functions) {
+    const unserved = unservedFixtureFunctions(
+      daemonOutput,
+      fixtureExports(await readFile(join(FIXTURE_SOURCE, "index.js"), "utf8")),
+    );
+    if (unserved)
+      throw new Error(
+        `${unserved}; install the fixture's dependencies (npm ci in ${FIXTURE_SOURCE}) and run from the checkout`,
+      );
+  }
   return { binary, ...JSON.parse(await readFile(outPath, "utf8")) };
 }
 
@@ -1324,9 +1412,10 @@ async function check() {
   const summary = {};
   for (const { status } of rows) summary[status] = (summary[status] ?? 0) + 1;
   const artifactSha256 = sha256(await readFile(local.binary));
+  const fixtureSha256 = existsSync(FIXTURE) ? sha256(await readFile(FIXTURE, "utf8")) : undefined;
   await writeFile(
     join(RUN_DIR, "comparison.json"),
-    `${JSON.stringify({ artifact: local.binary, artifactSha256, summary, orphans, failures: local.failures, rows }, null, 2)}\n`,
+    `${JSON.stringify({ artifact: local.binary, artifactSha256, fixtureSha256, runnerSha256: await runnerSha256(), ...(await sourceTree()), summary, orphans, failures: local.failures, rows }, null, 2)}\n`,
   );
   const passing = new Set(["MATCH", "MATCH_NONDETERMINISTIC"]);
   for (const row of rows.filter((r) => !passing.has(r.status))) {
@@ -1369,17 +1458,7 @@ async function exportComparison(out) {
   if (!out) throw new Error("usage: export-comparison <output.json>");
   const comparison = JSON.parse(await readFile(join(RUN_DIR, "comparison.json"), "utf8"));
   const fixtureSha256 = sha256(await readFile(FIXTURE, "utf8"));
-  const evidence = {
-    kind: "auth-tenant-blocking-comparison-v1",
-    artifactSha256: comparison.artifactSha256,
-    fixtureSha256,
-    summary: comparison.summary,
-    rows: comparison.rows.map(({ row, status, production, fireemu }) =>
-      status === "MISMATCH"
-        ? Object.assign({ row, status }, differenceSummary(production, fireemu))
-        : { row, status },
-    ),
-  };
+  const evidence = comparisonEvidence(comparison, fixtureSha256);
   await writeFile(out, `${JSON.stringify(evidence, null, 2)}\n`);
   console.log(JSON.stringify({ out, summary: evidence.summary, fixtureSha256 }, null, 2));
 }

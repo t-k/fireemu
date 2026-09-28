@@ -298,3 +298,52 @@ fn the_emulator_profile_keeps_its_own_form() {
         assert_eq!(status, 400, "{trigger}: {refused}");
     }
 }
+
+/// Accepts any settings, so the adapter's own validation is what refuses.
+struct PermissiveHook;
+
+impl AuthBlockingHook for PermissiveHook {
+    fn invoke(
+        &self,
+        _event: BlockingAuthEvent,
+        _user: &fireemu_core_auth::store::UserRecord,
+    ) -> Result<Value, BlockingFunctionFailure> {
+        unreachable!("no Auth request runs a function here")
+    }
+
+    fn blocking_auth_project(&self) -> Option<&str> {
+        Some("demo-app")
+    }
+
+    fn blocking_auth_settings(&self) -> Option<Value> {
+        Some(json!({}))
+    }
+
+    fn validate_blocking_auth_settings(&self, _settings: &Value) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn update_blocking_auth_settings(&self, _settings: &Value) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+/// The emulator profile's request validation itself refuses an `updateTime`, which only the
+/// strict profile takes back from a read (closure review, suggested test).
+#[test]
+fn the_emulator_profile_refuses_an_update_time_before_the_bridge_sees_it() {
+    for (strict, expected) in [(false, 400), (true, 200)] {
+        let (mut s, _) = state(strict, json!({}));
+        s.blocking = Some(Arc::new(PermissiveHook));
+        let (status, body) = admin(
+            &s,
+            "PATCH",
+            &format!("{CONFIG}?updateMask=blockingFunctions.triggers.beforeCreate"),
+            &json!({"blockingFunctions": {"triggers": {"beforeCreate": {
+                "functionUri": "fireemu://functions/demo-app/us-central1/f",
+                "updateTime": "2026-09-28T00:00:00Z",
+            }}}}),
+        );
+        assert_eq!(status, expected, "strict {strict}: {body}");
+    }
+}

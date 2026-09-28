@@ -217,3 +217,59 @@ fn exclusive_canonicalization_matches_xmllint() {
         r#"<a xmlns:i="urn:i"><!--c--></a>"#
     );
 }
+
+/// Signature wrapping (XSW): how the verifier reads documents that bend the binding between a
+/// signature and the data read. Production's handling of these forms is unobserved; the
+/// tests fix this verifier's reading, which never follows an ID lookup: a signature covers the
+/// element it is enveloped in, and only a direct assertion of the response is read.
+#[test]
+fn signature_wrapping_forms_are_read_by_the_enveloping_element_only() {
+    let signed = fixture("assertion-signed.xml");
+    // Another element with the same ID (an unsigned assertion before the signed one): the
+    // signature still covers its enveloping assertion, and that one is read.
+    let forged = "<saml:Assertion ID=\"_assertion-1\" Version=\"2.0\"><saml:Issuer>https://idp.example.test/saml/fixture</saml:Issuer><saml:Subject><saml:NameID>attacker@example.com</saml:NameID></saml:Subject></saml:Assertion>";
+    let duplicated = signed.replacen("<saml:Assertion ", &format!("{forged}<saml:Assertion "), 1);
+    let verified = verify_saml_response(&duplicated, &idp()).unwrap();
+    assert_eq!(
+        verified.name_id.as_deref(),
+        Some("fixture-user@example.com")
+    );
+
+    // A signed response embedded in another document is not a SAML response.
+    let embedded = signed.replacen(
+        "<samlp:Response ",
+        "<wrapper xmlns=\"urn:x\"><samlp:Response ",
+        1,
+    ) + "</wrapper>";
+    let embedded = embedded.replacen("<?xml version=\"1.0\" encoding=\"UTF-8\"?>", "", 1);
+    assert!(matches!(
+        verify_saml_response(&embedded, &idp()),
+        Err(SamlError::Malformed("not a samlp:Response"))
+    ));
+
+    // Only a direct assertion of the response is read: one below samlp:Extensions is not, with
+    // or without a direct one beside it (the response signature covers both).
+    assert!(matches!(
+        verify_saml_response(&fixture("nested-assertion.xml"), &idp()),
+        Err(SamlError::Malformed("no assertion"))
+    ));
+    let beside = verify_saml_response(&fixture("nested-beside-direct.xml"), &idp()).unwrap();
+    assert_eq!(beside.name_id.as_deref(), Some("fixture-user@example.com"));
+
+    // The signed element's ID is its unqualified `ID` attribute, exactly: another case or a
+    // namespaced `ID` does not name it.
+    let lowercase = signed.replacen("ID=\"_assertion-1\"", "Id=\"_assertion-1\"", 1);
+    assert!(matches!(
+        verify_saml_response(&lowercase, &idp()),
+        Err(SamlError::Malformed("the signed element has no ID"))
+    ));
+    let namespaced = signed.replacen(
+        "ID=\"_assertion-1\"",
+        "xmlns:x=\"urn:x\" x:ID=\"_assertion-1\" ID=\"_other\"",
+        1,
+    );
+    assert_eq!(
+        verify_saml_response(&namespaced, &idp()),
+        Err(SamlError::Signature)
+    );
+}

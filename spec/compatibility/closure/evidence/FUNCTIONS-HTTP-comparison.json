@@ -1,16 +1,16 @@
 {
   "schemaVersion": 1,
   "parent": "FUNCTIONS-HTTP",
-  "sourceCommit": "08a44dac2b59dab5b3a283f919cb8bffb6e5eb13",
-  "finalArtifactSha256": "28c7e475bd64cfeb5d991ca644cd9ae65c9c5fb288d7e620fc5891cbed02f137",
+  "sourceCommit": "8959805113f67ded6d537b9aa78ac685a1f0efa4",
+  "finalArtifactSha256": "4918b2201852364d6f20cf4be7bf63cb3efcea6588f030be77dd552977cb2940",
   "runnerTreeSha256": "c70c6d835dae46d525b513bcf6828cb1fe551289d8aa231fa4f52a8d6fac4cce",
   "corpusSha256": "836c138ba213546428e700e7ecb51644089bb5b0cdc91946eb9904a648106bea",
   "fixtureIndexSha256": "0c481ec6b6ec87db71a2f90550238ce69ec2b923c7a92b7ea5171cb7909886a5",
   "fixturePackageLockSha256": "9d0a9bc3287ad79bc66ee7174c2486dd078d18e77b2c27d612c3c8712d703eeb",
   "nodeVersion": "v22.22.1",
-  "privateArtifactReceipt": "docs.local/runs/functions-http-final-20260928-rereview2/artifact.json",
-  "privateArtifactReceiptSha256": "3ffa547ae620444c1c6032d99b0a74aac4dd6bc86b4662496598d945e60164fc",
-  "privateComparison": "docs.local/runs/functions-http-final-20260928-rereview2/comparison.json",
+  "privateArtifactReceipt": "docs.local/runs/functions-http-final-20260928-rereview3/artifact.json",
+  "privateArtifactReceiptSha256": "ec92b20e7c1b5aa8905ad940970581d1fd6b82ede464af7473c763a76a1eb03c",
+  "privateComparison": "docs.local/runs/functions-http-final-20260928-rereview3/comparison.json",
   "privateComparisonSha256": "6e11834e2225f04ea342a18bf972a09791dc8faa74588f22f8451f23a5fd38d7",
   "productionRecordingSha256": [
     "555c1150e708606a6f21ac931d9196a5e75e62486398b760d9e9cfafc8d94e0f",
@@ -229,7 +229,7 @@
     "ownerPolicyDecision": "APPROVED_RETAIN_401",
     "ownerDecisionRef": "docs.local/instructions/owner-decisions.md (2026-09-28 FUNCTIONS-HTTP B7, row 353)"
   },
-  "artifactSha256": "28c7e475bd64cfeb5d991ca644cd9ae65c9c5fb288d7e620fc5891cbed02f137",
+  "artifactSha256": "4918b2201852364d6f20cf4be7bf63cb3efcea6588f030be77dd552977cb2940",
   "rows": [
     {
       "row": "functions-http/http/request-shape#GET",
@@ -511,8 +511,8 @@
   "productionFinishedAt": "2026-09-27T15:25:07.292Z",
   "productionRecordingTimeBasis": "The timestamps are the two recording files' first-persisted filesystem birth times. The stage 3 runner wrote pass 1 and pass 2 to separate files, interleaved by program, before the shared ledger finish line at 2026-09-27T15:25:07.292Z. Pass IDs, not timestamp spacing, identify the recordings.",
   "runnerTreeManifestFormat": "For each runner-node file sorted by filename in ascending ASCII order, concatenate UTF-8 filename, TAB, lowercase SHA-256 hex of file bytes, LF; SHA-256 the concatenated bytes.",
-  "privateConformance": "docs.local/runs/functions-http-final-20260928-rereview2/conformance.json",
-  "privateConformanceSha256": "1d1bc4cb75eed9a6a25363d4a8027e346d975e80e8a5bb47aeb9c3c285a6b97d",
+  "privateConformance": "docs.local/runs/functions-http-final-20260928-rereview3/conformance.json",
+  "privateConformanceSha256": "1d8f2f82bc087dc739ccd17e89ec07a726e5d38075214b151feb8816ac485533",
   "productionRecordingPassIds": [
     1,
     2
@@ -526,5 +526,18 @@
     "decidedOn": "2026-09-28",
     "decisionRef": "docs.local/instructions/owner-decisions.md (2026-09-28 FUNCTIONS-HTTP callable non-loopback Origin)",
     "localVerification": "External HTTPS and LAN callable Origins are admitted in both profiles. Default callable CORS is checked against the pinned SDK and the retained official emulator fixture; no new production recording is claimed."
+  },
+  "callablePreflightPolicyDecision": {
+    "decision": "APPROVED_SDK_CORS_WRAPPER",
+    "profiles": [
+      "emulator",
+      "strict"
+    ],
+    "decidedOn": "2026-09-28",
+    "decider": "project coordinator (delegated by the owner)",
+    "decisionRef": "docs.local/instructions/owner-decisions.md (2026-09-28 FUNCTIONS-HTTP loopback Origin refusals)",
+    "localVerification": "Callable OPTIONS delegates to the pinned SDK CORS wrapper without Auth or App Check admission. The final binary passed 224 local requests covering cors:false, single and multiple Origin lists, loopback/external/LAN Origins, and cross-site preflights requesting GET or arbitrary headers. No new production recording is claimed.",
+    "privateCorsReceipt": "docs.local/runs/functions-http-final-20260928-rereview3/cors-receipt.json",
+    "privateCorsReceiptSha256": "abe6cff3a7111e659610662ad8ec1404feaf1bacd0a8cdb95fa5038516e95c1b"
   }
 }

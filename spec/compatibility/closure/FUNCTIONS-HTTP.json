@@ -13,10 +13,10 @@
   },
   "closureReview": {
     "decision": "PENDING",
-    "submittedSourceCommit": "08a44dac2b59dab5b3a283f919cb8bffb6e5eb13",
-    "submittedFinalArtifactSha256": "28c7e475bd64cfeb5d991ca644cd9ae65c9c5fb288d7e620fc5891cbed02f137",
-    "submittedComparisonSha256": "15e153d78a83e1089af461b5df0b33ca69b0f0bf4d0da18e47b41d2feab8919b",
-    "finalArtifactSha256": "28c7e475bd64cfeb5d991ca644cd9ae65c9c5fb288d7e620fc5891cbed02f137",
+    "submittedSourceCommit": "8959805113f67ded6d537b9aa78ac685a1f0efa4",
+    "submittedFinalArtifactSha256": "4918b2201852364d6f20cf4be7bf63cb3efcea6588f030be77dd552977cb2940",
+    "submittedComparisonSha256": "0e021b4cf185ff58252ea33b8b65d4ba3f2ee19bf2a9d62456ad89aad402662a",
+    "finalArtifactSha256": "4918b2201852364d6f20cf4be7bf63cb3efcea6588f030be77dd552977cb2940",
     "ownerPolicyDecision": {
       "decision": "APPROVED_RETAIN_401",
       "decidedOn": "2026-09-28",
@@ -31,6 +31,19 @@
       "decidedOn": "2026-09-28",
       "decisionRef": "docs.local/instructions/owner-decisions.md (2026-09-28 FUNCTIONS-HTTP callable non-loopback Origin)",
       "localVerification": "External HTTPS and LAN callable Origins are admitted in both profiles. Default callable CORS is checked against the pinned SDK and the retained official emulator fixture; no new production recording is claimed."
+    },
+    "callablePreflightPolicyDecision": {
+      "decision": "APPROVED_SDK_CORS_WRAPPER",
+      "profiles": [
+        "emulator",
+        "strict"
+      ],
+      "decidedOn": "2026-09-28",
+      "decider": "project coordinator (delegated by the owner)",
+      "decisionRef": "docs.local/instructions/owner-decisions.md (2026-09-28 FUNCTIONS-HTTP loopback Origin refusals)",
+      "localVerification": "Callable OPTIONS delegates to the pinned SDK CORS wrapper without Auth or App Check admission. The final binary passed 224 local requests covering cors:false, single and multiple Origin lists, loopback/external/LAN Origins, and cross-site preflights requesting GET or arbitrary headers. No new production recording is claimed.",
+      "privateCorsReceipt": "docs.local/runs/functions-http-final-20260928-rereview3/cors-receipt.json",
+      "privateCorsReceiptSha256": "abe6cff3a7111e659610662ad8ec1404feaf1bacd0a8cdb95fa5038516e95c1b"
     }
   },
   "scopeDecisions": [
@@ -120,11 +133,11 @@
             "pass": 2
           }
         ],
-        "sourceCommit": "08a44dac2b59dab5b3a283f919cb8bffb6e5eb13",
-        "finalArtifactSha256": "28c7e475bd64cfeb5d991ca644cd9ae65c9c5fb288d7e620fc5891cbed02f137",
+        "sourceCommit": "8959805113f67ded6d537b9aa78ac685a1f0efa4",
+        "finalArtifactSha256": "4918b2201852364d6f20cf4be7bf63cb3efcea6588f030be77dd552977cb2940",
         "runnerTreeSha256": "c70c6d835dae46d525b513bcf6828cb1fe551289d8aa231fa4f52a8d6fac4cce",
         "comparisonPath": "spec/compatibility/closure/evidence/FUNCTIONS-HTTP-comparison.json",
-        "comparisonSha256": "15e153d78a83e1089af461b5df0b33ca69b0f0bf4d0da18e47b41d2feab8919b",
+        "comparisonSha256": "0e021b4cf185ff58252ea33b8b65d4ba3f2ee19bf2a9d62456ad89aad402662a",
         "strictRecordingSha256": "92e9ea008073ae16897015e552ae7b58cb1560d2d55de14092c3ca71e8fea39f",
         "rows": {
           "MATCH": 6
@@ -159,11 +172,11 @@
             "pass": 2
           }
         ],
-        "sourceCommit": "08a44dac2b59dab5b3a283f919cb8bffb6e5eb13",
-        "finalArtifactSha256": "28c7e475bd64cfeb5d991ca644cd9ae65c9c5fb288d7e620fc5891cbed02f137",
+        "sourceCommit": "8959805113f67ded6d537b9aa78ac685a1f0efa4",
+        "finalArtifactSha256": "4918b2201852364d6f20cf4be7bf63cb3efcea6588f030be77dd552977cb2940",
         "runnerTreeSha256": "c70c6d835dae46d525b513bcf6828cb1fe551289d8aa231fa4f52a8d6fac4cce",
         "comparisonPath": "spec/compatibility/closure/evidence/FUNCTIONS-HTTP-comparison.json",
-        "comparisonSha256": "15e153d78a83e1089af461b5df0b33ca69b0f0bf4d0da18e47b41d2feab8919b",
+        "comparisonSha256": "0e021b4cf185ff58252ea33b8b65d4ba3f2ee19bf2a9d62456ad89aad402662a",
         "strictRecordingSha256": "92e9ea008073ae16897015e552ae7b58cb1560d2d55de14092c3ca71e8fea39f",
         "rows": {
           "MATCH": 4
@@ -199,11 +212,11 @@
             "pass": 2
           }
         ],
-        "sourceCommit": "08a44dac2b59dab5b3a283f919cb8bffb6e5eb13",
-        "finalArtifactSha256": "28c7e475bd64cfeb5d991ca644cd9ae65c9c5fb288d7e620fc5891cbed02f137",
+        "sourceCommit": "8959805113f67ded6d537b9aa78ac685a1f0efa4",
+        "finalArtifactSha256": "4918b2201852364d6f20cf4be7bf63cb3efcea6588f030be77dd552977cb2940",
         "runnerTreeSha256": "c70c6d835dae46d525b513bcf6828cb1fe551289d8aa231fa4f52a8d6fac4cce",
         "comparisonPath": "spec/compatibility/closure/evidence/FUNCTIONS-HTTP-comparison.json",
-        "comparisonSha256": "15e153d78a83e1089af461b5df0b33ca69b0f0bf4d0da18e47b41d2feab8919b",
+        "comparisonSha256": "0e021b4cf185ff58252ea33b8b65d4ba3f2ee19bf2a9d62456ad89aad402662a",
         "strictRecordingSha256": "92e9ea008073ae16897015e552ae7b58cb1560d2d55de14092c3ca71e8fea39f",
         "rows": {
           "MATCH": 5
@@ -238,11 +251,11 @@
             "pass": 2
           }
         ],
-        "sourceCommit": "08a44dac2b59dab5b3a283f919cb8bffb6e5eb13",
-        "finalArtifactSha256": "28c7e475bd64cfeb5d991ca644cd9ae65c9c5fb288d7e620fc5891cbed02f137",
+        "sourceCommit": "8959805113f67ded6d537b9aa78ac685a1f0efa4",
+        "finalArtifactSha256": "4918b2201852364d6f20cf4be7bf63cb3efcea6588f030be77dd552977cb2940",
         "runnerTreeSha256": "c70c6d835dae46d525b513bcf6828cb1fe551289d8aa231fa4f52a8d6fac4cce",
         "comparisonPath": "spec/compatibility/closure/evidence/FUNCTIONS-HTTP-comparison.json",
-        "comparisonSha256": "15e153d78a83e1089af461b5df0b33ca69b0f0bf4d0da18e47b41d2feab8919b",
+        "comparisonSha256": "0e021b4cf185ff58252ea33b8b65d4ba3f2ee19bf2a9d62456ad89aad402662a",
         "strictRecordingSha256": "92e9ea008073ae16897015e552ae7b58cb1560d2d55de14092c3ca71e8fea39f",
         "rows": {
           "MATCH": 4
@@ -274,11 +287,11 @@
             "pass": 2
           }
         ],
-        "sourceCommit": "08a44dac2b59dab5b3a283f919cb8bffb6e5eb13",
-        "finalArtifactSha256": "28c7e475bd64cfeb5d991ca644cd9ae65c9c5fb288d7e620fc5891cbed02f137",
+        "sourceCommit": "8959805113f67ded6d537b9aa78ac685a1f0efa4",
+        "finalArtifactSha256": "4918b2201852364d6f20cf4be7bf63cb3efcea6588f030be77dd552977cb2940",
         "runnerTreeSha256": "c70c6d835dae46d525b513bcf6828cb1fe551289d8aa231fa4f52a8d6fac4cce",
         "comparisonPath": "spec/compatibility/closure/evidence/FUNCTIONS-HTTP-comparison.json",
-        "comparisonSha256": "15e153d78a83e1089af461b5df0b33ca69b0f0bf4d0da18e47b41d2feab8919b",
+        "comparisonSha256": "0e021b4cf185ff58252ea33b8b65d4ba3f2ee19bf2a9d62456ad89aad402662a",
         "strictRecordingSha256": "92e9ea008073ae16897015e552ae7b58cb1560d2d55de14092c3ca71e8fea39f",
         "rows": {
           "MATCH": 1
@@ -312,11 +325,11 @@
             "pass": 2
           }
         ],
-        "sourceCommit": "08a44dac2b59dab5b3a283f919cb8bffb6e5eb13",
-        "finalArtifactSha256": "28c7e475bd64cfeb5d991ca644cd9ae65c9c5fb288d7e620fc5891cbed02f137",
+        "sourceCommit": "8959805113f67ded6d537b9aa78ac685a1f0efa4",
+        "finalArtifactSha256": "4918b2201852364d6f20cf4be7bf63cb3efcea6588f030be77dd552977cb2940",
         "runnerTreeSha256": "c70c6d835dae46d525b513bcf6828cb1fe551289d8aa231fa4f52a8d6fac4cce",
         "comparisonPath": "spec/compatibility/closure/evidence/FUNCTIONS-HTTP-comparison.json",
-        "comparisonSha256": "15e153d78a83e1089af461b5df0b33ca69b0f0bf4d0da18e47b41d2feab8919b",
+        "comparisonSha256": "0e021b4cf185ff58252ea33b8b65d4ba3f2ee19bf2a9d62456ad89aad402662a",
         "strictRecordingSha256": "92e9ea008073ae16897015e552ae7b58cb1560d2d55de14092c3ca71e8fea39f",
         "rows": {
           "MATCH": 3
@@ -349,11 +362,11 @@
             "pass": 2
           }
         ],
-        "sourceCommit": "08a44dac2b59dab5b3a283f919cb8bffb6e5eb13",
-        "finalArtifactSha256": "28c7e475bd64cfeb5d991ca644cd9ae65c9c5fb288d7e620fc5891cbed02f137",
+        "sourceCommit": "8959805113f67ded6d537b9aa78ac685a1f0efa4",
+        "finalArtifactSha256": "4918b2201852364d6f20cf4be7bf63cb3efcea6588f030be77dd552977cb2940",
         "runnerTreeSha256": "c70c6d835dae46d525b513bcf6828cb1fe551289d8aa231fa4f52a8d6fac4cce",
         "comparisonPath": "spec/compatibility/closure/evidence/FUNCTIONS-HTTP-comparison.json",
-        "comparisonSha256": "15e153d78a83e1089af461b5df0b33ca69b0f0bf4d0da18e47b41d2feab8919b",
+        "comparisonSha256": "0e021b4cf185ff58252ea33b8b65d4ba3f2ee19bf2a9d62456ad89aad402662a",
         "strictRecordingSha256": "92e9ea008073ae16897015e552ae7b58cb1560d2d55de14092c3ca71e8fea39f",
         "rows": {
           "MATCH": 2
@@ -387,11 +400,11 @@
             "pass": 2
           }
         ],
-        "sourceCommit": "08a44dac2b59dab5b3a283f919cb8bffb6e5eb13",
-        "finalArtifactSha256": "28c7e475bd64cfeb5d991ca644cd9ae65c9c5fb288d7e620fc5891cbed02f137",
+        "sourceCommit": "8959805113f67ded6d537b9aa78ac685a1f0efa4",
+        "finalArtifactSha256": "4918b2201852364d6f20cf4be7bf63cb3efcea6588f030be77dd552977cb2940",
         "runnerTreeSha256": "c70c6d835dae46d525b513bcf6828cb1fe551289d8aa231fa4f52a8d6fac4cce",
         "comparisonPath": "spec/compatibility/closure/evidence/FUNCTIONS-HTTP-comparison.json",
-        "comparisonSha256": "15e153d78a83e1089af461b5df0b33ca69b0f0bf4d0da18e47b41d2feab8919b",
+        "comparisonSha256": "0e021b4cf185ff58252ea33b8b65d4ba3f2ee19bf2a9d62456ad89aad402662a",
         "strictRecordingSha256": "92e9ea008073ae16897015e552ae7b58cb1560d2d55de14092c3ca71e8fea39f",
         "rows": {
           "MATCH": 2
@@ -423,11 +436,11 @@
             "pass": 2
           }
         ],
-        "sourceCommit": "08a44dac2b59dab5b3a283f919cb8bffb6e5eb13",
-        "finalArtifactSha256": "28c7e475bd64cfeb5d991ca644cd9ae65c9c5fb288d7e620fc5891cbed02f137",
+        "sourceCommit": "8959805113f67ded6d537b9aa78ac685a1f0efa4",
+        "finalArtifactSha256": "4918b2201852364d6f20cf4be7bf63cb3efcea6588f030be77dd552977cb2940",
         "runnerTreeSha256": "c70c6d835dae46d525b513bcf6828cb1fe551289d8aa231fa4f52a8d6fac4cce",
         "comparisonPath": "spec/compatibility/closure/evidence/FUNCTIONS-HTTP-comparison.json",
-        "comparisonSha256": "15e153d78a83e1089af461b5df0b33ca69b0f0bf4d0da18e47b41d2feab8919b",
+        "comparisonSha256": "0e021b4cf185ff58252ea33b8b65d4ba3f2ee19bf2a9d62456ad89aad402662a",
         "strictRecordingSha256": "92e9ea008073ae16897015e552ae7b58cb1560d2d55de14092c3ca71e8fea39f",
         "rows": {
           "MATCH": 1
@@ -459,11 +472,11 @@
             "pass": 2
           }
         ],
-        "sourceCommit": "08a44dac2b59dab5b3a283f919cb8bffb6e5eb13",
-        "finalArtifactSha256": "28c7e475bd64cfeb5d991ca644cd9ae65c9c5fb288d7e620fc5891cbed02f137",
+        "sourceCommit": "8959805113f67ded6d537b9aa78ac685a1f0efa4",
+        "finalArtifactSha256": "4918b2201852364d6f20cf4be7bf63cb3efcea6588f030be77dd552977cb2940",
         "runnerTreeSha256": "c70c6d835dae46d525b513bcf6828cb1fe551289d8aa231fa4f52a8d6fac4cce",
         "comparisonPath": "spec/compatibility/closure/evidence/FUNCTIONS-HTTP-comparison.json",
-        "comparisonSha256": "15e153d78a83e1089af461b5df0b33ca69b0f0bf4d0da18e47b41d2feab8919b",
+        "comparisonSha256": "0e021b4cf185ff58252ea33b8b65d4ba3f2ee19bf2a9d62456ad89aad402662a",
         "strictRecordingSha256": "92e9ea008073ae16897015e552ae7b58cb1560d2d55de14092c3ca71e8fea39f",
         "rows": {
           "MATCH": 1
@@ -498,11 +511,11 @@
             "pass": 2
           }
         ],
-        "sourceCommit": "08a44dac2b59dab5b3a283f919cb8bffb6e5eb13",
-        "finalArtifactSha256": "28c7e475bd64cfeb5d991ca644cd9ae65c9c5fb288d7e620fc5891cbed02f137",
+        "sourceCommit": "8959805113f67ded6d537b9aa78ac685a1f0efa4",
+        "finalArtifactSha256": "4918b2201852364d6f20cf4be7bf63cb3efcea6588f030be77dd552977cb2940",
         "runnerTreeSha256": "c70c6d835dae46d525b513bcf6828cb1fe551289d8aa231fa4f52a8d6fac4cce",
         "comparisonPath": "spec/compatibility/closure/evidence/FUNCTIONS-HTTP-comparison.json",
-        "comparisonSha256": "15e153d78a83e1089af461b5df0b33ca69b0f0bf4d0da18e47b41d2feab8919b",
+        "comparisonSha256": "0e021b4cf185ff58252ea33b8b65d4ba3f2ee19bf2a9d62456ad89aad402662a",
         "strictRecordingSha256": "92e9ea008073ae16897015e552ae7b58cb1560d2d55de14092c3ca71e8fea39f",
         "rows": {
           "MATCH": 4
@@ -552,11 +565,11 @@
             "pass": 2
           }
         ],
-        "sourceCommit": "08a44dac2b59dab5b3a283f919cb8bffb6e5eb13",
-        "finalArtifactSha256": "28c7e475bd64cfeb5d991ca644cd9ae65c9c5fb288d7e620fc5891cbed02f137",
+        "sourceCommit": "8959805113f67ded6d537b9aa78ac685a1f0efa4",
+        "finalArtifactSha256": "4918b2201852364d6f20cf4be7bf63cb3efcea6588f030be77dd552977cb2940",
         "runnerTreeSha256": "c70c6d835dae46d525b513bcf6828cb1fe551289d8aa231fa4f52a8d6fac4cce",
         "comparisonPath": "spec/compatibility/closure/evidence/FUNCTIONS-HTTP-comparison.json",
-        "comparisonSha256": "15e153d78a83e1089af461b5df0b33ca69b0f0bf4d0da18e47b41d2feab8919b",
+        "comparisonSha256": "0e021b4cf185ff58252ea33b8b65d4ba3f2ee19bf2a9d62456ad89aad402662a",
         "strictRecordingSha256": "92e9ea008073ae16897015e552ae7b58cb1560d2d55de14092c3ca71e8fea39f",
         "rows": {
           "MATCH": 19
@@ -592,11 +605,11 @@
             "pass": 2
           }
         ],
-        "sourceCommit": "08a44dac2b59dab5b3a283f919cb8bffb6e5eb13",
-        "finalArtifactSha256": "28c7e475bd64cfeb5d991ca644cd9ae65c9c5fb288d7e620fc5891cbed02f137",
+        "sourceCommit": "8959805113f67ded6d537b9aa78ac685a1f0efa4",
+        "finalArtifactSha256": "4918b2201852364d6f20cf4be7bf63cb3efcea6588f030be77dd552977cb2940",
         "runnerTreeSha256": "c70c6d835dae46d525b513bcf6828cb1fe551289d8aa231fa4f52a8d6fac4cce",
         "comparisonPath": "spec/compatibility/closure/evidence/FUNCTIONS-HTTP-comparison.json",
-        "comparisonSha256": "15e153d78a83e1089af461b5df0b33ca69b0f0bf4d0da18e47b41d2feab8919b",
+        "comparisonSha256": "0e021b4cf185ff58252ea33b8b65d4ba3f2ee19bf2a9d62456ad89aad402662a",
         "strictRecordingSha256": "92e9ea008073ae16897015e552ae7b58cb1560d2d55de14092c3ca71e8fea39f",
         "rows": {
           "MATCH": 5
@@ -630,11 +643,11 @@
             "pass": 2
           }
         ],
-        "sourceCommit": "08a44dac2b59dab5b3a283f919cb8bffb6e5eb13",
-        "finalArtifactSha256": "28c7e475bd64cfeb5d991ca644cd9ae65c9c5fb288d7e620fc5891cbed02f137",
+        "sourceCommit": "8959805113f67ded6d537b9aa78ac685a1f0efa4",
+        "finalArtifactSha256": "4918b2201852364d6f20cf4be7bf63cb3efcea6588f030be77dd552977cb2940",
         "runnerTreeSha256": "c70c6d835dae46d525b513bcf6828cb1fe551289d8aa231fa4f52a8d6fac4cce",
         "comparisonPath": "spec/compatibility/closure/evidence/FUNCTIONS-HTTP-comparison.json",
-        "comparisonSha256": "15e153d78a83e1089af461b5df0b33ca69b0f0bf4d0da18e47b41d2feab8919b",
+        "comparisonSha256": "0e021b4cf185ff58252ea33b8b65d4ba3f2ee19bf2a9d62456ad89aad402662a",
         "strictRecordingSha256": "92e9ea008073ae16897015e552ae7b58cb1560d2d55de14092c3ca71e8fea39f",
         "rows": {
           "MATCH": 3
@@ -668,11 +681,11 @@
             "pass": 2
           }
         ],
-        "sourceCommit": "08a44dac2b59dab5b3a283f919cb8bffb6e5eb13",
-        "finalArtifactSha256": "28c7e475bd64cfeb5d991ca644cd9ae65c9c5fb288d7e620fc5891cbed02f137",
+        "sourceCommit": "8959805113f67ded6d537b9aa78ac685a1f0efa4",
+        "finalArtifactSha256": "4918b2201852364d6f20cf4be7bf63cb3efcea6588f030be77dd552977cb2940",
         "runnerTreeSha256": "c70c6d835dae46d525b513bcf6828cb1fe551289d8aa231fa4f52a8d6fac4cce",
         "comparisonPath": "spec/compatibility/closure/evidence/FUNCTIONS-HTTP-comparison.json",
-        "comparisonSha256": "15e153d78a83e1089af461b5df0b33ca69b0f0bf4d0da18e47b41d2feab8919b",
+        "comparisonSha256": "0e021b4cf185ff58252ea33b8b65d4ba3f2ee19bf2a9d62456ad89aad402662a",
         "strictRecordingSha256": "92e9ea008073ae16897015e552ae7b58cb1560d2d55de14092c3ca71e8fea39f",
         "rows": {
           "MATCH": 3
@@ -706,11 +719,11 @@
             "pass": 2
           }
         ],
-        "sourceCommit": "08a44dac2b59dab5b3a283f919cb8bffb6e5eb13",
-        "finalArtifactSha256": "28c7e475bd64cfeb5d991ca644cd9ae65c9c5fb288d7e620fc5891cbed02f137",
+        "sourceCommit": "8959805113f67ded6d537b9aa78ac685a1f0efa4",
+        "finalArtifactSha256": "4918b2201852364d6f20cf4be7bf63cb3efcea6588f030be77dd552977cb2940",
         "runnerTreeSha256": "c70c6d835dae46d525b513bcf6828cb1fe551289d8aa231fa4f52a8d6fac4cce",
         "comparisonPath": "spec/compatibility/closure/evidence/FUNCTIONS-HTTP-comparison.json",
-        "comparisonSha256": "15e153d78a83e1089af461b5df0b33ca69b0f0bf4d0da18e47b41d2feab8919b",
+        "comparisonSha256": "0e021b4cf185ff58252ea33b8b65d4ba3f2ee19bf2a9d62456ad89aad402662a",
         "strictRecordingSha256": "92e9ea008073ae16897015e552ae7b58cb1560d2d55de14092c3ca71e8fea39f",
         "rows": {
           "MATCH": 3
@@ -743,11 +756,11 @@
             "pass": 2
           }
         ],
-        "sourceCommit": "08a44dac2b59dab5b3a283f919cb8bffb6e5eb13",
-        "finalArtifactSha256": "28c7e475bd64cfeb5d991ca644cd9ae65c9c5fb288d7e620fc5891cbed02f137",
+        "sourceCommit": "8959805113f67ded6d537b9aa78ac685a1f0efa4",
+        "finalArtifactSha256": "4918b2201852364d6f20cf4be7bf63cb3efcea6588f030be77dd552977cb2940",
         "runnerTreeSha256": "c70c6d835dae46d525b513bcf6828cb1fe551289d8aa231fa4f52a8d6fac4cce",
         "comparisonPath": "spec/compatibility/closure/evidence/FUNCTIONS-HTTP-comparison.json",
-        "comparisonSha256": "15e153d78a83e1089af461b5df0b33ca69b0f0bf4d0da18e47b41d2feab8919b",
+        "comparisonSha256": "0e021b4cf185ff58252ea33b8b65d4ba3f2ee19bf2a9d62456ad89aad402662a",
         "strictRecordingSha256": "92e9ea008073ae16897015e552ae7b58cb1560d2d55de14092c3ca71e8fea39f",
         "rows": {
           "MATCH": 2
@@ -781,11 +794,11 @@
             "pass": 2
           }
         ],
-        "sourceCommit": "08a44dac2b59dab5b3a283f919cb8bffb6e5eb13",
-        "finalArtifactSha256": "28c7e475bd64cfeb5d991ca644cd9ae65c9c5fb288d7e620fc5891cbed02f137",
+        "sourceCommit": "8959805113f67ded6d537b9aa78ac685a1f0efa4",
+        "finalArtifactSha256": "4918b2201852364d6f20cf4be7bf63cb3efcea6588f030be77dd552977cb2940",
         "runnerTreeSha256": "c70c6d835dae46d525b513bcf6828cb1fe551289d8aa231fa4f52a8d6fac4cce",
         "comparisonPath": "spec/compatibility/closure/evidence/FUNCTIONS-HTTP-comparison.json",
-        "comparisonSha256": "15e153d78a83e1089af461b5df0b33ca69b0f0bf4d0da18e47b41d2feab8919b",
+        "comparisonSha256": "0e021b4cf185ff58252ea33b8b65d4ba3f2ee19bf2a9d62456ad89aad402662a",
         "strictProductionRows": {
           "MATCH": 68
         },

@@ -12265,7 +12265,14 @@ fn sign_in_with_idp(
         } else {
             identity
         };
-        match store.sign_in_with_idp(identity, info.email_verified, at) {
+        // Production creates an account without the email another account holds (record-saml
+        // 7789f0, observed for OIDC); the official emulator stores it.
+        let duplicate_email = if strict_oidc {
+            fireemu_core_auth::store::DuplicateIdpEmail::Omitted
+        } else {
+            fireemu_core_auth::store::DuplicateIdpEmail::Stored
+        };
+        match store.sign_in_with_idp_as(identity, info.email_verified, at, duplicate_email) {
             Ok(fireemu_core_auth::store::IdpSignIn::SignedIn {
                 uid,
                 is_new,

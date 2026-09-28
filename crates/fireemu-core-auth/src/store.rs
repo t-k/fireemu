@@ -168,6 +168,17 @@ pub enum IdpSignIn {
     },
 }
 
+/// How a federated sign-in's new account holds an email another account already holds (with
+/// `allowDuplicateEmails`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DuplicateIdpEmail {
+    /// The new account holds the email too, as the official emulator does.
+    Stored,
+    /// The new account holds no email; its provider information keeps it (production,
+    /// AUTH-FEDERATION record-saml 7789f0, 2026-09-28).
+    Omitted,
+}
+
 /// Out-of-band (email action) code kinds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OobRequestType {
@@ -3660,6 +3671,18 @@ impl AuthStore {
         email_verified: bool,
         now: LogicalInstant,
     ) -> Result<IdpSignIn, AuthError> {
+        self.sign_in_with_idp_as(identity, email_verified, now, DuplicateIdpEmail::Stored)
+    }
+
+    /// [`Self::sign_in_with_idp`], with how a new account holds an email another account
+    /// already holds (only possible with `allowDuplicateEmails`).
+    pub fn sign_in_with_idp_as(
+        &mut self,
+        identity: FederatedIdentity,
+        email_verified: bool,
+        now: LogicalInstant,
+        duplicate_email: DuplicateIdpEmail,
+    ) -> Result<IdpSignIn, AuthError> {
         // Before anything is created, recycled or copied into a profile.
         identity.validate()?;
         // 1. An account already linking this exact provider identity signs straight in.
@@ -3719,9 +3742,12 @@ impl AuthStore {
             }
         }
         // 3. No match: a new account, linked to the identity.
+        let email = identity.email.clone().filter(|email| {
+            duplicate_email == DuplicateIdpEmail::Stored || !self.email_owned_by_other(email, None)
+        });
         let new_user = NewUser {
-            email: identity.email.clone(),
-            email_verified: identity.email.is_some() && email_verified,
+            email_verified: email.is_some() && email_verified,
+            email,
             provider: Provider::Federated(identity.provider_id.clone()),
         };
         let uid = if self.config.allow_duplicate_emails {

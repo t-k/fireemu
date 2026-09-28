@@ -1037,3 +1037,78 @@ fn strict_refuses_a_configured_google_provider_it_cannot_verify_as_production_do
         "configured google.com",
     );
 }
+
+#[test]
+fn a_new_account_whose_email_another_holds_has_no_email() {
+    // record-saml 7789f0 (duplicate-email-lookup): with duplicate emails allowed, an OIDC
+    // sign-in whose email a password account holds creates an account without an email. The
+    // answer names the email; the ID token and the lookup do not, and the provider information
+    // keeps it.
+    let s = strict_state();
+    allow_duplicate_emails(&s);
+    let owner = handle(
+        &s,
+        "POST",
+        &format!("{V1}/accounts:signUp"),
+        &json!({"email": "shared@example.com", "password": "fireemu-password", "returnSecureToken": true}),
+    );
+    assert_eq!(owner.status, 200, "{}", owner.body);
+    let mut shared = claims();
+    shared["email"] = json!("shared@example.com");
+    shared["email_verified"] = json!(true);
+    let signed = sign_in(&s, &request(&token(&shared)));
+    assert_eq!(signed.status, 200, "{}", signed.body);
+    assert_eq!(signed.body["isNewUser"], true);
+    assert_eq!(signed.body["email"], "shared@example.com");
+    assert_eq!(signed.body["emailVerified"], true);
+    assert_ne!(signed.body["localId"], owner.body["localId"]);
+    let token_claims = id_token_claims(&signed);
+    assert!(token_claims.get("email").is_none(), "{token_claims}");
+    assert!(
+        token_claims.get("email_verified").is_none(),
+        "{token_claims}"
+    );
+    assert_eq!(
+        token_claims["firebase"]["identities"],
+        json!({PROVIDER: ["strict-subject"]})
+    );
+    let lookup = handle(
+        &s,
+        "POST",
+        &format!("{V1}/accounts:lookup"),
+        &json!({"idToken": signed.body["idToken"]}),
+    );
+    let user = &lookup.body["users"][0];
+    assert!(user.get("email").is_none(), "{user}");
+    assert!(user.get("emailVerified").is_none(), "{user}");
+    assert_eq!(user["providerUserInfo"][0]["email"], "shared@example.com");
+    // The owner keeps the email.
+    let store = s.store.lock().unwrap();
+    assert_eq!(
+        store
+            .user_by_email("shared@example.com")
+            .unwrap()
+            .local_id
+            .as_str(),
+        owner.body["localId"].as_str().unwrap()
+    );
+}
+
+#[test]
+fn a_new_account_whose_email_nobody_holds_keeps_it() {
+    let s = strict_state();
+    allow_duplicate_emails(&s);
+    let mut own = claims();
+    own["email"] = json!("own@example.com");
+    own["email_verified"] = json!(true);
+    let signed = sign_in(&s, &request(&token(&own)));
+    assert_eq!(signed.status, 200, "{}", signed.body);
+    assert_eq!(id_token_claims(&signed)["email"], "own@example.com");
+}
+
+fn allow_duplicate_emails(s: &AuthState) {
+    let mut store = s.store.lock().unwrap();
+    let mut config = store.config();
+    config.allow_duplicate_emails = true;
+    store.set_config(config);
+}

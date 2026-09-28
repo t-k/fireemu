@@ -317,6 +317,55 @@ fn duplicate_email_mode_refuses_password_duplicates_and_admits_idp_accounts() {
 }
 
 #[test]
+fn an_omitted_duplicate_email_leaves_the_new_account_without_one() {
+    // AUTH-FEDERATION record-saml 7789f0: production's new account holds no email another
+    // account holds; its provider information keeps it, and the owner keeps the email.
+    use fireemu_core_auth::store::{DuplicateIdpEmail, IdpSignIn};
+    let mut s = store();
+    let owner = s
+        .create_user(NewUser::email("shared@example.com"), t0())
+        .unwrap();
+    s.set_config(ProjectAuthConfig {
+        allow_duplicate_emails: true,
+        ..ProjectAuthConfig::default()
+    });
+    let Ok(IdpSignIn::SignedIn { uid, is_new, .. }) = s.sign_in_with_idp_as(
+        federated("oidc.partner", "subject-1", Some("Shared@example.com")),
+        true,
+        t(1),
+        DuplicateIdpEmail::Omitted,
+    ) else {
+        panic!("expected a completed IdP sign-in");
+    };
+    assert!(is_new);
+    let user = s.user(&uid).unwrap();
+    assert_eq!(user.email, None);
+    assert!(!user.email_verified);
+    assert_eq!(
+        user.federated[0].email.as_deref(),
+        Some("Shared@example.com")
+    );
+    assert_eq!(
+        s.user_by_email("shared@example.com").unwrap().local_id,
+        owner
+    );
+    // An email nobody holds is stored.
+    let Ok(IdpSignIn::SignedIn { uid, .. }) = s.sign_in_with_idp_as(
+        federated("oidc.partner", "subject-2", Some("own@example.com")),
+        true,
+        t(2),
+        DuplicateIdpEmail::Omitted,
+    ) else {
+        panic!("expected a completed IdP sign-in");
+    };
+    assert_eq!(
+        s.user(&uid).unwrap().email.as_deref(),
+        Some("own@example.com")
+    );
+    assert!(s.user(&uid).unwrap().email_verified);
+}
+
+#[test]
 fn a_verified_idp_email_recycling_an_account_keeps_its_password_change_time() {
     // AUTH-FEDERATION record-oidc 39209e: production's lookup of the recycled account still
     // reports `passwordUpdatedAt`, as after an Admin password removal.

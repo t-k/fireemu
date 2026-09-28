@@ -12,6 +12,23 @@ const CHECKPOINTS = [
   "rules-after-2",
   "final",
 ];
+const rulesStates = new WeakMap();
+
+/** Require the original Rules state bound to the canonical plan and recording. */
+export function verifyProductionRulesBinding(state, supplied) {
+  try {
+    const proof = record(supplied, ["plan", "recording"]),
+      binding = rulesStates.get(state);
+    return (
+      Object.keys(proof).length === 2 &&
+      binding !== undefined &&
+      proof.recording === binding.recording &&
+      isDeepStrictEqual(copy(proof.plan), binding.plan)
+    );
+  } catch {
+    return false;
+  }
+}
 const sha256 = (value) => createHash("sha256").update(value).digest("hex");
 const ascii = (value, max) =>
   typeof value === "string" && /^[\x21-\x7e]+$/.test(value) && value.length <= max;
@@ -317,7 +334,7 @@ export function createProductionRulesState(input) {
   function deletion(result) {
     if (result.status !== 200 || Object.keys(result.data).length !== 0) throw new Error();
   }
-  return Object.freeze({
+  const state = Object.freeze({
     async checkpoint(label, recipeToken) {
       if (closed || failed) throw new Error("production Rules are unavailable");
       if (
@@ -405,4 +422,6 @@ export function createProductionRulesState(input) {
       closed = true;
     },
   });
+  rulesStates.set(state, { plan, recording });
+  return state;
 }

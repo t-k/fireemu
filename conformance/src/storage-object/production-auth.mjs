@@ -8,6 +8,38 @@ import { parseCaptureJsonSpans } from "./production-capture-body.mjs";
 const sha256 = (value) => createHash("sha256").update(value).digest("hex");
 const ascii = (value, max) =>
   typeof value === "string" && /^[\x21-\x7e]+$/.test(value) && value.length <= max;
+const authStates = new WeakMap();
+
+/** Verify the original state and its canonical production recording without invoking caller hooks. */
+export function verifyProductionAuthBinding(state, supplied) {
+  try {
+    const proof = record(supplied, ["plan", "recording"]),
+      binding = authStates.get(state);
+    return (
+      Object.keys(proof).length === 2 &&
+      binding !== undefined &&
+      proof.recording === binding.recording &&
+      isDeepStrictEqual(planCopy(proof.plan), binding.plan)
+    );
+  } catch {
+    return false;
+  }
+}
+
+/** Cleanup is terminal only after the original recipe capability and final proof persistence succeed. */
+export function verifyProductionAuthRecipeTerminal(state, supplied) {
+  try {
+    const proof = record(supplied, ["recipeId", "recipeToken"]);
+    return (
+      Object.keys(proof).length === 2 &&
+      typeof proof.recipeId === "string" &&
+      proof.recipeToken !== undefined &&
+      authStates.get(state)?.terminal(proof) === true
+    );
+  } catch {
+    return false;
+  }
+}
 function record(value, keys) {
   if (
     !value ||
@@ -153,7 +185,17 @@ export function createProductionAuthState(input) {
     programs = new Map(
       recipes.map((recipe, index) => [
         recipe.id,
-        { recipe, index: index + 1, setup: false, refresh: false, cleanup: false },
+        {
+          recipe,
+          index: index + 1,
+          setup: false,
+          refresh: false,
+          cleanup: false,
+          capability: undefined,
+          refreshCapability: undefined,
+          cleanupCapability: undefined,
+          cleanupComplete: false,
+        },
       ]),
     );
   for (const program of programs.values())
@@ -494,6 +536,7 @@ export function createProductionAuthState(input) {
         absent: true,
       }),
     );
+    admitted(result.requestContext);
   }
   async function run(stage, recipeId, capability) {
     const program = programs.get(recipeId);
@@ -509,6 +552,9 @@ export function createProductionAuthState(input) {
       throw new Error("invalid production Auth stage");
     busy = true;
     program[stage] = true;
+    if (stage === "setup") program.capability = capability;
+    if (stage === "refresh") program.refreshCapability = capability;
+    if (stage === "cleanup") program.cleanupCapability = capability;
     try {
       admitted(
         context(
@@ -527,6 +573,7 @@ export function createProductionAuthState(input) {
           capability,
         );
       }
+      if (stage === "cleanup") program.cleanupComplete = true;
     } catch {
       subjectFailed = true;
       clearCredentials();
@@ -535,7 +582,7 @@ export function createProductionAuthState(input) {
       busy = false;
     }
   }
-  return Object.freeze({
+  const state = Object.freeze({
     setup: (recipeId, capability) => run("setup", recipeId, capability),
     refresh: (recipeId, capability) => run("refresh", recipeId, capability),
     cleanup: (recipeId, capability) => run("cleanup", recipeId, capability),
@@ -627,4 +674,27 @@ export function createProductionAuthState(input) {
       clearCredentials();
     },
   });
+  authStates.set(state, {
+    plan,
+    recording,
+    terminal(proof) {
+      const program = programs.get(proof.recipeId);
+      return (
+        !busy &&
+        !closed &&
+        program !== undefined &&
+        program.setup &&
+        program.cleanupComplete &&
+        program.capability === proof.recipeToken &&
+        program.cleanupCapability === proof.recipeToken &&
+        (!program.refresh || program.refreshCapability === proof.recipeToken) &&
+        ["valid", "competitor"].every((kind) =>
+          ["unobserved", "absent", "absent-after-delete"].includes(
+            accounts.get(program.recipe.accounts[kind].ref).state,
+          ),
+        )
+      );
+    },
+  });
+  return state;
 }

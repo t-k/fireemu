@@ -64,6 +64,14 @@ function readSet(rows, { name, bucket, present }) {
 
 /** Replay one canonical local Auth program; credentials stay inside the counted sender. */
 export async function replayLocalAuth({ sender, recipe, bucket, prefix, onCapture } = {}) {
+  return replayAuthCore({ sender, recipe, bucket, prefix, onCapture });
+}
+
+/** Share object proofs and cleanup while the facade selects its account and Rules lifecycle. */
+export async function replayAuthCore(
+  { sender, recipe, bucket, prefix, onCapture } = {},
+  production = null,
+) {
   if (typeof onCapture !== "function") throw new Error("private Auth capture is required");
   const owned = new Set(),
     controls = [],
@@ -88,12 +96,21 @@ export async function replayLocalAuth({ sender, recipe, bucket, prefix, onCaptur
     };
   }
   async function capture(operationId, response) {
-    await onCapture({
-      operationId,
-      status: response.status,
-      headers: response.headers,
-      bodyBase64: response.raw.toString("base64"),
-    });
+    await onCapture(
+      production
+        ? {
+            operationId,
+            status: response.status,
+            bodyByteLength: response.raw.length,
+            bodySha256: digest(response.raw),
+          }
+        : {
+            operationId,
+            status: response.status,
+            headers: response.headers,
+            bodyBase64: response.raw.toString("base64"),
+          },
+    );
     return response;
   }
   const send = async (step) => capture(step.id, await sender.sendStep(step));
@@ -114,14 +131,21 @@ export async function replayLocalAuth({ sender, recipe, bucket, prefix, onCaptur
   }
   try {
     await sender.start();
-    await sender.verifyLocalAuthRules();
+    if (production) await production.before();
+    else await sender.verifyLocalAuthRules();
     await sender.admitNamespace();
     namespaceReady = true;
     for (const probe of recipe.probes) sender.admitObject(probe.objectName);
-    for (const [stepIndex, step] of recipe.accountSetup.entries()) {
-      currentId = `${recipe.id}/${step.id}`;
-      await capture(currentId, await sender.sendAuthStep({ recipe, stepIndex }));
-    }
+    if (production) {
+      currentId = `${recipe.id}/account-setup`;
+      await production.setup();
+      currentId = `${recipe.id}/account-refresh`;
+      await production.refresh();
+    } else
+      for (const [stepIndex, step] of recipe.accountSetup.entries()) {
+        currentId = `${recipe.id}/${step.id}`;
+        await capture(currentId, await sender.sendAuthStep({ recipe, stepIndex }));
+      }
     for (const [probeIndex, probe] of recipe.probes.entries()) {
       await reads(probe, probe.initial, "initial", false);
       let mutationId = null;
@@ -174,7 +198,15 @@ export async function replayLocalAuth({ sender, recipe, bucket, prefix, onCaptur
       currentId = `${recipe.id}/${probe.id}/subject`;
       const subject = await capture(
         currentId,
-        await sender.sendAuthSubject({ recipe, probeIndex }),
+        production
+          ? await sender.sendStep({
+              ...probe.subject,
+              id: currentId,
+              dialect: "firebase",
+              headers:
+                probe.action === "write" ? { "content-type": "application/octet-stream" } : {},
+            })
+          : await sender.sendAuthSubject({ recipe, probeIndex }),
       );
       const subjectId = currentId,
         accepted = subject.status === 200;
@@ -225,7 +257,12 @@ export async function replayLocalAuth({ sender, recipe, bucket, prefix, onCaptur
       });
     }
   } catch {
-    failure = { id: currentId, reason: "LOCAL_AUTH_REQUEST_OR_PROOF_FAILED" };
+    failure = {
+      id: currentId,
+      reason: production
+        ? "PRODUCTION_AUTH_REQUEST_OR_PROOF_FAILED"
+        : "LOCAL_AUTH_REQUEST_OR_PROOF_FAILED",
+    };
   }
   if (namespaceReady && sender.snapshot().mode === "subject") {
     sender.beginCleanup();
@@ -252,20 +289,33 @@ export async function replayLocalAuth({ sender, recipe, bucket, prefix, onCaptur
         });
       }
     }
-    for (const [cleanupIndex, step] of recipe.accountCleanup.entries()) {
-      const kind = step.id.startsWith("valid-") ? "valid" : "competitor";
-      const state = sender.authAccountSnapshot({ recipe })[kind];
-      if (["unobserved", "absent", "absent-after-delete"].includes(state)) continue;
-      const operationId = `${recipe.id}/${step.id}`;
+    if (production) {
       try {
-        await capture(operationId, await sender.sendAuthStep({ recipe, cleanupIndex }));
+        await production.cleanup();
+        if (!production.verifyTerminal()) throw new Error();
       } catch {
-        cleanupFailures.push({ accountKind: kind, reason: "LOCAL_AUTH_ACCOUNT_CLEANUP_FAILED" });
+        cleanupFailures.push({ reason: "PRODUCTION_AUTH_ACCOUNT_CLEANUP_FAILED" });
       }
-    }
+      try {
+        await production.after();
+      } catch {
+        cleanupFailures.push({ reason: "PRODUCTION_AUTH_RULES_CHECKPOINT_FAILED" });
+      }
+    } else
+      for (const [cleanupIndex, step] of recipe.accountCleanup.entries()) {
+        const kind = step.id.startsWith("valid-") ? "valid" : "competitor";
+        const state = sender.authAccountSnapshot({ recipe })[kind];
+        if (["unobserved", "absent", "absent-after-delete"].includes(state)) continue;
+        const operationId = `${recipe.id}/${step.id}`;
+        try {
+          await capture(operationId, await sender.sendAuthStep({ recipe, cleanupIndex }));
+        } catch {
+          cleanupFailures.push({ accountKind: kind, reason: "LOCAL_AUTH_ACCOUNT_CLEANUP_FAILED" });
+        }
+      }
     if (sender.unresolved().length === 0 && cleanupFailures.length === 0) {
       try {
-        await sender.verifyLocalAuthRules();
+        if (!production) await sender.verifyLocalAuthRules();
         await sender.verifyRunEmpty();
         sender.close();
       } catch {
@@ -273,15 +323,21 @@ export async function replayLocalAuth({ sender, recipe, bucket, prefix, onCaptur
       }
     }
   }
-  const unresolved = sender.unresolved();
+  const unresolved = [...sender.unresolved(), ...(production?.unresolved() ?? [])];
   return {
     recipeId: recipe.id,
     status:
       unresolved.length || cleanupFailures.length
-        ? "LOCAL_NEEDS_RECOVERY"
+        ? production
+          ? "PRODUCTION_REPLAY_NEEDS_RECOVERY"
+          : "LOCAL_NEEDS_RECOVERY"
         : failure
-          ? "LOCAL_BLOCKED"
-          : "LOCAL_COMPLETE",
+          ? production
+            ? "PRODUCTION_REPLAY_BLOCKED"
+            : "LOCAL_BLOCKED"
+          : production
+            ? "PRODUCTION_REPLAY_COMPLETE"
+            : "LOCAL_COMPLETE",
     controls,
     initialSeedObservations,
     requests: sender.snapshot().total,

@@ -14,6 +14,23 @@ import { buildSymbolicStorageAuthPlan } from "./auth-plan.mjs";
 const MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
 const senderClosureProofs = new WeakMap();
 const productionSenders = new WeakSet();
+const productionSenderBindings = new WeakMap();
+
+/** Require the original production sender and its exact recipe capability and plan. */
+export function verifyProductionSenderBinding(sender, supplied) {
+  try {
+    const proof = productionRecord(supplied, ["plan", "recipeToken"]),
+      binding = productionSenderBindings.get(sender);
+    return (
+      Object.keys(proof).length === 2 &&
+      binding !== undefined &&
+      proof.recipeToken === binding.recipeToken &&
+      isDeepStrictEqual(productionData(proof.plan), binding.plan)
+    );
+  } catch {
+    return false;
+  }
+}
 
 /** Verify a module-private terminal proof against the actual active recipe and sequence. */
 export function verifyLocalRecipeTerminal(sender, proof) {
@@ -124,6 +141,7 @@ export function createProductionStorageSender(input) {
       },
     );
     productionSenders.add(sender);
+    productionSenderBindings.set(sender, { plan: options.plan, recipeToken: options.recipeToken });
     return sender;
   } catch {
     throw new Error("invalid production sender configuration");

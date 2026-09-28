@@ -615,6 +615,64 @@ test("close inside secret registration cannot dispatch a later account helper", 
   );
 });
 
+test("private Auth terminal evidence binds setup, refresh and cleanup to the original capability", async () => {
+  for (const changedStage of ["setup", "refresh", "cleanup"])
+    await fixture(async (f) => {
+      const capability = Object.freeze({}),
+        foreign = Object.freeze({}),
+        recipe = recipes[0];
+      await f.state.setup(recipe.id, changedStage === "setup" ? foreign : capability);
+      await f.state.refresh(recipe.id, changedStage === "refresh" ? foreign : capability);
+      await f.state.cleanup(recipe.id, changedStage === "cleanup" ? foreign : capability);
+      // This mock accepts foreign capabilities; the real finite dispatcher rejects them earlier.
+      assert.equal(f.state.snapshot().unresolved.length, 0);
+      assert.equal(
+        module.verifyProductionAuthRecipeTerminal(f.state, {
+          recipeId: recipe.id,
+          recipeToken: capability,
+        }),
+        false,
+      );
+      assert.equal(
+        module.verifyProductionAuthRecipeTerminal(f.state, {
+          recipeId: recipe.id,
+          recipeToken: foreign,
+        }),
+        false,
+      );
+    });
+});
+
+test("closing during final Auth cleanup persistence prevents terminal publication", async () => {
+  let state;
+  await fixture(
+    async (f) => {
+      state = f.state;
+      const capability = Object.freeze({}),
+        recipe = recipes[0];
+      await state.setup(recipe.id, capability);
+      await state.refresh(recipe.id, capability);
+      await assert.rejects(state.cleanup(recipe.id, capability), /unavailable/);
+      assert.equal(f.calls.length, 22);
+      assert.equal(
+        module.verifyProductionAuthRecipeTerminal(state, {
+          recipeId: recipe.id,
+          recipeToken: capability,
+        }),
+        false,
+      );
+    },
+    {
+      options: {
+        onProof: async (row) => {
+          if (row.type === "production-auth-cleanup" && row.accountRef.endsWith(":competitor"))
+            state.close();
+        },
+      },
+    },
+  );
+});
+
 test("dispatch context rejects coercion and nested Proxy values without stopping the valid pair", async () => {
   let hooks = 0;
   const revoked = Proxy.revocable({}, {});

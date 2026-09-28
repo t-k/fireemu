@@ -158,9 +158,12 @@ async function sourceTree() {
  * The public evidence of a comparison, refused when the fixture changed after the check: the
  * digest is the one the check compared against (closure review S4).
  */
-export function comparisonEvidence(comparison, currentFixtureSha256) {
+export function comparisonEvidence(comparison, currentFixtureSha256, suite = SUITE) {
   if (comparison.fixtureSha256 !== currentFixtureSha256)
     throw new Error("the fixture changed after the check; run the check again");
+  // The run directory holds one suite's comparison at a time.
+  if (comparison.suite !== suite)
+    throw new Error(`the last check compared the ${comparison.suite} suite, not ${suite}`);
   return {
     kind: "auth-tenant-blocking-comparison-v1",
     artifactSha256: comparison.artifactSha256,
@@ -1331,7 +1334,7 @@ async function runLocalSession(programs) {
     ],
     {
       cwd: CONFORMANCE_DIR,
-      stdio: ["ignore", "inherit", "pipe"],
+      stdio: ["ignore", "pipe", "pipe"],
       env: {
         ...withoutLockCapability(),
         ...(functions ? { FIREEMU_RUNNER_NODE: join(RUNNER_DIR, "index.mjs") } : {}),
@@ -1343,7 +1346,12 @@ async function runLocalSession(programs) {
       },
     },
   );
+  // The daemon's start banner (`functions loaded:`) is on its stdout, its notes on stderr.
   let daemonOutput = "";
+  child.stdout.on("data", (chunk) => {
+    daemonOutput += chunk;
+    process.stdout.write(chunk);
+  });
   child.stderr.on("data", (chunk) => {
     daemonOutput += chunk;
     process.stderr.write(chunk);
@@ -1415,7 +1423,7 @@ async function check() {
   const fixtureSha256 = existsSync(FIXTURE) ? sha256(await readFile(FIXTURE, "utf8")) : undefined;
   await writeFile(
     join(RUN_DIR, "comparison.json"),
-    `${JSON.stringify({ artifact: local.binary, artifactSha256, fixtureSha256, runnerSha256: await runnerSha256(), ...(await sourceTree()), summary, orphans, failures: local.failures, rows }, null, 2)}\n`,
+    `${JSON.stringify({ suite: SUITE, artifact: local.binary, artifactSha256, fixtureSha256, runnerSha256: await runnerSha256(), ...(await sourceTree()), summary, orphans, failures: local.failures, rows }, null, 2)}\n`,
   );
   const passing = new Set(["MATCH", "MATCH_NONDETERMINISTIC"]);
   for (const row of rows.filter((r) => !passing.has(r.status))) {

@@ -1052,13 +1052,16 @@ test("a comparison's evidence is bound to the fixture it was checked against (cl
     runnerSha256: "r".repeat(64),
     sourceCommit: "c".repeat(40),
     treeClean: true,
+    suite: "tenant",
     summary: { MATCH: 1 },
     rows: [{ row: "atb/tenant/manage#x", status: "MATCH", production: {}, fireemu: {} }],
   };
-  const evidence = comparisonEvidence(comparison, "f".repeat(64));
+  const evidence = comparisonEvidence(comparison, "f".repeat(64), "tenant");
   assert.equal(evidence.fixtureSha256, "f".repeat(64));
   assert.equal(evidence.runnerSha256, "r".repeat(64));
   assert.equal(evidence.sourceCommit, "c".repeat(40));
   assert.deepEqual(evidence.rows, [{ row: "atb/tenant/manage#x", status: "MATCH" }]);
-  assert.throws(() => comparisonEvidence(comparison, "e".repeat(64)), /fixture changed/);
+  assert.throws(() => comparisonEvidence(comparison, "e".repeat(64), "tenant"), /fixture changed/);
+  // A leftover comparison of the other suite is not exported under this one.
+  assert.throws(() => comparisonEvidence(comparison, "f".repeat(64), "blocking"), /tenant suite/);
 });

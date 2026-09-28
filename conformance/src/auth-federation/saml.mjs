@@ -283,7 +283,8 @@ export function samlResponse({
 
 /**
  * A signed SAMLResponse (base64 of the document): `sign` is "assertion", "response" or
- * "both" (the assertion is signed first, so the response signature covers it).
+ * "both" (the assertion is signed first, so the response signature covers it), or "none"
+ * (an unsigned response).
  */
 export function signedSamlResponse(
   fields,
@@ -308,6 +309,15 @@ export function signedSamlResponse(
   }
   const xml = serializeDocument(signedResponse);
   return { xml, base64: Buffer.from(xml, "utf8").toString("base64") };
+}
+
+/** `xml` with the first character of its first SignatureValue changed: no longer verifies. */
+export function tamperSignature(xml) {
+  if (!xml.includes("<ds:SignatureValue>")) throw new Error("no signature to tamper with");
+  return xml.replace(
+    /<ds:SignatureValue>(.)/,
+    (_, c) => `<ds:SignatureValue>${c === "A" ? "B" : "A"}`,
+  );
 }
 
 /** A query parameter decoded without turning `+` into a space (base64 keeps its `+`). */

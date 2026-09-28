@@ -329,7 +329,8 @@
       "recipeIds": [
         "auth-federation/saml/sign-in",
         "auth-federation/saml/conditions",
-        "auth-federation/saml/certificate"
+        "auth-federation/saml/certificate",
+        "auth-federation/saml/signature"
       ],
       "configProjections": [
         "strict"
@@ -391,7 +392,8 @@
       "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
       "recipeIds": [
         "auth-federation/create-auth-uri",
-        "auth-federation/saml/acs"
+        "auth-federation/saml/acs",
+        "auth-federation/oidc/scopes"
       ],
       "configProjections": [
         "strict"

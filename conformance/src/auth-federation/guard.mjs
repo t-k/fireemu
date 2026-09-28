@@ -126,17 +126,31 @@ function assertHost(value, ctx, key) {
     throw new Error(`${key} host ${host} is not reviewed`);
 }
 
+/** The run's own SAML IdP entity ID (corpus-saml.mjs): the project's web.app host, the run. */
+const runSamlIdp = (ctx) => ({
+  test: (issuer) => issuer === `https://${ctx.project}.web.app/saml/${checkRun(ctx.run)}`,
+});
+
 /** Whether `value` is a credential the run made: synthetic text or a JWS of the run's key. */
 export function isRunCredential(value, ctx) {
   if (typeof value !== "string" || value === "") return true;
   if (value.startsWith("fireemu-")) return true;
-  // A SAMLResponse (base64 XML): every certificate it carries is one this run made.
+  // A SAMLResponse (base64 XML): every certificate it carries is one this run made, or it is
+  // unsigned and issued by the run's own SAML IdP (no credential at all).
   const xml = Buffer.from(value, "base64").toString("utf8");
   if (xml.includes("<samlp:Response")) {
     const carried = [...xml.matchAll(/<ds:X509Certificate>([^<]*)<\/ds:X509Certificate>/g)].map(
       (match) => match[1].replaceAll(/\s/g, ""),
     );
-    return carried.length > 0 && carried.every((c) => ctx.runCertificates?.includes(c) ?? false);
+    if (carried.length === 0) {
+      const issuers = [...xml.matchAll(/<saml:Issuer>([^<]*)<\/saml:Issuer>/g)].map((m) => m[1]);
+      return (
+        !xml.includes("Signature") &&
+        issuers.length > 0 &&
+        issuers.every((issuer) => runSamlIdp(ctx).test(issuer))
+      );
+    }
+    return carried.every((c) => ctx.runCertificates?.includes(c) ?? false);
   }
   const [header] = value.split(".");
   try {

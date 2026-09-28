@@ -785,3 +785,86 @@ test("recordings mask ISO times in messages and an AuthnRequest ID of any hex le
   assert.equal(request(`_${"a".repeat(32)}`), request(`_${"b".repeat(31)}`));
   assert.ok(request(`_${"a".repeat(32)}`).includes('ID="<id:_hex>"'));
 });
+
+test("the follow-up corpus sends a tampered and an unsigned response of the run's IdP only", async () => {
+  const { materialize } = await import("./auth-federation/run.mjs");
+  const { generateKeyPairSync } = await import("node:crypto");
+  const { deflateRawSync } = await import("node:zlib");
+  const { privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+  const certificate = "UlVOLUNFUlQ=";
+  const saml = {
+    keys: {
+      run: {
+        privateKey,
+        certificatePem: `-----BEGIN CERTIFICATE-----\n${certificate}\n-----END CERTIFICATE-----`,
+      },
+    },
+    now: () => 1_790_000_000,
+  };
+  const request =
+    '<samlp:AuthnRequest xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" ID="_req7" AssertionConsumerServiceURL="https://sp.example/acs"><saml:Issuer xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion">sp</saml:Issuer></samlp:AuthnRequest>';
+  const authUri = `https://idp.example/sso?SAMLRequest=${encodeURIComponent(deflateRawSync(Buffer.from(request)).toString("base64"))}&RelayState=relay-7`;
+  const raw = new Map([["auth-uri", { authUri, sessionId: "s-7" }]]);
+  const runIdp = `https://${SANDBOX_PROJECT}.web.app/saml/${RUN}`;
+  const spec = {
+    request: "auth-uri",
+    issuer: runIdp,
+    audience: "sp",
+    destination: "https://sp.example/acs",
+    nameId: "user@example.com",
+  };
+  const decode = (value) => Buffer.from(value, "base64").toString("utf8");
+  const signed = decode(materialize({ $saml: spec }, raw, {}, saml));
+  const tampered = decode(materialize({ $saml: { ...spec, tamper: true } }, raw, {}, saml));
+  const signature = (xml) => xml.match(/<ds:SignatureValue>([^<]*)</)[1];
+  // Only the first character of the signature differs from a signed response's form.
+  assert.notEqual(signature(tampered)[0], signature(signed)[0]);
+  assert.equal(signature(tampered).length, signature(signed).length);
+  const unsigned = decode(materialize({ $saml: { ...spec, sign: "none" } }, raw, {}, saml));
+  assert.ok(!unsigned.includes("Signature") && !unsigned.includes("X509Certificate"), unsigned);
+  assert.ok(unsigned.includes('InResponseTo="_req7"'), unsigned);
+  // The guard sends a tampered response carrying the run's certificate, and an unsigned one
+  // only when every issuer in it is the run's own IdP.
+  const ctx = production({ runCertificates: [certificate] });
+  const post = (xml) =>
+    send(
+      ctx,
+      "POST",
+      "/v1/accounts:signInWithIdp",
+      idp({
+        providerId: `saml.fireemu-${RUN}-sg`,
+        SAMLResponse: Buffer.from(xml).toString("base64"),
+      }),
+    );
+  assert.doesNotThrow(() => post(tampered));
+  assert.doesNotThrow(() => post(unsigned));
+  for (const foreign of [
+    unsigned.replaceAll(runIdp, "https://idp.example/saml"),
+    unsigned.replaceAll(runIdp, `https://${SANDBOX_PROJECT}.web.app/saml/d4e5f6`),
+    unsigned.replaceAll(runIdp, `https://other-project.web.app/saml/${RUN}`),
+  ]) {
+    assert.throws(() => post(foreign), /credential/);
+  }
+  // A signature by another certificate is still refused, unsigned or not.
+  assert.throws(() => post(signed.replaceAll(certificate, "T1RIRVI=")), /credential/);
+});
+
+test("the follow-up issuer lists its scopes in the discovery document it publishes", async () => {
+  const { discoveryDocument, issuerSite } = await import("./auth-federation/idp.mjs");
+  const { FOLLOWUP_DISCOVERY_SCOPES } = await import("./auth-federation/corpus-followup.mjs");
+  const issuer = `https://${CHANNEL}/oidc/${RUN}`;
+  assert.equal(discoveryDocument(issuer).scopes_supported, undefined);
+  assert.deepEqual(
+    discoveryDocument(issuer, { scopes: FOLLOWUP_DISCOVERY_SCOPES }).scopes_supported,
+    ["profile", "openid", "email", "phone"],
+  );
+  const key = generateSigningKey({ kid: "run-kid" });
+  const site = issuerSite({ issuer, run: RUN, jwks: [key.jwk], scopes: FOLLOWUP_DISCOVERY_SCOPES });
+  const published = JSON.parse(site.files[`/oidc/${RUN}/.well-known/openid-configuration`]);
+  assert.deepEqual(published.scopes_supported, FOLLOWUP_DISCOVERY_SCOPES);
+  const plain = issuerSite({ issuer, run: RUN, jwks: [key.jwk] });
+  assert.equal(
+    JSON.parse(plain.files[`/oidc/${RUN}/.well-known/openid-configuration`]).scopes_supported,
+    undefined,
+  );
+});

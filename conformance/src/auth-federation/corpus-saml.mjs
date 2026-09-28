@@ -23,8 +23,8 @@ const SSO = "https://{project}.web.app/saml/RUN/sso";
 const SP = "https://{project}.firebaseapp.com/saml/RUN";
 const CALLBACK = "https://{project}.firebaseapp.com/__/auth/handler";
 
-const samlProvider = (letters) => `saml.fireemu-RUN-${letters}`;
-const createSaml = (letters, certificate = "saml-a") =>
+export const samlProvider = (letters) => `saml.fireemu-RUN-${letters}`;
+export const createSaml = (letters, certificate = "saml-a") =>
   admin("create-provider", "POST", "inboundSamlConfigs", {
     query: { inboundSamlConfigId: samlProvider(letters) },
     body: {
@@ -37,13 +37,13 @@ const createSaml = (letters, certificate = "saml-a") =>
       enabled: true,
     },
   });
-const authUri = (id, letters, continueUri = CALLBACK) =>
+export const authUri = (id, letters, continueUri = CALLBACK) =>
   client(id, "createAuthUri", { providerId: samlProvider(letters), continueUri });
 /**
  * A SAML sign-in answering the AuthnRequest of step `request`, with its session and relay
  * state. `spec` changes the response (see run.mjs `samlValue`).
  */
-const samlSignIn = (id, letters, request, spec = {}) =>
+export const samlSignIn = (id, letters, request, spec = {}) =>
   client(id, "signInWithIdp", {
     requestUri: CALLBACK,
     sessionId: from(`${request}:sessionId`),

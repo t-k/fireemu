@@ -214,7 +214,7 @@ async function rehearse(packet = "record-oidc") {
   const keys = prepareKeys();
   const secretDir = await mkdtemp(join(tmpdir(), "fireemu-rehearsal-"));
   try {
-    const saml = packet === "record-saml" ? await prepareSamlSigners(secretDir) : undefined;
+    const saml = profileOf(packet).samlSigners ? await prepareSamlSigners(secretDir) : undefined;
     const certificatePem = saml ? undefined : await makeCertificate(secretDir, "saml-a");
     const issuer = `https://${SANDBOX_PROJECT}--fed-${run}-rehearse.web.app/oidc/${run}`;
     const exportKey = (key) => ({
@@ -253,6 +253,9 @@ async function rehearse(packet = "record-oidc") {
             [issuer]: {
               ...jwksDocument(keys.run.jwk),
               authorization_endpoint: discoveryDocument(issuer).authorization_endpoint,
+              ...(profileOf(packet).discoveryScopes
+                ? { scopes_supported: profileOf(packet).discoveryScopes }
+                : {}),
             },
           },
         },
@@ -323,5 +326,6 @@ async function rehearse(packet = "record-oidc") {
 const mode = process.argv[1] === fileURLToPath(import.meta.url) ? process.argv[2] : undefined;
 if (mode === "session") await sessionRehearsal();
 else if (mode === "record-saml") await rehearse("record-saml");
+else if (mode === "record-followup") await rehearse("record-followup");
 else if (mode === undefined && process.argv[1] === fileURLToPath(import.meta.url)) await rehearse();
 else if (mode !== undefined) throw new Error(`unknown mode ${mode}`);

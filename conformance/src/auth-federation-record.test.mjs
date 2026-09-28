@@ -624,7 +624,11 @@ test("a record-saml recording writes its own action, limits and account cap to t
   const { result, ledger } = await campaign(failing, {
     profile: saml,
     certificatePem: undefined,
-    signers: { certificates: { "saml-a": "A", "saml-expired": "B" }, keys: {}, runCertificates: [] },
+    signers: {
+      certificates: { "saml-a": "A", "saml-expired": "B" },
+      keys: {},
+      runCertificates: [],
+    },
   });
   assert.equal(result.outcome, "failed-cleaned", JSON.stringify(result));
   assert.equal(ledger[0].event, "started");
@@ -635,4 +639,49 @@ test("a record-saml recording writes its own action, limits and account cap to t
   assert.deepEqual(ledger[0].touchedBefore, { "signIn.allowDuplicateEmails": false });
   assert.deepEqual(ledger[0].defaultIdpsAbsentBefore, ["google.com"]);
   assert.equal(ledger.at(-1).action, "record-saml");
+});
+
+test("record-followup's envelope: a small recording, no new account expected, its own fixture", async () => {
+  const { FOLLOWUP_PROGRAMS, FOLLOWUP_DISCOVERY_SCOPES } =
+    await import("./auth-federation/corpus-followup.mjs");
+  const followup = PROFILES["record-followup"];
+  assert.equal(followup.limits.api + followup.limits.issuer, followup.runner.maxRequests);
+  assert.equal(followup.runner.reserveUsd, 1);
+  // Every sign-in of this corpus is one production refuses: at most 2 accounts per pass cap a
+  // surprise acceptance.
+  assert.ok(followup.accountLimit * 2 <= 4);
+  assert.ok(followup.passLimit * 2 < followup.limits.api);
+  assert.equal(followup.programs, FOLLOWUP_PROGRAMS);
+  assert.equal(followup.samlSigners, true);
+  assert.deepEqual(followup.discoveryScopes, FOLLOWUP_DISCOVERY_SCOPES);
+  for (const other of ["record-oidc", "record-saml"]) {
+    assert.notEqual(followup.fixture, PROFILES[other].fixture);
+    assert.equal(PROFILES[other].discoveryScopes, undefined, other);
+  }
+});
+
+test("a record-followup recording publishes its issuer's scopes and cleans up", async () => {
+  const env = sandbox();
+  const { result, ledger } = await campaign(env, {
+    profile: PROFILES["record-followup"],
+    certificatePem: undefined,
+    signers: {
+      certificates: { "saml-a": "A", "saml-expired": "B" },
+      keys: {},
+      runCertificates: [],
+    },
+  });
+  const discovery = Object.entries(env.site.state.served).find(([path]) =>
+    path.endsWith("/.well-known/openid-configuration"),
+  );
+  assert.ok(discovery, JSON.stringify(result));
+  assert.deepEqual(JSON.parse(discovery[1]).scopes_supported, [
+    "profile",
+    "openid",
+    "email",
+    "phone",
+  ]);
+  assert.equal(ledger[0].action, "record-followup");
+  assert.equal(ledger.at(-1).action, "record-followup");
+  assert.equal(env.site.state.versionDeleted, true);
 });

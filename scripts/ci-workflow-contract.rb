@@ -17,10 +17,8 @@ jobs = workflow.fetch("jobs")
 trigger = workflow["on"] || workflow[true]
 assert(trigger.key?("workflow_dispatch"), "CI must retain a manual full-suite trigger")
 
-automatic = jobs.map do |name, definition|
-  name unless definition.fetch("if", "").include?("workflow_dispatch")
-end.compact
-assert(automatic == ["pr"], "only the minimal pr job may run automatically, found #{automatic.join(', ')}")
+assert(trigger.key?("pull_request"), "CI must run on pull requests")
+assert(trigger.dig("push", "branches") == ["main"], "CI must run on pushes to main")
 
 pr = jobs.fetch("pr")
 assert(!pr.key?("needs"), "the minimal pr job must not depend on manual jobs")
@@ -85,8 +83,9 @@ release_source = File.read(File.join(ROOT, ".github", "workflows", "release.yml"
 assert(!release_source.include?("NPM_TOKEN"), "release publish must authenticate through Trusted Publishing")
 assert(!release_source.include?("NODE_AUTH_TOKEN"), "release publish must not inject a registry token")
 
+# The full suite runs on every trigger: pull requests, pushes to main and manual dispatch.
 %w[lint test verify platforms package ui].each do |name|
-  assert(jobs.fetch(name).fetch("if") == "${{ github.event_name == 'workflow_dispatch' }}", "#{name} must be manual-only before publication")
+  assert(!jobs.fetch(name).key?("if"), "#{name} must run on pull requests and on pushes to main, not only on manual dispatch")
 end
 
 jobs.each do |job, definition|

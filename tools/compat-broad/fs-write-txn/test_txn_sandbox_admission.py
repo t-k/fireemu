@@ -127,6 +127,57 @@ def test_sandbox_idle_uses_maximum_timestamp_and_rejects_unparseable_rows():
         admission.verify_send_gates([older, malformed], NOW, DECISION, PINS)
 
 
+def recovery_row(outcome, *, attempt="prior-recovery", project="fireemu-oracle-sbx", task="FS-TRANSACTION-SANDBOX", ts="2026-09-28T01:50:05.141352Z"):
+    return {"ts": ts, "project": project, "taskId": task, "outcome": outcome,
+            "packetId": "historical-packet", "attemptId": attempt, "runDir": f"/private/{attempt}"}
+
+
+@pytest.mark.parametrize("interruption", ["none", "different-attempt", "different-project", "later-different-project", "different-task"])
+def test_equal_timestamp_reservation_then_recovery_uses_the_later_append(interruption):
+    opened = recovery_row("reserved")
+    closed = recovery_row("recovered-exact-name")
+    between = []
+    if interruption == "different-attempt":
+        between = [recovery_row("reserved", attempt="other-attempt"), recovery_row("recorded", attempt="other-attempt")]
+    elif interruption == "different-project":
+        between = [recovery_row("reserved", attempt="other-project", project="fireemu-oracle-idp")]
+    elif interruption == "different-task":
+        between = [recovery_row("reserved", attempt="other-task", task="FS-DATA-WRITE-SANDBOX"), recovery_row("recorded", attempt="other-task", task="FS-DATA-WRITE-SANDBOX")]
+    after = [recovery_row("reserved", attempt="other-project", project="fireemu-oracle-idp")] if interruption == "later-different-project" else []
+    now = datetime(2026, 9, 28, 2, 30, tzinfo=timezone.utc)
+    assert admission.verify_send_gates([opened, *between, closed, *after], now, DECISION, PINS) == closed["ts"]
+
+
+@pytest.mark.parametrize("foreign", [False, True])
+def test_equal_timestamp_terminal_then_reservation_is_still_open(foreign):
+    rows = [recovery_row("recovered-exact-name"), recovery_row("reserved")]
+    if foreign:
+        rows += [recovery_row("recorded", attempt="other-attempt"), recovery_row("recorded", project="fireemu-oracle-idp")]
+    with pytest.raises(ValueError, match="open attempt"):
+        admission.verify_send_gates(rows, datetime(2026, 9, 28, 2, 30, tzinfo=timezone.utc), DECISION, PINS)
+
+
+@pytest.mark.parametrize("mismatch", ["attempt", "project"])
+def test_equal_timestamp_recovery_cannot_close_a_different_reservation(mismatch):
+    opened = recovery_row("reserved")
+    closed = recovery_row("recovered-exact-name", attempt="other-attempt" if mismatch == "attempt" else "prior-recovery",
+                          project="fireemu-oracle-idp" if mismatch == "project" else "fireemu-oracle-sbx")
+    with pytest.raises(ValueError, match="open attempt"):
+        admission.verify_send_gates([opened, closed], datetime(2026, 9, 28, 2, 30, tzinfo=timezone.utc), DECISION, PINS)
+
+
+@pytest.mark.parametrize("newer_terminal", [False, True])
+def test_task_latest_timestamp_remains_primary_over_append_order(newer_terminal):
+    newer = recovery_row("recorded" if newer_terminal else "needs-recovery")
+    older = recovery_row("needs-recovery" if newer_terminal else "recorded", ts="2026-09-28T01:50:05.141351Z")
+    now = datetime(2026, 9, 28, 2, 30, tzinfo=timezone.utc)
+    if newer_terminal:
+        assert admission.verify_send_gates([newer, older], now, DECISION, PINS) == newer["ts"]
+    else:
+        with pytest.raises(ValueError, match="needs recovery"):
+            admission.verify_send_gates([newer, older], now, DECISION, PINS)
+
+
 def test_parent_task_revocation_also_refuses_a_direct_approval():
     revoked = (
         "- 2026-09-28 | FS-TRANSACTION | REVOKED | オーナー | "

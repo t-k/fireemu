@@ -227,7 +227,8 @@ def verify_send_gates(rows, now, decisions, pins):
                 raise ValueError("the sandbox has an open attempt")
     task_rows = [row for row in sandbox if row.get("taskId") == "FS-TRANSACTION-SANDBOX"]
     if task_rows:
-        most_recent = max(task_rows, key=lambda row: _instant(row["ts"]))
+        # Equal timestamps use the later append as the latest responsibility state.
+        most_recent = max(reversed(task_rows), key=lambda row: _instant(row["ts"]))
         if not _terminal(most_recent):
             raise ValueError("the FS-TRANSACTION sandbox attempt needs recovery")
     activity = [

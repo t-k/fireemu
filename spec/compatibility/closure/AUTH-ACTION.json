@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "parent": "AUTH-ACTION",
-  "parentStatus": "IMPLEMENTING",
+  "parentStatus": "COMPAT_VERIFIED",
   "oracleTrack": "disposable-sandbox",
   "scopeDecisions": [
     {
@@ -495,8 +495,8 @@
       "configProjections": [
         "default"
       ],
-      "status": "PENDING_REVIEW",
-      "note": "Independent clean-context closure and security review of the final artifact and evidence.",
+      "status": "VERIFIED",
+      "note": "Re-promotion on the integrated v0.8.0 release artifact: the final evidence of every condition, bound to artifact ca106b00, is reproduced row for row by release binary c258b022 (integratedRegression).",
       "evidence": {
         "productionRecordings": [
           {
@@ -530,15 +530,40 @@
     }
   ],
   "closureReview": {
-    "decision": "PENDING_REVIEW",
-    "decidedOn": "2026-09-25",
-    "reviewer": "independent clean-context closure review and security review of artifact bf3c6b12, a clean-context confirmation review of their follow-ups on artifact 06bbbf6f, the independent promotion review of 2026-09-25 (promotion kept, conditionally), and a clean-context confirmation review of the follow-up directive's fixes on artifact ca106b00",
-    "reviewedCommit": "8097c7c01",
+    "decision": "APPROVED",
+    "decidedOn": "2026-09-28",
+    "decider": "project coordinator (delegated by the owner; owner ledger 2026-09-24, A12 decision: AUTH-ACCOUNT and AUTH-CREDENTIAL are re-promoted by the Claude lane on the final artifact; 2026-09-25: AUTH-ACTION with them on the integrated release artifact)",
+    "reviewer": "re-promotion on the integrated release artifact, checked by the independent v0.8.0 integration review",
+    "reviewedCommit": "2079e0146f4eb6ad72da4449f5e2557fc81000e5",
     "finalArtifactSha256": "ca106b009c547fbe426fd7ed6ef579d5bddef023d31b6b5793381a5e514cb7ef",
-    "report": "docs.local/reviews/2026-09-25-auth-action-follow-up-confirmation.md (private; earlier: 2026-09-24-auth-action-confirmation-review.md, -closure-review.md, -security-review.md, and docs.local/instructions/2026-09-24-auth-action-promotion-review.md)",
+    "integratedArtifactSha256": "c258b022c5f452a60a9bc60de68e6de26b3f5aeaf846623cf1bf7e33f28d31df",
+    "basis": "integratedRegression: every row of the committed lane comparison is identical on the release binary built from the integration head, with no production request.",
+    "previousReport": "docs.local/reviews/2026-09-25-auth-action-follow-up-confirmation.md (private; earlier: 2026-09-24-auth-action-confirmation-review.md, -closure-review.md, -security-review.md, and docs.local/instructions/2026-09-24-auth-action-promotion-review.md)",
     "followUps": "Non-blocking and tracked privately (docs.local/issues/open/auth-action-unobserved-edges.md): code lifetimes beyond one hour, VERIFY_EMAIL supersession (unobservable under production's per-address limit), sessions after an email link removes a password, a client sign-in link for a disabled account, a link sign-in of a disabled account, and a closure-test count of rows whose dependency returned nothing. After the follow-up directive: pinning that the emulator profile spends a code whose address nobody owns, and the official emulator's order of the weak-password check before the owner lookup (confirmation review S1, S2).",
     "previousDecision": "APPROVED",
-    "previousFinalArtifactSha256": "ca106b009c547fbe426fd7ed6ef579d5bddef023d31b6b5793381a5e514cb7ef",
-    "nextReviewRequired": "Re-promotion on the integrated release artifact together with AUTH-ACCOUNT and AUTH-CREDENTIAL (owner decision, 2026-09-25): an independent review of the integrated artifact and every declared condition, with the E9 known difference expected to match once A12 is resolved."
+    "previousFinalArtifactSha256": "ca106b009c547fbe426fd7ed6ef579d5bddef023d31b6b5793381a5e514cb7ef"
+  },
+  "integratedRegression": {
+    "release": "v0.8.0",
+    "integrationCommit": "2079e0146f4eb6ad72da4449f5e2557fc81000e5",
+    "releaseBinarySha256": "c258b022c5f452a60a9bc60de68e6de26b3f5aeaf846623cf1bf7e33f28d31df",
+    "buildReceiptPath": "spec/compatibility/closure/evidence/integration-v0.8.0/release-artifact.json",
+    "buildReceiptSha256": "b6aeba829940617796300d16807b5e9aeac39d9fb9fc165f7e84e57d92a8c86e",
+    "comparisons": [
+      {
+        "path": "spec/compatibility/closure/evidence/integration-v0.8.0/AUTH-ACTION-comparison.json",
+        "sha256": "a01c7b1fef608c0ccf486d014172e9afe7e577212e0f55b7dd15bd1351c638f7",
+        "rows": 346,
+        "summary": {
+          "MATCH": 346
+        },
+        "laneComparisonPath": "spec/compatibility/closure/evidence/AUTH-ACTION-comparison.json",
+        "laneComparisonSha256": "01f41572fcd9d619996ba8257635235073a561cf1ee62e4b5bf7850ecf4288a5",
+        "identicalRows": 346,
+        "changedRows": []
+      }
+    ],
+    "result": "IDENTICAL_TO_LANE",
+    "productionRequests": 0
   }
 }

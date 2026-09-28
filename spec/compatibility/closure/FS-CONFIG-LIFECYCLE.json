@@ -700,5 +700,30 @@
         }
       }
     }
-  ]
+  ],
+  "integratedRegression": {
+    "release": "v0.8.0",
+    "integrationCommit": "2079e0146f4eb6ad72da4449f5e2557fc81000e5",
+    "releaseBinarySha256": "c258b022c5f452a60a9bc60de68e6de26b3f5aeaf846623cf1bf7e33f28d31df",
+    "buildReceiptPath": "spec/compatibility/closure/evidence/integration-v0.8.0/release-artifact.json",
+    "buildReceiptSha256": "b6aeba829940617796300d16807b5e9aeac39d9fb9fc165f7e84e57d92a8c86e",
+    "comparisons": [
+      {
+        "path": "spec/compatibility/closure/evidence/integration-v0.8.0/FS-CONFIG-LIFECYCLE-comparison.json",
+        "sha256": "af24ae7980442ac6040e7fb114944462722b19d22fbdf07e324da73bee97ca31",
+        "rows": 270,
+        "summary": {
+          "MATCH": 264,
+          "MATCH_RELABELED": 3,
+          "MATCH_NONDETERMINISTIC": 3
+        },
+        "laneComparisonPath": "spec/compatibility/closure/evidence/FS-CONFIG-LIFECYCLE-comparison.json",
+        "laneComparisonSha256": "3e9570fea280a2ffc14831877a87656bc6e52856068e1937aedd19c5ea3b1da3",
+        "identicalRows": 270,
+        "changedRows": []
+      }
+    ],
+    "result": "IDENTICAL_TO_LANE",
+    "productionRequests": 0
+  }
 }

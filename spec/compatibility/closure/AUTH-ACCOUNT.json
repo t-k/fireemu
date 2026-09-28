@@ -1,18 +1,20 @@
 {
   "schemaVersion": 1,
   "parent": "AUTH-ACCOUNT",
-  "parentStatus": "IMPLEMENTING",
+  "parentStatus": "COMPAT_VERIFIED",
   "oracleTrack": "disposable-sandbox",
   "closureReview": {
-    "decision": "PENDING_REVIEW",
-    "decidedOn": "2026-09-24",
-    "reviewer": "independent clean-context closure and security review (round 3)",
-    "reviewedCommit": "3eb68306a",
-    "finalArtifactSha256": "db8cafcd1c4dc8d56113a9b6b4c7dbd255154071f1a5c95dd27db2b43537ede4",
+    "decision": "APPROVED",
+    "decidedOn": "2026-09-28",
+    "decider": "project coordinator (delegated by the owner; owner ledger 2026-09-24, A12 decision: AUTH-ACCOUNT and AUTH-CREDENTIAL are re-promoted by the Claude lane on the final artifact; 2026-09-25: AUTH-ACTION with them on the integrated release artifact)",
+    "reviewer": "re-promotion on the integrated release artifact, checked by the independent v0.8.0 integration review",
+    "reviewedCommit": "2079e0146f4eb6ad72da4449f5e2557fc81000e5",
+    "finalArtifactSha256": "a8bfc5dc1737dee01bae028b2e3dd421f04326e12640cb4936d896ebfcfa358a",
+    "integratedArtifactSha256": "c258b022c5f452a60a9bc60de68e6de26b3f5aeaf846623cf1bf7e33f28d31df",
+    "basis": "integratedRegression: every row of the committed lane comparison is identical on the release binary built from the integration head, with no production request.",
     "followUps": "Non-blocking Should items are tracked outside the closure (security hardening of hash verification under the store lock, duplicate-email password reset, export restorability of out-of-bound hashes, standard scrypt parallelism bound, handwritten figures).",
     "previousDecision": "APPROVED",
-    "previousFinalArtifactSha256": "db8cafcd1c4dc8d56113a9b6b4c7dbd255154071f1a5c95dd27db2b43537ede4",
-    "nextReviewRequired": "Independent review of the current source-bound artifact and all declared AUTH-ACCOUNT conditions."
+    "previousFinalArtifactSha256": "db8cafcd1c4dc8d56113a9b6b4c7dbd255154071f1a5c95dd27db2b43537ede4"
   },
   "scopeDecisions": [
     {
@@ -1034,7 +1036,7 @@
       "configProjections": [
         "default"
       ],
-      "status": "PENDING_REVIEW",
+      "status": "VERIFIED",
       "evidence": {
         "productionRecordings": [
           {
@@ -1056,8 +1058,8 @@
             "project": "fireemu-oracle-idp"
           }
         ],
-        "finalArtifactSha256": "db8cafcd1c4dc8d56113a9b6b4c7dbd255154071f1a5c95dd27db2b43537ede4",
-        "sourceCommit": "b25d7499290d4321000cb8ba99d975274a20daed",
+        "finalArtifactSha256": "a8bfc5dc1737dee01bae028b2e3dd421f04326e12640cb4936d896ebfcfa358a",
+        "sourceCommit": "c86b8490c1717bce2881eac051bef94388a84001",
         "comparisonPath": "spec/compatibility/closure/evidence/AUTH-ACCOUNT-comparison.json",
         "reviews": [
           {
@@ -1078,7 +1080,30 @@
           }
         ]
       },
-      "note": "The prior approval remains historical and is bound to the previous artifact; this source-bound artifact needs a fresh full closure review."
+      "note": "Re-promotion on the integrated v0.8.0 release artifact: the final evidence of every condition, bound to artifact a8bfc5dc, is reproduced row for row by release binary c258b022 (integratedRegression)."
     }
-  ]
+  ],
+  "integratedRegression": {
+    "release": "v0.8.0",
+    "integrationCommit": "2079e0146f4eb6ad72da4449f5e2557fc81000e5",
+    "releaseBinarySha256": "c258b022c5f452a60a9bc60de68e6de26b3f5aeaf846623cf1bf7e33f28d31df",
+    "buildReceiptPath": "spec/compatibility/closure/evidence/integration-v0.8.0/release-artifact.json",
+    "buildReceiptSha256": "b6aeba829940617796300d16807b5e9aeac39d9fb9fc165f7e84e57d92a8c86e",
+    "comparisons": [
+      {
+        "path": "spec/compatibility/closure/evidence/integration-v0.8.0/AUTH-ACCOUNT-comparison.json",
+        "sha256": "f5ecd67769ee337e8d34035083ade6bc233cce4c9a91cc13483f6924df6d5134",
+        "rows": 631,
+        "summary": {
+          "MATCH": 631
+        },
+        "laneComparisonPath": "spec/compatibility/closure/evidence/AUTH-ACCOUNT-comparison.json",
+        "laneComparisonSha256": "f1a73cf9f2611005cad9e7f73922bc22257f66b2472397c418820d5f4e1082ec",
+        "identicalRows": 631,
+        "changedRows": []
+      }
+    ],
+    "result": "IDENTICAL_TO_LANE",
+    "productionRequests": 0
+  }
 }

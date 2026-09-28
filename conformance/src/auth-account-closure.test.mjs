@@ -246,7 +246,7 @@ test("AUTH-ACCOUNT A12 and final regression bind to the current attested artifac
   assert.deepEqual(a12.evidence.rows, { MATCH: 31 });
   assert.equal(a12.evidence.documentedDivergences, undefined);
   assert.equal(regression.status, "VERIFIED");
-  assert.equal(closure.parentStatus, "IMPLEMENTING");
+  assert.equal(closure.parentStatus, "COMPAT_VERIFIED");
   assert.equal(
     regression.evidence.finalArtifactSha256,
     "a8bfc5dc1737dee01bae028b2e3dd421f04326e12640cb4936d896ebfcfa358a",
@@ -256,7 +256,7 @@ test("AUTH-ACCOUNT A12 and final regression bind to the current attested artifac
     closure.conditions.find(
       ({ conditionId }) => conditionId === "AUTH-ACCOUNT/closure-review",
     ).status,
-    "PENDING_REVIEW",
+    "VERIFIED",
   );
 });
 

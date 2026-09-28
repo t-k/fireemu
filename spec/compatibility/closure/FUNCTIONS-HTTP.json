@@ -868,5 +868,28 @@
         "decisionRef": "docs.local/instructions/owner-decisions.md (2026-09-28 FUNCTIONS-HTTP promotion)"
       }
     }
-  ]
+  ],
+  "integratedRegression": {
+    "release": "v0.8.0",
+    "integrationCommit": "2079e0146f4eb6ad72da4449f5e2557fc81000e5",
+    "releaseBinarySha256": "c258b022c5f452a60a9bc60de68e6de26b3f5aeaf846623cf1bf7e33f28d31df",
+    "buildReceiptPath": "spec/compatibility/closure/evidence/integration-v0.8.0/release-artifact.json",
+    "buildReceiptSha256": "b6aeba829940617796300d16807b5e9aeac39d9fb9fc165f7e84e57d92a8c86e",
+    "comparisons": [
+      {
+        "path": "spec/compatibility/closure/evidence/integration-v0.8.0/FUNCTIONS-HTTP-comparison.json",
+        "sha256": "b306caf27efddaacdaa6d97d17d1b4d985445366a8ac956ebc8383bbdd6f6b13",
+        "rows": 68,
+        "summary": {
+          "MATCH": 68
+        },
+        "laneComparisonPath": "spec/compatibility/closure/evidence/FUNCTIONS-HTTP-comparison.json",
+        "laneComparisonSha256": "0e021b4cf185ff58252ea33b8b65d4ba3f2ee19bf2a9d62456ad89aad402662a",
+        "identicalRows": 68,
+        "changedRows": []
+      }
+    ],
+    "result": "IDENTICAL_TO_LANE",
+    "productionRequests": 0
+  }
 }

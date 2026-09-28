@@ -580,7 +580,7 @@
         "citations": [
           "crates/fireemu-adapter-grpc/src/rest/admin_fields.rs:695",
           "crates/fireemu-adapter-grpc/src/rest/admin_fields.rs:106",
-          "crates/fireemu-core-firestore/src/index.rs:254"
+          "crates/fireemu-core-firestore/src/index.rs:258"
         ],
         "status": "implemented"
       },
@@ -972,7 +972,7 @@
       "citations": [
         "crates/fireemu-adapter-grpc/src/rest/admin_fields.rs:536",
         "crates/fireemu/src/control.rs:148",
-        "crates/fireemu-core-firestore/src/index.rs:231"
+        "crates/fireemu-core-firestore/src/index.rs:235"
       ],
       "class": "data-plane-contract",
       "fixApplied": true,

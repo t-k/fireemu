@@ -699,5 +699,31 @@
     "finalArtifactSha256": "86172226d07d1f6e850a58934c24c650b05eda345361ab4058aaea174f921356",
     "report": "docs.local/reviews/2026-09-25-auth-mfa-follow-up-confirmation.md (private; earlier: docs.local/instructions/2026-09-25-auth-mfa-promotion-review.md, 2026-09-25-auth-mfa-follow-up-directive.md, docs.local/reviews/2026-09-25-auth-mfa-closure-review.md, -closure-confirmation.md, -safety-review.md, -safety-confirmation.md and the pre-send reviews)",
     "followUps": "Non-blocking and tracked privately (docs.local/issues/open/auth-mfa-unobserved-edges.md, mfa-pending-credential-survives-token-revocation.md): the per-account TOTP attempt quota, the unobserved gaps inside the measured brackets (TOTP pending, recent sign-in, SMS start), the SMS finalize after an accepted start, the phone enrollment session's lifetime past about 1803 seconds, a finalized TOTP session offered again before three attempts, fireemu's own per-user and per-account bounds, Admin entries with both phoneInfo and totpInfo, pending credentials after a refresh-token revocation (a password change was observed and production still completes), and tenant second factors (AUTH-TENANT-BLOCKING). The local check runs each program with a pinned clock so it is reproducible; the harness does not record the ages its SMS start rows reach (see the pending-credential-lifetime note)."
+  },
+  "integratedRegression": {
+    "release": "v0.8.0",
+    "integrationCommit": "2079e0146f4eb6ad72da4449f5e2557fc81000e5",
+    "releaseBinarySha256": "c258b022c5f452a60a9bc60de68e6de26b3f5aeaf846623cf1bf7e33f28d31df",
+    "buildReceiptPath": "spec/compatibility/closure/evidence/integration-v0.8.0/release-artifact.json",
+    "buildReceiptSha256": "b6aeba829940617796300d16807b5e9aeac39d9fb9fc165f7e84e57d92a8c86e",
+    "comparisons": [
+      {
+        "path": "spec/compatibility/closure/evidence/integration-v0.8.0/AUTH-MFA-comparison.json",
+        "sha256": "dcb6eec21b7116c7b8f26d81a4ac9a823229694ac6609f84279d206c3a92f752",
+        "rows": 449,
+        "summary": {
+          "MATCH": 441,
+          "MATCH_NONDETERMINISTIC": 5,
+          "REOBSERVED_MATCH": 2,
+          "MATCH_TIMING_DEPENDENT": 1
+        },
+        "laneComparisonPath": "spec/compatibility/closure/evidence/AUTH-MFA-comparison.json",
+        "laneComparisonSha256": "dc8c4530e9c59d29c0185324ae6cd030dec89a1dc140f302bb6f5c0c15cdbb25",
+        "identicalRows": 449,
+        "changedRows": []
+      }
+    ],
+    "result": "IDENTICAL_TO_LANE",
+    "productionRequests": 0
   }
 }

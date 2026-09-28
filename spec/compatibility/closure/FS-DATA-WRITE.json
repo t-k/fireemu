@@ -1591,5 +1591,50 @@
       "ownerDecision": "2026-09-28 FS-DATA-WRITE D-2",
       "reason": "Production's WebChannel form-body bound lies in (12,582,912, 16,777,216]: it accepted 12,582,912 bytes on a valid session and refused 16,777,216 with its HTML 400 page, after which the session was gone (follow-up recording, 2026-09-27, both passes). The bytes inside the interval are unobserved. Strict adopts the upper end as an estimate: it accepts up to 16,777,215 bytes and answers production's page and ends the session above it. Every recorded row matches."
     }
-  ]
+  ],
+  "integratedRegression": {
+    "release": "v0.8.0",
+    "integrationCommit": "2079e0146f4eb6ad72da4449f5e2557fc81000e5",
+    "releaseBinarySha256": "c258b022c5f452a60a9bc60de68e6de26b3f5aeaf846623cf1bf7e33f28d31df",
+    "buildReceiptPath": "spec/compatibility/closure/evidence/integration-v0.8.0/release-artifact.json",
+    "buildReceiptSha256": "b6aeba829940617796300d16807b5e9aeac39d9fb9fc165f7e84e57d92a8c86e",
+    "comparisons": [
+      {
+        "path": "spec/compatibility/closure/evidence/integration-v0.8.0/FS-DATA-WRITE-regression.json",
+        "sha256": "73d65d9277b7071344c27c1d925834b8bc362779300d43634381e7ce31bee381",
+        "rows": 115,
+        "laneComparisonPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-current-comparison.json",
+        "identicalRows": 115,
+        "changedRows": []
+      },
+      {
+        "path": "spec/compatibility/closure/evidence/integration-v0.8.0/FS-DATA-WRITE-LIST-comparison.json",
+        "sha256": "e41fd2b6181f0b682d3af066d7d0364ce3ca4a0301cba1ac6df0a58170e27688",
+        "rows": 201,
+        "summary": {
+          "MATCH": 200,
+          "MATCH_NONDETERMINISTIC": 1
+        },
+        "laneComparisonPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-LIST-comparison.json",
+        "laneComparisonSha256": "0a555ce6cd84fefe5d5278067dcc0d5b5fa96dcb86971d332191ecdf15df4754",
+        "identicalRows": 201,
+        "changedRows": []
+      },
+      {
+        "path": "spec/compatibility/closure/evidence/integration-v0.8.0/FS-QUERY-INDEX-comparison.json",
+        "sha256": "37d93ecb6b2c942dd8bf1d1bb4a1a10dbdabbfc6e0936478383b58d2914a437e",
+        "rows": 710,
+        "summary": {
+          "MATCH": 675,
+          "DIVERGENCE_APPROVED": 35
+        },
+        "laneComparisonPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-query-regression-comparison.json",
+        "laneComparisonSha256": "f1b17e9cfe1ea519c899fc168fe528e6fc937dabbd91e1191185270eb1275e1b",
+        "identicalRows": 710,
+        "changedRows": []
+      }
+    ],
+    "result": "IDENTICAL_TO_LANE",
+    "productionRequests": 0
+  }
 }

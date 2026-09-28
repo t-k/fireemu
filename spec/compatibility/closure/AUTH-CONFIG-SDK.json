@@ -906,5 +906,29 @@
     "finalArtifactSha256": "8c698a58c71af5779d6e94c33e89a8d0b8a1a600b6b6a1990d3373a0b79aa631",
     "report": "docs.local/reviews/2026-09-26-auth-config-sdk-final-review.md (private)",
     "followUps": "Non-blocking embedded multi-AuthState shared-store gate invariant: docs.local/issues/open/auth-config-shared-store-needs-shared-gate.md."
+  },
+  "integratedRegression": {
+    "release": "v0.8.0",
+    "integrationCommit": "2079e0146f4eb6ad72da4449f5e2557fc81000e5",
+    "releaseBinarySha256": "c258b022c5f452a60a9bc60de68e6de26b3f5aeaf846623cf1bf7e33f28d31df",
+    "buildReceiptPath": "spec/compatibility/closure/evidence/integration-v0.8.0/release-artifact.json",
+    "buildReceiptSha256": "b6aeba829940617796300d16807b5e9aeac39d9fb9fc165f7e84e57d92a8c86e",
+    "comparisons": [
+      {
+        "path": "spec/compatibility/closure/evidence/integration-v0.8.0/AUTH-CONFIG-SDK-comparison.json",
+        "sha256": "ae6030aec6c0ff0648749c4cbe015e21622ac1d46ee4c6c011d0c83c60ab9239",
+        "rows": 359,
+        "summary": {
+          "MATCH": 351,
+          "MISMATCH": 8
+        },
+        "laneComparisonPath": "spec/compatibility/closure/evidence/AUTH-CONFIG-SDK-comparison.json",
+        "laneComparisonSha256": "40c155247b30774ea87a277f421f444d985545c0a97db96e748d1f20b6883381",
+        "identicalRows": 359,
+        "changedRows": []
+      }
+    ],
+    "result": "IDENTICAL_TO_LANE",
+    "productionRequests": 0
   }
 }

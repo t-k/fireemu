@@ -257,7 +257,9 @@ test("the historical production regression ran on the release artifact and expla
     }
   }
   const text = JSON.stringify(report);
-  for (const forbidden of ["docs.local", "/Users/", "fireemu-oracle", "ya29.", "AIza"]) {
+  // The home-directory prefix is assembled so that this file does not itself carry one.
+  const home = ["", "Users", ""].join("/");
+  for (const forbidden of ["docs.local", home, "fireemu-oracle", "ya29.", "AIza"]) {
     assert.ok(!text.includes(forbidden), forbidden);
   }
 });

@@ -75,7 +75,6 @@ def fresh_local_replay() -> dict:
     run_path = Path(records[0]["runDir"]).resolve()
     runs_root = (REPOSITORY / "conformance/.runs").resolve()
     assert run_path.is_relative_to(runs_root)
-    assert replay.returncode == 1, replay.stdout + replay.stderr
     comparison_lines = []
     for line in replay.stdout.splitlines():
         try:
@@ -85,7 +84,11 @@ def fresh_local_replay() -> dict:
         if isinstance(record, dict) and "corpusDigest" in record:
             comparison_lines.append(record)
     assert len(comparison_lines) == 1, replay.stdout + replay.stderr
-    return {"path": run_path, "summary": comparison_lines[0]}
+    summary = comparison_lines[0]
+    # The checker exits 1 while any row differs and 0 once every row matches.
+    assert summary["mismatches"] == len(summary["differences"])
+    assert replay.returncode == (1 if summary["mismatches"] else 0), replay.stdout + replay.stderr
+    return {"path": run_path, "summary": summary}
 
 
 def test_current_rebind_is_source_bound_and_keeps_saved_recording_provenance(fresh_local_replay):

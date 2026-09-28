@@ -2375,25 +2375,12 @@ impl Drop for GeneratedLocalIdReservation {
     }
 }
 
-/// Runs `beforeSendEmail` before a mail is sent: the one place every email path (the client and
-/// Admin `sendOobCode`, in a project or a tenant) reaches. Production runs it for a password
-/// reset and an email sign-in mail, not for an email verification, and a refusal answers the
-/// request (AUTH-TENANT-BLOCKING recording 2026-09-28, send#*). A mail is about to be sent when
-/// the speculative request created its code: an unknown address that improved email privacy
-/// answers without a code runs nothing. Only the strict profile calls this; the official Auth
-/// emulator has no email event. The function's answer changes nothing
-/// (`recaptchaActionOverride` needs reCAPTCHA, which fireemu does not run: send#reset-mail-blocked
-/// is answered as a sent mail).
-fn before_send_email(
-    blocking: &dyn AuthBlockingHook,
-    before: &AuthStore,
-    after: &AuthStore,
-    project: &str,
-) -> Result<(), JsonResponse> {
-    if !blocking.handles(fireemu_core_functions::manifest::BlockingAuthEvent::BeforeSendEmail) {
-        return Ok(());
-    }
-    let Some((email, email_type)) = after.oob_codes().into_iter().find_map(|code| {
+/// The mail a request is about to send: a password reset or email sign-in code that `after`
+/// has and `before` did not, with its address and the kind of mail. An unknown address that
+/// improved email privacy answers without a code sends nothing, and an email verification is
+/// not a mail Identity Platform runs `beforeSendEmail` for.
+fn mail_about_to_be_sent(before: &AuthStore, after: &AuthStore) -> Option<(String, &'static str)> {
+    after.oob_codes().into_iter().find_map(|code| {
         let email_type = match code.request_type {
             OobRequestType::PasswordReset => "PASSWORD_RESET",
             OobRequestType::EmailSignIn => "EMAIL_SIGN_IN",
@@ -2403,13 +2390,25 @@ fn before_send_email(
             .oob_code(&code.code)
             .is_none()
             .then(|| (code.email.clone(), email_type))
-    }) else {
-        return Ok(());
-    };
+    })
+}
+
+/// Runs `beforeSendEmail` before a mail is sent: the one place every email path (the client and
+/// Admin `sendOobCode`, in a project or a tenant) reaches. Production runs it for a password
+/// reset and an email sign-in mail, and a refusal answers the request (AUTH-TENANT-BLOCKING
+/// recording 2026-09-28, send#*). Only the strict profile calls this; the official Auth
+/// emulator has no email event. The function's answer changes nothing
+/// (`recaptchaActionOverride` needs reCAPTCHA, which fireemu does not run: send#reset-mail-blocked
+/// is answered as a sent mail).
+fn before_send_email(
+    blocking: &dyn AuthBlockingHook,
+    (email, email_type): &(String, &'static str),
+    project: &str,
+) -> Result<(), JsonResponse> {
     // The event names neither a user nor a tenant, in a tenant too (send#link-mail-echo-in-tenant).
     let context = AuthBlockingContext {
-        email: Some(email),
-        email_type: Some(email_type.to_owned()),
+        email: Some(email.clone()),
+        email_type: Some((*email_type).to_owned()),
         ..AuthBlockingContext::default()
     };
     blocking
@@ -2556,8 +2555,18 @@ fn dispatch_with_blocking_hook(
     // sign-in (AUTH-TENANT-BLOCKING recording 2026-09-28, events#sign-up-anonymous and
     // custom-token#custom-*; the official Auth emulator runs none either).
     let runs_hooks = !matches!(sign_in_method.as_deref(), Some("anonymous" | "custom"));
-    if response.status == 200 && !state.stateless_refresh_tokens {
-        if let Err(refusal) = before_send_email(blocking, &live_snapshot, &candidate, &project) {
+    // The mail the speculative request is about to send, when this profile runs
+    // beforeSendEmail for it; the commit below must send the same one (security review S1).
+    let speculative_mail = (response.status == 200
+        && !state.stateless_refresh_tokens
+        && matches!(
+            handler,
+            routes::Handler::SendOobCode | routes::Handler::AdminSendOobCode
+        )
+        && blocking.handles(fireemu_core_functions::manifest::BlockingAuthEvent::BeforeSendEmail))
+    .then(|| mail_about_to_be_sent(&live_snapshot, &candidate));
+    if let Some(Some(mail)) = &speculative_mail {
+        if let Err(refusal) = before_send_email(blocking, mail, &project) {
             return refusal;
         }
     }
@@ -2760,6 +2769,14 @@ fn dispatch_with_blocking_hook(
         };
         if committed_response.status != 200 {
             return committed_response;
+        }
+        // A mail the function did not see is never sent: the live store may answer
+        // differently from the speculative copy (an address registered meanwhile, a setting
+        // changed), and then the request is refused rather than sent unchecked.
+        if let Some(expected) = &speculative_mail {
+            if mail_about_to_be_sent(&live, &committed) != *expected {
+                return error(409, "AUTH_STATE_CHANGED");
+            }
         }
         let uid = committed_response
             .body
@@ -3886,6 +3903,19 @@ fn handle_with_policy_inner(
     } else {
         None
     };
+    // A mail hook enabled after admission is not skipped on the Admin route either: the check
+    // the end-user routes make below comes after this route's own branch (security review S2).
+    if route.handler == routes::Handler::AdminSendOobCode
+        && !blocking_auth
+        && !state.stateless_refresh_tokens
+        && state.blocking.as_deref().is_some_and(|blocking| {
+            blocking.blocking_auth_revision() != blocking_revision
+                || (handler_runs_blocking_auth(state, blocking, route.handler)
+                    && blocking_hook_applies_to_project(state, blocking, &store_project))
+        })
+    {
+        return error(409, "BLOCKING_FUNCTION_CONFIGURATION_CHANGED");
+    }
     // The Admin link generator runs beforeSendEmail through the blocking path, as the client
     // route does (send#admin-reset-link-echo).
     if route.class != routes::RouteClass::EndUser

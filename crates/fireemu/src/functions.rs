@@ -2322,9 +2322,7 @@ async fn start_codebase(
             }
         }
         let mut manifest = parse_manifest(&manifest_json)?;
-        if cfg.profile == CompatibilityProfile::Emulator {
-            ignore_send_blocking_events(&mut manifest);
-        }
+        serve_blocking_events_for(cfg.profile, &mut manifest);
         // Before anything is served: every export the runner could not serve is either named in a
         // refusal or printed, one line each.
         let policy = UnservedTriggers::parse(&cfg.functions_unserved_triggers).unwrap_or_default();
@@ -2341,9 +2339,7 @@ async fn start_codebase(
                 .clone()
                 .ok_or_else(|| "the functions runner did not discover a manifest".to_owned())?;
             let mut discovered = parse_manifest(&discovered)?;
-            if cfg.profile == CompatibilityProfile::Emulator {
-                ignore_send_blocking_events(&mut discovered);
-            }
+            serve_blocking_events_for(cfg.profile, &mut discovered);
             check_manifest_agrees_on_blocking_auth(&manifest, &discovered)?;
             if callable_trusted_protocol {
                 check_manifest_agrees_on_callables(&manifest, &discovered)?;
@@ -2366,6 +2362,17 @@ async fn start_codebase(
         runner.kill_now();
     }
     configured
+}
+
+/// Leaves in service the blocking functions `profile` serves: the strict profile serves every
+/// Identity Platform event, the emulator profile the official emulator's two.
+fn serve_blocking_events_for(
+    profile: CompatibilityProfile,
+    manifest: &mut fireemu_core_functions::manifest::FunctionManifest,
+) {
+    if profile == CompatibilityProfile::Emulator {
+        ignore_send_blocking_events(manifest);
+    }
 }
 
 /// Keeps Identity Platform's email and SMS blocking functions out of service, as the official
@@ -5022,6 +5029,19 @@ mod tests {
                 ["functionUri"],
             "fireemu://functions/demo-app/us-central1/smsGuard"
         );
+        // A whole trigger map replaces every served event's selection.
+        strict
+            .replace_blocking_auth_settings_masked(
+                &json!({"triggers": {
+                    "beforeSendEmail": {"functionUri": "fireemu://functions/demo-app/us-central1/mailGuard"}
+                }}),
+                &["blockingFunctions.triggers".to_owned()],
+            )
+            .expect("a whole trigger map");
+        assert!(strict.handles(BlockingAuthEvent::BeforeSendEmail));
+        assert!(
+            strict.blocking_auth_settings_value().unwrap()["triggers"]["beforeSendSms"].is_null()
+        );
         // The same mask names nothing the emulator profile serves.
         emulator
             .replace_blocking_auth_settings_masked(
@@ -5153,6 +5173,114 @@ mod tests {
         runtime.shutdown().await;
     }
 
+    /// Each invocation path delivers its event to the selected function and answers what the
+    /// function answered (the fake runner echoes the request): the user events carry the
+    /// user, the mail event the address, and a bridge without the email event runs nothing.
+    #[tokio::test(flavor = "current_thread")]
+    async fn every_invocation_path_delivers_its_token_and_answers_the_function() {
+        use fireemu_adapter_http::identity_toolkit::{AuthBlockingContext, AuthBlockingHook};
+        use fireemu_core_auth::mfa::TotpPolicy;
+        use fireemu_core_auth::store::{AuthStore, NewUser};
+        use fireemu_core_functions::manifest::BlockingAuthEvent;
+        use fireemu_core_types::determinism::SplitMix64;
+        use fireemu_core_types::time::LogicalInstant;
+
+        let runtime = runtime_with_blocking_auth_targets(&[
+            ("createGuard", BlockingAuthEvent::BeforeCreate, false, false),
+            ("signInGuard", BlockingAuthEvent::BeforeSignIn, false, false),
+            (
+                "mailGuard",
+                BlockingAuthEvent::BeforeSendEmail,
+                false,
+                false,
+            ),
+        ])
+        .await;
+        let mut store = AuthStore::new("demo-app", SplitMix64::new(7), TotpPolicy::default());
+        let uid = store
+            .create_user(
+                NewUser::email("person@example.test"),
+                LogicalInstant::from_unix_seconds(1_788_004_860),
+            )
+            .unwrap();
+        let user = store.user_by_id(uid.as_str()).unwrap().clone();
+        let strict = Arc::new(
+            BlockingAuthBridge::new_with_selections(
+                runtime.clone(),
+                fireemu_core_functions::manifest::BlockingAuthSelections::default(),
+                false,
+            )
+            .with_send_events(true),
+        );
+        let emulator = Arc::new(BlockingAuthBridge::new_with_selections(
+            runtime.clone(),
+            fireemu_core_functions::manifest::BlockingAuthSelections::default(),
+            false,
+        ));
+        let token = |answer: &serde_json::Value| -> serde_json::Value {
+            let body: serde_json::Value =
+                serde_json::from_str(answer["body"].as_str().unwrap()).unwrap();
+            let jwt = body["data"]["jwt"].as_str().unwrap();
+            let payload = jwt.split('.').nth(1).unwrap();
+            serde_json::from_slice(&fireemu_core_auth::jwt::base64url_decode(payload).unwrap())
+                .unwrap()
+        };
+        let (answers, none) = tokio::task::spawn_blocking(move || {
+            let mail = AuthBlockingContext {
+                email: Some("person@example.test".to_owned()),
+                email_type: Some("PASSWORD_RESET".to_owned()),
+                ..AuthBlockingContext::default()
+            };
+            let answers = [
+                strict
+                    .invoke_for("demo-app", None, BlockingAuthEvent::BeforeCreate, &user)
+                    .unwrap(),
+                strict
+                    .invoke_for_with_context(
+                        "demo-app",
+                        Some("tenant-a"),
+                        BlockingAuthEvent::BeforeSignIn,
+                        &user,
+                        &AuthBlockingContext::default(),
+                    )
+                    .unwrap(),
+                strict.invoke_before_send_email("demo-app", &mail).unwrap(),
+            ];
+            let none = emulator
+                .invoke_before_send_email("demo-app", &mail)
+                .unwrap();
+            (answers, none)
+        })
+        .await
+        .unwrap();
+        assert_eq!(none, None);
+        let [create, sign_in, mail] = answers.map(Option::unwrap);
+        for (answer, function) in [
+            (&create, "createGuard"),
+            (&sign_in, "signInGuard"),
+            (&mail, "mailGuard"),
+        ] {
+            assert!(
+                answer["path"]
+                    .as_str()
+                    .unwrap()
+                    .ends_with(&format!("/{function}")),
+                "{answer}"
+            );
+        }
+        let create = token(&create);
+        assert_eq!(create["event_type"], "beforeCreate");
+        assert_eq!(create["sub"], uid.as_str());
+        let sign_in = token(&sign_in);
+        assert_eq!(sign_in["event_type"], "beforeSignIn");
+        assert_eq!(sign_in["tenant_id"], "tenant-a");
+        let mail = token(&mail);
+        assert_eq!(mail["event_type"], "beforeSendEmail");
+        assert_eq!(mail["email"], "person@example.test");
+        assert!(mail.get("sub").is_none() && mail.get("tenant_id").is_none());
+        runtime.shutdown().await;
+    }
+
     /// A mail event's token names the address and the kind of mail and no user
     /// (AUTH-TENANT-BLOCKING recording 2026-09-28, send#reset-mail-echo: `u` null, `au` email
     /// and isNewUser).
@@ -5191,7 +5319,10 @@ mod tests {
             {"name": "sms", "trigger": {"type": "blockingAuth", "eventType": "providers/cloud.auth/eventTypes/user.beforeSendSms"}},
         ]}))
         .unwrap();
-        super::ignore_send_blocking_events(&mut manifest);
+        let mut strict = manifest.clone();
+        super::serve_blocking_events_for(super::CompatibilityProfile::Strict, &mut strict);
+        assert_eq!(strict, manifest);
+        super::serve_blocking_events_for(super::CompatibilityProfile::Emulator, &mut manifest);
         assert_eq!(
             manifest
                 .functions

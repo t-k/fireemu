@@ -236,6 +236,21 @@ fn a_strict_update_takes_back_what_a_read_answered() {
         "https://us-central1-demo-app.cloudfunctions.net/a/b",
         "https://-demo-app.cloudfunctions.net/atbBeforeCreate",
         "http://us-central1-demo-app.cloudfunctions.net/atbBeforeCreate",
+        // Security review of 2026-09-28: userinfo, a port, a query or fragment, other paths,
+        // case, no path, and a name with a control character stay unmapped and are refused.
+        "https://u@us-central1-demo-app.cloudfunctions.net/f",
+        "https://us-central1-demo-app.cloudfunctions.net:443/f",
+        "https://us-central1-demo-app.cloudfunctions.net/f?x=1",
+        "https://us-central1-demo-app.cloudfunctions.net/f#x",
+        "https://us-central1-demo-app.cloudfunctions.net/f/",
+        "https://us-central1-demo-app.cloudfunctions.net/%2Ff",
+        "https://us-central1-demo-app.cloudfunctions.net/..",
+        "HTTPS://us-central1-demo-app.cloudfunctions.net/f",
+        "https://US-CENTRAL1-DEMO-APP.CLOUDFUNCTIONS.NET/f",
+        "https://us-central1-demo-app.cloudfunctions.net",
+        "https://us-central1-demo-app.cloudfunctions.net/f\u{0}",
+        "https://us-central1-demo-app.cloudfunctions.net/f\n",
+        "fireemu://functions/other-app/us-central1/f",
     ] {
         let (status, refused) = admin(
             &s,

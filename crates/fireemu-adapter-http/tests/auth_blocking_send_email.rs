@@ -4,6 +4,7 @@
 //! refusal answers the request. The official Auth emulator has no email event, so only the
 //! strict profile runs it.
 
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use fireemu_adapter_http::identity_toolkit::{
@@ -380,6 +381,12 @@ fn no_event_runs_without_a_reset_or_sign_in_mail_or_in_the_emulator_profile() {
         &json!({"requestType": "VERIFY_EMAIL", "idToken": created["idToken"]}),
     );
     assert_eq!(status, 200, "{body}");
+    let (status, body) = client(
+        &s,
+        &format!("{V1}/accounts:sendOobCode"),
+        &json!({"requestType": "VERIFY_AND_CHANGE_EMAIL", "idToken": created["idToken"], "newEmail": "refused-new@example.com"}),
+    );
+    assert_eq!(status, 200, "{body}");
     let (status, body) = admin(
         &s,
         "PATCH",
@@ -417,4 +424,246 @@ fn no_event_runs_without_a_reset_or_sign_in_mail_or_in_the_emulator_profile() {
             "strict {strict}, handles {handles}"
         );
     }
+}
+
+/// Deletes the address's account while `beforeSendEmail` runs, so the live store answers
+/// differently from the copy the function was asked about.
+struct DeletingHook {
+    store: Arc<Mutex<AuthStore>>,
+}
+
+impl AuthBlockingHook for DeletingHook {
+    fn handles(&self, event: BlockingAuthEvent) -> bool {
+        event == BlockingAuthEvent::BeforeSendEmail
+    }
+
+    fn invoke(
+        &self,
+        _event: BlockingAuthEvent,
+        _user: &fireemu_core_auth::store::UserRecord,
+    ) -> Result<Value, BlockingFunctionFailure> {
+        unreachable!("a mail event has no user")
+    }
+
+    fn invoke_before_send_email(
+        &self,
+        _project: &str,
+        context: &AuthBlockingContext,
+    ) -> Result<Option<Value>, BlockingFunctionFailure> {
+        let mut store = self.store.lock().unwrap();
+        let uid = store
+            .user_by_email(context.email.as_deref().unwrap())
+            .unwrap()
+            .local_id
+            .clone();
+        store.delete_user_by_id(uid.as_str()).unwrap();
+        Ok(None)
+    }
+}
+
+/// A mail is sent only as the function saw it: when the live store answers differently from
+/// the speculative copy, the request is refused and nothing is sent (security review S1).
+#[test]
+fn a_mail_the_function_did_not_see_is_never_sent() {
+    let (mut s, _) = state(true, true);
+    let (status, body) = admin(
+        &s,
+        "PATCH",
+        "/identitytoolkit.googleapis.com/admin/v2/projects/demo-app/config?updateMask=emailPrivacyConfig.enableImprovedEmailPrivacy",
+        &json!({"emailPrivacyConfig": {"enableImprovedEmailPrivacy": true}}),
+    );
+    assert_eq!(status, 200, "{body}");
+    create_account(
+        &s,
+        &format!("{V1}/projects/demo-app/accounts"),
+        "vanishing@example.com",
+    );
+    let tenant = create_tenant(&s);
+    s.blocking = Some(Arc::new(DeletingHook {
+        store: s.store.clone(),
+    }));
+    let before = codes(&s, &tenant);
+    let (status, body) = client(
+        &s,
+        &format!("{V1}/accounts:sendOobCode"),
+        &json!({"requestType": "PASSWORD_RESET", "email": "vanishing@example.com"}),
+    );
+    assert_eq!(status, 409, "{body}");
+    assert_eq!(body["error"]["message"], "AUTH_STATE_CHANGED");
+    assert_eq!(codes(&s, &tenant), before);
+}
+
+/// Answers that it runs `beforeSendEmail` only after its first answer, or changes its revision
+/// after the first read: a function enabled after the request was admitted.
+struct LateHook {
+    handles_calls: AtomicUsize,
+    revision_calls: AtomicUsize,
+    bump_revision: bool,
+}
+
+impl AuthBlockingHook for LateHook {
+    fn handles(&self, event: BlockingAuthEvent) -> bool {
+        event == BlockingAuthEvent::BeforeSendEmail
+            && !self.bump_revision
+            && self.handles_calls.fetch_add(1, Ordering::SeqCst) >= 1
+    }
+
+    fn blocking_auth_revision(&self) -> u64 {
+        u64::from(self.bump_revision && self.revision_calls.fetch_add(1, Ordering::SeqCst) >= 1)
+    }
+
+    fn invoke(
+        &self,
+        _event: BlockingAuthEvent,
+        _user: &fireemu_core_auth::store::UserRecord,
+    ) -> Result<Value, BlockingFunctionFailure> {
+        unreachable!("a mail event has no user")
+    }
+
+    fn invoke_before_send_email(
+        &self,
+        _project: &str,
+        _context: &AuthBlockingContext,
+    ) -> Result<Option<Value>, BlockingFunctionFailure> {
+        unreachable!("the request is refused before a function runs")
+    }
+}
+
+/// The Admin link generator does not skip a mail function enabled after the request was
+/// admitted: it answers the configuration change and returns no link (security review S2).
+#[test]
+fn the_admin_link_generator_does_not_skip_a_late_mail_function() {
+    for bump_revision in [false, true] {
+        let (mut s, _) = state(true, true);
+        create_account(
+            &s,
+            &format!("{V1}/projects/demo-app/accounts"),
+            "late@example.com",
+        );
+        let tenant = create_tenant(&s);
+        s.blocking = Some(Arc::new(LateHook {
+            handles_calls: AtomicUsize::new(0),
+            revision_calls: AtomicUsize::new(0),
+            bump_revision,
+        }));
+        let before = codes(&s, &tenant);
+        let (status, body) = admin(
+            &s,
+            "POST",
+            &format!("{V1}/projects/demo-app/accounts:sendOobCode"),
+            &json!({"requestType": "PASSWORD_RESET", "email": "late@example.com", "returnOobLink": true}),
+        );
+        assert_eq!(status, 409, "revision {bump_revision}: {body}");
+        assert_eq!(
+            body["error"]["message"], "BLOCKING_FUNCTION_CONFIGURATION_CHANGED",
+            "revision {bump_revision}"
+        );
+        assert!(body.get("oobLink").is_none());
+        assert_eq!(codes(&s, &tenant), before, "revision {bump_revision}");
+    }
+}
+
+/// The Admin link generator of a tenant is refused as the client route is: no code in the
+/// tenant's store and no link.
+#[test]
+fn a_refused_tenant_admin_link_leaves_no_code() {
+    let (s, mails) = state(true, true);
+    let tenant = create_tenant(&s);
+    create_account(
+        &s,
+        &format!("{V1}/projects/demo-app/tenants/{tenant}/accounts"),
+        "refused-tenant@example.com",
+    );
+    for body in [
+        json!({"requestType": "PASSWORD_RESET", "email": "refused-tenant@example.com", "returnOobLink": true}),
+        json!({"requestType": "EMAIL_SIGNIN", "email": "refused-tenant@example.com", "returnOobLink": true}),
+    ] {
+        let before = codes(&s, &tenant);
+        let (status, answer) = admin(
+            &s,
+            "POST",
+            &format!("{V1}/projects/demo-app/tenants/{tenant}/accounts:sendOobCode"),
+            &body,
+        );
+        assert_eq!(status, 400, "{body}: {answer}");
+        assert!(answer.get("oobLink").is_none(), "{answer}");
+        assert_eq!(codes(&s, &tenant), before, "{body}");
+    }
+    assert_eq!(mails.lock().unwrap().len(), 2);
+}
+
+/// Refuses every mail once switched on.
+struct SwitchHook {
+    refuse: AtomicBool,
+}
+
+impl AuthBlockingHook for SwitchHook {
+    fn handles(&self, event: BlockingAuthEvent) -> bool {
+        event == BlockingAuthEvent::BeforeSendEmail
+    }
+
+    fn invoke(
+        &self,
+        _event: BlockingAuthEvent,
+        _user: &fireemu_core_auth::store::UserRecord,
+    ) -> Result<Value, BlockingFunctionFailure> {
+        unreachable!("a mail event has no user")
+    }
+
+    fn invoke_before_send_email(
+        &self,
+        _project: &str,
+        _context: &AuthBlockingContext,
+    ) -> Result<Option<Value>, BlockingFunctionFailure> {
+        if self.refuse.load(Ordering::SeqCst) {
+            return Err(BlockingFunctionFailure::from_function(
+                BlockingFunctionCode::PermissionDenied,
+                "mail refused",
+            )
+            .unwrap());
+        }
+        Ok(None)
+    }
+}
+
+/// A refused mail has no side effect: no delivery notice, and the code an earlier mail sent
+/// still works.
+#[test]
+fn a_refused_mail_leaves_no_notice_and_keeps_the_earlier_code() {
+    let (mut s, _) = state(true, true);
+    let notices = Arc::new(Mutex::new(0_usize));
+    let counted = notices.clone();
+    s.notices = Some(Arc::new(move |_notice| *counted.lock().unwrap() += 1));
+    create_account(
+        &s,
+        &format!("{V1}/projects/demo-app/accounts"),
+        "twice@example.com",
+    );
+    let hook = Arc::new(SwitchHook {
+        refuse: AtomicBool::new(false),
+    });
+    s.blocking = Some(hook.clone());
+    let send = |s: &AuthState| {
+        client(
+            s,
+            &format!("{V1}/accounts:sendOobCode"),
+            &json!({"requestType": "PASSWORD_RESET", "email": "twice@example.com"}),
+        )
+    };
+    let (status, body) = send(&s);
+    assert_eq!(status, 200, "{body}");
+    let delivered = *notices.lock().unwrap();
+    assert!(delivered > 0);
+    let code = s.store.lock().unwrap().oob_codes()[0].code.clone();
+    hook.refuse.store(true, Ordering::SeqCst);
+    let (status, body) = send(&s);
+    assert_eq!(status, 400, "{body}");
+    assert_eq!(*notices.lock().unwrap(), delivered);
+    let (status, checked) = client(
+        &s,
+        &format!("{V1}/accounts:resetPassword"),
+        &json!({"oobCode": code}),
+    );
+    assert_eq!(status, 200, "{checked}");
+    assert_eq!(checked["requestType"], "PASSWORD_RESET");
 }

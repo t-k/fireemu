@@ -31,9 +31,9 @@ use fireemu_core_auth::signup_quota::{
 use fireemu_core_auth::store::{
     AuthError, AuthPrincipal, AuthStore, CredentialNotice, FederatedIdentity,
     InboundSamlProviderConfig, LocalId, NewUser, OAuthResponseType, OidcProviderConfig,
-    OobRequestType, PendingSignInId, PhoneCodeUse, ProjectAuthConfigPatch, RoutedStoreInstall,
-    SecondFactorAssertion, SignInConfig, UserQueryExpression, UserSortField, VerificationCode,
-    VerificationPurpose,
+    OobRequestType, PendingSignInId, PhoneCodeUse, ProjectAuthConfigPatch,
+    ProjectConfigStoreUpdate, RoutedStoreInstall, SecondFactorAssertion, SignInConfig,
+    UserQueryExpression, UserSortField, VerificationCode, VerificationPurpose,
 };
 use fireemu_core_session::clock::VirtualClock;
 pub use fireemu_core_session::loopback::origin_is_local;
@@ -66,7 +66,10 @@ const SIGNUP_QUOTA_FIELDS: [&str; 3] = ["quota", "startTime", "quotaDuration"];
 
 mod custom_token;
 pub use custom_token::{CustomTokenRefusal, CustomTokenTrust};
+mod config_proto;
 mod password_hash;
+mod phone_region;
+mod project_config;
 mod project_mfa;
 pub use password_hash::restorable_spec as restorable_imported_hash_spec;
 mod routes;
@@ -2807,6 +2810,16 @@ fn handle_with_policy(
     } else {
         match select_store(state, path, query, body, resolution) {
             Ok(store) => store,
+            // Production answers a client policy read of an unknown tenant with the v2 API's
+            // INVALID_TENANT_ID (sandbox recording 2026-09-25).
+            Err(response) if response.body["error"]["message"] == "TENANT_NOT_FOUND" => {
+                return match resolution {
+                    routes::Resolution::Matched { route, .. } => {
+                        unknown_tenant_refusal(route.handler, response)
+                    }
+                    _ => response,
+                };
+            }
             Err(response) => return response,
         }
     };
@@ -3039,7 +3052,7 @@ fn handle_with_policy(
         return tenant_management(state, route.handler, project, tenant, query, body);
     }
     if tenant.is_some() && store.tenant_id() != tenant {
-        return error(404, "TENANT_NOT_FOUND");
+        return unknown_tenant_refusal(route.handler, error(404, "TENANT_NOT_FOUND"));
     }
     if route.handler == routes::Handler::SignInWithIdp
         && state.idp_continuations == IdpContinuationPolicy::Disabled
@@ -3079,6 +3092,11 @@ fn handle_with_policy(
     }
     if route.class == routes::RouteClass::EndUser {
         if let Some(denial) = end_user_client_permission_denial(route.handler, &store, body, at) {
+            return denial;
+        }
+    }
+    if !state.stateless_refresh_tokens {
+        if let Some(denial) = new_account_code_denial(route.handler, &store, body) {
             return denial;
         }
     }
@@ -3502,24 +3520,33 @@ fn dispatch(
         Handler::SignInWithEmailLink => {
             sign_in_with_email_link(store, body, at, !options.stateless_refresh_tokens)
         }
-        Handler::SendVerificationCode => send_verification_code(store, body, at),
+        Handler::SendVerificationCode => {
+            if !options.stateless_refresh_tokens {
+                if let Some(refusal) = sms_region_refusal(store, body) {
+                    return refusal;
+                }
+            }
+            send_verification_code(store, body, at)
+        }
         Handler::SignInWithPhoneNumber => sign_in_with_phone_number(store, body, at),
         Handler::SignInWithIdp => {
             sign_in_with_idp(store, body, at, options.inbound_credential_policy)
         }
-        Handler::CreateAuthUri => create_auth_uri(store, body),
-        Handler::Projects => JsonResponse {
-            status: 200,
-            body: json!({"projectId": store.project_id(), "authorizedDomains": ["localhost"]}),
-        },
-        Handler::RecaptchaParams => JsonResponse {
-            status: 200,
-            body: json!({
+        Handler::CreateAuthUri => create_auth_uri(store, body, !options.stateless_refresh_tokens),
+        Handler::Projects => client_project_config(store, !options.stateless_refresh_tokens),
+        Handler::RecaptchaParams => {
+            let mut body = json!({
                 "kind": "identitytoolkit#GetRecaptchaParamResponse",
                 "recaptchaStoken": "This-is-a-fake-token__Dont-send-this-to-the-Recaptcha-service__The-Auth-Emulator-does-not-support-Recaptcha",
                 "recaptchaSiteKey": "Fake-key__Do-not-send-this-to-Recaptcha_",
-            }),
-        },
+            });
+            // Production also names the reCAPTCHA project; no key of it is real here.
+            if !options.stateless_refresh_tokens {
+                body["producerProjectNumber"] = json!("000000000000");
+            }
+            JsonResponse { status: 200, body }
+        }
+        Handler::RecaptchaConfig => project_config::client_recaptcha_config(store, query),
         Handler::PasswordPolicy => password_policy_json(store.password_policy()),
         // Strict: production's answer when TOTP is not enabled, and the v2 API's error shape
         // (sandbox recording 2026-09-24); the emulator keeps the official emulator's.
@@ -3730,21 +3757,55 @@ fn apply_project_config_fields(
                     &["client", "permissions", "disabledUserDeletion"],
                 )?);
             }
-            // Decoded whole by `project_mfa`, like the sign-in providers.
-            "mfa" => {}
-            field
-                if field == "passwordPolicyConfig"
-                    || field.starts_with("passwordPolicyConfig.")
-                    || SIGN_IN_PROVIDER_FIELDS.contains(&field)
-                    || valid_blocking_config_field(field)
-                    || valid_quota_field(field) => {}
-            _ => return Err(error(400, "INVALID_ARGUMENT")),
+            // The caller refused every field it does not model; the policy, quota, sign-in,
+            // blocking and stored members are applied on their own.
+            _ => {}
         }
     }
     Ok(())
 }
 
-fn password_policy_from_config_json(value: &Value) -> Result<PasswordPolicy, JsonResponse> {
+/// The strength options of a written policy's one version, `None` for the default options.
+/// Production requires exactly one version (sandbox recording 2026-09-25); without
+/// `one_version` a policy without versions takes the default options.
+fn policy_version_options(
+    object: &serde_json::Map<String, Value>,
+    one_version: bool,
+) -> Result<Option<&serde_json::Map<String, Value>>, JsonResponse> {
+    let one_version_refusal =
+        || config_proto::refusal("INVALID_CONFIG : Policy versions list must be of length 1");
+    match object.get("passwordPolicyVersions") {
+        None | Some(Value::Null) if one_version => Err(one_version_refusal()),
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Array(versions)) if versions.len() != 1 => Err(if one_version {
+            one_version_refusal()
+        } else {
+            error(400, "INVALID_ARGUMENT")
+        }),
+        Some(Value::Array(versions)) => {
+            let version = versions[0]
+                .as_object()
+                .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?;
+            if version.keys().any(|field| field != "customStrengthOptions") {
+                return Err(error(400, "INVALID_ARGUMENT"));
+            }
+            match version.get("customStrengthOptions") {
+                Some(Value::Object(options)) => Ok(Some(options)),
+                Some(Value::Null) => Ok(None),
+                None | Some(_) => Err(error(400, "INVALID_ARGUMENT")),
+            }
+        }
+        Some(_) => Err(error(400, "INVALID_ARGUMENT")),
+    }
+}
+
+/// A written password policy. Strict requires exactly one version, as production does
+/// (sandbox recording 2026-09-25); otherwise a policy without versions takes the default
+/// options, as the official emulator (which does not check the policy) takes it.
+fn password_policy_from_config_json(
+    value: &Value,
+    one_version: bool,
+) -> Result<PasswordPolicy, JsonResponse> {
     let object = value
         .as_object()
         .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?;
@@ -3759,6 +3820,7 @@ fn password_policy_from_config_json(value: &Value) -> Result<PasswordPolicy, Jso
         Some(Value::String(value)) => match value.as_str() {
             "OFF" => EnforcementState::Off,
             "ENFORCE" => EnforcementState::Enforce,
+            "PASSWORD_POLICY_ENFORCEMENT_STATE_UNSPECIFIED" => EnforcementState::Unspecified,
             _ => return Err(error(400, "INVALID_ARGUMENT")),
         },
         Some(_) => return Err(error(400, "INVALID_ARGUMENT")),
@@ -3768,23 +3830,7 @@ fn password_policy_from_config_json(value: &Value) -> Result<PasswordPolicy, Jso
         Some(Value::Bool(value)) => *value,
         Some(_) => return Err(error(400, "INVALID_ARGUMENT")),
     };
-    let options = match object.get("passwordPolicyVersions") {
-        None | Some(Value::Null) => None,
-        Some(Value::Array(versions)) if versions.len() == 1 => {
-            let version = versions[0]
-                .as_object()
-                .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?;
-            if version.keys().any(|field| field != "customStrengthOptions") {
-                return Err(error(400, "INVALID_ARGUMENT"));
-            }
-            match version.get("customStrengthOptions") {
-                Some(Value::Object(options)) => Some(options),
-                Some(Value::Null) => None,
-                None | Some(_) => return Err(error(400, "INVALID_ARGUMENT")),
-            }
-        }
-        Some(_) => return Err(error(400, "INVALID_ARGUMENT")),
-    };
+    let options = policy_version_options(object, one_version)?;
     if options.is_some_and(|options| {
         options
             .keys()
@@ -3830,12 +3876,37 @@ fn password_policy_from_config_json(value: &Value) -> Result<PasswordPolicy, Jso
         boolean("containsNonAlphanumericCharacter")?,
         fireemu_core_auth::password_policy::default_allowed_non_alphanumeric(),
     )
-    .map_err(|_| error(400, "INVALID_ARGUMENT"))
+    .map(|mut policy| {
+        policy.min_length_written = options
+            .and_then(|o| o.get("minPasswordLength"))
+            .is_some_and(|v| !v.is_null());
+        policy
+    })
+    .map_err(|refused| password_policy_refusal(refused, max))
+}
+
+/// Production's wording of each password policy refusal (sandbox recording 2026-09-25).
+fn password_policy_refusal(
+    refused: fireemu_core_auth::password_policy::ConfigError,
+    max: Option<usize>,
+) -> JsonResponse {
+    use fireemu_core_auth::password_policy::ConfigError;
+    config_proto::refusal(match refused {
+        ConfigError::InvalidMinimumLength => {
+            "INVALID_CONFIG : Minimum password length must be between 6 and 30"
+        }
+        ConfigError::InvalidMaximumLength if max.is_some_and(|max| max > 4096) => {
+            "INVALID_CONFIG : Maximum password length must be less than or equal to 4096"
+        }
+        ConfigError::InvalidMaximumLength => {
+            "INVALID_CONFIG : Maximum password length must be greater than or equal to the minimum password length"
+        }
+        ConfigError::InvalidAllowedCharacter => "INVALID_CONFIG",
+    })
 }
 
 fn password_policy_config_json(policy: &PasswordPolicy) -> Value {
     let mut options = serde_json::Map::from_iter([
-        ("minPasswordLength".to_owned(), json!(policy.min_length)),
         (
             "containsUppercaseCharacter".to_owned(),
             json!(policy.require_uppercase),
@@ -3853,23 +3924,30 @@ fn password_policy_config_json(policy: &PasswordPolicy) -> Value {
             json!(policy.require_non_alphanumeric),
         ),
     ]);
+    if policy.min_length_written || !policy.configured {
+        options.insert("minPasswordLength".to_owned(), json!(policy.min_length));
+    }
     if let Some(max) = policy.max_length {
         options.insert("maxPasswordLength".to_owned(), json!(max));
     }
-    json!({
-        "passwordPolicyEnforcementState": match policy.enforcement_state {
-            EnforcementState::Off => "OFF",
-            EnforcementState::Enforce => "ENFORCE",
-        },
+    let mut config = json!({
         "forceUpgradeOnSignin": policy.force_upgrade_on_signin,
         "passwordPolicyVersions": [{"customStrengthOptions": options}],
-    })
+    });
+    // Production stores an unspecified state as none.
+    match policy.enforcement_state {
+        EnforcementState::Off => config["passwordPolicyEnforcementState"] = json!("OFF"),
+        EnforcementState::Enforce => config["passwordPolicyEnforcementState"] = json!("ENFORCE"),
+        EnforcementState::Unspecified => {}
+    }
+    config
 }
 
 fn password_policy_from_update(
     current: &PasswordPolicy,
     body: &Value,
     fields: &[String],
+    one_version: bool,
 ) -> Result<Option<PasswordPolicy>, JsonResponse> {
     let policy_fields: Vec<&str> = fields
         .iter()
@@ -3881,9 +3959,8 @@ fn password_policy_from_update(
     if policy_fields.is_empty() {
         return Ok(None);
     }
-    let Some(value) = body.get("passwordPolicyConfig") else {
-        return Err(error(400, "INVALID_ARGUMENT"));
-    };
+    // A masked policy the body leaves out is cleared, as a null one is.
+    let value = body.get("passwordPolicyConfig").unwrap_or(&Value::Null);
     if value.is_null() && policy_fields.contains(&"passwordPolicyConfig") {
         if policy_fields.len() != 1 {
             return Err(error(400, "INVALID_ARGUMENT"));
@@ -3897,18 +3974,25 @@ fn password_policy_from_update(
     };
     // Validate the complete supplied policy before applying the mask. A malformed policy
     // payload must never become a partial successful update merely because its malformed
-    // member was outside the selected mask.
-    if !value.is_null() {
-        let _supplied_policy = password_policy_from_config_json(value)?;
+    // member was outside the selected mask. A leaf update supplies no versions; the merged
+    // policy is checked below.
+    if object.contains_key("passwordPolicyVersions") {
+        let _supplied_policy = password_policy_from_config_json(value, one_version)?;
     }
     if policy_fields.contains(&"passwordPolicyConfig") {
         if policy_fields.len() != 1 {
             return Err(error(400, "INVALID_ARGUMENT"));
         }
-        return password_policy_from_config_json(value).map(Some);
+        return password_policy_from_config_json(value, one_version).map(Some);
     }
 
-    let mut merged = password_policy_config_json(current);
+    // Production merges a leaf into the stored policy, or into none when the project has none
+    // (strict); the emulator profile merges into the default policy, as it always has.
+    let mut merged = if current.configured || !one_version {
+        password_policy_config_json(current)
+    } else {
+        json!({})
+    };
     let merged_object = merged
         .as_object_mut()
         .expect("password policy projection is an object");
@@ -3932,7 +4016,7 @@ fn password_policy_from_update(
             _ => return Err(error(400, "INVALID_ARGUMENT")),
         }
     }
-    password_policy_from_config_json(&merged).map(Some)
+    password_policy_from_config_json(&merged, one_version).map(Some)
 }
 
 fn valid_password_policy_field(field: &str) -> bool {
@@ -3951,13 +4035,12 @@ fn apply_project_config_parent(
     child: &str,
     current: &mut Option<bool>,
 ) -> Result<(), JsonResponse> {
-    let Some(value) = body.get(parent) else {
-        return Ok(());
-    };
-    if value.is_null() {
+    // A masked member the body leaves out is reset, as a null one is (production reads the
+    // body as proto3 JSON, where both are the default message).
+    let Some(value) = body.get(parent).filter(|value| !value.is_null()) else {
         *current = Some(false);
         return Ok(());
-    }
+    };
     let Some(object) = value.as_object() else {
         return Err(error(400, "INVALID_ARGUMENT"));
     };
@@ -4183,6 +4266,28 @@ fn project_provider_denial(
         )
     {
         return Some(error(400, "OPERATION_NOT_ALLOWED"));
+    }
+    // Production names these refusals as the official emulator does, and sends a password
+    // reset email while the provider is off (sandbox recording 2026-09-25).
+    if !config.email_enabled
+        && matches!(
+            handler,
+            routes::Handler::SignInWithPassword | routes::Handler::ResetPassword
+        )
+    {
+        return Some(error(400, "PASSWORD_LOGIN_DISABLED"));
+    }
+    let anonymous_sign_up = handler == routes::Handler::SignUp
+        && str_field(body, "email").is_none()
+        && str_field(body, "password").is_none()
+        && body.get("idToken").is_none_or(Value::is_null);
+    if anonymous_sign_up && !config.anonymous_enabled {
+        return Some(error(400, "ADMIN_ONLY_OPERATION"));
+    }
+    if handler == routes::Handler::SendOobCode
+        && body.get("requestType").and_then(Value::as_str) == Some("PASSWORD_RESET")
+    {
+        return None;
     }
     let metadata = fireemu_core_auth::store::TenantMetadata {
         allow_password_signup: config.email_enabled,
@@ -4421,35 +4526,31 @@ fn quota_config_from_json(
             {
                 return Err(error(400, "INVALID_ARGUMENT"));
             }
-            let quota_number = quota_object
-                .get("quota")
-                .and_then(Value::as_str)
-                .filter(|value| {
-                    !value.is_empty()
-                        && value.bytes().all(|byte| byte.is_ascii_digit())
-                        && value
-                            .parse::<u64>()
-                            .is_ok_and(|value| i64::try_from(value).is_ok())
-                })
-                .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?
-                .parse::<u64>()
-                .map_err(|_| error(400, "INVALID_ARGUMENT"))?;
-            let start_time = LogicalInstant::parse_rfc3339(
-                quota_object
-                    .get("startTime")
-                    .and_then(Value::as_str)
-                    .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?,
-            )
-            .map_err(|_| error(400, "INVALID_ARGUMENT"))?;
-            let duration = quota_duration_from_json(
-                quota_object
-                    .get("quotaDuration")
-                    .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?,
-            )?;
-            Some(
-                TemporaryQuota::new(quota_number, start_time, duration)
+            // Production takes any quota it can parse: a negative or zero quota, a missing
+            // start (the epoch) and a missing or zero duration (sandbox recording
+            // 2026-09-25). fireemu's quota simulation runs only a quota it can represent;
+            // the written value is kept for the document (`project_config`).
+            let quota_number = match quota_object.get("quota") {
+                None | Some(Value::Null) => Some(0),
+                Some(value) => Some(
+                    value
+                        .as_str()
+                        .and_then(|text| text.parse::<i64>().ok())
+                        .or_else(|| value.as_i64())
+                        .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?,
+                ),
+            }
+            .and_then(|quota| u64::try_from(quota).ok());
+            let start_time = match quota_object.get("startTime").and_then(Value::as_str) {
+                None => LogicalInstant::UNIX_EPOCH,
+                Some(text) => LogicalInstant::parse_rfc3339(text)
                     .map_err(|_| error(400, "INVALID_ARGUMENT"))?,
-            )
+            };
+            let duration = match quota_object.get("quotaDuration") {
+                None | Some(Value::Null) => LogicalDuration::from_nanos(0),
+                Some(value) => quota_duration_from_json(value)?,
+            };
+            quota_number.and_then(|quota| TemporaryQuota::new(quota, start_time, duration).ok())
         };
     }
     if let Some(value) = object
@@ -4516,9 +4617,8 @@ fn quota_config_from_update(
     if quota_fields.contains(&"quota") && quota_fields.len() != 1 {
         return Err(error(400, "INVALID_ARGUMENT"));
     }
-    let Some(quota_value) = body.get("quota") else {
-        return Err(error(400, "INVALID_ARGUMENT"));
-    };
+    // A masked quota the body leaves out is cleared, as a null one is.
+    let quota_value = body.get("quota").unwrap_or(&Value::Null);
     if quota_value.is_null() {
         if quota_fields.contains(&"quota") {
             return Ok(Some(SignupQuotaConfig::default()));
@@ -4561,9 +4661,13 @@ fn quota_config_from_update(
         .iter()
         .any(|field| *field == "quota" || *field == "quota.signUpQuotaConfig")
     {
-        if let Some(value) = quota.get("signUpQuotaConfig") {
-            selected.insert("signUpQuotaConfig".to_owned(), value.clone());
-        }
+        selected.insert(
+            "signUpQuotaConfig".to_owned(),
+            quota
+                .get("signUpQuotaConfig")
+                .cloned()
+                .unwrap_or(Value::Null),
+        );
     }
     if quota_fields
         .iter()
@@ -4649,7 +4753,7 @@ fn quota_config_json(quota: &SignupQuotaConfig) -> Value {
 }
 
 #[allow(clippy::too_many_lines)]
-fn validate_project_config_payload(body: &Value) -> Result<(), JsonResponse> {
+fn validate_project_config_payload(body: &Value, one_version: bool) -> Result<(), JsonResponse> {
     let object = body
         .as_object()
         .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?;
@@ -4664,7 +4768,8 @@ fn validate_project_config_payload(body: &Value) -> Result<(), JsonResponse> {
                 | "blockingFunctions"
                 | "authorizedDomains"
                 | "mfa"
-        ) {
+        ) && !project_config::STORED_MEMBERS.contains(&key.as_str())
+        {
             return Err(error(400, "INVALID_ARGUMENT"));
         }
     }
@@ -4750,8 +4855,9 @@ fn validate_project_config_payload(body: &Value) -> Result<(), JsonResponse> {
         }
     }
     if let Some(value) = object.get("passwordPolicyConfig") {
-        if !value.is_null() {
-            password_policy_from_config_json(value)?;
+        // A leaf update supplies no versions; the merged policy is checked when applied.
+        if value.get("passwordPolicyVersions").is_some() {
+            password_policy_from_config_json(value, one_version)?;
         }
     }
     if let Some(value) = object.get("quota").filter(|value| !value.is_null()) {
@@ -4869,6 +4975,76 @@ fn contains_non_null_value(value: &Value) -> bool {
 }
 
 #[allow(clippy::too_many_lines)]
+/// The Admin v2 config document of `project` as the running profile answers it
+/// ([`project_config`]).
+fn project_config_document(
+    state: &AuthState,
+    project: &str,
+    store: &AuthStore,
+    config: fireemu_core_auth::store::ProjectAuthConfig,
+) -> Value {
+    let quota = quota_config_json(store.signup_quota().config());
+    let mut sign_in = json!({});
+    add_sign_in_config_json(&mut sign_in, store.sign_in_config());
+    let sign_in_written = {
+        let current = store.sign_in_config();
+        let initial = SignInConfig::default();
+        current.email_enabled != initial.email_enabled
+            || current.password_required != initial.password_required
+            || current.anonymous_enabled != initial.anonymous_enabled
+            || current.phone_enabled != initial.phone_enabled
+            || current.test_phone_numbers != initial.test_phone_numbers
+    };
+    let policy = store.password_policy();
+    let tenancy = state.tenancy.as_ref().and_then(|t| t.read().ok());
+    let simulation = quota
+        .get("quotaSimulation")
+        .filter(|value| value.get("mode").and_then(Value::as_str) != Some("off"))
+        .cloned();
+    let sources = project_config::ConfigSources {
+        project,
+        project_number: store.project_number(),
+        api_key: tenancy.as_ref().and_then(|t| t.api_key_for(project)),
+        sign_in: sign_in.get("signIn").cloned().unwrap_or_else(|| json!({})),
+        providers: project_config::sign_in_providers(store.sign_in_config()),
+        policy_update_time: store
+            .stored_config_members()
+            .get(project_config::POLICY_UPDATE_TIME)
+            .and_then(|text| serde_json::from_str::<String>(text).ok()),
+        sign_in_written,
+        allow_duplicate_emails: config.allow_duplicate_emails,
+        improved_email_privacy: config.enable_improved_email_privacy,
+        disabled_user_signup: config.disabled_user_signup,
+        disabled_user_deletion: config.disabled_user_deletion,
+        password_policy: policy
+            .configured
+            .then(|| password_policy_config_json(policy)),
+        sign_up_quota: store
+            .stored_config_members()
+            .get(project_config::SIGN_UP_QUOTA)
+            .and_then(|text| serde_json::from_str(text).ok())
+            .or_else(|| quota.get("signUpQuotaConfig").cloned()),
+        quota_simulation: simulation,
+        authorized_domains: store.authorized_domains(),
+        authorized_domains_written: store.sign_in_config().authorized_domains.is_some(),
+        blocking_functions: state
+            .blocking
+            .as_ref()
+            .filter(|hook| hook.blocking_auth_project() == Some(project))
+            .and_then(|hook| hook.blocking_auth_settings()),
+        members: store.stored_config_members(),
+        mfa: project_mfa::mfa_config_json(store.mfa_config()),
+        mfa_written: *store.mfa_config()
+            != fireemu_core_auth::mfa_config::MfaProjectConfig::default(),
+    };
+    if state.stateless_refresh_tokens {
+        project_config::emulator_document(&sources)
+    } else {
+        project_config::strict_document(&sources)
+    }
+}
+
+#[allow(clippy::too_many_lines)]
 fn project_config_management(
     state: &AuthState,
     handler: routes::Handler,
@@ -4886,31 +5062,16 @@ fn project_config_management(
         let Ok(store) = selected_store.lock() else {
             return error(500, "INTERNAL");
         };
-        let mut body = project_config_json_with_auth_settings(
-            store.config(),
-            store.password_policy(),
-            store.signup_quota().config(),
-        );
-        add_sign_in_config_json(&mut body, store.sign_in_config());
-        body["mfa"] = project_mfa::mfa_config_json(store.mfa_config());
-        body["authorizedDomains"] = json!(store.authorized_domains());
-        if let Some(blocking) = state
-            .blocking
-            .as_ref()
-            .filter(|hook| hook.blocking_auth_project() == Some(project))
-            .and_then(|hook| hook.blocking_auth_settings())
-        {
-            body["blockingFunctions"] = blocking;
-        }
+        let body = project_config_document(state, project, &store, store.config());
         return JsonResponse { status: 200, body };
     }
-    if !body.is_object() {
-        return error(400, "INVALID_ARGUMENT");
-    }
-    if let Err(response) = validate_project_config_payload(body) {
-        return response;
-    }
-    let fields = match update_mask(query) {
+    // Production reads the body as proto3 JSON of its Config message (AUTH-CONFIG-SDK).
+    let parsed = match config_proto::parse_config_body(body) {
+        Ok(parsed) => parsed,
+        Err(response) => return response,
+    };
+    let body = &parsed;
+    let fields = match update_mask_with(query, false) {
         Ok(Some(fields)) => fields,
         Ok(None) => {
             let mut fields = Vec::new();
@@ -4962,13 +5123,32 @@ fn project_config_management(
             if body.get("mfa").is_some_and(|value| !value.is_null()) {
                 fields.push("mfa".to_owned());
             }
+            for member in project_config::STORED_MEMBERS {
+                if body.get(*member).is_some_and(|value| !value.is_null()) {
+                    fields.push((*member).to_owned());
+                }
+            }
             fields
         }
         Err(response) => return response,
     };
+    // A path production does not know or may not write is ignored, as production ignores it.
+    let fields: Vec<String> = fields
+        .into_iter()
+        .filter(|field| config_proto::known_writable_path(field))
+        .collect();
+    if let Err(response) =
+        project_config::validate_values(body, &fields, !state.stateless_refresh_tokens)
+    {
+        return response;
+    }
+    if let Err(response) = validate_project_config_payload(body, !state.stateless_refresh_tokens) {
+        return response;
+    }
+    // A writable path fireemu does not model (valid_project_config_field names the policy and
+    // blocking paths it models) is refused.
     if fields.iter().any(|field| {
-        (field.starts_with("passwordPolicyConfig") && !valid_password_policy_field(field))
-            || (!valid_project_config_field(field) && !valid_blocking_config_field(field))
+        !valid_project_config_field(field) && !project_config::stored_member_field(field)
     }) {
         return error(400, "INVALID_ARGUMENT");
     }
@@ -4989,11 +5169,24 @@ fn project_config_management(
     } else {
         None
     };
-    // Decode the sign-in providers before anything changes; they are applied after the rest.
-    let updates_sign_in = match sign_in_config_from_update(&SignInConfig::default(), body, &fields)
-    {
-        Ok(update) => update.is_some(),
-        Err(response) => return response,
+    // Reject malformed sign-in providers before changing any settings.
+    if let Err(response) = sign_in_config_from_update(&SignInConfig::default(), body, &fields) {
+        return response;
+    }
+    // The stored members too, from the current ones: a masked leaf merges into its member.
+    let stored_members = {
+        let Ok(store) = selected_store.lock() else {
+            return error(500, "INTERNAL");
+        };
+        match project_config::apply_stored_members(
+            store.stored_config_members(),
+            body,
+            &fields,
+            project,
+        ) {
+            Ok(update) => update,
+            Err(()) => return error(400, "INVALID_ARGUMENT"),
+        }
     };
     // Keep a rollback snapshot while the paired Auth candidate is published. Runtime-backed
     // bridges include private discovery markers in this snapshot so a failed Auth update cannot
@@ -5027,39 +5220,63 @@ fn project_config_management(
         }
         response
     };
-    let config = if let Some(registry) = state
+    // Members derived from the write (the normalized sign-up quota, when the policy was
+    // written and which of its options) are stored in the same update as the written members.
+    let derives_members = fields.iter().any(|field| {
+        field == "quota"
+            || field.starts_with("quota.signUpQuotaConfig")
+            || field.starts_with("passwordPolicyConfig")
+    });
+    let written_at = now(state).to_rfc3339().ok();
+    if let Some(registry) = state
         .registry
         .as_ref()
         .filter(|_| pending_project.is_none())
     {
         // Decode masked replacements after the registry has acquired the namespace gate. This
         // keeps a concurrent PATCH from merging against a stale policy or quota snapshot.
-        match registry.patch_project_config_with_current_settings(
-            project,
-            patch,
-            |current_policy, current_quota| {
-                let password_policy = password_policy_from_update(current_policy, body, &fields)?;
-                let signup_quota = quota_config_from_update(current_quota, body, &fields)?;
-                Ok((password_policy, signup_quota))
-            },
-        ) {
-            Ok(Some(config)) => {
+        match registry.patch_project_config_transaction(project, patch, |store| {
+            let password_policy = password_policy_from_update(
+                store.password_policy(),
+                body,
+                &fields,
+                !state.stateless_refresh_tokens,
+            )?;
+            let signup_quota =
+                quota_config_from_update(store.signup_quota().config(), body, &fields)?;
+            let sign_in = sign_in_config_from_update(store.sign_in_config(), body, &fields)?;
+            let stored_members = if stored_members.is_some() || derives_members {
+                let next = project_config::apply_stored_members(
+                    store.stored_config_members(),
+                    body,
+                    &fields,
+                    project,
+                )
+                .map_err(|()| error(400, "INVALID_ARGUMENT"))?;
+                let mut next = next.unwrap_or_else(|| store.stored_config_members().clone());
+                let configured = password_policy
+                    .as_ref()
+                    .unwrap_or(store.password_policy())
+                    .configured;
+                with_derived_members(&mut next, body, &fields, configured, written_at.as_deref());
+                Some(next)
+            } else {
+                None
+            };
+            Ok(ProjectConfigStoreUpdate {
+                password_policy,
+                signup_quota,
+                sign_in,
+                stored_members,
+            })
+        }) {
+            Ok(Some(_)) => {
+                // The multi-factor configuration is replaced after the rest, as AUTH-MFA applies it.
                 if let Some(mfa) = mfa_update.clone() {
                     if registry.update_project_mfa_config(project, mfa).is_none() {
                         return rollback_blocking(error(500, "INTERNAL"));
                     }
                 }
-                if updates_sign_in {
-                    match registry.update_project_sign_in_config(project, |current| {
-                        sign_in_config_from_update(current, body, &fields)
-                            .map(|next| next.unwrap_or_else(|| current.clone()))
-                    }) {
-                        Ok(Some(_)) => {}
-                        Ok(None) => return rollback_blocking(error(500, "INTERNAL")),
-                        Err(response) => return rollback_blocking(response),
-                    }
-                }
-                config
             }
             Ok(None) => return rollback_blocking(error(500, "INTERNAL")),
             Err(response) => return rollback_blocking(response),
@@ -5072,7 +5289,12 @@ fn project_config_management(
         };
         let current_policy = store.password_policy().clone();
         let current_quota = store.signup_quota().config().clone();
-        let password_policy = match password_policy_from_update(&current_policy, body, &fields) {
+        let password_policy = match password_policy_from_update(
+            &current_policy,
+            body,
+            &fields,
+            !state.stateless_refresh_tokens,
+        ) {
             Ok(policy) => policy,
             Err(response) => return rollback_blocking(response),
         };
@@ -5108,40 +5330,84 @@ fn project_config_management(
                 return rollback_blocking(error(400, "INVALID_ARGUMENT"));
             }
         }
+        let has_members = stored_members.is_some() || derives_members;
+        if has_members {
+            // From the members as they are under this lock, so a concurrent write is kept.
+            let Ok(next) = project_config::apply_stored_members(
+                store.stored_config_members(),
+                body,
+                &fields,
+                project,
+            ) else {
+                return rollback_blocking(error(400, "INVALID_ARGUMENT"));
+            };
+            let mut next = next.unwrap_or_else(|| store.stored_config_members().clone());
+            let configured = store.password_policy().configured;
+            with_derived_members(&mut next, body, &fields, configured, written_at.as_deref());
+            store.set_stored_config_members(next);
+        }
         drop(store);
-        if !patch.is_empty() || has_policy || has_quota || has_sign_in || has_mfa {
+        if !patch.is_empty() || has_policy || has_quota || has_sign_in || has_members || has_mfa {
             if let Some(project) = pending_project {
                 if let Err(response) = install_routed_candidate(state, project, selected_store) {
                     return rollback_blocking(response);
                 }
             }
         }
-        config
-    };
+    }
     JsonResponse {
         status: 200,
         body: {
             let Ok(store) = selected_store.lock() else {
                 return error(500, "INTERNAL");
             };
-            let mut body = project_config_json_with_auth_settings(
-                config,
-                store.password_policy(),
-                store.signup_quota().config(),
-            );
-            add_sign_in_config_json(&mut body, store.sign_in_config());
-            body["mfa"] = project_mfa::mfa_config_json(store.mfa_config());
-            body["authorizedDomains"] = json!(store.authorized_domains());
-            if let Some(blocking) = state
-                .blocking
-                .as_ref()
-                .filter(|hook| hook.blocking_auth_project() == Some(project))
-                .and_then(|hook| hook.blocking_auth_settings())
-            {
-                body["blockingFunctions"] = blocking;
+            let document = project_config_document(state, project, &store, store.config());
+            if state.stateless_refresh_tokens {
+                document
+            } else {
+                project_config::patch_answer(document)
             }
-            body
         },
+    }
+}
+
+/// The stored members a config write derives: the sign-up quota as production normalizes and
+/// reports it, and when the password policy was last written and which of its options.
+fn with_derived_members(
+    members: &mut fireemu_core_auth::config_members::StoredConfigMembers,
+    body: &Value,
+    fields: &[String],
+    policy_configured: bool,
+    written_at: Option<&str>,
+) {
+    if fields
+        .iter()
+        .any(|field| field == "quota" || field.starts_with("quota.signUpQuotaConfig"))
+    {
+        members.set(
+            project_config::SIGN_UP_QUOTA,
+            project_config::normalized_sign_up_quota(body).map(|quota| quota.to_string()),
+        );
+    }
+    if fields
+        .iter()
+        .any(|field| field.starts_with("passwordPolicyConfig"))
+    {
+        let time = written_at
+            .filter(|_| policy_configured)
+            .map(|time| json!(time).to_string());
+        members.set(project_config::POLICY_UPDATE_TIME, time);
+        if !policy_configured {
+            members.set(project_config::POLICY_WRITTEN_OPTIONS, None);
+        } else if fields.iter().any(|field| {
+            field == "passwordPolicyConfig"
+                || field.starts_with("passwordPolicyConfig.passwordPolicyVersions")
+        }) {
+            members.set(
+                project_config::POLICY_WRITTEN_OPTIONS,
+                project_config::written_policy_options(body).map(|names| json!(names).to_string()),
+            );
+        }
     }
 }
 
@@ -5560,6 +5826,15 @@ fn parse_saml(body: &Value, id: String) -> Result<InboundSamlProviderConfig, Jso
 }
 
 fn update_mask(query: Option<&str>) -> Result<Option<Vec<String>>, JsonResponse> {
+    update_mask_with(query, true)
+}
+
+/// The update mask; `refuse_duplicates` false keeps the first of repeated paths, as the
+/// project config PATCH of production does (AUTH-CONFIG-SDK).
+fn update_mask_with(
+    query: Option<&str>,
+    refuse_duplicates: bool,
+) -> Result<Option<Vec<String>>, JsonResponse> {
     let mut value = None;
     for pair in query
         .unwrap_or_default()
@@ -5601,7 +5876,10 @@ fn update_mask(query: Option<&str>) -> Result<Option<Vec<String>>, JsonResponse>
             return Err(error(400, "INVALID_ARGUMENT"));
         }
         if !seen.insert(field.to_owned()) {
-            return Err(error(400, "INVALID_ARGUMENT"));
+            if refuse_duplicates {
+                return Err(error(400, "INVALID_ARGUMENT"));
+            }
+            continue;
         }
         fields.push(field.to_owned());
     }
@@ -6199,7 +6477,7 @@ fn validate_tenant_update_payload(body: &Value) -> Result<(), JsonResponse> {
 
     if let Some(value) = object.get("passwordPolicyConfig") {
         if !value.is_null() {
-            password_policy_from_config_json(value)?;
+            password_policy_from_config_json(value, false)?;
         }
     }
     Ok(())
@@ -6229,7 +6507,7 @@ fn tenant_management(
             };
             let password_policy = match body.get("passwordPolicyConfig") {
                 None => None,
-                Some(value) => match password_policy_from_config_json(value) {
+                Some(value) => match password_policy_from_config_json(value, false) {
                     Ok(policy) => Some(policy),
                     Err(response) => return response,
                 },
@@ -6368,10 +6646,12 @@ fn tenant_management(
                 None
             };
             let password_policy = match current_policy {
-                Some(current) => match password_policy_from_update(&current, body, &fields) {
-                    Ok(policy) => policy,
-                    Err(response) => return response,
-                },
+                Some(current) => {
+                    match password_policy_from_update(&current, body, &fields, false) {
+                        Ok(policy) => policy,
+                        Err(response) => return response,
+                    }
+                }
                 None => None,
             };
             let patch = match tenant_metadata_patch(body, query) {
@@ -6404,13 +6684,27 @@ fn tenant_management(
     }
 }
 
+/// The refusal of a request for a tenant the emulator does not serve: production answers a
+/// client policy read with the v2 API's `INVALID_TENANT_ID` (sandbox recording 2026-09-25,
+/// AUTH-CONFIG-SDK config/read); other routes keep `refusal`.
+fn unknown_tenant_refusal(handler: routes::Handler, refusal: JsonResponse) -> JsonResponse {
+    if handler == routes::Handler::PasswordPolicy {
+        config_proto::refusal("INVALID_TENANT_ID")
+    } else {
+        refusal
+    }
+}
+
 fn tenant_policy_denial_with_metadata(
     handler: routes::Handler,
     metadata: Option<&fireemu_core_auth::store::TenantMetadata>,
     body: &Value,
 ) -> Option<JsonResponse> {
     let Some(metadata) = metadata else {
-        return Some(error(400, "TENANT_NOT_FOUND"));
+        return Some(unknown_tenant_refusal(
+            handler,
+            error(400, "TENANT_NOT_FOUND"),
+        ));
     };
     let authenticates = matches!(
         handler,
@@ -6476,6 +6770,34 @@ fn end_user_client_permission_denial(
         return Some(auth_error(&AuthError::UserSignupDisabled));
     }
     None
+}
+
+/// Strict: while client sign-up is off, production refuses a phone code for a number and an
+/// Admin email sign-in link for an address that no account holds when they are asked for
+/// (sandbox recording 2026-09-25, auth-config-sdk/client-permissions). A client's email link
+/// request is unobserved (the harness sends no email), so it is not refused here.
+fn new_account_code_denial(
+    handler: routes::Handler,
+    store: &AuthStore,
+    body: &Value,
+) -> Option<JsonResponse> {
+    if store.allows_user_signup(AuthPrincipal::EndUser)
+        || body.get("idToken").is_some_and(|value| !value.is_null())
+    {
+        return None;
+    }
+    let new_account = match handler {
+        routes::Handler::SendVerificationCode => str_field(body, "phoneNumber")
+            .is_some_and(|number| store.user_by_phone(number).is_none()),
+        routes::Handler::AdminSendOobCode => {
+            body.get("requestType").and_then(Value::as_str) == Some("EMAIL_SIGNIN")
+                && str_field(body, "email")
+                    .map(canonicalize_email)
+                    .is_some_and(|email| store.user_by_email(&email).is_none())
+        }
+        _ => false,
+    };
+    new_account.then(|| auth_error(&AuthError::UserSignupDisabled))
 }
 
 fn request_may_create_end_user(
@@ -7243,6 +7565,25 @@ fn custom_token_claims_hold(payload: &JsonValue, now_secs: i64) -> bool {
         && now_secs < exp.saturating_add(leeway)
 }
 
+/// `GET v1/projects`: the project named by its number, as production and the official
+/// emulator both answer, and the project's authorized domains (sandbox read 2026-09-25). The
+/// emulator profile keeps the official emulator's `localhost` until domains are configured.
+fn client_project_config(store: &AuthStore, strict: bool) -> JsonResponse {
+    let project = store.project_number().map_or_else(
+        || store.project_id().to_owned(),
+        |number| number.to_string(),
+    );
+    let domains = if strict || store.sign_in_config().authorized_domains.is_some() {
+        store.authorized_domains()
+    } else {
+        vec!["localhost".to_owned()]
+    };
+    JsonResponse {
+        status: 200,
+        body: json!({"projectId": project, "authorizedDomains": domains}),
+    }
+}
+
 /// The v2 API's refusal: a gRPC status name and no `errors` list (sandbox recording
 /// 2026-09-24, mfaEnrollment:start and :withdraw). Applied in the strict profile only.
 fn v2_error_shape(response: JsonResponse, strict: bool) -> JsonResponse {
@@ -7293,12 +7634,14 @@ fn legacy_sign_in_token(
 }
 
 fn password_policy_notification(code: ViolationCode, policy: &PasswordPolicy) -> Value {
+    // Production words a character class as its refusals do (sandbox recording 2026-09-25,
+    // auth-config-sdk/password-policy/existing#sign-in-weak-notify: "an upper case character").
     let message = match code {
         ViolationCode::MissingLowercaseCharacter => {
-            "Password must contain a lowercase character".to_owned()
+            "Password must contain a lower case character".to_owned()
         }
         ViolationCode::MissingUppercaseCharacter => {
-            "Password must contain an uppercase character".to_owned()
+            "Password must contain an upper case character".to_owned()
         }
         ViolationCode::MissingNumericCharacter => {
             "Password must contain a numeric character".to_owned()
@@ -8104,7 +8447,9 @@ fn parse_valid_since(body: &Value) -> Result<Option<LogicalInstant>, JsonRespons
     }
 }
 
-fn parse_update(body: &Value) -> Result<UpdatePlan, JsonResponse> {
+/// An update's plan. An administrator may set a password below the minimum length, as
+/// production lets it (sandbox recording 2026-09-25); an end user may not.
+fn parse_update(body: &Value, self_service: bool) -> Result<UpdatePlan, JsonResponse> {
     reject_unsupported(body, UNSUPPORTED_UPDATE_FIELDS)?;
     let claims = match opt_str(body, "customAttributes")? {
         Some(attrs) => Some(parse_custom_claims(attrs)?),
@@ -8112,7 +8457,12 @@ fn parse_update(body: &Value) -> Result<UpdatePlan, JsonResponse> {
     };
     let password = opt_str(body, "password")?.map(str::to_owned);
     if let Some(p) = &password {
-        AuthStore::validate_password(p).map_err(|e| auth_error(&e))?;
+        if self_service {
+            AuthStore::validate_password(p)
+        } else {
+            AuthStore::validate_admin_password(p)
+        }
+        .map_err(|e| auth_error(&e))?;
     }
     let change = |key: &str| -> Result<Change, JsonResponse> {
         Ok(opt_str(body, key)?.map_or(Change::Keep, |v| Change::Set(v.to_owned())))
@@ -8265,7 +8615,7 @@ fn parse_client_update(body: &Value) -> Result<UpdatePlan, JsonResponse> {
             fields.insert("displayName".to_owned(), Value::String(number.to_string()));
         }
     }
-    parse_update(&client)
+    parse_update(&client, true)
 }
 
 #[allow(clippy::too_many_lines)]
@@ -8380,14 +8730,18 @@ fn update(
     let plan = match if self_service {
         parse_client_update(body)
     } else {
-        parse_update(body)
+        parse_update(body, false)
     } {
         Ok(p) => p,
         Err(r) => return r,
     };
     if let Some(password) = &plan.password {
         if let Err(e) = store.validate_password_for(
-            fireemu_core_auth::password_policy::Operation::Change,
+            if self_service {
+                fireemu_core_auth::password_policy::Operation::Change
+            } else {
+                fireemu_core_auth::password_policy::Operation::AdminUpdate
+            },
             password,
         ) {
             return auth_error(&e);
@@ -8555,7 +8909,11 @@ fn update(
             &uid,
             password,
             at,
-            fireemu_core_auth::password_policy::Operation::Change,
+            if self_service {
+                fireemu_core_auth::password_policy::Operation::Change
+            } else {
+                fireemu_core_auth::password_policy::Operation::AdminUpdate
+            },
         ) {
             return auth_error(&e);
         }
@@ -10199,8 +10557,14 @@ fn oob_link(
     request_type: OobRequestType,
     code: &str,
     body: &Value,
-    tenant: Option<&str>,
+    store: &AuthStore,
 ) -> String {
+    let tenant = store.tenant_id();
+    // The link names the project's default locale, as production's does (sandbox recording
+    // 2026-09-25, auth-config-sdk/other-fields#reset-under-locale).
+    let lang = percent_encode(&project_config::default_locale(
+        store.stored_config_members(),
+    ));
     let host = headers.host.as_deref().unwrap_or("127.0.0.1:9099");
     let mode = match request_type {
         OobRequestType::PasswordReset => "resetPassword",
@@ -10209,7 +10573,7 @@ fn oob_link(
         OobRequestType::VerifyAndChangeEmail => "verifyAndChangeEmail",
     };
     let mut link = format!(
-        "http://{host}/emulator/action?mode={mode}&lang=en&oobCode={code}&apiKey=fake-api-key"
+        "http://{host}/emulator/action?mode={mode}&lang={lang}&oobCode={code}&apiKey=fake-api-key"
     );
     if let Some(url) = str_field(body, "continueUrl") {
         link.push_str("&continueUrl=");
@@ -10410,6 +10774,9 @@ fn send_oob_code(
                 return response;
             }
         }
+        if let Some(response) = mobile_link_refusal(store, body) {
+            return response;
+        }
         // A newer password reset, email change or sign-in link retires the older one; a
         // verification link cannot be asked for twice within minutes, so its rule is unobserved.
         if request_type != OobRequestType::VerifyEmail {
@@ -10422,28 +10789,91 @@ fn send_oob_code(
     };
     let mut response =
         json!({"kind": "identitytoolkit#GetOobConfirmationCodeResponse", "email": email});
+    let mut link = oob_link(headers, request_type, &code, body, store);
+    if strict {
+        link = mobile_link(store, body, link);
+    }
     if return_oob_link {
         response["oobCode"] = json!(code);
-        response["oobLink"] = json!(oob_link(
-            headers,
-            request_type,
-            &code,
-            body,
-            store.tenant_id()
-        ));
+        response["oobLink"] = json!(link);
     } else {
         // The mail that is not sent: the official emulator prints the link instead.
         store.push_credential_notice(CredentialNotice::EmailAction {
             request_type,
             email: email.clone(),
             new_email: store.oob_code(&code).and_then(|c| c.new_email.clone()),
-            link: oob_link(headers, request_type, &code, body, store.tenant_id()),
+            link,
         });
     }
     JsonResponse {
         status: 200,
         body: response,
     }
+}
+
+/// Whether an action link asks for a mobile app: an iOS bundle or an Android package.
+fn names_mobile_app(body: &Value) -> bool {
+    str_field(body, "iOSBundleId").is_some_and(|id| !id.is_empty())
+        || str_field(body, "androidPackageName").is_some_and(|name| !name.is_empty())
+}
+
+/// Whether an app handles the action link itself (`canHandleCodeInApp`).
+fn handled_in_app(body: &Value) -> bool {
+    body.get("canHandleCodeInApp").and_then(Value::as_bool) == Some(true)
+}
+
+/// Strict: production's refusals of mobile link settings (sandbox recording 2026-09-25,
+/// auth-config-sdk/mobile-links). fireemu configures no Firebase Hosting domain, so every link
+/// domain is refused; Dynamic Links are never activated.
+fn mobile_link_refusal(store: &AuthStore, body: &Value) -> Option<JsonResponse> {
+    if str_field(body, "linkDomain").is_some_and(|domain| !domain.is_empty()) {
+        return Some(error(
+            400,
+            "INVALID_HOSTING_LINK_DOMAIN : The provided hosting link domain is not configured in Firebase Hosting or is not owned by the current project. This cannot be a default hosting domain (web.app or firebaseapp.com).",
+        ));
+    }
+    if handled_in_app(body) && str_field(body, "continueUrl").is_none() {
+        return Some(error(400, "MISSING_CONTINUE_URI"));
+    }
+    let dynamic_links = project_config::member_value(
+        store.stored_config_members(),
+        "mobileLinksConfig",
+        store.project_id(),
+    )
+    .and_then(|config| config.get("domain").cloned())
+        == Some(json!("FIREBASE_DYNAMIC_LINK_DOMAIN"));
+    if dynamic_links && handled_in_app(body) && names_mobile_app(body) {
+        return Some(error(
+            400,
+            "DYNAMIC_LINK_NOT_ACTIVATED : FDL domain is not configured",
+        ));
+    }
+    None
+}
+
+/// Strict: an action link with mobile settings as production gives it. A link an app handles
+/// is wrapped in the hosting domain's `/__/auth/links`; otherwise a mobile app wraps the
+/// continue URL (sandbox recording 2026-09-25, auth-config-sdk/mobile-links).
+fn mobile_link(store: &AuthStore, body: &Value, link: String) -> String {
+    if !names_mobile_app(body) {
+        return link;
+    }
+    let links_handler = format!(
+        "https://{}.firebaseapp.com/__/auth/links?link=",
+        store.project_id()
+    );
+    if handled_in_app(body) {
+        return format!("{links_handler}{}", percent_encode(&link));
+    }
+    let Some(continue_url) = str_field(body, "continueUrl") else {
+        return link;
+    };
+    let direct = format!("continueUrl={}", percent_encode(continue_url));
+    let through_handler = format!(
+        "continueUrl={}",
+        percent_encode(&format!("{links_handler}{continue_url}"))
+    );
+    link.replacen(&direct, &through_handler, 1)
 }
 
 /// The refusal of a continue URL whose host is not one of the project's authorized domains.
@@ -10865,13 +11295,7 @@ fn action_reset_password(
     };
     let template = format!(
         "{}&newPassword=NEW_PASSWORD_HERE",
-        oob_link(
-            headers,
-            entry.request_type,
-            code,
-            &Value::Null,
-            store.tenant_id()
-        )
+        oob_link(headers, entry.request_type, code, &Value::Null, store)
     );
     let Some(new_password) = new_password else {
         return action_response(
@@ -11210,6 +11634,23 @@ fn send_verification_code(store: &mut AuthStore, body: &Value, at: LogicalInstan
         }
         Err(e) => auth_error(&e),
     }
+}
+
+/// Strict: a written SMS region policy refuses a code for a number of a region it does not
+/// allow (sandbox recording 2026-09-25, auth-config-sdk/other-fields).
+fn sms_region_refusal(store: &AuthStore, body: &Value) -> Option<JsonResponse> {
+    let number = str_field(body, "phoneNumber")?;
+    let policy = project_config::member_value(
+        store.stored_config_members(),
+        "smsRegionConfig",
+        store.project_id(),
+    )?;
+    phone_region::policy_refuses(&policy, number).then(|| {
+        error(
+            400,
+            "OPERATION_NOT_ALLOWED : SMS unable to be sent until this region enabled by the app developer.",
+        )
+    })
 }
 
 /// `accounts:signInWithPhoneNumber`: `sessionInfo` + `code`; with an `idToken` the number
@@ -11923,14 +12364,27 @@ fn normalized_idp_params(request_uri: &str, post_body: Option<&str>) -> BTreeMap
 /// `accounts:createAuthUri` (`fetchSignInMethodsForEmail`): whether the email is
 /// registered and how it can sign in. A `providerId` (a sign-in-with-identity-provider request) is not
 /// implemented by the official emulator, and neither is it here.
-fn create_auth_uri(store: &AuthStore, body: &Value) -> JsonResponse {
+/// `accounts:createAuthUri`. Strict answers as production does (sandbox recording
+/// 2026-09-25, auth-config-sdk/email-privacy): a provider that is not configured is refused,
+/// and empty provider lists are left out.
+fn create_auth_uri(store: &AuthStore, body: &Value, strict: bool) -> JsonResponse {
     let session_id = str_field(body, "sessionId")
         .filter(|s| !s.is_empty())
         .unwrap_or("fireemu-session")
         .to_owned();
     // The official emulator does not implement createAuthUri for a provider (it is a legacy
-    // redirect helper the SDKs no longer use); it answers NotImplementedError.
-    if body.get("providerId").is_some_and(|v| !v.is_null()) {
+    // redirect helper the SDKs no longer use); it answers NotImplementedError. Production's
+    // answer for a configured provider is unobserved.
+    if let Some(provider) = body.get("providerId").filter(|v| !v.is_null()) {
+        let configured = provider
+            .as_str()
+            .is_some_and(|id| store.oidc_config(id).is_some() || store.saml_config(id).is_some());
+        if strict && !configured {
+            return error(
+                400,
+                "OPERATION_NOT_ALLOWED : The identity provider configuration is not found.",
+            );
+        }
         return not_implemented("Sign-in with IDP is not yet supported.");
     }
     let Some(identifier) = str_field(body, "identifier") else {
@@ -11966,15 +12420,22 @@ fn create_auth_uri(store: &AuthStore, body: &Value) -> JsonResponse {
         }
         None => false,
     };
+    let mut answer = json!({
+        "kind": "identitytoolkit#CreateAuthUriResponse",
+        "registered": registered,
+        "signinMethods": methods,
+        "allProviders": methods,
+        "sessionId": session_id,
+    });
+    if strict && methods.is_empty() {
+        if let Some(fields) = answer.as_object_mut() {
+            fields.remove("signinMethods");
+            fields.remove("allProviders");
+        }
+    }
     JsonResponse {
         status: 200,
-        body: json!({
-            "kind": "identitytoolkit#CreateAuthUriResponse",
-            "registered": registered,
-            "signinMethods": methods,
-            "allProviders": methods,
-            "sessionId": session_id,
-        }),
+        body: answer,
     }
 }
 
@@ -12297,7 +12758,7 @@ fn emulator_route(
                     json!({
                         "email": c.email,
                         "oobCode": c.code,
-                        "oobLink": oob_link(headers, c.request_type, &c.code, &Value::Null, store.tenant_id()),
+                        "oobLink": oob_link(headers, c.request_type, &c.code, &Value::Null, store),
                         "requestType": c.request_type.as_str(),
                     })
                 })
@@ -12400,51 +12861,62 @@ fn project_config_json_with_password_policy(
     result
 }
 
-fn project_config_json_with_auth_settings(
-    config: fireemu_core_auth::store::ProjectAuthConfig,
-    policy: &PasswordPolicy,
-    quota: &SignupQuotaConfig,
-) -> Value {
-    let mut result = project_config_json_with_password_policy(config, policy);
-    result["quota"] = quota_config_json(quota);
-    result
-}
-
 fn password_policy_json(policy: &PasswordPolicy) -> JsonResponse {
-    // Production's order first, then any other configured character in code-point order.
-    let order = fireemu_core_auth::password_policy::DEFAULT_NON_ALPHANUMERIC_ORDER;
-    let allowed: Vec<String> = order
-        .chars()
-        .filter(|c| policy.allowed_non_alphanumeric.contains(c))
-        .chain(
-            policy
-                .allowed_non_alphanumeric
-                .iter()
-                .copied()
-                .filter(|c| !order.contains(*c)),
-        )
-        .map(String::from)
-        .collect();
+    // A project without a configured policy answers production's default policy (sandbox
+    // read 2026-09-25): no symbol list and no sign-in upgrade member.
+    if !policy.configured {
+        return JsonResponse {
+            status: 200,
+            body: json!({
+                "customStrengthOptions": {
+                    "minPasswordLength": policy.min_length,
+                    "maxPasswordLength": fireemu_core_auth::password_policy::MAX_PASSWORD_UTF16_UNITS,
+                },
+                "schemaVersion": 1,
+                "enforcementState": "ENFORCE",
+            }),
+        };
+    }
+    // A configured policy as production projects it (sandbox recording 2026-09-25): the
+    // written options without false ones, the symbol list only when a symbol is required, and
+    // the sign-in upgrade only when it is on.
     let options = password_policy_config_json(policy)
         .get("passwordPolicyVersions")
         .and_then(Value::as_array)
         .and_then(|versions| versions.first())
         .and_then(|version| version.get("customStrengthOptions"))
         .cloned()
-        .unwrap_or_else(|| json!({}));
-    JsonResponse {
-        status: 200,
-        body: json!({
-            "customStrengthOptions": options,
-            "allowedNonAlphanumericCharacters": allowed,
-            "enforcementState": match policy.enforcement_state {
-                EnforcementState::Off => "OFF",
-                EnforcementState::Enforce => "ENFORCE",
-            },
-            "forceUpgradeOnSignin": policy.force_upgrade_on_signin,
-            "schemaVersion": 1,
-        }),
+        .map_or_else(|| json!({}), project_config::without_false);
+    let mut body = json!({
+        "customStrengthOptions": options,
+        "schemaVersion": 1,
+        "enforcementState": match policy.enforcement_state {
+            EnforcementState::Off => "OFF",
+            EnforcementState::Enforce => "ENFORCE",
+            EnforcementState::Unspecified => "ENFORCEMENT_STATE_UNSPECIFIED",
+        },
+    });
+    if policy.require_non_alphanumeric {
+        // Production's order first, then any other configured character in code-point order.
+        let order = fireemu_core_auth::password_policy::DEFAULT_NON_ALPHANUMERIC_ORDER;
+        let allowed: Vec<String> = order
+            .chars()
+            .filter(|c| policy.allowed_non_alphanumeric.contains(c))
+            .chain(
+                policy
+                    .allowed_non_alphanumeric
+                    .iter()
+                    .copied()
+                    .filter(|c| !order.contains(*c)),
+            )
+            .map(String::from)
+            .collect();
+        body["allowedNonAlphanumericCharacters"] = json!(allowed);
     }
+    if policy.force_upgrade_on_signin {
+        body["forceUpgradeOnSignin"] = json!(true);
+    }
+    JsonResponse { status: 200, body }
 }
 
 #[cfg(test)]
@@ -12809,17 +13281,26 @@ mod tests {
                 "passwordPolicyEnforcementState": "ENFORCE",
                 "passwordPolicyVersions": versions,
             });
-            assert!(password_policy_from_config_json(&body).is_err());
+            assert!(password_policy_from_config_json(&body, true).is_err());
+            assert!(password_policy_from_config_json(&body, false).is_err());
         }
-        assert!(password_policy_from_config_json(&json!({
+        // Production requires exactly one version; the emulator profile takes none as the
+        // default options, as the official emulator takes any policy.
+        let without_versions = json!({
             "passwordPolicyEnforcementState": "ENFORCE",
             "passwordPolicyVersions": null,
-        }))
-        .is_ok());
-        assert!(password_policy_from_config_json(&json!({
-            "passwordPolicyEnforcementState": "ENFORCE",
-            "passwordPolicyVersions": [{"customStrengthOptions": {"minPasswordLength": 12}}]
-        }))
-        .is_ok());
+        });
+        assert!(password_policy_from_config_json(&without_versions, true).is_err());
+        assert!(password_policy_from_config_json(&without_versions, false).is_ok());
+        for one_version in [true, false] {
+            assert!(password_policy_from_config_json(
+                &json!({
+                    "passwordPolicyEnforcementState": "ENFORCE",
+                    "passwordPolicyVersions": [{"customStrengthOptions": {"minPasswordLength": 12}}]
+                }),
+                one_version
+            )
+            .is_ok());
+        }
     }
 }

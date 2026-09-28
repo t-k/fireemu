@@ -22,7 +22,7 @@ The repaired source is `6fc6da362aab0123096d46994c542a157a8064dd`. A clean build
 | `retry-token/retry-with-read-only-previous` | `INVALID_ARGUMENT`, `Cannot retry a read-only transaction` |
 | `finished-token/rollback-after-commit` | `ABORTED`, `The referenced transaction has expired or is no longer valid.` |
 
-This is partial evidence for idle-expiry, retry-token-lifecycle and the finished-token subset of failed-commit-and-rollback. Representative gRPC and the remaining failed-commit chain are not recorded. The other 15 frozen conditions receive no observation from this corpus; the [18-condition closure](../../spec/compatibility/closure/FS-TRANSACTION.json), final regression, independent closure review and official emulator profile gate remain open. No condition or parent is promoted and this comparison grants no further production permission.
+This is partial evidence for idle-expiry, retry-token-lifecycle and the finished-token subset of failed-commit-and-rollback. Separate [native idle-candidate evidence](fs-transaction-idle-candidates.md) now covers representative P10 recipes and their provisional strict repair; it does not establish exact expiry or the remaining failed-commit chain. The other 15 frozen conditions receive no observation from this REST corpus; the [18-condition closure](../../spec/compatibility/closure/FS-TRANSACTION.json), final regression, independent closure review and official emulator profile gate remain open. No condition or parent is promoted and this comparison grants no further production permission.
 
 ## Historical preparation scope
 

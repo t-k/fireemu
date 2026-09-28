@@ -1,0 +1,607 @@
+{
+  "schemaVersion": 1,
+  "kind": "fs-transaction-p10-idle-candidate-partial-comparison-v1",
+  "parent": "FS-TRANSACTION",
+  "parentStatus": "IMPLEMENTING",
+  "closureReview": "PENDING",
+  "frozenConditionCount": 18,
+  "coverage": "PARTIAL",
+  "authorizesProduction": false,
+  "productionRequestsFromLocalReplay": 0,
+  "acquisitionValidated": false,
+  "promotionReady": false,
+  "productionFreezeSha256": "5162b7bf507ad7d224e0944bf70562aa877c3e8a84d9ed468e654699e980f5b0",
+  "productionRecordingSha256": [
+    "b51b7eef2f013d6e9acd427ed6973a0ba52e3e262c75a5a66a655c9aeaeb5e43",
+    "e010620ee5504f26085786e98282a27cd4ff08979ea5d8792672570f932d4569"
+  ],
+  "productionSourceCommit": "de1194e6fb94c8d690cfb6163656f978420b76b6",
+  "productionTimingMode": "wall-clock",
+  "productionProjection": {
+    "cases": [
+      {
+        "caseId": "grpc/commit-before-idle",
+        "code": 0,
+        "details": "",
+        "issuedToken": false,
+        "rpc": "Commit"
+      },
+      {
+        "caseId": "grpc/commit-after-idle",
+        "code": 0,
+        "details": "",
+        "issuedToken": false,
+        "rpc": "Commit"
+      },
+      {
+        "caseId": "grpc/rollback-first-after-idle",
+        "code": 0,
+        "details": "",
+        "issuedToken": false,
+        "rpc": "Rollback"
+      },
+      {
+        "caseId": "grpc/retry-after-rollback-first",
+        "code": 0,
+        "details": "",
+        "issuedToken": true,
+        "rpc": "BeginTransaction"
+      },
+      {
+        "caseId": "grpc/get-first-after-idle",
+        "code": 0,
+        "details": "",
+        "issuedToken": false,
+        "rpc": "GetDocument"
+      },
+      {
+        "caseId": "grpc/rollback-after-expiry-touch",
+        "code": 0,
+        "details": "",
+        "issuedToken": false,
+        "rpc": "Rollback"
+      },
+      {
+        "caseId": "grpc/retry-after-expiry-touch",
+        "code": 0,
+        "details": "",
+        "issuedToken": true,
+        "rpc": "BeginTransaction"
+      }
+    ],
+    "cleanup": {
+      "absent": true
+    },
+    "corpusDigest": "60886bf65c4e568684d5af106f8376343c3a4f3de4fd423deb991483e0c1dbaf",
+    "exactThresholdProven": false,
+    "idleCandidates": [
+      {
+        "classification": "BEFORE",
+        "seconds": 55,
+        "site": "live/commit",
+        "thresholdSeconds": 60
+      },
+      {
+        "classification": "AFTER",
+        "seconds": 65,
+        "site": "expired/commit",
+        "thresholdSeconds": 60
+      },
+      {
+        "classification": "AFTER",
+        "seconds": 65,
+        "site": "rollback-first/rollback",
+        "thresholdSeconds": 60
+      },
+      {
+        "classification": "AFTER",
+        "seconds": 65,
+        "site": "get-first/expired-read",
+        "thresholdSeconds": 60
+      }
+    ],
+    "program": "FS-TRANSACTION-P10-A-GRPC-IDLE",
+    "reads": [
+      {
+        "code": 5,
+        "details": "Document \"projects/<project>/databases/(default)/documents/oracle/<nonce>/txn-p10/control\" not found.",
+        "site": "setup/absence",
+        "state": null
+      },
+      {
+        "code": 0,
+        "details": "",
+        "site": "live/read",
+        "state": "created"
+      },
+      {
+        "code": 0,
+        "details": "",
+        "site": "live/post-state",
+        "state": "committed-before-idle"
+      },
+      {
+        "code": 0,
+        "details": "",
+        "site": "expired/read",
+        "state": "committed-before-idle"
+      },
+      {
+        "code": 0,
+        "details": "",
+        "site": "expired/post-state",
+        "state": "attempted-after-idle"
+      },
+      {
+        "code": 0,
+        "details": "",
+        "site": "rollback-first/read",
+        "state": "attempted-after-idle"
+      },
+      {
+        "code": 0,
+        "details": "",
+        "site": "rollback-first/snapshot",
+        "state": "after-rollback-first"
+      },
+      {
+        "code": 0,
+        "details": "",
+        "site": "get-first/read",
+        "state": "after-rollback-first"
+      },
+      {
+        "code": 0,
+        "details": "",
+        "site": "get-first/expired-read",
+        "state": "after-rollback-first"
+      },
+      {
+        "code": 0,
+        "details": "",
+        "site": "get-first/snapshot",
+        "state": "after-get-first"
+      },
+      {
+        "code": 0,
+        "details": "",
+        "site": "post-state",
+        "state": "after-get-first"
+      }
+    ],
+    "skipped": [],
+    "timingMode": "wall-clock"
+  },
+  "sourceBuild": {
+    "sourceCommit": "ff4024b8f066e18277834fa82a58059b01f9bc4d",
+    "runtimeInputsDigest": "6af57d5c36b371fc6332137f82f1d70a9675b2fb710654e11e88d770e02a21de",
+    "runtimeInputCount": 444,
+    "artifactSha256": "1e45a2c3ddcaf2157bb1d03ada21a0eceb8c89c56bfdf7141054db7938ad47bf",
+    "buildLogSha256": "c7f6b0c2255b9e23af421ad3c3e253aee2418f83c3d9356309a5e708b5d3e658",
+    "sourceUnchanged": true,
+    "exitCode": 0
+  },
+  "localComparisonNormalization": [
+    "Only the declared project namespace is replaced by a marker.",
+    "timingMode is compared as provenance, not required to equal wall-clock. No RPC code, diagnostic or post-state is rewritten."
+  ],
+  "profiles": {
+    "strict": {
+      "timingMode": "control-clock",
+      "nativeProjection": {
+        "cases": [
+          {
+            "caseId": "grpc/commit-before-idle",
+            "code": 0,
+            "details": "",
+            "issuedToken": false,
+            "rpc": "Commit"
+          },
+          {
+            "caseId": "grpc/commit-after-idle",
+            "code": 0,
+            "details": "",
+            "issuedToken": false,
+            "rpc": "Commit"
+          },
+          {
+            "caseId": "grpc/rollback-first-after-idle",
+            "code": 0,
+            "details": "",
+            "issuedToken": false,
+            "rpc": "Rollback"
+          },
+          {
+            "caseId": "grpc/retry-after-rollback-first",
+            "code": 0,
+            "details": "",
+            "issuedToken": true,
+            "rpc": "BeginTransaction"
+          },
+          {
+            "caseId": "grpc/get-first-after-idle",
+            "code": 0,
+            "details": "",
+            "issuedToken": false,
+            "rpc": "GetDocument"
+          },
+          {
+            "caseId": "grpc/rollback-after-expiry-touch",
+            "code": 0,
+            "details": "",
+            "issuedToken": false,
+            "rpc": "Rollback"
+          },
+          {
+            "caseId": "grpc/retry-after-expiry-touch",
+            "code": 0,
+            "details": "",
+            "issuedToken": true,
+            "rpc": "BeginTransaction"
+          }
+        ],
+        "cleanup": {
+          "absent": true
+        },
+        "corpusDigest": "60886bf65c4e568684d5af106f8376343c3a4f3de4fd423deb991483e0c1dbaf",
+        "exactThresholdProven": false,
+        "idleCandidates": [
+          {
+            "classification": "BEFORE",
+            "seconds": 55,
+            "site": "live/commit",
+            "thresholdSeconds": 60
+          },
+          {
+            "classification": "AFTER",
+            "seconds": 65,
+            "site": "expired/commit",
+            "thresholdSeconds": 60
+          },
+          {
+            "classification": "AFTER",
+            "seconds": 65,
+            "site": "rollback-first/rollback",
+            "thresholdSeconds": 60
+          },
+          {
+            "classification": "AFTER",
+            "seconds": 65,
+            "site": "get-first/expired-read",
+            "thresholdSeconds": 60
+          }
+        ],
+        "program": "FS-TRANSACTION-P10-A-GRPC-IDLE",
+        "reads": [
+          {
+            "code": 5,
+            "details": "Document \"projects/<project>/databases/(default)/documents/oracle/<nonce>/txn-p10/control\" not found.",
+            "site": "setup/absence",
+            "state": null
+          },
+          {
+            "code": 0,
+            "details": "",
+            "site": "live/read",
+            "state": "created"
+          },
+          {
+            "code": 0,
+            "details": "",
+            "site": "live/post-state",
+            "state": "committed-before-idle"
+          },
+          {
+            "code": 0,
+            "details": "",
+            "site": "expired/read",
+            "state": "committed-before-idle"
+          },
+          {
+            "code": 0,
+            "details": "",
+            "site": "expired/post-state",
+            "state": "attempted-after-idle"
+          },
+          {
+            "code": 0,
+            "details": "",
+            "site": "rollback-first/read",
+            "state": "attempted-after-idle"
+          },
+          {
+            "code": 0,
+            "details": "",
+            "site": "rollback-first/snapshot",
+            "state": "after-rollback-first"
+          },
+          {
+            "code": 0,
+            "details": "",
+            "site": "get-first/read",
+            "state": "after-rollback-first"
+          },
+          {
+            "code": 0,
+            "details": "",
+            "site": "get-first/expired-read",
+            "state": "after-rollback-first"
+          },
+          {
+            "code": 0,
+            "details": "",
+            "site": "get-first/snapshot",
+            "state": "after-get-first"
+          },
+          {
+            "code": 0,
+            "details": "",
+            "site": "post-state",
+            "state": "after-get-first"
+          }
+        ],
+        "skipped": [],
+        "timingMode": "control-clock"
+      },
+      "nativeDataRequests": 29,
+      "nativeReceiptSha256": "da5aa3c6b376869e6fc120a9c21102fae1a0f1554be4df66722bebc95c74ca80",
+      "nativeProofSha256": "f65efe33ad48ded1f80970ae95b7fce844d555cbaed70286e2124feaf798b1fc",
+      "nativeFinishSha256": "a039998c273784b5f493e279299847ee8e254a958fda00a207a5e383ec61bfa7",
+      "nativeCaseDifferenceIds": [],
+      "nativeProductionProjectionMatch": true,
+      "knownProfilePolicyDifference": false,
+      "rest20_70": {
+        "dataRequests": 15,
+        "controlRequests": 4,
+        "requestedSeconds": [
+          20,
+          70
+        ],
+        "httpStatuses": [
+          200,
+          409
+        ],
+        "ownedDocumentsAbsent": 1,
+        "proofSha256": "0b9ab3dcd88a371c30110177a1ad6b0ae90110dcb772476b5d5a7b20b33b4a93"
+      },
+      "rest13CaseReplay": {
+        "matchedBothSavedRecordings": true,
+        "proofSha256": "f61f96d8e5453dce4d636c492e64af44b6cc1994168343f2d8c0388af0fa8be6"
+      },
+      "p09Replay": {
+        "matchedSavedProjection": true,
+        "dataRequests": 28,
+        "proofSha256": "724f39a00364479e90dc14318a189081ce30e7dbd43b169386b2e9c0c83cb2b8"
+      }
+    },
+    "emulator": {
+      "timingMode": "control-clock",
+      "nativeProjection": {
+        "cases": [
+          {
+            "caseId": "grpc/commit-before-idle",
+            "code": 0,
+            "details": "",
+            "issuedToken": false,
+            "rpc": "Commit"
+          },
+          {
+            "caseId": "grpc/commit-after-idle",
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid.",
+            "issuedToken": false,
+            "rpc": "Commit"
+          },
+          {
+            "caseId": "grpc/rollback-first-after-idle",
+            "code": 0,
+            "details": "",
+            "issuedToken": false,
+            "rpc": "Rollback"
+          },
+          {
+            "caseId": "grpc/retry-after-rollback-first",
+            "code": 3,
+            "details": "Invalid retry transaction.",
+            "issuedToken": false,
+            "rpc": "BeginTransaction"
+          },
+          {
+            "caseId": "grpc/get-first-after-idle",
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid.",
+            "issuedToken": false,
+            "rpc": "GetDocument"
+          },
+          {
+            "caseId": "grpc/rollback-after-expiry-touch",
+            "code": 0,
+            "details": "",
+            "issuedToken": false,
+            "rpc": "Rollback"
+          },
+          {
+            "caseId": "grpc/retry-after-expiry-touch",
+            "code": 3,
+            "details": "Invalid retry transaction.",
+            "issuedToken": false,
+            "rpc": "BeginTransaction"
+          }
+        ],
+        "cleanup": {
+          "absent": true
+        },
+        "corpusDigest": "60886bf65c4e568684d5af106f8376343c3a4f3de4fd423deb991483e0c1dbaf",
+        "exactThresholdProven": false,
+        "idleCandidates": [
+          {
+            "classification": "BEFORE",
+            "seconds": 55,
+            "site": "live/commit",
+            "thresholdSeconds": 60
+          },
+          {
+            "classification": "AFTER",
+            "seconds": 65,
+            "site": "expired/commit",
+            "thresholdSeconds": 60
+          },
+          {
+            "classification": "AFTER",
+            "seconds": 65,
+            "site": "rollback-first/rollback",
+            "thresholdSeconds": 60
+          },
+          {
+            "classification": "AFTER",
+            "seconds": 65,
+            "site": "get-first/expired-read",
+            "thresholdSeconds": 60
+          }
+        ],
+        "program": "FS-TRANSACTION-P10-A-GRPC-IDLE",
+        "reads": [
+          {
+            "code": 5,
+            "details": "Document \"projects/<project>/databases/(default)/documents/oracle/<nonce>/txn-p10/control\" not found.",
+            "site": "setup/absence",
+            "state": null
+          },
+          {
+            "code": 0,
+            "details": "",
+            "site": "live/read",
+            "state": "created"
+          },
+          {
+            "code": 0,
+            "details": "",
+            "site": "live/post-state",
+            "state": "committed-before-idle"
+          },
+          {
+            "code": 0,
+            "details": "",
+            "site": "expired/read",
+            "state": "committed-before-idle"
+          },
+          {
+            "code": 0,
+            "details": "",
+            "site": "expired/post-state",
+            "state": "committed-before-idle"
+          },
+          {
+            "code": 0,
+            "details": "",
+            "site": "rollback-first/read",
+            "state": "committed-before-idle"
+          },
+          {
+            "code": 0,
+            "details": "",
+            "site": "get-first/read",
+            "state": "after-rollback-first"
+          },
+          {
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid.",
+            "site": "get-first/expired-read",
+            "state": null
+          },
+          {
+            "code": 0,
+            "details": "",
+            "site": "post-state",
+            "state": "after-get-first"
+          }
+        ],
+        "skipped": [
+          {
+            "basis": "definitive-earlier-begin-refusal",
+            "site": "rollback-first/snapshot",
+            "tokenRole": "rollback-retry"
+          },
+          {
+            "basis": "definitive-earlier-begin-refusal",
+            "site": "rollback-first/finish",
+            "tokenRole": "rollback-retry"
+          },
+          {
+            "basis": "definitive-earlier-begin-refusal",
+            "site": "get-first/snapshot",
+            "tokenRole": "get-retry"
+          },
+          {
+            "basis": "definitive-earlier-begin-refusal",
+            "site": "get-first/finish",
+            "tokenRole": "get-retry"
+          }
+        ],
+        "timingMode": "control-clock"
+      },
+      "nativeDataRequests": 26,
+      "nativeReceiptSha256": "1a67e615be61b69ddf0752b1ed3d4bb2b47989794ff8c68811c7644c4e8d0967",
+      "nativeProofSha256": "738f926094dd2d88057d813aed8e0b5198a26bcfe25587d81be9a66d82b1b18b",
+      "nativeFinishSha256": "cada01d2167e2b420e6b49912f1b85ccc36117ade35d465649c520be516fc87a",
+      "nativeCaseDifferenceIds": [
+        "grpc/commit-after-idle",
+        "grpc/retry-after-rollback-first",
+        "grpc/get-first-after-idle",
+        "grpc/retry-after-expiry-touch"
+      ],
+      "nativeProductionProjectionMatch": false,
+      "knownProfilePolicyDifference": true,
+      "rest20_70": {
+        "dataRequests": 15,
+        "controlRequests": 4,
+        "requestedSeconds": [
+          20,
+          70
+        ],
+        "httpStatuses": [
+          200,
+          409
+        ],
+        "ownedDocumentsAbsent": 1,
+        "proofSha256": "862aa46c040029ba9286ba298ff2a2d1aa17d6969a0d6c2b1eb7a86c659a2f13"
+      },
+      "rest13CaseReplay": {
+        "matchedBothSavedRecordings": true,
+        "proofSha256": "b94442286669884fcc302bfe39926358008ebc659e931fc841a97604a6473c5b"
+      },
+      "p09Replay": {
+        "matchedSavedProjection": true,
+        "dataRequests": 28,
+        "proofSha256": "4f403c694d2ae1148edb3eb5f15833099ccc21b224fc0da47fc9fb8e67d50e2a"
+      }
+    }
+  },
+  "idlePolicy": {
+    "nominalCatalogueSeconds": 60,
+    "strictProvisionalAllowanceSeconds": 10,
+    "strictLocalDeadlineSeconds": 70,
+    "emulatorIdleSeconds": 60,
+    "totalSeconds": 270,
+    "exactProductionThresholdProven": false,
+    "provenConservativeUpperBound": false,
+    "officialArtifact": "Firestore emulator1.22.0",
+    "officialArtifactSha256": "9b6498b7f62714d67f48f59b3818883cd682dbcd46b9f59511de81c97bb5166c",
+    "officialEvidenceKind": "pinned transaction-manager bytecode; not a wire replay"
+  },
+  "remainingBoundaries": [
+    "Exact native/shared/transport-specific idle expiry, including P10-B.",
+    "Native held-writer progress and the separate wall-clock contention lease.",
+    "Rejected commit/token reuse/rollback/writer progress chain (P08).",
+    "Total-lifetime production corpus (P11).",
+    "Official emulator equality, first-expiry error mapping and ACTIVE/COMMIT state parity.",
+    "One final artifact across all remaining recorded recipes and the eighteen-condition closure review."
+  ],
+  "p09Reference": {
+    "freezeSha256": "188d89fd4fe415ca10f9164964c2d1e986c513374fdc1a18207af8c186c6f5ab",
+    "recordingSha256": [
+      "b129f425d3b8ac8cb3e7d40654b4e68f57172d9973a8406518fb81764bcc2e84",
+      "d6d8fd9c1a793a34f61eeab9389bf6cbbf085348df2f2f6e6f995c0ab68e9506"
+    ]
+  }
+}

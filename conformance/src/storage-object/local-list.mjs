@@ -15,6 +15,9 @@ const bucket = "example.appspot.com";
 const recipeIds = ["storage-object/firebase/list", "storage-object/gcs/list"];
 const directory = await mkdtemp(join(tmpdir(), "storage-object-list-"));
 const results = [];
+const gapOption = process.env.STORAGE_OBJECT_LOCAL_KNOWN_LIST_GAPS;
+if (gapOption !== undefined && !["0", "1"].includes(gapOption))
+  throw new Error("explicit local list gap option must be 0 or 1");
 
 for (const [index, recipeId] of recipeIds.entries()) {
   const runId = `locallist${String(index + 1).padStart(4, "0")}`;
@@ -39,7 +42,15 @@ for (const [index, recipeId] of recipeIds.entries()) {
     onReserve: async (event) => record({ type: "reserved", ...event }),
     onJournal: async (event) => record({ type: "ownership", ...event }),
   });
-  results.push(await replayLocalList({ sender, recipe, bucket }));
+  results.push(
+    await replayLocalList({
+      sender,
+      recipe,
+      bucket,
+      allowKnownLocalListGaps: gapOption === "1",
+      onCapture: (event) => record({ type: "response", ...event }),
+    }),
+  );
 }
 
 process.stdout.write(`${JSON.stringify({ results, eventDirectory: directory })}\n`);

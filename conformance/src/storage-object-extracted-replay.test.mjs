@@ -3,6 +3,7 @@ import test from "node:test";
 import { spawnSync } from "node:child_process";
 import { replayLocalBasic } from "./storage-object/basic-replay.mjs";
 import { replayLocalAdmin } from "./storage-object/admin-replay.mjs";
+import { replayLocalList } from "./storage-object/list-replay.mjs";
 import { buildCorpus } from "./storage-object/corpus.mjs";
 import { createLocalStorageSender } from "./storage-object/sender.mjs";
 import { buildStage3DraftPlan } from "./storage-object/stage3-plan.mjs";
@@ -11,6 +12,8 @@ function fixture({
   recipeId = "storage-object/firebase/simple-upload",
   driftBeforeCleanup = false,
   occupied = false,
+  localListGapStatus = null,
+  localListGapReason = "invalid",
 } = {}) {
   const plan = buildStage3DraftPlan({
     projectId: "example-project",
@@ -40,12 +43,48 @@ function fixture({
     fetchImpl: async (href, init) => {
       events.push("wire");
       const url = new URL(href);
-      if (url.pathname === `/storage/v1/b/${plan.bucket}/o` && init.method === "GET")
+      if (
+        [`/storage/v1/b/${plan.bucket}/o`, `/v0/b/${plan.bucket}/o`].includes(url.pathname) &&
+        init.method === "GET"
+      ) {
+        const parameter = ["startOffset", "matchGlob"].find((key) => url.searchParams.has(key));
+        if (parameter && localListGapStatus !== null) {
+          const message = `unsupported JSON API list parameter: ${parameter}`;
+          return Response.json(
+            {
+              error: {
+                code: localListGapStatus,
+                message,
+                errors: [{ domain: "global", message, reason: localListGapReason }],
+              },
+            },
+            { status: localListGapStatus },
+          );
+        }
+        const scope = url.searchParams.get("prefix");
+        const delimiter = url.searchParams.get("delimiter");
+        const entries = new Map();
+        for (const row of objects.values()) {
+          if (!row.metadata.name.startsWith(scope)) continue;
+          const suffix = row.metadata.name.slice(scope.length);
+          const boundary = delimiter ? suffix.indexOf(delimiter) : -1;
+          if (boundary >= 0) {
+            const name = `${scope}${suffix.slice(0, boundary + delimiter.length)}`;
+            entries.set(name, { prefix: name });
+          } else entries.set(row.metadata.name, { item: row.metadata });
+        }
+        const sorted = [...entries].toSorted(([a], [b]) => a.localeCompare(b));
+        const offset = Number(url.searchParams.get("pageToken") ?? 0);
+        const limit = Number(url.searchParams.get("maxResults")) || 1000;
+        const page = sorted.slice(offset, offset + limit).map(([, value]) => value);
         return Response.json({
           items: occupied
             ? [{ bucket: plan.bucket, name: `${plan.recordings[0].prefix}foreign.bin` }]
-            : [...objects.values()].map((row) => row.metadata),
+            : page.flatMap((row) => (row.item ? [row.item] : [])),
+          prefixes: page.flatMap((row) => (row.prefix ? [row.prefix] : [])),
+          ...(offset + limit < sorted.length ? { nextPageToken: `${offset + limit}` } : {}),
         });
+      }
       const name = url.searchParams.get("name") ?? decodeURIComponent(url.pathname.split("/o/")[1]);
       if (init.method === "POST") {
         const bytes = Buffer.from(init.body);
@@ -140,4 +179,100 @@ test("all six replay modules import with no environment, output or transport sid
   });
   assert.equal(result.status, 0, result.stderr);
   assert.equal(result.stdout, "");
+});
+
+test("explicit local list gap admission records both candidates and retains pagination and owned cleanup", async () => {
+  const f = fixture({ recipeId: "storage-object/gcs/list", localListGapStatus: 400 });
+  const captures = [];
+  const result = await replayLocalList({
+    ...f,
+    allowKnownLocalListGaps: true,
+    onCapture: async (row) => captures.push(row),
+  });
+  assert.equal(result.status, "LOCAL_COMPLETE");
+  assert.deepEqual(
+    result.localDifferenceCandidates.map(({ stepId, status, parameter }) => ({
+      stepId,
+      status,
+      parameter,
+    })),
+    [
+      { stepId: "offset-filter", status: 400, parameter: "startOffset" },
+      { stepId: "glob-filter", status: 400, parameter: "matchGlob" },
+    ],
+  );
+  assert.ok(
+    result.localDifferenceCandidates.every((row) => row.compatibility === "UNOBSERVED_PRODUCTION"),
+  );
+  assert.equal(result.pageEvaluation.status, "MATCHED_SUPPLIED_PAGES");
+  assert.equal(result.requests, 73);
+  assert.equal(f.deleted.length, 6);
+  assert.equal(f.objects.size, 0);
+  assert.deepEqual(result.unresolved, []);
+  assert.deepEqual(
+    captures.filter((row) => row.status === 400).map((row) => row.stepId),
+    ["offset-filter", "glob-filter"],
+  );
+});
+
+test("known local list gaps require opt-in and never admit authorization errors", async () => {
+  for (const [status, allowKnownLocalListGaps] of [
+    [400, false],
+    [401, true],
+    [403, true],
+    [500, true],
+  ]) {
+    const f = fixture({ recipeId: "storage-object/gcs/list", localListGapStatus: status });
+    await assert.rejects(
+      replayLocalList({ ...f, allowKnownLocalListGaps, onCapture: async () => {} }),
+      /list response was not 200/,
+    );
+    assert.equal(f.deleted.length, 0);
+    assert.equal(f.sender.unresolved().length, 6);
+    assert.equal(f.reservations.at(-1).operationId, "offset-filter");
+  }
+});
+
+test("local list gap admission cannot excuse another error body, altered query or undeclared step", async () => {
+  for (const variation of ["error-body", "query", "step"]) {
+    const f = fixture({
+      recipeId: "storage-object/gcs/list",
+      localListGapStatus: 400,
+      ...(variation === "error-body" ? { localListGapReason: "permissionDenied" } : {}),
+    });
+    const step = f.recipe.steps.find((row) => row.id === "offset-filter");
+    if (variation === "query") step.query.startOffset += "changed";
+    if (variation === "step") step.id = "unregistered-filter";
+    await assert.rejects(
+      replayLocalList({ ...f, allowKnownLocalListGaps: true, onCapture: async () => {} }),
+      /list response was not 200/,
+    );
+    assert.equal(f.deleted.length, 0);
+    assert.equal(f.sender.unresolved().length, 6);
+    assert.equal(f.reservations.at(-1).operationId, step.id);
+  }
+});
+
+test("local list gap admission requires capture before start and stops if capture fails", async () => {
+  const missing = fixture({ recipeId: "storage-object/gcs/list", localListGapStatus: 400 });
+  await assert.rejects(
+    replayLocalList({ ...missing, allowKnownLocalListGaps: true }),
+    /capture writer is required/,
+  );
+  assert.equal(missing.reservations.length, 0);
+  assert.equal(missing.sender.snapshot().mode, "not-started");
+  const failed = fixture({ recipeId: "storage-object/gcs/list", localListGapStatus: 400 });
+  await assert.rejects(
+    replayLocalList({
+      ...failed,
+      allowKnownLocalListGaps: true,
+      onCapture: async ({ stepId }) => {
+        if (stepId === "offset-filter") throw new Error("capture fsync failed");
+      },
+    }),
+    /capture fsync failed/,
+  );
+  assert.equal(failed.reservations.at(-1).operationId, "offset-filter");
+  assert.equal(failed.deleted.length, 0);
+  assert.equal(failed.sender.unresolved().length, 6);
 });

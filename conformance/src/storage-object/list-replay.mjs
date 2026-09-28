@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import { evaluateListPages } from "./list-pages.mjs";
 
 function listBody(response) {
@@ -36,14 +37,89 @@ function nextToken(body, cap) {
   return token;
 }
 
+function knownLocalGap(recipe, step, response, bucket) {
+  const scope = step.scopePrefix;
+  const parameter = { "offset-filter": "startOffset", "glob-filter": "matchGlob" }[step.id];
+  if (
+    recipe.id !== "storage-object/gcs/list" ||
+    !parameter ||
+    response.status !== 400 ||
+    step.dialect !== "gcs" ||
+    step.collection !== true ||
+    step.method !== "GET" ||
+    step.credential !== "admin" ||
+    step.path !== `/storage/v1/b/${bucket}/o` ||
+    typeof scope !== "string" ||
+    !scope.endsWith("/list/gcs/") ||
+    !isDeepStrictEqual(
+      recipe.objects,
+      ["a.txt", "b.txt", "dir/c.txt", "dir/d.txt", "dir2/e.txt", "zz.txt"].map(
+        (suffix) => `${scope}${suffix}`,
+      ),
+    ) ||
+    !isDeepStrictEqual(
+      step.query,
+      parameter === "startOffset"
+        ? { prefix: scope, startOffset: `${scope}b.txt`, endOffset: `${scope}zz.txt` }
+        : { prefix: scope, matchGlob: `${scope}dir/*` },
+    )
+  )
+    return null;
+  let body;
+  try {
+    body = JSON.parse(response.raw.toString("utf8"));
+  } catch {
+    return null;
+  }
+  const message = `unsupported JSON API list parameter: ${parameter}`;
+  if (
+    !isDeepStrictEqual(body, {
+      error: { code: 400, message, errors: [{ domain: "global", message, reason: "invalid" }] },
+    })
+  )
+    return null;
+  return {
+    stepId: step.id,
+    status: 400,
+    parameter,
+    compatibility: "UNOBSERVED_PRODUCTION",
+    reason: "FIREEMU_STRICT_UNSUPPORTED_LIST_PARAMETER",
+  };
+}
+
 /** Replay the existing list sequence through its supplied counted sender. */
-export async function replayLocalList({ sender, recipe, bucket } = {}) {
+export async function replayLocalList({
+  sender,
+  recipe,
+  bucket,
+  allowKnownLocalListGaps = false,
+  onCapture,
+} = {}) {
+  if (
+    typeof allowKnownLocalListGaps !== "boolean" ||
+    (onCapture !== undefined && typeof onCapture !== "function")
+  )
+    throw new Error("invalid local list observation options");
+  if (allowKnownLocalListGaps && typeof onCapture !== "function")
+    throw new Error("private response capture writer is required for local list gaps");
   const recipeId = recipe.id;
+  const localDifferenceCandidates = [];
+  async function send(step) {
+    const response = await sender.sendStep(step);
+    if (onCapture)
+      await onCapture({
+        stepId: step.id,
+        dialect: step.dialect,
+        status: response.status,
+        bodyBase64: response.raw.toString("base64"),
+      });
+    return response;
+  }
   await sender.start();
   await sender.admitNamespace();
   for (const name of recipe.objects) sender.admitObject(name);
   for (const step of recipe.preflight) {
-    const response = await sender.sendStep(step);
+    const response = await send(step);
     if (step.collection) {
       const body = listBody(response);
       if (
@@ -81,7 +157,14 @@ export async function replayLocalList({ sender, recipe, bucket } = {}) {
       const query = step.continuation
         ? { ...step.query, [step.continuation.targetQuery]: pageToken }
         : step.query;
-      const response = await sender.sendStep({ ...step, query });
+      const response = await send({ ...step, query });
+      const candidate = allowKnownLocalListGaps
+        ? knownLocalGap(recipe, step, response, bucket)
+        : null;
+      if (candidate) {
+        localDifferenceCandidates.push(candidate);
+        continue;
+      }
       const body = listBody(response);
       if (step.id.startsWith("page-")) {
         pageRecords.push({
@@ -103,7 +186,7 @@ export async function replayLocalList({ sender, recipe, bucket } = {}) {
     }
     const state = states.get(step.objectName);
     if (!state) throw new Error(`${recipeId}: undeclared seed object`);
-    const response = await sender.sendStep(step);
+    const response = await send(step);
     if (step.method === "POST") {
       if (response.status !== 200 || state.uploadId !== null || !step.body?.base64)
         throw new Error(`${recipeId}: seed upload failed or repeated`);
@@ -147,7 +230,7 @@ export async function replayLocalList({ sender, recipe, bucket } = {}) {
     });
     if (deletion.status !== 204) throw new Error(`${recipeId}: seed cleanup failed`);
     for (const step of cleanup.slice(1)) {
-      const response = await sender.sendStep(step);
+      const response = await send(step);
       if (response.status !== 404)
         throw new Error(`${recipeId}: cleanup ${step.id} was not absent`);
     }
@@ -163,5 +246,6 @@ export async function replayLocalList({ sender, recipe, bucket } = {}) {
     requests: sender.snapshot().total,
     pageEvaluation,
     pageSummaries,
+    localDifferenceCandidates,
   };
 }

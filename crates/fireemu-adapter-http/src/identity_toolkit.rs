@@ -3643,7 +3643,10 @@ fn dispatch(
             emulator_route(store, "DELETE", "accounts", headers, body)
         }
         Handler::EmulatorGetConfig => emulator_route(store, "GET", "config", headers, body),
-        Handler::EmulatorPatchConfig => emulator_route(store, "PATCH", "config", headers, body),
+        Handler::EmulatorPatchConfig => {
+            let body = emulator_config_patch(body, !options.stateless_refresh_tokens);
+            emulator_route(store, "PATCH", "config", headers, &body)
+        }
         Handler::EmulatorAction => {
             emulator_action(store, query, headers, at, options.stateless_refresh_tokens)
         }
@@ -12954,10 +12957,26 @@ fn emulator_route(
     }
 }
 
+/// The body `PATCH /emulator/v1/projects/{p}/config` applies. The official emulator's
+/// `updateEmulatorProjectConfig` (firebase-tools 15.28.2) applies only `signIn` and
+/// `emailPrivacyConfig` and ignores `client.permissions`, which it never enforces; the emulator
+/// profile ignores it too, so the route cannot switch client sign-up or deletion off. Strict
+/// keeps applying it (the route has no production counterpart).
+fn emulator_config_patch(body: &Value, strict: bool) -> std::borrow::Cow<'_, Value> {
+    if strict || body.get("client").is_none() {
+        return std::borrow::Cow::Borrowed(body);
+    }
+    let mut body = body.clone();
+    if let Some(object) = body.as_object_mut() {
+        object.remove("client");
+    }
+    std::borrow::Cow::Owned(body)
+}
+
 /// The document `GET` / `PATCH /emulator/v1/projects/{p}/config` serve, in both profiles: the
 /// official emulator's `getEmulatorProjectConfig` (firebase-tools 15.28.2), which has no
-/// `client` member (owner decision K3). The route has no production counterpart. A PATCH still
-/// applies `client.permissions`, which this document does not echo.
+/// `client` member (owner decision K3). The route has no production counterpart. Under strict a
+/// PATCH still applies `client.permissions`, which this document does not echo.
 fn project_config_json(config: fireemu_core_auth::store::ProjectAuthConfig) -> Value {
     json!({
         "signIn": {"allowDuplicateEmails": config.allow_duplicate_emails},

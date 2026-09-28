@@ -20764,8 +20764,9 @@ fn sign_up_quotas_are_taken_and_reported_as_production_normalizes_them() {
 /// The emulator-only config route answers the official emulator's document in both profiles
 /// (firebase-tools 15.28.2 `getEmulatorProjectConfig`, conformance fixture
 /// `auth/client-account-flows#enable-improved-email-privacy`; owner decision K3): `signIn`
-/// and `emailPrivacyConfig`, without `client`. Production has no such route. A PATCH of
-/// `client.permissions` is still applied, as a fireemu extension.
+/// and `emailPrivacyConfig`, without `client`. Production has no such route. The official
+/// `updateEmulatorProjectConfig` ignores `client.permissions`, and so does the emulator profile:
+/// a client sign-up still succeeds afterwards. Strict keeps applying it.
 #[test]
 fn the_emulator_config_route_answers_the_official_emulator_document() {
     const EMULATOR_CONFIG: &str = "/emulator/v1/projects/demo-app/config";
@@ -20801,9 +20802,19 @@ fn the_emulator_config_route_answers_the_official_emulator_document() {
             "{profile}"
         );
         let applied = s.store.lock().unwrap().config();
-        assert!(
-            applied.disabled_user_signup && applied.disabled_user_deletion,
+        let strict = profile == "strict";
+        assert_eq!(
+            (applied.disabled_user_signup, applied.disabled_user_deletion),
+            (strict, strict),
             "{profile}"
         );
+        if !strict {
+            let (status, signed_up) = post(
+                &s,
+                &format!("{V1}/accounts:signUp"),
+                &json!({"email": "after-emulator-patch@example.com", "password": "hunter22"}),
+            );
+            assert_eq!(status, 200, "{signed_up}");
+        }
     }
 }

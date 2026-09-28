@@ -27,7 +27,7 @@ from txn_sandbox_admission import read_ledger
 from txn_sandbox_runtime import require_packet_runtime
 
 CLOSURE = ROOT / 'spec/compatibility/closure/FS-TRANSACTION.json'
-ENVELOPE_ID = 'FS-TRANSACTION-p10-grpc-idle-001'
+ENVELOPE_ID = 'FS-TRANSACTION-p10-grpc-idle-002'
 FIELDS = {'schemaVersion', 'program', 'packetName', 'packetId', 'project', 'database', 'recordings', 'requestsPerRecording', 'estimatedUsdPerRecording', 'sourceCommit', 'runnerSha256', 'closureSha256', 'corpusDigest', 'planSourceDigest', 'baselineSha256', 'envelopeId', 'envelopePath', 'envelopeSha256', 'runtime', 'iamConfig', 'retries', 'onStop', 'observationSeconds', 'recoverySeconds', 'maxTokens', 'timing', 'timingSource', 'reserveUsd'}
 
 

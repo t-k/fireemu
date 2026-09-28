@@ -35,7 +35,7 @@ def test_fresh_scope_and_caps_are_exact(packet):
     assert value['maxTokens'] == 6 and value['reserveUsd'] == 0.04
 
 
-@pytest.mark.parametrize('field,changed', [('extra', True), ('requestsPerRecording', 49), ('recordings', True), ('packetName', 'expiry-retry-04'), ('envelopeId', 'FS-TRANSACTION-expiry-retry-04-003'), ('project', 'fireemu-oracle-idp'), ('runnerSha256', '0' * 64), ('sourceCommit', 'c' * 40), ('closureSha256', '0' * 64), ('corpusDigest', '0' * 64), ('planSourceDigest', '0' * 64)])
+@pytest.mark.parametrize('field,changed', [('extra', True), ('requestsPerRecording', 49), ('recordings', True), ('packetName', 'expiry-retry-04'), ('envelopeId', 'FS-TRANSACTION-expiry-retry-04-003'), ('envelopeId', 'FS-TRANSACTION-p10-grpc-idle-001'), ('project', 'fireemu-oracle-idp'), ('runnerSha256', '0' * 64), ('sourceCommit', 'c' * 40), ('closureSha256', '0' * 64), ('corpusDigest', '0' * 64), ('planSourceDigest', '0' * 64)])
 def test_changed_packet_refused_before_any_wire(packet, field, changed):
     path, _baseline, _envelope, value, load = packet
     path.write_text(json.dumps({**value, field: changed}))

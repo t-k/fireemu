@@ -37,6 +37,7 @@ export async function replayLocalBasic({ sender, recipe, bucket } = {}) {
       const metadata = await sender.sendStep({
         id: metadataId,
         dialect: "gcs",
+        credential: "admin",
         method: "GET",
         objectName: name,
         path: objectPath,
@@ -45,6 +46,7 @@ export async function replayLocalBasic({ sender, recipe, bucket } = {}) {
       const media = await sender.sendStep({
         id: mediaId,
         dialect: "gcs",
+        credential: "admin",
         method: "GET",
         objectName: name,
         path: objectPath,
@@ -140,6 +142,7 @@ export async function replayLocalBasic({ sender, recipe, bucket } = {}) {
     const media = await sender.sendStep({
       id: mediaId,
       dialect: "gcs",
+      credential: "admin",
       method: "GET",
       objectName: name,
       path: `/storage/v1/b/${bucket}/o/${encodeURIComponent(name)}`,

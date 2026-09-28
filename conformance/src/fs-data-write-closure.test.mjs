@@ -343,7 +343,11 @@ test("conditions bound to older comparisons are covered by the release compariso
   const streamIds = new Set(
     corpus.streamRecipes.filter(({ transport }) => transport === "grpc").map(({ id }) => id),
   );
-  // The release comparison compared every current recipe and found no difference at all.
+  // The release comparison compared exactly the current corpus and found no difference at all.
+  assert.equal(
+    candidate.corpusSha256,
+    createHash("sha256").update(JSON.stringify(corpus)).digest("hex"),
+  );
   assert.equal(candidate.comparedRestPrograms, restIds.size);
   assert.equal(candidate.comparedGrpcStreams, streamIds.size);
   assert.deepEqual(candidate.pendingRestIds, []);

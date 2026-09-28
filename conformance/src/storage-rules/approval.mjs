@@ -2,6 +2,8 @@ import { DRAFT_REQUEST_LIMITS } from "./request-counter.mjs";
 
 const PINS = ["packetSha256", "sourceCommit", "runnerSha256", "manifestSha256", "fixtureSchemaSha256"];
 const COORDINATOR = "Claude（委任。枠の内の承認し直し）";
+const DELEGATED_ENVELOPE_ACTOR = "Claude（委任。オーナーの裁量の委任 2026-09-28）";
+const DELEGATION_REFERENCE = "2026-09-28 調整役への委任（本番の送信）";
 export const DRAFT_STAGE3_APPROVAL_LIMITS = Object.freeze({
   projects: Object.freeze(["fireemu-oracle-idp", "fireemu-oracle-query"]),
   maxRequests: DRAFT_REQUEST_LIMITS.maxRequests * 2,
@@ -43,12 +45,25 @@ function ledgerRows(text, subject) {
       const separator = entry.indexOf("=");
       const key = entry.slice(0, separator).trim();
       const value = entry.slice(separator + 1).trim();
-      if (separator < 1 || !/^[A-Za-z][A-Za-z0-9]*$/.test(key) || !value) throw new Error("malformed target ledger row");
+      if (separator < 1 || (key !== "根拠" && !/^[A-Za-z][A-Za-z0-9]*$/.test(key)) || !value) throw new Error("malformed target ledger row");
       if (Object.hasOwn(fields, key)) throw new Error("duplicate ledger field");
       fields[key] = value;
     }
     return [{ line: index + 1, subject: columns[1], fields, actor: columns[3] }];
   });
+}
+
+function hasOwnerDelegation(text) {
+  const rows = text.split("\n").map((line) => line.split("|").map((column) => column.trim()))
+    .filter((columns) => columns[1] === "調整役への委任（本番の送信）");
+  if (rows.length !== 1) return false;
+  const columns = rows[0];
+  if (columns.length !== 5 || columns[0] !== "- 2026-09-28" || !columns[3].startsWith("オーナー") || !columns[4]) return false;
+  const decisions = columns[2].split(";").flatMap((entry) => {
+    const separator = entry.indexOf("=");
+    return separator >= 1 && entry.slice(0, separator).trim() === "decision" ? [entry.slice(separator + 1).trim()] : [];
+  });
+  return decisions.length === 1 && decisions[0] === "APPROVE";
 }
 
 /** Validate local approval bindings only; this does not authorize or perform a send. */
@@ -92,7 +107,7 @@ export function validatePresendApproval(options) {
   const envelopes = rows.filter((row) => row.subject === `${subject} envelope` && row.fields.envelopeId === envelopeId);
   if (envelopes.length > 1) throw new Error("ambiguous owner envelope");
   const envelope = envelopes[0];
-  if (!envelope || !envelopeId || envelope.line >= decision.line || !envelope.actor.startsWith("オーナー（")) throw new Error("preceding owner envelope required");
+  if (!envelope || !envelopeId || envelope.line >= decision.line || (!envelope.actor.startsWith("オーナー（") && envelope.actor !== DELEGATED_ENVELOPE_ACTOR)) throw new Error("preceding owner envelope required");
   if (["writes", "iamConfig", "retries"].some((key) => !Object.hasOwn(envelope.fields, key))) throw new Error("invalid owner envelope schema");
   if (envelope.fields.decision && envelope.fields.decision !== "APPROVE") throw new Error("owner envelope not approved");
   if (review.envelopeId !== envelopeId || review.withinEnvelope !== true) throw new Error("in-envelope review required");
@@ -101,6 +116,10 @@ export function validatePresendApproval(options) {
     !/^(?:0|[1-9]\d*)(?:\.\d{1,6})?$/.test(envelope.fields.reserveUsd) ||
     !Number.isFinite(Number(envelope.fields.reserveUsd)) || Number(envelope.fields.reserveUsd) <= 0
   ) throw new Error("invalid envelope bound");
+  if (envelope.actor === DELEGATED_ENVELOPE_ACTOR) {
+    if (envelope.fields["根拠"] !== DELEGATION_REFERENCE || !hasOwnerDelegation(ledgerText)) throw new Error("delegated envelope authority required");
+    if (Number(envelope.fields.reserveUsd) > 10) throw new Error("delegated envelope exceeds US$10");
+  }
   if (
     envelope.fields.project !== packet.projects.join(",") ||
     Number(envelope.fields.maxRequests) < packet.maxRequests ||

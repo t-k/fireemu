@@ -17,6 +17,9 @@ const pins = ["packetSha256", "sourceCommit", "runnerSha256", "manifestSha256", 
 const review = { verdict: "APPROVE", must: [], should: [], ...Object.fromEntries(pins.map((key) => [key, packet[key]])), envelopeId: null, withinEnvelope: false };
 const envelopeId = "STORAGE-RULES-stage3-v1-001";
 const coordinator = "Claude（委任。枠の内の承認し直し）";
+const delegatedEnvelopeActor = "Claude（委任。オーナーの裁量の委任 2026-09-28）";
+const delegationReference = "2026-09-28 調整役への委任（本番の送信）";
+const delegationRow = "- 2026-09-28 | 調整役への委任（本番の送信） | decision=APPROVE; local delegation fixture | オーナー（ローカル試験） | private-delegation.md";
 
 function envelope(values = {}) {
   const fields = { envelopeId, project: packet.projects.join(","), maxRequests: packet.maxRequests, reserveUsd: packet.reserveUsd, writes: "owned fixtures", iamConfig: "Storage release only", retries: "zero", ...values };
@@ -26,6 +29,14 @@ function envelope(values = {}) {
 function decision({ actor = "オーナー（ローカル試験）", values = {}, subject = "STORAGE-RULES stage3-v1" } = {}) {
   const fields = { decision: "APPROVE", ...Object.fromEntries(pins.map((key) => [key, packet[key]])), ...values };
   return `- 2026-09-28 | ${subject} | ${Object.entries(fields).map(([key, value]) => `${key}=${value}`).join("; ")} | ${actor} | private-packet.md`;
+}
+
+function delegatedEnvelope({ values = {}, actor = delegatedEnvelopeActor } = {}) {
+  return envelope({ "根拠": delegationReference, ...values }).replace("オーナー（ローカル試験）", actor);
+}
+
+function delegatedLedger({ basis = delegationRow, values = {}, actor = delegatedEnvelopeActor } = {}) {
+  return [basis, delegatedEnvelope({ values, actor }), decision({ actor: coordinator, values: { envelopeId } })].filter(Boolean).join("\n");
 }
 
 async function load() {
@@ -51,6 +62,99 @@ test("a coordinator decision binds to a preceding owner envelope and an in-envel
   assert.equal(result.decisionLine, 2);
   assert.equal(result.envelopeLine, 1);
   assert.equal(result.envelopeId, envelopeId);
+});
+
+for (const reserveUsd of [2, 10]) {
+  test(`a coordinator envelope with reserveUsd=${reserveUsd} binds to the owner's recorded delegation`, async () => {
+    const validate = await load();
+    const result = validate({ ledgerText: delegatedLedger({ values: { reserveUsd } }), packet, review: { ...review, envelopeId, withinEnvelope: true } });
+    assert.equal(result.envelopeLine, 2);
+    assert.equal(result.decisionLine, 3);
+    assert.equal(result.envelopeId, envelopeId);
+    assert.equal(result.sendAuthorized, false);
+  });
+}
+
+for (const basis of ["", delegationRow.replace("オーナー（ローカル試験）", delegatedEnvelopeActor), delegationRow.replace("2026-09-28 |", "2026-09-27 |"), delegationRow.replace("調整役への委任（本番の送信）", "調整役への委任（枠の承認）")]) {
+  test("a delegated envelope requires the referenced owner delegation row", async () => {
+    const validate = await load();
+    assert.throws(() => validate({ ledgerText: delegatedLedger({ basis }), packet, review: { ...review, envelopeId, withinEnvelope: true } }), /delegated envelope authority required/);
+  });
+}
+
+for (const reference of [undefined, "2026-09-27 調整役への委任（本番の送信）", `${delegationReference} extra`]) {
+  test("a delegated envelope requires the exact delegation reference token", async () => {
+    const validate = await load();
+    let ledgerText = delegatedLedger({ values: { "根拠": reference } });
+    if (reference === undefined) ledgerText = ledgerText.replace(`; 根拠=undefined`, "");
+    assert.throws(() => validate({ ledgerText, packet, review: { ...review, envelopeId, withinEnvelope: true } }), /delegated envelope authority required/);
+  });
+}
+
+for (const actor of [coordinator, "Claude（委任）", `${delegatedEnvelopeActor} extra`]) {
+  test("only the exact delegated envelope actor can use the new owner delegation", async () => {
+    const validate = await load();
+    assert.throws(() => validate({ ledgerText: delegatedLedger({ actor }), packet, review: { ...review, envelopeId, withinEnvelope: true } }), /preceding .*envelope required/);
+  });
+}
+
+test("a delegated envelope cannot exceed the US$10 task ceiling", async () => {
+  const validate = await load();
+  assert.throws(() => validate({ ledgerText: delegatedLedger({ values: { reserveUsd: "10.000001" } }), packet, review: { ...review, envelopeId, withinEnvelope: true } }), /delegated envelope exceeds US\$10/);
+});
+
+for (const body of ["decision=REVOKED", "decision=REQUEST_CHANGES"]) {
+  test("a non-approved owner delegation cannot authorize a coordinator envelope", async () => {
+    const validate = await load();
+    assert.throws(() => validate({ ledgerText: delegatedLedger({ basis: delegationRow.replace("decision=APPROVE", body) }), packet, review: { ...review, envelopeId, withinEnvelope: true } }), /delegated envelope authority required/);
+  });
+}
+
+test("an ambiguous owner delegation cannot authorize a coordinator envelope", async () => {
+  const validate = await load();
+  assert.throws(() => validate({ ledgerText: delegatedLedger({ basis: `${delegationRow}\n${delegationRow.replace("decision=APPROVE", "decision=REVOKED")}` }), packet, review: { ...review, envelopeId, withinEnvelope: true } }), /delegated envelope authority required/);
+});
+
+test("duplicate decisions in the owner delegation cannot hide its revocation", async () => {
+  const validate = await load();
+  const basis = delegationRow.replace("decision=APPROVE", "decision=APPROVE; decision=REVOKED");
+  assert.throws(() => validate({ ledgerText: delegatedLedger({ basis }), packet, review: { ...review, envelopeId, withinEnvelope: true } }), /delegated envelope authority required/);
+});
+
+for (const body of ["decision=REVOKED", "decision=REQUEST_CHANGES", "decision=APPROVE; decision=REVOKED"]) {
+  for (const placement of ["before", "after"]) {
+    test(`a later owner delegation ${body} is refused ${placement} the envelope decision`, async () => {
+      const validate = await load();
+      const withdrawal = delegationRow.replace("2026-09-28 |", "2026-09-29 |").replace("decision=APPROVE", body);
+      const ledgerText = placement === "before" ? delegatedLedger({ basis: `${delegationRow}\n${withdrawal}` }) : `${delegatedLedger()}\n${withdrawal}`;
+      assert.throws(() => validate({ ledgerText, packet, review: { ...review, envelopeId, withinEnvelope: true } }), /delegated envelope authority required/);
+    });
+  }
+}
+
+test("a malformed later owner delegation cannot hide its revocation", async () => {
+  const validate = await load();
+  const withdrawal = delegationRow.replace("2026-09-28 |", "2026-09-29 |").replace("decision=APPROVE", "decision=REVOKED").replace("| オーナー", "| extra | オーナー");
+  assert.throws(() => validate({ ledgerText: `${delegatedLedger()}\n${withdrawal}`, packet, review: { ...review, envelopeId, withinEnvelope: true } }), /delegated envelope authority required/);
+});
+
+test("a later approval cannot revive the referenced owner delegation after revocation", async () => {
+  const validate = await load();
+  const withdrawal = delegationRow.replace("2026-09-28 |", "2026-09-29 |").replace("decision=APPROVE", "decision=REVOKED");
+  const reapproval = delegationRow.replace("2026-09-28 |", "2026-09-30 |");
+  assert.throws(() => validate({ ledgerText: `${delegatedLedger()}\n${withdrawal}\n${reapproval}`, packet, review: { ...review, envelopeId, withinEnvelope: true } }), /delegated envelope authority required/);
+});
+
+test("a malformed owner delegation cannot authorize a coordinator envelope", async () => {
+  const validate = await load();
+  const basis = delegationRow.replace("| オーナー", "| extra | オーナー");
+  assert.throws(() => validate({ ledgerText: delegatedLedger({ basis }), packet, review: { ...review, envelopeId, withinEnvelope: true } }), /delegated envelope authority required/);
+});
+
+test("an owner envelope remains accepted independently of the delegation proof", async () => {
+  const validate = await load();
+  const ledgerText = `${envelope({ reserveUsd: 11 })}\n${decision({ actor: coordinator, values: { envelopeId } })}`;
+  assert.equal(validate({ ledgerText, packet, review: { ...review, envelopeId, withinEnvelope: true } }).sendAuthorized, false);
 });
 
 test("a later revocation rejects the exact same packet approval", async () => {

@@ -63,6 +63,12 @@
       "decision": "Moved here: client signInWithIdp sign-in and linking (AUTH-ACCOUNT A4) and the IdP session claims (AUTH-CREDENTIAL C7).",
       "decidedBy": "lane",
       "decidedOn": "2026-09-27"
+    },
+    {
+      "id": "F11",
+      "decision": "The spConfig.spCertificates production issues and answers for a SAML provider whose requests are signed is a known difference: fireemu does not generate it (it needs an X.509 certificate dependency). Implementing it is a later issue. Owner ledger 2026-09-29 (AUTH-FEDERATION F11).",
+      "decidedBy": "owner (t-k)",
+      "decidedOn": "2026-09-29"
     }
   ],
   "conditions": [
@@ -106,7 +112,7 @@
       "configProjections": [
         "strict"
       ],
-      "status": "MISMATCH",
+      "status": "VERIFIED",
       "note": "Project inboundSamlConfigs create, get, update by mask and delete: certificate PEM validation, spConfig, signRequest and the spCertificates the service adds.",
       "evidence": {
         "productionRecordings": [
@@ -125,9 +131,27 @@
         "rows": {
           "MATCH": 4,
           "MISMATCH": 2
-        }
+        },
+        "documentedDivergences": [
+          {
+            "row": "auth-federation/provider-config/saml#patch-sign-request",
+            "kind": "not-implemented",
+            "decidedBy": "owner",
+            "decidedOn": "2026-09-29",
+            "scopeDecision": "F11",
+            "reason": "The answer differs only in spConfig.spCertificates, the SP certificate production generates when signRequest is set; fireemu generates none."
+          },
+          {
+            "row": "auth-federation/provider-config/saml#get-after-sign-request",
+            "kind": "not-implemented",
+            "decidedBy": "owner",
+            "decidedOn": "2026-09-29",
+            "scopeDecision": "F11",
+            "reason": "The answer differs only in spConfig.spCertificates, the SP certificate production generates when signRequest is set; fireemu generates none."
+          }
+        ]
       },
-      "pendingDecision": "provider-config/saml#patch-sign-request and #get-after-sign-request differ only in spConfig.spCertificates, which fireemu does not generate (it makes no SP key). Whether this is an approved known difference or is implemented is the owner's decision (Q2, asked 2026-09-29)."
+      "limits": "spConfig.spCertificates is not generated (F11), so a provider whose requests are signed answers without it and its createAuthUri is not implemented (501)."
     },
     {
       "conditionId": "AUTH-FEDERATION/provider-config-default-supported",

@@ -165,8 +165,8 @@ Security Rules (FS-RULES): behavior below was measured against a real Firestore 
 
 ### Known issues
 
-- Strict profile only, unobserved in production: managed Admin `bulkDeleteDocuments` and `importDocuments` write through the Commit route, so they apply the data plane's Commit limits. A bulk delete of a collection holding a document inside Commit's delete window is refused with `Transaction too big. Decrease transaction size.`, and an import of an export holding a document strict refuses to write (for example, an export the emulator profile wrote) is refused with that document's error. Nothing is deleted or imported in either case. The emulator profile is unaffected.
-- Both profiles, since 0.7.1: an ordinary Functions HTTP request that carries two `Origin` header fields is refused with 403. The official emulator does not refuse it, so the emulator profile differs from it here; this is to be fixed in the next release.
+- Strict profile only, unobserved in production: managed Admin `bulkDeleteDocuments` and `importDocuments` write through the Commit route, so they apply the data plane's Commit limits. A bulk delete of a collection holding a document inside Commit's delete window is refused with `Transaction too big. Decrease transaction size.`, and an import of an export holding a document strict refuses to write (for example, an export the emulator profile wrote) is refused with that document's error. Both operations commit in chunks of 500 documents and stop at the first refused chunk without undoing the chunks before it, so a larger operation can end partly done. The emulator profile is unaffected.
+- Both profiles, as in earlier releases: an ordinary Functions HTTP request that carries two `Origin` header fields is refused with 403. The official emulator does not refuse it, so the emulator profile differs from it here; this is to be fixed in the next release.
 
 ## [0.7.1] - 2026-09-10
 

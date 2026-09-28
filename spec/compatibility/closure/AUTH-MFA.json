@@ -83,7 +83,9 @@
       "id": "M11",
       "decision": "The final-artifact regression re-runs the AUTH-ACTION, AUTH-CREDENTIAL and AUTH-ACCOUNT corpora and inherits their one documented divergence, as AUTH-ACTION scope decision E9 does: AUTH-ACCOUNT scope decision A12, the gson parser message text for malformed customAttributes JSON. The INVALID_CLAIMS refusal itself must match.",
       "decidedBy": "owner (t-k)",
-      "decidedOn": "2026-09-25"
+      "decidedOn": "2026-09-25",
+      "resolvedOn": "2026-09-28",
+      "resolution": "Resolved with AUTH-ACCOUNT A12: on the integrated v0.8.0 release binary the row matches production. The divergence is kept under resolvedDivergences of the final-artifact regression, for the lane artifact it was recorded on."
     },
     {
       "id": "M12",

@@ -28,7 +28,7 @@
     "spec/compatibility/broad-runs/fs-write-limits-03.json": "145134bd10a13a9d0cead3f06929aaee6f2f491bf14bd04ab26cc6ec45cc434f",
     "spec/compatibility/closure/AUTH-ACCOUNT.json": "025d2036f513168f3ceedb887f88af070f13a55425883536afdfc3bc6dc4a504",
     "spec/compatibility/closure/AUTH-CREDENTIAL.json": "2c0373fdf7249baa4fb710b8d33c0d437e099b64039f3ef0f98ac7bebdd5c06d",
-    "spec/compatibility/closure/AUTH-MFA.json": "effdc2573064fe8c06d6e9ebeec72cc2b4d07bb0a985938c2bed859b8792c3bb",
+    "spec/compatibility/closure/AUTH-MFA.json": "5e4684473fc5d17d2d2bf9ebaccd33de61b9212f7dc996fdfb84069a401e6c24",
     "spec/compatibility/closure/FUNCTIONS-HTTP.json": "1c41022be935060bbadd0db877fa804a43d60696d94ee3a1933b68cb22cdd47b",
     "spec/compatibility/closure/evidence/AUTH-ACCOUNT-comparison.json": "f1a73cf9f2611005cad9e7f73922bc22257f66b2472397c418820d5f4e1082ec",
     "spec/compatibility/closure/evidence/AUTH-ACCOUNT-saved-replay.json": "71b0e25b02c53830ee2f98cfa407b30f7d5cb073a15e1c2984c39da4034da7c4",

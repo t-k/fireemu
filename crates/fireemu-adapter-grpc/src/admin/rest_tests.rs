@@ -1593,8 +1593,8 @@ fn refused_queries_leave_the_admin_index_registry_unchanged() {
 /// Known edge, unobserved in production (issue: managed Admin operations use Commit-route limits
 /// in strict): a managed import writes through the Commit route, so under strict it applies the
 /// data plane's limits. An export the emulator profile wrote may hold a document strict refuses to
-/// write, here a name over the recorded index-entry bound, and strict then refuses the import
-/// before it starts. The emulator profile imports the same export.
+/// write, here a name over the recorded index-entry bound, and strict refuses the chunk of up to
+/// 500 documents that holds it. The emulator profile imports the same export.
 #[test]
 fn strict_import_applies_commit_route_limits_to_exported_documents() {
     let storage = Arc::new(MemoryStorage::default());

@@ -5858,7 +5858,7 @@ fn deletes_are_refused_from_each_route_s_deterministic_minimum() {
 /// Known edge, unobserved in production (issue: managed Admin operations use Commit-route limits
 /// in strict): a managed `bulkDeleteDocuments` deletes through the Commit route, so under strict
 /// a document inside Commit's delete window (12,112 elements under a 1,000-byte name) refuses
-/// the whole operation before it starts, and the document stays. The emulator profile deletes it.
+/// the chunk of up to 500 documents that holds it. The emulator profile deletes it.
 #[test]
 fn strict_bulk_delete_applies_the_commit_route_delete_window() {
     let collection = format!("{}K", "c".repeat(997));
@@ -5898,4 +5898,45 @@ fn strict_bulk_delete_applies_the_commit_route_delete_window() {
             assert_eq!(after, 404);
         }
     }
+}
+
+/// The same known edge past one chunk: a managed bulk delete commits 500 documents at a time and
+/// stops at the first refused chunk without undoing the earlier ones, so under strict a refused
+/// document that sorts after the first 500 leaves the operation partly done.
+#[test]
+fn strict_bulk_delete_stops_at_the_refused_chunk_after_deleting_earlier_chunks() {
+    let collection = format!("{}K", "c".repeat(997));
+    let s = state_with_profile(true);
+    for n in 0..500 {
+        let (status, body) = call(
+            &s,
+            "PATCH",
+            &format!("{DOCS}/{collection}/a{n:03}"),
+            json!({"fields": {}}),
+        );
+        assert_eq!(status, 200, "{body}");
+    }
+    let (status, body) = call(
+        &s,
+        "PATCH",
+        &format!("{DOCS}/{collection}/d"),
+        json!({"fields": {"a": {"arrayValue": {"values":
+            (0..12_112).map(|n| json!({"integerValue": n.to_string()})).collect::<Vec<_>>()
+        }}}}),
+    );
+    assert_eq!(status, 200, "{body}");
+    let (status, answer) = call(
+        &s,
+        "POST",
+        "/v1/projects/demo-app/databases/(default):bulkDeleteDocuments",
+        json!({"collectionIds": [collection]}),
+    );
+    assert_eq!(
+        (status, answer["error"]["message"].as_str()),
+        (400, Some("Transaction too big. Decrease transaction size."))
+    );
+    let (status, _) = call(&s, "GET", &format!("{DOCS}/{collection}/a000"), Value::Null);
+    assert_eq!(status, 404, "the first chunk stays deleted");
+    let (status, _) = call(&s, "GET", &format!("{DOCS}/{collection}/d"), Value::Null);
+    assert_eq!(status, 200, "the refused chunk keeps its document");
 }

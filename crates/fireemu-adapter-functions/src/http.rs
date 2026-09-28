@@ -1399,14 +1399,7 @@ async fn respond(
         return Ok(simple(StatusCode::BAD_REQUEST, &error));
     }
     let method = req.method().as_str().to_owned();
-    let (callable, plain_http, streaming_callable) = http_trigger_kinds(&runtime, function);
-    if !plain_http
-        && origin
-            .as_deref()
-            .is_some_and(|value| !origin_is_local(value))
-    {
-        return Ok(simple(StatusCode::FORBIDDEN, "forbidden origin"));
-    }
+    let (callable, _plain_http, streaming_callable) = http_trigger_kinds(&runtime, function);
     let streaming = streaming_callable && accepts_callable_stream(req.headers());
     if let Some(answer) = function_preflight(callable, &method, req.headers()) {
         return Ok(answer);
@@ -1494,16 +1487,29 @@ fn function_preflight(
 
 /// A proxy-owned callable preflight response.
 ///
-/// Callable preflights never reach Auth/App Check admission or the runner. Unlike the
-/// compatibility response for `onRequest`, this accepts only the callable protocol's method
-/// and request headers instead of reflecting browser input as authority.
+/// Callable preflights never reach Auth/App Check admission or the runner. Non-loopback
+/// origins receive the SDK's default callable CORS response. Loopback preflights retain
+/// the local protocol and Fetch Metadata checks, with every admission field in `Vary`.
 fn callable_preflight(headers: &hyper::HeaderMap) -> Option<Response<OutBody>> {
     let origins = field_values(headers, "origin");
     let [origin] = origins.as_slice() else {
         return None;
     };
     if !origin_is_local(origin) {
-        return None;
+        let requested_fields = field_values(headers, "access-control-request-headers");
+        if requested_fields.len() > 1 {
+            return None;
+        }
+        let mut builder = Response::builder()
+            .status(StatusCode::NO_CONTENT)
+            .header("access-control-allow-origin", origin)
+            .header("access-control-allow-methods", "POST")
+            .header("vary", "Origin, Access-Control-Request-Headers")
+            .header("content-length", "0");
+        if let Some(fields) = requested_fields.first().filter(|fields| !fields.is_empty()) {
+            builder = builder.header("access-control-allow-headers", fields);
+        }
+        return builder.body(full(Bytes::new())).ok();
     }
     let requested_method = field_values(headers, "access-control-request-method");
     if requested_method.len() != 1 || !requested_method[0].eq_ignore_ascii_case("POST") {

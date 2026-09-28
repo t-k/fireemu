@@ -143,11 +143,13 @@ fn on_request_cors_follows_the_selected_profile_and_explicit_option() {
         &source,
         "index.js",
         r"
-const { onRequest } = require('firebase-functions/v2/https');
+const { onRequest, onCall } = require('firebase-functions/v2/https');
 const handler = (request, response) => response.json({ method: request.method });
 exports.defaultCors = onRequest(handler);
 exports.disabledCors = onRequest({ cors: false }, handler);
 exports.enabledCors = onRequest({ cors: true }, handler);
+exports.listedCors = onRequest({ cors: ['https://allowed.example'] }, handler);
+exports.defaultCallable = onCall(request => ({ data: request.data }));
 ",
     );
     let project = "demo-cors-profile";
@@ -155,23 +157,39 @@ exports.enabledCors = onRequest({ cors: true }, handler);
 const assert = require('node:assert/strict');
 (async () => {
   const base = `http://${process.env.FIREEMU_FUNCTIONS_HOST}/demo-cors-profile/us-central1`;
-  const origin = 'http://localhost:3000';
   const profile = process.argv[1];
-  for (const name of ['defaultCors', 'disabledCors', 'enabledCors']) {
+  for (const origin of ['http://localhost:3000', 'https://evil.example', 'http://192.168.1.20:5173']) {
+  for (const name of ['defaultCors', 'disabledCors', 'enabledCors', 'listedCors']) {
     const preflight = await fetch(`${base}/${name}`, {
       method: 'OPTIONS',
       headers: { origin, 'access-control-request-method': 'GET' },
     });
-    const wrapped = name === 'enabledCors' || (profile === 'emulator' && name === 'defaultCors');
+    const wrapped = name === 'enabledCors' || name === 'listedCors' || (profile === 'emulator' && name === 'defaultCors');
+    const allowedOrigin = name === 'listedCors' && profile === 'strict' ? 'https://allowed.example' : origin;
     assert.equal(preflight.status, wrapped ? 204 : 200, `${profile} ${name} preflight`);
-    assert.equal(preflight.headers.get('access-control-allow-origin'), wrapped ? origin : null);
+    assert.equal(preflight.headers.get('access-control-allow-origin'), wrapped ? allowedOrigin : null);
     assert.equal(preflight.headers.get('access-control-allow-methods'), wrapped ? 'GET,HEAD,PUT,PATCH,POST,DELETE' : null);
     if (wrapped) assert.equal(await preflight.text(), '');
     else assert.deepEqual(await preflight.json(), { method: 'OPTIONS' });
     const get = await fetch(`${base}/${name}`, { headers: { origin } });
     assert.equal(get.status, 200, `${profile} ${name} GET`);
-    assert.equal(get.headers.get('access-control-allow-origin'), wrapped ? origin : null);
+    assert.equal(get.headers.get('access-control-allow-origin'), wrapped ? allowedOrigin : null);
     assert.deepEqual(await get.json(), { method: 'GET' });
+  }
+  const callablePreflight = await fetch(`${base}/defaultCallable`, {
+    method: 'OPTIONS',
+    headers: { origin, 'access-control-request-method': 'POST', 'access-control-request-headers': 'content-type' },
+  });
+  assert.equal(callablePreflight.status, 204);
+  assert.equal(callablePreflight.headers.get('access-control-allow-origin'), origin);
+  assert.equal(callablePreflight.headers.get('access-control-allow-methods'), 'POST');
+  assert.equal(callablePreflight.headers.get('access-control-allow-headers'), 'content-type');
+  const callable = await fetch(`${base}/defaultCallable`, {
+    method: 'POST', headers: { origin, 'content-type': 'application/json' }, body: JSON.stringify({ data: 'cors' }),
+  });
+  assert.equal(callable.status, 200);
+  assert.equal(callable.headers.get('access-control-allow-origin'), origin);
+  assert.deepEqual(await callable.json(), { result: { data: 'cors' } });
   }
 })().catch(error => { console.error(error); process.exitCode = 1; });
 ";

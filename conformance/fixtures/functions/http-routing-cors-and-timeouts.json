@@ -9,8 +9,8 @@
   "variant": "baseline",
   "oracle": "official Local Emulator Suite, pinned in ORACLE.md",
   "summary": {
-    "parity": 9,
-    "documented-divergence": 3,
+    "parity": 11,
+    "documented-divergence": 1,
     "debt": 0,
     "pending": 0
   },
@@ -111,39 +111,23 @@
     },
     {
       "id": "preflight-on-a-callable-from-a-remote-origin",
-      "status": "documented-divergence",
-      "oracle": {
+      "status": "parity",
+      "value": {
         "allowHeaders": "content-type",
         "allowMethods": "POST",
         "allowOrigin": "https://evil.example",
         "status": 204,
         "vary": "Origin, Access-Control-Request-Headers"
-      },
-      "testd": {
-        "allowHeaders": null,
-        "allowMethods": null,
-        "allowOrigin": null,
-        "status": 403,
-        "vary": null
-      },
-      "documents": "README.md, \"Functions\"",
-      "reason": "The official emulator starts its runtime with FIREBASE_DEBUG_FEATURES={\"skipTokenVerification\":true,\"enableCors\":true}. Its callable wrapper answers a preflight from any origin on the internet. fireemu refuses a callable from a non-loopback Origin with 403 before it reaches the runner, preserving the callable trust boundary. An onRequest handler receives the Origin and its own CORS policy applies."
+      }
     },
     {
       "id": "a-cross-origin-post-to-a-callable",
-      "status": "documented-divergence",
-      "oracle": {
+      "status": "parity",
+      "value": {
         "allowOrigin": "https://evil.example",
         "body": "{\"result\":{\"sum\":3}}",
         "status": 200
-      },
-      "testd": {
-        "allowOrigin": null,
-        "body": "forbidden origin",
-        "status": 403
-      },
-      "documents": "README.md, \"Functions\"",
-      "reason": "The same callable divergence on the request itself rather than the preflight: the official emulator reflects https://evil.example and hands the callable's result to it. fireemu refuses a non-loopback callable Origin with 403 before the request reaches the runner. OnRequest functions receive the Origin, and the emulator profile enables the official CORS wrapper for a default onRequest function unless cors: false is declared."
+      }
     },
     {
       "id": "a-function-that-overruns-its-timeout",

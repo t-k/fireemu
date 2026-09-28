@@ -1407,6 +1407,18 @@ const DEBUG_FEATURES_TRUSTED_STRICT: &str = r#"{"skipTokenVerification":true}"#;
 const DEBUG_FEATURES_UNTRUSTED_EMULATOR: &str = r#"{"enableCors":true}"#;
 const DEBUG_FEATURES_TRUSTED_EMULATOR: &str = r#"{"skipTokenVerification":true,"enableCors":true}"#;
 
+fn runner_debug_features(
+    profile: CompatibilityProfile,
+    callable_trusted_protocol: bool,
+) -> Option<&'static str> {
+    match (profile, callable_trusted_protocol) {
+        (CompatibilityProfile::Emulator, true) => Some(DEBUG_FEATURES_TRUSTED_EMULATOR),
+        (CompatibilityProfile::Emulator, false) => Some(DEBUG_FEATURES_UNTRUSTED_EMULATOR),
+        (CompatibilityProfile::Strict, true) => Some(DEBUG_FEATURES_TRUSTED_STRICT),
+        (CompatibilityProfile::Strict, false) => None,
+    }
+}
+
 /// `FIREBASE_CONFIG`, with the three members the official emulator puts in it
 /// (`functionsEmulator.js:1010-1026` with `constructDefaultAdminSdkConfig`,
 /// `adminSdkConfig.js:13`).
@@ -2803,12 +2815,7 @@ async fn start_codebase(
     // The emulator profile follows the official runtime's CORS feature. The trusted callable
     // protocol separately enables token skipping only after daemon-side credential checks.
     // The runner allowlist excludes these names and `SpawnSpec::env` is applied last.
-    let debug_features = match (cfg.profile, callable_trusted_protocol) {
-        (CompatibilityProfile::Emulator, true) => Some(DEBUG_FEATURES_TRUSTED_EMULATOR),
-        (CompatibilityProfile::Emulator, false) => Some(DEBUG_FEATURES_UNTRUSTED_EMULATOR),
-        (CompatibilityProfile::Strict, true) => Some(DEBUG_FEATURES_TRUSTED_STRICT),
-        (CompatibilityProfile::Strict, false) => None,
-    };
+    let debug_features = runner_debug_features(cfg.profile, callable_trusted_protocol);
     if let Some(debug_features) = debug_features {
         env.push(("FIREBASE_DEBUG_MODE".to_owned(), "true".to_owned()));
         env.push((
@@ -4708,6 +4715,47 @@ mod tests {
     };
     use fireemu_core_session::clock::VirtualClock;
     use serde_json::json;
+
+    #[test]
+    fn runner_debug_features_emulator_trusted_enables_cors_and_verified_token_decoding() {
+        let features =
+            super::runner_debug_features(crate::config::CompatibilityProfile::Emulator, true)
+                .expect("the emulator runtime has debug features");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(features).unwrap(),
+            json!({"enableCors": true, "skipTokenVerification": true})
+        );
+    }
+
+    #[test]
+    fn runner_debug_features_emulator_untrusted_enables_cors_without_token_skipping() {
+        let features =
+            super::runner_debug_features(crate::config::CompatibilityProfile::Emulator, false)
+                .expect("the emulator CORS feature does not require callable trust");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(features).unwrap(),
+            json!({"enableCors": true})
+        );
+    }
+
+    #[test]
+    fn runner_debug_features_strict_trusted_only_enables_verified_token_decoding() {
+        let features =
+            super::runner_debug_features(crate::config::CompatibilityProfile::Strict, true)
+                .expect("trusted callables use daemon-verified credentials");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(features).unwrap(),
+            json!({"skipTokenVerification": true})
+        );
+    }
+
+    #[test]
+    fn runner_debug_features_strict_untrusted_does_not_enable_debug_mode() {
+        assert_eq!(
+            super::runner_debug_features(crate::config::CompatibilityProfile::Strict, false),
+            None
+        );
+    }
 
     #[tokio::test]
     async fn fixed_inspector_port_wait_reports_a_port_still_in_use() {

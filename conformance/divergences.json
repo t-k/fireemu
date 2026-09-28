@@ -611,42 +611,6 @@
         "approvalRecord": "capability manifest FN-HTTP-1 (crates/fireemu/src/capabilities.json)"
       }
     },
-    "functions/http-routing-cors-and-timeouts#preflight-on-a-callable-from-a-remote-origin": {
-      "documents": "README.md, \"Functions\"",
-      "reason": "The official emulator starts its runtime with FIREBASE_DEBUG_FEATURES={\"skipTokenVerification\":true,\"enableCors\":true}. Its callable wrapper answers a preflight from any origin on the internet. fireemu refuses a callable from a non-loopback Origin with 403 before it reaches the runner, preserving the callable trust boundary. An onRequest handler receives the Origin and its own CORS policy applies.",
-      "authority": {
-        "kind": "intentional-local-policy",
-        "sourceUrls": [
-          "https://firebase.google.com/docs/functions/http-events",
-          "https://github.com/firebase/firebase-tools/tree/v15.28.2"
-        ],
-        "checkedOn": "2026-09-05",
-        "officialBaseline": {
-          "package": "firebase-tools",
-          "version": "15.28.2"
-        },
-        "fixture": "conformance/fixtures/functions/http-routing-cors-and-timeouts.json#preflight-on-a-callable-from-a-remote-origin",
-        "approvalRecord": "README.md, \"Functions\""
-      }
-    },
-    "functions/http-routing-cors-and-timeouts#a-cross-origin-post-to-a-callable": {
-      "documents": "README.md, \"Functions\"",
-      "reason": "The same callable divergence on the request itself rather than the preflight: the official emulator reflects https://evil.example and hands the callable's result to it. fireemu refuses a non-loopback callable Origin with 403 before the request reaches the runner. OnRequest functions receive the Origin, and the emulator profile enables the official CORS wrapper for a default onRequest function unless cors: false is declared.",
-      "authority": {
-        "kind": "intentional-local-policy",
-        "sourceUrls": [
-          "https://firebase.google.com/docs/functions/http-events",
-          "https://github.com/firebase/firebase-tools/tree/v15.28.2"
-        ],
-        "checkedOn": "2026-09-05",
-        "officialBaseline": {
-          "package": "firebase-tools",
-          "version": "15.28.2"
-        },
-        "fixture": "conformance/fixtures/functions/http-routing-cors-and-timeouts.json#a-cross-origin-post-to-a-callable",
-        "approvalRecord": "README.md, \"Functions\""
-      }
-    },
     "pubsub-probe/seek-to-time#replayed": {
       "documents": "README.md, \"Pub/Sub\"; capability manifest PUBSUB-WIRE-1 (crates/fireemu/src/capabilities.json)",
       "reason": "After a subscription is seeked to a timestamp before a message was published, fireemu redelivers that message even though it was already acknowledged and the subscription did not set retainAckedMessages. fireemu retains acked messages for seek unconditionally; the official emulator retains them only when retainAckedMessages is true, so it does not replay here. This is a fireemu superset: a seek never sees fewer messages than the official emulator returns.",

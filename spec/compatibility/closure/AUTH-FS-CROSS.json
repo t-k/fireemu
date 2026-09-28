@@ -12,7 +12,15 @@
     "location": "us-central1"
   },
   "closureReview": {
-    "decision": "PENDING"
+    "decision": "APPROVED",
+    "decidedOn": "2026-09-29",
+    "decider": "project coordinator (delegated by the owner)",
+    "reviewer": "independent clean-context closure review, round 2 APPROVE with no Must or Should (round 1 REQUEST_CHANGES, Must 0, Should 6), with a safety review of the request-widening commits",
+    "reviewedCommit": "c63ba6ff4",
+    "packetSha256": "1ec9e8c8eba5dad5c8d56cbe7dfcb59b96ceb7edabf992a5b7f3fd23ef4fac55",
+    "finalArtifactSha256": "890a38d8b8827ca3980522151b69c9bbad4230a674ccf73a7123470910094021",
+    "report": "docs.local/reviews/2026-09-29-auth-fs-cross-closure-rereview.md (private)",
+    "note": "The parent stays IMPLEMENTING: it waits only for the post-integration condition, the emulator-profile release corpus with 0 findings on main after this lane's round-2 merge. The closure-review condition is kept PENDING_REVIEW until then, since this closure's test ties COMPAT_VERIFIED to every condition being VERIFIED together with an approved review."
   },
   "scopeDecisions": [
     {
@@ -683,7 +691,7 @@
         "default"
       ],
       "status": "PENDING_REVIEW",
-      "note": "Independent clean-context closure review and a separate safety review of every change that widens what a request may do.",
+      "note": "Independent clean-context closure review and a separate safety review of every change that widens what a request may do. The review approved on 2026-09-29 (closureReview); the condition waits for the post-integration condition before promotion.",
       "stage": null,
       "observation": {
         "method": "Independent review of scope, conditions, receipts, divergences, cleanup and owner decisions.",

@@ -496,3 +496,36 @@ test("recordings keep no absolute time: echoed claims are relative to iat, accou
   // A rawUserInfo that is not JSON stays text.
   assert.deepEqual(normalize({ rawUserInfo: "not json" }, ctx), { rawUserInfo: "not json" });
 });
+
+test("recordings keep no per-request value: the authorization state and times in messages", async () => {
+  const { normalize } = await import("./auth-federation/harness.mjs");
+  const ctx = { run: RUN, project: SANDBOX_PROJECT, issuerHost: CHANNEL };
+  const authUri = `https://${CHANNEL}/oidc/${RUN}/authorize?response_type=id_token&client_id=client-q&state=AMbdmDmLyPCC-x_y&scope=openid&nonce=n-1`;
+  assert.deepEqual(normalize({ authUri }, ctx), {
+    authUri: "https://<issuer-host>/oidc/<run>/authorize?response_type=id_token&client_id=client-q&state=<state>&scope=openid&nonce=n-1",
+  });
+  // A nonce the service made (64 hex digits) is masked with its form kept; another is kept.
+  const generated = `${authUri.replace("nonce=n-1", `nonce=${"9d".repeat(32)}`)}#x`;
+  assert.deepEqual(normalize({ authUri: generated }, ctx), {
+    authUri: "https://<issuer-host>/oidc/<run>/authorize?response_type=id_token&client_id=client-q&state=<state>&scope=openid&nonce=<nonce:hex64>#x",
+  });
+  const stale = "INVALID_IDP_RESPONSE : ID Token issued at 1790552633 is stale to sign-in.";
+  const unnamed = `INVALID_IDP_RESPONSE : ID Token does not contain user's identity in 'sub' claim: {"aud":"client-v","exp":1790563433,"iat":1790559833,"iss":"https://${CHANNEL}/oidc/${RUN}"}`;
+  assert.deepEqual(
+    normalize({ error: { message: stale, errors: [{ message: unnamed }] } }, ctx),
+    {
+      error: {
+        message: "INVALID_IDP_RESPONSE : ID Token issued at <time> is stale to sign-in.",
+        errors: [
+          {
+            message: `INVALID_IDP_RESPONSE : ID Token does not contain user's identity in 'sub' claim: {"aud":"client-v","exp":"iat+3600","iat":"<iat>","iss":"https://<issuer-host>/oidc/<run>"}`,
+          },
+        ],
+      },
+    },
+  );
+  // Numbers that are not plausible Unix times stay as answered.
+  assert.deepEqual(normalize({ message: "code 400, 12 attempts, 1234567" }, ctx), {
+    message: "code 400, 12 attempts, 1234567",
+  });
+});

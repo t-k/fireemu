@@ -3,7 +3,11 @@
   "recordedAgainst": {
     "target": "production Identity Toolkit, Secure Token and Admin v2 REST, Identity Platform sandbox; the OIDC issuer is the run's preview channel of the sandbox's Hosting, its ID tokens signed locally (owner decision O1)",
     "project": "<project>",
-    "note": "Two recordings per program. The run's issuer host, run tag, project and project number are placeholders; tokens are recorded as their header and claims with times relative to iat; refresh, access and pending tokens, session IDs, local IDs and certificates are masked. `second` holds the other recording of rows that differed."
+    "note": "Two recordings per program. The run's issuer host, run tag, project and project number are placeholders; tokens are recorded as their header and claims with times relative to iat; refresh, access and pending tokens, session IDs, local IDs and certificates are masked. `second` holds the other recording of rows that differed.",
+    "renormalized": {
+      "harnessDigest": "c472378fb1951c1b14c949a70db3126270d18a6ef0af602ebc8d39b110f6b8b9",
+      "note": "Re-normalized after recording: the authorization state of an authUri and a nonce the service made became placeholders, Unix times in error messages were masked, and claims quoted in messages became relative to iat. The rows are otherwise as recorded (harnessDigest per program is the recording harness)."
+    }
   },
   "programs": {
     "auth-federation/accounts/new": {
@@ -1277,7 +1281,7 @@
           "status": 200,
           "body": {
             "kind": "identitytoolkit#CreateAuthUriResponse",
-            "authUri": "https://<issuer-host>/oidc/<run>/authorize?response_type=id_token&client_id=client-q&redirect_uri=https://<project>.firebaseapp.com/__/auth/handler&state=AMbdmDmLyPCCSdygJlYodxgpUYXWWZdNON044mMR5BAthjYGVAqnKE9jTZ2v-USbUxrnK0ujLAG6Q457nBwK0ib4q8oWn13wUkSpB4ZRgDbFMTHUCKX5GcYA9XK8zXOOOAJQ4LiPWzy8pafwelsRlhWLqeP7i_p5H1ZMhkOdTzKt5hdWFeRrfkcZ_7R6IhmJ9_1OuNYLB8nmdyWknQ2Cinh5RBynjeP_0dif9-p4NCiHuGSlhdmklhPj1zUgLRcZDrMIUlHPNrJ_P5smNTbZd5ZXQWHGjimmkLX5fhk3CKHBM5IZe2fNOmplLIOCYfCxVWFaBGEMx4amHTYw3nqzwG0h1xEIQqHuseNB4koIiA&scope=openid&nonce=9d948fb3b603f0765047d57b851bbea2c682299cb46ee2a0ffd64c98f47a61e3",
+            "authUri": "https://<issuer-host>/oidc/<run>/authorize?response_type=id_token&client_id=client-q&redirect_uri=https://<project>.firebaseapp.com/__/auth/handler&state=<state>&scope=openid&nonce=<nonce:hex64>",
             "providerId": "oidc.fireemu-<run>-q",
             "sessionId": "<session-id>"
           }
@@ -1296,17 +1300,6 @@
                 }
               ]
             }
-          }
-        }
-      },
-      "second": {
-        "create-auth-uri": {
-          "status": 200,
-          "body": {
-            "kind": "identitytoolkit#CreateAuthUriResponse",
-            "authUri": "https://<issuer-host>/oidc/<run>/authorize?response_type=id_token&client_id=client-q&redirect_uri=https://<project>.firebaseapp.com/__/auth/handler&state=AMbdmDnt5k12DuoUIn3yhhkBH8WT0reUtOAU3H-dzY3ZU-SdPanMMVO-AskixR0to-dQdH4c3OVq--adgcOlapf6uUFx8yZ4My8LNgvKsUwlssqXLonWf1P9SeoOsqFtl1en7m3Ad-d51NLMD9ppfYh01NkCbgYH3x1xyQDx160pEI37A6HLyCCBgtPZ25MAVFn0-lfMXwStsV1FJ7ZOpfWy3lQbMPgrLCpZmSaDrPZeXMrT4UtT1iBeG5jds92lnSzcCEXKVwTm77cWG36BS87X6KMwtVy1vn_SSf97bVwYsd6AHrfl4TIxvotp3jwWWY0_XIOX3_xA25JlsIMgSbXien6klTa4u8OzTMlXKw&scope=openid&nonce=2b2af00d6c80313123c89adad468f061958307bb854344d2b4717fa17f7620ef",
-            "providerId": "oidc.fireemu-<run>-q",
-            "sessionId": "<session-id>"
           }
         }
       }
@@ -2292,10 +2285,10 @@
           "body": {
             "error": {
               "code": 400,
-              "message": "INVALID_IDP_RESPONSE : ID Token issued at 1790552633 is stale to sign-in.",
+              "message": "INVALID_IDP_RESPONSE : ID Token issued at <time> is stale to sign-in.",
               "errors": [
                 {
-                  "message": "INVALID_IDP_RESPONSE : ID Token issued at 1790552633 is stale to sign-in.",
+                  "message": "INVALID_IDP_RESPONSE : ID Token issued at <time> is stale to sign-in.",
                   "domain": "global",
                   "reason": "invalid"
                 }
@@ -2308,10 +2301,10 @@
           "body": {
             "error": {
               "code": 400,
-              "message": "INVALID_IDP_RESPONSE : ID Token issued at 1790563433 is stale to sign-in.",
+              "message": "INVALID_IDP_RESPONSE : ID Token issued at <time> is stale to sign-in.",
               "errors": [
                 {
-                  "message": "INVALID_IDP_RESPONSE : ID Token issued at 1790563433 is stale to sign-in.",
+                  "message": "INVALID_IDP_RESPONSE : ID Token issued at <time> is stale to sign-in.",
                   "domain": "global",
                   "reason": "invalid"
                 }
@@ -2391,10 +2384,10 @@
           "body": {
             "error": {
               "code": 400,
-              "message": "INVALID_IDP_RESPONSE : ID Token does not contain user's identity in 'sub' claim: {\"aud\":\"client-v\",\"exp\":1790563433,\"iat\":1790559833,\"iss\":\"https://<issuer-host>/oidc/<run>\"}",
+              "message": "INVALID_IDP_RESPONSE : ID Token does not contain user's identity in 'sub' claim: {\"aud\":\"client-v\",\"exp\":\"iat+3600\",\"iat\":\"<iat>\",\"iss\":\"https://<issuer-host>/oidc/<run>\"}",
               "errors": [
                 {
-                  "message": "INVALID_IDP_RESPONSE : ID Token does not contain user's identity in 'sub' claim: {\"aud\":\"client-v\",\"exp\":1790563433,\"iat\":1790559833,\"iss\":\"https://<issuer-host>/oidc/<run>\"}",
+                  "message": "INVALID_IDP_RESPONSE : ID Token does not contain user's identity in 'sub' claim: {\"aud\":\"client-v\",\"exp\":\"iat+3600\",\"iat\":\"<iat>\",\"iss\":\"https://<issuer-host>/oidc/<run>\"}",
                   "domain": "global",
                   "reason": "invalid"
                 }
@@ -2487,56 +2480,6 @@
               "errors": [
                 {
                   "message": "INVALID_IDP_RESPONSE : Error connecting to the given credential's issuer.",
-                  "domain": "global",
-                  "reason": "invalid"
-                }
-              ]
-            }
-          }
-        }
-      },
-      "second": {
-        "expired": {
-          "status": 400,
-          "body": {
-            "error": {
-              "code": 400,
-              "message": "INVALID_IDP_RESPONSE : ID Token issued at 1790552701 is stale to sign-in.",
-              "errors": [
-                {
-                  "message": "INVALID_IDP_RESPONSE : ID Token issued at 1790552701 is stale to sign-in.",
-                  "domain": "global",
-                  "reason": "invalid"
-                }
-              ]
-            }
-          }
-        },
-        "issued-in-future": {
-          "status": 400,
-          "body": {
-            "error": {
-              "code": 400,
-              "message": "INVALID_IDP_RESPONSE : ID Token issued at 1790563501 is stale to sign-in.",
-              "errors": [
-                {
-                  "message": "INVALID_IDP_RESPONSE : ID Token issued at 1790563501 is stale to sign-in.",
-                  "domain": "global",
-                  "reason": "invalid"
-                }
-              ]
-            }
-          }
-        },
-        "without-subject": {
-          "status": 400,
-          "body": {
-            "error": {
-              "code": 400,
-              "message": "INVALID_IDP_RESPONSE : ID Token does not contain user's identity in 'sub' claim: {\"aud\":\"client-v\",\"exp\":1790563501,\"iat\":1790559901,\"iss\":\"https://<issuer-host>/oidc/<run>\"}",
-              "errors": [
-                {
-                  "message": "INVALID_IDP_RESPONSE : ID Token does not contain user's identity in 'sub' claim: {\"aud\":\"client-v\",\"exp\":1790563501,\"iat\":1790559901,\"iss\":\"https://<issuer-host>/oidc/<run>\"}",
                   "domain": "global",
                   "reason": "invalid"
                 }
@@ -3299,7 +3242,7 @@
           "status": 200,
           "body": {
             "kind": "identitytoolkit#CreateAuthUriResponse",
-            "authUri": "https://<issuer-host>/oidc/<run>/authorize?response_type=id_token&client_id=client-w&redirect_uri=https://<project>.firebaseapp.com/__/auth/handler&state=AMbdmDnZuMrPgqe2fwGxiu-l8tNQzs-Dwh8qjrl7eHJVQjIi3NUUhzxo3aEASYswXfDIX50KAHegr282GJ_uRuHTVDV6-U3TVzrADL1Y2q1Dyss0CTSQkUUaMBj7rRzxty4Dkxn1nxbhgWgD-tGRwNMtLGp4wrsYayvNuuVddCoLfPGpNkkHDB2Ea2rbiYdLtso8IbWnuEn2jq7TEjxGx4c7LY8pQ8huS93KdY7zst_xHqDWmeYk-MV1w4a-gt8j2bFP6z0ZwnSxSmqqd_jp7GKEnQAolKPTZbi951hGqQrk4vaveivwTedD5yNvrPLXHL1acUjrHpR6rcEnUUW6vtV0uFNvAaP3MlHFc8wsYA&scope=openid&nonce=dbc273f12faf0c76a0343c068c2f5a4f8ce747f43abe37be298b6d53f6a77256",
+            "authUri": "https://<issuer-host>/oidc/<run>/authorize?response_type=id_token&client_id=client-w&redirect_uri=https://<project>.firebaseapp.com/__/auth/handler&state=<state>&scope=openid&nonce=<nonce:hex64>",
             "providerId": "oidc.fireemu-<run>-w",
             "sessionId": "<session-id>"
           }
@@ -3559,17 +3502,6 @@
             },
             "kind": "identitytoolkit#VerifyAssertionResponse",
             "pendingToken": "<pending-token>"
-          }
-        }
-      },
-      "second": {
-        "create-auth-uri": {
-          "status": 200,
-          "body": {
-            "kind": "identitytoolkit#CreateAuthUriResponse",
-            "authUri": "https://<issuer-host>/oidc/<run>/authorize?response_type=id_token&client_id=client-w&redirect_uri=https://<project>.firebaseapp.com/__/auth/handler&state=AMbdmDm-vQEbfFtXh7p_nR_KDR8iGMT-y-1Zw7Sd4k2iqNmIVKDmtaRAZVUhMiSgiZ1NjDBgoUJ-c4kP9hyIkzM_lIfVMiOJx5FeHJZteTNCjDwZ7Lu5vjs2yeWdstx_cbHd6xSxl9GN95FPMz3hJjpYht-kSfc9yCsiSsuRZT_FJVmzxfKv4F4w2OSdY_ApAX-aVkBdkbz9mTkeHlbZip3GpGkCvE_GWvzQebPIa3Z1cTG-x0CwozfnpY9d_3xLiHz_Ikw0T9Ck3HKop7oCBhZD5G4SSCsDS7pTrlrxdubVDYwfanoIx3ayFir6AQUiIJ0KQCpsPuQU8OeGRqtpoFHarBu74NEUlbEBtSzwCg&scope=openid&nonce=2f7e7f26ae20d79ab64bbe9166362925fd74be6bcf511c74d545be919357f4f8",
-            "providerId": "oidc.fireemu-<run>-w",
-            "sessionId": "<session-id>"
           }
         }
       }

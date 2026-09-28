@@ -73,6 +73,29 @@ function decodeToken(token) {
   }
 }
 
+/** Unix times in seconds from 2020 to 2040: a number in a message that is one is a time. */
+const UNIX_SECONDS = /\b(1[6-9]|20|21)\d{8}\b/g;
+
+/**
+ * An error message as recorded: claims it quotes as JSON with their times relative to `iat`,
+ * and any other Unix time masked (both differ on every request).
+ */
+function normalizeMessage(message, ctx) {
+  let out = message;
+  const start = out.indexOf("{");
+  if (start !== -1) {
+    try {
+      const quoted = JSON.parse(out.slice(start));
+      if (quoted && typeof quoted === "object" && !Array.isArray(quoted)) {
+        out = `${out.slice(0, start)}${JSON.stringify(relativeTimes(quoted))}`;
+      }
+    } catch {
+      // Not a JSON tail: only the times below.
+    }
+  }
+  return placeholders(out.replace(UNIX_SECONDS, "<time>"), ctx);
+}
+
 /** `text` with the run's identifiers as placeholders (the issuer host first: it holds both). */
 function placeholders(text, ctx) {
   let out = ctx.issuerHost ? text.replaceAll(ctx.issuerHost, "<issuer-host>") : text;
@@ -96,6 +119,15 @@ export function normalize(value, ctx, key = "") {
     if (TOKEN_KEYS.has(key)) return normalize(decodeToken(value), ctx);
     if (MASKED[key]) return MASKED[key];
     if (KEPT_ONLY[key]) return KEPT_ONLY[key](value);
+    // The service's authorization state, and the nonce it makes when none is given, differ
+    // on every createAuthUri (the nonce's form is kept).
+    if (key === "authUri") {
+      const uri = value
+        .replace(/([?&]state=)[^&#]*/, "$1<state>")
+        .replace(/([?&]nonce=)[0-9a-f]{64}(?=[&#]|$)/, "$1<nonce:hex64>");
+      return placeholders(uri, ctx);
+    }
+    if (key === "message") return normalizeMessage(value, ctx);
     // The IdP's claims as the service echoes them, as JSON text.
     if (key === "rawUserInfo") {
       try {

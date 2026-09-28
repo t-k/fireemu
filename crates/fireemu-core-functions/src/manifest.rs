@@ -405,12 +405,6 @@ impl BlockingAuthEvent {
         }
     }
 
-    /// Parses the short spelling only (a configuration key).
-    #[must_use]
-    pub fn from_short_name(value: &str) -> Option<Self> {
-        Self::ALL.into_iter().find(|event| event.as_str() == value)
-    }
-
     /// Fully qualified event type exposed to a Blocking Auth handler.
     #[must_use]
     pub const fn event_type(self) -> &'static str {

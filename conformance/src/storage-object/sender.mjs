@@ -5,6 +5,8 @@ import { isDeepStrictEqual } from "node:util";
 import { resolveDeclaredQuery } from "./reference-resolution.mjs";
 import { evaluateRewriteProgress, validateRewriteDeclaration } from "./rewrite-attempts.mjs";
 import { buildCorpus } from "./corpus.mjs";
+import { createLocalAuthState } from "./local-auth-state.mjs";
+import { FIXED_PRODUCTION_RULES_SHA256 } from "./auth-plan.mjs";
 
 const MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
 
@@ -161,6 +163,9 @@ export function validateStorageRoute(step, { bucket, prefix } = {}) {
 export function createLocalStorageSender({
   plan,
   origin,
+  authOrigin,
+  localAuth,
+  localControl,
   fetchImpl,
   onStart,
   onReserve,
@@ -168,6 +173,15 @@ export function createLocalStorageSender({
   credentials = {},
 } = {}) {
   const base = localOrigin(origin);
+  const authBase = authOrigin === undefined ? null : localOrigin(authOrigin);
+  const controlBase = localControl === undefined ? null : localOrigin(localControl.origin);
+  if (
+    localControl &&
+    (typeof localControl.token !== "string" || !/^[^\s]+$/.test(localControl.token))
+  )
+    throw new Error("local control credential is invalid");
+  let localRulesVerified = false,
+    rulesProofSerial = 0;
   if (typeof fetchImpl !== "function" || typeof onJournal !== "function")
     throw new Error("fetch and durable ownership journal writers are required");
   if (plan?.status !== "LOCAL_DRAFT_NO_SEND" || plan.recordings?.length !== 2)
@@ -186,6 +200,7 @@ export function createLocalStorageSender({
   const rewriteChains = new Map(),
     rewriteDispatches = new Map();
   const sessions = new Map();
+  const authSubjectDispatches = new Map();
   if (credentials === null || typeof credentials !== "object" || Array.isArray(credentials))
     throw new Error("invalid local credentials");
 
@@ -196,14 +211,23 @@ export function createLocalStorageSender({
     return { authorization };
   }
 
-  async function countedFetch(operationId, path, query, init, beforeFetch = async () => {}) {
-    const url = new URL(path, base);
+  async function countedFetch(
+    operationId,
+    path,
+    query,
+    init,
+    beforeFetch = async () => {},
+    requestOrigin = base,
+    verifyBeforeFetch = () => {},
+  ) {
+    const url = new URL(path, requestOrigin);
     for (const [key, value] of Object.entries(query ?? {})) {
       if (typeof value !== "string") throw new Error("unresolved request query");
       url.searchParams.set(key, value);
     }
     return counter.send(operationId, async () => {
       await beforeFetch();
+      verifyBeforeFetch();
       const response = await fetchImpl(url.href, {
         ...init,
         redirect: "manual",
@@ -219,6 +243,28 @@ export function createLocalStorageSender({
       };
     });
   }
+
+  const auth =
+    authBase === null
+      ? null
+      : createLocalAuthState({
+          ...localAuth,
+          plan,
+          onJournal,
+          request: (operationId, path, query, { owner, body }, beforeFetch) =>
+            countedFetch(
+              operationId,
+              path,
+              query,
+              {
+                method: "POST",
+                headers: { "content-type": "application/json", ...(owner ? adminHeaders() : {}) },
+                body: JSON.stringify(body),
+              },
+              beforeFetch,
+              authBase,
+            ),
+        });
 
   function ownedReadbacks(name, metadataOperationId, mediaOperationId) {
     if (typeof name !== "string" || !name.startsWith(prefix) || name.length === prefix.length)
@@ -341,6 +387,88 @@ export function createLocalStorageSender({
       if (!namespaceAdmitted) throw new Error("initial namespace is unproved");
       return ownership.noteInitialAbsentFromNamespace(name);
     },
+    async sendAuthStep(options = {}) {
+      if (
+        !auth ||
+        !namespaceAdmitted ||
+        counter.snapshot().mode !== (options.cleanupIndex !== undefined ? "cleanup" : "subject")
+      )
+        throw new Error("local Auth dispatch phase is unavailable");
+      return auth.send(options);
+    },
+    async verifyLocalAuthRules() {
+      localRulesVerified = false;
+      if (!auth || !controlBase || !["subject", "cleanup"].includes(counter.snapshot().mode))
+        throw new Error("local Rules readback is unavailable");
+      const operationId = `local-auth-rules-${++rulesProofSerial}`;
+      const response = await countedFetch(
+        operationId,
+        "/v1/storage/rules",
+        {},
+        { method: "GET", headers: { authorization: `Bearer ${localControl.token}` } },
+        undefined,
+        controlBase,
+      );
+      let body;
+      try {
+        body = JSON.parse(response.raw.toString("utf8"));
+      } catch {
+        throw new Error("local Rules readback is malformed");
+      }
+      if (
+        response.status !== 200 ||
+        body?.loaded !== true ||
+        body.targeted !== false ||
+        typeof body.source !== "string" ||
+        createHash("sha256").update(body.source).digest("hex") !== FIXED_PRODUCTION_RULES_SHA256
+      )
+        throw new Error("local Rules readback differs from the fixed source");
+      await onJournal({
+        operationId,
+        rulesSourceSha256: FIXED_PRODUCTION_RULES_SHA256,
+        loaded: true,
+        localOnly: true,
+      });
+      localRulesVerified = true;
+      return Object.freeze({
+        rulesSourceSha256: FIXED_PRODUCTION_RULES_SHA256,
+        sendAuthorized: false,
+      });
+    },
+    authAccountSnapshot: (options) => {
+      if (!auth) throw new Error("local Auth is unavailable");
+      return auth.snapshot(options);
+    },
+    async sendAuthSubject(options = {}) {
+      if (!auth || !localRulesVerified || counter.snapshot().mode !== "subject")
+        throw new Error("local Auth subject dispatch is unavailable");
+      const { probe, authorization, proof } = auth.wire(options);
+      const step = {
+        id: `${options.recipe.id}/${probe.id}/subject`,
+        dialect: "firebase",
+        method: probe.subject.method,
+        objectName: probe.objectName,
+        path: probe.subject.path,
+        query: probe.subject.query,
+        credential: "none",
+        headers: probe.action === "write" ? { "content-type": "application/octet-stream" } : {},
+        ...(probe.subject.body ? { body: probe.subject.body } : {}),
+      };
+      const bound = structuredClone({ recipe: options.recipe, probeIndex: options.probeIndex });
+      authSubjectDispatches.set(step.id, {
+        authorization,
+        proof,
+        check: () => {
+          if (auth.wire(bound).authorization !== authorization)
+            throw new Error("local Auth wire credential changed before send");
+        },
+      });
+      try {
+        return await sender.sendStep(step);
+      } finally {
+        authSubjectDispatches.delete(step.id);
+      }
+    },
     async sendStep(step, { operationId = step?.id } = {}) {
       if (counter.snapshot().mode === "not-started") throw new Error("no durable started row");
       const route = validateStorageRoute(step, { bucket, prefix });
@@ -354,6 +482,8 @@ export function createLocalStorageSender({
       if (observed.has(operationId) || operationId === "initial-prefix-list")
         throw new Error("request operation ID was already used");
       const headers = { ...step.headers };
+      const authDispatch = authSubjectDispatches.get(operationId);
+      if (authDispatch?.authorization) headers.authorization = authDispatch.authorization;
       if (step.credential !== undefined && step.credential !== "none") {
         const authorization = credentials[step.credential];
         if (typeof authorization !== "string" || !/^(Bearer|Firebase) [^\s]+$/.test(authorization))
@@ -370,24 +500,32 @@ export function createLocalStorageSender({
         step.path,
         step.query,
         { method: step.method, headers, body },
-        mutates
-          ? async () => {
-              await onJournal({
-                bucket,
-                prefix,
-                name: step.objectName,
-                operationId,
-                method: step.method,
-                ...(rewriteDispatches.get(operationId)?.previousOperationId
-                  ? { continuationOf: rewriteDispatches.get(operationId).previousOperationId }
-                  : {}),
-              });
-              const previous = rewriteDispatches.get(operationId)?.previousOperationId;
-              if (previous)
-                ownership.noteMutationContinuation(step.objectName, previous, operationId);
-              else ownership.noteMutationAttempt(step.objectName, operationId);
-            }
-          : undefined,
+        async () => {
+          if (authDispatch)
+            await onJournal({
+              operationId,
+              name: step.objectName,
+              credentialProof: authDispatch.proof,
+            });
+          if (mutates) {
+            await onJournal({
+              bucket,
+              prefix,
+              name: step.objectName,
+              operationId,
+              method: step.method,
+              ...(rewriteDispatches.get(operationId)?.previousOperationId
+                ? { continuationOf: rewriteDispatches.get(operationId).previousOperationId }
+                : {}),
+            });
+            const previous = rewriteDispatches.get(operationId)?.previousOperationId;
+            if (previous)
+              ownership.noteMutationContinuation(step.objectName, previous, operationId);
+            else ownership.noteMutationAttempt(step.objectName, operationId);
+          }
+        },
+        base,
+        authDispatch?.check,
       );
       observed.set(operationId, { step, response, ordinal: ++ordinal });
       if (mutates) lastMutation.set(step.objectName, ordinal);
@@ -1015,6 +1153,7 @@ export function createLocalStorageSender({
       [
         ...new Set([
           ...ownership.unresolved(),
+          ...(auth?.unresolved() ?? []),
           ...[...sessions]
             .filter(([, session]) => !session.completed && !session.cancelled)
             .map(([name]) => name),

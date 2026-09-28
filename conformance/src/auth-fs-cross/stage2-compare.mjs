@@ -101,14 +101,61 @@ function comparableForm(row) {
   };
 }
 
-/** One row's status from its production form(s) and fireemu's, all `comparable` forms. */
-export function classifyStage2({ stale, production, alternative, fireemu }) {
+/**
+ * Rows with a part whose result is allowed to vary, with the values allowed there. Everything
+ * outside those parts must still be equal; a value outside the set, on either side, is a
+ * mismatch.
+ */
+export const NONDETERMINISTIC_ROWS = {
+  "held/exp-plus-35-sdk": {
+    reason:
+      "The deleted tenant's SDK client keeps its expired token after its refresh fails; whether the SDK's retry surfaces the refusal inside the probe's window depends on its timer (local runs 3 and 4 differed).",
+    parts: [
+      ["probes", "afc2-tenant/t1-sdk", "listeners", "sdk-ten-t1/doc"],
+      ["probes", "afc2-tenant/t1-sdk", "listeners", "sdk-ten-t1/query"],
+    ],
+    allowed: [[], ["error:unauthenticated"]],
+  },
+};
+
+const at = (form, path) => path.reduce((value, key) => value?.[key], form);
+
+/** A copy of `form` with each of `parts` replaced by a marker. */
+function without(form, parts) {
+  const copy = structuredClone(form);
+  for (const path of parts) {
+    const parent = at(copy, path.slice(0, -1));
+    if (parent && path.at(-1) in parent) parent[path.at(-1)] = "<allowed to vary>";
+  }
+  return copy;
+}
+
+/**
+ * One row's status from its production form(s) and fireemu's, all `comparable` forms. `row`
+ * names the row for its allowance in `NONDETERMINISTIC_ROWS`.
+ */
+export function classifyStage2({ row, stale, production, alternative, fireemu }) {
   if (stale) return "STALE_FIXTURE";
   if (production === undefined) return "MISSING_FIXTURE";
   if (fireemu === undefined) return "MISSING";
   // A client's request cap refused something: the row shows the harness's limit, not behavior.
   if ([production, alternative, fireemu].some((form) => form?.capped?.length)) return "CAPPED";
   if ([production, alternative, fireemu].some((form) => form?.late?.length)) return "INDETERMINATE";
+  const rule = NONDETERMINISTIC_ROWS[row];
+  if (rule) {
+    const forms = [production, alternative, fireemu].filter(
+      (form) => form !== undefined && form !== null,
+    );
+    const allowed = (form) =>
+      rule.parts.every((path) =>
+        rule.allowed.some((value) => isDeepStrictEqual(at(form, path), value)),
+      );
+    if (!forms.every(allowed)) return "MISMATCH";
+    const rest = forms.map((form) => without(form, rule.parts));
+    return rest.every((form) => isDeepStrictEqual(form, rest[0]))
+      ? "MATCH_NONDETERMINISTIC"
+      : "MISMATCH";
+  }
   // The two production recordings disagree: the row is decided by the owner (C9), not here.
   if (alternative !== undefined) return "INDETERMINATE";
   return isDeepStrictEqual(production, fireemu) ? "MATCH" : "MISMATCH";

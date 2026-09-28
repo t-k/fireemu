@@ -264,3 +264,60 @@ test("a row only recording 2 has is kept, with nothing to hold fireemu to", () =
     "MISSING_FIXTURE",
   );
 });
+
+test("the deleted tenant's SDK row may vary only inside its allowed set", () => {
+  const form = (t1, steady = ["docs:5"]) => ({
+    probes: {
+      "afc2-owned/steady-sdk": { listeners: { "sdk-steady/doc": steady } },
+      "afc2-tenant/t1-sdk": { listeners: { "sdk-ten-t1/doc": t1, "sdk-ten-t1/query": t1 } },
+    },
+    late: [],
+  });
+  const row = "held/exp-plus-35-sdk";
+  const error = ["error:unauthenticated"];
+  assert.equal(
+    classifyStage2({ row, production: form([]), fireemu: form(error) }),
+    "MATCH_NONDETERMINISTIC",
+  );
+  assert.equal(
+    classifyStage2({ row, production: form(error), alternative: form([]), fireemu: form([]) }),
+    "MATCH_NONDETERMINISTIC",
+  );
+  // A value outside the set, on either side, is a mismatch.
+  assert.equal(
+    classifyStage2({ row, production: form([]), fireemu: form(["docs:5"]) }),
+    "MISMATCH",
+  );
+  assert.equal(
+    classifyStage2({ row, production: form(["docs:5"]), fireemu: form([]) }),
+    "MISMATCH",
+  );
+  // The rest of the row must still agree.
+  assert.equal(
+    classifyStage2({ row, production: form([]), fireemu: form([], ["error:x"]) }),
+    "MISMATCH",
+  );
+  // Another row keeps the ordinary rules.
+  assert.equal(
+    classifyStage2({ row: "other", production: form([]), fireemu: form(error) }),
+    "MISMATCH",
+  );
+  assert.equal(
+    classifyStage2({
+      row: "other",
+      production: form([]),
+      alternative: form(error),
+      fireemu: form([]),
+    }),
+    "INDETERMINATE",
+  );
+  // A late timer or a cap still wins.
+  assert.equal(
+    classifyStage2({ row, production: { ...form([]), late: ["x"] }, fireemu: form([]) }),
+    "INDETERMINATE",
+  );
+  assert.equal(
+    classifyStage2({ row, production: { ...form([]), capped: ["c"] }, fireemu: form([]) }),
+    "CAPPED",
+  );
+});

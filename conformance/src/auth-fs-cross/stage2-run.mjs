@@ -258,7 +258,13 @@ async function check(args) {
     const saved = fixture.rows[id];
     const fireemu = local.rows?.[id] === undefined ? undefined : comparable(local.rows[id]);
     const alternative = saved === undefined || !("second" in saved) ? undefined : saved.second;
-    const status = classifyStage2({ stale, production: saved?.production, alternative, fireemu });
+    const status = classifyStage2({
+      row: id,
+      stale,
+      production: saved?.production,
+      alternative,
+      fireemu,
+    });
     const out = { row: id, status, production: saved?.production, fireemu };
     if (alternative !== undefined) out.alternative = alternative;
     return out;
@@ -270,13 +276,16 @@ async function check(args) {
     join(RUN_DIR, "comparison.json"),
     `${JSON.stringify({ summary, cleanupErrors: local.cleanupErrors ?? [], rows }, null, 2)}\n`,
   );
+  // A row whose varying part stayed inside its allowed set passes; the output shows both
+  // production recordings and fireemu for it all the same.
+  const passing = new Set(["MATCH", "MATCH_NONDETERMINISTIC"]);
   for (const row of rows.filter((r) => r.status !== "MATCH")) {
     console.log(`\n${row.status} ${row.row}`);
     console.log(`  production ${String(JSON.stringify(row.production)).slice(0, 400)}`);
     console.log(`  fireemu    ${String(JSON.stringify(row.fireemu)).slice(0, 400)}`);
   }
   console.log(JSON.stringify({ summary, cleanupErrors: local.cleanupErrors ?? [] }, null, 2));
-  if (rows.some((r) => r.status !== "MATCH") || (local.cleanupErrors ?? []).length)
+  if (rows.some((r) => !passing.has(r.status)) || (local.cleanupErrors ?? []).length)
     process.exitCode = 1;
 }
 

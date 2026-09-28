@@ -344,8 +344,11 @@ export function createInterpreter(program, deps) {
           (f.targetChange?.targetIds ?? []).length === 0 &&
           f.targetChange?.resumeToken,
       )?.targetChange.resumeToken;
-    await framesReady(first, (frames) => tokenOf(frames) !== undefined);
-    await first.close();
+    try {
+      await framesReady(first, (frames) => tokenOf(frames) !== undefined);
+    } finally {
+      await first.close();
+    }
     const resumeToken = tokenOf(first.frames);
     if (resumeToken === undefined) throw fatal(`${step.id}: no resume token`);
     await session.seed([step.write]);
@@ -353,9 +356,15 @@ export function createInterpreter(program, deps) {
     for (const resume of step.resumes) {
       const recorder = openNative(resume.as, [{ targetId: 1, documents, resumeToken }]);
       note(step.id, { resume: resume.name });
-      await session.pause(windowOf(step));
-      const end = recorder.ended();
-      await recorder.close();
+      // A stop during the window (a signal, a fatal) still closes this stream: it is in no
+      // map that the final close walks.
+      let end;
+      try {
+        await session.pause(windowOf(step));
+        end = recorder.ended();
+      } finally {
+        await recorder.close();
+      }
       resumes[resume.name] = {
         frames: resumeRows(recorder.frames, documentsRoot),
         end: end ? { reason: end.reason, code: end.code } : null,

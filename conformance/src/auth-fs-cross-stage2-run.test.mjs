@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 
-import { prepareRunDir } from "./auth-fs-cross/stage2-run.mjs";
+import { comparisonDir, prepareRunDir } from "./auth-fs-cross/stage2-run.mjs";
 
 test("each local run gets its own private directory, and earlier runs are kept", async () => {
   const root = await mkdtemp(join(tmpdir(), "afc2-runs-"));
@@ -35,6 +35,20 @@ test("each local run gets its own private directory, and earlier runs are kept",
       });
       assert.equal(paths.out, join(dir, "fireemu.json"));
     }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a comparison goes next to a fresh run's rows, and saved rows get a new directory", async () => {
+  const root = await mkdtemp(join(tmpdir(), "afc2-runs-"));
+  try {
+    const fresh = join(root, "fresh");
+    assert.equal(await comparisonDir({ runDir: fresh }, { root }), fresh);
+    const at = new Date("2026-09-28T13:40:00.000Z");
+    const saved = await comparisonDir({}, { root, now: at });
+    assert.equal(saved, join(root, "2026-09-28T13-40-00.000Z"));
+    assert.notEqual(await comparisonDir({}, { root, now: at }), saved);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

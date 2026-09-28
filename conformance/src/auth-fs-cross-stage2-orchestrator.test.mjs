@@ -520,6 +520,71 @@ test("a resume probe reopens a listener from its resume token, as its own and as
   });
 });
 
+test("a resume probe without a resume token stops the run, and a stop in its window closes its stream", async () => {
+  const program = (resumes) => ({
+    steps: [
+      {
+        do: "resume-probe",
+        id: "resume/open",
+        condition: "X",
+        as: "a",
+        document: "afc2-open/resume",
+        write: { doc: "afc2-open/resume", fields: {} },
+        resumes,
+      },
+    ],
+  });
+  const principals = { a: { uid: "uid-a", idToken: token(100) } };
+  // The first stream ends without a token: nothing is written, the run stops.
+  const tokenless = fakeSession({ principals });
+  const ended = fakeRecorder();
+  ended.end({ reason: "error", code: 7 });
+  await assert.rejects(
+    createInterpreter(program([{ name: "same", as: "a" }]), {
+      session: tokenless,
+      ctx,
+      spawnClient: () => fakeClient(),
+      openListen: () => ended,
+      sdkConfig: {},
+    }).run(),
+    /resume\/open: no resume token/,
+  );
+  assert.deepEqual(
+    tokenless.calls.filter(([k]) => k === "seed"),
+    [],
+  );
+  // A stop while a resume is watched closes that stream before the run ends.
+  const stopped = fakeSession({ principals });
+  stopped.pause = async () => {
+    throw new Error("stopped by a signal");
+  };
+  const recorders = [];
+  await assert.rejects(
+    createInterpreter(program([{ name: "same", as: "a" }]), {
+      session: stopped,
+      ctx,
+      spawnClient: () => fakeClient(),
+      openListen: () => {
+        const recorder = fakeRecorder();
+        if (recorders.length === 0)
+          recorder.frames.push({
+            kind: "targetChange",
+            targetChange: { targetChangeType: "NO_CHANGE", targetIds: [], resumeToken: "dA==" },
+          });
+        recorders.push(recorder);
+        return recorder;
+      },
+      sdkConfig: {},
+    }).run(),
+    /stopped by a signal/,
+  );
+  assert.equal(recorders.length, 2);
+  assert.deepEqual(
+    recorders.map((r) => r.ended()?.reason),
+    ["closed-by-harness", "closed-by-harness"],
+  );
+});
+
 test("placeholders resolve before a command leaves, and a transaction's result row names its op", async () => {
   const client = fakeClient({ hold: ["transaction"] });
   const session = fakeSession({

@@ -240,12 +240,18 @@ export function packetApproval(ownerText, { packetSha256, sourceCommit, harnessD
       .slice(2)
       .split(" | ")
       .map((c) => c.trim());
-    if (topic !== subject && topic !== `${subject} envelope` && topic !== PARENT) continue;
+    // Only this lane's topics count. Approvals are read under the exact topics; a revocation
+    // under any of this lane's topics withdraws what it names (the safe side: a revocation once
+    // went under a topic no approval uses).
+    if (topic !== PARENT && !topic.startsWith(`${PARENT} `)) continue;
+    const known = topic === subject || topic === `${subject} envelope` || topic === PARENT;
     const entry = fields(body);
     // A later line naming this version or an envelope that is not an approval of it (REVOKED,
     // another decision) withdraws what it names, as stage 1 refuses after any later line.
+    const revoked = /\bREVOKED\b/i.test(body);
+    if (!known && !revoked) continue;
     const withdraws =
-      /\bREVOKED\b/i.test(body) ||
+      revoked ||
       (entry.decision !== undefined &&
         entry.decision !== "APPROVE" &&
         topic !== `${subject} envelope`);

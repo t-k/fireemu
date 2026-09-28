@@ -334,13 +334,19 @@ test("the deleted tenant's SDK row may vary only inside its allowed set", () => 
   });
   const row = "held/exp-plus-35-sdk";
   const error = ["error:unauthenticated"];
+  // The set is `[]` only: production gave it in all four recordings, fireemu since the stream
+  // close was fixed. An error, which local runs once gave, is now a mismatch on either side.
   assert.equal(
-    classifyStage2({ row, production: form([]), fireemu: form(error) }),
+    classifyStage2({ row, production: form([]), alternative: form([]), fireemu: form([]) }),
     "MATCH_NONDETERMINISTIC",
   );
   assert.equal(
+    classifyStage2({ row, production: form([]), fireemu: form(error) }),
+    "MISMATCH",
+  );
+  assert.equal(
     classifyStage2({ row, production: form(error), alternative: form([]), fireemu: form([]) }),
-    "MATCH_NONDETERMINISTIC",
+    "MISMATCH",
   );
   // A value outside the set, on either side, is a mismatch.
   assert.equal(

@@ -171,6 +171,11 @@ export async function newRunDir({ root = RUN_DIR, now = new Date() } = {}) {
   }
 }
 
+/** Where a comparison is written: next to the fresh run's rows, or a new directory for saved rows. */
+export async function comparisonDir(local, { root = RUN_DIR, now = new Date() } = {}) {
+  return local.runDir ?? (await newRunDir({ root, now }));
+}
+
 /**
  * A new private directory under `root` for one local run, named by its start time, with the
  * run's inputs written. An earlier run's directory (its rows, its comparison) is never touched:
@@ -296,8 +301,7 @@ async function check(args) {
   });
   const summary = {};
   for (const { status } of rows) summary[status] = (summary[status] ?? 0) + 1;
-  // Next to the rows it compares: the fresh run's directory, or a new one for saved rows.
-  const dir = local.runDir ?? (await newRunDir());
+  const dir = await comparisonDir(local);
   const compared = rowsAt >= 0 ? args[rowsAt + 1] : join(dir, "fireemu.json");
   await writeFile(
     join(dir, "comparison.json"),

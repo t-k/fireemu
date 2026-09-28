@@ -473,6 +473,26 @@ test("a later line naming the version or envelope that is not an approval withdr
     ).problems.length,
     1,
   );
+  // A revocation under any AUTH-FS-CROSS topic withdraws what it names, even one the approval
+  // lines never use (safe side: the v6 revocation was first written under such a topic).
+  const loose = (topic, body) => `- 2026-09-30 | ${topic} | ${body} | Claude（委任） | -`;
+  assert.equal(
+    approve(`${owned}\n${loose("AUTH-FS-CROSS stage-2", `REVOKED packetSha256=${PACKET}`)}`)
+      .problems.length,
+    1,
+  );
+  assert.equal(
+    approve(
+      `${envelope()}\n${delegated()}\n${loose("AUTH-FS-CROSS closure", "REVOKED envelopeId=AUTH-FS-CROSS-stage-2-packet-1")}`,
+    ).problems.length,
+    1,
+  );
+  // A line of another topic family, or an approval-shaped line under a loose topic, does not.
+  assert.equal(
+    approve(`${owned}\n${loose("FS-RULES stage-2", `REVOKED packetSha256=${PACKET}`)}`).approval
+      .kind,
+    "owner",
+  );
   // A decision about another version leaves this one approved.
   assert.equal(
     approve(`${owned}\n${later(`decision=REQUEST_CHANGES; packetSha256=${"f".repeat(64)}`)}`)

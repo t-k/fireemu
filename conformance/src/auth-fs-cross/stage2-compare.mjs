@@ -110,12 +110,12 @@ function comparableForm(row) {
 export const NONDETERMINISTIC_ROWS = {
   "held/exp-plus-35-sdk": {
     reason:
-      "The deleted tenant's SDK client keeps its expired token after its refresh fails; whether the SDK's retry surfaces the refusal inside the probe's window depends on its timer (local runs 3 and 4 differed).",
+      "The deleted tenant's SDK client keeps its expired token after its refresh fails and retries. Local runs once let the refusal reach the listener inside the probe's window; production gave nothing in all four recordings (v6 and v7), and so has fireemu since a strict stream closes on its own instead of removing its targets. The set is that one value.",
     parts: [
       ["probes", "afc2-tenant/t1-sdk", "listeners", "sdk-ten-t1/doc"],
       ["probes", "afc2-tenant/t1-sdk", "listeners", "sdk-ten-t1/query"],
     ],
-    allowed: [[], ["error:unauthenticated"]],
+    allowed: [[]],
   },
 };
 

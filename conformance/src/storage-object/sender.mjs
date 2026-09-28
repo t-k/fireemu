@@ -1,19 +1,122 @@
 import { createHash } from "node:crypto";
 import { createRunOwnership } from "./ownership.mjs";
 import { createStage3RequestCounter, claimStage3RecipeContext } from "./request-counter.mjs";
-import { isDeepStrictEqual } from "node:util";
+import { isDeepStrictEqual, types } from "node:util";
 import { resolveDeclaredQuery } from "./reference-resolution.mjs";
 import { evaluateRewriteProgress, validateRewriteDeclaration } from "./rewrite-attempts.mjs";
 import { buildCorpus } from "./corpus.mjs";
 import { createLocalAuthState } from "./local-auth-state.mjs";
 import { FIXED_PRODUCTION_RULES_SHA256 } from "./auth-plan.mjs";
+import { buildProductionStage3DraftPlan } from "./stage3-plan.mjs";
+import { validateProductionCredentialDeclaration } from "./production-credentials.mjs";
+import { buildSymbolicStorageAuthPlan } from "./auth-plan.mjs";
 
 const MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
 const senderClosureProofs = new WeakMap();
+const productionSenders = new WeakSet();
 
 /** Verify a module-private terminal proof against the actual active recipe and sequence. */
 export function verifyLocalRecipeTerminal(sender, proof) {
   return senderClosureProofs.get(sender)?.(proof) === true;
+}
+
+/** Production terminal evidence requires the original module-private sender identity. */
+export function verifyProductionRecipeTerminal(sender, proof) {
+  return productionSenders.has(sender) && verifyLocalRecipeTerminal(sender, proof);
+}
+
+function productionRecord(value, allowed) {
+  if (
+    !value ||
+    types.isProxy(value) ||
+    ![Object.prototype, null].includes(Object.getPrototypeOf(value))
+  )
+    throw new Error("invalid production sender data");
+  const entries = [];
+  for (const key of Reflect.ownKeys(value)) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (
+      typeof key !== "string" ||
+      (allowed && !allowed.includes(key)) ||
+      !descriptor.enumerable ||
+      !Object.hasOwn(descriptor, "value")
+    )
+      throw new Error("invalid production sender data");
+    entries.push([key, descriptor.value]);
+  }
+  return Object.fromEntries(entries);
+}
+
+function productionData(value, depth = 0) {
+  if (depth > 16 || types.isProxy(value)) throw new Error("invalid production sender data");
+  if (
+    value === null ||
+    value === undefined ||
+    ["string", "number", "boolean"].includes(typeof value)
+  )
+    return value;
+  if (Array.isArray(value)) {
+    if (
+      Object.getPrototypeOf(value) !== Array.prototype ||
+      value.length > 64 ||
+      Reflect.ownKeys(value).length !== value.length + 1
+    )
+      throw new Error("invalid production sender data");
+    return Array.from({ length: value.length }, (_, index) => {
+      const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+      if (!descriptor?.enumerable || !Object.hasOwn(descriptor, "value"))
+        throw new Error("invalid production sender data");
+      return productionData(descriptor.value, depth + 1);
+    });
+  }
+  return Object.fromEntries(
+    Object.entries(productionRecord(value)).map(([key, item]) => [
+      key,
+      productionData(item, depth + 1),
+    ]),
+  );
+}
+
+/** Bind the shared ownership core to a canonical production plan, capability and closed wire. */
+export function createProductionStorageSender(input) {
+  try {
+    const options = productionRecord(input, [
+      "plan",
+      "recipeToken",
+      "wire",
+      "verifyAdmission",
+      "onJournal",
+    ]);
+    if (Object.keys(options).length !== 5 || options.recipeToken === undefined) throw new Error();
+    options.plan = productionData(options.plan);
+    if (
+      !isDeepStrictEqual(
+        options.plan,
+        buildProductionStage3DraftPlan({
+          projectId: options.plan.projectId,
+          bucket: options.plan.bucket,
+          runIds: options.plan.recordings.map((row) => row.runId),
+        }),
+      )
+    )
+      throw new Error();
+    const wire = productionRecord(options.wire);
+    if (
+      [wire.fetchStorage, options.verifyAdmission, options.onJournal].some(
+        (fn) => typeof fn !== "function" || types.isProxy(fn),
+      ) ||
+      Object.getPrototypeOf(options.verifyAdmission) !== Function.prototype
+    )
+      throw new Error();
+    const sender = createStorageSender(
+      { plan: options.plan, recipeToken: options.recipeToken, onJournal: options.onJournal },
+      { fetchStorage: wire.fetchStorage, verifyAdmission: options.verifyAdmission },
+    );
+    productionSenders.add(sender);
+    return sender;
+  } catch {
+    throw new Error("invalid production sender configuration");
+  }
 }
 
 function localOrigin(value) {
@@ -166,20 +269,27 @@ export function validateStorageRoute(step, { bucket, prefix } = {}) {
 }
 
 /** Local-only sender seam. Production entry points remain disabled separately. */
-export function createLocalStorageSender({
-  plan,
-  recipeToken,
-  origin,
-  authOrigin,
-  localAuth,
-  localControl,
-  fetchImpl,
-  onStart,
-  onReserve,
-  onJournal,
-  credentials = {},
-} = {}) {
-  const base = localOrigin(origin);
+export function createLocalStorageSender(options = {}) {
+  return createStorageSender(options, null);
+}
+
+function createStorageSender(
+  {
+    plan,
+    recipeToken,
+    origin,
+    authOrigin,
+    localAuth,
+    localControl,
+    fetchImpl,
+    onStart,
+    onReserve,
+    onJournal,
+    credentials = {},
+  } = {},
+  production,
+) {
+  const base = production ? null : localOrigin(origin);
   const authBase = authOrigin === undefined ? null : localOrigin(authOrigin);
   const controlBase = localControl === undefined ? null : localOrigin(localControl.origin);
   if (
@@ -189,15 +299,26 @@ export function createLocalStorageSender({
     throw new Error("local control credential is invalid");
   let localRulesVerified = false,
     rulesProofSerial = 0;
-  if (typeof fetchImpl !== "function" || typeof onJournal !== "function")
+  if ((!production && typeof fetchImpl !== "function") || typeof onJournal !== "function")
     throw new Error("fetch and durable ownership journal writers are required");
-  if (plan?.status !== "LOCAL_DRAFT_NO_SEND" || plan.recordings?.length !== 2)
+  if (
+    plan?.status !== (production ? "PRODUCTION_DRAFT_NO_SEND" : "LOCAL_DRAFT_NO_SEND") ||
+    plan.recordings?.length !== 2
+  )
     throw new Error("a reviewed two-recording draft shape is required");
   const context = recipeToken === undefined ? null : claimStage3RecipeContext(recipeToken, plan);
   const bucket = context?.bucket ?? plan.bucket;
   const prefix = context?.prefix ?? plan.recordings[0].prefix;
   const ownership = createRunOwnership({ bucket, prefix });
   const counter = context?.counter ?? createStage3RequestCounter(plan, { onStart, onReserve });
+  const accountRefs = production
+    ? buildSymbolicStorageAuthPlan({
+        projectId: plan.projectId,
+        bucket,
+        runId: plan.recordings[context.recording - 1].runId,
+      }).programs.flatMap((program) => [program.validAccountRef, program.competitorAccountRef])
+    : [];
+  let productionFailed = false;
   let terminalProof = null;
   let recipeClosed = false;
   let namespaceAdmitted = false;
@@ -215,10 +336,42 @@ export function createLocalStorageSender({
     throw new Error("invalid local credentials");
 
   function adminHeaders() {
+    if (production) return {};
     const authorization = credentials.admin;
     if (typeof authorization !== "string" || !/^Bearer [^\s]+$/.test(authorization))
       throw new Error("admin OAuth credential is unresolved");
     return { authorization };
+  }
+
+  function productionAdmitted(requestContext) {
+    if (!production) return;
+    try {
+      if (
+        productionFailed ||
+        production.verifyAdmission(requestContext) !== true ||
+        productionFailed
+      )
+        throw new Error();
+    } catch {
+      productionFailed = true;
+      throw new Error("production sender admission is unavailable");
+    }
+  }
+
+  function internalProductionStep(path, query, init) {
+    const collection = `/storage/v1/b/${bucket}/o`;
+    if (path !== collection && !path.startsWith(`${collection}/`))
+      throw new Error("invalid production helper route");
+    return {
+      dialect: "gcs",
+      method: init.method,
+      credential: "admin",
+      path,
+      query,
+      ...(path === collection
+        ? { collection: true, scopePrefix: prefix }
+        : { objectName: decodeURIComponent(path.slice(collection.length + 1)) }),
+    };
   }
 
   async function countedFetch(
@@ -229,9 +382,48 @@ export function createLocalStorageSender({
     beforeFetch = async () => {},
     requestOrigin = base,
     verifyBeforeFetch = () => {},
+    storageStep,
   ) {
     terminalProof = null;
     const dispatchOperationId = context?.dispatchOperationId(operationId) ?? operationId;
+    if (production) {
+      const requestContext = Object.freeze({
+        recording: context.recording,
+        phase: counter.snapshot().mode,
+        kind: "storage",
+        operationId: dispatchOperationId,
+      });
+      const declaration = storageStep ?? internalProductionStep(path, query, init);
+      validateStorageRoute(declaration, { bucket, prefix });
+      validateProductionCredentialDeclaration(declaration, { accountRefs });
+      productionAdmitted(requestContext);
+      try {
+        return await counter.send(operationId, async () => {
+          await beforeFetch();
+          verifyBeforeFetch();
+          productionAdmitted(requestContext);
+          const response = await production.fetchStorage(context.recording, declaration, {
+            method: init.method,
+            headers: init.headers ?? {},
+            body: init.body,
+            redirect: "manual",
+            operationId: dispatchOperationId,
+            accountingPhase: requestContext.phase,
+          });
+          const bytes = Buffer.from(await response.arrayBuffer());
+          productionAdmitted(requestContext);
+          if (bytes.length > MAX_RESPONSE_BYTES) throw new Error();
+          return {
+            status: response.status,
+            headers: Object.fromEntries(response.headers.entries()),
+            raw: bytes,
+          };
+        });
+      } catch {
+        productionFailed = true;
+        throw new Error("production sender request is unavailable");
+      }
+    }
     const url = new URL(path, requestOrigin);
     for (const [key, value] of Object.entries(query ?? {})) {
       if (typeof value !== "string") throw new Error("unresolved request query");
@@ -485,7 +677,13 @@ export function createLocalStorageSender({
         authSubjectDispatches.delete(step.id);
       }
     },
-    async sendStep(step, { operationId = step?.id } = {}) {
+    async sendStep(suppliedStep, suppliedOptions = {}) {
+      const step = production ? productionData(suppliedStep) : suppliedStep;
+      const options = production
+        ? productionRecord(suppliedOptions, ["operationId"])
+        : suppliedOptions;
+      const { operationId = step?.id } = options;
+      if (production) validateProductionCredentialDeclaration(step, { accountRefs });
       if (counter.snapshot().mode === "not-started") throw new Error("no durable started row");
       const route = validateStorageRoute(step, { bucket, prefix });
       if (route !== "direct") throw new Error("session reference is unresolved");
@@ -500,7 +698,7 @@ export function createLocalStorageSender({
       const headers = { ...step.headers };
       const authDispatch = authSubjectDispatches.get(operationId);
       if (authDispatch?.authorization) headers.authorization = authDispatch.authorization;
-      if (step.credential !== undefined && step.credential !== "none") {
+      if (!production && step.credential !== undefined && step.credential !== "none") {
         const authorization = credentials[step.credential];
         if (typeof authorization !== "string" || !/^(Bearer|Firebase) [^\s]+$/.test(authorization))
           throw new Error("local credential is unresolved");
@@ -542,6 +740,7 @@ export function createLocalStorageSender({
         },
         base,
         authDispatch?.check,
+        step,
       );
       observed.set(operationId, { step, response, ordinal: ++ordinal });
       if (mutates) lastMutation.set(step.objectName, ordinal);
@@ -1226,10 +1425,29 @@ export function createLocalStorageSender({
           sequence: counter.snapshot().total,
           namespaceEmpty: true,
         });
-        await onJournal(proof);
-        if (counter.snapshot().total !== proof.sequence || sender.unresolved().length !== 0)
-          throw new Error("recipe terminal proof became stale");
-        terminalProof = Object.freeze(proof);
+        const persistTerminal = async () => {
+          await onJournal(proof);
+          if (production)
+            productionAdmitted(
+              Object.freeze({
+                recording: context.recording,
+                phase: counter.snapshot().mode,
+                kind: "storage",
+                operationId: context.dispatchOperationId("final-prefix-list"),
+              }),
+            );
+          if (counter.snapshot().total !== proof.sequence || sender.unresolved().length !== 0)
+            throw new Error("recipe terminal proof became stale");
+          terminalProof = Object.freeze(proof);
+        };
+        if (!production) await persistTerminal();
+        else
+          try {
+            await persistTerminal();
+          } catch {
+            productionFailed = true;
+            throw new Error("production sender terminal proof is unavailable");
+          }
       }
       return empty;
     },
@@ -1239,7 +1457,8 @@ export function createLocalStorageSender({
     close: () => {
       if (
         context &&
-        (!terminalProof ||
+        (productionFailed ||
+          !terminalProof ||
           terminalProof.sequence !== counter.snapshot().total ||
           sender.unresolved().length !== 0)
       )
@@ -1261,6 +1480,7 @@ export function createLocalStorageSender({
   if (context) {
     senderClosureProofs.set(sender, (proof) =>
       Boolean(
+        !productionFailed &&
         recipeClosed &&
         terminalProof &&
         context.isActive() &&

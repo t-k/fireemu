@@ -6339,12 +6339,7 @@ mod tests {
         use fireemu_core_types::time::LogicalInstant;
 
         let runtime = runtime_with_blocking_auth_policy_order(&[("guardA", false, false)]).await;
-        // The property is that the first request waits for the replacement runner instead of
-        // failing fast, not that a fresh Python process starts inside production's seven
-        // seconds: a cold, contended macOS runner has spent longer than that on the spawn
-        // alone. The caller's deadline therefore matches the runner's declared hello
-        // allowance; the seven-second envelope is pinned by its own tests.
-        let bridge = BlockingAuthBridge::with_deadline(runtime.clone(), Duration::from_secs(60));
+        let bridge = BlockingAuthBridge::new(runtime.clone());
         let now = LogicalInstant::from_unix_seconds(1_788_004_860);
         let mut store = AuthStore::new("demo-app", SplitMix64::new(7), TotpPolicy::default());
         let uid = store

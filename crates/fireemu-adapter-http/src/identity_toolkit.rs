@@ -2764,11 +2764,16 @@ fn dispatch_with_blocking_hook(
                         // answers 400 DUPLICATE_LOCAL_ID, as it does when no clear came between
                         // and as the official emulator's signUp does (closure re-review S1'',
                         // 2026-09-28). The strict profile answered a clear above, and without a
-                        // clear the request's own ticket is only released when it returns.
+                        // clear the request's own ticket is only released when it returns, so
+                        // the refusal below is a guard no request reaches.
+                        debug_assert!(
+                            cleared,
+                            "a request's own reservation fails only across a clear or a restore"
+                        );
                         if !cleared {
                             return error(409, "AUTH_STATE_CHANGED");
                         }
-                        committed.use_reserved_generated_local_id(uid);
+                        committed.use_generated_local_id_reserved_before_reset(uid);
                     }
                 }
             }

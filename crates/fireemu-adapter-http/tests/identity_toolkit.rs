@@ -4539,6 +4539,44 @@ fn the_emulator_profile_creates_a_cleared_idp_account_with_the_uid_its_function_
         .is_some_and(|user| user.local_id.as_str() == seen[0]));
 }
 
+/// Accounts cleared while beforeCreate runs, and another account created after the clear, in the
+/// strict profile: the request is refused with fireemu's own 409 `AUTH_STATE_RESET`, the other
+/// account skips the request's uid while it runs, and the uid is free once it returns (closure
+/// re-review 3, 2026-09-28).
+#[test]
+fn the_strict_profile_holds_a_cleared_request_uid_until_the_request_returns() {
+    let hook = std::sync::OnceLock::new();
+    let state = Arc::new_cyclic(|weak| {
+        let mut state = strict_state();
+        let clearing = Arc::new(ClearingThenTakingHook {
+            bystander: true,
+            ..ClearingThenTakingHook::new(weak.clone(), true, false)
+        });
+        hook.set(Arc::clone(&clearing)).ok().unwrap();
+        state.blocking = Some(clearing);
+        state
+    });
+    let (status, body) = post(
+        &state,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"email": "strict-cleared@example.com", "password": "hunter22"}),
+    );
+    assert_eq!(
+        (status, body["error"]["message"].as_str()),
+        (409, Some("AUTH_STATE_RESET")),
+        "{body}"
+    );
+    let seen = hook.get().unwrap().seen.lock().unwrap().clone();
+    assert_eq!(seen.len(), 1);
+    let store = state.store.lock().unwrap();
+    assert_eq!(store.user_count(), 1);
+    assert!(store
+        .user_by_email("bystander@example.com")
+        .is_some_and(|user| user.local_id.as_str() != seen[0]));
+    assert!(store.user_by_email("strict-cleared@example.com").is_none());
+    assert!(!store.holds_generated_local_id(&seen[0]));
+}
+
 /// A function switched on after admission: a retryable 409 in the strict profile; the
 /// emulator profile completes the sign-up (closure review M1).
 #[test]

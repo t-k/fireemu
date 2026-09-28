@@ -3008,17 +3008,37 @@ impl AuthStore {
         }
     }
 
-    /// Uses a previously reserved ID for the next generated account and retires one reservation
-    /// from the current generation. New blocking requests use the ticketed variant below so a
-    /// later guard release cannot affect another request's reservation.
-    pub fn use_reserved_generated_local_id(&mut self, id: &str) {
-        let generation = self.reset_generation();
-        let mut reservations = self
-            .generated_local_id_reservations
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        Self::release_reservation_generation(&mut reservations, id, generation);
+    /// Names an id reserved before a reset for the next generated account, as the emulator
+    /// profile does when it commits a request across an account wipe. It releases nothing: the
+    /// request's own reservation stays in the ledger under its older generation until its guard
+    /// releases it by ticket, and no reservation of the current generation can hold the same id,
+    /// since a reservation skips every id the ledger holds.
+    pub fn use_generated_local_id_reserved_before_reset(&mut self, id: &str) {
+        debug_assert!(
+            {
+                let generation = self.reset_generation();
+                self.generated_local_id_reservations
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .get(&LocalId(id.to_owned()))
+                    .is_some_and(|entries| {
+                        entries
+                            .iter()
+                            .all(|(reserved_generation, _)| *reserved_generation != generation)
+                    })
+            },
+            "only a reservation from before a reset names the id"
+        );
         self.next_id_override = Some(id.to_owned());
+    }
+
+    /// Whether an in-flight request holds `id` as its generated local id, in any reset
+    /// generation.
+    pub fn holds_generated_local_id(&self, id: &str) -> bool {
+        self.generated_local_id_reservations
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .contains_key(&LocalId(id.to_owned()))
     }
 
     /// Uses and retires exactly one request-owned generated ID reservation.
@@ -12113,10 +12133,7 @@ mod generated_id_tests {
     }
 
     fn held(live: &AuthStore, id: &str) -> bool {
-        live.generated_local_id_reservations
-            .lock()
-            .unwrap()
-            .contains_key(&LocalId(id.to_owned()))
+        live.holds_generated_local_id(id)
     }
 
     /// A reset keeps the id of a request still in flight: the emulator profile commits that
@@ -12143,6 +12160,63 @@ mod generated_id_tests {
         live.release_reserved_generated_local_id_at_generation(&fresh, fresh_generation);
         assert!(!held(&live, &reserved), "a released id is free again");
         assert!(!held(&live, &fresh));
+    }
+
+    /// Committing across a reset names the reserved id for the next account and releases
+    /// nothing: the request's own reservation stays until its guard releases it (closure
+    /// re-review 3, 2026-09-28).
+    #[test]
+    fn using_a_reservation_from_before_a_reset_releases_nothing() {
+        let mut live = AuthStore::new("demo-app", SplitMix64::new(7), TotpPolicy::default());
+        let (reserved, generation) = live
+            .clone()
+            .reserve_next_generated_local_id_with_generation();
+        live.clear();
+
+        let mut committed = live.clone();
+        committed.use_generated_local_id_reserved_before_reset(&reserved);
+        assert!(held(&live, &reserved));
+        let created = committed
+            .create_user(NewUser::email("across-reset@example.test"), NOW)
+            .expect("the request's account is created with its id");
+        assert_eq!(created.as_str(), reserved);
+        assert!(held(&live, &reserved), "only the guard releases it");
+
+        live.release_reserved_generated_local_id_at_generation(&reserved, generation);
+        assert!(!held(&live, &reserved));
+    }
+
+    /// A restore brings back an account whose id an in-flight request holds: the restore wins,
+    /// and the request cannot create its account (400 `DUPLICATE_LOCAL_ID` in the emulator
+    /// profile; the strict profile refuses it first as a reset). The official emulator has no
+    /// restore while a request runs (closure re-review 3, 2026-09-28).
+    #[test]
+    fn a_restored_account_wins_over_an_in_flight_reservation_of_its_id() {
+        let mut live = AuthStore::new("demo-app", SplitMix64::new(7), TotpPolicy::default());
+        let (reserved, generation) = live
+            .clone()
+            .reserve_next_generated_local_id_with_generation();
+        let mut source = AuthStore::new("demo-app", SplitMix64::new(11), TotpPolicy::default());
+        source
+            .create_user_with_id(
+                NewUser::email("restored@example.test"),
+                Some(&reserved),
+                NOW,
+            )
+            .expect("the source holds an account with that id");
+        let report = AuthSnapshot::capture(&source).restore_into(&mut live);
+        assert_eq!(report, super::RestoreReport::default());
+        assert!(live.user_by_id(&reserved).is_some());
+        assert!(held(&live, &reserved));
+
+        let mut committed = live.clone();
+        committed.use_generated_local_id_reserved_before_reset(&reserved);
+        assert_eq!(
+            committed.create_user(NewUser::email("request@example.test"), NOW),
+            Err(super::AuthError::LocalIdExists)
+        );
+        live.release_reserved_generated_local_id_at_generation(&reserved, generation);
+        assert!(!held(&live, &reserved));
     }
 
     #[test]

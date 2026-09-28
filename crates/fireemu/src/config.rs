@@ -4583,6 +4583,15 @@ mod tests {
         }
     }
 
+    /// A `firebase.json` path resolved against the `/proj` base the way the loader resolves it:
+    /// joined with the platform's separator, so Windows reads `/proj\firestore.rules`.
+    fn under_proj(relative: &str) -> String {
+        std::path::Path::new("/proj")
+            .join(relative)
+            .to_string_lossy()
+            .into_owned()
+    }
+
     #[test]
     fn firebase_json_maps_rules_indexes_ports_and_the_selected_functions() {
         let json = json!({
@@ -4603,22 +4612,28 @@ mod tests {
         let report = cfg
             .apply_firebase_json(&json, base, &Selection::default())
             .unwrap();
-        assert_eq!(cfg.rules_file.as_deref(), Some("/proj/firestore.rules"));
+        assert_eq!(
+            cfg.rules_file.as_deref(),
+            Some(under_proj("firestore.rules").as_str())
+        );
         assert_eq!(
             cfg.firestore_databases[fireemu_core_types::ids::DatabaseId::DEFAULT]
                 .rules
                 .as_deref(),
-            Some("/proj/firestore.rules")
+            Some(under_proj("firestore.rules").as_str())
         );
         assert_eq!(
             cfg.index_file.as_deref(),
-            Some("/proj/firestore.indexes.json")
+            Some(under_proj("firestore.indexes.json").as_str())
         );
         assert_eq!(
             cfg.storage_rules_file.as_deref(),
-            Some("/proj/storage.rules")
+            Some(under_proj("storage.rules").as_str())
         );
-        assert_eq!(cfg.functions_source.as_deref(), Some("/proj/functions"));
+        assert_eq!(
+            cfg.functions_source.as_deref(),
+            Some(under_proj("functions").as_str())
+        );
         assert_eq!(cfg.firestore_addr, "127.0.0.1:8081");
         assert_eq!(cfg.http_addr, "127.0.0.1:9100");
         assert_eq!(cfg.storage_addr, "127.0.0.1:9200");
@@ -4635,7 +4650,10 @@ mod tests {
             &only,
         )
         .unwrap();
-        assert_eq!(cfg.index_file.as_deref(), Some("/proj/idx.json"));
+        assert_eq!(
+            cfg.index_file.as_deref(),
+            Some(under_proj("idx.json").as_str())
+        );
         assert_eq!(cfg.functions_source, None);
         assert!(!only.functions);
 
@@ -4653,11 +4671,11 @@ mod tests {
         assert!(report.notices.is_empty(), "{:?}", report.notices);
         assert_eq!(
             cfg.firestore_databases["staging"].rules.as_deref(),
-            Some("/proj/staging.rules")
+            Some(under_proj("staging.rules").as_str())
         );
         assert_eq!(
             cfg.firestore_databases["staging"].indexes.as_deref(),
-            Some("/proj/staging.indexes.json")
+            Some(under_proj("staging.indexes.json").as_str())
         );
         assert!(Selection::parse("auth,database").is_err());
         assert_eq!(
@@ -4701,17 +4719,14 @@ mod tests {
         assert_eq!(
             cfg.storage_rules_by_bucket,
             BTreeMap::from([
-                (
-                    "assets.example.test".to_owned(),
-                    "/proj/public.rules".to_owned()
-                ),
+                ("assets.example.test".to_owned(), under_proj("public.rules")),
                 (
                     "demo-app.appspot.com".to_owned(),
-                    "/proj/public.rules".to_owned()
+                    under_proj("public.rules")
                 ),
                 (
                     "private.example.test".to_owned(),
-                    "/proj/private.rules".to_owned()
+                    under_proj("private.rules")
                 ),
             ])
         );
@@ -4843,7 +4858,7 @@ mod tests {
             .expect("a multi-codebase project loads every codebase");
         assert_eq!(cfg.functions_codebases.len(), 2);
         assert_eq!(cfg.functions_codebases[0].codebase, "api");
-        assert_eq!(cfg.functions_codebases[0].source, "/proj/fn/api");
+        assert_eq!(cfg.functions_codebases[0].source, under_proj("fn/api"));
         assert_eq!(
             cfg.functions_codebases[0].runtime.as_deref(),
             Some("nodejs20")
@@ -4870,7 +4885,10 @@ mod tests {
         let mut cfg = RuntimeConfig::default();
         let only = Selection::parse("functions:workers").unwrap();
         cfg.apply_firebase_json(&json, base, &only).unwrap();
-        assert_eq!(cfg.functions_source.as_deref(), Some("/proj/fn/workers"));
+        assert_eq!(
+            cfg.functions_source.as_deref(),
+            Some(under_proj("fn/workers").as_str())
+        );
         assert_eq!(cfg.functions_to_load().len(), 1);
 
         // A single codebase needs no name at all, in either spelling.
@@ -4881,7 +4899,10 @@ mod tests {
             let mut cfg = RuntimeConfig::default();
             cfg.apply_firebase_json(&section, base, &Selection::default())
                 .unwrap();
-            assert_eq!(cfg.functions_source.as_deref(), Some("/proj/functions"));
+            assert_eq!(
+                cfg.functions_source.as_deref(),
+                Some(under_proj("functions").as_str())
+            );
             assert_eq!(cfg.functions_to_load().len(), 1);
         }
 

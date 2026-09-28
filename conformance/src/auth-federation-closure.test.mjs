@@ -178,6 +178,14 @@ test("AUTH-FEDERATION closure inventory cannot silently omit a declared conditio
     };
     const rows = comparisons.flatMap(({ rows: all }) => all.filter(({ row }) => covered(row)));
     assert.ok(rows.length > 0, `${label}: has compared rows`);
+    // The row counts a condition names are its comparisons' own, recounted here.
+    const counts = {};
+    for (const { status } of rows) counts[status] = (counts[status] ?? 0) + 1;
+    assert.deepEqual(
+      condition.evidence.rows,
+      counts,
+      `${label}: its row counts are its comparisons' own`,
+    );
     const divergences = condition.evidence.documentedDivergences ?? [];
     for (const divergence of divergences) {
       assert.equal(divergence.decidedBy, "owner", `${label}: ${divergence.row}`);

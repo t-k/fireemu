@@ -662,7 +662,9 @@ async function observeCollector({
           ? { FIRESTORE_PROBE_RECOVERY_MODE: recoveryMode ?? "recover-legacy" }
           : {}),
       },
-      timeout: 10_000,
+      // A guard against a hung child only. A delta-v3 run takes about 2.5 s alone and over 10 s
+      // under a parallel workspace build, where a 10 s limit killed it as a silent failure.
+      timeout: 60_000,
     });
   } catch (error) {
     failure = error;

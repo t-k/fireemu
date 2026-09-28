@@ -660,7 +660,7 @@
       "historicalProductionReferences": [],
       "verification": {
         "requiredEvidence": [
-          "Two independent sandbox recordings for Node and real browser, including wire shape, refusal code, callback count and final state.",
+          "Two independent sandbox recordings for the declared Node Admin SDK transport, including wire shape, refusal code, callback count and final state.",
           "Final source-bound comparison with no unexplained mismatch and complete cleanup."
         ],
         "recordingsRequired": 2,
@@ -691,7 +691,7 @@
       "historicalProductionReferences": [],
       "verification": {
         "requiredEvidence": [
-          "Two independent sandbox recordings for Node and real browser, including wire shape, refusal code, callback count and final state.",
+          "Two independent sandbox recordings for native gRPC Listen, including atomic snapshot visibility, commit time, notification order and final state.",
           "Final source-bound comparison with no unexplained mismatch and complete cleanup."
         ],
         "recordingsRequired": 2,

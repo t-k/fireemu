@@ -408,3 +408,30 @@ test("locks are taken in sorted order, the directory must be private, and a lega
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test("a later line naming the version or envelope that is not an approval withdraws it", () => {
+  const later = (body) =>
+    `- 2026-09-30 | AUTH-FS-CROSS stage-2 packet | ${body} | オーナー（直接） | -`;
+  assert.equal(
+    approve(`${owned}\n${later(`decision=REQUEST_CHANGES; packetSha256=${PACKET}`)}`).problems
+      .length,
+    1,
+  );
+  assert.equal(approve(`${owned}\n${later(`revoked ${PACKET}`)}`).problems.length, 1);
+  assert.equal(
+    approve(
+      `${envelope()}\n${delegated()}\n${later("decision=WITHDRAWN; envelopeId=AUTH-FS-CROSS-stage-2-packet-1")}`,
+    ).problems.length,
+    1,
+  );
+  // A decision about another version leaves this one approved.
+  assert.equal(
+    approve(`${owned}\n${later(`decision=REQUEST_CHANGES; packetSha256=${"f".repeat(64)}`)}`)
+      .approval.kind,
+    "owner",
+  );
+  assert.match(
+    destinationProblem(`https://firestore.googleapis.com/v1/projects/%E0%A4%A/x`),
+    /malformed percent-encoding/,
+  );
+});

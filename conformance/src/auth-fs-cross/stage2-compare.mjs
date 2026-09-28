@@ -125,9 +125,21 @@ export function buildFixture({ recordings, metas, programDigest, harnessDigest }
     if (meta.programDigest !== programDigest || meta.harness !== harnessDigest)
       throw new Error(`recording ${meta.recording} is of another program or harness`);
   const rows = {};
-  for (const [id, row] of Object.entries(first.rows).toSorted(([a], [b]) => a.localeCompare(b))) {
-    const one = comparable(row);
+  const ids = [...new Set([...Object.keys(first.rows), ...Object.keys(second.rows)])].toSorted();
+  for (const id of ids) {
+    const row = first.rows[id];
     const other = second.rows[id] === undefined ? undefined : comparable(second.rows[id]);
+    if (row === undefined) {
+      // Only recording 2 has the row: nothing to hold fireemu to until both agree.
+      rows[id] = {
+        conditions: second.rows[id].conditions,
+        production: null,
+        second: other,
+        raw: second.rows[id],
+      };
+      continue;
+    }
+    const one = comparable(row);
     rows[id] = {
       conditions: row.conditions,
       production: one,

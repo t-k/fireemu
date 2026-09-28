@@ -99,6 +99,9 @@ function fakeSession({ onSeed = () => {}, principals = {} } = {}) {
     async act(step) {
       calls.push(["act", step]);
     },
+    chargeHarness() {
+      calls.push(["charge"]);
+    },
   };
 }
 
@@ -258,6 +261,8 @@ test("a probe records only what arrived after its commit, and a stream's end in 
   });
   const rows = await interpreter.run();
   assert.equal(opened.metadata.get("authorization")[0], "Bearer a");
+  // The stream is one harness request, counted before it opens.
+  assert.deepEqual(session.calls[0], ["charge"]);
   assert.deepEqual(opened.targets, [
     { targetId: 1, documents: { documents: [`${ROOT}/afc2-owned/a`] } },
   ]);
@@ -306,7 +311,7 @@ test("a probe records only what arrived after its commit, and a stream's end in 
     },
     clients: {},
   });
-  assert.deepEqual(session.calls.slice(0, 2), [
+  assert.deepEqual(session.calls.slice(1, 3), [
     ["seed", ["afc2-owned/a"]],
     ["pause", 12_000],
   ]);
@@ -709,4 +714,34 @@ test("a row names the clients whose request cap refused something, and only thos
   assert.deepEqual(rows.after.capped, ["a"]);
   assert.equal("capped" in rows["only-b"], false);
   assert.deepEqual(rows.life.capped, ["a"]);
+});
+
+test("an owner's read of a client's writes is marked when that client was capped", async () => {
+  const client = fakeClient();
+  const session = fakeSession({ principals: {} });
+  const program = {
+    steps: [
+      { do: "client", client: "p", transport: "node-sdk" },
+      { do: "server", id: "before", condition: "X", client: "p", docs: ["afc2-pending/x"] },
+      { do: "server", id: "after", condition: "X", client: "p", docs: ["afc2-pending/x"] },
+    ],
+  };
+  const interpreter = createInterpreter(program, {
+    session,
+    ctx,
+    spawnClient: () => client,
+    openListen: () => {},
+    sdkConfig: {},
+  });
+  const read = session.ownerRead;
+  let reads = 0;
+  session.ownerRead = async (doc) => {
+    reads += 1;
+    if (reads === 2)
+      client.deliver({ event: "wire-refused", host: "h", path: "/p", reason: "cap" });
+    return read(doc);
+  };
+  const rows = await interpreter.run();
+  assert.equal("capped" in rows.before, false);
+  assert.deepEqual(rows.after.capped, ["p"]);
 });

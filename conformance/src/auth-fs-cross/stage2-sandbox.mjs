@@ -48,7 +48,12 @@ export function destinationProblem(
   }
   if (parsed.protocol !== "https:") return `not https: ${parsed.protocol}`;
   if (!hosts.includes(parsed.hostname)) return `undeclared host ${parsed.hostname}`;
-  const path = decodeURIComponent(parsed.pathname);
+  let path;
+  try {
+    path = decodeURIComponent(parsed.pathname);
+  } catch {
+    return "malformed percent-encoding in the path";
+  }
   for (const [, project] of path.matchAll(/(?:^|\/)projects\/([^/]+)/g))
     if (!projects.includes(project)) return `undeclared project ${project}`;
   return null;
@@ -204,7 +209,14 @@ export function packetApproval(ownerText, { packetSha256, sourceCommit, harnessD
       .map((c) => c.trim());
     if (topic !== subject && topic !== `${subject} envelope` && topic !== PARENT) continue;
     const entry = fields(body);
-    if (/\bREVOKED\b/.test(body)) {
+    // A later line naming this version or an envelope that is not an approval of it (REVOKED,
+    // another decision) withdraws what it names, as stage 1 refuses after any later line.
+    const withdraws =
+      /\bREVOKED\b/i.test(body) ||
+      (entry.decision !== undefined &&
+        entry.decision !== "APPROVE" &&
+        topic !== `${subject} envelope`);
+    if (withdraws) {
       if (body.includes(packetSha256)) approval = undefined;
       const id = entry.envelopeId ?? /\benvelopeId=([A-Za-z0-9_-]+)/.exec(body)?.[1];
       if (id) {
@@ -286,7 +298,16 @@ export function startedLine({
  * The line of a run stopped before it wrote anything, for a reason the owner decides on (a key
  * that may refuse the browser): it names the reason and what caused it, and ends nothing open.
  */
-export function stoppedLine({ ts, sha, recording, programDigest, reason, detail, requests }) {
+export function stoppedLine({
+  ts,
+  sha,
+  packetSha256,
+  recording,
+  programDigest,
+  reason,
+  detail,
+  requests,
+}) {
   return {
     ts,
     event: "finished",
@@ -294,6 +315,7 @@ export function stoppedLine({ ts, sha, recording, programDigest, reason, detail,
     project: SANDBOX_PROJECT,
     stage: STAGE,
     recording,
+    packetSha256,
     gitSha: sha,
     programDigest,
     outcome: "stopped-before-write",
@@ -312,6 +334,7 @@ export function stoppedLine({ ts, sha, recording, programDigest, reason, detail,
 export function closingLines({
   ts,
   sha,
+  packetSha256,
   recording,
   programDigest,
   outcome,
@@ -319,12 +342,14 @@ export function closingLines({
   counts,
   error,
 }) {
+  // Every line names its packet: recording 2 is admitted by recording 1's closing line.
   const common = {
     ts,
     taskId: TASK_ID,
     project: SANDBOX_PROJECT,
     stage: STAGE,
     recording,
+    packetSha256,
     gitSha: sha,
     programDigest,
   };

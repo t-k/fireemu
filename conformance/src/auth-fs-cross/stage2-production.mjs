@@ -135,6 +135,7 @@ export async function runStage2Production(deps) {
           stoppedLine({
             ts: deps.now().toISOString(),
             sha: admission.sha,
+            packetSha256: deps.packetSha256,
             recording: deps.recording,
             programDigest: admission.programDigest,
             reason,
@@ -159,6 +160,8 @@ export async function runStage2Production(deps) {
       );
       throw new Error(`browser key probe refused: ${clean(String(keyProbe.code))}`);
     }
+    // A stop requested before the first write ends the run here, with nothing written.
+    if (deps.stopRequested?.()) throw new Error("stopped by a signal before any write");
     // The compile probe writes: from its first request only a clean readback releases the locks.
     keepLocks = true;
     let probe;
@@ -178,6 +181,7 @@ export async function runStage2Production(deps) {
             project: SANDBOX_PROJECT,
             stage: STAGE,
             recording: deps.recording,
+            packetSha256: deps.packetSha256,
             reason: "compile-probe",
             sandboxAtBaseline: false,
             ...(probe.error ? { error: clean(probe.error) } : {}),
@@ -252,6 +256,7 @@ export async function runStage2Production(deps) {
     for (const row of closingLines({
       ts: deps.now().toISOString(),
       sha: admission.sha,
+      packetSha256: deps.packetSha256,
       recording: deps.recording,
       programDigest: admission.programDigest,
       outcome,

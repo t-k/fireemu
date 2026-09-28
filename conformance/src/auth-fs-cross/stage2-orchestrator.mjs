@@ -275,6 +275,8 @@ export function createInterpreter(program, deps) {
           },
     );
     const database = `projects/${ctx.project}/databases/(default)`;
+    // A stream is one request of the harness, counted under its ceiling like any other.
+    session.chargeHarness();
     const recorder = openListen({
       client: session.grpcClient,
       protos: session.protos,

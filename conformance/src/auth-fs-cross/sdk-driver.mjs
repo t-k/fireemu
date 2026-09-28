@@ -52,4 +52,6 @@ createInterface({ input: process.stdin }).on("line", (line) => {
   }
   return run(command);
 });
+// A parent that is gone (killed, or its terminal closed) ends this client and its streams.
+process.stdin.on("close", () => process.exit(0));
 emit({ event: "ready" });

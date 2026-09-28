@@ -240,3 +240,27 @@ test("a row whose client hit its request cap is kept apart from every comparison
   assert.equal(classifyStage2({ production: plain, alternative: form, fireemu: plain }), "CAPPED");
   assert.equal(classifyStage2({ stale: true, production: form, fireemu: form }), "STALE_FIXTURE");
 });
+
+test("a row only recording 2 has is kept, with nothing to hold fireemu to", () => {
+  const row = { conditions: ["C"], listeners: {}, clients: {} };
+  const metas = [
+    { recording: 1, programDigest: "p", harness: "h" },
+    { recording: 2, programDigest: "p", harness: "h" },
+  ];
+  const fixture = buildFixture({
+    recordings: [{ rows: {} }, { rows: { late: row } }],
+    metas,
+    programDigest: "p",
+    harnessDigest: "h",
+  });
+  assert.equal(fixture.rows.late.production, null);
+  assert.deepEqual(fixture.rows.late.second, { listeners: {}, clients: {} });
+  assert.equal(
+    classifyStage2({
+      production: fixture.rows.late.production ?? undefined,
+      alternative: fixture.rows.late.second,
+      fireemu: {},
+    }),
+    "MISSING_FIXTURE",
+  );
+});

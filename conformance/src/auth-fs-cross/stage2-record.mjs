@@ -179,9 +179,19 @@ export async function browserKeyProbe(sdkConfig, { spawn = spawnSdk } = {}) {
   try {
     await sdk.ready();
     const result = await sdk.send("probeKey", {});
+    // Any request the page tried outside the allowed hosts, or any page or driver error, would
+    // mark every browser row of the window as the harness's limit: the run stops here instead.
+    const trouble = sdk.events.find((e) =>
+      ["wire-refused", "page-error", "driver-error"].includes(e.event),
+    );
+    const code = trouble
+      ? `${trouble.event}${trouble.host ? `:${trouble.host}` : ""}`
+      : result.ok
+        ? null
+        : (result.code ?? "unknown");
     return {
-      ok: result.ok,
-      code: result.ok ? null : (result.code ?? "unknown"),
+      ok: code === null,
+      code,
       requests: sdk.events.filter((e) => e.event === "wire").length,
     };
   } finally {
@@ -298,7 +308,8 @@ export async function recordProduction(env = process.env) {
   return runStage2Production({
     ledger: env.FIREEMU_SANDBOX_LEDGER,
     lockDir: locks,
-    legacyLock: `${env.FIREEMU_SANDBOX_LEDGER}.lock`,
+    // The shared ledger's own path (admission checked the environment's resolves to it).
+    legacyLock: join(first.root, "docs.local", "runs", "sandbox-ledger.jsonl.lock"),
     ownerDecisions: join(first.root, "docs.local", "instructions", "owner-decisions.md"),
     privateRoot,
     packetSha256: first.packetSha256,

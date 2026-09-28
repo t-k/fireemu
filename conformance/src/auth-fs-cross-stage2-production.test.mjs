@@ -456,3 +456,110 @@ test("a window whose own cleanup failed needs recovery and keeps the lock, even 
     done();
   }
 });
+
+test("recording 2 is admitted by recording 1's own closing line", async () => {
+  const first = setup();
+  try {
+    await runStage2Production(await withProbe(first.deps));
+    const ledgerAfterFirst = readFileSync(first.paths.ledger, "utf8");
+    for (const line of lines(first.paths.ledger))
+      assert.equal(line.packetSha256, PACKET, line.event);
+    const second = setup({ ledger: ledgerAfterFirst, recording: 2 });
+    try {
+      const result = await runStage2Production(await withProbe(second.deps));
+      assert.equal(result.outcome, "recorded");
+      assert.deepEqual(
+        lines(second.paths.ledger).map((l) => [l.event, l.recording]),
+        [
+          ["started", 1],
+          ["finished", 1],
+          ["started", 2],
+          ["finished", 2],
+        ],
+      );
+    } finally {
+      second.done();
+    }
+  } finally {
+    first.done();
+  }
+});
+
+test("a stop requested before the first write writes nothing and releases the lock", async () => {
+  const { paths, deps, fake, done } = setup();
+  deps.stopRequested = () => true;
+  try {
+    await assert.rejects(
+      runStage2Production(await withProbe(deps)),
+      /stopped by a signal before any write/,
+    );
+    assert.equal(readFileSync(paths.ledger, "utf8"), "");
+    assert.deepEqual(readdirSync(paths.lockDir), []);
+    // Reads only: no ruleset was created.
+    assert.equal(
+      fake.calls.some(
+        ({ method, url }) => method === "POST" && new URL(url).pathname.endsWith("/rulesets"),
+      ),
+      false,
+    );
+  } finally {
+    done();
+  }
+});
+
+test("multi-tenancy left on at the start stops the run before any write", async () => {
+  const { paths, deps, fake, done } = setup({ worldOptions: { allowTenants: true } });
+  try {
+    await assert.rejects(
+      runStage2Production(await withProbe(deps)),
+      /preflight: .*atb-2 allowTenants/,
+    );
+    assert.equal(readFileSync(paths.ledger, "utf8"), "");
+    assert.deepEqual(readdirSync(paths.lockDir), []);
+    assert.equal(
+      fake.calls.some(
+        ({ method, url }) => method === "POST" && new URL(url).pathname.endsWith("/rulesets"),
+      ),
+      false,
+    );
+  } finally {
+    done();
+  }
+});
+
+test("the browser key probe fails on a refused request or a page error, not only on its result", async () => {
+  const { browserKeyProbe } = await import("./auth-fs-cross/stage2-record.mjs");
+  const fakeProbe =
+    (events, result = { ok: true }) =>
+    async () =>
+      browserKeyProbe(
+        { mode: "production", web: {} },
+        {
+          spawn: (config) => {
+            assert.equal(config.wireCap, 5);
+            return {
+              events,
+              ready: async () => ({}),
+              send: async () => result,
+              close: async () => {},
+            };
+          },
+        },
+      );
+  assert.deepEqual(await fakeProbe([{ event: "wire", host: "h" }])(), {
+    ok: true,
+    code: null,
+    requests: 1,
+  });
+  assert.deepEqual(await fakeProbe([], { ok: false, code: "auth/network-request-failed" })(), {
+    ok: false,
+    code: "auth/network-request-failed",
+    requests: 0,
+  });
+  assert.deepEqual(await fakeProbe([{ event: "wire-refused", host: "x.example" }])(), {
+    ok: false,
+    code: "wire-refused:x.example",
+    requests: 0,
+  });
+  assert.equal((await fakeProbe([{ event: "page-error", message: "m" }])()).code, "page-error");
+});

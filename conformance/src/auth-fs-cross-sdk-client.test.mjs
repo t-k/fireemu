@@ -91,3 +91,33 @@ test("a client runs the Node driver unless told to run the browser driver", asyn
     ],
   );
 });
+
+test("the Node driver ends when its parent's pipe closes", async () => {
+  const { spawn } = await import("node:child_process");
+  const { DRIVERS } = await import("./auth-fs-cross/sdk-client.mjs");
+  const config = {
+    mode: "local",
+    web: { apiKey: "fake-api-key", projectId: "demo-afc", authDomain: "localhost" },
+    authEmulator: "http://127.0.0.1:9",
+    firestoreEmulator: { host: "127.0.0.1", port: 9 },
+    wireCap: 5,
+  };
+  const child = spawn(process.execPath, [DRIVERS["node-sdk"]], {
+    env: { ...process.env, AFC_SDK_CONFIG: JSON.stringify(config) },
+    stdio: ["pipe", "pipe", "ignore"],
+  });
+  await new Promise((resolve) => child.stdout.once("data", resolve));
+  // A listener on an unreachable emulator keeps retrying: only the pipe's close ends the driver.
+  child.stdin.write(
+    `${JSON.stringify({ id: "l", op: "listen", name: "d", path: "afc2-owned/x" })}\n`,
+  );
+  await new Promise((resolve) => setTimeout(resolve, 500));
+  const exited = new Promise((resolve) => child.once("exit", (code) => resolve(code)));
+  child.stdin.end();
+  const code = await Promise.race([
+    exited,
+    new Promise((r) => setTimeout(() => r("timeout"), 10_000)),
+  ]);
+  if (code === "timeout") child.kill("SIGKILL");
+  assert.equal(code, 0);
+});

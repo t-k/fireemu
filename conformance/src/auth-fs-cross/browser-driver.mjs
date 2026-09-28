@@ -118,7 +118,15 @@ async function main() {
     if (url.startsWith(`${origin}/`)) return route.continue();
     if (url.startsWith(GSTATIC)) {
       const file = url.slice(GSTATIC.length);
-      if (!BUNDLES.includes(file)) return route.abort("blockedbyclient");
+      if (!BUNDLES.includes(file)) {
+        emit({
+          event: "wire-refused",
+          host: "www.gstatic.com",
+          path: `/${file}`,
+          reason: "not a pinned bundle",
+        });
+        return route.abort("blockedbyclient");
+      }
       const body = readFileSync(join(FIREBASE, file));
       if (!served.has(file)) {
         served.add(file);

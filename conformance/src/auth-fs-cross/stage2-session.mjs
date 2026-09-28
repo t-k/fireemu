@@ -1393,6 +1393,8 @@ export function createSession(
       await gapic.close();
     },
     counts: () => ({ requests, harnessRequests, cleanupRequests, foreignRequests }),
+    /** Counts one harness request made outside `call` (a native Listen stream), under the ceiling. */
+    chargeHarness: () => charge(true),
   };
 }
 

@@ -295,7 +295,7 @@ function pendingSteps(tag, variant) {
     variant === "ab"
       ? { do: "sdk", client, op: "signIn", as: "bob" }
       : { do: "sdk", client, op: "signOut" },
-    { do: "server", id: id("offline"), condition: CONDITION.pending, docs: [doc] },
+    { do: "server", id: id("offline"), condition: CONDITION.pending, client, docs: [doc] },
     { do: "sdk", client, op: "online", mark: id("online") },
     {
       do: "observe",
@@ -305,7 +305,7 @@ function pendingSteps(tag, variant) {
       since: id("online"),
       windowMs: SLOW_WINDOW_MS,
     },
-    { do: "server", id: id("after-online"), condition: CONDITION.pending, docs: [doc] },
+    { do: "server", id: id("after-online"), condition: CONDITION.pending, client, docs: [doc] },
     { do: "sdk", client, op: "signIn", as: "alice", mark: id("back") },
     {
       do: "observe",
@@ -315,7 +315,7 @@ function pendingSteps(tag, variant) {
       since: id("back"),
       windowMs: SLOW_WINDOW_MS,
     },
-    { do: "server", id: id("after-back"), condition: CONDITION.pending, docs: [doc] },
+    { do: "server", id: id("after-back"), condition: CONDITION.pending, client, docs: [doc] },
     { do: "close-client", client },
   ];
 }
@@ -354,7 +354,7 @@ function transactionSteps() {
         commandId: `tx-${variant}`,
         since: id("start"),
       },
-      { do: "server", id: id("server"), condition: CONDITION.transaction, docs: [doc] },
+      { do: "server", id: id("server"), condition: CONDITION.transaction, client, docs: [doc] },
     ];
   };
   return [

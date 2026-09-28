@@ -166,6 +166,11 @@ const REFUSED = [
     /out of range/,
   ],
   [
+    "an owner's read naming an unknown client",
+    (p) => (p.steps.find((s) => s.do === "server").client = "nobody"),
+    /client nobody is not open/,
+  ],
+  [
     "an unknown alignment",
     (p) => (p.steps.find((s) => s.do === "expiry-groups").groups[0].align = "earliest"),
     /unknown alignment earliest/,

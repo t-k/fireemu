@@ -225,6 +225,8 @@ export function validateStage2(program, { principals = STAGE2_PRINCIPALS, closur
         return;
       }
       case "server":
+        // The client whose writes the owner's read shows (its cap marks the row too).
+        if (step.client !== undefined) openClient(where, step.client);
         for (const doc of step.docs) checkDoc(where, doc);
         cost.reads += step.docs.length;
         row(where, step, []);

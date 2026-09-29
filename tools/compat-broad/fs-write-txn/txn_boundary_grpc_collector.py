@@ -15,6 +15,11 @@ from txn_idle_grpc_collector import _timing, idle_interval, utc_now
 STATES = ['created'] + [f'accepted-idle-{seconds}' for seconds in range(65, 71)]
 
 
+def _string_field(value):
+    # Native protobuf decoding can include its matching oneof discriminator.
+    return isinstance(value, dict) and set(value) in ({'stringValue'}, {'stringValue', 'valueType'}) and isinstance(value.get('stringValue'), str) and value.get('valueType', 'stringValue') == 'stringValue'
+
+
 def _native_timestamp(value):
     if not isinstance(value, dict) or set(value) - {'seconds', 'nanos'} or not isinstance(value.get('seconds'), str) or not re.fullmatch(r'[0-9]{1,12}', value['seconds']) or type(value.get('nanos', 0)) is not int or not 0 <= value.get('nanos', 0) <= 999999999:
         raise ValueError('P10-B native updateTime required')
@@ -152,7 +157,7 @@ class Collector:
             raise ValueError('P10-B document owner differs; deletion refused')
         if not isinstance(fields.get('state'), dict) or fields['state'].get('stringValue') not in STATES:
             raise ValueError('P10-B state marker is invalid')
-        if set(fields) != {'owner', 'nonce', 'role', 'state'} or any(set(field) != {'stringValue'} for field in fields.values()):
+        if set(fields) != {'owner', 'nonce', 'role', 'state'} or any(not _string_field(field) for field in fields.values()):
             raise ValueError('P10-B owned marker schema differs')
         _native_timestamp(document.get('updateTime'))
         return fields['state']['stringValue']
@@ -324,7 +329,7 @@ def projection(receipt):
         if not isinstance(document, dict) or document.get('name') != plan['document'] or not isinstance(document.get('fields'), dict) or set(document['fields']) != {'owner', 'nonce', 'role', 'state'}:
             raise ValueError('P10-B document marker differs')
         fields = document['fields']
-        if any(not isinstance(field, dict) or set(field) != {'stringValue'} for field in fields.values()) or any(fields[key]['stringValue'] != value for key, value in {'owner': plan['ownerId'], 'nonce': plan['nonce'], 'role': 'control'}.items()) or fields['state']['stringValue'] != expected_state:
+        if any(not _string_field(field) for field in fields.values()) or any(fields[key]['stringValue'] != value for key, value in {'owner': plan['ownerId'], 'nonce': plan['nonce'], 'role': 'control'}.items()) or fields['state']['stringValue'] != expected_state:
             raise ValueError('P10-B acknowledged document state or owner differs')
         return _native_timestamp(document.get('updateTime'))
 

@@ -218,3 +218,47 @@ def test_nonmonotonic_or_overlapping_candidate_results_are_indeterminate():
     receipt = fixture((0, 0, 0, 10, 10, 10))[1].run()
     for wait in receipt["waits"]: wait["idleInterval"]["upperSeconds"] += 2
     assert module.boundary_classification(receipt["waits"], receipt["observations"]) == "INDETERMINATE"
+
+
+@pytest.mark.parametrize("codes", [(0,) * 6, (10,) * 6])
+def test_native_protobuf_oneof_discriminator_preserves_owned_marker_and_cleanup(codes):
+    module, collector, wire, _, _, _ = fixture(codes)
+    send = wire.send
+    def native_send(method, request, **kwargs):
+        result = send(method, request, **kwargs)
+        if method == 'GetDocument' and result['code'] == 0:
+            for value in result['response']['fields'].values():
+                value['valueType'] = 'stringValue'
+        return result
+    wire.send = native_send
+    receipt = collector.run()
+    assert receipt['complete'] is True
+    assert wire.document is None and receipt['cleanup']['absent'] is True
+    assert [row['code'] for row in module.projection(receipt)['cases']] == list(codes)
+
+
+@pytest.mark.parametrize('extra', [{'valueType': 'integerValue'}, {'valueType': None}, {'valueType': True}, {'integerValue': '1'}, {'unknown': 'field'}])
+def test_conflicting_oneof_discriminator_or_extra_value_cannot_authorize_deletion(extra):
+    module, collector, wire, _, _, _ = fixture()
+    send = wire.send
+    def malformed_send(method, request, **kwargs):
+        result = send(method, request, **kwargs)
+        if method == 'GetDocument' and result['code'] == 0:
+            result['response']['fields']['owner'].update(extra)
+        return result
+    wire.send = malformed_send
+    receipt = collector.run()
+    assert receipt['complete'] is False
+    assert not any(method == 'DeleteDocument' for method, _request in wire.calls)
+    with pytest.raises(ValueError):
+        module.projection(receipt)
+
+
+@pytest.mark.parametrize('extra', [{'valueType': 'integerValue'}, {'valueType': None}, {'valueType': True}, {'integerValue': '1'}, {'unknown': 'field'}])
+def test_projection_rejects_conflicting_oneof_or_extra_value_in_saved_native_rows(extra):
+    module, collector, _, _, _, _ = fixture()
+    receipt = collector.run()
+    assert receipt['complete'] is True
+    receipt['steps'][3]['result']['response']['fields']['owner'].update(extra)
+    with pytest.raises(ValueError):
+        module.projection(receipt)

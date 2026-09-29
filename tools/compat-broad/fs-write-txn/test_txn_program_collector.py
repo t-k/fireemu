@@ -33,6 +33,7 @@ class Service:
         self.locks, self.partial_publish, self.locked = locks, partial_publish, {}
         self.ro_snapshot, self.readonly, self.snapshots = ro_snapshot, set(), {}
         self.ro_empty_refused = ro_empty_refused
+        self.genesis = {}
         self.calls, self.documents, self.tokens, self.version = [], {}, {}, 0
         if existing:
             self.documents[existing] = {"name": existing, "fields": {}, "version": self._bump()}
@@ -65,7 +66,9 @@ class Service:
             if token and (self.tokens.get(token) == "dead" or self.finished_reads_refused and self.tokens.get(token) in ("committed", "rolled-back")):
                 return self._receipt(transport, 10, details="The referenced transaction has expired or is no longer valid.")
             source = self.documents
-            if token in self.readonly and self.ro_snapshot != "latest":
+            if token in self.readonly and self.ro_snapshot == "ancient":
+                source = self.genesis
+            elif token in self.readonly and self.ro_snapshot != "latest":
                 if token not in self.snapshots: self.snapshots[token] = copy.deepcopy(self.documents)
                 source = self.snapshots[token]
             document = source.get(request["name"])
@@ -158,6 +161,7 @@ class Service:
         results = []
         for write in writes:
             version = self._bump()
+            self.genesis.setdefault(write["update"]["name"], {"name": write["update"]["name"], "fields": copy.deepcopy(write["update"]["fields"]), "version": version})
             self.documents[write["update"]["name"]] = {"name": write["update"]["name"], "fields": copy.deepcopy(write["update"]["fields"]), "version": version}
             results.append({"updateTime": self._stamp(transport, version)})
         return results

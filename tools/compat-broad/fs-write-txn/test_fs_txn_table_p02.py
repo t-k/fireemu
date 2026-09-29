@@ -125,3 +125,10 @@ def test_a_writer_timeout_stops_and_is_never_resent():
     receipt, service = record(writer_code=4)
     assert receipt["complete"] is False and receipt["unknownCommits"] == ["rest/s1/writer"]
     assert receipt["cleanup"] == {"absent": True}
+
+
+def test_a_read_only_transaction_that_shows_a_state_from_before_it_began_stops():
+    receipt, service = record(ro_snapshot="ancient")
+    assert receipt["complete"] is False and receipt["failureType"] == "ValueError"
+    assert receipt["cleanup"] == {"absent": True} and service.documents == {}
+    assert [row["site"] for row in receipt["steps"]][-1] == "rest/s2/read-a", "the first read older than its begin is where the recording stops"

@@ -1,6 +1,14 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { chmodSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
+import {
+  chmodSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  realpathSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Duplex } from "node:stream";
@@ -19,13 +27,14 @@ const plan = buildProductionStage3DraftPlan({
 });
 const hash = (value) => createHash("sha256").update(value).digest("hex");
 const owner = "SYNTHETIC_REGISTRY_OWNER_abcdefgh123456789";
+const fixtureRegistries = new WeakMap();
 
 async function fixture(
   action,
   responder,
   { registryProfile = {}, responseHeaders = [], responseWire, chunkSize = 37, status = 200 } = {},
 ) {
-  const directory = mkdtempSync(join(tmpdir(), "storage-object-secret-registry-"));
+  const directory = realpathSync(mkdtempSync(join(tmpdir(), "storage-object-secret-registry-")));
   chmodSync(directory, 0o700);
   const originalConnect = tls.connect,
     argv = [...process.execArgv],
@@ -91,6 +100,13 @@ async function fixture(
     return socket;
   };
   try {
+    const registry = createProductionSecretRegistry({
+      maxValues: 81,
+      maxUtf8Bytes: 65536,
+      maxIndexNodes: 200000,
+      maxScanCodeUnits: 16777216,
+      ...registryProfile,
+    });
     wire = createProductionWireTransport({
       plan,
       resources: {
@@ -105,14 +121,9 @@ async function fixture(
       verifyAdmission: () => true,
       ownerAuthorization: () => `Bearer ${owner}`,
       accountAuthorization: () => assert.fail("no account provider is used"),
-      secretRegistry: createProductionSecretRegistry({
-        maxValues: 81,
-        maxUtf8Bytes: 65536,
-        maxIndexNodes: 200000,
-        maxScanCodeUnits: 16777216,
-        ...registryProfile,
-      }),
+      secretRegistry: registry,
     });
+    fixtureRegistries.set(wire, registry);
     await action({ wire, directory, calls, reservations });
   } finally {
     await wire?.close();
@@ -145,6 +156,45 @@ function readMetadata(wire, { recording = 1, media = false, id = "private-read" 
   );
 }
 
+// Pure UNAVAILABLE projections are tested in storage-object-task-capture.test.mjs.
+// This integration verifies the exact persistence stage and irreversible dispatch halt.
+function assertUnavailablePersistence(wire, directory, dispatched = true, exhausted = false) {
+  const registry = fixtureRegistries.get(wire);
+  assert.ok(registry);
+  assert.equal(registry.snapshot().closed, true);
+  assert.equal(registry.snapshot().failed, !dispatched || exhausted);
+  assert.throws(() => registry.openScan(), /SECRET_REGISTRY_UNAVAILABLE/);
+  assert.equal(wire.snapshot().failed, true);
+  const files = readdirSync(directory).toSorted();
+  assert.deepEqual(files, dispatched ? ["000001-intent.json", "000001-request.json"] : []);
+  const rows = [];
+  for (const file of files) {
+    const path = join(directory, file);
+    const stat = statSync(path);
+    assert.equal(stat.isFile(), true);
+    assert.equal(stat.mode & 0o777, 0o600);
+    assert.equal(stat.uid, process.getuid());
+    assert.equal(stat.nlink, 1);
+    const bytes = readFileSync(path);
+    assert.equal(bytes.length, stat.size);
+    const row = JSON.parse(bytes);
+    assert.equal(row.sequence, 1);
+    if (file.endsWith("-request.json")) {
+      assert.equal(row.capture.taskSecretStatus, "AVAILABLE");
+      assert.ok(["GET", "POST"].includes(row.method));
+      assert.match(row.requestWire.sha256, /^[a-f0-9]{64}$/);
+      assert.ok(Number.isSafeInteger(row.requestWire.byteLength) && row.requestWire.byteLength > 0);
+    } else {
+      assert.equal(row.phase, "subject");
+      assert.equal(row.boundary, "HTTP_PLAINTEXT_COMMITMENT_AND_SANITIZED_BODY");
+      assert.match(row.operationId.sha256, /^[a-f0-9]{64}$/);
+      assert.ok(Number.isSafeInteger(row.operationId.byteLength) && row.operationId.byteLength > 0);
+    }
+    rows.push(row);
+  }
+  return rows;
+}
+
 for (const channel of [
   "100",
   "102",
@@ -155,18 +205,12 @@ for (const channel of [
   "trailer-known",
   "trailer-unknown",
 ])
-  test(`auxiliary responses commit the current capture and halt the task (${channel})`, async () => {
+  test(`auxiliary responses withhold unchecked capture and halt the task (${channel})`, async () => {
     const secret = "SYNTHETIC_AUXILIARY_PRIVATE_abcdefgh123456789";
     await fixture(
       async ({ wire, directory, calls, reservations }) => {
         await assert.rejects(() => readMetadata(wire), /PRODUCTION_WIRE_REQUEST_REJECTED/);
-        const saved = JSON.parse(readFileSync(join(directory, "000001-result.json")));
-        assert.equal(saved.complete, false);
-        assert.equal(saved.response.taskSecretStatus, "UNAVAILABLE");
-        assert.equal(saved.response.bodyBase64, null);
-        assert.equal(saved.response.observation, null);
-        assert.equal(saved.response.url.pathname, null);
-        assert.deepEqual(saved.response.headers, []);
+        const saved = assertUnavailablePersistence(wire, directory);
         assert.equal(JSON.stringify(saved).includes(secret), false);
         for (const file of readdirSync(directory)) {
           const path = join(directory, file),
@@ -252,15 +296,13 @@ test("a normal chunked response without trailers preserves original nonsecret bo
   );
 });
 
-test("request discovery exhaustion leaves only fixed commitments and starts no socket", async () => {
+test("request discovery exhaustion withholds artifacts and starts no socket", async () => {
   await fixture(
     async ({ wire, directory, calls, reservations }) => {
       await assert.rejects(() => readMetadata(wire), /PRODUCTION_WIRE_REQUEST_REJECTED/);
       assert.equal(calls.length, 0);
       assert.equal(reservations.length, 1);
-      const request = JSON.parse(readFileSync(join(directory, "000001-request.json")));
-      assert.equal(request.capture.bodyBase64, null);
-      assert.equal(request.capture.taskSecretStatus, "UNAVAILABLE");
+      assertUnavailablePersistence(wire, directory, false);
       await assert.rejects(() => readMetadata(wire, { id: "later" }), /PRODUCTION_WIRE_HALTED/);
       assert.equal(calls.length, 0);
       assert.equal(reservations.length, 1);
@@ -270,15 +312,11 @@ test("request discovery exhaustion leaves only fixed commitments and starts no s
   );
 });
 
-test("response discovery exhaustion persists an incomplete fixed receipt before halting", async () => {
+test("response discovery exhaustion withholds unchecked response and result before halting", async () => {
   await fixture(
     async ({ wire, directory, calls, reservations }) => {
       await assert.rejects(() => readMetadata(wire), /PRODUCTION_WIRE_REQUEST_REJECTED/);
-      const saved = JSON.parse(readFileSync(join(directory, "000001-result.json")));
-      assert.equal(saved.complete, false);
-      assert.equal(saved.reason, "SECRET_DISCOVERY_UNAVAILABLE");
-      assert.equal(saved.response.bodyBase64, null);
-      assert.equal(saved.response.taskSecretStatus, "UNAVAILABLE");
+      const saved = assertUnavailablePersistence(wire, directory, true, true);
       assert.equal(JSON.stringify(saved).includes("SYNTHETIC_RESPONSE_PRIVATE"), false);
       await assert.rejects(() => readMetadata(wire, { id: "later" }), /PRODUCTION_WIRE_HALTED/);
       assert.equal(calls.length, 1);
@@ -293,16 +331,14 @@ test("response discovery exhaustion persists an incomplete fixed receipt before 
 });
 
 for (const kind of ["unknown-json", "unknown-header", "opaque-public-header", "unapproved-media"])
-  test(`unapproved discovery shapes persist commitments and stop future requests (${kind})`, async () => {
+  test(`unapproved discovery shapes withhold artifacts and stop future requests (${kind})`, async () => {
     await fixture(
       async ({ wire, directory, calls, reservations }) => {
         await assert.rejects(
           () => readMetadata(wire, { media: kind === "unapproved-media" }),
           /PRODUCTION_WIRE_REQUEST_REJECTED/,
         );
-        const saved = JSON.parse(readFileSync(join(directory, "000001-result.json")));
-        assert.equal(saved.complete, false);
-        assert.equal(saved.response.bodyBase64, null);
+        const saved = assertUnavailablePersistence(wire, directory);
         assert.equal(JSON.stringify(saved).includes("SYNTHETIC_UNKNOWN_PRIVATE"), false);
         await assert.rejects(() => readMetadata(wire, { id: "later" }), /PRODUCTION_WIRE_HALTED/);
         assert.equal(calls.length, 1);
@@ -493,11 +529,7 @@ for (const [kind, value, body, parameters] of [
             });
           if (unknown) {
             await assert.rejects(send, /PRODUCTION_WIRE_REQUEST_REJECTED/);
-            const saved = JSON.parse(readFileSync(join(directory, "000001-result.json")));
-            assert.equal(saved.complete, false);
-            assert.equal(saved.response.bodyBase64, null);
-            assert.equal(saved.response.taskSecretStatus, "UNAVAILABLE");
-            assert.equal(saved.response.observation, null);
+            assertUnavailablePersistence(wire, directory);
             await assert.rejects(() => readMetadata(wire), /PRODUCTION_WIRE_HALTED/);
           } else {
             assert.equal((await send()).status, 200);
@@ -663,10 +695,7 @@ for (const [kind, map] of [
             ),
           /PRODUCTION_WIRE_REQUEST_REJECTED/,
         );
-        const saved = JSON.parse(readFileSync(join(directory, "000001-result.json")));
-        assert.equal(saved.complete, false);
-        assert.equal(saved.response.taskSecretStatus, "UNAVAILABLE");
-        assert.equal(saved.response.bodyBase64, null);
+        const saved = assertUnavailablePersistence(wire, directory);
         assert.equal(JSON.stringify(saved).includes("opaquecomponent"), false);
         await assert.rejects(() => readMetadata(wire, { recording: 2 }), /PRODUCTION_WIRE_HALTED/);
         assert.equal(calls.length, 1);
@@ -824,11 +853,7 @@ test("an unregistered credential-looking value stops the task before an encoded 
   await fixture(
     async ({ wire, directory, calls, reservations }) => {
       await assert.rejects(() => readMetadata(wire), /PRODUCTION_WIRE_REQUEST_REJECTED/);
-      const saved = JSON.parse(readFileSync(join(directory, "000001-result.json")));
-      assert.equal(saved.complete, false);
-      assert.equal(saved.response.taskSecretStatus, "UNAVAILABLE");
-      assert.equal(saved.response.bodyBase64, null);
-      assert.equal(saved.response.observation, null);
+      assertUnavailablePersistence(wire, directory);
       await assert.rejects(() => readMetadata(wire, { recording: 2 }), /PRODUCTION_WIRE_HALTED/);
       assert.equal(calls.length, 1);
       assert.equal(reservations.length, 1);
@@ -857,13 +882,7 @@ for (const encoding of ["raw", "percent", "base64", "base64url-suffix"])
       async ({ wire, directory, calls, reservations }) => {
         wire.registerSecret(prefix);
         await assert.rejects(() => readMetadata(wire), /PRODUCTION_WIRE_REQUEST_REJECTED/);
-        const saved = JSON.parse(readFileSync(join(directory, "000001-result.json")));
-        assert.equal(saved.complete, false);
-        assert.equal(saved.response.taskSecretStatus, "UNAVAILABLE");
-        assert.equal(saved.response.bodyBase64, null);
-        assert.equal(saved.response.observation, null);
-        assert.equal(saved.response.url.pathname, null);
-        assert.deepEqual(saved.response.headers, []);
+        assertUnavailablePersistence(wire, directory);
         await assert.rejects(() => readMetadata(wire, { recording: 2 }), /PRODUCTION_WIRE_HALTED/);
         assert.equal(calls.length, 1);
         assert.equal(reservations.length, 1);

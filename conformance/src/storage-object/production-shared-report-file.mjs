@@ -1,3 +1,4 @@
+import { createProductionArtifactWorkAccount } from "./production-artifact-work-profile.mjs";
 import { createHash } from "node:crypto";
 import {
   closeSync,
@@ -20,6 +21,7 @@ import {
   ensureProductionArtifactInventory,
   reserveProductionArtifactFile,
   trackProductionArtifactFile,
+  productionSharedArtifactBrokerAllows,
 } from "./production-artifact-inventory.mjs";
 const writers = new WeakMap(),
   pending = new WeakMap(),
@@ -84,10 +86,17 @@ export function createProductionSharedReportWriter(supplied) {
       dev: stat.dev,
       ino: stat.ino,
       records: new Set(),
-      work: 0,
-      limit: runtime.secretRegistry.snapshot().limits.maxScanCodeUnits,
+      account: createProductionArtifactWorkAccount({
+        profile: runtime.workProfile ?? null,
+        kind: "shared-report",
+        ...(runtime.workProfile
+          ? {}
+          : { prototypeLimit: runtime.secretRegistry.snapshot().limits.maxScanCodeUnits }),
+      }),
       failed: false,
       outcome: "NONE",
+      permit: null,
+      requiresBroker: !!runtime.workProfile,
     });
     return writer;
   } catch {
@@ -110,14 +119,22 @@ export function originalProductionSharedReportWriterContext(writer) {
         boundary: source.boundary,
         registry: source.registry,
         inspector: source.inspector,
-        work: source.work,
+        work: source.account.consumed(),
         outcome: source.outcome,
       })
     : null;
 }
 /** This deferred internal writer never stops before the broker has collected and removed owned matches. */
-export function writeProductionSharedPrivacyReport(writer, supplied) {
+export function writeProductionSharedPrivacyReport(writer, supplied, permit) {
   const source = writers.get(writer);
+  if (
+    source &&
+    (source.requiresBroker || source.permit !== null) &&
+    (source.permit === null ||
+      source.permit !== permit ||
+      !productionSharedArtifactBrokerAllows(permit, writer, "report"))
+  )
+    throw uncertain();
   let directoryFd,
     fileFd,
     fileBinding,
@@ -140,7 +157,7 @@ export function writeProductionSharedPrivacyReport(writer, supplied) {
       source.records.has(input.recording) ||
       !Number.isSafeInteger(input.remainingWork) ||
       input.remainingWork < 1 ||
-      input.remainingWork > source.limit - source.work
+      input.remainingWork > source.account.allowance("shared-report")
     )
       throw new Error();
     const bytes = copyProductionSharedInspectionReportBytes(input.receipt, source.inspector);
@@ -157,7 +174,7 @@ export function writeProductionSharedPrivacyReport(writer, supplied) {
     try {
       copy = scan.hasSecretCopy(bytes.toString("utf8"));
     } finally {
-      source.work += scan.snapshot().scanCodeUnits;
+      source.account.consume(scan.snapshot().scanCodeUnits);
     }
     if (copy) {
       source.outcome = "WITHHELD_PRIVACY";
@@ -263,4 +280,23 @@ export function writeProductionSharedPrivacyReport(writer, supplied) {
   }
   source.outcome = "COMPLETE";
   return result;
+}
+export function bindProductionSharedReportWriterBroker(writer, permit) {
+  const source = writers.get(writer);
+  if (
+    !source ||
+    source.failed ||
+    source.permit !== null ||
+    source.records.size !== 0 ||
+    source.outcome !== "NONE" ||
+    (source.account.consumed() !== 0 && source.account.consumed() !== 0n) ||
+    !productionSharedArtifactBrokerAllows(permit, writer, "bind-report")
+  )
+    throw uncertain();
+  source.permit = permit;
+}
+export function originalProductionSharedReportWriterAllowance(writer) {
+  const source = writers.get(writer);
+  if (!source || source.failed) throw uncertain();
+  return source.account.allowance("shared-report");
 }

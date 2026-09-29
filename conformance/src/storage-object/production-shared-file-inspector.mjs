@@ -1,3 +1,5 @@
+import { createProductionArtifactWorkAccount } from "./production-artifact-work-profile.mjs";
+import { productionSharedArtifactBrokerAllows } from "./production-artifact-inventory.mjs";
 import {
   closeSync,
   constants,
@@ -170,10 +172,17 @@ export function createProductionSharedFileInspector(supplied) {
       boundary: input.boundary,
       registry: runtime.secretRegistry,
       files: Object.freeze(files),
-      work: 0,
+      account: createProductionArtifactWorkAccount({
+        profile: runtime.workProfile ?? null,
+        kind: "shared-reader",
+        ...(runtime.workProfile
+          ? {}
+          : { prototypeLimit: runtime.secretRegistry.snapshot().limits.maxScanCodeUnits }),
+      }),
       epoch: 0,
       latestReceipt: null,
-      limit: runtime.secretRegistry.snapshot().limits.maxScanCodeUnits,
+      permit: null,
+      requiresBroker: !!runtime.workProfile,
       busy: false,
       failed: false,
     });
@@ -183,41 +192,51 @@ export function createProductionSharedFileInspector(supplied) {
   }
 }
 /** Inspection is read-only; its controller must synchronously retain the lease and stop on this fixed failure. */
-export function inspectProductionSharedFiles(inspector, allowance) {
+export function inspectProductionSharedFiles(inspector, allowance, permit) {
   const source = inspectors.get(inspector);
+  if (
+    source &&
+    (source.requiresBroker || source.permit !== null) &&
+    (source.permit === null ||
+      source.permit !== permit ||
+      !productionSharedArtifactBrokerAllows(permit, inspector, "inspect"))
+  )
+    throw uncheckable();
   if (!source || source.failed || source.busy) {
     if (source) source.failed = true;
     throw uncheckable();
   }
-  const remaining = source.limit - source.work;
+  const remaining = source.account.allowance("shared-reader");
   const allowed = allowance === undefined ? remaining : allowance;
   if (!Number.isSafeInteger(allowed) || allowed < 1 || allowed > remaining) {
     source.failed = true;
     throw uncheckable();
   }
-  const workLimit = source.work + allowed;
+  let used = 0;
   source.busy = true;
   source.epoch++;
   source.latestReceipt = null;
   const files = [],
-    beginning = source.work;
+    beginning = source.account.consumed();
   try {
     source.registry.openScan();
     for (const file of source.files) {
       if (source.failed) throw uncheckable();
       const size = lstatSync(file.path, { bigint: true }).size;
-      if (size < 0n || size > BigInt(MAX_BYTES) || size > BigInt(workLimit - source.work))
+      if (size < 0n || size > BigInt(MAX_BYTES) || size > BigInt(allowed - used))
         throw uncheckable();
-      source.work += Number(size);
+      source.account.consume(Number(size));
+      used += Number(size);
       const bytes = readShared(file);
       // Charge the actual stable read as well when an append occurred before opening the file.
       if (bytes.length !== Number(size)) throw uncheckable();
-      const scan = source.registry.openScan(workLimit - source.work);
+      const scan = source.registry.openScan(Math.min(allowed - used, source.account.allowance()));
       let report;
       try {
         report = scan.findSecretCopyLines(decoder.decode(bytes));
       } finally {
-        source.work += scan.snapshot().scanCodeUnits;
+        source.account.consume(scan.snapshot().scanCodeUnits);
+        used += scan.snapshot().scanCodeUnits;
       }
       if (report.matchedLineCount) files.push(Object.freeze({ path: file.path, ...report }));
     }
@@ -236,7 +255,7 @@ export function inspectProductionSharedFiles(inspector, allowance) {
       inspector,
       report,
       bytes,
-      work: source.work - beginning,
+      work: source.account.consumed() - beginning,
       epoch: source.epoch,
     });
     source.latestReceipt = receipt;
@@ -301,5 +320,30 @@ export function originalProductionSharedInspectionContext(receipt, inspector) {
 
 /** Failed inspection work is diagnostic only so the broker can retain a conservative cumulative bound. */
 export function originalProductionSharedInspectorWork(inspector) {
-  return inspectors.get(inspector)?.work ?? null;
+  return inspectors.get(inspector)?.account.consumed() ?? null;
+}
+export function productionSharedFileInspectorIsPristine(inspector) {
+  const source = inspectors.get(inspector);
+  return (
+    !!source &&
+    !source.failed &&
+    !source.busy &&
+    source.permit === null &&
+    source.epoch === 0 &&
+    source.latestReceipt === null &&
+    (source.account.consumed() === 0 || source.account.consumed() === 0n)
+  );
+}
+export function bindProductionSharedFileInspectorBroker(inspector, permit) {
+  if (
+    !productionSharedFileInspectorIsPristine(inspector) ||
+    !productionSharedArtifactBrokerAllows(permit, inspector, "bind-inspector")
+  )
+    throw uncheckable();
+  inspectors.get(inspector).permit = permit;
+}
+export function originalProductionSharedInspectorAllowance(inspector) {
+  const source = inspectors.get(inspector);
+  if (!source || source.failed || source.busy) throw uncheckable();
+  return source.account.allowance("shared-reader");
 }

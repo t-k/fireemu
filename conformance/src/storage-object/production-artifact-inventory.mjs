@@ -1,3 +1,4 @@
+import { createProductionArtifactWorkAccount } from "./production-artifact-work-profile.mjs";
 import { createHash } from "node:crypto";
 import {
   closeSync,
@@ -16,6 +17,7 @@ import { originalProductionArtifactContext } from "./production-artifact-policy.
 import {
   bindProductionSecretArtifactInventory,
   isProductionSecretRegistry,
+  originalProductionSecretRegistryWorkProfile,
 } from "./production-secret-registry.mjs";
 import {
   originalProductionArtifactFile,
@@ -33,6 +35,9 @@ import {
 
 import {
   inspectProductionSharedFiles,
+  bindProductionSharedFileInspectorBroker,
+  productionSharedFileInspectorIsPristine,
+  originalProductionSharedInspectorAllowance,
   originalProductionSharedInspectionContext,
   originalProductionSharedInspectorWork,
   productionSharedInspectorUsesArtifactContext,
@@ -41,11 +46,14 @@ import {
   originalProductionSharedReportFile,
   originalProductionSharedReportPending,
   originalProductionSharedReportWriterContext,
+  bindProductionSharedReportWriterBroker,
+  originalProductionSharedReportWriterAllowance,
   writeProductionSharedPrivacyReport,
 } from "./production-shared-report-file.mjs";
 
 const inventories = new WeakMap(),
-  tasks = new WeakMap();
+  tasks = new WeakMap(),
+  brokerPermits = new WeakMap();
 // Finite prototype ceilings, derived from the two existing writer ceilings.
 // A runtime still needs its separate producer count and work/memory profile.
 const MAX_FILES = 6000 * 20 + 1024;
@@ -189,9 +197,14 @@ function rescan(state) {
   if (state.shared) {
     const before = originalProductionSharedInspectorWork(state.shared.inspector);
     try {
+      state.inspectionActive = true;
       sharedReceipt = inspectProductionSharedFiles(
         state.shared.inspector,
-        state.workLimit - state.work,
+        Math.min(
+          state.account.allowance("shared-reader"),
+          originalProductionSharedInspectorAllowance(state.shared.inspector),
+        ),
+        state.shared.permit,
       );
       const context = originalProductionSharedInspectionContext(
         sharedReceipt,
@@ -209,12 +222,27 @@ function rescan(state) {
       sharedFailure = true;
       uncertain = true;
     } finally {
+      state.inspectionActive = false;
       const after = originalProductionSharedInspectorWork(state.shared.inspector);
-      if (!Number.isSafeInteger(before) || !Number.isSafeInteger(after) || after < before) {
-        state.work = state.workLimit;
+      if (
+        typeof before !== typeof state.account.consumed() ||
+        typeof after !== typeof before ||
+        (typeof before === "number" &&
+          (!Number.isSafeInteger(before) || !Number.isSafeInteger(after))) ||
+        before < 0 ||
+        after < before
+      ) {
+        state.account.halt();
         sharedFailure = true;
         uncertain = true;
-      } else state.work += after - before;
+      } else {
+        try {
+          state.account.consume(after - before);
+        } catch {
+          sharedFailure = true;
+          uncertain = true;
+        }
+      }
     }
   }
   try {
@@ -224,15 +252,15 @@ function rescan(state) {
   }
   for (const file of state.files.values()) {
     try {
-      if (file.pending || file.byteLength > state.workLimit - state.work) throw new Error();
-      state.work += file.byteLength;
+      if (file.pending || file.byteLength > state.account.allowance()) throw new Error();
+      state.account.consume(file.byteLength);
       const bytes = readOriginal(state, file);
-      const scan = state.registry.openScan(state.workLimit - state.work);
+      const scan = state.registry.openScan(state.account.allowance());
       let copy;
       try {
         copy = scan.hasSecretCopy(decoder.decode(bytes));
       } finally {
-        state.work += scan.snapshot().scanCodeUnits;
+        state.account.consume(scan.snapshot().scanCodeUnits);
       }
       if (copy) matched.push(file);
     } catch {
@@ -253,11 +281,19 @@ function rescan(state) {
     state.phase = "REPORTING";
     const before = originalProductionSharedReportWriterContext(state.shared.reportWriter).work;
     try {
-      const report = writeProductionSharedPrivacyReport(state.shared.reportWriter, {
-        receipt: sharedReceipt,
-        recording: state.recording,
-        remainingWork: state.workLimit - state.work,
-      });
+      state.reportActive = true;
+      const report = writeProductionSharedPrivacyReport(
+        state.shared.reportWriter,
+        {
+          receipt: sharedReceipt,
+          recording: state.recording,
+          remainingWork: Math.min(
+            state.account.allowance("shared-report"),
+            originalProductionSharedReportWriterAllowance(state.shared.reportWriter),
+          ),
+        },
+        state.shared.permit,
+      );
       const status = originalProductionSharedReportWriterContext(state.shared.reportWriter).outcome;
       if (report === null && status === "WITHHELD_PRIVACY") reportWithheld = true;
       else if (!report || status !== "COMPLETE") throw new Error();
@@ -265,12 +301,27 @@ function rescan(state) {
       reportFailure = true;
       uncertain = true;
     } finally {
+      state.reportActive = false;
       const after = originalProductionSharedReportWriterContext(state.shared.reportWriter).work;
-      if (!Number.isSafeInteger(before) || !Number.isSafeInteger(after) || after < before) {
-        state.work = state.workLimit;
+      if (
+        typeof before !== typeof state.account.consumed() ||
+        typeof after !== typeof before ||
+        (typeof before === "number" &&
+          (!Number.isSafeInteger(before) || !Number.isSafeInteger(after))) ||
+        before < 0 ||
+        after < before
+      ) {
+        state.account.halt();
         reportFailure = true;
         uncertain = true;
-      } else state.work += after - before;
+      } else {
+        try {
+          state.account.consume(after - before);
+        } catch {
+          reportFailure = true;
+          uncertain = true;
+        }
+      }
     }
   }
   if (uncertain || matched.length || sharedMatch) {
@@ -298,13 +349,31 @@ function rescan(state) {
 }
 /** Original cumulative work is diagnostic only and grants no runtime admission. */
 export function originalProductionArtifactInventoryWork(inventory) {
-  return inventories.get(inventory)?.work ?? null;
+  return inventories.get(inventory)?.account.consumed() ?? null;
 }
 
 /** Only the original registry may invoke its original task inventory observer. */
 export function originalProductionArtifactInventoryObserver(inventory, registry) {
   const state = inventories.get(inventory);
   return state && state.registry === registry ? state.observer : null;
+}
+/** The broker never exports its permit; only its synchronous inspection/report window may use it. */
+export function productionSharedArtifactBrokerAllows(permit, target, purpose) {
+  const binding = brokerPermits.get(permit);
+  if (!binding) return false;
+  const { state } = binding;
+  if (state.shared?.permit !== permit) return false;
+  if (purpose === "bind-inspector") return state.phase === "OPEN" && target === binding.inspector;
+  if (purpose === "bind-report") return state.phase === "OPEN" && target === binding.reportWriter;
+  if (purpose === "inspect")
+    return (
+      state.phase === "CHECKING" && state.inspectionActive === true && target === binding.inspector
+    );
+  if (purpose === "report")
+    return (
+      state.phase === "REPORTING" && state.reportActive === true && target === binding.reportWriter
+    );
+  return false;
 }
 /** One registry, profile, capability and directory own one task-wide inventory. */
 export function ensureProductionArtifactInventory(supplied) {
@@ -341,9 +410,16 @@ export function ensureProductionArtifactInventory(supplied) {
       phase: "OPEN",
       recording: 1,
       files: new Map(),
-      work: 0,
-      workLimit: runtime.secretRegistry.snapshot().limits.maxScanCodeUnits,
+      account: createProductionArtifactWorkAccount({
+        profile: runtime.workProfile ?? null,
+        kind: "inventory",
+        ...(runtime.workProfile
+          ? {}
+          : { prototypeLimit: runtime.secretRegistry.snapshot().limits.maxScanCodeUnits }),
+      }),
       observer: null,
+      inspectionActive: false,
+      reportActive: false,
     };
     const inventory = Object.freeze({});
     state.observer = () => rescan(state);
@@ -388,8 +464,13 @@ export function ensurePrototypeArtifactInventory(supplied) {
       phase: "OPEN",
       recording: 1,
       files: new Map(),
-      work: 0,
-      workLimit: input.registry.snapshot().limits.maxScanCodeUnits,
+      account: createProductionArtifactWorkAccount({
+        profile: originalProductionSecretRegistryWorkProfile(input.registry),
+        kind: "inventory",
+        ...(originalProductionSecretRegistryWorkProfile(input.registry)
+          ? {}
+          : { prototypeLimit: input.registry.snapshot().limits.maxScanCodeUnits }),
+      }),
       observer: null,
     };
     state.observer = () => rescan(state);
@@ -468,10 +549,12 @@ export function trackProductionArtifactFile(inventory, writer, receipt) {
 
 /** One original shared inspector and internal report writer join the original owned observer before any producer. */
 export function attachProductionSharedArtifactInspection(supplied) {
+  let state,
+    minted = false;
   try {
     const input = copyProductionCaptureRecord(supplied, ["inventory", "inspector", "reportWriter"]);
-    const state = inventories.get(input.inventory),
-      writer = originalProductionSharedReportWriterContext(input.reportWriter);
+    state = inventories.get(input.inventory);
+    const writer = originalProductionSharedReportWriterContext(input.reportWriter);
     if (
       Object.keys(input).length !== 3 ||
       !state ||
@@ -479,6 +562,7 @@ export function attachProductionSharedArtifactInspection(supplied) {
       state.phase !== "OPEN" ||
       state.shared ||
       state.files.size ||
+      !productionSharedFileInspectorIsPristine(input.inspector) ||
       !productionSharedInspectorUsesArtifactContext(input.inspector, {
         directory: state.directory,
         profile: state.profile,
@@ -490,11 +574,29 @@ export function attachProductionSharedArtifactInspection(supplied) {
       writer.boundary !== state.boundary ||
       writer.registry !== state.registry ||
       writer.inspector !== input.inspector ||
-      writer.outcome !== "NONE"
+      writer.outcome !== "NONE" ||
+      (writer.work !== 0 && writer.work !== 0n)
     )
       throw new Error();
-    state.shared = Object.freeze({ inspector: input.inspector, reportWriter: input.reportWriter });
+    const permit = Object.freeze({});
+    brokerPermits.set(permit, {
+      state,
+      inspector: input.inspector,
+      reportWriter: input.reportWriter,
+    });
+    state.shared = Object.freeze({
+      inspector: input.inspector,
+      reportWriter: input.reportWriter,
+      permit,
+    });
+    minted = true;
+    bindProductionSharedFileInspectorBroker(input.inspector, permit);
+    bindProductionSharedReportWriterBroker(input.reportWriter, permit);
   } catch {
+    if (minted) {
+      state.account.halt();
+      state.phase = "STOPPED";
+    }
     throw new Error("invalid production shared artifact inspection");
   }
 }

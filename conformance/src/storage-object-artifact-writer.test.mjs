@@ -2,10 +2,11 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { mkdtempSync, readFileSync, readdirSync, lstatSync, rmSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
+import { pathToFileURL, fileURLToPath } from "node:url";
 import test from "node:test";
 import { spawnSync } from "node:child_process";
-import { writeFileSync, existsSync } from "node:fs";
+import { writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { buildProductionStage3DraftPlan } from "./storage-object/stage3-plan.mjs";
 import { createProductionSecretRegistry } from "./storage-object/production-secret-registry.mjs";
 import { createProductionArtifactProfile } from "./storage-object/production-artifact-policy.mjs";
@@ -225,23 +226,39 @@ function child(fault, recording) {
   const base = realpathSync(mkdtempSync(join(tmpdir(), "fireemu-artifact-child-")));
   const directory = join(base, "owned"),
     marker = "FOREIGN_SYNTHETIC_FIXED";
-  const writerURL = new URL("./storage-object/production-artifact-writer.mjs", import.meta.url)
-    .href;
-  const moduleURL = (name) => new URL(`./storage-object/${name}.mjs`, import.meta.url).href;
-  let importedWriter = writerURL;
+  const originalDirectory = new URL("./storage-object/", import.meta.url);
+  let moduleDirectory = originalDirectory;
+  const moduleURL = (name) => new URL(`${name}.mjs`, moduleDirectory).href;
   if (fault === "counter-bound") {
-    const source = readFileSync(new URL(writerURL), "utf8");
+    const modules = new Map();
+    const bind = (url) => {
+      if (modules.has(url.href)) return;
+      assert.equal(url.href.startsWith(originalDirectory.href), true);
+      const source = readFileSync(url, "utf8");
+      modules.set(url.href, source);
+      for (const match of source.matchAll(/(?:from\s*|import\s*\()\s*["'](\.[^"']+)["']/g))
+        bind(new URL(match[1], url));
+    };
+    bind(new URL("production-artifact-writer.mjs", originalDirectory));
+    // Every copied module uses one shared private identity closure.
+    const copyDirectory = join(base, "counter-source");
+    mkdirSync(copyDirectory, { mode: 0o700 });
+    for (const [url, source] of modules) {
+      const relative = fileURLToPath(url).slice(fileURLToPath(originalDirectory).length);
+      const target = join(copyDirectory, relative);
+      mkdirSync(dirname(target), { recursive: true, mode: 0o700 });
+      writeFileSync(target, source, { mode: 0o600 });
+    }
+    moduleDirectory = pathToFileURL(copyDirectory + "/");
+    const source = modules.get(new URL("production-artifact-writer.mjs", originalDirectory).href);
     assert.equal(source.split("let sequence = 0,").length, 2);
-    const mutant = source
-      .replace("let sequence = 0,", "let sequence = MAX_ARTIFACT_FILES - 1,")
-      .replace(
-        /from "(\.\/[^"]+)"/g,
-        (_, relative) => `from ${JSON.stringify(new URL(relative, writerURL).href)}`,
-      );
-    const file = join(base, "counter-fixture.mjs");
-    writeFileSync(file, mutant, { mode: 0o600 });
-    importedWriter = new URL(`file://${file}`).href;
+    writeFileSync(
+      new URL("production-artifact-writer.mjs", moduleDirectory),
+      source.replace("let sequence = 0,", "let sequence = MAX_ARTIFACT_FILES - 1,"),
+      { mode: 0o600 },
+    );
   }
+  const importedWriter = moduleURL("production-artifact-writer");
   const script = `
 import fs from "node:fs";
 import { createHash } from "node:crypto";
@@ -516,9 +533,8 @@ test("invalid write contexts fail with fixed metadata without input hooks or fil
 });
 
 test("a bound original profile is required for audited standalone privacy failures", () => {
-  fixture(({ directory, profile }) => {
+  fixture(({ directory, profile, boundary }) => {
     assert.equal(typeof standalone.productionStandaloneUsesArtifactProfile, "function");
-    const boundary = standalone.createProductionStandaloneFailStop({ directory, profile });
     assert.equal(standalone.productionStandaloneUsesArtifactProfile(boundary, profile), true);
     assert.equal(
       standalone.productionStandaloneUsesArtifactProfile({ ...boundary }, profile),
@@ -527,6 +543,11 @@ test("a bound original profile is required for audited standalone privacy failur
     assert.equal(
       standalone.productionStandaloneUsesArtifactProfile(boundary, { ...profile }),
       false,
+    );
+    const foreignBoundary = standalone.createProductionStandaloneFailStop({ directory, profile });
+    assert.throws(
+      () => api.createProductionArtifactWriter({ directory, profile, boundary: foreignBoundary }),
+      /invalid production artifact inventory/,
     );
     const writer = api.createProductionArtifactWriter({ directory, profile, boundary });
     writer.close();

@@ -1,3 +1,4 @@
+import { originalProductionArtifactWorkProfile } from "./production-artifact-work-profile.mjs";
 import { locateProductionSecretLines } from "./production-secret-line-locations.mjs";
 import { types } from "node:util";
 
@@ -8,7 +9,11 @@ const unavailable = () => new Error("SECRET_REGISTRY_UNAVAILABLE");
 export const isProductionSecretScan = (scan) => originalScans.has(scan);
 
 /** A compact UTF-16 trie bounds retained edges and uses failure links for linear scans. */
-export function createProductionSecretIndex(maxNodes) {
+export function createProductionSecretIndex(maxNodes, workProfile = null) {
+  const workBinding = originalProductionArtifactWorkProfile(workProfile);
+  if (workProfile !== null && (!workBinding || workBinding.limits.maxIndexNodes !== maxNodes))
+    throw new Error("invalid secret index work profile");
+  const maximumScan = workBinding?.maxSingleScanCodeUnits ?? 268435456;
   if (!Number.isSafeInteger(maxNodes) || maxNodes < 1 || maxNodes > 1048576)
     throw new Error("invalid secret index configuration");
   const edges = new Map();
@@ -109,7 +114,7 @@ export function createProductionSecretIndex(maxNodes) {
     },
     openScan(maxCodeUnits) {
       ready();
-      if (!Number.isSafeInteger(maxCodeUnits) || maxCodeUnits < 1 || maxCodeUnits > 268435456)
+      if (!Number.isSafeInteger(maxCodeUnits) || maxCodeUnits < 1 || maxCodeUnits > maximumScan)
         throw new Error("invalid secret scan configuration");
       let work = 0;
       const charge = (amount) => {

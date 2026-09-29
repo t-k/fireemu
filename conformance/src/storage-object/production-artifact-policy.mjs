@@ -1,3 +1,4 @@
+import { originalProductionArtifactWorkProfile } from "./production-artifact-work-profile.mjs";
 import { createHash } from "node:crypto";
 import { isDeepStrictEqual, types } from "node:util";
 import { buildProductionStage3DraftPlan } from "./stage3-plan.mjs";
@@ -7,6 +8,7 @@ import { resolveProductionControlRoute } from "./production-routes.mjs";
 import { copyProductionCaptureRecord } from "./production-capture-input.mjs";
 import {
   isProductionSecretRegistry,
+  originalProductionSecretRegistryWorkProfile,
   productionSecretRegistryHasValue,
 } from "./production-secret-registry.mjs";
 import { MAX_RESPONSE_BODY_BYTES } from "./wire-limits.mjs";
@@ -195,6 +197,9 @@ export function createProductionArtifactProfile(supplied) {
       )
     )
       throw new Error();
+    const workProfile = originalProductionSecretRegistryWorkProfile(input.secretRegistry);
+    if (workProfile && !originalProductionArtifactWorkProfile(workProfile, { plan }))
+      throw new Error();
     const resources = copyProductionCaptureRecord(input.resources, [
       "projectNumber",
       "apiKeyResource",
@@ -240,6 +245,7 @@ export function createProductionArtifactProfile(supplied) {
       failureCode: null,
       runtime: Object.freeze({
         secretRegistry: input.secretRegistry,
+        ...(workProfile ? { workProfile } : {}),
         runIds: Object.freeze(plan.recordings.map((row) => row.runId)),
       }),
     });

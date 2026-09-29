@@ -1,3 +1,7 @@
+import {
+  originalProductionArtifactWorkProfile,
+  PRODUCTION_SECRET_REGISTRY_CEILINGS,
+} from "./production-artifact-work-profile.mjs";
 import { types } from "node:util";
 import { captureSecretForms } from "./production-capture-body.mjs";
 import { createProductionSecretIndex } from "./production-secret-index.mjs";
@@ -21,6 +25,9 @@ export function bindProductionSecretArtifactInventory(registry, inventory) {
   artifactObservers.set(registry, observer);
 }
 
+const registryWorkProfiles = new WeakMap();
+export const originalProductionSecretRegistryWorkProfile = (registry) =>
+  registryWorkProfiles.get(registry) ?? null;
 const registries = new WeakSet();
 const memberships = new WeakMap();
 const unavailable = () => new Error("SECRET_REGISTRY_UNAVAILABLE");
@@ -35,7 +42,9 @@ export function productionSecretRegistryHasValue(registry, value) {
 
 /** Pure prototype: the approved runtime must separately pin its tested count, memory and work profile. */
 export function createProductionSecretRegistry(supplied) {
-  let limits;
+  let limits,
+    workProfile = null,
+    workBinding = null;
   try {
     if (
       !supplied ||
@@ -44,7 +53,15 @@ export function createProductionSecretRegistry(supplied) {
     )
       throw new Error();
     const keys = ["maxValues", "maxUtf8Bytes", "maxIndexNodes", "maxScanCodeUnits"];
-    if (Reflect.ownKeys(supplied).length !== keys.length) throw new Error();
+    const workDescriptor = Object.getOwnPropertyDescriptor(supplied, "workProfile");
+    if (Reflect.ownKeys(supplied).length !== keys.length + (workDescriptor ? 1 : 0))
+      throw new Error();
+    if (workDescriptor) {
+      if (!workDescriptor.enumerable || !Object.hasOwn(workDescriptor, "value")) throw new Error();
+      workProfile = workDescriptor.value;
+      workBinding = originalProductionArtifactWorkProfile(workProfile);
+      if (!workBinding) throw new Error();
+    }
     limits = Object.fromEntries(
       keys.map((key) => {
         const d = Object.getOwnPropertyDescriptor(supplied, key);
@@ -59,17 +76,23 @@ export function createProductionSecretRegistry(supplied) {
       }),
     );
     if (
-      limits.maxValues > 81 + 6000 * 4 * 64 ||
-      limits.maxUtf8Bytes > 268435456 ||
-      limits.maxIndexNodes > 1048576 ||
-      limits.maxScanCodeUnits > 268435456
+      limits.maxValues > PRODUCTION_SECRET_REGISTRY_CEILINGS.maxValues ||
+      limits.maxUtf8Bytes > PRODUCTION_SECRET_REGISTRY_CEILINGS.maxUtf8Bytes ||
+      limits.maxIndexNodes > PRODUCTION_SECRET_REGISTRY_CEILINGS.maxIndexNodes ||
+      limits.maxScanCodeUnits > (workBinding?.maxSingleScanCodeUnits ?? 268435456)
+    )
+      throw new Error();
+    if (
+      workBinding &&
+      (limits.maxScanCodeUnits !== workBinding.maxSingleScanCodeUnits ||
+        Object.entries(workBinding.limits).some(([key, value]) => limits[key] !== value))
     )
       throw new Error();
   } catch {
     throw new Error("invalid secret registry configuration");
   }
   const values = new Set(),
-    index = createProductionSecretIndex(limits.maxIndexNodes);
+    index = createProductionSecretIndex(limits.maxIndexNodes, workProfile);
   let utf8Bytes = 0,
     failed = false,
     closed = false,
@@ -137,6 +160,7 @@ export function createProductionSecretRegistry(supplied) {
       failRegistration();
     }
   });
+  registryWorkProfiles.set(registry, workProfile);
   registries.add(registry);
   memberships.set(registry, (value) => {
     try {

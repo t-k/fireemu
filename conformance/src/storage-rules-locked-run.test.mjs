@@ -92,7 +92,7 @@ test("a whole recording under real locks checks the locks with every request and
     // Every request was preceded by a check: the ledger and the locks.
     assert.equal(admission.snapshot().checks, h.gate.snapshot().requests + 1);
     assert.equal(admission.snapshot().refused, false);
-    confirmCleanClose(lease, outcome);
+    confirmCleanClose(lease, outcome, h.controller);
     return "done";
   });
   assert.equal(result, "done");
@@ -177,7 +177,7 @@ test("a third recording under the approval is refused at its start with nothing 
     const h = await assemble({ lease, admission });
     const result = await h.controller.run();
     assert.equal(result.status, "finished");
-    confirmCleanClose(lease, result);
+    confirmCleanClose(lease, result, h.controller);
   });
   assert.deepEqual(second.runs, ["first-run", "run-two"]);
 });
@@ -226,10 +226,10 @@ test("a stop is recovered under the same locks and they are released only after 
     stopped = await h.controller.run();
     assert.equal(stopped.status, "stopped");
     // A stopped run does not release the locks.
-    assert.throws(() => confirmCleanClose(lease, stopped), /not a clean close/);
+    assert.throws(() => confirmCleanClose(lease, stopped, h.controller), /not a clean close/);
     recovered = await h.controller.recover();
     assert.equal(recovered.status, "recovered", JSON.stringify(recovered));
-    confirmCleanClose(lease, recovered);
+    confirmCleanClose(lease, recovered, h.controller);
   });
   assert.deepEqual(await lockFiles(dirs), []);
 });
@@ -252,22 +252,33 @@ test("a transport failure keeps the locks even after a clean recovery", async (t
     const stopped = await h.controller.run();
     assert.equal(stopped.reason, "outcome uncertain");
     const recovered = await h.controller.recover();
-    if (recovered.status === "recovered") confirmCleanClose(lease, recovered);
+    if (recovered.status === "recovered") confirmCleanClose(lease, recovered, h.controller);
   }), /outbound attempt failed|cannot confirm|project locks retained/);
   assert.deepEqual(await lockFiles(dirs), ["fireemu-oracle-idp.lock", "fireemu-oracle-query.lock"]);
 });
 
-test("only a finished or recovered result confirms the close, and only through this run's lease", async (t) => {
+test("only a clean result the run's own controller returned confirms the close, and only through this run's lease", async (t) => {
   const { confirmCleanClose } = await load();
+  const { markCleanResult } = await import("./storage-rules/results.mjs");
   const calls = [];
   const lease = { confirmClosed: () => calls.push("closed") };
-  for (const bad of [null, undefined, {}, { status: "stopped" }, { status: "stopped", needsRecovery: true }, { status: "refused" }, { status: "recovered ", }, { status: "FINISHED" }]) assert.throws(() => confirmCleanClose(lease, bad), /not a clean close/);
+  const owner = {};
+  const other = {};
+  const own = (status) => markCleanResult(Object.freeze({ status }), owner);
+  for (const bad of [null, undefined, {}, { status: "stopped" }, { status: "stopped", needsRecovery: true }, { status: "refused" }, { status: "recovered " }, { status: "FINISHED" }, { status: "finished" }, Object.freeze({ status: "finished" }), Object.freeze({ status: "recovered" }), markCleanResult(Object.freeze({ status: "finished" }), other)]) assert.throws(() => confirmCleanClose(lease, bad, owner), /not a clean close/, JSON.stringify(bad));
+  assert.throws(() => confirmCleanClose(lease, own("finished"), undefined), /not a clean close/);
+  assert.throws(() => confirmCleanClose(lease, own("finished"), null), /not a clean close/);
+  assert.throws(() => confirmCleanClose(lease, own("finished"), {}), /not a clean close/);
   assert.deepEqual(calls, []);
-  confirmCleanClose(lease, { status: "finished" });
-  confirmCleanClose(lease, { status: "recovered" });
+  confirmCleanClose(lease, own("finished"), owner);
+  confirmCleanClose(lease, own("recovered"), owner);
   assert.deepEqual(calls, ["closed", "closed"]);
-  assert.throws(() => confirmCleanClose({}, { status: "finished" }), /invalid lease/);
-  assert.throws(() => confirmCleanClose(null, { status: "finished" }), /invalid lease/);
+  assert.throws(() => confirmCleanClose({}, own("finished"), owner), /invalid lease/);
+  assert.throws(() => confirmCleanClose(null, own("finished"), owner), /invalid lease/);
+  // Only a frozen finished or recovered result can be registered at all.
+  for (const bad of [{ status: "finished" }, Object.freeze({ status: "stopped" }), Object.freeze({ status: "refused" }), null, "finished"]) assert.throws(() => markCleanResult(bad, owner), /not a clean result/);
+  assert.throws(() => markCleanResult(Object.freeze({ status: "finished" }), null), /not a clean result/);
+  assert.throws(() => markCleanResult(Object.freeze({ status: "finished" }), "owner"), /not a clean result/);
 });
 
 test("the lease transport sends through the lease exactly once per request and returns the answer", async () => {

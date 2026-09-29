@@ -3,6 +3,7 @@ import { classifyResponse } from "./acceptance.mjs";
 import { ENFORCEMENT } from "./enforcement.mjs";
 import { applyVerdict, createSettleState, nextRead } from "./settle.mjs";
 import { STOP_CODES, stopCodeOf } from "./stop-codes.mjs";
+import { markCleanResult } from "./results.mjs";
 
 // Runs the reviewed schedule of one recording. Each row goes through the same steps: guards from the ledgers, the
 // run-time references it needs, its exact target, the ledgers' record of the intent, one send through the gate, the
@@ -215,7 +216,7 @@ export function createController(options) {
     }
   }
 
-  return Object.freeze({
+  const self = Object.freeze({
     async recover() {
       const mode = gate.snapshot().mode;
       if (recoveryAttempted || !["normal", "recovery"].includes(mode)) return Object.freeze({ status: "refused", reason: recoveryAttempted ? "recovery already attempted" : "the counter is not open" });
@@ -234,13 +235,14 @@ export function createController(options) {
         return Object.freeze({ status: "stopped", reason: error.reason, detail: Object.freeze({ ...error.detail }), requests: executed - start, skipped: Object.freeze(skipped.slice(startSkipped)), needsRecovery: true });
       }
       await gate.finish(proven ? "recovered" : "needs-recovery");
-      return Object.freeze({ status: proven ? "recovered" : "stopped", ...(proven ? {} : { reason: "owned-prefix check skipped", detail: Object.freeze({}), needsRecovery: true }), requests: executed - start, skipped: Object.freeze(skipped.slice(startSkipped)) });
+      const result = Object.freeze({ status: proven ? "recovered" : "stopped", ...(proven ? {} : { reason: "owned-prefix check skipped", detail: Object.freeze({}), needsRecovery: true }), requests: executed - start, skipped: Object.freeze(skipped.slice(startSkipped)) });
+      return proven ? markCleanResult(result, self) : result;
     },
     async run() {
       try {
         await runAll();
         await gate.finish("finished");
-        return Object.freeze({ status: "finished", requests: executed, skipped: Object.freeze([...skipped]) });
+        return markCleanResult(Object.freeze({ status: "finished", requests: executed, skipped: Object.freeze([...skipped]) }), self);
       } catch (error) {
         if (!(error instanceof RunStop)) throw error;
         const untouched = objects.snapshot().mutations === 0 && run.snapshot().mutations === 0;
@@ -252,4 +254,5 @@ export function createController(options) {
       }
     },
   });
+  return self;
 }

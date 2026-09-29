@@ -1,5 +1,6 @@
 import { createAdmission } from "./admission.mjs";
 import { withProjectLocks } from "./project-locks.mjs";
+import { isCleanResult } from "./results.mjs";
 
 // The project locks and the live admission as one. The lock set must be exactly this packet's; every request's admission
 // then also proves the locks are still this run's, the run's only transport goes through the lease, and the locks are
@@ -25,9 +26,10 @@ export function leaseTransport(lease, transport) {
   return Object.freeze({ send: (spec) => lease.dispatch(() => transport.send(spec)), validate: (spec) => transport.validate(spec) });
 }
 
-/** Confirm the close to the lease only for a result that ended clean; anything else keeps the locks. */
-export function confirmCleanClose(lease, result) {
+/** Confirm the close to the lease only for a clean result that `owner` (the controller of this run) itself returned; anything else keeps the locks. */
+export function confirmCleanClose(lease, result, owner) {
   if (typeof lease?.confirmClosed !== "function") throw new Error("invalid lease");
-  if (!plain(result) || !["finished", "recovered"].includes(result.status)) throw new Error("not a clean close");
+  // Only a result object the controller itself returned for a clean end counts; a caller cannot build one.
+  if (!isCleanResult(result, owner) || !["finished", "recovered"].includes(result.status)) throw new Error("not a clean close");
   lease.confirmClosed();
 }

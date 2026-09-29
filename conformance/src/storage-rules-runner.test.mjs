@@ -72,7 +72,7 @@ test("a preflight fact that differs from the private packet stops the run at tha
   let state;
   await assert.rejects(withAssembledRun(f.options, async (run) => {
     result = await run.run();
-    state = run.gate.snapshot();
+    state = run.snapshot();
   }), /closure not confirmed; project locks retained|project locks retained/);
   assert.deepEqual([result.status, result.reason, result.detail.rowId], ["stopped", "preflight refused", "preflight/owner/identity"]);
   assert.equal(result.needsRecovery, false);
@@ -166,6 +166,9 @@ test("a run that stops at its first sign-in is wired to the manifest, the keys, 
     seen.result = await run.run();
     seen.recovered = await run.recover();
     seen.close = (() => { try { run.confirmCleanClose(seen.recovered); return "closed"; } catch (error) { return error.message; } })();
+    // A close built by the caller is refused, and so is the controller's own result of a stop: the locks stay held either way.
+    seen.forged = [{ status: "finished" }, Object.freeze({ status: "finished" }), Object.freeze({ status: "recovered" }), seen.result].map((forged) => { try { run.confirmCleanClose(forged); return "closed"; } catch (error) { return error.message; } });
+    seen.exposed = Object.keys(run).sort();
     return "caller value";
   }, { randomBytes: (size) => Buffer.alloc(size, 7) });
   // The failed attempt is uncertain, so the locks stay held and the caller sees the refusal.
@@ -175,7 +178,10 @@ test("a run that stops at its first sign-in is wired to the manifest, the keys, 
   assert.deepEqual([seen.result.status, seen.result.reason, seen.result.needsRecovery], ["stopped", "delegate failed", true]);
   assert.equal(seen.recovered.status, "recovered");
   assert.ok(seen.recovered.requests > 0 && seen.recovered.skipped.length > 0, JSON.stringify(seen.recovered.requests));
-  assert.match(seen.close, /cannot confirm project lock closure/);
+  assert.match(seen.close, /cannot confirm project lock closure|not a clean close/);
+  assert.deepEqual(seen.forged, ["not a clean close", "not a clean close", "not a clean close", "not a clean close"]);
+  // The recording offers no gate, admission or controller to the driver.
+  assert.deepEqual(seen.exposed, ["confirmCleanClose", "manifest", "recover", "run", "runId", "snapshot"]);
   assert.equal(new URL(signIn).searchParams.get("key"), API_KEYS.query);
   assert.ok(sleeps >= 1, "the controller's waits go through the caller's clock");
   assert.deepEqual(await f.usage(), [runId]);

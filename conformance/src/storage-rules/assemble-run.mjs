@@ -71,11 +71,17 @@ export async function withAssembledRun(options, use, { randomBytes } = {}) {
         manifest, schedule: buildSchedule(manifest), recoverySchedule: buildRecoverySchedule(manifest), gate, targets, refs, tables, objects, run: runLedger, capture,
         delegates: assembled.delegates, wait: clock.sleep, credentials: assembled.credentials, judgePreflight: judge,
       });
+      // The driver gets what it needs to run, recover and close, and a read-only view of the gate: not the gate, the admission or the controller.
       const recording = Object.freeze({
-        runId, manifest, controller, gate, admission,
+        runId, manifest,
         run: () => controller.run(),
         recover: () => controller.recover(),
-        confirmCleanClose: (result) => confirmCleanClose(lease, result),
+        snapshot: () => gate.snapshot(),
+        // The locks are released only for the controller's own clean result and only when the gate itself has closed.
+        confirmCleanClose: (result) => {
+          if (gate.snapshot().mode !== "closed") throw new Error("not a clean close");
+          confirmCleanClose(lease, result, controller);
+        },
       });
       return await use(recording);
     } finally { await closeJournals(); }

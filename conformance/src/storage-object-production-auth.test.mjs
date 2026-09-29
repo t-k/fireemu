@@ -248,6 +248,65 @@ const context = (index = 0) => ({
   operationId: `r1/p${25 + index}/${"a".repeat(64)}`,
 });
 
+test("the synchronous Auth provider preserves original recording identity without accepting copied methods", async () => {
+  await fixture(async ({ state, calls }) => {
+    assert.equal(typeof module.originalProductionAuthAuthorizationProvider, "function");
+    const provider = module.originalProductionAuthAuthorizationProvider(state, 1);
+    assert.equal(provider, state.accountAuthorization);
+    const ref = { kind: "valid", accountRef: recipes[0].accounts.valid.ref };
+    assert.throws(() => provider(ref, context()), /unavailable/);
+    assert.equal(calls.length, 0);
+    let hooks = 0;
+    const fake = {
+      get accountAuthorization() {
+        hooks++;
+        return provider;
+      },
+    };
+    const proxy = new Proxy(state, {
+      get() {
+        hooks++;
+        return provider;
+      },
+      getPrototypeOf() {
+        hooks++;
+        return Object.prototype;
+      },
+    });
+    const revoked = Proxy.revocable(state, {});
+    revoked.revoke();
+    for (const value of [{ ...state }, fake, proxy, revoked.proxy, null])
+      assert.throws(
+        () => module.originalProductionAuthAuthorizationProvider(value, 1),
+        /invalid original production Auth provider/,
+      );
+    for (const recording of [
+      2,
+      0,
+      undefined,
+      new Number(1),
+      {
+        valueOf() {
+          hooks++;
+          return 1;
+        },
+      },
+    ])
+      assert.throws(
+        () => module.originalProductionAuthAuthorizationProvider(state, recording),
+        /invalid original production Auth provider/,
+      );
+    assert.equal(hooks, 0);
+    assert.equal(calls.length, 0);
+    await state.setup(recipes[0].id, Object.freeze({}));
+    assert.match(provider(ref, context()), /^Firebase /);
+    assert.equal(calls.length, 8);
+    state.close();
+    assert.throws(() => provider(ref, context()), /unavailable/);
+    assert.equal(calls.length, 8);
+  });
+});
+
 test("four production accounts use only their eleven declared slots and proved Firebase credentials", async () => {
   await fixture(async (f) => {
     const capability = Object.freeze({});

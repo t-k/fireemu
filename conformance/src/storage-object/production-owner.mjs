@@ -6,6 +6,15 @@ import { verifyProductionOwnerTokenInfo } from "./owner-tokeninfo.mjs";
 import { parseCaptureJsonSpans } from "./production-capture-body.mjs";
 
 const STAGES = ["initial", "subject-renewal", "cleanup-renewal"];
+const ownerStates = new WeakMap();
+
+/** Identity alone does not prove a usable token; the original provider retains its admission and expiry checks. */
+export function originalProductionOwnerAuthorizationProvider(state, recording) {
+  const binding = ownerStates.get(state);
+  if (!binding || recording !== binding.recording)
+    throw new Error("invalid original production owner provider");
+  return binding.provider;
+}
 const OWNER_KINDS = new Set([
   "storage",
   "owner-tokeninfo",
@@ -187,7 +196,7 @@ export function createProductionOwnerState(input) {
     pending = null;
     verified = null;
   }
-  return Object.freeze({
+  const state = Object.freeze({
     async exchangeAndProve(stage, recipeToken) {
       if (closed || failed) throw new Error("production owner is unavailable");
       if (
@@ -338,4 +347,6 @@ export function createProductionOwnerState(input) {
       dispose();
     },
   });
+  ownerStates.set(state, { recording, provider: state.ownerAuthorization });
+  return state;
 }

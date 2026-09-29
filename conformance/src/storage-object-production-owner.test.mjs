@@ -101,6 +101,64 @@ const normalContext = () => ({
   operationId: `r1/p1/${"a".repeat(64)}`,
 });
 
+test("the synchronous owner provider comes only from the original recording state without reading caller properties", async () => {
+  await fixture(async ({ state, calls }) => {
+    assert.equal(typeof module.originalProductionOwnerAuthorizationProvider, "function");
+    const provider = module.originalProductionOwnerAuthorizationProvider(state, 1);
+    assert.equal(provider, state.ownerAuthorization);
+    assert.throws(() => provider(normalContext()), /unavailable/);
+    assert.equal(calls.length, 0);
+    let hooks = 0;
+    const fake = {
+      get ownerAuthorization() {
+        hooks++;
+        return provider;
+      },
+    };
+    const proxy = new Proxy(state, {
+      get() {
+        hooks++;
+        return provider;
+      },
+      getPrototypeOf() {
+        hooks++;
+        return Object.prototype;
+      },
+    });
+    const revoked = Proxy.revocable(state, {});
+    revoked.revoke();
+    for (const value of [{ ...state }, fake, proxy, revoked.proxy, null])
+      assert.throws(
+        () => module.originalProductionOwnerAuthorizationProvider(value, 1),
+        /invalid original production owner provider/,
+      );
+    for (const recording of [
+      2,
+      0,
+      undefined,
+      new Number(1),
+      {
+        valueOf() {
+          hooks++;
+          return 1;
+        },
+      },
+    ])
+      assert.throws(
+        () => module.originalProductionOwnerAuthorizationProvider(state, recording),
+        /invalid original production owner provider/,
+      );
+    assert.equal(hooks, 0);
+    assert.equal(calls.length, 0);
+    await state.exchangeAndProve("initial");
+    assert.equal(provider(normalContext()), `Bearer ${token}`);
+    assert.equal(calls.length, 2);
+    state.close();
+    assert.throws(() => provider(normalContext()), /unavailable/);
+    assert.equal(calls.length, 2);
+  });
+});
+
 test("owner state connects a pinned ADC exchange to the same tokeninfo token and prior principal", async () => {
   await fixture(async ({ state, calls, proofs, secrets, directory }) => {
     assert.throws(

@@ -10,6 +10,14 @@ const ascii = (value, max) =>
   typeof value === "string" && /^[\x21-\x7e]+$/.test(value) && value.length <= max;
 const authStates = new WeakMap();
 
+/** Origin and recording are private; usability still requires the original UID, clock and admission proofs. */
+export function originalProductionAuthAuthorizationProvider(state, recording) {
+  const binding = authStates.get(state);
+  if (!binding || recording !== binding.recording)
+    throw new Error("invalid original production Auth provider");
+  return binding.provider;
+}
+
 /** Verify the original state and its canonical production recording without invoking caller hooks. */
 export function verifyProductionAuthBinding(state, supplied) {
   try {
@@ -677,6 +685,7 @@ export function createProductionAuthState(input) {
   authStates.set(state, {
     plan,
     recording,
+    provider: state.accountAuthorization,
     terminal(proof) {
       const program = programs.get(proof.recipeId);
       return (

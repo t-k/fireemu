@@ -74,8 +74,10 @@ export function keyFacts(facts) {
  * The private inputs file for stage 3, from what the reads showed. `local` carries the ADC path, the two project numbers and
  * the two API key strings the operator already holds; a key string that is not the one production reports is a stop.
  */
+export const keyStringMatches = (reported, local) => typeof reported === "string" && typeof local === "string" && same(sha(reported), sha(local));
+
 export function assembleInputs({ adcPath, local, identity, query, idp, bucket, database, queryIamSha256 }) {
-  if (!same(sha(query.keyString), sha(local.keys.query)) || !same(sha(idp.keyString), sha(local.keys.idp))) stop("a local key string is not the key production reports");
+  if (!keyStringMatches(query.keyString, local.keys.query) || !keyStringMatches(idp.keyString, local.keys.idp)) stop("a local key string is not the key production reports");
   const inputs = {
     schemaVersion: 1, adcPath,
     owner: { emailSha256: sha(identity.email), subjectSha256: sha(identity.subject) },

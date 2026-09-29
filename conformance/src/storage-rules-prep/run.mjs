@@ -1,6 +1,6 @@
 import { classifyResponse } from "../storage-rules/acceptance.mjs";
 import { STOP_CODES, tagged } from "../storage-rules/stop-codes.mjs";
-import { assembleInputs, keyFacts, KEY_LIST_IDS, OWNER_TOKEN_ID, PREP_IDS, selectKey } from "./plan.mjs";
+import { assembleInputs, keyFacts, keyStringMatches, KEY_LIST_IDS, OWNER_TOKEN_ID, PREP_IDS, selectKey } from "./plan.mjs";
 
 // The thirteen reads, in order, through the dispatch gate (so each is admitted, journalled before it is sent and counted).
 // A request whose answer is not the expected shape, or whose facts do not fit, ends the run at that request: the gate's
@@ -66,7 +66,7 @@ export async function runPrepReads({ gate, cache, targets, local, bucket, captur
   for (const project of ["query", "idp"]) {
     const id = `preflight/${project}/key-string`;
     // The classifier reads the key string from the body; the row only names the kind.
-    const outcome = await sendRow(targets.prepareKeyString(project, keyIds), targets.manifestRow(id));
+    const outcome = await sendRow(targets.prepareKeyString(project, keyIds), targets.manifestRow(id), (seen) => keyStringMatches(seen.secretFacts?.keyString, local.keys[project]));
     strings[project] = outcome.secretFacts.keyString;
   }
   const bucketMeta = await standard("preflight/bucket/metadata", (outcome) => outcome.facts.projectNumber === local.numbers.query);

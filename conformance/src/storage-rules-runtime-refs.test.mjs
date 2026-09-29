@@ -117,7 +117,8 @@ test("values outside each kind's grammar are refused", async () => {
   const update = manifest.rows.find((r) => r.id === "recovery/document-0/current");
   const key = manifest.rows.find((r) => r.id === "recovery/document-0/delete").request.query["currentDocument.updateTime"].key;
   for (const value of ["2026-09-29", "2026-09-29T10:00:00", "2026-09-29T10:00:00+09:00", "2026-13-29T10:00:00Z", "2026-09-29T10:00:00.1234567890Z", "x", "2026-02-30T10:00:00Z", "2026-04-31T10:00:00Z", "2026-02-29T10:00:00Z", "2026-00-10T10:00:00Z", "2026-09-29T24:00:00Z", "2026-09-29T10:00:60Z", "2026-09-29T10:60:00Z", "2026-09-29t10:00:00z", " 2026-09-29T10:00:00Z", "2026-09-29T10:00:00Z\n"]) {
-    await assert.rejects(store.bind({ ref: ref("update-time", key), value, provenance: producer(update) }), /invalid runtime reference bind/, value);
+    // The readback's own verdict (present), so only the grammar can refuse the value.
+    await assert.rejects(store.bind({ ref: ref("update-time", key), value, provenance: producer(update, "present") }), /invalid runtime reference bind/, value);
   }
   await store.bind({ ref: ref("update-time", key), value: "2028-02-29T23:59:59.123456789Z", provenance: producer(update, "present") });
   await store.bind({ ref: ref("update-time", key), value: "2026-09-29T10:00:00Z", provenance: producer(update, "present", 2) });
@@ -306,7 +307,7 @@ test("session URL and token values outside their grammar or from another produce
   const cleanup = manifest.rows.find((r) => r.family === "declared" && r.stage === "cleanup" && r.request.sessionUrlReference);
   const key = cleanup.request.sessionUrlReference.expectedObjectName;
   const start = manifest.rows.find((r) => r.programId === cleanup.programId && r.request.id === "start");
-  for (const value of ["", "not a url", "http://firebasestorage.googleapis.com/v0/b/b/o?upload_id=x", `${SESSION_URL(key)}#f`, `${SESSION_URL(key)}\r\nX: y`, `${SESSION_URL(key)} `, "https://evil.example/v0/b/b/o?upload_id=abcdefgh", "x".repeat(4100), 7]) {
+  for (const value of ["", "not a url", "http://firebasestorage.googleapis.com/v0/b/b/o?upload_id=x", `${SESSION_URL(key)}#f`, `${SESSION_URL(key)}\r\nX: y`, `${SESSION_URL(key)} `, "https://evil.example/v0/b/b/o?upload_id=abcdefgh", "x".repeat(4100), 7, SESSION_URL(key).replace("firebasestorage.googleapis.com", "evil.example"), SESSION_URL(key).replace("firebasestorage.googleapis.com", "firebasestorage.googleapis.com.evil.example")]) {
     await assert.rejects(store.bind({ ref: ref("session-url", key), value, provenance: producer(start, "accepted", 1, false) }), /invalid runtime reference bind/);
   }
   await assert.rejects(store.bind({ ref: ref("session-url", key), value: SESSION_URL(key), provenance: producer(manifest.rows.find((r) => r.request.headers["x-goog-upload-command"] === "start" && r.programId !== cleanup.programId), "accepted", 1, false) }), /invalid runtime reference bind/);
@@ -318,4 +319,50 @@ test("session URL and token values outside their grammar or from another produce
   }
   await store.bind({ ref: ref("download-token", tokenKey), value: "0a1b2c3d-1111-2222-3333-444455556666", provenance: producer(create, "accepted", 1, false) });
   assert.equal(store.resolve(token.request.query.token, token.id), "0a1b2c3d-1111-2222-3333-444455556666");
+});
+
+test("a session URL longer than 4096 characters is refused even when it fits the grammar", async () => {
+  const { buildRefTables, createRuntimeRefStore } = await load();
+  const tables = buildRefTables(manifest);
+  const cleanup = manifest.rows.find((r) => r.family === "declared" && r.stage === "cleanup" && r.request.sessionUrlReference);
+  const key = cleanup.request.sessionUrlReference.expectedObjectName;
+  const start = manifest.rows.find((r) => r.programId === cleanup.programId && r.request.id === "start");
+  const prefix = `https://firebasestorage.googleapis.com/v0/b/${"a".repeat(222)}/o?`;
+  const url = (length) => `${prefix}${"x".repeat(length - prefix.length)}`;
+  const bind = (value) => createRuntimeRefStore({ tables, runId: options.runId, digestSalt: salt, writeProof: async () => {} }).bind({ ref: ref("session-url", key), value, provenance: producer(start, "accepted", 1, false) });
+  await bind(url(4096));
+  await assert.rejects(bind(url(4097)), /invalid runtime reference bind/);
+  await assert.rejects(bind(url(prefix.length + 3900)), /invalid runtime reference bind/);
+});
+
+test("an update time's producer verdict follows the producer's method: a readback is present, a write is accepted", async () => {
+  const { buildRefTables } = await load();
+  const tables = buildRefTables(manifest);
+  const byId = new Map(manifest.rows.map((r) => [r.id, r]));
+  let readbacks = 0;
+  for (const [key, entries] of Object.entries(tables.producers["update-time"])) {
+    for (const entry of entries) {
+      const method = byId.get(entry.operationId).request.method;
+      assert.equal(entry.verdict, method === "GET" ? "present" : "accepted", `${key} ${entry.operationId}`);
+      if (method === "GET") readbacks++;
+    }
+  }
+  assert.ok(readbacks > 0);
+  const { store } = await fresh();
+  const { row, ref: r } = nativeConsumers().find(({ ref }) => ref.kind === "firestore-update-time" && ref.fromStep === "doc-read-false");
+  const pinned = producerOf(row, "doc-read-false");
+  assert.equal(pinned.request.method, "GET");
+  await assert.rejects(store.bind({ ref: ref("update-time", r.documentName), value: "2026-09-29T10:00:00Z", provenance: producer(pinned, "accepted") }), /invalid runtime reference bind/);
+  await store.bind({ ref: ref("update-time", r.documentName), value: "2026-09-29T10:00:00Z", provenance: producer(pinned, "present") });
+});
+
+test("a pinned generation or update time must come from an admin step", async () => {
+  const { buildRefTables } = await load();
+  for (const kind of ["firestore-update-time", "gcs-object-generation"]) {
+    const { row, ref: r } = nativeConsumers().find(({ ref }) => ref.kind === kind);
+    const pinned = producerOf(row, r.fromStep);
+    assert.equal(pinned.request.credential, "admin", kind);
+    const changed = { ...manifest, rows: manifest.rows.map((x) => (x.id === pinned.id ? { ...x, request: { ...x.request, credential: "user-a" } } : x)) };
+    assert.throws(() => buildRefTables(changed), /invalid reference tables/, kind);
+  }
 });

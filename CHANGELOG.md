@@ -8,6 +8,10 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ## [Unreleased]
 
+### Added
+
+- `auth.multiTenant` and `auth.tenants[]` in the canonical configuration (Fireemu-only): the default project's multi-tenancy switch and its tenants, so a run starts with them instead of creating them through the Admin API in every session. Each tenant is an Admin v2 `Tenant` document with its `tenantId` (production's `displayName-xxxxx` shape in both profiles), read by the code the Admin create route reads a document with, and created empty when the daemon starts and again by `POST /v1/sessions/{s}/reset`, which also returns the switch to the declared value. Under the strict profile declaring tenants needs `auth.multiTenant.allowTenants: true`, as production creates tenants only in a project that allows them; the emulator profile takes tenants without the switch. An `--import` is authoritative for a tenant of the same id.
+
 ### Changed
 
 - Emulator profile without signers: a custom token's tenant claim is checked only where the official emulator checks it: never on a JSON fake token (`{"uid": …}`), and on an unsigned JWT only in a tenant, where the claim must name that tenant. A JSON token now signs in to the tenant the request names whatever its claim, and a JWT with a tenant claim exchanged in the project signs in to the project; both were refused with `TENANT_ID_MISMATCH` before, which the official emulator never does. This fixes the JSON-token and tenant-claim known issue listed under 0.9.0. The strict profile, and the emulator profile with signers, keep production's rules.

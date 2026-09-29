@@ -157,8 +157,30 @@ fn cross_field_problems(cfg: &Value, root: &Path) -> Vec<String> {
     }
 
     problems.extend(app_check_problems(cfg));
+    problems.extend(auth_tenant_problems(cfg));
 
     problems
+}
+
+/// Declared tenants under the strict profile (the default): production creates tenants only in a
+/// project that allows them, so `auth.tenants` needs `auth.multiTenant.allowTenants: true`. The
+/// Rust loader enforces the same rule.
+fn auth_tenant_problems(cfg: &Value) -> Vec<String> {
+    let declared = cfg
+        .pointer("/auth/tenants")
+        .and_then(Value::as_array)
+        .is_some_and(|tenants| !tenants.is_empty());
+    let allowed = cfg
+        .pointer("/auth/multiTenant/allowTenants")
+        .and_then(Value::as_bool)
+        == Some(true);
+    if declared && !allowed && str_at(cfg, &["profile"]) != Some("emulator") {
+        return vec![
+            "auth.tenants needs auth.multiTenant.allowTenants: true under the strict profile"
+                .to_owned(),
+        ];
+    }
+    Vec::new()
 }
 
 /// App Check cross-field rules (spec `firebase-app-check.md` section 8) that JSON Schema

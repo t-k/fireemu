@@ -1,9 +1,10 @@
+import { DELEGATION_SUBJECTS, scanRevocations } from "./ledger-revocation.mjs";
 import { DRAFT_REQUEST_LIMITS } from "./request-counter.mjs";
 
 const PINS = ["packetSha256", "sourceCommit", "runnerSha256", "manifestSha256", "fixtureSchemaSha256"];
 const COORDINATOR = "Claude（委任。枠の内の承認し直し）";
 const DELEGATED_ENVELOPE_ACTOR = "Claude（委任。オーナーの裁量の委任 2026-09-28）";
-const DELEGATION_REFERENCE = "2026-09-28 調整役への委任（本番の送信）";
+const DELEGATION_REFERENCE = `2026-09-28 ${DELEGATION_SUBJECTS.send}`;
 export const DRAFT_STAGE3_APPROVAL_LIMITS = Object.freeze({
   projects: Object.freeze(["fireemu-oracle-idp", "fireemu-oracle-query"]),
   maxRequests: DRAFT_REQUEST_LIMITS.maxRequests * 2,
@@ -53,9 +54,9 @@ function ledgerRows(text, subject) {
   });
 }
 
-function hasOwnerDelegation(text) {
+function hasOwnerDelegation(text, delegationSubject) {
   const rows = text.split("\n").map((line) => line.split("|").map((column) => column.trim()))
-    .filter((columns) => columns[1] === "調整役への委任（本番の送信）");
+    .filter((columns) => columns[1] === delegationSubject);
   if (rows.length !== 1) return false;
   const columns = rows[0];
   if (columns.length !== 5 || columns[0] !== "- 2026-09-28" || !columns[3].startsWith("オーナー") || !columns[4]) return false;
@@ -92,6 +93,11 @@ export function validatePresendApproval(options) {
   ) throw new Error("clean APPROVE review required");
   if (PINS.some((key) => review[key] !== packet[key])) throw new Error("review pin mismatch");
   const subject = `${packet.taskId} ${packet.packetName}`;
+  const revocations = scanRevocations({
+    ledgerText, taskId: packet.taskId, subject, packetSha256: packet.packetSha256, sourceCommit: packet.sourceCommit,
+    envelopeId: review.envelopeId,
+  });
+  if (revocations.lane.length > 0) throw new Error("approval revoked");
   const rows = ledgerRows(ledgerText, subject);
   if (rows.some((row) => row.fields.decision === "REVOKED")) throw new Error("approval revoked");
   const decision = rows.findLast((row) => row.subject === subject && row.fields.decision);
@@ -103,6 +109,7 @@ export function validatePresendApproval(options) {
     if (review.envelopeId !== null || review.withinEnvelope !== false) throw new Error("direct review envelope mismatch");
     return Object.freeze({ status: "APPROVAL_BOUND_LOCAL_ONLY", sendAuthorized: false, decisionLine: decision.line, envelopeId: null });
   }
+  if (revocations.delegation.length > 0) throw new Error("delegated envelope authority required: delegation revoked");
   const envelopeId = decision.fields.envelopeId;
   const envelopes = rows.filter((row) => row.subject === `${subject} envelope` && row.fields.envelopeId === envelopeId);
   if (envelopes.length > 1) throw new Error("ambiguous owner envelope");
@@ -117,7 +124,7 @@ export function validatePresendApproval(options) {
     !Number.isFinite(Number(envelope.fields.reserveUsd)) || Number(envelope.fields.reserveUsd) <= 0
   ) throw new Error("invalid envelope bound");
   if (envelope.actor === DELEGATED_ENVELOPE_ACTOR) {
-    if (envelope.fields["根拠"] !== DELEGATION_REFERENCE || !hasOwnerDelegation(ledgerText)) throw new Error("delegated envelope authority required");
+    if (envelope.fields["根拠"] !== DELEGATION_REFERENCE || !Object.values(DELEGATION_SUBJECTS).every((delegationSubject) => hasOwnerDelegation(ledgerText, delegationSubject))) throw new Error("delegated envelope authority required");
     if (Number(envelope.fields.reserveUsd) > 10) throw new Error("delegated envelope exceeds US$10");
   }
   if (

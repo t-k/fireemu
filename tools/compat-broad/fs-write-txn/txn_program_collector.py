@@ -79,6 +79,7 @@ class Ledger:
         self.unknown_starts, self.unknown_rollbacks, self.unknown_commits = set(), set(), set()
         self._prior = {}
         self._probes = set()
+        self.tried = {role: set() for role in plan["documents"]}
 
     def snapshot(self):
         return {
@@ -151,6 +152,7 @@ class Ledger:
             for write in step["writes"] if step else []:
                 doc = self.docs[write["document"]]
                 self._prior[site][write["document"]] = copy.deepcopy(doc)
+                self.tried[write["document"]].add(write["state"])
                 if doc["status"] != "created":
                     doc["status"] = "possibly-owned"
                 if write["state"] not in doc["possible"]:
@@ -205,6 +207,8 @@ class Ledger:
             else:
                 self.unknown_commits.discard(site)
                 for role, prior in self._prior.pop(site, {}).items():
+                    # A refusal publishes nothing, so status and state return; the labels tried stay known in
+                    # `tried` (outside the recorded snapshot), so recovery can still delete a partly written document.
                     self.docs[role] = prior
             self._prior.pop(site, None)
         elif method == "DeleteDocument":
@@ -306,7 +310,7 @@ class Ledger:
         if site.startswith("cleanup/read/"):
             if code != 0:
                 raise ValueError("owned document is not readable for deletion")
-            doc["stamp"] = self._owned(role, result["response"], "grpc", set(doc["possible"]) | {doc["state"]})
+            doc["stamp"] = self._owned(role, result["response"], "grpc", set(doc["possible"]) | {doc["state"]} | self.tried[role])
         elif site.startswith("cleanup/verify/") and code == 5:
             doc["status"] = "confirmed-absent"
         elif site.startswith("cleanup/verify/"):

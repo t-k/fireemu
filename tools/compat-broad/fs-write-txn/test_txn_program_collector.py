@@ -23,13 +23,14 @@ class Clock:
 class Service:
     """A stand-in for Firestore over both transports; each knob is one production answer a table may allow."""
 
-    def __init__(self, clock, *, fail_code=9, writer_code=0, writer_applies=None, rollback_code=0, repeat_rollback_code=0, after_commit_rollback_code=10, fail_at=None, foreign_marker=False, duplicate_tokens=False, corrupt=None, existing=None, dead_on_failure=False, dead_rollback_code=10, finished_reads_refused=False):
+    def __init__(self, clock, *, fail_code=9, writer_code=0, writer_applies=None, rollback_code=0, repeat_rollback_code=0, after_commit_rollback_code=10, fail_at=None, foreign_marker=False, duplicate_tokens=False, corrupt=None, existing=None, dead_on_failure=False, dead_rollback_code=10, finished_reads_refused=False, locks=False, partial_publish=False):
         self.clock, self.fail_code, self.writer_code, self.rollback_code = clock, fail_code, writer_code, rollback_code
         self.writer_applies = writer_applies if writer_applies is not None else writer_code == 0
         self.repeat_rollback_code, self.after_commit_rollback_code = repeat_rollback_code, after_commit_rollback_code
         self.fail_at, self.foreign_marker, self.duplicate_tokens, self.corrupt = fail_at, foreign_marker, duplicate_tokens, corrupt
         self.dead_on_failure, self.dead_rollback_code = dead_on_failure, dead_rollback_code
         self.finished_reads_refused = finished_reads_refused
+        self.locks, self.partial_publish, self.locked = locks, partial_publish, {}
         self.calls, self.documents, self.tokens, self.version = [], {}, {}, 0
         if existing:
             self.documents[existing] = {"name": existing, "fields": {}, "version": self._bump()}
@@ -61,6 +62,8 @@ class Service:
             document = self.documents.get(request["name"])
             if document is None:
                 return self._receipt(transport, 5, details="not found")
+            if token and self.locks and self.tokens.get(token) == "open":
+                self.locked.setdefault(token, set()).add(request["name"])
             response = {**copy.deepcopy(document), "updateTime": self._stamp(transport, document["version"])}
             del response["version"]
             if self.foreign_marker and token: response["fields"]["owner"]["stringValue"] = "foreign"
@@ -113,6 +116,12 @@ class Service:
             return self._receipt(transport, 0, response={"writeResults": []} if transport == "grpc" else {"commitTime": self._stamp(transport)})
         writer = token is None and request["writes"][0]["currentDocument"]["exists"] is True
         failing = [w for w in writes if w["currentDocument"]["exists"] != (w["update"]["name"] in self.documents)]
+        held = {name for token_, names in self.locked.items() if self.tokens.get(token_) == "open" for name in names}
+        if writer and self.locks and held & {write["update"]["name"] for write in writes}:
+            self.clock.sleep(25)
+            if self.partial_publish:
+                self._apply([write for write in writes if write["update"]["name"] not in held], transport)
+            return self._receipt(transport, 10, details="Too much contention on these documents. Please try again.")
         if writer:
             self.clock.sleep(25 if self.writer_code == 10 else 0)
             if self.writer_code == 4:

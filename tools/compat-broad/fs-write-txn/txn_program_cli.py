@@ -29,7 +29,7 @@ from txn_sandbox_runtime import require_packet_runtime
 
 CLOSURE = ROOT / 'spec/compatibility/closure/FS-TRANSACTION.json'
 # Program name -> the module holding its TABLE; the registry is closed and bound by the runner manifest.
-TABLES = {'p01-lifecycle': 'fs_txn_table_p01', 'p08-failed-commit': 'fs_txn_table_p08'}
+TABLES = {'p01-lifecycle': 'fs_txn_table_p01', 'p06-multiwrite': 'fs_txn_table_p06', 'p08-failed-commit': 'fs_txn_table_p08'}
 FIELDS = {'schemaVersion', 'program', 'packetName', 'packetId', 'project', 'database', 'recordings', 'requestsPerRecording', 'estimatedUsdPerRecording', 'sourceCommit', 'runnerSha256', 'closureSha256', 'corpusDigest', 'planSourceDigest', 'baselineSha256', 'envelopeId', 'envelopePath', 'envelopeSha256', 'runtime', 'iamConfig', 'retries', 'onStop', 'observationSeconds', 'recoverySeconds', 'maxTokens', 'timing', 'timingSource', 'reserveUsd', 'maxUnresolvedTokens', 'releasePolicy', 'caps', 'cases', 'scope'}
 
 

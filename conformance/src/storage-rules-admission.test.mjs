@@ -132,6 +132,20 @@ test("a refusal is permanent even when the ledger looks valid again", async () =
   assert.equal(state.lockCalls, 1);
 });
 
+test("every check that reads the ledger is counted, and a check after a refusal reads nothing", async () => {
+  const createAdmission = await load();
+  const { options: opts, state } = admissionOptions();
+  const admission = createAdmission(opts);
+  assert.equal(admission.snapshot().checks, 0);
+  await admission.check();
+  await admission.check();
+  assert.deepEqual(admission.snapshot(), { refused: false, checks: 2 });
+  state.set(`${goodLedger}\n${revoked("STORAGE-RULES stage3-v1")}`);
+  await assert.rejects(() => admission.check(), /admission refused/);
+  await assert.rejects(() => admission.check(), /an earlier check refused/);
+  assert.deepEqual(admission.snapshot(), { refused: true, checks: 3 });
+});
+
 test("the packet and review are copied when the admission is created", async () => {
   const createAdmission = await load();
   const { options: opts } = admissionOptions();
@@ -159,7 +173,7 @@ const { publicKey: signingKey } = generateKeyPairSync("rsa", { modulusLength: 20
 const canned = (body) => ({ status: 200, rawHeaders: ["Cache-Control", "public, max-age=3600", "Age", "0"], bytes: Buffer.from(JSON.stringify(body)), startedAtMs: 1, finishedAtMs: 2 });
 const adc = { type: "authorized_user", client_id: "synthetic-client.apps.googleusercontent.com", client_secret: "synthetic-client-secret-00001", refresh_token: "synthetic-refresh-token-with/slash+00002" };
 
-async function harness(admissionOverrides = {}, { delegates = {} } = {}) {
+async function harness(admissionOverrides = {}, { delegates = {}, credentials = { fresh: () => true } } = {}) {
   const capture = memoryCapture();
   const simulator = createSimulator({ manifest, options: { invalidContent } });
   const transportCalls = { count: 0 };
@@ -188,7 +202,7 @@ async function harness(admissionOverrides = {}, { delegates = {} } = {}) {
   const controller = createController({
     manifest, schedule: buildSchedule(manifest), recoverySchedule: buildRecoverySchedule(manifest), gate, targets, refs, tables, objects, run, capture,
     delegates: { "preflight-cache": noop, "credential-cache": noop, "prepare-query": noop, "foreign-signup": noop, "foreign-cleanup": noop, "cleanup-query": noop, "recover-accounts": noop, ...delegates },
-    wait: async () => {}, credentials: { fresh: () => true }, judgePreflight: (row, outcome) => outcome.verdict !== "unexpected",
+    wait: async () => {}, credentials, judgePreflight: (row, outcome) => outcome.verdict !== "unexpected",
   });
   return { controller, gate, admission, transportCalls, started, hooks, state: created.state, simulator };
 }
@@ -316,3 +330,35 @@ test("a delegate that fails without an admission refusal stops the run as a fail
   assert.deepEqual([result.status, result.reason, result.detail.op], ["stopped", "delegate failed", "prepare-query"]);
 });
 
+
+test("a missing delegate stops the run as a missing delegate before it sends anything for that step", async () => {
+  const h = await harness({}, { delegates: { "credential-cache": undefined } });
+  const result = await h.controller.run();
+  assert.deepEqual([result.status, result.reason, result.detail], ["stopped", "delegate missing", { op: "credential-cache" }]);
+});
+
+test("a failed preflight cache delegate stops the run like any other delegate", async () => {
+  const h = await harness({}, { delegates: { "preflight-cache": async () => { throw new Error("boom"); } } });
+  const result = await h.controller.run();
+  assert.deepEqual([result.status, result.reason, result.detail.op, result.needsRecovery], ["stopped", "delegate failed", "preflight-cache", false]);
+  assert.equal(h.transportCalls.count, 0);
+  const missing = await harness({}, { delegates: { "preflight-cache": undefined } });
+  assert.deepEqual([(await missing.controller.run()).reason], ["delegate missing"]);
+});
+
+test("a credential refresh stopped by a revocation stops the run as an admission refusal, any other failure as a failed refresh", async () => {
+  let h;
+  const ensure = async () => {
+    if (h.gate.snapshot().mode !== "normal") return;
+    h.state.set(`${goodLedger}\n${revoked("STORAGE-RULES stage3-v1")}`);
+    await h.gate.delegated.counter.send("auth-shared/owner-token/1", async () => ({}));
+  };
+  h = await harness({}, { credentials: { fresh: () => true, ensure } });
+  const result = await h.controller.run();
+  assert.deepEqual([result.status, result.reason], ["stopped", "admission refused"], JSON.stringify(result));
+  assert.equal(typeof result.detail.rowId, "string");
+  assert.equal(h.gate.snapshot().admissionRefused, true);
+  const failed = await harness({}, { credentials: { fresh: () => true, ensure: async () => { if (failed.gate.snapshot().mode === "normal") throw new Error("token endpoint down"); } } });
+  const other = await failed.controller.run();
+  assert.deepEqual([other.status, other.reason, failed.gate.snapshot().admissionRefused], ["stopped", "credential refresh failed", false]);
+});

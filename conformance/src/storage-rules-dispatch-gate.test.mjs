@@ -210,6 +210,35 @@ test("the request must belong to the counter's current mode", async () => {
   assert.equal(events(h.trace, "transport").length, 1);
 });
 
+test("a preflight ID is sent only as a preflight and a preflight only for a preflight ID, refused before anything is written", async () => {
+  const h = await harness();
+  await h.gate.start({ runId: options.runId });
+  h.trace.length = 0;
+  await assert.rejects(h.gate.send(h.prepare(READ), preflightMeta), /request phase does not match the counter/);
+  assert.deepEqual(h.trace, []);
+  assert.equal(h.gate.snapshot().mode, "preflight");
+  for (const id of preflightIds) await h.gate.send(h.prepare(id), preflightMeta);
+  h.gate.admit();
+  h.trace.length = 0;
+  await assert.rejects(h.gate.send(h.prepare(preflightIds[0]), normalMeta), /request phase does not match the counter/);
+  assert.deepEqual(h.trace, []);
+  assert.equal(h.gate.snapshot().mode, "normal");
+});
+
+test("a request whose reservation lands in another phase than its intent is refused at the last step, so nothing is sent", async () => {
+  let hook = async () => {};
+  const h = await harness({ capture: { writeIntent: async (r) => { h.trace.push(["intent", r.operationId, r.phase]); await hook(); } } });
+  await h.admit();
+  // The counter moves to recovery while the normal request's intent is written: its reservation is then a recovery one.
+  hook = async () => { hook = async () => {}; h.gate.enterRecovery(); };
+  h.trace.length = 0;
+  await assert.rejects(h.gate.send(h.prepare(READ), normalMeta), /dispatch is not armed/);
+  assert.deepEqual(events(h.trace, "intent").map((entry) => entry.slice(1)), [[READ, "normal"]]);
+  assert.deepEqual(events(h.trace, "reserved").map((entry) => entry.slice(1)), [[READ, "recovery"]]);
+  assert.equal(events(h.trace, "transport").length, 0);
+  assert.match(events(h.trace, "note")[0][2], /^request not sent: dispatch is not armed/);
+});
+
 test("a transport failure leaves the outcome uncertain, notes it, moves to recovery and never repeats the request", async () => {
   let calls = 0; let armedFailure = false;
   const h = await harness({ transport: { send: async () => { calls++; if (armedFailure) { armedFailure = false; throw new Error(`socket closed for token=${BEARER}`); } return ok; } } });

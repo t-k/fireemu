@@ -203,3 +203,94 @@ test("a refused admission is visible in the gate's snapshot for the controller",
   await assert.rejects(() => cacheOf(ctx).refreshOwner(ownerPreflight));
   assert.equal(ctx.gate.snapshot().admissionRefused, true);
 });
+
+test("the delegated counter's snapshot is a frozen copy", async () => {
+  const ctx = await setup();
+  await ctx.gate.start({ runId: "delegated" });
+  const seen = ctx.gate.delegated.counter.snapshot();
+  assert.equal(Object.isFrozen(seen), true);
+  assert.notEqual(ctx.gate.delegated.counter.snapshot(), seen);
+});
+
+test("a delegated request with invalid arguments is refused before its admission, its intent and its reservation", async () => {
+  const ctx = await setup();
+  await ctx.gate.start({ runId: "delegated" });
+  ctx.trace.length = 0;
+  let ran = false;
+  const attempt = async () => { ran = true; return { sendAuthorized: false }; };
+  const calls = [
+    () => ctx.gate.delegated.counter.sendPreflight(7, attempt, () => true),
+    () => ctx.gate.delegated.counter.sendPreflight(ownerPreflight, { attempt }, () => true),
+    () => ctx.gate.delegated.counter.sendPreflight(ownerPreflight, attempt, null),
+    () => ctx.gate.delegated.counter.sendPreflight(ownerPreflight, attempt, "accept"),
+    () => ctx.gate.delegated.counter.send(null, attempt),
+    () => ctx.gate.delegated.counter.send("auth-shared/owner-token/1", undefined),
+  ];
+  for (const call of calls) await assert.rejects(call, /invalid delegated request/);
+  assert.deepEqual(ctx.trace, []);
+  assert.equal(ran, false);
+  // Nothing was counted or closed: the declared preflight still runs.
+  assert.equal(ctx.gate.snapshot().mode, "preflight");
+  await cacheOf(ctx).refreshOwner(ownerPreflight);
+  assert.equal(ctx.gate.snapshot().requests, 1);
+});
+
+test("a delegated send outside a request mode is refused before its intent", async () => {
+  const ctx = await setup();
+  let ran = false;
+  const attempt = async () => { ran = true; return {}; };
+  await assert.rejects(() => ctx.gate.delegated.counter.send("auth-shared/owner-token/1", attempt), /delegated request outside a request mode/);
+  assert.deepEqual(ctx.trace, ["admission"]);
+  const cache = cacheOf(ctx);
+  await ctx.gate.start({ runId: "delegated" });
+  await cache.refreshOwner(ownerPreflight);
+  await cache.fetchSigningKeys(keyPreflight);
+  ctx.gate.admit();
+  await ctx.gate.finish("finished");
+  ctx.trace.length = 0;
+  await assert.rejects(() => ctx.gate.delegated.counter.send("auth-shared/owner-token/1", attempt), /delegated request outside a request mode/);
+  assert.deepEqual(ctx.trace, ["admission"]);
+  assert.equal(ran, false);
+});
+
+test("the http budget ends with its attempt even when the attempt made no request", async () => {
+  const ctx = await setup();
+  await ctx.gate.start({ runId: "delegated" });
+  const spec = { url: "https://oauth2.googleapis.com/token", method: "POST", headers: {}, body: Buffer.alloc(0) };
+  await ctx.gate.delegated.counter.sendPreflight(ownerPreflight, async () => ({ sendAuthorized: false }), () => true);
+  await assert.rejects(() => ctx.gate.delegated.http(spec), /outside a delegated attempt/);
+  await assert.rejects(() => ctx.gate.delegated.counter.sendPreflight(keyPreflight, async () => { throw new Error("refused before its request"); }, () => true), /refused before its request/);
+  await assert.rejects(() => ctx.gate.delegated.http(spec), /outside a delegated attempt/);
+  assert.equal(ctx.trace.some((entry) => entry.startsWith("http:")), false);
+});
+
+test("a delegated attempt whose reservation lands in another phase than its intent never reaches the transport", async () => {
+  let hook = () => {};
+  const ctx = await setup({ capture: { writeIntent: async (r) => { ctx.trace.push(`intent:${r.operationId}:${r.phase}`); hook(); } } });
+  const cache = cacheOf(ctx);
+  await ctx.gate.start({ runId: "delegated" });
+  await cache.refreshOwner(ownerPreflight);
+  await cache.fetchSigningKeys(keyPreflight);
+  ctx.gate.admit();
+  // The counter moves to recovery while the normal request's intent is written: its reservation is then a recovery one.
+  hook = () => { hook = () => {}; ctx.gate.enterRecovery(); };
+  ctx.trace.length = 0;
+  let ran = false;
+  await assert.rejects(() => ctx.gate.delegated.counter.send("auth-shared/owner-token/1", async () => { ran = true; return ctx.gate.delegated.http({ url: "https://oauth2.googleapis.com/token", method: "POST", headers: {}, body: Buffer.alloc(0) }); }), /dispatch is not armed/);
+  assert.deepEqual(ctx.trace, ["admission", "intent:auth-shared/owner-token/1:normal", "reserved:auth-shared/owner-token/1"]);
+  assert.equal(ran, false);
+});
+
+test("an admission that answers anything but admitted is recorded as a refusal", async () => {
+  for (const answer of [undefined, null, {}, { admitted: false }, { admitted: "true" }]) {
+    let calls = 0;
+    const ctx = await setup({ admission: { check: async () => (++calls > 1 ? answer : { admitted: true }) } });
+    await ctx.gate.start({ runId: "delegated" });
+    assert.equal(ctx.gate.snapshot().admissionRefused, false);
+    await assert.rejects(() => ctx.gate.delegated.counter.sendPreflight(ownerPreflight, async () => ({}), () => true), /admission refused/);
+    assert.equal(ctx.gate.snapshot().admissionRefused, true, JSON.stringify(answer));
+  }
+  const refused = await setup({ admission: { check: async () => ({ admitted: false }) } });
+  await assert.rejects(() => refused.gate.start({ runId: "delegated" }), /admission refused/);
+  assert.equal(refused.gate.snapshot().admissionRefused, true);
+});

@@ -79,6 +79,14 @@ jobs:
           echo "version=${version}" >> "$GITHUB_OUTPUT"
           echo "publish=${publish}" >> "$GITHUB_OUTPUT"
           echo "releasing ${version} (publish: ${publish})"
+      # The GitHub Release is written from this section after npm has the packages, so a missing
+      # or empty section is refused here, before anything is built or published, rather than
+      # leaving a published version without notes.
+      - name: the CHANGELOG has a section for this version
+        if: steps.version.outputs.publish == 'true'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: node npm/scripts/changelog-section.mjs "$VERSION" --out "$RUNNER_TEMP/release-notes.md"
 
   # The Emulator UI is built once and reused by every platform, so every binary in a release
   # embeds byte-identical assets.
@@ -501,3 +509,34 @@ jobs:
           name: dry-run-archives
           path: dist/*
           if-no-files-found: error
+
+  # The Release page for the tag: its notes are the CHANGELOG section for the version. It runs
+  # only after npm has every package, in a job of its own so that the one job with write access
+  # to releases runs no build or test code and reads no secret. `--verify-tag` refuses to create
+  # a tag from the default branch, so the Release can only describe a tag that was pushed. The
+  # archives and checksums are not attached here.
+  github-release:
+    needs: [plan, publish]
+    if: needs.plan.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 24
+      - name: create the GitHub Release from the CHANGELOG section
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.plan.outputs.version }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          node npm/scripts/changelog-section.mjs "$VERSION" --out "$RUNNER_TEMP/release-notes.md"
+          flags=""
+          case "$VERSION" in *-*) flags="--prerelease" ;; esac
+          # shellcheck disable=SC2086 # $flags is empty or one fixed flag
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --verify-tag --title "fireemu ${VERSION}" \
+            --notes-file "$RUNNER_TEMP/release-notes.md" $flags

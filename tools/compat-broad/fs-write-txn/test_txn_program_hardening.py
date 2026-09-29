@@ -397,3 +397,17 @@ def test_a_backwards_monotonic_clock_is_refused_directly():
     collector.monotonic = lambda: float("nan")
     with pytest.raises(ValueError, match="clock"):
         collector._now()
+
+
+def test_an_answer_whose_clocks_are_refused_is_still_kept_in_the_rows():
+    collector, service, *_ = fixture()
+    ticks = {"n": 0}
+    original = collector.utc
+    def utc():
+        ticks["n"] += 1
+        # the response stamp of the fourth request steps back a full second against its monotonic elapsed time
+        return "2026-09-29T00:00:00.000Z" if ticks["n"] == 8 else original()
+    collector.utc = utc
+    receipt_ = collector.run()
+    assert receipt_["complete"] is False and receipt_["failureType"] == "ValueError"
+    assert [row["site"] for row in receipt_["steps"]][:4] == ["setup/absence-a", "setup/absence-m", "setup/create-a", "r/begin"], "the refused answer's row is present"

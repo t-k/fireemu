@@ -327,13 +327,14 @@ class Collector:
         timing = {"dispatchMonotonic": self._now(), "dispatchUtc": self.utc()}
         result = self.wire.send(transport, method, request, nonce=self.plan["nonce"], owner_id=self.plan["ownerId"], bearer=self.bearer, deadline_ms=int(wanted * 1000))
         timing.update(responseMonotonic=self._now(), responseUtc=self.utc())
-        check_timing(timing)
-        if self.last_timing is not None:
-            check_order(self.last_timing, timing)
-        self.last_timing = copy.deepcopy(timing)
         row = {"sequence": len(self.rows) + len(self.cleanup_rows), "phase": phase, "timing": timing, "site": site, "transport": transport, "rpc": method, "caseId": step["caseId"] if step else None, "request": copy.deepcopy(request), "result": copy.deepcopy(result)}
         (self.rows if phase == "observation" else self.cleanup_rows).append(row)
         try:
+            # The answer is kept in the rows even when its clocks are refused.
+            check_timing(timing)
+            if self.last_timing is not None:
+                check_order(self.last_timing, timing)
+            self.last_timing = copy.deepcopy(timing)
             self.ledger.after(site, transport, method, request, step, result, timing)
         except (Exception, KeyboardInterrupt):
             self._persist()
@@ -352,7 +353,7 @@ class Collector:
             for role in self.ledger.pending_release(step):
                 site = f"cleanup/token/{role}"
                 self._rpc(site, self.ledger.tokens[role]["transport"], "Rollback", self.ledger.release_request(role), "tokenCleanup")
-                if self.ledger.tokens[role]["state"] != "rolled-back":
+                if self.ledger.tokens[role]["state"] not in ("rolled-back", "released-refused"):
                     raise ValueError("chain release is unconfirmed; next chain forbidden")
         return cursor.complete
 
@@ -473,7 +474,7 @@ def projection(receipt, table):
                 raise ValueError("per-chain release proof differs")
             ledger.before(site, transport, method, request, None)
             ledger.after(site, transport, method, request, None, result, row["timing"])
-            if ledger.tokens[owed[0]]["state"] != "rolled-back":
+            if ledger.tokens[owed[0]]["state"] not in ("rolled-back", "released-refused"):
                 raise ValueError("chain release is unconfirmed")
             owed.pop(0)
             releases += 1

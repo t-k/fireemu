@@ -232,10 +232,20 @@ def test_a_chain_that_ends_with_its_token_open_releases_it_before_the_next_chain
 
 def test_a_chain_release_that_is_refused_forbids_the_next_chain():
     table = without(support.TABLE, "r/rollback", "r/rollback-again", "g/rollback", "g/rollback-again")
-    collector, service, _budget, _journal, _clock, _plan = fixture(table, rollback_code=10)
+    collector, service, _budget, _journal, _clock, _plan = fixture(table, rollback_code=5)
     receipt = collector.run()
     assert receipt["complete"] is False
     assert not any(call[0] == "grpc" and call[1] == "BeginTransaction" for call in service.calls)
+
+
+def test_a_chain_release_answered_with_the_gone_text_finishes_the_token_and_the_chain_goes_on():
+    table = without(support.TABLE, "r/rollback", "r/rollback-again", "g/rollback", "g/rollback-again")
+    collector, service, _budget, _journal, _clock, _plan = fixture(table, rollback_code=10)
+    receipt = collector.run()
+    assert receipt["complete"] is True and receipt["unrecovered"] is False
+    assert {entry["state"] for entry in receipt["tokens"].values()} == {"released-refused"}
+    assert any(call[0] == "grpc" and call[1] == "BeginTransaction" for call in service.calls)
+    collector_module.projection(receipt, table)
 
 
 def test_a_finished_token_probe_never_changes_the_token():

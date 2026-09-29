@@ -373,6 +373,12 @@ fn what_names_no_servable_tenant_creates_nothing() {
             json!({}),
         ),
         (
+            "unknown route with a body tenant",
+            format!("{V1}/nothing-here?key={KEY}"),
+            "POST",
+            json!({"tenantId": "four"}),
+        ),
+        (
             "slash",
             format!("{V1}/accounts:lookup?key={KEY}"),
             "POST",
@@ -381,7 +387,7 @@ fn what_names_no_servable_tenant_creates_nothing() {
     ];
     for (case, path, method, body) in attempts {
         let _ = handle_with(&state, method, &path, &owner(), &body);
-        for tenant in ["one", "two", "three", "a/b"] {
+        for tenant in ["one", "two", "three", "four", "a/b"] {
             assert!(
                 registry.tenant_store("demo-app", tenant).is_none(),
                 "{case}: {tenant}"
@@ -488,4 +494,56 @@ fn the_tenant_is_made_in_the_project_the_request_names() {
     assert!(registry.tenant_store("demo-app", "only-here").is_none());
     assert_eq!(tenant_names(&state, "demo-second"), ["only-here"]);
     assert_eq!(tenant_names(&state, "demo-app"), Vec::<String>::new());
+}
+
+/// An empty `tenantId` is no tenant to the official emulator (JavaScript falsiness): a path
+/// tenant beside it is the target, and is made.
+#[test]
+fn an_empty_body_tenant_leaves_the_path_tenant_as_the_target() {
+    let (state, registry) = emulator();
+    // (The answer to the request itself is a separate matter: the account API still reads a path
+    // tenant beside an empty body tenant as a mismatch.)
+    let _ = admin(
+        &state,
+        "POST",
+        &format!("{V1}/projects/demo-app/tenants/t-empty/accounts"),
+        &json!({"tenantId": "", "email": "a@example.com", "password": "hunter22"}),
+    );
+    assert!(registry.tenant_store("demo-app", "t-empty").is_some());
+}
+
+/// The tenant made on the way holds the official default multi-factor config in its own store, and
+/// shows it as written; a tenant made by a create request does not get it.
+#[test]
+fn the_tenant_made_on_the_way_carries_the_default_mfa_config_in_its_store() {
+    use fireemu_core_auth::mfa_config::MfaConfigState;
+    let (state, registry) = emulator();
+    let (status, _) = admin(
+        &state,
+        "GET",
+        &format!("{V2}/projects/demo-app/tenants/on-the-way"),
+        &json!({}),
+    );
+    assert_eq!(status, 200);
+    let store = registry.tenant_store("demo-app", "on-the-way").unwrap();
+    let config = store.lock().unwrap().mfa_config().clone();
+    assert_eq!(config.state, MfaConfigState::Enabled);
+    assert!(config.phone_sms);
+    assert!(!config.totp_enabled());
+    let (status, created) = admin(
+        &state,
+        "POST",
+        &format!("{V2}/projects/demo-app/tenants"),
+        &json!({"displayName": "explicit"}),
+    );
+    assert_eq!(status, 200, "{created}");
+    assert!(created.get("mfaConfig").is_none(), "{created}");
+    let id = created["name"]
+        .as_str()
+        .unwrap()
+        .rsplit('/')
+        .next()
+        .unwrap();
+    let store = registry.tenant_store("demo-app", id).unwrap();
+    assert_eq!(*store.lock().unwrap().mfa_config(), Default::default());
 }

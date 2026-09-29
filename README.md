@@ -65,6 +65,29 @@ See the [configuration schema](spec/config/fireemu.schema.json) for the complete
 
 The canonical file can configure the local Auth settings used by the selected project. `auth.passwordPolicy` and `auth.passwordPolicyOverrides` define password strength and sign-in enforcement; `auth.signIn.allowDuplicateEmails`, `auth.client.permissions`, and `auth.improvedEmailPrivacy` control account ownership, end-user account creation/deletion, and email privacy. `auth.signIn.email`, `auth.signIn.anonymous` and `auth.signIn.phoneNumber` (with its test numbers) set the sign-in providers, which otherwise all start enabled. `auth.configOverrides` scopes the latter settings to an existing project or tenant without creating that namespace. `auth.blockingFunctions` selects owned local beforeCreate/beforeSignIn functions and bounds inbound credential forwarding. `auth.quota` stores a production-shaped temporary quota, while `auth.quotaSimulation` enables the deterministic local fixed-window model. Values are validated before startup, and project/tenant management routes expose the effective settings without changing the file. These local settings and simulations are separate from production compatibility evidence; the compatibility ledger records which conditions have been compared with Firebase.
 
+### Enabling multi-factor authentication at start
+
+Under the strict profile TOTP is on only through the project's multi-factor configuration, as in production, so `auth.totp` alone enables nothing there. `auth.mfa` is that configuration, in the shape Identity Platform uses (`state`, `enabledProviders`, `providerConfigs` with `totpProviderConfig.adjacentIntervals`), so it does not have to be written through the Admin API in every session:
+
+```json
+{
+  "schemaVersion": 1,
+  "profile": "strict",
+  "auth": {
+    "mfa": {
+      "state": "ENABLED",
+      "providerConfigs": [{ "state": "ENABLED", "totpProviderConfig": { "adjacentIntervals": 1 } }]
+    }
+  }
+}
+```
+
+- It is the project's configuration when the daemon starts, in both profiles, and the configuration of every project the daemon creates later (not the default project's live value). It is validated as the Admin API validates an update of `mfa`, and a value production would refuse stops the daemon before it starts.
+- The runtime is unchanged. The Admin API's config update still replaces the configuration, and disabling it refuses TOTP as production does.
+- `POST /v1/sessions/{s}/reset` returns the project to the declared configuration. Without `auth.mfa` a reset leaves an Admin-set configuration alone, as it does the rest of the project configuration, and `DELETE /emulator/v1/projects/{p}/accounts` clears accounts only in both cases. Export and import carry accounts and their factors, not the project configuration, so the importing daemon's own `auth.mfa` applies.
+- The emulator profile keeps `auth.totp` working as before. Strict with `auth.totp` and no `auth.mfa` enabling TOTP prints a start-up warning naming `auth.mfa`.
+
+
 ## Installation
 
 Install Fireemu as a development dependency:

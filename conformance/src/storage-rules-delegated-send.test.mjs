@@ -364,3 +364,38 @@ test("a target digest that cannot be journalled stops the request before it is s
   await assert.rejects(() => cache.refreshOwner("auth-shared/owner-token/1"), /credential cache request failed/);
   assert.equal(sends.length, before);
 });
+
+test("a delegated request the transport refuses is not sent and not journalled", async () => {
+  let refuse = false;
+  const sends = [];
+  const notes = [];
+  const ctx = await setup({ capture: { writeNote: async (r) => { notes.push(r.text); } }, transport: { validate: () => { if (refuse) throw new Error("invalid HTTP transport input"); }, send: async (spec) => { sends.push(spec.url); return spec.url === certUrl ? raw({ synthetic: pem }) : raw({ access_token: token, token_type: "Bearer", expires_in: 3600 }); } } });
+  const cache = await admitted(ctx);
+  const before = [sends.length, notes.filter((text) => /delegated target/.test(text)).length];
+  refuse = true;
+  await assert.rejects(() => cache.refreshOwner("auth-shared/owner-token/1"), /credential cache request failed/);
+  assert.deepEqual([sends.length, notes.filter((text) => /delegated target/.test(text)).length], before);
+});
+
+test("the journalled digest is exactly the SHA-256 of the request's operation, method, URL, sorted headers and body digest", async () => {
+  const { createHash } = await import("node:crypto");
+  const notes = [];
+  const sent = [];
+  const ctx = await setup({ capture: { writeNote: async (r) => { notes.push(r); } }, transport: { send: async (spec) => { sent.push(spec); return spec.url === certUrl ? raw({ synthetic: pem }) : raw({ access_token: token, token_type: "Bearer", expires_in: 3600 }); } } });
+  const cache = await admitted(ctx);
+  notes.length = 0;
+  sent.length = 0;
+  await cache.refreshOwner("auth-shared/owner-token/1");
+  await cache.fetchSigningKeys("auth-shared/signing-keys/1");
+  const targets = notes.filter((note) => /delegated target/.test(note.text));
+  assert.equal(targets.length, 2);
+  sent.forEach((spec, index) => {
+    const expected = createHash("sha256").update(JSON.stringify({ operationId: targets[index].operationId, method: spec.method, url: spec.url, headers: Object.entries(spec.headers).sort(([a], [b]) => (a < b ? -1 : 1)), body: spec.body === null ? null : createHash("sha256").update(spec.body).digest("hex") })).digest("hex");
+    assert.equal(targets[index].text, `delegated target ${expected}`, spec.url);
+  });
+  assert.deepEqual(targets.map((note) => note.operationId), ["auth-shared/owner-token/1", "auth-shared/signing-keys/1"]);
+  // A header-less GET and a form-encoded POST have different shapes, so both branches of the digest are covered.
+  assert.equal(sent[0].method, "POST");
+  assert.equal(sent[1].method, "GET");
+  assert.ok(Object.keys(sent[0].headers).length >= 2);
+});

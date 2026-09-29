@@ -87,3 +87,26 @@ test("send carries the new preflight routes through the same single attempt", as
   await assert.rejects(t.send(spec("https://www.googleapis.com/oauth2/v2/userinfo?x=1")), /invalid HTTP transport input/);
   assert.equal(calls.length, 1);
 });
+
+test("an exact route is bound to its own origin, not only to its path", () => {
+  const t = transport();
+  const q = options.queryProjectNumber;
+  const key = options.queryApiKeyId;
+  for (const s of [
+    spec("https://example.com/oauth2/v2/userinfo"),
+    spec(`https://apikeys.googleapis.com/v3/projects/${q}`), spec(`https://www.googleapis.com/v3/projects/${q}`), spec(`https://iam.googleapis.com/v3/projects/${q}:getIamPolicy`, "POST", Buffer.from("{}")),
+    spec(`https://cloudresourcemanager.googleapis.com/v2/projects/${q}/locations/global/keys/${key}`), spec(`https://www.googleapis.com/v2/projects/${q}/locations/global/keys/${key}/keyString`),
+    spec("https://cloudresourcemanager.googleapis.com/oauth2/v2/userinfo"),
+  ]) assert.throws(() => t.validate(s), /invalid HTTP transport input/, `${s.method} ${s.url}`);
+});
+
+test("a refusal of the transport's input is marked as not sent, and only that refusal", async () => {
+  const t = transport();
+  for (const s of [spec("https://example.com/"), spec("https://www.googleapis.com/oauth2/v2/userinfo?x=1")]) {
+    assert.throws(() => t.validate(s), (error) => error.notSent === true && error.message === "invalid HTTP transport input");
+    await assert.rejects(t.send(s), (error) => error.notSent === true && error.message === "invalid HTTP transport input");
+  }
+  // A failure once the request was made is not a "not sent".
+  const failing = createSingleAttemptHttpsTransport({ requestImpl: () => { const listeners = {}; return { destroy() {}, on(name, fn) { listeners[name] = fn; }, once(name, fn) { listeners[name] = fn; }, end() { queueMicrotask(() => listeners.error?.(new Error("connection reset"))); } }; } });
+  await assert.rejects(failing.send(spec("https://www.googleapis.com/oauth2/v2/userinfo")), (error) => error.notSent !== true);
+});

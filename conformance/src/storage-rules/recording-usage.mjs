@@ -11,12 +11,13 @@ const MAX_BYTES = 64 * 1024;
 const refused = () => new Error("recording usage refused");
 
 export function createRecordingUsage(options) {
-  const keys = ["path", "packetSha256"];
-  const uidGiven = options !== null && typeof options === "object" && Object.hasOwn(options, "uid");
-  if (options === null || typeof options !== "object" || Object.getPrototypeOf(options) !== Object.prototype || Reflect.ownKeys(options).length !== keys.length + (uidGiven ? 1 : 0) || !keys.every((key) => Object.hasOwn(options, key))) throw new Error("invalid recording usage options");
+  const plainOptions = options !== null && typeof options === "object" && Object.getPrototypeOf(options) === Object.prototype;
+  const known = ["path", "packetSha256", "uid", "io"];
+  if (!plainOptions || Reflect.ownKeys(options).some((key) => !known.includes(key)) || !["path", "packetSha256"].every((key) => Object.hasOwn(options, key))) throw new Error("invalid recording usage options");
   const { path, packetSha256 } = options;
-  const uid = uidGiven ? options.uid : process.getuid();
-  if (typeof path !== "string" || !isAbsolute(path) || path.includes("\0") || !PACKET.test(packetSha256) || !Number.isInteger(uid)) throw new Error("invalid recording usage options");
+  const uid = Object.hasOwn(options, "uid") ? options.uid : process.getuid();
+  const io = Object.hasOwn(options, "io") ? options.io : { open };
+  if (typeof path !== "string" || !isAbsolute(path) || path.includes("\0") || !PACKET.test(packetSha256) || !Number.isInteger(uid) || io === null || typeof io !== "object" || Reflect.ownKeys(io).length !== 1 || typeof io.open !== "function") throw new Error("invalid recording usage options");
 
   async function guarded(handle) {
     const stat = await handle.stat();
@@ -26,7 +27,7 @@ export function createRecordingUsage(options) {
 
   async function read() {
     let handle;
-    try { handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW); } catch (error) { if (error?.code === "ENOENT") return []; throw refused(); }
+    try { handle = await io.open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK); } catch (error) { if (error?.code === "ENOENT") return []; throw refused(); }
     try {
       await guarded(handle);
       const text = new TextDecoder("utf-8", { fatal: true }).decode(await handle.readFile());
@@ -54,7 +55,7 @@ export function createRecordingUsage(options) {
       if (typeof runId !== "string" || !RUN_ID.test(runId)) throw refused();
       if ((await read()).includes(runId)) throw refused();
       let handle;
-      try { handle = await open(path, constants.O_WRONLY | constants.O_APPEND | constants.O_CREAT | constants.O_NOFOLLOW, 0o600); } catch { throw refused(); }
+      try { handle = await io.open(path, constants.O_WRONLY | constants.O_APPEND | constants.O_CREAT | constants.O_NOFOLLOW | constants.O_NONBLOCK, 0o600); } catch { throw refused(); }
       try {
         await guarded(handle);
         await handle.writeFile(`${JSON.stringify({ packetSha256, runId })}\n`);

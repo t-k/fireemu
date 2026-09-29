@@ -550,3 +550,37 @@ test("a numeric project path must carry the project number of the project the re
   const base = row("preflight/query/project");
   rejects(b, { ...base, request: { ...base.request, project: "fireemu-oracle-idp" } }, "query number billed to idp");
 });
+
+test("only a ruleset-name reference is a release body reference, and no other body may carry a reference", async () => {
+  const b = await builder();
+  const create = row("release/v1/publish");
+  const owned = `projects/fireemu-oracle-query/releases/firebase.storage/${binding.bucket}`;
+  const ref = create.request.body.json.rulesetName;
+  const withBody = (base, json) => ({ ...base, request: { ...base.request, body: { json } } });
+  // A look-alike that is not a runtime reference would be sent as a literal object.
+  rejects(b, withBody(create, { name: owned, rulesetName: { kind: "other", type: "ruleset-name", key: "v1", resolveOnlyAfterDurableProof: true } }), "look-alike kind");
+  rejects(b, withBody(create, { name: owned, rulesetName: { ...ref, resolveOnlyAfterDurableProof: false } }), "unproven reference");
+  rejects(b, withBody(create, { name: owned, rulesetName: { ...ref, extra: 1 } }), "extra reference field");
+  // Another body carrying a reference of a kind the body position does not allow is refused whatever the row is.
+  const test = manifest.rows.find((r) => r.family === "compile" && r.stage === "test");
+  const source = test.request.body.json.source;
+  for (const type of ["generation", "metageneration", "update-time", "page-token", "session-url", "download-token", "ruleset-path"]) {
+    rejects(b, withBody(test, { source, extra: { kind: "runtime-reference", type, key: "k", resolveOnlyAfterDurableProof: true } }), `${type} in a test body`);
+  }
+  assert.doesNotThrow(() => b.prepare(withBody(test, { source, extra: { ...ref, key: "v1" } }), resolver()));
+});
+
+test("a preflight row with no billed project defaults to the query project, for its numeric path and its key path", async () => {
+  const b = await builder();
+  for (const id of ["preflight/query/project", "preflight/query/key-metadata", "preflight/query/key-string", "preflight/query/permissions", "preflight/query/iam"]) {
+    const base = row(id);
+    const { project, ...rest } = base.request;
+    assert.doesNotThrow(() => b.prepare({ ...base, request: rest }, resolver()), id);
+    assert.equal(b.prepare({ ...base, request: rest }, resolver()).project, "fireemu-oracle-query");
+  }
+  for (const id of ["preflight/idp/project", "preflight/idp/key-metadata", "preflight/idp/key-string", "preflight/idp/permissions"]) {
+    const base = row(id);
+    const { project, ...rest } = base.request;
+    rejects(b, { ...base, request: rest }, `${id} without its project falls to the query project and its own number no longer fits`);
+  }
+});

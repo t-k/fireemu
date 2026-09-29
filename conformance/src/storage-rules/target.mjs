@@ -15,9 +15,8 @@ const MAX_BODY_BYTES = 256 * 1024;
 const CREDENTIALS = new Set(["admin", "user-a", "user-b", "user-plain", "anonymous", "revoked-token", "foreign-project-token", "malformed-token", "malformed-oauth", "api-key-only", "owner-oauth", "adc-refresh"]);
 const QUERY_REFS = new Set(["generation", "metageneration", "update-time", "page-token", "download-token"]);
 const BODY_REFS = new Set(["ruleset-name"]);
-// A row may carry only the headers the reviewed manifest uses; credentials and the quota project are added later, by the gate.
+// A row may carry only the headers the reviewed manifest uses (a lower-case exact match); credentials and the quota project are added later, by the gate.
 const ROW_HEADERS = new Set(["content-type", "x-goog-upload-protocol", "x-goog-upload-command", "x-goog-upload-offset"]);
-const FORBIDDEN_HEADERS = new Set(["authorization", "cookie", "host", "connection", "content-length", "transfer-encoding", "proxy-authorization", "proxy-connection", "upgrade", "expect", "accept-encoding", "x-goog-user-project"]);
 const escape = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const bad = () => { throw new Error("invalid target row"); };
 const sha256 = (value) => createHash("sha256").update(value).digest("hex");
@@ -158,7 +157,7 @@ export function createTargetBuilder(options) {
     if (matches.length !== 1 || !matches[0].route.check(matches[0].match, query, request, request.method)) bad();
     const headers = {};
     for (const [name, value] of Object.entries(request.headers ?? {})) {
-      if (!/^[a-z0-9-]{1,64}$/.test(name) || !ROW_HEADERS.has(name) || FORBIDDEN_HEADERS.has(name) || typeof value !== "string" || !/^[\x20-\x7e]{0,1024}$/.test(value)) bad();
+      if (!ROW_HEADERS.has(name) || typeof value !== "string" || !/^[\x20-\x7e]{0,1024}$/.test(value)) bad();
       headers[name] = value;
     }
     let body = null;

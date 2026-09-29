@@ -132,6 +132,13 @@ test("an input refusal by the transport itself is reported as not sent, never as
   await assert.rejects(harness({ transport: { send: async () => { throw new Error("connection reset"); } } }).then((x) => x.admit()), /request outcome uncertain/);
 });
 
+test("only a strict notSent marker turns a transport failure into not sent", async () => {
+  for (const marker of [1, "yes", {}, "true"]) {
+    const error = Object.assign(new Error("odd failure"), { notSent: marker });
+    await assert.rejects(harness({ transport: { send: async () => { throw error; } } }).then((x) => x.admit()), /request outcome uncertain/, JSON.stringify(marker));
+  }
+});
+
 test("credential headers are closed to the two allowed names and printable values, and a refusal sends nothing", async () => {
   for (const headers of [{ cookie: "a=b" }, { authorization: "x\r\nX: y" }, { authorization: 7 }, { authorization: "" }, { "x-other": "1" }, null, []]) {
     const h = await harness({ credentials: { headersFor: () => headers } });
@@ -166,6 +173,19 @@ test("the run's start goes through the admission's begin, and every later reques
   const silent = await harness({ admission: { begin: async () => undefined, check: async () => ({ admitted: true }) } });
   await assert.rejects(silent.gate.start({ runId: options.runId }), /admission refused/);
   assert.equal(silent.gate.snapshot().admissionRefused, true);
+});
+
+test("at send time only an explicit admitted answer lets a request go", async () => {
+  for (const answer of [null, {}, { admitted: false }, { admitted: "yes" }, { admitted: 1 }, "admitted", 1]) {
+    let deny = false;
+    const h = await harness({ admission: { check: async () => (deny ? answer : { admitted: true }) } });
+    await h.admit();
+    deny = true;
+    h.trace.length = 0;
+    await assert.rejects(h.gate.send(h.prepare(READ), normalMeta), /admission refused/, JSON.stringify(answer));
+    assert.equal(h.gate.snapshot().admissionRefused, true);
+    assert.deepEqual(h.trace.filter((entry) => ["intent", "reserved", "transport"].includes(entry[0])), []);
+  }
 });
 
 test("a refused admission stops a request before its intent, its reservation and its send", async () => {

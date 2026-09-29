@@ -176,8 +176,9 @@ test("begin checks the approval, then marks the run started exactly once, and th
   assert.equal(state.marks, 1);
   assert.equal(state.lockCalls, 1);
   assert.deepEqual(admission.snapshot(), { refused: false, checks: 1, begun: true });
-  await assert.rejects(() => admission.begin(), /admission refused/);
+  await assert.rejects(() => admission.begin(), /admission refused: already begun/);
   assert.equal(state.marks, 1);
+  assert.equal(admission.snapshot().refused, true);
 });
 
 test("a third recording under one approval is refused before any marker is written, permanently", async () => {
@@ -206,18 +207,22 @@ test("begin refuses without touching the usage record when the approval is not l
   noLock.state.lockResult = false;
   await assert.rejects(() => createAdmission(noLock.options).begin(), /admission refused/);
   assert.equal(noLock.state.marks, 0);
+  // Each fake behaves well after the marker is written, so only the check under test can refuse.
+  const afterMark = (before, after) => { let marked = false; return { startedRunIds: async () => (marked ? after : before), markStarted: async () => { marked = true; } }; };
   const cases = {
-    "read fails": { startedRunIds: async () => { throw new Error("EIO"); }, markStarted: async () => {} },
-    "read is not an array": { startedRunIds: async () => "run", markStarted: async () => {} },
-    "read holds a non-string": { startedRunIds: async () => [1], markStarted: async () => {} },
-    "read holds a duplicate": { startedRunIds: async () => ["a", "a"], markStarted: async () => {} },
-    "mark fails": { startedRunIds: async () => [], markStarted: async () => { throw new Error("EIO"); } },
-    "mark is not durable": { startedRunIds: async () => [], markStarted: async () => {} },
+    "read fails": [{ startedRunIds: async () => { throw new Error("EIO"); }, markStarted: async () => {} }, /recording usage unreadable/],
+    "read fails once": [(() => { let calls = 0; return { startedRunIds: async () => { if (++calls === 1) throw new Error("EIO"); return ["run-one"]; }, markStarted: async () => {} }; })(), /recording usage unreadable/],
+    "read is not an array": [afterMark("xrun-onex", ["run-one"]), /recording usage is malformed/],
+    "read holds a non-string": [afterMark([1], [1, "run-one"]), /recording usage is malformed/],
+    "read holds a duplicate": [afterMark(["a", "a"], ["a", "a", "run-one"]), /recording usage is malformed/],
+    "read after the mark is malformed": [afterMark([], ["run-one", "run-one"]), /recording usage is malformed/],
+    "mark fails": [{ startedRunIds: async () => [], markStarted: async () => { throw new Error("EIO"); } }, /run could not be marked started/],
+    "mark is not durable": [{ startedRunIds: async () => [], markStarted: async () => {} }, /run marker is not durable/],
   };
-  for (const [name, usage] of Object.entries(cases)) {
+  for (const [name, [usage, message]] of Object.entries(cases)) {
     const { options: opts } = admissionOptions({ usage });
     const admission = createAdmission(opts);
-    await assert.rejects(() => admission.begin(), /admission refused/, name);
+    await assert.rejects(() => admission.begin(), message, name);
     assert.equal(admission.snapshot().refused, true, name);
   }
 });

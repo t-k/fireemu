@@ -72,3 +72,70 @@ test("the options are a closed record and the run ID has one shape", async (t) =
   for (const bad of ["", "UPPER", "a b", "x".repeat(49), 5, null, undefined, "-lead", "a/b"]) await assert.rejects(usage.markStarted(bad), /recording usage refused/, String(bad));
   await usage.markStarted("a1-b2");
 });
+
+// Cases that separate each guard from the others.
+test("an empty ledger is a valid ledger, and a last line without its newline is refused whatever it holds", async (t) => {
+  const { createRecordingUsage } = await load();
+  const empty = await scratch(t);
+  await writeFile(empty.path, "", { mode: 0o600 });
+  assert.deepEqual(await createRecordingUsage({ path: empty.path, packetSha256 }).startedRunIds(), []);
+  const line = JSON.stringify({ packetSha256, runId: "one" });
+  for (const body of [`${line} `, `${line}\n${line.replace("one", "two")} `, `${line}\n ${line.replace("one", "two")}\n `]) {
+    const file = await scratch(t);
+    await writeFile(file.path, body, { mode: 0o600 });
+    await assert.rejects(createRecordingUsage({ path: file.path, packetSha256 }).startedRunIds(), /recording usage refused/, JSON.stringify(body).slice(0, 30));
+  }
+});
+
+test("a ledger over its size limit is refused whole even when every line is valid", async (t) => {
+  const { createRecordingUsage } = await load();
+  const file = await scratch(t);
+  const lines = Array.from({ length: 1200 }, (_, index) => `${JSON.stringify({ packetSha256, runId: `run-${index}` })}\n`).join("");
+  assert.ok(lines.length > 64 * 1024);
+  await writeFile(file.path, lines, { mode: 0o600 });
+  await assert.rejects(createRecordingUsage({ path: file.path, packetSha256 }).startedRunIds(), /recording usage refused/);
+  await assert.rejects(createRecordingUsage({ path: file.path, packetSha256 }).markStarted("another"), /recording usage refused/);
+});
+
+test("a named pipe or another special file is refused without blocking", async (t) => {
+  const { createRecordingUsage } = await load();
+  const { execFileSync } = await import("node:child_process");
+  const file = await scratch(t);
+  execFileSync("mkfifo", ["-m", "600", file.path]);
+  const usage = createRecordingUsage({ path: file.path, packetSha256 });
+  await assert.rejects(Promise.race([usage.startedRunIds(), new Promise((_, reject) => setTimeout(() => reject(new Error("blocked")), 3000).unref())]), /recording usage refused/);
+  await assert.rejects(Promise.race([usage.markStarted("run-x"), new Promise((_, reject) => setTimeout(() => reject(new Error("blocked")), 3000).unref())]), /recording usage refused/);
+});
+
+test("a marker is synced before the handle closes, and a file that changed under the append is refused", async (t) => {
+  const { createRecordingUsage } = await load();
+  const file = await scratch(t);
+  const { open } = await import("node:fs/promises");
+  const events = [];
+  const io = { open: async (path, flags, mode) => {
+    const handle = await open(path, flags, mode);
+    return { stat: (...a) => handle.stat(...a), readFile: (...a) => handle.readFile(...a), writeFile: async (...a) => { events.push("write"); return handle.writeFile(...a); }, sync: async () => { events.push("sync"); return handle.sync(); }, close: async () => { events.push("close"); return handle.close(); } };
+  } };
+  await createRecordingUsage({ path: file.path, packetSha256, io }).markStarted("run-one");
+  const at = (name) => events.lastIndexOf(name);
+  assert.ok(at("write") < at("sync") && at("sync") < at("close"), events.join());
+  // A handle whose file is group writable when the append starts is refused before anything is written.
+  const other = await scratch(t);
+  const { constants } = await import("node:fs");
+  const racing = { open: async (path, flags, mode) => {
+    const handle = await open(path, flags, mode);
+    const writing = (flags & constants.O_WRONLY) !== 0;
+    return { stat: async () => (writing ? { ...(await handle.stat()), isFile: () => true, mode: 0o100664, uid: process.getuid(), nlink: 1, size: 0 } : handle.stat()), readFile: (...a) => handle.readFile(...a), writeFile: async (...a) => { events.push("late-write"); return handle.writeFile(...a); }, sync: () => handle.sync(), close: () => handle.close() };
+  } };
+  events.length = 0;
+  await assert.rejects(createRecordingUsage({ path: other.path, packetSha256, io: racing }).markStarted("run-two"), /recording usage refused/);
+  assert.equal(events.includes("late-write"), false);
+  assert.equal(await readFile(other.path, "utf8"), "");
+});
+
+test("the uid option is an integer, and the io option is a closed record of functions", async (t) => {
+  const { createRecordingUsage } = await load();
+  const { path } = await scratch(t);
+  for (const uid of ["501", 1.5, null, NaN, undefined]) assert.throws(() => createRecordingUsage({ path, packetSha256, uid }), /invalid recording usage options/, String(uid));
+  for (const io of [null, {}, { open: 1 }, { open() {}, extra: 1 }, "x"]) assert.throws(() => createRecordingUsage({ path, packetSha256, io }), /invalid recording usage options/, JSON.stringify(io));
+});

@@ -467,3 +467,15 @@ test("a row refused for its method, origin, credential, family or id never reach
     assert.deepEqual(calls, [], r.request.method);
   }
 });
+
+test("a query key that names an Object prototype member cannot reach or skip a route's closed key set", async () => {
+  const b = await builder();
+  const media = row("management/control-0/baseline-media");
+  const withQuery = (query) => ({ ...media, request: { ...media.request, query } });
+  for (const key of ["__proto__", "constructor", "prototype", "toString", "valueOf", "hasOwnProperty", "__defineGetter__"]) {
+    // Parsed from JSON so `__proto__` is an own key, as a row loaded from a file would carry it.
+    rejects(b, withQuery(JSON.parse(`{"alt":"media","${key}":"x"}`)), key);
+    rejects(b, withQuery(JSON.parse(`{"${key}":"media"}`)), `${key} alone`);
+  }
+  assert.doesNotThrow(() => b.prepare(withQuery({ alt: "media" }), resolver()));
+});

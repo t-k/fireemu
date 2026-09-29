@@ -96,7 +96,7 @@ export function createTargetBuilder(options) {
     if (!request || typeof request !== "object" || ["auth", "credential-cache"].includes(row.family) || !CREDENTIALS.has(request.credential)) bad();
     if (typeof request.origin !== "string" || !["GET", "POST", "PATCH", "DELETE"].includes(request.method)) bad();
     const literal = { ...(request.query ?? {}) };
-    const query = {}; const pieces = []; const redactedPieces = [];
+    const query = Object.create(null); const pieces = []; const redactedPieces = [];
     for (const [key, value] of Object.entries(literal)) {
       if (!/^[A-Za-z][A-Za-z0-9._]{0,63}$/.test(key)) bad();
       const list = Array.isArray(value) ? value : [value];

@@ -115,7 +115,12 @@ test("the public evidence names member paths of a differing row, never its value
 });
 
 test("each corpus is compared with its own fixture under its own evidence kind", () => {
-  assert.deepEqual(Object.keys(COMPARISONS), ["record-oidc", "record-saml", "record-followup"]);
+  assert.deepEqual(Object.keys(COMPARISONS), [
+    "record-oidc",
+    "record-saml",
+    "record-followup",
+    "record-strict-safety",
+  ]);
   const kinds = Object.values(COMPARISONS).map(({ kind }) => kind);
   assert.equal(new Set(kinds).size, kinds.length);
   for (const corpus of Object.values(COMPARISONS)) {

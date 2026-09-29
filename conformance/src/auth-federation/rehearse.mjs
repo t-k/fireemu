@@ -327,5 +327,6 @@ const mode = process.argv[1] === fileURLToPath(import.meta.url) ? process.argv[2
 if (mode === "session") await sessionRehearsal();
 else if (mode === "record-saml") await rehearse("record-saml");
 else if (mode === "record-followup") await rehearse("record-followup");
+else if (mode === "record-strict-safety") await rehearse("record-strict-safety");
 else if (mode === undefined && process.argv[1] === fileURLToPath(import.meta.url)) await rehearse();
 else if (mode !== undefined) throw new Error(`unknown mode ${mode}`);

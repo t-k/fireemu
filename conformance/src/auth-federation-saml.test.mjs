@@ -255,3 +255,58 @@ test("a response departs from the default only where a field asks it to", async 
   const unsolicited = serializeDocument(samlResponse({ ...fields, inResponseTo: null }).response);
   assert.ok(!unsolicited.includes("InResponseTo"), unsolicited);
 });
+
+test("a signature may use SHA-1 for the signature and the digest, and SHA-256 stays the default", () => {
+  const { privateKey, publicKey, certificatePem } = key();
+  const { response } = samlResponse(FIELDS);
+  const assertion = response.children[2];
+  const sha1 = signEnveloped(assertion, {
+    privateKey,
+    certificatePem,
+    inScope: response.ns,
+    algorithm: "sha1",
+  });
+  const [signedInfo] = sha1.signed.children[1].children;
+  const [, method, reference] = signedInfo.children;
+  assert.equal(method.attrs.Algorithm, "http://www.w3.org/2000/09/xmldsig#rsa-sha1");
+  assert.equal(reference.children[1].attrs.Algorithm, "http://www.w3.org/2000/09/xmldsig#sha1");
+  assert.equal(
+    reference.children[2].children[0],
+    createHash("sha1").update(sha1.digested).digest("base64"),
+  );
+  assert.ok(
+    verify("sha1", Buffer.from(sha1.signedText), publicKey, Buffer.from(sha1.signatureValue, "base64")),
+  );
+  const defaultSigned = signEnveloped(assertion, { privateKey, certificatePem, inScope: response.ns });
+  const [defaultInfo] = defaultSigned.signed.children[1].children;
+  assert.equal(defaultInfo.children[1].attrs.Algorithm, "http://www.w3.org/2001/04/xmldsig-more#rsa-sha256");
+  assert.equal(defaultInfo.children[2].children[1].attrs.Algorithm, "http://www.w3.org/2001/04/xmlenc#sha256");
+  assert.throws(
+    () => signEnveloped(assertion, { privateKey, certificatePem, inScope: response.ns, algorithm: "md5" }),
+    /algorithm md5/,
+  );
+  // signedSamlResponse passes the choice through.
+  const { xml } = signedSamlResponse(FIELDS, { privateKey, certificatePem, algorithm: "sha1" });
+  assert.match(xml, /xmldsig#rsa-sha1/);
+  assert.doesNotMatch(xml, /sha256/);
+});
+
+test("a response may leave out either NotOnOrAfter and keep the rest", async () => {
+  const { serializeDocument } = await import("./auth-federation/saml.mjs");
+  const both = serializeDocument(
+    samlResponse({ ...FIELDS, conditionsNotOnOrAfter: null, confirmationNotOnOrAfter: null }).response,
+  );
+  assert.doesNotMatch(both, /NotOnOrAfter/);
+  assert.match(both, /<saml:Conditions NotBefore="[^"]+">/);
+  assert.match(both, /<saml:SubjectConfirmationData InResponseTo="_req-1" Recipient=/);
+  const conditionsOnly = serializeDocument(
+    samlResponse({ ...FIELDS, conditionsNotOnOrAfter: null }).response,
+  );
+  assert.match(conditionsOnly, /<saml:Conditions NotBefore="[^"]+">/);
+  assert.match(conditionsOnly, /SubjectConfirmationData InResponseTo="_req-1" NotOnOrAfter=/);
+  const confirmationOnly = serializeDocument(
+    samlResponse({ ...FIELDS, confirmationNotOnOrAfter: null }).response,
+  );
+  assert.match(confirmationOnly, /<saml:Conditions NotBefore="[^"]+" NotOnOrAfter="[^"]+">/);
+  assert.doesNotMatch(confirmationOnly, /SubjectConfirmationData[^>]*NotOnOrAfter/);
+});

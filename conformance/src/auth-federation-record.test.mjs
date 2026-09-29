@@ -687,3 +687,52 @@ test("a record-followup recording publishes its issuer's scopes and cleans up", 
   assert.equal(ledger.at(-1).action, "record-followup");
   assert.equal(env.site.state.versionDeleted, true);
 });
+
+test("record-strict-safety's envelope: a small recording of behaviours production never showed", async () => {
+  const { STRICT_SAFETY_PROGRAMS } = await import("./auth-federation/corpus-strict-safety.mjs");
+  const profile = PROFILES["record-strict-safety"];
+  assert.equal(profile.packet, "record-strict-safety");
+  assert.equal(profile.action, "record-strict-safety");
+  assert.equal(profile.limits.api + profile.limits.issuer, profile.runner.maxRequests);
+  assert.equal(profile.runner.reserveUsd, 1);
+  assert.equal(profile.programs, STRICT_SAFETY_PROGRAMS);
+  assert.equal(profile.samlSigners, true);
+  // The steps of one pass fit its share of the API limit, twice, with room for the prechecks,
+  // the issuer's deploy and the cleanup.
+  const steps = STRICT_SAFETY_PROGRAMS.reduce((sum, program) => sum + program.steps.length, 0);
+  assert.ok(steps <= profile.passLimit, `${steps} steps against a pass limit of ${profile.passLimit}`);
+  assert.ok(profile.passLimit * 2 + 50 <= profile.limits.api);
+  // Every account a program's sign-ins may create is counted: 4 sign-in programs, one account each.
+  assert.ok(profile.accountLimit >= 4 && profile.accountLimit * 2 <= 12);
+  for (const other of ["record-oidc", "record-saml", "record-followup"]) {
+    assert.notEqual(profile.fixture, PROFILES[other].fixture);
+  }
+  // The programs are covered by recipes the closure already has.
+  const { readFileSync } = await import("node:fs");
+  const closure = JSON.parse(
+    readFileSync(new URL("../../spec/compatibility/closure/AUTH-FEDERATION.json", import.meta.url), "utf8"),
+  );
+  const recipes = closure.conditions.flatMap(({ recipeIds }) => recipeIds);
+  for (const { id } of STRICT_SAFETY_PROGRAMS) {
+    assert.ok(
+      recipes.some((recipe) => id.startsWith(`${recipe}/`)),
+      `${id} belongs to no existing recipe`,
+    );
+  }
+});
+
+test("a record-strict-safety recording runs under its own action and cleans up", async () => {
+  const env = sandbox();
+  const { result, ledger } = await campaign(env, {
+    profile: PROFILES["record-strict-safety"],
+    certificatePem: undefined,
+    signers: {
+      certificates: { "saml-a": "A", "saml-expired": "B" },
+      keys: {},
+      runCertificates: [],
+    },
+  });
+  assert.equal(ledger[0].action, "record-strict-safety");
+  assert.equal(ledger.at(-1).action, "record-strict-safety");
+  assert.equal(env.site.state.versionDeleted, true, JSON.stringify(result));
+});

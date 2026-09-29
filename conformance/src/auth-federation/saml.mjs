@@ -17,6 +17,13 @@ const EXC_C14N = "http://www.w3.org/2001/10/xml-exc-c14n#";
 const ENVELOPED = "http://www.w3.org/2000/09/xmldsig#enveloped-signature";
 const RSA_SHA256 = "http://www.w3.org/2001/04/xmldsig-more#rsa-sha256";
 const SHA256 = "http://www.w3.org/2001/04/xmlenc#sha256";
+const RSA_SHA1 = "http://www.w3.org/2000/09/xmldsig#rsa-sha1";
+const SHA1 = "http://www.w3.org/2000/09/xmldsig#sha1";
+/** The signature and digest algorithms a response may be signed with (SHA-256 by default). */
+const ALGORITHMS = {
+  sha256: { signature: RSA_SHA256, digest: SHA256, hash: "sha256" },
+  sha1: { signature: RSA_SHA1, digest: SHA1, hash: "sha1" },
+};
 
 /**
  * An element: `name` is `prefix:local` or `local`; `ns` holds the namespace declarations
@@ -121,7 +128,7 @@ export function serializeDocument(node) {
   return `<?xml version="1.0" encoding="UTF-8"?>${serializeNoisy(node)}`;
 }
 
-const sha256Base64 = (text) => createHash("sha256").update(text, "utf8").digest("base64");
+const digestBase64 = (hash, text) => createHash(hash).update(text, "utf8").digest("base64");
 
 /** The DER of a PEM certificate, base64 (the X509Certificate text). */
 export function certificateBase64(pem) {
@@ -136,25 +143,30 @@ export function certificateBase64(pem) {
  * ancestors declare. Returns the signed element and the canonical texts that were digested
  * and signed (for the tests).
  */
-export function signEnveloped(target, { privateKey, certificatePem, inScope = {}, position = 1 }) {
+export function signEnveloped(
+  target,
+  { privateKey, certificatePem, inScope = {}, position = 1, algorithm = "sha256" },
+) {
   const id = target.attrs.ID;
   if (!id) throw new Error("the signed element has no ID");
+  const algorithms = ALGORITHMS[algorithm];
+  if (!algorithms) throw new Error(`no signature algorithm ${algorithm}`);
   const digested = canonicalize(target, inScope);
   const signedInfo = el("ds:SignedInfo", {}, [
     el("ds:CanonicalizationMethod", { attrs: { Algorithm: EXC_C14N } }),
-    el("ds:SignatureMethod", { attrs: { Algorithm: RSA_SHA256 } }),
+    el("ds:SignatureMethod", { attrs: { Algorithm: algorithms.signature } }),
     el("ds:Reference", { attrs: { URI: `#${id}` } }, [
       el("ds:Transforms", {}, [
         el("ds:Transform", { attrs: { Algorithm: ENVELOPED } }),
         el("ds:Transform", { attrs: { Algorithm: EXC_C14N } }),
       ]),
-      el("ds:DigestMethod", { attrs: { Algorithm: SHA256 } }),
-      el("ds:DigestValue", {}, [sha256Base64(digested)]),
+      el("ds:DigestMethod", { attrs: { Algorithm: algorithms.digest } }),
+      el("ds:DigestValue", {}, [digestBase64(algorithms.hash, digested)]),
     ]),
   ]);
   const signatureScope = { ...inScope, ...target.ns, ds: NS.ds };
   const signedText = canonicalize(signedInfo, signatureScope);
-  const value = sign("sha256", Buffer.from(signedText, "utf8"), privateKey).toString("base64");
+  const value = sign(algorithms.hash, Buffer.from(signedText, "utf8"), privateKey).toString("base64");
   const signature = el("ds:Signature", { ns: { ds: NS.ds } }, [
     signedInfo,
     el("ds:SignatureValue", {}, [value]),
@@ -179,7 +191,8 @@ const present = (attrs) =>
  * Each field below departs from the default document only when given: `recipient` (the
  * destination), `conditionsNotBefore` and `conditionsNotOnOrAfter`, `confirmationNotOnOrAfter`,
  * `statusCode` (Success), `assertionIssuer` (the issuer), `nameIdFormat` (emailAddress), and
- * `inResponseTo: null` for an unsolicited response.
+ * `inResponseTo: null` for an unsolicited response. `conditionsNotOnOrAfter: null` and
+ * `confirmationNotOnOrAfter: null` leave that attribute out.
  */
 export function samlResponse({
   responseId,
@@ -215,7 +228,8 @@ export function samlResponse({
             el("saml:SubjectConfirmationData", {
               attrs: present({
                 InResponseTo: inResponseTo,
-                NotOnOrAfter: isoSeconds(confirmationNotOnOrAfter),
+                NotOnOrAfter:
+                  confirmationNotOnOrAfter === null ? null : isoSeconds(confirmationNotOnOrAfter),
                 Recipient: recipient,
               }),
             }),
@@ -225,10 +239,10 @@ export function samlResponse({
       el(
         "saml:Conditions",
         {
-          attrs: {
+          attrs: present({
             NotBefore: isoSeconds(conditionsNotBefore),
-            NotOnOrAfter: isoSeconds(conditionsNotOnOrAfter),
-          },
+            NotOnOrAfter: conditionsNotOnOrAfter === null ? null : isoSeconds(conditionsNotOnOrAfter),
+          }),
         },
         [
           el("saml:AudienceRestriction", {}, [el("saml:Audience", {}, [audience])]),
@@ -284,11 +298,12 @@ export function samlResponse({
 /**
  * A signed SAMLResponse (base64 of the document): `sign` is "assertion", "response" or
  * "both" (the assertion is signed first, so the response signature covers it), or "none"
- * (an unsigned response).
+ * (an unsigned response). `algorithm` is "sha256" (default) or "sha1", for the signature and
+ * the digest alike.
  */
 export function signedSamlResponse(
   fields,
-  { privateKey, certificatePem, sign: where = "assertion" },
+  { privateKey, certificatePem, sign: where = "assertion", algorithm = "sha256" },
 ) {
   const { response } = samlResponse(fields);
   let signedResponse = response;
@@ -299,13 +314,14 @@ export function signedSamlResponse(
       privateKey,
       certificatePem,
       inScope: { ...responseScope, ...response.ns },
+      algorithm,
     });
     const children = [...response.children];
     children[index] = signed;
     signedResponse = { ...response, children };
   }
   if (where === "response" || where === "both") {
-    signedResponse = signEnveloped(signedResponse, { privateKey, certificatePem }).signed;
+    signedResponse = signEnveloped(signedResponse, { privateKey, certificatePem, algorithm }).signed;
   }
   const xml = serializeDocument(signedResponse);
   return { xml, base64: Buffer.from(xml, "utf8").toString("base64") };

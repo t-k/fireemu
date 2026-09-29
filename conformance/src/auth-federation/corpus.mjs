@@ -582,11 +582,13 @@ export const PROGRAMS = [
 /**
  * The corpus with this run's values in place of its placeholders: `{project}`, `RUN` (the
  * run's tag), `ISSUERHOST` (the run's preview channel; required, never the live site),
- * `CERT(name)` and `TOKEN(name)` from the given maps.
+ * `CERT(name)` and `TOKEN(name)` from the given maps, and `PASSTAG` (the pass's tag: what makes
+ * a credential of one pass differ from the next pass's, so a nonce-bearing sign-in is not the
+ * duplicate of the earlier pass's).
  */
 export function resolveCorpus(
   programs,
-  { project, run, issuerHost, certificates = {}, tokens = {} },
+  { project, run, issuerHost, certificates = {}, tokens = {}, passTag = "0" },
 ) {
   if (!issuerChannelHost(project, run).test(issuerHost ?? "")) {
     throw new Error(`issuer host ${issuerHost} is not the run's preview channel of the sandbox`);
@@ -597,6 +599,7 @@ export function resolveCorpus(
       .replaceAll("{project}", project)
       .replaceAll(/EMAIL\(([\w-]+)\)/g, (_, name) => `fireemu-fed-RUN-${name}@example.com`)
       .replaceAll("RUN", run)
+      .replaceAll("PASSTAG", passTag)
       .replaceAll(/CERT\(([\w-]+)\)/g, (_, name) => certificates[name] ?? `fireemu-no-cert-${name}`)
       .replaceAll(/TOKEN\(([\w-]+)\)/g, (_, name) => tokens[name] ?? `fireemu-no-token-${name}`);
   const walk = (value) => {

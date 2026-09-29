@@ -2,7 +2,7 @@
 // profile) and writes the recorded rows under `.runs/`; the production recording
 // (`record.mjs`) runs the same programs through `runPrograms` against the sandbox.
 //
-//   node src/auth-federation/run.mjs local [record-saml|record-followup]
+//   node src/auth-federation/run.mjs local [record-saml|record-followup|record-strict-safety]
 
 import { execFile, spawn } from "node:child_process";
 import { createHash, createPrivateKey, randomBytes } from "node:crypto";
@@ -18,6 +18,7 @@ import { SANDBOX_PROJECT } from "../auth-account/harness.mjs";
 import { PROGRAMS, resolveCorpus } from "./corpus.mjs";
 import { SAML_PROGRAMS } from "./corpus-saml.mjs";
 import { FOLLOWUP_DISCOVERY_SCOPES, FOLLOWUP_PROGRAMS } from "./corpus-followup.mjs";
+import { STRICT_SAFETY_PROGRAMS } from "./corpus-strict-safety.mjs";
 import { guardHttp, validateFederationCorpus } from "./guard.mjs";
 import { normalizeHttp } from "./harness.mjs";
 import {
@@ -144,10 +145,17 @@ export const CORPORA = {
   "record-oidc": PROGRAMS,
   "record-saml": SAML_PROGRAMS,
   "record-followup": FOLLOWUP_PROGRAMS,
+  "record-strict-safety": STRICT_SAFETY_PROGRAMS,
 };
 
 /** The scopes_supported a corpus's run issuer lists in its discovery document, if any. */
 export const DISCOVERY_SCOPES = { "record-followup": FOLLOWUP_DISCOVERY_SCOPES };
+
+/**
+ * The tag of pass number `pass` made at `now` (unix seconds): what `PASSTAG` in the corpus
+ * becomes. The pass number keeps two passes that start in the same second apart.
+ */
+export const passTagOf = (now, pass = 1) => `p${now.toString(36)}${pass}`;
 
 export function resolveRun({
   project,
@@ -157,6 +165,7 @@ export function resolveRun({
   certificatePem,
   certificates = { "saml-a": certificatePem },
   now,
+  pass = 1,
   programs: corpus = PROGRAMS,
 }) {
   const issuer = `https://${issuerHost}/oidc/${run}`;
@@ -174,10 +183,13 @@ export function resolveRun({
     issuerHost,
     certificates,
     tokens: { missing: legacy("missing"), off: legacy("off") },
+    passTag: passTagOf(now, pass),
   });
   for (const program of programs) program.minted = mintTokens(program, { issuer, keys, now });
   validateFederationCorpus(programs, { run });
-  return { issuer, programs };
+  // Only a corpus that tags its passes has a tag to mask; the others' rows are recorded as before.
+  const tagged = JSON.stringify(corpus).includes("PASSTAG");
+  return { issuer, programs, passTag: tagged ? passTagOf(now, pass) : undefined };
 }
 
 /**
@@ -196,7 +208,7 @@ async function prepareRun(project, run, issuerHost, corpus = PROGRAMS) {
     JSON.stringify({ keyPems: signers.keyPems, certificates: signers.certificates }),
     { mode: 0o600 },
   );
-  const { issuer, programs } = resolveRun({
+  const { issuer, programs, passTag } = resolveRun({
     project,
     run,
     issuerHost,
@@ -213,6 +225,7 @@ async function prepareRun(project, run, issuerHost, corpus = PROGRAMS) {
     samlKeysPath,
     runKids: [keys.run.jwk.kid],
     runCertificates: signers.runCertificates,
+    passTag,
     programs,
     jwks: [keys.run.jwk],
   };
@@ -242,9 +255,17 @@ function fromRaw(raw, reference) {
  * A SAMLResponse signed now with one of the run's SAML keys (`saml.keys[key]`), answering the
  * AuthnRequest of the step `request` unless `inResponseTo` names another ID (or `null`: an
  * unsolicited response). Times are relative to `saml.now()`: `conditions.notBefore` (-60),
- * `conditions.notOnOrAfter` (300), `confirmationNotOnOrAfter` (300).
+ * `conditions.notOnOrAfter` (300), `confirmationNotOnOrAfter` (300); `null` leaves the
+ * attribute out. `algorithm: "sha1"` signs and digests with SHA-1. `remember: name` keeps the
+ * value for the program's later `{ reuse: name }`, which sends the same response again.
  */
 function samlValue(spec, raw, saml) {
+  // A response remembered by an earlier step of the program is sent again unchanged.
+  if (spec.reuse !== undefined) {
+    const remembered = raw.get(`$saml:${spec.reuse}`);
+    if (remembered === undefined) throw new Error(`no SAML response ${spec.reuse} was remembered`);
+    return remembered;
+  }
   const signer = saml?.keys?.[spec.key ?? "run"];
   if (!signer) throw new Error(`the run made no SAML key ${spec.key ?? "run"}`);
   const now = saml.now();
@@ -252,6 +273,8 @@ function samlValue(spec, raw, saml) {
   const inResponseTo =
     spec.inResponseTo !== undefined ? spec.inResponseTo : readAuthnRequest(authUri).id;
   const suffix = randomBytes(8).toString("hex");
+  // A time is relative to now; an explicit null leaves the attribute out.
+  const at = (offset, fallback) => (offset === null ? null : now + (offset ?? fallback));
   const { xml } = signedSamlResponse(
     {
       responseId: `_r${suffix}`,
@@ -267,14 +290,16 @@ function samlValue(spec, raw, saml) {
       attributes: spec.attributes,
       statusCode: spec.status,
       now,
-      conditionsNotBefore: now + (spec.conditions?.notBefore ?? -60),
-      conditionsNotOnOrAfter: now + (spec.conditions?.notOnOrAfter ?? 300),
-      confirmationNotOnOrAfter: now + (spec.confirmationNotOnOrAfter ?? 300),
+      conditionsNotBefore: at(spec.conditions?.notBefore, -60),
+      conditionsNotOnOrAfter: at(spec.conditions?.notOnOrAfter, 300),
+      confirmationNotOnOrAfter: at(spec.confirmationNotOnOrAfter, 300),
     },
-    { ...signer, sign: spec.sign ?? "assertion" },
+    { ...signer, sign: spec.sign ?? "assertion", algorithm: spec.algorithm ?? "sha256" },
   );
   // `tamper`: the signature no longer verifies (production's refusal, saml-smoke efe0ef).
-  return Buffer.from(spec.tamper ? tamperSignature(xml) : xml, "utf8").toString("base64");
+  const value = Buffer.from(spec.tamper ? tamperSignature(xml) : xml, "utf8").toString("base64");
+  if (spec.remember !== undefined) raw.set(`$saml:${spec.remember}`, value);
+  return value;
 }
 
 /**
@@ -536,6 +561,7 @@ async function sessionLocal() {
     projectNumber: LOCAL_PROJECT_NUMBER,
     runKids: prepared.runKids,
     runCertificates: prepared.runCertificates,
+    passTag: prepared.passTag,
     saml: {
       keys: await loadSamlSigners(prepared.samlKeysPath),
       now: () => Math.floor(Date.now() / 1000),

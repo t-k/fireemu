@@ -2,8 +2,8 @@
 // export for the closure evidence. It reads what `run.mjs local` wrote and is not part of the
 // recorded harness (record.mjs digests the modules a recording runs; this one only reads).
 //
-//   node src/auth-federation/compare.mjs check [record-saml|record-followup]
-//   node src/auth-federation/compare.mjs export [record-saml|record-followup] <output.json>
+//   node src/auth-federation/compare.mjs check [record-saml|record-followup|record-strict-safety]
+//   node src/auth-federation/compare.mjs export [record-saml|record-followup|record-strict-safety] <output.json>
 //
 // `check` runs `run.mjs local` with FIREEMU_BIN (or the workspace build), classifies each
 // recorded row and writes `.runs/auth-federation/comparison[-record-saml].json`.
@@ -21,6 +21,7 @@ import { resolveFireemuBinary } from "../evidence.mjs";
 import { PROGRAMS } from "./corpus.mjs";
 import { SAML_PROGRAMS } from "./corpus-saml.mjs";
 import { FOLLOWUP_PROGRAMS } from "./corpus-followup.mjs";
+import { STRICT_SAFETY_PROGRAMS } from "./corpus-strict-safety.mjs";
 import { programDigests } from "./record.mjs";
 
 const RUN_DIR = join(CONFORMANCE_DIR, ".runs", "auth-federation");
@@ -47,6 +48,13 @@ export const COMPARISONS = {
     results: "fireemu-record-followup-results.json",
     comparison: "comparison-record-followup.json",
     kind: "auth-federation-followup-comparison-v1",
+  },
+  "record-strict-safety": {
+    programs: STRICT_SAFETY_PROGRAMS,
+    fixture: "auth-federation-strict-safety-production.json",
+    results: "fireemu-record-strict-safety-results.json",
+    comparison: "comparison-record-strict-safety.json",
+    kind: "auth-federation-strict-safety-comparison-v1",
   },
 };
 

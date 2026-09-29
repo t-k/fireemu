@@ -1019,3 +1019,142 @@ test("the follow-up corpus's own SAML sign-ins, with its real names, get through
     sendSignIns(resolve(renamed));
   }
 });
+
+test("a $saml value may use SHA-1, leave out NotOnOrAfter and be sent again unchanged", async () => {
+  const { materialize } = await import("./auth-federation/run.mjs");
+  const { generateKeyPairSync } = await import("node:crypto");
+  const { privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+  const saml = {
+    keys: {
+      run: {
+        privateKey,
+        certificatePem: "-----BEGIN CERTIFICATE-----\nUlVOLUNFUlQ=\n-----END CERTIFICATE-----",
+      },
+    },
+    now: () => 1_790_000_000,
+  };
+  const spec = {
+    issuer: "https://idp.example/saml",
+    audience: "sp",
+    destination: "https://sp.example/acs",
+    nameId: "user@example.com",
+    inResponseTo: null,
+  };
+  const decode = (value) => Buffer.from(value, "base64").toString("utf8");
+  const raw = new Map();
+
+  const sha1 = decode(materialize({ $saml: { ...spec, algorithm: "sha1" } }, raw, {}, saml));
+  assert.match(sha1, /xmldsig#rsa-sha1/);
+  assert.match(sha1, /DigestMethod Algorithm="http:\/\/www\.w3\.org\/2000\/09\/xmldsig#sha1"/);
+  const sha256 = decode(materialize({ $saml: spec }, raw, {}, saml));
+  assert.match(sha256, /rsa-sha256/);
+  assert.doesNotMatch(sha256, /rsa-sha1/);
+
+  const open = decode(
+    materialize(
+      { $saml: { ...spec, conditions: { notOnOrAfter: null }, confirmationNotOnOrAfter: null } },
+      raw,
+      {},
+      saml,
+    ),
+  );
+  assert.doesNotMatch(open, /NotOnOrAfter/);
+  assert.match(open, /<saml:Conditions NotBefore="[^"]+">/);
+  // Only an explicit null leaves it out: an absent value keeps the five-minute default.
+  assert.match(sha256, /<saml:Conditions NotBefore="[^"]+" NotOnOrAfter="[^"]+">/);
+
+  // Two responses made for the same spec are different documents (their IDs differ); a
+  // remembered one is sent again byte for byte, within the program that made it.
+  const one = materialize({ $saml: spec }, raw, {}, saml);
+  assert.notEqual(one, materialize({ $saml: spec }, raw, {}, saml));
+  const first = materialize({ $saml: { ...spec, remember: "replay" } }, raw, {}, saml);
+  const again = materialize({ $saml: { reuse: "replay" } }, raw, {}, saml);
+  assert.equal(again, first);
+  assert.throws(() => materialize({ $saml: { reuse: "never-made" } }, raw, {}, saml), /never-made/);
+  // Another program's steps do not see it.
+  assert.throws(() => materialize({ $saml: { reuse: "replay" } }, new Map(), {}, saml), /replay/);
+});
+
+test("PASSTAG names the pass, so a credential of one pass is not the next pass's duplicate", async () => {
+  const { resolveRun } = await import("./auth-federation/run.mjs");
+  const keys = { run: generateSigningKey({ kid: "run-kid" }), other: generateSigningKey() };
+  const program = {
+    id: "auth-federation/pending-token/x",
+    providers: ["oidc.fireemu-RUN-x"],
+    client: "client-x",
+    tokens: { first: { claims: { sub: "sub-x-PASSTAG", nonce: { $sha256: "nonce-PASSTAG" } } } },
+    steps: [
+      {
+        id: "sign-in",
+        auth: "key",
+        path: "v1/accounts:signInWithIdp",
+        body: { postBody: "providerId=oidc.fireemu-RUN-x&nonce=nonce-PASSTAG" },
+      },
+    ],
+  };
+  const resolve = (now, pass = 1) =>
+    resolveRun({
+      project: SANDBOX_PROJECT,
+      run: RUN,
+      issuerHost: CHANNEL,
+      keys,
+      certificates: {},
+      now,
+      pass,
+      programs: [program],
+    }).programs[0];
+  const one = resolve(1_790_000_000);
+  const two = resolve(1_790_000_017);
+  // Two passes that start in the same second are still told apart.
+  assert.notEqual(resolve(1_790_000_000, 1).tokens.first.claims.sub, resolve(1_790_000_000, 2).tokens.first.claims.sub);
+  assert.ok(!JSON.stringify(one).includes("PASSTAG"), "the placeholder is filled");
+  assert.notEqual(one.tokens.first.claims.sub, two.tokens.first.claims.sub);
+  assert.notEqual(one.steps[0].body.postBody, two.steps[0].body.postBody);
+  assert.match(one.steps[0].body.postBody, /nonce=nonce-p[0-9a-z]{6}1$/);
+  // The same pass resolves the same way twice.
+  assert.deepEqual(resolve(1_790_000_000).tokens, one.tokens);
+});
+
+test("a recording masks the pass tag, so the passes' rows compare", async () => {
+  const { normalize } = await import("./auth-federation/harness.mjs");
+  const { passTagOf } = await import("./auth-federation/run.mjs");
+  const tag = passTagOf(1_790_000_000, 1);
+  assert.match(tag, /^p[0-9a-z]{6}1$/);
+  assert.notEqual(tag, passTagOf(1_790_000_017, 1));
+  assert.notEqual(tag, passTagOf(1_790_000_000, 2));
+  const ctx = { run: RUN, project: SANDBOX_PROJECT, passTag: tag };
+  assert.deepEqual(normalize({ federatedId: `oidc.fireemu-${RUN}-nr/sub-nr-first-${tag}` }, ctx), {
+    federatedId: "oidc.fireemu-<run>-nr/sub-nr-first-<pass>",
+  });
+  // The hashed nonce an answer echoes differs per pass with the raw nonce: a corpus that tags its
+  // passes records its form only.
+  const hash = "a".repeat(64);
+  assert.deepEqual(normalize({ claims: { nonce: hash } }, ctx), { claims: { nonce: "<nonce:hex64>" } });
+  assert.deepEqual(normalize({ claims: { nonce: hash } }, { run: RUN, project: SANDBOX_PROJECT }), {
+    claims: { nonce: hash },
+  });
+  assert.deepEqual(normalize({ nonce: "not-a-hash" }, ctx), { nonce: "not-a-hash" });
+  // Without a pass tag nothing else is touched.
+  assert.deepEqual(normalize({ federatedId: `sub-${tag}` }, { run: RUN, project: SANDBOX_PROJECT }), {
+    federatedId: `sub-${tag}`,
+  });
+});
+
+test("only a corpus that uses PASSTAG has a pass tag", async () => {
+  const { resolveRun } = await import("./auth-federation/run.mjs");
+  const { PROGRAMS } = await import("./auth-federation/corpus.mjs");
+  const { STRICT_SAFETY_PROGRAMS } = await import("./auth-federation/corpus-strict-safety.mjs");
+  const keys = { run: generateSigningKey({ kid: "run-kid" }), other: generateSigningKey() };
+  const resolve = (programs) =>
+    resolveRun({
+      project: SANDBOX_PROJECT,
+      run: RUN,
+      issuerHost: CHANNEL,
+      keys,
+      certificates: {},
+      now: 1_790_000_000,
+      programs,
+    });
+  assert.equal(resolve(PROGRAMS).passTag, undefined, "record-oidc's rows keep their nonces");
+  assert.match(resolve(STRICT_SAFETY_PROGRAMS).passTag, /^p[0-9a-z]{6}1$/);
+});

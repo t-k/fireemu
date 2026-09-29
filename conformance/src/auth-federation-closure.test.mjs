@@ -370,12 +370,13 @@ test("parent promotion requires every condition and an approved closure review",
   );
 });
 
-/** The corpora: record-oidc's, record-saml's and record-followup's programs. */
+/** The corpora: record-oidc's, record-saml's, record-followup's and record-strict-safety's programs. */
 async function corpusPrograms() {
   const { PROGRAMS } = await import("./auth-federation/corpus.mjs");
   const { SAML_PROGRAMS } = await import("./auth-federation/corpus-saml.mjs");
   const { FOLLOWUP_PROGRAMS } = await import("./auth-federation/corpus-followup.mjs");
-  return [...PROGRAMS, ...SAML_PROGRAMS, ...FOLLOWUP_PROGRAMS];
+  const { STRICT_SAFETY_PROGRAMS } = await import("./auth-federation/corpus-strict-safety.mjs");
+  return [...PROGRAMS, ...SAML_PROGRAMS, ...FOLLOWUP_PROGRAMS, ...STRICT_SAFETY_PROGRAMS];
 }
 
 test("closure recipes and corpus programs cover each other", async () => {

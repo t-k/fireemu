@@ -140,6 +140,8 @@ function normalizeMessage(message, ctx) {
 function placeholders(text, ctx) {
   let out = ctx.issuerHost ? text.replaceAll(ctx.issuerHost, "<issuer-host>") : text;
   out = out.replaceAll(ctx.run, "<run>").replaceAll(ctx.project, "<project>");
+  // What made one pass's credentials differ from the next pass's (record-strict-safety).
+  if (ctx.passTag) out = out.replaceAll(ctx.passTag, "<pass>");
   if (ctx.projectNumber) out = out.replaceAll(String(ctx.projectNumber), "<project-number>");
   // An answer may echo the Web API key (a handler URL's `apiKey`).
   if (ctx.apiKey) out = out.replaceAll(String(ctx.apiKey), "<api-key>");
@@ -158,6 +160,9 @@ export function normalize(value, ctx, key = "") {
   if (typeof value === "string") {
     if (TOKEN_KEYS.has(key)) return normalize(decodeToken(value, key), ctx);
     if (MASKED[key]) return MASKED[key];
+    // A corpus that tags its passes sends a new raw nonce each pass, so the hash the answer
+    // echoes differs; its form is kept, as the authUri's nonce is.
+    if (key === "nonce" && ctx.passTag && /^[0-9a-f]{64}$/.test(value)) return "<nonce:hex64>";
     if (KEPT_ONLY[key]) return KEPT_ONLY[key](value);
     // The service's authorization state, and the nonce it makes when none is given, differ
     // on every createAuthUri (the nonce's form is kept).

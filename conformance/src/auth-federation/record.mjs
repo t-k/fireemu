@@ -30,6 +30,7 @@ import { packetApproval } from "./approval.mjs";
 import { PROGRAMS } from "./corpus.mjs";
 import { SAML_PROGRAMS } from "./corpus-saml.mjs";
 import { FOLLOWUP_DISCOVERY_SCOPES, FOLLOWUP_PROGRAMS } from "./corpus-followup.mjs";
+import { STRICT_SAFETY_PROGRAMS } from "./corpus-strict-safety.mjs";
 import {
   checkWebConfig,
   clients,
@@ -126,6 +127,24 @@ export const PROFILES = {
     target:
       "production Identity Toolkit, Secure Token and Admin v2 REST, Identity Platform sandbox; the OIDC issuer the run's preview channel of the sandbox's Hosting, its discovery document listing scopes_supported; the SAML responses made locally at each step, tampered or unsigned (owner decisions O1, O5; the coordinator's T12 (c), 2026-09-29)",
   },
+  "record-strict-safety": {
+    packet: "record-strict-safety",
+    action: "record-strict-safety",
+    // Two passes of at most 50 requests (the corpus has 33 steps, and a pass also deletes the
+    // accounts and providers it made and reads the providers back), and at most 50 for the
+    // prechecks, the issuer's deploy and the cleanup, counted against the API limit alone.
+    runner: { project: SANDBOX_PROJECT, maxRequests: 162, reserveUsd: 1 },
+    limits: { api: 150, issuer: 12 },
+    passLimit: 50,
+    accountLimit: 6,
+    programs: STRICT_SAFETY_PROGRAMS,
+    samlSigners: true,
+    fixture: fileURLToPath(
+      new URL("../../auth-federation-strict-safety-production.json", import.meta.url),
+    ),
+    target:
+      "production Identity Toolkit, Secure Token and Admin v2 REST, Identity Platform sandbox; the OIDC issuer the run's preview channel of the sandbox's Hosting; the SAML responses made locally at each step, signed with SHA-1, without NotOnOrAfter or sent again (owner decisions O1, O5; the coordinator's N10 packet, 2026-09-29)",
+  },
 };
 
 /** The profile a mode names (record-oidc when none). */
@@ -142,6 +161,7 @@ export const SOURCES = [
   "corpus.mjs",
   "corpus-saml.mjs",
   "corpus-followup.mjs",
+  "corpus-strict-safety.mjs",
   "guard.mjs",
   "harness.mjs",
   "idp.mjs",
@@ -381,13 +401,14 @@ export async function recordCampaign({
     });
     for (let pass = 1; pass <= PASSES; pass += 1) {
       stop.check();
-      const { programs } = resolveRun({
+      const { programs, passTag } = resolveRun({
         project: SANDBOX_PROJECT,
         run,
         issuerHost: issuer.issuerHost,
         keys,
         certificates,
         now: now(),
+        pass,
         programs: profile.programs,
       });
       const ctx = {
@@ -396,6 +417,7 @@ export async function recordCampaign({
         projectNumber: meta.projectNumber,
         issuerHost: issuer.issuerHost,
         runKids: [keys.run.jwk.kid],
+        passTag,
         apiKey: meta.apiKey,
         adminAuthorization: `Bearer ${meta.adminToken}`,
         adminHeaders: { "x-goog-user-project": SANDBOX_PROJECT },

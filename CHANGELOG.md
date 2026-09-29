@@ -8,6 +8,10 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ## [Unreleased]
 
+### Added
+
+- `auth.mfa` in the canonical configuration (Fireemu-only): the project's initial multi-factor configuration, in the Identity Platform `Config.mfa` shape, so TOTP can be enabled from the config file under the strict profile (where `auth.totp` alone enables nothing, as in production) instead of through the Admin API in every session. It is validated as the Admin API validates an update of `mfa`, is the project's configuration at start in both profiles and that of every project created later, and is what `POST /v1/sessions/{s}/reset` returns to; without it a reset leaves an Admin-set configuration alone, as before. An Admin update still replaces it and disabling refuses TOTP as production does; the emulator profile keeps `auth.totp`. Strict with `auth.totp` and no enabling `auth.mfa` prints a start-up warning naming the key.
+
 ### Changed
 
 - Emulator profile without signers: a custom token's tenant claim is checked only where the official emulator checks it: never on a JSON fake token (`{"uid": …}`), and on an unsigned JWT only in a tenant, where the claim must name that tenant. A JSON token now signs in to the tenant the request names whatever its claim, and a JWT with a tenant claim exchanged in the project signs in to the project; both were refused with `TENANT_ID_MISMATCH` before, which the official emulator never does. This fixes the JSON-token and tenant-claim known issue listed under 0.9.0. The strict profile, and the emulator profile with signers, keep production's rules.

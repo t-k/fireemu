@@ -51,6 +51,8 @@ fn reject_loser(driver: &mut TransactionConditionalLockDriver, loser: &str) {
         .expect("retry observes committed lock");
 }
 
+// The read guard closure returns tonic::Status, which clippy calls a large error.
+#[allow(clippy::result_large_err)]
 #[test]
 fn local_contract_idle_rollback_before_expiry_touch_retains_retry_lineage() {
     // This pins existing local handler ordering, not a production observation.

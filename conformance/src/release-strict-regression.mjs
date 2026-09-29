@@ -24,6 +24,8 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 
+import { findPackagedRunner, packagedRunnerCandidates } from "./packaged-runner.mjs";
+
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const CONFORMANCE = join(ROOT, "conformance");
 const RUNS_DIR = join(CONFORMANCE, ".runs");
@@ -48,6 +50,8 @@ const FORBIDDEN_ENV_NAMES = new Set([
   "GOOGLE_APPLICATION_CREDENTIALS",
   "FIREEMU_PRODUCTION_TOKEN",
   "FIREEMU_PRODUCTION_PROJECT",
+  // Names a runner of its own: the gate runs the runner the package ships.
+  "FIREEMU_RUNNER_NODE",
 ]);
 const FORBIDDEN_ENV_PATTERNS = [/^FIREEMU_.*_PRIVATE_DIR$/, /^CLOUDSDK_/];
 
@@ -149,17 +153,18 @@ export const RUNS = [
     "auth-config-sdk",
     1,
   ),
-  // AUTH-TENANT-BLOCKING: one kind, two suites, each its own run (AUTH_TENANT_SUITE). The
-  // blocking suite serves the Functions fixture from the checkout (its dependencies are installed
-  // by the job) and runs the packaged runner beside the binary under test, and refuses to run
-  // without it: the checkout's runner would not show a missing module in the package.
+  // AUTH-TENANT-BLOCKING: one kind, two suites, each its own run (AUTH_TENANT_SUITE). The blocking
+  // suite serves the Functions fixture from the checkout (its dependencies are installed by the
+  // job). Both suites run the packaged runner beside the binary under test and refuse to run
+  // without it (AUTH_TENANT_PACKAGED_RUNNER): the checkout's runner would not show a module
+  // missing from the package.
   laneRun(
     "R13",
     "auth-tenant-blocking-comparison-v1",
     "conformance/src/auth-tenant-blocking/run.mjs",
     "auth-tenant-blocking",
     0,
-    { AUTH_TENANT_SUITE: "tenant" },
+    { AUTH_TENANT_SUITE: "tenant", AUTH_TENANT_PACKAGED_RUNNER: "1" },
     { rowPrefix: "atb/tenant/" },
   ),
   laneRun(
@@ -361,7 +366,7 @@ function runsForComparison(allRuns, kind, document, path, errors) {
 }
 
 /** Errors in a list of kind exclusions: a missing reason or issue, or a kind a run reproduces. */
-function exclusionErrors(excludedKinds) {
+function exclusionErrors(excludedKinds, runs) {
   const errors = [];
   for (const exclusion of excludedKinds) {
     const kind = exclusion.kind;
@@ -371,11 +376,20 @@ function exclusionErrors(excludedKinds) {
     if (typeof exclusion.issue !== "string" || !/^[a-z0-9-]+\.md$/.test(exclusion.issue)) {
       errors.push(`excluded kind ${kind}: no issue named by file name`);
     }
-    if (RUNS.some((run) => run.kind === kind)) {
+    if (runs.some((run) => run.kind === kind)) {
       errors.push(`excluded kind ${kind}: a run reproduces it`);
     }
   }
   return errors;
+}
+
+/**
+ * Why the binary under test is not an installed package, or undefined: the gate runs the runner
+ * the package ships beside the binary, and a build under target/ has none.
+ */
+export function packagedRunnerError(binary, lookup) {
+  if (findPackagedRunner(binary, lookup) !== undefined) return undefined;
+  return `no packaged runner beside ${binary} (${packagedRunnerCandidates(binary, lookup?.realpath).join(", ")}); run the installed package, not a build`;
 }
 
 /** The environment variables that refuse the run. */
@@ -438,7 +452,7 @@ export function planComparisons(
   readJson,
   { excludedKinds = EXCLUDED_KINDS, runs: allRuns = RUNS } = {},
 ) {
-  const errors = exclusionErrors(excludedKinds);
+  const errors = exclusionErrors(excludedKinds, allRuns);
   const byPath = new Map();
   for (const entry of closures) {
     if (entry.closure.parentStatus !== "COMPAT_VERIFIED") continue;
@@ -929,6 +943,8 @@ async function main() {
   if (!binaryPath || !functionsNode) throw new Error("FIREEMU_BIN and FIREEMU_NODE are required");
   await assertNoOutboundNetwork(fetch);
   const binary = realpathSync(resolve(binaryPath));
+  const notPackaged = packagedRunnerError(binary);
+  if (notPackaged) throw new Error(notPackaged);
   const out = resolve(args.out);
   await rm(out, { recursive: true, force: true });
   await mkdir(join(out, "logs"), { recursive: true });

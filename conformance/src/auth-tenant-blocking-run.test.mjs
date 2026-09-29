@@ -15,7 +15,10 @@ import {
   recentAbort,
   restoreDue,
   restoreSandbox,
+  localSessionEnv,
   runnerEnvironment,
+  runnerSha256,
+  selectRunner,
   TASK_ID,
 } from "./auth-tenant-blocking/run.mjs";
 import { createRequestBudget, installBudget } from "./auth-tenant-blocking/budget.mjs";
@@ -1073,7 +1076,7 @@ const CHECKOUT_RUNNER = "/checkout/tools/runner-node/index.mjs";
 const runnerCase = (env, files = []) => {
   const present = new Set(files);
   return runnerEnvironment(env, "/install/bin/fireemu", {
-    checkoutRunner: CHECKOUT_RUNNER,
+    checkoutDir: "/checkout/tools/runner-node",
     exists: (path) => present.has(path),
     realpath: (path) => path,
   });
@@ -1114,9 +1117,98 @@ test("the packaged-runner switch refuses to fall back when no runner ships besid
 
 test("the packaged-runner switch resolves a symlinked binary before it looks beside it", () => {
   const env = runnerEnvironment({ AUTH_TENANT_PACKAGED_RUNNER: "1" }, "/install/.bin/fireemu", {
-    checkoutRunner: CHECKOUT_RUNNER,
+    checkoutDir: "/checkout/tools/runner-node",
     exists: (path) => path === "/install/pkg/bin/runner-node/index.mjs",
     realpath: () => "/install/pkg/bin/fireemu",
   });
   assert.equal("FIREEMU_RUNNER_NODE" in env, false);
+});
+
+test("the runner a session runs is named with its directory, packaged or checkout", () => {
+  const present = new Set(["/install/bin/runner-node/index.mjs"]);
+  const deps = { checkoutDir: "/checkout/tools/runner-node", exists: (p) => present.has(p), realpath: (p) => p };
+  assert.deepEqual(selectRunner({}, "/install/bin/fireemu", deps), {
+    source: "checkout",
+    dir: "/checkout/tools/runner-node",
+  });
+  assert.deepEqual(selectRunner({ AUTH_TENANT_PACKAGED_RUNNER: "1" }, "/install/bin/fireemu", deps), {
+    source: "packaged",
+    dir: "/install/bin/runner-node",
+  });
+  assert.throws(
+    () => selectRunner({ AUTH_TENANT_PACKAGED_RUNNER: "1" }, "/other/bin/fireemu", deps),
+    /packaged runner/,
+  );
+});
+
+const SESSION_PATHS = {
+  inPath: "/run/programs.json",
+  outPath: "/run/fireemu.json",
+  signersPath: "/run/signers.json",
+  run: "42",
+  origin: "http://127.0.0.1:32298",
+};
+const sessionCase = (env, options = {}, files = []) => {
+  const present = new Set(files);
+  return localSessionEnv(env, "/install/bin/fireemu", {
+    ...SESSION_PATHS,
+    functions: true,
+    checkoutDir: "/checkout/tools/runner-node",
+    exists: (p) => present.has(p),
+    realpath: (p) => p,
+    ...options,
+  });
+};
+
+test("the session environment carries the run's paths and the caller's environment", () => {
+  const env = sessionCase({ PATH: "/bin", HOME: "/h" });
+  assert.deepEqual(
+    {
+      in: env.AUTH_TENANT_IN,
+      out: env.AUTH_TENANT_OUT,
+      signers: env.AUTH_TENANT_SIGNERS,
+      run: env.AUTH_TENANT_RUN,
+      origin: env.AUTH_TENANT_ORIGIN,
+      path: env.PATH,
+      home: env.HOME,
+    },
+    {
+      in: "/run/programs.json",
+      out: "/run/fireemu.json",
+      signers: "/run/signers.json",
+      run: "42",
+      origin: "http://127.0.0.1:32298",
+      path: "/bin",
+      home: "/h",
+    },
+  );
+});
+
+test("the session environment names the checkout runner only for a Functions session", () => {
+  assert.equal(sessionCase({}).FIREEMU_RUNNER_NODE, CHECKOUT_RUNNER);
+  assert.equal("FIREEMU_RUNNER_NODE" in sessionCase({}, { functions: false }), false);
+});
+
+test("the session environment of a packaged run has no runner override, or the session does not start", () => {
+  const packaged = { AUTH_TENANT_PACKAGED_RUNNER: "1", FIREEMU_RUNNER_NODE: "/elsewhere/index.mjs" };
+  const env = sessionCase(packaged, {}, ["/install/bin/runner-node/index.mjs"]);
+  assert.equal("FIREEMU_RUNNER_NODE" in env, false);
+  assert.equal(env.AUTH_TENANT_IN, "/run/programs.json");
+  assert.throws(() => sessionCase(packaged, {}, []), /packaged runner/);
+});
+
+test("the runner digest covers the runner's sources and not its tests", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "fireemu-runner-digest-"));
+  try {
+    await writeFile(join(dir, "index.mjs"), "a");
+    await writeFile(join(dir, "helper.mjs"), "b");
+    const base = await runnerSha256(dir);
+    await writeFile(join(dir, "helper.test.mjs"), "t");
+    await writeFile(join(dir, "notes.txt"), "n");
+    assert.equal(await runnerSha256(dir), base);
+    await writeFile(join(dir, "helper.mjs"), "c");
+    assert.notEqual(await runnerSha256(dir), base);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });

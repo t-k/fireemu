@@ -21,9 +21,11 @@ import {
   judgeFsDataWriteCurrent,
   judgeFsDataWriteHistorical,
   judgeFunctionsHttp,
+  packagedRunnerError,
   parseArguments,
   planComparisons,
 } from "./release-strict-regression.mjs";
+import { COMPARISONS } from "./auth-federation/compare.mjs";
 
 const repo = (path) => fileURLToPath(new URL(`../../${path}`, import.meta.url));
 const readJson = (path) => JSON.parse(readFileSync(repo(path), "utf8"));
@@ -187,6 +189,8 @@ test("a verified closure with a comparison of an unknown kind stops the release"
 const SYNTHETIC_KIND = "synthetic-two-suites-v1";
 const suiteRun = (id, rowPrefix) => ({ id, kind: SYNTHETIC_KIND, rowPrefix, clear: [], commands: [] });
 const suiteRuns = [suiteRun("S1", "one/"), suiteRun("S2", "two/")];
+const noRunError = (path) =>
+  `${path}: no run of kind ${SYNTHETIC_KIND} has a row prefix covering every row of the file`;
 const suiteFile = (path, rowIds) => ({
   path,
   document: { kind: SYNTHETIC_KIND, rows: rowIds.map((row) => ({ row, status: "MATCH" })) },
@@ -218,12 +222,26 @@ test("comparison files of one kind are each served by the run whose row prefix c
 
 test("a file that no run's row prefix covers stops the release", () => {
   const plan = planSuites(suiteFile("a.json", ["three/a#1"]));
-  assert.ok(plan.errors.some((error) => error.includes("a.json") && error.includes("no run")));
+  assert.deepEqual(plan.errors, [noRunError("a.json")]);
 });
 
 test("a file whose rows are split across two runs' prefixes stops the release", () => {
   const plan = planSuites(suiteFile("a.json", ["one/a#1", "two/a#1"]));
-  assert.ok(plan.errors.some((error) => error.includes("a.json") && error.includes("no run")));
+  assert.deepEqual(plan.errors, [noRunError("a.json")]);
+});
+
+test("a row that contains a run's prefix without starting with it is not covered", () => {
+  const plan = planSuites(suiteFile("a.json", ["one/a#1", "x/one/a#1"]));
+  assert.deepEqual(plan.errors, [noRunError("a.json")]);
+});
+
+test("an empty file is refused even when a single run has a prefix", () => {
+  const document = { kind: SYNTHETIC_KIND, rows: [] };
+  const plan = planComparisons([verifiedWith("SUITES", "a.json")], () => document, {
+    excludedKinds: [],
+    runs: [suiteRun("S1", "")],
+  });
+  assert.deepEqual(plan.errors, [noRunError("a.json")]);
 });
 
 test("a file two runs' prefixes both cover stops the release", () => {
@@ -236,7 +254,7 @@ test("a file two runs' prefixes both cover stops the release", () => {
 
 test("a file without rows cannot be assigned to a run and stops the release", () => {
   const plan = planSuites({ path: "a.json", document: { kind: SYNTHETIC_KIND, rows: [] } });
-  assert.ok(plan.errors.some((error) => error.includes("a.json")));
+  assert.deepEqual(plan.errors, [noRunError("a.json")]);
 });
 
 test("every export is copied once per comparison file, under that file's name", () => {
@@ -280,9 +298,15 @@ const verifiedWith = (name, path) => ({
 });
 
 test("a comparison of an excluded kind is planned as excluded, with its reason and issue", () => {
-  const [exclusion] = EXCLUDED_KINDS;
+  const exclusion = {
+    kind: "synthetic-excluded-v1",
+    reason: "a reason long enough to be a real one",
+    issue: "synthetic.md",
+  };
   const read = (path) => (path === "new/excluded.json" ? { kind: exclusion.kind } : readJson(path));
-  const plan = planComparisons([...committedClosures(), verifiedWith("NEW", "new/excluded.json")], read);
+  const plan = planComparisons([...committedClosures(), verifiedWith("NEW", "new/excluded.json")], read, {
+    excludedKinds: [...EXCLUDED_KINDS, exclusion],
+  });
   assert.deepEqual(plan.errors, []);
   assert.ok(!plan.comparisons.some((c) => c.path === "new/excluded.json"));
   const excluded = plan.excluded.find((c) => c.path === "new/excluded.json");
@@ -342,8 +366,16 @@ test("an exclusion no verified closure needs stops the release", () => {
   assert.ok(plan.errors.some((error) => error.includes("unused-v1")));
 });
 
+test("the excluded kinds are exactly the ones the release discloses", () => {
+  // Removing an exclusion means adding its run; adding one means a disclosure of its own.
+  assert.deepEqual(EXCLUDED_KINDS.map((exclusion) => exclusion.kind).toSorted(), [
+    "auth-fs-cross-comparison-v1",
+    "auth-fs-cross-stage2-comparison-v1",
+    "fs-rules-comparison-v1",
+  ]);
+});
+
 test("every kind exclusion names its reason and an issue by file name only", () => {
-  assert.ok(EXCLUDED_KINDS.length > 0);
   for (const exclusion of EXCLUDED_KINDS) {
     assert.ok(exclusion.reason.length > 20, exclusion.kind);
     assert.match(exclusion.issue, /^[a-z0-9-]+\.md$/, exclusion.kind);
@@ -412,6 +444,7 @@ test("a production or sandbox credential in the environment refuses the run", ()
     "GOOGLE_APPLICATION_CREDENTIALS",
     "FIREEMU_PRODUCTION_TOKEN",
     "FIREEMU_PRODUCTION_PROJECT",
+    "FIREEMU_RUNNER_NODE",
     "FIREEMU_FS_RULES_PRIVATE_DIR",
     "CLOUDSDK_CONFIG",
   ]) {
@@ -706,4 +739,75 @@ test("the strict-production job installs the blocking fixture's dependencies bef
 test("the loopback run passes the Functions Node to the harnesses", () => {
   const job = strictProductionJob();
   assert.match(job.slice(job.indexOf("unshare --net")), /FIREEMU_NODE="\$FIREEMU_NODE"/);
+});
+
+// --- exclusions and the run table ------------------------------------------------------------
+
+test("an exclusion of a kind an injected run reproduces stops the release", () => {
+  const kind = "synthetic-excluded-v1";
+  const plan = planComparisons([], () => undefined, {
+    excludedKinds: [{ kind, reason: "a reason long enough to be a real one", issue: "s.md" }],
+    runs: [{ id: "S1", kind, clear: [], commands: [] }],
+  });
+  assert.ok(plan.errors.some((error) => error.includes(kind) && error.includes("a run reproduces")));
+  // The live table's runs do not stand in for the injected ones.
+  const live = planComparisons([], () => undefined, {
+    excludedKinds: [{ kind, reason: "a reason long enough to be a real one", issue: "s.md" }],
+    runs: [],
+  });
+  assert.ok(!live.errors.some((error) => error.includes("a run reproduces")));
+});
+
+const atbRuns = () => RUNS.filter((run) => run.kind === "auth-tenant-blocking-comparison-v1");
+
+test("every AUTH-TENANT-BLOCKING run runs the packaged runner in every command", () => {
+  assert.deepEqual(
+    atbRuns().map((run) => run.id),
+    ["R13", "R14"],
+  );
+  for (const run of atbRuns()) {
+    assert.ok(run.commands.length > 0, run.id);
+    for (const command of run.commands) {
+      assert.equal(command.env.AUTH_TENANT_PACKAGED_RUNNER, "1", `${run.id} ${command.mode}`);
+    }
+  }
+});
+
+test("every AUTH-TENANT-BLOCKING run names its suite and the rows of that suite", () => {
+  const suites = atbRuns().map((run) => run.commands[0].env.AUTH_TENANT_SUITE);
+  assert.deepEqual(suites.toSorted(), ["blocking", "tenant"]);
+  for (const run of atbRuns()) {
+    for (const command of run.commands) {
+      assert.equal(command.env.AUTH_TENANT_SUITE, run.commands[0].env.AUTH_TENANT_SUITE, run.id);
+    }
+    assert.equal(run.rowPrefix, `atb/${run.commands[0].env.AUTH_TENANT_SUITE}/`, run.id);
+  }
+});
+
+test("every AUTH-FEDERATION run runs the packet of its own kind, in both commands", () => {
+  const runs = RUNS.filter((run) => run.commands[0].argv.some((arg) => arg.endsWith("auth-federation/compare.mjs")));
+  assert.deepEqual(runs.map((run) => run.id), ["R15", "R16", "R17"]);
+  for (const run of runs) {
+    const [check, exported] = run.commands;
+    const packet = check.argv[check.argv.indexOf("check") + 1];
+    assert.equal(COMPARISONS[packet]?.kind, run.kind, run.id);
+    assert.equal(exported.argv[exported.argv.indexOf("export-comparison") + 1], packet, run.id);
+    assert.equal(exported.argv.at(-1), "{export}", run.id);
+  }
+  assert.equal(new Set(runs.map((run) => run.kind)).size, runs.length);
+});
+
+// --- the installed package ---------------------------------------------------------------------
+
+test("a runner override in the environment refuses the run", () => {
+  assert.deepEqual(forbiddenEnvironment({ FIREEMU_RUNNER_NODE: "/checkout/index.mjs" }), [
+    "FIREEMU_RUNNER_NODE",
+  ]);
+});
+
+test("the run refuses a binary that ships no runner beside it", () => {
+  const present = new Set(["/install/bin/runner-node/index.mjs"]);
+  const deps = { exists: (path) => present.has(path), realpath: (path) => path };
+  assert.equal(packagedRunnerError("/install/bin/fireemu", deps), undefined);
+  assert.match(packagedRunnerError("/checkout/target/release/fireemu", deps), /no packaged runner/);
 });

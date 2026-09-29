@@ -88,8 +88,11 @@ test("thirteen reads, in order, each once, yield exactly the stage 3 inputs, and
   const projectOf = (url) => (url.includes(NUMBERS.idp) ? "fireemu-oracle-idp" : "fireemu-oracle-query");
   for (const entry of f.wire.slice(1)) {
     assert.equal(entry.headers.authorization, `Bearer ${OWNER_TOKEN}`, entry.url);
-    assert.equal(entry.headers["x-goog-user-project"], entry.url.includes("firestore") || entry.url.includes("storage.googleapis") || entry.url.includes("www.googleapis") ? "fireemu-oracle-query" : projectOf(entry.url), entry.url);
+    // The owner's own userinfo is not a project-billed API: with the header it answers 403 USER_PROJECT_DENIED.
+    if (entry.url === "https://www.googleapis.com/oauth2/v2/userinfo") { assert.equal(Object.hasOwn(entry.headers, "x-goog-user-project"), false, entry.url); continue; }
+    assert.equal(entry.headers["x-goog-user-project"], entry.url.includes("firestore") || entry.url.includes("storage.googleapis") ? "fireemu-oracle-query" : projectOf(entry.url), entry.url);
   }
+  assert.equal(f.wire.filter((entry) => !Object.hasOwn(entry.headers, "x-goog-user-project")).length, 2);
   assert.equal(f.wire[0].headers.authorization, undefined);
   assert.equal(f.wire.filter((entry) => entry.body !== null && entry.body.length > 0).length, 4);
   const inputs = JSON.parse(await readFile(result.inputsPath, "utf8"));

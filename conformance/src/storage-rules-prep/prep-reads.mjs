@@ -115,7 +115,8 @@ export function bindPrepEntry(options) {
           capture, transport: leaseTransport(lease, transport), targets,
           credentials: { headersFor: (credential, context) => {
             if (credential !== "admin" || !["fireemu-oracle-idp", "fireemu-oracle-query"].includes(context?.project)) refuse("no credential for this request");
-            return { authorization: `Bearer ${cache.ownerCredential().accessToken}`, "x-goog-user-project": context.project };
+            // The gate says whether this route carries the quota project header (userinfo does not); only an explicit yes adds it.
+            return { authorization: `Bearer ${cache.ownerCredential().accessToken}`, ...(context.quotaProject === true ? { "x-goog-user-project": context.project } : {}) };
           } },
           preflightIds: [...PREP_IDS], admission,
         });

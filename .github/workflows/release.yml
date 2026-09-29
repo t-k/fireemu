@@ -479,6 +479,18 @@ jobs:
         if: needs.plan.outputs.publish == 'true'
         run: echo "build provenance attestation - ${{ steps.attest.outcome }}"
 
+      # What the GitHub Release attaches: the attested archives, the checksums and both SBOMs,
+      # handed over before anything is published so that a failed upload cannot leave npm ahead
+      # of the release.
+      - name: hand the release assets to the GitHub Release job
+        if: needs.plan.outputs.publish == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: release-assets
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 7
+
       # Platform packages first: `fireemu` pins them exactly, so publishing the launcher before
       # them would leave a version on the registry that cannot be installed.
       - name: publish the platform packages
@@ -510,11 +522,11 @@ jobs:
           path: dist/*
           if-no-files-found: error
 
-  # The Release page for the tag: its notes are the CHANGELOG section for the version. It runs
-  # only after npm has every package, in a job of its own so that the one job with write access
-  # to releases runs no build or test code and reads no secret. `--verify-tag` refuses to create
-  # a tag from the default branch, so the Release can only describe a tag that was pushed. The
-  # archives and checksums are not attached here.
+  # The Release page for the tag: its notes are the CHANGELOG section for the version, and it
+  # carries the archives, the checksums and both SBOMs the publish job attested. It runs only
+  # after npm has every package, in a job of its own so that the one job with write access to
+  # releases runs no build or test code and reads no secret. `--verify-tag` refuses to create a
+  # tag from the default branch, so the Release can only describe a tag that was pushed.
   github-release:
     needs: [plan, publish]
     if: needs.plan.outputs.publish == 'true'
@@ -528,15 +540,21 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: 24
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: release-assets
+          path: dist
       - name: create the GitHub Release from the CHANGELOG section
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ needs.plan.outputs.version }}
           TAG: ${{ github.ref_name }}
         run: |
+          # The files attached are the ones SHA256SUMS names (and attested), unchanged.
+          (cd dist && sha256sum --check SHA256SUMS)
           node npm/scripts/changelog-section.mjs "$VERSION" --out "$RUNNER_TEMP/release-notes.md"
           flags=""
           case "$VERSION" in *-*) flags="--prerelease" ;; esac
           # shellcheck disable=SC2086 # $flags is empty or one fixed flag
           gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --verify-tag --title "fireemu ${VERSION}" \
-            --notes-file "$RUNNER_TEMP/release-notes.md" $flags
+            --notes-file "$RUNNER_TEMP/release-notes.md" $flags dist/*

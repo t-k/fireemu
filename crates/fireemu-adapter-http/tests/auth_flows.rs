@@ -4140,142 +4140,192 @@ fn admin_v2_config_empty_mask_does_not_revert_a_concurrent_update() {
     assert_eq!(result.body["signIn"]["allowDuplicateEmails"], true);
 }
 
-/// Whichever of a project update and a tenant creation wins, the project's setting never
-/// reaches the tenant: tenants inherit nothing (AUTH-TENANT-BLOCKING recording 2026-09-27).
-#[test]
-fn admin_v2_config_racing_tenant_publication_never_reaches_the_tenant() {
-    let mut base = state();
+/// The state of a profile with a registry: the strict profile with multi-tenancy switched on,
+/// as tenant management there needs.
+fn tenant_profile_state(strict: bool) -> (AuthState, Arc<fireemu_core_auth::store::AuthRegistry>) {
+    let mut base = if strict {
+        AuthState {
+            stateless_refresh_tokens: false,
+            ..state()
+        }
+    } else {
+        state()
+    };
     let registry = Arc::new(fireemu_core_auth::store::AuthRegistry::new(
         "demo-app",
         base.store.clone(),
     ));
     base.registry = Some(registry.clone());
-    let state = Arc::new(base);
-    let start = Arc::new(std::sync::Barrier::new(3));
-    let config_path =
-        "/identitytoolkit.googleapis.com/admin/v2/projects/demo-app/config?updateMask=emailPrivacyConfig.enableImprovedEmailPrivacy";
-    let tenants_path = "/identitytoolkit.googleapis.com/v2/projects/demo-app/tenants";
-    std::thread::scope(|scope| {
-        let config_state = Arc::clone(&state);
-        let config_start = Arc::clone(&start);
-        scope.spawn(move || {
-            config_start.wait();
-            handle_with(
-                &config_state,
-                "PATCH",
-                config_path,
-                &owner(),
-                &json!({
-                    "emailPrivacyConfig": {"enableImprovedEmailPrivacy": true}
-                }),
-            )
-        });
-        let tenant_state = Arc::clone(&state);
-        let tenant_start = Arc::clone(&start);
-        scope.spawn(move || {
-            tenant_start.wait();
-            handle_with(
-                &tenant_state,
-                "POST",
-                tenants_path,
-                &owner(),
-                &json!({"displayName": "racing tenant"}),
-            )
-        });
-        start.wait();
-    });
-    let tenants = registry.tenants("demo-app");
-    assert_eq!(tenants.len(), 1);
-    assert!(tenants.iter().all(|tenant| {
-        registry
-            .tenant_store("demo-app", tenant)
-            .and_then(|store| store.lock().ok().map(|store| store.config()))
-            .is_some_and(|config| !config.enable_improved_email_privacy)
-    }));
-    assert!(
-        state
-            .store
-            .lock()
-            .unwrap()
-            .config()
-            .enable_improved_email_privacy
-    );
+    if strict {
+        let enabled = handle_with(
+            &base,
+            "PATCH",
+            "/identitytoolkit.googleapis.com/admin/v2/projects/demo-app/config?updateMask=multiTenant.allowTenants",
+            &owner(),
+            &json!({"multiTenant": {"allowTenants": true}}),
+        );
+        assert_eq!(enabled.status, 200, "{}", enabled.body);
+    }
+    (base, registry)
 }
 
-/// A tenant created after project changes takes none of them: production tenants inherit no
-/// project setting (AUTH-TENANT-BLOCKING recording 2026-09-27, inheritance#get-after,
-/// sign-up-in-late-tenant). fireemu used to copy the project's privacy and client permissions.
+/// Whichever of a project update and a tenant creation wins, the tenant ends as its profile
+/// says: the strict profile's inherits nothing (AUTH-TENANT-BLOCKING recording 2026-09-27), the
+/// emulator profile's reads the project's email privacy, as the official emulator's does
+/// (round-2 integration review M1, 2026-09-29).
 #[test]
-fn admin_v2_tenant_create_takes_none_of_the_project_config() {
-    use fireemu_core_auth::store::AuthRegistry;
+fn admin_v2_config_racing_tenant_publication_leaves_the_tenant_as_its_profile_says() {
+    for strict in [true, false] {
+        let (base, registry) = tenant_profile_state(strict);
+        let state = Arc::new(base);
+        let start = Arc::new(std::sync::Barrier::new(3));
+        let config_path =
+            "/identitytoolkit.googleapis.com/admin/v2/projects/demo-app/config?updateMask=emailPrivacyConfig.enableImprovedEmailPrivacy";
+        let tenants_path = "/identitytoolkit.googleapis.com/v2/projects/demo-app/tenants";
+        std::thread::scope(|scope| {
+            let config_state = Arc::clone(&state);
+            let config_start = Arc::clone(&start);
+            scope.spawn(move || {
+                config_start.wait();
+                handle_with(
+                    &config_state,
+                    "PATCH",
+                    config_path,
+                    &owner(),
+                    &json!({
+                        "emailPrivacyConfig": {"enableImprovedEmailPrivacy": true}
+                    }),
+                )
+            });
+            let tenant_state = Arc::clone(&state);
+            let tenant_start = Arc::clone(&start);
+            scope.spawn(move || {
+                tenant_start.wait();
+                handle_with(
+                    &tenant_state,
+                    "POST",
+                    tenants_path,
+                    &owner(),
+                    &json!({"displayName": "racing-tenant"}),
+                )
+            });
+            start.wait();
+        });
+        let tenants = registry.tenants("demo-app");
+        assert_eq!(tenants.len(), 1, "strict {strict}");
+        assert!(
+            tenants.iter().all(|tenant| {
+                registry
+                    .tenant_store("demo-app", tenant)
+                    .and_then(|store| store.lock().ok().map(|store| store.config()))
+                    .is_some_and(|config| config.enable_improved_email_privacy != strict)
+            }),
+            "strict {strict}"
+        );
+        assert!(
+            state
+                .store
+                .lock()
+                .unwrap()
+                .config()
+                .enable_improved_email_privacy
+        );
+    }
+}
 
-    let mut base = state();
-    let registry = Arc::new(AuthRegistry::new("demo-app", base.store.clone()));
-    base.registry = Some(registry.clone());
-    let state = base;
-    let config_path =
-        "/identitytoolkit.googleapis.com/admin/v2/projects/demo-app/config?updateMask=emailPrivacyConfig.enableImprovedEmailPrivacy,client.permissions.disabledUserSignup";
-    let enabled = handle_with(
-        &state,
-        "PATCH",
-        config_path,
-        &owner(),
-        &json!({
-            "emailPrivacyConfig": {"enableImprovedEmailPrivacy": true},
-            "client": {"permissions": {"disabledUserSignup": true}}
-        }),
-    );
-    assert_eq!(enabled.status, 200, "{}", enabled.body);
+/// A tenant created after project changes: the strict profile's takes none of them, as
+/// production tenants inherit no project setting (AUTH-TENANT-BLOCKING recording 2026-09-27,
+/// inheritance#get-after, sign-up-in-late-tenant); the emulator profile's reads the project's
+/// email privacy, as the official emulator's does (round-2 integration review M1, 2026-09-29).
+/// Client permissions start off in both. fireemu used to copy the project's privacy and client
+/// permissions.
+#[test]
+#[allow(clippy::too_many_lines)]
+fn admin_v2_tenant_create_takes_the_project_config_as_its_profile_says() {
+    for strict in [true, false] {
+        let (state, registry) = tenant_profile_state(strict);
+        let config_path =
+            "/identitytoolkit.googleapis.com/admin/v2/projects/demo-app/config?updateMask=emailPrivacyConfig.enableImprovedEmailPrivacy,client.permissions.disabledUserSignup";
+        let enabled = handle_with(
+            &state,
+            "PATCH",
+            config_path,
+            &owner(),
+            &json!({
+                "emailPrivacyConfig": {"enableImprovedEmailPrivacy": true},
+                "client": {"permissions": {"disabledUserSignup": true}}
+            }),
+        );
+        assert_eq!(enabled.status, 200, "{}", enabled.body);
+        let followed = !strict;
 
-    let created = handle_with(
-        &state,
-        "POST",
-        "/identitytoolkit.googleapis.com/v2/projects/demo-app/tenants",
-        &owner(),
-        &json!({"displayName": "late-tenant"}),
-    );
-    assert_eq!(created.status, 200, "{}", created.body);
-    assert!(
-        created.body.get("emailPrivacyConfig").is_none(),
-        "{}",
-        created.body
-    );
-    assert!(created.body.get("client").is_none(), "{}", created.body);
-    let tenant = created.body["name"]
-        .as_str()
-        .unwrap()
-        .rsplit('/')
-        .next()
-        .unwrap();
-    assert!(registry
-        .tenant_store("demo-app", tenant)
-        .and_then(|store| store.lock().ok().map(|store| store.config()))
-        .is_some_and(|config| {
-            !config.enable_improved_email_privacy && !config.disabled_user_signup
-        }));
-    assert!(registry
-        .tenant_metadata("demo-app", tenant)
-        .is_some_and(|metadata| {
-            !metadata.enable_improved_email_privacy && !metadata.disabled_user_signup
-        }));
-    // A tenant's own written values show, a written message kept even when off.
-    let explicit = handle_with(
-        &state,
-        "POST",
-        "/identitytoolkit.googleapis.com/v2/projects/demo-app/tenants",
-        &owner(),
-        &json!({
-            "displayName": "own-values",
-            "client": {"permissions": {"disabledUserSignup": true}},
-            "emailPrivacyConfig": {"enableImprovedEmailPrivacy": false}
-        }),
-    );
-    assert_eq!(explicit.status, 200, "{}", explicit.body);
-    assert_eq!(explicit.body["emailPrivacyConfig"], json!({}));
-    assert_eq!(
-        explicit.body["client"],
-        json!({"permissions": {"disabledUserSignup": true}})
-    );
+        let created = handle_with(
+            &state,
+            "POST",
+            "/identitytoolkit.googleapis.com/v2/projects/demo-app/tenants",
+            &owner(),
+            &json!({"displayName": "late-tenant"}),
+        );
+        assert_eq!(created.status, 200, "{}", created.body);
+        assert_eq!(
+            created.body.get("emailPrivacyConfig").cloned(),
+            followed.then(|| json!({"enableImprovedEmailPrivacy": true})),
+            "strict {strict}: {}",
+            created.body
+        );
+        assert!(created.body.get("client").is_none(), "{}", created.body);
+        let tenant = created.body["name"]
+            .as_str()
+            .unwrap()
+            .rsplit('/')
+            .next()
+            .unwrap();
+        assert!(
+            registry
+                .tenant_store("demo-app", tenant)
+                .and_then(|store| store.lock().ok().map(|store| store.config()))
+                .is_some_and(|config| {
+                    config.enable_improved_email_privacy == followed && !config.disabled_user_signup
+                }),
+            "strict {strict}"
+        );
+        assert!(
+            registry
+                .tenant_metadata("demo-app", tenant)
+                .is_some_and(|metadata| {
+                    metadata.enable_improved_email_privacy == followed
+                        && !metadata.disabled_user_signup
+                }),
+            "strict {strict}"
+        );
+        // A tenant's own written values show, a written message kept even when off; the
+        // emulator profile's privacy stays the project's.
+        let explicit = handle_with(
+            &state,
+            "POST",
+            "/identitytoolkit.googleapis.com/v2/projects/demo-app/tenants",
+            &owner(),
+            &json!({
+                "displayName": "own-values",
+                "client": {"permissions": {"disabledUserSignup": true}},
+                "emailPrivacyConfig": {"enableImprovedEmailPrivacy": false}
+            }),
+        );
+        assert_eq!(explicit.status, 200, "{}", explicit.body);
+        assert_eq!(
+            explicit.body["emailPrivacyConfig"],
+            if followed {
+                json!({"enableImprovedEmailPrivacy": true})
+            } else {
+                json!({})
+            },
+            "strict {strict}"
+        );
+        assert_eq!(
+            explicit.body["client"],
+            json!({"permissions": {"disabledUserSignup": true}})
+        );
+    }
 }
 
 #[test]

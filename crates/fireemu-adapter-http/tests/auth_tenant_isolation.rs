@@ -1352,13 +1352,18 @@ fn explicit_tenant_creation_defaults_sign_in_methods_off_until_patched() {
 /// `mfaConfig` is a constant `DISABLED` projection that refuses PATCH. Identity Platform's
 /// `Tenant.inheritance` covers only `emailSendingConfig`, so the copied and propagated
 /// fields are spec-derived hypotheses until observed.
-/// A tenant takes none of the project's settings, at creation or later, and its clients obey
-/// the tenant's own (AUTH-TENANT-BLOCKING sandbox recording 2026-09-27, `atb/tenant/inheritance`
-/// and `atb/tenant/settings`). This replaces fireemu's earlier model, in which a tenant copied the
-/// project's privacy and client permissions until it overrode them.
+/// A tenant's clients obey the tenant's own settings, and a later project change reaches no
+/// tenant's password policy or client permissions (AUTH-TENANT-BLOCKING sandbox recording
+/// 2026-09-27, `atb/tenant/inheritance` and `atb/tenant/settings`). The strict profile's tenant
+/// takes none of the project's settings, its email privacy included, as production's does; the
+/// emulator profile's reads the project's email privacy, as the official emulator's does
+/// (round-2 integration review M1, 2026-09-29;
+/// `an_emulator_tenant_reads_the_projects_duplicate_email_and_privacy_settings_live`). This
+/// replaces fireemu's earlier model, in which a tenant copied the project's privacy and client
+/// permissions until it overrode them.
 #[test]
 #[allow(clippy::too_many_lines)]
-fn tenants_take_none_of_the_project_settings_and_obey_their_own() {
+fn tenants_obey_their_own_settings_and_take_the_projects_privacy_as_their_profile_says() {
     for (profile, state, registry) in profiles() {
         // Project: an enforced 8-character minimum and email enumeration protection.
         let (status, project) = admin(
@@ -1388,20 +1393,21 @@ fn tenants_take_none_of_the_project_settings_and_obey_their_own() {
         untouched_body["displayName"] = json!("Untouched");
         let untouched = tenant_id_of(&create_tenant(&state, &untouched_body));
 
-        // Nothing of the project's shows in a new tenant.
-        for absent in [
-            "emailPrivacyConfig",
-            "client",
-            "passwordPolicyConfig",
-            "mfaConfig",
-        ] {
+        // Nothing of the project's shows in a new tenant, except, in the emulator profile, the
+        // project's email privacy it follows.
+        for absent in ["client", "passwordPolicyConfig", "mfaConfig"] {
             assert!(
                 created.get(absent).is_none(),
                 "{profile}: {absent}: {created}"
             );
         }
+        let privacy = |document: &Value| document.get("emailPrivacyConfig").cloned();
+        let followed = (profile == "emulator").then(|| json!({"enableImprovedEmailPrivacy": true}));
+        assert_eq!(privacy(&created), followed, "{profile}: {created}");
         // Its clients obey the tenant's own defaults: a 7-character password (the default
-        // policy) while the project enforces 8, and unknown addresses revealed (privacy off).
+        // policy) while the project enforces 8. Unknown addresses are revealed in the strict
+        // profile (the tenant's own privacy, off) and hidden in the emulator profile (the
+        // project's, on).
         assert_eq!(
             sign_up_status(
                 &state,
@@ -1421,7 +1427,11 @@ fn tenants_take_none_of_the_project_settings_and_obey_their_own() {
         assert_eq!(class(&weak), "PASSWORD_DOES_NOT_MEET_REQUIREMENTS");
         assert_eq!(
             unknown_email_sign_in_class(&state, Some(&overridden)),
-            "EMAIL_NOT_FOUND",
+            if profile == "strict" {
+                "EMAIL_NOT_FOUND"
+            } else {
+                "INVALID_LOGIN_CREDENTIALS"
+            },
             "{profile}"
         );
         assert_eq!(
@@ -1544,10 +1554,7 @@ fn tenants_take_none_of_the_project_settings_and_obey_their_own() {
         for tenant in [&overridden, &untouched] {
             let document = read_tenant(&state, tenant);
             assert!(document.get("client").is_none(), "{profile}: {document}");
-            assert!(
-                document.get("emailPrivacyConfig").is_none(),
-                "{profile}: {document}"
-            );
+            assert_eq!(privacy(&document), followed, "{profile}: {document}");
             assert!(
                 !registry
                     .tenant_store("demo-app", tenant)
@@ -1592,6 +1599,136 @@ fn tenants_take_none_of_the_project_settings_and_obey_their_own() {
             &json!({"idToken": ok["idToken"], "password": "ten-chars!"}),
         );
         assert_eq!(status, 200, "{profile}: {changed}");
+    }
+}
+
+/// The emulator profile's tenant reads the project's duplicate-email and improved email privacy
+/// settings, live, as the official emulator's tenant does (firebase-tools 15.28.2
+/// `TenantProjectState`, whose `oneAccountPerEmail` and `enableImprovedEmailPrivacy` return the
+/// parent project's): a project change reaches a tenant that already exists, and a tenant's own
+/// privacy write changes nothing. The strict profile's tenant keeps its own, as production's
+/// does: the project's change reaches it not, and its own privacy write does (round-2
+/// integration review M1, 2026-09-29).
+#[test]
+#[allow(clippy::too_many_lines)]
+fn a_tenant_takes_the_projects_duplicate_email_and_privacy_settings_as_its_profile_says() {
+    for (profile, state, _registry) in profiles() {
+        let emulator = profile == "emulator";
+        let tenant = tenant_id_of(&create_tenant(
+            &state,
+            &json!({"displayName": "Live", "allowPasswordSignup": true}),
+        ));
+        let reset = |state: &AuthState| {
+            let (status, body) = client(
+                state,
+                &format!("{V1}/accounts:sendOobCode"),
+                &tenant,
+                json!({"requestType": "PASSWORD_RESET", "email": "missing@example.com"}),
+            );
+            (status, class(&body))
+        };
+        // The address is held by an account without a password: two password accounts never
+        // share one, whatever the setting.
+        let (status, held) = admin(
+            &state,
+            "POST",
+            &tenant_admin_path(&tenant, "accounts"),
+            &json!({"email": "held@example.com"}),
+        );
+        assert_eq!(status, 200, "{profile}: {held}");
+        let mover = sign_up(&state, &tenant, "mover@example.com");
+        let take_held = |state: &AuthState| {
+            let (status, body) = client(
+                state,
+                &format!("{V1}/accounts:update"),
+                &tenant,
+                json!({"idToken": mover["idToken"], "email": "held@example.com"}),
+            );
+            (status, class(&body))
+        };
+        let revealed = (
+            "EMAIL_NOT_FOUND",
+            (400, "EMAIL_NOT_FOUND".to_owned()),
+            (400, "EMAIL_EXISTS".to_owned()),
+        );
+        let observed = |state: &AuthState| {
+            (
+                unknown_email_sign_in_class(state, Some(&tenant)),
+                reset(state),
+                take_held(state),
+            )
+        };
+        let as_owned = |(sign_in, reset, take): (&str, (u16, String), (u16, String))| {
+            (sign_in.to_owned(), reset, take)
+        };
+
+        // Both off in the project: unknown addresses are revealed, and an address is one
+        // account's.
+        assert_eq!(observed(&state), as_owned(revealed.clone()), "{profile}");
+        let project_turns_on = |mask: &str, body: Value| {
+            let (status, project) = admin(
+                &state,
+                "PATCH",
+                &format!("{PROJECT_CONFIG}?updateMask={mask}"),
+                &body,
+            );
+            assert_eq!(status, 200, "{profile}: {project}");
+        };
+
+        // The project allows duplicate addresses after the tenant exists: the emulator
+        // profile's tenant follows, the strict profile's keeps its own. (With improved email
+        // privacy on, an email change asks for verification first, so duplicates come first.)
+        project_turns_on(
+            "signIn.allowDuplicateEmails",
+            json!({"signIn": {"allowDuplicateEmails": true}}),
+        );
+        assert_eq!(
+            take_held(&state),
+            if emulator {
+                (200, String::new())
+            } else {
+                (400, "EMAIL_EXISTS".to_owned())
+            },
+            "{profile}"
+        );
+
+        // The project turns improved email privacy on: the emulator profile's tenant follows,
+        // the strict profile's keeps its own.
+        project_turns_on(
+            "emailPrivacyConfig.enableImprovedEmailPrivacy",
+            json!({"emailPrivacyConfig": {"enableImprovedEmailPrivacy": true}}),
+        );
+        if emulator {
+            assert_eq!(
+                unknown_email_sign_in_class(&state, Some(&tenant)),
+                "INVALID_LOGIN_CREDENTIALS"
+            );
+            assert_eq!(reset(&state).0, 200);
+        } else {
+            assert_eq!(
+                (
+                    unknown_email_sign_in_class(&state, Some(&tenant)),
+                    reset(&state)
+                ),
+                (revealed.0.to_owned(), revealed.1.clone()),
+                "{profile}"
+            );
+        }
+
+        // A tenant's own privacy write: the emulator profile keeps the project's (on), the
+        // strict profile takes the tenant's.
+        let (status, patched) = admin(
+            &state,
+            "PATCH",
+            &format!("{ADMIN_V2}/tenants/{tenant}?updateMask=emailPrivacyConfig.enableImprovedEmailPrivacy"),
+            &json!({"emailPrivacyConfig": {"enableImprovedEmailPrivacy": !emulator}}),
+        );
+        assert_eq!(status, 200, "{profile}: {patched}");
+        assert_eq!(
+            unknown_email_sign_in_class(&state, Some(&tenant)),
+            "INVALID_LOGIN_CREDENTIALS",
+            "{profile}"
+        );
     }
 }
 

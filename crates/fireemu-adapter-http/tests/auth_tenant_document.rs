@@ -176,6 +176,7 @@ fn a_new_tenant_answers_only_what_was_written() {
 }
 
 #[test]
+#[allow(clippy::too_many_lines)]
 fn switches_appear_only_when_on_and_written_members_are_echoed() {
     for (label, state) in profiles() {
         // manage#create-open: a false disableAuth is left out.
@@ -244,9 +245,16 @@ fn switches_appear_only_when_on_and_written_members_are_echoed() {
             settings["monitoring"],
             json!({"requestLogging": {"enabled": true}})
         );
+        // The emulator profile's tenant keeps the project's email privacy (off), as the
+        // official emulator's does; the write shows as written (round-2 integration review M1).
         assert_eq!(
             settings["emailPrivacyConfig"],
-            json!({"enableImprovedEmailPrivacy": true})
+            if label == "strict" {
+                json!({"enableImprovedEmailPrivacy": true})
+            } else {
+                json!({})
+            },
+            "{label}"
         );
         assert_eq!(
             settings["client"],
@@ -604,8 +612,16 @@ fn the_tenant_list_is_ordered_by_id_and_pages_as_production_does() {
         let token = first["nextPageToken"].as_str().unwrap().to_owned();
         let second = listed(&format!("?pageSize=2&pageToken={token}"));
         assert_eq!(ids_of(&second), ids[2..]);
-        // manage#list-bad-token.
+        // manage#list-bad-token: production lists nothing for a token it did not issue. The
+        // emulator profile reads it as the official emulator does, as the last tenant id listed
+        // (round-2 integration review S2, 2026-09-29).
         assert_eq!(listed("?pageToken=not-a-token"), json!({}), "{label}");
+        let after_raw = listed(&format!("?pageSize=2&pageToken={}", ids[1]));
+        if label == "strict" {
+            assert_eq!(after_raw, json!({}), "{label}");
+        } else {
+            assert_eq!(ids_of(&after_raw), ids[2..], "{label}: {after_raw}");
+        }
     }
 }
 

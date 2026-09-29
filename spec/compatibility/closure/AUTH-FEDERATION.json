@@ -949,45 +949,136 @@
     "followUps": "Non-blocking and tracked privately (docs.local/issues/open/auth-federation-strict-idp-safety-observations.md): the strict IdP observations the reviews listed (the RSA key size note, SHA-1, the authUri escaping, a nonce-bearing continuation, SAML responses without NotOnOrAfter or sessionId), now stated in the limits where they apply. F11 (spConfig.spCertificates) is an owner-accepted known difference tracked separately."
   },
   "integratedRegression": {
+    "release": "v0.9.0",
+    "integrationCommit": "e6a61bd5927f771ef098a5e3f38094a46dd708a8",
+    "releaseBinarySha256": "ece3f66b1093e69d24ab16fa820994469120fcfb7ddaff22d6a4fc72cff51167",
+    "buildReceiptPath": "spec/compatibility/closure/evidence/integration-v0.9.0/release-artifact.json",
+    "buildReceiptSha256": "5de64ae72ddab9c30a3544f3957d95dbb1d3708c390f0319e09ddf97f29e6e3f",
+    "comparisons": [
+      {
+        "path": "spec/compatibility/closure/evidence/AUTH-FEDERATION-comparison.json",
+        "sha256": "6d8fcd0e1223753af281edb8c7d72e2135e62d5f5274e49cc0f92148fb225975",
+        "rows": 117,
+        "summary": {
+          "MATCH": 115,
+          "MISMATCH": 2
+        },
+        "laneComparisonPath": "spec/compatibility/closure/evidence/AUTH-FEDERATION-comparison.json",
+        "laneComparisonSha256": "6d8fcd0e1223753af281edb8c7d72e2135e62d5f5274e49cc0f92148fb225975",
+        "identicalRows": 117,
+        "changedRows": []
+      },
+      {
+        "path": "spec/compatibility/closure/evidence/AUTH-FEDERATION-saml-comparison.json",
+        "sha256": "aaa7c90991cb48537f1e8002a7e5cc43829aa3e733ce7d5f0724848d3df5c666",
+        "rows": 62,
+        "summary": {
+          "MATCH": 62
+        },
+        "laneComparisonPath": "spec/compatibility/closure/evidence/AUTH-FEDERATION-saml-comparison.json",
+        "laneComparisonSha256": "aaa7c90991cb48537f1e8002a7e5cc43829aa3e733ce7d5f0724848d3df5c666",
+        "identicalRows": 62,
+        "changedRows": []
+      },
+      {
+        "path": "spec/compatibility/closure/evidence/AUTH-FEDERATION-followup-comparison.json",
+        "sha256": "494465b08ee4ce1f411c9d876909c2a23b5c5ef5a8d391917e1bffbfedb7ecb3",
+        "rows": 7,
+        "summary": {
+          "MATCH": 7
+        },
+        "laneComparisonPath": "spec/compatibility/closure/evidence/AUTH-FEDERATION-followup-comparison.json",
+        "laneComparisonSha256": "494465b08ee4ce1f411c9d876909c2a23b5c5ef5a8d391917e1bffbfedb7ecb3",
+        "identicalRows": 7,
+        "changedRows": []
+      },
+      {
+        "path": "spec/compatibility/closure/evidence/AUTH-FEDERATION-account-regression.json",
+        "sha256": "d126fa22b6fefaca747c732edaf64ede8a12b0d933fc48be0f89b9e505668f18",
+        "rows": 631,
+        "summary": {
+          "MATCH": 631
+        },
+        "laneComparisonPath": "spec/compatibility/closure/evidence/AUTH-FEDERATION-account-regression.json",
+        "laneComparisonSha256": "d126fa22b6fefaca747c732edaf64ede8a12b0d933fc48be0f89b9e505668f18",
+        "identicalRows": 631,
+        "changedRows": [],
+        "inherited": "AUTH-ACCOUNT"
+      },
+      {
+        "path": "spec/compatibility/closure/evidence/AUTH-FEDERATION-credential-regression.json",
+        "sha256": "7a238530f99fe847422dd6653ac21b1d5b36f1daeacb0a0848f7703418c61547",
+        "rows": 222,
+        "summary": {
+          "MATCH": 222
+        },
+        "laneComparisonPath": "spec/compatibility/closure/evidence/AUTH-FEDERATION-credential-regression.json",
+        "laneComparisonSha256": "7a238530f99fe847422dd6653ac21b1d5b36f1daeacb0a0848f7703418c61547",
+        "identicalRows": 222,
+        "changedRows": [],
+        "inherited": "AUTH-CREDENTIAL"
+      },
+      {
+        "path": "spec/compatibility/closure/evidence/AUTH-FEDERATION-action-regression.json",
+        "sha256": "23cc549839415ec58fdc5621d861f3e2535b8d86c78e393929a3fb8de9ab616e",
+        "rows": 346,
+        "summary": {
+          "MATCH": 346
+        },
+        "laneComparisonPath": "spec/compatibility/closure/evidence/AUTH-FEDERATION-action-regression.json",
+        "laneComparisonSha256": "23cc549839415ec58fdc5621d861f3e2535b8d86c78e393929a3fb8de9ab616e",
+        "identicalRows": 346,
+        "changedRows": [],
+        "inherited": "AUTH-ACTION"
+      },
+      {
+        "path": "spec/compatibility/closure/evidence/AUTH-FEDERATION-mfa-regression.json",
+        "sha256": "b6b582b1180a32fb70fd8aeb75ce159115ec5a54440ca4fea6d15ce5fc2cf760",
+        "rows": 449,
+        "summary": {
+          "MATCH": 441,
+          "MATCH_NONDETERMINISTIC": 5,
+          "REOBSERVED_MATCH": 2,
+          "MATCH_TIMING_DEPENDENT": 1
+        },
+        "laneComparisonPath": "spec/compatibility/closure/evidence/AUTH-FEDERATION-mfa-regression.json",
+        "laneComparisonSha256": "b6b582b1180a32fb70fd8aeb75ce159115ec5a54440ca4fea6d15ce5fc2cf760",
+        "identicalRows": 449,
+        "changedRows": [],
+        "inherited": "AUTH-MFA"
+      },
+      {
+        "path": "spec/compatibility/closure/evidence/AUTH-FEDERATION-config-sdk-regression.json",
+        "sha256": "9ff9f3140b2a789a05c69efe2a7d49c803cd4a2378ac7a03358f0c62b1aed494",
+        "rows": 359,
+        "summary": {
+          "MATCH": 351,
+          "MISMATCH": 8
+        },
+        "laneComparisonPath": "spec/compatibility/closure/evidence/AUTH-FEDERATION-config-sdk-regression.json",
+        "laneComparisonSha256": "9ff9f3140b2a789a05c69efe2a7d49c803cd4a2378ac7a03358f0c62b1aed494",
+        "identicalRows": 359,
+        "changedRows": [],
+        "inherited": "AUTH-CONFIG-SDK"
+      },
+      {
+        "path": "spec/compatibility/closure/evidence/AUTH-FEDERATION-tenant-blocking-regression.json",
+        "sha256": "4840d2fc3ad2d8bab8e731e831ab7003b095b636cbdf3d6b96b44772a307eb73",
+        "rows": 233,
+        "summary": {
+          "MATCH": 233
+        },
+        "laneComparisonPath": "spec/compatibility/closure/evidence/AUTH-FEDERATION-tenant-blocking-regression.json",
+        "laneComparisonSha256": "4840d2fc3ad2d8bab8e731e831ab7003b095b636cbdf3d6b96b44772a307eb73",
+        "identicalRows": 233,
+        "changedRows": [],
+        "inherited": "AUTH-TENANT-BLOCKING"
+      }
+    ],
+    "result": "IDENTICAL_TO_LANE",
+    "productionRequests": 0,
     "artifact": "integration/round2-2026-09-29 e6a61bd5927f771ef098a5e3f38094a46dd708a8",
-    "finalArtifactSha256": "ece3f66b1093e69d24ab16fa820994469120fcfb7ddaff22d6a4fc72cff51167",
     "checkout": "work/atb-final 46cffab96 (harness only on top of e6a61bd59)",
-    "comparisons": {
-      "record-oidc": {
-        "MATCH": 115,
-        "MISMATCH": 2
-      },
-      "record-saml": {
-        "MATCH": 62
-      },
-      "record-followup": {
-        "MATCH": 7
-      }
-    },
-    "regressions": {
-      "account": {
-        "MATCH": 631
-      },
-      "credential": {
-        "MATCH": 222
-      },
-      "action": {
-        "MATCH": 346
-      },
-      "mfa": {
-        "MATCH": 441,
-        "MATCH_NONDETERMINISTIC": 5,
-        "REOBSERVED_MATCH": 2,
-        "MATCH_TIMING_DEPENDENT": 1
-      },
-      "config-sdk": {
-        "MATCH": 351,
-        "MISMATCH": 8
-      },
-      "tenant-blocking": {
-        "MATCH": 233
-      }
-    },
     "note": "Every differing row is documented: the two F11 rows of this parent and AUTH-CONFIG-SDK's owner-decided K5, K16 and K17 rows. The workspace tests, fmt and clippy of the integrated artifact are the round-2 integration's."
   }
 }

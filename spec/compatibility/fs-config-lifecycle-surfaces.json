@@ -396,8 +396,8 @@
       "id": "cli.exportImport",
       "local": {
         "citations": [
-          "crates/fireemu/src/import_export.rs:2897",
-          "crates/fireemu/src/import_export.rs:353",
+          "crates/fireemu/src/import_export.rs:2930",
+          "crates/fireemu/src/import_export.rs:356",
           "crates/fireemu-core-export/src/metadata.rs:142"
         ],
         "status": "implemented"
@@ -412,7 +412,7 @@
         "citations": [
           "crates/fireemu-core-export/src/metadata.rs:133",
           "crates/fireemu-core-export/src/metadata.rs:195",
-          "crates/fireemu/src/import_export.rs:1374"
+          "crates/fireemu/src/import_export.rs:1391"
         ],
         "status": "implemented"
       },
@@ -679,7 +679,7 @@
       "dataPlaneConsequence": "The written export format is a contract: fireemu's own export and import must read and write what the official tooling produces, which is already covered by local format evidence.",
       "local": {
         "citations": [
-          "crates/fireemu/src/import_export.rs:2897",
+          "crates/fireemu/src/import_export.rs:2930",
           "crates/fireemu-core-export/src/firestore.rs:518",
           "crates/fireemu-core-export/src/metadata.rs:142"
         ],
@@ -707,9 +707,9 @@
       "dataPlaneConsequence": "The accepted on-disk format, partition enumeration and refusal of corrupt or duplicated output references are a contract the local importer already holds.",
       "local": {
         "citations": [
-          "crates/fireemu/src/import_export.rs:353",
-          "crates/fireemu/src/import_export.rs:1136",
-          "crates/fireemu/src/import_export.rs:1170"
+          "crates/fireemu/src/import_export.rs:356",
+          "crates/fireemu/src/import_export.rs:1153",
+          "crates/fireemu/src/import_export.rs:1187"
         ],
         "status": "local-extension-only"
       },

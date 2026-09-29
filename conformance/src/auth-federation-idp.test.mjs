@@ -69,13 +69,13 @@ test("the issuer publishes a discovery document and a public-only JWKS", () => {
 });
 
 test("private keys are written only below docs.local or the temp dir, mode 600", async () => {
-  const roots = { isRepositoryRoot: (dir) => dir === "/Users/x/repo" };
-  assert.ok(isPrivateKeyLocation("/Users/x/repo/docs.local/runs/k.pem", roots));
+  const roots = { isRepositoryRoot: (dir) => dir === "/work/repo" };
+  assert.ok(isPrivateKeyLocation("/work/repo/docs.local/runs/k.pem", roots));
   assert.ok(isPrivateKeyLocation(join(tmpdir(), "k.pem"), roots));
-  assert.ok(!isPrivateKeyLocation("/Users/x/repo/conformance/k.pem", roots));
+  assert.ok(!isPrivateKeyLocation("/work/repo/conformance/k.pem", roots));
   // A docs.local below the root is tracked by git: refused.
-  assert.ok(!isPrivateKeyLocation("/Users/x/repo/conformance/docs.local/k.pem", roots));
-  assert.ok(!isPrivateKeyLocation("/Users/x/repo/docs.local", roots));
+  assert.ok(!isPrivateKeyLocation("/work/repo/conformance/docs.local/k.pem", roots));
+  assert.ok(!isPrivateKeyLocation("/work/repo/docs.local", roots));
   const key = generateSigningKey();
   await assert.rejects(saveSigningKey("conformance/k.pem", key), /refusing to write a private key/);
   const dir = await mkdtemp(join(tmpdir(), "fed-idp-"));

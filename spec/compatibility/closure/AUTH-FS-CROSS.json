@@ -725,5 +725,75 @@
     }
   ],
   "frozenOn": "2026-09-27",
-  "frozenBy": "coordinator (delegated), after owner decisions OX-1 to OX-3, X3 and X9"
+  "frozenBy": "coordinator (delegated), after owner decisions OX-1 to OX-3, X3 and X9",
+  "integratedRegression": {
+    "release": "v0.9.0",
+    "integrationCommit": "e6a61bd5927f771ef098a5e3f38094a46dd708a8",
+    "releaseBinarySha256": "ece3f66b1093e69d24ab16fa820994469120fcfb7ddaff22d6a4fc72cff51167",
+    "buildReceiptPath": "spec/compatibility/closure/evidence/integration-v0.9.0/release-artifact.json",
+    "buildReceiptSha256": "5de64ae72ddab9c30a3544f3957d95dbb1d3708c390f0319e09ddf97f29e6e3f",
+    "laneArtifactSha256": "890a38d8b8827ca3980522151b69c9bbad4230a674ccf73a7123470910094021",
+    "supplementaryRegression": {
+      "binarySha256": "ece3f66b1093e69d24ab16fa820994469120fcfb7ddaff22d6a4fc72cff51167",
+      "productionRequests": 0,
+      "method": "the recorded harnesses, with only the local tenant setup (multi-tenancy switched on and restored, as the production path does) added outside them (ledger line 473); the rows are classified by the recorded harnesses",
+      "summaries": {
+        "spec/compatibility/closure/evidence/AUTH-FS-CROSS-stage1-comparison.json": {
+          "MATCH": 89
+        },
+        "spec/compatibility/closure/evidence/AUTH-FS-CROSS-stage2-comparison.json": {
+          "MATCH": 56,
+          "MATCH_NONDETERMINISTIC": 1
+        },
+        "spec/compatibility/closure/evidence/AUTH-FS-CROSS-fs-rules-regression.json": {
+          "MATCH": 1144,
+          "DEPENDENCY_REFUSED": 5
+        }
+      },
+      "recordedIn": "AUTH-FS-CROSS/final-artifact-regression"
+    },
+    "comparisons": [
+      {
+        "path": "spec/compatibility/closure/evidence/AUTH-FS-CROSS-stage1-comparison.json",
+        "sha256": "d2550cc15e22ee7b10396bd469ef15ecd6ce86dda11ad2b2faaee3d1b3b9a4e0",
+        "rows": 89,
+        "summary": {
+          "MATCH": 89
+        },
+        "laneComparisonPath": "spec/compatibility/closure/evidence/AUTH-FS-CROSS-stage1-comparison.json",
+        "laneComparisonSha256": "d2550cc15e22ee7b10396bd469ef15ecd6ce86dda11ad2b2faaee3d1b3b9a4e0",
+        "identicalRows": 89,
+        "changedRows": []
+      },
+      {
+        "path": "spec/compatibility/closure/evidence/AUTH-FS-CROSS-stage2-comparison.json",
+        "sha256": "0068cfbf7c139d27f25a1c18dc2ca353b36bd4bb2eed20ddb75f200f61c76b8d",
+        "rows": 57,
+        "summary": {
+          "MATCH": 56,
+          "MATCH_NONDETERMINISTIC": 1
+        },
+        "laneComparisonPath": "spec/compatibility/closure/evidence/AUTH-FS-CROSS-stage2-comparison.json",
+        "laneComparisonSha256": "0068cfbf7c139d27f25a1c18dc2ca353b36bd4bb2eed20ddb75f200f61c76b8d",
+        "identicalRows": 57,
+        "changedRows": []
+      },
+      {
+        "path": "spec/compatibility/closure/evidence/AUTH-FS-CROSS-fs-rules-regression.json",
+        "sha256": "d2426eb9fa84d3e97ac8b34d53eafe63588439757034dc537c4d11c5cb20094a",
+        "rows": 1149,
+        "summary": {
+          "MATCH": 1144,
+          "DEPENDENCY_REFUSED": 5
+        },
+        "laneComparisonPath": "spec/compatibility/closure/evidence/AUTH-FS-CROSS-fs-rules-regression.json",
+        "laneComparisonSha256": "d2426eb9fa84d3e97ac8b34d53eafe63588439757034dc537c4d11c5cb20094a",
+        "identicalRows": 1149,
+        "changedRows": [],
+        "inherited": "FS-RULES"
+      }
+    ],
+    "result": "SUPPLEMENTARY_ON_RELEASE_BINARY",
+    "productionRequests": 0
+  }
 }

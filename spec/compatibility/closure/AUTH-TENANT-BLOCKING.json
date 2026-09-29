@@ -1016,5 +1016,95 @@
     "report": "docs.local/reviews/2026-09-28-auth-tenant-blocking-closure-rereview3.md (private; earlier: -closure-review.md, -closure-rereview.md, -closure-rereview2.md)",
     "followUps": "Non-blocking and tracked privately (docs.local/issues/closed/auth-tenant-blocking-reservation-follow-ups.md (fixed in 665dd7595), emulator-profile-blocking-bounds-without-official-counterpart.md, blocking-path-self-deadlock-on-unregistered-routed-project.md): an override-only call in place of use_reserved_generated_local_id after a clear, the unreachable !cleared 409 branch, a restored account whose id an in-flight reservation holds, two optional tests, and the emulator profile's bounds that date from main",
     "promotion": "COMPAT_VERIFIED on 2026-09-29 by the project coordinator (delegated by the owner), owner ledger line 501, after the round-2 integration review approved (docs.local/reviews/2026-09-29-round2-integration-rereview2.md, packet v3 b0d0699dbe594ae867a72a473f762d14be7c841dc40f932625dc2a019acf8151, final head 04edf513b, artifact ece3f66b1093e69d24ab16fa820994469120fcfb7ddaff22d6a4fc72cff51167, private) and every row matched on the round-2 final artifact"
+  },
+  "integratedRegression": {
+    "release": "v0.9.0",
+    "integrationCommit": "e6a61bd5927f771ef098a5e3f38094a46dd708a8",
+    "releaseBinarySha256": "ece3f66b1093e69d24ab16fa820994469120fcfb7ddaff22d6a4fc72cff51167",
+    "buildReceiptPath": "spec/compatibility/closure/evidence/integration-v0.9.0/release-artifact.json",
+    "buildReceiptSha256": "5de64ae72ddab9c30a3544f3957d95dbb1d3708c390f0319e09ddf97f29e6e3f",
+    "comparisons": [
+      {
+        "path": "spec/compatibility/closure/evidence/AUTH-TENANT-BLOCKING-tenant-comparison.json",
+        "sha256": "98e91d6835758483b7f565abd514bb4151c7196dd4a31c1d7d45be3cac36c58d",
+        "rows": 233,
+        "summary": {
+          "MATCH": 233
+        },
+        "laneComparisonPath": "spec/compatibility/closure/evidence/AUTH-TENANT-BLOCKING-tenant-comparison.json",
+        "laneComparisonSha256": "98e91d6835758483b7f565abd514bb4151c7196dd4a31c1d7d45be3cac36c58d",
+        "identicalRows": 233,
+        "changedRows": []
+      },
+      {
+        "path": "spec/compatibility/closure/evidence/AUTH-TENANT-BLOCKING-blocking-comparison.json",
+        "sha256": "adb6cf761ad71fe0480c2494c0484f284a587813e5e610ee7f88539fcc7a731d",
+        "rows": 89,
+        "summary": {
+          "MATCH": 89
+        },
+        "laneComparisonPath": "spec/compatibility/closure/evidence/AUTH-TENANT-BLOCKING-blocking-comparison.json",
+        "laneComparisonSha256": "adb6cf761ad71fe0480c2494c0484f284a587813e5e610ee7f88539fcc7a731d",
+        "identicalRows": 89,
+        "changedRows": []
+      },
+      {
+        "path": "spec/compatibility/closure/evidence/AUTH-TENANT-BLOCKING-account-regression.json",
+        "sha256": "d126fa22b6fefaca747c732edaf64ede8a12b0d933fc48be0f89b9e505668f18",
+        "rows": 631,
+        "summary": {
+          "MATCH": 631
+        },
+        "laneComparisonPath": "spec/compatibility/closure/evidence/AUTH-TENANT-BLOCKING-account-regression.json",
+        "laneComparisonSha256": "d126fa22b6fefaca747c732edaf64ede8a12b0d933fc48be0f89b9e505668f18",
+        "identicalRows": 631,
+        "changedRows": [],
+        "inherited": "AUTH-ACCOUNT"
+      },
+      {
+        "path": "spec/compatibility/closure/evidence/AUTH-TENANT-BLOCKING-credential-regression.json",
+        "sha256": "7a238530f99fe847422dd6653ac21b1d5b36f1daeacb0a0848f7703418c61547",
+        "rows": 222,
+        "summary": {
+          "MATCH": 222
+        },
+        "laneComparisonPath": "spec/compatibility/closure/evidence/AUTH-TENANT-BLOCKING-credential-regression.json",
+        "laneComparisonSha256": "7a238530f99fe847422dd6653ac21b1d5b36f1daeacb0a0848f7703418c61547",
+        "identicalRows": 222,
+        "changedRows": [],
+        "inherited": "AUTH-CREDENTIAL"
+      },
+      {
+        "path": "spec/compatibility/closure/evidence/AUTH-TENANT-BLOCKING-action-regression.json",
+        "sha256": "23cc549839415ec58fdc5621d861f3e2535b8d86c78e393929a3fb8de9ab616e",
+        "rows": 346,
+        "summary": {
+          "MATCH": 346
+        },
+        "laneComparisonPath": "spec/compatibility/closure/evidence/AUTH-TENANT-BLOCKING-action-regression.json",
+        "laneComparisonSha256": "23cc549839415ec58fdc5621d861f3e2535b8d86c78e393929a3fb8de9ab616e",
+        "identicalRows": 346,
+        "changedRows": [],
+        "inherited": "AUTH-ACTION"
+      },
+      {
+        "path": "spec/compatibility/closure/evidence/AUTH-TENANT-BLOCKING-mfa-regression.json",
+        "sha256": "b6b582b1180a32fb70fd8aeb75ce159115ec5a54440ca4fea6d15ce5fc2cf760",
+        "rows": 449,
+        "summary": {
+          "MATCH": 441,
+          "MATCH_NONDETERMINISTIC": 5,
+          "REOBSERVED_MATCH": 2,
+          "MATCH_TIMING_DEPENDENT": 1
+        },
+        "laneComparisonPath": "spec/compatibility/closure/evidence/AUTH-TENANT-BLOCKING-mfa-regression.json",
+        "laneComparisonSha256": "b6b582b1180a32fb70fd8aeb75ce159115ec5a54440ca4fea6d15ce5fc2cf760",
+        "identicalRows": 449,
+        "changedRows": [],
+        "inherited": "AUTH-MFA"
+      }
+    ],
+    "result": "IDENTICAL_TO_LANE",
+    "productionRequests": 0
   }
 }

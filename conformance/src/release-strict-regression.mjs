@@ -104,7 +104,7 @@ export const RUNS = [
     "fs-config-lifecycle",
     0,
   ),
-  laneRun("R4", "fs-rules-comparison-v1", "conformance/src/fs-rules/run.mjs", "fs-rules", 0),
+  // R4 (fs-rules-comparison-v1) is excluded for v0.9.0: see EXCLUDED_KINDS.
   laneRun(
     "R5",
     "auth-account-comparison-v1",
@@ -242,6 +242,77 @@ export const EXCLUDED_PARTS = [
   },
 ];
 
+const ROUND_2_RUNS = "round-2-parent-suites-have-no-release-run.md";
+
+/**
+ * Comparison kinds a COMPAT_VERIFIED closure names that no run reproduces yet, with why and where
+ * the missing run is tracked (owner decision 2026-09-29: v0.9.0 is released with these disclosed).
+ * Every other comparison a verified closure names is rerun. A kind here must not also have a run,
+ * and must be named by a verified closure.
+ */
+export const EXCLUDED_KINDS = [
+  {
+    kind: "fs-rules-comparison-v1",
+    reason:
+      "the recorded FS-RULES harness creates tenants and does not switch multi-tenancy on, which the strict profile now requires as production does; the local tenant setup sits outside the bound harness (ledger line 473). FS-RULES was re-checked on the v0.9.0 final artifact with that setup added outside the harness: 1144 MATCH and 5 DEPENDENCY_REFUSED (owner decision 2026-09-29)",
+    issue: "move-local-only-harness-setup-outside-the-bound-harness-digest.md",
+  },
+  {
+    kind: "auth-tenant-blocking-comparison-v1",
+    reason:
+      "the tenant and blocking suites share this kind, so one export cannot reproduce both files, and the blocking suite needs the Functions fixture's dependencies, which the release job does not install",
+    issue: ROUND_2_RUNS,
+  },
+  {
+    kind: "auth-federation-comparison-v1",
+    reason:
+      "the AUTH-FEDERATION harness has no check or export-comparison mode to rerun its OIDC suite",
+    issue: ROUND_2_RUNS,
+  },
+  {
+    kind: "auth-federation-saml-comparison-v1",
+    reason:
+      "the AUTH-FEDERATION harness has no check or export-comparison mode to rerun its SAML suite",
+    issue: ROUND_2_RUNS,
+  },
+  {
+    kind: "auth-federation-followup-comparison-v1",
+    reason:
+      "the AUTH-FEDERATION harness has no check or export-comparison mode to rerun its follow-up suite",
+    issue: ROUND_2_RUNS,
+  },
+  {
+    kind: "auth-fs-cross-comparison-v1",
+    reason:
+      "stage 1 needs the local tenant setup (multi-tenancy switched on) that the recorded harness does not do; its regression ran with that setup added outside the harness (owner decision, ledger line 473)",
+    issue: "move-local-only-harness-setup-outside-the-bound-harness-digest.md",
+  },
+  {
+    kind: "auth-fs-cross-stage2-comparison-v1",
+    reason:
+      "stage 2 needs the local tenant setup (multi-tenancy switched on) that the recorded harness does not do; its regression ran with that setup added outside the harness (owner decision, ledger line 473)",
+    issue: "move-local-only-harness-setup-outside-the-bound-harness-digest.md",
+  },
+];
+
+/** Errors in a list of kind exclusions: a missing reason or issue, or a kind a run reproduces. */
+function exclusionErrors(excludedKinds) {
+  const errors = [];
+  for (const exclusion of excludedKinds) {
+    const kind = exclusion.kind;
+    if (typeof exclusion.reason !== "string" || exclusion.reason.length <= 20) {
+      errors.push(`excluded kind ${kind}: no reason`);
+    }
+    if (typeof exclusion.issue !== "string" || !/^[a-z0-9-]+\.md$/.test(exclusion.issue)) {
+      errors.push(`excluded kind ${kind}: no issue named by file name`);
+    }
+    if (RUNS.some((run) => run.kind === kind)) {
+      errors.push(`excluded kind ${kind}: a run reproduces it`);
+    }
+  }
+  return errors;
+}
+
 /** The environment variables that refuse the run. */
 export function forbiddenEnvironment(env) {
   return Object.keys(env)
@@ -293,11 +364,12 @@ const parentName = ({ name, closure }) => closure.parent ?? name.replace(/\.json
 
 /**
  * The comparison files every COMPAT_VERIFIED closure names, each with the runs that reproduce
- * it. A closure without an integrated regression, a comparison of a kind no run produces, or a
- * part of a composite file that is neither run nor excluded is an error.
+ * it, and the ones of an excluded kind. A closure without an integrated regression, a
+ * comparison of a kind no run produces and no exclusion names, a part of a composite file that
+ * is neither run nor excluded, and a malformed or unused exclusion are errors.
  */
-export function planComparisons(closures, readJson) {
-  const errors = [];
+export function planComparisons(closures, readJson, { excludedKinds = EXCLUDED_KINDS } = {}) {
+  const errors = exclusionErrors(excludedKinds);
   const byPath = new Map();
   for (const entry of closures) {
     if (entry.closure.parentStatus !== "COMPAT_VERIFIED") continue;
@@ -313,12 +385,26 @@ export function planComparisons(closures, readJson) {
     }
   }
   const planned = [];
+  const excluded = [];
+  const usedExclusions = new Set();
   for (const [path, parents] of byPath) {
     const document = readJson(path);
     const kind = document?.kind;
     const runs = RUNS.filter((run) => run.kind === kind);
     if (runs.length === 0) {
-      errors.push(`${path}: no run produces comparisons of kind ${kind}`);
+      const exclusion = excludedKinds.find((ex) => ex.kind === kind);
+      if (exclusion) {
+        usedExclusions.add(kind);
+        excluded.push({
+          path,
+          kind,
+          parents: [...parents].toSorted(),
+          reason: exclusion.reason,
+          issue: exclusion.issue,
+        });
+      } else {
+        errors.push(`${path}: no run produces comparisons of kind ${kind}`);
+      }
       continue;
     }
     if (COMPOSITE_KINDS[kind]) {
@@ -332,7 +418,12 @@ export function planComparisons(closures, readJson) {
     }
     planned.push({ path, kind, parents: [...parents].toSorted(), runIds: runs.map((r) => r.id) });
   }
-  return { comparisons: planned, errors };
+  for (const exclusion of excludedKinds) {
+    if (!usedExclusions.has(exclusion.kind)) {
+      errors.push(`excluded kind ${exclusion.kind}: no verified closure names it`);
+    }
+  }
+  return { comparisons: planned, excluded, errors };
 }
 
 const brief = (value) => {
@@ -777,6 +868,7 @@ async function main() {
     tarballs,
     node: process.version,
     exclusions: EXCLUDED_PARTS,
+    excludedComparisons: plan.excluded,
     planErrors: plan.errors,
     runs: [],
     comparisons: [],
@@ -800,7 +892,7 @@ async function main() {
     const exportsByRun = Object.fromEntries(
       plan.comparisons.map((c) => [c.runIds[0], c.path.split("/").at(-1)]),
     );
-    for (const run of RUNS.slice(0, 9)) {
+    for (const run of RUNS.filter((r) => r.commands.some((c) => c.mode === "export-comparison"))) {
       const from = join(out, `${run.id}-export.json`);
       if (existsSync(from)) await copyFile(from, join(out, exportsByRun[run.id]));
     }

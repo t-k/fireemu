@@ -10,6 +10,7 @@ import { fileURLToPath } from "node:url";
 
 import {
   ALLOWED_MODES,
+  EXCLUDED_KINDS,
   EXCLUDED_PARTS,
   RUNS,
   assertNoOutboundNetwork,
@@ -149,7 +150,7 @@ test("each kind of row difference names the row and what is wrong with it", () =
 test("every comparison a verified closure names is run or excluded with a reason", () => {
   const plan = planComparisons(committedClosures(), readJson);
   assert.deepEqual(plan.errors, []);
-  const paths = new Set(plan.comparisons.map((c) => c.path));
+  const paths = new Set([...plan.comparisons, ...plan.excluded].map((c) => c.path));
   for (const { closure } of committedClosures()) {
     if (closure.parentStatus !== "COMPAT_VERIFIED") continue;
     for (const { path } of closure.integratedRegression.comparisons) assert.ok(paths.has(path));
@@ -178,6 +179,87 @@ test("a verified closure with a comparison of an unknown kind stops the release"
     path === "new/comparison.json" ? { kind: "new-kind-v1" } : readJson(path);
   const plan = planComparisons([...closures, fake], read);
   assert.ok(plan.errors.some((error) => error.includes("new-kind-v1")));
+});
+
+const verifiedWith = (name, path) => ({
+  name: `${name}.json`,
+  closure: {
+    parent: name,
+    parentStatus: "COMPAT_VERIFIED",
+    integratedRegression: { comparisons: [{ path }] },
+  },
+});
+
+test("a comparison of an excluded kind is planned as excluded, with its reason and issue", () => {
+  const [exclusion] = EXCLUDED_KINDS;
+  const read = (path) => (path === "new/excluded.json" ? { kind: exclusion.kind } : readJson(path));
+  const plan = planComparisons([...committedClosures(), verifiedWith("NEW", "new/excluded.json")], read);
+  assert.deepEqual(plan.errors, []);
+  assert.ok(!plan.comparisons.some((c) => c.path === "new/excluded.json"));
+  const excluded = plan.excluded.find((c) => c.path === "new/excluded.json");
+  assert.deepEqual(excluded, {
+    path: "new/excluded.json",
+    kind: exclusion.kind,
+    parents: ["NEW"],
+    reason: exclusion.reason,
+    issue: exclusion.issue,
+  });
+});
+
+test("an unlisted kind with no run still stops the release", () => {
+  const read = (path) => (path === "new/unlisted.json" ? { kind: "unlisted-kind-v1" } : readJson(path));
+  const plan = planComparisons([...committedClosures(), verifiedWith("NEW", "new/unlisted.json")], read);
+  assert.ok(plan.errors.some((error) => error.includes("unlisted-kind-v1")));
+  assert.ok(!plan.excluded.some((c) => c.kind === "unlisted-kind-v1"));
+});
+
+test("an exclusion without a reason or an issue stops the release", () => {
+  const kinds = (entry) => [...EXCLUDED_KINDS, entry];
+  const withReason = planComparisons(committedClosures(), readJson, {
+    excludedKinds: kinds({ kind: "x-v1", reason: "", issue: "x.md" }),
+  });
+  assert.ok(withReason.errors.some((error) => error.includes("x-v1") && error.includes("reason")));
+  const withIssue = planComparisons(committedClosures(), readJson, {
+    excludedKinds: kinds({ kind: "y-v1", reason: "a reason long enough to be a real one", issue: "" }),
+  });
+  assert.ok(withIssue.errors.some((error) => error.includes("y-v1") && error.includes("issue")));
+  const withPath = planComparisons(committedClosures(), readJson, {
+    excludedKinds: kinds({
+      kind: "z-v1",
+      reason: "a reason long enough to be a real one",
+      issue: "docs.local/issues/open/z.md",
+    }),
+  });
+  assert.ok(withPath.errors.some((error) => error.includes("z-v1") && error.includes("issue")));
+});
+
+test("an exclusion of a kind a run reproduces stops the release", () => {
+  const plan = planComparisons(committedClosures(), readJson, {
+    excludedKinds: [
+      ...EXCLUDED_KINDS,
+      { kind: RUNS[0].kind, reason: "a reason long enough to be a real one", issue: "r.md" },
+    ],
+  });
+  assert.ok(plan.errors.some((error) => error.includes(RUNS[0].kind) && error.includes("run")));
+});
+
+test("an exclusion no verified closure needs stops the release", () => {
+  const plan = planComparisons(committedClosures(), readJson, {
+    excludedKinds: [
+      ...EXCLUDED_KINDS,
+      { kind: "unused-v1", reason: "a reason long enough to be a real one", issue: "u.md" },
+    ],
+  });
+  assert.ok(plan.errors.some((error) => error.includes("unused-v1")));
+});
+
+test("every kind exclusion names its reason and an issue by file name only", () => {
+  assert.ok(EXCLUDED_KINDS.length > 0);
+  for (const exclusion of EXCLUDED_KINDS) {
+    assert.ok(exclusion.reason.length > 20, exclusion.kind);
+    assert.match(exclusion.issue, /^[a-z0-9-]+\.md$/, exclusion.kind);
+    assert.ok(!RUNS.some((run) => run.kind === exclusion.kind), exclusion.kind);
+  }
 });
 
 test("a verified closure without an integrated regression stops the release", () => {

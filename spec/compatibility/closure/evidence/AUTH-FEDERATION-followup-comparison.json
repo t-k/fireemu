@@ -1,6 +1,6 @@
 {
   "kind": "auth-federation-followup-comparison-v1",
-  "artifactSha256": "6193a0dad20dcca8da6e4e62d7f883953b9a02b37411cd018add420c1e96d57d",
+  "artifactSha256": "ece3f66b1093e69d24ab16fa820994469120fcfb7ddaff22d6a4fc72cff51167",
   "fixtureSha256": "96d4aa07614069035faacdec2b03ade2d7e97eb7bcaa78c09e10875ef362acc2",
   "summary": {
     "MATCH": 7

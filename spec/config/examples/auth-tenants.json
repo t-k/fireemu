@@ -1,0 +1,39 @@
+{
+  "$schema": "https://fireemu.dev/spec/config/fireemu.schema.json",
+  "schemaVersion": 1,
+  "profile": "strict",
+  "limits": {
+    "catalog": "firestore-standard-2026-08-25",
+    "queryCatalog": "firestore-standard-query-2026-08-25",
+    "rulesCatalog": "firebase-rules-2026-08-25"
+  },
+  "firestore": {
+    "edition": "standard",
+    "apiMode": "native"
+  },
+  "rules": {
+    "executionMode": "admin-bypass"
+  },
+  "auth": {
+    "multiTenant": {
+      "allowTenants": true
+    },
+    "tenants": [
+      {
+        "tenantId": "acme-x7k2q",
+        "displayName": "acme",
+        "allowPasswordSignup": true,
+        "mfaConfig": {
+          "state": "ENABLED",
+          "enabledProviders": [
+            "PHONE_SMS"
+          ]
+        }
+      },
+      {
+        "tenantId": "beta-a1b2c",
+        "displayName": "beta"
+      }
+    ]
+  }
+}

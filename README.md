@@ -213,6 +213,7 @@ The `auth` section of `fireemu.json` lets you configure sign-in methods, passwor
 | Handling of accounts that share an email address | `auth.signIn.allowDuplicateEmails` |
 | Password length and character requirements, and policy enforcement at sign-in | `auth.passwordPolicy` |
 | TOTP-based multi-factor authentication | `auth.totp` |
+| Tenants that exist when the daemon starts, and the multi-tenancy switch | `auth.tenants`, `auth.multiTenant` |
 | Restrictions on end-user account creation and deletion | `auth.client.permissions` |
 | Email enumeration protection | `auth.improvedEmailPrivacy` |
 | Project- and tenant-specific password policies and account permissions | `auth.passwordPolicyOverrides`, `auth.configOverrides` |
@@ -284,6 +285,33 @@ These settings are separate from creating the project or tenant. Naming a tenant
 #### Enable multi-tenancy
 
 Under the `strict` profile, enable `multiTenant.allowTenants` through the Admin API before using multi-tenancy. See the [compatibility documentation](docs/compatibility-contract.md) for the supported Admin API scope. 
+
+#### Start with tenants
+
+Instead of creating tenants through the Admin API in every session, declare the default project's tenants and the multi-tenancy switch in the file. Each entry of `auth.tenants` is an Admin v2 `Tenant` document plus its `tenantId`, which has the form production generates, the display name, a hyphen, and five characters of `a-z0-9`:
+
+```json
+{
+  "schemaVersion": 1,
+  "profile": "strict",
+  "auth": {
+    "multiTenant": { "allowTenants": true },
+    "tenants": [
+      {
+        "tenantId": "acme-x7k2q",
+        "displayName": "acme",
+        "allowPasswordSignup": true,
+        "mfaConfig": { "state": "ENABLED", "enabledProviders": ["PHONE_SMS"] }
+      }
+    ]
+  }
+}
+```
+
+- A document is read by the code the Admin tenant create route reads one with, so a value production refuses stops the daemon at startup. The tenants are created empty, in file order, and settings such as `mfaConfig` and `passwordPolicyConfig` come from the document.
+- Under the `strict` profile tenants are created only in a project that allows them, as in production, so `auth.tenants` needs `auth.multiTenant.allowTenants: true` (the daemon refuses to start otherwise). The `emulator` profile takes tenants without the switch.
+- `POST /v1/sessions/{session}/reset` creates the declared tenants again, empty, and returns the switch to the declared value. Without these keys a reset leaves an Admin-set switch alone.
+- Only the default project is seeded. With `--import`, an imported tenant is authoritative for its id, and a declared tenant the import did not carry is still created.
 
 #### Test quota-exceeded behavior
 

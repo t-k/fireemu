@@ -130,3 +130,15 @@ test("Firestore documents read as present with times, absent as NOT_FOUND, and w
   assert.equal(classifyResponse(patch, json(200, doc({ name: patch.request.path.slice(4) }))).verdict, "accepted");
   assert.equal(classifyResponse(patch, json(200, doc({ name: `${patch.request.path.slice(4)}x` }))).verdict, "unexpected");
 });
+
+test("a session URL is accepted only in its canonical spelling with each query key once", async () => {
+  const { classifyResponse } = await load();
+  const start = manifest.rows.find((r) => r.request.headers["x-goog-upload-command"] === "start" && r.request.objectName === SESSION_OBJECT.objectName);
+  const good = (url) => json(200, {}, { "X-Goog-Upload-URL": url, "X-Goog-Upload-Status": "active" });
+  assert.equal(classifyResponse(start, good(sessionUrl())).verdict, "accepted");
+  const url = sessionUrl();
+  for (const bad of [
+    url.replace("googleapis.com/", "googleapis.com:443/"), url.replace("https://firebasestorage", "HTTPS://FIREBASESTORAGE"), url.replace(`/b/${binding.bucket}/o`, `/b/${binding.bucket}/./o`),
+    `${url}&name=${encodeURIComponent(SESSION_OBJECT.objectName)}`, `${url}&upload_protocol=resumable`, `${url}&upload_id=CANARYUPLOADID9876543210`,
+  ]) assert.equal(classifyResponse(start, good(bad)).verdict, "unexpected", bad);
+});

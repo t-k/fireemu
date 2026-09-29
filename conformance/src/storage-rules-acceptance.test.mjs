@@ -201,3 +201,14 @@ test("kinds other than the settle read take no context", async () => {
   for (const ctx of [{}, { expectedSha256: "a".repeat(64) }, null, 0]) assert.throws(() => classifyResponse(del, response(204, ""), ctx), /invalid acceptance context/);
   assert.equal(classifyResponse(del, response(204, "")).verdict, "accepted");
 });
+
+test("every family refuses a stage it does not declare", async () => {
+  const { acceptanceKindOf } = await load();
+  const families = new Map();
+  for (const r of manifest.rows) if (!families.has(r.family)) families.set(r.family, r);
+  assert.ok(families.has("session-verify"));
+  for (const [family, base] of families) {
+    acceptanceKindOf(base);
+    assert.throws(() => acceptanceKindOf({ ...base, stage: "undeclared-stage" }), /invalid acceptance kind/, family);
+  }
+});

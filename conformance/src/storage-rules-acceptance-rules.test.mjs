@@ -150,3 +150,26 @@ test("no Rules API fact carries source text or a name beyond the reviewed fields
   const read = classifyResponse(row("ruleset/v1/read-source"), json(200, ruleset(secretSource)));
   assert.equal(JSON.stringify(read).includes("CANARY-SOURCE-TEXT"), false);
 });
+
+test("a Ruleset with a top-level field outside the published schema is unexpected", async () => {
+  const { classifyResponse } = await load();
+  assert.equal(classifyResponse(createRow, json(200, ruleset(sentContent))).verdict, "accepted");
+  for (const r of [createRow, row("ruleset/v1/read-source")]) assert.equal(classifyResponse(r, json(200, ruleset(sentContent, { surprise: 1 }))).verdict, "unexpected");
+});
+
+test("an absence needs the HTTP status, error.code, error.status and a message to agree", async () => {
+  const { classifyResponse } = await load();
+  const read = row("ruleset/v1/read-source");
+  const body = { error: { code: 404, message: "Requested entity was not found.", status: "NOT_FOUND" } };
+  assert.equal(classifyResponse(read, json(404, body)).verdict, "absent");
+  for (const bad of [json(200, body), json(403, body), json(500, body), json(404, { error: { code: 404, status: "NOT_FOUND" } }), json(404, { error: { code: 404, status: "NOT_FOUND", message: 7 } })]) {
+    assert.equal(classifyResponse(read, bad).verdict, "unexpected");
+  }
+});
+
+test("a Ruleset time must be a real time of day", async () => {
+  const { classifyResponse } = await load();
+  const read = row("ruleset/v1/read-source");
+  for (const good of ["2026-09-29T00:00:00Z", "2026-09-29T23:59:59.999999999Z", "2026-09-29T19:00:00Z"]) assert.equal(classifyResponse(read, json(200, ruleset("x", { createTime: good }))).verdict, "present", good);
+  for (const bad of ["2026-09-29T24:00:00Z", "2026-09-29T29:59:59Z", "2026-09-29T23:60:00Z", "2026-09-29T23:59:60Z"]) assert.equal(classifyResponse(read, json(200, ruleset("x", { createTime: bad }))).verdict, "unexpected", bad);
+});

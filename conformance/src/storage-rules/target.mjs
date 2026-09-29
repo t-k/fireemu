@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { isValidRefValue } from "./runtime-refs.mjs";
+import { isValidRefValue, referenceOf } from "./runtime-refs.mjs";
 
 // Turns one manifest row into the exact request the transport may send. Nothing is sent from here and no credential value
 // is read: the dispatch gate adds authorization later. Every target must match one closed route for its origin, method
@@ -12,7 +12,7 @@ const FIRESTORE = "https://firestore.googleapis.com";
 const RULES = "https://firebaserules.googleapis.com";
 const MAX_BODY_BYTES = 256 * 1024;
 const CREDENTIALS = new Set(["admin", "user-a", "user-b", "user-plain", "anonymous", "revoked-token", "foreign-project-token", "malformed-token", "malformed-oauth", "api-key-only", "owner-oauth", "adc-refresh"]);
-const QUERY_REFS = new Set(["generation", "metageneration", "update-time", "page-token"]);
+const QUERY_REFS = new Set(["generation", "metageneration", "update-time", "page-token", "download-token"]);
 const BODY_REFS = new Set(["ruleset-name"]);
 const FORBIDDEN_HEADERS = new Set(["authorization", "cookie", "host", "connection", "content-length", "transfer-encoding", "proxy-authorization", "proxy-connection", "upgrade", "expect", "accept-encoding", "x-goog-user-project"]);
 const escape = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -52,7 +52,7 @@ export function createTargetBuilder(options) {
     { origin: GCS, methods: ["POST"], path: new RegExp(`^/upload/storage/v1/b/${B}/o$`), check: (m, q, r) => subset(q, ["name", "uploadType", "ifGenerationMatch"]) && q.name === r.objectName && owned(q.name) && q.uploadType === "media" && (q.ifGenerationMatch === undefined || q.ifGenerationMatch === "0") },
     { origin: GCS, methods: ["GET"], path: new RegExp(`^/storage/v1/b/${B}/o$`), check: (m, q) => subset(q, ["prefix", "maxResults"]) && ownedPrefix(q.prefix) && numeric(q.maxResults, 1000) },
     { origin: GCS, methods: ["GET"], path: new RegExp(`^/storage/v1/b/${B}(?:/iam|/iam/testPermissions)?$`), family: "preflight", check: (m, q) => subset(q, ["optionsRequestedPolicyVersion", "permissions"]) },
-    { origin: FIREBASE, methods: ["GET", "PATCH", "DELETE", "POST"], path: new RegExp(`^/v0/b/${B}/o/([^/]+)$`), check: (m, q, r, method) => objectSegment(m[1], r) && subset(q, { GET: ["alt"], PATCH: [], DELETE: [], POST: ["create_token"] }[method]) && (q.alt === undefined || q.alt === "media") && (q.create_token === undefined || q.create_token === "true") },
+    { origin: FIREBASE, methods: ["GET", "PATCH", "DELETE", "POST"], path: new RegExp(`^/v0/b/${B}/o/([^/]+)$`), check: (m, q, r, method) => objectSegment(m[1], r) && subset(q, { GET: ["alt", "token"], PATCH: [], DELETE: [], POST: ["create_token"] }[method]) && (q.alt === undefined || q.alt === "media") && (q.create_token === undefined || q.create_token === "true") },
     { origin: FIREBASE, methods: ["POST"], path: new RegExp(`^/v0/b/${B}/o$`), check: (m, q, r) => subset(q, ["name", "uploadType"]) && q.name === r.objectName && owned(q.name) && (q.uploadType === undefined || ["multipart", "resumable"].includes(q.uploadType)) },
     { origin: FIREBASE, methods: ["GET"], path: new RegExp(`^/v0/b/${B}/o$`), check: (m, q) => subset(q, ["prefix", "maxResults"]) && ownedPrefix(q.prefix) && numeric(q.maxResults, 1000) },
     { origin: FIRESTORE, methods: ["GET", "PATCH", "DELETE"], path: /^\/v1\/projects\/fireemu-oracle-query\/databases\/\(default\)\/documents\/([A-Za-z0-9._\/-]+)$/, check: (m, q, r, method) => documents.has(documentName(m[1])) && subset(q, { GET: [], PATCH: ["currentDocument.updateTime", "updateMask.fieldPaths"], DELETE: ["currentDocument.updateTime"] }[method]) },
@@ -70,15 +70,12 @@ export function createTargetBuilder(options) {
     { origin: "https://apikeys.googleapis.com", methods: ["GET"], path: /^\/v2\/projects\/\d{1,20}\/locations\/global\/keys\/[A-Za-z0-9_-]{1,128}(?:\/keyString)?$/, family: "preflight", check: (m, q) => subset(q, []) },
   ];
 
-  // The corpus's Firestore programs name two values in their own shape; they are the same facts as the runtime references.
-  const NATIVE_REFS = { "firestore-update-time": { type: "update-time", key: "documentName", field: "updateTime" }, "gcs-object-generation": { type: "generation", key: "objectName", field: "generation" } };
+  // Reference objects come in two shapes: the runtime reference and the corpus's own (Firestore-program values, session URLs, tokens).
   function resolveValue(reference, allowed, rowId, resolve) {
+    const found = reference && typeof reference === "object" && reference.kind !== "runtime-reference" ? referenceOf(reference) : null;
     let type;
-    if (reference && typeof reference === "object" && Object.hasOwn(NATIVE_REFS, reference.kind)) {
-      const native = NATIVE_REFS[reference.kind];
-      if (reference.field !== native.field || typeof reference[native.key] !== "string" || typeof reference.fromStep !== "string") bad();
-      type = native.type;
-    } else {
+    if (found) type = found.type;
+    else {
       if (!closedRecord(reference, ["kind", "type", "key", "resolveOnlyAfterDurableProof"]) || reference.kind !== "runtime-reference" || reference.resolveOnlyAfterDurableProof !== true) bad();
       type = reference.type;
     }
@@ -87,7 +84,7 @@ export function createTargetBuilder(options) {
     if (!isValidRefValue(type, value)) bad();
     return value;
   }
-  const refType = (entry) => (Object.hasOwn(NATIVE_REFS, entry?.kind) ? NATIVE_REFS[entry.kind].type : entry?.type);
+  const refType = (entry) => (entry && typeof entry === "object" && entry.kind !== "runtime-reference" ? referenceOf(entry)?.type : entry?.type);
   const encode = (text) => encodeURIComponent(text);
   const issued = new WeakSet();
   const digestOf = ({ rowId, method, url, headers, body, credential }) => sha256([digestSalt, JSON.stringify({ rowId, method, url, headers, body: body === null ? null : sha256(body), credential })].join("\0"));
@@ -95,7 +92,7 @@ export function createTargetBuilder(options) {
   function build(row, resolve) {
     if (!row || typeof row !== "object" || typeof row.id !== "string" || !ids.has(row.id) || typeof resolve !== "function") bad();
     const request = row.request;
-    if (!request || typeof request !== "object" || ["auth", "credential-cache"].includes(row.family) || request.sessionUrlReference || !CREDENTIALS.has(request.credential)) bad();
+    if (!request || typeof request !== "object" || ["auth", "credential-cache"].includes(row.family) || !CREDENTIALS.has(request.credential)) bad();
     if (typeof request.origin !== "string" || !["GET", "POST", "PATCH", "DELETE"].includes(request.method)) bad();
     const literal = { ...(request.query ?? {}) };
     const query = {}; const pieces = []; const redactedPieces = [];
@@ -104,15 +101,24 @@ export function createTargetBuilder(options) {
       const list = Array.isArray(value) ? value : [value];
       if (Array.isArray(value) && value.length === 0) bad();
       const resolved = list.map((entry) => {
-        if (typeof entry === "string") { if (entry.length > 2048 || /[\0-\x1f\x7f]/.test(entry)) bad(); return { text: entry, redacted: entry }; }
+        // A parameter that carries a capability must come from a bound reference, never from a literal in a row.
+        if (typeof entry === "string") { if (entry.length > 2048 || /[\0-\x1f\x7f]/.test(entry) || /^(?:token|key|upload_id|access_token|id_token|refresh_token|sig|signature)$/i.test(key)) bad(); return { text: entry, redacted: entry }; }
         if (entry && typeof entry === "object" && !Array.isArray(value)) return { text: resolveValue(entry, QUERY_REFS, row.id, resolve), redacted: `<ref:${refType(entry)}>` };
         return bad();
       });
       query[key] = Array.isArray(value) ? resolved.map((entry) => entry.text) : resolved[0].text;
       for (const entry of resolved) { pieces.push(`${encode(key)}=${encode(entry.text)}`); redactedPieces.push(`${encode(key)}=${entry.redacted.startsWith("<ref:") ? entry.redacted : encode(entry.redacted)}`); }
     }
+    let sessionUrl = null;
+    if (request.sessionUrlReference !== undefined) {
+      if (request.method !== "POST" || (request.path !== null && request.path !== undefined) || pieces.length !== 0 || request.pathReference !== undefined) bad();
+      sessionUrl = resolveValue(request.sessionUrlReference, new Set(["session-url"]), row.id, resolve);
+    }
     let path; let redactedPath;
-    if (request.pathReference !== undefined) {
+    if (sessionUrl !== null) {
+      path = new URL(sessionUrl).pathname;
+      redactedPath = `${path}?<ref:session-url>`;
+    } else if (request.pathReference !== undefined) {
       if (request.path !== null && request.path !== undefined) bad();
       path = resolveValue(request.pathReference, new Set(["ruleset-path"]), row.id, resolve);
       redactedPath = "<ref:ruleset-path>";
@@ -120,10 +126,16 @@ export function createTargetBuilder(options) {
       path = request.path; redactedPath = request.path;
     }
     if (typeof path !== "string" || !path.startsWith("/") || /[\0-\x1f\x7f?#\\]|\.\.\/|\/\.\.|\/\.\/|%2e|%2E|%00|%2f|%5c/i.test(path.replace(/%2F/g, "%20"))) bad();
-    const url = `${request.origin}${path}${pieces.length ? `?${pieces.join("&")}` : ""}`;
+    const url = sessionUrl ?? `${request.origin}${path}${pieces.length ? `?${pieces.join("&")}` : ""}`;
     const parsed = new URL(url);
     if (parsed.href !== url || parsed.protocol !== "https:" || `${parsed.protocol}//${parsed.host}` !== request.origin || parsed.username || parsed.password || parsed.hash) bad();
-    const matches = routes.filter((route) => route.origin === request.origin && route.methods.includes(request.method) && (route.family === undefined || route.family === row.family)).map((route) => ({ route, match: route.path.exec(path) })).filter((entry) => entry.match);
+    if (sessionUrl !== null) {
+      // A resumable session URL: the owned bucket's object collection, this row's object, the resumable protocol, and only the known parameters, once each.
+      const seen = new Map();
+      for (const [key, value] of parsed.searchParams) { if (seen.has(key) || !["name", "upload_id", "upload_protocol", "uploadType"].includes(key)) bad(); seen.set(key, value); }
+      if (request.origin !== FIREBASE || parsed.pathname !== `/v0/b/${bucket}/o` || seen.get("name") !== request.objectName || !owned(seen.get("name")) || seen.get("upload_protocol") !== "resumable" || !/^[A-Za-z0-9._-]{8,256}$/.test(seen.get("upload_id") ?? "")) bad();
+    }
+    const matches = sessionUrl !== null ? [{ route: { check: () => true }, match: [] }] : routes.filter((route) => route.origin === request.origin && route.methods.includes(request.method) && (route.family === undefined || route.family === row.family)).map((route) => ({ route, match: route.path.exec(path) })).filter((entry) => entry.match);
     if (matches.length !== 1 || !matches[0].route.check(matches[0].match, query, request, request.method)) bad();
     const headers = {};
     for (const [name, value] of Object.entries(request.headers ?? {})) {

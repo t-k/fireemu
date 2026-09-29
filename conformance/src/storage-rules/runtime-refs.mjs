@@ -6,7 +6,7 @@ import { isTimestamp } from "./acceptance-core.mjs";
 // times, Ruleset names (and the paths derived from them) and list page tokens. A value is bound to the run only through
 // a declared producer row and becomes resolvable, by a declared consumer only, after its proof is durable. The proof
 // carries a salted digest, never the value. Auth fixtures, OAuth bodies and session URLs are outside this store.
-export const RUNTIME_REF_KINDS = Object.freeze(["generation", "metageneration", "update-time", "ruleset-name", "ruleset-path", "page-token"]);
+export const RUNTIME_REF_KINDS = Object.freeze(["generation", "metageneration", "update-time", "ruleset-name", "ruleset-path", "page-token", "session-url", "download-token"]);
 const QUERY_PROJECT = "fireemu-oracle-query";
 const GRAMMARS = Object.freeze({
   generation: (value) => /^[1-9]\d{0,18}$/.test(value),
@@ -14,6 +14,9 @@ const GRAMMARS = Object.freeze({
   "update-time": (value) => isTimestamp(value),
   "ruleset-name": (value) => new RegExp(`^projects/${QUERY_PROJECT}/rulesets/[A-Za-z0-9_-]{1,128}$`).test(value),
   "page-token": (value) => /^[A-Za-z0-9._~+/=-]{1,2048}$/.test(value),
+  // Bearer capabilities: held in memory only, and only a salted digest ever reaches a proof.
+  "session-url": (value) => value.length <= 4096 && /^https:\/\/firebasestorage\.googleapis\.com\/v0\/b\/[a-z0-9][a-z0-9._-]{2,221}\/o\?[A-Za-z0-9_.~%&=+-]{1,3900}$/.test(value),
+  "download-token": (value) => /^[A-Za-z0-9-]{8,128}$/.test(value),
 });
 const RULESET_ID = "[A-Za-z0-9_-]{1,128}";
 /** Whether a value is well formed for one runtime reference kind; `ruleset-path` is the `/v1/` form of a `ruleset-name`. */
@@ -42,13 +45,17 @@ function closedRecord(value, keys, message) {
 const NATIVE_REFS = Object.freeze({
   "firestore-update-time": Object.freeze({ type: "update-time", key: "documentName", field: "updateTime" }),
   "gcs-object-generation": Object.freeze({ type: "generation", key: "objectName", field: "generation" }),
+  "firebase-resumable-session-url": Object.freeze({ type: "session-url", key: "expectedObjectName", field: undefined }),
+  "firebase-download-token": Object.freeze({ type: "download-token", key: "objectName", field: undefined }),
 });
-function referenceOf(value) {
+/** The reference kind a corpus-native reference names, or null. */
+export const nativeRefType = (reference) => (reference && typeof reference === "object" && Object.hasOwn(NATIVE_REFS, reference.kind) ? NATIVE_REFS[reference.kind].type : null);
+export function referenceOf(value) {
   if (!value || typeof value !== "object") return null;
   if (value.kind === "runtime-reference" && RUNTIME_REF_KINDS.includes(value.type) && typeof value.key === "string") return { type: value.type, key: value.key, fromStep: null };
   if (Object.hasOwn(NATIVE_REFS, value.kind)) {
     const native = NATIVE_REFS[value.kind];
-    if (value.field === native.field && typeof value[native.key] === "string" && value[native.key] !== "" && typeof value.fromStep === "string" && value.fromStep !== "") return { type: native.type, key: value[native.key], fromStep: value.fromStep };
+    if ((native.field === undefined || value.field === native.field) && typeof value[native.key] === "string" && value[native.key] !== "" && typeof value.fromStep === "string" && value.fromStep !== "") return { type: native.type, key: value[native.key], fromStep: value.fromStep };
   }
   return null;
 }
@@ -81,7 +88,7 @@ export function buildRefTables(manifest) {
       if (row.request.method === "DELETE" && ["generation", "update-time"].includes(reference.type)) deleters.add(`${reference.type}|${reference.key}|${row.id}`);
       if (reference.fromStep !== null) {
         const producer = byStep.get(`${row.programId}\0${reference.fromStep}`);
-        if (!producer || producer.id === row.id || producer.request.credential !== "admin") bad("invalid reference tables");
+        if (!producer || producer.id === row.id || (["generation", "update-time"].includes(reference.type) && producer.request.credential !== "admin")) bad("invalid reference tables");
         const verdict = reference.type === "generation" ? PRODUCER_KINDS.get(acceptanceKindOf(producer)) : "accepted";
         if (!verdict) bad("invalid reference tables");
         pinned[`${reference.type}|${reference.key}|${row.id}`] = producer.id;

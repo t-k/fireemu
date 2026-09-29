@@ -10,10 +10,12 @@ const options = { runId: "local-run", sourceCommit: "a".repeat(40), queryProject
 const binding = { bucket: "synthetic-rules-bucket", prefix: "STORAGE-RULES/local-run/", uidA: "storage-rules-local-run-user-a", uidB: "storage-rules-local-run-user-b" };
 const manifest = buildFullRequestManifest(buildCorpus(binding), closure, options);
 const salt = "7".repeat(64);
-const VALUES = { generation: "1700000000000001", metageneration: "1", "update-time": "2026-09-29T10:00:00Z", "ruleset-name": "projects/fireemu-oracle-query/rulesets/abc-123", "ruleset-path": "/v1/projects/fireemu-oracle-query/rulesets/abc-123", "page-token": "next-token_1" };
-const typeOf = (reference) => reference.type ?? { "firestore-update-time": "update-time", "gcs-object-generation": "generation" }[reference.kind];
-const resolver = (log = []) => (reference, rowId) => { log.push([typeOf(reference), rowId]); return VALUES[typeOf(reference)] ?? assert.fail(`unexpected ${typeOf(reference)}`); };
-const UNPREPARED = (row) => ["auth", "credential-cache"].includes(row.family) || row.request.sessionUrlReference || row.request.query?.token?.kind === "firebase-download-token";
+const VALUES = { "download-token": "0a1b2c3d-1111-2222-3333-444455556666", generation: "1700000000000001", metageneration: "1", "update-time": "2026-09-29T10:00:00Z", "ruleset-name": "projects/fireemu-oracle-query/rulesets/abc-123", "ruleset-path": "/v1/projects/fireemu-oracle-query/rulesets/abc-123", "page-token": "next-token_1" };
+const typeOf = (reference) => reference.type ?? { "firestore-update-time": "update-time", "gcs-object-generation": "generation", "firebase-resumable-session-url": "session-url", "firebase-download-token": "download-token" }[reference.kind];
+const sessionUrl = (objectName, over = {}) => `https://firebasestorage.googleapis.com${over.path ?? `/v0/b/${binding.bucket}/o`}?name=${encodeURIComponent(over.name ?? objectName)}&upload_id=${over.uploadId ?? "CANARYUPLOADID0123456789"}&upload_protocol=${over.protocol ?? "resumable"}${over.extra ?? ""}`;
+const valueFor = (reference) => (typeOf(reference) === "session-url" ? sessionUrl(reference.expectedObjectName) : VALUES[typeOf(reference)]);
+const resolver = (log = []) => (reference, rowId) => { log.push([typeOf(reference), rowId]); return valueFor(reference) ?? assert.fail(`unexpected ${typeOf(reference)}`); };
+const UNPREPARED = (row) => ["auth", "credential-cache"].includes(row.family);
 const load = async () => {
   const module = await import("./storage-rules/target.mjs").catch((error) => { if (error.code === "ERR_MODULE_NOT_FOUND") return {}; throw error; });
   assert.equal(typeof module.createTargetBuilder, "function");
@@ -28,7 +30,7 @@ const sha = (value) => createHash("sha256").update(value).digest("hex");
 test("every row that is not delegated prepares into a canonical, exact target", async () => {
   const b = await builder();
   const rows = manifest.rows.filter((r) => !UNPREPARED(r));
-  assert.equal(rows.length, 6172 - 37 - 19 - 48 - 1);
+  assert.equal(rows.length, 6172 - 37 - 19);
   const seen = new Set();
   for (const r of rows) {
     const prepared = b.prepare(r, resolver());
@@ -94,7 +96,7 @@ test("every reference is resolved for its own row and a failing resolver stops t
 test("a resolved value outside its kind's grammar is refused, so no query or path injection can pass", async () => {
   const b = await builder();
   const cases = [["management/control-0/delete", "generation", ["0", "1&x=1", "1#", "1\r\nX: y", "../1", "1%26", " 1"]], ["rulesets-list/final/2", "page-token", ["a&b=1", "a b", "a\r\nb", "a#"]], ["release/v1/publish", "ruleset-name", ["projects/other/rulesets/x", "projects/fireemu-oracle-query/rulesets/../x", "x"]], ["ruleset/v1/read-source", "ruleset-path", ["/v1/projects/other/rulesets/x", "/v1/projects/fireemu-oracle-query/rulesets/x/../y", "/v1/projects/fireemu-oracle-query/rulesets/x?y=1", "x"]]];
-  for (const [id, type, values] of cases) for (const value of values) assert.throws(() => b.prepare(row(id), (reference) => (typeOf(reference) === type ? value : VALUES[typeOf(reference)])), /invalid target row/, `${type} ${value}`);
+  for (const [id, type, values] of cases) for (const value of values) assert.throws(() => b.prepare(row(id), (reference) => (typeOf(reference) === type ? value : valueFor(reference))), /invalid target row/, `${type} ${value}`);
 });
 
 const OWNED = `/storage/v1/b/${binding.bucket}/o/${encodeURIComponent(`${binding.prefix}x/object.bin`)}`;
@@ -221,4 +223,52 @@ test("verify accepts only a target this builder issued, unchanged since", async 
   assert.equal(b.verify(fresh), true);
   const swapped = Object.create(null);
   assert.equal(b.verify(swapped), false);
+});
+
+test("a resumable session row is sent to the session URL and nowhere else", async () => {
+  const b = await builder();
+  const finalize = manifest.rows.find((r) => r.request.headers["x-goog-upload-command"] === "upload, finalize");
+  const name = finalize.request.objectName;
+  const prepared = b.prepare(finalize, resolver());
+  assert.equal(prepared.spec.url, sessionUrl(name));
+  assert.equal(prepared.spec.method, "POST");
+  assert.equal(prepared.spec.body.toString(), "next");
+  assert.equal(prepared.redacted, `POST https://firebasestorage.googleapis.com/v0/b/${binding.bucket}/o?<ref:session-url>`);
+  assert.equal(JSON.stringify(prepared).includes("CANARYUPLOADID"), false);
+  assert.equal(prepared.redacted.includes("CANARYUPLOADID"), false);
+  assert.equal(b.verify(prepared), true);
+  const other = b.prepare(finalize, (reference) => sessionUrl(reference.expectedObjectName, { uploadId: "OTHERUPLOADID987654321" }));
+  assert.notEqual(other.targetSha256, prepared.targetSha256);
+  for (const bad of [
+    sessionUrl(name, { name: "STORAGE-RULES/other-run/x.bin" }), sessionUrl(name, { name: "outside/x.bin" }), sessionUrl(name, { path: "/v0/b/other-bucket/o" }), sessionUrl(name, { path: `/v0/b/${binding.bucket}/o/x` }),
+    sessionUrl(name, { protocol: "multipart" }), sessionUrl(name, { extra: "&surprise=1" }), sessionUrl(name, { extra: `&name=${encodeURIComponent(name)}` }), sessionUrl(name, { uploadId: "short" }), sessionUrl(name, { uploadId: "has space" }),
+    sessionUrl(name).replace("https://", "http://"), sessionUrl(name).replace("firebasestorage", "evil"), `${sessionUrl(name)}#f`, sessionUrl(name).replace("https://", "https://u:p@"), sessionUrl(name).replace(".com/", ".com:8443/"),
+    `${sessionUrl(name)}\r\nX: y`, "", "not a url",
+  ]) assert.throws(() => b.prepare(finalize, () => bad), /invalid target row/, bad);
+  assert.throws(() => b.prepare({ ...finalize, request: { ...finalize.request, method: "PATCH" } }, resolver()), /invalid target row/);
+  assert.throws(() => b.prepare({ ...finalize, request: { ...finalize.request, path: "/v0/b/x/o" } }, resolver()), /invalid target row/);
+  assert.throws(() => b.prepare({ ...finalize, request: { ...finalize.request, query: { name } } }, resolver()), /invalid target row/);
+});
+
+test("the comparison row carries the created download token in its query and hides it", async () => {
+  const b = await builder();
+  const comparison = manifest.rows.find((r) => r.request.query?.token?.kind === "firebase-download-token");
+  const prepared = b.prepare(comparison, resolver());
+  assert.ok(prepared.spec.url.includes(`token=${VALUES["download-token"]}`));
+  assert.equal(prepared.redacted.includes(VALUES["download-token"]), false);
+  assert.ok(prepared.redacted.includes("token=<ref:download-token>"));
+  assert.equal(JSON.stringify(prepared).includes(VALUES["download-token"]), false);
+  for (const bad of ["", "short", "has space 123456", "a\r\nb-12345678", "token,second-token", "x".repeat(129)]) {
+    assert.throws(() => b.prepare(comparison, (reference) => (typeOf(reference) === "download-token" ? bad : valueFor(reference))), /invalid target row/, bad);
+  }
+});
+
+test("a capability parameter can never be a literal in a row", async () => {
+  const b = await builder();
+  const seed = row("management/control-0/baseline-metadata");
+  for (const key of ["token", "key", "upload_id", "access_token", "id_token", "refresh_token", "sig", "signature", "Token"]) {
+    assert.throws(() => b.prepare({ ...seed, request: { ...seed.request, query: { [key]: "literal" } } }, resolver()), /invalid target row/, key);
+  }
+  const comparison = manifest.rows.find((r) => r.request.query?.token?.kind === "firebase-download-token");
+  assert.throws(() => b.prepare({ ...comparison, request: { ...comparison.request, query: { alt: "media", token: "0a1b2c3d-1111-2222-3333-444455556666" } } }, resolver()), /invalid target row/);
 });

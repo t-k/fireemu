@@ -256,3 +256,66 @@ test("a native reference with an unknown shape is refused on resolve", async () 
     assert.throws(() => store.resolve(bad, row.id), /invalid runtime reference resolve/);
   }
 });
+
+const SESSION_URL = (objectName, id = "CANARYUPLOADID0123456789") => `https://firebasestorage.googleapis.com/v0/b/${binding.bucket}/o?name=${encodeURIComponent(objectName)}&upload_id=${id}&upload_protocol=resumable`;
+const sessionConsumers = () => manifest.rows.filter((r) => r.request.sessionUrlReference);
+const tokenConsumer = () => manifest.rows.find((r) => r.request.query?.token?.kind === "firebase-download-token");
+
+test("session URLs and download tokens are declared, pinned to the step that produces them, and used by many rows", async () => {
+  const { buildRefTables } = await load();
+  const tables = buildRefTables(manifest);
+  const consumers = sessionConsumers();
+  assert.equal(consumers.length, 8 + 8 + 8 + 8 + 8 + 8);
+  for (const row of consumers) {
+    const key = row.request.sessionUrlReference.expectedObjectName;
+    assert.ok(tables.consumers["session-url"][key].includes(row.id), row.id);
+    const start = manifest.rows.find((r) => r.programId === row.programId && r.request.id === "start");
+    assert.equal(tables.pinned[`session-url|${key}|${row.id}`], start.id);
+    assert.deepEqual(tables.producers["session-url"][key], [{ operationId: start.id, verdict: "accepted" }]);
+  }
+  const token = tokenConsumer();
+  const create = manifest.rows.find((r) => r.programId === token.programId && r.request.id === "create-token");
+  assert.equal(tables.pinned[`download-token|${token.request.query.token.objectName}|${token.id}`], create.id);
+  assert.deepEqual(tables.producers["download-token"][token.request.query.token.objectName], [{ operationId: create.id, verdict: "accepted" }]);
+});
+
+test("a session URL binds once per session, resolves for every consumer and never appears in a proof", async () => {
+  const { buildRefTables, createRuntimeRefStore } = await load();
+  const proofs = [];
+  const store = createRuntimeRefStore({ tables: buildRefTables(manifest), runId: options.runId, digestSalt: salt, writeProof: async (proof) => { proofs.push(proof); } });
+  const cleanup = manifest.rows.find((r) => r.family === "declared" && r.stage === "cleanup" && r.request.sessionUrlReference);
+  const key = cleanup.request.sessionUrlReference.expectedObjectName;
+  const start = manifest.rows.find((r) => r.programId === cleanup.programId && r.request.id === "start");
+  const url = SESSION_URL(key);
+  assert.throws(() => store.resolve(cleanup.request.sessionUrlReference, cleanup.id), /reference is not bound/);
+  await store.bind({ ref: ref("session-url", key), value: url, provenance: producer(start, "accepted", 1, false) });
+  const consumers = sessionConsumers().filter((r) => r.request.sessionUrlReference.expectedObjectName === key);
+  assert.ok(consumers.length >= 3);
+  for (const consumer of consumers) assert.equal(store.resolve(consumer.request.sessionUrlReference, consumer.id), url);
+  assert.equal(JSON.stringify(proofs).includes("CANARYUPLOADID"), false);
+  assert.equal(JSON.stringify(store.state()).includes("CANARYUPLOADID"), false);
+  assert.equal(proofs.length, 1);
+  await assert.rejects(store.bind({ ref: ref("session-url", key), value: SESSION_URL(key, "OTHERUPLOADID987654321"), provenance: producer(start, "accepted", 2, false) }), /invalid runtime reference bind/);
+  const other = sessionConsumers().find((r) => r.request.sessionUrlReference.expectedObjectName !== key);
+  assert.throws(() => store.resolve(cleanup.request.sessionUrlReference, other.id), /invalid runtime reference resolve/);
+});
+
+test("session URL and token values outside their grammar or from another producer are refused", async () => {
+  const { buildRefTables, createRuntimeRefStore } = await load();
+  const store = createRuntimeRefStore({ tables: buildRefTables(manifest), runId: options.runId, digestSalt: salt, writeProof: async () => {} });
+  const cleanup = manifest.rows.find((r) => r.family === "declared" && r.stage === "cleanup" && r.request.sessionUrlReference);
+  const key = cleanup.request.sessionUrlReference.expectedObjectName;
+  const start = manifest.rows.find((r) => r.programId === cleanup.programId && r.request.id === "start");
+  for (const value of ["", "not a url", "http://firebasestorage.googleapis.com/v0/b/b/o?upload_id=x", `${SESSION_URL(key)}#f`, `${SESSION_URL(key)}\r\nX: y`, `${SESSION_URL(key)} `, "https://evil.example/v0/b/b/o?upload_id=abcdefgh", "x".repeat(4100), 7]) {
+    await assert.rejects(store.bind({ ref: ref("session-url", key), value, provenance: producer(start, "accepted", 1, false) }), /invalid runtime reference bind/);
+  }
+  await assert.rejects(store.bind({ ref: ref("session-url", key), value: SESSION_URL(key), provenance: producer(manifest.rows.find((r) => r.request.headers["x-goog-upload-command"] === "start" && r.programId !== cleanup.programId), "accepted", 1, false) }), /invalid runtime reference bind/);
+  const token = tokenConsumer();
+  const tokenKey = token.request.query.token.objectName;
+  const create = manifest.rows.find((r) => r.programId === token.programId && r.request.id === "create-token");
+  for (const value of ["", "short", "has space 123456", "a".repeat(129), "tok\r\nen1234", "token,second-token", 7]) {
+    await assert.rejects(store.bind({ ref: ref("download-token", tokenKey), value, provenance: producer(create, "accepted", 1, false) }), /invalid runtime reference bind/);
+  }
+  await store.bind({ ref: ref("download-token", tokenKey), value: "0a1b2c3d-1111-2222-3333-444455556666", provenance: producer(create, "accepted", 1, false) });
+  assert.equal(store.resolve(token.request.query.token, token.id), "0a1b2c3d-1111-2222-3333-444455556666");
+});

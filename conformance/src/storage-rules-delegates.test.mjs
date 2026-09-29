@@ -447,7 +447,7 @@ test("account recovery abandons an open foreign fixture as a failure, so its acc
   // The counter is still normal: the abandoned fixture is a failure for the session, which moves the counter to recovery
   // before it deletes the foreign account.
   await u.delegates["recover-accounts"]();
-  assert.ok(u.trace.includes("recovery:auth/foreign-project-token/delete"), JSON.stringify(u.trace.slice(-12)));
+  assert.ok(u.trace.includes("recovery:recovery/auth/foreign-project-token/delete"), JSON.stringify(u.trace.slice(-12)));
   assert.equal(u.trace.includes("normal:auth/foreign-project-token/delete"), false);
   assert.equal(u.identity.users.size, 0);
   assert.equal(u.real.snapshot().foreignOpen, false);

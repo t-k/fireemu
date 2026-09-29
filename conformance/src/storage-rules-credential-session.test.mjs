@@ -184,6 +184,11 @@ test("a subject transport failure deletes the foreign account in recovery before
   await assert.rejects(ctx.session.withForeignFixture(async () => ctx.counter.send("foreign/subject", async () => { throw new Error("private-refresh-secret"); })), (error) => error.message === "fixture subject failed");
   assert.ok(!ctx.users.has("fireemu-oracle-idp/foreign-captured-uid"));
   assert.equal(ctx.counter.snapshot().mode, "recovery");
+  // The cleanup that runs in recovery uses the recovery IDs, never the normal cleanup IDs that were never spent.
+  const sent = ctx.events.filter(([kind]) => kind === "transport").map(([, id]) => id);
+  assert.ok(sent.includes("recovery/auth/foreign-project-token/delete") && sent.includes("recovery/auth/foreign-project-token/absence"));
+  assert.equal(sent.includes("auth/foreign-project-token/delete"), false);
+  assert.equal(sent.includes("auth/foreign-project-token/absence"), false);
   await ctx.session.recoverOwnedAccounts();
 });
 

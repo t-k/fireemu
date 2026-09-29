@@ -226,7 +226,7 @@ export function createCredentialFixtureSession(options) {
         } catch (error) { failure = error; }
         if (journalHealthy && owned.has("foreign-project-token")) {
           if (failure && counter.snapshot().mode === "normal") counter.enterRecovery();
-          try { await deleteOwned("foreign-project-token"); } catch (error) { failure = error; }
+          try { await deleteOwned("foreign-project-token", counter.snapshot().mode === "recovery" ? "recovery/auth" : "auth"); } catch (error) { failure = error; }
         }
         if (failure) throw failure;
         return result;

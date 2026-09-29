@@ -49,13 +49,13 @@ test("the real credential cache runs both preflight refreshes and a normal one t
   ctx.trace.length = 0;
   const owner = await cache.refreshOwner(ownerPreflight);
   assert.equal(owner.sendAuthorized, false);
-  assert.deepEqual(ctx.trace, ["admission", `intent:${ownerPreflight}:preflight`, `reserved:${ownerPreflight}`, "http:https://oauth2.googleapis.com/token"]);
+  assert.deepEqual(ctx.trace.map((entry) => entry.replace(/^note:delegated target [0-9a-f]{64}$/, "note:target")), ["admission", `intent:${ownerPreflight}:preflight`, `reserved:${ownerPreflight}`, "note:target", "http:https://oauth2.googleapis.com/token"]);
   await cache.fetchSigningKeys(keyPreflight);
   ctx.gate.admit();
   assert.equal(ctx.gate.snapshot().requests, 2);
   ctx.trace.length = 0;
   await cache.refreshOwner("auth-shared/owner-token/1");
-  assert.deepEqual(ctx.trace, ["admission", "intent:auth-shared/owner-token/1:normal", "reserved:auth-shared/owner-token/1", "http:https://oauth2.googleapis.com/token"]);
+  assert.deepEqual(ctx.trace.map((entry) => entry.replace(/^note:delegated target [0-9a-f]{64}$/, "note:target")), ["admission", "intent:auth-shared/owner-token/1:normal", "reserved:auth-shared/owner-token/1", "note:target", "http:https://oauth2.googleapis.com/token"]);
   assert.equal(ctx.gate.snapshot().requests, 3);
   assert.equal(cache.ownerCredential().accessToken, token);
 });
@@ -293,4 +293,74 @@ test("an admission that answers anything but admitted is recorded as a refusal",
   const refused = await setup({ admission: { check: async () => ({ admitted: false }) } });
   await assert.rejects(() => refused.gate.start({ runId: "delegated" }), /admission refused/);
   assert.equal(refused.gate.snapshot().admissionRefused, true);
+});
+
+// The delegated seam is bound as tightly as the gate's own send.
+async function admitted(ctx) {
+  const cache = cacheOf(ctx);
+  await ctx.gate.start({ runId: "delegated" });
+  await cache.refreshOwner(ownerPreflight);
+  await cache.fetchSigningKeys(keyPreflight);
+  ctx.gate.admit();
+  return cache;
+}
+
+test("a delegated request's ID must agree with its phase: recovery IDs only in recovery, preflight IDs only in preflight, neither in the normal phase", async () => {
+  const ctx = await setup();
+  await ctx.gate.start({ runId: "delegated" });
+  const send = ctx.gate.delegated.counter;
+  const attempt = async () => ({ sendAuthorized: false });
+  // Preflight mode.
+  ctx.trace.length = 0;
+  await assert.rejects(send.sendPreflight("auth-shared/owner-token/1", attempt, () => true), /delegated request ID does not match its phase/);
+  await assert.rejects(send.sendPreflight("recovery/auth-shared/owner-token/1", attempt, () => true), /delegated request ID does not match its phase/);
+  await assert.rejects(send.send("preflight/auth/owner-token", attempt), /delegated request outside a request mode|does not match|preflight/);
+  assert.deepEqual(ctx.trace.filter((entry) => entry.startsWith("intent:") || entry.startsWith("reserved:")), []);
+  const cache = cacheOf(ctx);
+  await cache.refreshOwner(ownerPreflight);
+  await cache.fetchSigningKeys(keyPreflight);
+  ctx.gate.admit();
+  // Normal mode.
+  ctx.trace.length = 0;
+  for (const id of ["recovery/auth-shared/owner-token/1", "preflight/auth/owner-token"]) await assert.rejects(send.send(id, attempt), /delegated request ID does not match its phase/, id);
+  await assert.rejects(send.sendPreflight("auth-shared/owner-token/2", attempt, () => true), /delegated request outside a request mode|preflight/);
+  assert.deepEqual(ctx.trace.filter((entry) => entry.startsWith("intent:") || entry.startsWith("reserved:")), []);
+  // Recovery mode.
+  ctx.gate.enterRecovery();
+  for (const id of ["auth-shared/owner-token/2", "auth/foreign-project-token/delete", "preflight/auth/owner-token"]) await assert.rejects(send.send(id, attempt), /delegated request ID does not match its phase/, id);
+  assert.deepEqual(ctx.trace.filter((entry) => entry.startsWith("intent:") || entry.startsWith("reserved:")), []);
+  await send.send("recovery/auth-shared/owner-token/1", attempt);
+  assert.ok(ctx.trace.some((entry) => entry === "intent:recovery/auth-shared/owner-token/1:recovery"));
+});
+
+test("a delegated request's target is bound durably: a digest of the exact request is journalled before it is sent, without any secret", async () => {
+  const notes = [];
+  const sentSpecs = [];
+  const ctx = await setup({ capture: { writeNote: async (r) => { notes.push(r); } }, transport: { send: async (spec) => { sentSpecs.push(spec); return spec.url === certUrl ? raw({ synthetic: pem }) : raw({ access_token: token, token_type: "Bearer", expires_in: 3600 }); } } });
+  const cache = await admitted(ctx);
+  notes.length = 0;
+  await cache.refreshOwner("auth-shared/owner-token/1");
+  const bound = notes.filter((note) => /delegated target/.test(note.text));
+  assert.equal(bound.length, 1);
+  assert.equal(bound[0].operationId, "auth-shared/owner-token/1");
+  assert.match(bound[0].text, /^delegated target [0-9a-f]{64}$/);
+  const digest = bound[0].text.slice(-64);
+  assert.equal(JSON.stringify(notes).includes(adc.refresh_token), false);
+  assert.equal(JSON.stringify(notes).includes(adc.client_secret), false);
+  // The digest follows the request: another refresh has another digest for the same URL because its body or ID differs, and equal requests digest equally.
+  await cache.refreshOwner("auth-shared/owner-token/2");
+  const second = notes.filter((note) => /delegated target/.test(note.text)).at(-1);
+  assert.notEqual(second.text.slice(-64), digest);
+  assert.equal(sentSpecs.length >= 4, true);
+});
+
+test("a target digest that cannot be journalled stops the request before it is sent", async () => {
+  let failNote = false;
+  const sends = [];
+  const ctx = await setup({ capture: { writeNote: async (r) => { if (failNote && /delegated target/.test(r.text)) throw new Error("disk full"); } }, transport: { send: async (spec) => { sends.push(spec.url); return spec.url === certUrl ? raw({ synthetic: pem }) : raw({ access_token: token, token_type: "Bearer", expires_in: 3600 }); } } });
+  const cache = await admitted(ctx);
+  const before = sends.length;
+  failNote = true;
+  await assert.rejects(() => cache.refreshOwner("auth-shared/owner-token/1"), /credential cache request failed/);
+  assert.equal(sends.length, before);
 });

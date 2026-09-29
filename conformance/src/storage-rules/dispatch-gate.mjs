@@ -109,6 +109,7 @@ export function createDispatchGate(options) {
   // session). Their sends run through the same counter, admission and durable intent as every other request, one at a time,
   // and the real transport is reachable only inside an armed, counted attempt, once per attempt. They capture no response
   // themselves: what they learn they record as digests, never as the token-bearing answer.
+  let currentOperation = null;
   async function delegatedSend(operationId, attempt, accept, preflight) {
     if (poisoned) bad("dispatch gate is poisoned");
     if (busy) bad("concurrent dispatch is forbidden");
@@ -117,14 +118,17 @@ export function createDispatchGate(options) {
       if (typeof operationId !== "string" || !isFunction(attempt) || (preflight && !isFunction(accept))) bad("invalid delegated request");
       if (capture.snapshot().uncertain) bad("capture journal is uncertain");
       await admitted();
-      const phase = preflight ? "preflight" : counter.snapshot().mode;
-      if (!modeOf(phase)) bad("delegated request outside a request mode");
+      const phase = counter.snapshot().mode;
+      // The preflight entry point works only in preflight mode and the other only outside it, and the ID's prefix names its phase, as for the gate's own send.
+      if (preflight !== (phase === "preflight") || !modeOf(phase)) bad("delegated request outside a request mode");
+      if ((operationId.startsWith("preflight/") ? "preflight" : operationId.startsWith("recovery/") ? "recovery" : "normal") !== phase) bad("delegated request ID does not match its phase");
       await capture.writeIntent({ operationId, phase, targetSha256: createHash("sha256").update(`delegated:${operationId}`).digest("hex"), redactedTarget: `delegated ${operationId}`, mutationKey: null });
       const armedAttempt = async () => {
         if (armed === null || armed.operationId !== operationId || armed.phase !== phase) bad("dispatch is not armed");
         armed = null;
         httpBudget = 1;
-        try { return await attempt(); } finally { httpBudget = 0; }
+        currentOperation = operationId;
+        try { return await attempt(); } finally { httpBudget = 0; currentOperation = null; }
       };
       return preflight ? await counter.sendPreflight(operationId, armedAttempt, accept) : await counter.send(operationId, armedAttempt);
     } finally { busy = false; }
@@ -139,6 +143,11 @@ export function createDispatchGate(options) {
     http: async (spec) => {
       if (httpBudget !== 1) bad("http outside a delegated attempt or more than one request in it");
       httpBudget = 0;
+      // The exact request is bound durably before it leaves: a digest of it (its headers and body may hold secrets, so only the digest is written).
+      transport.validate(spec);
+      const body = spec.body === null || spec.body === undefined ? null : createHash("sha256").update(spec.body).digest("hex");
+      const digest = createHash("sha256").update(JSON.stringify({ operationId: currentOperation, method: spec.method, url: spec.url, headers: Object.entries(spec.headers ?? {}).sort(([a], [b]) => (a < b ? -1 : 1)), body })).digest("hex");
+      await capture.writeNote({ operationId: currentOperation, text: `delegated target ${digest}` });
       return transport.send(spec);
     },
   });

@@ -100,6 +100,16 @@ test("thirteen reads, in order, each once, yield exactly the stage 3 inputs, and
   assert.equal((await stat(join(f.runs, `storage-rules-prep-${runId}`))).mode & 0o777, 0o700);
   assert.equal(await readFile(join(f.runs, "storage-rules-prep-usage.jsonl"), "utf8"), `${JSON.stringify({ packetSha256: packet.packetSha256, runId })}\n`);
   assert.deepEqual(await f.lockFiles(), []);
+  // The counter's terminal row says finished, and every read left its classified facts (never a secret) in the capture journal.
+  const dir = join(f.runs, `storage-rules-prep-${runId}`);
+  const reservationRows = (await readFile(join(dir, (await readdir(dir)).find((name) => name.endsWith("reservations.jsonl"))), "utf8")).split("\n").filter(Boolean).map((line) => JSON.parse(line));
+  const terminal = reservationRows.filter((row) => JSON.stringify(row).includes("terminal"));
+  assert.equal(terminal.length, 1);
+  assert.match(JSON.stringify(terminal[0]), /"outcome":"finished"/);
+  const captureRows = (await readFile(join(dir, (await readdir(dir)).find((name) => name.endsWith("captures.jsonl"))), "utf8")).split("\n").filter(Boolean).map((line) => JSON.parse(line));
+  const facts = captureRows.filter((row) => row.event === "facts");
+  assert.deepEqual(facts.map((row) => row.data.operationId).sort(), ["preflight/bucket/iam", "preflight/bucket/metadata", "preflight/bucket/permissions", "preflight/idp/key-list", "preflight/idp/key-string", "preflight/idp/permissions", "preflight/owner/identity", "preflight/query/database", "preflight/query/iam", "preflight/query/key-list", "preflight/query/key-string", "preflight/query/permissions"]);
+  assert.equal(JSON.stringify(facts).includes(API_KEYS.query), false);
   assert.deepEqual(f.gitCalls.map(([where, ...args]) => [where, args.join(" ")]), [[codeRoot, "rev-parse HEAD"], [codeRoot, "status --porcelain --untracked-files=no"], [codeRoot, "status --porcelain --untracked-files=all --ignored -- conformance/src/storage-rules spec/compatibility/closure/STORAGE-RULES.json"], [codeRoot, "status --porcelain --untracked-files=all --ignored -- conformance/src/storage-rules-prep"]]);
 });
 
@@ -198,6 +208,15 @@ test("the run is refused, before anything is created, unless the code, the schem
   await assert.rejects(broken(brokenGit.options), /source commit unreadable/);
   for (const state of [moved, dirty, untrackedRunner, untrackedPrep, brokenGit]) { assert.deepEqual(await readdir(state.runs), ["sandbox-locks"]); assert.equal(state.wire.length, 0); }
   // A private-inputs change that moves the corpus (another bucket name) is caught as a manifest mismatch.
+  const gitDown = await checkout(t);
+  const down = bindPrepEntry({ root: gitDown.root, codeRoot, requestImpl() {}, clock, git: async () => { throw new Error("git missing"); } });
+  await assert.rejects(down(gitDown.options), /source commit unreadable/);
+  const emptyCode = await mkdtemp("/private/tmp/storage-rules-prep-empty-code-");
+  t.after(() => rm(emptyCode, { recursive: true, force: true }));
+  const noCode = await checkout(t);
+  const blind = bindPrepEntry({ root: noCode.root, codeRoot: emptyCode, requestImpl() {}, clock, git: async () => "" });
+  await assert.rejects(blind(noCode.options), /pin source refused/);
+  for (const state of [gitDown, noCode]) assert.deepEqual(await readdir(state.runs), ["sandbox-locks"]);
   const other = await checkout(t, { local: (adc) => ({ ...localInputs(adc), bucket: { name: "another-bucket-name" } }) });
   await assert.rejects(other.entry(other.options), /pin mismatch: manifestSha256/);
   assert.equal(other.wire.length, 0);
@@ -206,6 +225,10 @@ test("the run is refused, before anything is created, unless the code, the schem
 test("a revoked approval, a wrong bound, a missing envelope and a second recording are refused with nothing sent", async (t) => {
   const revoked = await checkout(t, { ledgerText: `${ledger}\n- 2026-09-29 | STORAGE-RULES ${PACKET_NAME} | decision=REVOKED; packetSha256=${packet.packetSha256} | オーナー（ローカル試験） | private.md` });
   await assert.rejects(revoked.entry(revoked.options), /approval revoked/);
+  // A revocation of the lane that is not a row of this packet (no decision field) still stops it, through the lane scan alone.
+  const laneOnly = await checkout(t, { ledgerText: `${ledger}\n- 2026-09-29 | STORAGE-RULES | revoked | オーナー（ローカル試験） | note.md` });
+  await assert.rejects(laneOnly.entry(laneOnly.options), /approval revoked/);
+  assert.equal(laneOnly.wire.length, 0);
   const noEnvelope = await checkout(t, { ledgerText: ledger.split("\n").filter((line) => !line.includes("envelope |")).join("\n") });
   await assert.rejects(noEnvelope.entry(noEnvelope.options), /preceding owner envelope required/);
   const smallEnvelope = await checkout(t, { ledgerText: ledger.replace("maxRequests=13;", "maxRequests=12;") });
@@ -254,6 +277,7 @@ test("the operator's local inputs file is a private, closed, plain file", async 
     "bad bucket": async (f) => write(f, { ...base(f), bucket: { name: "A" } }),
     "extra bucket key": async (f) => write(f, { ...base(f), bucket: { name: "some-bucket-name", extra: 1 } }),
     "a link": async (f) => { await rm(f.localPath); await symlink(f.adcPath, f.localPath); },
+    "a link to a valid local file": async (f) => { const real = join(f.root, "real-local.json"); await writeFile(real, JSON.stringify(localInputs(f.adcPath)), { mode: 0o600 }); await rm(f.localPath); await symlink(real, f.localPath); },
     "a directory": async (f) => { await rm(f.localPath); await mkdir(f.localPath); },
     "missing": async (f) => rm(f.localPath),
   };
@@ -268,6 +292,7 @@ test("the operator's local inputs file is a private, closed, plain file", async 
 });
 
 test("the ledger and the runs and lock directories must be private and plain, as for the stage 3 entry", async (t) => {
+  const EXPECTED_REFUSAL = { "ledger group writable": /owner ledger refused|approval/, "ledger missing": /owner ledger refused/, "lock dir shared": /lock directory refused/, "runs dir shared": /runs directory refused/, "run directory exists": /run directory exists/, "legacy lock": /legacy shared lock exists/ };
   const cases = {
     "ledger group writable": async (f) => chmod(join(f.root, "docs.local", "instructions", "owner-decisions.md"), 0o664),
     "ledger missing": async (f) => rm(join(f.root, "docs.local", "instructions", "owner-decisions.md")),
@@ -281,7 +306,7 @@ test("the ledger and the runs and lock directories must be private and plain, as
     await change(f);
     let result = "ran";
     try { await f.entry(f.options); } catch (error) { result = error.message; }
-    assert.notEqual(result, "ran", name);
+    assert.match(result, EXPECTED_REFUSAL[name], name);
     assert.equal(f.wire.length, 0, name);
   }
 });

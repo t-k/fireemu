@@ -64,7 +64,7 @@ test("exactly one live key of the right project is chosen, and anything else is 
     [{ keys: [key(PREP_KEYS.query)], nextPageToken: "n" }, /paged or malformed/], [{ keys: [key(PREP_KEYS.query)], nextPageToken: "" }, /paged or malformed/], [null, /paged or malformed/], [[], /paged or malformed/], [{ keys: "x" }, /paged or malformed/],
     [{}, /found 0/], [{ keys: [] }, /found 0/], [{ keys: [key(PREP_KEYS.query, { deleteTime: "x" })] }, /found 0/], [{ keys: [key(PREP_KEYS.query), key(PREP_KEYS.idp)] }, /found 2/], [{ keys: [null] }, /found 0|expected exactly/],
     [{ keys: [{ name: `projects/${NUMBERS.idp}/locations/global/keys/${PREP_KEYS.query}` }] }, /not the expected resource/], [{ keys: [{ name: `projects/${NUMBERS.query}/locations/global/keys/${PREP_KEYS.query.toUpperCase()}` }] }, /not the expected resource/],
-    [{ keys: [{ name: `projects/${NUMBERS.query}/locations/global/keys/not-a-uuid-not-a-uuid-not-a-uuid-1234` }] }, /not the expected resource/], [{ keys: [{}] }, /not the expected resource/], [{ keys: [{ name: 5 }] }, /not the expected resource/],
+    [{ keys: [{ name: `projects/${NUMBERS.query}/locations/global/keys/not-a-uuid-not-a-uuid-not-a-uuid-1234` }] }, /not the expected resource/], [{ keys: [{ name: `projects/${NUMBERS.query}/locations/global/keys/${"0".repeat(36)}` }] }, /not the expected resource/], [{ keys: [{}] }, /not the expected resource/], [{ keys: [{ name: 5 }] }, /not the expected resource/],
   ];
   for (const [body, message] of stops) assert.throws(() => selectKey(body, NUMBERS.query), (error) => message.test(error.message) && error.stopCode === "preflight-failed", JSON.stringify(body));
 });

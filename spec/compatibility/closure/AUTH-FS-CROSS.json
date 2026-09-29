@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "parent": "AUTH-FS-CROSS",
-  "parentStatus": "IMPLEMENTING",
+  "parentStatus": "COMPAT_VERIFIED",
   "inventoryStatus": "FROZEN",
   "freezeState": "FROZEN",
   "oracleTrack": "disposable-sandbox",
@@ -20,7 +20,7 @@
     "packetSha256": "1ec9e8c8eba5dad5c8d56cbe7dfcb59b96ceb7edabf992a5b7f3fd23ef4fac55",
     "finalArtifactSha256": "890a38d8b8827ca3980522151b69c9bbad4230a674ccf73a7123470910094021",
     "report": "docs.local/reviews/2026-09-29-auth-fs-cross-closure-rereview.md (private)",
-    "note": "The parent stays IMPLEMENTING: it waits only for the post-integration condition, the emulator-profile release corpus with 0 findings on main after this lane's round-2 merge. The closure-review condition is kept PENDING_REVIEW until then, since this closure's test ties COMPAT_VERIFIED to every condition being VERIFIED together with an approved review."
+    "note": "The lane's closure re-review approved on 2026-09-29. The parent was promoted after the round-2 integration: the option-A supplementary regression on the final integrated artifact matched every row (final-artifact-regression), the emulator-profile release corpus had 0 gating findings, and the integration re-review 2 approved."
   },
   "scopeDecisions": [
     {
@@ -690,8 +690,8 @@
       "configProjections": [
         "default"
       ],
-      "status": "PENDING_REVIEW",
-      "note": "Independent clean-context closure review and a separate safety review of every change that widens what a request may do. The review approved on 2026-09-29 (closureReview); the condition waits for the post-integration condition before promotion.",
+      "status": "VERIFIED",
+      "note": "Independent clean-context closure review and a separate safety review of every change that widens what a request may do. The closure re-review approved on 2026-09-29 (closureReview), and the round-2 integration re-review 2 approved the integrated head and artifact with Must 0 and Should 0, after the option-A supplementary regression on the final artifact and 0 gating findings in the emulator-profile release corpus.",
       "stage": null,
       "observation": {
         "method": "Independent review of scope, conditions, receipts, divergences, cleanup and owner decisions.",
@@ -704,6 +704,23 @@
       },
       "verification": {
         "recordingsRequired": 0
+      },
+      "evidence": {
+        "reviewedCommit": "c63ba6ff412a1c4ced013884dfaa5ed35bc50848",
+        "packetSha256": "1ec9e8c8eba5dad5c8d56cbe7dfcb59b96ceb7edabf992a5b7f3fd23ef4fac55",
+        "finalArtifactSha256": "890a38d8b8827ca3980522151b69c9bbad4230a674ccf73a7123470910094021",
+        "integration": {
+          "reviewedHead": "04edf513baae70505c121e6fe4c12a472fe189fe",
+          "packetSha256": "b0d0699dbe594ae867a72a473f762d14be7c841dc40f932625dc2a019acf8151",
+          "finalArtifactSha256": "ece3f66b1093e69d24ab16fa820994469120fcfb7ddaff22d6a4fc72cff51167"
+        },
+        "reviewReportSha256": [
+          "ea69c59f105e0e6e5d06125911e532912242fcdf2ab347b887e6e18087efce6f",
+          "8ceb38697879f2ffc91f69d96d9f77db64ad5256a0f2ed27481f475bf1e43869"
+        ],
+        "reviews": [
+          "the closure re-review of the lane and the round-2 integration re-review 2; reports kept privately"
+        ]
       }
     }
   ],

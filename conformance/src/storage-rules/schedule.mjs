@@ -70,6 +70,8 @@ function build(manifest) {
           row(declared.id);
           delegate("foreign-cleanup", foreignCleanup);
         } else row(declared.id);
+        // The cancel's answer alone proves nothing, so the session is asked once more right after it.
+        if (declared.request.headers?.["x-goog-upload-command"] === "cancel") row(`session-verify/${id}`);
       }
     }
   };

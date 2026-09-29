@@ -1,7 +1,7 @@
 // Draft stage 3 envelope per recording. This module performs no HTTP or journal I/O.
 export const DRAFT_REQUEST_LIMITS = Object.freeze({ maxRequests: 6648, recoveryReserve: 2000 });
 // The bound a packet states: one finite ID per declared request in a recording. The 6,648 ceiling above is only the counter's hard cap.
-export const DECLARED_REQUESTS_PER_RECORDING = 6164;
+export const DECLARED_REQUESTS_PER_RECORDING = 6172;
 
 /** Reserve each outbound attempt durably before dispatch, including read-only preflight. */
 export function createStage3RequestCounter(options = {}) {

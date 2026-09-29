@@ -39,7 +39,7 @@ test("each normal row is scheduled exactly once, explicitly, in a settle block o
   }
   const normal = manifest.rows.filter((r) => r.phase !== "recovery").map((r) => r.id);
   assert.deepEqual([...covered.keys()].sort(), normal.sort());
-  assert.equal(covered.size, 4630);
+  assert.equal(covered.size, 4638);
   assert.ok(![...covered.keys()].some((id) => id.startsWith("recovery/")));
 });
 
@@ -110,10 +110,12 @@ test("a case runs its rows in the corpus's order without interleaving with anoth
   const s = await schedule();
   const rows = s.steps.filter((step) => step.type === "row").map((step) => manifest.rows.find((r) => r.id === step.id));
   for (const id of [...manifest.publication.v1, ...manifest.publication.v2]) {
-    const indices = rows.map((r, index) => [r, index]).filter(([r]) => r.programId === id && r.family === "declared").map(([, index]) => index);
+    const belongs = (r) => r.programId === id && (r.family === "declared" || r.family === "session-verify");
+    const indices = rows.map((r, index) => [r, index]).filter(([r]) => belongs(r)).map(([, index]) => index);
     assert.ok(indices.length > 0, id);
     assert.equal(indices.at(-1) - indices[0] + 1, indices.length, `${id} is interleaved`);
-    const inventory = manifest.rows.filter((r) => r.programId === id && r.family === "declared").map((r) => r.id);
+    // The corpus's order, with each session's verify row directly after its cancel.
+    const inventory = manifest.rows.filter((r) => r.programId === id && r.family === "declared").flatMap((r) => (r.request.headers?.["x-goog-upload-command"] === "cancel" ? [r.id, `session-verify/${id}`] : [r.id]));
     assert.deepEqual(indices.map((i) => rows[i].id), inventory, id);
   }
 });
@@ -182,5 +184,14 @@ test("the schedule is deterministic and refuses a manifest it does not recognize
   assert.equal(JSON.stringify(buildSchedule(manifest)), JSON.stringify(buildSchedule(manifest)));
   for (const bad of [null, {}, { ...manifest, rows: manifest.rows.slice(1) }, { ...manifest, publication: undefined }, { ...manifest, sendAuthorized: true }, { ...manifest, preflightIds: manifest.preflightIds.slice(1) }]) {
     assert.throws(() => buildSchedule(bad), /invalid schedule manifest/);
+  }
+});
+
+test("every session is asked again right after its cancel and before the case ends", async () => {
+  const s = await schedule();
+  for (const session of manifest.resources.sessions) {
+    const cancel = s.steps.findIndex((step) => step.type === "row" && manifest.rows.find((r) => r.id === step.id).request.headers?.["x-goog-upload-command"] === "cancel" && manifest.rows.find((r) => r.id === step.id).programId === session.caseId);
+    const verify = position(s.steps, rowStep(`session-verify/${session.caseId}`));
+    assert.ok(cancel >= 0 && verify === cancel + 1, session.caseId);
   }
 });

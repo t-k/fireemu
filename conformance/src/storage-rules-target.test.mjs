@@ -28,7 +28,7 @@ const sha = (value) => createHash("sha256").update(value).digest("hex");
 test("every row that is not delegated prepares into a canonical, exact target", async () => {
   const b = await builder();
   const rows = manifest.rows.filter((r) => !UNPREPARED(r));
-  assert.equal(rows.length, 6164 - 37 - 19 - 40 - 1);
+  assert.equal(rows.length, 6172 - 37 - 19 - 48 - 1);
   const seen = new Set();
   for (const r of rows) {
     const prepared = b.prepare(r, resolver());

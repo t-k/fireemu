@@ -31,7 +31,7 @@ const seedRow = row("management/control-0/seed");
 const seedName = seedRow.request.objectName;
 const seedBytes = Buffer.from(seedRow.request.body.base64, "base64");
 
-test("every one of the 6,164 rows maps to exactly one closed acceptance kind", async () => {
+test("every one of the 6,172 rows maps to exactly one closed acceptance kind", async () => {
   const { acceptanceKindOf, ACCEPTANCE_KINDS } = await load();
   assert.equal(Object.isFrozen(ACCEPTANCE_KINDS), true);
   const used = new Map();
@@ -41,7 +41,7 @@ test("every one of the 6,164 rows maps to exactly one closed acceptance kind", a
     used.set(kind, (used.get(kind) ?? 0) + 1);
   }
   assert.deepEqual([...used.keys()].sort(), Object.keys(ACCEPTANCE_KINDS).sort());
-  assert.equal([...used.values()].reduce((a, b) => a + b, 0), 6164);
+  assert.equal([...used.values()].reduce((a, b) => a + b, 0), 6172);
 });
 
 test("a row of an unknown family, stage, method or service has no kind", async () => {

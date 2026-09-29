@@ -39,6 +39,7 @@ const STAGES = new Map(Object.entries({
   compile: /^(?:before|after-invalid|test)$/,
   release: /^(?:entry|no-release-entry-after|final|before-switch|publish|after-switch|owner-before-delete|delete|bucket-absence|bucketless-absence)$/,
   settle: /^cycle-[1-9]\d*$/,
+  "session-verify": /^verify$/,
   preflight: /^readback$/,
   "credential-cache": /^acquire$/,
   auth: /^(?:absence|baseline|clear-claims|create|delete|lookup-claims|lookup-created|lookup-plain|lookup-revoked|lookup-token|revoke|set-claims|sign-in|sign-in-plain|sign-up)$/,

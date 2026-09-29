@@ -334,3 +334,29 @@ test("uncertain outcomes are remembered and inputs are closed", async () => {
   assert.throws(() => run.recordOutcome(create, { kind: "x", verdict: "accepted" }), /invalid run ledger outcome/);
   assert.throws(() => run.check(create, null), /invalid run ledger outcome/);
 });
+
+test("a cancelled session that is not proven final, or one in an unknown state, keeps the cleanup guard false until it is verified final", async () => {
+  const { run } = await fresh();
+  const prefix = row("management/prefix-empty");
+  const token = ["all-owned-resources-and-sessions-cleaned"];
+  run.recordOutcome(row("release/restore/bucket-absence"), out("rules-release-read", "absent"));
+  run.recordOutcome(row("release/restore/bucketless-absence"), out("rules-release-read", "absent"));
+  const session = manifest.resources.sessions[0];
+  const start = manifest.rows.find((r) => r.request.headers["x-goog-upload-command"] === "start" && r.programId === session.caseId);
+  const cancel = manifest.rows.find((r) => r.family === "declared" && r.stage === "cleanup" && r.programId === session.caseId && r.request.headers["x-goog-upload-command"] === "cancel");
+  const verify = row(`session-verify/${session.caseId}`);
+  run.recordIntent(start);
+  run.recordOutcome(start, out("session-start", "accepted", { uploadStatus: "active" }));
+  assert.equal(run.evaluate(prefix, token).decision, "stop");
+  run.recordIntent(cancel);
+  run.recordOutcome(cancel, out("session-command", "acknowledged"));
+  assert.equal(run.evaluate(prefix, token).decision, "stop");
+  run.recordIntent(verify);
+  run.recordOutcome(verify, out("session-command", "active", { uploadStatus: "active", sizeReceived: 0 }));
+  assert.equal(run.evaluate(prefix, token).decision, "stop");
+  run.recordOutcome(verify, { uncertain: true });
+  assert.equal(run.evaluate(prefix, token).decision, "stop");
+  run.recordOutcome(verify, out("session-command", "final", { uploadStatus: "final", sizeReceived: 0 }));
+  assert.equal(run.evaluate(prefix, token).decision, "go");
+  assert.equal(run.snapshot().sessions, 1);
+});

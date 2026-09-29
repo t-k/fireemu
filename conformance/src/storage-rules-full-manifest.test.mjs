@@ -18,11 +18,11 @@ test("full draft has one finite ID per attempt and stays inside both fixed caps"
   assert.equal(m.status, "LOCAL_FULL_DRAFT_NO_SEND");
   assert.equal(m.sendAuthorized, false);
   assert.equal(m.controllerReady, false);
-  assert.deepEqual(m.counts, { normal: 4630, recovery: 1534, preflight: 19, total: 6164 });
+  assert.deepEqual(m.counts, { normal: 4638, recovery: 1534, preflight: 19, total: 6172 });
   assert.deepEqual(m.limits, { normal: 4648, recovery: 2000, total: 6648 });
   assert.equal(m.counts.total, DECLARED_REQUESTS_PER_RECORDING);
-  assert.equal(m.rows.length, 6164);
-  assert.equal(new Set(m.rows.map((r) => r.id)).size, 6164);
+  assert.equal(m.rows.length, 6172);
+  assert.equal(new Set(m.rows.map((r) => r.id)).size, 6172);
   assert.ok(m.rows.every((r) => /^[A-Za-z0-9][A-Za-z0-9._/-]{0,159}$/.test(r.id) && r.request.capture.body === "raw-bytes"));
   assert.equal(m.preflightIds.length, 19);
   assert.match(m.corpusSha256, /^[a-f0-9]{64}$/);
@@ -260,7 +260,7 @@ test("settle and restore reads carry no user credential, because every witness s
 test("resumable session cancel and query use the upload URL as the capability and send no credential", () => {
   const m = build();
   const commands = m.rows.filter((r) => r.request.sessionUrlReference && ["query", "cancel"].includes(r.request.headers["x-goog-upload-command"]) && r.stage !== "subject");
-  assert.equal(commands.length, 8 + 24);
+  assert.equal(commands.length, 8 + 8 + 24);
   assert.ok(commands.every((r) => r.request.credential === "anonymous"));
   const start = m.rows.filter((r) => r.request.headers["x-goog-upload-command"] === "start");
   assert.equal(start.length, 8);
@@ -294,7 +294,7 @@ test("the expansion changes nothing in the corpus or the declared-request builde
     const { origin, ...request } = r.request;
     return { id: r.id, phase: r.phase, family: r.family, programId: r.programId, stage: r.stage, service: r.service, request, requiredState: r.requiredState, when: r.when };
   });
-  assert.equal(digest(JSON.stringify(rows)), "de31d61eb122228d80dc0e9bd085e856e8b78f513c59b5075c404173f951d94d");
+  assert.equal(digest(JSON.stringify(rows)), "835fa188cfb869309cab0c5bd0bca8a08f6747e88031234203680d88808511d7");
 });
 
 test("every row names its origin from one closed (service, dialect) table", async () => {
@@ -322,4 +322,25 @@ test("the manifest names which cases and Firestore programs each published bundl
   const declaredPrograms = new Set(m.rows.filter((r) => r.family === "declared").map((r) => r.programId));
   assert.deepEqual([...new Set(ids)].sort(), [...declaredPrograms].sort());
   assert.ok(m.publication.v1.length > 0 && m.publication.v2.length > 0);
+});
+
+test("each session is verified in the normal path after its cancel, so a cancelled session can be proven finished", () => {
+  const m = build();
+  const rows = m.rows.filter((r) => r.family === "session-verify");
+  assert.equal(rows.length, 8);
+  for (const session of m.resources.sessions) {
+    const verify = rows.find((r) => r.programId === session.caseId);
+    assert.ok(verify, session.caseId);
+    assert.equal(verify.id, `session-verify/${session.caseId}`);
+    assert.equal(verify.phase, "normal");
+    assert.equal(verify.stage, "verify");
+    assert.equal(verify.service, "storage");
+    assert.equal(verify.request.method, "POST");
+    assert.equal(verify.request.credential, "anonymous");
+    assert.equal(verify.request.path, null);
+    assert.equal(verify.request.body, null);
+    assert.equal(verify.request.headers["x-goog-upload-command"], "query");
+    assert.deepEqual(verify.request.sessionUrlReference, m.rows.find((r) => r.family === "recovery-session" && r.programId === session.caseId).request.sessionUrlReference);
+    assert.deepEqual(verify.requires, ["durable-verified-start-url-and-target", "unknown-terminal-shape-remains-needs-recovery"]);
+  }
 });

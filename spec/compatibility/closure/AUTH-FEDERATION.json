@@ -157,7 +157,7 @@
           }
         ]
       },
-      "limits": "spConfig.spCertificates is not generated (F11), so a provider whose requests are signed answers without it and its createAuthUri is not implemented (501)."
+      "limits": "spConfig.spCertificates is not generated (F11), so a provider whose requests are signed answers without it. Separately, createAuthUri for such a provider is not implemented (501); that is not part of F11."
     },
     {
       "conditionId": "AUTH-FEDERATION/provider-config-default-supported",

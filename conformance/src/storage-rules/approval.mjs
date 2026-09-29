@@ -34,8 +34,9 @@ function dataArray(value, label) {
   }
 }
 
-function ledgerRows(text, subject) {
+function ledgerRows(text, subject, skipLines) {
   return text.split("\n").flatMap((line, index) => {
+    if (skipLines.has(index + 1)) return [];
     const columns = line.split("|").map((value) => value.trim());
     if (![subject, `${subject} envelope`].includes(columns[1])) return [];
     if (columns.length !== 5 || !/^- \d{4}-\d{2}-\d{2}$/.test(columns[0]) || !columns[3] || !columns[4]) {
@@ -98,7 +99,7 @@ export function validatePresendApproval(options) {
     envelopeId: review.envelopeId, pinSha256s: PINS.filter((key) => key !== "sourceCommit").map((key) => packet[key]),
   });
   if (revocations.lane.length > 0) throw new Error("approval revoked");
-  const rows = ledgerRows(ledgerText, subject);
+  const rows = ledgerRows(ledgerText, subject, new Set(revocations.consumed));
   if (rows.some((row) => row.fields.decision === "REVOKED")) throw new Error("approval revoked");
   const decision = rows.findLast((row) => row.subject === subject && row.fields.decision);
   if (!decision || decision.fields.decision !== "APPROVE" || (!decision.actor.startsWith("オーナー（") && decision.actor !== COORDINATOR)) {

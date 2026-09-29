@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { chmod, mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, readdir, rename, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { linkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
 import { bindReleaseEntry, SAVED_FILE } from "./storage-rules-release/release-entry.mjs";
@@ -33,7 +34,7 @@ const ledgerFor = (mode, packet) => {
   ].join("\n");
 };
 
-async function checkout(t, { mode = "pre", world = createReleaseWorld(), gitHead = SOURCE_COMMIT, gitStatus = "", gitExtra = "", usage = [], saved = savedRecord(), mutatePacket = (packet) => packet, ledgerText } = {}) {
+async function checkout(t, { mode = "pre", world = createReleaseWorld(), gitHead = SOURCE_COMMIT, gitStatus = "", gitExtra = "", gitExtraRelease = "", gitThrows = false, usage = [], saved = savedRecord(), mutatePacket = (packet) => packet, ledgerText } = {}) {
   const root = await mkdtemp("/private/tmp/storage-rules-release-");
   t.after(() => rm(root, { recursive: true, force: true }));
   await mkdir(join(root, ".git"));
@@ -55,7 +56,7 @@ async function checkout(t, { mode = "pre", world = createReleaseWorld(), gitHead
   await writeFile(localPath, JSON.stringify(mode === "pre" ? preLocal(adcPath) : postLocal(adcPath, savedPath)), { mode: 0o600 });
   const wire = [];
   const gitCalls = [];
-  const git = async (where, args) => { gitCalls.push([where, ...args]); return args[0] === "rev-parse" ? `${gitHead}\n` : args.includes("--ignored") ? gitExtra : gitStatus; };
+  const git = async (where, args) => { gitCalls.push([where, ...args]); if (gitThrows) throw new Error("git failed"); if (args[0] === "rev-parse") return `${gitHead}\n`; if (args.includes("--ignored")) return args.includes("conformance/src/storage-rules-release") ? gitExtraRelease : gitExtra; return gitStatus; };
   const entry = bindReleaseEntry({ root, codeRoot, requestImpl: fakeRequestImpl((spec) => world.answer(spec), wire), clock, git });
   const options = { mode, localPath, runId, sourceCommit: SOURCE_COMMIT, packet: structuredClone(packet), review: structuredClone(review) };
   return { root, runs, entry, options, wire, world, gitCalls, localPath, savedPath, saved, adcPath, lockFiles: async () => (await readdir(join(runs, "sandbox-locks"))).sort() };
@@ -70,6 +71,8 @@ async function walk(directory) {
   }
   return out;
 }
+// The facts the run wrote, in order: what each read or write of the run concluded, without secrets.
+const factsOf = async (f) => (await readFile(join(runDir(f), "captures.jsonl"), "utf8")).split("\n").filter(Boolean).map((line) => JSON.parse(line)).flatMap((row) => { const data = row.data ?? row; return data.facts !== undefined && data.kind !== undefined ? [{ operationId: data.operationId, kind: data.kind, verdict: data.verdict, facts: data.facts }] : []; });
 const urls = (f) => f.wire.map((entry) => `${entry.method} ${new URL(entry.url).pathname}`);
 const lockedOnce = ["fireemu-oracle-query.lock"];
 
@@ -290,7 +293,9 @@ test("pins are recomputed before anything is created, and any mismatch, dirty tr
     "manifest pin": { mutatePacket: (packet) => ({ ...packet, manifestSha256: "0".repeat(64) }), message: /pin mismatch: manifestSha256/ },
     "head is not the source commit": { gitHead: "b".repeat(40), message: /./ },
     "tracked change": { gitStatus: " M conformance/src/storage-rules/x.mjs\n", message: /./ },
-    "untracked runner file": { gitExtra: "?? conformance/src/storage-rules-release/extra.mjs\n", message: /untracked or ignored runner files/ },
+    "untracked runner file of stage 3": { gitExtra: "?? conformance/src/storage-rules/extra.mjs\n", message: /untracked or ignored runner files/ },
+    "untracked runner file of stage 2c": { gitExtraRelease: "?? conformance/src/storage-rules-release/extra.mjs\n", message: /untracked or ignored runner files/ },
+    "git fails": { gitThrows: true, message: /source commit unreadable$/ },
   })) {
     const f = await checkout(t, options);
     await assert.rejects(f.entry(f.options), options.message, name);
@@ -352,4 +357,159 @@ test("a revocation written while the run is going stops the very next request", 
   await new Promise((resolve) => setTimeout(resolve, 10));
   assert.equal(f.world.deletes, 0);
   assert.deepEqual(f.world.release, before);
+});
+
+const bodyDigest = canonicalDigest(releaseBody());
+const releaseFact = (operationId, body, verdict = "present") => ({ operationId, kind: "rules-release-read", verdict, facts: body === null ? { status: 404 } : { status: 200, releaseName: body.name, rulesetName: body.rulesetName, createTime: body.createTime, updateTime: body.updateTime, bodySha256: canonicalDigest(body) } });
+const rulesetFact = { operationId: "preflight/ruleset/saved", kind: "rules-ruleset-read", verdict: "present", facts: { status: 200, rulesetName: RULESET, createTime: "2026-09-25T10:29:00.111111Z", sourceSha256: SOURCE_SHA } };
+const absent = (operationId) => releaseFact(operationId, null, "absent");
+const restored = (n) => ({ name: RELEASE_NAME, rulesetName: RULESET, createTime: `2026-09-29T14:00:0${n}.000000Z`, updateTime: `2026-09-29T14:00:0${n}.000000Z` });
+const refused = (world) => world.json({ error: { code: 403, message: "no", status: "PERMISSION_DENIED" } }, 403);
+const broken = (world) => world.json({ error: { code: 500, message: "boom", status: "INTERNAL" } }, 500);
+
+test("pre: the facts the run journals are what each read and write concluded, in order", async (t) => {
+  const f = await checkout(t);
+  await f.entry(f.options);
+  assert.equal(bodyDigest, canonicalDigest(f.saved.name === RELEASE_NAME ? releaseBody() : null));
+  assert.deepEqual(await factsOf(f), [rulesetFact, releaseFact("preflight/release/bucket", releaseBody()), absent("preflight/release/bucketless"), absent("release/bucket/absence"), absent("release/bucketless/absence")]);
+});
+
+test("pre: a deletion answered with an error after it was applied is recovered by publishing the release again, and the run reports it as unchanged", async (t) => {
+  const f = await checkout(t);
+  f.world.hook.delete = (world) => { world.release = null; return broken(world); };
+  const result = await f.entry(f.options);
+  assert.deepEqual([result.status, result.changed, result.released], ["recovered", false, true]);
+  assert.deepEqual(f.world.posts, [{ name: RELEASE_NAME, rulesetName: RULESET }]);
+  assert.deepEqual(await factsOf(f), [rulesetFact, releaseFact("preflight/release/bucket", releaseBody()), absent("preflight/release/bucketless"), absent("recovery/release/bucket/current"), releaseFact("recovery/release/bucket/after", restored(1))]);
+  assert.deepEqual(await f.lockFiles(), []);
+});
+
+test("pre: a refused deletion is recovered as unchanged and journals the release it found", async (t) => {
+  const f = await checkout(t);
+  f.world.hook.delete = refused;
+  const result = await f.entry(f.options);
+  assert.deepEqual([result.status, result.changed], ["recovered", false]);
+  assert.deepEqual((await factsOf(f)).slice(3), [releaseFact("recovery/release/bucket/current", releaseBody())]);
+});
+
+test("pre: each way the recovery cannot finish ends the run for the reason it names, and keeps the lock", async (t) => {
+  const cases = [
+    ["another ruleset appeared", (world) => { world.hook.delete = (w) => { w.release = releaseBody(OTHER_RULESET); throw new Error("connection lost"); }; }, /neither the saved one nor absent/],
+    ["the publication is refused", (world) => { world.hook.delete = (w) => { w.release = null; throw new Error("connection lost"); }; world.hook.post = refused; }, /could not be published again/],
+    ["the publication answers another ruleset while the release is right", (world) => { world.hook.delete = (w) => { w.release = null; throw new Error("connection lost"); }; world.hook.post = (w, body) => { w.release = releaseBody(body.rulesetName); return w.json(releaseBody(OTHER_RULESET)); }; }, /could not be published again/],
+    ["the release read back is another ruleset", (world) => { world.hook.delete = (w) => { w.release = null; throw new Error("connection lost"); }; world.hook.post = (w, body) => { w.release = releaseBody(OTHER_RULESET); return w.json(releaseBody(body.rulesetName)); }; }, /published release is not the saved one/],
+    ["the release read back is absent", (world) => { world.hook.delete = (w) => { w.release = null; throw new Error("connection lost"); }; world.hook.post = (w, body) => w.json(releaseBody(body.rulesetName)); }, /published release is not the saved one/],
+    ["the current read is unexpected", (world) => { world.hook.delete = () => { throw new Error("connection lost"); }; world.hook.read = (w, which) => (w.deletes === 1 && which === "bucket" ? broken(w) : undefined); }, /neither the saved one nor absent/],
+  ];
+  for (const [name, set, reason] of cases) {
+    const f = await checkout(t);
+    set(f.world);
+    await assert.rejects(f.entry(f.options), reason, name);
+    assert.equal(f.world.deletes, 1, name);
+    assert.ok(f.world.posts.length <= 1, name);
+    assert.deepEqual(await f.lockFiles(), lockedOnce, name);
+  }
+});
+
+test("pre: a revocation written after the deletion was attempted stops the run without a single recovery request, and keeps the lock", async (t) => {
+  const f = await checkout(t);
+  const ledgerPath = join(f.root, "docs.local", "instructions", "owner-decisions.md");
+  f.world.hook.delete = (world) => { world.release = null; writeFileSync(ledgerPath, `${ledgerFor("pre", packetFor("pre", f.saved))}\n- 2026-09-29 | STORAGE-RULES stage2c-pre-v1 | decision=REVOKED | Claude | private.md`); return world.json({}); };
+  await assert.rejects(f.entry(f.options), /admission refused/);
+  assert.equal(f.world.deletes, 1);
+  assert.deepEqual(f.world.posts, []);
+  assert.deepEqual(urls(f).slice(-1), [`DELETE /v1/${RELEASE_NAME}`]);
+  assert.deepEqual(await f.lockFiles(), lockedOnce);
+  assert.match(await journalText(f), /needs-recovery/);
+});
+
+test("post: the facts the run journals, for a publication, for a release that is already there, and for a recovery", async (t) => {
+  const f = await checkout(t, { mode: "post", world: createReleaseWorld({ release: null }) });
+  await f.entry(f.options);
+  assert.deepEqual(await factsOf(f), [rulesetFact, absent("preflight/release/bucket"), absent("preflight/release/bucketless"), releaseFact("release/bucket/after", restored(1))]);
+  const there = await checkout(t, { mode: "post" });
+  await there.entry(there.options);
+  assert.deepEqual(await factsOf(there), [rulesetFact, releaseFact("preflight/release/bucket", releaseBody()), absent("preflight/release/bucketless")]);
+  const recovered = await checkout(t, { mode: "post", world: createReleaseWorld({ release: null }) });
+  recovered.world.hook.post = (world, body) => { world.release = { name: body.name, rulesetName: body.rulesetName, createTime: "2026-09-29T14:00:07.000000Z", updateTime: "2026-09-29T14:00:07.000000Z" }; return broken(world); };
+  const result = await recovered.entry(recovered.options);
+  assert.deepEqual([result.status, result.changed, result.released], ["recovered", true, true]);
+  assert.deepEqual((await factsOf(recovered)).slice(3), [releaseFact("recovery/release/bucket/current", { name: RELEASE_NAME, rulesetName: RULESET, createTime: "2026-09-29T14:00:07.000000Z", updateTime: "2026-09-29T14:00:07.000000Z" })]);
+});
+
+test("post: each way a publication fails ends the run for the reason it names, and keeps the lock when the answer was lost", async (t) => {
+  // The answer names another ruleset but the release is right: the recovery finds the saved release and the run ends recovered.
+  const wrongAnswer = await checkout(t, { mode: "post", world: createReleaseWorld({ release: null }) });
+  wrongAnswer.world.hook.post = (w, body) => { w.release = releaseBody(body.rulesetName); return w.json(releaseBody(OTHER_RULESET)); };
+  const result = await wrongAnswer.entry(wrongAnswer.options);
+  assert.deepEqual([result.status, result.changed, result.released], ["recovered", true, true]);
+  const cases = {
+    "the release read back is another ruleset": (world) => { world.hook.post = (w, body) => { w.release = releaseBody(OTHER_RULESET); return w.json(releaseBody(body.rulesetName)); }; },
+    "the publication is refused": (world) => { world.hook.post = refused; },
+    "the publication is accepted but nothing is there": (world) => { world.hook.post = (w, body) => w.json(releaseBody(body.rulesetName)); },
+    "the publication is lost and nothing is there": (world) => { world.hook.post = () => { throw new Error("connection lost"); }; },
+  };
+  for (const [name, set] of Object.entries(cases)) {
+    const f = await checkout(t, { mode: "post", world: createReleaseWorld({ release: null }) });
+    set(f.world);
+    await assert.rejects(f.entry(f.options), /saved release is not there/, name);
+    assert.equal(f.world.posts.length, 1, name);
+    assert.deepEqual(await f.lockFiles(), lockedOnce, name);
+  }
+});
+
+test("the identity answer must be well-formed UTF-8, and the run stops before the ruleset is read", async (t) => {
+  const f = await checkout(t);
+  f.world.hook.any = (world, spec) => (new URL(spec.url).pathname === "/oauth2/v2/userinfo" ? { status: 200, rawHeaders: ["Content-Type", "application/json"], bytes: Buffer.concat([Buffer.from('{"id":"1","email":"owner@example.test","verified_email":true,"note":"'), Buffer.from([0xff]), Buffer.from('"}')]) } : undefined);
+  await assert.rejects(f.entry(f.options));
+  assert.equal(f.wire.length, 2);
+  assert.equal(f.world.deletes, 0);
+});
+
+test("the owner ledger, the local inputs and the runs directory must be private files and directories of this user, and small", async (t) => {
+  const cases = {
+    "ledger writable by others": async (f) => { await chmod(join(f.root, "docs.local", "instructions", "owner-decisions.md"), 0o666); return /owner ledger refused/; },
+    "ledger writable by the group": async (f) => { await chmod(join(f.root, "docs.local", "instructions", "owner-decisions.md"), 0o664); return /owner ledger refused/; },
+    "ledger too large": async (f) => { await writeFile(join(f.root, "docs.local", "instructions", "owner-decisions.md"), Buffer.alloc(8 * 1024 * 1024 + 1, 0x20), { mode: 0o644 }); return /owner ledger refused/; },
+    "ledger is not UTF-8": async (f) => { await writeFile(join(f.root, "docs.local", "instructions", "owner-decisions.md"), Buffer.concat([Buffer.from(ledgerFor("pre", packetFor("pre", f.saved)) + "\n"), Buffer.from([0xff])]), { mode: 0o644 }); return /owner ledger refused|admission refused/; },
+    "local inputs hard-linked": async (f) => { linkSync(f.localPath, join(f.root, "local-link.json")); return /local inputs file refused/; },
+    "local inputs too large": async (f) => { await writeFile(f.localPath, Buffer.concat([Buffer.from(JSON.stringify(preLocal(f.adcPath))), Buffer.alloc(64 * 1024, 0x20)]), { mode: 0o600 }); return /local inputs file refused/; },
+    "local inputs is not UTF-8": async (f) => { await writeFile(f.localPath, Buffer.concat([Buffer.from(JSON.stringify(preLocal(f.adcPath)).replace(f.adcPath, `${f.adcPath}\u0000`).replace("\\u0000", "")), Buffer.from([0x20, 0xff])]), { mode: 0o600 }); return /local inputs file refused/; },
+    "the ADC path is relative": async (f) => { await writeFile(f.localPath, JSON.stringify({ ...preLocal(f.adcPath), adcPath: "adc.json" }), { mode: 0o600 }); return /local inputs file refused/; },
+    "the owner digest is short": async (f) => { await writeFile(f.localPath, JSON.stringify({ ...preLocal(f.adcPath), ownerEmailSha256: "abc" }), { mode: 0o600 }); return /local inputs file refused/; },
+    "the runs directory is open to others": async (f) => { await chmod(f.runs, 0o755); return /runs directory refused/; },
+    "the lock directory is open to others": async (f) => { await chmod(join(f.runs, "sandbox-locks"), 0o755); return /lock directory refused/; },
+    "the lock directory is missing": async (f) => { await rm(join(f.runs, "sandbox-locks"), { recursive: true }); return /lock directory missing/; },
+    "the runs directory is a symlink": async (f) => { await rename(f.runs, `${f.runs}-real`); await symlink(`${f.runs}-real`, f.runs); return /runs directory refused/; },
+    "the run directory exists": async (f) => { await mkdir(join(f.runs, `storage-rules-release-${runId}`), { mode: 0o700 }); return /run directory exists/; },
+    "the run directory cannot be created": async (f) => { await chmod(f.runs, 0o500); return /run directory refused/; },
+  };
+  for (const [name, spoil] of Object.entries(cases)) {
+    const f = await checkout(t);
+    const message = await spoil(f);
+    await assert.rejects(f.entry(f.options), message, name);
+    assert.equal(f.wire.length, 0, name);
+    assert.equal(f.world.deletes, 0, name);
+    await chmod(f.runs, 0o700).catch(() => {});
+  }
+});
+
+test("the entry's own inputs are closed records: bad bindings and bad options are refused before anything is read", async (t) => {
+  const f = await checkout(t);
+  const binding = { root: f.root, codeRoot, requestImpl: () => {}, clock, git: async () => "" };
+  for (const bad of [null, undefined, [], "x", { ...binding, extra: 1 }, { ...binding, root: 5 }, { ...binding, codeRoot: 5 }, { ...binding, git: 5 }, { ...binding, requestImpl: 5 }, { ...binding, clock: { nowSeconds: () => 1 } }, { ...binding, clock: null }, Object.assign(Object.create(null), binding)]) {
+    assert.throws(() => bindReleaseEntry(bad), /invalid entry binding/);
+  }
+  const { root, ...withoutRoot } = binding;
+  assert.throws(() => bindReleaseEntry(withoutRoot), /invalid entry binding/);
+  assert.throws(() => bindReleaseEntry({ ...binding, root: join(f.root, "docs.local") }), /entry root is not a main checkout/);
+  const spoiled = [
+    null, undefined, [], "x", { ...f.options, extra: 1 }, { ...f.options, mode: "both" }, { ...f.options, mode: undefined }, { ...f.options, localPath: 5 }, { ...f.options, runId: 5 }, { ...f.options, runId: "Bad Id" }, { ...f.options, runId: "" },
+    { ...f.options, sourceCommit: 5 }, { ...f.options, sourceCommit: "abc" }, { ...f.options, sourceCommit: "A".repeat(40) }, { ...f.options, packet: { ...f.options.packet, sourceCommit: "b".repeat(40) } }, { ...f.options, packet: [] }, { ...f.options, packet: null }, { ...f.options, packet: Object.create(null) },
+    { ...f.options, review: 5 }, { ...f.options, review: [] }, { ...f.options, review: null }, { ...f.options, review: Object.create(null) },
+    ...["runnerSha256", "fixtureSchemaSha256", "manifestSha256"].flatMap((key) => [{ ...f.options, packet: { ...f.options.packet, [key]: "abc" } }, { ...f.options, packet: { ...f.options.packet, [key]: "G".repeat(64) } }, { ...f.options, packet: { ...f.options.packet, [key]: 5 } }]),
+  ];
+  for (const options of spoiled) await assert.rejects(f.entry(options), /invalid release options/, JSON.stringify(options)?.slice(0, 80));
+  assert.equal(f.wire.length, 0);
+  assert.deepEqual(await readdir(f.runs), ["sandbox-locks"]);
 });

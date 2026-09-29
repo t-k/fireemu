@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { chmod, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { linkSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -134,4 +135,22 @@ test("the pin printer prints the four pins of a clean checkout for either mode a
   // A file of the other mode's shape is refused.
   const crossed = await run(["post", pre], gitFor());
   assert.deepEqual([crossed.code, crossed.out], [1, ""]);
+});
+
+test("the approval file must be a small, single-link, valid UTF-8 file", async (t) => {
+  const { path, root } = await scratch(t);
+  const link = join(root, "hard.json");
+  linkSync(path, link);
+  const big = await scratch(t, { text: JSON.stringify({ ...approval, pad: "x".repeat(64 * 1024) }) });
+  const bytes = await scratch(t, { text: "" });
+  await writeFile(bytes.path, Buffer.concat([Buffer.from(JSON.stringify({ packet: { ...approval.packet, packetName: "stage2c-pre-v9" }, review: { note: "" } }).replace('"note":""', '"note":"')), Buffer.from([0xff]), Buffer.from('"}}')]), { mode: 0o600 });
+  for (const file of [link, big.path, bytes.path]) {
+    const h = harness(async () => ({}));
+    const result = await h.run(["pre", "/x/l.json", file, "ok-run"]);
+    assert.equal(result.code, 1, file);
+    assert.match(result.err, /approval file refused/);
+    assert.equal(h.calls.length, 0);
+  }
+  const good = harness(async () => ({ status: "finished", changed: true, requests: 1, released: true }));
+  assert.equal((await good.run(["pre", "/x/l.json", (await scratch(t)).path, "ok-run"])).code, 0);
 });

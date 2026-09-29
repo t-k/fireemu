@@ -161,4 +161,9 @@ test("targets are built from exact sources: reads name a fixed resource, the del
   assert.equal(targets.prepareBucketRead("g").targetSha256, read.targetSha256);
   assert.notEqual(targets.prepareDelete("g", saved).targetSha256, read.targetSha256);
   assert.equal(read.spec.body, null);
+  // The request itself never shows in a serialization of the prepared target: the spec is not an enumerable property.
+  assert.deepEqual(Object.keys(read), ["rowId", "credential", "project", "redacted", "targetSha256"]);
+  assert.equal(JSON.stringify(read).includes("\"spec\""), false);
+  assert.equal(Object.getOwnPropertyDescriptor(read, "spec").enumerable, false);
+  assert.equal(read.redacted, `GET https://firebaserules.googleapis.com/v1/${RELEASE_NAME}`);
 });

@@ -106,7 +106,8 @@ async function recoverPre({ gate, targets, saved, capture }) {
   if (current.state !== "absent") throw tagged(STOP_CODES.outcomeUncertain, "the bucket release is neither the saved one nor absent");
   await releaseFacts(ids.current, capture, "rules-release-read", "absent", null);
   const answer = await gate.send(targets.preparePublish(ids.restore, saved), { phase: "recovery", mutationKey: "release-restore", accept: null });
-  if (classifyRelease(answer.raw, saved.name).state !== "present") throw tagged(STOP_CODES.outcomeUncertain, "the release could not be published again");
+  const made = classifyRelease(answer.raw, saved.name);
+  if (made.state !== "present" || !same(made.release, saved)) throw tagged(STOP_CODES.outcomeUncertain, "the release could not be published again");
   const after = classifyRelease((await gate.send(targets.prepareBucketRead(ids.restored), meta)).raw, targets.releaseName);
   if (after.state !== "present" || !same(after.release, saved)) throw tagged(STOP_CODES.outcomeUncertain, "the published release is not the saved one");
   await releaseFacts(ids.restored, capture, "rules-release-read", "present", after.release);

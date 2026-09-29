@@ -72,3 +72,25 @@ test("the admission needs its mode and the closed options", () => {
   assert.throws(() => createReleaseAdmission(without), /invalid admission options/);
   assert.throws(() => createReleaseAdmission({ ...options(), extra: 1 }), /invalid admission options/);
 });
+
+test("the packet's identity and the envelope's bounds are checked before the approval is granted", () => {
+  for (const delta of [{ taskId: "OTHER" }, { taskId: 5 }, { packetName: 5 }, { packetName: null }, { packetName: "Stage2c-pre-v1" }, { packetName: `stage2c-pre-${"a".repeat(60)}` }, { sourceCommit: "abc" }, { runnerSha256: "abc" }, { manifestSha256: 5 }]) {
+    const packet = packetOf("pre", delta);
+    assert.throws(() => validateReleaseApproval({ ledgerText: ledgerOf(packetOf("pre")), packet, review: reviewOf(packet), mode: "pre" }), /invalid packet data/, JSON.stringify(delta));
+  }
+  assert.throws(() => validateReleaseApproval({ ledgerText: 5, packet: packetOf("pre"), review: reviewOf(packetOf("pre")), mode: "pre" }), /invalid approval options data/);
+  assert.throws(() => validateReleaseApproval({ ledgerText: "a\0b", packet: packetOf("pre"), review: reviewOf(packetOf("pre")), mode: "pre" }), /invalid approval options data/);
+  for (const bad of ["abc", "0", "01", "-1", "1.5", "9".repeat(20)]) assert.throws(() => check("pre", { max: bad }), /invalid envelope bound/, `max ${bad}`);
+  for (const bad of ["abc", "-1", "0", "0.0", "1.", ".5", "1.1234567", "NaN", "Infinity"]) assert.throws(() => check("pre", { reserve: bad }), /invalid envelope bound/, `reserve ${bad}`);
+  for (const good of ["0.5", "0.500000", "1", "10", "3.25"]) assert.doesNotThrow(() => check("pre", { reserve: good }), `reserve ${good}`);
+});
+
+test("the admission refuses each option that is missing or of the wrong kind", () => {
+  const options = () => ({ readLedger: async () => "", packet: packetOf("pre"), review: reviewOf(packetOf("pre")), locks: { verify: async () => true }, runId: "run-1", usage: { startedRunIds: async () => [], markStarted: async () => {} }, mode: "pre" });
+  const spoiled = [
+    { readLedger: 5 }, { readLedger: undefined }, { locks: {} }, { locks: { verify: 5 } }, { locks: undefined }, { packet: [] }, { packet: null }, { packet: 5 }, { review: [] }, { review: null }, { review: 5 },
+    { runId: 5 }, { runId: "Bad Id" }, { runId: "" }, { runId: "a".repeat(49) }, { usage: {} }, { usage: { startedRunIds: async () => [] } }, { usage: { markStarted: async () => {} } }, { usage: { startedRunIds: 5, markStarted: async () => {} } }, { usage: { startedRunIds: async () => [], markStarted: 5 } }, { usage: undefined },
+  ];
+  for (const delta of spoiled) assert.throws(() => createReleaseAdmission({ ...options(), ...delta }), /invalid admission options/, JSON.stringify(Object.keys(delta)));
+  for (const bad of [null, [], 5, "x", Object.assign(Object.create(null), options())]) assert.throws(() => createReleaseAdmission(bad), /invalid admission options/);
+});

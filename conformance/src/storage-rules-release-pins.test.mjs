@@ -50,3 +50,12 @@ test("a symbolic link, an empty runner directory and a missing schema file refus
   rmSync(join(missing, SCHEMA_FILES[0]));
   await assert.rejects(releaseCodeDigests(missing));
 });
+
+test("a module larger than eight mebibytes refuses the pin", async (t) => {
+  const root = scratchCode();
+  t.after(() => cleanup(root));
+  writeFileSync(join(root, "conformance/src/storage-rules/big.mjs"), Buffer.alloc(8 * 1024 * 1024 + 1, 0x20));
+  await assert.rejects(releaseCodeDigests(root), /pin source refused/);
+  writeFileSync(join(root, "conformance/src/storage-rules/big.mjs"), Buffer.alloc(8 * 1024 * 1024, 0x20));
+  assert.match((await releaseCodeDigests(root)).runnerSha256, /^[0-9a-f]{64}$/);
+});

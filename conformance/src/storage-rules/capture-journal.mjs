@@ -144,7 +144,7 @@ export async function createCaptureJournal(input) {
     for (const [handle, clear] of [[file, () => { file = null; }], [blobs, () => { blobs = null; }], [directory, () => { directory = null; }]]) {
       if (handle) { try { await handle.close(); clear(); } catch { failed = true; } }
     }
-    if (failed) { uncertain = true; throw tagged(STOP_CODES.captureFailed, "capture journal uncertain"); }
+    if (failed) { uncertain = true; throw new Error("capture journal uncertain"); }
   }
 
   try {
@@ -294,7 +294,7 @@ export async function createCaptureJournal(input) {
       });
     },
     async close() {
-      if (busy) throw tagged(STOP_CODES.captureFailed, "capture journal event refused");
+      if (busy) throw new Error("capture journal event refused");
       if (closed && !file && !directory && !blobs) return;
       closed = true; busy = true;
       try { await closeHandles(); } finally { busy = false; }

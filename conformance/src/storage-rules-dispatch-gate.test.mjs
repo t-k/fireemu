@@ -326,7 +326,7 @@ test("a capture failure after the request poisons the gate for every later reque
   assert.equal(h.gate.snapshot().poisoned, true);
   h.trace.length = 0;
   fail = false;
-  await assert.rejects(h.gate.send(h.prepare(READ2), normalMeta), /dispatch gate is poisoned/);
+  await assert.rejects(h.gate.send(h.prepare(READ2), normalMeta), (error) => /dispatch gate is poisoned/.test(error.message) && stopCodeOf(error) === STOP_CODES.captureFailed);
   h.gate.enterRecovery();
   await assert.rejects(h.gate.send(h.prepare("recovery/object-0/metadata"), recoveryMeta), /dispatch gate is poisoned/);
   assert.deepEqual(h.trace, []);

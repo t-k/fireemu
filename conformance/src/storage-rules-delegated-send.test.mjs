@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { generateKeyPairSync } from "node:crypto";
 import test from "node:test";
+import { STOP_CODES, stopCodeOf } from "./storage-rules/stop-codes.mjs";
 import { createCountedCredentialCache } from "./storage-rules/credential-cache.mjs";
 import { createDispatchGate } from "./storage-rules/dispatch-gate.mjs";
 
@@ -115,6 +116,7 @@ test("an uncertain capture journal stops a delegated send", async () => {
   ctx.state.uncertain = true;
   ctx.trace.length = 0;
   await assert.rejects(() => cacheOf(ctx).refreshOwner(ownerPreflight));
+  await assert.rejects(() => ctx.gate.delegated.counter.sendPreflight(keyPreflight, async () => ({}), () => true), (error) => /capture journal is uncertain/.test(error.message) && stopCodeOf(error) === STOP_CODES.captureFailed);
   assert.equal(ctx.trace.some((entry) => entry.startsWith("intent:") || entry.startsWith("http:")), false);
 });
 
@@ -154,7 +156,7 @@ test("a poisoned gate refuses delegated sends", async () => {
   const prepared = { rowId: ownerPreflight, spec: { url: "https://x/", method: "GET", headers: {}, body: null }, targetSha256: "0".repeat(64), redacted: "GET https://x/", credential: "anonymous" };
   await assert.rejects(() => ctx.gate.send(prepared, { phase: "preflight", mutationKey: null, accept: () => true }), /capture failed after send/);
   assert.equal(ctx.gate.snapshot().poisoned, true);
-  await assert.rejects(() => ctx.gate.delegated.counter.sendPreflight(keyPreflight, async () => ({}), () => true), /poisoned/);
+  await assert.rejects(() => ctx.gate.delegated.counter.sendPreflight(keyPreflight, async () => ({}), () => true), (error) => /poisoned/.test(error.message) && stopCodeOf(error) === STOP_CODES.captureFailed);
 });
 
 test("the delegated counter's snapshot and recovery entry are the gate's own", async () => {

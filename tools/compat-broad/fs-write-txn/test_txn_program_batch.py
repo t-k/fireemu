@@ -278,7 +278,7 @@ def drop(table_, step_id, key):
 @pytest.mark.parametrize("label,change", [
     ("a commit no earlier step has run", lambda t: edit(t, "rest/get-at-v1", readAt={"document": "a", "commit": "rest/emb/commit"})),
     ("a commit that does not exist", lambda t: edit(t, "rest/get-at-v1", readAt={"document": "a", "commit": "setup/update-a-9"})),
-    ("a commit that may be refused", lambda t: edit(t, "setup/update-a-1", allow=(0, 10))),
+    ("a commit that may be refused", lambda t: edit(t, "setup/update-a-1", role="observation", allow=(0, 10))),
     ("a commit that did not write the document", lambda t: edit(t, "rest/get-at-v1", readAt={"document": "m", "commit": "setup/create-a"})),
     ("an unknown document", lambda t: edit(t, "rest/get-at-v1", readAt={"document": "z", "commit": "setup/create-a"})),
     ("a commit id that is not a string", lambda t: edit(t, "rest/get-at-v1", readAt={"document": "a", "commit": 5})),
@@ -380,23 +380,23 @@ def test_a_read_only_transaction_that_began_before_a_document_existed_may_see_it
 
 @pytest.mark.parametrize("code", [3, 5, 9, 10])
 def test_any_definitive_refusal_of_a_read_only_release_finishes_the_token(code):
-    table_ = ro_table()
-    result, service = record_ro(table_, ro_snapshot="begin")
-    assert result["complete"] is True
-    import collections
+    p02 = __import__("importlib").import_module("fs_txn_table_p02")
+    table_ = p02.TABLE
+    plan = program.compile_plan(table_, NONCE, OWNER)
+    clock = Clock()
+    service = Service(clock)
     original = service.send
     def send(transport, method, request, **kwargs):
         answer = original(transport, method, request, **kwargs)
-        if method == "Rollback": return {**answer, "code": code, "details": "refused", "response": None, "http": 400 if transport == "rest" else None}
+        if method == "Rollback":
+            return {**answer, "code": code, "details": "refused", "response": None, "http": 400 if transport == "rest" else None}
         return answer
-    clock = Clock()
-    plan = program.compile_plan(table_, NONCE, OWNER)
-    fresh = Service(clock)
-    original = fresh.send
-    fresh.send = send
-    outcome = collector_module.Collector(plan, table_, program.RequestBudget(plan, table_), fresh, "owner", save=lambda _s: None, monotonic=clock.now, utc=clock.utc).run()
+    service.send = send
+    outcome = collector_module.Collector(plan, table_, program.RequestBudget(plan, table_), service, "owner", save=lambda _s: None, monotonic=clock.now, utc=clock.utc).run()
     assert outcome["complete"] is True, (code, outcome["failureType"])
-    assert {entry["state"] for entry in outcome["tokens"].values()} <= {"released-refused", "committed"}
+    states = {role: entry["state"] for role, entry in outcome["tokens"].items()}
+    assert states["rest-s1"] == "released-refused" and states["grpc-s1"] == "released-refused", "the read-only chains ended on a refused release"
+    assert states["rest-w"] in ("committed", "rolled-back")
     collector_module.projection(outcome, table_)
 
 

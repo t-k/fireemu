@@ -8218,6 +8218,19 @@ async fn start_with_profile(
     FirestoreClient<tonic::transport::Channel>,
     tokio::task::JoinHandle<()>,
 ) {
+    let (client, _clock, _backend, handle) = start_profile_with_state(strict, None).await;
+    (client, handle)
+}
+
+async fn start_profile_with_state(
+    strict: bool,
+    contention_wait: Option<std::time::Duration>,
+) -> (
+    FirestoreClient<tonic::transport::Channel>,
+    Arc<Mutex<VirtualClock>>,
+    Arc<LocalBackend>,
+    tokio::task::JoinHandle<()>,
+) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let gateway = Gateway {
@@ -8236,8 +8249,12 @@ async fn start_with_profile(
     let clock = Arc::new(Mutex::new(VirtualClock::new(
         LogicalInstant::from_unix_seconds(1_788_004_860),
     )));
-    let backend = Arc::new(LocalBackend::new(gateway.clone(), clock, 7));
-    let svc = FirestoreServer::new(GatewayService::local(gateway, backend));
+    let mut backend = LocalBackend::new(gateway.clone(), clock.clone(), 7);
+    if let Some(wait) = contention_wait {
+        backend = backend.with_contention_wait(wait);
+    }
+    let backend = Arc::new(backend);
+    let svc = FirestoreServer::new(GatewayService::local(gateway, backend.clone()));
     let handle = tokio::spawn(async move {
         tonic::transport::Server::builder()
             .add_service(svc)
@@ -8250,7 +8267,370 @@ async fn start_with_profile(
         .connect()
         .await
         .unwrap();
-    (FirestoreClient::new(channel), handle)
+    (FirestoreClient::new(channel), clock, backend, handle)
+}
+
+fn assert_native_profile_scope(backend: &LocalBackend, strict: bool) {
+    use fireemu_core_firestore::store::LimitScope;
+    let parent = fireemu_adapter_grpc::decode::parse_parent(DOCS).unwrap();
+    let scope = backend
+        .database_handle(&parent)
+        .unwrap()
+        .with(|state| Ok(state.limit_scope()))
+        .unwrap();
+    assert_eq!(
+        scope,
+        if strict {
+            LimitScope::Production
+        } else {
+            LimitScope::OfficialEmulator
+        }
+    );
+}
+
+async fn native_transaction_document(
+    client: &mut FirestoreClient<tonic::transport::Channel>,
+    path: &str,
+    transaction: Option<Vec<u8>>,
+) -> pb::Document {
+    client
+        .get_document(pb::GetDocumentRequest {
+            name: format!("{DOCS}/{path}"),
+            consistency_selector: transaction
+                .map(pb::get_document_request::ConsistencySelector::Transaction),
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner()
+}
+
+/// A repeated late precondition refusal preserves the same token, exact snapshot and read lock until explicit rollback; this is local coverage, not a production observation.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[allow(clippy::too_many_lines)]
+async fn native_precondition_refusal_preserves_same_token_until_explicit_rollback() {
+    for strict in [true, false] {
+        let (mut client, _clock, backend, handle) =
+            start_profile_with_state(strict, Some(std::time::Duration::ZERO)).await;
+        assert_native_profile_scope(&backend, strict);
+        client
+            .commit(pb::CommitRequest {
+                database: DB.to_owned(),
+                writes: vec![update_write("p08-native/existing", &[("value", i(1))])],
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let original = native_transaction_document(&mut client, "p08-native/existing", None).await;
+        let transaction = client
+            .begin_transaction(pb::BeginTransactionRequest {
+                database: DB.to_owned(),
+                ..Default::default()
+            })
+            .await
+            .unwrap()
+            .into_inner()
+            .transaction;
+        assert_eq!(
+            native_transaction_document(
+                &mut client,
+                "p08-native/existing",
+                Some(transaction.clone()),
+            )
+            .await,
+            original
+        );
+        let mut missing = update_write("p08-native/missing", &[("value", i(2))]);
+        missing.current_document = Some(pb::Precondition {
+            condition_type: Some(pb::precondition::ConditionType::Exists(true)),
+        });
+        let failed_request = pb::CommitRequest {
+            database: DB.to_owned(),
+            transaction: transaction.clone(),
+            writes: vec![
+                update_write("p08-native/existing", &[("value", i(9))]),
+                missing,
+            ],
+            ..Default::default()
+        };
+        for _ in 0..2 {
+            let refused = client.commit(failed_request.clone()).await.unwrap_err();
+            assert_eq!(refused.code(), tonic::Code::NotFound, "strict={strict}");
+            assert_eq!(
+                native_transaction_document(
+                    &mut client,
+                    "p08-native/existing",
+                    Some(transaction.clone()),
+                )
+                .await,
+                original,
+                "the failed token still serves the original document and version"
+            );
+            assert_eq!(
+                native_transaction_document(&mut client, "p08-native/existing", None).await,
+                original,
+                "the first staged write was not published"
+            );
+            assert_eq!(
+                client
+                    .get_document(pb::GetDocumentRequest {
+                        name: format!("{DOCS}/p08-native/missing"),
+                        ..Default::default()
+                    })
+                    .await
+                    .unwrap_err()
+                    .code(),
+                tonic::Code::NotFound
+            );
+            assert_eq!(
+                client
+                    .commit(pb::CommitRequest {
+                        database: DB.to_owned(),
+                        writes: vec![update_write("p08-native/existing", &[("value", i(3))])],
+                        ..Default::default()
+                    })
+                    .await
+                    .unwrap_err()
+                    .code(),
+                tonic::Code::Aborted,
+                "a rejected Commit must not release the token's read lock"
+            );
+        }
+        client
+            .rollback(pb::RollbackRequest {
+                database: DB.to_owned(),
+                transaction,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        client
+            .commit(pb::CommitRequest {
+                database: DB.to_owned(),
+                writes: vec![update_write("p08-native/existing", &[("value", i(3))])],
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            native_transaction_document(&mut client, "p08-native/existing", None)
+                .await
+                .fields
+                .get("value"),
+            Some(&i(3))
+        );
+        handle.abort();
+        assert!(handle.await.unwrap_err().is_cancelled());
+    }
+}
+
+/// Correcting a failed precondition commits with the same token and releases ownership through Commit, separately from the explicit rollback branch.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[allow(clippy::too_many_lines)]
+async fn native_corrected_precondition_commits_with_the_same_failed_token() {
+    for strict in [true, false] {
+        let (mut client, _clock, backend, handle) =
+            start_profile_with_state(strict, Some(std::time::Duration::ZERO)).await;
+        assert_native_profile_scope(&backend, strict);
+        client
+            .commit(pb::CommitRequest {
+                database: DB.to_owned(),
+                writes: vec![update_write("p08-native/existing", &[("value", i(1))])],
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let original = native_transaction_document(&mut client, "p08-native/existing", None).await;
+        let transaction = client
+            .begin_transaction(pb::BeginTransactionRequest {
+                database: DB.to_owned(),
+                ..Default::default()
+            })
+            .await
+            .unwrap()
+            .into_inner()
+            .transaction;
+        assert_eq!(
+            native_transaction_document(
+                &mut client,
+                "p08-native/existing",
+                Some(transaction.clone()),
+            )
+            .await,
+            original
+        );
+        let mut missing = update_write("p08-native/missing", &[("value", i(2))]);
+        missing.current_document = Some(pb::Precondition {
+            condition_type: Some(pb::precondition::ConditionType::Exists(true)),
+        });
+        let mut request = pb::CommitRequest {
+            database: DB.to_owned(),
+            transaction,
+            writes: vec![
+                update_write("p08-native/existing", &[("value", i(9))]),
+                missing,
+            ],
+            ..Default::default()
+        };
+        assert_eq!(
+            client.commit(request.clone()).await.unwrap_err().code(),
+            tonic::Code::NotFound
+        );
+        assert_eq!(
+            native_transaction_document(&mut client, "p08-native/existing", None).await,
+            original
+        );
+        request.writes[1].current_document = Some(pb::Precondition {
+            condition_type: Some(pb::precondition::ConditionType::Exists(false)),
+        });
+        let committed = client.commit(request).await.unwrap().into_inner();
+        assert_eq!(committed.write_results.len(), 2);
+        assert!(committed
+            .write_results
+            .iter()
+            .all(|write| write.update_time.is_some()));
+        assert_eq!(
+            native_transaction_document(&mut client, "p08-native/existing", None)
+                .await
+                .fields
+                .get("value"),
+            Some(&i(9))
+        );
+        assert_eq!(
+            native_transaction_document(&mut client, "p08-native/missing", None)
+                .await
+                .fields
+                .get("value"),
+            Some(&i(2))
+        );
+        client
+            .commit(pb::CommitRequest {
+                database: DB.to_owned(),
+                writes: vec![update_write("p08-native/existing", &[("value", i(3))])],
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            native_transaction_document(&mut client, "p08-native/existing", None)
+                .await
+                .fields
+                .get("value"),
+            Some(&i(3))
+        );
+        handle.abort();
+        assert!(handle.await.unwrap_err().is_cancelled());
+    }
+}
+
+/// Native keepalive reads protect idle lifetime while Commit still uses the original total age; these controlled-clock traces are local coverage only.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[allow(clippy::too_many_lines)]
+async fn native_keepalive_commits_at_269_total_seconds_and_refuses_at_271() {
+    for strict in [true, false] {
+        for elapsed in [269, 271] {
+            let (mut client, clock, backend, handle) = start_profile_with_state(strict, None).await;
+            assert_native_profile_scope(&backend, strict);
+            client
+                .commit(pb::CommitRequest {
+                    database: DB.to_owned(),
+                    writes: vec![update_write("p11-native/doc", &[("value", i(0))])],
+                    ..Default::default()
+                })
+                .await
+                .unwrap();
+            let original = native_transaction_document(&mut client, "p11-native/doc", None).await;
+            let transaction = client
+                .begin_transaction(pb::BeginTransactionRequest {
+                    database: DB.to_owned(),
+                    ..Default::default()
+                })
+                .await
+                .unwrap()
+                .into_inner()
+                .transaction;
+            let mut previous = 0;
+            for current in [0, 59, 118, 177, 236] {
+                clock
+                    .lock()
+                    .unwrap()
+                    .advance(LogicalDuration::from_seconds(current - previous))
+                    .unwrap();
+                assert_eq!(
+                    native_transaction_document(
+                        &mut client,
+                        "p11-native/doc",
+                        Some(transaction.clone()),
+                    )
+                    .await,
+                    original,
+                    "strict={strict}, keepalive={current}"
+                );
+                previous = current;
+            }
+            clock
+                .lock()
+                .unwrap()
+                .advance(LogicalDuration::from_seconds(elapsed - previous))
+                .unwrap();
+            let result = client
+                .commit(pb::CommitRequest {
+                    database: DB.to_owned(),
+                    transaction,
+                    writes: vec![update_write("p11-native/doc", &[("value", i(1))])],
+                    ..Default::default()
+                })
+                .await;
+            if elapsed == 269 {
+                result.unwrap();
+                assert_eq!(
+                    native_transaction_document(&mut client, "p11-native/doc", None)
+                        .await
+                        .fields
+                        .get("value"),
+                    Some(&i(1))
+                );
+            } else {
+                let refused = result.unwrap_err();
+                assert_eq!(refused.code(), tonic::Code::Aborted);
+                assert_eq!(
+                    refused.message(),
+                    "The referenced transaction has expired or is no longer valid."
+                );
+                assert_eq!(
+                    native_transaction_document(&mut client, "p11-native/doc", None).await,
+                    original,
+                    "the total-expired Commit published no document or version"
+                );
+            }
+            let parent = fireemu_adapter_grpc::decode::parse_parent(DOCS).unwrap();
+            assert_eq!(
+                backend
+                    .database_handle(&parent)
+                    .unwrap()
+                    .with(|state| Ok(state.transaction_bookkeeping_stats().active))
+                    .unwrap(),
+                0
+            );
+            client
+                .commit(pb::CommitRequest {
+                    database: DB.to_owned(),
+                    writes: vec![update_write("p11-native/doc", &[("value", i(2))])],
+                    ..Default::default()
+                })
+                .await
+                .unwrap();
+            assert_eq!(
+                native_transaction_document(&mut client, "p11-native/doc", None)
+                    .await
+                    .fields
+                    .get("value"),
+                Some(&i(2))
+            );
+            handle.abort();
+            assert!(handle.await.unwrap_err().is_cancelled());
+        }
+    }
 }
 
 /// Production's refusal of a `BatchWrite` that names one document twice

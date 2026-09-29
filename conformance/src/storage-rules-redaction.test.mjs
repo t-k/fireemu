@@ -251,3 +251,19 @@ test("a public header whose value carries a secret pattern still has the pattern
   assert.equal(out.join("\n").includes(OPAQUE), false);
   assert.equal(out.join("\n").includes(CANARIES.idToken), false);
 });
+
+// The owner's Google account ID (the userinfo answer's `id`, a 21-digit subject) identifies a person: it is removed from bodies.
+test("a numeric account ID under an id key is removed from a body, and ordinary ids and numbers stay", async () => {
+  const r = await redactor();
+  const subject = "107364905517293846281";
+  for (const body of [`{"id":"${subject}","email":"o@x.example","verified_email":true}`, `{ "id" : "${subject}" }`, `{"id":${subject}}`, `{"a":{"id":"${subject}"}}`, `{"id":"${"9".repeat(15)}"}`, `{"id":"${"9".repeat(25)}"}`]) {
+    const out = r.bytes(Buffer.from(body)).bytes.toString();
+    assert.equal(/\d{15}/.test(out), false, body);
+    assert.match(out, /<redacted:account-id>/, body);
+  }
+  for (const body of [`{"id":"${"9".repeat(14)}"}`, `{"id":"${"9".repeat(26)}"}`, `{"id":"bucket/${subject}/17000"}`, `{"id":"abc${subject}"}`, `{"identifier":"${subject}"}`, `{"userid":"${subject}"}`, `{"generation":"${subject}"}`, `{"id":"${subject}x"}`]) {
+    assert.equal(r.bytes(Buffer.from(body)).bytes.toString(), body, body);
+  }
+  const text = r.text(`owner ${JSON.stringify({ id: subject })} end`);
+  assert.equal(text.includes(subject), false);
+});

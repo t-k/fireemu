@@ -515,7 +515,7 @@ test("a whole recording with real delegates and real journals leaves no secret a
   assert.equal(result.status, "finished", JSON.stringify(result));
   await capture.close();
   await journal.close();
-  const secrets = [OWNER_TOKEN, adc.refresh_token, adc.client_secret, ...Object.values(passwords), ...Object.values(MALFORMED).map((value) => value.split(" ").at(-1)), ...h.simulator.secrets(), ...h.identity.secrets(), "@example.com"];
+  const secrets = [OWNER_TOKEN, adc.refresh_token, adc.client_secret, ...Object.values(passwords), ...Object.values(apiKeys), ...Object.values(MALFORMED).map((value) => value.split(" ").at(-1)), ...h.simulator.secrets(), ...h.identity.secrets(), "@example.com"];
   assert.ok(secrets.length > 20);
   const files = await walk(directory);
   assert.ok(files.some((f) => f.endsWith("captures.jsonl")) && files.some((f) => f.endsWith("reservations.jsonl")));

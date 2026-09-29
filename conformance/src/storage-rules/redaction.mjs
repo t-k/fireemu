@@ -20,6 +20,8 @@ const PATTERNS = [
   { kind: "session-url", re: /https?:\/\/[^\s"'<>\\]*[?&]upload_id=[^\s"'<>\\]*/gi, group: 0 },
   { kind: "private-key", re: /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g, group: 0 },
   { kind: "json-field", re: new RegExp(`"(?:${SECRET_FIELDS})"\\s*:\\s*"((?:[^"\\\\]|\\\\.)*)"`, "gi"), group: 1 },
+  // The owner's Google account ID from the userinfo answer: a 15- to 25-digit number under an exact "id" key, quoted or not.
+  { kind: "account-id", re: /"id"\s*:\s*"?(\d{15,25})(?![A-Za-z0-9_])/g, group: 1 },
   { kind: "url-parameter", re: new RegExp(`(?:[?&]|\\\\u0026|&amp;)(?:${URL_PARAMETERS})=([^&"'\\s<>\\\\]+)`, "gi"), group: 1 },
   { kind: "assignment", re: /(?:^|[\s,;([{])(?:token|access_token|id_token|refresh_token|password|secret|api[_-]?key|upload_id|downloadTokens)\s*[=:]\s*([^\s,;&"'<>)\]}]+)/gi, group: 1 },
   { kind: "email", re: /(?<![A-Za-z0-9._%+-])(?!securetoken@system\.gserviceaccount\.com)[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}/g, group: 0 },

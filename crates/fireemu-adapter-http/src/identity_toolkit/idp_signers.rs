@@ -271,7 +271,8 @@ fn check_signing_key(key: &Value) -> Result<(), String> {
     if field("n").is_some_and(|n| n.len() > 1_366) || field("e").is_some_and(|e| e.len() > 8) {
         return Err("a key's modulus or exponent is too long".to_owned());
     }
-    // A modulus of at most 1366 base64url characters is at most 8192 bits, verify's upper bound.
+    // The rsa crate refuses a modulus over `RsaPublicKey::MAX_SIZE` (4096 bits), so a longer key
+    // is refused here rather than accepted and never verifying. Production's own limit is unobserved.
     super::custom_token::validate_public_jwk(key)
 }
 

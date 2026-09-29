@@ -249,7 +249,8 @@ impl LocalOidcTrust {
             BigUint::from_bytes_be(&base64url_decode(exponent).ok()?),
         )
         .ok()?;
-        if !(2048..=8192).contains(&key.n().bits()) {
+        // The upper bound is the rsa crate's own: `RsaPublicKey::new` refuses a longer modulus.
+        if !(2048..=RsaPublicKey::MAX_SIZE).contains(&key.n().bits()) {
             return None;
         }
         let signature = base64url_decode(signature).ok()?;

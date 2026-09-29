@@ -4154,8 +4154,13 @@ fn handle_with_policy_inner(
     let dispatch_body = saml_body.as_ref().unwrap_or(body);
     let idp_trust = oidc_trust.or(strict_idp_trust.as_ref());
     // A strict sign-in's nonce-bearing credential, reserved when checked and kept only if the
-    // sign-in succeeds.
+    // sign-in succeeds. A resumed continuation is not a new credential: it carries the one the
+    // request that issued it consumed (a continuation this daemon issued, found by its token),
+    // so it neither checks nor reserves the used set, and is verified again in every other way.
+    // A repeated resume is not refused (production's answer is unobserved); presenting the ID
+    // token itself again stays a duplicate.
     let mut used_credential = CredentialReservation::default();
+    let resuming = resumed_body.is_some();
     if route.handler == routes::Handler::SignInWithIdp {
         if let Some(trust) = idp_trust {
             let params = normalized_idp_params(
@@ -4164,15 +4169,17 @@ fn handle_with_policy_inner(
             );
             let now = i64::try_from(at.as_nanos().div_euclid(1_000_000_000)).unwrap_or(i64::MAX);
             let used = |token: &crate::oidc::VerifiedIdToken| {
-                strict_signers.is_some_and(|signers| {
-                    used_credential_key(&store, trust, token)
-                        .is_some_and(|key| signers.credential_used(&key, now))
-                })
+                !resuming
+                    && strict_signers.is_some_and(|signers| {
+                        used_credential_key(&store, trust, token)
+                            .is_some_and(|key| signers.credential_used(&key, now))
+                    })
             };
             match trust.check(&store, &params, at, &used) {
                 Ok(token) => {
-                    if let Some((signers, key)) =
-                        strict_signers.zip(used_credential_key(&store, trust, &token))
+                    if let Some((signers, key)) = strict_signers
+                        .filter(|_| !resuming)
+                        .zip(used_credential_key(&store, trust, &token))
                     {
                         // Reserved under the store lock the check ran under: a sign-in checked
                         // while this one runs a blocking function sees it (closure review SF4).

@@ -1308,3 +1308,187 @@ fn strict_create_auth_uri_asks_for_openid_then_the_listed_email_and_profile() {
         assert_eq!(scope_for(scopes.clone()), expected, "{scopes:?}");
     }
 }
+
+fn nonce_token() -> String {
+    let mut claimed = claims();
+    claimed["nonce"] = json!(hashed("nonce-a"));
+    token(&claimed)
+}
+
+fn continuing_state() -> AuthState {
+    let mut s = strict_state();
+    s.idp_continuations = IdpContinuationPolicy::LocalBounded;
+    s
+}
+
+#[test]
+fn a_continuation_of_a_nonce_sign_in_resumes_without_the_used_credential_refusal() {
+    // The nonce credential the first request consumed is not consumed again by resuming the
+    // continuation that request answered with: the continuation is that credential, verified
+    // again against the live provider and keys (closure review N10 item 4, N-g). A repeated
+    // resume is not refused (production's answer is unobserved).
+    let s = continuing_state();
+    let first = sign_in(&s, &with_nonce(&nonce_token(), Some("nonce-a")));
+    assert_eq!(first.status, 200, "{}", first.body);
+    let pending = first.body["pendingToken"].clone();
+    assert!(pending.is_string(), "{}", first.body);
+    for round in ["first resume", "second resume"] {
+        let resumed = sign_in(&s, &continuation(&pending));
+        assert_eq!(resumed.status, 200, "{round}: {}", resumed.body);
+        assert_eq!(resumed.body["localId"], first.body["localId"], "{round}");
+    }
+    assert_eq!(s.store.lock().unwrap().user_count(), 1);
+}
+
+#[test]
+fn resuming_a_continuation_does_not_reopen_the_raw_credential() {
+    let s = continuing_state();
+    let first = sign_in(&s, &with_nonce(&nonce_token(), Some("nonce-a")));
+    assert_eq!(first.status, 200, "{}", first.body);
+    let resumed = sign_in(&s, &continuation(&first.body["pendingToken"]));
+    assert_eq!(resumed.status, 200, "{}", resumed.body);
+    // Presenting the same ID token and nonce again, before or after a resume, stays a duplicate.
+    assert_refused_after(&s, &with_nonce(&nonce_token(), Some("nonce-a")), DUPLICATE);
+    // A body that carries a pendingToken and a postBody is refused before any credential is read.
+    let mut both = with_nonce(&nonce_token(), Some("nonce-a"));
+    both["pendingToken"] = first.body["pendingToken"].clone();
+    assert_refused_after(&s, &both, "INVALID_PENDING_TOKEN");
+}
+
+#[test]
+fn only_a_continuation_this_emulator_issued_skips_the_used_credential_check() {
+    let s = continuing_state();
+    let first = sign_in(&s, &with_nonce(&nonce_token(), Some("nonce-a")));
+    assert_eq!(first.status, 200, "{}", first.body);
+    // A forged token, and one issued by another emulator instance (another store), are refused
+    // as unknown continuations, not resumed.
+    assert_refused_after(
+        &s,
+        &continuation(&json!("forged-pending-token")),
+        "INVALID_PENDING_TOKEN",
+    );
+    let foreign = continuing_state();
+    assert_refused_after(
+        &foreign,
+        &continuation(&first.body["pendingToken"]),
+        "INVALID_PENDING_TOKEN",
+    );
+    // A continuation whose request URI differs is refused.
+    let mut moved = continuation(&first.body["pendingToken"]);
+    moved["requestUri"] = json!("http://localhost/elsewhere");
+    assert_refused_after(&s, &moved, "INVALID_REQUEST_URI");
+    // The fixture profile's continuation does not resume under strict, nonce or not.
+    let mut emulator = strict_state();
+    emulator.store = s.store.clone();
+    emulator.stateless_refresh_tokens = true;
+    emulator.idp_assertions = IdpAssertionPolicy::Fixture;
+    emulator.idp_continuations = IdpContinuationPolicy::LocalBounded;
+    let fixture = sign_in(&emulator, &fixture_requests("google.com")[1]);
+    assert_eq!(fixture.status, 200, "{}", fixture.body);
+    assert_refused_after(
+        &s,
+        &continuation(&fixture.body["pendingToken"]),
+        "INVALID_PENDING_TOKEN",
+    );
+}
+
+#[test]
+fn a_resumed_continuation_is_still_verified_against_the_live_provider() {
+    let s = continuing_state();
+    let first = sign_in(&s, &with_nonce(&nonce_token(), Some("nonce-a")));
+    let pending = first.body["pendingToken"].clone();
+    s.store
+        .lock()
+        .unwrap()
+        .replace_oidc_config(provider(false, ISSUER));
+    assert_refused_after(&s, &continuation(&pending), DISABLED);
+    s.store
+        .lock()
+        .unwrap()
+        .replace_oidc_config(provider(true, ISSUER));
+    s.clock
+        .lock()
+        .unwrap()
+        .advance_to(LogicalInstant::from_unix_seconds(NOW + 60))
+        .unwrap();
+    assert_refused_after(&s, &continuation(&pending), &stale(NOW));
+}
+
+#[test]
+fn a_link_refusal_that_carries_a_nonce_credential_resumes_its_continuation() {
+    // The needConfirmation-shaped answers (`PROVIDER_ALREADY_LINKED`, `EMAIL_EXISTS`) are 200s
+    // that keep the credential used; their continuation is resumable all the same.
+    let s = continuing_state();
+    let first_claims = claims();
+    let first = sign_in(&s, &request(&token(&first_claims)));
+    assert_eq!(first.status, 200, "{}", first.body);
+    let mut second = claims();
+    second["sub"] = json!("sub-second");
+    second["nonce"] = json!(hashed("nonce-a"));
+    let mut link = link_request(&token(&second), &first.body["idToken"], true);
+    link["postBody"] = json!(format!(
+        "{}&nonce=nonce-a",
+        link["postBody"].as_str().unwrap()
+    ));
+    let answer = sign_in(&s, &link);
+    assert_eq!(answer.status, 200, "{}", answer.body);
+    assert_eq!(answer.body["errorMessage"], "PROVIDER_ALREADY_LINKED");
+    let resumed = sign_in(&s, &continuation(&answer.body["pendingToken"]));
+    assert_ne!(
+        resumed.body["error"]["message"], DUPLICATE,
+        "{}",
+        resumed.body
+    );
+}
+
+/// A JWK whose modulus has exactly `bits` bits (a synthetic value, all ones below the top bit;
+/// no private key exists for it) and the exponent 65537.
+fn synthetic_key(bits: usize) -> Value {
+    let mut modulus = vec![0xff_u8; bits.div_ceil(8)];
+    let spare = modulus.len() * 8 - bits;
+    modulus[0] >>= spare;
+    json!({
+        "kty": "RSA", "alg": "RS256", "use": "sig", "kid": format!("k{bits}"),
+        "n": fireemu_core_auth::jwt::base64url_encode(&modulus),
+        "e": "AQAB",
+    })
+}
+
+#[test]
+fn an_issuer_key_of_4096_bits_is_accepted_and_one_of_4097_bits_is_refused_at_startup() {
+    // The rsa crate caps a public key at 4096 bits; a longer one is refused when the
+    // configuration is read, not accepted and then never verifying.
+    let load = |bits: usize| {
+        let mut map = serde_json::Map::new();
+        map.insert(ISSUER.to_owned(), json!({"keys": [synthetic_key(bits)]}));
+        IdpSignerTrust::from_jwks(&map).map(|_| ())
+    };
+    assert_eq!(load(4096), Ok(()));
+    assert_eq!(load(2048), Ok(()));
+    let refused = load(4097).unwrap_err();
+    assert!(refused.contains("not valid"), "{refused}");
+    let short = load(2047).unwrap_err();
+    assert!(short.contains("at least 2048"), "{short}");
+}
+
+#[test]
+fn create_auth_uri_puts_the_continue_uri_and_client_id_into_authuri_as_given() {
+    // Pinned as it is, not as production does it: production's escaping of these parameters is
+    // unobserved (only `:` and `/` are recorded, and those stay as they are), so nothing is
+    // escaped or refused here (closure review N10 item 3).
+    let s = strict_state_with_endpoint();
+    let mut config = provider(true, ISSUER);
+    config.client_id = "client&x=1 é".into();
+    s.store.lock().unwrap().replace_oidc_config(config);
+    let continue_uri = "https://app.example.test/cb?a=1&b=%41+c #frag é";
+    let answer = create_auth_uri(
+        &s,
+        &json!({"providerId": PROVIDER, "continueUri": continue_uri}),
+    );
+    assert_eq!(answer.status, 200, "{}", answer.body);
+    let uri = answer.body["authUri"].as_str().unwrap();
+    let prefix = format!(
+        "{AUTHORIZE}?response_type=id_token&client_id=client&x=1 é&redirect_uri={continue_uri}&state="
+    );
+    assert!(uri.starts_with(&prefix), "{uri}");
+}

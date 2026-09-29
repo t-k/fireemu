@@ -1416,7 +1416,7 @@ fn a_resumed_continuation_is_still_verified_against_the_live_provider() {
 }
 
 #[test]
-fn a_link_refusal_that_carries_a_nonce_credential_resumes_its_continuation() {
+fn a_link_refusal_that_carries_a_nonce_credential_keeps_it_used_and_resumes_its_continuation() {
     // The needConfirmation-shaped answers (`PROVIDER_ALREADY_LINKED`, `EMAIL_EXISTS`) are 200s
     // that keep the credential used; their continuation is resumable all the same.
     let s = continuing_state();
@@ -1434,12 +1434,155 @@ fn a_link_refusal_that_carries_a_nonce_credential_resumes_its_continuation() {
     let answer = sign_in(&s, &link);
     assert_eq!(answer.status, 200, "{}", answer.body);
     assert_eq!(answer.body["errorMessage"], "PROVIDER_ALREADY_LINKED");
+    // The 200 kept the credential: the same token and nonce again is a duplicate.
+    assert_refused_after(&s, &link, DUPLICATE);
+    // Its continuation resumes as a sign-in, and does not reopen the credential.
     let resumed = sign_in(&s, &continuation(&answer.body["pendingToken"]));
-    assert_ne!(
-        resumed.body["error"]["message"], DUPLICATE,
+    assert_eq!(resumed.status, 200, "{}", resumed.body);
+    assert!(resumed.body["localId"].is_string(), "{}", resumed.body);
+    assert!(
+        resumed.body.get("errorMessage").is_none(),
         "{}",
         resumed.body
     );
+    assert_refused_after(&s, &link, DUPLICATE);
+}
+
+#[test]
+fn a_nonce_sign_in_answered_with_a_second_factor_challenge_keeps_its_credential_and_resumes() {
+    let s = continuing_state();
+    let first = sign_in(&s, &request(&token(&claims())));
+    assert_eq!(first.status, 200, "{}", first.body);
+    // The account then enrols a second factor and the project turns MFA on, so the next
+    // sign-in stops at the challenge.
+    s.store
+        .lock()
+        .unwrap()
+        .set_mfa_config(fireemu_core_auth::mfa_config::MfaProjectConfig {
+            state: fireemu_core_auth::mfa_config::MfaConfigState::Enabled,
+            phone_sms: true,
+            totp: None,
+        });
+    {
+        let mut store = s.store.lock().unwrap();
+        let uid = store
+            .user_by_id(first.body["localId"].as_str().unwrap())
+            .unwrap()
+            .local_id
+            .clone();
+        store
+            .enroll_phone_factor(
+                &uid,
+                "+15555550127",
+                None,
+                LogicalInstant::from_unix_seconds(NOW),
+            )
+            .unwrap();
+    }
+    let challenged = sign_in(&s, &with_nonce(&nonce_token(), Some("nonce-a")));
+    assert_eq!(challenged.status, 200, "{}", challenged.body);
+    assert!(
+        challenged.body["mfaPendingCredential"].is_string(),
+        "{}",
+        challenged.body
+    );
+    assert!(
+        challenged.body.get("idToken").is_none(),
+        "{}",
+        challenged.body
+    );
+    let pending = challenged.body["pendingToken"].clone();
+    assert!(pending.is_string(), "{}", challenged.body);
+    // The challenge consumed the credential: the same token and nonce again is a duplicate.
+    assert_refused_after(&s, &with_nonce(&nonce_token(), Some("nonce-a")), DUPLICATE);
+    // The continuation resumes to the same challenge, twice, and the credential stays used.
+    for round in ["first resume", "second resume"] {
+        let resumed = sign_in(&s, &continuation(&pending));
+        assert_eq!(resumed.status, 200, "{round}: {}", resumed.body);
+        assert!(
+            resumed.body["mfaPendingCredential"].is_string(),
+            "{round}: {}",
+            resumed.body
+        );
+        assert!(
+            resumed.body.get("idToken").is_none(),
+            "{round}: {}",
+            resumed.body
+        );
+    }
+    assert_refused_after(&s, &with_nonce(&nonce_token(), Some("nonce-a")), DUPLICATE);
+}
+
+#[test]
+fn a_continuation_of_one_tenant_does_not_resume_in_another_namespace() {
+    let mut s = continuing_state();
+    let registry = Arc::new(AuthRegistry::new("demo-app", s.store.clone()));
+    for name in ["customer-a", "customer-b"] {
+        let tenant = registry.ensure_tenant("demo-app", name).unwrap();
+        assert!(tenant
+            .lock()
+            .unwrap()
+            .create_oidc_config(provider(true, ISSUER)));
+    }
+    s.registry = Some(registry.clone());
+    allow_tenants(&s);
+    let in_tenant = |name: &str, mut body: Value| {
+        body["tenantId"] = json!(name);
+        body
+    };
+    let signed = sign_in(
+        &s,
+        &in_tenant("customer-a", with_nonce(&nonce_token(), Some("nonce-a"))),
+    );
+    assert_eq!(signed.status, 200, "{}", signed.body);
+    let pending = signed.body["pendingToken"].clone();
+    assert!(pending.is_string(), "{}", signed.body);
+    // Tenant A's continuation resumes in tenant A ...
+    let own = sign_in(&s, &in_tenant("customer-a", continuation(&pending)));
+    assert_eq!(own.status, 200, "{}", own.body);
+    // ... and is an unknown continuation in tenant B and in the project.
+    for (where_, body) in [
+        ("tenant B", in_tenant("customer-b", continuation(&pending))),
+        ("the project", continuation(&pending)),
+    ] {
+        let refused = sign_in(&s, &body);
+        assert_eq!(refused.status, 400, "{where_}: {}", refused.body);
+        assert_eq!(
+            refused.body["error"]["message"], "INVALID_PENDING_TOKEN",
+            "{where_}"
+        );
+    }
+    // Tenant B's used set is untouched: the same credential still signs in there once.
+    let in_b = sign_in(
+        &s,
+        &in_tenant("customer-b", with_nonce(&nonce_token(), Some("nonce-a"))),
+    );
+    assert_eq!(in_b.status, 200, "{}", in_b.body);
+}
+
+#[test]
+fn a_reset_forgets_the_continuation_and_the_credential_signs_in_again() {
+    let s = continuing_state();
+    let first = sign_in(&s, &with_nonce(&nonce_token(), Some("nonce-a")));
+    assert_eq!(first.status, 200, "{}", first.body);
+    let pending = first.body["pendingToken"].clone();
+    let reset = handle(
+        &s,
+        "DELETE",
+        "/emulator/v1/projects/demo-app/accounts",
+        &Value::Null,
+    );
+    assert_eq!(reset.status, 200, "{}", reset.body);
+    s.store
+        .lock()
+        .unwrap()
+        .replace_oidc_config(provider(true, ISSUER));
+    let refused = sign_in(&s, &continuation(&pending));
+    assert_eq!(refused.status, 400, "{}", refused.body);
+    assert_eq!(refused.body["error"]["message"], "INVALID_PENDING_TOKEN");
+    // The credential belongs to the old generation: the raw token signs in again.
+    let again = sign_in(&s, &with_nonce(&nonce_token(), Some("nonce-a")));
+    assert_eq!(again.status, 200, "{}", again.body);
 }
 
 /// A JWK whose modulus has exactly `bits` bits (a synthetic value, all ones below the top bit;

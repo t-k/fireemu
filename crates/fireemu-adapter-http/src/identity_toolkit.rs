@@ -808,6 +808,12 @@ pub enum IdpAssertionPolicy {
     /// is accepted only when a startup key of the provider's issuer verifies it (an empty key
     /// set refuses every OIDC sign-in), a `saml.*` response only when the provider's configured
     /// certificates verify its signature; the fixture and every other provider are refused.
+    ///
+    /// A `pendingToken` continuation is a bearer handle drawn from the store's credential
+    /// entropy. An embedder that runs this policy must install the operating system CSPRNG
+    /// (`fireemu_core_auth::store::install_credential_entropy`, as the daemon does): without it
+    /// handles fall back to the seeded stream, and a nonce-bearing credential's resume can be
+    /// guessed by someone who holds the credential.
     SignedOidc(Arc<IdpSignerTrust>),
 }
 

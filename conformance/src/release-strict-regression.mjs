@@ -941,10 +941,10 @@ async function main() {
   const binaryPath = process.env.FIREEMU_BIN;
   const functionsNode = process.env.FIREEMU_NODE;
   if (!binaryPath || !functionsNode) throw new Error("FIREEMU_BIN and FIREEMU_NODE are required");
-  await assertNoOutboundNetwork(fetch);
   const binary = realpathSync(resolve(binaryPath));
   const notPackaged = packagedRunnerError(binary);
   if (notPackaged) throw new Error(notPackaged);
+  await assertNoOutboundNetwork(fetch);
   const out = resolve(args.out);
   await rm(out, { recursive: true, force: true });
   await mkdir(join(out, "logs"), { recursive: true });

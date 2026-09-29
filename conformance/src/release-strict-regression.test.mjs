@@ -3,8 +3,11 @@
 // checks (no recording mode, no production credential, no route out) are tested here on inputs
 // built from the committed evidence, each broken in one place.
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { readdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 
@@ -810,4 +813,37 @@ test("the run refuses a binary that ships no runner beside it", () => {
   const deps = { exists: (path) => present.has(path), realpath: (path) => path };
   assert.equal(packagedRunnerError("/install/bin/fireemu", deps), undefined);
   assert.match(packagedRunnerError("/checkout/target/release/fireemu", deps), /no packaged runner/);
+});
+
+test("the script refuses to start on a build that ships no runner, before it reaches for the network", () => {
+  const dir = mkdtempSync(join(tmpdir(), "fireemu-strict-refusal-"));
+  try {
+    const binary = join(dir, "fireemu");
+    writeFileSync(binary, "");
+    const out = join(dir, "out");
+    const run = spawnSync(
+      process.execPath,
+      [repo("conformance/src/release-strict-regression.mjs"), "--out", out],
+      {
+        env: { PATH: process.env.PATH, FIREEMU_BIN: binary, FIREEMU_NODE: process.execPath },
+        encoding: "utf8",
+      },
+    );
+    assert.notEqual(run.status, 0);
+    assert.match(run.stderr, /no packaged runner beside/);
+    assert.equal(existsSync(out), false);
+    mkdirSync(join(dir, "runner-node"));
+    writeFileSync(join(dir, "runner-node", "index.mjs"), "");
+    const packaged = spawnSync(
+      process.execPath,
+      [repo("conformance/src/release-strict-regression.mjs"), "--out", out],
+      {
+        env: { PATH: process.env.PATH, FIREEMU_BIN: binary, FIREEMU_NODE: process.execPath, FIREEMU_RUNNER_NODE: "x" },
+        encoding: "utf8",
+      },
+    );
+    assert.match(packaged.stderr, /refusing to run with FIREEMU_RUNNER_NODE set/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

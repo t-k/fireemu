@@ -1212,3 +1212,11 @@ test("the runner digest covers the runner's sources and not its tests", async ()
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test("the session's child environment and the comparison's runner digest go through the runner selection", async () => {
+  const source = await readFile(new URL("./auth-tenant-blocking/run.mjs", import.meta.url), "utf8");
+  // Only runnerEnvironment names the runner override (once to strip it, once to set it); the spawn uses the builder; the digest follows the choice.
+  assert.equal(source.match(/FIREEMU_RUNNER_NODE/g).length, 2);
+  assert.match(source, /env: localSessionEnv\(withoutLockCapability\(\), binary, \{/);
+  assert.match(source, /runnerSha256: await runnerSha256\(selectRunner\(process\.env, local\.binary\)\.dir\)/);
+});

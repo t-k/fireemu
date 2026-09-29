@@ -3,11 +3,21 @@ import { types } from "node:util";
 
 // Judges the preflight reads against the private packet of expected values: the owner's identity, both projects and their
 // keys, the bucket, the database and the policy baselines. It returns true only when every fact the probe carries matches;
-// the two entry reads (Rulesets list, release) are judged by their own verdicts elsewhere and must merely be well formed.
+// the entry list of Rulesets must be exactly the two rulesets production holds, and the two entry release reads must merely be well formed.
 // Bearer values (the owner's address, the key strings) are compared as digests or in constant time and are never returned.
 const digest = (value) => createHash("sha256").update(value).digest("hex");
 const same = (left, right) => typeof left === "string" && typeof right === "string" && left.length === right.length && timingSafeEqual(Buffer.from(left), Buffer.from(right));
 const equalLists = (left, right) => Array.isArray(left) && left.length === right.length && left.every((entry, index) => entry === right[index]);
+
+// The rulesets production holds on the query project when the recording starts, by name and service: the storage ruleset that stage 2c-pre
+// deliberately kept (the bucket release that pointed at it is removed for the recording and published again after it) and the project's
+// Firestore ruleset. The entry list must be exactly these two, so an unknown ruleset (or a missing one) stops the run before anything is
+// written. The run deletes only rulesets it created itself; these two are never touched (see the run ledger).
+export const ENTRY_RULESETS = Object.freeze([
+  Object.freeze({ name: "projects/fireemu-oracle-query/rulesets/22b746af-a48a-458d-ab5c-7853473bc8c8", services: Object.freeze(["firebase.storage"]) }),
+  Object.freeze({ name: "projects/fireemu-oracle-query/rulesets/d0abf7c6-b0b6-4163-8488-7c8a48ac5dd1", services: Object.freeze(["cloud.firestore"]) }),
+]);
+const isEntryList = (listed) => Array.isArray(listed) && listed.length === ENTRY_RULESETS.length && listed.every((entry, index) => entry?.name === ENTRY_RULESETS[index].name && equalLists(entry.services, ENTRY_RULESETS[index].services));
 
 export function createPreflightJudge(options) {
   const fail = () => { throw new Error("invalid preflight judge options"); };
@@ -46,7 +56,7 @@ export function createPreflightJudge(options) {
     "preflight/bucket/iam": (outcome) => outcome.kind === "preflight-bucket-iam" && outcome.verdict === "accepted" && same(outcome.facts.policySha256, bucket.iamPolicySha256),
     "preflight/query/database": (outcome) => outcome.kind === "preflight-database" && outcome.verdict === "accepted" && outcome.facts.locationId === database.locationId && outcome.facts.type === database.type,
     "preflight/query/iam": (outcome) => outcome.kind === "preflight-project-iam" && outcome.verdict === "accepted" && same(outcome.facts.policySha256, inputs.queryProjectIamPolicySha256),
-    "preflight/rulesets-list/entry/1": (outcome) => outcome.kind === "rules-list-page" && outcome.verdict !== "unexpected",
+    "preflight/rulesets-list/entry/1": (outcome) => outcome.kind === "rules-list-page" && outcome.verdict === "accepted" && outcome.facts.hasNextPage === false && isEntryList(outcome.facts.rulesets),
     "preflight/release/entry/bucket": (outcome) => outcome.kind === "rules-release-read" && outcome.verdict !== "unexpected",
     "preflight/release/entry/bucketless": (outcome) => outcome.kind === "rules-release-read" && outcome.verdict !== "unexpected",
   };

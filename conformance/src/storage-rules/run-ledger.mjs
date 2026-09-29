@@ -25,6 +25,9 @@ export function createRunLedger(options) {
   const rulesets = new Map(SOURCES.map((name) => [name, { createAttempted: false, createAck: false, name: null, sourceSha256: null, readOk: false, deleteAttempted: false, deleteAcked: false, absentConfirmed: false, uncertain: false }]));
   const release = { bucket: "unknown", bucketless: "unknown", rulesetName: null, ownedCurrent: false, unownedChange: false, uncertain: false, createAttempted: false, deleteAttempted: false, entryBucketAbsent: false, entryBucketlessAbsent: false };
   const compile = { tests: new Set(), invalid: false };
+  // The names of the rulesets that existed when the recording started (the entry list). The run owns only what it creates: an acknowledged create that
+  // names one of these is an unexpected outcome, so it can never make a listed ruleset deletable.
+  let entryRulesets = new Set();
   const flags = { credentialFresh: false };
   const settled = new Map();
   const controlReadbacks = new Set();
@@ -119,12 +122,14 @@ export function createRunLedger(options) {
       const ruleset = rulesetFor(row);
       if (uncertain) { ruleset.uncertain = true; return; }
       if (kind === "rules-ruleset-create") {
-        if (verdict === "accepted") { ruleset.createAck = true; ruleset.name = facts.rulesetName; ruleset.sourceSha256 = facts.sourceSha256; } else ruleset.uncertain = true;
+        if (verdict === "accepted" && !entryRulesets.has(facts.rulesetName)) { ruleset.createAck = true; ruleset.name = facts.rulesetName; ruleset.sourceSha256 = facts.sourceSha256; } else ruleset.uncertain = true;
       } else if (kind === "rules-ruleset-read") {
         if (verdict === "present") ruleset.readOk = ruleset.createAck && facts.rulesetName === ruleset.name && facts.sourceSha256 === ruleset.sourceSha256;
         else if (verdict === "absent") { ruleset.absentConfirmed = true; ruleset.readOk = false; }
         else ruleset.uncertain = true;
       } else if (kind === "rules-ruleset-delete") { if (verdict === "accepted") ruleset.deleteAcked = true; else ruleset.uncertain = true; }
+    } else if (row.family === "rulesets-list") {
+      if (kind === "rules-list-page" && verdict === "accepted" && row.id.startsWith("preflight/") && Array.isArray(facts.rulesets)) entryRulesets = new Set(facts.rulesets.map((entry) => entry.name));
     } else if (isRelease(row)) {
       const slot = isBucketless(row) ? "bucketless" : "bucket";
       if (uncertain) { release.uncertain = true; release.bucket = "unknown"; return; }

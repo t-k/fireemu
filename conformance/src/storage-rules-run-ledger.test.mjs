@@ -128,6 +128,40 @@ test("a release is publishable only for a created and read-back Ruleset, and its
   void objects;
 });
 
+test("a Ruleset the run creates must be a new one: an acknowledged create that names a Ruleset listed at entry makes it unowned, and nothing of it can be read, published or deleted", async () => {
+  const listEntry = (name, services) => ({ name, services });
+  const entryList = out("rules-list-page", "accepted", { count: 2, hasNextPage: false, rulesets: [listEntry(RS("kept-storage"), ["firebase.storage"]), listEntry(RS("firestore"), ["cloud.firestore"])] });
+  for (const listed of ["kept-storage", "firestore"]) {
+    const { run } = await fresh();
+    run.recordOutcome(row("preflight/rulesets-list/entry/1"), entryList);
+    const create = row("ruleset/v1/create");
+    run.recordIntent(create);
+    run.recordOutcome(create, out("rules-ruleset-create", "accepted", { rulesetName: RS(listed), createTime: "t", sourceSha256: "1".repeat(64) }));
+    assert.equal(run.evaluate(row("ruleset/v1/read-source"), ["acknowledged-ruleset-create"]).decision, "stop", listed);
+    assert.equal(run.evaluate(row("ruleset/v1/delete"), ["owned-ruleset-and-unreferenced-after-restore"]).decision, "stop", listed);
+    assert.equal(run.evaluate(row("release/v1/publish"), ["owned-ruleset-and-source-readback"]).decision, "stop", listed);
+  }
+  // A new name is acknowledged as before, and a later page of the final list never widens or replaces the entry list.
+  const { run } = await fresh();
+  run.recordOutcome(row("preflight/rulesets-list/entry/1"), entryList);
+  run.recordOutcome(row("rulesets-list/final/1"), out("rules-list-page", "accepted", { count: 1, hasNextPage: false, rulesets: [listEntry(RS("later"), [])] }));
+  const create = row("ruleset/v1/create");
+  run.recordIntent(create);
+  run.recordOutcome(create, out("rules-ruleset-create", "accepted", { rulesetName: RS("kept-storage"), createTime: "t", sourceSha256: "1".repeat(64) }));
+  assert.equal(run.evaluate(row("ruleset/v1/read-source"), ["acknowledged-ruleset-create"]).decision, "stop");
+  const other = await fresh();
+  other.run.recordOutcome(row("preflight/rulesets-list/entry/1"), entryList);
+  other.run.recordOutcome(row("rulesets-list/final/1"), out("rules-list-page", "accepted", { count: 1, hasNextPage: false, rulesets: [listEntry(RS("later"), [])] }));
+  other.run.recordIntent(create);
+  other.run.recordOutcome(create, out("rules-ruleset-create", "accepted", { rulesetName: RS("later"), createTime: "t", sourceSha256: "1".repeat(64) }));
+  assert.equal(other.run.evaluate(row("ruleset/v1/read-source"), ["acknowledged-ruleset-create"]).decision, "go");
+  const fresh2 = await fresh();
+  fresh2.run.recordOutcome(row("preflight/rulesets-list/entry/1"), out("rules-list-page", "unexpected", { status: 200 }));
+  fresh2.run.recordIntent(create);
+  fresh2.run.recordOutcome(create, out("rules-ruleset-create", "accepted", { rulesetName: RS("kept-storage"), createTime: "t", sourceSha256: "1".repeat(64) }));
+  assert.equal(fresh2.run.evaluate(row("ruleset/v1/read-source"), ["acknowledged-ruleset-create"]).decision, "go");
+});
+
 test("the previous-release check follows the publication chain", async () => {
   const { run } = await fresh();
   const before = (name) => row(`release/${name}/before`);

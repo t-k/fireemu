@@ -230,6 +230,8 @@ test("a whole recording through the assembled runner finishes, cleans up, marks 
   });
   const state = f.simulator.state();
   assert.deepEqual({ objects: state.objects, rulesets: state.rulesets, release: state.release, documents: state.documents }, { objects: 0, rulesets: 0, release: null, documents: 0 });
+  // The recording never creates, reads or deletes the rulesets production already holds: the listed ones stay untouched.
+  assert.deepEqual(f.simulator.touchedEntryRulesets(), []);
   assert.equal(f.identity.users.size, 0);
   assert.deepEqual(await f.usage(), [runId]);
   assert.deepEqual(await f.lockFiles(), []);

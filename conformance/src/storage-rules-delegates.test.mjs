@@ -128,6 +128,8 @@ test("a whole recording with every delegate real counts each request once and le
   assert.equal(result.status, "finished", JSON.stringify(result));
   const state = h.simulator.state();
   assert.deepEqual({ objects: state.objects, rulesets: state.rulesets, release: state.release, documents: state.documents }, { objects: 0, rulesets: 0, release: null, documents: 0 });
+  // The recording never creates, reads or deletes the rulesets production already holds: the listed ones stay untouched.
+  assert.deepEqual(h.simulator.touchedEntryRulesets(), []);
   assert.equal(h.identity.users.size, 0);
   // 2 preflight cache rows and the 2 normal cache refreshes are counted with the auth fixture's requests.
   const authIds = h.trace.filter((id) => id.startsWith("auth/") || id.startsWith("auth-shared/") || id.startsWith("preflight/auth/"));
@@ -200,6 +202,8 @@ test("a stop with the foreign fixture open is recovered: the fixture is abandone
   assert.equal(h.real.snapshot().foreignOpen, false);
   const state = h.simulator.state();
   assert.deepEqual({ objects: state.objects, rulesets: state.rulesets, release: state.release, documents: state.documents }, { objects: 0, rulesets: 0, release: null, documents: 0 });
+  // The recording never creates, reads or deletes the rulesets production already holds: the listed ones stay untouched.
+  assert.deepEqual(h.simulator.touchedEntryRulesets(), []);
   assert.equal(h.trace.at(-1), "terminal:recovered");
   assert.deepEqual(h.seen.cleanup.map((row) => row.account).sort(), ["foreign-project-token", "revoked-token", "user-a", "user-b"]);
 });

@@ -65,6 +65,8 @@ test("a whole recording runs against the simulator, cleans up everything it crea
   assert.equal(result.status, "finished", JSON.stringify(result));
   const state = h.simulator.state();
   assert.deepEqual({ objects: state.objects, rulesets: state.rulesets, release: state.release, documents: state.documents }, { objects: 0, rulesets: 0, release: null, documents: 0 });
+  // The recording never creates, reads or deletes the rulesets production already holds: the listed ones stay untouched.
+  assert.deepEqual(h.simulator.touchedEntryRulesets(), []);
   assert.ok(state.sessions.every((s) => s === "final" || s === "cancelled"));
   assert.deepEqual([...h.objects.residual()], []);
   assert.equal(h.gate.snapshot().mode, "closed");

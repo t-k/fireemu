@@ -65,10 +65,44 @@ test("every fact matching the private packet is accepted, for each of the fourte
   for (const id of ids) assert.equal(judge(row(id), seen(id)), true, id);
 });
 
-test("the two entry reads and the Rulesets list entry are judged by their own verdicts, not by the packet", async () => {
+const STORAGE_RULESET = "projects/fireemu-oracle-query/rulesets/22b746af-a48a-458d-ab5c-7853473bc8c8";
+const FIRESTORE_RULESET = "projects/fireemu-oracle-query/rulesets/d0abf7c6-b0b6-4163-8488-7c8a48ac5dd1";
+// The list as production returned it at the entry of the first recording, with the metadata Firebase adds to each entry.
+const productionList = () => ({ rulesets: [
+  { name: STORAGE_RULESET, createTime: "2026-09-25T11:08:54.358767Z", metadata: { services: ["firebase.storage"] } },
+  { name: FIRESTORE_RULESET, createTime: "2026-09-23T23:02:05.839536Z", metadata: { services: ["cloud.firestore"] } },
+] });
+const listOutcome = (body) => classifyResponse(row("preflight/rulesets-list/entry/1"), raw(body));
+
+test("the entry list must be exactly the two rulesets production holds, by name and service, and nothing else is accepted", async () => {
   const judge = await judgeWith();
-  const list = classifyResponse(row("preflight/rulesets-list/entry/1"), raw({}));
-  assert.equal(judge(row("preflight/rulesets-list/entry/1"), list), true);
+  const id = "preflight/rulesets-list/entry/1";
+  assert.equal(judge(row(id), listOutcome(productionList())), true);
+  // The order of the answer does not matter.
+  assert.equal(judge(row(id), listOutcome({ rulesets: [...productionList().rulesets].reverse() })), true);
+  const extra = { name: "projects/fireemu-oracle-query/rulesets/aaaaaaaa-0000-4000-8000-000000000000", createTime: "2026-09-29T00:00:00Z", metadata: { services: ["firebase.storage"] } };
+  const refused = {
+    "empty list": {}, "only the storage ruleset": { rulesets: [productionList().rulesets[0]] }, "only the firestore ruleset": { rulesets: [productionList().rulesets[1]] },
+    "an unknown third ruleset": { rulesets: [...productionList().rulesets, extra] }, "the storage one replaced": { rulesets: [extra, productionList().rulesets[1]] },
+    "the firestore one replaced": { rulesets: [productionList().rulesets[0], extra] }, "a ruleset twice": { rulesets: [productionList().rulesets[0], productionList().rulesets[0]] },
+    "the services swapped": { rulesets: [{ ...productionList().rulesets[0], metadata: { services: ["cloud.firestore"] } }, { ...productionList().rulesets[1], metadata: { services: ["firebase.storage"] } }] },
+    "an extra service on the storage one": { rulesets: [{ ...productionList().rulesets[0], metadata: { services: ["firebase.storage", "cloud.firestore"] } }, productionList().rulesets[1]] },
+    "no services on the storage one": { rulesets: [{ name: STORAGE_RULESET, createTime: "2026-09-25T11:08:54.358767Z" }, productionList().rulesets[1]] },
+    "a next page": { ...productionList(), nextPageToken: "more" },
+  };
+  for (const [name, body] of Object.entries(refused)) assert.equal(judge(row(id), listOutcome(body)), false, name);
+  assert.equal(judge(row(id), listOutcome("nope")), false);
+  assert.equal(judge(row(id), classifyResponse(row(id), raw({ error: { code: 403, message: "no", status: "PERMISSION_DENIED" } }, 403))), false);
+});
+
+test("the known entry rulesets are the two names production holds, in name order, and frozen", async () => {
+  const { ENTRY_RULESETS } = await load();
+  assert.deepEqual(ENTRY_RULESETS.map((entry) => [entry.name, [...entry.services]]), [[STORAGE_RULESET, ["firebase.storage"]], [FIRESTORE_RULESET, ["cloud.firestore"]]]);
+  assert.equal(Object.isFrozen(ENTRY_RULESETS) && ENTRY_RULESETS.every((entry) => Object.isFrozen(entry) && Object.isFrozen(entry.services)), true);
+});
+
+test("the two entry reads are judged by their own verdicts, not by the packet", async () => {
+  const judge = await judgeWith();
   const absent = classifyResponse(row("preflight/release/entry/bucket"), raw({ error: { code: 404, message: "not found", status: "NOT_FOUND" } }, 404));
   assert.equal(judge(row("preflight/release/entry/bucket"), absent), true);
   assert.equal(judge(row("preflight/release/entry/bucketless"), classifyResponse(row("preflight/release/entry/bucketless"), raw({ error: { code: 404, message: "not found", status: "NOT_FOUND" } }, 404))), true);
@@ -149,7 +183,7 @@ test("the judge's options are a closed record around parsed inputs", async () =>
 const absentRelease = (id) => classifyResponse(row(id), raw({ error: { code: 404, message: "not found", status: "NOT_FOUND" } }, 404));
 const genuine = () => ({
   ...Object.fromEntries(ids.map((id) => [id, seen(id)])),
-  "preflight/rulesets-list/entry/1": classifyResponse(row("preflight/rulesets-list/entry/1"), raw({})),
+  "preflight/rulesets-list/entry/1": listOutcome(productionList()),
   "preflight/release/entry/bucket": absentRelease("preflight/release/entry/bucket"),
   "preflight/release/entry/bucketless": absentRelease("preflight/release/entry/bucketless"),
 });

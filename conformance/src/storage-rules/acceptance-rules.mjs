@@ -25,6 +25,22 @@ function releaseOf(body, expectedName) {
   if (typeof body.rulesetName !== "string" || !RULESET_NAME.test(body.rulesetName) || !isTimestamp(body.createTime) || !isTimestamp(body.updateTime)) return null;
   return { name: body.name, rulesetName: body.rulesetName, updateTime: body.updateTime };
 }
+// A listed ruleset as production returns it: its name and creation time, and the metadata Firebase adds (the services it serves, such as
+// `firebase.storage` or `cloud.firestore`). The page reports each entry's name and sorted services, never its creation time or source.
+const SERVICE_NAME = /^[a-z][a-z0-9._-]{0,63}$/;
+function listEntryOf(entry) {
+  if (!isObject(entry) || !onlyKeys(entry, ["name", "createTime", "metadata"]) || typeof entry.name !== "string" || !RULESET_NAME.test(entry.name) || !isTimestamp(entry.createTime)) return null;
+  let services = [];
+  if (entry.metadata !== undefined) {
+    const metadata = entry.metadata;
+    if (!isObject(metadata) || !onlyKeys(metadata, ["services"])) return null;
+    if (metadata.services !== undefined) {
+      if (!Array.isArray(metadata.services) || metadata.services.length > 8 || !metadata.services.every((service) => typeof service === "string" && SERVICE_NAME.test(service))) return null;
+      services = [...metadata.services].sort();
+    }
+  }
+  return { name: entry.name, services };
+}
 const pathName = (row) => (typeof row.request.path === "string" && row.request.path.startsWith("/v1/") ? row.request.path.slice(4) : null);
 
 export const RULES_CLASSIFIERS = {
@@ -64,8 +80,10 @@ export const RULES_CLASSIFIERS = {
       const list = body.rulesets === undefined ? [] : body.rulesets;
       const token = body.nextPageToken;
       const tokenOk = token === undefined || (typeof token === "string" && PAGE_TOKEN.test(token));
-      if (Array.isArray(list) && list.length <= 100 && tokenOk && list.every((entry) => isObject(entry) && onlyKeys(entry, ["name", "createTime"]) && typeof entry.name === "string" && RULESET_NAME.test(entry.name) && isTimestamp(entry.createTime))) {
-        return result("rules-list-page", "accepted", { status: 200, count: list.length, hasNextPage: token !== undefined, ...(token === undefined ? {} : { nextPageToken: token }) });
+      const entries = Array.isArray(list) && list.length <= 100 ? list.map(listEntryOf) : [];
+      if (Array.isArray(list) && list.length <= 100 && tokenOk && entries.every((entry) => entry !== null)) {
+        const rulesets = entries.sort((left, right) => (left.name < right.name ? -1 : left.name > right.name ? 1 : 0));
+        return result("rules-list-page", "accepted", { status: 200, count: list.length, hasNextPage: token !== undefined, ...(token === undefined ? {} : { nextPageToken: token }), rulesets });
       }
     }
     return unexpected("rules-list-page", response);

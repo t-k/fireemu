@@ -20,6 +20,13 @@ export function createSimulator({ manifest, options = {} }) {
   const invalidContent = options.invalidContent ?? null;
   const objects = new Map();
   const rulesets = new Map();
+  // The rulesets that exist in production before the run (a storage one and a Firestore one, listed with their metadata). The run never creates,
+  // reads or deletes them; a request that names one is counted in `touchedEntryRulesets`.
+  const entryRulesets = (options.entryRulesets ?? [
+    { id: "22b746af-a48a-458d-ab5c-7853473bc8c8", createTime: "2026-09-25T11:08:54.358767Z", services: ["firebase.storage"] },
+    { id: "d0abf7c6-b0b6-4163-8488-7c8a48ac5dd1", createTime: "2026-09-23T23:02:05.839536Z", services: ["cloud.firestore"] },
+  ]).map((entry) => ({ ...entry, name: `projects/fireemu-oracle-query/rulesets/${entry.id}` }));
+  const touchedEntryRulesets = [];
   const documents = new Map();
   const sessions = new Map();
   const log = [];
@@ -172,12 +179,13 @@ export function createSimulator({ manifest, options = {} }) {
     }
     let match = new RegExp(`^/v1/projects/${project}/rulesets/([^/]+)$`).exec(path);
     if (match) {
+      if (entryRulesets.some((entry) => entry.id === match[1])) { touchedEntryRulesets.push(`${method} ${match[1]}`); return json(200, {}); }
       const ruleset = rulesets.get(match[1]);
       if (!ruleset) return rpcNotFound();
       if (method === "DELETE") { rulesets.delete(match[1]); return json(200, {}); }
       return json(200, { name: ruleset.name, createTime: ruleset.createTime, source: { files: [{ name: "storage.rules", content: ruleset.content }] } });
     }
-    if (method === "GET" && path === `/v1/projects/${project}/rulesets`) return json(200, rulesets.size ? { rulesets: [...rulesets.values()].map((r) => ({ name: r.name, createTime: r.createTime })) } : {});
+    if (method === "GET" && path === `/v1/projects/${project}/rulesets`) return json(200, { rulesets: [...entryRulesets.map((entry) => ({ name: entry.name, createTime: entry.createTime, metadata: { services: entry.services } })), ...[...rulesets.values()].map((r) => ({ name: r.name, createTime: r.createTime, metadata: { services: ["firebase.storage"] } }))] });
     const name = `projects/${project}/releases/firebase.storage/${bucket}`;
     const releaseJson = () => ({ name, rulesetName: release, createTime: time(), updateTime: time() });
     if (method === "POST" && path === `/v1/projects/${project}/releases`) { previousSource = activeSource(); release = body.rulesetName; staleReads = options.lag ?? 0; return json(200, releaseJson()); }
@@ -238,6 +246,7 @@ export function createSimulator({ manifest, options = {} }) {
       if (url.host === "firestore.googleapis.com") return firestore(method, url, spec);
       return preflight(method, url, spec);
     },
+    touchedEntryRulesets: () => [...touchedEntryRulesets],
     state: () => ({ objects: objects.size, rulesets: rulesets.size, release, documents: documents.size, sessions: [...sessions.values()].map((s) => s.state), calls: state.calls, log }),
     objects: () => [...objects.keys()],
     /** Every bearer value the simulator handed out, for sweeps that prove none was saved. */

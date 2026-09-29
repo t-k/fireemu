@@ -113,15 +113,37 @@ test("a Rulesets list page reports counts and the next token, and rejects malfor
   const names = [1, 2, 3].map((n) => ({ name: rulesetName(`id-${n}`), createTime }));
   const withNext = classifyResponse(page, json(200, { rulesets: names, nextPageToken: "opaque_token-1" }));
   assert.equal(withNext.verdict, "accepted");
-  assert.deepEqual({ ...withNext.facts }, { status: 200, count: 3, hasNextPage: true, nextPageToken: "opaque_token-1" });
-  assert.deepEqual({ ...classifyResponse(page, json(200, { rulesets: names })).facts }, { status: 200, count: 3, hasNextPage: false });
-  assert.deepEqual({ ...classifyResponse(page, json(200, {})).facts }, { status: 200, count: 0, hasNextPage: false });
+  const listed = names.map((entry) => ({ name: entry.name, services: [] }));
+  assert.deepEqual({ ...withNext.facts }, { status: 200, count: 3, hasNextPage: true, nextPageToken: "opaque_token-1", rulesets: listed });
+  assert.deepEqual({ ...classifyResponse(page, json(200, { rulesets: names })).facts }, { status: 200, count: 3, hasNextPage: false, rulesets: listed });
+  assert.deepEqual({ ...classifyResponse(page, json(200, {})).facts }, { status: 200, count: 0, hasNextPage: false, rulesets: [] });
   const big = Array.from({ length: 100 }, (_, n) => ({ name: rulesetName(`id-${n}`), createTime }));
   assert.equal(classifyResponse(page, json(200, { rulesets: big })).facts.count, 100);
   for (const bad of [
     json(200, { rulesets: [...big, big[0]] }), json(200, { rulesets: [{ name: "x", createTime }] }), json(200, { rulesets: [{ name: rulesetName(), createTime: "x" }] }), json(200, { rulesets: {} }),
     json(200, { rulesets: names, nextPageToken: "" }), json(200, { rulesets: names, nextPageToken: "a b" }), json(200, { rulesets: names, nextPageToken: 7 }), json(200, { rulesets: names, extra: 1 }), json(403, {}), response(200, "[]"), notFound,
   ]) assert.equal(classifyResponse(page, bad).verdict, "unexpected");
+});
+
+test("a Rulesets list page takes the entries the way production lists them, with their services, and reports them sorted by name", async () => {
+  const { classifyResponse } = await load();
+  const page = row("preflight/rulesets-list/entry/1");
+  const storage = { name: rulesetName("22b746af-a48a-458d-ab5c-7853473bc8c8"), createTime: "2026-09-25T11:08:54.358767Z", metadata: { services: ["firebase.storage"] } };
+  const firestore = { name: rulesetName("d0abf7c6-b0b6-4163-8488-7c8a48ac5dd1"), createTime: "2026-09-23T23:02:05.839536Z", metadata: { services: ["cloud.firestore"] } };
+  const outcome = classifyResponse(page, json(200, { rulesets: [firestore, storage] }));
+  assert.equal(outcome.verdict, "accepted");
+  assert.deepEqual({ ...outcome.facts }, { status: 200, count: 2, hasNextPage: false, rulesets: [{ name: storage.name, services: ["firebase.storage"] }, { name: firestore.name, services: ["cloud.firestore"] }] });
+  // Services are reported sorted, an entry with empty or absent services reports none, and neither createTime nor a source ever reaches a fact.
+  const both = { name: rulesetName("both"), createTime: storage.createTime, metadata: { services: ["firebase.storage", "cloud.firestore"] } };
+  assert.deepEqual(classifyResponse(page, json(200, { rulesets: [both] })).facts.rulesets, [{ name: both.name, services: ["cloud.firestore", "firebase.storage"] }]);
+  assert.deepEqual(classifyResponse(page, json(200, { rulesets: [{ ...both, metadata: {} }] })).facts.rulesets, [{ name: both.name, services: [] }]);
+  assert.deepEqual(classifyResponse(page, json(200, { rulesets: [{ ...both, metadata: { services: [] } }] })).facts.rulesets, [{ name: both.name, services: [] }]);
+  assert.equal(JSON.stringify(outcome.facts).includes("createTime"), false);
+  for (const bad of [
+    { ...storage, metadata: { services: ["firebase.storage"], extra: 1 } }, { ...storage, metadata: [] }, { ...storage, metadata: "x" }, { ...storage, metadata: null }, { ...storage, metadata: { services: "firebase.storage" } },
+    { ...storage, metadata: { services: [5] } }, { ...storage, metadata: { services: ["Firebase Storage"] } }, { ...storage, metadata: { services: Array.from({ length: 9 }, (_, n) => `s${n}`) } }, { ...storage, source: {} }, { ...storage, extra: 1 },
+  ]) assert.equal(classifyResponse(page, json(200, { rulesets: [bad] })).verdict, "unexpected", JSON.stringify(bad).slice(0, 80));
+  assert.equal(classifyResponse(page, json(200, { rulesets: [{ ...storage, metadata: { services: Array.from({ length: 8 }, (_, n) => `s${n}`) } }] })).verdict, "accepted");
 });
 
 test("a source test answers accepted for no error, rejected for an error, unexpected otherwise", async () => {

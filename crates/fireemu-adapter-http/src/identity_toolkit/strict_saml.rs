@@ -84,8 +84,9 @@ pub(super) fn names_saml_provider(body: &Value) -> bool {
 /// messages for a provider that is missing, named in another case or disabled;
 /// `INVALID_IDP_RESPONSE` for a missing or unreadable response, one without a `NameID`, or a
 /// form this verifier does not implement (codes unobserved); and production's messages for
-/// the conditions of [`check_conditions`], unless the sign-in resumes a continuation (its
-/// response was checked when first presented).
+/// the conditions of [`check_conditions`]. A resumed continuation checks them again against the
+/// live configuration, all but `InResponseTo` (closure review SF5: production's continuation is
+/// unobserved, and a response past its window or for another SP is not honoured).
 pub(super) fn strict_saml(
     store: &AuthStore,
     body: &Value,
@@ -128,23 +129,21 @@ pub(super) fn strict_saml(
         .clone()
         .filter(|name| !name.chars().any(char::is_control))
         .ok_or_else(refused)?;
-    if !resumed {
-        if let Some(config) = store.saml_config(provider_id) {
-            let now = at.as_nanos().div_euclid(1_000_000_000);
-            let request_id = str_field(body, "sessionId")
-                .filter(|id| !id.is_empty())
-                .and_then(|id| {
-                    signers.saml_request(&session_key(store, id), i64::try_from(now).ok()?)
-                });
-            let expected = Expected {
-                callback_uri: &config.callback_uri,
-                idp_entity_id: &config.idp_entity_id,
-                sp_entity_id: &config.sp_entity_id,
-                request_id: request_id.as_deref(),
-            };
-            if let Err(message) = check_conditions(&verified, &expected, at) {
-                return Err(error(400, &message));
-            }
+    if let Some(config) = store.saml_config(provider_id) {
+        let now = at.as_nanos().div_euclid(1_000_000_000);
+        // A resumed continuation checks everything again against the live configuration but
+        // InResponseTo, which the sign-in that made it checked (closure review SF5).
+        let request_id = str_field(body, "sessionId")
+            .filter(|id| !resumed && !id.is_empty())
+            .and_then(|id| signers.saml_request(&session_key(store, id), i64::try_from(now).ok()?));
+        let expected = Expected {
+            callback_uri: &config.callback_uri,
+            idp_entity_id: &config.idp_entity_id,
+            sp_entity_id: &config.sp_entity_id,
+            request_id: request_id.as_deref(),
+        };
+        if let Err(message) = check_conditions(&verified, &expected, at) {
+            return Err(error(400, &message));
         }
     }
     let rewritten = credential_body(body, provider_id, &name_id, &verified);

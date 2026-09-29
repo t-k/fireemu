@@ -3119,11 +3119,7 @@ impl LocalBackend {
             .cloned()
             .unwrap_or_default();
         let has_declared = !declared.is_empty();
-        let catalog = match catalogs.get_mut(&key) {
-            Some(catalog) => catalog,
-            None if has_declared => catalogs.entry(key.clone()).or_insert(declared),
-            None => return false,
-        };
+        let catalog = catalogs.entry(key.clone()).or_insert(declared);
         let removed = catalog.disable(collection_group, field);
         // An emptied catalog of a project whose configuration declares policies stays, so
         // that the cleared policy is not resurrected by the fallback.

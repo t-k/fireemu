@@ -479,3 +479,74 @@ test("a query key that names an Object prototype member cannot reach or skip a r
   }
   assert.doesNotThrow(() => b.prepare(withQuery({ alt: "media" }), resolver()));
 });
+
+// Defence in depth for rows the reviewed manifest never carries: the layer that builds targets must not accept them either.
+test("a row may carry only the four headers the reviewed manifest uses", async () => {
+  const b = await builder();
+  const get = row("management/control-0/baseline-metadata");
+  const withHeaders = (headers) => ({ ...get, request: { ...get.request, headers } });
+  for (const name of ["content-type", "x-goog-upload-protocol", "x-goog-upload-command", "x-goog-upload-offset"]) assert.doesNotThrow(() => b.prepare(withHeaders({ [name]: "value" }), resolver()), name);
+  for (const name of ["x-http-method-override", "x-goog-encryption-key", "x-goog-api-client", "user-agent", "accept", "range", "if-match", "x-forwarded-for", "origin", "referer", "x-goog-user-project", "authorization", "x-goog-upload-url", "x-firebase-appcheck"]) rejects(b, withHeaders({ [name]: "value" }), name);
+});
+
+test("a release write names only this run's release and takes its Ruleset from a bound reference", async () => {
+  const b = await builder();
+  const create = row("release/v1/publish");
+  const patch = row("release/v2/publish");
+  const owned = `projects/fireemu-oracle-query/releases/firebase.storage/${binding.bucket}`;
+  const ref = create.request.body.json.rulesetName;
+  const withBody = (base, json) => ({ ...base, request: { ...base.request, body: { json } } });
+  assert.doesNotThrow(() => b.prepare(create, resolver()));
+  assert.doesNotThrow(() => b.prepare(patch, resolver()));
+  for (const [name, json] of Object.entries({
+    "another release": { name: "projects/fireemu-oracle-query/releases/cloud.firestore", rulesetName: ref },
+    "another bucket": { name: `projects/fireemu-oracle-query/releases/firebase.storage/other-bucket`, rulesetName: ref },
+    "the bucketless release": { name: "projects/fireemu-oracle-query/releases/firebase.storage", rulesetName: ref },
+    "another project": { name: `projects/fireemu-oracle-idp/releases/firebase.storage/${binding.bucket}`, rulesetName: ref },
+    "a literal Ruleset name": { name: owned, rulesetName: "projects/fireemu-oracle-query/rulesets/someone-elses" },
+    "a wrong reference type": { name: owned, rulesetName: { ...ref, type: "generation" } },
+    "an extra field": { name: owned, rulesetName: ref, extra: 1 },
+    "a missing name": { rulesetName: ref },
+    "a missing Ruleset": { name: owned },
+    "a nested wrapper": { release: { name: owned, rulesetName: ref } },
+  })) rejects(b, withBody(create, json), `create with ${name}`);
+  for (const [name, json] of Object.entries({
+    "another release": { release: { name: "projects/fireemu-oracle-query/releases/cloud.firestore", rulesetName: ref }, updateMask: "rulesetName" },
+    "a literal Ruleset name": { release: { name: owned, rulesetName: "projects/fireemu-oracle-query/rulesets/x" }, updateMask: "rulesetName" },
+    "another update mask": { release: { name: owned, rulesetName: ref }, updateMask: "name" },
+    "no update mask": { release: { name: owned, rulesetName: ref } },
+    "an extra release field": { release: { name: owned, rulesetName: ref, extra: 1 }, updateMask: "rulesetName" },
+    "a flat body": { name: owned, rulesetName: ref },
+    "an extra top field": { release: { name: owned, rulesetName: ref }, updateMask: "rulesetName", extra: 1 },
+  })) rejects(b, withBody(patch, json), `patch with ${name}`);
+});
+
+test("a Ruleset read or delete needs the bound Ruleset path, never a literal one", async () => {
+  const b = await builder();
+  for (const id of ["ruleset/v1/delete", "ruleset/v1/read-source"]) {
+    const base = row(id);
+    assert.doesNotThrow(() => b.prepare(base, resolver()), id);
+    const { pathReference, ...rest } = base.request;
+    rejects(b, { ...base, request: { ...rest, path: "/v1/projects/fireemu-oracle-query/rulesets/someone-elses-ruleset" } }, `${id} literal`);
+  }
+});
+
+test("a numeric project path must carry the project number of the project the request is billed to, and a key path its own key", async () => {
+  const b = await builder();
+  const numbers = { query: options.queryProjectNumber, idp: options.idpProjectNumber };
+  const keys = { query: options.queryApiKeyId, idp: options.idpApiKeyId };
+  for (const [name, id] of [["query", "preflight/query/project"], ["idp", "preflight/idp/project"], ["query", "preflight/query/permissions"], ["idp", "preflight/idp/permissions"], ["query", "preflight/query/iam"], ["query", "preflight/query/key-metadata"], ["idp", "preflight/idp/key-metadata"], ["query", "preflight/query/key-string"], ["idp", "preflight/idp/key-string"]]) {
+    const base = row(id);
+    assert.doesNotThrow(() => b.prepare(base, resolver()), id);
+    const other = name === "query" ? "idp" : "query";
+    rejects(b, { ...base, request: { ...base.request, path: base.request.path.replace(numbers[name], numbers[other]) } }, `${id} with the other project's number`);
+    rejects(b, { ...base, request: { ...base.request, path: base.request.path.replace(numbers[name], "999999999999") } }, `${id} with an unknown number`);
+    if (/keys\//.test(base.request.path)) {
+      rejects(b, { ...base, request: { ...base.request, path: base.request.path.replace(keys[name], keys[other]) } }, `${id} with the other project's key`);
+      rejects(b, { ...base, request: { ...base.request, path: base.request.path.replace(keys[name], "11111111-1111-4111-8111-111111111111") } }, `${id} with an unknown key`);
+    }
+  }
+  // The billed project decides which number is expected.
+  const base = row("preflight/query/project");
+  rejects(b, { ...base, request: { ...base.request, project: "fireemu-oracle-idp" } }, "query number billed to idp");
+});

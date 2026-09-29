@@ -15,6 +15,8 @@ const MAX_BODY_BYTES = 256 * 1024;
 const CREDENTIALS = new Set(["admin", "user-a", "user-b", "user-plain", "anonymous", "revoked-token", "foreign-project-token", "malformed-token", "malformed-oauth", "api-key-only", "owner-oauth", "adc-refresh"]);
 const QUERY_REFS = new Set(["generation", "metageneration", "update-time", "page-token", "download-token"]);
 const BODY_REFS = new Set(["ruleset-name"]);
+// A row may carry only the headers the reviewed manifest uses; credentials and the quota project are added later, by the gate.
+const ROW_HEADERS = new Set(["content-type", "x-goog-upload-protocol", "x-goog-upload-command", "x-goog-upload-offset"]);
 const FORBIDDEN_HEADERS = new Set(["authorization", "cookie", "host", "connection", "content-length", "transfer-encoding", "proxy-authorization", "proxy-connection", "upgrade", "expect", "accept-encoding", "x-goog-user-project"]);
 const escape = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const bad = () => { throw new Error("invalid target row"); };
@@ -38,6 +40,12 @@ export function createTargetBuilder(options) {
   const ids = new Set(manifest.rows.map((row) => row.id));
   const documents = new Set(manifest.resources.documents);
   const B = escape(bucket);
+  const OWNED_RELEASE = `projects/${QUERY}/releases/firebase.storage/${bucket}`;
+  // The numeric project segment and the API key of a preflight path are the ones the run was built for, for the project the request is billed to.
+  const { queryProjectNumber, idpProjectNumber, queryApiKeyId, idpApiKeyId } = manifest.binding;
+  const projectOf = (request) => (request.project === undefined ? QUERY : request.project);
+  const numberFor = (request) => (projectOf(request) === IDP ? idpProjectNumber : queryProjectNumber);
+  const keyIdFor = (request) => (projectOf(request) === IDP ? idpApiKeyId : queryApiKeyId);
   const owned = (name) => typeof name === "string" && name.startsWith(prefix) && name.length > prefix.length && name.length <= 1024 && !/[\0-\x1f\x7f]/.test(name) && !name.split("/").some((part) => part === "" || part === "." || part === "..");
   const ownedPrefix = (value) => typeof value === "string" && value.startsWith(prefix) && !/[\0-\x1f\x7f]/.test(value) && !value.split("/").slice(0, -1).some((part) => part === "." || part === "..");
   const subset = (query, allowed) => Object.keys(query).every((key) => allowed.includes(key));
@@ -61,15 +69,25 @@ export function createTargetBuilder(options) {
     { origin: FIRESTORE, methods: ["GET"], path: /^\/v1\/projects\/fireemu-oracle-query\/databases\/\(default\)$/, family: "preflight", check: (m, q) => subset(q, []) },
     { origin: RULES, methods: ["POST"], path: new RegExp(`^/v1/projects/${QUERY}:test$`), check: (m, q) => subset(q, []) },
     { origin: RULES, methods: ["POST", "GET"], path: new RegExp(`^/v1/projects/${QUERY}/rulesets$`), check: (m, q, r, method) => subset(q, method === "GET" ? ["pageSize", "pageToken"] : []) && (q.pageSize === undefined || q.pageSize === "100") },
-    { origin: RULES, methods: ["GET", "DELETE"], path: new RegExp(`^/v1/projects/${QUERY}/rulesets/[A-Za-z0-9_-]{1,128}$`), check: (m, q) => subset(q, []) },
+    { origin: RULES, methods: ["GET", "DELETE"], path: new RegExp(`^/v1/projects/${QUERY}/rulesets/[A-Za-z0-9_-]{1,128}$`), check: (m, q, r) => subset(q, []) && r.pathReference !== undefined },
     { origin: RULES, methods: ["POST"], path: new RegExp(`^/v1/projects/${QUERY}/releases$`), check: (m, q) => subset(q, []) },
     { origin: RULES, methods: ["GET", "PATCH", "DELETE"], path: new RegExp(`^/v1/projects/${QUERY}/releases/firebase\\.storage/${B}$`), check: (m, q) => subset(q, []) },
     { origin: RULES, methods: ["GET"], path: new RegExp(`^/v1/projects/${QUERY}/releases/firebase\\.storage$`), check: (m, q) => subset(q, []) },
     { origin: "https://www.googleapis.com", methods: ["GET"], path: /^\/oauth2\/v2\/userinfo$/, family: "preflight", check: (m, q) => subset(q, []) },
-    { origin: "https://cloudresourcemanager.googleapis.com", methods: ["GET"], path: /^\/v3\/projects\/\d{1,20}$/, family: "preflight", check: (m, q) => subset(q, []) },
-    { origin: "https://cloudresourcemanager.googleapis.com", methods: ["POST"], path: /^\/v3\/projects\/\d{1,20}:(?:testIamPermissions|getIamPolicy)$/, family: "preflight", check: (m, q) => subset(q, []) },
-    { origin: "https://apikeys.googleapis.com", methods: ["GET"], path: /^\/v2\/projects\/\d{1,20}\/locations\/global\/keys\/[A-Za-z0-9_-]{1,128}(?:\/keyString)?$/, family: "preflight", check: (m, q) => subset(q, []) },
+    { origin: "https://cloudresourcemanager.googleapis.com", methods: ["GET"], path: /^\/v3\/projects\/(\d{1,20})$/, family: "preflight", check: (m, q, r) => subset(q, []) && m[1] === numberFor(r) },
+    { origin: "https://cloudresourcemanager.googleapis.com", methods: ["POST"], path: /^\/v3\/projects\/(\d{1,20}):(?:testIamPermissions|getIamPolicy)$/, family: "preflight", check: (m, q, r) => subset(q, []) && m[1] === numberFor(r) },
+    { origin: "https://apikeys.googleapis.com", methods: ["GET"], path: /^\/v2\/projects\/(\d{1,20})\/locations\/global\/keys\/([A-Za-z0-9_-]{1,128})(?:\/keyString)?$/, family: "preflight", check: (m, q, r) => subset(q, []) && m[1] === numberFor(r) && m[2] === keyIdFor(r) },
   ];
+
+  // A release write names only this run's release and takes its Ruleset from a bound reference (checked on the row's own body, before resolution).
+  const rulesetReference = (value) => closedRecord(value, ["kind", "type", "key", "resolveOnlyAfterDurableProof"]) && value.kind === "runtime-reference" && value.type === "ruleset-name";
+  function releaseBodyOk(request, walked) {
+    const raw = request.body.json;
+    const exact = (value, keys) => value !== null && typeof value === "object" && !Array.isArray(value) && Object.getPrototypeOf(value) === Object.prototype && Reflect.ownKeys(value).length === keys.length && keys.every((key) => Object.hasOwn(value, key));
+    if (request.method === "POST") {
+      if (!exact(raw, ["name", "rulesetName"]) || walked.name !== OWNED_RELEASE || !rulesetReference(raw.rulesetName)) bad();
+    } else if (!exact(raw, ["release", "updateMask"]) || !exact(raw.release, ["name", "rulesetName"]) || walked.release.name !== OWNED_RELEASE || !rulesetReference(raw.release.rulesetName) || walked.updateMask !== "rulesetName") bad();
+  }
 
   // Reference objects come in two shapes: the runtime reference and the corpus's own (Firestore-program values, session URLs, tokens).
   function resolveValue(reference, allowed, rowId, resolve) {
@@ -140,7 +158,7 @@ export function createTargetBuilder(options) {
     if (matches.length !== 1 || !matches[0].route.check(matches[0].match, query, request, request.method)) bad();
     const headers = {};
     for (const [name, value] of Object.entries(request.headers ?? {})) {
-      if (!/^[a-z0-9-]{1,64}$/.test(name) || FORBIDDEN_HEADERS.has(name) || typeof value !== "string" || !/^[\x20-\x7e]{0,1024}$/.test(value)) bad();
+      if (!/^[a-z0-9-]{1,64}$/.test(name) || !ROW_HEADERS.has(name) || FORBIDDEN_HEADERS.has(name) || typeof value !== "string" || !/^[\x20-\x7e]{0,1024}$/.test(value)) bad();
       headers[name] = value;
     }
     let body = null;
@@ -162,7 +180,9 @@ export function createTargetBuilder(options) {
           }
           return bad();
         };
-        body = Buffer.from(JSON.stringify(walk(request.body.json)));
+        const walked = walk(request.body.json);
+        if (request.origin === RULES && /^\/v1\/projects\/[^/]+\/releases(?:\/|$)/.test(request.path ?? "") && ["POST", "PATCH"].includes(request.method)) releaseBodyOk(request, walked);
+        body = Buffer.from(JSON.stringify(walked));
         if (body.length > MAX_BODY_BYTES) bad();
         if (headers["content-type"] === undefined) headers["content-type"] = "application/json; charset=utf-8";
       } else bad();

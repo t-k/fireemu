@@ -16,6 +16,7 @@ const spec = (method, url) => ({ method, url });
 
 test("userinfo is the only route without the quota project header", () => {
   assert.deepEqual([...NO_QUOTA_PROJECT_ROUTES], ["GET https://www.googleapis.com/oauth2/v2/userinfo"]);
+  assert.ok(Object.isFrozen(NO_QUOTA_PROJECT_ROUTES));
   assert.equal(quotaProjectRequired(spec("GET", "https://www.googleapis.com/oauth2/v2/userinfo")), false);
   assert.equal(quotaProjectRequired(spec("GET", "https://www.googleapis.com/oauth2/v2/userinfo?alt=json")), false);
   // The rule is exact: another method, path, host or scheme on the same endpoint is not exempted.

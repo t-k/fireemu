@@ -977,7 +977,7 @@ test("the jobs that verify the harness lineage check out the whole history", () 
     // The `with:` block of the checkout step: the lines indented deeper than the step's `uses`.
     const block = [];
     for (const line of lines.slice(checkout + 1)) {
-      if (/^      - /.test(line) || /^    \S/.test(line)) break;
+      if (line.startsWith("      - ") || /^    \S/.test(line)) break;
       block.push(line.trim());
     }
     assert.ok(block.includes("fetch-depth: 0"), `${workflow}: the checkout fetches the whole history`);

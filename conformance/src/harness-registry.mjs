@@ -464,12 +464,12 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       for (const [name, lane] of Object.entries(report.lanes))
         console.log(`${name}: ${lane.state} (recorded ${lane.saved}, current ${lane.current})`);
     const unconnected = Object.entries(report.lanes).filter(
-      ([name, lane]) => lane.state === "stale" && !lane.known,
+      ([, lane]) => lane.state === "stale" && !lane.known,
     );
     if (report.lineageProblems.length || report.enrollmentProblems.length || unconnected.length) {
       for (const problem of [...report.lineageProblems, ...report.enrollmentProblems])
         console.error(problem);
-      for (const [name] of unconnected) console.error(`${name}: recorded digest is not connected`);
+      for (const [lane] of unconnected) console.error(`${lane}: recorded digest is not connected`);
       process.exitCode = 1;
     }
   }

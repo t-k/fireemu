@@ -14,9 +14,17 @@ import { productionTlsOptions } from "./production-tls.mjs";
 import { createProductionWireAttempt } from "./production-wire-capture.mjs";
 import { createWireTransportCore } from "./wire-transport-core.mjs";
 import { buildCorpus } from "./corpus.mjs";
+import { isProductionSecretRegistry } from "./production-secret-registry.mjs";
+import { originalProductionCredentialProviderFunctions } from "./production-provider-boundary.mjs";
+import { createProductionCaptureProfile } from "./production-capture-coverage.mjs";
+import {
+  createProductionPayloadInventory,
+  bindProductionPayloadCapture,
+} from "./production-payload-authority.mjs";
 import {
   resolveProductionSessionRoute,
   validateProductionSessionUri,
+  productionSessionCapturePhase,
 } from "./production-session.mjs";
 
 const CONFIG_KEYS = [
@@ -85,11 +93,35 @@ export function createProductionWireTransport(input) {
   let config, plan, boundaries, accountRefs, expectedEmails, sessionPrograms;
   try {
     config = record(input);
+    const originalProviders = Object.hasOwn(config, "credentialProviders");
+    const requiredKeys = originalProviders
+      ? [
+          ...CONFIG_KEYS.filter(
+            (key) => !["ownerAuthorization", "accountAuthorization"].includes(key),
+          ),
+          "credentialProviders",
+          "secretRegistry",
+        ]
+      : CONFIG_KEYS;
     if (
-      Reflect.ownKeys(config).length !== CONFIG_KEYS.length ||
-      CONFIG_KEYS.some((key) => !Object.hasOwn(config, key))
+      Reflect.ownKeys(config).length !==
+        requiredKeys.length +
+          (!originalProviders && Object.hasOwn(config, "secretRegistry") ? 1 : 0) ||
+      requiredKeys.some((key) => !Object.hasOwn(config, key))
     )
       throw new Error();
+    if (Object.hasOwn(config, "secretRegistry")) {
+      if (!isProductionSecretRegistry(config.secretRegistry)) throw new Error();
+      config.secretRegistry.openScan();
+    }
+    if (originalProviders)
+      Object.assign(
+        config,
+        originalProductionCredentialProviderFunctions(
+          config.credentialProviders,
+          config.secretRegistry,
+        ),
+      );
     plan = planCopy(config.plan);
     if (
       !isDeepStrictEqual(
@@ -167,12 +199,21 @@ export function createProductionWireTransport(input) {
     sessionCapabilities = new WeakMap(),
     sessionAttempts = new Set();
   const pacer = createObjectMutationPacer({ ownedPrefixes: boundaries.map((row) => row.prefix) });
+  const payloadInventory = config.secretRegistry
+    ? createProductionPayloadInventory({
+        projectId: plan.projectId,
+        bucket: plan.bucket,
+        runIds: plan.recordings.map((row) => row.runId),
+      })
+    : null;
   let active = null,
     busy = false,
     binding = false,
+    authorizing = false,
     failed = false,
     closed = false;
   const core = createWireTransportCore({
+    auxiliaryResponsePolicy: "REJECT",
     limits: plan,
     onByteReserve: (row) => config.onByteReserve({ ...row, recording: active.context.recording }),
     serializeRequest: (route, init) => serializeProductionHttpRequest(route, init),
@@ -189,7 +230,36 @@ export function createProductionWireTransport(input) {
         },
         metadata: { operationId: metadata.operationId, phase: metadata.phase },
         policy: {
-          knownSecrets: [...secrets],
+          knownSecrets: config.secretRegistry ? [] : [...secrets],
+          secretRegistry: config.secretRegistry,
+          captureProfile: config.secretRegistry
+            ? createProductionCaptureProfile({
+                kind: active.kind,
+                objectName: active.route.objectName ?? null,
+                method: active.route.method,
+                url: serialized.url.href,
+                payloadAuthority:
+                  active.kind === "storage"
+                    ? bindProductionPayloadCapture(payloadInventory, {
+                        recording: active.context.recording,
+                        operationId: active.context.operationId,
+                        method: active.route.method,
+                        objectName: active.route.objectName ?? null,
+                        body: serialized.body,
+                        url: serialized.url.href,
+                        headers: Object.entries(active.init.headers).filter(
+                          ([name]) =>
+                            !["authorization", "x-goog-user-project"].includes(name.toLowerCase()),
+                        ),
+                      })
+                    : null,
+                sessionPhase: active.sessionInitiation
+                  ? "initiate"
+                  : active.sessionDeclaration
+                    ? productionSessionCapturePhase(active.sessionDeclaration.step)
+                    : null,
+              })
+            : undefined,
           expectedObjectNames: [...names],
           expectedBucket: plan.bucket,
           expectedEmails,
@@ -199,27 +269,51 @@ export function createProductionWireTransport(input) {
     tlsConnectionOptions: (url) => productionTlsOptions(url.href),
   });
 
+  function rememberSecret(value) {
+    if (config.secretRegistry) config.secretRegistry.register(value);
+    else {
+      if (!secrets.has(value) && secrets.size >= 64) throw new Error();
+      secrets.add(value);
+    }
+  }
+
   function registerSecret(value) {
     if (
       closed ||
-      busy ||
+      failed ||
+      (busy && !authorizing) ||
       typeof value !== "string" ||
       !value ||
       value.length > 8192 ||
       !value.isWellFormed() ||
-      (!secrets.has(value) && secrets.size >= 64)
+      (!config.secretRegistry && !secrets.has(value) && secrets.size >= 64)
     )
       throw new Error("PRODUCTION_WIRE_SECRET_REJECTED");
-    secrets.add(value);
+    try {
+      rememberSecret(value);
+    } catch {
+      failed = true;
+      throw new Error("PRODUCTION_WIRE_SECRET_REJECTED");
+    }
   }
 
   function authorize(context, declaration) {
     if (declaration.credential === "none") return null;
     const owner = declaration.credential === "admin";
-    const authorization = owner
-      ? config.ownerAuthorization(context)
-      : config.accountAuthorization(declaration.credentialRef, context);
+    let authorization;
+    authorizing = true;
+    try {
+      authorization = owner
+        ? config.ownerAuthorization(context)
+        : config.accountAuthorization(declaration.credentialRef, context);
+    } finally {
+      authorizing = false;
+    }
+    if (types.isPromise(authorization))
+      void Promise.prototype.then.call(authorization, undefined, () => {});
     if (
+      closed ||
+      failed ||
       typeof authorization !== "string" ||
       !(owner ? /^Bearer [\x21-\x7e]{1,8192}$/ : /^Firebase [\x21-\x7e]{1,8192}$/).test(
         authorization,
@@ -227,8 +321,7 @@ export function createProductionWireTransport(input) {
     )
       throw new Error();
     const secret = authorization.slice(authorization.indexOf(" ") + 1);
-    if (!secrets.has(secret) && secrets.size >= 64) throw new Error();
-    secrets.add(secret);
+    rememberSecret(secret);
     return authorization;
   }
 
@@ -492,6 +585,7 @@ export function createProductionWireTransport(input) {
     async close() {
       closed = true;
       await core.close();
+      config.secretRegistry?.close();
       secrets.clear();
       names.clear();
     },

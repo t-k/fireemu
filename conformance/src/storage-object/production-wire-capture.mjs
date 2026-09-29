@@ -7,6 +7,11 @@ import {
   writePrivateExclusive,
 } from "./private-wire-capture.mjs";
 import { sanitizeProductionCapture } from "./production-capture-policy.mjs";
+import { isProductionSecretRegistry } from "./production-secret-registry.mjs";
+import {
+  isProductionCaptureProfile,
+  productionCaptureRequestBodyKind,
+} from "./production-capture-coverage.mjs";
 import {
   HTTP_RESPONSE_READ_UNIT_BYTES,
   MAX_RESPONSE_BODY_BYTES,
@@ -37,6 +42,7 @@ const REASONS = new Set([
   "WIRE_RESPONSE_CAP_EXHAUSTED",
   "WIRE_BUDGET_HALTED",
   "WIRE_PREDISPATCH_OR_CAPTURE_FAILED",
+  "WIRE_UNSUPPORTED_AUXILIARY_RESPONSE",
 ]);
 const RECEIPT_FIELDS = new Set([
   "complete",
@@ -90,13 +96,23 @@ export function createProductionWireAttempt({
       !["subject", "cleanup"].includes(phase)
     )
       throw new Error("invalid production wire capture");
-    const options = structuredClone({
-      knownSecrets: policy.knownSecrets ?? [],
-      approvedBodySha256: policy.approvedBodySha256 ?? [],
-      expectedObjectNames: policy.expectedObjectNames ?? [],
-      expectedBucket: policy.expectedBucket,
-      expectedEmails: policy.expectedEmails ?? [],
-    });
+    const secretRegistry = policy.secretRegistry;
+    const captureProfile = policy.captureProfile;
+    if (secretRegistry !== undefined && !isProductionSecretRegistry(secretRegistry))
+      throw new Error("invalid task secret registry");
+    if (secretRegistry !== undefined && !isProductionCaptureProfile(captureProfile))
+      throw new Error("invalid production capture profile");
+    const options = {
+      ...structuredClone({
+        knownSecrets: policy.knownSecrets ?? [],
+        approvedBodySha256: policy.approvedBodySha256 ?? [],
+        expectedObjectNames: policy.expectedObjectNames ?? [],
+        expectedBucket: policy.expectedBucket,
+        expectedEmails: policy.expectedEmails ?? [],
+      }),
+      secretRegistry,
+      captureProfile,
+    };
     const responseBodyKind = policy.responseBodyKind ?? "json";
     if (!["json", "media"].includes(responseBodyKind))
       throw new Error("invalid production wire capture");
@@ -107,7 +123,10 @@ export function createProductionWireAttempt({
       headers: requestHeaders,
       body: requestBody,
       complete: true,
-      bodyKind: policy.requestBodyKind ?? "json",
+      status: null,
+      bodyKind: secretRegistry
+        ? productionCaptureRequestBodyKind(captureProfile)
+        : (policy.requestBodyKind ?? "json"),
     });
     const requestWire = commitment(requestWireBytes);
     const parent = privateCaptureDirectory(directory);
@@ -131,6 +150,8 @@ export function createProductionWireAttempt({
         boundary: "HTTP_PLAINTEXT_COMMITMENT_AND_SANITIZED_BODY",
       }),
     );
+    if (capturedRequest.taskSecretStatus === "UNAVAILABLE")
+      throw new Error("task secret registry unavailable");
     responseFd = openSync(
       files.response,
       constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
@@ -275,13 +296,15 @@ export function createProductionWireAttempt({
             headers,
             body,
             bodyKind: responseBodyKind,
+            status: receipt.status,
           });
+          const taskUnavailable = response.taskSecretStatus === "UNAVAILABLE";
           writePrivateExclusive(
             files.result,
             encode({
               sequence,
-              complete,
-              reason,
+              complete: complete && !taskUnavailable,
+              reason: taskUnavailable ? "SECRET_DISCOVERY_UNAVAILABLE" : reason,
               status: receipt.status,
               finishConfirmed: receipt.finishConfirmed,
               socketReportedWrittenBytes: receipt.socketReportedWrittenBytes,
@@ -291,6 +314,7 @@ export function createProductionWireAttempt({
               response: persistenceCopy(response),
             }),
           );
+          if (taskUnavailable) throw new Error("task secret registry unavailable");
         } catch {
           throw new Error("production wire capture receipt failed");
         } finally {

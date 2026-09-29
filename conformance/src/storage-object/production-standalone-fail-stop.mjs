@@ -27,6 +27,11 @@ const reasons = new Set([
   "PERSISTENCE_UNCERTAIN",
 ]);
 
+/** Capability identity is checked without reading caller properties. */
+export function isProductionStandaloneFailStop(value) {
+  return boundaries.has(value);
+}
+
 function owned(stat, mode) {
   return (
     (stat.mode & 0o777) === mode &&

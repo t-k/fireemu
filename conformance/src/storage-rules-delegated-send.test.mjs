@@ -4,6 +4,7 @@ import test from "node:test";
 import { STOP_CODES, stopCodeOf } from "./storage-rules/stop-codes.mjs";
 import { createCountedCredentialCache } from "./storage-rules/credential-cache.mjs";
 import { createDispatchGate } from "./storage-rules/dispatch-gate.mjs";
+import { ownerHeadersFor } from "./storage-rules-owner-headers.mjs";
 
 // The seam through which the credential cache and the credential session send: the same counter, admission and capture
 // journal as every other request, and the one real transport reachable only inside an armed, counted attempt.
@@ -28,7 +29,7 @@ async function setup({ admission = { check: async () => ({ admitted: true }) }, 
     capture: { writeIntent: async (r) => { trace.push(`intent:${r.operationId}:${r.phase}`); }, writeDelegatedTarget: async (r) => { targets.push(r); trace.push(`target:${r.operationId}`); }, writeResponse: async (r) => { trace.push(`response:${r.operationId}`); }, writeNote: async (r) => { trace.push(`note:${r.text}`); }, snapshot: () => ({ ...state }), ...capture },
     transport: transport ? { validate() {}, ...transport } : { validate() {}, send: async (spec) => { trace.push(`http:${spec.url}`); return spec.url === certUrl ? raw({ synthetic: pem }) : raw({ access_token: token, token_type: "Bearer", expires_in: 3600 }); } },
     targets: { verify: () => true, prepare: () => { throw new Error("unused"); } },
-    credentials: { headersFor: () => ({}) },
+    credentials: { headersFor: ownerHeadersFor("t") },
     preflightIds: [ownerPreflight, keyPreflight],
     admission: { check: async () => { trace.push("admission"); return admission.check(); }, begin: async () => { trace.push("admission"); return (admission.begin ?? admission.check)(); } },
   });

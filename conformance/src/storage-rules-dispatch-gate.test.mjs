@@ -5,6 +5,7 @@ import { buildCorpus } from "./storage-rules/corpus.mjs";
 import { buildFullRequestManifest } from "./storage-rules/full-manifest.mjs";
 import { STOP_CODES, stopCodeOf } from "./storage-rules/stop-codes.mjs";
 import { createTargetBuilder } from "./storage-rules/target.mjs";
+import { ownerHeadersFor } from "./storage-rules-owner-headers.mjs";
 
 const closure = JSON.parse(readFileSync(new URL("../../spec/compatibility/closure/STORAGE-RULES.json", import.meta.url)));
 const options = { runId: "local-run", sourceCommit: "a".repeat(40), queryProjectNumber: "1".repeat(12), idpProjectNumber: "2".repeat(12), queryApiKeyId: "00000000-0000-4000-8000-000000000001", idpApiKeyId: "00000000-0000-4000-8000-000000000002" };
@@ -41,7 +42,7 @@ async function harness(delta = {}) {
     snapshot: () => Object.freeze({ ...state }),
   };
   const transport = { validate() {}, send: async (spec) => { trace.push(["transport", spec.method, spec.url, JSON.stringify(spec.headers)]); return ok; } };
-  const credentials = { headersFor: (credential) => (credential === "anonymous" ? {} : { authorization: `Bearer ${BEARER}` }) };
+  const credentials = { headersFor: ownerHeadersFor(BEARER) };
   const gate = createDispatchGate({ reservations: { ...reservations, ...delta.reservations }, capture: { ...capture, ...delta.capture }, transport: { ...transport, ...delta.transport }, targets: { ...targets, ...delta.targets }, credentials: { ...credentials, ...delta.credentials }, preflightIds, admission: (() => { const a = { check: async () => { trace.push(["admission"]); return { admitted: true }; }, ...delta.admission }; a.begin ??= a.check; return a; })() });
   const prepare = (id) => targets.prepare(row(id), resolver);
   const admit = async () => {
@@ -135,6 +136,28 @@ test("a provider that adds the quota project header to userinfo is refused befor
   const first = manifest.preflightIds.find((id) => id === "preflight/owner/identity");
   await assert.rejects(h.gate.send(h.prepare(first), preflightMeta), /invalid credential headers/);
   assert.equal(h.trace.some((entry) => entry[0] === "transport"), false);
+});
+
+test("the check is two-sided: an owner request on a route that carries the header is refused without it or with another project's, and other credentials need none", async () => {
+  const owner = manifest.rows.find((r) => r.id === READ && r.request.credential === "admin") ?? assert.fail(READ);
+  assert.equal(owner.request.credential, "admin");
+  for (const headers of [{ authorization: "Bearer t" }, { authorization: "Bearer t", "x-goog-user-project": "fireemu-oracle-idp" }]) {
+    let armed = false;
+    const h = await harness({ credentials: { headersFor: (credential, context) => (armed && credential === "admin" ? headers : ownerProvider().headersFor(credential, context)) } });
+    await h.admit();
+    armed = true;
+    h.trace.length = 0;
+    await assert.rejects(h.gate.send(h.prepare(READ), normalMeta), /invalid credential headers/);
+    assert.equal(h.trace.some((entry) => entry[0] === "transport"), false);
+  }
+  // The exempt route needs no header, and a request of another credential is not held to the owner's rule.
+  const h = await harness({ credentials: ownerProvider() });
+  await h.admit();
+  const anonymous = manifest.rows.find((r) => r.phase === "normal" && r.request.credential === "anonymous") ?? assert.fail("no anonymous row");
+  h.trace.length = 0;
+  await h.gate.send(h.prepare(anonymous.id), normalMeta);
+  assert.equal(events(h.trace, "transport").length, 1);
+  assert.equal(Object.hasOwn(JSON.parse(events(h.trace, "transport")[0][3]), "x-goog-user-project"), false);
 });
 
 test("the exemption from the quota project header is by method as well: another method on the userinfo path keeps the header", async () => {

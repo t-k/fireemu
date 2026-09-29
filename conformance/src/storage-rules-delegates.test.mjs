@@ -13,6 +13,7 @@ import { buildRecoverySchedule, buildSchedule } from "./storage-rules/schedule.m
 import { buildRefTables, createRuntimeRefStore } from "./storage-rules/runtime-refs.mjs";
 import { createTargetBuilder } from "./storage-rules/target.mjs";
 import { createSimulator } from "./storage-rules-simulator.mjs";
+import { ownerHeadersFor } from "./storage-rules-owner-headers.mjs";
 
 // Every delegate real, every endpoint simulated: the Storage/Rules/Firestore simulator plus a fake OAuth endpoint, the
 // signing-key endpoint and a small Identity Toolkit. Nothing here reaches a network.
@@ -290,7 +291,7 @@ function unit({ respond = () => undefined } = {}) {
   const gate = createDispatchGate({
     reservations: { onStarted: async () => {}, onReserve: async (r) => { trace.push(`${r.phase}:${r.operationId}`); }, onTerminal: async (r) => { trace.push(`terminal:${r.outcome}`); } },
     capture: { writeIntent: async () => {}, writeResponse: async () => {}, writeNote: async () => {}, writeDelegatedTarget: async () => {}, snapshot: () => ({ uncertain: false }) },
-    transport, targets: { verify: () => true, prepare: () => { throw new Error("unused"); } }, credentials: { headersFor: () => ({}) },
+    transport, targets: { verify: () => true, prepare: () => { throw new Error("unused"); } }, credentials: { headersFor: ownerHeadersFor("t") },
     preflightIds: [OWNER_PREFLIGHT, KEYS_PREFLIGHT], admission: { check: async () => ({ admitted: true }), begin: async () => ({ admitted: true }) },
   });
   const real = createRunnerDelegates({ gate, adc, apiKeys, passwords, digestSalt: salt, runId: "lr", nowSeconds: () => clock.now, waitUntilSeconds: async (value) => { clock.now = Math.max(clock.now, value); },

@@ -53,6 +53,8 @@ export function createDispatchGate(options) {
       if (name === "x-goog-user-project" && (value !== prepared.project || !quotaProject)) bad("invalid credential headers");
       out[name] = value;
     }
+    // Both sides: an owner request on a route that carries the header must carry it, for its own project.
+    if (prepared.credential === "admin" && quotaProject && out["x-goog-user-project"] !== prepared.project) bad("invalid credential headers");
     return out;
   }
 

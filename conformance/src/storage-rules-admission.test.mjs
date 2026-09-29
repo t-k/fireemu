@@ -13,6 +13,7 @@ import { buildRefTables, createRuntimeRefStore } from "./storage-rules/runtime-r
 import { buildRecoverySchedule, buildSchedule } from "./storage-rules/schedule.mjs";
 import { createTargetBuilder } from "./storage-rules/target.mjs";
 import { createSimulator } from "./storage-rules-simulator.mjs";
+import { ownerHeadersFor } from "./storage-rules-owner-headers.mjs";
 
 const closure = JSON.parse(readFileSync(new URL("../../spec/compatibility/closure/STORAGE-RULES.json", import.meta.url)));
 const options = { runId: "local-run", sourceCommit: "a".repeat(40), queryProjectNumber: "1".repeat(12), idpProjectNumber: "2".repeat(12), queryApiKeyId: "00000000-0000-4000-8000-000000000001", idpApiKeyId: "00000000-0000-4000-8000-000000000002" };
@@ -269,7 +270,7 @@ async function harness(admissionOverrides = {}, { delegates = {}, credentials = 
   const admission = createAdmission(created.options);
   const started = { count: 0 };
   const reservations = { onStarted: async () => { started.count++; }, onReserve: async () => {}, onTerminal: async () => {} };
-  const gate = createDispatchGate({ reservations, capture, transport, targets, credentials: { headersFor: (c) => (c === "anonymous" ? {} : { authorization: "Bearer SIM" }) }, preflightIds, admission });
+  const gate = createDispatchGate({ reservations, capture, transport, targets, credentials: { headersFor: ownerHeadersFor("SIM") }, preflightIds, admission });
   const noop = async () => {};
   const controller = createController({
     manifest, schedule: buildSchedule(manifest), recoverySchedule: buildRecoverySchedule(manifest), gate, targets, refs, tables, objects, run, capture,

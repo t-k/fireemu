@@ -14,6 +14,7 @@ import { buildRecoverySchedule, buildSchedule } from "./storage-rules/schedule.m
 import { buildRefTables, createRuntimeRefStore } from "./storage-rules/runtime-refs.mjs";
 import { createTargetBuilder } from "./storage-rules/target.mjs";
 import { createSimulator } from "./storage-rules-simulator.mjs";
+import { ownerHeadersFor } from "./storage-rules-owner-headers.mjs";
 
 // The project locks and the live admission as one: the lock check is part of every request's admission, the run's only
 // transport goes through the lease, and the locks are released only after a clean terminal state was confirmed.
@@ -68,7 +69,7 @@ async function assemble({ lease, admission, simulatorOptions = {} }, { transport
   const transport = leaseTransport(lease, { validate() {}, send: async (spec) => { calls.count++; await transportHook(spec, calls.count); return simulator.send(spec); } });
   const gate = createDispatchGate({
     reservations: { onStarted: async () => {}, onReserve: async (r) => { trace.push(r.operationId); }, onTerminal: async (r) => { trace.push(`terminal:${r.outcome}`); } },
-    capture, transport, targets, credentials: { headersFor: () => ({}) }, preflightIds, admission,
+    capture, transport, targets, credentials: { headersFor: ownerHeadersFor("t") }, preflightIds, admission,
   });
   const noop = async () => {};
   const controller = createController({

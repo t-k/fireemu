@@ -15,6 +15,7 @@ import { buildRefTables, createRuntimeRefStore } from "./storage-rules/runtime-r
 import { buildRecoverySchedule, buildSchedule } from "./storage-rules/schedule.mjs";
 import { createTargetBuilder } from "./storage-rules/target.mjs";
 import { createSimulator } from "./storage-rules-simulator.mjs";
+import { ownerHeadersFor } from "./storage-rules-owner-headers.mjs";
 
 const closure = JSON.parse(readFileSync(new URL("../../spec/compatibility/closure/STORAGE-RULES.json", import.meta.url)));
 const options = { runId: "local-run", sourceCommit: "a".repeat(40), queryProjectNumber: "1".repeat(12), idpProjectNumber: "2".repeat(12), queryApiKeyId: "00000000-0000-4000-8000-000000000001", idpApiKeyId: "00000000-0000-4000-8000-000000000002" };
@@ -47,7 +48,7 @@ async function harness({ capture = memoryCapture(), simulatorOptions = {}, crede
   const run = createRunLedger({ manifest, objects });
   const trace = [];
   const reservations = { onStarted: async () => { trace.push("started"); }, onReserve: async (r) => { trace.push(r.operationId); }, onTerminal: async (r) => { trace.push(`terminal:${r.outcome}`); } };
-  const gate = createDispatchGate({ reservations: harnessReservations ?? reservations, capture, transport: simulator, targets, credentials: { headersFor: (c) => (c === "anonymous" ? {} : { authorization: `Bearer ${BEARER}` }) }, preflightIds, admission: { check: async () => ({ admitted: true }), begin: async () => ({ admitted: true }) } });
+  const gate = createDispatchGate({ reservations: harnessReservations ?? reservations, capture, transport: simulator, targets, credentials: { headersFor: ownerHeadersFor(BEARER) }, preflightIds, admission: { check: async () => ({ admitted: true }), begin: async () => ({ admitted: true }) } });
   const noop = async () => {};
   const controller = createController(adjust({
     manifest, schedule: buildSchedule(manifest), recoverySchedule: buildRecoverySchedule(manifest), gate, targets, refs, tables, objects, run, capture,

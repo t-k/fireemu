@@ -1264,3 +1264,41 @@ fn a_continuation_does_not_check_the_request_it_answered_again() {
     let resumed = sign_in(&s, &continuation(&first.body["pendingToken"]));
     assert_eq!(resumed.status, 200, "{}", resumed.body);
 }
+
+#[test]
+fn a_continuation_resumed_with_another_session_is_not_checked_against_it() {
+    // A resume request may name any sessionId: InResponseTo is the one condition a resumed
+    // continuation leaves out, whatever session the resume names (closure re-review S1). No
+    // new refusal: a resume naming another live session, or a session where the sign-in named
+    // none, is accepted.
+    let (mut s, key) = dynamic_state();
+    s.idp_continuations = IdpContinuationPolicy::LocalBounded;
+    let (first_session, first_request) = session(&s);
+    let first = sign_in(
+        &s,
+        &dynamic_request(
+            &signed_response(&key, &Conditions::answering(Some(&first_request))),
+            Some(&first_session),
+        ),
+    );
+    assert_eq!(first.status, 200, "{}", first.body);
+    let (other_session, _) = session(&s);
+    let mut resume = continuation(&first.body["pendingToken"]);
+    resume["sessionId"] = json!(other_session);
+    let resumed = sign_in(&s, &resume);
+    assert_eq!(resumed.status, 200, "{}", resumed.body);
+    // A sign-in that named no session, resumed with one.
+    let unsolicited = sign_in(
+        &s,
+        &dynamic_request(
+            &signed_response(&key, &Conditions::answering(Some("_unsolicited"))),
+            None,
+        ),
+    );
+    assert_eq!(unsolicited.status, 200, "{}", unsolicited.body);
+    let (named_session, _) = session(&s);
+    let mut resume = continuation(&unsolicited.body["pendingToken"]);
+    resume["sessionId"] = json!(named_session);
+    let resumed = sign_in(&s, &resume);
+    assert_eq!(resumed.status, 200, "{}", resumed.body);
+}

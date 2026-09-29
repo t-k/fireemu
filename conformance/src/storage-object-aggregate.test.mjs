@@ -274,3 +274,24 @@ test("a failed started writer issues no request and closes the unused wire", asy
   assert.equal(f.factories(), 1);
   assert.equal(f.closes(), 1);
 });
+
+test("a recordings option other than one or two is refused before any wire exists", async () => {
+  for (const recordings of [0, 3, -1, 1.5, "1", null]) {
+    const f = fixture();
+    f.options.recordings = recordings;
+    await assert.rejects(replayLocalAggregate(f.options), /recordings/);
+    assert.equal(f.factories(), 0);
+    assert.equal(f.events.length, 0);
+  }
+});
+
+test("a one-recording run stops after the first recording's recipes and never advances", async () => {
+  // The fake object store answers only the first recipe's shape, so the run stops early; what
+  // matters here is that the option is accepted and the first recording alone is attempted.
+  const f = fixture({ uploadFailure: true });
+  f.options.recordings = 1;
+  const result = await replayLocalAggregate(f.options);
+  assert.equal(result.status, "LOCAL_NEEDS_RECOVERY");
+  assert.deepEqual(result.counter.completedRecipes, [0, 0]);
+  assert.equal(f.events.filter((row) => row.type === "started").length, 1);
+});

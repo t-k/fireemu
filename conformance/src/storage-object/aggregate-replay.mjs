@@ -132,6 +132,7 @@ export async function replayLocalAggregate(options) {
     "onCapture",
     "onByteReserve",
     "wireFactory",
+    "recordings",
   ]);
   if (
     !options ||
@@ -155,7 +156,10 @@ export async function replayLocalAggregate(options) {
     onCapture,
     onByteReserve,
     wireFactory = createLocalWireTransport,
+    recordings: recordingCount = 2,
   } = options;
+  // One recording per run is how a production run is split: each run is admitted on its own.
+  if (recordingCount !== 1 && recordingCount !== 2) throw new Error("invalid aggregate recordings");
   if (
     [
       onStart,
@@ -267,7 +271,7 @@ export async function replayLocalAggregate(options) {
   }
   try {
     await counter.start();
-    for (let recording = 0; recording < 2; recording++) {
+    for (let recording = 0; recording < recordingCount; recording++) {
       current = null;
       await fixedRules(recording, "initial");
       for (const { recipe, replay } of registries[recording]) {
@@ -319,11 +323,13 @@ export async function replayLocalAggregate(options) {
       }
       current = null;
       await fixedRules(recording, "final");
-      if (recording === 0) counter.nextRecording();
+      if (recording === 0 && recordingCount === 2) counter.nextRecording();
     }
     if (!wireReady() || wire.snapshot().attempts !== counter.snapshot().total)
       throw new Error("LOCAL_AGGREGATE_WIRE_EVIDENCE_INCOMPLETE");
-    counter.close();
+    if (recordingCount === 2) counter.close();
+    else if (counter.snapshot().completedRecipes[0] !== registries[0].length)
+      throw new Error("LOCAL_AGGREGATE_RECORDING_INCOMPLETE");
     status = "LOCAL_COMPLETE";
   } catch {
     cleanupFailures = [...(current?.result?.cleanupFailures ?? [])];

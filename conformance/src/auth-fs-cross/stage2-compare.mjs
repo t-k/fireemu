@@ -266,6 +266,7 @@ export function stage2Evidence({
     fireemu: { commit: fireemuCommit, artifactSha256 },
     fixtureSha256: createHash("sha256").update(fixtureText).digest("hex"),
     summary: comparison.summary,
+    ...(comparison.localSetup ? { localSetup: comparison.localSetup } : {}),
     rows: comparison.rows.map(({ row, status }) => ({ row, status })),
   };
 }

@@ -30,6 +30,8 @@ import { join } from "node:path";
 import { CONFORMANCE_DIR } from "../config.mjs";
 import { resolveFireemuBinary } from "../evidence.mjs";
 import { createContext, SANDBOX_PROJECT } from "../fs-rules/harness.mjs";
+import { checkFixtureDigest, HARNESS_LANES } from "../harness-registry.mjs";
+import { withLocalMultiTenancy } from "../harness-target/local-tenancy.mjs";
 import { STAGE2_PRINCIPALS, STAGE2_PROGRAM } from "./programs-stage2.mjs";
 import { closureTransports, validateStage2 } from "./stage2-corpus.mjs";
 import { scanFixture } from "../auth-account/fixture-scan.mjs";
@@ -137,16 +139,20 @@ async function sessionLocal() {
     // As in production: the browser's first request with the key is a read, before any write.
     const keyProbe = await browserKeyProbe(localSdkConfig(target));
     if (!keyProbe.ok) throw new Error(`browser key probe refused: ${keyProbe.code}`);
-    out = await runStage2Window(program, ctx, {
-      principals: STAGE2_PRINCIPALS,
-      sdkConfig: localSdkConfig(target),
-      sessionOptions: {
-        maxHarnessRequests: HARNESS_CEILING,
-        maxCleanupRequests: CLEANUP_CEILING,
+    // The local tenant setup lives here, outside the digest the recorded rows are bound to.
+    const prepared = await withLocalMultiTenancy(ctx, () =>
+      runStage2Window(program, ctx, {
+        principals: STAGE2_PRINCIPALS,
+        sdkConfig: localSdkConfig(target),
+        sessionOptions: {
+          maxHarnessRequests: HARNESS_CEILING,
+          maxCleanupRequests: CLEANUP_CEILING,
+          log,
+        },
         log,
-      },
-      log,
-    });
+      }),
+    );
+    out = { ...prepared.value, localSetup: { digest: prepared.digest, actions: prepared.actions } };
   } catch (error) {
     await writeFile(
       process.env.AFC2_OUT,
@@ -306,11 +312,15 @@ async function exportStage2Comparison(args) {
 
 /** Compares fireemu's rows (a fresh window, or a saved local run) with the fixture. */
 async function check(args) {
-  const { stage2HarnessDigest, stage2ProgramDigest } = await import("./stage2-record.mjs");
+  const { stage2ProgramDigest } = await import("./stage2-record.mjs");
   const fixture = JSON.parse(await readFile(FIXTURE, "utf8"));
   const stale =
     fixture.programDigest !== stage2ProgramDigest() ||
-    fixture.harnessDigest !== (await stage2HarnessDigest());
+    checkFixtureDigest(
+      "auth-fs-cross-stage2",
+      HARNESS_LANES["auth-fs-cross-stage2"],
+      fixture.harnessDigest,
+    ).state === "stale";
   const rowsAt = args.indexOf("--rows");
   const local =
     rowsAt >= 0
@@ -340,7 +350,17 @@ async function check(args) {
   const compared = rowsAt >= 0 ? args[rowsAt + 1] : join(dir, "fireemu.json");
   await writeFile(
     join(dir, "comparison.json"),
-    `${JSON.stringify({ summary, compared, cleanupErrors: local.cleanupErrors ?? [], rows }, null, 2)}\n`,
+    `${JSON.stringify(
+      {
+        summary,
+        compared,
+        cleanupErrors: local.cleanupErrors ?? [],
+        localSetup: local.localSetup,
+        rows,
+      },
+      null,
+      2,
+    )}\n`,
   );
   console.log(JSON.stringify({ comparison: join(dir, "comparison.json") }));
   // A row whose varying part stayed inside its allowed set passes; the output shows both

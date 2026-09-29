@@ -28,6 +28,8 @@ import { SIGNER_ACCOUNTS } from "../auth-credential/harness.mjs";
 import { scanFixture } from "../auth-account/fixture-scan.mjs";
 import { CONFORMANCE_DIR } from "../config.mjs";
 import { resolveFireemuBinary } from "../evidence.mjs";
+import { checkFixtureDigest, HARNESS_LANES, rawDigest, treeReader } from "../harness-registry.mjs";
+import { withLocalMultiTenancy } from "../harness-target/local-tenancy.mjs";
 import { PRINCIPALS, PROGRAMS, validateCorpus } from "./corpus.mjs";
 import {
   createContext,
@@ -55,14 +57,12 @@ const RULESET_TEXT = RULESET_IDS.map((id) => rulesetSource(id)).join("\n");
 /** A program's digest covers its JSON and every ruleset it could run under. */
 export const programDigest = (program) => sha256(`${JSON.stringify(program)}\n${RULESET_TEXT}`);
 
-/** Normalization and request semantics a saved row depends on; a change makes it stale. */
+/**
+ * Normalization and request semantics a saved row depends on; a change makes it stale. The files
+ * are listed in ../harness-registry.mjs, which also says when a recorded digest is still current.
+ */
 export async function harnessDigest() {
-  const sources = await Promise.all(
-    ["fs-rules/harness.mjs", "fs-rules/session.mjs", "auth-credential/tokens.mjs"].map((file) =>
-      readFile(join(CONFORMANCE_DIR, "src", file), "utf8"),
-    ),
-  );
-  return sha256(`${sources.join("\n")}\n${JSON.stringify(PRINCIPALS)}`);
+  return rawDigest(HARNESS_LANES["fs-rules"], treeReader);
 }
 
 export function selectPrograms(programs = PROGRAMS, env = process.env) {
@@ -591,12 +591,18 @@ async function sessionLocal() {
       },
     },
   });
-  const out = await runCorpus({ programs, principals: PRINCIPALS }, ctx, {
-    ...ceilings(programs),
-    signers,
-    log: process.env.FS_RULES_VERBOSE ? (line) => console.error(line) : undefined,
-  });
-  await writeFile(process.env.FS_RULES_OUT, JSON.stringify(out));
+  // The local tenant setup lives here, outside the digest the recorded rows are bound to.
+  const { value, actions, digest } = await withLocalMultiTenancy(ctx, () =>
+    runCorpus({ programs, principals: PRINCIPALS }, ctx, {
+      ...ceilings(programs),
+      signers,
+      log: process.env.FS_RULES_VERBOSE ? (line) => console.error(line) : undefined,
+    }),
+  );
+  await writeFile(
+    process.env.FS_RULES_OUT,
+    JSON.stringify({ ...value, localSetup: { digest, actions } }),
+  );
 }
 
 export async function runLocal(programs, { profile = "strict" } = {}) {
@@ -727,14 +733,15 @@ async function check() {
     : { programs: {} };
   const selected = selectPrograms();
   validateCorpus(selected);
-  const harness = await harnessDigest();
   const local = await runLocal(selected);
   const rows = [];
   for (const program of selected) {
     const saved = fixture.programs[program.id];
     const stale =
       saved !== undefined &&
-      (saved.corpusDigest !== programDigest(program) || saved.harnessDigest !== harness);
+      (saved.corpusDigest !== programDigest(program) ||
+        checkFixtureDigest("fs-rules", HARNESS_LANES["fs-rules"], saved.harnessDigest).state ===
+          "stale");
     for (const step of program.steps.filter((s) => !s.action)) {
       const production = saved?.steps?.[step.id];
       const alternative = saved?.second?.[step.id];
@@ -756,7 +763,7 @@ async function check() {
   const artifactSha256 = sha256(await readFile(local.binary));
   await writeFile(
     join(RUN_DIR, "comparison.json"),
-    `${JSON.stringify({ artifact: local.binary, artifactSha256, summary, orphans, failures: local.failures, rows }, null, 2)}\n`,
+    `${JSON.stringify({ artifact: local.binary, artifactSha256, summary, orphans, failures: local.failures, localSetup: local.localSetup, rows }, null, 2)}\n`,
   );
   const passing = new Set(["MATCH", "MATCH_NONDETERMINISTIC", "DEPENDENCY_REFUSED"]);
   for (const row of rows.filter((r) => !passing.has(r.status))) {
@@ -778,6 +785,7 @@ async function exportComparison(out) {
     artifactSha256: comparison.artifactSha256,
     fixtureSha256,
     summary: comparison.summary,
+    localSetup: comparison.localSetup,
     rows: comparison.rows.map(({ row, status }) => ({ row, status })),
   };
   await writeFile(out, `${JSON.stringify(evidence, null, 2)}\n`);

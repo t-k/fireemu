@@ -118,7 +118,7 @@ test("response headers are redacted by name and by content", async () => {
   assert.equal(text.includes("CANARYCOOKIE"), false);
   assert.equal(out[out.indexOf("X-Goog-Generation") + 1], "1700000000000001");
   assert.equal(out[out.indexOf("Content-Type") + 1], "application/json");
-  assert.match(out[out.indexOf("Authorization") + 1], /^<redacted:header>$/);
+  assert.match(out[out.indexOf("Authorization") + 1], /^<redacted:header:[0-9a-f]{64}>$/);
 });
 
 test("free text such as a target or an error message is redacted the same way", async () => {
@@ -173,7 +173,9 @@ test("every bearer header hides an opaque value by its name alone, whatever its 
   const r = await redactor();
   for (const name of ["authorization", "proxy-authorization", "cookie", "set-cookie", "x-goog-upload-url", "x-goog-api-key", "x-firebase-appcheck", "x-goog-iam-authorization-token"]) {
     for (const spelled of [name, name.toUpperCase(), name.replace(/(^|-)([a-z])/g, (_, dash, letter) => `${dash}${letter.toUpperCase()}`)]) {
-      assert.deepEqual(r.headers([spelled, OPAQUE, "X-Plain", OPAQUE]), [spelled, "<redacted:header>", "X-Plain", OPAQUE], spelled);
+      const out = r.headers([spelled, OPAQUE, "Content-Type", "text/plain"]);
+      assert.match(out[1], /^<redacted:header:[0-9a-f]{64}>$/, spelled);
+      assert.deepEqual([out[0], out[2], out[3]], [spelled, "Content-Type", "text/plain"]);
     }
   }
 });
@@ -209,4 +211,43 @@ test("at one start the longest match names the span, and at equal length the ear
   // The idToken value is exactly a JWT: the JSON field rule comes first and names it.
   const token = r.bytes(Buffer.from(JSON.stringify({ idToken: CANARIES.idToken })));
   assert.deepEqual(token.spans.map((span) => span.kind), ["json-field"]);
+});
+
+// Header capture is an allowlist: a public header keeps its (text-redacted) value, every other header keeps only a salted digest.
+const PUBLIC = ["accept", "accept-encoding", "host", "connection", "date", "server", "content-type", "content-length", "content-range", "content-encoding", "content-disposition", "cache-control", "expires", "last-modified", "etag", "vary", "transfer-encoding", "range", "user-agent", "x-goog-user-project", "x-goog-hash", "x-goog-generation", "x-goog-metageneration", "x-goog-storage-class", "x-goog-stored-content-length", "x-goog-stored-content-encoding", "x-goog-upload-protocol", "x-goog-upload-command", "x-goog-upload-offset", "x-goog-upload-header-content-length", "x-goog-upload-header-content-type", "x-goog-upload-status", "x-goog-upload-size-received", "x-content-type-options"];
+
+test("every public header keeps its value whatever its case", async () => {
+  const r = await redactor();
+  for (const name of PUBLIC) for (const spelled of [name, name.toUpperCase(), name.replace(/(^|-)([a-z])/g, (_, dash, letter) => `${dash}${letter.toUpperCase()}`)]) {
+    assert.deepEqual(r.headers([spelled, "plain-value-1"]), [spelled, "plain-value-1"], spelled);
+  }
+});
+
+test("every header outside the public list is reduced to a salted digest, including the upload and download capabilities", async () => {
+  const r = await redactor();
+  const secretNames = ["x-guploader-uploadid", "x-goog-upload-control-url", "location", "x-firebase-storage-download-tokens", "x-goog-upload-url", "authorization", "set-cookie", "x-firebase-appcheck", "x-custom", "x-plain", "x-goog-upload-chunk-granularity", "access-control-allow-origin", "alt-svc", "x-goog-request-id", "content-language"];
+  for (const name of secretNames) {
+    for (const spelled of [name, name.toUpperCase()]) {
+      const out = r.headers([spelled, OPAQUE]);
+      assert.equal(out[0], spelled);
+      assert.match(out[1], /^<redacted:header:[0-9a-f]{64}>$/, spelled);
+      assert.equal(out[1].includes(OPAQUE), false, spelled);
+    }
+  }
+  // The digest is stable for one value, differs between values and between salts, and is the same whatever the header's name.
+  const one = r.headers(["X-A", "value-1"])[1];
+  assert.equal(r.headers(["X-A", "value-1"])[1], one);
+  assert.equal(r.headers(["X-B", "value-1"])[1], one);
+  assert.notEqual(r.headers(["X-A", "value-2"])[1], one);
+  const other = (await import("./storage-rules/redaction.mjs")).createRedactor({ digestSalt: "8".repeat(64) });
+  assert.notEqual(other.headers(["X-A", "value-1"])[1], one);
+  // An empty value is a value too.
+  assert.match(r.headers(["X-A", ""])[1], /^<redacted:header:[0-9a-f]{64}>$/);
+});
+
+test("a public header whose value carries a secret pattern still has the pattern removed", async () => {
+  const r = await redactor();
+  const out = r.headers(["Content-Disposition", `attachment; filename="${CANARIES.downloadToken}"; token=${OPAQUE}`, "ETag", `"${CANARIES.idToken}"`]);
+  assert.equal(out.join("\n").includes(OPAQUE), false);
+  assert.equal(out.join("\n").includes(CANARIES.idToken), false);
 });

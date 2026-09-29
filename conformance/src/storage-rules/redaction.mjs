@@ -6,7 +6,15 @@ import { createHash } from "node:crypto";
 const MAX_BYTES = 2 * 1024 * 1024;
 const SECRET_FIELDS = "downloadTokens|firebaseStorageDownloadTokens|idToken|id_token|refreshToken|refresh_token|access_token|accessToken|passwordHash|salt|keyString|sessionInfo|password|secret|apiKey|api_key|token|privateKey|private_key|client_secret";
 const URL_PARAMETERS = "token|key|upload_id|access_token|id_token|refresh_token|sig|signature|X-Goog-Signature|X-Goog-Credential|X-Amz-Signature|X-Amz-Credential";
-const HEADER_NAMES = new Set(["authorization", "proxy-authorization", "cookie", "set-cookie", "x-goog-upload-url", "x-goog-api-key", "x-firebase-appcheck", "x-goog-iam-authorization-token"]);
+// Header capture is an allowlist (as in the STORAGE-OBJECT lane's capture policy): only these keep their value, still passed through the
+// text patterns. Every other header, including x-guploader-uploadid, x-goog-upload-control-url, location and
+// x-firebase-storage-download-tokens, is kept as a salted digest only.
+const PUBLIC_HEADERS = new Set([
+  "accept", "accept-encoding", "host", "connection", "date", "server", "content-type", "content-length", "content-range", "content-encoding", "content-disposition",
+  "cache-control", "expires", "last-modified", "etag", "vary", "transfer-encoding", "range", "user-agent", "x-goog-user-project", "x-goog-hash", "x-goog-generation",
+  "x-goog-metageneration", "x-goog-storage-class", "x-goog-stored-content-length", "x-goog-stored-content-encoding", "x-goog-upload-protocol", "x-goog-upload-command",
+  "x-goog-upload-offset", "x-goog-upload-header-content-length", "x-goog-upload-header-content-type", "x-goog-upload-status", "x-goog-upload-size-received", "x-content-type-options",
+]);
 // Each pattern yields spans; `group` selects the secret part of a match, and the first pattern to reach a byte wins after merging.
 const PATTERNS = [
   { kind: "session-url", re: /https?:\/\/[^\s"'<>\\]*[?&]upload_id=[^\s"'<>\\]*/gi, group: 0 },
@@ -76,7 +84,7 @@ export function createRedactor(options) {
       const out = [];
       for (let index = 0; index < rawHeaders.length; index += 2) {
         const name = rawHeaders[index];
-        out.push(name, HEADER_NAMES.has(name.toLowerCase()) ? "<redacted:header>" : redactString(rawHeaders[index + 1]).text);
+        out.push(name, PUBLIC_HEADERS.has(name.toLowerCase()) ? redactString(rawHeaders[index + 1]).text : `<redacted:header:${digest("header", rawHeaders[index + 1])}>`);
       }
       return Object.freeze(out);
     },

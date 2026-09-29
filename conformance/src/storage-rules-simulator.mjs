@@ -127,7 +127,7 @@ export function createSimulator({ manifest, options = {} }) {
         const id = `SIMSESSION${sessions.size}${randomUUID().replaceAll("-", "").slice(0, 12)}`;
         sessions.set(id, { name, state: "active" });
         secrets.push(id);
-        return json(200, {}, { "X-Goog-Upload-URL": `https://firebasestorage.googleapis.com/v0/b/${bucket}/o?name=${encodeURIComponent(name)}&upload_id=${id}&upload_protocol=resumable`, "X-Goog-Upload-Status": "active" });
+        return json(200, {}, { "X-Goog-Upload-URL": `https://firebasestorage.googleapis.com/v0/b/${bucket}/o?name=${encodeURIComponent(name)}&upload_id=${id}&upload_protocol=resumable`, "X-Goog-Upload-Status": "active", "X-GUploader-UploadID": id });
       }
       if (!allowed(name)) return denial();
       return json(200, firebaseJson(name, putObject(name, spec.body ?? Buffer.alloc(0))));
@@ -135,8 +135,14 @@ export function createSimulator({ manifest, options = {} }) {
     return json(404, { error: { code: 404, message: "unrouted" } });
   }
 
+  // Every answer about a session carries its upload ID in X-GUploader-UploadID, as the real service does; it is a canary like the URL.
+  const tagged = (response, id) => ({ ...response, rawHeaders: [...response.rawHeaders, "X-GUploader-UploadID", id] });
   function session(url, spec) {
     const id = url.searchParams.get("upload_id");
+    const entry = sessions.get(id);
+    return entry ? tagged(sessionAnswer(url, spec, id), id) : sessionAnswer(url, spec, id);
+  }
+  function sessionAnswer(url, spec, id) {
     const entry = sessions.get(id);
     const command = spec.headers["x-goog-upload-command"];
     if (!entry) return json(404, { error: { code: 404, message: "Not Found." } });

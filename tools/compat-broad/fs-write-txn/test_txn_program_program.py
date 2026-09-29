@@ -128,6 +128,8 @@ def _step_change(index, **fields):
         ("too many tokens", lambda t: _broken(t, maxTokens=1)),
         ("finished on non rollback", lambda t: _broken(t, steps=_step_change(4, finished=True))),
         ("read with writes", lambda t: _broken(t, steps=_step_change(4, writes=({"document": "a", "state": "held", "exists": True},)))),
+        ("envelope of another program", lambda t: _broken(t, envelopeId="FS-TRANSACTION-p10-grpc-boundary-002")),
+        ("unnumbered envelope", lambda t: _broken(t, envelopeId="FS-TRANSACTION-toy-failed-commit")),
         ("missing key", lambda t: _broken(t, steps=lambda steps: tuple({k: v for k, v in step.items() if k != "allow"} for step in steps))),
     ],
 )

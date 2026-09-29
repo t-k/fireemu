@@ -67,6 +67,8 @@ def _validate_table(table):
         _bad("a table field is missing")
     if not isinstance(table["slug"], str) or not _LABEL.fullmatch(table["slug"]) or not isinstance(table["program"], str) or not isinstance(table["name"], str):
         _bad("name, program or slug is malformed")
+    if not isinstance(table.get("envelopeId"), str) or not re.fullmatch(rf"FS-TRANSACTION-{re.escape(table['name'])}-[0-9]{{3}}", table["envelopeId"]):
+        _bad("the envelope id is not this program's next numbered one")
     documents, states = tuple(table["documents"]), tuple(table["states"])
     if not documents or len(set(documents)) != len(documents) or any(not isinstance(role, str) or not _LABEL.fullmatch(role) for role in documents):
         _bad("owned document roles are malformed")

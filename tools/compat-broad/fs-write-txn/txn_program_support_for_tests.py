@@ -44,6 +44,7 @@ STEPS = tuple(_step(row) for row in _rows())
 TABLE = {
     "name": "toy-failed-commit",
     "program": "FS-TRANSACTION-TOY",
+    "envelopeId": "FS-TRANSACTION-toy-failed-commit-001",
     "slug": "txn-toy",
     "documents": ("a", "m"),
     "states": ("created", "held", "moved"),

@@ -1,0 +1,30 @@
+{
+  "$schema": "https://fireemu.dev/spec/config/fireemu.schema.json",
+  "schemaVersion": 1,
+  "profile": "strict",
+  "limits": {
+    "catalog": "firestore-standard-2026-08-25",
+    "queryCatalog": "firestore-standard-query-2026-08-25",
+    "rulesCatalog": "firebase-rules-2026-08-25"
+  },
+  "firestore": {
+    "edition": "standard",
+    "apiMode": "native"
+  },
+  "rules": {
+    "executionMode": "admin-bypass"
+  },
+  "auth": {
+    "mfa": {
+      "state": "ENABLED",
+      "providerConfigs": [
+        {
+          "state": "ENABLED",
+          "totpProviderConfig": {
+            "adjacentIntervals": 1
+          }
+        }
+      ]
+    }
+  }
+}

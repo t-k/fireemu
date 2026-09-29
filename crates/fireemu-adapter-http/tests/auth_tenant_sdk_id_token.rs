@@ -274,13 +274,15 @@ fn a_contradicting_body_tenant_keeps_its_refusal() {
     }
 }
 
-/// A deleted tenant's token names no store any more: it is refused as before.
+/// A deleted tenant's token names no store any more: it is refused as before. The emulator
+/// profile makes the tenant again on the way, so each route meets it deleted afresh.
 #[test]
 fn a_deleted_tenants_token_keeps_its_refusal() {
     for (case, state, registry) in cases() {
         let a = sign_up(&state, KEY, TENANT_A, "a@example.com");
         assert!(registry.delete_tenant("demo-app", TENANT_A), "{case}");
         for route in ["accounts:lookup", "accounts:update", "accounts:delete"] {
+            registry.delete_tenant("demo-app", TENANT_A);
             let (status, refused) = sdk_call(
                 &state,
                 route,
@@ -301,7 +303,7 @@ fn a_deleted_tenants_token_keeps_its_refusal() {
 /// signatures are checked; either way no tenant store is chosen for it.
 #[test]
 fn a_tenant_claim_naming_no_tenant_keeps_its_refusal() {
-    for (case, state, _registry) in cases() {
+    for (case, state, registry) in cases() {
         let a = sign_up(&state, KEY, TENANT_A, "a@example.com");
         let token = a["idToken"].as_str().unwrap();
         let mut payload = claims(token);
@@ -314,6 +316,8 @@ fn a_tenant_claim_naming_no_tenant_keeps_its_refusal() {
             base64url_encode(payload.to_string().as_bytes())
         );
         for route in ["accounts:lookup", "accounts:update", "accounts:delete"] {
+            // The emulator profile makes the named tenant on the way; each route meets it absent.
+            registry.delete_tenant("demo-app", "tenant-missing");
             let (status, refused) = sdk_call(
                 &state,
                 route,
@@ -573,20 +577,17 @@ fn a_blank_body_tenant_is_a_mismatch() {
     }
 }
 
-/// The refusal of a missing tenant creates nothing, where the official emulator creates the
-/// tenant on the way (a divergence fireemu keeps).
+/// A request naming a tenant that does not exist finds the tenant made on the way in the emulator
+/// profile, as the official emulator makes it (`getProjectStateById`), and creates nothing in the
+/// strict profile, as production refuses. Either way the account is not found.
 #[test]
-fn a_missing_tenant_is_not_created_by_its_refusal() {
+fn a_missing_tenant_is_made_on_the_way_only_in_the_emulator_profile() {
     for (case, state, registry) in cases() {
         let a = sign_up(&state, KEY, TENANT_A, "a@example.com");
         assert!(registry.delete_tenant("demo-app", TENANT_A), "{case}");
         let (status, refused) =
             sdk_call(&state, "accounts:lookup", &json!({"idToken": a["idToken"]}));
         assert_eq!(status, 400, "{case}: {refused}");
-        assert!(
-            registry.tenant_store("demo-app", TENANT_A).is_none(),
-            "{case}"
-        );
         let (status, tenants) = admin(
             &state,
             "GET",
@@ -594,12 +595,27 @@ fn a_missing_tenant_is_not_created_by_its_refusal() {
             &json!({}),
         );
         assert_eq!(status, 200, "{case}: {tenants}");
-        let names: Vec<&str> = tenants["tenants"]
+        let mut names: Vec<&str> = tenants["tenants"]
             .as_array()
             .map(|all| all.iter().filter_map(|t| t["name"].as_str()).collect())
             .unwrap_or_default();
-        assert_eq!(names.len(), 1, "{case}: {tenants}");
-        assert!(names[0].ends_with(TENANT_B), "{case}: {tenants}");
+        names.sort_unstable();
+        if case.starts_with("emulator") {
+            assert!(
+                registry.tenant_store("demo-app", TENANT_A).is_some(),
+                "{case}"
+            );
+            assert_eq!(names.len(), 2, "{case}: {tenants}");
+            assert!(names[0].ends_with(TENANT_A), "{case}: {tenants}");
+            assert!(names[1].ends_with(TENANT_B), "{case}: {tenants}");
+        } else {
+            assert!(
+                registry.tenant_store("demo-app", TENANT_A).is_none(),
+                "{case}"
+            );
+            assert_eq!(names.len(), 1, "{case}: {tenants}");
+            assert!(names[0].ends_with(TENANT_B), "{case}: {tenants}");
+        }
     }
 }
 

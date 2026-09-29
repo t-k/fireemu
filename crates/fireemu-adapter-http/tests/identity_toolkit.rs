@@ -4977,7 +4977,8 @@ fn oidc_provider_config_crud_is_namespaced_and_refusals_do_not_mutate() {
             &json!({})
         )
         .status,
-        404
+        // The official emulator makes the tenant on the way and lists its (no) configs.
+        200
     );
 }
 
@@ -14544,11 +14545,25 @@ fn client_namespace_selectors_fail_closed_without_default_fallback() {
             "password": "password1"
         }),
     );
-    assert_eq!(status, 404, "{refused}");
-    assert_eq!(refused["error"]["message"], "TENANT_NOT_FOUND");
+    // The named tenant is made on the way in the key's project (the official emulator's
+    // `getProjectStateById`), and the user lands in it: the request never falls back to the
+    // project namespace, in the key's project or in the default one.
+    assert_eq!(status, 200, "{refused}");
+    assert!(registry
+        .tenant_store("worker-auth", "missing-tenant")
+        .is_some());
+    assert!(registry
+        .tenant_store("demo-app", "missing-tenant")
+        .is_none());
     assert!(registry
         .store_for("worker-auth")
         .unwrap()
+        .lock()
+        .unwrap()
+        .user_by_email("missing-tenant@example.com")
+        .is_none());
+    assert!(s
+        .store
         .lock()
         .unwrap()
         .user_by_email("missing-tenant@example.com")

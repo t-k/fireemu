@@ -133,6 +133,22 @@ test("a marker is synced before the handle closes, and a file that changed under
   assert.equal(await readFile(other.path, "utf8"), "");
 });
 
+test("both opens refuse symbolic links and never block on a special file, and the append creates a private file", async (t) => {
+  const { createRecordingUsage } = await load();
+  const file = await scratch(t);
+  const { open } = await import("node:fs/promises");
+  const { constants } = await import("node:fs");
+  const opens = [];
+  const io = { open: async (path, flags, mode) => { opens.push({ flags, mode }); return open(path, flags, mode); } };
+  await createRecordingUsage({ path: file.path, packetSha256, io }).markStarted("run-one");
+  assert.equal(opens.length, 2);
+  const [read, write] = opens;
+  for (const flag of ["O_NOFOLLOW", "O_NONBLOCK"]) assert.ok((read.flags & constants[flag]) !== 0 && (write.flags & constants[flag]) !== 0, flag);
+  assert.ok((read.flags & constants.O_ACCMODE) === constants.O_RDONLY);
+  for (const flag of ["O_WRONLY", "O_APPEND", "O_CREAT"]) assert.ok((write.flags & constants[flag]) !== 0, flag);
+  assert.equal(write.mode, 0o600);
+});
+
 test("the uid option is an integer, and the io option is a closed record of functions", async (t) => {
   const { createRecordingUsage } = await load();
   const { path } = await scratch(t);

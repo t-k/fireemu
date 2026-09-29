@@ -139,7 +139,7 @@ test("every option is validated on its own, before any file is touched", async (
   const cases = {
     inputsPath: { inputsPath: 5 }, closure: { closure: [] }, sourceCommitType: { sourceCommit: 5, packet: { ...o.packet, sourceCommit: 5 } }, sourceCommitShape: { sourceCommit: "A".repeat(40), packet: { ...o.packet, sourceCommit: "A".repeat(40) } },
     locks: { locks: [] }, usagePath: { usagePath: 5 }, directory: { directory: 5 }, transportSend: { transport: { validate() {} } }, transportValidate: { transport: { send() {} } },
-    clockObject: { clock: [] }, clockNow: { clock: { waitUntilSeconds() {}, sleep() {} } }, clockWait: { clock: { nowSeconds() {}, sleep() {} } }, clockSleep: { clock: { nowSeconds() {}, waitUntilSeconds() {} } },
+    clockObject: { clock: [] }, clockInstance: { clock: new (class { nowSeconds() {} waitUntilSeconds() {} sleep() {} })() }, clockNow: { clock: { waitUntilSeconds() {}, sleep() {} } }, clockWait: { clock: { nowSeconds() {}, sleep() {} } }, clockSleep: { clock: { nowSeconds() {}, waitUntilSeconds() {} } },
     reviewLedger: { readLedger: "ledger" }, packet: { packet: [] }, runIdTooLong: { runId: `a${"b".repeat(48)}` },
   };
   for (const [name, patch] of Object.entries(cases)) await assert.rejects(withAssembledRun({ ...o, ...patch }, async () => assert.fail("must not run")), /invalid assembled run options/, name);

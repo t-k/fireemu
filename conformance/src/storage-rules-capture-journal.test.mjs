@@ -476,6 +476,29 @@ test("the delegated target HMAC follows every recorded part and the salt, and a 
   assert.notEqual(recompute((await ctx.rows()).at(-1).data, "7".repeat(64)), seen.at(-1));
 });
 
+test("a delegated target keeps no credential-bearing header of any kind and redacts every other header that is not public", async (t) => {
+  const ctx = await fixture(t);
+  await ctx.journal.writeDelegatedTarget(targetInput({ headers: { accept: "application/json", cookie: "session=CANARY-COOKIE", "proxy-authorization": "Basic CANARY-PROXY", authorization: "Bearer CANARY-BEARER", "x-secret-thing": "CANARY-SECRET-VALUE" } }));
+  const data = (await ctx.rows()).at(-1).data;
+  assert.deepEqual(data.headers.map(([name]) => name), ["accept", "x-secret-thing"]);
+  assert.match(data.headers[1][1], /^<redacted:header:[0-9a-f]{64}>$/);
+  assert.equal(JSON.stringify(data).includes("CANARY"), false);
+});
+
+test("a delegated target takes only plain data: a body that is a Buffer in name only, and headers that are not an ordinary record, are refused", async (t) => {
+  const ctx = await fixture(t);
+  const j = ctx.journal;
+  const spoofed = Buffer.from("body");
+  Object.setPrototypeOf(spoofed, Object.create(Buffer.prototype));
+  const hidden = { accept: "application/json" };
+  Object.defineProperty(hidden, "x-hidden", { value: "v", enumerable: false });
+  class Headers { constructor() { this.accept = "application/json"; } }
+  for (const bad of [targetInput({ body: spoofed }), targetInput({ headers: Object.assign(Object.create(null), { accept: "application/json" }) }), targetInput({ headers: new Headers() }), targetInput({ headers: hidden })]) {
+    await assert.rejects(j.writeDelegatedTarget(bad), /event refused/);
+  }
+  assert.equal((await ctx.rows()).filter((row) => row.event === "delegated-target").length, 0);
+});
+
 test("a delegated target refuses an undeclared operation, a bad method, a bad body, bad headers and anything past the size limits", async (t) => {
   const ctx = await fixture(t);
   const j = ctx.journal;

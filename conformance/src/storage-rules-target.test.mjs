@@ -436,6 +436,16 @@ test("query parameters are closed: no empty list, no control character, no overs
   for (const key of ["1x", "a-b", "_x", "x".repeat(65)]) rejects(b, { ...media, request: { ...media.request, query: { alt: "media", [key]: "1" } } }, key);
 });
 
+test("a resumable session is only ever sent to the Firebase Storage origin, even when the row and the URL agree on another one", async () => {
+  const b = await builder();
+  const finalize = manifest.rows.find((r) => r.request.headers["x-goog-upload-command"] === "upload, finalize");
+  const name = finalize.request.objectName;
+  for (const origin of ["https://storage.googleapis.com", "https://firebaserules.googleapis.com", "https://identitytoolkit.googleapis.com"]) {
+    const moved = { ...finalize, request: { ...finalize.request, origin } };
+    rejects(b, moved, origin, () => sessionUrl(name).replace("https://firebasestorage.googleapis.com", origin));
+  }
+});
+
 test("a resumable session URL must name this row's own object, and that object must be owned", async () => {
   const b = await builder();
   const finalize = manifest.rows.find((r) => r.request.headers["x-goog-upload-command"] === "upload, finalize");

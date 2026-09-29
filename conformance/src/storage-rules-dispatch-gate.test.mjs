@@ -372,6 +372,10 @@ test("gate options are a closed record of the required parts", async () => {
   for (const bad of [null, {}, { ...good, extra: 1 }, { ...good, transport: {} }, { ...good, capture: { ...good.capture, writeNote: undefined } }, { ...good, targets: { prepare() {} } }, { ...good, credentials: {} }, { ...good, admission: undefined }, { ...good, admission: {} }, { ...good, admission: { check() {} } }, { ...good, admission: { begin() {} } }, { ...good, transport: { send() {} } }, { ...good, transport: { validate() {} } }, { ...good, reservations: { ...good.reservations, onTerminal: 1 } }]) {
     assert.throws(() => createDispatchGate(bad), /invalid dispatch gate options/);
   }
+  // Every single required function matters on its own.
+  for (const part of ["reservations", "capture", "transport", "credentials", "admission"]) {
+    for (const name of Object.keys(good[part])) assert.throws(() => createDispatchGate({ ...good, [part]: { ...good[part], [name]: undefined } }), /invalid dispatch gate options/, `${part}.${name}`);
+  }
 });
 
 test("a finished counter refuses everything", async () => {

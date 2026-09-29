@@ -13572,7 +13572,10 @@ fn tenant_client_permissions_and_privacy_are_namespaced_and_atomic_with_password
         true
     );
     // The emulator profile's tenant keeps the project's email privacy (off here), as the
-    // official emulator's does; the write shows as written (round-2 integration review M1).
+    // official emulator's does. Its document shows that effective value, not what it wrote,
+    // which neither the official emulator nor production answers (known issue
+    // emulator-tenant-document-shows-the-projects-email-privacy; round-2 integration review M1
+    // and re-review S1).
     assert_eq!(updated.1["emailPrivacyConfig"], json!({}));
     assert_eq!(
         updated.1["passwordPolicyConfig"]["passwordPolicyVersions"][0]["customStrengthOptions"]
@@ -13937,7 +13940,10 @@ fn tenant_create_rejects_malformed_settings_before_publishing_and_reads_back_sup
         true
     );
     // The emulator profile's tenant keeps the project's email privacy (off here), as the
-    // official emulator's does; the write shows as written (round-2 integration review M1).
+    // official emulator's does. Its document shows that effective value, not what it wrote,
+    // which neither the official emulator nor production answers (known issue
+    // emulator-tenant-document-shows-the-projects-email-privacy; round-2 integration review M1
+    // and re-review S1).
     assert_eq!(created.body["emailPrivacyConfig"], json!({}));
     assert_eq!(
         created.body["passwordPolicyConfig"]["passwordPolicyVersions"][0]["customStrengthOptions"]

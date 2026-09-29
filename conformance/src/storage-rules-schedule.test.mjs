@@ -195,3 +195,118 @@ test("every session is asked again right after its cancel and before the case en
     assert.ok(cancel >= 0 && verify === cancel + 1, session.caseId);
   }
 });
+
+// Recovery: the reviewed order of the declared recovery rows, each group enabled by ledger facts at run time.
+const recoverySchedule = async () => {
+  const module = await load();
+  assert.equal(typeof module.buildRecoverySchedule, "function");
+  return module.buildRecoverySchedule(manifest);
+};
+const recoveryIds = (step) => (step.type === "row" ? [step.id] : step.rowIds);
+
+test("each recovery row is scheduled exactly once", async () => {
+  const s = await recoverySchedule();
+  assert.equal(Object.isFrozen(s), true);
+  const seen = new Set();
+  for (const step of s.steps) for (const id of recoveryIds(step)) { assert.equal(seen.has(id), false, id); seen.add(id); }
+  const declared = manifest.rows.filter((r) => r.phase === "recovery").map((r) => r.id);
+  assert.equal(seen.size, declared.length);
+  assert.ok(declared.every((id) => seen.has(id)));
+  assert.equal(declared.length, 1534);
+  assert.ok(s.steps.every((step) => recoveryIds(step).every((id) => id.startsWith("recovery/"))));
+});
+
+test("recovery runs the release, the restore settle, the owner media, sessions, objects, documents, accounts, Rulesets, the list and the prefix in that order", async () => {
+  const s = await recoverySchedule();
+  const first = (predicate) => position(s.steps, predicate);
+  const order = [
+    first(rowStep("recovery/release/restore/owner-before-delete")),
+    first(rowStep("recovery/release/restore/bucketless-absence")),
+    first((step) => step.type === "settle" && step.name === "restore"),
+    first(rowStep("recovery/management/restore-owner-media/0")),
+    first((step) => step.type === "row" && /^recovery\/session\//.test(step.id)),
+    first((step) => step.type === "row" && /^recovery\/object-0\//.test(step.id)),
+    first((step) => step.type === "row" && /^recovery\/document-0\//.test(step.id)),
+    first((step) => step.type === "delegate" && step.op === "recover-accounts"),
+    first((step) => step.type === "row" && /^recovery\/ruleset\//.test(step.id)),
+    first((step) => step.type === "pages"),
+    first(rowStep("recovery/management/prefix-empty")),
+  ];
+  assert.ok(order.every((index) => index >= 0), JSON.stringify(order));
+  assert.deepEqual(order, [...order].sort((a, b) => a - b));
+  assert.equal(new Set(order).size, order.length);
+  assert.equal(s.steps.at(-1).type === "row" && s.steps.at(-1).id, "recovery/management/prefix-empty");
+});
+
+test("a recovery resource keeps its own steps together: current read, delete, then its absences", async () => {
+  const s = await recoverySchedule();
+  const ids = s.steps.filter((step) => step.type === "row").map((step) => step.id);
+  const objectOrder = ids.filter((id) => id.startsWith("recovery/object-0/"));
+  assert.deepEqual(objectOrder.map((id) => id.split("/").at(-1)), ["metadata", "delete", "absence-metadata", "absence-media"]);
+  const start = ids.indexOf("recovery/object-0/metadata");
+  assert.deepEqual(ids.slice(start, start + 4), objectOrder);
+  for (const kind of ["document", "ruleset"]) {
+    const group = ids.filter((id) => id.startsWith(`recovery/${kind}`)).slice(0, 3);
+    assert.deepEqual(group.map((id) => id.split("/").at(-1)), ["current", "delete", "absence"]);
+  }
+  const sessions = ids.filter((id) => id.startsWith("recovery/session/")).slice(0, 3);
+  assert.deepEqual(sessions.map((id) => id.split("/").at(-1)), ["current", "cancel", "terminal"]);
+  assert.equal(new Set(sessions.map((id) => id.split("/")[2])).size, 1);
+});
+
+test("the recovery restore settle carries the recovery rows, the witnesses and the restoration limits", async () => {
+  const s = await recoverySchedule();
+  const step = s.steps.find((entry) => entry.type === "settle");
+  assert.equal(step.name, "restore");
+  assert.equal(step.rowIds.length, 60);
+  assert.ok(step.rowIds.every((id) => id.startsWith("recovery/settle/restore/")));
+  assert.equal(step.intervalMs, manifest.restoration.intervalMs);
+  assert.deepEqual(step.config, { kind: "restoration", name: "restore", phase: "recovery", maxCycles: manifest.restoration.maxCycles, requiredConsecutive: manifest.restoration.consecutiveCompleteCycles, witnesses: step.config.witnesses });
+  assert.equal(step.config.witnesses.length, 4);
+  assert.ok(step.config.witnesses.every((w) => w.expect === "denied" && manifest.resources.controls.includes(w.objectName)));
+  const pages = s.steps.find((entry) => entry.type === "pages");
+  assert.equal(pages.rowIds.length, 10);
+  assert.equal(pages.stopWhen, "no-next-page-token");
+});
+
+test("the recovery accounts and their shared token are delegated as one group", async () => {
+  const s = await recoverySchedule();
+  const group = s.steps.filter((step) => step.type === "delegate");
+  assert.deepEqual(group.map((step) => step.op), ["recover-accounts"]);
+  assert.equal(group[0].rowIds.length, 16);
+  assert.ok(group[0].rowIds.every((id) => /^recovery\/auth\//.test(id) || /^recovery\/auth-shared\//.test(id)));
+});
+
+test("the recovery schedule is deterministic and refuses a manifest that lost recovery rows", async () => {
+  const module = await load();
+  assert.deepEqual(module.buildRecoverySchedule(manifest), module.buildRecoverySchedule(manifest));
+  const rows = manifest.rows.filter((r) => r.id !== "recovery/object-0/delete");
+  assert.throws(() => module.buildRecoverySchedule({ ...manifest, rows }), /invalid schedule manifest/);
+  assert.throws(() => module.buildRecoverySchedule({ ...manifest, sendAuthorized: true }), /invalid schedule manifest/);
+});
+
+test("recovery steps carry the ledger fact that enables them, and only the resource-free groups run unconditionally", async () => {
+  const { createRunLedger } = await import("./storage-rules/run-ledger.mjs");
+  const { createResourceLedger } = await import("./storage-rules/resource-ledger.mjs");
+  const run = createRunLedger({ manifest, objects: createResourceLedger({ manifest }) });
+  const s = await recoverySchedule();
+  const enabled = new Map();
+  for (const step of s.steps) {
+    if (step.enabledBy !== undefined) { assert.equal(typeof run.recoveryEnabled(step.enabledBy), "boolean", step.enabledBy); }
+    for (const id of recoveryIds(step)) enabled.set(id, step.enabledBy ?? null);
+  }
+  const of = (id) => enabled.get(id);
+  assert.equal(of("recovery/release/restore/owner-before-delete"), "release-written-not-deleted");
+  assert.equal(of("recovery/release/restore/delete"), "release-written-not-deleted");
+  assert.equal(of("recovery/release/restore/bucket-absence"), "release-written");
+  assert.equal(of("recovery/release/restore/bucketless-absence"), "release-written");
+  assert.equal(of("recovery/settle/restore/1/0"), "restore-needed");
+  for (const index of [0, 1, 2, 3]) assert.equal(of(`recovery/management/restore-owner-media/${index}`), "restore-needed");
+  for (const name of ["v1", "v2", "A", "B"]) {
+    assert.equal(of(`recovery/ruleset/${name}/current`), `ruleset-created-not-deleted:${name}`);
+    assert.equal(of(`recovery/ruleset/${name}/delete`), `ruleset-created-not-deleted:${name}`);
+    assert.equal(of(`recovery/ruleset/${name}/absence`), `ruleset-attempted:${name}`);
+  }
+  for (const session of manifest.resources.sessions) for (const stage of ["current", "cancel", "terminal"]) assert.equal(of(`recovery/session/${session.caseId}/${stage}`), `session-started:${session.caseId}`);
+  for (const [id, by] of enabled) if (/^recovery\/(object-|document-|rulesets-list|management\/prefix-empty|auth)/.test(id)) assert.equal(by, null, id);
+});

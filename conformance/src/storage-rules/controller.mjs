@@ -17,10 +17,10 @@ const DEFER = new Set(["admission", "delegate", "refs", "structure", "policy", "
 
 export function createController(options) {
   const fail = () => { throw new Error("invalid controller options"); };
-  const keys = ["manifest", "schedule", "gate", "targets", "refs", "tables", "objects", "run", "capture", "delegates", "wait", "credentials", "judgePreflight"];
+  const keys = ["manifest", "schedule", "recoverySchedule", "gate", "targets", "refs", "tables", "objects", "run", "capture", "delegates", "wait", "credentials", "judgePreflight"];
   if (!plain(options) || Reflect.ownKeys(options).length !== keys.length || !keys.every((key) => Object.hasOwn(options, key))) fail();
-  const { manifest, schedule, gate, targets, refs, tables, objects, run, capture, delegates, wait, credentials, judgePreflight } = options;
-  if (!manifest || manifest.sendAuthorized !== false || !schedule?.steps || ![gate?.send, gate?.start, gate?.admit, gate?.finish, targets?.prepare, refs?.bind, refs?.resolve, objects?.evaluate, run?.evaluate, capture?.writeFacts, capture?.writeNote, wait, credentials?.fresh, judgePreflight].every(callable) || !plain(delegates)) fail();
+  const { manifest, schedule, recoverySchedule, gate, targets, refs, tables, objects, run, capture, delegates, wait, credentials, judgePreflight } = options;
+  if (!manifest || manifest.sendAuthorized !== false || !schedule?.steps || !recoverySchedule?.steps || typeof run?.recoveryEnabled !== "function" || ![gate?.send, gate?.start, gate?.admit, gate?.finish, targets?.prepare, refs?.bind, refs?.resolve, objects?.evaluate, run?.evaluate, capture?.writeFacts, capture?.writeNote, wait, credentials?.fresh, judgePreflight].every(callable) || !plain(delegates)) fail();
   const rowById = new Map(manifest.rows.map((row) => [row.id, row]));
   const skipped = [];
   const seedDigest = new Map();
@@ -133,7 +133,7 @@ export function createController(options) {
     for (let read = nextRead(state); read !== null; read = nextRead(state)) {
       const row = rowById.get(read.rowId);
       const digest = seedDigest.get(read.witness.objectName);
-      const outcome = await execute(row, "normal", { ctx: { expectedSha256: digest ?? "0".repeat(64) } });
+      const outcome = await execute(row, step.config.phase, { ctx: { expectedSha256: digest ?? "0".repeat(64) } });
       if (outcome === null) throw new RunStop("settle read skipped", { rowId: row.id });
       state = applyVerdict(state, outcome.verdict);
       if (state.status === "running" && read.index === step.config.witnesses.length - 1) await wait(step.intervalMs);
@@ -142,9 +142,9 @@ export function createController(options) {
     if (state.status !== "settled") throw new RunStop("settle exhausted", { name: step.name });
   }
 
-  async function pagesStep(step) {
+  async function pagesStep(step, phase) {
     for (let index = 0; index < step.rowIds.length; index++) {
-      const outcome = await execute(rowById.get(step.rowIds[index]), "normal");
+      const outcome = await execute(rowById.get(step.rowIds[index]), phase);
       if (outcome !== null && !outcome.facts.hasNextPage) return;
     }
     throw new RunStop("more than ten Ruleset pages");
@@ -167,7 +167,29 @@ export function createController(options) {
     for (const step of schedule.steps) {
       if (step.type === "row") await execute(rowById.get(step.id), "normal");
       else if (step.type === "settle") await settleStep(step);
-      else if (step.type === "pages") await pagesStep(step);
+      else if (step.type === "pages") await pagesStep(step, "normal");
+      else if (step.type === "delegate") {
+        if (!callable(delegates[step.op])) throw new RunStop("delegate missing", { op: step.op });
+        await delegates[step.op](step);
+      } else throw new RunStop("unknown step", { type: step.type });
+    }
+  }
+
+  // Recovery: the declared recovery rows in the reviewed order. Each row is enabled by the ledgers' facts (a skip costs nothing,
+  // a failed guard stops), the same gate, ledgers and checks apply, and recovery never resends or widens what a row may do.
+  // It closes as `recovered` only when the last row, the owned-prefix check behind every cleanup guard, was sent and accepted.
+  let recoveryAttempted = false;
+  async function recoverAll() {
+    for (const step of recoverySchedule.steps) {
+      if (step.enabledBy !== undefined && !run.recoveryEnabled(step.enabledBy)) {
+        const ids = step.type === "row" ? [step.id] : step.rowIds;
+        skipped.push(...ids);
+        await capture.writeNote({ operationId: null, text: `skipped ${ids.length} recovery row(s), ${step.enabledBy} is not true: ${ids[0]}` });
+        continue;
+      }
+      if (step.type === "row") await execute(rowById.get(step.id), "recovery");
+      else if (step.type === "settle") await settleStep(step);
+      else if (step.type === "pages") await pagesStep(step, "recovery");
       else if (step.type === "delegate") {
         if (!callable(delegates[step.op])) throw new RunStop("delegate missing", { op: step.op });
         await delegates[step.op](step);
@@ -176,6 +198,26 @@ export function createController(options) {
   }
 
   return Object.freeze({
+    async recover() {
+      const mode = gate.snapshot().mode;
+      if (recoveryAttempted || !["normal", "recovery"].includes(mode)) return Object.freeze({ status: "refused", reason: recoveryAttempted ? "recovery already attempted" : "the counter is not open" });
+      recoveryAttempted = true;
+      const start = executed;
+      const startSkipped = skipped.length;
+      const finalRow = recoverySchedule.steps.at(-1)?.id;
+      let proven = false;
+      try {
+        if (mode === "normal") gate.enterRecovery();
+        await recoverAll();
+        proven = !skipped.slice(startSkipped).includes(finalRow);
+      } catch (error) {
+        if (!(error instanceof RunStop)) throw error;
+        await gate.finish("needs-recovery");
+        return Object.freeze({ status: "stopped", reason: error.reason, detail: Object.freeze({ ...error.detail }), requests: executed - start, skipped: Object.freeze(skipped.slice(startSkipped)), needsRecovery: true });
+      }
+      await gate.finish(proven ? "recovered" : "needs-recovery");
+      return Object.freeze({ status: proven ? "recovered" : "stopped", ...(proven ? {} : { reason: "owned-prefix check skipped", detail: Object.freeze({}), needsRecovery: true }), requests: executed - start, skipped: Object.freeze(skipped.slice(startSkipped)) });
+    },
     async run() {
       try {
         await runAll();

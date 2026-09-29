@@ -105,3 +105,61 @@ function build(manifest) {
   if (covered.size !== expected.length || expected.some((id) => !covered.has(id))) bad();
   return Object.freeze({ preflight: Object.freeze([...PREFLIGHT_ORDER]), steps: Object.freeze(steps.map((step) => Object.freeze(step))) });
 }
+
+export function buildRecoverySchedule(manifest) {
+  try { return buildRecovery(manifest); } catch { return bad(); }
+}
+
+// The reviewed recovery order (design review section B): each step is enabled at run time only by ledger facts, and a
+// resource keeps its own steps together. Auth accounts and their shared token are one delegated group.
+function buildRecovery(manifest) {
+  if (!manifest || manifest.sendAuthorized !== false || !Array.isArray(manifest.rows) || !manifest.restoration) bad();
+  const recovery = manifest.rows.filter((r) => r.phase === "recovery");
+  if (manifest.counts?.recovery !== recovery.length) bad();
+  const byId = new Map(recovery.map((row) => [row.id, row]));
+  const steps = [];
+  const row = (id, enabledBy) => { if (!byId.has(id)) bad(); steps.push(enabledBy === undefined ? { type: "row", id } : { type: "row", id, enabledBy }); };
+  const family = (name) => recovery.filter((r) => r.family === name);
+  // Rows of one resource in the manifest's order, grouped by the resource segment of the ID (recovery/<kind>/<resource>/<stage>).
+  const grouped = (name, stages, resourceOf, enabledByOf) => {
+    const groups = new Map();
+    for (const r of family(name)) {
+      const key = resourceOf(r);
+      if (!groups.has(key)) groups.set(key, new Map());
+      if (groups.get(key).has(r.stage)) bad();
+      groups.get(key).set(r.stage, r.id);
+    }
+    for (const [key, stageMap] of groups) {
+      if (stageMap.size !== stages.length || !stages.every((stage) => stageMap.has(stage))) bad();
+      stages.forEach((stage) => row(stageMap.get(stage), enabledByOf?.(key, stage)));
+    }
+  };
+  const segment = (index) => (r) => r.id.split("/")[index];
+
+  // The release goes only when a release write was attempted; its readback and delete only while it is not deleted yet.
+  ["owner-before-delete", "delete"].forEach((stage) => row(`recovery/release/restore/${stage}`, "release-written-not-deleted"));
+  ["bucket-absence", "bucketless-absence"].forEach((stage) => row(`recovery/release/restore/${stage}`, "release-written"));
+  const settleRows = family("settle").filter((r) => r.programId === "restore");
+  const witnesses = settleRows.filter((r) => r.id.startsWith("recovery/settle/restore/1/")).map((r) => ({ objectName: r.request.objectName, expect: "denied" }));
+  if (witnesses.length !== 4 || settleRows.length !== 60) bad();
+  steps.push({
+    type: "settle", name: "restore", enabledBy: "restore-needed", rowIds: settleRows.map((r) => r.id), intervalMs: manifest.restoration.intervalMs,
+    config: { kind: "restoration", name: "restore", phase: "recovery", maxCycles: manifest.restoration.maxCycles, requiredConsecutive: manifest.restoration.consecutiveCompleteCycles, witnesses },
+  });
+  [0, 1, 2, 3].forEach((index) => row(`recovery/management/restore-owner-media/${index}`, "restore-needed"));
+  grouped("recovery-session", ["current", "cancel", "terminal"], segment(2), (key) => `session-started:${key}`);
+  grouped("recovery-object", ["metadata", "delete", "absence-metadata", "absence-media"], segment(1));
+  grouped("recovery-document", ["current", "delete", "absence"], segment(1));
+  steps.push({ type: "delegate", op: "recover-accounts", rowIds: recovery.filter((r) => r.family === "auth" || r.family === "credential-cache").map((r) => r.id) });
+  for (const name of ["v1", "v2", "A", "B"]) {
+    ["current", "delete"].forEach((stage) => row(`recovery/ruleset/${name}/${stage}`, `ruleset-created-not-deleted:${name}`));
+    row(`recovery/ruleset/${name}/absence`, `ruleset-attempted:${name}`);
+  }
+  steps.push({ type: "pages", rowIds: Array.from({ length: 10 }, (_, index) => { const id = `recovery/rulesets-list/final/${index + 1}`; if (!byId.has(id)) bad(); return id; }), stopWhen: "no-next-page-token" });
+  row("recovery/management/prefix-empty");
+
+  const seen = new Set();
+  for (const step of steps) for (const id of step.type === "row" ? [step.id] : step.rowIds) { if (seen.has(id)) bad(); seen.add(id); }
+  if (seen.size !== recovery.length || recovery.some((r) => !seen.has(r.id))) bad();
+  return Object.freeze({ steps: Object.freeze(steps.map((step) => Object.freeze(step))) });
+}

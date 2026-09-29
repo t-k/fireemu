@@ -8,7 +8,7 @@ import { buildFullRequestManifest } from "./storage-rules/full-manifest.mjs";
 import { createResourceLedger } from "./storage-rules/resource-ledger.mjs";
 import { createRunLedger } from "./storage-rules/run-ledger.mjs";
 import { buildRefTables, createRuntimeRefStore } from "./storage-rules/runtime-refs.mjs";
-import { buildSchedule } from "./storage-rules/schedule.mjs";
+import { buildRecoverySchedule, buildSchedule } from "./storage-rules/schedule.mjs";
 import { createTargetBuilder } from "./storage-rules/target.mjs";
 import { createSimulator } from "./storage-rules-simulator.mjs";
 
@@ -171,8 +171,8 @@ async function harness(admissionOverrides = {}) {
   const gate = createDispatchGate({ reservations, capture, transport, targets, credentials: { headersFor: (c) => (c === "anonymous" ? {} : { authorization: "Bearer SIM" }) }, preflightIds, admission });
   const noop = async () => {};
   const controller = createController({
-    manifest, schedule: buildSchedule(manifest), gate, targets, refs, tables, objects, run, capture,
-    delegates: { "preflight-cache": noop, "credential-cache": noop, "prepare-query": noop, "foreign-signup": noop, "foreign-cleanup": noop, "cleanup-query": noop },
+    manifest, schedule: buildSchedule(manifest), recoverySchedule: buildRecoverySchedule(manifest), gate, targets, refs, tables, objects, run, capture,
+    delegates: { "preflight-cache": noop, "credential-cache": noop, "prepare-query": noop, "foreign-signup": noop, "foreign-cleanup": noop, "cleanup-query": noop, "recover-accounts": noop },
     wait: async () => {}, credentials: { fresh: () => true }, judgePreflight: (row, outcome) => outcome.verdict !== "unexpected",
   });
   return { controller, gate, admission, transportCalls, started, hooks, state: created.state, simulator };
@@ -249,4 +249,18 @@ test("the gate requires an admission", async () => {
   assert.throws(() => createDispatchGate(gateOptions()), /invalid dispatch gate options/);
   assert.throws(() => createDispatchGate(gateOptions({})), /invalid dispatch gate options/);
   assert.doesNotThrow(() => createDispatchGate(gateOptions({ check: async () => ({ admitted: true }) })));
+});
+
+test("a revocation stops recovery too: no recovery request leaves once the approval is gone", async () => {
+  const h = await harness();
+  let stop = false;
+  h.hooks.after = async (request) => { if (!stop && h.simulator.state().objects >= 6) { stop = true; h.state.set(`${goodLedger}\n${revoked("STORAGE-RULES stage3-v1")}`); } };
+  const stopped = await h.controller.run();
+  assert.equal(stopped.reason, "admission refused");
+  const calls = h.transportCalls.count;
+  const result = await h.controller.recover();
+  assert.equal(result.status, "stopped");
+  assert.equal(result.reason, "admission refused");
+  assert.equal(h.transportCalls.count, calls);
+  assert.equal(h.gate.snapshot().mode, "closed");
 });

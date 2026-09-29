@@ -157,7 +157,24 @@ export function createRunLedger(options) {
     }
     const control = controlIndex(row);
     if (control !== null && /\/cleanup-metadata$/.test(row.id) && (verdict === "present" || verdict === "absent")) controlReadbacks.add(control);
-    if (/^management\/restore-owner-media\//.test(row.id) && verdict === "present") ownerMedia.add(row.id);
+    if (/^(?:recovery\/)?management\/restore-owner-media\/(\d)$/.test(row.id) && verdict === "present") ownerMedia.add(row.id.slice(-1));
+  }
+
+  // Whether a group of recovery rows is enabled by what the ledgers know. Closed vocabulary; it reads state and changes nothing.
+  function recoveryEnabled(name) {
+    if (typeof name !== "string") bad("invalid recovery group");
+    if (name === "release-written") return release.createAttempted || release.uncertain;
+    if (name === "release-written-not-deleted") return release.createAttempted && !release.deleteAttempted;
+    if (name === "restore-needed") return witnesses.some((object) => objects.object(object).started) && ownerMedia.size < WITNESS_INDEXES.length;
+    const separator = name.indexOf(":");
+    const kind = name.slice(0, separator);
+    const key = name.slice(separator + 1);
+    if (kind === "session-started" && sessions.has(key)) { const s = sessions.get(key); return s.startConfirmed || s.state !== "none"; }
+    if ((kind === "ruleset-attempted" || kind === "ruleset-created-not-deleted") && SOURCES.includes(key)) {
+      const r = rulesets.get(key);
+      return kind === "ruleset-attempted" ? r.createAttempted : r.createAttempted && !r.deleteAttempted;
+    }
+    return bad("invalid recovery group");
   }
 
   function recordSettle(name, status) {
@@ -270,6 +287,7 @@ export function createRunLedger(options) {
       const d = documents.get(name) ?? bad("unowned resource");
       return Object.freeze({ started: d.started, latest: d.latest, updateTime: d.updateTime, deleteAttempted: d.deleteAttempted, deletable: d.started && d.latest === "present" && d.updateTime !== null && !d.uncertain });
     },
+    recoveryEnabled,
     ownedTokens: () => Object.freeze([...OWNED_TOKENS].sort()),
     checkTokens: () => Object.freeze(Object.keys(CHECKS).sort()),
     snapshot: () => Object.freeze({

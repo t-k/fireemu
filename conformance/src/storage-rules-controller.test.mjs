@@ -11,7 +11,7 @@ import { createReservationJournal } from "./storage-rules/reservation-journal.mj
 import { createResourceLedger } from "./storage-rules/resource-ledger.mjs";
 import { createRunLedger } from "./storage-rules/run-ledger.mjs";
 import { buildRefTables, createRuntimeRefStore } from "./storage-rules/runtime-refs.mjs";
-import { buildSchedule } from "./storage-rules/schedule.mjs";
+import { buildRecoverySchedule, buildSchedule } from "./storage-rules/schedule.mjs";
 import { createTargetBuilder } from "./storage-rules/target.mjs";
 import { createSimulator } from "./storage-rules-simulator.mjs";
 
@@ -47,8 +47,8 @@ async function harness({ capture = memoryCapture(), simulatorOptions = {}, crede
   const gate = createDispatchGate({ reservations: harnessReservations ?? reservations, capture, transport: simulator, targets, credentials: { headersFor: (c) => (c === "anonymous" ? {} : { authorization: `Bearer ${BEARER}` }) }, preflightIds, admission: { check: async () => ({ admitted: true }) } });
   const noop = async () => {};
   const controller = createController({
-    manifest, schedule: buildSchedule(manifest), gate, targets, refs, tables, objects, run, capture,
-    delegates: { "preflight-cache": noop, "credential-cache": noop, "prepare-query": noop, "foreign-signup": noop, "foreign-cleanup": noop, "cleanup-query": noop, ...delegates },
+    manifest, schedule: buildSchedule(manifest), recoverySchedule: buildRecoverySchedule(manifest), gate, targets, refs, tables, objects, run, capture,
+    delegates: { "preflight-cache": noop, "credential-cache": noop, "prepare-query": noop, "foreign-signup": noop, "foreign-cleanup": noop, "cleanup-query": noop, "recover-accounts": noop, ...delegates },
     wait: async (ms) => { waits.push(ms); }, credentials: { fresh: credentialsFresh }, judgePreflight: judge ?? ((row, outcome) => outcome.verdict !== "unexpected"),
   });
   return { controller, simulator, gate, objects, run, refs, capture, trace, waits };
@@ -199,6 +199,159 @@ test("every request the controller sends is one the schedule names, exactly once
   assert.equal(sent.some((id) => id.startsWith("recovery/")), false);
   const skippedAndSent = result.skipped.filter((id) => sent.includes(id));
   assert.deepEqual(skippedAndSent, []);
+});
+
+// Recovery: the same controller, ledgers and gate finish what a stopped run left behind, using only the declared recovery rows.
+const clean = { objects: 0, rulesets: 0, release: null, documents: 0 };
+const cleanOf = (h) => { const state = h.simulator.state(); return { objects: state.objects, rulesets: state.rulesets, release: state.release, documents: state.documents }; };
+const sentIds = (h) => h.trace.filter((id) => id !== "started" && !id.startsWith("terminal"));
+
+test("after a stop with the release published, recovery removes everything the run made and closes as recovered", async () => {
+  const h = await harness({ credentialsFresh: () => false });
+  const stopped = await h.controller.run();
+  assert.equal(stopped.needsRecovery, true);
+  assert.ok(h.simulator.state().rulesets > 0 && h.simulator.state().objects > 0 && h.simulator.state().release !== null);
+  const before = sentIds(h).length;
+  const result = await h.controller.recover();
+  assert.equal(result.status, "recovered", JSON.stringify(result));
+  assert.deepEqual(cleanOf(h), clean);
+  assert.deepEqual([...h.objects.residual()], []);
+  assert.equal(h.trace.at(-1), "terminal:recovered");
+  assert.equal(h.gate.snapshot().mode, "closed");
+  const recoverySent = sentIds(h).slice(before);
+  assert.ok(recoverySent.length > 0 && recoverySent.every((id) => id.startsWith("recovery/")));
+  assert.equal(new Set(sentIds(h)).size, sentIds(h).length);
+  assert.equal(result.requests, recoverySent.length);
+  assert.ok(recoverySent.length <= 2000);
+  assert.equal(recoverySent.at(-1), "recovery/management/prefix-empty");
+});
+
+test("recovery never sends a second delete for a resource whatever ID carries it", async () => {
+  const h = await harness({ credentialsFresh: () => false });
+  await h.controller.run();
+  await h.controller.recover();
+  const deletes = h.simulator.state().log.filter((line) => /^DELETE /.test(line));
+  assert.equal(new Set(deletes).size, deletes.length);
+});
+
+test("recovery after a lost connection continues in the counter's recovery mode", async () => {
+  const call = await firstCall(/^POST storage\.googleapis\.com\/upload/);
+  const h = await harness({ simulatorOptions: { failures: new Map([[call, "throw"]]) } });
+  const stopped = await h.controller.run();
+  assert.equal(stopped.reason, "outcome uncertain");
+  assert.equal(h.gate.snapshot().mode, "recovery");
+  const result = await h.controller.recover();
+  // The uncertain create is not owned, so recovery never deletes it and reports what remains.
+  assert.ok(["recovered", "stopped"].includes(result.status), JSON.stringify(result));
+  assert.equal(h.gate.snapshot().mode, "closed");
+  const afterFailure = sentIds(h).slice(sentIds(h).indexOf("management/control-0/seed") + 1);
+  assert.ok(afterFailure.every((id) => id.startsWith("recovery/")));
+});
+
+test("a recovery step that meets a surprise stops recovery and closes as needs-recovery", async () => {
+  const h = await harness({ credentialsFresh: () => false });
+  await h.controller.run();
+  const calls = h.simulator.state().calls;
+  // The recovery's first request fails with a server error: nothing recovery may assume, so it stops.
+  const failing = await harness({ credentialsFresh: () => false, simulatorOptions: { failures: new Map([[calls + 1, () => response(500, { error: { code: 500, message: "boom" } })]]) } });
+  await failing.controller.run();
+  const result = await failing.controller.recover();
+  assert.equal(result.status, "stopped");
+  assert.ok(["unexpected verdict", "check failed", "guard failed", "unclassifiable response"].includes(result.reason), result.reason);
+  assert.equal(failing.trace.at(-1), "terminal:needs-recovery");
+  assert.equal(failing.gate.snapshot().mode, "closed");
+  assert.equal((await failing.controller.recover()).status, "refused");
+});
+
+// The number (1-based) of the simulator call that carries the row `nth` after the first row matching, from a dry run.
+async function callAfter(predicate, offset = 1) {
+  const h = await harness();
+  await h.controller.run();
+  const index = sentIds(h).findIndex((id) => predicate(manifest.rows.find((r) => r.id === id)));
+  assert.ok(index >= 0);
+  return index + offset + 1;
+}
+const failWith500 = (call) => ({ failures: new Map([[call, () => response(500, { error: { code: 500, message: "boom" } })]]) });
+
+test("a stop before any release was written skips the release group but still restores the witnesses before deleting them", async () => {
+  const h = await harness({ simulatorOptions: { invalidContent: "never matches anything" } });
+  const stopped = await h.controller.run();
+  assert.equal(stopped.reason, "unexpected verdict");
+  assert.ok(h.simulator.state().objects > 0);
+  const before = sentIds(h).length;
+  const result = await h.controller.recover();
+  assert.equal(result.status, "recovered", JSON.stringify(result));
+  assert.deepEqual(cleanOf(h), clean);
+  const recoverySent = sentIds(h).slice(before);
+  assert.equal(recoverySent.some((id) => id.startsWith("recovery/release/")), false);
+  // The witness deletion is guarded by the four owner readbacks, which follow the restore settle.
+  assert.equal(recoverySent.filter((id) => id.startsWith("recovery/management/restore-owner-media/")).length, 4);
+  assert.ok(recoverySent.some((id) => id.startsWith("recovery/settle/restore/")));
+  assert.ok(recoverySent.findIndex((id) => id.startsWith("recovery/settle/")) < recoverySent.findIndex((id) => id.startsWith("recovery/management/restore-owner-media/")));
+  assert.ok(recoverySent.findIndex((id) => id.startsWith("recovery/management/restore-owner-media/3")) < recoverySent.findIndex((id) => id.startsWith("recovery/object-")));
+  assert.equal(recoverySent.some((id) => id.startsWith("recovery/object-")), true);
+  assert.equal(h.trace.at(-1), "terminal:recovered");
+});
+
+test("a stop after an open upload session cancels it once and verifies it", async () => {
+  const start = (r) => r.request.headers?.["x-goog-upload-command"] === "start";
+  const call = await callAfter(start, 1);
+  const h = await harness({ simulatorOptions: failWith500(call) });
+  const stopped = await h.controller.run();
+  assert.equal(stopped.status, "stopped");
+  assert.ok(h.simulator.state().sessions.some((state) => state === "active"), JSON.stringify(h.simulator.state().sessions));
+  const result = await h.controller.recover();
+  assert.equal(result.status, "recovered", JSON.stringify(result));
+  assert.ok(h.simulator.state().sessions.every((state) => state === "final" || state === "cancelled"));
+  assert.deepEqual(cleanOf(h), clean);
+  const cancels = sentIds(h).filter((id) => /^recovery\/session\/.*\/cancel$/.test(id));
+  assert.equal(cancels.length, 1);
+});
+
+test("a stop after a document write recovers the document", async () => {
+  const write = (r) => r.service === "firestore" && ["PATCH", "POST", "PUT"].includes(r.request.method);
+  const call = await callAfter(write, 1);
+  const h = await harness({ simulatorOptions: failWith500(call) });
+  const stopped = await h.controller.run();
+  assert.equal(stopped.status, "stopped");
+  assert.ok(h.simulator.state().documents > 0);
+  const result = await h.controller.recover();
+  assert.equal(result.status, "recovered", JSON.stringify(result));
+  assert.deepEqual(cleanOf(h), clean);
+});
+
+test("a release delete that failed is never retried, and recovery reports the release it cannot prove gone", async () => {
+  const call = await firstCall(/^DELETE firebaserules\.googleapis\.com\/v1\/projects\/fireemu-oracle-query\/releases\/firebase\.storage\/synthetic-rules-bucket/);
+  const h = await harness({ simulatorOptions: failWith500(call) });
+  const stopped = await h.controller.run();
+  assert.equal(stopped.status, "stopped");
+  const result = await h.controller.recover();
+  assert.equal(result.status, "stopped");
+  assert.equal(h.trace.at(-1), "terminal:needs-recovery");
+  assert.equal(sentIds(h).some((id) => id === "recovery/release/restore/delete"), false);
+  assert.notEqual(h.simulator.state().release, null);
+});
+
+test("recovery refuses to start before admission or after a close, and sends nothing", async () => {
+  const fresh = await harness();
+  const none = await fresh.controller.recover();
+  assert.equal(none.status, "refused");
+  assert.equal(fresh.simulator.state().calls, 0);
+  const done = await harness();
+  await done.controller.run();
+  const calls = done.simulator.state().calls;
+  const after = await done.controller.recover();
+  assert.equal(after.status, "refused");
+  assert.equal(done.simulator.state().calls, calls);
+});
+
+test("recovery is enabled by ledger facts: a run stopped before any write recovers nothing and sends no delete", async () => {
+  const h = await harness({ judge: (row) => row.id !== "preflight/query/project" });
+  await h.controller.run();
+  const calls = h.simulator.state().calls;
+  const result = await h.controller.recover();
+  assert.equal(result.status, "refused");
+  assert.equal(h.simulator.state().calls, calls);
 });
 
 async function walk(directory) {

@@ -405,3 +405,70 @@ test("the absence reads of a control follow its final readback and its deletion,
   noReadback.objects.recordIntent(del);
   assert.equal(noReadback.run.evaluate(absence, token).decision, "stop");
 });
+
+// Recovery groups are enabled only by ledger facts; nothing else decides whether a group of recovery rows is sent.
+test("the recovery groups are closed and nothing is enabled on a fresh ledger", async () => {
+  const { run } = await fresh();
+  assert.equal(typeof run.recoveryEnabled, "function");
+  for (const name of ["release-written", "release-written-not-deleted", "restore-needed", "ruleset-attempted:v1", "ruleset-created-not-deleted:v1"]) {
+    assert.equal(run.recoveryEnabled(name), false, name);
+  }
+  assert.equal(run.recoveryEnabled(`session-started:${manifest.resources.sessions[0].caseId}`), false);
+  for (const bad of ["", "release", "release-written:1", "ruleset-attempted:C", "ruleset-attempted", "session-started:unknown", "session-started:", "restore-needed:x", null, undefined, 1, {}]) {
+    assert.throws(() => run.recoveryEnabled(bad), /invalid recovery group/, String(bad));
+  }
+});
+
+test("the release groups follow the release writes: written and not yet deleted, or written at all", async () => {
+  const { run } = await fresh();
+  const publish = row("release/v1/publish");
+  run.recordIntent(publish);
+  assert.deepEqual(["release-written", "release-written-not-deleted"].map((name) => run.recoveryEnabled(name)), [true, true]);
+  run.recordIntent(row("release/restore/delete"));
+  assert.deepEqual(["release-written", "release-written-not-deleted"].map((name) => run.recoveryEnabled(name)), [true, false]);
+});
+
+test("the restore group is needed once a witness exists and until the four owner readbacks are done", async () => {
+  const { objects, run } = await fresh();
+  assert.equal(run.recoveryEnabled("restore-needed"), false);
+  seedControls(objects, [2]);
+  assert.equal(run.recoveryEnabled("restore-needed"), false, "a non-witness control does not need the restore");
+  seedControls(objects, [0]);
+  assert.equal(run.recoveryEnabled("restore-needed"), true);
+  const media = (index, prefix = "") => row(`${prefix}management/restore-owner-media/${index}`);
+  for (const index of [0, 1, 2]) run.recordOutcome(media(index), out("gcs-media-read", "present"));
+  assert.equal(run.recoveryEnabled("restore-needed"), true);
+  run.recordOutcome(media(3), out("gcs-media-read", "present"));
+  assert.equal(run.recoveryEnabled("restore-needed"), false);
+});
+
+test("the recovery owner media reads count toward the restore the same as the normal ones", async () => {
+  const { objects, run } = await fresh();
+  seedControls(objects, [0, 1, 3, 4]);
+  for (const index of [0, 1, 2, 3]) run.recordOutcome(row(`recovery/management/restore-owner-media/${index}`), out("gcs-media-read", "present"));
+  assert.equal(run.recoveryEnabled("restore-needed"), false);
+});
+
+test("a session group is enabled once its start is confirmed or it has any state", async () => {
+  const { run } = await fresh();
+  const session = manifest.resources.sessions[0];
+  const start = manifest.rows.find((r) => r.request.headers["x-goog-upload-command"] === "start" && r.programId === session.caseId);
+  const name = `session-started:${session.caseId}`;
+  assert.equal(run.recoveryEnabled(name), false);
+  run.recordIntent(start);
+  assert.equal(run.recoveryEnabled(name), false, "an intent alone is not a confirmed session");
+  run.recordOutcome(start, out("session-start", "accepted", { uploadStatus: "active" }));
+  assert.equal(run.recoveryEnabled(name), true);
+  const other = manifest.resources.sessions[1].caseId;
+  assert.equal(run.recoveryEnabled(`session-started:${other}`), false);
+});
+
+test("a Ruleset group is enabled by its create attempt, and the delete group only until its delete", async () => {
+  const { run } = await fresh();
+  assert.deepEqual([run.recoveryEnabled("ruleset-attempted:v1"), run.recoveryEnabled("ruleset-created-not-deleted:v1")], [false, false]);
+  run.recordIntent(row("ruleset/v1/create"));
+  assert.deepEqual([run.recoveryEnabled("ruleset-attempted:v1"), run.recoveryEnabled("ruleset-created-not-deleted:v1")], [true, true]);
+  assert.deepEqual([run.recoveryEnabled("ruleset-attempted:v2"), run.recoveryEnabled("ruleset-created-not-deleted:v2")], [false, false]);
+  run.recordIntent(row("ruleset/v1/delete"));
+  assert.deepEqual([run.recoveryEnabled("ruleset-attempted:v1"), run.recoveryEnabled("ruleset-created-not-deleted:v1")], [true, false]);
+});

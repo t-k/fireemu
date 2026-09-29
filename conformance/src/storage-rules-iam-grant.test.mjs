@@ -80,7 +80,13 @@ test("the grant is added once, read back, and the lock is released", async (t) =
   assert.deepEqual(await f.lockFiles(), []);
   assert.equal(await readFile(join(f.runs, "storage-rules-iam-usage.jsonl"), "utf8"), `${JSON.stringify({ packetSha256: packet.packetSha256, runId })}\n`);
   // Every request carries the owner's token and the query project as quota project, except the token request itself.
-  for (const entry of f.wire.slice(1)) { assert.equal(entry.headers.authorization, `Bearer ${OWNER_TOKEN}`); assert.equal(entry.headers["x-goog-user-project"], "fireemu-oracle-query"); }
+  // The one exception is the owner's own userinfo, which is not a project-billed API (with the header it answers 403 USER_PROJECT_DENIED).
+  for (const entry of f.wire.slice(1)) {
+    assert.equal(entry.headers.authorization, `Bearer ${OWNER_TOKEN}`);
+    if (entry.url === "https://www.googleapis.com/oauth2/v2/userinfo") assert.equal(Object.hasOwn(entry.headers, "x-goog-user-project"), false);
+    else assert.equal(entry.headers["x-goog-user-project"], "fireemu-oracle-query", entry.url);
+  }
+  assert.deepEqual(f.wire.filter((entry) => !Object.hasOwn(entry.headers, "x-goog-user-project")).map((entry) => entry.url), [f.wire[0].url, "https://www.googleapis.com/oauth2/v2/userinfo"]);
 });
 
 test("an existing binding for the role gets the member appended, and every other binding, member and condition stays", async (t) => {

@@ -32,6 +32,10 @@ pub(super) const SIGNATURE_REFUSAL: &str =
 /// seconds (an emulator bound: past it, a response is not checked against the request).
 const REQUEST_LIFETIME: i64 = 3_600;
 
+/// Production's refusal of a response with no signature at all (record-followup b72af6).
+pub(super) const UNSIGNED_REFUSAL: &str =
+    "INVALID_IDP_RESPONSE : Missing signature in Assertion and Response enclosing it (if present).";
+
 /// The largest `SAMLResponse` read, as sent (base64 of at most 256 KiB of XML).
 const MAX_ENCODED: usize = crate::saml::MAX_RESPONSE_BYTES / 3 * 4 + 4;
 
@@ -122,6 +126,7 @@ pub(super) fn strict_saml(
     let xml = decode_response(encoded).ok_or_else(refused)?;
     let verified = verified_against(store, provider_id, &xml).map_err(|failure| match failure {
         Some(SamlError::Signature) => error(400, SIGNATURE_REFUSAL),
+        Some(SamlError::Unsigned) => error(400, UNSIGNED_REFUSAL),
         _ => refused(),
     })?;
     let name_id = verified

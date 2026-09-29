@@ -14256,10 +14256,11 @@ fn stored_email_verified(store: &AuthStore, uid: &LocalId, info: &IdpUserInfo, b
 /// Production's `createAuthUri` for an OIDC provider (record-oidc 39209e): the issuer's
 /// authorization endpoint with the ID-token flow's parameters (the continue URI as the redirect
 /// URI, a state, the scope and the SHA-256 of a raw nonce the service keeps), and a session ID.
-/// The scope is the issuer's configured `scopes_supported`, or `openid` without it: production
-/// asked for `openid` where the discovery document listed no scopes and for `openid email
-/// profile` where it listed those (accounts.google.com, AUTH-TENANT-BLOCKING 2026-09-27),
-/// which is inferred from these two observations. A sign-in reads neither back (production signed in with a wrong or no session).
+/// The scope is `openid`, then `email` and then `profile` when the issuer's configured
+/// `scopes_supported` lists them, in that order; every other listed scope is dropped. Inferred
+/// from record-oidc (no list: `openid`), Google (`[openid, email, profile]`: all three,
+/// AUTH-TENANT-BLOCKING 2026-09-27) and record-followup b72af6 (`[profile, openid, email,
+/// phone]`: `openid email profile`). A sign-in reads neither back (production signed in with a wrong or no session).
 /// `None` for a provider strict does not answer: not OIDC, an issuer without a configured
 /// authorization endpoint (no discovery document is fetched), or the code flow.
 fn strict_oidc_auth_uri(
@@ -14288,9 +14289,17 @@ fn strict_oidc_auth_uri(
         raw_nonce.as_bytes(),
     ));
     let session_id = store.next_opaque_value();
-    let scope = signers
+    let listed = signers
         .and_then(|signers| signers.scopes_supported(&config.issuer))
-        .map_or_else(|| "openid".to_owned(), |scopes| scopes.join("+"));
+        .unwrap_or_default();
+    let scope = std::iter::once("openid")
+        .chain(
+            ["email", "profile"]
+                .into_iter()
+                .filter(|scope| listed.iter().any(|listed| listed == scope)),
+        )
+        .collect::<Vec<_>>()
+        .join("+");
     Some(JsonResponse {
         status: 200,
         body: json!({

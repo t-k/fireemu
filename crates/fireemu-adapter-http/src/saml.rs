@@ -55,6 +55,9 @@ pub enum SamlError {
     /// A signature that does not verify with any configured certificate, or no signature
     /// covering an assertion (production: "Failed to verify the signature in `SAMLResponse`").
     Signature,
+    /// No signature anywhere in the response (production: "Missing signature in Assertion and
+    /// Response enclosing it (if present).", record-followup b72af6).
+    Unsigned,
     /// An algorithm or form this verifier does not implement (a known limitation, not a
     /// production refusal).
     Unsupported(String),
@@ -183,7 +186,19 @@ pub fn verify_saml_response(xml: &str, certificates: &[String]) -> Result<Verifi
         (None, true) => *assertions
             .first()
             .ok_or(SamlError::Malformed("no assertion"))?,
-        (None, false) => return Err(SamlError::Signature),
+        // No verified signature covers an assertion: a response with none anywhere is
+        // unsigned; one whose signature covers something else does not verify.
+        (None, false) => {
+            let signed_anywhere = response
+                .document()
+                .descendants()
+                .any(|node| node.has_tag_name((DSIG, "Signature")));
+            return Err(if signed_anywhere {
+                SamlError::Signature
+            } else {
+                SamlError::Unsigned
+            });
+        }
     };
     Ok(read_assertion(
         response,

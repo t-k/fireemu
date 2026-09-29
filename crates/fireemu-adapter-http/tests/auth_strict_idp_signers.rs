@@ -1262,3 +1262,49 @@ fn a_sign_in_a_blocking_function_refuses_leaves_its_nonce_credential_unused() {
     assert_eq!(again.status, 200, "{}", again.body);
     assert_refused_after(&s, &body, DUPLICATE);
 }
+
+#[test]
+fn strict_create_auth_uri_asks_for_openid_then_the_listed_email_and_profile() {
+    // Production's createAuthUri scope, inferred from record-oidc (no scopes_supported: openid),
+    // Google ([openid, email, profile]: openid email profile) and record-followup b72af6
+    // ([profile, openid, email, phone]: openid email profile): openid always, then email and
+    // then profile when the issuer lists them, in that order; every other scope is dropped.
+    let scope_for = |scopes: Option<Value>| {
+        let mut s = strict_state();
+        let mut jwks = signer().jwks();
+        jwks["authorization_endpoint"] = json!(AUTHORIZE);
+        if let Some(scopes) = scopes {
+            jwks["scopes_supported"] = scopes;
+        }
+        s.idp_assertions = IdpAssertionPolicy::SignedOidc(signers(ISSUER, jwks));
+        let answer = create_auth_uri(
+            &s,
+            &json!({"providerId": PROVIDER, "continueUri": CONTINUE}),
+        );
+        assert_eq!(answer.status, 200, "{}", answer.body);
+        let uri = answer.body["authUri"].as_str().unwrap().to_owned();
+        uri.split("&scope=")
+            .nth(1)
+            .unwrap()
+            .split('&')
+            .next()
+            .unwrap()
+            .to_owned()
+    };
+    for (scopes, expected) in [
+        (None, "openid"),
+        (
+            Some(json!(["openid", "email", "profile"])),
+            "openid+email+profile",
+        ),
+        (
+            Some(json!(["profile", "openid", "email", "phone"])),
+            "openid+email+profile",
+        ),
+        (Some(json!(["profile"])), "openid+profile"),
+        (Some(json!(["email", "phone"])), "openid+email"),
+        (Some(json!(["phone", "offline_access"])), "openid"),
+    ] {
+        assert_eq!(scope_for(scopes.clone()), expected, "{scopes:?}");
+    }
+}

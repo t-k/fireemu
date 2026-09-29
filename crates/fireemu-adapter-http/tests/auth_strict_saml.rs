@@ -175,7 +175,6 @@ fn a_signature_that_does_not_verify_is_refused_with_productions_message() {
         "tampered-signature.xml",
         "tampered-content.xml",
         "other-key.xml",
-        "unsigned.xml",
         "wrapped.xml",
     ] {
         let s = state(true);
@@ -188,6 +187,14 @@ fn a_signature_that_does_not_verify_is_refused_with_productions_message() {
         }
         assert_refused(&s, &request(&fixture(name)), SIGNATURE_REFUSAL, name);
     }
+    // A response with no signature at all has a message of its own (record-followup b72af6).
+    let s = state(true);
+    assert_refused(
+        &s,
+        &request(&fixture("unsigned.xml")),
+        "INVALID_IDP_RESPONSE : Missing signature in Assertion and Response enclosing it (if present).",
+        "unsigned",
+    );
 }
 
 #[test]

@@ -29,6 +29,7 @@ import { SANDBOX_PROJECT } from "../auth-account/harness.mjs";
 import { packetApproval } from "./approval.mjs";
 import { PROGRAMS } from "./corpus.mjs";
 import { SAML_PROGRAMS } from "./corpus-saml.mjs";
+import { FOLLOWUP_DISCOVERY_SCOPES, FOLLOWUP_PROGRAMS } from "./corpus-followup.mjs";
 import {
   checkWebConfig,
   clients,
@@ -102,9 +103,28 @@ export const PROFILES = {
     passLimit: 150,
     accountLimit: 25,
     programs: SAML_PROGRAMS,
+    samlSigners: true,
     fixture: fileURLToPath(new URL("../../auth-federation-saml-production.json", import.meta.url)),
     target:
       "production Identity Toolkit, Secure Token and Admin v2 REST, Identity Platform sandbox; the SAML responses signed locally with the run's certificates at each step, the OIDC issuer the run's preview channel of the sandbox's Hosting (owner decisions O1, O5)",
+  },
+  "record-followup": {
+    packet: "record-followup",
+    action: "record-followup",
+    // Two passes of at most 40 requests, and at most 50 for the prechecks, the issuer's deploy
+    // and the cleanup (the rehearsal used 33 of those), counted against the API limit alone.
+    runner: { project: SANDBOX_PROJECT, maxRequests: 142, reserveUsd: 1 },
+    limits: { api: 130, issuer: 12 },
+    passLimit: 40,
+    accountLimit: 2,
+    programs: FOLLOWUP_PROGRAMS,
+    samlSigners: true,
+    discoveryScopes: FOLLOWUP_DISCOVERY_SCOPES,
+    fixture: fileURLToPath(
+      new URL("../../auth-federation-followup-production.json", import.meta.url),
+    ),
+    target:
+      "production Identity Toolkit, Secure Token and Admin v2 REST, Identity Platform sandbox; the OIDC issuer the run's preview channel of the sandbox's Hosting, its discovery document listing scopes_supported; the SAML responses made locally at each step, tampered or unsigned (owner decisions O1, O5; the coordinator's T12 (c), 2026-09-29)",
   },
 };
 
@@ -121,6 +141,7 @@ export const SOURCES = [
   "run.mjs",
   "corpus.mjs",
   "corpus-saml.mjs",
+  "corpus-followup.mjs",
   "guard.mjs",
   "harness.mjs",
   "idp.mjs",
@@ -329,9 +350,7 @@ export async function recordCampaign({
     envelopeId: meta.envelopeId,
     requestLimits: profile.limits,
     reserveUsd: profile.runner.reserveUsd,
-    ...(profile.accountLimit === undefined
-      ? {}
-      : { accountLimit: profile.accountLimit * PASSES }),
+    ...(profile.accountLimit === undefined ? {} : { accountLimit: profile.accountLimit * PASSES }),
     gitSha: meta.gitSha,
     scriptDigest: meta.digest,
     configDigestBefore: sha256Hex(before.text),
@@ -356,6 +375,7 @@ export async function recordCampaign({
       jwks: [keys.run.jwk],
       forbidden: [meta.apiKey, meta.projectNumber],
       stop,
+      scopes: profile.discoveryScopes,
       result: issuer,
       journal: (fields) => appendLedger({ event: "progress", action, run, ...fields }),
     });
@@ -791,7 +811,7 @@ async function recordProduction(profile) {
   let certificatePem;
   let signers;
   try {
-    if (profile.packet === "record-saml") {
+    if (profile.samlSigners) {
       signers = await prepareSamlSigners(secretDir);
       delete signers.keyPems;
     } else {

@@ -12,13 +12,61 @@
 // also be the coordinator's: its decider exactly `Claude（委任。オーナーの裁量の委任 2026-09-28）`,
 // its body naming `根拠=2026-09-28 調整役への委任（本番の送信）`, that basis line present in the
 // ledger by the owner, and a reserve of at most US$10.
-// A later line of the parent and packet saying REVOKED with the digest or the envelope ID
-// withdraws what it names.
+// The coordinator's envelope also needs the owner's delegation of envelope approvals
+// (`調整役への委任（枠の承認）`, 2026-09-28).
+//
+// Revocations are read from every line in their normalized form (NFKC, lower case; pre-send
+// review M1), wherever they stand in the ledger, and fail closed; approvals stay exact:
+// - a line whose topic names the delegation (`調整役への委任`) and says revoked voids every
+//   coordinator envelope;
+// - a line that says revoked and names this digest or this commit (in full or by a prefix of
+//   at least 8 hex digits) or the approving envelope's ID withdraws the approval, and so does a
+//   revocation that names no digest, commit or envelope for a topic of this packet or of the
+//   parent alone.
+// A revoked version or envelope is not restored by a later approval: it needs a new digest or
+// envelope ID.
 
 const DATE_LINE = /^- \d{4}-\d{2}-\d{2} \| /;
 const DELEGATE = "Claude（委任。オーナーの裁量の委任 2026-09-28）";
 const BASIS = { date: "2026-09-28", subject: "調整役への委任（本番の送信）" };
+const ENVELOPE_BASIS = { date: "2026-09-28", subject: "調整役への委任（枠の承認）" };
 const MAX_DELEGATED_USD = 10;
+
+/** A ledger text as revocations are compared: NFKC, lower case (pre-send review M1). */
+export const norm = (text) => text.normalize("NFKC").toLowerCase();
+/** The revocation constants, already in their normalized form. */
+export const REVOCATION_TOKENS = ["revoked", "調整役への委任", "envelopeid="];
+const [REVOKED, DELEGATION, ENVELOPE_ID] = REVOCATION_TOKENS;
+
+/**
+ * The revocations of a ledger: every line that says revoked, normalized, with its topic (the
+ * column after a leading date, or the first column; the whole line when it has fewer than three
+ * columns).
+ */
+function revocations(lines) {
+  return lines
+    .map(norm)
+    .filter((text) => text.includes(REVOKED))
+    .map((text) => {
+      const cols = text
+        .replace(/^\s*-\s*/, "")
+        .split("|")
+        .map((col) => col.trim());
+      const topic =
+        cols.length < 3 ? text : /^\d{4}-\d{2}-\d{2}$/.test(cols[0]) ? cols[1] : cols[0];
+      return { text, topic };
+    });
+}
+
+/** Whether a revocation withdraws the approval of `packet` at `digest` from `commit`. */
+function withdraws({ text, topic }, { parent, packet, digest, commit, envelopeId }) {
+  const hexes = text.match(/[0-9a-f]{8,}/g) ?? [];
+  if (hexes.some((hex) => hex.length <= 64 && digest.startsWith(hex))) return true;
+  if (hexes.some((hex) => hex.length <= 40 && commit.startsWith(hex))) return true;
+  if (envelopeId && text.includes(norm(envelopeId))) return true;
+  const specific = hexes.some((hex) => hex.length >= 40) || text.includes(ENVELOPE_ID);
+  return !specific && (topic === norm(parent) || topic.startsWith(norm(`${parent} ${packet}`)));
+}
 
 const escapeRegExp = (text) => text.replaceAll(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
@@ -54,27 +102,22 @@ export function packetApproval(ownerDecisions, { parent, packet, digest, commit,
   const envelopes = new Map();
   let approval;
   const lines = ownerDecisions.split("\n");
-  // The owner's delegation the coordinator's envelope lines rest on.
-  const delegated = lines.some((line) => {
-    const [date = "", subject = "", , decider = ""] = columns(line);
-    return (
-      date === BASIS.date && subject === BASIS.subject && decider.trim().startsWith("オーナー")
-    );
-  });
+  const revoked = revocations(lines);
+  const ownerLine = ({ date, subject }) =>
+    lines.some((line) => {
+      const [lineDate = "", lineSubject = "", , decider = ""] = columns(line);
+      return lineDate === date && lineSubject === subject && decider.trim().startsWith("オーナー");
+    });
+  // The owner's delegations the coordinator's envelope lines rest on, both unrevoked.
+  const delegated =
+    ownerLine(BASIS) &&
+    ownerLine(ENVELOPE_BASIS) &&
+    !revoked.some(({ topic }) => topic.includes(DELEGATION));
   for (const line of lines) {
+    // A line that says revoked and would approve names this digest or its envelope ID, so the
+    // revocation check below withdraws it.
     const [, subject = "", body = "", decider = ""] = columns(line);
     const owner = decider.trim().startsWith("オーナー");
-    const ours = subject === `${parent} ${packet}` || subject === `${parent} ${packet} envelope`;
-    // Revocations: of this version, or of the envelope it was approved in.
-    if ((ours || subject === parent) && /\bREVOKED\b/.test(body)) {
-      const id = /\benvelopeId=([A-Za-z0-9_-]+)/.exec(body)?.[1];
-      if (body.includes(digest)) approval = undefined;
-      if (id) {
-        envelopes.delete(id);
-        if (approval?.envelopeId === id) approval = undefined;
-      }
-      continue;
-    }
     if (subject === parent && owner && word("APPROVED").test(body)) {
       approval = { kind: "owner", line };
     } else if (subject === `${parent} ${packet} envelope` && owner) {
@@ -109,6 +152,14 @@ export function packetApproval(ownerDecisions, { parent, packet, digest, commit,
         approval = { kind: "envelope", line, envelopeId: version.envelopeId };
       }
     }
+  }
+  if (
+    approval &&
+    revoked.some((revocation) =>
+      withdraws(revocation, { parent, packet, digest, commit, envelopeId: approval.envelopeId }),
+    )
+  ) {
+    return undefined;
   }
   return approval;
 }

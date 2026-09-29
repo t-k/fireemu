@@ -78,7 +78,6 @@ fn a_signature_that_does_not_verify_is_refused() {
         "tampered-signature.xml",
         "tampered-content.xml",
         "other-key.xml",
-        "unsigned.xml",
     ] {
         assert_eq!(
             verify_saml_response(&fixture(name), &idp()),
@@ -86,6 +85,23 @@ fn a_signature_that_does_not_verify_is_refused() {
             "{name}"
         );
     }
+    // A response with no signature anywhere is told apart (production's "Missing signature…",
+    // record-followup b72af6); one with a signature that covers neither the response nor an
+    // assertion is not.
+    assert_eq!(
+        verify_saml_response(&fixture("unsigned.xml"), &idp()),
+        Err(SamlError::Unsigned)
+    );
+    let stray = fixture("unsigned.xml").replacen(
+        "</samlp:Status>",
+        "<ds:Signature xmlns:ds=\"http://www.w3.org/2000/09/xmldsig#\"></ds:Signature></samlp:Status>",
+        1,
+    );
+    assert_ne!(stray, fixture("unsigned.xml"));
+    assert_eq!(
+        verify_saml_response(&stray, &idp()),
+        Err(SamlError::Signature)
+    );
     // Only the configured certificates count: the other key verifies once it is configured.
     let both = vec![fixture("idp.cert.pem"), fixture("other.cert.pem")];
     assert!(verify_saml_response(&fixture("other-key.xml"), &both).is_ok());
@@ -417,7 +433,7 @@ fn the_size_node_and_depth_limits_are_exact() {
     // The document, the response and 62 elements: 64 levels are read (and, unsigned, refused).
     assert_eq!(
         verify_saml_response(&nested(62), &idp()),
-        Err(SamlError::Signature)
+        Err(SamlError::Unsigned)
     );
     assert!(matches!(
         verify_saml_response(&nested(63), &idp()),

@@ -2,7 +2,7 @@
 // profile) and writes the recorded rows under `.runs/`; the production recording
 // (`record.mjs`) runs the same programs through `runPrograms` against the sandbox.
 //
-//   node src/auth-federation/run.mjs local [record-saml]
+//   node src/auth-federation/run.mjs local [record-saml|record-followup]
 
 import { execFile, spawn } from "node:child_process";
 import { createHash, createPrivateKey, randomBytes } from "node:crypto";
@@ -17,9 +17,15 @@ import { resolveFireemuBinary } from "../evidence.mjs";
 import { SANDBOX_PROJECT } from "../auth-account/harness.mjs";
 import { PROGRAMS, resolveCorpus } from "./corpus.mjs";
 import { SAML_PROGRAMS } from "./corpus-saml.mjs";
+import { FOLLOWUP_DISCOVERY_SCOPES, FOLLOWUP_PROGRAMS } from "./corpus-followup.mjs";
 import { guardHttp, validateFederationCorpus } from "./guard.mjs";
 import { normalizeHttp } from "./harness.mjs";
-import { certificateBase64, readAuthnRequest, signedSamlResponse } from "./saml.mjs";
+import {
+  certificateBase64,
+  readAuthnRequest,
+  signedSamlResponse,
+  tamperSignature,
+} from "./saml.mjs";
 import {
   discoveryDocument,
   generateSigningKey,
@@ -134,7 +140,14 @@ export function prepareKeys() {
  * run's preview channel) and certificate, and every program's ID tokens minted at `now`.
  */
 /** The corpora a recording can run, by packet. */
-export const CORPORA = { "record-oidc": PROGRAMS, "record-saml": SAML_PROGRAMS };
+export const CORPORA = {
+  "record-oidc": PROGRAMS,
+  "record-saml": SAML_PROGRAMS,
+  "record-followup": FOLLOWUP_PROGRAMS,
+};
+
+/** The scopes_supported a corpus's run issuer lists in its discovery document, if any. */
+export const DISCOVERY_SCOPES = { "record-followup": FOLLOWUP_DISCOVERY_SCOPES };
 
 export function resolveRun({
   project,
@@ -239,7 +252,7 @@ function samlValue(spec, raw, saml) {
   const inResponseTo =
     spec.inResponseTo !== undefined ? spec.inResponseTo : readAuthnRequest(authUri).id;
   const suffix = randomBytes(8).toString("hex");
-  const { base64 } = signedSamlResponse(
+  const { xml } = signedSamlResponse(
     {
       responseId: `_r${suffix}`,
       assertionId: `_a${suffix}`,
@@ -260,7 +273,8 @@ function samlValue(spec, raw, saml) {
     },
     { ...signer, sign: spec.sign ?? "assertion" },
   );
-  return base64;
+  // `tamper`: the signature no longer verifies (production's refusal, saml-smoke efe0ef).
+  return Buffer.from(spec.tamper ? tamperSignature(xml) : xml, "utf8").toString("base64");
 }
 
 /**
@@ -565,6 +579,7 @@ async function runLocal(packet = "record-oidc") {
             [prepared.issuer]: {
               ...jwksDocument(...prepared.jwks),
               authorization_endpoint: discoveryDocument(prepared.issuer).authorization_endpoint,
+              ...(DISCOVERY_SCOPES[packet] ? { scopes_supported: DISCOVERY_SCOPES[packet] } : {}),
             },
           },
         },
@@ -601,7 +616,8 @@ async function runLocal(packet = "record-oidc") {
     const code = await new Promise((resolve) => child.once("exit", resolve));
     if (code !== 0) throw new Error(`fireemu session exited ${code}`);
     const out = JSON.parse(await readFile(outPath, "utf8"));
-    const results = packet === "record-oidc" ? "fireemu-results.json" : `fireemu-${packet}-results.json`;
+    const results =
+      packet === "record-oidc" ? "fireemu-results.json" : `fireemu-${packet}-results.json`;
     await writeFile(join(RUN_DIR, results), `${JSON.stringify(out, null, 2)}\n`);
     console.log(
       JSON.stringify({ binary, requests: out.requests, failures: out.failures }, null, 2),

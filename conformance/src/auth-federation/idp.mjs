@@ -91,8 +91,11 @@ export function idTokenClaims({ issuer, clientId, subject, now, lifetime = 3600,
   };
 }
 
-/** The discovery document an issuer serves at `/.well-known/openid-configuration`. */
-export function discoveryDocument(issuer) {
+/**
+ * The discovery document an issuer serves at `/.well-known/openid-configuration`, with
+ * `scopes_supported` when a corpus names them (record-followup).
+ */
+export function discoveryDocument(issuer, { scopes } = {}) {
   return {
     issuer,
     jwks_uri: `${issuer}/jwks.json`,
@@ -100,6 +103,7 @@ export function discoveryDocument(issuer) {
     response_types_supported: ["id_token"],
     subject_types_supported: ["public"],
     id_token_signing_alg_values_supported: ["RS256"],
+    ...(scopes ? { scopes_supported: scopes } : {}),
   };
 }
 
@@ -134,11 +138,11 @@ export function scanPublished(text, forbidden = []) {
  * version config that serves each of them, named by its literal path, as uncached JSON. (A
  * `**` glob does not match the dot segment `.well-known`.)
  */
-export function issuerSite({ issuer, run, jwks, forbidden = [] }) {
+export function issuerSite({ issuer, run, jwks, forbidden = [], scopes }) {
   const base = `/oidc/${checkRun(run)}`;
   if (new URL(issuer).pathname !== base) throw new Error(`issuer ${issuer} is not ${base}`);
   const files = {
-    [`${base}/.well-known/openid-configuration`]: `${JSON.stringify(discoveryDocument(issuer), null, 2)}\n`,
+    [`${base}/.well-known/openid-configuration`]: `${JSON.stringify(discoveryDocument(issuer, { scopes }), null, 2)}\n`,
     [`${base}/jwks.json`]: `${JSON.stringify(jwksDocument(...jwks), null, 2)}\n`,
   };
   for (const text of Object.values(files)) scanPublished(text, forbidden);

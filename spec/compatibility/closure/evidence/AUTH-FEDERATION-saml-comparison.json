@@ -1,6 +1,6 @@
 {
   "kind": "auth-federation-saml-comparison-v1",
-  "artifactSha256": "ff883a9bcd577ba7f7f12619c26c8e80596777ca551a69f47e18034269336de0",
+  "artifactSha256": "6193a0dad20dcca8da6e4e62d7f883953b9a02b37411cd018add420c1e96d57d",
   "fixtureSha256": "349120878c55c74ef8d04253221cd6c2f8ac5688b85a8cfa75de8359e64951b9",
   "summary": {
     "MATCH": 62

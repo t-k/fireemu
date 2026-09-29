@@ -57,6 +57,7 @@ const readJson = (path) =>
 const FIXTURES = {
   "auth-federation-comparison-v1": "conformance/auth-federation-production.json",
   "auth-federation-saml-comparison-v1": "conformance/auth-federation-saml-production.json",
+  "auth-federation-followup-comparison-v1": "conformance/auth-federation-followup-production.json",
   "auth-config-sdk-comparison-v1": "conformance/auth-config-sdk-production.json",
   "auth-action-comparison-v1": "conformance/auth-action-production.json",
   "auth-credential-comparison-v1": "conformance/auth-credential-production.json",
@@ -283,11 +284,12 @@ test("parent promotion requires every condition and an approved closure review",
   );
 });
 
-/** Both corpora: record-oidc's and record-saml's programs. */
+/** The corpora: record-oidc's, record-saml's and record-followup's programs. */
 async function corpusPrograms() {
   const { PROGRAMS } = await import("./auth-federation/corpus.mjs");
   const { SAML_PROGRAMS } = await import("./auth-federation/corpus-saml.mjs");
-  return [...PROGRAMS, ...SAML_PROGRAMS];
+  const { FOLLOWUP_PROGRAMS } = await import("./auth-federation/corpus-followup.mjs");
+  return [...PROGRAMS, ...SAML_PROGRAMS, ...FOLLOWUP_PROGRAMS];
 }
 
 test("closure recipes and corpus programs cover each other", async () => {

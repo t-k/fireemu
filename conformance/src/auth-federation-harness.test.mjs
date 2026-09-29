@@ -785,3 +785,237 @@ test("recordings mask ISO times in messages and an AuthnRequest ID of any hex le
   assert.equal(request(`_${"a".repeat(32)}`), request(`_${"b".repeat(31)}`));
   assert.ok(request(`_${"a".repeat(32)}`).includes('ID="<id:_hex>"'));
 });
+
+test("the follow-up corpus sends a tampered and an unsigned response of the run's IdP only", async () => {
+  const { materialize } = await import("./auth-federation/run.mjs");
+  const { generateKeyPairSync } = await import("node:crypto");
+  const { deflateRawSync } = await import("node:zlib");
+  const { privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+  const certificate = "UlVOLUNFUlQ=";
+  const saml = {
+    keys: {
+      run: {
+        privateKey,
+        certificatePem: `-----BEGIN CERTIFICATE-----\n${certificate}\n-----END CERTIFICATE-----`,
+      },
+    },
+    now: () => 1_790_000_000,
+  };
+  const request =
+    '<samlp:AuthnRequest xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" ID="_req7" AssertionConsumerServiceURL="https://sp.example/acs"><saml:Issuer xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion">sp</saml:Issuer></samlp:AuthnRequest>';
+  const authUri = `https://idp.example/sso?SAMLRequest=${encodeURIComponent(deflateRawSync(Buffer.from(request)).toString("base64"))}&RelayState=relay-7`;
+  const raw = new Map([["auth-uri", { authUri, sessionId: "s-7" }]]);
+  const runIdp = `https://${SANDBOX_PROJECT}.web.app/saml/${RUN}`;
+  const spec = {
+    request: "auth-uri",
+    issuer: runIdp,
+    audience: "sp",
+    destination: "https://sp.example/acs",
+    nameId: "user@example.com",
+  };
+  const decode = (value) => Buffer.from(value, "base64").toString("utf8");
+  const signed = decode(materialize({ $saml: spec }, raw, {}, saml));
+  const tampered = decode(materialize({ $saml: { ...spec, tamper: true } }, raw, {}, saml));
+  const signature = (xml) => xml.match(/<ds:SignatureValue>([^<]*)</)[1];
+  // Only the first character of the signature differs from a signed response's form.
+  assert.notEqual(signature(tampered)[0], signature(signed)[0]);
+  assert.equal(signature(tampered).length, signature(signed).length);
+  const unsigned = decode(materialize({ $saml: { ...spec, sign: "none" } }, raw, {}, saml));
+  assert.ok(!unsigned.includes("Signature") && !unsigned.includes("X509Certificate"), unsigned);
+  assert.ok(unsigned.includes('InResponseTo="_req7"'), unsigned);
+  // The guard sends a tampered response carrying the run's certificate, and an unsigned one
+  // only when every issuer in it is the run's own IdP.
+  const ctx = production({ runCertificates: [certificate] });
+  const post = (xml) =>
+    send(
+      ctx,
+      "POST",
+      "/v1/accounts:signInWithIdp",
+      idp({
+        providerId: `saml.fireemu-${RUN}-sg`,
+        SAMLResponse: Buffer.from(xml).toString("base64"),
+      }),
+    );
+  assert.doesNotThrow(() => post(tampered));
+  assert.doesNotThrow(() => post(unsigned));
+  for (const foreign of [
+    unsigned.replaceAll(runIdp, "https://idp.example/saml"),
+    unsigned.replaceAll(runIdp, `https://${SANDBOX_PROJECT}.web.app/saml/d4e5f6`),
+    unsigned.replaceAll(runIdp, `https://other-project.web.app/saml/${RUN}`),
+  ]) {
+    assert.throws(() => post(foreign), /credential/);
+  }
+  // A signature by another certificate is still refused, unsigned or not.
+  assert.throws(() => post(signed.replaceAll(certificate, "T1RIRVI=")), /credential/);
+});
+
+test("the follow-up issuer lists its scopes in the discovery document it publishes", async () => {
+  const { discoveryDocument, issuerSite } = await import("./auth-federation/idp.mjs");
+  const { FOLLOWUP_DISCOVERY_SCOPES } = await import("./auth-federation/corpus-followup.mjs");
+  const issuer = `https://${CHANNEL}/oidc/${RUN}`;
+  assert.equal(discoveryDocument(issuer).scopes_supported, undefined);
+  assert.deepEqual(
+    discoveryDocument(issuer, { scopes: FOLLOWUP_DISCOVERY_SCOPES }).scopes_supported,
+    ["profile", "openid", "email", "phone"],
+  );
+  const key = generateSigningKey({ kid: "run-kid" });
+  const site = issuerSite({ issuer, run: RUN, jwks: [key.jwk], scopes: FOLLOWUP_DISCOVERY_SCOPES });
+  const published = JSON.parse(site.files[`/oidc/${RUN}/.well-known/openid-configuration`]);
+  assert.deepEqual(published.scopes_supported, FOLLOWUP_DISCOVERY_SCOPES);
+  const plain = issuerSite({ issuer, run: RUN, jwks: [key.jwk] });
+  assert.equal(
+    JSON.parse(plain.files[`/oidc/${RUN}/.well-known/openid-configuration`]).scopes_supported,
+    undefined,
+  );
+});
+
+test("an unsigned response goes only when every Issuer in any spelling is the run's (pre-send review S1)", () => {
+  const runIdp = `https://${SANDBOX_PROJECT}.web.app/saml/${RUN}`;
+  const foreign = "https://idp.example/x";
+  const response = (issuers, extra = "") =>
+    `<samlp:Response xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion">${issuers[0]}<saml:Assertion>${issuers[1] ?? ""}${extra}</saml:Assertion></samlp:Response>`;
+  const plain = (value) => `<saml:Issuer>${value}</saml:Issuer>`;
+  const ctx = production({ runCertificates: ["UlVOLUNFUlQ="] });
+  const post = (xml) =>
+    send(
+      ctx,
+      "POST",
+      "/v1/accounts:signInWithIdp",
+      idp({
+        providerId: `saml.fireemu-${RUN}-sg`,
+        SAMLResponse: Buffer.from(xml).toString("base64"),
+      }),
+    );
+  assert.doesNotThrow(() => post(response([plain(runIdp), plain(runIdp)])), "the run's own");
+  // The run's own Issuer in another spelling is collected, and goes.
+  assert.doesNotThrow(
+    () => post(response([plain(runIdp), `<saml2:Issuer Format="urn:x">${runIdp}</saml2:Issuer>`])),
+    "the run's own, another prefix and attributes",
+  );
+  for (const [name, xml] of Object.entries({
+    "a mixed response: the run's Response Issuer, a foreign Assertion Issuer": response([
+      plain(runIdp),
+      plain(foreign),
+    ]),
+    "an Issuer with attributes": response([
+      plain(runIdp),
+      `<saml:Issuer Format="urn:x">${foreign}</saml:Issuer>`,
+    ]),
+    "an Issuer of another prefix": response([
+      plain(runIdp),
+      `<saml2:Issuer>${foreign}</saml2:Issuer>`,
+    ]),
+    "an Issuer without a prefix": response([plain(runIdp), `<Issuer>${foreign}</Issuer>`]),
+    "an Issuer holding a comment": response([
+      plain(runIdp),
+      `<saml:Issuer>${foreign}<!-- --></saml:Issuer>`,
+    ]),
+    "an Issuer holding CDATA": response([
+      plain(runIdp),
+      `<saml:Issuer><![CDATA[${runIdp}]]></saml:Issuer>`,
+    ]),
+    "an unclosed Issuer": response([plain(runIdp), `<saml:Issuer>${runIdp}`]),
+    "a signature without a certificate": response(
+      [plain(runIdp), plain(runIdp)],
+      "<ds:Signature><ds:SignatureValue>AAAA</ds:SignatureValue></ds:Signature>",
+    ),
+    "a lower-case signature value": response(
+      [plain(runIdp), plain(runIdp)],
+      "<ds:signaturevalue>AAAA</ds:signaturevalue>",
+    ),
+    "an X509 element of another spelling": response(
+      [plain(runIdp), plain(runIdp)],
+      "<ds:X509Data></ds:X509Data>",
+    ),
+    "no Issuer": response([""]),
+  })) {
+    assert.throws(() => post(xml), /credential/, name);
+  }
+});
+
+test("the follow-up corpus's own SAML sign-ins, with its real names, get through the guard", async () => {
+  // The unsigned row's NameID is fireemu-fed-<run>-saml-signature@example.com: the guard reads
+  // signature markup, never text (pre-send re-review R-M1).
+  const { FOLLOWUP_PROGRAMS } = await import("./auth-federation/corpus-followup.mjs");
+  const { materialize, resolveRun } = await import("./auth-federation/run.mjs");
+  const { generateKeyPairSync } = await import("node:crypto");
+  const { deflateRawSync } = await import("node:zlib");
+  const { privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+  const certificate = "UlVOLUNFUlQ=";
+  const certificatePem = `-----BEGIN CERTIFICATE-----\n${certificate}\n-----END CERTIFICATE-----`;
+  const keys = { run: generateSigningKey({ kid: "run-kid" }), other: generateSigningKey() };
+  const resolve = (programs) =>
+    resolveRun({
+      project: SANDBOX_PROJECT,
+      run: RUN,
+      issuerHost: CHANNEL,
+      keys,
+      certificates: { "saml-a": certificatePem },
+      now: 1_790_000_000,
+      programs,
+    }).programs;
+  const saml = { keys: { run: { privateKey, certificatePem } }, now: () => 1_790_000_000 };
+  const authUri = (id) => {
+    const request = `<samlp:AuthnRequest xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" ID="_${id}" AssertionConsumerServiceURL="https://sp.example/acs"><saml:Issuer xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion">sp</saml:Issuer></samlp:AuthnRequest>`;
+    return `https://idp.example/sso?SAMLRequest=${encodeURIComponent(deflateRawSync(Buffer.from(request)).toString("base64"))}&RelayState=relay-${id}`;
+  };
+  const ctx = production({
+    runCertificates: [certificate],
+    runKids: ["run-kid"],
+    issuerHost: CHANNEL,
+  });
+  const sendSignIns = (programs) => {
+    const program = programs.find(({ id }) => id === "auth-federation/saml/signature");
+    const raw = new Map(
+      program.steps
+        .filter(({ id }) => id.endsWith("-auth-uri"))
+        .map(({ id }) => [id, { authUri: authUri(id.replace(/\W/g, "")), sessionId: `s-${id}` }]),
+    );
+    const signIns = program.steps.filter(({ id }) => id === "tampered" || id === "unsigned");
+    assert.deepEqual(
+      signIns.map(({ id }) => id),
+      ["tampered", "unsigned"],
+    );
+    return signIns.map((step) => {
+      const body = materialize(step.body, raw, program.minted, saml);
+      const xml = Buffer.from(
+        new URLSearchParams(body.postBody).get("SAMLResponse"),
+        "base64",
+      ).toString("utf8");
+      assert.doesNotThrow(() => send(ctx, "POST", `/${step.path}`, body), step.id);
+      return xml;
+    });
+  };
+  const [tampered, unsigned] = sendSignIns(resolve(FOLLOWUP_PROGRAMS));
+  assert.match(unsigned, /saml-signature@example\.com/, "the corpus's own NameID");
+  assert.ok(!/<[\w-]*:?Signature\b/i.test(unsigned), "unsigned");
+  assert.match(tampered, /<ds:Signature\b/, "tampered keeps its signature");
+  // A NameID naming a signature in any case still goes.
+  for (const name of ["Signature", "SIGNATURE", "SignatureValue", "x509"]) {
+    const renamed = structuredClone(FOLLOWUP_PROGRAMS).map((program) => ({
+      ...program,
+      steps: program.steps.map((step) =>
+        step.body?.postBody?.$form?.SAMLResponse?.$saml
+          ? {
+              ...step,
+              body: {
+                ...step.body,
+                postBody: {
+                  $form: {
+                    ...step.body.postBody.$form,
+                    SAMLResponse: {
+                      $saml: {
+                        ...step.body.postBody.$form.SAMLResponse.$saml,
+                        nameId: `${name}@example.com`,
+                      },
+                    },
+                  },
+                },
+              },
+            }
+          : step,
+      ),
+    }));
+    sendSignIns(resolve(renamed));
+  }
+});

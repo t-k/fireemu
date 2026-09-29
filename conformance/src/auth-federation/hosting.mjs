@@ -435,6 +435,7 @@ export async function deployIssuer({
   stop,
   result,
   journal = async () => {},
+  scopes,
 }) {
   const channelId = `fed-${run}`;
   // From here the channel may exist even if the answer is lost: the cleanup probes it.
@@ -452,7 +453,7 @@ export async function deployIssuer({
   }
   result.issuerHost = host;
   const issuer = `https://${host}/oidc/${run}`;
-  const site = issuerSite({ issuer, run, jwks, forbidden });
+  const site = issuerSite({ issuer, run, jwks, forbidden, scopes });
   stop.check();
 
   // Journalled before and after, so a recovery knows whether a version may exist and which.

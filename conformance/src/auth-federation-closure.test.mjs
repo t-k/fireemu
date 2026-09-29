@@ -70,6 +70,34 @@ const FIXTURES = {
  * The parents compared again as regressions on the final artifact, each as a whole: their rows
  * are their own parents' evidence, so their recordings are not this parent's.
  */
+/**
+ * The statuses a comparison counts as matching production: a row recorded differently by the
+ * two passes, re-observed, or timing-dependent, as the parents that record them classify them.
+ */
+const MATCHING = new Set([
+  "MATCH",
+  "MATCH_NONDETERMINISTIC",
+  "MATCH_TIMING_DEPENDENT",
+  "REOBSERVED_MATCH",
+]);
+
+/**
+ * The owner-decided divergences a regression parent's own closure records: a regression row
+ * that differs is accepted only when that parent documents it (its evidence is that parent's).
+ */
+function laneDocumentedRows() {
+  const rows = new Set();
+  for (const lane of REGRESSION_LANES) {
+    const closure = readJson(`spec/compatibility/closure/${lane.toUpperCase()}.json`);
+    for (const { evidence } of closure.conditions) {
+      for (const divergence of evidence?.documentedDivergences ?? []) {
+        if (divergence.decidedBy === "owner") rows.add(divergence.row);
+      }
+    }
+  }
+  return rows;
+}
+
 const REGRESSION_LANES = new Set([
   "auth-account",
   "auth-credential",
@@ -231,7 +259,7 @@ test("AUTH-FEDERATION closure inventory cannot silently omit a declared conditio
     }
     const documented = new Set(divergences.map(({ row }) => row));
     const off = rows
-      .filter(({ status, row }) => status !== "MATCH" && !documented.has(row))
+      .filter(({ status, row }) => !MATCHING.has(status) && !documented.has(row))
       .map(({ row }) => row);
     if (label === "AUTH-FEDERATION/closure-review") {
       assert.equal(closure.closureReview?.decision, "APPROVED", label);
@@ -249,11 +277,12 @@ test("AUTH-FEDERATION closure inventory cannot silently omit a declared conditio
           `${other.conditionId}: bound to the final artifact`,
         );
       }
-      const everyDocumented = new Set(
-        closure.conditions.flatMap(({ evidence }) =>
+      const everyDocumented = new Set([
+        ...closure.conditions.flatMap(({ evidence }) =>
           (evidence?.documentedDivergences ?? []).map(({ row }) => row),
         ),
-      );
+        ...laneDocumentedRows(),
+      ]);
       assert.deepEqual(
         off.filter((row) => !everyDocumented.has(row)),
         [],

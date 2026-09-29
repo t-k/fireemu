@@ -39,11 +39,11 @@ def test_other_identifier_words_do_not_become_revocation(word):
         f"REVOKED; packetSha256={OTHER_PACKET}; envelopeId:broken",
         f"REVOKED; packetSha256={OTHER_PACKET}; envelopeId",
         f"REVOKED; packetSha256={OTHER_PACKET}; envelopeId :=other",
-        f"REVOKED; packetSha256={OTHER_PACKET}; ENVELOPEID=other",
+        f"REVOKED; packetSha256={OTHER_PACKET}; ENVELOPEID:broken",
         "REVOKED; envelopeId=other; packetSha256:broken",
         "REVOKED; envelopeId=other; packetSha256",
         "REVOKED; envelopeId=other; closurePacketSha256:broken",
-        "REVOKED; envelopeId=other; PACKETSHA256=" + OTHER_PACKET,
+        "REVOKED; envelopeId=other; PACKETSHA256:broken",
     ],
 )
 def test_matching_envelope_or_malformed_scope_cannot_be_shadowed(decision):
@@ -107,11 +107,11 @@ def test_every_current_authority_stops_raw_cancellation_before_approval(kind, be
         "colon-envelope": f"packetSha256={OTHER_PACKET}; envelopeId:broken",
         "bare-envelope": f"packetSha256={OTHER_PACKET}; envelopeId",
         "wrong-assignment": f"packetSha256={OTHER_PACKET}; envelopeId :=other",
-        "case-envelope": f"packetSha256={OTHER_PACKET}; ENVELOPEID=other",
+        "case-envelope": f"packetSha256={OTHER_PACKET}; ENVELOPEID:broken",
         "colon-packet": "envelopeId=other; packetSha256:broken",
         "bare-packet": "envelopeId=other; packetSha256",
         "colon-closure": "envelopeId=other; closurePacketSha256:broken",
-        "case-packet": f"envelopeId=other; PACKETSHA256={OTHER_PACKET}",
+        "case-packet": f"envelopeId=other; PACKETSHA256:broken",
     }
     topic = "AUTH-OTHER" if shape == "unrelated-topic" else "FS-TRANSACTION " + pins["packetName"] + (" correction" if shape == "correction-topic" else " recovery closure")
     row = f"- 2026-09-29 | {topic} | REVOKED（{decisions[scope]}） | オーナー（synthetic） | synthetic.md\n"

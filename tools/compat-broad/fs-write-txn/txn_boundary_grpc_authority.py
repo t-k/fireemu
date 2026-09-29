@@ -13,10 +13,10 @@ TASK_ID = 'FS-TRANSACTION-SANDBOX'
 
 def _values(columns):
     values = {}
-    for token in columns[2].split(';'):
+    for token in shared.normalize_authority(columns[2]).split(';'):
         if '=' not in token:
             continue
-        key, value = map(str.strip, token.split('=', 1))
+        key, value = map(lambda value: shared.normalize_authority(value.strip()), token.split('=', 1))
         if key in values:
             raise ValueError('duplicate P10-B authority key')
         values[key] = value
@@ -29,45 +29,45 @@ def authorize(decisions, pins):
         raise ValueError('fresh P10-B authority scope required')
     shared.reject_revocations(decisions, pins)
     entries = shared._decision_entries(decisions)
-    scope = {'FS-TRANSACTION', NAME, NAME + ' envelope'}
+    scope = {shared.normalize_authority(value) for value in ('FS-TRANSACTION', NAME, NAME + ' envelope')}
     for columns, _tokens in entries:
-        if columns[1] in scope and shared._revoked_packet(columns[2], pins['packetSha256'], pins['envelopeId']):
+        if shared.normalize_authority(columns[1]) in scope and shared._revoked_packet(columns[2], pins['packetSha256'], pins['envelopeId']):
             raise ValueError('P10-B packet or envelope is REVOKED')
     expected = {'decision': 'APPROVE', 'envelopeId': pins['envelopeId'], 'packetSha256': pins['packetSha256'], 'sourceCommit': pins['sourceCommit'], 'runnerSha256': pins['runnerSha256'], 'requestsPerRecording': '48', 'estimatedUsdPerRecording': '0.01', 'recordings': '2'}
     exact = []
     for columns, _tokens in entries:
-        if columns[1] not in {'FS-TRANSACTION', NAME} or columns[4] != pins['packetPath']:
+        if shared.normalize_authority(columns[1]) not in {shared.normalize_authority(value) for value in ('FS-TRANSACTION', NAME)} or columns[4] != pins['packetPath']:
             continue
         values = _values(columns)
         actor = columns[3]
-        delegated = actor == shared.DELEGATED_ACTOR and shared._has_delegation(entries) or actor == 'Claude（委任。枠の内の承認し直し）'
-        if all(values.get(key) == value for key, value in expected.items()) and (actor.startswith('オーナー') or delegated):
+        delegated = shared._delegated_actor(actor, entries, decisions, allow_within_envelope=True)
+        if all(values.get(shared.normalize_authority(key)) == shared.normalize_authority(value) for key, value in expected.items()) and (shared.normalize_authority(actor).startswith(shared.normalize_authority('オーナー')) or delegated):
             exact.append(columns)
     if len(exact) != 1:
         raise ValueError('one explicit exact-version P10-B APPROVE row required')
-    if exact[0][3].startswith('オーナー'):
+    if shared.normalize_authority(exact[0][3]).startswith(shared.normalize_authority('オーナー')):
         return 96, 0.02
     envelopes = []
     for columns, _tokens in entries:
-        if columns[1] != NAME + ' envelope' or columns[4] != pins['envelopePath']:
+        if shared.normalize_authority(columns[1]) != shared.normalize_authority(NAME + ' envelope') or columns[4] != pins['envelopePath']:
             continue
         values = _values(columns)
         actor = columns[3]
-        delegated = actor == shared.DELEGATED_ACTOR and shared._has_delegation(entries) and values.get('根拠') == '2026-09-28 調整役への委任（本番の送信）'
-        if values.get('envelopeId') == pins['envelopeId'] and (actor.startswith('オーナー') or delegated):
+        delegated = shared._delegated_actor(actor, entries, decisions) and values.get(shared.normalize_authority('根拠')) == shared.normalize_authority('2026-09-28 調整役への委任（本番の送信）')
+        if values.get(shared.normalize_authority('envelopeId')) == shared.normalize_authority(pins['envelopeId']) and (shared.normalize_authority(actor).startswith(shared.normalize_authority('オーナー')) or delegated):
             envelopes.append(values)
     if len(envelopes) != 1:
         raise ValueError('one owner or delegation-i P10-B envelope required')
     values = envelopes[0]
     expected_scope = {'project': 'fireemu-oracle-sbx/(default)', 'writes': 'owned-one-document', 'iamConfig': 'none', 'retries': 'none', 'onStop': 'needs-recovery-lock-held', 'observationSeconds': '1200', 'recoverySeconds': '180', 'maxTokens': '6', 'maxUnresolvedTokens': '1', 'releasePolicy': 'rollback-zero-before-next-sample', 'timing': 'wall-clock', 'timingSource': 'parent-wire-envelope'}
-    if any(values.get(key) != value for key, value in expected_scope.items()):
+    if any(values.get(shared.normalize_authority(key)) != shared.normalize_authority(value) for key, value in expected_scope.items()):
         raise ValueError('P10-B envelope resource scope differs')
     try:
-        count = int(values['maxRequests'])
-        reserve = Decimal(values['reserveUsd'])
+        count = int(values[shared.normalize_authority('maxRequests')])
+        reserve = Decimal(values[shared.normalize_authority('reserveUsd')])
     except (KeyError, ValueError, InvalidOperation):
         raise ValueError('P10-B envelope bound is invalid') from None
-    if str(count) != values['maxRequests'] or count != 96 or not reserve.is_finite() or reserve != Decimal('0.04'):
+    if str(count) != values[shared.normalize_authority('maxRequests')] or count != 96 or not reserve.is_finite() or reserve != Decimal('0.04'):
         raise ValueError('P10-B envelope does not cover the graph within task limits')
     return count, float(reserve)
 

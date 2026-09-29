@@ -11,6 +11,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent))
 
 import txn_sandbox_admission as admission
+from test_txn_delegation_fixtures import AUTHORITY
 
 PACKET = "a" * 64
 SOURCE = "b" * 40
@@ -197,9 +198,9 @@ def test_version_revocation_only_refuses_the_named_packet(prefix, same_packet):
     )
     if same_packet:
         with pytest.raises(ValueError, match="revoked"):
-            admission.verify_send_gates([LAST], NOW, ENVELOPE + DELEGATED + revoked, PINS)
+            admission.verify_send_gates([LAST], NOW, AUTHORITY + ENVELOPE + DELEGATED + revoked, PINS)
     else:
-        assert admission.verify_send_gates([LAST], NOW, ENVELOPE + revoked + DELEGATED, PINS) == LAST["ts"]
+        assert admission.verify_send_gates([LAST], NOW, AUTHORITY + ENVELOPE + revoked + DELEGATED, PINS) == LAST["ts"]
 
 
 def test_envelope_002_accepts_a_later_path_correction_without_reusing_envelope_001():
@@ -209,7 +210,7 @@ def test_envelope_002_accepts_a_later_path_correction_without_reusing_envelope_0
     delegated = DELEGATED.replace("expiry-retry-04-001", "expiry-retry-04-002")
     with pytest.raises(ValueError, match="owner envelope"):
         admission.verify_send_gates([LAST], NOW, historical + delegated, pins)
-    assert admission.verify_send_gates([LAST], NOW, historical + envelope + delegated, pins) == LAST["ts"]
+    assert admission.verify_send_gates([LAST], NOW, AUTHORITY + historical + envelope + delegated, pins) == LAST["ts"]
 
 
 @pytest.mark.parametrize("at_baseline", [True, False, None])
@@ -284,7 +285,7 @@ def test_unknown_endings_and_failed_without_request_count_remain_open():
 
 
 def test_owner_envelope_and_delegated_exact_version_are_accepted_together():
-    assert admission.verify_send_gates([LAST], NOW, ENVELOPE + DELEGATED, PINS) == LAST["ts"]
+    assert admission.verify_send_gates([LAST], NOW, AUTHORITY + ENVELOPE + DELEGATED, PINS) == LAST["ts"]
     with pytest.raises(ValueError, match="owner"):
         admission.verify_send_gates([LAST], NOW, DELEGATED, PINS)
     with pytest.raises(ValueError, match="envelope"):
@@ -300,7 +301,7 @@ def test_later_revocation_refuses_direct_and_envelope_paths():
         "envelopeId=FS-TRANSACTION-expiry-retry-04-001 | オーナー | "
         "docs.local/reviews/transaction-envelope.md\n"
     )
-    for decisions in (DECISION + revoked, ENVELOPE + DELEGATED + revoked):
+    for decisions in (DECISION + revoked, AUTHORITY + ENVELOPE + DELEGATED + revoked):
         with pytest.raises(ValueError, match="revoked"):
             admission.verify_send_gates([LAST], NOW, decisions, PINS)
 

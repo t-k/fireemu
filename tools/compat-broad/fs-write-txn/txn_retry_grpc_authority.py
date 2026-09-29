@@ -40,7 +40,7 @@ def authorize(decisions, pins):
             continue
         values = _values(columns)
         actor = columns[3]
-        delegated = actor == shared.DELEGATED_ACTOR and shared._has_delegation(entries) or actor == 'Claude（委任。枠の内の承認し直し）'
+        delegated = shared._delegated_actor(actor, entries, decisions, allow_within_envelope=True)
         if all(values.get(key) == value for key, value in expected.items()) and (actor.startswith('オーナー') or delegated):
             exact.append(columns)
     if len(exact) != 1:
@@ -53,7 +53,7 @@ def authorize(decisions, pins):
             continue
         values = _values(columns)
         actor = columns[3]
-        delegated = actor == shared.DELEGATED_ACTOR and shared._has_delegation(entries) and values.get('根拠') == '2026-09-28 調整役への委任（本番の送信）'
+        delegated = shared._delegated_actor(actor, entries, decisions) and values.get('根拠') == '2026-09-28 調整役への委任（本番の送信）'
         if values.get('envelopeId') == pins['envelopeId'] and (actor.startswith('オーナー') or delegated):
             envelopes.append(values)
     if len(envelopes) != 1:

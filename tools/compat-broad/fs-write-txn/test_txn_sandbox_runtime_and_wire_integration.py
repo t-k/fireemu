@@ -28,7 +28,7 @@ from test_txn_sandbox_recovery import document, fixture_context, snapshot
 NONCE = "0123456789abcdef0123456789abcdef"
 OWNER = "11111111222233334444555566667777"
 ACTOR = "Claude（委任。オーナーの裁量の委任 2026-09-28）"
-AUTHORITY = '- 2026-09-28 | 調整役への委任（本番の送信） | decision=APPROVE; 「君の裁量でどんどんやってくれていいです。費用が10ドル以内であれば問題ない」。sandboxのproject（fireemu-oracle-sbx、-idp、-query、-events）への本番の送信について、枠の承認、枠の作り直し、回復、読み取りの確認を、調整役が判断してよい。上限は観測タスクごとの費用US$10（既存の予算の規則と同じ単位）。送信前レビュー（APPROVE、MustとShouldなし）、projectごとのlock、30分の間隔、台帳、1回の承認で1回の規則は変えない。調整役の枠の行の決定者は「Claude（委任。オーナーの裁量の委任 2026-09-28）」とする。次はこれまでどおりオーナーに上げる: 新しいprojectの作成や削除、請求の設定、fireemu-35fe6への送信、sandboxの外への公開が長く続くもの、mainやfeatへのmergeとforce push、公開のリポジトリへの秘密の混入のおそれ、emulatorプロファイルの公式エミュレータにない拒否の例外 | オーナー（このセッションへの直接の返答） | docs.local/instructions/owner-decisions.md\n'
+from test_txn_delegation_fixtures import AUTHORITY
 
 
 @pytest.fixture(autouse=True)

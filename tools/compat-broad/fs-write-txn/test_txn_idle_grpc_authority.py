@@ -58,7 +58,7 @@ def test_explicit_owner_version_is_the_documented_alternative_to_an_envelope():
 def test_owner_envelope_and_documented_within_envelope_actor_are_accepted():
     owner_envelope = ENVELOPE.replace(ACTOR, 'オーナー（直接）')
     within_envelope = APPROVE.replace(ACTOR, 'Claude（委任。枠の内の承認し直し）')
-    assert authorize(owner_envelope + within_envelope, PINS) == (96, 0.04)
+    assert authorize(AUTHORITY + owner_envelope + within_envelope, PINS) == (96, 0.04)
     with pytest.raises(ValueError): authorize(within_envelope, PINS)
 
 

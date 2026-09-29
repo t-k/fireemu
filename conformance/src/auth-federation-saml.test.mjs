@@ -285,10 +285,15 @@ test("a signature may use SHA-1 for the signature and the digest, and SHA-256 st
     () => signEnveloped(assertion, { privateKey, certificatePem, inScope: response.ns, algorithm: "md5" }),
     /algorithm md5/,
   );
-  // signedSamlResponse passes the choice through.
-  const { xml } = signedSamlResponse(FIELDS, { privateKey, certificatePem, algorithm: "sha1" });
-  assert.match(xml, /xmldsig#rsa-sha1/);
-  assert.doesNotMatch(xml, /sha256/);
+  // signedSamlResponse passes the choice through, for every signature it makes, and defaults to SHA-256.
+  for (const where of ["assertion", "response", "both"]) {
+    const { xml } = signedSamlResponse(FIELDS, { privateKey, certificatePem, algorithm: "sha1", sign: where });
+    assert.equal((xml.match(/xmldsig#rsa-sha1/g) ?? []).length, where === "both" ? 2 : 1, where);
+    assert.doesNotMatch(xml, /sha256/, where);
+    const plain = signedSamlResponse(FIELDS, { privateKey, certificatePem, sign: where }).xml;
+    assert.equal((plain.match(/rsa-sha256/g) ?? []).length, where === "both" ? 2 : 1, where);
+    assert.doesNotMatch(plain, /sha1/, where);
+  }
 });
 
 test("a response may leave out either NotOnOrAfter and keep the rest", async () => {

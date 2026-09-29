@@ -700,7 +700,10 @@ test("record-strict-safety's envelope: a small recording of behaviours productio
   // The steps of one pass fit its share of the API limit, twice, with room for the prechecks,
   // the issuer's deploy and the cleanup.
   const steps = STRICT_SAFETY_PROGRAMS.reduce((sum, program) => sum + program.steps.length, 0);
-  assert.ok(steps <= profile.passLimit, `${steps} steps against a pass limit of ${profile.passLimit}`);
+  // A pass also deletes each provider and account it made and reads the providers back (2 lists).
+  const providers = STRICT_SAFETY_PROGRAMS.reduce((sum, program) => sum + (program.providers?.length ?? 0), 0);
+  const needed = steps + providers + profile.accountLimit + 2;
+  assert.ok(needed <= profile.passLimit, `${needed} requests against a pass limit of ${profile.passLimit}`);
   assert.ok(profile.passLimit * 2 + 50 <= profile.limits.api);
   // Every account a program's sign-ins may create is counted: 4 sign-in programs, one account each.
   assert.ok(profile.accountLimit >= 4 && profile.accountLimit * 2 <= 12);

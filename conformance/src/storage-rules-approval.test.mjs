@@ -378,6 +378,16 @@ const laneRevocations = {
   "revoked in a later column": note(laneSubject, `packetSha256=${sha}; 理由=test; REVOKED`),
   "full-width subject spelling": note("ＳＴＯＲＡＧＥ－ＲＵＬＥＳ　stage3-v1", "decision=REVOKED"),
   "lane-wide row": note("STORAGE-RULES", "REVOKED"),
+  "lane-wide row with a full-width qualifier": note("STORAGE-RULES（訂正）", "REVOKED"),
+  "lane-wide row with an ASCII qualifier": note("STORAGE-RULES(訂正)", "REVOKED"),
+  "lane-wide row with two qualifiers": note("STORAGE-RULES（訂正）（取消）", "REVOKED"),
+  "lane-wide row with a spaced qualifier": note("STORAGE-RULES （取消）", "revoked"),
+  "lane-wide row with an empty qualifier": note("STORAGE-RULES（）", "REVOKED"),
+  "lane-wide row with a leading qualifier": note("（訂正）STORAGE-RULES", "REVOKED"),
+  "lane-wide row with a nested qualifier": note("STORAGE-RULES（訂正（旧））", "REVOKED"),
+  "lane-wide row with a middle qualifier": note("STORAGE-（訂正）RULES", "REVOKED"),
+  "subject with a full-width qualifier": note("STORAGE-RULES stage3-v1（取消）", "REVOKED"),
+  "subject with an ASCII qualifier": note("STORAGE-RULES stage3-v1(取消)", "revoked"),
   "free text line": `Note: REVOKED ${sha} by the owner`,
 };
 for (const [name, row] of Object.entries(laneRevocations)) {
@@ -401,6 +411,10 @@ for (const [name, row] of Object.entries({
   "another packet of this lane with other hashes": note("STORAGE-RULES other-packet", `REVOKED packetSha256=${"9".repeat(64)}`),
   "prose without an identifier": "A revoked test user is only mentioned in this note.",
   "a similar but different commit prefix": note("anything else", `REVOKED ${"b".repeat(7)}0`),
+  "another packet of this lane with a full-width qualifier": note("STORAGE-RULES other-packet（訂正）", `REVOKED packetSha256=${"9".repeat(64)}`),
+  "another packet of this lane with an ASCII qualifier": note("STORAGE-RULES other-packet(取消)", `REVOKED packetSha256=${"9".repeat(64)}`),
+  "another lane with a qualifier": note("STORAGE-OBJECT（訂正）", "REVOKED"),
+  "a longer task name with a qualifier": note("STORAGE-RULES-EXTRA（訂正）", "REVOKED"),
 })) {
   test(`a revocation of ${name} does not stop this approval`, async () => {
     const validate = await load();

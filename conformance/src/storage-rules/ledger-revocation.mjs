@@ -26,6 +26,16 @@ export const HISTORICAL_REVOCATION_ALLOWLIST = Object.freeze([
   }),
 ]);
 
+/** Drop parenthetical qualifiers such as "（訂正）", wherever they sit, from a normalized subject column. */
+function withoutQualifiers(text) {
+  let current = text.trim();
+  for (;;) {
+    const next = current.replace(/\s*\([^()]*\)/, "");
+    if (next === current) return current;
+    current = next;
+  }
+}
+
 export function rowSha256(line) {
   return createHash("sha256").update(line, "utf8").digest("hex");
 }
@@ -34,7 +44,8 @@ export function rowSha256(line) {
  * Find ledger lines that stop this lane's approval or the coordinator's delegation.
  * A line counts when its normalized text contains "revoked" and names the lane subject, the lane
  * as a whole, the packet SHA, the source commit (full or at least eight digits) or the envelope ID;
- * or when it names the coordinator delegation. Position, column count and spelling do not matter.
+ * or when it names the coordinator delegation. A parenthetical qualifier on the subject
+ * column, such as "（訂正）", does not hide the lane. Position, column count and spelling do not matter.
  * Returns 1-based line numbers.
  */
 export function scanRevocations({ ledgerText, taskId, subject, packetSha256, sourceCommit, envelopeId, allowlist = HISTORICAL_REVOCATION_ALLOWLIST }) {
@@ -49,7 +60,7 @@ export function scanRevocations({ ledgerText, taskId, subject, packetSha256, sou
   ledgerText.split("\n").forEach((line, index) => {
     const text = normalizeLedgerText(line);
     if (!text.includes(REVOKED) || allowed.has(rowSha256(line))) return;
-    const subjectColumn = normalizeLedgerText(line.split("|")[1] ?? "").trim();
+    const subjectColumn = withoutQualifiers(normalizeLedgerText(line.split("|")[1] ?? ""));
     if (
       text.includes(subjectKey) || subjectColumn === taskKey || text.includes(packetKey) ||
       text.includes(commitKey) || (envelopeKey !== null && text.includes(envelopeKey))

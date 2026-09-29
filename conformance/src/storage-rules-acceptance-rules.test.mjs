@@ -121,8 +121,9 @@ test("a Rulesets list page reports counts and the next token, and rejects malfor
   assert.equal(classifyResponse(page, json(200, { rulesets: big })).facts.count, 100);
   for (const bad of [
     json(200, { rulesets: [...big, big[0]] }), json(200, { rulesets: [{ name: "x", createTime }] }), json(200, { rulesets: [{ name: rulesetName(), createTime: "x" }] }), json(200, { rulesets: {} }),
+    json(200, { rulesets: "abc" }), json(200, { rulesets: 5 }), json(200, { rulesets: null }), json(200, { rulesets: true }),
     json(200, { rulesets: names, nextPageToken: "" }), json(200, { rulesets: names, nextPageToken: "a b" }), json(200, { rulesets: names, nextPageToken: 7 }), json(200, { rulesets: names, extra: 1 }), json(403, {}), response(200, "[]"), notFound,
-  ]) assert.equal(classifyResponse(page, bad).verdict, "unexpected");
+  ]) { const outcome = classifyResponse(page, bad); assert.deepEqual([outcome.kind, outcome.verdict], ["rules-list-page", "unexpected"]); }
 });
 
 test("a Rulesets list page takes the entries the way production lists them, with their services, and reports them sorted by name", async () => {
@@ -177,6 +178,11 @@ test("a Ruleset with a top-level field outside the published schema is unexpecte
   const { classifyResponse } = await load();
   assert.equal(classifyResponse(createRow, json(200, ruleset(sentContent))).verdict, "accepted");
   for (const r of [createRow, row("ruleset/v1/read-source")]) assert.equal(classifyResponse(r, json(200, ruleset(sentContent, { surprise: 1 }))).verdict, "unexpected");
+  // The metadata production adds to a ruleset is an object; anything else is a surprise, and an object is accepted.
+  for (const r of [createRow, row("ruleset/v1/read-source")]) {
+    for (const metadata of ["x", 5, [], null, true]) assert.equal(classifyResponse(r, json(200, ruleset(sentContent, { metadata }))).verdict, "unexpected", `${r.id} ${JSON.stringify(metadata)}`);
+    assert.notEqual(classifyResponse(r, json(200, ruleset(sentContent, { metadata: { services: ["firebase.storage"] } }))).verdict, "unexpected", r.id);
+  }
 });
 
 test("an absence needs the HTTP status, error.code, error.status and a message to agree", async () => {

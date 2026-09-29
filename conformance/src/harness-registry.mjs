@@ -17,6 +17,9 @@
 // whitespace and nothing else. Nothing is rewritten in a fixture.
 //
 //   node src/harness-registry.mjs verify [--json]     every enrolled lane, the lineage, enrollment
+//   node src/harness-registry.mjs paths               the repository paths a rewrite must show it
+//   node src/harness-registry.mjs rewrite-check <f> [--head <sha>]
+//                                                     what a rewrite of files does to each lane
 
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -342,6 +345,83 @@ export function bindingProblems({ reader = gitReader, shallow = isShallowCheckou
   ];
 }
 
+// ---- rewrites ---------------------------------------------------------------------------------
+
+const LINEAGE_REPO_PATH = "conformance/harness-lineage.json";
+const inputPath = (file) => `conformance/src/${file}`;
+const fixturePath = (lane) => `conformance/${lane.fixture}`;
+
+/** The repository paths a rewrite must not change without the registry seeing it. */
+export function registryPaths({ lanes = HARNESS_LANES } = {}) {
+  return [
+    ...new Set([
+      LINEAGE_REPO_PATH,
+      ...Object.values(lanes).flatMap((lane) => [...lane.files.map(inputPath), fixturePath(lane)]),
+    ]),
+  ].toSorted();
+}
+
+/**
+ * What a rewrite of files (`overrides`: repository path -> the new text, e.g. a rebind of commit
+ * SHAs) does to each lane: its state before and after, the inputs it touches, and the problems: a
+ * lane that was connected and no longer is, and a lineage the rewrite left unsound. A rewrite of
+ * comments leaves the scheme-2 digest, and so the state, alone.
+ */
+export function rewriteReport(
+  overrides,
+  { lanes = HARNESS_LANES, reader = gitReader, shallow = isShallowCheckout(), proposeCommit } = {},
+) {
+  for (const [path, text] of Object.entries(overrides))
+    if (typeof text !== "string") throw new Error(`${path}: the new text must be a string`);
+  const changedLineage = LINEAGE_REPO_PATH in overrides;
+  const lineage = changedLineage ? JSON.parse(overrides[LINEAGE_REPO_PATH]) : loadLineage();
+  const beforeLineage = loadLineage();
+  const read = (file) => overrides[inputPath(file)] ?? treeReader(file);
+  const report = [];
+  const problems = [];
+  const proposed = [];
+  for (const [name, lane] of Object.entries(lanes)) {
+    const before = laneStatus(name, lane, { lineage: beforeLineage.hops });
+    const fixture =
+      fixturePath(lane) in overrides ? JSON.parse(overrides[fixturePath(lane)]) : undefined;
+    const after = laneStatus(name, lane, { read, lineage: lineage.hops, fixture });
+    const changedInputs = lane.files.filter((file) => inputPath(file) in overrides);
+    report.push({
+      lane: name,
+      changedInputs,
+      fixtureChanged: fixture !== undefined,
+      before: { state: before.state, current: before.current },
+      after: { state: after.state, current: after.current },
+      digestChanged: before.current !== after.current,
+    });
+    if (after.state === "stale" && before.state !== "stale") {
+      problems.push(
+        `${name}: the rewrite disconnects the recorded digest (was ${before.state}, now stale; scheme-2 ${before.current} -> ${after.current})`,
+      );
+      // Only comments and whitespace changed (the scheme-2 digest is the same) and the recorded
+      // digest was today's raw one: a hop at the current commit connects it again. It is
+      // proposed, never added: it goes in a commit of its own before the rewrite.
+      if (before.state === "raw" && before.current === after.current && proposeCommit)
+        proposed.push({
+          lane: name,
+          from: after.saved,
+          to: after.current,
+          commit: proposeCommit,
+          kind: "scheme",
+        });
+    }
+  }
+  if (changedLineage)
+    for (const problem of lineageProblems(lineage, {
+      lanes,
+      reader,
+      shallow,
+      current: (file) => overrides[inputPath(file)] ?? treeReader(file),
+    }))
+      problems.push(`lineage after the rewrite: ${problem}`);
+  return { lanes: report, problems, proposedHops: proposed };
+}
+
 // ---- report ------------------------------------------------------------------------------------
 
 /** What `verify` prints: each lane's recorded and current digest and its state. */
@@ -362,8 +442,20 @@ export function verifyReport({ reader = gitReader, shallow } = {}) {
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  if (process.argv[2] !== "verify") {
-    console.error("usage: harness-registry.mjs verify [--json]");
+  if (process.argv[2] === "paths") {
+    console.log(JSON.stringify(registryPaths()));
+  } else if (process.argv[2] === "rewrite-check") {
+    // <overrides.json>: { "<repository path>": "<new text>" }; see rewriteReport.
+    const head = process.argv[4] === "--head" ? process.argv[5] : undefined;
+    const result = rewriteReport(JSON.parse(readFileSync(process.argv[3], "utf8")), {
+      proposeCommit: head,
+    });
+    console.log(JSON.stringify(result, null, 2));
+    if (result.problems.length) process.exitCode = 1;
+  } else if (process.argv[2] !== "verify") {
+    console.error(
+      "usage: harness-registry.mjs verify [--json] | paths | rewrite-check <overrides.json>",
+    );
     process.exitCode = 2;
   } else {
     const report = verifyReport();

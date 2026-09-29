@@ -20,6 +20,8 @@ import {
   loadLineage,
   rawDigest,
   recordedDigests,
+  registryPaths,
+  rewriteReport,
   scheme2Digest,
   sourceTokens,
   treeReader,
@@ -451,4 +453,151 @@ test("fixture discovery lists only *-production.json files that hold a harnessDi
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+// ---- rewrites (the rebind guard) ----------------------------------------------------------
+
+const readSrc = (file) => readFileSync(join(CONFORMANCE_DIR, "src", file), "utf8");
+const laneReport = (report, name) => report.lanes.find((l) => l.lane === name);
+const NO_GIT = {
+  reader: () => () => {
+    throw new Error("no history in this test");
+  },
+  shallow: false,
+};
+
+test("the registry lists every input, fixture and the lineage a rewrite must show it", () => {
+  const paths = registryPaths();
+  assert.ok(paths.includes("conformance/harness-lineage.json"));
+  assert.ok(paths.includes("conformance/src/auth-fs-cross/session.mjs"));
+  assert.ok(paths.includes("conformance/src/auth-fs-cross/stage2-orchestrator.mjs"));
+  assert.ok(paths.includes("conformance/fs-rules-production.json"));
+  assert.deepEqual(paths, [...new Set(paths)].toSorted());
+  assert.ok(!paths.includes("conformance/src/auth-fs-cross/run.mjs"), "a runner is not an input");
+});
+
+test("a rewrite of provenance comments leaves every lane as it was", () => {
+  const file = "auth-fs-cross/session.mjs";
+  const edited = readSrc(file).replace(
+    /^\/\/ Copied from.*$/m,
+    "// Copied from elsewhere, at commit 0000",
+  );
+  assert.notEqual(edited, readSrc(file));
+  const report = rewriteReport({ [`conformance/src/${file}`]: edited }, NO_GIT);
+  assert.deepEqual(report.problems, []);
+  const lane = laneReport(report, "auth-fs-cross");
+  assert.deepEqual(lane.changedInputs, [file]);
+  assert.equal(lane.digestChanged, false);
+  assert.equal(lane.after.state, lane.before.state);
+  assert.equal(laneReport(report, "fs-rules").changedInputs.length, 0);
+});
+
+test("a comment-only rewrite that disconnects a raw recorded digest proposes the hop, and adds none", () => {
+  const file = "fs-rules/session.mjs";
+  const edited = readSrc(file).replace(/^\/\/ Executes.*$/m, "// Executes programs, reworded");
+  assert.notEqual(edited, readSrc(file));
+  const head = "d".repeat(40);
+  const report = rewriteReport(
+    { [`conformance/src/${file}`]: edited },
+    { ...NO_GIT, proposeCommit: head },
+  );
+  assert.match(report.problems.join("\n"), /fs-rules: the rewrite disconnects/);
+  const lane = laneReport(report, "fs-rules");
+  assert.equal(lane.digestChanged, false);
+  assert.deepEqual(report.proposedHops, [
+    {
+      lane: "fs-rules",
+      from: laneStatus("fs-rules", HARNESS_LANES["fs-rules"]).saved,
+      to: lane.after.current,
+      commit: head,
+      kind: "scheme",
+    },
+  ]);
+  // Without a commit to name, nothing is proposed; with a token change, nothing is either.
+  assert.deepEqual(rewriteReport({ [`conformance/src/${file}`]: edited }, NO_GIT).proposedHops, []);
+  const tokenChange = rewriteReport(
+    { [`conformance/src/${file}`]: `${readSrc(file)}\nconst x = 1;\n` },
+    { ...NO_GIT, proposeCommit: head },
+  );
+  assert.deepEqual(tokenChange.proposedHops, []);
+  assert.match(tokenChange.problems.join("\n"), /fs-rules/);
+});
+
+test("a rewrite that changes a token of an input a lane is connected through is refused", () => {
+  const file = "fs-rules/session.mjs";
+  const edited = `${readSrc(file)}\nconst rewrittenByMistake = 1;\n`;
+  const report = rewriteReport({ [`conformance/src/${file}`]: edited }, NO_GIT);
+  const lane = laneReport(report, "fs-rules");
+  assert.equal(lane.digestChanged, true);
+  assert.equal(lane.after.state, "stale");
+  assert.match(report.problems.join("\n"), /fs-rules: the rewrite disconnects/);
+  // The same file is an input of the AUTH-FS-CROSS copy only through its own session; the lane
+  // whose inputs the edit does not touch is left alone.
+  assert.ok(!report.problems.join("\n").includes("auth-fs-cross:"));
+});
+
+test("a lane that was already unconnected is not blamed again", () => {
+  const file = "auth-fs-cross/stage2-session.mjs";
+  const report = rewriteReport(
+    { [`conformance/src/${file}`]: `${readSrc(file)}\nconst x = 1;\n` },
+    NO_GIT,
+  );
+  assert.equal(laneReport(report, "auth-fs-cross-stage2").before.state, "stale");
+  assert.deepEqual(report.problems, []);
+});
+
+test("a rewrite of the fixture or of the lineage that disconnects a lane is refused", () => {
+  const fixturePath = "conformance/auth-fs-cross-production.json";
+  const fixture = JSON.parse(readFileSync(join(REPO_ROOT, fixturePath), "utf8"));
+  for (const program of Object.values(fixture.programs)) program.harnessDigest = "7".repeat(64);
+  const changedFixture = rewriteReport({ [fixturePath]: JSON.stringify(fixture) }, NO_GIT);
+  assert.equal(laneReport(changedFixture, "auth-fs-cross").fixtureChanged, true);
+  assert.match(changedFixture.problems.join("\n"), /auth-fs-cross: the rewrite disconnects/);
+  const noHops = rewriteReport(
+    { "conformance/harness-lineage.json": JSON.stringify({ version: 1, hops: [] }) },
+    NO_GIT,
+  );
+  assert.match(noHops.problems.join("\n"), /auth-fs-cross: the rewrite disconnects/);
+});
+
+test("a rewritten lineage is verified as well, and a bad text is an error", () => {
+  const hop = loadLineage().hops[0];
+  const moved = JSON.stringify({ version: 1, hops: [{ ...hop, commit: "1".repeat(40) }] });
+  const report = rewriteReport({ "conformance/harness-lineage.json": moved }, NO_GIT);
+  assert.match(report.problems.join("\n"), /lineage after the rewrite: hop 0: the sources at/);
+  assert.throws(() => rewriteReport({ "conformance/harness-lineage.json": "not json" }, NO_GIT));
+  assert.throws(() => rewriteReport({ "conformance/src/x.mjs": 5 }, NO_GIT), /must be a string/);
+});
+
+test("a rewrite of a file no lane reads changes nothing", () => {
+  const report = rewriteReport(
+    { "conformance/src/auth-fs-cross/run.mjs": "// anything\n" },
+    NO_GIT,
+  );
+  assert.deepEqual(report.problems, []);
+  assert.ok(report.lanes.every((l) => l.changedInputs.length === 0 && !l.fixtureChanged));
+});
+
+test("a hop is never proposed for a lane that was connected through a hop", () => {
+  const noHops = rewriteReport(
+    { "conformance/harness-lineage.json": JSON.stringify({ version: 1, hops: [] }) },
+    { ...NO_GIT, proposeCommit: "d".repeat(40) },
+  );
+  assert.match(noHops.problems.join("\n"), /auth-fs-cross: the rewrite disconnects/);
+  assert.deepEqual(noHops.proposedHops, []);
+});
+
+test("a rewritten lineage is checked against the rewritten inputs", () => {
+  const file = "auth-fs-cross/session.mjs";
+  const report = rewriteReport(
+    {
+      "conformance/harness-lineage.json": JSON.stringify(loadLineage()),
+      [`conformance/src/${file}`]: `${readSrc(file)}\nconst x = 1;\n`,
+    },
+    { reader: gitReader, shallow: false },
+  );
+  assert.match(
+    report.problems.join("\n"),
+    /lineage after the rewrite: hop 0: the scheme-2 digest of the current tree/,
+  );
 });

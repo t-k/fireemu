@@ -76,7 +76,7 @@ export function validateCall(spec) {
         if (write.update.fields[key].stringValue !== expected) throw new Error('P10-B write owner differs');
       }
       keys(write.update.fields.state, ['stringValue']);
-      if (!['created', 'accepted-idle-65', 'accepted-idle-66', 'accepted-idle-67', 'accepted-idle-68', 'accepted-idle-69', 'accepted-idle-70'].includes(write.update.fields.state.stringValue)) throw new Error('P10-B state differs');
+      if (!['created', 'accepted-idle-75', 'accepted-idle-80', 'accepted-idle-90', 'accepted-idle-100', 'accepted-idle-110', 'accepted-idle-120'].includes(write.update.fields.state.stringValue)) throw new Error('P10-B state differs');
       break;
     }
     case 'DeleteDocument':

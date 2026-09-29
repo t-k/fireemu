@@ -1,4 +1,4 @@
-"""The boundary sweep has six fresh samples and an immutable request graph."""
+"""The boundary sweep has six fresh samples and an immutable request graph (P10-C: 75 to 120 s)."""
 
 import copy
 import importlib
@@ -17,9 +17,9 @@ def plan(program):
 
 def test_sweep_has_six_fixed_fresh_transactions_and_one_owned_marker(program):
     value = plan(program)
-    assert value["program"] == "FS-TRANSACTION-P10-B-GRPC-BOUNDARY"
+    assert value["program"] == "FS-TRANSACTION-P10-C-GRPC-BOUNDARY"
     assert value["document"].endswith("/oracle/" + "a" * 32 + "/txn-p10b/control")
-    assert value["candidates"] == list(range(65, 71))
+    assert value["candidates"] == [75, 80, 90, 100, 110, 120] == list(program.CANDIDATES)
     assert len(value["steps"]) == 26
     assert value["conditionalSkips"] == []
     assert value["maxTokens"] == 6
@@ -27,10 +27,10 @@ def test_sweep_has_six_fixed_fresh_transactions_and_one_owned_marker(program):
     assert value["observationSeconds"] == 1200
     assert value["recoverySeconds"] == 180
     assert value["maxRequests"] == sum(value["caps"].values()) == 48
-    assert sum(value["waits"].values()) == 405
-    tokens = {f"idle-{seconds}": f"token-{seconds}".encode().hex() for seconds in range(65, 71)}
-    for seconds in range(65, 71):
-        sample = value["steps"][2 + (seconds - 65) * 4:6 + (seconds - 65) * 4]
+    assert sum(value["waits"].values()) == 575
+    tokens = {f"idle-{seconds}": f"token-{seconds}".encode().hex() for seconds in program.CANDIDATES}
+    for index, seconds in enumerate(program.CANDIDATES):
+        sample = value["steps"][2 + index * 4:6 + index * 4]
         assert [step["rpc"] for step in sample] == ["BeginTransaction", "GetDocument", "Commit", "GetDocument"]
         assert sample[0]["tokenInput"] is None
         assert sample[0]["tokenOutput"] == f"idle-{seconds}"
@@ -45,12 +45,12 @@ def test_sweep_has_six_fixed_fresh_transactions_and_one_owned_marker(program):
 def test_plan_rejects_authority_and_graph_changes(program, mutation):
     value = plan(program)
     changed = copy.deepcopy(value)
-    if mutation == "wait": changed["waits"]["idle-65/commit"] = 64
-    elif mutation == "candidate": changed["candidates"][0] = 64
+    if mutation == "wait": changed["waits"]["idle-75/commit"] = 74
+    elif mutation == "candidate": changed["candidates"][0] = 74
     elif mutation == "omit": changed["steps"].pop()
     elif mutation == "repeat": changed["steps"].append(changed["steps"][-1])
-    elif mutation == "state": changed["steps"][4]["state"] = "accepted-idle-70"
-    elif mutation == "skip": changed["conditionalSkips"].append("idle-65/read")
+    elif mutation == "state": changed["steps"][4]["state"] = "accepted-idle-120"
+    elif mutation == "skip": changed["conditionalSkips"].append("idle-75/read")
     elif mutation == "tokens": changed["maxTokens"] = 7
     elif mutation == "concurrent": changed["maxUnresolvedTokens"] = 2
     elif mutation == "phase": changed["caps"]["observation"] = 27
@@ -68,7 +68,7 @@ def test_slots_cannot_repeat_or_skip_and_requests_keep_owned_preconditions(progr
     with pytest.raises(ValueError, match="order"):
         cursor.claim(value["steps"][1]["id"])
     token = "dG9rZW4="
-    tokens = {f"idle-{seconds}": token for seconds in range(65, 71)}
+    tokens = {f"idle-{seconds}": token for seconds in program.CANDIDATES}
     for step in value["steps"]:
         assert cursor.claim(step["id"]) == step
         request = program.request_for_step(value, step, tokens)

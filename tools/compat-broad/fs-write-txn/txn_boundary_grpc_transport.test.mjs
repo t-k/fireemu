@@ -10,10 +10,10 @@ const module = () => import('./txn_boundary_grpc_transport.mjs');
 const spec = (method, request) => ({ kind: 'txn-p10b-grpc-call-v1', target: { kind: 'local', host: '127.0.0.1', port: 12345 }, projectId: 'demo-p10b', nonce, ownerId, method, request, bearer: 'owner', deadlineMs: 1000 });
 const update = state => ({ database, writes: [{ update: { name, fields: Object.fromEntries(Object.entries({ owner: ownerId, nonce, role: 'control', state }).map(([key, value]) => [key, { stringValue: value }])) }, currentDocument: { exists: true } }], transaction: token });
 
-test('only the seven boundary marker states and exact B resource are admitted', async () => {
+test('only the seven P10-C boundary marker states and exact B resource are admitted', async () => {
   const { validateCall } = await module();
-  for (const state of ['created', ...[65, 66, 67, 68, 69, 70].map(seconds => `accepted-idle-${seconds}`)]) validateCall(spec('Commit', update(state)));
-  for (const state of ['committed-before-idle', 'after-get-first', 'accepted-idle-64', 'accepted-idle-71']) assert.throws(() => validateCall(spec('Commit', update(state))));
+  for (const state of ['created', ...[75, 80, 90, 100, 110, 120].map(seconds => `accepted-idle-${seconds}`)]) validateCall(spec('Commit', update(state)));
+  for (const state of ['committed-before-idle', 'after-get-first', 'accepted-idle-65', 'accepted-idle-70', 'accepted-idle-74', 'accepted-idle-121']) assert.throws(() => validateCall(spec('Commit', update(state))));
   const wrong = update('created'); wrong.writes[0].update.name = name.replace('txn-p10b', 'txn-p10');
   assert.throws(() => validateCall(spec('Commit', wrong)));
 });
@@ -28,7 +28,7 @@ test('owned update, native version delete and finite unary methods are required'
   const { validateCall } = await module();
   validateCall(spec('DeleteDocument', { name, currentDocument: { updateTime: { seconds: '1788004860', nanos: 123 } } }));
   for (const change of ['owner', 'nonce', 'role', 'extra', 'precondition', 'writes']) {
-    const body = update('accepted-idle-65');
+    const body = update('accepted-idle-75');
     if (['owner', 'nonce', 'role'].includes(change)) body.writes[0].update.fields[change].stringValue = 'foreign';
     else if (change === 'extra') body.writes[0].update.fields.extra = { stringValue: 'foreign' };
     else if (change === 'precondition') delete body.writes[0].currentDocument;
@@ -70,7 +70,7 @@ test('one unary attempt disables retries and retains the raw native refusal', as
       close() { closes += 1; },
     };
   };
-  const result = await runUnary(spec('Commit', update('accepted-idle-65')), factory);
+  const result = await runUnary(spec('Commit', update('accepted-idle-75')), factory);
   assert.deepEqual(result, { kind: 'txn-p10b-grpc-receipt-v1', complete: true, code: 10, details: 'native refusal', response: null, dispatchedRequests: 1 });
   assert.equal(calls, 1); assert.equal(closes, 1);
 });

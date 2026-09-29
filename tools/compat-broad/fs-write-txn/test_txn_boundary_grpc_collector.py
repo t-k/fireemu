@@ -7,6 +7,8 @@ import importlib
 
 import pytest
 
+CANDIDATES = importlib.import_module("txn_boundary_grpc_program").CANDIDATES
+
 
 class Clock:
     def __init__(self): self.seconds = 100.0
@@ -26,7 +28,9 @@ class Wire:
 
     def send(self, method, request, **_kwargs):
         self.calls.append((method, copy.deepcopy(request)))
-        self.clock.sleep(0.01)
+        # A binary fraction: summed 0.01 steps drift by 1e-14 over 500 s and put a wait's lower bound a
+        # hair under its nominal length, which a real clock's scheduling slack never does.
+        self.clock.sleep(1 / 64)
         if len(self.calls) == self.fail_at:
             return {"kind": "txn-p10b-grpc-receipt-v1", "complete": False, "code": 14, "details": "lost", "response": None, "childReaped": True, "dispatchedRequests": 1}
         code, details, response = 0, "", {}
@@ -37,7 +41,7 @@ class Wire:
             self.transactions[token] = copy.deepcopy(self.document)
             response = {"transaction": token}
         elif method == "Commit":
-            code = self.codes[int(request["writes"][0]["update"]["fields"]["state"]["stringValue"].removeprefix("accepted-idle-")) - 65] if token else 0
+            code = self.codes[CANDIDATES.index(int(request["writes"][0]["update"]["fields"]["state"]["stringValue"].removeprefix("accepted-idle-")))] if token else 0
             if code:
                 details, response = "The referenced transaction has expired or is no longer valid.", None
             else:
@@ -86,7 +90,7 @@ def test_six_samples_are_fresh_and_failed_tokens_release_before_the_next_begin(c
     assert not receipt["openTokens"]
     assert not receipt["unknownStarts"] and not receipt["unknownCommits"] and not receipt["unknownRollbacks"]
     assert len(receipt["waits"]) == 6
-    assert clock.seconds >= 505
+    assert clock.seconds >= 100 + sum(CANDIDATES)
     assert wire.document is None
     active = None
     for method, request in wire.calls:
@@ -97,7 +101,7 @@ def test_six_samples_are_fresh_and_failed_tokens_release_before_the_next_begin(c
             active = request["transaction"]
         elif method == "Commit" and request.get("transaction"):
             seconds = int(request["writes"][0]["update"]["fields"]["state"]["stringValue"].removeprefix("accepted-idle-"))
-            if codes[seconds - 65] == 0: active = None
+            if codes[CANDIDATES.index(seconds)] == 0: active = None
         elif method == "Rollback":
             assert request["transaction"] == active
             active = None
@@ -106,8 +110,8 @@ def test_six_samples_are_fresh_and_failed_tokens_release_before_the_next_begin(c
     assert [row["code"] for row in projected["cases"]] == list(codes)
     assert projected["exactThresholdProven"] is False
     assert projected["cleanup"] == {"absent": True}
-    assert any(value["unknownStarts"] == ["idle-65/begin"] for value in journal)
-    for seconds, wait in zip(range(65, 71), receipt["waits"], strict=True):
+    assert any(value["unknownStarts"] == [f"idle-{CANDIDATES[0]}/begin"] for value in journal)
+    for seconds, wait in zip(CANDIDATES, receipt["waits"], strict=True):
         assert wait["seconds"] == seconds
         assert wait["idleInterval"]["lowerSeconds"] >= seconds
         assert wait["idleInterval"]["upperSeconds"] > wait["idleInterval"]["lowerSeconds"]
@@ -121,7 +125,7 @@ def test_nonzero_or_unknown_release_stops_next_candidate_without_retry(code, unk
     assert not receipt["complete"] and receipt["unrecovered"]
     assert sum(method == "BeginTransaction" for method, _ in wire.calls) == 1
     assert sum(method == "Rollback" for method, _ in wire.calls) == 1
-    assert receipt["openTokens"] == ["idle-65"]
+    assert receipt["openTokens"] == [f"idle-{CANDIDATES[0]}"]
     assert bool(receipt["unknownRollbacks"]) == unknown
 
 
@@ -148,7 +152,7 @@ def test_unproven_publication_owner_or_cleanup_version_cannot_freeze(flag):
 def test_duplicate_minted_token_stops_the_second_sample():
     _, collector, wire, _, _, _ = fixture(duplicate=True)
     receipt = collector.run()
-    assert not receipt["complete"] and receipt["unknownStarts"] == ["idle-66/begin"]
+    assert not receipt["complete"] and receipt["unknownStarts"] == [f"idle-{CANDIDATES[1]}/begin"]
     assert sum(method == "BeginTransaction" for method, _ in wire.calls) == 2
 
 
@@ -173,7 +177,7 @@ def test_sample_total_age_headroom_is_checked_before_the_candidate_commit():
 
 def test_scheduling_overshoot_does_not_silently_become_another_candidate():
     _, collector, wire, _, _, clock = fixture()
-    collector.sleep = lambda _seconds: clock.sleep(67)
+    collector.sleep = lambda _seconds: clock.sleep(CANDIDATES[0] + 2)
     receipt = collector.run()
     assert not receipt['complete']
     assert not any(method == 'Commit' and request.get('transaction') for method, request in wire.calls)
@@ -184,12 +188,12 @@ def test_wait_at_the_one_second_scheduling_slack_retains_its_measured_interval()
     first = True
     def sleep(seconds):
         nonlocal first
-        clock.sleep(66 if first else seconds)
+        clock.sleep(CANDIDATES[0] + 1 if first else seconds)
         first = False
     collector.sleep = sleep
     receipt = collector.run()
     assert receipt['complete']
-    assert receipt['waits'][0]['idleInterval']['lowerSeconds'] >= 66
+    assert receipt['waits'][0]['idleInterval']['lowerSeconds'] >= CANDIDATES[0] + 1
     assert module.projection(receipt)['exactThresholdProven'] is False
 
 
@@ -198,10 +202,10 @@ def test_projection_derives_evidence_instead_of_accepting_claimed_completion(cha
     module, collector, _, _, _, _ = fixture((0, 0, 0, 10, 10, 10))
     receipt = collector.run()
     assert receipt["complete"]
-    if change == "wait": receipt["waits"][0]["seconds"] = 64
+    if change == "wait": receipt["waits"][0]["seconds"] = CANDIDATES[0] - 1
     elif change == "order": receipt["steps"][3], receipt["steps"][4] = receipt["steps"][4], receipt["steps"][3]
     elif change == "count": receipt["phaseRequests"]["observation"] -= 1
-    elif change == "token": receipt["tokens"]["idle-70"]["value"] = receipt["tokens"]["idle-65"]["value"]
+    elif change == "token": receipt["tokens"][f"idle-{CANDIDATES[-1]}"]["value"] = receipt["tokens"][f"idle-{CANDIDATES[0]}"]["value"]
     elif change == "release": receipt["cleanupSteps"][0]["result"]["code"] = 10
     elif change == "state": receipt["expectedState"] = "created"
     elif change == "absence": receipt["cleanupSteps"][-1]["result"].update(code=0, response={})
@@ -216,8 +220,13 @@ def test_nonmonotonic_or_overlapping_candidate_results_are_indeterminate():
     projected = module.projection(receipt)
     assert projected["boundaryClassification"] == "INDETERMINATE"
     receipt = fixture((0, 0, 0, 10, 10, 10))[1].run()
-    for wait in receipt["waits"]: wait["idleInterval"]["upperSeconds"] += 2
+    # The candidates are 10 s apart at the refusal edge (90 and 100): intervals widened past that
+    # overlap the last acceptance and the first refusal, and cannot separate them.
+    for wait in receipt["waits"]: wait["idleInterval"]["upperSeconds"] += 11
     assert module.boundary_classification(receipt["waits"], receipt["observations"]) == "INDETERMINATE"
+    # Untouched, the same outcomes are separated: accepted through 90 s, refused from 100 s.
+    separated = fixture((0, 0, 0, 10, 10, 10))[1].run()
+    assert module.boundary_classification(separated["waits"], separated["observations"]) == "SEPARATED_OBSERVATIONS"
 
 
 @pytest.mark.parametrize("codes", [(0,) * 6, (10,) * 6])

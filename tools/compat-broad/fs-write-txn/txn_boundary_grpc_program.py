@@ -1,4 +1,7 @@
-"""Closed P10-B native gRPC idle sweep; this module grants no send permission."""
+"""Closed P10-C native gRPC idle sweep (75 to 120 s); this module grants no send permission.
+
+P10-B swept 65 to 70 s and every candidate was accepted; the REST refusal once read as a 70 s
+refusal was a 121 s idle. This sweep brackets the window between them."""
 
 from __future__ import annotations
 
@@ -10,45 +13,34 @@ from pathlib import Path
 
 PROJECT = "fireemu-oracle-sbx"
 DATABASE = "(default)"
-PROGRAM = "FS-TRANSACTION-P10-B-GRPC-BOUNDARY"
+PROGRAM = "FS-TRANSACTION-P10-C-GRPC-BOUNDARY"
 MAX_REQUESTS = 48
 OBSERVATION_SECONDS = 1200
 RECOVERY_SECONDS = 180
 _CAPS = {"observation": 26, "tokenCleanup": 6, "documentCleanup": 7, "management": 7, "credential": 2}
-CANDIDATES = (65, 66, 67, 68, 69, 70)
+CANDIDATES = (75, 80, 90, 100, 110, 120)
 _WAITS = {f"idle-{seconds}/commit": seconds for seconds in CANDIDATES}
 _IDENTITY = re.compile(r"[a-f0-9]{32}\Z")
 
 # id, RPC, token input, token output, write/read state, observation case.
 # Begin outputs are tracked even when a refusal was expected.
-_STEPS = (
+_SETUP = (
     ('setup/absence', 'GetDocument', None, None, None, None),
     ('setup/create', 'Commit', None, None, 'created', None),
-    ('idle-65/begin', 'BeginTransaction', None, 'idle-65', None, None),
-    ('idle-65/read', 'GetDocument', 'idle-65', None, None, None),
-    ('idle-65/commit', 'Commit', 'idle-65', None, 'accepted-idle-65', 'grpc/commit-idle-65'),
-    ('idle-65/post-state', 'GetDocument', None, None, None, None),
-    ('idle-66/begin', 'BeginTransaction', None, 'idle-66', None, None),
-    ('idle-66/read', 'GetDocument', 'idle-66', None, None, None),
-    ('idle-66/commit', 'Commit', 'idle-66', None, 'accepted-idle-66', 'grpc/commit-idle-66'),
-    ('idle-66/post-state', 'GetDocument', None, None, None, None),
-    ('idle-67/begin', 'BeginTransaction', None, 'idle-67', None, None),
-    ('idle-67/read', 'GetDocument', 'idle-67', None, None, None),
-    ('idle-67/commit', 'Commit', 'idle-67', None, 'accepted-idle-67', 'grpc/commit-idle-67'),
-    ('idle-67/post-state', 'GetDocument', None, None, None, None),
-    ('idle-68/begin', 'BeginTransaction', None, 'idle-68', None, None),
-    ('idle-68/read', 'GetDocument', 'idle-68', None, None, None),
-    ('idle-68/commit', 'Commit', 'idle-68', None, 'accepted-idle-68', 'grpc/commit-idle-68'),
-    ('idle-68/post-state', 'GetDocument', None, None, None, None),
-    ('idle-69/begin', 'BeginTransaction', None, 'idle-69', None, None),
-    ('idle-69/read', 'GetDocument', 'idle-69', None, None, None),
-    ('idle-69/commit', 'Commit', 'idle-69', None, 'accepted-idle-69', 'grpc/commit-idle-69'),
-    ('idle-69/post-state', 'GetDocument', None, None, None, None),
-    ('idle-70/begin', 'BeginTransaction', None, 'idle-70', None, None),
-    ('idle-70/read', 'GetDocument', 'idle-70', None, None, None),
-    ('idle-70/commit', 'Commit', 'idle-70', None, 'accepted-idle-70', 'grpc/commit-idle-70'),
-    ('idle-70/post-state', 'GetDocument', None, None, None, None),
 )
+
+
+def _sample(seconds):
+    role = f'idle-{seconds}'
+    return (
+        (f'{role}/begin', 'BeginTransaction', None, role, None, None),
+        (f'{role}/read', 'GetDocument', role, None, None, None),
+        (f'{role}/commit', 'Commit', role, None, f'accepted-idle-{seconds}', f'grpc/commit-idle-{seconds}'),
+        (f'{role}/post-state', 'GetDocument', None, None, None, None),
+    )
+
+
+_STEPS = _SETUP + tuple(row for seconds in CANDIDATES for row in _sample(seconds))
 
 
 def _canonical(value):

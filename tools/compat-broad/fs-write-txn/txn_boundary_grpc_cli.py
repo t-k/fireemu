@@ -20,14 +20,14 @@ ROOT = HERE.parents[2]
 sys.path.insert(0, str(HERE))
 
 from txn_boundary_grpc_authority import authorize, remaining_task_budget
-from txn_boundary_grpc_program import PROGRAM, corpus_digest, source_digest
+from txn_boundary_grpc_program import CANDIDATES, PROGRAM, corpus_digest, source_digest
 from txn_boundary_grpc_runner import record_twice, run_once
 from txn_boundary_grpc_wire import verify_runtime
 from txn_sandbox_admission import read_ledger
 from txn_sandbox_runtime import require_packet_runtime
 
 CLOSURE = ROOT / 'spec/compatibility/closure/FS-TRANSACTION.json'
-ENVELOPE_ID = 'FS-TRANSACTION-p10-grpc-boundary-001'
+ENVELOPE_ID = 'FS-TRANSACTION-p10-grpc-boundary-002'
 FIELDS = {'schemaVersion', 'program', 'packetName', 'packetId', 'project', 'database', 'recordings', 'requestsPerRecording', 'estimatedUsdPerRecording', 'sourceCommit', 'runnerSha256', 'closureSha256', 'corpusDigest', 'planSourceDigest', 'baselineSha256', 'envelopeId', 'envelopePath', 'envelopeSha256', 'runtime', 'iamConfig', 'retries', 'onStop', 'observationSeconds', 'recoverySeconds', 'maxTokens', 'timing', 'timingSource', 'reserveUsd', 'maxUnresolvedTokens', 'releasePolicy', 'candidates'}
 
 
@@ -76,7 +76,7 @@ def runner_sha256():
 
 
 def packet_value(*, source_commit, runtime, baseline_sha256, envelope_sha256, packet_id, envelope_relative):
-    return {'schemaVersion': 1, 'program': PROGRAM, 'packetName': 'p10-grpc-boundary', 'packetId': packet_id, 'project': 'fireemu-oracle-sbx', 'database': '(default)', 'recordings': 2, 'requestsPerRecording': 48, 'estimatedUsdPerRecording': 0.01, 'sourceCommit': source_commit, 'runnerSha256': runner_sha256(), 'closureSha256': sha(CLOSURE.read_bytes()), 'corpusDigest': corpus_digest(), 'planSourceDigest': source_digest(), 'baselineSha256': baseline_sha256, 'envelopeId': ENVELOPE_ID, 'envelopePath': envelope_relative, 'envelopeSha256': envelope_sha256, 'runtime': runtime, 'iamConfig': 'none', 'retries': 'none', 'onStop': 'needs-recovery-lock-held', 'observationSeconds': 1200, 'recoverySeconds': 180, 'maxTokens': 6, 'timing': 'wall-clock', 'timingSource': 'parent-wire-envelope', 'reserveUsd': 0.04, 'maxUnresolvedTokens': 1, 'releasePolicy': 'rollback-zero-before-next-sample', 'candidates': list(range(65, 71))}
+    return {'schemaVersion': 1, 'program': PROGRAM, 'packetName': 'p10-grpc-boundary', 'packetId': packet_id, 'project': 'fireemu-oracle-sbx', 'database': '(default)', 'recordings': 2, 'requestsPerRecording': 48, 'estimatedUsdPerRecording': 0.01, 'sourceCommit': source_commit, 'runnerSha256': runner_sha256(), 'closureSha256': sha(CLOSURE.read_bytes()), 'corpusDigest': corpus_digest(), 'planSourceDigest': source_digest(), 'baselineSha256': baseline_sha256, 'envelopeId': ENVELOPE_ID, 'envelopePath': envelope_relative, 'envelopeSha256': envelope_sha256, 'runtime': runtime, 'iamConfig': 'none', 'retries': 'none', 'onStop': 'needs-recovery-lock-held', 'observationSeconds': 1200, 'recoverySeconds': 180, 'maxTokens': 6, 'timing': 'wall-clock', 'timingSource': 'parent-wire-envelope', 'reserveUsd': 0.04, 'maxUnresolvedTokens': 1, 'releasePolicy': 'rollback-zero-before-next-sample', 'candidates': list(CANDIDATES)}
 
 
 def _read_packet(path, digest, *, label='packet'):

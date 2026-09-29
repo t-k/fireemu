@@ -7,12 +7,12 @@ import time
 import re
 import math
 
-from txn_boundary_grpc_program import GraphCursor, canonical_token, compile_plan, request_for_step, validate_plan
+from txn_boundary_grpc_program import CANDIDATES, GraphCursor, canonical_token, compile_plan, request_for_step, validate_plan
 
 
 from txn_idle_grpc_collector import _timing, idle_interval, utc_now
 
-STATES = ['created'] + [f'accepted-idle-{seconds}' for seconds in range(65, 71)]
+STATES = ['created'] + [f'accepted-idle-{seconds}' for seconds in CANDIDATES]
 
 
 def _string_field(value):
@@ -383,7 +383,7 @@ def projection(receipt):
             index += 1
         elif row.get('phase') == 'tokenCleanup':
             role = str(row.get('site')).removeprefix('cleanup/token/')
-            if row.get('rpc') != 'Rollback' or role not in issued or tokens[role] != 'open' or result['code'] != 0 or request != {'database': plan['database'], 'transaction': issued[role]} or previous is None or previous['site'] != role + '/post-state' or index >= 26 and role != 'idle-70':
+            if row.get('rpc') != 'Rollback' or role not in issued or tokens[role] != 'open' or result['code'] != 0 or request != {'database': plan['database'], 'transaction': issued[role]} or previous is None or previous['site'] != role + '/post-state' or index >= 26 and role != f'idle-{CANDIDATES[-1]}':
                 raise ValueError('P10-B per-sample release proof differs')
             tokens[role] = 'rolled-back'
             last_uses[role] = copy.deepcopy(row['timing'])

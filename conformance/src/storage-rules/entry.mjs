@@ -1,7 +1,7 @@
 import { constants, lstatSync } from "node:fs";
 import { lstat, mkdir, open } from "node:fs/promises";
 import { request as httpsRequest } from "node:https";
-import { dirname, isAbsolute, join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { withAssembledRun } from "./assemble-run.mjs";
 import { createSingleAttemptHttpsTransport } from "./http-transport.mjs";
@@ -56,10 +56,10 @@ async function readOwnerLedger(path) {
     const stat = await handle.stat();
     if (!stat.isFile() || stat.uid !== process.getuid() || (stat.mode & 0o022) !== 0 || stat.size > MAX_LEDGER_BYTES) refuse("owner ledger refused");
     return new TextDecoder("utf-8", { fatal: true }).decode(await handle.readFile());
-  } catch (error) { throw error?.message === "owner ledger refused" ? error : new Error("owner ledger refused"); } finally { await handle.close(); }
+  } catch { refuse("owner ledger refused"); } finally { await handle.close(); }
 }
 
-const systemClock = Object.freeze({
+export const systemClock = Object.freeze({
   nowSeconds: () => Math.floor(Date.now() / 1000),
   waitUntilSeconds: (target) => new Promise((done) => setTimeout(done, Math.max(0, target * 1000 - Date.now()))),
   sleep: (ms) => new Promise((done) => setTimeout(done, ms)),
@@ -73,7 +73,7 @@ const systemClock = Object.freeze({
 export function bindStorageRulesEntry(options) {
   if (!closed(options, ROOT_KEYS)) refuse("invalid entry binding");
   const { root, requestImpl, clock } = options;
-  if (typeof root !== "string" || !isAbsolute(root) || root !== resolve(root) || typeof requestImpl !== "function" || !closed(clock, ["nowSeconds", "waitUntilSeconds", "sleep"])) refuse("invalid entry binding");
+  if (typeof root !== "string" || typeof requestImpl !== "function" || !closed(clock, ["nowSeconds", "waitUntilSeconds", "sleep"])) refuse("invalid entry binding");
   if (mainRepositoryRoot(root) !== root) refuse("entry root is not a main checkout");
   const paths = pinnedPaths(root);
   const transport = createSingleAttemptHttpsTransport({ requestImpl });
@@ -89,8 +89,6 @@ export function bindStorageRulesEntry(options) {
     // A private, fresh directory for this run's journals: it must not exist yet.
     const directory = paths.runDirectory(runId);
     await mkdir(directory, { mode: 0o700 }).catch((error) => refuse(error?.code === "EEXIST" ? "run directory exists" : "run directory refused"));
-    const made = await lstat(directory);
-    if (!made.isDirectory() || (made.mode & 0o077) !== 0) refuse("run directory refused");
     return withAssembledRun({
       inputsPath, closure, runId, sourceCommit, packet, review,
       readLedger: () => readOwnerLedger(paths.ownerLedger),
@@ -100,6 +98,9 @@ export function bindStorageRulesEntry(options) {
   };
 }
 
-const here = dirname(fileURLToPath(import.meta.url));
-/** Start a recording: the real wire, the real clock, the paths of the main checkout this file belongs to. */
-export const withStorageRulesRecording = bindStorageRulesEntry({ root: mainRepositoryRoot(here), requestImpl: httpsRequest, clock: systemClock });
+/** The main checkout this file belongs to, resolved from the file's own location and never from the working directory. */
+export const entryRoot = mainRepositoryRoot(dirname(fileURLToPath(import.meta.url)));
+/** What the real entry is bound to: that checkout, the real HTTPS request function and the system clock. */
+export const realBinding = Object.freeze({ root: entryRoot, requestImpl: httpsRequest, clock: systemClock });
+/** Start a recording. */
+export const withStorageRulesRecording = bindStorageRulesEntry(realBinding);

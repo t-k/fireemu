@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile, chmod } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile, chmod, open } from "node:fs/promises";
+import { execFileSync, spawn } from "node:child_process";
+import { request as httpsRequest } from "node:https";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
-import { bindStorageRulesEntry, mainRepositoryRoot, pinnedPaths, withStorageRulesRecording } from "./storage-rules/entry.mjs";
+import { bindStorageRulesEntry, entryRoot, mainRepositoryRoot, pinnedPaths, realBinding, systemClock, withStorageRulesRecording } from "./storage-rules/entry.mjs";
 import { ADC, BUCKET, privatePacket } from "./storage-rules-runner-support.mjs";
 
 // The real entry point against a scratch main checkout: which files it reads, takes and writes, and what a caller cannot name.
@@ -72,7 +74,47 @@ test("the real binding of this file resolves to a main checkout that has the run
   const here = dirname(fileURLToPath(import.meta.url));
   const root = mainRepositoryRoot(here);
   assert.equal((await stat(join(root, ".git"))).isDirectory(), true);
+  assert.equal(entryRoot, root);
   assert.equal(typeof withStorageRulesRecording, "function");
+  // The real binding is that checkout, the real HTTPS request function and the system clock, and nothing else.
+  assert.deepEqual(Object.keys(realBinding).sort(), ["clock", "requestImpl", "root"]);
+  assert.equal(realBinding.root, root);
+  assert.equal(realBinding.requestImpl, httpsRequest);
+  assert.equal(realBinding.clock, systemClock);
+  assert.equal(Object.isFrozen(realBinding) && Object.isFrozen(systemClock), true);
+});
+
+test("the entry root comes from the file's location, not from the working directory", async (t) => {
+  const elsewhere = await mkdtemp("/private/tmp/storage-rules-entry-cwd-");
+  t.after(() => rm(elsewhere, { recursive: true, force: true }));
+  const previous = process.cwd();
+  process.chdir(elsewhere);
+  try {
+    const fresh = await import(`./storage-rules/entry.mjs?cwd=${Date.now()}`);
+    assert.equal(fresh.entryRoot, entryRoot);
+  } finally { process.chdir(previous); }
+});
+
+test("the system clock reads real time, waits until its target and sleeps for the given milliseconds", async () => {
+  assert.ok(Math.abs(systemClock.nowSeconds() - Date.now() / 1000) < 2 && Number.isInteger(systemClock.nowSeconds()));
+  let started = Date.now();
+  await systemClock.sleep(60);
+  assert.ok(Date.now() - started >= 50, `slept ${Date.now() - started} ms`);
+  started = Date.now();
+  await systemClock.waitUntilSeconds(Date.now() / 1000 + 0.4);
+  assert.ok(Date.now() - started >= 300, `waited ${Date.now() - started} ms`);
+  started = Date.now();
+  await systemClock.waitUntilSeconds(Date.now() / 1000 - 5);
+  assert.ok(Date.now() - started < 200);
+});
+
+test("finding the main checkout does not swallow a filesystem error other than a missing .git", async (t) => {
+  const root = await mkdtemp("/private/tmp/storage-rules-entry-eacces-");
+  t.after(async () => { await chmod(join(root, "closed"), 0o700).catch(() => {}); await rm(root, { recursive: true, force: true }); });
+  await mkdir(join(root, ".git"));
+  await mkdir(join(root, "closed", "inner"), { recursive: true });
+  await chmod(join(root, "closed"), 0o000);
+  assert.throws(() => mainRepositoryRoot(join(root, "closed", "inner")), /EACCES/);
 });
 
 test("the binding is a closed record for a main checkout, the real request function and a clock", async (t) => {
@@ -83,7 +125,7 @@ test("the binding is a closed record for a main checkout, the real request funct
   await mkdir(linked, { recursive: true });
   await writeFile(join(linked, ".git"), "gitdir: x\n");
   for (const bad of [null, {}, { ...good, extra: 1 }, { root: f.root, requestImpl: good.requestImpl }, { ...good, root: "relative" }, { ...good, root: `${f.root}/` }, { ...good, root: linked }, { ...good, root: 5 }, { ...good, requestImpl: 5 }, { ...good, clock: { nowSeconds() {} } }, { ...good, clock: [] }]) {
-    assert.throws(() => bindStorageRulesEntry(bad), /invalid entry binding|entry root is not a main checkout/);
+    assert.throws(() => bindStorageRulesEntry(bad), /invalid entry binding|entry root is not a main checkout|main repository root not found/);
   }
 });
 
@@ -94,7 +136,7 @@ test("a caller cannot name the ledger, the locks, the usage ledger, the run dire
   // Nor can a required option be left out or renamed, or the callback be something else.
   for (const key of Object.keys(f.options)) { const { [key]: _, ...rest } = f.options; await assert.rejects(f.entry(rest, async () => assert.fail("must not run")), /invalid storage rules recording options/, key); }
   await assert.rejects(f.entry(f.options, "not a function"), /invalid storage rules recording options/);
-  await assert.rejects(f.entry({ ...f.options, runId: "Bad Id" }, async () => assert.fail("must not run")), /invalid storage rules recording options/);
+  for (const bad of ["Bad Id", 5, ["entry-test"], "a".repeat(49), ""]) await assert.rejects(f.entry({ ...f.options, runId: bad }, async () => assert.fail("must not run")), /invalid storage rules recording options/, String(bad));
   assert.deepEqual(await readdir(f.runs), ["sandbox-locks"]);
   assert.equal(f.wire.length, 0);
 });
@@ -105,6 +147,9 @@ test("a run reads the pinned ledger, takes the pinned locks, marks the pinned us
   let result;
   await f.entry(f.options, async (run) => {
     seen = { locks: (await readdir(join(f.runs, "sandbox-locks"))).sort(), directoryMode: (await stat(join(f.runs, `storage-rules-${runId}`))).mode & 0o777 };
+    const body = JSON.parse(await readFile(join(f.runs, "sandbox-locks", "fireemu-oracle-idp.lock"), "utf8"));
+    assert.deepEqual([body.taskId, body.packetId, body.sourceCommit, body.pid], [packet.taskId, packet.packetName, sourceCommit, process.pid]);
+    assert.ok(Math.abs(Date.parse(body.acquiredAt) - Date.now()) < 60_000, body.acquiredAt);
     result = await run.run();
   });
   // The third recording under this approval is refused by the pinned usage ledger, so the approval read from the pinned owner ledger was valid.
@@ -163,5 +208,88 @@ test("the owner ledger must be a plain file of this user that nobody else can wr
     assert.deepEqual([result.status, result.reason], ["stopped", "admission refused"]);
     assert.equal(f.wire.length, 0);
     assert.equal((await readFile(join(f.runs, "storage-rules-recording-usage.jsonl"), "utf8").catch(() => "")), "");
+  }
+});
+
+test("a runs or lock directory that is a file or a link, or another user's, is refused", async (t) => {
+  const asFile = await checkout(t);
+  await rm(join(asFile.runs, "sandbox-locks"), { recursive: true });
+  await writeFile(join(asFile.runs, "sandbox-locks"), "", { mode: 0o600 });
+  await assert.rejects(asFile.entry(asFile.options, async () => assert.fail("must not run")), /lock directory refused/);
+  const asLink = await checkout(t);
+  await rm(join(asLink.runs, "sandbox-locks"), { recursive: true });
+  await mkdir(join(asLink.root, "real-locks"), { mode: 0o700 });
+  await symlink(join(asLink.root, "real-locks"), join(asLink.runs, "sandbox-locks"));
+  await assert.rejects(asLink.entry(asLink.options, async () => assert.fail("must not run")), /lock directory refused/);
+  // Another user's directory: the check compares the owner with this process's user.
+  for (const [name, message] of [["runs", /runs directory refused/]]) {
+    const other = await checkout(t);
+    const real = process.getuid;
+    process.getuid = () => real() + 1;
+    try { await assert.rejects(other.entry(other.options, async () => assert.fail("must not run")), message, name); } finally { process.getuid = real; }
+  }
+  const foreignLocks = await checkout(t);
+  await chmod(foreignLocks.runs, 0o700);
+  const real = process.getuid;
+  const calls = [];
+  // The runs directory is checked first; only the lock directory sees a different user.
+  process.getuid = () => { calls.push(1); return calls.length <= 1 ? real() : real() + 1; };
+  try { await assert.rejects(foreignLocks.entry(foreignLocks.options, async () => assert.fail("must not run")), /lock directory refused/); } finally { process.getuid = real; }
+  for (const state of [asFile, asLink, foreignLocks]) assert.equal(state.wire.length, 0);
+});
+
+test("a legacy shared lock at the pinned path stops the run, and nothing is left held", async (t) => {
+  const f = await checkout(t);
+  await writeFile(join(f.runs, "sandbox-ledger.jsonl.lock"), "{}\n", { mode: 0o600 });
+  await assert.rejects(f.entry(f.options, async () => assert.fail("must not run")), /legacy shared lock exists/);
+  assert.deepEqual(await readdir(join(f.runs, "sandbox-locks")), []);
+  assert.equal(f.wire.length, 0);
+});
+
+const held = (path) => execFileSync("lsof", ["-p", String(process.pid), "-Fn"], { encoding: "utf8" }).split("\n").filter((line) => line.startsWith("n") && line.includes(path));
+
+test("an owner ledger that is over its size limit, is not valid UTF-8, or is another user's is refused, and the handle is closed each time", async (t) => {
+  const path = (f) => join(f.root, "docs.local", "instructions", "owner-decisions.md");
+  const refusedRun = async (f, between = async () => {}) => {
+    let result;
+    await f.entry(f.options, async (run) => { await between(); result = await run.run(); });
+    assert.deepEqual([result.status, result.reason], ["stopped", "admission refused"]);
+    assert.equal(f.wire.length, 0);
+    assert.deepEqual(held(path(f)), []);
+  };
+  const big = await checkout(t, { ledgerText: `${ledger}\n${"x".repeat(8 * 1024 * 1024)}` });
+  await refusedRun(big);
+  const invalid = await checkout(t);
+  await writeFile(path(invalid), Buffer.concat([Buffer.from(ledger), Buffer.from([0x0a, 0xff])]), { mode: 0o644 });
+  await refusedRun(invalid);
+  const foreign = await checkout(t);
+  const real = process.getuid;
+  await refusedRun(foreign, async () => { process.getuid = () => real() + 1; t.after(() => { process.getuid = real; }); }).finally(() => { process.getuid = real; });
+  // The same ledger is accepted for its own user (the runs above fail only for the stated reason).
+  const fine = await checkout(t);
+  let result;
+  await assert.rejects(fine.entry(fine.options, async (run) => { result = await run.run(); }));
+  assert.notEqual(result.reason, "admission refused");
+  assert.deepEqual(held(path(fine)), []);
+});
+
+test("an owner ledger that is a named pipe is refused without blocking, even when a writer is ready", async (t) => {
+  for (const withWriter of [false, true]) {
+    const f = await checkout(t);
+    const ledgerPath = join(f.root, "docs.local", "instructions", "owner-decisions.md");
+    await rm(ledgerPath);
+    execFileSync("mkfifo", ["-m", "600", ledgerPath]);
+    let writer = null;
+    if (withWriter) {
+      await writeFile(join(f.root, "ledger-source.md"), ledger);
+      writer = spawn("sh", ["-c", 'cat "$0" > "$1"', join(f.root, "ledger-source.md"), ledgerPath], { stdio: "ignore" });
+    }
+    try {
+      let result;
+      const run = f.entry(f.options, async (recording) => { result = await recording.run(); });
+      await Promise.race([run, new Promise((_, reject) => setTimeout(() => reject(new Error("blocked on the pipe")), 4000).unref())]);
+      assert.deepEqual([result.status, result.reason], ["stopped", "admission refused"], String(withWriter));
+      assert.equal(f.wire.length, 0);
+    } finally { if (writer !== null && writer.exitCode === null) writer.kill("SIGTERM"); }
   }
 });

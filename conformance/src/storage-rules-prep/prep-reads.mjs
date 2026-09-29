@@ -15,7 +15,7 @@ import { withProjectLocks } from "../storage-rules/project-locks.mjs";
 import { createRecordingUsage } from "../storage-rules/recording-usage.mjs";
 import { createReservationJournal } from "../storage-rules/reservation-journal.mjs";
 import { createPrepAdmission } from "./admission.mjs";
-import { prepCorpus, PREP_IDS } from "./plan.mjs";
+import { KEY_ID, prepCorpus, PREP_IDS } from "./plan.mjs";
 import { prepCodeDigests } from "./pins.mjs";
 import { runPrepReads } from "./run.mjs";
 import { createPrepTargets } from "./targets.mjs";
@@ -58,11 +58,11 @@ export async function readLocalInputs(path) {
     const stat = await handle.stat();
     if (!stat.isFile() || (stat.mode & 0o077) !== 0 || stat.uid !== process.getuid() || stat.nlink !== 1 || stat.size > MAX_LOCAL_BYTES) throw new Error();
     const value = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(await handle.readFile()));
-    if (!closed(value, ["schemaVersion", "adcPath", "projects", "bucket"]) || value.schemaVersion !== 1 || !closed(value.projects, ["query", "idp"]) || !closed(value.projects.query, ["projectNumber", "apiKey"]) || !closed(value.projects.idp, ["projectNumber", "apiKey"]) || !closed(value.bucket, ["name"])) throw new Error();
+    if (!closed(value, ["schemaVersion", "adcPath", "projects", "bucket"]) || value.schemaVersion !== 1 || !closed(value.projects, ["query", "idp"]) || !closed(value.projects.query, ["projectNumber", "apiKey", "apiKeyId"]) || !closed(value.projects.idp, ["projectNumber", "apiKey", "apiKeyId"]) || !closed(value.bucket, ["name"])) throw new Error();
     const ok = (name, pattern) => typeof name === "string" && pattern.test(name);
     if (!ok(value.adcPath, /^\/[^\0\r\n]{1,1023}$/) || !ok(value.projects.query.projectNumber, /^[1-9]\d{0,19}$/) || !ok(value.projects.idp.projectNumber, /^[1-9]\d{0,19}$/) || value.projects.query.projectNumber === value.projects.idp.projectNumber ||
-      !ok(value.projects.query.apiKey, /^[A-Za-z0-9_-]{20,128}$/) || !ok(value.projects.idp.apiKey, /^[A-Za-z0-9_-]{20,128}$/) || value.projects.query.apiKey === value.projects.idp.apiKey || !ok(value.bucket.name, /^[a-z0-9][a-z0-9._-]{2,221}$/)) throw new Error();
-    return Object.freeze({ adcPath: value.adcPath, numbers: Object.freeze({ query: value.projects.query.projectNumber, idp: value.projects.idp.projectNumber }), keys: Object.freeze({ query: value.projects.query.apiKey, idp: value.projects.idp.apiKey }), bucket: value.bucket.name });
+      !ok(value.projects.query.apiKey, /^[A-Za-z0-9_-]{20,128}$/) || !ok(value.projects.idp.apiKey, /^[A-Za-z0-9_-]{20,128}$/) || value.projects.query.apiKey === value.projects.idp.apiKey || ![value.projects.query.apiKeyId, value.projects.idp.apiKeyId].every((id) => id === null || ok(id, KEY_ID)) || (value.projects.query.apiKeyId !== null && value.projects.query.apiKeyId === value.projects.idp.apiKeyId) || !ok(value.bucket.name, /^[a-z0-9][a-z0-9._-]{2,221}$/)) throw new Error();
+    return Object.freeze({ adcPath: value.adcPath, numbers: Object.freeze({ query: value.projects.query.projectNumber, idp: value.projects.idp.projectNumber }), keys: Object.freeze({ query: value.projects.query.apiKey, idp: value.projects.idp.apiKey }), keyIds: Object.freeze({ query: value.projects.query.apiKeyId, idp: value.projects.idp.apiKeyId }), bucket: value.bucket.name });
   } catch { throw new Error("local inputs file refused"); } finally { await handle?.close(); }
 }
 
@@ -88,7 +88,7 @@ export function bindPrepEntry(options) {
     const digests = await prepCodeDigests(codeRoot).catch(() => refuse("pin source refused"));
     if (digests.runnerSha256 !== packet.runnerSha256) refuse("pin mismatch: runnerSha256");
     if (digests.fixtureSchemaSha256 !== packet.fixtureSchemaSha256) refuse("pin mismatch: fixtureSchemaSha256");
-    const params = { bucket: local.bucket, queryProjectNumber: local.numbers.query, idpProjectNumber: local.numbers.idp, sourceCommit };
+    const params = { bucket: local.bucket, queryProjectNumber: local.numbers.query, idpProjectNumber: local.numbers.idp, sourceCommit, expectedKeyIds: local.keyIds };
     const corpus = prepCorpus(closure, params);
     if (corpus.sha256 !== packet.manifestSha256) refuse("pin mismatch: manifestSha256");
     const checkout = await checkoutMatches({ root: codeRoot, sourceCommit, git }).catch(() => ({ ok: false, reason: "source commit unreadable" }));

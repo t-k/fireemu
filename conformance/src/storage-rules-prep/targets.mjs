@@ -1,13 +1,12 @@
 import { createHash } from "node:crypto";
 import { createTargetBuilder } from "../storage-rules/target.mjs";
-import { keyListRequest, KEY_LIST_IDS, PREP_IDS, standardRows } from "./plan.mjs";
+import { keyListRequest, KEY_ID, KEY_LIST_IDS, PREP_IDS, standardRows } from "./plan.mjs";
 
 // The targets of the thirteen requests. Eleven are prepared by the stage 3 target builder from the stage 3 manifest's own rows
 // (so the same route, header and project rules apply); the two key lists are prepared here, from an exact URL. The two
 // key-string reads use a second builder made after the lists, once the real key IDs are known. One `verify` covers all three.
 const digest = (value) => createHash("sha256").update(value).digest("hex");
 const noReferences = () => { throw new Error("no runtime references in stage 2a"); };
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 export function createPrepTargets({ closure, params, digestSalt }) {
   const first = standardRows(closure, params);
@@ -45,7 +44,7 @@ export function createPrepTargets({ closure, params, digestSalt }) {
     /** Learn the two key IDs (once), then prepare a key-string read. */
     prepareKeyString(project, keyIds) {
       if (learned === null) {
-        if (!UUID.test(keyIds?.query ?? "") || !UUID.test(keyIds?.idp ?? "") || keyIds.query === keyIds.idp) throw new Error("invalid key IDs");
+        if (!KEY_ID.test(keyIds?.query ?? "") || !KEY_ID.test(keyIds?.idp ?? "") || keyIds.query === keyIds.idp) throw new Error("invalid key IDs");
         learned = { ...keyIds };
         const rows = standardRows(closure, params, learned);
         builderLearned = createTargetBuilder({ manifest: rows.manifest, digestSalt });

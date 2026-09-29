@@ -46,7 +46,7 @@ export async function runPrepReads({ gate, cache, targets, local, bucket, captur
       try {
         const body = parse(raw);
         if (body === undefined) return false;
-        chosen = selectKey(body, local.numbers[project]);
+        chosen = selectKey(body, local.numbers[project], local.keyIds[project]);
         const metaRow = targets.manifestRow(`preflight/${project}/key-metadata`);
         const row = { ...metaRow, request: { ...metaRow.request, path: `/v2/${chosen.item.name}` } };
         const seen = classifyResponse(row, { status: 200, rawHeaders: ["content-type", "application/json"], bytes: Buffer.from(JSON.stringify(chosen.item)) });
@@ -57,7 +57,7 @@ export async function runPrepReads({ gate, cache, targets, local, bucket, captur
     };
     const result = await gate.send(prepared, meta(accept));
     if (chosen === null || facts === null) stop("key list not judged");
-    await capture.writeFacts({ operationId: KEY_LIST_IDS[project], kind: "preflight-key-list", verdict: "accepted", facts: { status: 200, live: 1, apiTargets: facts.apiTargets.length } });
+    await capture.writeFacts({ operationId: KEY_LIST_IDS[project], kind: "preflight-key-list", verdict: "accepted", facts: { status: 200, otherLiveKeys: chosen.otherLiveKeys, apiTargets: facts.apiTargets.length } });
     keys[project] = { keyId: chosen.keyId, facts, attempt: result.attempt };
   }
   if (keys.query.keyId === keys.idp.keyId) stop("the two projects report the same key ID");

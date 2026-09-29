@@ -17,7 +17,9 @@ export const PREP_IDS = Object.freeze([
   "preflight/query/permissions", "preflight/idp/permissions", "preflight/bucket/permissions",
 ]);
 const PLACEHOLDER_KEYS = Object.freeze({ query: "00000000-0000-4000-8000-000000000001", idp: "00000000-0000-4000-8000-000000000002" });
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+// An API Keys v2 key ID: a UUID, or a custom ID (a lower-case letter first, then lower-case letters, digits and hyphens, at most 63 characters).
+export const KEY_ID = /^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[a-z][a-z0-9-]{0,62})$/;
+const REQUIRED_SERVICES = ["identitytoolkit.googleapis.com", "securetoken.googleapis.com"];
 const sha = (value) => createHash("sha256").update(value).digest("hex");
 const same = (left, right) => typeof left === "string" && typeof right === "string" && left.length === right.length && timingSafeEqual(Buffer.from(left), Buffer.from(right));
 const stop = (message) => { throw tagged(STOP_CODES.preflightFailed, message); };
@@ -36,7 +38,8 @@ export function keyListRequest(project, number) {
 
 /**
  * The operation corpus the approval pins as its manifest: the thirteen requests (method, URL and body), with the two key IDs of
- * the key-string reads as placeholders because the real ones are learnt from the lists.
+ * the key-string reads as placeholders because the real ones are learnt from the lists, and the key each project is expected to use
+ * (`params.expectedKeyIds`, a key ID or null for "the one live key").
  */
 export function prepCorpus(closure, params) {
   const { rows } = standardRows(closure, params);
@@ -47,27 +50,44 @@ export function prepCorpus(closure, params) {
     const request = rows.get(id).request;
     return { id, method: request.method, url: `${request.origin}${request.path}`, query: request.query ?? null, body: request.body ?? null, credential: request.credential, project: request.project ?? QUERY_PROJECT };
   });
-  return Object.freeze({ list, sha256: sha(JSON.stringify(list)) });
+  const expectedKeyIds = { query: params.expectedKeyIds?.query ?? null, idp: params.expectedKeyIds?.idp ?? null };
+  if (Object.values(expectedKeyIds).some((id) => id !== null && (typeof id !== "string" || !KEY_ID.test(id)))) throw new Error("invalid expected key ID");
+  return Object.freeze({ list, expectedKeyIds, sha256: sha(JSON.stringify({ expectedKeyIds, list })) });
 }
 
-/** The single live key of a project's list, or a stop: a next page or anything but exactly one live key is ambiguous. */
-export function selectKey(body, number) {
+/**
+ * The key of a project's list the run will use, or a stop. A next page is a stop (the list is only read once). With an expected key ID
+ * the key must be live and named exactly; the other live keys are tolerated and counted. Without one, the project must have exactly one
+ * live key.
+ */
+export function selectKey(body, number, expectedKeyId = null) {
   const keys = body?.keys;
   if (body === null || typeof body !== "object" || Array.isArray(body) || body.nextPageToken !== undefined || (keys !== undefined && !Array.isArray(keys))) stop("key list is paged or malformed");
   const live = (keys ?? []).filter((item) => item !== null && typeof item === "object" && item.deleteTime === undefined);
-  if (live.length !== 1) stop(`expected exactly one live key, found ${live.length}`);
-  const [item] = live;
-  const match = new RegExp(`^projects/${number}/locations/global/keys/([0-9a-f-]{36})$`).exec(item.name ?? "");
-  if (match === null || !UUID.test(match[1])) stop("key name is not the expected resource");
-  return Object.freeze({ keyId: match[1], item });
+  const nameOf = (item) => (typeof item.name === "string" ? item.name : "");
+  const prefix = `projects/${number}/locations/global/keys/`;
+  let item;
+  if (expectedKeyId === null) {
+    if (live.length !== 1) stop(`expected exactly one live key, found ${live.length}`);
+    [item] = live;
+  } else {
+    if (typeof expectedKeyId !== "string" || !KEY_ID.test(expectedKeyId)) stop("the expected key ID is not a key ID");
+    const named = live.filter((entry) => nameOf(entry) === `${prefix}${expectedKeyId}`);
+    if (named.length !== 1) stop(`the expected key is not one live key of the project, found ${named.length}`);
+    [item] = named;
+  }
+  const keyId = nameOf(item).startsWith(prefix) ? nameOf(item).slice(prefix.length) : "";
+  if (!KEY_ID.test(keyId)) stop("key name is not the expected resource");
+  return Object.freeze({ keyId, item, otherLiveKeys: live.length - 1 });
 }
 
-/** Judge the facts of one key (as the stage 3 preflight does) against the wide open assumptions the run makes of it. */
+/** Judge the facts of one key (as the stage 3 preflight does): live, not method restricted, the two sign-in services allowed; its restriction digest is recorded. */
 export function keyFacts(facts) {
-  if (facts.deleted !== false || facts.otherRestrictions.length !== 0 || facts.methodRestricted !== false || !Array.isArray(facts.apiTargets) || typeof facts.uid !== "string" || facts.uid === "") stop("key restrictions are not the expected shape");
+  if (facts.deleted !== false || facts.methodRestricted !== false || !Array.isArray(facts.apiTargets) || typeof facts.uid !== "string" || facts.uid === "" || !/^[0-9a-f]{64}$/.test(facts.restrictionsSha256 ?? "")) stop("key restrictions are not the expected shape");
   const targets = facts.apiTargets;
-  if (targets.length > 8 || targets.some((target, index) => index > 0 && !(targets[index - 1] < target))) stop("key targets are not a strictly ascending list");
-  return { keyUid: facts.uid, apiTargets: [...targets] };
+  if (targets.length > 64 || targets.some((target, index) => index > 0 && !(targets[index - 1] < target))) stop("key targets are not a strictly ascending list");
+  if (!REQUIRED_SERVICES.every((service) => targets.includes(service))) stop("the key does not allow the two sign-in services");
+  return { keyUid: facts.uid, apiTargets: [...targets], restrictionsSha256: facts.restrictionsSha256 };
 }
 
 /**
@@ -82,8 +102,8 @@ export function assembleInputs({ adcPath, local, identity, query, idp, bucket, d
     schemaVersion: 1, adcPath,
     owner: { emailSha256: sha(identity.email), subjectSha256: sha(identity.subject) },
     projects: {
-      query: { projectId: QUERY_PROJECT, projectNumber: local.numbers.query, apiKeyId: query.keyId, apiKey: local.keys.query, keyUid: query.facts.keyUid, apiTargets: query.facts.apiTargets },
-      idp: { projectId: IDP_PROJECT, projectNumber: local.numbers.idp, apiKeyId: idp.keyId, apiKey: local.keys.idp, keyUid: idp.facts.keyUid, apiTargets: idp.facts.apiTargets },
+      query: { projectId: QUERY_PROJECT, projectNumber: local.numbers.query, apiKeyId: query.keyId, apiKey: local.keys.query, keyUid: query.facts.keyUid, apiTargets: query.facts.apiTargets, restrictionsSha256: query.facts.restrictionsSha256 },
+      idp: { projectId: IDP_PROJECT, projectNumber: local.numbers.idp, apiKeyId: idp.keyId, apiKey: local.keys.idp, keyUid: idp.facts.keyUid, apiTargets: idp.facts.apiTargets, restrictionsSha256: idp.facts.restrictionsSha256 },
     },
     bucket: { name: bucket.name, location: bucket.facts.location, uniformBucketLevelAccess: bucket.facts.uniformBucketLevelAccess, iamPolicySha256: bucket.iamSha256 },
     database: { locationId: database.locationId, type: database.type },

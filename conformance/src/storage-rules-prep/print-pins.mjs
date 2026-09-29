@@ -25,7 +25,7 @@ export async function runPrepPrintPins({ args, codeRoot, git = gitOutput, out, e
     if (!state.ok) throw new Error(state.reason);
     if ((await git(codeRoot, ["status", "--porcelain", "--untracked-files=all", "--ignored", "--", PREP_DIR])).trim() !== "") throw new Error("untracked or ignored runner files");
     const digests = await prepCodeDigests(codeRoot);
-    const corpus = prepCorpus(closure, { bucket: local.bucket, queryProjectNumber: local.numbers.query, idpProjectNumber: local.numbers.idp, sourceCommit });
+    const corpus = prepCorpus(closure, { bucket: local.bucket, queryProjectNumber: local.numbers.query, idpProjectNumber: local.numbers.idp, sourceCommit, expectedKeyIds: local.keyIds });
     out(`${JSON.stringify({ sourceCommit, runnerSha256: digests.runnerSha256, manifestSha256: corpus.sha256, fixtureSchemaSha256: digests.fixtureSchemaSha256 }, null, 2)}\n`);
     return 0;
   } catch (error) {

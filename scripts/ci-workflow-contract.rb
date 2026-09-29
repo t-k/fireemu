@@ -108,6 +108,20 @@ assert(!publish_runs.include?("gh release create"), "the publish job must not cr
 # `publish` mints the OIDC token that npm Trusted Publishing and the attestations need, and
 # `github-release` writes the Release. The rest run build, test and third-party dependency code.
 assert(release["permissions"] == { "contents" => "read" }, "the workflow default must stay read-only: the jobs that need more ask for it themselves")
+# Nothing is set for every job at once: an env such as BASH_ENV or NODE_OPTIONS, or `defaults`, would
+# reach the job that holds the release token. (`on:` parses as the key `true`.)
+assert(
+  release.keys.map { |key| key == true ? "on" : key }.sort == %w[concurrency env jobs name on permissions],
+  "the release workflow has no top-level defaults and no key beyond name, on, permissions, concurrency, env and jobs"
+)
+assert(release["env"].keys.sort == %w[CARGO_TERM_COLOR RUSTFLAGS SOURCE_DATE_EPOCH], "the release workflow's env is exactly the reproducibility inputs")
+every_use = release.fetch("jobs").values.flat_map { |definition| definition.fetch("steps", []).map { |step| step["uses"] }.compact }
+assert(every_use.group_by { |use| use.split("@").first }.values.all? { |uses| uses.uniq.length == 1 }, "an action is pinned to one commit across the release workflow")
+release.fetch("jobs").each do |job, definition|
+  extra = definition.keys - %w[needs if runs-on outputs steps strategy timeout-minutes permissions environment]
+  assert(extra.empty?, "release #{job} sets #{extra.join(', ')}: no job-level env, defaults, container, services or continue-on-error")
+end
+assert(every_use.all? { |use| use.match?(/\A[\w.-]+\/[\w.-]+(\/[\w.\/-]+)?@[0-9a-f]{40}\z/) }, "every action in the release workflow is pinned to a 40-hex commit, never a branch or a tag")
 expected_permissions = Hash.new({ "contents" => "read" }).merge(
   "publish" => { "contents" => "read", "id-token" => "write", "attestations" => "write" },
   "github-release" => { "contents" => "write" }
@@ -139,6 +153,7 @@ assert(notes_upload.dig("with", "overwrite") == true, "a re-run of plan must be 
 assert(notes_upload["continue-on-error"].nil?, "the release notes upload must block publication")
 plan_steps = release.dig("jobs", "plan", "steps")
 extraction = plan_steps.find { |step| step["run"]&.include?("changelog-section.mjs") }
+assert(extraction.keys.sort == %w[env if name run], "the extraction step has no working-directory, shell or continue-on-error")
 assert(extraction["run"] == 'node npm/scripts/changelog-section.mjs "$VERSION" --out "$RUNNER_TEMP/release-notes.md"', "plan extracts the notes with exactly this command")
 assert(extraction["if"] == "steps.version.outputs.publish == 'true'" && extraction["continue-on-error"].nil?, "the extraction runs for every tag and blocks the release when it fails")
 assert(extraction.dig("env", "VERSION") == "${{ steps.version.outputs.version }}", "the extraction reads the version plan validated")
@@ -159,6 +174,7 @@ end
 
 github_release = release.dig("jobs", "github-release")
 assert(github_release, "release must create the GitHub Release after publication")
+assert(release.dig("jobs", "github-release", "runs-on") == "ubuntu-latest", "the job that holds the release token runs on a hosted, ephemeral runner")
 assert(github_release.keys.sort == %w[if needs permissions runs-on steps], "the GitHub Release job has no environment, no continue-on-error and no other setting")
 assert(github_release.fetch("needs").sort == %w[plan publish], "the GitHub Release must wait for the npm publish")
 assert(github_release["if"] == "needs.plan.outputs.publish == 'true'", "a dry run must not create a GitHub Release")

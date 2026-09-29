@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import { classifyResponse } from "./storage-rules/acceptance.mjs";
+import { restrictionsSha256 } from "./storage-rules/acceptance-preflight.mjs";
 import { buildCorpus } from "./storage-rules/corpus.mjs";
 import { buildFullRequestManifest } from "./storage-rules/full-manifest.mjs";
 import { parsePrivateInputs } from "./storage-rules/private-inputs.mjs";
@@ -10,6 +11,11 @@ import { parsePrivateInputs } from "./storage-rules/private-inputs.mjs";
 const sha = (value) => createHash("sha256").update(value).digest("hex");
 const closure = JSON.parse(readFileSync(new URL("../../spec/compatibility/closure/STORAGE-RULES.json", import.meta.url)));
 const options = { runId: "local-run", sourceCommit: "a".repeat(40), queryProjectNumber: "111111111111", idpProjectNumber: "222222222222", queryApiKeyId: "00000000-0000-4000-8000-000000000001", idpApiKeyId: "00000000-0000-4000-8000-000000000002" };
+// The two shapes production has: a dedicated key with two services, and a Browser key with empty browser restrictions and many services.
+const QUERY_SERVICES = ["identitytoolkit.googleapis.com", "securetoken.googleapis.com"];
+const IDP_SERVICES = ["identitytoolkit.googleapis.com", "securetoken.googleapis.com", ...Array.from({ length: 25 }, (_, index) => `service${String(index).padStart(2, "0")}.googleapis.com`)];
+const queryRestrictions = () => ({ apiTargets: QUERY_SERVICES.map((service) => ({ service })) });
+const idpRestrictions = () => ({ browserKeyRestrictions: { allowedReferrers: [] }, apiTargets: IDP_SERVICES.map((service) => ({ service })) });
 const binding = { bucket: "synthetic-rules-bucket", prefix: "STORAGE-RULES/local-run/", uidA: "storage-rules-local-run-user-a", uidB: "storage-rules-local-run-user-b" };
 const manifest = buildFullRequestManifest(buildCorpus(binding), closure, options);
 const row = (id) => manifest.rows.find((r) => r.id === id) ?? assert.fail(id);
@@ -20,8 +26,8 @@ const canonicalSha = (bindings) => sha(JSON.stringify(bindings.map((entry) => ({
 const packet = () => ({
   schemaVersion: 1, adcPath: "/private/adc.json", owner: { emailSha256: sha("owner@example.test"), subjectSha256: sha("owner-subject") },
   projects: {
-    query: { projectId: "fireemu-oracle-query", projectNumber: "111111111111", apiKeyId: options.queryApiKeyId, apiKey: "Q".repeat(39), keyUid: "query-key-uid", apiTargets: ["identitytoolkit.googleapis.com"] },
-    idp: { projectId: "fireemu-oracle-idp", projectNumber: "222222222222", apiKeyId: options.idpApiKeyId, apiKey: "I".repeat(39), keyUid: "idp-key-uid", apiTargets: ["identitytoolkit.googleapis.com"] },
+    query: { projectId: "fireemu-oracle-query", projectNumber: "111111111111", apiKeyId: options.queryApiKeyId, apiKey: "Q".repeat(39), keyUid: "query-key-uid", apiTargets: [...QUERY_SERVICES].sort(), restrictionsSha256: restrictionsSha256(queryRestrictions()) },
+    idp: { projectId: "fireemu-oracle-idp", projectNumber: "222222222222", apiKeyId: options.idpApiKeyId, apiKey: "I".repeat(39), keyUid: "idp-key-uid", apiTargets: [...IDP_SERVICES].sort(), restrictionsSha256: restrictionsSha256(idpRestrictions()) },
   },
   bucket: { name: "synthetic-rules-bucket", location: "US-CENTRAL1", uniformBucketLevelAccess: true, iamPolicySha256: canonicalSha(bucketBindings) },
   database: { locationId: "us-central1", type: "FIRESTORE_NATIVE" }, queryProjectIamPolicySha256: canonicalSha(projectBindings),
@@ -33,8 +39,8 @@ const good = {
   "preflight/owner/identity": () => ({ id: "owner-subject", email: "owner@example.test", verified_email: true }),
   "preflight/query/project": () => ({ name: "projects/111111111111", projectId: "fireemu-oracle-query", state: "ACTIVE" }),
   "preflight/idp/project": () => ({ name: "projects/222222222222", projectId: "fireemu-oracle-idp", state: "ACTIVE" }),
-  "preflight/query/key-metadata": () => ({ name: `projects/111111111111/locations/global/keys/${options.queryApiKeyId}`, uid: "query-key-uid", restrictions: { apiTargets: [{ service: "identitytoolkit.googleapis.com" }] } }),
-  "preflight/idp/key-metadata": () => ({ name: `projects/222222222222/locations/global/keys/${options.idpApiKeyId}`, uid: "idp-key-uid", restrictions: { apiTargets: [{ service: "identitytoolkit.googleapis.com" }] } }),
+  "preflight/query/key-metadata": () => ({ name: `projects/111111111111/locations/global/keys/${options.queryApiKeyId}`, uid: "query-key-uid", restrictions: queryRestrictions() }),
+  "preflight/idp/key-metadata": () => ({ name: `projects/222222222222/locations/global/keys/${options.idpApiKeyId}`, uid: "idp-key-uid", restrictions: idpRestrictions() }),
   "preflight/query/key-string": () => ({ keyString: "Q".repeat(39) }),
   "preflight/idp/key-string": () => ({ keyString: "I".repeat(39) }),
   "preflight/query/permissions": (r) => ({ permissions: r.request.body.json.permissions }),
@@ -74,8 +80,8 @@ const perturb = {
   "preflight/owner/identity": [(b) => ({ ...b, email: "someone@example.test" }), (b) => ({ ...b, id: "other-subject" }), (b) => ({ ...b, verified_email: false })],
   "preflight/query/project": [(b) => ({ ...b, projectId: "fireemu-oracle-idp" }), (b) => ({ ...b, state: "DELETE_REQUESTED" }), (b) => ({ ...b, deleteTime: "2026-01-01T00:00:00Z" })],
   "preflight/idp/project": [(b) => ({ ...b, projectId: "fireemu-oracle-query" }), (b) => ({ ...b, state: "ACTIVE_WITH_ISSUES" }), (b) => ({ ...b, deleteTime: "x" })],
-  "preflight/query/key-metadata": [(b) => ({ ...b, uid: "another-uid" }), (b) => ({ ...b, deleteTime: "x" }), (b) => ({ ...b, restrictions: { apiTargets: [{ service: "storage.googleapis.com" }] } }), (b) => ({ ...b, restrictions: { apiTargets: [{ service: "identitytoolkit.googleapis.com" }, { service: "storage.googleapis.com" }] } }), (b) => ({ ...b, restrictions: {} }), (b) => ({ ...b, restrictions: { apiTargets: b.restrictions.apiTargets, browserKeyRestrictions: { allowedReferrers: ["*"] } } }), (b) => ({ ...b, restrictions: { apiTargets: [{ service: "identitytoolkit.googleapis.com", methods: ["x"] }] } })],
-  "preflight/idp/key-metadata": [(b) => ({ ...b, uid: "query-key-uid" }), (b) => ({ ...b, deleteTime: "x" }), (b) => ({ ...b, restrictions: { apiTargets: [] } })],
+  "preflight/query/key-metadata": [(b) => ({ ...b, uid: "another-uid" }), (b) => ({ ...b, deleteTime: "x" }), (b) => ({ ...b, restrictions: { apiTargets: [{ service: "storage.googleapis.com" }] } }), (b) => ({ ...b, restrictions: { apiTargets: [...b.restrictions.apiTargets, { service: "storage.googleapis.com" }] } }), (b) => ({ ...b, restrictions: {} }), (b) => ({ ...b, restrictions: { apiTargets: b.restrictions.apiTargets, browserKeyRestrictions: { allowedReferrers: ["*"] } } }), (b) => ({ ...b, restrictions: { apiTargets: [{ service: "identitytoolkit.googleapis.com", methods: ["x"] }, { service: "securetoken.googleapis.com" }] } }), (b) => ({ ...b, restrictions: { apiTargets: b.restrictions.apiTargets, androidKeyRestrictions: { allowedApplications: [] } } })],
+  "preflight/idp/key-metadata": [(b) => ({ ...b, uid: "query-key-uid" }), (b) => ({ ...b, deleteTime: "x" }), (b) => ({ ...b, restrictions: { apiTargets: [] } }), (b) => ({ ...b, restrictions: { ...b.restrictions, browserKeyRestrictions: { allowedReferrers: ["*"] } } }), (b) => ({ ...b, restrictions: { apiTargets: b.restrictions.apiTargets } }), (b) => ({ ...b, restrictions: { ...b.restrictions, apiTargets: b.restrictions.apiTargets.slice(1) } }), (b) => ({ ...b, restrictions: { ...b.restrictions, apiTargets: [...b.restrictions.apiTargets, { service: "zz.googleapis.com" }] } }), (b) => ({ ...b, restrictions: { ...b.restrictions, iosKeyRestrictions: { allowedBundleIds: [] } } })],
   "preflight/query/key-string": [(b) => ({ keyString: "Q".repeat(38) }), (b) => ({ keyString: "I".repeat(39) }), (b) => ({ keyString: `${"Q".repeat(39)}x` })],
   "preflight/idp/key-string": [(b) => ({ keyString: "Q".repeat(39) }), (b) => ({ keyString: "I".repeat(38) })],
   "preflight/query/permissions": [(b) => ({ permissions: b.permissions.slice(1) }), () => ({})],
@@ -104,7 +110,7 @@ test("the packet's facts, not the manifest's, decide: a packet with other expect
     "preflight/query/project": (v) => { v.projects.query.projectNumber = "333333333333"; },
     "preflight/idp/project": (v) => { v.projects.idp.projectNumber = "333333333333"; },
     "preflight/query/key-metadata": (v) => { v.projects.query.keyUid = "other"; },
-    "preflight/idp/key-metadata": (v) => { v.projects.idp.apiTargets = ["a.googleapis.com"]; },
+    "preflight/idp/key-metadata": (v) => { v.projects.idp.apiTargets = [...v.projects.idp.apiTargets, "zz.googleapis.com"]; },
     "preflight/query/key-string": (v) => { v.projects.query.apiKey = "Z".repeat(39); },
     "preflight/idp/key-string": (v) => { v.projects.idp.apiKey = "Z".repeat(39); },
     "preflight/bucket/metadata": (v) => { v.bucket.location = "ASIA"; },
@@ -221,7 +227,10 @@ test("facts the classifier never produces are still refused: inconsistent permis
   // An array-like list that reads like the expected targets is not a list.
   const arrayLike = { length: 1, 0: "identitytoolkit.googleapis.com", every: Array.prototype.every };
   assert.equal(judge(row("preflight/query/key-metadata"), accepted("preflight/query/key-metadata", { apiTargets: arrayLike })), false);
-  assert.equal(judge(row("preflight/query/key-metadata"), accepted("preflight/query/key-metadata", { apiTargets: ["identitytoolkit.googleapis.com"] })), true);
+  assert.equal(judge(row("preflight/query/key-metadata"), accepted("preflight/query/key-metadata", { apiTargets: [...QUERY_SERVICES].sort() })), true);
+  assert.equal(judge(row("preflight/query/key-metadata"), accepted("preflight/query/key-metadata", { apiTargets: ["identitytoolkit.googleapis.com"] })), false);
+  for (const value of [undefined, "", "0".repeat(64), 5, Buffer.from(restrictionsSha256(queryRestrictions()))]) assert.equal(judge(row("preflight/query/key-metadata"), accepted("preflight/query/key-metadata", { restrictionsSha256: value })), false, String(value));
+  assert.equal(judge(row("preflight/query/key-metadata"), accepted("preflight/query/key-metadata", { otherRestrictions: ["anything"], restrictionsSha256: restrictionsSha256(queryRestrictions()) })), true);
 });
 
 test("the judge answers false, never another value, for inherited ids, callable outcomes and outcomes that throw", async () => {
@@ -249,4 +258,20 @@ test("the judge's options must be a plain record around frozen inputs with strin
   ];
   bad.forEach((options, index) => assert.throws(() => createPreflightJudge(options), /invalid preflight judge options/, `#${index}`));
   assert.equal(typeof createPreflightJudge({ inputs: Object.freeze(withSecrets({ ...inputs }, inputs.secrets)) }), "function");
+});
+
+test("the key facts are order independent, and a key's whole restriction shape is compared, not only its targets", async () => {
+  const judge = (await load()).createPreflightJudge({ inputs: parsePrivateInputs(packet()) });
+  const reordered = (id, restrictions) => classifyResponse(row(id), raw({ ...good[id](), restrictions }));
+  // The same targets in another order, and the same object with its keys in another order, are the same key.
+  const idp = idpRestrictions();
+  assert.equal(judge(row("preflight/idp/key-metadata"), reordered("preflight/idp/key-metadata", { apiTargets: [...idp.apiTargets].reverse(), browserKeyRestrictions: { allowedReferrers: [] } })), true);
+  assert.equal(judge(row("preflight/query/key-metadata"), reordered("preflight/query/key-metadata", { apiTargets: [...queryRestrictions().apiTargets].reverse() })), true);
+  // A key that allows the same services but has any other restriction (or none) is another key.
+  assert.equal(judge(row("preflight/idp/key-metadata"), reordered("preflight/idp/key-metadata", { apiTargets: idp.apiTargets })), false);
+  assert.equal(judge(row("preflight/idp/key-metadata"), reordered("preflight/idp/key-metadata", { ...idp, browserKeyRestrictions: { allowedReferrers: ["https://example.test/"] } })), false);
+  // A packet that records another restriction digest for the same targets refuses the very key it describes.
+  const other = await judgeWith((v) => { v.projects.idp.restrictionsSha256 = "0".repeat(64); v.projects.query.restrictionsSha256 = "1".repeat(64); });
+  assert.equal(other(row("preflight/idp/key-metadata"), classifyResponse(row("preflight/idp/key-metadata"), raw(good["preflight/idp/key-metadata"]()))), false);
+  assert.equal(other(row("preflight/query/key-metadata"), classifyResponse(row("preflight/query/key-metadata"), raw(good["preflight/query/key-metadata"]()))), false);
 });

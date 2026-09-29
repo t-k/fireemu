@@ -64,6 +64,22 @@ test("the three origins the preflight uses are reachable only through their exac
   for (const s of bad) assert.throws(() => t.validate(s), /invalid HTTP transport input/, `${s.method} ${s.url}`);
 });
 
+test("an API key is reachable by a UUID or by a custom key ID of the documented shape, with or without keyString, and by nothing else", () => {
+  const t = transport();
+  const q = options.queryProjectNumber;
+  const url = (id, tail = "") => `https://apikeys.googleapis.com/v2/projects/${q}/locations/global/keys/${id}${tail}`;
+  for (const id of ["fireemu-query-auth-20260925", "a", "a1", `a${"b".repeat(62)}`, "abc-def", "00000000-0000-4000-8000-000000000001", "ffffffff-ffff-ffff-ffff-ffffffffffff"]) {
+    for (const tail of ["", "/keyString"]) assert.doesNotThrow(() => t.validate(spec(url(id, tail))), `${id}${tail}`);
+  }
+  for (const id of [`a${"b".repeat(63)}`, "1abc", "Abc", "aBc", "a_b", "a.b", "a b", "a%2Fb", "-abc", "abc/def", "", "0000000A-0000-4000-8000-00000000000A", "00000000-0000-4000-8000-00000000000", "00000000-0000-4000-8000-0000000000012", "abc$"]) {
+    for (const tail of ["", "/keyString"]) assert.throws(() => t.validate(spec(url(id, tail))), /invalid HTTP transport input/, `${id}${tail}`);
+  }
+  // The route stays a plain GET without a query and without a body.
+  assert.throws(() => t.validate(spec(url("fireemu-query-auth-20260925"), "POST", Buffer.from("{}"))), /invalid HTTP transport input/);
+  assert.throws(() => t.validate(spec(`${url("fireemu-query-auth-20260925")}?a=b`)), /invalid HTTP transport input/);
+  assert.throws(() => t.validate(spec(url("fireemu-query-auth-20260925", "/keyString/x"))), /invalid HTTP transport input/);
+});
+
 test("the origins that were already allowed stay allowed and validation sends nothing", async () => {
   const t = transport();
   for (const url of ["https://firebasestorage.googleapis.com/v0/b/b/o", "https://storage.googleapis.com/storage/v1/b/b/o", "https://firestore.googleapis.com/v1/projects/p/databases/(default)", "https://firebaserules.googleapis.com/v1/projects/p/rulesets", "https://identitytoolkit.googleapis.com/v1/accounts:signUp", "https://oauth2.googleapis.com/token"]) {

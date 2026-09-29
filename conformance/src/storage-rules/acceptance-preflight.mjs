@@ -28,6 +28,14 @@ function policyResult(kind, response, expectedKind) {
   return result(kind, "accepted", { status: 200, bindings: bindings.length, members: bindings.reduce((total, entry) => total + entry.members.length, 0), version: body.version ?? 0, policySha256: sha(JSON.stringify(canonical)) });
 }
 
+const canonical = (value) => (Array.isArray(value) ? value.map(canonical) : isObject(value) ? Object.fromEntries(Object.keys(value).sort().map((key) => [key, canonical(value[key])])) : value);
+/** The digest of a key's whole restriction object, independent of key order and of the order of its API targets. */
+export function restrictionsSha256(restrictions) {
+  const shape = canonical(restrictions ?? {});
+  if (Array.isArray(shape.apiTargets)) shape.apiTargets = shape.apiTargets.map((target) => JSON.stringify(target)).sort().map((text) => JSON.parse(text));
+  return sha(JSON.stringify(shape));
+}
+
 export const PREFLIGHT_CLASSIFIERS = {
   "preflight-identity": (row, response) => {
     const body = okBody(response);
@@ -54,6 +62,7 @@ export const PREFLIGHT_CLASSIFIERS = {
       return result("preflight-key-metadata", "accepted", {
         status: 200, uid: body.uid, deleted: body.deleteTime !== undefined, apiTargets: list.map((target) => target.service).sort(),
         otherRestrictions: Object.keys(restrictions ?? {}).filter((key) => key !== "apiTargets").sort(), methodRestricted: list.some((target) => target.methods !== undefined),
+        restrictionsSha256: restrictionsSha256(restrictions),
       });
     }
     return unexpected("preflight-key-metadata", response);

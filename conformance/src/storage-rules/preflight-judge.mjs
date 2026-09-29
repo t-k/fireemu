@@ -23,7 +23,7 @@ export function createPreflightJudge(options) {
     const facts = outcome.facts;
     return outcome.kind === "preflight-key-metadata" && outcome.verdict === "accepted" &&
       row.request.path === `/v2/projects/${projects[name].projectNumber}/locations/global/keys/${projects[name].apiKeyId}` &&
-      facts.uid === projects[name].keyUid && facts.deleted === false && equalLists(facts.apiTargets, projects[name].apiTargets) && facts.otherRestrictions?.length === 0 && facts.methodRestricted === false;
+      facts.uid === projects[name].keyUid && facts.deleted === false && equalLists(facts.apiTargets, projects[name].apiTargets) && same(facts.restrictionsSha256, projects[name].restrictionsSha256) && facts.methodRestricted === false;
   };
   const keyStringRow = (name) => (outcome, row) => outcome.kind === "preflight-key-string" && outcome.verdict === "accepted" &&
     row.request.path === `/v2/projects/${projects[name].projectNumber}/locations/global/keys/${projects[name].apiKeyId}/keyString` && same(outcome.secretFacts?.keyString, secrets[name]);

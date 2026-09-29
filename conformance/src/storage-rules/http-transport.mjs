@@ -4,12 +4,13 @@ const ORIGINS = new Set([
 ]);
 // Origins reached only through exact (method, path) routes, with no query: the owner's identity, the two projects' metadata and
 // IAM permission reads, and the two existing API keys' metadata and key strings.
-const UUID = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
+// An API Keys v2 key ID: a UUID, or a custom ID (a lower-case letter first, then lower-case letters, digits and hyphens, at most 63 characters).
+const KEY_ID = "(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[a-z][a-z0-9-]{0,62})";
 const EXACT_ROUTES = [
   { method: "GET", origin: "https://www.googleapis.com", path: /^\/oauth2\/v2\/userinfo$/ },
   { method: "GET", origin: "https://cloudresourcemanager.googleapis.com", path: /^\/v3\/projects\/[1-9]\d{0,19}$/ },
   { method: "POST", origin: "https://cloudresourcemanager.googleapis.com", path: /^\/v3\/projects\/[1-9]\d{0,19}:(?:testIamPermissions|getIamPolicy)$/ },
-  { method: "GET", origin: "https://apikeys.googleapis.com", path: new RegExp(`^/v2/projects/[1-9]\\d{0,19}/locations/global/keys/${UUID}(?:/keyString)?$`) },
+  { method: "GET", origin: "https://apikeys.googleapis.com", path: new RegExp(`^/v2/projects/[1-9]\\d{0,19}/locations/global/keys/${KEY_ID}(?:/keyString)?$`) },
 ];
 const exactRoute = (url, method) => url.search === "" && EXACT_ROUTES.some((route) => route.method === method && route.origin === url.origin && route.path.test(url.pathname));
 const CERTIFICATE_URL = "https://www.googleapis.com/robot/v1/metadata/x509/securetoken@system.gserviceaccount.com";

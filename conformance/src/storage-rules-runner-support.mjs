@@ -1,4 +1,5 @@
 import { createHash, generateKeyPairSync, sign } from "node:crypto";
+import { restrictionsSha256 } from "./storage-rules/acceptance-preflight.mjs";
 
 // Test support for the assembled runner: a private packet whose facts a production-shaped preflight stream matches, and one
 // transport that answers the preflight reads, the OAuth and signing-key endpoints and a small Identity Toolkit, and hands
@@ -8,7 +9,15 @@ export const CERT_URL = "https://www.googleapis.com/robot/v1/metadata/x509/secur
 export const OWNER_TOKEN = "synthetic-owner-access-token-00003";
 export const ADC = { type: "authorized_user", client_id: "synthetic-client.apps.googleusercontent.com", client_secret: "synthetic-client-secret-00001", refresh_token: "synthetic-refresh-token-with/slash+00002", quota_project_id: "some-project" };
 export const NUMBERS = { query: "111111111111", idp: "222222222222" };
-export const KEY_IDS = { query: "00000000-0000-4000-8000-000000000001", idp: "00000000-0000-4000-8000-000000000002" };
+// The two key shapes production has: query's dedicated key has a custom ID and only the two sign-in services; idp's is the Browser key
+// Firebase created, with a UUID ID, empty browser restrictions and many API targets.
+export const KEY_IDS = { query: "fireemu-query-auth-20260925", idp: "00000000-0000-4000-8000-000000000002" };
+const IDP_SERVICES = ["identitytoolkit.googleapis.com", "securetoken.googleapis.com", "firebaserules.googleapis.com", "firestore.googleapis.com", "firebasestorage.googleapis.com", "firebase.googleapis.com", "firebaseinstallations.googleapis.com", "firebaseappcheck.googleapis.com", "fcm.googleapis.com", "fcmregistrations.googleapis.com", "firebaseremoteconfig.googleapis.com", "firebasedynamiclinks.googleapis.com", "firebaseml.googleapis.com", "firebasehosting.googleapis.com", "firebaseperusertopics.googleapis.com", "firebasecrashlytics.googleapis.com", "mobilecrashreporting.googleapis.com", "cloudconfig.googleapis.com", "growth.googleapis.com", "playintegrity.googleapis.com", "androidcheck.googleapis.com", "cloudfunctions.googleapis.com", "identity.googleapis.com", "cloudresourcemanager.googleapis.com", "firebaseinappmessaging.googleapis.com", "firebaselogging-pa.googleapis.com", "fireperf.googleapis.com"];
+export const KEY_RESTRICTIONS = {
+  query: { apiTargets: [{ service: "identitytoolkit.googleapis.com" }, { service: "securetoken.googleapis.com" }] },
+  idp: { browserKeyRestrictions: {}, apiTargets: IDP_SERVICES.map((service) => ({ service })) },
+};
+export const KEY_TARGETS = { query: KEY_RESTRICTIONS.query.apiTargets.map((target) => target.service).sort(), idp: [...IDP_SERVICES].sort() };
 export const API_KEYS = { query: "Q".repeat(39), idp: "I".repeat(39) };
 export const BUCKET = "fireemu-fixture-rules-bucket";
 export const SUBJECT = "107364905517293846281";
@@ -21,8 +30,8 @@ export function privatePacket(adcPath) {
   return {
     schemaVersion: 1, adcPath, owner: { emailSha256: sha("owner@example.test"), subjectSha256: sha(SUBJECT) },
     projects: {
-      query: { projectId: "fireemu-oracle-query", projectNumber: NUMBERS.query, apiKeyId: KEY_IDS.query, apiKey: API_KEYS.query, keyUid: "query-key-uid", apiTargets: ["identitytoolkit.googleapis.com"] },
-      idp: { projectId: "fireemu-oracle-idp", projectNumber: NUMBERS.idp, apiKeyId: KEY_IDS.idp, apiKey: API_KEYS.idp, keyUid: "idp-key-uid", apiTargets: ["identitytoolkit.googleapis.com"] },
+      query: { projectId: "fireemu-oracle-query", projectNumber: NUMBERS.query, apiKeyId: KEY_IDS.query, apiKey: API_KEYS.query, keyUid: "query-key-uid", apiTargets: KEY_TARGETS.query, restrictionsSha256: restrictionsSha256(KEY_RESTRICTIONS.query) },
+      idp: { projectId: "fireemu-oracle-idp", projectNumber: NUMBERS.idp, apiKeyId: KEY_IDS.idp, apiKey: API_KEYS.idp, keyUid: "idp-key-uid", apiTargets: KEY_TARGETS.idp, restrictionsSha256: restrictionsSha256(KEY_RESTRICTIONS.idp) },
     },
     bucket: { name: BUCKET, location: "US-CENTRAL1", uniformBucketLevelAccess: true, iamPolicySha256: canonical(bucketBindings) },
     database: { locationId: "us-central1", type: "FIRESTORE_NATIVE" }, queryProjectIamPolicySha256: canonical(projectBindings),
@@ -42,11 +51,11 @@ export function preflightAnswer(spec, bad = {}) {
   match = /^\/v3\/projects\/(\d+):testIamPermissions$/.exec(path);
   if (url.host === "cloudresourcemanager.googleapis.com" && match) return pick(`permissions-${match[1]}`, { permissions: JSON.parse(spec.body.toString()).permissions });
   if (url.host === "cloudresourcemanager.googleapis.com" && /:getIamPolicy$/.test(path)) return pick("project-iam", { bindings: projectBindings, version: 3 });
-  match = /^\/v2\/projects\/(\d+)\/locations\/global\/keys\/([0-9a-f-]+)(\/keyString)?$/.exec(path);
+  match = /^\/v2\/projects\/(\d+)\/locations\/global\/keys\/([a-z0-9-]+)(\/keyString)?$/.exec(path);
   if (url.host === "apikeys.googleapis.com" && match) {
     const which = match[1] === NUMBERS.query ? "query" : "idp";
     if (match[3]) return pick(`keystring-${which}`, { keyString: API_KEYS[which] });
-    return pick(`key-${which}`, { name: `projects/${match[1]}/locations/global/keys/${match[2]}`, uid: `${which}-key-uid`, restrictions: { apiTargets: [{ service: "identitytoolkit.googleapis.com" }] } });
+    return pick(`key-${which}`, { name: `projects/${match[1]}/locations/global/keys/${match[2]}`, uid: `${which}-key-uid`, restrictions: KEY_RESTRICTIONS[which] });
   }
   if (url.host === "storage.googleapis.com" && path === `/storage/v1/b/${BUCKET}`) return pick("bucket", { kind: "storage#bucket", name: BUCKET, projectNumber: NUMBERS.query, location: "US-CENTRAL1", iamConfiguration: { uniformBucketLevelAccess: { enabled: true } } });
   if (url.host === "storage.googleapis.com" && path === `/storage/v1/b/${BUCKET}/iam`) return pick("bucket-iam", { kind: "storage#policy", bindings: bucketBindings, version: 1 });

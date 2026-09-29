@@ -2,11 +2,22 @@ const ORIGINS = new Set([
   "https://firebasestorage.googleapis.com", "https://storage.googleapis.com", "https://firestore.googleapis.com",
   "https://firebaserules.googleapis.com", "https://identitytoolkit.googleapis.com", "https://oauth2.googleapis.com",
 ]);
+// Origins reached only through exact (method, path) routes, with no query: the owner's identity, the two projects' metadata and
+// IAM permission reads, and the two existing API keys' metadata and key strings.
+const UUID = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
+const EXACT_ROUTES = [
+  { method: "GET", origin: "https://www.googleapis.com", path: /^\/oauth2\/v2\/userinfo$/ },
+  { method: "GET", origin: "https://cloudresourcemanager.googleapis.com", path: /^\/v3\/projects\/[1-9]\d{0,19}$/ },
+  { method: "POST", origin: "https://cloudresourcemanager.googleapis.com", path: /^\/v3\/projects\/[1-9]\d{0,19}:(?:testIamPermissions|getIamPolicy)$/ },
+  { method: "GET", origin: "https://apikeys.googleapis.com", path: new RegExp(`^/v2/projects/[1-9]\\d{0,19}/locations/global/keys/${UUID}(?:/keyString)?$`) },
+];
+const exactRoute = (url, method) => url.search === "" && EXACT_ROUTES.some((route) => route.method === method && route.origin === url.origin && route.path.test(url.pathname));
 const CERTIFICATE_URL = "https://www.googleapis.com/robot/v1/metadata/x509/securetoken@system.gserviceaccount.com";
 const MAX_REQUEST_BYTES = 256 * 1024;
 const MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
 const MAX_HEADER_BYTES = 32 * 1024;
 const TIMEOUT_MS = 30000;
+const inputRefusal = () => Object.assign(new Error("invalid HTTP transport input"), { notSent: true });
 const forbiddenHeaders = new Set(["host", "connection", "content-length", "transfer-encoding", "proxy-authorization", "proxy-connection", "upgrade", "expect", "accept-encoding"]);
 const nativeLength = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(Uint8Array.prototype), "length").get;
 
@@ -40,7 +51,7 @@ function prepare(spec) {
   try { url = new URL(spec.url); } catch { throw new Error("invalid HTTP transport input"); }
   if (
     url.href !== spec.url || url.username || url.password || url.hash || url.protocol !== "https:" || url.port ||
-    (!ORIGINS.has(url.origin) && !(spec.url === CERTIFICATE_URL && spec.method === "GET")) ||
+    (!ORIGINS.has(url.origin) && !(spec.url === CERTIFICATE_URL && spec.method === "GET") && !exactRoute(url, spec.method)) ||
     (body !== null && ["GET", "DELETE"].includes(spec.method))
   ) throw new Error("invalid HTTP transport input");
   if (!spec.headers || typeof spec.headers !== "object") throw new Error("invalid HTTP transport input");
@@ -67,9 +78,13 @@ export function createSingleAttemptHttpsTransport(options) {
   const { requestImpl } = options;
   if (typeof requestImpl !== "function") throw new Error("invalid HTTP transport input");
   return Object.freeze({
+    /** The transport's own input check, with nothing sent: a caller runs it before a request is counted. */
+    validate(spec) {
+      try { prepare(spec); } catch { throw inputRefusal(); }
+    },
     async send(spec) {
       let prepared;
-      try { prepared = prepare(spec); } catch { throw new Error("invalid HTTP transport input"); }
+      try { prepared = prepare(spec); } catch { throw inputRefusal(); }
       const { url, method, headers, body } = prepared;
       const startedAtMs = Date.now();
       return new Promise((resolve, reject) => {

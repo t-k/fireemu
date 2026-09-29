@@ -18,7 +18,7 @@ export function createDispatchGate(options) {
   const fail = () => bad("invalid dispatch gate options");
   closedRecord(options, ["reservations", "capture", "transport", "targets", "credentials", "preflightIds", "admission"], "invalid dispatch gate options");
   const { reservations, capture, transport, targets, credentials, preflightIds, admission } = options;
-  if (![reservations?.onStarted, reservations?.onReserve, reservations?.onTerminal, capture?.writeIntent, capture?.writeResponse, capture?.writeNote, capture?.snapshot, transport?.send, targets?.verify, credentials?.headersFor, admission?.check].every(isFunction)) fail();
+  if (![reservations?.onStarted, reservations?.onReserve, reservations?.onTerminal, capture?.writeIntent, capture?.writeResponse, capture?.writeNote, capture?.snapshot, transport?.send, targets?.verify, credentials?.headersFor, admission?.check, transport?.validate].every(isFunction)) fail();
   let armed = null;
   let busy = false;
   let poisoned = false;
@@ -61,6 +61,8 @@ export function createDispatchGate(options) {
       if (!targets.verify(prepared) || !modeOf(phase) || (mutationKey !== null && typeof mutationKey !== "string") || (phase === "preflight" ? !isFunction(accept) : accept !== null)) bad("invalid dispatch request");
       const operationId = prepared.rowId;
       if (counter.snapshot().mode !== modeOf(phase) || operationId.startsWith("recovery/") !== (phase === "recovery") || operationId.startsWith("preflight/") !== (phase === "preflight")) bad("request phase does not match the counter");
+      // A target the transport would refuse is stopped here, before anything is admitted, written or counted.
+      try { transport.validate({ url: prepared.spec.url, method: prepared.spec.method, headers: prepared.spec.headers, body: prepared.spec.body }); } catch { bad("request not sent: the transport refuses the target"); }
       if (capture.snapshot().uncertain) bad("capture journal is uncertain");
       await admitted();
       await capture.writeIntent({ operationId, phase, targetSha256: prepared.targetSha256, redactedTarget: prepared.redacted, mutationKey });
@@ -72,7 +74,9 @@ export function createDispatchGate(options) {
         if (!targets.verify(prepared)) bad("target changed after its intent");
         const headers = { ...prepared.spec.headers, ...credentialHeaders(prepared) };
         dispatched = true;
-        const answer = await transport.send({ url: prepared.spec.url, method: prepared.spec.method, headers, body: prepared.spec.body });
+        let answer;
+        // The transport's own refusal of its input means nothing left: that is "not sent", not an uncertain outcome.
+        try { answer = await transport.send({ url: prepared.spec.url, method: prepared.spec.method, headers, body: prepared.spec.body }); } catch (error) { if (error?.notSent === true) dispatched = false; throw error; }
         // Only the status, the raw headers and the bytes travel on; timing and any other field of the transport stay behind.
         received = Object.freeze({ status: answer.status, rawHeaders: answer.rawHeaders, bytes: answer.bytes });
         return received;

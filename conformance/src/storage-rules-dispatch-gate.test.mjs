@@ -38,7 +38,7 @@ async function harness(delta = {}) {
     writeNote: async (r) => { trace.push(["note", r.operationId, r.text]); },
     snapshot: () => Object.freeze({ ...state }),
   };
-  const transport = { send: async (spec) => { trace.push(["transport", spec.method, spec.url, JSON.stringify(spec.headers)]); return ok; } };
+  const transport = { validate() {}, send: async (spec) => { trace.push(["transport", spec.method, spec.url, JSON.stringify(spec.headers)]); return ok; } };
   const credentials = { headersFor: (credential) => (credential === "anonymous" ? {} : { authorization: `Bearer ${BEARER}` }) };
   const gate = createDispatchGate({ reservations: { ...reservations, ...delta.reservations }, capture: { ...capture, ...delta.capture }, transport: { ...transport, ...delta.transport }, targets: { ...targets, ...delta.targets }, credentials: { ...credentials, ...delta.credentials }, preflightIds, admission: { check: async () => { trace.push(["admission"]); return { admitted: true }; }, ...delta.admission } });
   const prepare = (id) => targets.prepare(row(id), resolver);
@@ -107,6 +107,29 @@ test("the quota project header always equals the target's project, whatever the 
   const ok = await harness({ credentials: { headersFor: (credential, context) => ({ authorization: "Bearer t", "x-goog-user-project": context.project }) } });
   await ok.admit();
   await ok.gate.send(ok.prepare(READ), normalMeta);
+});
+
+test("a target the transport refuses is not sent and costs nothing: no admission, intent, reservation or counter movement", async () => {
+  let refuse = false;
+  const h = await harness({ transport: { validate: () => { if (refuse) throw new Error("invalid HTTP transport input"); } } });
+  await h.admit();
+  const before = h.gate.snapshot();
+  refuse = true;
+  h.trace.length = 0;
+  await assert.rejects(h.gate.send(h.prepare(READ), normalMeta), /request not sent/);
+  assert.deepEqual(h.trace, []);
+  const after = h.gate.snapshot();
+  assert.deepEqual([after.mode, after.requests, after.normal, after.recovery, after.poisoned], [before.mode, before.requests, before.normal, before.recovery, false]);
+  // The gate is still usable for a target the transport accepts.
+  refuse = false;
+  await h.gate.send(h.prepare(READ), normalMeta);
+});
+
+test("an input refusal by the transport itself is reported as not sent, never as an uncertain outcome", async () => {
+  const notSent = Object.assign(new Error("invalid HTTP transport input"), { notSent: true });
+  // Preflight IDs are sent by admit(), so the refusal surfaces there: it must not be the uncertain-outcome error.
+  await assert.rejects(harness({ transport: { send: async () => { throw notSent; } } }).then((x) => x.admit()), (error) => error === notSent);
+  await assert.rejects(harness({ transport: { send: async () => { throw new Error("connection reset"); } } }).then((x) => x.admit()), /request outcome uncertain/);
 });
 
 test("credential headers are closed to the two allowed names and printable values, and a refusal sends nothing", async () => {
@@ -306,9 +329,9 @@ test("the request description is a closed record", async () => {
 test("gate options are a closed record of the required parts", async () => {
   const { createDispatchGate } = await import("./storage-rules/dispatch-gate.mjs");
   const targets = createTargetBuilder({ manifest, digestSalt: salt });
-  const good = { reservations: { onStarted() {}, onReserve() {}, onTerminal() {} }, capture: { writeIntent() {}, writeResponse() {}, writeNote() {}, snapshot() {} }, transport: { send() {} }, targets, credentials: { headersFor() {} }, preflightIds, admission: { check() {} } };
+  const good = { reservations: { onStarted() {}, onReserve() {}, onTerminal() {} }, capture: { writeIntent() {}, writeResponse() {}, writeNote() {}, snapshot() {} }, transport: { validate() {}, send() {} }, targets, credentials: { headersFor() {} }, preflightIds, admission: { check() {} } };
   assert.doesNotThrow(() => createDispatchGate(good));
-  for (const bad of [null, {}, { ...good, extra: 1 }, { ...good, transport: {} }, { ...good, capture: { ...good.capture, writeNote: undefined } }, { ...good, targets: { prepare() {} } }, { ...good, credentials: {} }, { ...good, admission: undefined }, { ...good, admission: {} }, { ...good, reservations: { ...good.reservations, onTerminal: 1 } }]) {
+  for (const bad of [null, {}, { ...good, extra: 1 }, { ...good, transport: {} }, { ...good, capture: { ...good.capture, writeNote: undefined } }, { ...good, targets: { prepare() {} } }, { ...good, credentials: {} }, { ...good, admission: undefined }, { ...good, admission: {} }, { ...good, transport: { send() {} } }, { ...good, transport: { validate() {} } }, { ...good, reservations: { ...good.reservations, onTerminal: 1 } }]) {
     assert.throws(() => createDispatchGate(bad), /invalid dispatch gate options/);
   }
 });

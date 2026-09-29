@@ -21,8 +21,8 @@ export async function withLockedAdmission(options, run) {
 
 /** The gate's real transport, sent through the lease so the locks know a request left and whether one failed. */
 export function leaseTransport(lease, transport) {
-  if (typeof lease?.dispatch !== "function" || typeof transport?.send !== "function") throw new Error("invalid lease transport");
-  return Object.freeze({ send: (spec) => lease.dispatch(() => transport.send(spec)) });
+  if (typeof lease?.dispatch !== "function" || typeof transport?.send !== "function" || typeof transport?.validate !== "function") throw new Error("invalid lease transport");
+  return Object.freeze({ send: (spec) => lease.dispatch(() => transport.send(spec)), validate: (spec) => transport.validate(spec) });
 }
 
 /** Confirm the close to the lease only for a result that ended clean; anything else keeps the locks. */

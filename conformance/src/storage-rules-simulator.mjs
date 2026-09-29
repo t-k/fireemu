@@ -241,6 +241,8 @@ export function createSimulator({ manifest, options = {} }) {
     state: () => ({ objects: objects.size, rulesets: rulesets.size, release, documents: documents.size, sessions: [...sessions.values()].map((s) => s.state), calls: state.calls, log }),
     objects: () => [...objects.keys()],
     /** Every bearer value the simulator handed out, for sweeps that prove none was saved. */
+    // The simulator accepts every target the controller builds; the real transport's checks are tested on their own.
+    validate() {},
     secrets: () => [...secrets],
   });
 }

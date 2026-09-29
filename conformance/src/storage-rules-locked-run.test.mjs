@@ -64,7 +64,7 @@ async function assemble({ lease, admission, simulatorOptions = {} }, { transport
   const objects = createResourceLedger({ manifest });
   const run = createRunLedger({ manifest, objects });
   const calls = { count: 0 };
-  const transport = leaseTransport(lease, { send: async (spec) => { calls.count++; await transportHook(spec, calls.count); return simulator.send(spec); } });
+  const transport = leaseTransport(lease, { validate() {}, send: async (spec) => { calls.count++; await transportHook(spec, calls.count); return simulator.send(spec); } });
   const gate = createDispatchGate({
     reservations: { onStarted: async () => {}, onReserve: async (r) => { trace.push(r.operationId); }, onTerminal: async (r) => { trace.push(`terminal:${r.outcome}`); } },
     capture, transport, targets, credentials: { headersFor: () => ({}) }, preflightIds, admission,
@@ -228,10 +228,12 @@ test("the lease transport sends through the lease exactly once per request and r
   const { leaseTransport } = await load();
   const seen = [];
   const lease = { dispatch: async (send) => { seen.push("dispatch"); return send(); } };
-  const transport = leaseTransport(lease, { send: async (spec) => { seen.push(spec.url); return { status: 200 }; } });
+  const transport = leaseTransport(lease, { validate: () => seen.push("validate"), send: async (spec) => { seen.push(spec.url); return { status: 200 }; } });
   assert.deepEqual(await transport.send({ url: "https://x/" }), { status: 200 });
   assert.deepEqual(seen, ["dispatch", "https://x/"]);
+  transport.validate({ url: "https://x/" });
+  assert.equal(seen.at(-1), "validate");
   assert.equal(Object.isFrozen(transport), true);
-  assert.deepEqual(Object.keys(transport), ["send"]);
-  for (const bad of [[null, { send() {} }], [{}, { send() {} }], [lease, {}], [lease, null]]) assert.throws(() => leaseTransport(...bad), /invalid lease transport/);
+  assert.deepEqual(Object.keys(transport).sort(), ["send", "validate"]);
+  for (const bad of [[null, { send() {}, validate() {} }], [{}, { send() {}, validate() {} }], [lease, {}], [lease, null], [lease, { send() {} }], [lease, { validate() {} }]]) assert.throws(() => leaseTransport(...bad), /invalid lease transport/);
 });

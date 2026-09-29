@@ -85,7 +85,7 @@ async function assemble({ simulatorOptions = {}, respond = () => undefined, admi
   const simulator = createSimulator({ manifest, options: { invalidContent, ...simulatorOptions } });
   const seen = { http: [], headers: [], proofs: [], ownership: [], cleanup: [] };
   const trace = [];
-  const transport = { send: async (spec) => {
+  const transport = { validate() {}, send: async (spec) => {
     seen.http.push(`${spec.method} ${new URL(spec.url).host}${new URL(spec.url).pathname}`);
     seen.headers.push(spec.headers);
     const replaced = respond(spec, trace.at(-1), clock);
@@ -261,7 +261,7 @@ function unit({ respond = () => undefined } = {}) {
   const identity = fakeIdentity(clock);
   const trace = [];
   const seen = { http: 0, proofs: [], ownership: [], cleanup: [] };
-  const transport = { send: async (spec) => {
+  const transport = { validate() {}, send: async (spec) => {
     seen.http++;
     const replaced = respond(spec);
     if (replaced !== undefined) return replaced;

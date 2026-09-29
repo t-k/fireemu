@@ -24,7 +24,7 @@ async function setup({ admission = { check: async () => ({ admitted: true }) }, 
   const gate = createDispatchGate({
     reservations: { onStarted: async () => { trace.push("started"); }, onReserve: async (row) => { trace.push(`reserved:${row.operationId}`); }, onTerminal: async (row) => { trace.push(`terminal:${row.outcome}`); }, ...reservations },
     capture: { writeIntent: async (r) => { trace.push(`intent:${r.operationId}:${r.phase}`); }, writeResponse: async (r) => { trace.push(`response:${r.operationId}`); }, writeNote: async (r) => { trace.push(`note:${r.text}`); }, snapshot: () => ({ ...state }), ...capture },
-    transport: transport ?? { send: async (spec) => { trace.push(`http:${spec.url}`); return spec.url === certUrl ? raw({ synthetic: pem }) : raw({ access_token: token, token_type: "Bearer", expires_in: 3600 }); } },
+    transport: transport ? { validate() {}, ...transport } : { validate() {}, send: async (spec) => { trace.push(`http:${spec.url}`); return spec.url === certUrl ? raw({ synthetic: pem }) : raw({ access_token: token, token_type: "Bearer", expires_in: 3600 }); } },
     targets: { verify: () => true, prepare: () => { throw new Error("unused"); } },
     credentials: { headersFor: () => ({}) },
     preflightIds: [ownerPreflight, keyPreflight],

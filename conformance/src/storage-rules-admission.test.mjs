@@ -183,7 +183,7 @@ async function harness(admissionOverrides = {}, { delegates = {}, credentials = 
   const simulator = createSimulator({ manifest, options: { invalidContent } });
   const transportCalls = { count: 0 };
   const hooks = { after: async () => {} };
-  const transport = { send: async (request) => {
+  const transport = { validate() {}, send: async (request) => {
     transportCalls.count++;
     let answer;
     if (request.url === CERT_URL) answer = canned({ synthetic: signingKey.export({ type: "spki", format: "pem" }) });
@@ -279,7 +279,7 @@ test("a refused admission leaves the gate closed to every later request", async 
 });
 
 test("the gate requires an admission", async () => {
-  const gateOptions = (admission) => ({ reservations: { onStarted() {}, onReserve() {}, onTerminal() {} }, capture: memoryCapture(), transport: { send() {} }, targets: { verify() {}, prepare() {} }, credentials: { headersFor() {} }, preflightIds, ...(admission === undefined ? {} : { admission }) });
+  const gateOptions = (admission) => ({ reservations: { onStarted() {}, onReserve() {}, onTerminal() {} }, capture: memoryCapture(), transport: { validate() {}, send() {} }, targets: { verify() {}, prepare() {} }, credentials: { headersFor() {} }, preflightIds, ...(admission === undefined ? {} : { admission }) });
   assert.throws(() => createDispatchGate(gateOptions()), /invalid dispatch gate options/);
   assert.throws(() => createDispatchGate(gateOptions({})), /invalid dispatch gate options/);
   assert.doesNotThrow(() => createDispatchGate(gateOptions({ check: async () => ({ admitted: true }) })));

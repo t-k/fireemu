@@ -812,13 +812,15 @@
         "auth-account",
         "auth-credential",
         "auth-action",
-        "auth-config-sdk"
+        "auth-config-sdk",
+        "auth-mfa",
+        "auth-tenant-blocking"
       ],
       "configProjections": [
         "strict"
       ],
       "status": "PENDING_REVIEW",
-      "note": "Every AUTH-FEDERATION row and the AUTH-ACCOUNT, AUTH-CREDENTIAL, AUTH-ACTION and AUTH-CONFIG-SDK regressions on one artifact, with the workspace tests and clippy."
+      "note": "Closes on the round-2 integrated artifact (integration/round2-2026-09-29 after this parent is merged), not on the lane artifact: every AUTH-FEDERATION row (record-oidc and record-saml; the two F11 rows differing only in spConfig.spCertificates) and, as regressions on that one artifact, every AUTH-ACCOUNT, AUTH-CREDENTIAL, AUTH-ACTION, AUTH-CONFIG-SDK (its documented K5, K16 and K17 rows only), AUTH-MFA and AUTH-TENANT-BLOCKING row. AUTH-TENANT-BLOCKING is included because its atb/tenant/providers#auth-uri-a depends on this parent (T12). With the workspace tests, fmt and clippy on that artifact."
     },
     {
       "conditionId": "AUTH-FEDERATION/closure-review",
@@ -830,7 +832,7 @@
         "strict"
       ],
       "status": "PENDING_REVIEW",
-      "note": "An independent closure review and a safety review of the final artifact (no cargo-mutants in the reviews; the lane's own mutation evidence is checked). The safety review focuses on strict IdP verification (O4, f5d0831ff): the signature check, key selection by kid, alg, the exp, iat, nbf, aud, azp, iss and nonce checks, the key size bounds, auth.idpSigners validation, the re-verification in the blocking-function commit and the continuation authority."
+      "note": "An independent closure review and a safety review of the round-2 integrated artifact (no cargo-mutants in the reviews; the lane's own mutation evidence is checked). The lane-artifact closure material was approved with conditions (2026-09-29; packet 65d522de, closure 7ac8e70e1); the review of the integrated artifact covers the changes after it, including the fixes of that review's SF4 (the OIDC nonce replay check on the blocking-function path) and SF5 (the conditions of a resumed SAML continuation). The safety review focuses on strict IdP verification (O4, f5d0831ff): the signature check, key selection by kid, alg, the exp, iat, nbf, aud, azp, iss and nonce checks, the key size bounds, auth.idpSigners validation, the re-verification in the blocking-function commit and the continuation authority."
     }
   ]
 }

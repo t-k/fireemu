@@ -61,7 +61,22 @@ const FIXTURES = {
   "auth-action-comparison-v1": "conformance/auth-action-production.json",
   "auth-credential-comparison-v1": "conformance/auth-credential-production.json",
   "auth-account-comparison-v1": "conformance/auth-account-production.json",
+  "auth-mfa-comparison-v1": "conformance/auth-mfa-production.json",
+  "auth-tenant-blocking-comparison-v1": "conformance/auth-tenant-blocking-production.json",
 };
+
+/**
+ * The parents compared again as regressions on the final artifact, each as a whole: their rows
+ * are their own parents' evidence, so their recordings are not this parent's.
+ */
+const REGRESSION_LANES = new Set([
+  "auth-account",
+  "auth-credential",
+  "auth-action",
+  "auth-config-sdk",
+  "auth-mfa",
+  "auth-tenant-blocking",
+]);
 
 function assertBoundToFixture(comparison, label) {
   const fixturePath = FIXTURES[comparison.kind];
@@ -75,11 +90,17 @@ function assertBoundToFixture(comparison, label) {
     createHash("sha256").update(text).digest("hex"),
     `${label}: the comparison was made against the committed ${fixturePath}`,
   );
-  const recorded = Object.entries(JSON.parse(text).programs).flatMap(([program, { steps }]) =>
+  let recorded = Object.entries(JSON.parse(text).programs).flatMap(([program, { steps }]) =>
     Object.keys(steps).map((step) => `${program}#${step}`),
   );
+  const compared = comparison.rows.map(({ row }) => row);
+  if (comparison.kind === "auth-tenant-blocking-comparison-v1") {
+    // AUTH-TENANT-BLOCKING compares its tenant and blocking suites separately.
+    const suites = new Set(compared.map((row) => row.split("/").slice(0, 2).join("/")));
+    recorded = recorded.filter((row) => suites.has(row.split("/").slice(0, 2).join("/")));
+  }
   assert.deepEqual(
-    comparison.rows.map(({ row }) => row).toSorted(),
+    compared.toSorted(),
     recorded.toSorted(),
     `${label}: the comparison covers exactly the recorded rows of ${fixturePath}`,
   );
@@ -151,7 +172,7 @@ test("AUTH-FEDERATION closure inventory cannot silently omit a declared conditio
     // The named runs are exactly the recordings the fixtures hold for the condition's programs.
     assert.deepEqual(
       runs.map(({ recordedAt, gitSha }) => `${recordedAt} ${gitSha}`).toSorted(),
-      recordedRuns(condition.recipeIds),
+      recordedRuns(condition.recipeIds.filter((recipe) => !REGRESSION_LANES.has(recipe))),
       `${label}: productionRecordings name the fixtures' own recordings`,
     );
     assert.match(condition.evidence?.finalArtifactSha256 ?? "", /^[0-9a-f]{64}$/, label);
@@ -168,10 +189,7 @@ test("AUTH-FEDERATION closure inventory cannot silently omit a declared conditio
       return condition.recipeIds.some(
         (r) =>
           r === "auth-federation" ||
-          r === "auth-config-sdk" ||
-          r === "auth-action" ||
-          r === "auth-credential" ||
-          r === "auth-account" ||
+          REGRESSION_LANES.has(r) ||
           programId === r ||
           programId.startsWith(`${r}/`),
       );

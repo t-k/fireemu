@@ -387,7 +387,7 @@ fn functions_starts_eventarc_and_tasks_on_dedicated_ports() {
         "printf '%s\\n' \"$FIREEMU_FUNCTIONS_HOST\" \"$CLOUD_EVENTARC_EMULATOR_HOST\" \"$CLOUD_TASKS_EMULATOR_HOST\" > {}",
         env_path.display()
     );
-    let output = exec_command(&source, None, &["sh", "-c", &script]);
+    let output = exec_command(&source, None, &["/bin/sh", "-c", &script]);
     assert!(output.status.success(), "{}", stderr(&output));
 
     let env = std::fs::read_to_string(&env_path).unwrap();
@@ -514,7 +514,7 @@ fn occupied_default_support_ports_relocate_and_export_the_selected_addresses() {
             "--functions",
             source.to_str().unwrap(),
             "--",
-            "sh",
+            "/bin/sh",
             "-c",
             &script,
         ])
@@ -1188,7 +1188,7 @@ test "$after" != "$before"
 "#;
     let source = fixture("blocking-auth-never-settles");
     let config = source.join("fireemu.json");
-    let out = exec_command(&source, Some(&config), &["sh", "-c", script]);
+    let out = exec_command(&source, Some(&config), &["/bin/sh", "-c", script]);
     let err = stderr(&out);
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert_eq!(

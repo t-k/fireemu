@@ -38,7 +38,7 @@ const PIDFILE_VAR: &str = "FIREEMU_LEAK_FIXTURE_PIDFILE";
 // Never waiting for the child is the whole point of the fixture; the nested driver reaps it.
 #[allow(clippy::zombie_processes)]
 fn fixture_child_keeps_captured_stdout() {
-    let child = Command::new("sh")
+    let child = Command::new("/bin/sh")
         .arg("-c")
         .arg(format!("exec sleep {FIXTURE_CHILD_SECONDS}"))
         .stdin(Stdio::null())
@@ -57,7 +57,7 @@ fn fixture_child_keeps_captured_stdout() {
 #[ignore = "intentional leak; run through the nested nextest driver"]
 #[allow(clippy::zombie_processes)]
 fn fixture_child_redirects_output() {
-    let child = Command::new("sh")
+    let child = Command::new("/bin/sh")
         .arg("-c")
         .arg(format!("exec sleep {FIXTURE_CHILD_SECONDS}"))
         .stdin(Stdio::null())

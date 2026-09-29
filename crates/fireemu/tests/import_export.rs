@@ -1080,7 +1080,7 @@ fn an_import_keeps_email_enumeration_protection_unless_the_artifact_declares_it(
         let output = exec()
             .args(["--only", "auth", "--import"])
             .arg(&export)
-            .args(["--", "sh", "-c", probe])
+            .args(["--", "/bin/sh", "-c", probe])
             .output()
             .unwrap();
         let log = text(&output);
@@ -1133,7 +1133,7 @@ fn a_storage_resource_limit_refuses_a_mixed_import_before_the_command_starts() {
     let output = exec()
         .args(["--import"])
         .arg(&export)
-        .args(["--", "sh", "-c"])
+        .args(["--", "/bin/sh", "-c"])
         .arg(format!("touch {}", marker.display()))
         .output()
         .unwrap();
@@ -1166,7 +1166,7 @@ fn a_sparse_firestore_output_is_refused_before_allocation_or_command_start() {
     let output = exec()
         .args(["--import"])
         .arg(&export)
-        .args(["--", "sh", "-c"])
+        .args(["--", "/bin/sh", "-c"])
         .arg(format!("touch {}", marker.display()))
         .output()
         .unwrap();
@@ -1427,7 +1427,7 @@ fn api_created_password_account_keeps_password_provider_without_hash() {
         .arg(&source)
         .arg("--export-on-exit")
         .arg(&out)
-        .args(["--", "sh", "-c"])
+        .args(["--", "/bin/sh", "-c"])
         .arg(r#"curl -s -X POST "http://$FIREBASE_AUTH_EMULATOR_HOST/identitytoolkit.googleapis.com/v1/accounts:signUp?key=fake-api-key" -H 'Content-Type: application/json' -d '{"email":"api-password@example.com","password":"hunter22"}'"#)
         .output()
         .unwrap();
@@ -1483,7 +1483,7 @@ fn removed_password_provider_is_not_reintroduced_by_export_round_trip() {
         .arg(&source)
         .arg("--export-on-exit")
         .arg(&out)
-        .args(["--", "sh", "-c"])
+        .args(["--", "/bin/sh", "-c"])
         .arg(
             r#"curl -s -X POST "http://$FIREBASE_AUTH_EMULATOR_HOST/identitytoolkit.googleapis.com/v1/projects/demo-export/accounts:update" -H 'Authorization: Bearer owner' -H 'Content-Type: application/json' -d '{"localId":"user-password","deleteAttribute":["PASSWORD"]}'"#,
         )
@@ -1572,7 +1572,7 @@ fn email_link_account_import_preserves_provider_and_export_marker() {
         .arg(&source)
         .arg("--export-on-exit")
         .arg(&out)
-        .args(["--", "sh", "-c"])
+        .args(["--", "/bin/sh", "-c"])
         .arg(probe)
         .output()
         .unwrap();
@@ -1665,7 +1665,7 @@ fn auth_artifact_round_trip_preserves_tenant_scoped_account_state() {
         .arg(&source)
         .arg("--export-on-exit")
         .arg(&out)
-        .args(["--", "sh", "-c"])
+        .args(["--", "/bin/sh", "-c"])
         .arg(&probe)
         .output()
         .unwrap();
@@ -1846,7 +1846,7 @@ fn the_export_runs_when_the_daemon_is_interrupted() {
             .arg(fixture("official-multiproduct"))
             .arg("--export-on-exit")
             .arg(&out)
-            .args(["--", "sh", "-c"])
+            .args(["--", "/bin/sh", "-c"])
             .arg(format!(
                 "printf '%s' $$ > {}; touch {}; exec sleep 60",
                 child_pid_path.display(),
@@ -1894,7 +1894,7 @@ fn the_export_runs_when_the_daemon_is_terminated() {
             .arg(fixture("official-multiproduct"))
             .arg("--export-on-exit")
             .arg(&out)
-            .args(["--", "sh", "-c"])
+            .args(["--", "/bin/sh", "-c"])
             .arg(format!(
                 "printf '%s' $$ > {}; touch {}; exec sleep 60",
                 child_pid_path.display(),
@@ -2548,7 +2548,7 @@ fn a_lone_config_member_survives_the_round_trip() {
     let output = exec()
         .args(["--only", "auth", "--export-on-exit"])
         .arg(&out)
-        .args(["--", "sh", "-c"])
+        .args(["--", "/bin/sh", "-c"])
         .arg(&write)
         .output()
         .unwrap();
@@ -2561,7 +2561,7 @@ fn a_lone_config_member_survives_the_round_trip() {
     let again = exec()
         .args(["--only", "auth", "--import"])
         .arg(&out)
-        .args(["--", "sh", "-c"])
+        .args(["--", "/bin/sh", "-c"])
         .arg(&read)
         .output()
         .unwrap();
@@ -2617,7 +2617,7 @@ printf '%s\n' "DOC $(curl -s "{tenants}/$tenant" {admin})""#
     let output = exec()
         .args(["--only", "auth", "--export-on-exit"])
         .arg(&out)
-        .args(["--", "sh", "-c"])
+        .args(["--", "/bin/sh", "-c"])
         .arg(&write)
         .output()
         .unwrap();
@@ -2659,7 +2659,7 @@ printf '%s\n' "DOC $(curl -s "{tenants}/$tenant" {admin})""#
     let again = exec()
         .args(["--only", "auth", "--import"])
         .arg(&out)
-        .args(["--", "sh", "-c"])
+        .args(["--", "/bin/sh", "-c"])
         .arg(&read)
         .output()
         .unwrap();
@@ -2704,7 +2704,7 @@ fn written_config_members_and_the_tenant_switch_survive_the_round_trip() {
     let output = exec()
         .args(["--only", "auth", "--export-on-exit"])
         .arg(&out)
-        .args(["--", "sh", "-c"])
+        .args(["--", "/bin/sh", "-c"])
         .arg(&write)
         .output()
         .unwrap();
@@ -2731,7 +2731,7 @@ fn written_config_members_and_the_tenant_switch_survive_the_round_trip() {
     let again = exec()
         .args(["--only", "auth", "--import"])
         .arg(&out)
-        .args(["--", "sh", "-c"])
+        .args(["--", "/bin/sh", "-c"])
         .arg(&read)
         .output()
         .unwrap();

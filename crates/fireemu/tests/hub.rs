@@ -910,7 +910,7 @@ fn exec_exports_the_hub_address_to_its_command() {
                     "--hub-port",
                 ])
                 .arg(port.to_string())
-                .args(["--", "sh", "-c"])
+                .args(["--", "/bin/sh", "-c"])
                 .arg(format!("env > {}", out.display()))
                 .stdin(Stdio::null())
                 .output()
@@ -962,7 +962,7 @@ fn turning_the_hub_off_leaves_no_listener_and_no_variable() {
             "--project",
             "demo-hub-off",
             "--",
-            "sh",
+            "/bin/sh",
             "-c",
         ])
         .arg(format!("env > {}", out.display()))

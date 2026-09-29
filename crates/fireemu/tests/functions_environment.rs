@@ -88,7 +88,7 @@ fn exec(source: &Path, project: &str) -> Output {
 
 fn exec_script(source: &Path, project: &str, script: &str) -> Output {
     fireemu_exec(source, project)
-        .args(["--", "sh", "-c", script])
+        .args(["--", "/bin/sh", "-c", script])
         .stdin(Stdio::null())
         .output()
         .unwrap()
@@ -98,7 +98,7 @@ fn exec_script_with_arg(source: &Path, project: &str, script: &str, arg: &Path) 
     fireemu_exec(source, project)
         .args([
             "--",
-            "sh",
+            "/bin/sh",
             "-c",
             script,
             "functions-reload-test",

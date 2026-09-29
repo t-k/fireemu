@@ -6,11 +6,11 @@ import { assembleInputs, keyFacts, keyListRequest, keyStringMatches, KEY_LIST_ID
 import { createPrepTargets } from "./storage-rules-prep/targets.mjs";
 import { createPrepHttpsTransport } from "./storage-rules-prep/transport.mjs";
 import { PREP_KEYS, createHttpsRequestDouble, prepInputsFor } from "./storage-rules-prep-support.mjs";
-import { API_KEYS, BUCKET, NUMBERS, SUBJECT, privatePacket } from "./storage-rules-runner-support.mjs";
+import { API_KEYS, BUCKET, KEY_TARGETS, NUMBERS, SUBJECT, privatePacket } from "./storage-rules-runner-support.mjs";
 
 const closure = JSON.parse(readFileSync(new URL("../../spec/compatibility/closure/STORAGE-RULES.json", import.meta.url), "utf8"));
 const commit = "a".repeat(40);
-const params = { bucket: BUCKET, queryProjectNumber: NUMBERS.query, idpProjectNumber: NUMBERS.idp, sourceCommit: commit };
+const params = { bucket: BUCKET, queryProjectNumber: NUMBERS.query, idpProjectNumber: NUMBERS.idp, sourceCommit: commit, expectedKeyIds: { query: "fireemu-query-auth-20260925", idp: null } };
 const sha = (text) => createHash("sha256").update(text).digest("hex");
 
 test("thirteen declared requests, each with a distinct preflight ID, ordered token, identity, lists, key strings, bucket, database, IAM, permissions", () => {
@@ -26,11 +26,12 @@ test("the corpus digest follows every input the requests are built from, and the
   const base = prepCorpus(closure, params);
   assert.equal(base.list.length, 13);
   assert.match(base.sha256, /^[0-9a-f]{64}$/);
-  assert.equal(base.sha256, sha(JSON.stringify(base.list)));
+  assert.deepEqual(base.expectedKeyIds, { query: "fireemu-query-auth-20260925", idp: null });
+  assert.equal(base.sha256, sha(JSON.stringify({ expectedKeyIds: base.expectedKeyIds, list: base.list })));
   assert.equal(prepCorpus(closure, params).sha256, base.sha256);
-  for (const change of [{ bucket: "another-bucket-name" }, { queryProjectNumber: "333333333333" }, { idpProjectNumber: "444444444444" }, { sourceCommit: "b".repeat(40) }]) {
+  for (const change of [{ bucket: "another-bucket-name" }, { queryProjectNumber: "333333333333" }, { idpProjectNumber: "444444444444" }, { sourceCommit: "b".repeat(40) }, { expectedKeyIds: { query: "another-key", idp: null } }, { expectedKeyIds: { query: "fireemu-query-auth-20260925", idp: "an-idp-key" } }, { expectedKeyIds: { query: null, idp: null } }]) {
     const moved = prepCorpus(closure, { ...params, ...change });
-    // The source commit does not appear in a request, so it does not move the corpus; every other input does.
+    // The source commit does not appear in a request, so it does not move the corpus; every other input (including the expected keys) does.
     assert.equal(moved.sha256 !== base.sha256, !("sourceCommit" in change), JSON.stringify(change));
   }
   const urls = Object.fromEntries(base.list.map((row) => [row.id, `${row.method} ${row.url}`]));
@@ -39,6 +40,8 @@ test("the corpus digest follows every input the requests are built from, and the
   assert.equal(urls[KEY_LIST_IDS.idp], `GET https://apikeys.googleapis.com/v2/projects/${NUMBERS.idp}/locations/global/keys`);
   assert.match(urls["preflight/query/key-string"], /\/keys\/00000000-0000-4000-8000-000000000001\/keyString$/);
   assert.equal(JSON.stringify(base.list).includes(PREP_KEYS.query), false);
+  for (const bad of [{ query: "Bad", idp: null }, { query: 5, idp: null }, { query: null, idp: "a/b" }, { query: `a${"b".repeat(63)}`, idp: null }]) assert.throws(() => prepCorpus(closure, { ...params, expectedKeyIds: bad }), /invalid expected key ID/, JSON.stringify(bad));
+  assert.deepEqual(prepCorpus(closure, { ...params, expectedKeyIds: undefined }).expectedKeyIds, { query: null, idp: null });
   assert.deepEqual(base.list.find((row) => row.id === "preflight/query/iam").body, { json: { options: { requestedPolicyVersion: 3 } } });
   // The stage 3 preflight rows are the source of the standard requests.
   const { rows } = standardRows(closure, params);
@@ -54,30 +57,45 @@ test("a key list request is an exact GET of one project's list", () => {
   assert.equal(Object.isFrozen(request), true);
 });
 
-test("exactly one live key of the right project is chosen, and anything else is a stop", () => {
+test("the expected key is chosen from the live keys and the others are counted; without an expected key exactly one live key is needed; anything else is a stop", () => {
   const key = (id, extra = {}) => ({ name: `projects/${NUMBERS.query}/locations/global/keys/${id}`, uid: "u", ...extra });
-  const chosen = selectKey({ keys: [key(PREP_KEYS.query)] }, NUMBERS.query);
-  assert.equal(chosen.keyId, PREP_KEYS.query);
+  const browser = key("a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d");
+  const dedicated = key("fireemu-query-auth-20260925");
+  const chosen = selectKey({ keys: [browser, dedicated] }, NUMBERS.query, "fireemu-query-auth-20260925");
+  assert.deepEqual([chosen.keyId, chosen.otherLiveKeys], ["fireemu-query-auth-20260925", 1]);
+  assert.equal(chosen.item, dedicated);
   assert.equal(Object.isFrozen(chosen), true);
-  assert.equal(selectKey({ keys: [key(PREP_KEYS.idp, { deleteTime: "2026-01-01T00:00:00Z" }), key(PREP_KEYS.query)] }, NUMBERS.query).keyId, PREP_KEYS.query);
+  assert.equal(selectKey({ keys: [dedicated] }, NUMBERS.query, "fireemu-query-auth-20260925").otherLiveKeys, 0);
+  assert.equal(selectKey({ keys: [key("old-key", { deleteTime: "2026-01-01T00:00:00Z" }), browser, dedicated] }, NUMBERS.query, "fireemu-query-auth-20260925").otherLiveKeys, 1);
+  assert.equal(selectKey({ keys: [dedicated, browser] }, NUMBERS.query, "a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d").keyId, "a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d");
+  // Without an expected key the project must have exactly one live key, of either shape of ID.
+  assert.equal(selectKey({ keys: [browser] }, NUMBERS.query).keyId, "a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d");
+  assert.equal(selectKey({ keys: [dedicated, key("old", { deleteTime: "x" })] }, NUMBERS.query, null).keyId, "fireemu-query-auth-20260925");
   const stops = [
-    [{ keys: [key(PREP_KEYS.query)], nextPageToken: "n" }, /paged or malformed/], [{ keys: [key(PREP_KEYS.query)], nextPageToken: "" }, /paged or malformed/], [null, /paged or malformed/], [[], /paged or malformed/], [{ keys: "x" }, /paged or malformed/],
-    [{}, /found 0/], [{ keys: [] }, /found 0/], [{ keys: [key(PREP_KEYS.query, { deleteTime: "x" })] }, /found 0/], [{ keys: [key(PREP_KEYS.query), key(PREP_KEYS.idp)] }, /found 2/], [{ keys: [null] }, /found 0|expected exactly/],
-    [{ keys: [{ name: `projects/${NUMBERS.idp}/locations/global/keys/${PREP_KEYS.query}` }] }, /not the expected resource/], [{ keys: [{ name: `projects/${NUMBERS.query}/locations/global/keys/${PREP_KEYS.query.toUpperCase()}` }] }, /not the expected resource/],
-    [{ keys: [{ name: `projects/${NUMBERS.query}/locations/global/keys/not-a-uuid-not-a-uuid-not-a-uuid-1234` }] }, /not the expected resource/], [{ keys: [{ name: `projects/${NUMBERS.query}/locations/global/keys/${"0".repeat(36)}` }] }, /not the expected resource/], [{ keys: [{}] }, /not the expected resource/], [{ keys: [{ name: 5 }] }, /not the expected resource/],
+    [{ keys: [browser, dedicated], nextPageToken: "n" }, "fireemu-query-auth-20260925", /paged or malformed/], [{ keys: [dedicated], nextPageToken: "" }, null, /paged or malformed/], [null, null, /paged or malformed/], [[], null, /paged or malformed/], [{ keys: "x" }, null, /paged or malformed/],
+    [{}, null, /found 0/], [{ keys: [] }, null, /found 0/], [{ keys: [browser, dedicated] }, null, /found 2/], [{ keys: [key("x-key", { deleteTime: "x" })] }, null, /found 0/], [{ keys: [null] }, null, /found 0/],
+    [{ keys: [browser] }, "fireemu-query-auth-20260925", /not one live key/], [{ keys: [] }, "fireemu-query-auth-20260925", /not one live key/], [{}, "fireemu-query-auth-20260925", /not one live key/], [{ keys: [key("fireemu-query-auth-20260925", { deleteTime: "x" })] }, "fireemu-query-auth-20260925", /not one live key/], [{ keys: [dedicated, dedicated] }, "fireemu-query-auth-20260925", /found 2/],
+    [{ keys: [{ name: `projects/${NUMBERS.idp}/locations/global/keys/fireemu-query-auth-20260925` }] }, "fireemu-query-auth-20260925", /not one live key/], [{ keys: [{ name: 5 }, {}] }, "fireemu-query-auth-20260925", /not one live key/],
+    [{ keys: [dedicated] }, "Bad", /not a key ID/], [{ keys: [dedicated] }, 5, /not a key ID/], [{ keys: [dedicated] }, "", /not a key ID/], [{ keys: [dedicated] }, `a${"b".repeat(63)}`, /not a key ID/], [{ keys: [dedicated] }, "a/b", /not a key ID/],
+    [{ keys: [{ name: `projects/${NUMBERS.idp}/locations/global/keys/${PREP_KEYS.query}` }] }, null, /not the expected resource/], [{ keys: [{ name: `projects/${NUMBERS.query}/locations/global/keys/Abc` }] }, null, /not the expected resource/],
+    [{ keys: [{ name: `projects/${NUMBERS.query}/locations/global/keys/1abc` }] }, null, /not the expected resource/], [{ keys: [{ name: `projects/${NUMBERS.query}/locations/global/keys/${"0".repeat(36)}` }] }, null, /not the expected resource/], [{ keys: [{}] }, null, /not the expected resource/], [{ keys: [{ name: 5 }] }, null, /not the expected resource/],
+    [{ keys: [{ name: `projects/${NUMBERS.query}/locations/global/keys/` }] }, null, /not the expected resource/], [{ keys: [{ name: `projects/${NUMBERS.query}/locations/global/keys/a/b` }] }, null, /not the expected resource/],
   ];
-  for (const [body, message] of stops) assert.throws(() => selectKey(body, NUMBERS.query), (error) => message.test(error.message) && error.stopCode === "preflight-failed", JSON.stringify(body));
+  for (const [body, expected, message] of stops) assert.throws(() => selectKey(body, NUMBERS.query, expected), (error) => message.test(error.message) && error.stopCode === "preflight-failed", `${JSON.stringify(body)} ${expected}`);
 });
 
-test("a key's facts must be a plain live key with strictly ascending targets", () => {
-  const facts = { uid: "u", deleted: false, apiTargets: ["a.googleapis.com", "b.googleapis.com"], otherRestrictions: [], methodRestricted: false };
-  assert.deepEqual(keyFacts(facts), { keyUid: "u", apiTargets: ["a.googleapis.com", "b.googleapis.com"] });
+test("a key's facts must be a live key that is not method restricted, allows both sign-in services in a strictly ascending list, and has a restriction digest", () => {
+  const digest = "d".repeat(64);
+  const facts = { uid: "u", deleted: false, apiTargets: ["a.googleapis.com", "identitytoolkit.googleapis.com", "securetoken.googleapis.com"], otherRestrictions: ["browserKeyRestrictions"], methodRestricted: false, restrictionsSha256: digest };
+  assert.deepEqual(keyFacts(facts), { keyUid: "u", apiTargets: facts.apiTargets, restrictionsSha256: digest });
   assert.notEqual(keyFacts(facts).apiTargets, facts.apiTargets);
-  for (const change of [{ deleted: true }, { otherRestrictions: ["browserKeyRestrictions"] }, { methodRestricted: true }, { uid: "" }, { uid: 5 }, { apiTargets: "x" }, { apiTargets: ["a", "a"] }, { apiTargets: ["b", "a"] }, { apiTargets: Array.from({ length: 9 }, (_, index) => `s${index}.googleapis.com`) }]) {
-    assert.throws(() => keyFacts({ ...facts, ...change }), /key restrictions|key targets/, JSON.stringify(change));
+  // Another restriction (a Browser key's) is fine: it is recorded through the digest, not refused.
+  assert.equal(keyFacts({ ...facts, otherRestrictions: [] }).keyUid, "u");
+  const many = (count) => [...Array.from({ length: count }, (_, index) => `s${String(index).padStart(2, "0")}.googleapis.com`), "identitytoolkit.googleapis.com", "securetoken.googleapis.com"].sort();
+  for (const change of [{ deleted: true }, { methodRestricted: true }, { uid: "" }, { uid: 5 }, { apiTargets: "x" }, { apiTargets: ["a", "a"] }, { apiTargets: ["securetoken.googleapis.com", "identitytoolkit.googleapis.com"] }, { apiTargets: ["identitytoolkit.googleapis.com"] }, { apiTargets: ["securetoken.googleapis.com"] }, { apiTargets: [] }, { restrictionsSha256: undefined }, { restrictionsSha256: "short" }, { restrictionsSha256: "D".repeat(64) }, { restrictionsSha256: 5 }, { apiTargets: many(63) }]) {
+    assert.throws(() => keyFacts({ ...facts, ...change }), /key restrictions|key targets|sign-in services/, JSON.stringify(change));
   }
-  assert.deepEqual(keyFacts({ ...facts, apiTargets: [] }).apiTargets, []);
-  assert.equal(keyFacts({ ...facts, apiTargets: Array.from({ length: 8 }, (_, index) => `s${index}.googleapis.com`) }).apiTargets.length, 8);
+  assert.equal(keyFacts({ ...facts, apiTargets: many(62) }).apiTargets.length, 64);
 });
 
 test("a key string matches only the local one, compared as digests", () => {
@@ -86,11 +104,12 @@ test("a key string matches only the local one, compared as digests", () => {
 });
 
 test("the private inputs are assembled from the reads, validated as stage 3 inputs, and refuse a key string that is not the local one", () => {
-  const facts = { keyUid: "query-key-uid", apiTargets: ["identitytoolkit.googleapis.com"] };
+  const queryFacts = { keyUid: "query-key-uid", apiTargets: KEY_TARGETS.query, restrictionsSha256: privatePacket("/x/adc.json").projects.query.restrictionsSha256 };
+  const idpFacts = { keyUid: "idp-key-uid", apiTargets: KEY_TARGETS.idp, restrictionsSha256: privatePacket("/x/adc.json").projects.idp.restrictionsSha256 };
   const input = {
     adcPath: "/x/adc.json", local: { numbers: NUMBERS, keys: API_KEYS },
     identity: { email: "owner@example.test", subject: SUBJECT },
-    query: { keyId: PREP_KEYS.query, facts, keyString: API_KEYS.query }, idp: { keyId: PREP_KEYS.idp, facts: { ...facts, keyUid: "idp-key-uid" }, keyString: API_KEYS.idp },
+    query: { keyId: PREP_KEYS.query, facts: queryFacts, keyString: API_KEYS.query }, idp: { keyId: PREP_KEYS.idp, facts: idpFacts, keyString: API_KEYS.idp },
     bucket: { name: BUCKET, facts: { location: "US-CENTRAL1", uniformBucketLevelAccess: true }, iamSha256: privatePacket("/x/adc.json").bucket.iamPolicySha256 },
     database: { locationId: "us-central1", type: "FIRESTORE_NATIVE" }, queryIamSha256: privatePacket("/x/adc.json").queryProjectIamPolicySha256,
   };
@@ -137,7 +156,7 @@ test("the key-string reads are prepared only after the two key IDs are learnt, o
   assert.equal(idp.spec.url, `https://apikeys.googleapis.com/v2/projects/${NUMBERS.idp}/locations/global/keys/${PREP_KEYS.idp}/keyString`);
   assert.equal(idp.project, "fireemu-oracle-idp");
   assert.throws(() => targets.prepareKeyString("query", { query: PREP_KEYS.idp, idp: PREP_KEYS.query }), /key IDs changed/);
-  for (const bad of [null, {}, { query: PREP_KEYS.query }, { query: "x", idp: "y" }, { query: PREP_KEYS.query, idp: PREP_KEYS.query }]) {
+  for (const bad of [null, {}, { query: PREP_KEYS.query }, { query: "Bad", idp: "Worse" }, { query: "a/b", idp: PREP_KEYS.idp }, { query: 5, idp: PREP_KEYS.idp }, { query: PREP_KEYS.query, idp: PREP_KEYS.query }]) {
     const fresh = createPrepTargets({ closure, params, digestSalt: "7".repeat(64) });
     assert.throws(() => fresh.prepareKeyString("query", bad), /invalid key IDs/, JSON.stringify(bad));
   }
@@ -153,6 +172,10 @@ test("the prep transport allows the key list route for a plain GET only, and eve
   for (const bad of [list({ method: "POST" }), list({ url: `${list().url}?pageSize=100` }), list({ url: `${list().url}/`, }), list({ url: "https://apikeys.googleapis.com/v2/projects/abc/locations/global/keys" }), list({ url: "https://apikeys.googleapis.com/v2/projects/0/locations/global/keys" }), list({ url: "https://apikeys.googleapis.com/v2/projects/1/locations/global/keys/../keys" }), list({ url: "http://apikeys.googleapis.com/v2/projects/1/locations/global/keys" }), list({ url: "https://apikeys.googleapis.com/v2/projects/1/locations/us/keys" }), list({ body: Buffer.from("x") })]) {
     assert.throws(() => transport.validate(bad), (error) => error.notSent === true, JSON.stringify(bad.url));
   }
+  // Keys are reachable by a UUID or a custom ID of the documented shape only, with or without keyString.
+  const keyUrl = (id, tail = "") => `https://apikeys.googleapis.com/v2/projects/${NUMBERS.query}/locations/global/keys/${id}${tail}`;
+  for (const id of ["fireemu-query-auth-20260925", "a", `a${"b".repeat(62)}`, PREP_KEYS.idp]) for (const tail of ["", "/keyString"]) assert.doesNotThrow(() => transport.validate({ url: keyUrl(id, tail), method: "GET", headers: {}, body: null }), `${id}${tail}`);
+  for (const id of [`a${"b".repeat(63)}`, "1abc", "Abc", "a_b", "a.b", "", "0000000A-0000-4000-8000-00000000000A"]) assert.throws(() => transport.validate({ url: keyUrl(id), method: "GET", headers: {}, body: null }), (error) => error.notSent === true, id);
   // The stage 3 exact routes still hold, and a list POST or an other-origin list is refused.
   assert.doesNotThrow(() => transport.validate({ url: `https://apikeys.googleapis.com/v2/projects/${NUMBERS.query}/locations/global/keys/${PREP_KEYS.query}/keyString`, method: "GET", headers: {}, body: null }));
   assert.throws(() => transport.validate({ url: `https://example.com/v2/projects/${NUMBERS.query}/locations/global/keys`, method: "GET", headers: {}, body: null }), (error) => error.notSent === true);
@@ -186,7 +209,7 @@ test("the pin printer prints the four pins of a clean checkout and refuses an un
   assert.equal(ok.code, 0);
   assert.equal(ok.err, "");
   const digests = await prepCodeDigests(root);
-  const corpus = prepCorpus(closure, { bucket: BUCKET, queryProjectNumber: NUMBERS.query, idpProjectNumber: NUMBERS.idp, sourceCommit: commit });
+  const corpus = prepCorpus(closure, { bucket: BUCKET, queryProjectNumber: NUMBERS.query, idpProjectNumber: NUMBERS.idp, sourceCommit: commit, expectedKeyIds: { query: PREP_KEYS.query, idp: null } });
   assert.deepEqual(JSON.parse(ok.out), { sourceCommit: commit, runnerSha256: digests.runnerSha256, manifestSha256: corpus.sha256, fixtureSchemaSha256: digests.fixtureSchemaSha256 });
   assert.match(ok.out, /^\{\n  "sourceCommit": "d{40}",\n/);
   for (const [git, message] of [[gitFor(" M x\n"), /working tree not clean/], [gitFor("", "?? conformance/src/storage-rules/driver.mjs\n"), /untracked or ignored runner files/], [gitFor("", "", "?? conformance/src/storage-rules-prep/x.mjs\n"), /untracked or ignored runner files/]]) {

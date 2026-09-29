@@ -1,7 +1,7 @@
 import { EventEmitter } from "node:events";
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { ADC, API_KEYS, BUCKET, KEY_IDS, NUMBERS, OWNER_TOKEN, preflightAnswer, privatePacket } from "./storage-rules-runner-support.mjs";
+import { ADC, API_KEYS, BUCKET, KEY_IDS, KEY_RESTRICTIONS, NUMBERS, OWNER_TOKEN, preflightAnswer, privatePacket } from "./storage-rules-runner-support.mjs";
 import { prepCorpus } from "./storage-rules-prep/plan.mjs";
 import { prepCodeDigests } from "./storage-rules-prep/pins.mjs";
 
@@ -24,9 +24,18 @@ export function scratchCode(closureText) {
   return root;
 }
 
-// Key IDs unlike the placeholders the corpus uses for the key-string reads, so a read that used a placeholder would show.
-export const PREP_KEYS = Object.freeze({ query: "5b1c2d3e-4f50-4a6b-8c7d-9e0f1a2b3c4d", idp: "6c2d3e4f-5061-4b7c-9d8e-0f1a2b3c4d5e" });
-export const keyListBody = (which, number, extra = {}) => ({ keys: [{ name: `projects/${number}/locations/global/keys/${PREP_KEYS[which]}`, uid: `${which}-key-uid`, restrictions: { apiTargets: [{ service: "identitytoolkit.googleapis.com" }] } }], ...extra });
+// Key IDs unlike the placeholders the corpus uses for the key-string reads, so a read that used a placeholder would show: query's dedicated
+// key has a custom ID (as in production), idp's Browser key a UUID.
+export const PREP_KEYS = Object.freeze({ query: "fireemu-query-auth-20260925", idp: "6c2d3e4f-5061-4b7c-9d8e-0f1a2b3c4d5e" });
+export const BROWSER_KEY_ID = "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d";
+const entryFor = (which, number, id, uid, restrictions) => ({ name: `projects/${number}/locations/global/keys/${id}`, uid, restrictions });
+/** What each project's key list holds in production: query has the auto-created Browser key next to the dedicated key, idp has only its Browser key. */
+export const keyListBody = (which, number, extra = {}) => ({
+  keys: which === "query"
+    ? [entryFor("query", number, BROWSER_KEY_ID, "query-browser-uid", KEY_RESTRICTIONS.idp), entryFor("query", number, PREP_KEYS.query, "query-key-uid", KEY_RESTRICTIONS.query)]
+    : [entryFor("idp", number, PREP_KEYS.idp, "idp-key-uid", KEY_RESTRICTIONS.idp)],
+  ...extra,
+});
 
 /** What production answers for the thirteen reads when everything matches; `bad` replaces the body of one route by name. */
 export function prepAnswer(spec, bad = {}) {
@@ -73,7 +82,7 @@ export function fakeRequestImpl(answer, log) {
 }
 
 export function localInputs(adcPath) {
-  return { schemaVersion: 1, adcPath, projects: { query: { projectNumber: NUMBERS.query, apiKey: API_KEYS.query }, idp: { projectNumber: NUMBERS.idp, apiKey: API_KEYS.idp } }, bucket: { name: BUCKET } };
+  return { schemaVersion: 1, adcPath, projects: { query: { projectNumber: NUMBERS.query, apiKey: API_KEYS.query, apiKeyId: PREP_KEYS.query }, idp: { projectNumber: NUMBERS.idp, apiKey: API_KEYS.idp, apiKeyId: null } }, bucket: { name: BUCKET } };
 }
 
 export const cleanup = (path) => rmSync(path, { recursive: true, force: true });

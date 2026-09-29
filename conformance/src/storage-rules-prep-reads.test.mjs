@@ -5,8 +5,8 @@ import { join } from "node:path";
 import test from "node:test";
 import { bindPrepEntry, prepPaths } from "./storage-rules-prep/prep-reads.mjs";
 import { loadPrivateInputs } from "./storage-rules/private-inputs.mjs";
-import { ADC, API_KEYS, NUMBERS, OWNER_TOKEN, SUBJECT } from "./storage-rules-runner-support.mjs";
-import { CODE_FILES, ENVELOPE_ID, PREP_KEYS, prepInputsFor, PACKET_NAME, PIN_KEYS, SOURCE_COMMIT, cleanup, fakeRequestImpl, localInputs, prepAnswer, prepCodeDigests, prepCorpus, scratchCode } from "./storage-rules-prep-support.mjs";
+import { ADC, API_KEYS, KEY_RESTRICTIONS, KEY_TARGETS, NUMBERS, OWNER_TOKEN, SUBJECT } from "./storage-rules-runner-support.mjs";
+import { BROWSER_KEY_ID, CODE_FILES, ENVELOPE_ID, PREP_KEYS, prepInputsFor, PACKET_NAME, PIN_KEYS, SOURCE_COMMIT, cleanup, fakeRequestImpl, localInputs, prepAnswer, prepCodeDigests, prepCorpus, scratchCode } from "./storage-rules-prep-support.mjs";
 
 // The stage 2a entry against a scratch main checkout and a fake wire: what it reads, takes and writes, and when it stops.
 const closureText = readFileSync(new URL("../../spec/compatibility/closure/STORAGE-RULES.json", import.meta.url), "utf8");
@@ -15,7 +15,7 @@ const codeRoot = scratchCode(closureText);
 process.on("exit", () => cleanup(codeRoot));
 const digests = await prepCodeDigests(codeRoot);
 const BUCKET_NAME = "fireemu-fixture-rules-bucket";
-const params = { bucket: BUCKET_NAME, queryProjectNumber: NUMBERS.query, idpProjectNumber: NUMBERS.idp, sourceCommit: SOURCE_COMMIT };
+const params = { bucket: BUCKET_NAME, queryProjectNumber: NUMBERS.query, idpProjectNumber: NUMBERS.idp, sourceCommit: SOURCE_COMMIT, expectedKeyIds: { query: PREP_KEYS.query, idp: null } };
 const corpus = prepCorpus(closure, params);
 const packet = { taskId: "STORAGE-RULES", packetName: PACKET_NAME, packetSha256: "1".repeat(64), sourceCommit: SOURCE_COMMIT, runnerSha256: digests.runnerSha256, manifestSha256: corpus.sha256, fixtureSchemaSha256: digests.fixtureSchemaSha256, projects: ["fireemu-oracle-idp", "fireemu-oracle-query"], maxRequests: 13, reserveUsd: 0.01 };
 const review = { verdict: "APPROVE", must: [], should: [], ...Object.fromEntries(PIN_KEYS.map((key) => [key, packet[key]])), envelopeId: ENVELOPE_ID, withinEnvelope: true };
@@ -126,20 +126,29 @@ test("the journals hold no secret: not the token, the key strings, the owner's a
   }
 });
 
+const nameQ = (id) => `projects/${NUMBERS.query}/locations/global/keys/${id}`;
+const nameI = (id) => `projects/${NUMBERS.idp}/locations/global/keys/${id}`;
+function keyEntry(which) {
+  return { name: `projects/${NUMBERS[which]}/locations/global/keys/${PREP_KEYS[which]}`, uid: `${which}-key-uid`, restrictions: KEY_RESTRICTIONS[which] };
+}
+const browserEntry = () => ({ name: nameQ(BROWSER_KEY_ID), uid: "query-browser-uid", restrictions: KEY_RESTRICTIONS.idp });
+const dedicated = (over = {}) => ({ ...keyEntry("query"), ...over });
 const STOPS = [
   ["identity address unverified", { identity: { id: SUBJECT, email: "owner@example.test", verified_email: false } }, 2],
-  ["query key list with two live keys", { "list-query": { keys: [{ name: `projects/${NUMBERS.query}/locations/global/keys/${PREP_KEYS.query}`, uid: "a" }, { name: `projects/${NUMBERS.query}/locations/global/keys/${PREP_KEYS.idp}`, uid: "b" }] } }, 3],
-  ["query key list with a next page", { "list-query": { keys: [{ name: `projects/${NUMBERS.query}/locations/global/keys/${PREP_KEYS.query}`, uid: "a" }], nextPageToken: "next" } }, 3],
+  ["query list without the expected key", { "list-query": { keys: [browserEntry()] } }, 3],
+  ["query expected key deleted", { "list-query": { keys: [browserEntry(), dedicated({ deleteTime: "2026-01-01T00:00:00Z" })] } }, 3],
+  ["query expected key named twice", { "list-query": { keys: [dedicated(), dedicated()] } }, 3],
+  ["query key list with a next page", { "list-query": { keys: [browserEntry(), dedicated()], nextPageToken: "next" } }, 3],
   ["query key list with no key", { "list-query": {} }, 3],
-  ["query key list that only holds a deleted key", { "list-query": { keys: [{ name: `projects/${NUMBERS.query}/locations/global/keys/${PREP_KEYS.query}`, uid: "a", deleteTime: "2026-01-01T00:00:00Z" }] } }, 3],
   ["query key list that is not a list", { "list-query": { keys: "none" } }, 3],
-  ["query key of another project", { "list-query": { keys: [{ name: `projects/${NUMBERS.idp}/locations/global/keys/${PREP_KEYS.query}`, uid: "a" }] } }, 3],
-  ["query key name that is not a UUID", { "list-query": { keys: [{ name: `projects/${NUMBERS.query}/locations/global/keys/not-a-uuid`, uid: "a" }] } }, 3],
-  ["query key with a method restriction", { "list-query": { keys: [{ name: `projects/${NUMBERS.query}/locations/global/keys/${PREP_KEYS.query}`, uid: "a", restrictions: { apiTargets: [{ service: "identitytoolkit.googleapis.com", methods: ["x"] }] } }] } }, 3],
-  ["query key with another restriction", { "list-query": { keys: [{ name: `projects/${NUMBERS.query}/locations/global/keys/${PREP_KEYS.query}`, uid: "a", restrictions: { browserKeyRestrictions: { allowedReferrers: ["*"] } } }] } }, 3],
-  ["query key with a duplicated target", { "list-query": { keys: [{ name: `projects/${NUMBERS.query}/locations/global/keys/${PREP_KEYS.query}`, uid: "a", restrictions: { apiTargets: [{ service: "a.googleapis.com" }, { service: "a.googleapis.com" }] } }] } }, 3],
-  ["idp key list with two live keys", { "list-idp": { keys: [{ name: `projects/${NUMBERS.idp}/locations/global/keys/${PREP_KEYS.idp}`, uid: "a" }, { name: `projects/${NUMBERS.idp}/locations/global/keys/${PREP_KEYS.query}`, uid: "b" }] } }, 4],
-  ["both projects report the same key ID", { "list-idp": { keys: [{ name: `projects/${NUMBERS.idp}/locations/global/keys/${PREP_KEYS.query}`, uid: "b" }] } }, 4],
+  ["query key of another project", { "list-query": { keys: [browserEntry(), dedicated({ name: nameI(PREP_KEYS.query) })] } }, 3],
+  ["query key with a method restriction", { "list-query": { keys: [dedicated({ restrictions: { apiTargets: [{ service: "identitytoolkit.googleapis.com", methods: ["x"] }, { service: "securetoken.googleapis.com" }] } })] } }, 3],
+  ["query key without the token service", { "list-query": { keys: [dedicated({ restrictions: { apiTargets: [{ service: "identitytoolkit.googleapis.com" }] } })] } }, 3],
+  ["query key without the sign-in service", { "list-query": { keys: [dedicated({ restrictions: { apiTargets: [{ service: "securetoken.googleapis.com" }] } })] } }, 3],
+  ["query key with a duplicated target", { "list-query": { keys: [dedicated({ restrictions: { apiTargets: [{ service: "identitytoolkit.googleapis.com" }, { service: "identitytoolkit.googleapis.com" }, { service: "securetoken.googleapis.com" }] } })] } }, 3],
+  ["idp key list with two live keys", { "list-idp": { keys: [keyEntry("idp"), { ...keyEntry("idp"), name: nameI(BROWSER_KEY_ID) }] } }, 4],
+  ["idp key list with no live key", { "list-idp": { keys: [{ ...keyEntry("idp"), deleteTime: "2026-01-01T00:00:00Z" }] } }, 4],
+  ["both projects report the same key ID", { "list-idp": { keys: [{ ...keyEntry("idp"), name: nameI(PREP_KEYS.query) }] } }, 4],
   ["query key string that is not the local one", { "keystring-query": { keyString: "Z".repeat(39) } }, 5],
   ["idp key string that is not the local one", { "keystring-idp": { keyString: "Z".repeat(39) } }, 6],
   ["a bucket of another project", { bucket: { kind: "storage#bucket", name: "fireemu-fixture-rules-bucket", projectNumber: "999999999999", location: "US-CENTRAL1" } }, 7],
@@ -160,22 +169,29 @@ test("an unexpected answer ends the run at that request, writes no inputs and ke
 
 test("a key list that answers with an error status, a non-JSON body or a broken key entry ends the run there", async (t) => {
   const raw = (status, text) => (spec) => (/\/keys$/.test(spec.url) && spec.url.includes(NUMBERS.query) ? { status, rawHeaders: ["Content-Type", "application/json"], bytes: Buffer.from(text) } : prepAnswer(spec));
-  for (const [status, text] of [[403, "{}"], [200, "not json"], [200, "[]"], [200, "null"], [200, JSON.stringify({ keys: [null] })], [200, JSON.stringify({ keys: [{ name: `projects/${NUMBERS.query}/locations/global/keys/${PREP_KEYS.query}` }] })]]) {
+  for (const [status, text] of [[403, "{}"], [200, "not json"], [200, "[]"], [200, "null"], [200, JSON.stringify({ keys: [null] })], [200, JSON.stringify({ keys: [{ name: nameQ(PREP_KEYS.query) }] })]]) {
     const f = await checkout(t, { answer: raw(status, text) });
     await assert.rejects(f.entry(f.options), Error, `${status} ${text}`);
     assert.equal(f.wire.length, 3, `${status} ${text}`);
   }
 });
 
-test("a deleted key next to the one live key is ignored", async (t) => {
-  const live = keyEntry("query");
-  const f = await checkout(t, { answer: answerWith({ "list-query": { keys: [{ name: `projects/${NUMBERS.query}/locations/global/keys/${PREP_KEYS.idp}`, uid: "old", deleteTime: "2026-01-01T00:00:00Z" }, live] } }) });
+test("other live keys are tolerated and counted, and a deleted key is neither: query has its Browser key next to the dedicated key", async (t) => {
+  const f = await checkout(t, { answer: answerWith({ "list-query": { keys: [{ ...dedicated(), name: nameQ("old-deleted-key"), deleteTime: "2026-01-01T00:00:00Z" }, browserEntry(), dedicated()] } }) });
   const result = await f.entry(f.options);
   assert.equal(result.requests, 13);
+  const dir = join(f.runs, `storage-rules-prep-${runId}`);
+  const captureRows = (await readFile(join(dir, (await readdir(dir)).find((name) => name.endsWith("captures.jsonl"))), "utf8")).split("\n").filter(Boolean).map((line) => JSON.parse(line));
+  const lists = Object.fromEntries(captureRows.filter((row) => row.event === "facts" && /key-list$/.test(row.data.operationId)).map((row) => [row.data.operationId, row.data.facts]));
+  assert.equal(lists["preflight/query/key-list"].otherLiveKeys, 1);
+  assert.equal(lists["preflight/idp/key-list"].otherLiveKeys, 0);
+  assert.equal(lists["preflight/query/key-list"].apiTargets, 2);
+  assert.equal(lists["preflight/idp/key-list"].apiTargets, KEY_TARGETS.idp.length);
+  // The inputs name the dedicated key, not the Browser key.
+  const inputs = JSON.parse(await readFile(result.inputsPath, "utf8"));
+  assert.equal(inputs.projects.query.apiKeyId, PREP_KEYS.query);
+  assert.equal(inputs.projects.idp.apiKeyId, PREP_KEYS.idp);
 });
-function keyEntry(which) {
-  return { name: `projects/${NUMBERS[which]}/locations/global/keys/${PREP_KEYS[which]}`, uid: `${which}-key-uid`, restrictions: { apiTargets: [{ service: "identitytoolkit.googleapis.com" }] } };
-}
 
 test("the run is refused, before anything is created, unless the code, the schema, the corpus and the checkout reproduce the approval's pins", async (t) => {
   const cases = [
@@ -269,6 +285,12 @@ test("the operator's local inputs file is a private, closed, plain file", async 
     "not json": async (f) => write(f, "not json"),
     "extra key": async (f) => write(f, { ...base(f), extra: 1 }),
     "wrong version": async (f) => write(f, { ...base(f), schemaVersion: 2 }),
+    "expected key ID upper": async (f) => write(f, { ...base(f), projects: { query: { ...base(f).projects.query, apiKeyId: "Fireemu" }, idp: base(f).projects.idp } }),
+    "expected key ID digit first": async (f) => write(f, { ...base(f), projects: { query: { ...base(f).projects.query, apiKeyId: "1abc" }, idp: base(f).projects.idp } }),
+    "expected key ID 64 chars": async (f) => write(f, { ...base(f), projects: { query: { ...base(f).projects.query, apiKeyId: `a${"b".repeat(63)}` }, idp: base(f).projects.idp } }),
+    "expected key ID a number": async (f) => write(f, { ...base(f), projects: { query: { ...base(f).projects.query, apiKeyId: 5 }, idp: base(f).projects.idp } }),
+    "expected key ID missing": async (f) => write(f, { ...base(f), projects: { query: { projectNumber: base(f).projects.query.projectNumber, apiKey: base(f).projects.query.apiKey }, idp: base(f).projects.idp } }),
+    "same expected key IDs": async (f) => write(f, { ...base(f), projects: { query: base(f).projects.query, idp: { ...base(f).projects.idp, apiKeyId: base(f).projects.query.apiKeyId } } }),
     "same numbers": async (f) => write(f, { ...base(f), projects: { query: { ...base(f).projects.query }, idp: { ...base(f).projects.idp, projectNumber: base(f).projects.query.projectNumber } } }),
     "same keys": async (f) => write(f, { ...base(f), projects: { query: base(f).projects.query, idp: { ...base(f).projects.idp, apiKey: base(f).projects.query.apiKey } } }),
     "bad number": async (f) => write(f, { ...base(f), projects: { query: { ...base(f).projects.query, projectNumber: "012" }, idp: base(f).projects.idp } }),

@@ -989,6 +989,31 @@ test("a closed wire refuses, and a halted one refuses, and neither sends", async
   assert.equal(closed.wire.snapshot().attempts, 1);
 });
 
+test("an asynchronous token provider is awaited, and its failure sends nothing", async () => {
+  const ok = harness({ options: { adminToken: async () => TOKEN } });
+  await ok.wire.fetch(`${STORAGE}/v0/b/${BUCKET}/o/${enc(name("a"))}`, {
+    method: "GET",
+    headers: admin,
+  });
+  assert.equal(new Headers(ok.calls[0].headers).get("authorization"), `Bearer ${TOKEN}`);
+  const failing = harness({
+    options: {
+      adminToken: async () => {
+        throw new Error(`refresh failed for ${TOKEN}`);
+      },
+    },
+  });
+  await assert.rejects(
+    failing.wire.fetch(`${STORAGE}/v0/b/${BUCKET}/o/${enc(name("a"))}`, {
+      method: "GET",
+      headers: admin,
+    }),
+    (error) =>
+      /owner access token is unavailable/.test(error.message) && !error.message.includes(TOKEN),
+  );
+  assert.equal(failing.calls.length, 0);
+});
+
 test("the configuration is checked before any request", () => {
   const base = {
     bucket: BUCKET,

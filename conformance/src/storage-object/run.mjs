@@ -1,13 +1,17 @@
-// The stage 3 runner currently exposes only a local, non-sending plan. Production recording
-// remains disabled until the corpus, total HTTP budget, credential wire and cleanup are reviewed.
+// The STORAGE-OBJECT runner. `plan` prints the local, non-sending draft; `pins` prints the digests
+// a lean packet pins; `record-production <1|2>` runs one recording of the lean recorder (see
+// record.mjs) and needs an approved packet, an owner ledger row, a project lock and a clean tree.
 
 import { buildStage3DraftPlan } from "./stage3-plan.mjs";
 
 const [command, projectId, bucket, firstRunId, secondRunId] = process.argv.slice(2);
 
 if (command === "record-production") {
-  process.stderr.write("record-production is disabled: the stage 3 sender is not implemented\n");
-  process.exitCode = 2;
+  const { realDeps, recordCommand } = await import("./record-cli.mjs");
+  process.exitCode = await recordCommand(process.argv.slice(3), process.env, realDeps());
+} else if (command === "pins") {
+  const { pinsCommand, realDeps } = await import("./record-cli.mjs");
+  process.exitCode = await pinsCommand(realDeps());
 } else if (command === "plan") {
   try {
     const plan = buildStage3DraftPlan({ projectId, bucket, runIds: [firstRunId, secondRunId] });
@@ -17,6 +21,10 @@ if (command === "record-production") {
     process.exitCode = 2;
   }
 } else {
-  process.stderr.write("usage: node src/storage-object/run.mjs plan <project> <bucket> <run-id-1> <run-id-2>\n");
+  process.stderr.write(
+    "usage: node src/storage-object/run.mjs plan <project> <bucket> <run-id-1> <run-id-2>\n" +
+      "       node src/storage-object/run.mjs pins\n" +
+      "       node src/storage-object/run.mjs record-production <1|2>\n",
+  );
   process.exitCode = 2;
 }

@@ -19,8 +19,31 @@ test("plan command prints a bounded non-sending two-recording draft", () => {
 });
 
 test("record-production refuses locally before loading any credential", () => {
-  const result = spawnSync(process.execPath, [runner, "record-production"], { encoding: "utf8" });
-  assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /not implemented|disabled/i);
+  const result = spawnSync(process.execPath, [runner, "record-production"], {
+    encoding: "utf8",
+    env: { PATH: process.env.PATH },
+  });
+  assert.equal(result.status, 2);
+  assert.match(result.stderr, /recording number/i);
   assert.doesNotMatch(result.stderr, /token|key string|password/i);
+});
+
+test("record-production names the missing environment and reads nothing", () => {
+  const result = spawnSync(process.execPath, [runner, "record-production", "1"], {
+    encoding: "utf8",
+    env: { PATH: process.env.PATH },
+  });
+  assert.equal(result.status, 2);
+  assert.match(result.stderr, /missing environment: FIREEMU_SANDBOX_LEDGER/);
+});
+
+test("pins prints the packet pins and the commit as one line of JSON", () => {
+  const output = execFileSync(process.execPath, [runner, "pins"], { encoding: "utf8" });
+  const pins = JSON.parse(output);
+  assert.match(pins.sourceCommit, /^[0-9a-f]{40}$/);
+  for (const key of ["runnerSha256", "planSha256", "corpusSha256", "rulesSourceSha256"]) {
+    assert.match(pins[key], /^[0-9a-f]{64}$/, key);
+  }
+  assert.equal(typeof pins.treeClean, "boolean");
+  assert.ok(pins.sourceFiles > 50);
 });

@@ -295,14 +295,14 @@ export function createLeanWire({
     throw new Error("origin is not a placeholder of this run");
   }
 
-  function requestHeaders(init) {
+  async function requestHeaders(init) {
     const headers = new Headers(init.headers ?? {});
     const secrets = [];
     let admin = false;
     if (headers.get("authorization") === LEAN_PLACEHOLDER_ADMIN) {
       let token;
       try {
-        token = adminToken();
+        token = await adminToken();
       } catch {
         // The provider's own message may quote what it failed to obtain.
         throw new Error("owner access token is unavailable");
@@ -352,7 +352,7 @@ export function createLeanWire({
   };
 
   async function send(route, init, sequence) {
-    const { headers, secrets } = requestHeaders(init);
+    const { headers, secrets } = await requestHeaders(init);
     const target = realUrl(route, secrets);
     const body = init.body === undefined || init.body === null ? null : Buffer.from(init.body);
     const request = {

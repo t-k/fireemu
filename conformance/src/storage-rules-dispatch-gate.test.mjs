@@ -85,7 +85,7 @@ test("credential headers reach the transport and nothing else", async () => {
 
 test("the credential provider is told which project the request is billed to", async () => {
   const seen = [];
-  const h = await harness({ credentials: { headersFor: (credential, context) => { seen.push([credential, context.project, Object.isFrozen(context)]); return credential === "anonymous" ? {} : { authorization: "Bearer t", "x-goog-user-project": context.project }; } } });
+  const h = await harness({ credentials: { headersFor: (credential, context) => { seen.push([credential, context.project, Object.isFrozen(context)]); return credential === "anonymous" ? {} : { authorization: "Bearer t", ...(context.quotaProject ? { "x-goog-user-project": context.project } : {}) }; } } });
   await h.admit();
   h.trace.length = 0;
   const prepared = h.prepare(READ);
@@ -98,7 +98,7 @@ test("the credential provider is told which project the request is billed to", a
 test("the quota project header always equals the target's project, whatever the provider returns", async () => {
   for (const project of ["fireemu-oracle-idp", "another-project", "", "fireemu-oracle-query\n"]) {
     let wrong = false;
-    const h = await harness({ credentials: { headersFor: (credential, context) => ({ authorization: "Bearer t", "x-goog-user-project": wrong ? project : context.project }) } });
+    const h = await harness({ credentials: { headersFor: (credential, context) => ({ authorization: "Bearer t", ...(context.quotaProject || wrong ? { "x-goog-user-project": wrong ? project : context.project } : {}) }) } });
     await h.admit();
     wrong = true;
     const prepared = h.prepare(READ);
@@ -106,9 +106,35 @@ test("the quota project header always equals the target's project, whatever the 
     await assert.rejects(h.gate.send(prepared, normalMeta), /invalid credential headers/);
     assert.equal(h.trace.some((entry) => entry[0] === "transport"), false);
   }
-  const ok = await harness({ credentials: { headersFor: (credential, context) => ({ authorization: "Bearer t", "x-goog-user-project": context.project }) } });
+  const ok = await harness({ credentials: ownerProvider() });
   await ok.admit();
   await ok.gate.send(ok.prepare(READ), normalMeta);
+});
+
+const ownerProvider = (options = {}) => ({ headersFor: (credential, context) => (credential === "anonymous" ? {} : { authorization: "Bearer t", ...(options.always || context.quotaProject === true ? { "x-goog-user-project": context.project } : {}) }) });
+
+test("the quota project header follows the route: userinfo goes without it, every other owner request carries the target's project", async () => {
+  const told = [];
+  const h = await harness({ credentials: { headersFor: (credential, context) => { told.push([context.project, context.quotaProject, Object.isFrozen(context), Object.keys(context).sort().join()]); return ownerProvider().headersFor(credential, context); } } });
+  await h.admit();
+  const preflight = h.trace.filter((entry) => entry[0] === "transport");
+  const userinfo = preflight.find((entry) => entry[2] === "https://www.googleapis.com/oauth2/v2/userinfo");
+  assert.ok(userinfo, "the userinfo request was sent");
+  assert.equal(Object.hasOwn(JSON.parse(userinfo[3]), "x-goog-user-project"), false);
+  assert.match(JSON.parse(userinfo[3]).authorization, /^Bearer /);
+  const others = preflight.filter((entry) => entry !== userinfo && JSON.parse(entry[3]).authorization !== undefined);
+  assert.ok(others.length >= 10);
+  for (const entry of others) assert.match(JSON.parse(entry[3])["x-goog-user-project"], /^fireemu-oracle-(query|idp)$/, entry[2]);
+  assert.ok(told.every(([, quota, frozen, keys]) => typeof quota === "boolean" && frozen && keys === "project,quotaProject"));
+  assert.ok(told.some(([, quota]) => quota === false) && told.some(([, quota]) => quota === true));
+});
+
+test("a provider that adds the quota project header to userinfo is refused before anything is sent", async () => {
+  const h = await harness({ credentials: ownerProvider({ always: true }) });
+  await h.gate.start({ runId: options.runId });
+  const first = manifest.preflightIds.find((id) => id === "preflight/owner/identity");
+  await assert.rejects(h.gate.send(h.prepare(first), preflightMeta), /invalid credential headers/);
+  assert.equal(h.trace.some((entry) => entry[0] === "transport"), false);
 });
 
 test("a target the transport refuses is not sent and costs nothing: no admission, intent, reservation or counter movement", async () => {

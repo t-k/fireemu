@@ -374,6 +374,8 @@ jobs:
           "$FIREEMU_NODE" --version
           pnpm -C conformance install --frozen-lockfile
           npm ci --prefix conformance/functions-http/fixtures --ignore-scripts --no-audit --no-fund
+          # The AUTH-TENANT-BLOCKING blocking fixture's Functions dependencies, served by the daemon.
+          npm ci --prefix conformance/src/auth-tenant-blocking/function --ignore-scripts --no-audit --no-fund
           node --test conformance/src/integration-v0.8.0-regression.test.mjs conformance/src/release-strict-regression.test.mjs
       - name: the strict profile against the committed production recordings (loopback only)
         env:

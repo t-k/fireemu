@@ -684,3 +684,26 @@ test("every departure of the FUNCTIONS-HTTP stand-in fails it", () => {
     assert.notDeepEqual(judgeFunctionsHttp(functionsHttp(), observed), [], name);
   }
 });
+
+// --- the release job --------------------------------------------------------------------------
+
+const strictProductionJob = () => {
+  const workflow = readFileSync(repo(".github/workflows/release.yml"), "utf8");
+  const start = workflow.indexOf("\n  strict-production:");
+  const end = workflow.indexOf("\n  publish:", start);
+  assert.ok(start > 0 && end > start, "the strict-production job is in release.yml");
+  return workflow.slice(start, end);
+};
+
+test("the strict-production job installs the blocking fixture's dependencies before the loopback run", () => {
+  const job = strictProductionJob();
+  const install = job.indexOf("npm ci --prefix conformance/src/auth-tenant-blocking/function");
+  assert.ok(install > 0, "the blocking fixture's npm ci");
+  assert.match(job.slice(install, install + 120), /--ignore-scripts/);
+  assert.ok(install < job.indexOf("unshare --net"), "installed while the network is still there");
+});
+
+test("the loopback run passes the Functions Node to the harnesses", () => {
+  const job = strictProductionJob();
+  assert.match(job.slice(job.indexOf("unshare --net")), /FIREEMU_NODE="\$FIREEMU_NODE"/);
+});

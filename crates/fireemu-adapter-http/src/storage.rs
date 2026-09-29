@@ -93,6 +93,15 @@ enum StorageRulesMode {
     PerBucket(BTreeMap<String, Arc<RulesetSlot>>),
 }
 
+/// Why [`StorageRulesRegistry::replace_source`] refused a source.
+#[derive(Debug)]
+pub enum StorageRulesSourceError {
+    /// The source does not compile: a client error, and the active generation is unchanged.
+    Invalid(fireemu_core_rules::parse::ParseError),
+    /// A compiled source could not be installed: an internal failure.
+    Internal(String),
+}
+
 /// Storage Rules registry shared by the Firebase SDK surface, the control API and snapshots.
 #[derive(Debug)]
 pub struct StorageRulesRegistry {
@@ -177,9 +186,15 @@ impl StorageRulesRegistry {
     }
 
     /// Parses and installs one global rules source.
-    pub fn replace_source(&self, source: &str) -> Result<(), String> {
-        let loaded = LoadedRules::from_source(source).map_err(|error| error.to_string())?;
+    ///
+    /// # Errors
+    /// [`StorageRulesSourceError::Invalid`] when the source does not compile, which leaves the
+    /// active generation unchanged; [`StorageRulesSourceError::Internal`] when a compiled
+    /// source cannot be installed.
+    pub fn replace_source(&self, source: &str) -> Result<(), StorageRulesSourceError> {
+        let loaded = LoadedRules::from_source(source).map_err(StorageRulesSourceError::Invalid)?;
         self.replace_loaded(loaded)
+            .map_err(StorageRulesSourceError::Internal)
     }
 
     /// Installs the explicit no-rules global generation used by the control extension.

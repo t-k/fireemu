@@ -472,3 +472,259 @@ test("a Ruleset group is enabled by its create attempt, and the delete group onl
   run.recordIntent(row("ruleset/v1/delete"));
   assert.deepEqual([run.recoveryEnabled("ruleset-attempted:v1"), run.recoveryEnabled("ruleset-created-not-deleted:v1")], [true, false]);
 });
+
+// Mutation-driven tests: each one pins a conjunct or a state transition that the tests above left open.
+
+test("a delete of a document or of the release is never attempted twice, whatever row carries it", async () => {
+  const { run } = await fresh();
+  const step = row("firestore-program/firestore-get-transition/step/doc-delete");
+  const cleanup = row("firestore-program/firestore-get-transition/cleanup/doc-cleanup-delete");
+  const recovery = row("recovery/document-0/delete");
+  assert.equal(step.request.documentName, recovery.request.documentName);
+  run.recordIntent(step);
+  assert.throws(() => run.recordIntent(cleanup), /mutation already attempted/);
+  assert.throws(() => run.recordIntent(recovery), /mutation already attempted/);
+  run.recordIntent(row("release/restore/delete"));
+  assert.throws(() => run.recordIntent(row("recovery/release/restore/delete")), /mutation already attempted/);
+  const other = await fresh();
+  other.run.recordIntent(row("recovery/release/restore/delete"));
+  assert.throws(() => other.run.recordIntent(row("release/restore/delete")), /mutation already attempted/);
+});
+
+test("a Ruleset readback counts only when both the created name and the source digest match", async () => {
+  const { run } = await fresh();
+  const publish = row("release/v1/publish");
+  const token = ["owned-ruleset-and-source-readback"];
+  run.recordOutcome(row("ruleset/v1/create"), out("rules-ruleset-create", "accepted", { rulesetName: RS("aaa"), createTime: "t", sourceSha256: "1".repeat(64) }));
+  run.recordOutcome(row("ruleset/v1/read-source"), out("rules-ruleset-read", "present", { rulesetName: RS("other"), sourceSha256: "1".repeat(64) }));
+  assert.equal(run.evaluate(publish, token).decision, "stop");
+  run.recordOutcome(row("ruleset/v1/read-source"), out("rules-ruleset-read", "present", { rulesetName: RS("aaa"), sourceSha256: "1".repeat(64) }));
+  assert.equal(run.evaluate(publish, token).decision, "go");
+});
+
+test("a bucketless release that is present is an unowned change", async () => {
+  const { run } = await fresh();
+  const read = row("release/restore/bucket-absence");
+  const token = ["restore-without-unowned-release-change"];
+  assert.equal(run.evaluate(read, token).decision, "go");
+  run.recordOutcome(row("preflight/release/entry/bucketless"), out("rules-release-read", "present", { rulesetName: RS("foreign") }));
+  assert.equal(run.evaluate(read, token).decision, "stop");
+});
+
+test("an accepted release write naming a Ruleset that is not ours does not make the release ours", async () => {
+  const { run } = await fresh();
+  const del = row("release/restore/delete");
+  const token = ["exact-owned-current-release-and-absent-entry-baseline"];
+  run.recordOutcome(row("preflight/release/entry/bucket"), out("rules-release-read", "absent"));
+  run.recordOutcome(row("preflight/release/entry/bucketless"), out("rules-release-read", "absent"));
+  run.recordOutcome(row("ruleset/B/create"), out("rules-ruleset-create", "accepted", { rulesetName: RS("bb"), createTime: "t", sourceSha256: "1".repeat(64) }));
+  run.recordOutcome(row("release/B/publish"), out("rules-release-patch", "accepted", { rulesetName: RS("foreign"), releaseName: "n", updateTime: "t" }));
+  assert.equal(run.evaluate(del, token).decision, "stop");
+  run.recordOutcome(row("release/B/publish"), out("rules-release-patch", "accepted", { rulesetName: RS("bb"), releaseName: "n", updateTime: "t" }));
+  assert.equal(run.evaluate(del, token).decision, "go");
+});
+
+test("the release removal needs each part of the entry baseline and no unowned change", async () => {
+  const token = ["exact-owned-current-release-and-absent-entry-baseline"];
+  const publishB = (run) => {
+    run.recordOutcome(row("ruleset/B/create"), out("rules-ruleset-create", "accepted", { rulesetName: RS("bb"), createTime: "t", sourceSha256: "1".repeat(64) }));
+    run.recordOutcome(row("release/B/publish"), out("rules-release-patch", "accepted", { rulesetName: RS("bb"), releaseName: "n", updateTime: "t" }));
+  };
+  for (const entries of [[], ["bucket"], ["bucketless"]]) {
+    const { run } = await fresh();
+    for (const slot of entries) run.recordOutcome(row(`preflight/release/entry/${slot}`), out("rules-release-read", "absent"));
+    publishB(run);
+    assert.equal(run.evaluate(row("release/restore/delete"), token).decision, "stop", entries.join(",") || "no entry reads");
+  }
+  const { run } = await fresh();
+  run.recordOutcome(row("preflight/release/entry/bucket"), out("rules-release-read", "absent"));
+  run.recordOutcome(row("preflight/release/entry/bucketless"), out("rules-release-read", "absent"));
+  publishB(run);
+  assert.equal(run.evaluate(row("release/restore/delete"), token).decision, "go");
+  run.recordOutcome(row("release/restore/bucketless-absence"), out("rules-release-read", "present", { rulesetName: RS("foreign") }));
+  assert.equal(run.evaluate(row("release/restore/delete"), token).decision, "stop");
+});
+
+test("after an accepted release delete the release is unknown until it is read back", async () => {
+  const { run } = await fresh();
+  const delRuleset = row("ruleset/v1/delete");
+  const token = ["owned-ruleset-and-unreferenced-after-restore"];
+  run.recordOutcome(row("ruleset/v1/create"), out("rules-ruleset-create", "accepted", { rulesetName: RS("aaa"), createTime: "t", sourceSha256: "1".repeat(64) }));
+  const del = row("release/restore/delete");
+  run.recordIntent(del);
+  run.recordOutcome(del, out("rules-release-delete", "accepted"));
+  assert.equal(run.snapshot().release, "unknown");
+  assert.equal(run.evaluate(delRuleset, token).decision, "stop");
+  run.recordOutcome(row("release/restore/bucket-absence"), out("rules-release-read", "absent"));
+  assert.equal(run.evaluate(delRuleset, token).decision, "go");
+});
+
+test("a control's final readback counts only when it read the control as present or absent", async () => {
+  const { run } = await fresh();
+  const del = row("management/control-0/delete");
+  const token = ["all-final-control-readbacks-complete"];
+  for (let index = 0; index < 5; index++) run.recordOutcome(row(`management/control-${index}/cleanup-metadata`), out("gcs-metadata-read", "present"));
+  for (const verdict of ["unexpected", "denied", "unknown"]) {
+    run.recordOutcome(row("management/control-5/cleanup-metadata"), out("gcs-metadata-read", verdict));
+    assert.equal(run.evaluate(del, token).decision, "stop", verdict);
+  }
+  run.recordOutcome(row("management/control-5/cleanup-metadata"), out("gcs-metadata-read", "absent"));
+  assert.equal(run.evaluate(del, token).decision, "go");
+});
+
+test("an owner media read counts toward the restore only when it found the witness", async () => {
+  const { objects, run } = await fresh();
+  seedControls(objects, [0, 1, 3, 4]);
+  const witnessDelete = row(`recovery/object-${manifest.resources.objects.indexOf(manifest.resources.controls[0])}/delete`);
+  const token = ["restore-controls-retained-until-owner-readbacks"];
+  for (const index of [0, 1, 2]) run.recordOutcome(row(`management/restore-owner-media/${index}`), out("gcs-media-read", "present"));
+  for (const verdict of ["absent", "unexpected"]) {
+    run.recordOutcome(row("management/restore-owner-media/3"), out("gcs-media-read", verdict));
+    run.recordOutcome(row("recovery/management/restore-owner-media/3"), out("gcs-media-read", verdict));
+    assert.equal(run.recoveryEnabled("restore-needed"), true, verdict);
+    assert.equal(run.evaluate(witnessDelete, token).decision, "stop", verdict);
+  }
+  run.recordOutcome(row("management/restore-owner-media/3"), out("gcs-media-read", "present"));
+  assert.equal(run.recoveryEnabled("restore-needed"), false);
+  assert.equal(run.evaluate(witnessDelete, token).decision, "go");
+});
+
+test("a witness whose delete was attempted is not retained even when a later read shows it present", async () => {
+  const { objects, run } = await fresh();
+  const publish = row("release/v1/publish");
+  const token = ["all-four-controls-confirmed-and-retained"];
+  seedControls(objects, [0, 1, 3, 4]);
+  assert.equal(run.evaluate(publish, token).decision, "go");
+  const del = row("management/control-1/delete");
+  objects.recordIntent(del);
+  objects.recordOutcome(del, out("gcs-delete", "unexpected"));
+  objects.recordOutcome(row("management/control-1/cleanup-metadata"), out("gcs-metadata-read", "present", { generation: "1700000000000011", metageneration: "1" }));
+  const witness = objects.object(manifest.resources.controls[1]);
+  assert.deepEqual([witness.owned, witness.latest, witness.deleteAttempted], [true, "present", true]);
+  assert.equal(run.evaluate(publish, token).decision, "stop");
+});
+
+test("a witness seeded without a proven-absent baseline is not owned and does not count", async () => {
+  const { objects, run } = await fresh();
+  const publish = row("release/v1/publish");
+  const token = ["all-four-controls-confirmed-and-retained"];
+  seedControls(objects, [0, 1, 3]);
+  const id = (stage) => row(`management/control-4/${stage}`);
+  objects.recordIntent(id("seed"));
+  objects.recordOutcome(id("seed"), out("gcs-seed-upload", "accepted", { generation: "1700000000000041", metageneration: "1", size: "4" }));
+  objects.recordOutcome(id("seed-metadata"), out("gcs-metadata-read", "present", { generation: "1700000000000041", metageneration: "1" }));
+  const witness = objects.object(manifest.resources.controls[4]);
+  assert.deepEqual([witness.owned, witness.latest, witness.deleteAttempted, witness.generation], [false, "present", false, "1700000000000041"]);
+  assert.equal(run.evaluate(publish, token).decision, "stop");
+});
+
+test("the compile is done only when every test answered and the invalid source was rejected", async () => {
+  const create = row("ruleset/v1/create");
+  const token = ["compiled-source-and-entry-baseline"];
+  const tests = manifest.rows.filter((r) => r.family === "compile" && r.stage === "test");
+  const invalid = row("compile/invalid/storage-expression");
+  const baseline = (run) => {
+    run.recordOutcome(row("preflight/release/entry/bucket"), out("rules-release-read", "absent"));
+    run.recordOutcome(row("preflight/release/entry/bucketless"), out("rules-release-read", "absent"));
+  };
+  const allAccepted = await fresh();
+  baseline(allAccepted.run);
+  for (const test of tests) allAccepted.run.recordOutcome(test, out("rules-test", "accepted", { issues: 0, errors: 0 }));
+  assert.equal(allAccepted.run.evaluate(create, token).decision, "stop", "no test was rejected");
+  const invalidFirst = await fresh();
+  baseline(invalidFirst.run);
+  invalidFirst.run.recordOutcome(invalid, out("rules-test", "rejected", { issues: 1, errors: 1 }));
+  assert.equal(invalidFirst.run.evaluate(create, token).decision, "stop", "only the invalid test answered");
+  const rest = tests.filter((t) => t.id !== invalid.id);
+  for (const [index, test] of rest.entries()) {
+    invalidFirst.run.recordOutcome(test, out("rules-test", "accepted", { issues: 0, errors: 0 }));
+    assert.equal(invalidFirst.run.evaluate(create, token).decision, index === rest.length - 1 ? "go" : "stop", `after ${index}`);
+  }
+});
+
+test("a confirmed session is active only while its latest state is active", async () => {
+  const { run } = await fresh();
+  const session = manifest.resources.sessions[0];
+  const start = manifest.rows.find((r) => r.request.headers["x-goog-upload-command"] === "start" && r.programId === session.caseId);
+  const cancel = manifest.rows.find((r) => r.family === "declared" && r.stage === "cleanup" && r.programId === session.caseId && r.request.headers["x-goog-upload-command"] === "cancel");
+  const token = ["confirmed-active-session"];
+  run.recordIntent(start);
+  run.recordOutcome(start, out("session-start", "accepted", { uploadStatus: "active" }));
+  assert.equal(run.evaluate(cancel, token).decision, "go");
+  run.recordOutcome(row(`recovery/session/${session.caseId}/current`), out("session-command", "final", { uploadStatus: "final", sizeReceived: 4 }));
+  assert.equal(run.evaluate(cancel, token).decision, "stop");
+  run.recordOutcome(row(`recovery/session/${session.caseId}/current`), { uncertain: true });
+  assert.equal(run.evaluate(cancel, token).decision, "stop");
+});
+
+test("the final prefix check needs every written document proven absent", async () => {
+  const { run } = await fresh();
+  const prefix = row("management/prefix-empty");
+  const token = ["all-owned-resources-and-sessions-cleaned"];
+  run.recordOutcome(row("release/restore/bucket-absence"), out("rules-release-read", "absent"));
+  run.recordOutcome(row("release/restore/bucketless-absence"), out("rules-release-read", "absent"));
+  assert.equal(run.evaluate(prefix, token).decision, "go");
+  const create = row("firestore-program/firestore-get-transition/step/doc-create-true");
+  run.recordIntent(create);
+  assert.equal(run.evaluate(prefix, token).decision, "stop");
+  run.recordOutcome(create, out("firestore-write", "accepted", { documentName: create.request.documentName, updateTime: "2026-09-29T10:00:00Z" }));
+  assert.equal(run.evaluate(prefix, token).decision, "stop");
+  run.recordOutcome(row("recovery/document-0/absence"), out("firestore-read", "absent"));
+  assert.equal(run.evaluate(prefix, token).decision, "go");
+});
+
+test("a publication needs exactly the previous release: absence before v1, and the previous created Ruleset after it", async () => {
+  const token = ["exact-previous-release-or-entry-absence"];
+  const create = (run, name, id) => run.recordOutcome(row(`ruleset/${name}/create`), out("rules-ruleset-create", "accepted", { rulesetName: RS(id), createTime: "t", sourceSha256: "1".repeat(64) }));
+  const publishOutcome = (rulesetName) => out("rules-release-patch", "accepted", { rulesetName, releaseName: "n", updateTime: "t" });
+  const { run } = await fresh();
+  assert.equal(run.evaluate(row("release/v1/publish"), token).decision, "stop", "the release was never read");
+  run.recordOutcome(row("release/v1/before"), out("rules-release-read", "absent"));
+  assert.equal(run.evaluate(row("release/v1/publish"), token).decision, "go");
+  assert.equal(run.evaluate(row("release/v2/publish"), token).decision, "stop", "an absent release is not v1's");
+  create(run, "v1", "aaa");
+  run.recordOutcome(row("release/v1/publish"), publishOutcome(RS("aaa")));
+  assert.equal(run.evaluate(row("release/v1/publish"), token).decision, "stop", "v1 needs an absent release");
+  assert.equal(run.evaluate(row("release/v2/publish"), token).decision, "go");
+  assert.equal(run.evaluate(row("release/A/publish"), token).decision, "stop", "v2 was never created");
+  create(run, "v2", "bbb");
+  assert.equal(run.evaluate(row("release/A/publish"), token).decision, "stop", "the release still names v1");
+  run.recordOutcome(row("release/v2/publish"), publishOutcome(RS("bbb")));
+  assert.equal(run.evaluate(row("release/A/publish"), token).decision, "go");
+  assert.equal(run.evaluate(row("release/v2/publish"), token).decision, "stop");
+  const unnamed = await fresh();
+  unnamed.run.recordOutcome(row("release/v1/publish"), publishOutcome(null));
+  assert.equal(unnamed.run.evaluate(row("release/v2/publish"), token).decision, "stop", "an unnamed release never matches an uncreated Ruleset");
+});
+
+test("a document is deletable and has a confirmed history only when present with an update time and no doubt", async () => {
+  const { run } = await fresh();
+  const name = row("recovery/document-0/delete").request.documentName;
+  const token = ["confirmed-document-write-history-and-current-version"];
+  const del = row("recovery/document-0/delete");
+  const state = () => [run.document(name).deletable, run.evaluate(del, token).decision];
+  assert.deepEqual(state(), [false, "stop"]);
+  const create = row("firestore-program/firestore-get-transition/step/doc-create-true");
+  run.recordIntent(create);
+  assert.deepEqual(state(), [false, "stop"], "started only");
+  run.recordOutcome(create, out("firestore-write", "accepted", { documentName: name }));
+  assert.equal(run.document(name).latest, "present");
+  assert.deepEqual(state(), [false, "stop"], "present without an update time");
+  run.recordOutcome(row("recovery/document-0/current"), out("firestore-read", "present", { documentName: name, updateTime: "2026-09-29T10:00:00Z" }));
+  assert.deepEqual(state(), [true, "go"]);
+  const update = row("firestore-program/firestore-get-transition/step/doc-update-false");
+  run.recordIntent(update);
+  run.recordOutcome(update, { uncertain: true });
+  run.recordOutcome(row("recovery/document-0/current"), out("firestore-read", "present", { documentName: name, updateTime: "2026-09-29T10:01:00Z" }));
+  assert.equal(run.document(name).latest, "present");
+  assert.deepEqual(state(), [false, "stop"], "present after an unanswered write");
+});
+
+test("the prefix is empty only with no items and no next page", async () => {
+  const { run } = await fresh();
+  const prefix = row("management/prefix-empty");
+  assert.equal(run.check(prefix, out("gcs-prefix-list", "accepted", { itemCount: 0, hasNextPage: false })).ok, true);
+  for (const facts of [{ itemCount: 0, hasNextPage: true, nextPageToken: "t" }, { itemCount: 0 }, { itemCount: 1, hasNextPage: false }]) {
+    assert.equal(run.check(prefix, out("gcs-prefix-list", "accepted", facts)).ok, false, JSON.stringify(facts));
+  }
+});

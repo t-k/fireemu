@@ -111,8 +111,10 @@ export const PROFILES = {
   "record-followup": {
     packet: "record-followup",
     action: "record-followup",
-    runner: { project: SANDBOX_PROJECT, maxRequests: 162, reserveUsd: 1 },
-    limits: { api: 150, issuer: 12 },
+    // Two passes of at most 40 requests, and at most 50 for the prechecks, the issuer's deploy
+    // and the cleanup (the rehearsal used 33 of those), counted against the API limit alone.
+    runner: { project: SANDBOX_PROJECT, maxRequests: 142, reserveUsd: 1 },
+    limits: { api: 130, issuer: 12 },
     passLimit: 40,
     accountLimit: 2,
     programs: FOLLOWUP_PROGRAMS,

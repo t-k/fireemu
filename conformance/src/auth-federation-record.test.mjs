@@ -646,6 +646,8 @@ test("record-followup's envelope: a small recording, no new account expected, it
     await import("./auth-federation/corpus-followup.mjs");
   const followup = PROFILES["record-followup"];
   assert.equal(followup.limits.api + followup.limits.issuer, followup.runner.maxRequests);
+  // The API limit is the two passes' own limits and 50 for what runs outside them.
+  assert.equal(followup.limits.api, followup.passLimit * 2 + 50);
   assert.equal(followup.runner.reserveUsd, 1);
   // Every sign-in of this corpus is one production refuses: at most 2 accounts per pass cap a
   // surprise acceptance.

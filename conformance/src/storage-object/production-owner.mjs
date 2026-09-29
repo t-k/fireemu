@@ -1,3 +1,6 @@
+import { copyProductionCaptureRecord } from "./production-capture-input.mjs";
+import { productionControlDispatcherUsesArtifactContext } from "./production-controls.mjs";
+import { productionWireUsesOwner } from "./production-wire-transport.mjs";
 import { createHash } from "node:crypto";
 import { performance } from "node:perf_hooks";
 import { types } from "node:util";
@@ -75,7 +78,7 @@ async function jsonResponse(response) {
 
 /** Exchange only the three declared pairs. ADC and tokens stay in memory; the runner pins the prior principal and real control producer. */
 export function createProductionOwnerState(input) {
-  let options, principal, pinned;
+  let options, principal, pinned, originalControls;
   try {
     options = record(input, [
       "recording",
@@ -86,6 +89,7 @@ export function createProductionOwnerState(input) {
       "onProof",
       "onSecret",
     ]);
+    originalControls = options.controls;
     options.controls = record(options.controls, ["send", "snapshot"]);
     if (
       Object.keys(options).length !== 7 ||
@@ -347,6 +351,45 @@ export function createProductionOwnerState(input) {
       dispose();
     },
   });
-  ownerStates.set(state, { recording, provider: state.ownerAuthorization });
+  ownerStates.set(state, {
+    recording,
+    provider: state.ownerAuthorization,
+    controls: originalControls,
+    healthy: () => !closed && !failed && !busy,
+  });
   return state;
+}
+
+/** Static original owner/control/provider identity does not prove a usable token or admission. */
+export function productionOwnerUsesArtifactContext(state, supplied) {
+  try {
+    const binding = ownerStates.get(state),
+      input = copyProductionCaptureRecord(supplied, [
+        "recording",
+        "profile",
+        "plan",
+        "counter",
+        "wire",
+      ]);
+    return (
+      Object.keys(input).length === 5 &&
+      !!binding &&
+      binding.healthy() &&
+      binding.recording === input.recording &&
+      productionControlDispatcherUsesArtifactContext(binding.controls, {
+        profile: input.profile,
+        plan: input.plan,
+        counter: input.counter,
+        wire: input.wire,
+      }) &&
+      productionWireUsesOwner(input.wire, {
+        profile: input.profile,
+        plan: input.plan,
+        recording: input.recording,
+        owner: state,
+      })
+    );
+  } catch {
+    return false;
+  }
 }

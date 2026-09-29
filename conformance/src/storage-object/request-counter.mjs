@@ -1,3 +1,5 @@
+import { copyProductionCaptureRecord } from "./production-capture-input.mjs";
+import { copyCanonicalProductionStage3Plan } from "./production-context.mjs";
 import { estimateStage3Budget } from "./budget-model.mjs";
 import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
@@ -17,6 +19,36 @@ export function originalProductionStage3CounterSnapshot(counter, profile) {
     return null;
   return binding.read();
 }
+/** Static original task identity is not terminal, source trust or admission authority. */
+export function productionStage3CounterUsesArtifactContext(counter, supplied) {
+  try {
+    const binding = taskCounterBindings.get(counter);
+    const input = copyProductionCaptureRecord(supplied, ["profile", "plan"]);
+    if (
+      Object.keys(input).length !== 2 ||
+      !binding?.production ||
+      binding.artifactProfile === undefined ||
+      binding.artifactProfile !== input.profile ||
+      !productionArtifactProfileUsesPlan(
+        input.profile,
+        copyCanonicalProductionStage3Plan(input.plan),
+      ) ||
+      Object.getPrototypeOf(counter) !== Object.prototype
+    )
+      return false;
+    const names = Reflect.ownKeys(counter);
+    return (
+      names.length === Object.keys(binding.methods).length &&
+      Object.entries(binding.methods).every(([name, method]) => {
+        const d = Object.getOwnPropertyDescriptor(counter, name);
+        return d?.enumerable && Object.hasOwn(d, "value") && d.value === method;
+      })
+    );
+  } catch {
+    return false;
+  }
+}
+
 const recipeContextClaims = new WeakMap();
 
 /** Claim one sender context from an actual active recipe capability. */
@@ -437,6 +469,7 @@ export function createStage3RequestCounter(
     },
   };
   taskCounterBindings.set(counter, {
+    methods: Object.freeze(Object.fromEntries(Object.entries(counter))),
     artifactProfile,
     plan,
     production,

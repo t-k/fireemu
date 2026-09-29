@@ -53,7 +53,8 @@ export function createProductionCredentialProviders(supplied) {
     throw new Error("invalid production credential providers");
   }
   const owners = new Map(),
-    accounts = new Map();
+    accounts = new Map(),
+    ownerSources = new Map();
   let closed = false;
   function bind(map, original, recording, state) {
     try {
@@ -89,7 +90,10 @@ export function createProductionCredentialProviders(supplied) {
   }
   const providers = Object.freeze({
     bindOwner: (recording, state) =>
-      bind(owners, originalProductionOwnerAuthorizationProvider, recording, state),
+      (() => {
+        bind(owners, originalProductionOwnerAuthorizationProvider, recording, state);
+        ownerSources.set(recording, state);
+      })(),
     bindAuth: (recording, state) =>
       bind(accounts, originalProductionAuthAuthorizationProvider, recording, state),
     ownerAuthorization(suppliedContext) {
@@ -110,10 +114,14 @@ export function createProductionCredentialProviders(supplied) {
     close() {
       closed = true;
       owners.clear();
+      ownerSources.clear();
       accounts.clear();
     },
   });
   bindings.set(providers, {
+    ownerSources,
+    owners,
+    alive: () => !closed,
     registry,
     boundary,
     ownerAuthorization: providers.ownerAuthorization,
@@ -137,4 +145,21 @@ export function originalProductionCredentialProviderFunctions(providers, registr
 export function productionCredentialProvidersUseBoundary(providers, boundary, registry) {
   const binding = bindings.get(providers);
   return binding !== undefined && binding.boundary === boundary && binding.registry === registry;
+}
+
+/** Original owner lineage never acquires an owner token or reads a caller snapshot. */
+export function productionCredentialProvidersUseOwner(providers, recording, owner) {
+  try {
+    const binding = bindings.get(providers);
+    return (
+      !!binding &&
+      binding.alive() &&
+      [1, 2].includes(recording) &&
+      binding.ownerSources.get(recording) === owner &&
+      binding.owners.get(recording) ===
+        originalProductionOwnerAuthorizationProvider(owner, recording)
+    );
+  } catch {
+    return false;
+  }
 }

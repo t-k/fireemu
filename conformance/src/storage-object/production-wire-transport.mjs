@@ -1,3 +1,7 @@
+import { copyProductionCaptureRecord } from "./production-capture-input.mjs";
+import { productionCredentialProvidersUseOwner } from "./production-provider-boundary.mjs";
+import { copyCanonicalProductionStage3Plan } from "./production-context.mjs";
+const wireBindings = new WeakMap();
 import { isAbsolute } from "node:path";
 import { createHash } from "node:crypto";
 import { isDeepStrictEqual, types } from "node:util";
@@ -510,7 +514,7 @@ export function createProductionWireTransport(input) {
     }
   }
 
-  return Object.freeze({
+  const wire = Object.freeze({
     registerSecret,
     bindSession(recording, response) {
       let ownsBinding = false;
@@ -629,4 +633,48 @@ export function createProductionWireTransport(input) {
       names.clear();
     },
   });
+  wireBindings.set(wire, {
+    profile: config.artifactProfile,
+    providers: config.credentialProviders,
+    plan: copyCanonicalProductionStage3Plan(plan),
+    healthy: () =>
+      !failed && !closed && !busy && !binding && !core.snapshot().active && !core.snapshot().halted,
+  });
+  return wire;
+}
+
+/** Original owned wire identity does not prove live admission or credential usability. */
+export function productionWireUsesArtifactContext(wire, supplied) {
+  try {
+    const source = wireBindings.get(wire),
+      input = copyProductionCaptureRecord(supplied, ["profile", "plan"]);
+    return (
+      Object.keys(input).length === 2 &&
+      !!source &&
+      source.profile !== undefined &&
+      source.profile === input.profile &&
+      source.healthy() &&
+      productionArtifactProfileUsesPlan(
+        source.profile,
+        copyCanonicalProductionStage3Plan(input.plan),
+      )
+    );
+  } catch {
+    return false;
+  }
+}
+
+/** The provider boundary must select this original owner for this recording. */
+export function productionWireUsesOwner(wire, supplied) {
+  try {
+    const input = copyProductionCaptureRecord(supplied, ["profile", "plan", "recording", "owner"]),
+      source = wireBindings.get(wire);
+    return (
+      Object.keys(input).length === 4 &&
+      productionWireUsesArtifactContext(wire, { profile: input.profile, plan: input.plan }) &&
+      productionCredentialProvidersUseOwner(source.providers, input.recording, input.owner)
+    );
+  } catch {
+    return false;
+  }
 }

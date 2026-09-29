@@ -1,3 +1,8 @@
+import { copyProductionCaptureRecord } from "./production-capture-input.mjs";
+import { copyCanonicalProductionStage3Plan } from "./production-context.mjs";
+import { productionStage3CounterUsesArtifactContext } from "./request-counter.mjs";
+import { productionWireUsesArtifactContext } from "./production-wire-transport.mjs";
+const controlBindings = new WeakMap();
 import { createHash } from "node:crypto";
 import { isDeepStrictEqual, types } from "node:util";
 import { buildProductionStage3DraftPlan } from "./stage3-plan.mjs";
@@ -10,7 +15,7 @@ const AUTH_RECIPES = [
 const RULES_KINDS = ["rules-release", "rules-ruleset", "rules-bucketless"];
 
 function canonicalPlan(input) {
-  const plan = structuredClone(input);
+  const plan = copyCanonicalProductionStage3Plan(input);
   if (
     !isDeepStrictEqual(
       plan,
@@ -172,7 +177,7 @@ export function createProductionControlDispatcher(input) {
   const attempted = new Set();
   let busy = false,
     failed = false;
-  return Object.freeze({
+  const dispatcher = Object.freeze({
     async send(id, suppliedInput = {}) {
       if (failed) throw new Error("production control dispatcher is halted");
       if (busy) throw new Error("concurrent production control is forbidden");
@@ -243,4 +248,34 @@ export function createProductionControlDispatcher(input) {
     },
     snapshot: () => Object.freeze({ attempted: attempted.size, busy, failed }),
   });
+  controlBindings.set(dispatcher, {
+    plan: copyCanonicalProductionStage3Plan(options.plan),
+    counter,
+    wire,
+    healthy: () => !failed && !busy,
+  });
+  return dispatcher;
+}
+
+/** Shape dispatchers remain prototypes; only matching original counter and wire supply local lineage. */
+export function productionControlDispatcherUsesArtifactContext(dispatcher, supplied) {
+  try {
+    const source = controlBindings.get(dispatcher),
+      input = copyProductionCaptureRecord(supplied, ["profile", "plan", "counter", "wire"]);
+    return (
+      Object.keys(input).length === 4 &&
+      !!source &&
+      source.healthy() &&
+      source.counter === input.counter &&
+      source.wire === input.wire &&
+      isDeepStrictEqual(source.plan, copyCanonicalProductionStage3Plan(input.plan)) &&
+      productionStage3CounterUsesArtifactContext(source.counter, {
+        profile: input.profile,
+        plan: source.plan,
+      }) &&
+      productionWireUsesArtifactContext(source.wire, { profile: input.profile, plan: source.plan })
+    );
+  } catch {
+    return false;
+  }
 }

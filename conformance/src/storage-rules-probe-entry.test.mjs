@@ -123,6 +123,28 @@ test("an owner who is not the expected one, or is unverified, stops the run befo
   }
 });
 
+test("the identity answer must be well-formed UTF-8, and the run stops before the first probe read", async (t) => {
+  const f = await checkout(t);
+  f.world.hook.any = (spec) => (new URL(spec.url).pathname === "/oauth2/v2/userinfo" ? { status: 200, rawHeaders: ["Content-Type", "application/json"], bytes: Buffer.concat([Buffer.from('{"id":"1","email":"owner@example.test","verified_email":true,"note":"'), Buffer.from([0xff]), Buffer.from('"}')]) } : undefined);
+  await assert.rejects(f.entry(f.options));
+  assert.deepEqual(urls(f), ["POST oauth2.googleapis.com/token", "GET www.googleapis.com/oauth2/v2/userinfo"]);
+});
+
+test("a content type is recorded only when it is short, printable and free of markup, and is null when absent", async (t) => {
+  const answers = {
+    "no header": { rawHeaders: [], expected: null }, "markup": { rawHeaders: ["Content-Type", "text/<b>x</b>"], expected: null }, "control character": { rawHeaders: ["Content-Type", "text/plain\u0007"], expected: null },
+    "too long": { rawHeaders: ["Content-Type", `text/${"a".repeat(101)}`], expected: null }, "empty": { rawHeaders: ["Content-Type", ""], expected: null },
+    "printable": { rawHeaders: ["Content-Type", "text/plain; charset=utf-8"], expected: "text/plain; charset=utf-8" }, "upper-case name": { rawHeaders: ["CONTENT-TYPE", "text/plain"], expected: "text/plain" },
+    "the first of two": { rawHeaders: ["Content-Type", "text/plain", "Content-Type", "text/html"], expected: "text/plain" }, "exactly 100": { rawHeaders: ["Content-Type", `t/${"a".repeat(98)}`], expected: `t/${"a".repeat(98)}` },
+  };
+  for (const [name, { rawHeaders, expected }] of Object.entries(answers)) {
+    const f = await checkout(t);
+    f.world.hook.answer = (spec, key) => (key === "list" ? { status: 200, rawHeaders: rawHeaders.map((value) => value.replace("\\u0007", String.fromCharCode(7))), bytes: Buffer.from("{}") } : undefined);
+    await f.entry(f.options);
+    assert.equal((await factsOf(f)).find((fact) => fact.operationId === "probe/rulesets-list").facts.contentType, expected, name);
+  }
+});
+
 test("a lost connection stops the run at that request, sends nothing after it, and keeps the lock", async (t) => {
   for (const key of ["list", "metadata", "media", "testValid", "testInvalid", "document"]) {
     const f = await checkout(t);
@@ -201,6 +223,7 @@ test("the local inputs, the owner ledger and the runs directory must be private,
     "local inputs too large": async (f) => { await writeFile(f.localPath, Buffer.concat([Buffer.from(JSON.stringify(probeLocal(f.adcPath))), Buffer.alloc(64 * 1024, 0x20)]), { mode: 0o600 }); return /local inputs file refused/; },
     "local inputs is not UTF-8": async (f) => { const text = JSON.stringify(probeLocal(f.adcPath)); const at = text.indexOf(f.adcPath) + f.adcPath.length; await writeFile(f.localPath, Buffer.concat([Buffer.from(text.slice(0, at)), Buffer.from([0xff]), Buffer.from(text.slice(at))]), { mode: 0o600 }); return /^Error: local inputs file refused$/; },
     "ledger writable by others": async (f) => { await chmod(f.ledgerPath, 0o666); return /owner ledger refused/; },
+    "ledger is not UTF-8": async (f) => { await writeFile(f.ledgerPath, Buffer.concat([Buffer.from(`${ledger}\n`), Buffer.from([0xff])]), { mode: 0o644 }); return /owner ledger refused/; },
     "ledger too large": async (f) => { await writeFile(f.ledgerPath, Buffer.alloc(8 * 1024 * 1024 + 1, 0x20), { mode: 0o644 }); return /owner ledger refused/; },
     "the runs directory is open to others": async (f) => { await chmod(f.runs, 0o755); return /runs directory refused/; },
     "the lock directory is open to others": async (f) => { await chmod(join(f.runs, "sandbox-locks"), 0o755); return /lock directory refused/; },

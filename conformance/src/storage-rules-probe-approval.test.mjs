@@ -44,6 +44,7 @@ test("the packet's identity, the review's pins and the ledger's decision are che
     const packet = packetOf(delta);
     assert.throws(() => validateProbeApproval({ ledgerText: ledgerOf(packetOf()), packet, review: reviewOf(packet) }), /invalid packet data/, JSON.stringify(delta));
   }
+  for (const projects of [[5], [null], [{}], ["fireemu-oracle-query", 5]]) assert.throws(() => validateProbeApproval({ ledgerText: ledgerOf(packetOf()), packet: packetOf({ projects }), review: reviewOf(packetOf()) }), /invalid packet project data/, JSON.stringify(projects));
   assert.throws(() => validateProbeApproval({ ledgerText: 5, packet: packetOf(), review: reviewOf(packetOf()) }), /invalid approval options data/);
   assert.throws(() => validateProbeApproval({ ledgerText: "a\0b", packet: packetOf(), review: reviewOf(packetOf()) }), /invalid approval options data/);
   assert.throws(() => validateProbeApproval({ ledgerText: "", packet: packetOf(), review: reviewOf(packetOf()), mode: "pre" }), /invalid approval options data/);

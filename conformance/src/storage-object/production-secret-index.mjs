@@ -1,3 +1,4 @@
+import { locateProductionSecretLines } from "./production-secret-line-locations.mjs";
 import { types } from "node:util";
 
 const originalScans = new WeakSet();
@@ -15,8 +16,8 @@ export function createProductionSecretIndex(maxNodes) {
     first = new Int32Array(maxNodes),
     next = new Int32Array(maxNodes),
     failure = new Int32Array(maxNodes),
-    terminal = new Uint8Array(maxNodes),
-    matched = new Uint8Array(maxNodes);
+    terminal = new Int32Array(maxNodes),
+    matched = new Int32Array(maxNodes);
   let nodes = 1,
     dirty = false,
     failed = false,
@@ -51,7 +52,7 @@ export function createProductionSecretIndex(maxNodes) {
           target = edges.get(fallback * 65536 + chars[child]);
         }
         failure[child] = target ?? 0;
-        matched[child] = terminal[child] | matched[failure[child]];
+        matched[child] = Math.max(terminal[child], matched[failure[child]]);
         queue[write++] = child;
       }
     }
@@ -98,7 +99,7 @@ export function createProductionSecretIndex(maxNodes) {
             }
             parent = child;
           }
-          terminal[parent] = 1;
+          terminal[parent] = pattern.length;
         }
         dirty = true;
       } catch {
@@ -142,6 +143,31 @@ export function createProductionSecretIndex(maxNodes) {
         });
       };
       const scan = Object.freeze({
+        findSecretCopyLines(text) {
+          ready();
+          try {
+            if (typeof text !== "string" || text.length > 2097152 || !text.isWellFormed())
+              throw unavailable();
+            return locateProductionSecretLines(text, charge, (candidate, found) => {
+              charge(candidate.length);
+              compile();
+              let state = 0;
+              for (let i = 0; i < candidate.length; i++) {
+                const character = candidate.charCodeAt(i);
+                let target = edges.get(state * 65536 + character);
+                while (state && target === undefined) {
+                  state = failure[state];
+                  target = edges.get(state * 65536 + character);
+                }
+                state = target ?? 0;
+                if (matched[state]) found(i + 1 - matched[state], i + 1);
+              }
+            });
+          } catch {
+            halt();
+            throw unavailable();
+          }
+        },
         hasSecretCopy(text) {
           ready();
           try {
@@ -184,7 +210,7 @@ export function createProductionSecretIndex(maxNodes) {
         edges: edges.size,
         failed,
         closed,
-        typedArrayBytes: closed ? 0 : maxNodes * 16,
+        typedArrayBytes: closed ? 0 : maxNodes * 22,
         maxCompileScratchBytes: maxNodes * 4,
       }),
     close() {

@@ -3,7 +3,7 @@ import { execFile } from "node:child_process";
 import { open, readdir } from "node:fs/promises";
 import { constants } from "node:fs";
 import { join, posix } from "node:path";
-import { buildRunManifest, manifestParams, TEMPLATE_RUN_ID } from "./run-manifest.mjs";
+import { buildRunManifest, manifestParams, paramsFromInputs, TEMPLATE_RUN_ID } from "./run-manifest.mjs";
 
 // What an approval's pins mean, recomputed from what is about to run. The ledger records five pins; the entry point refuses
 // to start unless the running code and manifest reproduce the three that can be recomputed here and the checkout is at the
@@ -64,6 +64,13 @@ export function manifestPin(manifest, closure) {
   const params = manifestParams(manifest);
   if (buildRunManifest(closure, params).sha256 !== manifest.sha256) throw new Error("manifest does not rebuild from its binding");
   return buildRunManifest(closure, { ...params, runId: TEMPLATE_RUN_ID }).sha256;
+}
+
+/** All three recomputable pins for the code at `codeRoot` and the validated private `inputs`, as an approval line records them. */
+export async function computePins({ inputs, closure, sourceCommit, codeRoot }) {
+  const digests = await codeDigests(codeRoot);
+  const manifest = buildRunManifest(closure, paramsFromInputs(inputs, TEMPLATE_RUN_ID, sourceCommit));
+  return Object.freeze({ sourceCommit, runnerSha256: digests.runnerSha256, manifestSha256: manifest.sha256, fixtureSchemaSha256: digests.fixtureSchemaSha256 });
 }
 
 /** The real git reader: `git -C <root> <args>` with a fixed environment, output capped. */

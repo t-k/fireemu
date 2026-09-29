@@ -1,10 +1,16 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { chmod, mkdir, mkdtemp, readFile, rm, symlink, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import test from "node:test";
-import { checkoutMatches, codeDigests, FIXTURE_FILES, gitOutput } from "./storage-rules/pins.mjs";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { checkoutMatches, CLOSURE_SPEC, codeDigests, computePins, FIXTURE_FILES, gitOutput } from "./storage-rules/pins.mjs";
+import { loadPrivateInputs } from "./storage-rules/private-inputs.mjs";
+import { buildRunManifest, manifestParams, paramsFromInputs, TEMPLATE_RUN_ID } from "./storage-rules/run-manifest.mjs";
+import { manifestPin } from "./storage-rules/pins.mjs";
+import { ADC, BUCKET, KEY_IDS, NUMBERS, privatePacket } from "./storage-rules-runner-support.mjs";
 
 const sha = (text) => createHash("sha256").update(text).digest("hex");
 const CLOSURE = "spec/compatibility/closure/STORAGE-RULES.json";
@@ -140,4 +146,65 @@ test("git is run with a fixed environment and the root it was given", async (t) 
     if (previous.secret === undefined) delete process.env.FIREEMU_SECRET; else process.env.FIREEMU_SECRET = previous.secret;
   }
   assert.deepEqual((await readFile(out, "utf8")).split("\n").slice(0, 7), ["C", "0", "", "4", "-C", "/some/root", "rev-parse"]);
+});
+
+const realRoot = fileURLToPath(new URL("../..", import.meta.url));
+const realClosure = JSON.parse(readFileSync(join(realRoot, CLOSURE_SPEC)));
+
+async function inputsFile(t, mutate = (packet) => packet) {
+  const root = await mkdtemp("/private/tmp/storage-rules-pins-inputs-");
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const adcPath = join(root, "adc.json");
+  await writeFile(adcPath, JSON.stringify(ADC), { mode: 0o600 });
+  const path = join(root, "inputs.json");
+  await writeFile(path, JSON.stringify(mutate(privatePacket(adcPath))), { mode: 0o600 });
+  return path;
+}
+
+test("all three recomputable pins come from the code, the private inputs and the commit, and agree with the entry's checks", async (t) => {
+  const { root } = await tree(t);
+  const inputs = await loadPrivateInputs({ path: await inputsFile(t) });
+  const commit = "c".repeat(40);
+  const pins = await computePins({ inputs, closure: realClosure, sourceCommit: commit, codeRoot: root });
+  const digests = await codeDigests(root);
+  assert.deepEqual(Object.keys(pins), ["sourceCommit", "runnerSha256", "manifestSha256", "fixtureSchemaSha256"]);
+  assert.deepEqual([pins.sourceCommit, pins.runnerSha256, pins.fixtureSchemaSha256], [commit, digests.runnerSha256, digests.fixtureSchemaSha256]);
+  const template = buildRunManifest(realClosure, paramsFromInputs(inputs, TEMPLATE_RUN_ID, commit));
+  assert.equal(pins.manifestSha256, template.sha256);
+  // Any run of this approval reproduces the same manifest pin.
+  for (const runId of ["first-recording-1", "second-recording-2"]) assert.equal(manifestPin(buildRunManifest(realClosure, paramsFromInputs(inputs, runId, commit)), realClosure), pins.manifestSha256);
+  assert.deepEqual(manifestParams(template), paramsFromInputs(inputs, TEMPLATE_RUN_ID, commit));
+  // Each parameter comes from its own private input (named independently of the code under test).
+  assert.deepEqual(paramsFromInputs(inputs, "some-run-id-1", commit), { bucket: BUCKET, runId: "some-run-id-1", sourceCommit: commit, queryProjectNumber: NUMBERS.query, idpProjectNumber: NUMBERS.idp, queryApiKeyId: KEY_IDS.query, idpApiKeyId: KEY_IDS.idp });
+  assert.equal(new Set([NUMBERS.query, NUMBERS.idp, KEY_IDS.query, KEY_IDS.idp]).size, 4);
+  assert.equal(Object.isFrozen(pins), true);
+  // The commit and every private input the manifest names move the pin; the API key strings, which it does not name, do not.
+  const other = await computePins({ inputs, closure: realClosure, sourceCommit: "d".repeat(40), codeRoot: root });
+  assert.notEqual(other.manifestSha256, pins.manifestSha256);
+  const moved = await loadPrivateInputs({ path: await inputsFile(t, (packet) => { packet.bucket.name = "another-bucket-name"; return packet; }) });
+  assert.notEqual((await computePins({ inputs: moved, closure: realClosure, sourceCommit: commit, codeRoot: root })).manifestSha256, pins.manifestSha256);
+});
+
+test("the pin printer prints the pins of this checkout for a private inputs file and refuses anything else without echoing the file", async (t) => {
+  const script = fileURLToPath(new URL("./storage-rules/print-pins.mjs", import.meta.url));
+  const path = await inputsFile(t);
+  const stdout = execFileSync("node", [script, path], { encoding: "utf8" });
+  const printed = JSON.parse(stdout);
+  assert.match(stdout, /^\{\n  "sourceCommit": "[0-9a-f]{40}",\n/);
+  const inputs = await loadPrivateInputs({ path });
+  const head = execFileSync("git", ["-C", realRoot, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+  assert.deepEqual(printed, { ...(await computePins({ inputs, closure: realClosure, sourceCommit: head, codeRoot: realRoot })) });
+  assert.deepEqual(Object.keys(printed), ["sourceCommit", "runnerSha256", "manifestSha256", "fixtureSchemaSha256"]);
+  for (const args of [[], [path, "extra"]]) {
+    const result = spawnSync("node", [script, ...args], { encoding: "utf8" });
+    assert.equal(result.status, 2);
+    assert.match(result.stderr, /usage/);
+    assert.equal(result.stdout, "");
+  }
+  const bad = await inputsFile(t, (packet) => ({ ...packet, extra: "SECRET-VALUE-XYZ" }));
+  const failed = spawnSync("node", [script, bad], { encoding: "utf8" });
+  assert.equal(failed.status, 1);
+  assert.equal(failed.stdout, "");
+  assert.match(failed.stderr, /private inputs file refused/);
+  assert.equal(failed.stderr.includes("SECRET-VALUE-XYZ"), false);
 });

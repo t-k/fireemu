@@ -3,7 +3,7 @@ import { createCaptureJournal } from "./capture-journal.mjs";
 import { createController } from "./controller.mjs";
 import { createRunnerDelegates } from "./delegates.mjs";
 import { createDispatchGate } from "./dispatch-gate.mjs";
-import { buildRunManifest } from "./run-manifest.mjs";
+import { buildRunManifest, paramsFromInputs } from "./run-manifest.mjs";
 import { confirmCleanClose, leaseTransport, withLockedAdmission } from "./locked-run.mjs";
 import { createPreflightJudge } from "./preflight-judge.mjs";
 import { generateRunSecrets, loadPrivateInputs, readAdcFile } from "./private-inputs.mjs";
@@ -38,10 +38,7 @@ export async function withAssembledRun(options, use, { randomBytes } = {}) {
   const inputs = await loadPrivateInputs({ path: inputsPath });
   const adc = await readAdcFile({ path: inputs.adcPath });
   const secrets = generateRunSecrets(randomBytes === undefined ? undefined : { randomBytes });
-  const manifest = buildRunManifest(closure, {
-    bucket: inputs.bucket.name, runId, sourceCommit, queryProjectNumber: inputs.projects.query.projectNumber, idpProjectNumber: inputs.projects.idp.projectNumber,
-    queryApiKeyId: inputs.projects.query.apiKeyId, idpApiKeyId: inputs.projects.idp.apiKeyId,
-  });
+  const manifest = buildRunManifest(closure, paramsFromInputs(inputs, runId, sourceCommit));
   const usage = createRecordingUsage({ path: usagePath, packetSha256: packet.packetSha256 });
 
   return withLockedAdmission({ locks: { ...locks, projects: [...packet.projects], taskId: packet.taskId, packetId: packet.packetName, sourceCommit: packet.sourceCommit }, readLedger, packet, review, runId, usage }, async ({ admission, lease }) => {

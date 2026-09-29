@@ -19,3 +19,11 @@ export function manifestParams(manifest) {
   if (binding === null || typeof binding !== "object") throw new Error("invalid run manifest input");
   return Object.fromEntries(FIELDS.map((field) => [field, binding[field]]));
 }
+
+/** The manifest parameters of one run, taken from the validated private inputs. */
+export function paramsFromInputs(inputs, runId, sourceCommit) {
+  return {
+    bucket: inputs.bucket.name, runId, sourceCommit, queryProjectNumber: inputs.projects.query.projectNumber, idpProjectNumber: inputs.projects.idp.projectNumber,
+    queryApiKeyId: inputs.projects.query.apiKeyId, idpApiKeyId: inputs.projects.idp.apiKeyId,
+  };
+}

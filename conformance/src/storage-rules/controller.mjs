@@ -45,7 +45,8 @@ export function createController(options) {
       return verdict === "present" || verdict === "absent";
     }
     if (kind === "firestore-read") return verdict === "present" || verdict === "absent";
-    if (kind === "session-command") return row.request.headers["x-goog-upload-command"] === "cancel" ? verdict === "acknowledged" : verdict === "active" || verdict === "final";
+    // A query right after a cancel (the verify rows and recovery's terminal query) must find the session finished; only the first look may find it active.
+    if (kind === "session-command") return row.request.headers["x-goog-upload-command"] === "cancel" ? verdict === "acknowledged" : row.family === "session-verify" || /\/terminal$/.test(row.id) ? verdict === "final" : verdict === "active" || verdict === "final";
     if (kind === "settle-read") return true;
     return verdict === "accepted";
   }

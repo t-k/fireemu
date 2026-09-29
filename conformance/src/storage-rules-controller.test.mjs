@@ -427,6 +427,34 @@ test("each row kind stops the run on a verdict its step must not accept", async 
   }
 });
 
+const sessionActive = () => ({ status: 200, rawHeaders: ["X-Goog-Upload-Status", "active", "X-Goog-Upload-Size-Received", "0"], bytes: Buffer.alloc(0), startedAtMs: 1, finishedAtMs: 2 });
+
+test("a session that still answers active after its cancel stops the run at once", async () => {
+  const verify = await firstSent((r) => r.family === "session-verify");
+  const h = await harness({ simulatorOptions: answerAt(await callOf(verify), sessionActive) });
+  const result = await h.controller.run();
+  assert.deepEqual([result.status, result.reason, result.detail.rowId], ["stopped", "unexpected verdict", verify]);
+  // Nothing is sent after the surprise: the verify row is the last request of the run.
+  assert.equal(sentIds(h).at(-1), verify);
+  assert.equal(result.needsRecovery, true);
+});
+
+test("recovery stops when a session still answers active after its cancel", async () => {
+  const start = (r) => r.request.headers?.["x-goog-upload-command"] === "start";
+  const call = await callAfter(start, 1);
+  const dry = await harness({ simulatorOptions: failWith500(call) });
+  await dry.controller.run();
+  await dry.controller.recover();
+  const terminal = sentIds(dry).find((id) => /^recovery\/session\/.*\/terminal$/.test(id));
+  assert.ok(terminal);
+  const terminalCall = sentIds(dry).indexOf(terminal) + 1;
+  const h = await harness({ simulatorOptions: { failures: new Map([[call, () => response(500, { error: { code: 500, message: "boom" } })], [terminalCall, sessionActive]]) } });
+  await h.controller.run();
+  const result = await h.controller.recover();
+  assert.deepEqual([result.status, result.reason, result.detail.rowId], ["stopped", "unexpected verdict", terminal]);
+  assert.equal(h.trace.at(-1), "terminal:needs-recovery");
+});
+
 test("a response that fails its post-response check stops the run as a failed check", async () => {
   // A publication's after-read must name the Ruleset the run created; a missing release fails that check.
   const after = await harness({ simulatorOptions: answerAt(await callOf("release/v1/after"), rpcNotFound) });

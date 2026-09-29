@@ -91,11 +91,12 @@ impl Daemon {
             );
             let deadline = std::time::Instant::now() + Duration::from_secs(60);
             loop {
-                if TcpStream::connect(("127.0.0.1", port)).is_ok() {
-                    return daemon;
-                }
+                // A daemon that already exited did not bind the port, whoever answers on it.
                 if daemon.child.try_wait().unwrap().is_some() {
                     break;
+                }
+                if TcpStream::connect(("127.0.0.1", port)).is_ok() {
+                    return daemon;
                 }
                 assert!(
                     std::time::Instant::now() < deadline,

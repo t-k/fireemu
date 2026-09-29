@@ -228,6 +228,7 @@ function build(corpusInput, closureInput, optionsInput) {
   const manifest = {
     status: "LOCAL_FULL_DRAFT_NO_SEND", sendAuthorized: false, controllerReady: false,
     binding: { ...binding, ...options }, corpusSha256: hash(JSON.stringify(corpus)), closureSha256: hash(JSON.stringify(closure)), counts, limits, preflightIds: rows.filter((r) => r.phase === "preflight").map((r) => r.id),
+    publication: { v1: [...bundles[0].caseIds], v2: [...bundles[1].caseIds] },
     resources: { objects, documents, sessions, controls }, sources: sources.map((s) => ({ id: s.id, sha256: hash(s.content) })),
     restoration: { intervalMs: 20000, maxCycles: 15, consecutiveCompleteCycles: 2, witnessCount: 4, retainUntil: "restore-owner-readbacks-complete", missingProof: "needs-recovery" },
     sessionPolicy: { queryStatus: ["active", "final"], maxReceivedBytes: 4, unknownTerminalShape: "needs-recovery", startStatus: 200, startHeaderStatus: "active", origin: FIREBASE, duplicateHeaders: "reject", literalUrls: "private-only", cancelResponseAloneProvesTerminal: false, paths: ["exact-bucket-collection", "exact-encoded-owned-object"], queryKeys: ["name", "upload_id", "upload_protocol", "uploadType"], requiredQueryKeys: ["name", "upload_id", "upload_protocol"], queryValues: { name: "exact-owned-object", upload_id: "bounded-private-opaque-id", upload_protocol: "resumable", uploadType: "resumable-if-present" }, duplicateQueryKeys: "reject", querySuccessStatus: 200, missingDurableStart: "needs-recovery" },

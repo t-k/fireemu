@@ -313,3 +313,13 @@ test("every row names its origin from one closed (service, dialect) table", asyn
     assert.equal(r.request.origin, module.REQUEST_ORIGINS[key], r.id);
   }
 });
+
+test("the manifest names which cases and Firestore programs each published bundle serves", () => {
+  const m = build();
+  assert.deepEqual(Object.keys(m.publication).sort(), ["v1", "v2"]);
+  const ids = [...m.publication.v1, ...m.publication.v2];
+  assert.equal(new Set(ids).size, ids.length);
+  const declaredPrograms = new Set(m.rows.filter((r) => r.family === "declared").map((r) => r.programId));
+  assert.deepEqual([...new Set(ids)].sort(), [...declaredPrograms].sort());
+  assert.ok(m.publication.v1.length > 0 && m.publication.v2.length > 0);
+});

@@ -191,3 +191,68 @@ test("a bind is refused while another proof write is in flight", async () => {
   await first;
   await store.bind({ ref: meta, value: "1", provenance: producer(patchSeed) });
 });
+
+const nativeConsumers = () => manifest.rows.flatMap((row) => {
+  const found = [];
+  walk(row.request, (v) => { if (["firestore-update-time", "gcs-object-generation"].includes(v.kind)) found.push({ row, ref: v }); });
+  return found;
+});
+const producerOf = (row, step) => manifest.rows.find((r) => r.programId === row.programId && r.request.id === step) ?? assert.fail(`no producer ${step}`);
+
+test("the corpus's own Firestore-program references are declared, each pinned to the step that must produce it", async () => {
+  const { buildRefTables } = await load();
+  const tables = buildRefTables(manifest);
+  const native = nativeConsumers();
+  assert.ok(native.length >= 19);
+  for (const { row, ref: r } of native) {
+    const type = r.kind === "firestore-update-time" ? "update-time" : "generation";
+    const key = r.kind === "firestore-update-time" ? r.documentName : r.objectName;
+    assert.ok(tables.consumers[type][key].includes(row.id), row.id);
+    const producer = producerOf(row, r.fromStep);
+    assert.equal(tables.pinned[`${type}|${key}|${row.id}`], producer.id, row.id);
+    assert.ok(tables.producers[type][key].some((p) => p.operationId === producer.id), row.id);
+  }
+});
+
+test("a pinned consumer sees the value its step produced, even after a later readback", async () => {
+  const { buildRefTables, createRuntimeRefStore } = await load();
+  const store = createRuntimeRefStore({ tables: buildRefTables(manifest), runId: options.runId, digestSalt: salt, writeProof: async () => {} });
+  const { row, ref: r } = nativeConsumers().find(({ ref }) => ref.kind === "firestore-update-time" && ref.fromStep === "doc-read-false");
+  const key = r.documentName;
+  const pinned = producerOf(row, "doc-read-false");
+  const other = nativeConsumers().map((c) => producerOf(c.row, c.ref.fromStep)).find((p) => p.id !== pinned.id && p.request.documentName === key);
+  assert.ok(other, "another readback of the same document exists");
+  const recoveryDelete = manifest.rows.find((x) => x.family === "recovery-document" && x.stage === "delete" && x.request.query["currentDocument.updateTime"].key === key);
+  assert.throws(() => store.resolve(r, row.id), /reference is not bound/);
+  await store.bind({ ref: ref("update-time", key), value: "2026-09-29T10:00:00Z", provenance: producer(pinned, "accepted", 1) });
+  assert.equal(store.resolve(r, row.id), "2026-09-29T10:00:00Z");
+  await store.bind({ ref: ref("update-time", key), value: "2026-09-29T10:05:00Z", provenance: producer(other, "accepted", 2) });
+  assert.equal(store.resolve(r, row.id), "2026-09-29T10:00:00Z");
+  assert.equal(store.resolve(recoveryDelete.request.query["currentDocument.updateTime"], recoveryDelete.id), "2026-09-29T10:05:00Z");
+});
+
+test("a pinned generation resolves for its own cleanup delete only from its own metadata readback", async () => {
+  const { buildRefTables, createRuntimeRefStore } = await load();
+  const tables = buildRefTables(manifest);
+  const store = createRuntimeRefStore({ tables, runId: options.runId, digestSalt: salt, writeProof: async () => {} });
+  const { row, ref: r } = nativeConsumers().find(({ ref }) => ref.kind === "gcs-object-generation");
+  const pinned = producerOf(row, r.fromStep);
+  assert.throws(() => store.resolve(r, row.id), /reference is not bound/);
+  const others = tables.producers.generation[r.objectName].filter((p) => p.operationId !== pinned.id);
+  if (others.length) {
+    const otherRow = manifest.rows.find((x) => x.id === others[0].operationId);
+    await store.bind({ ref: ref("generation", r.objectName), value: "1700000000000009", provenance: producer(otherRow, others[0].verdict, 1, true) });
+    assert.throws(() => store.resolve(r, row.id), /reference is not bound/);
+  }
+  await store.bind({ ref: ref("generation", r.objectName), value: "1700000000000010", provenance: producer(pinned, "present", 2, true) });
+  assert.equal(store.resolve(r, row.id), "1700000000000010");
+});
+
+test("a native reference with an unknown shape is refused on resolve", async () => {
+  const { buildRefTables, createRuntimeRefStore } = await load();
+  const store = createRuntimeRefStore({ tables: buildRefTables(manifest), runId: options.runId, digestSalt: salt, writeProof: async () => {} });
+  const { row, ref: r } = nativeConsumers().find(({ ref }) => ref.kind === "firestore-update-time");
+  for (const bad of [{ ...r, field: "generation" }, { ...r, documentName: `${r.documentName}x` }, { ...r, kind: "other" }, { ...r, fromStep: "doc-somewhere-else" }, { ...r, fromStep: 7 }]) {
+    assert.throws(() => store.resolve(bad, row.id), /invalid runtime reference resolve/);
+  }
+});

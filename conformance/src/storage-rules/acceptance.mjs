@@ -1,18 +1,15 @@
-import { createHash } from "node:crypto";
+import { FIRESTORE_CLASSIFIERS } from "./acceptance-firestore.mjs";
+import { PREFLIGHT_CLASSIFIERS } from "./acceptance-preflight.mjs";
+import { RULES_CLASSIFIERS } from "./acceptance-rules.mjs";
+import { SESSION_CLASSIFIERS } from "./acceptance-sessions.mjs";
+import { bad, common, decimal, digest, isObject, jsonBody, readResponse, result, single, size, unexpected } from "./acceptance-core.mjs";
 
 // Closed response schemas for the declared STORAGE-RULES requests. A schema names what a response *is*; whether that is
 // the response a step needs is the controller's decision. Kinds without a reviewed schema fail closed. This module
 // performs no I/O and holds no secret: download tokens and other bearer values never reach a fact.
-const nativeLength = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(Uint8Array.prototype), "length").get;
 const kindEntry = (implemented) => Object.freeze({ implemented });
-const IMPLEMENTED = ["subject-observed", "settle-read", "gcs-seed-upload", "gcs-delete", "gcs-metadata-read", "gcs-media-read"];
+const IMPLEMENTED = ["subject-observed", "settle-read", "gcs-seed-upload", "gcs-delete", "gcs-metadata-read", "gcs-media-read", "gcs-patch", "gcs-prefix-list", "firestore-read", "firestore-write", "firebase-create-token", "session-start", "session-command", "preflight-identity", "preflight-project", "preflight-key-metadata", "preflight-key-string", "preflight-permissions", "preflight-bucket-metadata", "preflight-bucket-iam", "preflight-bucket-permissions", "preflight-database", "preflight-project-iam", "rules-test", "rules-release-read", "rules-release-create", "rules-release-patch", "rules-release-delete", "rules-ruleset-create", "rules-ruleset-read", "rules-ruleset-delete", "rules-list-page"];
 const PENDING = [
-  "gcs-patch", "gcs-prefix-list", "firebase-create-token", "session-start", "session-command",
-  "firestore-read", "firestore-write",
-  "rules-test", "rules-release-read", "rules-release-create", "rules-release-patch", "rules-release-delete",
-  "rules-ruleset-create", "rules-ruleset-read", "rules-ruleset-delete", "rules-list-page",
-  "preflight-identity", "preflight-project", "preflight-key-metadata", "preflight-key-string", "preflight-permissions",
-  "preflight-bucket-metadata", "preflight-bucket-iam", "preflight-bucket-permissions", "preflight-database", "preflight-project-iam",
   "credential-cache", "auth",
 ];
 export const ACCEPTANCE_KINDS = Object.freeze(Object.fromEntries([...IMPLEMENTED.map((k) => [k, kindEntry(true)]), ...PENDING.map((k) => [k, kindEntry(false)])]));
@@ -27,7 +24,6 @@ const PREFLIGHT_KINDS = new Map([
   ["query/database", "preflight-database"], ["query/iam", "preflight-project-iam"],
 ]);
 const GCS_KINDS = { upload: "gcs-seed-upload", patch: "gcs-patch", delete: "gcs-delete", "get-metadata": "gcs-metadata-read", "get-media": "gcs-media-read", list: "gcs-prefix-list" };
-const bad = (message) => { throw new Error(message); };
 // Every family and its stages, as the full manifest declares them. A row outside this table has no kind.
 const STAGES = new Map(Object.entries({
   declared: /^(?:baseline|before|after|cleanup|setup|step|subject|comparison)$/,
@@ -79,51 +75,6 @@ export function acceptanceKindOf(row) {
   return fail();
 }
 
-function readResponse(value) {
-  const fail = () => bad("invalid acceptance response");
-  if (!value || typeof value !== "object" || Object.getPrototypeOf(value) !== Object.prototype) fail();
-  const keys = Reflect.ownKeys(value);
-  if (keys.length !== 3 || !["status", "rawHeaders", "bytes"].every((key) => keys.includes(key))) fail();
-  for (const key of keys) {
-    const field = Object.getOwnPropertyDescriptor(value, key);
-    if (!field?.enumerable || !Object.hasOwn(field, "value")) fail();
-  }
-  const { status, rawHeaders, bytes } = value;
-  if (!Number.isInteger(status) || status < 100 || status > 599) fail();
-  if (!Array.isArray(rawHeaders) || Object.getPrototypeOf(rawHeaders) !== Array.prototype || rawHeaders.length % 2 !== 0 || rawHeaders.length > 512) fail();
-  const headerKeys = Reflect.ownKeys(rawHeaders);
-  if (headerKeys.length !== rawHeaders.length + 1) fail();
-  for (const key of headerKeys) {
-    if (key === "length") continue;
-    const field = Object.getOwnPropertyDescriptor(rawHeaders, key);
-    if (typeof key !== "string" || !/^(?:0|[1-9]\d*)$/.test(key) || !field?.enumerable || !Object.hasOwn(field, "value") || typeof field.value !== "string") fail();
-  }
-  if (!Buffer.isBuffer(bytes) || Object.getPrototypeOf(bytes) !== Buffer.prototype) fail();
-  const size = nativeLength.call(bytes);
-  const headers = new Map();
-  for (let index = 0; index < rawHeaders.length; index += 2) {
-    const name = rawHeaders[index].toLowerCase();
-    headers.set(name, [...(headers.get(name) ?? []), rawHeaders[index + 1]]);
-  }
-  const copy = Buffer.alloc(size);
-  Uint8Array.prototype.set.call(copy, bytes);
-  return { status, headers, bytes: copy };
-}
-
-const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
-const single = (headers, name) => (headers.get(name)?.length === 1 ? headers.get(name)[0] : headers.has(name) ? null : undefined);
-function jsonBody(response) {
-  const type = single(response.headers, "content-type");
-  if (typeof type !== "string" || !/^application\/json(?:\s*;\s*charset=utf-8)?$/i.test(type.trim())) return undefined;
-  try { return JSON.parse(new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(response.bytes)); } catch { return undefined; }
-}
-const isObject = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
-const decimal = (value, max = 19) => typeof value === "string" && new RegExp(`^[1-9]\\d{0,${max - 1}}$`).test(value);
-const size = (value) => typeof value === "string" && /^(?:0|[1-9]\d{0,15})$/.test(value);
-const common = (response) => Object.freeze({ status: response.status, bodyBytes: response.bytes.length, bodySha256: digest(response.bytes) });
-const result = (kind, verdict, facts) => Object.freeze({ kind, verdict, facts: Object.freeze(facts) });
-const unexpected = (kind, response) => result(kind, "unexpected", common(response));
-
 function storageObject(body, bucket, name) {
   return isObject(body) && body.kind === "storage#object" && body.bucket === bucket && body.name === name && decimal(body.generation) && decimal(body.metageneration);
 }
@@ -138,6 +89,10 @@ function objectContext(row, prefix) {
 }
 
 const CLASSIFIERS = {
+  ...PREFLIGHT_CLASSIFIERS,
+  ...RULES_CLASSIFIERS,
+  ...FIRESTORE_CLASSIFIERS,
+  ...SESSION_CLASSIFIERS,
   "subject-observed": (row, response) => result("subject-observed", "observed", common(response)),
   "settle-read": (row, response, ctx) => {
     const body = response.status === 403 ? jsonBody(response) : undefined;
@@ -167,6 +122,20 @@ const CLASSIFIERS = {
     }
     if (gcsNotFound(response)) return result("gcs-metadata-read", "absent", { status: 404 });
     return unexpected("gcs-metadata-read", response);
+  },
+  "gcs-patch": (row, response) => {
+    const { bucket, name } = objectContext(row, "/storage/v1");
+    const body = jsonBody(response);
+    if (response.status === 200 && storageObject(body, bucket, name)) return result("gcs-patch", "accepted", { status: 200, generation: body.generation, metageneration: body.metageneration });
+    return unexpected("gcs-patch", response);
+  },
+  "gcs-prefix-list": (row, response) => {
+    const body = jsonBody(response);
+    const list = (value) => value === undefined || (Array.isArray(value) && value.length <= 1000);
+    if (response.status === 200 && isObject(body) && body.kind === "storage#objects" && list(body.items) && list(body.prefixes) && (body.items ?? []).every(isObject) && (body.prefixes ?? []).every((entry) => typeof entry === "string") && (body.nextPageToken === undefined || typeof body.nextPageToken === "string")) {
+      return result("gcs-prefix-list", "accepted", { status: 200, itemCount: (body.items ?? []).length, prefixCount: (body.prefixes ?? []).length, hasNextPage: body.nextPageToken !== undefined });
+    }
+    return unexpected("gcs-prefix-list", response);
   },
   "gcs-media-read": (row, response) => {
     objectContext(row, "/storage/v1");

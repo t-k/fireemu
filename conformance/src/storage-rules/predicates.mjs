@@ -68,7 +68,7 @@ export const REQUIRES_REGISTRY = Object.freeze({
   "private-key-string-matches-key-metadata-and-cached-secret": entry("input", ["input.key-match"]),
   "project-id-number-active-match": entry("input", ["input.project-match"]),
   "release-name-and-created-ruleset-match": entry("check", ["response.release-state"]),
-  "resource-started-and-provenance-matches": entry("guard", ["resource.started", "resource.provenance"]),
+  "resource-started-and-provenance-matches": entry("guard", ["resource.started", "resource.provenance"], "skip"),
   "restore-controls-retained-until-owner-readbacks": entry("guard", ["witness.retained"]),
   "restore-without-unowned-release-change": entry("guard", ["release.owned-current"]),
   "two-complete-all-denied-restore-cycles": entry("guard", ["restore.cycles"]),

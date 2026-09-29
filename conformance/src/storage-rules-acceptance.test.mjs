@@ -188,8 +188,10 @@ test("kinds without a reviewed response schema fail closed and are listed", asyn
   assert.ok(Array.isArray(listed) && Object.isFrozen(listed));
   for (const kind of listed) assert.equal(module.ACCEPTANCE_KINDS[kind].implemented, false);
   for (const kind of Object.keys(module.ACCEPTANCE_KINDS)) assert.equal(listed.includes(kind), !module.ACCEPTANCE_KINDS[kind].implemented);
-  const rulesRow = manifest.rows.find((r) => module.acceptanceKindOf(r) === "rules-test");
-  assert.throws(() => module.classifyResponse(rulesRow, json(200, {})), /acceptance kind not implemented/);
+  for (const kind of listed) {
+    const pending = manifest.rows.find((r) => module.acceptanceKindOf(r) === kind);
+    assert.throws(() => module.classifyResponse(pending, json(200, {})), /acceptance kind not implemented/, kind);
+  }
   for (const kind of ["subject-observed", "settle-read", "gcs-seed-upload", "gcs-delete", "gcs-metadata-read", "gcs-media-read"]) assert.equal(module.ACCEPTANCE_KINDS[kind].implemented, true);
 });
 

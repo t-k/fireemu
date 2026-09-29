@@ -15,6 +15,7 @@ const load = async () => {
   return module;
 };
 const SKIP_TOKENS = ["object-not-absent-per-latest-readback", "document-not-absent-per-latest-readback", "session-active-per-latest-query"];
+const STARTED_TOKEN = "resource-started-and-provenance-matches";
 
 test("the registry keys are exactly the tokens the manifest uses", async () => {
   const { REQUIRES_REGISTRY } = await load();
@@ -38,10 +39,10 @@ test("every entry has a closed category, a closed fact list and a stop-or-skip o
   assert.equal(new Set(PREDICATE_FACTS).size, PREDICATE_FACTS.length);
 });
 
-test("only the three explicit conditional-cleanup guards may skip a row", async () => {
+test("only the three explicit conditional-cleanup guards and the resource-started guard may skip a row", async () => {
   const { REQUIRES_REGISTRY } = await load();
-  assert.deepEqual(Object.entries(REQUIRES_REGISTRY).filter(([, e]) => e.onFalse === "skip").map(([t]) => t).sort(), [...SKIP_TOKENS].sort());
-  for (const token of SKIP_TOKENS) assert.equal(REQUIRES_REGISTRY[token].category, "guard");
+  assert.deepEqual(Object.entries(REQUIRES_REGISTRY).filter(([, e]) => e.onFalse === "skip").map(([t]) => t).sort(), [...SKIP_TOKENS, STARTED_TOKEN].sort());
+  for (const token of [...SKIP_TOKENS, STARTED_TOKEN]) assert.equal(REQUIRES_REGISTRY[token].category, "guard");
 });
 
 test("required-state and when values are closed sets equal to the manifest's", async () => {
@@ -85,5 +86,5 @@ test("a manifest with an unknown token, state or condition is refused", async ()
 
 test("the reviewed registry is pinned, so any change to a token, category, fact or outcome needs a deliberate update", async () => {
   const { REQUIRES_REGISTRY } = await load();
-  assert.equal(createHash("sha256").update(JSON.stringify(REQUIRES_REGISTRY)).digest("hex"), "bcc52f8a4a00a4c18d020485987e590dd0e2df6d5619319104c3013b83f8cdb8");
+  assert.equal(createHash("sha256").update(JSON.stringify(REQUIRES_REGISTRY)).digest("hex"), "4f015cbeae293f4fd58f44e7dd82a706283c3a58d0441263c1bf02d1ecdcb542");
 });

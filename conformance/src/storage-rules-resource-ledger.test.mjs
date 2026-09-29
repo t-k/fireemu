@@ -200,3 +200,133 @@ test("resumable-session control rows do not touch the object's record, but a fin
   l.recordIntent(finalize);
   assert.equal(l.object(name).started, true);
 });
+
+// Mutation-driven tests: each one pins a transition or a conjunct that the tests above left open.
+const seedAccepted = (generation = "1700000000000001") => ({ kind: "gcs-seed-upload", verdict: "accepted", facts: { status: 200, generation, metageneration: "1", size: "4" } });
+const objectOf = (l) => l.object(row(ids.seed).request.objectName);
+
+test("a DELETE counts as a delete even when its operation label says otherwise", async () => {
+  const l = await ledger();
+  const declared = row(ids.cleanupDelete);
+  const { operation, ...request } = declared.request;
+  assert.equal(operation, "delete");
+  const unlabelled = { ...declared, id: "crafted/unlabelled-delete", request };
+  l.recordIntent(unlabelled);
+  assert.equal(objectOf(l).deleteAttempted, true);
+  assert.throws(() => l.recordIntent(declared), /mutation already attempted/);
+});
+
+test("a read carrying the namespace token is the baseline read itself and may always go", async () => {
+  const l = await ledger();
+  const baseline = row("management/control-0/baseline-metadata");
+  assert.ok(baseline.requires.includes("owned-namespace-and-absence"));
+  assert.equal(l.evaluate(baseline).decision, "go");
+  assert.equal(l.evaluate(row("management/control-0/seed")).decision, "stop");
+});
+
+test("a media read proves the baseline as well as a metadata read", async () => {
+  const l = await ledger();
+  l.recordOutcome(row(`case/${caseId}/baseline/baseline-absence-media`), absent("gcs-media-read"));
+  assert.equal(l.evaluate(row(ids.seed)).decision, "go");
+  l.recordOutcome(row(`case/${caseId}/baseline/baseline-absence-media`), present("gcs-media-read"));
+  assert.equal(objectOf(l).latest, "present");
+});
+
+test("an object written without a proven-absent baseline is never owned, even after it is read absent", async () => {
+  const l = await ledger();
+  l.recordIntent(row(ids.seed));
+  l.recordOutcome(row(ids.seed), seedAccepted());
+  assert.equal(objectOf(l).owned, false);
+  l.recordOutcome(row(ids.cleanupAbsence), absent("gcs-metadata-read"));
+  assert.equal(objectOf(l).owned, false);
+});
+
+test("an object found present before the run touched it is foreign: never owned and always residual", async () => {
+  const l = await ledger();
+  const name = row(ids.seed).request.objectName;
+  l.recordOutcome(row(ids.baselineMetadata), absent("gcs-metadata-read"));
+  assert.equal(objectOf(l).owned, true);
+  l.recordOutcome(row(ids.baselineMetadata), present("gcs-metadata-read"));
+  assert.equal(objectOf(l).owned, false);
+  assert.ok(l.residual().includes(name));
+  l.recordOutcome(row(ids.baselineMetadata), absent("gcs-metadata-read"));
+  assert.equal(objectOf(l).owned, false);
+  assert.equal(l.evaluate(row(ids.seed)).decision, "stop");
+  const untouched = await ledger();
+  untouched.recordOutcome(row(ids.baselineMetadata), present("gcs-metadata-read"));
+  assert.equal(untouched.object(name).started, false);
+  assert.deepEqual([...untouched.residual()], [name]);
+});
+
+test("a seed answer that is not accepted is uncertain even when it carries a generation", async () => {
+  const l = await ledger();
+  l.recordOutcome(row(ids.baselineMetadata), absent("gcs-metadata-read"));
+  l.recordIntent(row(ids.seed));
+  l.recordOutcome(row(ids.seed), { kind: "gcs-seed-upload", verdict: "unexpected", facts: { status: 200, generation: "1700000000000001", metageneration: "1" } });
+  assert.equal(objectOf(l).owned, false);
+  assert.equal(objectOf(l).seedGeneration, null);
+});
+
+test("the seeded version is the first accepted one; a replayed seed answer does not move it", async () => {
+  const l = await ledger();
+  l.recordOutcome(row(ids.baselineMetadata), absent("gcs-metadata-read"));
+  l.recordIntent(row(ids.seed));
+  l.recordOutcome(row(ids.seed), seedAccepted("1700000000000001"));
+  l.recordOutcome(row(ids.seed), seedAccepted("1700000000000002"));
+  assert.equal(objectOf(l).generation, "1700000000000002");
+  assert.equal(objectOf(l).seedGeneration, "1700000000000001");
+});
+
+test("an unanswered or refused delete leaves the object undeletable even when it is read present again", async () => {
+  const l = await ledger();
+  l.recordOutcome(row(ids.baselineMetadata), absent("gcs-metadata-read"));
+  l.recordIntent(row(ids.seed));
+  assert.equal(objectOf(l).deletable, false, "a started seed whose answer is not in");
+  l.recordOutcome(row(ids.seed), seedAccepted());
+  l.recordOutcome(row(ids.cleanupMetadata), present("gcs-metadata-read"));
+  assert.equal(objectOf(l).deletable, true);
+  l.recordIntent(row(ids.cleanupDelete));
+  assert.equal(objectOf(l).deletable, false, "the delete's answer is not in");
+  l.recordOutcome(row(ids.cleanupDelete), { kind: "gcs-delete", verdict: "unexpected", facts: { status: 500, bodyBytes: 0, bodySha256: "0".repeat(64) } });
+  l.recordOutcome(row(ids.recoveryMetadata), present("gcs-metadata-read"));
+  assert.equal(objectOf(l).latest, "present");
+  assert.equal(objectOf(l).deletable, false);
+});
+
+test("a write history needs a started object, present now, with a known generation", async () => {
+  const seedMetadata = row(`case/${caseId}/setup/seed-metadata`);
+  assert.ok(seedMetadata.requires.includes("confirmed-write-history-and-current-version"));
+  const notStarted = await ledger();
+  notStarted.recordOutcome(row(ids.baselineMetadata), present("gcs-metadata-read"));
+  assert.equal(notStarted.evaluate(seedMetadata).decision, "stop", "present but never written by the run");
+  const notPresent = await ledger();
+  notPresent.recordOutcome(row(ids.baselineMetadata), absent("gcs-metadata-read"));
+  notPresent.recordIntent(row(ids.seed));
+  notPresent.recordOutcome(row(ids.seed), seedAccepted());
+  assert.equal(notPresent.evaluate(seedMetadata).decision, "go");
+  notPresent.recordOutcome(row(ids.cleanupMetadata), { kind: "gcs-metadata-read", verdict: "unexpected", facts: { status: 500, bodyBytes: 0, bodySha256: "0".repeat(64) } });
+  assert.deepEqual([objectOf(notPresent).latest, objectOf(notPresent).generation], ["unknown", "1700000000000001"]);
+  assert.equal(notPresent.evaluate(seedMetadata).decision, "stop", "the latest read is in doubt");
+  const noGeneration = await ledger();
+  noGeneration.recordOutcome(row(ids.baselineMetadata), absent("gcs-metadata-read"));
+  noGeneration.recordIntent(row(ids.seed));
+  noGeneration.recordOutcome(row(ids.cleanupMetadata), { kind: "gcs-metadata-read", verdict: "present", facts: { status: 200 } });
+  assert.deepEqual([objectOf(noGeneration).latest, objectOf(noGeneration).generation], ["present", null]);
+  assert.equal(noGeneration.evaluate(seedMetadata).decision, "stop", "present without a generation");
+});
+
+test("an uncertain create stays residual even after an absent read, since it may still land", async () => {
+  const l = await ledger();
+  const name = row(ids.seed).request.objectName;
+  l.recordOutcome(row(ids.baselineMetadata), absent("gcs-metadata-read"));
+  l.recordIntent(row(ids.seed));
+  l.recordOutcome(row(ids.seed), { uncertain: true });
+  l.recordOutcome(row(ids.cleanupAbsence), absent("gcs-metadata-read"));
+  assert.ok(l.residual().includes(name));
+  const certain = await ledger();
+  certain.recordOutcome(row(ids.baselineMetadata), absent("gcs-metadata-read"));
+  certain.recordIntent(row(ids.seed));
+  certain.recordOutcome(row(ids.seed), seedAccepted());
+  certain.recordOutcome(row(ids.cleanupAbsence), absent("gcs-metadata-read"));
+  assert.equal(certain.residual().includes(name), false);
+});

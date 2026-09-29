@@ -30,7 +30,7 @@ export function standardRows(closure, params, keyIds = PLACEHOLDER_KEYS) {
 
 /** The API key list request of one project: an exact URL, no query, no body. */
 export function keyListRequest(project, number) {
-  if (!["query", "idp"].includes(project) || !/^[1-9]\d{0,19}$/.test(number)) throw new Error("invalid key list request");
+  if (!["query", "idp"].includes(project) || typeof number !== "string" || !/^[1-9]\d{0,19}$/.test(number)) throw new Error("invalid key list request");
   return Object.freeze({ id: KEY_LIST_IDS[project], project: project === "query" ? QUERY_PROJECT : IDP_PROJECT, method: "GET", url: `https://apikeys.googleapis.com/v2/projects/${number}/locations/global/keys`, credential: "admin" });
 }
 

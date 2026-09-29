@@ -1,7 +1,7 @@
 import { EventEmitter } from "node:events";
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { ADC, API_KEYS, BUCKET, KEY_IDS, NUMBERS, OWNER_TOKEN, preflightAnswer } from "./storage-rules-runner-support.mjs";
+import { ADC, API_KEYS, BUCKET, KEY_IDS, NUMBERS, OWNER_TOKEN, preflightAnswer, privatePacket } from "./storage-rules-runner-support.mjs";
 import { prepCorpus } from "./storage-rules-prep/plan.mjs";
 import { prepCodeDigests } from "./storage-rules-prep/pins.mjs";
 
@@ -24,7 +24,9 @@ export function scratchCode(closureText) {
   return root;
 }
 
-export const keyListBody = (which, number, extra = {}) => ({ keys: [{ name: `projects/${number}/locations/global/keys/${KEY_IDS[which]}`, uid: `${which}-key-uid`, restrictions: { apiTargets: [{ service: "identitytoolkit.googleapis.com" }] } }], ...extra });
+// Key IDs unlike the placeholders the corpus uses for the key-string reads, so a read that used a placeholder would show.
+export const PREP_KEYS = Object.freeze({ query: "5b1c2d3e-4f50-4a6b-8c7d-9e0f1a2b3c4d", idp: "6c2d3e4f-5061-4b7c-9d8e-0f1a2b3c4d5e" });
+export const keyListBody = (which, number, extra = {}) => ({ keys: [{ name: `projects/${number}/locations/global/keys/${PREP_KEYS[which]}`, uid: `${which}-key-uid`, restrictions: { apiTargets: [{ service: "identitytoolkit.googleapis.com" }] } }], ...extra });
 
 /** What production answers for the thirteen reads when everything matches; `bad` replaces the body of one route by name. */
 export function prepAnswer(spec, bad = {}) {
@@ -42,6 +44,7 @@ export function prepAnswer(spec, bad = {}) {
 }
 
 /** A fake `https.request`: records each attempt and answers from `answer`. */
+export const createHttpsRequestDouble = fakeRequestImpl;
 export function fakeRequestImpl(answer, log) {
   return (url, options, callback) => {
     const request = new EventEmitter();
@@ -74,4 +77,5 @@ export function localInputs(adcPath) {
 }
 
 export const cleanup = (path) => rmSync(path, { recursive: true, force: true });
+export const prepInputsFor = (adcPath) => { const base = privatePacket(adcPath); return { ...base, projects: { query: { ...base.projects.query, apiKeyId: PREP_KEYS.query }, idp: { ...base.projects.idp, apiKeyId: PREP_KEYS.idp } } }; };
 export { ADC, chmodSync, prepCorpus, prepCodeDigests, mkdirSync, mkdtempSync, writeFileSync, join };

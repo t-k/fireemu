@@ -5,8 +5,8 @@ import { join } from "node:path";
 import test from "node:test";
 import { bindPrepEntry, prepPaths } from "./storage-rules-prep/prep-reads.mjs";
 import { loadPrivateInputs } from "./storage-rules/private-inputs.mjs";
-import { ADC, API_KEYS, KEY_IDS, NUMBERS, OWNER_TOKEN, SUBJECT, privatePacket } from "./storage-rules-runner-support.mjs";
-import { CODE_FILES, ENVELOPE_ID, PACKET_NAME, PIN_KEYS, SOURCE_COMMIT, cleanup, fakeRequestImpl, localInputs, prepAnswer, prepCodeDigests, prepCorpus, scratchCode } from "./storage-rules-prep-support.mjs";
+import { ADC, API_KEYS, NUMBERS, OWNER_TOKEN, SUBJECT } from "./storage-rules-runner-support.mjs";
+import { CODE_FILES, ENVELOPE_ID, PREP_KEYS, prepInputsFor, PACKET_NAME, PIN_KEYS, SOURCE_COMMIT, cleanup, fakeRequestImpl, localInputs, prepAnswer, prepCodeDigests, prepCorpus, scratchCode } from "./storage-rules-prep-support.mjs";
 
 // The stage 2a entry against a scratch main checkout and a fake wire: what it reads, takes and writes, and when it stops.
 const closureText = readFileSync(new URL("../../spec/compatibility/closure/STORAGE-RULES.json", import.meta.url), "utf8");
@@ -14,7 +14,8 @@ const closure = JSON.parse(closureText);
 const codeRoot = scratchCode(closureText);
 process.on("exit", () => cleanup(codeRoot));
 const digests = await prepCodeDigests(codeRoot);
-const params = { bucket: privatePacket("/x").bucket.name, queryProjectNumber: NUMBERS.query, idpProjectNumber: NUMBERS.idp, sourceCommit: SOURCE_COMMIT };
+const BUCKET_NAME = "fireemu-fixture-rules-bucket";
+const params = { bucket: BUCKET_NAME, queryProjectNumber: NUMBERS.query, idpProjectNumber: NUMBERS.idp, sourceCommit: SOURCE_COMMIT };
 const corpus = prepCorpus(closure, params);
 const packet = { taskId: "STORAGE-RULES", packetName: PACKET_NAME, packetSha256: "1".repeat(64), sourceCommit: SOURCE_COMMIT, runnerSha256: digests.runnerSha256, manifestSha256: corpus.sha256, fixtureSchemaSha256: digests.fixtureSchemaSha256, projects: ["fireemu-oracle-idp", "fireemu-oracle-query"], maxRequests: 13, reserveUsd: 0.01 };
 const review = { verdict: "APPROVE", must: [], should: [], ...Object.fromEntries(PIN_KEYS.map((key) => [key, packet[key]])), envelopeId: ENVELOPE_ID, withinEnvelope: true };
@@ -65,8 +66,8 @@ const EXPECTED_URLS = [
   ["GET", "https://www.googleapis.com/oauth2/v2/userinfo"],
   ["GET", `https://apikeys.googleapis.com/v2/projects/${NUMBERS.query}/locations/global/keys`],
   ["GET", `https://apikeys.googleapis.com/v2/projects/${NUMBERS.idp}/locations/global/keys`],
-  ["GET", `https://apikeys.googleapis.com/v2/projects/${NUMBERS.query}/locations/global/keys/${KEY_IDS.query}/keyString`],
-  ["GET", `https://apikeys.googleapis.com/v2/projects/${NUMBERS.idp}/locations/global/keys/${KEY_IDS.idp}/keyString`],
+  ["GET", `https://apikeys.googleapis.com/v2/projects/${NUMBERS.query}/locations/global/keys/${PREP_KEYS.query}/keyString`],
+  ["GET", `https://apikeys.googleapis.com/v2/projects/${NUMBERS.idp}/locations/global/keys/${PREP_KEYS.idp}/keyString`],
   ["GET", "https://storage.googleapis.com/storage/v1/b/fireemu-fixture-rules-bucket"],
   ["GET", "https://storage.googleapis.com/storage/v1/b/fireemu-fixture-rules-bucket/iam?optionsRequestedPolicyVersion=3"],
   ["GET", "https://firestore.googleapis.com/v1/projects/fireemu-oracle-query/databases/(default)"],
@@ -92,9 +93,9 @@ test("thirteen reads, in order, each once, yield exactly the stage 3 inputs, and
   assert.equal(f.wire[0].headers.authorization, undefined);
   assert.equal(f.wire.filter((entry) => entry.body !== null && entry.body.length > 0).length, 4);
   const inputs = JSON.parse(await readFile(result.inputsPath, "utf8"));
-  assert.deepEqual(inputs, privatePacket(f.adcPath));
+  assert.deepEqual(inputs, prepInputsFor(f.adcPath));
   // The produced file is a valid stage 3 private inputs file.
-  assert.equal((await loadPrivateInputs({ path: result.inputsPath })).projects.query.apiKeyId, KEY_IDS.query);
+  assert.equal((await loadPrivateInputs({ path: result.inputsPath })).projects.query.apiKeyId, PREP_KEYS.query);
   assert.equal((await stat(result.inputsPath)).mode & 0o777, 0o600);
   assert.equal((await stat(join(f.runs, `storage-rules-prep-${runId}`))).mode & 0o777, 0o700);
   assert.equal(await readFile(join(f.runs, "storage-rules-prep-usage.jsonl"), "utf8"), `${JSON.stringify({ packetSha256: packet.packetSha256, runId })}\n`);
@@ -117,18 +118,18 @@ test("the journals hold no secret: not the token, the key strings, the owner's a
 
 const STOPS = [
   ["identity address unverified", { identity: { id: SUBJECT, email: "owner@example.test", verified_email: false } }, 2],
-  ["query key list with two live keys", { "list-query": { keys: [{ name: `projects/${NUMBERS.query}/locations/global/keys/${KEY_IDS.query}`, uid: "a" }, { name: `projects/${NUMBERS.query}/locations/global/keys/${KEY_IDS.idp}`, uid: "b" }] } }, 3],
-  ["query key list with a next page", { "list-query": { keys: [{ name: `projects/${NUMBERS.query}/locations/global/keys/${KEY_IDS.query}`, uid: "a" }], nextPageToken: "next" } }, 3],
+  ["query key list with two live keys", { "list-query": { keys: [{ name: `projects/${NUMBERS.query}/locations/global/keys/${PREP_KEYS.query}`, uid: "a" }, { name: `projects/${NUMBERS.query}/locations/global/keys/${PREP_KEYS.idp}`, uid: "b" }] } }, 3],
+  ["query key list with a next page", { "list-query": { keys: [{ name: `projects/${NUMBERS.query}/locations/global/keys/${PREP_KEYS.query}`, uid: "a" }], nextPageToken: "next" } }, 3],
   ["query key list with no key", { "list-query": {} }, 3],
-  ["query key list that only holds a deleted key", { "list-query": { keys: [{ name: `projects/${NUMBERS.query}/locations/global/keys/${KEY_IDS.query}`, uid: "a", deleteTime: "2026-01-01T00:00:00Z" }] } }, 3],
+  ["query key list that only holds a deleted key", { "list-query": { keys: [{ name: `projects/${NUMBERS.query}/locations/global/keys/${PREP_KEYS.query}`, uid: "a", deleteTime: "2026-01-01T00:00:00Z" }] } }, 3],
   ["query key list that is not a list", { "list-query": { keys: "none" } }, 3],
-  ["query key of another project", { "list-query": { keys: [{ name: `projects/${NUMBERS.idp}/locations/global/keys/${KEY_IDS.query}`, uid: "a" }] } }, 3],
+  ["query key of another project", { "list-query": { keys: [{ name: `projects/${NUMBERS.idp}/locations/global/keys/${PREP_KEYS.query}`, uid: "a" }] } }, 3],
   ["query key name that is not a UUID", { "list-query": { keys: [{ name: `projects/${NUMBERS.query}/locations/global/keys/not-a-uuid`, uid: "a" }] } }, 3],
-  ["query key with a method restriction", { "list-query": { keys: [{ name: `projects/${NUMBERS.query}/locations/global/keys/${KEY_IDS.query}`, uid: "a", restrictions: { apiTargets: [{ service: "identitytoolkit.googleapis.com", methods: ["x"] }] } }] } }, 3],
-  ["query key with another restriction", { "list-query": { keys: [{ name: `projects/${NUMBERS.query}/locations/global/keys/${KEY_IDS.query}`, uid: "a", restrictions: { browserKeyRestrictions: { allowedReferrers: ["*"] } } }] } }, 3],
-  ["query key with a duplicated target", { "list-query": { keys: [{ name: `projects/${NUMBERS.query}/locations/global/keys/${KEY_IDS.query}`, uid: "a", restrictions: { apiTargets: [{ service: "a.googleapis.com" }, { service: "a.googleapis.com" }] } }] } }, 3],
-  ["idp key list with two live keys", { "list-idp": { keys: [{ name: `projects/${NUMBERS.idp}/locations/global/keys/${KEY_IDS.idp}`, uid: "a" }, { name: `projects/${NUMBERS.idp}/locations/global/keys/${KEY_IDS.query}`, uid: "b" }] } }, 4],
-  ["both projects report the same key ID", { "list-idp": { keys: [{ name: `projects/${NUMBERS.idp}/locations/global/keys/${KEY_IDS.query}`, uid: "b" }] } }, 4],
+  ["query key with a method restriction", { "list-query": { keys: [{ name: `projects/${NUMBERS.query}/locations/global/keys/${PREP_KEYS.query}`, uid: "a", restrictions: { apiTargets: [{ service: "identitytoolkit.googleapis.com", methods: ["x"] }] } }] } }, 3],
+  ["query key with another restriction", { "list-query": { keys: [{ name: `projects/${NUMBERS.query}/locations/global/keys/${PREP_KEYS.query}`, uid: "a", restrictions: { browserKeyRestrictions: { allowedReferrers: ["*"] } } }] } }, 3],
+  ["query key with a duplicated target", { "list-query": { keys: [{ name: `projects/${NUMBERS.query}/locations/global/keys/${PREP_KEYS.query}`, uid: "a", restrictions: { apiTargets: [{ service: "a.googleapis.com" }, { service: "a.googleapis.com" }] } }] } }, 3],
+  ["idp key list with two live keys", { "list-idp": { keys: [{ name: `projects/${NUMBERS.idp}/locations/global/keys/${PREP_KEYS.idp}`, uid: "a" }, { name: `projects/${NUMBERS.idp}/locations/global/keys/${PREP_KEYS.query}`, uid: "b" }] } }, 4],
+  ["both projects report the same key ID", { "list-idp": { keys: [{ name: `projects/${NUMBERS.idp}/locations/global/keys/${PREP_KEYS.query}`, uid: "b" }] } }, 4],
   ["query key string that is not the local one", { "keystring-query": { keyString: "Z".repeat(39) } }, 5],
   ["idp key string that is not the local one", { "keystring-idp": { keyString: "Z".repeat(39) } }, 6],
   ["a bucket of another project", { bucket: { kind: "storage#bucket", name: "fireemu-fixture-rules-bucket", projectNumber: "999999999999", location: "US-CENTRAL1" } }, 7],
@@ -149,7 +150,7 @@ test("an unexpected answer ends the run at that request, writes no inputs and ke
 
 test("a key list that answers with an error status, a non-JSON body or a broken key entry ends the run there", async (t) => {
   const raw = (status, text) => (spec) => (/\/keys$/.test(spec.url) && spec.url.includes(NUMBERS.query) ? { status, rawHeaders: ["Content-Type", "application/json"], bytes: Buffer.from(text) } : prepAnswer(spec));
-  for (const [status, text] of [[403, "{}"], [200, "not json"], [200, "[]"], [200, "null"], [200, JSON.stringify({ keys: [null] })], [200, JSON.stringify({ keys: [{ name: `projects/${NUMBERS.query}/locations/global/keys/${KEY_IDS.query}` }] })]]) {
+  for (const [status, text] of [[403, "{}"], [200, "not json"], [200, "[]"], [200, "null"], [200, JSON.stringify({ keys: [null] })], [200, JSON.stringify({ keys: [{ name: `projects/${NUMBERS.query}/locations/global/keys/${PREP_KEYS.query}` }] })]]) {
     const f = await checkout(t, { answer: raw(status, text) });
     await assert.rejects(f.entry(f.options), Error, `${status} ${text}`);
     assert.equal(f.wire.length, 3, `${status} ${text}`);
@@ -158,10 +159,131 @@ test("a key list that answers with an error status, a non-JSON body or a broken 
 
 test("a deleted key next to the one live key is ignored", async (t) => {
   const live = keyEntry("query");
-  const f = await checkout(t, { answer: answerWith({ "list-query": { keys: [{ name: `projects/${NUMBERS.query}/locations/global/keys/${KEY_IDS.idp}`, uid: "old", deleteTime: "2026-01-01T00:00:00Z" }, live] } }) });
+  const f = await checkout(t, { answer: answerWith({ "list-query": { keys: [{ name: `projects/${NUMBERS.query}/locations/global/keys/${PREP_KEYS.idp}`, uid: "old", deleteTime: "2026-01-01T00:00:00Z" }, live] } }) });
   const result = await f.entry(f.options);
   assert.equal(result.requests, 13);
 });
 function keyEntry(which) {
-  return { name: `projects/${NUMBERS[which]}/locations/global/keys/${KEY_IDS[which]}`, uid: `${which}-key-uid`, restrictions: { apiTargets: [{ service: "identitytoolkit.googleapis.com" }] } };
+  return { name: `projects/${NUMBERS[which]}/locations/global/keys/${PREP_KEYS[which]}`, uid: `${which}-key-uid`, restrictions: { apiTargets: [{ service: "identitytoolkit.googleapis.com" }] } };
 }
+
+test("the run is refused, before anything is created, unless the code, the schema, the corpus and the checkout reproduce the approval's pins", async (t) => {
+  const cases = [
+    ["runnerSha256", (f) => { f.options.packet.runnerSha256 = "0".repeat(64); }, /pin mismatch: runnerSha256/],
+    ["fixtureSchemaSha256", (f) => { f.options.packet.fixtureSchemaSha256 = "0".repeat(64); }, /pin mismatch: fixtureSchemaSha256/],
+    ["manifestSha256", (f) => { f.options.packet.manifestSha256 = "0".repeat(64); }, /pin mismatch: manifestSha256/],
+    ["runner digest not hex", (f) => { f.options.packet.runnerSha256 = "X".repeat(64); }, /invalid prep options/],
+    ["a digest with a suffix", (f) => { f.options.packet.manifestSha256 = `${f.options.packet.manifestSha256}0`; }, /invalid prep options/],
+    ["a digest that is not a string", (f) => { f.options.packet.fixtureSchemaSha256 = 5; }, /invalid prep options/],
+    ["the commit of the packet is another one", (f) => { f.options.packet.sourceCommit = "b".repeat(40); }, /invalid prep options/],
+  ];
+  for (const [name, change, message] of cases) {
+    const f = await checkout(t);
+    change(f);
+    await assert.rejects(f.entry(f.options), message, name);
+    assert.deepEqual(await readdir(f.runs), ["sandbox-locks"], name);
+    assert.deepEqual(await f.lockFiles(), [], name);
+    assert.equal(f.wire.length, 0, name);
+  }
+  const moved = await checkout(t, { gitHead: "b".repeat(40) });
+  await assert.rejects(moved.entry(moved.options), /source commit mismatch/);
+  const dirty = await checkout(t, { gitStatus: " M x\n" });
+  await assert.rejects(dirty.entry(dirty.options), /working tree not clean/);
+  for (const state of [moved, dirty]) { assert.deepEqual(await readdir(state.runs), ["sandbox-locks"]); assert.equal(state.wire.length, 0); }
+  // A private-inputs change that moves the corpus (another bucket name) is caught as a manifest mismatch.
+  const other = await checkout(t, { local: (adc) => ({ ...localInputs(adc), bucket: { name: "another-bucket-name" } }) });
+  await assert.rejects(other.entry(other.options), /pin mismatch: manifestSha256/);
+  assert.equal(other.wire.length, 0);
+});
+
+test("a revoked approval, a wrong bound, a missing envelope and a second recording are refused with nothing sent", async (t) => {
+  const revoked = await checkout(t, { ledgerText: `${ledger}\n- 2026-09-29 | STORAGE-RULES ${PACKET_NAME} | decision=REVOKED; packetSha256=${packet.packetSha256} | オーナー（ローカル試験） | private.md` });
+  await assert.rejects(revoked.entry(revoked.options), /approval revoked/);
+  const noEnvelope = await checkout(t, { ledgerText: ledger.split("\n").filter((line) => !line.includes("envelope |")).join("\n") });
+  await assert.rejects(noEnvelope.entry(noEnvelope.options), /preceding owner envelope required/);
+  const smallEnvelope = await checkout(t, { ledgerText: ledger.replace("maxRequests=13;", "maxRequests=12;") });
+  await assert.rejects(smallEnvelope.entry(smallEnvelope.options), /packet exceeds owner envelope/);
+  const cheapEnvelope = await checkout(t, { ledgerText: ledger.replace("reserveUsd=0.01;", "reserveUsd=0.005;") });
+  await assert.rejects(cheapEnvelope.entry(cheapEnvelope.options), /packet exceeds owner envelope/);
+  const stage3 = await checkout(t);
+  stage3.options.packet = { ...stage3.options.packet, maxRequests: 12344, reserveUsd: 2 };
+  stage3.options.review = { ...stage3.options.review };
+  await assert.rejects(stage3.entry(stage3.options), /runner limit mismatch/);
+  const projects = await checkout(t);
+  projects.options.packet.projects = ["fireemu-oracle-query"];
+  await assert.rejects(projects.entry(projects.options), /runner limit mismatch/);
+  for (const state of [revoked, noEnvelope, smallEnvelope, cheapEnvelope, stage3, projects]) { assert.equal(state.wire.length, 0); assert.deepEqual(await state.lockFiles(), []); }
+  // One recording per approval: a second run under the same packet is refused at its start.
+  const second = await checkout(t, { usage: ["first-prep-run"] });
+  await assert.rejects(second.entry(second.options), /recording budget exhausted/);
+  assert.equal(second.wire.length, 0);
+  assert.deepEqual(await second.lockFiles(), []);
+});
+
+test("a caller cannot name the ledger, the locks, the usage ledger, the run directory, the transport, the clock or the credentials", async (t) => {
+  const f = await checkout(t);
+  const overrides = { readLedger: async () => "", ledger: "/x", locks: {}, lockDir: "/x", usagePath: "/x", directory: "/x", transport: {}, clock, root: "/x", requestImpl() {}, adcPath: "/x", inputsPath: "/x", use() {} };
+  for (const [name, value] of Object.entries(overrides)) await assert.rejects(f.entry({ ...f.options, [name]: value }), /invalid prep options/, name);
+  for (const key of Object.keys(f.options)) { const { [key]: _, ...rest } = f.options; await assert.rejects(f.entry(rest), /invalid prep options/, key); }
+  for (const bad of ["Bad Id", "", 5, "a".repeat(49)]) await assert.rejects(f.entry({ ...f.options, runId: bad }), /invalid prep options/, String(bad));
+  assert.deepEqual(await readdir(f.runs), ["sandbox-locks"]);
+  assert.equal(f.wire.length, 0);
+});
+
+test("the operator's local inputs file is a private, closed, plain file", async (t) => {
+  const good = await checkout(t);
+  const write = async (f, value, mode = 0o600) => { await writeFile(f.localPath, typeof value === "string" ? value : JSON.stringify(value), { mode }); await chmod(f.localPath, mode); };
+  const base = (f) => localInputs(f.adcPath);
+  const cases = {
+    "wide mode": async (f) => write(f, base(f), 0o640),
+    "not json": async (f) => write(f, "not json"),
+    "extra key": async (f) => write(f, { ...base(f), extra: 1 }),
+    "wrong version": async (f) => write(f, { ...base(f), schemaVersion: 2 }),
+    "same numbers": async (f) => write(f, { ...base(f), projects: { query: { ...base(f).projects.query }, idp: { ...base(f).projects.idp, projectNumber: base(f).projects.query.projectNumber } } }),
+    "same keys": async (f) => write(f, { ...base(f), projects: { query: base(f).projects.query, idp: { ...base(f).projects.idp, apiKey: base(f).projects.query.apiKey } } }),
+    "bad number": async (f) => write(f, { ...base(f), projects: { query: { ...base(f).projects.query, projectNumber: "012" }, idp: base(f).projects.idp } }),
+    "short key": async (f) => write(f, { ...base(f), projects: { query: { ...base(f).projects.query, apiKey: "short" }, idp: base(f).projects.idp } }),
+    "relative adc": async (f) => write(f, { ...base(f), adcPath: "adc.json" }),
+    "bad bucket": async (f) => write(f, { ...base(f), bucket: { name: "A" } }),
+    "extra bucket key": async (f) => write(f, { ...base(f), bucket: { name: "some-bucket-name", extra: 1 } }),
+    "a link": async (f) => { await rm(f.localPath); await symlink(f.adcPath, f.localPath); },
+    "a directory": async (f) => { await rm(f.localPath); await mkdir(f.localPath); },
+    "missing": async (f) => rm(f.localPath),
+  };
+  void good;
+  for (const [name, change] of Object.entries(cases)) {
+    const f = await checkout(t);
+    await change(f);
+    await assert.rejects(f.entry(f.options), /local inputs file refused/, name);
+    assert.equal(f.wire.length, 0, name);
+    assert.deepEqual(await readdir(f.runs), ["sandbox-locks"], name);
+  }
+});
+
+test("the ledger and the runs and lock directories must be private and plain, as for the stage 3 entry", async (t) => {
+  const cases = {
+    "ledger group writable": async (f) => chmod(join(f.root, "docs.local", "instructions", "owner-decisions.md"), 0o664),
+    "ledger missing": async (f) => rm(join(f.root, "docs.local", "instructions", "owner-decisions.md")),
+    "lock dir shared": async (f) => chmod(join(f.runs, "sandbox-locks"), 0o750),
+    "runs dir shared": async (f) => chmod(f.runs, 0o755),
+    "run directory exists": async (f) => mkdir(join(f.runs, `storage-rules-prep-${runId}`), { mode: 0o700 }),
+    "legacy lock": async (f) => writeFile(join(f.runs, "sandbox-ledger.jsonl.lock"), "{}\n", { mode: 0o600 }),
+  };
+  for (const [name, change] of Object.entries(cases)) {
+    const f = await checkout(t);
+    await change(f);
+    let result = "ran";
+    try { await f.entry(f.options); } catch (error) { result = error.message; }
+    assert.notEqual(result, "ran", name);
+    assert.equal(f.wire.length, 0, name);
+  }
+});
+
+test("the binding is a closed record for a main checkout, the real request function, a clock and git", async (t) => {
+  const f = await checkout(t);
+  const good = { root: f.root, codeRoot, requestImpl() {}, clock, git: async () => "" };
+  assert.doesNotThrow(() => bindPrepEntry(good));
+  for (const bad of [null, {}, { ...good, extra: 1 }, { root: f.root, codeRoot, requestImpl() {}, clock }, { ...good, codeRoot: 5 }, { ...good, git: 5 }, { ...good, requestImpl: 5 }, { ...good, root: 5 }, { ...good, clock: { nowSeconds() {} } }, { ...good, root: join(f.root, "docs.local") }]) {
+    assert.throws(() => bindPrepEntry(bad), /invalid entry binding|entry root is not a main checkout|main repository root not found/);
+  }
+});

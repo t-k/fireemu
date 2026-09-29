@@ -293,6 +293,7 @@ def drop(table_, step_id, key):
     ("an embedded transaction with no token output", lambda t: edit(t, "rest/emb/batch-new", tokenOutput=None)),
     ("an embedded transaction inside a transaction", lambda t: edit(t, "rest/emb/batch-new", tokenInput="rest-ro")),
     ("an embedded transaction that reuses a token", lambda t: edit(t, "grpc/emb/batch-new", tokenOutput="rest-emb")),
+    ("an embedded transaction that reuses a token with the count kept", lambda t: {**edit(edit(t, "grpc/emb/batch-new", tokenOutput="rest-emb"), "grpc/emb/commit", tokenInput="rest-emb"), "maxTokens": 3}),
     ("a token output on a batch that begins nothing", lambda t: edit(t, "rest/batch-at-v1", tokenOutput="rest-x")),
 ])
 def test_a_malformed_read_time_or_embedded_transaction_never_compiles(label, change):

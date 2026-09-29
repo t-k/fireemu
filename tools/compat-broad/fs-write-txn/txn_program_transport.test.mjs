@@ -156,6 +156,7 @@ for (const transport of ['rest', 'grpc']) {
     validateCall(spec('BeginTransaction', { database, options: { readOnly: { readTime: at } } }, transport));
     for (const [method, request] of [
       ['GetDocument', { name: name('a'), readTime: at, transaction: token }], ['GetDocument', { name: name('a'), readTime: '2026-09-30T00:00:00Z' }], ['GetDocument', { name: name('a'), readTime: { seconds: 5, nanos: 0 } }],
+      ['BatchGetDocuments', { database, documents: [name('a')], readTime: '2026-09-30T00:00:00Z' }], ['BatchGetDocuments', { database, documents: [name('a')], readTime: { seconds: 5, nanos: 0 } }],
       ['BatchGetDocuments', { database, documents: [name('a')], readTime: at, transaction: token }], ['BatchGetDocuments', { database, documents: [name('a')], newTransaction: { readWrite: {} }, readTime: at }],
       ['BatchGetDocuments', { database, documents: [name('a')], newTransaction: { readWrite: {} }, transaction: token }], ['BatchGetDocuments', { database, documents: [name('a')], newTransaction: {} }],
       ['BatchGetDocuments', { database, documents: [name('a')], newTransaction: { readWrite: { retryTransaction: token } } }], ['BatchGetDocuments', { database, documents: [name('a')], newTransaction: { readOnly: {}, readWrite: {} } }],

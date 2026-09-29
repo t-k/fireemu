@@ -163,6 +163,7 @@ def _frame_a(state="v2", **extra):
     ("two bare heads", [{"transaction": "dG9rZW4="}, {"transaction": "dG9rZW4="}, _frame_a(), {"missing": "M"}], False),
     ("a head and too few documents", [{"transaction": "dG9rZW4="}, _frame_a()], False),
     ("a malformed transaction", [{"transaction": "not base64!"}, _frame_a(), {"missing": "M"}], False),
+    ("a transaction that was already issued", [{"transaction": "QUxSRUFEWQ=="}, _frame_a(), {"missing": "M"}], False),
 ])
 def test_the_batch_that_begins_a_transaction_hands_over_exactly_one_fresh_transaction(label, frames, ok):
     value = plan()
@@ -170,6 +171,7 @@ def test_the_batch_that_begins_a_transaction_hands_over_exactly_one_fresh_transa
     ledger.docs["a"].update(status="created", state="v2"); ledger.docs["m"].update(status="confirmed-absent")
     ledger.history["a"].extend(["created", "v1", "v2"])
     ledger.versions["a"] = [("created", (100, 1)), ("v1", (100, 2)), ("v2", (101, 0))]
+    ledger.tokens["earlier"] = {"value": "QUxSRUFEWQ==", "state": "committed", "transport": "rest", "start": timing(), "lastUse": timing()}
     names = value["documents"]
     frames = [{**frame, "missing": names["m"]} if frame.get("missing") == "M" else frame for frame in copy.deepcopy(frames)]
     step = next(step for step in value["steps"] if step["id"] == "grpc/emb/batch-new")

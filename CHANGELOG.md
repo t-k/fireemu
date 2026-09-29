@@ -13,6 +13,10 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 - Emulator profile without signers: a custom token's tenant claim is checked only where the official emulator checks it: never on a JSON fake token (`{"uid": …}`), and on an unsigned JWT only in a tenant, where the claim must name that tenant. A JSON token now signs in to the tenant the request names whatever its claim, and a JWT with a tenant claim exchanged in the project signs in to the project; both were refused with `TENANT_ID_MISMATCH` before, which the official emulator never does. This fixes the two known issues listed under 0.9.0. The strict profile, and the emulator profile with signers, keep production's rules.
 - Emulator profile: a tenant's `emailPrivacyConfig` reads back as the official emulator keeps it (firebase-tools 15.28.2): a create keeps none, and an update keeps what it writes, `false` included, while a masked member the body lacks changes nothing. The tenant's privacy behaviour still reads the project's. Before, the document showed the project's value. This fixes the known issue listed under 0.9.0. The strict profile keeps production's answer.
 
+### Fixed
+
+- The npm launcher registers its SIGTERM and SIGINT handlers before it starts the daemon. A signal that reached it in the instant between the two could kill the launcher and leave the daemon running.
+
 ## [0.9.0] - 2026-09-29
 
 Auth tenants and blocking functions (AUTH-TENANT-BLOCKING) were measured against a real Identity Platform project on 2026-09-27 and 2026-09-28; the items that cite a sandbox recording without naming another parent come from those runs. Each item names the profiles it affects.

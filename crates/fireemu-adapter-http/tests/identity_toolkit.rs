@@ -21812,6 +21812,34 @@ fn the_emulator_profile_checks_a_custom_token_tenant_claim_only_where_the_offici
     }
 }
 
+/// Strict without signers, where every custom token is refused: an unsigned token naming a
+/// tenant other than its claim, a JSON one included, is still refused at the store selection
+/// with `TENANT_ID_MISMATCH`, before the handler; only the emulator profile leaves a JSON
+/// token's claim unchecked there.
+#[test]
+fn strict_without_signers_refuses_a_mismatched_custom_token_at_the_store_selection() {
+    use fireemu_adapter_http::identity_toolkit::CUSTOM_TOKEN_AUDIENCE;
+    let s = with_registry(strict_state());
+    enable_tenants(&s);
+    s.registry
+        .as_ref()
+        .unwrap()
+        .ensure_tenant("demo-app", "tenant-a")
+        .unwrap();
+    for token in [
+        json!({"uid": "json"}).to_string(),
+        custom_token_from_payload(&json!({"aud": CUSTOM_TOKEN_AUDIENCE, "uid": "jwt"})),
+    ] {
+        let (status, body) = post(
+            &s,
+            &format!("{V1}/accounts:signInWithCustomToken"),
+            &json!({"token": token, "tenantId": "tenant-a"}),
+        );
+        assert_eq!(status, 400, "{token}: {body}");
+        assert_eq!(body["error"]["message"], "TENANT_ID_MISMATCH", "{token}");
+    }
+}
+
 /// A verified custom token's tenant claim under strict, as production answers it
 /// (AUTH-TENANT-BLOCKING sandbox recording 2026-09-27, custom-token program).
 #[test]

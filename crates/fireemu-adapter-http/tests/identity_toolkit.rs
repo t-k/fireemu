@@ -4977,8 +4977,9 @@ fn oidc_provider_config_crud_is_namespaced_and_refusals_do_not_mutate() {
             &json!({})
         )
         .status,
-        // The official emulator makes the tenant on the way and lists its (no) configs.
-        200
+        // The official emulator stubs the tenant IdP-config routes (501) and makes no tenant on
+        // them; Fireemu serves them as an extension, and a tenant that does not exist is refused.
+        404
     );
 }
 

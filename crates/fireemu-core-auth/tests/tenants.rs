@@ -639,3 +639,67 @@ fn a_tenant_capture_waits_for_the_project_operation_gate() {
     assert!(receiver.recv_timeout(Duration::from_secs(5)).unwrap());
     worker.join().unwrap();
 }
+
+/// `ensure_tenant_with` sets a store it creates up before the store is published, so a request
+/// never sees the tenant without it, and does not touch a tenant that exists.
+#[test]
+fn ensure_tenant_with_initialises_the_new_store_before_it_is_published() {
+    let parent = Arc::new(Mutex::new(store("demo-app", 1)));
+    let registry = AuthRegistry::new("demo-app", parent);
+    let mut ran = 0;
+    let created = registry.ensure_tenant_with("demo-app", "fresh", |tenant_store| {
+        ran += 1;
+        // Nothing can see the tenant yet.
+        assert!(registry.tenant_store("demo-app", "fresh").is_none());
+        assert!(registry.tenants("demo-app").is_empty());
+        tenant_store.set_mfa_config(fireemu_core_auth::mfa_config::MfaProjectConfig {
+            state: fireemu_core_auth::mfa_config::MfaConfigState::Enabled,
+            phone_sms: true,
+            totp: None,
+        });
+    });
+    let created = created.expect("the tenant is made");
+    assert_eq!(ran, 1);
+    assert!(created.lock().unwrap().mfa_config().phone_sms);
+    assert_eq!(registry.tenants("demo-app"), ["fresh"]);
+    // An existing tenant is returned as it is, and the initialiser does not run.
+    let again = registry
+        .ensure_tenant_with("demo-app", "fresh", |_| ran += 1)
+        .expect("the tenant exists");
+    assert_eq!(ran, 1);
+    assert!(Arc::ptr_eq(&created, &again));
+    // A name that cannot be a tenant, or a project that is not served, makes nothing.
+    assert!(registry
+        .ensure_tenant_with("demo-app", "", |_| ran += 1)
+        .is_none());
+    assert!(registry
+        .ensure_tenant_with("demo-app", "a/b", |_| ran += 1)
+        .is_none());
+    assert!(registry
+        .ensure_tenant_with("nowhere", "x", |_| ran += 1)
+        .is_none());
+    assert_eq!(ran, 1);
+}
+
+/// What a refresh token says about its tenant: whether it decodes, and the tenant it names.
+#[test]
+fn a_refresh_token_says_whether_it_decodes_and_which_tenant_it_names() {
+    let decode = AuthRegistry::decode_refresh_token_tenant;
+    assert_eq!(decode("rt1.8.0.demo-app.entropy"), Some(None));
+    assert_eq!(
+        decode("rt1.8.8.demo-apptenant-x.entropy"),
+        Some(Some("tenant-x".to_owned()))
+    );
+    for undecodable in [
+        "",
+        "garbage",
+        "rt1.",
+        "rt1.8.0.demo-app.",
+        "rt1.8.0.demo-app",
+        "rt1.8.x.demo-app.entropy",
+        "rt2.8.0.demo-app.entropy",
+        "rt1.8.3.demo-appa/b.entropy",
+    ] {
+        assert_eq!(decode(undecodable), None, "{undecodable:?}");
+    }
+}

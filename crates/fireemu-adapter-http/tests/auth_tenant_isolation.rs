@@ -2017,7 +2017,8 @@ fn deleting_a_tenant_invalidates_its_credentials_and_leaves_the_sibling_and_proj
         for (selector, lookup_status, lookup_class, refresh_status, refresh_class) in [
             // A request naming the tenant in its body makes it on the way (the official
             // emulator's `getProjectStateById`), so its refresh finds an empty tenant and no such
-            // token; a tenant named only in the query is not read as a target, and stays refused.
+            // token. A tenant named only in the query is not read as a target, but the refresh
+            // token names the tenant, which is the fourth source of the target and is made too.
             (
                 Selector::KeyAndBody,
                 400,
@@ -2036,8 +2037,8 @@ fn deleting_a_tenant_invalidates_its_credentials_and_leaves_the_sibling_and_proj
                 Selector::QueryOnly,
                 400,
                 "USER_NOT_FOUND",
-                404,
-                "TENANT_NOT_FOUND",
+                400,
+                "INVALID_REFRESH_TOKEN",
             ),
         ]
         .into_iter()

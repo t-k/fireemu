@@ -7745,6 +7745,18 @@ impl AuthRegistry {
 
     /// Returns a tenant store, creating its isolated namespace on first use.
     pub fn ensure_tenant(&self, project: &str, tenant: &str) -> Option<Arc<Mutex<AuthStore>>> {
+        self.ensure_tenant_with(project, tenant, |_| {})
+    }
+
+    /// Returns a tenant store, creating its isolated namespace on first use. `init` sets up a
+    /// store that is created here before it is published, under the project's gate, so no request
+    /// sees the tenant without it; it does not run for a tenant that already exists.
+    pub fn ensure_tenant_with(
+        &self,
+        project: &str,
+        tenant: &str,
+        init: impl FnOnce(&mut AuthStore),
+    ) -> Option<Arc<Mutex<AuthStore>>> {
         if tenant.is_empty() || tenant.contains(['/', '\\']) {
             return None;
         }
@@ -7761,6 +7773,7 @@ impl AuthRegistry {
             return Some(store);
         }
         let store = self.build_tenant_store(project, tenant, parent)?;
+        init(&mut *store.lock().ok()?);
         let mut tenant_metadata = TenantMetadata {
             allow_password_signup: true,
             enable_email_link_signin: true,
@@ -8778,6 +8791,14 @@ impl AuthRegistry {
     pub fn refresh_token_tenant(token: &str) -> Option<(String, String)> {
         let (project, tenant) = refresh_token_namespace(token)?;
         Some((project.to_owned(), tenant?.to_owned()))
+    }
+
+    /// What a refresh token this version issued says about its tenant: `None` when the token does
+    /// not decode, `Some(None)` when it names no tenant, and `Some(Some(tenant))` otherwise.
+    #[must_use]
+    pub fn decode_refresh_token_tenant(token: &str) -> Option<Option<String>> {
+        let (_, tenant) = refresh_token_namespace(token)?;
+        Some(tenant.map(str::to_owned))
     }
 
     /// The session epochs `tenant` of `project` had when it was deleted, if it was.

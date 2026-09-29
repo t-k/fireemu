@@ -5,7 +5,7 @@
 //! emulator profile does the same. The strict profile refuses and creates nothing, as production
 //! does.
 
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 
 use fireemu_adapter_http::identity_toolkit::{
     handle, handle_with, AuthQueryLimits, AuthState, ClientApiKeyPolicy, FakeCustomTokenExpiry,
@@ -15,6 +15,7 @@ use fireemu_core_auth::jwt::decode_unsigned;
 use fireemu_core_auth::mfa::TotpPolicy;
 use fireemu_core_auth::store::{AuthRegistry, AuthStore};
 use fireemu_core_session::clock::VirtualClock;
+use fireemu_core_session::tenancy::Tenancy;
 use fireemu_core_types::determinism::SplitMix64;
 use fireemu_core_types::time::LogicalInstant;
 use serde_json::{json, Value};
@@ -22,6 +23,7 @@ use serde_json::{json, Value};
 const V1: &str = "/identitytoolkit.googleapis.com/v1";
 const V2: &str = "/identitytoolkit.googleapis.com/v2";
 const KEY: &str = "fake-api-key";
+const SECURE_TOKEN: &str = "/securetoken.googleapis.com/v1/token";
 fn emulator_state() -> AuthState {
     AuthState {
         store: Arc::new(Mutex::new(AuthStore::new(
@@ -345,7 +347,8 @@ fn a_request_with_a_token_of_a_deleted_tenant_finds_no_user_and_the_tenant_exist
 #[test]
 fn what_names_no_servable_tenant_creates_nothing() {
     let (state, registry) = emulator();
-    // A path tenant and a body tenant that differ, an empty name, a name that is not a string,
+    // A path tenant and a body tenant that differ, an empty name, a name that is a boolean, an
+    // object or an array (a number is read as its string, `a_numeric_tenant_id_names_its_string`),
     // and a route that does not exist.
     let attempts: Vec<(&str, String, &str, Value)> = vec![
         (
@@ -361,10 +364,22 @@ fn what_names_no_servable_tenant_creates_nothing() {
             json!({"tenantId": "", "idToken": "x"}),
         ),
         (
-            "not a string",
+            "a boolean",
             format!("{V1}/accounts:lookup?key={KEY}"),
             "POST",
-            json!({"tenantId": 7, "idToken": "x"}),
+            json!({"tenantId": true, "idToken": "x"}),
+        ),
+        (
+            "an object",
+            format!("{V1}/accounts:lookup?key={KEY}"),
+            "POST",
+            json!({"tenantId": {"name": "one"}, "idToken": "x"}),
+        ),
+        (
+            "an array",
+            format!("{V1}/accounts:lookup?key={KEY}"),
+            "POST",
+            json!({"tenantId": ["one"], "idToken": "x"}),
         ),
         (
             "unknown route",
@@ -378,16 +393,10 @@ fn what_names_no_servable_tenant_creates_nothing() {
             "POST",
             json!({"tenantId": "four"}),
         ),
-        (
-            "slash",
-            format!("{V1}/accounts:lookup?key={KEY}"),
-            "POST",
-            json!({"tenantId": "a/b", "idToken": "x"}),
-        ),
     ];
     for (case, path, method, body) in attempts {
         let _ = handle_with(&state, method, &path, &owner(), &body);
-        for tenant in ["one", "two", "three", "four", "a/b"] {
+        for tenant in ["one", "two", "three", "four"] {
             assert!(
                 registry.tenant_store("demo-app", tenant).is_none(),
                 "{case}: {tenant}"
@@ -549,4 +558,273 @@ fn the_tenant_made_on_the_way_carries_the_default_mfa_config_in_its_store() {
         *store.lock().unwrap().mfa_config(),
         fireemu_core_auth::mfa_config::MfaProjectConfig::default()
     );
+}
+
+fn no_tenant(registry: &AuthRegistry, projects: &[&str], tenants: &[&str], case: &str) {
+    for project in projects {
+        for tenant in tenants {
+            assert!(
+                registry.tenant_store(project, tenant).is_none(),
+                "{case}: {project}/{tenant}"
+            );
+        }
+    }
+}
+
+/// Only a request this daemon would serve makes a tenant: one that a guard refuses gets the
+/// refusal, and nothing is made. The official emulator answers an unauthorised request before it
+/// looks a tenant up.
+#[test]
+fn a_request_a_guard_refuses_makes_no_tenant() {
+    let (mut state, registry) = emulator();
+    state.control_token = Some("control-token".to_owned());
+    let tenants = ["guarded"];
+    let garbage = RequestHeaders {
+        authorization: Some("Bearer garbage".to_owned()),
+        ..owner()
+    };
+    // An Admin route with a credential that is not the owner's, on every tenant-scoped shape.
+    for (method, path) in [
+        ("GET", format!("{V2}/projects/demo-app/tenants/guarded")),
+        ("DELETE", format!("{V2}/projects/demo-app/tenants/guarded")),
+        (
+            "POST",
+            format!("{V1}/projects/demo-app/tenants/guarded/accounts"),
+        ),
+        (
+            "GET",
+            format!("{V1}/projects/demo-app/tenants/guarded/accounts:batchGet"),
+        ),
+        (
+            "GET",
+            format!("{V1}/projects/demo-app/accounts:batchGet?tenantId=guarded"),
+        ),
+    ] {
+        let r = handle_with(&state, method, &path, &garbage, &json!({}));
+        assert_eq!(r.status, 401, "{method} {path}: {}", r.body);
+        no_tenant(
+            &registry,
+            &["demo-app"],
+            &tenants,
+            &format!("{method} {path}"),
+        );
+    }
+    // An emulator route from a local page without the control token.
+    let browser = RequestHeaders {
+        origin: Some("http://localhost:3000".to_owned()),
+        authorization: None,
+        ..owner()
+    };
+    let r = handle_with(
+        &state,
+        "GET",
+        "/emulator/v1/projects/demo-app/tenants/guarded/oobCodes",
+        &browser,
+        &json!({}),
+    );
+    assert_eq!(r.status, 403, "{}", r.body);
+    no_tenant(
+        &registry,
+        &["demo-app"],
+        &tenants,
+        "browser without the token",
+    );
+    // The same request with the token, and an owner credential on the Admin route, is served and
+    // makes the tenant.
+    let with_token = RequestHeaders {
+        authorization: Some("Bearer control-token".to_owned()),
+        ..browser
+    };
+    let r = handle_with(
+        &state,
+        "GET",
+        "/emulator/v1/projects/demo-app/tenants/guarded/oobCodes",
+        &with_token,
+        &json!({}),
+    );
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert!(registry.tenant_store("demo-app", "guarded").is_some());
+    // A project the daemon does not serve makes nothing, in it or in the default project.
+    let r = handle_with(
+        &state,
+        "GET",
+        "/emulator/v1/projects/other-app/tenants/elsewhere/oobCodes",
+        &with_token,
+        &json!({}),
+    );
+    assert_eq!(r.status, 404, "{}", r.body);
+    no_tenant(
+        &registry,
+        &["demo-app", "other-app"],
+        &["elsewhere"],
+        "wrong project",
+    );
+}
+
+/// A key no project owns is refused, and the tenant its body names is made in no project: the
+/// default project's namespace is not written on behalf of a caller that belongs to none.
+#[test]
+fn an_unknown_api_key_makes_no_tenant_in_any_project() {
+    let (mut state, registry) = emulator();
+    let alpha = AuthStore::new("worker-alpha", SplitMix64::new(11), TotpPolicy::default());
+    assert!(registry.register_session("worker-alpha", alpha));
+    let mut tenancy = Tenancy::new("demo-app");
+    tenancy
+        .register("worker-alpha", &[], &["alpha-key".to_owned()])
+        .unwrap();
+    state.tenancy = Some(Arc::new(RwLock::new(tenancy)));
+    let r = handle(
+        &state,
+        "POST",
+        "/identitytoolkit.googleapis.com/v1/accounts:signUp?key=unknown-key",
+        &json!({"email": "a@example.com", "password": "hunter22", "tenantId": "stray"}),
+    );
+    assert_eq!(r.status, 400, "{}", r.body);
+    assert_eq!(
+        r.body["error"]["details"][0]["reason"], "API_KEY_INVALID",
+        "{}",
+        r.body
+    );
+    no_tenant(
+        &registry,
+        &["demo-app", "worker-alpha"],
+        &["stray"],
+        "unknown key",
+    );
+    // The project's own key is served: the tenant is made in its project.
+    let r = handle(
+        &state,
+        "POST",
+        "/identitytoolkit.googleapis.com/v1/accounts:signUp?key=alpha-key",
+        &json!({"email": "a@example.com", "password": "hunter22", "tenantId": "owned"}),
+    );
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert!(registry.tenant_store("worker-alpha", "owned").is_some());
+    assert!(registry.tenant_store("demo-app", "owned").is_none());
+}
+
+/// The refresh token is the fourth place a target tenant comes from, and it is decoded before the
+/// tenant is looked up (`server.js` `toExegesisOperation`).
+#[test]
+fn the_tenant_of_a_refresh_token_is_read_and_checked_before_a_tenant_is_made() {
+    let (state, registry) = emulator();
+    let sign_up = |tenant: &str| {
+        let (status, created) = client(
+            &state,
+            &format!("{V1}/accounts:signUp"),
+            &json!({"email": "a@example.com", "password": "hunter22", "tenantId": tenant}),
+        );
+        assert_eq!(status, 200, "{created}");
+        created["refreshToken"].as_str().unwrap().to_owned()
+    };
+    let refresh = |body: Value| {
+        let mut body = body;
+        body["grant_type"] = json!("refresh_token");
+        let r = handle(&state, "POST", &format!("{SECURE_TOKEN}?key={KEY}"), &body);
+        (
+            r.status,
+            r.body["error"]["message"].as_str().unwrap_or("").to_owned(),
+        )
+    };
+    let token_a = sign_up("tenant-a");
+    // A body tenant with a refresh token that does not decode: INVALID_REFRESH_TOKEN, nothing made.
+    let (status, message) = refresh(json!({"refresh_token": "garbage", "tenantId": "tenant-b"}));
+    assert_eq!((status, message.as_str()), (400, "INVALID_REFRESH_TOKEN"));
+    no_tenant(&registry, &["demo-app"], &["tenant-b"], "undecodable token");
+    // A token of tenant A with a body tenant B that does not exist: a mismatch, nothing made.
+    let (status, message) = refresh(json!({"refresh_token": token_a, "tenantId": "tenant-b"}));
+    assert_eq!(status, 400);
+    assert_eq!(
+        message,
+        "TENANT_ID_MISMATCH: ((Refresh token tenant ID does not match target tenant ID.))"
+    );
+    no_tenant(&registry, &["demo-app"], &["tenant-b"], "mismatched token");
+    // The token's own tenant, deleted, is the target when nothing else names one: it is made, and
+    // the token is not one of its sessions.
+    assert!(registry.delete_tenant("demo-app", "tenant-a"));
+    let (status, message) = refresh(json!({"refresh_token": token_a}));
+    assert_eq!((status, message.as_str()), (400, "INVALID_REFRESH_TOKEN"));
+    assert!(registry.tenant_store("demo-app", "tenant-a").is_some());
+}
+
+/// The action link reads its tenant from the query, and makes it; without the parameters the
+/// official handler refuses first, and makes nothing.
+#[test]
+fn an_action_link_naming_a_tenant_makes_it() {
+    let (state, registry) = emulator();
+    let link = |query: &str| {
+        handle_with(
+            &state,
+            "GET",
+            &format!("/emulator/action?{query}"),
+            &owner(),
+            &json!({}),
+        )
+    };
+    let _ = link(&format!("mode=verifyEmail&oobCode=nope&tenantId=t-link"));
+    assert!(registry.tenant_store("demo-app", "t-link").is_none());
+    let _ = link(&format!(
+        "mode=verifyEmail&oobCode=nope&apiKey={KEY}&tenantId=t-link"
+    ));
+    assert!(registry.tenant_store("demo-app", "t-link").is_some());
+    let _ = link(&format!("mode=verifyEmail&apiKey={KEY}&tenantId=t-no-code"));
+    assert!(registry.tenant_store("demo-app", "t-no-code").is_none());
+}
+
+/// The tenant IdP-config routes are stubs in the official emulator (`501`, no tenant), so a
+/// missing tenant is refused as before and not made.
+#[test]
+fn the_tenant_idp_config_routes_make_no_tenant() {
+    let (state, registry) = emulator();
+    for collection in [
+        "oauthIdpConfigs",
+        "inboundSamlConfigs",
+        "defaultSupportedIdpConfigs",
+    ] {
+        let (status, refused) = admin(
+            &state,
+            "GET",
+            &format!("{V2}/projects/demo-app/tenants/no-idp/{collection}"),
+            &json!({}),
+        );
+        assert_eq!(status, 404, "{collection}: {refused}");
+    }
+    no_tenant(&registry, &["demo-app"], &["no-idp"], "idp configs");
+}
+
+/// A number in the string-typed `tenantId` is read as its string (the official body validation
+/// converts it), so the tenant `"7"` is made and the request runs in it.
+#[test]
+fn a_numeric_tenant_id_names_its_string() {
+    let (state, registry) = emulator();
+    let (status, created) = client(
+        &state,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"email": "a@example.com", "password": "hunter22", "tenantId": 7}),
+    );
+    assert_eq!(status, 200, "{created}");
+    assert_eq!(
+        claims(created["idToken"].as_str().unwrap())["firebase"]["tenant"],
+        "7"
+    );
+    assert!(registry.tenant_store("demo-app", "7").is_some());
+    assert_eq!(tenant_names(&state, "demo-app"), ["7"]);
+}
+
+/// A tenant name with a slash is a divergence: the official emulator makes it, and Fireemu keeps
+/// a tenant id out of a resource path's separators. It is refused as an unknown tenant, `TENANT_NOT_FOUND`.
+#[test]
+fn a_tenant_name_with_a_slash_makes_no_tenant() {
+    let (state, registry) = emulator();
+    for name in ["a/b", "a\\b"] {
+        let (status, refused) = client(
+            &state,
+            &format!("{V1}/accounts:lookup"),
+            &json!({"tenantId": name, "idToken": "x"}),
+        );
+        assert_eq!(status, 404, "{name}: {refused}");
+        assert_eq!(refused["error"]["message"], "TENANT_NOT_FOUND", "{name}");
+        no_tenant(&registry, &["demo-app"], &[name], name);
+    }
+    assert_eq!(tenant_names(&state, "demo-app"), Vec::<String>::new());
 }

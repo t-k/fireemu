@@ -114,6 +114,41 @@ fn sign_up_body(email: &str) -> Value {
 }
 
 // ------------------------------------------------------------------------------------------
+// A denied request makes no tenant on the way (the emulator profile makes one a request names)
+// ------------------------------------------------------------------------------------------
+
+#[test]
+fn an_enforced_request_naming_a_missing_tenant_makes_no_tenant_when_denied() {
+    let mut h = harness(BaselineMode::Enforced);
+    let registry = Arc::new(fireemu_core_auth::store::AuthRegistry::new(
+        "demo-app",
+        h.auth.store.clone(),
+    ));
+    Arc::get_mut(&mut h.auth)
+        .expect("the harness is the sole AuthState owner")
+        .registry = Some(registry.clone());
+    let denied = h.post(
+        &format!("{V1}/accounts:signUp"),
+        &json!({"email": "a@example.com", "password": "hunter22", "tenantId": "denied-tenant"}),
+        &[],
+    );
+    assert_eq!(denied.status, 403, "{}", denied.body);
+    assert!(
+        registry.tenant_store("demo-app", "denied-tenant").is_none(),
+        "a denied request leaves no tenant behind"
+    );
+    let admitted = h.post(
+        &format!("{V1}/accounts:signUp"),
+        &json!({"email": "a@example.com", "password": "hunter22", "tenantId": "admitted-tenant"}),
+        &[&h.valid_token()],
+    );
+    assert_eq!(admitted.status, 200, "{}", admitted.body);
+    assert!(registry
+        .tenant_store("demo-app", "admitted-tenant")
+        .is_some());
+}
+
+// ------------------------------------------------------------------------------------------
 // Scenario 1: an enforced sign-up without App Check creates no user
 // ------------------------------------------------------------------------------------------
 

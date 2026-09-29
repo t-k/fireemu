@@ -1,0 +1,241 @@
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import test from "node:test";
+import { buildCorpus } from "./storage-rules/corpus.mjs";
+import { buildFullRequestManifest } from "./storage-rules/full-manifest.mjs";
+import { createTargetBuilder } from "./storage-rules/target.mjs";
+
+const closure = JSON.parse(readFileSync(new URL("../../spec/compatibility/closure/STORAGE-RULES.json", import.meta.url)));
+const options = { runId: "local-run", sourceCommit: "a".repeat(40), queryProjectNumber: "1".repeat(12), idpProjectNumber: "2".repeat(12), queryApiKeyId: "00000000-0000-4000-8000-000000000001", idpApiKeyId: "00000000-0000-4000-8000-000000000002" };
+const binding = { bucket: "synthetic-rules-bucket", prefix: "STORAGE-RULES/local-run/", uidA: "storage-rules-local-run-user-a", uidB: "storage-rules-local-run-user-b" };
+const manifest = buildFullRequestManifest(buildCorpus(binding), closure, options);
+const salt = "6".repeat(64);
+const BEARER = "CANARY-BEARER-0123456789abcdef";
+const VALUES = { generation: "1700000000000001", metageneration: "1", "update-time": "2026-09-29T10:00:00Z", "ruleset-name": "projects/fireemu-oracle-query/rulesets/abc", "page-token": "next" };
+const typeOf = (reference) => reference.type ?? { "firestore-update-time": "update-time", "gcs-object-generation": "generation" }[reference.kind];
+const resolver = (reference) => VALUES[typeOf(reference)];
+const row = (id) => manifest.rows.find((r) => r.id === id) ?? assert.fail(id);
+const ok = { status: 200, rawHeaders: ["Content-Type", "application/json"], bytes: Buffer.from("{}"), startedAtMs: 1, finishedAtMs: 2 };
+// The gate admits through the preflight rows the target builder can prepare; the cache rows are carried by their own module.
+const preflightIds = manifest.preflightIds.filter((id) => !manifest.rows.find((r) => r.id === id).family.startsWith("credential"));
+const normalMeta = { phase: "normal", mutationKey: null, accept: null };
+const recoveryMeta = { phase: "recovery", mutationKey: null, accept: null };
+const preflightMeta = { phase: "preflight", mutationKey: null, accept: () => true };
+const READ = "management/control-0/baseline-metadata";
+const READ2 = "management/control-0/baseline-media";
+const WRITE = "management/control-0/seed";
+
+async function harness(delta = {}) {
+  const { createDispatchGate } = await import("./storage-rules/dispatch-gate.mjs").catch((error) => { if (error.code === "ERR_MODULE_NOT_FOUND") return {}; throw error; });
+  assert.equal(typeof createDispatchGate, "function");
+  const trace = [];
+  const state = { uncertain: false };
+  const targets = createTargetBuilder({ manifest, digestSalt: salt });
+  const reservations = { onStarted: async () => { trace.push(["started"]); }, onReserve: async (r) => { trace.push(["reserved", r.operationId, r.phase]); }, onTerminal: async (r) => { trace.push(["terminal", r.outcome]); } };
+  const capture = {
+    writeIntent: async (r) => { trace.push(["intent", r.operationId, r.phase, r.targetSha256, r.redactedTarget, r.mutationKey]); },
+    writeResponse: async (r) => { trace.push(["response", r.operationId, r.attempt, r.response.status]); },
+    writeNote: async (r) => { trace.push(["note", r.operationId, r.text]); },
+    snapshot: () => Object.freeze({ ...state }),
+  };
+  const transport = { send: async (spec) => { trace.push(["transport", spec.method, spec.url, JSON.stringify(spec.headers)]); return ok; } };
+  const credentials = { headersFor: (credential) => (credential === "anonymous" ? {} : { authorization: `Bearer ${BEARER}` }) };
+  const gate = createDispatchGate({ reservations: { ...reservations, ...delta.reservations }, capture: { ...capture, ...delta.capture }, transport: { ...transport, ...delta.transport }, targets: { ...targets, ...delta.targets }, credentials: { ...credentials, ...delta.credentials }, preflightIds });
+  const prepare = (id) => targets.prepare(row(id), resolver);
+  const admit = async () => {
+    await gate.start({ runId: options.runId });
+    for (const id of preflightIds) await gate.send(prepare(id), preflightMeta);
+    gate.admit();
+  };
+  return { gate, trace, state, targets, prepare, admit };
+}
+const events = (trace, name) => trace.filter((entry) => entry[0] === name);
+
+test("a request leaves only after its intent and its reservation are durable, and its response is captured after", async () => {
+  const h = await harness();
+  await h.admit();
+  h.trace.length = 0;
+  const prepared = h.prepare(READ);
+  const { raw, attempt } = await h.gate.send(prepared, normalMeta);
+  assert.deepEqual(h.trace.map((entry) => entry[0]), ["intent", "reserved", "transport", "response"]);
+  assert.equal(raw.status, 200);
+  assert.equal(attempt, preflightIds.length + 1);
+  assert.deepEqual(h.trace[0].slice(1, 3), [READ, "normal"]);
+  assert.equal(h.trace[0][3], prepared.targetSha256);
+  assert.equal(h.trace[0][4], prepared.redacted);
+  assert.equal(h.trace[3][2], attempt);
+  assert.equal(Object.hasOwn(raw, "startedAtMs"), false);
+});
+
+test("credential headers reach the transport and nothing else", async () => {
+  const h = await harness();
+  await h.admit();
+  h.trace.length = 0;
+  await h.gate.send(h.prepare(READ), normalMeta);
+  const sent = events(h.trace, "transport")[0];
+  assert.ok(sent[3].includes(BEARER));
+  assert.equal(JSON.stringify(h.trace.filter((entry) => entry[0] !== "transport")).includes(BEARER), false);
+  h.trace.length = 0;
+  const anonymous = h.prepare("settle/v1/1/0");
+  await h.gate.send(anonymous, normalMeta);
+  assert.equal(JSON.parse(events(h.trace, "transport")[0][3]).authorization, undefined);
+});
+
+test("credential headers are closed to the two allowed names and printable values, and a refusal sends nothing", async () => {
+  for (const headers of [{ cookie: "a=b" }, { authorization: "x\r\nX: y" }, { authorization: 7 }, { authorization: "" }, { "x-other": "1" }, null, []]) {
+    const h = await harness({ credentials: { headersFor: () => headers } });
+    await h.admit().catch(() => {});
+    const sentBefore = events(h.trace, "transport").length;
+    await assert.rejects(h.gate.send(h.prepare(READ), normalMeta), /./);
+    assert.equal(events(h.trace, "transport").length, sentBefore);
+  }
+});
+
+test("nothing is sent when the reservation cannot be made durable", async () => {
+  const h = await harness({ reservations: { onReserve: async (r) => { if (r.phase === "normal") throw new Error("disk full"); } } });
+  await h.admit();
+  h.trace.length = 0;
+  await assert.rejects(h.gate.send(h.prepare(READ), normalMeta), /disk full/);
+  assert.deepEqual(h.trace.map((entry) => entry[0]), ["intent", "note"]);
+  assert.equal(h.gate.snapshot().mode, "journal-uncertain");
+});
+
+test("an intent failure stops before any reservation or request", async () => {
+  let fail = false;
+  const h = await harness({ capture: { writeIntent: async (r) => { if (fail) throw new Error("capture uncertain"); } } });
+  await h.admit();
+  fail = true;
+  h.trace.length = 0;
+  await assert.rejects(h.gate.send(h.prepare(READ), normalMeta), /capture uncertain/);
+  assert.deepEqual(h.trace, []);
+});
+
+test("an uncertain capture journal refuses the request before its intent", async () => {
+  const h = await harness();
+  await h.admit();
+  h.state.uncertain = true;
+  h.trace.length = 0;
+  await assert.rejects(h.gate.send(h.prepare(READ), normalMeta), /capture journal is uncertain/);
+  assert.deepEqual(h.trace, []);
+});
+
+test("a target changed after its intent is refused at the last step, so nothing is sent", async () => {
+  let hook = async () => {};
+  const h = await harness({ capture: { writeIntent: async (r) => { await hook(r); } } });
+  await h.admit();
+  const victim = h.prepare(WRITE);
+  hook = async () => { victim.spec.body[0] ^= 1; };
+  h.trace.length = 0;
+  await assert.rejects(h.gate.send(victim, normalMeta), /target changed after its intent/);
+  assert.equal(events(h.trace, "transport").length, 0);
+  assert.equal(events(h.trace, "reserved").length, 1);
+});
+
+test("a forged or altered prepared target is refused before anything is written", async () => {
+  const h = await harness();
+  await h.admit();
+  h.trace.length = 0;
+  const genuine = h.prepare(READ);
+  for (const forged of [null, {}, { ...genuine }, Object.freeze({ rowId: READ, credential: "admin", targetSha256: genuine.targetSha256, redacted: genuine.redacted })]) {
+    await assert.rejects(h.gate.send(forged, normalMeta), /invalid dispatch request/);
+  }
+  assert.deepEqual(h.trace, []);
+});
+
+test("the request must belong to the counter's current mode", async () => {
+  const h = await harness();
+  await h.admit();
+  h.trace.length = 0;
+  await assert.rejects(h.gate.send(h.prepare("recovery/object-0/metadata"), normalMeta), /request phase does not match the counter/);
+  await assert.rejects(h.gate.send(h.prepare(READ), recoveryMeta), /request phase does not match the counter/);
+  await assert.rejects(h.gate.send(h.prepare(preflightIds[0]), preflightMeta), /request phase does not match the counter/);
+  await assert.rejects(h.gate.send(h.prepare("recovery/object-0/metadata"), recoveryMeta), /request phase does not match the counter/);
+  assert.deepEqual(h.trace, []);
+  h.gate.enterRecovery();
+  await assert.rejects(h.gate.send(h.prepare(READ), normalMeta), /request phase does not match the counter/);
+  await h.gate.send(h.prepare("recovery/object-0/metadata"), recoveryMeta);
+  assert.equal(events(h.trace, "transport").length, 1);
+});
+
+test("a transport failure leaves the outcome uncertain, notes it, moves to recovery and never repeats the request", async () => {
+  let calls = 0; let armedFailure = false;
+  const h = await harness({ transport: { send: async () => { calls++; if (armedFailure) { armedFailure = false; throw new Error(`socket closed for token=${BEARER}`); } return ok; } } });
+  await h.admit();
+  h.trace.length = 0; calls = 0; armedFailure = true;
+  await assert.rejects(h.gate.send(h.prepare(WRITE), { phase: "normal", mutationKey: "object|x|create|management/control-0/seed", accept: null }), /request outcome uncertain/);
+  const note = events(h.trace, "note")[0];
+  assert.match(note[2], /outcome unknown/);
+  assert.equal(h.gate.snapshot().mode, "recovery");
+  assert.equal(events(h.trace, "response").length, 0);
+  assert.equal(calls, 1);
+  await assert.rejects(h.gate.send(h.prepare(WRITE), normalMeta), /request phase does not match the counter/);
+  assert.equal(calls, 1);
+  assert.equal(events(h.trace, "intent")[0][5], "object|x|create|management/control-0/seed");
+});
+
+test("a capture failure after the request poisons the gate for every later request", async () => {
+  let fail = false;
+  const h = await harness({ capture: { writeResponse: async () => { if (fail) throw new Error("disk full"); } } });
+  await h.admit();
+  fail = true;
+  await assert.rejects(h.gate.send(h.prepare(READ), normalMeta), /capture failed after send/);
+  assert.equal(h.gate.snapshot().poisoned, true);
+  h.trace.length = 0;
+  fail = false;
+  await assert.rejects(h.gate.send(h.prepare(READ2), normalMeta), /dispatch gate is poisoned/);
+  h.gate.enterRecovery();
+  await assert.rejects(h.gate.send(h.prepare("recovery/object-0/metadata"), recoveryMeta), /dispatch gate is poisoned/);
+  assert.deepEqual(h.trace, []);
+});
+
+test("two requests never overlap", async () => {
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  let hold = false;
+  const h = await harness({ transport: { send: async () => { if (hold) await gate; return ok; } } });
+  await h.admit();
+  hold = true;
+  const first = h.gate.send(h.prepare(READ), normalMeta);
+  await assert.rejects(h.gate.send(h.prepare(READ2), normalMeta), /concurrent dispatch is forbidden/);
+  release();
+  await first;
+  assert.equal(h.gate.snapshot().busy, false);
+});
+
+test("a preflight the caller refuses keeps its captured response, closes the counter and does not poison the gate", async () => {
+  const h = await harness();
+  await h.gate.start({ runId: options.runId });
+  await assert.rejects(h.gate.send(h.prepare(preflightIds[0]), { phase: "preflight", mutationKey: null, accept: () => false }), /preflight failed/);
+  assert.deepEqual(events(h.trace, "response").map((entry) => entry[1]), [preflightIds[0]]);
+  assert.deepEqual(events(h.trace, "terminal"), [["terminal", "preflight-failed"]]);
+  assert.equal(h.gate.snapshot().poisoned, false);
+  assert.equal(events(h.trace, "note").length, 0);
+});
+
+test("the request description is a closed record", async () => {
+  const h = await harness();
+  await h.admit();
+  const prepared = h.prepare(READ);
+  for (const meta of [null, {}, { phase: "normal", mutationKey: null }, { ...normalMeta, extra: 1 }, { phase: "other", mutationKey: null, accept: null }, { phase: "normal", mutationKey: 7, accept: null }, { phase: "normal", mutationKey: null, accept: () => true }, { phase: "preflight", mutationKey: null, accept: null }]) {
+    await assert.rejects(h.gate.send(prepared, meta), /invalid dispatch request/);
+  }
+});
+
+test("gate options are a closed record of the required parts", async () => {
+  const { createDispatchGate } = await import("./storage-rules/dispatch-gate.mjs");
+  const targets = createTargetBuilder({ manifest, digestSalt: salt });
+  const good = { reservations: { onStarted() {}, onReserve() {}, onTerminal() {} }, capture: { writeIntent() {}, writeResponse() {}, writeNote() {}, snapshot() {} }, transport: { send() {} }, targets, credentials: { headersFor() {} }, preflightIds };
+  assert.doesNotThrow(() => createDispatchGate(good));
+  for (const bad of [null, {}, { ...good, extra: 1 }, { ...good, transport: {} }, { ...good, capture: { ...good.capture, writeNote: undefined } }, { ...good, targets: { prepare() {} } }, { ...good, credentials: {} }, { ...good, reservations: { ...good.reservations, onTerminal: 1 } }]) {
+    assert.throws(() => createDispatchGate(bad), /invalid dispatch gate options/);
+  }
+});
+
+test("a finished counter refuses everything", async () => {
+  const h = await harness();
+  await h.admit();
+  await h.gate.finish("finished");
+  h.trace.length = 0;
+  await assert.rejects(h.gate.send(h.prepare(READ), normalMeta), /./);
+  assert.equal(events(h.trace, "transport").length, 0);
+});

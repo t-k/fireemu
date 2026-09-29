@@ -149,3 +149,64 @@ test("inputs and options are closed", async () => {
   for (const bad of [null, ["a"], ["a", 1], "x", ["a", "b", "c"]]) assert.throws(() => r.headers(bad), /invalid redaction input/);
   assert.throws(() => r.bytes(Buffer.alloc(2 * 1024 * 1024 + 1)), /invalid redaction input/);
 });
+
+// The canaries below have no shape of their own (no JWT, ya29., 1//, AIza or Bearer prefix), so only the named rule can hide them.
+const OPAQUE = "CANARYOPAQUEVALUE0123456789";
+
+test("every secret JSON field hides an opaque value by its name alone", async () => {
+  const r = await redactor();
+  for (const field of ["downloadTokens", "firebaseStorageDownloadTokens", "idToken", "id_token", "refreshToken", "refresh_token", "access_token", "accessToken", "passwordHash", "salt", "keyString", "sessionInfo", "password", "secret", "apiKey", "api_key", "token", "privateKey", "private_key", "client_secret"]) {
+    const out = r.bytes(Buffer.from(JSON.stringify({ [field]: OPAQUE, size: "4" })));
+    assert.equal(out.bytes.toString(), JSON.stringify({ [field]: "<redacted:json-field>", size: "4" }), field);
+    assert.deepEqual(out.spans.map((span) => span.kind), ["json-field"], field);
+  }
+});
+
+test("every secret URL parameter hides an opaque value by its name alone", async () => {
+  const r = await redactor();
+  for (const parameter of ["token", "key", "upload_id", "access_token", "id_token", "refresh_token", "sig", "signature", "X-Goog-Signature", "X-Goog-Credential", "X-Amz-Signature", "X-Amz-Credential"]) {
+    assert.equal(r.text(`GET /o?alt=media&${parameter}=${OPAQUE}&b=2`), `GET /o?alt=media&${parameter}=<redacted:url-parameter>&b=2`, parameter);
+  }
+});
+
+test("every bearer header hides an opaque value by its name alone, whatever its case", async () => {
+  const r = await redactor();
+  for (const name of ["authorization", "proxy-authorization", "cookie", "set-cookie", "x-goog-upload-url", "x-goog-api-key", "x-firebase-appcheck", "x-goog-iam-authorization-token"]) {
+    for (const spelled of [name, name.toUpperCase(), name.replace(/(^|-)([a-z])/g, (_, dash, letter) => `${dash}${letter.toUpperCase()}`)]) {
+      assert.deepEqual(r.headers([spelled, OPAQUE, "X-Plain", OPAQUE]), [spelled, "<redacted:header>", "X-Plain", OPAQUE], spelled);
+    }
+  }
+});
+
+test("a resumable session URL is a bearer capability and is removed whole, not only its upload ID", async () => {
+  const r = await redactor();
+  assert.equal(r.text(`session ${CANARIES.sessionUrl} end`), "session <redacted:session-url> end");
+  const body = Buffer.from(`{"location":"${CANARIES.sessionUrl}"}`);
+  const out = r.bytes(body);
+  assert.equal(out.bytes.toString(), '{"location":"<redacted:session-url>"}');
+  assert.deepEqual(out.spans.map(({ kind, start, length }) => ({ kind, start, length })), [{ kind: "session-url", start: body.indexOf("https://"), length: CANARIES.sessionUrl.length }]);
+  assert.equal(out.bytes.toString().includes("upload_protocol"), false);
+});
+
+test("a secret that starts inside another match and runs past its end stays hidden to its last byte", async () => {
+  const r = await redactor();
+  const pemBody = "CANARYPEMBODYTHATMUSTNOTLEAK0123456789";
+  const text = `token=x-----BEGIN PRIVATE KEY-----\n${pemBody}\n-----END PRIVATE KEY----- tail`;
+  const out = r.text(text);
+  assert.equal(out, "token=<redacted:assignment> tail");
+  assert.equal(out.includes(pemBody), false);
+  const spans = r.bytes(Buffer.from(text)).spans;
+  assert.deepEqual(spans.map(({ start, length }) => ({ start, length })), [{ start: 6, length: text.length - 6 - " tail".length }]);
+});
+
+test("at one start the longest match names the span, and at equal length the earlier pattern does", async () => {
+  const r = await redactor();
+  // A service-account key file: the JSON value is the PEM block plus its trailing newline, so it is longer than the PEM match.
+  const keyFile = Buffer.from(JSON.stringify({ private_key: `${CANARIES.pem}\n`, client_email: "svc" }));
+  const out = r.bytes(keyFile);
+  assert.equal(out.bytes.toString(), JSON.stringify({ private_key: "<redacted:json-field>", client_email: "svc" }));
+  assert.deepEqual(out.spans.map(({ kind, start, length }) => ({ kind, start, length })), [{ kind: "json-field", start: keyFile.indexOf("-----BEGIN"), length: JSON.stringify(`${CANARIES.pem}\n`).length - 2 }]);
+  // The idToken value is exactly a JWT: the JSON field rule comes first and names it.
+  const token = r.bytes(Buffer.from(JSON.stringify({ idToken: CANARIES.idToken })));
+  assert.deepEqual(token.spans.map((span) => span.kind), ["json-field"]);
+});

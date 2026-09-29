@@ -292,6 +292,32 @@ fn both_profiles_start_with_the_declared_tenants_under_the_ids_of_the_file() {
 }
 
 #[test]
+fn the_profile_decides_how_a_tenant_document_reads_back() {
+    // The emulator profile keeps a tenant's emailPrivacyConfig as the official emulator does (a
+    // create keeps none); strict keeps what production keeps. The seed follows the profile as the
+    // create route does.
+    let mut with_privacy = acme();
+    with_privacy["emailPrivacyConfig"] = json!({"enableImprovedEmailPrivacy": true});
+    let auth = json!({
+        "apiKeys": ["fake-api-key"],
+        "multiTenant": {"allowTenants": true},
+        "tenants": [with_privacy]
+    });
+    let strict = Daemon::start("privacy-strict", "strict", &auth);
+    let (status, document) = strict.tenant("acme-x7k2q");
+    assert_eq!(status, 200, "{document}");
+    assert_eq!(
+        document["emailPrivacyConfig"],
+        json!({"enableImprovedEmailPrivacy": true}),
+        "{document}"
+    );
+    let emulator = Daemon::start("privacy-emulator", "emulator", &auth);
+    let (status, document) = emulator.tenant("acme-x7k2q");
+    assert_eq!(status, 200, "{document}");
+    assert!(document.get("emailPrivacyConfig").is_none(), "{document}");
+}
+
+#[test]
 fn the_emulator_profile_takes_tenants_without_the_switch() {
     let mut auth = declared(true);
     auth.as_object_mut().unwrap().remove("multiTenant");

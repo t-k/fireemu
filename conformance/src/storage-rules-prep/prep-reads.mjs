@@ -8,7 +8,7 @@ import { createCountedCredentialCache } from "../storage-rules/credential-cache.
 import { createDispatchGate } from "../storage-rules/dispatch-gate.mjs";
 import { mainRepositoryRoot, pinnedPaths, systemClock } from "../storage-rules/entry.mjs";
 import { createPrepHttpsTransport } from "./transport.mjs";
-import { confirmCleanClose, leaseTransport } from "../storage-rules/locked-run.mjs";
+import { leaseTransport } from "../storage-rules/locked-run.mjs";
 import { checkoutMatches, gitOutput } from "../storage-rules/pins.mjs";
 import { generateRunSecrets, readAdcFile } from "../storage-rules/private-inputs.mjs";
 import { withProjectLocks } from "../storage-rules/project-locks.mjs";
@@ -28,6 +28,7 @@ const OPTION_KEYS = ["localPath", "closure", "runId", "sourceCommit", "packet", 
 const BIND_KEYS = ["root", "codeRoot", "requestImpl", "clock", "git"];
 const RUN_ID = /^[a-z0-9][a-z0-9-]{0,47}$/;
 const HEX64 = /^[0-9a-f]{64}$/;
+const PREP_DIR = "conformance/src/storage-rules-prep";
 const MAX_LOCAL_BYTES = 64 * 1024;
 const plain = (value) => value !== null && typeof value === "object" && Object.getPrototypeOf(value) === Object.prototype;
 const closed = (value, keys) => plain(value) && Reflect.ownKeys(value).length === keys.length && keys.every((key) => Object.hasOwn(value, key));
@@ -92,6 +93,9 @@ export function bindPrepEntry(options) {
     if (corpus.sha256 !== packet.manifestSha256) refuse("pin mismatch: manifestSha256");
     const checkout = await checkoutMatches({ root: codeRoot, sourceCommit, git }).catch(() => ({ ok: false, reason: "source commit unreadable" }));
     if (!checkout.ok) refuse(checkout.reason);
+    // The runner pin also hashes the stage 2a directory, so nothing untracked or ignored may sit there either.
+    const extra = await git(codeRoot, ["status", "--porcelain", "--untracked-files=all", "--ignored", "--", PREP_DIR]).catch(() => refuse("source commit unreadable"));
+    if (extra.trim() !== "") refuse("untracked or ignored runner files");
     const adc = await readAdcFile({ path: local.adcPath });
     const directory = paths.runDirectory(runId);
     await mkdir(directory, { mode: 0o700 }).catch((error) => refuse(error?.code === "EEXIST" ? "run directory exists" : "run directory refused"));
@@ -120,7 +124,8 @@ export function bindPrepEntry(options) {
         const inputsPath = join(directory, "private-inputs.json");
         const handle = await open(inputsPath, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
         try { await handle.writeFile(`${JSON.stringify(inputs, null, 2)}\n`); await handle.sync(); } finally { await handle.close(); }
-        confirmCleanClose(lease, { status: "finished" });
+        // This entry has no caller callback: it closes only after every read passed and the inputs file was written.
+        lease.confirmClosed();
         return Object.freeze({ status: "finished", requests: gate.snapshot().requests, inputsPath });
       } finally { await capture.close().catch(() => {}); await reservations.close().catch(() => {}); }
     });

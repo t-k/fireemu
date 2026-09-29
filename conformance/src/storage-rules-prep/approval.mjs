@@ -103,6 +103,8 @@ export function validatePrepApproval(options) {
     throw new Error("matching owner approval required");
   }
   if (PINS.some((key) => decision.fields[key] !== packet[key])) throw new Error("decision pin mismatch");
+  // A global revocation stops the lane only when it was written after the decision row this check selected; an earlier one is superseded.
+  if (revocations.global.some((line) => line > decision.line)) throw new Error("approval revoked");
   if (decision.actor !== COORDINATOR) {
     if (review.envelopeId !== null || review.withinEnvelope !== false) throw new Error("direct review envelope mismatch");
     return Object.freeze({ status: "APPROVAL_BOUND_LOCAL_ONLY", sendAuthorized: false, decisionLine: decision.line, envelopeId: null });

@@ -166,3 +166,40 @@ test("the request double answers what it is told and records what it saw", async
   assert.equal(answer.status, 200);
   assert.equal(log.length, 1);
 });
+
+test("the pin printer prints the four pins of a clean checkout and refuses an unclean one, a bad file and bad arguments without echoing the file", async (t) => {
+  const { mkdtemp, mkdir, rm, writeFile, chmod } = await import("node:fs/promises");
+  const { join } = await import("node:path");
+  const { runPrepPrintPins } = await import("./storage-rules-prep/print-pins.mjs");
+  const { prepCodeDigests } = await import("./storage-rules-prep/pins.mjs");
+  const { scratchCode, localInputs } = await import("./storage-rules-prep-support.mjs");
+  const root = scratchCode(JSON.stringify(closure));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const dir = await mkdtemp("/private/tmp/storage-rules-prep-pins-");
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const write = async (name, value, mode = 0o600) => { const path = join(dir, name); await writeFile(path, typeof value === "string" ? value : JSON.stringify(value), { mode }); await chmod(path, mode); return path; };
+  const good = await write("local.json", localInputs("/x/adc.json"));
+  const commit = "d".repeat(40);
+  const gitFor = (status = "", extra = "", extraPrep = "") => async (where, args) => { assert.equal(where, root); return args[0] === "rev-parse" ? `${commit}\n` : args.includes("--ignored") ? (args.includes("conformance/src/storage-rules-prep") ? extraPrep : extra) : status; };
+  const run = async (args, git) => { const seen = { out: "", err: "" }; const code = await runPrepPrintPins({ args, codeRoot: root, git, out: (text) => { seen.out += text; }, err: (text) => { seen.err += text; } }); return { code, ...seen }; };
+  const ok = await run([good], gitFor());
+  assert.equal(ok.code, 0);
+  assert.equal(ok.err, "");
+  const digests = await prepCodeDigests(root);
+  const corpus = prepCorpus(closure, { bucket: BUCKET, queryProjectNumber: NUMBERS.query, idpProjectNumber: NUMBERS.idp, sourceCommit: commit });
+  assert.deepEqual(JSON.parse(ok.out), { sourceCommit: commit, runnerSha256: digests.runnerSha256, manifestSha256: corpus.sha256, fixtureSchemaSha256: digests.fixtureSchemaSha256 });
+  assert.match(ok.out, /^\{\n  "sourceCommit": "d{40}",\n/);
+  for (const [git, message] of [[gitFor(" M x\n"), /working tree not clean/], [gitFor("", "?? conformance/src/storage-rules/driver.mjs\n"), /untracked or ignored runner files/], [gitFor("", "", "?? conformance/src/storage-rules-prep/x.mjs\n"), /untracked or ignored runner files/]]) {
+    const refused = await run([good], git);
+    assert.equal(refused.code, 1);
+    assert.equal(refused.out, "");
+    assert.match(refused.err, message);
+  }
+  for (const args of [[], [good, "extra"]]) { const usage = await run(args, gitFor()); assert.deepEqual([usage.code, usage.out], [2, ""]); assert.match(usage.err, /usage/); }
+  const bad = await write("bad.json", { ...localInputs("/x/adc.json"), extra: "SECRET-VALUE-XYZ" });
+  const failed = await run([bad], gitFor());
+  assert.deepEqual([failed.code, failed.out], [1, ""]);
+  assert.match(failed.err, /local inputs file refused/);
+  assert.equal(failed.err.includes("SECRET-VALUE-XYZ"), false);
+  void mkdir;
+});

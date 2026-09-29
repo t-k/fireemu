@@ -28,7 +28,7 @@ const ledger = [
 const clock = { nowSeconds: () => 1_800_000_000, waitUntilSeconds: async () => {}, sleep: async () => {} };
 const runId = "prep-test-run";
 
-async function checkout(t, { ledgerText = ledger, answer = prepAnswer, gitHead = SOURCE_COMMIT, gitStatus = "", usage = [], local = localInputs } = {}) {
+async function checkout(t, { ledgerText = ledger, answer = prepAnswer, gitHead = SOURCE_COMMIT, gitStatus = "", usage = [], local = localInputs, gitExtra = "", gitExtraPrep = "" } = {}) {
   const root = await mkdtemp("/private/tmp/storage-rules-prep-");
   t.after(() => rm(root, { recursive: true, force: true }));
   await mkdir(join(root, ".git"));
@@ -46,7 +46,7 @@ async function checkout(t, { ledgerText = ledger, answer = prepAnswer, gitHead =
   await writeFile(localPath, JSON.stringify(local(adcPath)), { mode: 0o600 });
   const wire = [];
   const gitCalls = [];
-  const git = async (where, args) => { gitCalls.push([where, ...args]); return args[0] === "rev-parse" ? `${gitHead}\n` : gitStatus; };
+  const git = async (where, args) => { gitCalls.push([where, ...args]); return args[0] === "rev-parse" ? `${gitHead}\n` : args.includes("--ignored") ? (args.includes("conformance/src/storage-rules-prep") ? gitExtraPrep : gitExtra) : gitStatus; };
   const entry = bindPrepEntry({ root, codeRoot, requestImpl: fakeRequestImpl(answer, wire), clock, git });
   const options = { localPath, closure, runId, sourceCommit: SOURCE_COMMIT, packet: structuredClone(packet), review: structuredClone(review) };
   return { root, runs, entry, options, wire, gitCalls, adcPath, localPath, lockFiles: async () => (await readdir(join(runs, "sandbox-locks"))).sort() };
@@ -100,7 +100,7 @@ test("thirteen reads, in order, each once, yield exactly the stage 3 inputs, and
   assert.equal((await stat(join(f.runs, `storage-rules-prep-${runId}`))).mode & 0o777, 0o700);
   assert.equal(await readFile(join(f.runs, "storage-rules-prep-usage.jsonl"), "utf8"), `${JSON.stringify({ packetSha256: packet.packetSha256, runId })}\n`);
   assert.deepEqual(await f.lockFiles(), []);
-  assert.deepEqual(f.gitCalls.map(([where, ...args]) => [where, args.join(" ")]), [[codeRoot, "rev-parse HEAD"], [codeRoot, "status --porcelain --untracked-files=no"]]);
+  assert.deepEqual(f.gitCalls.map(([where, ...args]) => [where, args.join(" ")]), [[codeRoot, "rev-parse HEAD"], [codeRoot, "status --porcelain --untracked-files=no"], [codeRoot, "status --porcelain --untracked-files=all --ignored -- conformance/src/storage-rules spec/compatibility/closure/STORAGE-RULES.json"], [codeRoot, "status --porcelain --untracked-files=all --ignored -- conformance/src/storage-rules-prep"]]);
 });
 
 test("the journals hold no secret: not the token, the key strings, the owner's address, the key IDs' strings or the project numbers' credentials", async (t) => {
@@ -189,7 +189,14 @@ test("the run is refused, before anything is created, unless the code, the schem
   await assert.rejects(moved.entry(moved.options), /source commit mismatch/);
   const dirty = await checkout(t, { gitStatus: " M x\n" });
   await assert.rejects(dirty.entry(dirty.options), /working tree not clean/);
-  for (const state of [moved, dirty]) { assert.deepEqual(await readdir(state.runs), ["sandbox-locks"]); assert.equal(state.wire.length, 0); }
+  const untrackedRunner = await checkout(t, { gitExtra: "?? conformance/src/storage-rules/driver.mjs\n" });
+  await assert.rejects(untrackedRunner.entry(untrackedRunner.options), /untracked or ignored runner files/);
+  const untrackedPrep = await checkout(t, { gitExtraPrep: "!! conformance/src/storage-rules-prep/scratch.mjs\n" });
+  await assert.rejects(untrackedPrep.entry(untrackedPrep.options), /untracked or ignored runner files/);
+  const brokenGit = await checkout(t);
+  const broken = bindPrepEntry({ root: brokenGit.root, codeRoot, requestImpl() {}, clock, git: async (where, args) => { if (args.includes("conformance/src/storage-rules-prep")) throw new Error("git missing"); return args[0] === "rev-parse" ? `${SOURCE_COMMIT}\n` : ""; } });
+  await assert.rejects(broken(brokenGit.options), /source commit unreadable/);
+  for (const state of [moved, dirty, untrackedRunner, untrackedPrep, brokenGit]) { assert.deepEqual(await readdir(state.runs), ["sandbox-locks"]); assert.equal(state.wire.length, 0); }
   // A private-inputs change that moves the corpus (another bucket name) is caught as a manifest mismatch.
   const other = await checkout(t, { local: (adc) => ({ ...localInputs(adc), bucket: { name: "another-bucket-name" } }) });
   await assert.rejects(other.entry(other.options), /pin mismatch: manifestSha256/);
@@ -285,5 +292,22 @@ test("the binding is a closed record for a main checkout, the real request funct
   assert.doesNotThrow(() => bindPrepEntry(good));
   for (const bad of [null, {}, { ...good, extra: 1 }, { root: f.root, codeRoot, requestImpl() {}, clock }, { ...good, codeRoot: 5 }, { ...good, git: 5 }, { ...good, requestImpl: 5 }, { ...good, root: 5 }, { ...good, clock: { nowSeconds() {} } }, { ...good, root: join(f.root, "docs.local") }]) {
     assert.throws(() => bindPrepEntry(bad), /invalid entry binding|entry root is not a main checkout|main repository root not found/);
+  }
+});
+
+test("a global revocation stops the reads when it is written after the decision row, however many status lines cite the packet after it, and not when it came before", async (t) => {
+  const global = "- 2026-09-30 | 全体 | decision=REVOKED; すべての本番送信承認を取り消す | オーナー（ローカル試験） | note.md";
+  const status = `- 2026-09-30 | STORAGE-RULES ${PACKET_NAME} status | packetSha256=${packet.packetSha256}; outcome=noted | note.md`;
+  const decision = ledger.split("\n").at(-1);
+  const named = "- 2026-09-30 | 全体 | decision=REVOKED; すべてのレーン（FS-TRANSACTIONを含む）を取り消す | オーナー（ローカル試験） | note.md";
+  for (const [name, text] of [["after", `${ledger}\n${global}`], ["after with a status line", `${ledger}\n${global}\n${status}`], ["after, naming another lane", `${ledger}\n${named}`], ["after a re-approval, again", `${ledger}\n${global}\n${decision}\n${global}`]]) {
+    const f = await checkout(t, { ledgerText: text });
+    await assert.rejects(f.entry(f.options), /approval revoked/, name);
+    assert.equal(f.wire.length, 0, name);
+  }
+  // Before the decision row, or superseded by a later decision row, it does not stop the reads.
+  for (const [name, text] of [["before", `${global}\n${ledger}`], ["superseded", `${ledger}\n${global}\n${decision}\n${status}`]]) {
+    const f = await checkout(t, { ledgerText: text });
+    assert.equal((await f.entry(f.options)).status, "finished", name);
   }
 });

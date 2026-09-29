@@ -72,11 +72,12 @@ export function withoutGrant(policy, member) {
   return Object.freeze({ version: POLICY_VERSION, etag: policy.etag, bindings: Object.freeze(bindings) });
 }
 
-/** The bindings in a form that ignores the order of bindings and members. */
+/** The bindings in a form that ignores the order of bindings and members: each as canonical JSON, and the list sorted as text. */
 export function canonicalBindings(policy) {
   return policy.bindings
-    .map((binding) => ({ role: binding.role, members: [...new Set(binding.members)].sort(), condition: binding.condition === undefined ? null : canonical(binding.condition) }))
-    .sort((a, b) => (JSON.stringify([a.role, a.condition]) < JSON.stringify([b.role, b.condition]) ? -1 : JSON.stringify([a.role, a.condition]) > JSON.stringify([b.role, b.condition]) ? 1 : 0));
+    .map((binding) => JSON.stringify({ role: binding.role, members: [...new Set(binding.members)].sort(), condition: binding.condition === undefined ? null : canonical(binding.condition) }))
+    .sort()
+    .map((text) => JSON.parse(text));
 }
 
 export const sameBindings = (left, right) => JSON.stringify(canonicalBindings(left)) === JSON.stringify(canonicalBindings(right));

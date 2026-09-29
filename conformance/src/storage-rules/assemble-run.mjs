@@ -1,10 +1,9 @@
 import { open, lstat, mkdir } from "node:fs/promises";
 import { createCaptureJournal } from "./capture-journal.mjs";
-import { buildCorpus } from "./corpus.mjs";
 import { createController } from "./controller.mjs";
 import { createRunnerDelegates } from "./delegates.mjs";
 import { createDispatchGate } from "./dispatch-gate.mjs";
-import { buildFullRequestManifest } from "./full-manifest.mjs";
+import { buildRunManifest } from "./run-manifest.mjs";
 import { confirmCleanClose, leaseTransport, withLockedAdmission } from "./locked-run.mjs";
 import { createPreflightJudge } from "./preflight-judge.mjs";
 import { generateRunSecrets, loadPrivateInputs, readAdcFile } from "./private-inputs.mjs";
@@ -39,9 +38,8 @@ export async function withAssembledRun(options, use, { randomBytes } = {}) {
   const inputs = await loadPrivateInputs({ path: inputsPath });
   const adc = await readAdcFile({ path: inputs.adcPath });
   const secrets = generateRunSecrets(randomBytes === undefined ? undefined : { randomBytes });
-  const binding = { bucket: inputs.bucket.name, prefix: `STORAGE-RULES/${runId}/`, uidA: `storage-rules-${runId}-user-a`, uidB: `storage-rules-${runId}-user-b` };
-  const manifest = buildFullRequestManifest(buildCorpus(binding), closure, {
-    runId, sourceCommit, queryProjectNumber: inputs.projects.query.projectNumber, idpProjectNumber: inputs.projects.idp.projectNumber,
+  const manifest = buildRunManifest(closure, {
+    bucket: inputs.bucket.name, runId, sourceCommit, queryProjectNumber: inputs.projects.query.projectNumber, idpProjectNumber: inputs.projects.idp.projectNumber,
     queryApiKeyId: inputs.projects.query.apiKeyId, idpApiKeyId: inputs.projects.idp.apiKeyId,
   });
   const usage = createRecordingUsage({ path: usagePath, packetSha256: packet.packetSha256 });

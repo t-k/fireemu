@@ -5,6 +5,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { withAssembledRun } from "./assemble-run.mjs";
 import { createSingleAttemptHttpsTransport } from "./http-transport.mjs";
+import { checkoutMatches, codeDigests, gitOutput, manifestPin } from "./pins.mjs";
 
 // The one entry point a recording is started from. The ledger it trusts, the lock directory it takes, the usage ledger it
 // marks and the run directory it writes are constants resolved from the MAIN repository checkout (never the working
@@ -12,9 +13,10 @@ import { createSingleAttemptHttpsTransport } from "./http-transport.mjs";
 // of those four kinds, without a transport and without a clock. The only network capability is the single-attempt HTTPS
 // transport built here, which reaches the wire only through the dispatch gate `withAssembledRun` wires around it.
 const OPTION_KEYS = ["inputsPath", "closure", "runId", "sourceCommit", "packet", "review"];
-const ROOT_KEYS = ["root", "requestImpl", "clock"];
+const ROOT_KEYS = ["root", "codeRoot", "requestImpl", "clock", "git"];
 const MAX_LEDGER_BYTES = 8 * 1024 * 1024;
 const RUN_ID = /^[a-z0-9][a-z0-9-]{0,47}$/;
+const HEX64 = /^[0-9a-f]{64}$/;
 const plain = (value) => value !== null && typeof value === "object" && !Array.isArray(value) && Object.getPrototypeOf(value) === Object.prototype;
 const closed = (value, keys) => plain(value) && Reflect.ownKeys(value).length === keys.length && keys.every((key) => Object.hasOwn(value, key));
 const refuse = (message) => { throw new Error(message); };
@@ -72,8 +74,8 @@ export const systemClock = Object.freeze({
  */
 export function bindStorageRulesEntry(options) {
   if (!closed(options, ROOT_KEYS)) refuse("invalid entry binding");
-  const { root, requestImpl, clock } = options;
-  if (typeof root !== "string" || typeof requestImpl !== "function" || !closed(clock, ["nowSeconds", "waitUntilSeconds", "sleep"])) refuse("invalid entry binding");
+  const { root, codeRoot, requestImpl, clock, git } = options;
+  if (typeof root !== "string" || typeof codeRoot !== "string" || typeof git !== "function" || typeof requestImpl !== "function" || !closed(clock, ["nowSeconds", "waitUntilSeconds", "sleep"])) refuse("invalid entry binding");
   if (mainRepositoryRoot(root) !== root) refuse("entry root is not a main checkout");
   const paths = pinnedPaths(root);
   const transport = createSingleAttemptHttpsTransport({ requestImpl });
@@ -87,6 +89,13 @@ export function bindStorageRulesEntry(options) {
       if (!stat.isDirectory() || stat.uid !== process.getuid() || (stat.mode & 0o077) !== 0) refuse(`${name} refused`);
     }
     // A private, fresh directory for this run's journals: it must not exist yet.
+    // The pins the approval names must be the ones this code and this checkout reproduce, before anything is created.
+    if (!plain(packet) || !HEX64.test(packet.runnerSha256) || !HEX64.test(packet.fixtureSchemaSha256) || !HEX64.test(packet.manifestSha256)) refuse("invalid storage rules recording options");
+    const digests = await codeDigests(codeRoot).catch(() => refuse("pin source refused"));
+    if (digests.runnerSha256 !== packet.runnerSha256) refuse("pin mismatch: runnerSha256");
+    if (digests.fixtureSchemaSha256 !== packet.fixtureSchemaSha256) refuse("pin mismatch: fixtureSchemaSha256");
+    const checkout = await checkoutMatches({ root: codeRoot, sourceCommit, git }).catch(() => ({ ok: false, reason: "source commit unreadable" }));
+    if (!checkout.ok) refuse(checkout.reason);
     const directory = paths.runDirectory(runId);
     await mkdir(directory, { mode: 0o700 }).catch((error) => refuse(error?.code === "EEXIST" ? "run directory exists" : "run directory refused"));
     return withAssembledRun({
@@ -94,13 +103,19 @@ export function bindStorageRulesEntry(options) {
       readLedger: () => readOwnerLedger(paths.ownerLedger),
       locks: { lockDir: paths.lockDir, legacyLockPath: paths.legacyLockPath, pid: process.pid, acquiredAt: new Date().toISOString() },
       usagePath: paths.usagePath, directory, transport, clock,
-    }, use);
+    // The manifest built for this run must reproduce the pinned digest before the caller can run anything: a refusal here
+    // happens with the locks held but nothing sent, so they are released and nothing is marked.
+    }, async (recording) => {
+      if (manifestPin(recording.manifest, closure) !== packet.manifestSha256) refuse("pin mismatch: manifestSha256");
+      return use(recording);
+    });
   };
 }
 
 /** The main checkout this file belongs to, resolved from the file's own location and never from the working directory. */
-export const entryRoot = mainRepositoryRoot(dirname(fileURLToPath(import.meta.url)));
-/** What the real entry is bound to: that checkout, the real HTTPS request function and the system clock. */
-export const realBinding = Object.freeze({ root: entryRoot, requestImpl: httpsRequest, clock: systemClock });
+const entryDir = dirname(fileURLToPath(import.meta.url));
+export const entryRoot = mainRepositoryRoot(entryDir);
+/** What the real entry is bound to: that checkout, the checkout this code runs from (its files and commit are what the pins name), the real HTTPS request function, the system clock and git. */
+export const realBinding = Object.freeze({ root: entryRoot, codeRoot: resolve(entryDir, "..", "..", ".."), requestImpl: httpsRequest, clock: systemClock, git: gitOutput });
 /** Start a recording. */
 export const withStorageRulesRecording = bindStorageRulesEntry(realBinding);

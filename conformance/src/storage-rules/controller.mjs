@@ -117,7 +117,7 @@ export function createController(options) {
     try { result = await gate.send(prepared, { phase, mutationKey: mutationKeyOf(row), accept }); } catch (error) {
       if (/^admission refused/.test(error.message)) throw new RunStop("admission refused", { rowId: row.id });
       if (/^preflight failed/.test(error.message)) throw new RunStop("preflight refused", { rowId: row.id });
-      if (/outcome uncertain/.test(error.message)) { objects.recordOutcome(row, { uncertain: true }); run.recordOutcome(row, { uncertain: true }); throw new RunStop("outcome uncertain", { rowId: row.id }); }
+      if (/outcome uncertain/.test(error.message)) { executed++; objects.recordOutcome(row, { uncertain: true }); run.recordOutcome(row, { uncertain: true }); throw new RunStop("outcome uncertain", { rowId: row.id }); }
       throw new RunStop(/poisoned|capture/.test(error.message) ? "capture failed" : "not sent", { rowId: row.id, message: error.message });
     }
     executed++;
@@ -243,7 +243,9 @@ export function createController(options) {
         const untouched = objects.snapshot().mutations === 0 && run.snapshot().mutations === 0;
         let closed = false;
         if (untouched && gate.snapshot().mode === "normal") { await gate.finish("stopped-no-mutation"); closed = true; }
-        return Object.freeze({ status: "stopped", reason: error.reason, detail: Object.freeze({ ...error.detail }), requests: executed, skipped: Object.freeze([...skipped]), needsRecovery: !closed && !untouched });
+        // Untouched and closed needs no recovery; anything still open (a counter that flipped to recovery after an uncertain read) is reported as open.
+        const open = ["normal", "recovery"].includes(gate.snapshot().mode);
+        return Object.freeze({ status: "stopped", reason: error.reason, detail: Object.freeze({ ...error.detail }), requests: executed, skipped: Object.freeze([...skipped]), needsRecovery: !closed && (!untouched || open) });
       }
     },
   });

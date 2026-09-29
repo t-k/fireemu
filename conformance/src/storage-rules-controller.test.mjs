@@ -455,6 +455,34 @@ test("recovery stops when a session still answers active after its cancel", asyn
   assert.equal(h.trace.at(-1), "terminal:needs-recovery");
 });
 
+test("an untouched run whose first read failed leaves the counter open, says so, counts the read and is closed clean by recovery", async () => {
+  const id = "management/control-0/baseline-metadata";
+  const h = await harness({ simulatorOptions: answerAt(await callOf(id), "throw") });
+  const result = await h.controller.run();
+  assert.deepEqual([result.status, result.reason, result.detail.rowId], ["stopped", "outcome uncertain", id]);
+  // Nothing was written, but the counter flipped to recovery and no terminal row was written: the run is not closed.
+  assert.equal(h.gate.snapshot().mode, "recovery");
+  assert.equal(h.trace.some((entry) => entry.startsWith("terminal:")), false);
+  assert.equal(result.needsRecovery, true);
+  // The result counts every reservation the counter made, the uncertain read included.
+  assert.equal(result.requests, sentIds(h).length);
+  assert.equal(result.requests, h.gate.snapshot().requests);
+  const recovered = await h.controller.recover();
+  assert.equal(recovered.status, "recovered", JSON.stringify(recovered));
+  assert.equal(h.trace.at(-1), "terminal:recovered");
+  assert.equal(recovered.requests, sentIds(h).length - result.requests);
+});
+
+test("a result never claims a recovery is unneeded while the counter is open", async () => {
+  // A read that fails after a write: the writes make the recovery needed; a run stopped before admission is closed and needs none.
+  const write = await harness({ simulatorOptions: failWith500(await callAfter((r) => r.request.method === "PATCH" || r.request.operation === "seed", 1)) });
+  assert.equal((await write.controller.run()).needsRecovery, true);
+  const refused = await harness({ judge: (row) => row.id !== "preflight/query/project" });
+  const one = await refused.controller.run();
+  assert.equal(one.needsRecovery, false);
+  assert.equal(refused.gate.snapshot().mode, "closed");
+});
+
 test("a response that fails its post-response check stops the run as a failed check", async () => {
   // A publication's after-read must name the Ruleset the run created; a missing release fails that check.
   const after = await harness({ simulatorOptions: answerAt(await callOf("release/v1/after"), rpcNotFound) });

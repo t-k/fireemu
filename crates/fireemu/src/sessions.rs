@@ -742,7 +742,10 @@ pub(crate) mod tests {
             .reset_scope(&Scope::AllExcept(BTreeSet::new()))
             .expect("the reset succeeds");
         assert_eq!(registry.tenants("demo-app"), ["acme-x7k2q"]);
-        assert!(store.lock().unwrap().allows_tenants(), "the declared switch returns");
+        assert!(
+            store.lock().unwrap().allows_tenants(),
+            "the declared switch returns"
+        );
         let tenant = registry.tenant_store("demo-app", "acme-x7k2q").unwrap();
         assert!(tenant.lock().unwrap().mfa_config().sms_enabled());
     }

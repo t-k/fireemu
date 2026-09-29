@@ -182,3 +182,31 @@ test("every read the reducer offers is a declared settle row for the same witnes
     assert.equal(manifest.rows.filter((r) => r.family === "settle" && r.phase === plan.phase && r.programId === plan.name).length, seen.size);
   }
 });
+
+// The closed-configuration cases above use names that already fail the name grammar; these use well-formed names so each rule is checked on its own.
+test("each configuration rule holds on its own with well-formed witness names", async () => {
+  const { createSettleState } = await load();
+  const w = (name, expect) => ({ objectName: `STORAGE-RULES/r/${name}.bin`, expect });
+  const bad = [
+    publication({ witnesses: [w("same", "allowed"), w("same", "denied")] }),
+    restoration({ witnesses: [w("a", "denied"), w("b", "denied"), w("c", "denied"), w("a", "denied")] }),
+    publication({ witnesses: [w("allow", "allowed")] }),
+    publication({ witnesses: [w("allow", "allowed"), w("deny", "denied"), w("more", "denied")] }),
+    publication({ witnesses: [w("deny", "denied"), w("allow", "allowed")] }),
+    publication({ witnesses: [w("a", "allowed"), w("b", "allowed")] }),
+    publication({ witnesses: [w("a", "denied"), w("b", "denied")] }),
+    publication({ phase: "recovery" }),
+  ];
+  for (const config of bad) assert.throws(() => createSettleState(config), /invalid settle configuration/, JSON.stringify(config));
+  for (const config of [publication({ phase: "normal" }), restoration({ phase: "recovery" }), restoration({ phase: "normal" })]) assert.equal(createSettleState(config).status, "running");
+});
+
+test("a witness name must be a well-formed name under STORAGE-RULES/", async () => {
+  const { createSettleState } = await load();
+  const withName = (objectName) => publication({ witnesses: [{ objectName, expect: "allowed" }, { objectName: "STORAGE-RULES/r/deny.bin", expect: "denied" }] });
+  for (const objectName of ["x", "STORAGE-RULES/", "other/r/allow.bin", "storage-rules/r/allow.bin", " STORAGE-RULES/r/allow.bin", "STORAGE-RULES/r/a b.bin", "STORAGE-RULES/r/a\n", "STORAGE-RULES/r/a?b", `STORAGE-RULES/${"a".repeat(901)}`, 7]) {
+    assert.throws(() => createSettleState(withName(objectName)), /invalid settle configuration/, String(objectName).slice(0, 40));
+  }
+  assert.equal(createSettleState(withName(`STORAGE-RULES/${"a".repeat(900)}`)).status, "running");
+  assert.equal(createSettleState(withName("STORAGE-RULES/r/a-b_c.d/e.bin")).status, "running");
+});

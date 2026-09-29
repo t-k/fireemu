@@ -15,6 +15,7 @@ import { promisify } from "node:util";
 
 import { CONFORMANCE_DIR } from "../config.mjs";
 import { createContext } from "../fs-rules/harness.mjs";
+import { STAGE2_HARNESS_FILES } from "../harness-registry.mjs";
 import { STAGE2_PRINCIPALS, STAGE2_PROGRAM } from "./programs-stage2.mjs";
 import { DRIVERS, spawnSdk } from "./sdk-client.mjs";
 import { createWireLedger, installSocketGuard } from "./sdk-wire.mjs";
@@ -81,21 +82,8 @@ export function runnerLimits(cost) {
   };
 }
 
-/** The files whose semantics a recorded row depends on; a change makes the rows stale. */
-const HARNESS_FILES = [
-  "fs-rules/harness.mjs",
-  "auth-credential/tokens.mjs",
-  "auth-fs-cross/stage2-session.mjs",
-  "auth-fs-cross/stage2-orchestrator.mjs",
-  "auth-fs-cross/listen-grpc.mjs",
-  "auth-fs-cross/sdk-client.mjs",
-  "auth-fs-cross/sdk-driver.mjs",
-  "auth-fs-cross/sdk-driver-wire.mjs",
-  "auth-fs-cross/sdk-wire.mjs",
-  "auth-fs-cross/sdk-operations.mjs",
-  "auth-fs-cross/browser-driver.mjs",
-  "auth-fs-cross/browser-page.mjs",
-];
+/** The files whose semantics a recorded row depends on; see harness-registry.mjs. */
+const HARNESS_FILES = STAGE2_HARNESS_FILES;
 
 export async function stage2HarnessDigest(
   read = (file) => readFile(join(CONFORMANCE_DIR, "src", file), "utf8"),
@@ -107,11 +95,10 @@ export async function stage2HarnessDigest(
 /** The harness digest of the files at `commit` (the principals are this checkout's). */
 export async function stage2HarnessDigestAt(commit) {
   return stage2HarnessDigest(async (file) => {
-    const { stdout } = await execFileAsync(
-      "git",
-      ["show", `${commit}:conformance/src/${file}`],
-      { cwd: CONFORMANCE_DIR, maxBuffer: 64 * 1024 * 1024 },
-    );
+    const { stdout } = await execFileAsync("git", ["show", `${commit}:conformance/src/${file}`], {
+      cwd: CONFORMANCE_DIR,
+      maxBuffer: 64 * 1024 * 1024,
+    });
     return stdout;
   });
 }

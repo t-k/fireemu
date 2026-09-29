@@ -11,11 +11,11 @@
 //   node src/auth-fs-cross/run.mjs local                run the corpus against fireemu only
 //   node src/auth-fs-cross/run.mjs export-comparison <out.json>
 //
-// Copied from conformance/src/fs-rules/run.mjs at commit
-// 3cab6f31ac7327f27849645fe1199f775c96d6a4 (file SHA-256
-// a5985ed27f3b5e3448ab0340cc0cef7d38bf3b7f685ec96b478b183e37e4bf54) and changed only where this
-// lane differs: its task, fixture, rulesets, principals and session, no custom-token signer, and
-// the other project whose ID token the foreign-project program presents (X9).
+// Copied from conformance/src/fs-rules/run.mjs, as it was when the local tenant setup and the
+// harness registry replaced its private digest recipe (file SHA-256
+// 7c39e63fc011cebd6cf639b6150b52f1fd1f71bf131a53848ac245233eb6c92c) and changed only
+// where this lane differs: its task, fixture, rulesets, principals and session, no custom-token
+// signer, and the other project whose ID token the foreign-project program presents (X9).
 //
 // Production needs FIREEMU_AUTH_SANDBOX_WEB_CONFIG (the sandbox web app config JSON, kept outside
 // the repository), FIREEMU_AUTH_FOREIGN_PROJECT_FILE and FIREEMU_AUTH_FOREIGN_KEY_FILE (the id,
@@ -41,6 +41,8 @@ import {
   SANDBOX_PROJECT,
   sameRecording,
 } from "../fs-rules/harness.mjs";
+import { checkFixtureDigest, HARNESS_LANES, rawDigest, treeReader } from "../harness-registry.mjs";
+import { withLocalMultiTenancy } from "../harness-target/local-tenancy.mjs";
 import { PRINCIPALS, PROGRAMS, validateCorpus } from "./corpus.mjs";
 import { RULESET_IDS, rulesetSource } from "./rulesets.mjs";
 import { compileProbe, readBaseline, readForeign, runProduction } from "./production.mjs";
@@ -71,14 +73,12 @@ const RULESET_TEXT = RULESET_IDS.map((id) => rulesetSource(id)).join("\n");
 /** A program's digest covers its JSON and every ruleset it could run under. */
 export const programDigest = (program) => sha256(`${JSON.stringify(program)}\n${RULESET_TEXT}`);
 
-/** Normalization and request semantics a saved row depends on; a change makes it stale. */
+/**
+ * Normalization and request semantics a saved row depends on; a change makes it stale. The files
+ * are listed in ../harness-registry.mjs, which also says when a recorded digest is still current.
+ */
 export async function harnessDigest() {
-  const sources = await Promise.all(
-    ["fs-rules/harness.mjs", "auth-fs-cross/session.mjs", "auth-credential/tokens.mjs"].map(
-      (file) => readFile(join(CONFORMANCE_DIR, "src", file), "utf8"),
-    ),
-  );
-  return sha256(`${sources.join("\n")}\n${JSON.stringify(PRINCIPALS)}`);
+  return rawDigest(HARNESS_LANES["auth-fs-cross"], treeReader);
 }
 
 export function selectPrograms(programs = PROGRAMS, env = process.env) {
@@ -513,11 +513,17 @@ async function sessionLocal() {
       },
     },
   });
-  const out = await runCorpus({ programs, principals: PRINCIPALS }, ctx, {
-    ...ceilings(programs),
-    log: process.env.AFC_VERBOSE ? (line) => console.error(line) : undefined,
-  });
-  await writeFile(process.env.AFC_OUT, JSON.stringify(out));
+  // The local tenant setup lives here, outside the digest the recorded rows are bound to.
+  const { value, actions, digest } = await withLocalMultiTenancy(ctx, () =>
+    runCorpus({ programs, principals: PRINCIPALS }, ctx, {
+      ...ceilings(programs),
+      log: process.env.AFC_VERBOSE ? (line) => console.error(line) : undefined,
+    }),
+  );
+  await writeFile(
+    process.env.AFC_OUT,
+    JSON.stringify({ ...value, localSetup: { digest, actions } }),
+  );
 }
 
 /** The local stand-in of the foreign project: see LOCAL_FOREIGN_PROJECT. */
@@ -626,14 +632,15 @@ async function check() {
     : { programs: {} };
   const selected = selectPrograms();
   validateCorpus(selected);
-  const harness = await harnessDigest();
   const local = await runLocal(selected);
   const rows = [];
   for (const program of selected) {
     const saved = fixture.programs[program.id];
     const stale =
       saved !== undefined &&
-      (saved.corpusDigest !== programDigest(program) || saved.harnessDigest !== harness);
+      (saved.corpusDigest !== programDigest(program) ||
+        checkFixtureDigest("auth-fs-cross", HARNESS_LANES["auth-fs-cross"], saved.harnessDigest)
+          .state === "stale");
     for (const step of program.steps.filter((s) => !s.action)) {
       const production = saved?.steps?.[step.id];
       const alternative = saved?.second?.[step.id];
@@ -655,7 +662,7 @@ async function check() {
   const artifactSha256 = sha256(await readFile(local.binary));
   await writeFile(
     join(RUN_DIR, "comparison.json"),
-    `${JSON.stringify({ artifact: local.binary, artifactSha256, summary, orphans, failures: local.failures, rows }, null, 2)}\n`,
+    `${JSON.stringify({ artifact: local.binary, artifactSha256, summary, orphans, failures: local.failures, localSetup: local.localSetup, rows }, null, 2)}\n`,
   );
   const passing = new Set(["MATCH", "MATCH_NONDETERMINISTIC", "DEPENDENCY_REFUSED"]);
   for (const row of rows.filter((r) => !passing.has(r.status))) {
@@ -677,6 +684,7 @@ async function exportComparison(out) {
     artifactSha256: comparison.artifactSha256,
     fixtureSha256,
     summary: comparison.summary,
+    localSetup: comparison.localSetup,
     rows: comparison.rows.map(({ row, status }) => ({ row, status })),
   };
   await writeFile(out, `${JSON.stringify(evidence, null, 2)}\n`);

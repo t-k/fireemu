@@ -1309,3 +1309,103 @@ fn a_continuation_resumed_with_another_session_is_not_checked_against_it() {
     let resumed = sign_in(&s, &resume);
     assert_eq!(resumed.status, 200, "{}", resumed.body);
 }
+
+/// A blocking hook that allows the sign-in and runs `during` while the request is paused, as a
+/// concurrent Admin call or the passing of time would.
+struct HookThatRuns {
+    during: Box<dyn Fn() + Send + Sync>,
+}
+
+impl fireemu_adapter_http::identity_toolkit::AuthBlockingHook for HookThatRuns {
+    fn invoke(
+        &self,
+        _event: fireemu_core_functions::manifest::BlockingAuthEvent,
+        _user: &UserRecord,
+    ) -> Result<Value, fireemu_adapter_http::identity_toolkit::BlockingFunctionFailure> {
+        Ok(json!({}))
+    }
+
+    fn invoke_for_with_context(
+        &self,
+        _project: &str,
+        _tenant: Option<&str>,
+        _event: fireemu_core_functions::manifest::BlockingAuthEvent,
+        _user: &UserRecord,
+        _context: &fireemu_adapter_http::identity_toolkit::AuthBlockingContext,
+    ) -> Result<Option<Value>, fireemu_adapter_http::identity_toolkit::BlockingFunctionFailure>
+    {
+        (self.during)();
+        Ok(Some(json!({})))
+    }
+}
+
+#[test]
+fn a_provider_repointed_while_a_blocking_function_runs_is_refused_at_commit() {
+    // The commit checks what the live configuration decides again (the callback URL, the
+    // identity provider's entity ID and the SP entity ID), as a resumed continuation does
+    // (closure review N10 / N-d). The refusal is the existing bare INVALID_IDP_RESPONSE.
+    type Repoint = fn(&mut InboundSamlProviderConfig);
+    let cases: [(&str, Repoint); 3] = [
+        ("callback URL", |config| {
+            config.callback_uri = "https://demo-app.firebaseapp.com/__/auth/other".into();
+        }),
+        ("identity provider entity ID", |config| {
+            config.idp_entity_id = "https://other-idp.example.test/saml".into();
+        }),
+        ("SP entity ID", |config| {
+            config.sp_entity_id = "https://other.example.test/sp".into();
+        }),
+    ];
+    for (case, repoint) in cases {
+        let (mut s, key) = dynamic_state();
+        let store = s.store.clone();
+        s.blocking = Some(Arc::new(HookThatRuns {
+            during: Box::new(move || {
+                let mut store = store.lock().unwrap();
+                let mut config = store.saml_config(DYNAMIC).unwrap().clone();
+                repoint(&mut config);
+                store.replace_saml_config(config);
+            }),
+        }));
+        let xml = signed_response(&key, &Conditions::answering(None));
+        let response = sign_in(&s, &dynamic_request(&xml, None));
+        assert_eq!(response.status, 400, "{case}: {}", response.body);
+        assert_eq!(
+            response.body["error"]["message"], "INVALID_IDP_RESPONSE",
+            "{case}"
+        );
+        assert_eq!(s.store.lock().unwrap().user_count(), 0, "{case}");
+    }
+}
+
+#[test]
+fn a_response_that_expires_while_a_blocking_function_runs_still_commits() {
+    // The time windows are read once, when the request starts, as production reads them before
+    // it calls the function; a slow function does not turn a valid sign-in into a refusal.
+    let (mut s, key) = dynamic_state();
+    let clock = s.clock.clone();
+    s.blocking = Some(Arc::new(HookThatRuns {
+        during: Box::new(move || {
+            clock
+                .lock()
+                .unwrap()
+                .set(LogicalInstant::from_unix_seconds(NOW + 1_000))
+                .unwrap();
+        }),
+    }));
+    let xml = signed_response(&key, &Conditions::answering(None));
+    let response = sign_in(&s, &dynamic_request(&xml, None));
+    assert_eq!(response.status, 200, "{}", response.body);
+    assert_eq!(s.store.lock().unwrap().user_count(), 1);
+}
+
+#[test]
+fn a_provider_left_alone_while_a_blocking_function_runs_commits_a_dynamic_response() {
+    let (mut s, key) = dynamic_state();
+    s.blocking = Some(Arc::new(HookThatRuns {
+        during: Box::new(|| {}),
+    }));
+    let xml = signed_response(&key, &Conditions::answering(None));
+    let response = sign_in(&s, &dynamic_request(&xml, None));
+    assert_eq!(response.status, 200, "{}", response.body);
+}

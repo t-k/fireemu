@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
+import { isDeepStrictEqual } from "node:util";
 
 const closurePath = fileURLToPath(
   new URL("../../spec/compatibility/closure/AUTH-FEDERATION.json", import.meta.url),
@@ -82,20 +83,44 @@ const MATCHING = new Set([
 ]);
 
 /**
- * The owner-decided divergences a regression parent's own closure records: a regression row
- * that differs is accepted only when that parent documents it (its evidence is that parent's).
+ * The owner-decided divergences a regression parent's own closure records, by row: the parent
+ * that documents it, and the row's status and differences in that parent's committed comparison.
  */
 function laneDocumentedRows() {
-  const rows = new Set();
+  const rows = new Map();
   for (const lane of REGRESSION_LANES) {
     const closure = readJson(`spec/compatibility/closure/${lane.toUpperCase()}.json`);
     for (const { evidence } of closure.conditions) {
+      const compared = (evidence?.comparisonPaths ?? []).flatMap((path) => readJson(path).rows);
       for (const divergence of evidence?.documentedDivergences ?? []) {
-        if (divergence.decidedBy === "owner") rows.add(divergence.row);
+        if (divergence.decidedBy !== "owner") continue;
+        const recorded = compared.filter(({ row }) => row === divergence.row);
+        assert.equal(recorded.length, 1, `${lane}: ${divergence.row} is compared once`);
+        const { status, differences } = recorded[0];
+        rows.set(divergence.row, { lane, status, differences });
       }
     }
   }
   return rows;
+}
+
+/**
+ * The differing regression rows not accepted: a row is accepted only when the regression parent
+ * it belongs to documents it, and it differs exactly as that parent's committed comparison
+ * records (its status and differences), so a documented row cannot drift unnoticed.
+ */
+function unacceptedRegressionRows(offRows, laneDocumented) {
+  return offRows
+    .filter(({ row, status, differences }) => {
+      const documented = laneDocumented.get(row);
+      return !(
+        documented &&
+        row.startsWith(`${documented.lane}/`) &&
+        status === documented.status &&
+        isDeepStrictEqual(differences, documented.differences)
+      );
+    })
+    .map(({ row }) => row);
 }
 
 const REGRESSION_LANES = new Set([
@@ -258,9 +283,8 @@ test("AUTH-FEDERATION closure inventory cannot silently omit a declared conditio
       }
     }
     const documented = new Set(divergences.map(({ row }) => row));
-    const off = rows
-      .filter(({ status, row }) => !MATCHING.has(status) && !documented.has(row))
-      .map(({ row }) => row);
+    const offRows = rows.filter(({ status, row }) => !MATCHING.has(status) && !documented.has(row));
+    const off = offRows.map(({ row }) => row);
     if (label === "AUTH-FEDERATION/closure-review") {
       assert.equal(closure.closureReview?.decision, "APPROVED", label);
       assert.equal(
@@ -277,14 +301,16 @@ test("AUTH-FEDERATION closure inventory cannot silently omit a declared conditio
           `${other.conditionId}: bound to the final artifact`,
         );
       }
-      const everyDocumented = new Set([
-        ...closure.conditions.flatMap(({ evidence }) =>
+      const ownDocumented = new Set(
+        closure.conditions.flatMap(({ evidence }) =>
           (evidence?.documentedDivergences ?? []).map(({ row }) => row),
         ),
-        ...laneDocumentedRows(),
-      ]);
+      );
       assert.deepEqual(
-        off.filter((row) => !everyDocumented.has(row)),
+        unacceptedRegressionRows(
+          offRows.filter(({ row }) => !ownDocumented.has(row)),
+          laneDocumentedRows(),
+        ),
         [],
         `${label}: every differing row is a documented divergence`,
       );
@@ -292,6 +318,37 @@ test("AUTH-FEDERATION closure inventory cannot silently omit a declared conditio
       assert.deepEqual(off, [], `${label}: every row matches production`);
     }
   }
+});
+
+test("a regression parent's documented row is accepted only as that parent records it", () => {
+  // Integrated closure review S1: the row must differ exactly as the documenting parent's own
+  // committed comparison records it, and only that parent (the row's prefix) documents it.
+  const regression = readJson(
+    "spec/compatibility/closure/evidence/AUTH-FEDERATION-config-sdk-regression.json",
+  );
+  const offRows = regression.rows.filter(({ status }) => !MATCHING.has(status));
+  assert.equal(offRows.length, 8, "the K5, K16 and K17 rows");
+  const laneDocumented = laneDocumentedRows();
+  assert.deepEqual(unacceptedRegressionRows(offRows, laneDocumented), []);
+  const malformed = "auth-config-sdk/config/invalid#body-malformed";
+  const changed = (patch) =>
+    offRows.map((row) => (row.row === malformed ? { ...row, ...patch } : row));
+  // The review's probe: other members differ than the lane recorded.
+  assert.deepEqual(
+    unacceptedRegressionRows(
+      changed({ differences: ["status", "body.error.message", "body.error.code"] }),
+      laneDocumented,
+    ),
+    [malformed],
+  );
+  assert.deepEqual(unacceptedRegressionRows(changed({ status: "INDETERMINATE" }), laneDocumented), [
+    malformed,
+  ]);
+  const misfiled = new Map(
+    [...laneDocumented].map(([row, documented]) => [row, { ...documented, lane: "auth-mfa" }]),
+  );
+  assert.equal(unacceptedRegressionRows(offRows, misfiled).length, 8);
+  assert.equal(unacceptedRegressionRows(offRows, new Map()).length, 8);
 });
 
 test("scope decisions are recorded, not implied", () => {

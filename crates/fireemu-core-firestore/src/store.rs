@@ -1044,9 +1044,12 @@ const MAX_FINISHED_TRANSACTION_LINEAGE: usize = 8_192;
 // Strict allows a transaction to sit idle 120 s (the nominal 60 s quota plus this allowance).
 // Production accepted a native Commit after a nominal 110 s idle (measured idle in [110.58,
 // 113.12] s) and refused one after 120 s ([120.54, 122.97] s), each twice (P10-C), and the earlier
-// native samples of 65 to 70 s (up to 72.9 s) were accepted; a REST refusal sat at about 121 s.
+// native samples of 65 to 70 s (up to 72.9 s) were accepted. The REST refusals of the expiry
+// recording (run e823, idleSeconds 121.15 and 120.35, response to response) are consistent with
+// this but bound nothing.
 // Strict must not refuse what production accepted (at least 113.12 s) and must refuse what it
-// refused (below 120.54 s); it takes 120 s, so the unobserved gap 113.12 to 120 s is accepted.
+// refused (below 120.54 s); it takes 120 s. The unobserved 113.12 to 120 s gap is accepted and
+// the unobserved 120 to 120.54 s gap is refused.
 // This is a provisional bracket, not an exact production threshold.
 // The pinned official emulator retains its nominal idle budget without this allowance.
 const TRANSACTION_IDLE_ALLOWANCE_SECONDS: i64 = 60;

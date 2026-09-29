@@ -3764,8 +3764,9 @@ fn an_idle_rest_transaction_expires_and_releases_its_document_lock() {
     );
     assert_eq!(status, 200, "{held}");
 
-    // The REST commit that production refused had idled about 121 s (P10-C bracket); strict's limit
-    // is 120 s, so 125 s is a later local sample. It claims no exact production threshold.
+    // The REST commit that production refused (expiry recording, run e823) had a measured idleSeconds
+    // of 121.15 and 120.35 (response to response); strict's limit is 120 s, so 125 s is a later
+    // local sample. It claims no exact production threshold.
     let _ = clock
         .lock()
         .unwrap()

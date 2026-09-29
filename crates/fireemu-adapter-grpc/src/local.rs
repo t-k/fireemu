@@ -695,10 +695,18 @@ impl CommitPublication for NoopCommitPublication {
 pub const DEFAULT_CONTENTION_WAIT: std::time::Duration = std::time::Duration::from_secs(15);
 
 /// How long (wall clock) a transaction may keep other writers blocked on its locks before it
-/// is rolled back: production expires a transaction idle for 60 seconds, which is what
-/// releases a lock a client stopped driving. The lease is wall time even under a pinned
-/// virtual clock, so a client awaiting a write that its own transaction blocks (a pattern
-/// the SDKs' commit retries turn into a long wait in production too) eventually proceeds.
+/// is rolled back: production expires an idle transaction, which is what releases a lock a
+/// client stopped driving. The lease is wall time even under a pinned virtual clock, so a
+/// client awaiting a write that its own transaction blocks (a pattern the SDKs' commit
+/// retries turn into a long wait in production too) eventually proceeds.
+///
+/// The 60 seconds are the nominal documented idle quota. Production's own idle limit lies
+/// between about 110.7 and 123 seconds (P10-B, P10-C: a native Commit after a nominal 110 second
+/// idle was accepted, one after 120 seconds refused), and strict's virtual-clock limit is 120
+/// seconds. This lease is a separate rule, in both profiles: a transaction that holds a
+/// lock another writer contends with is rolled back after 60 seconds of wall idle. What
+/// production does with a contended holder between 60 seconds and its limit is unobserved; it
+/// may keep the holder, whose later Commit here is then ABORTED.
 pub const DEFAULT_LOCK_LEASE: std::time::Duration = std::time::Duration::from_secs(60);
 
 /// Commit notifications retained for slow Listen and UI subscribers. Lag is recoverable by

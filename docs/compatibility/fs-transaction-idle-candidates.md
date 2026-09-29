@@ -28,6 +28,8 @@ The private controlled-clock counterpart invokes ordinary maintenance on every a
 
 Both profiles also passed the same-instance REST success at 20 seconds and refusal at 70 seconds probe, the retained REST replay of 13 cases against both saved recordings, and the P09 native predecessor replay. Local processes exited normally and the observed owned documents were proved absent. These are bounded regressions on this artifact, not final-artifact closure across the remaining corpus.
 
+> **Superseded (P10-C, 2026-09-30).** The 10-second allowance, the 70-second cutoff and the reading of REST as refusing at 70 seconds in the paragraphs above describe the state of the artifact when they were written and are no longer current. The REST refusals had idled about 121.15 and 120.35 seconds, not 70. After P10-B and P10-C, strict takes 120 seconds (a 60-second allowance), a provisional bracket: production accepted a native Commit after a nominal 110-second idle and refused one after 120 seconds, and its own limit lies between about 110.70 and 122.96 seconds. The 69/70/71-second matrix below and the 20/70-second REST probe were checked against the old cutoff and are historical.
+
 ## Verification and remaining obligations
 
 Four recorded-candidate regressions first failed on the prior runtime. The repair was checked with direct operations and preceding maintenance. A separate controlled-clock matrix at 69/70/71 seconds protects the provisional local policy without asserting production equality. Six relevant semantic mutations were detected, including upward allowance drift, premature pruning, total-budget relaxation and overbroad Finished retry. Existing later-expiry, lock-release and 269/271 total-budget obligations remain covered.

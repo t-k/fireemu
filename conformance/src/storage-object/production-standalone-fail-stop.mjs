@@ -228,6 +228,47 @@ export function failStopProductionStandalone(boundary, supplied) {
   exit(2);
 }
 
+/** Source-only privacy audit: a checked payload or commitment cannot be fabricated after scan failure. */
+export function failStopProductionPrivacy(boundary, supplied) {
+  const expected = boundaries.get(boundary);
+  if (!expected?.runtime) throw new Error("invalid production privacy boundary");
+  let input;
+  try {
+    input = copyProductionCaptureRecord(supplied, ["recording", "reason"]);
+    if (
+      Object.keys(input).length !== 2 ||
+      ![1, 2].includes(input.recording) ||
+      ![
+        "artifact-withheld-privacy",
+        "artifact-uncheckable",
+        "artifact-removed-late-secret",
+        "artifact-past-scan-uncertain",
+        "shared-record-withheld-privacy",
+        "shared-record-uncheckable",
+      ].includes(input.reason)
+    )
+      throw new Error();
+  } catch {
+    throw new Error("invalid production privacy failure");
+  }
+  expected.runtime.secretRegistry.close();
+  try {
+    const audit = {
+      reason: input.reason,
+      timestamp: new Instant(now()).toISOString(),
+      runId: expected.runtime.runIds[input.recording - 1],
+    };
+    persistFixedRecord(
+      expected,
+      Buffer.from(`${JSON.stringify(audit)}\n`),
+      `privacy-r${input.recording}.json`,
+    );
+  } catch {
+    // Persistence uncertainty retains the started lease and exits without exposing payload metadata.
+  }
+  exit(2);
+}
+
 /** The runtime must additionally pin original provider identities and their synchronous source contract. */
 export function callProductionStandaloneProvider(supplied) {
   let input, args;

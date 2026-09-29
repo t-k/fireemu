@@ -2,6 +2,25 @@ import { types } from "node:util";
 import { captureSecretForms } from "./production-capture-body.mjs";
 import { createProductionSecretIndex } from "./production-secret-index.mjs";
 
+import { originalProductionArtifactInventoryObserver } from "./production-artifact-inventory.mjs";
+
+import { copyProductionCaptureArray } from "./production-capture-input.mjs";
+
+const artifactObservers = new WeakMap(),
+  batchRegistrations = new WeakMap();
+/** Discovery enrolls every value in its bounded original batch before rescanning past artifacts. */
+export function registerProductionSecretBatch(registry, values) {
+  const register = batchRegistrations.get(registry);
+  if (!register) throw new Error("invalid production secret registry");
+  return register(values);
+}
+export function bindProductionSecretArtifactInventory(registry, inventory) {
+  const observer = originalProductionArtifactInventoryObserver(inventory, registry);
+  if (!registries.has(registry) || !observer || artifactObservers.has(registry))
+    throw new Error("invalid production secret artifact inventory");
+  artifactObservers.set(registry, observer);
+}
+
 const registries = new WeakSet();
 const memberships = new WeakMap();
 const unavailable = () => new Error("SECRET_REGISTRY_UNAVAILABLE");
@@ -58,31 +77,40 @@ export function createProductionSecretRegistry(supplied) {
   const ready = () => {
     if (closed || failed || index.snapshot().failed) throw unavailable();
   };
+  function enroll(value) {
+    ready();
+    if (typeof value !== "string" || !value || value.length > 8192 || !value.isWellFormed())
+      throw unavailable();
+    if (values.has(value)) return false;
+    const bytes = Buffer.byteLength(value);
+    if (values.size >= limits.maxValues || bytes > limits.maxUtf8Bytes - utf8Bytes)
+      throw unavailable();
+    const retained = Buffer.from(value, "utf8").toString("utf8");
+    index.registerPatterns(captureSecretForms(retained));
+    values.add(retained);
+    utf8Bytes += bytes;
+    retainedCount = values.size;
+    return true;
+  }
+  function failRegistration() {
+    failed = true;
+    index.halt();
+    artifactObservers.get(registry)?.();
+    throw unavailable();
+  }
   const registry = Object.freeze({
     register(value) {
-      ready();
       try {
-        if (typeof value !== "string" || !value || value.length > 8192 || !value.isWellFormed())
-          throw unavailable();
-        if (values.has(value)) return;
-        const bytes = Buffer.byteLength(value);
-        if (values.size >= limits.maxValues || bytes > limits.maxUtf8Bytes - utf8Bytes)
-          throw unavailable();
-        // A caller's short slice can retain an arbitrarily large backing string.
-        const retained = Buffer.from(value, "utf8").toString("utf8");
-        index.registerPatterns(captureSecretForms(retained));
-        values.add(retained);
-        utf8Bytes += bytes;
-        retainedCount = values.size;
+        if (enroll(value)) artifactObservers.get(registry)?.();
       } catch {
-        failed = true;
-        index.halt();
-        throw unavailable();
+        failRegistration();
       }
     },
-    openScan() {
+    openScan(maximum = limits.maxScanCodeUnits) {
       ready();
-      return index.openScan(limits.maxScanCodeUnits);
+      if (!Number.isSafeInteger(maximum) || maximum < 1 || maximum > limits.maxScanCodeUnits)
+        throw unavailable();
+      return index.openScan(maximum);
     },
     snapshot: () =>
       Object.freeze({
@@ -98,6 +126,16 @@ export function createProductionSecretRegistry(supplied) {
       index.close();
       values.clear();
     },
+  });
+  batchRegistrations.set(registry, (suppliedValues) => {
+    try {
+      const batch = copyProductionCaptureArray(suppliedValues, 64);
+      let changed = false;
+      for (const value of batch) changed = enroll(value) || changed;
+      if (changed) artifactObservers.get(registry)?.();
+    } catch {
+      failRegistration();
+    }
   });
   registries.add(registry);
   memberships.set(registry, (value) => {

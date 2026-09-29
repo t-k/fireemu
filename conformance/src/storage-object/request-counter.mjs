@@ -3,6 +3,20 @@ import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { buildProductionStage3DraftPlan } from "./stage3-plan.mjs";
 
+import { productionArtifactProfileUsesPlan } from "./production-artifact-policy.mjs";
+
+const taskCounterBindings = new WeakMap();
+/** Private counts remain available for fixed failure diagnostics after registry failure; this grants no admission authority. */
+export function originalProductionStage3CounterSnapshot(counter, profile) {
+  const binding = taskCounterBindings.get(counter);
+  if (
+    !binding?.production ||
+    binding.artifactProfile === undefined ||
+    binding.artifactProfile !== profile
+  )
+    return null;
+  return binding.read();
+}
 const recipeContextClaims = new WeakMap();
 
 /** Claim one sender context from an actual active recipe capability. */
@@ -13,11 +27,19 @@ export function claimStage3RecipeContext(token, plan) {
 }
 
 /** Count every outbound attempt before dispatch, with protected cleanup and recovery capacity. */
-export function createStage3RequestCounter(plan, { onStart, onReserve, recipeLifecycle } = {}) {
+export function createStage3RequestCounter(
+  plan,
+  { onStart, onReserve, recipeLifecycle, artifactProfile } = {},
+) {
   if (typeof onStart !== "function" || typeof onReserve !== "function")
     throw new Error("durable started and request-reservation writers are required");
   plan = structuredClone(plan);
   const production = plan?.status === "PRODUCTION_DRAFT_NO_SEND";
+  if (
+    artifactProfile !== undefined &&
+    (!production || !productionArtifactProfileUsesPlan(artifactProfile, plan))
+  )
+    throw new Error("invalid production counter artifact profile");
   const productionStartsAttempted = new Set();
   let productionAdmissionFailed = false;
   let lifecycle = null;
@@ -221,6 +243,21 @@ export function createStage3RequestCounter(plan, { onStart, onReserve, recipeLif
     });
   }
 
+  const taskSnapshot = () => {
+    return {
+      total,
+      recordings: recordings.map((item) => ({ subject: item.subject, cleanup: item.cleanup })),
+      recovery,
+      mode,
+      ...(production ? { recording: recording + 1 } : {}),
+      ...(lifecycle
+        ? {
+            completedRecipes: [...completedRecipes],
+            activeRecipeId: activeRecipe?.recipeId ?? null,
+          }
+        : {}),
+    };
+  };
   const counter = {
     async start() {
       if (mode !== "not-started" || busy) throw new Error("counter already started");
@@ -396,20 +433,26 @@ export function createStage3RequestCounter(plan, { onStart, onReserve, recipeLif
       mode = "closed";
     },
     snapshot() {
-      return {
-        total,
-        recordings: recordings.map((item) => ({ subject: item.subject, cleanup: item.cleanup })),
-        recovery,
-        mode,
-        ...(production ? { recording: recording + 1 } : {}),
-        ...(lifecycle
-          ? {
-              completedRecipes: [...completedRecipes],
-              activeRecipeId: activeRecipe?.recipeId ?? null,
-            }
-          : {}),
-      };
+      return taskSnapshot();
     },
   };
+  taskCounterBindings.set(counter, {
+    artifactProfile,
+    plan,
+    production,
+    read: () => {
+      const value = taskSnapshot();
+      // The second admission callback runs before the public counter advances; diagnostics already belong to its target.
+      const targetRecording = productionStartsAttempted.has(1) ? 1 : recording;
+      return Object.freeze({
+        ...value,
+        recording: targetRecording + 1,
+        recordings: Object.freeze(value.recordings.map((row) => Object.freeze(row))),
+        busy,
+        startAttempted: productionStartsAttempted.has(targetRecording),
+        admissionFailed: productionAdmissionFailed,
+      });
+    },
+  });
   return counter;
 }

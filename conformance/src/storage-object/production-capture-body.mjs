@@ -469,6 +469,14 @@ function captureStorageBody(
     }
     parts.push(text.slice(offset));
     const saved = parts.join("");
+    // Successful classification may expand the saved representation beyond the original scan bound.
+    // This does not recover from an unknown shape, discovery failure or a failed scan.
+    if (
+      !coverageOnly &&
+      isProductionSecretScan(secretScan) &&
+      (saved.length > MAX_RESPONSE_BODY_BYTES || Buffer.byteLength(saved) > MAX_RESPONSE_BODY_BYTES)
+    )
+      return base;
     if (unsafe(saved)) return base;
     return {
       ...base,

@@ -12,6 +12,7 @@ import { createHash } from "node:crypto";
 import { isAbsolute, join } from "node:path";
 import { copyProductionCaptureRecord } from "./production-capture-input.mjs";
 import {
+  originalProductionArtifactContext,
   isProductionArtifactProfile,
   sanitizeProductionArtifact,
 } from "./production-artifact-policy.mjs";
@@ -22,8 +23,18 @@ import {
 } from "./production-standalone-fail-stop.mjs";
 import { MAX_RESPONSE_BODY_BYTES } from "./wire-limits.mjs";
 
+import {
+  ensureProductionArtifactInventory,
+  reserveProductionArtifactFile,
+  trackProductionArtifactFile,
+} from "./production-artifact-inventory.mjs";
+
 const writers = new WeakSet();
-const receipts = new WeakMap();
+const receipts = new WeakMap(),
+  pendingFiles = new WeakMap();
+export function originalProductionArtifactPending(writer) {
+  return writers.has(writer) ? (pendingFiles.get(writer) ?? null) : null;
+}
 // A finite prototype ceiling; the runtime must still prove every actual producer count.
 const MAX_ARTIFACT_FILES = 6000 * 16 + 1024;
 const MAX_OUTPUT_BYTES = MAX_RESPONSE_BODY_BYTES + 4096 * 160;
@@ -94,6 +105,11 @@ export function isProductionArtifactReceipt(receipt, supplied) {
     return false;
   }
 }
+export function originalProductionArtifactFile(receipt, writer) {
+  const original = receipts.get(receipt);
+  return writers.has(writer) && original?.writer === writer ? original.fileBinding : null;
+}
+
 /** This original synchronous writer owns every path and never receives a raw error object. */
 export function createProductionArtifactWriter(supplied) {
   let input, expected;
@@ -117,6 +133,7 @@ export function createProductionArtifactWriter(supplied) {
   } catch {
     throw new Error("invalid production artifact writer");
   }
+  const inventory = ensureProductionArtifactInventory(input);
   let sequence = 0,
     closed = false;
   const stop = (row) =>
@@ -132,6 +149,7 @@ export function createProductionArtifactWriter(supplied) {
       let directoryFd,
         fileFd,
         result,
+        fileBinding,
         durable = false;
       try {
         if (closed || sequence >= MAX_ARTIFACT_FILES) throw new Error();
@@ -145,6 +163,17 @@ export function createProductionArtifactWriter(supplied) {
           throw new Error();
         const file = `artifact-${String(++sequence).padStart(6, "0")}-r${row.recording}.json`,
           path = join(input.directory, file);
+        pendingFiles.set(
+          writer,
+          Object.freeze({
+            ...input,
+            registry: originalProductionArtifactContext(input.profile).secretRegistry,
+            file,
+            path,
+            recording: row.recording,
+          }),
+        );
+        reserveProductionArtifactFile(inventory, writer);
         directoryFd = openSync(
           input.directory,
           constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW,
@@ -157,6 +186,11 @@ export function createProductionArtifactWriter(supplied) {
         );
         const before = fstatSync(fileFd);
         if (!before.isFile() || before.nlink !== 1 || !owned(before, 0o600)) throw new Error();
+        pendingFiles.set(
+          writer,
+          Object.freeze({ ...pendingFiles.get(writer), dev: before.dev, ino: before.ino }),
+        );
+        reserveProductionArtifactFile(inventory, writer);
         let offset = 0;
         while (offset < bytes.length) {
           const count = writeSync(fileFd, bytes, offset, bytes.length - offset);
@@ -190,6 +224,19 @@ export function createProductionArtifactWriter(supplied) {
           sha256: hash(bytes),
           byteLength: bytes.length,
         });
+        fileBinding = Object.freeze({
+          ...input,
+          writerKind: "artifact",
+          kind: row.kind,
+          registry: originalProductionArtifactContext(input.profile).secretRegistry,
+          file,
+          path,
+          dev: before.dev,
+          ino: before.ino,
+          recording: row.recording,
+          sha256: result.sha256,
+          byteLength: bytes.length,
+        });
         durable = projection.taskSecretStatus === "AVAILABLE";
       } catch {
         durable = false;
@@ -208,7 +255,14 @@ export function createProductionArtifactWriter(supplied) {
         recording: row.recording,
         operationId: row.operationId,
         kind: row.kind,
+        fileBinding,
       });
+      try {
+        trackProductionArtifactFile(inventory, writer, result);
+        pendingFiles.delete(writer);
+      } catch {
+        stop(row);
+      }
       return result;
     },
     close() {

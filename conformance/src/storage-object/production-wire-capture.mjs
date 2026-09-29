@@ -8,6 +8,18 @@ import {
 } from "./private-wire-capture.mjs";
 import { sanitizeProductionCapture } from "./production-capture-policy.mjs";
 import { isProductionSecretRegistry } from "./production-secret-registry.mjs";
+import { originalProductionArtifactContext } from "./production-artifact-policy.mjs";
+import {
+  createProductionWireFileWriter,
+  createPrototypeWireFileWriter,
+  isProductionWireFileReceipt,
+} from "./production-owned-wire-files.mjs";
+import {
+  productionStandaloneOwnsDirectory,
+  productionStandaloneUsesArtifactProfile,
+  failStopProductionPrivacy,
+  failStopProductionStandalone,
+} from "./production-standalone-fail-stop.mjs";
 import {
   isProductionCaptureProfile,
   productionCaptureRequestBodyKind,
@@ -61,6 +73,26 @@ function persistenceCopy(value) {
   return { ...copy, bodyBase64: body === null ? null : body.toString("base64") };
 }
 
+function compactPersistenceCopy(value) {
+  const jsonCommitment = (child) => commitment(Buffer.from(JSON.stringify(child)));
+  return {
+    originalByteLength: value.originalByteLength,
+    originalSha256: value.originalSha256,
+    mode: "COMMITMENT_ONLY",
+    bodyBase64: null,
+    replacedFields: jsonCommitment(value.replacedFields),
+    url: jsonCommitment(value.url),
+    headers: jsonCommitment(value.headers),
+    replacedHeaders: jsonCommitment(value.replacedHeaders),
+    observation: value.observation ?? {
+      byteLength: value.originalByteLength,
+      sha256: value.originalSha256,
+    },
+    taskSecretStatus: "AVAILABLE",
+    representation: "SIZE_BOUND_COMMITMENT",
+  };
+}
+
 /** The original HTTP plaintext is committed in memory and never passed to a file writer. */
 export function createProductionWireAttempt({
   directory,
@@ -98,6 +130,55 @@ export function createProductionWireAttempt({
       throw new Error("invalid production wire capture");
     const secretRegistry = policy.secretRegistry;
     const captureProfile = policy.captureProfile;
+    const privacyBoundary = policy.standaloneBoundary;
+    const artifactProfile = policy.artifactProfile;
+    const recording = /^r([12])\/(?:p(?:[1-9]|1[0-9]|2[0-6])|control)\/[a-f0-9]{64}$/.exec(
+      operationId,
+    )?.[1];
+    if (privacyBoundary !== undefined || artifactProfile !== undefined) {
+      const context = originalProductionArtifactContext(artifactProfile);
+      if (
+        recording === undefined ||
+        context?.secretRegistry !== secretRegistry ||
+        !productionStandaloneUsesArtifactProfile(privacyBoundary, artifactProfile) ||
+        !productionStandaloneOwnsDirectory(privacyBoundary, directory)
+      )
+        throw new Error("invalid production wire privacy boundary");
+    }
+    // Every generated field and the actual serialization suffix are checked together.
+    const encoded = (value) => {
+      let bytes = encode(value);
+      if (secretRegistry !== undefined) {
+        let reason = "artifact-uncheckable";
+        try {
+          if (bytes.length > MAX_RESPONSE_BODY_BYTES) {
+            const key = Object.hasOwn(value, "capture") ? "capture" : "response";
+            const capture = value[key];
+            const state = secretRegistry.snapshot();
+            if (
+              value.complete === false ||
+              state.failed ||
+              state.closed ||
+              capture?.taskSecretStatus !== "AVAILABLE" ||
+              !["RAW_BODY", "CAPABILITY_FIELDS_REPLACED"].includes(capture.mode)
+            )
+              throw new Error();
+            bytes = encode({ ...value, [key]: compactPersistenceCopy(capture) });
+          }
+          if (bytes.length > MAX_RESPONSE_BODY_BYTES) throw new Error();
+          if (secretRegistry.openScan().hasSecretCopy(bytes.toString("utf8"))) {
+            reason = "artifact-withheld-privacy";
+            throw new Error();
+          }
+        } catch {
+          secretRegistry.close();
+          if (privacyBoundary !== undefined)
+            failStopProductionPrivacy(privacyBoundary, { recording: Number(recording), reason });
+          throw new Error("production wire artifact withheld");
+        }
+      }
+      return bytes;
+    };
     if (secretRegistry !== undefined && !isProductionSecretRegistry(secretRegistry))
       throw new Error("invalid task secret registry");
     if (secretRegistry !== undefined && !isProductionCaptureProfile(captureProfile))
@@ -116,6 +197,23 @@ export function createProductionWireAttempt({
     const responseBodyKind = policy.responseBodyKind ?? "json";
     if (!["json", "media"].includes(responseBodyKind))
       throw new Error("invalid production wire capture");
+    const ownedWriter =
+      privacyBoundary === undefined
+        ? secretRegistry === undefined
+          ? null
+          : createPrototypeWireFileWriter({
+              directory,
+              registry: secretRegistry,
+              operationId,
+              sequence,
+            })
+        : createProductionWireFileWriter({
+            directory,
+            profile: artifactProfile,
+            boundary: privacyBoundary,
+            operationId,
+            sequence,
+          });
     const capturedRequest = sanitizeProductionCapture({
       ...options,
       url,
@@ -131,32 +229,47 @@ export function createProductionWireAttempt({
     const requestWire = commitment(requestWireBytes);
     const parent = privateCaptureDirectory(directory);
     const stem = String(sequence).padStart(6, "0");
-    const files = Object.freeze({
-      request: join(parent, `${stem}-request.json`),
-      intent: join(parent, `${stem}-intent.json`),
-      response: join(parent, `${stem}-response.json`),
-      result: join(parent, `${stem}-result.json`),
+    const files =
+      ownedWriter?.files ??
+      Object.freeze({
+        request: join(parent, `${stem}-request.json`),
+        intent: join(parent, `${stem}-intent.json`),
+        response: join(parent, `${stem}-response.json`),
+        result: join(parent, `${stem}-result.json`),
+      });
+    const persist = (kind, value) => {
+      const bytes = encoded(value);
+      if (ownedWriter !== null) {
+        const receipt = ownedWriter.write(kind, bytes);
+        if (!isProductionWireFileReceipt(receipt, ownedWriter, kind))
+          failStopProductionStandalone(privacyBoundary, {
+            recording: Number(recording),
+            operationId,
+            reason: "PERSISTENCE_UNCERTAIN",
+            providerKind: "runtime",
+          });
+      } else writePrivateExclusive(files[kind], bytes);
+    };
+    persist("request", {
+      sequence,
+      method,
+      requestWire,
+      capture: persistenceCopy(capturedRequest),
     });
-    writePrivateExclusive(
-      files.request,
-      encode({ sequence, method, requestWire, capture: persistenceCopy(capturedRequest) }),
-    );
-    writePrivateExclusive(
-      files.intent,
-      encode({
-        sequence,
-        phase,
-        operationId: commitment(Buffer.from(operationId)),
-        boundary: "HTTP_PLAINTEXT_COMMITMENT_AND_SANITIZED_BODY",
-      }),
-    );
+    persist("intent", {
+      sequence,
+      phase,
+      operationId: commitment(Buffer.from(operationId)),
+      boundary: "HTTP_PLAINTEXT_COMMITMENT_AND_SANITIZED_BODY",
+    });
     if (capturedRequest.taskSecretStatus === "UNAVAILABLE")
       throw new Error("task secret registry unavailable");
-    responseFd = openSync(
-      files.response,
-      constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
-      0o600,
-    );
+    if (ownedWriter === null)
+      responseFd = openSync(
+        files.response,
+        constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
+        0o600,
+      );
     const wireHash = createHash("sha256");
     let byteLength = 0;
     let readUnits = 0;
@@ -193,8 +306,10 @@ export function createProductionWireAttempt({
         closed = true;
         try {
           const responseWire = { byteLength, readUnits, sha256: wireHash.digest("hex") };
-          writePrivateBytes(responseFd, encode({ sequence, responseWire }));
-          fsyncSync(responseFd);
+          if (secretRegistry === undefined) {
+            writePrivateBytes(responseFd, encoded({ sequence, responseWire }));
+            fsyncSync(responseFd);
+          }
           if (
             receipt === null ||
             typeof receipt !== "object" ||
@@ -299,26 +414,31 @@ export function createProductionWireAttempt({
             status: receipt.status,
           });
           const taskUnavailable = response.taskSecretStatus === "UNAVAILABLE";
-          writePrivateExclusive(
-            files.result,
-            encode({
-              sequence,
-              complete: complete && !taskUnavailable,
-              reason: taskUnavailable ? "SECRET_DISCOVERY_UNAVAILABLE" : reason,
-              status: receipt.status,
-              finishConfirmed: receipt.finishConfirmed,
-              socketReportedWrittenBytes: receipt.socketReportedWrittenBytes,
-              requestReservedBytes: requestWire.byteLength,
-              responseObservedBytes: byteLength,
-              responseWire,
-              response: persistenceCopy(response),
-            }),
-          );
+          if (secretRegistry !== undefined) {
+            // Response discoveries must precede every generated response commitment.
+            if (ownedWriter !== null) persist("response", { sequence, responseWire });
+            else {
+              writePrivateBytes(responseFd, encoded({ sequence, responseWire }));
+              fsyncSync(responseFd);
+            }
+          }
+          persist("result", {
+            sequence,
+            complete: complete && !taskUnavailable,
+            reason: taskUnavailable ? "SECRET_DISCOVERY_UNAVAILABLE" : reason,
+            status: receipt.status,
+            finishConfirmed: receipt.finishConfirmed,
+            socketReportedWrittenBytes: receipt.socketReportedWrittenBytes,
+            requestReservedBytes: requestWire.byteLength,
+            responseObservedBytes: byteLength,
+            responseWire,
+            response: persistenceCopy(response),
+          });
           if (taskUnavailable) throw new Error("task secret registry unavailable");
         } catch {
           throw new Error("production wire capture receipt failed");
         } finally {
-          closeSync(responseFd);
+          if (responseFd !== undefined) closeSync(responseFd);
         }
       },
     });

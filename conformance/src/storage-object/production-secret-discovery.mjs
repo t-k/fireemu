@@ -1,5 +1,8 @@
 import { types } from "node:util";
-import { isProductionSecretRegistry } from "./production-secret-registry.mjs";
+import {
+  isProductionSecretRegistry,
+  registerProductionSecretBatch,
+} from "./production-secret-registry.mjs";
 import { parseCaptureJsonSpans } from "./production-capture-body.mjs";
 import { MAX_RESPONSE_BODY_BYTES } from "./wire-limits.mjs";
 
@@ -280,7 +283,7 @@ export function discoverProductionCaptureSecrets(registry, supplied) {
         bodyForm = "JSON";
       }
     }
-    for (const value of values) registry.register(value);
+    registerProductionSecretBatch(registry, [...values]);
     return Object.freeze({ available: true, discoveredValues: values.size, bodyForm });
   } catch {
     registry.close();

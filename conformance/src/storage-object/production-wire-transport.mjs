@@ -15,7 +15,18 @@ import { createProductionWireAttempt } from "./production-wire-capture.mjs";
 import { createWireTransportCore } from "./wire-transport-core.mjs";
 import { buildCorpus } from "./corpus.mjs";
 import { isProductionSecretRegistry } from "./production-secret-registry.mjs";
-import { originalProductionCredentialProviderFunctions } from "./production-provider-boundary.mjs";
+import {
+  originalProductionCredentialProviderFunctions,
+  productionCredentialProvidersUseBoundary,
+} from "./production-provider-boundary.mjs";
+import {
+  originalProductionArtifactContext,
+  productionArtifactProfileUsesPlan,
+} from "./production-artifact-policy.mjs";
+import {
+  productionStandaloneOwnsDirectory,
+  productionStandaloneUsesArtifactProfile,
+} from "./production-standalone-fail-stop.mjs";
 import { createProductionCaptureProfile } from "./production-capture-coverage.mjs";
 import {
   createProductionPayloadInventory,
@@ -94,6 +105,8 @@ export function createProductionWireTransport(input) {
   try {
     config = record(input);
     const originalProviders = Object.hasOwn(config, "credentialProviders");
+    const ownedPrivacy =
+      Object.hasOwn(config, "artifactProfile") || Object.hasOwn(config, "standaloneBoundary");
     const requiredKeys = originalProviders
       ? [
           ...CONFIG_KEYS.filter(
@@ -106,13 +119,35 @@ export function createProductionWireTransport(input) {
     if (
       Reflect.ownKeys(config).length !==
         requiredKeys.length +
-          (!originalProviders && Object.hasOwn(config, "secretRegistry") ? 1 : 0) ||
-      requiredKeys.some((key) => !Object.hasOwn(config, key))
+          (!originalProviders && Object.hasOwn(config, "secretRegistry") ? 1 : 0) +
+          (ownedPrivacy ? 2 : 0) ||
+      requiredKeys.some((key) => !Object.hasOwn(config, key)) ||
+      (ownedPrivacy &&
+        (!originalProviders ||
+          !Object.hasOwn(config, "artifactProfile") ||
+          !Object.hasOwn(config, "standaloneBoundary")))
     )
       throw new Error();
     if (Object.hasOwn(config, "secretRegistry")) {
       if (!isProductionSecretRegistry(config.secretRegistry)) throw new Error();
       config.secretRegistry.openScan();
+    }
+    if (ownedPrivacy) {
+      const context = originalProductionArtifactContext(config.artifactProfile);
+      if (
+        context?.secretRegistry !== config.secretRegistry ||
+        !productionStandaloneUsesArtifactProfile(
+          config.standaloneBoundary,
+          config.artifactProfile,
+        ) ||
+        !productionStandaloneOwnsDirectory(config.standaloneBoundary, config.captureDirectory) ||
+        !productionCredentialProvidersUseBoundary(
+          config.credentialProviders,
+          config.standaloneBoundary,
+          config.secretRegistry,
+        )
+      )
+        throw new Error();
     }
     if (originalProviders)
       Object.assign(
@@ -133,6 +168,8 @@ export function createProductionWireTransport(input) {
         }),
       )
     )
+      throw new Error();
+    if (ownedPrivacy && !productionArtifactProfileUsesPlan(config.artifactProfile, plan))
       throw new Error();
     const resources = record(config.resources);
     if (
@@ -232,6 +269,8 @@ export function createProductionWireTransport(input) {
         policy: {
           knownSecrets: config.secretRegistry ? [] : [...secrets],
           secretRegistry: config.secretRegistry,
+          artifactProfile: config.artifactProfile,
+          standaloneBoundary: config.standaloneBoundary,
           captureProfile: config.secretRegistry
             ? createProductionCaptureProfile({
                 kind: active.kind,

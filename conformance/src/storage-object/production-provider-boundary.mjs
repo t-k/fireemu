@@ -115,6 +115,7 @@ export function createProductionCredentialProviders(supplied) {
   });
   bindings.set(providers, {
     registry,
+    boundary,
     ownerAuthorization: providers.ownerAuthorization,
     accountAuthorization: providers.accountAuthorization,
   });
@@ -130,4 +131,10 @@ export function originalProductionCredentialProviderFunctions(providers, registr
     ownerAuthorization: binding.ownerAuthorization,
     accountAuthorization: binding.accountAuthorization,
   });
+}
+
+/** Owned wire and providers must use the same original failure boundary and task registry. */
+export function productionCredentialProvidersUseBoundary(providers, boundary, registry) {
+  const binding = bindings.get(providers);
+  return binding !== undefined && binding.boundary === boundary && binding.registry === registry;
 }

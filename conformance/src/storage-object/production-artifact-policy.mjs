@@ -38,6 +38,10 @@ const fields = new Set(
   requestBody requestBodySha256 requestByteLength responseByteLength captureSequence capturePath sha256 byteLength
   packetSha256 sourceCommit runnerSha256 planSha256 corpusSha256 maxRequests reserveUsd mode total subject cleanup
   complete reason needsRecovery timestamp startedAt endedAt runtime nodeVersion argv env files path hash
+  recordings estimatedUsd maxUsdReservation taskMaxRequests subjectCapRequests cleanupReserveRequests
+  semanticOperationId firstSequence lastSequence requests emailSha256 sessionUriSha256
+  requestReservedBytes responseReservedBytes socketReportedWrittenBytes responseObservedBytes readUnits
+  attempts largestResponseReadBytes readAfterHaltBytes active halted boundary
   idToken id_token refreshToken refresh_token access_token password rawPassword client_secret clientSecret apiKey keyString
   authorization Authorization error code cause stack message onConfigurationChange
 `
@@ -69,6 +73,8 @@ const fixedValues = [
   "production-owner",
   "production-auth-ownership",
   "production-auth-token-proof",
+  "production-auth-account",
+  "production-auth-cleanup",
   "production-auth-account-absence",
   "production-rules-checkpoint",
   "production-rules-reference-list",
@@ -95,6 +101,7 @@ const fixedValues = [
   "recording-initial",
   "recording-final",
   "recipe",
+  "HTTP_PLAINTEXT_DELIVERED_TO_ONREAD",
 ];
 const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const commitment = (bytes) =>
@@ -228,6 +235,7 @@ export function createProductionArtifactProfile(supplied) {
     const profile = Object.freeze({});
     profiles.set(profile, {
       registry: input.secretRegistry,
+      plan,
       literals,
       failureCode: null,
       runtime: Object.freeze({
@@ -243,6 +251,20 @@ export function createProductionArtifactProfile(supplied) {
 
 export function isProductionArtifactProfile(value) {
   return profiles.has(value);
+}
+
+/** Compare a descriptor-safe plan snapshot with the original private canonical task plan. */
+export function productionArtifactProfileUsesPlan(profile, suppliedPlan) {
+  const binding = profiles.get(profile);
+  if (!binding) return false;
+  try {
+    const state = binding.registry.snapshot();
+    if (state.failed || state.closed) return false;
+    const plan = JSON.parse(snapshot(suppliedPlan, false).body.toString());
+    return isDeepStrictEqual(plan, binding.plan);
+  } catch {
+    return false;
+  }
 }
 
 /** Original task identity supplies only the registry capability and canonical run IDs. */

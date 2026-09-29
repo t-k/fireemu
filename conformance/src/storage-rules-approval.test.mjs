@@ -352,7 +352,8 @@ test("a direct owner approval cannot use a review bound to another envelope", as
 test("another packet's revocation does not revoke this packet", async () => {
   const validate = await load();
   const other = { packetSha256: "9".repeat(64), sourceCommit: "8".repeat(40) };
-  const ledgerText = `${decision()}\n${decision({ subject: "STORAGE-RULES other-packet", values: { decision: "REVOKED", ...other } })}`;
+  const consumed = `- 2026-09-28 | STORAGE-RULES other-packet | decision=REVOKED; packetSha256=${other.packetSha256}; sourceCommit=${other.sourceCommit} | オーナー（local） | packet.md`;
+  const ledgerText = `${decision({ subject: "STORAGE-RULES other-packet", values: other })}\n${decision()}\n${consumed}`;
   assert.equal(validate({ ledgerText, packet, review }).sendAuthorized, false);
 });
 
@@ -414,45 +415,39 @@ for (const [name, row] of Object.entries({
   "another packet of this lane with a full-width qualifier": note("STORAGE-RULES other-packet（訂正）", `REVOKED packetSha256=${"9".repeat(64)}`),
   "another packet of this lane with an ASCII qualifier": note("STORAGE-RULES other-packet(取消)", `REVOKED packetSha256=${"9".repeat(64)}`),
   "another lane with a qualifier": note("STORAGE-OBJECT（訂正）", "REVOKED"),
-  "a longer task name with a qualifier": note("STORAGE-RULES-EXTRA（訂正）", "REVOKED"),
 })) {
   test(`a revocation of ${name} does not stop this approval`, async () => {
     const validate = await load();
-    assert.equal(validate({ ledgerText: `${decision()}\n${row}`, packet, review }).sendAuthorized, false);
+    // Another packet of this lane was approved earlier in the ledger, so its consumed revocation is one of its own.
+    const earlier = decision({ subject: "STORAGE-RULES other-packet", values: { packetSha256: "9".repeat(64), sourceCommit: "8".repeat(40) } });
+    assert.equal(validate({ ledgerText: `${earlier}\n${decision()}\n${row}`, packet, review }).sendAuthorized, false);
   });
 }
 
-// A consumed revocation names this lane and another version's full packet SHA: it belongs to that version and does not stop this one.
-const foreignSha = "9".repeat(64);
-for (const [name, row] of Object.entries({
-  "the bare lane": note("STORAGE-RULES", `decision=REVOKED; packetSha256=${foreignSha}`),
-  "the lane with a qualifier": note("STORAGE-RULES（訂正）", `REVOKED packetSha256=${foreignSha}`),
-  "the bare lane, upper-case foreign digest": note("STORAGE-RULES", `REVOKED packetSha256=${"F".repeat(64)}`),
-  "two foreign digests": note("STORAGE-RULES", `REVOKED packetSha256=${foreignSha}; runnerSha256=${"7".repeat(64)}`),
-  "a free text line": `Note: STORAGE-RULES REVOKED ${foreignSha} by the owner`,
-})) {
-  test(`a revocation scoped to another packet digest (${name}) does not stop this approval`, async () => {
-    const validate = await load();
-    assert.equal(validate({ ledgerText: `${decision()}\n${row}`, packet, review }).sendAuthorized, false);
-  });
-}
-
+// A consumed revocation names this lane and only key-bound pins that an earlier approval line of this lane in the same ledger carries.
+const foreignSha = "9f".repeat(32);
 // The retry flow: a consumed revocation of version 1 is written under the lane subject, then version 2 is approved under the same subject.
-const v1 = { packetSha256: "9".repeat(64), runnerSha256: "8".repeat(64), manifestSha256: "7".repeat(64), fixtureSchemaSha256: "6".repeat(64), sourceCommit: "5".repeat(40) };
+const v1 = { packetSha256: foreignSha, runnerSha256: "8e".repeat(32), manifestSha256: "7d".repeat(32), fixtureSchemaSha256: "6c".repeat(32), sourceCommit: "5b".repeat(20) };
 const v1EnvelopeId = "STORAGE-RULES-stage3-v1-000";
+const v1Approval = () => decision({ values: { ...v1, envelopeId: v1EnvelopeId } });
 for (const [name, row] of Object.entries({
   "five columns": note(laneSubject, `REVOKED packetSha256=${foreignSha}`),
   "four columns": `- 2026-09-29 | ${laneSubject} | REVOKED packetSha256=${foreignSha} | note.md`,
   "a decision field": note(laneSubject, `decision=REVOKED; packetSha256=${foreignSha}`),
   "lower-case and full-width": note(laneSubject, `ｒｅｖｏｋｅｄ packetSha256=${foreignSha}`),
+  "upper-case key and digest": note(laneSubject, `REVOKED PACKETSHA256=${foreignSha.toUpperCase()}`),
   "another envelope ID": note(laneSubject, `decision=REVOKED; envelopeId=${v1EnvelopeId}`),
   "another digest and envelope ID": note(laneSubject, `decision=REVOKED; packetSha256=${foreignSha}; envelopeId=${v1EnvelopeId}`),
   "the envelope subject": note(`${laneSubject} envelope`, `decision=REVOKED; packetSha256=${foreignSha}`),
+  "the bare lane": note("STORAGE-RULES", `decision=REVOKED; packetSha256=${foreignSha}`),
+  "the lane with a qualifier": note("STORAGE-RULES（訂正）", `REVOKED packetSha256=${foreignSha}`),
+  "two version 1 pins": note("STORAGE-RULES", `REVOKED packetSha256=${foreignSha}; runnerSha256=${v1.runnerSha256}`),
+  "the version 1 commit": note(laneSubject, `decision=REVOKED; packetSha256=${foreignSha}; sourceCommit=${v1.sourceCommit}`),
 })) {
-  test(`a consumed revocation of another version under this subject (${name}) does not stop this approval`, async () => {
+  test(`a consumed revocation of version 1 (${name}) does not stop version 2, before or after its approval`, async () => {
     const validate = await load();
-    assert.equal(validate({ ledgerText: `${decision()}\n${row}`, packet, review }).sendAuthorized, false);
-    assert.equal(validate({ ledgerText: `${row}\n${decision()}`, packet, review }).sendAuthorized, false);
+    assert.equal(validate({ ledgerText: [v1Approval(), decision(), row].join("\n"), packet, review }).sendAuthorized, false);
+    assert.equal(validate({ ledgerText: [v1Approval(), row, decision()].join("\n"), packet, review }).sendAuthorized, false);
   });
 }
 
@@ -479,20 +474,57 @@ test("a delegated version 1 envelope, its consumed revocation and a version 2 en
   assert.equal(validate({ ledgerText, packet, review: { ...review, envelopeId, withinEnvelope: true } }).envelopeId, envelopeId);
 });
 
-// A revoked line under the lane subject stops unless it carries a well-formed reference to another version and nothing of this one.
-for (const [name, row] of Object.entries({
-  "no reference": note(laneSubject, "decision=REVOKED"),
-  "a truncated foreign digest": note(laneSubject, `decision=REVOKED; packetSha256=${foreignSha.slice(0, 63)}`),
-  "a foreign digest inside a longer hex run": note(laneSubject, `decision=REVOKED; packetSha256=${foreignSha}0`),
-  "a foreign digest and this version's commit prefix": note(laneSubject, `decision=REVOKED; packetSha256=${foreignSha}; ${packet.sourceCommit.slice(0, 8)}`),
-  "a foreign digest and this version's packet digest": note(laneSubject, `decision=REVOKED; packetSha256=${foreignSha}; packetSha256=${sha}`),
-  "a foreign digest and this version's runner digest": note(laneSubject, `decision=REVOKED; packetSha256=${foreignSha}; runnerSha256=${packet.runnerSha256}`),
-})) {
-  test(`a revoked line under this subject with ${name} still stops this approval`, async () => {
+// The reviewer's probes (R1 to R8): a line that names the lane and is not a well-formed consumed revocation stops the approval.
+const reviewDigest = "ab".repeat(32);
+const stops = {
+  "R1 a subject that does not name the lane, the body does": note("全体", "decision=REVOKED; STORAGE-RULESの送信承認を取り消す"),
+  "R2 the lane with a stage label": note("STORAGE-RULES stage 3", "decision=REVOKED"),
+  "R3 the lane with another label": note("STORAGE-RULES send", "decision=REVOKED"),
+  "R4 this version's own subject citing a review digest": note(laneSubject, `decision=REVOKED; 理由=presend review ${reviewDigest} found a leak`),
+  "R5 the bare lane with a review digest": note("STORAGE-RULES", `decision=REVOKED; review=${reviewDigest}`),
+  "R6 this version's own subject with a packet prefix and a review digest": note(laneSubject, `decision=REVOKED; packet=${packet.packetSha256.slice(0, 12)}; review=${reviewDigest}`),
+  "R7 an unrelated topic with this version's manifest pin": note("unrelated", `REVOKED manifestSha256=${packet.manifestSha256}`),
+  "R8 an unrelated topic with a packet prefix": note("unrelated", `REVOKED packet ${packet.packetSha256.slice(0, 16)}`),
+  "a runner pin prefix": note("unrelated", `REVOKED ${packet.runnerSha256.slice(0, 8)}`),
+  "a fixture schema pin prefix": note("unrelated", `REVOKED ${packet.fixtureSchemaSha256.slice(0, 10)}`),
+  "a source commit prefix": note("unrelated", `REVOKED ${packet.sourceCommit.slice(0, 8)}`),
+  "the lane with the digest unbound to a key": note("STORAGE-RULES", `REVOKED ${foreignSha}`),
+  "the lane with the digest under another key": note("STORAGE-RULES", `REVOKED review=${foreignSha}`),
+  "the lane with a digest bound to the wrong pin": note("STORAGE-RULES", `REVOKED runnerSha256=${foreignSha}`),
+  "the lane with a version 1 digest and a review digest": note("STORAGE-RULES", `REVOKED packetSha256=${foreignSha}; review=${reviewDigest}`),
+  "the lane with a digest that no earlier approval carries": note("STORAGE-RULES", `REVOKED packetSha256=${"cd".repeat(32)}`),
+  "the lane with a spaced assignment": note("STORAGE-RULES", `REVOKED packetSha256 = ${foreignSha}`),
+  "the lane with a colon assignment": note("STORAGE-RULES", `REVOKED packetSha256: ${foreignSha}`),
+  "the lane with a truncated version 1 digest": note("STORAGE-RULES", `REVOKED packetSha256=${foreignSha.slice(0, 63)}`),
+  "the lane with a longer hex run": note("STORAGE-RULES", `REVOKED packetSha256=${foreignSha}0`),
+  "the lane with no digest": note(laneSubject, "REVOKED"),
+  "a longer task name that contains the lane's (fail closed)": note("STORAGE-RULES-EXTRA（訂正）", "REVOKED"),
+  "the lane with a version 1 digest and this version's runner digest": note(laneSubject, `decision=REVOKED; packetSha256=${foreignSha}; runnerSha256=${packet.runnerSha256}`),
+  "the lane with a version 1 digest and this version's packet digest": note(laneSubject, `decision=REVOKED; packetSha256=${foreignSha}; packetSha256=${sha}`),
+  "the lane with a version 1 digest and this version's commit prefix": note(laneSubject, `decision=REVOKED; packetSha256=${foreignSha}; ${packet.sourceCommit.slice(0, 8)}`),
+  "the lane with a free text line": `Note: STORAGE-RULES REVOKED ${foreignSha} by the owner`,
+  "the lane with a version 1 envelope and this version's": note(laneSubject, `decision=REVOKED; envelopeId=${v1EnvelopeId}; envelopeId=${envelopeId}`),
+};
+for (const [name, row] of Object.entries(stops)) {
+  test(`a revocation line (${name}) stops this approval whatever else the ledger holds`, async () => {
     const validate = await load();
-    assert.throws(() => validate({ ledgerText: `${decision()}\n${row}`, packet, review }), /approval revoked/);
+    assert.throws(() => validate({ ledgerText: [v1Approval(), decision(), row].join("\n"), packet, review }), /approval revoked/);
+    assert.throws(() => validate({ ledgerText: [v1Approval(), row, decision()].join("\n"), packet, review }), /approval revoked/);
+    assert.throws(() => validate({ ledgerText: [row, decision()].join("\n"), packet, review }), /approval revoked/);
   });
 }
+
+test("a consumed revocation must follow the approval line whose pins it names, and that line must be this lane's", async () => {
+  const validate = await load();
+  const consumed = note(laneSubject, `decision=REVOKED; packetSha256=${foreignSha}`);
+  assert.throws(() => validate({ ledgerText: [consumed, v1Approval(), decision()].join("\n"), packet, review }), /approval revoked/);
+  const otherLane = decision({ subject: "STORAGE-OBJECT stage3-v1", values: v1 });
+  assert.throws(() => validate({ ledgerText: [otherLane, consumed, decision()].join("\n"), packet, review }), /approval revoked/);
+  // An earlier line that is itself a revocation does not count as an approval.
+  const revokedEarlier = note(laneSubject, `decision=REVOKED; packetSha256=${foreignSha}`);
+  assert.throws(() => validate({ ledgerText: [revokedEarlier, consumed, decision()].join("\n"), packet, review }), /approval revoked/);
+  assert.equal(validate({ ledgerText: [v1Approval(), consumed, decision()].join("\n"), packet, review }).sendAuthorized, false);
+});
 
 // Envelope IDs only mean something to a delegated approval that has one.
 for (const [name, row] of Object.entries({
@@ -503,23 +535,6 @@ for (const [name, row] of Object.entries({
   test(`a revoked line under this subject with ${name} still stops a delegated approval`, async () => {
     const validate = await load();
     assert.throws(() => validate({ ledgerText: `${delegatedLedger()}\n${row}`, packet, review: { ...review, envelopeId, withinEnvelope: true } }), /approval revoked/);
-  });
-}
-
-for (const [name, row] of Object.entries({
-  "this packet digest beside a foreign one": note(laneSubject, `REVOKED packetSha256=${foreignSha}; ${sha}`),
-  "this runner digest only": note(laneSubject, `REVOKED runnerSha256=${packet.runnerSha256}`),
-  "this manifest digest only": note("STORAGE-RULES", `REVOKED manifestSha256=${packet.manifestSha256}`),
-  "this fixture schema digest only": note(laneSubject, `REVOKED fixtureSchemaSha256=${packet.fixtureSchemaSha256}`),
-  "this runner digest beside a foreign one": note(laneSubject, `REVOKED packetSha256=${foreignSha}; runnerSha256=${packet.runnerSha256}`),
-  "this source commit beside a foreign digest": note(laneSubject, `REVOKED packetSha256=${foreignSha}; ${packet.sourceCommit.slice(0, 8)}`),
-  "the lane with no digest": note(laneSubject, "REVOKED"),
-  "the lane with a truncated foreign digest": note(laneSubject, `REVOKED packetSha256=${foreignSha.slice(0, 63)}`),
-  "the lane with a longer hex run": note(laneSubject, `REVOKED packetSha256=${foreignSha}0`),
-})) {
-  test(`a revocation naming ${name} still stops this approval`, async () => {
-    const validate = await load();
-    assert.throws(() => validate({ ledgerText: `${decision()}\n${row}`, packet, review }), /approval revoked/);
   });
 }
 
@@ -590,7 +605,7 @@ test("the historical revocation allowlist is closed and every entry carries a re
 test("an allowlisted historical row is ignored only when its SHA-256 matches exactly", async () => {
   const module = await import("./storage-rules/ledger-revocation.mjs").catch(() => ({}));
   const line = "- 2026-09-27 | STORAGE-RULES | historical prose about a revoked test user | オーナー（local） | note.md";
-  const scan = (text, allowlist) => module.scanRevocations({ ledgerText: text, taskId: "STORAGE-RULES", subject: laneSubject, packetSha256: sha, sourceCommit: packet.sourceCommit, envelopeId: null, allowlist });
+  const scan = (text, allowlist) => module.scanRevocations({ ledgerText: text, taskId: "STORAGE-RULES", pins: Object.fromEntries(pins.map((key) => [key, packet[key]])), envelopeId: null, allowlist });
   assert.deepEqual(scan(line, []).lane, [1]);
   const allowlist = [{ sha256: module.rowSha256(line), reason: "historical prose, not a revocation of any packet" }];
   assert.deepEqual(scan(line, allowlist).lane, []);
@@ -601,7 +616,7 @@ test("an allowlisted historical row is ignored only when its SHA-256 matches exa
 
 test("the scanner compares the packet SHA and the source commit case-insensitively", async () => {
   const module = await import("./storage-rules/ledger-revocation.mjs").catch(() => ({}));
-  const scan = (text) => module.scanRevocations({ ledgerText: text, taskId: "STORAGE-RULES", subject: laneSubject, packetSha256: sha.toUpperCase(), sourceCommit: packet.sourceCommit.toUpperCase(), envelopeId: envelopeId.toUpperCase() });
+  const scan = (text) => module.scanRevocations({ ledgerText: text, taskId: "STORAGE-RULES", pins: Object.fromEntries(pins.map((key) => [key, packet[key].toUpperCase()])), envelopeId: envelopeId.toUpperCase() });
   assert.deepEqual(scan(`revoked ${sha}`).lane, [1]);
   assert.deepEqual(scan(`revoked ${packet.sourceCommit.slice(0, 8)}`).lane, [1]);
   assert.deepEqual(scan(`revoked ${envelopeId.toLowerCase()}`).lane, [1]);

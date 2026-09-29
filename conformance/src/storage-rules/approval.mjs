@@ -94,10 +94,7 @@ export function validatePresendApproval(options) {
   ) throw new Error("clean APPROVE review required");
   if (PINS.some((key) => review[key] !== packet[key])) throw new Error("review pin mismatch");
   const subject = `${packet.taskId} ${packet.packetName}`;
-  const revocations = scanRevocations({
-    ledgerText, taskId: packet.taskId, subject, packetSha256: packet.packetSha256, sourceCommit: packet.sourceCommit,
-    envelopeId: review.envelopeId, pinSha256s: PINS.filter((key) => key !== "sourceCommit").map((key) => packet[key]),
-  });
+  const revocations = scanRevocations({ ledgerText, taskId: packet.taskId, pins: Object.fromEntries(PINS.map((key) => [key, packet[key]])), envelopeId: review.envelopeId });
   if (revocations.lane.length > 0) throw new Error("approval revoked");
   const rows = ledgerRows(ledgerText, subject, new Set(revocations.consumed));
   if (rows.some((row) => row.fields.decision === "REVOKED")) throw new Error("approval revoked");

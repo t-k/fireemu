@@ -13,7 +13,7 @@ export function normalizeLedgerText(text) {
 
 export const NORMALIZED_DELEGATION_MARKER = normalizeLedgerText("調整役への委任");
 const REVOKED = "revoked";
-const COMMIT_PREFIX_LENGTH = 8;
+const PIN_PREFIX_LENGTH = 8;
 
 /**
  * Ledger rows that mention the lane and the word "revoked" without revoking anything.
@@ -36,53 +36,55 @@ function withoutQualifiers(text) {
   }
 }
 
-/**
- * True when the text carries at least one well-formed reference to another version (a whole 64-digit hex digest,
- * or an envelope ID of this task) and every such reference is foreign: no digest is a pin of this packet, and no
- * envelope ID equals this one, is a prefix of it or extends it.
- */
-function onlyForeignReferences(text, pinKeys, taskKey, envelopeKey) {
-  const digests = text.match(/(?<![0-9a-f])[0-9a-f]{64}(?![0-9a-f])/g) ?? [];
-  const envelopeIds = text.match(new RegExp(`(?<![a-z0-9-])${taskKey.replace(/[^a-z0-9]/g, "\\$&")}-[a-z0-9][a-z0-9.-]*-\\d+(?![a-z0-9.-])`, "g")) ?? [];
-  const relatedToThis = (id) => envelopeKey !== null && (id.startsWith(envelopeKey) || envelopeKey.startsWith(id));
-  return digests.length + envelopeIds.length > 0 && digests.every((digest) => !pinKeys.has(digest)) && envelopeIds.every((id) => !relatedToThis(id));
-}
-
 export function rowSha256(line) {
   return createHash("sha256").update(line, "utf8").digest("hex");
 }
 
+// A pin a line may name as a key-bound field, and the token shapes that count as references to a version.
+const KEYED = /(packetsha256|sourcecommit|runnersha256|manifestsha256|fixtureschemasha256|envelopeid)=([a-z0-9][a-z0-9._-]*)/g;
+const HEX_REFERENCE = /(?<![0-9a-f])(?:[0-9a-f]{40}|[0-9a-f]{64})(?![0-9a-f])/g;
+
 /**
  * Find ledger lines that stop this lane's approval or the coordinator's delegation.
- * A line counts when its normalized text contains "revoked" and names the lane subject, the lane
- * as a whole, the packet SHA, the source commit (full or at least eight digits) or the envelope ID;
- * or when it names the coordinator delegation. A row that names the lane but carries only well-formed references (whole digests or envelope IDs)
- * that belong to no pin of this packet is a consumed revocation of another version and does not count; its line
- * number is returned in `consumed` so the caller leaves it out of the ledger-row parsing as well. A parenthetical qualifier on the subject
- * column, such as "（訂正）", does not hide the lane. Position, column count and spelling do not matter.
- * Returns 1-based line numbers.
+ * The whole normalized line is read (position, column count and spelling do not matter). A line that contains "revoked" and
+ * names the lane at all (the task ID anywhere in it) stops the approval, unless it is a consumed revocation of an earlier
+ * version: it does not name this version (no pin in full or by an 8-character prefix, no envelope ID), it carries at
+ * least one key-bound field (packetSha256=..., sourceCommit=..., runnerSha256=..., manifestSha256=...,
+ * fixtureSchemaSha256=..., envelopeId=...), every such field equals the same field of an earlier approval line of this lane in the
+ * same ledger, and no other digest or commit appears in it. A line that names the coordinator delegation makes every
+ * coordinator-written row unusable. A historical line that only mentions the words is ignored through an allowlist that
+ * pins the exact raw line by SHA-256. Returns 1-based line numbers: `lane` (stops), `consumed` (skipped by the row
+ * parsing as well) and `delegation`.
  */
-export function scanRevocations({ ledgerText, taskId, subject, packetSha256, sourceCommit, envelopeId, pinSha256s = [], allowlist = HISTORICAL_REVOCATION_ALLOWLIST }) {
+export function scanRevocations({ ledgerText, taskId, pins, envelopeId, allowlist = HISTORICAL_REVOCATION_ALLOWLIST }) {
   const allowed = new Set(allowlist.map((entry) => entry.sha256));
-  const subjectKey = normalizeLedgerText(subject);
   const taskKey = normalizeLedgerText(taskId);
-  const packetKey = normalizeLedgerText(packetSha256);
-  const commitKey = normalizeLedgerText(sourceCommit).slice(0, COMMIT_PREFIX_LENGTH);
+  const pinPrefixes = Object.values(pins).map((pin) => normalizeLedgerText(pin).slice(0, PIN_PREFIX_LENGTH));
   const envelopeKey = typeof envelopeId === "string" && envelopeId !== "" ? normalizeLedgerText(envelopeId) : null;
-  const pinKeys = new Set([packetKey, ...pinSha256s.map(normalizeLedgerText)]);
+  const approved = new Set();
   const lane = [];
   const consumed = [];
   const delegation = [];
   ledgerText.split("\n").forEach((line, index) => {
     const text = normalizeLedgerText(line);
-    if (!text.includes(REVOKED) || allowed.has(rowSha256(line))) return;
-    const subjectColumn = withoutQualifiers(normalizeLedgerText(line.split("|")[1] ?? ""));
-    const namesThisVersion = text.includes(packetKey) || text.includes(commitKey) || (envelopeKey !== null && text.includes(envelopeKey));
-    const namesLane = text.includes(subjectKey) || subjectColumn === taskKey;
-    const foreign = onlyForeignReferences(text, pinKeys, taskKey, envelopeKey);
-    if (namesThisVersion || (namesLane && !foreign)) lane.push(index + 1);
-    else if (namesLane && foreign) consumed.push(index + 1);
-    if (text.includes(NORMALIZED_DELEGATION_MARKER)) delegation.push(index + 1);
+    const keyed = [...text.matchAll(KEYED)].map((match) => `${match[1]}=${match[2]}`);
+    if (!text.includes(REVOKED)) {
+      // An earlier approval line of this lane: what it carries is what a later consumed revocation may cite.
+      if (text.includes(taskKey)) keyed.forEach((entry) => approved.add(entry));
+    } else if (!allowed.has(rowSha256(line))) {
+      const namesLane = text.includes(taskKey) || withoutQualifiers(normalizeLedgerText(line.split("|")[1] ?? "")).includes(taskKey);
+      const namesThisVersion = pinPrefixes.some((prefix) => text.includes(prefix)) || (envelopeKey !== null && text.includes(envelopeKey));
+      const keyedValues = new Set(keyed.map((entry) => entry.slice(entry.indexOf("=") + 1)));
+      const references = [...(text.match(HEX_REFERENCE) ?? []), ...(text.match(envelopeIdPattern(taskKey)) ?? [])];
+      const wellFormed = keyed.length > 0 && keyed.every((entry) => approved.has(entry)) && references.every((reference) => keyedValues.has(reference));
+      if (namesThisVersion || (namesLane && !wellFormed)) lane.push(index + 1);
+      else if (namesLane) consumed.push(index + 1);
+      if (text.includes(NORMALIZED_DELEGATION_MARKER)) delegation.push(index + 1);
+    }
   });
   return { lane, consumed, delegation };
+}
+
+function envelopeIdPattern(taskKey) {
+  return new RegExp(`(?<![a-z0-9-])${taskKey.replace(/[^a-z0-9]/g, "\\$&")}-[a-z0-9][a-z0-9.-]*-\\d+(?![a-z0-9.-])`, "g");
 }

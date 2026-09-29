@@ -245,6 +245,10 @@ export function failStopProductionPrivacy(boundary, supplied) {
         "artifact-past-scan-uncertain",
         "shared-record-withheld-privacy",
         "shared-record-uncheckable",
+        "shared-file-secret-copy",
+        "shared-file-uncheckable",
+        "shared-report-withheld-privacy",
+        "shared-report-persistence-uncertain",
       ].includes(input.reason)
     )
       throw new Error();

@@ -183,12 +183,19 @@ export function createProductionSharedFileInspector(supplied) {
   }
 }
 /** Inspection is read-only; its controller must synchronously retain the lease and stop on this fixed failure. */
-export function inspectProductionSharedFiles(inspector) {
+export function inspectProductionSharedFiles(inspector, allowance) {
   const source = inspectors.get(inspector);
   if (!source || source.failed || source.busy) {
     if (source) source.failed = true;
     throw uncheckable();
   }
+  const remaining = source.limit - source.work;
+  const allowed = allowance === undefined ? remaining : allowance;
+  if (!Number.isSafeInteger(allowed) || allowed < 1 || allowed > remaining) {
+    source.failed = true;
+    throw uncheckable();
+  }
+  const workLimit = source.work + allowed;
   source.busy = true;
   source.epoch++;
   source.latestReceipt = null;
@@ -199,13 +206,13 @@ export function inspectProductionSharedFiles(inspector) {
     for (const file of source.files) {
       if (source.failed) throw uncheckable();
       const size = lstatSync(file.path, { bigint: true }).size;
-      if (size < 0n || size > BigInt(MAX_BYTES) || size > BigInt(source.limit - source.work))
+      if (size < 0n || size > BigInt(MAX_BYTES) || size > BigInt(workLimit - source.work))
         throw uncheckable();
       source.work += Number(size);
       const bytes = readShared(file);
       // Charge the actual stable read as well when an append occurred before opening the file.
       if (bytes.length !== Number(size)) throw uncheckable();
-      const scan = source.registry.openScan(source.limit - source.work);
+      const scan = source.registry.openScan(workLimit - source.work);
       let report;
       try {
         report = scan.findSecretCopyLines(decoder.decode(bytes));
@@ -252,4 +259,47 @@ export function copyProductionSharedInspectionReportBytes(receipt, inspector) {
     binding.epoch === source.epoch
     ? Buffer.from(binding.bytes)
     : null;
+}
+
+/** These source references prove original local binding, never frozen path provenance or admission. */
+export function productionSharedInspectorUsesArtifactContext(inspector, supplied) {
+  try {
+    const input = copyProductionCaptureRecord(supplied, ["directory", "profile", "boundary"]);
+    const source = inspectors.get(inspector);
+    return (
+      Object.keys(input).length === 3 &&
+      !!source &&
+      !source.failed &&
+      !source.busy &&
+      source.directory === input.directory &&
+      source.profile === input.profile &&
+      source.boundary === input.boundary
+    );
+  } catch {
+    return false;
+  }
+}
+/** Only a fresh original receipt supplies work and context to the source-owned broker. */
+export function originalProductionSharedInspectionContext(receipt, inspector) {
+  const binding = receipts.get(receipt),
+    source = inspectors.get(inspector);
+  return source &&
+    !source.failed &&
+    !source.busy &&
+    source.latestReceipt === receipt &&
+    binding?.inspector === inspector &&
+    binding.epoch === source.epoch
+    ? Object.freeze({
+        directory: source.directory,
+        profile: source.profile,
+        boundary: source.boundary,
+        registry: source.registry,
+        work: binding.work,
+      })
+    : null;
+}
+
+/** Failed inspection work is diagnostic only so the broker can retain a conservative cumulative bound. */
+export function originalProductionSharedInspectorWork(inspector) {
+  return inspectors.get(inspector)?.work ?? null;
 }

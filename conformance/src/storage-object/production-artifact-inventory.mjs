@@ -31,6 +31,19 @@ import {
   productionStandaloneUsesArtifactProfile,
 } from "./production-standalone-fail-stop.mjs";
 
+import {
+  inspectProductionSharedFiles,
+  originalProductionSharedInspectionContext,
+  originalProductionSharedInspectorWork,
+  productionSharedInspectorUsesArtifactContext,
+} from "./production-shared-file-inspector.mjs";
+import {
+  originalProductionSharedReportFile,
+  originalProductionSharedReportPending,
+  originalProductionSharedReportWriterContext,
+  writeProductionSharedPrivacyReport,
+} from "./production-shared-report-file.mjs";
+
 const inventories = new WeakMap(),
   tasks = new WeakMap();
 // Finite prototype ceilings, derived from the two existing writer ceilings.
@@ -168,7 +181,42 @@ function rescan(state) {
   }
   state.phase = "CHECKING";
   const matched = [];
-  let uncertain = false;
+  let uncertain = false,
+    sharedFailure = false,
+    reportFailure = false,
+    reportWithheld = false,
+    sharedReceipt = null;
+  if (state.shared) {
+    const before = originalProductionSharedInspectorWork(state.shared.inspector);
+    try {
+      sharedReceipt = inspectProductionSharedFiles(
+        state.shared.inspector,
+        state.workLimit - state.work,
+      );
+      const context = originalProductionSharedInspectionContext(
+        sharedReceipt,
+        state.shared.inspector,
+      );
+      if (
+        !context ||
+        context.profile !== state.profile ||
+        context.boundary !== state.boundary ||
+        context.directory !== state.directory ||
+        context.registry !== state.registry
+      )
+        throw new Error();
+    } catch {
+      sharedFailure = true;
+      uncertain = true;
+    } finally {
+      const after = originalProductionSharedInspectorWork(state.shared.inspector);
+      if (!Number.isSafeInteger(before) || !Number.isSafeInteger(after) || after < before) {
+        state.work = state.workLimit;
+        sharedFailure = true;
+        uncertain = true;
+      } else state.work += after - before;
+    }
+  }
   try {
     state.registry.openScan();
   } catch {
@@ -200,7 +248,32 @@ function rescan(state) {
       uncertain = true;
     }
   }
-  if (uncertain || matched.length) {
+  const sharedMatch = sharedReceipt?.hasMatches === true;
+  if (sharedMatch) {
+    state.phase = "REPORTING";
+    const before = originalProductionSharedReportWriterContext(state.shared.reportWriter).work;
+    try {
+      const report = writeProductionSharedPrivacyReport(state.shared.reportWriter, {
+        receipt: sharedReceipt,
+        recording: state.recording,
+        remainingWork: state.workLimit - state.work,
+      });
+      const status = originalProductionSharedReportWriterContext(state.shared.reportWriter).outcome;
+      if (report === null && status === "WITHHELD_PRIVACY") reportWithheld = true;
+      else if (!report || status !== "COMPLETE") throw new Error();
+    } catch {
+      reportFailure = true;
+      uncertain = true;
+    } finally {
+      const after = originalProductionSharedReportWriterContext(state.shared.reportWriter).work;
+      if (!Number.isSafeInteger(before) || !Number.isSafeInteger(after) || after < before) {
+        state.work = state.workLimit;
+        reportFailure = true;
+        uncertain = true;
+      } else state.work += after - before;
+    }
+  }
+  if (uncertain || matched.length || sharedMatch) {
     state.phase = "STOPPED";
     if (state.prototype) {
       state.registry.close();
@@ -208,11 +281,26 @@ function rescan(state) {
     }
     failStopProductionPrivacy(state.boundary, {
       recording: state.recording,
-      reason: uncertain ? "artifact-past-scan-uncertain" : "artifact-removed-late-secret",
+      reason: sharedFailure
+        ? "shared-file-uncheckable"
+        : reportFailure
+          ? "shared-report-persistence-uncertain"
+          : reportWithheld
+            ? "shared-report-withheld-privacy"
+            : uncertain
+              ? "artifact-past-scan-uncertain"
+              : sharedMatch
+                ? "shared-file-secret-copy"
+                : "artifact-removed-late-secret",
     });
   }
   state.phase = "OPEN";
 }
+/** Original cumulative work is diagnostic only and grants no runtime admission. */
+export function originalProductionArtifactInventoryWork(inventory) {
+  return inventories.get(inventory)?.work ?? null;
+}
+
 /** Only the original registry may invoke its original task inventory observer. */
 export function originalProductionArtifactInventoryObserver(inventory, registry) {
   const state = inventories.get(inventory);
@@ -318,10 +406,17 @@ export function ensurePrototypeArtifactInventory(supplied) {
 export function reserveProductionArtifactFile(inventory, writer) {
   const state = inventories.get(inventory);
   const file =
-    originalProductionArtifactPending(writer) ?? originalProductionWireArtifactPending(writer);
+    originalProductionArtifactPending(writer) ??
+    originalProductionWireArtifactPending(writer) ??
+    originalProductionSharedReportPending(writer);
   if (
     !state ||
-    state.phase !== "OPEN" ||
+    (state.phase !== "OPEN" &&
+      !(
+        state.phase === "REPORTING" &&
+        writer === state.shared?.reportWriter &&
+        file?.writerKind === "shared-privacy"
+      )) ||
     !file ||
     file.profile !== state.profile ||
     file.boundary !== state.boundary ||
@@ -342,10 +437,16 @@ export function reserveProductionArtifactFile(inventory, writer) {
 /** Only original successful writer receipts can enroll an owned inode. */
 export function trackProductionArtifactFile(inventory, writer, receipt) {
   const state = inventories.get(inventory);
-  if (!state || state.phase !== "OPEN") throw new Error("invalid production artifact inventory");
+  if (
+    !state ||
+    (state.phase !== "OPEN" &&
+      !(state.phase === "REPORTING" && writer === state.shared?.reportWriter))
+  )
+    throw new Error("invalid production artifact inventory");
   const file =
     originalProductionArtifactFile(receipt, writer) ??
-    originalProductionWireArtifactFile(receipt, writer);
+    originalProductionWireArtifactFile(receipt, writer) ??
+    originalProductionSharedReportFile(receipt, writer);
   if (
     !file ||
     file.profile !== state.profile ||
@@ -363,4 +464,37 @@ export function trackProductionArtifactFile(inventory, writer, receipt) {
     throw new Error("unreserved production artifact receipt");
   state.files.set(file.path, Object.freeze({ ...file, pending: false }));
   state.recording = file.recording;
+}
+
+/** One original shared inspector and internal report writer join the original owned observer before any producer. */
+export function attachProductionSharedArtifactInspection(supplied) {
+  try {
+    const input = copyProductionCaptureRecord(supplied, ["inventory", "inspector", "reportWriter"]);
+    const state = inventories.get(input.inventory),
+      writer = originalProductionSharedReportWriterContext(input.reportWriter);
+    if (
+      Object.keys(input).length !== 3 ||
+      !state ||
+      state.prototype ||
+      state.phase !== "OPEN" ||
+      state.shared ||
+      state.files.size ||
+      !productionSharedInspectorUsesArtifactContext(input.inspector, {
+        directory: state.directory,
+        profile: state.profile,
+        boundary: state.boundary,
+      }) ||
+      !writer ||
+      writer.directory !== state.directory ||
+      writer.profile !== state.profile ||
+      writer.boundary !== state.boundary ||
+      writer.registry !== state.registry ||
+      writer.inspector !== input.inspector ||
+      writer.outcome !== "NONE"
+    )
+      throw new Error();
+    state.shared = Object.freeze({ inspector: input.inspector, reportWriter: input.reportWriter });
+  } catch {
+    throw new Error("invalid production shared artifact inspection");
+  }
 }

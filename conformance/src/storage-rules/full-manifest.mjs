@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { CREDENTIAL_CACHE_REQUEST_IDS } from "./credential-cache.mjs";
 import { buildDeclaredRequestManifest } from "./manifest.mjs";
+import { assertManifestPredicates } from "./predicates.mjs";
 import { buildPublicationSources } from "./publication.mjs";
 import { DRAFT_REQUEST_LIMITS } from "./request-counter.mjs";
 
@@ -12,6 +13,8 @@ const FIREBASE = "https://firebasestorage.googleapis.com";
 const AUTH = "https://identitytoolkit.googleapis.com";
 const PROJECTS = "https://cloudresourcemanager.googleapis.com";
 const ROOT = `/v1/projects/${QUERY}`;
+/** The origin of every declared object and Firestore request, fixed by service and dialect. */
+export const REQUEST_ORIGINS = Object.freeze({ "storage/gcs": GCS, "storage/firebase": FIREBASE, firestore: "https://firestore.googleapis.com" });
 const AUTH_STEPS = {
   "user-a": ["create", "lookup-created", "set-claims", "lookup-claims", "sign-in", "clear-claims", "lookup-plain", "sign-in-plain", "delete", "absence"],
   "user-b": ["create", "lookup-created", "set-claims", "lookup-claims", "sign-in", "delete", "absence"],
@@ -95,10 +98,13 @@ function build(corpusInput, closureInput, optionsInput) {
 
   for (const r of declared.rows) {
     const request = r.request; const requires = ["canonical-program-state-and-fresh-credential"];
+    const originKey = r.service === "firestore" ? "firestore" : `storage/${request.dialect}`;
+    if (!Object.hasOwn(REQUEST_ORIGINS, originKey)) throw new Error();
+    request.origin = REQUEST_ORIGINS[originKey];
     if (request.sessionUrlReference) {
       if (r.stage !== "subject") request.credential = "anonymous";
       requires.push("durable-verified-start-url-and-target");
-      if (request.headers["x-goog-upload-command"] === "cancel") requires.push("confirmed-active-session", "cancel-not-attempted");
+      if (request.headers["x-goog-upload-command"] === "cancel") requires.push("confirmed-active-session", "cancel-not-attempted", "session-active-per-latest-query");
     }
     if (request.credential === "admin" && r.stage !== "subject" && r.stage !== "comparison") {
       if (request.operation === "upload") { request.query.ifGenerationMatch = "0"; requires.push("owned-namespace-and-absence"); }
@@ -106,9 +112,10 @@ function build(corpusInput, closureInput, optionsInput) {
         request.query.ifGenerationMatch ??= reference("generation", request.objectName);
         if (request.operation === "patch") request.query.ifMetagenerationMatch ??= reference("metageneration", request.objectName);
         requires.push("confirmed-write-history-and-current-version");
-        if (request.operation === "delete") requires.push("delete-not-attempted");
+        if (request.operation === "delete") requires.push("delete-not-attempted", "object-not-absent-per-latest-readback");
       }
     }
+    if (r.service === "firestore" && request.method === "DELETE" && r.stage === "cleanup") requires.push("document-not-absent-per-latest-readback");
     add(r.id, "normal", "declared", r.programId, r.stage, r.service, request, requires);
     if (Object.hasOwn(r, "requiredState")) rows.at(-1).requiredState = r.requiredState;
     if (Object.hasOwn(r, "when")) rows.at(-1).when = r.when;
@@ -171,7 +178,7 @@ function build(corpusInput, closureInput, optionsInput) {
     const name = controls[index];
     for (const [stage, media] of [["baseline-metadata", false], ["baseline-media", true], ["seed-metadata", false], ["seed-media", true], ["cleanup-metadata", false], ["absence-metadata", false], ["absence-media", true]]) add(`management/control-${index}/${stage}`, "normal", "management", `control-${index}`, stage, "storage", storage(name, media), [stage.startsWith("baseline") ? "owned-namespace-and-absence" : "owned-control-retained-through-final-readback"]);
     add(`management/control-${index}/seed`, "normal", "management", `control-${index}`, "seed", "storage", req(GCS, `/upload/storage/v1/b/${binding.bucket}/o`, "POST", { dialect: "gcs", operation: "upload", objectName: name, query: { uploadType: "media", name, ifGenerationMatch: "0" }, headers: { "content-type": "text/plain" }, body: { base64: Buffer.from("next").toString("base64") } }), ["owned-namespace-and-absence"]);
-    add(`management/control-${index}/delete`, "normal", "management", `control-${index}`, "delete", "storage", { ...storage(name), method: "DELETE", operation: "delete", query: { ifGenerationMatch: reference("generation", name) } }, ["confirmed-write-history-and-current-version", "all-final-control-readbacks-complete", "delete-not-attempted"]);
+    add(`management/control-${index}/delete`, "normal", "management", `control-${index}`, "delete", "storage", { ...storage(name), method: "DELETE", operation: "delete", query: { ifGenerationMatch: reference("generation", name) } }, ["confirmed-write-history-and-current-version", "all-final-control-readbacks-complete", "delete-not-attempted", "object-not-absent-per-latest-readback"]);
   }
   for (const [source, index] of [["A", 3], ["A", 4], ["B", 3], ["B", 4]]) {
     const name = controls[index];
@@ -206,13 +213,13 @@ function build(corpusInput, closureInput, optionsInput) {
 
   for (let index = 0; index < objects.length; index++) {
     const name = objects[index];
-    for (const [stage, media, method] of [["metadata", false, "GET"], ["delete", false, "DELETE"], ["absence-metadata", false, "GET"], ["absence-media", true, "GET"]]) add(`recovery/object-${index}/${stage}`, "recovery", "recovery-object", `object-${index}`, stage, "storage", { ...storage(name, media), method, ...(method === "DELETE" ? { operation: "delete", query: { ifGenerationMatch: reference("generation", name) } } : {}) }, method === "DELETE" ? ["confirmed-write-history-and-current-version", "delete-not-attempted", "restore-controls-retained-until-owner-readbacks"] : ["resource-started-and-provenance-matches"]);
+    for (const [stage, media, method] of [["metadata", false, "GET"], ["delete", false, "DELETE"], ["absence-metadata", false, "GET"], ["absence-media", true, "GET"]]) add(`recovery/object-${index}/${stage}`, "recovery", "recovery-object", `object-${index}`, stage, "storage", { ...storage(name, media), method, ...(method === "DELETE" ? { operation: "delete", query: { ifGenerationMatch: reference("generation", name) } } : {}) }, method === "DELETE" ? ["confirmed-write-history-and-current-version", "delete-not-attempted", "object-not-absent-per-latest-readback", "restore-controls-retained-until-owner-readbacks"] : ["resource-started-and-provenance-matches"]);
   }
   for (let index = 0; index < documents.length; index++) {
     const name = documents[index];
-    for (const stage of ["current", "delete", "absence"]) add(`recovery/document-${index}/${stage}`, "recovery", "recovery-document", `document-${index}`, stage, "firestore", req("https://firestore.googleapis.com", `/v1/${name}`, stage === "delete" ? "DELETE" : "GET", { documentName: name, ...(stage === "delete" ? { query: { "currentDocument.updateTime": reference("update-time", name) } } : {}) }), stage === "delete" ? ["confirmed-document-write-history-and-current-version", "delete-not-attempted"] : ["resource-started-and-provenance-matches"]);
+    for (const stage of ["current", "delete", "absence"]) add(`recovery/document-${index}/${stage}`, "recovery", "recovery-document", `document-${index}`, stage, "firestore", req("https://firestore.googleapis.com", `/v1/${name}`, stage === "delete" ? "DELETE" : "GET", { documentName: name, ...(stage === "delete" ? { query: { "currentDocument.updateTime": reference("update-time", name) } } : {}) }), stage === "delete" ? ["confirmed-document-write-history-and-current-version", "delete-not-attempted", "document-not-absent-per-latest-readback"] : ["resource-started-and-provenance-matches"]);
   }
-  for (const session of sessions) for (const [stage, command] of [["current", "query"], ["cancel", "cancel"], ["terminal", "query"]]) add(`recovery/session/${session.caseId}/${stage}`, "recovery", "recovery-session", session.caseId, stage, "storage", req(FIREBASE, null, "POST", { objectName: session.objectName, credential: "anonymous", dialect: "firebase", operation: "upload", sessionUrlReference: { ...session.reference }, headers: { "x-goog-upload-protocol": "resumable", "x-goog-upload-command": command } }), command === "cancel" ? ["durable-verified-start-url-and-target", "confirmed-active-session", "cancel-not-attempted"] : ["durable-verified-start-url-and-target", "unknown-terminal-shape-remains-needs-recovery"]);
+  for (const session of sessions) for (const [stage, command] of [["current", "query"], ["cancel", "cancel"], ["terminal", "query"]]) add(`recovery/session/${session.caseId}/${stage}`, "recovery", "recovery-session", session.caseId, stage, "storage", req(FIREBASE, null, "POST", { objectName: session.objectName, credential: "anonymous", dialect: "firebase", operation: "upload", sessionUrlReference: { ...session.reference }, headers: { "x-goog-upload-protocol": "resumable", "x-goog-upload-command": command } }), command === "cancel" ? ["durable-verified-start-url-and-target", "confirmed-active-session", "cancel-not-attempted", "session-active-per-latest-query"] : ["durable-verified-start-url-and-target", "unknown-terminal-shape-remains-needs-recovery"]);
   for (const source of sources) for (const stage of ["current", "delete", "absence"]) add(`recovery/ruleset/${source.id}/${stage}`, "recovery", "recovery-ruleset", source.id, stage, "firebase-rules", req(RULES, null, stage === "delete" ? "DELETE" : "GET", { pathReference: reference("ruleset-path", source.id) }), stage === "delete" ? ["owned-ruleset-and-unreferenced-after-restore", "delete-not-attempted"] : ["acknowledged-ruleset-create"]);
   for (let page = 1; page <= 10; page++) list("recovery", "final", page);
   prefixEmpty("recovery");
@@ -226,6 +233,7 @@ function build(corpusInput, closureInput, optionsInput) {
     sessionPolicy: { queryStatus: ["active", "final"], maxReceivedBytes: 4, unknownTerminalShape: "needs-recovery", startStatus: 200, startHeaderStatus: "active", origin: FIREBASE, duplicateHeaders: "reject", literalUrls: "private-only", cancelResponseAloneProvesTerminal: false, paths: ["exact-bucket-collection", "exact-encoded-owned-object"], queryKeys: ["name", "upload_id", "upload_protocol", "uploadType"], requiredQueryKeys: ["name", "upload_id", "upload_protocol"], queryValues: { name: "exact-owned-object", upload_id: "bounded-private-opaque-id", upload_protocol: "resumable", uploadType: "resumable-if-present" }, duplicateQueryKeys: "reject", querySuccessStatus: 200, missingDurableStart: "needs-recovery" },
     pending: ["offline-adc-quota-billing-and-approved-input-provenance", "closed-runtime-reference-resolution-and-response-validation", "controller-ordering-and-state-proofs", "durable-target-response-and-resource-proofs", "live-admission-final-pins-and-presend-review"], rows,
   };
+  assertManifestPredicates(manifest);
   return { ...manifest, sha256: hash(JSON.stringify(manifest)) };
 }
 

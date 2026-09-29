@@ -63,7 +63,9 @@ test("declared subjects keep their canonical HTTP inputs and finite IDs", () => 
   const m = build(options, corpus);
   for (const row of old.rows.filter((r) => ["subject", "comparison"].includes(r.stage))) {
     const full = m.rows.find((r) => r.id === row.id);
-    assert.deepEqual(full.request, row.request);
+    const { origin, ...request } = full.request;
+    assert.deepEqual(request, row.request);
+    assert.equal(origin, `https://${full.request.dialect === "gcs" ? "storage" : "firebasestorage"}.googleapis.com`);
     assert.equal(full.service, row.service);
   }
   assert.equal(m.rows.filter((r) => r.family === "declared" && r.stage === "subject").length, 331);
@@ -280,5 +282,34 @@ test("each publication phase reads the previous phase's positive witness as its 
   for (const name of ["v1", "v2", "A", "B"]) {
     const ids = m.rows.filter((r) => r.family === "settle" && r.programId === name).map((r) => r.id);
     assert.equal(ids.length, 60);
+  }
+});
+
+test("the expansion changes nothing in the corpus or the declared-request builders, and no request but its origin", () => {
+  const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
+  const source = (name) => readFileSync(new URL(`./storage-rules/${name}`, import.meta.url));
+  assert.equal(digest(source("corpus.mjs")), "5f8fa2f505c2e3f8f3e5c34f101012b35c160450f5de4dbcf7b8205ddd13ce53");
+  assert.equal(digest(source("manifest.mjs")), "9634bbddccdcfa77caee48715bad00de6f26a3d60f784c8657ae5cc0e6b40c8a");
+  const rows = build().rows.map((r) => {
+    const { origin, ...request } = r.request;
+    return { id: r.id, phase: r.phase, family: r.family, programId: r.programId, stage: r.stage, service: r.service, request, requiredState: r.requiredState, when: r.when };
+  });
+  assert.equal(digest(JSON.stringify(rows)), "de31d61eb122228d80dc0e9bd085e856e8b78f513c59b5075c404173f951d94d");
+});
+
+test("every row names its origin from one closed (service, dialect) table", async () => {
+  const module = await import("./storage-rules/full-manifest.mjs");
+  assert.deepEqual(module.REQUEST_ORIGINS, {
+    "storage/gcs": "https://storage.googleapis.com",
+    "storage/firebase": "https://firebasestorage.googleapis.com",
+    firestore: "https://firestore.googleapis.com",
+  });
+  assert.equal(Object.isFrozen(module.REQUEST_ORIGINS), true);
+  const m = build();
+  const allowed = new Set([...Object.values(module.REQUEST_ORIGINS), "https://firebaserules.googleapis.com", "https://identitytoolkit.googleapis.com", "https://oauth2.googleapis.com", "https://www.googleapis.com", "https://cloudresourcemanager.googleapis.com", "https://apikeys.googleapis.com"]);
+  for (const r of m.rows) assert.ok(allowed.has(r.request.origin), `${r.id}: ${r.request.origin}`);
+  for (const r of m.rows.filter((x) => x.family === "declared")) {
+    const key = r.service === "firestore" ? "firestore" : `storage/${r.request.dialect}`;
+    assert.equal(r.request.origin, module.REQUEST_ORIGINS[key], r.id);
   }
 });

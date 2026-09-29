@@ -489,7 +489,7 @@
         ],
         "recordingsRequired": 2
       },
-      "note": "Two sandbox recordings and both fireemu profiles agree for this REST subset. Native gRPC sweeps (P10-B, nominal idle 65 to 70 s; P10-C, 75 to 120 s; each recorded twice) accepted every Commit through a nominal 110 s idle and refused the 120 s Commit with code 10, expired or no longer valid. The measured idle of the accepted 110 s Commit was [110.58, 113.12] s and of the refused 120 s Commit [120.54, 122.97] s. The REST refusal in the recorded run had idled about 121 s (idleSeconds 121.15 and 120.35), not the nominal 70 s wait. The exact idle threshold is not identified: it lies in [110.70, 122.96) s. Strict takes 120 s as a provisional limit, and the unobserved gap 113.12 to 120 s is accepted. This condition remains open.",
+      "note": "Two sandbox recordings and both fireemu profiles agreed for this REST subset when it was recorded; that agreement was measured at strict's old 10 s idle allowance, with 90 s of local idle for idle-expiry/commit-after-idle, so it no longer describes current strict behavior (120 s limit) for that case. Native gRPC sweeps (P10-B, nominal idle 65 to 70 s; P10-C, 75 to 120 s; each recorded twice) accepted every Commit through a nominal 110 s idle and refused the 120 s Commit with code 10, expired or no longer valid. The measured idle of the accepted 110 s Commit was [110.58, 113.12] s and of the refused 120 s Commit [120.54, 122.97] s. The REST refusal in the recorded run had idled about 121 s (idleSeconds 121.15 and 120.35), not the nominal 70 s wait. The exact idle threshold is not identified: it lies in [110.70, 122.96) s. Strict takes 120 s as a provisional limit, and the unobserved gap 113.12 to 120 s is accepted. The final source-bound regression redoes the REST comparison with a driver-level override that advances the local control clock to the measured production idle (about 121 s), with new evidence versions (local shadow v4, comparison v2), leaving the recorded plan and the production fixtures untouched. This condition remains open.",
       "partialEvidence": {
         "coverage": "PARTIAL",
         "reference": "spec/compatibility/broad-runs/fs-transaction-expiry-retry-04-recorded-comparison-v1.json",
@@ -504,7 +504,8 @@
         ],
         "remainingBoundaries": [
           "The exact idle threshold is not identified: it lies between the last accepted measured idle (lower bound 110.70 s) and the first refused one (upper bound 122.96 s). Strict's 120 s limit is provisional and accepts the unobserved gap 113.12 to 120 s.",
-          "The native gRPC sweeps (P10-B, P10-C) were recorded outside this recipe and are not yet bound to it."
+          "The native gRPC sweeps (P10-B, P10-C) were recorded outside this recipe and are not yet bound to it.",
+          "The recorded REST comparison (local shadow v3, comparison v1) describes strict at the old 10 s allowance and 90 s of local idle for idle-expiry/commit-after-idle; it is historical for that case until local shadow v4 and comparison v2 are recorded at the final artifact."
         ]
       }
     },

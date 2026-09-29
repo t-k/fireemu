@@ -868,3 +868,67 @@ test("the follow-up issuer lists its scopes in the discovery document it publish
     undefined,
   );
 });
+
+test("an unsigned response goes only when every Issuer in any spelling is the run's (pre-send review S1)", () => {
+  const runIdp = `https://${SANDBOX_PROJECT}.web.app/saml/${RUN}`;
+  const foreign = "https://idp.example/x";
+  const response = (issuers, extra = "") =>
+    `<samlp:Response xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion">${issuers[0]}<saml:Assertion>${issuers[1] ?? ""}${extra}</saml:Assertion></samlp:Response>`;
+  const plain = (value) => `<saml:Issuer>${value}</saml:Issuer>`;
+  const ctx = production({ runCertificates: ["UlVOLUNFUlQ="] });
+  const post = (xml) =>
+    send(
+      ctx,
+      "POST",
+      "/v1/accounts:signInWithIdp",
+      idp({
+        providerId: `saml.fireemu-${RUN}-sg`,
+        SAMLResponse: Buffer.from(xml).toString("base64"),
+      }),
+    );
+  assert.doesNotThrow(() => post(response([plain(runIdp), plain(runIdp)])), "the run's own");
+  // The run's own Issuer in another spelling is collected, and goes.
+  assert.doesNotThrow(
+    () => post(response([plain(runIdp), `<saml2:Issuer Format="urn:x">${runIdp}</saml2:Issuer>`])),
+    "the run's own, another prefix and attributes",
+  );
+  for (const [name, xml] of Object.entries({
+    "a mixed response: the run's Response Issuer, a foreign Assertion Issuer": response([
+      plain(runIdp),
+      plain(foreign),
+    ]),
+    "an Issuer with attributes": response([
+      plain(runIdp),
+      `<saml:Issuer Format="urn:x">${foreign}</saml:Issuer>`,
+    ]),
+    "an Issuer of another prefix": response([
+      plain(runIdp),
+      `<saml2:Issuer>${foreign}</saml2:Issuer>`,
+    ]),
+    "an Issuer without a prefix": response([plain(runIdp), `<Issuer>${foreign}</Issuer>`]),
+    "an Issuer holding a comment": response([
+      plain(runIdp),
+      `<saml:Issuer>${foreign}<!-- --></saml:Issuer>`,
+    ]),
+    "an Issuer holding CDATA": response([
+      plain(runIdp),
+      `<saml:Issuer><![CDATA[${runIdp}]]></saml:Issuer>`,
+    ]),
+    "an unclosed Issuer": response([plain(runIdp), `<saml:Issuer>${runIdp}`]),
+    "a signature without a certificate": response(
+      [plain(runIdp), plain(runIdp)],
+      "<ds:Signature><ds:SignatureValue>AAAA</ds:SignatureValue></ds:Signature>",
+    ),
+    "a lower-case signature value": response(
+      [plain(runIdp), plain(runIdp)],
+      "<ds:signaturevalue>AAAA</ds:signaturevalue>",
+    ),
+    "an X509 element of another spelling": response(
+      [plain(runIdp), plain(runIdp)],
+      "<ds:X509Data></ds:X509Data>",
+    ),
+    "no Issuer": response([""]),
+  })) {
+    assert.throws(() => post(xml), /credential/, name);
+  }
+});

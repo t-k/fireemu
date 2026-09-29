@@ -131,6 +131,24 @@ const runSamlIdp = (ctx) => ({
   test: (issuer) => issuer === `https://${ctx.project}.web.app/saml/${checkRun(ctx.run)}`,
 });
 
+/**
+ * Whether an unsigned response is the run's own (pre-send review S1): no signature or
+ * certificate markup in any case, and every `Issuer` element (any prefix, any attributes)
+ * collected and naming exactly the run's SAML IdP (a comment or CDATA in one is never that).
+ */
+function isRunUnsignedResponse(xml, ctx) {
+  if (/signature|x509/i.test(xml)) return false;
+  const openings = xml.match(/<(?:[\w-]+:)?Issuer\b/g) ?? [];
+  const issuers = [
+    ...xml.matchAll(/<(?:[\w-]+:)?Issuer\b[^>]*>([\s\S]*?)<\/(?:[\w-]+:)?Issuer>/g),
+  ].map((match) => match[1]);
+  return (
+    issuers.length > 0 &&
+    issuers.length === openings.length &&
+    issuers.every((issuer) => runSamlIdp(ctx).test(issuer))
+  );
+}
+
 /** Whether `value` is a credential the run made: synthetic text or a JWS of the run's key. */
 export function isRunCredential(value, ctx) {
   if (typeof value !== "string" || value === "") return true;
@@ -142,14 +160,7 @@ export function isRunCredential(value, ctx) {
     const carried = [...xml.matchAll(/<ds:X509Certificate>([^<]*)<\/ds:X509Certificate>/g)].map(
       (match) => match[1].replaceAll(/\s/g, ""),
     );
-    if (carried.length === 0) {
-      const issuers = [...xml.matchAll(/<saml:Issuer>([^<]*)<\/saml:Issuer>/g)].map((m) => m[1]);
-      return (
-        !xml.includes("Signature") &&
-        issuers.length > 0 &&
-        issuers.every((issuer) => runSamlIdp(ctx).test(issuer))
-      );
-    }
+    if (carried.length === 0) return isRunUnsignedResponse(xml, ctx);
     return carried.every((c) => ctx.runCertificates?.includes(c) ?? false);
   }
   const [header] = value.split(".");

@@ -256,7 +256,7 @@ fn every_way_of_naming_a_tenant_creates_it_in_the_emulator_profile() {
         ),
         (
             "emulator route",
-            format!("/emulator/v1/projects/demo-app/tenants/t-emulator/oobCodes"),
+            "/emulator/v1/projects/demo-app/tenants/t-emulator/oobCodes".to_string(),
             "GET",
             json!({}),
         ),

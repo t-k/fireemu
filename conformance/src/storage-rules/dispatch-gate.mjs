@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { createStage3RequestCounter } from "./request-counter.mjs";
 
 // The only object that holds the real transport. A request leaves through it only after its intent is durable and its
@@ -21,6 +22,8 @@ export function createDispatchGate(options) {
   let armed = null;
   let busy = false;
   let poisoned = false;
+  let admissionRefused = false;
+  let httpBudget = 0;
   const counter = createStage3RequestCounter({
     preflightIds,
     onStarted: (row) => reservations.onStarted(row),
@@ -29,8 +32,9 @@ export function createDispatchGate(options) {
   });
   // The live approval is proved again before every request, reads included: a revocation must stop the very next request.
   async function admitted() {
-    const seen = await admission.check();
-    if (seen?.admitted !== true) bad("admission refused: no admission");
+    let seen;
+    try { seen = await admission.check(); } catch (error) { admissionRefused = true; throw error; }
+    if (seen?.admitted !== true) { admissionRefused = true; bad("admission refused: no admission"); }
   }
   const modeOf = (phase) => ({ preflight: "preflight", normal: "normal", recovery: "recovery" })[phase];
 
@@ -95,7 +99,46 @@ export function createDispatchGate(options) {
     } finally { busy = false; }
   }
 
+  // The seam for the modules that carry their own request bodies and credentials (the credential cache and the credential
+  // session). Their sends run through the same counter, admission and durable intent as every other request, one at a time,
+  // and the real transport is reachable only inside an armed, counted attempt, once per attempt. They capture no response
+  // themselves: what they learn they record as digests, never as the token-bearing answer.
+  async function delegatedSend(operationId, attempt, accept, preflight) {
+    if (poisoned) bad("dispatch gate is poisoned");
+    if (busy) bad("concurrent dispatch is forbidden");
+    busy = true;
+    try {
+      if (typeof operationId !== "string" || !isFunction(attempt) || (preflight && !isFunction(accept))) bad("invalid delegated request");
+      if (capture.snapshot().uncertain) bad("capture journal is uncertain");
+      await admitted();
+      const phase = preflight ? "preflight" : counter.snapshot().mode;
+      if (!modeOf(phase)) bad("delegated request outside a request mode");
+      await capture.writeIntent({ operationId, phase, targetSha256: createHash("sha256").update(`delegated:${operationId}`).digest("hex"), redactedTarget: `delegated ${operationId}`, mutationKey: null });
+      const armedAttempt = async () => {
+        if (armed === null || armed.operationId !== operationId || armed.phase !== phase) bad("dispatch is not armed");
+        armed = null;
+        httpBudget = 1;
+        try { return await attempt(); } finally { httpBudget = 0; }
+      };
+      return preflight ? await counter.sendPreflight(operationId, armedAttempt, accept) : await counter.send(operationId, armedAttempt);
+    } finally { busy = false; }
+  }
+  const delegated = Object.freeze({
+    counter: Object.freeze({
+      send: (operationId, attempt) => delegatedSend(operationId, attempt, null, false),
+      sendPreflight: (operationId, attempt, accept) => delegatedSend(operationId, attempt, accept, true),
+      snapshot: () => Object.freeze({ ...counter.snapshot() }),
+      enterRecovery: () => counter.enterRecovery(),
+    }),
+    http: async (spec) => {
+      if (httpBudget !== 1) bad("http outside a delegated attempt or more than one request in it");
+      httpBudget = 0;
+      return transport.send(spec);
+    },
+  });
+
   return Object.freeze({
+    delegated,
     start: async (input) => {
       await admitted();
       return counter.start(input);
@@ -104,6 +147,6 @@ export function createDispatchGate(options) {
     enterRecovery: () => counter.enterRecovery(),
     finish: (outcome) => counter.finish(outcome),
     send,
-    snapshot: () => Object.freeze({ ...counter.snapshot(), poisoned, busy }),
+    snapshot: () => Object.freeze({ ...counter.snapshot(), poisoned, busy, admissionRefused }),
   });
 }

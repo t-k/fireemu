@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
+import { generateKeyPairSync } from "node:crypto";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import { buildCorpus } from "./storage-rules/corpus.mjs";
+import { createCountedCredentialCache } from "./storage-rules/credential-cache.mjs";
 import { createController } from "./storage-rules/controller.mjs";
 import { createDispatchGate } from "./storage-rules/dispatch-gate.mjs";
 import { buildFullRequestManifest } from "./storage-rules/full-manifest.mjs";
@@ -152,12 +154,25 @@ function memoryCapture() {
   return { writeIntent: async () => {}, writeResponse: async () => {}, writeFacts: async () => {}, writeProof: async () => {}, writeNote: async () => {}, snapshot: () => ({ uncertain: false }) };
 }
 
-async function harness(admissionOverrides = {}) {
+const CERT_URL = "https://www.googleapis.com/robot/v1/metadata/x509/securetoken@system.gserviceaccount.com";
+const { publicKey: signingKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+const canned = (body) => ({ status: 200, rawHeaders: ["Cache-Control", "public, max-age=3600", "Age", "0"], bytes: Buffer.from(JSON.stringify(body)), startedAtMs: 1, finishedAtMs: 2 });
+const adc = { type: "authorized_user", client_id: "synthetic-client.apps.googleusercontent.com", client_secret: "synthetic-client-secret-00001", refresh_token: "synthetic-refresh-token-with/slash+00002" };
+
+async function harness(admissionOverrides = {}, { delegates = {} } = {}) {
   const capture = memoryCapture();
   const simulator = createSimulator({ manifest, options: { invalidContent } });
   const transportCalls = { count: 0 };
   const hooks = { after: async () => {} };
-  const transport = { send: async (request) => { transportCalls.count++; const answer = await simulator.send(request); await hooks.after(request); return answer; } };
+  const transport = { send: async (request) => {
+    transportCalls.count++;
+    let answer;
+    if (request.url === CERT_URL) answer = canned({ synthetic: signingKey.export({ type: "spki", format: "pem" }) });
+    else if (request.url.startsWith("https://oauth2.googleapis.com/")) answer = canned({ access_token: "synthetic-owner-access-token-00003", token_type: "Bearer", expires_in: 3600 });
+    else answer = await simulator.send(request);
+    await hooks.after(request);
+    return answer;
+  } };
   const targets = createTargetBuilder({ manifest, digestSalt: salt });
   const tables = buildRefTables(manifest);
   const refs = createRuntimeRefStore({ tables, runId: options.runId, digestSalt: salt, writeProof: (proof) => capture.writeProof(proof) });
@@ -172,7 +187,7 @@ async function harness(admissionOverrides = {}) {
   const noop = async () => {};
   const controller = createController({
     manifest, schedule: buildSchedule(manifest), recoverySchedule: buildRecoverySchedule(manifest), gate, targets, refs, tables, objects, run, capture,
-    delegates: { "preflight-cache": noop, "credential-cache": noop, "prepare-query": noop, "foreign-signup": noop, "foreign-cleanup": noop, "cleanup-query": noop, "recover-accounts": noop },
+    delegates: { "preflight-cache": noop, "credential-cache": noop, "prepare-query": noop, "foreign-signup": noop, "foreign-cleanup": noop, "cleanup-query": noop, "recover-accounts": noop, ...delegates },
     wait: async () => {}, credentials: { fresh: () => true }, judgePreflight: (row, outcome) => outcome.verdict !== "unexpected",
   });
   return { controller, gate, admission, transportCalls, started, hooks, state: created.state, simulator };
@@ -263,4 +278,40 @@ test("a revocation stops recovery too: no recovery request leaves once the appro
   assert.equal(result.reason, "admission refused");
   assert.equal(h.transportCalls.count, calls);
   assert.equal(h.gate.snapshot().mode, "closed");
+});
+
+// The delegates that carry their own requests send through the gate's seam.
+const cacheDelegate = (getGate, proofs = []) => async (step) => {
+  const gate = getGate();
+  const cache = createCountedCredentialCache({ adc, counter: gate.delegated.counter, digestSalt: salt, nowSeconds: () => Math.floor(Date.now() / 1000), sendHttp: gate.delegated.http, writeProof: async (proof) => { proofs.push(proof); } });
+  for (const id of step.rowIds) await (id.includes("owner-token") ? cache.refreshOwner(id) : cache.fetchSigningKeys(id));
+};
+
+test("a whole recording with the real credential cache delegate counts its requests through the gate", async () => {
+  const proofs = [];
+  let h;
+  h = await harness({}, { delegates: { "credential-cache": cacheDelegate(() => h.gate, proofs) } });
+  const result = await h.controller.run();
+  assert.equal(result.status, "finished", JSON.stringify(result));
+  assert.equal(proofs.length, 9);
+  assert.equal(h.gate.snapshot().requests, result.requests + 9);
+  assert.ok(proofs.every((proof) => proof.sendAuthorized === false));
+});
+
+test("a revocation stops a delegate that sends through the seam and reports it as an admission refusal", async () => {
+  let h;
+  const send = cacheDelegate(() => h.gate);
+  h = await harness({}, { delegates: { "credential-cache": async (step) => { h.state.set(`${goodLedger}\n${revoked("STORAGE-RULES stage3-v1")}`); await send(step); } } });
+  const result = await h.controller.run();
+  assert.equal(result.status, "stopped");
+  assert.equal(result.reason, "admission refused");
+  assert.deepEqual(result.detail, { op: "credential-cache" });
+  assert.equal(h.gate.snapshot().admissionRefused, true);
+});
+
+test("a delegate that fails without an admission refusal stops the run as a failed delegate", async () => {
+  let h;
+  h = await harness({}, { delegates: { "prepare-query": async () => { throw new Error("boom"); } } });
+  const result = await h.controller.run();
+  assert.deepEqual([result.status, result.reason, result.detail.op], ["stopped", "delegate failed", "prepare-query"]);
 });

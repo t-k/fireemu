@@ -142,6 +142,17 @@ export function createController(options) {
     if (state.status !== "settled") throw new RunStop("settle exhausted", { name: step.name });
   }
 
+  // A delegate carries its own requests through the gate's seam. Whatever it throws becomes a stop: a refused admission keeps
+  // its reason, anything else is a failed delegate; the run never continues after a delegate that did not finish.
+  async function runDelegate(op, argument) {
+    if (!callable(delegates[op])) throw new RunStop("delegate missing", { op });
+    try { await delegates[op](argument); } catch (error) {
+      if (error instanceof RunStop) throw error;
+      if (gate.snapshot().admissionRefused === true) throw new RunStop("admission refused", { op });
+      throw new RunStop("delegate failed", { op });
+    }
+  }
+
   async function pagesStep(step, phase) {
     for (let index = 0; index < step.rowIds.length; index++) {
       const outcome = await execute(rowById.get(step.rowIds[index]), phase);
@@ -157,7 +168,7 @@ export function createController(options) {
     }
     for (const id of schedule.preflight) {
       const row = rowById.get(id);
-      if (row.family === "credential-cache") { await delegates["preflight-cache"](row); continue; }
+      if (row.family === "credential-cache") { await runDelegate("preflight-cache", row); continue; }
       // The counter closes the run itself when the answer is not the admitted one, so the judgement is made as the response arrives.
       const accept = (raw) => { try { const seen = classifyResponse(row, raw); return verdictOk(row, seen) && judgePreflight(row, seen) === true; } catch { return false; } };
       const outcome = await execute(row, "preflight", { accept });
@@ -169,8 +180,7 @@ export function createController(options) {
       else if (step.type === "settle") await settleStep(step);
       else if (step.type === "pages") await pagesStep(step, "normal");
       else if (step.type === "delegate") {
-        if (!callable(delegates[step.op])) throw new RunStop("delegate missing", { op: step.op });
-        await delegates[step.op](step);
+        await runDelegate(step.op, step);
       } else throw new RunStop("unknown step", { type: step.type });
     }
   }
@@ -191,8 +201,7 @@ export function createController(options) {
       else if (step.type === "settle") await settleStep(step);
       else if (step.type === "pages") await pagesStep(step, "recovery");
       else if (step.type === "delegate") {
-        if (!callable(delegates[step.op])) throw new RunStop("delegate missing", { op: step.op });
-        await delegates[step.op](step);
+        await runDelegate(step.op, step);
       } else throw new RunStop("unknown step", { type: step.type });
     }
   }

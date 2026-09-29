@@ -89,10 +89,12 @@ assert(!strict.key?("environment"), "strict-production must not use a deployment
 assert(!YAML.dump(strict).include?("secrets."), "strict-production must not read secrets")
 strict_checkout = strict.fetch("steps").find { |step| step["uses"]&.start_with?("actions/checkout@") }
 assert(strict_checkout&.dig("with", "persist-credentials") == false, "strict-production must not leave a token in the checkout")
+assert(strict_checkout.dig("with", "fetch-depth") == 0, "strict-production must fetch the whole history: the harness lineage check verifies every hop against it and refuses a shallow clone")
 assert(strict.fetch("steps").any? { |step| step["uses"]&.start_with?("actions/download-artifact@") && step.dig("with", "name") == "package-linux-x64" }, "strict-production must test the package publish ships")
 strict_runs = strict.fetch("steps").map { |step| step["run"] }.compact.join("\n")
 assert(strict_runs.include?("node npm/scripts/verify-install.mjs --dist npm/dist --keep"), "strict-production must install the packed artifact as verify-artifact does")
 assert(strict_runs.include?("sha256sum npm/platforms/build/linux-x64/bin/fireemu"), "strict-production must bind the installed binary to the platform package")
+assert(strict_runs.include?("npm ci --prefix conformance/src/auth-tenant-blocking/function --ignore-scripts --no-audit --no-fund"), "strict-production must install the AUTH-TENANT-BLOCKING blocking fixture's dependencies from its lockfile without running install scripts")
 assert(strict_runs.include?("unshare --net"), "strict-production must run the harnesses with loopback-only networking")
 assert(strict_runs.include?("node conformance/src/release-strict-regression.mjs"), "strict-production must run the committed comparison script")
 assert(!strict_runs.match?(/record-production|record-|preflight/), "strict-production must never record against production")

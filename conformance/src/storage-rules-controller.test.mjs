@@ -568,7 +568,7 @@ test("a response that fails its post-response check stops the run as a failed ch
   // The entry Ruleset list must be a single page.
   const entry = await harness({ simulatorOptions: answerAt(await callOf("preflight/rulesets-list/entry/1"), () => response(200, { nextPageToken: "next" })) });
   const two = await entry.controller.run();
-  assert.deepEqual([two.status, two.reason, two.detail.rowId, two.detail.tokens], ["stopped", "check failed", "preflight/rulesets-list/entry/1", ["entry-page-has-no-next-token"]]);
+  assert.deepEqual([two.status, two.reason, two.detail.rowId, two.detail.tokens], ["stopped", "check failed", "preflight/rulesets-list/entry/1", ["approved-ruleset-count-and-cleanup-baseline", "entry-page-has-no-next-token"]]);
 });
 
 test("a response the classifier cannot read stops the run as unclassifiable", async () => {
@@ -590,7 +590,9 @@ test("the final Ruleset list follows each page token to the next page and stops 
   const first = await callOf("rulesets-list/final/1");
   const tokens = [];
   const failures = new Map(Array.from({ length: 10 }, (_, index) => [first + index, (spec) => { tokens.push(new URL(spec.url).searchParams.get("pageToken")); return response(200, { nextPageToken: `page-${index + 2}` }); }]));
-  const h = await harness({ simulatorOptions: { failures } });
+  // The Rulesets baseline (a single page holding exactly the two known rulesets) would stop the first page; this test is about following tokens, so the ledger's answer to that one check is set aside.
+  const setBaselineAside = (run) => ({ check: (row, outcome) => { const seen = run.check(row, outcome); return seen.ok || !seen.failed.every((token) => token === "approved-ruleset-count-and-cleanup-baseline") ? seen : Object.freeze({ ok: true, failed: Object.freeze([]) }); } });
+  const h = await harness({ simulatorOptions: { failures }, adjust: (built) => ({ ...built, run: ledgerAnswering(built, setBaselineAside) }) });
   const result = await h.controller.run();
   assert.deepEqual([result.status, result.reason], ["stopped", "more than ten Ruleset pages"]);
   assert.deepEqual(tokens, [null, ...Array.from({ length: 9 }, (_, index) => `page-${index + 2}`)]);

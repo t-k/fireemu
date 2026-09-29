@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { quotaProjectRequired } from "./quota-project.mjs";
 import { createStage3RequestCounter } from "./request-counter.mjs";
 import { STOP_CODES, tagged } from "./stop-codes.mjs";
 
@@ -40,13 +41,16 @@ export function createDispatchGate(options) {
   const modeOf = (phase) => ({ preflight: "preflight", normal: "normal", recovery: "recovery" })[phase];
 
   function credentialHeaders(prepared) {
-    const headers = credentials.headersFor(prepared.credential, Object.freeze({ project: prepared.project }));
+    // Whether the route carries the quota project header is decided here, from the target, and handed to the provider.
+    const quotaProject = quotaProjectRequired({ method: prepared.spec.method, url: prepared.spec.url });
+    const headers = credentials.headersFor(prepared.credential, Object.freeze({ project: prepared.project, quotaProject }));
     if (!plain(headers)) bad("invalid credential headers");
     const out = {};
     for (const [name, value] of Object.entries(headers)) {
       if (!CREDENTIAL_HEADERS.has(name) || typeof value !== "string" || !/^[\x20-\x7e]{1,4096}$/.test(value)) bad("invalid credential headers");
-      // The quota project is the project the target names; a provider (or row data behind it) cannot bill another one.
-      if (name === "x-goog-user-project" && value !== prepared.project) bad("invalid credential headers");
+      // The quota project is the project the target names; a provider (or row data behind it) cannot bill another one,
+      // and cannot send the header to a route that must not have it.
+      if (name === "x-goog-user-project" && (value !== prepared.project || !quotaProject)) bad("invalid credential headers");
       out[name] = value;
     }
     return out;

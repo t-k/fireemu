@@ -96,6 +96,7 @@ function build(corpusInput, closureInput, optionsInput) {
   for (const r of declared.rows) {
     const request = r.request; const requires = ["canonical-program-state-and-fresh-credential"];
     if (request.sessionUrlReference) {
+      if (r.stage !== "subject") request.credential = "anonymous";
       requires.push("durable-verified-start-url-and-target");
       if (request.headers["x-goog-upload-command"] === "cancel") requires.push("confirmed-active-session", "cancel-not-attempted");
     }
@@ -161,9 +162,9 @@ function build(corpusInput, closureInput, optionsInput) {
   }
 
   const settle = (phase, name, objectsToRead, cycles) => {
-    for (let cycle = 1; cycle <= cycles; cycle++) for (let index = 0; index < objectsToRead.length; index++) add(`${phase === "recovery" ? "recovery/" : ""}settle/${name}/${cycle}/${index}`, phase, "settle", name, `cycle-${cycle}`, "storage", storage(objectsToRead[index], true, "firebase"), ["all-four-controls-confirmed-and-retained", "finite-distinct-cycle-and-fresh-user-token"]);
+    for (let cycle = 1; cycle <= cycles; cycle++) for (let index = 0; index < objectsToRead.length; index++) add(`${phase === "recovery" ? "recovery/" : ""}settle/${name}/${cycle}/${index}`, phase, "settle", name, `cycle-${cycle}`, "storage", { ...storage(objectsToRead[index], true, "firebase"), credential: "anonymous" }, ["all-four-controls-confirmed-and-retained", "finite-distinct-cycle-and-fresh-user-token"]);
   };
-  for (const [name, allowed, denied] of [["v1", controls[0], controls[2]], ["v2", controls[1], controls[2]], ["A", controls[3], controls[4]], ["B", controls[4], controls[3]]]) settle("normal", name, [allowed, denied], 30);
+  for (const [name, allowed, denied] of [["v1", controls[0], controls[2]], ["v2", controls[1], controls[0]], ["A", controls[3], controls[1]], ["B", controls[4], controls[3]]]) settle("normal", name, [allowed, denied], 30);
   settle("normal", "restore", witnesses, 15); settle("recovery", "restore", witnesses, 15);
 
   for (let index = 0; index < controls.length; index++) {
@@ -211,7 +212,7 @@ function build(corpusInput, closureInput, optionsInput) {
     const name = documents[index];
     for (const stage of ["current", "delete", "absence"]) add(`recovery/document-${index}/${stage}`, "recovery", "recovery-document", `document-${index}`, stage, "firestore", req("https://firestore.googleapis.com", `/v1/${name}`, stage === "delete" ? "DELETE" : "GET", { documentName: name, ...(stage === "delete" ? { query: { "currentDocument.updateTime": reference("update-time", name) } } : {}) }), stage === "delete" ? ["confirmed-document-write-history-and-current-version", "delete-not-attempted"] : ["resource-started-and-provenance-matches"]);
   }
-  for (const session of sessions) for (const [stage, command] of [["current", "query"], ["cancel", "cancel"], ["terminal", "query"]]) add(`recovery/session/${session.caseId}/${stage}`, "recovery", "recovery-session", session.caseId, stage, "storage", req(FIREBASE, null, "POST", { objectName: session.objectName, credential: "user-a", dialect: "firebase", operation: "upload", sessionUrlReference: { ...session.reference }, headers: { "x-goog-upload-protocol": "resumable", "x-goog-upload-command": command } }), command === "cancel" ? ["durable-verified-start-url-and-target", "confirmed-active-session", "cancel-not-attempted"] : ["durable-verified-start-url-and-target", "unknown-terminal-shape-remains-needs-recovery"]);
+  for (const session of sessions) for (const [stage, command] of [["current", "query"], ["cancel", "cancel"], ["terminal", "query"]]) add(`recovery/session/${session.caseId}/${stage}`, "recovery", "recovery-session", session.caseId, stage, "storage", req(FIREBASE, null, "POST", { objectName: session.objectName, credential: "anonymous", dialect: "firebase", operation: "upload", sessionUrlReference: { ...session.reference }, headers: { "x-goog-upload-protocol": "resumable", "x-goog-upload-command": command } }), command === "cancel" ? ["durable-verified-start-url-and-target", "confirmed-active-session", "cancel-not-attempted"] : ["durable-verified-start-url-and-target", "unknown-terminal-shape-remains-needs-recovery"]);
   for (const source of sources) for (const stage of ["current", "delete", "absence"]) add(`recovery/ruleset/${source.id}/${stage}`, "recovery", "recovery-ruleset", source.id, stage, "firebase-rules", req(RULES, null, stage === "delete" ? "DELETE" : "GET", { pathReference: reference("ruleset-path", source.id) }), stage === "delete" ? ["owned-ruleset-and-unreferenced-after-restore", "delete-not-attempted"] : ["acknowledged-ruleset-create"]);
   for (let page = 1; page <= 10; page++) list("recovery", "final", page);
   prefixEmpty("recovery");

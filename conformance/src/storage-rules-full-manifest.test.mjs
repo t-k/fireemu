@@ -245,3 +245,39 @@ test("rejects accessors, symbols, sparse arrays and cyclic data without calling 
   const sparse = buildCorpus(binding); delete sparse.cases[0]; assert.throws(() => build(options, sparse), /invalid full manifest input/);
   const cyclic = buildCorpus(binding); cyclic.extra = cyclic; assert.throws(() => build(options, cyclic), /invalid full manifest input/);
 });
+
+test("settle and restore reads carry no user credential, because every witness source allows all reads", () => {
+  const m = build();
+  const settle = m.rows.filter((r) => r.family === "settle");
+  assert.equal(settle.length, 360);
+  assert.ok(settle.every((r) => r.request.credential === "anonymous" && Object.keys(r.request.headers).length === 0));
+  assert.ok(!m.rows.filter((r) => r.family === "settle" && r.phase === "recovery").some((r) => r.request.credential === "user-a"));
+});
+
+test("resumable session cancel and query use the upload URL as the capability and send no credential", () => {
+  const m = build();
+  const commands = m.rows.filter((r) => r.request.sessionUrlReference && ["query", "cancel"].includes(r.request.headers["x-goog-upload-command"]) && r.stage !== "subject");
+  assert.equal(commands.length, 8 + 24);
+  assert.ok(commands.every((r) => r.request.credential === "anonymous"));
+  const start = m.rows.filter((r) => r.request.headers["x-goog-upload-command"] === "start");
+  assert.equal(start.length, 8);
+  assert.ok(start.every((r) => r.request.credential === "user-a"));
+  const finalize = m.rows.filter((r) => r.stage === "subject" && r.request.sessionUrlReference);
+  assert.equal(finalize.length, 8);
+  assert.ok(finalize.every((r) => r.request.credential === "user-a"));
+});
+
+test("each publication phase reads the previous phase's positive witness as its negative", () => {
+  const m = build();
+  const [c0, c1, , c3, c4] = m.resources.controls;
+  const denyControl = m.resources.controls[2];
+  const objects = (name) => [0, 1].map((index) => m.rows.find((r) => r.id === `settle/${name}/1/${index}`).request.objectName);
+  assert.deepEqual(objects("v1"), [c0, denyControl]);
+  assert.deepEqual(objects("v2"), [c1, c0]);
+  assert.deepEqual(objects("A"), [c3, c1]);
+  assert.deepEqual(objects("B"), [c4, c3]);
+  for (const name of ["v1", "v2", "A", "B"]) {
+    const ids = m.rows.filter((r) => r.family === "settle" && r.programId === name).map((r) => r.id);
+    assert.equal(ids.length, 60);
+  }
+});

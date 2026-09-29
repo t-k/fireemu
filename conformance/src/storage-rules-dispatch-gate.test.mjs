@@ -137,6 +137,17 @@ test("a provider that adds the quota project header to userinfo is refused befor
   assert.equal(h.trace.some((entry) => entry[0] === "transport"), false);
 });
 
+test("the exemption from the quota project header is by method as well: another method on the userinfo path keeps the header", async () => {
+  const h = await harness({ credentials: ownerProvider(), targets: { verify: () => true } });
+  await h.gate.start({ runId: options.runId });
+  const prepared = h.prepare("preflight/owner/identity");
+  const post = { ...prepared, spec: { ...prepared.spec, method: "POST" } };
+  await h.gate.send(post, preflightMeta);
+  const sent = h.trace.find((entry) => entry[0] === "transport");
+  assert.equal(sent[1], "POST");
+  assert.equal(JSON.parse(sent[3])["x-goog-user-project"], prepared.project);
+});
+
 test("a target the transport refuses is not sent and costs nothing: no admission, intent, reservation or counter movement", async () => {
   let refuse = false;
   const h = await harness({ transport: { validate: () => { if (refuse) throw new Error("invalid HTTP transport input"); } } });

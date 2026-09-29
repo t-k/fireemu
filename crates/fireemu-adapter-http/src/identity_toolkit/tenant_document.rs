@@ -48,6 +48,11 @@ const ANSWERED_MEMBERS: &[&str] = &[
 pub(super) const PRIVACY_WRITTEN: &str = "_tenantEmailPrivacyConfigWritten";
 /// Whether `client` was ever written: it is then answered even with no permission on.
 pub(super) const CLIENT_WRITTEN: &str = "_tenantClientWritten";
+/// Under the emulator profile, the tenant's `emailPrivacyConfig` as the official emulator keeps
+/// it (firebase-tools 15.28.2): what masked updates wrote, as written, `false` included
+/// (`applyMask`), and none from a create (`createTenant`). An update without a mask applies what
+/// its body has, as every emulator-profile update without a mask does.
+pub(super) const EMULATOR_PRIVACY: &str = "_tenantEmulatorEmailPrivacyConfig";
 
 const INVALID_DISPLAY_NAME: &str = "INVALID_DISPLAY_NAME : display_name should start with a letter and only consist of letters, digits and hyphens with 4-20 characters.";
 const MISSING_DISPLAY_NAME: &str = "MISSING_DISPLAY_NAME : Missing tenant with valid display_name.";
@@ -96,9 +101,59 @@ pub(super) struct WrittenMembers {
     phones: Option<BTreeMap<String, String>>,
     privacy_written: bool,
     client_written: bool,
+    /// Under the emulator profile, the change to the `emailPrivacyConfig` it answers.
+    emulator_privacy: Option<EmulatorPrivacyWrite>,
     /// A password policy write: the parsed body, the policy paths it touched, whether a policy
     /// is configured after it, and when it was written (the derived members production keeps).
     policy: Option<(Value, Vec<String>, bool, Option<String>)>,
+}
+
+/// A change to the `emailPrivacyConfig` the emulator profile answers: the update's paths,
+/// applied to its body as the official emulator's `updateTenant` applies a mask (`applyMask`).
+#[derive(Debug)]
+pub(super) struct EmulatorPrivacyWrite {
+    pub(super) paths: Vec<String>,
+    pub(super) body: Value,
+}
+
+impl EmulatorPrivacyWrite {
+    /// The member after this change, from the one before.
+    fn applied(self, before: Option<Value>) -> Option<Value> {
+        let Self { paths, body } = self;
+        let written = body
+            .get("emailPrivacyConfig")
+            .filter(|value| !value.is_null());
+        let mut after = before;
+        for path in paths {
+            match path.as_str() {
+                "emailPrivacyConfig" => {
+                    if let Some(written) = written {
+                        after = Some(written.clone());
+                    }
+                }
+                "emailPrivacyConfig.enableImprovedEmailPrivacy" => {
+                    // `applyMask` makes the parent an object before it looks for the leaf, and
+                    // skips a parent the update lacks or holds as no object.
+                    let Some(Value::Object(written)) = written else {
+                        continue;
+                    };
+                    let mut object = match after.take() {
+                        Some(Value::Object(object)) => object,
+                        _ => Map::new(),
+                    };
+                    if let Some(leaf) = written
+                        .get("enableImprovedEmailPrivacy")
+                        .filter(|value| !value.is_null())
+                    {
+                        object.insert("enableImprovedEmailPrivacy".to_owned(), leaf.clone());
+                    }
+                    after = Some(Value::Object(object));
+                }
+                _ => {}
+            }
+        }
+        after
+    }
 }
 
 impl WrittenMembers {
@@ -156,6 +211,12 @@ impl WrittenMembers {
         Ok(written)
     }
 
+    /// Records, under the emulator profile, the change to the `emailPrivacyConfig` it answers.
+    pub(super) fn with_emulator_privacy(mut self, write: EmulatorPrivacyWrite) -> Self {
+        self.emulator_privacy = Some(write);
+        self
+    }
+
     /// Records a password policy write, for its derived members (`lastUpdateTime`, the written
     /// strength options).
     pub(super) fn with_policy_write(
@@ -192,6 +253,15 @@ impl WrittenMembers {
         if self.client_written {
             members.set(CLIENT_WRITTEN, Some("true".to_owned()));
         }
+        if let Some(write) = self.emulator_privacy {
+            let before = members
+                .get(EMULATOR_PRIVACY)
+                .and_then(|text| serde_json::from_str(text).ok());
+            members.set(
+                EMULATOR_PRIVACY,
+                write.applied(before).map(|value| value.to_string()),
+            );
+        }
         if let Some((body, fields, configured, written_at)) = &self.policy {
             super::with_derived_members(
                 &mut members,
@@ -209,6 +279,8 @@ impl WrittenMembers {
 /// The private markers of a tenant an export carries, with the project's exported private
 /// members ([`project_config::EXPORTED_PRIVATE_MEMBERS`]) a tenant's password policy derives.
 const EXPORTED_MARKERS: &[&str] = &[PRIVACY_WRITTEN, CLIENT_WRITTEN];
+/// The private members an export carries as values: the emulator profile's `emailPrivacyConfig`.
+const EXPORTED_VALUES: &[&str] = &[EMULATOR_PRIVACY];
 
 /// A tenant's written members, as `(member, JSON text)` in member order, for an export: the
 /// members kept as written, the markers of a written `emailPrivacyConfig` and `client`, and the
@@ -218,6 +290,7 @@ pub fn exportable_tenant_members(members: &StoredConfigMembers) -> Vec<(String, 
     WRITTEN_MEMBERS
         .iter()
         .chain(EXPORTED_MARKERS)
+        .chain(EXPORTED_VALUES)
         .chain(project_config::EXPORTED_PRIVATE_MEMBERS)
         .filter_map(|member| {
             members.get(member).map(|text| {
@@ -268,6 +341,7 @@ fn prepared_tenant_members(members: &[(String, String)]) -> Result<PreparedTenan
     let mut private = Vec::new();
     let private_members: Vec<&str> = EXPORTED_MARKERS
         .iter()
+        .chain(EXPORTED_VALUES)
         .chain(project_config::EXPORTED_PRIVATE_MEMBERS)
         .copied()
         .collect();
@@ -286,6 +360,8 @@ fn prepared_tenant_members(members: &[(String, String)]) -> Result<PreparedTenan
             return Err(format!("tenant member {member:?} is not a written member"));
         } else if EXPORTED_MARKERS.contains(&member.as_str()) {
             value == Value::Bool(true)
+        } else if EXPORTED_VALUES.contains(&member.as_str()) {
+            value.is_object()
         } else {
             project_config::valid_private_member(member, &value)
         };
@@ -389,6 +465,7 @@ pub(super) fn document(
     metadata: &TenantMetadata,
     store: &AuthStore,
     view: View,
+    emulator: bool,
 ) -> Value {
     let members = store.stored_config_members();
     let stored = |member: &str| -> Option<Value> {
@@ -446,7 +523,14 @@ pub(super) fn document(
     if let Some(policy) = written_policy(store) {
         document.insert("passwordPolicyConfig".to_owned(), policy);
     }
-    if metadata.enable_improved_email_privacy {
+    // The emulator profile answers the member as the official emulator keeps it; its privacy
+    // behaviour reads the project's (issue
+    // emulator-tenant-document-shows-the-projects-email-privacy, 2026-09-29).
+    if emulator {
+        if let Some(privacy) = stored(EMULATOR_PRIVACY) {
+            document.insert("emailPrivacyConfig".to_owned(), privacy);
+        }
+    } else if metadata.enable_improved_email_privacy {
         document.insert(
             "emailPrivacyConfig".to_owned(),
             json!({"enableImprovedEmailPrivacy": true}),

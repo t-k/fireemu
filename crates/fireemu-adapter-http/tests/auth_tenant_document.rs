@@ -245,15 +245,12 @@ fn switches_appear_only_when_on_and_written_members_are_echoed() {
             settings["monitoring"],
             json!({"requestLogging": {"enabled": true}})
         );
-        // The emulator profile's tenant keeps the project's email privacy (off), as the
-        // official emulator's does; the write shows as written (round-2 integration review M1).
+        // The emulator profile's create keeps no emailPrivacyConfig, as the official emulator's
+        // `createTenant` keeps none; its privacy behaviour reads the project's (issue
+        // emulator-tenant-document-shows-the-projects-email-privacy).
         assert_eq!(
-            settings["emailPrivacyConfig"],
-            if label == "strict" {
-                json!({"enableImprovedEmailPrivacy": true})
-            } else {
-                json!({})
-            },
+            settings.get("emailPrivacyConfig").cloned(),
+            (label == "strict").then(|| json!({"enableImprovedEmailPrivacy": true})),
             "{label}"
         );
         assert_eq!(
@@ -452,7 +449,9 @@ fn a_patch_applies_exactly_its_mask() {
         );
         assert_eq!(status, 200, "{label}: {unchanged}");
         assert_eq!(unchanged["displayName"], "atb-man-open");
-        // settings#privacy-off: a written message stays, empty, when its switch is cleared.
+        // settings#privacy-off: a written message stays, empty, when its switch is cleared. The
+        // emulator profile keeps the false it was given, as the official emulator's `applyMask`
+        // does (issue emulator-tenant-document-shows-the-projects-email-privacy).
         let (status, privacy) = admin(
             &state,
             "PATCH",
@@ -462,7 +461,11 @@ fn a_patch_applies_exactly_its_mask() {
         assert_eq!(status, 200);
         assert_eq!(
             privacy["emailPrivacyConfig"],
-            json!({}),
+            if label == "strict" {
+                json!({})
+            } else {
+                json!({"enableImprovedEmailPrivacy": false})
+            },
             "{label}: {privacy}"
         );
         // mfa#tenant-m-mfa-off: the mfaConfig mask replaces the whole message.
@@ -758,5 +761,113 @@ fn permissions_are_answered_without_a_written_client() {
             json!({"permissions": {"disabledUserSignup": true}}),
             "{label}: {document}"
         );
+    }
+}
+
+/// A tenant's `emailPrivacyConfig` as each profile answers it. The strict profile answers what
+/// the tenant wrote, emptied when turned off, as production does (`atb/tenant/settings`). The
+/// emulator profile answers it as the official emulator does (firebase-tools 15.28.2): a create
+/// keeps none (`createTenant` copies five members), a masked update keeps what it names as
+/// written, `false` included (`applyMask`), and a masked member the body lacks changes nothing;
+/// an update without a mask applies what its body has, as the emulator profile's updates without
+/// a mask do. Its privacy behaviour reads the project's either way (issue
+/// emulator-tenant-document-shows-the-projects-email-privacy, 2026-09-29).
+#[test]
+#[allow(clippy::too_many_lines)]
+fn a_tenant_answers_its_email_privacy_as_its_profile_says() {
+    for (label, state) in profiles() {
+        let strict = label == "strict";
+        let privacy = |document: &Value| document.get("emailPrivacyConfig").cloned();
+        let tenant_path = |id: &str| format!("{TENANTS}/{id}");
+        let read = |id: &str| {
+            let (status, body) = admin(&state, "GET", &tenant_path(id), &json!({}));
+            assert_eq!(status, 200, "{label}: {body}");
+            body
+        };
+        let patch = |id: &str, mask: Option<&str>, body: Value| {
+            let path = match mask {
+                Some(mask) => format!("{}?updateMask={mask}", tenant_path(id)),
+                None => tenant_path(id),
+            };
+            let (status, answer) = admin(&state, "PATCH", &path, &body);
+            assert_eq!(status, 200, "{label} {mask:?}: {answer}");
+            answer
+        };
+        // The project hides unknown addresses; a new tenant never shows it.
+        let (status, project) = admin(
+            &state,
+            "PATCH",
+            "/identitytoolkit.googleapis.com/admin/v2/projects/demo-app/config?updateMask=emailPrivacyConfig.enableImprovedEmailPrivacy",
+            &json!({"emailPrivacyConfig": {"enableImprovedEmailPrivacy": true}}),
+        );
+        assert_eq!(status, 200, "{label}: {project}");
+        let plain = create(&state, &json!({"displayName": "atb-priv-plain"}));
+        assert_eq!(privacy(&plain), None, "{label}: {plain}");
+        assert_eq!(privacy(&read(&id_of(&plain))), None, "{label}");
+
+        // A create that writes it: strict keeps it; the emulator profile keeps none.
+        let written = create(
+            &state,
+            &json!({"displayName": "atb-priv-written",
+                    "emailPrivacyConfig": {"enableImprovedEmailPrivacy": true}}),
+        );
+        let on = json!({"enableImprovedEmailPrivacy": true});
+        let expected_create = strict.then(|| on.clone());
+        assert_eq!(privacy(&written), expected_create, "{label}: {written}");
+        let id = id_of(&written);
+        assert_eq!(privacy(&read(&id)), expected_create, "{label}");
+
+        // A masked update turning it off: strict empties it; the emulator profile keeps the
+        // false it was given.
+        let off = patch(
+            &id,
+            Some("emailPrivacyConfig.enableImprovedEmailPrivacy"),
+            json!({"emailPrivacyConfig": {"enableImprovedEmailPrivacy": false}}),
+        );
+        let expected_off = if strict {
+            json!({})
+        } else {
+            json!({"enableImprovedEmailPrivacy": false})
+        };
+        assert_eq!(privacy(&off), Some(expected_off.clone()), "{label}: {off}");
+        assert_eq!(privacy(&read(&id)), Some(expected_off.clone()), "{label}");
+
+        // A masked update turning it on: both answer it on.
+        let back_on = patch(
+            &id,
+            Some("emailPrivacyConfig"),
+            json!({"emailPrivacyConfig": {"enableImprovedEmailPrivacy": true}}),
+        );
+        assert_eq!(privacy(&back_on), Some(on.clone()), "{label}: {back_on}");
+
+        // A masked member the body lacks: the emulator profile changes nothing; strict clears
+        // it to off, as production reads a masked absent member.
+        let lacking = patch(
+            &id,
+            Some("emailPrivacyConfig.enableImprovedEmailPrivacy"),
+            json!({"displayName": "atb-priv-written"}),
+        );
+        let expected_lacking = if strict { json!({}) } else { on.clone() };
+        assert_eq!(
+            privacy(&lacking),
+            Some(expected_lacking),
+            "{label}: {lacking}"
+        );
+
+        // An update without a mask, in the emulator profile, applies what its body has.
+        if !strict {
+            let unmasked = patch(&id, None, json!({"displayName": "atb-priv-unmasked"}));
+            assert_eq!(privacy(&unmasked), Some(on.clone()), "{label}: {unmasked}");
+            let rewritten = patch(
+                &id,
+                None,
+                json!({"emailPrivacyConfig": {"enableImprovedEmailPrivacy": false}}),
+            );
+            assert_eq!(
+                privacy(&rewritten),
+                Some(json!({"enableImprovedEmailPrivacy": false})),
+                "{label}: {rewritten}"
+            );
+        }
     }
 }

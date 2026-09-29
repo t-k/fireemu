@@ -7929,6 +7929,7 @@ fn with_tenant_store(
 
 /// A tenant's document, as the answer to `view`.
 fn tenant_answer(
+    state: &AuthState,
     registry: &AuthRegistry,
     project: &str,
     tenant: &str,
@@ -7946,7 +7947,15 @@ fn tenant_answer(
     };
     JsonResponse {
         status: 200,
-        body: tenant_document::document(project, &project_name, tenant, &metadata, &store, view),
+        body: tenant_document::document(
+            project,
+            &project_name,
+            tenant,
+            &metadata,
+            &store,
+            view,
+            state.stateless_refresh_tokens,
+        ),
     }
 }
 
@@ -8072,7 +8081,13 @@ fn tenant_management(
             {
                 return response;
             }
-            tenant_answer(registry, project, &tenant, tenant_document::View::Written)
+            tenant_answer(
+                state,
+                registry,
+                project,
+                &tenant,
+                tenant_document::View::Written,
+            )
         }
         Handler::TenantList => {
             let params = query_params(query);
@@ -8122,6 +8137,7 @@ fn tenant_management(
                         &metadata,
                         &store,
                         tenant_document::View::Written,
+                        state.stateless_refresh_tokens,
                     ))
                 })
                 .collect();
@@ -8143,7 +8159,13 @@ fn tenant_management(
             let Some(tenant) = tenant else {
                 return error(400, "INVALID_TENANT_ID");
             };
-            tenant_answer(registry, project, tenant, tenant_document::View::Read)
+            tenant_answer(
+                state,
+                registry,
+                project,
+                tenant,
+                tenant_document::View::Read,
+            )
         }
         Handler::TenantUpdate => {
             let Some(tenant) = tenant else {
@@ -8228,6 +8250,15 @@ fn tenant_management(
                 Ok(written) => written,
                 Err(response) => return response,
             };
+            // The emulator profile keeps the tenant's `emailPrivacyConfig` as the official
+            // emulator's `updateTenant` does (issue
+            // emulator-tenant-document-shows-the-projects-email-privacy, 2026-09-29).
+            if !strict {
+                written = written.with_emulator_privacy(tenant_document::EmulatorPrivacyWrite {
+                    paths: fields.clone(),
+                    body: parsed.clone(),
+                });
+            }
             if fields.iter().any(touches_policy) {
                 written = written.with_policy_write(
                     &parsed,
@@ -8267,7 +8298,13 @@ fn tenant_management(
             {
                 return response;
             }
-            tenant_answer(registry, project, tenant, tenant_document::View::Written)
+            tenant_answer(
+                state,
+                registry,
+                project,
+                tenant,
+                tenant_document::View::Written,
+            )
         }
         Handler::TenantDelete => {
             let Some(tenant) = tenant else {

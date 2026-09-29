@@ -4267,9 +4267,11 @@ fn admin_v2_tenant_create_takes_the_project_config_as_its_profile_says() {
             &json!({"displayName": "late-tenant"}),
         );
         assert_eq!(created.status, 200, "{}", created.body);
-        assert_eq!(
-            created.body.get("emailPrivacyConfig").cloned(),
-            followed.then(|| json!({"enableImprovedEmailPrivacy": true})),
+        // The emulator profile's tenant follows the project's privacy without answering it,
+        // as the official emulator's does (issue
+        // emulator-tenant-document-shows-the-projects-email-privacy).
+        assert!(
+            created.body.get("emailPrivacyConfig").is_none(),
             "strict {strict}: {}",
             created.body
         );
@@ -4299,7 +4301,8 @@ fn admin_v2_tenant_create_takes_the_project_config_as_its_profile_says() {
             "strict {strict}"
         );
         // A tenant's own written values show, a written message kept even when off; the
-        // emulator profile's privacy stays the project's.
+        // emulator profile's create keeps no emailPrivacyConfig, as the official emulator's
+        // `createTenant` keeps none, and its privacy stays the project's.
         let explicit = handle_with(
             &state,
             "POST",
@@ -4313,12 +4316,8 @@ fn admin_v2_tenant_create_takes_the_project_config_as_its_profile_says() {
         );
         assert_eq!(explicit.status, 200, "{}", explicit.body);
         assert_eq!(
-            explicit.body["emailPrivacyConfig"],
-            if followed {
-                json!({"enableImprovedEmailPrivacy": true})
-            } else {
-                json!({})
-            },
+            explicit.body.get("emailPrivacyConfig").cloned(),
+            strict.then(|| json!({})),
             "strict {strict}"
         );
         assert_eq!(

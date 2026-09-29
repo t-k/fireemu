@@ -3764,11 +3764,12 @@ fn an_idle_rest_transaction_expires_and_releases_its_document_lock() {
     );
     assert_eq!(status, 200, "{held}");
 
-    // A later local sample checks idle expiry and lock release without claiming an exact production threshold.
+    // The REST commit that production refused had idled about 121 s (P10-C bracket); strict's limit
+    // is 120 s, so 125 s is a later local sample. It claims no exact production threshold.
     let _ = clock
         .lock()
         .unwrap()
-        .advance(fireemu_core_types::time::LogicalDuration::from_seconds(90));
+        .advance(fireemu_core_types::time::LogicalDuration::from_seconds(125));
     let (status, expired) = call(
         &s,
         "POST",

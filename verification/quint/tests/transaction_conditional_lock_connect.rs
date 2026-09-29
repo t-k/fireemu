@@ -85,8 +85,8 @@ fn local_contract_idle_rollback_before_expiry_touch_retains_retry_lineage() {
         clock
             .lock()
             .expect("clock lock")
-            .advance_to(LogicalInstant::from_unix_seconds(start + 90))
-            .expect("advance beyond idle deadline");
+            .advance_to(LogicalInstant::from_unix_seconds(start + 125))
+            .expect("advance beyond the 120 s strict idle deadline");
         if touch_before_rollback {
             let error = backend
                 .get_document(

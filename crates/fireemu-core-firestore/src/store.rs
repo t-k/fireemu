@@ -1041,9 +1041,15 @@ const TRANSACTION_CONCURRENT_MODIFICATION: &str =
 /// transaction holds on what it read (`concurrencyMode: PESSIMISTIC`).
 pub const TOO_MUCH_CONTENTION: &str = "Too much contention on these documents. Please try again.";
 const MAX_FINISHED_TRANSACTION_LINEAGE: usize = 8_192;
-// Strict uses a provisional allowance after the nominal 60-second idle quota: two production native recordings accepted the 65-second recipes, while two REST recordings refused the 70-second recipe. These samples do not establish an exact server boundary.
+// Strict allows a transaction to sit idle 120 s (the nominal 60 s quota plus this allowance).
+// Production accepted a native Commit after a nominal 110 s idle (measured idle in [110.58,
+// 113.12] s) and refused one after 120 s ([120.54, 122.97] s), each twice (P10-C), and the earlier
+// native samples of 65 to 70 s (up to 72.9 s) were accepted; a REST refusal sat at about 121 s.
+// Strict must not refuse what production accepted (at least 113.12 s) and must refuse what it
+// refused (below 120.54 s); it takes 120 s, so the unobserved gap 113.12 to 120 s is accepted.
+// This is a provisional bracket, not an exact production threshold.
 // The pinned official emulator retains its nominal idle budget without this allowance.
-const TRANSACTION_IDLE_ALLOWANCE_SECONDS: i64 = 10;
+const TRANSACTION_IDLE_ALLOWANCE_SECONDS: i64 = 60;
 
 fn transaction_ttl() -> LogicalDuration {
     seconds_limit(limits::TRANSACTION_TOTAL_TIME, 270)

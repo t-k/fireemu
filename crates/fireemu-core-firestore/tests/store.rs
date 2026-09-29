@@ -459,8 +459,9 @@ fn event_admission_refusal_does_not_extend_a_transaction_lease() {
         ),
         Err(FirestoreError::EventAdmission(_))
     ));
+    // The refusal at t(59) did not renew the lease: it still ends 120 s after t(0).
     assert!(matches!(
-        state.touch_transaction(&transaction, t(90)),
+        state.touch_transaction(&transaction, t(125)),
         Err(FirestoreError::Aborted(_))
     ));
     assert!(state.get(&path("events/refused-transaction")).is_none());
@@ -901,10 +902,10 @@ fn an_expired_transaction_releases_its_locks() {
         s.commit(&[set("held/doc", &[])], None, t(30)),
         Err(FirestoreError::Aborted(_))
     ));
-    // Past the idle deadline the transaction is gone and the write goes through.
-    s.commit(&[set("held/doc", &[])], None, t(90)).unwrap();
+    // Past the idle deadline (strict: 120 s) the transaction is gone and the write goes through.
+    s.commit(&[set("held/doc", &[])], None, t(125)).unwrap();
     assert!(matches!(
-        s.commit(&[set("held/doc", &[])], Some(&txn), t(91)),
+        s.commit(&[set("held/doc", &[])], Some(&txn), t(126)),
         Err(FirestoreError::Aborted(_))
     ));
 }
@@ -953,7 +954,7 @@ fn locally_expired_transaction_rollback_does_not_revive_finished_lineage() {
         .get_in_transaction(&transaction, &path("expired/locked"))
         .unwrap();
     assert!(matches!(
-        state.touch_transaction(&transaction, t(90)),
+        state.touch_transaction(&transaction, t(125)),
         Err(FirestoreError::Aborted(_))
     ));
     let released = state.transaction_releases();
@@ -961,15 +962,15 @@ fn locally_expired_transaction_rollback_does_not_revive_finished_lineage() {
     state.rollback(&transaction).unwrap();
     assert_eq!(state.transaction_releases(), released);
     assert!(matches!(
-        state.retry_transaction(&transaction, t(91)),
+        state.retry_transaction(&transaction, t(126)),
         Err(FirestoreError::InvalidArgument(message)) if message == "Invalid retry transaction."
     ));
     assert!(matches!(
-        state.commit(&[], Some(&transaction), t(92)),
+        state.commit(&[], Some(&transaction), t(127)),
         Err(FirestoreError::Aborted(_))
     ));
     state
-        .commit(&[set("expired/locked", &[])], None, t(93))
+        .commit(&[set("expired/locked", &[])], None, t(128))
         .unwrap();
 }
 
@@ -2264,32 +2265,87 @@ fn idle_candidate_allowance_is_strict_only() {
     }
 }
 
+/// An instant `ms` milliseconds after `t(0)`.
+fn t_ms(ms: i64) -> LogicalInstant {
+    LogicalInstant::from_nanos((1_788_000_000_i128 * 1_000 + i128::from(ms)) * 1_000_000)
+}
+
 #[test]
-fn provisional_strict_idle_deadline_is_a_local_policy_not_a_production_measurement() {
-    // These instants check the delegated provisional local policy, independently of the recorded native/REST samples. They do not prove Firestore's exact boundary.
-    for (seconds, accepted) in [(69, true), (70, false), (71, false)] {
+fn strict_idle_limit_follows_the_p10c_bracket() {
+    // Production accepted a native Commit after a nominal 110 s idle (its measured idle lay in
+    // [110.58, 113.12] s, P10-C, twice) and refused one after 120 s ([120.54, 122.97] s, twice); the
+    // REST refusal sat at about 121 s. Strict takes the limit at 120 s: it must not refuse what
+    // production accepted (113.12 s and the earlier 65 to 70 s samples, the latest at 72.9 s) and
+    // must refuse what production refused (120.54 s). The gap 113.12 to 120 s is unobserved and
+    // accepted. This is a provisional bracket, not an exact production threshold.
+    let cases: [(i64, bool); 9] = [
+        (60_100, true),
+        (72_900, true),
+        (113_120, true),
+        (113_200, true),
+        (119_000, true),
+        (119_900, true),
+        (120_000, false),
+        (120_540, false),
+        (120_600, false),
+    ];
+    for (millis, accepted) in cases {
         for maintenance in [false, true] {
             for commit_first in [false, true] {
                 let mut state = FirestoreState::new();
                 let transaction = state.begin_transaction(false, t(0)).unwrap();
                 if maintenance {
-                    state.compact(t(seconds));
+                    state.compact(t_ms(millis));
                     let expected = usize::from(accepted);
                     assert_eq!(state.transaction_bookkeeping_stats().active, expected);
                     assert_eq!(state.transaction_bookkeeping_stats().deadlines, expected);
                 }
                 let result = if commit_first {
                     state
-                        .commit(&[], Some(&transaction), t(seconds))
+                        .commit(&[], Some(&transaction), t_ms(millis))
                         .map(|_| ())
                 } else {
-                    state.touch_transaction(&transaction, t(seconds))
+                    state.touch_transaction(&transaction, t_ms(millis))
                 };
                 if accepted {
-                    result.unwrap();
+                    result.unwrap_or_else(|error| panic!("{millis} ms refused: {error:?}"));
                 } else {
-                    assert!(matches!(result, Err(FirestoreError::Aborted(_))));
+                    assert!(
+                        matches!(result, Err(FirestoreError::Aborted(_))),
+                        "{millis} ms accepted"
+                    );
                 }
+            }
+        }
+    }
+}
+
+#[test]
+fn the_official_emulator_profile_keeps_the_nominal_idle_budget() {
+    // The pinned official emulator has no allowance: 60.1 s idle is refused, 59.9 s is not.
+    for (millis, accepted) in [
+        (59_900, true),
+        (60_100, false),
+        (72_900, false),
+        (120_600, false),
+    ] {
+        for commit_first in [false, true] {
+            let mut state = FirestoreState::with_limit_scope(LimitScope::OfficialEmulator);
+            let transaction = state.begin_transaction(false, t(0)).unwrap();
+            let result = if commit_first {
+                state
+                    .commit(&[], Some(&transaction), t_ms(millis))
+                    .map(|_| ())
+            } else {
+                state.touch_transaction(&transaction, t_ms(millis))
+            };
+            if accepted {
+                result.unwrap();
+            } else {
+                assert!(
+                    matches!(result, Err(FirestoreError::Aborted(_))),
+                    "{millis} ms"
+                );
             }
         }
     }
@@ -2306,13 +2362,13 @@ fn transactions_expire_on_idle_and_total_time() {
         s.touch_transaction(&txn, t(118)).is_ok(),
         "idle window restarts"
     );
-    // 90 s after the last activity the local idle budget is spent. An expired transaction is ABORTED (the code the SDKs retry), the same as a finished one.
+    // More than 120 s after the last activity (t(118)) the local idle budget is spent. An expired transaction is ABORTED (the code the SDKs retry), the same as a finished one.
     assert!(matches!(
-        s.touch_transaction(&txn, t(208)),
+        s.touch_transaction(&txn, t(240)),
         Err(FirestoreError::Aborted(_))
     ));
     assert!(
-        s.touch_transaction(&txn, t(210)).is_err(),
+        s.touch_transaction(&txn, t(242)).is_err(),
         "expired stays expired"
     );
 

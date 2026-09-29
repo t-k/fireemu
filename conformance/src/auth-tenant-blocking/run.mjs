@@ -1298,6 +1298,16 @@ async function runLocalSession(programs) {
         idTokenSigning: "session-rsa",
         apiKeys: ["fake-api-key"],
         customTokenSigners: { [project.serviceAccount]: project.jwks },
+        // atb/tenant/providers#auth-uri-a: Google's authorization endpoint and scopes as its
+        // discovery document gives them (fireemu fetches none). The key is the run's own public
+        // key: this harness signs no Google ID token, but a signer entry needs one.
+        idpSigners: {
+          "https://accounts.google.com": {
+            keys: [{ ...project.jwks.keys[0] }],
+            authorization_endpoint: "https://accounts.google.com/o/oauth2/v2/auth",
+            scopes_supported: ["openid", "email", "profile"],
+          },
+        },
       },
     }),
   );

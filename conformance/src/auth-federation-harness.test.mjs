@@ -817,8 +817,13 @@ test("the follow-up corpus sends a tampered and an unsigned response of the run'
   const signed = decode(materialize({ $saml: spec }, raw, {}, saml));
   const tampered = decode(materialize({ $saml: { ...spec, tamper: true } }, raw, {}, saml));
   const signature = (xml) => xml.match(/<ds:SignatureValue>([^<]*)</)[1];
-  // Only the first character of the signature differs from a signed response's form.
-  assert.notEqual(signature(tampered)[0], signature(signed)[0]);
+  // Tampering changes only the first character of the signature. (Two responses made from one
+  // spec have different IDs and so different signatures: comparing their first characters
+  // failed about once in 64 runs.)
+  const { tamperSignature } = await import("./auth-federation/saml.mjs");
+  const changed = [...tamperSignature(signed)].filter((character, index) => character !== signed[index]);
+  assert.equal(changed.length, 1);
+  assert.notEqual(signature(tamperSignature(signed))[0], signature(signed)[0]);
   assert.equal(signature(tampered).length, signature(signed).length);
   const unsigned = decode(materialize({ $saml: { ...spec, sign: "none" } }, raw, {}, saml));
   assert.ok(!unsigned.includes("Signature") && !unsigned.includes("X509Certificate"), unsigned);

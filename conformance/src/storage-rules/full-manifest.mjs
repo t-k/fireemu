@@ -134,7 +134,9 @@ function build(corpusInput, closureInput, optionsInput) {
   }
   pre("bucket/metadata", req(GCS, `/storage/v1/b/${binding.bucket}`), "bucket-name-project-number-and-baseline-match");
   pre("bucket/iam", req(GCS, `/storage/v1/b/${binding.bucket}/iam`, "GET", { query: { optionsRequestedPolicyVersion: "3" } }), "approved-bucket-policy-baseline-match");
-  pre("bucket/permissions", req(GCS, `/storage/v1/b/${binding.bucket}/iam/testPermissions`, "GET", { query: { permissions: ["storage.buckets.get", "storage.buckets.getIamPolicy", "storage.objects.create", "storage.objects.delete", "storage.objects.get", "storage.objects.list", "storage.objects.update"] } }), "all-explicit-bucket-permissions-present");
+  // Only the bucket-level permissions IAM can report here. The bucket uses fine-grained access, so the project's owners hold object read and
+  // update through object ACLs (storage.legacyObjectOwner), which a bucket-level test never lists; asking for them stopped stage 2a in production.
+  pre("bucket/permissions", req(GCS, `/storage/v1/b/${binding.bucket}/iam/testPermissions`, "GET", { query: { permissions: ["storage.buckets.get", "storage.buckets.getIamPolicy", "storage.objects.create", "storage.objects.delete", "storage.objects.list"] } }), "all-explicit-bucket-permissions-present");
   pre("query/database", req("https://firestore.googleapis.com", `/v1/projects/${QUERY}/databases/(default)`), "default-database-project-and-baseline-match");
   pre("query/iam", req(PROJECTS, `/v3/projects/${options.queryProjectNumber}:getIamPolicy`, "POST", { body: { json: { options: { requestedPolicyVersion: 3 } } } }), "approved-cross-service-grant-and-policy-baseline-match");
 

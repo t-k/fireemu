@@ -61,7 +61,22 @@ const FIXTURES = {
   "auth-action-comparison-v1": "conformance/auth-action-production.json",
   "auth-credential-comparison-v1": "conformance/auth-credential-production.json",
   "auth-account-comparison-v1": "conformance/auth-account-production.json",
+  "auth-mfa-comparison-v1": "conformance/auth-mfa-production.json",
+  "auth-tenant-blocking-comparison-v1": "conformance/auth-tenant-blocking-production.json",
 };
+
+/**
+ * The parents compared again as regressions on the final artifact, each as a whole: their rows
+ * are their own parents' evidence, so their recordings are not this parent's.
+ */
+const REGRESSION_LANES = new Set([
+  "auth-account",
+  "auth-credential",
+  "auth-action",
+  "auth-config-sdk",
+  "auth-mfa",
+  "auth-tenant-blocking",
+]);
 
 function assertBoundToFixture(comparison, label) {
   const fixturePath = FIXTURES[comparison.kind];
@@ -75,11 +90,17 @@ function assertBoundToFixture(comparison, label) {
     createHash("sha256").update(text).digest("hex"),
     `${label}: the comparison was made against the committed ${fixturePath}`,
   );
-  const recorded = Object.entries(JSON.parse(text).programs).flatMap(([program, { steps }]) =>
+  let recorded = Object.entries(JSON.parse(text).programs).flatMap(([program, { steps }]) =>
     Object.keys(steps).map((step) => `${program}#${step}`),
   );
+  const compared = comparison.rows.map(({ row }) => row);
+  if (comparison.kind === "auth-tenant-blocking-comparison-v1") {
+    // AUTH-TENANT-BLOCKING compares its tenant and blocking suites separately.
+    const suites = new Set(compared.map((row) => row.split("/").slice(0, 2).join("/")));
+    recorded = recorded.filter((row) => suites.has(row.split("/").slice(0, 2).join("/")));
+  }
   assert.deepEqual(
-    comparison.rows.map(({ row }) => row).toSorted(),
+    compared.toSorted(),
     recorded.toSorted(),
     `${label}: the comparison covers exactly the recorded rows of ${fixturePath}`,
   );
@@ -151,7 +172,7 @@ test("AUTH-FEDERATION closure inventory cannot silently omit a declared conditio
     // The named runs are exactly the recordings the fixtures hold for the condition's programs.
     assert.deepEqual(
       runs.map(({ recordedAt, gitSha }) => `${recordedAt} ${gitSha}`).toSorted(),
-      recordedRuns(condition.recipeIds),
+      recordedRuns(condition.recipeIds.filter((recipe) => !REGRESSION_LANES.has(recipe))),
       `${label}: productionRecordings name the fixtures' own recordings`,
     );
     assert.match(condition.evidence?.finalArtifactSha256 ?? "", /^[0-9a-f]{64}$/, label);
@@ -168,16 +189,21 @@ test("AUTH-FEDERATION closure inventory cannot silently omit a declared conditio
       return condition.recipeIds.some(
         (r) =>
           r === "auth-federation" ||
-          r === "auth-config-sdk" ||
-          r === "auth-action" ||
-          r === "auth-credential" ||
-          r === "auth-account" ||
+          REGRESSION_LANES.has(r) ||
           programId === r ||
           programId.startsWith(`${r}/`),
       );
     };
     const rows = comparisons.flatMap(({ rows: all }) => all.filter(({ row }) => covered(row)));
     assert.ok(rows.length > 0, `${label}: has compared rows`);
+    // The row counts a condition names are its comparisons' own, recounted here.
+    const counts = {};
+    for (const { status } of rows) counts[status] = (counts[status] ?? 0) + 1;
+    assert.deepEqual(
+      condition.evidence.rows,
+      counts,
+      `${label}: its row counts are its comparisons' own`,
+    );
     const divergences = condition.evidence.documentedDivergences ?? [];
     for (const divergence of divergences) {
       assert.equal(divergence.decidedBy, "owner", `${label}: ${divergence.row}`);
@@ -186,6 +212,21 @@ test("AUTH-FEDERATION closure inventory cannot silently omit a declared conditio
         closure.scopeDecisions.some(({ id }) => id === divergence.scopeDecision),
         `${label}: ${divergence.row} names a recorded scope decision`,
       );
+      // A divergence is approved for the members it names, not for its whole row (closure
+      // review SF3): the compared row differs in exactly those.
+      assert.ok(
+        Array.isArray(divergence.differences) && divergence.differences.length > 0,
+        `${label}: ${divergence.row} names the members it approves`,
+      );
+      const compared = rows.filter(({ row }) => row === divergence.row);
+      assert.equal(compared.length, 1, `${label}: ${divergence.row} is compared once`);
+      if (compared[0].status !== "MATCH") {
+        assert.deepEqual(
+          compared[0].differences,
+          divergence.differences,
+          `${label}: ${divergence.row} differs only in the approved members`,
+        );
+      }
     }
     const documented = new Set(divergences.map(({ row }) => row));
     const off = rows

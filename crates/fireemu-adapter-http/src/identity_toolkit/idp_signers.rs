@@ -129,10 +129,19 @@ impl IdpSignerTrust {
             .map_or(true, |mut used| used.contains(key, now))
     }
 
-    /// Records that a sign-in used the credential `key`, valid until `expires`.
-    pub(crate) fn record_credential(&self, key: String, expires: i64, now: i64) {
+    /// Reserves the credential `key` for a sign-in, valid until `expires`: `false` when a sign-in
+    /// already used or reserved it. The check and the reservation are one step, so two
+    /// concurrent sign-ins cannot both pass (closure review SF4).
+    pub(crate) fn reserve_credential(&self, key: &str, expires: i64, now: i64) -> bool {
+        self.used
+            .lock()
+            .is_ok_and(|mut used| used.insert_if_absent(key, (), expires, now))
+    }
+
+    /// Forgets the reservation of `key`: the sign-in that reserved it did not succeed.
+    pub(crate) fn release_credential(&self, key: &str) {
         if let Ok(mut used) = self.used.lock() {
-            used.record(key, expires, now);
+            used.remove(key);
         }
     }
 
@@ -201,6 +210,20 @@ impl<V> Expiring<V> {
         self.get(key, now).is_some()
     }
 
+    /// Inserts `key` unless it is present: whether it was absent. An entry already expired at
+    /// `now` is never remembered, so it counts as inserted.
+    fn insert_if_absent(&mut self, key: &str, value: V, expires: i64, now: i64) -> bool {
+        if self.contains(key, now) {
+            return false;
+        }
+        self.insert(key.to_owned(), value, expires, now);
+        true
+    }
+
+    fn remove(&mut self, key: &str) {
+        self.entries.remove(key);
+    }
+
     fn insert(&mut self, key: String, value: V, expires: i64, now: i64) {
         self.sweep(now);
         if expires <= now {
@@ -226,6 +249,7 @@ impl<V> Expiring<V> {
 }
 
 impl Expiring<()> {
+    #[cfg(test)]
     fn record(&mut self, key: String, expires: i64, now: i64) {
         self.insert(key, (), expires, now);
     }
@@ -282,6 +306,23 @@ fn valid_issuer(issuer: &str) -> bool {
 #[cfg(test)]
 mod used_credentials_tests {
     use super::{Expiring, UsedCredentials};
+
+    #[test]
+    fn a_credential_is_reserved_once_and_released_on_failure() {
+        let mut used: UsedCredentials = Expiring::with_capacity(4);
+        assert!(used.insert_if_absent("k", (), 100, 10));
+        assert!(!used.insert_if_absent("k", (), 100, 11), "reserved once");
+        assert!(used.contains("k", 12));
+        used.remove("k");
+        assert!(!used.contains("k", 12));
+        assert!(
+            used.insert_if_absent("k", (), 100, 13),
+            "released, reserved again"
+        );
+        // An already expired credential is not remembered: there is nothing to reserve.
+        assert!(used.insert_if_absent("old", (), 5, 10));
+        assert!(!used.contains("old", 10));
+    }
 
     #[test]
     fn an_issued_request_is_read_back_until_it_expires() {

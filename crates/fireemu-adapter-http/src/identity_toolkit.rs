@@ -4153,8 +4153,9 @@ fn handle_with_policy_inner(
     };
     let dispatch_body = saml_body.as_ref().unwrap_or(body);
     let idp_trust = oidc_trust.or(strict_idp_trust.as_ref());
-    // A strict sign-in's nonce-bearing credential, remembered once the sign-in succeeds.
-    let mut used_credential = None;
+    // A strict sign-in's nonce-bearing credential, reserved when checked and kept only if the
+    // sign-in succeeds.
+    let mut used_credential = CredentialReservation::default();
     if route.handler == routes::Handler::SignInWithIdp {
         if let Some(trust) = idp_trust {
             let params = normalized_idp_params(
@@ -4170,9 +4171,18 @@ fn handle_with_policy_inner(
             };
             match trust.check(&store, &params, at, &used) {
                 Ok(token) => {
-                    used_credential = strict_signers
-                        .zip(used_credential_key(&store, trust, &token))
-                        .map(|(signers, key)| (signers, key, token.expires, now));
+                    if let Some((signers, key)) =
+                        strict_signers.zip(used_credential_key(&store, trust, &token))
+                    {
+                        // Reserved under the store lock the check ran under: a sign-in checked
+                        // while this one runs a blocking function sees it (closure review SF4).
+                        if !signers.reserve_credential(&key, token.expires, now) {
+                            return error(400, crate::oidc::DUPLICATE_REFUSAL);
+                        }
+                        used_credential = CredentialReservation {
+                            reserved: Some((signers, key)),
+                        };
+                    }
                 }
                 Err(message) => return error(400, &message),
             }
@@ -4247,7 +4257,7 @@ fn handle_with_policy_inner(
             response
         };
         let response = finish_token_response(response, signer.as_deref(), &store_arc, at);
-        record_used_credential(used_credential, &response);
+        used_credential.settle(&response);
         return response;
     }
     let signer = store.signer_arc();
@@ -4375,7 +4385,7 @@ fn handle_with_policy_inner(
     if let Some(trust) = &strict_saml_trust {
         trust.shape_answer(&mut response);
     }
-    record_used_credential(used_credential, &response);
+    used_credential.settle(&response);
     if let Some(reservation) = quota_reservation.take() {
         // Blocking dispatch commits a successful new-account reservation at its typed
         // per-request creation boundary. Any reservation left here belongs to a failed or
@@ -13986,14 +13996,27 @@ fn jws_kid(token: &str) -> Result<String, JsonResponse> {
         .ok_or_else(|| error(400, crate::oidc::SIGNATURE_REFUSAL))
 }
 
-/// Remembers a strict sign-in's nonce-bearing credential once the sign-in succeeded.
-fn record_used_credential(
-    used: Option<(&IdpSignerTrust, String, i64, i64)>,
-    response: &JsonResponse,
-) {
-    if response.status == 200 {
-        if let Some((signers, key, expires, now)) = used {
-            signers.record_credential(key, expires, now);
+/// A strict sign-in's reserved nonce-bearing credential: kept when the sign-in answers 200, and
+/// released when it answers anything else or ends early (a refused or failed sign-in uses no
+/// credential).
+#[derive(Default)]
+struct CredentialReservation<'a> {
+    reserved: Option<(&'a IdpSignerTrust, String)>,
+}
+
+impl CredentialReservation<'_> {
+    /// Keeps the reservation if `response` is a success, and releases it otherwise.
+    fn settle(&mut self, response: &JsonResponse) {
+        if response.status == 200 {
+            self.reserved = None;
+        }
+    }
+}
+
+impl Drop for CredentialReservation<'_> {
+    fn drop(&mut self) {
+        if let Some((signers, key)) = self.reserved.take() {
+            signers.release_credential(&key);
         }
     }
 }

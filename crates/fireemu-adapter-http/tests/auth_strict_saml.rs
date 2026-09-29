@@ -1201,3 +1201,66 @@ fn a_refresh_keeps_the_sign_in_auth_time() {
         assert_eq!(refreshed["iat"], VECTOR_NOW + 2, "{token}");
     }
 }
+
+#[test]
+fn a_continuation_checks_the_response_conditions_again() {
+    // A resumed continuation runs the conditions again against the live configuration, all but
+    // InResponseTo (closure review SF5; production's continuation is unobserved, so this is
+    // the strict profile's own safety choice).
+    let resume_at = |seconds: i64, change: &dyn Fn(&mut InboundSamlProviderConfig)| {
+        let mut s = state(true);
+        s.idp_continuations = IdpContinuationPolicy::LocalBounded;
+        let first = sign_in(&s, &request(&fixture("assertion-signed.xml")));
+        assert_eq!(first.status, 200, "{}", first.body);
+        let pending = first.body["pendingToken"].clone();
+        let mut config = provider(true, "idp.cert.pem");
+        change(&mut config);
+        s.store.lock().unwrap().replace_saml_config(config);
+        *s.clock.lock().unwrap() = VirtualClock::new(LogicalInstant::from_unix_seconds(seconds));
+        sign_in(&s, &continuation(&pending))
+    };
+    let unchanged = resume_at(VECTOR_NOW + 60, &|_| {});
+    assert_eq!(unchanged.status, 200, "{}", unchanged.body);
+    // The vectors' NotOnOrAfter is 2027-01-15T08:05:00Z.
+    let expired = resume_at(VECTOR_NOW + 275, &|_| {});
+    assert_eq!(expired.status, 400, "{}", expired.body);
+    assert_eq!(
+        expired.body["error"]["message"],
+        "INVALID_IDP_RESPONSE : Current instant, 2027-01-15T08:05:05.000Z, is on or after NotOnOrAfter attribute, 2027-01-15T08:05:00.000Z"
+    );
+    let audience = resume_at(VECTOR_NOW + 60, &|config| {
+        config.sp_entity_id = "another-sp".into();
+    });
+    assert_eq!(audience.status, 400, "{}", audience.body);
+    assert_eq!(
+        audience.body["error"]["message"],
+        "INVALID_IDP_RESPONSE : All <AudienceRestriction>s should contain the SAML RP entity ID: 'another-sp'."
+    );
+    let issuer = resume_at(VECTOR_NOW + 60, &|config| {
+        config.idp_entity_id = "https://idp.example.test/saml/other".into();
+    });
+    assert_eq!(issuer.status, 400, "{}", issuer.body);
+    assert_eq!(
+        issuer.body["error"]["message"],
+        "INVALID_IDP_RESPONSE : Assertion has Issuer https://idp.example.test/saml/fixture which is different from expected Issuer https://idp.example.test/saml/other."
+    );
+}
+
+#[test]
+fn a_continuation_does_not_check_the_request_it_answered_again() {
+    // InResponseTo is the one condition a resumed continuation leaves out: the sign-in that
+    // made the continuation checked it, and the resumed request carries no session.
+    let (mut s, key) = dynamic_state();
+    s.idp_continuations = IdpContinuationPolicy::LocalBounded;
+    let (session_id, request_id) = session(&s);
+    let first = sign_in(
+        &s,
+        &dynamic_request(
+            &signed_response(&key, &Conditions::answering(Some(&request_id))),
+            Some(&session_id),
+        ),
+    );
+    assert_eq!(first.status, 200, "{}", first.body);
+    let resumed = sign_in(&s, &continuation(&first.body["pendingToken"]));
+    assert_eq!(resumed.status, 200, "{}", resumed.body);
+}

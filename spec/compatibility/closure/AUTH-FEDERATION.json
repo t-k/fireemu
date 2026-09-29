@@ -139,7 +139,10 @@
             "decidedBy": "owner",
             "decidedOn": "2026-09-29",
             "scopeDecision": "F11",
-            "reason": "The answer differs only in spConfig.spCertificates, the SP certificate production generates when signRequest is set; fireemu generates none."
+            "reason": "The answer differs only in spConfig.spCertificates, the SP certificate production generates when signRequest is set; fireemu generates none.",
+            "differences": [
+              "body.spConfig.spCertificates"
+            ]
           },
           {
             "row": "auth-federation/provider-config/saml#get-after-sign-request",
@@ -147,11 +150,14 @@
             "decidedBy": "owner",
             "decidedOn": "2026-09-29",
             "scopeDecision": "F11",
-            "reason": "The answer differs only in spConfig.spCertificates, the SP certificate production generates when signRequest is set; fireemu generates none."
+            "reason": "The answer differs only in spConfig.spCertificates, the SP certificate production generates when signRequest is set; fireemu generates none.",
+            "differences": [
+              "body.spConfig.spCertificates"
+            ]
           }
         ]
       },
-      "limits": "spConfig.spCertificates is not generated (F11), so a provider whose requests are signed answers without it and its createAuthUri is not implemented (501)."
+      "limits": "spConfig.spCertificates is not generated (F11), so a provider whose requests are signed answers without it. Separately, createAuthUri for such a provider is not implemented (501); that is not part of F11."
     },
     {
       "conditionId": "AUTH-FEDERATION/provider-config-default-supported",
@@ -336,7 +342,7 @@
       ],
       "status": "VERIFIED",
       "note": "A controlled SAML IdP (O1): SP-initiated responses signed with the run's certificate (record-saml 7789f0). The signature in each position, and a tampered or missing one refused with INVALID_IDP_RESPONSE : Failed to verify the signature in SAMLResponse (saml-smoke efe0ef); a response without NameID refused. Strict refuses, with production's messages, a status other than success, a Destination other than the callback URL, an assertion Issuer other than the IdP entity ID, audience restrictions without the SP entity ID, Conditions not yet valid or expired, an expired bearer confirmation, and an InResponseTo missing from or other than the request. The Recipient and an expired IdP certificate are accepted, as production accepted them.",
-      "limits": "The signature refusal (a tampered or missing signature: INVALID_IDP_RESPONSE : Failed to verify the signature in SAMLResponse) rests on the single saml-smoke run efe0ef (2026-09-27), not on a fixture recorded twice; the recorded rows here are the conditions, attributes and certificate programs of record-saml 7789f0. The InResponseTo check applies only to a sign-in naming a sessionId that fireemu's createAuthUri issued within the last hour; a sign-in without one is unobserved and not refused. Unobserved: which refusal wins when several conditions fail, and a time that does not parse (not checked). The verifier does not implement inclusive canonicalization, other transforms, EncryptedAssertion, or responses past its size and namespace limits; those are refused with INVALID_IDP_RESPONSE.",
+      "limits": "The signature refusal (a tampered or missing signature: INVALID_IDP_RESPONSE : Failed to verify the signature in SAMLResponse) rests on the single saml-smoke run efe0ef (2026-09-27), not on a fixture recorded twice; the recorded rows here are the conditions, attributes and certificate programs of record-saml 7789f0. The InResponseTo check applies only to a sign-in naming a sessionId that fireemu's createAuthUri issued within the last hour; a sign-in without one is unobserved and not refused. Unobserved: which refusal wins when several conditions fail, and a time that does not parse (not checked). The verifier does not implement inclusive canonicalization, other transforms, EncryptedAssertion, or responses past its size and namespace limits; those are refused with INVALID_IDP_RESPONSE. A resumed pendingToken continuation checks the conditions again against the live configuration, all but InResponseTo (closure review SF5): a strict-profile safety choice, since production's continuation is unobserved.",
       "evidence": {
         "productionRecordings": [
           {
@@ -812,13 +818,15 @@
         "auth-account",
         "auth-credential",
         "auth-action",
-        "auth-config-sdk"
+        "auth-config-sdk",
+        "auth-mfa",
+        "auth-tenant-blocking"
       ],
       "configProjections": [
         "strict"
       ],
       "status": "PENDING_REVIEW",
-      "note": "Every AUTH-FEDERATION row and the AUTH-ACCOUNT, AUTH-CREDENTIAL, AUTH-ACTION and AUTH-CONFIG-SDK regressions on one artifact, with the workspace tests and clippy."
+      "note": "Closes on the round-2 integrated artifact (integration/round2-2026-09-29 after this parent is merged), not on the lane artifact: every AUTH-FEDERATION row (record-oidc and record-saml; the two F11 rows differing only in spConfig.spCertificates) and, as regressions on that one artifact, every AUTH-ACCOUNT, AUTH-CREDENTIAL, AUTH-ACTION, AUTH-CONFIG-SDK (its documented K5, K16 and K17 rows only), AUTH-MFA and AUTH-TENANT-BLOCKING row. AUTH-TENANT-BLOCKING is included because its atb/tenant/providers#auth-uri-a depends on this parent (T12). With the workspace tests, fmt and clippy on that artifact."
     },
     {
       "conditionId": "AUTH-FEDERATION/closure-review",
@@ -830,7 +838,7 @@
         "strict"
       ],
       "status": "PENDING_REVIEW",
-      "note": "An independent closure review and a safety review of the final artifact (no cargo-mutants in the reviews; the lane's own mutation evidence is checked). The safety review focuses on strict IdP verification (O4, f5d0831ff): the signature check, key selection by kid, alg, the exp, iat, nbf, aud, azp, iss and nonce checks, the key size bounds, auth.idpSigners validation, the re-verification in the blocking-function commit and the continuation authority."
+      "note": "An independent closure review and a safety review of the round-2 integrated artifact (no cargo-mutants in the reviews; the lane's own mutation evidence is checked). The lane-artifact closure material was approved with conditions (2026-09-29; packet 65d522de, closure 7ac8e70e1); the review of the integrated artifact covers the changes after it, including the fixes of that review's SF4 (the OIDC nonce replay check on the blocking-function path) and SF5 (the conditions of a resumed SAML continuation). The safety review focuses on strict IdP verification (O4, f5d0831ff): the signature check, key selection by kid, alg, the exp, iat, nbf, aud, azp, iss and nonce checks, the key size bounds, auth.idpSigners validation, the re-verification in the blocking-function commit and the continuation authority."
     }
   ]
 }

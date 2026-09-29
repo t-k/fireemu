@@ -1148,3 +1148,105 @@ fn allow_tenants(s: &AuthState) {
     );
     assert_eq!(r.status, 200, "{}", r.body);
 }
+
+/// A blocking function whose first call waits until the test releases it: another request runs
+/// while this one is inside the hook, without the store lock (closure review SF4).
+struct HoldingHook {
+    entered: Mutex<Option<std::sync::mpsc::Sender<()>>>,
+    release: Mutex<Option<std::sync::mpsc::Receiver<()>>>,
+}
+
+impl fireemu_adapter_http::identity_toolkit::AuthBlockingHook for HoldingHook {
+    fn invoke(
+        &self,
+        _event: fireemu_core_functions::manifest::BlockingAuthEvent,
+        _user: &UserRecord,
+    ) -> Result<Value, fireemu_adapter_http::identity_toolkit::BlockingFunctionFailure> {
+        let entered = self.entered.lock().unwrap().take();
+        if let Some(entered) = entered {
+            entered.send(()).unwrap();
+            let release = self.release.lock().unwrap().take();
+            if let Some(release) = release {
+                release.recv().unwrap();
+            }
+        }
+        Ok(json!({}))
+    }
+}
+
+#[test]
+fn a_nonce_credential_signs_in_once_while_a_blocking_function_runs() {
+    // Two sign-ins with the same nonce-bearing token: the second is checked while the first is
+    // inside its blocking function. Production refuses a credential used again; exactly one
+    // sign-in succeeds.
+    let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    let mut s = strict_state();
+    // The subject has signed in before: both sign-ins are returning ones, which leave the
+    // account's identity as it was.
+    let earlier = sign_in(&s, &request(&token(&claims())));
+    assert_eq!(earlier.status, 200, "{}", earlier.body);
+    s.blocking = Some(Arc::new(HoldingHook {
+        entered: Mutex::new(Some(entered_tx)),
+        release: Mutex::new(Some(release_rx)),
+    }));
+    let mut claimed = claims();
+    claimed["nonce"] = json!(hashed("nonce-race"));
+    let body = with_nonce(&token(&claimed), Some("nonce-race"));
+    let (first, second) = std::thread::scope(|scope| {
+        let first = scope.spawn(|| sign_in(&s, &body));
+        entered_rx
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .expect("the first sign-in reaches its blocking function");
+        let second = scope.spawn(|| sign_in(&s, &body));
+        // The second request passes its check, or is refused by it, before the first ends.
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        release_tx.send(()).unwrap();
+        (first.join().unwrap(), second.join().unwrap())
+    });
+    let mut statuses = [first.status, second.status];
+    statuses.sort_unstable();
+    assert_eq!(statuses, [200, 400], "{} / {}", first.body, second.body);
+    let refused = if first.status == 400 { &first } else { &second };
+    assert_eq!(
+        refused.body["error"]["message"], DUPLICATE,
+        "{}",
+        refused.body
+    );
+    assert_eq!(s.store.lock().unwrap().user_count(), 1);
+}
+
+/// A blocking function that refuses its first call and accepts the others.
+struct RefusingOnceHook {
+    refused: std::sync::atomic::AtomicBool,
+}
+
+impl fireemu_adapter_http::identity_toolkit::AuthBlockingHook for RefusingOnceHook {
+    fn invoke(
+        &self,
+        _event: fireemu_core_functions::manifest::BlockingAuthEvent,
+        _user: &UserRecord,
+    ) -> Result<Value, fireemu_adapter_http::identity_toolkit::BlockingFunctionFailure> {
+        if self.refused.swap(true, std::sync::atomic::Ordering::SeqCst) {
+            Ok(json!({}))
+        } else {
+            Err(fireemu_adapter_http::identity_toolkit::BlockingFunctionFailure::unhandled())
+        }
+    }
+}
+
+#[test]
+fn a_sign_in_a_blocking_function_refuses_leaves_its_nonce_credential_unused() {
+    let mut s = strict_state();
+    s.blocking = Some(Arc::new(RefusingOnceHook {
+        refused: std::sync::atomic::AtomicBool::new(false),
+    }));
+    let mut claimed = claims();
+    claimed["nonce"] = json!(hashed("nonce-refused"));
+    let body = with_nonce(&token(&claimed), Some("nonce-refused"));
+    let refused = sign_in(&s, &body);
+    assert_ne!(refused.status, 200, "{}", refused.body);
+    let again = sign_in(&s, &body);
+    assert_eq!(again.status, 200, "{}", again.body);
+    assert_refused_after(&s, &body, DUPLICATE);
+}

@@ -8,6 +8,8 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-09-29
+
 Auth tenants and blocking functions (AUTH-TENANT-BLOCKING) were measured against a real Identity Platform project on 2026-09-27 and 2026-09-28; the items that cite a sandbox recording without naming another parent come from those runs. Each item names the profiles it affects.
 
 Identity-provider sign-in (AUTH-FEDERATION): items naming a recording were measured on the disposable Identity Platform sandbox on the date they give.
@@ -371,7 +373,8 @@ Security Rules (FS-RULES): behavior below was measured against a real Firestore 
 - The `strict` and `firebase` compatibility profiles, the Capability Manifest, and the Compatibility Contract pinned to firebase-tools 15.28.2.
 - `fireemu init`, `up`, `exec`, `emulators:export`, `doctor`, and `capabilities` commands, with the official `emulators:start` and `emulators:exec` spellings as aliases.
 
-[Unreleased]: https://github.com/t-k/fireemu/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/t-k/fireemu/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/t-k/fireemu/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/t-k/fireemu/compare/v0.7.1...v0.8.0
 [0.7.1]: https://github.com/t-k/fireemu/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/t-k/fireemu/compare/v0.6.0...v0.7.0

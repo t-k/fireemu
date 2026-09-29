@@ -127,6 +127,19 @@ def _step_change(index, **fields):
         ("too many tokens", lambda t: _broken(t, maxTokens=1)),
         ("undeclared key", lambda t: _broken(t, steps=_step_change(4, finished=True))),
         ("read with writes", lambda t: _broken(t, steps=_step_change(4, writes=({"document": "a", "state": "held", "exists": True},)))),
+        ("non-writer with the writer deadline", lambda t: _broken(t, steps=_step_change(4, deadlineMs=30000))),
+        ("fewer tokens than declared", lambda t: _broken(t, maxTokens=3)),
+        ("exists is not a bool", lambda t: _broken(t, steps=_step_change(5, writes=({"document": "a", "state": "held", "exists": "yes"}, {"document": "m", "state": "held", "exists": True})))),
+        ("write to an undeclared document", lambda t: _broken(t, steps=_step_change(5, writes=({"document": "a", "state": "held", "exists": True}, {"document": "z", "state": "held", "exists": True})))),
+        ("more documents than the worker admits", lambda t: _broken(t, documents=("a", "m") + tuple(f"d{n}" for n in range(7)), caps={**t["caps"], "documentCleanup": 27})),
+        ("more states than the worker admits", lambda t: _broken(t, states=t["states"] + tuple(f"s{n}" for n in range(30)))),
+        ("token cleanup reserve short", lambda t: _broken(t, caps={**t["caps"], "tokenCleanup": 1})),
+        ("document cleanup reserve short", lambda t: _broken(t, caps={**t["caps"], "documentCleanup": 5})),
+        ("write before the absence probe", lambda t: _broken(t, steps=lambda steps: (steps[2], steps[0], steps[1]) + tuple(steps[3:]))),
+        ("token read of an unprobed document", lambda t: _broken(t, steps=lambda steps: tuple(dict(step, document="m") if step["id"] == "r/read" else step for step in steps if step["id"] != "setup/absence-m"))),
+        ("absence probe that allows a document", lambda t: _broken(t, steps=_step_change(0, allow=(0, 5)))),
+        ("absence probe in a transaction", lambda t: _broken(t, steps=_step_change(1, tokenInput="rest-r"))),
+        ("absence probe that is an observation", lambda t: _broken(t, steps=_step_change(0, role="observation"))),
         ("envelope of another program", lambda t: _broken(t, envelopeId="FS-TRANSACTION-p10-grpc-boundary-002")),
         ("unnumbered envelope", lambda t: _broken(t, envelopeId="FS-TRANSACTION-toy-failed-commit")),
         ("missing key", lambda t: _broken(t, steps=lambda steps: tuple({k: v for k, v in step.items() if k != "allow"} for step in steps))),
@@ -230,3 +243,11 @@ def test_outcome_classes_follow_the_code(program):
     for bad in [-1, 17, True, None, "0"]:
         with pytest.raises(ValueError, match="code"):
             program.outcome_class(bad)
+
+
+def test_transaction_bytes_are_capped_at_1024_decoded_bytes():
+    import base64
+    program = importlib.import_module("txn_program_program")
+    assert program.canonical_token(base64.b64encode(b"x" * 1024).decode())
+    with pytest.raises(ValueError, match="bounded"):
+        program.canonical_token(base64.b64encode(b"x" * 1025).decode())

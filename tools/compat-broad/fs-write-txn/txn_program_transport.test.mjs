@@ -187,6 +187,13 @@ test('REST: an answer that cannot be read is an unknown outcome, never a refusal
   }
 });
 
+test('REST: a non-2xx answer whose status name is OK is never a success', async () => {
+  const { runUnary } = await module();
+  const wire = exchange([{ status: 500, text: JSON.stringify({ error: { message: 'odd', status: 'OK' } }) }]);
+  const result = await runUnary(spec('Commit', commit([write('a', 'held')]), 'rest'), wire.run);
+  assert.deepEqual([result.code, result.complete, result.http], [2, false, 500]);
+});
+
 test('REST: a network failure is UNAVAILABLE and a slow answer is a deadline, both incomplete', async () => {
   const { runUnary } = await module();
   const failed = await runUnary(spec('Rollback', { database, transaction: token }, 'rest'), exchange([new Error('ECONNRESET')]).run);

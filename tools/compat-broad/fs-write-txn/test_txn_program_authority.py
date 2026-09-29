@@ -126,3 +126,10 @@ def test_a_new_envelope_reserve_fits_the_whole_task_before_any_reservation():
     with pytest.raises(ValueError, match="limit"):
         authority.verify_initial_gates([{**LAST, "estimatedUsd": 9.97}], NOW, DECISIONS, PINS)
     assert authority.verify_initial_gates([{**LAST, "estimatedUsd": 9.96}], NOW, DECISIONS, PINS)
+
+
+@pytest.mark.parametrize("scope", [{}, {key: value for key, value in SCOPE.items() if key != "writes"}, {**SCOPE, "extra": "x"}, {**SCOPE, "writes": ""}, {**SCOPE, "writes": 2}])
+def test_the_pinned_scope_must_be_the_full_scope(scope):
+    bare = AUTHORITY + envelope_row(scope={}) + APPROVE
+    with pytest.raises(ValueError, match="scope"):
+        authority.authorize(bare, {**PINS, "scope": scope})

@@ -57,7 +57,7 @@ for (const transport of ['rest', 'grpc']) {
       { kind: 'txn-boundary-grpc-call-v1' }, { projectId: 'fireemu-oracle-idp' }, { transport: 'http' },
       { target: { kind: 'local', host: 'localhost', port: 12345 } }, { target: { kind: 'production' } },
       { request: { name: name('a'), transaction: 'bad-token' } }, { request: { name: name('a'), extra: true } },
-      { bearer: 'owner\nAuthorization: injected' }, { deadlineMs: 0 }, { deadlineMs: 30001 }, { deadlineMs: 1.5 },
+      { bearer: 'owner\nAuthorization: injected' }, { deadlineMs: 0 }, { deadlineMs: 10001 }, { deadlineMs: 30001 }, { deadlineMs: 1.5 },
       { slug: 'Txn Toy' }, { documents: ['a', 'a'] }, { documents: [] }, { states: [] }, { states: ['UPPER'] }, { extra: true },
     ]) assert.throws(() => validateCall({ ...base, ...changes }), undefined, JSON.stringify(Object.keys(changes)));
   });
@@ -79,10 +79,17 @@ test('a native version delete is admitted over gRPC only', async () => {
   assert.throws(() => validateCall(spec('ListDocuments', { name: name('a') }, 'grpc')));
 });
 
-test('a 30 second writer deadline is admitted and nothing longer', async () => {
+test('a 30 second deadline is admitted for an outside writer alone and nothing longer', async () => {
   const { validateCall } = await module();
-  validateCall(spec('Commit', commit([write('a', 'moved')], false), 'rest', { deadlineMs: 30000 }));
-  assert.throws(() => validateCall(spec('Commit', commit([write('a', 'moved')], false), 'rest', { deadlineMs: 30001 })));
+  for (const transport of ['rest', 'grpc']) {
+    validateCall(spec('Commit', commit([write('a', 'moved')], false), transport, { deadlineMs: 30000 }));
+    assert.throws(() => validateCall(spec('Commit', commit([write('a', 'moved')], false), transport, { deadlineMs: 30001 })));
+    // A transactional commit and every other call stop at 10 s.
+    assert.throws(() => validateCall(spec('Commit', commit([write('a', 'moved')], true), transport, { deadlineMs: 30000 })));
+    assert.throws(() => validateCall(spec('Rollback', { database, transaction: token }, transport, { deadlineMs: 30000 })));
+    assert.throws(() => validateCall(spec('GetDocument', { name: name('a') }, transport, { deadlineMs: 10001 })));
+    validateCall(spec('Rollback', { database, transaction: token }, transport, { deadlineMs: 10000 }));
+  }
 });
 
 test('gRPC: one unary attempt disables retries and retains the raw native refusal', async () => {
@@ -130,7 +137,32 @@ test('a call that fails validation never reaches even the injected network', asy
 
 test('injection is a local-target convenience only', async () => {
   const { runUnary } = await module();
-  await assert.rejects(runUnary({ ...spec('GetDocument', { name: 'projects/fireemu-oracle-sbx/databases/(default)/documents/oracle/' + nonce + '/txn-toy/a' }), target: { kind: 'production' }, projectId: 'fireemu-oracle-sbx', bearer: 'ya29.token-value_1' }, () => ({})));
+  let touched = 0;
+  const production = transport => ({ ...spec('GetDocument', { name: 'projects/fireemu-oracle-sbx/databases/(default)/documents/oracle/' + nonce + '/txn-toy/a' }, transport), target: { kind: 'production' }, projectId: 'fireemu-oracle-sbx', bearer: 'ya29.token-value_1' });
+  for (const transport of ['rest', 'grpc']) {
+    await assert.rejects(runUnary(production(transport), () => { touched += 1; return {}; }), /injection requires a local target/);
+  }
+  await assert.rejects(runUnary(spec('GetDocument', { name: name('a') }), 'not a function'), /injection requires a local target/);
+  assert.equal(touched, 0);
+});
+
+test('REST headers carry the credential, and the user project only in production', async () => {
+  const { restHeaders } = await module();
+  assert.deepEqual(restHeaders(spec('GetDocument', { name: name('a') }, 'rest')), { authorization: 'Bearer owner', accept: 'application/json' });
+  const production = { ...spec('GetDocument', { name: name('a') }, 'rest'), target: { kind: 'production' }, bearer: 'ya29.token' };
+  assert.deepEqual(restHeaders(production), { authorization: 'Bearer ya29.token', accept: 'application/json', 'x-goog-user-project': 'fireemu-oracle-sbx' });
+});
+
+test('the real REST exchange refuses an answer over the size cap', async () => {
+  const { httpExchange, restRequest } = await module();
+  const http = await import('node:http');
+  const server = http.createServer((_req, res) => { res.setHeader('content-type', 'application/json'); res.end(JSON.stringify({ blob: 'x'.repeat(70000) })); });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const call = spec('GetDocument', { name: name('a') }, 'rest', { target: { kind: 'local', host: '127.0.0.1', port: server.address().port } });
+    const answer = await httpExchange(call, restRequest(call), new AbortController().signal);
+    assert.equal(answer.oversize, true); assert.equal(answer.text, null); assert.equal(answer.status, 200);
+  } finally { server.close(); }
 });
 
 function exchange(answers) {

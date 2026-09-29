@@ -80,16 +80,22 @@ def test_the_ipc_deadline_follows_the_step_deadline(runtime, monkeypatch):
     wire = NodeWire(runtime, SCOPE)
     seen = []
     monkeypatch.setattr(wire, '_child', lambda spec, timeout: (seen.append(timeout) or receipt(), {'childReaped': True}))
+    name = f'{DATABASE}/documents/oracle/{NONCE}/txn-toy/a'
+    writer = {'database': DATABASE, 'writes': [{'update': {'name': name, 'fields': {}}, 'currentDocument': {'exists': True}}]}
     rollback(wire)
-    rollback(wire, deadline_ms=30000)
+    wire.send('grpc', 'Commit', writer, nonce=NONCE, owner_id=OWNER, bearer='private-credential', deadline_ms=30000)
     assert seen[0] < seen[1] and seen[1] >= 30 + 2
     with pytest.raises(ValueError, match='deadline'):
-        rollback(wire, deadline_ms=30001)
+        wire.send('grpc', 'Commit', writer, nonce=NONCE, owner_id=OWNER, bearer='private-credential', deadline_ms=30001)
     with pytest.raises(ValueError, match='deadline'):
         rollback(wire, deadline_ms=0)
+    with pytest.raises(ValueError, match='deadline'):
+        rollback(wire, deadline_ms=10001)
+    with pytest.raises(ValueError, match='deadline'):
+        wire.send('grpc', 'Commit', {**writer, 'transaction': 'aXNzdWVk'}, nonce=NONCE, owner_id=OWNER, bearer='private-credential', deadline_ms=30000)
 
 
-@pytest.mark.parametrize('bad', [{'code': 0}, {'kind': 'txn-p10b-grpc-receipt-v1'}, {'transport': 'rest'}, {'dispatchedRequests': 2}, {'code': 99}, {'complete': True, 'code': 14}, {'details': 5}, {'details': 'x' * 20000}, {'code': 0, 'response': None}, {'extra': 1}])
+@pytest.mark.parametrize('bad', [{'code': 0}, {'kind': 'txn-p10b-grpc-receipt-v1'}, {'transport': 'rest'}, {'dispatchedRequests': 2}, {'code': 99}, {'complete': True, 'code': 14}, {'details': 5}, {'details': 'x' * 20000}, {'code': 0, 'response': None}, {'extra': 1}, {'http': 200}, {'http': 99}, {'transport': 'rest', 'http': None}])
 def test_a_receipt_that_is_not_the_closed_native_form_is_rejected(runtime, monkeypatch, bad):
     wire = NodeWire(runtime, SCOPE)
     monkeypatch.setattr(wire, '_child', lambda _spec, _timeout: ({**receipt(), **bad} if set(bad) != {'code'} or bad['code'] != 0 else bad, {'childReaped': True}))
@@ -163,3 +169,21 @@ def test_runtime_stamp_cache_rejects_changed_executable_through_symlink(tmp_path
     else:
         link.unlink(); link.symlink_to(second, target_is_directory=True)
     with pytest.raises(ValueError): module.verify_runtime(value)
+
+
+def test_the_scope_sent_is_the_one_the_wire_was_built_with(runtime, monkeypatch):
+    other = {'slug': 'txn-p08', 'documents': ['a', 'm', 'q'], 'states': ['created', 'rest-a-writer']}
+    wire = NodeWire(runtime, other)
+    seen = {}
+    monkeypatch.setattr(wire, '_child', lambda spec, _timeout: (seen.update(spec=spec) or receipt(), {'childReaped': True}))
+    rollback(wire)
+    assert (seen['spec']['slug'], seen['spec']['documents'], seen['spec']['states']) == ('txn-p08', ['a', 'm', 'q'], ['created', 'rest-a-writer'])
+    with pytest.raises(ValueError, match='scope'):
+        NodeWire(runtime, {'slug': 'x'})
+
+
+def test_a_rest_receipt_needs_an_http_status_and_a_grpc_one_forbids_it(runtime, monkeypatch):
+    wire = NodeWire(runtime, SCOPE)
+    monkeypatch.setattr(wire, '_child', lambda _spec, _timeout: (receipt('rest', http=None), {'childReaped': True}))
+    result = wire.send('rest', 'Rollback', {'database': DATABASE, 'transaction': 'aXNzdWVk'}, nonce=NONCE, owner_id=OWNER, bearer='private-credential')
+    assert result['http'] is None, 'an incomplete REST outcome may carry no status; the collector decides what that means'

@@ -244,3 +244,44 @@ def test_the_prior_families_manifests_are_unchanged_by_the_shared_graph():
     assert prior_idle.runner_sha256() == "0c5befa05db71835c1ed2236b9caeeee8c954ca77f13f68f59f6ac2e312d49d3"
     assert prior_retry.runner_sha256() == "23c95d428a0e0f5cc7edfcb3a582811dbb30315ea4158638025175c3970cd4a9"
     assert not any("txn_program" in path for path in boundary.source_manifest())
+
+
+def test_private_inputs_must_sit_under_docs_local_with_mode_600(tmp_path):
+    root = tmp_path
+    (root / "docs.local").mkdir()
+    good = root / "docs.local/a.json"; good.write_text("{}"); good.chmod(0o600)
+    assert cli._private(good, root) == good.resolve()
+    open_mode = root / "docs.local/b.json"; open_mode.write_text("{}"); open_mode.chmod(0o644)
+    outside = root / "c.json"; outside.write_text("{}"); outside.chmod(0o600)
+    for path in [open_mode, outside, root / "docs.local"]:
+        with pytest.raises(ValueError, match="private"):
+            cli._private(path, root)
+
+
+def test_a_proxy_credential_or_interpreter_override_in_the_environment_is_refused(monkeypatch):
+    for key in ["GOOGLE_APPLICATION_CREDENTIALS", "HTTPS_PROXY", "http_proxy", "CLOUDSDK_CORE_PROJECT", "NODE_OPTIONS", "NODE_PATH", "PYTHONPATH", "FIREBASE_TOKEN"]:
+        with monkeypatch.context() as scoped:
+            scoped.setenv(key, "x")
+            with pytest.raises(ValueError, match="override"):
+                cli.assert_clean_environment()
+    for key in [name for name in __import__("os").environ if name.upper().endswith("_PROXY") or name.startswith("CLOUDSDK_")]:
+        monkeypatch.delenv(key)
+    cli.assert_clean_environment()
+
+
+def test_the_review_is_exactly_this_eight_line_gate(packet):
+    pins = packet[4]()
+    assert cli.review_template(pins) == "\n".join(["APPROVE", f"packetSha256={pins['packetSha256']}", f"sourceCommit={pins['sourceCommit']}", f"runnerSha256={pins['runnerSha256']}", f"envelopeId={pins['envelopeId']}", "withinEnvelope=YES", "Must=NONE", "Should=NONE"]) + "\n"
+
+
+def test_a_packet_over_the_size_cap_is_refused_even_with_its_own_digest(tmp_path):
+    big = tmp_path / "big.json"
+    big.write_bytes(b" " * 70000 + b"{}")
+    with pytest.raises(ValueError, match="bytes differ"):
+        cli._read_packet(big, cli.sha(big.read_bytes()))
+
+
+def test_the_packets_own_path_cannot_climb(packet, table):
+    path, baseline, envelope, value, _load = packet
+    with pytest.raises(ValueError, match="path"):
+        cli.load_packet(path, cli.sha(path.read_bytes()), baseline, envelope, table=table, source_commit="b" * 40, packet_relative="docs.local/reviews/../toy-unit.json", envelope_relative=value["envelopePath"])

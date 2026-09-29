@@ -263,3 +263,54 @@ def test_a_journal_failure_blocks_the_metadata_postflight(tmp_path, monkeypatch)
     receipt = runner.run_once(0, TABLE, "a" * 32, "b" * 32, tmp_path, baseline={}, runtime={}, check=lambda: None)
     assert receipt["journalFailure"] is True and receipt["complete"] is False
     assert post == []
+
+
+def test_recordings_whose_rules_metadata_differ_do_not_freeze(tmp_path):
+    ledger, kwargs = fixture(tmp_path)
+    def varied(index, nonce, owner, directory):
+        receipt = record(index, nonce, owner, directory)
+        if index == 1: receipt["metadata"] = {"rulesSourceSha256": "e" * 64, "rulesetName": "projects/fireemu-oracle-sbx/rulesets/other"}
+        return receipt
+    kwargs["record_once"] = varied
+    with pytest.raises(ValueError, match="differ"): runner.record_twice(**kwargs)
+    assert (tmp_path / LOCK).is_file() and not list(tmp_path.glob("fs-transaction-*/freeze.json"))
+
+
+def test_a_first_recording_that_cannot_be_projected_forbids_the_second(tmp_path):
+    ledger, kwargs = fixture(tmp_path)
+    calls = []
+    def once(*args):
+        calls.append(args[0])
+        receipt = record(*args)
+        receipt["observations"][0]["result"]["code"] = 3
+        return receipt
+    kwargs["record_once"] = once
+    with pytest.raises(ValueError): runner.record_twice(**kwargs)
+    assert calls == [0]
+    rows = [json.loads(line) for line in ledger.read_text().splitlines()]
+    assert [row["outcome"] for row in rows[1:]] == ["reserved", "stopped-needs-review"], "an unprojectable recording is never ledgered as recorded"
+
+
+def test_authority_is_reread_before_each_reservation(tmp_path):
+    ledger, kwargs = fixture(tmp_path)
+    reads = []
+    def decisions():
+        reads.append(True)
+        return DECISIONS if len(reads) <= 2 else DECISIONS + f"- 2026-09-28 | FS-TRANSACTION toy-failed-commit | decision=REVOKED; envelopeId={PINS['envelopeId']} | オーナー（直接） | {PINS['packetPath']}\n"
+    kwargs["decisions"] = decisions
+    with pytest.raises(ValueError, match="REVOKED|revoked"): runner.record_twice(**kwargs)
+    assert [json.loads(line)["outcome"] for line in ledger.read_text().splitlines()[1:]] == [], "no reservation is written once the authority is revoked"
+
+
+def test_the_whole_task_budget_is_rechecked_before_each_recording(tmp_path):
+    ledger, kwargs = fixture(tmp_path)
+    calls = []
+    def once(index, nonce, owner, directory):
+        calls.append(index)
+        receipt = record(index, nonce, owner, directory)
+        with ledger.open("a") as handle:
+            handle.write(json.dumps({**LAST, "attemptId": "other-session", "estimatedUsd": 9.95, "ts": "2026-09-28T04:59:00Z"}) + "\n")
+        return receipt
+    kwargs["record_once"] = once
+    with pytest.raises(ValueError, match="limit"): runner.record_twice(**kwargs)
+    assert calls == [0]

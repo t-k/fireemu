@@ -51,7 +51,7 @@ def test_delegation_with_exact_foundation_envelope_and_version_is_accepted():
     assert authority.verify_initial_gates([LAST], NOW, DECISIONS, PINS) == LAST["ts"]
 
 
-@pytest.mark.parametrize("old,new", [("owned-2-documents", "owned-5-documents"), (f"maxRequests={2 * REQUESTS}", f"maxRequests={2 * REQUESTS - 1}"), ("reserveUsd=0.04", "reserveUsd=10.01"), ("decision=APPROVE;", ""), ("recordings=2", "recordings=1"), ("根拠=2026-09-28 調整役への委任（本番の送信）", "根拠=unknown"), ("writerDeadlineSeconds=30", "writerDeadlineSeconds=60"), ("transports=grpc+rest", "transports=grpc"), ("observationSeconds=240", "observationSeconds=900"), ("recoverySeconds=180", "recoverySeconds=360"), ("maxTokens=2", "maxTokens=3"), ("maxUnresolvedTokens=1", "maxUnresolvedTokens=2"), ("releasePolicy=rollback-zero-before-next-chain", "releasePolicy=assume-invalidated"), ("timingSource=parent-wire-envelope", "timingSource=local-control-clock")])
+@pytest.mark.parametrize("old,new", [("owned-2-documents", "owned-5-documents"), (f"maxRequests={2 * REQUESTS}", f"maxRequests={2 * REQUESTS - 1}"), ("reserveUsd=0.04", "reserveUsd=10.01"), ("reserveUsd=0.04", "reserveUsd=0.03"), (f"maxRequests={2 * REQUESTS}", f"maxRequests={2 * REQUESTS + 1}"), ("decision=APPROVE;", ""), ("recordings=2", "recordings=1"), ("根拠=2026-09-28 調整役への委任（本番の送信）", "根拠=unknown"), ("writerDeadlineSeconds=30", "writerDeadlineSeconds=60"), ("transports=grpc+rest", "transports=grpc"), ("observationSeconds=240", "observationSeconds=900"), ("recoverySeconds=180", "recoverySeconds=360"), ("maxTokens=2", "maxTokens=3"), ("maxUnresolvedTokens=1", "maxUnresolvedTokens=2"), ("releasePolicy=rollback-zero-before-next-chain", "releasePolicy=assume-invalidated"), ("timingSource=parent-wire-envelope", "timingSource=local-control-clock")])
 def test_scope_and_explicit_approval_are_not_inferred(old, new):
     with pytest.raises(ValueError):
         authority.authorize(DECISIONS.replace(old, new), PINS)
@@ -133,3 +133,15 @@ def test_the_pinned_scope_must_be_the_full_scope(scope):
     bare = AUTHORITY + envelope_row(scope={}) + APPROVE
     with pytest.raises(ValueError, match="scope"):
         authority.authorize(bare, {**PINS, "scope": scope})
+
+
+@pytest.mark.parametrize("name", ["p09-grpc-retry", "p10-grpc-boundary", "p10-grpc-idle", "expiry-retry-04"])
+def test_a_taken_name_never_authorizes_even_with_a_matching_envelope_id(name):
+    with pytest.raises(ValueError, match="scope"):
+        authority.authorize(DECISIONS, {**PINS, "packetName": name, "envelopeId": f"FS-TRANSACTION-{name}-001"})
+
+
+def test_the_transports_in_the_scope_come_from_the_table():
+    grpc_only = {**support.TABLE, "steps": tuple(step for step in support.TABLE["steps"] if step["transport"] == "grpc"), "caps": {**support.TABLE["caps"], "observation": 11}, "maxTokens": 1}
+    assert authority.envelope_scope(grpc_only)["transports"] == "grpc"
+    assert authority.envelope_scope(support.TABLE)["transports"] == "grpc+rest"

@@ -384,3 +384,16 @@ def test_details_are_masked_of_tokens_the_run_and_the_owner():
     projected = collector_module.projection(receipt_, support.TABLE)
     detail = next(case["details"] for case in projected["cases"] if case["caseId"] == "rest/fail-commit")
     assert detail == "token <token:rest-r> run <nonce> owner <owner>"
+
+
+def test_a_backwards_monotonic_clock_is_refused_directly():
+    collector, *_ = fixture()
+    readings = iter([100.0, 99.0])
+    collector.monotonic = lambda: next(readings)
+    collector._last_monotonic = 100.0
+    assert collector._now() == 100.0
+    with pytest.raises(ValueError, match="clock"):
+        collector._now()
+    collector.monotonic = lambda: float("nan")
+    with pytest.raises(ValueError, match="clock"):
+        collector._now()

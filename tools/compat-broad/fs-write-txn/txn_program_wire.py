@@ -254,7 +254,8 @@ class NodeWire:
 
     def send(self, transport, method, request, *, nonce, owner_id, bearer, deadline_ms=10000):
         verify_runtime(self.runtime)
-        if transport not in ('rest', 'grpc') or type(deadline_ms) is not int or not 1 <= deadline_ms <= 30000:
+        writer = method == 'Commit' and 'transaction' not in request
+        if transport not in ('rest', 'grpc') or type(deadline_ms) is not int or not 1 <= deadline_ms <= (30000 if writer else 10000):
             raise ValueError('program transport or deadline differs')
         project = 'fireemu-oracle-sbx'
         body = copy.deepcopy(request)

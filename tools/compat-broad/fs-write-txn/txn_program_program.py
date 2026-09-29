@@ -86,7 +86,11 @@ def _validate_table(table):
     if caps["tokenCleanup"] < table["maxTokens"] or caps["documentCleanup"] < 3 * len(documents):
         _bad("the cleanup reserve cannot release every token or clean every document")
     ids, cases, issued, probed = set(), set(), {}, set()
-    for step in steps:
+    last_use = {}
+    for index, step in enumerate(steps):
+        if isinstance(step["tokenInput"], str):
+            last_use[step["tokenInput"]] = index
+    for index, step in enumerate(steps):
         if not isinstance(step["id"], str) or not step["id"] or step["id"] in ids:
             _bad("step ids are missing or repeat")
         ids.add(step["id"])
@@ -103,7 +107,13 @@ def _validate_table(table):
                 _bad(f"{step['id']} has a case id that is misplaced or repeats")
             cases.add(step["caseId"])
         rpc = step["rpc"]
+        if step["role"] == "control" and (step["allow"] != [0] and not (step["allow"] == [5] and rpc == "GetDocument")):
+            _bad(f"{step['id']} is a control step that may be refused")
+        if step["role"] == "post-state" and step["allow"] != [0]:
+            _bad(f"{step['id']} is a post-state read that may be refused")
         if rpc == "BeginTransaction":
+            if any(last_use.get(token, -1) > index for token in issued):
+                _bad(f"{step['id']} begins while an earlier chain still uses its token")
             if step["tokenInput"] is not None or not isinstance(step["tokenOutput"], str) or step["tokenOutput"] in issued or step["document"] is not None or step["writes"]:
                 _bad(f"{step['id']} is not a fresh begin")
             issued[step["tokenOutput"]] = step["transport"]

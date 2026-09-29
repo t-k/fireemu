@@ -20,6 +20,7 @@ const REST_METHODS = ['BeginTransaction', 'GetDocument', 'Commit', 'Rollback'];
 export const CHANNEL_OPTIONS = Object.freeze({ 'grpc.enable_retries': 0, 'grpc.max_send_message_length': 16384, 'grpc.max_receive_message_length': 65536 });
 export const RECEIPT_KIND = 'txn-program-receipt-v1';
 export const MAX_DEADLINE_MS = 30000;
+export const DEFAULT_DEADLINE_MS = 10000;
 const UNKNOWN_CODES = [1, 2, 4, 13, 14];
 // google.rpc.Code by the `status` name a REST error carries.
 const STATUS_CODES = { OK: 0, CANCELLED: 1, UNKNOWN: 2, INVALID_ARGUMENT: 3, DEADLINE_EXCEEDED: 4, NOT_FOUND: 5, ALREADY_EXISTS: 6, PERMISSION_DENIED: 7, RESOURCE_EXHAUSTED: 8, FAILED_PRECONDITION: 9, ABORTED: 10, OUT_OF_RANGE: 11, UNIMPLEMENTED: 12, INTERNAL: 13, UNAVAILABLE: 14, DATA_LOSS: 15, UNAUTHENTICATED: 16 };
@@ -44,7 +45,9 @@ export function validateCall(spec) {
   if (spec.kind !== 'txn-program-call-v1' || !['rest', 'grpc'].includes(spec.transport) || !/^[a-f0-9]{32}$/.test(spec.nonce) || !/^[a-f0-9]{32}$/.test(spec.ownerId)) throw new Error('program identity differs');
   if (typeof spec.slug !== 'string' || !LABEL.test(spec.slug) || !Array.isArray(spec.documents) || !spec.documents.length || spec.documents.length > 8 || spec.documents.some(role => typeof role !== 'string' || !LABEL.test(role)) || new Set(spec.documents).size !== spec.documents.length) throw new Error('program document scope differs');
   if (!Array.isArray(spec.states) || !spec.states.length || spec.states.length > 32 || spec.states.some(state => typeof state !== 'string' || !LABEL.test(state))) throw new Error('program states differ');
-  if (!Number.isInteger(spec.deadlineMs) || spec.deadlineMs < 1 || spec.deadlineMs > MAX_DEADLINE_MS || typeof spec.bearer !== 'string' || !/^[A-Za-z0-9._~+\/-]{1,8192}$/.test(spec.bearer)) throw new Error('program deadline or bearer differs');
+  // Only an outside writer's commit (no transaction) may wait 30 s; every other call is capped at 10 s.
+  const writer = spec.method === 'Commit' && plain(spec.request) && spec.request.transaction === undefined;
+  if (!Number.isInteger(spec.deadlineMs) || spec.deadlineMs < 1 || spec.deadlineMs > (writer ? MAX_DEADLINE_MS : DEFAULT_DEADLINE_MS) || typeof spec.bearer !== 'string' || !/^[A-Za-z0-9._~+\/-]{1,8192}$/.test(spec.bearer)) throw new Error('program deadline or bearer differs');
   if (spec.target?.kind === 'production') {
     keys(spec.target, ['kind']);
     if (spec.projectId !== 'fireemu-oracle-sbx') throw new Error('program production project differs');
@@ -135,11 +138,16 @@ export function restRequest(spec) {
 }
 
 /** The real REST exchange: one connection, one request, a bounded answer; the caller times it out. */
+export function restHeaders(spec) {
+  const headers = { authorization: `Bearer ${spec.bearer}`, accept: 'application/json' };
+  if (spec.target.kind === 'production') headers['x-goog-user-project'] = 'fireemu-oracle-sbx';
+  return headers;
+}
+
 export function httpExchange(spec, prepared, signal) {
   const production = spec.target.kind === 'production';
   const module = production ? https : http;
-  const headers = { authorization: `Bearer ${spec.bearer}`, accept: 'application/json' };
-  if (production) headers['x-goog-user-project'] = 'fireemu-oracle-sbx';
+  const headers = restHeaders(spec);
   const payload = prepared.body === undefined ? undefined : Buffer.from(JSON.stringify(prepared.body));
   if (payload) { headers['content-type'] = 'application/json'; headers['content-length'] = String(payload.length); }
   return new Promise((resolve, reject) => {

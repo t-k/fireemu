@@ -160,9 +160,9 @@ test("a revoked envelope cannot authorize a later delegated decision", () => {
     /revoked/,
   );
 });
-test("another packet's revocation does not revoke this concrete packet", () => {
+test("another fully identified packet's revocation does not revoke this concrete packet", () => {
   const result = validate(
-    `${decision()}\n${row("STORAGE-OBJECT other-packet", { decision: "REVOKED" })}`,
+    `${decision()}\n${row("STORAGE-OBJECT other-packet", { decision: "REVOKED", packetSha256: "f".repeat(64) })}`,
   );
   assert.equal(result.decisionLine, 1);
 });
@@ -271,18 +271,25 @@ const delegationReference = "2026-09-28 調整役への委任（本番の送信�
 const basisSubject = "調整役への委任（本番の送信）";
 const basis = (actor = owner, date = "2026-09-28") =>
   `- ${date} | ${basisSubject} | decision=APPROVE; sandbox delegation within USD10 | ${actor} | delegation.md`;
+const frameBasis = (actor = owner) =>
+  `- 2026-09-28 | 調整役への委任（枠の承認） | decision=APPROVE; sandbox envelope delegation within USD10 | ${actor} | delegation.md`;
 const delegatedEnvelope = (values = {}, actor = delegatedEnvelopeActor) =>
   envelope({ 根拠: delegationReference, ...values }, actor);
-const delegatedLedger = (values = {}) => `${basis()}\n${delegatedEnvelope(values)}\n${delegated()}`;
+const delegatedLedger = (values = {}) =>
+  `${basis()}\n${frameBasis()}\n${delegatedEnvelope(values)}\n${delegated()}`;
 
 for (const actor of [owner, "オーナー"]) {
   test(`the exact delegated envelope actor binds a real owner basis: ${actor}`, () => {
-    const result = validate(`${basis(actor)}\n${delegatedEnvelope()}\n${delegated()}`, {
-      review: inEnvelope,
-    });
-    assert.equal(result.envelopeLine, 2);
-    assert.equal(result.decisionLine, 3);
+    const result = validate(
+      `${basis(actor)}\n${frameBasis(actor)}\n${delegatedEnvelope()}\n${delegated()}`,
+      {
+        review: inEnvelope,
+      },
+    );
+    assert.equal(result.envelopeLine, 3);
+    assert.equal(result.decisionLine, 4);
     assert.equal(result.delegationLine, 1);
+    assert.equal(result.envelopeDelegationLine, 2);
     assert.equal(result.sendAuthorized, false);
   });
 }

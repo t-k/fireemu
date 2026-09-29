@@ -10,6 +10,68 @@ const COORDINATOR = "Claude（委任。枠の内の承認し直し）";
 const DELEGATED_ENVELOPE_ACTOR = "Claude（委任。オーナーの裁量の委任 2026-09-28）";
 const DELEGATION_SUBJECT = "調整役への委任（本番の送信）";
 const DELEGATION_REFERENCE = `2026-09-28 ${DELEGATION_SUBJECT}`;
+const ENVELOPE_DELEGATION_SUBJECT = "調整役への委任（枠の承認）";
+const normalizeRevocation = (text) => text.normalize("NFKC").toLowerCase();
+const revocationTerms = Object.freeze({
+  task: normalizeRevocation("STORAGE-OBJECT"),
+  delegationPrefix: normalizeRevocation("調整役への委任"),
+  marker: normalizeRevocation("REVOKED"),
+});
+
+function envelopeReferences(line) {
+  return [
+    ...line.matchAll(/\benvelopeid\s*=\s*([a-z0-9][a-z0-9._-]{0,127})(?=[\s;|()、。,]|$)/g),
+  ].map((match) => match[1]);
+}
+
+/** Revocations are checked before parsing positive rows, including malformed and corrected rows. */
+function rejectRelatedRevocations(text, packet, envelopeId) {
+  const lines = text.split("\n").map(normalizeRevocation);
+  const currentPacket = normalizeRevocation(packet.packetSha256);
+  const currentSource = normalizeRevocation(packet.sourceCommit);
+  const currentEnvelope = typeof envelopeId === "string" ? normalizeRevocation(envelopeId) : null;
+  const knownEnvelopes = new Set(
+    lines
+      .filter(
+        (line) => !line.includes(revocationTerms.marker) && line.includes(revocationTerms.task),
+      )
+      .flatMap(envelopeReferences),
+  );
+  for (const line of lines) {
+    if (!line.includes(revocationTerms.marker)) continue;
+    const hexadecimal = line.match(/[a-f0-9]+/g) ?? [];
+    const envelopes = envelopeReferences(line);
+    if (
+      hexadecimal.includes(currentPacket) ||
+      hexadecimal.some(
+        (value) => value.length >= 8 && value.length <= 40 && currentSource.startsWith(value),
+      ) ||
+      (currentEnvelope !== null && (line.match(/[a-z0-9._-]+/g) ?? []).includes(currentEnvelope))
+    )
+      throw new Error("approval revoked");
+    if (!line.includes(revocationTerms.task)) continue;
+    const otherPacket = [
+      ...line.matchAll(/\bpacketsha256\s*=\s*([a-f0-9]{64})(?=[\s;|()、。,]|$)/g),
+    ].some((match) => match[1] !== currentPacket);
+    const otherEnvelope = envelopes.some(
+      (value) => value !== currentEnvelope && knownEnvelopes.has(value),
+    );
+    if (!otherPacket && !otherEnvelope) throw new Error("approval revoked");
+  }
+}
+
+function rejectDelegationRevocations(text) {
+  if (
+    text.split("\n").some((line) => {
+      const normalized = normalizeRevocation(line);
+      return (
+        normalized.includes(revocationTerms.delegationPrefix) &&
+        normalized.includes(revocationTerms.marker)
+      );
+    })
+  )
+    throw new Error("owner delegation revoked");
+}
 
 function closedRecord(value, keys, label) {
   if (!value || typeof value !== "object" || Object.getPrototypeOf(value) !== Object.prototype)
@@ -63,6 +125,7 @@ function ledgerRows(text, subject) {
   return text.split("\n").flatMap((line, index) => {
     const columns = line.split("|").map((value) => value.trim());
     if (![subject, `${subject} envelope`].includes(columns[1])) return [];
+    if (normalizeRevocation(line).includes(revocationTerms.marker)) return [];
     if (
       columns.length !== 5 ||
       !/^- \d{4}-\d{2}-\d{2}$/.test(columns[0]) ||
@@ -70,8 +133,6 @@ function ledgerRows(text, subject) {
       !columns[4]
     )
       throw new Error("malformed target ledger row");
-    // Revocation needs no digest, envelope ID or well-formed approval fields.
-    if (/\bREVOKED\b/.test(columns[2])) throw new Error("approval revoked");
     const fields = Object.create(null);
     for (const entry of columns[2].split(";")) {
       const separator = entry.indexOf("=");
@@ -86,11 +147,11 @@ function ledgerRows(text, subject) {
   });
 }
 
-function ownerDelegationLine(ledgerText) {
+function ownerDelegationLine(ledgerText, subject, envelopeLine) {
   let basisLine = null;
   for (const [index, line] of ledgerText.split("\n").entries()) {
     const columns = line.split("|").map((value) => value.trim());
-    if (columns[1] !== DELEGATION_SUBJECT) continue;
+    if (columns[1] !== subject) continue;
     if (
       columns.length !== 5 ||
       !/^- \d{4}-\d{2}-\d{2}$/.test(columns[0]) ||
@@ -100,7 +161,13 @@ function ownerDelegationLine(ledgerText) {
     )
       throw new Error("malformed owner delegation basis");
     if (/\bREVOKED\b/.test(columns[2])) throw new Error("owner delegation revoked");
-    if (columns[0] === "- 2026-09-28" && columns[3].startsWith("オーナー")) basisLine = index + 1;
+    if (
+      columns[0] === "- 2026-09-28" &&
+      columns[3].startsWith("オーナー") &&
+      columns[2].split(";")[0].trim() === "decision=APPROVE" &&
+      index + 1 < envelopeLine
+    )
+      basisLine = index + 1;
   }
   if (basisLine === null) throw new Error("owner delegation basis required");
   return basisLine;
@@ -143,6 +210,7 @@ export function validatePresendApproval(options) {
   if (review.verdict !== "APPROVE" || review.must.length || review.should.length)
     throw new Error("clean APPROVE review required");
   if (PINS.some((key) => review[key] !== packet[key])) throw new Error("review pin mismatch");
+  rejectRelatedRevocations(ledgerText, packet, review.envelopeId);
   const subject = `${packet.taskId} ${packet.packetName}`;
   const rows = ledgerRows(ledgerText, subject);
   const decision = rows.findLast((row) => row.subject === subject && row.fields.decision);
@@ -194,11 +262,18 @@ export function validatePresendApproval(options) {
     reservation <= 0
   )
     throw new Error("invalid envelope bound");
-  let delegationLine = null;
+  let delegationLine = null,
+    envelopeDelegationLine = null;
   if (envelope.actor === DELEGATED_ENVELOPE_ACTOR) {
     if (envelope.fields["根拠"] !== DELEGATION_REFERENCE)
       throw new Error("exact delegation reference required");
-    delegationLine = ownerDelegationLine(ledgerText);
+    rejectDelegationRevocations(ledgerText);
+    delegationLine = ownerDelegationLine(ledgerText, DELEGATION_SUBJECT, envelope.line);
+    envelopeDelegationLine = ownerDelegationLine(
+      ledgerText,
+      ENVELOPE_DELEGATION_SUBJECT,
+      envelope.line,
+    );
     if (reservation > 10) throw new Error("delegated envelope reservation exceeds USD10");
   }
   for (const limits of [packet, runner]) {
@@ -215,6 +290,6 @@ export function validatePresendApproval(options) {
     decisionLine: decision.line,
     envelopeLine: envelope.line,
     envelopeId,
-    ...(delegationLine === null ? {} : { delegationLine }),
+    ...(delegationLine === null ? {} : { delegationLine, envelopeDelegationLine }),
   });
 }

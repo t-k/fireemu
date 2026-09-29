@@ -80,12 +80,18 @@ export function gitOutput(root, args) {
   });
 }
 
-/** The checkout must be at the pinned commit with no change to a tracked file. */
+/**
+ * The checkout must be at the pinned commit with no change to a tracked file, and the files the runner pin hashes must all be
+ * tracked: nothing untracked or ignored under the runner directory or at the closure spec path, so that the pin can be
+ * recomputed from the commit alone.
+ */
 export async function checkoutMatches({ root, sourceCommit, git = gitOutput }) {
   const head = (await git(root, ["rev-parse", "HEAD"])).trim();
   if (head !== sourceCommit) return { ok: false, reason: "source commit mismatch" };
   const changes = await git(root, ["status", "--porcelain", "--untracked-files=no"]);
   if (changes.trim() !== "") return { ok: false, reason: "working tree not clean" };
+  const extra = await git(root, ["status", "--porcelain", "--untracked-files=all", "--ignored", "--", RUNNER_DIR, CLOSURE_SPEC]);
+  if (extra.trim() !== "") return { ok: false, reason: "untracked or ignored runner files" };
   return { ok: true };
 }
 

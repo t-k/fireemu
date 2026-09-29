@@ -83,7 +83,12 @@ test("the checkout must be at the pinned commit with no change to a tracked file
   // Only a tracked-file change counts: the status is asked without untracked files.
   const asked = [];
   await checkoutMatches({ root: "/r", sourceCommit: commit, git: async (root, args) => { asked.push(args); return args[0] === "rev-parse" ? commit : ""; } });
-  assert.deepEqual(asked, [["rev-parse", "HEAD"], ["status", "--porcelain", "--untracked-files=no"]]);
+  assert.deepEqual(asked, [["rev-parse", "HEAD"], ["status", "--porcelain", "--untracked-files=no"], ["status", "--porcelain", "--untracked-files=all", "--ignored", "--", DIR, CLOSURE]]);
+  // Untracked or ignored files under the runner directory or at the closure spec path are refused, whatever the tracked state is.
+  const extra = (out) => async (root, args) => (args[0] === "rev-parse" ? commit : args.includes("--ignored") ? out : "");
+  assert.deepEqual(await checkoutMatches({ root: "/r", sourceCommit: commit, git: extra("?? conformance/src/storage-rules/driver.mjs\n") }), { ok: false, reason: "untracked or ignored runner files" });
+  assert.deepEqual(await checkoutMatches({ root: "/r", sourceCommit: commit, git: extra("!! conformance/src/storage-rules/x.mjs\n") }), { ok: false, reason: "untracked or ignored runner files" });
+  assert.deepEqual(await checkoutMatches({ root: "/r", sourceCommit: commit, git: extra("\n") }), { ok: true });
 });
 
 test("the real git reader reads a scratch repository and refuses a directory that is not one", async (t) => {
@@ -94,11 +99,27 @@ test("the real git reader reads a scratch repository and refuses a directory tha
   const run = (...args) => execFileSync("git", ["-C", root, ...args], { encoding: "utf8", env });
   run("init", "-q");
   await writeFile(join(root, "a.txt"), "one");
-  run("add", "a.txt");
+  await mkdir(join(root, DIR), { recursive: true });
+  await mkdir(join(root, "spec", "compatibility", "closure"), { recursive: true });
+  await writeFile(join(root, DIR, "module.mjs"), "export {};\n");
+  await writeFile(join(root, CLOSURE), "{}");
+  await writeFile(join(root, ".gitignore"), "ignored-*.mjs\n");
+  run("add", "a.txt", DIR, CLOSURE, ".gitignore");
   run("commit", "-q", "-m", "first");
   const head = run("rev-parse", "HEAD").trim();
   assert.deepEqual(await checkoutMatches({ root, sourceCommit: head }), { ok: true });
   await writeFile(join(root, "untracked.txt"), "x");
+  assert.deepEqual(await checkoutMatches({ root, sourceCommit: head }), { ok: true });
+  // An untracked or an ignored module under the runner directory is refused; an ignored file elsewhere is not.
+  await writeFile(join(root, DIR, "driver.mjs"), "export {};\n");
+  assert.deepEqual(await checkoutMatches({ root, sourceCommit: head }), { ok: false, reason: "untracked or ignored runner files" });
+  await unlink(join(root, DIR, "driver.mjs"));
+  await writeFile(join(root, DIR, "ignored-thing.mjs"), "export {};\n");
+  assert.deepEqual(await checkoutMatches({ root, sourceCommit: head }), { ok: false, reason: "untracked or ignored runner files" });
+  await unlink(join(root, DIR, "ignored-thing.mjs"));
+  await writeFile(join(root, "ignored-elsewhere.mjs"), "export {};\n");
+  assert.deepEqual(await checkoutMatches({ root, sourceCommit: head }), { ok: true });
+  await writeFile(join(root, "spec", "compatibility", "closure", "extra.json"), "{}");
   assert.deepEqual(await checkoutMatches({ root, sourceCommit: head }), { ok: true });
   await writeFile(join(root, "a.txt"), "two");
   assert.deepEqual(await checkoutMatches({ root, sourceCommit: head }), { ok: false, reason: "working tree not clean" });
@@ -185,26 +206,46 @@ test("all three recomputable pins come from the code, the private inputs and the
   assert.notEqual((await computePins({ inputs: moved, closure: realClosure, sourceCommit: commit, codeRoot: root })).manifestSha256, pins.manifestSha256);
 });
 
-test("the pin printer prints the pins of this checkout for a private inputs file and refuses anything else without echoing the file", async (t) => {
-  const script = fileURLToPath(new URL("./storage-rules/print-pins.mjs", import.meta.url));
+test("the pin printer prints the pins for a clean checkout and refuses an unclean one, a bad file and bad arguments without echoing the file", async (t) => {
+  const { runPrintPins } = await import("./storage-rules/print-pins.mjs");
+  const { root } = await tree(t);
+  await mkdir(join(root, "spec", "compatibility", "closure"), { recursive: true });
+  await writeFile(join(root, CLOSURE), JSON.stringify(realClosure));
   const path = await inputsFile(t);
-  const stdout = execFileSync("node", [script, path], { encoding: "utf8" });
-  const printed = JSON.parse(stdout);
-  assert.match(stdout, /^\{\n  "sourceCommit": "[0-9a-f]{40}",\n/);
+  const commit = "c".repeat(40);
+  const gitFor = (status = "", extra = "") => async (where, args) => { assert.equal(where, root); return args[0] === "rev-parse" ? `${commit}\n` : args.includes("--ignored") ? extra : status; };
+  const run = async (args, git) => {
+    const seen = { out: "", err: "" };
+    const code = await runPrintPins({ args, codeRoot: root, git, out: (text) => { seen.out += text; }, err: (text) => { seen.err += text; } });
+    return { code, ...seen };
+  };
+  const ok = await run([path], gitFor());
+  assert.equal(ok.code, 0);
+  assert.equal(ok.err, "");
+  assert.match(ok.out, /^\{\n  "sourceCommit": "c{40}",\n/);
   const inputs = await loadPrivateInputs({ path });
-  const head = execFileSync("git", ["-C", realRoot, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
-  assert.deepEqual(printed, { ...(await computePins({ inputs, closure: realClosure, sourceCommit: head, codeRoot: realRoot })) });
-  assert.deepEqual(Object.keys(printed), ["sourceCommit", "runnerSha256", "manifestSha256", "fixtureSchemaSha256"]);
+  assert.deepEqual(JSON.parse(ok.out), { ...(await computePins({ inputs, closure: realClosure, sourceCommit: commit, codeRoot: root })) });
+  assert.deepEqual(Object.keys(JSON.parse(ok.out)), ["sourceCommit", "runnerSha256", "manifestSha256", "fixtureSchemaSha256"]);
+  for (const [git, message] of [[gitFor(" M conformance/src/storage-rules/x.mjs\n"), /working tree not clean/], [gitFor("", "?? conformance/src/storage-rules/driver.mjs\n"), /untracked or ignored runner files/], [gitFor("", "!! conformance/src/storage-rules/x.mjs\n"), /untracked or ignored runner files/]]) {
+    const refused = await run([path], git);
+    assert.equal(refused.code, 1);
+    assert.equal(refused.out, "");
+    assert.match(refused.err, message);
+  }
   for (const args of [[], [path, "extra"]]) {
-    const result = spawnSync("node", [script, ...args], { encoding: "utf8" });
-    assert.equal(result.status, 2);
-    assert.match(result.stderr, /usage/);
-    assert.equal(result.stdout, "");
+    const usage = await run(args, gitFor());
+    assert.deepEqual([usage.code, usage.out], [2, ""]);
+    assert.match(usage.err, /usage/);
   }
   const bad = await inputsFile(t, (packet) => ({ ...packet, extra: "SECRET-VALUE-XYZ" }));
-  const failed = spawnSync("node", [script, bad], { encoding: "utf8" });
-  assert.equal(failed.status, 1);
-  assert.equal(failed.stdout, "");
-  assert.match(failed.stderr, /private inputs file refused/);
-  assert.equal(failed.stderr.includes("SECRET-VALUE-XYZ"), false);
+  const failed = await run([bad], gitFor());
+  assert.deepEqual([failed.code, failed.out], [1, ""]);
+  assert.match(failed.err, /private inputs file refused/);
+  assert.equal(failed.err.includes("SECRET-VALUE-XYZ"), false);
+  // The command line itself: usage and a bad file end the process with the same codes and print nothing to stdout.
+  const script = fileURLToPath(new URL("./storage-rules/print-pins.mjs", import.meta.url));
+  assert.equal(spawnSync("node", [script], { encoding: "utf8" }).status, 2);
+  const cli = spawnSync("node", [script, bad], { encoding: "utf8" });
+  assert.deepEqual([cli.status, cli.stdout], [1, ""]);
+  assert.equal(cli.stderr.includes("SECRET-VALUE-XYZ"), false);
 });

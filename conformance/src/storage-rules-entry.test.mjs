@@ -37,7 +37,7 @@ const ledger = [
 ].join("\n");
 const clock = { nowSeconds: () => 1_800_000_000, waitUntilSeconds: async () => {}, sleep: async () => {} };
 
-async function checkout(t, { ledgerText = ledger, ledgerMode = 0o644, usage = [], gitHead = sourceCommit, gitStatus = "" } = {}) {
+async function checkout(t, { ledgerText = ledger, ledgerMode = 0o644, usage = [], gitHead = sourceCommit, gitStatus = "", gitExtra = "" } = {}) {
   const root = await mkdtemp("/private/tmp/storage-rules-entry-");
   t.after(() => rm(root, { recursive: true, force: true }));
   await mkdir(join(root, ".git"));
@@ -57,7 +57,7 @@ async function checkout(t, { ledgerText = ledger, ledgerMode = 0o644, usage = []
   const wire = [];
   const requestImpl = (...args) => { wire.push(args); throw new Error("the wire must not be reached"); };
   const gitCalls = [];
-  const git = async (where, args) => { gitCalls.push([where, ...args]); return args[0] === "rev-parse" ? `${gitHead}\n` : gitStatus; };
+  const git = async (where, args) => { gitCalls.push([where, ...args]); return args[0] === "rev-parse" ? `${gitHead}\n` : args.includes("--ignored") ? gitExtra : gitStatus; };
   const entry = bindStorageRulesEntry({ root, codeRoot, requestImpl, clock, git });
   const options = { inputsPath, closure, runId, sourceCommit, packet: structuredClone(packet), review: structuredClone(review) };
   return { root, runs, entry, options, wire, gitCalls };
@@ -342,13 +342,15 @@ test("the run is refused, before anything is created, unless the code, the fixtu
   await assert.rejects(moved.entry(moved.options, async () => assert.fail("must not run")), /source commit mismatch/);
   const dirty = await checkout(t, { gitStatus: " M conformance/src/storage-rules/entry.mjs\n" });
   await assert.rejects(dirty.entry(dirty.options, async () => assert.fail("must not run")), /working tree not clean/);
+  const untracked = await checkout(t, { gitExtra: "?? conformance/src/storage-rules/driver.mjs\n" });
+  await assert.rejects(untracked.entry(untracked.options, async () => assert.fail("must not run")), /untracked or ignored runner files/);
   const broken = await checkout(t);
   broken.entry = bindStorageRulesEntry({ root: broken.root, codeRoot, requestImpl() {}, clock, git: async () => { throw new Error("git missing"); } });
   await assert.rejects(broken.entry(broken.options, async () => assert.fail("must not run")), /source commit unreadable/);
-  for (const state of [moved, dirty, broken]) { assert.deepEqual(await readdir(state.runs), ["sandbox-locks"]); assert.equal(state.wire.length, 0); }
+  for (const state of [moved, dirty, untracked, broken]) { assert.deepEqual(await readdir(state.runs), ["sandbox-locks"]); assert.equal(state.wire.length, 0); }
   const ok = await checkout(t);
   await assert.rejects(ok.entry(ok.options, async (run) => { await run.run(); }));
-  assert.deepEqual(ok.gitCalls.map(([where, ...args]) => [where, args.join(" ")]), [[codeRoot, "rev-parse HEAD"], [codeRoot, "status --porcelain --untracked-files=no"]]);
+  assert.deepEqual(ok.gitCalls.map(([where, ...args]) => [where, args.join(" ")]), [[codeRoot, "rev-parse HEAD"], [codeRoot, "status --porcelain --untracked-files=no"], [codeRoot, `status --porcelain --untracked-files=all --ignored -- conformance/src/storage-rules spec/compatibility/closure/STORAGE-RULES.json`]]);
 });
 
 test("the caller receives the assembled recording itself, still frozen, and the entry's own return value", async (t) => {

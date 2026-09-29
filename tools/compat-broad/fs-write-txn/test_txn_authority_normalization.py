@@ -126,9 +126,111 @@ def test_shortened_source_followed_by_punctuation_revokes_before_approval(kind, 
         function(decisions + cancellation, pins)
 
 
-@pytest.mark.parametrize('reference', ['b' * 7, 'b' * 41, 'b' * 8 + 'z', 'd' * 8])
+@pytest.mark.parametrize('reference', ['b' * 7, 'b' * 41, 'd' * 8])
 def test_short_or_nonhex_other_source_references_do_not_become_current_identity(reference):
     shared.reject_revocations(row('AUTH-OTHER', 'REVOKED; sourceCommit=' + reference), PINS)
+
+
+@pytest.mark.parametrize('kind', ['legacy', 'retry', 'idle', 'boundary'])
+@pytest.mark.parametrize('spelling', [
+    'REVOKED（{prefix}は使わない）',
+    'REVOKED source {prefix}',
+    'REVOKED sourceCommit: {prefix}',
+    'REVOKED commit={prefix}',
+    'REVOKED run of {prefix} is void',
+])
+def test_review_m1_prose_source_prefix_revokes_every_authority(kind, spelling):
+    function, decisions, pins = authority_fixture(kind, boundary.ACTOR)
+    prefix = pins['sourceCommit'][:12 if 'run of' in spelling else 9]
+    cancellation = row('第2回の統合', spelling.format(prefix=prefix))
+    with pytest.raises(ValueError, match='revoked'):
+        function(decisions + cancellation, pins)
+
+
+HEX_PINS = {
+    **PINS,
+    'packetSha256': 'b431436c369813a95ba09570a0a272911e7268e537af8adb430991a6d64998b4',
+    'sourceCommit': 'c199d3d92a5b768e400ba8522be90bad5a4f29d9',
+    'runnerSha256': '39e712b7347645a5e9f371fc66983ec566a5b2566dc793beb021722b7cb0426e',
+}
+HEX_KEYS = ['packetSha256', 'sourceCommit', 'runnerSha256']
+HEX_LENGTHS = [(key, size) for key in HEX_KEYS for size in [8, 9, 12, 39, 40, 63, 64] if size <= len(HEX_PINS[key])]
+
+
+@pytest.mark.parametrize('key,size', HEX_LENGTHS)
+@pytest.mark.parametrize('transform', [str.lower, str.upper, fullwidth])
+def test_key_independent_hex_prefixes_use_normalized_maximal_runs(key, size, transform):
+    cancellation = row('第2回の統合', 'ＲＥＶＯＫＥＤ unknown: ' + transform(HEX_PINS[key][:size]))
+    with pytest.raises(ValueError, match='revoked'):
+        shared.reject_revocations(cancellation, HEX_PINS)
+
+
+@pytest.mark.parametrize('key', HEX_KEYS)
+@pytest.mark.parametrize('left,right', [
+    ('z', ''), ('', 'z'), ('_', ''), ('', '_'), ('-', ''), ('', '-'),
+    ('ｚ', ''), ('', 'ｚ'), ('＿', ''), ('', '＿'), ('－', ''), ('', '－'),
+    ('（', 'は使わない）'),
+])
+def test_nonhex_identifier_and_fullwidth_neighbors_are_prefix_boundaries(key, left, right):
+    cancellation = row('第2回の統合', 'REVOKED ' + left + HEX_PINS[key][:8] + right)
+    with pytest.raises(ValueError, match='revoked'):
+        shared.reject_revocations(cancellation, HEX_PINS)
+
+
+@pytest.mark.parametrize('key', HEX_KEYS)
+@pytest.mark.parametrize('column', range(5))
+def test_hex_prefix_scan_covers_every_raw_column_without_topic_filter(key, column):
+    parts = ['- 2026-09-29', '第2回の統合', 'REVOKED', 'actor', 'path']
+    parts[column] += ' ' + HEX_PINS[key][:9]
+    with pytest.raises(ValueError, match='revoked'):
+        shared.reject_revocations(' | '.join(parts) + '\n', HEX_PINS)
+
+
+@pytest.mark.parametrize('key', HEX_KEYS)
+@pytest.mark.parametrize('variant', ['short', 'long', 'different-prefix', 'other-full', 'left-hex', 'left-full-hex', 'no-revocation'])
+def test_maximal_hex_run_controls_do_not_cancel_unrelated_identity(key, variant):
+    identity = HEX_PINS[key]
+    reference = {
+        'short': identity[:7],
+        'long': identity + '0',
+        'different-prefix': '0' + identity[1:8],
+        'other-full': identity[:-1] + ('0' if identity[-1] != '0' else '1'),
+        'left-hex': '0' + identity[:8],
+        'left-full-hex': '0' + identity,
+        'no-revocation': identity[:8],
+    }[variant]
+    action = 'NOT_REVOKED' if variant == 'no-revocation' else 'REVOKED'
+    shared.reject_revocations(row('第2回の統合', action + ' ' + reference), HEX_PINS)
+
+
+def test_envelope_prefix_does_not_cancel_a_distinct_complete_envelope():
+    shared.reject_revocations(row('FS-TRANSACTION correction', 'REVOKED envelopeId=FS-TRANSACTION-other-001'), HEX_PINS)
+    shared.reject_revocations(row('第2回の統合', 'REVOKED FS-TRANS'), HEX_PINS)
+
+
+@pytest.mark.parametrize('key', HEX_KEYS)
+def test_current_hex_prefix_overrides_a_well_formed_other_packet_scope(key):
+    with pytest.raises(ValueError, match='revoked'):
+        shared.reject_revocations(row('第2回の統合', 'REVOKED packetSha256=' + OTHER + '; replaced ' + HEX_PINS[key][:8]), HEX_PINS)
+
+
+@pytest.mark.parametrize('key', HEX_KEYS)
+@pytest.mark.parametrize('variant', ['fullwidth-left-hex', 'fullwidth-right-hex', 'source-in-other-full-sha'])
+def test_normalization_cannot_extract_a_prefix_inside_another_maximal_hex_run(key, variant):
+    identity = HEX_PINS[key]
+    reference = {
+        'fullwidth-left-hex': '０' + identity[:8],
+        'fullwidth-right-hex': identity[:8] + 'ｆ',
+        'source-in-other-full-sha': HEX_PINS['sourceCommit'] + 'f' * 24,
+    }[variant]
+    shared.reject_revocations(row('第2回の統合', 'REVOKED ' + reference), HEX_PINS)
+
+
+def test_missing_optional_hex_pins_still_scan_the_packet_prefix():
+    pins = {'packetSha256': HEX_PINS['packetSha256']}
+    with pytest.raises(ValueError, match='revoked'):
+        shared.reject_revocations(row('第2回の統合', 'REVOKED ' + pins['packetSha256'][:8], 3), pins)
+    shared.reject_revocations(row('第2回の統合', 'REVOKED ' + HEX_PINS['sourceCommit'][:8], 4), pins)
 
 
 @pytest.mark.parametrize('scope', ['PACKETSHA256=' + OTHER, 'EnVeLoPeId=FS-TRANSACTION-other-001', fullwidth('closurePacketSha256=' + OTHER)])

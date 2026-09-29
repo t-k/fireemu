@@ -160,16 +160,18 @@ def reject_revocations(decisions, pins):
     envelope = normalize_authority(pins["envelopeId"]) if pins.get("envelopeId") is not None else None
     identities = [re.compile(r"(?<![a-z0-9_-])" + re.escape(normalize_authority(pins[key])) + r"(?![a-z0-9_-])")
         for key in ("packetSha256", "envelopeId", "sourceCommit", "runnerSha256") if pins.get(key)]
-    source = normalize_authority(pins.get("sourceCommit", ""))
-    source_declarations = r"(?<![a-z0-9_-])" + normalize_authority("sourceCommit") + r"\s*=\s*([a-f0-9]{8,40})(?![a-z0-9_-])"
+    hex_identities = [normalize_authority(pins[key])
+        for key in ("packetSha256", "sourceCommit", "runnerSha256") if pins.get(key)]
+    hex_runs = re.compile(r"(?<![a-f0-9])[a-f0-9]{8,64}(?![a-f0-9])")
     for line in decisions.splitlines():
         line = normalize_authority(line)
         if not _is_revocation(line):
             continue
         if normalize_authority(DELEGATION_TOPIC_PREFIX) in line:
             raise ValueError("owner delegation was revoked")
-        source_prefix = any(source.startswith(match[1]) for match in re.finditer(source_declarations, line))
-        if any(identity.search(line) for identity in identities) or source_prefix:
+        hex_prefix = any(identity.startswith(match[0])
+            for match in hex_runs.finditer(line) for identity in hex_identities)
+        if any(identity.search(line) for identity in identities) or hex_prefix:
             raise ValueError("this packet or envelope was revoked")
         if normalize_authority(TASK) in line and _revoked_packet(line, packet, envelope):
             raise ValueError("this packet or envelope was revoked")

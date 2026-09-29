@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "parent": "AUTH-TENANT-BLOCKING",
   "parentStatus": "IMPLEMENTING",
-  "parentStatusNote": "The closure review is approved (closureReview). On the round-2 integrated artifact every row matches except atb/tenant/providers#auth-uri-a, so the parent stays IMPLEMENTING only for provider-isolation (T12), final-artifact-regression and closure-review, which wait for AUTH-FEDERATION. It becomes COMPAT_VERIFIED when that row matches on the integrated artifact.",
+  "parentStatusNote": "The closure review is approved (closureReview), and every row matches on the round-2 final artifact. The parent stays IMPLEMENTING only for the closure-review condition, which waits for the round-2 integration review of the changes after the approved commit, and the coordinator's ledger line.",
   "oracleTrack": "disposable-sandbox",
   "scopeDecisions": [
     {
@@ -112,8 +112,8 @@
             "project": "fireemu-oracle-idp"
           }
         ],
-        "finalArtifactSha256": "1087af08e80da080438e6326f46bbd84a1f6cee30325e4cc1f923fc3945f32d6",
-        "sourceCommit": "40a1be87d28e7d99dc18e290daea3dde57b0fc8b",
+        "finalArtifactSha256": "ece3f66b1093e69d24ab16fa820994469120fcfb7ddaff22d6a4fc72cff51167",
+        "sourceCommit": "67dbcaeb8d972e48cc7ca1f413008c99a7d2e9f5",
         "comparisonPaths": [
           "spec/compatibility/closure/evidence/AUTH-TENANT-BLOCKING-tenant-comparison.json"
         ],
@@ -142,8 +142,8 @@
             "project": "fireemu-oracle-idp"
           }
         ],
-        "finalArtifactSha256": "1087af08e80da080438e6326f46bbd84a1f6cee30325e4cc1f923fc3945f32d6",
-        "sourceCommit": "40a1be87d28e7d99dc18e290daea3dde57b0fc8b",
+        "finalArtifactSha256": "ece3f66b1093e69d24ab16fa820994469120fcfb7ddaff22d6a4fc72cff51167",
+        "sourceCommit": "67dbcaeb8d972e48cc7ca1f413008c99a7d2e9f5",
         "comparisonPaths": [
           "spec/compatibility/closure/evidence/AUTH-TENANT-BLOCKING-tenant-comparison.json"
         ],
@@ -173,8 +173,8 @@
             "project": "fireemu-oracle-idp"
           }
         ],
-        "finalArtifactSha256": "1087af08e80da080438e6326f46bbd84a1f6cee30325e4cc1f923fc3945f32d6",
-        "sourceCommit": "40a1be87d28e7d99dc18e290daea3dde57b0fc8b",
+        "finalArtifactSha256": "ece3f66b1093e69d24ab16fa820994469120fcfb7ddaff22d6a4fc72cff51167",
+        "sourceCommit": "67dbcaeb8d972e48cc7ca1f413008c99a7d2e9f5",
         "comparisonPaths": [
           "spec/compatibility/closure/evidence/AUTH-TENANT-BLOCKING-tenant-comparison.json"
         ],
@@ -203,8 +203,8 @@
             "project": "fireemu-oracle-idp"
           }
         ],
-        "finalArtifactSha256": "1087af08e80da080438e6326f46bbd84a1f6cee30325e4cc1f923fc3945f32d6",
-        "sourceCommit": "40a1be87d28e7d99dc18e290daea3dde57b0fc8b",
+        "finalArtifactSha256": "ece3f66b1093e69d24ab16fa820994469120fcfb7ddaff22d6a4fc72cff51167",
+        "sourceCommit": "67dbcaeb8d972e48cc7ca1f413008c99a7d2e9f5",
         "comparisonPaths": [
           "spec/compatibility/closure/evidence/AUTH-TENANT-BLOCKING-tenant-comparison.json"
         ],
@@ -233,8 +233,8 @@
             "project": "fireemu-oracle-idp"
           }
         ],
-        "finalArtifactSha256": "1087af08e80da080438e6326f46bbd84a1f6cee30325e4cc1f923fc3945f32d6",
-        "sourceCommit": "40a1be87d28e7d99dc18e290daea3dde57b0fc8b",
+        "finalArtifactSha256": "ece3f66b1093e69d24ab16fa820994469120fcfb7ddaff22d6a4fc72cff51167",
+        "sourceCommit": "67dbcaeb8d972e48cc7ca1f413008c99a7d2e9f5",
         "comparisonPaths": [
           "spec/compatibility/closure/evidence/AUTH-TENANT-BLOCKING-tenant-comparison.json"
         ],
@@ -263,8 +263,8 @@
             "project": "fireemu-oracle-idp"
           }
         ],
-        "finalArtifactSha256": "1087af08e80da080438e6326f46bbd84a1f6cee30325e4cc1f923fc3945f32d6",
-        "sourceCommit": "40a1be87d28e7d99dc18e290daea3dde57b0fc8b",
+        "finalArtifactSha256": "ece3f66b1093e69d24ab16fa820994469120fcfb7ddaff22d6a4fc72cff51167",
+        "sourceCommit": "67dbcaeb8d972e48cc7ca1f413008c99a7d2e9f5",
         "comparisonPaths": [
           "spec/compatibility/closure/evidence/AUTH-TENANT-BLOCKING-tenant-comparison.json"
         ],
@@ -293,8 +293,8 @@
             "project": "fireemu-oracle-idp"
           }
         ],
-        "finalArtifactSha256": "1087af08e80da080438e6326f46bbd84a1f6cee30325e4cc1f923fc3945f32d6",
-        "sourceCommit": "40a1be87d28e7d99dc18e290daea3dde57b0fc8b",
+        "finalArtifactSha256": "ece3f66b1093e69d24ab16fa820994469120fcfb7ddaff22d6a4fc72cff51167",
+        "sourceCommit": "67dbcaeb8d972e48cc7ca1f413008c99a7d2e9f5",
         "comparisonPaths": [
           "spec/compatibility/closure/evidence/AUTH-TENANT-BLOCKING-tenant-comparison.json"
         ],
@@ -323,8 +323,8 @@
             "project": "fireemu-oracle-idp"
           }
         ],
-        "finalArtifactSha256": "1087af08e80da080438e6326f46bbd84a1f6cee30325e4cc1f923fc3945f32d6",
-        "sourceCommit": "40a1be87d28e7d99dc18e290daea3dde57b0fc8b",
+        "finalArtifactSha256": "ece3f66b1093e69d24ab16fa820994469120fcfb7ddaff22d6a4fc72cff51167",
+        "sourceCommit": "67dbcaeb8d972e48cc7ca1f413008c99a7d2e9f5",
         "comparisonPaths": [
           "spec/compatibility/closure/evidence/AUTH-TENANT-BLOCKING-tenant-comparison.json"
         ],
@@ -353,8 +353,8 @@
             "project": "fireemu-oracle-idp"
           }
         ],
-        "finalArtifactSha256": "1087af08e80da080438e6326f46bbd84a1f6cee30325e4cc1f923fc3945f32d6",
-        "sourceCommit": "40a1be87d28e7d99dc18e290daea3dde57b0fc8b",
+        "finalArtifactSha256": "ece3f66b1093e69d24ab16fa820994469120fcfb7ddaff22d6a4fc72cff51167",
+        "sourceCommit": "67dbcaeb8d972e48cc7ca1f413008c99a7d2e9f5",
         "comparisonPaths": [
           "spec/compatibility/closure/evidence/AUTH-TENANT-BLOCKING-tenant-comparison.json"
         ],
@@ -383,8 +383,8 @@
             "project": "fireemu-oracle-idp"
           }
         ],
-        "finalArtifactSha256": "1087af08e80da080438e6326f46bbd84a1f6cee30325e4cc1f923fc3945f32d6",
-        "sourceCommit": "40a1be87d28e7d99dc18e290daea3dde57b0fc8b",
+        "finalArtifactSha256": "ece3f66b1093e69d24ab16fa820994469120fcfb7ddaff22d6a4fc72cff51167",
+        "sourceCommit": "67dbcaeb8d972e48cc7ca1f413008c99a7d2e9f5",
         "comparisonPaths": [
           "spec/compatibility/closure/evidence/AUTH-TENANT-BLOCKING-tenant-comparison.json"
         ],
@@ -413,8 +413,8 @@
             "project": "fireemu-oracle-idp"
           }
         ],
-        "finalArtifactSha256": "1087af08e80da080438e6326f46bbd84a1f6cee30325e4cc1f923fc3945f32d6",
-        "sourceCommit": "40a1be87d28e7d99dc18e290daea3dde57b0fc8b",
+        "finalArtifactSha256": "ece3f66b1093e69d24ab16fa820994469120fcfb7ddaff22d6a4fc72cff51167",
+        "sourceCommit": "67dbcaeb8d972e48cc7ca1f413008c99a7d2e9f5",
         "comparisonPaths": [
           "spec/compatibility/closure/evidence/AUTH-TENANT-BLOCKING-tenant-comparison.json"
         ],
@@ -432,8 +432,8 @@
       "configProjections": [
         "default"
       ],
-      "status": "PRODUCTION_RECORDED",
-      "note": "T12: an OIDC provider configuration created in one tenant is not visible or deletable from another tenant or the project (its content and sign-in are AUTH-FEDERATION, TB4).",
+      "status": "VERIFIED",
+      "note": "T12: an OIDC provider configuration created in one tenant is not visible or deletable from another tenant or the project (its content and sign-in are AUTH-FEDERATION, TB4). createAuthUri for the tenant OIDC provider matches on the round-2 final artifact, with AUTH-FEDERATION integrated.",
       "evidence": {
         "productionRecordings": [
           {
@@ -443,22 +443,14 @@
             "project": "fireemu-oracle-idp"
           }
         ],
-        "finalArtifactSha256": "1087af08e80da080438e6326f46bbd84a1f6cee30325e4cc1f923fc3945f32d6",
-        "sourceCommit": "40a1be87d28e7d99dc18e290daea3dde57b0fc8b",
+        "finalArtifactSha256": "ece3f66b1093e69d24ab16fa820994469120fcfb7ddaff22d6a4fc72cff51167",
+        "sourceCommit": "67dbcaeb8d972e48cc7ca1f413008c99a7d2e9f5",
         "comparisonPaths": [
           "spec/compatibility/closure/evidence/AUTH-TENANT-BLOCKING-tenant-comparison.json"
         ],
         "rows": {
-          "MATCH": 11,
-          "INDETERMINATE": 1
-        },
-        "pendingAfterIntegration": [
-          {
-            "row": "atb/tenant/providers#auth-uri-a",
-            "awaits": "AUTH-FEDERATION",
-            "reason": "createAuthUri for a tenant OIDC provider and identity-provider sign-in are AUTH-FEDERATION scope (TB4); fireemu answers 501 until that lane is integrated, then this row is compared again with the same fixture"
-          }
-        ]
+          "MATCH": 12
+        }
       }
     },
     {
@@ -484,8 +476,8 @@
             "project": "fireemu-oracle-idp"
           }
         ],
-        "finalArtifactSha256": "1087af08e80da080438e6326f46bbd84a1f6cee30325e4cc1f923fc3945f32d6",
-        "sourceCommit": "40a1be87d28e7d99dc18e290daea3dde57b0fc8b",
+        "finalArtifactSha256": "ece3f66b1093e69d24ab16fa820994469120fcfb7ddaff22d6a4fc72cff51167",
+        "sourceCommit": "67dbcaeb8d972e48cc7ca1f413008c99a7d2e9f5",
         "comparisonPaths": [
           "spec/compatibility/closure/evidence/AUTH-TENANT-BLOCKING-blocking-comparison.json"
         ],
@@ -514,8 +506,8 @@
             "project": "fireemu-oracle-idp"
           }
         ],
-        "finalArtifactSha256": "1087af08e80da080438e6326f46bbd84a1f6cee30325e4cc1f923fc3945f32d6",
-        "sourceCommit": "40a1be87d28e7d99dc18e290daea3dde57b0fc8b",
+        "finalArtifactSha256": "ece3f66b1093e69d24ab16fa820994469120fcfb7ddaff22d6a4fc72cff51167",
+        "sourceCommit": "67dbcaeb8d972e48cc7ca1f413008c99a7d2e9f5",
         "comparisonPaths": [
           "spec/compatibility/closure/evidence/AUTH-TENANT-BLOCKING-blocking-comparison.json"
         ],
@@ -544,8 +536,8 @@
             "project": "fireemu-oracle-idp"
           }
         ],
-        "finalArtifactSha256": "1087af08e80da080438e6326f46bbd84a1f6cee30325e4cc1f923fc3945f32d6",
-        "sourceCommit": "40a1be87d28e7d99dc18e290daea3dde57b0fc8b",
+        "finalArtifactSha256": "ece3f66b1093e69d24ab16fa820994469120fcfb7ddaff22d6a4fc72cff51167",
+        "sourceCommit": "67dbcaeb8d972e48cc7ca1f413008c99a7d2e9f5",
         "comparisonPaths": [
           "spec/compatibility/closure/evidence/AUTH-TENANT-BLOCKING-blocking-comparison.json"
         ],
@@ -574,8 +566,8 @@
             "project": "fireemu-oracle-idp"
           }
         ],
-        "finalArtifactSha256": "1087af08e80da080438e6326f46bbd84a1f6cee30325e4cc1f923fc3945f32d6",
-        "sourceCommit": "40a1be87d28e7d99dc18e290daea3dde57b0fc8b",
+        "finalArtifactSha256": "ece3f66b1093e69d24ab16fa820994469120fcfb7ddaff22d6a4fc72cff51167",
+        "sourceCommit": "67dbcaeb8d972e48cc7ca1f413008c99a7d2e9f5",
         "comparisonPaths": [
           "spec/compatibility/closure/evidence/AUTH-TENANT-BLOCKING-blocking-comparison.json"
         ],
@@ -604,8 +596,8 @@
             "project": "fireemu-oracle-idp"
           }
         ],
-        "finalArtifactSha256": "1087af08e80da080438e6326f46bbd84a1f6cee30325e4cc1f923fc3945f32d6",
-        "sourceCommit": "40a1be87d28e7d99dc18e290daea3dde57b0fc8b",
+        "finalArtifactSha256": "ece3f66b1093e69d24ab16fa820994469120fcfb7ddaff22d6a4fc72cff51167",
+        "sourceCommit": "67dbcaeb8d972e48cc7ca1f413008c99a7d2e9f5",
         "comparisonPaths": [
           "spec/compatibility/closure/evidence/AUTH-TENANT-BLOCKING-blocking-comparison.json"
         ],
@@ -634,8 +626,8 @@
             "project": "fireemu-oracle-idp"
           }
         ],
-        "finalArtifactSha256": "1087af08e80da080438e6326f46bbd84a1f6cee30325e4cc1f923fc3945f32d6",
-        "sourceCommit": "40a1be87d28e7d99dc18e290daea3dde57b0fc8b",
+        "finalArtifactSha256": "ece3f66b1093e69d24ab16fa820994469120fcfb7ddaff22d6a4fc72cff51167",
+        "sourceCommit": "67dbcaeb8d972e48cc7ca1f413008c99a7d2e9f5",
         "comparisonPaths": [
           "spec/compatibility/closure/evidence/AUTH-TENANT-BLOCKING-blocking-comparison.json"
         ],
@@ -664,8 +656,8 @@
             "project": "fireemu-oracle-idp"
           }
         ],
-        "finalArtifactSha256": "1087af08e80da080438e6326f46bbd84a1f6cee30325e4cc1f923fc3945f32d6",
-        "sourceCommit": "40a1be87d28e7d99dc18e290daea3dde57b0fc8b",
+        "finalArtifactSha256": "ece3f66b1093e69d24ab16fa820994469120fcfb7ddaff22d6a4fc72cff51167",
+        "sourceCommit": "67dbcaeb8d972e48cc7ca1f413008c99a7d2e9f5",
         "comparisonPaths": [
           "spec/compatibility/closure/evidence/AUTH-TENANT-BLOCKING-blocking-comparison.json"
         ],
@@ -694,8 +686,8 @@
             "project": "fireemu-oracle-idp"
           }
         ],
-        "finalArtifactSha256": "1087af08e80da080438e6326f46bbd84a1f6cee30325e4cc1f923fc3945f32d6",
-        "sourceCommit": "40a1be87d28e7d99dc18e290daea3dde57b0fc8b",
+        "finalArtifactSha256": "ece3f66b1093e69d24ab16fa820994469120fcfb7ddaff22d6a4fc72cff51167",
+        "sourceCommit": "67dbcaeb8d972e48cc7ca1f413008c99a7d2e9f5",
         "comparisonPaths": [
           "spec/compatibility/closure/evidence/AUTH-TENANT-BLOCKING-blocking-comparison.json"
         ],
@@ -725,8 +717,8 @@
             "project": "fireemu-oracle-idp"
           }
         ],
-        "finalArtifactSha256": "1087af08e80da080438e6326f46bbd84a1f6cee30325e4cc1f923fc3945f32d6",
-        "sourceCommit": "40a1be87d28e7d99dc18e290daea3dde57b0fc8b",
+        "finalArtifactSha256": "ece3f66b1093e69d24ab16fa820994469120fcfb7ddaff22d6a4fc72cff51167",
+        "sourceCommit": "67dbcaeb8d972e48cc7ca1f413008c99a7d2e9f5",
         "comparisonPaths": [
           "spec/compatibility/closure/evidence/AUTH-TENANT-BLOCKING-blocking-comparison.json"
         ],
@@ -755,8 +747,8 @@
             "project": "fireemu-oracle-idp"
           }
         ],
-        "finalArtifactSha256": "1087af08e80da080438e6326f46bbd84a1f6cee30325e4cc1f923fc3945f32d6",
-        "sourceCommit": "40a1be87d28e7d99dc18e290daea3dde57b0fc8b",
+        "finalArtifactSha256": "ece3f66b1093e69d24ab16fa820994469120fcfb7ddaff22d6a4fc72cff51167",
+        "sourceCommit": "67dbcaeb8d972e48cc7ca1f413008c99a7d2e9f5",
         "comparisonPaths": [
           "spec/compatibility/closure/evidence/AUTH-TENANT-BLOCKING-blocking-comparison.json"
         ],
@@ -785,8 +777,8 @@
             "project": "fireemu-oracle-idp"
           }
         ],
-        "finalArtifactSha256": "1087af08e80da080438e6326f46bbd84a1f6cee30325e4cc1f923fc3945f32d6",
-        "sourceCommit": "40a1be87d28e7d99dc18e290daea3dde57b0fc8b",
+        "finalArtifactSha256": "ece3f66b1093e69d24ab16fa820994469120fcfb7ddaff22d6a4fc72cff51167",
+        "sourceCommit": "67dbcaeb8d972e48cc7ca1f413008c99a7d2e9f5",
         "comparisonPaths": [
           "spec/compatibility/closure/evidence/AUTH-TENANT-BLOCKING-blocking-comparison.json"
         ],
@@ -807,8 +799,8 @@
       "status": "VERIFIED",
       "note": "L1 (local only; production has no session reset): a project reset, a snapshot restore and its rollback, and the resource report include the session project's tenants (sessions.rs project_reset_removes_tenant_state_and_invalidates_held_credentials; snapshots.rs a_restore_rolls_the_scopes_tenant_namespaces_back_to_the_capture and a_rollback_puts_the_tenant_namespaces_back_as_they_were_before_the_restore; resources.rs the_auth_report_counts_tenant_users_and_tenants; core-auth tenants.rs a_tenant_restore_with_a_poisoned_store_changes_nothing).",
       "evidence": {
-        "finalArtifactSha256": "1087af08e80da080438e6326f46bbd84a1f6cee30325e4cc1f923fc3945f32d6",
-        "sourceCommit": "40a1be87d28e7d99dc18e290daea3dde57b0fc8b",
+        "finalArtifactSha256": "ece3f66b1093e69d24ab16fa820994469120fcfb7ddaff22d6a4fc72cff51167",
+        "sourceCommit": "67dbcaeb8d972e48cc7ca1f413008c99a7d2e9f5",
         "localEvidence": {
           "fixedIn": [
             "293a3a5e7"
@@ -850,8 +842,8 @@
       "status": "VERIFIED",
       "note": "L2 (local only): requests running while a blocking function runs do not make a sign-in fail, and the emulator profile adds no refusal of fireemu's own around blocking functions.",
       "evidence": {
-        "finalArtifactSha256": "1087af08e80da080438e6326f46bbd84a1f6cee30325e4cc1f923fc3945f32d6",
-        "sourceCommit": "40a1be87d28e7d99dc18e290daea3dde57b0fc8b",
+        "finalArtifactSha256": "ece3f66b1093e69d24ab16fa820994469120fcfb7ddaff22d6a4fc72cff51167",
+        "sourceCommit": "67dbcaeb8d972e48cc7ca1f413008c99a7d2e9f5",
         "localEvidence": {
           "fixedIn": [
             "c802ff26d",
@@ -936,8 +928,8 @@
       "configProjections": [
         "default"
       ],
-      "status": "PRODUCTION_RECORDED",
-      "note": "This parent's comparison (the tenant and the blocking suites) and, as regressions, every AUTH-MFA, AUTH-ACTION, AUTH-CREDENTIAL and AUTH-ACCOUNT row, on one artifact: the round-2 integrated artifact. Every row matches, including auth-account/admin/custom-attributes#invalid-json (TB12, the pre-integration message-text divergence, is removed) and atb/blocking/timeout#sign-in-slow, except atb/tenant/providers#auth-uri-a, which waits for AUTH-FEDERATION (pendingAfterIntegration). The workspace tests are run on this artifact.",
+      "status": "VERIFIED",
+      "note": "This parent's comparison (the tenant and the blocking suites) and, as regressions, every AUTH-MFA, AUTH-ACTION, AUTH-CREDENTIAL and AUTH-ACCOUNT row, on one artifact: the round-2 final artifact. Every row matches, auth-account/admin/custom-attributes#invalid-json, atb/blocking/timeout#sign-in-slow and atb/tenant/providers#auth-uri-a included. The workspace tests are run on this artifact.",
       "evidence": {
         "productionRecordings": [
           {
@@ -953,8 +945,8 @@
             "project": "fireemu-oracle-idp"
           }
         ],
-        "finalArtifactSha256": "1087af08e80da080438e6326f46bbd84a1f6cee30325e4cc1f923fc3945f32d6",
-        "sourceCommit": "40a1be87d28e7d99dc18e290daea3dde57b0fc8b",
+        "finalArtifactSha256": "ece3f66b1093e69d24ab16fa820994469120fcfb7ddaff22d6a4fc72cff51167",
+        "sourceCommit": "67dbcaeb8d972e48cc7ca1f413008c99a7d2e9f5",
         "comparisonPaths": [
           "spec/compatibility/closure/evidence/AUTH-TENANT-BLOCKING-tenant-comparison.json",
           "spec/compatibility/closure/evidence/AUTH-TENANT-BLOCKING-blocking-comparison.json",
@@ -964,20 +956,12 @@
           "spec/compatibility/closure/evidence/AUTH-TENANT-BLOCKING-mfa-regression.json"
         ],
         "rows": {
-          "MATCH": 1961,
+          "MATCH": 1962,
           "MATCH_NONDETERMINISTIC": 5,
           "REOBSERVED_MATCH": 2,
-          "INDETERMINATE": 1,
           "MATCH_TIMING_DEPENDENT": 1
         },
-        "pendingAfterIntegration": [
-          {
-            "row": "atb/tenant/providers#auth-uri-a",
-            "awaits": "AUTH-FEDERATION",
-            "reason": "createAuthUri for a tenant OIDC provider and identity-provider sign-in are AUTH-FEDERATION scope (TB4); fireemu answers 501 until that lane is integrated, then this row is compared again with the same fixture"
-          }
-        ],
-        "buildTree": "clean (git status --porcelain empty at build, source 40a1be87d on integration/round2-2026-09-29); the reference artifact is the private copy in docs.local/runs/auth-tenant-blocking-integrated-20260929/fireemu (the sha256 above), with its source commit, fmt and clippy logs (command and exit code) and check logs beside it. The comparisons run that copy with the checkout runner named explicitly (FIREEMU_RUNNER_NODE), refusing a blocking comparison unless every fixture function was served; this parent's comparisons record the runner digest and the clean source tree",
+        "buildTree": "the round-2 final artifact, built by the integration from integration/round2-2026-09-29 e6a61bd59 (the sha256 above); the comparisons run it from work/atb-final 67dbcaeb8 (e6a61bd59 plus the harness configuration for atb/tenant/providers#auth-uri-a) on a clean tree, with the checkout runner named explicitly (FIREEMU_RUNNER_NODE), refusing a blocking comparison unless every fixture function was served; this parent's comparisons record the runner digest and the clean source tree. The copy, its sha256 and the check logs are in docs.local/runs/auth-tenant-blocking-final-round2-20260929/ (private)",
         "mutation": "docs.local/runs/auth-tenant-blocking-final-20260928/mutants/ (private), every cargo-mutants output of the lane since the recording: the fix commits b93c6bdda (7: 6 caught, 1 unviable) and bace0a3f1 (8 caught); the beforeSendEmail, blockingFunctions and review-fix sources f519e1cb8..cac19bae1 (139: 105 caught, 15 unviable, 2 missed and killed by tests in fe9e2dbb3, 17 timed out under load and run again alone: 19 run, 12 caught, 7 missed, of which 4 were killed by tests or simplified in cac19bae1, 1 (an updateTime condition of validate_project_config_payload) is caught by the_emulator_profile_refuses_an_update_time_before_the_bridge_sees_it (validate-update-time: every mutant of that line, 6 caught) and 2 are equivalent); fe9e2dbb3 (6: 5 caught, 1 unviable); and, for the event, failure and hook-selection fixes e957deaff, ed615e82c and debc9052a, every mutant of their functions (blocking_auth_user_record, blocking_auth_claims, unsigned_jwt, epoch_millis, blocking_auth_wait, blocking_auth_elapsed, BlockingFunctionFailure, the runs_hooks lines) selected by a synthetic diff (44: 37 caught, 7 unviable). The runner's JavaScript (e957deaff, 989061a2e) was mutated by hand: 34 mutations, all caught after 5 edge tests were added (runner-js-manual.json); and, for the closure re-review, every mutant of blocking_account, account_providers and invoke_matching_namespace, and of the lines c802ff26d and e53ba276c changed, selected by a synthetic diff at 9eb4f2300 on a clean tree (s1p, 58: 45 caught, 10 unviable, 3 missed). The additional_user_info survivor of an earlier run that an edit made during the run contaminated (kept as s1p-contaminated-aborted) is caught at the clean tree by the test of 923b06b87. The 3 missed (blocking_account returning no providers or factors, the cleared-account condition of the emulator profile's commit, and a provider condition of account_providers) were killed by tests of 785a9f465: s1p-recheck ran the 9 mutants of their lines again (8 caught, 1 missed), and s1p-account-providers ran every mutant of account_providers after one more test (5 caught). Those tests ran on a tree with uncommitted test edits; committed-recheck ran the mutants of blocking_account, account_providers, the updateTime line of validate_project_config_payload and the cleared-reservation condition again at 4745e6d4e on a clean tree (17: 13 caught, 4 unviable). For the second closure re-review, s1pp ran every mutant of the source lines 55c61b18b and 5e7372e67 changed, with the tests of fireemu-core-auth and fireemu-adapter-http (14: 10 caught, 2 unviable, 1 timeout where deleting a negation makes the reservation loop endless, 1 missed); the missed one, in a condition whose revision guard could never decide it, is gone in 4745e6d4e, whose negation committed-recheck catches. Deleting the use_reserved_generated_local_id call (use_generated_local_id_reserved_before_reset since 665dd7595), a statement cargo-mutants does not delete, was applied by hand and is caught by the_emulator_profile_creates_a_cleared_idp_account_with_the_uid_its_function_saw"
       }
     },
@@ -991,10 +975,10 @@
         "default"
       ],
       "status": "PENDING_REVIEW",
-      "note": "Independent closure and safety review of the final artifact. The review of the pre-integration artifact is approved (closureReview, 2026-09-28), and the changes after it are reviewed with the round-2 integration. This condition covers every row of the parent (recipe atb), so it becomes VERIFIED with provider-isolation and final-artifact-regression, when atb/tenant/providers#auth-uri-a matches after AUTH-FEDERATION is integrated.",
+      "note": "Independent closure and safety review of the final artifact. The review of the pre-integration artifact is approved (closureReview, 2026-09-28); every row matches on the round-2 final artifact. It becomes VERIFIED when the round-2 integration review, which covers the changes after the approved commit, approves.",
       "evidence": {
-        "finalArtifactSha256": "1087af08e80da080438e6326f46bbd84a1f6cee30325e4cc1f923fc3945f32d6",
-        "sourceCommit": "40a1be87d28e7d99dc18e290daea3dde57b0fc8b",
+        "finalArtifactSha256": "ece3f66b1093e69d24ab16fa820994469120fcfb7ddaff22d6a4fc72cff51167",
+        "sourceCommit": "67dbcaeb8d972e48cc7ca1f413008c99a7d2e9f5",
         "reviewReport": "docs.local/reviews/2026-09-28-auth-tenant-blocking-closure-rereview3.md",
         "packetSha256": "893df19c3f1f28be612f4382105e57065d604243485e431bd220f35f686d5d68"
       }

@@ -1,13 +1,12 @@
 {
   "kind": "auth-tenant-blocking-comparison-v1",
-  "artifactSha256": "1087af08e80da080438e6326f46bbd84a1f6cee30325e4cc1f923fc3945f32d6",
+  "artifactSha256": "ece3f66b1093e69d24ab16fa820994469120fcfb7ddaff22d6a4fc72cff51167",
   "fixtureSha256": "99679371f97e17fb12912bb54513424a80c502b19ba40b0f5c2aa4d7ed9a639b",
   "runnerSha256": "874e01c9322193f689e99568089baf0bafaacb8734c3945f8187b9fa7e8a71bd",
-  "sourceCommit": "40a1be87d28e7d99dc18e290daea3dde57b0fc8b",
+  "sourceCommit": "67dbcaeb8d972e48cc7ca1f413008c99a7d2e9f5",
   "treeClean": true,
   "summary": {
-    "MATCH": 232,
-    "INDETERMINATE": 1
+    "MATCH": 233
   },
   "rows": [
     {
@@ -924,7 +923,7 @@
     },
     {
       "row": "atb/tenant/providers#auth-uri-a",
-      "status": "INDETERMINATE"
+      "status": "MATCH"
     },
     {
       "row": "atb/tenant/providers#auth-uri-b",

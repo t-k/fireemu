@@ -777,6 +777,12 @@ fn an_action_link_naming_a_tenant_makes_it() {
     ));
     assert!(registry.tenant_store("demo-app", "t-link").is_some());
     let _ = link(&format!("mode=verifyEmail&apiKey={KEY}&tenantId=t-no-code"));
+    let _ = link("mode=verifyEmail&oobCode=nope&apiKey=&tenantId=t-empty-key");
+    assert!(registry.tenant_store("demo-app", "t-empty-key").is_none());
+    let _ = link(&format!(
+        "mode=verifyEmail&oobCode=&apiKey={KEY}&tenantId=t-empty-code"
+    ));
+    assert!(registry.tenant_store("demo-app", "t-empty-code").is_none());
     assert!(registry.tenant_store("demo-app", "t-no-code").is_none());
 }
 
@@ -836,4 +842,21 @@ fn a_tenant_name_with_a_slash_makes_no_tenant() {
         no_tenant(&registry, &["demo-app"], &[name], name);
     }
     assert_eq!(tenant_names(&state, "demo-app"), Vec::<String>::new());
+}
+
+/// `tenants:create` makes the tenant it creates and no tenant its body names (the official
+/// emulator makes the named one and then refuses).
+#[test]
+fn tenants_create_makes_no_tenant_the_body_names() {
+    let (state, registry) = emulator();
+    let (status, created) = admin(
+        &state,
+        "POST",
+        &format!("{V2}/projects/demo-app/tenants"),
+        &json!({"displayName": "explicit", "tenantId": "named-in-body"}),
+    );
+    // Fireemu's own answer to a body tenant on the create route, unchanged.
+    assert_eq!(status, 400, "{created}");
+    assert!(registry.tenant_store("demo-app", "named-in-body").is_none());
+    assert!(tenant_names(&state, "demo-app").is_empty());
 }

@@ -1305,7 +1305,7 @@
               "precision": "documented-divergence"
             },
             {
-              "behaviour": "the Admin config stores multiTenant.allowTenants in both profiles and reads it back; while it is off, as it is for a new production project, the strict profile refuses tenant management with 400 INVALID_PROJECT_ID and a request addressed to a tenant with 404 TENANT_NOT_FOUND (v2/passwordPolicy: INVALID_TENANT_ID). Production's refusal of a tenant list is observed (FS-RULES sandbox recording 2026-09-25); the other answers are fireemu's reading until the AUTH-TENANT-BLOCKING recording (atb/tenant/switch-off). The emulator profile never refuses, as the official emulator has no switch",
+              "behaviour": "the Admin config stores multiTenant.allowTenants in both profiles and reads it back; while it is off, as it is for a new production project, the strict profile refuses tenant management with 400 INVALID_PROJECT_ID and a request addressed to a tenant with 400 INVALID_TENANT_ID, as production answers them (FS-RULES sandbox recording 2026-09-25, and AUTH-TENANT-BLOCKING sandbox recording 2026-09-27, atb/tenant/switch-off: the config, a tenant list, get and create, and a sign-up and an Admin lookup in a tenant that does not exist, all matching). The emulator profile never refuses, as the official emulator has no switch",
               "precision": "documented-divergence"
             },
             {

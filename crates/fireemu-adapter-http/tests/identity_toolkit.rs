@@ -13571,10 +13571,9 @@ fn tenant_client_permissions_and_privacy_are_namespaced_and_atomic_with_password
         updated.1["client"]["permissions"]["disabledUserDeletion"],
         true
     );
-    assert_eq!(
-        updated.1["emailPrivacyConfig"]["enableImprovedEmailPrivacy"],
-        true
-    );
+    // The emulator profile's tenant keeps the project's email privacy (off here), as the
+    // official emulator's does; the write shows as written (round-2 integration review M1).
+    assert_eq!(updated.1["emailPrivacyConfig"], json!({}));
     assert_eq!(
         updated.1["passwordPolicyConfig"]["passwordPolicyVersions"][0]["customStrengthOptions"]
             ["minPasswordLength"],
@@ -13594,10 +13593,7 @@ fn tenant_client_permissions_and_privacy_are_namespaced_and_atomic_with_password
     let after = admin(&s, "GET", path, &Value::Null);
     assert_eq!(after.0, 200, "{}", after.1);
     assert_eq!(after.1["client"]["permissions"]["disabledUserSignup"], true);
-    assert_eq!(
-        after.1["emailPrivacyConfig"]["enableImprovedEmailPrivacy"],
-        true
-    );
+    assert_eq!(after.1["emailPrivacyConfig"], json!({}));
     assert_eq!(
         after.1["passwordPolicyConfig"]["passwordPolicyVersions"][0]["customStrengthOptions"]
             ["minPasswordLength"],
@@ -13940,10 +13936,9 @@ fn tenant_create_rejects_malformed_settings_before_publishing_and_reads_back_sup
         created.body["client"]["permissions"]["disabledUserSignup"],
         true
     );
-    assert_eq!(
-        created.body["emailPrivacyConfig"]["enableImprovedEmailPrivacy"],
-        true
-    );
+    // The emulator profile's tenant keeps the project's email privacy (off here), as the
+    // official emulator's does; the write shows as written (round-2 integration review M1).
+    assert_eq!(created.body["emailPrivacyConfig"], json!({}));
     assert_eq!(
         created.body["passwordPolicyConfig"]["passwordPolicyVersions"][0]["customStrengthOptions"]
             ["minPasswordLength"],
@@ -21687,6 +21682,58 @@ fn the_emulator_config_route_answers_the_official_emulator_document() {
             );
             assert_eq!(status, 200, "{signed_up}");
         }
+    }
+}
+
+/// The emulator profile refuses a JWT custom token without the tenant's claim, exchanged in a
+/// tenant, as the official emulator does: 400 `TENANT_ID_MISMATCH`, with configured signers or
+/// without (firebase-tools 15.28.2, `operations.js` `signInWithCustomToken`, lines 1020-1022).
+/// Production's internal error for it stays strict's (round-2 integration review S1, 2026-09-29).
+#[test]
+fn the_emulator_profile_refuses_a_claimless_custom_token_in_a_tenant_as_the_official_emulator() {
+    use fireemu_adapter_http::identity_toolkit::CUSTOM_TOKEN_AUDIENCE;
+    let now = 1_788_004_860;
+    let payload = |tenant: Option<&str>| {
+        let mut payload = json!({"aud": CUSTOM_TOKEN_AUDIENCE, "iss": TEST_SIGNER,
+            "sub": TEST_SIGNER, "uid": "ct", "iat": now, "exp": now + 3600});
+        if let Some(tenant) = tenant {
+            payload["tenant_id"] = json!(tenant);
+        }
+        payload
+    };
+    let signed = |tenant: Option<&str>| signed_payload(test_signer_key(), &payload(tenant));
+    let unsigned = |tenant: Option<&str>| custom_token_from_payload(&payload(tenant));
+    let trusted = strict_state_with_signer();
+    let with_signers = with_registry(AuthState {
+        custom_token_trust: trusted.custom_token_trust.clone(),
+        ..state()
+    });
+    let without_signers = with_registry(state());
+    for (label, s, token) in [
+        (
+            "signers",
+            &with_signers,
+            &signed as &dyn Fn(Option<&str>) -> String,
+        ),
+        ("no signers", &without_signers, &unsigned),
+    ] {
+        s.registry
+            .as_ref()
+            .unwrap()
+            .ensure_tenant("demo-app", "tenant-a")
+            .unwrap();
+        let exchange = |token: String| {
+            post(
+                s,
+                &format!("{V1}/accounts:signInWithCustomToken"),
+                &json!({"token": token, "tenantId": "tenant-a", "returnSecureToken": true}),
+            )
+        };
+        let (status, body) = exchange(token(None));
+        assert_eq!(status, 400, "{label}: {body}");
+        assert_eq!(body["error"]["message"], "TENANT_ID_MISMATCH", "{label}");
+        let (status, body) = exchange(token(Some("tenant-a")));
+        assert_eq!(status, 200, "{label}: {body}");
     }
 }
 

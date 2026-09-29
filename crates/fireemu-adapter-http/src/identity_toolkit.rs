@@ -7773,6 +7773,18 @@ fn tenant_client_config_patch(body: &Value) -> fireemu_core_auth::store::TenantM
     }
 }
 
+/// The emulator profile's tenant keeps no setting of its own for duplicate emails and improved
+/// email privacy: it reads the project's, live, as the official emulator's tenant does
+/// (firebase-tools 15.28.2 `TenantProjectState`, whose `oneAccountPerEmail` and
+/// `enableImprovedEmailPrivacy` return the parent project's). The strict profile's tenant keeps
+/// its own, as production's does (round-2 integration review M1, 2026-09-29).
+fn follow_the_project_settings_the_official_emulator_shares(
+    patch: &mut fireemu_core_auth::store::TenantMetadataPatch,
+) {
+    patch.allow_duplicate_emails = None;
+    patch.enable_improved_email_privacy = None;
+}
+
 /// Every writable member of a tenant: what an update without a mask replaces.
 const TENANT_TOP_LEVEL_MEMBERS: &[&str] = &[
     "displayName",
@@ -8014,15 +8026,22 @@ fn tenant_management(
                     now(state).to_rfc3339().ok(),
                 );
             }
-            // A tenant takes none of the project's settings, at creation or later (AUTH-TENANT-
-            // BLOCKING recording 2026-09-27, inheritance program): every setting a tenant could
-            // inherit is written, as sent or off.
+            // A tenant's clients obey the tenant's own permissions, which start off. The strict
+            // profile's tenant takes none of the project's settings, at creation or later
+            // (AUTH-TENANT-BLOCKING recording 2026-09-27, inheritance program): every setting a
+            // tenant could inherit is written, as sent or off. The emulator profile's tenant
+            // reads the project's duplicate-email and email privacy settings, as the official
+            // emulator's does.
             let mut patch = tenant_client_config_patch(&parsed);
             patch.disabled_user_signup = Some(patch.disabled_user_signup.unwrap_or(false));
             patch.disabled_user_deletion = Some(patch.disabled_user_deletion.unwrap_or(false));
-            patch.enable_improved_email_privacy =
-                Some(patch.enable_improved_email_privacy.unwrap_or(false));
-            patch.allow_duplicate_emails = Some(false);
+            if state.stateless_refresh_tokens {
+                follow_the_project_settings_the_official_emulator_shares(&mut patch);
+            } else {
+                patch.enable_improved_email_privacy =
+                    Some(patch.enable_improved_email_privacy.unwrap_or(false));
+                patch.allow_duplicate_emails = Some(false);
+            }
             let created = if state.stateless_refresh_tokens {
                 registry.create_tenant_with_password_policy(
                     project,
@@ -8068,6 +8087,10 @@ fn tenant_management(
                 None | Some("") => None,
                 Some(token) => match tenant_page_token_id(token) {
                     Some(id) => Some(id),
+                    // The emulator profile reads any other token as the official emulator's:
+                    // the last tenant id listed (firebase-tools 15.28.2 `listTenants`; round-2
+                    // integration review S2, 2026-09-29).
+                    None if state.stateless_refresh_tokens => Some(token.to_owned()),
                     // A token fireemu did not issue lists nothing (manage#list-bad-token).
                     None => {
                         return JsonResponse {
@@ -8219,7 +8242,10 @@ fn tenant_management(
                     now(state).to_rfc3339().ok(),
                 );
             }
-            let patch = tenant_patch_from_fields(&parsed, &fields);
+            let mut patch = tenant_patch_from_fields(&parsed, &fields);
+            if state.stateless_refresh_tokens {
+                follow_the_project_settings_the_official_emulator_shares(&mut patch);
+            }
             let updated = if state.stateless_refresh_tokens {
                 registry.patch_tenant_with_password_policy(project, tenant, patch, password_policy)
             } else {
@@ -9104,7 +9130,10 @@ fn sign_in_with_custom_token(
     }
     // Production (strict): a claim other than the named tenant is refused with its text, and
     // a token without a claim exchanged in a tenant is its internal error (AUTH-TENANT-BLOCKING
-    // recording 2026-09-27, custom-token program).
+    // recording 2026-09-27, custom-token program). The emulator profile, with signers or without,
+    // refuses a JWT without the tenant's claim as the official emulator does, with
+    // TENANT_ID_MISMATCH (firebase-tools 15.28.2 `signInWithCustomToken`; round-2 integration
+    // review S1, 2026-09-29).
     if let Some(tenant_id) = payload.get("tenant_id") {
         let Some(tenant_id) = tenant_id.as_str() else {
             return error(400, "INVALID_CUSTOM_TOKEN : tenant_id must be a string");
@@ -9119,8 +9148,13 @@ fn sign_in_with_custom_token(
                 },
             );
         }
-    } else if production_rules && store.tenant_id().is_some() {
-        return backend_internal_error();
+    } else if store.tenant_id().is_some() {
+        if reject_expired {
+            return backend_internal_error();
+        }
+        if jwt {
+            return error(400, "TENANT_ID_MISMATCH");
+        }
     }
     let uid = match payload.get("uid").or_else(|| payload.get("user_id")) {
         Some(JsonValue::String(s)) => Some(s.clone()),

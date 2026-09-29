@@ -3,10 +3,16 @@ import { captureSecretForms } from "./production-capture-body.mjs";
 import { createProductionSecretIndex } from "./production-secret-index.mjs";
 
 const registries = new WeakSet();
+const memberships = new WeakMap();
 const unavailable = () => new Error("SECRET_REGISTRY_UNAVAILABLE");
 
 /** A production capture must use the original registry, never a copied public method set. */
 export const isProductionSecretRegistry = (registry) => registries.has(registry);
+export function productionSecretRegistryHasValue(registry, value) {
+  if (typeof value !== "string" || !value || value.length > 8192 || !value.isWellFormed())
+    return false;
+  return memberships.get(registry)?.(value) ?? false;
+}
 
 /** Pure prototype: the approved runtime must separately pin its tested count, memory and work profile. */
 export function createProductionSecretRegistry(supplied) {
@@ -94,5 +100,13 @@ export function createProductionSecretRegistry(supplied) {
     },
   });
   registries.add(registry);
+  memberships.set(registry, (value) => {
+    try {
+      ready();
+      return values.has(value);
+    } catch {
+      return false;
+    }
+  });
   return registry;
 }

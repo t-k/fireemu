@@ -1,5 +1,11 @@
 import { createHash } from "node:crypto";
 import { MAX_RESPONSE_BODY_BYTES } from "./wire-limits.mjs";
+import { isProductionSecretScan } from "./production-secret-index.mjs";
+import {
+  copyProductionCaptureBody,
+  copyProductionCaptureRecord,
+  copyProductionCaptureArray,
+} from "./production-capture-input.mjs";
 
 const digest = (value) => createHash("sha256").update(value).digest("hex");
 export const captureStringIsWellFormed = (value) => Buffer.from(value).toString("utf8") === value;
@@ -260,7 +266,7 @@ function safeStorageUrl(value, expectedBucket, names, unsafe) {
 }
 
 /** Preserve nonsecret Storage bytes and fixed capability structure; unknown shapes retain only hashes. */
-export function sanitizeStorageCaptureBody(
+function captureStorageBody(
   bytes,
   {
     knownSecrets = [],
@@ -270,9 +276,12 @@ export function sanitizeStorageCaptureBody(
     bodyKind = "json",
     expectedObjectNames = [],
     expectedBucket,
+    secretScan,
   } = {},
+  coverageOnly = false,
 ) {
   if (
+    (secretScan !== undefined && !isProductionSecretScan(secretScan)) ||
     !Buffer.isBuffer(bytes) ||
     bytes.length > MAX_RESPONSE_BODY_BYTES ||
     [knownSecrets, contextSecrets].some(
@@ -305,7 +314,10 @@ export function sanitizeStorageCaptureBody(
   };
   if (!complete) return base;
   const secretForms = [...knownSecrets, ...contextSecrets].flatMap(captureSecretForms);
-  const unsafe = (text) => CREDENTIAL_FORM.test(text) || captureHasSecretCopy(text, secretForms);
+  const unsafe = (text) =>
+    !coverageOnly &&
+    (CREDENTIAL_FORM.test(text) ||
+      (secretScan ? secretScan.hasSecretCopy(text) : captureHasSecretCopy(text, secretForms)));
   if (bytes.length === 0 && bodyKind === "json")
     return { ...base, mode: "RAW_BODY", body: Buffer.from(bytes) };
   if (
@@ -469,4 +481,51 @@ export function sanitizeStorageCaptureBody(
   } catch {
     return base;
   }
+}
+
+/** Schema coverage is independent of whether a known secret copy forces body commitment. */
+export function storageCaptureBodyIsCovered(bytes, options = {}) {
+  try {
+    return (
+      captureStorageBody(copyProductionCaptureBody(bytes), bodyOptions(options), true).mode !==
+      "COMMITMENT_ONLY"
+    );
+  } catch {
+    return false;
+  }
+}
+
+/** Preserve the established persistence shape for local and production consumers. */
+export function sanitizeStorageCaptureBody(bytes, options = {}) {
+  try {
+    return captureStorageBody(copyProductionCaptureBody(bytes), bodyOptions(options));
+  } catch {
+    throw new Error("invalid capture body configuration");
+  }
+}
+
+function bodyOptions(options) {
+  const copy = copyProductionCaptureRecord(options, [
+    "knownSecrets",
+    "contextSecrets",
+    "approvedBodySha256",
+    "complete",
+    "bodyKind",
+    "expectedObjectNames",
+    "expectedBucket",
+    "secretScan",
+  ]);
+  for (const key of [
+    "knownSecrets",
+    "contextSecrets",
+    "approvedBodySha256",
+    "expectedObjectNames",
+  ]) {
+    if (copy[key] !== undefined)
+      copy[key] = copyProductionCaptureArray(
+        copy[key],
+        key === "expectedObjectNames" ? 16384 : key === "approvedBodySha256" ? 65536 : 64,
+      );
+  }
+  return copy;
 }

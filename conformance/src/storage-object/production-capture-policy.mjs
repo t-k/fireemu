@@ -1,4 +1,16 @@
 import { createHash } from "node:crypto";
+import { types } from "node:util";
+import {
+  isProductionSecretRegistry,
+  productionSecretRegistryHasValue,
+} from "./production-secret-registry.mjs";
+import { discoverProductionCaptureSecrets } from "./production-secret-discovery.mjs";
+import { MAX_RESPONSE_BODY_BYTES } from "./wire-limits.mjs";
+import {
+  isProductionCaptureProfile,
+  productionCaptureIsCovered,
+  approvedProductionCaptureBodySha256,
+} from "./production-capture-coverage.mjs";
 import {
   sanitizeStorageCaptureBody,
   parseCaptureJsonSpans,
@@ -104,6 +116,45 @@ const PUBLIC_QUERY = new Set([
   "maxBytesRewrittenPerCall",
 ]);
 const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
+const byteLength = Object.getOwnPropertyDescriptor(
+  Object.getPrototypeOf(Uint8Array.prototype),
+  "byteLength",
+).get;
+function originalBodyCopy(body) {
+  if (
+    types.isProxy(body) ||
+    !Buffer.isBuffer(body) ||
+    Object.getPrototypeOf(body) !== Buffer.prototype
+  )
+    throw new Error();
+  const length = byteLength.call(body);
+  if (length > MAX_RESPONSE_BODY_BYTES) throw new Error();
+  const copy = Buffer.alloc(length);
+  Uint8Array.prototype.set.call(copy, body);
+  return copy;
+}
+function unavailableTaskCapture(body, value) {
+  const copy = originalBodyCopy(body);
+  if (typeof value !== "string") throw new Error();
+  const url = new URL(value);
+  return {
+    originalByteLength: copy.length,
+    originalSha256: digest(copy),
+    mode: "COMMITMENT_ONLY",
+    body: null,
+    replacedFields: [],
+    url: {
+      origin: ORIGINS.has(url.origin) ? url.origin : null,
+      pathname: null,
+      query: null,
+      original: commitment(value),
+    },
+    headers: [],
+    replacedHeaders: [],
+    observation: null,
+    taskSecretStatus: "UNAVAILABLE",
+  };
+}
 const commitment = (value) => {
   const bytes = Buffer.isBuffer(value)
     ? value
@@ -112,6 +163,57 @@ const commitment = (value) => {
 };
 const CREDENTIAL_FORM =
   /1\/\/|GOCSPX-|AMf-v|AIza[A-Za-z0-9_-]{20,}|eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+|(?:Bearer|Firebase) [A-Za-z0-9._~+/-]+/;
+
+function requireRegisteredCredentials(registry, { body, bodyKind, headers, url, direction }) {
+  const check = (value) => {
+    if (!CREDENTIAL_FORM.test(value)) return;
+    const tokens = [
+      ...value.matchAll(
+        /1\/\/[A-Za-z0-9_-]+|GOCSPX-[A-Za-z0-9_-]+|AMf-v[A-Za-z0-9_-]+|AIza[A-Za-z0-9_-]{20,}|eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+|(?:Bearer|Firebase) [A-Za-z0-9._~+/-]+/g,
+      ),
+    ];
+    if (!tokens.length) throw new Error();
+    for (const [matched] of tokens) {
+      const token = matched.replace(/^(?:Bearer|Firebase) /, "");
+      if (!productionSecretRegistryHasValue(registry, token)) throw new Error();
+    }
+  };
+  const parsedUrl = new URL(url);
+  for (const [key, value] of parsedUrl.searchParams) {
+    check(key);
+    check(value);
+  }
+  for (const [name, value] of headers) {
+    check(name);
+    check(value);
+  }
+  if (body.length && bodyKind === "json") {
+    const value = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(body);
+    if (value === "OK") return;
+    if (typedSchema(parsedUrl, direction)?.form) {
+      for (const [key, child] of strictPairs(value)) {
+        check(key);
+        check(child);
+      }
+      return;
+    }
+    const walk = (node) => {
+      if (node.type === "string") {
+        check(node.value);
+        return;
+      }
+      if (node.type === "array") {
+        for (const child of node.entries) walk(child);
+      } else if (node.type === "object") {
+        for (const [key, child] of node.entries) {
+          check(key);
+          walk(child);
+        }
+      }
+    };
+    walk(parseCaptureJsonSpans(value));
+  }
+}
 
 function strictPairs(encoded) {
   if (!encoded) return [];
@@ -347,8 +449,56 @@ export function sanitizeProductionCapture({
   expectedBucket,
   expectedEmails = [],
   bodyKind = "json",
+  secretRegistry,
+  captureProfile,
+  status = null,
 }) {
   try {
+    let secretScan;
+    if (secretRegistry !== undefined) {
+      if (
+        !isProductionSecretRegistry(secretRegistry) ||
+        knownSecrets.length !== 0 ||
+        approvedBodySha256.length !== 0
+      )
+        throw new Error("invalid task registry");
+      const discovered = discoverProductionCaptureSecrets(secretRegistry, {
+        url: value,
+        direction,
+        headers,
+        body,
+        complete,
+        bodyKind,
+      });
+      if (!discovered.available) return unavailableTaskCapture(body, value);
+      body = originalBodyCopy(body);
+      if (
+        !isProductionCaptureProfile(captureProfile) ||
+        !productionCaptureIsCovered(captureProfile, {
+          url: value,
+          direction,
+          status,
+          complete,
+          headers,
+          body,
+          bodyKind,
+          expectedObjectNames,
+          expectedBucket,
+        })
+      ) {
+        secretRegistry.close();
+        return unavailableTaskCapture(body, value);
+      }
+      secretScan = secretRegistry.openScan();
+      approvedBodySha256 = approvedProductionCaptureBodySha256(captureProfile, direction, body);
+      requireRegisteredCredentials(secretRegistry, {
+        body,
+        bodyKind,
+        headers,
+        url: value,
+        direction,
+      });
+    }
     if (
       typeof value !== "string" ||
       !captureStringIsWellFormed(value) ||
@@ -418,9 +568,16 @@ export function sanitizeProductionCapture({
       expectedObjectNames,
       expectedBucket,
       bodyKind,
+      secretScan,
     });
+    if (secretRegistry?.snapshot().failed) {
+      secretRegistry.close();
+      return unavailableTaskCapture(body, value);
+    }
     const forms = [...knownSecrets, ...contextSecrets].flatMap(captureSecretForms);
-    const unsafe = (text) => CREDENTIAL_FORM.test(text) || captureHasSecretCopy(text, forms);
+    const unsafe = (text) =>
+      CREDENTIAL_FORM.test(text) ||
+      (secretScan ? secretScan.hasSecretCopy(text) : captureHasSecretCopy(text, forms));
     let path = url.pathname;
     try {
       if (
@@ -471,6 +628,14 @@ export function sanitizeProductionCapture({
       url.searchParams.has("key") ||
       url.searchParams.has("access_token");
     const mode = credentialExchange || !complete ? "COMMITMENT_ONLY" : captured.mode;
+    const observation =
+      mode === "COMMITMENT_ONLY" && complete && !contextUnavailable
+        ? typedObservation(body, headers, unsafe, { url, direction, expectedEmails })
+        : null;
+    if (secretRegistry?.snapshot().failed) {
+      secretRegistry.close();
+      return unavailableTaskCapture(body, value);
+    }
     return {
       ...captured,
       mode,
@@ -478,12 +643,18 @@ export function sanitizeProductionCapture({
       url: { origin: url.origin, pathname: path, query, original: commitment(value) },
       headers: savedHeaders,
       replacedHeaders,
-      observation:
-        mode === "COMMITMENT_ONLY" && complete && !contextUnavailable
-          ? typedObservation(body, headers, unsafe, { url, direction, expectedEmails })
-          : null,
+      observation,
+      ...(secretRegistry ? { taskSecretStatus: "AVAILABLE" } : {}),
     };
   } catch {
+    if (isProductionSecretRegistry(secretRegistry)) {
+      secretRegistry.close();
+      try {
+        return unavailableTaskCapture(body, value);
+      } catch {
+        /* Invalid inputs have no persistence copy. */
+      }
+    }
     throw new Error("invalid production capture");
   }
 }

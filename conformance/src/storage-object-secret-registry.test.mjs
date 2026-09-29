@@ -17,6 +17,31 @@ const profile = {
   maxIndexNodes: 32768,
   maxScanCodeUnits: 1048576,
 };
+
+test("exact task membership is original and cannot approve an unregistered credential component", () => {
+  assert.equal(typeof module.productionSecretRegistryHasValue, "function");
+  const r = module.createProductionSecretRegistry(profile),
+    secret = "GOCSPX-SYNTHETIC_REGISTERED_VALUE";
+  try {
+    r.register(secret);
+    assert.equal(module.productionSecretRegistryHasValue(r, secret), true);
+    assert.equal(module.productionSecretRegistryHasValue(r, `prefix-${secret}-suffix`), false);
+    assert.equal(module.productionSecretRegistryHasValue({ ...r }, secret), false);
+    let hooks = 0;
+    const value = {
+      toString() {
+        hooks++;
+        return secret;
+      },
+    };
+    assert.equal(module.productionSecretRegistryHasValue(r, value), false);
+    assert.equal(hooks, 0);
+    r.close();
+    assert.equal(module.productionSecretRegistryHasValue(r, secret), false);
+  } finally {
+    r.close();
+  }
+});
 function registry(changes = {}) {
   assert.equal(
     typeof module.createProductionSecretRegistry,

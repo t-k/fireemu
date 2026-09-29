@@ -246,7 +246,10 @@ fn switches_appear_only_when_on_and_written_members_are_echoed() {
             json!({"requestLogging": {"enabled": true}})
         );
         // The emulator profile's tenant keeps the project's email privacy (off), as the
-        // official emulator's does; the write shows as written (round-2 integration review M1).
+        // official emulator's does. Its document shows that effective value, not what it wrote,
+        // which neither the official emulator nor production answers (known issue
+        // emulator-tenant-document-shows-the-projects-email-privacy; round-2 integration review M1
+        // and re-review S1).
         assert_eq!(
             settings["emailPrivacyConfig"],
             if label == "strict" {

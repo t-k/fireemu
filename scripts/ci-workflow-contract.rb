@@ -104,32 +104,48 @@ publish_runs = release.dig("jobs", "publish", "steps").map { |step| step["run"] 
 assert(publish_runs.include?("npm@11.9.0"), "release publish must pin an npm version that supports Trusted Publishing")
 assert(publish_runs.include?("npm publish ./npm/fireemu"), "release publish must treat the launcher as a local path")
 assert(!publish_runs.include?("gh release create"), "the publish job must not create the GitHub Release: it only reads the repository")
-assert(
-  release.dig("jobs", "publish", "permissions") == { "contents" => "read", "id-token" => "write", "attestations" => "write" },
-  "the publish job needs exactly contents: read, id-token: write and attestations: write"
+# Permissions, per job. The workflow default is read-only, and no job but these two holds more:
+# `publish` mints the OIDC token that npm Trusted Publishing and the attestations need, and
+# `github-release` writes the Release. The rest run build, test and third-party dependency code.
+assert(release["permissions"] == { "contents" => "read" }, "the workflow default must stay read-only: the jobs that need more ask for it themselves")
+expected_permissions = Hash.new({ "contents" => "read" }).merge(
+  "publish" => { "contents" => "read", "id-token" => "write", "attestations" => "write" },
+  "github-release" => { "contents" => "write" }
 )
-assert(release["permissions"] == { "contents" => "read" }, "the workflow default must stay read-only: the one job that writes releases asks for it itself")
 release.fetch("jobs").each do |job, definition|
-  next if job == "github-release"
-  permissions = definition["permissions"] || release["permissions"]
-  assert(permissions["contents"] == "read", "release #{job} must not write the repository")
+  effective = definition["permissions"] || release["permissions"]
+  assert(effective == expected_permissions[job], "release #{job} must have exactly #{expected_permissions[job]} permissions, not #{effective}")
 end
 
 # The GitHub Release is written from the CHANGELOG section that `plan` checked, and from the
 # attested files `publish` handed over, after npm has the packages. It is a job of its own that
 # checks out nothing and installs nothing, so the only job that can write releases runs no code
 # from the repository.
-notes_upload = release.dig("jobs", "plan", "steps").find { |step| step["uses"]&.start_with?("actions/upload-artifact@") && step.dig("with", "name") == "release-notes" }
-assert(notes_upload, "plan must hand the CHANGELOG section it checked to the GitHub Release job")
+uploads = lambda do |job, name|
+  release.dig("jobs", job, "steps").select { |step| step["uses"]&.start_with?("actions/upload-artifact@") && step.dig("with", "name") == name }
+end
+all_uploaders = lambda do |name|
+  release.fetch("jobs").flat_map do |job, definition|
+    definition.fetch("steps", []).select { |step| step["uses"]&.start_with?("actions/upload-artifact@") && step.dig("with", "name") == name }.map { job }
+  end
+end
+assert(all_uploaders.call("release-notes") == %w[plan], "only plan may upload release-notes, exactly once")
+assert(all_uploaders.call("release-assets") == %w[publish], "only publish may upload release-assets, exactly once")
+notes_upload = uploads.call("plan", "release-notes").first
 assert(notes_upload["if"] == "steps.version.outputs.publish == 'true'", "a dry run must not upload release notes")
+assert(notes_upload.dig("with", "path") == "${{ runner.temp }}/release-notes.md", "the notes uploaded are the file the extraction wrote")
 assert(notes_upload.dig("with", "if-no-files-found") == "error", "the release notes upload must fail when the notes are missing")
 assert(notes_upload.dig("with", "overwrite") == true, "a re-run of plan must be able to replace the release notes")
 assert(notes_upload["continue-on-error"].nil?, "the release notes upload must block publication")
-assert(release.dig("jobs", "plan", "steps").index(notes_upload) > release.dig("jobs", "plan", "steps").index { |step| step["run"]&.include?("changelog-section.mjs") }, "the notes are uploaded after they are extracted")
+plan_steps = release.dig("jobs", "plan", "steps")
+extraction = plan_steps.find { |step| step["run"]&.include?("changelog-section.mjs") }
+assert(extraction["run"] == 'node npm/scripts/changelog-section.mjs "$VERSION" --out "$RUNNER_TEMP/release-notes.md"', "plan extracts the notes with exactly this command")
+assert(extraction["if"] == "steps.version.outputs.publish == 'true'" && extraction["continue-on-error"].nil?, "the extraction runs for every tag and blocks the release when it fails")
+assert(extraction.dig("env", "VERSION") == "${{ steps.version.outputs.version }}", "the extraction reads the version plan validated")
+assert(plan_steps.index(notes_upload) > plan_steps.index(extraction), "the notes are uploaded after they are extracted")
 
 publish_steps = release.dig("jobs", "publish", "steps")
-release_assets_upload = publish_steps.find { |step| step["uses"]&.start_with?("actions/upload-artifact@") && step.dig("with", "name") == "release-assets" }
-assert(release_assets_upload, "the publish job must hand the attested archives, checksums and SBOMs to the GitHub Release job")
+release_assets_upload = uploads.call("publish", "release-assets").first
 assert(release_assets_upload.dig("with", "path") == "dist/*", "the release assets are the attested dist directory")
 assert(release_assets_upload["if"] == "needs.plan.outputs.publish == 'true'", "a dry run must not upload release assets")
 assert(release_assets_upload.dig("with", "if-no-files-found") == "error", "the release assets upload must fail when a file is missing")
@@ -143,32 +159,37 @@ end
 
 github_release = release.dig("jobs", "github-release")
 assert(github_release, "release must create the GitHub Release after publication")
+assert(github_release.keys.sort == %w[if needs permissions runs-on steps], "the GitHub Release job has no environment, no continue-on-error and no other setting")
 assert(github_release.fetch("needs").sort == %w[plan publish], "the GitHub Release must wait for the npm publish")
 assert(github_release["if"] == "needs.plan.outputs.publish == 'true'", "a dry run must not create a GitHub Release")
-assert(github_release["permissions"] == { "contents" => "write" }, "the GitHub Release job needs contents: write and nothing else")
-assert(!github_release.key?("environment"), "the GitHub Release job must not wait for another approval after publication")
-assert(github_release["continue-on-error"].nil?, "a failed GitHub Release must fail the run")
 assert(!YAML.dump(github_release).include?("secrets."), "the GitHub Release job must use only the workflow token")
-release_uses = github_release.fetch("steps").map { |step| step["uses"] }.compact
-assert(release_uses.all? { |use| use.start_with?("actions/download-artifact@") }, "the GitHub Release job may only download artifacts: no checkout, no setup, no install")
-downloads = github_release.fetch("steps").select { |step| step["uses"]&.start_with?("actions/download-artifact@") }.map { |step| step.dig("with", "name") }
-assert(downloads.sort == %w[release-assets release-notes], "the GitHub Release job downloads the attested assets and the checked notes")
-github_release_steps = github_release.fetch("steps").select { |step| step["run"] }
-assert(github_release_steps.none? { |step| step["run"].include?("${{") }, "no expression may be interpolated into a script of the GitHub Release job: pass it through env")
-github_release_runs = github_release_steps.map { |step| step["run"] }.join("\n")
-assert(!github_release_runs.match?(/\b(node|npm|npx|pnpm|yarn|python3?|ruby|cargo|pip|uv)\b/), "the GitHub Release job runs no repository or package code")
-assert(github_release_runs.include?("gh release create"), "the GitHub Release job must create the release")
-position = lambda do |needle|
-  github_release_runs.index(needle) || raise("the GitHub Release job must run #{needle}")
+release_steps = github_release.fetch("steps")
+assert(release_steps.length == 3, "the GitHub Release job downloads the assets, downloads the notes and creates the Release, and does nothing else")
+download_assets, download_notes, create = release_steps
+[[download_assets, "release-assets", "dist"], [download_notes, "release-notes", "notes"]].each do |step, name, path|
+  assert(step.keys.sort == %w[uses with] && step["uses"].start_with?("actions/download-artifact@"), "#{name} is fetched by a plain download-artifact step: no if, no continue-on-error")
+  assert(step["with"] == { "name" => name, "path" => path }, "#{name} is downloaded into #{path}")
 end
-create_at = position.call("gh release create")
-assert(position.call("sha256sum --check SHA256SUMS") < create_at, "the release assets must match SHA256SUMS before the release is created")
-assert(position.call("test -s notes/release-notes.md") < create_at, "the checked notes must be there and not empty before the release is created")
-assert(position.call("gh release view") < create_at, "an existing Release for the tag must be reported before one is created")
-assert(github_release_runs.include?("--verify-tag"), "the GitHub Release must be created only for an existing tag")
-assert(github_release_runs.include?("--notes-file notes/release-notes.md"), "the GitHub Release notes must be the checked section")
-assert(github_release_runs[create_at..].include?("dist/*"), "the release assets must be attached when the release is created")
-assert(github_release_runs.include?('${VERSION%%+*}'), "a version is a prerelease by its part before the build metadata")
+# The create step is compared whole. Every check in it blocks the Release, and a weakened one
+# (`|| true`, a comment, `--generate-notes`, another shell) is a different script.
+EXPECTED_CREATE_SCRIPT = <<~'SCRIPT'
+  # The files attached are the ones SHA256SUMS names (and attested), unchanged.
+  (cd dist && sha256sum --check SHA256SUMS)
+  test -s notes/release-notes.md
+  if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+    echo "a GitHub Release for $TAG already exists: edit it by hand and attach dist/*, or delete it and re-run this job" >&2
+    exit 1
+  fi
+  flags=""
+  # A version is a prerelease by what precedes its build metadata.
+  case "${VERSION%%+*}" in *-*) flags="--prerelease" ;; esac
+  # shellcheck disable=SC2086 # $flags is empty or one fixed flag
+  gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --verify-tag --title "Fireemu ${VERSION}" \
+    --notes-file notes/release-notes.md $flags dist/*
+SCRIPT
+assert(create.keys.sort == %w[env name run], "the create step has no if, continue-on-error, shell or working directory")
+assert(create["env"] == { "GH_TOKEN" => "${{ github.token }}", "VERSION" => "${{ needs.plan.outputs.version }}", "TAG" => "${{ github.ref_name }}" }, "the create step passes the token, the version and the tag through env")
+assert(create["run"].strip == EXPECTED_CREATE_SCRIPT.strip, "the create step's script is not the reviewed one")
 plan_runs = release.dig("jobs", "plan", "steps").map { |step| step["run"] }.compact.join("\n")
 assert(plan_runs.include?("node npm/scripts/changelog-section.mjs"), "release plan must refuse a version without a CHANGELOG section before anything is published")
 assert(load_workflow("ci.yml").dig("jobs", "package", "steps").map { |step| step["run"] }.compact.include?("node --test npm/scripts/changelog-section.test.mjs"), "CI must test the CHANGELOG section extraction")

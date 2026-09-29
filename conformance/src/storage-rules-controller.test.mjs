@@ -484,6 +484,16 @@ test("a write the run ledger recorded keeps the counter open even when no object
   assert.equal(h.trace.some((id) => id.startsWith("terminal")), false);
 });
 
+test("an update time is bound with the run ledger's own deletable answer, so a document it does not call deletable is never deleted", async () => {
+  // Today a document read is deletable whenever a delete's guards pass; a ledger that says otherwise must still be obeyed.
+  const neverDeletable = (run) => ({ document: (name) => Object.freeze({ ...run.document(name), deletable: false }) });
+  const h = await harness({ adjust: (built) => ({ ...built, run: ledgerAnswering(built, neverDeletable) }) });
+  const result = await h.controller.run();
+  const del = await firstSent((r) => r.service === "firestore" && r.request.method === "DELETE");
+  assert.deepEqual([result.status, result.reason, result.detail.rowId, result.detail.cause], ["stopped", "target unavailable", del, "reference is not deletable"]);
+  assert.equal(sentIds(h).includes(del), false);
+});
+
 test("recovery runs once: after a recovery whose close failed, a second call is refused and sends nothing", async () => {
   let failFinish = false;
   const flaky = (gate) => Object.freeze({ ...gate, finish: async (outcome) => { if (failFinish) { failFinish = false; throw new Error("journal unavailable"); } return gate.finish(outcome); } });
@@ -535,7 +545,7 @@ test("a release read whose outcome is uncertain enables the release absence read
   assert.equal(h.trace.at(-1), "terminal:needs-recovery");
 });
 
-test("owner readbacks count per witness, so a recovery that repeats two of them still deletes the witnesses", async () => {
+test("owner readbacks count per witness, so a recovery that repeats two of them still reads all four before deleting the witnesses", async () => {
   // The run stops before the third owner readback is sent, so the witnesses stay confirmed.
   const h = await harness({ ensure: async (row) => { if (row.id === "management/restore-owner-media/2") throw new Error("refresh failed"); } });
   const stopped = await h.controller.run();
@@ -543,6 +553,10 @@ test("owner readbacks count per witness, so a recovery that repeats two of them 
   assert.equal(h.run.snapshot().ownerMedia, 2);
   const result = await h.controller.recover();
   assert.equal(result.status, "recovered", JSON.stringify(result));
+  // Repeating the first two readbacks does not stand in for the other two: all four are read before any witness goes.
+  const readbacks = sentIds(h).filter((id) => id.startsWith("recovery/management/restore-owner-media/"));
+  assert.deepEqual(readbacks, [0, 1, 2, 3].map((index) => `recovery/management/restore-owner-media/${index}`));
+  assert.ok(sentIds(h).indexOf(readbacks.at(-1)) < sentIds(h).findIndex((id) => /^recovery\/object-\d+\/delete$/.test(id)));
   assert.deepEqual(cleanOf(h), clean);
 });
 

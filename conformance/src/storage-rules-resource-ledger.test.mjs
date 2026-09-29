@@ -165,3 +165,38 @@ test("inputs are closed", async () => {
   assert.throws(() => l.recordOutcome(row(ids.seed), { kind: "x", verdict: "accepted" }), /invalid resource ledger outcome/);
   assert.throws(() => l.recordOutcome(row(ids.seed), null), /invalid resource ledger outcome/);
 });
+
+test("tokens shared with other resource kinds stay unresolved on rows that are not objects", async () => {
+  const l = await ledger();
+  for (const id of ["recovery/document-0/delete", "recovery/document-0/current", "ruleset/v1/delete", "recovery/ruleset/v1/current", "release/restore/delete", "recovery/session/incoming-upload-resumable-size-true/cancel"]) {
+    const r = manifest.rows.find((x) => x.id === id);
+    if (!r) continue;
+    const decision = l.evaluate(r);
+    assert.equal(decision.decision, "go", id);
+    assert.deepEqual([...decision.failed], [], id);
+    for (const token of r.requires) assert.ok(decision.unresolved.includes(token), `${id}: ${token}`);
+  }
+  assert.ok(manifest.rows.find((x) => x.id === "recovery/document-0/delete").requires.includes("delete-not-attempted"));
+  const before = l.snapshot();
+  l.recordIntent(manifest.rows.find((x) => x.id === "recovery/document-0/delete"));
+  l.recordOutcome(manifest.rows.find((x) => x.id === "recovery/document-0/delete"), { kind: "firestore-write", verdict: "accepted", facts: { status: 200 } });
+  assert.deepEqual(l.snapshot(), before);
+});
+
+test("resumable-session control rows do not touch the object's record, but a finalize does", async () => {
+  const l = await ledger();
+  const command = (name) => manifest.rows.find((r) => r.request.headers?.["x-goog-upload-command"] === name);
+  const name = command("start").request.objectName;
+  const before = l.object(name);
+  for (const control of ["start", "cancel"]) {
+    const r = command(control);
+    if (r.request.objectName !== name) continue;
+    l.recordIntent(r);
+    l.recordOutcome(r, { kind: "session-command", verdict: "acknowledged", facts: { status: 200 } });
+  }
+  assert.deepEqual(l.object(name), before);
+  const finalize = manifest.rows.find((r) => r.request.headers?.["x-goog-upload-command"] === "upload, finalize" && r.request.objectName === name);
+  assert.ok(finalize);
+  l.recordIntent(finalize);
+  assert.equal(l.object(name).started, true);
+});

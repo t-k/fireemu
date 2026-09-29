@@ -17,7 +17,7 @@ export function createResourceLedger(options) {
   if (!manifest || manifest.sendAuthorized !== false || !Array.isArray(manifest.resources?.objects) || manifest.resources.objects.length === 0) fail();
   const objects = new Map(manifest.resources.objects.map((name) => [name, {
     name, baselineAbsent: false, foreign: false, started: false, writes: 0, deleteAttempted: false, uncertainCreate: false, uncertainOther: false,
-    confirmedWrite: false, latest: "unknown", generation: null, metageneration: null,
+    confirmedWrite: false, latest: "unknown", generation: null, metageneration: null, seedGeneration: null,
   }]));
   const mutations = new Set();
 
@@ -27,7 +27,9 @@ export function createResourceLedger(options) {
     if (typeof name !== "string" || !objects.has(name)) bad("unowned resource");
     return objects.get(name);
   }
-  const isObjectRow = (row) => row?.service === "storage" && typeof row?.request?.objectName === "string";
+  // Session start, query and cancel rows belong to the session, not to the object; a finalize writes the object.
+  const isSessionControl = (row) => ["start", "query", "cancel"].includes(row?.request?.headers?.["x-goog-upload-command"]);
+  const isObjectRow = (row) => row?.service === "storage" && typeof row?.request?.objectName === "string" && !isSessionControl(row);
   const verbOf = (row) => {
     const { method, operation } = row.request;
     if (!["POST", "PATCH", "PUT", "DELETE"].includes(method)) return null;
@@ -36,6 +38,7 @@ export function createResourceLedger(options) {
   const mutationKey = (row, verb) => (verb === "delete" ? `object|${row.request.objectName}|delete` : `object|${row.request.objectName}|${verb}|${row.id}`);
 
   function recordIntent(row) {
+    if (!isObjectRow(row)) return;
     const object = recordFor(row);
     const verb = verbOf(row);
     if (verb === null) return;
@@ -49,6 +52,7 @@ export function createResourceLedger(options) {
   }
 
   function recordOutcome(row, outcome) {
+    if (!isObjectRow(row)) return;
     const object = recordFor(row);
     const uncertain = plain(outcome) && Reflect.ownKeys(outcome).length === 1 && outcome.uncertain === true;
     if (!uncertain && (!plain(outcome) || Reflect.ownKeys(outcome).length !== 3 || typeof outcome.kind !== "string" || typeof outcome.verdict !== "string" || !plain(outcome.facts))) bad("invalid resource ledger outcome");
@@ -75,6 +79,7 @@ export function createResourceLedger(options) {
     if (verb === "create" && kind === "gcs-seed-upload") {
       if (verdict === "accepted" && typeof facts.generation === "string") {
         object.latest = "present"; object.generation = facts.generation; object.metageneration = facts.metageneration ?? null; object.confirmedWrite = true;
+        if (object.seedGeneration === null) object.seedGeneration = facts.generation;
       } else { object.uncertainCreate = true; object.latest = "unknown"; }
       return;
     }
@@ -102,12 +107,12 @@ export function createResourceLedger(options) {
   function evaluate(row) {
     if (!row || typeof row !== "object" || !Array.isArray(row.requires) || typeof row.id !== "string") bad("invalid resource ledger row");
     const tokens = row.requires.filter((token) => Object.hasOwn(REQUIRES_REGISTRY, token));
-    const handled = tokens.filter((token) => OBJECT_TOKENS.has(token));
-    const unresolved = tokens.filter((token) => !OBJECT_TOKENS.has(token));
+    // Some tokens name a guard for every resource kind; this ledger answers them for objects only.
+    const handled = isObjectRow(row) ? tokens.filter((token) => OBJECT_TOKENS.has(token)) : [];
+    const unresolved = tokens.filter((token) => !handled.includes(token));
     const failed = [];
     let skip = false;
     if (handled.length > 0) {
-      if (!isObjectRow(row)) bad("invalid resource ledger row");
       const object = recordFor(row);
       for (const token of handled) {
         const result = HANDLERS[token](object);
@@ -126,8 +131,11 @@ export function createResourceLedger(options) {
     object(name) {
       if (typeof name !== "string" || !objects.has(name)) bad("unowned resource");
       const o = objects.get(name);
-      return Object.freeze({ name, owned: owned(o), deletable: owned(o) && o.started && o.latest === "present" && !o.uncertainOther, started: o.started, latest: o.latest, generation: o.generation, metageneration: o.metageneration, deleteAttempted: o.deleteAttempted });
+      return Object.freeze({ name, owned: owned(o), deletable: owned(o) && o.started && o.latest === "present" && !o.uncertainOther, started: o.started, latest: o.latest, generation: o.generation, metageneration: o.metageneration, seedGeneration: o.seedGeneration, deleteAttempted: o.deleteAttempted });
     },
+    tokens: () => Object.freeze([...OBJECT_TOKENS].sort()),
+    /** Names of objects the run started and has not proven absent again; each needs recovery or a delete. */
+    residual: () => Object.freeze([...objects.values()].filter((o) => (o.started || o.foreign) && !(o.latest === "absent" && !o.uncertainCreate)).map((o) => o.name)),
     snapshot: () => Object.freeze({ objects: objects.size, started: [...objects.values()].filter((o) => o.started).length, mutations: mutations.size }),
   });
 }

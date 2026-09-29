@@ -1,0 +1,226 @@
+import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
+import { chmod, link, lstat, mkdir, mkdtemp, open, readFile, readdir, rename, rm, symlink, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import test from "node:test";
+
+const runId = "capture-test";
+const sourceCommit = "ab".repeat(20);
+const manifestDigest = "cd".repeat(32);
+const digestSalt = "3".repeat(64);
+const requestIds = ["preflight/owner", "case/a/subject/get", "case/a/subject/put", "recovery/case/a/get"];
+const TOKEN = "CANARY-DOWNLOAD-0123456789abcdef";
+const JWT = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJDQU5BUlkifQ.Q0FOQVJZU0lHMDEyMzQ1Njc4OWFiY2RlZg";
+const SESSION = "https://firebasestorage.googleapis.com/v0/b/b/o?name=x&upload_id=CANARYUPLOAD0123456789&upload_protocol=resumable";
+const sha = (value) => createHash("sha256").update(value).digest("hex");
+const intent = (operationId = requestIds[1], delta = {}) => ({ operationId, phase: "normal", targetSha256: "1".repeat(64), redactedTarget: "GET https://storage.googleapis.com/storage/v1/b/b/o/x?ifGenerationMatch=<ref:generation>", mutationKey: null, ...delta });
+const response = (delta = {}) => ({ status: 200, rawHeaders: ["Content-Type", "application/json", "X-Goog-Upload-URL", SESSION], bytes: Buffer.from(JSON.stringify({ name: "n", downloadTokens: TOKEN, idToken: JWT })), ...delta });
+
+async function fixture(t, { hooks = {}, before = null, delta = {} } = {}) {
+  const directory = await mkdtemp("/private/tmp/storage-rules-capture-");
+  const trace = [];
+  const handles = [];
+  let journal;
+  t.after(async () => { if (journal) await journal.close().catch(() => {}); for (const handle of handles) await handle.close().catch(() => {}); await rm(directory, { recursive: true, force: true }); });
+  if (before) await before({ directory });
+  const io = {
+    lstat,
+    mkdir,
+    open: async (name, flags, mode) => {
+      const handle = await open(name, flags, mode);
+      handles.push(handle);
+      const kind = name === directory ? "directory" : name.endsWith("/blobs") ? "blobs" : name.includes("/blobs/") ? "blob" : "journal";
+      trace.push({ event: "open", kind });
+      return {
+        stat: (...args) => handle.stat(...args),
+        write: async (...args) => { trace.push({ event: "write", kind }); return hooks.write ? hooks.write(handle, args, kind) : handle.write(...args); },
+        sync: async () => { trace.push({ event: "sync", kind }); return hooks.sync ? hooks.sync(handle, kind) : handle.sync(); },
+        close: async () => { trace.push({ event: "close", kind }); return handle.close(); },
+      };
+    },
+  };
+  const module = await import("./storage-rules/capture-journal.mjs").catch((error) => { if (error.code === "ERR_MODULE_NOT_FOUND") return {}; throw error; });
+  assert.equal(typeof module.createCaptureJournal, "function");
+  journal = await module.createCaptureJournal({ directory, runId, sourceCommit, manifestDigest, digestSalt, requestIds, io, ...delta });
+  const rows = async () => (await readFile(join(directory, "captures.jsonl"), "utf8")).split("\n").filter(Boolean).map((line) => JSON.parse(line));
+  return { journal, directory, trace, rows };
+}
+
+test("creation makes a private journal and blob directory and records the declared IDs", async (t) => {
+  const ctx = await fixture(t);
+  const rows = await ctx.rows();
+  assert.deepEqual(rows.map((row) => row.event), ["opened"]);
+  assert.deepEqual(rows[0].data, { requestCount: requestIds.length, requestIdsSha256: sha(JSON.stringify(requestIds)) });
+  assert.equal((await lstat(join(ctx.directory, "captures.jsonl"))).mode & 0o777, 0o600);
+  assert.equal((await lstat(join(ctx.directory, "blobs"))).mode & 0o777, 0o700);
+  assert.deepEqual(ctx.journal.snapshot(), { busy: false, uncertain: false, closed: false, events: 1, intents: 0, responses: 0, sendAuthorized: false });
+});
+
+for (const [label, before] of [
+  ["an existing journal file", async ({ directory }) => writeFile(join(directory, "captures.jsonl"), "old\n", { mode: 0o600 })],
+  ["a symlinked journal", async ({ directory }) => symlink("/private/tmp/never-used", join(directory, "captures.jsonl"))],
+  ["an existing blob directory", async ({ directory }) => mkdir(join(directory, "blobs"), { mode: 0o700 })],
+  ["a group-readable run directory", async ({ directory }) => chmod(directory, 0o750)],
+]) {
+  test(`${label} is refused and nothing is replaced`, async (t) => {
+    await assert.rejects(fixture(t, { before }), /capture journal creation failed/);
+  });
+}
+
+test("invalid options are refused before anything is created", async (t) => {
+  for (const delta of [{ directory: "relative/dir" }, { runId: "Bad Run" }, { sourceCommit: "x" }, { manifestDigest: "y" }, { digestSalt: "short" }, { requestIds: [] }, { requestIds: ["a", "a"] }, { requestIds: ["bad id"] }, { extra: 1 }]) {
+    await assert.rejects(fixture(t, { delta }), /invalid capture journal input/);
+  }
+});
+
+test("intent, response, facts, proof and note append closed rows in one sequence", async (t) => {
+  const ctx = await fixture(t);
+  await ctx.journal.writeIntent(intent());
+  await ctx.journal.writeResponse({ operationId: requestIds[1], attempt: 1, response: response() });
+  await ctx.journal.writeFacts({ operationId: requestIds[1], kind: "gcs-metadata-read", verdict: "present", facts: { status: 200, generation: "1700000000000001", hasDownloadToken: true } });
+  await ctx.journal.writeProof({ runId, type: "generation", key: "STORAGE-RULES/run/a.bin", operationId: requestIds[1], attempt: 1, valueSha256: "2".repeat(64) });
+  await ctx.journal.writeNote({ operationId: requestIds[1], text: "settled" });
+  const rows = await ctx.rows();
+  assert.deepEqual(rows.map((row) => [row.event, row.sequence]), [["opened", 1], ["intent", 2], ["response", 3], ["facts", 4], ["proof", 5], ["note", 6]]);
+  assert.ok(rows.every((row) => row.schemaVersion === 1 && row.runId === runId && row.sourceCommit === sourceCommit && row.manifestDigest === manifestDigest));
+  const captured = rows[2].data;
+  assert.equal(captured.targetSha256, "1".repeat(64));
+  assert.equal(captured.status, 200);
+  const blob = await readFile(join(ctx.directory, "blobs", `${captured.blob.sha256}.bin`));
+  assert.equal(sha(blob), captured.blob.sha256);
+  assert.equal(blob.length, captured.blob.bytes);
+  assert.equal(captured.originalSha256.length, 64);
+  assert.ok(captured.spans.length >= 2);
+  assert.equal((await lstat(join(ctx.directory, "blobs", `${captured.blob.sha256}.bin`))).mode & 0o777, 0o600);
+  assert.deepEqual(ctx.journal.snapshot(), { busy: false, uncertain: false, closed: false, events: 6, intents: 1, responses: 1, sendAuthorized: false });
+});
+
+test("a blob is written and synced, then its directory synced, before the response row is written", async (t) => {
+  const ctx = await fixture(t);
+  await ctx.journal.writeIntent(intent());
+  const before = ctx.trace.length;
+  await ctx.journal.writeResponse({ operationId: requestIds[1], attempt: 1, response: response() });
+  const events = ctx.trace.slice(before).map((entry) => `${entry.event}:${entry.kind}`);
+  const firstJournalWrite = events.indexOf("write:journal");
+  assert.ok(events.indexOf("write:blob") >= 0 && events.indexOf("write:blob") < events.indexOf("sync:blob") && events.indexOf("sync:blob") < events.indexOf("sync:blobs") && events.indexOf("sync:blobs") < firstJournalWrite);
+  assert.ok(events.indexOf("sync:journal") > firstJournalWrite);
+});
+
+test("events are refused out of order, twice, for undeclared operations and with malformed input", async (t) => {
+  const ctx = await fixture(t);
+  const j = ctx.journal;
+  await assert.rejects(j.writeResponse({ operationId: requestIds[1], attempt: 1, response: response() }), /event refused/);
+  await assert.rejects(j.writeFacts({ operationId: requestIds[1], kind: "k", verdict: "present", facts: {} }), /event refused/);
+  await assert.rejects(j.writeIntent(intent("case/undeclared/get")), /event refused/);
+  for (const delta of [{ phase: "other" }, { targetSha256: "x" }, { mutationKey: 7 }, { mutationKey: "bad key" }, { extra: 1 }]) await assert.rejects(j.writeIntent(intent(requestIds[1], delta)), /event refused/);
+  await j.writeIntent(intent());
+  await assert.rejects(j.writeIntent(intent()), /event refused/);
+  for (const delta of [{ attempt: 0 }, { attempt: 1.5 }, { response: response({ status: 99 }) }, { response: response({ status: 600 }) }, { response: response({ rawHeaders: ["a"] }) }, { response: response({ bytes: "x" }) }, { response: { ...response(), extra: 1 } }]) {
+    await assert.rejects(j.writeResponse({ operationId: requestIds[1], attempt: 1, response: response(), ...delta }), /event refused/);
+  }
+  await assert.rejects(j.writeResponse({ operationId: requestIds[2], attempt: 1, response: response() }), /event refused/);
+  await j.writeResponse({ operationId: requestIds[1], attempt: 1, response: response() });
+  await assert.rejects(j.writeResponse({ operationId: requestIds[1], attempt: 2, response: response() }), /event refused/);
+  const accessor = Object.defineProperty({ ...intent(requestIds[2]) }, "phase", { enumerable: true, get() { return "normal"; } });
+  await assert.rejects(j.writeIntent(accessor), /event refused/);
+  assert.equal(j.snapshot().uncertain, false);
+  assert.deepEqual((await ctx.rows()).map((row) => row.event), ["opened", "intent", "response"]);
+});
+
+test("bearer material is redacted or refused in every writer", async (t) => {
+  const ctx = await fixture(t);
+  const j = ctx.journal;
+  await assert.rejects(j.writeIntent(intent(requestIds[1], { redactedTarget: `GET https://x/o?token=${TOKEN}` })), /event refused/);
+  await assert.rejects(j.writeIntent(intent(requestIds[1], { redactedTarget: `GET ${SESSION}` })), /event refused/);
+  await j.writeIntent(intent());
+  await j.writeResponse({ operationId: requestIds[1], attempt: 1, response: response() });
+  await assert.rejects(j.writeFacts({ operationId: requestIds[1], kind: "k", verdict: "present", facts: { link: `https://x/o?token=${TOKEN}` } }), /event refused/);
+  await assert.rejects(j.writeFacts({ operationId: requestIds[1], kind: "k", verdict: "present", facts: { nested: { deep: [JWT] } } }), /event refused/);
+  await assert.rejects(j.writeProof({ runId, type: "page-token", key: `k?token=${TOKEN}`, operationId: requestIds[1], attempt: 1, valueSha256: "2".repeat(64) }), /event refused/);
+  await j.writeNote({ operationId: null, text: `failed with ${JWT} at ${SESSION} token=${TOKEN}` });
+  const all = (await readFile(join(ctx.directory, "captures.jsonl"), "utf8")) + (await Promise.all((await readdir(join(ctx.directory, "blobs"))).map((name) => readFile(join(ctx.directory, "blobs", name), "utf8")))).join("");
+  for (const secret of [TOKEN, JWT, "CANARYUPLOAD0123456789", SESSION]) assert.equal(all.includes(secret), false, secret);
+  assert.equal(all.includes("STORAGE") || all.includes("generation"), true);
+});
+
+test("facts are limited to plain JSON of bounded size", async (t) => {
+  const ctx = await fixture(t);
+  await ctx.journal.writeIntent(intent());
+  await ctx.journal.writeResponse({ operationId: requestIds[1], attempt: 1, response: response() });
+  const facts = (facts) => ctx.journal.writeFacts({ operationId: requestIds[1], kind: "k", verdict: "present", facts });
+  for (const bad of [{ f: () => 1 }, { n: 1.5 }, { n: Infinity }, { s: "x".repeat(4097) }, Object.create({ inherited: 1 }), { a: new Array(65).fill(1) }, JSON.parse(`{${'"a":'.repeat(1)}{"b":{"c":{"d":{"e":{"f":{"g":{"h":1}}}}}}}}`)]) await assert.rejects(facts(bad), /event refused/);
+  await facts({ ok: true, nested: { list: [1, "two", null, false] } });
+});
+
+test("a failing journal write leaves the journal uncertain and refuses everything after", async (t) => {
+  let fail = false;
+  const ctx = await fixture(t, { hooks: { write: (handle, args, kind) => { if (fail && kind === "journal") throw new Error("disk full"); return handle.write(...args); } } });
+  await ctx.journal.writeIntent(intent());
+  fail = true;
+  await assert.rejects(ctx.journal.writeResponse({ operationId: requestIds[1], attempt: 1, response: response() }), /capture journal uncertain/);
+  fail = false;
+  await assert.rejects(ctx.journal.writeNote({ operationId: null, text: "x" }), /event refused/);
+  assert.equal(ctx.journal.snapshot().uncertain, true);
+});
+
+test("a failing blob sync leaves the journal uncertain and no response row", async (t) => {
+  const ctx = await fixture(t, { hooks: { sync: (handle, kind) => { if (kind === "blob") throw new Error("io error"); return handle.sync(); } } });
+  await ctx.journal.writeIntent(intent());
+  await assert.rejects(ctx.journal.writeResponse({ operationId: requestIds[1], attempt: 1, response: response() }), /capture journal uncertain/);
+  assert.deepEqual((await ctx.rows()).map((row) => row.event), ["opened", "intent"]);
+  assert.equal(ctx.journal.snapshot().uncertain, true);
+});
+
+test("a partial write is completed before the row is acknowledged", async (t) => {
+  const ctx = await fixture(t, { hooks: { write: (handle, [bytes, offset, length, position], kind) => handle.write(bytes, offset, kind === "journal" ? Math.min(length, 7) : length, position) } });
+  await ctx.journal.writeIntent(intent());
+  await ctx.journal.writeResponse({ operationId: requestIds[1], attempt: 1, response: response() });
+  assert.deepEqual((await ctx.rows()).map((row) => row.event), ["opened", "intent", "response"]);
+});
+
+test("a second event during an in-flight write is refused without a row", async (t) => {
+  let release; const gate = new Promise((resolve) => { release = resolve; });
+  let hold = false;
+  const ctx = await fixture(t, { hooks: { write: async (handle, args, kind) => { if (hold && kind === "journal") await gate; return handle.write(...args); } } });
+  hold = true;
+  const first = ctx.journal.writeIntent(intent());
+  await assert.rejects(ctx.journal.writeNote({ operationId: null, text: "x" }), /event refused/);
+  release();
+  await first;
+  assert.deepEqual((await ctx.rows()).map((row) => row.event), ["opened", "intent"]);
+});
+
+test("replacing or linking the journal file makes the next event uncertain", async (t) => {
+  const ctx = await fixture(t);
+  await ctx.journal.writeIntent(intent());
+  const path = join(ctx.directory, "captures.jsonl");
+  await link(path, join(ctx.directory, "second-name"));
+  await assert.rejects(ctx.journal.writeNote({ operationId: null, text: "x" }), /capture journal uncertain/);
+  const other = await fixture(t);
+  await other.journal.writeIntent(intent());
+  const replaced = join(other.directory, "captures.jsonl");
+  const copy = await readFile(replaced);
+  await rename(replaced, join(other.directory, "moved"));
+  await writeFile(replaced, copy, { mode: 0o600 });
+  await assert.rejects(other.journal.writeNote({ operationId: null, text: "x" }), /capture journal uncertain/);
+});
+
+test("identical redacted bodies share one blob and a different body gets its own", async (t) => {
+  const ctx = await fixture(t);
+  for (const [index, id] of [requestIds[1], requestIds[2]].entries()) {
+    await ctx.journal.writeIntent(intent(id, { targetSha256: String(index + 1).repeat(64) }));
+    await ctx.journal.writeResponse({ operationId: id, attempt: index + 1, response: response({ bytes: Buffer.from("same body") }) });
+  }
+  assert.equal((await readdir(join(ctx.directory, "blobs"))).length, 1);
+  await ctx.journal.writeIntent(intent(requestIds[3], { phase: "recovery" }));
+  await ctx.journal.writeResponse({ operationId: requestIds[3], attempt: 3, response: response({ bytes: Buffer.from("other body") }) });
+  assert.equal((await readdir(join(ctx.directory, "blobs"))).length, 2);
+});
+
+test("close is idempotent, refuses events afterwards and refuses while busy", async (t) => {
+  const ctx = await fixture(t);
+  await ctx.journal.close();
+  await ctx.journal.close();
+  await assert.rejects(ctx.journal.writeIntent(intent()), /event refused/);
+  assert.equal(ctx.journal.snapshot().closed, true);
+});

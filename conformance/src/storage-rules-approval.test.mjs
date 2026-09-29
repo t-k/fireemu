@@ -363,6 +363,7 @@ function note(subject, body, tail = " | オーナー（local） | note.md") {
 }
 const sha = packet.packetSha256;
 const laneSubject = "STORAGE-RULES stage3-v1";
+const laneName = "STORAGE-RULES";
 const laneRevocations = {
   "lowercase revoked": note(laneSubject, `revoked packetSha256=${sha}`),
   "mixed case Revoked": note(laneSubject, `Revoked packetSha256=${sha}`),
@@ -576,6 +577,56 @@ test("a global revocation needs a real decision line to follow, and a lane name 
   for (const text of ["the sub-auth-thing revoked", "prefs-x revoked", "myfs-data revoked", "xstorage-object revoked", "unhosting-x revoked"]) {
     assert.throws(() => validate({ ledgerText: [decision(), note("all", text)].join("\n"), packet, review }), /approval revoked/, text);
   }
+});
+
+test("a global revocation is measured against the decision row, so a later line that cites the packet digest cannot cancel it", async () => {
+  const validate = await load();
+  const global = note("全体", "decision=REVOKED; すべての本番送信承認を取り消す");
+  for (const status of [
+    note(`${laneSubject} status`, `recording run-one finished; packetSha256=${packet.packetSha256}; outcome=finished`),
+    note("owner note", `hold note for ${packet.packetSha256}`),
+    `- 2026-09-29 | unrelated | see ${packet.packetSha256} | note.md`,
+  ]) {
+    assert.throws(() => validate({ ledgerText: [decision(), global, status].join("\n"), packet, review }), /approval revoked/, status);
+    assert.throws(() => validate({ ledgerText: [decision(), global, status, status].join("\n"), packet, review }), /approval revoked/, `${status} twice`);
+  }
+  // A new decision row written after the global revocation supersedes it, and the status lines after that do not matter.
+  const status = note(`${laneSubject} status`, `packetSha256=${packet.packetSha256}`);
+  assert.equal(validate({ ledgerText: [decision(), global, decision(), status].join("\n"), packet, review }).sendAuthorized, false);
+  // A revocation written after the decision and before nothing else is measured from the last decision row, not the first.
+  assert.throws(() => validate({ ledgerText: [decision(), global, decision(), global].join("\n"), packet, review }), /approval revoked/);
+});
+
+test("a global revocation that says all and names other lanes as examples still stops the lane; naming one other lane alone does not", async () => {
+  const validate = await load();
+  for (const text of ["すべてのレーン（FS-TRANSACTIONを含む）の本番送信承認を取り消す", "revoke all approvals, including FS-TRANSACTION and AUTH-MFA", "every lane incl. FUNCTIONS-EVENTS is revoked", "全レーンの承認を取消（AUTH-FEDERATIONを含む）", "全部撤回。例: HOSTING-CONFIG"]) {
+    assert.throws(() => validate({ ledgerText: [decision(), note("全体", `decision=REVOKED; ${text}`)].join("\n"), packet, review }), /approval revoked/, text);
+    assert.equal(validate({ ledgerText: [note("全体", `decision=REVOKED; ${text}`), decision()].join("\n"), packet, review }).sendAuthorized, false, `${text} before`);
+  }
+  for (const text of ["FS-TRANSACTIONの承認を取り消す", "revoked: the AUTH-MFA packet", "smallest revoked step of FS-RULES", "the ballpark revoke of FUNCTIONS-HTTP"]) {
+    assert.equal(validate({ ledgerText: [decision(), note("owner", text)].join("\n"), packet, review }).sendAuthorized, false, text);
+  }
+});
+
+test("a stop word that is not one of the revocation words does not revoke, by design", async () => {
+  // The owner's revocation words are fixed; a lane that is named with the plain word 停止 (as a procedure step or a status) is not stopped, because such lines are common.
+  const validate = await load();
+  for (const text of ["本番送信を停止する", "停止条件を確認", "保留にする"]) {
+    assert.equal(validate({ ledgerText: [decision(), note("STORAGE-RULES", text)].join("\n"), packet, review }).sendAuthorized, false, text);
+    assert.equal(validate({ ledgerText: [decision(), note("全体", text)].join("\n"), packet, review }).sendAuthorized, false, `${text} global`);
+  }
+});
+
+test("an approval line of another lane that only mentions this lane does not feed the earlier pins a consumed revocation may cite", async () => {
+  const validate = await load();
+  const consumed = note(laneSubject, `decision=REVOKED; packetSha256=${foreignSha}`);
+  for (const subject of ["FS-TRANSACTION expiry-retry-04", "Codex lanes to Sonnet lanes", "owner note about STORAGE-RULES", "xSTORAGE-RULES stage3-v1"]) {
+    const other = note(subject, `decision=APPROVE; packetSha256=${foreignSha}; also covers ${laneName}`);
+    assert.throws(() => validate({ ledgerText: [other, consumed, decision()].join("\n"), packet, review }), /approval revoked/, subject);
+  }
+  // The lane's own subject, with a qualifier in parentheses, does feed them.
+  const own = note(`${laneSubject}（訂正）`, `decision=APPROVE; packetSha256=${foreignSha}`);
+  assert.equal(validate({ ledgerText: [own, consumed, decision()].join("\n"), packet, review }).sendAuthorized, false);
 });
 
 test("only the lane's approval and envelope lines feed the earlier pins a consumed revocation may cite", async () => {

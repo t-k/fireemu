@@ -17,6 +17,8 @@ export const NORMALIZED_DELEGATION_MARKER = normalizeLedgerText("調整役への
 // The delegation rows carry prose of their own (中止, 無効 and 取り下げ occur in it), so a delegation is revoked only by the narrower set.
 const DELEGATION_WORDS = /revoke|revocation|withdraw|取消|取り消|撤回/;
 const REVOCATION_WORDS = /revoke|revocation|withdraw|rescind|取消|取り消|撤回|取り下げ|中止|無効/;
+// A universal quantifier makes a revocation global even when it names other lanes as examples.
+const UNIVERSAL = /すべて|全て|全体|全部|全レーン|(?<![a-z])(?:all|every|everything)(?![a-z])/;
 const PIN_PREFIX_LENGTH = 8;
 
 /**
@@ -60,7 +62,7 @@ const HEX_REFERENCE = /(?<![0-9a-f])(?:[0-9a-f]{40}|[0-9a-f]{64})(?![0-9a-f])/g;
  * same ledger, and no other digest or commit appears in it. A line that names the coordinator delegation makes every
  * coordinator-written row unusable. A historical line that only mentions the words is ignored through an allowlist that
  * pins the exact raw line by SHA-256. Returns 1-based line numbers: `lane` (stops), `consumed` (skipped by the row
- * parsing as well) and `delegation`.
+ * parsing as well), `delegation` and `global` (revocations that name no lane: they stop the lane only when written after its decision row).
  */
 export function scanRevocations({ ledgerText, taskId, pins, envelopeId, allowlist = HISTORICAL_REVOCATION_ALLOWLIST }) {
   const allowed = new Set(allowlist.map((entry) => entry.sha256));
@@ -70,7 +72,6 @@ export function scanRevocations({ ledgerText, taskId, pins, envelopeId, allowlis
   const envelopeKey = typeof envelopeId === "string" && envelopeId !== "" ? normalizeLedgerText(envelopeId) : null;
   const approved = new Set();
   const globalCandidates = [];
-  let decisionLine = -1;
   const lane = [];
   const consumed = [];
   const delegation = [];
@@ -79,10 +80,10 @@ export function scanRevocations({ ledgerText, taskId, pins, envelopeId, allowlis
     const keyed = [...text.matchAll(KEYED)].map((match) => `${match[1]}=${match[2]}`);
     if (!REVOCATION_WORDS.test(text)) {
       // An earlier approval line of this lane: what it carries is what a later consumed revocation may cite.
-      const subject = (line.split("|")[1] ?? "").trim();
-      const approvalLine = text.includes(taskKey) && (text.includes("decision=approve") || normalizeLedgerText(subject).endsWith(" envelope"));
-      if (approvalLine) keyed.forEach((entry) => approved.add(entry));
-      if (text.includes(packetKey)) decisionLine = index + 1;
+      // Only this lane's own lines (its subject is the task or starts with it) count as earlier approvals: a line of another lane that merely mentions it does not.
+      const subject = withoutQualifiers(normalizeLedgerText(line.split("|")[1] ?? ""));
+      const laneSubject = subject === taskKey || subject.startsWith(`${taskKey} `);
+      if (laneSubject && (text.includes("decision=approve") || subject.endsWith(" envelope"))) keyed.forEach((entry) => approved.add(entry));
     } else if (!allowed.has(rowSha256(line))) {
       const namesLane = text.includes(taskKey) || withoutQualifiers(normalizeLedgerText(line.split("|")[1] ?? "")).includes(taskKey);
       const namesThisVersion = pinPrefixes.some((prefix) => text.includes(prefix)) || (envelopeKey !== null && text.includes(envelopeKey));
@@ -93,13 +94,12 @@ export function scanRevocations({ ledgerText, taskId, pins, envelopeId, allowlis
       else if (namesLane) consumed.push(index + 1);
       const isDelegation = text.includes(NORMALIZED_DELEGATION_MARKER);
       if (isDelegation) { if (DELEGATION_WORDS.test(text)) delegation.push(index + 1); }
-      // A revocation that names no lane at all (the whole sandbox program, an unscoped "all") is a candidate to stop this lane too.
-      else if (!namesLane && !namesThisVersion && !OTHER_LANE.test(text)) globalCandidates.push(index + 1);
+      // A revocation that names no lane at all (the whole sandbox program, an unscoped "all"), or that says all and names other lanes only as examples, is a candidate to stop this lane too.
+      else if (!namesLane && !namesThisVersion && (UNIVERSAL.test(text) || !OTHER_LANE.test(text))) globalCandidates.push(index + 1);
     }
   });
-  // It counts only when it was written after this packet's decision: a decision written later supersedes an earlier global revocation.
-  if (decisionLine !== -1) lane.push(...globalCandidates.filter((line) => line > decisionLine));
-  return { lane, consumed, delegation };
+  // The caller decides whether a global candidate counts: only one written after the decision row it selected does, so a decision written later supersedes an earlier global revocation.
+  return { lane, consumed, delegation, global: globalCandidates };
 }
 
 function envelopeIdPattern(taskKey) {

@@ -40,7 +40,7 @@ test("the corpus digest follows every input the requests are built from, and the
   assert.equal(urls[KEY_LIST_IDS.idp], `GET https://apikeys.googleapis.com/v2/projects/${NUMBERS.idp}/locations/global/keys`);
   assert.match(urls["preflight/query/key-string"], /\/keys\/00000000-0000-4000-8000-000000000001\/keyString$/);
   assert.equal(JSON.stringify(base.list).includes(PREP_KEYS.query), false);
-  for (const bad of [{ query: "Bad", idp: null }, { query: 5, idp: null }, { query: null, idp: "a/b" }, { query: `a${"b".repeat(63)}`, idp: null }]) assert.throws(() => prepCorpus(closure, { ...params, expectedKeyIds: bad }), /invalid expected key ID/, JSON.stringify(bad));
+  for (const bad of [{ query: "Bad", idp: null }, { query: "a_b", idp: null }, { query: "1abc", idp: null }, { query: "", idp: null }, { query: 5, idp: null }, { query: null, idp: "a/b" }, { query: `a${"b".repeat(63)}`, idp: null }]) assert.throws(() => prepCorpus(closure, { ...params, expectedKeyIds: bad }), /invalid expected key ID/, JSON.stringify(bad));
   assert.deepEqual(prepCorpus(closure, { ...params, expectedKeyIds: undefined }).expectedKeyIds, { query: null, idp: null });
   assert.deepEqual(base.list.find((row) => row.id === "preflight/query/iam").body, { json: { options: { requestedPolicyVersion: 3 } } });
   // The stage 3 preflight rows are the source of the standard requests.
@@ -76,7 +76,7 @@ test("the expected key is chosen from the live keys and the others are counted; 
     [{}, null, /found 0/], [{ keys: [] }, null, /found 0/], [{ keys: [browser, dedicated] }, null, /found 2/], [{ keys: [key("x-key", { deleteTime: "x" })] }, null, /found 0/], [{ keys: [null] }, null, /found 0/],
     [{ keys: [browser] }, "fireemu-query-auth-20260925", /not one live key/], [{ keys: [] }, "fireemu-query-auth-20260925", /not one live key/], [{}, "fireemu-query-auth-20260925", /not one live key/], [{ keys: [key("fireemu-query-auth-20260925", { deleteTime: "x" })] }, "fireemu-query-auth-20260925", /not one live key/], [{ keys: [dedicated, dedicated] }, "fireemu-query-auth-20260925", /found 2/],
     [{ keys: [{ name: `projects/${NUMBERS.idp}/locations/global/keys/fireemu-query-auth-20260925` }] }, "fireemu-query-auth-20260925", /not one live key/], [{ keys: [{ name: 5 }, {}] }, "fireemu-query-auth-20260925", /not one live key/],
-    [{ keys: [dedicated] }, "Bad", /not a key ID/], [{ keys: [dedicated] }, 5, /not a key ID/], [{ keys: [dedicated] }, "", /not a key ID/], [{ keys: [dedicated] }, `a${"b".repeat(63)}`, /not a key ID/], [{ keys: [dedicated] }, "a/b", /not a key ID/],
+    [{ keys: [dedicated] }, "Bad", /not a key ID/], [{ keys: [dedicated] }, "a_b", /not a key ID/], [{ keys: [dedicated] }, "a.b", /not a key ID/], [{ keys: [dedicated] }, "1abc", /not a key ID/], [{ keys: [dedicated] }, 5, /not a key ID/], [{ keys: [dedicated] }, "", /not a key ID/], [{ keys: [dedicated] }, `a${"b".repeat(63)}`, /not a key ID/], [{ keys: [dedicated] }, "a/b", /not a key ID/],
     [{ keys: [{ name: `projects/${NUMBERS.idp}/locations/global/keys/${PREP_KEYS.query}` }] }, null, /not the expected resource/], [{ keys: [{ name: `projects/${NUMBERS.query}/locations/global/keys/Abc` }] }, null, /not the expected resource/],
     [{ keys: [{ name: `projects/${NUMBERS.query}/locations/global/keys/1abc` }] }, null, /not the expected resource/], [{ keys: [{ name: `projects/${NUMBERS.query}/locations/global/keys/${"0".repeat(36)}` }] }, null, /not the expected resource/], [{ keys: [{}] }, null, /not the expected resource/], [{ keys: [{ name: 5 }] }, null, /not the expected resource/],
     [{ keys: [{ name: `projects/${NUMBERS.query}/locations/global/keys/` }] }, null, /not the expected resource/], [{ keys: [{ name: `projects/${NUMBERS.query}/locations/global/keys/a/b` }] }, null, /not the expected resource/],
@@ -225,4 +225,16 @@ test("the pin printer prints the four pins of a clean checkout and refuses an un
   assert.match(failed.err, /local inputs file refused/);
   assert.equal(failed.err.includes("SECRET-VALUE-XYZ"), false);
   void mkdir;
+});
+
+test("the key ID grammar is the one the stage 3 private inputs accept, for the same candidates", async () => {
+  const { parsePrivateInputs } = await import("./storage-rules/private-inputs.mjs");
+  const { KEY_ID } = await import("./storage-rules-prep/plan.mjs");
+  const base = privatePacket("/x/adc.json");
+  const candidates = ["fireemu-query-auth-20260925", "a", "a1", `a${"b".repeat(62)}`, `a${"b".repeat(63)}`, "abc-def", "-abc", "1abc", "Abc", "aBc", "a_b", "a.b", "a b", "a/b", "", "00000000-0000-4000-8000-000000000001", "ffffffff-ffff-ffff-ffff-ffffffffffff", "0000000A-0000-4000-8000-00000000000A", "00000000-0000-4000-8000-00000000000", "00000000-0000-4000-8000-0000000000012", "abc$", "abc\n"];
+  for (const id of candidates) {
+    let stage3 = true;
+    try { parsePrivateInputs({ ...base, projects: { ...base.projects, query: { ...base.projects.query, apiKeyId: id } } }); } catch { stage3 = false; }
+    assert.equal(KEY_ID.test(id), stage3, JSON.stringify(id));
+  }
 });

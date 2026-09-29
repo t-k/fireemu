@@ -275,3 +275,12 @@ test("the key facts are order independent, and a key's whole restriction shape i
   assert.equal(other(row("preflight/idp/key-metadata"), classifyResponse(row("preflight/idp/key-metadata"), raw(good["preflight/idp/key-metadata"]()))), false);
   assert.equal(other(row("preflight/query/key-metadata"), classifyResponse(row("preflight/query/key-metadata"), raw(good["preflight/query/key-metadata"]()))), false);
 });
+
+test("a key with a method restriction is refused even when the packet recorded exactly that restriction", async () => {
+  const methodsRestrictions = () => ({ apiTargets: QUERY_SERVICES.map((service) => ({ service, methods: ["*.Get"] })) });
+  const judge = await judgeWith((v) => { v.projects.query.restrictionsSha256 = restrictionsSha256(methodsRestrictions()); });
+  const outcome = classifyResponse(row("preflight/query/key-metadata"), raw({ ...good["preflight/query/key-metadata"](), restrictions: methodsRestrictions() }));
+  assert.equal(outcome.facts.restrictionsSha256, restrictionsSha256(methodsRestrictions()));
+  assert.equal(outcome.facts.methodRestricted, true);
+  assert.equal(judge(row("preflight/query/key-metadata"), outcome), false);
+});

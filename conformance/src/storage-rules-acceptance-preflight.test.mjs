@@ -68,6 +68,12 @@ test("a key read reports its uid, deletion and API targets, and its string stays
   const browser = { browserKeyRestrictions: { allowedReferrers: [] }, apiTargets: [{ service: "b.googleapis.com" }, { service: "a.googleapis.com" }] };
   assert.equal(digest(browser), digest({ apiTargets: [{ service: "a.googleapis.com" }, { service: "b.googleapis.com" }], browserKeyRestrictions: { allowedReferrers: [] } }));
   for (const other of [{ apiTargets: browser.apiTargets }, { ...browser, browserKeyRestrictions: { allowedReferrers: ["*"] } }, { ...browser, apiTargets: browser.apiTargets.slice(1) }, { ...browser, apiTargets: [...browser.apiTargets, { service: "c.googleapis.com" }] }, { ...browser, androidKeyRestrictions: {} }, { ...browser, apiTargets: [{ service: "a.googleapis.com", methods: ["x"] }, { service: "b.googleapis.com" }] }]) assert.notEqual(digest(other), digest(browser));
+  // Key order inside nested objects and inside API target entries does not matter either, but list order inside other lists does.
+  const nested = { browserKeyRestrictions: { allowedReferrers: ["https://a.example/", "https://b.example/"], extra: { x: 1, y: 2 } }, apiTargets: [{ service: "a.googleapis.com", methods: ["m1", "m2"] }] };
+  assert.equal(digest(nested), digest({ apiTargets: [{ methods: ["m1", "m2"], service: "a.googleapis.com" }], browserKeyRestrictions: { extra: { y: 2, x: 1 }, allowedReferrers: ["https://a.example/", "https://b.example/"] } }));
+  assert.notEqual(digest(nested), digest({ ...nested, browserKeyRestrictions: { ...nested.browserKeyRestrictions, allowedReferrers: ["https://b.example/", "https://a.example/"] } }));
+  assert.notEqual(digest(nested), digest({ ...nested, browserKeyRestrictions: { ...nested.browserKeyRestrictions, extra: { x: 1, y: 3 } } }));
+  assert.notEqual(digest(nested), digest({ ...nested, apiTargets: [{ service: "a.googleapis.com", methods: ["m2", "m1"] }] }));
   assert.match(digest(browser), /^[0-9a-f]{64}$/);
   assert.equal(classifyResponse(meta, json(200, { ...key(), restrictions: undefined })).facts.restrictionsSha256, restrictionsSha256({}));
   assert.equal(restrictionsSha256(undefined), restrictionsSha256({}));

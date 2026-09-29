@@ -73,6 +73,8 @@ async function walk(directory) {
 }
 // The facts the run wrote, in order: what each read or write of the run concluded, without secrets.
 const factsOf = async (f) => (await readFile(join(runDir(f), "captures.jsonl"), "utf8")).split("\n").filter(Boolean).map((line) => JSON.parse(line)).flatMap((row) => { const data = row.data ?? row; return data.facts !== undefined && data.kind !== undefined ? [{ operationId: data.operationId, kind: data.kind, verdict: data.verdict, facts: data.facts }] : []; });
+// The outcome of the terminal row of the reservation journal: how the run ended, as the counter recorded it.
+const terminalOf = async (f) => JSON.parse((await readFile(join(runDir(f), "reservations.jsonl"), "utf8")).split("\n").filter(Boolean).at(-1)).data.outcome;
 const urls = (f) => f.wire.map((entry) => `${entry.method} ${new URL(entry.url).pathname}`);
 const lockedOnce = ["fireemu-oracle-query.lock"];
 
@@ -86,6 +88,7 @@ test("pre: the release is saved, deleted and read back as absent, and the lock i
   assert.equal(result.released, true);
   assert.equal(result.requests, 8);
   assert.equal(result.mode, "pre");
+  assert.equal(await terminalOf(f), "finished");
   assert.equal(f.world.release, null);
   assert.equal(f.world.bucketless, null);
   assert.deepEqual(f.world.posts, []);
@@ -212,6 +215,7 @@ test("post: the saved release is published again from the saved record and read 
   assert.equal(result.changed, true);
   assert.equal(result.mode, "post");
   assert.equal(result.requests, 7);
+  assert.equal(await terminalOf(f), "finished");
   assert.deepEqual(f.world.posts, [{ name: RELEASE_NAME, rulesetName: RULESET }]);
   assert.equal(f.world.release.rulesetName, RULESET);
   assert.equal(f.world.deletes, 0);
@@ -379,6 +383,7 @@ test("pre: a deletion answered with an error after it was applied is recovered b
   f.world.hook.delete = (world) => { world.release = null; return broken(world); };
   const result = await f.entry(f.options);
   assert.deepEqual([result.status, result.changed, result.released], ["recovered", false, true]);
+  assert.equal(await terminalOf(f), "recovered");
   assert.deepEqual(f.world.posts, [{ name: RELEASE_NAME, rulesetName: RULESET }]);
   assert.deepEqual(await factsOf(f), [rulesetFact, releaseFact("preflight/release/bucket", releaseBody()), absent("preflight/release/bucketless"), absent("recovery/release/bucket/current"), releaseFact("recovery/release/bucket/after", restored(1))]);
   assert.deepEqual(await f.lockFiles(), []);
@@ -389,6 +394,7 @@ test("pre: a refused deletion is recovered as unchanged and journals the release
   f.world.hook.delete = refused;
   const result = await f.entry(f.options);
   assert.deepEqual([result.status, result.changed], ["recovered", false]);
+  assert.equal(await terminalOf(f), "recovered");
   assert.deepEqual((await factsOf(f)).slice(3), [releaseFact("recovery/release/bucket/current", releaseBody())]);
 });
 
@@ -434,6 +440,7 @@ test("post: the facts the run journals, for a publication, for a release that is
   recovered.world.hook.post = (world, body) => { world.release = { name: body.name, rulesetName: body.rulesetName, createTime: "2026-09-29T14:00:07.000000Z", updateTime: "2026-09-29T14:00:07.000000Z" }; return broken(world); };
   const result = await recovered.entry(recovered.options);
   assert.deepEqual([result.status, result.changed, result.released], ["recovered", true, true]);
+  assert.equal(await terminalOf(recovered), "recovered");
   assert.deepEqual((await factsOf(recovered)).slice(3), [releaseFact("recovery/release/bucket/current", { name: RELEASE_NAME, rulesetName: RULESET, createTime: "2026-09-29T14:00:07.000000Z", updateTime: "2026-09-29T14:00:07.000000Z" })]);
 });
 
@@ -474,7 +481,7 @@ test("the owner ledger, the local inputs and the runs directory must be private 
     "ledger is not UTF-8": async (f) => { await writeFile(join(f.root, "docs.local", "instructions", "owner-decisions.md"), Buffer.concat([Buffer.from(ledgerFor("pre", packetFor("pre", f.saved)) + "\n"), Buffer.from([0xff])]), { mode: 0o644 }); return /owner ledger refused|admission refused/; },
     "local inputs hard-linked": async (f) => { linkSync(f.localPath, join(f.root, "local-link.json")); return /local inputs file refused/; },
     "local inputs too large": async (f) => { await writeFile(f.localPath, Buffer.concat([Buffer.from(JSON.stringify(preLocal(f.adcPath))), Buffer.alloc(64 * 1024, 0x20)]), { mode: 0o600 }); return /local inputs file refused/; },
-    "local inputs is not UTF-8": async (f) => { await writeFile(f.localPath, Buffer.concat([Buffer.from(JSON.stringify(preLocal(f.adcPath)).replace(f.adcPath, `${f.adcPath}\u0000`).replace("\\u0000", "")), Buffer.from([0x20, 0xff])]), { mode: 0o600 }); return /local inputs file refused/; },
+    "local inputs is not UTF-8": async (f) => { const text = JSON.stringify(preLocal(f.adcPath)); const at = text.indexOf(f.adcPath) + f.adcPath.length; await writeFile(f.localPath, Buffer.concat([Buffer.from(text.slice(0, at)), Buffer.from([0xff]), Buffer.from(text.slice(at))]), { mode: 0o600 }); return /^Error: local inputs file refused$/; },
     "the ADC path is relative": async (f) => { await writeFile(f.localPath, JSON.stringify({ ...preLocal(f.adcPath), adcPath: "adc.json" }), { mode: 0o600 }); return /local inputs file refused/; },
     "the owner digest is short": async (f) => { await writeFile(f.localPath, JSON.stringify({ ...preLocal(f.adcPath), ownerEmailSha256: "abc" }), { mode: 0o600 }); return /local inputs file refused/; },
     "the runs directory is open to others": async (f) => { await chmod(f.runs, 0o755); return /runs directory refused/; },
@@ -505,7 +512,7 @@ test("the entry's own inputs are closed records: bad bindings and bad options ar
   assert.throws(() => bindReleaseEntry({ ...binding, root: join(f.root, "docs.local") }), /entry root is not a main checkout/);
   const spoiled = [
     null, undefined, [], "x", { ...f.options, extra: 1 }, { ...f.options, mode: "both" }, { ...f.options, mode: undefined }, { ...f.options, localPath: 5 }, { ...f.options, runId: 5 }, { ...f.options, runId: "Bad Id" }, { ...f.options, runId: "" },
-    { ...f.options, sourceCommit: 5 }, { ...f.options, sourceCommit: "abc" }, { ...f.options, sourceCommit: "A".repeat(40) }, { ...f.options, packet: { ...f.options.packet, sourceCommit: "b".repeat(40) } }, { ...f.options, packet: [] }, { ...f.options, packet: null }, { ...f.options, packet: Object.create(null) },
+    { ...f.options, sourceCommit: 5 }, { ...f.options, sourceCommit: "abc" }, { ...f.options, sourceCommit: "A".repeat(40) }, { ...f.options, sourceCommit: "abc", packet: { ...f.options.packet, sourceCommit: "abc" } }, { ...f.options, sourceCommit: "A".repeat(40), packet: { ...f.options.packet, sourceCommit: "A".repeat(40) } }, { ...f.options, packet: { ...f.options.packet, sourceCommit: "b".repeat(40) } }, { ...f.options, packet: [] }, { ...f.options, packet: null }, { ...f.options, packet: Object.create(null) },
     { ...f.options, review: 5 }, { ...f.options, review: [] }, { ...f.options, review: null }, { ...f.options, review: Object.create(null) },
     ...["runnerSha256", "fixtureSchemaSha256", "manifestSha256"].flatMap((key) => [{ ...f.options, packet: { ...f.options.packet, [key]: "abc" } }, { ...f.options, packet: { ...f.options.packet, [key]: "G".repeat(64) } }, { ...f.options, packet: { ...f.options.packet, [key]: 5 } }]),
   ];

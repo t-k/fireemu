@@ -154,3 +154,20 @@ test("the approval file must be a small, single-link, valid UTF-8 file", async (
   const good = harness(async () => ({ status: "finished", changed: true, requests: 1, released: true }));
   assert.equal((await good.run(["pre", "/x/l.json", (await scratch(t)).path, "ok-run"])).code, 0);
 });
+
+test("the local inputs reader knows only the two modes, and each mode reads only its own shape", async (t) => {
+  const dir = await mkdtemp("/private/tmp/storage-rules-release-local-");
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const saved = makeSaved({ bucket: BUCKET, release: { ...releaseBody(), bodySha256: canonicalDigest(releaseBody()) }, ruleset: { sourceSha256: SOURCE_SHA } });
+  const savedPath = join(dir, "saved.json");
+  await writeFile(savedPath, JSON.stringify(saved), { mode: 0o600 });
+  const prePath = join(dir, "pre.json");
+  const postPath = join(dir, "post.json");
+  await writeFile(prePath, JSON.stringify(preLocal("/x/adc.json")), { mode: 0o600 });
+  await writeFile(postPath, JSON.stringify(postLocal("/x/adc.json", savedPath)), { mode: 0o600 });
+  assert.equal((await readLocalInputs(prePath, "pre")).mode, "pre");
+  assert.equal((await readLocalInputs(postPath, "post")).mode, "post");
+  for (const [path, mode] of [[prePath, "post"], [postPath, "pre"], [prePath, "both"], [postPath, "both"], [postPath, undefined], [prePath, ""], [postPath, "toString"]]) {
+    await assert.rejects(readLocalInputs(path, mode), /local inputs file refused/, `${path} ${mode}`);
+  }
+});

@@ -571,10 +571,12 @@ async function harnessRequest(ctx, method, path) {
   return { status: response.status };
 }
 
-/** Inside `fireemu exec`: runs the prepared corpus against the local emulator. */
-async function sessionLocal() {
-  const prepared = JSON.parse(await readFile(process.env.AUTH_FEDERATION_IN, "utf8"));
-  const out = await runPrograms(prepared.programs, {
+/**
+ * The context the local session runs the prepared corpus with: the run's names, the pass tag and
+ * nonce labels the rows are masked with, and the local emulator at `host` as the only target.
+ */
+export function localSessionContext(prepared, saml, host) {
+  return {
     run: prepared.run,
     issuerHost: prepared.issuerHost,
     project: SANDBOX_PROJECT,
@@ -583,15 +585,25 @@ async function sessionLocal() {
     runCertificates: prepared.runCertificates,
     passTag: prepared.passTag,
     nonceLabels: prepared.nonceLabels,
-    saml: {
-      keys: await loadSamlSigners(prepared.samlKeysPath),
-      now: () => Math.floor(Date.now() / 1000),
-    },
+    saml,
     apiKey: "fake-api-key",
     adminAuthorization: OWNER,
-    origin: `http://${process.env.FIREBASE_AUTH_EMULATOR_HOST}`,
-    target: { kind: "local", origin: `http://${process.env.FIREBASE_AUTH_EMULATOR_HOST}` },
-  });
+    origin: `http://${host}`,
+    target: { kind: "local", origin: `http://${host}` },
+  };
+}
+
+/** Inside `fireemu exec`: runs the prepared corpus against the local emulator. */
+async function sessionLocal() {
+  const prepared = JSON.parse(await readFile(process.env.AUTH_FEDERATION_IN, "utf8"));
+  const saml = {
+    keys: await loadSamlSigners(prepared.samlKeysPath),
+    now: () => Math.floor(Date.now() / 1000),
+  };
+  const out = await runPrograms(
+    prepared.programs,
+    localSessionContext(prepared, saml, process.env.FIREBASE_AUTH_EMULATOR_HOST),
+  );
   await writeFile(process.env.AUTH_FEDERATION_OUT, JSON.stringify(out));
 }
 

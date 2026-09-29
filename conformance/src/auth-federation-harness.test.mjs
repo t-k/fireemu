@@ -1314,3 +1314,94 @@ test("the record-strict-safety corpus is what its packet says", async () => {
     ["fireemu-nonce-a-PASSTAG", "fireemu-nonce-b-PASSTAG", "fireemu-nonce-c-PASSTAG"],
   );
 });
+
+test("the local session runs the prepared corpus with the prepared pass tag and nonce labels", async () => {
+  const { localSessionContext, resolveRun } = await import("./auth-federation/run.mjs");
+  const { STRICT_SAFETY_PROGRAMS } = await import("./auth-federation/corpus-strict-safety.mjs");
+  const keys = { run: generateSigningKey({ kid: "run-kid" }), other: generateSigningKey() };
+  const resolved = resolveRun({
+    project: SANDBOX_PROJECT,
+    run: RUN,
+    issuerHost: CHANNEL,
+    keys,
+    certificates: {},
+    now: 1_790_000_000,
+    programs: STRICT_SAFETY_PROGRAMS,
+  });
+  const prepared = {
+    run: RUN,
+    issuerHost: CHANNEL,
+    runKids: ["run-kid"],
+    runCertificates: ["cert"],
+    passTag: resolved.passTag,
+    nonceLabels: resolved.nonceLabels,
+    programs: resolved.programs,
+  };
+  const saml = { keys: {}, now: () => 1_790_000_000 };
+  const ctx = localSessionContext(prepared, saml, "127.0.0.1:9099");
+  // What the recorded rows are masked with must reach the run: the tag and the labels.
+  assert.equal(ctx.passTag, resolved.passTag);
+  assert.deepEqual(ctx.nonceLabels, resolved.nonceLabels);
+  assert.equal(Object.keys(ctx.nonceLabels).length, 3);
+  assert.equal(ctx.run, RUN);
+  assert.equal(ctx.issuerHost, CHANNEL);
+  assert.deepEqual(ctx.runKids, ["run-kid"]);
+  assert.deepEqual(ctx.runCertificates, ["cert"]);
+  assert.equal(ctx.saml, saml);
+  assert.deepEqual(ctx.target, { kind: "local", origin: "http://127.0.0.1:9099" });
+  assert.equal(ctx.origin, "http://127.0.0.1:9099");
+  // A corpus without a tag runs with neither.
+  const plain = localSessionContext({ ...prepared, passTag: undefined, nonceLabels: undefined }, saml, "127.0.0.1:9099");
+  assert.equal(plain.passTag, undefined);
+  assert.equal(plain.nonceLabels, undefined);
+});
+
+test("distinct raw nonces get distinct labels and the same raw nonce one label", async () => {
+  const { resolveRun } = await import("./auth-federation/run.mjs");
+  const keys = { run: generateSigningKey({ kid: "run-kid" }), other: generateSigningKey() };
+  const token = (raw) => ({ claims: { nonce: { $sha256: raw } } });
+  const programs = [
+    {
+      id: "auth-federation/pending-token/labels-a",
+      providers: [`oidc.fireemu-RUN-la`],
+      client: "client-la",
+      tokens: {
+        one: token("nonce-one-PASSTAG"),
+        two: token("nonce-two-PASSTAG"),
+        // The same raw nonce twice, and one that differs only in where the tag sits.
+        again: token("nonce-one-PASSTAG"),
+        tagFirst: token("PASSTAG-nonce-one"),
+        plain: token("nonce-one"),
+      },
+      steps: [],
+    },
+    {
+      id: "auth-federation/pending-token/labels-b",
+      providers: [`oidc.fireemu-RUN-lb`],
+      client: "client-lb",
+      tokens: { other: token("nonce-two-PASSTAG"), three: token("nonce-three-PASSTAG") },
+      steps: [],
+    },
+  ];
+  const { nonceLabels, passTag } = resolveRun({
+    project: SANDBOX_PROJECT,
+    run: RUN,
+    issuerHost: CHANNEL,
+    keys,
+    certificates: {},
+    now: 1_790_000_000,
+    programs,
+  });
+  const labels = Object.values(nonceLabels);
+  // Five different raw nonces (one-tag, two-tag, tag-one, one, three): five hashes, five labels.
+  assert.equal(Object.keys(nonceLabels).length, 5);
+  assert.equal(new Set(labels).size, 5);
+  assert.deepEqual(labels.toSorted(), [
+    "<sha256:<pass>-nonce-one>",
+    "<sha256:nonce-one-<pass>>",
+    "<sha256:nonce-one>",
+    "<sha256:nonce-three-<pass>>",
+    "<sha256:nonce-two-<pass>>",
+  ]);
+  assert.ok(labels.every((label) => !label.includes(passTag)), "no label carries the raw tag");
+});

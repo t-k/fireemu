@@ -503,6 +503,20 @@ const stops = {
   "the lane with a version 1 digest and this version's packet digest": note(laneSubject, `decision=REVOKED; packetSha256=${foreignSha}; packetSha256=${sha}`),
   "the lane with a version 1 digest and this version's commit prefix": note(laneSubject, `decision=REVOKED; packetSha256=${foreignSha}; ${packet.sourceCommit.slice(0, 8)}`),
   "the lane with a free text line": `Note: STORAGE-RULES REVOKED ${foreignSha} by the owner`,
+  "the word revocation": note("STORAGE-RULES", "decision=revocation"),
+  "the word revoke": note(laneSubject, "revoke this packet"),
+  "the word withdrawn": note("STORAGE-RULES", "withdrawn"),
+  "the word withdraw": note(laneSubject, "withdraw the approval"),
+  "the upper-case word WITHDRAWN": note("STORAGE-RULES", "WITHDRAWN"),
+  "the full-width word withdrawn": note("STORAGE-RULES", "ｗｉｔｈｄｒａｗｎ"),
+  "the word 取消": note("STORAGE-RULES", "承認を取消"),
+  "the word 取り消し": note(laneSubject, "承認の取り消し"),
+  "the word 取り消す": note("STORAGE-RULES", "承認を取り消す"),
+  "the word 撤回": note("STORAGE-RULES", "承認を撤回"),
+  "the word 撤回 in another column": `- 2026-09-29 | 全体 | STORAGE-RULES stage3-v1を撤回 | オーナー（local） | note.md`,
+  "the lane with a version 1 digest and a commit that is not key-bound": note("STORAGE-RULES", `REVOKED packetSha256=${foreignSha}; see ${"c3".repeat(20)}`),
+  "the lane with a version 1 digest and a 64-digit digest that is not key-bound": note("STORAGE-RULES", `REVOKED packetSha256=${foreignSha}; see ${"d4".repeat(32)}`),
+  "the lane with a version 1 digest and an envelope ID that is not key-bound": note("STORAGE-RULES", `REVOKED packetSha256=${foreignSha}; see ${v1EnvelopeId}`),
   "the lane with a version 1 envelope and this version's": note(laneSubject, `decision=REVOKED; envelopeId=${v1EnvelopeId}; envelopeId=${envelopeId}`),
 };
 for (const [name, row] of Object.entries(stops)) {
@@ -514,6 +528,25 @@ for (const [name, row] of Object.entries(stops)) {
   });
 }
 
+test("every revocation word also makes a consumed revocation of an earlier version, when it is well formed", async () => {
+  const validate = await load();
+  for (const word of ["revoked", "revocation", "revoke", "withdrawn", "withdraw", "取消", "取り消し", "撤回"]) {
+    const consumed = note(laneSubject, `decision=${word}; packetSha256=${foreignSha}`);
+    assert.equal(validate({ ledgerText: [v1Approval(), consumed, decision()].join("\n"), packet, review }).sendAuthorized, false, word);
+    const unbound = note(laneSubject, `decision=${word}`);
+    assert.throws(() => validate({ ledgerText: [v1Approval(), unbound, decision()].join("\n"), packet, review }), /approval revoked/, word);
+  }
+});
+
+test("the delegation is revoked by every revocation word too", async () => {
+  const validate = await load();
+  for (const word of ["revoked", "revocation", "revoke", "withdrawn", "withdraw", "取消", "取り消し", "撤回", "WITHDRAWN"]) {
+    for (const subject of ["調整役への委任（本番の送信）", "調整役への委任（枠の承認）", "調整役への委任"]) {
+      assert.throws(() => validate({ ledgerText: `${delegatedLedger()}\n${note(subject, `decision=${word}`)}`, packet, review: { ...review, envelopeId, withinEnvelope: true } }), /delegation revoked|approval revoked|delegated envelope authority required/, `${subject} ${word}`);
+    }
+  }
+});
+
 test("a consumed revocation must follow the approval line whose pins it names, and that line must be this lane's", async () => {
   const validate = await load();
   const consumed = note(laneSubject, `decision=REVOKED; packetSha256=${foreignSha}`);
@@ -524,6 +557,13 @@ test("a consumed revocation must follow the approval line whose pins it names, a
   const revokedEarlier = note(laneSubject, `decision=REVOKED; packetSha256=${foreignSha}`);
   assert.throws(() => validate({ ledgerText: [revokedEarlier, consumed, decision()].join("\n"), packet, review }), /approval revoked/);
   assert.equal(validate({ ledgerText: [v1Approval(), consumed, decision()].join("\n"), packet, review }).sendAuthorized, false);
+});
+
+test("a keyed revocation of this version's own envelope stops a delegated approval even though earlier lines carry that envelope ID", async () => {
+  const validate = await load();
+  for (const row of [note(laneSubject, `decision=REVOKED; envelopeId=${envelopeId}`), note(`${laneSubject} envelope`, `decision=REVOKED; envelopeId=${envelopeId.toLowerCase()}`), note("unrelated", `REVOKED envelopeId=${envelopeId}`)]) {
+    assert.throws(() => validate({ ledgerText: `${delegatedLedger()}\n${row}`, packet, review: { ...review, envelopeId, withinEnvelope: true } }), /approval revoked/, row);
+  }
 });
 
 // Envelope IDs only mean something to a delegated approval that has one.

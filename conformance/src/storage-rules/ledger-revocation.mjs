@@ -12,7 +12,8 @@ export function normalizeLedgerText(text) {
 }
 
 export const NORMALIZED_DELEGATION_MARKER = normalizeLedgerText("調整役への委任");
-const REVOKED = "revoked";
+// The words that revoke, on the normalized (NFKC, lower-cased) line: the English forms and the Japanese ones (取消, 取り消し, 取り消す, 撤回).
+const REVOCATION_WORDS = /revoked|revocation|revoke|取消|取り消|撤回|withdrawn|withdraw/;
 const PIN_PREFIX_LENGTH = 8;
 
 /**
@@ -46,7 +47,7 @@ const HEX_REFERENCE = /(?<![0-9a-f])(?:[0-9a-f]{40}|[0-9a-f]{64})(?![0-9a-f])/g;
 
 /**
  * Find ledger lines that stop this lane's approval or the coordinator's delegation.
- * The whole normalized line is read (position, column count and spelling do not matter). A line that contains "revoked" and
+ * The whole normalized line is read (position, column count and spelling do not matter). A line that contains a revocation word ("revoked", "revocation", "revoke", "取消", "取り消", "撤回", "withdrawn", "withdraw") and
  * names the lane at all (the task ID anywhere in it) stops the approval, unless it is a consumed revocation of an earlier
  * version: it does not name this version (no pin in full or by an 8-character prefix, no envelope ID), it carries at
  * least one key-bound field (packetSha256=..., sourceCommit=..., runnerSha256=..., manifestSha256=...,
@@ -68,7 +69,7 @@ export function scanRevocations({ ledgerText, taskId, pins, envelopeId, allowlis
   ledgerText.split("\n").forEach((line, index) => {
     const text = normalizeLedgerText(line);
     const keyed = [...text.matchAll(KEYED)].map((match) => `${match[1]}=${match[2]}`);
-    if (!text.includes(REVOKED)) {
+    if (!REVOCATION_WORDS.test(text)) {
       // An earlier approval line of this lane: what it carries is what a later consumed revocation may cite.
       if (text.includes(taskKey)) keyed.forEach((entry) => approved.add(entry));
     } else if (!allowed.has(rowSha256(line))) {

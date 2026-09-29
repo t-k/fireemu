@@ -46,6 +46,10 @@ pub(super) struct StrictSaml {
     provider_id: String,
     xml: String,
     name_id: String,
+    /// The instant the request was verified at. The commit checks the provider's live
+    /// configuration against the response at this instant, so the time windows are read once,
+    /// when the request starts.
+    at: LogicalInstant,
 }
 
 impl StrictSaml {
@@ -58,10 +62,26 @@ impl StrictSaml {
         }
     }
 
-    /// Whether the provider still exists and is enabled and its certificates still verify the
-    /// response (the same document names the same subject).
+    /// Whether the provider still exists and is enabled, its certificates still verify the
+    /// response (the same document names the same subject), and the response still names the
+    /// provider's callback URL, identity provider and SP entity IDs (closure review N10, N-d).
+    /// The time windows are evaluated at the instant the request was verified, and `InResponseTo`
+    /// was checked then, so a slow blocking function never turns a valid sign-in into a refusal
+    /// on its own; only a configuration that changed while it ran does.
     pub(super) fn accepts(&self, store: &AuthStore) -> bool {
-        verified_against(store, &self.provider_id, &self.xml).is_ok()
+        let Ok(verified) = verified_against(store, &self.provider_id, &self.xml) else {
+            return false;
+        };
+        let Some(config) = store.saml_config(&self.provider_id) else {
+            return false;
+        };
+        let expected = Expected {
+            callback_uri: &config.callback_uri,
+            idp_entity_id: &config.idp_entity_id,
+            sp_entity_id: &config.sp_entity_id,
+            request_id: None,
+        };
+        check_conditions(&verified, &expected, self.at).is_ok()
     }
 }
 
@@ -157,6 +177,7 @@ pub(super) fn strict_saml(
             provider_id: provider_id.clone(),
             xml,
             name_id,
+            at,
         },
         rewritten,
     )))

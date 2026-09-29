@@ -843,8 +843,13 @@ fn signed_response(key: &rsa::RsaPrivateKey, c: &Conditions) -> String {
             .map_or_else(String::new, |id| format!(" {name}=\"{id}\""))
     };
     let unsigned = format!(
-        "<samlp:Response xmlns:samlp=\"urn:oasis:names:tc:SAML:2.0:protocol\" xmlns:saml=\"urn:oasis:names:tc:SAML:2.0:assertion\" Destination=\"{dest}\" ID=\"_r1\"{irt} IssueInstant=\"{now}\" Version=\"2.0\"><saml:Issuer>{IDP}</saml:Issuer><samlp:Status><samlp:StatusCode Value=\"{status}\"></samlp:StatusCode></samlp:Status><saml:Assertion ID=\"_a1\" IssueInstant=\"{now}\" Version=\"2.0\"><saml:Issuer>{issuer}</saml:Issuer><saml:Subject><saml:NameID>dynamic@example.com</saml:NameID><saml:SubjectConfirmation Method=\"urn:oasis:names:tc:SAML:2.0:cm:bearer\"><saml:SubjectConfirmationData{cirt} NotOnOrAfter=\"{cnoa}\" Recipient=\"{recipient}\"></saml:SubjectConfirmationData></saml:SubjectConfirmation></saml:Subject><saml:Conditions NotBefore=\"{nb}\" NotOnOrAfter=\"{noa}\"><saml:AudienceRestriction><saml:Audience>{aud}</saml:Audience></saml:AudienceRestriction></saml:Conditions></saml:Assertion></samlp:Response>",
-        dest = c.destination,
+        "<samlp:Response xmlns:samlp=\"urn:oasis:names:tc:SAML:2.0:protocol\" xmlns:saml=\"urn:oasis:names:tc:SAML:2.0:assertion\"{dest} ID=\"_r1\"{irt} IssueInstant=\"{now}\" Version=\"2.0\"><saml:Issuer>{IDP}</saml:Issuer><samlp:Status><samlp:StatusCode Value=\"{status}\"></samlp:StatusCode></samlp:Status><saml:Assertion ID=\"_a1\" IssueInstant=\"{now}\" Version=\"2.0\"><saml:Issuer>{issuer}</saml:Issuer><saml:Subject><saml:NameID>dynamic@example.com</saml:NameID><saml:SubjectConfirmation Method=\"urn:oasis:names:tc:SAML:2.0:cm:bearer\"><saml:SubjectConfirmationData{cirt} NotOnOrAfter=\"{cnoa}\" Recipient=\"{recipient}\"></saml:SubjectConfirmationData></saml:SubjectConfirmation></saml:Subject><saml:Conditions NotBefore=\"{nb}\" NotOnOrAfter=\"{noa}\"><saml:AudienceRestriction><saml:Audience>{aud}</saml:Audience></saml:AudienceRestriction></saml:Conditions></saml:Assertion></samlp:Response>",
+        // An empty destination leaves the attribute out.
+        dest = if c.destination.is_empty() {
+            String::new()
+        } else {
+            format!(" Destination=\"{}\"", c.destination)
+        },
         irt = reply_to("InResponseTo"),
         cirt = if c.confirmation_answers { reply_to("InResponseTo") } else { String::new() },
         now = iso(NOW),
@@ -1308,4 +1313,175 @@ fn a_continuation_resumed_with_another_session_is_not_checked_against_it() {
     resume["sessionId"] = json!(named_session);
     let resumed = sign_in(&s, &resume);
     assert_eq!(resumed.status, 200, "{}", resumed.body);
+}
+
+/// A blocking hook that allows the sign-in and runs `during` while the request is paused, as a
+/// concurrent Admin call or the passing of time would.
+struct HookThatRuns {
+    during: Box<dyn Fn() + Send + Sync>,
+}
+
+impl fireemu_adapter_http::identity_toolkit::AuthBlockingHook for HookThatRuns {
+    fn invoke(
+        &self,
+        _event: fireemu_core_functions::manifest::BlockingAuthEvent,
+        _user: &UserRecord,
+    ) -> Result<Value, fireemu_adapter_http::identity_toolkit::BlockingFunctionFailure> {
+        Ok(json!({}))
+    }
+
+    fn invoke_for_with_context(
+        &self,
+        _project: &str,
+        _tenant: Option<&str>,
+        _event: fireemu_core_functions::manifest::BlockingAuthEvent,
+        _user: &UserRecord,
+        _context: &fireemu_adapter_http::identity_toolkit::AuthBlockingContext,
+    ) -> Result<Option<Value>, fireemu_adapter_http::identity_toolkit::BlockingFunctionFailure>
+    {
+        (self.during)();
+        Ok(Some(json!({})))
+    }
+}
+
+#[test]
+fn a_provider_repointed_while_a_blocking_function_runs_is_refused_at_commit() {
+    // The commit checks what the live configuration decides again (the callback URL, the
+    // identity provider's entity ID and the SP entity ID), as a resumed continuation does
+    // (closure review N10 / N-d). The refusal is the existing bare INVALID_IDP_RESPONSE.
+    type Repoint = fn(&mut InboundSamlProviderConfig);
+    let cases: [(&str, Repoint); 3] = [
+        ("callback URL", |config| {
+            config.callback_uri = "https://demo-app.firebaseapp.com/__/auth/other".into();
+        }),
+        ("identity provider entity ID", |config| {
+            config.idp_entity_id = "https://other-idp.example.test/saml".into();
+        }),
+        ("SP entity ID", |config| {
+            config.sp_entity_id = "https://other.example.test/sp".into();
+        }),
+    ];
+    for (case, repoint) in cases {
+        let (mut s, key) = dynamic_state();
+        let store = s.store.clone();
+        s.blocking = Some(Arc::new(HookThatRuns {
+            during: Box::new(move || {
+                let mut store = store.lock().unwrap();
+                let mut config = store.saml_config(DYNAMIC).unwrap().clone();
+                repoint(&mut config);
+                store.replace_saml_config(config);
+            }),
+        }));
+        let xml = signed_response(&key, &Conditions::answering(None));
+        let response = sign_in(&s, &dynamic_request(&xml, None));
+        assert_eq!(response.status, 400, "{case}: {}", response.body);
+        assert_eq!(
+            response.body["error"]["message"], "INVALID_IDP_RESPONSE",
+            "{case}"
+        );
+        assert_eq!(s.store.lock().unwrap().user_count(), 0, "{case}");
+    }
+}
+
+#[test]
+fn a_response_that_expires_while_a_blocking_function_runs_still_commits() {
+    // The time windows are read once, when the request starts, as production reads them before
+    // it calls the function; a slow function does not turn a valid sign-in into a refusal.
+    let (mut s, key) = dynamic_state();
+    let clock = s.clock.clone();
+    s.blocking = Some(Arc::new(HookThatRuns {
+        during: Box::new(move || {
+            clock
+                .lock()
+                .unwrap()
+                .set(LogicalInstant::from_unix_seconds(NOW + 1_000))
+                .unwrap();
+        }),
+    }));
+    let xml = signed_response(&key, &Conditions::answering(None));
+    let response = sign_in(&s, &dynamic_request(&xml, None));
+    assert_eq!(response.status, 200, "{}", response.body);
+    assert_eq!(s.store.lock().unwrap().user_count(), 1);
+}
+
+#[test]
+fn a_provider_left_alone_while_a_blocking_function_runs_commits_a_dynamic_response() {
+    let (mut s, key) = dynamic_state();
+    s.blocking = Some(Arc::new(HookThatRuns {
+        during: Box::new(|| {}),
+    }));
+    let xml = signed_response(&key, &Conditions::answering(None));
+    let response = sign_in(&s, &dynamic_request(&xml, None));
+    assert_eq!(response.status, 200, "{}", response.body);
+}
+
+#[test]
+fn a_provider_deleted_while_a_blocking_function_runs_is_refused_at_commit() {
+    let (mut s, key) = dynamic_state();
+    let store = s.store.clone();
+    s.blocking = Some(Arc::new(HookThatRuns {
+        during: Box::new(move || {
+            // The hook may run more than once (beforeCreate, beforeSignIn): deleting is idempotent.
+            store.lock().unwrap().delete_saml_config(DYNAMIC);
+        }),
+    }));
+    let xml = signed_response(&key, &Conditions::answering(None));
+    let response = sign_in(&s, &dynamic_request(&xml, None));
+    assert_eq!(response.status, 400, "{}", response.body);
+    assert_eq!(response.body["error"]["message"], "INVALID_IDP_RESPONSE");
+    assert_eq!(s.store.lock().unwrap().user_count(), 0);
+}
+
+#[test]
+fn a_sign_in_naming_a_session_commits_through_a_blocking_function() {
+    // The commit re-check does not ask for InResponseTo again: the request's own check ran when
+    // it started, and the response answers the session's AuthnRequest.
+    let (mut s, key) = dynamic_state();
+    s.blocking = Some(Arc::new(HookThatRuns {
+        during: Box::new(|| {}),
+    }));
+    let (session_id, request_id) = session(&s);
+    let xml = signed_response(&key, &Conditions::answering(Some(&request_id)));
+    let response = sign_in(&s, &dynamic_request(&xml, Some(&session_id)));
+    assert_eq!(response.status, 200, "{}", response.body);
+    assert_eq!(s.store.lock().unwrap().user_count(), 1);
+}
+
+#[test]
+fn a_response_that_names_no_destination_commits_when_the_callback_changes_meanwhile() {
+    // The commit compares a name only when the response carries it (as the request's own check
+    // does): with no Destination, a changed callback URL has nothing to disagree with.
+    let (mut s, key) = dynamic_state();
+    let store = s.store.clone();
+    s.blocking = Some(Arc::new(HookThatRuns {
+        during: Box::new(move || {
+            let mut store = store.lock().unwrap();
+            let mut config = store.saml_config(DYNAMIC).unwrap().clone();
+            config.callback_uri = "https://demo-app.firebaseapp.com/__/auth/other".into();
+            store.replace_saml_config(config);
+        }),
+    }));
+    let conditions = Conditions {
+        destination: String::new(),
+        ..Conditions::answering(None)
+    };
+    let response = sign_in(
+        &s,
+        &dynamic_request(&signed_response(&key, &conditions), None),
+    );
+    assert_eq!(response.status, 200, "{}", response.body);
+    // The same change with the Destination named is refused (the repoint test).
+    let (mut s, key) = dynamic_state();
+    let store = s.store.clone();
+    s.blocking = Some(Arc::new(HookThatRuns {
+        during: Box::new(move || {
+            let mut store = store.lock().unwrap();
+            let mut config = store.saml_config(DYNAMIC).unwrap().clone();
+            config.callback_uri = "https://demo-app.firebaseapp.com/__/auth/other".into();
+            store.replace_saml_config(config);
+        }),
+    }));
+    let named = signed_response(&key, &Conditions::answering(None));
+    let refused = sign_in(&s, &dynamic_request(&named, None));
+    assert_eq!(refused.status, 400, "{}", refused.body);
 }

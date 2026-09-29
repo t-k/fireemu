@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "profile": "strict",
+  "profile": "emulator",
   "firestore": {
     "edition": "standard",
     "apiMode": "native"

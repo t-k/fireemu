@@ -79,6 +79,25 @@ jobs:
           echo "version=${version}" >> "$GITHUB_OUTPUT"
           echo "publish=${publish}" >> "$GITHUB_OUTPUT"
           echo "releasing ${version} (publish: ${publish})"
+      # The GitHub Release is written from this section after npm has the packages, so a missing
+      # or empty section is refused here, before anything is built or published, rather than
+      # leaving a published version without notes.
+      - name: the CHANGELOG has a section for this version
+        if: steps.version.outputs.publish == 'true'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: node npm/scripts/changelog-section.mjs "$VERSION" --out "$RUNNER_TEMP/release-notes.md"
+      # The Release's notes are these, exactly as checked: the job that writes the Release reads
+      # the file, not the repository.
+      - name: hand the release notes to the GitHub Release job
+        if: steps.version.outputs.publish == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: release-notes
+          path: ${{ runner.temp }}/release-notes.md
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 30
 
   # The Emulator UI is built once and reused by every platform, so every binary in a release
   # embeds byte-identical assets.
@@ -255,8 +274,10 @@ jobs:
   # The artifact a user installs, not the workspace build, is what the conformance corpus is
   # replayed against: the packed launcher and the linux-x64 package are installed offline into
   # a project the way `npm install fireemu` would, run through doctor / exec / symlink /
-  # read-only checks, and then drive `pnpm -C conformance run check`. The npm SBOM of that
-  # installation is attached to the release next to the cargo one.
+  # read-only checks, and then drive `pnpm -C conformance run check`, which compares the
+  # emulator profile with the recordings of the official Local Emulator Suite. The strict
+  # profile of the same package is compared with production by `strict-production` below. The
+  # npm SBOM of that installation is attached to the release next to the cargo one.
   verify-artifact:
     needs: [plan, build]
     runs-on: ubuntu-latest
@@ -306,8 +327,98 @@ jobs:
           test -x "$FIREEMU_BIN"
           pnpm -C conformance run check
 
+  # The strict profile of the artifact a user installs, replayed against the committed
+  # production recordings: every comparison a COMPAT_VERIFIED parent's closure names in its
+  # integratedRegression is rerun on the packed linux-x64 binary and must equal the committed
+  # rows. The harnesses run in a network namespace that has only loopback, so nothing can reach
+  # production, and the job reads no secret. It blocks publication like verify-artifact.
+  strict-production:
+    needs: [plan, build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          # The whole history: the gate verifies every hop of conformance/harness-lineage.json
+          # against it and refuses a shallow clone.
+          fetch-depth: 0
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa
+        with:
+          version: 10.32.1
+      # The Functions runtime of the FUNCTIONS-HTTP fixture: the Node its production comparison
+      # was recorded with (FUNCTIONS-HTTP-comparison.json nodeVersion).
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22.22.1
+      - name: keep the Functions runtime Node
+        run: echo "FIREEMU_NODE=$(command -v node)" >> "$GITHUB_ENV"
+      # The harnesses' Node: the runtime the lanes recorded their local comparisons with.
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 24.14.0
+      # uv runs the FS-DATA-WRITE corpus exporter (standard library only) on the runner's Python.
+      - name: uv
+        run: |
+          pipx install uv==0.11.28
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: package-linux-x64
+          path: npm/platforms/build/linux-x64
+      - name: pack the two packages at the release version
+        run: |
+          node npm/scripts/stamp-version.mjs ${{ needs.plan.outputs.version }}
+          node npm/scripts/prepare-launcher.mjs
+          mkdir -p npm/dist
+          (cd npm/platforms/build/linux-x64 && npm pack --pack-destination ../../../dist)
+          (cd npm/fireemu && npm pack --pack-destination ../dist)
+          sha256sum npm/dist/*.tgz
+      - name: install it the way a user would
+        id: install
+        run: |
+          node npm/scripts/verify-install.mjs --dist npm/dist --keep | tee verify.log
+          echo "dir=$(grep '^install=' verify.log | cut -d= -f2-)" >> "$GITHUB_OUTPUT"
+      - name: the installed binary is the one publish ships
+        env:
+          FIREEMU_BIN: ${{ steps.install.outputs.dir }}/node_modules/@fireemu/linux-x64/bin/fireemu
+        run: |
+          test -x "$FIREEMU_BIN"
+          installed=$(sha256sum "$FIREEMU_BIN" | cut -d' ' -f1)
+          packaged=$(sha256sum npm/platforms/build/linux-x64/bin/fireemu | cut -d' ' -f1)
+          echo "installed $installed"; echo "packaged  $packaged"
+          test "$installed" = "$packaged"
+      - name: harness dependencies
+        run: |
+          uv --version
+          "$FIREEMU_NODE" --version
+          pnpm -C conformance install --frozen-lockfile
+          npm ci --prefix conformance/functions-http/fixtures --ignore-scripts --no-audit --no-fund
+          # The AUTH-TENANT-BLOCKING blocking fixture's Functions dependencies, served by the daemon.
+          npm ci --prefix conformance/src/auth-tenant-blocking/function --ignore-scripts --no-audit --no-fund
+          node --test conformance/src/integration-v0.8.0-regression.test.mjs conformance/src/release-strict-regression.test.mjs
+      - name: the strict profile against the committed production recordings (loopback only)
+        env:
+          FIREEMU_BIN: ${{ steps.install.outputs.dir }}/node_modules/@fireemu/linux-x64/bin/fireemu
+          UV_OFFLINE: "1"
+          UV_PYTHON_DOWNLOADS: never
+        run: |
+          sudo unshare --net -- env PATH="$PATH" HOME="$HOME" FIREEMU_BIN="$FIREEMU_BIN" \
+            FIREEMU_NODE="$FIREEMU_NODE" UV_OFFLINE="$UV_OFFLINE" UV_PYTHON_DOWNLOADS="$UV_PYTHON_DOWNLOADS" \
+            sh -c 'ip link set lo up && exec setpriv --reuid="$1" --regid="$2" --init-groups -- \
+              node conformance/src/release-strict-regression.mjs --out strict-regression --dist npm/dist' \
+            sh "$(id -u)" "$(id -g)"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: strict-regression
+          path: strict-regression
+          if-no-files-found: warn
+
   publish:
-    needs: [plan, build, verify-artifact, reproducible]
+    needs: [plan, build, verify-artifact, reproducible, strict-production]
     runs-on: ubuntu-latest
     environment: npm-release
     permissions:
@@ -384,6 +495,20 @@ jobs:
         if: needs.plan.outputs.publish == 'true'
         run: echo "build provenance attestation - ${{ steps.attest.outcome }}"
 
+      # What the GitHub Release attaches: the attested archives, the checksums and both SBOMs,
+      # handed over before anything is published so that a failed upload cannot leave npm ahead
+      # of the release.
+      - name: hand the release assets to the GitHub Release job
+        if: needs.plan.outputs.publish == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: release-assets
+          path: dist/*
+          if-no-files-found: error
+          # A re-run of publish attests and uploads again.
+          overwrite: true
+          retention-days: 30
+
       # Platform packages first: `fireemu` pins them exactly, so publishing the launcher before
       # them would leave a version on the registry that cannot be installed.
       - name: publish the platform packages
@@ -414,3 +539,45 @@ jobs:
           name: dry-run-archives
           path: dist/*
           if-no-files-found: error
+
+  # The Release page for the tag: its notes are the CHANGELOG section `plan` checked before
+  # anything was built, and it carries the archives, the checksums and both SBOMs `publish`
+  # attested. It runs only after npm has every package. It checks out nothing and installs
+  # nothing, so the one job with write access to releases runs no code from the repository and
+  # reads no secret; if it fails after npm published, "Re-run failed jobs" recovers it (both
+  # artifacts are kept for 30 days). `--verify-tag` refuses to create a tag from the default
+  # branch, so the Release can only describe a tag that was pushed.
+  github-release:
+    needs: [plan, publish]
+    if: needs.plan.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: release-assets
+          path: dist
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: release-notes
+          path: notes
+      - name: create the GitHub Release from the CHANGELOG section
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.plan.outputs.version }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          # The files attached are the ones SHA256SUMS names (and attested), unchanged.
+          (cd dist && sha256sum --check SHA256SUMS)
+          test -s notes/release-notes.md
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "a GitHub Release for $TAG already exists: edit it by hand and attach dist/*, or delete it and re-run this job" >&2
+            exit 1
+          fi
+          flags=""
+          # A version is a prerelease by what precedes its build metadata.
+          case "${VERSION%%+*}" in *-*) flags="--prerelease" ;; esac
+          # shellcheck disable=SC2086 # $flags is empty or one fixed flag
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --verify-tag --title "Fireemu ${VERSION}" \
+            --notes-file notes/release-notes.md $flags dist/*

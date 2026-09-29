@@ -8,10 +8,9 @@
 //! bytes under either scope, as a side effect of automatic index accounting; the checks
 //! here pin that boundary so it cannot be lost.
 //!
-//! The aggregate-map recording fixes map accounting but does not bracket the aggregate size
-//! limit for a map or array value. It is therefore refused only under [`LimitScope::Production`] (the
-//! `strict` profile), because the compatibility contract forbids adding a refusal to the
-//! `emulator` profile.
+//! A map or array value is not refused for its aggregate size under either scope: production
+//! accepted a map of 1,048,488 logical bytes (FS-DATA-WRITE bracket recording, 2026-09-27), one
+//! byte over the catalog figure, so only `FS-LIMIT-DOCUMENT-BYTES` bounds an aggregate value.
 //!
 //! `FS-LIMIT-INDEXED-FIELD-VALUE-BYTES` is a truncating maximum: production truncates the
 //! indexed representation and refuses nothing, so it is identical under both scopes.
@@ -19,7 +18,9 @@
 use std::collections::BTreeMap;
 
 use fireemu_core_firestore::path::DocumentPath;
-use fireemu_core_firestore::size::{indexed_value_size, INDEXED_VALUE_TRUNCATION_BYTES};
+use fireemu_core_firestore::size::{
+    field_value_size, indexed_value_size, INDEXED_VALUE_TRUNCATION_BYTES,
+};
 use fireemu_core_firestore::store::{
     FirestoreError, FirestoreState, ImportedDocument, LimitScope, Write, WriteOp,
 };
@@ -134,43 +135,69 @@ fn canonical_len(segments: &[usize]) -> usize {
 // FS-LIMIT-FIELD-VALUE-BYTES: aggregate accounting
 // ---------------------------------------------------------------------------
 
+/// Production accepted a map of 1,048,488 logical bytes (FS-DATA-WRITE bracket recording,
+/// 2026-09-27); no aggregate refusal was observed, so neither scope has one.
 #[test]
-fn an_aggregate_field_value_at_the_production_boundary_is_accepted_and_one_more_byte_is_refused() {
-    // `document_size` for `a/b` with one field `v` is 20 (name) + 32 + 2 (field name) + value,
-    // so the accepted case is still inside FS-LIMIT-DOCUMENT-BYTES.
-    let mut store = state(LimitScope::Production);
-    store
-        .commit(&[set("a/b", "v", aggregate_map(1_048_487))], None, t(0))
-        .expect("the inclusive maximum is accepted");
+fn an_aggregate_value_over_the_catalog_figure_is_accepted_under_both_scopes() {
+    for scope in [LimitScope::Production, LimitScope::OfficialEmulator] {
+        for (label, value) in [
+            ("map at the catalog figure", aggregate_map(1_048_487)),
+            ("map one byte over", aggregate_map(1_048_488)),
+            (
+                "array of two payloads one byte over",
+                Value::Array(vec![
+                    Value::String("x".repeat(524_243)),
+                    Value::String("x".repeat(524_243)),
+                ]),
+            ),
+        ] {
+            let mut store = state(scope);
+            let result = store.commit(&[set("a/b", "v", value)], None, t(0));
+            assert!(result.is_ok(), "{scope:?} {label}: {}", outcome(&result));
+            assert!(store.get(&path("a/b")).is_some(), "{scope:?} {label}");
+        }
+    }
+}
 
-    let mut store = state(LimitScope::Production);
-    store
-        .commit(&[set("a/control", "v", Value::Integer(1))], None, t(0))
-        .expect("control");
-    let before = store.get(&path("a/control")).cloned();
-    let refused = store.commit(
-        &[
-            set("a/b", "v", aggregate_map(1_048_488)),
-            set("a/control", "v", Value::Integer(2)),
-        ],
-        None,
-        t(1),
-    );
-    assert!(
-        matches!(refused, Err(FirestoreError::InvalidArgument(ref m))
-            if m == "The value of property \"v\" is longer than 1048487 bytes."),
-        "{}",
-        outcome(&refused)
-    );
-    assert!(
-        store.get(&path("a/b")).is_none(),
-        "the refused write must publish nothing"
-    );
+/// A map of two strings whose aggregate size is `total`: each field charges its name (2) and
+/// its string (length + 1), so the strings share `total - 6` bytes and neither reaches the
+/// single-payload limit.
+fn two_string_map(total: usize) -> Value {
+    let payload = total - 6;
+    let value = Value::Map(BTreeMap::from([
+        ("s".to_owned(), Value::String("x".repeat(payload / 2))),
+        (
+            "t".to_owned(),
+            Value::String("x".repeat(payload - payload / 2)),
+        ),
+    ]));
     assert_eq!(
-        store.get(&path("a/control")).cloned(),
-        before,
-        "the sibling write in the same commit must not publish"
+        usize::try_from(field_value_size(&value).unwrap()).unwrap(),
+        total,
+        "the map fixture must be exact"
     );
+    value
+}
+
+/// `FS-LIMIT-DOCUMENT-BYTES` still bounds an aggregate value under both scopes: `a/b` with one
+/// field `v` charges 54 bytes besides the value (20 for the name, 32, and 2 for the field name),
+/// so a value of 1,048,522 bytes fills the 1,048,576-byte document and one more is refused.
+#[test]
+fn the_document_limit_bounds_an_aggregate_value_under_both_scopes() {
+    for scope in [LimitScope::Production, LimitScope::OfficialEmulator] {
+        let mut store = state(scope);
+        let accepted = store.commit(&[set("a/b", "v", two_string_map(1_048_522))], None, t(0));
+        assert!(accepted.is_ok(), "{scope:?}: {}", outcome(&accepted));
+        let mut store = state(scope);
+        let refused = store.commit(&[set("a/b", "v", two_string_map(1_048_523))], None, t(0));
+        assert!(
+            matches!(refused, Err(FirestoreError::ResourceExhausted(ref violation))
+                if violation.to_string().starts_with("FS-LIMIT-DOCUMENT-BYTES: 1048577 exceeds")),
+            "{scope:?}: {}",
+            outcome(&refused)
+        );
+        assert!(store.get(&path("a/b")).is_none(), "{scope:?}");
+    }
 }
 
 #[test]
@@ -182,39 +209,6 @@ fn a_map_accepted_by_the_saved_production_recording_has_no_extra_map_overhead() 
     let mut store = state(LimitScope::Production);
     let result = store.commit(&[set("a/b", "v", value)], None, t(0));
     assert!(result.is_ok(), "{}", outcome(&result));
-    assert!(store.get(&path("a/b")).is_some());
-}
-
-#[test]
-fn an_aggregate_array_value_over_the_boundary_is_refused_under_production() {
-    let mut store = state(LimitScope::Production);
-    // 1,048,488 bytes across two payloads, neither of which trips the single-payload rule.
-    let refused = store.commit(
-        &[set(
-            "a/b",
-            "v",
-            Value::Array(vec![
-                Value::String("x".repeat(524_243)),
-                Value::String("x".repeat(524_243)),
-            ]),
-        )],
-        None,
-        t(0),
-    );
-    assert!(
-        matches!(refused, Err(FirestoreError::InvalidArgument(_))),
-        "{}",
-        outcome(&refused)
-    );
-    assert!(store.get(&path("a/b")).is_none());
-}
-
-#[test]
-fn the_emulator_scope_admits_an_aggregate_field_value_over_the_boundary() {
-    let mut store = state(LimitScope::OfficialEmulator);
-    store
-        .commit(&[set("a/b", "v", aggregate_map(1_048_488))], None, t(0))
-        .expect("the emulator profile may not gain a refusal");
     assert!(store.get(&path("a/b")).is_some());
 }
 
@@ -447,7 +441,7 @@ fn an_oversized_document_with_an_over_long_path_still_reports_the_document_charg
 #[test]
 fn an_import_applies_the_write_path_byte_limits_and_publishes_nothing_on_refusal() {
     for (label, value) in [
-        ("aggregate value", aggregate_map(1_048_488)),
+        ("oversized document", two_string_map(1_048_523)),
         ("nested path", nested_path_field(&PATH_OVER_MAXIMUM).1),
     ] {
         let name = if label == "nested path" {
@@ -473,8 +467,12 @@ fn an_import_applies_the_write_path_byte_limits_and_publishes_nothing_on_refusal
             ],
             t(0),
         );
+        // The path rule answers INVALID_ARGUMENT, the document limit RESOURCE_EXHAUSTED.
         assert!(
-            matches!(refused, Err(FirestoreError::InvalidArgument(_))),
+            matches!(
+                refused,
+                Err(FirestoreError::InvalidArgument(_) | FirestoreError::ResourceExhausted(_))
+            ),
             "{label}: {}",
             outcome(&refused)
         );
@@ -482,20 +480,21 @@ fn an_import_applies_the_write_path_byte_limits_and_publishes_nothing_on_refusal
         assert!(store.get(&path("a/bad")).is_none(), "{label}");
     }
 
-    // The emulator scope imports what the official emulator imports: only the aggregate
-    // value rule is strict-only, the path rule applies under either scope.
-    let mut store = state(LimitScope::OfficialEmulator);
-    store
-        .import_documents(
-            vec![ImportedDocument {
-                path: path("a/bad"),
-                fields: BTreeMap::from([("v".to_owned(), aggregate_map(1_048_488))]),
-                create_time: None,
-                update_time: None,
-            }],
-            t(0),
-        )
-        .expect("the emulator profile may not gain a refusal");
+    // Neither scope refuses an aggregate value for its own size on import.
+    for scope in [LimitScope::Production, LimitScope::OfficialEmulator] {
+        let mut store = state(scope);
+        store
+            .import_documents(
+                vec![ImportedDocument {
+                    path: path("a/bad"),
+                    fields: BTreeMap::from([("v".to_owned(), aggregate_map(1_048_488))]),
+                    create_time: None,
+                    update_time: None,
+                }],
+                t(0),
+            )
+            .unwrap_or_else(|error| panic!("{scope:?}: {error}"));
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -559,4 +558,109 @@ fn the_reviewed_array_field_path_fixture_is_emulator_ok_and_strict_refused() {
         outcome(&refused)
     );
     assert!(store.get(&path("a/b")).is_none());
+}
+
+// ---------------------------------------------------------------------------
+// Index accounting: production refusals the official emulator does not make
+// ---------------------------------------------------------------------------
+
+/// A relative document name of exactly `total` bytes: units `k/<id>` joined by `/`, each id
+/// between 1 and 1,500 bytes.
+fn name_of(total: usize) -> String {
+    let units = (total + 1).div_ceil(1_503);
+    let id_bytes = total + 1 - 3 * units;
+    let name = (0..units)
+        .map(|index| {
+            let id = id_bytes / units + usize::from(index < id_bytes % units);
+            format!("k/{}", "i".repeat(id))
+        })
+        .collect::<Vec<_>>()
+        .join("/");
+    assert_eq!(name.len(), total, "the name fixture must be exact");
+    name
+}
+
+fn integers(count: i64) -> Value {
+    Value::Array((0..count).map(Value::Integer).collect())
+}
+
+/// Index accounting refuses these in production (the FS-DATA-WRITE recordings); the pinned
+/// official emulator (firebase-tools 15.28.2, cloud-firestore-emulator v1.22.0) accepted every
+/// one of them on 2026-09-27, so only the strict profile refuses them.
+#[test]
+fn index_accounting_refusals_are_strict_profile_only() {
+    let cases = [
+        // The create transaction budget (owner decision D1).
+        (name_of(2_000), "a", integers(7_300), "Transaction too big."),
+        // FS-LIMIT-INDEX-ENTRIES-PER-DOCUMENT: 20,000 distinct elements are 40,002 entries.
+        (
+            "ie3/arr20000".to_owned(),
+            "a",
+            integers(20_000),
+            "too many index entries",
+        ),
+        // A 1,500-byte string under a 2,642-byte name (index-entry-string-name/2642).
+        (
+            name_of(2_642),
+            "s",
+            Value::String("x".repeat(1_500)),
+            "Index entry is too large.",
+        ),
+        // FS-LIMIT-INDEX-ENTRY-BYTES: a single-field entry over the recorded threshold.
+        (
+            name_of(3_668),
+            "b",
+            Value::Bytes(vec![7; 1_500]),
+            "Index entry is too large.",
+        ),
+        // The whole-name guard.
+        (
+            name_of(5_000),
+            "v",
+            Value::Integer(1),
+            "Index entry is too large.",
+        ),
+    ];
+    for (name, field, value, message) in cases {
+        let mut strict = state(LimitScope::Production);
+        let refused = strict.commit(&[set(&name, field, value.clone())], None, t(0));
+        assert!(
+            matches!(refused, Err(FirestoreError::InvalidArgument(ref m)) if m.starts_with(message)),
+            "strict {message}: {}",
+            outcome(&refused)
+        );
+        assert!(strict.get(&path(&name)).is_none());
+
+        let mut emulator = state(LimitScope::OfficialEmulator);
+        emulator
+            .commit(&[set(&name, field, value.clone())], None, t(0))
+            .unwrap_or_else(|error| panic!("emulator {message}: {error}"));
+        assert!(emulator.get(&path(&name)).is_some());
+
+        // An import is validated by the same rules.
+        let mut imported = state(LimitScope::OfficialEmulator);
+        imported
+            .import_documents(
+                vec![ImportedDocument {
+                    path: path(&name),
+                    fields: BTreeMap::from([(field.to_owned(), value.clone())]),
+                    create_time: None,
+                    update_time: None,
+                }],
+                t(0),
+            )
+            .unwrap_or_else(|error| panic!("emulator import {message}: {error}"));
+        let mut strict_import = state(LimitScope::Production);
+        assert!(strict_import
+            .import_documents(
+                vec![ImportedDocument {
+                    path: path(&name),
+                    fields: BTreeMap::from([(field.to_owned(), value)]),
+                    create_time: None,
+                    update_time: None,
+                }],
+                t(0),
+            )
+            .is_err());
+    }
 }

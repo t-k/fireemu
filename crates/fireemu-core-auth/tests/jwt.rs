@@ -2,13 +2,15 @@
 
 use fireemu_core_auth::claims::{ClaimValue, CustomClaims};
 use fireemu_core_auth::jwt::{
-    base64url_encode, decode_unsigned, encode_unsigned, verify_id_token, verify_rules_token,
+    base64url_encode, decode_unsigned, encode_unsigned,
+    verify_firestore_rules_token_of_removed_tenant, verify_id_token, verify_rules_token,
     verify_rules_token_for_project, JwtError, SigningMode, TokenAcceptance, TokenVerification,
 };
 use fireemu_core_auth::mfa::TotpPolicy;
-use fireemu_core_auth::store::{AuthStore, NewUser};
+use fireemu_core_auth::store::{AuthRegistry, AuthStore, NewUser};
 use fireemu_core_types::determinism::SplitMix64;
 use fireemu_core_types::time::{LogicalDuration, LogicalInstant};
+use std::sync::{Arc, Mutex};
 
 fn t0() -> LogicalInstant {
     LogicalInstant::from_unix_seconds(1_788_004_860)
@@ -225,4 +227,58 @@ fn base64url_round_trip_and_rfc4648_vectors() {
             .collect();
         assert_eq!(base64url_decode(&base64url_encode(&data)).unwrap(), data);
     }
+}
+
+/// A removed tenant's token is checked against its project's store: it must name a tenant (a
+/// project token is no removed tenant's), and a tenant store is never its project's.
+#[test]
+fn a_removed_tenants_token_names_a_tenant_and_is_checked_against_its_project() {
+    let project = Arc::new(Mutex::new(AuthStore::new(
+        "demo-app",
+        SplitMix64::new(5),
+        TotpPolicy::default(),
+    )));
+    let registry = AuthRegistry::new("demo-app", project.clone());
+    let tenant = registry.ensure_tenant("demo-app", "tenant-a").unwrap();
+    let tenant_token = {
+        let mut store = tenant.lock().unwrap();
+        let uid = store
+            .create_user(NewUser::email("t@example.com"), t0())
+            .unwrap();
+        encode_unsigned(&store.id_token_claims(&uid, None, t0()).unwrap())
+    };
+    let project_token = {
+        let mut store = project.lock().unwrap();
+        let uid = store
+            .create_user(NewUser::email("p@example.com"), t0())
+            .unwrap();
+        encode_unsigned(&store.id_token_claims(&uid, None, t0()).unwrap())
+    };
+    let check = |token: &str, store: &Arc<Mutex<AuthStore>>| {
+        verify_firestore_rules_token_of_removed_tenant(
+            token,
+            &store.lock().unwrap(),
+            t0(),
+            TokenAcceptance::Verified,
+            None,
+            None,
+        )
+    };
+    let decoded = check(&tenant_token, &project).unwrap();
+    assert_eq!(
+        decoded
+            .payload
+            .get("firebase")
+            .and_then(|f| f.get("tenant"))
+            .and_then(|t| t.as_str()),
+        Some("tenant-a")
+    );
+    assert!(matches!(
+        check(&project_token, &project),
+        Err(JwtError::WrongTenant { .. })
+    ));
+    assert!(matches!(
+        check(&tenant_token, &tenant),
+        Err(JwtError::WrongTenant { .. })
+    ));
 }

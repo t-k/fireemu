@@ -1,15 +1,15 @@
-# fireemu
+# Fireemu
 
-An experimental local runtime for testing Firebase SDK and Functions code.
+A local runtime for testing Firebase SDK and Functions code, checked against production Firebase behavior.
 
 Some Firebase failures are easy to miss locally. A query may need a composite index in production even though it passes against the official emulator. Production limits may reject a request that looked fine during development. Finding those problems only after running against a real Firebase project makes the feedback loop slow and can leave test data behind.
 
-fireemu was built for two jobs:
+Fireemu was built for two jobs:
 
 - catch selected production-facing problems earlier, including missing Firestore indexes and production limit violations;
 - keep local test runs fast, with no JVM emulator to start and a single command that starts the services, runs the test command, and shuts everything down.
 
-fireemu is experimental. It is not a replacement for the official Firebase Emulator Suite or for testing against a real Firebase project. Use it as an additional test target, keep the official emulator in your test matrix, and verify important flows against production before shipping.
+Fireemu is pre-1.0. It is not a replacement for the official Firebase Emulator Suite or for testing against a real Firebase project. Use it as an additional test target, keep the official emulator in your test matrix, and verify important flows against production before shipping.
 
 ## Quick start
 
@@ -28,7 +28,7 @@ npx fireemu exec -- npm test
 
 The `strict` profile, the default and the one `init` recommends, behaves like production Firebase where the official emulator does not: composite indexes are checked with production's rules, production query limits are enforced, and ID tokens are verified. Choose the `emulator` profile when matching the pinned official emulator is more important.
 
-If `firebase.json` exists, `init` references it instead of copying its settings. Rules, indexes, Functions codebases, and emulator ports are loaded from that file each time fireemu starts. `firebase-tools@15.28.2` does not impose a Functions codebase-count limit, but fireemu applies a documented local safety budget of 32 simultaneously selected codebases because each starts a Node runner; `--only functions:<codebase>` selects one from a larger project.
+If `firebase.json` exists, `init` references it instead of copying its settings. Rules, indexes, Functions codebases, and emulator ports are loaded from that file each time Fireemu starts. `firebase-tools@15.28.2` does not impose a Functions codebase-count limit, but Fireemu applies a documented local safety budget of 32 simultaneously selected codebases because each starts a Node runner; `--only functions:<codebase>` selects one from a larger project.
 
 Functions source reloads hash all non-ignored file content. One daemon-wide source-work admission paces scans and snapshots to 64 MiB/s and 20,000 directory entries/s, stops abandoned work between 64 KiB chunks, and rejects a watch or reload operation whose source tree exceeds 100,000 entries or 128 directory levels. These are local resource-safety limits rather than Firebase CLI compatibility claims.
 
@@ -61,13 +61,13 @@ The generated configuration uses Standard edition Firestore with the Native API:
 
 See the [configuration schema](spec/config/fireemu.schema.json) for the complete set of options.
 
-`--config` accepts either a canonical fireemu configuration (with `"schemaVersion": 1`) or a Firebase project configuration. A file without `schemaVersion` is refused if it contains fireemu-only keys such as `profile`, `daemon`, or `auth.totp`, with a diagnostic naming the file, key, and required version. This check also applies to `--firebase-json` and files referenced by `firebaseJson`; keep fireemu settings in the canonical file and pass it with `--config`. Shared Firebase product sections and deployment settings remain supported, and filenames do not determine the format.
+`--config` accepts either a canonical Fireemu configuration (with `"schemaVersion": 1`) or a Firebase project configuration. A file without `schemaVersion` is refused if it contains Fireemu-only keys such as `profile`, `daemon`, or `auth.totp`, with a diagnostic naming the file, key, and required version. This check also applies to `--firebase-json` and files referenced by `firebaseJson`; keep Fireemu settings in the canonical file and pass it with `--config`. Shared Firebase product sections and deployment settings remain supported, and filenames do not determine the format.
 
-The canonical file can configure the local Auth settings used by the selected project. `auth.passwordPolicy` and `auth.passwordPolicyOverrides` define password strength and sign-in enforcement; `auth.signIn.allowDuplicateEmails`, `auth.client.permissions`, and `auth.improvedEmailPrivacy` control account ownership, end-user account creation/deletion, and email privacy. `auth.configOverrides` scopes the latter settings to an existing project or tenant without creating that namespace. `auth.blockingFunctions` selects owned local beforeCreate/beforeSignIn functions and bounds inbound credential forwarding. `auth.quota` stores a production-shaped temporary quota, while `auth.quotaSimulation` enables the deterministic local fixed-window model. Values are validated before startup, and project/tenant management routes expose the effective settings without changing the file. These local settings and simulations are separate from production compatibility evidence; the compatibility ledger records which conditions have been compared with Firebase.
+The canonical file can configure the local Auth settings used by the selected project. `auth.passwordPolicy` and `auth.passwordPolicyOverrides` define password strength and sign-in enforcement; `auth.signIn.allowDuplicateEmails`, `auth.client.permissions`, and `auth.improvedEmailPrivacy` control account ownership, end-user account creation/deletion, and email privacy. `auth.signIn.email`, `auth.signIn.anonymous` and `auth.signIn.phoneNumber` (with its test numbers) set the sign-in providers, which otherwise all start enabled. `auth.configOverrides` scopes the latter settings to an existing project or tenant without creating that namespace. `auth.blockingFunctions` selects owned local beforeCreate/beforeSignIn functions and bounds inbound credential forwarding. `auth.quota` stores a production-shaped temporary quota, while `auth.quotaSimulation` enables the deterministic local fixed-window model. Values are validated before startup, and project/tenant management routes expose the effective settings without changing the file. These local settings and simulations are separate from production compatibility evidence; the compatibility ledger records which conditions have been compared with Firebase.
 
 ## Installation
 
-Install fireemu as a development dependency:
+Install Fireemu as a development dependency:
 
 ```sh
 npm install --save-dev fireemu
@@ -100,7 +100,7 @@ npx fireemu exec -- npm test
 npx fireemu exec -- npx vitest run
 ```
 
-`exec` returns the child command's exit status and forwards SIGINT and SIGTERM. It also exports the emulator host variables used by Firebase SDKs. Like the official command, it starts without the Emulator UI unless `--ui` is present. The fireemu-specific `--ui-port <port>` remains an explicit UI override, and port `0` disables it.
+`exec` returns the child command's exit status and forwards SIGINT and SIGTERM. It also exports the emulator host variables used by Firebase SDKs. Like the official command, it starts without the Emulator UI unless `--ui` is present. The Fireemu-specific `--ui-port <port>` remains an explicit UI override, and port `0` disables it.
 
 The official CLI spellings are available as aliases:
 
@@ -142,14 +142,14 @@ The following is a product-level summary, not a claim that every API and edge ca
 | Cloud Functions for Firebase | v2 HTTP and callable functions, including callable streaming, plus Firestore, Storage, and scheduled functions through the bundled Node.js runner |
 | Cloud Pub/Sub | The documented gRPC subset used by the supported Functions flows |
 | Emulator logging | The EmulatorLog WebSocket with bounded local history and per-function Node log attribution |
-| Firebase App Check | A fireemu-specific local implementation; this is not an official Emulator Suite parity claim |
-| Emulator UI | A fireemu UI for supported data and controls, with scoped workflow and official Logs interoperability evidence |
+| Firebase App Check | A Fireemu-specific local implementation; this is not an official Emulator Suite parity claim |
+| Emulator UI | A Fireemu UI for supported data and controls, with scoped workflow and official Logs interoperability evidence |
 
 Run `fireemu capabilities` or inspect the [Capability Manifest](crates/fireemu/src/capabilities.json) before depending on a specific API. Each capability records whether it is implemented, partial, validation-only, or unsupported.
 
 ## Gap from production Firebase
 
-fireemu aims to catch selected failures before a production run, but it does not reproduce the Firebase backend.
+Fireemu aims to catch selected failures before a production run, but it does not reproduce the Firebase backend.
 
 - Strict mode checks known Firestore index and request-limit cases, but it cannot guarantee that every request accepted locally will be accepted by production.
 - Real quota accounting, billing, IAM, organization policy, regional behavior, network conditions, and service rollouts are outside the local runtime.
@@ -160,14 +160,15 @@ These are the gaps currently known and documented by the project, not an exhaust
 
 ## Gap from the official Firebase Emulator Suite
 
-fireemu is compatible with the listed Local Emulator Suite products as shipped by firebase-tools 15.28.2 -- Cloud Firestore, Firebase Authentication, Cloud Storage for Firebase, Cloud Functions, Cloud Pub/Sub and Eventarc, with Security Rules on the Firestore and Storage surfaces -- under the `emulator` compatibility profile and the evidence recorded in `spec/compatibility/contract.json`; it makes no complete-suite and no unqualified superset claim while Realtime Database, Firebase Hosting, App Hosting and Data Connect are deferred and Firebase Extensions is not planned.
+Fireemu is compatible with the listed Local Emulator Suite products as shipped by firebase-tools 15.28.2 -- Cloud Firestore, Firebase Authentication, Cloud Storage for Firebase, Cloud Functions, Cloud Pub/Sub and Eventarc, with Security Rules on the Firestore and Storage surfaces -- under the `emulator` compatibility profile and the evidence recorded in `spec/compatibility/contract.json`; it makes no complete-suite and no unqualified superset claim while Realtime Database, Firebase Hosting, App Hosting and Data Connect are deferred and Firebase Extensions is not planned.
 
 In practical terms:
 
 - the `emulator` profile targets the behavior of the pinned Firebase Emulator Suite release, while `strict` follows production Firebase and refuses what production refuses;
-- where production and the official emulator disagree, fireemu follows production and records the difference in `conformance/divergences.json`. Two examples: an equality filter combined with an inequality on another field is refused without a composite index, as production does, and a REST `runQuery` response omits the `done` flag that the official emulator adds;
-- a few behaviors differ by profile rather than being registered differences, because the `emulator` profile still matches the official emulator exactly. `spec/compatibility/contract.json` lists them. One example: under `strict` a request against a Firestore database that was never created answers `NOT_FOUND` as production does, where the official emulator serves any syntactically valid database id. The default database and the databases a `firebase.json` `firestore` entry names are always served under both profiles;
-- fireemu serves its own UI with the supported Auth, Firestore, Storage, Functions, Rules diagnostics and Firebase alerts workflows. The official UI Logs browser boundary is also tested; Android, Apple and Unity SDK matrices plus optional accessibility and visual snapshots remain outside the current scope;
+- where production and the official emulator disagree, Fireemu follows production and records the difference in `conformance/divergences.json`. One example: a REST `runQuery` response omits the `done` flag that the official emulator adds;
+- a few behaviors differ by profile rather than being registered differences, because the `emulator` profile still matches the official emulator exactly. `spec/compatibility/contract.json` lists them. Two examples: under `strict` a request against a Firestore database that was never created answers `NOT_FOUND` as production does, where the official emulator serves any syntactically valid database id, and an equality filter combined with an inequality on another field is refused without a composite index, as production does, where the official emulator checks no composite index. The default database and the databases a `firebase.json` `firestore` entry names are always served under both profiles;
+- under `strict`, Identity Platform multi-tenancy is off until the project turns it on, as in production: tenant management and requests to a tenant are refused until `multiTenant.allowTenants` is written through the Admin config API, the same call production takes (`PATCH /identitytoolkit.googleapis.com/admin/v2/projects/<project>/config?updateMask=multiTenant.allowTenants` with `{"multiTenant":{"allowTenants":true}}` and an owner credential). There is no start-up setting for it; an Auth export keeps the switch and an import restores it;
+- Fireemu serves its own UI with the supported Auth, Firestore, Storage, Functions, Rules diagnostics and Firebase alerts workflows. The official UI Logs browser boundary is also tested; Android, Apple and Unity SDK matrices plus optional accessibility and visual snapshots remain outside the current scope;
 - Eventarc publication and trigger-management workflows, Cloud Tasks queue inspection, Pub/Sub snapshots, and loopback push delivery are supported through the Functions and Pub/Sub runtimes. Local safety limits and reload semantics are recorded in the compatibility contract;
 - Realtime Database, Firebase Hosting, App Hosting, and Data Connect are deferred and not served;
 - Firebase Extensions is not planned.
@@ -189,9 +190,9 @@ The two profiles answer different questions:
 
 ## Performance
 
-fireemu is measured against the official Firestore emulator by a paired benchmark ([benchmark.yml](.github/workflows/benchmark.yml), harness in [`tools/bench/`](tools/bench/)). Both emulators run sequentially on the same GitHub Actions Linux runner, under the `emulator` profile, driven by the same SDK workloads with result validation. The figures below are from one `standard` run (5 measured pairs, commit f3b942c) and are paired ratios with 95% confidence intervals; absolute values depend on the runner.
+Fireemu is measured against the official Firestore emulator by a paired benchmark ([benchmark.yml](.github/workflows/benchmark.yml), harness in [`tools/bench/`](tools/bench/)). Both emulators run sequentially on the same GitHub Actions Linux runner, under the `emulator` profile, driven by the same SDK workloads with result validation. The figures below are from one `standard` run (5 measured pairs, commit f3b942c) and are paired ratios with 95% confidence intervals; absolute values depend on the runner.
 
-| Area | Official | fireemu | Ratio |
+| Area | Official | Fireemu | Ratio |
 | --- | ---: | ---: | ---: |
 | Startup until the SDK can use Firestore | 3,043 ms | 140 ms | 21.6x faster [21.4, 21.8] |
 | Idle memory, empty database (PSS) | 390 MiB | 11 MiB | 34x smaller |
@@ -200,12 +201,12 @@ fireemu is measured against the official Firestore emulator by a paired benchmar
 
 ## Project status
 
-fireemu is under active development and has not reached a stable compatibility promise. Configuration, unsupported behavior, and edge-case semantics may change between releases.
+Fireemu is under active development and has not reached a stable compatibility promise. Configuration, unsupported behavior, and edge-case semantics may change between releases.
 
-Bug reports that include the Firebase product, SDK version, fireemu profile, and a minimal reproduction are especially useful. When reporting a compatibility problem, note whether the reference behavior came from production Firebase or the official emulator; they do not always behave the same way.
+Bug reports that include the Firebase product, SDK version, Fireemu profile, and a minimal reproduction are especially useful. When reporting a compatibility problem, note whether the reference behavior came from production Firebase or the official emulator; they do not always behave the same way.
 
 Contributor build and test commands are documented in the [development guide](docs/development.md).
 
 ## License
 
-fireemu is licensed under the [Apache License 2.0](LICENSE). Third-party notices are listed in [THIRD_PARTY_LICENSES.txt](THIRD_PARTY_LICENSES.txt).
+Fireemu is licensed under the [Apache License 2.0](LICENSE). Third-party notices are listed in [THIRD_PARTY_LICENSES.txt](THIRD_PARTY_LICENSES.txt).

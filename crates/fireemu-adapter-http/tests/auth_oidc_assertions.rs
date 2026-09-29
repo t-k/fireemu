@@ -77,6 +77,7 @@ fn state() -> AuthState {
         fake_custom_token_expiry:
             fireemu_adapter_http::identity_toolkit::FakeCustomTokenExpiry::Ignore,
         custom_token_trust: None,
+        idp_assertions: fireemu_adapter_http::identity_toolkit::IdpAssertionPolicy::Fixture,
         app_check: None,
         app_check_policy: None,
         tenancy: None,
@@ -111,7 +112,10 @@ fn signed_oidc_refuses_bad_signature_before_account_creation() {
     );
     let response = signed_post(&s, &trust(), &request(&jwt));
     assert_eq!(response.status, 400);
-    assert_eq!(response.body["error"]["message"], "INVALID_IDP_RESPONSE");
+    assert_eq!(
+        response.body["error"]["message"],
+        "INVALID_IDP_RESPONSE : Unable to verify the ID Token signature."
+    );
     assert!(s
         .store
         .lock()
@@ -134,6 +138,126 @@ fn signed_oidc_creates_then_signs_in_to_the_same_account() {
     assert_eq!(s.store.lock().unwrap().users_by_creation().len(), 1);
 }
 
+fn assert_signed_oidc_claim_lifecycle(tenant: Option<&str>, stateless_refresh: bool) {
+    use fireemu_adapter_http::identity_toolkit::{handle, handle_with, OWNER_CREDENTIAL};
+    use fireemu_core_auth::jwt::decode_unsigned;
+    use fireemu_core_auth::store::AuthRegistry;
+
+    let mut s = state();
+    s.stateless_refresh_tokens = stateless_refresh;
+    let mut pin = trust();
+    let mut body = request(&token(&claims()));
+    if let Some(tenant) = tenant {
+        let registry = Arc::new(AuthRegistry::new("demo-app", s.store.clone()));
+        let config = s
+            .store
+            .lock()
+            .unwrap()
+            .oidc_config("oidc.local")
+            .unwrap()
+            .clone();
+        let store = registry.ensure_tenant("demo-app", tenant).unwrap();
+        assert!(store.lock().unwrap().create_oidc_config(config));
+        s.registry = Some(registry);
+        allow_tenants(&s);
+        pin.tenant_id = Some(tenant.into());
+        body["tenantId"] = json!(tenant);
+    }
+    let signed = signed_post(&s, &pin, &body);
+    assert_eq!(signed.status, 200, "{}", signed.body);
+    let uid = signed.body["localId"].clone();
+    let assert_claims = |encoded: &Value, issuer: &str, attributes: Option<&Value>| {
+        let decoded = decode_unsigned(encoded.as_str().unwrap()).unwrap();
+        let claims: Value = serde_json::from_str(&decoded.payload_json).unwrap();
+        assert_eq!(claims["sub"], uid);
+        assert_eq!(claims["aud"], "demo-app");
+        assert_eq!(claims["iss"], issuer);
+        assert_eq!(claims["auth_time"], NOW);
+        assert_eq!(claims["firebase"]["sign_in_provider"], "oidc.local");
+        assert_eq!(
+            claims["firebase"]["identities"]["oidc.local"],
+            json!(["signed-subject"])
+        );
+        assert_eq!(claims["firebase"].get("sign_in_attributes"), attributes);
+        assert_eq!(
+            claims["firebase"].get("tenant").cloned(),
+            tenant.map(|id| json!(id))
+        );
+    };
+    // The emulator profile keeps every claim as sign-in attributes (the official emulator);
+    // strict keeps only the claims beyond the standard ones, as production does (record-oidc
+    // 39209e), and these are all standard.
+    let initial_attributes = claims();
+    let initial = stateless_refresh.then_some(&initial_attributes);
+    assert_claims(
+        &signed.body["idToken"],
+        "https://securetoken.google.com/demo-app",
+        initial,
+    );
+    s.clock
+        .lock()
+        .unwrap()
+        .advance_to(LogicalInstant::from_unix_seconds(NOW + 30))
+        .unwrap();
+    let mut refresh_body =
+        json!({"grant_type": "refresh_token", "refresh_token": signed.body["refreshToken"]});
+    if let Some(tenant) = tenant {
+        refresh_body["tenantId"] = json!(tenant);
+    }
+    let refreshed = handle(
+        &s,
+        "POST",
+        "/securetoken.googleapis.com/v1/token",
+        &refresh_body,
+    );
+    assert_eq!(refreshed.status, 200, "{}", refreshed.body);
+    assert_claims(
+        &refreshed.body["id_token"],
+        "https://securetoken.google.com/demo-app",
+        None,
+    );
+
+    let namespace = tenant.map_or_else(
+        || format!("{V1}/projects/demo-app"),
+        |tenant| format!("{V1}/projects/demo-app/tenants/{tenant}"),
+    );
+    for (id_token, attributes) in [
+        (&signed.body["idToken"], initial),
+        (&refreshed.body["id_token"], None),
+    ] {
+        let cookie = handle_with(
+            &s,
+            "POST",
+            &format!("{namespace}:createSessionCookie"),
+            &RequestHeaders {
+                authorization: Some(OWNER_CREDENTIAL.to_owned()),
+                ..RequestHeaders::default()
+            },
+            &json!({"idToken": id_token, "validDuration": "3600"}),
+        );
+        assert_eq!(cookie.status, 200, "{}", cookie.body);
+        assert_claims(
+            &cookie.body["sessionCookie"],
+            "https://session.firebase.google.com/demo-app",
+            attributes,
+        );
+    }
+}
+
+#[test]
+fn signed_oidc_project_claims_survive_refresh_and_cookie_handoffs() {
+    for stateless_refresh in [false, true] {
+        assert_signed_oidc_claim_lifecycle(None, stateless_refresh);
+    }
+}
+
+#[test]
+fn signed_oidc_tenant_claims_survive_refresh_and_cookie_handoffs() {
+    for stateless_refresh in [false, true] {
+        assert_signed_oidc_claim_lifecycle(Some("customer-a"), stateless_refresh);
+    }
+}
+
 #[test]
 fn signed_oidc_refuses_claim_boundaries_without_mutating_existing_accounts() {
     let s = state();
@@ -147,15 +271,11 @@ fn signed_oidc_refuses_claim_boundaries_without_mutating_existing_accounts() {
         ("aud", json!("wrong")),
         ("exp", json!(NOW)),
         ("exp", json!(NOW - 1)),
-        ("nbf", json!(NOW + 1)),
         ("iat", json!(NOW + 1)),
         ("iat", Value::Null),
         ("exp", json!("9999999999")),
-        ("nbf", Value::Null),
         ("sub", json!("")),
         ("nonce", json!("unbound")),
-        ("azp", json!("wrong")),
-        ("aud", json!(["local-client", "other"])),
     ] {
         let mut c = claims();
         c[name] = value;
@@ -166,6 +286,24 @@ fn signed_oidc_refuses_claim_boundaries_without_mutating_existing_accounts() {
             before,
             format!("{:?}", s.store.lock().unwrap().users_by_creation())
         );
+    }
+}
+
+#[test]
+fn signed_oidc_accepts_the_claims_production_accepts() {
+    // A future `nbf` is not checked, and several audiences that include the client need no
+    // `azp` (AUTH-FEDERATION record-oidc, run 39209e).
+    let s = state();
+    for (name, value) in [
+        ("nbf", json!(NOW + 1)),
+        ("nbf", Value::Null),
+        ("aud", json!(["local-client", "other"])),
+        ("azp", json!("wrong")),
+    ] {
+        let mut c = claims();
+        c[name] = value;
+        let response = signed_post(&s, &trust(), &request(&token(&c)));
+        assert_eq!(response.status, 200, "refused {name}: {}", response.body);
     }
 }
 
@@ -526,7 +664,10 @@ fn signed_oidc_bad_signature_preserves_populated_sessions_transients_and_allocat
     );
     let response = signed_post(&s, &trust(), &request(&jwt));
     assert_eq!(response.status, 400);
-    assert_eq!(response.body["error"]["message"], "INVALID_IDP_RESPONSE");
+    assert_eq!(
+        response.body["error"]["message"],
+        "INVALID_IDP_RESPONSE : Unable to verify the ID Token signature."
+    );
     assert!(response.body.get("idToken").is_none());
     assert!(response.body.get("refreshToken").is_none());
     assert_eq!(events.lock().unwrap().len(), event_count);
@@ -693,7 +834,10 @@ fn signed_continuation_reverifies_assertion_expiry_before_its_local_handle_expir
     let before = format!("{:?}", s.store.lock().unwrap().users_by_creation());
     let rejected = signed_post(&s, &trust(), &next);
     assert_eq!(rejected.status, 400);
-    assert_eq!(rejected.body["error"]["message"], "INVALID_IDP_RESPONSE");
+    assert_eq!(
+        rejected.body["error"]["message"],
+        format!("INVALID_IDP_RESPONSE : ID Token issued at {NOW} is stale to sign-in.")
+    );
     assert!(rejected.body.get("idToken").is_none());
     assert_eq!(
         before,
@@ -828,4 +972,19 @@ fn unsigned_forgery_cannot_mint_a_signed_continuation_or_link_an_account() {
     assert!(response.body.get("pendingToken").is_none());
     assert_eq!(s.store.lock().unwrap().pending_idp_count(), 0);
     assert_eq!(s.store.lock().unwrap().user_count(), 0);
+}
+
+/// Strict serves a tenant only while the project allows tenants, as production does.
+fn allow_tenants(s: &AuthState) {
+    let r = fireemu_adapter_http::identity_toolkit::handle_with(
+        s,
+        "PATCH",
+        "/identitytoolkit.googleapis.com/admin/v2/projects/demo-app/config?updateMask=multiTenant.allowTenants",
+        &fireemu_adapter_http::identity_toolkit::RequestHeaders {
+            authorization: Some(fireemu_adapter_http::identity_toolkit::OWNER_CREDENTIAL.to_owned()),
+            ..fireemu_adapter_http::identity_toolkit::RequestHeaders::default()
+        },
+        &serde_json::json!({"multiTenant": {"allowTenants": true}}),
+    );
+    assert_eq!(r.status, 200, "{}", r.body);
 }

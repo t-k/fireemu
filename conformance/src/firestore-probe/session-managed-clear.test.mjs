@@ -13,6 +13,14 @@ import {
   validateShrinkBoundaryState,
   assertV3ProductionCleanupAllowed,
   isExactDeltaV3ProductionScope,
+  isExactPartialProductionScope,
+  mutationIntentTarget,
+  queryDocumentNames,
+  webchannelSessionPrerequisite,
+  batchGetProvesAbsent,
+  runQueryProvesEmpty,
+  validateBracketCorpus,
+  assertAdmissionNamesRecordingSet,
 } from "./sandbox-session.mjs";
 
 const prefix = "projects/fireemu-oracle-sbx/databases/(default)/documents/";
@@ -87,6 +95,36 @@ test("delta-v3 remote scope requires the dedicated journal binding and exact nam
   assert.equal(
     isExactDeltaV3ProductionScope({ ...scope, names: [...deltaNames, deltaNames[0]] }),
     false,
+  );
+});
+
+test("the partial production scope admits only the six adjacent boundary names", () => {
+  const scope = {
+    mode: true,
+    lockHeld: true,
+    deltaMode: false,
+    host: "firestore.googleapis.com",
+    scheme: "https",
+    project: "fireemu-oracle-sbx",
+    maxRequests: 800,
+    managedClearJournal: "/private/managed-clear.json",
+    names: corpusV3.slice(0, 6),
+  };
+  assert.equal(isExactPartialProductionScope(scope), true);
+  assert.equal(isExactPartialProductionScope({ ...scope, mode: false }), false);
+  assert.equal(isExactPartialProductionScope({ ...scope, lockHeld: false }), false);
+  assert.equal(isExactPartialProductionScope({ ...scope, deltaMode: true }), false);
+  assert.equal(isExactPartialProductionScope({ ...scope, host: "attacker.example" }), false);
+  assert.equal(isExactPartialProductionScope({ ...scope, scheme: "http" }), false);
+  assert.equal(isExactPartialProductionScope({ ...scope, project: "fireemu-35fe6" }), false);
+  assert.equal(isExactPartialProductionScope({ ...scope, maxRequests: 1001 }), false);
+  assert.equal(isExactPartialProductionScope({ ...scope, maxRequests: 0 }), false);
+  assert.equal(isExactPartialProductionScope({ ...scope, managedClearJournal: undefined }), false);
+  assert.equal(isExactPartialProductionScope({ ...scope, names: corpusV3 }), false);
+  assert.equal(isExactPartialProductionScope({ ...scope, names: corpusV3.slice(6) }), false);
+  assert.equal(isExactPartialProductionScope({ ...scope, names: legacy }), false);
+  assert.doesNotThrow(() =>
+    assertV3ProductionCleanupAllowed({ host: "firestore.googleapis.com", exactScope: true }),
   );
 });
 
@@ -338,4 +376,128 @@ test("managed clear accepts only a terminal successful operation in the fixed da
   ]) {
     assert.throws(() => validateManagedClearOperation(state, "fireemu-oracle-sbx"));
   }
+});
+
+test("the write-ahead intent target never parses a WebChannel form body as JSON", () => {
+  const commit = JSON.stringify({
+    writes: [{ update: { name: "projects/p/databases/(default)/documents/c/d" } }],
+  });
+  assert.equal(
+    mutationIntentTarget({
+      body: commit,
+      json: true,
+      resolvedPath: "/v1/projects/p/databases/(default)/documents:commit",
+    }),
+    "projects/p/databases/(default)/documents/c/d",
+  );
+  assert.equal(
+    mutationIntentTarget({
+      body: "count=0&req0___data__=x",
+      json: false,
+      resolvedPath: "/google.firestore.v1.Firestore/Write/channel?VER=8",
+    }),
+    null,
+  );
+  assert.equal(
+    mutationIntentTarget({
+      body: undefined,
+      json: false,
+      resolvedPath: "/v1/projects/p/databases/(default)/documents/c/d?currentDocument.exists=true",
+    }),
+    "projects/p/databases/(default)/documents/c/d",
+  );
+});
+
+test("a collection-group answer counts only rows that carry a document", () => {
+  const readTime = "2026-09-25T00:00:00.000000Z";
+  // Production's empty answer is one row holding only readTime.
+  assert.deepEqual(queryDocumentNames([{ readTime }]), []);
+  assert.deepEqual(queryDocumentNames([]), []);
+  assert.deepEqual(queryDocumentNames([{ document: { name: "p/d/c/x" }, readTime }]), ["p/d/c/x"]);
+  assert.deepEqual(
+    queryDocumentNames([
+      { document: { name: "a" }, readTime },
+      { document: { name: "b" }, readTime },
+    ]),
+    ["a", "b"],
+  );
+  for (const invalid of [
+    null,
+    {},
+    [{ error: { code: 3 } }],
+    [{ skipped: 1 }],
+    [{ document: {} }],
+  ]) {
+    assert.equal(queryDocumentNames(invalid), null, JSON.stringify(invalid));
+  }
+});
+
+test("a WebChannel session measures only after an acknowledged control and always terminates", () => {
+  const opened = new Map([["handshake", { sid: "SIDabcdefghijkl", gsessionid: "g-1" }]]);
+  const closed = new Map([["handshake", null]]);
+  const acked = { control: { status: 200, code: "OK", body: "forward-ack" } };
+  const refused = { control: { status: 400, code: "WEBCHANNEL_HTTP", message: "x" } };
+  assert.equal(webchannelSessionPrerequisite("handshake", new Map(), {}), null);
+  assert.equal(webchannelSessionPrerequisite("control", opened, {}), null);
+  assert.equal(webchannelSessionPrerequisite("boundary", opened, acked), null);
+  assert.match(webchannelSessionPrerequisite("boundary", opened, refused), /not acknowledged/);
+  assert.equal(webchannelSessionPrerequisite("terminate", opened, refused), null);
+  for (const kind of ["control", "boundary", "terminate"]) {
+    assert.match(webchannelSessionPrerequisite(kind, closed, acked), /did not open/);
+  }
+});
+
+test("bracket absence and emptiness are proven only by typed answers", () => {
+  const owned = [`${prefix}a/1`, `${prefix}b/2`];
+  const missing = owned.map((name) => ({ missing: name, readTime: "t" }));
+  assert.equal(batchGetProvesAbsent(200, missing, owned), true);
+  assert.equal(batchGetProvesAbsent(200, missing.toReversed(), owned), true);
+  assert.equal(batchGetProvesAbsent(400, missing, owned), false);
+  assert.equal(batchGetProvesAbsent(200, missing.slice(1), owned), false);
+  assert.equal(batchGetProvesAbsent(200, [missing[0], missing[0]], owned), false);
+  assert.equal(
+    batchGetProvesAbsent(
+      200,
+      [missing[0], { found: { name: owned[1] }, missing: owned[1] }],
+      owned,
+    ),
+    false,
+  );
+  assert.equal(batchGetProvesAbsent(200, null, owned), false);
+  assert.equal(runQueryProvesEmpty(200, [{ readTime: "t" }]), true);
+  // An answer proves emptiness only with a read time and no error element.
+  assert.equal(runQueryProvesEmpty(200, []), false);
+  assert.equal(runQueryProvesEmpty(200, [{ error: { code: 13 } }]), false);
+  assert.equal(runQueryProvesEmpty(200, [{ readTime: "t" }, { error: { code: 13 } }]), false);
+  assert.equal(runQueryProvesEmpty(200, [{ document: { name: owned[0] }, readTime: "t" }]), false);
+  assert.equal(runQueryProvesEmpty(500, [{ readTime: "t" }]), false);
+  assert.equal(runQueryProvesEmpty(200, { error: {} }), false);
+});
+
+test("the bracket child refuses any corpus but the fixed bracket recipes", async () => {
+  const { prepareSandboxCorpus, selectBracketRecipes } =
+    await import("../fs-data-write-sandbox-run.mjs");
+  const { corpus } = await prepareSandboxCorpus();
+  const { recordingCorpus } = selectBracketRecipes(corpus);
+  validateBracketCorpus(recordingCorpus);
+  assert.throws(() => validateBracketCorpus(corpus), /fixed bracket recipes/);
+  const [first, ...rest] = recordingCorpus.restPrograms;
+  assert.throws(
+    () =>
+      validateBracketCorpus({
+        ...recordingCorpus,
+        restPrograms: rest,
+        restRequestCount: recordingCorpus.restRequestCount - first.steps.length,
+      }),
+    /fixed bracket recipes/,
+  );
+});
+
+test("a bracket child runs only the recording set its admission names", () => {
+  const env = (mode) => ({ FIRESTORE_PROBE_ADMISSION: JSON.stringify({ mode }) });
+  assertAdmissionNamesRecordingSet(env("followup"), "followup");
+  assertAdmissionNamesRecordingSet(env("bracket"), "bracket");
+  assert.throws(() => assertAdmissionNamesRecordingSet(env("bracket"), "followup"), /mode/);
+  assert.throws(() => assertAdmissionNamesRecordingSet(env("partial"), "bracket"), /mode/);
+  assert.throws(() => assertAdmissionNamesRecordingSet({}, "bracket"), /mode/);
 });

@@ -7,8 +7,11 @@ use std::sync::{Arc, Mutex};
 use fireemu_adapter_grpc::gateway::Gateway;
 use fireemu_adapter_grpc::local::LocalBackend;
 use fireemu_adapter_grpc::rest::RestState;
-use fireemu_adapter_grpc::rules::RulesEnforcer;
-use fireemu_adapter_grpc::webchannel::{ChannelRequest, ChannelResponse, Hub, StreamKind};
+use fireemu_adapter_grpc::rules::{RulesEnforcer, TokenSemantics};
+use fireemu_adapter_grpc::webchannel::{
+    ChannelRequest, ChannelResponse, Hub, StreamKind, EMULATOR_UNKNOWN_SESSION_BODY,
+    STRICT_UNKNOWN_SESSION_BODY,
+};
 use fireemu_core_auth::jwt::{base64url_encode, TokenAcceptance};
 use fireemu_core_auth::mfa::TotpPolicy;
 use fireemu_core_auth::store::AuthStore;
@@ -39,8 +42,16 @@ fn hub_with_acceptance(rules: Option<&str>, acceptance: TokenAcceptance) -> Hub 
 }
 
 fn hub_and_local(rules: Option<&str>, acceptance: TokenAcceptance) -> (Hub, Arc<LocalBackend>) {
+    hub_and_local_with_profile(rules, acceptance, true)
+}
+
+fn hub_and_local_with_profile(
+    rules: Option<&str>,
+    acceptance: TokenAcceptance,
+    strict: bool,
+) -> (Hub, Arc<LocalBackend>) {
     let gateway = Gateway {
-        enforce_limits: true,
+        enforce_limits: strict,
         ctx: PlanningContext {
             edition: FirestoreEdition::Standard,
             api_mode: FirestoreApiMode::Native,
@@ -64,6 +75,7 @@ fn hub_and_local(rules: Option<&str>, acceptance: TokenAcceptance) -> (Hub, Arc<
                 auth,
                 clock,
             )
+            .with_token_semantics(TokenSemantics::Firestore)
             .with_token_acceptance(acceptance),
         )
     });
@@ -106,8 +118,9 @@ async fn webchannel_binds_unknown_mock_tokens_to_the_requested_project() {
     assert_eq!(auth_handshake(&firebase, "demo-app-w0", &token).0, 200);
     assert_eq!(auth_handshake(&firebase, "demo-app", &token).0, 401);
 
+    // The strict profile refuses a token it cannot verify in production's words.
     let strict = hub_with_acceptance(Some(RULES_ALLOW_ALL), TokenAcceptance::Verified);
-    assert_eq!(auth_handshake(&strict, "demo-app-w0", &token).0, 401);
+    assert_eq!(auth_handshake(&strict, "demo-app-w0", &token).0, 403);
 
     let header = base64url_encode(br#"{"alg":"RS256","typ":"JWT","kid":"nope"}"#);
     let payload = base64url_encode(br#"{"aud":"demo-app-w0","exp":3600,"iat":0,"sub":"alice"}"#);
@@ -520,7 +533,7 @@ async fn rules_denied_write_terminal_error_survives_until_client_acknowledgement
         origin: Some("http://localhost:5173".to_owned()),
         body: String::new(),
     }));
-    assert_eq!((status, body.as_str()), (400, "Error: Unknown SID"));
+    assert_eq!((status, body.as_str()), (400, STRICT_UNKNOWN_SESSION_BODY));
     assert_eq!(
         read_long_poll_kind(&hub, StreamKind::Write, &sid, handshake_aid).await,
         denied,
@@ -569,7 +582,7 @@ async fn rules_denied_write_terminal_error_survives_until_client_acknowledgement
         origin: None,
         body: form(&[("count", "0"), ("ofs", "2")]),
     }));
-    assert_eq!((status, body.as_str()), (400, "Error: Unknown SID"));
+    assert_eq!((status, body.as_str()), (400, STRICT_UNKNOWN_SESSION_BODY));
 }
 
 #[tokio::test]
@@ -614,7 +627,7 @@ async fn terminal_backchannel_ack_returns_a_framed_end_without_reattaching() {
         origin: None,
         body: String::new(),
     }));
-    assert_eq!((status, body.as_str()), (400, "Error: Unknown SID"));
+    assert_eq!((status, body.as_str()), (400, STRICT_UNKNOWN_SESSION_BODY));
 }
 
 #[tokio::test]
@@ -649,7 +662,7 @@ async fn explicit_terminate_releases_an_unacknowledged_terminal_session() {
         origin: None,
         body: form(&[("count", "0"), ("ofs", "2")]),
     }));
-    assert_eq!((status, body.as_str()), (400, "Error: Unknown SID"));
+    assert_eq!((status, body.as_str()), (400, STRICT_UNKNOWN_SESSION_BODY));
 }
 
 #[tokio::test]
@@ -1060,7 +1073,7 @@ async fn chunks_count_utf16_units_and_maps_are_delivered_in_id_order() {
         origin: Some("http://localhost:9999".to_owned()),
         body: form(&[("count", "0"), ("ofs", "1")]),
     }));
-    assert_eq!((status, body.as_str()), (400, "Error: Unknown SID"));
+    assert_eq!((status, body.as_str()), (400, STRICT_UNKNOWN_SESSION_BODY));
     let (status, _, _) = full(hub.handle(&ChannelRequest {
         kind: StreamKind::Listen,
         method: "POST".to_owned(),
@@ -1341,4 +1354,144 @@ async fn a_missing_index_on_the_opening_target_reaches_the_first_back_channel() 
         body: form(&[("count", "1"), ("ofs", "1"), ("req0___data__", &covered)]),
     }));
     assert_eq!(status, 200, "the session is still known: {ack}");
+}
+
+/// Owner decision D6 (2026-09-25): strict answers an unknown session as production did
+/// (`writes/limits/webchannel-request-bytes`, recorded twice): HTTP 400 with the recorded prefix
+/// of Google's HTML error page. The emulator profile keeps the official emulator's text.
+#[tokio::test]
+async fn an_unknown_session_is_answered_by_profile() {
+    for (strict, expected, content_type) in [
+        (
+            true,
+            STRICT_UNKNOWN_SESSION_BODY,
+            "text/html; charset=UTF-8",
+        ),
+        (
+            false,
+            EMULATOR_UNKNOWN_SESSION_BODY,
+            "text/plain; charset=utf-8",
+        ),
+    ] {
+        let (hub, _) = hub_and_local_with_profile(None, TokenAcceptance::Verified, strict);
+        let (status, headers, body) = full(hub.handle(&ChannelRequest {
+            kind: StreamKind::Write,
+            method: "POST".to_owned(),
+            params: params(&[
+                ("database", DB),
+                ("VER", "8"),
+                ("RID", "1"),
+                ("SID", "missing-fireemu-byte-probe"),
+                ("AID", "0"),
+            ]),
+            authorization: None,
+            app_check: Vec::new(),
+            origin: None,
+            body: "count=0".to_owned(),
+        }));
+        assert_eq!((status, body.as_str()), (400, expected), "strict={strict}");
+        assert!(
+            headers
+                .iter()
+                .any(|(name, value)| *name == "content-type" && value == content_type),
+            "strict={strict}: {headers:?}"
+        );
+    }
+    assert!(STRICT_UNKNOWN_SESSION_BODY.starts_with("<!DOCTYPE html>"));
+    assert_eq!(STRICT_UNKNOWN_SESSION_BODY.chars().count(), 400);
+}
+
+/// Production closed held native gRPC streams an hour after they opened (AUTH-FS-CROSS stage 2);
+/// no `WebChannel` was held that long, so the strict profile keeps a `WebChannel` `Listen` open
+/// past the hour, as before.
+#[tokio::test]
+async fn a_webchannel_listen_is_not_closed_at_the_hour() {
+    let gateway = Gateway {
+        enforce_limits: true,
+        ctx: PlanningContext {
+            edition: FirestoreEdition::Standard,
+            api_mode: FirestoreApiMode::Native,
+            policy: IndexValidationPolicy::Production,
+        },
+        indexes: IndexSet::default(),
+    };
+    let start = LogicalInstant::from_unix_seconds(1_788_004_860);
+    let clock = Arc::new(Mutex::new(VirtualClock::new(start)));
+    let local = Arc::new(LocalBackend::new(gateway.clone(), clock.clone(), 7));
+    let auth = Arc::new(Mutex::new(AuthStore::new(
+        "demo-app",
+        SplitMix64::new(3),
+        TotpPolicy::default(),
+    )));
+    let token = {
+        let mut store = auth.lock().unwrap();
+        let uid = store
+            .create_user_with_id(
+                fireemu_core_auth::store::NewUser::email("held@example.com"),
+                Some("held"),
+                start,
+            )
+            .unwrap();
+        fireemu_core_auth::jwt::encode_unsigned(&store.id_token_claims(&uid, None, start).unwrap())
+    };
+    let enforcer = RulesEnforcer::new(
+        Arc::new(RulesetSlot::new(
+            LoadedRules::from_source(RULES_ALLOW_ALL).unwrap(),
+        )),
+        auth,
+        clock.clone(),
+    )
+    .with_token_semantics(TokenSemantics::Firestore)
+    .with_token_acceptance(TokenAcceptance::Verified)
+    .with_listen_stream_lifetime(true);
+    let hub = Hub::new(Arc::new(RestState {
+        local: local.clone(),
+        gateway: Arc::new(gateway),
+        rules: Some(Arc::new(enforcer)),
+        app_check: None,
+        control_token: None,
+    }));
+    commit(&local, vec![set_write("held/a", 0)]);
+    let (status, headers, _) = full(hub.handle(&ChannelRequest {
+        kind: StreamKind::Listen,
+        method: "POST".to_owned(),
+        params: params(&[("database", DB), ("VER", "8"), ("RID", "1")]),
+        authorization: Some(format!("Bearer {token}")),
+        app_check: Vec::new(),
+        origin: None,
+        body: form(&[
+            ("count", "1"),
+            ("ofs", "0"),
+            ("req0___data__", &listen_target(3, "held")),
+        ]),
+    }));
+    assert_eq!(status, 200);
+    let sid = headers
+        .into_iter()
+        .find(|(key, _)| *key == "x-http-session-id")
+        .map(|(_, value)| value)
+        .unwrap();
+    let initial = read_long_poll(&hub, &sid, 0).await;
+    let initial_aid = last_array_id(&initial);
+    // Past the hour (and the token's allowance is not what is tested: the clock stops short
+    // of exp + 30 s). A gRPC stream would end within a second.
+    clock
+        .lock()
+        .unwrap()
+        .advance_to(
+            start
+                .checked_add(fireemu_core_types::time::LogicalDuration::from_seconds(
+                    3_610,
+                ))
+                .unwrap(),
+        )
+        .unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(2_500)).await;
+    commit(&local, vec![set_write("held/b", 1)]);
+    let later = read_long_poll(&hub, &sid, initial_aid).await;
+    assert!(response_payloads(&later).iter().any(|payload| {
+        payload["documentChange"]["document"]["name"]
+            .as_str()
+            .is_some_and(|name| name.ends_with("/held/b"))
+    }));
 }

@@ -12,6 +12,37 @@ BATCH_WRITE = f"/v1/{DOCS}:batchWrite"
 BATCH_GET = f"/v1/{DOCS}:batchGet"
 
 
+# (string bytes, relative document-name bytes, last document-ID bytes or None for the even
+# split of `name_of_length`) for the indexed-string follow-up.
+INDEXED_STRING_NAME_POINTS = (
+    (2999, 1142, None),
+    (2999, 1143, None),
+    (2999, 1500, None),
+    (2999, 1800, None),
+    (2999, 2100, None),
+    (2999, 2400, None),
+    (2999, 2606, None),
+    (2999, 2607, None),
+    (2000, 2141, None),
+    (2000, 2142, None),
+    # Own name alone refuses this write; own plus parent name would not.
+    (1500, 2642, 1500),
+)
+
+
+def name_with_last_id(target: int, tag: str, last_id_bytes: int) -> str:
+    """`c/<tag padded>/c/<last>`: a two-pair name of exact length with a fixed last ID."""
+    first = target - last_id_bytes - 5
+    if not 1 <= first <= 1500 or not 1 <= last_id_bytes <= 1500:
+        raise ValueError(
+            f"cannot form a {target}-byte name with a {last_id_bytes}-byte last ID"
+        )
+    name = f"c/{tag[:first].ljust(first, 'd')}/c/{'d' * last_id_bytes}"
+    if len(name.encode()) != target:
+        raise ValueError("name fixture length")
+    return name
+
+
 def name_of_length(target: int, tag: str) -> str:
     """Build an even-segment relative document name of exact UTF-8 length."""
     for pairs in range(1, 12):
@@ -162,14 +193,16 @@ def _raw_request_program(size: int) -> dict[str, Any]:
 def _non_commit_batchwrite_request_program(size: int) -> dict[str, Any]:
     name = f"{DOCS}/rawBatch/{size}"
     payload = json.dumps({"writes": [_update(name)]}, separators=(",", ":"))
-    if len(payload) > size:
-        raise ValueError("raw BatchWrite target smaller than JSON body")
-    payload = payload[:-1] + " " * (size - len(payload)) + "}"
     return {
         "id": f"writes/limits/non-commit-rest-request-bytes/batch-write/{size}",
         "area": "writes",
         "steps": [
-            {"id": "write", "method": "POST", "path": BATCH_WRITE, "body": payload},
+            {
+                "id": "write",
+                "method": "POST",
+                "path": BATCH_WRITE,
+                **_padded_body(payload, size),
+            },
             _readback([name]),
         ],
     }
@@ -187,9 +220,6 @@ def _non_commit_read_request_program(family: str, size: int) -> dict[str, Any]:
     else:
         raise ValueError(f"unsupported non-Commit REST family: {family}")
     payload = json.dumps(body, separators=(",", ":"))
-    if len(payload) > size:
-        raise ValueError("raw read target smaller than JSON body")
-    payload = payload[:-1] + " " * (size - len(payload)) + "}"
     return {
         "id": f"writes/limits/non-commit-rest-request-bytes/{family}/{size}",
         "area": "writes",
@@ -200,7 +230,12 @@ def _non_commit_read_request_program(family: str, size: int) -> dict[str, Any]:
                 "path": COMMIT,
                 "body": {"writes": [_update(name)]},
             },
-            {"id": "probe", "method": "POST", "path": path, "body": payload},
+            {
+                "id": "probe",
+                "method": "POST",
+                "path": path,
+                **_padded_body(payload, size),
+            },
         ],
     }
 
@@ -228,12 +263,14 @@ def _non_commit_document_write_program(family: str, size: int) -> dict[str, Any]
     payload = json.dumps(
         {"fields": {"v": {"integerValue": "2"}}}, separators=(",", ":")
     )
-    if len(payload) > size:
-        raise ValueError("raw document write target smaller than JSON body")
-    payload = payload[:-1] + " " * (size - len(payload)) + "}"
     steps.extend(
         [
-            {"id": "probe", "method": method, "path": path, "body": payload},
+            {
+                "id": "probe",
+                "method": method,
+                "path": path,
+                **_padded_body(payload, size),
+            },
             {"id": "readback", "method": "GET", "path": f"/v1/{name}"},
         ]
     )
@@ -350,22 +387,73 @@ def _map_key_programs(
     ]
 
 
+# Bodies of at least this size are stored compact with `padToBytes`; the harness pads them
+# before sending. Stored whole, eleven-mebibyte bodies push the exported corpus past what a
+# caller can buffer.
+COMPACT_PADDING_FROM = 11_534_336
+
+
+def _padded_body(payload: str, size: int) -> dict[str, Any]:
+    """The step fields that send `payload` padded with spaces before its last `}` to `size`."""
+    if len(payload) > size:
+        raise ValueError("request target smaller than JSON body")
+    if size >= COMPACT_PADDING_FROM:
+        return {"body": payload, "padToBytes": size}
+    return {"body": payload[:-1] + " " * (size - len(payload)) + "}"}
+
+
+# Production accepted 10,485,761 bytes on every non-Commit REST route; the 11 MiB pair
+# brackets each route against the REST Commit maximum (owner decision D4, 2026-09-27 split).
+NON_COMMIT_REQUEST_SIZES = (10_485_760, 10_485_761, 11_534_336, 11_534_337)
+
+
+def _aggregate_map_pair_program(size: int) -> dict[str, Any]:
+    """A map whose logical size is `size`: field `s` (2 bytes) plus a string of size - 3."""
+    name = f"{DOCS}/aggregatePair/m{size}"
+    value = "x" * (size - 3)
+    write = _field_update(
+        name, {"m": {"mapValue": {"fields": {"s": {"stringValue": value}}}}}
+    )
+    return _commit_program(f"writes/limits/aggregate-map/{size}", [write], [name])
+
+
+def _indexed_value_pair_program(name_sum: int) -> dict[str, Any]:
+    """A 2,999-byte indexed string under a name whose own and parent sizes sum to `name_sum`.
+
+    The capped index entry is `name_sum` + 21 (field) + 32 + 1,500 (truncated value): 6,753
+    under 5,200 and 7,681, one byte over the 7,680 entry limit, under 6,128.
+    """
+    fixed = ["ifvpair", "r", "p", "z" * 800, "p", "z" * 800, "p"]
+    parent_storage = (name_sum - (len("ifvtest") + 1) - (len("d") + 1)) // 2
+    pad = parent_storage - 16 - sum(len(segment) + 1 for segment in fixed) - 1
+    segments = [*fixed, "z" * pad, "ifvtest", "d"]
+    name = f"{DOCS}/{'/'.join(segments)}"
+    write = _field_update(name, {"s" * 20: {"stringValue": "x" * 2_999}})
+    return _commit_program(
+        f"writes/limits/indexed-field-value-bytes/{name_sum}", [write], [name]
+    )
+
+
 def build_programs() -> list[dict[str, Any]]:
     programs = [_raw_request_program(size) for size in (11_534_336, 11_534_337)]
     programs.extend(
         _non_commit_batchwrite_request_program(size)
-        for size in (10_485_760, 10_485_761)
+        for size in NON_COMMIT_REQUEST_SIZES
     )
     programs.extend(
         _non_commit_read_request_program(family, size)
         for family in ("batch-get", "run-query")
-        for size in (10_485_760, 10_485_761)
+        for size in NON_COMMIT_REQUEST_SIZES
     )
     programs.extend(
         _non_commit_document_write_program(family, size)
         for family in ("create", "patch")
-        for size in (10_485_760, 10_485_761)
+        for size in NON_COMMIT_REQUEST_SIZES
     )
+    programs.extend(
+        _aggregate_map_pair_program(size) for size in (1_048_487, 1_048_488)
+    )
+    programs.extend(_indexed_value_pair_program(total) for total in (5_200, 6_128))
     programs.extend(
         _batch_variant(variant)
         for variant in (
@@ -415,6 +503,24 @@ def build_programs() -> list[dict[str, Any]]:
         programs.append(
             _commit_program(
                 f"writes/limits/index-entry-string-name/{length}", [write], [name]
+            )
+        )
+    # The follow-up to the bracket recording: accepted-side observations for an indexed
+    # string longer than 1,500 bytes, in the same shape as the pair above.
+    for string_bytes, name_bytes, last_id_bytes in INDEXED_STRING_NAME_POINTS:
+        tag = f"s{string_bytes}n{name_bytes}"
+        relative = (
+            name_of_length(name_bytes, tag)
+            if last_id_bytes is None
+            else name_with_last_id(name_bytes, tag, last_id_bytes)
+        )
+        name = f"{DOCS}/{relative}"
+        write = _field_update(name, {"s": {"stringValue": "x" * string_bytes}})
+        programs.append(
+            _commit_program(
+                f"writes/limits/indexed-string-name/{string_bytes}/{name_bytes}",
+                [write],
+                [name],
             )
         )
     for length in (4627, 4628, 6127, 6128):

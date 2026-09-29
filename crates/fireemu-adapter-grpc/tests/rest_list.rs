@@ -54,6 +54,7 @@ fn call(s: &RestState, method: &str, path_and_query: &str, body: Value) -> (u16,
         browser_metadata: false,
         app_check: Vec::new(),
         body,
+        batch_field_order: Vec::new(),
     });
     (r.status, r.body)
 }

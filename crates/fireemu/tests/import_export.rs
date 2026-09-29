@@ -1080,7 +1080,7 @@ fn an_import_keeps_email_enumeration_protection_unless_the_artifact_declares_it(
         let output = exec()
             .args(["--only", "auth", "--import"])
             .arg(&export)
-            .args(["--", "sh", "-c", probe])
+            .args(["--", "/bin/sh", "-c", probe])
             .output()
             .unwrap();
         let log = text(&output);
@@ -1133,7 +1133,7 @@ fn a_storage_resource_limit_refuses_a_mixed_import_before_the_command_starts() {
     let output = exec()
         .args(["--import"])
         .arg(&export)
-        .args(["--", "sh", "-c"])
+        .args(["--", "/bin/sh", "-c"])
         .arg(format!("touch {}", marker.display()))
         .output()
         .unwrap();
@@ -1166,7 +1166,7 @@ fn a_sparse_firestore_output_is_refused_before_allocation_or_command_start() {
     let output = exec()
         .args(["--import"])
         .arg(&export)
-        .args(["--", "sh", "-c"])
+        .args(["--", "/bin/sh", "-c"])
         .arg(format!("touch {}", marker.display()))
         .output()
         .unwrap();
@@ -1362,6 +1362,26 @@ fn tenant_accounts_import_and_export_in_isolated_files() {
     assert_eq!(tenant["users"][0]["tenantId"], "customer-a");
     let default = std::fs::read_to_string(out.join("auth_export/accounts.json")).unwrap();
     assert!(!default.contains("tenant-user"));
+    // A tenant from an artifact without tenant metadata gets a new tenant's sign-in switches,
+    // and the export records them.
+    let settings: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(out.join("auth_export/fireemu-auth-settings.json")).unwrap(),
+    )
+    .unwrap();
+    let metadata = settings["namespaces"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|namespace| namespace["tenantId"] == "customer-a")
+        .map(|namespace| &namespace["metadata"])
+        .expect("the tenant's metadata is exported");
+    for switch in [
+        "allowPasswordSignup",
+        "enableEmailLinkSignin",
+        "enableAnonymousUser",
+    ] {
+        assert_eq!(metadata[switch], true, "{switch}: {metadata}");
+    }
 }
 
 #[test]
@@ -1407,7 +1427,7 @@ fn api_created_password_account_keeps_password_provider_without_hash() {
         .arg(&source)
         .arg("--export-on-exit")
         .arg(&out)
-        .args(["--", "sh", "-c"])
+        .args(["--", "/bin/sh", "-c"])
         .arg(r#"curl -s -X POST "http://$FIREBASE_AUTH_EMULATOR_HOST/identitytoolkit.googleapis.com/v1/accounts:signUp?key=fake-api-key" -H 'Content-Type: application/json' -d '{"email":"api-password@example.com","password":"hunter22"}'"#)
         .output()
         .unwrap();
@@ -1463,7 +1483,7 @@ fn removed_password_provider_is_not_reintroduced_by_export_round_trip() {
         .arg(&source)
         .arg("--export-on-exit")
         .arg(&out)
-        .args(["--", "sh", "-c"])
+        .args(["--", "/bin/sh", "-c"])
         .arg(
             r#"curl -s -X POST "http://$FIREBASE_AUTH_EMULATOR_HOST/identitytoolkit.googleapis.com/v1/projects/demo-export/accounts:update" -H 'Authorization: Bearer owner' -H 'Content-Type: application/json' -d '{"localId":"user-password","deleteAttribute":["PASSWORD"]}'"#,
         )
@@ -1552,7 +1572,7 @@ fn email_link_account_import_preserves_provider_and_export_marker() {
         .arg(&source)
         .arg("--export-on-exit")
         .arg(&out)
-        .args(["--", "sh", "-c"])
+        .args(["--", "/bin/sh", "-c"])
         .arg(probe)
         .output()
         .unwrap();
@@ -1645,7 +1665,7 @@ fn auth_artifact_round_trip_preserves_tenant_scoped_account_state() {
         .arg(&source)
         .arg("--export-on-exit")
         .arg(&out)
-        .args(["--", "sh", "-c"])
+        .args(["--", "/bin/sh", "-c"])
         .arg(&probe)
         .output()
         .unwrap();
@@ -1826,7 +1846,7 @@ fn the_export_runs_when_the_daemon_is_interrupted() {
             .arg(fixture("official-multiproduct"))
             .arg("--export-on-exit")
             .arg(&out)
-            .args(["--", "sh", "-c"])
+            .args(["--", "/bin/sh", "-c"])
             .arg(format!(
                 "printf '%s' $$ > {}; touch {}; exec sleep 60",
                 child_pid_path.display(),
@@ -1874,7 +1894,7 @@ fn the_export_runs_when_the_daemon_is_terminated() {
             .arg(fixture("official-multiproduct"))
             .arg("--export-on-exit")
             .arg(&out)
-            .args(["--", "sh", "-c"])
+            .args(["--", "/bin/sh", "-c"])
             .arg(format!(
                 "printf '%s' $$ > {}; touch {}; exec sleep 60",
                 child_pid_path.display(),
@@ -2509,4 +2529,227 @@ fn a_failed_export_on_exit_warns_and_preserves_the_command_exit_code() {
     assert!(log.contains("going to exit now"), "{log}");
     assert!(log.contains(&target.display().to_string()), "{log}");
     assert!(!target.exists(), "{log}");
+}
+
+/// Issue strict-multi-tenancy-switch-lost-on-export-import: the project's written config
+/// members, the multi-tenancy switch among them, survive an export and an import, so a tenant
+/// restored by the import is reachable under the strict profile.
+/// A project whose only written setting is a config member still gets the settings sidecar:
+/// no tenant, quota or blocking function is needed for its members to survive.
+#[test]
+fn a_lone_config_member_survives_the_round_trip() {
+    let dir = scratch("lone-config-member-round-trip");
+    let out = dir.join("out");
+    let base = "http://$FIREBASE_AUTH_EMULATOR_HOST/identitytoolkit.googleapis.com";
+    let admin = "-H 'Authorization: Bearer owner' -H 'Content-Type: application/json'";
+    let write = format!(
+        r#"curl -s -X PATCH "{base}/admin/v2/projects/demo-export/config?updateMask=autodeleteAnonymousUsers" {admin} -d '{{"autodeleteAnonymousUsers":true}}'"#
+    );
+    let output = exec()
+        .args(["--only", "auth", "--export-on-exit"])
+        .arg(&out)
+        .args(["--", "/bin/sh", "-c"])
+        .arg(&write)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", text(&output));
+    assert!(
+        out.join("auth_export/fireemu-auth-settings.json").exists(),
+        "the sidecar carries the member"
+    );
+    let read = format!(r#"curl -s "{base}/admin/v2/projects/demo-export/config" {admin}"#);
+    let again = exec()
+        .args(["--only", "auth", "--import"])
+        .arg(&out)
+        .args(["--", "/bin/sh", "-c"])
+        .arg(&read)
+        .output()
+        .unwrap();
+    let log = text(&again);
+    assert!(again.status.success(), "{log}");
+    assert!(log.contains(r#""autodeleteAnonymousUsers":true"#), "{log}");
+}
+
+/// Sets the first member named `key` found in `value` (depth first) to `to`.
+fn set_first_key(value: &mut serde_json::Value, key: &str, to: &serde_json::Value) -> bool {
+    match value {
+        serde_json::Value::Object(map) => {
+            if let Some(member) = map.get_mut(key) {
+                *member = to.clone();
+                return true;
+            }
+            map.values_mut().any(|value| set_first_key(value, key, to))
+        }
+        serde_json::Value::Array(items) => {
+            items.iter_mut().any(|value| set_first_key(value, key, to))
+        }
+        _ => false,
+    }
+}
+
+/// The private members behind the Admin config's password policy and sign-up quota, and a
+/// tenant's written members (issue strict-multi-tenancy-switch-lost-on-export-import): the
+/// documents read back after an import exactly as before the export.
+#[test]
+fn private_and_tenant_config_members_survive_the_round_trip() {
+    let dir = scratch("private-config-members-round-trip");
+    let out = dir.join("out");
+    let base = "http://$FIREBASE_AUTH_EMULATOR_HOST/identitytoolkit.googleapis.com";
+    let admin = "-H 'Authorization: Bearer owner' -H 'Content-Type: application/json'";
+    let config = format!("{base}/admin/v2/projects/demo-export/config");
+    let tenants = format!("{base}/v2/projects/demo-export/tenants");
+    let policy = r#"{"passwordPolicyConfig":{"passwordPolicyEnforcementState":"ENFORCE","passwordPolicyVersions":[{"customStrengthOptions":{"minPasswordLength":8,"containsNumericCharacter":false}}]}}"#;
+    let quota = r#"{"quota":{"signUpQuotaConfig":{"quota":"10","startTime":"2026-09-25T00:00:00Z","quotaDuration":"3600s"}}}"#;
+    let tenant_body = r#"{"displayName":"members","monitoring":{"requestLogging":{"enabled":true}},"emailPrivacyConfig":{"enableImprovedEmailPrivacy":false},"client":{"permissions":{"disabledUserSignup":false}}}"#;
+    // `printf '%s\n'`, not `echo`: a POSIX `sh` (dash, macOS `/bin/sh`) expands the `\n` inside a
+    // JSON string that `echo` prints, which splits the document over two lines.
+    let write = format!(
+        r#"set -e
+curl -s -X PATCH "{config}?updateMask=multiTenant.allowTenants" {admin} -d '{{"multiTenant":{{"allowTenants":true}}}}' >/dev/null
+curl -s -X PATCH "{config}?updateMask=passwordPolicyConfig" {admin} -d '{policy}' >/dev/null
+curl -s -X PATCH "{config}?updateMask=quota.signUpQuotaConfig" {admin} -d '{quota}' >/dev/null
+tenant=$(curl -s -X POST "{tenants}" {admin} -d '{tenant_body}' | sed -n 's/.*"name":"projects\/demo-export\/tenants\/\([^"]*\)".*/\1/p')
+curl -s -X PATCH "{tenants}/$tenant?updateMask=passwordPolicyConfig" {admin} -d '{policy}' >/dev/null
+printf '%s\n' "TENANT $tenant"
+printf '%s\n' "CONFIG $(curl -s "{config}" {admin})"
+printf '%s\n' "DOC $(curl -s "{tenants}/$tenant" {admin})""#
+    );
+    let output = exec()
+        .args(["--only", "auth", "--export-on-exit"])
+        .arg(&out)
+        .args(["--", "/bin/sh", "-c"])
+        .arg(&write)
+        .output()
+        .unwrap();
+    let log = text(&output);
+    assert!(output.status.success(), "{log}");
+    let field = |log: &str, prefix: &str| -> String {
+        log.lines()
+            .find_map(|line| line.strip_prefix(prefix))
+            .unwrap_or_else(|| panic!("{prefix} was printed: {log}"))
+            .to_owned()
+    };
+    let tenant = field(&log, "TENANT ");
+    assert!(!tenant.is_empty(), "the tenant was created: {log}");
+    let before_config: serde_json::Value = serde_json::from_str(&field(&log, "CONFIG ")).unwrap();
+    let before_doc: serde_json::Value = serde_json::from_str(&field(&log, "DOC ")).unwrap();
+    // The written values are part of what must survive.
+    assert!(
+        before_config["passwordPolicyConfig"]["lastUpdateTime"].is_string(),
+        "{before_config}"
+    );
+    assert!(
+        before_config["quota"]["signUpQuotaConfig"].is_object(),
+        "{before_config}"
+    );
+    assert_eq!(
+        before_doc["emailPrivacyConfig"],
+        serde_json::json!({}),
+        "{before_doc}"
+    );
+    assert_eq!(
+        before_doc["monitoring"],
+        serde_json::json!({"requestLogging": {"enabled": true}}),
+        "{before_doc}"
+    );
+
+    let read = format!(
+        r#"printf '%s\n' "CONFIG $(curl -s "{config}" {admin})"; printf '%s\n' "DOC $(curl -s "{tenants}/{tenant}" {admin})""#
+    );
+    let again = exec()
+        .args(["--only", "auth", "--import"])
+        .arg(&out)
+        .args(["--", "/bin/sh", "-c"])
+        .arg(&read)
+        .output()
+        .unwrap();
+    let log = text(&again);
+    assert!(again.status.success(), "{log}");
+    let after_config: serde_json::Value = serde_json::from_str(&field(&log, "CONFIG ")).unwrap();
+    let after_doc: serde_json::Value = serde_json::from_str(&field(&log, "DOC ")).unwrap();
+    assert_eq!(after_config, before_config);
+    assert_eq!(after_doc, before_doc);
+
+    // A tenant member no write could have stored refuses the import before startup.
+    let sidecar = out.join("auth_export/fireemu-auth-settings.json");
+    let mut settings: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&sidecar).unwrap()).unwrap();
+    assert!(
+        set_first_key(
+            &mut settings,
+            "tenantClientWritten",
+            &serde_json::json!(false)
+        ),
+        "the tenant's marker was exported: {settings}"
+    );
+    std::fs::write(&sidecar, settings.to_string()).unwrap();
+    let refused = exec()
+        .args(["--only", "auth", "--import"])
+        .arg(&out)
+        .args(["--", "true"])
+        .output()
+        .unwrap();
+    assert_refused(&refused, "auth", "fireemu-auth-settings.json");
+}
+
+#[test]
+fn written_config_members_and_the_tenant_switch_survive_the_round_trip() {
+    let dir = scratch("config-members-round-trip");
+    let out = dir.join("out");
+    let base = "http://$FIREBASE_AUTH_EMULATOR_HOST/identitytoolkit.googleapis.com";
+    let admin = "-H 'Authorization: Bearer owner' -H 'Content-Type: application/json'";
+    let write = format!(
+        r#"curl -s -X PATCH "{base}/admin/v2/projects/demo-export/config?updateMask=multiTenant.allowTenants,autodeleteAnonymousUsers" {admin} -d '{{"multiTenant":{{"allowTenants":true}},"autodeleteAnonymousUsers":true}}' && echo && curl -s -X POST "{base}/v2/projects/demo-export/tenants" {admin} -d '{{"displayName":"round-trip"}}' && echo"#
+    );
+    let output = exec()
+        .args(["--only", "auth", "--export-on-exit"])
+        .arg(&out)
+        .args(["--", "/bin/sh", "-c"])
+        .arg(&write)
+        .output()
+        .unwrap();
+    let log = text(&output);
+    assert!(output.status.success(), "{log}");
+    let created: serde_json::Value = serde_json::from_str(
+        log.lines()
+            .find(|line| line.contains(r#""name":"projects/demo-export/tenants/"#))
+            .and_then(|line| line.find('{').map(|at| &line[at..]))
+            .unwrap_or_else(|| panic!("the tenant was created: {log}")),
+    )
+    .unwrap();
+    let tenant = created["name"]
+        .as_str()
+        .unwrap()
+        .rsplit('/')
+        .next()
+        .unwrap()
+        .to_owned();
+
+    let read = format!(
+        r#"curl -s "{base}/admin/v2/projects/demo-export/config" {admin}; echo; curl -s "{base}/v2/projects/demo-export/tenants/{tenant}" {admin}; echo"#
+    );
+    let again = exec()
+        .args(["--only", "auth", "--import"])
+        .arg(&out)
+        .args(["--", "/bin/sh", "-c"])
+        .arg(&read)
+        .output()
+        .unwrap();
+    let log = text(&again);
+    assert!(again.status.success(), "{log}");
+    let config: serde_json::Value = serde_json::from_str(
+        log.lines()
+            .find(|line| line.contains(r#""projects/demo-export/config""#))
+            .and_then(|line| line.find('{').map(|at| &line[at..]))
+            .unwrap_or_else(|| panic!("the config was read: {log}")),
+    )
+    .unwrap();
+    assert_eq!(config["multiTenant"]["allowTenants"], true, "{config}");
+    assert_eq!(config["autodeleteAnonymousUsers"], true, "{config}");
+    assert!(
+        log.contains(&format!(
+            r#""name":"projects/demo-export/tenants/{tenant}""#
+        )),
+        "the restored tenant is reachable under strict: {log}"
+    );
 }

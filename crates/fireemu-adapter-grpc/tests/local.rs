@@ -8586,6 +8586,7 @@ async fn batch_write_item_shapes_answer_identically_on_rest_and_grpc() {
                     authorization: Some("Bearer owner".to_owned()),
                     app_check: Vec::new(),
                     body: serde_json::json!({"writes": writes}),
+                    batch_field_order: Vec::new(),
                     origin: None,
                     browser_metadata: false,
                 });

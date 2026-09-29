@@ -198,6 +198,9 @@ struct PreparedAuth {
     /// Optional fireemu-only namespace settings. The sidecar carries quota configuration and
     /// explicit tenant projections; usage buckets are never serialized.
     auth_settings: Option<AuthSettings>,
+    /// The project's written config members the settings sidecar carries (validated when the
+    /// section is prepared), installed over the running ones; `None` keeps the running members.
+    config_members: Option<Vec<(String, String)>>,
     tenants: BTreeMap<String, Vec<ImportedUser>>,
 }
 
@@ -584,6 +587,15 @@ fn apply_auth(auth: &PreparedAuth, endpoints: &Endpoints) -> Result<(), Artifact
                     )
                 })?;
         }
+        if let Some(members) = &auth.config_members {
+            let restored = fireemu_adapter_http::identity_toolkit::restored_config_members(
+                endpoints.project,
+                candidate.stored_config_members(),
+                members,
+            )
+            .map_err(|error| ArtifactError::new("auth", &settings_path, error))?;
+            candidate.set_stored_config_members(restored);
+        }
         install_auth_users(
             &mut candidate,
             &auth.users,
@@ -664,6 +676,11 @@ fn apply_auth(auth: &PreparedAuth, endpoints: &Endpoints) -> Result<(), Artifact
                         )
                     })?;
             }
+            fireemu_adapter_http::identity_toolkit::restore_tenant_members(
+                &mut candidate,
+                &settings.settings.config_members,
+            )
+            .map_err(|error| ArtifactError::new("auth", &settings_path, error))?;
         }
         let fallback = current_tenant_policies
             .get(tenant)
@@ -770,6 +787,8 @@ fn apply_auth(auth: &PreparedAuth, endpoints: &Endpoints) -> Result<(), Artifact
 /// generation or compare-and-swap operation. The comparison avoids overwriting a concurrent
 /// settings update in the usual interleaving; a hook implementation needs a generation-aware
 /// API to make this boundary fully atomic against a writer that races after the comparison.
+///
+/// [`AuthBlockingHook`]: fireemu_adapter_http::identity_toolkit::AuthBlockingHook
 fn restore_blocking_settings_if_unchanged(
     blocking: &dyn fireemu_adapter_http::identity_toolkit::AuthBlockingHook,
     snapshot: &serde_json::Value,
@@ -1691,6 +1710,21 @@ fn read_auth_section(
             }
         }
     }
+    // The written config members are validated here, so an invalid one refuses the import
+    // before anything starts (issue strict-multi-tenancy-switch-lost-on-export-import).
+    let config_members = auth_settings
+        .as_ref()
+        .filter(|settings| settings.project_id == target_project)
+        .map(|settings| settings.project.config_members.clone())
+        .filter(|members| !members.is_empty());
+    if let Some(members) = &config_members {
+        fireemu_adapter_http::identity_toolkit::restored_config_members(
+            target_project,
+            &fireemu_core_auth::config_members::StoredConfigMembers::default(),
+            members,
+        )
+        .map_err(|error| ArtifactError::new("auth", section_dir.join(AUTH_SETTINGS_FILE), error))?;
+    }
     Ok(PreparedAuth {
         users,
         password_updated_at,
@@ -1700,6 +1734,7 @@ fn read_auth_section(
         email_privacy_declared,
         password_policies,
         auth_settings,
+        config_members,
         tenants,
     })
 }
@@ -1708,6 +1743,9 @@ fn exported_password_policy(policy: &PasswordPolicy) -> PasswordPolicyRecord {
     PasswordPolicyRecord {
         enforcement_state: match policy.enforcement_state {
             EnforcementState::Off => "OFF".to_owned(),
+            EnforcementState::Unspecified => {
+                "PASSWORD_POLICY_ENFORCEMENT_STATE_UNSPECIFIED".to_owned()
+            }
             EnforcementState::Enforce => "ENFORCE".to_owned(),
         },
         force_upgrade_on_signin: policy.force_upgrade_on_signin,
@@ -1733,6 +1771,7 @@ fn imported_password_policy(
 ) -> Result<PasswordPolicy, ArtifactError> {
     let state = match record.enforcement_state.as_str() {
         "OFF" => EnforcementState::Off,
+        "PASSWORD_POLICY_ENFORCEMENT_STATE_UNSPECIFIED" => EnforcementState::Unspecified,
         "ENFORCE" => EnforcementState::Enforce,
         _ => {
             return Err(ArtifactError::new(
@@ -3324,6 +3363,9 @@ fn export_auth(
                 quota: (tenant_quota != SignupQuotaConfig::default())
                     .then(|| exported_quota_settings(&tenant_quota)),
                 blocking: None,
+                config_members: fireemu_adapter_http::identity_toolkit::exportable_tenant_members(
+                    tenant_store.stored_config_members(),
+                ),
             },
             config_is_explicit: tenant_config_override.is_some(),
             metadata: Some(exported_tenant_metadata(tenant_metadata)),
@@ -3353,9 +3395,13 @@ fn export_auth(
         write_private_file(&path, policies.to_json().as_bytes())
             .map_err(|e| ArtifactError::new("auth", &path, e))?;
     }
+    let project_members = fireemu_adapter_http::identity_toolkit::exportable_config_members(
+        store.stored_config_members(),
+    );
     if project_quota != SignupQuotaConfig::default()
         || project_blocking.is_some()
         || !tenant_settings.is_empty()
+        || !project_members.is_empty()
     {
         let path = section_dir.join(AUTH_SETTINGS_FILE);
         let settings = AuthSettings {
@@ -3365,6 +3411,7 @@ fn export_auth(
                 quota: (project_quota != SignupQuotaConfig::default())
                     .then(|| exported_quota_settings(&project_quota)),
                 blocking: project_blocking,
+                config_members: project_members,
             },
             namespaces: tenant_settings,
         };
@@ -4115,6 +4162,43 @@ mod tests {
     use fireemu_core_auth::store::{ProjectAuthConfig, TenantMetadata};
     use fireemu_core_export::auth::{AuthConfig, AuthSettingsNamespace, AuthSettingsRecord};
     use fireemu_core_types::time::{days_from_civil, LogicalInstant};
+
+    /// A password policy survives an export and import in each enforcement state, the
+    /// unspecified one included (AUTH-CONFIG-SDK: production stores an unspecified state).
+    #[test]
+    fn password_policies_round_trip_through_the_sidecar() {
+        use fireemu_core_auth::password_policy::{
+            default_allowed_non_alphanumeric, EnforcementState, PasswordPolicy,
+        };
+        let path = std::path::Path::new("policy.json");
+        for state in [
+            EnforcementState::Off,
+            EnforcementState::Unspecified,
+            EnforcementState::Enforce,
+        ] {
+            let policy = PasswordPolicy::try_new(
+                state,
+                true,
+                10,
+                Some(20),
+                true,
+                false,
+                true,
+                false,
+                default_allowed_non_alphanumeric(),
+            )
+            .unwrap();
+            let record = super::exported_password_policy(&policy);
+            let imported = super::imported_password_policy(&record, path).unwrap();
+            assert_eq!(imported.enforcement_state, state);
+            assert_eq!(imported.min_length, 10);
+            assert_eq!(imported.max_length, Some(20));
+            assert!(imported.force_upgrade_on_signin && imported.require_uppercase);
+        }
+        let mut record = super::exported_password_policy(&PasswordPolicy::default());
+        record.enforcement_state = "SOMETIMES".to_owned();
+        assert!(super::imported_password_policy(&record, path).is_err());
+    }
     #[cfg(unix)]
     use fireemu_export_publication::PublicationStage;
 
@@ -4335,6 +4419,7 @@ mod tests {
                 }),
                 quota: None,
                 blocking: None,
+                config_members: Vec::new(),
             },
             config_is_explicit: false,
             metadata: None,
@@ -5054,6 +5139,7 @@ mod tests {
                     config: None,
                     quota: None,
                     blocking: Some(imported_blocking),
+                    config_members: Vec::new(),
                 },
                 namespaces: Vec::new(),
             }),

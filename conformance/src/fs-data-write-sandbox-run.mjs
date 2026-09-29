@@ -6,28 +6,40 @@ import {
   lstat,
   mkdir,
   mkdtemp,
+  readdir,
   readFile,
   rmdir,
   stat,
+  unlink,
   writeFile,
 } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { promisify } from "node:util";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { CONFORMANCE_DIR, RUNS_DIR } from "./config.mjs";
 import {
+  assertCompleteRecording,
   compareSandboxArtifact,
   freezeSandboxFixture,
+  recordingSet,
   validateSandboxCorpus,
 } from "./fs-data-write-sandbox.mjs";
 import { validateStreamRecipes } from "./firestore-probe/stream-session.mjs";
+import { assertNoProxyEnvironment } from "./firestore-probe/webchannel-request-bytes.mjs";
 import {
   legacyManagedClearNames,
   managedClearScope,
   managedShrinkScope,
 } from "./firestore-probe/sandbox-session.mjs";
+import {
+  admissionPacketId,
+  admissionPacketRow,
+  admissionPlanDigest,
+  verifyProductionAdmission,
+  verifyProductionAdmissionOnDisk,
+} from "./fs-data-write-admission.mjs";
 
 const execFileAsync = promisify(execFile);
 const require = createRequire(import.meta.url);
@@ -49,7 +61,13 @@ const DELTA_V3_HTTP_CAP = 430;
 const DELTA_DELETE_ROUTES = ["rest", "commit", "batch-write"];
 const DELTA_DELETE_COUNTS = [12112, 12113];
 const DELTA_STREAM_ID = "writes/write-stream-terminal/response-before-half-close";
-export const MAX_STREAM_FRAMES = 9;
+export const MAX_STREAM_FRAMES = 11;
+const PARTIAL_BOUNDARY_ID = "writes/limits/index-entry-sum/adjacent";
+const DELTA_REST_IDS = new Set(
+  DELTA_DELETE_ROUTES.flatMap((route) =>
+    DELTA_DELETE_COUNTS.map((count) => `writes/limits/near-limit-delete-refusal/${route}/${count}`),
+  ),
+);
 const sha256 = (value) => createHash("sha256").update(value).digest("hex");
 
 export function assertMatchingSandboxCorpus(fixture, currentCorpus, localCorpus) {
@@ -88,14 +106,9 @@ export function selectComparableSandboxRecipes(fixture, manifest, currentCorpus,
     (program) => manifest.programs[program.id] === sha256(JSON.stringify(program)),
   );
   const matchedRestIds = selectedPrograms.map((program) => program.id).toSorted();
-  const pendingRestIds = [
-    ...new Set([
-      ...recordedIds,
-      ...(currentCorpus.restPrograms ?? []).map((program) => program.id),
-    ]),
-  ]
-    .filter((id) => !matchedRestIds.includes(id))
-    .toSorted();
+  const currentRestIds = (currentCorpus.restPrograms ?? []).map((program) => program.id);
+  const pendingRestIds = currentRestIds.filter((id) => !matchedRestIds.includes(id)).toSorted();
+  const retiredRestIds = recordedIds.filter((id) => !currentRestIds.includes(id));
   const currentStreams = (currentCorpus.streamRecipes ?? []).filter(
     (recipe) => recipe.transport === "grpc",
   );
@@ -103,14 +116,13 @@ export function selectComparableSandboxRecipes(fixture, manifest, currentCorpus,
     (recipe) => manifest.streams?.[recipe.id] === sha256(JSON.stringify(recipe)),
   );
   const matchedStreamIds = selectedStreams.map((recipe) => recipe.id).toSorted();
-  const pendingStreamIds = [
-    ...new Set([
-      ...Object.keys(fixture.streams ?? {}),
-      ...currentStreams.map((recipe) => recipe.id),
-    ]),
-  ]
+  const currentStreamIds = currentStreams.map((recipe) => recipe.id);
+  const pendingStreamIds = currentStreamIds
     .filter((id) => !matchedStreamIds.includes(id))
     .toSorted();
+  const retiredStreamIds = Object.keys(fixture.streams ?? {}).filter(
+    (id) => !currentStreamIds.includes(id),
+  );
   const keep = (entries, ids) => Object.fromEntries(ids.map((id) => [id, entries[id]]));
   return {
     fixture: {
@@ -129,8 +141,90 @@ export function selectComparableSandboxRecipes(fixture, manifest, currentCorpus,
     },
     matchedRestIds,
     pendingRestIds,
+    retiredRestIds,
     matchedStreamIds,
     pendingStreamIds,
+    retiredStreamIds,
+  };
+}
+
+/**
+ * Compare pending recipes against later recording sets. Each supplement pins the digest of
+ * every recipe it recorded; only a recipe whose current digest is unchanged is compared.
+ */
+export function selectSupplementComparisons(
+  supplements,
+  currentCorpus,
+  pendingRestIds,
+  pendingStreamIds,
+) {
+  const programs = new Map(
+    (currentCorpus.restPrograms ?? []).map((program) => [program.id, program]),
+  );
+  const streams = new Map(
+    (currentCorpus.streamRecipes ?? [])
+      .filter((recipe) => recipe.transport === "grpc")
+      .map((recipe) => [recipe.id, recipe]),
+  );
+  const coveredBy = new Map();
+  const comparisons = [];
+  for (const { name, fixture } of supplements) {
+    const digests = fixture?.recipeDigests;
+    const recordedRest = Object.keys(fixture?.programs ?? {}).toSorted();
+    const recordedStreams = Object.keys(fixture?.streams ?? {}).toSorted();
+    if (
+      fixture?.schemaVersion !== 1 ||
+      JSON.stringify(recordedRest) !==
+        JSON.stringify(Object.keys(digests?.programs ?? {}).toSorted()) ||
+      JSON.stringify(recordedStreams) !==
+        JSON.stringify(Object.keys(digests?.streams ?? {}).toSorted())
+    ) {
+      throw new Error(`supplement ${name} does not pin the recipe digests of its rows`);
+    }
+    const matchedRestIds = recordedRest.filter(
+      (id) =>
+        pendingRestIds.includes(id) &&
+        programs.has(id) &&
+        digests.programs[id] === sha256(JSON.stringify(programs.get(id))),
+    );
+    const matchedStreamIds = recordedStreams.filter(
+      (id) =>
+        pendingStreamIds.includes(id) &&
+        streams.has(id) &&
+        digests.streams[id] === sha256(JSON.stringify(streams.get(id))),
+    );
+    for (const id of [...matchedRestIds, ...matchedStreamIds]) {
+      if (coveredBy.has(id)) {
+        throw new Error(
+          `${id} is recorded by more than one supplement (${coveredBy.get(id)}, ${name})`,
+        );
+      }
+      coveredBy.set(id, name);
+    }
+    if (matchedRestIds.length === 0 && matchedStreamIds.length === 0) continue;
+    const keep = (entries, ids) => Object.fromEntries(ids.map((id) => [id, entries[id]]));
+    const restPrograms = matchedRestIds.map((id) => programs.get(id));
+    comparisons.push({
+      name,
+      fixture: {
+        ...fixture,
+        programs: keep(fixture.programs, matchedRestIds),
+        streams: keep(fixture.streams ?? {}, matchedStreamIds),
+      },
+      corpus: {
+        ...currentCorpus,
+        restPrograms,
+        streamRecipes: matchedStreamIds.map((id) => streams.get(id)),
+        restRequestCount: restPrograms.reduce((total, program) => total + program.steps.length, 0),
+      },
+      matchedRestIds,
+      matchedStreamIds,
+    });
+  }
+  return {
+    comparisons,
+    pendingRestIds: pendingRestIds.filter((id) => !coveredBy.has(id)),
+    pendingStreamIds: pendingStreamIds.filter((id) => !coveredBy.has(id)),
   };
 }
 
@@ -171,10 +265,8 @@ export function selectDeltaV3Recipes(currentCorpus, fixture, manifest) {
   ) {
     throw new Error("delta-v3 manifest programs differ from the saved production fixture");
   }
-  if (
-    JSON.stringify(Object.keys(fixture.streams ?? {}).toSorted()) !==
-    JSON.stringify(Object.keys(manifest.streams ?? {}).toSorted())
-  ) {
+  // The manifest may also pin the saved-reference stream, which has no live recording.
+  if (Object.keys(fixture.streams ?? {}).some((id) => !manifest.streams?.[id])) {
     throw new Error("delta-v3 manifest streams differ from the saved production fixture");
   }
   const retainedRestIds = currentCorpus.restPrograms
@@ -191,11 +283,12 @@ export function selectDeltaV3Recipes(currentCorpus, fixture, manifest) {
     )
     .map((recipe) => recipe.id)
     .toSorted();
-  const pendingRestIds = [
-    ...new Set([...recordedRestIds, ...currentCorpus.restPrograms.map((program) => program.id)]),
-  ]
+  const currentRestIds = new Set(currentCorpus.restPrograms.map((program) => program.id));
+  const pendingRestIds = [...currentRestIds]
     .filter((id) => !expectedRestIds.includes(id) && !retainedRestIds.includes(id))
     .toSorted();
+  // Saved rows whose recipe left the corpus are reported, never recorded again.
+  const retiredRestIds = recordedRestIds.filter((id) => !currentRestIds.has(id));
   const currentGrpcIds = currentCorpus.streamRecipes
     .filter((recipe) => recipe.transport === "grpc")
     .map((recipe) => recipe.id);
@@ -220,6 +313,7 @@ export function selectDeltaV3Recipes(currentCorpus, fixture, manifest) {
     retainedRestIds,
     retainedStreamIds,
     pendingRestIds,
+    retiredRestIds,
     pendingStreamIds,
     recordingCorpus: {
       ...currentCorpus,
@@ -249,6 +343,209 @@ export function classifyDeltaV3DeletePair(route, smaller, larger) {
     return { status: "adjacent-boundary", route };
   }
   return { status: "route-specific-exploration-required", route };
+}
+
+/**
+ * Every recipe the saved fixture does not cover, except the delta-v3 deletes and stream.
+ * The adjacent boundary program stays last so its six large documents are cleared last.
+ */
+export function selectPartialRecipes(currentCorpus, fixture, manifest) {
+  validateSandboxCorpus(currentCorpus);
+  const comparable = selectComparableSandboxRecipes(
+    fixture,
+    manifest,
+    currentCorpus,
+    currentCorpus,
+  );
+  const currentIds = new Set(currentCorpus.restPrograms.map((program) => program.id));
+  const pending = new Set(comparable.pendingRestIds);
+  const programs = currentCorpus.restPrograms.filter(
+    (program) => pending.has(program.id) && !DELTA_REST_IDS.has(program.id),
+  );
+  const boundary = programs.filter((program) => program.id === PARTIAL_BOUNDARY_ID);
+  if (boundary.length !== 1) {
+    throw new Error("the partial corpus needs the unrecorded adjacent boundary program");
+  }
+  const restPrograms = [
+    ...programs.filter((program) => program.id !== PARTIAL_BOUNDARY_ID),
+    ...boundary,
+  ];
+  const streamRecipes = currentCorpus.streamRecipes.filter(
+    (recipe) =>
+      recipe.transport === "grpc" &&
+      recipe.id !== DELTA_STREAM_ID &&
+      comparable.pendingStreamIds.includes(recipe.id),
+  );
+  const sourceCorpusDigest = sha256(JSON.stringify(currentCorpus));
+  return {
+    sourceCorpusDigest,
+    retainedRestIds: comparable.matchedRestIds,
+    retiredRestIds: comparable.pendingRestIds.filter((id) => !currentIds.has(id)),
+    recordingCorpus: {
+      schemaVersion: 1,
+      sourceCorpusSha256: sourceCorpusDigest,
+      restPrograms,
+      streamRecipes,
+      restRequestCount: restPrograms.reduce((total, program) => total + program.steps.length, 0),
+    },
+  };
+}
+
+export function partialManagedClearNames(recordingCorpus) {
+  const programs = recordingCorpus?.restPrograms ?? [];
+  if (programs.some((program) => DELTA_REST_IDS.has(program.id))) {
+    throw new Error("the partial corpus must not carry the delta-v3 delete recipes");
+  }
+  const program = programs.at(-1);
+  if (program?.id !== PARTIAL_BOUNDARY_ID) {
+    throw new Error("the partial managed-clear boundary program must be last");
+  }
+  const writes = program.steps.filter((step) => step.id.startsWith("write-"));
+  const names = writes.map((step) => step.body?.writes?.[0]?.update?.name);
+  if (
+    writes.length !== 6 ||
+    names.some((name) => typeof name !== "string") ||
+    new Set(names).size !== 6
+  ) {
+    throw new Error("the partial boundary program must own six distinct documents");
+  }
+  managedClearScope(names, SANDBOX_PROJECT, "(default)");
+  if (managedShrinkScope(names, SANDBOX_PROJECT, "(default)") !== "v3") {
+    throw new Error("the partial boundary documents differ from the frozen corpus-v3 names");
+  }
+  return names;
+}
+
+export function partialRequestBound(recordingCorpus) {
+  const names = partialManagedClearNames(recordingCorpus);
+  const cleanup = cleanupRequestBound(recordingCorpus, names);
+  const maxHttpRequests = cleanup.totalRequestBound + V3_MANAGED_CLEAR_CAP;
+  if (cleanup.managedRequestBound > V3_MANAGED_CLEAR_CAP || maxHttpRequests > REST_CAP) {
+    throw new Error(
+      `the partial corpus needs ${cleanup.managedRequestBound} managed and ${maxHttpRequests} HTTP requests; caps are ${V3_MANAGED_CLEAR_CAP} and ${REST_CAP}`,
+    );
+  }
+  return {
+    declaredHttp: recordingCorpus.restRequestCount,
+    ...cleanup,
+    managedHttpCap: V3_MANAGED_CLEAR_CAP,
+    maxHttpRequests,
+    maxStreamFrames: recordingCorpus.streamRecipes.reduce(
+      (total, recipe) => total + recipe.maxFrames,
+      0,
+    ),
+  };
+}
+
+/** The fixed boundary pairs, in corpus order, taken byte for byte from the current corpus. */
+export function selectBracketRecipes(currentCorpus, setName = "bracket") {
+  const set = recordingSet(setName);
+  validateSandboxCorpus(currentCorpus);
+  const wanted = new Set(set.restIds);
+  const restPrograms = currentCorpus.restPrograms.filter((program) => wanted.has(program.id));
+  const streamRecipes = set.streamIds.map((id) =>
+    currentCorpus.streamRecipes.find((recipe) => recipe.id === id),
+  );
+  if (restPrograms.length !== wanted.size || streamRecipes.some((recipe) => !recipe)) {
+    throw new Error("the current corpus lacks a bracket recipe");
+  }
+  const sourceCorpusDigest = sha256(JSON.stringify(currentCorpus));
+  return {
+    sourceCorpusDigest,
+    recordingCorpus: {
+      schemaVersion: 1,
+      sourceCorpusSha256: sourceCorpusDigest,
+      restPrograms,
+      streamRecipes,
+      restRequestCount: restPrograms.reduce((total, program) => total + program.steps.length, 0),
+    },
+  };
+}
+
+export function bracketRequestBound(recordingCorpus, setName = "bracket") {
+  const set = recordingSet(setName);
+  const { requestCount } = validateSandboxCorpus(recordingCorpus);
+  const ids = recordingCorpus.restPrograms.map((program) => program.id).toSorted();
+  const streamIds = (recordingCorpus.streamRecipes ?? []).map((recipe) => recipe.id);
+  if (
+    JSON.stringify(ids) !== JSON.stringify([...set.restIds].toSorted()) ||
+    JSON.stringify(streamIds) !== JSON.stringify([...set.streamIds])
+  ) {
+    throw new Error(`the ${setName} corpus must carry exactly its fixed bracket recipes`);
+  }
+  const names = ownedMutationNamesForPrograms(recordingCorpus.restPrograms);
+  if (JSON.stringify(names) !== JSON.stringify(set.ownedNames)) {
+    throw new Error("the bracket recipes write outside the owned cleanup names");
+  }
+  // A typed-missing read of the owned names, plus an empty-collection check when a recipe
+  // reads a whole collection.
+  const preflightHttp = set.queriedCollection ? 2 : 1;
+  const bound = {
+    declaredHttp: requestCount,
+    preflightHttp,
+    cleanupHttp: names.length + 1,
+    maxHttpRequests: requestCount + preflightHttp + names.length + 1,
+    maxStreamFrames: recordingCorpus.streamRecipes.reduce(
+      (total, recipe) => total + recipe.maxFrames,
+      0,
+    ),
+  };
+  if (bound.maxHttpRequests !== set.httpCap) {
+    throw new Error("the bracket request bound differs from the child's fixed cap");
+  }
+  return bound;
+}
+
+export function deltaV3RecordingCorpus(selection) {
+  return {
+    schemaVersion: 1,
+    sourceCorpusSha256: selection.sourceCorpusDigest,
+    restPrograms: selection.recordingCorpus.restPrograms,
+    streamRecipes: selection.recordingCorpus.streamRecipes,
+    restRequestCount: selection.recordingCorpus.restRequestCount,
+  };
+}
+
+/** The ledger estimate one attempt of `mode` reserves. */
+export function attemptEstimateFor(mode) {
+  return mode === "bracket" || mode === "followup"
+    ? recordingSet(mode).attemptEstimateUsd
+    : ATTEMPT_ESTIMATE_USD;
+}
+
+/** The deterministic plan the pre-send review pins by its digest. */
+export function productionAdmissionPlan(mode, selection) {
+  let recordingCorpus;
+  let bounds;
+  let managedNames;
+  if (mode === "partial") {
+    recordingCorpus = selection.recordingCorpus;
+    bounds = partialRequestBound(recordingCorpus);
+    managedNames = partialManagedClearNames(recordingCorpus);
+  } else if (mode === "bracket" || mode === "followup") {
+    recordingCorpus = selection.recordingCorpus;
+    bounds = bracketRequestBound(recordingCorpus, mode);
+    managedNames = [...recordingSet(mode).ownedNames];
+  } else if (mode === "delta-v3") {
+    recordingCorpus = deltaV3RecordingCorpus(selection);
+    bounds = deltaV3RequestBound(recordingCorpus);
+    managedNames = deltaV3ManagedClearNames(recordingCorpus);
+  } else {
+    throw new Error("unknown production recording mode");
+  }
+  return {
+    mode,
+    project: SANDBOX_PROJECT,
+    database: "(default)",
+    sourceCorpusSha256: selection.sourceCorpusDigest,
+    recordingCorpusSha256: sha256(JSON.stringify(recordingCorpus)),
+    restIds: recordingCorpus.restPrograms.map((program) => program.id),
+    streamIds: recordingCorpus.streamRecipes.map((recipe) => recipe.id),
+    managedNames,
+    bounds,
+    attempts: 2,
+    attemptEstimateUsd: attemptEstimateFor(mode),
+  };
 }
 
 export function deltaV3RequestBound(recordingCorpus) {
@@ -356,9 +653,13 @@ export function sandboxLedgerEntry({
   estimatedUsd = ATTEMPT_ESTIMATE_USD,
   attemptId,
   streamFrames,
+  packetId,
+  runId,
+  requestCap: explicitRequestCap,
 }) {
   const requestCap =
-    streamFrames === undefined || streamFrames === null ? REST_CAP : DELTA_V3_HTTP_CAP;
+    explicitRequestCap ??
+    (streamFrames === undefined || streamFrames === null ? REST_CAP : DELTA_V3_HTTP_CAP);
   if (requests !== null && (!Number.isInteger(requests) || requests < 0 || requests > requestCap)) {
     throw new Error("invalid sandbox ledger request count");
   }
@@ -382,12 +683,23 @@ export function sandboxLedgerEntry({
     runDir,
     ...(attemptId === undefined ? {} : { attemptId }),
     ...(streamFrames === undefined ? {} : { streamFrames }),
+    ...(packetId === undefined ? {} : { packetId }),
+    ...(runId === undefined ? {} : { runId }),
   };
 }
 
-export async function reserveProductionAttempt({ ledgerPath, rows, gitSha, corpusDigest, runDir }) {
+export async function reserveProductionAttempt({
+  ledgerPath,
+  rows,
+  gitSha,
+  corpusDigest,
+  runDir,
+  packetId,
+  runId,
+  estimatedUsd = ATTEMPT_ESTIMATE_USD,
+}) {
   requireHistoricalUnknownHold(rows);
-  remainingSandboxBudget(rows, ATTEMPT_ESTIMATE_USD);
+  remainingSandboxBudget(rows, estimatedUsd);
   const attemptId = randomUUID().replaceAll("-", "");
   const reservation = sandboxLedgerEntry({
     gitSha,
@@ -395,8 +707,10 @@ export async function reserveProductionAttempt({ ledgerPath, rows, gitSha, corpu
     requests: null,
     outcome: "reserved",
     runDir,
-    estimatedUsd: ATTEMPT_ESTIMATE_USD,
+    estimatedUsd,
     attemptId,
+    packetId,
+    runId,
   });
   const handle = await open(ledgerPath, "a", 0o600);
   try {
@@ -416,6 +730,9 @@ export async function reserveProductionAttemptWithToken({
   corpusDigest,
   runDir,
   acquireToken,
+  packetId,
+  runId,
+  estimatedUsd = ATTEMPT_ESTIMATE_USD,
 }) {
   if (typeof acquireToken !== "function") {
     throw new Error("production credential provider is required");
@@ -426,6 +743,9 @@ export async function reserveProductionAttemptWithToken({
     gitSha,
     corpusDigest,
     runDir,
+    packetId,
+    runId,
+    estimatedUsd,
   });
   const token = await acquireToken();
   if (typeof token !== "string" || !token.trim()) {
@@ -525,6 +845,7 @@ export function deltaV3RecoveryEnvironment({
   corpusDigest,
   sourceGitSha,
   remainingHttp,
+  cancelBulkDelete = false,
 }) {
   if (
     typeof token !== "string" ||
@@ -572,7 +893,17 @@ export function deltaV3RecoveryEnvironment({
     FIRESTORE_PROBE_DELETE_RUN_ID: runId,
     FIRESTORE_PROBE_CORPUS_DIGEST: corpusDigest,
     FIRESTORE_PROBE_SOURCE_GIT_SHA: sourceGitSha,
+    ...(cancelBulkDelete === true ? { FIRESTORE_PROBE_DELTA_V3_CANCEL_BULK_DELETE: "1" } : {}),
   };
+}
+
+export function deltaV3RecoveryOutcome(status, cancelBulkDelete) {
+  if (cancelBulkDelete) {
+    if (status === "bulk-delete-cancelled" || status === "bulk-delete-done") return status;
+    throw new Error("delta-v3 cancel run did not leave its operation terminal");
+  }
+  if (status === "complete") return "recovered";
+  throw new Error("delta-v3 recovery did not verify exact typed absence and group emptiness");
 }
 
 export async function findV3RecoveryResume(privateDir, expectedNames) {
@@ -839,7 +1170,7 @@ async function recoverV3() {
   process.stdout.write(`${JSON.stringify({ ...result, invocationGitSha: currentGitSha })}\n`);
 }
 
-async function recoverDeltaV3() {
+async function recoverDeltaV3({ cancelBulkDelete = false } = {}) {
   const gitCommonDir = (
     await execFileAsync("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], {
       cwd: ROOT,
@@ -907,14 +1238,15 @@ async function recoverDeltaV3() {
           corpusDigest: resume.journal.corpusDigest,
           sourceGitSha: resume.journal.sourceGitSha,
           remainingHttp,
+          cancelBulkDelete,
         }),
         1_200_000,
       );
       const recovered = JSON.parse(await readFile(resume.journalPath, "utf8"));
-      if (recovered.status !== "complete" || recovered.mode !== "cleanup-delta-v3") {
+      if (recovered.mode !== "cleanup-delta-v3") {
         throw new Error("delta-v3 recovery did not verify exact typed absence and group emptiness");
       }
-      outcome = "recovered";
+      outcome = deltaV3RecoveryOutcome(recovered.status, cancelBulkDelete);
     } finally {
       try {
         const cumulativeCount = sessionRequestCount(JSON.parse(await readFile(meta, "utf8")));
@@ -1187,19 +1519,7 @@ export function deltaV3ManagedClearNames(recordingCorpus) {
   return names;
 }
 
-export function assertDeltaV3ProductionAdmission({ host, presendReviewed = false }) {
-  if (host === "firestore.googleapis.com" || host === "firestore.googleapis.com:443") {
-    if (!presendReviewed) {
-      throw new Error(
-        "delta-v3 production recording is blocked pending independent presend review",
-      );
-    }
-  } else {
-    localTarget(host);
-  }
-}
-
-function ownedMutationNamesForPrograms(programs) {
+export function ownedMutationNamesForPrograms(programs) {
   const prefix = `projects/${SANDBOX_PROJECT}/databases/(default)/documents/`;
   const names = new Set();
   const add = (name) => {
@@ -1283,10 +1603,13 @@ function exactInventoryRequestBound(names) {
 }
 
 export function productionCleanupRequestBound(corpus) {
+  return cleanupRequestBound(corpus, sandboxManagedClearNames(corpus));
+}
+
+function cleanupRequestBound(corpus, boundaryNames) {
   const { requestCount } = validateSandboxCorpus(corpus);
   const programs = corpus.restPrograms;
   const names = ownedMutationNamesForPrograms(programs);
-  const boundaryNames = sandboxManagedClearNames(corpus);
   if (!boundaryNames.every((name) => names.includes(name))) {
     throw new Error("exact cleanup request bound omitted a frozen boundary target");
   }
@@ -1355,7 +1678,30 @@ export function productionRestEnvironment({
   corpusDigest,
   sourceGitSha,
   deltaV3 = false,
+  partial,
+  bracket,
+  admission,
 }) {
+  if ([deltaV3 || undefined, partial, bracket].filter((mode) => mode !== undefined).length > 1) {
+    throw new Error("a production recording runs in exactly one recording mode");
+  }
+  if (
+    bracket !== undefined &&
+    (!Number.isSafeInteger(bracket?.maxHttpRequests) ||
+      bracket.maxHttpRequests < 1 ||
+      bracket.maxHttpRequests > recordingSet(bracket.set ?? "bracket").httpCap)
+  ) {
+    throw new Error("the bracket HTTP cap must be a positive integer within its fixed cap");
+  }
+  if (
+    partial !== undefined &&
+    (deltaV3 ||
+      !Number.isSafeInteger(partial?.maxHttpRequests) ||
+      partial.maxHttpRequests < 1 ||
+      partial.maxHttpRequests > REST_CAP)
+  ) {
+    throw new Error("the partial HTTP cap must be a positive integer within the REST cap");
+  }
   if (
     ![input, output, meta, token, journal].every(
       (value) => typeof value === "string" && value.length > 0,
@@ -1372,14 +1718,21 @@ export function productionRestEnvironment({
   }
   if (
     !Array.isArray(managedNames) ||
-    (deltaV3
-      ? managedNames.length !== 6 ||
-        managedShrinkScope(managedNames, SANDBOX_PROJECT, "(default)") !== "delta-v3"
-      : managedNames.length !== 12)
+    (bracket
+      ? JSON.stringify(managedNames.toSorted()) !==
+        JSON.stringify(recordingSet(bracket.set ?? "bracket").ownedNames)
+      : deltaV3
+        ? managedNames.length !== 6 ||
+          managedShrinkScope(managedNames, SANDBOX_PROJECT, "(default)") !== "delta-v3"
+        : partial
+          ? managedNames.length !== 6 ||
+            managedShrinkScope(managedNames, SANDBOX_PROJECT, "(default)") !== "v3"
+          : managedNames.length !== 12)
   ) {
     throw new Error("production managed-clear names do not match the selected exact scope");
   }
-  managedClearScope(managedNames, SANDBOX_PROJECT, "(default)");
+  // Bracket names are nested documents deleted one by one, not root groups cleared whole.
+  if (!bracket) managedClearScope(managedNames, SANDBOX_PROJECT, "(default)");
   return {
     FIRESTORE_PROBE_TARGET: "production",
     FIRESTORE_PROBE_SCHEME: "https",
@@ -1390,7 +1743,15 @@ export function productionRestEnvironment({
     FIRESTORE_PROBE_IN: input,
     FIRESTORE_PROBE_OUT: output,
     FIRESTORE_PROBE_META_OUT: meta,
-    FIRESTORE_PROBE_MAX_REQUESTS: String(deltaV3 ? 430 : REST_CAP),
+    FIRESTORE_PROBE_MAX_REQUESTS: String(
+      bracket
+        ? bracket.maxHttpRequests
+        : partial
+          ? partial.maxHttpRequests
+          : deltaV3
+            ? DELTA_V3_HTTP_CAP
+            : REST_CAP,
+    ),
     FIRESTORE_PROBE_TIMEOUT_MS: "180000",
     FIRESTORE_PROBE_MANAGED_CLEAR_NAMES: JSON.stringify(managedNames),
     FIRESTORE_PROBE_MANAGED_CLEAR_JOURNAL: deltaV3 ? undefined : journal,
@@ -1400,6 +1761,12 @@ export function productionRestEnvironment({
     FIRESTORE_PROBE_DELETE_RUN_ID: runId,
     FIRESTORE_PROBE_CORPUS_DIGEST: corpusDigest,
     FIRESTORE_PROBE_SOURCE_GIT_SHA: sourceGitSha,
+    FIRESTORE_PROBE_PARTIAL: partial ? "1" : undefined,
+    FIRESTORE_PROBE_PARTIAL_LOCK_HELD: partial ? "1" : undefined,
+    FIRESTORE_PROBE_BRACKET: bracket ? "1" : undefined,
+    FIRESTORE_PROBE_RECORDING_SET: bracket ? (bracket.set ?? "bracket") : undefined,
+    FIRESTORE_PROBE_BRACKET_LOCK_HELD: bracket ? "1" : undefined,
+    FIRESTORE_PROBE_ADMISSION: admission === undefined ? undefined : JSON.stringify(admission),
   };
 }
 
@@ -1446,12 +1813,18 @@ async function productionRecording({
   rows,
   managedNames,
   deltaV3 = false,
+  partial,
+  bracket,
+  admission,
   streamFrameLimit = MAX_STREAM_FRAMES,
+  attemptEstimateUsd = ATTEMPT_ESTIMATE_USD,
 }) {
   const runDir = await mkdtemp(join(privateDir, "fs-data-write-production-"));
   const runId = randomUUID().replaceAll("-", "");
   const journal = join(runDir, deltaV3 ? "delta-cleanup.json" : "managed-clear.json");
   const ledgerPath = join(privateDir, "sandbox-ledger.jsonl");
+  const packetId =
+    admission === undefined ? undefined : admissionPacketId(admission.mode, admission.nonce);
   const { reservation, token } = await reserveProductionAttemptWithToken({
     ledgerPath,
     rows,
@@ -1459,7 +1832,11 @@ async function productionRecording({
     corpusDigest,
     runDir,
     acquireToken: productionAccessToken,
+    packetId,
+    runId,
+    estimatedUsd: attemptEstimateUsd,
   });
+  const tokens = [token];
   const restOut = join(runDir, "rest-results.json");
   const metaOut = join(runDir, "rest-meta.json");
   const streamOut = join(runDir, "stream-results.json");
@@ -1481,6 +1858,9 @@ async function productionRecording({
         corpusDigest,
         sourceGitSha: gitSha,
         deltaV3,
+        partial,
+        bracket,
+        admission,
       }),
       25_200_000,
     );
@@ -1496,16 +1876,30 @@ async function productionRecording({
     ) {
       throw new Error("delta-v3 HTTP requests exceeded the 430-attempt recording bound");
     }
-    await runNode("production gRPC", "firestore-probe/stream-session.mjs", {
-      FIRESTORE_STREAM_CORPUS: corpusIn,
-      FIRESTORE_STREAM_OUT: streamOut,
-      FIRESTORE_STREAM_TARGET: "production",
-      FIRESTORE_STREAM_HOST: undefined,
-      FIRESTORE_STREAM_PORT: undefined,
-      FIRESTORE_STREAM_TOKEN: token,
-    });
+    if (partial && requestCount > partial.maxHttpRequests) {
+      throw new Error("partial HTTP requests exceeded the reviewed recording bound");
+    }
+    if (bracket && requestCount > bracket.maxHttpRequests) {
+      throw new Error("bracket HTTP requests exceeded the reviewed recording bound");
+    }
+    // A set without gRPC recipes sends no gRPC request at all.
+    if (liveStreamCount > 0) {
+      // The REST phase can outlive a cached credential; the gRPC child gets a fresh one.
+      const streamToken = await productionAccessToken();
+      tokens.push(streamToken);
+      await runNode("production gRPC", "firestore-probe/stream-session.mjs", {
+        FIRESTORE_STREAM_CORPUS: corpusIn,
+        FIRESTORE_STREAM_OUT: streamOut,
+        FIRESTORE_STREAM_TARGET: "production",
+        FIRESTORE_STREAM_HOST: undefined,
+        FIRESTORE_STREAM_PORT: undefined,
+        FIRESTORE_STREAM_TOKEN: streamToken,
+        FIRESTORE_STREAM_RUN_ID: runId,
+        FIRESTORE_PROBE_ADMISSION: admission === undefined ? undefined : JSON.stringify(admission),
+      });
+    }
     const rest = JSON.parse(await readFile(restOut, "utf8"));
-    const stream = JSON.parse(await readFile(streamOut, "utf8"));
+    const stream = liveStreamCount > 0 ? JSON.parse(await readFile(streamOut, "utf8")) : {};
     if (Object.keys(stream).length !== liveStreamCount)
       throw new Error("incomplete production stream set");
     const streamFrames = Object.values(stream).reduce((total, result) => {
@@ -1518,7 +1912,18 @@ async function productionRecording({
       throw new Error("production stream messages escaped the bounded corpus");
     }
     outcome = "recorded";
-    return { rest, stream, startedAt, runDir, journal, runId, requestCount, streamFrames, token };
+    return {
+      rest,
+      stream,
+      startedAt,
+      runDir,
+      journal,
+      runId,
+      requestCount,
+      streamFrames,
+      token,
+      tokens,
+    };
   } finally {
     if (requestCount === null) {
       try {
@@ -1534,8 +1939,11 @@ async function productionRecording({
       ...(outcome === "recorded" ? { streamFrames: streamFrameLimit } : {}),
       outcome,
       runDir,
-      estimatedUsd: ATTEMPT_ESTIMATE_USD,
+      estimatedUsd: attemptEstimateUsd,
       attemptId: reservation.attemptId,
+      packetId,
+      runId,
+      requestCap: partial?.maxHttpRequests ?? bracket?.maxHttpRequests,
     });
     const handle = await open(ledgerPath, "a", 0o600);
     try {
@@ -1638,8 +2046,8 @@ function classifyRecordingDeletePairs(rest) {
   );
 }
 
-export async function recordDeltaV3Production() {
-  assertDeltaV3ProductionAdmission({ host: "firestore.googleapis.com" });
+export async function recordDeltaV3Production(admissionArgs) {
+  const pins = requireAdmissionArguments("record-delta-v3", admissionArgs);
   const gitCommonDir = (
     await execFileAsync("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], {
       cwd: ROOT,
@@ -1655,14 +2063,9 @@ export async function recordDeltaV3Production() {
     await readFile(join(CONFORMANCE_DIR, "fs-data-write-recipe-digests.json"), "utf8"),
   );
   const selection = selectDeltaV3Recipes(corpus, fixture, manifest);
-  const recordingCorpus = {
-    schemaVersion: 1,
-    sourceCorpusSha256: selection.sourceCorpusDigest,
-    restPrograms: selection.recordingCorpus.restPrograms,
-    streamRecipes: selection.recordingCorpus.streamRecipes,
-    restRequestCount: selection.recordingCorpus.restRequestCount,
-  };
+  const recordingCorpus = deltaV3RecordingCorpus(selection);
   const bound = deltaV3RequestBound(recordingCorpus);
+  const admission = await admitProductionRecording("delta-v3", selection, pins);
   const managedNames = deltaV3ManagedClearNames(recordingCorpus);
   const corpusDigest = selection.sourceCorpusDigest;
   const gitSha = (await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: ROOT })).stdout.trim();
@@ -1675,6 +2078,7 @@ export async function recordDeltaV3Production() {
   const corpusIn = join(generatedDir, "delta-corpus.json");
   await writeFile(corpusIn, JSON.stringify(recordingCorpus));
   await withSandboxExclusiveLock(privateDir, async (lockedRows) => {
+    verifyProductionAdmissionOnDisk({ admission });
     requireHistoricalUnknownHold(lockedRows);
     remainingSandboxBudget(lockedRows, ATTEMPT_ESTIMATE_USD * 2);
     const recordings = [];
@@ -1691,6 +2095,7 @@ export async function recordDeltaV3Production() {
           rows: lockedRows,
           managedNames,
           deltaV3: true,
+          admission,
           streamFrameLimit: bound.maxStreamFrames,
         }),
       );
@@ -1750,10 +2155,634 @@ export async function recordDeltaV3Production() {
     };
     const output = join(generatedDir, "delta-v3-recordings.json");
     await writeFile(output, `${JSON.stringify(summary, null, 2)}\n`, { mode: 0o600 });
+    // Freeze only the two approved DELETE bands as whole-program alternatives when they differ.
+    try {
+      const frozen = freezeSandboxFixture({
+        mode: "delta-v3",
+        corpus: recordingCorpus,
+        first: recordings[0].rest,
+        second: recordings[1].rest,
+        firstStream: recordings[0].stream,
+        secondStream: recordings[1].stream,
+        recordedAt: recordings.map((recording) => recording.startedAt),
+        harnessRevision: gitSha,
+        sdkVersions: recordingSdkVersions(),
+        credentialToken: recordings[0].token,
+      });
+      const frozenText = JSON.stringify(frozen);
+      if (recordings.some(({ tokens }) => tokens.some((t) => frozenText.includes(t)))) {
+        throw new Error("recorded response contains a credential token");
+      }
+      // Written beside the private summary (gitignored) so the checkout stays clean for the
+      // next reviewed recording; the operator commits it into SUPPLEMENTS_DIR afterwards.
+      await writeFile(
+        join(generatedDir, `delta-v3-${admission.nonce}.json`),
+        `${JSON.stringify({ ...frozen, mode: "delta-v3", recipeDigests: supplementRecipeDigests(recordingCorpus) }, null, 2)}\n`,
+        { flag: "wx" },
+      );
+      summary.supplement = join(generatedDir, `delta-v3-${admission.nonce}.json`);
+    } catch (error) {
+      summary.supplementError = String(error.message ?? error).slice(0, 400);
+    }
+    await writeFile(output, `${JSON.stringify(summary, null, 2)}\n`, { mode: 0o600 });
     process.stdout.write(
-      `${JSON.stringify({ output, routeTasks, resultsIdentical: summary.resultsIdentical, bounds: bound })}\n`,
+      `${JSON.stringify({ output, routeTasks, resultsIdentical: summary.resultsIdentical, supplement: summary.supplement ?? null, supplementError: summary.supplementError ?? null, bounds: bound })}\n`,
     );
   });
+}
+
+export function requireAdmissionArguments(command, args = []) {
+  const values = {};
+  for (let index = 0; index < args.length; index += 2) {
+    const flag = args[index];
+    if (
+      !["--nonce", "--review", "--review-sha256"].includes(flag) ||
+      args[index + 1] === undefined
+    ) {
+      throw new Error(`${command} requires --nonce, --review and --review-sha256`);
+    }
+    values[flag.slice(2)] = args[index + 1];
+  }
+  if (!values.nonce || !values.review || !values["review-sha256"]) {
+    throw new Error(`${command} requires --nonce, --review and --review-sha256`);
+  }
+  return { nonce: values.nonce, review: values.review, reviewSha256: values["review-sha256"] };
+}
+
+async function loadProductionSelection(mode) {
+  const { corpus } = await prepareSandboxCorpus();
+  const fixture = JSON.parse(
+    await readFile(join(CONFORMANCE_DIR, "fs-data-write-production-matrix.json"), "utf8"),
+  );
+  const manifest = JSON.parse(
+    await readFile(join(CONFORMANCE_DIR, "fs-data-write-recipe-digests.json"), "utf8"),
+  );
+  if (mode === "partial") return selectPartialRecipes(corpus, fixture, manifest);
+  if (mode === "delta-v3") return selectDeltaV3Recipes(corpus, fixture, manifest);
+  if (mode === "bracket" || mode === "followup") return selectBracketRecipes(corpus, mode);
+  throw new Error("unknown production recording mode");
+}
+
+async function currentSourceCommit() {
+  return (await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: ROOT })).stdout.trim();
+}
+
+/** Pin the plan and check the review, commit and ledger packet before any credential. */
+async function admitProductionRecording(mode, selection, pins) {
+  const admission = {
+    mode,
+    nonce: pins.nonce,
+    reviewSha256: pins.reviewSha256,
+    planSha256: admissionPlanDigest(productionAdmissionPlan(mode, selection)),
+    sourceCommit: await currentSourceCommit(),
+    reviewPath: resolve(pins.review),
+  };
+  verifyProductionAdmissionOnDisk({ admission });
+  return admission;
+}
+
+async function printProductionPlan(mode) {
+  const plan = productionAdmissionPlan(mode, await loadProductionSelection(mode));
+  process.stdout.write(
+    `${JSON.stringify({ sourceCommit: await currentSourceCommit(), planSha256: admissionPlanDigest(plan), plan }, null, 2)}\n`,
+  );
+}
+
+/** Append the operator's packet reservation after checking the review pins it. */
+async function reserveAdmission(mode, args) {
+  const pins = requireAdmissionArguments("reserve-admission", args);
+  const selection = await loadProductionSelection(mode);
+  const planSha256 = admissionPlanDigest(productionAdmissionPlan(mode, selection));
+  const sourceCommit = await currentSourceCommit();
+  const row = admissionPacketRow({
+    mode,
+    nonce: pins.nonce,
+    sourceCommit,
+    planSha256,
+    reviewSha256: pins.reviewSha256,
+  });
+  verifyProductionAdmission({
+    admission: {
+      mode,
+      nonce: pins.nonce,
+      reviewSha256: pins.reviewSha256,
+      planSha256,
+      sourceCommit,
+    },
+    reviewBytes: await readFile(resolve(pins.review)),
+    gitHead: sourceCommit,
+    gitStatus: (await execFileAsync("git", ["status", "--porcelain"], { cwd: ROOT })).stdout.trim(),
+    rows: [row],
+  });
+  const gitCommonDir = (
+    await execFileAsync("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], {
+      cwd: ROOT,
+    })
+  ).stdout.trim();
+  const ledgerPath = sandboxLedgerPath(gitCommonDir);
+  await withSandboxExclusiveLock(dirname(ledgerPath), async (rows) => {
+    if (rows.some((existing) => existing.packetId === row.packetId)) {
+      throw new Error("this admission packet is already reserved");
+    }
+    requireHistoricalUnknownHold(rows);
+    remainingSandboxBudget(rows, attemptEstimateFor(mode) * 2);
+    await appendFile(ledgerPath, `${JSON.stringify(row)}\n`, { mode: 0o600 });
+  });
+  process.stdout.write(`${JSON.stringify({ packetId: row.packetId, planSha256 })}\n`);
+}
+
+function recordingSdkVersions() {
+  return {
+    firebase: require("firebase/package.json").version,
+    firebaseAdmin: require("firebase-admin").SDK_VERSION,
+    firestore: require("@google-cloud/firestore/package.json").version,
+    grpc: require("@grpc/grpc-js/package.json").version,
+  };
+}
+
+function supplementRecipeDigests(recordingCorpus) {
+  return {
+    programs: Object.fromEntries(
+      recordingCorpus.restPrograms.map((program) => [program.id, sha256(JSON.stringify(program))]),
+    ),
+    streams: Object.fromEntries(
+      recordingCorpus.streamRecipes.map((recipe) => [recipe.id, sha256(JSON.stringify(recipe))]),
+    ),
+  };
+}
+
+export async function recordPartialProduction(admissionArgs) {
+  const pins = requireAdmissionArguments("record-partial", admissionArgs);
+  const gitCommonDir = (
+    await execFileAsync("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], {
+      cwd: ROOT,
+    })
+  ).stdout.trim();
+  const ledgerPath = sandboxLedgerPath(gitCommonDir);
+  const privateDir = dirname(ledgerPath);
+  const selection = await loadProductionSelection("partial");
+  const { recordingCorpus } = selection;
+  const bound = partialRequestBound(recordingCorpus);
+  const managedNames = partialManagedClearNames(recordingCorpus);
+  const admission = await admitProductionRecording("partial", selection, pins);
+  const corpusDigest = selection.sourceCorpusDigest;
+  const gitSha = admission.sourceCommit;
+  const rows = await readLedger(ledgerPath);
+  requireHistoricalUnknownHold(rows);
+  remainingSandboxBudget(rows, ATTEMPT_ESTIMATE_USD * 2);
+  await mkdir(RUNS_DIR, { recursive: true });
+  const generatedDir = await mkdtemp(join(RUNS_DIR, "fs-data-write-partial-"));
+  const corpusIn = join(generatedDir, "partial-corpus.json");
+  await writeFile(corpusIn, JSON.stringify(recordingCorpus));
+  await withSandboxExclusiveLock(privateDir, async (lockedRows) => {
+    verifyProductionAdmissionOnDisk({ admission });
+    requireHistoricalUnknownHold(lockedRows);
+    remainingSandboxBudget(lockedRows, ATTEMPT_ESTIMATE_USD * 2);
+    const recordings = [];
+    for (let index = 0; index < 2; index += 1) {
+      recordings.push(
+        await productionRecording({
+          corpusIn,
+          restIn: corpusIn,
+          privateDir,
+          gitSha,
+          corpusDigest,
+          restRequestCount: recordingCorpus.restRequestCount,
+          liveStreamCount: recordingCorpus.streamRecipes.length,
+          rows: lockedRows,
+          managedNames,
+          partial: bound,
+          admission,
+          streamFrameLimit: bound.maxStreamFrames,
+        }),
+      );
+    }
+    if (recordings[0].runId === recordings[1].runId) {
+      throw new Error("partial recordings reused a run ID");
+    }
+    for (const recording of recordings) {
+      const journal = JSON.parse(await readFile(recording.journal, "utf8"));
+      if (journal.status !== "complete" || journal.mode !== "cleanup-corpus-v3") {
+        throw new Error("partial cleanup is unresolved; preserve the lock and journal");
+      }
+    }
+    await writeFile(
+      join(generatedDir, "partial-recordings.json"),
+      `${JSON.stringify(
+        recordings.map(
+          ({ runId, runDir, startedAt, requestCount, streamFrames, rest, stream }) => ({
+            runId,
+            runDir,
+            startedAt,
+            httpRequests: requestCount,
+            streamFrames,
+            rest,
+            stream,
+          }),
+        ),
+        null,
+        2,
+      )}\n`,
+      { mode: 0o600 },
+    );
+    const fixture = freezeSandboxFixture({
+      corpus: recordingCorpus,
+      first: recordings[0].rest,
+      second: recordings[1].rest,
+      firstStream: recordings[0].stream,
+      secondStream: recordings[1].stream,
+      recordedAt: recordings.map((recording) => recording.startedAt),
+      harnessRevision: gitSha,
+      sdkVersions: recordingSdkVersions(),
+      credentialToken: recordings[0].token,
+    });
+    const fixtureText = JSON.stringify(fixture);
+    if (recordings.some(({ tokens }) => tokens.some((t) => fixtureText.includes(t)))) {
+      throw new Error("recorded response contains a credential token");
+    }
+    // Written under the gitignored run directory so the checkout stays clean for the next
+    // reviewed recording; the operator commits it into SUPPLEMENTS_DIR afterwards.
+    const output = join(generatedDir, `partial-${admission.nonce}.json`);
+    await writeFile(
+      output,
+      `${JSON.stringify({ ...fixture, mode: "partial", recipeDigests: supplementRecipeDigests(recordingCorpus) }, null, 2)}\n`,
+      { flag: "wx" },
+    );
+    process.stdout.write(
+      `${JSON.stringify({ output, generatedDir, httpRequests: recordings.map((recording) => recording.requestCount), bounds: bound })}\n`,
+    );
+  });
+}
+
+const SANDBOX_IDLE_MS = 30 * 60_000;
+const OWNER_APPROVER = /^オーナー/;
+
+/** A row that records work on the sandbox, as opposed to a note or a reservation. */
+function sandboxActivity(row) {
+  return (
+    row?.project === SANDBOX_PROJECT &&
+    row.event !== "note" &&
+    row.event !== "started" &&
+    !String(row.outcome ?? "").startsWith("reserved") &&
+    row.outcome !== "historical-unknown-hold"
+  );
+}
+
+/**
+ * The gates the pre-send review requires immediately before a bracket recording: the sandbox
+ * has been idle for 30 minutes and has no open attempt, this packet has never run, and the
+ * owner ledger holds exactly one owner row pinning this packet, commit, plan and nonce.
+ */
+export function verifyBracketSendGates({ rows, now, decisions, pins }) {
+  const sandbox = rows.filter((row) => row?.project === SANDBOX_PROJECT);
+  for (const [index, row] of sandbox.entries()) {
+    const opens = row.outcome === "reserved" || row.event === "started";
+    if (
+      opens &&
+      !sandbox
+        .slice(index + 1)
+        .some(
+          (later) =>
+            later.attemptId === row.attemptId &&
+            later.outcome !== "reserved" &&
+            later.event !== "started",
+        )
+    ) {
+      throw new Error("the sandbox has an open attempt; recover it before a bracket recording");
+    }
+  }
+  if (rows.some((row) => row?.packetId === pins.packetId && row.outcome === "reserved")) {
+    throw new Error("this bracket packet already ran; a rerun needs a new nonce and approval");
+  }
+  const latest = sandbox.findLast(sandboxActivity);
+  if (latest && !(now - Date.parse(latest.ts) >= SANDBOX_IDLE_MS)) {
+    throw new Error("the sandbox has not been idle for 30 minutes since its last activity");
+  }
+  const required = [
+    `packetSha256=${pins.packetSha256}`,
+    `sourceCommit=${pins.sourceCommit}`,
+    `planSha256=${pins.planSha256}`,
+    `nonce=${pins.nonce}`,
+  ];
+  const approvals = decisions.split(/\r?\n/).filter((line) => {
+    const columns = line
+      .replace(/^\s*-\s*/, "")
+      .split("|")
+      .map((value) => value.trim());
+    const tokens = new Set((columns[2] ?? "").split(";").map((value) => value.trim()));
+    return (
+      columns.length === 5 &&
+      /^\d{4}-\d{2}-\d{2}$/.test(columns[0]) &&
+      columns[1] === "FS-DATA-WRITE" &&
+      required.every((token) => tokens.has(token)) &&
+      OWNER_APPROVER.test(columns[3]) &&
+      columns[4] === pins.packetPath
+    );
+  });
+  if (approvals.length !== 1) {
+    throw new Error("the owner approval row for this bracket packet is missing or duplicated");
+  }
+  return { lastActivity: latest?.ts ?? null };
+}
+
+/** The ledger lock every sandbox lane shares; taken exclusively for the whole recording. */
+export async function acquireSharedLedgerLock(path, packetId) {
+  let handle;
+  try {
+    handle = await open(path, "wx", 0o600);
+  } catch (error) {
+    if (error?.code === "EEXIST") {
+      throw new Error("the shared ledger lock is held by another lane; wait for its release", {
+        cause: error,
+      });
+    }
+    throw error;
+  }
+  try {
+    await handle.writeFile(`${JSON.stringify({ packetId, pid: process.pid })}\n`);
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
+  return { path, packetId };
+}
+
+export async function releaseSharedLedgerLock(held) {
+  const owner = JSON.parse(await readFile(held.path, "utf8"));
+  if (owner.packetId !== held.packetId || owner.pid !== process.pid) {
+    throw new Error("the shared ledger lock changed hands; leave it for review");
+  }
+  await unlink(held.path);
+}
+
+const BRACKET_FLAGS = ["--nonce", "--review", "--review-sha256", "--packet", "--packet-sha256"];
+
+export function requireBracketArguments(args = []) {
+  const values = {};
+  for (let index = 0; index < args.length; index += 2) {
+    const flag = args[index];
+    if (!BRACKET_FLAGS.includes(flag) || args[index + 1] === undefined || flag in values) {
+      values.invalid = true;
+      break;
+    }
+    values[flag] = args[index + 1];
+  }
+  if (
+    values.invalid ||
+    BRACKET_FLAGS.some((flag) => !values[flag]) ||
+    !/^[a-f0-9]{64}$/.test(values["--packet-sha256"]) ||
+    !/^[a-f0-9]{64}$/.test(values["--review-sha256"])
+  ) {
+    throw new Error(
+      "record-bracket requires --nonce, --review, --review-sha256, --packet and --packet-sha256",
+    );
+  }
+  return {
+    nonce: values["--nonce"],
+    review: values["--review"],
+    reviewSha256: values["--review-sha256"],
+    packet: values["--packet"],
+    packetSha256: values["--packet-sha256"],
+  };
+}
+
+/** Both attempts get a fresh credential; a fixed ambient token could expire between them. */
+export function assertNoAmbientProductionToken(env) {
+  if (Object.hasOwn(env, "FIREEMU_PRODUCTION_TOKEN")) {
+    throw new Error("a bracket recording refuses FIREEMU_PRODUCTION_TOKEN; unset it");
+  }
+}
+
+/**
+ * The recording corpus split by its set's freeze groups. A set with one group keeps its gRPC
+ * recipes in that group; a split set carries none.
+ */
+export function bracketGroupCorpora(recordingCorpus, setName) {
+  const groups = Object.entries(recordingSet(setName).freezeGroups);
+  if (groups.length > 1 && recordingCorpus.streamRecipes.length > 0) {
+    throw new Error("a recording set with gRPC recipes freezes as one group");
+  }
+  return groups.map(([group, ids]) => {
+    const wanted = new Set(ids);
+    const restPrograms = recordingCorpus.restPrograms.filter((program) => wanted.has(program.id));
+    return {
+      group,
+      corpus: {
+        ...recordingCorpus,
+        restPrograms,
+        streamRecipes: groups.length === 1 ? recordingCorpus.streamRecipes : [],
+        restRequestCount: restPrograms.reduce((total, program) => total + program.steps.length, 0),
+      },
+    };
+  });
+}
+
+/** The freeze groups a single recording answered completely. */
+export function completeBracketGroups(recordingCorpus, setName, rest, stream) {
+  return bracketGroupCorpora(recordingCorpus, setName)
+    .filter(({ corpus }) => {
+      try {
+        assertCompleteRecording(corpus, rest, stream, { refuseAuthFailures: true });
+        return true;
+      } catch {
+        return false;
+      }
+    })
+    .map(({ group }) => group);
+}
+
+/**
+ * Record the fixed boundary pairs twice with the same bytes, prove each attempt cleaned its
+ * owned names, and freeze a supplement only when both recordings agree row by row.
+ */
+export async function recordBracketProduction(admissionArgs, mode = "bracket") {
+  const set = recordingSet(mode);
+  const estimate = set.attemptEstimateUsd;
+  const pins = requireBracketArguments(admissionArgs);
+  assertNoProxyEnvironment(process.env);
+  assertNoAmbientProductionToken(process.env);
+  const gitCommonDir = (
+    await execFileAsync("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], {
+      cwd: ROOT,
+    })
+  ).stdout.trim();
+  const ledgerPath = sandboxLedgerPath(gitCommonDir);
+  const privateDir = dirname(ledgerPath);
+  const selection = await loadProductionSelection(mode);
+  const { recordingCorpus } = selection;
+  const bound = bracketRequestBound(recordingCorpus, mode);
+  const admission = await admitProductionRecording(mode, selection, pins);
+  const corpusDigest = selection.sourceCorpusDigest;
+  const gitSha = admission.sourceCommit;
+  const rows = await readLedger(ledgerPath);
+  requireHistoricalUnknownHold(rows);
+  remainingSandboxBudget(rows, estimate * 2);
+  await mkdir(RUNS_DIR, { recursive: true });
+  const mainRoot = resolve(privateDir, "../..");
+  const packetPath = resolve(pins.packet);
+  if (sha256(await readFile(packetPath)) !== pins.packetSha256) {
+    throw new Error("the bracket packet differs from its pinned SHA-256");
+  }
+  const gatePins = {
+    packetId: admissionPacketId(mode, admission.nonce),
+    nonce: admission.nonce,
+    packetSha256: pins.packetSha256,
+    sourceCommit: admission.sourceCommit,
+    planSha256: admission.planSha256,
+    packetPath: relative(mainRoot, packetPath),
+  };
+  const decisionsPath = join(mainRoot, "docs.local/instructions/owner-decisions.md");
+  const generatedDir = await mkdtemp(join(RUNS_DIR, `fs-data-write-${mode}-`));
+  const corpusIn = join(generatedDir, `${mode}-corpus.json`);
+  await writeFile(corpusIn, JSON.stringify(recordingCorpus));
+  // Held from before the first reservation until the last ledger row; kept if anything was
+  // sent and the recording failed, so no other lane starts before the review.
+  const sharedLock = await acquireSharedLedgerLock(`${ledgerPath}.lock`, gatePins.packetId);
+  let sent = false;
+  try {
+    await recordBracketUnderLocks();
+    await releaseSharedLedgerLock(sharedLock);
+  } catch (error) {
+    if (!sent) await releaseSharedLedgerLock(sharedLock);
+    throw error;
+  }
+
+  async function recordBracketUnderLocks() {
+    await withSandboxExclusiveLock(privateDir, async (lockedRows) => {
+      verifyProductionAdmissionOnDisk({ admission });
+      requireHistoricalUnknownHold(lockedRows);
+      remainingSandboxBudget(lockedRows, estimate * 2);
+      verifyBracketSendGates({
+        rows: lockedRows,
+        now: Date.now(),
+        decisions: await readFile(decisionsPath, "utf8"),
+        pins: gatePins,
+      });
+      if (sha256(await readFile(packetPath)) !== pins.packetSha256) {
+        throw new Error("the bracket packet changed after admission");
+      }
+      const recordings = [];
+      let completeGroups = [];
+      for (let index = 0; index < 2; index += 1) {
+        sent = true;
+        const recording = await productionRecording({
+          corpusIn,
+          restIn: corpusIn,
+          privateDir,
+          gitSha,
+          corpusDigest,
+          restRequestCount: recordingCorpus.restRequestCount,
+          liveStreamCount: recordingCorpus.streamRecipes.length,
+          rows: lockedRows,
+          managedNames: [...set.ownedNames],
+          bracket: { ...bound, set: mode },
+          attemptEstimateUsd: estimate,
+          admission,
+          streamFrameLimit: bound.maxStreamFrames,
+        });
+        // The second attempt starts only after the first proved its owned names absent and
+        // answered every step of at least one freeze group; a group with a failed row cannot
+        // be frozen, so the attempt is not repeated for nothing.
+        const journal = JSON.parse(await readFile(recording.journal, "utf8"));
+        if (journal.status !== "complete" || journal.mode !== "cleanup-bracket") {
+          throw new Error("bracket cleanup is unresolved; preserve the lock and journal");
+        }
+        if (index === 0) {
+          completeGroups = completeBracketGroups(
+            recordingCorpus,
+            mode,
+            recording.rest,
+            recording.stream,
+          );
+          if (completeGroups.length === 0) {
+            throw new Error("the first attempt answered no freeze group completely; stopping");
+          }
+        }
+        recordings.push(recording);
+      }
+      if (recordings[0].runId === recordings[1].runId) {
+        throw new Error("bracket recordings reused a run ID");
+      }
+      await writeFile(
+        join(generatedDir, `${mode}-recordings.json`),
+        `${JSON.stringify(
+          recordings.map(
+            ({ runId, runDir, startedAt, requestCount, streamFrames, rest, stream }) => ({
+              runId,
+              runDir,
+              startedAt,
+              httpRequests: requestCount,
+              streamFrames,
+              rest,
+              stream,
+            }),
+          ),
+          null,
+          2,
+        )}\n`,
+        { mode: 0o600 },
+      );
+      const pick = (entries, programs) =>
+        Object.fromEntries(programs.map((program) => [program.id, entries[program.id]]));
+      const outputs = [];
+      const refused = [];
+      for (const { group, corpus: groupCorpus } of bracketGroupCorpora(recordingCorpus, mode)) {
+        if (!completeGroups.includes(group)) {
+          refused.push({ group, reason: "the first attempt did not answer every step" });
+          continue;
+        }
+        let fixture;
+        try {
+          fixture = freezeSandboxFixture({
+            corpus: groupCorpus,
+            first: pick(recordings[0].rest, groupCorpus.restPrograms),
+            second: pick(recordings[1].rest, groupCorpus.restPrograms),
+            firstStream: groupCorpus.streamRecipes.length > 0 ? recordings[0].stream : {},
+            secondStream: groupCorpus.streamRecipes.length > 0 ? recordings[1].stream : {},
+            recordedAt: recordings.map((recording) => recording.startedAt),
+            harnessRevision: gitSha,
+            sdkVersions: recordingSdkVersions(),
+            credentialToken: recordings[0].token,
+            refuseAuthFailures: true,
+          });
+        } catch (error) {
+          refused.push({ group, reason: String(error.message).slice(0, 400) });
+          continue;
+        }
+        const fixtureText = JSON.stringify(fixture);
+        if (recordings.some(({ tokens }) => tokens.some((t) => fixtureText.includes(t)))) {
+          throw new Error("recorded response contains a credential token");
+        }
+        const name =
+          group === "all"
+            ? `${mode}-${admission.nonce}.json`
+            : `${mode}-${admission.nonce}-${group}.json`;
+        const output = join(generatedDir, name);
+        await writeFile(
+          output,
+          `${JSON.stringify({ ...fixture, mode, recipeDigests: supplementRecipeDigests(groupCorpus) }, null, 2)}\n`,
+          { flag: "wx" },
+        );
+        outputs.push({ group, output });
+      }
+      const summary = {
+        outputs,
+        refused,
+        generatedDir,
+        httpRequests: recordings.map((recording) => recording.requestCount),
+        bounds: bound,
+      };
+      await writeFile(
+        join(generatedDir, `${mode}-freeze-summary.json`),
+        `${JSON.stringify(summary, null, 2)}\n`,
+        { mode: 0o600 },
+      );
+      process.stdout.write(`${JSON.stringify(summary)}\n`);
+      if (outputs.length === 0) {
+        throw new Error("no freeze group could be frozen; the recordings stay for review");
+      }
+    });
+  }
 }
 
 async function productionAccessToken() {
@@ -1878,6 +2907,24 @@ async function localChild() {
   );
 }
 
+const SUPPLEMENTS_DIR = join(CONFORMANCE_DIR, "fs-data-write-production-supplements");
+
+async function readSupplements() {
+  let names;
+  try {
+    names = (await readdir(SUPPLEMENTS_DIR)).filter((name) => name.endsWith(".json")).toSorted();
+  } catch (error) {
+    if (error.code === "ENOENT") return [];
+    throw error;
+  }
+  return Promise.all(
+    names.map(async (name) => ({
+      name,
+      fixture: JSON.parse(await readFile(join(SUPPLEMENTS_DIR, name), "utf8")),
+    })),
+  );
+}
+
 async function compareLocal(runDir) {
   if (typeof runDir !== "string" || !runDir) throw new Error("local run directory is required");
   const { corpus } = await prepareSandboxCorpus();
@@ -1896,10 +2943,12 @@ async function compareLocal(runDir) {
       corpus,
       matchedRestIds: corpus.restPrograms.map((program) => program.id),
       pendingRestIds: [],
+      retiredRestIds: [],
       matchedStreamIds: corpus.streamRecipes
         .filter((recipe) => recipe.transport === "grpc")
         .map((recipe) => recipe.id),
       pendingStreamIds: [],
+      retiredStreamIds: [],
     };
   } else {
     const manifest = JSON.parse(
@@ -1917,8 +2966,28 @@ async function compareLocal(runDir) {
     comparedStreams,
     comparison.corpus,
   );
+  const supplemental = selectSupplementComparisons(
+    await readSupplements(),
+    corpus,
+    comparison.pendingRestIds,
+    comparison.pendingStreamIds,
+  );
+  for (const supplement of supplemental.comparisons) {
+    differences.push(
+      ...compareSandboxArtifact(
+        supplement.fixture,
+        Object.fromEntries(supplement.matchedRestIds.map((id) => [id, rest[id]])),
+        Object.fromEntries(supplement.matchedStreamIds.map((id) => [id, stream[id]])),
+        supplement.corpus,
+      ),
+    );
+    comparison.matchedRestIds.push(...supplement.matchedRestIds);
+    comparison.matchedStreamIds.push(...supplement.matchedStreamIds);
+  }
+  comparison.pendingRestIds = supplemental.pendingRestIds;
+  comparison.pendingStreamIds = supplemental.pendingStreamIds;
   process.stdout.write(
-    `${JSON.stringify({ corpusDigest, recordedCorpusDigest: fixture.evidence.corpusSha256, comparedPrograms: comparison.matchedRestIds.length, comparedStreams: comparison.matchedStreamIds.length, pendingRestIds: comparison.pendingRestIds, pendingStreamIds: comparison.pendingStreamIds, mismatches: differences.length, differences })}\n`,
+    `${JSON.stringify({ corpusDigest, recordedCorpusDigest: fixture.evidence.corpusSha256, comparedPrograms: comparison.matchedRestIds.length, comparedStreams: comparison.matchedStreamIds.length, pendingRestIds: comparison.pendingRestIds, pendingStreamIds: comparison.pendingStreamIds, retiredRestIds: comparison.retiredRestIds, retiredStreamIds: comparison.retiredStreamIds, mismatches: differences.length, differences })}\n`,
   );
   process.exitCode = comparisonExitCode(
     differences,
@@ -1934,12 +3003,28 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
     await compareLocal(process.argv[3]);
   } else if (process.argv[2] === "record-production") {
     await recordProduction();
+  } else if (process.argv[2] === "record-delta-v3") {
+    await recordDeltaV3Production(process.argv.slice(3));
+  } else if (process.argv[2] === "record-partial") {
+    await recordPartialProduction(process.argv.slice(3));
+  } else if (process.argv[2] === "record-bracket") {
+    await recordBracketProduction(process.argv.slice(3));
+  } else if (process.argv[2] === "record-followup") {
+    await recordBracketProduction(process.argv.slice(3), "followup");
+  } else if (process.argv[2] === "plan") {
+    await printProductionPlan(process.argv[3]);
+  } else if (process.argv[2] === "reserve-admission") {
+    await reserveAdmission(process.argv[3], process.argv.slice(4));
   } else if (process.argv[2] === "recover-legacy") {
     await recoverLegacy();
   } else if (process.argv[2] === "recover-v3") {
     await recoverV3();
   } else if (process.argv[2] === "recover-delta-v3") {
-    await recoverDeltaV3();
+    const extra = process.argv.slice(3);
+    if (extra.some((argument) => argument !== "--cancel-bulk-delete")) {
+      throw new Error("recover-delta-v3 accepts only --cancel-bulk-delete");
+    }
+    await recoverDeltaV3({ cancelBulkDelete: extra.includes("--cancel-bulk-delete") });
   } else if (process.argv[2] === "prepare") {
     const prepared = await prepareSandboxCorpus();
     process.stdout.write(
@@ -1947,7 +3032,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
     );
   } else {
     throw new Error(
-      "expected prepare, local-child, compare-local, record-production, recover-legacy, recover-v3 or recover-delta-v3",
+      "expected prepare, local-child, compare-local, record-production, record-delta-v3, record-partial, record-bracket, record-followup, plan, reserve-admission, recover-legacy, recover-v3 or recover-delta-v3",
     );
   }
 }

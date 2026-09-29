@@ -255,8 +255,9 @@ const httpRouting = {
 
     // CORS. The official emulator starts its runtime with
     // FIREBASE_DEBUG_FEATURES={"skipTokenVerification":true,"enableCors":true}, which makes
-    // firebase-functions wrap every handler in `cors({origin: true})`. What that produces for
-    // a preflight and for a cross-origin POST is what these rows record.
+    // firebase-functions wrap a default onRequest handler in `cors({origin: true})` while
+    // respecting an explicit `cors: false`. These rows record the default preflight and
+    // the callable's cross-origin response.
     const preflight = (name, origin) =>
       fetch(at(ctx, `/${PROJECT}/us-central1/${name}`), {
         method: "OPTIONS",

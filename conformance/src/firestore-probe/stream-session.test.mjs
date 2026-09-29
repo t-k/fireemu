@@ -8,13 +8,14 @@ import {
   responseGatedDeadlineIsIndeterminate,
   terminalComplete,
   shouldHalfCloseAfterResponse,
+  validateLiveStreamSubset,
   validateStreamRecipes,
   validateStreamTarget,
 } from "./stream-session.mjs";
 
 test("gRPC unary request body has exact protobuf byte boundaries", async () => {
   assert.equal(typeof streamSession.makeUnaryRequestByWireBytes, "function");
-  for (const size of [10_485_760, 10_485_761]) {
+  for (const size of [10_485_760, 10_485_761, 11_534_336, 11_534_337]) {
     const { request, wireBytes } = await streamSession.makeUnaryRequestByWireBytes(size);
     assert.equal(wireBytes, size);
     assert.equal(
@@ -84,6 +85,20 @@ const recipes = [
     maxFrames: 1,
   },
   {
+    id: "writes/limits/grpc-unary-request-bytes/11534336",
+    transport: "grpc",
+    action: "get-document-transaction-bytes",
+    wireBytes: 11_534_336,
+    maxFrames: 1,
+  },
+  {
+    id: "writes/limits/grpc-unary-request-bytes/11534337",
+    transport: "grpc",
+    action: "get-document-transaction-bytes",
+    wireBytes: 11_534_337,
+    maxFrames: 1,
+  },
+  {
     id: "writes/limits/grpc-stream-request-bytes/10485760",
     transport: "grpc",
     action: "write-stream-token-bytes",
@@ -99,8 +114,41 @@ const recipes = [
   },
 ];
 
-test("only the seven fixed sandbox gRPC recipes are live", () => {
-  assert.equal(validateStreamRecipes(recipes).live.length, 7);
+test("only the nine fixed sandbox gRPC recipes are live", () => {
+  assert.equal(validateStreamRecipes(recipes).live.length, 9);
+  assert.deepEqual(
+    validateStreamRecipes(recipes).live.map((recipe) => recipe.id),
+    recipes.slice(1).map((recipe) => recipe.id),
+  );
+  // Every fixed recipe is required, and none may change its size or appear twice.
+  for (let index = 0; index < recipes.length; index += 1) {
+    assert.throws(
+      () => validateStreamRecipes(recipes.filter((_, other) => other !== index)),
+      /unsupported stream recipe/,
+    );
+  }
+  assert.throws(
+    () => validateStreamRecipes([...recipes.slice(0, -1), recipes[1]]),
+    /unsupported stream recipe/,
+  );
+  assert.throws(
+    () =>
+      validateStreamRecipes(
+        recipes.map((recipe) =>
+          recipe.wireBytes === 11_534_337 ? { ...recipe, wireBytes: 11_534_338 } : recipe,
+        ),
+      ),
+    /unsupported stream recipe/,
+  );
+  assert.throws(
+    () =>
+      validateStreamRecipes(
+        recipes.map((recipe, index) =>
+          index === 0 ? { ...recipe, source: "spec/other.json" } : recipe,
+        ),
+      ),
+    /unsupported stream recipe/,
+  );
   assert.throws(
     () => validateStreamRecipes([{ ...recipes[1], action: "write-arbitrary-document" }]),
     /unsupported stream recipe/,
@@ -218,5 +266,26 @@ test("stream connection is fixed to the sandbox project and transport", () => {
         port: 8080,
       }),
     /loopback/,
+  );
+});
+
+test("a recording subset keeps each live recipe on its fixed specification", async () => {
+  const { prepareSandboxCorpus } = await import("../fs-data-write-sandbox-run.mjs");
+  const { corpus } = await prepareSandboxCorpus();
+  const byId = new Map(corpus.streamRecipes.map((recipe) => [recipe.id, recipe]));
+  const halfClose = byId.get("writes/write-stream-terminal/response-before-half-close");
+  const unary = byId.get("writes/limits/grpc-unary-request-bytes/10485761");
+  assert.deepEqual(validateLiveStreamSubset([halfClose]), [halfClose]);
+  assert.deepEqual(validateLiveStreamSubset([unary, halfClose]), [unary, halfClose]);
+  assert.deepEqual(validateLiveStreamSubset(corpus.streamRecipes).length, 9);
+  assert.throws(() => validateLiveStreamSubset([]), /stream recipe subset/);
+  assert.throws(() => validateLiveStreamSubset([halfClose, halfClose]), /stream recipe subset/);
+  assert.throws(
+    () => validateLiveStreamSubset([{ ...halfClose, maxFrames: 3 }]),
+    /stream recipe subset/,
+  );
+  assert.throws(
+    () => validateLiveStreamSubset([{ ...unary, id: "writes/limits/unknown" }]),
+    /stream recipe subset/,
   );
 });

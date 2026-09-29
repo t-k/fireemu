@@ -1,10 +1,50 @@
 {
   "schemaVersion": 1,
   "parent": "FS-DATA-WRITE",
-  "parentStatus": "WAITING_ORACLE",
+  "parentStatus": "COMPAT_VERIFIED",
   "oracleTrack": "disposable-sandbox",
   "closureReview": {
-    "decision": "PENDING"
+    "decision": "APPROVED",
+    "decidedOn": "2026-09-28",
+    "decider": "project coordinator (delegated by the owner)",
+    "candidateComparisonPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-current-comparison.json",
+    "candidateSourceHead": "dd0c4e6fed38d09646fb2575c2fc11251724e0f4",
+    "candidateExecutableSha256": "eec383e576e5de8c63fd934ef55dde6592bb6b69888a7f00bb4129c6a9338593",
+    "approvedKnownDifferenceCount": 0,
+    "pendingOracleDifferenceCount": 0,
+    "reviewedCommit": "654dc08ea6cd749457a50f0e10c202884853e085",
+    "finalArtifactSha256": "eec383e576e5de8c63fd934ef55dde6592bb6b69888a7f00bb4129c6a9338593",
+    "reviews": [
+      {
+        "reviewer": "independent clean-context closure review (read-only subagent, Opus)",
+        "scope": "45da3de146a2196985a3ee4cc51c0686c6605e64",
+        "reportSha256": "e95b0f33a10ac7616343a61c974df30fe33f4b3a55cb90bff1aa09dbd2ce1657",
+        "outcome": "APPROVE WITH CHANGES (no Must)"
+      },
+      {
+        "reviewer": "independent clean-context review of the fix diff (read-only subagent, Opus)",
+        "scope": "45da3de14..1f07e78c7",
+        "reportSha256": "8ebef0c0d9fa661fbd012418c493b6bf0bbfb324da04889a1baae0657dce76c7",
+        "outcome": "APPROVE WITH CHANGES (no Must)"
+      },
+      {
+        "reviewer": "independent clean-context review of the closing change (read-only subagent, Opus)",
+        "scope": "654dc08ea plus the closing change",
+        "reportSha256": "8d7586f0bc7e47b61352676f560b69379f09cbf1814f940a5d638aa94576a17c",
+        "outcome": "APPROVE WITH CHANGES (no Must)"
+      }
+    ],
+    "followUps": "Non-blocking items tracked outside the closure: a strict delete of a stored document over the index-entry limits is refused rather than priced; WebChannel form bodies can hold up to 16 MiB each under the request work limiter; the limits-catalog request-bytes note keeps one stale sentence, fixed at the next product rebuild because the note is compiled into the release binary; the ten retired historical REST recipes are no longer compared; the historical rows emulator/routes#get-database and emulator/routes#list-databases answer 200 in production on the real Admin databases API, and databases.get and databases.list are compared against production only by FS-CONFIG-LIFECYCLE/database-projection on its own branch and artifact, not on this release artifact (here they differ from the recording by the per-resource etag and uid, and the list also holds the databases the earlier steps of the emulator/routes program created and an empty unreachable field the recording lacks); these two API behaviours belong to the FS-CONFIG-LIFECYCLE scope and are closed by rerunning the comparisons of both parents on the first release after integration.",
+    "followUpStatus": {
+      "asOf": "v0.8.0 (2026-09-28)",
+      "closed": [
+        "emulator/routes#get-database and emulator/routes#list-databases: databases.get and databases.list are compared against production by FS-CONFIG-LIFECYCLE/database-projection on the same release binary as this parent (integratedRegression of both parents); the get rows are MATCH and the list rows MATCH_RELABELED, as on the lane artifact."
+      ],
+      "remaining": [
+        "The limits-catalog request-bytes note still carries the stale sentence: it is compiled into the release binary, so correcting it would have changed the artifact every comparison was rerun on; it moves to the next product change.",
+        "The strict delete pricing over the index-entry limits, the WebChannel form-body memory bound and the ten retired historical REST recipes stay as listed above."
+      ]
+    }
   },
   "conditions": [
     {
@@ -28,9 +68,15 @@
         ],
         "finalArtifactSha256": "242248dd5d1119c1ef72724efda21f19caf1411b344a884106ff4258e5cfb15e",
         "comparisonPath": "spec/compatibility/broad-runs/fs-batch-malformed-middle-8a0f205-current-comparison.json",
-        "comparisonSha256": "b53a0b912cd4275c3b913f47d1e5180765ca9a26f09b9d8901bc562cf77aeb6a",
-        "sourceCommit": "8a0f20599bab98bb094a74e00d6b2df9f6cd60e8",
-        "sourceBindingSha256": "73b823461ad2933db06acd5fd9d5bf6f933ba4fb713e63042ab27a21b5d3f15a"
+        "comparisonSha256": "f36f16fcc42aa534047423e412c2b98062494f16bc7d77546c6c3f35809a4e58",
+        "sourceCommit": "f35f7b83e8a17133817c533decf67e0f242550e2",
+        "sourceBindingSha256": "0ddb1a4f0560aa0c62c1c8b05484e410f053e1e65f3debc6466e2f870e233da1",
+        "currentCoverage": {
+          "comparisonPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-current-comparison.json",
+          "comparisonSha256": "36bbc483573dcc3ff5857ddfa8bd79d3a828a389ca3befcf62469ae567c39625",
+          "finalArtifactSha256": "eec383e576e5de8c63fd934ef55dde6592bb6b69888a7f00bb4129c6a9338593",
+          "sourceHead": "dd0c4e6fed38d09646fb2575c2fc11251724e0f4"
+        }
       },
       "historicalEvidence": {
         "productionRecordings": [
@@ -52,7 +98,37 @@
         "writes/batch-write-malformed/bad-timestamp"
       ],
       "boundaryStatus": "NOT_APPLICABLE",
-      "status": "PENDING_RECORDING"
+      "status": "VERIFIED",
+      "evidence": {
+        "productionRecordings": [
+          "cbc38d2d2add26cdfbaf0bccd0336565c19c669fc8c8608d71e86588d3b5eb6c",
+          "cbc38d2d2add26cdfbaf0bccd0336565c19c669fc8c8608d71e86588d3b5eb6c"
+        ],
+        "productionRecordingSources": [
+          {
+            "path": "conformance/fs-data-write-production-matrix.json",
+            "sha256": "5dab01cb3d21b375efc1604e9de1f5537f543dab8502f7a2a539a16fe9bd5b19",
+            "recordingDigests": [
+              "7c794af67119e745072ceae3d742bd463df28c0aa804998c2155b1333b1625d9",
+              "7c794af67119e745072ceae3d742bd463df28c0aa804998c2155b1333b1625d9"
+            ],
+            "transport": "rest"
+          },
+          {
+            "path": "conformance/fs-data-write-production-supplements/partial-7bfd51026a2ac56617d81504.json",
+            "sha256": "4867fbf7837f16ecd3e4ada73aa91655686e9c37bcafb36c171ab491ed5a2582",
+            "recordingDigests": [
+              "aee842159a37e001bcab5710eb49be8d0804dd53fa7b79521aa05a018048fee1",
+              "aee842159a37e001bcab5710eb49be8d0804dd53fa7b79521aa05a018048fee1"
+            ],
+            "transport": "rest"
+          }
+        ],
+        "finalArtifactSha256": "eec383e576e5de8c63fd934ef55dde6592bb6b69888a7f00bb4129c6a9338593",
+        "sourceHead": "dd0c4e6fed38d09646fb2575c2fc11251724e0f4",
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-current-accepted-conditions.json",
+        "comparisonSha256": "64c3ee1f361944c780f7601ece224d9fc8e2cf11e8c58e4309237814e47e9976"
+      }
     },
     {
       "conditionId": "FS-DATA-WRITE/map-value-key-validation",
@@ -67,7 +143,28 @@
         "writes/map-key-validation/type-tag/query"
       ],
       "boundaryStatus": "NOT_APPLICABLE",
-      "status": "PENDING_RECORDING"
+      "status": "VERIFIED",
+      "evidence": {
+        "productionRecordings": [
+          "f7100aba315b01a2096c6ee4478c38aafc4677b57ceb6123f88cd47a068b7629",
+          "f7100aba315b01a2096c6ee4478c38aafc4677b57ceb6123f88cd47a068b7629"
+        ],
+        "productionRecordingSources": [
+          {
+            "path": "conformance/fs-data-write-production-supplements/partial-7bfd51026a2ac56617d81504.json",
+            "sha256": "4867fbf7837f16ecd3e4ada73aa91655686e9c37bcafb36c171ab491ed5a2582",
+            "recordingDigests": [
+              "aee842159a37e001bcab5710eb49be8d0804dd53fa7b79521aa05a018048fee1",
+              "aee842159a37e001bcab5710eb49be8d0804dd53fa7b79521aa05a018048fee1"
+            ],
+            "transport": "rest"
+          }
+        ],
+        "finalArtifactSha256": "eec383e576e5de8c63fd934ef55dde6592bb6b69888a7f00bb4129c6a9338593",
+        "sourceHead": "dd0c4e6fed38d09646fb2575c2fc11251724e0f4",
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-current-accepted-conditions.json",
+        "comparisonSha256": "64c3ee1f361944c780f7601ece224d9fc8e2cf11e8c58e4309237814e47e9976"
+      }
     },
     {
       "conditionId": "FS-WRITE-LIMITS-03/batch-duplicate-document",
@@ -83,7 +180,13 @@
           "7c794af67119e745072ceae3d742bd463df28c0aa804998c2155b1333b1625d9"
         ],
         "finalArtifactSha256": "d6db62596e71c152883dc5b83bf8dc48b79b703777d49bab10874c1fae6dfc6d",
-        "comparisonPath": "spec/compatibility/broad-runs/fs-batch-duplicate-document-3d7ceabb8-saved-comparison.json"
+        "comparisonPath": "spec/compatibility/broad-runs/fs-batch-duplicate-document-3d7ceabb8-saved-comparison.json",
+        "currentCoverage": {
+          "comparisonPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-current-comparison.json",
+          "comparisonSha256": "36bbc483573dcc3ff5857ddfa8bd79d3a828a389ca3befcf62469ae567c39625",
+          "finalArtifactSha256": "eec383e576e5de8c63fd934ef55dde6592bb6b69888a7f00bb4129c6a9338593",
+          "sourceHead": "dd0c4e6fed38d09646fb2575c2fc11251724e0f4"
+        }
       }
     },
     {
@@ -108,7 +211,13 @@
           "7c794af67119e745072ceae3d742bd463df28c0aa804998c2155b1333b1625d9"
         ],
         "finalArtifactSha256": "d6db62596e71c152883dc5b83bf8dc48b79b703777d49bab10874c1fae6dfc6d",
-        "comparisonPath": "spec/compatibility/broad-runs/fs-collection-id-3d7ceabb8-saved-comparison.json"
+        "comparisonPath": "spec/compatibility/broad-runs/fs-collection-id-3d7ceabb8-saved-comparison.json",
+        "currentCoverage": {
+          "comparisonPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-current-comparison.json",
+          "comparisonSha256": "36bbc483573dcc3ff5857ddfa8bd79d3a828a389ca3befcf62469ae567c39625",
+          "finalArtifactSha256": "eec383e576e5de8c63fd934ef55dde6592bb6b69888a7f00bb4129c6a9338593",
+          "sourceHead": "dd0c4e6fed38d09646fb2575c2fc11251724e0f4"
+        }
       }
     },
     {
@@ -129,7 +238,13 @@
           "7c794af67119e745072ceae3d742bd463df28c0aa804998c2155b1333b1625d9"
         ],
         "finalArtifactSha256": "d6db62596e71c152883dc5b83bf8dc48b79b703777d49bab10874c1fae6dfc6d",
-        "comparisonPath": "spec/compatibility/broad-runs/fs-subcollection-depth-3d7ceabb8-saved-comparison.json"
+        "comparisonPath": "spec/compatibility/broad-runs/fs-subcollection-depth-3d7ceabb8-saved-comparison.json",
+        "currentCoverage": {
+          "comparisonPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-current-comparison.json",
+          "comparisonSha256": "36bbc483573dcc3ff5857ddfa8bd79d3a828a389ca3befcf62469ae567c39625",
+          "finalArtifactSha256": "eec383e576e5de8c63fd934ef55dde6592bb6b69888a7f00bb4129c6a9338593",
+          "sourceHead": "dd0c4e6fed38d09646fb2575c2fc11251724e0f4"
+        }
       }
     },
     {
@@ -151,8 +266,15 @@
           "7c794af67119e745072ceae3d742bd463df28c0aa804998c2155b1333b1625d9"
         ],
         "finalArtifactSha256": "d6db62596e71c152883dc5b83bf8dc48b79b703777d49bab10874c1fae6dfc6d",
-        "comparisonPath": "spec/compatibility/broad-runs/fs-document-name-bytes-3d7ceabb8-saved-comparison.json"
-      }
+        "comparisonPath": "spec/compatibility/broad-runs/fs-document-name-bytes-3d7ceabb8-saved-comparison.json",
+        "currentCoverage": {
+          "comparisonPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-current-comparison.json",
+          "comparisonSha256": "36bbc483573dcc3ff5857ddfa8bd79d3a828a389ca3befcf62469ae567c39625",
+          "finalArtifactSha256": "eec383e576e5de8c63fd934ef55dde6592bb6b69888a7f00bb4129c6a9338593",
+          "sourceHead": "dd0c4e6fed38d09646fb2575c2fc11251724e0f4"
+        }
+      },
+      "profileNote": "A document name over 6,144 bytes is refused in both profiles ('The document name is longer than 6144 bytes.', empty-document-name/6128). The document-name guard that refuses a name size over 4,644 bytes with 'Index entry is too large.' (empty-document-name/6127) is strict profile only; the emulator profile accepts that name, as the pinned official emulator (firebase-tools 15.28.2, Firestore emulator v1.22.0) does."
     },
     {
       "conditionId": "FS-LIMIT-INDEX-ENTRIES-PER-DOCUMENT",
@@ -161,8 +283,34 @@
         "writes/limits/index-entries-per-document",
         "writes/limits/index-entry-sum/adjacent"
       ],
-      "boundaryStatus": "PENDING_RECORDING",
-      "status": "PENDING_RECORDING"
+      "boundaryStatus": "BRACKETED",
+      "status": "VERIFIED",
+      "boundaryEvidence": [
+        "writes/limits/index-entries-per-document#observation-0",
+        "writes/limits/index-entries-per-document#observation-1"
+      ],
+      "evidence": {
+        "productionRecordings": [
+          "f7100aba315b01a2096c6ee4478c38aafc4677b57ceb6123f88cd47a068b7629",
+          "f7100aba315b01a2096c6ee4478c38aafc4677b57ceb6123f88cd47a068b7629"
+        ],
+        "productionRecordingSources": [
+          {
+            "path": "conformance/fs-data-write-production-supplements/partial-7bfd51026a2ac56617d81504.json",
+            "sha256": "4867fbf7837f16ecd3e4ada73aa91655686e9c37bcafb36c171ab491ed5a2582",
+            "recordingDigests": [
+              "aee842159a37e001bcab5710eb49be8d0804dd53fa7b79521aa05a018048fee1",
+              "aee842159a37e001bcab5710eb49be8d0804dd53fa7b79521aa05a018048fee1"
+            ],
+            "transport": "rest"
+          }
+        ],
+        "finalArtifactSha256": "eec383e576e5de8c63fd934ef55dde6592bb6b69888a7f00bb4129c6a9338593",
+        "sourceHead": "dd0c4e6fed38d09646fb2575c2fc11251724e0f4",
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-current-accepted-conditions.json",
+        "comparisonSha256": "64c3ee1f361944c780f7601ece224d9fc8e2cf11e8c58e4309237814e47e9976"
+      },
+      "profileNote": "Strict profile only. The emulator profile counts index entries without refusing: the pinned official emulator (firebase-tools 15.28.2, Firestore emulator v1.22.0) accepted the same write on 2026-09-27 (contract.json FS-CLAIM-LIMITS)."
     },
     {
       "conditionId": "FS-LIMIT-INDEX-ENTRY-BYTES",
@@ -177,8 +325,43 @@
         "writes/limits/indexed-field-value-bytes",
         "writes/limits/index-entry-sum-per-document"
       ],
-      "boundaryStatus": "PENDING_RECORDING",
-      "status": "MISMATCH"
+      "boundaryStatus": "BRACKETED",
+      "status": "VERIFIED",
+      "boundaryEvidence": [
+        "writes/limits/index-entry-string-name/2641#write",
+        "writes/limits/index-entry-string-name/2642#write"
+      ],
+      "evidence": {
+        "productionRecordings": [
+          "cbc38d2d2add26cdfbaf0bccd0336565c19c669fc8c8608d71e86588d3b5eb6c",
+          "cbc38d2d2add26cdfbaf0bccd0336565c19c669fc8c8608d71e86588d3b5eb6c"
+        ],
+        "productionRecordingSources": [
+          {
+            "path": "conformance/fs-data-write-production-matrix.json",
+            "sha256": "5dab01cb3d21b375efc1604e9de1f5537f543dab8502f7a2a539a16fe9bd5b19",
+            "recordingDigests": [
+              "7c794af67119e745072ceae3d742bd463df28c0aa804998c2155b1333b1625d9",
+              "7c794af67119e745072ceae3d742bd463df28c0aa804998c2155b1333b1625d9"
+            ],
+            "transport": "rest"
+          },
+          {
+            "path": "conformance/fs-data-write-production-supplements/partial-7bfd51026a2ac56617d81504.json",
+            "sha256": "4867fbf7837f16ecd3e4ada73aa91655686e9c37bcafb36c171ab491ed5a2582",
+            "recordingDigests": [
+              "aee842159a37e001bcab5710eb49be8d0804dd53fa7b79521aa05a018048fee1",
+              "aee842159a37e001bcab5710eb49be8d0804dd53fa7b79521aa05a018048fee1"
+            ],
+            "transport": "rest"
+          }
+        ],
+        "finalArtifactSha256": "eec383e576e5de8c63fd934ef55dde6592bb6b69888a7f00bb4129c6a9338593",
+        "sourceHead": "dd0c4e6fed38d09646fb2575c2fc11251724e0f4",
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-current-accepted-conditions.json",
+        "comparisonSha256": "64c3ee1f361944c780f7601ece224d9fc8e2cf11e8c58e4309237814e47e9976"
+      },
+      "profileNote": "Strict profile only. Strict refuses a single-field (collection scope) entry over 5,530 bytes under the documented entry formula (own name, parent name, field name, indexed value up to 1,500 bytes, plus 32) with production's 'Index entry is too large.': production accepted 5,529 (index-entry-string-name/2641) and refused 5,531 (/2642), and every recorded write agrees. Composite and collection-group entries are unobserved in production and are not refused for their size. Strict also refuses a document whose name size is over 4,644 bytes, even when empty: production accepted empty-document-name/4627 (4,644) and refused /4628 (4,645); the documented formulas do not explain that refusal, so the bound is fitted to the pair (owner decision, 2026-09-28). The emulator profile counts index entries without refusing, as the pinned official emulator (firebase-tools 15.28.2, Firestore emulator v1.22.0) does."
     },
     {
       "conditionId": "FS-LIMIT-INDEX-ENTRY-SUM-PER-DOCUMENT",
@@ -187,18 +370,82 @@
         "writes/limits/index-entry-sum-per-document",
         "writes/limits/index-entry-sum/adjacent"
       ],
-      "boundaryStatus": "PENDING_RECORDING",
-      "status": "MISMATCH"
+      "boundaryStatus": "BRACKETED",
+      "status": "VERIFIED",
+      "boundaryEvidence": [
+        "writes/limits/index-entry-sum/adjacent#write-500-19999",
+        "writes/limits/index-entry-sum/adjacent#write-500-20000"
+      ],
+      "evidence": {
+        "productionRecordings": [
+          "cbc38d2d2add26cdfbaf0bccd0336565c19c669fc8c8608d71e86588d3b5eb6c",
+          "cbc38d2d2add26cdfbaf0bccd0336565c19c669fc8c8608d71e86588d3b5eb6c"
+        ],
+        "productionRecordingSources": [
+          {
+            "path": "conformance/fs-data-write-production-matrix.json",
+            "sha256": "5dab01cb3d21b375efc1604e9de1f5537f543dab8502f7a2a539a16fe9bd5b19",
+            "recordingDigests": [
+              "7c794af67119e745072ceae3d742bd463df28c0aa804998c2155b1333b1625d9",
+              "7c794af67119e745072ceae3d742bd463df28c0aa804998c2155b1333b1625d9"
+            ],
+            "transport": "rest"
+          },
+          {
+            "path": "conformance/fs-data-write-production-supplements/partial-7bfd51026a2ac56617d81504.json",
+            "sha256": "4867fbf7837f16ecd3e4ada73aa91655686e9c37bcafb36c171ab491ed5a2582",
+            "recordingDigests": [
+              "aee842159a37e001bcab5710eb49be8d0804dd53fa7b79521aa05a018048fee1",
+              "aee842159a37e001bcab5710eb49be8d0804dd53fa7b79521aa05a018048fee1"
+            ],
+            "transport": "rest"
+          }
+        ],
+        "finalArtifactSha256": "eec383e576e5de8c63fd934ef55dde6592bb6b69888a7f00bb4129c6a9338593",
+        "sourceHead": "dd0c4e6fed38d09646fb2575c2fc11251724e0f4",
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-current-accepted-conditions.json",
+        "comparisonSha256": "64c3ee1f361944c780f7601ece224d9fc8e2cf11e8c58e4309237814e47e9976"
+      },
+      "profileNote": "Strict profile only. The emulator profile counts index entries without refusing: the pinned official emulator (firebase-tools 15.28.2, Firestore emulator v1.22.0) accepted the same write on 2026-09-27 (contract.json FS-CLAIM-LIMITS)."
     },
     {
       "conditionId": "FS-DATA-WRITE/near-limit-delete-refusal",
       "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
       "recipeIds": [
-        "writes/limits/near-limit-delete-refusal"
+        "writes/limits/near-limit-delete-refusal/rest/12112",
+        "writes/limits/near-limit-delete-refusal/rest/12113",
+        "writes/limits/near-limit-delete-refusal/commit/12112",
+        "writes/limits/near-limit-delete-refusal/commit/12113",
+        "writes/limits/near-limit-delete-refusal/batch-write/12112",
+        "writes/limits/near-limit-delete-refusal/batch-write/12113"
       ],
-      "boundaryStatus": "PENDING_RECORDING",
-      "status": "PENDING_CORPUS",
-      "ownerDecision": "The owner added this 29th condition on 2026-09-24 after production refused deletion of accepted near-index-limit documents. Acceptance requires a one-unit accepted/refused pair, two production recordings, readback, and matching REST DELETE, Commit DELETE and BatchWrite DELETE paths where observed."
+      "boundaryStatus": "NONDETERMINISTIC_BAND",
+      "status": "VERIFIED",
+      "ownerDecision": "The owner added this condition on 2026-09-24. Decision A on 2026-09-25 accepts the two non-deterministic 12,112-delete rows as a band and sets strict refusal at the first deterministic count for each route.",
+      "boundaryNote": "The 12,112-delete REST and BatchWrite rows are not a deterministic accepted boundary. REST and BatchWrite refuse at 12,113; Commit refuses at 12,112. BatchWrite returns HTTP 200 with nested status code 3 for refusal; its typed readback is found, while its limited group query does not independently prove the deletion outcome.",
+      "evidence": {
+        "productionRecordings": [
+          "2522c51a52ca00b46b92dc7ac776029dc93e6c6ffcfbeac588ac1b62ae30575f",
+          "74f98b04241975ffe4b0f3a20da4c7b90a679eb761fc0b18d4f919b6ea07b106"
+        ],
+        "fixturePath": "conformance/fs-data-write-production-supplements/delta-v3-a14f265fea575003423c7ebd.json",
+        "fixtureSha256": "04943e81c95077ba8a594b76dc10bfed979b45bada1c0d7bebf81addaa95605e",
+        "finalArtifactSha256": "eec383e576e5de8c63fd934ef55dde6592bb6b69888a7f00bb4129c6a9338593",
+        "sourceHead": "dd0c4e6fed38d09646fb2575c2fc11251724e0f4",
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-terminal-local-digests.json",
+        "comparisonSha256": "397e10f7ae0c6b9157d3cd3457bd014dcaf21728320cf970ccfdcfa25e5326d4"
+      },
+      "terminalOwnerDecision": "2026-09-25 FS-DATA-WRITE A",
+      "deterministicRefusalCounts": {
+        "rest": 12113,
+        "commit": 12112,
+        "batch-write": 12113
+      },
+      "nondeterministicRows": [
+        "writes/limits/near-limit-delete-refusal/rest/12112",
+        "writes/limits/near-limit-delete-refusal/batch-write/12112"
+      ],
+      "profileNote": "Strict profile only. The emulator profile adds no delete-budget refusal, since no official-emulator measurement shows one (contract.json FS-CLAIM-LIMITS)."
     },
     {
       "conditionId": "FS-LIMIT-FIELD-PATH-BYTES",
@@ -210,8 +457,42 @@
         "writes/limits/field-path-mask/1499",
         "writes/limits/field-path-mask/1500"
       ],
-      "boundaryStatus": "PENDING_RECORDING",
-      "status": "PENDING_RECORDING"
+      "boundaryStatus": "BRACKETED",
+      "status": "VERIFIED",
+      "boundaryEvidence": [
+        "writes/limits/field-path-mask/1499#write",
+        "writes/limits/field-path-mask/1500#write"
+      ],
+      "evidence": {
+        "productionRecordings": [
+          "cbc38d2d2add26cdfbaf0bccd0336565c19c669fc8c8608d71e86588d3b5eb6c",
+          "cbc38d2d2add26cdfbaf0bccd0336565c19c669fc8c8608d71e86588d3b5eb6c"
+        ],
+        "productionRecordingSources": [
+          {
+            "path": "conformance/fs-data-write-production-matrix.json",
+            "sha256": "5dab01cb3d21b375efc1604e9de1f5537f543dab8502f7a2a539a16fe9bd5b19",
+            "recordingDigests": [
+              "7c794af67119e745072ceae3d742bd463df28c0aa804998c2155b1333b1625d9",
+              "7c794af67119e745072ceae3d742bd463df28c0aa804998c2155b1333b1625d9"
+            ],
+            "transport": "rest"
+          },
+          {
+            "path": "conformance/fs-data-write-production-supplements/partial-7bfd51026a2ac56617d81504.json",
+            "sha256": "4867fbf7837f16ecd3e4ada73aa91655686e9c37bcafb36c171ab491ed5a2582",
+            "recordingDigests": [
+              "aee842159a37e001bcab5710eb49be8d0804dd53fa7b79521aa05a018048fee1",
+              "aee842159a37e001bcab5710eb49be8d0804dd53fa7b79521aa05a018048fee1"
+            ],
+            "transport": "rest"
+          }
+        ],
+        "finalArtifactSha256": "eec383e576e5de8c63fd934ef55dde6592bb6b69888a7f00bb4129c6a9338593",
+        "sourceHead": "dd0c4e6fed38d09646fb2575c2fc11251724e0f4",
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-current-accepted-conditions.json",
+        "comparisonSha256": "64c3ee1f361944c780f7601ece224d9fc8e2cf11e8c58e4309237814e47e9976"
+      }
     },
     {
       "conditionId": "FS-LIMIT-FIELD-VALUE-BYTES/scalar-refusal",
@@ -231,7 +512,13 @@
           "7c794af67119e745072ceae3d742bd463df28c0aa804998c2155b1333b1625d9"
         ],
         "finalArtifactSha256": "d6db62596e71c152883dc5b83bf8dc48b79b703777d49bab10874c1fae6dfc6d",
-        "comparisonPath": "spec/compatibility/broad-runs/fs-scalar-refusal-3d7ceabb8-saved-comparison.json"
+        "comparisonPath": "spec/compatibility/broad-runs/fs-scalar-refusal-3d7ceabb8-saved-comparison.json",
+        "currentCoverage": {
+          "comparisonPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-current-comparison.json",
+          "comparisonSha256": "36bbc483573dcc3ff5857ddfa8bd79d3a828a389ca3befcf62469ae567c39625",
+          "finalArtifactSha256": "eec383e576e5de8c63fd934ef55dde6592bb6b69888a7f00bb4129c6a9338593",
+          "sourceHead": "dd0c4e6fed38d09646fb2575c2fc11251724e0f4"
+        }
       }
     },
     {
@@ -252,7 +539,13 @@
           "7c794af67119e745072ceae3d742bd463df28c0aa804998c2155b1333b1625d9"
         ],
         "finalArtifactSha256": "d6db62596e71c152883dc5b83bf8dc48b79b703777d49bab10874c1fae6dfc6d",
-        "comparisonPath": "spec/compatibility/broad-runs/fs-aggregate-string-3d7ceabb8-saved-comparison.json"
+        "comparisonPath": "spec/compatibility/broad-runs/fs-aggregate-string-3d7ceabb8-saved-comparison.json",
+        "currentCoverage": {
+          "comparisonPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-current-comparison.json",
+          "comparisonSha256": "36bbc483573dcc3ff5857ddfa8bd79d3a828a389ca3befcf62469ae567c39625",
+          "finalArtifactSha256": "eec383e576e5de8c63fd934ef55dde6592bb6b69888a7f00bb4129c6a9338593",
+          "sourceHead": "dd0c4e6fed38d09646fb2575c2fc11251724e0f4"
+        }
       }
     },
     {
@@ -260,19 +553,106 @@
       "source": "spec/compatibility/broad-runs/fs-write-limits-03.json#agg-map",
       "recipeIds": [
         "writes/limits/aggregate-map",
+        "writes/limits/aggregate-map/1048487",
+        "writes/limits/aggregate-map/1048488",
         "writes/limits/aggregate-map/strict-only"
       ],
-      "boundaryStatus": "UNBRACKETED",
-      "status": "PENDING_RECORDING"
+      "boundaryStatus": "NOT_APPLICABLE",
+      "status": "VERIFIED",
+      "scopeNote": "No aggregate refusal exists: production accepted a map of 1,048,488 logical bytes, one over the FS-LIMIT-FIELD-VALUE-BYTES figure (bracket recording, 2026-09-27), so neither profile refuses a map or array for its aggregate size and FS-LIMIT-DOCUMENT-BYTES bounds it (decision D-1). A single string or bytes payload over 1,048,487 bytes is refused under both profiles (FS-LIMIT-FIELD-VALUE-BYTES/scalar-refusal).",
+      "evidence": {
+        "productionRecordings": [
+          "29d1cf845d0b45903d06e58630876bdf460b2fb74df3267f70a57887aa466285",
+          "29d1cf845d0b45903d06e58630876bdf460b2fb74df3267f70a57887aa466285"
+        ],
+        "productionRecordingSources": [
+          {
+            "path": "conformance/fs-data-write-production-supplements/bracket-fb886aa8eed899746ecf607b.json",
+            "sha256": "b53c5752636ad291610a9da08ffb952a7668fac77fb1a6fd81aeb2195265eed2",
+            "recordingDigests": [
+              "c1088a2b2cb864dc32cd06c231802c8a042b13b606b274a7d733b32359a5e5b8",
+              "c1088a2b2cb864dc32cd06c231802c8a042b13b606b274a7d733b32359a5e5b8"
+            ],
+            "transport": "rest"
+          },
+          {
+            "path": "conformance/fs-data-write-production-supplements/partial-7bfd51026a2ac56617d81504.json",
+            "sha256": "4867fbf7837f16ecd3e4ada73aa91655686e9c37bcafb36c171ab491ed5a2582",
+            "recordingDigests": [
+              "aee842159a37e001bcab5710eb49be8d0804dd53fa7b79521aa05a018048fee1",
+              "aee842159a37e001bcab5710eb49be8d0804dd53fa7b79521aa05a018048fee1"
+            ],
+            "transport": "rest"
+          }
+        ],
+        "finalArtifactSha256": "eec383e576e5de8c63fd934ef55dde6592bb6b69888a7f00bb4129c6a9338593",
+        "sourceHead": "dd0c4e6fed38d09646fb2575c2fc11251724e0f4",
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-current-accepted-conditions.json",
+        "comparisonSha256": "64c3ee1f361944c780f7601ece224d9fc8e2cf11e8c58e4309237814e47e9976"
+      }
     },
     {
       "conditionId": "FS-LIMIT-INDEXED-FIELD-VALUE-BYTES",
       "source": "spec/limits/firestore-standard-2026-08-25.json#FS-LIMIT-INDEXED-FIELD-VALUE-BYTES",
       "recipeIds": [
-        "writes/limits/indexed-field-value-bytes"
+        "writes/limits/indexed-field-value-bytes",
+        "writes/limits/indexed-field-value-bytes/5200",
+        "writes/limits/indexed-field-value-bytes/6128",
+        "writes/limits/indexed-string-name/2999/1142",
+        "writes/limits/indexed-string-name/2999/1143",
+        "writes/limits/indexed-string-name/2999/1500",
+        "writes/limits/indexed-string-name/2999/1800",
+        "writes/limits/indexed-string-name/2999/2100",
+        "writes/limits/indexed-string-name/2999/2400",
+        "writes/limits/indexed-string-name/2999/2606",
+        "writes/limits/indexed-string-name/2999/2607",
+        "writes/limits/indexed-string-name/2000/2141",
+        "writes/limits/indexed-string-name/2000/2142",
+        "writes/limits/indexed-string-name/1500/2642"
       ],
-      "boundaryStatus": "UNBRACKETED",
-      "status": "PENDING_RECORDING"
+      "boundaryStatus": "NOT_APPLICABLE",
+      "status": "VERIFIED",
+      "profileNote": "No refusal of its own in either profile: truncation only sets the counted entry size. Strict refuses an entry over its limit through FS-LIMIT-INDEX-ENTRY-BYTES; the emulator profile counts without refusing, as the pinned official emulator (firebase-tools 15.28.2, Firestore emulator v1.22.0) does.",
+      "scopeNote": "A truncation rule, not a refusal: an indexed value over 1,500 bytes is counted as 1,500 in its index entry. It is observable only through FS-LIMIT-INDEX-ENTRY-BYTES, whose boundary is bracketed. Production accepted a 2,999-byte string where an untruncated count would exceed that boundary (indexed-string-name/2999/2607 at 5,478 bytes), which bounds the truncation point from above at 1,552 bytes at the recorded threshold; the recordings do not bound it from below, so the documented 1,500 bytes is adopted.",
+      "evidence": {
+        "productionRecordings": [
+          "835bb5df3a9ad9ddd5d29177546083a198b809669cd9d612c0f5787552b71386",
+          "835bb5df3a9ad9ddd5d29177546083a198b809669cd9d612c0f5787552b71386"
+        ],
+        "productionRecordingSources": [
+          {
+            "path": "conformance/fs-data-write-production-supplements/bracket-fb886aa8eed899746ecf607b.json",
+            "sha256": "b53c5752636ad291610a9da08ffb952a7668fac77fb1a6fd81aeb2195265eed2",
+            "recordingDigests": [
+              "c1088a2b2cb864dc32cd06c231802c8a042b13b606b274a7d733b32359a5e5b8",
+              "c1088a2b2cb864dc32cd06c231802c8a042b13b606b274a7d733b32359a5e5b8"
+            ],
+            "transport": "rest"
+          },
+          {
+            "path": "conformance/fs-data-write-production-supplements/followup-b0aeefc97b4c48765db4a9a1-indexed.json",
+            "sha256": "e3deb44e2b24947d64507e82b1f5fed4eda2a32d6c528671f055f3a22fbcc611",
+            "recordingDigests": [
+              "45a754c835d85bbbb0c566468cdfedfd0e60fea2e3f7575f7ef1affe82c67c2e",
+              "45a754c835d85bbbb0c566468cdfedfd0e60fea2e3f7575f7ef1affe82c67c2e"
+            ],
+            "transport": "rest"
+          },
+          {
+            "path": "conformance/fs-data-write-production-supplements/partial-7bfd51026a2ac56617d81504.json",
+            "sha256": "4867fbf7837f16ecd3e4ada73aa91655686e9c37bcafb36c171ab491ed5a2582",
+            "recordingDigests": [
+              "aee842159a37e001bcab5710eb49be8d0804dd53fa7b79521aa05a018048fee1",
+              "aee842159a37e001bcab5710eb49be8d0804dd53fa7b79521aa05a018048fee1"
+            ],
+            "transport": "rest"
+          }
+        ],
+        "finalArtifactSha256": "eec383e576e5de8c63fd934ef55dde6592bb6b69888a7f00bb4129c6a9338593",
+        "sourceHead": "dd0c4e6fed38d09646fb2575c2fc11251724e0f4",
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-current-accepted-conditions.json",
+        "comparisonSha256": "64c3ee1f361944c780f7601ece224d9fc8e2cf11e8c58e4309237814e47e9976"
+      }
     },
     {
       "conditionId": "FS-WRITE-LIMITS-03/implied-map",
@@ -292,7 +672,13 @@
           "7c794af67119e745072ceae3d742bd463df28c0aa804998c2155b1333b1625d9"
         ],
         "finalArtifactSha256": "d6db62596e71c152883dc5b83bf8dc48b79b703777d49bab10874c1fae6dfc6d",
-        "comparisonPath": "spec/compatibility/broad-runs/fs-implied-map-3d7ceabb8-saved-comparison.json"
+        "comparisonPath": "spec/compatibility/broad-runs/fs-implied-map-3d7ceabb8-saved-comparison.json",
+        "currentCoverage": {
+          "comparisonPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-current-comparison.json",
+          "comparisonSha256": "36bbc483573dcc3ff5857ddfa8bd79d3a828a389ca3befcf62469ae567c39625",
+          "finalArtifactSha256": "eec383e576e5de8c63fd934ef55dde6592bb6b69888a7f00bb4129c6a9338593",
+          "sourceHead": "dd0c4e6fed38d09646fb2575c2fc11251724e0f4"
+        }
       }
     },
     {
@@ -315,8 +701,15 @@
           "7c794af67119e745072ceae3d742bd463df28c0aa804998c2155b1333b1625d9"
         ],
         "finalArtifactSha256": "d6db62596e71c152883dc5b83bf8dc48b79b703777d49bab10874c1fae6dfc6d",
-        "comparisonPath": "spec/compatibility/broad-runs/fs-implied-array-3d7ceabb8-saved-comparison.json"
-      }
+        "comparisonPath": "spec/compatibility/broad-runs/fs-implied-array-3d7ceabb8-saved-comparison.json",
+        "currentCoverage": {
+          "comparisonPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-current-comparison.json",
+          "comparisonSha256": "36bbc483573dcc3ff5857ddfa8bd79d3a828a389ca3befcf62469ae567c39625",
+          "finalArtifactSha256": "eec383e576e5de8c63fd934ef55dde6592bb6b69888a7f00bb4129c6a9338593",
+          "sourceHead": "dd0c4e6fed38d09646fb2575c2fc11251724e0f4"
+        }
+      },
+      "profileNote": "The 1,494-byte key rule for a map held by an array is strict profile only; the emulator profile accepts the key (contract.json FS-CLAIM-LIMITS)."
     },
     {
       "conditionId": "FS-LIMIT-API-REQUEST-BYTES/rest-commit-json-accepted-samples",
@@ -328,7 +721,7 @@
         "writes/limits/decoded-11x1040000"
       ],
       "boundaryStatus": "NOT_APPLICABLE",
-      "scopeNote": "Concrete REST documents:commit JSON acceptance samples only; the nominal 10 MiB decoded-protobuf threshold and other transport surfaces are not inferred.",
+      "scopeNote": "Concrete REST documents:commit JSON acceptance samples only; they do not establish a decoded-protobuf 10 MiB limit. The other transports have their own conditions: non-Commit REST per route and gRPC unary are bracketed at 11,534,336 bytes, WebChannel has its own form-body bound, and the gRPC stream bound is an approved unobservable difference.",
       "status": "VERIFIED",
       "evidence": {
         "productionRecordings": [
@@ -336,7 +729,13 @@
           "7c794af67119e745072ceae3d742bd463df28c0aa804998c2155b1333b1625d9"
         ],
         "finalArtifactSha256": "d6db62596e71c152883dc5b83bf8dc48b79b703777d49bab10874c1fae6dfc6d",
-        "comparisonPath": "spec/compatibility/broad-runs/fs-rest-commit-json-samples-3d7ceabb8-saved-comparison.json"
+        "comparisonPath": "spec/compatibility/broad-runs/fs-rest-commit-json-samples-3d7ceabb8-saved-comparison.json",
+        "currentCoverage": {
+          "comparisonPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-current-comparison.json",
+          "comparisonSha256": "36bbc483573dcc3ff5857ddfa8bd79d3a828a389ca3befcf62469ae567c39625",
+          "finalArtifactSha256": "eec383e576e5de8c63fd934ef55dde6592bb6b69888a7f00bb4129c6a9338593",
+          "sourceHead": "dd0c4e6fed38d09646fb2575c2fc11251724e0f4"
+        }
       }
     },
     {
@@ -359,36 +758,395 @@
           "7c794af67119e745072ceae3d742bd463df28c0aa804998c2155b1333b1625d9"
         ],
         "finalArtifactSha256": "d6db62596e71c152883dc5b83bf8dc48b79b703777d49bab10874c1fae6dfc6d",
-        "comparisonPath": "spec/compatibility/broad-runs/fs-raw-request-bytes-3d7ceabb8-saved-comparison.json"
+        "comparisonPath": "spec/compatibility/broad-runs/fs-raw-request-bytes-3d7ceabb8-saved-comparison.json",
+        "currentCoverage": {
+          "comparisonPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-current-comparison.json",
+          "comparisonSha256": "36bbc483573dcc3ff5857ddfa8bd79d3a828a389ca3befcf62469ae567c39625",
+          "finalArtifactSha256": "eec383e576e5de8c63fd934ef55dde6592bb6b69888a7f00bb4129c6a9338593",
+          "sourceHead": "dd0c4e6fed38d09646fb2575c2fc11251724e0f4"
+        }
       }
     },
     {
-      "conditionId": "FS-LIMIT-API-REQUEST-BYTES/non-commit-rest",
+      "conditionId": "FS-LIMIT-API-REQUEST-BYTES/non-commit-rest/batch-get",
       "source": "crates/fireemu-adapter-grpc/src/serve.rs#MAX_REST_BODY_BYTES",
       "recipeIds": [
-        "writes/limits/non-commit-rest-request-bytes"
+        "writes/limits/non-commit-rest-request-bytes/batch-get/10485760",
+        "writes/limits/non-commit-rest-request-bytes/batch-get/10485761",
+        "writes/limits/non-commit-rest-request-bytes/batch-get/11534336",
+        "writes/limits/non-commit-rest-request-bytes/batch-get/11534337"
       ],
-      "boundaryStatus": "PENDING_RECORDING",
-      "status": "PENDING_RECORDING"
+      "boundaryStatus": "BRACKETED",
+      "status": "VERIFIED",
+      "boundaryEvidence": [
+        "writes/limits/non-commit-rest-request-bytes/batch-get/11534336#probe",
+        "writes/limits/non-commit-rest-request-bytes/batch-get/11534337#probe"
+      ],
+      "evidence": {
+        "productionRecordings": [
+          "29d1cf845d0b45903d06e58630876bdf460b2fb74df3267f70a57887aa466285",
+          "29d1cf845d0b45903d06e58630876bdf460b2fb74df3267f70a57887aa466285"
+        ],
+        "productionRecordingSources": [
+          {
+            "path": "conformance/fs-data-write-production-supplements/bracket-fb886aa8eed899746ecf607b.json",
+            "sha256": "b53c5752636ad291610a9da08ffb952a7668fac77fb1a6fd81aeb2195265eed2",
+            "recordingDigests": [
+              "c1088a2b2cb864dc32cd06c231802c8a042b13b606b274a7d733b32359a5e5b8",
+              "c1088a2b2cb864dc32cd06c231802c8a042b13b606b274a7d733b32359a5e5b8"
+            ],
+            "transport": "rest"
+          },
+          {
+            "path": "conformance/fs-data-write-production-supplements/partial-7bfd51026a2ac56617d81504.json",
+            "sha256": "4867fbf7837f16ecd3e4ada73aa91655686e9c37bcafb36c171ab491ed5a2582",
+            "recordingDigests": [
+              "aee842159a37e001bcab5710eb49be8d0804dd53fa7b79521aa05a018048fee1",
+              "aee842159a37e001bcab5710eb49be8d0804dd53fa7b79521aa05a018048fee1"
+            ],
+            "transport": "rest"
+          }
+        ],
+        "finalArtifactSha256": "eec383e576e5de8c63fd934ef55dde6592bb6b69888a7f00bb4129c6a9338593",
+        "sourceHead": "dd0c4e6fed38d09646fb2575c2fc11251724e0f4",
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-current-accepted-conditions.json",
+        "comparisonSha256": "64c3ee1f361944c780f7601ece224d9fc8e2cf11e8c58e4309237814e47e9976"
+      },
+      "profileNote": "Both profiles apply the same 11,534,336-byte bound and production's 400 answer (decision D, 2026-09-27). A body far over the bound is not drained on these routes and may reset the connection instead of delivering the 400."
+    },
+    {
+      "conditionId": "FS-LIMIT-API-REQUEST-BYTES/non-commit-rest/batch-write",
+      "source": "crates/fireemu-adapter-grpc/src/serve.rs#MAX_REST_BODY_BYTES",
+      "recipeIds": [
+        "writes/limits/non-commit-rest-request-bytes/batch-write/10485760",
+        "writes/limits/non-commit-rest-request-bytes/batch-write/10485761",
+        "writes/limits/non-commit-rest-request-bytes/batch-write/11534336",
+        "writes/limits/non-commit-rest-request-bytes/batch-write/11534337"
+      ],
+      "boundaryStatus": "BRACKETED",
+      "status": "VERIFIED",
+      "boundaryEvidence": [
+        "writes/limits/non-commit-rest-request-bytes/batch-write/11534336#write",
+        "writes/limits/non-commit-rest-request-bytes/batch-write/11534337#write"
+      ],
+      "evidence": {
+        "productionRecordings": [
+          "29d1cf845d0b45903d06e58630876bdf460b2fb74df3267f70a57887aa466285",
+          "29d1cf845d0b45903d06e58630876bdf460b2fb74df3267f70a57887aa466285"
+        ],
+        "productionRecordingSources": [
+          {
+            "path": "conformance/fs-data-write-production-supplements/bracket-fb886aa8eed899746ecf607b.json",
+            "sha256": "b53c5752636ad291610a9da08ffb952a7668fac77fb1a6fd81aeb2195265eed2",
+            "recordingDigests": [
+              "c1088a2b2cb864dc32cd06c231802c8a042b13b606b274a7d733b32359a5e5b8",
+              "c1088a2b2cb864dc32cd06c231802c8a042b13b606b274a7d733b32359a5e5b8"
+            ],
+            "transport": "rest"
+          },
+          {
+            "path": "conformance/fs-data-write-production-supplements/partial-7bfd51026a2ac56617d81504.json",
+            "sha256": "4867fbf7837f16ecd3e4ada73aa91655686e9c37bcafb36c171ab491ed5a2582",
+            "recordingDigests": [
+              "aee842159a37e001bcab5710eb49be8d0804dd53fa7b79521aa05a018048fee1",
+              "aee842159a37e001bcab5710eb49be8d0804dd53fa7b79521aa05a018048fee1"
+            ],
+            "transport": "rest"
+          }
+        ],
+        "finalArtifactSha256": "eec383e576e5de8c63fd934ef55dde6592bb6b69888a7f00bb4129c6a9338593",
+        "sourceHead": "dd0c4e6fed38d09646fb2575c2fc11251724e0f4",
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-current-accepted-conditions.json",
+        "comparisonSha256": "64c3ee1f361944c780f7601ece224d9fc8e2cf11e8c58e4309237814e47e9976"
+      },
+      "profileNote": "Both profiles apply the same 11,534,336-byte bound and production's 400 answer (decision D, 2026-09-27). A body far over the bound is not drained on these routes and may reset the connection instead of delivering the 400."
+    },
+    {
+      "conditionId": "FS-LIMIT-API-REQUEST-BYTES/non-commit-rest/create",
+      "source": "crates/fireemu-adapter-grpc/src/serve.rs#MAX_REST_BODY_BYTES",
+      "recipeIds": [
+        "writes/limits/non-commit-rest-request-bytes/create/10485760",
+        "writes/limits/non-commit-rest-request-bytes/create/10485761",
+        "writes/limits/non-commit-rest-request-bytes/create/11534336",
+        "writes/limits/non-commit-rest-request-bytes/create/11534337"
+      ],
+      "boundaryStatus": "BRACKETED",
+      "status": "VERIFIED",
+      "boundaryEvidence": [
+        "writes/limits/non-commit-rest-request-bytes/create/11534336#probe",
+        "writes/limits/non-commit-rest-request-bytes/create/11534337#probe"
+      ],
+      "evidence": {
+        "productionRecordings": [
+          "29d1cf845d0b45903d06e58630876bdf460b2fb74df3267f70a57887aa466285",
+          "29d1cf845d0b45903d06e58630876bdf460b2fb74df3267f70a57887aa466285"
+        ],
+        "productionRecordingSources": [
+          {
+            "path": "conformance/fs-data-write-production-supplements/bracket-fb886aa8eed899746ecf607b.json",
+            "sha256": "b53c5752636ad291610a9da08ffb952a7668fac77fb1a6fd81aeb2195265eed2",
+            "recordingDigests": [
+              "c1088a2b2cb864dc32cd06c231802c8a042b13b606b274a7d733b32359a5e5b8",
+              "c1088a2b2cb864dc32cd06c231802c8a042b13b606b274a7d733b32359a5e5b8"
+            ],
+            "transport": "rest"
+          },
+          {
+            "path": "conformance/fs-data-write-production-supplements/partial-7bfd51026a2ac56617d81504.json",
+            "sha256": "4867fbf7837f16ecd3e4ada73aa91655686e9c37bcafb36c171ab491ed5a2582",
+            "recordingDigests": [
+              "aee842159a37e001bcab5710eb49be8d0804dd53fa7b79521aa05a018048fee1",
+              "aee842159a37e001bcab5710eb49be8d0804dd53fa7b79521aa05a018048fee1"
+            ],
+            "transport": "rest"
+          }
+        ],
+        "finalArtifactSha256": "eec383e576e5de8c63fd934ef55dde6592bb6b69888a7f00bb4129c6a9338593",
+        "sourceHead": "dd0c4e6fed38d09646fb2575c2fc11251724e0f4",
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-current-accepted-conditions.json",
+        "comparisonSha256": "64c3ee1f361944c780f7601ece224d9fc8e2cf11e8c58e4309237814e47e9976"
+      },
+      "profileNote": "Both profiles apply the same 11,534,336-byte bound and production's 400 answer (decision D, 2026-09-27). A body far over the bound is not drained on these routes and may reset the connection instead of delivering the 400."
+    },
+    {
+      "conditionId": "FS-LIMIT-API-REQUEST-BYTES/non-commit-rest/patch",
+      "source": "crates/fireemu-adapter-grpc/src/serve.rs#MAX_REST_BODY_BYTES",
+      "recipeIds": [
+        "writes/limits/non-commit-rest-request-bytes/patch/10485760",
+        "writes/limits/non-commit-rest-request-bytes/patch/10485761",
+        "writes/limits/non-commit-rest-request-bytes/patch/11534336",
+        "writes/limits/non-commit-rest-request-bytes/patch/11534337"
+      ],
+      "boundaryStatus": "BRACKETED",
+      "status": "VERIFIED",
+      "boundaryEvidence": [
+        "writes/limits/non-commit-rest-request-bytes/patch/11534336#probe",
+        "writes/limits/non-commit-rest-request-bytes/patch/11534337#probe"
+      ],
+      "evidence": {
+        "productionRecordings": [
+          "29d1cf845d0b45903d06e58630876bdf460b2fb74df3267f70a57887aa466285",
+          "29d1cf845d0b45903d06e58630876bdf460b2fb74df3267f70a57887aa466285"
+        ],
+        "productionRecordingSources": [
+          {
+            "path": "conformance/fs-data-write-production-supplements/bracket-fb886aa8eed899746ecf607b.json",
+            "sha256": "b53c5752636ad291610a9da08ffb952a7668fac77fb1a6fd81aeb2195265eed2",
+            "recordingDigests": [
+              "c1088a2b2cb864dc32cd06c231802c8a042b13b606b274a7d733b32359a5e5b8",
+              "c1088a2b2cb864dc32cd06c231802c8a042b13b606b274a7d733b32359a5e5b8"
+            ],
+            "transport": "rest"
+          },
+          {
+            "path": "conformance/fs-data-write-production-supplements/partial-7bfd51026a2ac56617d81504.json",
+            "sha256": "4867fbf7837f16ecd3e4ada73aa91655686e9c37bcafb36c171ab491ed5a2582",
+            "recordingDigests": [
+              "aee842159a37e001bcab5710eb49be8d0804dd53fa7b79521aa05a018048fee1",
+              "aee842159a37e001bcab5710eb49be8d0804dd53fa7b79521aa05a018048fee1"
+            ],
+            "transport": "rest"
+          }
+        ],
+        "finalArtifactSha256": "eec383e576e5de8c63fd934ef55dde6592bb6b69888a7f00bb4129c6a9338593",
+        "sourceHead": "dd0c4e6fed38d09646fb2575c2fc11251724e0f4",
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-current-accepted-conditions.json",
+        "comparisonSha256": "64c3ee1f361944c780f7601ece224d9fc8e2cf11e8c58e4309237814e47e9976"
+      },
+      "profileNote": "Both profiles apply the same 11,534,336-byte bound and production's 400 answer (decision D, 2026-09-27). A body far over the bound is not drained on these routes and may reset the connection instead of delivering the 400."
+    },
+    {
+      "conditionId": "FS-LIMIT-API-REQUEST-BYTES/non-commit-rest/run-query",
+      "source": "crates/fireemu-adapter-grpc/src/serve.rs#MAX_REST_BODY_BYTES",
+      "recipeIds": [
+        "writes/limits/non-commit-rest-request-bytes/run-query/10485760",
+        "writes/limits/non-commit-rest-request-bytes/run-query/10485761",
+        "writes/limits/non-commit-rest-request-bytes/run-query/11534336",
+        "writes/limits/non-commit-rest-request-bytes/run-query/11534337"
+      ],
+      "boundaryStatus": "BRACKETED",
+      "status": "VERIFIED",
+      "boundaryEvidence": [
+        "writes/limits/non-commit-rest-request-bytes/run-query/11534336#probe",
+        "writes/limits/non-commit-rest-request-bytes/run-query/11534337#probe"
+      ],
+      "evidence": {
+        "productionRecordings": [
+          "29d1cf845d0b45903d06e58630876bdf460b2fb74df3267f70a57887aa466285",
+          "29d1cf845d0b45903d06e58630876bdf460b2fb74df3267f70a57887aa466285"
+        ],
+        "productionRecordingSources": [
+          {
+            "path": "conformance/fs-data-write-production-supplements/bracket-fb886aa8eed899746ecf607b.json",
+            "sha256": "b53c5752636ad291610a9da08ffb952a7668fac77fb1a6fd81aeb2195265eed2",
+            "recordingDigests": [
+              "c1088a2b2cb864dc32cd06c231802c8a042b13b606b274a7d733b32359a5e5b8",
+              "c1088a2b2cb864dc32cd06c231802c8a042b13b606b274a7d733b32359a5e5b8"
+            ],
+            "transport": "rest"
+          },
+          {
+            "path": "conformance/fs-data-write-production-supplements/partial-7bfd51026a2ac56617d81504.json",
+            "sha256": "4867fbf7837f16ecd3e4ada73aa91655686e9c37bcafb36c171ab491ed5a2582",
+            "recordingDigests": [
+              "aee842159a37e001bcab5710eb49be8d0804dd53fa7b79521aa05a018048fee1",
+              "aee842159a37e001bcab5710eb49be8d0804dd53fa7b79521aa05a018048fee1"
+            ],
+            "transport": "rest"
+          }
+        ],
+        "finalArtifactSha256": "eec383e576e5de8c63fd934ef55dde6592bb6b69888a7f00bb4129c6a9338593",
+        "sourceHead": "dd0c4e6fed38d09646fb2575c2fc11251724e0f4",
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-current-accepted-conditions.json",
+        "comparisonSha256": "64c3ee1f361944c780f7601ece224d9fc8e2cf11e8c58e4309237814e47e9976"
+      },
+      "profileNote": "Both profiles apply the same 11,534,336-byte bound and production's 400 answer (decision D, 2026-09-27). A body far over the bound is not drained on these routes and may reset the connection instead of delivering the 400."
     },
     {
       "conditionId": "FS-LIMIT-API-REQUEST-BYTES/webchannel",
-      "source": "crates/fireemu-adapter-grpc/src/webchannel.rs#MAX_FORM_BYTES",
+      "source": "crates/fireemu-adapter-grpc/src/webchannel.rs#max_form_bytes",
       "recipeIds": [
-        "writes/limits/webchannel-request-bytes"
+        "writes/limits/webchannel-request-bytes/10485760",
+        "writes/limits/webchannel-request-bytes/10485761",
+        "writes/limits/webchannel-request-bytes/11534336",
+        "writes/limits/webchannel-request-bytes/11534337",
+        "writes/limits/webchannel-request-bytes/12582912",
+        "writes/limits/webchannel-request-bytes/16777216",
+        "writes/limits/webchannel-request-bytes/16777217",
+        "writes/limits/webchannel-request-bytes/33554432",
+        "writes/limits/webchannel-request-bytes/33554433"
       ],
-      "boundaryStatus": "PENDING_RECORDING",
-      "status": "PENDING_RECORDING"
+      "boundaryStatus": "INFERRED_UPPER_BOUND",
+      "status": "KNOWN_DIFFERENCE_APPROVED",
+      "strictLimitEstimateBytes": 16777215,
+      "scopeNote": "An estimated bound closed as a known difference by owner decision D-2 (2026-09-28); see reason. The unobserved interval is the only difference that can remain.",
+      "evidence": {
+        "productionRecordings": [
+          "2a758869d04f471b29b78f5d0dc7036c367962b52e6ce76965d74323c3d7d865",
+          "2a758869d04f471b29b78f5d0dc7036c367962b52e6ce76965d74323c3d7d865"
+        ],
+        "productionRecordingSources": [
+          {
+            "path": "conformance/fs-data-write-production-supplements/bracket-fb886aa8eed899746ecf607b.json",
+            "sha256": "b53c5752636ad291610a9da08ffb952a7668fac77fb1a6fd81aeb2195265eed2",
+            "recordingDigests": [
+              "c1088a2b2cb864dc32cd06c231802c8a042b13b606b274a7d733b32359a5e5b8",
+              "c1088a2b2cb864dc32cd06c231802c8a042b13b606b274a7d733b32359a5e5b8"
+            ],
+            "transport": "rest"
+          },
+          {
+            "path": "conformance/fs-data-write-production-supplements/followup-b0aeefc97b4c48765db4a9a1-webchannel.json",
+            "sha256": "a9de619df92403a0d707f9ac5dc842babc2338d788caf78958b57c2b8247619b",
+            "recordingDigests": [
+              "de6fd1fdb034d8506ac257b5e0c1b3ded925b5d04a4543332b6f4c9e8463ce73",
+              "de6fd1fdb034d8506ac257b5e0c1b3ded925b5d04a4543332b6f4c9e8463ce73"
+            ],
+            "transport": "rest"
+          },
+          {
+            "path": "conformance/fs-data-write-production-supplements/partial-7bfd51026a2ac56617d81504.json",
+            "sha256": "4867fbf7837f16ecd3e4ada73aa91655686e9c37bcafb36c171ab491ed5a2582",
+            "recordingDigests": [
+              "aee842159a37e001bcab5710eb49be8d0804dd53fa7b79521aa05a018048fee1",
+              "aee842159a37e001bcab5710eb49be8d0804dd53fa7b79521aa05a018048fee1"
+            ],
+            "transport": "rest"
+          }
+        ],
+        "finalArtifactSha256": "eec383e576e5de8c63fd934ef55dde6592bb6b69888a7f00bb4129c6a9338593",
+        "sourceHead": "dd0c4e6fed38d09646fb2575c2fc11251724e0f4",
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-current-accepted-conditions.json",
+        "comparisonSha256": "64c3ee1f361944c780f7601ece224d9fc8e2cf11e8c58e4309237814e47e9976"
+      },
+      "profileNote": "Strict accepts form bodies up to 16,777,215 bytes and above that answers production's HTML 400 page and ends the session (production accepted 12,582,912 and refused 16,777,216, follow-up recording 2026-09-27). The emulator profile follows the pinned official emulator: up to 16,777,216 accepted, an empty 413 above it, the session kept. A request naming an unknown session answers 400 in both profiles: production's HTML page in strict (owner decision D6), 'Error: Unknown SID' in the emulator profile. A terminate of an unknown session gets the same page in strict and 200 in the emulator profile.",
+      "ownerDecision": "2026-09-28 FS-DATA-WRITE D-2",
+      "boundaryEvidence": [
+        "writes/limits/webchannel-request-bytes/12582912#boundary",
+        "writes/limits/webchannel-request-bytes/16777216#boundary"
+      ],
+      "reason": "Production's WebChannel form-body bound lies in (12,582,912, 16,777,216]: it accepted 12,582,912 bytes on a valid session and refused 16,777,216 with its HTML 400 page, after which the session was gone (follow-up recording, 2026-09-27, both passes). The bytes inside the interval are unobserved. Strict adopts the upper end as an estimate: it accepts up to 16,777,215 bytes and answers production's page and ends the session above it. Every recorded row matches."
     },
     {
-      "conditionId": "FS-LIMIT-API-REQUEST-BYTES/grpc",
+      "conditionId": "FS-LIMIT-API-REQUEST-BYTES/grpc-unary",
       "source": "crates/fireemu-adapter-grpc/src/serve.rs#MAX_GRPC_MESSAGE_BYTES",
       "recipeIds": [
-        "writes/limits/grpc-unary-request-bytes",
-        "writes/limits/grpc-stream-request-bytes"
+        "writes/limits/grpc-unary-request-bytes/10485760",
+        "writes/limits/grpc-unary-request-bytes/10485761",
+        "writes/limits/grpc-unary-request-bytes/11534336",
+        "writes/limits/grpc-unary-request-bytes/11534337"
       ],
-      "boundaryStatus": "PENDING_RECORDING",
-      "status": "PENDING_RECORDING"
+      "boundaryStatus": "BRACKETED",
+      "status": "VERIFIED",
+      "boundaryEvidence": [
+        "writes/limits/grpc-unary-request-bytes/11534336#grpc",
+        "writes/limits/grpc-unary-request-bytes/11534337#grpc"
+      ],
+      "evidence": {
+        "productionRecordings": [
+          "e140d5b48176d2f91d4012348387f053b0941b8694c6d406f25ef63f9c13969c",
+          "e140d5b48176d2f91d4012348387f053b0941b8694c6d406f25ef63f9c13969c"
+        ],
+        "productionRecordingSources": [
+          {
+            "path": "conformance/fs-data-write-production-supplements/bracket-fb886aa8eed899746ecf607b.json",
+            "sha256": "b53c5752636ad291610a9da08ffb952a7668fac77fb1a6fd81aeb2195265eed2",
+            "recordingDigests": [
+              "c88ef5acc3937b4a6dde6a135491268ee2b2104adfa56fdf8f4e2a66f5f19e74",
+              "c88ef5acc3937b4a6dde6a135491268ee2b2104adfa56fdf8f4e2a66f5f19e74"
+            ],
+            "transport": "grpc"
+          },
+          {
+            "path": "conformance/fs-data-write-production-supplements/partial-7bfd51026a2ac56617d81504.json",
+            "sha256": "4867fbf7837f16ecd3e4ada73aa91655686e9c37bcafb36c171ab491ed5a2582",
+            "recordingDigests": [
+              "39666991f456016cf39b0de6fcc729f4dd49134358dbfee17abb8619b3a32d05",
+              "39666991f456016cf39b0de6fcc729f4dd49134358dbfee17abb8619b3a32d05"
+            ],
+            "transport": "grpc"
+          }
+        ],
+        "finalArtifactSha256": "eec383e576e5de8c63fd934ef55dde6592bb6b69888a7f00bb4129c6a9338593",
+        "sourceHead": "dd0c4e6fed38d09646fb2575c2fc11251724e0f4",
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-current-accepted-conditions.json",
+        "comparisonSha256": "64c3ee1f361944c780f7601ece224d9fc8e2cf11e8c58e4309237814e47e9976"
+      },
+      "profileNote": "Both profiles apply the same 11,534,336-byte decode bound and answer code 3 with production's REST Commit wording (decision D, 2026-09-27)."
+    },
+    {
+      "conditionId": "FS-LIMIT-API-REQUEST-BYTES/grpc-stream",
+      "source": "crates/fireemu-adapter-grpc/src/serve.rs#MAX_GRPC_MESSAGE_BYTES",
+      "recipeIds": [
+        "writes/limits/grpc-stream-request-bytes/10485760",
+        "writes/limits/grpc-stream-request-bytes/10485761"
+      ],
+      "boundaryStatus": "UNOBSERVABLE",
+      "status": "KNOWN_DIFFERENCE_APPROVED",
+      "ownerDecision": "2026-09-27 FS-DATA-WRITE gRPC stream upper bound",
+      "reason": "The request-size bound of a gRPC Write or Listen stream cannot be observed safely in production. Both profiles apply the 11,534,336-byte bound bracketed on unary GetDocument (FS-LIMIT-API-REQUEST-BYTES/grpc-unary) as an estimate (decision D, 2026-09-27); the emulator profile adds no refusal beyond that production bound. The recorded stream rows at 10,485,760 and 10,485,761 bytes match.",
+      "evidence": {
+        "productionRecordings": [
+          "b4a40231ed8bb88397afd1760f0743b186b5381fa99005e222a119cef56c640a",
+          "b4a40231ed8bb88397afd1760f0743b186b5381fa99005e222a119cef56c640a"
+        ],
+        "productionRecordingSources": [
+          {
+            "path": "conformance/fs-data-write-production-supplements/partial-7bfd51026a2ac56617d81504.json",
+            "sha256": "4867fbf7837f16ecd3e4ada73aa91655686e9c37bcafb36c171ab491ed5a2582",
+            "recordingDigests": [
+              "39666991f456016cf39b0de6fcc729f4dd49134358dbfee17abb8619b3a32d05",
+              "39666991f456016cf39b0de6fcc729f4dd49134358dbfee17abb8619b3a32d05"
+            ],
+            "transport": "grpc"
+          }
+        ],
+        "finalArtifactSha256": "eec383e576e5de8c63fd934ef55dde6592bb6b69888a7f00bb4129c6a9338593",
+        "sourceHead": "dd0c4e6fed38d09646fb2575c2fc11251724e0f4",
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-current-accepted-conditions.json",
+        "comparisonSha256": "64c3ee1f361944c780f7601ece224d9fc8e2cf11e8c58e4309237814e47e9976"
+      },
+      "profileNote": "Both profiles apply the same 11,534,336-byte decode bound and answer code 3 with production's REST Commit wording (decision D, 2026-09-27)."
     },
     {
       "conditionId": "FS-DATA-WRITE/stream-transaction-precedence",
@@ -397,7 +1155,15 @@
         "writes/write-stream-transaction"
       ],
       "boundaryStatus": "NOT_APPLICABLE",
-      "status": "SAVED_REFERENCE_PENDING_FINAL"
+      "status": "VERIFIED",
+      "evidence": {
+        "productionReceiptSha256": "12956fbe82acefc106093eb2cd913ede9092f74aa98bd29f39e795492754b3f3",
+        "savedProductionAuthorityDigest": "431f0de31ff74ef1685a013fbb5bf6286129196a0984b58d723869fa0799991f",
+        "finalArtifactSha256": "eec383e576e5de8c63fd934ef55dde6592bb6b69888a7f00bb4129c6a9338593",
+        "sourceHead": "dd0c4e6fed38d09646fb2575c2fc11251724e0f4",
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-stream-transaction-current-saved-replay.json",
+        "comparisonSha256": "1b70bd204eb81d14a64a4fc8836f7b23eae983b5625850043955b4ec48940e50"
+      }
     },
     {
       "conditionId": "FS-DATA-WRITE/write-stream-trailing-metadata",
@@ -406,7 +1172,29 @@
         "writes/write-stream-terminal/trailing-metadata"
       ],
       "boundaryStatus": "NOT_APPLICABLE",
-      "status": "MISMATCH"
+      "status": "VERIFIED",
+      "evidence": {
+        "productionRecordings": [
+          "155f874ac6158e1cee1631d7015010cd514cc43e385663e823f2174a0069b4a5",
+          "155f874ac6158e1cee1631d7015010cd514cc43e385663e823f2174a0069b4a5"
+        ],
+        "productionRecordingSources": [
+          {
+            "path": "conformance/fs-data-write-production-matrix.json",
+            "sha256": "5dab01cb3d21b375efc1604e9de1f5537f543dab8502f7a2a539a16fe9bd5b19",
+            "recordingDigests": [
+              "ba880dc6feb56588256298deba48c9cbfd53de115e2f9381968867a28279d56f",
+              "ba880dc6feb56588256298deba48c9cbfd53de115e2f9381968867a28279d56f"
+            ],
+            "transport": "grpc"
+          }
+        ],
+        "finalArtifactSha256": "eec383e576e5de8c63fd934ef55dde6592bb6b69888a7f00bb4129c6a9338593",
+        "sourceHead": "dd0c4e6fed38d09646fb2575c2fc11251724e0f4",
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-current-accepted-conditions.json",
+        "comparisonSha256": "64c3ee1f361944c780f7601ece224d9fc8e2cf11e8c58e4309237814e47e9976"
+      },
+      "profileNote": "The trailer shaping (trailers-only split, content-disposition after a response) is strict profile only; the emulator profile keeps tonic's answer and its fireemu-reason diagnostic trailer (contract.json FS-CLAIM-RPC)."
     },
     {
       "conditionId": "FS-DATA-WRITE/write-stream-half-close",
@@ -431,8 +1219,15 @@
           "ba880dc6feb56588256298deba48c9cbfd53de115e2f9381968867a28279d56f"
         ],
         "finalArtifactSha256": "2af3f08c4d453459af86c9258f2283cb38fc7e74d83d388018cbdbb29e892a6a",
-        "comparisonPath": "spec/compatibility/broad-runs/fs-stream-half-close-1cb475837-current-comparison.json"
-      }
+        "comparisonPath": "spec/compatibility/broad-runs/fs-stream-half-close-1cb475837-current-comparison.json",
+        "currentCoverage": {
+          "comparisonPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-current-comparison.json",
+          "comparisonSha256": "36bbc483573dcc3ff5857ddfa8bd79d3a828a389ca3befcf62469ae567c39625",
+          "finalArtifactSha256": "eec383e576e5de8c63fd934ef55dde6592bb6b69888a7f00bb4129c6a9338593",
+          "sourceHead": "dd0c4e6fed38d09646fb2575c2fc11251724e0f4"
+        }
+      },
+      "profileNote": "The content-disposition trailer after a response is strict profile only; the emulator profile keeps tonic's answer (contract.json FS-CLAIM-RPC)."
     },
     {
       "conditionId": "FS-DATA-WRITE/write-stream-empty-write-response",
@@ -441,7 +1236,28 @@
         "writes/write-stream-terminal/response-before-half-close"
       ],
       "boundaryStatus": "NOT_APPLICABLE",
-      "status": "PENDING_RECORDING"
+      "status": "VERIFIED",
+      "evidence": {
+        "productionRecordings": [
+          "4da3056c59d952c15a5755aa396fc1652a40cbd7283ce6c1b74866f9d914f8eb",
+          "4da3056c59d952c15a5755aa396fc1652a40cbd7283ce6c1b74866f9d914f8eb"
+        ],
+        "productionRecordingSources": [
+          {
+            "path": "conformance/fs-data-write-production-supplements/delta-v3-a14f265fea575003423c7ebd.json",
+            "sha256": "04943e81c95077ba8a594b76dc10bfed979b45bada1c0d7bebf81addaa95605e",
+            "recordingDigests": [
+              "e12c830538c60737e0502d62a7cdec53d60c6a77b1fcbdb7e4b6c5c5e223b7db",
+              "e12c830538c60737e0502d62a7cdec53d60c6a77b1fcbdb7e4b6c5c5e223b7db"
+            ],
+            "transport": "grpc"
+          }
+        ],
+        "finalArtifactSha256": "eec383e576e5de8c63fd934ef55dde6592bb6b69888a7f00bb4129c6a9338593",
+        "sourceHead": "dd0c4e6fed38d09646fb2575c2fc11251724e0f4",
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-current-accepted-conditions.json",
+        "comparisonSha256": "64c3ee1f361944c780f7601ece224d9fc8e2cf11e8c58e4309237814e47e9976"
+      }
     },
     {
       "conditionId": "FS-DATA-WRITE/final-artifact-regression",
@@ -458,7 +1274,17 @@
         "pnpm -C conformance fs-data-write:check"
       ],
       "boundaryStatus": "NOT_APPLICABLE",
-      "status": "PENDING_REVIEW"
+      "status": "VERIFIED",
+      "evidence": {
+        "finalArtifactSha256": "eec383e576e5de8c63fd934ef55dde6592bb6b69888a7f00bb4129c6a9338593",
+        "sourceHead": "dd0c4e6fed38d09646fb2575c2fc11251724e0f4",
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-historical-regression.json",
+        "comparisonSha256": "206d27eaf9af6eb119102deeca2724ecda4a4a13dcd423bf78fd73760be29398",
+        "currentComparisonPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-current-comparison.json",
+        "currentComparisonSha256": "36bbc483573dcc3ff5857ddfa8bd79d3a828a389ca3befcf62469ae567c39625",
+        "releaseArtifactPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-release-artifact.json",
+        "releaseArtifactSha256": "6753ebb7bf27afc965a33d0f32a43c2d4ac91b449eb5ccef91c0720e3d57340d"
+      }
     },
     {
       "conditionId": "FS-DATA-WRITE/closure-review",
@@ -467,7 +1293,16 @@
         "FS-DATA-WRITE"
       ],
       "boundaryStatus": "NOT_APPLICABLE",
-      "status": "PENDING_REVIEW"
+      "status": "VERIFIED",
+      "evidence": {
+        "reviewedCommit": "654dc08ea6cd749457a50f0e10c202884853e085",
+        "finalArtifactSha256": "eec383e576e5de8c63fd934ef55dde6592bb6b69888a7f00bb4129c6a9338593",
+        "reviewReportSha256": [
+          "e95b0f33a10ac7616343a61c974df30fe33f4b3a55cb90bff1aa09dbd2ce1657",
+          "8ebef0c0d9fa661fbd012418c493b6bf0bbfb324da04889a1baae0657dce76c7",
+          "8d7586f0bc7e47b61352676f560b69379f09cbf1814f940a5d638aa94576a17c"
+        ]
+      }
     },
     {
       "conditionId": "FS-DATA-WRITE-LIST/list-documents-rest",
@@ -602,18 +1437,19 @@
         "fs-data-write-list/list-documents/read-time#read-time-empty"
       ],
       "boundaryStatus": "OBSERVED (page size 300)",
-      "status": "PENDING_INTEGRATION",
+      "status": "VERIFIED",
       "evidence": {
         "productionRecordings": [
           "e6bcc4b467e48d8a285d1cb754ce37bc3decf56dd5e822ef7f1e77abb089ed33",
           "5ef3ad1593391e2948f980cfde0b39747406c56d14597cbe7950158aafac3637"
         ],
-        "proposalPath": "docs.local/instructions/2026-09-24-fs-data-write-list-condition-proposal.md",
         "fixturePath": "conformance/fs-data-write-list-production.json",
-        "fixtureSha256": "1d70589d2ffc50b837dc92574ea0daf502677f08804d6227a4b5cbe4641f87f4",
-        "proposedArtifactSha256": "32e58e92a56f1063c1feb01c09080787cfd147e183c2fde5e0b026867d9697d2",
-        "sourceCommit": "c7d9e1213",
-        "comparisonPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-LIST-comparison.json"
+        "fixtureSha256": "fca755407c6e23169820b1b990104330fd43e455c60b81278c0a87f2181cef59",
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-LIST-comparison.json",
+        "comparisonSha256": "8a76294de3d75e651a9999736f7fbfe2a1c38a6540f9954154fb106895a5d8ec",
+        "finalArtifactSha256": "eec383e576e5de8c63fd934ef55dde6592bb6b69888a7f00bb4129c6a9338593",
+        "sourceHead": "dd0c4e6fed38d09646fb2575c2fc11251724e0f4",
+        "integrationCommit": "89002b203"
       }
     },
     {
@@ -657,18 +1493,19 @@
         "fs-data-write-list/list-collection-ids/rest#read-time-empty"
       ],
       "boundaryStatus": "NOT_APPLICABLE",
-      "status": "PENDING_INTEGRATION",
+      "status": "VERIFIED",
       "evidence": {
         "productionRecordings": [
           "e6bcc4b467e48d8a285d1cb754ce37bc3decf56dd5e822ef7f1e77abb089ed33",
           "5ef3ad1593391e2948f980cfde0b39747406c56d14597cbe7950158aafac3637"
         ],
-        "proposalPath": "docs.local/instructions/2026-09-24-fs-data-write-list-condition-proposal.md",
         "fixturePath": "conformance/fs-data-write-list-production.json",
-        "fixtureSha256": "1d70589d2ffc50b837dc92574ea0daf502677f08804d6227a4b5cbe4641f87f4",
-        "proposedArtifactSha256": "32e58e92a56f1063c1feb01c09080787cfd147e183c2fde5e0b026867d9697d2",
-        "sourceCommit": "c7d9e1213",
-        "comparisonPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-LIST-comparison.json"
+        "fixtureSha256": "fca755407c6e23169820b1b990104330fd43e455c60b81278c0a87f2181cef59",
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-LIST-comparison.json",
+        "comparisonSha256": "8a76294de3d75e651a9999736f7fbfe2a1c38a6540f9954154fb106895a5d8ec",
+        "finalArtifactSha256": "eec383e576e5de8c63fd934ef55dde6592bb6b69888a7f00bb4129c6a9338593",
+        "sourceHead": "dd0c4e6fed38d09646fb2575c2fc11251724e0f4",
+        "integrationCommit": "89002b203"
       }
     },
     {
@@ -713,18 +1550,19 @@
         "fs-data-write-list/grpc/list-collection-ids#collection-parent"
       ],
       "boundaryStatus": "NOT_APPLICABLE",
-      "status": "PENDING_INTEGRATION",
+      "status": "VERIFIED",
       "evidence": {
         "productionRecordings": [
           "e6bcc4b467e48d8a285d1cb754ce37bc3decf56dd5e822ef7f1e77abb089ed33",
           "5ef3ad1593391e2948f980cfde0b39747406c56d14597cbe7950158aafac3637"
         ],
-        "proposalPath": "docs.local/instructions/2026-09-24-fs-data-write-list-condition-proposal.md",
         "fixturePath": "conformance/fs-data-write-list-production.json",
-        "fixtureSha256": "1d70589d2ffc50b837dc92574ea0daf502677f08804d6227a4b5cbe4641f87f4",
-        "proposedArtifactSha256": "32e58e92a56f1063c1feb01c09080787cfd147e183c2fde5e0b026867d9697d2",
-        "sourceCommit": "c7d9e1213",
-        "comparisonPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-LIST-comparison.json"
+        "fixtureSha256": "fca755407c6e23169820b1b990104330fd43e455c60b81278c0a87f2181cef59",
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-LIST-comparison.json",
+        "comparisonSha256": "8a76294de3d75e651a9999736f7fbfe2a1c38a6540f9954154fb106895a5d8ec",
+        "finalArtifactSha256": "eec383e576e5de8c63fd934ef55dde6592bb6b69888a7f00bb4129c6a9338593",
+        "sourceHead": "dd0c4e6fed38d09646fb2575c2fc11251724e0f4",
+        "integrationCommit": "89002b203"
       }
     },
     {
@@ -736,19 +1574,78 @@
         "fs-data-write-list/list-documents/read-time#write-2"
       ],
       "boundaryStatus": "NOT_APPLICABLE",
-      "status": "PENDING_INTEGRATION",
+      "status": "VERIFIED",
       "evidence": {
         "productionRecordings": [
           "e6bcc4b467e48d8a285d1cb754ce37bc3decf56dd5e822ef7f1e77abb089ed33",
           "5ef3ad1593391e2948f980cfde0b39747406c56d14597cbe7950158aafac3637"
         ],
-        "proposalPath": "docs.local/instructions/2026-09-24-fs-data-write-list-condition-proposal.md",
         "fixturePath": "conformance/fs-data-write-list-production.json",
-        "fixtureSha256": "1d70589d2ffc50b837dc92574ea0daf502677f08804d6227a4b5cbe4641f87f4",
-        "proposedArtifactSha256": "32e58e92a56f1063c1feb01c09080787cfd147e183c2fde5e0b026867d9697d2",
-        "sourceCommit": "c7d9e1213",
-        "comparisonPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-LIST-comparison.json"
+        "fixtureSha256": "fca755407c6e23169820b1b990104330fd43e455c60b81278c0a87f2181cef59",
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-LIST-comparison.json",
+        "comparisonSha256": "8a76294de3d75e651a9999736f7fbfe2a1c38a6540f9954154fb106895a5d8ec",
+        "finalArtifactSha256": "eec383e576e5de8c63fd934ef55dde6592bb6b69888a7f00bb4129c6a9338593",
+        "sourceHead": "dd0c4e6fed38d09646fb2575c2fc11251724e0f4",
+        "integrationCommit": "89002b203"
       }
     }
-  ]
+  ],
+  "approvedKnownDifferences": [
+    {
+      "conditionId": "FS-LIMIT-API-REQUEST-BYTES/grpc-stream",
+      "ownerDecision": "2026-09-27 FS-DATA-WRITE gRPC stream upper bound",
+      "reason": "The request-size bound of a gRPC Write or Listen stream cannot be observed safely in production. Both profiles apply the 11,534,336-byte bound bracketed on unary GetDocument (FS-LIMIT-API-REQUEST-BYTES/grpc-unary) as an estimate (decision D, 2026-09-27); the emulator profile adds no refusal beyond that production bound. The recorded stream rows at 10,485,760 and 10,485,761 bytes match."
+    },
+    {
+      "conditionId": "FS-LIMIT-API-REQUEST-BYTES/webchannel",
+      "ownerDecision": "2026-09-28 FS-DATA-WRITE D-2",
+      "reason": "Production's WebChannel form-body bound lies in (12,582,912, 16,777,216]: it accepted 12,582,912 bytes on a valid session and refused 16,777,216 with its HTML 400 page, after which the session was gone (follow-up recording, 2026-09-27, both passes). The bytes inside the interval are unobserved. Strict adopts the upper end as an estimate: it accepts up to 16,777,215 bytes and answers production's page and ends the session above it. Every recorded row matches."
+    }
+  ],
+  "integratedRegression": {
+    "release": "v0.8.0",
+    "integrationCommit": "f8f0611ac35185a0719ae7660601ed4ac584dcad",
+    "releaseBinarySha256": "c258b022c5f452a60a9bc60de68e6de26b3f5aeaf846623cf1bf7e33f28d31df",
+    "buildReceiptPath": "spec/compatibility/closure/evidence/integration-v0.8.0/release-artifact.json",
+    "buildReceiptSha256": "439d1f55b447d2621661077fc8c130df1fba8f38d996b0a952adef0d4d8bcd1c",
+    "comparisons": [
+      {
+        "path": "spec/compatibility/closure/evidence/integration-v0.8.0/FS-DATA-WRITE-regression.json",
+        "sha256": "33b905fb57fbd498e1f0cdce5839df53720559c434ecde93f4581119f5f129fc",
+        "rows": 115,
+        "laneComparisonPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-current-comparison.json",
+        "laneComparisonSha256": "36bbc483573dcc3ff5857ddfa8bd79d3a828a389ca3befcf62469ae567c39625",
+        "identicalRows": 115,
+        "changedRows": []
+      },
+      {
+        "path": "spec/compatibility/closure/evidence/integration-v0.8.0/FS-DATA-WRITE-LIST-comparison.json",
+        "sha256": "823acec035ff704395817f25d5f61e90e11b4be384bf66d0b8136f8c42c86f78",
+        "rows": 201,
+        "summary": {
+          "MATCH": 200,
+          "MATCH_NONDETERMINISTIC": 1
+        },
+        "laneComparisonPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-LIST-comparison.json",
+        "laneComparisonSha256": "8a76294de3d75e651a9999736f7fbfe2a1c38a6540f9954154fb106895a5d8ec",
+        "identicalRows": 201,
+        "changedRows": []
+      },
+      {
+        "path": "spec/compatibility/closure/evidence/integration-v0.8.0/FS-QUERY-INDEX-comparison.json",
+        "sha256": "64bf5068e840993a9369deab599877130771676fe162311454a636ca4dd049b3",
+        "rows": 710,
+        "summary": {
+          "MATCH": 675,
+          "DIVERGENCE_APPROVED": 35
+        },
+        "laneComparisonPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-query-regression-comparison.json",
+        "laneComparisonSha256": "9acc02c49c22cb2fb060684c9561c682036085934830fc84f19047e1c1658005",
+        "identicalRows": 710,
+        "changedRows": []
+      }
+    ],
+    "result": "IDENTICAL_TO_LANE",
+    "productionRequests": 0
+  }
 }

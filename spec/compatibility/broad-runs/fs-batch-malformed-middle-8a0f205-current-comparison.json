@@ -1,14 +1,14 @@
 {
   "schemaVersion": 1,
   "conditionId": "FS-WRITE-LIMITS-03/batch-malformed-middle",
-  "sourceCommit": "8a0f20599bab98bb094a74e00d6b2df9f6cd60e8",
+  "sourceCommit": "f35f7b83e8a17133817c533decf67e0f242550e2",
   "savedComparison": {
     "path": "spec/compatibility/broad-runs/fs-batch-malformed-middle-3d7ceabb8-saved-comparison.json",
-    "sha256": "6b32bcb51093a023273de67aedef843ef09b0f4de6074fb397d6a35164602de2"
+    "sha256": "3d6be2459422db7a68de9300207099bdcbd1ad3c4aacb206e983bcb5174e9177"
   },
-  "productionFixtureSha256": "69ddfa897d2f22f76bece8c0b243e45912f0ba3ca10eb790a59f9cd6c1468b42",
+  "productionFixtureSha256": "5dab01cb3d21b375efc1604e9de1f5537f543dab8502f7a2a539a16fe9bd5b19",
   "recordedCorpusSha256": "6acc62c900269ad812686dbc650d5dd29ebc176091e11622e11509d1845c95bf",
-  "recipeManifestSha256": "5af66c701f3b69c78f9159b75f43dab3192ba73a127199bf2b68cd78d19b96d5",
+  "recipeManifestSha256": "b0116b8191616b708ac7acc107e4ee414f68b07f65a2417fd457e32cb4e86228",
   "productionRecordingTimes": [
     "2026-09-23T14:36:34.641Z",
     "2026-09-23T14:46:18.932Z"
@@ -24,7 +24,7 @@
   "comparisonCommand": "node conformance/src/fs-data-write-sandbox-run.mjs compare-local conformance/.runs/fs-data-write-local-DbrwFE",
   "localExecutableSha256": "242248dd5d1119c1ef72724efda21f19caf1411b344a884106ff4258e5cfb15e",
   "localRunBinding": {
-    "sourceHead": "8a0f20599bab98bb094a74e00d6b2df9f6cd60e8",
+    "sourceHead": "f35f7b83e8a17133817c533decf67e0f242550e2",
     "executablePath": "target/debug/fireemu",
     "executableSha256": "242248dd5d1119c1ef72724efda21f19caf1411b344a884106ff4258e5cfb15e",
     "executableSha256After": "242248dd5d1119c1ef72724efda21f19caf1411b344a884106ff4258e5cfb15e",
@@ -42,7 +42,7 @@
       "rustc": "rustc 1.94.0 (4a4ef493e 2026-03-02)"
     }
   },
-  "localRunBindingSha256": "73b823461ad2933db06acd5fd9d5bf6f933ba4fb713e63042ab27a21b5d3f15a",
+  "localRunBindingSha256": "0ddb1a4f0560aa0c62c1c8b05484e410f053e1e65f3debc6466e2f870e233da1",
   "localSelectedResultsSha256": "fbbd93c12ccab2f9beaa45c1e9d3a5e6b6862525e5b0302b5f86c8402f89f3a8",
   "comparisonRuntimeInput": {
     "path": "conformance/src/fs-data-write-sandbox.mjs",

@@ -1,0 +1,3619 @@
+{
+  "version": 1,
+  "recordedAgainst": {
+    "target": "production Identity Toolkit, Secure Token and Admin v2 REST, Identity Platform sandbox; the OIDC issuer is the run's preview channel of the sandbox's Hosting, its ID tokens signed locally (owner decision O1)",
+    "project": "<project>",
+    "note": "Two recordings per program. The run's issuer host, run tag, project and project number are placeholders; tokens are recorded as their header and claims with times relative to iat; refresh, access and pending tokens, session IDs, local IDs and certificates are masked. `second` holds the other recording of rows that differed.",
+    "renormalized": [
+      {
+        "harnessDigest": "2d1888b8ed9b5999de06b0f1b70d93842e790df629de46861ad7235210025c7b",
+        "note": "Re-normalized after recording: the authorization state of an authUri and a nonce the service made became placeholders, Unix times in error messages were masked, claims quoted in messages became relative to iat, and the key ID of every recorded token header was masked. The rows are otherwise as recorded (harnessDigest per program is the recording harness)."
+      },
+      {
+        "harnessDigest": "f437b1a5806d4149be0a96b6bde5647e360d19c26fcadb1317398fb3e8c59ead",
+        "note": "Re-normalized after recording (AUTH-FEDERATION Q1, 2026-09-29): in tokens minted after the sign-in (a refresh's id_token and access_token, and session cookies) an auth_time not after iat became <=iat, since which second it falls in depends on when the request was sent. The sign-in's idToken keeps its exact offset. Rows are otherwise as recorded."
+      }
+    ]
+  },
+  "programs": {
+    "auth-federation/accounts/new": {
+      "corpusDigest": "5ea4f4d72c9f520685a91fedf18df94aa80ade44fd9fa60bd625aa8054af3738",
+      "harnessDigest": "f98c033c465d82b7cad7ed42ab735d48b6e32d837647fb218605690317f1f1f3",
+      "recordedAt": "2026-09-28T01:43:42.183Z",
+      "gitSha": "94d7251e3bfedddc489022f8c358527ef545a0db",
+      "steps": {
+        "create-provider": {
+          "status": 200,
+          "body": {
+            "name": "projects/<project-number>/oauthIdpConfigs/oidc.fireemu-<run>-a",
+            "clientId": "client-a",
+            "issuer": "https://<issuer-host>/oidc/<run>",
+            "enabled": true,
+            "responseType": {
+              "idToken": true
+            }
+          }
+        },
+        "profile": {
+          "status": 200,
+          "body": {
+            "federatedId": "oidc.fireemu-<run>-a/sub-profile",
+            "providerId": "oidc.fireemu-<run>-a",
+            "email": "fireemu-fed-<run>-new@example.com",
+            "emailVerified": true,
+            "fullName": "Fed User",
+            "photoUrl": "https://<project>.web.app/picture.png",
+            "localId": "<local-id>",
+            "displayName": "Fed User",
+            "idToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "typ": "JWT",
+                  "kid": "<kid>"
+                },
+                "claims": {
+                  "name": "Fed User",
+                  "picture": "https://<project>.web.app/picture.png",
+                  "iss": "https://securetoken.google.com/<project>",
+                  "aud": "<project>",
+                  "auth_time": "iat+0",
+                  "user_id": "<local-id>",
+                  "sub": "<subject>",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-fed-<run>-new@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "oidc.fireemu-<run>-a": [
+                        "sub-profile"
+                      ],
+                      "email": [
+                        "fireemu-fed-<run>-new@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "oidc.fireemu-<run>-a"
+                  }
+                }
+              }
+            },
+            "refreshToken": "<refresh-token>",
+            "expiresIn": "3600",
+            "oauthIdToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "typ": "JWT",
+                  "kid": "<kid>"
+                },
+                "claims": {
+                  "iss": "https://<issuer-host>/oidc/<run>",
+                  "aud": "client-a",
+                  "sub": "<subject>",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-fed-<run>-new@example.com",
+                  "email_verified": true,
+                  "name": "Fed User",
+                  "picture": "https://<project>.web.app/picture.png"
+                }
+              }
+            },
+            "rawUserInfo": {
+              "<json>": {
+                "aud": "client-a",
+                "exp": "iat+3600",
+                "iat": "<iat>",
+                "iss": "https://<issuer-host>/oidc/<run>",
+                "sub": "<subject>",
+                "email": "fireemu-fed-<run>-new@example.com",
+                "email_verified": true,
+                "name": "Fed User",
+                "picture": "https://<project>.web.app/picture.png"
+              }
+            },
+            "isNewUser": true,
+            "kind": "identitytoolkit#VerifyAssertionResponse",
+            "pendingToken": "<pending-token>"
+          }
+        },
+        "lookup-profile": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#GetAccountInfoResponse",
+            "users": [
+              {
+                "localId": "<local-id>",
+                "email": "fireemu-fed-<run>-new@example.com",
+                "displayName": "Fed User",
+                "photoUrl": "https://<project>.web.app/picture.png",
+                "emailVerified": true,
+                "providerUserInfo": [
+                  {
+                    "providerId": "oidc.fireemu-<run>-a",
+                    "displayName": "Fed User",
+                    "photoUrl": "https://<project>.web.app/picture.png",
+                    "federatedId": "sub-profile",
+                    "email": "fireemu-fed-<run>-new@example.com",
+                    "rawId": "sub-profile"
+                  }
+                ],
+                "validSince": "<time>",
+                "lastLoginAt": "<time>",
+                "createdAt": "<time>",
+                "lastRefreshAt": "<time>"
+              }
+            ]
+          }
+        },
+        "unverified-email": {
+          "status": 200,
+          "body": {
+            "federatedId": "oidc.fireemu-<run>-a/sub-unverified",
+            "providerId": "oidc.fireemu-<run>-a",
+            "email": "fireemu-fed-<run>-unverified@example.com",
+            "emailVerified": false,
+            "localId": "<local-id>",
+            "idToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "typ": "JWT",
+                  "kid": "<kid>"
+                },
+                "claims": {
+                  "iss": "https://securetoken.google.com/<project>",
+                  "aud": "<project>",
+                  "auth_time": "iat+0",
+                  "user_id": "<local-id>",
+                  "sub": "<subject>",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-fed-<run>-unverified@example.com",
+                  "email_verified": false,
+                  "firebase": {
+                    "identities": {
+                      "oidc.fireemu-<run>-a": [
+                        "sub-unverified"
+                      ],
+                      "email": [
+                        "fireemu-fed-<run>-unverified@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "oidc.fireemu-<run>-a"
+                  }
+                }
+              }
+            },
+            "refreshToken": "<refresh-token>",
+            "expiresIn": "3600",
+            "oauthIdToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "typ": "JWT",
+                  "kid": "<kid>"
+                },
+                "claims": {
+                  "iss": "https://<issuer-host>/oidc/<run>",
+                  "aud": "client-a",
+                  "sub": "<subject>",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-fed-<run>-unverified@example.com",
+                  "email_verified": false
+                }
+              }
+            },
+            "rawUserInfo": {
+              "<json>": {
+                "aud": "client-a",
+                "exp": "iat+3600",
+                "iat": "<iat>",
+                "iss": "https://<issuer-host>/oidc/<run>",
+                "sub": "<subject>",
+                "email": "fireemu-fed-<run>-unverified@example.com",
+                "email_verified": false
+              }
+            },
+            "isNewUser": true,
+            "kind": "identitytoolkit#VerifyAssertionResponse",
+            "pendingToken": "<pending-token>"
+          }
+        },
+        "without-email": {
+          "status": 200,
+          "body": {
+            "federatedId": "oidc.fireemu-<run>-a/sub-no-email",
+            "providerId": "oidc.fireemu-<run>-a",
+            "emailVerified": false,
+            "localId": "<local-id>",
+            "idToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "typ": "JWT",
+                  "kid": "<kid>"
+                },
+                "claims": {
+                  "iss": "https://securetoken.google.com/<project>",
+                  "aud": "<project>",
+                  "auth_time": "iat+0",
+                  "user_id": "<local-id>",
+                  "sub": "<subject>",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "firebase": {
+                    "identities": {
+                      "oidc.fireemu-<run>-a": [
+                        "sub-no-email"
+                      ]
+                    },
+                    "sign_in_provider": "oidc.fireemu-<run>-a"
+                  }
+                }
+              }
+            },
+            "refreshToken": "<refresh-token>",
+            "expiresIn": "3600",
+            "oauthIdToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "typ": "JWT",
+                  "kid": "<kid>"
+                },
+                "claims": {
+                  "iss": "https://<issuer-host>/oidc/<run>",
+                  "aud": "client-a",
+                  "sub": "<subject>",
+                  "iat": "<iat>",
+                  "exp": "iat+3600"
+                }
+              }
+            },
+            "rawUserInfo": {
+              "<json>": {
+                "aud": "client-a",
+                "exp": "iat+3600",
+                "iat": "<iat>",
+                "iss": "https://<issuer-host>/oidc/<run>",
+                "sub": "<subject>"
+              }
+            },
+            "isNewUser": true,
+            "kind": "identitytoolkit#VerifyAssertionResponse",
+            "pendingToken": "<pending-token>"
+          }
+        }
+      }
+    },
+    "auth-federation/accounts/returning": {
+      "corpusDigest": "28fa5eb3c91faada0402e0d610f423cf1dfdc8cce37e23a7c48e7a6a47d8ed49",
+      "harnessDigest": "f98c033c465d82b7cad7ed42ab735d48b6e32d837647fb218605690317f1f1f3",
+      "recordedAt": "2026-09-28T01:43:42.183Z",
+      "gitSha": "94d7251e3bfedddc489022f8c358527ef545a0db",
+      "steps": {
+        "create-provider": {
+          "status": 200,
+          "body": {
+            "name": "projects/<project-number>/oauthIdpConfigs/oidc.fireemu-<run>-b",
+            "clientId": "client-b",
+            "issuer": "https://<issuer-host>/oidc/<run>",
+            "enabled": true,
+            "responseType": {
+              "idToken": true
+            }
+          }
+        },
+        "first": {
+          "status": 200,
+          "body": {
+            "federatedId": "oidc.fireemu-<run>-b/sub-returning",
+            "providerId": "oidc.fireemu-<run>-b",
+            "email": "fireemu-fed-<run>-returning@example.com",
+            "emailVerified": true,
+            "localId": "<local-id>",
+            "idToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "typ": "JWT",
+                  "kid": "<kid>"
+                },
+                "claims": {
+                  "iss": "https://securetoken.google.com/<project>",
+                  "aud": "<project>",
+                  "auth_time": "iat+0",
+                  "user_id": "<local-id>",
+                  "sub": "<subject>",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-fed-<run>-returning@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "oidc.fireemu-<run>-b": [
+                        "sub-returning"
+                      ],
+                      "email": [
+                        "fireemu-fed-<run>-returning@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "oidc.fireemu-<run>-b"
+                  }
+                }
+              }
+            },
+            "refreshToken": "<refresh-token>",
+            "expiresIn": "3600",
+            "oauthIdToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "typ": "JWT",
+                  "kid": "<kid>"
+                },
+                "claims": {
+                  "iss": "https://<issuer-host>/oidc/<run>",
+                  "aud": "client-b",
+                  "sub": "<subject>",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-fed-<run>-returning@example.com",
+                  "email_verified": true
+                }
+              }
+            },
+            "rawUserInfo": {
+              "<json>": {
+                "aud": "client-b",
+                "exp": "iat+3600",
+                "iat": "<iat>",
+                "iss": "https://<issuer-host>/oidc/<run>",
+                "sub": "<subject>",
+                "email": "fireemu-fed-<run>-returning@example.com",
+                "email_verified": true
+              }
+            },
+            "isNewUser": true,
+            "kind": "identitytoolkit#VerifyAssertionResponse",
+            "pendingToken": "<pending-token>"
+          }
+        },
+        "second": {
+          "status": 200,
+          "body": {
+            "federatedId": "oidc.fireemu-<run>-b/sub-returning",
+            "providerId": "oidc.fireemu-<run>-b",
+            "email": "fireemu-fed-<run>-returning@example.com",
+            "emailVerified": true,
+            "fullName": "Renamed",
+            "localId": "<local-id>",
+            "displayName": "Renamed",
+            "idToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "typ": "JWT",
+                  "kid": "<kid>"
+                },
+                "claims": {
+                  "iss": "https://securetoken.google.com/<project>",
+                  "aud": "<project>",
+                  "auth_time": "iat+0",
+                  "user_id": "<local-id>",
+                  "sub": "<subject>",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-fed-<run>-returning@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "oidc.fireemu-<run>-b": [
+                        "sub-returning"
+                      ],
+                      "email": [
+                        "fireemu-fed-<run>-returning@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "oidc.fireemu-<run>-b"
+                  }
+                }
+              }
+            },
+            "refreshToken": "<refresh-token>",
+            "expiresIn": "3600",
+            "oauthIdToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "typ": "JWT",
+                  "kid": "<kid>"
+                },
+                "claims": {
+                  "iss": "https://<issuer-host>/oidc/<run>",
+                  "aud": "client-b",
+                  "sub": "<subject>",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-fed-<run>-returning@example.com",
+                  "email_verified": true,
+                  "name": "Renamed"
+                }
+              }
+            },
+            "rawUserInfo": {
+              "<json>": {
+                "aud": "client-b",
+                "exp": "iat+3600",
+                "iat": "<iat>",
+                "iss": "https://<issuer-host>/oidc/<run>",
+                "sub": "<subject>",
+                "email": "fireemu-fed-<run>-returning@example.com",
+                "email_verified": true,
+                "name": "Renamed"
+              }
+            },
+            "kind": "identitytoolkit#VerifyAssertionResponse",
+            "pendingToken": "<pending-token>"
+          }
+        },
+        "lookup-after-second": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#GetAccountInfoResponse",
+            "users": [
+              {
+                "localId": "<local-id>",
+                "email": "fireemu-fed-<run>-returning@example.com",
+                "emailVerified": true,
+                "providerUserInfo": [
+                  {
+                    "providerId": "oidc.fireemu-<run>-b",
+                    "federatedId": "sub-returning",
+                    "email": "fireemu-fed-<run>-returning@example.com",
+                    "rawId": "sub-returning"
+                  }
+                ],
+                "validSince": "<time>",
+                "lastLoginAt": "<time>",
+                "createdAt": "<time>",
+                "lastRefreshAt": "<time>"
+              }
+            ]
+          }
+        }
+      }
+    },
+    "auth-federation/claims/refresh": {
+      "corpusDigest": "b9810be043a82a9093812af54642a76e56edd7c7936d2c5807b6a4ebd1cf6c10",
+      "harnessDigest": "f98c033c465d82b7cad7ed42ab735d48b6e32d837647fb218605690317f1f1f3",
+      "recordedAt": "2026-09-28T01:43:42.183Z",
+      "gitSha": "94d7251e3bfedddc489022f8c358527ef545a0db",
+      "steps": {
+        "create-provider": {
+          "status": 200,
+          "body": {
+            "name": "projects/<project-number>/oauthIdpConfigs/oidc.fireemu-<run>-t",
+            "clientId": "client-t",
+            "issuer": "https://<issuer-host>/oidc/<run>",
+            "enabled": true,
+            "responseType": {
+              "idToken": true
+            }
+          }
+        },
+        "sign-in": {
+          "status": 200,
+          "body": {
+            "federatedId": "oidc.fireemu-<run>-t/sub-claims-refresh",
+            "providerId": "oidc.fireemu-<run>-t",
+            "email": "fireemu-fed-<run>-claims-refresh@example.com",
+            "emailVerified": true,
+            "fullName": "Claims User",
+            "localId": "<local-id>",
+            "displayName": "Claims User",
+            "idToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "typ": "JWT",
+                  "kid": "<kid>"
+                },
+                "claims": {
+                  "name": "Claims User",
+                  "iss": "https://securetoken.google.com/<project>",
+                  "aud": "<project>",
+                  "auth_time": "iat+0",
+                  "user_id": "<local-id>",
+                  "sub": "<subject>",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-fed-<run>-claims-refresh@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "oidc.fireemu-<run>-t": [
+                        "sub-claims-refresh"
+                      ],
+                      "email": [
+                        "fireemu-fed-<run>-claims-refresh@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "oidc.fireemu-<run>-t",
+                    "sign_in_attributes": {
+                      "department": "fireemu"
+                    }
+                  }
+                }
+              }
+            },
+            "refreshToken": "<refresh-token>",
+            "expiresIn": "3600",
+            "oauthIdToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "typ": "JWT",
+                  "kid": "<kid>"
+                },
+                "claims": {
+                  "iss": "https://<issuer-host>/oidc/<run>",
+                  "aud": "client-t",
+                  "sub": "<subject>",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-fed-<run>-claims-refresh@example.com",
+                  "email_verified": true,
+                  "name": "Claims User",
+                  "department": "fireemu"
+                }
+              }
+            },
+            "rawUserInfo": {
+              "<json>": {
+                "aud": "client-t",
+                "exp": "iat+3600",
+                "iat": "<iat>",
+                "iss": "https://<issuer-host>/oidc/<run>",
+                "sub": "<subject>",
+                "email": "fireemu-fed-<run>-claims-refresh@example.com",
+                "email_verified": true,
+                "name": "Claims User",
+                "department": "fireemu"
+              }
+            },
+            "isNewUser": true,
+            "kind": "identitytoolkit#VerifyAssertionResponse",
+            "pendingToken": "<pending-token>"
+          }
+        },
+        "refresh": {
+          "status": 200,
+          "body": {
+            "access_token": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "typ": "JWT",
+                  "kid": "<kid>"
+                },
+                "claims": {
+                  "name": "Claims User",
+                  "iss": "https://securetoken.google.com/<project>",
+                  "aud": "<project>",
+                  "auth_time": "<=iat",
+                  "user_id": "<local-id>",
+                  "sub": "<subject>",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-fed-<run>-claims-refresh@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "oidc.fireemu-<run>-t": [
+                        "sub-claims-refresh"
+                      ],
+                      "email": [
+                        "fireemu-fed-<run>-claims-refresh@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "oidc.fireemu-<run>-t",
+                    "sign_in_attributes": {
+                      "department": "fireemu"
+                    }
+                  }
+                }
+              }
+            },
+            "expires_in": "3600",
+            "token_type": "Bearer",
+            "refresh_token": "<refresh-token>",
+            "id_token": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "typ": "JWT",
+                  "kid": "<kid>"
+                },
+                "claims": {
+                  "name": "Claims User",
+                  "iss": "https://securetoken.google.com/<project>",
+                  "aud": "<project>",
+                  "auth_time": "<=iat",
+                  "user_id": "<local-id>",
+                  "sub": "<subject>",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-fed-<run>-claims-refresh@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "oidc.fireemu-<run>-t": [
+                        "sub-claims-refresh"
+                      ],
+                      "email": [
+                        "fireemu-fed-<run>-claims-refresh@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "oidc.fireemu-<run>-t",
+                    "sign_in_attributes": {
+                      "department": "fireemu"
+                    }
+                  }
+                }
+              }
+            },
+            "user_id": "<local-id>",
+            "project_id": "<project-number>"
+          }
+        }
+      }
+    },
+    "auth-federation/claims/session-cookie": {
+      "corpusDigest": "73da437590a9c399d08f4481084dec860b347a88b72f133741cc7d17021ef297",
+      "harnessDigest": "f98c033c465d82b7cad7ed42ab735d48b6e32d837647fb218605690317f1f1f3",
+      "recordedAt": "2026-09-28T01:43:42.183Z",
+      "gitSha": "94d7251e3bfedddc489022f8c358527ef545a0db",
+      "steps": {
+        "create-provider": {
+          "status": 200,
+          "body": {
+            "name": "projects/<project-number>/oauthIdpConfigs/oidc.fireemu-<run>-k",
+            "clientId": "client-k",
+            "issuer": "https://<issuer-host>/oidc/<run>",
+            "enabled": true,
+            "responseType": {
+              "idToken": true
+            }
+          }
+        },
+        "sign-in": {
+          "status": 200,
+          "body": {
+            "federatedId": "oidc.fireemu-<run>-k/sub-claims-session-cookie",
+            "providerId": "oidc.fireemu-<run>-k",
+            "email": "fireemu-fed-<run>-claims-session-cookie@example.com",
+            "emailVerified": true,
+            "fullName": "Claims User",
+            "localId": "<local-id>",
+            "displayName": "Claims User",
+            "idToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "typ": "JWT",
+                  "kid": "<kid>"
+                },
+                "claims": {
+                  "name": "Claims User",
+                  "iss": "https://securetoken.google.com/<project>",
+                  "aud": "<project>",
+                  "auth_time": "iat+0",
+                  "user_id": "<local-id>",
+                  "sub": "<subject>",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-fed-<run>-claims-session-cookie@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "oidc.fireemu-<run>-k": [
+                        "sub-claims-session-cookie"
+                      ],
+                      "email": [
+                        "fireemu-fed-<run>-claims-session-cookie@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "oidc.fireemu-<run>-k",
+                    "sign_in_attributes": {
+                      "department": "fireemu"
+                    }
+                  }
+                }
+              }
+            },
+            "refreshToken": "<refresh-token>",
+            "expiresIn": "3600",
+            "oauthIdToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "typ": "JWT",
+                  "kid": "<kid>"
+                },
+                "claims": {
+                  "iss": "https://<issuer-host>/oidc/<run>",
+                  "aud": "client-k",
+                  "sub": "<subject>",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-fed-<run>-claims-session-cookie@example.com",
+                  "email_verified": true,
+                  "name": "Claims User",
+                  "department": "fireemu"
+                }
+              }
+            },
+            "rawUserInfo": {
+              "<json>": {
+                "aud": "client-k",
+                "exp": "iat+3600",
+                "iat": "<iat>",
+                "iss": "https://<issuer-host>/oidc/<run>",
+                "sub": "<subject>",
+                "email": "fireemu-fed-<run>-claims-session-cookie@example.com",
+                "email_verified": true,
+                "name": "Claims User",
+                "department": "fireemu"
+              }
+            },
+            "isNewUser": true,
+            "kind": "identitytoolkit#VerifyAssertionResponse",
+            "pendingToken": "<pending-token>"
+          }
+        },
+        "refresh": {
+          "status": 200,
+          "body": {
+            "access_token": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "typ": "JWT",
+                  "kid": "<kid>"
+                },
+                "claims": {
+                  "name": "Claims User",
+                  "iss": "https://securetoken.google.com/<project>",
+                  "aud": "<project>",
+                  "auth_time": "<=iat",
+                  "user_id": "<local-id>",
+                  "sub": "<subject>",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-fed-<run>-claims-session-cookie@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "oidc.fireemu-<run>-k": [
+                        "sub-claims-session-cookie"
+                      ],
+                      "email": [
+                        "fireemu-fed-<run>-claims-session-cookie@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "oidc.fireemu-<run>-k",
+                    "sign_in_attributes": {
+                      "department": "fireemu"
+                    }
+                  }
+                }
+              }
+            },
+            "expires_in": "3600",
+            "token_type": "Bearer",
+            "refresh_token": "<refresh-token>",
+            "id_token": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "typ": "JWT",
+                  "kid": "<kid>"
+                },
+                "claims": {
+                  "name": "Claims User",
+                  "iss": "https://securetoken.google.com/<project>",
+                  "aud": "<project>",
+                  "auth_time": "<=iat",
+                  "user_id": "<local-id>",
+                  "sub": "<subject>",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-fed-<run>-claims-session-cookie@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "oidc.fireemu-<run>-k": [
+                        "sub-claims-session-cookie"
+                      ],
+                      "email": [
+                        "fireemu-fed-<run>-claims-session-cookie@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "oidc.fireemu-<run>-k",
+                    "sign_in_attributes": {
+                      "department": "fireemu"
+                    }
+                  }
+                }
+              }
+            },
+            "user_id": "<local-id>",
+            "project_id": "<project-number>"
+          }
+        },
+        "cookie-from-sign-in": {
+          "status": 200,
+          "body": {
+            "sessionCookie": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<kid>"
+                },
+                "claims": {
+                  "iss": "https://session.firebase.google.com/<project>",
+                  "name": "Claims User",
+                  "aud": "<project>",
+                  "auth_time": "<=iat",
+                  "user_id": "<local-id>",
+                  "sub": "<subject>",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-fed-<run>-claims-session-cookie@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "oidc.fireemu-<run>-k": [
+                        "sub-claims-session-cookie"
+                      ],
+                      "email": [
+                        "fireemu-fed-<run>-claims-session-cookie@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "oidc.fireemu-<run>-k",
+                    "sign_in_attributes": {
+                      "department": "fireemu"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "cookie-from-refresh": {
+          "status": 200,
+          "body": {
+            "sessionCookie": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<kid>"
+                },
+                "claims": {
+                  "iss": "https://session.firebase.google.com/<project>",
+                  "name": "Claims User",
+                  "aud": "<project>",
+                  "auth_time": "<=iat",
+                  "user_id": "<local-id>",
+                  "sub": "<subject>",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-fed-<run>-claims-session-cookie@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "oidc.fireemu-<run>-k": [
+                        "sub-claims-session-cookie"
+                      ],
+                      "email": [
+                        "fireemu-fed-<run>-claims-session-cookie@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "oidc.fireemu-<run>-k",
+                    "sign_in_attributes": {
+                      "department": "fireemu"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "auth-federation/claims/sign-in": {
+      "corpusDigest": "cfa1e2df9b5b2a8a44bc8899da4189d2634636772c7a2a95a97f687b7855740b",
+      "harnessDigest": "f98c033c465d82b7cad7ed42ab735d48b6e32d837647fb218605690317f1f1f3",
+      "recordedAt": "2026-09-28T01:43:42.183Z",
+      "gitSha": "94d7251e3bfedddc489022f8c358527ef545a0db",
+      "steps": {
+        "create-provider": {
+          "status": 200,
+          "body": {
+            "name": "projects/<project-number>/oauthIdpConfigs/oidc.fireemu-<run>-s",
+            "clientId": "client-s",
+            "issuer": "https://<issuer-host>/oidc/<run>",
+            "enabled": true,
+            "responseType": {
+              "idToken": true
+            }
+          }
+        },
+        "sign-in": {
+          "status": 200,
+          "body": {
+            "federatedId": "oidc.fireemu-<run>-s/sub-claims-sign-in",
+            "providerId": "oidc.fireemu-<run>-s",
+            "email": "fireemu-fed-<run>-claims-sign-in@example.com",
+            "emailVerified": true,
+            "fullName": "Claims User",
+            "localId": "<local-id>",
+            "displayName": "Claims User",
+            "idToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "typ": "JWT",
+                  "kid": "<kid>"
+                },
+                "claims": {
+                  "name": "Claims User",
+                  "iss": "https://securetoken.google.com/<project>",
+                  "aud": "<project>",
+                  "auth_time": "iat+0",
+                  "user_id": "<local-id>",
+                  "sub": "<subject>",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-fed-<run>-claims-sign-in@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "oidc.fireemu-<run>-s": [
+                        "sub-claims-sign-in"
+                      ],
+                      "email": [
+                        "fireemu-fed-<run>-claims-sign-in@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "oidc.fireemu-<run>-s",
+                    "sign_in_attributes": {
+                      "department": "fireemu"
+                    }
+                  }
+                }
+              }
+            },
+            "refreshToken": "<refresh-token>",
+            "expiresIn": "3600",
+            "oauthIdToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "typ": "JWT",
+                  "kid": "<kid>"
+                },
+                "claims": {
+                  "iss": "https://<issuer-host>/oidc/<run>",
+                  "aud": "client-s",
+                  "sub": "<subject>",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-fed-<run>-claims-sign-in@example.com",
+                  "email_verified": true,
+                  "name": "Claims User",
+                  "department": "fireemu"
+                }
+              }
+            },
+            "rawUserInfo": {
+              "<json>": {
+                "aud": "client-s",
+                "exp": "iat+3600",
+                "iat": "<iat>",
+                "iss": "https://<issuer-host>/oidc/<run>",
+                "sub": "<subject>",
+                "email": "fireemu-fed-<run>-claims-sign-in@example.com",
+                "email_verified": true,
+                "name": "Claims User",
+                "department": "fireemu"
+              }
+            },
+            "isNewUser": true,
+            "kind": "identitytoolkit#VerifyAssertionResponse",
+            "pendingToken": "<pending-token>"
+          }
+        }
+      }
+    },
+    "auth-federation/collision/unverified": {
+      "corpusDigest": "de51a8f112f10dc20a4603a8169eb700041df200944c5d1d869421a1935566d6",
+      "harnessDigest": "f98c033c465d82b7cad7ed42ab735d48b6e32d837647fb218605690317f1f1f3",
+      "recordedAt": "2026-09-28T01:43:42.183Z",
+      "gitSha": "94d7251e3bfedddc489022f8c358527ef545a0db",
+      "steps": {
+        "create-provider": {
+          "status": 200,
+          "body": {
+            "name": "projects/<project-number>/oauthIdpConfigs/oidc.fireemu-<run>-u",
+            "clientId": "client-u",
+            "issuer": "https://<issuer-host>/oidc/<run>",
+            "enabled": true,
+            "responseType": {
+              "idToken": true
+            }
+          }
+        },
+        "create-owner": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#SignupNewUserResponse",
+            "email": "fireemu-fed-<run>-owner-u@example.com",
+            "localId": "<local-id>"
+          }
+        },
+        "unverified-email": {
+          "status": 200,
+          "body": {
+            "federatedId": "oidc.fireemu-<run>-u/sub-unverified",
+            "providerId": "oidc.fireemu-<run>-u",
+            "email": "fireemu-fed-<run>-owner-u@example.com",
+            "emailVerified": false,
+            "localId": "<local-id>",
+            "needConfirmation": true,
+            "oauthIdToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "typ": "JWT",
+                  "kid": "<kid>"
+                },
+                "claims": {
+                  "iss": "https://<issuer-host>/oidc/<run>",
+                  "aud": "client-u",
+                  "sub": "<subject>",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-fed-<run>-owner-u@example.com",
+                  "email_verified": false
+                }
+              }
+            },
+            "rawUserInfo": {
+              "<json>": {
+                "aud": "client-u",
+                "exp": "iat+3600",
+                "iat": "<iat>",
+                "iss": "https://<issuer-host>/oidc/<run>",
+                "sub": "<subject>",
+                "email": "fireemu-fed-<run>-owner-u@example.com",
+                "email_verified": false
+              }
+            },
+            "kind": "identitytoolkit#VerifyAssertionResponse",
+            "pendingToken": "<pending-token>"
+          }
+        },
+        "lookup-owner": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#GetAccountInfoResponse",
+            "users": [
+              {
+                "localId": "<local-id>",
+                "email": "fireemu-fed-<run>-owner-u@example.com",
+                "passwordHash": "UkVEQUNURUQ=",
+                "emailVerified": false,
+                "passwordUpdatedAt": "<time>",
+                "providerUserInfo": [
+                  {
+                    "providerId": "password",
+                    "federatedId": "fireemu-fed-<run>-owner-u@example.com",
+                    "email": "fireemu-fed-<run>-owner-u@example.com",
+                    "rawId": "fireemu-fed-<run>-owner-u@example.com"
+                  }
+                ],
+                "validSince": "<time>",
+                "disabled": false,
+                "createdAt": "<time>"
+              }
+            ]
+          }
+        }
+      }
+    },
+    "auth-federation/collision/verified": {
+      "corpusDigest": "ea34d69af796aa8330c93cfbbfe7e66de9c5f37b599ecfa0368fafc2aa14c945",
+      "harnessDigest": "f98c033c465d82b7cad7ed42ab735d48b6e32d837647fb218605690317f1f1f3",
+      "recordedAt": "2026-09-28T01:43:42.183Z",
+      "gitSha": "94d7251e3bfedddc489022f8c358527ef545a0db",
+      "steps": {
+        "create-provider": {
+          "status": 200,
+          "body": {
+            "name": "projects/<project-number>/oauthIdpConfigs/oidc.fireemu-<run>-c",
+            "clientId": "client-c",
+            "issuer": "https://<issuer-host>/oidc/<run>",
+            "enabled": true,
+            "responseType": {
+              "idToken": true
+            }
+          }
+        },
+        "create-owner": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#SignupNewUserResponse",
+            "email": "fireemu-fed-<run>-owner-v@example.com",
+            "localId": "<local-id>"
+          }
+        },
+        "verified-email": {
+          "status": 200,
+          "body": {
+            "federatedId": "oidc.fireemu-<run>-c/sub-verified",
+            "providerId": "oidc.fireemu-<run>-c",
+            "email": "fireemu-fed-<run>-owner-v@example.com",
+            "emailVerified": true,
+            "localId": "<local-id>",
+            "idToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "typ": "JWT",
+                  "kid": "<kid>"
+                },
+                "claims": {
+                  "iss": "https://securetoken.google.com/<project>",
+                  "aud": "<project>",
+                  "auth_time": "iat+0",
+                  "user_id": "<local-id>",
+                  "sub": "<subject>",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-fed-<run>-owner-v@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "oidc.fireemu-<run>-c": [
+                        "sub-verified"
+                      ],
+                      "email": [
+                        "fireemu-fed-<run>-owner-v@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "oidc.fireemu-<run>-c"
+                  }
+                }
+              }
+            },
+            "refreshToken": "<refresh-token>",
+            "expiresIn": "3600",
+            "oauthIdToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "typ": "JWT",
+                  "kid": "<kid>"
+                },
+                "claims": {
+                  "iss": "https://<issuer-host>/oidc/<run>",
+                  "aud": "client-c",
+                  "sub": "<subject>",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-fed-<run>-owner-v@example.com",
+                  "email_verified": true
+                }
+              }
+            },
+            "rawUserInfo": {
+              "<json>": {
+                "aud": "client-c",
+                "exp": "iat+3600",
+                "iat": "<iat>",
+                "iss": "https://<issuer-host>/oidc/<run>",
+                "sub": "<subject>",
+                "email": "fireemu-fed-<run>-owner-v@example.com",
+                "email_verified": true
+              }
+            },
+            "kind": "identitytoolkit#VerifyAssertionResponse",
+            "pendingToken": "<pending-token>"
+          }
+        },
+        "lookup-owner": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#GetAccountInfoResponse",
+            "users": [
+              {
+                "localId": "<local-id>",
+                "email": "fireemu-fed-<run>-owner-v@example.com",
+                "emailVerified": true,
+                "passwordUpdatedAt": "<time>",
+                "providerUserInfo": [
+                  {
+                    "providerId": "oidc.fireemu-<run>-c",
+                    "federatedId": "sub-verified",
+                    "email": "fireemu-fed-<run>-owner-v@example.com",
+                    "rawId": "sub-verified"
+                  }
+                ],
+                "validSince": "<time>",
+                "disabled": false,
+                "lastLoginAt": "<time>",
+                "createdAt": "<time>",
+                "lastRefreshAt": "<time>"
+              }
+            ]
+          }
+        }
+      }
+    },
+    "auth-federation/create-auth-uri": {
+      "corpusDigest": "30c46b19a8256af1c08ac86ebd4c23d58cb26c245c6e41cc61ffe402a0fe8226",
+      "harnessDigest": "f98c033c465d82b7cad7ed42ab735d48b6e32d837647fb218605690317f1f1f3",
+      "recordedAt": "2026-09-28T01:43:42.183Z",
+      "gitSha": "94d7251e3bfedddc489022f8c358527ef545a0db",
+      "steps": {
+        "create-provider": {
+          "status": 200,
+          "body": {
+            "name": "projects/<project-number>/oauthIdpConfigs/oidc.fireemu-<run>-q",
+            "clientId": "client-q",
+            "issuer": "https://<issuer-host>/oidc/<run>",
+            "enabled": true,
+            "responseType": {
+              "idToken": true
+            }
+          }
+        },
+        "create-auth-uri": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#CreateAuthUriResponse",
+            "authUri": "https://<issuer-host>/oidc/<run>/authorize?response_type=id_token&client_id=client-q&redirect_uri=https://<project>.firebaseapp.com/__/auth/handler&state=<state>&scope=openid&nonce=<nonce:hex64>",
+            "providerId": "oidc.fireemu-<run>-q",
+            "sessionId": "<session-id>"
+          }
+        },
+        "create-auth-uri-without-continue": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "MISSING_CONTINUE_URI",
+              "errors": [
+                {
+                  "message": "MISSING_CONTINUE_URI",
+                  "domain": "global",
+                  "reason": "invalid"
+                }
+              ]
+            }
+          }
+        }
+      }
+    },
+    "auth-federation/duplicate-email": {
+      "corpusDigest": "a565dfbc05f9a26d10ae2c5b0def851c44c83cb3026c8d6676ec7095f1dbbefe",
+      "harnessDigest": "f98c033c465d82b7cad7ed42ab735d48b6e32d837647fb218605690317f1f1f3",
+      "recordedAt": "2026-09-28T01:43:42.183Z",
+      "gitSha": "94d7251e3bfedddc489022f8c358527ef545a0db",
+      "steps": {
+        "create-provider": {
+          "status": 200,
+          "body": {
+            "name": "projects/<project-number>/oauthIdpConfigs/oidc.fireemu-<run>-d",
+            "clientId": "client-d",
+            "issuer": "https://<issuer-host>/oidc/<run>",
+            "enabled": true,
+            "responseType": {
+              "idToken": true
+            }
+          }
+        },
+        "allow-duplicates": {
+          "status": 200,
+          "body": {
+            "signIn": {
+              "allowDuplicateEmails": true
+            }
+          }
+        },
+        "create-owner": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#SignupNewUserResponse",
+            "email": "fireemu-fed-<run>-shared@example.com",
+            "localId": "<local-id>"
+          }
+        },
+        "sign-in-with-duplicates-allowed": {
+          "status": 200,
+          "body": {
+            "federatedId": "oidc.fireemu-<run>-d/sub-shared",
+            "providerId": "oidc.fireemu-<run>-d",
+            "email": "fireemu-fed-<run>-shared@example.com",
+            "emailVerified": true,
+            "localId": "<local-id>",
+            "idToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "typ": "JWT",
+                  "kid": "<kid>"
+                },
+                "claims": {
+                  "iss": "https://securetoken.google.com/<project>",
+                  "aud": "<project>",
+                  "auth_time": "iat+0",
+                  "user_id": "<local-id>",
+                  "sub": "<subject>",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "firebase": {
+                    "identities": {
+                      "oidc.fireemu-<run>-d": [
+                        "sub-shared"
+                      ]
+                    },
+                    "sign_in_provider": "oidc.fireemu-<run>-d"
+                  }
+                }
+              }
+            },
+            "refreshToken": "<refresh-token>",
+            "expiresIn": "3600",
+            "oauthIdToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "typ": "JWT",
+                  "kid": "<kid>"
+                },
+                "claims": {
+                  "iss": "https://<issuer-host>/oidc/<run>",
+                  "aud": "client-d",
+                  "sub": "<subject>",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-fed-<run>-shared@example.com",
+                  "email_verified": true
+                }
+              }
+            },
+            "rawUserInfo": {
+              "<json>": {
+                "aud": "client-d",
+                "exp": "iat+3600",
+                "iat": "<iat>",
+                "iss": "https://<issuer-host>/oidc/<run>",
+                "sub": "<subject>",
+                "email": "fireemu-fed-<run>-shared@example.com",
+                "email_verified": true
+              }
+            },
+            "isNewUser": true,
+            "kind": "identitytoolkit#VerifyAssertionResponse",
+            "pendingToken": "<pending-token>"
+          }
+        },
+        "lookup-owner": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#GetAccountInfoResponse",
+            "users": [
+              {
+                "localId": "<local-id>",
+                "email": "fireemu-fed-<run>-shared@example.com",
+                "passwordHash": "UkVEQUNURUQ=",
+                "emailVerified": false,
+                "passwordUpdatedAt": "<time>",
+                "providerUserInfo": [
+                  {
+                    "providerId": "password",
+                    "federatedId": "fireemu-fed-<run>-shared@example.com",
+                    "email": "fireemu-fed-<run>-shared@example.com",
+                    "rawId": "fireemu-fed-<run>-shared@example.com"
+                  }
+                ],
+                "validSince": "<time>",
+                "disabled": false,
+                "createdAt": "<time>"
+              }
+            ]
+          }
+        }
+      }
+    },
+    "auth-federation/link": {
+      "corpusDigest": "ba0411d449cc02aa245923e28b26200d8e430fefb2e89f8ea8db808f132cf95c",
+      "harnessDigest": "f98c033c465d82b7cad7ed42ab735d48b6e32d837647fb218605690317f1f1f3",
+      "recordedAt": "2026-09-28T01:43:42.183Z",
+      "gitSha": "94d7251e3bfedddc489022f8c358527ef545a0db",
+      "steps": {
+        "create-provider": {
+          "status": 200,
+          "body": {
+            "name": "projects/<project-number>/oauthIdpConfigs/oidc.fireemu-<run>-l",
+            "clientId": "client-l",
+            "issuer": "https://<issuer-host>/oidc/<run>",
+            "enabled": true,
+            "responseType": {
+              "idToken": true
+            }
+          }
+        },
+        "first": {
+          "status": 200,
+          "body": {
+            "federatedId": "oidc.fireemu-<run>-l/sub-first",
+            "providerId": "oidc.fireemu-<run>-l",
+            "email": "fireemu-fed-<run>-first@example.com",
+            "emailVerified": true,
+            "localId": "<local-id>",
+            "idToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "typ": "JWT",
+                  "kid": "<kid>"
+                },
+                "claims": {
+                  "iss": "https://securetoken.google.com/<project>",
+                  "aud": "<project>",
+                  "auth_time": "iat+0",
+                  "user_id": "<local-id>",
+                  "sub": "<subject>",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-fed-<run>-first@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "oidc.fireemu-<run>-l": [
+                        "sub-first"
+                      ],
+                      "email": [
+                        "fireemu-fed-<run>-first@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "oidc.fireemu-<run>-l"
+                  }
+                }
+              }
+            },
+            "refreshToken": "<refresh-token>",
+            "expiresIn": "3600",
+            "oauthIdToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "typ": "JWT",
+                  "kid": "<kid>"
+                },
+                "claims": {
+                  "iss": "https://<issuer-host>/oidc/<run>",
+                  "aud": "client-l",
+                  "sub": "<subject>",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-fed-<run>-first@example.com",
+                  "email_verified": true
+                }
+              }
+            },
+            "rawUserInfo": {
+              "<json>": {
+                "aud": "client-l",
+                "exp": "iat+3600",
+                "iat": "<iat>",
+                "iss": "https://<issuer-host>/oidc/<run>",
+                "sub": "<subject>",
+                "email": "fireemu-fed-<run>-first@example.com",
+                "email_verified": true
+              }
+            },
+            "isNewUser": true,
+            "kind": "identitytoolkit#VerifyAssertionResponse",
+            "pendingToken": "<pending-token>"
+          }
+        },
+        "create-other": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#SignupNewUserResponse",
+            "email": "fireemu-fed-<run>-other@example.com",
+            "localId": "<local-id>"
+          }
+        },
+        "create-taken": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#SignupNewUserResponse",
+            "email": "fireemu-fed-<run>-taken@example.com",
+            "localId": "<local-id>"
+          }
+        },
+        "link-second": {
+          "status": 200,
+          "body": {
+            "federatedId": "oidc.fireemu-<run>-l/sub-second",
+            "providerId": "oidc.fireemu-<run>-l",
+            "emailVerified": false,
+            "oauthIdToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "typ": "JWT",
+                  "kid": "<kid>"
+                },
+                "claims": {
+                  "iss": "https://<issuer-host>/oidc/<run>",
+                  "aud": "client-l",
+                  "sub": "<subject>",
+                  "iat": "<iat>",
+                  "exp": "iat+3600"
+                }
+              }
+            },
+            "rawUserInfo": {
+              "<json>": {
+                "aud": "client-l",
+                "exp": "iat+3600",
+                "iat": "<iat>",
+                "iss": "https://<issuer-host>/oidc/<run>",
+                "sub": "<subject>"
+              }
+            },
+            "errorMessage": "PROVIDER_ALREADY_LINKED",
+            "kind": "identitytoolkit#VerifyAssertionResponse",
+            "pendingToken": "<pending-token>"
+          }
+        },
+        "lookup-linked": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#GetAccountInfoResponse",
+            "users": [
+              {
+                "localId": "<local-id>",
+                "email": "fireemu-fed-<run>-first@example.com",
+                "emailVerified": true,
+                "providerUserInfo": [
+                  {
+                    "providerId": "oidc.fireemu-<run>-l",
+                    "federatedId": "sub-first",
+                    "email": "fireemu-fed-<run>-first@example.com",
+                    "rawId": "sub-first"
+                  }
+                ],
+                "validSince": "<time>",
+                "lastLoginAt": "<time>",
+                "createdAt": "<time>",
+                "lastRefreshAt": "<time>"
+              }
+            ]
+          }
+        },
+        "link-linked-elsewhere": {
+          "status": 200,
+          "body": {
+            "federatedId": "oidc.fireemu-<run>-l/sub-second",
+            "providerId": "oidc.fireemu-<run>-l",
+            "emailVerified": false,
+            "oauthIdToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "typ": "JWT",
+                  "kid": "<kid>"
+                },
+                "claims": {
+                  "iss": "https://<issuer-host>/oidc/<run>",
+                  "aud": "client-l",
+                  "sub": "<subject>",
+                  "iat": "<iat>",
+                  "exp": "iat+3600"
+                }
+              }
+            },
+            "rawUserInfo": {
+              "<json>": {
+                "aud": "client-l",
+                "exp": "iat+3600",
+                "iat": "<iat>",
+                "iss": "https://<issuer-host>/oidc/<run>",
+                "sub": "<subject>"
+              }
+            },
+            "errorMessage": "PROVIDER_ALREADY_LINKED",
+            "kind": "identitytoolkit#VerifyAssertionResponse",
+            "pendingToken": "<pending-token>"
+          }
+        },
+        "link-linked-elsewhere-without-credential": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "PROVIDER_ALREADY_LINKED",
+              "errors": [
+                {
+                  "message": "PROVIDER_ALREADY_LINKED",
+                  "domain": "global",
+                  "reason": "invalid"
+                }
+              ]
+            }
+          }
+        },
+        "link-taken-email": {
+          "status": 200,
+          "body": {
+            "federatedId": "oidc.fireemu-<run>-l/sub-taken",
+            "providerId": "oidc.fireemu-<run>-l",
+            "email": "fireemu-fed-<run>-taken@example.com",
+            "emailVerified": true,
+            "oauthIdToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "typ": "JWT",
+                  "kid": "<kid>"
+                },
+                "claims": {
+                  "iss": "https://<issuer-host>/oidc/<run>",
+                  "aud": "client-l",
+                  "sub": "<subject>",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-fed-<run>-taken@example.com",
+                  "email_verified": true
+                }
+              }
+            },
+            "rawUserInfo": {
+              "<json>": {
+                "aud": "client-l",
+                "exp": "iat+3600",
+                "iat": "<iat>",
+                "iss": "https://<issuer-host>/oidc/<run>",
+                "sub": "<subject>",
+                "email": "fireemu-fed-<run>-taken@example.com",
+                "email_verified": true
+              }
+            },
+            "errorMessage": "EMAIL_EXISTS",
+            "kind": "identitytoolkit#VerifyAssertionResponse",
+            "pendingToken": "<pending-token>"
+          }
+        }
+      }
+    },
+    "auth-federation/oidc/nonce": {
+      "corpusDigest": "8317541f27c28f3376be6b28d6bb41fa123f85c7840807d6b87895a968e87213",
+      "harnessDigest": "f98c033c465d82b7cad7ed42ab735d48b6e32d837647fb218605690317f1f1f3",
+      "recordedAt": "2026-09-28T01:43:42.183Z",
+      "gitSha": "94d7251e3bfedddc489022f8c358527ef545a0db",
+      "steps": {
+        "create-provider": {
+          "status": 200,
+          "body": {
+            "name": "projects/<project-number>/oauthIdpConfigs/oidc.fireemu-<run>-n",
+            "clientId": "client-n",
+            "issuer": "https://<issuer-host>/oidc/<run>",
+            "enabled": true,
+            "responseType": {
+              "idToken": true
+            }
+          }
+        },
+        "matching-nonce": {
+          "status": 200,
+          "body": {
+            "federatedId": "oidc.fireemu-<run>-n/sub-hashed",
+            "providerId": "oidc.fireemu-<run>-n",
+            "emailVerified": false,
+            "localId": "<local-id>",
+            "idToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "typ": "JWT",
+                  "kid": "<kid>"
+                },
+                "claims": {
+                  "iss": "https://securetoken.google.com/<project>",
+                  "aud": "<project>",
+                  "auth_time": "iat+0",
+                  "user_id": "<local-id>",
+                  "sub": "<subject>",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "firebase": {
+                    "identities": {
+                      "oidc.fireemu-<run>-n": [
+                        "sub-hashed"
+                      ]
+                    },
+                    "sign_in_provider": "oidc.fireemu-<run>-n"
+                  }
+                }
+              }
+            },
+            "refreshToken": "<refresh-token>",
+            "expiresIn": "3600",
+            "oauthIdToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "typ": "JWT",
+                  "kid": "<kid>"
+                },
+                "claims": {
+                  "iss": "https://<issuer-host>/oidc/<run>",
+                  "aud": "client-n",
+                  "sub": "<subject>",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "nonce": "b9f97921143efb3b0e1485f8e1255cb545e52224dd0bff9fef77ff22fdbb1db1"
+                }
+              }
+            },
+            "rawUserInfo": {
+              "<json>": {
+                "aud": "client-n",
+                "exp": "iat+3600",
+                "iat": "<iat>",
+                "iss": "https://<issuer-host>/oidc/<run>",
+                "nonce": "b9f97921143efb3b0e1485f8e1255cb545e52224dd0bff9fef77ff22fdbb1db1",
+                "sub": "<subject>"
+              }
+            },
+            "isNewUser": true,
+            "kind": "identitytoolkit#VerifyAssertionResponse",
+            "pendingToken": "<pending-token>"
+          }
+        },
+        "other-nonce": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "MISSING_OR_INVALID_NONCE : Duplicate credential received. Please try again with a new credential.",
+              "errors": [
+                {
+                  "message": "MISSING_OR_INVALID_NONCE : Duplicate credential received. Please try again with a new credential.",
+                  "domain": "global",
+                  "reason": "invalid"
+                }
+              ]
+            }
+          }
+        },
+        "token-nonce-only": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "MISSING_OR_INVALID_NONCE : Nonce is missing in the request.",
+              "errors": [
+                {
+                  "message": "MISSING_OR_INVALID_NONCE : Nonce is missing in the request.",
+                  "domain": "global",
+                  "reason": "invalid"
+                }
+              ]
+            }
+          }
+        },
+        "request-nonce-only": {
+          "status": 200,
+          "body": {
+            "federatedId": "oidc.fireemu-<run>-n/sub-plain",
+            "providerId": "oidc.fireemu-<run>-n",
+            "emailVerified": false,
+            "localId": "<local-id>",
+            "idToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "typ": "JWT",
+                  "kid": "<kid>"
+                },
+                "claims": {
+                  "iss": "https://securetoken.google.com/<project>",
+                  "aud": "<project>",
+                  "auth_time": "iat+0",
+                  "user_id": "<local-id>",
+                  "sub": "<subject>",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "firebase": {
+                    "identities": {
+                      "oidc.fireemu-<run>-n": [
+                        "sub-plain"
+                      ]
+                    },
+                    "sign_in_provider": "oidc.fireemu-<run>-n"
+                  }
+                }
+              }
+            },
+            "refreshToken": "<refresh-token>",
+            "expiresIn": "3600",
+            "oauthIdToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "typ": "JWT",
+                  "kid": "<kid>"
+                },
+                "claims": {
+                  "iss": "https://<issuer-host>/oidc/<run>",
+                  "aud": "client-n",
+                  "sub": "<subject>",
+                  "iat": "<iat>",
+                  "exp": "iat+3600"
+                }
+              }
+            },
+            "rawUserInfo": {
+              "<json>": {
+                "aud": "client-n",
+                "exp": "iat+3600",
+                "iat": "<iat>",
+                "iss": "https://<issuer-host>/oidc/<run>",
+                "sub": "<subject>"
+              }
+            },
+            "isNewUser": true,
+            "kind": "identitytoolkit#VerifyAssertionResponse",
+            "pendingToken": "<pending-token>"
+          }
+        }
+      },
+      "second": {
+        "matching-nonce": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "MISSING_OR_INVALID_NONCE : Duplicate credential received. Please try again with a new credential.",
+              "errors": [
+                {
+                  "message": "MISSING_OR_INVALID_NONCE : Duplicate credential received. Please try again with a new credential.",
+                  "domain": "global",
+                  "reason": "invalid"
+                }
+              ]
+            }
+          }
+        }
+      }
+    },
+    "auth-federation/oidc/replay": {
+      "corpusDigest": "671b6ba535e01206e420e5374523b6aa2e80af93332c72c419252fba1120ee77",
+      "harnessDigest": "f98c033c465d82b7cad7ed42ab735d48b6e32d837647fb218605690317f1f1f3",
+      "recordedAt": "2026-09-28T01:43:42.183Z",
+      "gitSha": "94d7251e3bfedddc489022f8c358527ef545a0db",
+      "steps": {
+        "create-provider": {
+          "status": 200,
+          "body": {
+            "name": "projects/<project-number>/oauthIdpConfigs/oidc.fireemu-<run>-r",
+            "clientId": "client-r",
+            "issuer": "https://<issuer-host>/oidc/<run>",
+            "enabled": true,
+            "responseType": {
+              "idToken": true
+            }
+          }
+        },
+        "first": {
+          "status": 200,
+          "body": {
+            "federatedId": "oidc.fireemu-<run>-r/sub-once",
+            "providerId": "oidc.fireemu-<run>-r",
+            "emailVerified": false,
+            "localId": "<local-id>",
+            "idToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "typ": "JWT",
+                  "kid": "<kid>"
+                },
+                "claims": {
+                  "iss": "https://securetoken.google.com/<project>",
+                  "aud": "<project>",
+                  "auth_time": "iat+0",
+                  "user_id": "<local-id>",
+                  "sub": "<subject>",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "firebase": {
+                    "identities": {
+                      "oidc.fireemu-<run>-r": [
+                        "sub-once"
+                      ]
+                    },
+                    "sign_in_provider": "oidc.fireemu-<run>-r"
+                  }
+                }
+              }
+            },
+            "refreshToken": "<refresh-token>",
+            "expiresIn": "3600",
+            "oauthIdToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "typ": "JWT",
+                  "kid": "<kid>"
+                },
+                "claims": {
+                  "iss": "https://<issuer-host>/oidc/<run>",
+                  "aud": "client-r",
+                  "sub": "<subject>",
+                  "iat": "<iat>",
+                  "exp": "iat+3600"
+                }
+              }
+            },
+            "rawUserInfo": {
+              "<json>": {
+                "aud": "client-r",
+                "exp": "iat+3600",
+                "iat": "<iat>",
+                "iss": "https://<issuer-host>/oidc/<run>",
+                "sub": "<subject>"
+              }
+            },
+            "isNewUser": true,
+            "kind": "identitytoolkit#VerifyAssertionResponse",
+            "pendingToken": "<pending-token>"
+          }
+        },
+        "again": {
+          "status": 200,
+          "body": {
+            "federatedId": "oidc.fireemu-<run>-r/sub-once",
+            "providerId": "oidc.fireemu-<run>-r",
+            "emailVerified": false,
+            "localId": "<local-id>",
+            "idToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "typ": "JWT",
+                  "kid": "<kid>"
+                },
+                "claims": {
+                  "iss": "https://securetoken.google.com/<project>",
+                  "aud": "<project>",
+                  "auth_time": "iat+0",
+                  "user_id": "<local-id>",
+                  "sub": "<subject>",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "firebase": {
+                    "identities": {
+                      "oidc.fireemu-<run>-r": [
+                        "sub-once"
+                      ]
+                    },
+                    "sign_in_provider": "oidc.fireemu-<run>-r"
+                  }
+                }
+              }
+            },
+            "refreshToken": "<refresh-token>",
+            "expiresIn": "3600",
+            "oauthIdToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "typ": "JWT",
+                  "kid": "<kid>"
+                },
+                "claims": {
+                  "iss": "https://<issuer-host>/oidc/<run>",
+                  "aud": "client-r",
+                  "sub": "<subject>",
+                  "iat": "<iat>",
+                  "exp": "iat+3600"
+                }
+              }
+            },
+            "rawUserInfo": {
+              "<json>": {
+                "aud": "client-r",
+                "exp": "iat+3600",
+                "iat": "<iat>",
+                "iss": "https://<issuer-host>/oidc/<run>",
+                "sub": "<subject>"
+              }
+            },
+            "kind": "identitytoolkit#VerifyAssertionResponse",
+            "pendingToken": "<pending-token>"
+          }
+        }
+      }
+    },
+    "auth-federation/oidc/verification": {
+      "corpusDigest": "db7a6091610af69ce47184d8f58fed5e4401cab06f81b7a8467f97f0d01ffc13",
+      "harnessDigest": "f98c033c465d82b7cad7ed42ab735d48b6e32d837647fb218605690317f1f1f3",
+      "recordedAt": "2026-09-28T01:43:42.183Z",
+      "gitSha": "94d7251e3bfedddc489022f8c358527ef545a0db",
+      "steps": {
+        "create-provider": {
+          "status": 200,
+          "body": {
+            "name": "projects/<project-number>/oauthIdpConfigs/oidc.fireemu-<run>-v",
+            "clientId": "client-v",
+            "issuer": "https://<issuer-host>/oidc/<run>",
+            "enabled": true,
+            "responseType": {
+              "idToken": true
+            }
+          }
+        },
+        "valid": {
+          "status": 200,
+          "body": {
+            "federatedId": "oidc.fireemu-<run>-v/sub-valid",
+            "providerId": "oidc.fireemu-<run>-v",
+            "email": "fireemu-fed-<run>-valid@example.com",
+            "emailVerified": true,
+            "localId": "<local-id>",
+            "idToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "typ": "JWT",
+                  "kid": "<kid>"
+                },
+                "claims": {
+                  "iss": "https://securetoken.google.com/<project>",
+                  "aud": "<project>",
+                  "auth_time": "iat+0",
+                  "user_id": "<local-id>",
+                  "sub": "<subject>",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-fed-<run>-valid@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "oidc.fireemu-<run>-v": [
+                        "sub-valid"
+                      ],
+                      "email": [
+                        "fireemu-fed-<run>-valid@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "oidc.fireemu-<run>-v"
+                  }
+                }
+              }
+            },
+            "refreshToken": "<refresh-token>",
+            "expiresIn": "3600",
+            "oauthIdToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "typ": "JWT",
+                  "kid": "<kid>"
+                },
+                "claims": {
+                  "iss": "https://<issuer-host>/oidc/<run>",
+                  "aud": "client-v",
+                  "sub": "<subject>",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-fed-<run>-valid@example.com",
+                  "email_verified": true
+                }
+              }
+            },
+            "rawUserInfo": {
+              "<json>": {
+                "aud": "client-v",
+                "exp": "iat+3600",
+                "iat": "<iat>",
+                "iss": "https://<issuer-host>/oidc/<run>",
+                "sub": "<subject>",
+                "email": "fireemu-fed-<run>-valid@example.com",
+                "email_verified": true
+              }
+            },
+            "isNewUser": true,
+            "kind": "identitytoolkit#VerifyAssertionResponse",
+            "pendingToken": "<pending-token>"
+          }
+        },
+        "other-key": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "INVALID_IDP_RESPONSE : Unable to verify the ID Token signature.",
+              "errors": [
+                {
+                  "message": "INVALID_IDP_RESPONSE : Unable to verify the ID Token signature.",
+                  "domain": "global",
+                  "reason": "invalid"
+                }
+              ]
+            }
+          }
+        },
+        "unknown-kid": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "INVALID_IDP_RESPONSE : Unable to verify the ID Token signature.",
+              "errors": [
+                {
+                  "message": "INVALID_IDP_RESPONSE : Unable to verify the ID Token signature.",
+                  "domain": "global",
+                  "reason": "invalid"
+                }
+              ]
+            }
+          }
+        },
+        "wrong-issuer": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "INVALID_IDP_RESPONSE : The issuer in ID Token https://<project>.web.app/oidc/<run>-other does not match the expected one in config: https://<issuer-host>/oidc/<run>.",
+              "errors": [
+                {
+                  "message": "INVALID_IDP_RESPONSE : The issuer in ID Token https://<project>.web.app/oidc/<run>-other does not match the expected one in config: https://<issuer-host>/oidc/<run>.",
+                  "domain": "global",
+                  "reason": "invalid"
+                }
+              ]
+            }
+          }
+        },
+        "wrong-audience": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "INVALID_IDP_RESPONSE : The audience in ID Token [client-other] does not match the expected audience client-v.",
+              "errors": [
+                {
+                  "message": "INVALID_IDP_RESPONSE : The audience in ID Token [client-other] does not match the expected audience client-v.",
+                  "domain": "global",
+                  "reason": "invalid"
+                }
+              ]
+            }
+          }
+        },
+        "several-audiences": {
+          "status": 200,
+          "body": {
+            "federatedId": "oidc.fireemu-<run>-v/sub-several-audiences",
+            "providerId": "oidc.fireemu-<run>-v",
+            "emailVerified": false,
+            "localId": "<local-id>",
+            "idToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "typ": "JWT",
+                  "kid": "<kid>"
+                },
+                "claims": {
+                  "iss": "https://securetoken.google.com/<project>",
+                  "aud": "<project>",
+                  "auth_time": "iat+0",
+                  "user_id": "<local-id>",
+                  "sub": "<subject>",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "firebase": {
+                    "identities": {
+                      "oidc.fireemu-<run>-v": [
+                        "sub-several-audiences"
+                      ]
+                    },
+                    "sign_in_provider": "oidc.fireemu-<run>-v"
+                  }
+                }
+              }
+            },
+            "refreshToken": "<refresh-token>",
+            "expiresIn": "3600",
+            "oauthIdToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "typ": "JWT",
+                  "kid": "<kid>"
+                },
+                "claims": {
+                  "iss": "https://<issuer-host>/oidc/<run>",
+                  "aud": [
+                    "client-v",
+                    "client-other"
+                  ],
+                  "sub": "<subject>",
+                  "iat": "<iat>",
+                  "exp": "iat+3600"
+                }
+              }
+            },
+            "rawUserInfo": {
+              "<json>": {
+                "aud": [
+                  "client-v",
+                  "client-other"
+                ],
+                "exp": "iat+3600",
+                "iat": "<iat>",
+                "iss": "https://<issuer-host>/oidc/<run>",
+                "sub": "<subject>"
+              }
+            },
+            "isNewUser": true,
+            "kind": "identitytoolkit#VerifyAssertionResponse",
+            "pendingToken": "<pending-token>"
+          }
+        },
+        "expired": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "INVALID_IDP_RESPONSE : ID Token issued at <time> is stale to sign-in.",
+              "errors": [
+                {
+                  "message": "INVALID_IDP_RESPONSE : ID Token issued at <time> is stale to sign-in.",
+                  "domain": "global",
+                  "reason": "invalid"
+                }
+              ]
+            }
+          }
+        },
+        "issued-in-future": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "INVALID_IDP_RESPONSE : ID Token issued at <time> is stale to sign-in.",
+              "errors": [
+                {
+                  "message": "INVALID_IDP_RESPONSE : ID Token issued at <time> is stale to sign-in.",
+                  "domain": "global",
+                  "reason": "invalid"
+                }
+              ]
+            }
+          }
+        },
+        "not-yet-valid": {
+          "status": 200,
+          "body": {
+            "federatedId": "oidc.fireemu-<run>-v/sub-not-yet-valid",
+            "providerId": "oidc.fireemu-<run>-v",
+            "emailVerified": false,
+            "localId": "<local-id>",
+            "idToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "typ": "JWT",
+                  "kid": "<kid>"
+                },
+                "claims": {
+                  "iss": "https://securetoken.google.com/<project>",
+                  "aud": "<project>",
+                  "auth_time": "iat+0",
+                  "user_id": "<local-id>",
+                  "sub": "<subject>",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "firebase": {
+                    "identities": {
+                      "oidc.fireemu-<run>-v": [
+                        "sub-not-yet-valid"
+                      ]
+                    },
+                    "sign_in_provider": "oidc.fireemu-<run>-v"
+                  }
+                }
+              }
+            },
+            "refreshToken": "<refresh-token>",
+            "expiresIn": "3600",
+            "oauthIdToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "typ": "JWT",
+                  "kid": "<kid>"
+                },
+                "claims": {
+                  "iss": "https://<issuer-host>/oidc/<run>",
+                  "aud": "client-v",
+                  "sub": "<subject>",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "nbf": "iat+3600"
+                }
+              }
+            },
+            "rawUserInfo": {
+              "<json>": {
+                "aud": "client-v",
+                "exp": "iat+3600",
+                "iat": "<iat>",
+                "iss": "https://<issuer-host>/oidc/<run>",
+                "nbf": "iat+3600",
+                "sub": "<subject>"
+              }
+            },
+            "isNewUser": true,
+            "kind": "identitytoolkit#VerifyAssertionResponse",
+            "pendingToken": "<pending-token>"
+          }
+        },
+        "without-subject": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "INVALID_IDP_RESPONSE : ID Token does not contain user's identity in 'sub' claim: {\"aud\":\"client-v\",\"exp\":\"iat+3600\",\"iat\":\"<iat>\",\"iss\":\"https://<issuer-host>/oidc/<run>\"}",
+              "errors": [
+                {
+                  "message": "INVALID_IDP_RESPONSE : ID Token does not contain user's identity in 'sub' claim: {\"aud\":\"client-v\",\"exp\":\"iat+3600\",\"iat\":\"<iat>\",\"iss\":\"https://<issuer-host>/oidc/<run>\"}",
+                  "domain": "global",
+                  "reason": "invalid"
+                }
+              ]
+            }
+          }
+        },
+        "hs256-header": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "INVALID_IDP_RESPONSE : Unable to verify the ID Token signature.",
+              "errors": [
+                {
+                  "message": "INVALID_IDP_RESPONSE : Unable to verify the ID Token signature.",
+                  "domain": "global",
+                  "reason": "invalid"
+                }
+              ]
+            }
+          }
+        },
+        "garbage": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "INVALID_IDP_RESPONSE : Unable to parse the ID Token.",
+              "errors": [
+                {
+                  "message": "INVALID_IDP_RESPONSE : Unable to parse the ID Token.",
+                  "domain": "global",
+                  "reason": "invalid"
+                }
+              ]
+            }
+          }
+        },
+        "missing-token": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "INVALID_CREDENTIAL_OR_PROVIDER_ID : Invalid IdP response/credential: http://localhost?providerId=oidc.fireemu-<run>-v",
+              "errors": [
+                {
+                  "message": "INVALID_CREDENTIAL_OR_PROVIDER_ID : Invalid IdP response/credential: http://localhost?providerId=oidc.fireemu-<run>-v",
+                  "domain": "global",
+                  "reason": "invalid"
+                }
+              ]
+            }
+          }
+        },
+        "mixed-case-provider": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "OPERATION_NOT_ALLOWED : The identity provider configuration is not found.",
+              "errors": [
+                {
+                  "message": "OPERATION_NOT_ALLOWED : The identity provider configuration is not found.",
+                  "domain": "global",
+                  "reason": "invalid"
+                }
+              ]
+            }
+          }
+        },
+        "create-unpublished": {
+          "status": 200,
+          "body": {
+            "name": "projects/<project-number>/oauthIdpConfigs/oidc.fireemu-<run>-u",
+            "clientId": "client-v",
+            "issuer": "https://<issuer-host>/oidc/<run>-unpublished",
+            "enabled": true,
+            "responseType": {
+              "idToken": true
+            }
+          }
+        },
+        "unpublished-issuer": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "INVALID_IDP_RESPONSE : Error connecting to the given credential's issuer.",
+              "errors": [
+                {
+                  "message": "INVALID_IDP_RESPONSE : Error connecting to the given credential's issuer.",
+                  "domain": "global",
+                  "reason": "invalid"
+                }
+              ]
+            }
+          }
+        }
+      }
+    },
+    "auth-federation/pending-token": {
+      "corpusDigest": "4fc6529f665e1ed9f00fadf62b368254fd937b392abe4f7814779f1402a34832",
+      "harnessDigest": "f98c033c465d82b7cad7ed42ab735d48b6e32d837647fb218605690317f1f1f3",
+      "recordedAt": "2026-09-28T01:43:42.183Z",
+      "gitSha": "94d7251e3bfedddc489022f8c358527ef545a0db",
+      "steps": {
+        "create-provider": {
+          "status": 200,
+          "body": {
+            "name": "projects/<project-number>/oauthIdpConfigs/oidc.fireemu-<run>-p",
+            "clientId": "client-p",
+            "issuer": "https://<issuer-host>/oidc/<run>",
+            "enabled": true,
+            "responseType": {
+              "idToken": true
+            }
+          }
+        },
+        "first": {
+          "status": 200,
+          "body": {
+            "federatedId": "oidc.fireemu-<run>-p/sub-pending",
+            "providerId": "oidc.fireemu-<run>-p",
+            "email": "fireemu-fed-<run>-pending@example.com",
+            "emailVerified": true,
+            "localId": "<local-id>",
+            "idToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "typ": "JWT",
+                  "kid": "<kid>"
+                },
+                "claims": {
+                  "iss": "https://securetoken.google.com/<project>",
+                  "aud": "<project>",
+                  "auth_time": "iat+0",
+                  "user_id": "<local-id>",
+                  "sub": "<subject>",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-fed-<run>-pending@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "oidc.fireemu-<run>-p": [
+                        "sub-pending"
+                      ],
+                      "email": [
+                        "fireemu-fed-<run>-pending@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "oidc.fireemu-<run>-p"
+                  }
+                }
+              }
+            },
+            "refreshToken": "<refresh-token>",
+            "expiresIn": "3600",
+            "oauthIdToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "typ": "JWT",
+                  "kid": "<kid>"
+                },
+                "claims": {
+                  "iss": "https://<issuer-host>/oidc/<run>",
+                  "aud": "client-p",
+                  "sub": "<subject>",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-fed-<run>-pending@example.com",
+                  "email_verified": true
+                }
+              }
+            },
+            "rawUserInfo": {
+              "<json>": {
+                "aud": "client-p",
+                "exp": "iat+3600",
+                "iat": "<iat>",
+                "iss": "https://<issuer-host>/oidc/<run>",
+                "sub": "<subject>",
+                "email": "fireemu-fed-<run>-pending@example.com",
+                "email_verified": true
+              }
+            },
+            "isNewUser": true,
+            "kind": "identitytoolkit#VerifyAssertionResponse",
+            "pendingToken": "<pending-token>"
+          }
+        },
+        "pending-token": {
+          "status": 200,
+          "body": {
+            "federatedId": "oidc.fireemu-<run>-p/sub-pending",
+            "providerId": "oidc.fireemu-<run>-p",
+            "email": "fireemu-fed-<run>-pending@example.com",
+            "emailVerified": true,
+            "localId": "<local-id>",
+            "idToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "typ": "JWT",
+                  "kid": "<kid>"
+                },
+                "claims": {
+                  "iss": "https://securetoken.google.com/<project>",
+                  "aud": "<project>",
+                  "auth_time": "iat+0",
+                  "user_id": "<local-id>",
+                  "sub": "<subject>",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-fed-<run>-pending@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "oidc.fireemu-<run>-p": [
+                        "sub-pending"
+                      ],
+                      "email": [
+                        "fireemu-fed-<run>-pending@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "oidc.fireemu-<run>-p"
+                  }
+                }
+              }
+            },
+            "refreshToken": "<refresh-token>",
+            "expiresIn": "3600",
+            "oauthIdToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "typ": "JWT",
+                  "kid": "<kid>"
+                },
+                "claims": {
+                  "iss": "https://<issuer-host>/oidc/<run>",
+                  "aud": "client-p",
+                  "sub": "<subject>",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-fed-<run>-pending@example.com",
+                  "email_verified": true
+                }
+              }
+            },
+            "rawUserInfo": {
+              "<json>": {
+                "aud": "client-p",
+                "exp": "iat+3600",
+                "iat": "<iat>",
+                "iss": "https://<issuer-host>/oidc/<run>",
+                "sub": "<subject>",
+                "email": "fireemu-fed-<run>-pending@example.com",
+                "email_verified": true
+              }
+            },
+            "kind": "identitytoolkit#VerifyAssertionResponse",
+            "pendingToken": "<pending-token>"
+          }
+        },
+        "pending-token-again": {
+          "status": 200,
+          "body": {
+            "federatedId": "oidc.fireemu-<run>-p/sub-pending",
+            "providerId": "oidc.fireemu-<run>-p",
+            "email": "fireemu-fed-<run>-pending@example.com",
+            "emailVerified": true,
+            "localId": "<local-id>",
+            "idToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "typ": "JWT",
+                  "kid": "<kid>"
+                },
+                "claims": {
+                  "iss": "https://securetoken.google.com/<project>",
+                  "aud": "<project>",
+                  "auth_time": "iat+0",
+                  "user_id": "<local-id>",
+                  "sub": "<subject>",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-fed-<run>-pending@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "oidc.fireemu-<run>-p": [
+                        "sub-pending"
+                      ],
+                      "email": [
+                        "fireemu-fed-<run>-pending@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "oidc.fireemu-<run>-p"
+                  }
+                }
+              }
+            },
+            "refreshToken": "<refresh-token>",
+            "expiresIn": "3600",
+            "oauthIdToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "typ": "JWT",
+                  "kid": "<kid>"
+                },
+                "claims": {
+                  "iss": "https://<issuer-host>/oidc/<run>",
+                  "aud": "client-p",
+                  "sub": "<subject>",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-fed-<run>-pending@example.com",
+                  "email_verified": true
+                }
+              }
+            },
+            "rawUserInfo": {
+              "<json>": {
+                "aud": "client-p",
+                "exp": "iat+3600",
+                "iat": "<iat>",
+                "iss": "https://<issuer-host>/oidc/<run>",
+                "sub": "<subject>",
+                "email": "fireemu-fed-<run>-pending@example.com",
+                "email_verified": true
+              }
+            },
+            "kind": "identitytoolkit#VerifyAssertionResponse",
+            "pendingToken": "<pending-token>"
+          }
+        }
+      }
+    },
+    "auth-federation/provider-config/default-supported": {
+      "corpusDigest": "c1702258f573cced689307761af45efcab038b4b739afca2d309e0bc64b0dce1",
+      "harnessDigest": "f98c033c465d82b7cad7ed42ab735d48b6e32d837647fb218605690317f1f1f3",
+      "recordedAt": "2026-09-28T01:43:42.183Z",
+      "gitSha": "94d7251e3bfedddc489022f8c358527ef545a0db",
+      "steps": {
+        "list-supported": {
+          "status": 200,
+          "body": {
+            "defaultSupportedIdps": [
+              {
+                "idpId": "apple.com"
+              },
+              {
+                "idpId": "facebook.com"
+              },
+              {
+                "idpId": "gc.apple.com"
+              },
+              {
+                "idpId": "github.com"
+              },
+              {
+                "idpId": "google.com"
+              },
+              {
+                "idpId": "linkedin.com"
+              },
+              {
+                "idpId": "microsoft.com"
+              },
+              {
+                "idpId": "playgames.google.com"
+              },
+              {
+                "idpId": "twitter.com"
+              },
+              {
+                "idpId": "yahoo.com"
+              }
+            ]
+          }
+        },
+        "list": {
+          "status": 200,
+          "body": {}
+        },
+        "create": {
+          "status": 200,
+          "body": {
+            "name": "projects/<project-number>/defaultSupportedIdpConfigs/facebook.com",
+            "clientId": "fireemu-client",
+            "clientSecret": "fireemu-secret"
+          }
+        },
+        "get": {
+          "status": 200,
+          "body": {
+            "name": "projects/<project-number>/defaultSupportedIdpConfigs/facebook.com",
+            "clientId": "fireemu-client",
+            "clientSecret": "fireemu-secret"
+          }
+        },
+        "patch-enabled": {
+          "status": 200,
+          "body": {
+            "name": "projects/<project-number>/defaultSupportedIdpConfigs/facebook.com",
+            "enabled": true,
+            "clientId": "fireemu-client",
+            "clientSecret": "fireemu-secret"
+          }
+        },
+        "delete": {
+          "status": 200,
+          "body": {}
+        },
+        "get-deleted": {
+          "status": 404,
+          "body": {
+            "error": {
+              "code": 404,
+              "message": "CONFIGURATION_NOT_FOUND",
+              "status": "NOT_FOUND"
+            }
+          }
+        }
+      }
+    },
+    "auth-federation/provider-config/oidc": {
+      "corpusDigest": "9d3ebb5305a6d3165af2c3b8ab1e6cbe07452c4c11a6ca94e1df6f076b556c0f",
+      "harnessDigest": "f98c033c465d82b7cad7ed42ab735d48b6e32d837647fb218605690317f1f1f3",
+      "recordedAt": "2026-09-28T01:43:42.183Z",
+      "gitSha": "94d7251e3bfedddc489022f8c358527ef545a0db",
+      "steps": {
+        "create": {
+          "status": 200,
+          "body": {
+            "name": "projects/<project-number>/oauthIdpConfigs/oidc.fireemu-<run>-a",
+            "clientId": "client-a",
+            "issuer": "https://<issuer-host>/oidc/<run>",
+            "enabled": true,
+            "responseType": {
+              "idToken": true
+            }
+          }
+        },
+        "create-duplicate": {
+          "status": 409,
+          "body": {
+            "error": {
+              "code": 409,
+              "message": "CONFIGURATION_EXISTS : The OAuthIdpConfig already exists with config_id: oidc.fireemu-<run>-a",
+              "status": "ALREADY_EXISTS"
+            }
+          }
+        },
+        "create-without-prefix": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "INVALID_CONFIG_ID : Oauth_idp_config_id must start with 'oidc.' and can only have alphanumeric characters, hyphens, underscores or periods. The part after 'oidc.' must also start with a lowercase letter, end with an alphanumeric character, and have at least 2 characters.",
+              "status": "INVALID_ARGUMENT"
+            }
+          }
+        },
+        "create-without-client": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "MISSING_OAUTH_CLIENT_ID : Client_id in OAuthIdpConfig cannot be empty.",
+              "status": "INVALID_ARGUMENT"
+            }
+          }
+        },
+        "create-both-responses": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "INVALID_CONFIG : response_type should have exactly one of 'idToken' and 'code' being true. Setting both types to be true ('{code: true, idToken: true}') is not yet supported.",
+              "status": "INVALID_ARGUMENT"
+            }
+          }
+        },
+        "create-code-without-secret": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "INVALID_CONFIG : client_secret cannot be empty for code flow.",
+              "status": "INVALID_ARGUMENT"
+            }
+          }
+        },
+        "create-http-issuer": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "INVALID_ISSUER : Issuer in OAuthIdpConfig should be a valid URL.",
+              "status": "INVALID_ARGUMENT"
+            }
+          }
+        },
+        "get": {
+          "status": 200,
+          "body": {
+            "name": "projects/<project-number>/oauthIdpConfigs/oidc.fireemu-<run>-a",
+            "clientId": "client-a",
+            "issuer": "https://<issuer-host>/oidc/<run>",
+            "enabled": true,
+            "responseType": {
+              "idToken": true
+            }
+          }
+        },
+        "list": {
+          "status": 200,
+          "body": {
+            "oauthIdpConfigs": [
+              {
+                "name": "projects/<project-number>/oauthIdpConfigs/oidc.fireemu-<run>-a",
+                "clientId": "client-a",
+                "issuer": "https://<issuer-host>/oidc/<run>",
+                "enabled": true,
+                "responseType": {
+                  "idToken": true
+                }
+              }
+            ]
+          }
+        },
+        "patch-display-name": {
+          "status": 200,
+          "body": {
+            "name": "projects/<project-number>/oauthIdpConfigs/oidc.fireemu-<run>-a",
+            "clientId": "client-a",
+            "issuer": "https://<issuer-host>/oidc/<run>",
+            "displayName": "Run A",
+            "enabled": true,
+            "responseType": {
+              "idToken": true
+            }
+          }
+        },
+        "patch-secret": {
+          "status": 200,
+          "body": {
+            "name": "projects/<project-number>/oauthIdpConfigs/oidc.fireemu-<run>-a",
+            "clientId": "client-a",
+            "issuer": "https://<issuer-host>/oidc/<run>",
+            "displayName": "Run A",
+            "enabled": true,
+            "clientSecret": "fireemu-secret",
+            "responseType": {
+              "idToken": true
+            }
+          }
+        },
+        "get-after-secret": {
+          "status": 200,
+          "body": {
+            "name": "projects/<project-number>/oauthIdpConfigs/oidc.fireemu-<run>-a",
+            "clientId": "client-a",
+            "issuer": "https://<issuer-host>/oidc/<run>",
+            "displayName": "Run A",
+            "enabled": true,
+            "clientSecret": "fireemu-secret",
+            "responseType": {
+              "idToken": true
+            }
+          }
+        },
+        "delete": {
+          "status": 200,
+          "body": {}
+        },
+        "get-deleted": {
+          "status": 404,
+          "body": {
+            "error": {
+              "code": 404,
+              "message": "CONFIGURATION_NOT_FOUND",
+              "status": "NOT_FOUND"
+            }
+          }
+        }
+      }
+    },
+    "auth-federation/provider-config/saml": {
+      "corpusDigest": "9781d74fc233707ccf9c3eb093dd3444899f515e5b93731929c451a5ad4085d8",
+      "harnessDigest": "f98c033c465d82b7cad7ed42ab735d48b6e32d837647fb218605690317f1f1f3",
+      "recordedAt": "2026-09-28T01:43:42.183Z",
+      "gitSha": "94d7251e3bfedddc489022f8c358527ef545a0db",
+      "steps": {
+        "create": {
+          "status": 200,
+          "body": {
+            "name": "projects/<project-number>/inboundSamlConfigs/saml.fireemu-<run>-a",
+            "idpConfig": {
+              "idpEntityId": "https://<project>.web.app/saml/<run>",
+              "ssoUrl": "https://<project>.web.app/saml/<run>/sso",
+              "idpCertificates": [
+                {
+                  "x509Certificate": "<certificate>"
+                }
+              ]
+            },
+            "spConfig": {
+              "spEntityId": "https://<project>.firebaseapp.com/saml/<run>",
+              "callbackUri": "https://<project>.firebaseapp.com/__/auth/handler"
+            },
+            "enabled": true
+          }
+        },
+        "create-bad-certificate": {
+          "status": 200,
+          "body": {
+            "name": "projects/<project-number>/inboundSamlConfigs/saml.fireemu-<run>-b",
+            "idpConfig": {
+              "idpEntityId": "https://<project>.web.app/saml/<run>",
+              "ssoUrl": "https://<project>.web.app/saml/<run>/sso",
+              "idpCertificates": [
+                {
+                  "x509Certificate": "<certificate>"
+                }
+              ]
+            },
+            "spConfig": {
+              "spEntityId": "https://<project>.firebaseapp.com/saml/<run>",
+              "callbackUri": "https://<project>.firebaseapp.com/__/auth/handler"
+            }
+          }
+        },
+        "get": {
+          "status": 200,
+          "body": {
+            "name": "projects/<project-number>/inboundSamlConfigs/saml.fireemu-<run>-a",
+            "idpConfig": {
+              "idpEntityId": "https://<project>.web.app/saml/<run>",
+              "ssoUrl": "https://<project>.web.app/saml/<run>/sso",
+              "idpCertificates": [
+                {
+                  "x509Certificate": "<certificate>"
+                }
+              ]
+            },
+            "spConfig": {
+              "spEntityId": "https://<project>.firebaseapp.com/saml/<run>",
+              "callbackUri": "https://<project>.firebaseapp.com/__/auth/handler"
+            },
+            "enabled": true
+          }
+        },
+        "patch-sign-request": {
+          "status": 200,
+          "body": {
+            "name": "projects/<project-number>/inboundSamlConfigs/saml.fireemu-<run>-a",
+            "idpConfig": {
+              "idpEntityId": "https://<project>.web.app/saml/<run>",
+              "ssoUrl": "https://<project>.web.app/saml/<run>/sso",
+              "idpCertificates": [
+                {
+                  "x509Certificate": "<certificate>"
+                }
+              ],
+              "signRequest": true
+            },
+            "spConfig": {
+              "spEntityId": "https://<project>.firebaseapp.com/saml/<run>",
+              "callbackUri": "https://<project>.firebaseapp.com/__/auth/handler",
+              "spCertificates": [
+                {
+                  "x509Certificate": "<certificate>",
+                  "expiresAt": "2031-09-27T01:43:59.732Z"
+                }
+              ]
+            },
+            "enabled": true
+          }
+        },
+        "get-after-sign-request": {
+          "status": 200,
+          "body": {
+            "name": "projects/<project-number>/inboundSamlConfigs/saml.fireemu-<run>-a",
+            "idpConfig": {
+              "idpEntityId": "https://<project>.web.app/saml/<run>",
+              "ssoUrl": "https://<project>.web.app/saml/<run>/sso",
+              "idpCertificates": [
+                {
+                  "x509Certificate": "<certificate>"
+                }
+              ],
+              "signRequest": true
+            },
+            "spConfig": {
+              "spEntityId": "https://<project>.firebaseapp.com/saml/<run>",
+              "callbackUri": "https://<project>.firebaseapp.com/__/auth/handler",
+              "spCertificates": [
+                {
+                  "x509Certificate": "<certificate>",
+                  "expiresAt": "2031-09-27T01:43:59.732Z"
+                }
+              ]
+            },
+            "enabled": true
+          }
+        },
+        "delete": {
+          "status": 200,
+          "body": {}
+        }
+      }
+    },
+    "auth-federation/provider-enablement": {
+      "corpusDigest": "342bb95a18c0370c359e61946b59962fe45077833478e960086d1c8823e25f4a",
+      "harnessDigest": "f98c033c465d82b7cad7ed42ab735d48b6e32d837647fb218605690317f1f1f3",
+      "recordedAt": "2026-09-28T01:43:42.183Z",
+      "gitSha": "94d7251e3bfedddc489022f8c358527ef545a0db",
+      "steps": {
+        "create-provider": {
+          "status": 200,
+          "body": {
+            "name": "projects/<project-number>/oauthIdpConfigs/oidc.fireemu-<run>-e",
+            "clientId": "client-e",
+            "issuer": "https://<issuer-host>/oidc/<run>",
+            "enabled": true,
+            "responseType": {
+              "idToken": true
+            }
+          }
+        },
+        "enabled": {
+          "status": 200,
+          "body": {
+            "federatedId": "oidc.fireemu-<run>-e/sub-enabled",
+            "providerId": "oidc.fireemu-<run>-e",
+            "emailVerified": false,
+            "localId": "<local-id>",
+            "idToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "typ": "JWT",
+                  "kid": "<kid>"
+                },
+                "claims": {
+                  "iss": "https://securetoken.google.com/<project>",
+                  "aud": "<project>",
+                  "auth_time": "iat+0",
+                  "user_id": "<local-id>",
+                  "sub": "<subject>",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "firebase": {
+                    "identities": {
+                      "oidc.fireemu-<run>-e": [
+                        "sub-enabled"
+                      ]
+                    },
+                    "sign_in_provider": "oidc.fireemu-<run>-e"
+                  }
+                }
+              }
+            },
+            "refreshToken": "<refresh-token>",
+            "expiresIn": "3600",
+            "oauthIdToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "typ": "JWT",
+                  "kid": "<kid>"
+                },
+                "claims": {
+                  "iss": "https://<issuer-host>/oidc/<run>",
+                  "aud": "client-e",
+                  "sub": "<subject>",
+                  "iat": "<iat>",
+                  "exp": "iat+3600"
+                }
+              }
+            },
+            "rawUserInfo": {
+              "<json>": {
+                "aud": "client-e",
+                "exp": "iat+3600",
+                "iat": "<iat>",
+                "iss": "https://<issuer-host>/oidc/<run>",
+                "sub": "<subject>"
+              }
+            },
+            "isNewUser": true,
+            "kind": "identitytoolkit#VerifyAssertionResponse",
+            "pendingToken": "<pending-token>"
+          }
+        },
+        "disable": {
+          "status": 200,
+          "body": {
+            "name": "projects/<project-number>/oauthIdpConfigs/oidc.fireemu-<run>-e",
+            "clientId": "client-e",
+            "issuer": "https://<issuer-host>/oidc/<run>",
+            "responseType": {
+              "idToken": true
+            }
+          }
+        },
+        "disabled": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "OPERATION_NOT_ALLOWED : The identity provider configuration is disabled.",
+              "errors": [
+                {
+                  "message": "OPERATION_NOT_ALLOWED : The identity provider configuration is disabled.",
+                  "domain": "global",
+                  "reason": "invalid"
+                }
+              ]
+            }
+          }
+        }
+      }
+    },
+    "auth-federation/request-uri": {
+      "corpusDigest": "e4537f522670acdbfb4c159a9cbe23f31860e7fac544da515202a291c2f94c0f",
+      "harnessDigest": "f98c033c465d82b7cad7ed42ab735d48b6e32d837647fb218605690317f1f1f3",
+      "recordedAt": "2026-09-28T01:43:42.183Z",
+      "gitSha": "94d7251e3bfedddc489022f8c358527ef545a0db",
+      "steps": {
+        "create-provider": {
+          "status": 200,
+          "body": {
+            "name": "projects/<project-number>/oauthIdpConfigs/oidc.fireemu-<run>-w",
+            "clientId": "client-w",
+            "issuer": "https://<issuer-host>/oidc/<run>",
+            "enabled": true,
+            "responseType": {
+              "idToken": true
+            }
+          }
+        },
+        "create-auth-uri": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#CreateAuthUriResponse",
+            "authUri": "https://<issuer-host>/oidc/<run>/authorize?response_type=id_token&client_id=client-w&redirect_uri=https://<project>.firebaseapp.com/__/auth/handler&state=<state>&scope=openid&nonce=<nonce:hex64>",
+            "providerId": "oidc.fireemu-<run>-w",
+            "sessionId": "<session-id>"
+          }
+        },
+        "with-session": {
+          "status": 200,
+          "body": {
+            "federatedId": "oidc.fireemu-<run>-w/sub-session",
+            "providerId": "oidc.fireemu-<run>-w",
+            "emailVerified": false,
+            "localId": "<local-id>",
+            "idToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "typ": "JWT",
+                  "kid": "<kid>"
+                },
+                "claims": {
+                  "iss": "https://securetoken.google.com/<project>",
+                  "aud": "<project>",
+                  "auth_time": "iat+0",
+                  "user_id": "<local-id>",
+                  "sub": "<subject>",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "firebase": {
+                    "identities": {
+                      "oidc.fireemu-<run>-w": [
+                        "sub-session"
+                      ]
+                    },
+                    "sign_in_provider": "oidc.fireemu-<run>-w"
+                  }
+                }
+              }
+            },
+            "refreshToken": "<refresh-token>",
+            "expiresIn": "3600",
+            "oauthIdToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "typ": "JWT",
+                  "kid": "<kid>"
+                },
+                "claims": {
+                  "iss": "https://<issuer-host>/oidc/<run>",
+                  "aud": "client-w",
+                  "sub": "<subject>",
+                  "iat": "<iat>",
+                  "exp": "iat+3600"
+                }
+              }
+            },
+            "rawUserInfo": {
+              "<json>": {
+                "aud": "client-w",
+                "exp": "iat+3600",
+                "iat": "<iat>",
+                "iss": "https://<issuer-host>/oidc/<run>",
+                "sub": "<subject>"
+              }
+            },
+            "isNewUser": true,
+            "kind": "identitytoolkit#VerifyAssertionResponse",
+            "pendingToken": "<pending-token>"
+          }
+        },
+        "with-wrong-session": {
+          "status": 200,
+          "body": {
+            "federatedId": "oidc.fireemu-<run>-w/sub-session",
+            "providerId": "oidc.fireemu-<run>-w",
+            "emailVerified": false,
+            "localId": "<local-id>",
+            "idToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "typ": "JWT",
+                  "kid": "<kid>"
+                },
+                "claims": {
+                  "iss": "https://securetoken.google.com/<project>",
+                  "aud": "<project>",
+                  "auth_time": "iat+0",
+                  "user_id": "<local-id>",
+                  "sub": "<subject>",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "firebase": {
+                    "identities": {
+                      "oidc.fireemu-<run>-w": [
+                        "sub-session"
+                      ]
+                    },
+                    "sign_in_provider": "oidc.fireemu-<run>-w"
+                  }
+                }
+              }
+            },
+            "refreshToken": "<refresh-token>",
+            "expiresIn": "3600",
+            "oauthIdToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "typ": "JWT",
+                  "kid": "<kid>"
+                },
+                "claims": {
+                  "iss": "https://<issuer-host>/oidc/<run>",
+                  "aud": "client-w",
+                  "sub": "<subject>",
+                  "iat": "<iat>",
+                  "exp": "iat+3600"
+                }
+              }
+            },
+            "rawUserInfo": {
+              "<json>": {
+                "aud": "client-w",
+                "exp": "iat+3600",
+                "iat": "<iat>",
+                "iss": "https://<issuer-host>/oidc/<run>",
+                "sub": "<subject>"
+              }
+            },
+            "kind": "identitytoolkit#VerifyAssertionResponse",
+            "pendingToken": "<pending-token>"
+          }
+        },
+        "with-other-request-uri": {
+          "status": 200,
+          "body": {
+            "federatedId": "oidc.fireemu-<run>-w/sub-session",
+            "providerId": "oidc.fireemu-<run>-w",
+            "emailVerified": false,
+            "localId": "<local-id>",
+            "idToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "typ": "JWT",
+                  "kid": "<kid>"
+                },
+                "claims": {
+                  "iss": "https://securetoken.google.com/<project>",
+                  "aud": "<project>",
+                  "auth_time": "iat+0",
+                  "user_id": "<local-id>",
+                  "sub": "<subject>",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "firebase": {
+                    "identities": {
+                      "oidc.fireemu-<run>-w": [
+                        "sub-session"
+                      ]
+                    },
+                    "sign_in_provider": "oidc.fireemu-<run>-w"
+                  }
+                }
+              }
+            },
+            "refreshToken": "<refresh-token>",
+            "expiresIn": "3600",
+            "oauthIdToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "typ": "JWT",
+                  "kid": "<kid>"
+                },
+                "claims": {
+                  "iss": "https://<issuer-host>/oidc/<run>",
+                  "aud": "client-w",
+                  "sub": "<subject>",
+                  "iat": "<iat>",
+                  "exp": "iat+3600"
+                }
+              }
+            },
+            "rawUserInfo": {
+              "<json>": {
+                "aud": "client-w",
+                "exp": "iat+3600",
+                "iat": "<iat>",
+                "iss": "https://<issuer-host>/oidc/<run>",
+                "sub": "<subject>"
+              }
+            },
+            "kind": "identitytoolkit#VerifyAssertionResponse",
+            "pendingToken": "<pending-token>"
+          }
+        },
+        "without-session": {
+          "status": 200,
+          "body": {
+            "federatedId": "oidc.fireemu-<run>-w/sub-session",
+            "providerId": "oidc.fireemu-<run>-w",
+            "emailVerified": false,
+            "localId": "<local-id>",
+            "idToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "typ": "JWT",
+                  "kid": "<kid>"
+                },
+                "claims": {
+                  "iss": "https://securetoken.google.com/<project>",
+                  "aud": "<project>",
+                  "auth_time": "iat+0",
+                  "user_id": "<local-id>",
+                  "sub": "<subject>",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "firebase": {
+                    "identities": {
+                      "oidc.fireemu-<run>-w": [
+                        "sub-session"
+                      ]
+                    },
+                    "sign_in_provider": "oidc.fireemu-<run>-w"
+                  }
+                }
+              }
+            },
+            "refreshToken": "<refresh-token>",
+            "expiresIn": "3600",
+            "oauthIdToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "typ": "JWT",
+                  "kid": "<kid>"
+                },
+                "claims": {
+                  "iss": "https://<issuer-host>/oidc/<run>",
+                  "aud": "client-w",
+                  "sub": "<subject>",
+                  "iat": "<iat>",
+                  "exp": "iat+3600"
+                }
+              }
+            },
+            "rawUserInfo": {
+              "<json>": {
+                "aud": "client-w",
+                "exp": "iat+3600",
+                "iat": "<iat>",
+                "iss": "https://<issuer-host>/oidc/<run>",
+                "sub": "<subject>"
+              }
+            },
+            "kind": "identitytoolkit#VerifyAssertionResponse",
+            "pendingToken": "<pending-token>"
+          }
+        }
+      }
+    },
+    "auth-federation/third-party-refusals": {
+      "corpusDigest": "29c9fe5573e0d0924e5272855270eb26d9acf6faf60c3f5c71dea11632ff2019",
+      "harnessDigest": "f98c033c465d82b7cad7ed42ab735d48b6e32d837647fb218605690317f1f1f3",
+      "recordedAt": "2026-09-28T01:43:42.183Z",
+      "gitSha": "94d7251e3bfedddc489022f8c358527ef545a0db",
+      "steps": {
+        "google-garbage-id-token": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "OPERATION_NOT_ALLOWED : The identity provider configuration is not found.",
+              "errors": [
+                {
+                  "message": "OPERATION_NOT_ALLOWED : The identity provider configuration is not found.",
+                  "domain": "global",
+                  "reason": "invalid"
+                }
+              ]
+            }
+          }
+        },
+        "facebook-garbage-access-token": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "OPERATION_NOT_ALLOWED : The identity provider configuration is not found.",
+              "errors": [
+                {
+                  "message": "OPERATION_NOT_ALLOWED : The identity provider configuration is not found.",
+                  "domain": "global",
+                  "reason": "invalid"
+                }
+              ]
+            }
+          }
+        },
+        "unconfigured-oidc": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "OPERATION_NOT_ALLOWED : The identity provider configuration is not found.",
+              "errors": [
+                {
+                  "message": "OPERATION_NOT_ALLOWED : The identity provider configuration is not found.",
+                  "domain": "global",
+                  "reason": "invalid"
+                }
+              ]
+            }
+          }
+        },
+        "create-disabled": {
+          "status": 200,
+          "body": {
+            "name": "projects/<project-number>/oauthIdpConfigs/oidc.fireemu-<run>-off",
+            "clientId": "client-off",
+            "issuer": "https://<issuer-host>/oidc/<run>",
+            "responseType": {
+              "idToken": true
+            }
+          }
+        },
+        "disabled-oidc": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "OPERATION_NOT_ALLOWED : The identity provider configuration is disabled.",
+              "errors": [
+                {
+                  "message": "OPERATION_NOT_ALLOWED : The identity provider configuration is disabled.",
+                  "domain": "global",
+                  "reason": "invalid"
+                }
+              ]
+            }
+          }
+        },
+        "create-auth-uri-disabled": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "OPERATION_NOT_ALLOWED : The identity provider configuration is disabled.",
+              "errors": [
+                {
+                  "message": "OPERATION_NOT_ALLOWED : The identity provider configuration is disabled.",
+                  "domain": "global",
+                  "reason": "invalid"
+                }
+              ]
+            }
+          }
+        },
+        "delete-disabled": {
+          "status": 200,
+          "body": {}
+        }
+      }
+    }
+  }
+}

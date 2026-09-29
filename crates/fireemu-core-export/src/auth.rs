@@ -89,7 +89,10 @@ const KNOWN_PASSWORD_POLICY_MEMBERS: [&str; 9] = [
 const KNOWN_AUTH_SETTINGS_MEMBERS: [&str; 4] = ["version", "projectId", "project", "namespaces"];
 const KNOWN_AUTH_SETTINGS_NAMESPACE_MEMBERS: [&str; 4] =
     ["tenantId", "settings", "metadata", "configExplicit"];
-const KNOWN_AUTH_SETTINGS_RECORD_MEMBERS: [&str; 3] = ["config", "quota", "blocking"];
+const KNOWN_AUTH_SETTINGS_RECORD_MEMBERS: [&str; 4] =
+    ["config", "quota", "blocking", "configMembers"];
+/// The most written config members one namespace record may carry.
+const MAX_CONFIG_MEMBERS: usize = 32;
 const KNOWN_TENANT_METADATA_MEMBERS: [&str; 8] = [
     "displayName",
     "allowPasswordSignup",
@@ -302,6 +305,10 @@ pub struct AuthSettingsRecord {
     /// Logical project-level Blocking Auth selection. Runner addresses and secrets are never
     /// part of an export.
     pub blocking: Option<BlockingAuthSettingsRecord>,
+    /// Written Admin config members (`multiTenant`, `notification`, ...) as `(member, JSON
+    /// text)` in member order; empty when none was written. The importer validates each as a
+    /// config write would before it is installed.
+    pub config_members: Vec<(String, String)>,
 }
 
 /// One logical Blocking Auth trigger selection, resolved again against an owned Functions
@@ -603,10 +610,30 @@ fn parse_auth_settings_record(
             &format!("{subject}.blocking"),
         )?),
     };
+    let config_members = match value.get("configMembers") {
+        None | Some(JsonValue::Null) => Vec::new(),
+        Some(JsonValue::Object(members)) => {
+            if members.len() > MAX_CONFIG_MEMBERS {
+                return refuse(format!("{subject}.configMembers has too many members"));
+            }
+            let mut out = Vec::with_capacity(members.len());
+            for (member, value) in members {
+                if member.is_empty() || !member.bytes().all(|b| b.is_ascii_alphabetic()) {
+                    return refuse(format!(
+                        "{subject}.configMembers has an invalid member name {member:?}"
+                    ));
+                }
+                out.push((member.clone(), Json::from_value(value).to_pretty()));
+            }
+            out
+        }
+        Some(_) => return refuse(format!("{subject}.configMembers is not an object")),
+    };
     Ok(AuthSettingsRecord {
         config,
         quota,
         blocking,
+        config_members,
     })
 }
 
@@ -810,6 +837,14 @@ fn write_auth_settings_record(settings: &AuthSettingsRecord) -> Json {
         "blocking",
         settings.blocking.as_ref().map(write_blocking_settings),
     );
+    if !settings.config_members.is_empty() {
+        let mut members = Json::object();
+        for (member, text) in &settings.config_members {
+            let value = parse(text).expect("a written config member is JSON text");
+            members.insert(member.clone(), Json::from_value(&value));
+        }
+        doc.insert("configMembers", members);
+    }
     doc
 }
 
@@ -2004,6 +2039,7 @@ mod tests {
                         refresh_token: false,
                     }),
                 }),
+                config_members: Vec::new(),
             },
             namespaces: vec![AuthSettingsNamespace {
                 tenant_id: Some("tenant-a".to_owned()),
@@ -2016,6 +2052,7 @@ mod tests {
                     }),
                     quota: None,
                     blocking: None,
+                    config_members: Vec::new(),
                 },
                 config_is_explicit: true,
                 metadata: Some(TenantMetadataRecord {
@@ -2084,6 +2121,86 @@ mod tests {
         assert!(encoded.contains("\"enableEmailLinkSignin\": false"));
         assert!(encoded.contains("\"disableAuth\": false"));
         assert_eq!(AuthSettings::parse(&encoded).unwrap(), parsed);
+    }
+
+    /// The project's written config members travel in the settings sidecar as JSON values
+    /// (issue strict-multi-tenancy-switch-lost-on-export-import).
+    #[test]
+    fn written_config_members_round_trip_and_bad_ones_are_refused() {
+        let settings = r#"{
+          "version": 2,
+          "projectId": "demo",
+          "project": {
+            "configMembers": {
+              "multiTenant": {"allowTenants": true},
+              "mobileLinksConfig": {"domain": "HOSTING_DOMAIN"}
+            }
+          },
+          "namespaces": []
+        }"#;
+        let parsed = AuthSettings::parse(settings).expect("config members parse");
+        let members: Vec<(&str, fireemu_core_types::json::JsonValue)> = parsed
+            .project
+            .config_members
+            .iter()
+            .map(|(member, text)| {
+                (
+                    member.as_str(),
+                    fireemu_core_types::json::parse(text).expect("member text is JSON"),
+                )
+            })
+            .collect();
+        assert_eq!(
+            members
+                .iter()
+                .map(|(member, _)| *member)
+                .collect::<Vec<_>>(),
+            ["mobileLinksConfig", "multiTenant"]
+        );
+        assert_eq!(
+            members[1]
+                .1
+                .get("allowTenants")
+                .and_then(fireemu_core_types::json::JsonValue::as_bool),
+            Some(true)
+        );
+        let encoded = parsed.to_json();
+        assert!(encoded.contains("\"configMembers\""), "{encoded}");
+        assert_eq!(AuthSettings::parse(&encoded).unwrap(), parsed);
+        // No written member: no configMembers object at all.
+        let mut none = parsed.clone();
+        none.project.config_members.clear();
+        assert!(!none.to_json().contains("configMembers"));
+        for bad in [
+            r#""configMembers": []"#,
+            r#""configMembers": {"_allowTenants": true}"#,
+            r#""configMembers": {"": {}}"#,
+            r#""configMembers": {"multi.Tenant": {}}"#,
+        ] {
+            let text = format!(
+                r#"{{"version": 2, "projectId": "demo", "project": {{{bad}}}, "namespaces": []}}"#
+            );
+            assert!(AuthSettings::parse(&text).is_err(), "{bad}");
+        }
+        // At most MAX_CONFIG_MEMBERS members: the limit parses, one more is refused.
+        let with = |count: usize| {
+            let many = (0..count)
+                .map(|i| format!(r#""member{}": {{}}"#, "x".repeat(i + 1)))
+                .collect::<Vec<_>>()
+                .join(",");
+            format!(
+                r#"{{"version": 2, "projectId": "demo", "project": {{"configMembers": {{{many}}}}}, "namespaces": []}}"#
+            )
+        };
+        assert_eq!(
+            AuthSettings::parse(&with(super::MAX_CONFIG_MEMBERS))
+                .expect("the limit parses")
+                .project
+                .config_members
+                .len(),
+            super::MAX_CONFIG_MEMBERS
+        );
+        assert!(AuthSettings::parse(&with(super::MAX_CONFIG_MEMBERS + 1)).is_err());
     }
 
     #[test]
@@ -2178,6 +2295,7 @@ mod tests {
                     },
                     forwarding: None,
                 }),
+                config_members: Vec::new(),
             },
             namespaces: Vec::new(),
         };

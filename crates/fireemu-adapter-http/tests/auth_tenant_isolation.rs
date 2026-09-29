@@ -62,6 +62,7 @@ fn emulator_state() -> AuthState {
         client_api_key: ClientApiKeyPolicy::Optional,
         fake_custom_token_expiry: FakeCustomTokenExpiry::Ignore,
         custom_token_trust: None,
+        idp_assertions: fireemu_adapter_http::identity_toolkit::IdpAssertionPolicy::Fixture,
         app_check: None,
         app_check_policy: None,
         tenancy: None,
@@ -76,6 +77,7 @@ fn strict_state() -> AuthState {
         client_api_key: ClientApiKeyPolicy::Required,
         fake_custom_token_expiry: FakeCustomTokenExpiry::Reject,
         custom_token_trust: None,
+        idp_assertions: fireemu_adapter_http::identity_toolkit::IdpAssertionPolicy::Fixture,
         ..emulator_state()
     }
 }
@@ -90,6 +92,9 @@ fn profiles() -> Vec<(&'static str, AuthState, Arc<AuthRegistry>)> {
                 registry.ensure_tenant("demo-app", tenant).unwrap();
             }
             state.registry = Some(registry.clone());
+            if label == "strict" {
+                enable_tenants(&state, "demo-app");
+            }
             (label, state, registry)
         })
         .collect()
@@ -127,6 +132,17 @@ fn with_client_key(state: &AuthState, path: &str, key: &str) -> String {
 fn admin(state: &AuthState, method: &str, path: &str, body: &Value) -> (u16, Value) {
     let r = handle_with(state, method, path, &owner(), body);
     (r.status, r.body)
+}
+
+fn enable_tenants(state: &AuthState, project: &str) {
+    let path = format!("/identitytoolkit.googleapis.com/admin/v2/projects/{project}/config?updateMask=multiTenant.allowTenants");
+    let (status, body) = admin(
+        state,
+        "PATCH",
+        &path,
+        &json!({"multiTenant": {"allowTenants": true}}),
+    );
+    assert_eq!(status, 200, "{project}: {body}");
 }
 
 fn claims(id_token: &str) -> Value {
@@ -360,7 +376,14 @@ fn a_tenant_id_token_is_refused_on_every_other_tenant_route_without_mutation() {
                 // The class depends on which selector picked the store: the API key routes
                 // the request into tenant B, whose verifier rejects the tenant-A token; the
                 // bare body or query tenant is compared with the token's tenant first.
+                // Strict answers a v1 account call as production does: the token's tenant is
+                // compared with the named one first (AUTH-TENANT-BLOCKING recording 2026-09-27,
+                // selection#lookup-tenant-b).
+                // The emulator profile answers a v1 account call as the official Auth emulator
+                // does (firebase-tools 15.28.2 `toExegesisController`): a body tenant other than
+                // the token's is TENANT_ID_MISMATCH whatever the API key.
                 let expected = match selector {
+                    Selector::KeyAndBody if route.contains("/v1/") => "TENANT_ID_MISMATCH",
                     Selector::KeyAndBody => "INVALID_ID_TOKEN",
                     Selector::BodyOnly | Selector::QueryOnly => "TENANT_ID_MISMATCH",
                 };
@@ -469,6 +492,15 @@ fn a_tenant_refresh_token_is_refused_by_the_other_tenant_without_rotating_the_se
                     destination,
                     json!({"grant_type": "refresh_token", "refresh_token": refresh}),
                 );
+                // Under strict a refresh ignores a body tenantId, as production does
+                // (selection#refresh-a1-tenant-b): the session stays in its own tenant.
+                if profile == "strict" && selector == Selector::KeyAndBody {
+                    assert_eq!(status, 200, "{profile} {destination}: {refused}");
+                    let tenant =
+                        claims(refused["id_token"].as_str().unwrap())["firebase"]["tenant"].clone();
+                    assert_ne!(tenant, json!(destination), "{refused}");
+                    continue;
+                }
                 assert_eq!(
                     status, 400,
                     "{profile} {destination} {selector:?}: {refused}"
@@ -598,6 +630,11 @@ fn sdk_shaped_refresh_keeps_project_refresh_and_contradicting_selectors_unchange
                 }
                 let response = handle(&state, "POST", &format!("{SECURE_TOKEN}{query}"), &body);
                 let (status, refused) = (response.status, response.body);
+                // Under strict a refresh ignores a body tenantId (selection#refresh-a1-tenant-b).
+                if profile == "strict" && query == format!("?key={KEY}") && body_tenant.is_some() {
+                    assert_eq!(status, 200, "{profile} {query}: {refused}");
+                    continue;
+                }
                 if state.client_api_key == ClientApiKeyPolicy::Required && !query.contains("key=") {
                     // Production refuses a keyless client call before reading any selector.
                     assert_eq!(status, 403, "{profile} {query}: {refused}");
@@ -659,6 +696,9 @@ fn sdk_shaped_refresh_of_a_tenant_token_from_another_project_is_refused() {
                 project,
                 AuthStore::new(project, SplitMix64::new(11), TotpPolicy::default()),
             ));
+            if profile == "strict" {
+                enable_tenants(&state, project);
+            }
             registry.ensure_tenant(project, "customer-a").unwrap();
             tenancy.register(project, &[], &[key.to_owned()]).unwrap();
         }
@@ -716,6 +756,13 @@ fn sdk_shaped_refresh_of_a_tenant_token_from_another_project_is_refused() {
 #[allow(clippy::too_many_lines)]
 fn a_tenant_mfa_pending_credential_is_refused_by_the_other_tenant() {
     for (profile, state, _registry) in profiles() {
+        // Under strict a tenant asks for a second factor only while its own MFA config enables
+        // it (AUTH-TENANT-BLOCKING recording 2026-09-27, mfa#second-factor-m1).
+        if profile == "strict" {
+            for tenant in [TENANT_A, TENANT_B] {
+                enable_tenant_sms_mfa(&state, tenant);
+            }
+        }
         let (status, created) = admin(
             &state,
             "POST",
@@ -766,9 +813,15 @@ fn a_tenant_mfa_pending_credential_is_refused_by_the_other_tenant() {
                 start_body.clone(),
             );
             assert_eq!(status, 400, "{profile} start {selector:?}: {refused}");
-            assert_eq!(
-                class(&refused),
-                "INVALID_MFA_PENDING_CREDENTIAL",
+            // Strict refuses with production's pending-credential rules (the project's,
+            // AUTH-MFA); the exact class for this cross-tenant case was not recorded.
+            let expected: &[&str] = if profile == "strict" {
+                &["INVALID_PENDING_TOKEN", "INVALID_MFA_PENDING_CREDENTIAL"]
+            } else {
+                &["INVALID_MFA_PENDING_CREDENTIAL"]
+            };
+            assert!(
+                expected.contains(&class(&refused).as_str()),
                 "{profile} start {selector:?}: {refused}"
             );
         }
@@ -819,11 +872,23 @@ fn a_tenant_mfa_pending_credential_is_refused_by_the_other_tenant() {
                     status, 400,
                     "{profile} finalize {shape} {selector:?}: {refused}"
                 );
-                assert_eq!(
-                    class(&refused),
-                    expected,
-                    "{profile} finalize {shape} {selector:?}: {refused}"
-                );
+                if profile == "strict" {
+                    assert!(
+                        [
+                            "INVALID_SESSION_INFO",
+                            "INVALID_PENDING_TOKEN",
+                            "INVALID_MFA_PENDING_CREDENTIAL"
+                        ]
+                        .contains(&class(&refused).as_str()),
+                        "{profile} finalize {shape} {selector:?}: {refused}"
+                    );
+                } else {
+                    assert_eq!(
+                        class(&refused),
+                        expected,
+                        "{profile} finalize {shape} {selector:?}: {refused}"
+                    );
+                }
             }
         }
         // The refused finalize consumed neither the pending sign-in nor the code.
@@ -1082,20 +1147,27 @@ fn project_level_admin_lookup_does_not_find_tenant_users() {
         assert_eq!(found["users"][0]["localId"], "shared-uid");
         assert_eq!(found["users"][0]["tenantId"], TENANT_A);
 
-        // The project-level lookup route never accepts a body tenant as a redirection into a
-        // tenant namespace: the request is refused rather than silently rerouted.
+        // The project-level lookup route takes a body tenant as its scope under strict, as
+        // production does (AUTH-TENANT-BLOCKING recording 2026-09-27,
+        // selection#admin-lookup-a1-body-tenant); the emulator profile refuses it rather
+        // than rerouting.
         let (status, refused) = admin(
             &state,
             "POST",
             &format!("{V1}/projects/demo-app/accounts:lookup"),
             &json!({"localId": ["shared-uid"], "tenantId": TENANT_A}),
         );
-        assert_eq!(status, 400, "{profile}: {refused}");
-        assert_eq!(
-            class(&refused),
-            "TENANT_ID_MISMATCH",
-            "{profile}: {refused}"
-        );
+        if profile == "strict" {
+            assert_eq!(status, 200, "{profile}: {refused}");
+            assert_eq!(refused["users"][0]["tenantId"], TENANT_A, "{refused}");
+        } else {
+            assert_eq!(status, 400, "{profile}: {refused}");
+            assert_eq!(
+                class(&refused),
+                "TENANT_ID_MISMATCH",
+                "{profile}: {refused}"
+            );
+        }
 
         // Listing and query are project-scoped as well.
         let listed = snapshot(&state, None);
@@ -1188,19 +1260,23 @@ fn explicit_tenant_creation_defaults_sign_in_methods_off_until_patched() {
     for (profile, state, _registry) in profiles() {
         let created = create_tenant(&state, &json!({"displayName": "Minimal"}));
         let tenant = tenant_id_of(&created);
-        assert_eq!(
-            created["allowPasswordSignup"], false,
+        // Production leaves out a false switch.
+        assert!(
+            created["allowPasswordSignup"].is_null(),
             "{profile}: {created}"
         );
-        assert_eq!(
-            created["enableEmailLinkSignin"], false,
+        // Production leaves out a false switch.
+        assert!(
+            created["enableEmailLinkSignin"].is_null(),
             "{profile}: {created}"
         );
-        assert_eq!(
-            created["enableAnonymousUser"], false,
+        // Production leaves out a false switch.
+        assert!(
+            created["enableAnonymousUser"].is_null(),
             "{profile}: {created}"
         );
-        assert_eq!(created["disableAuth"], false, "{profile}: {created}");
+        // Production leaves out a false switch.
+        assert!(created["disableAuth"].is_null(), "{profile}: {created}");
 
         let password = json!({"email": "off@example.com", "password": "hunter22"});
         assert_eq!(
@@ -1210,7 +1286,17 @@ fn explicit_tenant_creation_defaults_sign_in_methods_off_until_patched() {
         );
         assert_eq!(
             sign_up_status(&state, &tenant, json!({})),
-            (400, "OPERATION_NOT_ALLOWED".to_owned()),
+            // Production refuses an anonymous sign-up while anonymous sign-in is off as
+            // ADMIN_ONLY_OPERATION (settings#anonymous-off-sign-up).
+            (
+                400,
+                if profile == "strict" {
+                    "ADMIN_ONLY_OPERATION"
+                } else {
+                    "OPERATION_NOT_ALLOWED"
+                }
+                .to_owned()
+            ),
             "{profile}"
         );
         let (status, refused) = client(
@@ -1266,9 +1352,18 @@ fn explicit_tenant_creation_defaults_sign_in_methods_off_until_patched() {
 /// `mfaConfig` is a constant `DISABLED` projection that refuses PATCH. Identity Platform's
 /// `Tenant.inheritance` covers only `emailSendingConfig`, so the copied and propagated
 /// fields are spec-derived hypotheses until observed.
+/// A tenant's clients obey the tenant's own settings, and a later project change reaches no
+/// tenant's password policy or client permissions (AUTH-TENANT-BLOCKING sandbox recording
+/// 2026-09-27, `atb/tenant/inheritance` and `atb/tenant/settings`). The strict profile's tenant
+/// takes none of the project's settings, its email privacy included, as production's does; the
+/// emulator profile's reads the project's email privacy, as the official emulator's does
+/// (round-2 integration review M1, 2026-09-29;
+/// `an_emulator_tenant_reads_the_projects_duplicate_email_and_privacy_settings_live`). This
+/// replaces fireemu's earlier model, in which a tenant copied the project's privacy and client
+/// permissions until it overrode them.
 #[test]
 #[allow(clippy::too_many_lines)]
-fn tenant_settings_inherit_at_creation_and_tenant_patches_override_them() {
+fn tenants_obey_their_own_settings_and_take_the_projects_privacy_as_their_profile_says() {
     for (profile, state, registry) in profiles() {
         // Project: an enforced 8-character minimum and email enumeration protection.
         let (status, project) = admin(
@@ -1284,10 +1379,6 @@ fn tenant_settings_inherit_at_creation_and_tenant_patches_override_them() {
             }),
         );
         assert_eq!(status, 200, "{profile}: {project}");
-        assert_eq!(
-            project["emailPrivacyConfig"]["enableImprovedEmailPrivacy"],
-            true
-        );
 
         let enabled = json!({
             "allowPasswordSignup": true,
@@ -1302,30 +1393,24 @@ fn tenant_settings_inherit_at_creation_and_tenant_patches_override_them() {
         untouched_body["displayName"] = json!("Untouched");
         let untouched = tenant_id_of(&create_tenant(&state, &untouched_body));
 
-        // The projection at creation: privacy and client permissions copied, the password
-        // policy not copied, MFA constant.
-        assert_eq!(created["allowPasswordSignup"], true);
-        assert_eq!(created["enableAnonymousUser"], true);
-        assert_eq!(
-            created["emailPrivacyConfig"]["enableImprovedEmailPrivacy"],
-            true
-        );
-        assert_eq!(
-            created["client"]["permissions"]["disabledUserSignup"],
-            false
-        );
-        assert_eq!(min_password_length(&created), 6, "{profile}: {created}");
-        assert_eq!(
-            created["passwordPolicyConfig"]["passwordPolicyEnforcementState"],
-            "OFF"
-        );
-        assert_eq!(
-            created["mfaConfig"],
-            json!({"state": "DISABLED", "enabledProviders": []})
-        );
-
-        // The client obeys the effective values: the tenant accepts a 7-character password
-        // (its own default policy) while the project enforces 8; both hide unknown emails.
+        // Nothing of the project's shows in a new tenant, in either profile: the emulator
+        // profile's tenant follows the project's privacy without answering it, as the official
+        // emulator's does (issue emulator-tenant-document-shows-the-projects-email-privacy).
+        for absent in [
+            "emailPrivacyConfig",
+            "client",
+            "passwordPolicyConfig",
+            "mfaConfig",
+        ] {
+            assert!(
+                created.get(absent).is_none(),
+                "{profile}: {absent}: {created}"
+            );
+        }
+        // Its clients obey the tenant's own defaults: a 7-character password (the default
+        // policy) while the project enforces 8. Unknown addresses are revealed in the strict
+        // profile (the tenant's own privacy, off) and hidden in the emulator profile (the
+        // project's, on).
         assert_eq!(
             sign_up_status(
                 &state,
@@ -1345,7 +1430,11 @@ fn tenant_settings_inherit_at_creation_and_tenant_patches_override_them() {
         assert_eq!(class(&weak), "PASSWORD_DOES_NOT_MEET_REQUIREMENTS");
         assert_eq!(
             unknown_email_sign_in_class(&state, Some(&overridden)),
-            "INVALID_LOGIN_CREDENTIALS",
+            if profile == "strict" {
+                "EMAIL_NOT_FOUND"
+            } else {
+                "INVALID_LOGIN_CREDENTIALS"
+            },
             "{profile}"
         );
         assert_eq!(
@@ -1353,18 +1442,13 @@ fn tenant_settings_inherit_at_creation_and_tenant_patches_override_them() {
             "INVALID_LOGIN_CREDENTIALS",
             "{profile}"
         );
-        assert_eq!(
-            sign_up_status(&state, &overridden, json!({})).0,
-            200,
-            "{profile}"
-        );
 
-        // Tenant override: no anonymous or password sign-in, a 12-character minimum, and
-        // privacy off, while the project keeps its own values.
+        // Tenant settings: no anonymous or password sign-in, a 12-character minimum, and an
+        // MFA config, which production takes for a tenant (manage#create-mfa, patch-mfa).
         let (status, patched) = admin(
             &state,
             "PATCH",
-            &format!("{ADMIN_V2}/tenants/{overridden}?updateMask=enableAnonymousUser,allowPasswordSignup,passwordPolicyConfig,emailPrivacyConfig.enableImprovedEmailPrivacy"),
+            &format!("{ADMIN_V2}/tenants/{overridden}?updateMask=enableAnonymousUser,allowPasswordSignup,passwordPolicyConfig"),
             &json!({
                 "enableAnonymousUser": false,
                 "allowPasswordSignup": false,
@@ -1372,51 +1456,38 @@ fn tenant_settings_inherit_at_creation_and_tenant_patches_override_them() {
                     "passwordPolicyEnforcementState": "ENFORCE",
                     "passwordPolicyVersions": [{"customStrengthOptions": {"minPasswordLength": 12}}]
                 },
-                "emailPrivacyConfig": {"enableImprovedEmailPrivacy": false},
             }),
         );
         assert_eq!(status, 200, "{profile}: {patched}");
-        assert_eq!(patched["enableAnonymousUser"], false);
-        assert_eq!(patched["allowPasswordSignup"], false);
+        assert!(patched.get("enableAnonymousUser").is_none(), "{patched}");
+        assert!(patched.get("allowPasswordSignup").is_none(), "{patched}");
         assert_eq!(min_password_length(&patched), 12);
-        assert_eq!(
-            patched["emailPrivacyConfig"]["enableImprovedEmailPrivacy"],
-            false
-        );
         let (status, mfa_patch) = admin(
             &state,
             "PATCH",
             &format!("{ADMIN_V2}/tenants/{overridden}?updateMask=mfaConfig"),
             &json!({"mfaConfig": {"state": "ENABLED", "enabledProviders": ["PHONE_SMS"]}}),
         );
-        assert_eq!(status, 400, "{profile}: {mfa_patch}");
-        assert_eq!(class(&mfa_patch), "INVALID_ARGUMENT");
+        assert_eq!(status, 200, "{profile}: {mfa_patch}");
         assert_eq!(
-            read_tenant(&state, &overridden)["mfaConfig"]["state"],
-            "DISABLED"
+            read_tenant(&state, &overridden)["mfaConfig"],
+            json!({"state": "ENABLED", "enabledProviders": ["PHONE_SMS"]})
         );
 
-        let (status, project_now) = admin(&state, "GET", PROJECT_CONFIG, &json!({}));
-        assert_eq!(status, 200, "{profile}: {project_now}");
-        assert_eq!(min_password_length(&project_now), 8);
-        assert_eq!(
-            project_now["emailPrivacyConfig"]["enableImprovedEmailPrivacy"],
-            true
-        );
-
-        // The client obeys the override in the tenant and the project values on the project.
+        // The clients obey the tenant's settings.
         assert_eq!(
             sign_up_status(&state, &overridden, json!({})),
-            (400, "OPERATION_NOT_ALLOWED".to_owned()),
-            "{profile}"
-        );
-        assert_eq!(
-            sign_up_status(
-                &state,
-                &overridden,
-                json!({"email": "twelve@example.com", "password": "twelve-chars-ok"})
+            // Production refuses an anonymous sign-up while anonymous sign-in is off as
+            // ADMIN_ONLY_OPERATION (settings#anonymous-off-sign-up).
+            (
+                400,
+                if profile == "strict" {
+                    "ADMIN_ONLY_OPERATION"
+                } else {
+                    "OPERATION_NOT_ALLOWED"
+                }
+                .to_owned()
             ),
-            (400, "OPERATION_NOT_ALLOWED".to_owned()),
             "{profile}"
         );
         let (status, refused) = client(
@@ -1426,36 +1497,16 @@ fn tenant_settings_inherit_at_creation_and_tenant_patches_override_them() {
             json!({"email": "seven@example.com", "password": "seven77"}),
         );
         assert_eq!(status, 400, "{profile}: {refused}");
+        // Production: PASSWORD_LOGIN_DISABLED (settings#password-off-sign-in).
         assert_eq!(
             class(&refused),
-            "OPERATION_NOT_ALLOWED",
-            "{profile}: {refused}"
-        );
-        let (status, anonymous) = post(
-            &state,
-            &format!("{V1}/accounts:signUp?key={KEY}"),
-            &json!({}),
-        );
-        assert_eq!(status, 200, "{profile}: {anonymous}");
-        let (status, ok) = post(
-            &state,
-            &format!("{V1}/accounts:signUp?key={KEY}"),
-            &json!({"email": "project8@example.com", "password": "eight888"}),
-        );
-        assert_eq!(status, 200, "{profile}: {ok}");
-        assert_eq!(
-            unknown_email_sign_in_class(&state, None),
-            "INVALID_LOGIN_CREDENTIALS",
+            if profile == "strict" {
+                "PASSWORD_LOGIN_DISABLED"
+            } else {
+                "OPERATION_NOT_ALLOWED"
+            },
             "{profile}"
         );
-        assert_eq!(
-            unknown_email_sign_in_class(&state, Some(&untouched)),
-            "INVALID_LOGIN_CREDENTIALS",
-            "{profile}"
-        );
-
-        // Re-enable password sign-in: the tenant's own 12-character policy applies, not the
-        // project's 8, and the tenant now reveals unknown addresses (privacy override).
         let (status, patched) = admin(
             &state,
             "PATCH",
@@ -1482,103 +1533,65 @@ fn tenant_settings_inherit_at_creation_and_tenant_patches_override_them() {
             200,
             "{profile}"
         );
-        assert_eq!(
-            unknown_email_sign_in_class(&state, Some(&overridden)),
-            "EMAIL_NOT_FOUND",
-            "{profile}"
+        let (status, ok) = post(
+            &state,
+            &format!("{V1}/accounts:signUp?key={KEY}"),
+            &json!({"email": "project8@example.com", "password": "eight888"}),
         );
+        assert_eq!(status, 200, "{profile}: {ok}");
 
-        // Later project changes: copied client config follows on the untouched tenant, the
-        // overridden field stays overridden, and the password policy never follows.
+        // Later project changes reach no tenant (inheritance#sign-up-in-tenant, get-after).
         let (status, project) = admin(
             &state,
             "PATCH",
-            &format!("{PROJECT_CONFIG}?updateMask=passwordPolicyConfig,emailPrivacyConfig.enableImprovedEmailPrivacy,client.permissions.disabledUserSignup"),
+            &format!("{PROJECT_CONFIG}?updateMask=passwordPolicyConfig,client.permissions.disabledUserSignup"),
             &json!({
                 "passwordPolicyConfig": {
                     "passwordPolicyEnforcementState": "ENFORCE",
                     "passwordPolicyVersions": [{"customStrengthOptions": {"minPasswordLength": 10}}]
                 },
-                "emailPrivacyConfig": {"enableImprovedEmailPrivacy": false},
                 "client": {"permissions": {"disabledUserSignup": true}},
             }),
         );
         assert_eq!(status, 200, "{profile}: {project}");
-        let (status, project) = admin(
-            &state,
-            "PATCH",
-            &format!("{PROJECT_CONFIG}?updateMask=emailPrivacyConfig.enableImprovedEmailPrivacy"),
-            &json!({"emailPrivacyConfig": {"enableImprovedEmailPrivacy": true}}),
-        );
-        assert_eq!(status, 200, "{profile}: {project}");
-        let overridden_now = read_tenant(&state, &overridden);
-        assert_eq!(
-            min_password_length(&overridden_now),
-            12,
-            "{profile}: {overridden_now}"
-        );
-        assert_eq!(
-            overridden_now["emailPrivacyConfig"]["enableImprovedEmailPrivacy"],
-            false
-        );
-        assert_eq!(
-            overridden_now["client"]["permissions"]["disabledUserSignup"],
-            true
-        );
-        let untouched_now = read_tenant(&state, &untouched);
-        assert_eq!(
-            min_password_length(&untouched_now),
-            6,
-            "{profile}: {untouched_now}"
-        );
-        assert_eq!(
-            untouched_now["emailPrivacyConfig"]["enableImprovedEmailPrivacy"],
-            true
-        );
-        assert_eq!(
-            untouched_now["client"]["permissions"]["disabledUserSignup"],
-            true
-        );
-        // The propagated permission is enforced by both tenant stores, not only projected,
-        // and each tenant's effective privacy decides what the client learns.
         for tenant in [&overridden, &untouched] {
-            assert_eq!(
-                sign_up_status(
-                    &state,
-                    tenant,
-                    json!({"email": "blocked@example.com", "password": "twelve-chars-ok"})
-                ),
-                (400, "ADMIN_ONLY_OPERATION".to_owned()),
-                "{profile} {tenant}"
+            let document = read_tenant(&state, tenant);
+            assert!(document.get("client").is_none(), "{profile}: {document}");
+            assert!(
+                document.get("emailPrivacyConfig").is_none(),
+                "{profile}: {document}"
             );
             assert!(
-                registry
+                !registry
                     .tenant_store("demo-app", tenant)
                     .unwrap()
                     .lock()
                     .unwrap()
                     .config()
-                    .disabled_user_signup
+                    .disabled_user_signup,
+                "{profile} {tenant}"
+            );
+            assert_eq!(
+                sign_up_status(
+                    &state,
+                    tenant,
+                    json!({"email": format!("after-{tenant}@example.com"), "password": "twelve-chars-ok"})
+                )
+                .0,
+                200,
+                "{profile} {tenant}"
             );
         }
         assert_eq!(
-            unknown_email_sign_in_class(&state, Some(&overridden)),
-            "EMAIL_NOT_FOUND",
+            min_password_length(&read_tenant(&state, &overridden)),
+            12,
             "{profile}"
         );
-        assert_eq!(
-            unknown_email_sign_in_class(&state, Some(&untouched)),
-            "INVALID_LOGIN_CREDENTIALS",
-            "{profile}"
-        );
-        assert_eq!(
-            unknown_email_sign_in_class(&state, None),
-            "INVALID_LOGIN_CREDENTIALS",
-            "{profile}"
-        );
-        // The project's own policy moved to 10 without touching either tenant: an existing
-        // project user cannot pick a 9-character password (end-user sign-up is disabled on
-        // the project now, so the check goes through a password change).
+        assert!(read_tenant(&state, &untouched)
+            .get("passwordPolicyConfig")
+            .is_none());
+        // The project enforces its own new policy: an existing project user cannot pick a
+        // 9-character password.
         let (status, weak) = post(
             &state,
             &format!("{V1}/accounts:update?key={KEY}"),
@@ -1592,6 +1605,136 @@ fn tenant_settings_inherit_at_creation_and_tenant_patches_override_them() {
             &json!({"idToken": ok["idToken"], "password": "ten-chars!"}),
         );
         assert_eq!(status, 200, "{profile}: {changed}");
+    }
+}
+
+/// The emulator profile's tenant reads the project's duplicate-email and improved email privacy
+/// settings, live, as the official emulator's tenant does (firebase-tools 15.28.2
+/// `TenantProjectState`, whose `oneAccountPerEmail` and `enableImprovedEmailPrivacy` return the
+/// parent project's): a project change reaches a tenant that already exists, and a tenant's own
+/// privacy write changes nothing. The strict profile's tenant keeps its own, as production's
+/// does: the project's change reaches it not, and its own privacy write does (round-2
+/// integration review M1, 2026-09-29).
+#[test]
+#[allow(clippy::too_many_lines)]
+fn a_tenant_takes_the_projects_duplicate_email_and_privacy_settings_as_its_profile_says() {
+    for (profile, state, _registry) in profiles() {
+        let emulator = profile == "emulator";
+        let tenant = tenant_id_of(&create_tenant(
+            &state,
+            &json!({"displayName": "Live", "allowPasswordSignup": true}),
+        ));
+        let reset = |state: &AuthState| {
+            let (status, body) = client(
+                state,
+                &format!("{V1}/accounts:sendOobCode"),
+                &tenant,
+                json!({"requestType": "PASSWORD_RESET", "email": "missing@example.com"}),
+            );
+            (status, class(&body))
+        };
+        // The address is held by an account without a password: two password accounts never
+        // share one, whatever the setting.
+        let (status, held) = admin(
+            &state,
+            "POST",
+            &tenant_admin_path(&tenant, "accounts"),
+            &json!({"email": "held@example.com"}),
+        );
+        assert_eq!(status, 200, "{profile}: {held}");
+        let mover = sign_up(&state, &tenant, "mover@example.com");
+        let take_held = |state: &AuthState| {
+            let (status, body) = client(
+                state,
+                &format!("{V1}/accounts:update"),
+                &tenant,
+                json!({"idToken": mover["idToken"], "email": "held@example.com"}),
+            );
+            (status, class(&body))
+        };
+        let revealed = (
+            "EMAIL_NOT_FOUND",
+            (400, "EMAIL_NOT_FOUND".to_owned()),
+            (400, "EMAIL_EXISTS".to_owned()),
+        );
+        let observed = |state: &AuthState| {
+            (
+                unknown_email_sign_in_class(state, Some(&tenant)),
+                reset(state),
+                take_held(state),
+            )
+        };
+        let as_owned = |(sign_in, reset, take): (&str, (u16, String), (u16, String))| {
+            (sign_in.to_owned(), reset, take)
+        };
+
+        // Both off in the project: unknown addresses are revealed, and an address is one
+        // account's.
+        assert_eq!(observed(&state), as_owned(revealed.clone()), "{profile}");
+        let project_turns_on = |mask: &str, body: Value| {
+            let (status, project) = admin(
+                &state,
+                "PATCH",
+                &format!("{PROJECT_CONFIG}?updateMask={mask}"),
+                &body,
+            );
+            assert_eq!(status, 200, "{profile}: {project}");
+        };
+
+        // The project allows duplicate addresses after the tenant exists: the emulator
+        // profile's tenant follows, the strict profile's keeps its own. (With improved email
+        // privacy on, an email change asks for verification first, so duplicates come first.)
+        project_turns_on(
+            "signIn.allowDuplicateEmails",
+            json!({"signIn": {"allowDuplicateEmails": true}}),
+        );
+        assert_eq!(
+            take_held(&state),
+            if emulator {
+                (200, String::new())
+            } else {
+                (400, "EMAIL_EXISTS".to_owned())
+            },
+            "{profile}"
+        );
+
+        // The project turns improved email privacy on: the emulator profile's tenant follows,
+        // the strict profile's keeps its own.
+        project_turns_on(
+            "emailPrivacyConfig.enableImprovedEmailPrivacy",
+            json!({"emailPrivacyConfig": {"enableImprovedEmailPrivacy": true}}),
+        );
+        if emulator {
+            assert_eq!(
+                unknown_email_sign_in_class(&state, Some(&tenant)),
+                "INVALID_LOGIN_CREDENTIALS"
+            );
+            assert_eq!(reset(&state).0, 200);
+        } else {
+            assert_eq!(
+                (
+                    unknown_email_sign_in_class(&state, Some(&tenant)),
+                    reset(&state)
+                ),
+                (revealed.0.to_owned(), revealed.1.clone()),
+                "{profile}"
+            );
+        }
+
+        // A tenant's own privacy write: the emulator profile keeps the project's (on), the
+        // strict profile takes the tenant's.
+        let (status, patched) = admin(
+            &state,
+            "PATCH",
+            &format!("{ADMIN_V2}/tenants/{tenant}?updateMask=emailPrivacyConfig.enableImprovedEmailPrivacy"),
+            &json!({"emailPrivacyConfig": {"enableImprovedEmailPrivacy": !emulator}}),
+        );
+        assert_eq!(status, 200, "{profile}: {patched}");
+        assert_eq!(
+            unknown_email_sign_in_class(&state, Some(&tenant)),
+            "INVALID_LOGIN_CREDENTIALS",
+            "{profile}"
+        );
     }
 }
 
@@ -1839,34 +1982,41 @@ fn deleting_a_tenant_invalidates_its_credentials_and_leaves_the_sibling_and_proj
             &tenant_admin_path(TENANT_A, "accounts:batchGet?maxResults=1000"),
             &json!({}),
         );
-        assert_eq!(status, 404, "{profile}: {missing}");
-        assert_eq!(class(&missing), "TENANT_NOT_FOUND");
+        // Strict answers an account call on a deleted tenant as production does
+        // (deletion#admin-lookup-after-delete).
+        if profile == "strict" {
+            assert_eq!(status, 400, "{profile}: {missing}");
+            assert_eq!(class(&missing), "TENANT_DELETED");
+        } else {
+            assert_eq!(status, 404, "{profile}: {missing}");
+            assert_eq!(class(&missing), "TENANT_NOT_FOUND");
+        }
 
-        // Issued credentials of the deleted tenant no longer authenticate anywhere. The
-        // class depends on the selector: the API key resolves the named tenant and finds
-        // none; a bare body tenant is compared with the store the token still selects (the
-        // parent project, the only remaining namespace the token can name), and a bare
-        // query tenant matches the token's tenant and then the token fails verification
-        // against that parent store. Every shape is a refusal without fallback.
+        // Issued credentials of the deleted tenant no longer authenticate anywhere. An
+        // account lookup is answered as the official Auth emulator answers it: its target is
+        // the body's tenant, else the ID token's (the API key and a query tenant do not
+        // choose it), and a target that no longer exists has no user (firebase-tools 15.28.2
+        // `toExegesisController`, `parseIdToken`). A refresh keeps its selector's class. Every
+        // shape is a refusal without fallback.
         for (selector, lookup_status, lookup_class, refresh_status, refresh_class) in [
             (
                 Selector::KeyAndBody,
-                404,
-                "TENANT_NOT_FOUND",
+                400,
+                "USER_NOT_FOUND",
                 404,
                 "TENANT_NOT_FOUND",
             ),
             (
                 Selector::BodyOnly,
                 400,
-                "TENANT_ID_MISMATCH",
+                "USER_NOT_FOUND",
                 400,
                 "TENANT_NOT_FOUND",
             ),
             (
                 Selector::QueryOnly,
                 400,
-                "INVALID_ID_TOKEN",
+                "USER_NOT_FOUND",
                 404,
                 "TENANT_NOT_FOUND",
             ),
@@ -1874,6 +2024,14 @@ fn deleting_a_tenant_invalidates_its_credentials_and_leaves_the_sibling_and_proj
         .into_iter()
         .filter(|row| Selector::admitted(&state).contains(&row.0))
         {
+            // Strict answers a deleted tenant as production does (AUTH-TENANT-BLOCKING
+            // recording 2026-09-27, deletion#lookup-after-delete, refresh-after-delete).
+            let (lookup_status, lookup_class, refresh_status, refresh_class) =
+                if profile == "strict" {
+                    (400, "TENANT_DELETED", 400, "TENANT_DELETED")
+                } else {
+                    (lookup_status, lookup_class, refresh_status, refresh_class)
+                };
             let (status, refused) = selector.request(
                 &state,
                 &format!("{V1}/accounts:lookup"),
@@ -1906,14 +2064,24 @@ fn deleting_a_tenant_invalidates_its_credentials_and_leaves_the_sibling_and_proj
             );
         }
         // Without a tenant selector the token still names the deleted tenant and cannot fall
-        // back to the project or to the sibling.
+        // back to the project or to the sibling (the emulator profile: no user in the target
+        // tenant, as the official Auth emulator answers it).
         let (status, refused) = post(
             &state,
             &format!("{V1}/accounts:lookup?key={KEY}"),
             &json!({"idToken": token_a}),
         );
+        let strict = profile == "strict";
         assert_eq!(status, 400, "{profile}: {refused}");
-        assert_eq!(class(&refused), "INVALID_ID_TOKEN", "{profile}: {refused}");
+        assert_eq!(
+            class(&refused),
+            if strict {
+                "TENANT_DELETED"
+            } else {
+                "USER_NOT_FOUND"
+            },
+            "{profile}: {refused}"
+        );
         let (status, refused) = post(
             &state,
             &format!("{SECURE_TOKEN}?key={KEY}"),
@@ -1922,7 +2090,11 @@ fn deleting_a_tenant_invalidates_its_credentials_and_leaves_the_sibling_and_proj
         assert_eq!(status, 400, "{profile}: {refused}");
         assert_eq!(
             class(&refused),
-            "INVALID_REFRESH_TOKEN",
+            if strict {
+                "TENANT_DELETED"
+            } else {
+                "INVALID_REFRESH_TOKEN"
+            },
             "{profile}: {refused}"
         );
         let (status, refused) = client(
@@ -1931,8 +2103,14 @@ fn deleting_a_tenant_invalidates_its_credentials_and_leaves_the_sibling_and_proj
             TENANT_B,
             json!({"idToken": token_a}),
         );
+        // Both profiles compare the named tenant with the token's first (strict: production;
+        // emulator: the official Auth emulator's `toExegesisController`).
         assert_eq!(status, 400, "{profile}: {refused}");
-        assert_eq!(class(&refused), "INVALID_ID_TOKEN", "{profile}: {refused}");
+        assert_eq!(
+            class(&refused),
+            "TENANT_ID_MISMATCH",
+            "{profile}: {refused}"
+        );
 
         // The sibling tenant and the project are untouched and their credentials still work.
         assert_eq!(snapshot(&state, Some(TENANT_B)), before_b, "{profile}");
@@ -2001,4 +2179,263 @@ fn deleting_a_tenant_invalidates_its_credentials_and_leaves_the_sibling_and_proj
             .as_array()
             .is_none_or(Vec::is_empty));
     }
+}
+
+fn enable_tenant_sms_mfa(state: &AuthState, tenant: &str) {
+    let (status, body) = admin(
+        state,
+        "PATCH",
+        &format!("{ADMIN_V2}/tenants/{tenant}?updateMask=mfaConfig"),
+        &json!({"mfaConfig": {"state": "ENABLED", "enabledProviders": ["PHONE_SMS"]}}),
+    );
+    assert_eq!(status, 200, "{tenant}: {body}");
+}
+
+/// Under strict a tenant's own MFA config decides its phone enrollment, not the project's
+/// (AUTH-TENANT-BLOCKING recording 2026-09-27, inheritance#phone-enroll-in-tenant,
+/// mfa#phone-start-n1, phone-start-m1); the emulator profile enrolls one as the official
+/// emulator does.
+#[test]
+fn a_tenant_phone_enrollment_follows_the_tenant_mfa_config() {
+    for (profile, state, _registry) in profiles() {
+        let (status, created) = admin(
+            &state,
+            "POST",
+            &tenant_admin_path(TENANT_A, "accounts"),
+            &json!({"email": "enroll@example.com", "password": "hunter22", "emailVerified": true}),
+        );
+        assert_eq!(status, 200, "{profile}: {created}");
+        let (status, signed_in) = client(
+            &state,
+            &format!("{V1}/accounts:signInWithPassword"),
+            TENANT_A,
+            json!({"email": "enroll@example.com", "password": "hunter22", "returnSecureToken": true}),
+        );
+        assert_eq!(status, 200, "{profile}: {signed_in}");
+        let token = signed_in["idToken"].clone();
+        let start = || {
+            client(
+                &state,
+                &format!("{V2}/accounts/mfaEnrollment:start"),
+                TENANT_A,
+                json!({"idToken": token, "phoneEnrollmentInfo": {"phoneNumber": "+15559876543"}}),
+            )
+        };
+        if profile == "strict" {
+            let (status, refused) = start();
+            assert_eq!(status, 400, "{refused}");
+            assert_eq!(
+                refused["error"]["message"],
+                "OPERATION_NOT_ALLOWED : SMS based MFA not enabled."
+            );
+            enable_tenant_sms_mfa(&state, TENANT_A);
+        }
+        let (status, started) = start();
+        assert_eq!(status, 200, "{profile}: {started}");
+        let session = started["phoneSessionInfo"]["sessionInfo"].clone();
+        let code = verification_codes(&state, TENANT_A)
+            .into_iter()
+            .find(|c| c["sessionInfo"] == session)
+            .map(|c| c["code"].clone())
+            .unwrap();
+        let (status, enrolled) = client(
+            &state,
+            &format!("{V2}/accounts/mfaEnrollment:finalize"),
+            TENANT_A,
+            json!({"idToken": token, "phoneVerificationInfo": {"sessionInfo": session, "code": code}}),
+        );
+        assert_eq!(status, 200, "{profile}: {enrolled}");
+    }
+}
+
+/// With a registry, a masked `mfa` update reaches the project's store and reads back in both
+/// profiles (mutation follow-up, docs.local/mutation/auth-mfa/20260925).
+#[test]
+fn a_registry_project_config_update_sets_the_mfa_config() {
+    for (profile, state, registry) in profiles() {
+        let (status, body) = admin(
+            &state,
+            "PATCH",
+            &format!("{PROJECT_CONFIG}?updateMask=mfa"),
+            &json!({"mfa": {"state": "ENABLED", "enabledProviders": ["PHONE_SMS"]}}),
+        );
+        assert_eq!(status, 200, "{profile}: {body}");
+        let (status, read) = admin(&state, "GET", PROJECT_CONFIG, &json!({}));
+        assert_eq!(status, 200, "{profile}: {read}");
+        assert_eq!(read["mfa"]["state"], "ENABLED", "{profile}: {read}");
+        let store = registry.store_for("demo-app").unwrap();
+        assert!(
+            store.lock().unwrap().mfa_config().sms_enabled(),
+            "{profile}"
+        );
+    }
+}
+
+/// With a registry, `mfa` is written in the config transaction with the other members: a
+/// combined PATCH applies both, and a PATCH refused for either leaves both as they were.
+#[test]
+fn a_registry_project_config_update_writes_mfa_with_the_other_members() {
+    let enabled = json!({"state": "ENABLED", "enabledProviders": ["PHONE_SMS"]});
+    for (profile, state, registry) in profiles() {
+        let store = registry.store_for("demo-app").unwrap();
+        let (status, body) = admin(
+            &state,
+            "PATCH",
+            &format!("{PROJECT_CONFIG}?updateMask=mfa,signIn.allowDuplicateEmails"),
+            &json!({"mfa": enabled, "signIn": {"allowDuplicateEmails": true}}),
+        );
+        assert_eq!(status, 200, "{profile}: {body}");
+        assert_eq!(body["mfa"], enabled, "{profile}: {body}");
+        {
+            let current = store.lock().unwrap();
+            assert!(current.mfa_config().sms_enabled(), "{profile}");
+            assert!(current.config().allow_duplicate_emails, "{profile}");
+        }
+
+        let (status, body) = admin(
+            &state,
+            "PATCH",
+            &format!("{PROJECT_CONFIG}?updateMask=mfa,passwordPolicyConfig"),
+            &json!({
+                "mfa": {"state": "DISABLED"},
+                "passwordPolicyConfig": {
+                    "passwordPolicyEnforcementState": "ENFORCE",
+                    "passwordPolicyVersions": [{"customStrengthOptions": {"minPasswordLength": 5}}],
+                },
+            }),
+        );
+        assert_eq!(status, 400, "{profile}: {body}");
+        let (status, body) = admin(
+            &state,
+            "PATCH",
+            &format!("{PROJECT_CONFIG}?updateMask=mfa,signIn.allowDuplicateEmails"),
+            &json!({"mfa": {"state": "NOT_A_STATE"}, "signIn": {"allowDuplicateEmails": false}}),
+        );
+        assert_eq!(status, 400, "{profile}: {body}");
+        let current = store.lock().unwrap();
+        assert!(current.mfa_config().sms_enabled(), "{profile}");
+        assert!(current.config().allow_duplicate_emails, "{profile}");
+        assert!(!current.password_policy().configured, "{profile}");
+    }
+}
+
+/// A strict tenant follows production's second-factor rules with its own MFA config
+/// (AUTH-TENANT-BLOCKING recording 2026-09-27, mfa#totp-start-n1, sign-in-n1-with-factor):
+/// `auth.totp` does not enable its TOTP enrollment, and a factor an admin attached is not asked
+/// for while the tenant's MFA is off.
+#[test]
+fn a_strict_tenant_follows_its_own_mfa_config() {
+    let mut state = strict_state();
+    state.totp_extension_enabled = true;
+    let registry = Arc::new(AuthRegistry::new("demo-app", state.store.clone()));
+    registry.ensure_tenant("demo-app", TENANT_A).unwrap();
+    state.registry = Some(registry);
+    enable_tenants(&state, "demo-app");
+    let (status, created) = admin(
+        &state,
+        "POST",
+        &tenant_admin_path(TENANT_A, "accounts"),
+        &json!({"email": "tenant-totp@example.com", "password": "hunter22", "emailVerified": true}),
+    );
+    assert_eq!(status, 200, "{created}");
+    let (status, signed_in) = client(
+        &state,
+        &format!("{V1}/accounts:signInWithPassword"),
+        TENANT_A,
+        json!({"email": "tenant-totp@example.com", "password": "hunter22", "returnSecureToken": true}),
+    );
+    assert_eq!(status, 200, "{signed_in}");
+    let (status, started) = client(
+        &state,
+        &format!("{V2}/accounts/mfaEnrollment:start"),
+        TENANT_A,
+        json!({"idToken": signed_in["idToken"], "totpEnrollmentInfo": {}}),
+    );
+    assert_eq!(status, 400, "{started}");
+    assert_eq!(
+        started["error"]["message"],
+        "OPERATION_NOT_ALLOWED : TOTP based MFA not enabled."
+    );
+    let (status, phone) = admin(
+        &state,
+        "POST",
+        &tenant_admin_path(TENANT_A, "accounts"),
+        &json!({"email": "tenant-phone@example.com", "password": "hunter22", "emailVerified": true,
+            "mfaInfo": [{"phoneInfo": "+15559876543"}]}),
+    );
+    assert_eq!(status, 200, "{phone}");
+    let (status, pending) = client(
+        &state,
+        &format!("{V1}/accounts:signInWithPassword"),
+        TENANT_A,
+        json!({"email": "tenant-phone@example.com", "password": "hunter22", "returnSecureToken": true}),
+    );
+    assert_eq!(status, 200, "{pending}");
+    assert!(pending.get("mfaPendingCredential").is_none(), "{pending}");
+    assert!(pending["idToken"].is_string(), "{pending}");
+    // With the tenant's SMS MFA on, the same sign-in asks for the factor.
+    enable_tenant_sms_mfa(&state, TENANT_A);
+    let (status, pending) = client(
+        &state,
+        &format!("{V1}/accounts:signInWithPassword"),
+        TENANT_A,
+        json!({"email": "tenant-phone@example.com", "password": "hunter22", "returnSecureToken": true}),
+    );
+    assert_eq!(status, 200, "{pending}");
+    assert!(pending["mfaPendingCredential"].is_string(), "{pending}");
+    assert!(pending.get("idToken").is_none(), "{pending}");
+}
+
+/// Under strict, a phone second factor finalized in a tenant without SMS MFA is refused for
+/// that before its session is read (AUTH-TENANT-BLOCKING recording 2026-09-27,
+/// mfa#sms-finalize-m1-in-n).
+#[test]
+fn strict_sms_finalize_in_a_tenant_without_sms_mfa_is_refused_first() {
+    let (_, state, _registry) = profiles().into_iter().nth(1).unwrap();
+    enable_tenant_sms_mfa(&state, TENANT_A);
+    let (status, created) = admin(
+        &state,
+        "POST",
+        &tenant_admin_path(TENANT_A, "accounts"),
+        &json!({"email": "m1@example.com", "password": "hunter22", "emailVerified": true,
+            "mfaInfo": [{"phoneInfo": "+15559876543", "displayName": "phone"}]}),
+    );
+    assert_eq!(status, 200, "{created}");
+    let (status, pending) = client(
+        &state,
+        &format!("{V1}/accounts:signInWithPassword"),
+        TENANT_A,
+        json!({"email": "m1@example.com", "password": "hunter22"}),
+    );
+    assert_eq!(status, 200, "{pending}");
+    let credential = pending["mfaPendingCredential"].clone();
+    let enrollment = pending["mfaInfo"][0]["mfaEnrollmentId"].clone();
+    let (status, started) = client(
+        &state,
+        &format!("{V2}/accounts/mfaSignIn:start"),
+        TENANT_A,
+        json!({"mfaPendingCredential": credential, "mfaEnrollmentId": enrollment,
+            "phoneSignInInfo": {"recaptchaToken": "x"}}),
+    );
+    assert_eq!(status, 200, "{started}");
+    let session = started["phoneResponseInfo"]["sessionInfo"].clone();
+    let code = verification_codes(&state, TENANT_A)
+        .into_iter()
+        .find(|c| c["sessionInfo"] == session)
+        .map(|c| c["code"].clone())
+        .unwrap();
+    let (status, refused) = client(
+        &state,
+        &format!("{V2}/accounts/mfaSignIn:finalize"),
+        TENANT_B,
+        json!({"mfaPendingCredential": credential,
+            "phoneVerificationInfo": {"sessionInfo": session, "code": code}}),
+    );
+    assert_eq!(
+        (status, refused),
+        (
+            400,
+            json!({"error": {"code": 400, "message": "OPERATION_NOT_ALLOWED : SMS based MFA not enabled.", "status": "INVALID_ARGUMENT"}})
+        )
+    );
 }

@@ -104,6 +104,12 @@ function hasDuplicateJsonObjectKey(text) {
   return scanValue();
 }
 
+// The test files that load the public fixture keys to sign test tokens.
+const SIGNING_TESTS = new Set([
+  "crates/fireemu-adapter-http/tests/signing.rs",
+  "crates/fireemu-adapter-http/tests/jwt_temporal_http.rs",
+]);
+
 function fixtureReferenceViolations({ fixtureName, fixtureBytes, files }) {
   const fixturePath = `crates/fireemu-adapter-http/tests/fixtures/${fixtureName}`;
   const fixtureDigest = createHash("sha256").update(fixtureBytes).digest("hex");
@@ -122,10 +128,7 @@ function fixtureReferenceViolations({ fixtureName, fixtureBytes, files }) {
     const isCompatibilityJson =
       path.startsWith("spec/compatibility/") && path.endsWith(".json");
     if (!isCompatibilityJson) {
-      if (
-        path !== "crates/fireemu-adapter-http/tests/signing.rs" &&
-        text.includes(fixtureName)
-      ) {
+      if (!SIGNING_TESTS.has(path) && text.includes(fixtureName)) {
         violations.push(`${path}: mentions the fixture name`);
       }
       continue;
@@ -194,6 +197,25 @@ test("public RSA test fixtures are referenced only by signing or hashed compatib
 
     assert.deepEqual(violations, [], `${fixtureName} has unauthorized references`);
   }
+});
+
+test("fixture reference checks allow only the named signing tests to mention a fixture", () => {
+  const fixtureName = ["INSECURE", "TEST", "ONLY", "RSA", "A.der.hex"].join("_");
+  const fixtureBytes = Buffer.from("deadbeef\n");
+  const mention = Buffer.from(`include_bytes!("fixtures/${fixtureName}")`);
+  const violations = fixtureReferenceViolations({
+    fixtureName,
+    fixtureBytes,
+    files: [
+      { path: "crates/fireemu-adapter-http/tests/signing.rs", contents: mention },
+      { path: "crates/fireemu-adapter-http/tests/jwt_temporal_http.rs", contents: mention },
+      { path: "crates/fireemu-adapter-http/tests/other.rs", contents: mention },
+    ],
+  });
+
+  assert.deepEqual(violations, [
+    "crates/fireemu-adapter-http/tests/other.rs: mentions the fixture name",
+  ]);
 });
 
 test("fixture reference checks reject canonical payload recurrence without its trailing newline", () => {

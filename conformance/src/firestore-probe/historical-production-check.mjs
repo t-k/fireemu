@@ -1,3 +1,10 @@
+import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
+import { readFile } from "node:fs/promises";
+import { relative } from "node:path";
+import { promisify } from "node:util";
+
+import { REPO_ROOT } from "../config.mjs";
 import { compareProductionToFireemu } from "./run.mjs";
 
 /** Compare only recipes known to be identical to the saved production recording. */
@@ -65,4 +72,31 @@ export function checkHistoricalProduction({ saved, live, definitions, excludedKe
     indeterminate,
     newIndeterminate: indeterminate.filter((key) => !baselineIndeterminate.has(key)),
   };
+}
+
+/**
+ * The identity of the fireemu artifact the historical check ran, from its SHA-256 before and
+ * after the run. An artifact that changed while the check ran is refused, as the FS-DATA-WRITE
+ * local check refuses one.
+ */
+export function historicalArtifactIdentity({ root = REPO_ROOT, binary, before, after, version }) {
+  for (const digest of [before, after]) {
+    if (!/^[0-9a-f]{64}$/.test(digest)) throw new Error("artifact digest must be a SHA-256");
+  }
+  if (before !== after) throw new Error("fireemu changed during the historical check");
+  return {
+    path: relative(root, binary),
+    sha256Before: before,
+    sha256After: after,
+    version: version.trim(),
+  };
+}
+
+/** The SHA-256 and `--version` of a fireemu artifact, taken before and after the check runs. */
+export async function measureArtifact(binary) {
+  const sha256 = createHash("sha256")
+    .update(await readFile(binary))
+    .digest("hex");
+  const { stdout } = await promisify(execFile)(binary, ["--version"]);
+  return { sha256, version: stdout };
 }

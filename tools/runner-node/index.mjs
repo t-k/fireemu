@@ -10,12 +10,14 @@
 
 import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, readlinkSync } from "node:fs";
 import { resolve, join, dirname } from "node:path";
 import { createServer } from "node:http";
+import { execFileSync, spawn } from "node:child_process";
 import { url as inspectorUrl } from "node:inspector";
 import { instrumentCallables } from "./callable-app-check.mjs";
 import { blockingFailure } from "./blocking-error.mjs";
+import { blockingEvent, loadIdentityParsers, portedIdentityParsers } from "./blocking-event.mjs";
 import { blockingResult } from "./blocking-response.mjs";
 import { boundLogMessage, createInvocationLogger } from "./log-context.mjs";
 import { invocationFailure } from "./invocation-error.mjs";
@@ -54,12 +56,146 @@ const frameOutput = new FrameWriter(process.stdout, {
   },
 });
 let finishingOutput = false;
+let groupCleanupPromise = Promise.resolve(true);
 function finishOutput() {
   if (finishingOutput || outputFailed) return;
   finishingOutput = true;
-  void Promise.all([frameOutput.finish(), diagnosticOutput.finish()])
+  void Promise.all([frameOutput.finish(), diagnosticOutput.finish(), groupCleanupPromise])
     .then(results => process.exit(results.every(Boolean) && !outputFailed ? 0 : 2));
 }
+
+function processField(pid, field) {
+  try {
+    return execFileSync('/bin/ps', ['-o', `${field}=`, '-p', String(pid)], {
+      encoding: 'utf8', timeout: 1000, maxBuffer: 2048,
+    }).trim();
+  } catch {
+    return null;
+  }
+}
+
+function processExecutable(pid) {
+  try {
+    if (process.platform === 'linux') return readlinkSync(`/proc/${pid}/exe`);
+    if (process.platform === 'darwin') {
+      const files = execFileSync('/usr/sbin/lsof', ['-a', '-p', String(pid), '-d', 'txt', '-Fn'], {
+        encoding: 'utf8', timeout: 1000, maxBuffer: 16384,
+      });
+      return files.split('\n').find(line => line.startsWith('n'))?.slice(1) ?? null;
+    }
+  } catch {
+    // Unknown executable identity cannot authorize signaling a parent-led group.
+  }
+  return null;
+}
+
+function runnerProcessGroup() {
+  if (process.platform === 'win32') return null;
+  const group = Number(processField(process.pid, 'pgid'));
+  if (!Number.isSafeInteger(group) || group <= 1) return null;
+  if (group === process.pid) return group;
+  if (group !== process.ppid || Number(processField(group, 'pgid')) !== group) return null;
+  return processExecutable(group)?.endsWith('/volta-shim') ? group : null;
+}
+
+// Capture the group before user code can spawn children or replace process information.
+const daemonManagedRunner = process.env.FIREEMU_RUNNER === '1';
+const ownedProcessGroup = daemonManagedRunner ? runnerProcessGroup() : null;
+let inputCleanupStarted = false;
+let explicitShutdown = false;
+let deferredExitCleanup = false;
+const groupCleanupHelper = `
+const {execFileSync} = require('node:child_process');
+const group = Number(process.argv[1]);
+function killOwnedGroup() {
+  try {
+    const ownGroup = Number(execFileSync('/bin/ps', ['-o', 'pgid=', '-p', String(process.pid)], {
+      encoding: 'utf8', timeout: 1000
+    }).trim());
+    if (group > 1 && ownGroup === group) process.kill(-group, 'SIGKILL');
+  } catch { /* The group is already gone or signaling is unavailable. */ }
+}
+const watchdog = setTimeout(killOwnedGroup, 4000);
+process.stdin.on('end', () => {
+  clearTimeout(watchdog);
+  setTimeout(killOwnedGroup, 1500);
+});
+process.stdin.on('error', () => {});
+process.stdin.resume();
+`;
+function deferCleanShutdownGroupCleanup() {
+  if (!ownedProcessGroup ||
+      Number(processField(process.pid, 'pgid')) !== ownedProcessGroup) return;
+  // Keep a known member in the group after Node exits. Rust normally kills it
+  // first; if the daemon dies in that gap, the helper performs bounded cleanup.
+  try {
+    const helper = spawn(process.execPath, ['-e', groupCleanupHelper, String(ownedProcessGroup)], {
+      stdio: ['pipe', 'ignore', 'ignore'], env: {},
+    });
+    if (!helper.pid) return;
+    helper.on('error', () => { deferredExitCleanup = false; });
+    helper.stdin.on('error', () => {});
+    helper.unref();
+    helper.stdin.unref?.();
+    deferredExitCleanup = true;
+  } catch {
+    // The exit handler still cleans the group when a helper cannot start.
+  }
+}
+function deferOwnedGroupCleanupUntilUserExitHandlers() {
+  if (!ownedProcessGroup) return;
+  process.removeListener('exit', killOwnedGroupOnExit);
+  process.on('exit', killOwnedGroupOnExit);
+}
+function cleanupProcessGroupOnInputClose() {
+  if (inputCleanupStarted || process.platform === 'win32') return;
+  inputCleanupStarted = true;
+  if (!ownedProcessGroup || Number(processField(process.pid, 'pgid')) !== ownedProcessGroup) {
+    if (daemonManagedRunner) {
+      process.stderr.write('[functions] stdin closed; runner process group ownership is unverified\n');
+    }
+    return;
+  }
+  // The group signal reaches this Node process too. Keep it alive until escalation;
+  // a shim may forward another TERM after receiving the group signal itself.
+  process.on('SIGTERM', () => {});
+  // User exit handlers registered during discovery must run before final group cleanup.
+  deferOwnedGroupCleanupUntilUserExitHandlers();
+  groupCleanupPromise = new Promise(resolve => {
+    setTimeout(() => {
+      // An undrained output pipe must not postpone descendant cleanup.
+      if (Number(processField(process.pid, 'pgid')) === ownedProcessGroup) {
+        try { process.kill(-ownedProcessGroup, 'SIGKILL'); }
+        catch { /* The exit handler makes one final ownership-checked attempt. */ }
+      }
+      resolve(true);
+    }, 500);
+  });
+  try {
+    process.kill(-ownedProcessGroup, 'SIGTERM');
+  } catch (error) {
+    process.stderr.write(`[functions] runner process group cleanup failed: ${error.code ?? 'unknown'}\n`);
+  }
+}
+function killOwnedGroupOnExit() {
+  // A fatal frame or output error can exit before stdin close or the grace timer.
+  // The runner is still a member, so its original group ID cannot be reused yet.
+  if (deferredExitCleanup || !ownedProcessGroup ||
+      Number(processField(process.pid, 'pgid')) !== ownedProcessGroup) return;
+  // Fatal exits can precede user exit listeners. Keep a verified group member
+  // alive until those listeners finish, then let it reap the group.
+  if (!inputCleanupStarted) {
+    deferCleanShutdownGroupCleanup();
+    if (deferredExitCleanup) return;
+  }
+  try { process.kill(-ownedProcessGroup, 'SIGKILL'); }
+  catch { /* The group has already ended or signaling was denied. */ }
+}
+process.on('exit', killOwnedGroupOnExit);
+process.stdin.on('close', () => {
+  if (!explicitShutdown) cleanupProcessGroupOnInputClose();
+  finishOutput();
+});
 process.stdout.write = (chunk, encoding, cb) => process.stderr.write(chunk, encoding, cb);
 
 const localSecrets = (() => {
@@ -70,6 +206,9 @@ const localSecrets = (() => {
   return new Map(Object.entries(parsed).filter(([, value]) => typeof value === "string"));
 })();
 let functionEnvironmentQueue = Promise.resolve();
+const sharedFunctionInvocations = new Set();
+let activeSharedEnvironments = 0;
+let sharedSavedSecrets;
 let discoveredGlobalOptions = {};
 
 function inspectorPort() {
@@ -206,16 +345,17 @@ function setFunctionIdentity(spec) {
 }
 
 function withFunctionEnvironment(spec, task, invocationId) {
+  const shared = localSecrets.size > 0 && activeInspectorPort === undefined &&
+    !(spec?.platformOptions?.secrets || []).some(name => localSecrets.has(name));
   const run = async () => {
     if (finishingOutput || outputFailed) throw new Error("runner is shutting down");
     setFunctionIdentity(spec);
-    const saved = new Map();
-    for (const [name] of localSecrets) {
-      saved.set(
-        name,
-        Object.prototype.hasOwnProperty.call(process.env, name) ? process.env[name] : undefined,
-      );
-      delete process.env[name];
+    let saved;
+    if (shared) {
+      if (activeSharedEnvironments === 0) sharedSavedSecrets = hideLocalSecrets();
+      activeSharedEnvironments++;
+    } else {
+      saved = hideLocalSecrets();
     }
     for (const name of spec?.platformOptions?.secrets || []) {
       if (localSecrets.has(name)) process.env[name] = localSecrets.get(name);
@@ -223,16 +363,54 @@ function withFunctionEnvironment(spec, task, invocationId) {
     try {
       return await invocationLogger.run({ functionName: spec?.name, invocationId }, task);
     } finally {
-      for (const [name, value] of saved) {
-        if (value === undefined) delete process.env[name];
-        else process.env[name] = value;
+      if (shared) {
+        activeSharedEnvironments--;
+        if (activeSharedEnvironments === 0) {
+          restoreLocalSecrets(sharedSavedSecrets);
+          sharedSavedSecrets = undefined;
+        }
+      } else {
+        restoreLocalSecrets(saved);
       }
     }
   };
   if (localSecrets.size === 0 && activeInspectorPort === undefined) return run();
-  const result = functionEnvironmentQueue.then(run);
+  const previous = functionEnvironmentQueue;
+  if (shared) {
+    // Undeclared calls share one cleared environment; a queued declaring call
+    // closes this group before later calls can enter.
+    const result = previous.then(run);
+    sharedFunctionInvocations.add(result);
+    void result.then(
+      () => sharedFunctionInvocations.delete(result),
+      () => sharedFunctionInvocations.delete(result),
+    );
+    return result;
+  }
+  const pendingShared = [...sharedFunctionInvocations];
+  sharedFunctionInvocations.clear();
+  const result = Promise.allSettled([previous, ...pendingShared]).then(run);
   functionEnvironmentQueue = result.catch(() => {});
   return result;
+}
+
+function hideLocalSecrets() {
+  const saved = new Map();
+  for (const [name] of localSecrets) {
+    saved.set(
+      name,
+      Object.prototype.hasOwnProperty.call(process.env, name) ? process.env[name] : undefined,
+    );
+    delete process.env[name];
+  }
+  return saved;
+}
+
+function restoreLocalSecrets(saved) {
+  for (const [name, value] of saved) {
+    if (value === undefined) delete process.env[name];
+    else process.env[name] = value;
+  }
 }
 
 async function loadCodebase() {
@@ -654,6 +832,15 @@ function callableAppCheck(instrumentation, fn) {
   };
 }
 
+// Identity Platform's blocking events. The email and SMS events are discovered as well; the
+// daemon serves them only where production parity asks for it (the official emulator serves
+// beforeCreate and beforeSignIn only).
+const BLOCKING_AUTH_EVENTS = ["beforeCreate", "beforeSignIn", "beforeSendEmail", "beforeSendSms"];
+
+function isBlockingAuthEvent(eventType) {
+  return BLOCKING_AUTH_EVENTS.some((event) => eventType.endsWith(event));
+}
+
 function blockingAuthTrigger(eventType, options) {
   return {
     type: "blockingAuth",
@@ -697,7 +884,7 @@ function describe(name, fn, instrumentation) {
     if (ep.callableTrigger) return { ...base, trigger: callable() };
     if (ep.blockingTrigger) {
       const eventType = String(ep.blockingTrigger.eventType || "");
-      if (eventType.endsWith("beforeCreate") || eventType.endsWith("beforeSignIn")) {
+      if (isBlockingAuthEvent(eventType)) {
         return {
           ...base,
           trigger: blockingAuthTrigger(eventType, ep.blockingTrigger.options),
@@ -734,7 +921,7 @@ function describe(name, fn, instrumentation) {
     }
     if (ep.blockingTrigger) {
       const eventType = String(ep.blockingTrigger.eventType || "");
-      if (eventType.endsWith("beforeCreate") || eventType.endsWith("beforeSignIn")) {
+      if (isBlockingAuthEvent(eventType)) {
         return {
           ...base,
           trigger: blockingAuthTrigger(eventType, ep.blockingTrigger.options),
@@ -832,7 +1019,7 @@ function describe(name, fn, instrumentation) {
     }
     if (t.blockingTrigger) {
       const eventType = String(t.blockingTrigger.eventType || "");
-      if (eventType.endsWith("beforeCreate") || eventType.endsWith("beforeSignIn")) {
+      if (isBlockingAuthEvent(eventType)) {
         return {
           ...base,
           trigger: blockingAuthTrigger(eventType, t.blockingTrigger.options),
@@ -962,6 +1149,10 @@ function v1Context(msg) {
 }
 
 async function makeHttpServer(functions, manifest) {
+  const httpProfile = process.env.FIREEMU_HTTP_PROFILE ?? "emulator";
+  if (httpProfile !== "strict" && httpProfile !== "emulator") {
+    throw new Error("invalid Functions HTTP profile");
+  }
   const require = createRequire(join(sourceDir, "package.json"));
   let express;
   let expressRequire = require;
@@ -979,6 +1170,8 @@ async function makeHttpServer(functions, manifest) {
     }
   }
   const HttpsErrors = await firebaseHttpsErrorConstructors(require);
+  // The SDK's own parsers build a blocking event from its token (blocking-event.mjs).
+  const identityParsers = loadIdentityParsers(require);
   const app = express();
   const admission = createHttpAdmission({
     secret: process.env.FIREEMU_RUNNER_SECRET || "",
@@ -1022,6 +1215,10 @@ async function makeHttpServer(functions, manifest) {
       },
     }),
   );
+  app.use((req, _res, next) => {
+    if (Buffer.isBuffer(req.body) && req.body.length === 0) req.body = {};
+    next();
+  });
   const major = Number.parseInt(
     String(expressRequire("express/package.json").version).split(".")[0],
     10,
@@ -1095,8 +1292,18 @@ async function makeHttpServer(functions, manifest) {
       if (!lifetime.canStart()) return;
       try {
         if (blocking) {
-          const user = req.body?.data?.user;
-          const context = req.body?.data?.context || {};
+          // A token is parsed by the codebase's own firebase-functions, as Identity Platform's
+          // delivery is, or by the port of its parsers when that SDK does not expose them.
+          const hasToken = req.body?.data?.jwt !== undefined;
+          const parsed = hasToken
+            ? blockingEvent(
+                req.body,
+                identityParsers || portedIdentityParsers,
+                process.env.GCLOUD_PROJECT || "",
+              )
+            : undefined;
+          const user = parsed ? parsed.user : req.body?.data?.user;
+          const context = parsed ? parsed.context : req.body?.data?.context || {};
           const value = await (spec.generation === 1 ? fn.run(user, context) : fn.run({ ...context, data: user }));
           if (lifetime.canStart()) {
             // Materialization can call user getters/toJSON. Keep it inside this
@@ -1117,6 +1324,17 @@ async function makeHttpServer(functions, manifest) {
       .catch(replyFailure)
       .finally(() => { lifetime.dispose(); completeAdmission(); });
   });
+  if (httpProfile === "strict") {
+    app.use((error, _req, res, next) => {
+      if (error?.status !== 400 || error?.type !== "entity.parse.failed") {
+        next(error);
+        return;
+      }
+      res.status(400);
+      res.setHeader("content-type", "text/html; charset=utf-8");
+      res.end('<!DOCTYPE html>\n<html lang="en">\n<head>\n<meta charset="utf-8">\n<title>Error</title>\n</head>\n<body>\n<pre>Bad Request</pre>\n</body>\n</html>\n');
+    });
+  }
   const server = createServer((req, res) => admission.handle(req, res, app));
   // Do not let Node send 100 Continue before authentication/capacity checks.
   server.on("checkContinue", (req, res) => admission.handle(req, res, app, true));
@@ -1176,6 +1394,59 @@ async function invoke(functions, manifest, msg) {
 
 
 async function main() {
+  let functions;
+  let manifest;
+  let runnerReady = false;
+  const activeInvocations = new InvocationBudget();
+  // Read before loading user code, which may await indefinitely after spawning children.
+  readFrames(
+    process.stdin,
+    (msg, payloadBytes) => {
+      if (msg.type === "shutdown") {
+        explicitShutdown = true;
+        // Volta must observe Node exit before its shim is killed, or the daemon
+        // can finish shutdown while Node still owns an inspector listener.
+        deferCleanShutdownGroupCleanup();
+        finishOutput();
+        return false;
+      }
+      if (!runnerReady) {
+        process.stderr.write('[functions] invocation received before runner hello\n');
+        process.exit(2);
+      }
+      // Includes callbacks waiting for secret/debugger environment selection.
+      // Retire on overflow; never report an unexecuted request as successful or
+      // retry uncertain in-flight side effects inside this runner.
+      const release = activeInvocations.reserve(msg.invocationId, payloadBytes);
+      invoke(functions, manifest, msg)
+        .then(() => send({ type: "result", invocationId: msg.invocationId, ok: true }))
+        .catch((error) => {
+          const failure = invocationFailure(error);
+          try {
+            log("error", `${msg.function}: ${failure.diagnostic}`, msg.invocationId, msg.function);
+          } catch {
+            // Diagnostic output cannot suppress the invocation's failure result.
+          }
+          send({
+            type: "result",
+            invocationId: msg.invocationId,
+            ok: false,
+            error: failure.message,
+          });
+        })
+        .finally(release);
+    },
+    () => {
+      cleanupProcessGroupOnInputClose();
+      finishOutput();
+    },
+    (error) => {
+      // The pipe cannot be resynchronized safely. Retire the runner so the daemon
+      // resolves outstanding invocations as RunnerGone, rather than timing out.
+      // Do not print JSON.parse diagnostics containing user payload fragments.
+      try { process.stderr.write(`${error.message}\n`); } finally { process.exit(2); }
+    },
+  );
   // Before any user code loads: the callable options are only observable as a callable is
   // declared (spec 13.4).
   const instrumentation = instrumentCallables(sourceDir);
@@ -1203,7 +1474,9 @@ async function main() {
   } catch (e) {
     log("warn", `cannot inspect firebase-functions global options: ${invocationFailure(e).message}`);
   }
-  const { functions, broken } = collectFunctions(ns);
+  const discovered = collectFunctions(ns);
+  functions = discovered.functions;
+  const { broken } = discovered;
   const described = [...functions.entries()].map(([name, fn]) => {
     try {
       return describe(name, fn, instrumentation);
@@ -1232,7 +1505,7 @@ async function main() {
   // Nothing is dropped: an export this runner cannot serve travels in the manifest's
   // `ignored` array with its region, its trigger type and its product scope, and the daemon
   // decides what to do with it.
-  const manifest = {
+  manifest = {
     functions: described.filter((d) => !d.ignored && !d.omitted),
     ignored: described
       .filter((d) => d.ignored)
@@ -1283,44 +1556,7 @@ async function main() {
       graphs: instrumentation.graphs,
     },
   });
-  const activeInvocations = new InvocationBudget();
-  readFrames(
-    process.stdin,
-    (msg, payloadBytes) => {
-      if (msg.type === "shutdown") {
-        finishOutput();
-        return false;
-      }
-      // Includes callbacks waiting for secret/debugger environment selection.
-      // Retire on overflow; never report an unexecuted request as successful or
-      // retry uncertain in-flight side effects inside this runner.
-      const release = activeInvocations.reserve(msg.invocationId, payloadBytes);
-      invoke(functions, manifest, msg)
-        .then(() => send({ type: "result", invocationId: msg.invocationId, ok: true }))
-        .catch((error) => {
-          const failure = invocationFailure(error);
-          try {
-            log("error", `${msg.function}: ${failure.diagnostic}`, msg.invocationId, msg.function);
-          } catch {
-            // Diagnostic output cannot suppress the invocation's failure result.
-          }
-          send({
-            type: "result",
-            invocationId: msg.invocationId,
-            ok: false,
-            error: failure.message,
-          });
-        })
-        .finally(release);
-    },
-    () => finishOutput(),
-    (error) => {
-      // The pipe cannot be resynchronized safely. Retire the runner so the daemon
-      // resolves outstanding invocations as RunnerGone, rather than timing out.
-      // Do not print JSON.parse diagnostics containing user payload fragments.
-      try { process.stderr.write(`${error.message}\n`); } finally { process.exit(2); }
-    },
-  );
+  runnerReady = true;
 }
 
 main().catch((error) => {

@@ -4,7 +4,7 @@
 use core::fmt;
 use std::collections::BTreeMap;
 
-use fireemu_core_firestore::field_path::FieldPath;
+use fireemu_core_firestore::field_path::{FieldPath, FieldPathError};
 use fireemu_core_firestore::path::{DocumentPath, PathError};
 use fireemu_core_firestore::query::{
     Cursor, Direction, DistanceMeasure, FieldOp, FilterExpr, FindNearest, OrderClause, Query,
@@ -305,8 +305,26 @@ fn decode_map(m: &pb::MapValue, parent_depth: u32) -> Result<Value, DecodeError>
                 "field name __name__ is reserved".into(),
             ));
         }
-        FieldPath::from_segments([k.as_str()])
-            .map_err(|error| DecodeError::InvalidFieldPath(error.to_string()))?;
+        // Production reports a `__type__` key holding an integer as a type tag before it
+        // treats the key as a reserved name. Only the integer case is observed.
+        if k == "__type__" && matches!(v.value_type, Some(pb::value::ValueType::IntegerValue(_))) {
+            return Err(DecodeError::Refused(
+                "Field __type__ must be a string; founds LONG.".into(),
+            ));
+        }
+        match FieldPath::from_segments([k.as_str()]) {
+            // An empty or over-long map key is answered by context in production: a write
+            // refuses the enclosing property, a query filter accepts an empty key and refuses
+            // an over-long one. The write and the query checks run after decoding.
+            Ok(_)
+            | Err(FieldPathError::EmptySegment { .. } | FieldPathError::SegmentTooLong { .. }) => {}
+            Err(FieldPathError::ReservedSegment { .. }) => {
+                return Err(DecodeError::InvalidStoredFieldName(format!(
+                    "field name '{k}' is reserved."
+                )))
+            }
+            Err(error) => return Err(DecodeError::InvalidFieldPath(error.to_string())),
+        }
         out.insert(k.clone(), decode_value_at(v, depth)?);
     }
     Ok(Value::Map(out))
@@ -335,17 +353,37 @@ fn field_op(op: i32) -> Result<FieldOp, DecodeError> {
     )
 }
 
+/// Whether a filter value holds a map key over the field-name limit. Production refuses such a
+/// value as too large for a query (observed at 1,501 bytes) but accepts an empty key.
+fn has_overlong_map_key(value: &Value) -> bool {
+    match value {
+        Value::Map(fields) => fields.iter().any(|(key, nested)| {
+            key.len() > fireemu_core_firestore::field_path::MAX_FIELD_NAME_BYTES
+                || has_overlong_map_key(nested)
+        }),
+        Value::Array(items) => items.iter().any(has_overlong_map_key),
+        _ => false,
+    }
+}
+
 fn decode_filter(filter: &sq::Filter) -> Result<FilterExpr, DecodeError> {
     use sq::filter::FilterType as F;
     match &filter.filter_type {
         None => Err(DecodeError::Refused("Unknown Filter type.".into())),
-        Some(F::FieldFilter(f)) => Ok(FilterExpr::Field {
-            field: field_path(f.field.as_ref())?,
-            op: field_op(f.op)?,
-            value: decode_value(f.value.as_ref().ok_or_else(|| {
+        Some(F::FieldFilter(f)) => {
+            let field = field_path(f.field.as_ref())?;
+            let op = field_op(f.op)?;
+            let value = decode_value(f.value.as_ref().ok_or_else(|| {
                 DecodeError::Refused("Cannot convert firestore.v1.Value with type unset.".into())
-            })?)?,
-        }),
+            })?)?;
+            if has_overlong_map_key(&value) {
+                return Err(DecodeError::Refused(format!(
+                    "value for {} is too large to be used in a query",
+                    field.canonical()
+                )));
+            }
+            Ok(FilterExpr::Field { field, op, value })
+        }
         Some(F::UnaryFilter(u)) => {
             use sq::unary_filter::Operator as O;
             let field = match &u.operand_type {

@@ -1,15 +1,15 @@
-# fireemu
+# Fireemu
 
-An experimental local runtime for testing Firebase SDK and Functions code.
+A local runtime for testing Firebase SDK and Functions code, checked against production Firebase behavior.
 
 Some Firebase failures are easy to miss locally. A query may need a composite index in production even though it passes against the official emulator. Production limits may reject a request that looked fine during development. Finding those problems only after running against a real Firebase project makes the feedback loop slow and can leave test data behind.
 
-fireemu was built for two jobs:
+Fireemu was built for two jobs:
 
 - catch selected production-facing problems earlier, including missing Firestore indexes and production limit violations;
 - keep local test runs fast, with no JVM emulator to start and a single command that starts the services, runs the test command, and shuts everything down.
 
-fireemu is experimental. It is not a replacement for the official Firebase Emulator Suite or for testing against a real Firebase project. Use it as an additional test target, keep the official emulator in your test matrix, and verify important flows against production before shipping.
+Fireemu is pre-1.0. It is not a replacement for the official Firebase Emulator Suite or for testing against a real Firebase project. Use it as an additional test target, keep the official emulator in your test matrix, and verify important flows against production before shipping.
 
 The real `firebase-admin`, `firebase` (Node and browser) and `firebase/firestore/lite` SDKs run against it unchanged. Run `npx fireemu capabilities` before depending on a specific API: each capability records whether it is implemented, partial, validation-only, or unsupported. The full feature summary, the known gaps from production Firebase and from the official Emulator Suite, and the project status are in the repository README linked below.
 

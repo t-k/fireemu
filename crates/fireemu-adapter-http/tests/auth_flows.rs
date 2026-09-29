@@ -4,8 +4,8 @@
 use std::sync::{Arc, Mutex, RwLock};
 
 use fireemu_adapter_http::identity_toolkit::{
-    handle, handle_with, AuthBlockingContext, AuthBlockingHook, AuthState, BlockingFunctionFailure,
-    RequestHeaders,
+    handle, handle_with, AuthBlockingContext, AuthBlockingHook, AuthState, BlockingFunctionCode,
+    BlockingFunctionFailure, RequestHeaders,
 };
 use fireemu_core_auth::jwt::{base64url_encode, decode_unsigned};
 use fireemu_core_auth::mfa::TotpPolicy;
@@ -184,6 +184,7 @@ fn state() -> AuthState {
         fake_custom_token_expiry:
             fireemu_adapter_http::identity_toolkit::FakeCustomTokenExpiry::Ignore,
         custom_token_trust: None,
+        idp_assertions: fireemu_adapter_http::identity_toolkit::IdpAssertionPolicy::Fixture,
         app_check: None,
         app_check_policy: None,
         tenancy: None,
@@ -228,11 +229,16 @@ fn assert_mfa_finalize_refused(
 }
 
 fn assert_phone_mfa_failures_roll_back(state: &mut AuthState, body: &Value) {
-    for hook in [
-        Arc::new(RejectBeforeSignInHook { timeout: false }) as Arc<dyn AuthBlockingHook>,
-        Arc::new(RejectBeforeSignInHook { timeout: true }),
+    // An unhandled failure is production's masked 503; an elapsed deadline its 400
+    // (AUTH-TENANT-BLOCKING recording 2026-09-28).
+    for (hook, status) in [
+        (
+            Arc::new(RejectBeforeSignInHook { timeout: false }) as Arc<dyn AuthBlockingHook>,
+            503,
+        ),
+        (Arc::new(RejectBeforeSignInHook { timeout: true }), 400),
     ] {
-        assert_mfa_finalize_refused(state, body, hook, 503);
+        assert_mfa_finalize_refused(state, body, hook, status);
     }
     for response in [
         json!({"userRecord": {"updateMask": "sessionClaims", "sessionClaims": {"firebase": "reserved"}}}),
@@ -739,6 +745,9 @@ fn password_reset_rejects_oversize_and_malformed_passwords_without_consuming_oob
     assert_eq!(status, 200, "{recovered}");
 }
 
+/// Strict: a password reset refuses the sessions before it as `TOKEN_EXPIRED`; the refresh
+/// record is kept and judged against the new `validSince` (sandbox recording 2026-09-24,
+/// auth-action/password-reset#refresh-token-before-reset).
 #[test]
 fn strict_profile_password_reset_revokes_the_existing_refresh_token() {
     let s = AuthState {
@@ -750,6 +759,7 @@ fn strict_profile_password_reset_revokes_the_existing_refresh_token() {
         fake_custom_token_expiry:
             fireemu_adapter_http::identity_toolkit::FakeCustomTokenExpiry::Reject,
         custom_token_trust: None,
+        idp_assertions: fireemu_adapter_http::identity_toolkit::IdpAssertionPolicy::Fixture,
         ..state()
     };
     let signed_up = sign_up(&s, "strict-reset@example.com");
@@ -762,6 +772,11 @@ fn strict_profile_password_reset_revokes_the_existing_refresh_token() {
     assert_eq!(status, 200, "{sent}");
     let (_, codes) = get(&s, &format!("{EMU}/oobCodes"));
     let code = codes["oobCodes"][0]["oobCode"].as_str().unwrap();
+    s.clock
+        .lock()
+        .unwrap()
+        .advance(fireemu_core_types::time::LogicalDuration::from_seconds(2))
+        .unwrap();
     let (status, reset) = post(
         &s,
         &format!("{V1}/accounts:resetPassword"),
@@ -775,7 +790,7 @@ fn strict_profile_password_reset_revokes_the_existing_refresh_token() {
         &json!({"grant_type": "refresh_token", "refresh_token": refresh_token}),
     );
     assert_eq!(status, 400, "{refreshed}");
-    assert_eq!(refreshed["error"]["message"], "INVALID_REFRESH_TOKEN");
+    assert_eq!(refreshed["error"]["message"], "TOKEN_EXPIRED");
 }
 
 #[test]
@@ -3210,6 +3225,9 @@ fn client_tenant_id_selects_the_namespace_and_must_match_the_id_token() {
     assert_eq!(mismatch["error"]["message"], "TENANT_ID_MISMATCH");
 }
 
+/// A JWT custom token's tenant claim must name the tenant it is exchanged in, as the official
+/// emulator checks it; a JSON fake token's claim is checked nowhere there, and not here
+/// (`the_emulator_profile_checks_a_custom_token_tenant_claim_only_where_the_official_emulator_does`).
 #[test]
 fn custom_token_tenant_id_must_match_the_target_tenant() {
     use fireemu_core_auth::store::AuthRegistry;
@@ -3218,7 +3236,16 @@ fn custom_token_tenant_id_must_match_the_target_tenant() {
     let registry = Arc::new(AuthRegistry::new("demo-app", s.store.clone()));
     registry.ensure_tenant("demo-app", "customer-a").unwrap();
     s.registry = Some(registry);
-    let token = json!({"uid": "tenant-custom-user", "tenant_id": "customer-b"}).to_string();
+    let header = base64url_encode(br#"{"alg":"none","typ":"JWT"}"#);
+    let payload = json!({
+        "aud": "https://identitytoolkit.googleapis.com/google.identity.identitytoolkit.v1.IdentityToolkit",
+        "uid": "tenant-custom-user",
+        "tenant_id": "customer-b",
+    });
+    let token = format!(
+        "{header}.{}.",
+        base64url_encode(payload.to_string().as_bytes())
+    );
 
     let (status, body) = post(
         &s,
@@ -3405,7 +3432,8 @@ fn tenant_manager_crud_lists_and_removes_explicit_tenants() {
     let deleted = handle_with(&s, "DELETE", &item, &owner(), &json!({}));
     assert_eq!(deleted.status, 200, "{}", deleted.body);
     let listed = handle_with(&s, "GET", &collection, &owner(), &json!({}));
-    assert_eq!(listed.body["tenants"].as_array().unwrap().len(), 0);
+    // Production answers an empty list as `{}` (AUTH-TENANT-BLOCKING recording 2026-09-27).
+    assert!(listed.body.get("tenants").is_none(), "{}", listed.body);
     let implicit = handle_with(&s, "GET", &item, &owner(), &json!({}));
     assert_eq!(implicit.status, 404, "{}", implicit.body);
     assert_eq!(implicit.body["error"]["message"], "TENANT_NOT_FOUND");
@@ -3877,7 +3905,11 @@ fn admin_v2_config_update_mask_is_typed_atomic_and_scoped() {
         }),
     );
     assert_eq!(outside_mask.status, 400, "{}", outside_mask.body);
-    assert_eq!(outside_mask.body["error"]["message"], "INVALID_ARGUMENT");
+    // Production parses the whole body first and names the member it cannot read.
+    assert_eq!(
+        outside_mask.body["error"]["message"],
+        "Invalid value at 'config.email_privacy_config.enable_improved_email_privacy' (TYPE_BOOL), \"wrong type\""
+    );
     let after_outside_mask = read();
     assert_eq!(
         after_outside_mask.status, 200,
@@ -3945,11 +3977,41 @@ fn admin_v2_config_update_mask_is_typed_atomic_and_scoped() {
         false
     );
 
+    // Production ignores a path it does not know and a repeated path (sandbox recording
+    // 2026-09-25, AUTH-CONFIG-SDK config/mask): only the known path is written.
     for mask in [
-        "signIn.unknown",
-        "signIn.allowDuplicateEmails,signIn.allowDuplicateEmails",
+        "signIn.unknown,emailPrivacyConfig.enableImprovedEmailPrivacy",
+        "emailPrivacyConfig.enableImprovedEmailPrivacy,emailPrivacyConfig.enableImprovedEmailPrivacy",
+        "emailPrivacyConfig.enableImprovedEmailPrivacy%2CemailPrivacyConfig.enableImprovedEmailPrivacy",
+    ] {
+        let accepted = handle_with(
+            &s,
+            "PATCH",
+            &format!("{path}?updateMask={mask}"),
+            &owner(),
+            &json!({
+                "signIn": {"allowDuplicateEmails": false},
+                "emailPrivacyConfig": {"enableImprovedEmailPrivacy": true}
+            }),
+        );
+        assert_eq!(accepted.status, 200, "mask={mask}: {}", accepted.body);
+        assert_eq!(accepted.body["signIn"]["allowDuplicateEmails"], true, "{mask}");
+        assert_eq!(
+            accepted.body["emailPrivacyConfig"]["enableImprovedEmailPrivacy"],
+            true,
+            "{mask}"
+        );
+    }
+    let privacy_off = handle_with(
+        &s,
+        "PATCH",
+        &format!("{path}?updateMask=emailPrivacyConfig.enableImprovedEmailPrivacy"),
+        &owner(),
+        &json!({"emailPrivacyConfig": {"enableImprovedEmailPrivacy": false}}),
+    );
+    assert_eq!(privacy_off.status, 200, "{}", privacy_off.body);
+    for mask in [
         "signIn.allowDuplicateEmails,,emailPrivacyConfig.enableImprovedEmailPrivacy",
-        "signIn.allowDuplicateEmails%2CsignIn.allowDuplicateEmails",
         "signIn.allowDuplicateEmails&updateMask=emailPrivacyConfig.enableImprovedEmailPrivacy",
         "%ZZ",
     ] {
@@ -4090,147 +4152,191 @@ fn admin_v2_config_empty_mask_does_not_revert_a_concurrent_update() {
     assert_eq!(result.body["signIn"]["allowDuplicateEmails"], true);
 }
 
-#[test]
-fn admin_v2_config_racing_tenant_publication_keeps_inherited_config_current() {
-    let mut base = state();
+/// The state of a profile with a registry: the strict profile with multi-tenancy switched on,
+/// as tenant management there needs.
+fn tenant_profile_state(strict: bool) -> (AuthState, Arc<fireemu_core_auth::store::AuthRegistry>) {
+    let mut base = if strict {
+        AuthState {
+            stateless_refresh_tokens: false,
+            ..state()
+        }
+    } else {
+        state()
+    };
     let registry = Arc::new(fireemu_core_auth::store::AuthRegistry::new(
         "demo-app",
         base.store.clone(),
     ));
     base.registry = Some(registry.clone());
-    let state = Arc::new(base);
-    let start = Arc::new(std::sync::Barrier::new(3));
-    let config_path =
-        "/identitytoolkit.googleapis.com/admin/v2/projects/demo-app/config?updateMask=emailPrivacyConfig.enableImprovedEmailPrivacy";
-    let tenants_path = "/identitytoolkit.googleapis.com/v2/projects/demo-app/tenants";
-    std::thread::scope(|scope| {
-        let config_state = Arc::clone(&state);
-        let config_start = Arc::clone(&start);
-        scope.spawn(move || {
-            config_start.wait();
-            handle_with(
-                &config_state,
-                "PATCH",
-                config_path,
-                &owner(),
-                &json!({
-                    "emailPrivacyConfig": {"enableImprovedEmailPrivacy": true}
-                }),
-            )
-        });
-        let tenant_state = Arc::clone(&state);
-        let tenant_start = Arc::clone(&start);
-        scope.spawn(move || {
-            tenant_start.wait();
-            handle_with(
-                &tenant_state,
-                "POST",
-                tenants_path,
-                &owner(),
-                &json!({"displayName": "racing tenant"}),
-            )
-        });
-        start.wait();
-    });
-    assert!(registry.tenants("demo-app").iter().any(|tenant| {
-        registry
-            .tenant_store("demo-app", tenant)
-            .and_then(|store| store.lock().ok().map(|store| store.config()))
-            .is_some_and(|config| config.enable_improved_email_privacy)
-    }));
+    if strict {
+        let enabled = handle_with(
+            &base,
+            "PATCH",
+            "/identitytoolkit.googleapis.com/admin/v2/projects/demo-app/config?updateMask=multiTenant.allowTenants",
+            &owner(),
+            &json!({"multiTenant": {"allowTenants": true}}),
+        );
+        assert_eq!(enabled.status, 200, "{}", enabled.body);
+    }
+    (base, registry)
 }
 
+/// Whichever of a project update and a tenant creation wins, the tenant ends as its profile
+/// says: the strict profile's inherits nothing (AUTH-TENANT-BLOCKING recording 2026-09-27), the
+/// emulator profile's reads the project's email privacy, as the official emulator's does
+/// (round-2 integration review M1, 2026-09-29).
 #[test]
-fn admin_v2_tenant_create_does_not_reset_omitted_inherited_config() {
-    use fireemu_core_auth::store::AuthRegistry;
+fn admin_v2_config_racing_tenant_publication_leaves_the_tenant_as_its_profile_says() {
+    for strict in [true, false] {
+        let (base, registry) = tenant_profile_state(strict);
+        let state = Arc::new(base);
+        let start = Arc::new(std::sync::Barrier::new(3));
+        let config_path =
+            "/identitytoolkit.googleapis.com/admin/v2/projects/demo-app/config?updateMask=emailPrivacyConfig.enableImprovedEmailPrivacy";
+        let tenants_path = "/identitytoolkit.googleapis.com/v2/projects/demo-app/tenants";
+        std::thread::scope(|scope| {
+            let config_state = Arc::clone(&state);
+            let config_start = Arc::clone(&start);
+            scope.spawn(move || {
+                config_start.wait();
+                handle_with(
+                    &config_state,
+                    "PATCH",
+                    config_path,
+                    &owner(),
+                    &json!({
+                        "emailPrivacyConfig": {"enableImprovedEmailPrivacy": true}
+                    }),
+                )
+            });
+            let tenant_state = Arc::clone(&state);
+            let tenant_start = Arc::clone(&start);
+            scope.spawn(move || {
+                tenant_start.wait();
+                handle_with(
+                    &tenant_state,
+                    "POST",
+                    tenants_path,
+                    &owner(),
+                    &json!({"displayName": "racing-tenant"}),
+                )
+            });
+            start.wait();
+        });
+        let tenants = registry.tenants("demo-app");
+        assert_eq!(tenants.len(), 1, "strict {strict}");
+        assert!(
+            tenants.iter().all(|tenant| {
+                registry
+                    .tenant_store("demo-app", tenant)
+                    .and_then(|store| store.lock().ok().map(|store| store.config()))
+                    .is_some_and(|config| config.enable_improved_email_privacy != strict)
+            }),
+            "strict {strict}"
+        );
+        assert!(
+            state
+                .store
+                .lock()
+                .unwrap()
+                .config()
+                .enable_improved_email_privacy
+        );
+    }
+}
 
-    let mut base = state();
-    let registry = Arc::new(AuthRegistry::new("demo-app", base.store.clone()));
-    base.registry = Some(registry.clone());
-    let state = base;
-    let config_path =
-        "/identitytoolkit.googleapis.com/admin/v2/projects/demo-app/config?updateMask=emailPrivacyConfig.enableImprovedEmailPrivacy,client.permissions.disabledUserSignup";
-    let enabled = handle_with(
-        &state,
-        "PATCH",
-        config_path,
-        &owner(),
-        &json!({
-            "emailPrivacyConfig": {"enableImprovedEmailPrivacy": true},
-            "client": {"permissions": {"disabledUserSignup": true}}
-        }),
-    );
-    assert_eq!(enabled.status, 200, "{}", enabled.body);
+/// A tenant created after project changes: the strict profile's takes none of them, as
+/// production tenants inherit no project setting (AUTH-TENANT-BLOCKING recording 2026-09-27,
+/// inheritance#get-after, sign-up-in-late-tenant); the emulator profile's reads the project's
+/// email privacy, as the official emulator's does (round-2 integration review M1, 2026-09-29).
+/// Client permissions start off in both. fireemu used to copy the project's privacy and client
+/// permissions.
+#[test]
+#[allow(clippy::too_many_lines)]
+fn admin_v2_tenant_create_takes_the_project_config_as_its_profile_says() {
+    for strict in [true, false] {
+        let (state, registry) = tenant_profile_state(strict);
+        let config_path =
+            "/identitytoolkit.googleapis.com/admin/v2/projects/demo-app/config?updateMask=emailPrivacyConfig.enableImprovedEmailPrivacy,client.permissions.disabledUserSignup";
+        let enabled = handle_with(
+            &state,
+            "PATCH",
+            config_path,
+            &owner(),
+            &json!({
+                "emailPrivacyConfig": {"enableImprovedEmailPrivacy": true},
+                "client": {"permissions": {"disabledUserSignup": true}}
+            }),
+        );
+        assert_eq!(enabled.status, 200, "{}", enabled.body);
+        let followed = !strict;
 
-    let created = handle_with(
-        &state,
-        "POST",
-        "/identitytoolkit.googleapis.com/v2/projects/demo-app/tenants",
-        &owner(),
-        &json!({"displayName": "inherited config tenant"}),
-    );
-    assert_eq!(created.status, 200, "{}", created.body);
-    assert_eq!(
-        created.body["emailPrivacyConfig"]["enableImprovedEmailPrivacy"],
-        true
-    );
-    assert_eq!(
-        created.body["client"]["permissions"]["disabledUserSignup"],
-        true
-    );
-    let tenant = created.body["name"]
-        .as_str()
-        .unwrap()
-        .rsplit('/')
-        .next()
-        .unwrap();
-    assert!(registry
-        .tenant_store("demo-app", tenant)
-        .and_then(|store| store.lock().ok().map(|store| store.config()))
-        .is_some_and(|config| {
-            config.enable_improved_email_privacy && config.disabled_user_signup
-        }));
-    assert!(registry
-        .tenant_metadata("demo-app", tenant)
-        .is_some_and(|metadata| {
-            metadata.enable_improved_email_privacy && metadata.disabled_user_signup
-        }));
-    let read = handle_with(
-        &state,
-        "GET",
-        &format!("/identitytoolkit.googleapis.com/v2/projects/demo-app/tenants/{tenant}"),
-        &owner(),
-        &json!({}),
-    );
-    assert_eq!(read.status, 200, "{}", read.body);
-    assert_eq!(
-        read.body["emailPrivacyConfig"]["enableImprovedEmailPrivacy"],
-        true
-    );
-    assert_eq!(
-        read.body["client"]["permissions"]["disabledUserSignup"],
-        true
-    );
-
-    let explicit_false = handle_with(
-        &state,
-        "POST",
-        "/identitytoolkit.googleapis.com/v2/projects/demo-app/tenants",
-        &owner(),
-        &json!({
-            "client": {"permissions": {"disabledUserSignup": false}},
-            "emailPrivacyConfig": {"enableImprovedEmailPrivacy": false}
-        }),
-    );
-    assert_eq!(explicit_false.status, 200, "{}", explicit_false.body);
-    assert_eq!(
-        explicit_false.body["emailPrivacyConfig"]["enableImprovedEmailPrivacy"],
-        false
-    );
-    assert_eq!(
-        explicit_false.body["client"]["permissions"]["disabledUserSignup"],
-        false
-    );
+        let created = handle_with(
+            &state,
+            "POST",
+            "/identitytoolkit.googleapis.com/v2/projects/demo-app/tenants",
+            &owner(),
+            &json!({"displayName": "late-tenant"}),
+        );
+        assert_eq!(created.status, 200, "{}", created.body);
+        // The emulator profile's tenant follows the project's privacy without answering it,
+        // as the official emulator's does (issue
+        // emulator-tenant-document-shows-the-projects-email-privacy).
+        assert!(
+            created.body.get("emailPrivacyConfig").is_none(),
+            "strict {strict}: {}",
+            created.body
+        );
+        assert!(created.body.get("client").is_none(), "{}", created.body);
+        let tenant = created.body["name"]
+            .as_str()
+            .unwrap()
+            .rsplit('/')
+            .next()
+            .unwrap();
+        assert!(
+            registry
+                .tenant_store("demo-app", tenant)
+                .and_then(|store| store.lock().ok().map(|store| store.config()))
+                .is_some_and(|config| {
+                    config.enable_improved_email_privacy == followed && !config.disabled_user_signup
+                }),
+            "strict {strict}"
+        );
+        assert!(
+            registry
+                .tenant_metadata("demo-app", tenant)
+                .is_some_and(|metadata| {
+                    metadata.enable_improved_email_privacy == followed
+                        && !metadata.disabled_user_signup
+                }),
+            "strict {strict}"
+        );
+        // A tenant's own written values show, a written message kept even when off; the
+        // emulator profile's create keeps no emailPrivacyConfig, as the official emulator's
+        // `createTenant` keeps none, and its privacy stays the project's.
+        let explicit = handle_with(
+            &state,
+            "POST",
+            "/identitytoolkit.googleapis.com/v2/projects/demo-app/tenants",
+            &owner(),
+            &json!({
+                "displayName": "own-values",
+                "client": {"permissions": {"disabledUserSignup": true}},
+                "emailPrivacyConfig": {"enableImprovedEmailPrivacy": false}
+            }),
+        );
+        assert_eq!(explicit.status, 200, "{}", explicit.body);
+        assert_eq!(
+            explicit.body.get("emailPrivacyConfig").cloned(),
+            strict.then(|| json!({})),
+            "strict {strict}"
+        );
+        assert_eq!(
+            explicit.body["client"],
+            json!({"permissions": {"disabledUserSignup": true}})
+        );
+    }
 }
 
 #[test]
@@ -4645,17 +4751,28 @@ fn blocking_auth_receives_every_non_idp_sign_in_method() {
         "password"
     );
 
-    contexts.lock().unwrap().clear();
-    let mut custom = state();
-    assert_eq!(
-        recorded_method(
-            &mut custom,
-            &contexts,
-            &format!("{V1}/accounts:signInWithCustomToken"),
-            &json!({"token": custom_token("blocking-custom")}),
+    // Identity Platform runs no blocking function for a custom-token sign-in or an anonymous
+    // sign-up (AUTH-TENANT-BLOCKING recording 2026-09-28, custom-token#custom-* and
+    // events#sign-up-anonymous).
+    for (path, body) in [
+        (
+            format!("{V1}/accounts:signInWithCustomToken"),
+            json!({"token": custom_token("blocking-custom"), "returnSecureToken": true}),
         ),
-        "custom"
-    );
+        (
+            format!("{V1}/accounts:signUp"),
+            json!({"returnSecureToken": true}),
+        ),
+    ] {
+        contexts.lock().unwrap().clear();
+        let mut state = state();
+        state.blocking = Some(Arc::new(FilteringIdpBlockingHook {
+            contexts: Arc::clone(&contexts),
+        }));
+        let (status, response) = post(&state, &path, &body);
+        assert_eq!(status, 200, "{path}: {response}");
+        assert!(contexts.lock().unwrap().is_empty(), "{path}");
+    }
 
     contexts.lock().unwrap().clear();
     let mut email_link = state();
@@ -4693,18 +4810,6 @@ fn blocking_auth_receives_every_non_idp_sign_in_method() {
             &json!({"sessionInfo": sent["sessionInfo"], "code": codes["verificationCodes"][0]["code"]}),
         ),
         "phone"
-    );
-
-    contexts.lock().unwrap().clear();
-    let mut anonymous = state();
-    assert_eq!(
-        recorded_method(
-            &mut anonymous,
-            &contexts,
-            &format!("{V1}/accounts:signUp"),
-            &json!({}),
-        ),
-        "anonymous"
     );
 }
 
@@ -5030,7 +5135,8 @@ fn rejected_mfa_hooks_drop_raw_credentials_but_keep_retry_provenance() {
             Arc::new(RejectBeforeSignInHook { timeout: false }) as Arc<dyn AuthBlockingHook>,
             503,
         ),
-        (Arc::new(RejectBeforeSignInHook { timeout: true }), 503),
+        // Identity Platform's elapsed deadline is its 400 (recording 2026-09-28, timeout#*).
+        (Arc::new(RejectBeforeSignInHook { timeout: true }), 400),
         (
             Arc::new(FixedBeforeSignInHook {
                 response: json!({
@@ -5131,7 +5237,14 @@ fn federated_totp_finalize_preserves_attributes_and_blocking_context() {
     assert_eq!(token["firebase"]["sign_in_provider"], "oidc.corp");
     assert_eq!(token["firebase"]["sign_in_attributes"], oidc);
     assert_eq!(token["selectedRole"], "auditor");
-    let recorded = contexts.lock().unwrap();
+    assert_idp_totp_before_sign_in(&contexts.lock().unwrap(), &oidc);
+}
+
+/// The one beforeSignIn event of an identity-provider first factor finalized with TOTP.
+fn assert_idp_totp_before_sign_in(
+    recorded: &[(BlockingAuthEvent, AuthBlockingContext)],
+    oidc: &Value,
+) {
     assert_eq!(recorded.len(), 1);
     assert_eq!(recorded[0].0, BlockingAuthEvent::BeforeSignIn);
     assert_eq!(
@@ -5140,8 +5253,67 @@ fn federated_totp_finalize_preserves_attributes_and_blocking_context() {
             .credential
             .as_ref()
             .and_then(|credential| credential.claims.as_ref()),
-        Some(&oidc)
+        Some(oidc)
     );
+    // The identity provider of the first factor is the event's additional user info, with its
+    // profile, for an account that is not new (closure re-review S1', 2026-09-28).
+    let info = recorded[0]
+        .1
+        .additional_user_info
+        .as_ref()
+        .expect("an identity-provider first factor names its provider");
+    assert_eq!(info.provider_id, "oidc.corp");
+    assert_eq!(info.profile.as_ref(), Some(oidc));
+    assert!(!info.is_new_user);
+    // The account's enrolled factor and its provider reach the event (B9).
+    let factors = &recorded[0].1.enrolled_factors;
+    assert_eq!(factors.len(), 1);
+    assert_eq!(factors[0].factor_id, "totp");
+    assert_eq!(factors[0].phone_number, None);
+    assert!(factors[0].enrollment_time.is_some());
+    assert!(recorded[0]
+        .1
+        .provider_data
+        .iter()
+        .any(|provider| provider.provider_id == "oidc.corp"));
+}
+
+/// The event of a sign-in names the account's providers as an account lookup lists them, the
+/// phone number first and the password provider for an address with a password
+/// (AUTH-TENANT-BLOCKING recording 2026-09-28, B9; closure re-review S1').
+#[test]
+fn a_blocking_event_names_the_account_providers_as_a_lookup_lists_them() {
+    let contexts = Arc::new(Mutex::new(Vec::new()));
+    let mut s = state();
+    let user = sign_up(&s, "providers@example.com");
+    let (status, updated) = admin(
+        &s,
+        &format!("{V1}/projects/demo-app/accounts:update"),
+        &json!({"localId": user["localId"], "phoneNumber": "+15550001234"}),
+    );
+    assert_eq!(status, 200, "{updated}");
+    s.blocking = Some(Arc::new(RawCredentialBlockingHook {
+        contexts: Arc::clone(&contexts),
+        forward_inbound_credentials: false,
+        token_policy: None,
+    }));
+    let (status, signed) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithPassword"),
+        &json!({"email": "providers@example.com", "password": "hunter22"}),
+    );
+    assert_eq!(status, 200, "{signed}");
+    let recorded = contexts.lock().unwrap();
+    assert_eq!(recorded.len(), 1);
+    let providers = &recorded[0].1.provider_data;
+    let ids: Vec<&str> = providers.iter().map(|p| p.provider_id.as_str()).collect();
+    assert_eq!(ids, ["phone", "password"]);
+    assert_eq!(providers[0].phone_number.as_deref(), Some("+15550001234"));
+    assert_eq!(providers[0].uid, "+15550001234");
+    assert_eq!(providers[1].email.as_deref(), Some("providers@example.com"));
+    assert_eq!(providers[1].uid, "providers@example.com");
+    assert_eq!(providers[1].phone_number, None);
+    assert!(recorded[0].1.enrolled_factors.is_empty());
 }
 
 #[test]
@@ -5405,6 +5577,7 @@ fn oob_authorization_state(strict: bool) -> (AuthState, Arc<Mutex<Vec<String>>>)
         s.query_limits = fireemu_adapter_http::identity_toolkit::AuthQueryLimits::ProductionBounded;
         s.fake_custom_token_expiry =
             fireemu_adapter_http::identity_toolkit::FakeCustomTokenExpiry::Reject;
+        enable_project_sms_mfa(&s);
     }
     (s, lines)
 }
@@ -5482,7 +5655,10 @@ fn pending_retry_preserves_sms_after_a_mismatched_pending_credential() {
         );
         assert_eq!(status, 200, "{lookup}");
         assert_eq!(lookup["users"][0]["localId"], user["localId"]);
-        assert_eq!(s.store.lock().unwrap().pending_sign_in_count(), count - 1);
+        assert_eq!(
+            s.store.lock().unwrap().pending_sign_in_count(),
+            count - 1 + usize::from(strict)
+        );
         assert_ne!(finalize_mfa(&s, &json!({"mfaPendingCredential": a["mfaPendingCredential"], "phoneVerificationInfo": phone})).0, 200);
     }
 }
@@ -5571,7 +5747,8 @@ fn pending_retry_preserves_sms_codes_across_purpose_mismatches() {
             let remaining = store.verification_codes();
             assert_eq!(remaining.len(), 1);
             assert_eq!(remaining[0].session_info, plain_session);
-            assert_eq!(store.pending_sign_in_count(), count - 1);
+            let kept = usize::from(strict);
+            assert_eq!(store.pending_sign_in_count(), count - 1 + kept);
         }
         let (status, lookup) = post(
             &s,
@@ -5687,7 +5864,11 @@ fn pending_retry_survives_sms_expiry_while_the_pending_credential_lives() {
         let (status, signed) = finalize_phone_step(&s, &pending, &phone);
         assert_eq!(status, 200, "{signed}");
         assert!(s.store.lock().unwrap().verification_codes().is_empty());
-        assert_eq!(s.store.lock().unwrap().pending_sign_in_count(), 0);
+        // Production keeps the pending credential after success (auth-mfa/sms).
+        assert_eq!(
+            s.store.lock().unwrap().pending_sign_in_count(),
+            usize::from(strict)
+        );
 
         // One second past it the code is refused, but the pending credential is kept: the
         // same pending credential can start a fresh code and finalize with it.
@@ -5699,7 +5880,11 @@ fn pending_retry_survives_sms_expiry_while_the_pending_credential_lives() {
         assert_eq!(refused["error"]["message"], "INVALID_SESSION_INFO");
         assert!(refused.get("idToken").is_none());
         assert!(s.store.lock().unwrap().verification_codes().is_empty());
-        assert_eq!(s.store.lock().unwrap().pending_sign_in_count(), 1);
+        // The pending credential of the first sign-in above is kept under production's rules.
+        assert_eq!(
+            s.store.lock().unwrap().pending_sign_in_count(),
+            1 + usize::from(strict)
+        );
         let fresh = start_phone_code(&s, &pending);
         assert_ne!(fresh["sessionInfo"], phone["sessionInfo"]);
         assert_ne!(
@@ -5716,16 +5901,47 @@ fn pending_retry_survives_sms_expiry_while_the_pending_credential_lives() {
         );
         assert_eq!(status, 200, "{lookup}");
         assert_eq!(lookup["users"][0]["localId"], user["localId"]);
-        assert_eq!(s.store.lock().unwrap().pending_sign_in_count(), 0);
+        // Both pending credentials of this test are kept under production's rules.
+        assert_eq!(
+            s.store.lock().unwrap().pending_sign_in_count(),
+            2 * usize::from(strict)
+        );
     }
 }
 
 #[test]
 fn pending_retry_ends_when_the_pending_credential_expires() {
-    use fireemu_core_auth::store::PENDING_SIGN_IN_TTL_SECONDS;
-    for strict in [false, true] {
+    use fireemu_core_auth::store::{
+        OBSERVED_SMS_PENDING_START_SECONDS, PENDING_SIGN_IN_TTL_SECONDS,
+    };
+    // Under production's rules the SMS step starts only before the observed limit (sandbox
+    // recording 2026-09-25, auth-mfa/lifetime-sms), and after the hour the swept credential is
+    // unknown.
+    {
         let email = "pending-lifetime@example.com";
-        let (s, _) = pending_expiry_state(strict, email);
+        let (s, _) = pending_expiry_state(true, email);
+        let pending = pending_login(&s, email);
+        advance_clock(&s, OBSERVED_SMS_PENDING_START_SECONDS - 1);
+        let phone = start_phone_code(&s, &pending);
+        let (status, signed) = finalize_phone_step(&s, &pending, &phone);
+        assert_eq!(status, 200, "{signed}");
+        let pending = pending_login(&s, email);
+        advance_clock(&s, OBSERVED_SMS_PENDING_START_SECONDS);
+        let (status, refused) = start_phone_step(&s, &pending);
+        assert_eq!(status, 400, "{refused}");
+        assert_eq!(
+            refused["error"]["message"],
+            "INVALID_MFA_PENDING_CREDENTIAL : MFA pending credential is expired."
+        );
+        advance_clock(&s, PENDING_SIGN_IN_TTL_SECONDS);
+        let (status, refused) = start_phone_step(&s, &pending);
+        assert_eq!(status, 400, "{refused}");
+        assert_eq!(refused["error"]["message"], "INVALID_PENDING_TOKEN");
+    }
+    // The official emulator's rules: the pending credential's hour.
+    {
+        let email = "pending-lifetime@example.com";
+        let (s, _) = pending_expiry_state(false, email);
         // At the pending lifetime a fresh code still finalizes; one second past it the
         // pending credential is gone, its code with it, and start is refused as well.
         let pending = pending_login(&s, email);
@@ -5777,7 +5993,11 @@ fn pending_and_sms_expiry_matrix_keeps_expiry_causes_separate() {
         let (status, signed) = finalize_phone_step(&s, &pending, &phone);
         assert_eq!(status, 200, "{signed}");
         assert!(signed["idToken"].is_string());
-        assert_eq!(s.store.lock().unwrap().pending_sign_in_count(), 0);
+        // Production keeps the pending credential after success (auth-mfa/sms).
+        assert_eq!(
+            s.store.lock().unwrap().pending_sign_in_count(),
+            usize::from(strict)
+        );
         let (status, lookup) = post(
             &s,
             &format!("{V1}/accounts:lookup"),
@@ -5798,30 +6018,45 @@ fn pending_and_sms_expiry_matrix_keeps_expiry_causes_separate() {
         let fresh = start_phone_code(&s, &pending);
         let (status, signed) = finalize_phone_step(&s, &pending, &fresh);
         assert_eq!(status, 200, "{signed}");
-        assert_eq!(s.store.lock().unwrap().pending_sign_in_count(), 0);
+        assert_eq!(
+            s.store.lock().unwrap().pending_sign_in_count(),
+            usize::from(strict)
+        );
 
         let (s, _) = pending_expiry_state(strict, "expiry-matrix-pending@example.com");
         let pending = pending_login(&s, "expiry-matrix-pending@example.com");
         advance_clock(&s, PENDING_SIGN_IN_TTL_SECONDS - 1);
-        let phone = start_phone_code(&s, &pending);
-        advance_clock(&s, 2);
-        let at = s.clock.lock().unwrap().now_for_test();
-        assert!(s
-            .store
-            .lock()
-            .unwrap()
-            .check_phone_code(
-                phone["sessionInfo"].as_str().unwrap(),
-                phone["code"].as_str().unwrap(),
-                at,
-            )
-            .is_ok());
-        let (status, refused) = finalize_phone_step(&s, &pending, &phone);
-        assert_eq!(status, 400, "{refused}");
-        assert_eq!(refused["error"]["message"], "INVALID_SESSION_INFO");
-        assert!(refused.get("idToken").is_none());
-        assert_eq!(s.store.lock().unwrap().pending_sign_in_count(), 0);
-        assert!(s.store.lock().unwrap().verification_codes().is_empty());
+        if strict {
+            // Production refuses the SMS step of a pending credential from about 603 seconds
+            // (sandbox recording 2026-09-25, auth-mfa/lifetime-sms), so under its rules a
+            // pending credential cannot outlive a code started for it.
+            let (status, refused) = start_phone_step(&s, &pending);
+            assert_eq!(status, 400, "{refused}");
+            assert_eq!(
+                refused["error"]["message"],
+                "INVALID_MFA_PENDING_CREDENTIAL : MFA pending credential is expired."
+            );
+        } else {
+            let phone = start_phone_code(&s, &pending);
+            advance_clock(&s, 2);
+            let at = s.clock.lock().unwrap().now_for_test();
+            assert!(s
+                .store
+                .lock()
+                .unwrap()
+                .check_phone_code(
+                    phone["sessionInfo"].as_str().unwrap(),
+                    phone["code"].as_str().unwrap(),
+                    at,
+                )
+                .is_ok());
+            let (status, refused) = finalize_phone_step(&s, &pending, &phone);
+            assert_eq!(status, 400, "{refused}");
+            assert_eq!(refused["error"]["message"], "INVALID_SESSION_INFO");
+            assert!(refused.get("idToken").is_none());
+            assert_eq!(s.store.lock().unwrap().pending_sign_in_count(), 0);
+            assert!(s.store.lock().unwrap().verification_codes().is_empty());
+        }
 
         let (s, _) = pending_expiry_state(strict, "expiry-matrix-both@example.com");
         let pending = pending_login(&s, "expiry-matrix-both@example.com");
@@ -5949,8 +6184,15 @@ fn pending_retry_refuses_finalize_after_the_account_is_disabled() {
         );
         assert_eq!(status, 200, "{lookup}");
         assert_eq!(lookup["users"][0]["localId"], user["localId"]);
-        assert!(s.store.lock().unwrap().verification_codes().is_empty());
-        assert_eq!(s.store.lock().unwrap().pending_sign_in_count(), count - 1);
+        // Production keeps the pending credential after success, and with it the codes it
+        // started (auth-mfa/sms#sign-in-finalize-again).
+        if !strict {
+            assert!(s.store.lock().unwrap().verification_codes().is_empty());
+        }
+        assert_eq!(
+            s.store.lock().unwrap().pending_sign_in_count(),
+            count - 1 + usize::from(strict)
+        );
     }
 }
 
@@ -6315,9 +6557,11 @@ fn pending_retry_observes_hook_time_delete_revoke_and_factor_changes() {
                 assert_eq!(status, 200, "{response}");
                 assert!(response["idToken"].is_string(), "{response}");
                 assert!(response["refreshToken"].is_string(), "{response}");
+                // This mutation runs under production's rules, which keep the pending
+                // credential after success (auth-mfa/sms#sign-in-finalize-again).
                 assert_eq!(
                     s.store.lock().unwrap().pending_sign_in_count(),
-                    before_pending - 1
+                    before_pending
                 );
                 assert_eq!(
                     get(&s, &format!("{EMU}/verificationCodes")).1["verificationCodes"],
@@ -7105,8 +7349,10 @@ fn oob_authorization_preserves_delivery_and_authenticated_admin_generation() {
             "VERIFY_EMAIL",
             "VERIFY_AND_CHANGE_EMAIL",
         ] {
+            // Strict needs a continue URL for a sign-in link (sandbox recording 2026-09-24).
             let mut body = json!({"requestType": request_type, "email": "oob-other@example.com",
-                "newEmail": "oob-new@example.com", "returnOobLink": false});
+                "newEmail": "oob-new@example.com", "returnOobLink": false,
+                "continueUrl": "http://localhost/"});
             let verification = matches!(request_type, "VERIFY_EMAIL" | "VERIFY_AND_CHANGE_EMAIL");
             if verification {
                 body["idToken"] = user["idToken"].clone();
@@ -8325,7 +8571,8 @@ fn routed_project_config_uses_selected_store_and_publishes_only_successful_write
         assert_eq!(registry.routed_store_for(project).is_some(), existing);
         for (mask, body, status) in [
             ("", json!({}), 200),
-            ("unknown", json!({}), 400),
+            // Production ignores a path it does not know.
+            ("unknown", json!({}), 200),
             (
                 "signIn.allowDuplicateEmails",
                 json!({"signIn":{"allowDuplicateEmails":"invalid"}}),
@@ -8397,13 +8644,12 @@ fn routed_project_config_uses_selected_store_and_publishes_only_successful_write
     }
 }
 
-/// ITKM-5. Email enumeration protection hides an unknown address from an anonymous caller.
-/// An Admin link generator is already authenticated and reads every account, so the silent
-/// 200 only costs it the link it asked for: it gets `EMAIL_NOT_FOUND`, as it does with the
-/// protection off. Production's answer for this pair is unobserved; this is the documented
-/// Admin SDK contract (`generatePasswordResetLink` rejects an unknown address).
+/// ITKM-5. Email enumeration protection hides an unknown address from every caller, the Admin
+/// link generator included: production answers its request with 200 and no code (sandbox
+/// recording 2026-09-24, `auth-action/generate/admin#reset-link-unknown`), as the official
+/// emulator does.
 #[test]
-fn improved_email_privacy_still_reports_an_unknown_address_to_an_admin_link_generator() {
+fn improved_email_privacy_hides_an_unknown_address_from_an_admin_link_generator() {
     let s = state();
     let enabled = handle_with(
         &s,
@@ -8424,13 +8670,19 @@ fn improved_email_privacy_still_reports_an_unknown_address_to_an_admin_link_gene
     assert_eq!(hidden["email"], "nobody@example.com");
     assert!(hidden.get("oobLink").is_none(), "{hidden}");
 
-    let (status, refused) = admin(
+    let (status, hidden) = admin(
         &s,
         &format!("{V1}/projects/demo-app/accounts:sendOobCode"),
         &json!({"requestType": "PASSWORD_RESET", "email": "nobody@example.com", "returnOobLink": true}),
     );
-    assert_eq!(status, 400, "{refused}");
-    assert_eq!(refused["error"]["message"], "EMAIL_NOT_FOUND");
+    assert_eq!(status, 200, "{hidden}");
+    assert_eq!(
+        hidden,
+        json!({"kind": "identitytoolkit#GetOobConfirmationCodeResponse", "email": "nobody@example.com"})
+    );
+    assert!(get(&s, &format!("{EMU}/oobCodes")).1["oobCodes"]
+        .as_array()
+        .is_some_and(Vec::is_empty));
 
     // A known address still yields the link.
     sign_up(&s, "known@example.com");
@@ -8763,6 +9015,534 @@ fn generated_saml_json_shape_corpus_is_executed_by_the_native_fixture_handler() 
         );
         if status != 200 {
             assert!(body.get("pendingToken").is_none());
+        }
+    }
+}
+
+/// Switches the project's SMS second factors on: under production's rules (the strict
+/// profile) an enrolled factor is asked for only while the project enables MFA.
+fn enable_project_sms_mfa(s: &AuthState) {
+    let r = handle_with(
+        s,
+        "PATCH",
+        "/identitytoolkit.googleapis.com/admin/v2/projects/demo-app/config?updateMask=mfa",
+        &owner(),
+        &json!({"mfa": {"state": "ENABLED", "enabledProviders": ["PHONE_SMS"]}}),
+    );
+    assert_eq!(r.status, 200, "{}", r.body);
+}
+
+/// A routed project's store is installed by any successful kind of config update: the password
+/// policy, the sign-in config, the sign-up quota and the multi-factor config each on their own
+/// (mutation follow-up, docs.local/mutation/auth-mfa/20260925).
+#[test]
+fn routed_project_config_installs_its_store_for_each_kind_of_update() {
+    for (mask, body) in [
+        (
+            "passwordPolicyConfig",
+            json!({"passwordPolicyConfig": {"passwordPolicyEnforcementState": "ENFORCE",
+                "passwordPolicyVersions": [{"customStrengthOptions": {"minPasswordLength": 12}}]}}),
+        ),
+        (
+            "signIn.allowDuplicateEmails",
+            json!({"signIn": {"allowDuplicateEmails": true}}),
+        ),
+        (
+            "quota.signUpQuotaConfig",
+            json!({"quota": {"signUpQuotaConfig": {"quota": "10", "startTime": "2026-09-25T00:00:00Z", "quotaDuration": "3600s"}}}),
+        ),
+        (
+            "mfa",
+            json!({"mfa": {"state": "ENABLED", "enabledProviders": ["PHONE_SMS"]}}),
+        ),
+    ] {
+        let mut state = state();
+        let registry = Arc::new(fireemu_core_auth::store::AuthRegistry::new(
+            "demo-app",
+            state.store.clone(),
+        ));
+        state.registry = Some(registry.clone());
+        state.allow_routed_projects = true;
+        let project = "worker-config";
+        let path = format!("/identitytoolkit.googleapis.com/admin/v2/projects/{project}/config");
+        let updated = handle_with(
+            &state,
+            "PATCH",
+            &format!("{path}?updateMask={mask}"),
+            &owner(),
+            &body,
+        );
+        assert_eq!(updated.status, 200, "{mask}: {}", updated.body);
+        assert!(registry.routed_store_for(project).is_some(), "{mask}");
+    }
+}
+
+/// A sign-in that ran a blocking function answers an unnamed account's `displayName` as `""`,
+/// as the sign-in without one does (AUTH-TENANT-BLOCKING recording 2026-09-28,
+/// events#sign-in-password).
+#[test]
+fn a_blocked_sign_in_answers_an_unnamed_account_as_production() {
+    let mut s = state();
+    sign_up(&s, "unnamed@example.com");
+    let sign_in = |s: &AuthState| {
+        post(
+            s,
+            &format!("{V1}/accounts:signInWithPassword"),
+            &json!({"email": "unnamed@example.com", "password": "hunter22", "returnSecureToken": true}),
+        )
+    };
+    let (status, plain) = sign_in(&s);
+    assert_eq!(status, 200, "{plain}");
+    s.blocking = Some(Arc::new(FixedBeforeSignInHook {
+        response: json!({"userRecord": {"updateMask": "sessionClaims", "sessionClaims": {"s": 1}}}),
+    }));
+    let (status, blocked) = sign_in(&s);
+    assert_eq!(status, 200, "{blocked}");
+    assert_eq!(blocked["displayName"], plain["displayName"], "{blocked}");
+    assert_eq!(blocked["displayName"], "");
+}
+
+/// A sign-up that ran a blocking function leaves an unnamed account's `displayName` out, as the
+/// sign-up without one does (AUTH-TENANT-BLOCKING recording 2026-09-28,
+/// events#sign-up-password and tenant#tenant-sign-up).
+#[test]
+fn a_blocked_sign_up_leaves_an_unnamed_account_out_as_production() {
+    let mut s = state();
+    let sign_up = |s: &AuthState, email: &str| {
+        post(
+            s,
+            &format!("{V1}/accounts:signUp"),
+            &json!({"email": email, "password": "hunter22", "returnSecureToken": true}),
+        )
+    };
+    let (status, plain) = sign_up(&s, "plain@example.com");
+    assert_eq!(status, 200, "{plain}");
+    assert!(plain.get("displayName").is_none(), "{plain}");
+    s.blocking = Some(Arc::new(FixedBeforeSignInHook {
+        response: json!({"userRecord": {"updateMask": "sessionClaims", "sessionClaims": {"s": 1}}}),
+    }));
+    let (status, blocked) = sign_up(&s, "blocked@example.com");
+    assert_eq!(status, 200, "{blocked}");
+    assert!(blocked.get("displayName").is_none(), "{blocked}");
+}
+
+/// Sets a claim at beforeCreate, then refuses or disables the sign-in at beforeSignIn.
+struct CreateThenRefuseSignInHook {
+    disable: bool,
+}
+
+impl AuthBlockingHook for CreateThenRefuseSignInHook {
+    fn invoke(
+        &self,
+        event: BlockingAuthEvent,
+        _user: &fireemu_core_auth::store::UserRecord,
+    ) -> Result<Value, BlockingFunctionFailure> {
+        match event {
+            BlockingAuthEvent::BeforeCreate => Ok(json!({"userRecord": {
+                "updateMask": "customClaims", "customClaims": {"created": true}}})),
+            BlockingAuthEvent::BeforeSignIn if self.disable => {
+                Ok(json!({"userRecord": {"updateMask": "disabled", "disabled": true}}))
+            }
+            BlockingAuthEvent::BeforeSignIn => Err(BlockingFunctionFailure::from_function(
+                BlockingFunctionCode::PermissionDenied,
+                "refused",
+            )
+            .unwrap()),
+            BlockingAuthEvent::BeforeSendEmail | BlockingAuthEvent::BeforeSendSms => {
+                unreachable!("a mail event has no user")
+            }
+        }
+    }
+}
+
+/// A sign-up refused at beforeSignIn keeps the account it created, with what beforeCreate set,
+/// its sign-in time and its token issuance time; so does one whose account beforeSignIn
+/// disables; a second sign-up is `EMAIL_EXISTS` (AUTH-TENANT-BLOCKING recording 2026-09-28,
+/// rollback#lookup-refused-at-sign-in, #sign-up-again and #lookup-sign-in-disabled; the
+/// official Auth emulator also creates the account before it runs beforeSignIn).
+#[test]
+fn a_sign_up_refused_at_before_sign_in_keeps_its_account_as_production() {
+    for (disable, message) in [
+        (false, "BLOCKING_FUNCTION_ERROR_RESPONSE"),
+        (true, "USER_DISABLED"),
+    ] {
+        let mut s = state();
+        s.blocking = Some(Arc::new(CreateThenRefuseSignInHook { disable }));
+        let email = "refused-at-sign-in@example.com";
+        let sign_up = |s: &AuthState| {
+            post(
+                s,
+                &format!("{V1}/accounts:signUp"),
+                &json!({"email": email, "password": "hunter22", "returnSecureToken": true}),
+            )
+        };
+        let (status, refused) = sign_up(&s);
+        assert_eq!(status, 400, "{refused}");
+        assert!(
+            refused["error"]["message"]
+                .as_str()
+                .unwrap()
+                .starts_with(message),
+            "{refused}"
+        );
+        assert!(refused.get("idToken").is_none() && refused.get("refreshToken").is_none());
+        let (status, lookup) = admin(
+            &s,
+            &format!("{V1}/projects/demo-app/accounts:lookup"),
+            &json!({"email": [email]}),
+        );
+        assert_eq!(status, 200, "{lookup}");
+        let user = &lookup["users"][0];
+        assert_eq!(user["customAttributes"], r#"{"created":true}"#, "{lookup}");
+        assert!(user["lastLoginAt"].is_string(), "{lookup}");
+        assert!(user["lastRefreshAt"].is_string(), "{lookup}");
+        assert_eq!(
+            user["disabled"].as_bool().unwrap_or(false),
+            disable,
+            "{lookup}"
+        );
+        let (status, again) = sign_up(&s);
+        assert_eq!(status, 400, "{again}");
+        assert_eq!(again["error"]["message"], "EMAIL_EXISTS");
+    }
+}
+
+/// Answers `response` at beforeCreate and nothing at beforeSignIn.
+struct FixedBeforeCreateHook {
+    response: Value,
+}
+
+impl AuthBlockingHook for FixedBeforeCreateHook {
+    fn invoke(
+        &self,
+        event: BlockingAuthEvent,
+        _user: &fireemu_core_auth::store::UserRecord,
+    ) -> Result<Value, BlockingFunctionFailure> {
+        Ok(if event == BlockingAuthEvent::BeforeCreate {
+            self.response.clone()
+        } else {
+            json!({})
+        })
+    }
+}
+
+/// An account that beforeCreate disables is kept with its token issuance time
+/// (AUTH-TENANT-BLOCKING recording 2026-09-28, rollback#lookup-create-disabled).
+#[test]
+fn a_sign_up_disabled_at_before_create_keeps_its_issuance_time_as_production() {
+    let mut s = state();
+    s.blocking = Some(Arc::new(FixedBeforeCreateHook {
+        response: json!({"userRecord": {"updateMask": "disabled", "disabled": true}}),
+    }));
+    let (status, refused) = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"email": "disabled-at-create@example.com", "password": "hunter22", "returnSecureToken": true}),
+    );
+    assert_eq!(status, 400, "{refused}");
+    assert_eq!(refused["error"]["message"], "USER_DISABLED");
+    let (_, lookup) = admin(
+        &s,
+        &format!("{V1}/projects/demo-app/accounts:lookup"),
+        &json!({"email": ["disabled-at-create@example.com"]}),
+    );
+    assert_eq!(lookup["users"][0]["disabled"], true, "{lookup}");
+    assert!(lookup["users"][0]["lastRefreshAt"].is_string(), "{lookup}");
+}
+
+/// A blocking function's custom claims read back as the runner's text of them, key order
+/// included, when that text parses to the same claims (AUTH-TENANT-BLOCKING recording
+/// 2026-09-28, rollback#lookup-refused-at-sign-in); otherwise, and for empty claims, as before.
+#[test]
+fn blocking_custom_claims_read_back_in_the_functions_key_order() {
+    let lookup = |claims: Value, text: Value| {
+        let mut s = state();
+        s.blocking = Some(Arc::new(FixedBeforeCreateHook {
+            response: json!({
+                "userRecord": {"updateMask": "customClaims", "customClaims": claims},
+                "fireemuCustomClaimsText": text,
+            }),
+        }));
+        let (status, created) = post(
+            &s,
+            &format!("{V1}/accounts:signUp"),
+            &json!({"email": "ordered@example.com", "password": "hunter22", "returnSecureToken": true}),
+        );
+        assert_eq!(status, 200, "{created}");
+        let (_, lookup) = admin(
+            &s,
+            &format!("{V1}/projects/demo-app/accounts:lookup"),
+            &json!({"localId": [created["localId"]]}),
+        );
+        lookup["users"][0].get("customAttributes").cloned()
+    };
+    let ordered = r#"{"b":1,"a":{"d":[2,"x"],"c":null}}"#;
+    let claims = json!({"b": 1, "a": {"d": [2, "x"], "c": null}});
+    assert_eq!(lookup(claims.clone(), json!(ordered)), Some(json!(ordered)));
+    let canonical = json!(r#"{"a":{"c":null,"d":[2,"x"]},"b":1}"#);
+    // A text of other claims, of reserved claims, or not text at all is not used.
+    for text in [
+        json!(r#"{"b":2,"a":{"d":[2,"x"],"c":null}}"#),
+        json!(r#"{"b":1}"#),
+        json!(r#"{"sub":"x"}"#),
+        json!(7),
+        json!("{"),
+    ] {
+        assert_eq!(
+            lookup(claims.clone(), text.clone()),
+            Some(canonical.clone()),
+            "{text}"
+        );
+    }
+    assert_eq!(lookup(json!({}), json!("{}")), None);
+}
+
+/// A blocking response's `photoURL`, the name the Functions SDK sends a function's photoURL
+/// under, is not applied; `photoUrl` is (AUTH-TENANT-BLOCKING recording 2026-09-28,
+/// ordering#lookup-profile; the official Auth emulator reads `photoUrl` only too).
+#[test]
+fn a_blocking_response_applies_photo_url_but_not_the_sdk_photo_url_name() {
+    for (field, applied) in [("photoURL", false), ("photoUrl", true)] {
+        let mut s = state();
+        s.blocking = Some(Arc::new(FixedBeforeCreateHook {
+            response: json!({"userRecord": {
+                "updateMask": format!("displayName,{field}"),
+                "displayName": "Named",
+                field: "https://example.com/p.png",
+            }}),
+        }));
+        let (status, created) = post(
+            &s,
+            &format!("{V1}/accounts:signUp"),
+            &json!({"email": "photo@example.com", "password": "hunter22", "returnSecureToken": true}),
+        );
+        assert_eq!(status, 200, "{created}");
+        let (_, lookup) = admin(
+            &s,
+            &format!("{V1}/projects/demo-app/accounts:lookup"),
+            &json!({"localId": [created["localId"]]}),
+        );
+        let user = &lookup["users"][0];
+        assert_eq!(user["displayName"], "Named", "{field}: {lookup}");
+        assert_eq!(user.get("photoUrl").is_some(), applied, "{field}: {lookup}");
+    }
+}
+
+/// An account without a password lists the password provider once it has signed in with an
+/// email link, whatever created it, as production's record does (closure re-review S1',
+/// 2026-09-28: a survivor in `account_providers`).
+#[test]
+fn an_email_link_sign_in_lists_the_password_provider_for_an_account_without_one() {
+    let s = state();
+    let (status, created) = admin(
+        &s,
+        &format!("{V1}/projects/demo-app/accounts"),
+        &json!({"email": "link-later@example.com"}),
+    );
+    assert_eq!(status, 200, "{created}");
+    let lookup = |s: &AuthState| {
+        admin(
+            s,
+            &format!("{V1}/projects/demo-app/accounts:lookup"),
+            &json!({"localId": [created["localId"]]}),
+        )
+        .1
+    };
+    assert!(lookup(&s)["users"][0].get("providerUserInfo").is_none());
+    let (status, sent) = post(
+        &s,
+        &format!("{V1}/accounts:sendOobCode"),
+        &json!({"requestType": "EMAIL_SIGNIN", "email": "link-later@example.com"}),
+    );
+    assert_eq!(status, 200, "{sent}");
+    let code = issued_code(&s, "EMAIL_SIGNIN");
+    let (status, signed) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithEmailLink"),
+        &json!({"email": "link-later@example.com", "oobCode": code}),
+    );
+    assert_eq!(status, 200, "{signed}");
+    assert_eq!(signed["localId"], created["localId"]);
+    let providers = lookup(&s)["users"][0]["providerUserInfo"].clone();
+    assert_eq!(
+        providers,
+        json!([{"providerId": "password", "rawId": "link-later@example.com", "federatedId": "link-later@example.com", "email": "link-later@example.com"}]),
+        "{providers}"
+    );
+}
+
+fn saml_fixture_cookie(s: &AuthState, tenant: Option<&str>, id_token: &Value) -> Value {
+    let namespace = tenant.map_or_else(
+        || format!("{V1}/projects/demo-app"),
+        |id| format!("{V1}/projects/demo-app/tenants/{id}"),
+    );
+    let (status, response) = admin(
+        s,
+        &format!("{namespace}:createSessionCookie"),
+        &json!({"idToken": id_token, "validDuration": "3600"}),
+    );
+    assert_eq!(status, 200, "{response}");
+    response["sessionCookie"].clone()
+}
+
+/// The sign-in attributes a SAML sign-in answers: stateful (strict) answers leave empty ones
+/// out, as production does (record-saml 7789f0); the emulator profile keeps the official
+/// emulator's empty object.
+fn answered_attributes(stateless_refresh: bool, attributes: Option<&Value>) -> Option<&Value> {
+    attributes.filter(|a| stateless_refresh || a.as_object().is_none_or(|m| !m.is_empty()))
+}
+
+/// A state of the given refresh-token profile, with `tenant` created and tenants allowed (strict
+/// serves a tenant only while the project allows tenants, as production does).
+fn saml_fixture_state(tenant: Option<&str>, stateless_refresh: bool) -> AuthState {
+    use fireemu_core_auth::store::AuthRegistry;
+
+    let mut s = state();
+    s.stateless_refresh_tokens = stateless_refresh;
+    if let Some(tenant) = tenant {
+        let registry = Arc::new(AuthRegistry::new("demo-app", s.store.clone()));
+        registry.ensure_tenant("demo-app", tenant).unwrap();
+        s.registry = Some(registry);
+        let r = handle_with(
+            &s,
+            "PATCH",
+            "/identitytoolkit.googleapis.com/admin/v2/projects/demo-app/config?updateMask=multiTenant.allowTenants",
+            &owner(),
+            &json!({"multiTenant": {"allowTenants": true}}),
+        );
+        assert_eq!(r.status, 200, "{}", r.body);
+    }
+    s
+}
+
+// Fixture-only SAML handoffs: these JSON assertions are not signed XML evidence.
+fn assert_saml_fixture_cookie_lifecycle(
+    tenant: Option<&str>,
+    stateless_refresh: bool,
+    attributes: Option<&Value>,
+) {
+    const SIGNED_AT: i64 = 1_788_004_860;
+    let s = saml_fixture_state(tenant, stateless_refresh);
+    let mut saml = json!({"assertion":{"subject":{"nameId":"lifecycle@saml.example.com"}}});
+    if let Some(attributes) = attributes {
+        saml["assertion"]["attributeStatements"] = attributes.clone();
+    }
+    let mut body = json!({"requestUri": DUMMY_URI, "postBody": format!(
+        "providerId=saml.lifecycle&id_token={}&SAMLResponse={}",
+        percent(&json!({"sub":"saml-lifecycle-subject"}).to_string()),
+        percent(&saml.to_string()))});
+    if let Some(tenant) = tenant {
+        body["tenantId"] = json!(tenant);
+    }
+    let (status, signed) = post(&s, &format!("{V1}/accounts:signInWithIdp"), &body);
+    assert_eq!(status, 200, "{signed}");
+    let uid = signed["localId"].clone();
+    let assert_token =
+        |encoded: &Value, issuer: &str, issued_at: i64, expected_attributes: Option<&Value>| {
+            let c = claims(encoded.as_str().unwrap());
+            assert_eq!(c["sub"], uid);
+            assert_eq!(c["aud"], "demo-app");
+            assert_eq!(c["iss"], issuer);
+            assert_eq!(c["iat"], issued_at);
+            assert_eq!(c["exp"], issued_at + 3600);
+            assert_eq!(c["auth_time"], SIGNED_AT);
+            assert_eq!(c["email"], "lifecycle@saml.example.com");
+            assert_eq!(c["email_verified"], true);
+            assert_eq!(c["firebase"]["sign_in_provider"], "saml.lifecycle");
+            assert_eq!(
+                c["firebase"]["identities"]["saml.lifecycle"],
+                json!(["saml-lifecycle-subject"])
+            );
+            assert_eq!(c["firebase"].get("sign_in_attributes"), expected_attributes);
+            assert_eq!(
+                c["firebase"].get("tenant").cloned(),
+                tenant.map(|id| json!(id))
+            );
+        };
+    let cookie = |id_token: &Value| saml_fixture_cookie(&s, tenant, id_token);
+    let attributes = answered_attributes(stateless_refresh, attributes);
+    assert_token(
+        &signed["idToken"],
+        "https://securetoken.google.com/demo-app",
+        SIGNED_AT,
+        attributes,
+    );
+    let before_cookie = cookie(&signed["idToken"]);
+    assert_token(
+        &before_cookie,
+        "https://session.firebase.google.com/demo-app",
+        SIGNED_AT,
+        attributes,
+    );
+    s.clock
+        .lock()
+        .unwrap()
+        .advance_to(LogicalInstant::from_unix_seconds(SIGNED_AT + 30))
+        .unwrap();
+    let mut refresh = json!({"grant_type":"refresh_token", "refresh_token":signed["refreshToken"]});
+    if let Some(tenant) = tenant {
+        refresh["tenantId"] = json!(tenant);
+    }
+    let (status, refreshed) = post(&s, "/securetoken.googleapis.com/v1/token", &refresh);
+    assert_eq!(status, 200, "{refreshed}");
+    // Stateful refresh keeps a SAML sign-in's attributes (record-saml 7789f0).
+    let refreshed_attributes = attributes.filter(|_| !stateless_refresh);
+    assert_token(
+        &refreshed["id_token"],
+        "https://securetoken.google.com/demo-app",
+        SIGNED_AT + 30,
+        refreshed_attributes,
+    );
+    assert_token(
+        &cookie(&signed["idToken"]),
+        "https://session.firebase.google.com/demo-app",
+        SIGNED_AT + 30,
+        attributes,
+    );
+    assert_token(
+        &cookie(&refreshed["id_token"]),
+        "https://session.firebase.google.com/demo-app",
+        SIGNED_AT + 30,
+        refreshed_attributes,
+    );
+    // Refresh does not rewrite a cookie that was already minted.
+    assert_token(
+        &before_cookie,
+        "https://session.firebase.google.com/demo-app",
+        SIGNED_AT,
+        attributes,
+    );
+    if tenant.is_some() {
+        assert!(s.store.lock().unwrap().users_by_creation().is_empty());
+    }
+}
+
+#[test]
+fn saml_fixture_project_claims_survive_cookie_handoffs_with_refresh() {
+    for stateless_refresh in [false, true] {
+        for attributes in [
+            None,
+            Some(json!({})),
+            Some(json!({"role":["reader"],"enabled":true,"rank":3,"nested":{"region":"west"}})),
+        ] {
+            assert_saml_fixture_cookie_lifecycle(None, stateless_refresh, attributes.as_ref());
+        }
+    }
+}
+
+#[test]
+fn saml_fixture_tenant_claims_survive_cookie_handoffs_with_refresh() {
+    for stateless_refresh in [false, true] {
+        for attributes in [
+            None,
+            Some(json!({})),
+            Some(json!({"role":["reader"],"enabled":true,"rank":3,"nested":{"region":"west"}})),
+        ] {
+            assert_saml_fixture_cookie_lifecycle(
+                Some("customer-a"),
+                stateless_refresh,
+                attributes.as_ref(),
+            );
         }
     }
 }

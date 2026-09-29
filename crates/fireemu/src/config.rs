@@ -83,6 +83,23 @@ pub struct PasswordPolicyOverride {
     pub password_policy: PasswordPolicyConfig,
 }
 
+/// The sign-in providers from `auth.signIn` (`email`, `anonymous`, `phoneNumber`). Each
+/// unset member keeps fireemu's default, where every provider is enabled in both profiles
+/// (owner decision K14, AUTH-CONFIG-SDK; a new production project enables none).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AuthSignInSettings {
+    /// `auth.signIn.email.enabled`.
+    pub email_enabled: Option<bool>,
+    /// `auth.signIn.email.passwordRequired` (email-link sign-in is off while set).
+    pub password_required: Option<bool>,
+    /// `auth.signIn.anonymous.enabled`.
+    pub anonymous_enabled: Option<bool>,
+    /// `auth.signIn.phoneNumber.enabled`.
+    pub phone_enabled: Option<bool>,
+    /// `auth.signIn.phoneNumber.testPhoneNumbers`: E.164 number to its code.
+    pub test_phone_numbers: Option<BTreeMap<String, String>>,
+}
+
 /// End-user account creation and deletion switches from `auth.client.permissions`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct AuthClientPermissions {
@@ -278,6 +295,31 @@ impl CompatibilityProfile {
     #[must_use]
     pub const fn implicit_database_creation(self) -> bool {
         matches!(self, Self::Emulator)
+    }
+
+    /// Whether a client request is refused while its database has no ruleset. Production
+    /// refuses every client request without a `cloud.firestore` release (observed on the
+    /// sandbox, FS-RULES); the official emulator allows everything until rules are loaded.
+    #[must_use]
+    pub const fn refuse_without_ruleset(self) -> bool {
+        matches!(self, Self::Strict)
+    }
+
+    /// Whether an end user may open a read-write transaction. Production refuses it with the
+    /// ordinary Security Rules denial and opens a read-only one (FS-RULES, 2026-09-25); the
+    /// official emulator opens both.
+    #[must_use]
+    pub const fn end_user_transactions(self) -> bool {
+        matches!(self, Self::Emulator)
+    }
+
+    /// Whether an end user's `Listen` stream ends on its own an hour after it opened. Production
+    /// closed every held stream with `INTERNAL` 3,600 s after it opened, without waiting for a
+    /// commit (AUTH-FS-CROSS stage 2, packet v7, 2026-09-28); the official emulator never ends
+    /// one.
+    #[must_use]
+    pub const fn listen_stream_lifetime(self) -> bool {
+        matches!(self, Self::Strict)
     }
 }
 
@@ -940,11 +982,23 @@ pub struct RuntimeConfig {
     /// way the official emulator does, or is refused with production's `NOT_FOUND`
     /// (profile-derived; there is no key of its own).
     pub implicit_database_creation: bool,
+    /// Whether a client request is refused while its database has no ruleset
+    /// (profile-derived; there is no key of its own).
+    pub refuse_without_ruleset: bool,
+    /// Whether an end user may open a read-write transaction
+    /// (profile-derived; there is no key of its own).
+    pub end_user_transactions: bool,
+    /// Whether an end user's `Listen` stream ends an hour after it opened
+    /// (profile-derived; there is no key of its own).
+    pub listen_stream_lifetime: bool,
     /// How long a document whose time-to-live field has expired stays readable before the
     /// expiry sweep deletes it (`firestore.ttlSweepIntervalSeconds`). Production deletes
     /// typically within 24 hours and within 72 hours at worst, so the default is 24 hours
     /// and the accepted range ends at the documented outer bound.
     pub ttl_sweep_interval: LogicalDuration,
+    /// `firestore.deletedDatabaseIdCooldownSeconds`: how long a deleted database id stays
+    /// unavailable. `None` keeps production's 300 seconds.
+    pub deleted_database_id_cooldown: Option<i64>,
     /// When the daemon's databases were created (`firestore.databaseCreateTime`): the
     /// `createTime` they report and the instant before which a `read_time` is refused. Unset,
     /// it is the daemon's start; a run compared with a production database names that
@@ -952,6 +1006,11 @@ pub struct RuntimeConfig {
     pub database_create_time: Option<LogicalInstant>,
     /// Only `demo-` project IDs are accepted.
     pub require_demo_prefix: bool,
+    /// `projects.unknownProjects = "refuse"`: under the strict profile only the daemon's
+    /// project exists, and a request naming another is refused as production refuses a
+    /// project the credential cannot use (scope decision C11). Default: every project is
+    /// served in its own session.
+    pub refuse_unknown_projects: bool,
     /// Initial virtual clock instant.
     pub clock_start: LogicalInstant,
     /// Whether `daemon.clockStart` pinned it. Without it the daemon starts its virtual
@@ -973,12 +1032,15 @@ pub struct RuntimeConfig {
     /// ordinary blocking handlers.
     pub auth_forward_inbound_credentials: bool,
     /// `auth.improvedEmailPrivacy`: production's email enumeration protection, on by default
-    /// for every new Firebase project. Sign-in with a wrong password or an unknown address
-    /// answers `INVALID_LOGIN_CREDENTIALS`, and a password reset for an unknown address is
-    /// acknowledged. `false` restores the official Auth emulator's revealing answers.
+    /// for every new Firebase project and so under the strict profile. Sign-in with a wrong
+    /// password or an unknown address answers `INVALID_LOGIN_CREDENTIALS`, and a password reset
+    /// for an unknown address is acknowledged. The emulator profile starts with it off, with the
+    /// official Auth emulator's revealing answers.
     pub auth_improved_email_privacy: bool,
     /// Whether auth.improvedEmailPrivacy was explicitly present in the input.
     pub auth_improved_email_privacy_explicit: bool,
+    /// `auth.signIn`'s providers.
+    pub auth_sign_in: AuthSignInSettings,
     /// `auth.logActionCodes`: print every email action link and SMS code to the daemon's
     /// standard output as the official Auth emulator does, on by default. `false` keeps the
     /// codes off the console; they stay readable from the emulator inspection routes.
@@ -1125,6 +1187,10 @@ pub struct RuntimeConfig {
     /// (`auth.customTokenSigners`). When set, only tokens they signed are accepted, as in
     /// production; when absent, the unsigned tokens of the Admin SDK's emulator mode are.
     pub auth_custom_token_signers: Option<serde_json::Map<String, Value>>,
+    /// OIDC issuers whose signed ID tokens the strict profile verifies, each with its public
+    /// JWK set (`auth.idpSigners`, AUTH-FEDERATION owner decision O4). No key is fetched from
+    /// an issuer; without an entry, strict refuses the issuer's sign-ins.
+    pub auth_idp_signers: Option<serde_json::Map<String, Value>>,
     /// The default project's API keys (`auth.apiKeys`). When any is declared, client requests
     /// with another key are refused as production's API front end refuses them; when none is,
     /// any key is accepted, as by the official emulator.
@@ -1270,9 +1336,14 @@ impl Default for RuntimeConfig {
             enforce_limits: profile.enforce_limits(),
             token_acceptance: profile.token_acceptance(),
             implicit_database_creation: profile.implicit_database_creation(),
+            refuse_without_ruleset: profile.refuse_without_ruleset(),
+            end_user_transactions: profile.end_user_transactions(),
+            listen_stream_lifetime: profile.listen_stream_lifetime(),
             ttl_sweep_interval: fireemu_core_firestore::ttl::DEFAULT_SWEEP_INTERVAL,
+            deleted_database_id_cooldown: None,
             database_create_time: None,
             require_demo_prefix: true,
+            refuse_unknown_projects: false,
             clock_start: LogicalInstant::from_unix_seconds(1_788_004_860),
             clock_start_pinned: false,
             seed: 42,
@@ -1282,6 +1353,7 @@ impl Default for RuntimeConfig {
             auth_forward_inbound_credentials: false,
             auth_improved_email_privacy: true,
             auth_improved_email_privacy_explicit: false,
+            auth_sign_in: AuthSignInSettings::default(),
             auth_log_action_codes: true,
             auth_password_policy: None,
             auth_password_policy_overrides: Vec::new(),
@@ -1341,6 +1413,7 @@ impl Default for RuntimeConfig {
             scheduler_catch_up: "all".to_owned(),
             id_token_signing: fireemu_core_auth::jwt::SigningMode::UnsignedEmulator,
             auth_custom_token_signers: None,
+            auth_idp_signers: None,
             auth_api_keys: Vec::new(),
             app_check: AppCheckConfig::disabled(),
         }
@@ -1348,12 +1421,13 @@ impl Default for RuntimeConfig {
 }
 
 /// The keys of the `auth` section (spec/config/fireemu.schema.json).
-pub(crate) const AUTH_KEYS: [&str; 18] = [
+pub(crate) const AUTH_KEYS: [&str; 19] = [
     "enabled",
     "apiKeys",
     "projectIssuer",
     "idTokenSigning",
     "customTokenSigners",
+    "idpSigners",
     "totp",
     "secretMaterialization",
     "forwardInboundCredentials",
@@ -2612,6 +2686,82 @@ pub fn firebase_json_reference(json: &Value) -> Result<Option<&str>, ConfigError
     }
 }
 
+/// `auth.signIn`'s provider members; `allowDuplicateEmails` is read by the caller.
+fn parse_sign_in_providers(
+    sign_in: &serde_json::Map<String, Value>,
+) -> Result<AuthSignInSettings, ConfigError> {
+    let member = |name: &str,
+                  keys: &[&str]|
+     -> Result<Option<&serde_json::Map<String, Value>>, ConfigError> {
+        let Some(value) = sign_in.get(name) else {
+            return Ok(None);
+        };
+        let object = value
+            .as_object()
+            .ok_or_else(|| ConfigError(format!("auth.signIn.{name} must be an object")))?;
+        if let Some(key) = object.keys().find(|key| !keys.contains(&key.as_str())) {
+            return Err(ConfigError(format!(
+                "unknown config key auth.signIn.{name}.{key}"
+            )));
+        }
+        Ok(Some(object))
+    };
+    let flag = |object: Option<&serde_json::Map<String, Value>>, name: &str, key: &str| {
+        object
+            .and_then(|object| object.get(key))
+            .map(|value| {
+                value.as_bool().ok_or_else(|| {
+                    ConfigError(format!("auth.signIn.{name}.{key} must be a boolean"))
+                })
+            })
+            .transpose()
+    };
+    let email = member("email", &["enabled", "passwordRequired"])?;
+    let anonymous = member("anonymous", &["enabled"])?;
+    let phone = member("phoneNumber", &["enabled", "testPhoneNumbers"])?;
+    let test_phone_numbers = phone
+        .and_then(|phone| phone.get("testPhoneNumbers"))
+        .map(|numbers| {
+            let path = "auth.signIn.phoneNumber.testPhoneNumbers";
+            let numbers = numbers
+                .as_object()
+                .ok_or_else(|| ConfigError(format!("{path} must be an object")))?;
+            if numbers.len() > 10 {
+                return Err(ConfigError(format!("{path} holds at most ten numbers")));
+            }
+            numbers
+                .iter()
+                .map(|(number, code)| {
+                    let e164 = number.strip_prefix('+').is_some_and(|digits| {
+                        (2..=15).contains(&digits.len())
+                            && !digits.starts_with('0')
+                            && digits.bytes().all(|b| b.is_ascii_digit())
+                    });
+                    if !e164 {
+                        return Err(ConfigError(format!(
+                            "{path}: {number} is not an E.164 number"
+                        )));
+                    }
+                    // Any text, as production's Admin config takes a test number's code.
+                    match code.as_str() {
+                        Some(code) => Ok((number.clone(), code.to_owned())),
+                        None => Err(ConfigError(format!(
+                            "{path}: the code of {number} is not text"
+                        ))),
+                    }
+                })
+                .collect::<Result<BTreeMap<_, _>, _>>()
+        })
+        .transpose()?;
+    Ok(AuthSignInSettings {
+        email_enabled: flag(email, "email", "enabled")?,
+        password_required: flag(email, "email", "passwordRequired")?,
+        anonymous_enabled: flag(anonymous, "anonymous", "enabled")?,
+        phone_enabled: flag(phone, "phoneNumber", "enabled")?,
+        test_phone_numbers,
+    })
+}
+
 impl RuntimeConfig {
     /// Selects the compatibility profile and rewrites the settings it derives. Every key the
     /// profile decides is written here and nowhere else, so an explicit key parsed afterwards
@@ -2622,6 +2772,14 @@ impl RuntimeConfig {
         self.enforce_limits = profile.enforce_limits();
         self.token_acceptance = profile.token_acceptance();
         self.implicit_database_creation = profile.implicit_database_creation();
+        self.refuse_without_ruleset = profile.refuse_without_ruleset();
+        self.end_user_transactions = profile.end_user_transactions();
+        // A new production project protects against email enumeration; the official Auth
+        // emulator starts with it off (owner decision K3, AUTH-CONFIG-SDK).
+        if !self.auth_improved_email_privacy_explicit {
+            self.auth_improved_email_privacy = profile == CompatibilityProfile::Strict;
+        }
+        self.listen_stream_lifetime = profile.listen_stream_lifetime();
     }
 
     fn parse_daemon(d: &serde_json::Map<String, Value>, cfg: &mut Self) -> Result<(), ConfigError> {
@@ -3180,6 +3338,16 @@ impl RuntimeConfig {
                         .map_err(|e| ConfigError(format!("firestore.databaseCreateTime: {e}")))?,
                 );
             }
+            if let Some(value) = fs.get("deletedDatabaseIdCooldownSeconds") {
+                let seconds = value.as_u64().filter(|s| *s <= 300).ok_or_else(|| {
+                    ConfigError(
+                        "firestore.deletedDatabaseIdCooldownSeconds must be a whole number of \
+                         seconds from 0 to production's 300"
+                            .to_owned(),
+                    )
+                })?;
+                cfg.deleted_database_id_cooldown = i64::try_from(seconds).ok();
+            }
             if let Some(value) = fs.get("ttlSweepIntervalSeconds") {
                 let seconds = value.as_u64().ok_or_else(|| {
                     ConfigError(
@@ -3213,6 +3381,16 @@ impl RuntimeConfig {
         if let Some(p) = obj.get("projects").and_then(Value::as_object) {
             if let Some(b) = p.get("requireDemoPrefix").and_then(Value::as_bool) {
                 cfg.require_demo_prefix = b;
+            }
+            match p.get("unknownProjects") {
+                None => {}
+                Some(Value::String(v)) if v == "serve" => cfg.refuse_unknown_projects = false,
+                Some(Value::String(v)) if v == "refuse" => cfg.refuse_unknown_projects = true,
+                Some(_) => {
+                    return Err(ConfigError(
+                        "projects.unknownProjects must be \"serve\" or \"refuse\"".into(),
+                    ))
+                }
             }
         }
         if let Some(d) = obj.get("daemon").and_then(Value::as_object) {
@@ -3293,6 +3471,14 @@ impl RuntimeConfig {
                     .map_err(|e| ConfigError(format!("auth.customTokenSigners: {e}")))?;
                 cfg.auth_custom_token_signers = Some(signers.clone());
             }
+            if let Some(signers) = auth.get("idpSigners") {
+                let signers = signers
+                    .as_object()
+                    .ok_or_else(|| ConfigError("auth.idpSigners must be an object".to_owned()))?;
+                fireemu_adapter_http::identity_toolkit::IdpSignerTrust::from_jwks(signers)
+                    .map_err(|e| ConfigError(format!("auth.idpSigners: {e}")))?;
+                cfg.auth_idp_signers = Some(signers.clone());
+            }
             if let Some(forward) = auth.get("forwardInboundCredentials") {
                 cfg.auth_forward_inbound_credentials = forward.as_bool().ok_or_else(|| {
                     ConfigError("auth.forwardInboundCredentials must be a boolean".to_owned())
@@ -3335,10 +3521,13 @@ impl RuntimeConfig {
                     .as_object()
                     .ok_or_else(|| ConfigError("auth.signIn must be an object".to_owned()))?;
                 for key in sign_in.keys() {
-                    if key != "allowDuplicateEmails" {
+                    if !["allowDuplicateEmails", "email", "anonymous", "phoneNumber"]
+                        .contains(&key.as_str())
+                    {
                         return Err(ConfigError(format!("unknown config key auth.signIn.{key}")));
                     }
                 }
+                cfg.auth_sign_in = parse_sign_in_providers(sign_in)?;
                 cfg.auth_allow_duplicate_emails =
                     parse_strict_bool(sign_in, "allowDuplicateEmails", "auth.signIn", false)?;
                 cfg.auth_allow_duplicate_emails_explicit =
@@ -3554,6 +3743,49 @@ mod tests {
     }
 
     #[test]
+    fn the_deleted_database_id_cooldown_is_production_s_unless_shortened() {
+        let parse = |firestore: Value| {
+            RuntimeConfig::from_json(&json!({"schemaVersion": 1, "firestore": firestore}))
+        };
+        assert_eq!(parse(json!({})).unwrap().deleted_database_id_cooldown, None);
+        assert_eq!(
+            parse(json!({"deletedDatabaseIdCooldownSeconds": 5}))
+                .unwrap()
+                .deleted_database_id_cooldown,
+            Some(5)
+        );
+        for bad in [json!(301), json!(-1), json!("5")] {
+            let error = parse(json!({"deletedDatabaseIdCooldownSeconds": bad})).unwrap_err();
+            assert!(
+                error.0.contains("deletedDatabaseIdCooldownSeconds"),
+                "{error}"
+            );
+        }
+    }
+
+    #[test]
+    fn unknown_projects_are_served_unless_the_config_refuses_them() {
+        let parse = |projects: Value| {
+            RuntimeConfig::from_json(&json!({"schemaVersion": 1, "projects": projects}))
+        };
+        assert!(!parse(json!({})).unwrap().refuse_unknown_projects);
+        assert!(
+            !parse(json!({"unknownProjects": "serve"}))
+                .unwrap()
+                .refuse_unknown_projects
+        );
+        assert!(
+            parse(json!({"unknownProjects": "refuse"}))
+                .unwrap()
+                .refuse_unknown_projects
+        );
+        for bad in [json!("deny"), json!(true)] {
+            let error = parse(json!({"unknownProjects": bad})).unwrap_err();
+            assert!(error.0.contains("projects.unknownProjects"), "{error}");
+        }
+    }
+
+    #[test]
     fn the_database_creation_time_is_configurable_and_defaults_to_the_daemon_start() {
         let parse = |firestore: Value| {
             RuntimeConfig::from_json(&json!({"schemaVersion": 1, "firestore": firestore}))
@@ -3596,6 +3828,9 @@ mod tests {
         assert!(!emulator.enforce_limits);
         assert_eq!(emulator.token_acceptance, TokenAcceptance::EmulatorMock);
         assert!(emulator.implicit_database_creation);
+        assert!(!emulator.refuse_without_ruleset);
+        assert!(emulator.end_user_transactions);
+        assert!(!emulator.listen_stream_lifetime);
 
         // strict: every one of those becomes production's refusal.
         let strict = with_profile(json!({"profile": "strict"})).unwrap();
@@ -3603,6 +3838,130 @@ mod tests {
         assert!(strict.enforce_limits);
         assert_eq!(strict.token_acceptance, TokenAcceptance::Verified);
         assert!(!strict.implicit_database_creation);
+        assert!(strict.refuse_without_ruleset);
+        assert!(!strict.end_user_transactions);
+        assert!(strict.listen_stream_lifetime);
+    }
+
+    #[test]
+    fn sign_in_providers_are_configurable_and_start_enabled() {
+        // Every provider starts enabled in both profiles (owner decision K14); a production
+        // project's providers can be carried over.
+        let defaults = with_profile(json!({})).unwrap();
+        assert_eq!(defaults.auth_sign_in, AuthSignInSettings::default());
+        let cfg = with_profile(json!({"auth": {"signIn": {
+            "allowDuplicateEmails": true,
+            "email": {"enabled": true, "passwordRequired": false},
+            "anonymous": {"enabled": false},
+            "phoneNumber": {"enabled": true, "testPhoneNumbers": {"+16505550101": "123456"}},
+        }}}))
+        .unwrap();
+        assert!(cfg.auth_allow_duplicate_emails);
+        assert_eq!(
+            cfg.auth_sign_in,
+            AuthSignInSettings {
+                email_enabled: Some(true),
+                password_required: Some(false),
+                anonymous_enabled: Some(false),
+                phone_enabled: Some(true),
+                test_phone_numbers: Some([("+16505550101".to_owned(), "123456".to_owned())].into()),
+            }
+        );
+        for (invalid, message) in [
+            (
+                json!({"email": {"enabled": "yes"}}),
+                "auth.signIn.email.enabled must be a boolean",
+            ),
+            (
+                json!({"email": {"other": true}}),
+                "unknown config key auth.signIn.email.other",
+            ),
+            (
+                json!({"anonymous": true}),
+                "auth.signIn.anonymous must be an object",
+            ),
+            (
+                json!({"phoneNumber": {"testPhoneNumbers": {"16505550101": "123456"}}}),
+                "auth.signIn.phoneNumber.testPhoneNumbers: 16505550101 is not an E.164 number",
+            ),
+            (
+                json!({"phoneNumber": {"testPhoneNumbers": {"+16505550101": 123_456}}}),
+                "auth.signIn.phoneNumber.testPhoneNumbers: the code of +16505550101 is not text",
+            ),
+        ] {
+            assert_eq!(
+                with_profile(json!({"auth": {"signIn": invalid}})).map(|_| ()),
+                Err(ConfigError(message.to_owned())),
+                "{message}"
+            );
+        }
+        // At most ten E.164 numbers: a leading zero, letters or a single digit are refused.
+        let numbers = |count: usize| {
+            (0..count)
+                .map(|n| (format!("+1650555{n:04}"), json!("123456")))
+                .collect::<serde_json::Map<_, _>>()
+        };
+        assert!(with_profile(
+            json!({"auth": {"signIn": {"phoneNumber": {"testPhoneNumbers": numbers(10)}}}})
+        )
+        .is_ok());
+        assert_eq!(
+            with_profile(
+                json!({"auth": {"signIn": {"phoneNumber": {"testPhoneNumbers": numbers(11)}}}})
+            )
+            .map(|_| ()),
+            Err(ConfigError(
+                "auth.signIn.phoneNumber.testPhoneNumbers holds at most ten numbers".to_owned()
+            ))
+        );
+        for number in ["+01234567", "+1650555abcd", "+1"] {
+            assert_eq!(
+                with_profile(json!({"auth": {"signIn": {"phoneNumber": {"testPhoneNumbers": {number: "1"}}}}})).map(|_| ()),
+                Err(ConfigError(format!(
+                    "auth.signIn.phoneNumber.testPhoneNumbers: {number} is not an E.164 number"
+                ))),
+                "{number}"
+            );
+        }
+        // A code is taken as production's Admin config takes it: any text (AUTH-CONFIG-SDK
+        // sandbox recording 2026-09-25 took "12345" and "abc").
+        let cfg = with_profile(
+            json!({"auth": {"signIn": {"phoneNumber": {"testPhoneNumbers": {
+                "+16505550101": "12345",
+                "+16505550102": "abc",
+            }}}}}),
+        )
+        .unwrap();
+        assert_eq!(
+            cfg.auth_sign_in.test_phone_numbers,
+            Some(
+                [
+                    ("+16505550101".to_owned(), "12345".to_owned()),
+                    ("+16505550102".to_owned(), "abc".to_owned()),
+                ]
+                .into()
+            )
+        );
+    }
+
+    #[test]
+    fn email_enumeration_protection_defaults_by_profile_and_yields_to_the_key() {
+        // A new production project turns improved email privacy on; the official emulator
+        // starts with it off (owner decision K3, AUTH-CONFIG-SDK).
+        assert!(with_profile(json!({})).unwrap().auth_improved_email_privacy);
+        assert!(
+            !with_profile(json!({"profile": "emulator"}))
+                .unwrap()
+                .auth_improved_email_privacy
+        );
+        for (profile, value) in [("emulator", true), ("strict", false)] {
+            let cfg = with_profile(json!({
+                "profile": profile,
+                "auth": {"improvedEmailPrivacy": value},
+            }))
+            .unwrap();
+            assert_eq!(cfg.auth_improved_email_privacy, value, "{profile}");
+        }
     }
 
     #[test]
@@ -4254,6 +4613,15 @@ mod tests {
         }
     }
 
+    /// A `firebase.json` path resolved against the `/proj` base the way the loader resolves it:
+    /// joined with the platform's separator, so Windows reads `/proj\firestore.rules`.
+    fn under_proj(relative: &str) -> String {
+        std::path::Path::new("/proj")
+            .join(relative)
+            .to_string_lossy()
+            .into_owned()
+    }
+
     #[test]
     fn firebase_json_maps_rules_indexes_ports_and_the_selected_functions() {
         let json = json!({
@@ -4274,22 +4642,28 @@ mod tests {
         let report = cfg
             .apply_firebase_json(&json, base, &Selection::default())
             .unwrap();
-        assert_eq!(cfg.rules_file.as_deref(), Some("/proj/firestore.rules"));
+        assert_eq!(
+            cfg.rules_file.as_deref(),
+            Some(under_proj("firestore.rules").as_str())
+        );
         assert_eq!(
             cfg.firestore_databases[fireemu_core_types::ids::DatabaseId::DEFAULT]
                 .rules
                 .as_deref(),
-            Some("/proj/firestore.rules")
+            Some(under_proj("firestore.rules").as_str())
         );
         assert_eq!(
             cfg.index_file.as_deref(),
-            Some("/proj/firestore.indexes.json")
+            Some(under_proj("firestore.indexes.json").as_str())
         );
         assert_eq!(
             cfg.storage_rules_file.as_deref(),
-            Some("/proj/storage.rules")
+            Some(under_proj("storage.rules").as_str())
         );
-        assert_eq!(cfg.functions_source.as_deref(), Some("/proj/functions"));
+        assert_eq!(
+            cfg.functions_source.as_deref(),
+            Some(under_proj("functions").as_str())
+        );
         assert_eq!(cfg.firestore_addr, "127.0.0.1:8081");
         assert_eq!(cfg.http_addr, "127.0.0.1:9100");
         assert_eq!(cfg.storage_addr, "127.0.0.1:9200");
@@ -4306,7 +4680,10 @@ mod tests {
             &only,
         )
         .unwrap();
-        assert_eq!(cfg.index_file.as_deref(), Some("/proj/idx.json"));
+        assert_eq!(
+            cfg.index_file.as_deref(),
+            Some(under_proj("idx.json").as_str())
+        );
         assert_eq!(cfg.functions_source, None);
         assert!(!only.functions);
 
@@ -4324,11 +4701,11 @@ mod tests {
         assert!(report.notices.is_empty(), "{:?}", report.notices);
         assert_eq!(
             cfg.firestore_databases["staging"].rules.as_deref(),
-            Some("/proj/staging.rules")
+            Some(under_proj("staging.rules").as_str())
         );
         assert_eq!(
             cfg.firestore_databases["staging"].indexes.as_deref(),
-            Some("/proj/staging.indexes.json")
+            Some(under_proj("staging.indexes.json").as_str())
         );
         assert!(Selection::parse("auth,database").is_err());
         assert_eq!(
@@ -4372,17 +4749,14 @@ mod tests {
         assert_eq!(
             cfg.storage_rules_by_bucket,
             BTreeMap::from([
-                (
-                    "assets.example.test".to_owned(),
-                    "/proj/public.rules".to_owned()
-                ),
+                ("assets.example.test".to_owned(), under_proj("public.rules")),
                 (
                     "demo-app.appspot.com".to_owned(),
-                    "/proj/public.rules".to_owned()
+                    under_proj("public.rules")
                 ),
                 (
                     "private.example.test".to_owned(),
-                    "/proj/private.rules".to_owned()
+                    under_proj("private.rules")
                 ),
             ])
         );
@@ -4514,7 +4888,7 @@ mod tests {
             .expect("a multi-codebase project loads every codebase");
         assert_eq!(cfg.functions_codebases.len(), 2);
         assert_eq!(cfg.functions_codebases[0].codebase, "api");
-        assert_eq!(cfg.functions_codebases[0].source, "/proj/fn/api");
+        assert_eq!(cfg.functions_codebases[0].source, under_proj("fn/api"));
         assert_eq!(
             cfg.functions_codebases[0].runtime.as_deref(),
             Some("nodejs20")
@@ -4541,7 +4915,10 @@ mod tests {
         let mut cfg = RuntimeConfig::default();
         let only = Selection::parse("functions:workers").unwrap();
         cfg.apply_firebase_json(&json, base, &only).unwrap();
-        assert_eq!(cfg.functions_source.as_deref(), Some("/proj/fn/workers"));
+        assert_eq!(
+            cfg.functions_source.as_deref(),
+            Some(under_proj("fn/workers").as_str())
+        );
         assert_eq!(cfg.functions_to_load().len(), 1);
 
         // A single codebase needs no name at all, in either spelling.
@@ -4552,7 +4929,10 @@ mod tests {
             let mut cfg = RuntimeConfig::default();
             cfg.apply_firebase_json(&section, base, &Selection::default())
                 .unwrap();
-            assert_eq!(cfg.functions_source.as_deref(), Some("/proj/functions"));
+            assert_eq!(
+                cfg.functions_source.as_deref(),
+                Some(under_proj("functions").as_str())
+            );
             assert_eq!(cfg.functions_to_load().len(), 1);
         }
 
@@ -4799,6 +5179,37 @@ mod tests {
             Err(ConfigError("auth must be an object".to_owned()))
         );
         assert!(parse(&json!({"idTokenSigning": "hs256"})).is_err());
+    }
+
+    #[test]
+    fn idp_signers_are_validated_when_the_configuration_is_read() {
+        // A public 2048-bit modulus; the key it belongs to was discarded.
+        let modulus = "0lwNtQWMVy0QqgEvrBmoFqwky_dcMx8CgS-o2rTesEV7QbG4cvNigTcDV7b_u0twRkJdonkMPjbUs0b8NKe_0_UOZ5vE_kILFG4TtPdeZWub8xnqhETc7WifXhEfqcB8xFbRyIxU9V0d_epsuNnQ-Nd7NlnFsH-aaq6f1HKp55_BVNxudwmHwT49P6JhNDDh7FWyoYBBBFtQ0St8dky4MFQTd2swZP4pEA8xGp-q-1mxbn0g9gfbq5voYWtOaDW9a2lsC_S_d6DecsrNWn4YYJ7Qc5xcx4pI70a23zftkVBj_I-Eip2hcvNUEsZJA4LlR4BgDLsNWu3ZWQxe08fOew";
+        let jwks = json!({"keys": [{"kty": "RSA", "alg": "RS256", "use": "sig", "kid": "k", "n": modulus, "e": "AQAB"}]});
+        let issuer = "https://idp.example/oidc/run";
+        let parsed = parse(&json!({"idpSigners": {issuer: jwks.clone()}})).unwrap();
+        assert_eq!(
+            parsed.auth_idp_signers,
+            Some(json!({issuer: jwks}).as_object().unwrap().clone())
+        );
+        assert_eq!(parse(&json!({})).unwrap().auth_idp_signers, None);
+        assert_eq!(
+            parse(&json!({"idpSigners": []})),
+            Err(ConfigError("auth.idpSigners must be an object".to_owned()))
+        );
+        assert!(
+            parse(&json!({"idpSigners": {"http://idp.example": jwks.clone()}}))
+                .unwrap_err()
+                .0
+                .starts_with("auth.idpSigners: ")
+        );
+        // A key the strict verifier could never use is refused at startup.
+        let mut unusable = jwks;
+        unusable["keys"][0].as_object_mut().unwrap().remove("use");
+        assert!(parse(&json!({"idpSigners": {issuer: unusable}}))
+            .unwrap_err()
+            .0
+            .contains("use sig"));
     }
 
     #[test]

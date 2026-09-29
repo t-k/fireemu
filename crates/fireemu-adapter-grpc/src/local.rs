@@ -20,6 +20,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::{Arc, Mutex, RwLock};
 
 use fireemu_core_firestore::field_path::FieldPath;
+use fireemu_core_firestore::index_usage::WriteRoute;
 use fireemu_core_firestore::path::DocumentPath;
 use fireemu_core_firestore::query::Query;
 use fireemu_core_firestore::store::{
@@ -183,7 +184,7 @@ impl DatabaseHandle {
     }
 
     /// Reads under this database's own lock; `None` once detached or poisoned.
-    fn read<T>(&self, f: impl FnOnce(&FirestoreState) -> T) -> Option<T> {
+    pub(crate) fn read<T>(&self, f: impl FnOnce(&FirestoreState) -> T) -> Option<T> {
         self.read_status(|state| Ok(f(state))).ok()
     }
 
@@ -307,6 +308,9 @@ pub struct LocalBackend {
     /// Unpinned compatibility runs sample wall time for each Firestore write while every
     /// other product and explicitly pinned run continues to use the virtual clock.
     wall_clock_write_time: bool,
+    /// The only project that exists (scope decision C11), when requests naming another are
+    /// refused as production refuses a project the credential cannot use.
+    project_boundary: Option<String>,
     /// Capacity retention root for databases created by this backend. Pinned-clock runs use
     /// the bounded default; wall-clock parity runs rely on the one-hour time root alone.
     history_version_limit: usize,
@@ -328,6 +332,8 @@ pub struct LocalBackend {
     implicit_database_creation: bool,
     /// Allocates identities for database instances independently of delayed wipe notifications.
     database_incarnations: std::sync::atomic::AtomicU64,
+    /// The Admin API's database catalog: created, patched and deleted databases.
+    admin: Arc<crate::admin::catalog::AdminCatalog>,
     /// The sessions' fault plans (looked up by project), when shared.
     faults: Mutex<Option<fireemu_core_session::fault::SharedFaultRegistry>>,
     /// Told after a fault plan moved the virtual clock (the functions runtime re-reads
@@ -1556,6 +1562,7 @@ impl LocalBackend {
             field_operation_ordinals: std::sync::atomic::AtomicU64::new(0),
             clock,
             wall_clock_write_time: false,
+            project_boundary: None,
             history_version_limit:
                 fireemu_core_firestore::store::DEFAULT_MAX_RETAINED_VERSIONS_PER_PATH,
             history_budget: Arc::new(Mutex::new(HistoryBudgetLedger::new(
@@ -1566,6 +1573,7 @@ impl LocalBackend {
             declared_databases: RwLock::new(BTreeSet::new()),
             implicit_database_creation: false,
             database_incarnations: std::sync::atomic::AtomicU64::new(0),
+            admin: Arc::new(crate::admin::catalog::AdminCatalog::new(seed, created_at)),
             faults: Mutex::new(None),
             clock_observer: Mutex::new(None),
             generations: Mutex::new(BTreeMap::new()),
@@ -1595,11 +1603,9 @@ impl LocalBackend {
     /// When the databases came into being, instead of the clock at construction: the
     /// `createTime` they report and the instant before which a `read_time` is refused.
     #[must_use]
-    pub const fn with_created_at(
-        mut self,
-        created_at: fireemu_core_types::time::LogicalInstant,
-    ) -> Self {
+    pub fn with_created_at(mut self, created_at: fireemu_core_types::time::LogicalInstant) -> Self {
         self.created_at = created_at;
+        self.admin.set_created_at(created_at);
         self
     }
 
@@ -1833,8 +1839,42 @@ impl LocalBackend {
             self.epoch.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         }
         let cleared = self.take_scope(scope);
+        self.admin.reset(|project| scope.owns_project(project));
         self.bump_generations(&cleared);
         self.announce_wipe(cleared);
+    }
+
+    /// Drops one database (`databases.delete`): its documents are gone, its streams observe
+    /// the wipe, and a later request is refused unless something creates it again.
+    pub fn delete_database(&self, project: &str, database: &str) {
+        let _exclusive = self.barrier.pause();
+        let key = (project.to_owned(), database.to_owned());
+        let removed = match self.databases.lock() {
+            Ok(mut dbs) => dbs.remove(&key).map(DatabaseHandle),
+            Err(_) => None,
+        };
+        if let Some(handle) = removed {
+            handle.detach();
+            self.history_budget
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .remove_committed(&key);
+        }
+        self.bump_generations(std::slice::from_ref(&key));
+        self.announce_wipe(vec![key]);
+    }
+
+    /// The Admin API's database catalog.
+    #[must_use]
+    pub fn admin(&self) -> &Arc<crate::admin::catalog::AdminCatalog> {
+        &self.admin
+    }
+
+    /// Whether a database exists in every project without a create call: `(default)` and the
+    /// databases the configuration declares.
+    #[must_use]
+    pub fn exists_without_create(&self, database: &str) -> bool {
+        self.database_exists_unprompted(database)
     }
 
     /// Removes every database `scope` owns from the catalog and detaches it, returning the
@@ -2411,6 +2451,9 @@ impl LocalBackend {
             .unwrap_or_else(Actor::system)
     }
 
+    /// `route` is the RPC the writes arrived through; it prices a delete's transaction. Only
+    /// the three routes production was observed on are charged (owner decisions A and D2,
+    /// 2026-09-25); every other path, including the `Write` stream, is `Internal`.
     fn commit_with_events(
         &self,
         parent: &Parent,
@@ -2418,21 +2461,10 @@ impl LocalBackend {
         writes: &[Write],
         transaction: Option<&TransactionId>,
         now: fireemu_core_types::time::LogicalInstant,
+        route: WriteRoute,
     ) -> Result<CommitResult, Status> {
-        let indexes = self.indexes.read().map_err(|_| lock_poisoned())?;
-        let key = (
-            Some(parent.project.as_str().to_owned()),
-            parent.database.as_str().to_owned(),
-        );
-        let shared = (None, parent.database.as_str().to_owned());
-        db.set_index_catalog(
-            indexes
-                .get(&key)
-                .or_else(|| indexes.get(&shared))
-                .cloned()
-                .unwrap_or_default(),
-        );
-        drop(indexes);
+        db.set_write_route(route);
+        db.set_index_catalog(self.planning_indexes(parent)?);
         let actor = Self::take_commit_actor();
         let sink = self
             .change_admission
@@ -2500,7 +2532,8 @@ impl LocalBackend {
             let now = self.write_time();
             let result = self.with_db(parent, |db| {
                 guard(db, writes, now)?;
-                let result = self.commit_with_events(parent, db, writes, None, now)?;
+                let result =
+                    self.commit_with_events(parent, db, writes, None, now, WriteRoute::Internal)?;
                 Ok(result)
             })?;
             Ok(crate::streams::WireCommit::from_result(&result))
@@ -2540,6 +2573,106 @@ impl LocalBackend {
         })
     }
 
+    /// The catalog a query or write of `parent`'s database is planned against: the configured
+    /// indexes (project-specific, else shared), every Admin-created index that is `READY` and
+    /// every applied Admin field patch.
+    fn planning_indexes(
+        &self,
+        parent: &Parent,
+    ) -> Result<fireemu_core_firestore::index::IndexSet, Status> {
+        let (project, database) = (parent.project.as_str(), parent.database.as_str());
+        let mut set = self.configured_indexes(project, database)?;
+        // The index-file indexes are the database's deployed indexes: one deleted through the
+        // Admin API, or gone with its database, no longer serves. Planning only reads the
+        // registry; nothing a query names is recorded.
+        let configured = set.composites().to_vec();
+        for definition in self
+            .admin
+            .indexes()
+            .retracted(project, database, &configured)
+        {
+            set.remove_composite(&definition);
+        }
+        self.admin.indexes().overlay(
+            parent.project.as_str(),
+            parent.database.as_str(),
+            self.admin_now(),
+            &mut set,
+        );
+        self.admin.fields().overlay(
+            parent.project.as_str(),
+            parent.database.as_str(),
+            self.admin_now(),
+            &mut set,
+            false,
+        );
+        Ok(set)
+    }
+
+    /// The indexes the configuration (index file or control API) declares for a database.
+    fn configured_indexes(
+        &self,
+        project: &str,
+        database: &str,
+    ) -> Result<fireemu_core_firestore::index::IndexSet, Status> {
+        let indexes = self.indexes.read().map_err(|_| lock_poisoned())?;
+        Ok(indexes
+            .get(&(Some(project.to_owned()), database.to_owned()))
+            .or_else(|| indexes.get(&(None, database.to_owned())))
+            .cloned()
+            .unwrap_or_default())
+    }
+
+    /// The composite indexes the index file (or control API) declares for a database now.
+    pub(crate) fn configured_composites(
+        &self,
+        project: &str,
+        database: &str,
+    ) -> Vec<fireemu_core_firestore::index::IndexDefinition> {
+        self.configured_indexes(project, database)
+            .map(|set| set.composites().to_vec())
+            .unwrap_or_default()
+    }
+
+    /// A query refusal in production's words: a missing index that an Admin create is still
+    /// building is "currently building", every other one is the ordinary refusal.
+    fn index_rejection(&self, parent: &Parent, rejection: &crate::gateway::Rejection) -> Status {
+        let database = crate::gateway::database_name(parent);
+        if let crate::gateway::Rejection::MissingIndex { requirement, .. } = rejection {
+            if let Some(index) = self.admin.indexes().building(
+                parent.project.as_str(),
+                parent.database.as_str(),
+                requirement,
+                self.admin_now(),
+            ) {
+                let mut refused =
+                    Status::failed_precondition(crate::index_messages::building_index_message(
+                        &database,
+                        &index.id,
+                        requirement,
+                    ));
+                if let Ok(v) = "FS_GW_MISSING_INDEX".parse() {
+                    refused.metadata_mut().insert("fireemu-reason", v);
+                }
+                return refused;
+            }
+            if let Some(index) = self.admin.indexes().deleted(
+                parent.project.as_str(),
+                parent.database.as_str(),
+                requirement,
+            ) {
+                let mut refused = Status::failed_precondition(
+                    crate::index_messages::deleted_index_message(&database, &index.id, requirement),
+                );
+                if let Ok(v) = "FS_GW_MISSING_INDEX".parse() {
+                    refused.metadata_mut().insert("fireemu-reason", v);
+                }
+                return refused;
+            }
+        }
+        rejection.to_status_in(&database)
+    }
+
     /// Decodes and validates a structured query through the strict gateway.
     pub fn accepted_query(
         &self,
@@ -2548,20 +2681,10 @@ impl LocalBackend {
     ) -> Result<AcceptedQuery, Status> {
         let query = decode_structured_query_in(parent, sq, self.gateway.production_refusals())
             .map_err(status)?;
-        let indexes = self.indexes.read().map_err(|_| lock_poisoned())?;
-        let empty = fireemu_core_firestore::index::IndexSet::default();
-        let project_key = (
-            Some(parent.project.as_str().to_owned()),
-            parent.database.as_str().to_owned(),
-        );
-        let shared_key = (None, parent.database.as_str().to_owned());
-        let database_indexes = indexes
-            .get(&project_key)
-            .or_else(|| indexes.get(&shared_key))
-            .unwrap_or(&empty);
+        let database_indexes = self.planning_indexes(parent)?;
         self.gateway
-            .validate_query_with_indexes(&query, database_indexes)
-            .map_err(|rejection| rejection.to_status_in(&crate::gateway::database_name(parent)))
+            .validate_query_with_indexes(&query, &database_indexes)
+            .map_err(|rejection| self.index_rejection(parent, &rejection))
     }
 
     /// Decodes and validates a structured aggregation query through the strict gateway.
@@ -2573,20 +2696,10 @@ impl LocalBackend {
     ) -> Result<AcceptedQuery, Status> {
         let query = decode_structured_query_in(parent, sq, self.gateway.production_refusals())
             .map_err(status)?;
-        let indexes = self.indexes.read().map_err(|_| lock_poisoned())?;
-        let empty = fireemu_core_firestore::index::IndexSet::default();
-        let project_key = (
-            Some(parent.project.as_str().to_owned()),
-            parent.database.as_str().to_owned(),
-        );
-        let shared_key = (None, parent.database.as_str().to_owned());
-        let database_indexes = indexes
-            .get(&project_key)
-            .or_else(|| indexes.get(&shared_key))
-            .unwrap_or(&empty);
+        let database_indexes = self.planning_indexes(parent)?;
         self.gateway
-            .validate_aggregation_query_with_indexes(&query, aggregations, database_indexes)
-            .map_err(|rejection| rejection.to_status_in(&crate::gateway::database_name(parent)))
+            .validate_aggregation_query_with_indexes(&query, aggregations, &database_indexes)
+            .map_err(|rejection| self.index_rejection(parent, &rejection))
     }
 
     /// Atomically replaces the index catalog used by subsequent query plans.
@@ -3248,7 +3361,14 @@ impl LocalBackend {
                 if !still_expired {
                     return Ok(false);
                 }
-                self.commit_with_events(parent, db, std::slice::from_ref(&write), None, now)?;
+                self.commit_with_events(
+                    parent,
+                    db,
+                    std::slice::from_ref(&write),
+                    None,
+                    now,
+                    WriteRoute::Internal,
+                )?;
                 Ok(true)
             })
         })
@@ -3444,6 +3564,28 @@ impl LocalBackend {
             .unwrap_or(fireemu_core_types::time::LogicalInstant::UNIX_EPOCH)
     }
 
+    /// Makes `project` the only project that exists: a request naming another is refused
+    /// with production's `PERMISSION_DENIED` (`projects.unknownProjects = "refuse"`).
+    #[must_use]
+    pub fn with_project_boundary(mut self, project: impl Into<String>) -> Self {
+        self.project_boundary = Some(project.into());
+        self
+    }
+
+    /// Whether a request naming `project` is refused because only another project exists.
+    #[must_use]
+    pub fn refuses_project(&self, project: &str) -> bool {
+        self.project_boundary
+            .as_deref()
+            .is_some_and(|only| only != project)
+    }
+
+    /// The instant the Admin API stamps a change with, and measures its pending states against:
+    /// the clock documents are written at, so an unpinned daemon follows the wall clock.
+    pub fn admin_now(&self) -> fireemu_core_types::time::LogicalInstant {
+        self.write_time()
+    }
+
     /// Timestamp supplied to one Firestore write attempt.
     fn write_time(&self) -> fireemu_core_types::time::LogicalInstant {
         if !self.wall_clock_write_time {
@@ -3512,6 +3654,9 @@ impl LocalBackend {
         parent: &Parent,
         admission: Admission,
     ) -> Result<DatabaseHandle, Status> {
+        if admission == Admission::RequestOnly {
+            self.admin_refusal(parent)?;
+        }
         let mut dbs = self.databases.lock().map_err(|_| lock_poisoned())?;
         // Decided under the catalog lock that would create the entry, so no request is
         // admitted by a database a concurrent request is being refused for.
@@ -3553,6 +3698,40 @@ impl LocalBackend {
                 })
                 .clone(),
         ))
+    }
+
+    /// What production answers the data plane for a database the Admin catalog says it must
+    /// not serve: a deleted database is `NOT_FOUND`; a Datastore-mode database and an
+    /// Enterprise database (created with Firestore data access disabled) are refused with
+    /// production's own messages.
+    fn admin_refusal(&self, parent: &Parent) -> Result<(), Status> {
+        use crate::admin::catalog::DataPlaneRefusal;
+        let (project, database) = (parent.project.as_str(), parent.database.as_str());
+        if self.refuses_project(project) {
+            return Err(Status::permission_denied(
+                crate::admin::rest::foreign_project_message(project),
+            ));
+        }
+        match self.admin.data_plane_refusal(
+            project,
+            database,
+            self.database_exists_unprompted(database),
+        ) {
+            None => Ok(()),
+            Some(DataPlaneRefusal::Missing) => Err(status(DecodeError::UnknownDatabase {
+                project: project.to_owned(),
+                database: database.to_owned(),
+            })),
+            Some(DataPlaneRefusal::DatastoreMode) => Err(Status::failed_precondition(format!(
+                "The Cloud Firestore API is not available for Firestore in Datastore Mode \
+                 database projects/{project}/databases/{database}."
+            ))),
+            Some(DataPlaneRefusal::NativeAccessDisabled) => Err(Status::failed_precondition(
+                "Access to this database via the Firestore in Native mode API is disabled. \
+                 Database Data Access modes are configured when a database is created, and \
+                 cannot be changed.",
+            )),
+        }
     }
 
     /// When this backend's databases came into being: the `createTime` and `updateTime` the
@@ -4205,7 +4384,14 @@ impl LocalBackend {
         let now = self.write_time();
         let doc = self.with_db(parent, |db| {
             guard(db, std::slice::from_ref(write), now)?;
-            self.commit_with_events(parent, db, std::slice::from_ref(write), None, now)?;
+            self.commit_with_events(
+                parent,
+                db,
+                std::slice::from_ref(write),
+                None,
+                now,
+                WriteRoute::Internal,
+            )?;
             let doc = db
                 .get(&path)
                 .map(|document| encode_masked(document, mask.as_deref()))
@@ -4312,7 +4498,14 @@ impl LocalBackend {
             };
             let result = (|| {
                 guard(db, std::slice::from_ref(&write), now)?;
-                self.commit_with_events(&parent, db, std::slice::from_ref(&write), None, now)?;
+                self.commit_with_events(
+                    &parent,
+                    db,
+                    std::slice::from_ref(&write),
+                    None,
+                    now,
+                    WriteRoute::Internal,
+                )?;
                 db.get(&path)
                     .map(|document| encode_masked(document, mask.as_deref()))
                     .ok_or_else(|| Status::internal("document vanished after commit"))
@@ -4392,7 +4585,14 @@ impl LocalBackend {
         let now = self.write_time();
         self.with_db(&parent, |db| {
             guard(db, std::slice::from_ref(&write), now)?;
-            self.commit_with_events(&parent, db, std::slice::from_ref(&write), None, now)?;
+            self.commit_with_events(
+                &parent,
+                db,
+                std::slice::from_ref(&write),
+                None,
+                now,
+                WriteRoute::DeleteDocument,
+            )?;
             Ok(())
         })
     }
@@ -4489,7 +4689,14 @@ impl LocalBackend {
         let now = self.write_time();
         let result = self.with_db(&parent, |db| {
             guard(db, &writes, now)?;
-            let result = self.commit_with_events(&parent, db, &writes, txn.as_ref(), now)?;
+            let result = self.commit_with_events(
+                &parent,
+                db,
+                &writes,
+                txn.as_ref(),
+                now,
+                WriteRoute::Commit,
+            )?;
             Ok(result)
         })?;
         Ok(encode_commit(&result))
@@ -5730,7 +5937,14 @@ impl LocalBackend {
                 let now = self.write_time();
                 let outcome = (|| {
                     guard(db, std::slice::from_ref(&write), now)?;
-                    self.commit_with_events(&parent, db, std::slice::from_ref(&write), None, now)
+                    self.commit_with_events(
+                        &parent,
+                        db,
+                        std::slice::from_ref(&write),
+                        None,
+                        now,
+                        WriteRoute::BatchWrite,
+                    )
                 })();
                 match outcome {
                     Ok(result) => {

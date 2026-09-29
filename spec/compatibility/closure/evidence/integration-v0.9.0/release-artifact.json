@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "kind": "integration-release-artifact",
+  "release": "v0.9.0",
+  "sourceCommit": "e6a61bd5927f771ef098a5e3f38094a46dd708a8",
+  "command": [
+    "cargo",
+    "build",
+    "--release",
+    "--locked",
+    "-p",
+    "fireemu"
+  ],
+  "binaryPath": "target/release/fireemu",
+  "binarySha256": "ece3f66b1093e69d24ab16fa820994469120fcfb7ddaff22d6a4fc72cff51167",
+  "version": "fireemu 0.8.0",
+  "rustc": "rustc 1.94.0 (4a4ef493e 2026-03-02)",
+  "platform": "Darwin arm64",
+  "gitStatusAtBuild": "",
+  "productionRequests": 0,
+  "buildInputsUnchangedThrough": "10c9e40183a10f9dcc256c61f2530384f134bc30",
+  "note": "One release binary built from the clean integration branch after the UI build, before the version commit: it reports the previous version. No crate source, build script, UI, Cargo manifest or toolchain file changed between the source commit and buildInputsUnchangedThrough; the version commit that follows changes only the workspace version, so the release job rebuilds from the tag and reruns every comparison it can on that build."
+}

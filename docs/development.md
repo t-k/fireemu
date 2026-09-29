@@ -29,7 +29,7 @@ Use `cargo nextest run --workspace --profile pr` as the full local gate. Do not 
 
 ## Local regression gate
 
-The automatic pull-request job formats and compiles every target with `cargo check`; it runs no test, so a green pull-request status is not evidence that the runtime behaves. Runtime tests run locally and on the manual `workflow_dispatch` jobs. To record a local run as evidence, run nextest through the gate:
+Every job in `.github/workflows/ci.yml` runs on pull requests, on pushes to `main` and on demand (`workflow_dispatch`): the quick `pr` job formats and compiles every target, and the `lint`, `test`, `verify`, platform, `package` and `ui` jobs run the runtime suite. Runtime tests also run locally. To record a local run as evidence, run nextest through the gate:
 
 ```sh
 scripts/local-regression-gate --session compat --report docs.local/gates/compat.json -- -p fireemu-core-firestore -p fireemu-adapter-grpc

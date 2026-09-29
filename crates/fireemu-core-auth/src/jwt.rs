@@ -75,8 +75,9 @@ pub fn base64url_decode(text: &str) -> Result<Vec<u8>, JwtError> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum TokenAcceptance {
     /// The `strict` profile: every token is an ID token of this session's Auth store, with
-    /// its issuer, audience, expiry, issued-at and authentication times on the virtual
-    /// clock, subject and revocation checked.
+    /// its issuer, audience, expiry, issued-at and authentication times on the virtual clock
+    /// checked. Identity Toolkit also checks the account (subject, disabled, revocation);
+    /// Firestore does not (see [`verify_firestore_token`]).
     #[default]
     Verified,
     /// The `emulator` profile: a token this store cannot verify is still accepted when it is
@@ -439,6 +440,9 @@ pub struct LegacyToken<'a> {
     /// The issuing store's session epoch, only while fireemu session isolation is active (the
     /// same local-only marker ID tokens carry under `firebase`).
     pub session_epoch: Option<&'a str>,
+    /// The tenant of a tenant's account: a top-level `tenant` claim (AUTH-TENANT-BLOCKING
+    /// sandbox recording 2026-09-27, settings#password-off-update-password).
+    pub tenant: Option<&'a str>,
 }
 
 /// The claims of a legacy token issued at `iat` for `project`: no `sub`, `auth_time` or
@@ -470,6 +474,9 @@ pub fn legacy_token_payload(project: &str, iat: i64, token: &LegacyToken<'_>) ->
     }
     if let Some(extra) = token.extra_claims.filter(|extra| !extra.is_empty()) {
         claims.insert("extra_claims".to_owned(), ClaimValue::Map(extra.clone()));
+    }
+    if let Some(tenant) = token.tenant {
+        claims.insert("tenant".to_owned(), ClaimValue::String(tenant.to_owned()));
     }
     if let Some(epoch) = token.session_epoch {
         claims.insert(
@@ -606,6 +613,27 @@ pub fn verify_rules_token_for_project(
     )
 }
 
+/// [`verify_rules_token_for_project`] for Firestore, which checks the token but not the account
+/// (see [`verify_firestore_token`]); `expected_project` binds a mock token's audience and
+/// defaults to the store's project.
+pub fn verify_firestore_rules_token(
+    token: &str,
+    store: &AuthStore,
+    now: LogicalInstant,
+    acceptance: TokenAcceptance,
+    expected_project: Option<&str>,
+) -> Result<DecodedToken, JwtError> {
+    let expected_project = match expected_project {
+        Some(project) => ProjectId::try_new(project.to_owned())
+            .map_err(|_| JwtError::Malformed)?
+            .as_str()
+            .to_owned(),
+        None => store.project_id().to_owned(),
+    };
+    let verified = verify_firestore_token(token, store, now);
+    mock_fallback(token, store, acceptance, &expected_project, verified)
+}
+
 fn verify_rules_token_with_expected_project(
     token: &str,
     store: &AuthStore,
@@ -613,8 +641,20 @@ fn verify_rules_token_with_expected_project(
     acceptance: TokenAcceptance,
     expected_project: &str,
 ) -> Result<DecodedToken, JwtError> {
-    match verify_id_token_decoded(token, store, now) {
-        Ok((_, decoded)) => Ok(decoded),
+    let verified = verify_id_token_decoded(token, store, now).map(|(_, decoded)| decoded);
+    mock_fallback(token, store, acceptance, expected_project, verified)
+}
+
+/// The emulator profile's mock-token admission after a failed verification.
+fn mock_fallback(
+    token: &str,
+    store: &AuthStore,
+    acceptance: TokenAcceptance,
+    expected_project: &str,
+    verified: Result<DecodedToken, JwtError>,
+) -> Result<DecodedToken, JwtError> {
+    match verified {
+        Ok(decoded) => Ok(decoded),
         Err(verified_error) => {
             // A session that installed a signer issues RS256 tokens and refuses unsigned ones
             // on every surface (`auth.idTokenSigning: session-rsa`); the mock path would undo
@@ -661,6 +701,126 @@ pub fn verify_id_token_decoded_with_leeway(
     now: LogicalInstant,
     leeway_seconds: i64,
 ) -> Result<(TokenVerification, DecodedToken), JwtError> {
+    let decoded = verify_token_claims(
+        token,
+        store,
+        now,
+        leeway_seconds,
+        TenantRule::Store,
+        store.lifecycle_epoch_claim(),
+    )?;
+    let sub = decoded.sub().ok_or(JwtError::Malformed)?;
+    let user = store.user_by_id(sub).ok_or(JwtError::UnknownUser)?;
+    let auth_time = check_auth_time(&decoded, now)?;
+    if user.disabled {
+        return Err(JwtError::UserDisabled);
+    }
+    if LogicalInstant::from_unix_seconds(auth_time) < user.tokens_valid_after {
+        return Err(JwtError::Revoked);
+    }
+    let second_factor = decoded
+        .payload
+        .get("firebase")
+        .and_then(|f| f.get("sign_in_second_factor"))
+        .and_then(JsonValue::as_str)
+        .map(str::to_owned);
+    Ok((
+        TokenVerification {
+            uid: sub.to_owned(),
+            second_factor,
+        },
+        decoded,
+    ))
+}
+
+/// What Firestore checks of an ID token before Security Rules see it: the signature, the
+/// issuer, audience, tenant and session, `exp` with Firestore's allowance, and that `iat` and
+/// `auth_time` are not in the future. Unlike Identity Toolkit it does not consult the
+/// account: a token of an account whose refresh tokens were revoked, that was disabled, or
+/// that was deleted is honoured until it expires (FS-RULES production recording,
+/// 2026-09-24).
+pub fn verify_firestore_token(
+    token: &str,
+    store: &AuthStore,
+    now: LogicalInstant,
+) -> Result<DecodedToken, JwtError> {
+    let decoded = verify_token_claims(
+        token,
+        store,
+        now,
+        FIRESTORE_EXPIRY_LEEWAY_SECONDS,
+        TenantRule::Store,
+        store.lifecycle_epoch_claim(),
+    )?;
+    check_auth_time(&decoded, now)?;
+    Ok(decoded)
+}
+
+/// [`verify_firestore_rules_token`] for a token whose tenant no longer exists, checked against
+/// its project's `store`. Firestore does not look the tenant up either: an unexpired token of a
+/// deleted tenant was honoured about 3 s and 66 s after the deletion (AUTH-FS-CROSS stage 1,
+/// 2026-09-27). The token must still carry a tenant claim, so it never passes for the project's
+/// user of the same uid.
+///
+/// `removed` is what the registry remembered of the tenant's deletion. While the project's
+/// session epoch is still the one it had then (no reset since), the token must carry the epoch
+/// its tenant had; otherwise, or for a tenant never deleted, the project's own epoch.
+pub fn verify_firestore_rules_token_of_removed_tenant(
+    token: &str,
+    store: &AuthStore,
+    now: LogicalInstant,
+    acceptance: TokenAcceptance,
+    expected_project: Option<&str>,
+    removed: Option<&crate::store::RemovedTenantEpochs>,
+) -> Result<DecodedToken, JwtError> {
+    let project_epoch = store.lifecycle_epoch_claim();
+    let expected_epoch = match removed {
+        Some(epochs) if epochs.project == project_epoch => epochs.tenant.clone(),
+        _ => project_epoch,
+    };
+    let expected_project = match expected_project {
+        Some(project) => ProjectId::try_new(project.to_owned())
+            .map_err(|_| JwtError::Malformed)?
+            .as_str()
+            .to_owned(),
+        None => store.project_id().to_owned(),
+    };
+    let verified = verify_token_claims(
+        token,
+        store,
+        now,
+        FIRESTORE_EXPIRY_LEEWAY_SECONDS,
+        TenantRule::Removed,
+        expected_epoch,
+    )
+    .and_then(|decoded| check_auth_time(&decoded, now).map(|_| decoded));
+    mock_fallback(token, store, acceptance, &expected_project, verified)
+}
+
+/// Which tenant claim a store accepts.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TenantRule {
+    /// Exactly the store's own tenant (none for a project store).
+    Store,
+    /// Any tenant, from a project store whose tenant was removed: the claim must be present.
+    Removed,
+}
+
+/// How long past `exp` Firestore still honours an ID token. In two recordings each (FS-RULES,
+/// 2026-09-25) production accepted a token sent at a nominal 29.8 s past it (29.3 s on gRPC) and
+/// refused one at a nominal 30.3 s (31.3 s on gRPC); dispatch times were not recorded, so this is
+/// a nominal bracket, not an exact (29.8, 30.3] s. A token is refused from `exp + 30`.
+pub const FIRESTORE_EXPIRY_LEEWAY_SECONDS: i64 = 30;
+
+/// The token checks that do not read the account: see [`verify_firestore_token`].
+fn verify_token_claims(
+    token: &str,
+    store: &AuthStore,
+    now: LogicalInstant,
+    leeway_seconds: i64,
+    tenant_rule: TenantRule,
+    expected_epoch: Option<String>,
+) -> Result<DecodedToken, JwtError> {
     let decoded = decode_token(token, store.signer())?;
     let expected_iss = format!("https://securetoken.google.com/{}", store.project_id());
     let iss = decoded.string("iss").ok_or(JwtError::Malformed)?;
@@ -684,13 +844,17 @@ pub fn verify_id_token_decoded_with_leeway(
         .and_then(JsonValue::as_str)
         .map(str::to_owned);
     let expected_tenant = store.tenant_id().map(str::to_owned);
-    if actual_tenant != expected_tenant {
+    let tenant_ok = match tenant_rule {
+        TenantRule::Store => actual_tenant == expected_tenant,
+        TenantRule::Removed => expected_tenant.is_none() && actual_tenant.is_some(),
+    };
+    if !tenant_ok {
         return Err(JwtError::WrongTenant {
             expected: expected_tenant,
             actual: actual_tenant,
         });
     }
-    if let Some(expected) = store.lifecycle_epoch_claim() {
+    if let Some(expected) = expected_epoch {
         let actual = decoded
             .payload
             .get("firebase")
@@ -717,8 +881,13 @@ pub fn verify_id_token_decoded_with_leeway(
     if issued_at > now_secs {
         return Err(JwtError::Malformed);
     }
-    let sub = decoded.sub().ok_or(JwtError::Malformed)?;
-    let user = store.user_by_id(sub).ok_or(JwtError::UnknownUser)?;
+    decoded.sub().ok_or(JwtError::Malformed)?;
+    Ok(decoded)
+}
+
+/// `auth_time` must be present and not in the future.
+fn check_auth_time(decoded: &DecodedToken, now: LogicalInstant) -> Result<i64, JwtError> {
+    let now_secs = i64::try_from(now.as_nanos().div_euclid(1_000_000_000)).unwrap_or(i64::MAX);
     let auth_time = decoded
         .payload
         .get("auth_time")
@@ -727,23 +896,5 @@ pub fn verify_id_token_decoded_with_leeway(
     if auth_time > now_secs {
         return Err(JwtError::Malformed);
     }
-    if user.disabled {
-        return Err(JwtError::UserDisabled);
-    }
-    if LogicalInstant::from_unix_seconds(auth_time) < user.tokens_valid_after {
-        return Err(JwtError::Revoked);
-    }
-    let second_factor = decoded
-        .payload
-        .get("firebase")
-        .and_then(|f| f.get("sign_in_second_factor"))
-        .and_then(JsonValue::as_str)
-        .map(str::to_owned);
-    Ok((
-        TokenVerification {
-            uid: sub.to_owned(),
-            second_factor,
-        },
-        decoded,
-    ))
+    Ok(auth_time)
 }

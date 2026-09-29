@@ -24,29 +24,34 @@ use tonic::Status;
 use crate::rest::{RestRequest, RestResponse, RestState};
 use crate::webchannel::{ChannelRequest, ChannelResponse, Hub, StreamKind};
 
-/// `FS-LIMIT-API-REQUEST-BYTES`: the largest API request Firestore accepts, measured on the
-/// message payload before protocol decode. It is an inclusive maximum, so a request of
-/// exactly this many bytes is accepted and one more byte is refused.
-///
-/// The normal REST, `WebChannel`, and gRPC paths each apply it at their own decode boundary:
-/// [`MAX_REST_BODY_BYTES`] on a REST body, [`crate::webchannel::MAX_FORM_BYTES`] on a
-/// `WebChannel` form body, and [`MAX_GRPC_MESSAGE_BYTES`] on a gRPC message. The strict REST
-/// `:commit` route has a separate production-observed raw allowance; it does not apply a
-/// second decoded-protobuf bound.
+/// `FS-LIMIT-API-REQUEST-BYTES` as the limits catalog publishes it: 10 MiB. Production does
+/// not refuse there (it accepted 10,485,761 bytes on every transport, FS-DATA-WRITE partial
+/// supplement), so no transport enforces this figure; [`MAX_REQUEST_BYTES`] is the bound.
 pub const API_REQUEST_BYTES: usize = 10 * 1024 * 1024;
 
-/// Maximum accepted REST request body (`FS-LIMIT-API-REQUEST-BYTES`). The body is read
-/// through a bounded stream, so an over-long request is refused without ever being held
-/// whole in memory.
-pub const MAX_REST_BODY_BYTES: usize = API_REQUEST_BYTES;
-
 /// Production accepts an 11 MiB raw REST Commit body and refuses one more byte.
-pub const MAX_STRICT_COMMIT_RAW_BYTES: usize = 11 * 1024 * 1024;
-const MAX_STRICT_COMMIT_REJECTION_DRAIN_BYTES: usize = 32 * 1024 * 1024;
+pub const MAX_COMMIT_RAW_BYTES: usize = 11 * 1024 * 1024;
 
-/// Maximum accepted gRPC message (`FS-LIMIT-API-REQUEST-BYTES`), applied by tonic before the
-/// protobuf is decoded. This is the request direction only.
-pub const MAX_GRPC_MESSAGE_BYTES: usize = API_REQUEST_BYTES;
+/// The request bound every transport applies at its own decode boundary, in both profiles:
+/// [`MAX_REST_BODY_BYTES`] on a REST body and [`MAX_GRPC_MESSAGE_BYTES`] on a gRPC message. It
+/// is an inclusive maximum measured before protocol decode. `WebChannel` has its own bound,
+/// [`crate::webchannel::max_form_bytes`].
+///
+/// Owner decision D4 (2026-09-25) reuses the one production-observed figure, REST `:commit`,
+/// as the estimate for the transports whose own limit is unobserved. Decision D (2026-09-27)
+/// applies it in the emulator profile too: a lower local bound would refuse requests
+/// production accepts, and the emulator profile adds no refusal.
+pub const MAX_REQUEST_BYTES: usize = MAX_COMMIT_RAW_BYTES;
+
+/// Maximum accepted REST request body. The body is read through a bounded stream, so an
+/// over-long request is refused without ever being held whole in memory.
+pub const MAX_REST_BODY_BYTES: usize = MAX_REQUEST_BYTES;
+
+const MAX_COMMIT_REJECTION_DRAIN_BYTES: usize = 32 * 1024 * 1024;
+
+/// Maximum accepted gRPC message, applied by tonic before the protobuf is decoded. This is
+/// the request direction only.
+pub const MAX_GRPC_MESSAGE_BYTES: usize = MAX_REQUEST_BYTES;
 
 /// Maximum gRPC message this runtime will encode in a response.
 ///
@@ -72,56 +77,20 @@ const REST_PAYLOAD_UNIT_BYTES: usize = 1024 * 1024;
 /// magnitude and only ever fires on a stalled or malicious sender.
 pub const BODY_READ_DEADLINE: std::time::Duration = std::time::Duration::from_secs(30);
 
-/// The refusal a request over [`API_REQUEST_BYTES`] gets.
-///
-/// Documented, production observation pending. The Firestore quotas page states the 10 MiB
-/// maximum but not the answer to exceeding it, and no production receipt for that refusal
-/// exists in this repository (`tools/compat-broad/fs-request-bytes-boundary/README.md` says
-/// as much about its own sources). The strict profile therefore answers, on every transport,
-/// the shape Google's API infrastructure documents for an oversized payload: HTTP 400 with
-/// the canonical code `INVALID_ARGUMENT`, which is the `google.rpc.Code` that maps to 400.
-/// One shape on all three transports is one thing for the request-byte campaign to confirm
-/// or correct.
-///
-/// The `emulator` profile keeps the 413 the local runtime has always answered. The boundary
-/// is identical under both: only the shape of the refusal differs.
+/// The refusal a request over [`MAX_REQUEST_BYTES`] gets, in both profiles and on every
+/// transport: production's recorded REST `:commit` answer, HTTP 400 `INVALID_ARGUMENT` (gRPC
+/// code 3) with this message. No official-emulator recording shows another shape, so the
+/// emulator profile answers the same (decision D, 2026-09-27).
 fn api_request_too_large_message() -> String {
-    format!("Request payload size exceeds the limit: {API_REQUEST_BYTES} bytes.")
+    format!("Request payload size exceeds the limit: {MAX_REQUEST_BYTES} bytes.")
 }
 
-/// The legacy refusal, kept for the `emulator` profile.
-pub const API_REQUEST_TOO_LARGE_LEGACY: &str = "request body too large";
-
-fn api_request_too_large(enforce_limits: bool) -> RestResponse {
-    if enforce_limits {
-        RestResponse {
-            status: 400,
-            body: fireemu_adapter_support::api_error::google_rpc(
-                400,
-                &api_request_too_large_message(),
-                "INVALID_ARGUMENT",
-            ),
-        }
-    } else {
-        RestResponse {
-            status: 413,
-            body: fireemu_adapter_support::api_error::google_rpc(
-                413,
-                API_REQUEST_TOO_LARGE_LEGACY,
-                "INVALID_ARGUMENT",
-            ),
-        }
-    }
-}
-
-fn strict_commit_raw_too_large() -> RestResponse {
+fn api_request_too_large() -> RestResponse {
     RestResponse {
         status: 400,
         body: fireemu_adapter_support::api_error::google_rpc(
             400,
-            &format!(
-                "Request payload size exceeds the limit: {MAX_STRICT_COMMIT_RAW_BYTES} bytes."
-            ),
+            &api_request_too_large_message(),
             "INVALID_ARGUMENT",
         ),
     }
@@ -243,13 +212,13 @@ fn header<'a, B>(req: &'a Request<B>, name: &str) -> Option<&'a str> {
 /// Why a request body was not read.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum BodyRejection {
-    /// Over [`API_REQUEST_BYTES`], or the connection failed mid-body. A broken connection has
+    /// Over [`MAX_REQUEST_BYTES`], or the connection failed mid-body. A broken connection has
     /// always been answered this way and keeps that answer; nothing reaches the client anyway.
     TooLarge,
     /// The sender held the request open past [`BODY_READ_DEADLINE`] without finishing it.
     Deadline,
     /// The request declared no body and sent one anyway. Distinct from [`Self::TooLarge`] so
-    /// that a single stray byte is not reported as a 10 MiB overflow.
+    /// that a single stray byte is not reported as an 11 MiB overflow.
     Undeclared,
 }
 
@@ -294,14 +263,6 @@ impl BodyAllowance {
             Self::Undeclared => BodyRejection::Undeclared,
         }
     }
-
-    const fn for_request(declared: bool, maximum: usize) -> Self {
-        if declared {
-            Self::Declared(maximum)
-        } else {
-            Self::Undeclared
-        }
-    }
 }
 
 async fn read_body<B>(
@@ -321,14 +282,39 @@ where
     }
 }
 
-/// A strict Commit over its raw limit is drained without retaining the overflow. Replying
-/// while the client is still uploading can reset the HTTP/1 connection before it sees the
+/// A Commit over its raw limit is drained without retaining the overflow. Replying while the
+/// client is still uploading can reset the HTTP/1 connection before it sees the
 /// production-shaped 400. The finite drain cap and deadline still bound hostile senders.
-async fn read_strict_commit_body(
+///
+/// Only `:commit` drains. Other REST routes and `WebChannel` stop reading at the bound, so a
+/// body far over it may reset the connection instead of delivering the 400; production's
+/// answer there is unobserved beyond one byte over.
+async fn read_commit_body(
     req: Request<Incoming>,
     deadline: std::time::Duration,
 ) -> Result<Bytes, BodyRejection> {
-    let mut body = req.into_body();
+    read_drained_body(
+        req.into_body(),
+        MAX_COMMIT_RAW_BYTES,
+        MAX_COMMIT_REJECTION_DRAIN_BYTES,
+        deadline,
+    )
+    .await
+}
+
+/// Reads a body of at most `limit` bytes. A body over it is drained up to `drain` bytes without
+/// retaining the overflow, so the refusal reaches the client instead of a connection reset.
+async fn read_drained_body<B>(
+    body: B,
+    limit: usize,
+    drain: usize,
+    deadline: std::time::Duration,
+) -> Result<Bytes, BodyRejection>
+where
+    B: Body<Data = Bytes>,
+    B::Error: Into<BoxError>,
+{
+    let mut body = std::pin::pin!(body);
     let read = async {
         let mut retained = BytesMut::new();
         let mut total = 0usize;
@@ -337,10 +323,10 @@ async fn read_strict_commit_body(
             let frame = frame.map_err(|_| BodyRejection::TooLarge)?;
             if let Ok(data) = frame.into_data() {
                 total = total.saturating_add(data.len());
-                if total > MAX_STRICT_COMMIT_REJECTION_DRAIN_BYTES {
+                if total > drain {
                     return Err(BodyRejection::TooLarge);
                 }
-                if total > MAX_STRICT_COMMIT_RAW_BYTES {
+                if total > limit {
                     too_large = true;
                     retained.clear();
                 } else if !too_large {
@@ -391,14 +377,9 @@ fn undeclared_body() -> RestResponse {
     }
 }
 
-fn body_rejection_response(
-    rejection: BodyRejection,
-    enforce_limits: bool,
-    strict_commit: bool,
-) -> RestResponse {
+fn body_rejection_response(rejection: BodyRejection) -> RestResponse {
     match rejection {
-        BodyRejection::TooLarge if strict_commit => strict_commit_raw_too_large(),
-        BodyRejection::TooLarge => api_request_too_large(enforce_limits),
+        BodyRejection::TooLarge => api_request_too_large(),
         BodyRejection::Deadline => body_read_deadline_exceeded(),
         BodyRejection::Undeclared => undeclared_body(),
     }
@@ -434,10 +415,9 @@ async fn rest_call(
         .iter()
         .map(|v| v.to_str().unwrap_or_default().to_owned())
         .collect();
-    let strict_commit =
-        state.gateway.enforce_limits && crate::rest::is_strict_commit_route(&method, &path);
-    let body_limit = if strict_commit {
-        MAX_STRICT_COMMIT_RAW_BYTES
+    let commit = crate::rest::is_commit_route(&method, &path);
+    let body_limit = if commit {
+        MAX_COMMIT_RAW_BYTES
     } else {
         MAX_REST_BODY_BYTES
     };
@@ -454,23 +434,24 @@ async fn rest_call(
             ));
         }
     };
-    let bytes = match if strict_commit {
-        read_strict_commit_body(req, body_deadline).await
+    let bytes = match if commit {
+        read_commit_body(req, body_deadline).await
     } else {
         read_body(req, BodyAllowance::Declared(body_limit), body_deadline).await
     } {
         Ok(bytes) => bytes,
         Err(rejection) => {
             return Ok(json_response(
-                &body_rejection_response(rejection, state.gateway.enforce_limits, strict_commit),
+                &body_rejection_response(rejection),
                 origin.as_deref(),
             ));
         }
     };
-    let body = match request_body(&bytes, &path, state.gateway.production_refusals()) {
-        Ok(body) => body,
-        Err(response) => return Ok(json_response(&response, origin.as_deref())),
-    };
+    let (body, batch_field_order) =
+        match request_body(&bytes, &path, state.gateway.production_refusals()) {
+            Ok(body) => body,
+            Err(response) => return Ok(json_response(&response, origin.as_deref())),
+        };
     drop(bytes);
     let request = RestEnvelope {
         request: RestRequest {
@@ -484,6 +465,7 @@ async fn rest_call(
             browser_metadata,
             app_check,
             body,
+            batch_field_order,
         },
         _payload_permit: payload_permit,
     };
@@ -532,7 +514,6 @@ async fn channel_call<B>(
     hub: Arc<Hub>,
     kind: StreamKind,
     req: Request<B>,
-    enforce_limits: bool,
     limiter: &Arc<tokio::sync::Semaphore>,
     body_deadline: std::time::Duration,
 ) -> Response<OutBody>
@@ -541,9 +522,8 @@ where
     B::Error: Into<BoxError>,
 {
     let origin = header(&req, "origin").map(str::to_owned);
-    // A form body is up to `MAX_FORM_BYTES`, the same as a REST body, so it is admitted from
-    // the same pool: without this, peak body memory on this path was bounded only by how
-    // fast clients connect.
+    // A form body is admitted from the same pool as a REST body: without this, peak body
+    // memory on this path was bounded only by how fast clients connect.
     //
     // Only a request that declares a body takes a permit. A `Listen` back channel is a bare
     // `GET` and reads nothing, so it must never be refused because writers are busy: that
@@ -579,14 +559,25 @@ where
         .iter()
         .map(|v| v.to_str().unwrap_or_default().to_owned())
         .collect();
-    let allowance = BodyAllowance::for_request(declared, crate::webchannel::MAX_FORM_BYTES);
-    let bytes = match read_body(req, allowance, body_deadline).await {
+    let read = if declared {
+        read_drained_body(
+            req.into_body(),
+            crate::webchannel::max_form_bytes(hub.enforce_limits()),
+            crate::webchannel::MAX_FORM_DRAIN_BYTES,
+            body_deadline,
+        )
+        .await
+    } else {
+        read_body(req, BodyAllowance::Undeclared, body_deadline).await
+    };
+    let bytes = match read {
         Ok(bytes) => bytes,
+        Err(BodyRejection::TooLarge) if declared => {
+            let sid = params.get("SID").map(String::as_str);
+            return channel_http_response(hub.oversized_form(sid), origin.as_deref());
+        }
         Err(rejection) => {
-            return json_response(
-                &body_rejection_response(rejection, enforce_limits, false),
-                origin.as_deref(),
-            );
+            return json_response(&body_rejection_response(rejection), origin.as_deref());
         }
     };
     let body = String::from_utf8_lossy(&bytes).into_owned();
@@ -599,13 +590,17 @@ where
         origin: origin.clone(),
         body,
     });
+    channel_http_response(response, origin.as_deref())
+}
+
+fn channel_http_response(response: ChannelResponse, origin: Option<&str>) -> Response<OutBody> {
     match response {
         ChannelResponse::Full {
             status,
             headers,
             body,
         } => {
-            let mut b = cors_headers(Response::builder().status(status), origin.as_deref());
+            let mut b = cors_headers(Response::builder().status(status), origin);
             for (k, v) in headers {
                 b = b.header(k, v);
             }
@@ -613,7 +608,7 @@ where
                 .unwrap_or_else(|_| Response::new(full(Bytes::new())))
         }
         ChannelResponse::Stream { headers, body } => {
-            let mut b = cors_headers(Response::builder().status(200), origin.as_deref());
+            let mut b = cors_headers(Response::builder().status(200), origin);
             for (k, v) in headers {
                 b = b.header(k, v);
             }
@@ -674,15 +669,23 @@ fn request_body(
     bytes: &[u8],
     path: &str,
     production_refusals: bool,
-) -> Result<serde_json::Value, crate::rest::RestResponse> {
+) -> Result<(serde_json::Value, Vec<Vec<String>>), crate::rest::RestResponse> {
     if bytes.is_empty() {
-        return Ok(serde_json::Value::Object(serde_json::Map::new()));
+        return Ok((
+            serde_json::Value::Object(serde_json::Map::new()),
+            Vec::new(),
+        ));
     }
-    crate::rest::transcode::parse_body(bytes)
+    let parsed = if path.ends_with(":batchWrite") {
+        crate::rest::json_syntax::parse_with_batch_field_order(bytes)
+    } else {
+        crate::rest::transcode::parse_body(bytes).map(|value| (value, Vec::new()))
+    };
+    parsed
         .or_else(|error| {
             if !production_refusals {
                 if let Ok(value) = serde_json::from_slice(bytes) {
-                    return Ok(value);
+                    return Ok((value, Vec::new()));
                 }
             }
             Err(error)
@@ -705,14 +708,14 @@ fn is_decoded_message_too_large(status: &Status) -> bool {
             .starts_with("Error, decoded message length too large")
 }
 
-fn normalize_transport_status(headers: &mut HeaderMap, enforce_limits: bool) {
+fn normalize_transport_status(headers: &mut HeaderMap) {
     crate::production_status::respec_grpc_message(headers);
     let Some(status) = Status::from_header_map(headers) else {
         return;
     };
     let replacement = if is_prost_recursion(&status) {
         Status::invalid_argument(status.message().to_owned())
-    } else if enforce_limits && is_decoded_message_too_large(&status) {
+    } else if is_decoded_message_too_large(&status) {
         Status::invalid_argument(api_request_too_large_message())
     } else {
         return;
@@ -730,23 +733,75 @@ fn normalize_transport_status(headers: &mut HeaderMap, enforce_limits: bool) {
     }
 }
 
+/// Shapes a gRPC answer as production's front end sends it: an error trailers-only answer is
+/// split into headers and trailers (FS-DATA-WRITE decision 1, 2026-09-25), and every trailers
+/// frame is normalized.
+fn shape_grpc_response(
+    mut response: Response<tonic::body::Body>,
+    enforce_limits: bool,
+    write_stream: bool,
+) -> Response<http_body_util::combinators::UnsyncBoxBody<Bytes, BoxError>> {
+    if enforce_limits && response.headers().contains_key(Status::GRPC_STATUS) {
+        let trailers = split_trailers_only(response.headers_mut());
+        let frame = normalize_transport_frame(
+            Frame::trailers(trailers),
+            enforce_limits,
+            write_stream,
+            false,
+        );
+        let body = http_body_util::StreamBody::new(tokio_stream::once(Ok::<_, BoxError>(frame)))
+            .boxed_unsync();
+        return response.map(|_| body);
+    }
+    response.map(|b| {
+        let mut responded = false;
+        b.map_frame(move |frame| {
+            responded |= frame.is_data();
+            normalize_transport_frame(frame, enforce_limits, write_stream, responded)
+        })
+        .map_err(|e| Box::new(e) as BoxError)
+        .boxed_unsync()
+    })
+}
+
+/// Moves a trailers-only answer's status and metadata out of its headers, leaving only the
+/// content type, and returns them as the trailers of the same answer.
+fn split_trailers_only(headers: &mut HeaderMap) -> HeaderMap {
+    let content_type = headers.remove(hyper::header::CONTENT_TYPE);
+    let trailers = std::mem::take(headers);
+    if let Some(value) = content_type {
+        headers.insert(hyper::header::CONTENT_TYPE, value);
+    }
+    trailers
+}
+
+/// `responded` says whether the stream sent any response message. Production closes a `Write`
+/// stream with `content-disposition: attachment` after a response
+/// (`write-stream-terminal/*`), but not when it ends without one
+/// (`grpc-stream-request-bytes/*`, recorded twice).
 fn normalize_transport_frame(
     mut frame: Frame<Bytes>,
     enforce_limits: bool,
     write_stream: bool,
+    responded: bool,
 ) -> Frame<Bytes> {
     if let Some(trailers) = frame.trailers_mut() {
-        normalize_transport_status(trailers, enforce_limits);
-        if enforce_limits
+        normalize_transport_status(trailers);
+        let write_terminal = enforce_limits
             && write_stream
-            && Status::from_header_map(trailers)
-                .is_some_and(|status| status.code() == tonic::Code::Ok)
-            && !trailers.contains_key("content-disposition")
-        {
+            && Status::from_header_map(trailers).is_some_and(|status| {
+                status.code() == tonic::Code::Ok
+                    || (status.code() == tonic::Code::InvalidArgument
+                        && status.message() == "empty write operation")
+            });
+        if write_terminal && responded && !trailers.contains_key("content-disposition") {
             trailers.insert(
                 "content-disposition",
                 HeaderValue::from_static("attachment"),
             );
+        }
+        if write_terminal {
+            trailers.remove("fireemu-reason");
         }
     }
     frame
@@ -831,7 +886,7 @@ where
                             Err(never) => match never {},
                         };
                         let enforce_limits = rest.gateway.enforce_limits;
-                        normalize_transport_status(response.headers_mut(), enforce_limits);
+                        normalize_transport_status(response.headers_mut());
                         if response
                             .headers()
                             .contains_key(crate::local::DROP_CONNECTION_KEY)
@@ -840,13 +895,11 @@ where
                             // the connection closed (HTTP/1) instead of delivering it.
                             return Err(dropped());
                         }
-                        return Ok::<_, std::io::Error>(response.map(|b| {
-                            b.map_frame(move |frame| {
-                                normalize_transport_frame(frame, enforce_limits, write_stream)
-                            })
-                            .map_err(|e| Box::new(e) as BoxError)
-                            .boxed_unsync()
-                        }));
+                        return Ok::<_, std::io::Error>(shape_grpc_response(
+                            response,
+                            enforce_limits,
+                            write_stream,
+                        ));
                     }
                     if let Some(origin) = header(&req, "origin") {
                         if !crate::webchannel::origin_is_local(origin) {
@@ -868,12 +921,10 @@ where
                         return Ok(readiness(header(&req, "origin")));
                     }
                     if let Some(kind) = channel_kind(req.uri().path()) {
-                        let enforce_limits = rest.gateway.enforce_limits;
                         return Ok(channel_call(
                             hub,
                             kind,
                             req,
-                            enforce_limits,
                             rest_work_limiter(),
                             body_deadline,
                         )
@@ -902,10 +953,20 @@ mod tests {
         let query = "/v1/projects/p/databases/(default)/documents:runQuery";
         let commit = "/v1/projects/p/databases/(default)/documents:commit";
         assert_eq!(
-            super::request_body(br#"{"structuredQuery": {"limit": 1,},}"#, query, true).unwrap(),
+            super::request_body(br#"{"structuredQuery": {"limit": 1,},}"#, query, true)
+                .unwrap()
+                .0,
             json!({"structuredQuery": {"limit": 1}})
         );
-        assert_eq!(super::request_body(b"", commit, true).unwrap(), json!({}));
+        assert_eq!(super::request_body(b"", commit, true).unwrap().0, json!({}));
+        let batch = "/v1/projects/p/databases/(default)/documents:batchWrite";
+        let (_, field_order) = super::request_body(
+            br"{writes:[{update:{fields:{z:{stringValue:'ok'},a:{integerValue:'bad'}}}}]}",
+            batch,
+            true,
+        )
+        .unwrap();
+        assert_eq!(field_order, vec![vec!["z".to_owned(), "a".to_owned()]]);
         let truncated = super::request_body(br#"{"structuredQuery":"#, query, true).unwrap_err();
         assert_eq!(truncated.status, 400);
         assert_eq!(
@@ -926,7 +987,7 @@ mod tests {
             .unwrap()
             .contains("Message too deep"));
         let read = super::request_body(deep.as_bytes(), commit, false).unwrap();
-        assert!(read.is_array());
+        assert!(read.0.is_array());
         let bare = super::request_body(b"not json", commit, false).unwrap_err();
         assert_eq!(
             bare.body["error"]["message"],
@@ -948,8 +1009,8 @@ mod tests {
 
     use super::{
         api_request_too_large_message, normalize_transport_frame, normalize_transport_status,
-        try_admit_rest_payload_from, try_admit_rest_work, RestEnvelope, MAX_REST_BODY_BYTES,
-        MAX_STRICT_COMMIT_RAW_BYTES, REST_PAYLOAD_UNIT_BYTES,
+        try_admit_rest_payload_from, try_admit_rest_work, RestEnvelope, MAX_COMMIT_RAW_BYTES,
+        MAX_REST_BODY_BYTES, REST_PAYLOAD_UNIT_BYTES,
     };
     use bytes::Bytes;
     use hyper::body::Frame;
@@ -965,7 +1026,7 @@ mod tests {
     #[test]
     fn successful_write_terminal_retains_stable_content_disposition() {
         let frame: Frame<Bytes> = Frame::trailers(headers(&Status::new(Code::Ok, "")));
-        let trailers = normalize_transport_frame(frame, true, true)
+        let trailers = normalize_transport_frame(frame, true, true, true)
             .into_trailers()
             .expect("terminal trailers");
         assert_eq!(
@@ -974,13 +1035,15 @@ mod tests {
                 .and_then(|value| value.to_str().ok()),
             Some("attachment")
         );
-        for (strict, write_stream, code) in [
-            (false, true, Code::Ok),
-            (true, false, Code::Ok),
-            (true, true, Code::InvalidArgument),
+        for (strict, write_stream, code, responded) in [
+            (false, true, Code::Ok, true),
+            (true, false, Code::Ok, true),
+            (true, true, Code::InvalidArgument, true),
+            // A stream that ends without any response carries no content-disposition.
+            (true, true, Code::Ok, false),
         ] {
             let frame: Frame<Bytes> = Frame::trailers(headers(&Status::new(code, "refused")));
-            let trailers = normalize_transport_frame(frame, strict, write_stream)
+            let trailers = normalize_transport_frame(frame, strict, write_stream, responded)
                 .into_trailers()
                 .expect("terminal trailers");
             assert!(!trailers.contains_key("content-disposition"));
@@ -995,7 +1058,7 @@ mod tests {
             Bytes::from_static(b"details"),
         );
         let mut ordinary_headers = headers(&ordinary);
-        normalize_transport_status(&mut ordinary_headers, true);
+        normalize_transport_status(&mut ordinary_headers);
         let unchanged = Status::from_header_map(&ordinary_headers).unwrap();
         assert_eq!(unchanged.code(), Code::Internal);
         assert_eq!(unchanged.message(), "backend failed");
@@ -1004,7 +1067,7 @@ mod tests {
         let already_client_error =
             Status::invalid_argument("failed to decode Protobuf message: recursion limit reached");
         let mut client_headers = headers(&already_client_error);
-        normalize_transport_status(&mut client_headers, true);
+        normalize_transport_status(&mut client_headers);
         assert_eq!(
             Status::from_header_map(&client_headers).unwrap().message(),
             already_client_error.message()
@@ -1016,7 +1079,7 @@ mod tests {
             Bytes::from_static(b"stale-internal-details"),
         );
         let mut prost_headers = headers(&prost);
-        normalize_transport_status(&mut prost_headers, true);
+        normalize_transport_status(&mut prost_headers);
         let normalized = Status::from_header_map(&prost_headers).unwrap();
         assert_eq!(normalized.code(), Code::InvalidArgument);
         assert_eq!(
@@ -1026,56 +1089,44 @@ mod tests {
         assert!(normalized.details().is_empty());
     }
 
-    /// The decode-size refusal keeps tonic's own answer under the `emulator` profile and
-    /// takes the documented production shape under `strict`. Only the shape changes: the
-    /// boundary tonic enforces is the same one either way.
+    /// The decode-size refusal takes production's shape in both profiles (decision D,
+    /// 2026-09-27): the bound tonic enforces is the same either way.
     #[test]
-    fn the_decode_size_refusal_is_reshaped_only_in_the_strict_profile() {
+    fn the_decode_size_refusal_is_reshaped_in_both_profiles() {
         let tonic_wording =
-            "Error, decoded message length too large: found 10485761 bytes, the limit is: 10485760 bytes";
-        let too_large = || Status::new(Code::OutOfRange, tonic_wording);
-
-        let mut emulator = headers(&too_large());
-        normalize_transport_status(&mut emulator, false);
-        let kept = Status::from_header_map(&emulator).unwrap();
-        assert_eq!(kept.code(), Code::OutOfRange);
-        assert_eq!(kept.message(), tonic_wording);
-
-        let mut strict = headers(&too_large());
-        normalize_transport_status(&mut strict, true);
-        let reshaped = Status::from_header_map(&strict).unwrap();
+            "Error, decoded message length too large: found 11534337 bytes, the limit is: 11534336 bytes";
+        let mut decoded = headers(&Status::new(Code::OutOfRange, tonic_wording));
+        normalize_transport_status(&mut decoded);
+        let reshaped = Status::from_header_map(&decoded).unwrap();
         assert_eq!(reshaped.code(), Code::InvalidArgument);
         assert_eq!(reshaped.message(), api_request_too_large_message());
+        // The message states the enforced bound, not the 10 MiB catalog figure.
         assert_eq!(
             api_request_too_large_message(),
-            "Request payload size exceeds the limit: 10485760 bytes."
+            "Request payload size exceeds the limit: 11534336 bytes."
         );
 
         // The encode direction is never touched. `MAX_GRPC_RESPONSE_BYTES` is a local memory
         // guard, not `FS-LIMIT-API-REQUEST-BYTES`, so a response this runtime could not encode
         // must not be dressed up as production refusing the client's request.
-        for enforce_limits in [true, false] {
-            let encode_side = "Error, encoded message length too large: found 10485761 bytes, the limit is: 10485760 bytes";
-            let mut encoded = headers(&Status::new(Code::OutOfRange, encode_side));
-            normalize_transport_status(&mut encoded, enforce_limits);
-            let kept = Status::from_header_map(&encoded).unwrap();
-            assert_eq!(kept.code(), Code::OutOfRange);
-            assert_eq!(kept.message(), encode_side);
-        }
+        let encode_side = "Error, encoded message length too large: found 10485761 bytes, the limit is: 10485760 bytes";
+        let mut encoded = headers(&Status::new(Code::OutOfRange, encode_side));
+        normalize_transport_status(&mut encoded);
+        let kept = Status::from_header_map(&encoded).unwrap();
+        assert_eq!(kept.code(), Code::OutOfRange);
+        assert_eq!(kept.message(), encode_side);
 
-        // An unrelated OUT_OF_RANGE is never touched, in either profile.
-        for enforce_limits in [true, false] {
-            let mut unrelated = headers(&Status::new(Code::OutOfRange, "cursor past the end"));
-            normalize_transport_status(&mut unrelated, enforce_limits);
-            let kept = Status::from_header_map(&unrelated).unwrap();
-            assert_eq!(kept.code(), Code::OutOfRange);
-            assert_eq!(kept.message(), "cursor past the end");
-        }
+        // An unrelated OUT_OF_RANGE is never touched.
+        let mut unrelated = headers(&Status::new(Code::OutOfRange, "cursor past the end"));
+        normalize_transport_status(&mut unrelated);
+        let kept = Status::from_header_map(&unrelated).unwrap();
+        assert_eq!(kept.code(), Code::OutOfRange);
+        assert_eq!(kept.message(), "cursor past the end");
     }
 
-    /// A `WebChannel` form body is up to the same 10 MiB a REST body is, so it draws on the
-    /// same admission pool. Before this, `channel_call` had no gate at all and peak body
-    /// memory on that path was bounded only by the connection rate.
+    /// A `WebChannel` form body is up to 16 MiB (`max_form_bytes`), larger than a REST body,
+    /// and draws on the same admission pool. Before this, `channel_call` had no gate at all
+    /// and peak body memory on that path was bounded only by the connection rate.
     mod channel_admission {
         use super::super::{
             channel_call, rest_work_limiter, too_many_concurrent_requests, BODY_READ_DEADLINE,
@@ -1122,12 +1173,20 @@ mod tests {
         }
 
         fn hub() -> Arc<Hub> {
+            hub_with(true)
+        }
+
+        fn hub_with(enforce_limits: bool) -> Arc<Hub> {
             let gateway = Gateway {
-                enforce_limits: true,
+                enforce_limits,
                 ctx: PlanningContext {
                     edition: FirestoreEdition::Standard,
                     api_mode: FirestoreApiMode::Native,
-                    policy: IndexValidationPolicy::Production,
+                    policy: if enforce_limits {
+                        IndexValidationPolicy::Production
+                    } else {
+                        IndexValidationPolicy::Emulator
+                    },
                 },
                 indexes: IndexSet::default(),
             };
@@ -1234,7 +1293,6 @@ mod tests {
                     hub(),
                     StreamKind::Write,
                     forward_channel_request(),
-                    true,
                     &exhausted,
                     BODY_READ_DEADLINE,
                 )
@@ -1243,6 +1301,95 @@ mod tests {
                 assert_eq!(status, 503);
                 assert_eq!(body, too_many_concurrent_requests().body);
                 assert_eq!(body["error"]["status"], "RESOURCE_EXHAUSTED");
+            });
+        }
+
+        /// A form body over the profile's bound: strict answers production's HTML 400 and the
+        /// session is gone afterwards; the emulator profile answers the official emulator's
+        /// empty 413 and the session keeps working.
+        #[test]
+        fn an_oversized_form_ends_the_session_only_in_the_strict_profile() {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            runtime.block_on(async {
+                for enforce_limits in [true, false] {
+                    let permits = Arc::new(tokio::sync::Semaphore::new(4));
+                    let hub = hub_with(enforce_limits);
+                    let handshake = channel_call(
+                        hub.clone(),
+                        StreamKind::Listen,
+                        listen_handshake_request(),
+                        &permits,
+                        BODY_READ_DEADLINE,
+                    )
+                    .await;
+                    assert_eq!(handshake.status().as_u16(), 200);
+                    let session = handshake
+                        .headers()
+                        .get("x-http-session-id")
+                        .and_then(|v| v.to_str().ok())
+                        .expect("the handshake names its session")
+                        .to_owned();
+                    let forward = |bytes: usize| {
+                        let body = format!("count=0&pad={}", "a".repeat(bytes - 12));
+                        Request::builder()
+                            .method("POST")
+                            .uri(format!(
+                                "/google.firestore.v1.Firestore/Listen/channel?SID={session}&VER=8&RID=2&AID=0"
+                            ))
+                            .body(Full::new(Bytes::from(body)))
+                            .expect("a well-formed forward request")
+                    };
+                    let over = channel_call(
+                        hub.clone(),
+                        StreamKind::Listen,
+                        forward(crate::webchannel::max_form_bytes(enforce_limits) + 1),
+                        &permits,
+                        BODY_READ_DEADLINE,
+                    )
+                    .await;
+                    let status = over.status().as_u16();
+                    let text = over.into_body().collect().await.unwrap().to_bytes();
+                    let after = channel_call(
+                        hub.clone(),
+                        StreamKind::Listen,
+                        forward(13),
+                        &permits,
+                        BODY_READ_DEADLINE,
+                    )
+                    .await;
+                    let terminate = channel_call(
+                        hub.clone(),
+                        StreamKind::Listen,
+                        Request::builder()
+                            .method("GET")
+                            .uri(format!(
+                                "/google.firestore.v1.Firestore/Listen/channel?SID={session}&VER=8&RID=3&AID=0&TYPE=terminate"
+                            ))
+                            .body(Full::new(Bytes::new()))
+                            .expect("a well-formed terminate"),
+                        &permits,
+                        BODY_READ_DEADLINE,
+                    )
+                    .await;
+                    if enforce_limits {
+                        assert_eq!(status, 400);
+                        assert_eq!(
+                            text.as_ref(),
+                            crate::webchannel::STRICT_UNKNOWN_SESSION_BODY.as_bytes()
+                        );
+                        assert_eq!(after.status().as_u16(), 400, "the session is gone");
+                        // Production's terminate of the ended session answered the same page.
+                        assert_eq!(terminate.status().as_u16(), 400);
+                    } else {
+                        assert_eq!(status, 413);
+                        assert!(text.is_empty());
+                        assert_eq!(after.status().as_u16(), 200, "the session keeps working");
+                        assert_eq!(terminate.status().as_u16(), 200);
+                    }
+                }
             });
         }
 
@@ -1264,7 +1411,6 @@ mod tests {
                     hub.clone(),
                     StreamKind::Listen,
                     listen_handshake_request(),
-                    true,
                     &one,
                     BODY_READ_DEADLINE,
                 )
@@ -1282,7 +1428,6 @@ mod tests {
                     hub.clone(),
                     StreamKind::Listen,
                     backchannel_request(&session),
-                    true,
                     &one,
                     BODY_READ_DEADLINE,
                 )
@@ -1300,7 +1445,6 @@ mod tests {
                     hub,
                     StreamKind::Write,
                     forward_channel_request(),
-                    true,
                     &one,
                     BODY_READ_DEADLINE,
                 )
@@ -1327,7 +1471,6 @@ mod tests {
                     hub.clone(),
                     StreamKind::Listen,
                     listen_handshake_request(),
-                    true,
                     &open,
                     BODY_READ_DEADLINE,
                 )
@@ -1344,7 +1487,6 @@ mod tests {
                     hub,
                     StreamKind::Listen,
                     backchannel_request(&session),
-                    true,
                     &exhausted,
                     BODY_READ_DEADLINE,
                 )
@@ -1381,7 +1523,6 @@ mod tests {
                         hub(),
                         StreamKind::Listen,
                         request,
-                        true,
                         &exhausted,
                         BODY_READ_DEADLINE,
                     )
@@ -1424,7 +1565,6 @@ mod tests {
                         hub(),
                         StreamKind::Write,
                         request,
-                        true,
                         &exhausted,
                         BODY_READ_DEADLINE,
                     )
@@ -1461,7 +1601,6 @@ mod tests {
                         hub(),
                         StreamKind::Write,
                         request,
-                        true,
                         &exhausted,
                         BODY_READ_DEADLINE,
                     )
@@ -1497,7 +1636,6 @@ mod tests {
                     hub(),
                     StreamKind::Write,
                     request,
-                    true,
                     &one,
                     std::time::Duration::from_millis(50),
                 )
@@ -1534,7 +1672,6 @@ mod tests {
                         hub.clone(),
                         StreamKind::Write,
                         forward_channel_request(),
-                        true,
                         &one,
                         BODY_READ_DEADLINE,
                     )
@@ -1596,6 +1733,7 @@ mod tests {
                 browser_metadata: false,
                 app_check: Vec::new(),
                 body: serde_json::Value::Object(serde_json::Map::new()),
+                batch_field_order: Vec::new(),
             },
             _payload_permit: Some(permit),
         }
@@ -1638,10 +1776,7 @@ mod tests {
 
     #[test]
     fn every_rest_body_read_is_charged_at_its_selected_wire_limit() {
-        assert_eq!(MAX_REST_BODY_BYTES.div_ceil(REST_PAYLOAD_UNIT_BYTES), 10);
-        assert_eq!(
-            MAX_STRICT_COMMIT_RAW_BYTES.div_ceil(REST_PAYLOAD_UNIT_BYTES),
-            11
-        );
+        assert_eq!(MAX_REST_BODY_BYTES.div_ceil(REST_PAYLOAD_UNIT_BYTES), 11);
+        assert_eq!(MAX_COMMIT_RAW_BYTES.div_ceil(REST_PAYLOAD_UNIT_BYTES), 11);
     }
 }

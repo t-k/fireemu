@@ -269,6 +269,8 @@ class NodeWire:
                     body[key] = body[key].replace(production, local, 1)
             for write in body.get('writes', []):
                 write['update']['name'] = write['update']['name'].replace(production, local, 1)
+            if 'documents' in body:
+                body['documents'] = [name.replace(production, local, 1) for name in body['documents']]
         spec = {'kind': 'txn-program-call-v1', 'transport': transport, 'target': self.target, 'projectId': project, 'nonce': nonce, 'ownerId': owner_id, **copy.deepcopy(self.scope), 'method': method, 'request': body, 'bearer': bearer, 'deadlineMs': deadline_ms}
         receipt, lifecycle = self._child(spec, deadline_ms / 1000 + 5)
         required = {'kind', 'transport', 'complete', 'code', 'details', 'response', 'http', 'dispatchedRequests'}

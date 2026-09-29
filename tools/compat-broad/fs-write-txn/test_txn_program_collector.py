@@ -64,6 +64,21 @@ class Service:
             del response["version"]
             if self.foreign_marker and token: response["fields"]["owner"]["stringValue"] = "foreign"
             return self._receipt(transport, 0, response=response)
+        if method == "BatchGetDocuments":
+            if token and self.tokens.get(token) == "dead":
+                return self._receipt(transport, 10, details="The referenced transaction has expired or is no longer valid.")
+            if token and self.tokens.get(token) in ("committed", "rolled-back"):
+                return self._receipt(transport, 10, details="The referenced transaction has expired or is no longer valid.")
+            frames = []
+            for name in request["documents"]:
+                document = self.documents.get(name)
+                if document is None:
+                    frames.append({"missing": name, "readTime": self._stamp(transport)})
+                else:
+                    found = {**copy.deepcopy(document), "updateTime": self._stamp(transport, document["version"])}
+                    del found["version"]
+                    frames.append({"found": found, "readTime": self._stamp(transport)})
+            return self._receipt(transport, 0, response={"responses": frames})
         if method == "Commit":
             return self._commit(transport, request, token)
         if method == "Rollback":
@@ -87,6 +102,13 @@ class Service:
 
     def _commit(self, transport, request, token):
         writes = request["writes"]
+        if token and self.tokens.get(token) in ("committed", "rolled-back"):
+            return self._receipt(transport, 10, details="The referenced transaction has expired or is no longer valid.")
+        if not writes:
+            if self.tokens.get(token) != "open":
+                return self._receipt(transport, 10, details="The referenced transaction has expired or is no longer valid.")
+            self.tokens[token] = "committed"
+            return self._receipt(transport, 0, response={"writeResults": []})
         writer = token is None and request["writes"][0]["currentDocument"]["exists"] is True
         failing = [w for w in writes if w["currentDocument"]["exists"] != (w["update"]["name"] in self.documents)]
         if writer:

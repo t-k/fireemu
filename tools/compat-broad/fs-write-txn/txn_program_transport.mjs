@@ -15,8 +15,9 @@ const descriptorClient = new FirestoreClient({ projectId: 'demo-descriptors' });
 const protos = descriptorClient._protos;
 const firestore = protos.google.firestore.v1;
 const empty = protos.google.protobuf.Empty;
-const RESPONSES = { BeginTransaction: firestore.BeginTransactionResponse, GetDocument: firestore.Document, Commit: firestore.CommitResponse, Rollback: empty, DeleteDocument: empty };
-const REST_METHODS = ['BeginTransaction', 'GetDocument', 'Commit', 'Rollback'];
+const RESPONSES = { BeginTransaction: firestore.BeginTransactionResponse, GetDocument: firestore.Document, BatchGetDocuments: firestore.BatchGetDocumentsResponse, Commit: firestore.CommitResponse, Rollback: empty, DeleteDocument: empty };
+const REST_METHODS = ['BeginTransaction', 'GetDocument', 'BatchGetDocuments', 'Commit', 'Rollback'];
+export const MAX_BATCH_FRAMES = 16;
 export const CHANNEL_OPTIONS = Object.freeze({ 'grpc.enable_retries': 0, 'grpc.max_send_message_length': 16384, 'grpc.max_receive_message_length': 65536 });
 export const RECEIPT_KIND = 'txn-program-receipt-v1';
 export const MAX_DEADLINE_MS = 30000;
@@ -74,6 +75,12 @@ export function validateCall(spec) {
       if (!owned(request.name)) throw new Error('program document differs');
       if (request.transaction !== undefined) bytes(request.transaction);
       break;
+    case 'BatchGetDocuments': {
+      keys(request, ['database', 'documents'], ['transaction']);
+      if (request.database !== database || !Array.isArray(request.documents) || !request.documents.length || request.documents.length > spec.documents.length || new Set(request.documents).size !== request.documents.length || !request.documents.every(owned)) throw new Error('program batch documents differ');
+      if (request.transaction !== undefined) bytes(request.transaction);
+      break;
+    }
     case 'Rollback':
       keys(request, ['database', 'transaction']);
       if (request.database !== database) throw new Error('program database differs');
@@ -81,7 +88,8 @@ export function validateCall(spec) {
       break;
     case 'Commit': {
       keys(request, ['database', 'writes'], ['transaction']);
-      if (request.database !== database || !Array.isArray(request.writes) || !request.writes.length || request.writes.length > spec.documents.length) throw new Error('program writes differ');
+      // An empty commit is a transaction's own: it must name the transaction.
+      if (request.database !== database || !Array.isArray(request.writes) || request.writes.length > spec.documents.length || (!request.writes.length && request.transaction === undefined)) throw new Error('program writes differ');
       if (request.transaction !== undefined) bytes(request.transaction);
       const seen = new Set();
       for (const write of request.writes) {
@@ -133,6 +141,7 @@ export function restRequest(spec) {
     case 'BeginTransaction': return { method: 'POST', path: `/v1/${database}/documents:beginTransaction`, body: { options: request.options } };
     case 'Commit': return { method: 'POST', path: `/v1/${database}/documents:commit`, body: { writes: request.writes, ...(request.transaction === undefined ? {} : { transaction: request.transaction }) } };
     case 'Rollback': return { method: 'POST', path: `/v1/${database}/documents:rollback`, body: { transaction: request.transaction } };
+    case 'BatchGetDocuments': return { method: 'POST', path: `/v1/${database}/documents:batchGet`, body: { documents: request.documents, ...(request.transaction === undefined ? {} : { transaction: request.transaction }) } };
     default: return { method: 'GET', path: `/v1/${request.name}${request.transaction === undefined ? '' : `?transaction=${encodeURIComponent(request.transaction)}`}`, body: undefined };
   }
 }
@@ -177,7 +186,13 @@ async function runRest(spec, exchange) {
     if (answer.oversize) return receipt(spec, 2, 'response capacity exceeded', null, answer.status);
     let body;
     try { body = JSON.parse(answer.text); } catch { return receipt(spec, 2, 'REST answer is not JSON', null, answer.status); }
-    if (answer.status >= 200 && answer.status < 300) return plain(body) ? receipt(spec, 0, '', body, answer.status) : receipt(spec, 2, 'REST success is not an object', null, answer.status);
+    const batch = spec.method === 'BatchGetDocuments';
+    // A batch answers with an array of entries; an error may arrive as the first entry.
+    if (batch && Array.isArray(body) && body.length && plain(body[0]) && plain(body[0].error)) body = body[0];
+    if (answer.status >= 200 && answer.status < 300) {
+      if (batch) return Array.isArray(body) && body.length <= MAX_BATCH_FRAMES && body.every(plain) ? receipt(spec, 0, '', { responses: body }, answer.status) : receipt(spec, 2, 'REST batch answer is not a bounded list of entries', null, answer.status);
+      return plain(body) ? receipt(spec, 0, '', body, answer.status) : receipt(spec, 2, 'REST success is not an object', null, answer.status);
+    }
     const status = body?.error?.status;
     // A non-2xx answer is never OK, whatever its status name says.
     const code = typeof status === 'string' && Object.hasOwn(STATUS_CODES, status) && STATUS_CODES[status] !== 0 ? STATUS_CODES[status] : 2;
@@ -209,7 +224,16 @@ async function runGrpc(spec, createClientOverride) {
       };
       timer = setTimeout(() => { finish(4, 'worker deadline exceeded'); call?.cancel(); }, spec.deadlineMs + 25);
       try {
-        call = client.makeUnaryRequest(`/google.firestore.v1.Firestore/${spec.method}`, firestore[`${spec.method}Request`].serialize, RESPONSES[spec.method].deserialize, spec.request, metadata, { deadline: new Date(Date.now() + spec.deadlineMs) }, (error, response) => finish(error?.code ?? 0, error?.details ?? '', response));
+        if (spec.method === 'BatchGetDocuments') {
+          // A server stream: collect a bounded number of entries; an error after entries is still the call's answer.
+          call = client.makeServerStreamRequest(`/google.firestore.v1.Firestore/${spec.method}`, firestore[`${spec.method}Request`].serialize, RESPONSES[spec.method].deserialize, spec.request, metadata, { deadline: new Date(Date.now() + spec.deadlineMs) });
+          const entries = [];
+          call.on('data', entry => { entries.push(entry); if (entries.length > MAX_BATCH_FRAMES) { finish(2, 'batch stream over the frame cap'); call.cancel(); } });
+          call.on('error', error => finish(error?.code ?? 2, error?.details ?? ''));
+          call.on('end', () => finish(0, '', { responses: entries }));
+        } else {
+          call = client.makeUnaryRequest(`/google.firestore.v1.Firestore/${spec.method}`, firestore[`${spec.method}Request`].serialize, RESPONSES[spec.method].deserialize, spec.request, metadata, { deadline: new Date(Date.now() + spec.deadlineMs) }, (error, response) => finish(error?.code ?? 0, error?.details ?? '', response));
+        }
       } catch { finish(2, 'native dispatch failed'); }
     });
   } finally { clearTimeout(timer); client.close(); }

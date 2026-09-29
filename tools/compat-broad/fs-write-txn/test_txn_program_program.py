@@ -118,7 +118,7 @@ def _step_change(index, **fields):
         ("unknown state", lambda t: _broken(t, steps=_step_change(5, writes=({"document": "a", "state": "gone", "exists": True},)))),
         ("allowed unknown code", lambda t: _broken(t, steps=_step_change(5, allow=(5, 14)))),
         ("empty allow", lambda t: _broken(t, steps=_step_change(5, allow=()))),
-        ("commit without writes", lambda t: _broken(t, steps=_step_change(5, writes=()))),
+        ("commit without writes outside a transaction", lambda t: _broken(t, steps=_step_change(7, writes=()))),
         ("writer with token", lambda t: _broken(t, steps=_step_change(7, tokenInput="rest-r"))),
         ("writer over deadline", lambda t: _broken(t, steps=_step_change(7, deadlineMs=30001))),
         ("case on control", lambda t: _broken(t, steps=_step_change(4, caseId="x"))),

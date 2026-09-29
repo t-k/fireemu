@@ -34,7 +34,7 @@ for (const transport of ['rest', 'grpc']) {
     const otherProgram = commit([write('a', 'held')]); otherProgram.writes[0].update.name = name('a').replace('txn-toy', 'txn-other');
     const otherRun = commit([write('a', 'held')]); otherRun.writes[0].update.name = name('a').replace(nonce, 'c'.repeat(32));
     const wrongRole = commit([write('a', 'held')]); wrongRole.writes[0].update.fields.role.stringValue = 'm';
-    for (const body of [commit([write('a', 'gone')]), wrongDocument, otherProgram, otherRun, wrongRole, commit([write('a', 'held'), write('a', 'moved')]), commit([]), commit([write('a', 'held'), write('m', 'held'), write('a', 'moved')])]) assert.throws(() => validateCall(spec('Commit', body, transport)));
+    for (const body of [commit([write('a', 'gone')]), wrongDocument, otherProgram, otherRun, wrongRole, commit([write('a', 'held'), write('a', 'moved')]), commit([], false), commit([write('a', 'held'), write('m', 'held'), write('a', 'moved')])]) assert.throws(() => validateCall(spec('Commit', body, transport)));
     for (const change of ['owner', 'nonce', 'extra', 'precondition']) {
       const body = commit([write('a', 'held')]);
       if (change === 'owner' || change === 'nonce') body.writes[0].update.fields[change].stringValue = 'foreign';
@@ -62,6 +62,82 @@ for (const transport of ['rest', 'grpc']) {
     ]) assert.throws(() => validateCall({ ...base, ...changes }), undefined, JSON.stringify(Object.keys(changes)));
   });
 }
+
+for (const transport of ['rest', 'grpc']) {
+  test(`${transport}: an empty commit must name its transaction, and a batch read names distinct owned documents`, async () => {
+    const { validateCall } = await module();
+    validateCall(spec('Commit', commit([]), transport));
+    assert.throws(() => validateCall(spec('Commit', commit([], false), transport)));
+    validateCall(spec('BatchGetDocuments', { database, documents: [name('a'), name('m')] }, transport));
+    validateCall(spec('BatchGetDocuments', { database, documents: [name('a')], transaction: token }, transport));
+    for (const request of [
+      { database, documents: [] }, { database, documents: [name('a'), name('a')] }, { database, documents: [name('a'), name('z')] },
+      { database, documents: [name('a'), name('m'), name('a')] }, { database: 'projects/other/databases/(default)', documents: [name('a')] },
+      { database, documents: [name('a').replace(nonce, 'c'.repeat(32))] }, { database, documents: [name('a')], transaction: 'bad' }, { database, documents: [name('a')], extra: true }, { documents: [name('a')] },
+      { database, documents: 'x' },
+    ]) assert.throws(() => validateCall(spec('BatchGetDocuments', request, transport)), undefined, JSON.stringify(request).slice(0, 60));
+  });
+}
+
+test('REST: a batch read becomes one fixed request and its entries are kept as a list', async () => {
+  const { restRequest, runUnary } = await module();
+  const call = spec('BatchGetDocuments', { database, documents: [name('a'), name('m')], transaction: token }, 'rest');
+  assert.deepEqual(restRequest(call), { method: 'POST', path: `/v1/${database}/documents:batchGet`, body: { documents: [name('a'), name('m')], transaction: token } });
+  assert.deepEqual(restRequest(spec('BatchGetDocuments', { database, documents: [name('a')] }, 'rest')).body, { documents: [name('a')] });
+  const entries = [{ found: { name: name('a'), fields: {}, updateTime: '2026-09-30T00:00:00.000000001Z' }, readTime: '2026-09-30T00:00:01Z' }, { missing: name('m'), readTime: '2026-09-30T00:00:01Z' }];
+  const result = await runUnary(call, exchange([{ status: 200, text: JSON.stringify(entries) }]).run);
+  assert.deepEqual([result.code, result.complete, result.http, result.response], [0, true, 200, { responses: entries }]);
+});
+
+test('REST: a batch answer that is not a bounded list of entries is an unknown outcome, and an error entry is an error', async () => {
+  const { runUnary } = await module();
+  const call = spec('BatchGetDocuments', { database, documents: [name('a')] }, 'rest');
+  for (const text of [JSON.stringify({ not: 'a list' }), JSON.stringify(['x']), JSON.stringify(Array.from({ length: 17 }, () => ({ missing: name('a') })))]) {
+    const result = await runUnary(call, exchange([{ status: 200, text }]).run);
+    assert.deepEqual([result.code, result.complete], [2, false], text.slice(0, 40));
+  }
+  const refused = await runUnary(call, exchange([{ status: 409, text: JSON.stringify([{ error: { code: 409, message: 'contended', status: 'ABORTED' } }]) }]).run);
+  assert.deepEqual([refused.code, refused.complete, refused.details], [10, true, 'contended']);
+  const plainError = await runUnary(call, exchange([{ status: 404, text: JSON.stringify({ error: { message: 'gone', status: 'NOT_FOUND' } }) }]).run);
+  assert.equal(plainError.code, 5);
+});
+
+function streamClient(events) {
+  const handlers = {};
+  const call = { on(name, handler) { handlers[name] = handler; return call; }, cancel() { call.cancelled = true; } };
+  return { call, factory: () => ({
+    makeServerStreamRequest(path, serialize, _deserialize, request, metadata, options) {
+      assert.equal(path, '/google.firestore.v1.Firestore/BatchGetDocuments');
+      assert.ok(serialize(request).length > 0); assert.deepEqual(metadata.get('authorization'), ['Bearer owner']); assert.ok(options.deadline instanceof Date);
+      queueMicrotask(() => events(handlers));
+      return call;
+    },
+    close() {},
+  }) };
+}
+
+test('gRPC: a batch read is one server stream whose entries are collected', async () => {
+  const { runUnary } = await module();
+  const first = { found: { name: name('a'), fields: {}, updateTime: { seconds: '1', nanos: 1 } }, readTime: { seconds: '2', nanos: 0 } };
+  const stream = streamClient(handlers => { handlers.data(first); handlers.data({ missing: name('m') }); handlers.end(); });
+  const result = await runUnary(spec('BatchGetDocuments', { database, documents: [name('a'), name('m')] }), stream.factory);
+  assert.deepEqual([result.code, result.complete, result.transport, result.http], [0, true, 'grpc', null]);
+  assert.equal(result.response.responses.length, 2);
+});
+
+test('gRPC: a stream that fails or overflows is an answer, not a success', async () => {
+  const { runUnary } = await module();
+  const failing = streamClient(handlers => { handlers.data({ missing: name('a') }); handlers.error({ code: 14, details: 'owner unavailable' }); });
+  const failed = await runUnary(spec('BatchGetDocuments', { database, documents: [name('a')] }), failing.factory);
+  assert.deepEqual([failed.code, failed.complete, failed.details, failed.response], [14, false, '[credential-redacted] unavailable', null]);
+  const refused = streamClient(handlers => handlers.error({ code: 10, details: 'contention' }));
+  const aborted = await runUnary(spec('BatchGetDocuments', { database, documents: [name('a')] }), refused.factory);
+  assert.deepEqual([aborted.code, aborted.complete], [10, true]);
+  const flood = streamClient(handlers => { for (let index = 0; index < 20; index += 1) handlers.data({ missing: name('a') }); handlers.end(); });
+  const over = await runUnary(spec('BatchGetDocuments', { database, documents: [name('a')] }), flood.factory);
+  assert.deepEqual([over.code, over.complete, over.response], [2, false, null]);
+  assert.equal(flood.call.cancelled, true);
+});
 
 test('production is the sandbox project alone, and a local target must be a demo project on the loopback', async () => {
   const { validateCall } = await module();

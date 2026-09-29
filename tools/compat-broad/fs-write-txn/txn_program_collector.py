@@ -229,6 +229,41 @@ class Ledger:
                 entry["lastUse"] = copy.deepcopy(timing)
         if method == "GetDocument":
             self._read(site, transport, request, result, code, step)
+        elif method == "BatchGetDocuments":
+            self._batch(transport, request, result, code)
+
+    def _batch(self, transport, request, result, code):
+        """One entry per requested document, each found with its acknowledged marker or reported missing."""
+        if code != 0:
+            return
+        frames = result["response"].get("responses")
+        if not isinstance(frames, list) or len(frames) != len(request["documents"]):
+            raise ValueError("batch answer does not carry one entry per requested document")
+        seen = set()
+        for frame in frames:
+            if not isinstance(frame, dict) or ("found" in frame) == ("missing" in frame) or set(frame) - {"found", "missing", "readTime", "transaction"}:
+                raise ValueError("batch entry is neither found nor missing")
+            name = frame["found"].get("name") if "found" in frame and isinstance(frame["found"], dict) else frame.get("missing")
+            if name not in request["documents"] or name in seen:
+                raise ValueError("batch entry names a document that was not requested or repeats")
+            seen.add(name)
+            role = self._role_of(name)
+            doc = self.docs[role]
+            if "found" in frame:
+                if doc["state"] is None:
+                    raise ValueError("a document this recording never wrote exists")
+                self._owned(role, frame["found"], transport, {doc["state"]})
+            elif doc["state"] is not None:
+                raise ValueError("an acknowledged document is reported missing")
+
+    def batch_states(self, request, result):
+        """The state each batch-read document showed, by role."""
+        states = {}
+        for frame in result["response"]["responses"]:
+            found = "found" in frame
+            name = frame["found"]["name"] if found else frame["missing"]
+            states[self._role_of(name)] = frame["found"]["fields"]["state"]["stringValue"] if found else None
+        return states
 
     def _role_of(self, name):
         return next(role for role, document in self.plan["documents"].items() if document == name)
@@ -467,6 +502,8 @@ def projection(receipt, table):
                 reads.append({"site": site, "code": 0, "state": result["response"]["fields"]["state"]["stringValue"]})
             elif method == "GetDocument":
                 reads.append({"site": site, "code": result["code"], "state": None})
+            if method == "BatchGetDocuments":
+                reads.append({"site": site, "code": result["code"], "documents": ledger.batch_states(request, result) if result["code"] == 0 else None})
             owed = ledger.pending_release(declared)
             index += 1
         elif row.get("phase") == "tokenCleanup":

@@ -16,7 +16,7 @@ from pathlib import Path
 PROJECT = "fireemu-oracle-sbx"
 DATABASE = "(default)"
 TRANSPORTS = ("rest", "grpc")
-RPCS = ("GetDocument", "BeginTransaction", "Commit", "Rollback")
+RPCS = ("GetDocument", "BatchGetDocuments", "BeginTransaction", "Commit", "Rollback")
 ROLES = ("control", "observation", "outside-writer", "post-state")
 PHASES = ("observation", "tokenCleanup", "documentCleanup", "management", "credential")
 UNKNOWN_CODES = (1, 2, 4, 13, 14)
@@ -28,7 +28,7 @@ _LABEL = re.compile(r"[a-z0-9][a-z0-9-]{0,47}\Z")
 MAX_DOCUMENTS = 8
 MAX_STATES = 32
 _STEP_KEYS = ("id", "transport", "rpc", "document", "tokenInput", "tokenOutput", "writes", "caseId", "role", "allow")
-_OPTIONAL_STEP_KEYS = ("deadlineMs",)
+_OPTIONAL_STEP_KEYS = ("deadlineMs", "documents")
 
 
 def outcome_class(code):
@@ -60,6 +60,9 @@ def _step(row):
     step["writes"] = [dict(write) for write in row["writes"]]
     step["allow"] = sorted(row["allow"]) if isinstance(row["allow"], (list, tuple)) and len(set(row["allow"])) == len(row["allow"]) else _bad("allowed codes repeat or are not a list")
     step["deadlineMs"] = row.get("deadlineMs", DEFAULT_DEADLINE_MS)
+    if "documents" in row:
+        # Only a batch read names several documents; an absent key keeps every earlier table's digest.
+        step["documents"] = list(row["documents"]) if isinstance(row["documents"], (list, tuple)) else _bad("batch documents are not a list")
     return step
 
 
@@ -122,7 +125,15 @@ def _validate_table(table):
             _bad(f"{step['id']} outputs a token without beginning one")
         if step["tokenInput"] is not None and issued.get(step["tokenInput"]) != step["transport"]:
             _bad(f"{step['id']} uses a token that is not issued earlier on its transport")
-        if rpc == "GetDocument":
+        if rpc != "BatchGetDocuments" and "documents" in step:
+            _bad(f"{step['id']} names a batch on a request that is not a batch read")
+        if rpc == "BatchGetDocuments":
+            batch = step.get("documents")
+            if not batch or len(set(batch)) != len(batch) or any(role not in documents for role in batch) or step["document"] is not None or step["writes"]:
+                _bad(f"{step['id']} is not a batch read of distinct owned documents")
+            if any(role not in probed for role in batch):
+                _bad(f"{step['id']} batch-reads a document before an absence probe")
+        elif rpc == "GetDocument":
             if step["document"] is None or step["writes"]:
                 _bad(f"{step['id']} is not a plain read")
             if step["document"] not in probed:
@@ -134,8 +145,8 @@ def _validate_table(table):
             if step["tokenInput"] is None or step["document"] is not None or step["writes"]:
                 _bad(f"{step['id']} is not a rollback of an issued token")
         else:
-            if step["document"] is not None or not step["writes"]:
-                _bad(f"{step['id']} commits no writes")
+            if step["document"] is not None or (not step["writes"] and (step["tokenInput"] is None or step["role"] == "outside-writer")):
+                _bad(f"{step['id']} commits no writes outside a transaction")
             if step["role"] == "outside-writer" and step["tokenInput"] is not None:
                 _bad(f"{step['id']} is an outside writer that carries a token")
             targets = [write.get("document") for write in step["writes"]]
@@ -246,6 +257,8 @@ def request_for_step(value, step, tokens, table):
     rpc = step["rpc"]
     if rpc == "GetDocument":
         return {"name": value["documents"][step["document"]], **({"transaction": token} if token else {})}
+    if rpc == "BatchGetDocuments":
+        return {"database": value["database"], "documents": [value["documents"][role] for role in step["documents"]], **({"transaction": token} if token else {})}
     if rpc == "Rollback":
         return {"database": value["database"], "transaction": token}
     if rpc == "BeginTransaction":

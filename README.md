@@ -176,6 +176,8 @@ An existing `fireemu.json` is not overwritten unless `--force` is supplied.
 
 Use `strict` when testing against production Firebase behavior. Add `emulator` to your test targets when you also need to check alignment with the official emulator.
 
+Under the `emulator` profile, a request that names a tenant the project does not have creates that tenant, and the number of tenants is not limited, as in the official emulator. The `strict` profile refuses such a request, as production does.
+
 ### Basic configuration
 
 The initial configuration selects Standard edition Firestore with the Native API.

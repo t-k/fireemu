@@ -92,10 +92,15 @@ test("a revocation in any spelling refuses admission", async () => {
     state.set(`${goodLedger}\n${line}`);
     await assert.rejects(() => createAdmission(opts).check(), /admission refused/, line);
   }
-  // Another version's revocation does not stop this one.
+  // A consumed revocation of an earlier version (it cites only pins an earlier approval line carries) does not stop this one; a bare revocation of another label does.
+  const earlier = `- 2026-09-27 | STORAGE-RULES stage3-v0 | decision=APPROVE; packetSha256=${"9f".repeat(32)} | Claude（委任。枠の内の承認し直し） | private.md`;
+  const consumed = `- 2026-09-28 | STORAGE-RULES stage3-v0 | decision=REVOKED; packetSha256=${"9f".repeat(32)} | オーナー（ローカル試験） | private.md`;
   const { options: opts, state } = admissionOptions();
-  state.set(`${goodLedger}\n${revoked("STORAGE-RULES stage3-v0")}`);
+  state.set(`${earlier}\n${consumed}\n${goodLedger}`);
   assert.equal((await createAdmission(opts).check()).admitted, true);
+  const bare = admissionOptions();
+  bare.state.set(`${goodLedger}\n${revoked("STORAGE-RULES stage3-v0")}`);
+  await assert.rejects(() => createAdmission(bare.options).check(), /admission refused/);
 });
 
 test("a lock that is not proven held refuses admission", async () => {

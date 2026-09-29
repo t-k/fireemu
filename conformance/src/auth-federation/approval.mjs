@@ -19,8 +19,8 @@
 // review M1), wherever they stand in the ledger, and fail closed; approvals stay exact:
 // - a line whose topic names the delegation (`調整役への委任`) and says revoked voids every
 //   coordinator envelope;
-// - a line that says revoked and names this digest, this commit (in full or by a prefix of at
-//   least 8 hex digits) or the approving envelope's ID withdraws the approval, and so does a
+// - a line that says revoked and names this digest or this commit (in full or by a prefix of
+//   at least 8 hex digits) or the approving envelope's ID withdraws the approval, and so does a
 //   revocation that names no digest, commit or envelope for a topic of this packet or of the
 //   parent alone.
 // A revoked version or envelope is not restored by a later approval: it needs a new digest or
@@ -61,7 +61,7 @@ function revocations(lines) {
 /** Whether a revocation withdraws the approval of `packet` at `digest` from `commit`. */
 function withdraws({ text, topic }, { parent, packet, digest, commit, envelopeId }) {
   const hexes = text.match(/[0-9a-f]{8,}/g) ?? [];
-  if (text.includes(digest)) return true;
+  if (hexes.some((hex) => hex.length <= 64 && digest.startsWith(hex))) return true;
   if (hexes.some((hex) => hex.length <= 40 && commit.startsWith(hex))) return true;
   if (envelopeId && text.includes(norm(envelopeId))) return true;
   const specific = hexes.some((hex) => hex.length >= 40) || text.includes(ENVELOPE_ID);

@@ -205,6 +205,14 @@ test("any spelling of a revocation withdraws what it names, and fails closed (pr
         : ledger(...base, line);
     assert.equal(packetApproval(text, ASK), undefined, name);
   }
+  // The digest named by a prefix of at least 8 hex digits, with another full hash on the line
+  // or under another topic (pre-send re-review R-S1).
+  for (const [name, line] of Object.entries({
+    "a digest prefix beside another full hash": `- 2026-09-29 | AUTH-FEDERATION record-oidc | REVOKED packetSha256=${DIGEST.slice(0, 8)}…（${"c".repeat(64)}に置き換え） | 調整役 | x`,
+    "a digest prefix under another topic": `- 2026-09-29 | AUTH-FEDERATION（c） | REVOKED ${DIGEST.slice(0, 8)}… | 調整役 | x`,
+  })) {
+    assert.equal(packetApproval(ledger(...base, line), ASK), undefined, name);
+  }
   // A revocation of another version or packet leaves this one approved.
   for (const [name, line] of Object.entries({
     "another digest": `- 2026-09-29 | AUTH-FEDERATION record-oidc | REVOKED packetSha256=${"c".repeat(64)} | 調整役 | x`,

@@ -49,7 +49,7 @@ function fakeToolkit(overrides = {}) {
     state.calls.push({ method, url });
     const { pathname } = new URL(url);
     if (overrides[pathname.split("/").at(-1)])
-      return overrides[pathname.split("/").at(-1)](state, method);
+      return overrides[pathname.split("/").at(-1)](state, method, init);
     if (pathname.endsWith("/config")) {
       if (method === "PATCH") {
         const value = JSON.parse(init.body).signIn.allowDuplicateEmails;
@@ -738,4 +738,105 @@ test("a record-strict-safety recording runs under its own action and cleans up",
   assert.equal(ledger[0].action, "record-strict-safety");
   assert.equal(ledger.at(-1).action, "record-strict-safety");
   assert.equal(env.site.state.versionDeleted, true, JSON.stringify(result));
+});
+
+/** A fake sign-in that answers what production does: the credential it was given, echoed. */
+function echoingSignIn() {
+  const sent = [];
+  const answers = new Map();
+  let count = 0;
+  const decode = (jwt) => JSON.parse(Buffer.from(jwt.split(".")[1], "base64url").toString("utf8"));
+  const handler = (_state, _method, init) => {
+    const body = JSON.parse(init.body);
+    if (body.pendingToken) {
+      const answer = answers.get(body.pendingToken);
+      return answer ? reply(200, answer) : reply(400, { error: { message: "INVALID_PENDING_TOKEN" } });
+    }
+    const form = new URLSearchParams(body.postBody);
+    const claims = decode(form.get("id_token"));
+    sent.push(claims);
+    count += 1;
+    const answer = {
+      providerId: form.get("providerId"),
+      federatedId: `${form.get("providerId")}/${claims.sub}`,
+      localId: `local-${claims.sub}`,
+      idToken: `id-token-${count}`,
+      oauthIdToken: form.get("id_token"),
+      pendingToken: `pending-${count}`,
+    };
+    answers.set(answer.pendingToken, answer);
+    return reply(200, answer);
+  };
+  return { handler, sent };
+}
+
+const NONCE_PROGRAM = () =>
+  STRICT_SAFETY_PROGRAMS_FOR_TEST.find(({ id }) => id === "auth-federation/pending-token/nonce");
+let STRICT_SAFETY_PROGRAMS_FOR_TEST;
+{
+  ({ STRICT_SAFETY_PROGRAMS: STRICT_SAFETY_PROGRAMS_FOR_TEST } = await import(
+    "./auth-federation/corpus-strict-safety.mjs"
+  ));
+}
+
+test("a tagged recording masks the pass tag, tells its nonces apart and shows no difference between passes", async () => {
+  const echo = echoingSignIn();
+  const env = sandbox({ toolkit: { "accounts:signInWithIdp": echo.handler } });
+  let fixture;
+  const profile = { ...PROFILES["record-strict-safety"], programs: [NONCE_PROGRAM()] };
+  const { result } = await campaign(env, {
+    profile,
+    writeFixture: async (written) => {
+      fixture = written;
+    },
+  });
+  assert.equal(result.outcome, "recorded", JSON.stringify(result));
+  const tags = new Set(echo.sent.map(({ sub }) => /sub-nr-first-(p[0-9a-z]+)$/.exec(sub)?.[1]).filter(Boolean));
+  assert.equal(tags.size, 2, "each pass had its own tag");
+  const text = JSON.stringify(fixture);
+  for (const tag of tags) assert.ok(!text.includes(tag), `the raw tag ${tag} is not in the fixture`);
+  assert.ok(text.includes("<pass>"));
+  // Each credential is recorded under its own raw nonce, so the rows tell b from c.
+  for (const label of ["a", "b", "c"]) {
+    assert.ok(text.includes(`<sha256:fireemu-nonce-${label}-<pass>>`), `label ${label}`);
+  }
+  assert.ok(!text.includes("<nonce:hex64>"), "every hash the pass sent has a label");
+  const program = fixture.programs["auth-federation/pending-token/nonce"];
+  assert.deepEqual(program.second ?? {}, {}, "the passes recorded the same rows");
+});
+
+test("a stop between the passes ends the recording after one pass, cleaned up", async () => {
+  const profile = { ...PROFILES["record-strict-safety"], programs: [NONCE_PROGRAM()] };
+  let checks = 0;
+  const counting = { check: () => (checks += 1) };
+  const echo = echoingSignIn();
+  await campaign(sandbox({ toolkit: { "accounts:signInWithIdp": echo.handler } }), {
+    profile,
+    stop: counting,
+  });
+  // The checks before and while the issuer is published, then one at the start of each pass:
+  // the last is the second pass's.
+  assert.ok(checks >= 3, `${checks} checks`);
+  let fixtureWritten = false;
+  let seen = 0;
+  const env = sandbox({ toolkit: { "accounts:signInWithIdp": echoingSignIn().handler } });
+  const { result, ledger } = await campaign(env, {
+    profile,
+    stop: {
+      check() {
+        seen += 1;
+        if (seen === checks) throw new Error("stopped between the passes");
+      },
+    },
+    writeFixture: async () => {
+      fixtureWritten = true;
+    },
+  });
+  assert.equal(result.outcome, "failed-cleaned", JSON.stringify(result));
+  assert.equal(result.passes, 1);
+  assert.equal(fixtureWritten, false);
+  assert.match(String(result.error), /stopped between the passes/);
+  assert.equal(result.providersLeft.length, 0);
+  assert.equal(env.site.state.versionDeleted, true);
+  assert.equal(ledger.at(-1).outcome, "failed-cleaned");
 });

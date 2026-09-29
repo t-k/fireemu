@@ -161,8 +161,12 @@ export function normalize(value, ctx, key = "") {
     if (TOKEN_KEYS.has(key)) return normalize(decodeToken(value, key), ctx);
     if (MASKED[key]) return MASKED[key];
     // A corpus that tags its passes sends a new raw nonce each pass, so the hash the answer
-    // echoes differs; its form is kept, as the authUri's nonce is.
-    if (key === "nonce" && ctx.passTag && /^[0-9a-f]{64}$/.test(value)) return "<nonce:hex64>";
+    // echoes differs from pass to pass.
+    // A hash the pass sent is recorded under the raw nonce it hashes, so two credentials stay
+    // told apart; any other hash keeps its form only.
+    if (key === "nonce" && ctx.passTag && /^[0-9a-f]{64}$/.test(value)) {
+      return ctx.nonceLabels?.[value] ?? "<nonce:hex64>";
+    }
     if (KEPT_ONLY[key]) return KEPT_ONLY[key](value);
     // The service's authorization state, and the nonce it makes when none is given, differ
     // on every createAuthUri (the nonce's form is kept).

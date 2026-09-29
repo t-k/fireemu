@@ -401,7 +401,7 @@ export async function recordCampaign({
     });
     for (let pass = 1; pass <= PASSES; pass += 1) {
       stop.check();
-      const { programs, passTag } = resolveRun({
+      const { programs, passTag, nonceLabels } = resolveRun({
         project: SANDBOX_PROJECT,
         run,
         issuerHost: issuer.issuerHost,
@@ -418,6 +418,7 @@ export async function recordCampaign({
         issuerHost: issuer.issuerHost,
         runKids: [keys.run.jwk.kid],
         passTag,
+        nonceLabels,
         apiKey: meta.apiKey,
         adminAuthorization: `Bearer ${meta.adminToken}`,
         adminHeaders: { "x-goog-user-project": SANDBOX_PROJECT },

@@ -821,6 +821,21 @@ test("the follow-up corpus sends a tampered and an unsigned response of the run'
   // spec have different IDs and so different signatures: comparing their first characters
   // failed about once in 64 runs.)
   const { tamperSignature } = await import("./auth-federation/saml.mjs");
+  // What makes it a tampered response: its signature no longer verifies with the run's key, and
+  // an untampered one does (a mutant that ignored `tamper` would fail the second assertion).
+  const { createPublicKey, verify } = await import("node:crypto");
+  const verifies = (xml) => {
+    const inner = /<ds:SignedInfo>([\s\S]*?)<\/ds:SignedInfo>/.exec(xml)[1];
+    const canonical = `<ds:SignedInfo xmlns:ds="http://www.w3.org/2000/09/xmldsig#">${inner}</ds:SignedInfo>`;
+    return verify(
+      "sha256",
+      Buffer.from(canonical),
+      createPublicKey(privateKey),
+      Buffer.from(signature(xml), "base64"),
+    );
+  };
+  assert.equal(verifies(signed), true, "an untampered response verifies");
+  assert.equal(verifies(tampered), false, "a tampered response does not");
   const changed = [...tamperSignature(signed)].filter((character, index) => character !== signed[index]);
   assert.equal(changed.length, 1);
   assert.notEqual(signature(tamperSignature(signed))[0], signature(signed)[0]);
@@ -1162,4 +1177,140 @@ test("only a corpus that uses PASSTAG has a pass tag", async () => {
     });
   assert.equal(resolve(PROGRAMS).passTag, undefined, "record-oidc's rows keep their nonces");
   assert.match(resolve(STRICT_SAFETY_PROGRAMS).passTag, /^p[0-9a-z]{6}1$/);
+});
+
+test("each hashed nonce a pass sends is recorded under the raw nonce it hashes, the same in every pass", async () => {
+  const { resolveRun } = await import("./auth-federation/run.mjs");
+  const { normalize } = await import("./auth-federation/harness.mjs");
+  const { STRICT_SAFETY_PROGRAMS } = await import("./auth-federation/corpus-strict-safety.mjs");
+  const { createHash } = await import("node:crypto");
+  const keys = { run: generateSigningKey({ kid: "run-kid" }), other: generateSigningKey() };
+  const resolve = (now, pass) =>
+    resolveRun({
+      project: SANDBOX_PROJECT,
+      run: RUN,
+      issuerHost: CHANNEL,
+      keys,
+      certificates: {},
+      now,
+      pass,
+      programs: STRICT_SAFETY_PROGRAMS,
+    });
+  const one = resolve(1_790_000_000, 1);
+  const two = resolve(1_790_000_017, 2);
+  const sha = (raw) => createHash("sha256").update(raw).digest("hex");
+  // The labels name the raw nonce with the tag as <pass>, so they are equal across passes while
+  // the hashes they label are not.
+  assert.deepEqual(Object.values(one.nonceLabels).toSorted(), Object.values(two.nonceLabels).toSorted());
+  assert.deepEqual(Object.values(one.nonceLabels).toSorted(), [
+    "<sha256:fireemu-nonce-a-<pass>>",
+    "<sha256:fireemu-nonce-b-<pass>>",
+    "<sha256:fireemu-nonce-c-<pass>>",
+  ]);
+  assert.notDeepEqual(Object.keys(one.nonceLabels).toSorted(), Object.keys(two.nonceLabels).toSorted());
+  assert.equal(one.nonceLabels[sha(`fireemu-nonce-b-${one.passTag}`)], "<sha256:fireemu-nonce-b-<pass>>");
+  // A normalized answer tells the credentials apart, in both passes.
+  for (const prepared of [one, two]) {
+    const ctx = { run: RUN, project: SANDBOX_PROJECT, passTag: prepared.passTag, nonceLabels: prepared.nonceLabels };
+    const echoed = (raw) => normalize({ claims: { nonce: sha(`${raw}-${prepared.passTag}`) } }, ctx);
+    assert.deepEqual(echoed("fireemu-nonce-b"), { claims: { nonce: "<sha256:fireemu-nonce-b-<pass>>" } });
+    assert.deepEqual(echoed("fireemu-nonce-c"), { claims: { nonce: "<sha256:fireemu-nonce-c-<pass>>" } });
+    // A hash the pass did not send keeps its form only; with no tag the value is verbatim.
+    assert.deepEqual(normalize({ nonce: "a".repeat(64) }, ctx), { nonce: "<nonce:hex64>" });
+  }
+  assert.deepEqual(normalize({ nonce: "a".repeat(64) }, { run: RUN, project: SANDBOX_PROJECT }), {
+    nonce: "a".repeat(64),
+  });
+  // A corpus without PASSTAG has no labels.
+  const { PROGRAMS } = await import("./auth-federation/corpus.mjs");
+  const plain = resolveRun({
+    project: SANDBOX_PROJECT,
+    run: RUN,
+    issuerHost: CHANNEL,
+    keys,
+    certificates: {},
+    now: 1_790_000_000,
+    programs: PROGRAMS,
+  });
+  assert.equal(plain.nonceLabels, undefined);
+});
+
+test("the record-strict-safety corpus is what its packet says", async () => {
+  const { STRICT_SAFETY_PROGRAMS } = await import("./auth-federation/corpus-strict-safety.mjs");
+  const program = (id) => STRICT_SAFETY_PROGRAMS.find((candidate) => candidate.id === id);
+  const spec = (step) => step.body.postBody.$form.SAMLResponse.$saml;
+  const step = (id, name) => program(id).steps.find((candidate) => candidate.id === name);
+  assert.deepEqual(
+    STRICT_SAFETY_PROGRAMS.map(({ id, steps }) => [id, steps.length]),
+    [
+      ["auth-federation/saml/signature/sha1", 3],
+      ["auth-federation/saml/conditions/open-ended", 7],
+      ["auth-federation/saml/sign-in/replay", 6],
+      ["auth-federation/create-auth-uri/escaping", 9],
+      ["auth-federation/pending-token/nonce", 8],
+    ],
+  );
+  // SHA-1 for the signature and the digest, and nothing else changed.
+  const sha1 = spec(step("auth-federation/saml/signature/sha1", "sha1"));
+  assert.equal(sha1.algorithm, "sha1");
+  assert.equal(sha1.conditions, undefined);
+  // NotOnOrAfter left out of the Conditions, of the confirmation, and of both.
+  const open = "auth-federation/saml/conditions/open-ended";
+  assert.deepEqual(spec(step(open, "no-conditions-end")).conditions, { notOnOrAfter: null });
+  assert.equal(spec(step(open, "no-conditions-end")).confirmationNotOnOrAfter, undefined);
+  assert.equal(spec(step(open, "no-confirmation-end")).confirmationNotOnOrAfter, null);
+  assert.equal(spec(step(open, "no-confirmation-end")).conditions, undefined);
+  assert.deepEqual(spec(step(open, "no-end-at-all")).conditions, { notOnOrAfter: null });
+  assert.equal(spec(step(open, "no-end-at-all")).confirmationNotOnOrAfter, null);
+  // The replay: an unsolicited response and its identical resend, without a session; then one
+  // response and its identical resend within one session.
+  const replay = "auth-federation/saml/sign-in/replay";
+  const first = step(replay, "unsolicited-first");
+  assert.equal(spec(first).inResponseTo, null);
+  assert.equal(spec(first).remember, "unsolicited");
+  assert.equal(first.body.sessionId, undefined);
+  assert.equal(spec(step(replay, "unsolicited-again")).reuse, "unsolicited");
+  assert.equal(step(replay, "unsolicited-again").body.sessionId, undefined);
+  assert.equal(spec(step(replay, "session-first")).remember, "session");
+  assert.equal(spec(step(replay, "session-again")).reuse, "session");
+  assert.deepEqual(step(replay, "session-again").body.sessionId, { $from: "auth-uri:sessionId" });
+  assert.deepEqual(step(replay, "session-first").body.sessionId, { $from: "auth-uri:sessionId" });
+  // The continueUri variants and the special clientId.
+  const escaping = "auth-federation/create-auth-uri/escaping";
+  const callback = "https://{project}.firebaseapp.com/__/auth/handler";
+  assert.deepEqual(
+    program(escaping)
+      .steps.filter(({ id }) => id.startsWith("continue-"))
+      .map(({ id, body }) => [id, body.continueUri]),
+    [
+      ["continue-ampersand", `${callback}?a=1&b=2`],
+      ["continue-fragment", `${callback}#fragment`],
+      ["continue-space", `${callback}?q=a b`],
+      ["continue-percent", `${callback}?q=%41`],
+      ["continue-plus", `${callback}?q=a+b`],
+      ["continue-non-ascii", "https://{project}.firebaseapp.com/__/auth/h\u00e1ndler"],
+    ],
+  );
+  assert.equal(step(escaping, "create-provider-special-client").body.clientId, "client&x=1 \u00e9");
+  assert.equal(step(escaping, "create-provider").body.clientId, "client-es");
+  // The nonce program's order, its nonces (every one tagged) and what each resume resumes.
+  const nonce = "auth-federation/pending-token/nonce";
+  assert.deepEqual(
+    program(nonce).steps.map(({ id }) => id),
+    ["create-provider", "first", "resume", "resume-again", "replay", "link", "link-again", "resume-link-again"],
+  );
+  const formOf = (name) => step(nonce, name).body.postBody.$form;
+  assert.equal(formOf("first").nonce, "fireemu-nonce-a-PASSTAG");
+  assert.equal(formOf("replay").nonce, "fireemu-nonce-a-PASSTAG");
+  assert.equal(formOf("link").nonce, "fireemu-nonce-b-PASSTAG");
+  assert.equal(formOf("link-again").nonce, "fireemu-nonce-c-PASSTAG");
+  assert.deepEqual(step(nonce, "resume").body.pendingToken, { $from: "first:pendingToken" });
+  assert.deepEqual(step(nonce, "resume-again").body.pendingToken, { $from: "first:pendingToken" });
+  assert.deepEqual(step(nonce, "resume-link-again").body.pendingToken, { $from: "link-again:pendingToken" });
+  assert.deepEqual(step(nonce, "link").body.idToken, { $from: "first:idToken" });
+  assert.deepEqual(step(nonce, "link-again").body.idToken, { $from: "first:idToken" });
+  assert.deepEqual(
+    Object.values(program(nonce).tokens).map((token) => token.claims.nonce.$sha256),
+    ["fireemu-nonce-a-PASSTAG", "fireemu-nonce-b-PASSTAG", "fireemu-nonce-c-PASSTAG"],
+  );
 });

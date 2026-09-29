@@ -157,6 +157,24 @@ export const DISCOVERY_SCOPES = { "record-followup": FOLLOWUP_DISCOVERY_SCOPES }
  */
 export const passTagOf = (now, pass = 1) => `p${now.toString(36)}${pass}`;
 
+/**
+ * The hash of each raw nonce a tagged corpus's tokens carry, labelled by that raw nonce with the
+ * tag as `<pass>` (`<sha256:fireemu-nonce-a-<pass>>`): the hashes differ per pass, the labels do
+ * not, and two credentials of one program stay told apart in a recorded row.
+ */
+function nonceLabelsOf(programs, passTag) {
+  const labels = {};
+  for (const program of programs) {
+    for (const spec of Object.values(program.tokens ?? {})) {
+      const raw = spec.claims?.nonce?.$sha256;
+      if (typeof raw !== "string") continue;
+      labels[createHash("sha256").update(raw).digest("hex")] =
+        `<sha256:${raw.split(passTag).join("<pass>")}>`;
+    }
+  }
+  return labels;
+}
+
 export function resolveRun({
   project,
   run,
@@ -189,7 +207,8 @@ export function resolveRun({
   validateFederationCorpus(programs, { run });
   // Only a corpus that tags its passes has a tag to mask; the others' rows are recorded as before.
   const tagged = JSON.stringify(corpus).includes("PASSTAG");
-  return { issuer, programs, passTag: tagged ? passTagOf(now, pass) : undefined };
+  const passTag = tagged ? passTagOf(now, pass) : undefined;
+  return { issuer, programs, passTag, nonceLabels: passTag ? nonceLabelsOf(programs, passTag) : undefined };
 }
 
 /**
@@ -208,7 +227,7 @@ async function prepareRun(project, run, issuerHost, corpus = PROGRAMS) {
     JSON.stringify({ keyPems: signers.keyPems, certificates: signers.certificates }),
     { mode: 0o600 },
   );
-  const { issuer, programs, passTag } = resolveRun({
+  const { issuer, programs, passTag, nonceLabels } = resolveRun({
     project,
     run,
     issuerHost,
@@ -226,6 +245,7 @@ async function prepareRun(project, run, issuerHost, corpus = PROGRAMS) {
     runKids: [keys.run.jwk.kid],
     runCertificates: signers.runCertificates,
     passTag,
+    nonceLabels,
     programs,
     jwks: [keys.run.jwk],
   };
@@ -562,6 +582,7 @@ async function sessionLocal() {
     runKids: prepared.runKids,
     runCertificates: prepared.runCertificates,
     passTag: prepared.passTag,
+    nonceLabels: prepared.nonceLabels,
     saml: {
       keys: await loadSamlSigners(prepared.samlKeysPath),
       now: () => Math.floor(Date.now() / 1000),

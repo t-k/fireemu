@@ -16,6 +16,7 @@ import {
   assertNoOutboundNetwork,
   commandModes,
   compareLaneExport,
+  exportCopies,
   forbiddenEnvironment,
   judgeFsDataWriteCurrent,
   judgeFsDataWriteHistorical,
@@ -179,6 +180,94 @@ test("a verified closure with a comparison of an unknown kind stops the release"
     path === "new/comparison.json" ? { kind: "new-kind-v1" } : readJson(path);
   const plan = planComparisons([...closures, fake], read);
   assert.ok(plan.errors.some((error) => error.includes("new-kind-v1")));
+});
+
+// --- several comparison files of one kind -----------------------------------------------------
+
+const SYNTHETIC_KIND = "synthetic-two-suites-v1";
+const suiteRun = (id, rowPrefix) => ({ id, kind: SYNTHETIC_KIND, rowPrefix, clear: [], commands: [] });
+const suiteRuns = [suiteRun("S1", "one/"), suiteRun("S2", "two/")];
+const suiteFile = (path, rowIds) => ({
+  path,
+  document: { kind: SYNTHETIC_KIND, rows: rowIds.map((row) => ({ row, status: "MATCH" })) },
+});
+const planSuites = (...files) => {
+  const byPath = new Map(files.map((file) => [file.path, file.document]));
+  const fake = {
+    name: "SUITES.json",
+    closure: {
+      parent: "SUITES",
+      parentStatus: "COMPAT_VERIFIED",
+      integratedRegression: { comparisons: files.map(({ path }) => ({ path })) },
+    },
+  };
+  return planComparisons([fake], (path) => byPath.get(path), { excludedKinds: [], runs: suiteRuns });
+};
+
+test("comparison files of one kind are each served by the run whose row prefix covers them", () => {
+  const plan = planSuites(suiteFile("a.json", ["one/a#1", "one/b#1"]), suiteFile("b.json", ["two/a#1"]));
+  assert.deepEqual(plan.errors, []);
+  assert.deepEqual(
+    plan.comparisons.map((c) => [c.path, c.runIds]),
+    [
+      ["a.json", ["S1"]],
+      ["b.json", ["S2"]],
+    ],
+  );
+});
+
+test("a file that no run's row prefix covers stops the release", () => {
+  const plan = planSuites(suiteFile("a.json", ["three/a#1"]));
+  assert.ok(plan.errors.some((error) => error.includes("a.json") && error.includes("no run")));
+});
+
+test("a file whose rows are split across two runs' prefixes stops the release", () => {
+  const plan = planSuites(suiteFile("a.json", ["one/a#1", "two/a#1"]));
+  assert.ok(plan.errors.some((error) => error.includes("a.json") && error.includes("no run")));
+});
+
+test("a file two runs' prefixes both cover stops the release", () => {
+  const overlapping = [suiteRun("S1", "one/"), suiteRun("S3", "one/x")];
+  const file = suiteFile("a.json", ["one/x#1"]);
+  const fake = verifiedWith("SUITES", "a.json");
+  const plan = planComparisons([fake], () => file.document, { excludedKinds: [], runs: overlapping });
+  assert.ok(plan.errors.some((error) => error.includes("a.json") && error.includes("more than one")));
+});
+
+test("a file without rows cannot be assigned to a run and stops the release", () => {
+  const plan = planSuites({ path: "a.json", document: { kind: SYNTHETIC_KIND, rows: [] } });
+  assert.ok(plan.errors.some((error) => error.includes("a.json")));
+});
+
+test("every export is copied once per comparison file, under that file's name", () => {
+  const comparisons = [
+    { path: "e/tenant.json", runIds: ["S1"] },
+    { path: "e/other.json", runIds: ["S1"] },
+    { path: "e/blocking.json", runIds: ["S2"] },
+  ];
+  assert.deepEqual(exportCopies(comparisons, suiteRunsWithExport()), [
+    { from: "S1-export.json", to: "tenant.json" },
+    { from: "S1-export.json", to: "other.json" },
+    { from: "S2-export.json", to: "blocking.json" },
+  ]);
+  // A comparison served by a run that exports nothing (a composite file) has no copy.
+  assert.deepEqual(exportCopies([{ path: "e/x.json", runIds: ["C1"] }], suiteRunsWithExport()), []);
+});
+
+function suiteRunsWithExport() {
+  const exporting = (run) => ({ ...run, commands: [{ mode: "export-comparison" }] });
+  return [...suiteRuns.map(exporting), { id: "C1", kind: "c", clear: [], commands: [{ mode: "check-local" }] }];
+}
+
+test("the committed ATB tenant, blocking and federation copies are served by the right runs", () => {
+  const plan = planComparisons(committedClosures(), readJson);
+  const runsOf = (name) => plan.comparisons.find((c) => c.path.endsWith(name))?.runIds;
+  assert.deepEqual(runsOf("AUTH-TENANT-BLOCKING-tenant-comparison.json"), ["R13"]);
+  assert.deepEqual(runsOf("AUTH-FEDERATION-tenant-blocking-regression.json"), ["R13"]);
+  assert.deepEqual(runsOf("AUTH-TENANT-BLOCKING-blocking-comparison.json"), ["R14"]);
+  assert.deepEqual(runsOf("AUTH-FEDERATION-comparison.json"), ["R15"]);
+  assert.deepEqual(runsOf("AUTH-FEDERATION-saml-comparison.json"), ["R16"]);
+  assert.deepEqual(runsOf("AUTH-FEDERATION-followup-comparison.json"), ["R17"]);
 });
 
 const verifiedWith = (name, path) => ({

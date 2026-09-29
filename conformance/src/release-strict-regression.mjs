@@ -57,20 +57,34 @@ export const PRODUCTION_ORIGINS = [
   "https://identitytoolkit.googleapis.com/",
 ];
 
-const laneRun = (id, kind, script, runDir, expectedCheckExit, env = {}) => ({
+/**
+ * A lane run: the harness's `check`, then its `export-comparison`. `rowPrefix` names the rows of
+ * the comparison files this run serves when one kind has several runs (see planComparisons);
+ * `extraArgs` (a corpus packet) follow the mode in both commands.
+ */
+const laneRun = (
   id,
   kind,
+  script,
+  runDir,
+  expectedCheckExit,
+  env = {},
+  { rowPrefix, extraArgs = [] } = {},
+) => ({
+  id,
+  kind,
+  ...(rowPrefix === undefined ? {} : { rowPrefix }),
   clear: [runDir],
   commands: [
     {
       mode: "check",
-      argv: ["node", script, "check"],
+      argv: ["node", script, "check", ...extraArgs],
       env,
       expectedExitCodes: [expectedCheckExit],
     },
     {
       mode: "export-comparison",
-      argv: ["node", script, "export-comparison", "{export}"],
+      argv: ["node", script, "export-comparison", ...extraArgs, "{export}"],
       env,
       expectedExitCodes: [0],
     },
@@ -134,6 +148,56 @@ export const RUNS = [
     "conformance/src/auth-config-sdk/run.mjs",
     "auth-config-sdk",
     1,
+  ),
+  // AUTH-TENANT-BLOCKING: one kind, two suites, each its own run (AUTH_TENANT_SUITE). The
+  // blocking suite serves the Functions fixture from the checkout (its dependencies are installed
+  // by the job) and runs the packaged runner beside the binary under test, and refuses to run
+  // without it: the checkout's runner would not show a missing module in the package.
+  laneRun(
+    "R13",
+    "auth-tenant-blocking-comparison-v1",
+    "conformance/src/auth-tenant-blocking/run.mjs",
+    "auth-tenant-blocking",
+    0,
+    { AUTH_TENANT_SUITE: "tenant" },
+    { rowPrefix: "atb/tenant/" },
+  ),
+  laneRun(
+    "R14",
+    "auth-tenant-blocking-comparison-v1",
+    "conformance/src/auth-tenant-blocking/run.mjs",
+    "auth-tenant-blocking",
+    0,
+    { AUTH_TENANT_SUITE: "blocking", AUTH_TENANT_PACKAGED_RUNNER: "1" },
+    { rowPrefix: "atb/blocking/" },
+  ),
+  // AUTH-FEDERATION: the comparison script (not the recording harness) runs each corpus packet.
+  laneRun(
+    "R15",
+    "auth-federation-comparison-v1",
+    "conformance/src/auth-federation/compare.mjs",
+    "auth-federation",
+    0,
+    {},
+    { extraArgs: ["record-oidc"] },
+  ),
+  laneRun(
+    "R16",
+    "auth-federation-saml-comparison-v1",
+    "conformance/src/auth-federation/compare.mjs",
+    "auth-federation",
+    0,
+    {},
+    { extraArgs: ["record-saml"] },
+  ),
+  laneRun(
+    "R17",
+    "auth-federation-followup-comparison-v1",
+    "conformance/src/auth-federation/compare.mjs",
+    "auth-federation",
+    0,
+    {},
+    { extraArgs: ["record-followup"] },
   ),
   {
     // FS-DATA-WRITE's sandbox corpus against the binary under test, called directly: the lane's
@@ -242,8 +306,6 @@ export const EXCLUDED_PARTS = [
   },
 ];
 
-const ROUND_2_RUNS = "round-2-parent-suites-have-no-release-run.md";
-
 /**
  * Comparison kinds a COMPAT_VERIFIED closure names that no run reproduces yet, with why and where
  * the missing run is tracked (owner decision 2026-09-29: v0.9.0 is released with these disclosed).
@@ -258,30 +320,6 @@ export const EXCLUDED_KINDS = [
     issue: "move-local-only-harness-setup-outside-the-bound-harness-digest.md",
   },
   {
-    kind: "auth-tenant-blocking-comparison-v1",
-    reason:
-      "the tenant and blocking suites share this kind, so one export cannot reproduce both files, and the blocking suite needs the Functions fixture's dependencies, which the release job does not install",
-    issue: ROUND_2_RUNS,
-  },
-  {
-    kind: "auth-federation-comparison-v1",
-    reason:
-      "the AUTH-FEDERATION harness has no check or export-comparison mode to rerun its OIDC suite",
-    issue: ROUND_2_RUNS,
-  },
-  {
-    kind: "auth-federation-saml-comparison-v1",
-    reason:
-      "the AUTH-FEDERATION harness has no check or export-comparison mode to rerun its SAML suite",
-    issue: ROUND_2_RUNS,
-  },
-  {
-    kind: "auth-federation-followup-comparison-v1",
-    reason:
-      "the AUTH-FEDERATION harness has no check or export-comparison mode to rerun its follow-up suite",
-    issue: ROUND_2_RUNS,
-  },
-  {
     kind: "auth-fs-cross-comparison-v1",
     reason:
       "stage 1 needs the local tenant setup (multi-tenancy switched on) that the recorded harness does not do; its regression ran with that setup added outside the harness (owner decision, ledger line 473)",
@@ -294,6 +332,33 @@ export const EXCLUDED_KINDS = [
     issue: "move-local-only-harness-setup-outside-the-bound-harness-digest.md",
   },
 ];
+
+/**
+ * The runs that serve one comparison file. A kind whose runs declare a `rowPrefix` has several
+ * files, each served by the one run whose prefix begins every row of the file; a file with none,
+ * or with more than one, is an error and yields `undefined`. The other kinds are served by all
+ * their runs (a composite file has several parts).
+ */
+function runsForComparison(allRuns, kind, document, path, errors) {
+  const ofKind = allRuns.filter((run) => run.kind === kind);
+  if (!ofKind.some((run) => run.rowPrefix !== undefined)) return ofKind;
+  const ids = (document?.rows ?? []).map(rowKey);
+  const covering =
+    ids.length === 0
+      ? []
+      : ofKind.filter((run) => ids.every((id) => String(id).startsWith(run.rowPrefix ?? "")));
+  if (covering.length === 0) {
+    errors.push(`${path}: no run of kind ${kind} has a row prefix covering every row of the file`);
+    return undefined;
+  }
+  if (covering.length > 1) {
+    errors.push(
+      `${path}: more than one run of kind ${kind} covers it (${covering.map((run) => run.id).join(", ")})`,
+    );
+    return undefined;
+  }
+  return covering;
+}
 
 /** Errors in a list of kind exclusions: a missing reason or issue, or a kind a run reproduces. */
 function exclusionErrors(excludedKinds) {
@@ -368,7 +433,11 @@ const parentName = ({ name, closure }) => closure.parent ?? name.replace(/\.json
  * comparison of a kind no run produces and no exclusion names, a part of a composite file that
  * is neither run nor excluded, and a malformed or unused exclusion are errors.
  */
-export function planComparisons(closures, readJson, { excludedKinds = EXCLUDED_KINDS } = {}) {
+export function planComparisons(
+  closures,
+  readJson,
+  { excludedKinds = EXCLUDED_KINDS, runs: allRuns = RUNS } = {},
+) {
   const errors = exclusionErrors(excludedKinds);
   const byPath = new Map();
   for (const entry of closures) {
@@ -390,7 +459,8 @@ export function planComparisons(closures, readJson, { excludedKinds = EXCLUDED_K
   for (const [path, parents] of byPath) {
     const document = readJson(path);
     const kind = document?.kind;
-    const runs = RUNS.filter((run) => run.kind === kind);
+    const runs = runsForComparison(allRuns, kind, document, path, errors);
+    if (runs === undefined) continue;
     if (runs.length === 0) {
       const exclusion = excludedKinds.find((ex) => ex.kind === kind);
       if (exclusion) {
@@ -825,6 +895,25 @@ function judge(comparison, observations, context) {
   return compareLaneExport(expected, observations[comparison.runIds[0]], context.binarySha256);
 }
 
+/**
+ * The exports to keep under the comparison files' names: one copy per comparison file served by
+ * a run that exports a comparison. Several files of one kind share a run's export, so a file
+ * name maps to its own copy rather than one per run.
+ */
+export function exportCopies(comparisons, runs) {
+  const exporting = new Set(
+    runs
+      .filter((run) => run.commands.some((command) => command.mode === "export-comparison"))
+      .map((run) => run.id),
+  );
+  return comparisons
+    .filter((comparison) => exporting.has(comparison.runIds[0]))
+    .map((comparison) => ({
+      from: `${comparison.runIds[0]}-export.json`,
+      to: comparison.path.split("/").at(-1),
+    }));
+}
+
 const annotate = (title, message) => {
   const clean = (text) =>
     String(text).replaceAll("%", "%25").replaceAll("\r", "").replaceAll("\n", " ");
@@ -889,12 +978,8 @@ async function main() {
       const differences = judge(comparison, observations, context);
       summary.comparisons.push({ ...comparison, differences });
     }
-    const exportsByRun = Object.fromEntries(
-      plan.comparisons.map((c) => [c.runIds[0], c.path.split("/").at(-1)]),
-    );
-    for (const run of RUNS.filter((r) => r.commands.some((c) => c.mode === "export-comparison"))) {
-      const from = join(out, `${run.id}-export.json`);
-      if (existsSync(from)) await copyFile(from, join(out, exportsByRun[run.id]));
+    for (const { from, to } of exportCopies(plan.comparisons, RUNS)) {
+      if (existsSync(join(out, from))) await copyFile(join(out, from), join(out, to));
     }
   }
   const expectedRaw = context.readJson(

@@ -1,4 +1,3 @@
-import { plain } from "./shape.mjs";
 const QUERY = "fireemu-oracle-query";
 const IDP = "fireemu-oracle-idp";
 const ORIGIN = "https://identitytoolkit.googleapis.com";
@@ -9,6 +8,7 @@ const STEPS = Object.freeze({
   "foreign-project-token": ["baseline", "sign-up", "lookup-token", "delete", "absence"],
 });
 const nativeLength = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(Uint8Array.prototype), "length").get;
+const plain = (value) => value !== null && typeof value === "object" && Object.getPrototypeOf(value) === Object.prototype;
 const matches = (value, pattern) => typeof value === "string" && !/[\r\n]/.test(value) && pattern.test(value);
 
 function record(value, keys) {

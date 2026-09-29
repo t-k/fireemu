@@ -1,5 +1,4 @@
 import { REQUIRES_REGISTRY } from "./predicates.mjs";
-import { plain } from "./shape.mjs";
 
 // What the run has done to everything that is not an owned object: Firestore documents, resumable sessions, the four
 // Rulesets, the bucket release, the witness and control objects (through the object ledger), and the run-level flags.
@@ -7,6 +6,7 @@ import { plain } from "./shape.mjs";
 // does not own is returned as unresolved, so no caller mistakes silence for approval. It sends nothing and keeps no
 // value that could be a secret.
 const bad = (message) => { throw new Error(message); };
+const plain = (value) => value !== null && typeof value === "object" && !Array.isArray(value) && Object.getPrototypeOf(value) === Object.prototype;
 const SOURCES = ["v1", "v2", "A", "B"];
 const PREVIOUS = { v1: null, v2: "v1", A: "v2", B: "A" };
 const WITNESS_INDEXES = [0, 1, 3, 4];

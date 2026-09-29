@@ -3,12 +3,12 @@ import { constants } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
 import { createRedactor } from "./redaction.mjs";
 import { STOP_CODES, tagged } from "./stop-codes.mjs";
-import { plain } from "./shape.mjs";
 
 // Run-local, append-only capture of what a request intended (intent), what came back (response, redacted and stored as a
 // content-addressed blob), what it meant (facts), which run-time values were bound (proof) and what the controller
 // said (note); plus the credential evidence (proofs, ownership and cleanup receipts of the fixture accounts). Every row and blob is synced before the call returns. Anything a writer is given is redacted or refused,
 // so no file under the run directory holds bearer material. This performs no HTTP.
+const plain = (value) => value !== null && typeof value === "object" && Object.getPrototypeOf(value) === Object.prototype;
 const matches = (value, pattern) => typeof value === "string" && !/[\r\n]/.test(value) && pattern.test(value);
 const requestId = (value) => matches(value, /^[A-Za-z0-9][A-Za-z0-9._/-]{0,159}$/);
 const MAX_ROW_BYTES = 256 * 1024;

@@ -1,5 +1,4 @@
 import { REQUIRES_REGISTRY } from "./predicates.mjs";
-import { plain } from "./shape.mjs";
 
 // What the run has done to each owned resource and what it may therefore do next. This slice covers the 344 owned
 // objects: baseline absence, writes attempted (a mutation is never attempted twice, whatever ID carries it), the latest
@@ -7,6 +6,7 @@ import { plain } from "./shape.mjs";
 // (Firestore documents, sessions, Rules resources, witnesses, credentials, inputs) are reported as unresolved so no
 // caller can read a `go` as more than it is. The ledger sends nothing and keeps no value that could be a secret.
 const bad = (message) => { throw new Error(message); };
+const plain = (value) => value !== null && typeof value === "object" && !Array.isArray(value) && Object.getPrototypeOf(value) === Object.prototype;
 const OBJECT_TOKENS = new Set(["owned-namespace-and-absence", "confirmed-write-history-and-current-version", "delete-not-attempted", "object-not-absent-per-latest-readback", "resource-started-and-provenance-matches"]);
 const READ_KINDS = new Set(["gcs-metadata-read", "gcs-media-read"]);
 

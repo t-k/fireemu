@@ -2,7 +2,6 @@ import { createHmac } from "node:crypto";
 import { createAuthWireTransport } from "./auth-wire.mjs";
 import { createCountedCredentialCache } from "./credential-cache.mjs";
 import { createCredentialFixtureSession } from "./credential-session.mjs";
-import { plain } from "./shape.mjs";
 
 // Glue between the controller's delegated steps and the modules that carry their own requests: the counted credential cache,
 // the fixture session and the Auth wire. Every request they make goes through `gate.delegated`. This module holds credentials
@@ -17,6 +16,7 @@ const USER_TOKEN_SCHEME = "Firebase";
 const PROJECTS = new Set(["fireemu-oracle-query", "fireemu-oracle-idp"]);
 const EVIDENCE = ["writeCredentialProof", "writeOwnership", "writeCleanup"];
 const INPUTS = ["gate", "adc", "apiKeys", "passwords", "digestSalt", "runId", "nowSeconds", "waitUntilSeconds", "evidence", "malformed"];
+const plain = (value) => value !== null && typeof value === "object" && Object.getPrototypeOf(value) === Object.prototype;
 const bad = (message) => { throw new Error(message); };
 
 function tokenExpiry(token) {

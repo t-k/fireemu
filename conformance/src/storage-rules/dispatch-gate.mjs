@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto";
 import { createStage3RequestCounter } from "./request-counter.mjs";
 import { STOP_CODES, tagged } from "./stop-codes.mjs";
-import { plain } from "./shape.mjs";
 
 // The only object that holds the real transport. A request leaves through it only after its intent is durable and its
 // reservation is durable, exactly once per reservation, for the target that was captured, in the mode its ID belongs to.
@@ -9,6 +8,7 @@ import { plain } from "./shape.mjs";
 // at the last step, and never reach the capture journal. The gate performs no retry and decides nothing about a response.
 const CREDENTIAL_HEADERS = new Set(["authorization", "x-goog-user-project"]);
 const bad = (message) => { throw new Error(message); };
+const plain = (value) => value !== null && typeof value === "object" && !Array.isArray(value) && Object.getPrototypeOf(value) === Object.prototype;
 
 function closedRecord(value, keys, message) {
   if (!plain(value) || Reflect.ownKeys(value).length !== keys.length || !keys.every((key) => { const field = Object.getOwnPropertyDescriptor(value, key); return field?.enumerable && Object.hasOwn(field, "value"); })) bad(message);

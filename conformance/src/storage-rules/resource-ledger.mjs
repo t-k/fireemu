@@ -96,7 +96,8 @@ export function createResourceLedger(options) {
 
   const owned = (object) => object.baselineAbsent && !object.foreign && !object.uncertainCreate;
   const HANDLERS = {
-    "owned-namespace-and-absence": (object) => owned(object) && object.latest === "absent",
+    // A write needs the object shown absent first; a read that carries the token is the read that shows it (its verdict is then required to be absent).
+    "owned-namespace-and-absence": (object, row) => (row.request.method === "GET" ? true : owned(object) && object.latest === "absent"),
     "confirmed-write-history-and-current-version": (object) => object.started && !object.uncertainCreate && object.latest === "present" && object.generation !== null,
     "delete-not-attempted": (object) => !object.deleteAttempted,
     // Nothing to remove is a skip; only an object the run touched whose state is now unknown is a doubt that stops the run.
@@ -115,7 +116,7 @@ export function createResourceLedger(options) {
     if (handled.length > 0) {
       const object = recordFor(row);
       for (const token of handled) {
-        const result = HANDLERS[token](object);
+        const result = HANDLERS[token](object, row);
         if (result === true) continue;
         const outcome = result === "unknown" ? "stop" : REQUIRES_REGISTRY[token].onFalse;
         failed.push(Object.freeze({ token, outcome }));

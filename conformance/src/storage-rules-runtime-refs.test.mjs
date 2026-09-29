@@ -119,8 +119,8 @@ test("values outside each kind's grammar are refused", async () => {
   for (const value of ["2026-09-29", "2026-09-29T10:00:00", "2026-09-29T10:00:00+09:00", "2026-13-29T10:00:00Z", "2026-09-29T10:00:00.1234567890Z", "x", "2026-02-30T10:00:00Z", "2026-04-31T10:00:00Z", "2026-02-29T10:00:00Z", "2026-00-10T10:00:00Z", "2026-09-29T24:00:00Z", "2026-09-29T10:00:60Z", "2026-09-29T10:60:00Z", "2026-09-29t10:00:00z", " 2026-09-29T10:00:00Z", "2026-09-29T10:00:00Z\n"]) {
     await assert.rejects(store.bind({ ref: ref("update-time", key), value, provenance: producer(update) }), /invalid runtime reference bind/, value);
   }
-  await store.bind({ ref: ref("update-time", key), value: "2028-02-29T23:59:59.123456789Z", provenance: producer(update) });
-  await store.bind({ ref: ref("update-time", key), value: "2026-09-29T10:00:00Z", provenance: producer(update, "accepted", 2) });
+  await store.bind({ ref: ref("update-time", key), value: "2028-02-29T23:59:59.123456789Z", provenance: producer(update, "present") });
+  await store.bind({ ref: ref("update-time", key), value: "2026-09-29T10:00:00Z", provenance: producer(update, "present", 2) });
 });
 
 test("a reference is resolved only by a declared consumer, and a page token only once", async () => {
@@ -224,9 +224,9 @@ test("a pinned consumer sees the value its step produced, even after a later rea
   assert.ok(other, "another readback of the same document exists");
   const recoveryDelete = manifest.rows.find((x) => x.family === "recovery-document" && x.stage === "delete" && x.request.query["currentDocument.updateTime"].key === key);
   assert.throws(() => store.resolve(r, row.id), /reference is not bound/);
-  await store.bind({ ref: ref("update-time", key), value: "2026-09-29T10:00:00Z", provenance: producer(pinned, "accepted", 1) });
+  await store.bind({ ref: ref("update-time", key), value: "2026-09-29T10:00:00Z", provenance: producer(pinned, "present", 1) });
   assert.equal(store.resolve(r, row.id), "2026-09-29T10:00:00Z");
-  await store.bind({ ref: ref("update-time", key), value: "2026-09-29T10:05:00Z", provenance: producer(other, "accepted", 2) });
+  await store.bind({ ref: ref("update-time", key), value: "2026-09-29T10:05:00Z", provenance: producer(other, "present", 2) });
   assert.equal(store.resolve(r, row.id), "2026-09-29T10:00:00Z");
   assert.equal(store.resolve(recoveryDelete.request.query["currentDocument.updateTime"], recoveryDelete.id), "2026-09-29T10:05:00Z");
 });

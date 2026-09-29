@@ -14,6 +14,7 @@ const PATTERNS = [
   { kind: "json-field", re: new RegExp(`"(?:${SECRET_FIELDS})"\\s*:\\s*"((?:[^"\\\\]|\\\\.)*)"`, "gi"), group: 1 },
   { kind: "url-parameter", re: new RegExp(`(?:[?&]|\\\\u0026|&amp;)(?:${URL_PARAMETERS})=([^&"'\\s<>\\\\]+)`, "gi"), group: 1 },
   { kind: "assignment", re: /(?:^|[\s,;([{])(?:token|access_token|id_token|refresh_token|password|secret|api[_-]?key|upload_id|downloadTokens)\s*[=:]\s*([^\s,;&"'<>)\]}]+)/gi, group: 1 },
+  { kind: "email", re: /(?<![A-Za-z0-9._%+-])(?!securetoken@system\.gserviceaccount\.com)[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}/g, group: 0 },
   { kind: "jwt", re: /eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]*/g, group: 0 },
   { kind: "google-api-key", re: /AIza[0-9A-Za-z_-]{35}/g, group: 0 },
   { kind: "oauth-access-token", re: /ya29\.[0-9A-Za-z_-]{10,}/g, group: 0 },

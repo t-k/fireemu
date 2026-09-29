@@ -138,7 +138,7 @@ test("the previous-release check follows the publication chain", async () => {
   assert.equal(run.check(before("v2"), out("rules-release-read", "present", { rulesetName: RS("aaa") })).ok, true);
   assert.equal(run.check(before("v2"), out("rules-release-read", "present", { rulesetName: RS("bbb") })).ok, false);
   assert.equal(run.check(before("v2"), out("rules-release-read", "absent")).ok, false);
-  assert.equal(run.check(before("v2"), out("gcs-metadata-read", "present")).ok, false);
+  assert.equal(run.check(before("v2"), out("gcs-metadata-read", "present")).ok, true);
   const after = row("release/v1/after");
   assert.equal(run.check(after, out("rules-release-read", "present", { rulesetName: RS("aaa") })).ok, true);
   assert.equal(run.check(after, out("rules-release-read", "present", { rulesetName: RS("zzz") })).ok, false);
@@ -359,4 +359,49 @@ test("a cancelled session that is not proven final, or one in an unknown state, 
   run.recordOutcome(verify, out("session-command", "final", { uploadStatus: "final", sizeReceived: 0 }));
   assert.equal(run.evaluate(prefix, token).decision, "go");
   assert.equal(run.snapshot().sessions, 1);
+});
+
+test("a finalize decides the session: accepted means final, a denial leaves it active, anything else is unknown", async () => {
+  const session = manifest.resources.sessions[0];
+  const finalize = manifest.rows.find((r) => r.request.headers["x-goog-upload-command"] === "upload, finalize" && r.programId === session.caseId);
+  const cancel = manifest.rows.find((r) => r.family === "declared" && r.stage === "cleanup" && r.programId === session.caseId && r.request.headers["x-goog-upload-command"] === "cancel");
+  const start = manifest.rows.find((r) => r.request.headers["x-goog-upload-command"] === "start" && r.programId === session.caseId);
+  const tokens = ["session-active-per-latest-query"];
+  for (const [status, expected] of [[200, "skip"], [403, "go"], [500, "stop"], [412, "stop"]]) {
+    const { run } = await fresh();
+    run.recordIntent(start);
+    run.recordOutcome(start, out("session-start", "accepted", { uploadStatus: "active" }));
+    run.recordIntent(finalize);
+    assert.equal(run.evaluate(cancel, tokens).decision, "stop", `before the answer ${status}`);
+    run.recordOutcome(finalize, { kind: "subject-observed", verdict: "observed", facts: { status, bodyBytes: 0, bodySha256: "0".repeat(64) } });
+    assert.equal(run.evaluate(cancel, tokens).decision, expected, String(status));
+  }
+  const { run } = await fresh();
+  run.recordIntent(start);
+  run.recordOutcome(start, out("session-start", "accepted", { uploadStatus: "active" }));
+  run.recordIntent(finalize);
+  run.recordOutcome(finalize, { uncertain: true });
+  assert.equal(run.evaluate(cancel, tokens).decision, "stop");
+});
+
+test("the absence reads of a control follow its final readback and its deletion, and every other control row precedes the deletion", async () => {
+  const { objects, run } = await fresh();
+  seedControls(objects, [2]);
+  const token = ["owned-control-retained-through-final-readback"];
+  const absence = row("management/control-2/absence-metadata");
+  const media = row("management/control-2/absence-media");
+  const readback = row("management/control-2/cleanup-metadata");
+  const del = row("management/control-2/delete");
+  assert.equal(run.evaluate(readback, token).decision, "go");
+  assert.equal(run.evaluate(absence, token).decision, "stop");
+  run.recordOutcome(readback, out("gcs-metadata-read", "present", { generation: "1700000000000021", metageneration: "1" }));
+  assert.equal(run.evaluate(absence, token).decision, "stop");
+  objects.recordIntent(del);
+  assert.equal(run.evaluate(absence, token).decision, "go");
+  assert.equal(run.evaluate(media, token).decision, "go");
+  assert.equal(run.evaluate(readback, token).decision, "stop");
+  const noReadback = await fresh();
+  seedControls(noReadback.objects, [2]);
+  noReadback.objects.recordIntent(del);
+  assert.equal(noReadback.run.evaluate(absence, token).decision, "stop");
 });

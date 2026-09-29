@@ -24,12 +24,12 @@ test("the ledgers answer exactly the tokens the table gives them", () => {
   const objects = createResourceLedger({ manifest });
   const run = createRunLedger({ manifest, objects });
   assert.deepEqual([...objects.tokens()].sort(), [...ENFORCEMENT["object-ledger"], ...ENFORCEMENT.shared].sort());
-  assert.deepEqual([...run.ownedTokens()].sort(), [...ENFORCEMENT["run-ledger"], ...ENFORCEMENT.shared].sort());
-  assert.deepEqual([...run.checkTokens()].sort(), [...ENFORCEMENT["post-check"]].sort());
+  assert.deepEqual([...run.ownedTokens()].sort(), [...ENFORCEMENT["run-ledger"], ...ENFORCEMENT.shared, ...ENFORCEMENT.both].sort());
+  assert.deepEqual([...run.checkTokens()].sort(), [...ENFORCEMENT["post-check"], ...ENFORCEMENT.both].sort());
 });
 
 test("the category of each token fits its enforcer", () => {
-  const expected = { "object-ledger": ["guard"], shared: ["guard"], "run-ledger": ["guard", "proof"], "post-check": ["check"], admission: ["input"], delegate: ["guard", "proof"], refs: ["guard"], structure: ["budget"], policy: ["policy"] };
+  const expected = { "object-ledger": ["guard"], shared: ["guard"], both: ["check"], "run-ledger": ["guard", "proof"], "post-check": ["check"], admission: ["input"], delegate: ["guard", "proof"], refs: ["guard"], structure: ["budget"], policy: ["policy"] };
   for (const [enforcer, tokens] of Object.entries(ENFORCEMENT)) {
     for (const token of tokens) assert.ok(expected[enforcer].includes(REQUIRES_REGISTRY[token].category), `${token}: ${REQUIRES_REGISTRY[token].category} under ${enforcer}`);
   }

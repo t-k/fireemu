@@ -60,7 +60,9 @@ export function createDispatchGate(options) {
         if (!targets.verify(prepared)) bad("target changed after its intent");
         const headers = { ...prepared.spec.headers, ...credentialHeaders(prepared.credential) };
         dispatched = true;
-        received = await transport.send({ url: prepared.spec.url, method: prepared.spec.method, headers, body: prepared.spec.body });
+        const answer = await transport.send({ url: prepared.spec.url, method: prepared.spec.method, headers, body: prepared.spec.body });
+        // Only the status, the raw headers and the bytes travel on; timing and any other field of the transport stay behind.
+        received = Object.freeze({ status: answer.status, rawHeaders: answer.rawHeaders, bytes: answer.bytes });
         return received;
       };
       let raw;

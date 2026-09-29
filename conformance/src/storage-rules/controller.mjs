@@ -1,0 +1,189 @@
+import { createHash } from "node:crypto";
+import { classifyResponse } from "./acceptance.mjs";
+import { ENFORCEMENT } from "./enforcement.mjs";
+import { applyVerdict, createSettleState, nextRead } from "./settle.mjs";
+
+// Runs the reviewed schedule of one recording. Each row goes through the same steps: guards from the ledgers, the
+// run-time references it needs, its exact target, the ledgers' record of the intent, one send through the gate, the
+// classification of the response, the durable facts, the ledgers' record of the outcome, the post-response checks, the
+// expected verdict and the references the response produced. Anything unexpected stops the run at once; the controller
+// never resends, never recovers by itself and never widens what a row may do. It sends only through the gate.
+class RunStop extends Error {
+  constructor(reason, detail = {}) { super(`run stopped: ${reason}`); this.reason = reason; this.detail = detail; }
+}
+const plain = (value) => value !== null && typeof value === "object" && !Array.isArray(value) && Object.getPrototypeOf(value) === Object.prototype;
+const callable = (value) => typeof value === "function";
+const DEFER = new Set(["admission", "delegate", "refs", "structure", "policy", "post-check"]);
+
+export function createController(options) {
+  const fail = () => { throw new Error("invalid controller options"); };
+  const keys = ["manifest", "schedule", "gate", "targets", "refs", "tables", "objects", "run", "capture", "delegates", "wait", "credentials", "judgePreflight"];
+  if (!plain(options) || Reflect.ownKeys(options).length !== keys.length || !keys.every((key) => Object.hasOwn(options, key))) fail();
+  const { manifest, schedule, gate, targets, refs, tables, objects, run, capture, delegates, wait, credentials, judgePreflight } = options;
+  if (!manifest || manifest.sendAuthorized !== false || !schedule?.steps || ![gate?.send, gate?.start, gate?.admit, gate?.finish, targets?.prepare, refs?.bind, refs?.resolve, objects?.evaluate, run?.evaluate, capture?.writeFacts, capture?.writeNote, wait, credentials?.fresh, judgePreflight].every(callable) || !plain(delegates)) fail();
+  const rowById = new Map(manifest.rows.map((row) => [row.id, row]));
+  const skipped = [];
+  const seedDigest = new Map();
+  for (const row of manifest.rows) {
+    if (row.request.operation === "upload" && row.request.credential === "admin" && typeof row.request.body?.base64 === "string" && manifest.resources.controls.includes(row.request.objectName)) {
+      seedDigest.set(row.request.objectName, createHash("sha256").update(Buffer.from(row.request.body.base64, "base64")).digest("hex"));
+    }
+  }
+  const invalidCompile = manifest.rows.filter((r) => r.family === "compile" && r.stage === "test").at(-1)?.id;
+  let executed = 0;
+
+  const mustBeAbsent = (row) => ["baseline", "baseline-metadata", "baseline-media", "absence-metadata", "absence-media"].includes(row.stage) || (row.stage === "cleanup" && /absence/.test(row.id));
+  function verdictOk(row, outcome) {
+    const { kind, verdict } = outcome;
+    if (kind === "gcs-metadata-read" || kind === "gcs-media-read") return mustBeAbsent(row) ? verdict === "absent" : verdict === "present" || verdict === "absent";
+    if (kind === "subject-observed") return verdict === "observed";
+    if (kind === "rules-test") return row.id === invalidCompile ? verdict === "rejected" : verdict === "accepted";
+    if (kind === "rules-ruleset-read") return row.stage === "absence" || /\/absence$/.test(row.id) ? verdict === "absent" : verdict === "present";
+    if (kind === "rules-release-read") {
+      if (/no-release-entry-after|\/final\/|-absence$|^compile\/release\/|^preflight\/release\//.test(row.id)) return verdict === "absent";
+      if (/owner-before-delete$|\/after$/.test(row.id)) return verdict === "present";
+      return verdict === "present" || verdict === "absent";
+    }
+    if (kind === "firestore-read") return verdict === "present" || verdict === "absent";
+    if (kind === "session-command") return row.request.headers["x-goog-upload-command"] === "cancel" ? verdict === "acknowledged" : verdict === "active" || verdict === "final";
+    if (kind === "settle-read") return true;
+    return verdict === "accepted";
+  }
+
+  const mutationKeyOf = (row) => {
+    const { method, operation } = row.request;
+    if (!["POST", "PATCH", "PUT", "DELETE"].includes(method)) return null;
+    const resource = row.request.objectName ?? row.request.documentName ?? row.programId;
+    return `${row.family}:${resource}:${operation ?? method}:${row.id}`;
+  };
+
+  function decide(row) {
+    const first = objects.evaluate(row);
+    const second = run.evaluate(row, first.unresolved);
+    const failed = [...first.failed, ...second.failed];
+    for (const token of second.unresolved) if (!DEFER.has(Object.keys(ENFORCEMENT).find((enforcer) => ENFORCEMENT[enforcer].includes(token)))) throw new RunStop("unhandled guard", { rowId: row.id, token });
+    const decision = failed.some((entry) => entry.outcome === "skip") ? "skip" : failed.some((entry) => entry.outcome === "stop") ? "stop" : "go";
+    return { decision, failed };
+  }
+
+  const bindable = (type, key, operationId, verdict) => (tables.producers[type]?.[key] ?? []).some((entry) => entry.operationId === operationId && entry.verdict === verdict);
+  async function bindReferences(row, outcome, attempt) {
+    const { kind, verdict, facts } = outcome;
+    const provenance = (deletable) => ({ operationId: row.id, attempt, verdict, deletable });
+    const ref = (type, key) => ({ kind: "runtime-reference", type, key, resolveOnlyAfterDurableProof: true });
+    const bind = async (type, key, value, deletable = false) => { if (typeof value === "string" && bindable(type, key, row.id, verdict)) await refs.bind({ ref: ref(type, key), value, provenance: provenance(deletable) }); };
+    const name = row.request.objectName;
+    if (kind === "gcs-seed-upload" || kind === "gcs-patch" || (kind === "gcs-metadata-read" && verdict === "present")) {
+      const deletable = objects.object(name).deletable;
+      await bind("generation", name, facts.generation, deletable);
+      await bind("metageneration", name, facts.metageneration, false);
+    } else if (kind === "rules-ruleset-create") await bind("ruleset-name", row.programId, facts.rulesetName);
+    else if (kind === "firestore-read" && verdict === "present") await bind("update-time", row.request.documentName, facts.updateTime, run.document(row.request.documentName).deletable);
+    else if (kind === "firestore-write" && verdict === "accepted" && row.request.method !== "DELETE") await bind("update-time", row.request.documentName, facts.updateTime, run.document(row.request.documentName).deletable);
+    else if (kind === "rules-list-page" && facts.hasNextPage) {
+      const match = /^rulesets-list\/final\/(\d+)$/.exec(row.id);
+      if (match) await bind("page-token", `normal/final/${match[1]}`, facts.nextPageToken);
+    }
+  }
+  async function bindSecrets(row, outcome, attempt) {
+    if (!outcome.secretFacts) return;
+    const provenance = { operationId: row.id, attempt, verdict: outcome.verdict, deletable: false };
+    const ref = (type, key) => ({ kind: "runtime-reference", type, key, resolveOnlyAfterDurableProof: true });
+    if (outcome.kind === "session-start") await refs.bind({ ref: ref("session-url", row.request.objectName), value: outcome.secretFacts.sessionUrl, provenance });
+    else if (outcome.kind === "firebase-create-token") {
+      const token = outcome.secretFacts.downloadTokens;
+      if (token.includes(",")) throw new RunStop("more than one download token", { rowId: row.id });
+      await refs.bind({ ref: ref("download-token", row.request.objectName), value: token, provenance });
+    }
+  }
+
+  async function execute(row, phase, { ctx, accept = null } = {}) {
+    run.setFlag("credentialFresh", credentials.fresh(row) === true);
+    const decision = decide(row);
+    if (decision.decision === "skip") { skipped.push(row.id); await capture.writeNote({ operationId: null, text: `skipped ${row.id}: ${decision.failed.map((f) => f.token).join(", ")}` }); return null; }
+    if (decision.decision === "stop") throw new RunStop("guard failed", { rowId: row.id, tokens: decision.failed.map((f) => f.token) });
+    let prepared;
+    let unavailable = "target refused";
+    try { prepared = targets.prepare(row, (reference, rowId) => { try { return refs.resolve(reference, rowId); } catch (error) { unavailable = error.message; throw error; } }); } catch { throw new RunStop("target unavailable", { rowId: row.id, cause: unavailable }); }
+    objects.recordIntent(row); run.recordIntent(row);
+    let result;
+    try { result = await gate.send(prepared, { phase, mutationKey: mutationKeyOf(row), accept }); } catch (error) {
+      if (/^preflight failed/.test(error.message)) throw new RunStop("preflight refused", { rowId: row.id });
+      if (/outcome uncertain/.test(error.message)) { objects.recordOutcome(row, { uncertain: true }); run.recordOutcome(row, { uncertain: true }); throw new RunStop("outcome uncertain", { rowId: row.id }); }
+      throw new RunStop(/poisoned|capture/.test(error.message) ? "capture failed" : "not sent", { rowId: row.id, message: error.message });
+    }
+    executed++;
+    let outcome;
+    try { outcome = classifyResponse(row, result.raw, ctx); } catch { throw new RunStop("unclassifiable response", { rowId: row.id }); }
+    await capture.writeFacts({ operationId: row.id, kind: outcome.kind, verdict: outcome.verdict, facts: outcome.facts });
+    // The ledgers read the classification only; a secret carried by the result never reaches them.
+    const shown = { kind: outcome.kind, verdict: outcome.verdict, facts: outcome.facts };
+    objects.recordOutcome(row, shown); run.recordOutcome(row, shown);
+    const checked = run.check(row, shown);
+    if (!checked.ok) throw new RunStop("check failed", { rowId: row.id, tokens: [...checked.failed] });
+    if (!verdictOk(row, outcome)) throw new RunStop("unexpected verdict", { rowId: row.id, kind: outcome.kind, verdict: outcome.verdict });
+    await bindReferences(row, outcome, result.attempt);
+    await bindSecrets(row, outcome, result.attempt);
+    return outcome;
+  }
+
+  async function settleStep(step) {
+    let state = createSettleState(step.config);
+    for (let read = nextRead(state); read !== null; read = nextRead(state)) {
+      const row = rowById.get(read.rowId);
+      const digest = seedDigest.get(read.witness.objectName);
+      const outcome = await execute(row, "normal", { ctx: { expectedSha256: digest ?? "0".repeat(64) } });
+      if (outcome === null) throw new RunStop("settle read skipped", { rowId: row.id });
+      state = applyVerdict(state, outcome.verdict);
+      if (state.status === "running" && read.index === step.config.witnesses.length - 1) await wait(step.intervalMs);
+    }
+    run.recordSettle(step.name, state.status);
+    if (state.status !== "settled") throw new RunStop("settle exhausted", { name: step.name });
+  }
+
+  async function pagesStep(step) {
+    for (let index = 0; index < step.rowIds.length; index++) {
+      const outcome = await execute(rowById.get(step.rowIds[index]), "normal");
+      if (outcome !== null && !outcome.facts.hasNextPage) return;
+    }
+    throw new RunStop("more than ten Ruleset pages");
+  }
+
+  async function runAll() {
+    await gate.start({ runId: manifest.binding.runId });
+    for (const id of schedule.preflight) {
+      const row = rowById.get(id);
+      if (row.family === "credential-cache") { await delegates["preflight-cache"](row); continue; }
+      // The counter closes the run itself when the answer is not the admitted one, so the judgement is made as the response arrives.
+      const accept = (raw) => { try { const seen = classifyResponse(row, raw); return verdictOk(row, seen) && judgePreflight(row, seen) === true; } catch { return false; } };
+      const outcome = await execute(row, "preflight", { accept });
+      if (outcome === null) throw new RunStop("preflight refused", { rowId: id });
+    }
+    gate.admit();
+    for (const step of schedule.steps) {
+      if (step.type === "row") await execute(rowById.get(step.id), "normal");
+      else if (step.type === "settle") await settleStep(step);
+      else if (step.type === "pages") await pagesStep(step);
+      else if (step.type === "delegate") {
+        if (!callable(delegates[step.op])) throw new RunStop("delegate missing", { op: step.op });
+        await delegates[step.op](step);
+      } else throw new RunStop("unknown step", { type: step.type });
+    }
+  }
+
+  return Object.freeze({
+    async run() {
+      try {
+        await runAll();
+        await gate.finish("finished");
+        return Object.freeze({ status: "finished", requests: executed, skipped: Object.freeze([...skipped]) });
+      } catch (error) {
+        if (!(error instanceof RunStop)) throw error;
+        const untouched = objects.snapshot().mutations === 0 && run.snapshot().mutations === 0;
+        let closed = false;
+        if (untouched && gate.snapshot().mode === "normal") { await gate.finish("stopped-no-mutation"); closed = true; }
+        return Object.freeze({ status: "stopped", reason: error.reason, detail: Object.freeze({ ...error.detail }), requests: executed, skipped: Object.freeze([...skipped]), needsRecovery: !closed && !untouched });
+      }
+    },
+  });
+}

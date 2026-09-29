@@ -76,6 +76,23 @@ test("plain assignments of a secret name are redacted, and placeholders and ordi
   assert.equal(r.text(benign), benign);
 });
 
+test("email addresses are personal data and are removed from bodies, headers and text", async () => {
+  const r = await redactor();
+  const body = JSON.stringify({ id: "1234567890", email: "owner.name+tag@example.co.uk", verified_email: true, bindings: [{ role: "roles/owner", members: ["user:owner@example.com", "serviceAccount:svc@project.iam.gserviceaccount.com", "group:team@example.org"] }], note: "contact a@b.io" });
+  const out = r.bytes(Buffer.from(body));
+  const text = out.bytes.toString();
+  for (const address of ["owner.name+tag@example.co.uk", "owner@example.com", "svc@project.iam.gserviceaccount.com", "team@example.org", "a@b.io"]) assert.equal(text.includes(address), false, address);
+  assert.equal(JSON.parse(text).verified_email, true);
+  assert.ok(text.includes("user:<redacted:email>"));
+  assert.equal(r.headers(["X-Goog-Authenticated-User-Email", "accounts.google.com:owner@example.com"])[1].includes("owner@example.com"), false);
+  assert.equal(r.text("sent to owner@example.com today").includes("owner@example.com"), false);
+  const certificate = "GET https://www.googleapis.com/robot/v1/metadata/x509/securetoken@system.gserviceaccount.com";
+  assert.equal(r.text(certificate), certificate);
+  const plain = "no address here, price 5 @ 3 and user@localhost";
+  assert.equal(r.text(plain), plain);
+  assert.ok(out.spans.some((span) => span.kind === "email"));
+});
+
 test("bodies without secrets, including binary media, pass through byte for byte", async () => {
   const r = await redactor();
   for (const body of [Buffer.from("allow"), Buffer.from([0, 255, 128, 7, 10]), Buffer.from(JSON.stringify({ error: { code: 403, message: "Permission denied. Could not perform this operation" } })), Buffer.alloc(0)]) {

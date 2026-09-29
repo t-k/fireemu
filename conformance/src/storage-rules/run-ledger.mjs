@@ -102,6 +102,10 @@ export function createRunLedger(options) {
         else if (row.request.method === "DELETE") document.latest = "unknown";
         else { document.latest = "present"; document.updateTime = facts.updateTime ?? null; }
       }
+    } else if (row.request?.headers?.["x-goog-upload-command"] === "upload, finalize" && sessions.has(row.programId)) {
+      // The subject's finalize decides the session: accepted means it finished, a denial leaves it active, anything else is unknown.
+      const session = sessions.get(row.programId);
+      session.state = uncertain ? "unknown" : facts.status === 200 ? "final" : facts.status === 403 ? "active" : "unknown";
     } else if (isSession(row)) {
       const session = sessionFor(row);
       if (uncertain) { session.uncertain = true; session.state = "unknown"; return; }
@@ -184,10 +188,23 @@ export function createRunLedger(options) {
     "confirmed-document-write-history-and-current-version": (row) => { const d = documentFor(row); return d.started && d.latest === "present" && d.updateTime !== null && !d.uncertain; },
     "durable-verified-start-url-and-target": (row) => { const s = sessionFor(row); return s.startConfirmed && s.urlHeld; },
     "entry-baseline-unchanged": () => entryBaseline(),
+    // On the before-read this is the check of its own response; on the publication it is the guard that the read found the expected release.
+    "exact-previous-release-or-entry-absence": (row) => {
+      if (row.request.method === "GET") return true;
+      const previous = PREVIOUS[sourceOf(row)];
+      if (previous === undefined) return false;
+      return previous === null ? release.bucket === "absent" : release.bucket === "present" && rulesets.get(previous).name !== null && release.rulesetName === rulesets.get(previous).name;
+    },
     "exact-owned-current-release-and-absent-entry-baseline": () => release.bucket === "present" && release.ownedCurrent && release.entryBucketAbsent && release.entryBucketlessAbsent && !release.unownedChange,
     "exact-release-source-and-effective-settle": (row) => { const name = sourceOfManagement(row); const r = name === null ? null : rulesets.get(name); return r !== null && r.name !== null && release.bucket === "present" && release.rulesetName === r.name && settled.get(name) === "settled"; },
     "owned-control-confirmed-present": (row) => { const o = objectOf(row); return o !== null && o.owned && o.latest === "present"; },
-    "owned-control-retained-through-final-readback": (row) => { const o = objectOf(row); return o !== null && o.owned && !o.deleteAttempted; },
+    // Before the control's final readback it must not have been deleted; after its deletion (the absence reads) the final readback must already have happened.
+    "owned-control-retained-through-final-readback": (row) => {
+      const o = objectOf(row);
+      if (o === null || !o.owned) return false;
+      if (row.stage === "absence-metadata" || row.stage === "absence-media") return controlReadbacks.has(manifest.resources.controls.indexOf(row.request.objectName)) && o.deleteAttempted;
+      return !o.deleteAttempted;
+    },
     "owned-control-still-present-and-version-matches": (row) => { const o = objectOf(row); return o !== null && o.owned && o.latest === "present" && o.generation !== null && o.generation === o.seedGeneration; },
     "owned-ruleset-and-source-readback": (row) => { const r = rulesetFor(row); return r.createAck && r.readOk; },
     "owned-ruleset-and-unreferenced-after-restore": (row) => { const r = rulesetFor(row); return r.createAck && release.bucket === "absent" && !r.uncertain; },
@@ -229,6 +246,7 @@ export function createRunLedger(options) {
     "empty-items-and-no-next-page-token": (row, o) => o.kind === "gcs-prefix-list" && o.facts.itemCount === 0 && o.facts.hasNextPage === false,
     "entry-page-has-no-next-token": (row, o) => o.kind === "rules-list-page" && o.facts.hasNextPage === false,
     "exact-previous-release-or-entry-absence": (row, o) => {
+      if (o.kind !== "rules-release-read") return true;
       const previous = PREVIOUS[row.id.split("/")[1]];
       if (previous === null) return o.kind === "rules-release-read" && o.verdict === "absent";
       const expected = rulesets.get(previous)?.name;
@@ -247,6 +265,11 @@ export function createRunLedger(options) {
 
   return Object.freeze({
     recordIntent, recordOutcome, recordSettle, setFlag, evaluate, check,
+    /** A document's state as far as a later delete may rely on it. */
+    document(name) {
+      const d = documents.get(name) ?? bad("unowned resource");
+      return Object.freeze({ started: d.started, latest: d.latest, updateTime: d.updateTime, deleteAttempted: d.deleteAttempted, deletable: d.started && d.latest === "present" && d.updateTime !== null && !d.uncertain });
+    },
     ownedTokens: () => Object.freeze([...OWNED_TOKENS].sort()),
     checkTokens: () => Object.freeze(Object.keys(CHECKS).sort()),
     snapshot: () => Object.freeze({

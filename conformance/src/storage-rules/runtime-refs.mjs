@@ -89,7 +89,7 @@ export function buildRefTables(manifest) {
       if (reference.fromStep !== null) {
         const producer = byStep.get(`${row.programId}\0${reference.fromStep}`);
         if (!producer || producer.id === row.id || (["generation", "update-time"].includes(reference.type) && producer.request.credential !== "admin")) bad("invalid reference tables");
-        const verdict = reference.type === "generation" ? PRODUCER_KINDS.get(acceptanceKindOf(producer)) : "accepted";
+        const verdict = reference.type === "generation" ? PRODUCER_KINDS.get(acceptanceKindOf(producer)) : reference.type === "update-time" ? (producer.request.method === "GET" ? "present" : "accepted") : "accepted";
         if (!verdict) bad("invalid reference tables");
         pinned[`${reference.type}|${reference.key}|${row.id}`] = producer.id;
         pinnedSteps[`${reference.type}|${reference.key}|${row.id}`] = reference.fromStep;
@@ -112,7 +112,7 @@ export function buildRefTables(manifest) {
       if (verdict) for (const type of ["generation", "metageneration"]) if (own(consumers[type], objectName)) add(producers, type, objectName, { operationId: row.id, verdict });
     }
     if (row.service === "firestore" && documentNames.has(documentName) && ["GET", "POST", "PATCH"].includes(row.request.method)) {
-      add(producers, "update-time", documentName, { operationId: row.id, verdict: "accepted" });
+      add(producers, "update-time", documentName, { operationId: row.id, verdict: row.request.method === "GET" ? "present" : "accepted" });
     }
   }
   for (const type of RUNTIME_REF_KINDS) {

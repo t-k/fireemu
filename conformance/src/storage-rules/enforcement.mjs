@@ -14,9 +14,11 @@ const table = {
     "owned-ruleset-and-source-readback", "owned-ruleset-and-unreferenced-after-restore", "restore-controls-retained-until-owner-readbacks", "restore-without-unowned-release-change",
     "two-complete-all-denied-restore-cycles", "document-not-absent-per-latest-readback", "session-active-per-latest-query",
   ],
+  // Answered by the run ledger before a write that depends on it and again as a check on the read that produced the state.
+  both: ["exact-previous-release-or-entry-absence"],
   "post-check": [
     "all-explicit-bucket-permissions-present", "all-explicit-permissions-present-does-not-authorize-send", "bucket-release-absent", "bucketless-release-absent",
-    "empty-items-and-no-next-page-token", "entry-page-has-no-next-token", "exact-previous-release-or-entry-absence", "release-name-and-created-ruleset-match", "literal-source-digest-match",
+    "empty-items-and-no-next-page-token", "entry-page-has-no-next-token", "release-name-and-created-ruleset-match", "literal-source-digest-match",
   ],
   admission: [
     "approved-bucket-policy-baseline-match", "approved-cross-service-grant-and-policy-baseline-match", "approved-private-input-provenance", "approved-ruleset-count-and-cleanup-baseline",

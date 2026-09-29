@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { generateKeyPairSync, sign } from "node:crypto";
+import { createHmac, generateKeyPairSync, sign } from "node:crypto";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import { createController } from "./storage-rules/controller.mjs";
@@ -216,7 +216,7 @@ test("the delegate options are a closed record and the credential provider refus
   const noEvidence = { writeCredentialProof: async () => {}, writeOwnership: async () => {}, writeCleanup: async () => {} };
   const base = { gate: good.gate, adc, apiKeys, passwords, digestSalt: salt, runId: "lr", nowSeconds: () => 1, waitUntilSeconds: async () => {}, evidence: noEvidence, malformed: MALFORMED };
   assert.doesNotThrow(() => createRunnerDelegates(base));
-  for (const bad of [{ ...base, extra: 1 }, { ...base, userTokenScheme: "Bearer" }, { ...base, evidence: {} }, { ...base, evidence: { ...noEvidence, writeCleanup: 1 } }, { ...base, malformed: { ...MALFORMED, "malformed-token": "" } }, { ...base, malformed: { "malformed-token": "x" } }, { ...base, gate: {} }, { ...base, nowSeconds: 1 }]) {
+  for (const bad of [{ ...base, extra: 1 }, { ...base, userTokenScheme: "Bearer" }, { ...base, evidence: {} }, { ...base, evidence: { ...noEvidence, writeCleanup: 1 } }, { ...base, evidence: Object.assign(Object.create(null), noEvidence) }, { ...base, evidence: Object.assign(() => {}, noEvidence) }, { ...base, malformed: { ...MALFORMED, "malformed-token": "" } }, { ...base, malformed: { "malformed-token": "x" } }, { ...base, gate: {} }, { ...base, nowSeconds: 1 }]) {
     assert.throws(() => createRunnerDelegates(bad), /invalid runner delegate options/);
   }
   const { credentials } = createRunnerDelegates(base);
@@ -246,4 +246,240 @@ test("ownership and cleanup receipts reach the real journal as digests, and no f
   assert.equal(rows.filter((row) => row.event === "credential-proof").length, 9);
   assert.ok(rows.filter((row) => row.event === "ownership").every((row) => row.data.runPrefix === "storage-rules-lr" && /^[0-9a-f]{64}$/.test(row.data.emailSha256)));
   for (const secret of [OWNER_TOKEN, "private-refresh-secret", adc.refresh_token, adc.client_secret, "@example.com", ...Object.values(passwords)]) assert.equal(text.includes(secret), false, secret.slice(0, 12));
+});
+
+// One gate with only the two credential-cache preflight rows, the real delegates and a fixed clock: enough to drive each
+// delegate and credential step directly.
+const OWNER_PREFLIGHT = "preflight/auth/owner-token";
+const KEYS_PREFLIGHT = "preflight/auth/signing-keys";
+const T0 = 1790553600;
+const ADMIN = { request: { credential: "admin" } };
+const credentialRow = (credential) => ({ request: { credential } });
+
+function unit({ respond = () => undefined } = {}) {
+  const clock = { now: T0 };
+  const identity = fakeIdentity(clock);
+  const trace = [];
+  const seen = { http: 0, proofs: [], ownership: [], cleanup: [] };
+  const transport = { send: async (spec) => {
+    seen.http++;
+    const replaced = respond(spec);
+    if (replaced !== undefined) return replaced;
+    if (spec.url === CERT_URL) return { status: 200, rawHeaders: ["Cache-Control", "public, max-age=3600", "Age", "0"], bytes: Buffer.from(JSON.stringify({ test: publicKey.export({ type: "spki", format: "pem" }) })), startedAtMs: 1, finishedAtMs: 2 };
+    if (spec.url.startsWith("https://oauth2.googleapis.com/")) return json({ access_token: OWNER_TOKEN, token_type: "Bearer", expires_in: 3600 });
+    if (spec.url.startsWith("https://identitytoolkit.googleapis.com/")) return identity.handle(spec);
+    throw new Error(`unexpected request ${spec.url}`);
+  } };
+  const gate = createDispatchGate({
+    reservations: { onStarted: async () => {}, onReserve: async (r) => { trace.push(`${r.phase}:${r.operationId}`); }, onTerminal: async (r) => { trace.push(`terminal:${r.outcome}`); } },
+    capture: { writeIntent: async () => {}, writeResponse: async () => {}, writeNote: async () => {}, snapshot: () => ({ uncertain: false }) },
+    transport, targets: { verify: () => true, prepare: () => { throw new Error("unused"); } }, credentials: { headersFor: () => ({}) },
+    preflightIds: [OWNER_PREFLIGHT, KEYS_PREFLIGHT], admission: { check: async () => ({ admitted: true }) },
+  });
+  const real = createRunnerDelegates({ gate, adc, apiKeys, passwords, digestSalt: salt, runId: "lr", nowSeconds: () => clock.now, waitUntilSeconds: async (value) => { clock.now = Math.max(clock.now, value); },
+    evidence: { writeCredentialProof: async (proof) => { seen.proofs.push(proof); }, writeOwnership: async (row) => { seen.ownership.push(row); }, writeCleanup: async (row) => { seen.cleanup.push(row); } }, malformed: MALFORMED });
+  // Start the counter, pass both cache preflights, admit, then spend the first normal refresh of each kind at T0.
+  const open = async () => {
+    await gate.start({ runId: "lr" });
+    await real.delegates["preflight-cache"]({ id: OWNER_PREFLIGHT });
+    await real.delegates["preflight-cache"]({ id: KEYS_PREFLIGHT });
+    gate.admit();
+    await real.delegates["credential-cache"]();
+  };
+  return { gate, real, clock, trace, seen, identity, open, delegates: real.delegates, credentials: real.credentials };
+}
+const refreshIds = (trace) => trace.filter((entry) => /owner-token\//.test(entry));
+
+test("the owner token is refreshed when exactly the refresh margin remains, and not a second earlier", async () => {
+  const u = unit();
+  await u.open();
+  // The owner token of auth-shared/owner-token/1 was fetched at T0 and expires at T0 + 3600.
+  u.clock.now = T0 + 3600 - 301;
+  await u.credentials.ensure(ADMIN);
+  assert.deepEqual(refreshIds(u.trace), ["normal:auth-shared/owner-token/1"]);
+  u.clock.now = T0 + 3600 - 300;
+  await u.credentials.ensure(ADMIN);
+  assert.deepEqual(refreshIds(u.trace), ["normal:auth-shared/owner-token/1", "normal:auth-shared/owner-token/2"]);
+  // The next stale token spends the next ID; none is reused.
+  u.clock.now += 3600 - 300;
+  await u.credentials.ensure(ADMIN);
+  assert.deepEqual(refreshIds(u.trace), ["normal:auth-shared/owner-token/1", "normal:auth-shared/owner-token/2", "normal:auth-shared/owner-token/3"]);
+});
+
+test("the declared normal refresh IDs are a budget: past the eighth a stale owner token stops without a request", async () => {
+  const u = unit();
+  await u.open();
+  for (let index = 2; index <= 8; index++) {
+    u.clock.now += 3400;
+    await u.credentials.ensure(ADMIN);
+    assert.equal(refreshIds(u.trace).at(-1), `normal:auth-shared/owner-token/${index}`);
+  }
+  u.clock.now += 3400;
+  const before = { http: u.seen.http, trace: u.trace.length };
+  await assert.rejects(() => u.credentials.ensure(ADMIN), /owner token refresh budget exhausted/);
+  assert.deepEqual({ http: u.seen.http, trace: u.trace.length }, before);
+});
+
+test("in recovery the owner token is refreshed through the recovery refresh IDs, from the first one", async () => {
+  const u = unit();
+  await u.open();
+  u.gate.enterRecovery();
+  u.clock.now += 3400;
+  await u.credentials.ensure(ADMIN);
+  u.clock.now += 3400;
+  await u.credentials.ensure(ADMIN);
+  assert.deepEqual(refreshIds(u.trace), ["normal:auth-shared/owner-token/1", "recovery:recovery/auth-shared/owner-token/1", "recovery:recovery/auth-shared/owner-token/2"]);
+});
+
+test("only owner rows outside the preflight refresh the owner token", async () => {
+  const u = unit();
+  await u.gate.start({ runId: "lr" });
+  // Preflight: no owner token yet, and no refresh is attempted for an owner row.
+  await u.credentials.ensure(ADMIN);
+  assert.deepEqual(u.trace, []);
+  await u.delegates["preflight-cache"]({ id: OWNER_PREFLIGHT });
+  await u.delegates["preflight-cache"]({ id: KEYS_PREFLIGHT });
+  u.gate.admit();
+  await u.delegates["credential-cache"]();
+  u.clock.now += 3400;
+  for (const credential of ["anonymous", "user-a", "malformed-token", "foreign-project-token"]) await u.credentials.ensure(credentialRow(credential));
+  assert.deepEqual(refreshIds(u.trace), ["normal:auth-shared/owner-token/1"]);
+  await u.credentials.ensure(ADMIN);
+  assert.equal(refreshIds(u.trace).at(-1), "normal:auth-shared/owner-token/2");
+});
+
+test("outside a request mode a stale owner token is refused before any request", async () => {
+  const u = unit();
+  await u.open();
+  await u.gate.finish("finished");
+  const before = { http: u.seen.http, trace: u.trace.length };
+  await assert.rejects(() => u.credentials.ensure(ADMIN), /no refresh outside a request mode/);
+  assert.deepEqual({ http: u.seen.http, trace: u.trace.length }, before);
+});
+
+test("the owner credential is fresh only with more than 60 seconds left", async () => {
+  const u = unit();
+  assert.equal(u.credentials.fresh(ADMIN), false);
+  await u.open();
+  const expected = [[T0, true], [T0 + 3600 - 61, true], [T0 + 3600 - 60, false], [T0 + 3600 - 45, false], [T0 + 3600, false]];
+  assert.deepEqual(expected.map(([now]) => { u.clock.now = now; return [now, u.credentials.fresh(ADMIN)]; }), expected);
+});
+
+test("a user token is fresh only with more than 60 seconds left", async () => {
+  const u = unit();
+  await u.open();
+  await u.delegates["prepare-query"]();
+  // user-a's token was minted at T0 - 1 and expires at T0 + 3599.
+  const expected = [[T0 + 3599 - 61, true], [T0 + 3599 - 60, false], [T0 + 3599 - 45, false]];
+  assert.deepEqual(expected.map(([now]) => { u.clock.now = now; return [now, u.credentials.fresh(credentialRow("user-a"))]; }), expected);
+});
+
+test("user and foreign credentials without a session or an open fixture are refused, never sent empty", async () => {
+  const u = unit();
+  assert.throws(() => u.credentials.headersFor("user-a", { project: "fireemu-oracle-query" }), /no session/);
+  assert.throws(() => u.credentials.headersFor("foreign-project-token", { project: "fireemu-oracle-idp" }), /no foreign token/);
+  assert.equal(u.credentials.fresh(credentialRow("foreign-project-token")), false);
+});
+
+test("an unknown preflight cache row is refused without a request", async () => {
+  const u = unit();
+  await u.gate.start({ runId: "lr" });
+  for (const id of ["preflight/auth/other", "auth-shared/owner-token/1", undefined]) await assert.rejects(() => u.delegates["preflight-cache"]({ id }), /unknown preflight cache row/);
+  assert.equal(u.seen.http, 0);
+  assert.deepEqual(u.trace, []);
+});
+
+test("the fixture session is created once", async () => {
+  const u = unit();
+  await u.open();
+  await u.delegates["prepare-query"]();
+  const before = { http: u.seen.http, trace: u.trace.length };
+  await assert.rejects(() => u.delegates["prepare-query"](), /fixture session already created/);
+  assert.deepEqual({ http: u.seen.http, trace: u.trace.length }, before);
+  assert.equal(u.real.snapshot().session.mode, "query-ready");
+});
+
+test("the foreign fixture opens only after the query accounts and only once at a time, and closes once", async () => {
+  const u = unit();
+  await u.open();
+  await assert.rejects(() => u.delegates["foreign-signup"](), /foreign fixture unavailable/);
+  await assert.rejects(() => u.delegates["foreign-cleanup"](), /no foreign fixture is open/);
+  await u.delegates["prepare-query"]();
+  await u.delegates["foreign-signup"]();
+  assert.equal(u.real.snapshot().foreignOpen, true);
+  assert.match(u.credentials.headersFor("foreign-project-token", { project: "fireemu-oracle-idp" }).authorization, /^Firebase eyJ/);
+  assert.equal(u.credentials.fresh(credentialRow("foreign-project-token")), true);
+  const before = { http: u.seen.http, trace: u.trace.length };
+  await assert.rejects(() => u.delegates["foreign-signup"](), /foreign fixture unavailable/);
+  assert.deepEqual({ http: u.seen.http, trace: u.trace.length }, before);
+  assert.equal(u.real.snapshot().foreignOpen, true);
+  await u.delegates["foreign-cleanup"]();
+  assert.equal(u.real.snapshot().foreignOpen, false);
+  assert.throws(() => u.credentials.headersFor("foreign-project-token", { project: "fireemu-oracle-idp" }), /no foreign token/);
+  assert.equal(u.credentials.fresh(credentialRow("foreign-project-token")), false);
+  assert.deepEqual([...u.identity.users.keys()].filter((key) => key.startsWith("fireemu-oracle-idp/")), []);
+  await assert.rejects(() => u.delegates["foreign-cleanup"](), /no foreign fixture is open/);
+});
+
+test("a foreign fixture that fails to open fails its step", async () => {
+  const u = unit({ respond: (spec) => (spec.url.includes("/projects/fireemu-oracle-idp/accounts:lookup") ? { ...json({}), status: 503 } : undefined) });
+  await u.open();
+  await u.delegates["prepare-query"]();
+  await assert.rejects(() => u.delegates["foreign-signup"]());
+  assert.equal(u.real.snapshot().foreignOpen, false);
+  assert.throws(() => u.credentials.headersFor("foreign-project-token", { project: "fireemu-oracle-idp" }), /no foreign token/);
+});
+
+test("account recovery without a fixture session sends nothing", async () => {
+  const u = unit();
+  await u.open();
+  u.gate.enterRecovery();
+  const before = { http: u.seen.http, trace: u.trace.length };
+  await u.delegates["recover-accounts"]();
+  assert.deepEqual({ http: u.seen.http, trace: u.trace.length }, before);
+});
+
+test("account recovery abandons an open foreign fixture as a failure, so its account is deleted in recovery", async () => {
+  const u = unit();
+  await u.open();
+  await u.delegates["prepare-query"]();
+  await u.delegates["foreign-signup"]();
+  // The counter is still normal: the abandoned fixture is a failure for the session, which moves the counter to recovery
+  // before it deletes the foreign account.
+  await u.delegates["recover-accounts"]();
+  assert.ok(u.trace.includes("recovery:auth/foreign-project-token/delete"), JSON.stringify(u.trace.slice(-12)));
+  assert.equal(u.trace.includes("normal:auth/foreign-project-token/delete"), false);
+  assert.equal(u.identity.users.size, 0);
+  assert.equal(u.real.snapshot().foreignOpen, false);
+  assert.equal(u.real.snapshot().session.mode, "recovered");
+});
+
+test("account recovery refreshes a stale owner token through a recovery refresh ID before it deletes the accounts", async () => {
+  const u = unit();
+  await u.open();
+  await u.delegates["prepare-query"]();
+  u.gate.enterRecovery();
+  // 200 seconds left: still usable, but inside the 300-second refresh margin.
+  u.clock.now = T0 + 3400;
+  await u.delegates["recover-accounts"]();
+  const refresh = u.trace.indexOf("recovery:recovery/auth-shared/owner-token/1");
+  const firstDelete = u.trace.findIndex((entry) => entry.startsWith("recovery:recovery/auth/"));
+  assert.ok(refresh >= 0 && refresh < firstDelete, JSON.stringify(u.trace.slice(-10)));
+  assert.equal(u.identity.users.size, 0);
+});
+
+test("ownership and cleanup receipts reach the evidence writers exactly, with the address as a salted, tagged HMAC", async () => {
+  const u = unit();
+  await u.open();
+  await u.delegates["prepare-query"]();
+  await u.delegates["foreign-signup"]();
+  await u.delegates["foreign-cleanup"]();
+  await u.delegates["cleanup-query"]();
+  const emailSha256 = (account) => createHmac("sha256", Buffer.from(salt, "hex")).update("storage-rules-email\0").update(`storage-rules-lr-${account}@example.com`).digest("hex");
+  const uid = (account) => (account === "foreign-project-token" ? "foreign-captured-uid-1" : `storage-rules-lr-${account}`);
+  const project = (account) => (account === "foreign-project-token" ? "fireemu-oracle-idp" : "fireemu-oracle-query");
+  const accounts = ["user-a", "user-b", "revoked-token", "foreign-project-token"];
+  assert.deepEqual(u.seen.ownership, accounts.map((account) => ({ account, project: project(account), uid: uid(account), runPrefix: "storage-rules-lr", emailSha256: emailSha256(account), creationRequestId: `auth/${account}/${account === "foreign-project-token" ? "sign-up" : "create"}` })));
+  assert.deepEqual(u.seen.cleanup, ["foreign-project-token", "user-a", "user-b", "revoked-token"].map((account) => ({ account, project: project(account), uid: uid(account), absent: true, requestId: `auth/${account}/absence` })));
+  assert.equal(u.seen.proofs.length, 9);
 });

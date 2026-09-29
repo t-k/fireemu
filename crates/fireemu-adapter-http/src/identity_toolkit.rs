@@ -76,8 +76,10 @@ mod project_config;
 pub use project_config::{exportable_config_members, restored_config_members};
 mod project_mfa;
 mod tenant_document;
+mod tenant_seed;
 pub use password_hash::restorable_spec as restorable_imported_hash_spec;
 pub use tenant_document::{exportable_tenant_members, restore_tenant_members};
+pub use tenant_seed::{prepare_tenant_seeds, seed_multi_tenancy, TenantSeed};
 mod routes;
 pub mod widget;
 mod widget_templates;
@@ -8347,6 +8349,7 @@ fn tenant_answer(
 
 /// A tenant document read for a create, ready to publish: what the Admin create route and a
 /// seeded tenant of the configuration file share, so both validate and default one way.
+#[derive(Clone)]
 pub(crate) struct PreparedTenantCreate {
     metadata: fireemu_core_auth::store::TenantMetadata,
     patch: fireemu_core_auth::store::TenantMetadataPatch,

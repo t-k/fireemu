@@ -3225,6 +3225,9 @@ fn client_tenant_id_selects_the_namespace_and_must_match_the_id_token() {
     assert_eq!(mismatch["error"]["message"], "TENANT_ID_MISMATCH");
 }
 
+/// A JWT custom token's tenant claim must name the tenant it is exchanged in, as the official
+/// emulator checks it; a JSON fake token's claim is checked nowhere there, and not here
+/// (`the_emulator_profile_checks_a_custom_token_tenant_claim_only_where_the_official_emulator_does`).
 #[test]
 fn custom_token_tenant_id_must_match_the_target_tenant() {
     use fireemu_core_auth::store::AuthRegistry;
@@ -3233,7 +3236,16 @@ fn custom_token_tenant_id_must_match_the_target_tenant() {
     let registry = Arc::new(AuthRegistry::new("demo-app", s.store.clone()));
     registry.ensure_tenant("demo-app", "customer-a").unwrap();
     s.registry = Some(registry);
-    let token = json!({"uid": "tenant-custom-user", "tenant_id": "customer-b"}).to_string();
+    let header = base64url_encode(br#"{"alg":"none","typ":"JWT"}"#);
+    let payload = json!({
+        "aud": "https://identitytoolkit.googleapis.com/google.identity.identitytoolkit.v1.IdentityToolkit",
+        "uid": "tenant-custom-user",
+        "tenant_id": "customer-b",
+    });
+    let token = format!(
+        "{header}.{}.",
+        base64url_encode(payload.to_string().as_bytes())
+    );
 
     let (status, body) = post(
         &s,

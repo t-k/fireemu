@@ -21743,6 +21743,109 @@ fn the_emulator_profile_refuses_a_claimless_custom_token_in_a_tenant_as_the_offi
     }
 }
 
+/// The emulator profile without signers checks a custom token's tenant claim only where the
+/// official emulator does (firebase-tools 15.28.2, `operations.js` `signInWithCustomToken`,
+/// lines 1010-1022): a JSON fake token is never checked, and an unsigned JWT is checked only in
+/// a tenant, where its claim must name that tenant. So a JSON token signs in to the tenant the
+/// request names whatever its claim, and a JWT with a claim signs in to the project
+/// (issue emulator-profile-refuses-json-fake-custom-token-in-a-tenant, 2026-09-29).
+#[test]
+fn the_emulator_profile_checks_a_custom_token_tenant_claim_only_where_the_official_emulator_does() {
+    use fireemu_adapter_http::identity_toolkit::CUSTOM_TOKEN_AUDIENCE;
+    let s = with_registry(state());
+    for tenant in ["tenant-a", "tenant-b"] {
+        s.registry
+            .as_ref()
+            .unwrap()
+            .ensure_tenant("demo-app", tenant)
+            .unwrap();
+    }
+    let json_token = |uid: &str, claim: Option<&str>| {
+        let mut token = json!({"uid": uid});
+        if let Some(claim) = claim {
+            token["tenant_id"] = json!(claim);
+        }
+        token.to_string()
+    };
+    let jwt = |uid: &str, claim: Option<&str>| {
+        let mut payload = json!({"aud": CUSTOM_TOKEN_AUDIENCE, "uid": uid});
+        if let Some(claim) = claim {
+            payload["tenant_id"] = json!(claim);
+        }
+        custom_token_from_payload(&payload)
+    };
+    let tenant_of =
+        |body: &Value| second_factor_claims(body["idToken"].as_str().unwrap())["tenant"].clone();
+    // A JSON token signs in to the tenant the body or the query names, whatever its claim.
+    for (uid, claim) in [("json-none", None), ("json-other", Some("tenant-b"))] {
+        let (status, body) = post(
+            &s,
+            &format!("{V1}/accounts:signInWithCustomToken"),
+            &json!({"token": json_token(uid, claim), "tenantId": "tenant-a", "returnSecureToken": true}),
+        );
+        assert_eq!(status, 200, "{uid}: {body}");
+        assert_eq!(tenant_of(&body), "tenant-a", "{uid}");
+        let (status, body) = post(
+            &s,
+            &format!("{V1}/accounts:signInWithCustomToken?tenantId=tenant-a"),
+            &json!({"token": json_token(&format!("{uid}-query"), claim), "returnSecureToken": true}),
+        );
+        assert_eq!(status, 200, "{uid} by query: {body}");
+        assert_eq!(tenant_of(&body), "tenant-a", "{uid} by query");
+    }
+    // In the project, neither token's claim is checked.
+    for (label, token) in [
+        ("json", json_token("project-json", Some("tenant-a"))),
+        ("jwt", jwt("project-jwt", Some("tenant-a"))),
+    ] {
+        let (status, body) = post(
+            &s,
+            &format!("{V1}/accounts:signInWithCustomToken"),
+            &json!({"token": token, "returnSecureToken": true}),
+        );
+        assert_eq!(status, 200, "{label}: {body}");
+        assert!(tenant_of(&body).is_null(), "{label}: {body}");
+    }
+    // In a tenant, an unsigned JWT's claim must name it, as before.
+    for claim in [None, Some("tenant-b")] {
+        let (status, body) = post(
+            &s,
+            &format!("{V1}/accounts:signInWithCustomToken"),
+            &json!({"token": jwt("jwt-in-tenant", claim), "tenantId": "tenant-a"}),
+        );
+        assert_eq!(status, 400, "{claim:?}: {body}");
+        assert_eq!(body["error"]["message"], "TENANT_ID_MISMATCH", "{claim:?}");
+    }
+}
+
+/// Strict without signers, where every custom token is refused: an unsigned token naming a
+/// tenant other than its claim, a JSON one included, is still refused at the store selection
+/// with `TENANT_ID_MISMATCH`, before the handler; only the emulator profile leaves a JSON
+/// token's claim unchecked there.
+#[test]
+fn strict_without_signers_refuses_a_mismatched_custom_token_at_the_store_selection() {
+    use fireemu_adapter_http::identity_toolkit::CUSTOM_TOKEN_AUDIENCE;
+    let s = with_registry(strict_state());
+    enable_tenants(&s);
+    s.registry
+        .as_ref()
+        .unwrap()
+        .ensure_tenant("demo-app", "tenant-a")
+        .unwrap();
+    for token in [
+        json!({"uid": "json"}).to_string(),
+        custom_token_from_payload(&json!({"aud": CUSTOM_TOKEN_AUDIENCE, "uid": "jwt"})),
+    ] {
+        let (status, body) = post(
+            &s,
+            &format!("{V1}/accounts:signInWithCustomToken"),
+            &json!({"token": token, "tenantId": "tenant-a"}),
+        );
+        assert_eq!(status, 400, "{token}: {body}");
+        assert_eq!(body["error"]["message"], "TENANT_ID_MISMATCH", "{token}");
+    }
+}
+
 /// A verified custom token's tenant claim under strict, as production answers it
 /// (AUTH-TENANT-BLOCKING sandbox recording 2026-09-27, custom-token program).
 #[test]

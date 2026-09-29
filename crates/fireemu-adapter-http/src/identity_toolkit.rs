@@ -8592,7 +8592,12 @@ fn select_store(
                 routes::Handler::Lookup | routes::Handler::Update | routes::Handler::Delete
             )
     );
-    if exchanges_custom_token {
+    // The emulator profile checks no tenant claim of a JSON fake custom token, as the official
+    // emulator checks none (firebase-tools 15.28.2, `operations.js` `signInWithCustomToken`,
+    // lines 1010-1016; issue emulator-profile-refuses-json-fake-custom-token-in-a-tenant).
+    let json_fake_token = !strict
+        && str_field(body, "token").is_some_and(|token| token.trim_start().starts_with('{'));
+    if exchanges_custom_token && !json_fake_token {
         // A selected tenant is an explicit namespace assertion, whether it came from the query
         // or the request body. A valid custom token without a tenant claim is project-scoped and
         // must not be silently rebound to the requested tenant; malformed tokens are left to the
@@ -9145,26 +9150,28 @@ fn sign_in_with_custom_token(
     // recording 2026-09-27, custom-token program). The emulator profile, with signers or without,
     // refuses a JWT without the tenant's claim as the official emulator does, with
     // TENANT_ID_MISMATCH (firebase-tools 15.28.2 `signInWithCustomToken`; round-2 integration
-    // review S1, 2026-09-29).
-    if let Some(tenant_id) = payload.get("tenant_id") {
-        let Some(tenant_id) = tenant_id.as_str() else {
-            return error(400, "INVALID_CUSTOM_TOKEN : tenant_id must be a string");
-        };
-        if store.tenant_id() != Some(tenant_id) {
-            return error(
-                400,
-                if production_rules {
-                    "TENANT_ID_MISMATCH : Specified tenant ID does not match the custom token."
-                } else {
-                    "TENANT_ID_MISMATCH"
-                },
-            );
-        }
-    } else if store.tenant_id().is_some() {
-        if reject_expired {
-            return backend_internal_error();
-        }
-        if jwt {
+    // review S1, 2026-09-29). Without signers it checks a claim only where the official emulator
+    // does: never on a JSON fake token, and on a JWT only in a tenant (lines 1010-1022).
+    let checks_the_claim = production_rules || (jwt && store.tenant_id().is_some());
+    if checks_the_claim {
+        if let Some(tenant_id) = payload.get("tenant_id") {
+            let Some(tenant_id) = tenant_id.as_str() else {
+                return error(400, "INVALID_CUSTOM_TOKEN : tenant_id must be a string");
+            };
+            if store.tenant_id() != Some(tenant_id) {
+                return error(
+                    400,
+                    if production_rules {
+                        "TENANT_ID_MISMATCH : Specified tenant ID does not match the custom token."
+                    } else {
+                        "TENANT_ID_MISMATCH"
+                    },
+                );
+            }
+        } else if store.tenant_id().is_some() {
+            if reject_expired {
+                return backend_internal_error();
+            }
             return error(400, "TENANT_ID_MISMATCH");
         }
     }

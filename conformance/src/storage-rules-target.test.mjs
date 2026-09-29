@@ -297,9 +297,173 @@ test("the billed project is one of the two sandbox projects and agrees with the 
   const query = row("ruleset/v1/create");
   assert.equal(query.request.path.includes("/projects/fireemu-oracle-query/"), true);
   for (const project of ["fireemu-oracle-idp", "another-project", "", null, 7, "fireemu-oracle-query\n"]) {
-    assert.throws(() => b.prepare({ ...query, request: { ...query.request, project } }, resolver()), /invalid target|./, String(project));
+    assert.throws(() => b.prepare({ ...query, request: { ...query.request, project } }, resolver()), /invalid target row/, String(project));
   }
   assert.doesNotThrow(() => b.prepare({ ...query, request: { ...query.request, project: "fireemu-oracle-query" } }, resolver()));
   // A row's headers cannot carry the quota project either.
   assert.throws(() => b.prepare({ ...query, request: { ...query.request, headers: { ...query.request.headers, "x-goog-user-project": "fireemu-oracle-idp" } } }, resolver()));
+});
+
+// Each test below pairs an accepted control with inputs that only one layer of the builder refuses, so every layer is
+// exercised on its own rather than through a neighbour that rejects the same input.
+const rejects = (b, r, message, resolve = resolver()) => assert.throws(() => b.prepare(r, resolve), /invalid target row/, message);
+const objectAt = (id, objectName, segment = encodeURIComponent(objectName)) => { const r = row(id); return { ...r, request: { ...r.request, objectName, path: r.request.path.replace(/\/o\/[^/]+$/, `/o/${segment}`) } }; };
+
+test("an object name outside the owned-name grammar is refused even when its path segment is canonical", async () => {
+  const b = await builder();
+  assert.doesNotThrow(() => b.prepare(objectAt("management/control-0/delete", `${binding.prefix}fresh/x.bin`), resolver()));
+  for (const name of [`${binding.prefix}a\x01b.bin`, `${binding.prefix}a\x7fb.bin`, `${binding.prefix}a\x1fb.bin`, `${binding.prefix}a//b.bin`, `${binding.prefix}dir/`, `${binding.prefix}a\\b.bin`]) {
+    rejects(b, objectAt("management/control-0/delete", name), JSON.stringify(name));
+  }
+});
+
+test("an object path segment must be the exact canonical encoding of the row's object name", async () => {
+  const b = await builder();
+  const name = `${binding.prefix}fresh/a:b+o.bin`;
+  assert.doesNotThrow(() => b.prepare(objectAt("management/control-0/baseline-metadata", name), resolver()));
+  for (const segment of [encodeURIComponent(name).replace("o.bin", "%6F.bin"), encodeURIComponent(name).replace("%3A", ":"), encodeURIComponent(name).replace("%2B", "+")]) {
+    rejects(b, objectAt("management/control-0/baseline-metadata", name, segment), segment);
+  }
+});
+
+test("an upload names this row's own object, and that object must be owned", async () => {
+  const b = await builder();
+  for (const id of ["management/control-0/seed", "case/method-read-upload-absent/subject/subject"]) {
+    const r = row(id);
+    const named = (objectName, name = objectName) => ({ ...r, request: { ...r.request, objectName, query: { ...r.request.query, name } } });
+    assert.doesNotThrow(() => b.prepare(named(`${binding.prefix}fresh/x.bin`), resolver()), id);
+    rejects(b, named(r.request.objectName, `${binding.prefix}fresh/other.bin`), `${id} names another owned object`);
+    rejects(b, named("outside/x.bin"), `${id} names an unowned object`);
+    rejects(b, named(binding.prefix), `${id} names the bare prefix`);
+  }
+});
+
+test("object, token and Rules list routes accept only their own query parameters and values", async () => {
+  const b = await builder();
+  const cases = [
+    ["management/control-0/baseline-metadata", {}, [{ projection: "full" }, { alt: "media", userProject: "x" }, { ifGenerationMatch: "1" }]],
+    ["management/control-0/baseline-media", { alt: "media" }, [{ alt: "json" }, { alt: "" }]],
+    ["case/download-token-deny/setup/create-token", { create_token: "true" }, [{ create_token: "false" }, { create_token: "1" }]],
+    ["preflight/rulesets-list/entry/1", { pageSize: "100" }, [{ pageSize: "50" }, { pageSize: "1000" }]],
+  ];
+  for (const [id, good, bads] of cases) {
+    const r = row(id);
+    assert.doesNotThrow(() => b.prepare({ ...r, request: { ...r.request, query: good } }, resolver()), id);
+    for (const query of bads) rejects(b, { ...r, request: { ...r.request, query } }, `${id} ${JSON.stringify(query)}`);
+  }
+});
+
+test("a Firestore create names its document id once, as a single literal", async () => {
+  const b = await builder();
+  const create = manifest.rows.find((r) => r.service === "firestore" && r.request.method === "POST");
+  const id = create.request.query.documentId;
+  assert.doesNotThrow(() => b.prepare({ ...create, request: { ...create.request, query: { documentId: id } } }, resolver()));
+  // A one-element list stringifies to the same id and produces the same URL, but it is not the shape a create has.
+  rejects(b, { ...create, request: { ...create.request, query: { documentId: [id] } } }, "list id");
+});
+
+test("a preflight-only route refuses a row of any other family", async () => {
+  const b = await builder();
+  const r = row("management/control-0/baseline-metadata");
+  const bucketRead = { ...r, request: { ...r.request, path: `/storage/v1/b/${binding.bucket}`, query: {} } };
+  assert.doesNotThrow(() => b.prepare({ ...bucketRead, family: "preflight" }, resolver()));
+  rejects(b, bucketRead, "management row on the bucket metadata route");
+  const database = { ...r, request: { ...r.request, origin: "https://firestore.googleapis.com", path: "/v1/projects/fireemu-oracle-query/databases/(default)", query: {} } };
+  assert.doesNotThrow(() => b.prepare({ ...database, family: "preflight" }, resolver()));
+  rejects(b, database, "management row on the database route");
+});
+
+test("a URL the parser would rewrite is refused, so the digest covers the bytes that are sent", async () => {
+  const b = await builder();
+  const r = row("management/control-0/delete");
+  assert.doesNotThrow(() => b.prepare({ ...r, request: { ...r.request, query: { ifGenerationMatch: "1" } } }, resolver()));
+  // encodeURIComponent keeps an apostrophe, and the URL parser escapes it in the query of a special scheme.
+  rejects(b, { ...r, request: { ...r.request, query: { ifGenerationMatch: "1'" } } }, "apostrophe");
+  const perms = row("preflight/bucket/permissions");
+  rejects(b, { ...perms, request: { ...perms.request, query: { permissions: ["storage.buckets.get", "it's"] } } }, "apostrophe in a list");
+});
+
+test("a base64 body must be the canonical encoding of its bytes", async () => {
+  const b = await builder();
+  const seed = row("management/control-0/seed");
+  assert.equal(b.prepare({ ...seed, request: { ...seed.request, body: { base64: "eA==" } } }, resolver()).spec.body.toString(), "x");
+  for (const base64 of ["eB==", "eA=", "eA", "eA==\n"]) rejects(b, { ...seed, request: { ...seed.request, body: { base64 } } }, base64);
+});
+
+test("a reference must be of a kind its position allows and must wait for durable proof", async () => {
+  const b = await builder();
+  const list = row("rulesets-list/final/2");
+  const token = list.request.query.pageToken;
+  const listWith = (pageToken) => ({ ...list, request: { ...list.request, query: { ...list.request.query, pageToken } } });
+  assert.doesNotThrow(() => b.prepare(listWith({ ...token }), resolver()));
+  for (const type of ["ruleset-name", "ruleset-path", "session-url"]) rejects(b, listWith({ ...token, type }), `query ${type}`);
+  for (const flag of [false, "true", 1]) rejects(b, listWith({ ...token, resolveOnlyAfterDurableProof: flag }), `proof flag ${flag}`);
+  const publish = row("release/v1/publish");
+  const bodyWith = (rulesetName) => ({ ...publish, request: { ...publish.request, body: { json: { ...publish.request.body.json, rulesetName } } } });
+  assert.doesNotThrow(() => b.prepare(bodyWith({ ...publish.request.body.json.rulesetName }), resolver()));
+  for (const type of ["generation", "metageneration", "update-time", "page-token", "download-token", "ruleset-path"]) rejects(b, bodyWith({ ...publish.request.body.json.rulesetName, type }), `body ${type}`);
+  const source = row("ruleset/v1/read-source");
+  rejects(b, { ...source, request: { ...source.request, path: VALUES["ruleset-path"] } }, "path reference beside a literal path");
+});
+
+test("a row must be a manifest row of a family this module carries, with a known credential", async () => {
+  const b = await builder();
+  const r = row("management/control-0/baseline-metadata");
+  assert.doesNotThrow(() => b.prepare({ ...r }, resolver()));
+  for (const family of ["auth", "credential-cache"]) rejects(b, { ...r, family }, family);
+  for (const id of ["management/control-0/unknown", `${r.id} `]) rejects(b, { ...r, id }, id);
+  for (const credential of ["root", "", "Admin", undefined]) rejects(b, { ...r, request: { ...r.request, credential } }, String(credential));
+});
+
+test("the binding's bucket and prefix must be well formed", async () => {
+  const { createTargetBuilder } = await load();
+  const withBinding = (delta) => ({ manifest: { ...manifest, binding: { ...manifest.binding, ...delta } }, digestSalt: salt });
+  assert.doesNotThrow(() => createTargetBuilder(withBinding({ prefix: "STORAGE-RULES/other-run/", bucket: "other.bucket-1" })));
+  for (const delta of [{ prefix: "other/" }, { prefix: "STORAGE-RULES/Run/" }, { prefix: "STORAGE-RULES/run" }, { prefix: "STORAGE-RULES/a/b/" }, { prefix: "STORAGE-RULES//" }, { bucket: "Bad_Bucket" }, { bucket: "ab" }, { bucket: "-bucket" }, { bucket: "bucket/x" }]) {
+    assert.throws(() => createTargetBuilder(withBinding(delta)), /invalid target builder options/, JSON.stringify(delta));
+  }
+});
+
+test("query parameters are closed: no empty list, no control character, no oversized value and no prototype key", async () => {
+  const b = await builder();
+  const perms = row("preflight/bucket/permissions");
+  const permsWith = (permissions) => ({ ...perms, request: { ...perms.request, query: { permissions } } });
+  assert.doesNotThrow(() => b.prepare(permsWith(["storage.buckets.get", "x".repeat(2048)]), resolver()));
+  for (const permissions of [[], ["storage.buckets.get\n"], ["a\x00b"], ["a\x7fb"], ["x".repeat(2049)], "x".repeat(2049)]) rejects(b, permsWith(permissions), JSON.stringify(permissions).slice(0, 40));
+  // An own "__proto__" key would set the prototype of the parsed query instead of adding a key, and so skip the route's closed key set.
+  const media = row("management/control-0/baseline-media");
+  rejects(b, { ...media, request: { ...media.request, query: JSON.parse('{"alt":"media","__proto__":"x"}') } }, "__proto__");
+  for (const key of ["1x", "a-b", "_x", "x".repeat(65)]) rejects(b, { ...media, request: { ...media.request, query: { alt: "media", [key]: "1" } } }, key);
+});
+
+test("a resumable session URL must name this row's own object, and that object must be owned", async () => {
+  const b = await builder();
+  const finalize = manifest.rows.find((r) => r.request.headers["x-goog-upload-command"] === "upload, finalize");
+  const at = (objectName) => ({ ...finalize, request: { ...finalize.request, objectName } });
+  const fresh = `${binding.prefix}fresh/x.bin`;
+  assert.doesNotThrow(() => b.prepare(at(fresh), () => sessionUrl(fresh)));
+  rejects(b, finalize, "another owned object", () => sessionUrl(finalize.request.objectName, { name: fresh }));
+  rejects(b, at("outside/x.bin"), "unowned object", () => sessionUrl("outside/x.bin"));
+  rejects(b, at(binding.prefix), "bare prefix", () => sessionUrl(binding.prefix));
+});
+
+test("a request that names no project on its path is still billed only to a sandbox project", async () => {
+  const b = await builder();
+  const seed = row("management/control-0/seed");
+  for (const project of ["fireemu-oracle-query", "fireemu-oracle-idp", undefined]) assert.doesNotThrow(() => b.prepare({ ...seed, request: { ...seed.request, project } }, resolver()), String(project));
+  for (const project of ["another-project", "fireemu-oracle-sbx", "", null, 7, "fireemu-oracle-query\n"]) rejects(b, { ...seed, request: { ...seed.request, project } }, String(project));
+});
+
+test("a row refused for its method, origin, credential, family or id never reaches the resolver", async () => {
+  const b = await builder();
+  const del = row("management/control-0/delete");
+  const log = [];
+  b.prepare(del, resolver(log));
+  assert.deepEqual(log, [["generation", del.id]]);
+  const refused = [...["PUT", "HEAD", "get", "OPTIONS", undefined].map((method) => ({ ...del, request: { ...del.request, method } })), { ...del, request: { ...del.request, origin: 7 } }, { ...del, request: { ...del.request, credential: "root" } }, { ...del, family: "auth" }, { ...del, id: "management/control-0/unknown" }];
+  for (const r of refused) {
+    const calls = [];
+    rejects(b, r, JSON.stringify([r.id, r.family, r.request.method, r.request.origin, r.request.credential]), resolver(calls));
+    assert.deepEqual(calls, [], r.request.method);
+  }
 });

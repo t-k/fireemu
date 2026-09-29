@@ -8,6 +8,10 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ## [Unreleased]
 
+### Fixed
+
+- The npm launcher registers its SIGTERM and SIGINT handlers before it starts the daemon. A signal that reached it in the instant between the two could kill the launcher and leave the daemon running.
+
 ## [0.9.0] - 2026-09-29
 
 Auth tenants and blocking functions (AUTH-TENANT-BLOCKING) were measured against a real Identity Platform project on 2026-09-27 and 2026-09-28; the items that cite a sandbox recording without naming another parent come from those runs. Each item names the profiles it affects.

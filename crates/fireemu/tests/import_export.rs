@@ -2601,6 +2601,8 @@ fn private_and_tenant_config_members_survive_the_round_trip() {
     let policy = r#"{"passwordPolicyConfig":{"passwordPolicyEnforcementState":"ENFORCE","passwordPolicyVersions":[{"customStrengthOptions":{"minPasswordLength":8,"containsNumericCharacter":false}}]}}"#;
     let quota = r#"{"quota":{"signUpQuotaConfig":{"quota":"10","startTime":"2026-09-25T00:00:00Z","quotaDuration":"3600s"}}}"#;
     let tenant_body = r#"{"displayName":"members","monitoring":{"requestLogging":{"enabled":true}},"emailPrivacyConfig":{"enableImprovedEmailPrivacy":false},"client":{"permissions":{"disabledUserSignup":false}}}"#;
+    // `printf '%s\n'`, not `echo`: a POSIX `sh` (dash, macOS `/bin/sh`) expands the `\n` inside a
+    // JSON string that `echo` prints, which splits the document over two lines.
     let write = format!(
         r#"set -e
 curl -s -X PATCH "{config}?updateMask=multiTenant.allowTenants" {admin} -d '{{"multiTenant":{{"allowTenants":true}}}}' >/dev/null
@@ -2608,9 +2610,9 @@ curl -s -X PATCH "{config}?updateMask=passwordPolicyConfig" {admin} -d '{policy}
 curl -s -X PATCH "{config}?updateMask=quota.signUpQuotaConfig" {admin} -d '{quota}' >/dev/null
 tenant=$(curl -s -X POST "{tenants}" {admin} -d '{tenant_body}' | sed -n 's/.*"name":"projects\/demo-export\/tenants\/\([^"]*\)".*/\1/p')
 curl -s -X PATCH "{tenants}/$tenant?updateMask=passwordPolicyConfig" {admin} -d '{policy}' >/dev/null
-echo "TENANT $tenant"
-echo "CONFIG $(curl -s "{config}" {admin})"
-echo "DOC $(curl -s "{tenants}/$tenant" {admin})""#
+printf '%s\n' "TENANT $tenant"
+printf '%s\n' "CONFIG $(curl -s "{config}" {admin})"
+printf '%s\n' "DOC $(curl -s "{tenants}/$tenant" {admin})""#
     );
     let output = exec()
         .args(["--only", "auth", "--export-on-exit"])
@@ -2652,7 +2654,7 @@ echo "DOC $(curl -s "{tenants}/$tenant" {admin})""#
     );
 
     let read = format!(
-        r#"echo "CONFIG $(curl -s "{config}" {admin})"; echo "DOC $(curl -s "{tenants}/{tenant}" {admin})""#
+        r#"printf '%s\n' "CONFIG $(curl -s "{config}" {admin})"; printf '%s\n' "DOC $(curl -s "{tenants}/{tenant}" {admin})""#
     );
     let again = exec()
         .args(["--only", "auth", "--import"])

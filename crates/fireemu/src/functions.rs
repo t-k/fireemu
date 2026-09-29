@@ -3341,7 +3341,7 @@ pub struct BlockingAuthBridge {
     /// Whether Identity Platform's email and SMS events are served (the strict profile; the
     /// official emulator serves `beforeCreate` and `beforeSignIn` only).
     send_events: bool,
-    /// When each event's trigger last changed ([`BlockingAuthEvent::ALL`] order): when the
+    /// When each event's trigger last changed ([`BlockingAuthEvent::ALL`](fireemu_core_functions::manifest::BlockingAuthEvent::ALL) order): when the
     /// bridge was built, or when a settings update changed that event's selection.
     trigger_times: RwLock<[fireemu_core_types::time::LogicalInstant; 4]>,
 }

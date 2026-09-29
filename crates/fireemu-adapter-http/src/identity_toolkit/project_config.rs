@@ -545,7 +545,7 @@ fn valid_update_time(text: &str) -> bool {
 
 /// The written config members of a project, as `(member, JSON text)` in member order, for an
 /// export: the public ones, then the private ones the Admin config reports from
-/// ([`EXPORTED_PRIVATE_MEMBERS`], named without their underscore). An import restores them
+/// (`EXPORTED_PRIVATE_MEMBERS`, named without their underscore). An import restores them
 /// ([`restored_config_members`]).
 #[must_use]
 pub fn exportable_config_members(
@@ -567,7 +567,7 @@ pub fn exportable_config_members(
 /// switch derived from `multiTenant`, become exactly the export's; other private members of
 /// `current` are kept. Each exported public member is parsed and validated as a config write of
 /// that member is, and stored as that write stores it; a private one must be a value a write
-/// could have stored ([`valid_private_member`]). The checks are the emulator profile's: a value
+/// could have stored (`valid_private_member`). The checks are the emulator profile's: a value
 /// either profile could have stored is restored. `Err` names the first member refused.
 pub fn restored_config_members(
     project: &str,

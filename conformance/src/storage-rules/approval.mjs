@@ -1,5 +1,5 @@
 import { DELEGATION_SUBJECTS, scanRevocations } from "./ledger-revocation.mjs";
-import { DRAFT_REQUEST_LIMITS } from "./request-counter.mjs";
+import { DECLARED_REQUESTS_PER_RECORDING } from "./request-counter.mjs";
 
 const PINS = ["packetSha256", "sourceCommit", "runnerSha256", "manifestSha256", "fixtureSchemaSha256"];
 const COORDINATOR = "Claude（委任。枠の内の承認し直し）";
@@ -7,7 +7,7 @@ const DELEGATED_ENVELOPE_ACTOR = "Claude（委任。オーナーの裁量の委�
 const DELEGATION_REFERENCE = `2026-09-28 ${DELEGATION_SUBJECTS.send}`;
 export const DRAFT_STAGE3_APPROVAL_LIMITS = Object.freeze({
   projects: Object.freeze(["fireemu-oracle-idp", "fireemu-oracle-query"]),
-  maxRequests: DRAFT_REQUEST_LIMITS.maxRequests * 2,
+  maxRequests: DECLARED_REQUESTS_PER_RECORDING * 2,
   reserveUsd: 2,
 });
 

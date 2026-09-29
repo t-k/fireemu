@@ -10,7 +10,7 @@ const packet = {
   manifestSha256: "d".repeat(64),
   fixtureSchemaSha256: "e".repeat(64),
   projects: ["fireemu-oracle-idp", "fireemu-oracle-query"],
-  maxRequests: 13296,
+  maxRequests: 12328,
   reserveUsd: 2,
 };
 const pins = ["packetSha256", "sourceCommit", "runnerSha256", "manifestSha256", "fixtureSchemaSha256"];
@@ -261,7 +261,7 @@ test("project objects are refused without calling toString", async () => {
 });
 
 for (const [key, value] of [
-  ["maxRequests", "NaN"], ["maxRequests", "Infinity"], ["maxRequests", "1e9"], ["maxRequests", "13296.5"],
+  ["maxRequests", "NaN"], ["maxRequests", "Infinity"], ["maxRequests", "1e9"], ["maxRequests", "12328.5"],
   ["reserveUsd", "NaN"], ["reserveUsd", "Infinity"], ["reserveUsd", "2e0"],
 ]) {
   test(`an envelope with ${key}=${value} is refused`, async () => {
@@ -302,7 +302,7 @@ test("a revoked envelope cannot be revived by a later coordinator decision", asy
   assert.throws(() => validate({ ledgerText, packet, review: { ...review, envelopeId, withinEnvelope: true } }), /approval revoked/);
 });
 
-for (const [key, value] of [["project", "fireemu-oracle-query"], ["maxRequests", "13295"], ["reserveUsd", "1.999999"]]) {
+for (const [key, value] of [["project", "fireemu-oracle-query"], ["maxRequests", "12327"], ["reserveUsd", "1.999999"]]) {
   test(`an owner envelope cannot be exceeded in ${key}`, async () => {
     const validate = await load();
     const ledgerText = `${envelope({ [key]: value })}\n${decision({ actor: coordinator, values: { envelopeId } })}`;
@@ -512,4 +512,14 @@ test("a malformed or duplicated target row that revokes nothing is still refused
   assert.throws(() => validate({ ledgerText: malformed, packet, review }), /malformed target ledger row/);
   const duplicated = decision().replace("decision=APPROVE", "decision=APPROVE; decision=APPROVE");
   assert.throws(() => validate({ ledgerText: duplicated, packet, review }), /duplicate ledger field/);
+});
+
+test("the approved request limit is the declared ID count per recording, doubled for two recordings", async () => {
+  const counter = await import("./storage-rules/request-counter.mjs");
+  const approval = await import("./storage-rules/approval.mjs");
+  assert.equal(counter.DECLARED_REQUESTS_PER_RECORDING, 6164);
+  assert.equal(approval.DRAFT_STAGE3_APPROVAL_LIMITS.maxRequests, 2 * 6164);
+  assert.equal(approval.DRAFT_STAGE3_APPROVAL_LIMITS.maxRequests, 12328);
+  const validate = await load();
+  assert.throws(() => validate({ ledgerText: decision(), packet: { ...packet, maxRequests: 13296 }, review }), /runner limit mismatch/);
 });

@@ -6,7 +6,7 @@ import { buildCorpus } from "./storage-rules/corpus.mjs";
 import { CREDENTIAL_CACHE_REQUEST_IDS } from "./storage-rules/credential-cache.mjs";
 import { buildDeclaredRequestManifest } from "./storage-rules/manifest.mjs";
 import { buildFullRequestManifest } from "./storage-rules/full-manifest.mjs";
-import { createStage3RequestCounter } from "./storage-rules/request-counter.mjs";
+import { createStage3RequestCounter, DECLARED_REQUESTS_PER_RECORDING } from "./storage-rules/request-counter.mjs";
 
 const closure = JSON.parse(readFileSync(new URL("../../spec/compatibility/closure/STORAGE-RULES.json", import.meta.url)));
 const options = { runId: "local-run", sourceCommit: "a".repeat(40), queryProjectNumber: "1".repeat(12), idpProjectNumber: "2".repeat(12), queryApiKeyId: "00000000-0000-4000-8000-000000000001", idpApiKeyId: "00000000-0000-4000-8000-000000000002" };
@@ -20,6 +20,7 @@ test("full draft has one finite ID per attempt and stays inside both fixed caps"
   assert.equal(m.controllerReady, false);
   assert.deepEqual(m.counts, { normal: 4630, recovery: 1534, preflight: 19, total: 6164 });
   assert.deepEqual(m.limits, { normal: 4648, recovery: 2000, total: 6648 });
+  assert.equal(m.counts.total, DECLARED_REQUESTS_PER_RECORDING);
   assert.equal(m.rows.length, 6164);
   assert.equal(new Set(m.rows.map((r) => r.id)).size, 6164);
   assert.ok(m.rows.every((r) => /^[A-Za-z0-9][A-Za-z0-9._/-]{0,159}$/.test(r.id) && r.request.capture.body === "raw-bytes"));

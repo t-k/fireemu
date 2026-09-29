@@ -197,6 +197,25 @@ test("an approval that is not valid takes no lock and enters nothing", async (t)
   assert.deepEqual(await lockFiles(dirs), []);
 });
 
+test("the options are exactly the four named fields and the locks and packet are plain records with project lists, checked before any lock is taken", async (t) => {
+  const { withLockedAdmission } = await load();
+  const dirs = await scratch(t);
+  const { review: renamed, ...rest } = params(dirs);
+  const cases = {
+    "a renamed field": { ...rest, approval: renamed },
+    "locks missing": params(dirs, { locks: null }), "locks an array": params(dirs, { locks: [] }), "packet missing": params(dirs, { packet: null }),
+    "lock projects not a list": params(dirs, {}, { projects: packet.projects.join(",") }),
+    "packet projects not a list": params(dirs, { packet: { ...structuredClone(packet), projects: packet.projects.join(",") } }),
+    "lock projects a string of the same characters": params(dirs, { packet: { ...structuredClone(packet), projects: [..."ab"] } }, { projects: "ba" }),
+  };
+  for (const [name, value] of Object.entries(cases)) {
+    let entered = false;
+    await assert.rejects(withLockedAdmission(value, async () => { entered = true; }), /invalid locked run options/, name);
+    assert.equal(entered, false, name);
+    assert.deepEqual(await lockFiles(dirs), [], name);
+  }
+});
+
 test("a stop is recovered under the same locks and they are released only after the recovery closed clean", async (t) => {
   const { withLockedAdmission, confirmCleanClose } = await load();
   const dirs = await scratch(t);

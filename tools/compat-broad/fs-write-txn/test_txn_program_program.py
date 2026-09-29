@@ -50,8 +50,7 @@ def test_step_defaults_are_filled_and_the_writer_keeps_its_own_deadline(program,
     by_id = {step["id"]: step for step in value["steps"]}
     assert by_id["r/begin"]["deadlineMs"] == 10000
     assert by_id["r/writer"]["deadlineMs"] == 30000
-    assert by_id["r/rollback-again"]["finished"] is True
-    assert by_id["r/rollback"]["finished"] is False
+    assert "finished" not in by_id["r/rollback"]
 
 
 @pytest.mark.parametrize(
@@ -126,7 +125,7 @@ def _step_change(index, **fields):
         ("duplicate case", lambda t: _broken(t, steps=_step_change(6, caseId="rest/fail-commit"))),
         ("caps not the step count", lambda t: _broken(t, caps={**t["caps"], "observation": 18})),
         ("too many tokens", lambda t: _broken(t, maxTokens=1)),
-        ("finished on non rollback", lambda t: _broken(t, steps=_step_change(4, finished=True))),
+        ("undeclared key", lambda t: _broken(t, steps=_step_change(4, finished=True))),
         ("read with writes", lambda t: _broken(t, steps=_step_change(4, writes=({"document": "a", "state": "held", "exists": True},)))),
         ("envelope of another program", lambda t: _broken(t, envelopeId="FS-TRANSACTION-p10-grpc-boundary-002")),
         ("unnumbered envelope", lambda t: _broken(t, envelopeId="FS-TRANSACTION-toy-failed-commit")),

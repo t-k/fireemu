@@ -26,7 +26,7 @@ WRITER_DEADLINE_MS = 30000
 _IDENTITY = re.compile(r"[a-f0-9]{32}\Z")
 _LABEL = re.compile(r"[a-z0-9][a-z0-9-]{0,47}\Z")
 _STEP_KEYS = ("id", "transport", "rpc", "document", "tokenInput", "tokenOutput", "writes", "caseId", "role", "allow")
-_OPTIONAL_STEP_KEYS = ("deadlineMs", "finished")
+_OPTIONAL_STEP_KEYS = ("deadlineMs",)
 
 
 def outcome_class(code):
@@ -58,7 +58,6 @@ def _step(row):
     step["writes"] = [dict(write) for write in row["writes"]]
     step["allow"] = sorted(row["allow"]) if isinstance(row["allow"], (list, tuple)) and len(set(row["allow"])) == len(row["allow"]) else _bad("allowed codes repeat or are not a list")
     step["deadlineMs"] = row.get("deadlineMs", DEFAULT_DEADLINE_MS)
-    step["finished"] = row.get("finished", False)
     return step
 
 
@@ -93,15 +92,13 @@ def _validate_table(table):
             _bad(f"{step['id']} names an unknown document")
         if not step["allow"] or any(type(code) is not int or not 0 <= code <= 16 or code in UNKNOWN_CODES for code in step["allow"]):
             _bad(f"{step['id']} allows no code or an unknown-outcome code")
-        if type(step["deadlineMs"]) is not int or not 1 <= step["deadlineMs"] <= (WRITER_DEADLINE_MS if step["role"] == "outside-writer" else DEFAULT_DEADLINE_MS) or type(step["finished"]) is not bool:
-            _bad(f"{step['id']} has a bad deadline or finished flag")
+        if type(step["deadlineMs"]) is not int or not 1 <= step["deadlineMs"] <= (WRITER_DEADLINE_MS if step["role"] == "outside-writer" else DEFAULT_DEADLINE_MS):
+            _bad(f"{step['id']} has a bad deadline")
         if step["caseId"] is not None:
             if step["role"] not in ("observation", "outside-writer") or not isinstance(step["caseId"], str) or step["caseId"] in cases:
                 _bad(f"{step['id']} has a case id that is misplaced or repeats")
             cases.add(step["caseId"])
         rpc = step["rpc"]
-        if step["finished"] and rpc != "Rollback":
-            _bad(f"{step['id']} marks a finished token on a non-rollback")
         if rpc == "BeginTransaction":
             if step["tokenInput"] is not None or not isinstance(step["tokenOutput"], str) or step["tokenOutput"] in issued or step["document"] is not None or step["writes"]:
                 _bad(f"{step['id']} is not a fresh begin")

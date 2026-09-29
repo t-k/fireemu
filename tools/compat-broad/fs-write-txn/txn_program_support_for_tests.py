@@ -34,8 +34,6 @@ def _step(values):
     step["writes"] = tuple({"document": document, "state": state, "exists": exists} for document, state, exists in step["writes"])
     if step["role"] == "outside-writer":
         step["deadlineMs"] = 30000
-    if step["id"].endswith("/rollback-again"):
-        step["finished"] = True
     return step
 
 

@@ -69,6 +69,7 @@ class Ledger:
         self.docs = {role: {"status": "unexamined", "state": None, "possible": [], "stamp": None} for role in plan["documents"]}
         self.unknown_starts, self.unknown_rollbacks, self.unknown_commits = set(), set(), set()
         self._prior = {}
+        self._probes = set()
 
     def snapshot(self):
         return {
@@ -119,10 +120,8 @@ class Ledger:
             _role, entry = self._token_for(request["transaction"])
             if entry is None:
                 raise ValueError("rollback names no issued token")
-            probe = bool(step and step["finished"])
-            if probe and entry["state"] not in RESOLVED_TOKENS:
-                raise ValueError("a finished-token probe needs a token an answer has finished")
-            if not probe and entry["state"] != "open":
+            # A declared rollback of a token an answer already finished is a probe; only an open token is released.
+            if step is None and entry["state"] != "open":
                 raise ValueError("token release cannot repeat")
 
     def before(self, site, transport, method, request, step):
@@ -132,9 +131,11 @@ class Ledger:
             self.unknown_starts.add(site)
         elif method == "Rollback":
             role, entry = self._token_for(request["transaction"])
-            if not (step and step["finished"]):
+            if entry["state"] == "open":
                 self.unknown_rollbacks.add(role)
                 entry["state"] = "unconfirmed-release"
+            else:
+                self._probes.add(site)
         elif method == "Commit":
             self.unknown_commits.add(site)
             self._prior[site] = {}
@@ -196,7 +197,8 @@ class Ledger:
                 raise ValueError("version deletion refused")
         elif method == "Rollback":
             role, entry = self._token_for(request["transaction"])
-            probe = bool(step and step["finished"])
+            probe = site in self._probes
+            self._probes.discard(site)
             if not probe:
                 self.unknown_rollbacks.discard(role)
                 if code == 0:

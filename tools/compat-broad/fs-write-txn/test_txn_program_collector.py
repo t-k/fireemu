@@ -23,11 +23,12 @@ class Clock:
 class Service:
     """A stand-in for Firestore over both transports; each knob is one production answer a table may allow."""
 
-    def __init__(self, clock, *, fail_code=9, writer_code=0, writer_applies=None, rollback_code=0, repeat_rollback_code=0, after_commit_rollback_code=10, fail_at=None, foreign_marker=False, duplicate_tokens=False, corrupt=None, existing=None):
+    def __init__(self, clock, *, fail_code=9, writer_code=0, writer_applies=None, rollback_code=0, repeat_rollback_code=0, after_commit_rollback_code=10, fail_at=None, foreign_marker=False, duplicate_tokens=False, corrupt=None, existing=None, dead_on_failure=False, dead_rollback_code=10):
         self.clock, self.fail_code, self.writer_code, self.rollback_code = clock, fail_code, writer_code, rollback_code
         self.writer_applies = writer_applies if writer_applies is not None else writer_code == 0
         self.repeat_rollback_code, self.after_commit_rollback_code = repeat_rollback_code, after_commit_rollback_code
         self.fail_at, self.foreign_marker, self.duplicate_tokens, self.corrupt = fail_at, foreign_marker, duplicate_tokens, corrupt
+        self.dead_on_failure, self.dead_rollback_code = dead_on_failure, dead_rollback_code
         self.calls, self.documents, self.tokens, self.version = [], {}, {}, 0
         if existing:
             self.documents[existing] = {"name": existing, "fields": {}, "version": self._bump()}
@@ -54,6 +55,8 @@ class Service:
             self.tokens[value] = "open"
             return self._receipt(transport, 0, response={"transaction": value})
         if method == "GetDocument":
+            if token and self.tokens.get(token) == "dead":
+                return self._receipt(transport, 10, details="The referenced transaction has expired or is no longer valid.")
             document = self.documents.get(request["name"])
             if document is None:
                 return self._receipt(transport, 5, details="not found")
@@ -66,6 +69,7 @@ class Service:
         if method == "Rollback":
             state = self.tokens.get(token)
             if state is None: return self._receipt(transport, 3, details="unknown transaction")
+            if state == "dead": return self._receipt(transport, self.dead_rollback_code, details="" if self.dead_rollback_code == 0 else "expired", response={} if self.dead_rollback_code == 0 else None)
             if state == "open":
                 if self.rollback_code == 0: self.tokens[token] = "rolled-back"
                 return self._receipt(transport, self.rollback_code, details="" if self.rollback_code == 0 else "refused", response={} if self.rollback_code == 0 else None)
@@ -89,7 +93,10 @@ class Service:
                 return self._receipt(transport, 4, details="deadline", complete=False)
             if self.writer_code != 0 or failing:
                 return self._receipt(transport, self.writer_code or 9, details="contended")
+        elif token and self.tokens.get(token) == "dead":
+            return self._receipt(transport, 10, details="The referenced transaction has expired or is no longer valid.")
         elif failing and self.fail_code != 0:
+            if self.dead_on_failure: self.tokens[token] = "dead"
             return self._receipt(transport, self.fail_code, details="precondition")
         elif self.fail_code == 0 and token and any(w["currentDocument"]["exists"] and w["update"]["name"] not in self.documents for w in writes):
             for w in writes: w["currentDocument"]["exists"] = False

@@ -23,7 +23,7 @@ class Clock:
 class Service:
     """A stand-in for Firestore over both transports; each knob is one production answer a table may allow."""
 
-    def __init__(self, clock, *, fail_code=9, writer_code=0, writer_applies=None, rollback_code=0, repeat_rollback_code=0, after_commit_rollback_code=10, fail_at=None, foreign_marker=False, duplicate_tokens=False, corrupt=None, existing=None, dead_on_failure=False, dead_rollback_code=10, finished_reads_refused=False, locks=False, partial_publish=False, ro_snapshot="begin", ro_empty_refused=False):
+    def __init__(self, clock, *, fail_code=9, writer_code=0, writer_applies=None, rollback_code=0, repeat_rollback_code=0, after_commit_rollback_code=10, fail_at=None, foreign_marker=False, duplicate_tokens=False, corrupt=None, existing=None, dead_on_failure=False, dead_rollback_code=10, finished_reads_refused=False, locks=False, partial_publish=False, ro_snapshot="begin", ro_empty_refused=False, expiry=False, lifetime=270, idle=120):
         self.clock, self.fail_code, self.writer_code, self.rollback_code = clock, fail_code, writer_code, rollback_code
         self.writer_applies = writer_applies if writer_applies is not None else writer_code == 0
         self.repeat_rollback_code, self.after_commit_rollback_code = repeat_rollback_code, after_commit_rollback_code
@@ -33,6 +33,7 @@ class Service:
         self.locks, self.partial_publish, self.locked = locks, partial_publish, {}
         self.ro_snapshot, self.readonly, self.snapshots = ro_snapshot, set(), {}
         self.ro_empty_refused = ro_empty_refused
+        self.expiry, self.lifetime, self.idle, self.tstart, self.tlast = expiry, lifetime, idle, {}, {}
         self.genesis, self.hist, self.ro_time = {}, {}, {}
         self.calls, self.documents, self.tokens, self.version = [], {}, {}, 0
         if existing:
@@ -63,9 +64,17 @@ class Service:
         if len(self.calls) == self.fail_at:
             return self._receipt(transport, 14, details="lost", complete=False)
         token = request.get("transaction")
+        if self.expiry and token in self.tokens:
+            now = self.clock.now()
+            if self.tokens[token] == "open" and (now - self.tstart[token] > self.lifetime or now - self.tlast[token] > self.idle):
+                self.tokens[token] = "dead"
+                self.locked.pop(token, None)
+            if self.tokens[token] == "open":
+                self.tlast[token] = now
         if method == "BeginTransaction":
             value = base64.b64encode(f"issued-{0 if self.duplicate_tokens else len(self.tokens)}".encode()).decode()
             self.tokens[value] = "open"
+            self.tstart[value] = self.tlast[value] = self.clock.now()
             if request["options"].get("readOnly", {}).get("readTime"):
                 self.ro_time[value] = request["options"]["readOnly"]["readTime"]
             if "readOnly" in request["options"]:
@@ -109,6 +118,7 @@ class Service:
             if "newTransaction" in request:
                 minted = base64.b64encode(f"issued-{0 if self.duplicate_tokens else len(self.tokens)}".encode()).decode()
                 self.tokens[minted] = "open"
+                self.tstart[minted] = self.tlast[minted] = self.clock.now()
                 if "readOnly" in request["newTransaction"]:
                     self.readonly.add(minted)
                     if self.ro_snapshot == "begin": self.snapshots[minted] = copy.deepcopy(self.documents)

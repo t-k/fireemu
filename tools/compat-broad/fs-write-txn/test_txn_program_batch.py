@@ -405,3 +405,50 @@ def test_a_read_write_release_refused_without_the_gone_text_still_stays_unresolv
     table_["steps"] = tuple(dict(s, allow=(3, 5, 9, 10)) if s["id"] == "rest/ro-write" else s for s in table_["steps"])
     result, service = record_ro(table_, ro_snapshot="latest", rollback_code=5)
     assert not result["complete"] or {entry["state"] for entry in result["tokens"].values()} != {"released-refused"}
+
+
+# --- waits and thresholds in a table ---
+
+def waiting(table_, step_id, seconds):
+    table_["steps"] = tuple({**step, "waitSeconds": seconds} if step["id"] == step_id else step for step in table_["steps"])
+    return table_
+
+
+def test_a_wait_before_a_token_step_or_an_outside_writer_compiles_and_moves_the_digest():
+    base = program.corpus_digest(support.TABLE)
+    for step_id in ("r/read", "r/writer"):
+        changed = waiting(copy.deepcopy(support.TABLE), step_id, 30)
+        plan = program.compile_plan(changed, NONCE, OWNER)
+        assert plan["waits"] == {step_id: 30} and program.corpus_digest(changed) != base
+        assert next(step for step in plan["steps"] if step["id"] == step_id)["waitSeconds"] == 30
+
+
+@pytest.mark.parametrize("label,change", [
+    ("zero seconds", lambda t: waiting(t, "r/read", 0)),
+    ("a negative wait", lambda t: waiting(t, "r/read", -5)),
+    ("over the maximum", lambda t: waiting(t, "r/read", 601)),
+    ("a boolean", lambda t: waiting(t, "r/read", True)),
+    ("a fraction", lambda t: waiting(t, "r/read", 1.5)),
+    ("a string", lambda t: waiting(t, "r/read", "30")),
+    ("before the first step", lambda t: waiting(t, "setup/absence-a", 30)),
+    ("outside a transaction and not a writer", lambda t: waiting(t, "r/plain-read", 30)),
+    ("thresholds of another shape", lambda t: {**t, "thresholds": {"idleSeconds": 60}}),
+    ("a zero threshold", lambda t: {**t, "thresholds": {"totalAgeSeconds": 0}}),
+    ("a boolean threshold", lambda t: {**t, "thresholds": {"totalAgeSeconds": True}}),
+    ("thresholds that are not a mapping", lambda t: {**t, "thresholds": [270]}),
+])
+def test_a_malformed_wait_or_threshold_never_compiles(label, change):
+    with pytest.raises(ValueError, match="table"):
+        program.compile_plan(change(copy.deepcopy(support.TABLE)), NONCE, OWNER)
+
+
+def test_thresholds_appear_in_the_plan_and_the_digest_only_when_the_table_has_them():
+    base = program.compile_plan(support.TABLE, NONCE, OWNER)
+    assert "thresholds" not in base and base["waits"] == {}
+    changed = {**copy.deepcopy(support.TABLE), "thresholds": {"totalAgeSeconds": 270}}
+    plan = program.compile_plan(changed, NONCE, OWNER)
+    assert plan["thresholds"] == {"totalAgeSeconds": 270} and plan["corpusDigest"] != base["corpusDigest"]
+    with pytest.raises(ValueError, match="closed|plan"):
+        program.validate_plan({**plan, "thresholds": {"totalAgeSeconds": 271}}, changed)
+    with pytest.raises(ValueError, match="closed|plan"):
+        program.validate_plan({key: value for key, value in plan.items() if key != "thresholds"}, changed)

@@ -56,6 +56,39 @@ def parse_time(value, transport):
     return seconds, int((fraction + "000000000")[:9])
 
 
+def interval(previous, current):
+    """Seconds between two requests, bounded by the previous one's response and the next one's dispatch (lower), and by
+    the previous one's dispatch and the next one's response (upper); both clocks must agree."""
+    check_timing(previous); check_timing(current)
+    lower = current["dispatchMonotonic"] - previous["responseMonotonic"]
+    upper = current["responseMonotonic"] - previous["dispatchMonotonic"]
+    if lower < 0 or _utc_seconds(current["dispatchUtc"]) < _utc_seconds(previous["responseUtc"]) or abs(lower - (_utc_seconds(current["dispatchUtc"]) - _utc_seconds(previous["responseUtc"]))) > 0.25 or abs(upper - (_utc_seconds(current["responseUtc"]) - _utc_seconds(previous["dispatchUtc"]))) > 0.25:
+        raise ValueError("interval clocks differ or moved backwards")
+    return {"lowerSeconds": lower, "upperSeconds": upper}
+
+
+def wait_projection(entry, thresholds):
+    """The part of a wait two independent recordings must agree on: the declared seconds and, against the table's
+    total-age threshold, whether the token was certainly younger, certainly older, or neither."""
+    shown = {"site": entry["site"], "seconds": entry["seconds"]}
+    if "totalAgeInterval" in entry and thresholds:
+        limit = thresholds["totalAgeSeconds"]
+        age = entry["totalAgeInterval"]
+        shown["ageClass"] = "BEFORE" if age["upperSeconds"] < limit else "AFTER" if age["lowerSeconds"] > limit else "INDETERMINATE"
+    return shown
+
+
+def wait_entry(step, previous, timing, tokens):
+    """What one wait left behind: the idle bounds before the request, and its token's total age bounds."""
+    entry = {"site": step["id"], "seconds": step["waitSeconds"], "previousSite": previous["site"], "previousTiming": copy.deepcopy(previous["timing"]), "currentTiming": copy.deepcopy(timing), "idleInterval": interval(previous["timing"], timing)}
+    if step["tokenInput"]:
+        entry["tokenRole"] = step["tokenInput"]
+        entry["totalAgeInterval"] = interval(tokens[step["tokenInput"]]["start"], timing)
+    if entry["idleInterval"]["lowerSeconds"] < step["waitSeconds"]:
+        raise ValueError("a wait did not last as long as declared")
+    return entry
+
+
 def _present(frame, key):
     """Whether a decoded entry sets `key` (a decoder may keep an unset member as null or an empty string)."""
     return frame.get(key) not in (None, "")
@@ -406,11 +439,12 @@ class Ledger:
 
 
 class Collector:
-    def __init__(self, plan, table, budget, wire, bearer, *, save, before_send=lambda: None, monotonic=time.monotonic, observation_deadline=None, utc=utc_now):
+    def __init__(self, plan, table, budget, wire, bearer, *, save, before_send=lambda: None, monotonic=time.monotonic, observation_deadline=None, utc=utc_now, sleep=time.sleep):
         validate_plan(plan, table)
         self.plan, self.table = copy.deepcopy(plan), table
         self.budget, self.wire, self.bearer, self.save, self.before_send = budget, wire, bearer, save, before_send
-        self.monotonic, self.utc = monotonic, utc
+        self.monotonic, self.utc, self.sleep = monotonic, utc, sleep
+        self.waits = []
         self.ledger = Ledger(self.plan)
         self.observation_deadline = observation_deadline or monotonic() + plan["observationSeconds"]
         self.deadline = self.observation_deadline
@@ -428,7 +462,7 @@ class Collector:
         return current
 
     def _state(self):
-        return {"kind": "txn-program-responsibility-v1", "plan": self.plan, **self.ledger.snapshot(), "pending": copy.deepcopy(self.pending), "rows": copy.deepcopy(self.rows), "cleanupRows": copy.deepcopy(self.cleanup_rows), "requests": self.budget.total}
+        return {"kind": "txn-program-responsibility-v1", "plan": self.plan, **self.ledger.snapshot(), "pending": copy.deepcopy(self.pending), "rows": copy.deepcopy(self.rows), "cleanupRows": copy.deepcopy(self.cleanup_rows), "requests": self.budget.total, **({"waits": copy.deepcopy(self.waits)} if self.plan["waits"] else {})}
 
     def _persist(self):
         try:
@@ -475,12 +509,39 @@ class Collector:
         self._persist()
         return result
 
+    def _wait(self, step):
+        """Idle for the declared seconds after a completed request, in one-second slices that re-check the phase."""
+        previous = self.rows[-1] if self.rows else None
+        if previous is None:
+            raise ValueError("a wait needs a preceding request")
+        target = self._now() + step["waitSeconds"]
+        need = max(13, step["deadlineMs"] / 1000 + 3)
+        while self._now() < target:
+            self.before_send()
+            current = self._now()
+            if self.deadline - current < (target - current) + need:
+                raise TimeoutError("a wait cannot fit the observation phase")
+            if current >= target:
+                break
+            self.sleep(min(1, target - current))
+            if self._now() <= current:
+                raise ValueError("the wait clock did not advance")
+        if self._now() - target > 1:
+            raise TimeoutError("a wait overshot its scheduling slack")
+        self._persist()
+
     def _observe(self):
         cursor = GraphCursor(self.plan, self.table)
         for declared in self.plan["steps"]:
             step = cursor.claim(declared["id"])
+            if "waitSeconds" in step:
+                self._wait(step)
+                previous = self.rows[-1]
             request = request_for_step(self.plan, step, self.ledger.token_values(), self.table, self.ledger.times())
             self._rpc(step["id"], step["transport"], step["rpc"], request, "observation", step=step)
+            if "waitSeconds" in step:
+                self.waits.append(wait_entry(step, previous, self.rows[-1]["timing"], self.ledger.tokens))
+                self._persist()
             for role in self.ledger.pending_release(step):
                 site = f"cleanup/token/{role}"
                 self._rpc(site, self.ledger.tokens[role]["transport"], "Rollback", self.ledger.release_request(role), "tokenCleanup")
@@ -553,6 +614,7 @@ class Collector:
             "failureType": failure,
             "sandboxRequests": self.budget.total,
             "phaseRequests": dict(self.budget.used),
+            **({"waits": copy.deepcopy(self.waits)} if self.plan["waits"] else {}),
         }
 
 
@@ -574,7 +636,7 @@ def projection(receipt, table):
         raise ValueError("native sequence differs")
     ledger = Ledger(plan)
     index, owed, queue, releases = 0, [], None, 0
-    observations, reads = [], []
+    observations, reads, waits = [], [], []
     previous_timing = None
     for row in sorted(rows, key=lambda row: row["sequence"]):
         check_timing(row.get("timing"))
@@ -590,6 +652,10 @@ def projection(receipt, table):
                 raise ValueError("closed request graph differs")
             ledger.before(site, transport, method, request, declared)
             ledger.after(site, transport, method, request, declared, result, row["timing"])
+            if "waitSeconds" in declared:
+                if index == 0:
+                    raise ValueError("a wait needs a preceding request")
+                waits.append(wait_entry(declared, steps[index - 1], row["timing"], ledger.tokens))
             if row.get("outcomeClass") != outcome_class(result["code"]):
                 raise ValueError("outcome class differs from its code")
             if declared["caseId"]:
@@ -626,7 +692,7 @@ def projection(receipt, table):
             ledger.after(site, transport, method, request, None, result, row["timing"])
         else:
             raise ValueError("undeclared native phase")
-    if index != len(steps) or owed or queue or releases != counts["tokenCleanup"] or not ledger.all_absent() or ledger.unresolved_tokens() or observations != receipt.get("observations") or ledger.snapshot()["tokens"] != receipt.get("tokens") or ledger.snapshot()["documents"] != receipt.get("documents"):
+    if index != len(steps) or owed or queue or releases != counts["tokenCleanup"] or not ledger.all_absent() or ledger.unresolved_tokens() or observations != receipt.get("observations") or ledger.snapshot()["tokens"] != receipt.get("tokens") or ledger.snapshot()["documents"] != receipt.get("documents") or (waits or receipt.get("waits")) and waits != receipt.get("waits"):
         raise ValueError("completion claims cannot be derived from native rows")
     if receipt.get("timingMode") != "wall-clock" or receipt.get("timingSource") != "parent-wire-envelope":
         raise ValueError("timing provenance differs")
@@ -646,4 +712,5 @@ def projection(receipt, table):
         "tokens": {role: {"transport": entry["transport"], "state": entry["state"]} for role, entry in ledger.tokens.items()},
         "expectedStates": {role: doc["state"] for role, doc in ledger.docs.items() if doc["state"] is not None},
         "cleanup": {"absent": True},
+        **({"waits": [wait_projection(entry, plan.get("thresholds")) for entry in waits]} if waits else {}),
     }

@@ -26,9 +26,10 @@ WRITER_DEADLINE_MS = 30000
 _IDENTITY = re.compile(r"[a-f0-9]{32}\Z")
 _LABEL = re.compile(r"[a-z0-9][a-z0-9-]{0,47}\Z")
 MAX_DOCUMENTS = 8
+MAX_WAIT_SECONDS = 600
 MAX_STATES = 32
 _STEP_KEYS = ("id", "transport", "rpc", "document", "tokenInput", "tokenOutput", "writes", "caseId", "role", "allow")
-_OPTIONAL_STEP_KEYS = ("deadlineMs", "documents", "mode", "readAt", "newTransaction")
+_OPTIONAL_STEP_KEYS = ("deadlineMs", "documents", "mode", "readAt", "newTransaction", "waitSeconds")
 
 
 def outcome_class(code):
@@ -67,6 +68,9 @@ def _step(row):
         step["readAt"] = dict(row["readAt"]) if isinstance(row["readAt"], dict) else _bad("readAt is not a mapping")
     if "newTransaction" in row:
         step["newTransaction"] = row["newTransaction"]
+    if "waitSeconds" in row:
+        # Idle time, in seconds, before this request is sent; only present on a step that waits.
+        step["waitSeconds"] = row["waitSeconds"]
     if "documents" in row:
         # Only a batch read names several documents; an absent key keeps every earlier table's digest.
         step["documents"] = list(row["documents"]) if isinstance(row["documents"], (list, tuple)) else _bad("batch documents are not a list")
@@ -90,6 +94,9 @@ def _validate_table(table):
         _bad("request caps are malformed")
     if any(type(table[key]) is not int or table[key] <= 0 for key in ("observationSeconds", "recoverySeconds", "maxTokens")):
         _bad("clock or token limits are malformed")
+    thresholds = table.get("thresholds")
+    if thresholds is not None and (not isinstance(thresholds, dict) or set(thresholds) != {"totalAgeSeconds"} or type(thresholds["totalAgeSeconds"]) is not int or thresholds["totalAgeSeconds"] <= 0):
+        _bad("thresholds are malformed")
     steps = [_step(row) for row in table["steps"]]
     if not steps or caps["observation"] != len(steps):
         _bad("the observation cap is not the step count")
@@ -112,6 +119,11 @@ def _validate_table(table):
             _bad(f"{step['id']} allows no code or an unknown-outcome code")
         if type(step["deadlineMs"]) is not int or not 1 <= step["deadlineMs"] <= (WRITER_DEADLINE_MS if step["role"] == "outside-writer" else DEFAULT_DEADLINE_MS):
             _bad(f"{step['id']} has a bad deadline")
+        if "waitSeconds" in step:
+            if type(step["waitSeconds"]) is not int or not 1 <= step["waitSeconds"] <= MAX_WAIT_SECONDS or index == 0:
+                _bad(f"{step['id']} has a wait that is not a whole number of seconds up to {MAX_WAIT_SECONDS}, or nothing to follow")
+            if step["tokenInput"] is None and step["role"] != "outside-writer":
+                _bad(f"{step['id']} waits outside a transaction and is not an outside writer")
         if step["caseId"] is not None:
             if step["role"] not in ("observation", "outside-writer") or not isinstance(step["caseId"], str) or step["caseId"] in cases:
                 _bad(f"{step['id']} has a case id that is misplaced or repeats")
@@ -207,10 +219,12 @@ def corpus_digest(table):
         "steps": steps,
         "documents": list(table["documents"]),
         "states": list(table["states"]),
-        "waits": {},
+        "waits": {step["id"]: step["waitSeconds"] for step in steps if "waitSeconds" in step},
         "transports": sorted({step["transport"] for step in steps}),
         "outcomeClasses": {step["id"]: [outcome_class(code) for code in step["allow"]] for step in steps},
     }
+    if table.get("thresholds"):
+        body["thresholds"] = dict(table["thresholds"])
     return hashlib.sha256(_canonical(body).encode()).hexdigest()
 
 
@@ -220,7 +234,7 @@ def compile_plan(table, nonce, owner_id):
     steps = _validate_table(table)
     database = f"projects/{PROJECT}/databases/{DATABASE}"
     caps = dict(table["caps"])
-    return {
+    plan = {
         "kind": "txn-program-plan-v1",
         "program": table["program"],
         "packetName": table["name"],
@@ -235,7 +249,7 @@ def compile_plan(table, nonce, owner_id):
         "maxTokens": table["maxTokens"],
         "maxUnresolvedTokens": 1,
         "releasePolicy": "rollback-zero-before-next-chain",
-        "waits": {},
+        "waits": {step["id"]: step["waitSeconds"] for step in steps if "waitSeconds" in step},
         "timing": "wall-clock",
         "caps": caps,
         "maxRequests": sum(caps.values()),
@@ -246,6 +260,9 @@ def compile_plan(table, nonce, owner_id):
         "sourceDigest": source_digest(table),
         "corpusDigest": corpus_digest(table),
     }
+    if table.get("thresholds"):
+        plan["thresholds"] = dict(table["thresholds"])
+    return plan
 
 
 def validate_plan(value, table):

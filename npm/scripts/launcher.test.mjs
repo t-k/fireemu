@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { constants, homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -277,3 +277,16 @@ for (const signal of ["SIGTERM", "SIGINT"]) {
     },
   );
 }
+
+test("the launcher registers its signal handlers before it spawns the daemon", () => {
+  // A SIGTERM or SIGINT that reaches the launcher between spawn() and process.on() would kill
+  // it with the default action and orphan the daemon. That window cannot be hit on demand, so
+  // the order is pinned: Node runs a handler on the event loop, after main() has returned, by
+  // which time the child exists.
+  const source = readFileSync(fileURLToPath(new URL("../fireemu/bin/fireemu.mjs", import.meta.url)), "utf8");
+  const main = source.slice(source.indexOf("function main()"));
+  const spawnAt = main.indexOf("spawn(binary.path");
+  const handlerAt = main.indexOf("process.on(signal");
+  assert.ok(spawnAt > 0 && handlerAt > 0, "main() spawns the daemon and registers signal handlers");
+  assert.ok(handlerAt < spawnAt, "the signal handlers must be registered before the daemon is spawned");
+});

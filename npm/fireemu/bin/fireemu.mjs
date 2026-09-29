@@ -116,10 +116,11 @@ function main() {
   ensureExecutable(binary.path);
   // Keep terminal I/O and the foreground process group intact. PID-directed signals only
   // reach this launcher, so forward them and wait for the daemon's own shutdown to finish.
-  const child = spawn(binary.path, process.argv.slice(2), {
-    stdio: "inherit",
-    windowsHide: false,
-  });
+  //
+  // The handlers are registered before the daemon is spawned: a signal that reached the launcher
+  // between spawn() and process.on() would kill it with the default action and orphan the daemon.
+  // Node runs a handler on the event loop, after main() has returned, so `child` exists by then.
+  let child;
   for (const signal of ["SIGTERM", "SIGINT"]) {
     process.on(signal, () => {
       // Windows delivers console Ctrl-C to the child directly; child.kill would forcefully
@@ -129,6 +130,10 @@ function main() {
       if (child.exitCode === null && child.signalCode === null) child.kill(signal);
     });
   }
+  child = spawn(binary.path, process.argv.slice(2), {
+    stdio: "inherit",
+    windowsHide: false,
+  });
   child.on("error", (error) => {
     if (child.pid) {
       // A failed signal delivery must not orphan a daemon that is still running.

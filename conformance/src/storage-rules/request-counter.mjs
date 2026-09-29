@@ -1,3 +1,4 @@
+import { STOP_CODES, tagged } from "./stop-codes.mjs";
 // Draft stage 3 envelope per recording. This module performs no HTTP or journal I/O.
 export const DRAFT_REQUEST_LIMITS = Object.freeze({ maxRequests: 6648, recoveryReserve: 2000 });
 // The bound a packet states: one finite ID per declared request in a recording. The 6,648 ceiling above is only the counter's hard cap.
@@ -119,7 +120,7 @@ export function createStage3RequestCounter(options = {}) {
         if (typeof accept !== "function") throw new Error("preflight acceptance check is required");
         if (!declaredPreflightIds.includes(operationId)) throw new Error("undeclared preflight request");
         result = await dispatch(operationId, transport, "preflight");
-        if (await accept(result) !== true) throw new Error(`preflight failed: ${operationId}`);
+        if (await accept(result) !== true) throw tagged(STOP_CODES.preflightFailed, `preflight failed: ${operationId}`);
       } catch (error) {
         if (mode === "preflight" && !busy) await writeTerminal("preflight-failed");
         throw error;

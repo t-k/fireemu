@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { lstat, mkdir, mkdtemp, open, rm } from "node:fs/promises";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import { STOP_CODES, tagged } from "./storage-rules/stop-codes.mjs";
 import { createCaptureJournal } from "./storage-rules/capture-journal.mjs";
 import { buildCorpus } from "./storage-rules/corpus.mjs";
 import { createController } from "./storage-rules/controller.mjs";
@@ -184,6 +185,35 @@ test("a capture failure after a send stops the run and no further request leaves
   assert.deepEqual([result.status, result.reason], ["stopped", "capture failed"]);
   assert.equal(h.gate.snapshot().poisoned, true);
   assert.equal(h.trace.filter((id) => !["started"].includes(id) && !id.startsWith("terminal")).length, 25);
+});
+
+test("a gate failure is mapped to its stop reason by the stop code it carries, never by its message", async () => {
+  const cases = [
+    [tagged(STOP_CODES.admissionRefused, "anything"), "admission refused"],
+    [tagged(STOP_CODES.preflightFailed, "anything"), "preflight refused"],
+    [tagged(STOP_CODES.outcomeUncertain, "anything"), "outcome uncertain"],
+    [tagged(STOP_CODES.captureFailed, "anything"), "capture failed"],
+    // The same words without the code are just a request that was not sent.
+    [new Error("admission refused: revoked"), "not sent"],
+    [new Error("preflight failed: preflight/x"), "not sent"],
+    [new Error("request outcome uncertain"), "not sent"],
+    [new Error("capture journal uncertain"), "not sent"],
+    [new Error("dispatch gate is poisoned"), "not sent"],
+    [Object.assign(new Error("x"), { stopCode: "admission-refused-typo" }), "not sent"],
+  ];
+  for (const [error, reason] of cases) {
+    const h = await harness({ adjust: (built) => ({ ...built, gate: { ...built.gate, send: async () => { throw error; } } }) });
+    const result = await h.controller.run();
+    assert.deepEqual([result.status, result.reason], ["stopped", reason], `${error.message} ${error.stopCode}`);
+  }
+  // The gate's start is mapped the same way: a coded refusal is a stop, and the same words without the code are not swallowed.
+  const refused = tagged(STOP_CODES.admissionRefused, "refused");
+  const h = await harness({ adjust: (built) => ({ ...built, gate: { ...built.gate, start: async () => { throw refused; } } }) });
+  const result = await h.controller.run();
+  assert.deepEqual([result.status, result.reason], ["stopped", "admission refused"]);
+  const plain = new Error("admission refused: by message only");
+  const g = await harness({ adjust: (built) => ({ ...built, gate: { ...built.gate, start: async () => { throw plain; } } }) });
+  await assert.rejects(g.controller.run(), (thrown) => thrown === plain);
 });
 
 test("a schedule step without its delegate stops the run, and the options are a closed record", async () => {

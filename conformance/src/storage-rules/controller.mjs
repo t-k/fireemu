@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { classifyResponse } from "./acceptance.mjs";
 import { ENFORCEMENT } from "./enforcement.mjs";
 import { applyVerdict, createSettleState, nextRead } from "./settle.mjs";
+import { STOP_CODES, stopCodeOf } from "./stop-codes.mjs";
 
 // Runs the reviewed schedule of one recording. Each row goes through the same steps: guards from the ledgers, the
 // run-time references it needs, its exact target, the ledgers' record of the intent, one send through the gate, the
@@ -116,10 +117,11 @@ export function createController(options) {
     objects.recordIntent(row); run.recordIntent(row);
     let result;
     try { result = await gate.send(prepared, { phase, mutationKey: mutationKeyOf(row), accept }); } catch (error) {
-      if (/^admission refused/.test(error.message)) throw new RunStop("admission refused", { rowId: row.id });
-      if (/^preflight failed/.test(error.message)) throw new RunStop("preflight refused", { rowId: row.id });
-      if (/outcome uncertain/.test(error.message)) { executed++; objects.recordOutcome(row, { uncertain: true }); run.recordOutcome(row, { uncertain: true }); throw new RunStop("outcome uncertain", { rowId: row.id }); }
-      throw new RunStop(/poisoned|capture/.test(error.message) ? "capture failed" : "not sent", { rowId: row.id, message: error.message });
+      const code = stopCodeOf(error);
+      if (code === STOP_CODES.admissionRefused) throw new RunStop("admission refused", { rowId: row.id });
+      if (code === STOP_CODES.preflightFailed) throw new RunStop("preflight refused", { rowId: row.id });
+      if (code === STOP_CODES.outcomeUncertain) { executed++; objects.recordOutcome(row, { uncertain: true }); run.recordOutcome(row, { uncertain: true }); throw new RunStop("outcome uncertain", { rowId: row.id }); }
+      throw new RunStop(code === STOP_CODES.captureFailed ? "capture failed" : "not sent", { rowId: row.id, message: error.message });
     }
     executed++;
     let outcome;
@@ -170,7 +172,7 @@ export function createController(options) {
 
   async function runAll() {
     try { await gate.start({ runId: manifest.binding.runId }); } catch (error) {
-      if (/^admission refused/.test(error.message)) throw new RunStop("admission refused", {});
+      if (stopCodeOf(error) === STOP_CODES.admissionRefused) throw new RunStop("admission refused", {});
       throw error;
     }
     for (const id of schedule.preflight) {

@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import { buildCorpus } from "./storage-rules/corpus.mjs";
 import { buildFullRequestManifest } from "./storage-rules/full-manifest.mjs";
+import { STOP_CODES, stopCodeOf } from "./storage-rules/stop-codes.mjs";
 import { createTargetBuilder } from "./storage-rules/target.mjs";
 
 const closure = JSON.parse(readFileSync(new URL("../../spec/compatibility/closure/STORAGE-RULES.json", import.meta.url)));
@@ -130,7 +131,7 @@ test("an input refusal by the transport itself is reported as not sent, never as
   const notSent = Object.assign(new Error("invalid HTTP transport input"), { notSent: true });
   // Preflight IDs are sent by admit(), so the refusal surfaces there: it must not be the uncertain-outcome error.
   await assert.rejects(harness({ transport: { send: async () => { throw notSent; } } }).then((x) => x.admit()), (error) => error === notSent);
-  await assert.rejects(harness({ transport: { send: async () => { throw new Error("connection reset"); } } }).then((x) => x.admit()), /request outcome uncertain/);
+  await assert.rejects(harness({ transport: { send: async () => { throw new Error("connection reset"); } } }).then((x) => x.admit()), (error) => /request outcome uncertain/.test(error.message) && stopCodeOf(error) === STOP_CODES.outcomeUncertain);
 });
 
 test("only a strict notSent marker turns a transport failure into not sent", async () => {
@@ -172,7 +173,7 @@ test("the run's start goes through the admission's begin, and every later reques
   assert.equal(refused.gate.snapshot().admissionRefused, true);
   assert.equal(refused.gate.snapshot().mode, "not-started");
   const silent = await harness({ admission: { begin: async () => undefined, check: async () => ({ admitted: true }) } });
-  await assert.rejects(silent.gate.start({ runId: options.runId }), /admission refused/);
+  await assert.rejects(silent.gate.start({ runId: options.runId }), (error) => /admission refused/.test(error.message) && stopCodeOf(error) === STOP_CODES.admissionRefused);
   assert.equal(silent.gate.snapshot().admissionRefused, true);
 });
 
@@ -183,7 +184,7 @@ test("at send time only an explicit admitted answer lets a request go", async ()
     await h.admit();
     deny = true;
     h.trace.length = 0;
-    await assert.rejects(h.gate.send(h.prepare(READ), normalMeta), /admission refused/, JSON.stringify(answer));
+    await assert.rejects(h.gate.send(h.prepare(READ), normalMeta), (error) => /admission refused/.test(error.message) && stopCodeOf(error) === STOP_CODES.admissionRefused, JSON.stringify(answer));
     assert.equal(h.gate.snapshot().admissionRefused, true);
     assert.deepEqual(h.trace.filter((entry) => ["intent", "reserved", "transport"].includes(entry[0])), []);
   }
@@ -229,7 +230,7 @@ test("an uncertain capture journal refuses the request before its intent", async
   await h.admit();
   h.state.uncertain = true;
   h.trace.length = 0;
-  await assert.rejects(h.gate.send(h.prepare(READ), normalMeta), /capture journal is uncertain/);
+  await assert.rejects(h.gate.send(h.prepare(READ), normalMeta), (error) => /capture journal is uncertain/.test(error.message) && stopCodeOf(error) === STOP_CODES.captureFailed);
   assert.deepEqual(h.trace, []);
 });
 

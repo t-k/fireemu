@@ -1,4 +1,5 @@
 import { RECORDINGS_PER_APPROVAL, validatePresendApproval } from "./approval.mjs";
+import { STOP_CODES, tagged } from "./stop-codes.mjs";
 
 // The live proof that a run may go on: the owner ledger, read again at every check, still holds this version's
 // approval (envelope, version pins, decision) with no revocation in any spelling, and the project locks are still
@@ -26,10 +27,10 @@ export function createAdmission(options) {
   let checks = 0;
   let begun = false;
 
-  const refuse = (reason) => { refused = true; throw new Error(`admission refused: ${reason}`); };
+  const refuse = (reason) => { refused = true; throw tagged(STOP_CODES.admissionRefused, `admission refused: ${reason}`); };
 
   async function verify() {
-    if (refused) throw new Error("admission refused: an earlier check refused");
+    if (refused) throw tagged(STOP_CODES.admissionRefused, "admission refused: an earlier check refused");
     checks++;
     let approval;
     try {

@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { createStage3RequestCounter } from "./request-counter.mjs";
+import { STOP_CODES, tagged } from "./stop-codes.mjs";
 
 // The only object that holds the real transport. A request leaves through it only after its intent is durable and its
 // reservation is durable, exactly once per reservation, for the target that was captured, in the mode its ID belongs to.
@@ -34,7 +35,7 @@ export function createDispatchGate(options) {
   async function admitted() {
     let seen;
     try { seen = await admission.check(); } catch (error) { admissionRefused = true; throw error; }
-    if (seen?.admitted !== true) { admissionRefused = true; bad("admission refused: no admission"); }
+    if (seen?.admitted !== true) { admissionRefused = true; throw tagged(STOP_CODES.admissionRefused, "admission refused: no admission"); }
   }
   const modeOf = (phase) => ({ preflight: "preflight", normal: "normal", recovery: "recovery" })[phase];
 
@@ -52,7 +53,7 @@ export function createDispatchGate(options) {
   }
 
   async function send(prepared, meta) {
-    if (poisoned) bad("dispatch gate is poisoned");
+    if (poisoned) throw tagged(STOP_CODES.captureFailed, "dispatch gate is poisoned");
     if (busy) bad("concurrent dispatch is forbidden");
     busy = true;
     try {
@@ -63,7 +64,7 @@ export function createDispatchGate(options) {
       if (counter.snapshot().mode !== modeOf(phase) || operationId.startsWith("recovery/") !== (phase === "recovery") || operationId.startsWith("preflight/") !== (phase === "preflight")) bad("request phase does not match the counter");
       // A target the transport would refuse is stopped here, before anything is admitted, written or counted.
       try { transport.validate({ url: prepared.spec.url, method: prepared.spec.method, headers: prepared.spec.headers, body: prepared.spec.body }); } catch { bad("request not sent: the transport refuses the target"); }
-      if (capture.snapshot().uncertain) bad("capture journal is uncertain");
+      if (capture.snapshot().uncertain) throw tagged(STOP_CODES.captureFailed, "capture journal is uncertain");
       await admitted();
       await capture.writeIntent({ operationId, phase, targetSha256: prepared.targetSha256, redactedTarget: prepared.redacted, mutationKey });
       let dispatched = false;
@@ -92,14 +93,14 @@ export function createDispatchGate(options) {
         }
         await capture.writeNote({ operationId, text: `request ${dispatched ? "outcome unknown" : "not sent"}: ${String(error?.message ?? "error").slice(0, 200)}` }).catch(() => { poisoned = true; });
         if (!dispatched) throw error;
-        throw new Error("request outcome uncertain");
+        throw tagged(STOP_CODES.outcomeUncertain, "request outcome uncertain");
       }
       const attemptNumber = counter.snapshot().requests;
       try {
         await capture.writeResponse({ operationId, attempt: attemptNumber, response: { status: raw.status, rawHeaders: raw.rawHeaders, bytes: raw.bytes } });
       } catch {
         poisoned = true;
-        throw new Error("capture failed after send");
+        throw tagged(STOP_CODES.captureFailed, "capture failed after send");
       }
       return Object.freeze({ raw: Object.freeze({ status: raw.status, rawHeaders: raw.rawHeaders, bytes: raw.bytes }), attempt: attemptNumber });
     } finally { busy = false; }
@@ -111,12 +112,12 @@ export function createDispatchGate(options) {
   // themselves: what they learn they record as digests, never as the token-bearing answer.
   let currentOperation = null;
   async function delegatedSend(operationId, attempt, accept, preflight) {
-    if (poisoned) bad("dispatch gate is poisoned");
+    if (poisoned) throw tagged(STOP_CODES.captureFailed, "dispatch gate is poisoned");
     if (busy) bad("concurrent dispatch is forbidden");
     busy = true;
     try {
       if (typeof operationId !== "string" || !isFunction(attempt) || (preflight && !isFunction(accept))) bad("invalid delegated request");
-      if (capture.snapshot().uncertain) bad("capture journal is uncertain");
+      if (capture.snapshot().uncertain) throw tagged(STOP_CODES.captureFailed, "capture journal is uncertain");
       await admitted();
       const phase = counter.snapshot().mode;
       // The preflight entry point works only in preflight mode and the other only outside it, and the ID's prefix names its phase, as for the gate's own send.
@@ -156,7 +157,7 @@ export function createDispatchGate(options) {
     start: async (input) => {
       let seen;
       try { seen = await admission.begin(); } catch (error) { admissionRefused = true; throw error; }
-      if (seen?.admitted !== true) { admissionRefused = true; bad("admission refused: no admission"); }
+      if (seen?.admitted !== true) { admissionRefused = true; throw tagged(STOP_CODES.admissionRefused, "admission refused: no admission"); }
       return counter.start(input);
     },
     admit: () => counter.admit(),

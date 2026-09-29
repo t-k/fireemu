@@ -2,6 +2,7 @@ import { createHash, createHmac } from "node:crypto";
 import { constants } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
 import { createRedactor } from "./redaction.mjs";
+import { STOP_CODES, tagged } from "./stop-codes.mjs";
 
 // Run-local, append-only capture of what a request intended (intent), what came back (response, redacted and stored as a
 // content-addressed blob), what it meant (facts), which run-time values were bound (proof) and what the controller
@@ -74,7 +75,7 @@ export async function createCaptureJournal(input) {
     options.requestIds = stringArray(options.requestIds, 20000);
     if (options.requestIds.length === 0 || options.requestIds.some((id) => !requestId(id)) || new Set(options.requestIds).size !== options.requestIds.length) throw new Error();
     redactor = createRedactor({ digestSalt: options.digestSalt });
-  } catch { throw new Error("invalid capture journal input"); }
+  } catch { throw tagged(STOP_CODES.captureFailed, "invalid capture journal input"); }
   const declared = new Set(options.requestIds);
   const path = join(options.directory, "captures.jsonl");
   const blobDirectory = join(options.directory, "blobs");
@@ -143,7 +144,7 @@ export async function createCaptureJournal(input) {
     for (const [handle, clear] of [[file, () => { file = null; }], [blobs, () => { blobs = null; }], [directory, () => { directory = null; }]]) {
       if (handle) { try { await handle.close(); clear(); } catch { failed = true; } }
     }
-    if (failed) { uncertain = true; throw new Error("capture journal uncertain"); }
+    if (failed) { uncertain = true; throw tagged(STOP_CODES.captureFailed, "capture journal uncertain"); }
   }
 
   try {
@@ -168,14 +169,14 @@ export async function createCaptureJournal(input) {
     await verifyIdentity(size);
   } catch {
     await closeHandles().catch(() => {});
-    throw new Error("capture journal creation failed");
+    throw tagged(STOP_CODES.captureFailed, "capture journal creation failed");
   }
 
   const gate = () => { if (busy || closed || uncertain) throw new Error(); };
 
   async function event(kind, build) {
     let plan;
-    try { gate(); plan = build(); } catch { throw new Error("capture journal event refused"); }
+    try { gate(); plan = build(); } catch { throw tagged(STOP_CODES.captureFailed, "capture journal event refused"); }
     busy = true;
     try {
       const row = await plan();
@@ -183,7 +184,7 @@ export async function createCaptureJournal(input) {
       row.after?.();
     } catch {
       uncertain = true;
-      throw new Error("capture journal uncertain");
+      throw tagged(STOP_CODES.captureFailed, "capture journal uncertain");
     } finally { busy = false; }
   }
 
@@ -293,7 +294,7 @@ export async function createCaptureJournal(input) {
       });
     },
     async close() {
-      if (busy) throw new Error("capture journal event refused");
+      if (busy) throw tagged(STOP_CODES.captureFailed, "capture journal event refused");
       if (closed && !file && !directory && !blobs) return;
       closed = true; busy = true;
       try { await closeHandles(); } finally { busy = false; }

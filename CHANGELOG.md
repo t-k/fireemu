@@ -8,6 +8,10 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ## [Unreleased]
 
+### Added
+
+- `firestore.indexes.json`: a `fieldOverrides[].ttl: true` now declares a time-to-live policy, as `firebase deploy` creates one from that file. Before, the key was read and dropped without a word, and a policy could only be set with the Admin `fields.patch`. The declared policy is in force for every project of the database, is reported by `fields.get` like a patched one, survives a session reset, and is read again when the file is reloaded. It is checked like a patch (not `__name__`, not the wildcard field, one field per collection group, at most 64); a file that names a `ttl` that is not a boolean, or a policy no patch could set, stops the daemon at start and keeps the last good policies on reload. A project that patches TTL starts from the declared policies. Runtime TTL behaviour is unchanged.
+
 ### Changed
 
 - Emulator profile without signers: a custom token's tenant claim is checked only where the official emulator checks it: never on a JSON fake token (`{"uid": …}`), and on an unsigned JWT only in a tenant, where the claim must name that tenant. A JSON token now signs in to the tenant the request names whatever its claim, and a JWT with a tenant claim exchanged in the project signs in to the project; both were refused with `TENANT_ID_MISMATCH` before, which the official emulator never does. This fixes the JSON-token and tenant-claim known issue listed under 0.9.0. The strict profile, and the emulator profile with signers, keep production's rules.

@@ -1749,9 +1749,10 @@ fn start_index_reload_supervisor(path: String, database: String, backend: &Arc<L
                     continue;
                 }
             };
-            match control::parse_indexes(&path, &text) {
-                Ok(indexes) => {
+            match control::parse_index_file(&path, &text) {
+                Ok((indexes, ttl_policies)) => {
                     if backend.replace_database_indexes(&database, indexes) {
+                        backend.replace_shared_ttl_catalog(&database, ttl_policies);
                         observed_stamp = Some(stable_stamp);
                         observed_signature = Some(stable_signature);
                         eprintln!("note: reloaded Firestore indexes for {database} from {path}");
@@ -3425,6 +3426,66 @@ mod config_reload_tests {
 
         std::fs::write(&path, INDEXES_TWO).unwrap();
         wait_for_index_collection(&backend, "other").await;
+        drop(backend);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    async fn wait_for_ttl(backend: &Arc<LocalBackend>, collection: &str, present: bool) {
+        let collection = fireemu_core_types::ids::CollectionId::try_new(collection).unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(4), async {
+            loop {
+                if backend
+                    .ttl_policy("demo-app", "staging", &collection)
+                    .is_some()
+                    == present
+                {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            }
+        })
+        .await
+        .expect("the index generation should reload its TTL policies");
+    }
+
+    #[tokio::test]
+    async fn index_reload_follows_the_declared_ttl_policies_and_keeps_the_last_good_ones() {
+        let dir = scratch("indexes-ttl");
+        let path = dir.join("firestore.indexes.json");
+        let declared = |ttl: &str| {
+            format!(
+                r#"{{"indexes":[],"fieldOverrides":[{{"collectionGroup":"sessions","fieldPath":"expireAt","ttl":{ttl},"indexes":[]}}]}}"#
+            )
+        };
+        std::fs::write(&path, declared("false")).unwrap();
+        let backend = index_backend(&declared("false"));
+        start_index_reload_supervisor(path.display().to_string(), "staging".to_owned(), &backend);
+        wait_for_ttl(&backend, "sessions", false).await;
+
+        std::fs::write(&path, declared("true")).unwrap();
+        wait_for_ttl(&backend, "sessions", true).await;
+
+        // A generation that names two TTL fields of one collection group is refused as a
+        // whole, and the last good policies stay in force.
+        std::fs::write(
+            &path,
+            r#"{"indexes":[],"fieldOverrides":[{"collectionGroup":"sessions","fieldPath":"a","ttl":true,"indexes":[]},{"collectionGroup":"sessions","fieldPath":"b","ttl":true,"indexes":[]}]}"#,
+        )
+        .unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(1_300)).await;
+        let sessions = fireemu_core_types::ids::CollectionId::try_new("sessions").unwrap();
+        assert_eq!(
+            backend
+                .ttl_policy("demo-app", "staging", &sessions)
+                .unwrap()
+                .field
+                .canonical(),
+            "expireAt"
+        );
+
+        // Removing the declaration removes the policy for a project that never patched.
+        std::fs::write(&path, declared("false")).unwrap();
+        wait_for_ttl(&backend, "sessions", false).await;
         drop(backend);
         let _ = std::fs::remove_dir_all(dir);
     }

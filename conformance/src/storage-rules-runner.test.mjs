@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { readFileSync } from "node:fs";
+import { createHmac } from "node:crypto";
+import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import test from "node:test";
 import { withAssembledRun } from "./storage-rules/assemble-run.mjs";
@@ -129,6 +131,86 @@ test("the options are a closed record checked before any file is touched, and a 
   assert.deepEqual(await f.usage(), []);
   assert.deepEqual(await f.lockFiles(), []);
   assert.equal(f.sent.count, 0);
+});
+
+test("every option is validated on its own, before any file is touched", async (t) => {
+  const f = await fixture(t);
+  const o = f.options;
+  const cases = {
+    inputsPath: { inputsPath: 5 }, closure: { closure: [] }, sourceCommitType: { sourceCommit: 5, packet: { ...o.packet, sourceCommit: 5 } }, sourceCommitShape: { sourceCommit: "A".repeat(40), packet: { ...o.packet, sourceCommit: "A".repeat(40) } },
+    locks: { locks: [] }, usagePath: { usagePath: 5 }, directory: { directory: 5 }, transportSend: { transport: { validate() {} } }, transportValidate: { transport: { send() {} } },
+    clockObject: { clock: [] }, clockNow: { clock: { waitUntilSeconds() {}, sleep() {} } }, clockWait: { clock: { nowSeconds() {}, sleep() {} } }, clockSleep: { clock: { nowSeconds() {}, waitUntilSeconds() {} } },
+    reviewLedger: { readLedger: "ledger" }, packet: { packet: [] }, runIdTooLong: { runId: `a${"b".repeat(48)}` },
+  };
+  for (const [name, patch] of Object.entries(cases)) await assert.rejects(withAssembledRun({ ...o, ...patch }, async () => assert.fail("must not run")), /invalid assembled run options/, name);
+  // A key swapped for another one keeps the count but not the shape, and a caller that is not a function is refused too.
+  const { usagePath, ...rest } = o;
+  await assert.rejects(withAssembledRun({ ...rest, extra: usagePath }, async () => assert.fail("must not run")), /invalid assembled run options/);
+  await assert.rejects(withAssembledRun(o, "not a function"), /invalid assembled run options/);
+  assert.deepEqual(await f.lockFiles(), []);
+  assert.deepEqual(await f.usage(), []);
+  assert.equal(f.sent.count, 0);
+});
+
+// The plumbing is checked on a run that stops early: the first password sign-in fails as an uncertain attempt, and the recovery runs.
+test("a run that stops at its first sign-in is wired to the manifest, the keys, the clock and the journals, and recovers", async (t) => {
+  let signIn = null;
+  const f = await fixture(t, { hook: (spec) => { if (spec.url.includes(":signInWithPassword")) { signIn = spec.url; throw new Error("connection reset"); } return undefined; } });
+  let sleeps = 0;
+  const { nowSeconds, sleep } = f.options.clock;
+  f.options.clock = { nowSeconds, waitUntilSeconds: f.options.clock.waitUntilSeconds, sleep: async () => { sleeps++; return sleep(); } };
+  const seen = {};
+  const returned = withAssembledRun(f.options, async (run) => {
+    seen.frozen = Object.isFrozen(run);
+    seen.manifest = run.manifest.sha256;
+    seen.result = await run.run();
+    seen.recovered = await run.recover();
+    seen.close = (() => { try { run.confirmCleanClose(seen.recovered); return "closed"; } catch (error) { return error.message; } })();
+    return "caller value";
+  }, { randomBytes: (size) => Buffer.alloc(size, 7) });
+  // The failed attempt is uncertain, so the locks stay held and the caller sees the refusal.
+  await assert.rejects(returned, /locks retained/);
+  assert.equal(seen.frozen, true);
+  assert.equal(seen.manifest, manifest.sha256);
+  assert.deepEqual([seen.result.status, seen.result.reason, seen.result.needsRecovery], ["stopped", "delegate failed", true]);
+  assert.equal(seen.recovered.status, "recovered");
+  assert.ok(seen.recovered.requests > 0 && seen.recovered.skipped.length > 0, JSON.stringify(seen.recovered.requests));
+  assert.match(seen.close, /cannot confirm project lock closure/);
+  assert.equal(new URL(signIn).searchParams.get("key"), API_KEYS.query);
+  assert.ok(sleeps >= 1, "the controller's waits go through the caller's clock");
+  assert.deepEqual(await f.usage(), [runId]);
+  assert.deepEqual(await f.lockFiles(), ["fireemu-oracle-idp.lock", "fireemu-oracle-query.lock"]);
+  // The journals carry the evidence the delegates wrote (credential proofs, ownership, cleanup) and the runtime reference proofs.
+  const kinds = new Map();
+  const capture = (await walk(f.directory)).find((file) => file.endsWith("captures.jsonl"));
+  for (const line of (await readFile(capture, "utf8")).split("\n").filter(Boolean)) { const event = JSON.parse(line); kinds.set(event.event ?? event.type ?? event.kind, (kinds.get(event.event ?? event.type ?? event.kind) ?? 0) + 1); }
+  for (const kind of ["credential-proof", "ownership", "cleanup", "proof", "delegated-target"]) assert.ok(kinds.get(kind) > 0, `${kind}: ${JSON.stringify([...kinds])}`);
+  // The journal is salted with the run's own secret, so a target's HMAC is recomputable from the injected random source.
+  const salt = Buffer.alloc(32, 7);
+  const targets = (await readFile(capture, "utf8")).split("\n").filter(Boolean).map((line) => JSON.parse(line)).filter((row) => row.event === "delegated-target");
+  for (const { data } of targets) assert.equal(data.targetHmac, createHmac("sha256", salt).update("delegated-target\0").update(JSON.stringify({ operationId: data.operationId, method: data.method, url: data.url, headers: data.headers, bodyHmac: data.bodyHmac })).digest("hex"));
+});
+
+test("the caller's value comes back, and the journals are closed once it ends", async (t) => {
+  const f = await fixture(t);
+  const held = () => execFileSync("lsof", ["-p", String(process.pid), "-Fn"], { encoding: "utf8" }).split("\n").filter((line) => line.startsWith("n") && line.includes(f.directory));
+  let open;
+  const value = await withAssembledRun(f.options, async () => {
+    open = held().length;
+    return "caller value";
+  });
+  assert.equal(value, "caller value");
+  assert.ok(open >= 2, "both journals are open while the caller runs");
+  assert.deepEqual(held(), []);
+});
+
+test("a capture journal that cannot open closes the reservation journal that was opened first", async (t) => {
+  const f = await fixture(t);
+  const held = () => execFileSync("lsof", ["-p", String(process.pid), "-Fn"], { encoding: "utf8" }).split("\n").filter((line) => line.startsWith("n") && line.includes(f.directory));
+  await mkdir(join(f.directory, "captures.jsonl"));
+  await assert.rejects(withAssembledRun(f.options, async () => assert.fail("must not run")));
+  assert.deepEqual(held(), []);
+  assert.deepEqual(await f.lockFiles(), []);
 });
 
 // Every row syncs several files, so this run takes over a minute; run it with STORAGE_RULES_SLOW_TESTS=1.

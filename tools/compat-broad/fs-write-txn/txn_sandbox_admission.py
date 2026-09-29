@@ -68,20 +68,69 @@ def _authorized_actor(actor, entries):
 
 
 def _is_revocation(decision):
-    return re.search(r"(?:^|[;\s])(?:decision=)?REVOKED(?=[;\s]|$)", decision) is not None
+    return re.search(r"(?<![A-Za-z0-9_])REVOKED(?![A-Za-z0-9_])", decision) is not None
+
+
+def _revocation_scope(decision, keys, value_pattern):
+    declared = 0
+    values = []
+    scope_keys = r"(?<![A-Za-z0-9_-])(?:packetSha256|closurePacketSha256|envelopeId)(?![A-Za-z0-9_-])"
+    consumed = 0
+    for declaration in re.finditer(scope_keys, decision, re.IGNORECASE):
+        if declaration.start() < consumed:
+            continue
+        value = re.match(r"\s*=\s*([^\s;|()（）:：,，]+)", decision[declaration.end():])
+        if value is not None:
+            # A scope value can itself contain a scope-key identifier.
+            consumed = declaration.end() + value.end()
+        if declaration.group().casefold() not in {key.casefold() for key in keys}:
+            continue
+        declared += 1
+        if value is not None and declaration.group() in keys:
+            values.append(value.group(1))
+    if declared == 0:
+        return False, None
+    if declared != 1 or len(values) != 1 or not re.fullmatch(value_pattern, values[0]):
+        return True, None
+    return True, values[0]
 
 
 def _revoked_packet(decision, packet_sha, envelope_id=None):
     """A scoped revocation cannot revoke another packet or fall through unrecognized."""
     if not _is_revocation(decision):
         return False
-    packets = re.findall(r"packetSha256=([a-f0-9]{64})(?![a-f0-9])", decision)
-    if "packetSha256=" in decision:
-        return len(packets) != 1 or decision.count("packetSha256=") != 1 or packets[0] == packet_sha
-    envelopes = re.findall(r"envelopeId=([A-Za-z0-9_-]+)", decision)
-    if "envelopeId=" in decision and envelope_id is not None:
-        return len(envelopes) != 1 or decision.count("envelopeId=") != 1 or envelopes[0] == envelope_id
-    return True
+    packet_declared, packet = _revocation_scope(
+        decision, ("packetSha256", "closurePacketSha256"), r"[a-f0-9]{64}"
+    )
+    envelope_declared, envelope = _revocation_scope(
+        decision, ("envelopeId",), r"[A-Za-z0-9_-]+"
+    )
+    if packet_declared and packet is None or envelope_declared and envelope is None:
+        return True
+    if packet == packet_sha or envelope_declared and (envelope_id is None or envelope == envelope_id):
+        return True
+    return not (packet_declared or envelope_declared)
+
+
+def reject_revocations(decisions, pins):
+    """Check cancellation before topic/date/column filtering can hide its identity."""
+    packet = pins["packetSha256"]
+    envelope = pins.get("envelopeId")
+    packet_identity = re.compile(r"(?<![a-f0-9])" + re.escape(packet) + r"(?![a-f0-9])", re.IGNORECASE)
+    envelope_identity = (
+        re.compile(r"(?<![A-Za-z0-9_-])" + re.escape(envelope) + r"(?![A-Za-z0-9_-])")
+        if envelope is not None else None
+    )
+    task_identity = re.compile(r"(?<![A-Za-z0-9_-])" + re.escape(TASK) + r"(?![A-Za-z0-9_-])")
+    for line in decisions.splitlines():
+        if not _is_revocation(line):
+            continue
+        if packet_identity.search(line) or envelope_identity is not None and envelope_identity.search(line):
+            raise ValueError("this packet or envelope was revoked")
+        columns = [part.strip() for part in line.split("|")]
+        topic = columns[1] if len(columns) == 5 else line
+        if task_identity.search(topic) and _revoked_packet(line, packet, envelope):
+            raise ValueError("this packet or envelope was revoked")
 
 
 def _owner_approval(decisions, pins):
@@ -93,6 +142,7 @@ def _owner_approval(decisions, pins):
         f"estimatedUsdPerRecording={pins['estimatedUsdPerRecording']}",
         "recordings=2",
     }
+    reject_revocations(decisions, pins)
     entries = _decision_entries(decisions)
     named_parent = f"{TASK} {pins.get('packetName', '')}".strip()
     for columns, _tokens in entries:

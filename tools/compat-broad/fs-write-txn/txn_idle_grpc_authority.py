@@ -27,6 +27,7 @@ def authorize(decisions, pins):
     """Re-read before every external dispatch, including cleanup and refresh."""
     if pins.get('packetName') != 'p10-grpc-idle' or pins.get('requestsPerRecording') != 48 or type(pins.get('requestsPerRecording')) is not int or pins.get('estimatedUsdPerRecording') != 0.01 or not str(pins.get('envelopeId', '')).startswith('FS-TRANSACTION-p10-grpc-idle-'):
         raise ValueError('fresh P10-A authority scope required')
+    shared.reject_revocations(decisions, pins)
     entries = shared._decision_entries(decisions)
     scope = {'FS-TRANSACTION', NAME, NAME + ' envelope'}
     for columns, _tokens in entries:

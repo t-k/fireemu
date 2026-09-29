@@ -1198,11 +1198,23 @@ fn a_nonce_credential_signs_in_once_while_a_blocking_function_runs() {
         entered_rx
             .recv_timeout(std::time::Duration::from_secs(10))
             .expect("the first sign-in reaches its blocking function");
-        let second = scope.spawn(|| sign_in(&s, &body));
-        // The second request passes its check, or is refused by it, before the first ends.
-        std::thread::sleep(std::time::Duration::from_millis(300));
+        // The second request's answer comes while the first is still inside its blocking
+        // function: refused at its check, it waits for nothing (closure re-review N-a). A design
+        // that let it pass its check would keep it waiting here.
+        let (second_tx, second_rx) = std::sync::mpsc::channel();
+        let second_body = &body;
+        let s = &s;
+        let second = scope.spawn(move || {
+            second_tx.send(sign_in(s, second_body)).unwrap();
+        });
+        let second_answer = second_rx.recv_timeout(std::time::Duration::from_secs(10));
         release_tx.send(()).unwrap();
-        (first.join().unwrap(), second.join().unwrap())
+        let first = first.join().unwrap();
+        second.join().unwrap();
+        (
+            first,
+            second_answer.expect("the second sign-in is answered while the first is held"),
+        )
     });
     let mut statuses = [first.status, second.status];
     statuses.sort_unstable();

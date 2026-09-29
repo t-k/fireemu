@@ -4385,7 +4385,6 @@ fn handle_with_policy_inner(
     if let Some(trust) = &strict_saml_trust {
         trust.shape_answer(&mut response);
     }
-    used_credential.settle(&response);
     if let Some(reservation) = quota_reservation.take() {
         // Blocking dispatch commits a successful new-account reservation at its typed
         // per-request creation boundary. Any reservation left here belongs to a failed or
@@ -4449,6 +4448,9 @@ fn handle_with_policy_inner(
             }
         }
     }
+    // Settled on the response returned: an error the quota release above answers instead of a
+    // 200 returns early and so releases the credential too (closure re-review S2).
+    used_credential.settle(&response);
     response
 }
 

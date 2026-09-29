@@ -43,6 +43,28 @@ test("anything else is refused before it is counted: other methods, hosts, proje
   for (const one of refused) assert.throws(() => transport.validate(one), (error) => error.notSent === true && /invalid HTTP transport input/.test(error.message), `${one.method} ${one.url}`);
 });
 
+test("the route patterns are exact at their edges: bucket and ruleset lengths and characters, anchoring, project and origin", () => {
+  const release = (bucket) => spec("GET", `${RULES}/v1/projects/fireemu-oracle-query/releases/firebase.storage/${bucket}`);
+  for (const bucket of ["abc", "a.b", "0-_", "a".repeat(222)]) assert.doesNotThrow(() => transport.validate(release(bucket)), bucket);
+  for (const bucket of ["ab", "a", "aBc", "abC", "-bc", "a".repeat(223), "a/b", "a b", "a%20b", "ab$"]) assert.throws(() => transport.validate(release(bucket)), /invalid HTTP transport input/, bucket);
+  assert.throws(() => transport.validate(spec("DELETE", release("ab").url)), /invalid HTTP transport input/);
+  assert.throws(() => transport.validate(spec("DELETE", release("aBc").url)), /invalid HTTP transport input/);
+  for (const bad of [
+    `${RULES}/v1/projects/fireemu-oracle-query/releases/firebase.storage/${BUCKET}/${BUCKET}`, `${RULES}/foo/v1/projects/fireemu-oracle-query/releases/firebase.storage/${BUCKET}`, `${RULES}/x/v1/projects/fireemu-oracle-query/rulesets/abc`,
+    `${RULES}/v1/projects/fireemu-oracle-query/releases/firebaseXstorage/${BUCKET}`, "https://storage.googleapis.com/v1/projects/fireemu-oracle-query/releases/firebase.storage/x-bucket", "https://firebaserules.example.com/v1/projects/fireemu-oracle-query/releases/firebase.storage/x-bucket",
+    "https://www.googleapis.com/v1/projects/fireemu-oracle-query/releases/firebase.storage/x-bucket", `${RULES}/v1/projects/fireemu-oracle-query/rulesets/${"a".repeat(129)}`, `${RULES}/v1/projects/fireemu-oracle-query/rulesets/a.b`, `${RULES}/v1/projects/fireemu-oracle-query/rulesets/a%2Fb`,
+  ]) assert.throws(() => transport.validate(spec("GET", bad)), /invalid HTTP transport input/, bad);
+  assert.doesNotThrow(() => transport.validate(spec("GET", `${RULES}/v1/projects/fireemu-oracle-query/rulesets/${"a".repeat(128)}`)));
+  assert.doesNotThrow(() => transport.validate(spec("GET", `${RULES}/v1/projects/fireemu-oracle-query/rulesets/a_b-C9`)));
+  for (const url of [`${RULES}/v1/projects/other/releases`, `${RULES}/x/v1/projects/fireemu-oracle-query/releases`, `${RULES}/v1/projects/fireemu-oracle-query/releases/`, "https://firestore.googleapis.com/v1/projects/fireemu-oracle-query/releases", "https://oauth2.googleapis.com/v1/projects/fireemu-oracle-query/releases"]) {
+    assert.throws(() => transport.validate(spec("POST", url, json({}))), /invalid HTTP transport input/, url);
+  }
+  // A path that fits one route never fits another method or origin.
+  assert.throws(() => transport.validate(spec("GET", "https://firebaserules.googleapis.com/token")), /invalid HTTP transport input/);
+  assert.throws(() => transport.validate(spec("POST", "https://www.googleapis.com/token", Buffer.from("x"))), /invalid HTTP transport input/);
+  assert.throws(() => transport.validate(spec("GET", "https://oauth2.googleapis.com/oauth2/v2/userinfo")), /invalid HTTP transport input/);
+});
+
 test("the input record is closed and the headers are plain, bounded and lower-case", () => {
   const good = allowed[2];
   for (const bad of [null, undefined, {}, { ...good, extra: 1 }, { ...good, headers: null }, { ...good, headers: { Authorization: "x" } }, { ...good, headers: { host: "evil" } }, { ...good, headers: { "content-length": "1" } }, { ...good, headers: { a: "x\ny" } }, { ...good, method: "TRACE" }, { ...good, url: 5 }, { ...good, body: "text" }]) {

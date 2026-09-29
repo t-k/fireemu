@@ -1511,3 +1511,66 @@ test("the Rules reader validates its configuration", () => {
     assert.throws(() => createRulesReader({ ...base, ...change }));
   }
 });
+
+// ---- rows that name several projects ---------------------------------------------------------------------
+
+const MULTI = `${RECORD_PROJECT},fireemu-oracle-idp`;
+const multiRow = (overrides) =>
+  `${JSON.stringify({
+    taskId: "STORAGE-RULES-SANDBOX",
+    project: MULTI,
+    packetId: "stage3-v6",
+    runId: "stage3-20260930a",
+    estimatedUsd: 0,
+    ...overrides,
+  })}\n`;
+
+test("another lane's row that names this project among several starts the quiet interval", async () => {
+  // As STORAGE-RULES stage 3 wrote it, six minutes before this run.
+  const closing = multiRow({
+    ts: "2026-10-01T08:54:00.000Z",
+    event: "finished",
+    outcome: "stopped-clean",
+    requests: 17,
+    sandboxAtBaseline: true,
+  });
+  await refused(setup({ ledgerText: closing }), /admission/);
+  // Thirty minutes to the millisecond after it, the same row no longer refuses.
+  const edge = multiRow({
+    ts: "2026-10-01T08:30:00.000Z",
+    event: "finished",
+    outcome: "stopped-clean",
+    requests: 17,
+    sandboxAtBaseline: true,
+  });
+  assert.equal((await recordRun(setup({ ledgerText: edge }).deps)).outcome, "recorded");
+});
+
+test("another lane's open run that names this project among several refuses the run", async () => {
+  const open = multiRow({ ts: "2026-09-28T04:00:00.000Z", event: "started" });
+  await refused(setup({ ledgerText: open }), /admission/);
+});
+
+test("a `projects` array names this project too", async () => {
+  const closing = `${JSON.stringify({
+    ts: "2026-10-01T08:54:00.000Z",
+    event: "note",
+    taskId: "SANDBOX-CONFIG",
+    projects: [RECORD_PROJECT, "fireemu-oracle-idp"],
+    estimatedUsd: 0,
+    readOnly: true,
+  })}\n`;
+  await refused(setup({ ledgerText: closing }), /admission/);
+});
+
+test("a row of several projects that does not name this one changes nothing", async () => {
+  const other = multiRow({
+    project: "fireemu-oracle-sbx,fireemu-oracle-idp",
+    ts: "2026-10-01T08:59:00.000Z",
+    event: "finished",
+    outcome: "recorded",
+    requests: 1,
+    sandboxAtBaseline: true,
+  });
+  assert.equal((await recordRun(setup({ ledgerText: other }).deps)).outcome, "recorded");
+});

@@ -139,3 +139,40 @@ export function needsRecoveryRow(input) {
 export function encodeRow(row) {
   return `${JSON.stringify(row)}\n`;
 }
+
+const projectNames = (row) => [
+  ...new Set(
+    [
+      ...(typeof row.project === "string" ? row.project.split(",") : []),
+      ...(Array.isArray(row.projects) ? row.projects.filter((p) => typeof p === "string") : []),
+    ]
+      .map((name) => name.trim())
+      .filter(Boolean),
+  ),
+];
+
+/**
+ * The ledger with every row that names several projects written once per project. A row names
+ * several as a comma-separated `project` ("a,b") or as a `projects` array; the admission checks
+ * read `row.project` as one name, so they would not see such a row on either project. A row of one
+ * project, a line that is not a JSON row and a row that names no project are kept as they were.
+ */
+export function expandProjectRows(ledgerText) {
+  return ledgerText
+    .split("\n")
+    .flatMap((line) => {
+      let row;
+      try {
+        row = JSON.parse(line);
+      } catch {
+        return [line];
+      }
+      if (row === null || typeof row !== "object" || Array.isArray(row)) return [line];
+      const names = projectNames(row);
+      const plain = typeof row.project === "string" && !row.project.includes(",");
+      if (names.length === 0 || (plain && !("projects" in row))) return [line];
+      const { projects: _projects, ...rest } = row;
+      return names.map((project) => JSON.stringify({ ...rest, project }));
+    })
+    .join("\n");
+}

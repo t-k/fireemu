@@ -16,6 +16,7 @@ import { buildStage3DraftPlan } from "./stage3-plan.mjs";
 import { validatePresendApproval } from "./approval.mjs";
 import { withProjectLocks } from "./project-locks.mjs";
 import {
+  expandProjectRows,
   finishedRow,
   needsRecoveryRow,
   SANDBOX_PROJECT,
@@ -260,7 +261,7 @@ const iso = (date) => date.toISOString();
 const usd = (requests) => Number(((requests / RUN_MAX_REQUESTS) * RUN_ESTIMATE_USD).toFixed(6));
 
 /** Any line on the project with a task ID inside the quiet interval, whichever task wrote it. */
-function recentLineProblems(ledgerText, project, nowMs) {
+export function recentLineProblems(ledgerText, project, nowMs) {
   const problems = [];
   for (const line of ledgerText.split("\n")) {
     let row;
@@ -332,7 +333,8 @@ export async function recordRun(deps) {
   // The shared ledger, judged: no open run, nothing inside the quiet interval, and a packet
   // history that leaves room for this recording.
   async function admit() {
-    const ledgerText = await ledger.read();
+    // A row may name several projects; judge it once for each.
+    const ledgerText = expandProjectRows(await ledger.read());
     const nowMs = now().getTime();
     const problems = [
       ...new Set([

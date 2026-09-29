@@ -12,6 +12,8 @@ import {
   mainRepositoryRoot,
   pinnedPaths,
   pinsCommand,
+  probeCommand,
+  probeRequiredEnvironment,
   recordCommand,
   requiredEnvironment,
 } from "./storage-object/record-cli.mjs";
@@ -382,4 +384,118 @@ test("the pins command prints the packet's pins and the commit, and nothing secr
     ...pinValues,
     sourceFiles: 1,
   });
+});
+
+// ---- probe-production ----------------------------------------------------------------------------
+
+function probeFixture(overrides = {}) {
+  let received;
+  const f = fixture({
+    ...overrides,
+    packet: overrides.packet ?? { ...packetFile, packetName: "probe-v1" },
+  });
+  f.deps.probeRun =
+    overrides.probeRun ??
+    (async (options) => {
+      received = options;
+      return { outcome: "recorded", requests: 9, answers: [{ id: "a", status: 404 }] };
+    });
+  return { ...f, probeReceived: () => received };
+}
+
+test("the probe needs three names of the environment: no key file", () => {
+  assert.deepEqual(
+    [...probeRequiredEnvironment],
+    [
+      "FIREEMU_STORAGE_OBJECT_PACKET",
+      "FIREEMU_STORAGE_OBJECT_REVIEW",
+      "FIREEMU_STORAGE_OBJECT_PRIVATE_DIR",
+    ],
+  );
+});
+
+test("the probe names the environment it lacks, takes no argument, and calls nothing then", async () => {
+  for (const name of probeRequiredEnvironment) {
+    const f = probeFixture({ env: { [name]: undefined } });
+    assert.equal(await probeCommand([], f.env, f.deps), 2, name);
+    assert.match(f.err.join(""), new RegExp(name));
+    assert.equal(f.probeReceived(), undefined);
+  }
+  const f = probeFixture();
+  assert.equal(await probeCommand(["1"], f.env, f.deps), 2);
+  assert.match(f.err.join(""), /no argument/);
+  assert.equal(f.probeReceived(), undefined);
+});
+
+test("the probe gets its own limits, the packet, the review, the pinned paths and no key", async () => {
+  const f = probeFixture({ env: { FIREEMU_STORAGE_OBJECT_AUTH_KEY_FILE: "/does/not/exist" } });
+  assert.equal(await probeCommand([], f.env, f.deps), 0);
+  const options = f.probeReceived();
+  assert.deepEqual(options.packet, {
+    taskId: "STORAGE-OBJECT",
+    packetName: "probe-v1",
+    projectId: "fireemu-oracle-query",
+    maxRequests: 17,
+    reserveUsd: 0.05,
+    packetSha256: packetFile.packetSha256,
+    sourceCommit: COMMIT,
+    ...pinValues,
+  });
+  assert.deepEqual(options.review, reviewFile);
+  assert.deepEqual(options.actualPins, pinValues);
+  assert.equal(options.ownerDecisionsText, "approval text\n");
+  assert.equal(options.locks.lockDir, join(f.dir, "docs.local", "runs", "sandbox-locks"));
+  assert.equal(options.locks.legacyLockPath, `${f.ledger}.lock`);
+  assert.equal(await options.getToken(), "ya29.synthetic-owner-access-token-value");
+  assert.deepEqual(options.ids, {
+    runId: "0123456789abcdef0123",
+    otherRunId: "fedcba9876543210fedc",
+  });
+  for (const name of ["ledger", "git", "admission", "privateRun", "fetch", "now"]) {
+    assert.ok(options[name], name);
+  }
+  for (const name of ["apiKey", "replay", "recording"]) {
+    assert.equal(name in options, false, name);
+  }
+});
+
+test("the probe's exit code and its one line of output follow the outcome", async () => {
+  const f = probeFixture();
+  assert.equal(await probeCommand([], f.env, f.deps), 0);
+  assert.deepEqual(JSON.parse(f.out.join("")), {
+    outcome: "recorded",
+    requests: 9,
+    runId: "0123456789abcdef0123",
+    answers: [{ id: "a", status: 404 }],
+  });
+  const g = probeFixture({ probeRun: async () => ({ outcome: "something-new", requests: 3 }) });
+  assert.equal(await probeCommand([], g.env, g.deps), 4);
+});
+
+test("a probe that had started and then failed exits 4, and a refusal exits 2, with no stack", async () => {
+  const f = probeFixture({
+    probeRun: async () => {
+      const error = new Error("fetch failed");
+      error.afterStart = true;
+      throw error;
+    },
+  });
+  assert.equal(await probeCommand([], f.env, f.deps), 4);
+  assert.equal(f.err.join(""), "fetch failed\n");
+  assert.equal(f.out.join(""), "");
+  const g = probeFixture({
+    probeRun: async () => {
+      throw new Error("ledger admission: another lane is open");
+    },
+  });
+  assert.equal(await probeCommand([], g.env, g.deps), 2);
+  assert.match(g.err.join(""), /ledger admission/);
+  assert.doesNotMatch(g.err.join(""), /\n\s+at /);
+});
+
+test("a probe packet file holds exactly the name and the pins", async () => {
+  const f = probeFixture({ packet: { ...packetFile, packetName: "probe-v1", extra: "x" } });
+  assert.equal(await probeCommand([], f.env, f.deps), 2);
+  assert.match(f.err.join(""), /packet file must hold exactly/);
+  assert.equal(f.probeReceived(), undefined);
 });

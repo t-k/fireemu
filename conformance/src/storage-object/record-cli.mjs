@@ -1,4 +1,5 @@
-// The command line of the lean recorder (`run.mjs pins` and `run.mjs record-production <1|2>`).
+// The command line of the lean recorder and its probe (`run.mjs pins`,
+// `run.mjs record-production <1|2>` and `run.mjs probe-production`).
 // It reads the packet and review files the approval check needs, builds the recorder's
 // collaborators from the environment and prints one line of JSON. Exit codes: 0 recorded,
 // 2 refused or failed before a run started, 3 stopped clean (nothing recorded), 4 needs
@@ -19,6 +20,8 @@ import {
   createPrivateRunFactory,
   readGitState,
 } from "./record-io.mjs";
+import { probeRun } from "./probe-run.mjs";
+import { PROBE_MAX_REQUESTS, PROBE_RESERVE_USD } from "./probe.mjs";
 import {
   createTokenProvider,
   PACKET_MAX_REQUESTS,
@@ -41,6 +44,10 @@ export const requiredEnvironment = Object.freeze([
   "FIREEMU_STORAGE_OBJECT_PRIVATE_DIR",
   "FIREEMU_STORAGE_OBJECT_AUTH_KEY_FILE",
 ]);
+
+export const probeRequiredEnvironment = Object.freeze(
+  requiredEnvironment.filter((name) => name !== "FIREEMU_STORAGE_OBJECT_AUTH_KEY_FILE"),
+);
 
 const MAX_OWNER_LEDGER_BYTES = 8 * 1024 * 1024;
 
@@ -123,6 +130,7 @@ export function realDeps() {
       (await run("gcloud", ["auth", "application-default", "print-access-token"])).stdout,
     fetch: (...args) => globalThis.fetch(...args),
     recordRun,
+    probeRun,
   };
 }
 
@@ -136,7 +144,10 @@ async function readJson(path, label) {
   return value;
 }
 
-async function readPacket(path) {
+async function readPacket(
+  path,
+  limits = { maxRequests: PACKET_MAX_REQUESTS, reserveUsd: PACKET_RESERVE_USD },
+) {
   const file = await readJson(path, "packet file");
   const keys = file && typeof file === "object" && !Array.isArray(file) ? Object.keys(file) : [];
   if (
@@ -152,8 +163,8 @@ async function readPacket(path) {
     taskId: "STORAGE-OBJECT",
     packetName: file.packetName,
     projectId: RECORD_PROJECT,
-    maxRequests: PACKET_MAX_REQUESTS,
-    reserveUsd: PACKET_RESERVE_USD,
+    maxRequests: limits.maxRequests,
+    reserveUsd: limits.reserveUsd,
     packetSha256: file.packetSha256,
     sourceCommit: file.sourceCommit,
     ...Object.fromEntries(PIN_KEYS.map((key) => [key, file[key]])),
@@ -232,6 +243,60 @@ export async function recordCommand(argv, env, deps = realDeps()) {
     return EXIT[result.outcome] ?? 4;
   } catch (error) {
     // A run that had started keeps its lock and may have left objects: that is not a refusal.
+    if (error?.afterStart === true) {
+      deps.stderr(`${String(error.message)}\n`);
+      return 4;
+    }
+    return fail(String(error?.message ?? error));
+  }
+}
+
+/** `run.mjs probe-production`: the probe, once per packet. It holds no Web API key. */
+export async function probeCommand(argv, env, deps = realDeps()) {
+  const fail = (message) => {
+    deps.stderr(`${message}\n`);
+    return 2;
+  };
+  if (argv.length !== 0) return fail("probe-production takes no argument");
+  const missing = probeRequiredEnvironment.filter((name) => !env[name]);
+  if (missing.length > 0) return fail(`missing environment: ${missing.join(", ")}`);
+  try {
+    const packet = await readPacket(env.FIREEMU_STORAGE_OBJECT_PACKET, {
+      maxRequests: PROBE_MAX_REQUESTS,
+      reserveUsd: PROBE_RESERVE_USD,
+    });
+    const review = await readJson(env.FIREEMU_STORAGE_OBJECT_REVIEW, "review file");
+    const paths = pinnedPaths(deps.mainCheckout());
+    const ownerDecisionsText = await readOwnerLedger(paths.ownerLedger);
+    const pins = await deps.pins();
+    const ids = deps.randomRunIds();
+    const result = await deps.probeRun({
+      ids,
+      packet,
+      review,
+      ownerDecisionsText,
+      actualPins: Object.fromEntries(PIN_KEYS.map((key) => [key, pins[key]])),
+      env,
+      nodeVersion: deps.nodeVersion,
+      ledger: createLedgerFile(paths.ledger),
+      git: () => deps.git(),
+      admission: admissionProblems,
+      locks: { lockDir: paths.lockDir, legacyLockPath: paths.legacyLock, pid: process.pid },
+      privateRun: createPrivateRunFactory({ root: env.FIREEMU_STORAGE_OBJECT_PRIVATE_DIR }),
+      getToken: createTokenProvider({ run: deps.gcloud, now: () => deps.now().getTime() }),
+      fetch: deps.fetch,
+      now: deps.now,
+    });
+    deps.stdout(
+      `${JSON.stringify({
+        outcome: result.outcome,
+        requests: result.requests,
+        runId: ids.runId,
+        ...(result.answers ? { answers: result.answers } : {}),
+      })}\n`,
+    );
+    return EXIT[result.outcome] ?? 4;
+  } catch (error) {
     if (error?.afterStart === true) {
       deps.stderr(`${String(error.message)}\n`);
       return 4;

@@ -224,3 +224,74 @@ test("close is idempotent, refuses events afterwards and refuses while busy", as
   await assert.rejects(ctx.journal.writeIntent(intent()), /event refused/);
   assert.equal(ctx.journal.snapshot().closed, true);
 });
+
+// Credential evidence: the cache's and the session's proofs and the fixture accounts' receipts, as closed digest-only events.
+const ownerProof = { status: "OWNER_OAUTH_LOCAL_ONLY", sendAuthorized: false, operationId: "preflight/auth/owner-token", sourceUrl: "https://oauth2.googleapis.com/token", fetchedAt: 1790553600, expiresAt: 1790557200, tokenDigest: "a".repeat(64) };
+const keysProof = { status: "SIGNING_KEYS_LOCAL_ONLY", sendAuthorized: false, operationId: "auth-shared/signing-keys/1", sourceUrl: "https://www.googleapis.com/robot/v1/metadata/x509/securetoken@system.gserviceaccount.com", fetchedAt: 1790553600, expiresAt: 1790557200, keyDigests: { synthetic: "b".repeat(64) } };
+const sessionProof = { status: "SIGNED_FIXTURE_LOCAL_ONLY", sendAuthorized: false, principal: "user-a", project: "fireemu-oracle-query", uid: "storage-rules-capture-test-user-a", issuedAt: 1790553599, expiresAt: 1790557199, authenticatedAt: 1790553599, revocationBoundary: null, tokenDigest: "c".repeat(64), signingKeyDigest: "d".repeat(64), keyFetchedAt: 1790553590, keyExpiresAt: 1790555600, claims: { email_verified: true, role: "reader", level: 7 } };
+const ownership = { account: "user-a", project: "fireemu-oracle-query", uid: "storage-rules-capture-test-user-a", runPrefix: "storage-rules-capture-test", emailSha256: "e".repeat(64), creationRequestId: "auth/user-a/create" };
+const cleanup = { account: "user-a", project: "fireemu-oracle-query", uid: "storage-rules-capture-test-user-a", absent: true, requestId: "auth/user-a/absence" };
+
+test("credential proofs, ownership receipts and cleanup receipts are journalled as their own closed events", async (t) => {
+  const ctx = await fixture(t);
+  for (const proof of [ownerProof, keysProof, sessionProof]) await ctx.journal.writeCredentialProof(proof);
+  await ctx.journal.writeOwnership(ownership);
+  await ctx.journal.writeCleanup(cleanup);
+  const rows = (await ctx.rows()).slice(1);
+  assert.deepEqual(rows.map((row) => row.event), ["credential-proof", "credential-proof", "credential-proof", "ownership", "cleanup"]);
+  assert.deepEqual(rows[0].data, ownerProof);
+  assert.deepEqual(rows[2].data, sessionProof);
+  assert.deepEqual(rows[3].data, ownership);
+  assert.deepEqual(rows[4].data, cleanup);
+  assert.equal(ctx.journal.snapshot().uncertain, false);
+});
+
+test("a credential proof must be a plain digest-only record of a local-only status and never carry bearer material", async (t) => {
+  const ctx = await fixture(t);
+  const j = ctx.journal;
+  const refused = [
+    null, [], "x", { ...ownerProof, sendAuthorized: true }, { ...ownerProof, status: "owner" }, { ...ownerProof, status: undefined }, (({ status, ...rest }) => rest)(ownerProof),
+    { ...ownerProof, accessToken: "ya29.CANARYaccessToken0123456789abcdefABCDEF" }, { ...ownerProof, idToken: JWT }, { ...ownerProof, note: `Bearer ${TOKEN}` },
+    { ...ownerProof, fetchedAt: 1.5 }, { ...ownerProof, deep: { a: { b: { c: { d: { e: { f: { g: 1 } } } } } } } },
+    Object.defineProperty({ ...ownerProof }, "hidden", { value: 1, enumerable: false }), { ...ownerProof, big: "x".repeat(5000) },
+  ];
+  for (const bad of refused) await assert.rejects(j.writeCredentialProof(bad), /event refused/, JSON.stringify(bad)?.slice(0, 60));
+  assert.equal(j.snapshot().uncertain, false);
+  assert.equal((await ctx.rows()).length, 1);
+});
+
+test("an ownership receipt has exactly its keys, a known account and project, and a digest instead of an address", async (t) => {
+  const ctx = await fixture(t);
+  const j = ctx.journal;
+  for (const bad of [
+    { ...ownership, email: "storage-rules-capture-test-user-a@example.com" }, (({ emailSha256, ...rest }) => rest)(ownership), { ...ownership, extra: 1 }, { ...ownership, account: "root" }, { ...ownership, project: "other-project" },
+    { ...ownership, uid: "" }, { ...ownership, uid: "u".repeat(129) }, { ...ownership, runPrefix: "other" }, { ...ownership, runPrefix: "storage-rules-other-run" }, (({ runPrefix, ...rest }) => rest)(ownership), { ...ownership, uid: "a b" }, { ...ownership, emailSha256: "E".repeat(64) }, { ...ownership, emailSha256: "e".repeat(63) },
+    { ...ownership, creationRequestId: "case/a/subject" }, { ...ownership, creationRequestId: "auth/user-a/create\n" }, { ...ownership, uid: JWT }, null,
+  ]) await assert.rejects(j.writeOwnership(bad), /event refused/, JSON.stringify(bad)?.slice(0, 60));
+  for (const account of ["user-a", "user-b", "revoked-token", "foreign-project-token"]) await j.writeOwnership({ ...ownership, account, project: account === "foreign-project-token" ? "fireemu-oracle-idp" : "fireemu-oracle-query", creationRequestId: account === "foreign-project-token" ? "auth/foreign-project-token/sign-up" : `auth/${account}/create` });
+  assert.equal((await ctx.rows()).length, 5);
+  // The foreign project's account gets a server-chosen UID, so only the other accounts' UIDs carry the run prefix.
+  await j.writeOwnership({ ...ownership, account: "foreign-project-token", project: "fireemu-oracle-idp", uid: "serverChosenUid123", creationRequestId: "auth/foreign-project-token/sign-up" });
+  await assert.rejects(j.writeOwnership({ ...ownership, uid: "serverChosenUid123" }), /event refused/);
+});
+
+test("a cleanup receipt has exactly its keys, states absence and names its request", async (t) => {
+  const ctx = await fixture(t);
+  const j = ctx.journal;
+  for (const bad of [
+    { ...cleanup, absent: false }, { ...cleanup, absent: "true" }, { ...cleanup, extra: 1 }, (({ requestId, ...rest }) => rest)(cleanup), { ...cleanup, account: "root" }, { ...cleanup, project: "x" },
+    { ...cleanup, requestId: "" }, { ...cleanup, requestId: "auth/user-a/absence\n" }, { ...cleanup, uid: JWT }, null,
+  ]) await assert.rejects(j.writeCleanup(bad), /event refused/, JSON.stringify(bad)?.slice(0, 60));
+  await j.writeCleanup({ ...cleanup, requestId: "recovery/auth/user-a/absence" });
+  assert.equal((await ctx.rows()).length, 2);
+});
+
+test("credential events follow the journal's gate: no event while another is in flight, none after close, and a failed sync leaves it uncertain", async (t) => {
+  let fail = false;
+  const ctx = await fixture(t, { hooks: { sync: async (handle, kind) => { if (fail && kind === "journal") throw new Error("disk"); return handle.sync(); } } });
+  await ctx.journal.writeOwnership(ownership);
+  fail = true;
+  await assert.rejects(ctx.journal.writeCleanup(cleanup), /capture journal uncertain/);
+  assert.equal(ctx.journal.snapshot().uncertain, true);
+  await assert.rejects(ctx.journal.writeCredentialProof(ownerProof), /event refused/);
+});

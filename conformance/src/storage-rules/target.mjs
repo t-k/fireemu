@@ -6,6 +6,7 @@ import { isValidRefValue, referenceOf } from "./runtime-refs.mjs";
 // and path, must stay inside the owned bucket, prefix, documents and Rules resources, and every run-time value comes from
 // the caller's resolver and is checked against its grammar again. Any failure is the one fixed error.
 const QUERY = "fireemu-oracle-query";
+const IDP = "fireemu-oracle-idp";
 const GCS = "https://storage.googleapis.com";
 const FIREBASE = "https://firebasestorage.googleapis.com";
 const FIRESTORE = "https://firestore.googleapis.com";
@@ -166,10 +167,15 @@ export function createTargetBuilder(options) {
         if (headers["content-type"] === undefined) headers["content-type"] = "application/json; charset=utf-8";
       } else bad();
     }
+    // The project a request is billed to is one of the two sandbox projects and agrees with the project its path names.
+    const project = request.project === undefined ? QUERY : request.project;
+    if (project !== QUERY && project !== IDP) bad();
+    const named = /\/projects\/(fireemu-oracle-[a-z]+)(?=[/:]|$)/.exec(new URL(url).pathname);
+    if (named !== null && named[1] !== project) bad();
     const sorted = Object.fromEntries(Object.entries(headers).sort(([a], [b]) => (a < b ? -1 : 1)));
-    const targetSha256 = digestOf({ rowId: row.id, method: request.method, url, headers: sorted, body, credential: request.credential, project: request.project ?? QUERY });
+    const targetSha256 = digestOf({ rowId: row.id, method: request.method, url, headers: sorted, body, credential: request.credential, project });
     const redacted = `${request.method} ${request.origin}${redactedPath}${redactedPieces.length ? `?${redactedPieces.join("&")}` : ""}`;
-    const prepared = { rowId: row.id, credential: request.credential, project: request.project ?? QUERY, redacted, targetSha256 };
+    const prepared = { rowId: row.id, credential: request.credential, project, redacted, targetSha256 };
     Object.defineProperty(prepared, "spec", { value: Object.freeze({ url, method: request.method, headers: Object.freeze(sorted), body }), enumerable: false });
     Object.freeze(prepared);
     issued.add(prepared);

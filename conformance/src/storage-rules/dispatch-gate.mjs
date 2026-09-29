@@ -44,6 +44,8 @@ export function createDispatchGate(options) {
     const out = {};
     for (const [name, value] of Object.entries(headers)) {
       if (!CREDENTIAL_HEADERS.has(name) || typeof value !== "string" || !/^[\x20-\x7e]{1,4096}$/.test(value)) bad("invalid credential headers");
+      // The quota project is the project the target names; a provider (or row data behind it) cannot bill another one.
+      if (name === "x-goog-user-project" && value !== prepared.project) bad("invalid credential headers");
       out[name] = value;
     }
     return out;

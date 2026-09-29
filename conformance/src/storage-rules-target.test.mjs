@@ -291,3 +291,15 @@ test("a prepared target carries the project its request is billed to, and the di
   const other = { ...original, request: { ...original.request, project: "fireemu-oracle-idp" } };
   assert.notEqual(b.prepare(other, resolver()).targetSha256, b.prepare(original, resolver()).targetSha256);
 });
+
+test("the billed project is one of the two sandbox projects and agrees with the project the path names", async () => {
+  const b = await builder();
+  const query = row("ruleset/v1/create");
+  assert.equal(query.request.path.includes("/projects/fireemu-oracle-query/"), true);
+  for (const project of ["fireemu-oracle-idp", "another-project", "", null, 7, "fireemu-oracle-query\n"]) {
+    assert.throws(() => b.prepare({ ...query, request: { ...query.request, project } }, resolver()), /invalid target|./, String(project));
+  }
+  assert.doesNotThrow(() => b.prepare({ ...query, request: { ...query.request, project: "fireemu-oracle-query" } }, resolver()));
+  // A row's headers cannot carry the quota project either.
+  assert.throws(() => b.prepare({ ...query, request: { ...query.request, headers: { ...query.request.headers, "x-goog-user-project": "fireemu-oracle-idp" } } }, resolver()));
+});

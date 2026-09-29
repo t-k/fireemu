@@ -1,3 +1,4 @@
+import { createHmac } from "node:crypto";
 import { createAuthWireTransport } from "./auth-wire.mjs";
 import { createCountedCredentialCache } from "./credential-cache.mjs";
 import { createCredentialFixtureSession } from "./credential-session.mjs";
@@ -9,7 +10,12 @@ const USER_PRINCIPALS = new Set(["user-a", "user-b", "user-plain", "revoked-toke
 const OWNER_REFRESH_MARGIN_SECONDS = 300;
 const USER_TOKEN_MARGIN_SECONDS = 60;
 const OWNER_MARGIN_SECONDS = 60;
-const INPUTS = ["gate", "adc", "apiKeys", "passwords", "digestSalt", "runId", "nowSeconds", "waitUntilSeconds", "writeProof", "writeOwnership", "writeCleanup", "userTokenScheme", "malformed"];
+// The web Storage SDK sends the user's ID token as `Authorization: Firebase <token>` (pinned firebase 12.18.0,
+// @firebase/storage 0.14.5: conformance/node_modules/@firebase/storage/dist/index.esm.js:816, dist/node-esm/index.node.esm.js:813).
+const USER_TOKEN_SCHEME = "Firebase";
+const PROJECTS = new Set(["fireemu-oracle-query", "fireemu-oracle-idp"]);
+const EVIDENCE = ["writeCredentialProof", "writeOwnership", "writeCleanup"];
+const INPUTS = ["gate", "adc", "apiKeys", "passwords", "digestSalt", "runId", "nowSeconds", "waitUntilSeconds", "evidence", "malformed"];
 const plain = (value) => value !== null && typeof value === "object" && Object.getPrototypeOf(value) === Object.prototype;
 const bad = (message) => { throw new Error(message); };
 
@@ -19,14 +25,21 @@ function tokenExpiry(token) {
 
 export function createRunnerDelegates(options) {
   if (!plain(options) || Reflect.ownKeys(options).length !== INPUTS.length || !INPUTS.every((key) => Object.hasOwn(options, key))) bad("invalid runner delegate options");
-  const { gate, adc, apiKeys, passwords, digestSalt, runId, nowSeconds, waitUntilSeconds, writeProof, writeOwnership, writeCleanup, userTokenScheme, malformed } = options;
+  const { gate, adc, apiKeys, passwords, digestSalt, runId, nowSeconds, waitUntilSeconds, evidence, malformed } = options;
   if (
     typeof gate?.delegated?.http !== "function" || typeof gate?.delegated?.counter?.send !== "function" || typeof gate?.snapshot !== "function" ||
-    !["Firebase", "Bearer"].includes(userTokenScheme) || !plain(malformed) ||
+    !plain(evidence) || !EVIDENCE.every((name) => typeof evidence[name] === "function") || !plain(malformed) ||
     ["malformed-token", "malformed-oauth"].some((key) => typeof malformed[key] !== "string" || !/^[\x21-\x7e][\x20-\x7e]{0,255}$/.test(malformed[key])) ||
-    ![nowSeconds, waitUntilSeconds, writeProof, writeOwnership, writeCleanup].every((fn) => typeof fn === "function")
+    ![nowSeconds, waitUntilSeconds].every((fn) => typeof fn === "function")
   ) bad("invalid runner delegate options");
 
+  // The modules write their own record shapes; the journal takes only digests. An address becomes a salted digest, its run prefix stays.
+  const writeProof = (proof) => evidence.writeCredentialProof(proof);
+  const writeOwnership = (receipt) => evidence.writeOwnership({
+    account: receipt.account, project: receipt.project, uid: receipt.uid, runPrefix: `storage-rules-${runId}`,
+    emailSha256: createHmac("sha256", Buffer.from(digestSalt, "hex")).update("storage-rules-email\0").update(receipt.email).digest("hex"), creationRequestId: receipt.creationRequestId,
+  });
+  const writeCleanup = (receipt) => evidence.writeCleanup({ account: receipt.account, project: receipt.project, uid: receipt.uid, absent: receipt.absent, requestId: receipt.requestId });
   const cache = createCountedCredentialCache({ adc, counter: gate.delegated.counter, digestSalt, nowSeconds, sendHttp: gate.delegated.http, writeProof });
   const wire = createAuthWireTransport({ runId, apiKeys, ownerCredential: () => cache.ownerCredential(), nowSeconds, sendHttp: gate.delegated.http });
   let session = null;
@@ -124,11 +137,11 @@ export function createRunnerDelegates(options) {
       if (credential === "anonymous") return {};
       if (credential === "malformed-token" || credential === "malformed-oauth") return { authorization: malformed[credential] };
       if (credential === "admin") {
+        if (!PROJECTS.has(context?.project)) bad("no known project for the owner credential");
         const owner = cache.ownerCredential();
-        if (typeof context?.project !== "string") bad("no project for the owner credential");
         return { authorization: `Bearer ${owner.accessToken}`, "x-goog-user-project": context.project };
       }
-      if (USER_PRINCIPALS.has(credential) || credential === "foreign-project-token") return { authorization: `${userTokenScheme} ${userToken(credential)}` };
+      if (USER_PRINCIPALS.has(credential) || credential === "foreign-project-token") return { authorization: `${USER_TOKEN_SCHEME} ${userToken(credential)}` };
       return bad("unknown credential");
     },
   };

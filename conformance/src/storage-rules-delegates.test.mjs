@@ -79,7 +79,7 @@ function fakeIdentity(clock) {
   };
 }
 
-async function assemble({ simulatorOptions = {}, respond = () => undefined, admission } = {}) {
+async function assemble({ simulatorOptions = {}, respond = () => undefined, admission, evidence } = {}) {
   const clock = { now: Math.floor(Date.now() / 1000) };
   const identity = fakeIdentity(clock);
   const simulator = createSimulator({ manifest, options: { invalidContent, ...simulatorOptions } });
@@ -108,7 +108,7 @@ async function assemble({ simulatorOptions = {}, respond = () => undefined, admi
     preflightIds: manifest.preflightIds, admission: admission ?? { check: async () => ({ admitted: true }) },
   });
   real = createRunnerDelegates({ gate, adc, apiKeys, passwords, digestSalt: salt, runId: "lr", nowSeconds: () => clock.now, waitUntilSeconds: async (value) => { clock.now = Math.max(clock.now, value); },
-    writeProof: async (proof) => { seen.proofs.push(proof); }, writeOwnership: async (row) => { seen.ownership.push(row); }, writeCleanup: async (row) => { seen.cleanup.push(row); }, userTokenScheme: "Firebase", malformed: MALFORMED });
+    evidence: evidence ?? { writeCredentialProof: async (proof) => { seen.proofs.push(proof); }, writeOwnership: async (row) => { seen.ownership.push(row); }, writeCleanup: async (row) => { seen.cleanup.push(row); } }, malformed: MALFORMED });
   const controller = createController({
     manifest, schedule: buildSchedule(manifest), recoverySchedule: buildRecoverySchedule(manifest), gate, targets, refs, tables, objects, run, capture,
     delegates: real.delegates, wait: async () => {}, credentials: real.credentials,
@@ -213,16 +213,37 @@ test("the delegate options are a closed record and the credential provider refus
   const good = await assemble();
   assert.throws(() => createRunnerDelegates(null), /invalid runner delegate options/);
   assert.throws(() => createRunnerDelegates({}), /invalid runner delegate options/);
-  const base = { gate: good.gate, adc, apiKeys, passwords, digestSalt: salt, runId: "lr", nowSeconds: () => 1, waitUntilSeconds: async () => {}, writeProof: async () => {}, writeOwnership: async () => {}, writeCleanup: async () => {}, userTokenScheme: "Firebase", malformed: MALFORMED };
+  const noEvidence = { writeCredentialProof: async () => {}, writeOwnership: async () => {}, writeCleanup: async () => {} };
+  const base = { gate: good.gate, adc, apiKeys, passwords, digestSalt: salt, runId: "lr", nowSeconds: () => 1, waitUntilSeconds: async () => {}, evidence: noEvidence, malformed: MALFORMED };
   assert.doesNotThrow(() => createRunnerDelegates(base));
-  for (const bad of [{ ...base, extra: 1 }, { ...base, userTokenScheme: "Basic" }, { ...base, malformed: { ...MALFORMED, "malformed-token": "" } }, { ...base, malformed: { "malformed-token": "x" } }, { ...base, gate: {} }, { ...base, nowSeconds: 1 }]) {
+  for (const bad of [{ ...base, extra: 1 }, { ...base, userTokenScheme: "Bearer" }, { ...base, evidence: {} }, { ...base, evidence: { ...noEvidence, writeCleanup: 1 } }, { ...base, malformed: { ...MALFORMED, "malformed-token": "" } }, { ...base, malformed: { "malformed-token": "x" } }, { ...base, gate: {} }, { ...base, nowSeconds: 1 }]) {
     assert.throws(() => createRunnerDelegates(bad), /invalid runner delegate options/);
   }
   const { credentials } = createRunnerDelegates(base);
   assert.throws(() => credentials.headersFor("adc-refresh", { project: "fireemu-oracle-query" }), /unknown credential/);
-  assert.throws(() => credentials.headersFor("admin", {}), /./);
+  assert.throws(() => credentials.headersFor("admin", {}), /no known project/);
+  assert.throws(() => credentials.headersFor("admin", { project: "another-project" }), /no known project/);
   assert.deepEqual(credentials.headersFor("anonymous", {}), {});
   assert.equal(credentials.fresh({ request: { credential: "adc-refresh" } }), false);
   assert.equal(credentials.fresh({ request: { credential: "anonymous" } }), true);
   assert.equal(credentials.fresh({ request: { credential: "user-a" } }), false);
+});
+
+test("ownership and cleanup receipts reach the real journal as digests, and no file of it holds a secret", async (t) => {
+  const { mkdtemp, open, lstat, mkdir, readFile, rm } = await import("node:fs/promises");
+  const { createCaptureJournal } = await import("./storage-rules/capture-journal.mjs");
+  const directory = await mkdtemp("/private/tmp/storage-rules-delegates-");
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const journal = await createCaptureJournal({ directory, runId: options.runId, sourceCommit: options.sourceCommit, manifestDigest: manifest.sha256, digestSalt: salt, requestIds: manifest.rows.map((r) => r.id), io: { open, lstat, mkdir } });
+  const h = await assemble({ evidence: journal });
+  const result = await h.controller.run();
+  assert.equal(result.status, "finished", JSON.stringify(result));
+  await journal.close();
+  const text = await readFile(`${directory}/captures.jsonl`, "utf8");
+  const rows = text.split("\n").filter(Boolean).map((line) => JSON.parse(line));
+  assert.deepEqual(rows.filter((row) => row.event === "ownership").map((row) => row.data.account).sort(), ["foreign-project-token", "revoked-token", "user-a", "user-b"]);
+  assert.deepEqual(rows.filter((row) => row.event === "cleanup").map((row) => row.data.account).sort(), ["foreign-project-token", "revoked-token", "user-a", "user-b"]);
+  assert.equal(rows.filter((row) => row.event === "credential-proof").length, 9);
+  assert.ok(rows.filter((row) => row.event === "ownership").every((row) => row.data.runPrefix === "storage-rules-lr" && /^[0-9a-f]{64}$/.test(row.data.emailSha256)));
+  for (const secret of [OWNER_TOKEN, "private-refresh-secret", adc.refresh_token, adc.client_secret, "@example.com", ...Object.values(passwords)]) assert.equal(text.includes(secret), false, secret.slice(0, 12));
 });

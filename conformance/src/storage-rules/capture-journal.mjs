@@ -5,7 +5,7 @@ import { createRedactor } from "./redaction.mjs";
 
 // Run-local, append-only capture of what a request intended (intent), what came back (response, redacted and stored as a
 // content-addressed blob), what it meant (facts), which run-time values were bound (proof) and what the controller
-// said (note). Every row and blob is synced before the call returns. Anything a writer is given is redacted or refused,
+// said (note); plus the credential evidence (proofs, ownership and cleanup receipts of the fixture accounts). Every row and blob is synced before the call returns. Anything a writer is given is redacted or refused,
 // so no file under the run directory holds bearer material. This performs no HTTP.
 const plain = (value) => value !== null && typeof value === "object" && Object.getPrototypeOf(value) === Object.prototype;
 const matches = (value, pattern) => typeof value === "string" && !/[\r\n]/.test(value) && pattern.test(value);
@@ -13,6 +13,9 @@ const requestId = (value) => matches(value, /^[A-Za-z0-9][A-Za-z0-9._/-]{0,159}$
 const MAX_ROW_BYTES = 256 * 1024;
 const MAX_BLOB_BYTES = 2 * 1024 * 1024;
 const MAX_NOTE = 4096;
+const MAX_EVIDENCE = 8192;
+const FIXTURE_ACCOUNTS = new Set(["user-a", "user-b", "revoked-token", "foreign-project-token"]);
+const FIXTURE_PROJECTS = new Set(["fireemu-oracle-query", "fireemu-oracle-idp"]);
 
 function record(value, keys) {
   if (!plain(value)) throw new Error();
@@ -224,6 +227,33 @@ export async function createCaptureJournal(input) {
         const row = record(input, ["runId", "type", "key", "operationId", "attempt", "valueSha256"]);
         declaredOperation(row.operationId);
         if (row.runId !== options.runId || !matches(row.type, /^[a-z-]{1,32}$/) || typeof row.key !== "string" || row.key.length === 0 || row.key.length > 1024 || redactor.text(row.key) !== row.key || !Number.isSafeInteger(row.attempt) || row.attempt < 1 || !matches(row.valueSha256, /^[0-9a-f]{64}$/)) throw new Error();
+        return async () => ({ data: row });
+      });
+    },
+    // What the credential modules learn, as digests only: the counted cache's proofs and the session's token proofs.
+    writeCredentialProof(input) {
+      return event("credential-proof", () => {
+        const proof = plainJson(input);
+        if (!plain(proof) || !matches(proof.status, /^[A-Z][A-Z_]{2,63}$/) || proof.sendAuthorized !== false) throw new Error();
+        const text = JSON.stringify(proof);
+        if (text.length > MAX_EVIDENCE || redactor.text(text) !== text) throw new Error();
+        return async () => ({ data: proof });
+      });
+    },
+    // The fixture accounts the run created and proved absent again. Only fixed keys; the address appears as a salted digest.
+    writeOwnership(input) {
+      return event("ownership", () => {
+        const row = record(input, ["account", "project", "uid", "runPrefix", "emailSha256", "creationRequestId"]);
+        if (!FIXTURE_ACCOUNTS.has(row.account) || !FIXTURE_PROJECTS.has(row.project) || !matches(row.uid, /^[A-Za-z0-9._-]{1,128}$/) || !matches(row.runPrefix, /^storage-rules-[a-z0-9][a-z0-9-]{0,47}$/) || (row.account !== "foreign-project-token" && !row.uid.startsWith(`${row.runPrefix}-`)) || !matches(row.emailSha256, /^[0-9a-f]{64}$/) || !matches(row.creationRequestId, /^auth\/[a-z-]{1,32}\/(?:create|sign-up)$/)) throw new Error();
+        if (redactor.text(JSON.stringify(row)) !== JSON.stringify(row)) throw new Error();
+        return async () => ({ data: row });
+      });
+    },
+    writeCleanup(input) {
+      return event("cleanup", () => {
+        const row = record(input, ["account", "project", "uid", "absent", "requestId"]);
+        if (!FIXTURE_ACCOUNTS.has(row.account) || !FIXTURE_PROJECTS.has(row.project) || !matches(row.uid, /^[A-Za-z0-9._-]{1,128}$/) || row.absent !== true || !matches(row.requestId, /^(?:recovery\/)?auth\/[a-z-]{1,32}\/absence$/)) throw new Error();
+        if (redactor.text(JSON.stringify(row)) !== JSON.stringify(row)) throw new Error();
         return async () => ({ data: row });
       });
     },

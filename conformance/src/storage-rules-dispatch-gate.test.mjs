@@ -93,6 +93,22 @@ test("the credential provider is told which project the request is billed to", a
   assert.ok(seen.some(([credential, project, frozen]) => credential === prepared.credential && project === prepared.project && frozen));
 });
 
+test("the quota project header always equals the target's project, whatever the provider returns", async () => {
+  for (const project of ["fireemu-oracle-idp", "another-project", "", "fireemu-oracle-query\n"]) {
+    let wrong = false;
+    const h = await harness({ credentials: { headersFor: (credential, context) => ({ authorization: "Bearer t", "x-goog-user-project": wrong ? project : context.project }) } });
+    await h.admit();
+    wrong = true;
+    const prepared = h.prepare(READ);
+    h.trace.length = 0;
+    await assert.rejects(h.gate.send(prepared, normalMeta), /invalid credential headers/);
+    assert.equal(h.trace.some((entry) => entry[0] === "transport"), false);
+  }
+  const ok = await harness({ credentials: { headersFor: (credential, context) => ({ authorization: "Bearer t", "x-goog-user-project": context.project }) } });
+  await ok.admit();
+  await ok.gate.send(ok.prepare(READ), normalMeta);
+});
+
 test("credential headers are closed to the two allowed names and printable values, and a refusal sends nothing", async () => {
   for (const headers of [{ cookie: "a=b" }, { authorization: "x\r\nX: y" }, { authorization: 7 }, { authorization: "" }, { "x-other": "1" }, null, []]) {
     const h = await harness({ credentials: { headersFor: () => headers } });

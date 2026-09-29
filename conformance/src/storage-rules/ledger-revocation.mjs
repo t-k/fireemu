@@ -13,8 +13,10 @@ export function normalizeLedgerText(text) {
 
 export const NORMALIZED_DELEGATION_MARKER = normalizeLedgerText("調整役への委任");
 // The words that revoke, on the normalized (NFKC, lower-cased) line: "revoke" (also revoked, revokes), "revocation", "withdraw" (also withdrawn, withdrawal)
-// and the Japanese 取消, 取り消(し/す) and 撤回.
-const REVOCATION_WORDS = /revoke|revocation|withdraw|取消|取り消|撤回/;
+// "rescind" and the Japanese 取消, 取り消(し/す), 撤回, 取り下げ, 中止 and 無効.
+// The delegation rows carry prose of their own (中止, 無効 and 取り下げ occur in it), so a delegation is revoked only by the narrower set.
+const DELEGATION_WORDS = /revoke|revocation|withdraw|取消|取り消|撤回/;
+const REVOCATION_WORDS = /revoke|revocation|withdraw|rescind|取消|取り消|撤回|取り下げ|中止|無効/;
 const PIN_PREFIX_LENGTH = 8;
 
 /**
@@ -44,6 +46,8 @@ export function rowSha256(line) {
 
 // A pin a line may name as a key-bound field, and the token shapes that count as references to a version.
 const KEYED = /(packetsha256|sourcecommit|runnersha256|manifestsha256|fixtureschemasha256|envelopeid)=([a-z0-9][a-z0-9._-]*)/g;
+// A lane other than this one, named the way the ledger names lanes: the revocation of another lane is not a revocation of this one.
+const OTHER_LANE = /(?<![a-z0-9-])(?:fs|auth|functions|storage|hosting|firestore|app-check)-[a-z][a-z0-9-]*/;
 const HEX_REFERENCE = /(?<![0-9a-f])(?:[0-9a-f]{40}|[0-9a-f]{64})(?![0-9a-f])/g;
 
 /**
@@ -61,9 +65,12 @@ const HEX_REFERENCE = /(?<![0-9a-f])(?:[0-9a-f]{40}|[0-9a-f]{64})(?![0-9a-f])/g;
 export function scanRevocations({ ledgerText, taskId, pins, envelopeId, allowlist = HISTORICAL_REVOCATION_ALLOWLIST }) {
   const allowed = new Set(allowlist.map((entry) => entry.sha256));
   const taskKey = normalizeLedgerText(taskId);
+  const packetKey = normalizeLedgerText(pins.packetSha256);
   const pinPrefixes = Object.values(pins).map((pin) => normalizeLedgerText(pin).slice(0, PIN_PREFIX_LENGTH));
   const envelopeKey = typeof envelopeId === "string" && envelopeId !== "" ? normalizeLedgerText(envelopeId) : null;
   const approved = new Set();
+  const globalCandidates = [];
+  let decisionLine = -1;
   const lane = [];
   const consumed = [];
   const delegation = [];
@@ -72,7 +79,10 @@ export function scanRevocations({ ledgerText, taskId, pins, envelopeId, allowlis
     const keyed = [...text.matchAll(KEYED)].map((match) => `${match[1]}=${match[2]}`);
     if (!REVOCATION_WORDS.test(text)) {
       // An earlier approval line of this lane: what it carries is what a later consumed revocation may cite.
-      if (text.includes(taskKey)) keyed.forEach((entry) => approved.add(entry));
+      const subject = (line.split("|")[1] ?? "").trim();
+      const approvalLine = text.includes(taskKey) && (text.includes("decision=approve") || normalizeLedgerText(subject).endsWith(" envelope"));
+      if (approvalLine) keyed.forEach((entry) => approved.add(entry));
+      if (text.includes(pinPrefixes[0]) && text.includes(packetKey)) decisionLine = index + 1;
     } else if (!allowed.has(rowSha256(line))) {
       const namesLane = text.includes(taskKey) || withoutQualifiers(normalizeLedgerText(line.split("|")[1] ?? "")).includes(taskKey);
       const namesThisVersion = pinPrefixes.some((prefix) => text.includes(prefix)) || (envelopeKey !== null && text.includes(envelopeKey));
@@ -81,9 +91,14 @@ export function scanRevocations({ ledgerText, taskId, pins, envelopeId, allowlis
       const wellFormed = keyed.length > 0 && keyed.every((entry) => approved.has(entry)) && references.every((reference) => keyedValues.has(reference));
       if (namesThisVersion || (namesLane && !wellFormed)) lane.push(index + 1);
       else if (namesLane) consumed.push(index + 1);
-      if (text.includes(NORMALIZED_DELEGATION_MARKER)) delegation.push(index + 1);
+      const isDelegation = text.includes(NORMALIZED_DELEGATION_MARKER);
+      if (isDelegation) { if (DELEGATION_WORDS.test(text)) delegation.push(index + 1); }
+      // A revocation that names no lane at all (the whole sandbox program, an unscoped "all") is a candidate to stop this lane too.
+      else if (!namesLane && !namesThisVersion && !OTHER_LANE.test(text)) globalCandidates.push(index + 1);
     }
   });
+  // It counts only when it was written after this packet's decision: a decision written later supersedes an earlier global revocation.
+  if (decisionLine !== -1) lane.push(...globalCandidates.filter((line) => line > decisionLine));
   return { lane, consumed, delegation };
 }
 

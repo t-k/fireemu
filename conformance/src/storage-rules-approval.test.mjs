@@ -410,8 +410,6 @@ test("an envelope ID named on a revoked line stops a delegated approval", async 
 for (const [name, row] of Object.entries({
   "another lane with other hashes": note("STORAGE-OBJECT stage3-v1", `decision=REVOKED; packetSha256=${"9".repeat(64)}; sourceCommit=${"8".repeat(40)}`),
   "another packet of this lane with other hashes": note("STORAGE-RULES other-packet", `REVOKED packetSha256=${"9".repeat(64)}`),
-  "prose without an identifier": "A revoked test user is only mentioned in this note.",
-  "a similar but different commit prefix": note("anything else", `REVOKED ${"b".repeat(7)}0`),
   "another packet of this lane with a full-width qualifier": note("STORAGE-RULES other-packet（訂正）", `REVOKED packetSha256=${"9".repeat(64)}`),
   "another packet of this lane with an ASCII qualifier": note("STORAGE-RULES other-packet(取消)", `REVOKED packetSha256=${"9".repeat(64)}`),
   "another lane with a qualifier": note("STORAGE-OBJECT（訂正）", "REVOKED"),
@@ -527,6 +525,55 @@ for (const [name, row] of Object.entries(stops)) {
     assert.throws(() => validate({ ledgerText: [row, decision()].join("\n"), packet, review }), /approval revoked/);
   });
 }
+
+// A revocation that applies to every lane and names none of them still ends this lane's approval, when it was written after the decision.
+test("a global revocation written after the decision stops the approval, and one written before it does not", async () => {
+  const validate = await load();
+  const after = {
+    "the whole sandbox program": note("全体", "decision=REVOKED; すべての本番送信承認を取り消す"),
+    "a bare all": note("all", "revoked"),
+    "an empty subject": "- 2026-09-29 |  | decision=REVOKED | オーナー | note.md",
+    "a revocation word in the body only": note("owner note", "本番送信を全て撤回する"),
+    "a withdrawal": note("sandbox", "withdrawn: all sends"),
+    "a revocation with a review digest": note("review", `decision=REVOKED; review=${"ab".repeat(32)}`),
+    "rescind": note("sandbox", "rescind every approval"),
+    "prose without an identifier": "A revoked test user is only mentioned in this note.",
+    "a similar but different commit prefix": note("anything else", `REVOKED ${"b".repeat(7)}0`),
+    "中止": note("全体", "承認を中止"),
+    "無効": note("全体", "承認は無効"),
+    "取り下げ": note("全体", "承認を取り下げ"),
+  };
+  for (const [name, row] of Object.entries(after)) {
+    assert.throws(() => validate({ ledgerText: [decision(), row].join("\n"), packet, review }), /approval revoked/, name);
+    assert.throws(() => validate({ ledgerText: [decision(), "- 2026-09-29 | unrelated | fine | note.md", row].join("\n"), packet, review }), /approval revoked/, `${name} later`);
+    // Written before the approval, it was superseded by it.
+    assert.equal(validate({ ledgerText: [row, decision()].join("\n"), packet, review }).sendAuthorized, false, `${name} before`);
+  }
+});
+
+test("a revocation that names another lane, and delegation lines, are not global revocations of this lane", async () => {
+  const validate = await load();
+  for (const row of [note("STORAGE-OBJECT stage3-v1", "decision=REVOKED"), note("FS-TRANSACTION p10-grpc-boundary", "revoked"), note("AUTH-FEDERATION record-followup", "取消"), note("FUNCTIONS-EVENTS stage2", "withdrawn"), note("HOSTING-CONFIG x", "撤回")]) {
+    assert.equal(validate({ ledgerText: [decision(), row].join("\n"), packet, review }).sendAuthorized, false, row);
+  }
+  // The delegation rows' own prose uses 中止, 無効 and 取り下げ; only the narrower revocation words revoke a delegation.
+  for (const word of ["中止", "無効", "取り下げ", "rescind"]) {
+    assert.equal(validate({ ledgerText: `${delegatedLedger()}\n${note("owner note", `調整役への委任について: ${word}`)}`, packet, review: { ...review, envelopeId, withinEnvelope: true } }).sendAuthorized, false, word);
+  }
+  // A delegation revocation ends coordinator rows, not an owner approval.
+  assert.equal(validate({ ledgerText: [decision(), note("調整役への委任（本番の送信）", "decision=REVOKED")].join("\n"), packet, review }).sendAuthorized, false);
+});
+
+test("only the lane's approval and envelope lines feed the earlier pins a consumed revocation may cite", async () => {
+  const validate = await load();
+  const status = note(laneSubject, `status update: packetSha256=${foreignSha} was reviewed`);
+  const consumed = note(laneSubject, `decision=REVOKED; packetSha256=${foreignSha}`);
+  assert.throws(() => validate({ ledgerText: [status, consumed, decision()].join("\n"), packet, review }), /approval revoked/);
+  assert.equal(validate({ ledgerText: [v1Approval(), consumed, decision()].join("\n"), packet, review }).sendAuthorized, false);
+  const envelopeRow = note(`${laneSubject} envelope`, `envelopeId=${v1EnvelopeId}; project=x`);
+  const consumedEnvelope = note(laneSubject, `decision=REVOKED; envelopeId=${v1EnvelopeId}`);
+  assert.equal(validate({ ledgerText: [envelopeRow, consumedEnvelope, decision()].join("\n"), packet, review }).sendAuthorized, false);
+});
 
 test("every revocation word also makes a consumed revocation of an earlier version, when it is well formed", async () => {
   const validate = await load();

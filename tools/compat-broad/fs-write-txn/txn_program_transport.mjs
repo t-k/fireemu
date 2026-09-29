@@ -67,7 +67,10 @@ export function validateCall(spec) {
       keys(request, ['database', 'options']);
       if (request.database !== database) throw new Error('program database differs');
       if (Object.keys(request.options ?? {}).length !== 1) throw new Error('program transaction mode differs');
-      keys(request.options, ['readWrite']); keys(request.options.readWrite, []);
+      // A fresh transaction, read-write or read-only at its own time; never a retry of another one.
+      const mode = Object.keys(request.options)[0];
+      if (!['readWrite', 'readOnly'].includes(mode)) throw new Error('program transaction mode differs');
+      keys(request.options, [mode]); keys(request.options[mode], []);
       break;
     }
     case 'GetDocument':

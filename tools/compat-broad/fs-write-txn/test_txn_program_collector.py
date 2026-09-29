@@ -23,7 +23,7 @@ class Clock:
 class Service:
     """A stand-in for Firestore over both transports; each knob is one production answer a table may allow."""
 
-    def __init__(self, clock, *, fail_code=9, writer_code=0, writer_applies=None, rollback_code=0, repeat_rollback_code=0, after_commit_rollback_code=10, fail_at=None, foreign_marker=False, duplicate_tokens=False, corrupt=None, existing=None, dead_on_failure=False, dead_rollback_code=10, finished_reads_refused=False, locks=False, partial_publish=False):
+    def __init__(self, clock, *, fail_code=9, writer_code=0, writer_applies=None, rollback_code=0, repeat_rollback_code=0, after_commit_rollback_code=10, fail_at=None, foreign_marker=False, duplicate_tokens=False, corrupt=None, existing=None, dead_on_failure=False, dead_rollback_code=10, finished_reads_refused=False, locks=False, partial_publish=False, ro_snapshot="begin", ro_empty_refused=False):
         self.clock, self.fail_code, self.writer_code, self.rollback_code = clock, fail_code, writer_code, rollback_code
         self.writer_applies = writer_applies if writer_applies is not None else writer_code == 0
         self.repeat_rollback_code, self.after_commit_rollback_code = repeat_rollback_code, after_commit_rollback_code
@@ -31,6 +31,8 @@ class Service:
         self.dead_on_failure, self.dead_rollback_code = dead_on_failure, dead_rollback_code
         self.finished_reads_refused = finished_reads_refused
         self.locks, self.partial_publish, self.locked = locks, partial_publish, {}
+        self.ro_snapshot, self.readonly, self.snapshots = ro_snapshot, set(), {}
+        self.ro_empty_refused = ro_empty_refused
         self.calls, self.documents, self.tokens, self.version = [], {}, {}, 0
         if existing:
             self.documents[existing] = {"name": existing, "fields": {}, "version": self._bump()}
@@ -55,11 +57,18 @@ class Service:
         if method == "BeginTransaction":
             value = base64.b64encode(f"issued-{0 if self.duplicate_tokens else len(self.tokens)}".encode()).decode()
             self.tokens[value] = "open"
+            if "readOnly" in request["options"]:
+                self.readonly.add(value)
+                if self.ro_snapshot == "begin": self.snapshots[value] = copy.deepcopy(self.documents)
             return self._receipt(transport, 0, response={"transaction": value})
         if method == "GetDocument":
             if token and (self.tokens.get(token) == "dead" or self.finished_reads_refused and self.tokens.get(token) in ("committed", "rolled-back")):
                 return self._receipt(transport, 10, details="The referenced transaction has expired or is no longer valid.")
-            document = self.documents.get(request["name"])
+            source = self.documents
+            if token in self.readonly and self.ro_snapshot != "latest":
+                if token not in self.snapshots: self.snapshots[token] = copy.deepcopy(self.documents)
+                source = self.snapshots[token]
+            document = source.get(request["name"])
             if document is None:
                 return self._receipt(transport, 5, details="not found")
             if token and self.locks and self.tokens.get(token) == "open":
@@ -75,7 +84,8 @@ class Service:
                 return self._receipt(transport, 10, details="The referenced transaction has expired or is no longer valid.")
             frames = []
             for name in request["documents"]:
-                document = self.documents.get(name)
+                source = self.snapshots.setdefault(token, copy.deepcopy(self.documents)) if token in self.readonly and self.ro_snapshot != "latest" else self.documents
+                document = source.get(name)
                 if document is None:
                     frames.append({"missing": name, "readTime": self._stamp(transport), **({"transaction": "", "result": "missing"} if transport == "grpc" else {})})
                 else:
@@ -108,6 +118,10 @@ class Service:
         writes = request["writes"]
         if token and self.tokens.get(token) in ("committed", "rolled-back"):
             return self._receipt(transport, 10, details="The referenced transaction has expired or is no longer valid.")
+        if writes and token in self.readonly:
+            return self._receipt(transport, 3, details="Cannot write in a read-only transaction.")
+        if not writes and token in self.readonly and self.ro_empty_refused:
+            return self._receipt(transport, 3, details="The referenced transaction has expired or is no longer valid.")
         if not writes:
             if self.tokens.get(token) != "open":
                 return self._receipt(transport, 10, details="The referenced transaction has expired or is no longer valid.")

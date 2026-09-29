@@ -162,3 +162,97 @@ def test_a_grpc_batch_entry_with_a_stray_transaction_or_a_disagreeing_discrimina
     good[0] = {**good[0], **change}
     with pytest.raises(ValueError, match="unrequested|discriminator"):
         ledger.after("x", "grpc", "BatchGetDocuments", request, step, receipt(response={"responses": good}), timing())
+
+
+# --- read-only transactions ---
+
+def ro_rows(transport, mode="readOnly"):
+    def step(step_id, rpc, role, **kwargs):
+        base = {"id": f"{transport}/{step_id}", "transport": transport, "rpc": rpc, "document": None, "tokenInput": None, "tokenOutput": None, "writes": (), "caseId": None, "role": role, "allow": (0,)}
+        return {**base, **kwargs}
+    token = f"{transport}-s"
+    return [
+        step("begin", "BeginTransaction", "control", tokenOutput=token, mode=mode),
+        step("writer", "Commit", "outside-writer", writes=({"document": "a", "state": f"{transport}-empty", "exists": True},), caseId=f"{transport}/writer", allow=(0, 10), deadlineMs=30000),
+        step("ro-read", "GetDocument", "observation", document="a", tokenInput=token, caseId=f"{transport}/ro-read"),
+        step("ro-batch", "BatchGetDocuments", "observation", documents=("a", "m"), tokenInput=token, caseId=f"{transport}/ro-batch"),
+        step("ro-write", "Commit", "observation", tokenInput=token, writes=({"document": "a", "state": "held", "exists": True},), caseId=f"{transport}/ro-write", allow=(3, 5, 9, 10)),
+        step("ro-empty", "Commit", "observation", tokenInput=token, caseId=f"{transport}/ro-empty"),
+        step("post", "GetDocument", "post-state", document="a"),
+    ]
+
+
+def ro_table(mode="readOnly", transports=("rest",)):
+    steps = tuple(probes() + [row for transport in transports for row in ro_rows(transport, mode)])
+    return {**support.TABLE, "steps": steps, "states": ("created", "held", "moved", "rest-empty", "grpc-empty"), "maxTokens": len(transports), "caps": {"observation": len(steps), "tokenCleanup": 4, "documentCleanup": 14, "management": 7, "credential": 2}}
+
+
+def record_ro(table_, **knobs):
+    clock = Clock()
+    plan = program.compile_plan(table_, NONCE, OWNER)
+    service = Service(clock, **knobs)
+    return collector_module.Collector(plan, table_, program.RequestBudget(plan, table_), service, "owner", save=lambda _s: None, monotonic=clock.now, utc=clock.utc).run(), service
+
+
+@pytest.mark.parametrize("snapshot,shown", [("begin", "created"), ("first-read", "rest-empty"), ("latest", "rest-empty")])
+def test_a_read_only_transaction_may_show_any_state_since_it_began(snapshot, shown):
+    table_ = ro_table()
+    result, service = record_ro(table_, ro_snapshot=snapshot)
+    assert result["complete"] is True, result["failureType"]
+    projected = collector_module.projection(result, table_)
+    reads = {read["site"]: read for read in projected["reads"]}
+    assert reads["rest/ro-read"]["state"] == shown
+    assert reads["rest/ro-batch"]["documents"]["a"] == shown
+    assert {c["caseId"]: c["code"] for c in projected["cases"]}["rest/ro-write"] == 3
+    assert any(call[2].get("options") == {"readOnly": {}} for call in service.calls if call[1] == "BeginTransaction")
+
+
+def test_a_read_only_transaction_cannot_show_a_state_from_before_it_began():
+    table_ = ro_table()
+    ledger = collector_module.Ledger(program.compile_plan(table_, NONCE, OWNER))
+    names = ledger.plan["documents"]
+    ledger.history["a"].extend(["created", "rest-empty", "moved"])
+    ledger.docs["a"].update(status="created", state="moved"); ledger.docs["m"].update(status="confirmed-absent")
+    ledger.tokens["rest-s"] = {"value": "dG9rZW4=", "state": "open", "transport": "rest", "start": timing(), "lastUse": timing()}
+    # The token began when two states had been acknowledged ("rest-empty" was current); "moved" came after.
+    ledger.modes["rest-s"] = "readOnly"; ledger.since["rest-s"] = {"a": 2, "m": 0}
+    step = next(step for step in ledger.plan["steps"] if step["id"] == "rest/ro-read")
+    def answer(state):
+        return receipt("rest", response={"name": names["a"], "fields": {"owner": {"stringValue": OWNER}, "nonce": {"stringValue": NONCE}, "role": {"stringValue": "a"}, "state": {"stringValue": state}}, "updateTime": "2026-09-30T00:00:00.000000001Z"})
+    request = {"name": names["a"], "transaction": "dG9rZW4="}
+    for shown in ("rest-empty", "moved"):
+        ledger.after("x", "rest", "GetDocument", request, step, answer(shown), timing())
+    for shown in ("created", "held"):
+        with pytest.raises(ValueError, match="state differs"):
+            ledger.after("x", "rest", "GetDocument", request, step, answer(shown), timing())
+    ledger.modes["rest-s"] = "readWrite"
+    with pytest.raises(ValueError, match="state differs"):
+        ledger.after("x", "rest", "GetDocument", request, step, answer("rest-empty"), timing())
+    ledger.after("x", "rest", "GetDocument", request, step, answer("moved"), timing())
+
+
+def test_a_read_write_transaction_still_shows_only_the_latest_state():
+    table_ = ro_table(mode="readWrite")
+    table_["steps"] = tuple(dict(step, allow=(3, 5, 9, 10)) if step["id"] == "rest/ro-write" else step for step in table_["steps"])
+    result, _service = record_ro(table_, ro_snapshot="begin")
+    assert result["complete"] is False, "a read-write transaction that sees the old state is not an allowed answer"
+
+
+@pytest.mark.parametrize("label,change", [
+    ("an unknown mode", lambda t: {**t, "steps": tuple(dict(s, mode="readSometimes") if s["id"] == "rest/begin" else s for s in t["steps"])}),
+    ("a mode on a read", lambda t: {**t, "steps": tuple(dict(s, mode="readOnly") if s["id"] == "rest/ro-read" else s for s in t["steps"])}),
+    ("a write that may succeed on a read-only token", lambda t: {**t, "steps": tuple(dict(s, allow=(0, 3)) if s["id"] == "rest/ro-write" else s for s in t["steps"])}),
+])
+def test_a_malformed_mode_never_compiles(label, change):
+    with pytest.raises(ValueError, match="table"):
+        program.compile_plan(change(ro_table()), NONCE, OWNER)
+
+
+def test_the_begin_request_names_its_mode():
+    table_ = ro_table()
+    plan = program.compile_plan(table_, NONCE, OWNER)
+    begin = next(step for step in plan["steps"] if step["id"] == "rest/begin")
+    assert program.request_for_step(plan, begin, {}, table_)["options"] == {"readOnly": {}}
+    plain = program.compile_plan(support.TABLE, NONCE, OWNER)
+    assert program.request_for_step(plain, next(step for step in plain["steps"] if step["id"] == "r/begin"), {}, support.TABLE)["options"] == {"readWrite": {}}
+    assert "mode" not in next(step for step in plain["steps"] if step["id"] == "r/begin"), "a table that names no mode keeps its digest"

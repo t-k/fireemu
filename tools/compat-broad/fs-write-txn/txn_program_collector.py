@@ -80,6 +80,9 @@ class Ledger:
         self._prior = {}
         self._probes = set()
         self.tried = {role: set() for role in plan["documents"]}
+        # Not part of the recorded snapshot: every state a document was acknowledged in, and what each token could see.
+        self.history = {role: [] for role in plan["documents"]}
+        self.since, self.modes = {}, {}
 
     def snapshot(self):
         return {
@@ -187,6 +190,8 @@ class Ledger:
                 if token in self.token_values().values():
                     raise ValueError("minted token is not fresh")
                 self.tokens[step["tokenOutput"]] = {"value": token, "state": "open", "transport": transport, "start": copy.deepcopy(timing), "lastUse": copy.deepcopy(timing)}
+                self.modes[step["tokenOutput"]] = step.get("mode", "readWrite")
+                self.since[step["tokenOutput"]] = {role: len(states) for role, states in self.history.items()}
             self.unknown_starts.discard(site)
             return
         if method == "Commit":
@@ -201,6 +206,7 @@ class Ledger:
                 for write in step["writes"]:
                     doc = self.docs[write["document"]]
                     doc.update(status="created", state=write["state"], possible=[write["state"]])
+                    self.history[write["document"]].append(write["state"])
                 _role, entry = self._token_for(request.get("transaction"))
                 if entry is not None:
                     entry["state"] = "committed"
@@ -260,7 +266,7 @@ class Ledger:
             if "found" in frame:
                 if doc["state"] is None:
                     raise ValueError("a document this recording never wrote exists")
-                self._owned(role, frame["found"], transport, {doc["state"]})
+                self._owned(role, frame["found"], transport, self._visible(role, request))
             elif doc["state"] is not None:
                 raise ValueError("an acknowledged document is reported missing")
 
@@ -289,6 +295,15 @@ class Ledger:
             raise ValueError("document state differs from the acknowledged state")
         return check_timestamp(document.get("updateTime"), transport)
 
+    def _visible(self, role, request):
+        """The states a read may show: the latest, or for a read-only transaction any since it began."""
+        doc = self.docs[role]
+        token_role, _entry = self._token_for(request.get("transaction"))
+        if token_role is None or self.modes.get(token_role) != "readOnly":
+            return {doc["state"]}
+        begun = self.since[token_role][role]
+        return set(self.history[role][max(0, begun - 1):]) or {doc["state"]}
+
     def _read(self, site, transport, request, result, code, step):
         role = self._role_of(request["name"])
         doc = self.docs[role]
@@ -303,7 +318,7 @@ class Ledger:
             return
         if doc["state"] is None:
             raise ValueError("a document this recording never wrote exists")
-        self._owned(role, result["response"], transport, {doc["state"]})
+        self._owned(role, result["response"], transport, self._visible(role, request))
 
     def _cleanup_read(self, site, role, transport, result, code):
         doc = self.docs[role]

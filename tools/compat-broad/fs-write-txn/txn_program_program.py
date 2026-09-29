@@ -28,7 +28,7 @@ _LABEL = re.compile(r"[a-z0-9][a-z0-9-]{0,47}\Z")
 MAX_DOCUMENTS = 8
 MAX_STATES = 32
 _STEP_KEYS = ("id", "transport", "rpc", "document", "tokenInput", "tokenOutput", "writes", "caseId", "role", "allow")
-_OPTIONAL_STEP_KEYS = ("deadlineMs", "documents")
+_OPTIONAL_STEP_KEYS = ("deadlineMs", "documents", "mode")
 
 
 def outcome_class(code):
@@ -60,6 +60,8 @@ def _step(row):
     step["writes"] = [dict(write) for write in row["writes"]]
     step["allow"] = sorted(row["allow"]) if isinstance(row["allow"], (list, tuple)) and len(set(row["allow"])) == len(row["allow"]) else _bad("allowed codes repeat or are not a list")
     step["deadlineMs"] = row.get("deadlineMs", DEFAULT_DEADLINE_MS)
+    if "mode" in row:
+        step["mode"] = row["mode"]
     if "documents" in row:
         # Only a batch read names several documents; an absent key keeps every earlier table's digest.
         step["documents"] = list(row["documents"]) if isinstance(row["documents"], (list, tuple)) else _bad("batch documents are not a list")
@@ -88,7 +90,7 @@ def _validate_table(table):
         _bad("the observation cap is not the step count")
     if caps["tokenCleanup"] < table["maxTokens"] or caps["documentCleanup"] < 3 * len(documents):
         _bad("the cleanup reserve cannot release every token or clean every document")
-    ids, cases, issued, probed = set(), set(), {}, set()
+    ids, cases, issued, probed, modes = set(), set(), {}, set(), {}
     last_use = {}
     for index, step in enumerate(steps):
         if isinstance(step["tokenInput"], str):
@@ -114,12 +116,17 @@ def _validate_table(table):
             _bad(f"{step['id']} is a control step that may be refused")
         if step["role"] == "post-state" and step["allow"] != [0]:
             _bad(f"{step['id']} is a post-state read that may be refused")
+        if rpc != "BeginTransaction" and "mode" in step:
+            _bad(f"{step['id']} names a transaction mode on a request that does not begin one")
+        if rpc == "BeginTransaction" and step.get("mode", "readWrite") not in ("readWrite", "readOnly"):
+            _bad(f"{step['id']} names an unknown transaction mode")
         if rpc == "BeginTransaction":
             if any(last_use.get(token, -1) > index for token in issued):
                 _bad(f"{step['id']} begins while an earlier chain still uses its token")
             if step["tokenInput"] is not None or not isinstance(step["tokenOutput"], str) or step["tokenOutput"] in issued or step["document"] is not None or step["writes"]:
                 _bad(f"{step['id']} is not a fresh begin")
             issued[step["tokenOutput"]] = step["transport"]
+            modes[step["tokenOutput"]] = step.get("mode", "readWrite")
             continue
         if step["tokenOutput"] is not None:
             _bad(f"{step['id']} outputs a token without beginning one")
@@ -149,6 +156,8 @@ def _validate_table(table):
                 _bad(f"{step['id']} commits no writes outside a transaction")
             if step["role"] == "outside-writer" and step["tokenInput"] is not None:
                 _bad(f"{step['id']} is an outside writer that carries a token")
+            if step["writes"] and modes.get(step["tokenInput"]) == "readOnly" and 0 in step["allow"]:
+                _bad(f"{step['id']} writes on a read-only transaction and may succeed")
             targets = [write.get("document") for write in step["writes"]]
             if len(set(targets)) != len(targets):
                 _bad(f"{step['id']} writes one document twice")
@@ -262,7 +271,7 @@ def request_for_step(value, step, tokens, table):
     if rpc == "Rollback":
         return {"database": value["database"], "transaction": token}
     if rpc == "BeginTransaction":
-        return {"database": value["database"], "options": {"readWrite": {}}}
+        return {"database": value["database"], "options": {step.get("mode", "readWrite"): {}}}
     writes = [{"update": {"name": value["documents"][write["document"]], "fields": marker_fields(value, write["document"], write["state"])}, "currentDocument": {"exists": write["exists"]}} for write in step["writes"]]
     return {"database": value["database"], "writes": writes, **({"transaction": token} if token else {})}
 

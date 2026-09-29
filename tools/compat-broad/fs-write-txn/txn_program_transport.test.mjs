@@ -47,7 +47,9 @@ for (const transport of ['rest', 'grpc']) {
 
   test(`${transport}: BeginTransaction is fresh and refuses retry or another mode`, async () => {
     const { validateCall } = await module();
-    for (const options of [{ readWrite: { retryTransaction: token } }, { readOnly: {} }, { readWrite: {}, readOnly: {} }, { readWrite: { extra: true } }]) assert.throws(() => validateCall(spec('BeginTransaction', { database, options }, transport)));
+    validateCall(spec('BeginTransaction', { database, options: { readWrite: {} } }, transport));
+    validateCall(spec('BeginTransaction', { database, options: { readOnly: {} } }, transport));
+    for (const options of [{ readWrite: { retryTransaction: token } }, { readOnly: { readTime: '2026-09-30T00:00:00Z' } }, { readWrite: {}, readOnly: {} }, { readWrite: { extra: true } }, { readOnly: { extra: true } }, { other: {} }, {}]) assert.throws(() => validateCall(spec('BeginTransaction', { database, options }, transport)), undefined, JSON.stringify(options));
   });
 
   test(`${transport}: protocol, project, token, credential and deadline changes are rejected`, async () => {

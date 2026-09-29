@@ -139,7 +139,8 @@ export function createRunnerDelegates(options) {
       if (credential === "admin") {
         if (!PROJECTS.has(context?.project)) bad("no known project for the owner credential");
         const owner = cache.ownerCredential();
-        return { authorization: `Bearer ${owner.accessToken}`, "x-goog-user-project": context.project };
+        // The gate says whether this route carries the quota project header; anything but an explicit yes leaves it off.
+        return { authorization: `Bearer ${owner.accessToken}`, ...(context.quotaProject === true ? { "x-goog-user-project": context.project } : {}) };
       }
       if (USER_PRINCIPALS.has(credential) || credential === "foreign-project-token") return { authorization: `${USER_TOKEN_SCHEME} ${userToken(credential)}` };
       return bad("unknown credential");

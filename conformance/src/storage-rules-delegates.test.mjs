@@ -140,12 +140,25 @@ test("a whole recording with every delegate real counts each request once and le
 });
 
 test("owner requests carry the owner bearer and the row's project, user requests the chosen scheme, and secrets never leave the transport", async () => {
-  const h = await assemble();
+  // While the credential cache is live: the header is added only when the gate says the route carries it.
+  let probed = null;
+  const respond = (spec) => {
+    if (probed !== null || !spec.headers.authorization?.startsWith("Bearer ")) return undefined;
+    const call = (quotaProject) => Object.keys(h.real.credentials.headersFor("admin", { project: "fireemu-oracle-query", quotaProject })).sort();
+    probed = { yes: call(true), others: [false, undefined, "true", 1, null].map(call) };
+    return undefined;
+  };
+  const h = await assemble({ respond });
   const result = await h.controller.run();
+  assert.deepEqual(probed?.yes, ["authorization", "x-goog-user-project"]);
+  assert.ok(probed.others.every((keys) => keys.length === 1 && keys[0] === "authorization"));
   assert.equal(result.status, "finished", JSON.stringify(result));
   const admin = h.seen.headers.filter((headers) => headers.authorization === `Bearer ${OWNER_TOKEN}`);
   assert.ok(admin.length > 1000);
-  assert.ok(admin.every((headers) => ["fireemu-oracle-query", "fireemu-oracle-idp"].includes(headers["x-goog-user-project"])));
+  // Every owner request carries the row's project, except the one route that is not a project-billed API: userinfo.
+  const without = admin.filter((headers) => !Object.hasOwn(headers, "x-goog-user-project"));
+  assert.equal(without.length, 1);
+  assert.ok(admin.filter((headers) => Object.hasOwn(headers, "x-goog-user-project")).every((headers) => ["fireemu-oracle-query", "fireemu-oracle-idp"].includes(headers["x-goog-user-project"])));
   assert.ok(h.seen.headers.some((headers) => /^Firebase eyJ/.test(headers.authorization ?? "")));
   assert.ok(h.seen.headers.some((headers) => headers.authorization === MALFORMED["malformed-token"]));
   assert.ok(h.seen.headers.some((headers) => headers.authorization === MALFORMED["malformed-oauth"]));

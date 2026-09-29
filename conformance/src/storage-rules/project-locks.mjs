@@ -31,7 +31,7 @@ async function acquire(lockDir, project, body) {
   }
 }
 
-async function releaseOwned(records) {
+async function verifyOwned(records) {
   for (const record of records) {
     const stat = await lstat(record.path);
     if (!stat.isFile() || stat.dev !== record.dev || stat.ino !== record.ino) {
@@ -42,6 +42,10 @@ async function releaseOwned(records) {
       throw new Error(`project lock ownership changed: ${record.path}`);
     }
   }
+}
+
+async function releaseOwned(records) {
+  await verifyOwned(records);
   for (const record of [...records].reverse()) await unlink(record.path);
 }
 
@@ -106,6 +110,13 @@ export async function withProjectLocks(options, run, hooks = {}) {
       } finally {
         inFlight = false;
       }
+    },
+    // True only while every lock this run took is still the same file with the same body and no legacy shared lock exists.
+    async verifyHeld() {
+      if (closed) throw new Error("project lock run already closed");
+      await verifyOwned(records);
+      if (await pathExists(options.legacyLockPath)) throw new Error("legacy shared lock exists");
+      return true;
     },
     confirmClosed() {
       if (!sent || failed) throw new Error("cannot confirm project lock closure");

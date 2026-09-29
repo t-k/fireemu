@@ -36,6 +36,12 @@ function withoutQualifiers(text) {
   }
 }
 
+/** True when the text carries at least one whole 64-digit hex digest and none of them is one of this packet's pins. */
+function onlyForeignDigests(text, pinKeys) {
+  const digests = text.match(/(?<![0-9a-f])[0-9a-f]{64}(?![0-9a-f])/g) ?? [];
+  return digests.length > 0 && digests.every((digest) => !pinKeys.has(digest));
+}
+
 export function rowSha256(line) {
   return createHash("sha256").update(line, "utf8").digest("hex");
 }
@@ -44,27 +50,28 @@ export function rowSha256(line) {
  * Find ledger lines that stop this lane's approval or the coordinator's delegation.
  * A line counts when its normalized text contains "revoked" and names the lane subject, the lane
  * as a whole, the packet SHA, the source commit (full or at least eight digits) or the envelope ID;
- * or when it names the coordinator delegation. A parenthetical qualifier on the subject
+ * or when it names the coordinator delegation. A row that names the lane but carries only whole digests
+ * that belong to no pin of this packet is a consumed revocation of another version and does not count. A parenthetical qualifier on the subject
  * column, such as "（訂正）", does not hide the lane. Position, column count and spelling do not matter.
  * Returns 1-based line numbers.
  */
-export function scanRevocations({ ledgerText, taskId, subject, packetSha256, sourceCommit, envelopeId, allowlist = HISTORICAL_REVOCATION_ALLOWLIST }) {
+export function scanRevocations({ ledgerText, taskId, subject, packetSha256, sourceCommit, envelopeId, pinSha256s = [], allowlist = HISTORICAL_REVOCATION_ALLOWLIST }) {
   const allowed = new Set(allowlist.map((entry) => entry.sha256));
   const subjectKey = normalizeLedgerText(subject);
   const taskKey = normalizeLedgerText(taskId);
   const packetKey = normalizeLedgerText(packetSha256);
   const commitKey = normalizeLedgerText(sourceCommit).slice(0, COMMIT_PREFIX_LENGTH);
   const envelopeKey = typeof envelopeId === "string" && envelopeId !== "" ? normalizeLedgerText(envelopeId) : null;
+  const pinKeys = new Set([packetKey, ...pinSha256s.map(normalizeLedgerText)]);
   const lane = [];
   const delegation = [];
   ledgerText.split("\n").forEach((line, index) => {
     const text = normalizeLedgerText(line);
     if (!text.includes(REVOKED) || allowed.has(rowSha256(line))) return;
     const subjectColumn = withoutQualifiers(normalizeLedgerText(line.split("|")[1] ?? ""));
-    if (
-      text.includes(subjectKey) || subjectColumn === taskKey || text.includes(packetKey) ||
-      text.includes(commitKey) || (envelopeKey !== null && text.includes(envelopeKey))
-    ) lane.push(index + 1);
+    const namesThisVersion = text.includes(packetKey) || text.includes(commitKey) || (envelopeKey !== null && text.includes(envelopeKey));
+    const namesLane = text.includes(subjectKey) || subjectColumn === taskKey;
+    if (namesThisVersion || (namesLane && !onlyForeignDigests(text, pinKeys))) lane.push(index + 1);
     if (text.includes(NORMALIZED_DELEGATION_MARKER)) delegation.push(index + 1);
   });
   return { lane, delegation };

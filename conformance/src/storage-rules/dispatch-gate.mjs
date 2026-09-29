@@ -15,9 +15,9 @@ const isFunction = (value) => typeof value === "function";
 
 export function createDispatchGate(options) {
   const fail = () => bad("invalid dispatch gate options");
-  closedRecord(options, ["reservations", "capture", "transport", "targets", "credentials", "preflightIds"], "invalid dispatch gate options");
-  const { reservations, capture, transport, targets, credentials, preflightIds } = options;
-  if (![reservations?.onStarted, reservations?.onReserve, reservations?.onTerminal, capture?.writeIntent, capture?.writeResponse, capture?.writeNote, capture?.snapshot, transport?.send, targets?.verify, credentials?.headersFor].every(isFunction)) fail();
+  closedRecord(options, ["reservations", "capture", "transport", "targets", "credentials", "preflightIds", "admission"], "invalid dispatch gate options");
+  const { reservations, capture, transport, targets, credentials, preflightIds, admission } = options;
+  if (![reservations?.onStarted, reservations?.onReserve, reservations?.onTerminal, capture?.writeIntent, capture?.writeResponse, capture?.writeNote, capture?.snapshot, transport?.send, targets?.verify, credentials?.headersFor, admission?.check].every(isFunction)) fail();
   let armed = null;
   let busy = false;
   let poisoned = false;
@@ -27,6 +27,11 @@ export function createDispatchGate(options) {
     onReserve: async (row) => { armed = null; await reservations.onReserve(row); armed = Object.freeze({ operationId: row.operationId, phase: row.phase }); },
     onTerminal: (row) => reservations.onTerminal(row),
   });
+  // The live approval is proved again before every request, reads included: a revocation must stop the very next request.
+  async function admitted() {
+    const seen = await admission.check();
+    if (seen?.admitted !== true) bad("admission refused: no admission");
+  }
   const modeOf = (phase) => ({ preflight: "preflight", normal: "normal", recovery: "recovery" })[phase];
 
   function credentialHeaders(credential) {
@@ -51,6 +56,7 @@ export function createDispatchGate(options) {
       const operationId = prepared.rowId;
       if (counter.snapshot().mode !== modeOf(phase) || operationId.startsWith("recovery/") !== (phase === "recovery") || operationId.startsWith("preflight/") !== (phase === "preflight")) bad("request phase does not match the counter");
       if (capture.snapshot().uncertain) bad("capture journal is uncertain");
+      await admitted();
       await capture.writeIntent({ operationId, phase, targetSha256: prepared.targetSha256, redactedTarget: prepared.redacted, mutationKey });
       let dispatched = false;
       let received = null;
@@ -90,7 +96,10 @@ export function createDispatchGate(options) {
   }
 
   return Object.freeze({
-    start: (input) => counter.start(input),
+    start: async (input) => {
+      await admitted();
+      return counter.start(input);
+    },
     admit: () => counter.admit(),
     enterRecovery: () => counter.enterRecovery(),
     finish: (outcome) => counter.finish(outcome),

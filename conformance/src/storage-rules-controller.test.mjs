@@ -44,7 +44,7 @@ async function harness({ capture = memoryCapture(), simulatorOptions = {}, crede
   const run = createRunLedger({ manifest, objects });
   const trace = [];
   const reservations = { onStarted: async () => { trace.push("started"); }, onReserve: async (r) => { trace.push(r.operationId); }, onTerminal: async (r) => { trace.push(`terminal:${r.outcome}`); } };
-  const gate = createDispatchGate({ reservations: harnessReservations ?? reservations, capture, transport: simulator, targets, credentials: { headersFor: (c) => (c === "anonymous" ? {} : { authorization: `Bearer ${BEARER}` }) }, preflightIds });
+  const gate = createDispatchGate({ reservations: harnessReservations ?? reservations, capture, transport: simulator, targets, credentials: { headersFor: (c) => (c === "anonymous" ? {} : { authorization: `Bearer ${BEARER}` }) }, preflightIds, admission: { check: async () => ({ admitted: true }) } });
   const noop = async () => {};
   const controller = createController({
     manifest, schedule: buildSchedule(manifest), gate, targets, refs, tables, objects, run, capture,

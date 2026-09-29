@@ -95,7 +95,7 @@ export function validatePresendApproval(options) {
   const subject = `${packet.taskId} ${packet.packetName}`;
   const revocations = scanRevocations({
     ledgerText, taskId: packet.taskId, subject, packetSha256: packet.packetSha256, sourceCommit: packet.sourceCommit,
-    envelopeId: review.envelopeId,
+    envelopeId: review.envelopeId, pinSha256s: PINS.filter((key) => key !== "sourceCommit").map((key) => packet[key]),
   });
   if (revocations.lane.length > 0) throw new Error("approval revoked");
   const rows = ledgerRows(ledgerText, subject);

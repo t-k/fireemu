@@ -40,7 +40,7 @@ async function harness(delta = {}) {
   };
   const transport = { send: async (spec) => { trace.push(["transport", spec.method, spec.url, JSON.stringify(spec.headers)]); return ok; } };
   const credentials = { headersFor: (credential) => (credential === "anonymous" ? {} : { authorization: `Bearer ${BEARER}` }) };
-  const gate = createDispatchGate({ reservations: { ...reservations, ...delta.reservations }, capture: { ...capture, ...delta.capture }, transport: { ...transport, ...delta.transport }, targets: { ...targets, ...delta.targets }, credentials: { ...credentials, ...delta.credentials }, preflightIds });
+  const gate = createDispatchGate({ reservations: { ...reservations, ...delta.reservations }, capture: { ...capture, ...delta.capture }, transport: { ...transport, ...delta.transport }, targets: { ...targets, ...delta.targets }, credentials: { ...credentials, ...delta.credentials }, preflightIds, admission: { check: async () => { trace.push(["admission"]); return { admitted: true }; }, ...delta.admission } });
   const prepare = (id) => targets.prepare(row(id), resolver);
   const admit = async () => {
     await gate.start({ runId: options.runId });
@@ -57,13 +57,13 @@ test("a request leaves only after its intent and its reservation are durable, an
   h.trace.length = 0;
   const prepared = h.prepare(READ);
   const { raw, attempt } = await h.gate.send(prepared, normalMeta);
-  assert.deepEqual(h.trace.map((entry) => entry[0]), ["intent", "reserved", "transport", "response"]);
+  assert.deepEqual(h.trace.map((entry) => entry[0]), ["admission", "intent", "reserved", "transport", "response"]);
   assert.equal(raw.status, 200);
   assert.equal(attempt, preflightIds.length + 1);
-  assert.deepEqual(h.trace[0].slice(1, 3), [READ, "normal"]);
-  assert.equal(h.trace[0][3], prepared.targetSha256);
-  assert.equal(h.trace[0][4], prepared.redacted);
-  assert.equal(h.trace[3][2], attempt);
+  assert.deepEqual(h.trace[1].slice(1, 3), [READ, "normal"]);
+  assert.equal(h.trace[1][3], prepared.targetSha256);
+  assert.equal(h.trace[1][4], prepared.redacted);
+  assert.equal(h.trace[4][2], attempt);
   assert.equal(Object.hasOwn(raw, "startedAtMs"), false);
 });
 
@@ -96,8 +96,33 @@ test("nothing is sent when the reservation cannot be made durable", async () => 
   await h.admit();
   h.trace.length = 0;
   await assert.rejects(h.gate.send(h.prepare(READ), normalMeta), /disk full/);
-  assert.deepEqual(h.trace.map((entry) => entry[0]), ["intent", "note"]);
+  assert.deepEqual(h.trace.map((entry) => entry[0]), ["admission", "intent", "note"]);
   assert.equal(h.gate.snapshot().mode, "journal-uncertain");
+});
+
+test("a refused admission stops a request before its intent, its reservation and its send", async () => {
+  let refuse = false;
+  const h = await harness({ admission: { check: async () => { if (refuse) throw new Error("admission refused: revoked"); return { admitted: true }; } } });
+  await h.admit();
+  refuse = true;
+  h.trace.length = 0;
+  await assert.rejects(h.gate.send(h.prepare(READ), normalMeta), /admission refused/);
+  assert.deepEqual(h.trace, []);
+});
+
+test("an admission that does not answer admitted stops the request and the start", async () => {
+  for (const answer of [undefined, null, {}, { admitted: false }, { admitted: "yes" }]) {
+    const h = await harness({ admission: { check: async () => answer } });
+    await assert.rejects(h.gate.start({ runId: options.runId }), /admission refused/);
+    assert.equal(h.gate.snapshot().mode, "not-started");
+    assert.deepEqual(h.trace.filter((entry) => ["intent", "reserved", "transport"].includes(entry[0])), []);
+  }
+  let calls = 0;
+  const h = await harness({ admission: { check: async () => (++calls > 1 + preflightIds.length ? undefined : { admitted: true }) } });
+  await h.admit();
+  h.trace.length = 0;
+  await assert.rejects(h.gate.send(h.prepare(READ), normalMeta), /admission refused/);
+  assert.deepEqual(h.trace, []);
 });
 
 test("an intent failure stops before any reservation or request", async () => {
@@ -107,7 +132,7 @@ test("an intent failure stops before any reservation or request", async () => {
   fail = true;
   h.trace.length = 0;
   await assert.rejects(h.gate.send(h.prepare(READ), normalMeta), /capture uncertain/);
-  assert.deepEqual(h.trace, []);
+  assert.deepEqual(h.trace, [["admission"]]);
 });
 
 test("an uncertain capture journal refuses the request before its intent", async () => {
@@ -224,9 +249,9 @@ test("the request description is a closed record", async () => {
 test("gate options are a closed record of the required parts", async () => {
   const { createDispatchGate } = await import("./storage-rules/dispatch-gate.mjs");
   const targets = createTargetBuilder({ manifest, digestSalt: salt });
-  const good = { reservations: { onStarted() {}, onReserve() {}, onTerminal() {} }, capture: { writeIntent() {}, writeResponse() {}, writeNote() {}, snapshot() {} }, transport: { send() {} }, targets, credentials: { headersFor() {} }, preflightIds };
+  const good = { reservations: { onStarted() {}, onReserve() {}, onTerminal() {} }, capture: { writeIntent() {}, writeResponse() {}, writeNote() {}, snapshot() {} }, transport: { send() {} }, targets, credentials: { headersFor() {} }, preflightIds, admission: { check() {} } };
   assert.doesNotThrow(() => createDispatchGate(good));
-  for (const bad of [null, {}, { ...good, extra: 1 }, { ...good, transport: {} }, { ...good, capture: { ...good.capture, writeNote: undefined } }, { ...good, targets: { prepare() {} } }, { ...good, credentials: {} }, { ...good, reservations: { ...good.reservations, onTerminal: 1 } }]) {
+  for (const bad of [null, {}, { ...good, extra: 1 }, { ...good, transport: {} }, { ...good, capture: { ...good.capture, writeNote: undefined } }, { ...good, targets: { prepare() {} } }, { ...good, credentials: {} }, { ...good, admission: undefined }, { ...good, admission: {} }, { ...good, reservations: { ...good.reservations, onTerminal: 1 } }]) {
     assert.throws(() => createDispatchGate(bad), /invalid dispatch gate options/);
   }
 });

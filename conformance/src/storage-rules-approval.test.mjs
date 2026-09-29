@@ -422,6 +422,51 @@ for (const [name, row] of Object.entries({
   });
 }
 
+// A consumed revocation names this lane and another version's full packet SHA: it belongs to that version and does not stop this one.
+const foreignSha = "9".repeat(64);
+for (const [name, row] of Object.entries({
+  "the bare lane": note("STORAGE-RULES", `decision=REVOKED; packetSha256=${foreignSha}`),
+  "the lane with a qualifier": note("STORAGE-RULES（訂正）", `REVOKED packetSha256=${foreignSha}`),
+  "the bare lane, upper-case foreign digest": note("STORAGE-RULES", `REVOKED packetSha256=${"F".repeat(64)}`),
+  "two foreign digests": note("STORAGE-RULES", `REVOKED packetSha256=${foreignSha}; runnerSha256=${"7".repeat(64)}`),
+  "a free text line": `Note: STORAGE-RULES REVOKED ${foreignSha} by the owner`,
+})) {
+  test(`a revocation scoped to another packet digest (${name}) does not stop this approval`, async () => {
+    const validate = await load();
+    assert.equal(validate({ ledgerText: `${decision()}\n${row}`, packet, review }).sendAuthorized, false);
+  });
+}
+
+// A row under this exact version subject is this version's own row: it is parsed as a ledger row and fails closed even when it names another packet's digest.
+// A later packet of the lane takes a new packet name, so the ledger never needs a consumed revocation under this subject.
+for (const [name, row] of Object.entries({
+  "five columns": note(laneSubject, `REVOKED packetSha256=${foreignSha}`),
+  "four columns": `- 2026-09-29 | ${laneSubject} | REVOKED packetSha256=${foreignSha} | note.md`,
+  "a decision field": note(laneSubject, `decision=REVOKED; packetSha256=${foreignSha}`),
+})) {
+  test(`a row under this version subject with another packet digest (${name}) is refused`, async () => {
+    const validate = await load();
+    assert.throws(() => validate({ ledgerText: `${decision()}\n${row}`, packet, review }), /malformed target ledger row|approval revoked/);
+  });
+}
+
+for (const [name, row] of Object.entries({
+  "this packet digest beside a foreign one": note(laneSubject, `REVOKED packetSha256=${foreignSha}; ${sha}`),
+  "this runner digest only": note(laneSubject, `REVOKED runnerSha256=${packet.runnerSha256}`),
+  "this manifest digest only": note("STORAGE-RULES", `REVOKED manifestSha256=${packet.manifestSha256}`),
+  "this fixture schema digest only": note(laneSubject, `REVOKED fixtureSchemaSha256=${packet.fixtureSchemaSha256}`),
+  "this runner digest beside a foreign one": note(laneSubject, `REVOKED packetSha256=${foreignSha}; runnerSha256=${packet.runnerSha256}`),
+  "this source commit beside a foreign digest": note(laneSubject, `REVOKED packetSha256=${foreignSha}; ${packet.sourceCommit.slice(0, 8)}`),
+  "the lane with no digest": note(laneSubject, "REVOKED"),
+  "the lane with a truncated foreign digest": note(laneSubject, `REVOKED packetSha256=${foreignSha.slice(0, 63)}`),
+  "the lane with a longer hex run": note(laneSubject, `REVOKED packetSha256=${foreignSha}0`),
+})) {
+  test(`a revocation naming ${name} still stops this approval`, async () => {
+    const validate = await load();
+    assert.throws(() => validate({ ledgerText: `${decision()}\n${row}`, packet, review }), /approval revoked/);
+  });
+}
+
 const delegationRevocations = {
   "the send delegation": note("調整役への委任（本番の送信）", "decision=REVOKED"),
   "lowercase revoked": note("調整役への委任（本番の送信）", "revoked"),

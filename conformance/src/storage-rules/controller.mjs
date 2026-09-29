@@ -108,6 +108,7 @@ export function createController(options) {
     objects.recordIntent(row); run.recordIntent(row);
     let result;
     try { result = await gate.send(prepared, { phase, mutationKey: mutationKeyOf(row), accept }); } catch (error) {
+      if (/^admission refused/.test(error.message)) throw new RunStop("admission refused", { rowId: row.id });
       if (/^preflight failed/.test(error.message)) throw new RunStop("preflight refused", { rowId: row.id });
       if (/outcome uncertain/.test(error.message)) { objects.recordOutcome(row, { uncertain: true }); run.recordOutcome(row, { uncertain: true }); throw new RunStop("outcome uncertain", { rowId: row.id }); }
       throw new RunStop(/poisoned|capture/.test(error.message) ? "capture failed" : "not sent", { rowId: row.id, message: error.message });
@@ -150,7 +151,10 @@ export function createController(options) {
   }
 
   async function runAll() {
-    await gate.start({ runId: manifest.binding.runId });
+    try { await gate.start({ runId: manifest.binding.runId }); } catch (error) {
+      if (/^admission refused/.test(error.message)) throw new RunStop("admission refused", {});
+      throw error;
+    }
     for (const id of schedule.preflight) {
       const row = rowById.get(id);
       if (row.family === "credential-cache") { await delegates["preflight-cache"](row); continue; }

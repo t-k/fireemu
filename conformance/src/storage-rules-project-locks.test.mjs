@@ -257,3 +257,57 @@ test("one replaced lock prevents releasing any lock in the multi-project set", a
     assert.equal(JSON.parse(await readFile(query, "utf8")).taskId, "STORAGE-RULES");
   });
 });
+
+test("verifyHeld proves each owned lock is still this run's and refuses once one changed", async () => {
+  await fixture(async ({ lockDir, legacyLockPath, options }) => {
+    const { withProjectLocks } = await import("./storage-rules/project-locks.mjs");
+    const projects = ["fireemu-oracle-idp", "fireemu-oracle-query"];
+    const own = (project) => join(lockDir, `${project}.lock`);
+    // The run body records what it proved; an inner failure leaves a proof missing, so the counts are checked outside.
+    const proven = [];
+    const inRun = (opts, body) => assert.rejects(() => withProjectLocks(opts, async (lease) => { await body(lease); }), Error);
+    await inRun({ ...options, projects }, async (lease) => {
+      assert.equal(typeof lease.verifyHeld, "function");
+      assert.equal(await lease.verifyHeld(), true);
+      proven.push("held");
+      // A replaced file (same body, different inode) is not this run's lock.
+      const body = await readFile(own(projects[1]), "utf8");
+      await unlink(own(projects[1]));
+      await writeFile(own(projects[1]), body, { mode: 0o600 });
+      await assert.rejects(() => lease.verifyHeld(), /ownership changed/);
+      proven.push("replaced");
+      await unlink(own(projects[1]));
+      await assert.rejects(() => lease.verifyHeld(), { code: "ENOENT" });
+      proven.push("missing");
+    });
+    await rm(lockDir, { recursive: true, force: true });
+    await inRun(options, async (lease) => {
+      await writeFile(own(options.projects[0]), '{"taskId":"OTHER"}\n');
+      await assert.rejects(() => lease.verifyHeld(), /ownership changed/);
+      proven.push("body");
+    });
+    await rm(lockDir, { recursive: true, force: true });
+    await withProjectLocks(options, async (lease) => {
+      await writeFile(legacyLockPath, "legacy\n", { mode: 0o600 });
+      await assert.rejects(() => lease.verifyHeld(), /legacy shared lock exists/);
+      proven.push("legacy");
+      await unlink(legacyLockPath);
+      await lease.dispatch(async () => "sent");
+      lease.confirmClosed();
+    });
+    assert.deepEqual(proven, ["held", "replaced", "missing", "body", "legacy"]);
+  });
+});
+
+test("verifyHeld is refused once the run is closed", async () => {
+  await fixture(async ({ options }) => {
+    const { withProjectLocks } = await import("./storage-rules/project-locks.mjs");
+    let held;
+    await withProjectLocks(options, async (lease) => {
+      held = lease;
+      await lease.dispatch(async () => "sent");
+      lease.confirmClosed();
+    });
+    await assert.rejects(() => held.verifyHeld(), /already closed|released/);
+  });
+});

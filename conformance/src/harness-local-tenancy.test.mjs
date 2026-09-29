@@ -1,11 +1,14 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { test } from "node:test";
+import { fileURLToPath } from "node:url";
 
 import { createSession } from "./auth-fs-cross/session.mjs";
 import { createContext, SANDBOX_PROJECT } from "./fs-rules/harness.mjs";
 import {
   EXPECTED_ACTIONS,
   localSetupDigest,
+  setupDigestOf,
   withLocalMultiTenancy,
 } from "./harness-target/local-tenancy.mjs";
 
@@ -228,8 +231,16 @@ test("a project id that could redirect the request is refused", async () => {
   assert.deepEqual(state.requests, []);
 });
 
-test("the setup digest names the helper's tokens and is stable across comment edits", () => {
+test("the setup digest is the helper's tokens: stable across comment edits, not across code", () => {
   assert.match(localSetupDigest(), /^[0-9a-f]{64}$/);
+  const text = readFileSync(
+    fileURLToPath(new URL("./harness-target/local-tenancy.mjs", import.meta.url)),
+    "utf8",
+  );
+  assert.equal(localSetupDigest(), setupDigestOf(text));
+  assert.equal(setupDigestOf(`// a comment\n${text}\n/* another */`), localSetupDigest());
+  assert.notEqual(setupDigestOf(text.replace("Bearer owner", "Bearer admin")), localSetupDigest());
+  assert.notEqual(setupDigestOf(`${text}\nconst added = 1;\n`), localSetupDigest());
 });
 
 test("it sends the requests the recorded session sends to production", async () => {

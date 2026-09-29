@@ -14,6 +14,7 @@ import {
   gitReader,
   bindingProblems,
   HARNESS_LANES,
+  isShallowCheckout,
   KNOWN_UNCONNECTED,
   laneStatus,
   lineageProblems,
@@ -24,8 +25,10 @@ import {
   rewriteReport,
   scheme2Digest,
   sourceTokens,
+  tokensInReportOrder,
   treeReader,
   unconnectedProblems,
+  verifyOutcome,
   WAIVED_FIXTURES,
 } from "./harness-registry.mjs";
 
@@ -46,9 +49,40 @@ test("any token edit changes the digest", () => {
     "const a = 1;\nfunction f(x) { return x - a; }\n",
     "const a = 1;\nfunction f(x) { return x + a; }\nf(1);\n",
     'const a = "1";\nfunction f(x) { return x + a; }\n',
-    "const a = 1\nfunction f(x) { return x + a }\n",
   ])
     assert.notEqual(digestOf(changed), digestOf(base), changed);
+});
+
+test("an inserted semicolon and an explicit one are the same token", () => {
+  const explicit = "const a = 1;\nfunction f(x) { return x + a; }\n";
+  assert.equal(digestOf("const a = 1\nfunction f(x) { return x + a }\n"), digestOf(explicit));
+});
+
+// A line break that ends a statement is meaning, and the parser (not a tokenizer) decides what is
+// a regular expression, so these pairs differ although their token texts and spacing do not.
+const ASI_PAIRS = [
+  ["return x", "return\n x"],
+  ["a\n++b", "a++\nb"],
+  ["async function f(){}", "async\nfunction f(){}"],
+  ["function* g(){ yield x }", "function* g(){ yield\n x }"],
+  ["l: for(;;){ continue l }", "l: for(;;){ continue\n l }"],
+  ["l: for(;;){ break l }", "l: for(;;){ break\n l }"],
+];
+
+const wrapAsi = (body) => (/^(return|a)/.test(body) ? `function f(){ ${body}; }` : body);
+
+test("a line break the parser turns into a statement end changes the digest", () => {
+  for (const [joined, split] of ASI_PAIRS)
+    assert.notEqual(digestOf(wrapAsi(joined)), digestOf(wrapAsi(split)), `${joined} / ${split}`);
+});
+
+test("code a tokenizer would read as a comment is still digested", () => {
+  const withStatement = "export default function(){}\n/[/*]/.test(''); X = 1; //*/\n";
+  const withoutStatement = "export default function(){}\n/[/*]/.test('');\n";
+  assert.notEqual(digestOf(withStatement), digestOf(withoutStatement));
+  const inAsync = "async function g(s){ await /[/*]/.exec(s); X = 1; //*/\n}\n";
+  assert.notEqual(digestOf(inAsync), digestOf("async function g(s){ await /[/*]/.exec(s); }\n"));
+  assert.ok(sourceTokens(withStatement).includes("X"));
 });
 
 test("the quote style of a string is part of the token", () => {
@@ -75,7 +109,7 @@ test("a slash is a division or a regular expression by context", () => {
 });
 
 test("a token boundary is never ambiguous and a file boundary matters", () => {
-  assert.notEqual(digestOf("ab c"), digestOf("a bc"));
+  assert.notEqual(digestOf("ab; c;"), digestOf("a; bc;"));
   const two = (a, b) =>
     scheme2Digest({ files: ["a.mjs", "b.mjs"], extra: "" }, (f) => (f === "a.mjs" ? a : b));
   assert.notEqual(two("x; y;", "z;"), two("x;", "y; z;"));
@@ -94,6 +128,8 @@ test("the extra inputs and the file names are bound", () => {
 });
 
 test("source that does not parse is refused, never digested", () => {
+  assert.throws(() => digestOf("a b"), /a\.mjs/);
+  assert.throws(() => digestOf("const = 1;"), /a\.mjs/);
   assert.throws(() => digestOf('const a = "unterminated;'), /a\.mjs/);
   assert.throws(() => digestOf("const a = `unterminated;"), /a\.mjs/);
 });
@@ -536,14 +572,32 @@ test("a rewrite that changes a token of an input a lane is connected through is 
   assert.ok(!report.problems.join("\n").includes("auth-fs-cross:"));
 });
 
-test("a lane that was already unconnected is not blamed again", () => {
+test("a lane that is known unconnected stays so under a comment rewrite, and is refused under a token change", () => {
   const file = "auth-fs-cross/stage2-session.mjs";
-  const report = rewriteReport(
+  const comment = rewriteReport(
+    { [`conformance/src/${file}`]: `// a comment\n${readSrc(file)}` },
+    NO_GIT,
+  );
+  assert.equal(laneReport(comment, "auth-fs-cross-stage2").before.state, "stale");
+  assert.deepEqual(comment.problems, []);
+  const token = rewriteReport(
     { [`conformance/src/${file}`]: `${readSrc(file)}\nconst x = 1;\n` },
     NO_GIT,
   );
-  assert.equal(laneReport(report, "auth-fs-cross-stage2").before.state, "stale");
-  assert.deepEqual(report.problems, []);
+  assert.match(
+    token.problems.join("\n"),
+    /after the rewrite: auth-fs-cross-stage2: the known-unconnected entry is out of date/,
+  );
+});
+
+test("a rewrite of a line break in the real stage-1 session is caught", () => {
+  const file = "auth-fs-cross/session.mjs";
+  const text = readSrc(file);
+  assert.ok(text.includes("return id;"));
+  const edited = text.replace("return id;", "return\n id;");
+  const report = rewriteReport({ [`conformance/src/${file}`]: edited }, NO_GIT);
+  assert.equal(laneReport(report, "auth-fs-cross").after.state, "stale");
+  assert.match(report.problems.join("\n"), /auth-fs-cross: the rewrite disconnects/);
 });
 
 test("a rewrite of the fixture or of the lineage that disconnects a lane is refused", () => {
@@ -600,4 +654,223 @@ test("a rewritten lineage is checked against the rewritten inputs", () => {
     report.problems.join("\n"),
     /lineage after the rewrite: hop 0: the scheme-2 digest of the current tree/,
   );
+});
+
+// ---- digest inputs the registry lists (review round 1) -------------------------------------
+
+test("scheme 2 digests only JavaScript; data goes through extra", () => {
+  const read = () => "{}";
+  for (const file of ["a.json", "a.py", "a", "a.mjs.txt", "a.cjs"])
+    assert.throws(
+      () => scheme2Digest({ files: [file], extra: "" }, read),
+      /only \.mjs and \.js/,
+      file,
+    );
+  assert.doesNotThrow(() => scheme2Digest({ files: ["a.js"], extra: "" }, () => "a;"));
+});
+
+test("the waived fixtures are exactly these, so a new waiver is a visible edit here", () => {
+  // Discovery sees only top-level `*-production.json` files that hold the key `"harnessDigest"`:
+  // a fixture named otherwise, in a subdirectory or under another key is not found, so a new lane
+  // must follow that convention.
+  assert.deepEqual(WAIVED_FIXTURES.map((w) => w.fixture).toSorted(), [
+    "auth-federation-followup-production.json",
+    "auth-federation-production.json",
+    "auth-federation-saml-production.json",
+    "auth-tenant-blocking-production.json",
+  ]);
+  assert.deepEqual(Object.keys(HARNESS_LANES).toSorted(), [
+    "auth-account",
+    "auth-action",
+    "auth-config-sdk",
+    "auth-credential",
+    "auth-fs-cross",
+    "auth-fs-cross-stage2",
+    "auth-mfa",
+    "fs-config-lifecycle",
+    "fs-data-write-list",
+    "fs-query-index",
+    "fs-rules",
+  ]);
+});
+
+const literalsOf = (text, pattern) => [...text.matchAll(pattern)].map((m) => m[1]);
+/** The file names a runner's private `harnessDigest` reads, from its source. */
+const runnerDigestFiles = (runner) => {
+  const text = readFileSync(join(CONFORMANCE_DIR, "src", runner), "utf8");
+  const start = text.search(/function harnessDigest\(/);
+  assert.ok(start >= 0, `${runner} has a harnessDigest`);
+  const body = text.slice(start, text.indexOf("\n}\n", start));
+  return literalsOf(body, /"([\w./-]+\.(?:mjs|js|json))"/g);
+};
+
+test("the registry lists the files each runner's own digest reads", () => {
+  const runners = {
+    "auth-account": "auth-account/run.mjs",
+    "auth-action": "auth-action/run.mjs",
+    "auth-config-sdk": "auth-config-sdk/run.mjs",
+    "auth-credential": "auth-credential/run.mjs",
+    "auth-mfa": "auth-mfa/run.mjs",
+    "fs-query-index": "fs-query-index/run.mjs",
+    "fs-data-write-list": "fs-query-index/run.mjs",
+    "fs-config-lifecycle": "fs-config-lifecycle/run.mjs",
+  };
+  for (const [name, runner] of Object.entries(runners)) {
+    const read = runnerDigestFiles(runner);
+    const listed = HARNESS_LANES[name].files;
+    // A runner may name a file relative to its own directory.
+    for (const file of read)
+      assert.ok(
+        listed.some((f) => f.endsWith(file)),
+        `${name}: ${file} is read but not listed`,
+      );
+    for (const file of listed)
+      assert.ok(
+        read.some((f) => file.endsWith(f)),
+        `${name}: ${file} is listed but not read`,
+      );
+  }
+});
+
+test("the waived lanes list the files their digests read", () => {
+  const federation = readFileSync(join(CONFORMANCE_DIR, "src/auth-federation/record.mjs"), "utf8");
+  const region = federation.slice(
+    federation.indexOf("export const SOURCES = ["),
+    federation.indexOf("].map(", federation.indexOf("export const SOURCES = [")),
+  );
+  const sources = literalsOf(region, /"([\w./-]+\.mjs)"/g).map(
+    (name) =>
+      `conformance/src/${join("auth-federation", name).replace(/^auth-federation\/\.\.\//, "")}`,
+  );
+  for (const w of WAIVED_FIXTURES.filter((x) => x.fixture.startsWith("auth-federation")))
+    assert.deepEqual(w.inputs.toSorted(), sources.toSorted(), w.fixture);
+  const blocking = WAIVED_FIXTURES.find(
+    (w) => w.fixture === "auth-tenant-blocking-production.json",
+  );
+  for (const file of runnerDigestFiles("auth-tenant-blocking/run.mjs"))
+    assert.ok(
+      blocking.inputs.some((input) => input.endsWith(`/${file}`)),
+      `${file} is read by the runner but not listed`,
+    );
+});
+
+test("every guarded and waived input exists, and is listed in `paths`", () => {
+  const paths = new Set(registryPaths());
+  for (const lane of Object.values(HARNESS_LANES))
+    for (const path of lane.guarded ?? []) {
+      assert.ok(existsSync(join(REPO_ROOT, path)), path);
+      assert.ok(paths.has(path), path);
+    }
+  for (const waived of WAIVED_FIXTURES)
+    for (const path of waived.inputs) {
+      assert.ok(existsSync(join(REPO_ROOT, path)), path);
+      assert.ok(paths.has(path), path);
+    }
+});
+
+test("a rewrite of an input a waived lane shares is refused, even of a comment", () => {
+  // auth-credential/tokens.mjs is an input of enrolled lanes and of the waived tenant-blocking lane.
+  const file = "auth-credential/tokens.mjs";
+  const report = rewriteReport(
+    { [`conformance/src/${file}`]: `// a comment\n${readSrc(file)}` },
+    NO_GIT,
+  );
+  assert.match(
+    report.problems.join("\n"),
+    /conformance\/src\/auth-credential\/tokens\.mjs: a rewrite changes an input the registry cannot follow: auth-tenant-blocking-production\.json/,
+  );
+  // An input only a waived lane reads, and a file that carries an enrolled lane's constants.
+  for (const path of [
+    "conformance/src/auth-tenant-blocking/session.mjs",
+    "conformance/src/auth-federation/idp.mjs",
+    "conformance/src/auth-mfa/run.mjs",
+    "conformance/src/auth-account/corpus.mjs",
+    "conformance/src/fs-rules/corpus.mjs",
+    "conformance/fs-query-index.indexes.json",
+  ]) {
+    const text = readFileSync(join(REPO_ROOT, path), "utf8");
+    const found = rewriteReport({ [path]: text.endsWith("\n") ? `${text} ` : `${text}\n` }, NO_GIT);
+    assert.match(
+      found.problems.join("\n"),
+      new RegExp(`${path.replaceAll(".", "\\.")}: a rewrite changes`),
+      path,
+    );
+  }
+  // A file no lane reads is not affected.
+  assert.deepEqual(rewriteReport({ "conformance/src/config.mjs": "// x\n" }, NO_GIT).problems, []);
+});
+
+test("the gate's binding problems include an unconnected lane, and a shallow clone by name", () => {
+  const found = bindingProblems({ shallow: false, unconnected: () => ["x: not connected"] });
+  assert.deepEqual(found, ["x: not connected"]);
+  assert.deepEqual(bindingProblems({ shallow: false, unconnected: () => [] }), []);
+  assert.match(
+    bindingProblems({ shallow: true, unconnected: () => [] }).join("\n"),
+    /shallow clone/,
+  );
+});
+
+test("a real depth-1 clone is a shallow checkout and this one is not", () => {
+  assert.equal(isShallowCheckout(), false);
+  const dir = mkdtempSync(join(tmpdir(), "shallow-"));
+  try {
+    execFileSync("git", ["clone", "-q", "--depth", "1", `file://${REPO_ROOT}`, dir], {
+      stdio: "ignore",
+    });
+    assert.equal(isShallowCheckout({ cwd: dir }), true);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("verify prints the lanes and exits non-zero on any binding problem", () => {
+  const report = {
+    lanes: { lane: { state: "raw", saved: "s", current: "c" } },
+    lineageProblems: [],
+    enrollmentProblems: [],
+  };
+  const clean = verifyOutcome({ report, problems: [] });
+  assert.equal(clean.exitCode, 0);
+  assert.deepEqual(clean.lines, ["lane: raw (recorded s, current c)"]);
+  assert.deepEqual(clean.errors, []);
+  const bad = verifyOutcome({ report, problems: ["an entry is out of date"] });
+  assert.equal(bad.exitCode, 1);
+  assert.deepEqual(bad.errors, ["an entry is out of date"]);
+  assert.equal(
+    JSON.parse(verifyOutcome({ json: true, report, problems: [] }).lines[0]).lanes.lane.state,
+    "raw",
+  );
+});
+
+test("a waiver names inputs that exist", () => {
+  const base = { fixture: "a-production.json", reason: "a reason long enough to count" };
+  const problems = (waiver) =>
+    enrollmentProblems({ fixtures: ["a-production.json"], lanes: {}, waived: [waiver] }).join("\n");
+  assert.match(problems(base), /names no inputs to guard/);
+  assert.match(problems({ ...base, inputs: [] }), /names no inputs to guard/);
+  assert.match(
+    problems({ ...base, inputs: ["conformance/src/no-such-file.mjs"] }),
+    /the guarded input conformance\/src\/no-such-file\.mjs does not exist/,
+  );
+  assert.equal(problems({ ...base, inputs: ["conformance/src/config.mjs"] }), "");
+});
+
+test("the parser reports every real input's tokens already in source order", () => {
+  // An inserted semicolon is reported at the end of the token before it, so the report order is
+  // the position order and the sort is only a guard; this pins the property on the real inputs
+  // and on the line-break cases.
+  const ordered = (text, label) => {
+    const at = tokensInReportOrder(text).map((token) => token.at);
+    assert.deepEqual(
+      at,
+      at.toSorted((a, b) => a - b),
+      label,
+    );
+  };
+  for (const lane of Object.values(HARNESS_LANES))
+    for (const file of lane.files) ordered(treeReader(file), file);
+  for (const [joined, split] of ASI_PAIRS) {
+    ordered(wrapAsi(joined), joined);
+    ordered(wrapAsi(split), split);
+  }
 });

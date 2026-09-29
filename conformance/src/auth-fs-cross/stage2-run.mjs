@@ -301,17 +301,13 @@ async function exportStage2Comparison(args) {
   const evidence = stage2Evidence({
     comparison: JSON.parse(await readFile(comparisonPath, "utf8")),
     fixtureText: await readFile(FIXTURE, "utf8"),
-    artifactSha256: createHash("sha256")
-      .update(await readFile(artifact))
-      .digest("hex"),
+    artifactSha256: createHash("sha256").update(await readFile(artifact)).digest("hex"),
     harnessCommit,
     harnessDigestAtCommit: await stage2HarnessDigestAt(harnessCommit),
     fireemuCommit: flag("--fireemu-commit"),
   });
   await writeFile(out, `${JSON.stringify(evidence, null, 2)}\n`);
-  console.log(
-    JSON.stringify({ out, summary: evidence.summary, fireemu: evidence.fireemu }, null, 2),
-  );
+  console.log(JSON.stringify({ out, summary: evidence.summary, fireemu: evidence.fireemu }, null, 2));
 }
 
 /** Compares fireemu's rows (a fresh window, or a saved local run) with the fixture. */

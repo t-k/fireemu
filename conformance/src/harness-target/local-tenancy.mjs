@@ -23,11 +23,15 @@ export const EXPECTED_ACTIONS = [
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "[::1]"]);
 const PROJECT_ID = /^[a-z0-9][a-z0-9-]*$/;
 
+/** The digest of a helper source: its tokens, so a comment edit does not change it. */
+export const setupDigestOf = (text) =>
+  createHash("sha256")
+    .update(JSON.stringify(sourceTokens(text)))
+    .digest("hex");
+
 /** Digest of this helper's tokens: it goes into the comparison's evidence beside the actions. */
 export const localSetupDigest = () =>
-  createHash("sha256")
-    .update(JSON.stringify(sourceTokens(readFileSync(fileURLToPath(import.meta.url), "utf8"))))
-    .digest("hex");
+  setupDigestOf(readFileSync(fileURLToPath(import.meta.url), "utf8"));
 
 /** The auth emulator's origin, or a reason the setup refuses to send anything. */
 function loopbackOrigin(ctx) {

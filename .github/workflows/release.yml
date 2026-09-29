@@ -79,6 +79,25 @@ jobs:
           echo "version=${version}" >> "$GITHUB_OUTPUT"
           echo "publish=${publish}" >> "$GITHUB_OUTPUT"
           echo "releasing ${version} (publish: ${publish})"
+      # The GitHub Release is written from this section after npm has the packages, so a missing
+      # or empty section is refused here, before anything is built or published, rather than
+      # leaving a published version without notes.
+      - name: the CHANGELOG has a section for this version
+        if: steps.version.outputs.publish == 'true'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: node npm/scripts/changelog-section.mjs "$VERSION" --out "$RUNNER_TEMP/release-notes.md"
+      # The Release's notes are these, exactly as checked: the job that writes the Release reads
+      # the file, not the repository.
+      - name: hand the release notes to the GitHub Release job
+        if: steps.version.outputs.publish == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: release-notes
+          path: ${{ runner.temp }}/release-notes.md
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 30
 
   # The Emulator UI is built once and reused by every platform, so every binary in a release
   # embeds byte-identical assets.
@@ -471,6 +490,20 @@ jobs:
         if: needs.plan.outputs.publish == 'true'
         run: echo "build provenance attestation - ${{ steps.attest.outcome }}"
 
+      # What the GitHub Release attaches: the attested archives, the checksums and both SBOMs,
+      # handed over before anything is published so that a failed upload cannot leave npm ahead
+      # of the release.
+      - name: hand the release assets to the GitHub Release job
+        if: needs.plan.outputs.publish == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: release-assets
+          path: dist/*
+          if-no-files-found: error
+          # A re-run of publish attests and uploads again.
+          overwrite: true
+          retention-days: 30
+
       # Platform packages first: `fireemu` pins them exactly, so publishing the launcher before
       # them would leave a version on the registry that cannot be installed.
       - name: publish the platform packages
@@ -501,3 +534,45 @@ jobs:
           name: dry-run-archives
           path: dist/*
           if-no-files-found: error
+
+  # The Release page for the tag: its notes are the CHANGELOG section `plan` checked before
+  # anything was built, and it carries the archives, the checksums and both SBOMs `publish`
+  # attested. It runs only after npm has every package. It checks out nothing and installs
+  # nothing, so the one job with write access to releases runs no code from the repository and
+  # reads no secret; if it fails after npm published, "Re-run failed jobs" recovers it (both
+  # artifacts are kept for 30 days). `--verify-tag` refuses to create a tag from the default
+  # branch, so the Release can only describe a tag that was pushed.
+  github-release:
+    needs: [plan, publish]
+    if: needs.plan.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: release-assets
+          path: dist
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: release-notes
+          path: notes
+      - name: create the GitHub Release from the CHANGELOG section
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.plan.outputs.version }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          # The files attached are the ones SHA256SUMS names (and attested), unchanged.
+          (cd dist && sha256sum --check SHA256SUMS)
+          test -s notes/release-notes.md
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "a GitHub Release for $TAG already exists: edit it by hand and attach dist/*, or delete it and re-run this job" >&2
+            exit 1
+          fi
+          flags=""
+          # A version is a prerelease by what precedes its build metadata.
+          case "${VERSION%%+*}" in *-*) flags="--prerelease" ;; esac
+          # shellcheck disable=SC2086 # $flags is empty or one fixed flag
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --verify-tag --title "Fireemu ${VERSION}" \
+            --notes-file notes/release-notes.md $flags dist/*

@@ -8,6 +8,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use fireemu_core_auth::jwt::TokenAcceptance;
 use fireemu_core_auth::mfa::TotpPolicy;
+use fireemu_core_auth::mfa_config::MfaProjectConfig;
 use fireemu_core_firestore::index::IndexValidationPolicy;
 use fireemu_core_pubsub::subscription::MAX_PUSH_MINIMUM_REDELIVERY_INTERVAL_MILLIS;
 use fireemu_core_types::edition::{FirestoreApiMode, FirestoreEdition};
@@ -1027,6 +1028,11 @@ pub struct RuntimeConfig {
     /// fireemu-only TOTP policy. Absence preserves the official Auth emulator's rejection
     /// of TOTP enrollment; declaring `auth.totp` explicitly enables the extension.
     pub auth_totp: Option<TotpPolicy>,
+    /// The project's initial multi-factor configuration (`auth.mfa`, the Identity Platform
+    /// `Config.mfa` shape), when the file declares one. It is the project's configuration at
+    /// start, and a control-plane reset returns to it. Absent, a project starts with multi-factor
+    /// off, as a new production project does.
+    pub auth_mfa: Option<MfaProjectConfig>,
     /// Whether the Functions blocking Auth bridge may receive raw inbound `IdP` credentials.
     /// This is disabled by default because those values are sensitive and are not needed by
     /// ordinary blocking handlers.
@@ -1350,6 +1356,7 @@ impl Default for RuntimeConfig {
             auth_project: "demo-app".to_owned(),
             auth_project_numbers: BTreeMap::new(),
             auth_totp: None,
+            auth_mfa: None,
             auth_forward_inbound_credentials: false,
             auth_improved_email_privacy: true,
             auth_improved_email_privacy_explicit: false,
@@ -1421,7 +1428,7 @@ impl Default for RuntimeConfig {
 }
 
 /// The keys of the `auth` section (spec/config/fireemu.schema.json).
-pub(crate) const AUTH_KEYS: [&str; 19] = [
+pub(crate) const AUTH_KEYS: [&str; 20] = [
     "enabled",
     "apiKeys",
     "projectIssuer",
@@ -1429,6 +1436,7 @@ pub(crate) const AUTH_KEYS: [&str; 19] = [
     "customTokenSigners",
     "idpSigners",
     "totp",
+    "mfa",
     "secretMaterialization",
     "forwardInboundCredentials",
     "improvedEmailPrivacy",
@@ -1775,6 +1783,24 @@ fn emulator_addr(entry: &Value, name: &str, current: &str) -> Result<String, Con
         }
     };
     Ok(format!("{host}:{port}"))
+}
+
+impl RuntimeConfig {
+    /// The warning a strict configuration earns when `auth.totp` is declared and the project's
+    /// multi-factor configuration does not enable TOTP: production enables TOTP only through
+    /// that configuration, so `auth.totp` alone enables nothing under the strict profile.
+    #[must_use]
+    pub fn auth_totp_warning(&self) -> Option<&'static str> {
+        (self.profile == CompatibilityProfile::Strict
+            && self.auth_totp.is_some()
+            && !self
+                .auth_mfa
+                .as_ref()
+                .is_some_and(MfaProjectConfig::totp_enabled))
+        .then_some(
+            "auth.totp does not enable TOTP under the strict profile (production enables it only through the project's MFA config); declare it with auth.mfa, for example {\"state\": \"ENABLED\", \"providerConfigs\": [{\"state\": \"ENABLED\", \"totpProviderConfig\": {}}]}",
+        )
+    }
 }
 
 impl RuntimeConfig {
@@ -3698,6 +3724,19 @@ impl RuntimeConfig {
                     ..defaults
                 });
             }
+            // The project's initial multi-factor configuration is validated by the one validator
+            // the Admin API's config update uses, so a file accepts and refuses what production does.
+            if let Some(mfa) = auth.get("mfa") {
+                cfg.auth_mfa = match mfa {
+                    Value::Null => None,
+                    value => Some(
+                        fireemu_adapter_http::identity_toolkit::mfa_config_from_json(value)
+                            .map_err(|refusal| {
+                                ConfigError(format!("auth.mfa: {}", refusal.message()))
+                            })?,
+                    ),
+                };
+            }
         }
         if let Some(app_check) = obj.get("appCheck") {
             let app_check = app_check
@@ -5331,6 +5370,147 @@ mod tests {
             );
         }
     }
+    #[test]
+    fn auth_mfa_declares_the_projects_initial_multi_factor_config() {
+        use fireemu_core_auth::mfa_config::{MfaConfigState, MfaProjectConfig, TotpProviderConfig};
+
+        assert_eq!(parse(&json!({})).unwrap().auth_mfa, None);
+        // `null` declares nothing, as an absent key does.
+        assert_eq!(parse(&json!({"mfa": null})).unwrap().auth_mfa, None);
+        let configured = parse(&json!({
+            "mfa": {
+                "state": "ENABLED",
+                "enabledProviders": ["PHONE_SMS"],
+                "providerConfigs": [{
+                    "state": "ENABLED",
+                    "totpProviderConfig": {"adjacentIntervals": 3}
+                }]
+            }
+        }))
+        .unwrap()
+        .auth_mfa;
+        assert_eq!(
+            configured,
+            Some(MfaProjectConfig {
+                state: MfaConfigState::Enabled,
+                phone_sms: true,
+                totp: Some(TotpProviderConfig {
+                    state: MfaConfigState::Enabled,
+                    adjacent_intervals: Some(3),
+                }),
+            })
+        );
+        // A declared "off" is a declaration: a reset returns to it.
+        assert_eq!(
+            parse(&json!({"mfa": {"state": "DISABLED"}}))
+                .unwrap()
+                .auth_mfa,
+            Some(MfaProjectConfig::default())
+        );
+        // The Admin API's own rules: MANDATORY is accepted, an entry without totpProviderConfig
+        // is dropped, and 0 is a window.
+        let mandatory = parse(&json!({"mfa": {
+            "state": "MANDATORY",
+            "providerConfigs": [{"state": "ENABLED"}, {"state": "ENABLED", "totpProviderConfig": {}}]
+        }}))
+        .unwrap()
+        .auth_mfa
+        .unwrap();
+        assert_eq!(mandatory.state, MfaConfigState::Mandatory);
+        assert!(mandatory.totp_enabled());
+        assert_eq!(mandatory.totp_window(), Some(0));
+    }
+
+    #[test]
+    fn strict_auth_totp_without_an_enabling_mfa_config_earns_a_warning_naming_the_key() {
+        let build = |profile: &str, auth: &Value| {
+            RuntimeConfig::from_json(&json!({
+                "schemaVersion": 1,
+                "profile": profile,
+                "auth": auth,
+            }))
+            .unwrap()
+        };
+        let totp_on = json!({"state": "ENABLED", "providerConfigs": [{"state": "ENABLED", "totpProviderConfig": {}}]});
+        for (profile, auth, warns) in [
+            ("strict", json!({"totp": {}}), true),
+            // Enabled through the project config: nothing to warn about.
+            ("strict", json!({"totp": {}, "mfa": totp_on}), false),
+            // A declared config that leaves TOTP off does not enable it.
+            (
+                "strict",
+                json!({"totp": {}, "mfa": {"state": "DISABLED"}}),
+                true,
+            ),
+            (
+                "strict",
+                json!({"totp": {}, "mfa": {"state": "ENABLED", "enabledProviders": ["PHONE_SMS"]}}),
+                true,
+            ),
+            (
+                "strict",
+                json!({"totp": {}, "mfa": {"state": "DISABLED", "providerConfigs": [{"state": "ENABLED", "totpProviderConfig": {}}]}}),
+                true,
+            ),
+            (
+                "strict",
+                json!({"totp": {}, "mfa": {"state": "ENABLED", "providerConfigs": [{"state": "DISABLED", "totpProviderConfig": {}}]}}),
+                true,
+            ),
+            // No auth.totp: nothing was asked for. The emulator profile keeps auth.totp working.
+            ("strict", json!({}), false),
+            ("strict", json!({"mfa": totp_on}), false),
+            ("emulator", json!({"totp": {}}), false),
+        ] {
+            let warning = build(profile, &auth).auth_totp_warning();
+            assert_eq!(warning.is_some(), warns, "{profile} {auth}: {warning:?}");
+            if let Some(text) = warning {
+                assert!(text.starts_with("auth.totp does not enable TOTP under the strict profile"));
+                assert!(text.contains("auth.mfa"));
+            }
+        }
+    }
+
+    #[test]
+    fn auth_mfa_is_refused_as_the_admin_api_refuses_it_naming_the_key() {
+        for (invalid, expected) in [
+            (json!({"mfa": true}), "auth.mfa:"),
+            (json!({"mfa": "ENABLED"}), "auth.mfa:"),
+            (json!({"mfa": {"state": "ON"}}), "config.mfa.state"),
+            (json!({"mfa": {"state": 1}}), "auth.mfa:"),
+            (json!({"mfa": {"unknown": 1}}), "auth.mfa:"),
+            (
+                json!({"mfa": {"enabledProviders": ["SMS_TEXT"]}}),
+                "config.mfa.enabled_providers[0]",
+            ),
+            (
+                json!({"mfa": {"enabledProviders": "PHONE_SMS"}}),
+                "auth.mfa:",
+            ),
+            (json!({"mfa": {"providerConfigs": {}}}), "auth.mfa:"),
+            (
+                json!({"mfa": {"providerConfigs": [{"state": "ENABLED", "totpProviderConfig": {"adjacentIntervals": 11}}]}}),
+                "between 0 and 10",
+            ),
+            (
+                json!({"mfa": {"providerConfigs": [{"state": "ENABLED", "totpProviderConfig": {"adjacentIntervals": -1}}]}}),
+                "between 0 and 10",
+            ),
+            (
+                json!({"mfa": {"providerConfigs": [{"state": "ENABLED", "totpProviderConfig": {"other": 1}}]}}),
+                "auth.mfa:",
+            ),
+            (
+                json!({"mfa": {"providerConfigs": [{"state": "ENABLED", "extra": 1}]}}),
+                "auth.mfa:",
+            ),
+        ] {
+            let error = parse(&invalid).expect_err(&format!("accepted {invalid}"));
+            assert!(error.0.starts_with("auth.mfa:"), "{invalid}: {error:?}");
+            assert!(error.0.contains(expected), "{invalid}: {error:?}");
+        }
+    }
+
     #[test]
     fn auth_project_numbers_are_explicit_validated_namespace_mappings() {
         let cfg = RuntimeConfig::from_json(&json!({"schemaVersion":1,"daemon":{"authProjectNumbers":{"demo-one":"111111111111","demo-two":"222222222222","demo-max":"18446744073709551615"}}})).unwrap();

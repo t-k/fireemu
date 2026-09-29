@@ -2566,6 +2566,7 @@ fn control_state(
             storage: storage.clone(),
             registry: registry.clone(),
             seed: cfg.seed,
+            mfa_seed: cfg.auth_mfa.clone(),
             app_check: app_check.clone(),
             pubsub: pubsub.clone(),
             pubsub_handle: pubsub_handle.clone(),

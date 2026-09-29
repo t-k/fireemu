@@ -38,6 +38,25 @@ pub enum MfaConfigRefusal {
     Shape,
 }
 
+impl MfaConfigRefusal {
+    /// The refusal as production words it (the Admin API answers with this message, and the
+    /// configuration file reports it): an enum's parse error names the field and its type.
+    #[must_use]
+    pub fn message(&self) -> String {
+        match self {
+            Self::InvalidEnum {
+                field,
+                type_name,
+                value,
+            } => format!(
+                "Invalid value at '{field}' (type.googleapis.com/google.cloud.identitytoolkit.admin.v2.{type_name}), \"{value}\""
+            ),
+            Self::AdjacentIntervalRange => "INVALID_ADJACENT_INTERVAL_RANGE : Allowed number of adjacent intervals must be between 0 and 10, inclusive".to_owned(),
+            Self::Shape => "the value is not an Identity Platform mfa config (state, enabledProviders, providerConfigs)".to_owned(),
+        }
+    }
+}
+
 /// The read-back form of a project's multi-factor configuration: an `adjacentIntervals` of 0
 /// is omitted, as proto3 omits a default (`totpProviderConfig: {}`).
 #[must_use]
@@ -257,6 +276,27 @@ mod tests {
                 type_name: "MultiFactorAuthConfig.Provider",
                 value: "NOT_A_PROVIDER".to_owned(),
             })
+        );
+    }
+
+    #[test]
+    fn a_refusal_reads_as_production_words_it() {
+        assert_eq!(
+            MfaConfigRefusal::InvalidEnum {
+                field: "config.mfa.state".to_owned(),
+                type_name: "MultiFactorAuthConfig.State",
+                value: "ON".to_owned(),
+            }
+            .message(),
+            "Invalid value at 'config.mfa.state' (type.googleapis.com/google.cloud.identitytoolkit.admin.v2.MultiFactorAuthConfig.State), \"ON\""
+        );
+        assert_eq!(
+            MfaConfigRefusal::AdjacentIntervalRange.message(),
+            "INVALID_ADJACENT_INTERVAL_RANGE : Allowed number of adjacent intervals must be between 0 and 10, inclusive"
+        );
+        assert_eq!(
+            MfaConfigRefusal::Shape.message(),
+            "the value is not an Identity Platform mfa config (state, enabledProviders, providerConfigs)"
         );
     }
 

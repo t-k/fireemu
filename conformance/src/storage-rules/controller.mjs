@@ -100,8 +100,7 @@ export function createController(options) {
   async function execute(row, phase, { ctx, accept = null } = {}) {
     // A credential provider may refresh what the row needs (through the gate's seam) before its freshness is judged.
     if (callable(credentials.ensure)) {
-      try { await credentials.ensure(row); } catch (error) {
-        if (error instanceof RunStop) throw error;
+      try { await credentials.ensure(row); } catch {
         throw new RunStop(gate.snapshot().admissionRefused === true ? "admission refused" : "credential refresh failed", { rowId: row.id });
       }
     }
@@ -153,8 +152,7 @@ export function createController(options) {
   // its reason, anything else is a failed delegate; the run never continues after a delegate that did not finish.
   async function runDelegate(op, argument) {
     if (!callable(delegates[op])) throw new RunStop("delegate missing", { op });
-    try { await delegates[op](argument); } catch (error) {
-      if (error instanceof RunStop) throw error;
+    try { await delegates[op](argument); } catch {
       if (gate.snapshot().admissionRefused === true) throw new RunStop("admission refused", { op });
       throw new RunStop("delegate failed", { op });
     }

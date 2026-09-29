@@ -187,3 +187,19 @@ def test_a_rest_receipt_needs_an_http_status_and_a_grpc_one_forbids_it(runtime, 
     monkeypatch.setattr(wire, '_child', lambda _spec, _timeout: (receipt('rest', http=None), {'childReaped': True}))
     result = wire.send('rest', 'Rollback', {'database': DATABASE, 'transaction': 'aXNzdWVk'}, nonce=NONCE, owner_id=OWNER, bearer='private-credential')
     assert result['http'] is None, 'an incomplete REST outcome may carry no status; the collector decides what that means'
+
+
+def test_local_batch_names_are_rebased_for_the_request_and_back_for_the_answer(runtime, monkeypatch):
+    wire = NodeWire(runtime, SCOPE, target={'kind': 'local', 'host': '127.0.0.1', 'port': 12345})
+    logical = [f'{DATABASE}/documents/oracle/{NONCE}/txn-toy/{role}' for role in ('a', 'm')]
+    local = [name.replace('fireemu-oracle-sbx', 'demo-program', 1) for name in logical]
+    def child(spec, _timeout):
+        assert spec['request']['documents'] == local and spec['request']['database'].startswith('projects/demo-program/')
+        entries = [{'found': {'name': local[0], 'fields': {}}, 'readTime': 'x'}, {'missing': local[1], 'readTime': 'x'}]
+        return receipt(response={'responses': entries}), {'childReaped': True}
+    monkeypatch.setattr(wire, '_child', child)
+    request = {'database': DATABASE, 'documents': logical}
+    result = wire.send('grpc', 'BatchGetDocuments', request, nonce=NONCE, owner_id=OWNER, bearer='owner')
+    assert [entry.get('found', {}).get('name') or entry['missing'] for entry in result['response']['responses']] == logical
+    assert result['localWireResponse']['responses'][0]['found']['name'] == local[0] and result['localWireResponse']['responses'][1]['missing'] == local[1]
+    assert request['documents'] == logical, 'the caller request is not mutated'

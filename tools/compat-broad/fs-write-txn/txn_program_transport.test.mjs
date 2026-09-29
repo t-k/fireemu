@@ -130,6 +130,9 @@ test('gRPC: a stream that fails or overflows is an answer, not a success', async
   const failing = streamClient(handlers => { handlers.data({ missing: name('a') }); handlers.error({ code: 14, details: 'owner unavailable' }); });
   const failed = await runUnary(spec('BatchGetDocuments', { database, documents: [name('a')] }), failing.factory);
   assert.deepEqual([failed.code, failed.complete, failed.details, failed.response], [14, false, '[credential-redacted] unavailable', null]);
+  const codeless = streamClient(handlers => handlers.error({ details: 'no status code' }));
+  const unknown = await runUnary(spec('BatchGetDocuments', { database, documents: [name('a')] }), codeless.factory);
+  assert.deepEqual([unknown.code, unknown.complete], [2, false], 'a stream error without a code is an unknown outcome');
   const refused = streamClient(handlers => handlers.error({ code: 10, details: 'contention' }));
   const aborted = await runUnary(spec('BatchGetDocuments', { database, documents: [name('a')] }), refused.factory);
   assert.deepEqual([aborted.code, aborted.complete], [10, true]);

@@ -19,35 +19,81 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
 const HEADING = /^## \[([^\]]+)\](?:\s.*)?$/;
 const SECOND_LEVEL = /^## /;
-const LINK_DEFINITION = /^\[[^\]]+\]:\s/;
-const FENCE = /^\s*(```|~~~)/;
+const LINK_DEFINITION = /^\[([^\]]+)\]:\s/;
+const FENCE_OPENER = /^ {0,3}(`{3,}|~{3,})(.*)$/;
+
+/**
+ * Whether each line is inside a fenced code block, fence lines included. A fence closes on the
+ * same character with at least as many characters as its opener (CommonMark), so a longer fence
+ * may contain a shorter one and a backtick fence may contain tildes.
+ *
+ * @throws when a fence is still open at the end of the file, since everything after it would
+ * be read as code.
+ */
+function fencedLines(lines) {
+  const fenced = [];
+  let open = null;
+  for (const line of lines) {
+    if (open === null) {
+      const opener = FENCE_OPENER.exec(line);
+      if (opener && !(opener[1][0] === "`" && opener[2].includes("`"))) {
+        open = { character: opener[1][0], length: opener[1].length };
+        fenced.push(true);
+      } else {
+        fenced.push(false);
+      }
+    } else {
+      fenced.push(true);
+      const closer = /^ {0,3}(`{3,}|~{3,})\s*$/.exec(line);
+      if (closer && closer[1][0] === open.character && closer[1].length >= open.length) open = null;
+    }
+  }
+  if (open !== null) throw new Error("CHANGELOG.md has a code fence that is never closed");
+  return fenced;
+}
 
 /**
  * The notes for `version`: the section's body without its heading, ending in one newline.
- * Throws when the section is missing, duplicated or empty. The version is compared as text
- * against the heading's label, never used as a pattern.
+ * Throws when the section is missing, duplicated or empty, or when a code fence is never closed.
+ * The version is compared as text against the heading's label, never used as a pattern.
+ *
+ * The section runs to the next second-level heading. The link reference definitions that end
+ * it (Keep a Changelog puts them after the last section) are not part of the notes; a
+ * definition the notes use, from anywhere in the file, is appended so the link still renders on
+ * the Release page. A definition in the middle of a section stays where it is.
  */
 export function changelogSection(changelog, version) {
   const lines = changelog.replace(/\r\n/g, "\n").split("\n");
+  const fenced = fencedLines(lines);
   const starts = [];
-  let inFence = false;
   for (const [index, line] of lines.entries()) {
-    if (FENCE.test(line)) inFence = !inFence;
-    if (!inFence && HEADING.exec(line)?.[1] === version) starts.push(index);
+    if (!fenced[index] && HEADING.exec(line)?.[1] === version) starts.push(index);
   }
   if (starts.length === 0) throw new Error(`CHANGELOG.md has no section for ${version}`);
   if (starts.length > 1) throw new Error(`CHANGELOG.md has more than one section for ${version}`);
 
-  const body = [];
-  inFence = false;
-  for (const line of lines.slice(starts[0] + 1)) {
-    if (FENCE.test(line)) inFence = !inFence;
-    if (!inFence && (SECOND_LEVEL.test(line) || LINK_DEFINITION.test(line))) break;
-    body.push(line);
+  let end = lines.length;
+  for (let index = starts[0] + 1; index < lines.length; index++) {
+    if (!fenced[index] && SECOND_LEVEL.test(lines[index])) {
+      end = index;
+      break;
+    }
   }
-  const text = body.join("\n").trim();
-  if (text === "") throw new Error(`the section for ${version} in CHANGELOG.md is empty`);
-  return `${text}\n`;
+  const body = lines.slice(starts[0] + 1, end);
+  while (body.length > 0 && (body.at(-1).trim() === "" || LINK_DEFINITION.test(body.at(-1)))) {
+    body.pop();
+  }
+  while (body.length > 0 && body[0].trim() === "") body.shift();
+  if (body.length === 0) throw new Error(`the section for ${version} in CHANGELOG.md is empty`);
+  const text = body.join("\n").trimEnd();
+
+  const definitions = lines.filter((line, index) => !fenced[index] && LINK_DEFINITION.test(line));
+  const used = definitions.filter((line) => {
+    if (body.includes(line)) return false;
+    const label = LINK_DEFINITION.exec(line)[1].toLowerCase();
+    return body.some((bodyLine) => !LINK_DEFINITION.test(bodyLine) && bodyLine.toLowerCase().includes(`[${label}]`));
+  });
+  return used.length === 0 ? `${text}\n` : `${text}\n\n${used.join("\n")}\n`;
 }
 
 function parseArgs(argv) {

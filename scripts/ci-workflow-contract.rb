@@ -104,35 +104,71 @@ publish_runs = release.dig("jobs", "publish", "steps").map { |step| step["run"] 
 assert(publish_runs.include?("npm@11.9.0"), "release publish must pin an npm version that supports Trusted Publishing")
 assert(publish_runs.include?("npm publish ./npm/fireemu"), "release publish must treat the launcher as a local path")
 assert(!publish_runs.include?("gh release create"), "the publish job must not create the GitHub Release: it only reads the repository")
-assert(release.dig("jobs", "publish", "permissions", "contents") == "read", "the publish job must only read the repository")
+assert(
+  release.dig("jobs", "publish", "permissions") == { "contents" => "read", "id-token" => "write", "attestations" => "write" },
+  "the publish job needs exactly contents: read, id-token: write and attestations: write"
+)
+assert(release["permissions"] == { "contents" => "read" }, "the workflow default must stay read-only: the one job that writes releases asks for it itself")
+release.fetch("jobs").each do |job, definition|
+  next if job == "github-release"
+  permissions = definition["permissions"] || release["permissions"]
+  assert(permissions["contents"] == "read", "release #{job} must not write the repository")
+end
 
-# The GitHub Release is written from the CHANGELOG section after npm has the packages, in a job
-# of its own so that the only job with write access to releases runs no build or test code.
+# The GitHub Release is written from the CHANGELOG section that `plan` checked, and from the
+# attested files `publish` handed over, after npm has the packages. It is a job of its own that
+# checks out nothing and installs nothing, so the only job that can write releases runs no code
+# from the repository.
+notes_upload = release.dig("jobs", "plan", "steps").find { |step| step["uses"]&.start_with?("actions/upload-artifact@") && step.dig("with", "name") == "release-notes" }
+assert(notes_upload, "plan must hand the CHANGELOG section it checked to the GitHub Release job")
+assert(notes_upload["if"] == "steps.version.outputs.publish == 'true'", "a dry run must not upload release notes")
+assert(notes_upload.dig("with", "if-no-files-found") == "error", "the release notes upload must fail when the notes are missing")
+assert(notes_upload.dig("with", "overwrite") == true, "a re-run of plan must be able to replace the release notes")
+assert(notes_upload["continue-on-error"].nil?, "the release notes upload must block publication")
+assert(release.dig("jobs", "plan", "steps").index(notes_upload) > release.dig("jobs", "plan", "steps").index { |step| step["run"]&.include?("changelog-section.mjs") }, "the notes are uploaded after they are extracted")
+
+publish_steps = release.dig("jobs", "publish", "steps")
+release_assets_upload = publish_steps.find { |step| step["uses"]&.start_with?("actions/upload-artifact@") && step.dig("with", "name") == "release-assets" }
+assert(release_assets_upload, "the publish job must hand the attested archives, checksums and SBOMs to the GitHub Release job")
+assert(release_assets_upload.dig("with", "path") == "dist/*", "the release assets are the attested dist directory")
+assert(release_assets_upload["if"] == "needs.plan.outputs.publish == 'true'", "a dry run must not upload release assets")
+assert(release_assets_upload.dig("with", "if-no-files-found") == "error", "the release assets upload must fail when a file is missing")
+assert(release_assets_upload.dig("with", "overwrite") == true, "a re-run of publish must be able to replace the release assets")
+assert(release_assets_upload["continue-on-error"].nil?, "the release assets upload must block publication, or npm gets ahead of the Release")
+assert(publish_steps.index(release_assets_upload) < publish_steps.index { |step| step["name"] == "publish the platform packages" }, "the assets must be uploaded before anything is published, so a failed upload cannot leave npm ahead of the release")
+assert(publish_steps.index { |step| step["id"] == "attest" } < publish_steps.index(release_assets_upload), "the assets are uploaded after attestation, so they are the attested bytes")
+[notes_upload, release_assets_upload].each do |upload|
+  assert(upload.dig("with", "retention-days").to_i >= 30, "the artifacts a re-run of github-release needs must outlive a slow recovery")
+end
+
 github_release = release.dig("jobs", "github-release")
 assert(github_release, "release must create the GitHub Release after publication")
 assert(github_release.fetch("needs").sort == %w[plan publish], "the GitHub Release must wait for the npm publish")
 assert(github_release["if"] == "needs.plan.outputs.publish == 'true'", "a dry run must not create a GitHub Release")
 assert(github_release["permissions"] == { "contents" => "write" }, "the GitHub Release job needs contents: write and nothing else")
 assert(!github_release.key?("environment"), "the GitHub Release job must not wait for another approval after publication")
+assert(github_release["continue-on-error"].nil?, "a failed GitHub Release must fail the run")
 assert(!YAML.dump(github_release).include?("secrets."), "the GitHub Release job must use only the workflow token")
-release_checkout = github_release.fetch("steps").find { |step| step["uses"]&.start_with?("actions/checkout@") }
-assert(release_checkout&.dig("with", "persist-credentials") == false, "the GitHub Release job must not leave a token in the checkout")
-github_release_runs = github_release.fetch("steps").map { |step| step["run"] }.compact.join("\n")
-assert(github_release_runs.include?("node npm/scripts/changelog-section.mjs"), "the GitHub Release notes must come from the CHANGELOG section")
+release_uses = github_release.fetch("steps").map { |step| step["uses"] }.compact
+assert(release_uses.all? { |use| use.start_with?("actions/download-artifact@") }, "the GitHub Release job may only download artifacts: no checkout, no setup, no install")
+downloads = github_release.fetch("steps").select { |step| step["uses"]&.start_with?("actions/download-artifact@") }.map { |step| step.dig("with", "name") }
+assert(downloads.sort == %w[release-assets release-notes], "the GitHub Release job downloads the attested assets and the checked notes")
+github_release_steps = github_release.fetch("steps").select { |step| step["run"] }
+assert(github_release_steps.none? { |step| step["run"].include?("${{") }, "no expression may be interpolated into a script of the GitHub Release job: pass it through env")
+github_release_runs = github_release_steps.map { |step| step["run"] }.join("\n")
+assert(!github_release_runs.match?(/\b(node|npm|npx|pnpm|yarn|python3?|ruby|cargo|pip|uv)\b/), "the GitHub Release job runs no repository or package code")
 assert(github_release_runs.include?("gh release create"), "the GitHub Release job must create the release")
-publish_steps = release.dig("jobs", "publish", "steps")
-release_assets_upload = publish_steps.find { |step| step["uses"]&.start_with?("actions/upload-artifact@") && step.dig("with", "name") == "release-assets" }
-assert(release_assets_upload, "the publish job must hand the attested archives, checksums and SBOMs to the GitHub Release job")
-assert(release_assets_upload.dig("with", "path") == "dist/*", "the release assets are the attested dist directory")
-assert(release_assets_upload["if"] == "needs.plan.outputs.publish == 'true'", "a dry run must not upload release assets")
-assert(publish_steps.index(release_assets_upload) < publish_steps.index { |step| step["name"] == "publish the platform packages" }, "the assets must be uploaded before anything is published, so a failed upload cannot leave npm ahead of the release")
-assert(publish_steps.index { |step| step["id"] == "attest" } < publish_steps.index(release_assets_upload), "the assets are uploaded after attestation, so they are the attested bytes")
-assert(github_release.fetch("steps").any? { |step| step["uses"]&.start_with?("actions/download-artifact@") && step.dig("with", "name") == "release-assets" }, "the GitHub Release job must download the release assets")
-assert(github_release_runs.include?("sha256sum --check SHA256SUMS"), "the release assets must match SHA256SUMS before they are attached")
-assert(github_release_runs.index("gh release create") < github_release_runs.index("dist/*"), "the release assets must be attached when the release is created")
+position = lambda do |needle|
+  github_release_runs.index(needle) || raise("the GitHub Release job must run #{needle}")
+end
+create_at = position.call("gh release create")
+assert(position.call("sha256sum --check SHA256SUMS") < create_at, "the release assets must match SHA256SUMS before the release is created")
+assert(position.call("test -s notes/release-notes.md") < create_at, "the checked notes must be there and not empty before the release is created")
+assert(position.call("gh release view") < create_at, "an existing Release for the tag must be reported before one is created")
 assert(github_release_runs.include?("--verify-tag"), "the GitHub Release must be created only for an existing tag")
-assert(github_release_runs.include?("--notes-file"), "the GitHub Release notes must be the extracted section")
-assert(github_release_runs.index("changelog-section.mjs") < github_release_runs.index("gh release create"), "the section must be extracted before the release is created, so a missing section fails first")
+assert(github_release_runs.include?("--notes-file notes/release-notes.md"), "the GitHub Release notes must be the checked section")
+assert(github_release_runs[create_at..].include?("dist/*"), "the release assets must be attached when the release is created")
+assert(github_release_runs.include?('${VERSION%%+*}'), "a version is a prerelease by its part before the build metadata")
 plan_runs = release.dig("jobs", "plan", "steps").map { |step| step["run"] }.compact.join("\n")
 assert(plan_runs.include?("node npm/scripts/changelog-section.mjs"), "release plan must refuse a version without a CHANGELOG section before anything is published")
 assert(load_workflow("ci.yml").dig("jobs", "package", "steps").map { |step| step["run"] }.compact.include?("node --test npm/scripts/changelog-section.test.mjs"), "CI must test the CHANGELOG section extraction")

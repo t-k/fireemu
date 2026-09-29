@@ -87,6 +87,17 @@ jobs:
         env:
           VERSION: ${{ steps.version.outputs.version }}
         run: node npm/scripts/changelog-section.mjs "$VERSION" --out "$RUNNER_TEMP/release-notes.md"
+      # The Release's notes are these, exactly as checked: the job that writes the Release reads
+      # the file, not the repository.
+      - name: hand the release notes to the GitHub Release job
+        if: steps.version.outputs.publish == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: release-notes
+          path: ${{ runner.temp }}/release-notes.md
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 30
 
   # The Emulator UI is built once and reused by every platform, so every binary in a release
   # embeds byte-identical assets.
@@ -489,7 +500,9 @@ jobs:
           name: release-assets
           path: dist/*
           if-no-files-found: error
-          retention-days: 7
+          # A re-run of publish attests and uploads again.
+          overwrite: true
+          retention-days: 30
 
       # Platform packages first: `fireemu` pins them exactly, so publishing the launcher before
       # them would leave a version on the registry that cannot be installed.
@@ -522,11 +535,13 @@ jobs:
           path: dist/*
           if-no-files-found: error
 
-  # The Release page for the tag: its notes are the CHANGELOG section for the version, and it
-  # carries the archives, the checksums and both SBOMs the publish job attested. It runs only
-  # after npm has every package, in a job of its own so that the one job with write access to
-  # releases runs no build or test code and reads no secret. `--verify-tag` refuses to create a
-  # tag from the default branch, so the Release can only describe a tag that was pushed.
+  # The Release page for the tag: its notes are the CHANGELOG section `plan` checked before
+  # anything was built, and it carries the archives, the checksums and both SBOMs `publish`
+  # attested. It runs only after npm has every package. It checks out nothing and installs
+  # nothing, so the one job with write access to releases runs no code from the repository and
+  # reads no secret; if it fails after npm published, "Re-run failed jobs" recovers it (both
+  # artifacts are kept for 30 days). `--verify-tag` refuses to create a tag from the default
+  # branch, so the Release can only describe a tag that was pushed.
   github-release:
     needs: [plan, publish]
     if: needs.plan.outputs.publish == 'true'
@@ -534,16 +549,14 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-        with:
-          persist-credentials: false
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
-        with:
-          node-version: 24
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
           name: release-assets
           path: dist
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: release-notes
+          path: notes
       - name: create the GitHub Release from the CHANGELOG section
         env:
           GH_TOKEN: ${{ github.token }}
@@ -552,9 +565,14 @@ jobs:
         run: |
           # The files attached are the ones SHA256SUMS names (and attested), unchanged.
           (cd dist && sha256sum --check SHA256SUMS)
-          node npm/scripts/changelog-section.mjs "$VERSION" --out "$RUNNER_TEMP/release-notes.md"
+          test -s notes/release-notes.md
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "a GitHub Release for $TAG already exists: edit it by hand and attach dist/*, or delete it and re-run this job" >&2
+            exit 1
+          fi
           flags=""
-          case "$VERSION" in *-*) flags="--prerelease" ;; esac
+          # A version is a prerelease by what precedes its build metadata.
+          case "${VERSION%%+*}" in *-*) flags="--prerelease" ;; esac
           # shellcheck disable=SC2086 # $flags is empty or one fixed flag
-          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --verify-tag --title "fireemu ${VERSION}" \
-            --notes-file "$RUNNER_TEMP/release-notes.md" $flags dist/*
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --verify-tag --title "Fireemu ${VERSION}" \
+            --notes-file notes/release-notes.md $flags dist/*

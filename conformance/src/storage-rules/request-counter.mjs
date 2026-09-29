@@ -149,7 +149,11 @@ export function createStage3RequestCounter(options = {}) {
       if (busy || !["normal", "recovery"].includes(mode)) {
         throw new Error("counter cannot close now");
       }
-      if (!["finished", "needs-recovery"].includes(outcome)) {
+      if (
+        !["finished", "needs-recovery", "stopped-no-mutation", "recovered"].includes(outcome) ||
+        (outcome === "stopped-no-mutation" && (mode !== "normal" || recovery !== 0)) ||
+        (outcome === "recovered" && (mode !== "recovery" || recovery < 1))
+      ) {
         throw new Error("invalid terminal outcome");
       }
       await writeTerminal(outcome);

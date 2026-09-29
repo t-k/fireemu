@@ -168,3 +168,60 @@ test("an asynchronous preflight verdict blocks concurrent preflight dispatch", a
   assert.equal(value.snapshot().mode, "closed");
   assert.deepEqual(events.map(([type]) => type), ["started", "reserve", "terminal"]);
 });
+
+async function admitted() {
+  const ctx = counter();
+  await ctx.value.start({ runId: "run-a" });
+  await ctx.value.sendPreflight("preflight/a", async () => 200, (status) => status === 200);
+  ctx.value.admit();
+  return ctx;
+}
+
+test("a run stopped before any mutation closes as stopped-no-mutation only while still normal", async () => {
+  const { value, events } = await admitted();
+  await value.send("subject/read", async () => 200);
+  await value.finish("stopped-no-mutation");
+  assert.deepEqual(events.at(-1), ["terminal", { outcome: "stopped-no-mutation", requests: 2, normal: 2, recovery: 0, maxRequests: 6648 }]);
+  assert.equal(value.snapshot().mode, "closed");
+});
+
+test("stopped-no-mutation is refused once recovery has begun", async () => {
+  const { value, events } = await admitted();
+  value.enterRecovery();
+  await value.send("recovery/read", async () => 200);
+  await assert.rejects(value.finish("stopped-no-mutation"), /invalid terminal outcome/);
+  assert.equal(events.filter(([type]) => type === "terminal").length, 0);
+  assert.equal(value.snapshot().mode, "recovery");
+});
+
+test("stopped-no-mutation is also refused in recovery mode before any recovery request", async () => {
+  const { value } = await admitted();
+  value.enterRecovery();
+  await assert.rejects(value.finish("stopped-no-mutation"), /invalid terminal outcome/);
+  assert.equal(value.snapshot().mode, "recovery");
+});
+
+test("a recovered close needs recovery mode and at least one recovery request", async () => {
+  const early = await admitted();
+  await assert.rejects(early.value.finish("recovered"), /invalid terminal outcome/);
+  const empty = await admitted();
+  empty.value.enterRecovery();
+  await assert.rejects(empty.value.finish("recovered"), /invalid terminal outcome/);
+  const { value, events } = await admitted();
+  await value.send("subject/write", async () => 200);
+  value.enterRecovery();
+  await value.send("recovery/delete", async () => 200);
+  await value.finish("recovered");
+  assert.deepEqual(events.at(-1), ["terminal", { outcome: "recovered", requests: 3, normal: 2, recovery: 1, maxRequests: 6648 }]);
+  assert.equal(value.snapshot().mode, "closed");
+});
+
+test("the existing finished and needs-recovery closes still work in either mode and unknown outcomes stay refused", async () => {
+  const normal = await admitted();
+  await normal.value.finish("finished");
+  const recovering = await admitted();
+  recovering.value.enterRecovery();
+  await recovering.value.finish("needs-recovery");
+  const other = await admitted();
+  await assert.rejects(other.value.finish("stopped"), /invalid terminal outcome/);
+});

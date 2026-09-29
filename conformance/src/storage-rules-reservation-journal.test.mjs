@@ -383,3 +383,38 @@ for (const [phase, cap, used] of [["normal", 4648, 2], ["recovery", 2000, 0]]) {
     assert.equal(journal.snapshot().requests, total);
   });
 }
+
+async function admittedJournal(t, { recoveryRequests = 0, normalRequests = 0 } = {}) {
+  const ctx = await fixture(t);
+  await ctx.journal.onStarted(start());
+  await ctx.journal.onReserve(reserve(1, preflightIds[0], "preflight"));
+  await ctx.journal.onReserve(reserve(2, preflightIds[1], "preflight"));
+  let attempt = 3;
+  if (normalRequests) await ctx.journal.onReserve(reserve(attempt++, requestIds[2], "normal"));
+  if (recoveryRequests) await ctx.journal.onReserve(reserve(attempt++, requestIds[3], "recovery"));
+  return { ctx, requests: attempt - 1 };
+}
+
+test("a stopped-no-mutation terminal is durable only in the normal phase with no recovery request", async (t) => {
+  const { ctx, requests } = await admittedJournal(t, { normalRequests: 1 });
+  await assert.rejects(ctx.journal.onTerminal(terminal("stopped-no-mutation", requests + 1, requests + 1, 0)), /journal event refused/);
+  await ctx.journal.onTerminal(terminal("stopped-no-mutation", requests, requests, 0));
+  assert.equal((await ctx.rows()).at(-1).data.outcome, "stopped-no-mutation");
+});
+
+test("a stopped-no-mutation terminal is refused before admission and after a recovery request", async (t) => {
+  const early = await fixture(t);
+  await early.journal.onStarted(start());
+  await early.journal.onReserve(reserve(1, preflightIds[0], "preflight"));
+  await assert.rejects(early.journal.onTerminal(terminal("stopped-no-mutation", 1, 1, 0)), /journal event refused/);
+  const { ctx, requests } = await admittedJournal(t, { normalRequests: 1, recoveryRequests: 1 });
+  await assert.rejects(ctx.journal.onTerminal(terminal("stopped-no-mutation", requests, requests - 1, 1)), /journal event refused/);
+});
+
+test("a recovered terminal needs the recovery phase and at least one recovery request", async (t) => {
+  const normalOnly = await admittedJournal(t, { normalRequests: 1 });
+  await assert.rejects(normalOnly.ctx.journal.onTerminal(terminal("recovered", normalOnly.requests, normalOnly.requests, 0)), /journal event refused/);
+  const { ctx, requests } = await admittedJournal(t, { normalRequests: 1, recoveryRequests: 1 });
+  await ctx.journal.onTerminal(terminal("recovered", requests, requests - 1, 1));
+  assert.equal((await ctx.rows()).at(-1).data.outcome, "recovered");
+});

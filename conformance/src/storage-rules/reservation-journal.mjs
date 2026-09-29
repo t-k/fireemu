@@ -139,8 +139,10 @@ export async function createReservationJournal(input) {
         if (row.phase === "recovery" ? recovery >= recoveryReserve : normal >= normalCap) throw new Error();
       } else {
         row = record(input, ["outcome", "requests", "normal", "recovery", "maxRequests"]);
-        if (state !== "started" || !["preflight-failed", "finished", "needs-recovery"].includes(row.outcome) || row.requests !== requests || row.normal !== normal || row.recovery !== recovery || row.maxRequests !== maxRequests) throw new Error();
+        if (state !== "started" || !["preflight-failed", "finished", "needs-recovery", "stopped-no-mutation", "recovered"].includes(row.outcome) || row.requests !== requests || row.normal !== normal || row.recovery !== recovery || row.maxRequests !== maxRequests) throw new Error();
         if (row.outcome === "preflight-failed" ? phase !== "preflight" : !completePreflight()) throw new Error();
+        if (row.outcome === "stopped-no-mutation" && recovery !== 0) throw new Error();
+        if (row.outcome === "recovered" && recovery < 1) throw new Error();
       }
     } catch { throw new Error("reservation journal event refused"); }
     busy = true;

@@ -7,6 +7,9 @@ import { FIXED_PRODUCTION_RULES_SHA256 } from "./auth-plan.mjs";
 import { replayLocalAggregate } from "./aggregate-replay.mjs";
 import { buildStage3DraftPlan } from "./stage3-plan.mjs";
 import { loopbackHttpOrigin } from "./wire-serialization.mjs";
+import { createLeanWire } from "./lean-wire.mjs";
+import { createLocalFetchForLeanWire } from "./local-lean-wire.mjs";
+import { createObjectMutationPacer } from "./production-pacing.mjs";
 
 function host(name) {
   const value = process.env[name];
@@ -80,12 +83,63 @@ try {
     plan,
     productionSendAuthorized: false,
   });
+  // STORAGE_OBJECT_LOCAL_WIRE=lean sends every request through lean-wire.mjs itself, with the four
+  // real hosts mapped onto the local server, as a production run does.
+  const leanWire = process.env.STORAGE_OBJECT_LOCAL_WIRE === "lean";
+  const ownerToken = "rehearsal-owner-token-0000000000";
+  const stopAfterRecipes = Number(process.env.STORAGE_OBJECT_LOCAL_STOP_AFTER_RECIPES ?? "0");
+  let recipesBegun = 0;
+  const placeholders = {
+    storage: "http://127.0.0.1:19199",
+    auth: "http://127.0.0.1:19099",
+    control: "http://127.0.0.1:19198",
+  };
   result = await replayLocalAggregate({
     plan,
+    ...(leanWire
+      ? {
+          wireFactory: ({ origins }) => {
+            const prefix = plan.recordings[0].prefix;
+            // `origins` are the placeholders the senders were given; the local servers are the
+            // real ones the mapping fetch reaches (Auth and the control API share one origin).
+            const localFetch = createLocalFetchForLeanWire({
+              local: { storage: storageOrigin, auth: authOrigin, control: control.origin },
+              ownerToken,
+              fetchImpl: globalThis.fetch,
+            });
+            return createLeanWire({
+              bucket: plan.bucket,
+              projectId: plan.projectId,
+              prefix,
+              origins: { storage: origins[0], auth: origins[1], control: origins[2] },
+              adminToken: async () => ownerToken,
+              authApiKey: "storage-object-local-key",
+              readRules: async ({ countRequest }) => {
+                countRequest();
+                const response = await globalThis.fetch(
+                  new URL("/v1/storage/rules", control.origin),
+                  {
+                    headers: { authorization: `Bearer ${process.env.FIREEMU_CONTROL_TOKEN}` },
+                  },
+                );
+                return { source: (await response.json()).source };
+              },
+              fetchImpl: localFetch,
+              capture: (entry) =>
+                journal.write(`${JSON.stringify({ type: "lean-capture", ...entry })}\n`),
+              pacer: createObjectMutationPacer({ ownedPrefixes: [prefix] }),
+            });
+          },
+        }
+      : {}),
+    stopAfter: () => stopAfterRecipes > 0 && recipesBegun >= stopAfterRecipes,
     recordings: Number(process.env.STORAGE_OBJECT_LOCAL_RECORDINGS ?? "2"),
-    storageOrigin,
-    authOrigin,
-    localControl: { origin: control.origin, token: process.env.FIREEMU_CONTROL_TOKEN },
+    storageOrigin: leanWire ? placeholders.storage : storageOrigin,
+    authOrigin: leanWire ? placeholders.auth : authOrigin,
+    localControl: {
+      origin: leanWire ? placeholders.control : control.origin,
+      token: process.env.FIREEMU_CONTROL_TOKEN,
+    },
     localAuth: {
       apiKey: "storage-object-local-key",
       password: randomBytes(24).toString("base64url"),
@@ -94,7 +148,10 @@ try {
     captureDirectory: directory,
     onStart: (event) => record({ ...event, type: "started" }),
     onReserve: (event) => record({ ...event, type: "reserved" }),
-    onRecipeBegin: (event) => record({ ...event, type: "recipe-begin" }),
+    onRecipeBegin: (event) => {
+      recipesBegun++;
+      return record({ ...event, type: "recipe-begin" });
+    },
     onRecipeFinish: (event) => record({ ...event, type: "recipe-finish" }),
     onJournal: record,
     onCapture: (event) => record({ ...event, type: "response" }),

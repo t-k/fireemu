@@ -237,10 +237,10 @@ test("the ledger file appends whole lines and reads the whole text", async () =>
   assert.equal(mode(path), 0o600);
 });
 
-test("the ledger file is not created, and a missing file reads as empty", async () => {
+test("the ledger file is not created, and a missing file is an error, not an empty ledger", async () => {
   const dir = tmp();
   const ledger = createLedgerFile(join(dir, "missing.jsonl"));
-  assert.equal(await ledger.read(), "");
+  await assert.rejects(ledger.read(), /ledger is missing/);
   await assert.rejects(ledger.append({ a: 1 }));
   assert.equal(existsSync(join(dir, "missing.jsonl")), false);
 });

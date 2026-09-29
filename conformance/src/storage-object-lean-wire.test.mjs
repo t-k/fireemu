@@ -11,6 +11,7 @@ import {
   createLeanWire,
   LEAN_PLACEHOLDER_ADMIN,
   LEAN_PLACEHOLDER_API_KEY,
+  sanitizeRecord,
 } from "./storage-object/lean-wire.mjs";
 
 const BUCKET = "example.appspot.com";
@@ -44,7 +45,12 @@ function harness(overrides = {}) {
     origins: { storage: STORAGE, auth: AUTH, control: CONTROL },
     adminToken: () => TOKEN,
     authApiKey: KEY,
-    readRules: async () => ({ source: "rules-source", requests: 2 }),
+    // The reader counts each real request it makes through the function the wire hands it.
+    readRules: async ({ countRequest }) => {
+      countRequest();
+      countRequest();
+      return { source: "rules-source" };
+    },
     fetchImpl: async (url, init) => {
       calls.push({ url: String(url), ...init });
       return respond(String(url), init);
@@ -247,7 +253,68 @@ const REFUSED = [
     `${STORAGE}/storage/v1/b/${BUCKET}/o/%2e%2e/${enc(name("a"))}`,
   ],
   ["a single-dot name part", "GET", `${STORAGE}/storage/v1/b/${BUCKET}/o/${enc(`${PREFIX}./x`)}`],
-  ["a name with a newline", "GET", `${STORAGE}/storage/v1/b/${BUCKET}/o/${enc(`${PREFIX}a\nb`)}`],
+  ["a name with a NUL", "GET", `${STORAGE}/storage/v1/b/${BUCKET}/o/${enc(`${PREFIX}a\0b`)}`],
+  [
+    "a name with a NUL in an upload",
+    "POST",
+    `${STORAGE}/upload/storage/v1/b/${BUCKET}/o?uploadType=media&name=${enc(`${PREFIX}a\0b`)}`,
+  ],
+  [
+    "a double-encoded prefix look-alike in a GCS upload",
+    "POST",
+    `${STORAGE}/upload/storage/v1/b/${BUCKET}/o?uploadType=media&name=${enc(enc(`${PREFIX}x`))}`,
+  ],
+  [
+    "a double-encoded prefix look-alike in a Firebase upload",
+    "POST",
+    `${STORAGE}/v0/b/${BUCKET}/o?name=${enc(enc(`${PREFIX}x`))}`,
+  ],
+  [
+    "a double-encoded prefix look-alike in a path",
+    "GET",
+    `${STORAGE}/storage/v1/b/${BUCKET}/o/${enc(enc(`${PREFIX}x`))}`,
+  ],
+  [
+    "two name parameters",
+    "POST",
+    `${STORAGE}/upload/storage/v1/b/${BUCKET}/o?uploadType=media&name=${enc(`${PREFIX}x`)}&name=${enc("outside")}`,
+  ],
+  [
+    "two name parameters, the outside one first",
+    "POST",
+    `${STORAGE}/upload/storage/v1/b/${BUCKET}/o?name=${enc("outside")}&name=${enc(`${PREFIX}x`)}`,
+  ],
+  [
+    "two prefix parameters",
+    "GET",
+    `${STORAGE}/storage/v1/b/${BUCKET}/o?prefix=${enc(PREFIX)}&prefix=`,
+  ],
+  [
+    "a billing project",
+    "GET",
+    `${STORAGE}/storage/v1/b/${BUCKET}/o/${enc(name("a"))}?userProject=another-project`,
+  ],
+  [
+    "a billing project in another case",
+    "GET",
+    `${STORAGE}/v0/b/${BUCKET}/o/${enc(name("a"))}?USERPROJECT=another-project`,
+  ],
+  [
+    "another run's list",
+    "GET",
+    `${STORAGE}/storage/v1/b/${BUCKET}/o?prefix=${enc("storage-object/bbbbbbbbbbbbbbbbbbbb/")}`,
+  ],
+  [
+    "a session cancel without an upload ID",
+    "DELETE",
+    `${STORAGE}/upload/storage/v1/b/${BUCKET}/o?uploadType=resumable&name=${enc(name("a"))}`,
+  ],
+  [
+    "a session cancel of an object outside the prefix",
+    "DELETE",
+    `${STORAGE}/upload/storage/v1/b/${BUCKET}/o?uploadType=resumable&upload_id=abc&name=${enc("other/a")}`,
+  ],
+  ["an account update", "POST", `${AUTH}/identitytoolkit.googleapis.com/v1/accounts:update`],
   ["the bare run prefix as an object", "GET", `${STORAGE}/storage/v1/b/${BUCKET}/o/${enc(PREFIX)}`],
   [
     "a long name outside the prefix",
@@ -1012,6 +1079,285 @@ test("an asynchronous token provider is awaited, and its failure sends nothing",
       /owner access token is unavailable/.test(error.message) && !error.message.includes(TOKEN),
   );
   assert.equal(failing.calls.length, 0);
+});
+
+test("a name with a line feed, a percent sign or a plus is a name like any other inside the prefix", async () => {
+  for (const suffix of ["a\nb", "a b%+snow.bin", "list\n", "x%252Fy"]) {
+    const h = harness();
+    await h.wire.fetch(`${STORAGE}/v0/b/${BUCKET}/o?name=${enc(`${PREFIX}${suffix}`)}`, {
+      method: "POST",
+      headers: admin,
+      body: "x",
+    });
+    const sent = new URL(h.calls[0].url).searchParams.get("name");
+    assert.equal(sent, `${PREFIX}${suffix}`, "the name goes out as the sender wrote it");
+    await h.wire.fetch(`${STORAGE}/storage/v1/b/${BUCKET}/o/${enc(`${PREFIX}${suffix}`)}`, {
+      method: "GET",
+      headers: admin,
+    });
+    assert.equal(h.calls.length, 2);
+  }
+});
+
+test("the same name written twice is paced as one object, however it is spelled", async () => {
+  const h = harness({ paced: true });
+  const put = () =>
+    h.wire.fetch(
+      `${STORAGE}/upload/storage/v1/b/${BUCKET}/o?uploadType=media&name=${enc(`${PREFIX}a b%+x`)}`,
+      { method: "POST", headers: admin, body: "x" },
+    );
+  await put();
+  await put();
+  assert.equal(h.sleeps.length, 1);
+});
+
+test("a resumable session can be cancelled with its upload ID and an owned name", async () => {
+  const h = harness();
+  const response = await h.wire.fetch(
+    `${STORAGE}/upload/storage/v1/b/${BUCKET}/o?uploadType=resumable&upload_id=abc&name=${enc(name("a"))}`,
+    { method: "DELETE", headers: admin },
+  );
+  assert.equal(response.status, 200);
+  assert.equal(h.calls.at(-1).method, "DELETE");
+});
+
+test("every real request the Rules reader makes is counted, a failed read included", async () => {
+  const failing = harness({
+    options: {
+      readRules: async ({ countRequest }) => {
+        countRequest();
+        throw new Error("release absent");
+      },
+    },
+  });
+  await assert.rejects(
+    failing.wire.fetch(`${CONTROL}/v1/storage/rules`, { method: "GET", headers: {} }),
+  );
+  assert.equal(failing.wire.snapshot().realRequests, 1);
+  assert.equal(failing.wire.snapshot().attempts, 1);
+  const failingLate = harness({
+    options: {
+      readRules: async ({ countRequest }) => {
+        countRequest();
+        countRequest();
+        return { requests: 99 };
+      },
+    },
+  });
+  await assert.rejects(
+    failingLate.wire.fetch(`${CONTROL}/v1/storage/rules`, { method: "GET", headers: {} }),
+  );
+  assert.equal(
+    failingLate.wire.snapshot().realRequests,
+    2,
+    "what the reader claims is not what is counted",
+  );
+});
+
+test("a body that echoes a known secret is scrubbed in the record, and the sender still gets the original", async () => {
+  for (const type of ["application/json", "text/plain", "application/xml"]) {
+    const body =
+      type === "application/json"
+        ? JSON.stringify({ error: `bad key ${KEY} for ${TOKEN}` })
+        : `bad key ${KEY} for ${TOKEN}`;
+    const h = harness({
+      respond: () => new Response(body, { status: 400, headers: { "content-type": type } }),
+    });
+    const response = await h.wire.fetch(
+      `${STORAGE}/v0/b/${BUCKET}/o/${enc(name("a"))}?key=${LEAN_PLACEHOLDER_API_KEY}`,
+      {
+        method: "GET",
+        headers: admin,
+      },
+    );
+    assert.equal(await response.text(), body);
+    const recorded = Buffer.from(h.captures[0].response.bodyBase64, "base64").toString("utf8");
+    assert.equal(recorded.includes(KEY), false, type);
+    assert.equal(recorded.includes(TOKEN), false, type);
+    assert.ok(recorded.includes(sha(TOKEN)), type);
+    assert.equal(h.captures[0].response.sanitized, true, type);
+  }
+});
+
+test("a binary response that holds a known secret stops the wire", async () => {
+  const h = harness({
+    respond: () =>
+      new Response(Buffer.from(`\u0000\u0001${TOKEN}\u0002`), {
+        status: 200,
+        headers: { "content-type": "application/octet-stream" },
+      }),
+  });
+  await assert.rejects(
+    h.wire.fetch(`${STORAGE}/v0/b/${BUCKET}/o/${enc(name("a"))}?alt=media`, {
+      method: "GET",
+      headers: admin,
+    }),
+  );
+  assert.equal(h.wire.snapshot().halted, true);
+  assert.equal(JSON.stringify(h.captures).includes(TOKEN), false);
+  await assert.rejects(
+    h.wire.fetch(`${STORAGE}/v0/b/${BUCKET}/o/${enc(name("b"))}`, {
+      method: "GET",
+      headers: admin,
+    }),
+  );
+});
+
+test("a location is rewritten only where it starts with a real host", async () => {
+  const decoy = "https://evil.example/?u=https://storage.googleapis.com/x";
+  const h = harness({
+    respond: () => new Response("{}", { status: 200, headers: { location: decoy } }),
+  });
+  const response = await h.wire.fetch(`${STORAGE}/v0/b/${BUCKET}/o/${enc(name("a"))}`, {
+    method: "GET",
+    headers: admin,
+  });
+  assert.equal(response.headers.get("location"), decoy);
+});
+
+test("a record is sanitized as a copy: secret members hashed, known secrets scrubbed, base64 bodies too", () => {
+  const REFRESH = "AMf-vBx-synthetic-refresh-token-0000000000";
+  const input = {
+    type: "response",
+    refreshToken: REFRESH,
+    nested: {
+      list: [{ refresh_token: REFRESH, access_token: "at-value", idToken: "id.token.value" }],
+    },
+    text: `see ${TOKEN} and ${KEY}`,
+    n: 3,
+    ok: true,
+    nothing: null,
+    bodyBase64: Buffer.from(
+      JSON.stringify({ refreshToken: REFRESH, idToken: "id.token.value", localId: "u" }),
+    ).toString("base64"),
+    plainBodyBase64: Buffer.from(`echo ${TOKEN}`).toString("base64"),
+  };
+  const before = JSON.stringify(input);
+  const out = sanitizeRecord(input, [TOKEN, KEY]);
+  assert.equal(JSON.stringify(input), before, "the input is not changed");
+  const seen = JSON.stringify(out) + Buffer.from(out.bodyBase64, "base64").toString("utf8");
+  for (const secret of [REFRESH, TOKEN, KEY, "at-value"])
+    assert.equal(seen.includes(secret), false, secret.slice(0, 6));
+  assert.equal(out.refreshToken, `sha256:${sha(REFRESH)}`);
+  assert.equal(out.nested.list[0].refresh_token, `sha256:${sha(REFRESH)}`);
+  assert.equal(out.nested.list[0].access_token, `sha256:${sha("at-value")}`);
+  assert.equal(out.nested.list[0].idToken, "id.token.value", "a disposable user's ID token stays");
+  assert.equal(out.text, `see sha256:${sha(TOKEN)} and sha256:${sha(KEY)}`);
+  assert.deepEqual([out.n, out.ok, out.nothing, out.type], [3, true, null, "response"]);
+  assert.equal(
+    JSON.parse(Buffer.from(out.bodyBase64, "base64").toString("utf8")).idToken,
+    "id.token.value",
+  );
+  assert.equal(Buffer.from(out.plainBodyBase64, "base64").toString("utf8").includes(TOKEN), false);
+});
+
+test("a base64 body that is binary or not JSON is kept as it is unless it holds a known secret", () => {
+  const media = Buffer.from([0, 255, 1, 2, 3, 4]);
+  const out = sanitizeRecord({ bodyBase64: media.toString("base64") }, [TOKEN]);
+  assert.equal(Buffer.from(out.bodyBase64, "base64").equals(media), true);
+  const notBase64 = sanitizeRecord({ bodyBase64: `not base64 ${TOKEN}` }, [TOKEN]);
+  assert.equal(notBase64.bodyBase64.includes(TOKEN), false);
+  assert.deepEqual(sanitizeRecord("plain", []), "plain");
+  assert.deepEqual(sanitizeRecord(null, []), null);
+  assert.deepEqual(sanitizeRecord([1, "a"], []), [1, "a"]);
+});
+
+test("each malformed name or method is refused with its own reason", async () => {
+  const h = harness();
+  const refuse = (href, method, pattern) =>
+    assert.rejects(h.wire.fetch(href, { method, headers: admin, body: "x" }), pattern, href);
+  await refuse(
+    `${STORAGE}/storage/v1/b/${BUCKET}/o/${enc(PREFIX)}%E0%A4%A`,
+    "GET",
+    /undecodable object name/,
+  );
+  await refuse(
+    `${STORAGE}/upload/storage/v1/b/${BUCKET}/o?uploadType=media`,
+    "POST",
+    /exactly one object name/,
+  );
+  await refuse(
+    `${STORAGE}/v0/b/${BUCKET}/o?upload_protocol=resumable`,
+    "POST",
+    /exactly one object name/,
+  );
+  await refuse(
+    `${STORAGE}/upload/storage/v1/b/${BUCKET}/o?uploadType=media&name=${enc(name("a"))}`,
+    "PATCH",
+    /owned object name/,
+  );
+  await refuse(
+    `${STORAGE}/upload/storage/v1/b/${BUCKET}/o?uploadType=media&name=${enc(name("a"))}`,
+    "GET",
+    /owned object name/,
+  );
+  assert.equal(h.calls.length, 0);
+});
+
+test("a token with a character outside the token alphabet is refused before any request", async () => {
+  for (const token of [
+    'ya29.tok"en-0000000000000000',
+    "ya29.tok;en-0000000000000000",
+    "ya29.tok\u0007en-0000000000000000",
+    "ya29.tok\u00e9en-0000000000000000",
+    { toString: () => "ya29.synthetic-owner-access-token-value" },
+  ]) {
+    const h = harness({ options: { adminToken: async () => token } });
+    await assert.rejects(
+      h.wire.fetch(`${STORAGE}/v0/b/${BUCKET}/o/${enc(name("a"))}`, {
+        method: "GET",
+        headers: admin,
+      }),
+      /owner access token is unavailable/,
+    );
+    assert.equal(h.calls.length, 0);
+  }
+});
+
+test("secret members are hashed wherever they are in a JSON body, and other members are left alone", async () => {
+  const body = {
+    refreshToken: null,
+    access_token: 5,
+    list: [{ refresh_token: "AMf-inside-a-list-0000000000" }],
+    keep: [1, "a", null, { ok: true }],
+  };
+  const h = harness({
+    respond: () =>
+      new Response(JSON.stringify(body), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+  });
+  await h.wire.fetch(
+    `${AUTH}/identitytoolkit.googleapis.com/v1/accounts:signUp?key=${LEAN_PLACEHOLDER_API_KEY}`,
+    { method: "POST", headers: {}, body: "{}" },
+  );
+  const recorded = JSON.parse(
+    Buffer.from(h.captures[0].response.bodyBase64, "base64").toString("utf8"),
+  );
+  assert.deepEqual(recorded, {
+    refreshToken: null,
+    access_token: 5,
+    list: [{ refresh_token: `sha256:${sha("AMf-inside-a-list-0000000000")}` }],
+    keep: [1, "a", null, { ok: true }],
+  });
+});
+
+test("sanitizeRecord leaves a body that is not base64 text, or not a string, to the generic rules", () => {
+  assert.deepEqual(sanitizeRecord({ bodyBase64: 5, otherBase64: null }, [TOKEN]), {
+    bodyBase64: 5,
+    otherBase64: null,
+  });
+  assert.equal(sanitizeRecord({ bodyBase64: "abc" }, [TOKEN]).bodyBase64, "abc");
+  assert.deepEqual(sanitizeRecord({ refreshToken: null, nested: { access_token: 5 } }, []), {
+    refreshToken: null,
+    nested: { access_token: 5 },
+  });
+  const nested = sanitizeRecord(
+    { a: [{ refreshToken: "AMf-in-an-array-of-records-0000000" }] },
+    [],
+  );
+  assert.equal(nested.a[0].refreshToken, `sha256:${sha("AMf-in-an-array-of-records-0000000")}`);
 });
 
 test("the configuration is checked before any request", () => {

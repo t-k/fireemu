@@ -34,7 +34,7 @@ test("record-production names the missing environment and reads nothing", () => 
     env: { PATH: process.env.PATH },
   });
   assert.equal(result.status, 2);
-  assert.match(result.stderr, /missing environment: FIREEMU_SANDBOX_LEDGER/);
+  assert.match(result.stderr, /missing environment: FIREEMU_STORAGE_OBJECT_PACKET/);
 });
 
 test("pins prints the packet pins and the commit as one line of JSON", () => {

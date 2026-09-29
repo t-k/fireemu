@@ -13,6 +13,7 @@ import {
   RECORD_BUCKET,
   RECORD_PROJECT,
   recordRun,
+  RELEASE_BASELINE,
   refuseUnsafeEnvironment,
   runnerDigest,
 } from "./storage-object/record.mjs";
@@ -37,7 +38,7 @@ const packet = {
   taskId: "STORAGE-OBJECT",
   packetName: "lean-v1",
   projectId: RECORD_PROJECT,
-  maxRequests: 6000,
+  maxRequests: 6004,
   reserveUsd: 1,
   ...Object.fromEntries(
     PINS.map((key, index) => [key, `${index + 1}`.repeat(key === "sourceCommit" ? 40 : 64)]),
@@ -53,6 +54,11 @@ const review = {
   withinEnvelope: false,
 };
 const approvalText = `- 2026-09-30 | STORAGE-OBJECT lean-v1 | decision=APPROVE; ${PINS.map((key) => `${key}=${packet[key]}`).join("; ")} | オーナー（ローカル試験） | packet.md\n`;
+const BASELINE = {
+  rulesetName: `projects/${RECORD_PROJECT}/rulesets/22b746af-a48a-458d-ab5c-7853473bc8c8`,
+  createTime: "t1",
+  updateTime: "t2",
+};
 const NOW = Date.parse("2026-10-01T09:00:00Z");
 const RUN = "0123456789abcdef0123";
 const OTHER = "fedcba9876543210fedc";
@@ -103,6 +109,7 @@ function setup(overrides = {}) {
     },
     getToken: async () => "ya29.synthetic-owner-access-token-value",
     apiKey: "AIzaSyD-synthetic-web-api-key-value-000000",
+    releaseBaseline: BASELINE,
     actualPins: Object.fromEntries(
       ["runnerSha256", "planSha256", "corpusSha256", "rulesSourceSha256"].map((key) => [
         key,
@@ -120,7 +127,7 @@ function setup(overrides = {}) {
         });
         if (String(url).includes("/releases/"))
           return Response.json({
-            rulesetName: `projects/${RECORD_PROJECT}/rulesets/abc`,
+            rulesetName: `projects/${RECORD_PROJECT}/rulesets/22b746af-a48a-458d-ab5c-7853473bc8c8`,
             createTime: "t1",
             updateTime: "t2",
           });
@@ -169,6 +176,7 @@ test("a clean run checks, locks, writes started, sends, writes one closing row a
     [
       "git",
       "ledger-read",
+      "ledger-read",
       `private-run:${RUN}`,
       "ledger-append:started",
       "replay",
@@ -177,7 +185,7 @@ test("a clean run checks, locks, writes started, sends, writes one closing row a
   );
   assert.deepEqual(lockFiles(s), [], "the lock is released once the closing row is durable");
   const [started, closing] = s.ledgerRows;
-  assert.equal(started.maxRequests, 3000);
+  assert.equal(started.maxRequests, 3002);
   assert.equal(started.estimatedUsd, 0.5);
   assert.equal(started.project, RECORD_PROJECT);
   assert.equal(started.runId, RUN);
@@ -210,7 +218,7 @@ test("the closing row counts what was really sent", async () => {
   });
   await recordRun(s.deps);
   assert.equal(s.ledgerRows.at(-1).requests, 2222);
-  assert.equal(s.ledgerRows.at(-1).estimatedUsd, Number(((2222 / 3000) * 0.15).toFixed(6)));
+  assert.equal(s.ledgerRows.at(-1).estimatedUsd, Number(((2222 / 3002) * 0.15).toFixed(6)));
 });
 
 test("the aggregate runs one recording with this run's plan and the placeholder credentials", async () => {
@@ -388,7 +396,7 @@ test("refuses while this task's own earlier run is open or needs recovery", asyn
     corpusDigest: "c".repeat(64),
   };
   const open = encodeRow(
-    startedRow({ ...ids, ts: "2026-09-30T09:00:00Z", maxRequests: 3000, estimatedUsd: 0.5 }),
+    startedRow({ ...ids, ts: "2026-09-30T09:00:00Z", maxRequests: 3002, estimatedUsd: 0.5 }),
   );
   await refused(setup({ ledgerText: open }), /admission/);
   const recovering =
@@ -430,7 +438,7 @@ test("a third run of one packet is refused, and a second needs the first recorde
     corpusDigest: "c".repeat(64),
   };
   const closed = (runId, at) =>
-    encodeRow(startedRow({ ...ids, runId, ts: at, maxRequests: 3000, estimatedUsd: 0.5 })) +
+    encodeRow(startedRow({ ...ids, runId, ts: at, maxRequests: 3002, estimatedUsd: 0.5 })) +
     encodeRow(
       finishedRow({
         ...ids,
@@ -447,7 +455,7 @@ test("a third run of one packet is refused, and a second needs the first recorde
   await refused(setup({ ledgerText: twice }), /already/);
   const stopped =
     encodeRow(
-      startedRow({ ...ids, ts: "2026-09-29T09:00:00Z", maxRequests: 3000, estimatedUsd: 0.5 }),
+      startedRow({ ...ids, ts: "2026-09-29T09:00:00Z", maxRequests: 3002, estimatedUsd: 0.5 }),
     ) +
     encodeRow(
       finishedRow({
@@ -808,7 +816,7 @@ test("a first recording that is already recorded is refused for recording 1", as
 
 test("the request budget counts every closing row, a recovery row included", async () => {
   const start = (at) =>
-    `${JSON.stringify({ ts: at, event: "started", taskId: "STORAGE-OBJECT-SANDBOX", project: RECORD_PROJECT, packetSha256: packet.packetSha256, maxRequests: 3000, estimatedUsd: 0.5 })}\n`;
+    `${JSON.stringify({ ts: at, event: "started", taskId: "STORAGE-OBJECT-SANDBOX", project: RECORD_PROJECT, packetSha256: packet.packetSha256, maxRequests: 3002, estimatedUsd: 0.5 })}\n`;
   const rows =
     start("2026-09-28T09:00:00Z") +
     closedRow({ ts: "2026-09-28T10:00:00Z", outcome: "stopped-clean", requests: 1600 }) +
@@ -824,10 +832,10 @@ test("the request budget counts every closing row, a recovery row included", asy
 });
 
 test("the budget is exactly the packet's request limit", async () => {
-  const exact = closedRow({ outcome: "stopped-clean", requests: 3000 });
+  const exact = closedRow({ outcome: "stopped-clean", requests: 3002 });
   const s = setup({ ledgerText: exact });
   assert.equal((await recordRun(s.deps)).outcome, "recorded");
-  const over = closedRow({ outcome: "stopped-clean", requests: 3001 });
+  const over = closedRow({ outcome: "stopped-clean", requests: 3003 });
   await refused(setup({ ledgerText: over }), /budget/);
 });
 
@@ -836,6 +844,430 @@ test("a closing row without a request count is charged as a whole run", async ()
   const one = setup({ ledgerText: noCount() });
   assert.equal((await recordRun(one.deps)).outcome, "recorded");
   await refused(setup({ ledgerText: noCount() + noCount() }), /budget/);
+});
+
+// ---- the release baseline (owner ledger line 535) ----------------------------------------------------------
+
+test("a recorder whose Rules release baseline is not pinned refuses before anything else is written", async () => {
+  const s = setup();
+  delete s.deps.releaseBaseline;
+  await refused(s, /baseline is not pinned/);
+  for (const baseline of [
+    { ...BASELINE, createTime: null },
+    { ...BASELINE, updateTime: null },
+    { ...BASELINE, createTime: "" },
+  ]) {
+    const t = setup();
+    t.deps.releaseBaseline = baseline;
+    await refused(t, /baseline is not pinned/);
+  }
+});
+
+test("the shipped baseline names the fixed ruleset and waits for its times", () => {
+  assert.equal(
+    RELEASE_BASELINE.rulesetName,
+    `projects/${RECORD_PROJECT}/rulesets/22b746af-a48a-458d-ab5c-7853473bc8c8`,
+  );
+  assert.equal(RELEASE_BASELINE.createTime, null);
+  assert.equal(RELEASE_BASELINE.updateTime, null);
+  assert.ok(Object.isFrozen(RELEASE_BASELINE));
+});
+
+test("a release that is not the pinned one stops the Rules read", async () => {
+  const good = BASELINE.rulesetName;
+  const make = (release) =>
+    createRulesReader({
+      projectId: RECORD_PROJECT,
+      bucket: RECORD_BUCKET,
+      baseline: BASELINE,
+      getToken: async () => "ya29.synthetic-owner-access-token-value",
+      fetchImpl: async (url) =>
+        String(url).includes("/releases/")
+          ? Response.json(release)
+          : Response.json({ source: { files: [{ content: "text" }] } }),
+    });
+  const ok = await make({ rulesetName: good, createTime: "t1", updateTime: "t2" })();
+  assert.equal(ok.source, "text");
+  for (const release of [
+    {
+      rulesetName: `projects/${RECORD_PROJECT}/rulesets/00000000-0000-0000-0000-000000000000`,
+      createTime: "t1",
+      updateTime: "t2",
+    },
+    { rulesetName: good, createTime: "t9", updateTime: "t2" },
+    { rulesetName: good, createTime: "t1", updateTime: "t9" },
+    { rulesetName: good },
+  ]) {
+    await assert.rejects(make(release)(), /differs from its pinned baseline/);
+  }
+});
+
+// ---- admission under the lock, and the quiet interval for every task ---------------------------------------------
+
+test("the ledger is judged again once the lock is held, and a line that arrived meanwhile refuses the run", async () => {
+  const s = setup();
+  const late = `${JSON.stringify({ ts: "2026-10-01T08:50:00Z", event: "started", taskId: "STORAGE-RULES-SANDBOX", project: RECORD_PROJECT, estimatedUsd: 0.5 })}\n`;
+  let reads = 0;
+  s.deps.ledger.read = async () => {
+    reads++;
+    s.events.push("ledger-read");
+    if (reads === 2) assert.equal(lockFiles(s).length, 1, "the second read is under the lock");
+    return reads === 1 ? "" : late;
+  };
+  await assert.rejects(recordRun(s.deps), /ledger admission/);
+  assert.equal(reads, 2);
+  assert.equal(s.ledgerRows.length, 0);
+  assert.equal(s.events.includes("replay"), false);
+  assert.equal(
+    s.events.some((event) => event.startsWith("private-run")),
+    false,
+    "no private directory for a refused run",
+  );
+  assert.deepEqual(lockFiles(s), [], "nothing started, so the lock is released");
+});
+
+test("a run under the lock is judged on the ledger as it is then, budget and recordings included", async () => {
+  const s = setup();
+  const recorded = closedRow({ requests: 100 });
+  let reads = 0;
+  s.deps.ledger.read = async () => (++reads === 1 ? "" : recorded);
+  s.deps.recording = 1;
+  await assert.rejects(recordRun(s.deps), /first recording is already recorded/);
+  assert.equal(s.ledgerRows.length, 0);
+  assert.deepEqual(lockFiles(s), []);
+});
+
+test("another task's line on the project inside the quiet interval refuses a run, AUTH-FS-CROSS's included", async () => {
+  const row = (taskId, ts, project = RECORD_PROJECT) =>
+    `${JSON.stringify({ ts, event: "finished", outcome: "recorded", taskId, project, requests: 1, estimatedUsd: 0 })}\n`;
+  for (const taskId of [
+    "AUTH-FS-CROSS-SANDBOX",
+    "STORAGE-RULES-SANDBOX",
+    "FUNCTIONS-HTTP-SANDBOX",
+  ]) {
+    await refused(setup({ ledgerText: row(taskId, "2026-10-01T08:55:00Z") }), /ledger admission/);
+    const ok = setup({ ledgerText: row(taskId, "2026-10-01T08:29:00Z") });
+    assert.equal((await recordRun(ok.deps)).outcome, "recorded", taskId);
+  }
+  const otherProject = setup({
+    ledgerText: row("AUTH-FS-CROSS-SANDBOX", "2026-10-01T08:55:00Z", "fireemu-oracle-idp"),
+  });
+  assert.equal((await recordRun(otherProject.deps)).outcome, "recorded");
+});
+
+// ---- environment ---------------------------------------------------------------------------------------------------
+
+for (const name of [
+  "NODE_DEBUG",
+  "NODE_DEBUG_NATIVE",
+  "NODE_USE_SYSTEM_CA",
+  "NODE_USE_ENV_PROXY",
+  "NODE_PATH",
+  "NODE_UNKNOWN_FUTURE_VARIABLE",
+  "NO_PROXY",
+  "no_proxy",
+  "GOOGLE_APPLICATION_CREDENTIALS",
+  "CLOUDSDK_CONFIG",
+  "CLOUDSDK_AUTH_IMPERSONATE_SERVICE_ACCOUNT",
+  "CLOUDSDK_CORE_ACCOUNT",
+  "CLOUDSDK_ANYTHING",
+  "CURL_CA_BUNDLE",
+  "REQUESTS_CA_BUNDLE",
+  "FIRESTORE_EMULATOR_HOST",
+]) {
+  test(`refuses a run with ${name} set`, async () => {
+    const s = setup({ env: { [name]: "x" } });
+    await refused(s, new RegExp(`unsafe environment: ${name}`));
+  });
+}
+
+test("NODE_ENV and the ordinary variables of a shell are not refused", () => {
+  assert.doesNotThrow(() =>
+    refuseUnsafeEnvironment(
+      { NODE_ENV: "production", PATH: "/bin", HOME: "/h", LANG: "C", TERM: "xterm" },
+      "v24.14.0",
+    ),
+  );
+});
+
+// ---- nothing secret reaches the private record ---------------------------------------------------------------------------
+
+test("no file of the private run holds a refresh token, the owner token, the key or a password", async () => {
+  const REFRESH = "AMf-vBx-synthetic-refresh-token-0000000000";
+  const KEYVALUE = "AIzaSyD-synthetic-web-api-key-value-000000";
+  let password;
+  const s = setup({
+    replay: async (options) => {
+      password = options.localAuth.password;
+      const body = (value) => Buffer.from(JSON.stringify(value)).toString("base64");
+      await options.getTokenProbe?.();
+      await options.onCapture({
+        recipeId: "r",
+        status: 200,
+        bodyBase64: body({ refreshToken: REFRESH, idToken: "id.token.value", localId: "u" }),
+      });
+      await options.onJournal({
+        type: "note",
+        refreshToken: REFRESH,
+        text: `key ${KEYVALUE} password ${password}`,
+      });
+      await options.onRecipeFinish({ result: { refresh_token: REFRESH } });
+      throw new Error(`failed with ${KEYVALUE} and ${password}`);
+    },
+  });
+  await assert.rejects(recordRun(s.deps));
+  const everything =
+    JSON.stringify([s.privateFiles.captures, s.privateFiles.events, s.privateFiles.meta]) +
+    s.privateFiles.events
+      .map((event) =>
+        event.bodyBase64 ? Buffer.from(event.bodyBase64, "base64").toString("utf8") : "",
+      )
+      .join("");
+  for (const secret of [REFRESH, KEYVALUE, password])
+    assert.equal(everything.includes(secret), false, secret.slice(0, 6));
+  assert.ok(everything.includes("id.token.value"), "a disposable user's ID token may stay");
+  assert.ok(s.privateFiles.events.some((event) => event.refreshToken?.startsWith("sha256:")));
+  assert.equal(JSON.stringify(s.privateFiles.meta).includes(password), false);
+});
+
+test("the owner token is scrubbed from what the record holds once the wire has used it", async () => {
+  const OWNER = "ya29.synthetic-owner-access-token-value";
+  const s = setup({
+    replay: async (options) => {
+      const wire = options.wireFactory({
+        origins: [options.storageOrigin, options.authOrigin, options.localControl.origin],
+        limits: options.plan,
+        captureDirectory: options.captureDirectory,
+        onByteReserve: async () => {},
+      });
+      const owned = encodeURIComponent(`${options.plan.recordings[0].prefix}a`);
+      await wire.fetch(`${options.storageOrigin}/v0/b/${RECORD_BUCKET}/o/${owned}`, {
+        method: "GET",
+        headers: { authorization: "Bearer owner" },
+      });
+      await options.onJournal({ type: "note", text: `token ${OWNER}` });
+      return {
+        status: "LOCAL_COMPLETE",
+        wire: wire.snapshot(),
+        unresolved: [],
+        cleanupFailures: [],
+      };
+    },
+  });
+  await recordRun(s.deps);
+  assert.equal(JSON.stringify(s.privateFiles).includes(OWNER), false);
+  assert.ok(JSON.stringify(s.privateFiles.events).includes("sha256:"));
+});
+
+// ---- accounting, failure reporting, the deadline -------------------------------------------------------------------------
+
+test("a Rules read that fails after one real request records that request", async () => {
+  const s = setup({
+    fetch: async (url, _init) => {
+      s.events.push("fetch");
+      return String(url).includes("/releases/")
+        ? new Response("{}", { status: 404 })
+        : new Response("{}");
+    },
+    replay: async (options) => {
+      const wire = options.wireFactory({
+        origins: [options.storageOrigin, options.authOrigin, options.localControl.origin],
+        limits: options.plan,
+        captureDirectory: options.captureDirectory,
+        onByteReserve: async () => {},
+      });
+      await assert.rejects(
+        wire.fetch(`${options.localControl.origin}/v1/storage/rules`, {
+          method: "GET",
+          headers: {},
+        }),
+      );
+      return {
+        status: "LOCAL_BLOCKED",
+        wire: wire.snapshot(),
+        unresolved: [],
+        cleanupFailures: [],
+      };
+    },
+  });
+  const result = await recordRun(s.deps);
+  assert.equal(result.outcome, "stopped-clean");
+  assert.equal(s.ledgerRows.at(-1).requests, 1);
+});
+
+test("an error after the started row says a run had started, and a refusal before it does not", async () => {
+  const refusedRun = setup({ env: { NODE_DEBUG: "fetch" } });
+  await assert.rejects(recordRun(refusedRun.deps), (error) => error.afterStart === undefined);
+  const underLock = setup();
+  let reads = 0;
+  underLock.deps.ledger.read = async () => (++reads === 1 ? "" : closedRow());
+  await assert.rejects(recordRun(underLock.deps), (error) => error.afterStart === undefined);
+  const startedFails = setup({ appendFails: (row) => row.event === "started" });
+  await assert.rejects(recordRun(startedFails.deps), (error) => error.afterStart === true);
+  const thrown = setup({
+    replay: async () => {
+      throw new Error("aggregate exploded");
+    },
+  });
+  await assert.rejects(recordRun(thrown.deps), (error) => error.afterStart === true);
+  const closingFails = setup({ appendFails: (row) => row.event === "finished" });
+  await assert.rejects(recordRun(closingFails.deps), (error) => error.afterStart === true);
+});
+
+test("a run that throws still leaves a private summary saying so", async () => {
+  const s = setup({
+    replay: async () => {
+      throw new Error("aggregate exploded\nwith a second line");
+    },
+  });
+  await assert.rejects(recordRun(s.deps), /aggregate exploded/);
+  assert.equal(s.privateFiles.meta.length, 1);
+  assert.deepEqual(s.privateFiles.meta[0], {
+    runId: RUN,
+    recording: 1,
+    outcome: "needs-recovery",
+    status: "THROWN",
+    reason: "aggregate exploded",
+    requests: 0,
+    plan: { runId: RUN, prefix: `storage-object/${RUN}/` },
+  });
+});
+
+test("a run stops at a recipe boundary once it has run for two hours", async () => {
+  let clock = NOW;
+  const seen = [];
+  const s = setup({
+    deps: { now: () => new Date(clock) },
+    replay: async (options) => {
+      seen.push(options.stopAfter());
+      clock = NOW + 2 * 60 * 60_000 - 1;
+      seen.push(options.stopAfter());
+      clock = NOW + 2 * 60 * 60_000;
+      seen.push(options.stopAfter());
+      return {
+        status: "LOCAL_BLOCKED",
+        reason: "RUN_DEADLINE_REACHED",
+        wire: { realRequests: 5 },
+        unresolved: [],
+        cleanupFailures: [],
+      };
+    },
+  });
+  const result = await recordRun(s.deps);
+  assert.deepEqual(seen, [false, false, true]);
+  assert.equal(result.outcome, "stopped-clean");
+  assert.equal(s.privateFiles.meta[0].reason, "RUN_DEADLINE_REACHED");
+});
+
+test("the token provider takes only the token alphabet", async () => {
+  for (const output of [
+    "ya29.token\nwith-control-12345678",
+    "ya29.tok\u0007en-0000000000000000",
+    "ya29.token with space 1234567",
+  ]) {
+    const provider = createTokenProvider({ run: async () => output, now: () => 0 });
+    await assert.rejects(provider(), /unavailable/);
+  }
+  const ok = createTokenProvider({ run: async () => "ya29.A0-b_c~d+e/f=g.H", now: () => 0 });
+  assert.equal(await ok(), "ya29.A0-b_c~d+e/f=g.H");
+});
+
+test("the quiet interval is thirty minutes to the millisecond, and a line without a task ID does not count", async () => {
+  const row = (ts, extra = {}) =>
+    `${JSON.stringify({ ts, event: "finished", outcome: "recorded", taskId: "FUNCTIONS-HTTP-SANDBOX", project: RECORD_PROJECT, requests: 1, estimatedUsd: 0, ...extra })}\n`;
+  await refused(setup({ ledgerText: row("2026-10-01T08:35:00Z") }), /ledger admission/);
+  await refused(setup({ ledgerText: row("2026-10-01T08:30:00.001Z") }), /ledger admission/);
+  assert.equal(
+    (await recordRun(setup({ ledgerText: row("2026-10-01T08:30:00Z") }).deps)).outcome,
+    "recorded",
+  );
+  const noTask = setup({ ledgerText: row("2026-10-01T08:55:00Z", { taskId: undefined }) });
+  assert.equal((await recordRun(noTask.deps)).outcome, "recorded");
+});
+
+test("a ruleset name is one UUID of a project, and only this project's", async () => {
+  const make = (rulesetName) =>
+    createRulesReader({
+      projectId: RECORD_PROJECT,
+      bucket: RECORD_BUCKET,
+      baseline: { rulesetName, createTime: "t1", updateTime: "t2" },
+      getToken: async () => "ya29.synthetic-owner-access-token-value",
+      fetchImpl: async (url) =>
+        String(url).includes("/releases/")
+          ? Response.json({ rulesetName, createTime: "t1", updateTime: "t2" })
+          : Response.json({ source: { files: [{ content: "x" }] } }),
+    });
+  const uuid = "22b746af-a48a-458d-ab5c-7853473bc8c8";
+  assert.equal((await make(`projects/${RECORD_PROJECT}/rulesets/${uuid}`)()).source, "x");
+  for (const bad of [
+    `projects/another-project/rulesets/${uuid}`,
+    `projects/${RECORD_PROJECT}/rulesets/${uuid.slice(1)}`,
+    `projects/${RECORD_PROJECT}/rulesets/${uuid}0`,
+    `projects/${RECORD_PROJECT}/rulesets/${uuid}/x`,
+    `projects/${RECORD_PROJECT}/x/rulesets/${uuid}`,
+  ]) {
+    await assert.rejects(make(bad)(), /names no ruleset of this project/, bad);
+  }
+});
+
+test("the release the Rules reader saw is recorded with its times, matching or not", async () => {
+  const records = [];
+  const name = BASELINE.rulesetName;
+  const reader = createRulesReader({
+    projectId: RECORD_PROJECT,
+    bucket: RECORD_BUCKET,
+    baseline: BASELINE,
+    record: async (entry) => records.push(entry),
+    getToken: async () => "ya29.synthetic-owner-access-token-value",
+    fetchImpl: async (url) =>
+      String(url).includes("/releases/")
+        ? Response.json({ rulesetName: name, createTime: "t1", updateTime: "t9" })
+        : Response.json({}),
+  });
+  await assert.rejects(reader(), /differs from its pinned baseline/);
+  assert.deepEqual(
+    records.find((entry) => entry.kind === "rules-release"),
+    {
+      kind: "rules-release",
+      rulesetName: name,
+      createTime: "t1",
+      updateTime: "t9",
+    },
+  );
+});
+
+test("a reason the aggregate gives, and the reason of a thrown error, are scrubbed and cut to one short line", async () => {
+  const KEYVALUE = "AIzaSyD-synthetic-web-api-key-value-000000";
+  const blocked = setup({
+    replay: async () => ({
+      status: "LOCAL_BLOCKED",
+      reason: `stopped: ${KEYVALUE}`,
+      wire: { realRequests: 1 },
+      unresolved: [],
+      cleanupFailures: [],
+    }),
+  });
+  await recordRun(blocked.deps);
+  assert.equal(JSON.stringify(blocked.privateFiles.meta).includes(KEYVALUE), false);
+  const thrown = setup({
+    replay: async () => {
+      throw new Error(`${"x".repeat(300)}\nsecond line`);
+    },
+  });
+  await assert.rejects(recordRun(thrown.deps));
+  assert.equal(thrown.privateFiles.meta[0].reason.length, 200);
+  assert.equal(thrown.privateFiles.meta[0].reason.includes("second"), false);
+});
+
+test("the quiet interval holds for AUTH-FS-CROSS's own lines on the project, thirty minutes to the millisecond", async () => {
+  const row = (ts) =>
+    `${JSON.stringify({ ts, event: "finished", outcome: "recorded", taskId: "AUTH-FS-CROSS-SANDBOX", project: RECORD_PROJECT, requests: 1, estimatedUsd: 0 })}\n`;
+  await refused(setup({ ledgerText: row("2026-10-01T08:35:00Z") }), /ledger admission/);
+  await refused(setup({ ledgerText: row("2026-10-01T08:30:00.001Z") }), /ledger admission/);
+  assert.equal(
+    (await recordRun(setup({ ledgerText: row("2026-10-01T08:30:00Z") }).deps)).outcome,
+    "recorded",
+  );
 });
 
 // ---- environment, digest ---------------------------------------------------------------------------------
@@ -933,6 +1365,7 @@ test("the Rules reader reads the bucket release and its ruleset with the owner t
   const reader = createRulesReader({
     projectId: RECORD_PROJECT,
     bucket: RECORD_BUCKET,
+    baseline: { rulesetName, createTime: "t1", updateTime: "t2" },
     getToken: async () => "ya29.synthetic-owner-access-token-value",
     fetchImpl: async (url, init) => {
       calls.push({ url: String(url), headers: new Headers(init.headers), method: init.method });
@@ -946,7 +1379,6 @@ test("the Rules reader reads the bucket release and its ruleset with the owner t
   });
   const result = await reader();
   assert.equal(result.source, "rules text");
-  assert.equal(result.requests, 2);
   assert.equal(result.rulesetName, rulesetName);
   assert.equal(
     calls[0].url,
@@ -964,12 +1396,13 @@ test("the Rules reader reads the bucket release and its ruleset with the owner t
 });
 
 test("the Rules reader refuses each malformed answer, with its own message", async () => {
-  const good = `projects/${RECORD_PROJECT}/rulesets/abc`;
+  const good = `projects/${RECORD_PROJECT}/rulesets/22b746af-a48a-458d-ab5c-7853473bc8c8`;
   const goodRuleset = () => Response.json({ source: { files: [{ content: "text" }] } });
   const make = (release, ruleset) =>
     createRulesReader({
       projectId: RECORD_PROJECT,
       bucket: RECORD_BUCKET,
+      baseline: { rulesetName: good, createTime: null, updateTime: null },
       getToken: async () => "ya29.synthetic-owner-access-token-value",
       fetchImpl: async (url) => (String(url).includes("/releases/") ? release() : ruleset()),
     });
@@ -983,7 +1416,23 @@ test("the Rules reader refuses each malformed answer, with its own message", asy
       new Response(JSON.stringify(body), { status });
   const cases = [
     [
-      make(release({ rulesetName: "projects/other/rulesets/abc" }), goodRuleset),
+      make(
+        release({ rulesetName: `projects/other/rulesets/22b746af-a48a-458d-ab5c-7853473bc8c8` }),
+        goodRuleset,
+      ),
+      /names no ruleset of this project/,
+    ],
+    [
+      make(release({ rulesetName: `projects/${RECORD_PROJECT}/rulesets/not-a-uuid` }), goodRuleset),
+      /names no ruleset of this project/,
+    ],
+    [
+      make(
+        release({
+          rulesetName: `projects/${RECORD_PROJECT}/rulesets/22b746af-a48a-458d-ab5c-7853473bc8c8/extra`,
+        }),
+        goodRuleset,
+      ),
       /names no ruleset of this project/,
     ],
     [make(release({ rulesetName: 42 }), goodRuleset), /names no ruleset of this project/],
@@ -1005,10 +1454,11 @@ test("the Rules reader refuses each malformed answer, with its own message", asy
 
 test("the Rules reader records each read without the body", async () => {
   const records = [];
-  const good = `projects/${RECORD_PROJECT}/rulesets/abc`;
+  const good = `projects/${RECORD_PROJECT}/rulesets/22b746af-a48a-458d-ab5c-7853473bc8c8`;
   const reader = createRulesReader({
     projectId: RECORD_PROJECT,
     bucket: RECORD_BUCKET,
+    baseline: { rulesetName: good, createTime: null, updateTime: null },
     getToken: async () => "ya29.synthetic-owner-access-token-value",
     record: async (entry) => records.push(entry),
     fetchImpl: async (url) =>
@@ -1017,16 +1467,26 @@ test("the Rules reader records each read without the body", async () => {
         : Response.json({ source: { files: [{ content: "text" }] } }),
   });
   await reader();
-  assert.equal(records.length, 2);
+  assert.equal(records.length, 3);
   assert.deepEqual(
     records.map((entry) => entry.kind),
-    ["rules-read", "rules-read"],
+    ["rules-read", "rules-release", "rules-read"],
   );
   assert.deepEqual(
-    records.map((entry) => entry.status),
+    records.filter((entry) => entry.kind === "rules-read").map((entry) => entry.status),
     [200, 200],
   );
-  assert.ok(records.every((entry) => /^[0-9a-f]{64}$/.test(entry.bodySha256)));
+  assert.deepEqual(records[1], {
+    kind: "rules-release",
+    rulesetName: good,
+    createTime: null,
+    updateTime: null,
+  });
+  assert.ok(
+    records
+      .filter((entry) => entry.kind === "rules-read")
+      .every((entry) => /^[0-9a-f]{64}$/.test(entry.bodySha256)),
+  );
   assert.equal(JSON.stringify(records).includes("text"), false);
 });
 
@@ -1034,6 +1494,7 @@ test("the Rules reader validates its configuration", () => {
   const base = {
     projectId: RECORD_PROJECT,
     bucket: RECORD_BUCKET,
+    baseline: BASELINE,
     getToken: async () => "t",
     fetchImpl: async () => new Response("{}"),
   };
@@ -1043,6 +1504,9 @@ test("the Rules reader validates its configuration", () => {
     { bucket: undefined },
     { getToken: undefined },
     { fetchImpl: undefined },
+    { baseline: undefined },
+    { baseline: {} },
+    { baseline: { rulesetName: 5 } },
   ]) {
     assert.throws(() => createRulesReader({ ...base, ...change }));
   }

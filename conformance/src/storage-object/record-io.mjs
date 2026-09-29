@@ -89,14 +89,16 @@ export function createPrivateRunFactory({ root }) {
   };
 }
 
-/** The shared ledger file: never created here, never followed through a link. */
+/** The shared ledger file: never created here, never missing, never followed through a link. */
 export function createLedgerFile(path) {
   return {
     async read() {
       try {
         return await readFile(path, "utf8");
       } catch (error) {
-        if (error.code === "ENOENT") return "";
+        // A ledger that is not there is not an empty one: the run must not be admitted on it.
+        if (error.code === "ENOENT")
+          throw new Error("the shared ledger is missing", { cause: error });
         throw error;
       }
     },

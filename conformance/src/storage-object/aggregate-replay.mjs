@@ -133,6 +133,7 @@ export async function replayLocalAggregate(options) {
     "onByteReserve",
     "wireFactory",
     "recordings",
+    "stopAfter",
   ]);
   if (
     !options ||
@@ -157,7 +158,10 @@ export async function replayLocalAggregate(options) {
     onByteReserve,
     wireFactory = createLocalWireTransport,
     recordings: recordingCount = 2,
+    stopAfter,
   } = options;
+  if (stopAfter !== undefined && typeof stopAfter !== "function")
+    throw new Error("invalid aggregate stopAfter");
   // One recording per run is how a production run is split: each run is admitted on its own.
   if (recordingCount !== 1 && recordingCount !== 2) throw new Error("invalid aggregate recordings");
   if (
@@ -277,6 +281,8 @@ export async function replayLocalAggregate(options) {
       await fixedRules(recording, "initial");
       for (const { recipe, replay } of registries[recording]) {
         if (!wireReady()) throw new Error("LOCAL_AGGREGATE_WIRE_UNAVAILABLE");
+        // A recipe boundary is the one place a run can stop with nothing pending.
+        if (stopAfter?.()) throw new Error("RUN_DEADLINE_REACHED");
         const firstSequence = counter.snapshot().total + 1;
         const token = await counter.beginRecipe(recipe.id);
         current = { token, recipeId: recipe.id, sender: null, result: null };
@@ -321,6 +327,8 @@ export async function replayLocalAggregate(options) {
             requests: counter.snapshot().total - firstSequence + 1,
           }),
         );
+        // The recipe is finished and its sender closed: nothing of it is pending any more.
+        current = null;
       }
       current = null;
       await fixedRules(recording, "final");

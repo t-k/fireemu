@@ -311,3 +311,46 @@ test("a stop before the first request has a reason too", async () => {
   const result = await replayLocalAggregate(f.options);
   assert.equal(typeof result.reason, "string", "a stop before the first request has one too");
 });
+
+test("a stop condition that holds at a recipe boundary ends the run clean before that recipe", async () => {
+  const f = fixture();
+  f.options.stopAfter = () => true;
+  const result = await replayLocalAggregate(f.options);
+  assert.equal(result.status, "LOCAL_BLOCKED");
+  assert.match(result.reason, /RUN_DEADLINE_REACHED/);
+  assert.deepEqual(result.unresolved, []);
+  assert.deepEqual(result.cleanupFailures, []);
+  assert.equal(f.events.filter((row) => row.type === "recipe-begin").length, 0);
+  assert.equal(f.requests.length, 1, "only the first Rules read went out");
+  assert.equal(f.closes(), 1);
+});
+
+test("a stop condition that does not hold changes nothing, and a non-function is refused", async () => {
+  const f = fixture({ uploadFailure: true });
+  f.options.stopAfter = () => false;
+  const result = await replayLocalAggregate(f.options);
+  assert.equal(result.status, "LOCAL_NEEDS_RECOVERY");
+  for (const stopAfter of [1, "yes", null, {}]) {
+    const g = fixture();
+    g.options.stopAfter = stopAfter;
+    await assert.rejects(replayLocalAggregate(g.options), /stopAfter/);
+    assert.equal(g.factories(), 0);
+  }
+});
+
+test("the stop reason is the first line of the error, at most 200 characters", async () => {
+  const f = fixture();
+  f.options.onRecipeBegin = async () => {
+    throw new Error(`${"y".repeat(300)}\nsecond line`);
+  };
+  const result = await replayLocalAggregate(f.options);
+  assert.equal(result.reason.length, 200);
+  assert.equal(result.reason, "y".repeat(200));
+  const stop = f.events.find((row) => row.type === "aggregate-stop");
+  assert.equal(stop.reason, result.reason);
+  const short = fixture();
+  short.options.onRecipeBegin = async () => {
+    throw new Error("short\nsecond");
+  };
+  assert.equal((await replayLocalAggregate(short.options)).reason, "short");
+});

@@ -53,16 +53,41 @@ function loopbackOrigin(value) {
 
 const hasDotSegment = (text) => /(^|\/)(\.|%2e){1,2}(?=\/|\?|#|$)/i.test(text);
 
-function objectName(segment) {
-  let decoded;
+/** A path segment names an object once: decode it once, and never again. */
+function decodeSegment(segment) {
   try {
-    decoded = decodeURIComponent(segment);
+    return decodeURIComponent(segment);
   } catch {
     throw new Error("route has an undecodable object name");
   }
-  if (decoded.split("/").some((part) => part === "." || part === "..") || /[\0\r\n]/.test(decoded))
+}
+
+/**
+ * The checks a decoded object name must pass. A line feed is allowed: `errors/object-name` sends
+ * one on purpose, and the prefix rule already keeps it inside the run's own names.
+ */
+function checkName(name) {
+  if (name.split("/").some((part) => part === "." || part === "..") || name.includes("\0"))
     throw new Error("route has an unsafe object name");
-  return decoded;
+  return name;
+}
+
+const pathName = (segment) => checkName(decodeSegment(segment));
+
+/** `URLSearchParams` has decoded the value once; it is the name as it is, so it is not decoded again. */
+function queryName(url) {
+  const values = url.searchParams.getAll("name");
+  if (values.length !== 1) throw new Error("route needs exactly one object name");
+  return checkName(values[0]);
+}
+
+/** Query parameters that change which resource or which project a request acts on. */
+function checkQuery(url) {
+  for (const key of url.searchParams.keys()) {
+    if (key.toLowerCase() === "userproject") throw new Error("route names a billing project");
+  }
+  if (url.searchParams.getAll("prefix").length > 1)
+    throw new Error("route has more than one prefix");
 }
 
 /**
@@ -71,6 +96,7 @@ function objectName(segment) {
  */
 function storageRoute(url, method, scope) {
   const { bucket, prefix } = scope;
+  checkQuery(url);
   const inRun = (name) => name.startsWith(prefix) && name.length > prefix.length;
   const segments = url.pathname.split("/");
   // segments[0] is empty: "/v0/b/<bucket>/o/<name>" -> ["", "v0", "b", bucket, "o", name]
@@ -107,10 +133,12 @@ function storageRoute(url, method, scope) {
   if (rest.length === 0) {
     // The collection: a list, an upload, or a resumable continuation.
     if (upload) {
-      const name = url.searchParams.get("name");
-      if (!["POST", "PUT"].includes(method) || name === null || !inRun(objectName(name)))
-        throw new Error("upload needs an owned object name");
-      return finish(objectName(name));
+      // POST starts an upload, PUT continues or probes a resumable session, DELETE cancels one.
+      const allowed =
+        method === "DELETE" ? url.searchParams.has("upload_id") : ["POST", "PUT"].includes(method);
+      const name = queryName(url);
+      if (!allowed || !inRun(name)) throw new Error("upload needs an owned object name");
+      return finish(name);
     }
     if (method === "GET") {
       if (!url.searchParams.get("prefix")?.startsWith(prefix))
@@ -118,15 +146,14 @@ function storageRoute(url, method, scope) {
       return finish(undefined);
     }
     if (host === REAL.firebase && ["POST", "PUT"].includes(method)) {
-      const name = url.searchParams.get("name");
-      if (name === null || !inRun(objectName(name)))
-        throw new Error("upload needs an owned object name");
-      return finish(objectName(name));
+      const name = queryName(url);
+      if (!inRun(name)) throw new Error("upload needs an owned object name");
+      return finish(name);
     }
     throw new Error("method is not allowed on the collection");
   }
   if (upload) throw new Error("upload routes have no object path");
-  const name = objectName(rest[0]);
+  const name = pathName(rest[0]);
   if (!inRun(name)) throw new Error("object is outside the run prefix");
   if (rest.length === 1) {
     if (!["GET", "PUT", "PATCH", "DELETE", "POST"].includes(method))
@@ -153,7 +180,7 @@ function storageRoute(url, method, scope) {
     rest[3] === bucket &&
     rest[4] === "o"
   ) {
-    const destination = objectName(rest[5]);
+    const destination = pathName(rest[5]);
     if (!inRun(destination)) throw new Error("copy destination is outside the run prefix");
     return finish(destination);
   }
@@ -214,6 +241,42 @@ function scrub(text, secrets) {
   let out = String(text);
   for (const secret of secrets) if (secret) out = out.split(secret).join(hashed(secret));
   return out;
+}
+
+function sanitizedBase64(text, secrets) {
+  const bytes = Buffer.from(text, "base64");
+  // Text that is not canonical base64 is not a body; scrub it as text.
+  if (bytes.toString("base64") !== text) return scrub(text, secrets);
+  let kept = sanitizedJson(bytes);
+  if (secrets.some((secret) => secret && kept.includes(secret)))
+    kept = Buffer.from(scrub(kept.toString("utf8"), secrets));
+  return kept.toString("base64");
+}
+
+/**
+ * A copy of a record with the secrets taken out: secret JSON members hashed, known secrets
+ * scrubbed from every string, and the base64 body of a response treated the same way. What a
+ * record holds is written to disk, so every record goes through this before it is.
+ */
+export function sanitizeRecord(value, secrets = []) {
+  const walk = (node) => {
+    if (typeof node === "string") return scrub(node, secrets);
+    if (Array.isArray(node)) return node.map(walk);
+    if (node && typeof node === "object") {
+      return Object.fromEntries(
+        Object.entries(node).map(([key, child]) => [
+          key,
+          SECRET_JSON_KEYS.has(key) && typeof child === "string"
+            ? hashed(child)
+            : key.toLowerCase().endsWith("base64") && typeof child === "string"
+              ? sanitizedBase64(child, secrets)
+              : walk(child),
+        ]),
+      );
+    }
+    return node;
+  };
+  return walk(value);
 }
 
 /** Create the wire. See the file comment; every collaborator is supplied. */
@@ -307,7 +370,7 @@ export function createLeanWire({
         // The provider's own message may quote what it failed to obtain.
         throw new Error("owner access token is unavailable");
       }
-      if (typeof token !== "string" || !/^[^\s]{20,}$/.test(token))
+      if (typeof token !== "string" || !/^[A-Za-z0-9._~+/=-]{20,}$/.test(token))
         throw new Error("owner access token is unavailable");
       headers.set("authorization", `Bearer ${token}`);
       secrets.push(token);
@@ -343,10 +406,10 @@ export function createLeanWire({
     for (const name of REWRITTEN_HEADERS) {
       const value = out.get(name);
       if (value === null) continue;
-      out.set(
-        name,
-        value.replace(REAL.gcs, placeholders.storage).replace(REAL.firebase, placeholders.storage),
-      );
+      // Only a value that starts with a real host is one of ours; a look-alike inside a longer
+      // URL is left alone.
+      const real = [REAL.gcs, REAL.firebase].find((host) => value.startsWith(host));
+      if (real !== undefined) out.set(name, `${placeholders.storage}${value.slice(real.length)}`);
     }
     return out;
   };
@@ -400,7 +463,22 @@ export function createLeanWire({
       throw new Error("LEAN_WIRE_RESPONSE_CAP_EXCEEDED");
     }
     const contentType = response.headers.get("content-type") ?? "";
-    const kept = contentType.includes("json") ? sanitizedJson(bytes) : bytes;
+    const textual = /json|text|xml|urlencoded/i.test(contentType);
+    const holdsSecret = secrets.some((secret) => secret && bytes.includes(secret));
+    if (holdsSecret && !textual) {
+      // A secret inside bytes that are not text cannot be taken out of them: stop.
+      halted = true;
+      await record({
+        sequence,
+        at: new Date().toISOString(),
+        request,
+        error: "response holds a known secret",
+      }).catch(() => {});
+      throw new Error("LEAN_WIRE_SECRET_IN_RESPONSE");
+    }
+    let kept = bytes;
+    if (contentType.includes("json")) kept = sanitizedJson(kept);
+    if (holdsSecret) kept = Buffer.from(scrub(kept.toString("utf8"), secrets));
     await record({
       sequence,
       at: new Date().toISOString(),
@@ -434,8 +512,12 @@ export function createLeanWire({
         const route = resolve(href, method);
         const sequence = attempts;
         if (route.kind === "control") {
-          const rules = await readRules();
-          realRequests += Number.isSafeInteger(rules?.requests) ? rules.requests : 0;
+          // Each real request is counted where it is made, so a read that fails is counted too.
+          const rules = await readRules({
+            countRequest: () => {
+              realRequests++;
+            },
+          });
           if (typeof rules?.source !== "string") throw new Error("Rules read failed");
           return Response.json({ loaded: true, targeted: false, source: rules.source });
         }

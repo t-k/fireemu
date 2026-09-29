@@ -12,8 +12,9 @@ export function normalizeLedgerText(text) {
 }
 
 export const NORMALIZED_DELEGATION_MARKER = normalizeLedgerText("調整役への委任");
-// The words that revoke, on the normalized (NFKC, lower-cased) line: the English forms and the Japanese ones (取消, 取り消し, 取り消す, 撤回).
-const REVOCATION_WORDS = /revoked|revocation|revoke|取消|取り消|撤回|withdrawn|withdraw/;
+// The words that revoke, on the normalized (NFKC, lower-cased) line: "revoke" (also revoked, revokes), "revocation", "withdraw" (also withdrawn, withdrawal)
+// and the Japanese 取消, 取り消(し/す) and 撤回.
+const REVOCATION_WORDS = /revoke|revocation|withdraw|取消|取り消|撤回/;
 const PIN_PREFIX_LENGTH = 8;
 
 /**

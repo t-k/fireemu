@@ -49,7 +49,8 @@ async function scratch(t) {
   return { root, lockDir: join(root, "sandbox-locks"), legacyLockPath: join(root, "sandbox-ledger.jsonl.lock") };
 }
 const lockOptions = (dirs, delta = {}) => ({ projects: [...packet.projects], lockDir: dirs.lockDir, legacyLockPath: dirs.legacyLockPath, taskId: packet.taskId, packetId: packet.packetName, sourceCommit: packet.sourceCommit, pid: process.pid, acquiredAt: "2026-09-29T00:00:00Z", ...delta });
-const params = (dirs, delta = {}, lockDelta = {}) => ({ locks: lockOptions(dirs, lockDelta), readLedger: async () => ledger, packet: structuredClone(packet), review: structuredClone(review), ...delta });
+const memoryUsage = (runs = []) => ({ runs, startedRunIds: async () => [...runs], markStarted: async (id) => { runs.push(id); } });
+const params = (dirs, delta = {}, lockDelta = {}) => ({ locks: lockOptions(dirs, lockDelta), readLedger: async () => ledger, packet: structuredClone(packet), review: structuredClone(review), runId: "run-one", usage: memoryUsage(), ...delta });
 const lockFiles = async (dirs) => (await readdir(dirs.lockDir).catch(() => [])).sort();
 
 // A whole controller over the simulator, its only transport going through the lease.
@@ -157,6 +158,30 @@ test("the lock set must be exactly this packet's: projects, task, packet name an
   assert.deepEqual(await lockFiles(dirs), []);
 });
 
+test("a third recording under the approval is refused at its start with nothing sent, and the run is marked started first otherwise", async (t) => {
+  const { withLockedAdmission, confirmCleanClose } = await load();
+  const dirs = await scratch(t);
+  const used = memoryUsage(["first-run", "second-run"]);
+  let outcome;
+  let calls = -1;
+  await withLockedAdmission(params(dirs, { usage: used }), async ({ admission, lease }) => {
+    const h = await assemble({ lease, admission });
+    outcome = await h.controller.run();
+    calls = h.calls.count;
+  }).catch(() => {});
+  assert.equal(outcome.reason, "admission refused");
+  assert.equal(calls, 0);
+  assert.deepEqual(used.runs, ["first-run", "second-run"]);
+  const second = memoryUsage(["first-run"]);
+  await withLockedAdmission(params(dirs, { usage: second, runId: "run-two" }), async ({ admission, lease }) => {
+    const h = await assemble({ lease, admission });
+    const result = await h.controller.run();
+    assert.equal(result.status, "finished");
+    confirmCleanClose(lease, result);
+  });
+  assert.deepEqual(second.runs, ["first-run", "run-two"]);
+});
+
 test("an approval that is not valid takes no lock and enters nothing", async (t) => {
   const { withLockedAdmission } = await load();
   const dirs = await scratch(t);
@@ -168,6 +193,8 @@ test("an approval that is not valid takes no lock and enters nothing", async (t)
   await assert.rejects(withLockedAdmission(null, async () => {}), /invalid locked run options/);
   await assert.rejects(withLockedAdmission(params(dirs), undefined), /invalid locked run options/);
   await assert.rejects(withLockedAdmission({ ...params(dirs), extra: 1 }, async () => {}), /invalid locked run options/);
+  for (const bad of [{ runId: undefined }, { runId: "Bad Id" }, { usage: undefined }, { usage: {} }]) await assert.rejects(withLockedAdmission(params(dirs, bad), async () => {}), /invalid admission options|invalid locked run options/);
+  assert.deepEqual(await lockFiles(dirs), []);
 });
 
 test("a stop is recovered under the same locks and they are released only after the recovery closed clean", async (t) => {

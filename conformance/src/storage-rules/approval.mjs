@@ -5,9 +5,11 @@ const PINS = ["packetSha256", "sourceCommit", "runnerSha256", "manifestSha256", 
 const COORDINATOR = "Claude（委任。枠の内の承認し直し）";
 const DELEGATED_ENVELOPE_ACTOR = "Claude（委任。オーナーの裁量の委任 2026-09-28）";
 const DELEGATION_REFERENCE = `2026-09-28 ${DELEGATION_SUBJECTS.send}`;
+// One approval covers two recordings; the admission refuses a third.
+export const RECORDINGS_PER_APPROVAL = 2;
 export const DRAFT_STAGE3_APPROVAL_LIMITS = Object.freeze({
   projects: Object.freeze(["fireemu-oracle-idp", "fireemu-oracle-query"]),
-  maxRequests: DECLARED_REQUESTS_PER_RECORDING * 2,
+  maxRequests: DECLARED_REQUESTS_PER_RECORDING * RECORDINGS_PER_APPROVAL,
   reserveUsd: 2,
 });
 

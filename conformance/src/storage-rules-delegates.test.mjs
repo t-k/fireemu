@@ -105,7 +105,7 @@ async function assemble({ simulatorOptions = {}, respond = () => undefined, admi
   const gate = createDispatchGate({
     reservations: { onStarted: async () => {}, onReserve: async (r) => { trace.push(r.operationId); }, onTerminal: async (r) => { trace.push(`terminal:${r.outcome}`); } },
     capture, transport, targets, credentials: { headersFor: (credential, context) => real.credentials.headersFor(credential, context) },
-    preflightIds: manifest.preflightIds, admission: admission ?? { check: async () => ({ admitted: true }) },
+    preflightIds: manifest.preflightIds, admission: admission ?? { check: async () => ({ admitted: true }), begin: async () => ({ admitted: true }) },
   });
   real = createRunnerDelegates({ gate, adc, apiKeys, passwords, digestSalt: salt, runId: "lr", nowSeconds: () => clock.now, waitUntilSeconds: async (value) => { clock.now = Math.max(clock.now, value); },
     evidence: evidence ?? { writeCredentialProof: async (proof) => { seen.proofs.push(proof); }, writeOwnership: async (row) => { seen.ownership.push(row); }, writeCleanup: async (row) => { seen.cleanup.push(row); } }, malformed: MALFORMED });
@@ -274,7 +274,7 @@ function unit({ respond = () => undefined } = {}) {
     reservations: { onStarted: async () => {}, onReserve: async (r) => { trace.push(`${r.phase}:${r.operationId}`); }, onTerminal: async (r) => { trace.push(`terminal:${r.outcome}`); } },
     capture: { writeIntent: async () => {}, writeResponse: async () => {}, writeNote: async () => {}, snapshot: () => ({ uncertain: false }) },
     transport, targets: { verify: () => true, prepare: () => { throw new Error("unused"); } }, credentials: { headersFor: () => ({}) },
-    preflightIds: [OWNER_PREFLIGHT, KEYS_PREFLIGHT], admission: { check: async () => ({ admitted: true }) },
+    preflightIds: [OWNER_PREFLIGHT, KEYS_PREFLIGHT], admission: { check: async () => ({ admitted: true }), begin: async () => ({ admitted: true }) },
   });
   const real = createRunnerDelegates({ gate, adc, apiKeys, passwords, digestSalt: salt, runId: "lr", nowSeconds: () => clock.now, waitUntilSeconds: async (value) => { clock.now = Math.max(clock.now, value); },
     evidence: { writeCredentialProof: async (proof) => { seen.proofs.push(proof); }, writeOwnership: async (row) => { seen.ownership.push(row); }, writeCleanup: async (row) => { seen.cleanup.push(row); } }, malformed: MALFORMED });

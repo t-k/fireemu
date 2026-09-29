@@ -40,7 +40,7 @@ async function harness(delta = {}) {
   };
   const transport = { validate() {}, send: async (spec) => { trace.push(["transport", spec.method, spec.url, JSON.stringify(spec.headers)]); return ok; } };
   const credentials = { headersFor: (credential) => (credential === "anonymous" ? {} : { authorization: `Bearer ${BEARER}` }) };
-  const gate = createDispatchGate({ reservations: { ...reservations, ...delta.reservations }, capture: { ...capture, ...delta.capture }, transport: { ...transport, ...delta.transport }, targets: { ...targets, ...delta.targets }, credentials: { ...credentials, ...delta.credentials }, preflightIds, admission: { check: async () => { trace.push(["admission"]); return { admitted: true }; }, ...delta.admission } });
+  const gate = createDispatchGate({ reservations: { ...reservations, ...delta.reservations }, capture: { ...capture, ...delta.capture }, transport: { ...transport, ...delta.transport }, targets: { ...targets, ...delta.targets }, credentials: { ...credentials, ...delta.credentials }, preflightIds, admission: (() => { const a = { check: async () => { trace.push(["admission"]); return { admitted: true }; }, ...delta.admission }; a.begin ??= a.check; return a; })() });
   const prepare = (id) => targets.prepare(row(id), resolver);
   const admit = async () => {
     await gate.start({ runId: options.runId });
@@ -149,6 +149,23 @@ test("nothing is sent when the reservation cannot be made durable", async () => 
   await assert.rejects(h.gate.send(h.prepare(READ), normalMeta), /disk full/);
   assert.deepEqual(h.trace.map((entry) => entry[0]), ["admission", "intent", "note"]);
   assert.equal(h.gate.snapshot().mode, "journal-uncertain");
+});
+
+test("the run's start goes through the admission's begin, and every later request through its check", async () => {
+  const calls = [];
+  const h = await harness({ admission: { begin: async () => { calls.push("begin"); return { admitted: true }; }, check: async () => { calls.push("check"); return { admitted: true }; } } });
+  await h.gate.start({ runId: options.runId });
+  assert.deepEqual(calls, ["begin"]);
+  await h.gate.send(h.prepare(manifest.preflightIds[0]), preflightMeta);
+  assert.deepEqual(calls, ["begin", "check"]);
+  // A refused begin marks the gate as refused and starts nothing.
+  const refused = await harness({ admission: { begin: async () => { throw new Error("admission refused: recording budget exhausted"); }, check: async () => ({ admitted: true }) } });
+  await assert.rejects(refused.gate.start({ runId: options.runId }), /recording budget exhausted/);
+  assert.equal(refused.gate.snapshot().admissionRefused, true);
+  assert.equal(refused.gate.snapshot().mode, "not-started");
+  const silent = await harness({ admission: { begin: async () => undefined, check: async () => ({ admitted: true }) } });
+  await assert.rejects(silent.gate.start({ runId: options.runId }), /admission refused/);
+  assert.equal(silent.gate.snapshot().admissionRefused, true);
 });
 
 test("a refused admission stops a request before its intent, its reservation and its send", async () => {
@@ -329,9 +346,9 @@ test("the request description is a closed record", async () => {
 test("gate options are a closed record of the required parts", async () => {
   const { createDispatchGate } = await import("./storage-rules/dispatch-gate.mjs");
   const targets = createTargetBuilder({ manifest, digestSalt: salt });
-  const good = { reservations: { onStarted() {}, onReserve() {}, onTerminal() {} }, capture: { writeIntent() {}, writeResponse() {}, writeNote() {}, snapshot() {} }, transport: { validate() {}, send() {} }, targets, credentials: { headersFor() {} }, preflightIds, admission: { check() {} } };
+  const good = { reservations: { onStarted() {}, onReserve() {}, onTerminal() {} }, capture: { writeIntent() {}, writeResponse() {}, writeNote() {}, snapshot() {} }, transport: { validate() {}, send() {} }, targets, credentials: { headersFor() {} }, preflightIds, admission: { check() {}, begin() {} } };
   assert.doesNotThrow(() => createDispatchGate(good));
-  for (const bad of [null, {}, { ...good, extra: 1 }, { ...good, transport: {} }, { ...good, capture: { ...good.capture, writeNote: undefined } }, { ...good, targets: { prepare() {} } }, { ...good, credentials: {} }, { ...good, admission: undefined }, { ...good, admission: {} }, { ...good, transport: { send() {} } }, { ...good, transport: { validate() {} } }, { ...good, reservations: { ...good.reservations, onTerminal: 1 } }]) {
+  for (const bad of [null, {}, { ...good, extra: 1 }, { ...good, transport: {} }, { ...good, capture: { ...good.capture, writeNote: undefined } }, { ...good, targets: { prepare() {} } }, { ...good, credentials: {} }, { ...good, admission: undefined }, { ...good, admission: {} }, { ...good, admission: { check() {} } }, { ...good, admission: { begin() {} } }, { ...good, transport: { send() {} } }, { ...good, transport: { validate() {} } }, { ...good, reservations: { ...good.reservations, onTerminal: 1 } }]) {
     assert.throws(() => createDispatchGate(bad), /invalid dispatch gate options/);
   }
 });

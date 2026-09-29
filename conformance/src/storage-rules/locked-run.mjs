@@ -5,16 +5,16 @@ import { withProjectLocks } from "./project-locks.mjs";
 // then also proves the locks are still this run's, the run's only transport goes through the lease, and the locks are
 // released only when the caller confirms a clean terminal state (a finished or recovered result, no outbound failure).
 const plain = (value) => value !== null && typeof value === "object" && !Array.isArray(value) && Object.getPrototypeOf(value) === Object.prototype;
-const KEYS = ["locks", "readLedger", "packet", "review"];
+const KEYS = ["locks", "readLedger", "packet", "review", "runId", "usage"];
 
 export async function withLockedAdmission(options, run) {
   if (!plain(options) || Reflect.ownKeys(options).length !== KEYS.length || !KEYS.every((key) => Object.hasOwn(options, key)) || typeof run !== "function") throw new Error("invalid locked run options");
-  const { locks, readLedger, packet, review } = options;
+  const { locks, readLedger, packet, review, runId, usage } = options;
   if (!plain(locks) || !plain(packet) || !Array.isArray(locks.projects) || !Array.isArray(packet.projects)) throw new Error("invalid locked run options");
   const sorted = (projects) => JSON.stringify([...projects].sort());
   if (sorted(locks.projects) !== sorted(packet.projects) || locks.taskId !== packet.taskId || locks.packetId !== packet.packetName || locks.sourceCommit !== packet.sourceCommit) throw new Error("lock set does not match the packet");
   return withProjectLocks(locks, async (lease) => {
-    const admission = createAdmission({ readLedger, packet, review, locks: { verify: () => lease.verifyHeld() } });
+    const admission = createAdmission({ readLedger, packet, review, locks: { verify: () => lease.verifyHeld() }, runId, usage });
     return run({ admission, lease });
   });
 }

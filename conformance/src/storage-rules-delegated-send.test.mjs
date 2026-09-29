@@ -28,7 +28,7 @@ async function setup({ admission = { check: async () => ({ admitted: true }) }, 
     targets: { verify: () => true, prepare: () => { throw new Error("unused"); } },
     credentials: { headersFor: () => ({}) },
     preflightIds: [ownerPreflight, keyPreflight],
-    admission: { check: async () => { trace.push("admission"); return admission.check(); } },
+    admission: { check: async () => { trace.push("admission"); return admission.check(); }, begin: async () => { trace.push("admission"); return (admission.begin ?? admission.check)(); } },
   });
   return { gate, trace, proofs, state };
 }

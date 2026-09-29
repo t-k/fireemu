@@ -45,7 +45,11 @@ const load = async () => (await import("./storage-rules/admission.mjs").catch(()
 const admissionOptions = (extra = {}) => {
   let text = goodLedger;
   const state = { text: () => text, set: (value) => { text = value; }, lockCalls: 0, lockResult: true };
-  return { state, options: { readLedger: async () => state.text(), packet: structuredClone(packet), review: structuredClone(review), locks: { verify: async () => { state.lockCalls++; return state.lockResult; } }, ...extra } };
+  const runs = [];
+  state.runs = runs;
+  state.marks = 0;
+  const usage = { startedRunIds: async () => [...runs], markStarted: async (runId) => { state.marks++; runs.push(runId); } };
+  return { state, options: { readLedger: async () => state.text(), packet: structuredClone(packet), review: structuredClone(review), locks: { verify: async () => { state.lockCalls++; return state.lockResult; } }, runId: "run-one", usage, ...extra } };
 };
 
 test("a live owner-ledger approval, version and lock admit the run", async () => {
@@ -144,11 +148,11 @@ test("every check that reads the ledger is counted, and a check after a refusal 
   assert.equal(admission.snapshot().checks, 0);
   await admission.check();
   await admission.check();
-  assert.deepEqual(admission.snapshot(), { refused: false, checks: 2 });
+  assert.deepEqual(admission.snapshot(), { refused: false, checks: 2, begun: false });
   state.set(`${goodLedger}\n${revoked("STORAGE-RULES stage3-v1")}`);
   await assert.rejects(() => admission.check(), /admission refused/);
   await assert.rejects(() => admission.check(), /an earlier check refused/);
-  assert.deepEqual(admission.snapshot(), { refused: true, checks: 3 });
+  assert.deepEqual(admission.snapshot(), { refused: true, checks: 3, begun: false });
 });
 
 test("the packet and review are copied when the admission is created", async () => {
@@ -160,11 +164,69 @@ test("the packet and review are copied when the admission is created", async () 
   assert.equal((await admission.check()).admitted, true);
 });
 
+// The two-recording budget: an approval covers two recordings, and each run is marked started before its first request.
+test("begin checks the approval, then marks the run started exactly once, and the second recording is allowed", async () => {
+  const createAdmission = await load();
+  const { options: opts, state } = admissionOptions();
+  state.runs.push("earlier-run");
+  const admission = createAdmission(opts);
+  const seen = await admission.begin();
+  assert.equal(seen.admitted, true);
+  assert.deepEqual(state.runs, ["earlier-run", "run-one"]);
+  assert.equal(state.marks, 1);
+  assert.equal(state.lockCalls, 1);
+  assert.deepEqual(admission.snapshot(), { refused: false, checks: 1, begun: true });
+  await assert.rejects(() => admission.begin(), /admission refused/);
+  assert.equal(state.marks, 1);
+});
+
+test("a third recording under one approval is refused before any marker is written, permanently", async () => {
+  const createAdmission = await load();
+  const { options: opts, state } = admissionOptions();
+  state.runs.push("first-run", "second-run");
+  const admission = createAdmission(opts);
+  await assert.rejects(() => admission.begin(), /admission refused: recording budget exhausted/);
+  assert.equal(state.marks, 0);
+  assert.equal(admission.snapshot().refused, true);
+  await assert.rejects(() => admission.check(), /admission refused/);
+  // A run that is already marked is not a fresh recording, and a repeat of the same run ID is refused.
+  const again = admissionOptions();
+  again.state.runs.push("run-one");
+  await assert.rejects(() => createAdmission(again.options).begin(), /admission refused: run already started/);
+  assert.equal(again.state.marks, 0);
+});
+
+test("begin refuses without touching the usage record when the approval is not live, and when the usage record misbehaves", async () => {
+  const createAdmission = await load();
+  const revokedCase = admissionOptions();
+  revokedCase.state.set(`${goodLedger}\n${revoked("STORAGE-RULES stage3-v1")}`);
+  await assert.rejects(() => createAdmission(revokedCase.options).begin(), /admission refused/);
+  assert.equal(revokedCase.state.marks, 0);
+  const noLock = admissionOptions();
+  noLock.state.lockResult = false;
+  await assert.rejects(() => createAdmission(noLock.options).begin(), /admission refused/);
+  assert.equal(noLock.state.marks, 0);
+  const cases = {
+    "read fails": { startedRunIds: async () => { throw new Error("EIO"); }, markStarted: async () => {} },
+    "read is not an array": { startedRunIds: async () => "run", markStarted: async () => {} },
+    "read holds a non-string": { startedRunIds: async () => [1], markStarted: async () => {} },
+    "read holds a duplicate": { startedRunIds: async () => ["a", "a"], markStarted: async () => {} },
+    "mark fails": { startedRunIds: async () => [], markStarted: async () => { throw new Error("EIO"); } },
+    "mark is not durable": { startedRunIds: async () => [], markStarted: async () => {} },
+  };
+  for (const [name, usage] of Object.entries(cases)) {
+    const { options: opts } = admissionOptions({ usage });
+    const admission = createAdmission(opts);
+    await assert.rejects(() => admission.begin(), /admission refused/, name);
+    assert.equal(admission.snapshot().refused, true, name);
+  }
+});
+
 test("admission options are closed", async () => {
   const createAdmission = await load();
   const { options: good } = admissionOptions();
   assert.doesNotThrow(() => createAdmission(good));
-  for (const bad of [undefined, null, {}, { ...good, extra: 1 }, { ...good, readLedger: 1 }, { ...good, locks: {} }, { ...good, locks: undefined }, { ...good, packet: null }, { ...good, review: null }]) {
+  for (const bad of [undefined, null, {}, { ...good, extra: 1 }, { ...good, readLedger: 1 }, { ...good, locks: {} }, { ...good, locks: undefined }, { ...good, packet: null }, { ...good, review: null }, { ...good, runId: undefined }, { ...good, runId: "Bad Id" }, { ...good, runId: 5 }, { ...good, usage: undefined }, { ...good, usage: {} }, { ...good, usage: { startedRunIds() {} } }, { ...good, usage: { markStarted() {} } }]) {
     assert.throws(() => createAdmission(bad), /invalid admission options/);
   }
 });
@@ -282,7 +344,8 @@ test("the gate requires an admission", async () => {
   const gateOptions = (admission) => ({ reservations: { onStarted() {}, onReserve() {}, onTerminal() {} }, capture: memoryCapture(), transport: { validate() {}, send() {} }, targets: { verify() {}, prepare() {} }, credentials: { headersFor() {} }, preflightIds, ...(admission === undefined ? {} : { admission }) });
   assert.throws(() => createDispatchGate(gateOptions()), /invalid dispatch gate options/);
   assert.throws(() => createDispatchGate(gateOptions({})), /invalid dispatch gate options/);
-  assert.doesNotThrow(() => createDispatchGate(gateOptions({ check: async () => ({ admitted: true }) })));
+  assert.throws(() => createDispatchGate(gateOptions({ check: async () => ({ admitted: true }) })), /invalid dispatch gate options/);
+  assert.doesNotThrow(() => createDispatchGate(gateOptions({ check: async () => ({ admitted: true }), begin: async () => ({ admitted: true }) })));
 });
 
 test("a revocation stops recovery too: no recovery request leaves once the approval is gone", async () => {

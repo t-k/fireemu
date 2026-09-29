@@ -18,7 +18,7 @@ export function createDispatchGate(options) {
   const fail = () => bad("invalid dispatch gate options");
   closedRecord(options, ["reservations", "capture", "transport", "targets", "credentials", "preflightIds", "admission"], "invalid dispatch gate options");
   const { reservations, capture, transport, targets, credentials, preflightIds, admission } = options;
-  if (![reservations?.onStarted, reservations?.onReserve, reservations?.onTerminal, capture?.writeIntent, capture?.writeResponse, capture?.writeNote, capture?.snapshot, transport?.send, targets?.verify, credentials?.headersFor, admission?.check, transport?.validate].every(isFunction)) fail();
+  if (![reservations?.onStarted, reservations?.onReserve, reservations?.onTerminal, capture?.writeIntent, capture?.writeResponse, capture?.writeNote, capture?.snapshot, transport?.send, targets?.verify, credentials?.headersFor, admission?.check, admission?.begin, transport?.validate].every(isFunction)) fail();
   let armed = null;
   let busy = false;
   let poisoned = false;
@@ -145,8 +145,11 @@ export function createDispatchGate(options) {
 
   return Object.freeze({
     delegated,
+    // The run's first admission also marks the run started (the recording budget); every later request only re-checks.
     start: async (input) => {
-      await admitted();
+      let seen;
+      try { seen = await admission.begin(); } catch (error) { admissionRefused = true; throw error; }
+      if (seen?.admitted !== true) { admissionRefused = true; bad("admission refused: no admission"); }
       return counter.start(input);
     },
     admit: () => counter.admit(),

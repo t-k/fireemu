@@ -74,7 +74,8 @@ mod password_hash;
 mod phone_region;
 mod project_config;
 pub use project_config::{exportable_config_members, restored_config_members};
-mod project_mfa;
+pub mod project_mfa;
+pub use project_mfa::{mfa_config_from_json, MfaConfigRefusal};
 mod tenant_document;
 pub use password_hash::restorable_spec as restorable_imported_hash_spec;
 pub use tenant_document::{exportable_tenant_members, restore_tenant_members};
@@ -4812,14 +4813,8 @@ fn dispatch(
 fn mfa_config_refusal(refusal: &project_mfa::MfaConfigRefusal) -> JsonResponse {
     use project_mfa::MfaConfigRefusal;
     let body = match refusal {
-        MfaConfigRefusal::InvalidEnum {
-            field,
-            type_name,
-            value,
-        } => {
-            let message = format!(
-                "Invalid value at '{field}' (type.googleapis.com/google.cloud.identitytoolkit.admin.v2.{type_name}), \"{value}\""
-            );
+        MfaConfigRefusal::InvalidEnum { field, .. } => {
+            let message = refusal.message();
             json!({"error": {
                 "code": 400,
                 "message": message,
@@ -4832,7 +4827,7 @@ fn mfa_config_refusal(refusal: &project_mfa::MfaConfigRefusal) -> JsonResponse {
         }
         MfaConfigRefusal::AdjacentIntervalRange => json!({"error": {
             "code": 400,
-            "message": "INVALID_ADJACENT_INTERVAL_RANGE : Allowed number of adjacent intervals must be between 0 and 10, inclusive",
+            "message": refusal.message(),
             "status": "INVALID_ARGUMENT",
         }}),
         MfaConfigRefusal::Shape => return error(400, "INVALID_ARGUMENT"),

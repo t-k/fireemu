@@ -5243,6 +5243,51 @@ mod tests {
         assert!(!restored.config().allow_duplicate_emails);
     }
 
+    /// The project's multi-factor configuration is not account data: an export carries the
+    /// accounts and their factors, and an import leaves the importing project's configuration and
+    /// its declared initial one alone (`auth.mfa`).
+    #[test]
+    fn importing_accounts_leaves_the_multi_factor_config_and_its_seed_alone() {
+        use fireemu_core_auth::mfa_config::{MfaConfigState, MfaProjectConfig, TotpProviderConfig};
+        use fireemu_core_auth::{mfa::TotpPolicy, store::AuthStore};
+        use fireemu_core_export::auth::UserRecord;
+        use fireemu_core_types::determinism::SplitMix64;
+        let path = std::path::Path::new("offline.json");
+        let totp_on = MfaProjectConfig {
+            state: MfaConfigState::Enabled,
+            phone_sms: false,
+            totp: Some(TotpProviderConfig {
+                state: MfaConfigState::Enabled,
+                adjacent_intervals: Some(1),
+            }),
+        };
+        let mut source = AuthStore::new("demo-app", SplitMix64::new(1), TotpPolicy::default());
+        source.set_mfa_seed(totp_on.clone());
+        let record = UserRecord {
+            local_id: "u".to_owned(),
+            email: Some("mfa@example.com".to_owned()),
+            created_at: Some("100000".to_owned()),
+            ..UserRecord::default()
+        };
+        source
+            .import_user(super::imported_user(&record, path).unwrap())
+            .unwrap();
+        let exported = super::exported_account(&source, source.user_by_id("u").unwrap(), None);
+        for declared in [Some(totp_on.clone()), None] {
+            let mut target = AuthStore::new("demo-app", SplitMix64::new(2), TotpPolicy::default());
+            if let Some(seed) = &declared {
+                target.set_mfa_seed(seed.clone());
+            }
+            let before = target.mfa_config().clone();
+            target
+                .import_user_trusted(super::imported_user(&exported, path).unwrap())
+                .unwrap();
+            assert!(target.user_by_id("u").is_some());
+            assert_eq!(*target.mfa_config(), before);
+            assert_eq!(target.mfa_seed(), declared.as_ref());
+        }
+    }
+
     /// A foreign hash imported through `accounts:batchCreate` survives an export and restore
     /// instead of being dropped (external review 2026-09-24).
     #[test]

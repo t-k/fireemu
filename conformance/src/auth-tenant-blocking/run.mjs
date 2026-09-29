@@ -24,7 +24,7 @@
 
 import { execFile, spawn } from "node:child_process";
 import { createHash, generateKeyPairSync, randomBytes } from "node:crypto";
-import { existsSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { appendFile, lstat, mkdir, open as openFile, readFile, writeFile } from "node:fs/promises";
 import { dirname, join, resolve as resolvePath } from "node:path";
 import { setTimeout as sleepFor } from "node:timers/promises";
@@ -127,6 +127,35 @@ export function unservedFixtureFunctions(daemonOutput, expected) {
   const loaded = new Set(line.split(",").map((name) => name.trim()));
   const missing = expected.filter((name) => !loaded.has(name));
   return missing.length ? `the daemon did not serve ${missing.join(", ")}` : undefined;
+}
+
+/**
+ * The environment a comparison session's daemon runs in, as to its Functions runner. By default
+ * the checkout's runner is named explicitly. With AUTH_TENANT_PACKAGED_RUNNER=1 (the release
+ * gate) the daemon must find the runner shipped beside the binary under test, as a user's
+ * install does, and the session refuses to start when none is there: falling back to the
+ * checkout's runner would hide a module missing from the package.
+ */
+export function runnerEnvironment(
+  env,
+  binary,
+  {
+    functions = true,
+    checkoutRunner = join(RUNNER_DIR, "index.mjs"),
+    exists = existsSync, realpath = realpathSync } = {},
+) {
+  const { FIREEMU_RUNNER_NODE: _named, ...rest } = env;
+  if (env.AUTH_TENANT_PACKAGED_RUNNER !== "1") {
+    return functions ? { ...rest, FIREEMU_RUNNER_NODE: checkoutRunner } : rest;
+  }
+  const dir = dirname(realpath(binary));
+  const candidates = [join(dir, "runner-node", "index.mjs"), join(dir, "..", "runner-node", "index.mjs")];
+  if (!candidates.some((path) => exists(path))) {
+    throw new Error(
+      `AUTH_TENANT_PACKAGED_RUNNER is set but no packaged runner ships with the binary: ${candidates.join(", ")}`,
+    );
+  }
+  return rest;
 }
 
 /** A digest of the runner's own sources (its tests and dependencies aside). */
@@ -1346,8 +1375,7 @@ async function runLocalSession(programs) {
       cwd: CONFORMANCE_DIR,
       stdio: ["ignore", "pipe", "pipe"],
       env: {
-        ...withoutLockCapability(),
-        ...(functions ? { FIREEMU_RUNNER_NODE: join(RUNNER_DIR, "index.mjs") } : {}),
+        ...runnerEnvironment(withoutLockCapability(), binary, { functions }),
         AUTH_TENANT_IN: inPath,
         AUTH_TENANT_OUT: outPath,
         AUTH_TENANT_SIGNERS: signersPath,

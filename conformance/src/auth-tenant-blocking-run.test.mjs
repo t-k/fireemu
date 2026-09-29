@@ -15,6 +15,7 @@ import {
   recentAbort,
   restoreDue,
   restoreSandbox,
+  runnerEnvironment,
   TASK_ID,
 } from "./auth-tenant-blocking/run.mjs";
 import { createRequestBudget, installBudget } from "./auth-tenant-blocking/budget.mjs";
@@ -1064,4 +1065,58 @@ test("a comparison's evidence is bound to the fixture it was checked against (cl
   assert.throws(() => comparisonEvidence(comparison, "e".repeat(64), "tenant"), /fixture changed/);
   // A leftover comparison of the other suite is not exported under this one.
   assert.throws(() => comparisonEvidence(comparison, "f".repeat(64), "blocking"), /tenant suite/);
+});
+
+// --- the Functions runner a comparison session runs ----------------------------------------------
+
+const CHECKOUT_RUNNER = "/checkout/tools/runner-node/index.mjs";
+const runnerCase = (env, files = []) => {
+  const present = new Set(files);
+  return runnerEnvironment(env, "/install/bin/fireemu", {
+    checkoutRunner: CHECKOUT_RUNNER,
+    exists: (path) => present.has(path),
+    realpath: (path) => path,
+  });
+};
+
+test("without the packaged-runner switch a comparison session runs the checkout's runner", () => {
+  assert.equal(runnerCase({ PATH: "/bin" }).FIREEMU_RUNNER_NODE, CHECKOUT_RUNNER);
+  assert.equal(runnerCase({ AUTH_TENANT_PACKAGED_RUNNER: "0" }).FIREEMU_RUNNER_NODE, CHECKOUT_RUNNER);
+});
+
+test("with the packaged-runner switch the session runs the runner beside the binary", () => {
+  const env = runnerCase({ PATH: "/bin", AUTH_TENANT_PACKAGED_RUNNER: "1" }, [
+    "/install/bin/runner-node/index.mjs",
+  ]);
+  assert.equal("FIREEMU_RUNNER_NODE" in env, false);
+  assert.equal(env.PATH, "/bin");
+});
+
+test("the packaged-runner switch drops a runner override the caller had set", () => {
+  const env = runnerCase(
+    { FIREEMU_RUNNER_NODE: "/elsewhere/index.mjs", AUTH_TENANT_PACKAGED_RUNNER: "1" },
+    ["/install/bin/runner-node/index.mjs"],
+  );
+  assert.equal("FIREEMU_RUNNER_NODE" in env, false);
+});
+
+test("the packaged-runner switch accepts the runner one level above the binary, as the daemon does", () => {
+  const env = runnerCase({ AUTH_TENANT_PACKAGED_RUNNER: "1" }, ["/install/runner-node/index.mjs"]);
+  assert.equal("FIREEMU_RUNNER_NODE" in env, false);
+});
+
+test("the packaged-runner switch refuses to fall back when no runner ships beside the binary", () => {
+  assert.throws(
+    () => runnerCase({ AUTH_TENANT_PACKAGED_RUNNER: "1" }, [CHECKOUT_RUNNER]),
+    /packaged runner.*\/install\/bin\/runner-node\/index\.mjs/,
+  );
+});
+
+test("the packaged-runner switch resolves a symlinked binary before it looks beside it", () => {
+  const env = runnerEnvironment({ AUTH_TENANT_PACKAGED_RUNNER: "1" }, "/install/.bin/fireemu", {
+    checkoutRunner: CHECKOUT_RUNNER,
+    exists: (path) => path === "/install/pkg/bin/runner-node/index.mjs",
+    realpath: () => "/install/pkg/bin/fireemu",
+  });
+  assert.equal("FIREEMU_RUNNER_NODE" in env, false);
 });

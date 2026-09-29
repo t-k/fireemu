@@ -35,15 +35,19 @@ const json = (body) => ({ status: 200, rawHeaders: ["Content-Type", "application
 
 function fakeIdentity(clock) {
   const users = new Map();
+  const secrets = ["private-refresh-secret"];
   let nextForeign = 0;
   const mint = (user, project) => {
     const iat = clock.now - 1;
     const payload = { iss: `https://securetoken.google.com/${project}`, aud: project, sub: user.localId, user_id: user.localId, iat, exp: iat + 3600, auth_time: iat, email: user.email, email_verified: user.emailVerified, firebase: { identities: { email: [user.email] }, sign_in_provider: "password" }, ...JSON.parse(user.customAttributes || "{}") };
     const data = `${Buffer.from(JSON.stringify({ alg: "RS256", kid: "test", typ: "JWT" })).toString("base64url")}.${Buffer.from(JSON.stringify(payload)).toString("base64url")}`;
-    return `${data}.${sign("RSA-SHA256", Buffer.from(data), privateKey).toString("base64url")}`;
+    const token = `${data}.${sign("RSA-SHA256", Buffer.from(data), privateKey).toString("base64url")}`;
+    secrets.push(token);
+    return token;
   };
   return {
     users,
+    secrets: () => [...secrets],
     handle(spec) {
       const url = new URL(spec.url);
       const body = JSON.parse(spec.body.toString("utf8"));
@@ -79,7 +83,7 @@ function fakeIdentity(clock) {
   };
 }
 
-async function assemble({ simulatorOptions = {}, respond = () => undefined, admission, evidence } = {}) {
+async function assemble({ simulatorOptions = {}, respond = () => undefined, admission, evidence, capture: journal, reservations } = {}) {
   const clock = { now: Math.floor(Date.now() / 1000) };
   const identity = fakeIdentity(clock);
   const simulator = createSimulator({ manifest, options: { invalidContent, ...simulatorOptions } });
@@ -95,7 +99,7 @@ async function assemble({ simulatorOptions = {}, respond = () => undefined, admi
     if (spec.url.startsWith("https://identitytoolkit.googleapis.com/")) return identity.handle(spec);
     return simulator.send(spec);
   } };
-  const capture = { writeIntent: async () => {}, writeResponse: async () => {}, writeFacts: async () => {}, writeProof: async (proof) => { seen.proofs.push(proof); }, writeNote: async () => {}, snapshot: () => ({ uncertain: false }) };
+  const capture = journal ?? { writeIntent: async () => {}, writeResponse: async () => {}, writeFacts: async () => {}, writeProof: async (proof) => { seen.proofs.push(proof); }, writeNote: async () => {}, snapshot: () => ({ uncertain: false }) };
   const targets = createTargetBuilder({ manifest, digestSalt: salt });
   const tables = buildRefTables(manifest);
   const refs = createRuntimeRefStore({ tables, runId: options.runId, digestSalt: salt, writeProof: (proof) => capture.writeProof(proof) });
@@ -103,7 +107,7 @@ async function assemble({ simulatorOptions = {}, respond = () => undefined, admi
   const run = createRunLedger({ manifest, objects });
   let real;
   const gate = createDispatchGate({
-    reservations: { onStarted: async () => {}, onReserve: async (r) => { trace.push(r.operationId); }, onTerminal: async (r) => { trace.push(`terminal:${r.outcome}`); } },
+    reservations: reservations ?? { onStarted: async () => {}, onReserve: async (r) => { trace.push(r.operationId); }, onTerminal: async (r) => { trace.push(`terminal:${r.outcome}`); } },
     capture, transport, targets, credentials: { headersFor: (credential, context) => real.credentials.headersFor(credential, context) },
     preflightIds: manifest.preflightIds, admission: admission ?? { check: async () => ({ admitted: true }), begin: async () => ({ admitted: true }) },
   });
@@ -114,7 +118,7 @@ async function assemble({ simulatorOptions = {}, respond = () => undefined, admi
     delegates: real.delegates, wait: async () => {}, credentials: real.credentials,
     judgePreflight: (row, outcome) => outcome.verdict !== "unexpected",
   });
-  return { controller, gate, simulator, seen, trace, identity, real, clock, objects };
+  return { controller, gate, simulator, seen, trace, identity, real, clock, objects, capture };
 }
 
 test("a whole recording with every delegate real counts each request once and leaves nothing behind", async () => {
@@ -482,4 +486,42 @@ test("ownership and cleanup receipts reach the evidence writers exactly, with th
   assert.deepEqual(u.seen.ownership, accounts.map((account) => ({ account, project: project(account), uid: uid(account), runPrefix: "storage-rules-lr", emailSha256: emailSha256(account), creationRequestId: `auth/${account}/${account === "foreign-project-token" ? "sign-up" : "create"}` })));
   assert.deepEqual(u.seen.cleanup, ["foreign-project-token", "user-a", "user-b", "revoked-token"].map((account) => ({ account, project: project(account), uid: uid(account), absent: true, requestId: `auth/${account}/absence` })));
   assert.equal(u.seen.proofs.length, 9);
+});
+
+async function walk(directory, read) {
+  const { lstat, readdir } = await import("node:fs/promises");
+  const out = [];
+  for (const name of await readdir(directory)) {
+    const path = `${directory}/${name}`;
+    if ((await lstat(path)).isDirectory()) out.push(...await walk(path, read)); else out.push(path);
+  }
+  return out;
+}
+
+// Real delegates, both real journals and a response stream shaped like production, then every file swept for every secret the run met.
+// Every row syncs several files, so this run takes over a minute; run it with STORAGE_RULES_SLOW_TESTS=1.
+test("a whole recording with real delegates and real journals leaves no secret anywhere in the run directory", { skip: !process.env.STORAGE_RULES_SLOW_TESTS && "set STORAGE_RULES_SLOW_TESTS=1" }, async (t) => {
+  const { mkdtemp, open, lstat, mkdir, readFile, rm } = await import("node:fs/promises");
+  const { createCaptureJournal } = await import("./storage-rules/capture-journal.mjs");
+  const { createReservationJournal } = await import("./storage-rules/reservation-journal.mjs");
+  const directory = await mkdtemp("/private/tmp/storage-rules-sweep-");
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const requestIds = manifest.rows.map((r) => r.id);
+  const io = { open, lstat, mkdir };
+  const journal = await createReservationJournal({ directory, runId: options.runId, sourceCommit: options.sourceCommit, manifestDigest: manifest.sha256, requestIds, preflightIds: manifest.preflightIds, io: { open, lstat } });
+  const capture = await createCaptureJournal({ directory, runId: options.runId, sourceCommit: options.sourceCommit, manifestDigest: manifest.sha256, digestSalt: salt, requestIds, io });
+  const h = await assemble({ capture, evidence: capture, reservations: { onStarted: journal.onStarted, onReserve: journal.onReserve, onTerminal: journal.onTerminal } });
+  const result = await h.controller.run();
+  assert.equal(result.status, "finished", JSON.stringify(result));
+  await capture.close();
+  await journal.close();
+  const secrets = [OWNER_TOKEN, adc.refresh_token, adc.client_secret, ...Object.values(passwords), ...Object.values(MALFORMED).map((value) => value.split(" ").at(-1)), ...h.simulator.secrets(), ...h.identity.secrets(), "@example.com"];
+  assert.ok(secrets.length > 20);
+  const files = await walk(directory);
+  assert.ok(files.some((f) => f.endsWith("captures.jsonl")) && files.some((f) => f.endsWith("reservations.jsonl")));
+  for (const file of files) {
+    const text = (await readFile(file)).toString("latin1");
+    for (const secret of secrets) for (const form of [secret, encodeURIComponent(secret), Buffer.from(secret).toString("base64"), Buffer.from(secret).toString("hex")]) assert.equal(text.includes(form), false, `${secret.slice(0, 14)} in ${file.slice(directory.length)}`);
+    assert.equal((await lstat(file)).mode & 0o077, 0, file);
+  }
 });

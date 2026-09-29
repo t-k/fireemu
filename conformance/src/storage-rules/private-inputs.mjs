@@ -36,15 +36,20 @@ function dataArray(value, maximum) {
   });
 }
 
+// The key the run uses in a project, by its API Keys v2 key ID (a UUID, or a custom ID such as the dedicated key's), with its uid, its
+// API targets and the digest of its whole restriction object. Other live keys of the project do not matter to the run; the recorded key is
+// compared exactly, and both keys must allow the two services the run signs in with.
+const REQUIRED_SERVICES = ["identitytoolkit.googleapis.com", "securetoken.googleapis.com"];
 function project(value, projectId) {
-  const row = record(value, ["projectId", "projectNumber", "apiKeyId", "apiKey", "keyUid", "apiTargets"]);
-  const targets = dataArray(row.apiTargets, 8);
+  const row = record(value, ["projectId", "projectNumber", "apiKeyId", "apiKey", "keyUid", "apiTargets", "restrictionsSha256"]);
+  const targets = dataArray(row.apiTargets, 64);
   if (
-    row.projectId !== projectId || !matches(row.projectNumber, /^[1-9]\d{0,19}$/) || !matches(row.apiKeyId, /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/) ||
-    !matches(row.apiKey, /^[A-Za-z0-9_-]{20,128}$/) || !matches(row.keyUid, /^[\x21-\x7e]{1,128}$/) ||
-    targets.some((target, index) => !matches(target, /^[a-z0-9][a-z0-9.-]{2,127}$/) || (index > 0 && !(targets[index - 1] < target)))
+    row.projectId !== projectId || !matches(row.projectNumber, /^[1-9]\d{0,19}$/) || !matches(row.apiKeyId, /^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[a-z][a-z0-9-]{0,62})$/) ||
+    !matches(row.apiKey, /^[A-Za-z0-9_-]{20,128}$/) || !matches(row.keyUid, /^[\x21-\x7e]{1,128}$/) || !HEX64.test(row.restrictionsSha256) ||
+    targets.some((target, index) => !matches(target, /^[a-z0-9][a-z0-9.-]{2,127}$/) || (index > 0 && !(targets[index - 1] < target))) ||
+    !REQUIRED_SERVICES.every((service) => targets.includes(service))
   ) bad();
-  return { projectId: row.projectId, projectNumber: row.projectNumber, apiKeyId: row.apiKeyId, keyUid: row.keyUid, apiTargets: Object.freeze([...targets]), apiKey: row.apiKey };
+  return { projectId: row.projectId, projectNumber: row.projectNumber, apiKeyId: row.apiKeyId, keyUid: row.keyUid, apiTargets: Object.freeze([...targets]), restrictionsSha256: row.restrictionsSha256, apiKey: row.apiKey };
 }
 
 /** Validate a packet object; the result is frozen, and the API keys are only under the non-enumerable `secrets`. */

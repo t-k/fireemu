@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import { restrictionsSha256 } from "./storage-rules/acceptance-preflight.mjs";
 import { buildCorpus } from "./storage-rules/corpus.mjs";
 import { buildFullRequestManifest } from "./storage-rules/full-manifest.mjs";
 
@@ -58,10 +59,24 @@ test("a key read reports its uid, deletion and API targets, and its string stays
   const key = (extra = {}) => ({ name, uid: "08c3ec4e-d284-4034-a35a-c061cafeeff7", displayName: "k", createTime: time, updateTime: time, restrictions: { apiTargets: [{ service: "securetoken.googleapis.com" }, { service: "identitytoolkit.googleapis.com" }] }, etag: "e", ...extra });
   const ok = classifyResponse(meta, json(200, key()));
   assert.equal(ok.verdict, "accepted");
-  assert.deepEqual({ ...ok.facts }, { status: 200, uid: "08c3ec4e-d284-4034-a35a-c061cafeeff7", deleted: false, apiTargets: ["identitytoolkit.googleapis.com", "securetoken.googleapis.com"], otherRestrictions: [], methodRestricted: false });
+  assert.deepEqual({ ...ok.facts }, { status: 200, uid: "08c3ec4e-d284-4034-a35a-c061cafeeff7", deleted: false, apiTargets: ["identitytoolkit.googleapis.com", "securetoken.googleapis.com"], otherRestrictions: [], methodRestricted: false, restrictionsSha256: restrictionsSha256({ apiTargets: [{ service: "identitytoolkit.googleapis.com" }, { service: "securetoken.googleapis.com" }] }) });
   assert.equal(classifyResponse(meta, json(200, key({ restrictions: { apiTargets: [{ service: "a.googleapis.com", methods: ["x"] }], browserKeyRestrictions: {} } }))).facts.methodRestricted, true);
   assert.deepEqual(classifyResponse(meta, json(200, key({ restrictions: { browserKeyRestrictions: {}, apiTargets: [] } }))).facts.otherRestrictions, ["browserKeyRestrictions"]);
   assert.equal(classifyResponse(meta, json(200, key({ deleteTime: time }))).facts.deleted, true);
+  // The digest covers the whole restriction object: any restriction moves it, and neither key order nor target order does.
+  const digest = (restrictions) => classifyResponse(meta, json(200, key({ restrictions }))).facts.restrictionsSha256;
+  const browser = { browserKeyRestrictions: { allowedReferrers: [] }, apiTargets: [{ service: "b.googleapis.com" }, { service: "a.googleapis.com" }] };
+  assert.equal(digest(browser), digest({ apiTargets: [{ service: "a.googleapis.com" }, { service: "b.googleapis.com" }], browserKeyRestrictions: { allowedReferrers: [] } }));
+  for (const other of [{ apiTargets: browser.apiTargets }, { ...browser, browserKeyRestrictions: { allowedReferrers: ["*"] } }, { ...browser, apiTargets: browser.apiTargets.slice(1) }, { ...browser, apiTargets: [...browser.apiTargets, { service: "c.googleapis.com" }] }, { ...browser, androidKeyRestrictions: {} }, { ...browser, apiTargets: [{ service: "a.googleapis.com", methods: ["x"] }, { service: "b.googleapis.com" }] }]) assert.notEqual(digest(other), digest(browser));
+  // Key order inside nested objects and inside API target entries does not matter either, but list order inside other lists does.
+  const nested = { browserKeyRestrictions: { allowedReferrers: ["https://a.example/", "https://b.example/"], extra: { x: 1, y: 2 } }, apiTargets: [{ service: "a.googleapis.com", methods: ["m1", "m2"] }] };
+  assert.equal(digest(nested), digest({ apiTargets: [{ methods: ["m1", "m2"], service: "a.googleapis.com" }], browserKeyRestrictions: { extra: { y: 2, x: 1 }, allowedReferrers: ["https://a.example/", "https://b.example/"] } }));
+  assert.notEqual(digest(nested), digest({ ...nested, browserKeyRestrictions: { ...nested.browserKeyRestrictions, allowedReferrers: ["https://b.example/", "https://a.example/"] } }));
+  assert.notEqual(digest(nested), digest({ ...nested, browserKeyRestrictions: { ...nested.browserKeyRestrictions, extra: { x: 1, y: 3 } } }));
+  assert.notEqual(digest(nested), digest({ ...nested, apiTargets: [{ service: "a.googleapis.com", methods: ["m2", "m1"] }] }));
+  assert.match(digest(browser), /^[0-9a-f]{64}$/);
+  assert.equal(classifyResponse(meta, json(200, { ...key(), restrictions: undefined })).facts.restrictionsSha256, restrictionsSha256({}));
+  assert.equal(restrictionsSha256(undefined), restrictionsSha256({}));
   for (const bad of [json(200, key({ name: `${name}x` })), json(200, key({ uid: "" })), json(200, key({ restrictions: { apiTargets: [{}] } })), json(404, errorBody(404, "NOT_FOUND"))]) assert.equal(classifyResponse(meta, bad).verdict, "unexpected");
   const string = row("preflight/query/key-string");
   const secret = "AIzaCANARYKEYSTRING0123456789abcdefghij";

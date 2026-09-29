@@ -13,8 +13,8 @@ const good = () => ({
   adcPath: "/private/adc/application_default_credentials.json",
   owner: { emailSha256: sha("owner@example.test"), subjectSha256: sha("owner-subject") },
   projects: {
-    query: { projectId: "fireemu-oracle-query", projectNumber: "111111111111", apiKeyId: "00000000-0000-4000-8000-000000000001", apiKey: "Q".repeat(39), keyUid: "query-key-uid", apiTargets: ["identitytoolkit.googleapis.com"] },
-    idp: { projectId: "fireemu-oracle-idp", projectNumber: "222222222222", apiKeyId: "00000000-0000-4000-8000-000000000002", apiKey: "I".repeat(39), keyUid: "idp-key-uid", apiTargets: ["identitytoolkit.googleapis.com"] },
+    query: { projectId: "fireemu-oracle-query", projectNumber: "111111111111", apiKeyId: "fireemu-query-auth-20260925", apiKey: "Q".repeat(39), keyUid: "query-key-uid", apiTargets: ["identitytoolkit.googleapis.com", "securetoken.googleapis.com"], restrictionsSha256: sha("query-restrictions") },
+    idp: { projectId: "fireemu-oracle-idp", projectNumber: "222222222222", apiKeyId: "00000000-0000-4000-8000-000000000002", apiKey: "I".repeat(39), keyUid: "idp-key-uid", apiTargets: ["identitytoolkit.googleapis.com", "securetoken.googleapis.com"], restrictionsSha256: sha("idp-restrictions") },
   },
   bucket: { name: "synthetic-rules-bucket", location: "US-CENTRAL1", uniformBucketLevelAccess: true, iamPolicySha256: sha("bucket-policy") },
   database: { locationId: "us-central1", type: "FIRESTORE_NATIVE" },
@@ -51,11 +51,14 @@ test("the packet is a closed record: unknown, missing and mistyped fields are re
     "project missing": mutate((v) => { delete v.projects.idp; }), "project extra": mutate((v) => { v.projects.other = v.projects.query; }),
     "wrong project id": mutate((v) => { v.projects.query.projectId = "fireemu-oracle-idp"; }), "zero project number": mutate((v) => { v.projects.query.projectNumber = "0123"; }), "project number not a string": mutate((v) => { v.projects.query.projectNumber = 111111111111; }),
     "same numbers": mutate((v) => { v.projects.idp.projectNumber = v.projects.query.projectNumber; }), "same key ids": mutate((v) => { v.projects.idp.apiKeyId = v.projects.query.apiKeyId; }), "same api keys": mutate((v) => { v.projects.idp.apiKey = v.projects.query.apiKey; }),
-    "key id not a uuid": mutate((v) => { v.projects.query.apiKeyId = "abc"; }), "key id upper": mutate((v) => { v.projects.query.apiKeyId = "0000000A-0000-4000-8000-00000000000A"; }),
+    "key id upper uuid": mutate((v) => { v.projects.query.apiKeyId = "0000000A-0000-4000-8000-00000000000A"; }), "key id upper custom": mutate((v) => { v.projects.query.apiKeyId = "Fireemu-query"; }), "key id digit first": mutate((v) => { v.projects.query.apiKeyId = "1abc"; }),
+    "key id underscore": mutate((v) => { v.projects.query.apiKeyId = "a_b"; }), "key id 64 chars": mutate((v) => { v.projects.query.apiKeyId = `a${"b".repeat(63)}`; }), "key id empty": mutate((v) => { v.projects.query.apiKeyId = ""; }), "key id slash": mutate((v) => { v.projects.query.apiKeyId = "a/b"; }), "key id dot": mutate((v) => { v.projects.query.apiKeyId = "a.b"; }), "key id not a string": mutate((v) => { v.projects.query.apiKeyId = 5; }),
+    "restriction digest missing": mutate((v) => { delete v.projects.query.restrictionsSha256; }), "restriction digest short": mutate((v) => { v.projects.query.restrictionsSha256 = "ab"; }), "restriction digest upper": mutate((v) => { v.projects.idp.restrictionsSha256 = v.projects.idp.restrictionsSha256.toUpperCase(); }), "restriction digest not a string": mutate((v) => { v.projects.idp.restrictionsSha256 = 5; }),
+    "no identitytoolkit": mutate((v) => { v.projects.query.apiTargets = ["securetoken.googleapis.com"]; }), "no securetoken": mutate((v) => { v.projects.idp.apiTargets = ["identitytoolkit.googleapis.com"]; }), "no targets": mutate((v) => { v.projects.query.apiTargets = []; }), "targets without the services": mutate((v) => { v.projects.idp.apiTargets = ["a.googleapis.com", "b.googleapis.com"]; }),
     "api key short": mutate((v) => { v.projects.query.apiKey = "short"; }), "api key with space": mutate((v) => { v.projects.query.apiKey = `${"Q".repeat(20)} ${"Q".repeat(20)}`; }), "api key long": mutate((v) => { v.projects.query.apiKey = "Q".repeat(129); }),
     "key uid empty": mutate((v) => { v.projects.query.keyUid = ""; }), "key uid control": mutate((v) => { v.projects.query.keyUid = "a\nb"; }), "key uid long": mutate((v) => { v.projects.query.keyUid = "u".repeat(129); }),
     "targets unsorted": mutate((v) => { v.projects.query.apiTargets = ["b.googleapis.com", "a.googleapis.com"]; }), "targets duplicated": mutate((v) => { v.projects.query.apiTargets = ["a.googleapis.com", "a.googleapis.com"]; }),
-    "targets not strings": mutate((v) => { v.projects.query.apiTargets = [1]; }), "targets not an array": mutate((v) => { v.projects.query.apiTargets = "a"; }), "too many targets": mutate((v) => { v.projects.query.apiTargets = Array.from({ length: 9 }, (_, i) => `s${i}.googleapis.com`); }),
+    "targets not strings": mutate((v) => { v.projects.query.apiTargets = [1]; }), "targets not an array": mutate((v) => { v.projects.query.apiTargets = "a"; }), "too many targets": mutate((v) => { v.projects.query.apiTargets = [...Array.from({ length: 63 }, (_, i) => `s${String(i).padStart(2, "0")}.googleapis.com`), "identitytoolkit.googleapis.com", "securetoken.googleapis.com"].sort(); }),
     "bucket name upper": mutate((v) => { v.bucket.name = "Bucket"; }), "bucket name slash": mutate((v) => { v.bucket.name = "a/b"; }), "bucket location empty": mutate((v) => { v.bucket.location = ""; }),
     "uniform not bool": mutate((v) => { v.bucket.uniformBucketLevelAccess = "true"; }), "bucket policy digest": mutate((v) => { v.bucket.iamPolicySha256 = "x"; }),
     "database missing": mutate((v) => { delete v.database; }), "database location empty": mutate((v) => { v.database.locationId = ""; }), "database location control": mutate((v) => { v.database.locationId = "us\ncentral1"; }), "database type empty": mutate((v) => { v.database.type = ""; }), "project policy digest": mutate((v) => { v.queryProjectIamPolicySha256 = "x"; }),
@@ -63,7 +66,10 @@ test("the packet is a closed record: unknown, missing and mistyped fields are re
   for (const [name, value] of Object.entries(bad)) assert.throws(() => parsePrivateInputs(value), /invalid private inputs/, name);
   // null is allowed where the bucket's uniform access is unknown to the packet.
   assert.doesNotThrow(() => parsePrivateInputs(mutate((v) => { v.bucket.uniformBucketLevelAccess = null; })));
-  assert.doesNotThrow(() => parsePrivateInputs(mutate((v) => { v.projects.query.apiTargets = []; })));
+  // A custom key ID, a UUID, and a Browser key with many targets (up to 64) are all keys the run may use.
+  for (const id of ["fireemu-query-auth-20260925", "a", `a${"b".repeat(62)}`, "00000000-0000-4000-8000-000000000001", "abc"]) assert.doesNotThrow(() => parsePrivateInputs(mutate((v) => { v.projects.query.apiKeyId = id; })), id);
+  assert.doesNotThrow(() => parsePrivateInputs(mutate((v) => { v.projects.idp.apiTargets = [...Array.from({ length: 62 }, (_, i) => `s${String(i).padStart(2, "0")}.googleapis.com`), "identitytoolkit.googleapis.com", "securetoken.googleapis.com"].sort(); })));
+  assert.equal(parsePrivateInputs(mutate(() => {})).projects.idp.restrictionsSha256, sha("idp-restrictions"));
 });
 
 test("getters, accessors, prototypes and inherited fields are not data", async () => {

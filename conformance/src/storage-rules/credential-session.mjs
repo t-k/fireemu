@@ -1,10 +1,10 @@
 import { verifyFixtureIdToken } from "./fixture-proof.mjs";
+import { plain } from "./shape.mjs";
 
 const QUERY = "fireemu-oracle-query";
 const IDP = "fireemu-oracle-idp";
 const ACCOUNTS = ["user-a", "user-b", "revoked-token", "foreign-project-token"];
 const INPUTS = ["runId", "counter", "transport", "keySet", "digestSalt", "passwords", "nowSeconds", "waitUntilSeconds", "writeOwnership", "writeProof", "writeCleanup"];
-const plain = (value) => value !== null && typeof value === "object" && Object.getPrototypeOf(value) === Object.prototype;
 
 function dataRecord(value, keys) {
   if (!plain(value)) throw new Error("invalid credential session input");

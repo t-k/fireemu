@@ -15,6 +15,7 @@ import { createRunLedger } from "./run-ledger.mjs";
 import { buildRefTables, createRuntimeRefStore } from "./runtime-refs.mjs";
 import { buildRecoverySchedule, buildSchedule } from "./schedule.mjs";
 import { createTargetBuilder } from "./target.mjs";
+import { plain } from "./shape.mjs";
 
 // The one entry point that wires a recording together: the private packet and the ADC file are loaded, the manifest is built
 // for this run, the project locks and the live admission are taken (the lock set must be exactly the packet's), the two
@@ -23,7 +24,6 @@ import { createTargetBuilder } from "./target.mjs";
 // reaches the wire only through the gate, inside a leased, counted, journalled attempt. Nothing here sends by itself: the
 // caller decides to run, and to recover, inside `use`, and the locks are released only after a confirmed clean close.
 const KEYS = ["inputsPath", "closure", "runId", "sourceCommit", "packet", "review", "readLedger", "locks", "usagePath", "directory", "transport", "clock"];
-const plain = (value) => value !== null && typeof value === "object" && !Array.isArray(value) && Object.getPrototypeOf(value) === Object.prototype;
 const bad = () => { throw new Error("invalid assembled run options"); };
 
 export async function withAssembledRun(options, use, { randomBytes } = {}) {

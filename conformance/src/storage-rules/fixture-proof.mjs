@@ -1,10 +1,10 @@
 import { constants, createHash, createHmac, createPublicKey, verify } from "node:crypto";
+import { plain } from "./shape.mjs";
 
 const INPUT_KEYS = ["token", "principal", "runId", "expectedUid", "keySet", "nowSeconds", "validSince", "digestSalt"];
 const PRINCIPALS = ["user-a", "user-b", "user-plain", "revoked-token", "foreign-project-token"];
 const CLAIM_KEYS = ["iss", "aud", "sub", "user_id", "iat", "exp", "auth_time", "email", "email_verified", "firebase", "role", "level"];
 const seconds = (value) => Number.isSafeInteger(value) && value > 0;
-const plain = (value) => value !== null && typeof value === "object" && Object.getPrototypeOf(value) === Object.prototype;
 
 function dataRecord(value, keys, label) {
   if (!plain(value)) throw new Error(`invalid ${label}`);

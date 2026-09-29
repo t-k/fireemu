@@ -1,4 +1,5 @@
 import { createHash, createHmac, createPublicKey } from "node:crypto";
+import { plain } from "./shape.mjs";
 
 const TOKEN_URL = "https://oauth2.googleapis.com/token";
 const CERTIFICATE_URL = "https://www.googleapis.com/robot/v1/metadata/x509/securetoken@system.gserviceaccount.com";
@@ -11,7 +12,6 @@ const entries = [
 const ids = new Map(entries.map(([id, kind, phase]) => [id, { kind, phase }]));
 export const CREDENTIAL_CACHE_REQUEST_IDS = Object.freeze(entries.map(([id]) => id));
 const nativeLength = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(Uint8Array.prototype), "length").get;
-const plain = (value) => value !== null && typeof value === "object" && Object.getPrototypeOf(value) === Object.prototype;
 const matches = (value, pattern) => typeof value === "string" && !/[\r\n]/.test(value) && pattern.test(value);
 
 function record(value, keys) {

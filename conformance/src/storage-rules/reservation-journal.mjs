@@ -1,8 +1,8 @@
 import { constants } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
 import { DRAFT_REQUEST_LIMITS } from "./request-counter.mjs";
+import { plain } from "./shape.mjs";
 
-const plain = (value) => value !== null && typeof value === "object" && Object.getPrototypeOf(value) === Object.prototype;
 const matches = (value, pattern) => typeof value === "string" && !/[\r\n]/.test(value) && pattern.test(value);
 const requestId = (value) => matches(value, /^[A-Za-z0-9][A-Za-z0-9._/-]{0,159}$/);
 

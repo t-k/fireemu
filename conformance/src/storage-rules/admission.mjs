@@ -1,12 +1,12 @@
 import { RECORDINGS_PER_APPROVAL, validatePresendApproval } from "./approval.mjs";
 import { STOP_CODES, tagged } from "./stop-codes.mjs";
+import { plain } from "./shape.mjs";
 
 // The live proof that a run may go on: the owner ledger, read again at every check, still holds this version's
 // approval (envelope, version pins, decision) with no revocation in any spelling, and the project locks are still
 // this run's. Any failure refuses, and a refusal is permanent, so a ledger that looks valid again later cannot resume the run.
 // This module decides nothing about a request; the dispatch gate asks before it starts and before it sends.
 const isFunction = (value) => typeof value === "function";
-const plain = (value) => value !== null && typeof value === "object" && !Array.isArray(value) && Object.getPrototypeOf(value) === Object.prototype;
 const KEYS = ["readLedger", "packet", "review", "locks", "runId", "usage"];
 
 function deepFreezeCopy(value) {

@@ -5,6 +5,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { withAssembledRun } from "./assemble-run.mjs";
 import { createSingleAttemptHttpsTransport } from "./http-transport.mjs";
+import { plain } from "./shape.mjs";
 
 // The one entry point a recording is started from. The ledger it trusts, the lock directory it takes, the usage ledger it
 // marks and the run directory it writes are constants resolved from the MAIN repository checkout (never the working
@@ -15,7 +16,6 @@ const OPTION_KEYS = ["inputsPath", "closure", "runId", "sourceCommit", "packet",
 const ROOT_KEYS = ["root", "requestImpl", "clock"];
 const MAX_LEDGER_BYTES = 8 * 1024 * 1024;
 const RUN_ID = /^[a-z0-9][a-z0-9-]{0,47}$/;
-const plain = (value) => value !== null && typeof value === "object" && !Array.isArray(value) && Object.getPrototypeOf(value) === Object.prototype;
 const closed = (value, keys) => plain(value) && Reflect.ownKeys(value).length === keys.length && keys.every((key) => Object.hasOwn(value, key));
 const refuse = (message) => { throw new Error(message); };
 

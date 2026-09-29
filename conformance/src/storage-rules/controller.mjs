@@ -3,6 +3,7 @@ import { classifyResponse } from "./acceptance.mjs";
 import { ENFORCEMENT } from "./enforcement.mjs";
 import { applyVerdict, createSettleState, nextRead } from "./settle.mjs";
 import { STOP_CODES, stopCodeOf } from "./stop-codes.mjs";
+import { plain } from "./shape.mjs";
 
 // Runs the reviewed schedule of one recording. Each row goes through the same steps: guards from the ledgers, the
 // run-time references it needs, its exact target, the ledgers' record of the intent, one send through the gate, the
@@ -12,7 +13,6 @@ import { STOP_CODES, stopCodeOf } from "./stop-codes.mjs";
 class RunStop extends Error {
   constructor(reason, detail = {}) { super(`run stopped: ${reason}`); this.reason = reason; this.detail = detail; }
 }
-const plain = (value) => value !== null && typeof value === "object" && !Array.isArray(value) && Object.getPrototypeOf(value) === Object.prototype;
 const callable = (value) => typeof value === "function";
 const DEFER = new Set(["admission", "delegate", "refs", "structure", "policy", "post-check"]);
 

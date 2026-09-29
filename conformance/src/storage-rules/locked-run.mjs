@@ -1,10 +1,10 @@
 import { createAdmission } from "./admission.mjs";
 import { withProjectLocks } from "./project-locks.mjs";
+import { plain } from "./shape.mjs";
 
 // The project locks and the live admission as one. The lock set must be exactly this packet's; every request's admission
 // then also proves the locks are still this run's, the run's only transport goes through the lease, and the locks are
 // released only when the caller confirms a clean terminal state (a finished or recovered result, no outbound failure).
-const plain = (value) => value !== null && typeof value === "object" && !Array.isArray(value) && Object.getPrototypeOf(value) === Object.prototype;
 const KEYS = ["locks", "readLedger", "packet", "review", "runId", "usage"];
 
 export async function withLockedAdmission(options, run) {

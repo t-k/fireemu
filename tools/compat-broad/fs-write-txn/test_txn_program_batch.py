@@ -126,5 +126,39 @@ def test_a_malformed_batch_table_never_compiles(label, change):
 
 def test_a_table_without_batches_keeps_its_digest():
     assert program.corpus_digest(support.TABLE) == "624ee4410100a3a30d90bdc80ad2133bd4c68dadde18978b7c425749bd957099", "adding batch reads must not move any earlier table's digest"
-    import fs_txn_table_p08
-    assert program.corpus_digest(fs_txn_table_p08.TABLE) == "1dc1d44eca4b99a23d8f3b480eb9b8d71aec4ef0894509b149fa12354c9d92bc"
+    # Loaded by name so a framework test does not bind a program table into every other program's manifest.
+    p08 = __import__("importlib").import_module("fs_txn_table_p08")
+    assert program.corpus_digest(p08.TABLE) == "1dc1d44eca4b99a23d8f3b480eb9b8d71aec4ef0894509b149fa12354c9d92bc"
+
+
+def test_an_empty_commit_may_answer_without_write_results_but_a_write_may_not():
+    value = table()
+    ledger = collector_module.Ledger(program.compile_plan(value, NONCE, OWNER))
+    ledger.docs["a"].update(status="created", state="created"); ledger.docs["m"].update(status="confirmed-absent")
+    ledger.tokens["rest-t"] = {"value": "dG9rZW4=", "state": "open", "transport": "rest", "start": timing(), "lastUse": timing()}
+    empty = next(step for step in ledger.plan["steps"] if step["id"] == "rest/empty-commit")
+    request = {"database": ledger.plan["database"], "writes": [], "transaction": "dG9rZW4="}
+    ledger.before("rest/empty-commit", "rest", "Commit", request, empty)
+    ledger.after("rest/empty-commit", "rest", "Commit", request, empty, receipt("rest", response={"commitTime": "2026-09-30T00:00:00Z"}), timing())
+    assert ledger.tokens["rest-t"]["state"] == "committed"
+    write = next(step for step in ledger.plan["steps"] if step["id"] == "setup/create-a")
+    request = program.request_for_step(ledger.plan, write, {}, value)
+    ledger2 = collector_module.Ledger(program.compile_plan(value, NONCE, OWNER))
+    ledger2.before("setup/create-a", "grpc", "Commit", request, write)
+    with pytest.raises(ValueError, match="acknowledgement"):
+        ledger2.after("setup/create-a", "grpc", "Commit", request, write, receipt("grpc", response={"commitTime": {"seconds": "1", "nanos": 0}}), timing())
+
+
+@pytest.mark.parametrize("change", [{"transaction": "AAAA"}, {"result": "missing"}])
+def test_a_grpc_batch_entry_with_a_stray_transaction_or_a_disagreeing_discriminator_stops(change):
+    ledger = collector_module.Ledger(program.compile_plan(table(), NONCE, OWNER))
+    names = ledger.plan["documents"]
+    ledger.docs["a"].update(status="created", state="created"); ledger.docs["m"].update(status="confirmed-absent")
+    found = {"name": names["a"], "fields": {"owner": {"stringValue": OWNER, "valueType": "stringValue"}, "nonce": {"stringValue": NONCE, "valueType": "stringValue"}, "role": {"stringValue": "a", "valueType": "stringValue"}, "state": {"stringValue": "created", "valueType": "stringValue"}}, "updateTime": {"seconds": "1", "nanos": 1}}
+    step = next(step for step in ledger.plan["steps"] if step["id"] == "grpc/plain-batch")
+    request = {"database": ledger.plan["database"], "documents": [names["a"], names["m"]]}
+    good = [{"found": found, "transaction": "", "result": "found"}, {"missing": names["m"], "transaction": "", "result": "missing"}]
+    ledger.after("x", "grpc", "BatchGetDocuments", request, step, receipt(response={"responses": copy.deepcopy(good)}), timing())
+    good[0] = {**good[0], **change}
+    with pytest.raises(ValueError, match="unrequested|discriminator"):
+        ledger.after("x", "grpc", "BatchGetDocuments", request, step, receipt(response={"responses": good}), timing())

@@ -287,6 +287,16 @@ class NodeWire:
         if not lifecycle.get('childReaped'):
             raise ValueError('program worker remains live')
         result = {**receipt, **lifecycle}
+        if self.target.get('kind') == 'local' and method == 'BatchGetDocuments' and result['code'] == 0 and isinstance(result['response'], dict):
+            # Entries name their documents as the local wire did; the plan names them as production would.
+            local = 'projects/demo-program/databases/(default)'
+            production = 'projects/fireemu-oracle-sbx/databases/(default)'
+            result['localWireResponse'] = copy.deepcopy(result['response'])
+            for entry in result['response'].get('responses', []):
+                if isinstance(entry.get('found'), dict) and isinstance(entry['found'].get('name'), str):
+                    entry['found']['name'] = entry['found']['name'].replace(local, production, 1)
+                if isinstance(entry.get('missing'), str):
+                    entry['missing'] = entry['missing'].replace(local, production, 1)
         if self.target.get('kind') == 'local' and method == 'GetDocument' and result['code'] == 0 and isinstance(result['response'], dict):
             result['localWireResponse'] = copy.deepcopy(result['response'])
             result['localNameRebased'] = False

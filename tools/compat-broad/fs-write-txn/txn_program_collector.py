@@ -189,7 +189,8 @@ class Ledger:
             return
         if method == "Commit":
             if code == 0:
-                writes = result["response"].get("writeResults")
+                # JSON omits an empty repeated field, so an empty commit may answer without writeResults.
+                writes = result["response"].get("writeResults", [])
                 if not isinstance(writes, list) or len(writes) != len(request["writes"]) or any(not isinstance(write, dict) for write in writes):
                     raise ValueError("commit lacks its per-write acknowledgements")
                 for write in writes:
@@ -241,8 +242,11 @@ class Ledger:
             raise ValueError("batch answer does not carry one entry per requested document")
         seen = set()
         for frame in frames:
-            if not isinstance(frame, dict) or ("found" in frame) == ("missing" in frame) or set(frame) - {"found", "missing", "readTime", "transaction"}:
+            # Native protobuf decoding adds the oneof discriminator `result` and an empty `transaction` (none was requested).
+            if not isinstance(frame, dict) or ("found" in frame) == ("missing" in frame) or set(frame) - {"found", "missing", "readTime", "transaction", "result"}:
                 raise ValueError("batch entry is neither found nor missing")
+            if frame.get("result", "found" if "found" in frame else "missing") != ("found" if "found" in frame else "missing") or frame.get("transaction", "") != "":
+                raise ValueError("batch entry carries an unrequested transaction or a discriminator that disagrees")
             name = frame["found"].get("name") if "found" in frame and isinstance(frame["found"], dict) else frame.get("missing")
             if name not in request["documents"] or name in seen:
                 raise ValueError("batch entry names a document that was not requested or repeats")

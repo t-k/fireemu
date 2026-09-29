@@ -23,12 +23,13 @@ class Clock:
 class Service:
     """A stand-in for Firestore over both transports; each knob is one production answer a table may allow."""
 
-    def __init__(self, clock, *, fail_code=9, writer_code=0, writer_applies=None, rollback_code=0, repeat_rollback_code=0, after_commit_rollback_code=10, fail_at=None, foreign_marker=False, duplicate_tokens=False, corrupt=None, existing=None, dead_on_failure=False, dead_rollback_code=10):
+    def __init__(self, clock, *, fail_code=9, writer_code=0, writer_applies=None, rollback_code=0, repeat_rollback_code=0, after_commit_rollback_code=10, fail_at=None, foreign_marker=False, duplicate_tokens=False, corrupt=None, existing=None, dead_on_failure=False, dead_rollback_code=10, finished_reads_refused=False):
         self.clock, self.fail_code, self.writer_code, self.rollback_code = clock, fail_code, writer_code, rollback_code
         self.writer_applies = writer_applies if writer_applies is not None else writer_code == 0
         self.repeat_rollback_code, self.after_commit_rollback_code = repeat_rollback_code, after_commit_rollback_code
         self.fail_at, self.foreign_marker, self.duplicate_tokens, self.corrupt = fail_at, foreign_marker, duplicate_tokens, corrupt
         self.dead_on_failure, self.dead_rollback_code = dead_on_failure, dead_rollback_code
+        self.finished_reads_refused = finished_reads_refused
         self.calls, self.documents, self.tokens, self.version = [], {}, {}, 0
         if existing:
             self.documents[existing] = {"name": existing, "fields": {}, "version": self._bump()}
@@ -55,7 +56,7 @@ class Service:
             self.tokens[value] = "open"
             return self._receipt(transport, 0, response={"transaction": value})
         if method == "GetDocument":
-            if token and self.tokens.get(token) == "dead":
+            if token and (self.tokens.get(token) == "dead" or self.finished_reads_refused and self.tokens.get(token) in ("committed", "rolled-back")):
                 return self._receipt(transport, 10, details="The referenced transaction has expired or is no longer valid.")
             document = self.documents.get(request["name"])
             if document is None:
@@ -73,11 +74,11 @@ class Service:
             for name in request["documents"]:
                 document = self.documents.get(name)
                 if document is None:
-                    frames.append({"missing": name, "readTime": self._stamp(transport)})
+                    frames.append({"missing": name, "readTime": self._stamp(transport), **({"transaction": "", "result": "missing"} if transport == "grpc" else {})})
                 else:
                     found = {**copy.deepcopy(document), "updateTime": self._stamp(transport, document["version"])}
                     del found["version"]
-                    frames.append({"found": found, "readTime": self._stamp(transport)})
+                    frames.append({"found": found, "readTime": self._stamp(transport), **({"transaction": "", "result": "found"} if transport == "grpc" else {})})
             return self._receipt(transport, 0, response={"responses": frames})
         if method == "Commit":
             return self._commit(transport, request, token)
@@ -108,7 +109,8 @@ class Service:
             if self.tokens.get(token) != "open":
                 return self._receipt(transport, 10, details="The referenced transaction has expired or is no longer valid.")
             self.tokens[token] = "committed"
-            return self._receipt(transport, 0, response={"writeResults": []})
+            # JSON omits an empty repeated field; the native decoder keeps it.
+            return self._receipt(transport, 0, response={"writeResults": []} if transport == "grpc" else {"commitTime": self._stamp(transport)})
         writer = token is None and request["writes"][0]["currentDocument"]["exists"] is True
         failing = [w for w in writes if w["currentDocument"]["exists"] != (w["update"]["name"] in self.documents)]
         if writer:

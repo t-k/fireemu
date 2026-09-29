@@ -171,7 +171,8 @@ async function runRest(spec, exchange) {
     try { body = JSON.parse(answer.text); } catch { return receipt(spec, 2, 'REST answer is not JSON', null, answer.status); }
     if (answer.status >= 200 && answer.status < 300) return plain(body) ? receipt(spec, 0, '', body, answer.status) : receipt(spec, 2, 'REST success is not an object', null, answer.status);
     const status = body?.error?.status;
-    const code = typeof status === 'string' && Object.hasOwn(STATUS_CODES, status) ? STATUS_CODES[status] : 2;
+    // A non-2xx answer is never OK, whatever its status name says.
+    const code = typeof status === 'string' && Object.hasOwn(STATUS_CODES, status) && STATUS_CODES[status] !== 0 ? STATUS_CODES[status] : 2;
     return receipt(spec, code, body?.error?.message ?? 'REST error without a status', null, answer.status);
   } catch (error) {
     return error?.deadline ? receipt(spec, 4, 'worker deadline exceeded', null) : receipt(spec, 14, 'REST exchange failed', null);

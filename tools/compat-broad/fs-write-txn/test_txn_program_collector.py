@@ -69,12 +69,15 @@ class Service:
         if method == "Rollback":
             state = self.tokens.get(token)
             if state is None: return self._receipt(transport, 3, details="unknown transaction")
-            if state == "dead": return self._receipt(transport, self.dead_rollback_code, details="" if self.dead_rollback_code == 0 else "expired", response={} if self.dead_rollback_code == 0 else None)
+            def answer(code):
+                gone = "The referenced transaction has expired or is no longer valid."
+                return self._receipt(transport, code, details="" if code == 0 else gone if code == 10 else "refused", response={} if code == 0 else None)
+            if state == "dead": return answer(self.dead_rollback_code)
             if state == "open":
                 if self.rollback_code == 0: self.tokens[token] = "rolled-back"
-                return self._receipt(transport, self.rollback_code, details="" if self.rollback_code == 0 else "refused", response={} if self.rollback_code == 0 else None)
-            if state == "committed": return self._receipt(transport, self.after_commit_rollback_code, details="finished", response=None if self.after_commit_rollback_code else {})
-            return self._receipt(transport, self.repeat_rollback_code, details="" if self.repeat_rollback_code == 0 else "finished", response={} if self.repeat_rollback_code == 0 else None)
+                return answer(self.rollback_code)
+            if state == "committed": return answer(self.after_commit_rollback_code)
+            return answer(self.repeat_rollback_code)
         if method == "DeleteDocument":
             document = self.documents[request["name"]]
             assert request["currentDocument"]["updateTime"] == self._stamp(transport, document["version"])

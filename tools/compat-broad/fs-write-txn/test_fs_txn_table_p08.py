@@ -47,7 +47,7 @@ def test_the_requests_match_the_corpus_plus_the_one_absence_probe_for_m():
     assert len(value["steps"]) == 45, "the corpus proposal counted 44 with no probe that m is absent"
     assert value["caps"] == {"observation": 45, "tokenCleanup": 6, "documentCleanup": 14, "management": 7, "credential": 2}
     assert value["maxRequests"] == 74 <= 80
-    assert value["maxTokens"] == 6 and value["observationSeconds"] == 180 and value["recoverySeconds"] == 180
+    assert value["maxTokens"] == 6 and value["observationSeconds"] == 300 and value["recoverySeconds"] == 180
     assert len(value["cases"]) == 26
     assert TABLE["envelopeId"] == "FS-TRANSACTION-p08-failed-commit-001"
 
@@ -112,7 +112,6 @@ def test_the_digests_bind_the_table_and_do_not_move_by_accident():
     ("the token dies with the refused commit", {"dead_on_failure": True}),
     ("the token survives the refused commit", {}),
     ("the token survives and the writer is contended", {"writer_code": 10}),
-    ("the dead token also refuses its rollback with code 5", {"dead_on_failure": True, "dead_rollback_code": 5}),
     ("the failed commit is answered FAILED_PRECONDITION and the dead token's rollback is accepted", {"dead_on_failure": True, "fail_code": 5, "dead_rollback_code": 0}),
 ])
 def test_a_full_recording_completes_and_projects_for_every_allowed_behaviour(label, knobs):
@@ -167,3 +166,15 @@ def test_the_absence_of_m_is_proved_before_the_first_write():
     first_write = next(index for index, call in enumerate(service.calls) if call[1] == "Commit")
     probed = [call[2]["name"].rsplit("/", 1)[1] for call in service.calls[:first_write] if call[1] == "GetDocument"]
     assert probed == ["a", "m"]
+
+
+def test_a_refusal_that_does_not_prove_the_transaction_gone_stops_the_recording_with_the_token_unresolved():
+    clock = Clock()
+    value = plan()
+    service = Service(clock, dead_on_failure=True, dead_rollback_code=5)
+    receipt = Collector(value, TABLE, RequestBudget(value, TABLE), service, "owner", save=lambda _state: None, monotonic=clock.now, utc=clock.utc).run()
+    assert receipt["complete"] is False and receipt["failureType"] == "ValueError"
+    assert receipt["phaseRequests"]["tokenCleanup"] == 1
+    begun = [call for call in service.calls if call[1] == "BeginTransaction"]
+    assert len(begun) == 1, "no later chain begins while a token is unresolved"
+    assert receipt["unrecovered"] is True and receipt["unknownRollbacks"] == [] and receipt["openTokens"] == ["rest-a"]

@@ -25,6 +25,8 @@ DEFAULT_DEADLINE_MS = 10000
 WRITER_DEADLINE_MS = 30000
 _IDENTITY = re.compile(r"[a-f0-9]{32}\Z")
 _LABEL = re.compile(r"[a-z0-9][a-z0-9-]{0,47}\Z")
+MAX_DOCUMENTS = 8
+MAX_STATES = 32
 _STEP_KEYS = ("id", "transport", "rpc", "document", "tokenInput", "tokenOutput", "writes", "caseId", "role", "allow")
 _OPTIONAL_STEP_KEYS = ("deadlineMs",)
 
@@ -69,9 +71,9 @@ def _validate_table(table):
     if not isinstance(table.get("envelopeId"), str) or not re.fullmatch(rf"FS-TRANSACTION-{re.escape(table['name'])}-[0-9]{{3}}", table["envelopeId"]):
         _bad("the envelope id is not this program's next numbered one")
     documents, states = tuple(table["documents"]), tuple(table["states"])
-    if not documents or len(set(documents)) != len(documents) or any(not isinstance(role, str) or not _LABEL.fullmatch(role) for role in documents):
+    if not documents or len(documents) > MAX_DOCUMENTS or len(set(documents)) != len(documents) or any(not isinstance(role, str) or not _LABEL.fullmatch(role) for role in documents):
         _bad("owned document roles are malformed")
-    if not states or len(set(states)) != len(states) or any(not isinstance(state, str) or not _LABEL.fullmatch(state) for state in states):
+    if not states or len(states) > MAX_STATES or len(set(states)) != len(states) or any(not isinstance(state, str) or not _LABEL.fullmatch(state) for state in states):
         _bad("marker states are malformed")
     caps = table["caps"]
     if not isinstance(caps, dict) or set(caps) != set(PHASES) or any(type(value) is not int or value < 0 for value in caps.values()):
@@ -81,7 +83,9 @@ def _validate_table(table):
     steps = [_step(row) for row in table["steps"]]
     if not steps or caps["observation"] != len(steps):
         _bad("the observation cap is not the step count")
-    ids, cases, issued = set(), set(), {}
+    if caps["tokenCleanup"] < table["maxTokens"] or caps["documentCleanup"] < 3 * len(documents):
+        _bad("the cleanup reserve cannot release every token or clean every document")
+    ids, cases, issued, probed = set(), set(), {}, set()
     for step in steps:
         if not isinstance(step["id"], str) or not step["id"] or step["id"] in ids:
             _bad("step ids are missing or repeat")
@@ -111,6 +115,11 @@ def _validate_table(table):
         if rpc == "GetDocument":
             if step["document"] is None or step["writes"]:
                 _bad(f"{step['id']} is not a plain read")
+            if step["document"] not in probed:
+                # The first touch of an owned document proves it is absent, so nothing foreign is ever written or deleted.
+                if step["role"] != "control" or step["tokenInput"] is not None or step["allow"] != [5]:
+                    _bad(f"{step['id']} touches {step['document']} before an absence probe")
+                probed.add(step["document"])
         elif rpc == "Rollback":
             if step["tokenInput"] is None or step["document"] is not None or step["writes"]:
                 _bad(f"{step['id']} is not a rollback of an issued token")
@@ -125,6 +134,8 @@ def _validate_table(table):
             for write in step["writes"]:
                 if set(write) != {"document", "state", "exists"} or write["document"] not in documents or write["state"] not in states or type(write["exists"]) is not bool:
                     _bad(f"{step['id']} has a malformed write")
+                if write["document"] not in probed:
+                    _bad(f"{step['id']} writes {write['document']} before an absence probe")
         if rpc != "Commit" and step["role"] == "outside-writer":
             _bad(f"{step['id']} is an outside writer that is not a commit")
     if len(issued) != table["maxTokens"]:

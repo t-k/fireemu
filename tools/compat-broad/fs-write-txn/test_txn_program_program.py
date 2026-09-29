@@ -142,7 +142,7 @@ def test_digests_move_with_every_recorded_fact(program, table):
     for label, changed in [
         ("allow", _broken(table, steps=_step_change(5, allow=(5, 9)))),
         ("transport", _broken(table, steps=_step_change(1, transport="rest"))),
-        ("document", _broken(table, steps=_step_change(0, document="m"))),
+        ("document", _broken(table, steps=lambda steps: (dict(steps[0], document="m"), dict(steps[1], document="a")) + tuple(steps[2:]))),
         ("case", _broken(table, steps=_step_change(5, caseId="renamed"))),
         ("states", _broken(table, states=("created", "held", "moved", "extra"))),
         ("deadline", _broken(table, steps=_step_change(7, deadlineMs=20000))),

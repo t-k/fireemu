@@ -97,7 +97,8 @@ TABLE = {
     "steps": STEPS,
     # Observation is one request per step; cleanup reserves 7 per owned document.
     "caps": {"observation": len(STEPS), "tokenCleanup": 6, "documentCleanup": 14, "management": 7, "credential": 2},
-    "observationSeconds": 180,
+    # Four outside writers may each wait their full 30 s; the other 41 requests take a few seconds each with the admission re-checks.
+    "observationSeconds": 300,
     "recoverySeconds": 180,
     "maxTokens": 6,
     "sourceFile": Path(__file__),

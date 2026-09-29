@@ -11,6 +11,7 @@ from txn_program_program import compile_plan
 
 TASK_ID = 'FS-TRANSACTION-SANDBOX'
 _PACKET_NAME = re.compile(r'[a-z][a-z0-9]*(-[a-z0-9]+){1,5}\Z')
+SCOPE_KEYS = ('project', 'writes', 'iamConfig', 'retries', 'onStop', 'observationSeconds', 'recoverySeconds', 'maxTokens', 'maxUnresolvedTokens', 'releasePolicy', 'timing', 'timingSource', 'transports', 'writerDeadlineSeconds')
 _TAKEN_NAMES = ('p09-grpc-retry', 'p10-grpc-boundary', 'p10-grpc-idle', 'expiry-retry-04')
 
 
@@ -37,7 +38,7 @@ def _check_scope(pins):
     name = pins.get('packetName')
     requests = pins.get('requestsPerRecording')
     envelope = pins.get('envelopeId')
-    if not isinstance(name, str) or not _PACKET_NAME.fullmatch(name) or name in _TAKEN_NAMES or type(requests) is not int or requests <= 0 or pins.get('estimatedUsdPerRecording') != 0.01 or not isinstance(pins.get('scope'), dict) or not isinstance(envelope, str) or not envelope.startswith(f'FS-TRANSACTION-{name}-'):
+    if not isinstance(name, str) or not _PACKET_NAME.fullmatch(name) or name in _TAKEN_NAMES or type(requests) is not int or requests <= 0 or pins.get('estimatedUsdPerRecording') != 0.01 or not isinstance(pins.get('scope'), dict) or set(pins['scope']) != set(SCOPE_KEYS) or any(not isinstance(value, str) or not value for value in pins['scope'].values()) or not isinstance(envelope, str) or not envelope.startswith(f'FS-TRANSACTION-{name}-'):
         raise ValueError('fresh program authority scope required')
     return name, requests
 

@@ -17,6 +17,9 @@ from txn_program_program import GraphCursor, canonical_token, compile_plan, corp
 RECEIPT_KIND = "txn-program-receipt-v1"
 RECORDING_KIND = "txn-program-recording-v1"
 RESOLVED_TOKENS = ("committed", "rolled-back", "released-refused")
+# The one refusal that proves a transaction is gone: what production answers for a finished or expired token.
+GONE_CODE = 10
+GONE_DETAILS = "The referenced transaction has expired or is no longer valid."
 _GRPC_TIME = "gRPC updateTime"
 _REST_TIME = re.compile(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d{1,9})?Z\Z")
 
@@ -40,6 +43,12 @@ def check_timing(value):
     ua, ub = _utc_seconds(value["dispatchUtc"]), _utc_seconds(value["responseUtc"])
     if ub < ua or abs((ub - ua) - (b - a)) > 0.25:
         raise ValueError("UTC and monotonic RPC elapsed differ")
+
+
+def check_order(previous, current):
+    """A request is sent only after the answer to the one before it, on both clocks."""
+    if current["dispatchMonotonic"] < previous["responseMonotonic"] or _utc_seconds(current["dispatchUtc"]) < _utc_seconds(previous["responseUtc"]) - 0.25:
+        raise ValueError("requests overlap or ran out of order")
 
 
 def check_timestamp(value, transport):
@@ -155,6 +164,9 @@ class Ledger:
             raise ValueError("native outcome is indeterminate")
         if not isinstance(result.get("details"), str) or len(result["details"].encode()) > 16384:
             raise ValueError("native details are malformed")
+        http = result.get("http")
+        if transport == "grpc" and http is not None or transport == "rest" and (type(http) is not int or not 100 <= http <= 599 or (200 <= http < 300) != (code == 0)):
+            raise ValueError("HTTP status disagrees with the transport or the code")
         if code == 0 and not isinstance(result.get("response"), dict):
             raise ValueError("native success has no typed response")
 
@@ -167,21 +179,22 @@ class Ledger:
 
     def _apply(self, site, transport, method, request, step, result, timing, code):
         if method == "BeginTransaction":
-            self.unknown_starts.discard(site)
+            # Validate before releasing the responsibility: a transaction may exist that no role owns yet.
             if code == 0:
                 token = canonical_token(result["response"].get("transaction"))
                 if token in self.token_values().values():
                     raise ValueError("minted token is not fresh")
                 self.tokens[step["tokenOutput"]] = {"value": token, "state": "open", "transport": transport, "start": copy.deepcopy(timing), "lastUse": copy.deepcopy(timing)}
+            self.unknown_starts.discard(site)
             return
         if method == "Commit":
-            self.unknown_commits.discard(site)
             if code == 0:
                 writes = result["response"].get("writeResults")
                 if not isinstance(writes, list) or len(writes) != len(request["writes"]) or any(not isinstance(write, dict) for write in writes):
                     raise ValueError("commit lacks its per-write acknowledgements")
                 for write in writes:
                     check_timestamp(write.get("updateTime"), transport)
+                self.unknown_commits.discard(site)
                 for write in step["writes"]:
                     doc = self.docs[write["document"]]
                     doc.update(status="created", state=write["state"], possible=[write["state"]])
@@ -189,6 +202,7 @@ class Ledger:
                 if entry is not None:
                     entry["state"] = "committed"
             else:
+                self.unknown_commits.discard(site)
                 for role, prior in self._prior.pop(site, {}).items():
                     self.docs[role] = prior
             self._prior.pop(site, None)
@@ -203,10 +217,12 @@ class Ledger:
                 self.unknown_rollbacks.discard(role)
                 if code == 0:
                     entry["state"] = "rolled-back"
-                elif step is not None and code in step["allow"]:
+                elif code == GONE_CODE and result["details"] == GONE_DETAILS:
+                    # Production says the transaction no longer exists, so no lock of it can remain.
                     entry["state"] = "released-refused"
                 else:
-                    entry["state"] = "open"
+                    # Any other refusal proves nothing: a declared step may try again, a recovery release never repeats.
+                    entry["state"] = "open" if step is not None else "unconfirmed-release"
         if code == 0 and method != "BeginTransaction":
             _role, entry = self._token_for(request.get("transaction"))
             if entry is not None:
@@ -271,6 +287,7 @@ class Collector:
         self.pending = None
         self.journal_failure = False
         self._last_monotonic = monotonic()
+        self.last_timing = None
 
     def _now(self):
         current = self.monotonic()
@@ -308,9 +325,12 @@ class Collector:
         if remaining < need:
             raise TimeoutError("dispatch no longer fits after durable journal")
         timing = {"dispatchMonotonic": self._now(), "dispatchUtc": self.utc()}
-        result = self.wire.send(transport, method, request, nonce=self.plan["nonce"], owner_id=self.plan["ownerId"], bearer=self.bearer, deadline_ms=max(1, min(int(wanted * 1000), int(remaining * 1000))))
+        result = self.wire.send(transport, method, request, nonce=self.plan["nonce"], owner_id=self.plan["ownerId"], bearer=self.bearer, deadline_ms=int(wanted * 1000))
         timing.update(responseMonotonic=self._now(), responseUtc=self.utc())
         check_timing(timing)
+        if self.last_timing is not None:
+            check_order(self.last_timing, timing)
+        self.last_timing = copy.deepcopy(timing)
         row = {"sequence": len(self.rows) + len(self.cleanup_rows), "phase": phase, "timing": timing, "site": site, "transport": transport, "rpc": method, "caseId": step["caseId"] if step else None, "request": copy.deepcopy(request), "result": copy.deepcopy(result)}
         (self.rows if phase == "observation" else self.cleanup_rows).append(row)
         try:
@@ -423,8 +443,12 @@ def projection(receipt, table):
     ledger = Ledger(plan)
     index, owed, queue, releases = 0, [], None, 0
     observations, reads = [], []
+    previous_timing = None
     for row in sorted(rows, key=lambda row: row["sequence"]):
         check_timing(row.get("timing"))
+        if previous_timing is not None:
+            check_order(previous_timing, row["timing"])
+        previous_timing = row["timing"]
         site, transport, method, request, result = row.get("site"), row.get("transport"), row.get("rpc"), row.get("request"), row.get("result")
         if row.get("phase") == "observation":
             if owed or queue is not None or index >= len(steps) or row != steps[index]:

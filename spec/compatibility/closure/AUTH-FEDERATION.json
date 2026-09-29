@@ -139,7 +139,10 @@
             "decidedBy": "owner",
             "decidedOn": "2026-09-29",
             "scopeDecision": "F11",
-            "reason": "The answer differs only in spConfig.spCertificates, the SP certificate production generates when signRequest is set; fireemu generates none."
+            "reason": "The answer differs only in spConfig.spCertificates, the SP certificate production generates when signRequest is set; fireemu generates none.",
+            "differences": [
+              "body.spConfig.spCertificates"
+            ]
           },
           {
             "row": "auth-federation/provider-config/saml#get-after-sign-request",
@@ -147,7 +150,10 @@
             "decidedBy": "owner",
             "decidedOn": "2026-09-29",
             "scopeDecision": "F11",
-            "reason": "The answer differs only in spConfig.spCertificates, the SP certificate production generates when signRequest is set; fireemu generates none."
+            "reason": "The answer differs only in spConfig.spCertificates, the SP certificate production generates when signRequest is set; fireemu generates none.",
+            "differences": [
+              "body.spConfig.spCertificates"
+            ]
           }
         ]
       },

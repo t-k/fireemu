@@ -212,6 +212,21 @@ test("AUTH-FEDERATION closure inventory cannot silently omit a declared conditio
         closure.scopeDecisions.some(({ id }) => id === divergence.scopeDecision),
         `${label}: ${divergence.row} names a recorded scope decision`,
       );
+      // A divergence is approved for the members it names, not for its whole row (closure
+      // review SF3): the compared row differs in exactly those.
+      assert.ok(
+        Array.isArray(divergence.differences) && divergence.differences.length > 0,
+        `${label}: ${divergence.row} names the members it approves`,
+      );
+      const compared = rows.filter(({ row }) => row === divergence.row);
+      assert.equal(compared.length, 1, `${label}: ${divergence.row} is compared once`);
+      if (compared[0].status !== "MATCH") {
+        assert.deepEqual(
+          compared[0].differences,
+          divergence.differences,
+          `${label}: ${divergence.row} differs only in the approved members`,
+        );
+      }
     }
     const documented = new Set(divergences.map(({ row }) => row));
     const off = rows

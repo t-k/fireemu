@@ -127,6 +127,22 @@ test('gRPC: a batch read is one server stream whose entries are collected', asyn
   assert.equal(result.response.responses.length, 2);
 });
 
+test('gRPC: an error after entries of a batch that begins a transaction is an unknown outcome', async () => {
+  const { runUnary } = await module();
+  const starting = { database, documents: [name('a')], newTransaction: { readWrite: {} } };
+  for (const code of [10, 9, 8, 3]) {
+    const stream = streamClient(handlers => { handlers.data({ transaction: token }); handlers.error({ code, details: 'definitive status after the transaction was handed over' }); });
+    const result = await runUnary(spec('BatchGetDocuments', starting), stream.factory);
+    assert.deepEqual([result.code, result.complete, result.response], [2, false, null], `code ${code}`);
+  }
+  // Before any entry the refusal is a plain refusal; and a batch that begins nothing keeps the status it got.
+  const early = streamClient(handlers => handlers.error({ code: 10, details: 'contention' }));
+  assert.deepEqual([(await runUnary(spec('BatchGetDocuments', starting), early.factory)).code], [10]);
+  const plainBatch = streamClient(handlers => { handlers.data({ missing: name('a') }); handlers.error({ code: 10, details: 'late refusal' }); });
+  const plain = await runUnary(spec('BatchGetDocuments', { database, documents: [name('a')] }), plainBatch.factory);
+  assert.deepEqual([plain.code, plain.complete], [10, true]);
+});
+
 test('gRPC: a stream that fails or overflows is an answer, not a success', async () => {
   const { runUnary } = await module();
   const failing = streamClient(handlers => { handlers.data({ missing: name('a') }); handlers.error({ code: 14, details: 'owner unavailable' }); });

@@ -1,8 +1,8 @@
 """FS-TRANSACTION P03: reads at a time in the past, read-only transactions at a time, and an embedded new transaction.
 
 This table grants no send permission. Owned documents: `a` (created in setup, then updated twice, so it has three
-acknowledged versions) and `m` (never created). A read time is the time a version's commit was acknowledged, taken from
-the write acknowledgement itself, never from a clock. Per transport:
+acknowledged versions) and `m` (never created). A read time is the time a named setup commit was acknowledged, taken from
+the write acknowledgement itself, never from a clock (version 0 is `setup/create-a`). Per transport:
 
 - a plain read of the current value (the control), then a Get of `a` at version 1 (and, over REST, at version 0) and a
   batch read of `a` and `m` at version 1;
@@ -17,6 +17,9 @@ REFUSED = (3, 5, 9, 10)
 STATES = ("created", "v1", "v2", "rest-emb-commit", "grpc-emb-commit")
 
 
+VERSIONS = {0: "setup/create-a", 1: "setup/update-a-1", 2: "setup/update-a-2"}
+
+
 def _step(step_id, transport, rpc, role, *, document=None, documents=None, token_in=None, token_out=None, mode=None, read_at=None, new_transaction=None, writes=(), case=None, allow=(0,)):
     step = {"id": step_id, "transport": transport, "rpc": rpc, "document": document, "tokenInput": token_in, "tokenOutput": token_out,
             "writes": tuple({"document": name, "state": state, "exists": exists} for name, state, exists in writes),
@@ -26,7 +29,7 @@ def _step(step_id, transport, rpc, role, *, document=None, documents=None, token
     if mode:
         step["mode"] = mode
     if read_at is not None:
-        step["readAt"] = {"document": "a", "version": read_at}
+        step["readAt"] = {"document": "a", "commit": VERSIONS[read_at]}
     if new_transaction:
         step["newTransaction"] = new_transaction
     return step

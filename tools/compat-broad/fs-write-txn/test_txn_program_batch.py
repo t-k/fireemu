@@ -276,18 +276,20 @@ def drop(table_, step_id, key):
 
 
 @pytest.mark.parametrize("label,change", [
-    ("a version no earlier step acknowledged", lambda t: edit(t, "rest/get-at-v1", readAt={"document": "a", "version": 3})),
-    ("a negative version", lambda t: edit(t, "rest/get-at-v1", readAt={"document": "a", "version": -1})),
-    ("a boolean version", lambda t: edit(t, "rest/get-at-v1", readAt={"document": "a", "version": True})),
-    ("a document nothing ever wrote", lambda t: edit(t, "rest/get-at-v1", readAt={"document": "m", "version": 0})),
-    ("an unknown document", lambda t: edit(t, "rest/get-at-v1", readAt={"document": "z", "version": 0})),
-    ("extra keys", lambda t: edit(t, "rest/get-at-v1", readAt={"document": "a", "version": 1, "extra": 1})),
+    ("a commit no earlier step has run", lambda t: edit(t, "rest/get-at-v1", readAt={"document": "a", "commit": "rest/emb/commit"})),
+    ("a commit that does not exist", lambda t: edit(t, "rest/get-at-v1", readAt={"document": "a", "commit": "setup/update-a-9"})),
+    ("a commit that may be refused", lambda t: edit(t, "setup/update-a-1", allow=(0, 10))),
+    ("a commit that did not write the document", lambda t: edit(t, "rest/get-at-v1", readAt={"document": "m", "commit": "setup/create-a"})),
+    ("an unknown document", lambda t: edit(t, "rest/get-at-v1", readAt={"document": "z", "commit": "setup/create-a"})),
+    ("a commit id that is not a string", lambda t: edit(t, "rest/get-at-v1", readAt={"document": "a", "commit": 5})),
+    ("an index instead of a commit", lambda t: edit(t, "rest/get-at-v1", readAt={"document": "a", "version": 1})),
+    ("extra keys", lambda t: edit(t, "rest/get-at-v1", readAt={"document": "a", "commit": "setup/create-a", "extra": 1})),
     ("a missing key", lambda t: edit(t, "rest/get-at-v1", readAt={"document": "a"})),
-    ("a read time on a commit", lambda t: edit(t, "rest/emb/commit", readAt={"document": "a", "version": 1})),
-    ("a read time on a rollback-less read inside a transaction", lambda t: edit(t, "rest/ro/read-a", readAt={"document": "a", "version": 1})),
+    ("a read time on a commit", lambda t: edit(t, "rest/emb/commit", readAt={"document": "a", "commit": "setup/update-a-1"})),
+    ("a read time on a rollback-less read inside a transaction", lambda t: edit(t, "rest/ro/read-a", readAt={"document": "a", "commit": "setup/update-a-1"})),
     ("a read time on a read-write begin", lambda t: drop(t, "rest/ro/begin", "mode")),
-    ("a read time beside an embedded transaction", lambda t: edit(t, "rest/emb/batch-new", readAt={"document": "a", "version": 1})),
-    ("a read time before the version exists", lambda t: edit(t, "setup/create-a", readAt={"document": "a", "version": 0})),
+    ("a read time beside an embedded transaction", lambda t: edit(t, "rest/emb/batch-new", readAt={"document": "a", "commit": "setup/update-a-1"})),
+    ("a read time before the version exists", lambda t: edit(t, "setup/create-a", readAt={"document": "a", "commit": "setup/create-a"})),
     ("an embedded transaction on a plain read", lambda t: edit(t, "rest/current-a", newTransaction="readWrite")),
     ("an unknown embedded mode", lambda t: edit(t, "rest/emb/batch-new", newTransaction="readSometimes")),
     ("an embedded transaction with no token output", lambda t: edit(t, "rest/emb/batch-new", tokenOutput=None)),
@@ -316,3 +318,90 @@ def test_read_times_and_embedded_transactions_do_not_move_an_earlier_tables_dige
     plain = program.compile_plan(support.TABLE, NONCE, OWNER)
     assert not [step for step in plain["steps"] if "readAt" in step or "newTransaction" in step]
     assert program.corpus_digest(support.TABLE) == "624ee4410100a3a30d90bdc80ad2133bd4c68dadde18978b7c425749bd957099"
+
+
+# --- the review of the extension ---
+
+def _time_ledger():
+    p03 = __import__("importlib").import_module("fs_txn_table_p03")
+    table_ = p03.TABLE
+    plan = program.compile_plan(table_, NONCE, OWNER)
+    ledger = collector_module.Ledger(plan)
+    ledger.docs["a"].update(status="created", state="v2"); ledger.docs["m"].update(status="confirmed-absent")
+    ledger.history["a"].extend(["created", "v1", "v2"])
+    ledger.versions["a"] = [("created", (100, 1)), ("v1", (100, 2)), ("v2", (101, 0))]
+    return table_, plan, ledger
+
+
+def _emb_frames(plan, state="v2", head=True, **extra):
+    found = {"name": plan["documents"]["a"], "fields": {"owner": {"stringValue": OWNER}, "nonce": {"stringValue": NONCE}, "role": {"stringValue": "a"}, "state": {"stringValue": state}}, "updateTime": {"seconds": "101", "nanos": 0}}
+    entries = [{"found": found}, {"missing": plan["documents"]["m"]}]
+    return ([{"transaction": "dG9rZW4="}] if head else []) + entries if head else [{**entries[0], "transaction": "dG9rZW4="}, entries[1]]
+
+
+@pytest.mark.parametrize("label,frames", [
+    ("a state the ledger did not expect", lambda plan: _emb_frames(plan, state="held")),
+    ("a document reported missing that exists", lambda plan: [{"transaction": "dG9rZW4="}, {"missing": plan["documents"]["a"]}, {"missing": plan["documents"]["m"]}]),
+    ("an entry that repeats", lambda plan: [{"transaction": "dG9rZW4="}, {"missing": plan["documents"]["m"]}, {"missing": plan["documents"]["m"]}]),
+])
+def test_a_batch_that_begins_a_transaction_owns_it_even_when_its_entries_are_refused(label, frames):
+    table_, plan, ledger = _time_ledger()
+    step = next(step for step in plan["steps"] if step["id"] == "grpc/emb/batch-new")
+    request = program.request_for_step(plan, step, {}, table_, ledger.times() if hasattr(ledger, "times") else {})
+    ledger.before("grpc/emb/batch-new", "grpc", "BatchGetDocuments", request, step)
+    with pytest.raises(ValueError):
+        ledger.after("grpc/emb/batch-new", "grpc", "BatchGetDocuments", request, step, receipt(response={"responses": frames(plan)}), timing())
+    assert ledger.tokens["grpc-emb"]["state"] == "open", "the transaction that may hold a lock is known, so recovery can release it"
+    assert ledger.unknown_starts == {"grpc/emb/batch-new"}, "and the responsibility stays until the entries are accepted"
+
+
+@pytest.mark.parametrize("head", [{"found": None}, {"found": None, "missing": ""}, {"found": "", "result": None}])
+def test_an_unset_member_that_a_decoder_keeps_as_null_is_not_a_document(head):
+    table_, plan, ledger = _time_ledger()
+    step = next(step for step in plan["steps"] if step["id"] == "grpc/emb/batch-new")
+    request = program.request_for_step(plan, step, {}, table_, ledger.times())
+    ledger.before("grpc/emb/batch-new", "grpc", "BatchGetDocuments", request, step)
+    frames = _emb_frames(plan)
+    frames[0] = {**frames[0], **head}
+    ledger.after("grpc/emb/batch-new", "grpc", "BatchGetDocuments", request, step, receipt(response={"responses": frames}), timing())
+    assert ledger.tokens["grpc-emb"]["state"] == "open" and ledger.unknown_starts == set()
+
+
+def test_a_read_only_transaction_that_began_before_a_document_existed_may_see_it_absent():
+    ledger = collector_module.Ledger(program.compile_plan(ro_table(), NONCE, OWNER))
+    ledger.history["a"].extend(["created", "rest-empty"])
+    ledger.docs["a"].update(status="created", state="rest-empty")
+    ledger.tokens["rest-s"] = {"value": "dG9rZW4=", "state": "open", "transport": "rest", "start": timing(), "lastUse": timing()}
+    ledger.modes["rest-s"] = "readOnly"; ledger.since["rest-s"] = {"a": 0, "m": 0}
+    assert ledger._visible("a", {"name": "x", "transaction": "dG9rZW4="}) == {None, "created", "rest-empty"}
+    ledger.since["rest-s"] = {"a": 1, "m": 0}
+    assert ledger._visible("a", {"name": "x", "transaction": "dG9rZW4="}) == {"created", "rest-empty"}
+
+
+@pytest.mark.parametrize("code", [3, 5, 9, 10])
+def test_any_definitive_refusal_of_a_read_only_release_finishes_the_token(code):
+    table_ = ro_table()
+    result, service = record_ro(table_, ro_snapshot="begin")
+    assert result["complete"] is True
+    import collections
+    original = service.send
+    def send(transport, method, request, **kwargs):
+        answer = original(transport, method, request, **kwargs)
+        if method == "Rollback": return {**answer, "code": code, "details": "refused", "response": None, "http": 400 if transport == "rest" else None}
+        return answer
+    clock = Clock()
+    plan = program.compile_plan(table_, NONCE, OWNER)
+    fresh = Service(clock)
+    original = fresh.send
+    fresh.send = send
+    outcome = collector_module.Collector(plan, table_, program.RequestBudget(plan, table_), fresh, "owner", save=lambda _s: None, monotonic=clock.now, utc=clock.utc).run()
+    assert outcome["complete"] is True, (code, outcome["failureType"])
+    assert {entry["state"] for entry in outcome["tokens"].values()} <= {"released-refused", "committed"}
+    collector_module.projection(outcome, table_)
+
+
+def test_a_read_write_release_refused_without_the_gone_text_still_stays_unresolved():
+    table_ = ro_table(mode="readWrite")
+    table_["steps"] = tuple(dict(s, allow=(3, 5, 9, 10)) if s["id"] == "rest/ro-write" else s for s in table_["steps"])
+    result, service = record_ro(table_, ro_snapshot="latest", rollback_code=5)
+    assert not result["complete"] or {entry["state"] for entry in result["tokens"].values()} != {"released-refused"}

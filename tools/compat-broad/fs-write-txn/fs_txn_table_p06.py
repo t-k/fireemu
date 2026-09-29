@@ -45,7 +45,7 @@ def _chain(transport, spare):
         _plain(transport, "plain-a-after-refusal", "a"),
         _plain(transport, "plain-b-after-refusal", "b"),
         _writer(transport, "multiwrite-without-holder-doc", (("b", f"{transport}-bc", True), (spare, f"{transport}-bc", False)), (0, 10)),
-        _step(f"{transport}/rollback", transport, "Rollback", "observation", token_in=token, case=f"{transport}/rollback"),
+        _step(f"{transport}/rollback", transport, "Rollback", "observation", token_in=token, case=f"{transport}/rollback", allow=(0, 10)),
         _writer(transport, "multiwrite-after-rollback", (("a", f"{transport}-ab-after", True), ("b", f"{transport}-ab-after", True)), (0, 10)),
         _plain(transport, "post-read-a", "a", case=False),
         _plain(transport, "post-read-b", "b", case=False),

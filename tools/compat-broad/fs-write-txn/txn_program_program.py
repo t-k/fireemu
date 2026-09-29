@@ -63,7 +63,7 @@ def _step(row):
     if "mode" in row:
         step["mode"] = row["mode"]
     if "readAt" in row:
-        # A version of an owned document, by the time its commit was acknowledged: {"document": role, "version": index}.
+        # A version of an owned document, by the time its commit was acknowledged: {"document": role, "commit": step id}.
         step["readAt"] = dict(row["readAt"]) if isinstance(row["readAt"], dict) else _bad("readAt is not a mapping")
     if "newTransaction" in row:
         step["newTransaction"] = row["newTransaction"]
@@ -127,8 +127,8 @@ def _validate_table(table):
             _bad(f"{step['id']} names an unknown transaction mode")
         if "readAt" in step:
             at = step["readAt"]
-            if set(at) != {"document", "version"} or at["document"] not in documents or type(at["version"]) is not int or not 0 <= at["version"] < acked.get(at["document"], 0):
-                _bad(f"{step['id']} reads at a version no earlier step can have acknowledged")
+            if set(at) != {"document", "commit"} or not isinstance(at["commit"], str) or at["document"] not in acked.get(at["commit"], ()):
+                _bad(f"{step['id']} reads at a version that no earlier must-succeed commit acknowledges")
             if rpc not in ("GetDocument", "BatchGetDocuments") and not (rpc == "BeginTransaction" and step.get("mode") == "readOnly"):
                 _bad(f"{step['id']} reads at a time on a request that cannot")
             if step["tokenInput"] is not None or "newTransaction" in step:
@@ -188,9 +188,9 @@ def _validate_table(table):
                     _bad(f"{step['id']} writes {write['document']} before an absence probe")
         if rpc != "Commit" and step["role"] == "outside-writer":
             _bad(f"{step['id']} is an outside writer that is not a commit")
-        if rpc == "Commit":
-            for write in step["writes"]:
-                acked[write["document"]] = acked.get(write["document"], 0) + 1
+        if rpc == "Commit" and step["allow"] == [0]:
+            # Only a commit that must succeed names a version, so a refused optional write cannot shift which one is read.
+            acked[step["id"]] = {write["document"] for write in step["writes"]}
     if len(issued) != table["maxTokens"]:
         _bad("the token count is not the declared maximum")
     return steps
@@ -289,7 +289,7 @@ def request_for_step(value, step, tokens, table, times=None):
     rpc = step["rpc"]
     read_time = None
     if "readAt" in step:
-        read_time = (times or {}).get(f"{step['readAt']['document']}:{step['readAt']['version']}")
+        read_time = (times or {}).get(f"{step['readAt']['document']}@{step['readAt']['commit']}")
         if not isinstance(read_time, dict):
             raise ValueError("step reads at a version that has not been acknowledged")
         read_time = {"seconds": read_time["seconds"], "nanos": read_time["nanos"]}

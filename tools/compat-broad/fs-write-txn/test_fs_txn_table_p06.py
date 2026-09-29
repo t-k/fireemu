@@ -70,7 +70,7 @@ def test_every_state_label_is_declared_and_used():
 
 def test_the_digest_binds_the_table():
     assert corpus_digest(TABLE) == plan()["corpusDigest"]
-    assert corpus_digest(TABLE) == "8850f80eb152b73e51b9e1241ffad2fa9f0807a16a0a7b489549fd2d489efb66"
+    assert corpus_digest(TABLE) == "5843dd8c1d0a4ba841e9d96e4da5f6b6987310fc4017f05d301c66ccebda925c"
 
 
 @pytest.mark.parametrize("label,knobs", [
@@ -114,3 +114,20 @@ def test_a_writer_timeout_stops_and_is_never_resent():
     two_writes = [call for call in service.calls if call[1] == "Commit" and "transaction" not in call[2] and len(call[2]["writes"]) == 2 and call[2]["writes"][0]["currentDocument"]["exists"] and call[2]["writes"][1]["currentDocument"]["exists"]]
     assert len(two_writes) == 1 and receipt["failureType"] == "ValueError"
     assert receipt["cleanup"] == {"absent": True}
+
+
+def test_a_holder_production_aborted_may_answer_its_rollback_with_the_gone_text():
+    clock = Clock()
+    value = plan()
+    service = Service(clock, locks=True)
+    original = service.send
+    def send(transport, method, request, **kwargs):
+        answer = original(transport, method, request, **kwargs)
+        if method == "Rollback":
+            return {**answer, "code": 10, "details": "The referenced transaction has expired or is no longer valid.", "response": None, "http": 409 if transport == "rest" else None}
+        return answer
+    service.send = send
+    receipt = Collector(value, TABLE, RequestBudget(value, TABLE), service, "owner", save=lambda _state: None, monotonic=clock.now, utc=clock.utc).run()
+    assert receipt["complete"] is True, receipt["failureType"]
+    assert {entry["state"] for entry in receipt["tokens"].values()} == {"released-refused"}
+    assert [step["allow"] for step in value["steps"] if step["id"].endswith("/rollback")] == [[0, 10], [0, 10]]

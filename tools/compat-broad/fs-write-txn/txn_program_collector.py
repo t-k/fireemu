@@ -56,6 +56,11 @@ def parse_time(value, transport):
     return seconds, int((fraction + "000000000")[:9])
 
 
+def _present(frame, key):
+    """Whether a decoded entry sets `key` (a decoder may keep an unset member as null or an empty string)."""
+    return frame.get(key) not in (None, "")
+
+
 def check_order(previous, current):
     """A request is sent only after the answer to the one before it, on both clocks."""
     if current["dispatchMonotonic"] < previous["responseMonotonic"] or _utc_seconds(current["dispatchUtc"]) < _utc_seconds(previous["responseUtc"]) - 0.25:
@@ -95,6 +100,7 @@ class Ledger:
         self.history = {role: [] for role in plan["documents"]}
         self.since, self.modes, self.token_time = {}, {}, {}
         self.versions = {role: [] for role in plan["documents"]}
+        self.acked_at = {}
 
     def snapshot(self):
         return {
@@ -106,8 +112,8 @@ class Ledger:
         }
 
     def times(self):
-        """Each acknowledged version of an owned document, by the time its commit was acknowledged."""
-        return {f"{role}:{index}": {"seconds": str(time[0]), "nanos": time[1]} for role, versions in self.versions.items() for index, (_state, time) in enumerate(versions)}
+        """The time each commit acknowledged for each document it wrote, keyed by document and the commit's step id."""
+        return {key: {"seconds": str(time[0]), "nanos": time[1]} for key, time in self.acked_at.items()}
 
     def token_values(self):
         return {role: entry["value"] for role, entry in self.tokens.items()}
@@ -226,7 +232,9 @@ class Ledger:
                     doc = self.docs[write["document"]]
                     doc.update(status="created", state=write["state"], possible=[write["state"]])
                     self.history[write["document"]].append(write["state"])
-                    self.versions[write["document"]].append((write["state"], parse_time(acknowledged["updateTime"], transport)))
+                    stamp = parse_time(acknowledged["updateTime"], transport)
+                    self.versions[write["document"]].append((write["state"], stamp))
+                    self.acked_at[f"{write['document']}@{site}"] = stamp
                 _role, entry = self._token_for(request.get("transaction"))
                 if entry is not None:
                     entry["state"] = "committed"
@@ -235,6 +243,7 @@ class Ledger:
                 for role, prior in self._prior.pop(site, {}).items():
                     # A refusal publishes nothing, so status and state return; the labels tried stay known in
                     # `tried` (outside the recorded snapshot), so recovery can still delete a partly written document.
+                    # A document a refused commit created outright is not covered: that would be a failure of atomicity.
                     self.docs[role] = prior
             self._prior.pop(site, None)
         elif method == "DeleteDocument":
@@ -248,8 +257,9 @@ class Ledger:
                 self.unknown_rollbacks.discard(role)
                 if code == 0:
                     entry["state"] = "rolled-back"
-                elif code == GONE_CODE and result["details"] == GONE_DETAILS:
-                    # Production says the transaction no longer exists, so no lock of it can remain.
+                elif code == GONE_CODE and result["details"] == GONE_DETAILS or self.modes.get(role) == "readOnly":
+                    # Production says the transaction no longer exists, so no lock of it can remain; a read-only
+                    # transaction holds no lock at all, so any definitive refusal of its release finishes it.
                     entry["state"] = "released-refused"
                 else:
                     # Any other refusal proves nothing: a declared step may try again, a recovery release never repeats.
@@ -278,51 +288,52 @@ class Ledger:
             # The transaction the batch begins arrives once, first: in an entry of its own that names no document, or
             # in the first document's entry.
             head = frames[0] if frames else None
-            if not isinstance(head, dict) or head.get("transaction", "") == "":
+            if not isinstance(head, dict) or not _present(head, "transaction"):
                 raise ValueError("the batch that begins a transaction does not answer with the transaction first")
             minted = canonical_token(head["transaction"])
-            if "found" not in head and "missing" not in head:
-                if set(head) - {"transaction", "readTime", "result"} or head.get("result") not in (None, ""):
+            if minted in self.token_values().values():
+                raise ValueError("the batch that begins a transaction minted no fresh transaction")
+            # Own the transaction before the entries are judged: a stop from here on can still release it.
+            self.tokens[step["tokenOutput"]] = {"value": minted, "state": "open", "transport": transport, "start": copy.deepcopy(timing), "lastUse": copy.deepcopy(timing)}
+            self.modes[step["tokenOutput"]] = step["newTransaction"]
+            self.since[step["tokenOutput"]] = {role: len(states) for role, states in self.history.items()}
+            if not _present(head, "found") and not _present(head, "missing"):
+                if {key for key in head if _present(head, key)} - {"transaction", "readTime"}:
                     raise ValueError("the entry that carries the new transaction is neither a bare head nor a document entry")
                 frames = frames[1:]
         if len(frames) != len(request["documents"]):
             raise ValueError("batch answer does not carry one entry per requested document")
         for index, frame in enumerate(frames):
             # Native protobuf decoding adds the oneof discriminator `result` and an empty `transaction`.
-            if not isinstance(frame, dict) or ("found" in frame) == ("missing" in frame) or set(frame) - {"found", "missing", "readTime", "transaction", "result"}:
+            if not isinstance(frame, dict) or _present(frame, "found") == _present(frame, "missing") or set(frame) - {"found", "missing", "readTime", "transaction", "result"}:
                 raise ValueError("batch entry is neither found nor missing")
-            if frame.get("result", "found" if "found" in frame else "missing") != ("found" if "found" in frame else "missing"):
+            kind = "found" if _present(frame, "found") else "missing"
+            if frame.get("result", kind) not in (kind, None):
                 raise ValueError("batch entry carries a discriminator that disagrees")
-            if frame.get("transaction", "") != "" and not (starts and index == 0 and frame["transaction"] == minted):
+            if _present(frame, "transaction") and not (starts and index == 0 and frame["transaction"] == minted):
                 raise ValueError("batch entry carries an unrequested transaction")
-            name = frame["found"].get("name") if "found" in frame and isinstance(frame["found"], dict) else frame.get("missing")
+            name = frame["found"].get("name") if kind == "found" and isinstance(frame["found"], dict) else frame.get("missing")
             if name not in request["documents"] or name in seen:
                 raise ValueError("batch entry names a document that was not requested or repeats")
             seen.add(name)
             role = self._role_of(name)
             visible = self._visible(role, request)
-            if "found" in frame:
+            if kind == "found":
                 if not visible - {None}:
                     raise ValueError("a document this recording never wrote exists")
                 self._owned(role, frame["found"], transport, visible - {None})
             elif None not in visible:
                 raise ValueError("an acknowledged document is reported missing")
         if starts:
-            # Validate the minted transaction before releasing the responsibility (a transaction may exist that no role owns yet).
-            if minted is None or minted in self.token_values().values():
-                raise ValueError("the batch that begins a transaction minted no fresh transaction")
-            self.tokens[step["tokenOutput"]] = {"value": minted, "state": "open", "transport": transport, "start": copy.deepcopy(timing), "lastUse": copy.deepcopy(timing)}
-            self.modes[step["tokenOutput"]] = step["newTransaction"]
-            self.since[step["tokenOutput"]] = {role: len(states) for role, states in self.history.items()}
             self.unknown_starts.discard(step["id"])
 
     def batch_states(self, request, result):
         """The state each batch-read document showed, by role."""
         states = {}
         for frame in result["response"]["responses"]:
-            if "found" not in frame and "missing" not in frame:
+            if not _present(frame, "found") and not _present(frame, "missing"):
                 continue
-            found = "found" in frame
+            found = _present(frame, "found")
             name = frame["found"]["name"] if found else frame["missing"]
             states[self._role_of(name)] = frame["found"]["fields"]["state"]["stringValue"] if found else None
         return states
@@ -362,7 +373,8 @@ class Ledger:
         if token_role is None or self.modes.get(token_role) != "readOnly":
             return {doc["state"]}
         begun = self.since[token_role][role]
-        return set(self.history[role][max(0, begun - 1):]) or {doc["state"]}
+        # A transaction that began before the document existed may also see it absent.
+        return set(self.history[role][max(0, begun - 1):]) | ({None} if begun == 0 else set()) or {doc["state"]}
 
     def _read(self, site, transport, request, result, code, step):
         role = self._role_of(request["name"])

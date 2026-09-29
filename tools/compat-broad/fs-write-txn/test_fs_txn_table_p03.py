@@ -43,7 +43,9 @@ def test_a_has_three_acknowledged_versions_before_any_read_at_a_time():
     ids = [step["id"] for step in plan()["steps"]]
     assert ids[:5] == ["setup/absence-a", "setup/absence-m", "setup/create-a", "setup/update-a-1", "setup/update-a-2"]
     reads = [step for step in plan()["steps"] if "readAt" in step]
-    assert {step["id"]: step["readAt"]["version"] for step in reads} == {"rest/get-at-v1": 1, "rest/get-at-v0": 0, "rest/batch-at-v1": 1, "rest/ro/begin": 1, "grpc/get-at-v1": 1, "grpc/batch-at-v1": 1, "grpc/ro/begin": 1}
+    v0, v1 = "setup/create-a", "setup/update-a-1"
+    assert {step["id"]: step["readAt"]["commit"] for step in reads} == {"rest/get-at-v1": v1, "rest/get-at-v0": v0, "rest/batch-at-v1": v1, "rest/ro/begin": v1, "grpc/get-at-v1": v1, "grpc/batch-at-v1": v1, "grpc/ro/begin": v1}
+    assert all(step["allow"] == [0] for step in plan()["steps"] if step["id"].startswith("setup/") and step["rpc"] == "Commit"), "a read time names only commits that must succeed"
     assert all(step["readAt"]["document"] == "a" for step in reads)
 
 
@@ -62,7 +64,7 @@ def test_every_state_label_is_declared_and_used():
 
 def test_the_digest_binds_the_table():
     assert corpus_digest(TABLE) == plan()["corpusDigest"]
-    assert corpus_digest(TABLE) == "40e9b27f59997a643613e79d5b8fda9105d376f3da05ba978ec4d77806540680"
+    assert corpus_digest(TABLE) == "68f373dcbef6da967eba9cca9d34b2c1a7b5c420f9eafaded84453abe968f290"
 
 
 def test_a_full_recording_completes_and_the_reads_show_the_versions_asked_for():
@@ -118,13 +120,14 @@ def _ledger_with_versions():
     ledger.docs["a"].update(status="created", state="v2"); ledger.docs["m"].update(status="confirmed-absent")
     ledger.history["a"].extend(["created", "v1", "v2"])
     ledger.versions["a"] = [("created", (100, 1)), ("v1", (100, 2)), ("v2", (101, 0))]
+    ledger.acked_at = {"a@setup/create-a": (100, 1), "a@setup/update-a-1": (100, 2), "a@setup/update-a-2": (101, 0)}
     return ledger
 
 
 def test_the_state_at_a_time_is_the_latest_version_at_or_before_it():
     ledger = _ledger_with_versions()
     assert [ledger._state_at("a", moment) for moment in [(99, 0), (100, 1), (100, 2), (100, 999), (101, 0), (500, 0)]] == [None, "created", "v1", "v1", "v2", "v2"]
-    assert ledger.times() == {"a:0": {"seconds": "100", "nanos": 1}, "a:1": {"seconds": "100", "nanos": 2}, "a:2": {"seconds": "101", "nanos": 0}}
+    assert ledger.times() == {"a@setup/create-a": {"seconds": "100", "nanos": 1}, "a@setup/update-a-1": {"seconds": "100", "nanos": 2}, "a@setup/update-a-2": {"seconds": "101", "nanos": 0}}
 
 
 @pytest.mark.parametrize("value,transport,expected", [
@@ -153,24 +156,26 @@ def _frame_a(state="v2", **extra):
     return {"found": {"name": plan()["documents"]["a"], "fields": {"owner": {"stringValue": OWNER}, "nonce": {"stringValue": NONCE}, "role": {"stringValue": "a"}, "state": {"stringValue": state}}, "updateTime": {"seconds": "101", "nanos": 0}}, **extra}
 
 
-@pytest.mark.parametrize("label,frames,ok", [
-    ("a bare head then the documents", [{"transaction": "dG9rZW4="}, _frame_a(), {"missing": "M"}], True),
-    ("the transaction on the first document", [_frame_a(transaction="dG9rZW4="), {"missing": "M"}], True),
-    ("no transaction at all", [_frame_a(), {"missing": "M"}], False),
-    ("the transaction on the second document", [_frame_a(), {"missing": "M", "transaction": "dG9rZW4="}], False),
-    ("a head that also carries a discriminator", [{"transaction": "dG9rZW4=", "result": "found"}, _frame_a(), {"missing": "M"}], False),
-    ("a head with another key", [{"transaction": "dG9rZW4=", "extra": 1}, _frame_a(), {"missing": "M"}], False),
-    ("two bare heads", [{"transaction": "dG9rZW4="}, {"transaction": "dG9rZW4="}, _frame_a(), {"missing": "M"}], False),
-    ("a head and too few documents", [{"transaction": "dG9rZW4="}, _frame_a()], False),
-    ("a malformed transaction", [{"transaction": "not base64!"}, _frame_a(), {"missing": "M"}], False),
-    ("a transaction that was already issued", [{"transaction": "QUxSRUFEWQ=="}, _frame_a(), {"missing": "M"}], False),
+@pytest.mark.parametrize("label,frames,ok,owned", [
+    ("a bare head then the documents", [{"transaction": "dG9rZW4="}, _frame_a(), {"missing": "M"}], True, True),
+    ("the transaction on the first document", [_frame_a(transaction="dG9rZW4="), {"missing": "M"}], True, True),
+    ("a head an unset decoder member decorates", [{"transaction": "dG9rZW4=", "found": None, "result": ""}, _frame_a(), {"missing": "M"}], True, True),
+    ("no transaction at all", [_frame_a(), {"missing": "M"}], False, False),
+    ("the transaction on the second document", [_frame_a(), {"missing": "M", "transaction": "dG9rZW4="}], False, False),
+    ("a head that also carries a discriminator", [{"transaction": "dG9rZW4=", "result": "found"}, _frame_a(), {"missing": "M"}], False, True),
+    ("a head with another key", [{"transaction": "dG9rZW4=", "extra": 1}, _frame_a(), {"missing": "M"}], False, True),
+    ("two bare heads", [{"transaction": "dG9rZW4="}, {"transaction": "dG9rZW4="}, _frame_a(), {"missing": "M"}], False, True),
+    ("a head and too few documents", [{"transaction": "dG9rZW4="}, _frame_a()], False, True),
+    ("a malformed transaction", [{"transaction": "not base64!"}, _frame_a(), {"missing": "M"}], False, False),
+    ("a transaction that was already issued", [{"transaction": "QUxSRUFEWQ=="}, _frame_a(), {"missing": "M"}], False, False),
 ])
-def test_the_batch_that_begins_a_transaction_hands_over_exactly_one_fresh_transaction(label, frames, ok):
+def test_the_batch_that_begins_a_transaction_hands_over_exactly_one_fresh_transaction(label, frames, ok, owned):
     value = plan()
     ledger = Ledger(value)
     ledger.docs["a"].update(status="created", state="v2"); ledger.docs["m"].update(status="confirmed-absent")
     ledger.history["a"].extend(["created", "v1", "v2"])
     ledger.versions["a"] = [("created", (100, 1)), ("v1", (100, 2)), ("v2", (101, 0))]
+    ledger.acked_at = {"a@setup/update-a-1": (100, 2)}
     ledger.tokens["earlier"] = {"value": "QUxSRUFEWQ==", "state": "committed", "transport": "rest", "start": timing(), "lastUse": timing()}
     names = value["documents"]
     frames = [{**frame, "missing": names["m"]} if frame.get("missing") == "M" else frame for frame in copy.deepcopy(frames)]
@@ -185,7 +190,7 @@ def test_the_batch_that_begins_a_transaction_hands_over_exactly_one_fresh_transa
         with pytest.raises(ValueError):
             ledger.after("grpc/emb/batch-new", "grpc", "BatchGetDocuments", request, step, receipt(response={"responses": frames}), timing())
         assert ledger.unknown_starts == {"grpc/emb/batch-new"}, "an unusable answer keeps the responsibility for a transaction that may exist"
-        assert "grpc-emb" not in ledger.tokens
+        assert ("grpc-emb" in ledger.tokens) is owned, "a valid minted transaction is owned before the entries are judged, an invalid one cannot be"
 
 
 def test_a_refused_batch_that_begins_a_transaction_releases_its_responsibility():
@@ -208,3 +213,14 @@ def test_a_batch_that_begins_a_transaction_waits_for_every_earlier_token():
     with pytest.raises(ValueError, match="unresolved"):
         ledger.guard("BatchGetDocuments", {"database": value["database"], "documents": [], "newTransaction": {"readWrite": {}}}, step)
     ledger.guard("BatchGetDocuments", {"database": value["database"], "documents": []}, step)
+
+
+def test_a_refused_optional_write_cannot_shift_which_version_a_read_names():
+    """The version is named by the commit that acknowledged it, so a writer that was refused changes nothing."""
+    receipt_, _service = record(writer_code=0)
+    assert receipt_["complete"] is True
+    ledger = Ledger(plan())
+    ledger.acked_at = {"a@setup/create-a": (100, 1), "a@setup/update-a-2": (101, 0)}
+    step = next(step for step in plan()["steps"] if step["id"] == "rest/get-at-v1")
+    with pytest.raises(ValueError, match="acknowledged"):
+        request_for_step(plan(), step, {}, TABLE, ledger.times())

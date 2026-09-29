@@ -249,7 +249,8 @@ async function runGrpc(spec, createClientOverride) {
           call = client.makeServerStreamRequest(`/google.firestore.v1.Firestore/${spec.method}`, firestore[`${spec.method}Request`].serialize, RESPONSES[spec.method].deserialize, spec.request, metadata, { deadline: new Date(Date.now() + spec.deadlineMs) });
           const entries = [];
           call.on('data', entry => { entries.push(entry); if (entries.length > MAX_BATCH_FRAMES) { finish(2, 'batch stream over the frame cap'); call.cancel(); } });
-          call.on('error', error => finish(error?.code ?? 2, error?.details ?? ''));
+          // A batch that begins a transaction may already have handed it over: an error after entries is unknown.
+          call.on('error', error => (entries.length && spec.request.newTransaction !== undefined) ? finish(2, 'batch stream failed after entries that may carry a new transaction') : finish(error?.code ?? 2, error?.details ?? ''));
           call.on('end', () => finish(0, '', { responses: entries }));
         } else {
           call = client.makeUnaryRequest(`/google.firestore.v1.Firestore/${spec.method}`, firestore[`${spec.method}Request`].serialize, RESPONSES[spec.method].deserialize, spec.request, metadata, { deadline: new Date(Date.now() + spec.deadlineMs) }, (error, response) => finish(error?.code ?? 0, error?.details ?? '', response));

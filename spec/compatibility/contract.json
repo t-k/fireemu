@@ -1476,6 +1476,10 @@
               "precision": "boundary-conformance"
             },
             {
+              "behaviour": "auth.mfa in the canonical configuration is a config seed of the project's mfa member, in the Identity Platform Config.mfa shape and validated by the validator the Admin config update uses: it is the project's mfa config when the daemon starts, in both profiles, and that of every project the daemon creates later (the declared seed, not the default project's live value), and a control-plane session reset returns to it only when one is declared (without one an Admin-set config survives a reset, as the rest of the project configuration does; DELETE /emulator/v1/projects/{p}/accounts clears accounts only). The runtime gate stays production-exact: only the project's mfa config enables a second factor under the strict profile, an Admin update replaces the seed and disabling refuses as production does, auth.totp alone enables nothing there (a start-up warning names auth.mfa), and a tenant follows its own mfaConfig, never the project's seed. Without auth.mfa a project starts with multi-factor off, as a new production project does. Export and import carry accounts and their factors, not this config",
+              "precision": "boundary-conformance"
+            },
+            {
               "behaviour": "the Admin config API holds the project's mfa member (state, enabledProviders, providerConfigs) and reads it back in production's shape; a value whose TOTP provider is enabled also enables TOTP enrollment and sign-in without auth.totp, with its adjacentIntervals as the acceptance window. The official emulator has no project mfa config; without one the emulator profile keeps its answers",
               "precision": "boundary-conformance"
             },

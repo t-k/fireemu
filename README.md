@@ -60,7 +60,7 @@ Fireemu supports Cloud Firestore, Firebase Authentication (Identity Platform), C
 | Cloud Firestore | The Enterprise Pipeline API supports a limited subset of read operations. Full-text search supports index definition validation, but local search execution is not supported.   |
 | Firebase Authentication (Identity Platform) | Authentication flows that communicate with external identity providers, authorization-code exchange, and SAML XML signature verification are outside the supported scope. These are separate from local authentication behavior and provider configuration.  |
 | Cloud Storage for Firebase | Object versioning, signed URLs, ACL-based access control, object composition (`compose`), and notification configuration are not supported.  |
-| Cloud Functions for Firebase | Triggers that depend on unsupported products, such as Realtime Database, Remote Config, and Data Connect, cannot run. Storage archive events do not occur because object versioning is not supported.  |
+| Cloud Functions for Firebase | Triggers that depend on unsupported products, such as Realtime Database (deferred), Remote Config, and Data Connect (deferred), cannot run. Storage archive events do not occur because object versioning is not supported.  |
 | Cloud Pub/Sub | Schemas, BigQuery and Cloud Storage subscription delivery, and some APIs such as `UpdateTopic` are not supported.  |
 | Firebase App Check | Local testing with debug tokens is supported. Real attestation through Play Integrity, App Attest, DeviceCheck, or reCAPTCHA, and replay protection using limited-use tokens, are not supported.  |
 
@@ -315,6 +315,8 @@ Security Rules and API behavior are implemented using documentation and observat
 ### Comparison with the official emulator
 
 The official emulator comparison baseline is `firebase-tools 15.28.2`.
+
+Fireemu is compatible with the listed Local Emulator Suite products as shipped by firebase-tools 15.28.2 -- Cloud Firestore, Firebase Authentication, Cloud Storage for Firebase, Cloud Functions, Cloud Pub/Sub and Eventarc, with Security Rules on the Firestore and Storage surfaces -- under the `emulator` compatibility profile and the evidence recorded in `spec/compatibility/contract.json`; it makes no complete-suite and no unqualified superset claim while Realtime Database, Firebase Hosting, App Hosting and Data Connect are deferred and Firebase Extensions is not planned.
 
 The `strict` and `emulator` profiles differ in some behaviors to serve their respective purposes. Where the official emulator and production Firebase disagree, Fireemu also adopts production behavior in some cases and records the difference.
 

@@ -52,6 +52,9 @@ test("the four witnesses are seeded and read back before any release is written"
     const order = ["baseline-metadata", "baseline-media", "seed", "seed-metadata", "seed-media"].map((stage) => position(s.steps, rowStep(`management/control-${index}/${stage}`)));
     assert.deepEqual([...order].sort((a, b) => a - b), order);
   }
+  // The witnesses come first, then the two other controls.
+  const lastWitness = Math.max(...[0, 1, 3, 4].map((index) => position(s.steps, rowStep(`management/control-${index}/seed-media`))));
+  for (const index of [2, 5]) assert.ok(position(s.steps, rowStep(`management/control-${index}/baseline-metadata`)) > lastWitness, `control-${index}`);
 });
 
 test("compile checks and Ruleset creation precede publication, and the invalid source comes last", async () => {
@@ -187,6 +190,16 @@ test("the schedule is deterministic and refuses a manifest it does not recognize
   }
 });
 
+test("the schedule refuses a normal row it would not run and a row it would run twice", async () => {
+  const { buildSchedule } = await load();
+  const extra = { ...manifest.rows.find((r) => r.id === "management/prefix-empty"), id: "management/unscheduled" };
+  const counts = { ...manifest.counts, total: manifest.counts.total + 1, normal: manifest.counts.normal + 1 };
+  assert.throws(() => buildSchedule({ ...manifest, rows: [...manifest.rows, extra], counts }), /invalid schedule manifest/);
+  // A case named twice by one bundle would run its rows twice.
+  const { v1 } = manifest.publication;
+  assert.throws(() => buildSchedule({ ...manifest, publication: { ...manifest.publication, v1: [...v1, v1[0]] } }), /invalid schedule manifest/);
+});
+
 test("every session is asked again right after its cancel and before the case ends", async () => {
   const s = await schedule();
   for (const session of manifest.resources.sessions) {
@@ -283,6 +296,15 @@ test("the recovery schedule is deterministic and refuses a manifest that lost re
   const rows = manifest.rows.filter((r) => r.id !== "recovery/object-0/delete");
   assert.throws(() => module.buildRecoverySchedule({ ...manifest, rows }), /invalid schedule manifest/);
   assert.throws(() => module.buildRecoverySchedule({ ...manifest, sendAuthorized: true }), /invalid schedule manifest/);
+});
+
+test("the recovery schedule refuses a recovery row it would not run and a row it would run twice", async () => {
+  const module = await load();
+  const extra = { ...manifest.rows.find((r) => r.id === "recovery/management/prefix-empty"), id: "recovery/management/unscheduled" };
+  assert.throws(() => module.buildRecoverySchedule({ ...manifest, rows: [...manifest.rows, extra], counts: { ...manifest.counts, recovery: manifest.counts.recovery + 1 } }), /invalid schedule manifest/);
+  // The owned-prefix check declared as an account row would run in the delegated group and again at the end.
+  const rows = manifest.rows.map((r) => (r.id === "recovery/management/prefix-empty" ? { ...r, family: "auth" } : r));
+  assert.throws(() => module.buildRecoverySchedule({ ...manifest, rows }), /invalid schedule manifest/);
 });
 
 test("recovery steps carry the ledger fact that enables them, and only the resource-free groups run unconditionally", async () => {

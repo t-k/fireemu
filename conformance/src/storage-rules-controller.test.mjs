@@ -35,7 +35,9 @@ function memoryCapture() {
   };
 }
 
-async function harness({ capture = memoryCapture(), simulatorOptions = {}, credentialsFresh = () => true, ensure, waits = [], delegates = {}, judge } = {}) {
+// `adjust` receives the controller options the harness built and returns the options the controller gets, so a test can
+// replace one collaborator (a gate or ledger wrapper, another recovery schedule) while the harness keeps the originals.
+async function harness({ capture = memoryCapture(), simulatorOptions = {}, credentialsFresh = () => true, ensure, waits = [], delegates = {}, judge, adjust = (built) => built } = {}) {
   const simulator = createSimulator({ manifest, options: { invalidContent, ...simulatorOptions } });
   const targets = createTargetBuilder({ manifest, digestSalt: salt });
   const tables = buildRefTables(manifest);
@@ -46,11 +48,11 @@ async function harness({ capture = memoryCapture(), simulatorOptions = {}, crede
   const reservations = { onStarted: async () => { trace.push("started"); }, onReserve: async (r) => { trace.push(r.operationId); }, onTerminal: async (r) => { trace.push(`terminal:${r.outcome}`); } };
   const gate = createDispatchGate({ reservations: harnessReservations ?? reservations, capture, transport: simulator, targets, credentials: { headersFor: (c) => (c === "anonymous" ? {} : { authorization: `Bearer ${BEARER}` }) }, preflightIds, admission: { check: async () => ({ admitted: true }) } });
   const noop = async () => {};
-  const controller = createController({
+  const controller = createController(adjust({
     manifest, schedule: buildSchedule(manifest), recoverySchedule: buildRecoverySchedule(manifest), gate, targets, refs, tables, objects, run, capture,
     delegates: { "preflight-cache": noop, "credential-cache": noop, "prepare-query": noop, "foreign-signup": noop, "foreign-cleanup": noop, "cleanup-query": noop, "recover-accounts": noop, ...delegates },
     wait: async (ms) => { waits.push(ms); }, credentials: { fresh: credentialsFresh, ...(ensure ? { ensure } : {}) }, judgePreflight: judge ?? ((row, outcome) => outcome.verdict !== "unexpected"),
-  });
+  }));
   return { controller, simulator, gate, objects, run, refs, capture, trace, waits };
 }
 let harnessReservations = null;
@@ -72,6 +74,8 @@ test("a whole recording runs against the simulator, cleans up everything it crea
   assert.ok(result.skipped.length > 0);
   assert.ok(h.waits.length > 0 && h.waits.every((ms) => ms === manifest.restoration.intervalMs));
   assert.ok(sent.every((id) => counted.some((r) => r.id === id)));
+  // Every classified response leaves its durable facts, in the order the requests left.
+  assert.deepEqual(h.capture.events.filter((event) => event[0] === "facts").map((event) => event[1]), sent);
 });
 
 // The number (1-based) of the first simulator call whose log line matches, from a completed dry run.
@@ -120,6 +124,9 @@ test("a dirty namespace is refused: an object that exists before the run stops i
   assert.deepEqual([result.status, result.reason, result.detail.rowId], ["stopped", "unexpected verdict", "management/control-0/baseline-metadata"]);
   assert.equal(result.needsRecovery, false);
   assert.equal(h.objects.object(controls[0]).owned, false);
+  // Nothing was written, so the controller closes the counter itself.
+  assert.equal(h.gate.snapshot().mode, "closed");
+  assert.equal(h.trace.at(-1), "terminal:stopped-no-mutation");
 });
 
 test("an unexpected seed answer stops the run, leaves the counter open and the object unowned", async () => {
@@ -185,6 +192,8 @@ test("a schedule step without its delegate stops the run, and the options are a 
   assert.deepEqual([result.status, result.reason, result.detail.op], ["stopped", "delegate missing", "prepare-query"]);
   const mod = await import("./storage-rules/controller.mjs");
   for (const bad of [null, {}, { manifest }, { ...(await harness()).controller }]) assert.throws(() => mod.createController(bad), /invalid controller options/);
+  // Only the non-sending draft manifest may be driven.
+  for (const sendAuthorized of [true, undefined]) await assert.rejects(harness({ adjust: (built) => ({ ...built, manifest: { ...manifest, sendAuthorized } }) }), /invalid controller options/);
 });
 
 test("every request the controller sends is one the schedule names, exactly once", async () => {
@@ -272,8 +281,11 @@ test("a recovery step that meets a surprise stops recovery and closes as needs-r
   // The recovery's first request fails with a server error: nothing recovery may assume, so it stops.
   const failing = await harness({ credentialsFresh: () => false, simulatorOptions: { failures: new Map([[calls + 1, () => response(500, { error: { code: 500, message: "boom" } })]]) } });
   await failing.controller.run();
+  const before = sentIds(failing).length;
   const result = await failing.controller.recover();
   assert.equal(result.status, "stopped");
+  // The request count covers this recovery only, not the run before it.
+  assert.equal(result.requests, sentIds(failing).length - before);
   assert.ok(["unexpected verdict", "check failed", "guard failed", "unclassifiable response"].includes(result.reason), result.reason);
   assert.equal(failing.trace.at(-1), "terminal:needs-recovery");
   assert.equal(failing.gate.snapshot().mode, "closed");
@@ -301,6 +313,8 @@ test("a stop before any release was written skips the release group but still re
   assert.deepEqual(cleanOf(h), clean);
   const recoverySent = sentIds(h).slice(before);
   assert.equal(recoverySent.some((id) => id.startsWith("recovery/release/")), false);
+  // The disabled group is reported as skipped, row by row.
+  for (const stage of ["owner-before-delete", "delete", "bucket-absence", "bucketless-absence"]) assert.ok(result.skipped.includes(`recovery/release/restore/${stage}`), stage);
   // The witness deletion is guarded by the four owner readbacks, which follow the restore settle.
   assert.equal(recoverySent.filter((id) => id.startsWith("recovery/management/restore-owner-media/")).length, 4);
   assert.ok(recoverySent.some((id) => id.startsWith("recovery/settle/restore/")));
@@ -369,6 +383,189 @@ test("recovery is enabled by ledger facts: a run stopped before any write recove
   const result = await h.controller.recover();
   assert.equal(result.status, "refused");
   assert.equal(h.simulator.state().calls, calls);
+});
+
+// The IDs one completed dry run sent, in order. Until an injected answer changes the run, a row's simulator call number is
+// its position here plus one.
+let dryRunSent = null;
+async function dryRun() {
+  if (dryRunSent === null) { const h = await harness(); await h.controller.run(); dryRunSent = sentIds(h); }
+  return dryRunSent;
+}
+async function callOf(id) { const index = (await dryRun()).indexOf(id); assert.ok(index >= 0, id); return index + 1; }
+const rowOf = (id) => manifest.rows.find((r) => r.id === id);
+async function firstSent(predicate) { const id = (await dryRun()).find((sent) => predicate(rowOf(sent))); assert.ok(id); return id; }
+const answerAt = (call, answer) => ({ failures: new Map([[call, answer]]) });
+const objectPresent = (row) => response(200, { kind: "storage#object", bucket: binding.bucket, name: row.request.objectName, generation: "1700000000000999", metageneration: "1", size: "4" });
+const mediaPresent = () => ({ status: 200, rawHeaders: ["Content-Type", "text/plain"], bytes: Buffer.from("seed"), startedAtMs: 1, finishedAtMs: 2 });
+const rpcNotFound = () => response(404, { error: { code: 404, message: "Requested entity was not found.", status: "NOT_FOUND" } });
+const rulesetPresent = () => response(200, { name: "projects/fireemu-oracle-query/rulesets/foreign", createTime: "2026-09-29T10:00:00.000000Z", source: { files: [{ name: "storage.rules", content: "x" }] } });
+const serverError = () => response(500, { error: { code: 500, message: "boom" } });
+
+test("each row kind stops the run on a verdict its step must not accept", async () => {
+  const baseline = await firstSent((r) => r.family === "declared" && r.stage === "baseline" && r.request.operation === "get-metadata");
+  const cleanupAbsence = await firstSent((r) => r.family === "declared" && r.stage === "cleanup" && /absence/.test(r.id) && r.request.operation === "get-metadata");
+  const verify = await firstSent((r) => r.family === "session-verify");
+  const cases = [
+    // Reads that must find nothing: a case baseline, a control's baseline media, a case cleanup and a control's final absence.
+    [baseline, objectPresent],
+    ["management/control-0/baseline-media", mediaPresent],
+    [cleanupAbsence, objectPresent],
+    ["management/control-0/absence-metadata", objectPresent],
+    ["management/control-0/absence-media", mediaPresent],
+    // A created Ruleset must read back, a deleted one must be gone, and the release must exist before its removal.
+    ["ruleset/v1/read-source", rpcNotFound],
+    ["ruleset/v1/absence", rulesetPresent],
+    ["release/restore/owner-before-delete", rpcNotFound],
+    // A session query answers active or final, nothing else.
+    [verify, serverError],
+  ];
+  for (const [id, answer] of cases) {
+    const h = await harness({ simulatorOptions: answerAt(await callOf(id), () => answer(rowOf(id))) });
+    const result = await h.controller.run();
+    assert.deepEqual([result.status, result.reason, result.detail.rowId], ["stopped", "unexpected verdict", id], id);
+  }
+});
+
+test("a response that fails its post-response check stops the run as a failed check", async () => {
+  // A publication's after-read must name the Ruleset the run created; a missing release fails that check.
+  const after = await harness({ simulatorOptions: answerAt(await callOf("release/v1/after"), rpcNotFound) });
+  const one = await after.controller.run();
+  assert.deepEqual([one.status, one.reason, one.detail.rowId, one.detail.tokens], ["stopped", "check failed", "release/v1/after", ["release-name-and-created-ruleset-match"]]);
+  // The entry Ruleset list must be a single page.
+  const entry = await harness({ simulatorOptions: answerAt(await callOf("preflight/rulesets-list/entry/1"), () => response(200, { nextPageToken: "next" })) });
+  const two = await entry.controller.run();
+  assert.deepEqual([two.status, two.reason, two.detail.rowId, two.detail.tokens], ["stopped", "check failed", "preflight/rulesets-list/entry/1", ["entry-page-has-no-next-token"]]);
+});
+
+test("a response the classifier cannot read stops the run as unclassifiable", async () => {
+  const id = "management/control-0/baseline-metadata";
+  const h = await harness({ simulatorOptions: answerAt(await callOf(id), () => ({ status: 200, rawHeaders: ["a"], bytes: Buffer.alloc(0) })) });
+  const result = await h.controller.run();
+  assert.deepEqual([result.status, result.reason, result.detail.rowId], ["stopped", "unclassifiable response", id]);
+});
+
+test("a created download token that comes back as a list of tokens stops the run before it is bound", async () => {
+  const id = await firstSent((r) => r.request.operation === "create-token");
+  const row = rowOf(id);
+  const h = await harness({ simulatorOptions: answerAt(await callOf(id), () => response(200, { name: row.request.objectName, bucket: binding.bucket, generation: "1700000000000999", metageneration: "1", size: "4", contentType: "text/plain", downloadTokens: "token-one,token-two" })) });
+  const result = await h.controller.run();
+  assert.deepEqual([result.status, result.reason, result.detail.rowId], ["stopped", "more than one download token", id]);
+});
+
+test("the final Ruleset list follows each page token to the next page and stops after ten pages", async () => {
+  const first = await callOf("rulesets-list/final/1");
+  const tokens = [];
+  const failures = new Map(Array.from({ length: 10 }, (_, index) => [first + index, (spec) => { tokens.push(new URL(spec.url).searchParams.get("pageToken")); return response(200, { nextPageToken: `page-${index + 2}` }); }]));
+  const h = await harness({ simulatorOptions: { failures } });
+  const result = await h.controller.run();
+  assert.deepEqual([result.status, result.reason], ["stopped", "more than ten Ruleset pages"]);
+  assert.deepEqual(tokens, [null, ...Array.from({ length: 9 }, (_, index) => `page-${index + 2}`)]);
+  assert.deepEqual(sentIds(h).slice(-10), Array.from({ length: 10 }, (_, index) => `rulesets-list/final/${index + 1}`));
+});
+
+// Seams: the ledgers and the recovery schedule are the controller's collaborators, so a test can make one answer what
+// today's manifest never makes it answer and prove the controller's own guard behind it.
+const ledgerAnswering = (built, answer) => Object.freeze({ ...built.run, ...answer(built.run) });
+
+test("a settle read the ledgers would skip stops the run instead of counting as a cycle", async () => {
+  const skipSettle = (run) => ({ evaluate: (row, tokens) => { const seen = run.evaluate(row, tokens); return row.family === "settle" ? Object.freeze({ ...seen, decision: "skip", failed: Object.freeze([Object.freeze({ token: "all-four-controls-confirmed-and-retained", outcome: "skip" })]) }) : seen; } });
+  const h = await harness({ adjust: (built) => ({ ...built, run: ledgerAnswering(built, skipSettle) }) });
+  const result = await h.controller.run();
+  assert.deepEqual([result.status, result.reason, result.detail.rowId], ["stopped", "settle read skipped", "settle/v1/1/0"]);
+});
+
+test("a write the run ledger recorded keeps the counter open even when no object was written", async () => {
+  const oneWrite = (run) => ({ snapshot: () => Object.freeze({ ...run.snapshot(), mutations: 1 }) });
+  const h = await harness({ simulatorOptions: { preexisting: [manifest.resources.controls[0]] }, adjust: (built) => ({ ...built, run: ledgerAnswering(built, oneWrite) }) });
+  const result = await h.controller.run();
+  assert.deepEqual([result.status, result.reason, result.needsRecovery], ["stopped", "unexpected verdict", true]);
+  assert.equal(h.gate.snapshot().mode, "normal");
+  assert.equal(h.trace.some((id) => id.startsWith("terminal")), false);
+});
+
+test("recovery runs once: after a recovery whose close failed, a second call is refused and sends nothing", async () => {
+  let failFinish = false;
+  const flaky = (gate) => Object.freeze({ ...gate, finish: async (outcome) => { if (failFinish) { failFinish = false; throw new Error("journal unavailable"); } return gate.finish(outcome); } });
+  const h = await harness({ credentialsFresh: () => false, adjust: (built) => ({ ...built, gate: flaky(built.gate) }) });
+  await h.controller.run();
+  failFinish = true;
+  await assert.rejects(h.controller.recover(), /journal unavailable/);
+  assert.equal(h.gate.snapshot().mode, "recovery");
+  const calls = h.simulator.state().calls;
+  const again = await h.controller.recover();
+  assert.deepEqual([again.status, again.reason], ["refused", "recovery already attempted"]);
+  assert.equal(h.simulator.state().calls, calls);
+});
+
+test("an error that is not a stop escapes recovery and leaves the counter open", async () => {
+  const capture = memoryCapture();
+  let failFacts = false;
+  const original = capture.writeFacts;
+  capture.writeFacts = async (r) => { if (failFacts) throw new Error("facts journal unavailable"); return original(r); };
+  const h = await harness({ capture, credentialsFresh: () => false });
+  await h.controller.run();
+  failFacts = true;
+  await assert.rejects(h.controller.recover(), /facts journal unavailable/);
+  assert.equal(h.gate.snapshot().mode, "recovery");
+  assert.equal(h.trace.some((id) => id.startsWith("terminal")), false);
+});
+
+test("a recovery whose final owned-prefix check was skipped closes as needs-recovery, not recovered", async () => {
+  // The reviewed schedule never gates the final check; one that did would skip it after a run that wrote no release.
+  const reviewed = buildRecoverySchedule(manifest);
+  const gated = Object.freeze({ steps: Object.freeze([...reviewed.steps.slice(0, -1), Object.freeze({ ...reviewed.steps.at(-1), enabledBy: "release-written" })]) });
+  const h = await harness({ simulatorOptions: { invalidContent: "never matches anything" }, adjust: (built) => ({ ...built, recoverySchedule: gated }) });
+  await h.controller.run();
+  const result = await h.controller.recover();
+  assert.deepEqual([result.status, result.reason, result.needsRecovery], ["stopped", "owned-prefix check skipped", true]);
+  assert.ok(result.skipped.includes("recovery/management/prefix-empty"));
+  assert.equal(sentIds(h).includes("recovery/management/prefix-empty"), false);
+  assert.equal(h.trace.at(-1), "terminal:needs-recovery");
+});
+
+test("a release read whose outcome is uncertain enables the release absence reads in recovery, whose guard then stops it", async () => {
+  const h = await harness({ simulatorOptions: answerAt(await callOf("compile/release/before"), "throw") });
+  const stopped = await h.controller.run();
+  assert.deepEqual([stopped.reason, stopped.detail.rowId], ["outcome uncertain", "compile/release/before"]);
+  const result = await h.controller.recover();
+  // No release write was attempted, so only the absence group is enabled; the uncertain release refuses its first read.
+  assert.deepEqual([result.status, result.reason, result.detail.rowId, result.detail.tokens, result.requests], ["stopped", "guard failed", "recovery/release/restore/bucket-absence", ["restore-without-unowned-release-change"], 0]);
+  assert.deepEqual(result.skipped, ["recovery/release/restore/owner-before-delete", "recovery/release/restore/delete"]);
+  assert.equal(h.trace.at(-1), "terminal:needs-recovery");
+});
+
+test("owner readbacks count per witness, so a recovery that repeats two of them still deletes the witnesses", async () => {
+  // The run stops before the third owner readback is sent, so the witnesses stay confirmed.
+  const h = await harness({ ensure: async (row) => { if (row.id === "management/restore-owner-media/2") throw new Error("refresh failed"); } });
+  const stopped = await h.controller.run();
+  assert.deepEqual([stopped.reason, stopped.detail.rowId], ["credential refresh failed", "management/restore-owner-media/2"]);
+  assert.equal(h.run.snapshot().ownerMedia, 2);
+  const result = await h.controller.recover();
+  assert.equal(result.status, "recovered", JSON.stringify(result));
+  assert.deepEqual(cleanOf(h), clean);
+});
+
+test("a session whose start outcome is uncertain is recovered, not skipped", async () => {
+  const id = await firstSent((r) => r.request.headers?.["x-goog-upload-command"] === "start");
+  const caseId = rowOf(id).programId;
+  const h = await harness({ simulatorOptions: answerAt(await callOf(id), "throw") });
+  const stopped = await h.controller.run();
+  assert.deepEqual([stopped.reason, stopped.detail.rowId], ["outcome uncertain", id]);
+  const result = await h.controller.recover();
+  assert.equal(result.skipped.includes(`recovery/session/${caseId}/current`), false, JSON.stringify(result));
+});
+
+test("a generation read after an uncertain metadata patch never feeds the recovery delete", async () => {
+  const id = await firstSent((r) => r.request.dialect === "gcs" && r.request.operation === "patch");
+  const name = rowOf(id).request.objectName;
+  const h = await harness({ simulatorOptions: answerAt(await callOf(id), "throw") });
+  const stopped = await h.controller.run();
+  assert.deepEqual([stopped.reason, stopped.detail.rowId], ["outcome uncertain", id]);
+  const result = await h.controller.recover();
+  const del = manifest.rows.find((r) => r.family === "recovery-object" && r.stage === "delete" && r.request.objectName === name);
+  assert.deepEqual([result.status, result.reason, result.detail.rowId, result.detail.cause], ["stopped", "target unavailable", del.id, "reference is not deletable"]);
+  assert.ok(h.simulator.objects().includes(name));
 });
 
 async function walk(directory) {

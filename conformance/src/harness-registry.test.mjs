@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -10,6 +10,7 @@ import { CONFORMANCE_DIR, REPO_ROOT } from "./config.mjs";
 import {
   checkFixtureDigest,
   enrollmentProblems,
+  frozenPaths,
   fixturesWithHarnessDigest,
   gitReader,
   bindingProblems,
@@ -29,6 +30,7 @@ import {
   treeReader,
   unconnectedProblems,
   verifyOutcome,
+  waivedDigestProblems,
   WAIVED_FIXTURES,
 } from "./harness-registry.mjs";
 
@@ -783,7 +785,8 @@ test("a rewrite of an input a waived lane shares is refused, even of a comment",
   for (const path of [
     "conformance/src/auth-tenant-blocking/session.mjs",
     "conformance/src/auth-federation/idp.mjs",
-    "conformance/src/auth-mfa/run.mjs",
+    "conformance/src/auth-account/authorized-domains.mjs",
+    "conformance/src/auth-config-sdk/sandbox-baseline.mjs",
     "conformance/src/auth-account/corpus.mjs",
     "conformance/src/fs-rules/corpus.mjs",
     "conformance/fs-query-index.indexes.json",
@@ -873,4 +876,76 @@ test("the parser reports every real input's tokens already in source order", () 
     ordered(wrapAsi(joined), joined);
     ordered(wrapAsi(split), split);
   }
+});
+
+test("a rewrite of every frozen path is refused, whatever it is", () => {
+  const frozen = frozenPaths();
+  // The guarded data and constants of the enrolled lanes, and every waived input.
+  assert.ok(frozen.size >= 30, `only ${frozen.size} frozen paths`);
+  for (const lane of Object.values(HARNESS_LANES))
+    for (const path of lane.guarded ?? []) assert.ok(frozen.has(path), path);
+  for (const waived of WAIVED_FIXTURES)
+    for (const path of waived.inputs) assert.ok(frozen.has(path), path);
+  for (const path of frozen.keys()) {
+    const text = readFileSync(join(REPO_ROOT, path), "utf8");
+    const found = rewriteReport({ [path]: `${text}\n` }, NO_GIT);
+    assert.ok(
+      found.problems.some((p) =>
+        p.startsWith(`${path}: a rewrite changes an input the registry cannot follow`),
+      ),
+      path,
+    );
+  }
+});
+
+test("the registry imports no lane runner, so importing it runs nothing", () => {
+  // A runner reads its mode from process.argv at load and prints a usage line for an unknown one.
+  for (const mode of ["check", "record-production", "local", "verify", "anything"]) {
+    const run = spawnSync(
+      process.execPath,
+      [
+        "--input-type=module",
+        "-e",
+        `await import(${JSON.stringify(new URL("./harness-registry.mjs", import.meta.url).href)});`,
+        mode,
+      ],
+      { encoding: "utf8" },
+    );
+    assert.equal(run.status, 0, `${mode}: ${run.stderr}`);
+    assert.equal(run.stdout + run.stderr, "", mode);
+  }
+  const text = readFileSync(join(CONFORMANCE_DIR, "src/harness-registry.mjs"), "utf8");
+  assert.ok(!/\bimport\(/.test(text), "no dynamic import");
+  assert.ok(!/from "\.\/[\w-]+\/run\.mjs"/.test(text), "no runner import");
+});
+
+test("a waived lane that can rebuild its digests must still match its fixture", () => {
+  assert.deepEqual(waivedDigestProblems(), []);
+  const blocking = WAIVED_FIXTURES.find(
+    (w) => w.fixture === "auth-tenant-blocking-production.json",
+  );
+  assert.equal(typeof blocking.recompute, "function");
+  const { tenant, blocking: withFixture } = blocking.recompute();
+  assert.notEqual(tenant, withFixture);
+  const recorded = new Set(
+    Object.values(
+      JSON.parse(readFileSync(join(CONFORMANCE_DIR, blocking.fixture), "utf8")).programs,
+    ).map((p) => p.harnessDigest),
+  );
+  assert.deepEqual(recorded, new Set([tenant, withFixture]));
+  const moved = waivedDigestProblems({
+    waived: [{ ...blocking, recompute: () => ({ tenant: "0".repeat(64) }) }],
+  });
+  assert.match(moved.join("\n"), /is none of the digests its inputs give today/);
+  assert.deepEqual(waivedDigestProblems({ waived: [{ ...blocking, recompute: undefined }] }), []);
+  assert.deepEqual(bindingProblems({ shallow: false, waivedDigests: () => ["w: stale"] }), [
+    "w: stale",
+  ]);
+  assert.deepEqual(bindingProblems({ shallow: false }), []);
+});
+
+test("the federation waiver says what its digests are", () => {
+  const federation = WAIVED_FIXTURES.find((w) => w.fixture === "auth-federation-production.json");
+  assert.match(federation.reason, /per-recording approval binding/);
+  assert.match(federation.reason, /nothing compares it/);
 });

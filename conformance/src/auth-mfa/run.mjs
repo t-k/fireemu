@@ -30,6 +30,7 @@ import { promisify } from "node:util";
 import { CONFORMANCE_DIR } from "../config.mjs";
 import { resolveFireemuBinary } from "../evidence.mjs";
 import { BASELINE_CONFIG, CONFIG_DEFAULTS } from "../auth-account/corpus.mjs";
+import { AUTHORIZED_DOMAINS } from "../auth-account/authorized-domains.mjs";
 import { scanFixture } from "../auth-account/fixture-scan.mjs";
 import {
   RECORDED_PROJECT,
@@ -161,11 +162,7 @@ async function sandboxWebConfig() {
   return web;
 }
 
-/**
- * The authorized domains the sandbox answers with (read 2026-09-24): its Firebase Hosting
- * domains, without `localhost`. Production is checked against them; fireemu is given them.
- */
-export const AUTHORIZED_DOMAINS = ["{project}.firebaseapp.com", "{project}.web.app"];
+export { AUTHORIZED_DOMAINS };
 
 /**
  * The sign-in baseline, the account-behaviour defaults and the authorized domains: read and

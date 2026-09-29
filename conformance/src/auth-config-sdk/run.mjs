@@ -33,14 +33,13 @@ import { scanFixture } from "../auth-account/fixture-scan.mjs";
 import {
   RECORDED_PROJECT,
   SANDBOX_PROJECT,
-  TEST_PHONES,
-  TEST_PHONE_CODE,
   createContext,
   diffRecordings,
   isTransient,
   sameRecording,
 } from "../auth-account/harness.mjs";
 import { PROGRAMS } from "./corpus.mjs";
+import { SANDBOX_BASELINE } from "./sandbox-baseline.mjs";
 import { SIGNER_ACCOUNT, guardHttp, validateConfigSdkCorpus } from "./guard.mjs";
 import { SDK_OPERATIONS, harnessFetch } from "./sdk.mjs";
 import { configDrift, configEquals, createSession, runCorpus } from "./session.mjs";
@@ -63,41 +62,7 @@ const LOCAL_PROJECT_NUMBER = "123456789012";
 const TASK_ID = "AUTH-CONFIG-SDK-SANDBOX";
 const sha256 = (text) => createHash("sha256").update(text).digest("hex");
 
-/**
- * Every config path this corpus may change, at the value the sandbox holds between runs (read
- * 2026-09-25). Production is required to hold it before and after each recording; fireemu is
- * given the sign-in part and the authorized domains, the rest being its own defaults.
- */
-export const SANDBOX_BASELINE = {
-  "signIn.email.enabled": true,
-  "signIn.email.passwordRequired": true,
-  "signIn.anonymous.enabled": true,
-  "signIn.phoneNumber.enabled": true,
-  "signIn.phoneNumber.testPhoneNumbers": Object.fromEntries(
-    TEST_PHONES.map((p) => [p, TEST_PHONE_CODE]),
-  ),
-  authorizedDomains: ["{project}.firebaseapp.com", "{project}.web.app"],
-  "signIn.allowDuplicateEmails": undefined,
-  "emailPrivacyConfig.enableImprovedEmailPrivacy": true,
-  passwordPolicyConfig: undefined,
-  "client.permissions.disabledUserSignup": undefined,
-  "client.permissions.disabledUserDeletion": undefined,
-  // Once written, production keeps a reCAPTCHA config: clearing it leaves both providers
-  // unspecified (sandbox, 2026-09-24 22:2xZ). It answers clients as an unset one does.
-  recaptchaConfig: {
-    emailPasswordEnforcementState: "RECAPTCHA_PROVIDER_ENFORCEMENT_STATE_UNSPECIFIED",
-    phoneEnforcementState: "RECAPTCHA_PROVIDER_ENFORCEMENT_STATE_UNSPECIFIED",
-    useSmsBotScore: false,
-    useSmsTollFraudProtection: false,
-  },
-  "quota.signUpQuotaConfig": undefined,
-  "mobileLinksConfig.domain": "HOSTING_DOMAIN",
-  smsRegionConfig: { allowByDefault: {} },
-  "notification.defaultLocale": "en",
-  "notification.sendEmail.resetPasswordTemplate.subject": "Reset your password for %APP_NAME%",
-  autodeleteAnonymousUsers: undefined,
-  "monitoring.requestLogging.enabled": undefined,
-};
+export { SANDBOX_BASELINE };
 /** What fireemu is given; the other baseline paths must already be its defaults. */
 const APPLIED_LOCALLY = [
   "signIn.email.enabled",

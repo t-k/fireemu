@@ -36,7 +36,9 @@ import { fileURLToPath } from "node:url";
 
 import { parse } from "acorn";
 
+import { AUTHORIZED_DOMAINS } from "./auth-account/authorized-domains.mjs";
 import { BASELINE_CONFIG } from "./auth-account/corpus.mjs";
+import { SANDBOX_BASELINE } from "./auth-config-sdk/sandbox-baseline.mjs";
 import { ALIGN_WINDOW } from "./auth-mfa/session.mjs";
 import { PRINCIPALS as AUTH_FS_CROSS_PRINCIPALS } from "./auth-fs-cross/corpus.mjs";
 import { STAGE2_PRINCIPALS } from "./auth-fs-cross/programs-stage2.mjs";
@@ -44,24 +46,6 @@ import { CONFORMANCE_DIR, REPO_ROOT } from "./config.mjs";
 import { PRINCIPALS as FS_RULES_PRINCIPALS } from "./fs-rules/corpus.mjs";
 
 const sha256 = (text) => createHash("sha256").update(text).digest("hex");
-
-/**
- * Imports a lane runner for a constant it exports. A runner reads its mode from process.argv at
- * load, and an unknown one prints a usage line and sets the exit code, so it is imported as if
- * started without a mode.
- */
-async function importQuietly(relative) {
-  const argv = process.argv;
-  process.argv = argv.slice(0, 2);
-  try {
-    return await import(new URL(relative, import.meta.url).href);
-  } finally {
-    process.argv = argv;
-  }
-}
-const { AUTHORIZED_DOMAINS: ACTION_DOMAINS } = await importQuietly("./auth-action/run.mjs");
-const { AUTHORIZED_DOMAINS: MFA_DOMAINS } = await importQuietly("./auth-mfa/run.mjs");
-const { SANDBOX_BASELINE } = await importQuietly("./auth-config-sdk/run.mjs");
 
 /** The files stage 2's recorded rows depend on (its runner and recorder are not among them). */
 export const STAGE2_HARNESS_FILES = [
@@ -118,8 +102,11 @@ export const HARNESS_LANES = {
       "auth-account/harness.mjs",
       "auth-account/session.mjs",
     ],
-    extra: `${JSON.stringify(BASELINE_CONFIG)}\n${JSON.stringify(ACTION_DOMAINS)}`,
-    guarded: ["conformance/src/auth-account/corpus.mjs", "conformance/src/auth-action/run.mjs"],
+    extra: `${JSON.stringify(BASELINE_CONFIG)}\n${JSON.stringify(AUTHORIZED_DOMAINS)}`,
+    guarded: [
+      "conformance/src/auth-account/corpus.mjs",
+      "conformance/src/auth-account/authorized-domains.mjs",
+    ],
   },
   "auth-config-sdk": {
     fixture: "auth-config-sdk-production.json",
@@ -134,7 +121,7 @@ export const HARNESS_LANES = {
     ],
     // The installed SDK versions are part of the digest, so the digest needs the dependencies.
     extra: () => `${JSON.stringify(SANDBOX_BASELINE)}\n${JSON.stringify(installedSdkVersions())}`,
-    guarded: ["conformance/src/auth-config-sdk/run.mjs"],
+    guarded: ["conformance/src/auth-config-sdk/sandbox-baseline.mjs"],
   },
   "auth-credential": {
     fixture: "auth-credential-production.json",
@@ -157,8 +144,11 @@ export const HARNESS_LANES = {
       "auth-account/harness.mjs",
       "auth-account/session.mjs",
     ],
-    extra: `${JSON.stringify(BASELINE_CONFIG)}\n${JSON.stringify(MFA_DOMAINS)}\n${JSON.stringify(ALIGN_WINDOW)}`,
-    guarded: ["conformance/src/auth-account/corpus.mjs", "conformance/src/auth-mfa/run.mjs"],
+    extra: `${JSON.stringify(BASELINE_CONFIG)}\n${JSON.stringify(AUTHORIZED_DOMAINS)}\n${JSON.stringify(ALIGN_WINDOW)}`,
+    guarded: [
+      "conformance/src/auth-account/corpus.mjs",
+      "conformance/src/auth-account/authorized-domains.mjs",
+    ],
   },
   "fs-query-index": {
     fixture: "fs-query-index-production.json",
@@ -207,7 +197,7 @@ function installedSdkVersions() {
  */
 const SRC = (files) => files.map((file) => `conformance/src/${file}`);
 const FEDERATION_REASON =
-  "the digest is a sha256 over the raw bytes of the modules record.mjs lists (SOURCES), which an owner-ledger approval names; it is not a token-stream digest. The listed inputs are guarded: any rewrite of them is refused";
+  "each recorded digest is a per-recording approval binding: a sha256 over the raw bytes of the modules record.mjs lists (SOURCES) as they were at that recording, named by an owner-ledger approval, and nothing compares it with today's sources. Freezing the listed inputs against a rewrite is a precaution, not a check";
 const FEDERATION_INPUTS = SRC([
   "auth-federation/record.mjs",
   "auth-federation/run.mjs",
@@ -224,6 +214,27 @@ const FEDERATION_INPUTS = SRC([
   "auth-federation/saml.mjs",
   "auth-account/harness.mjs",
 ]);
+/** The two digests of the tenant-blocking runner (its `harnessDigest`), rebuilt from the tree. */
+function tenantBlockingDigests() {
+  const sources = [
+    "auth-tenant-blocking/harness.mjs",
+    "auth-tenant-blocking/session.mjs",
+    "auth-mfa/harness.mjs",
+    "auth-mfa/session.mjs",
+    "auth-credential/session.mjs",
+    "auth-credential/tokens.mjs",
+    "auth-account/harness.mjs",
+    "auth-account/session.mjs",
+  ]
+    .map((file) => treeReader(file))
+    .join("\n");
+  const head = `${sources}\n${JSON.stringify(BASELINE_CONFIG)}\n${JSON.stringify(AUTHORIZED_DOMAINS)}`;
+  const fixture = ["index.js", "package.json", "package-lock.json", "firebase.json"]
+    .map((file) => treeReader(`auth-tenant-blocking/function/${file}`))
+    .join("\n");
+  return { tenant: sha256(head), blocking: sha256(`${head}\n${fixture}`) };
+}
+
 export const WAIVED_FIXTURES = [
   ...[
     "auth-federation-followup-production.json",
@@ -233,7 +244,8 @@ export const WAIVED_FIXTURES = [
   {
     fixture: "auth-tenant-blocking-production.json",
     reason:
-      "the runner keeps two digests (the tenant suite and the blocking suite, which adds the Functions fixture's files) and the blocking one reads files that are not sources. The listed inputs are guarded: any rewrite of them is refused",
+      "the runner keeps two digests (the tenant suite and the blocking suite, which adds the Functions fixture's files) and the blocking one reads files that are not sources. The listed inputs are guarded against a rewrite, and `recompute` rebuilds both digests so an ordinary commit that changes an input fails the selftest",
+    recompute: () => tenantBlockingDigests(),
     inputs: [
       ...SRC([
         "auth-tenant-blocking/harness.mjs",
@@ -519,6 +531,25 @@ export function unconnectedProblems({
   return problems;
 }
 
+/**
+ * A waived lane that can rebuild its digests must still match its fixture: an ordinary commit that
+ * changes one of its inputs fails here, as it does for an enrolled lane.
+ */
+export function waivedDigestProblems({ waived = WAIVED_FIXTURES } = {}) {
+  const problems = [];
+  for (const { fixture, recompute } of waived) {
+    if (!recompute) continue;
+    const fixtureText = JSON.parse(readFileSync(join(CONFORMANCE_DIR, fixture), "utf8"));
+    const current = new Set(Object.values(recompute()));
+    for (const saved of recordedDigests(fixture, fixtureText))
+      if (!current.has(saved))
+        problems.push(
+          `${fixture}: the recorded digest ${saved} is none of the digests its inputs give today`,
+        );
+  }
+  return problems;
+}
+
 /** Whether this checkout has only part of the history (a hop cannot be verified then). */
 export function isShallowCheckout({ cwd = REPO_ROOT } = {}) {
   return (
@@ -534,11 +565,13 @@ export function bindingProblems({
   reader = gitReader,
   shallow = isShallowCheckout(),
   unconnected = unconnectedProblems,
+  waivedDigests = waivedDigestProblems,
 } = {}) {
   const lineage = loadLineage();
   return [
     ...lineageProblems(lineage, { lanes: HARNESS_LANES, reader, shallow }),
     ...enrollmentProblems(),
+    ...waivedDigests(),
     ...unconnected({ lineage: lineage.hops }),
   ];
 }
@@ -570,7 +603,7 @@ export function registryPaths({ lanes = HARNESS_LANES, waived = WAIVED_FIXTURES 
  * change to one makes a recorded digest stale without anything noticing, so a rewrite of one is a
  * problem.
  */
-function frozenPaths({ lanes = HARNESS_LANES, waived = WAIVED_FIXTURES } = {}) {
+export function frozenPaths({ lanes = HARNESS_LANES, waived = WAIVED_FIXTURES } = {}) {
   const frozen = new Map();
   for (const [name, lane] of Object.entries(lanes))
     for (const path of lane.guarded ?? [])

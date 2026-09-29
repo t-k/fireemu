@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { chmod, link, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import test from "node:test";
 
 // The explicitly named private packet of expected values (identity, projects, keys, bucket, database, policy baselines).
@@ -57,7 +58,7 @@ test("the packet is a closed record: unknown, missing and mistyped fields are re
     "targets not strings": mutate((v) => { v.projects.query.apiTargets = [1]; }), "targets not an array": mutate((v) => { v.projects.query.apiTargets = "a"; }), "too many targets": mutate((v) => { v.projects.query.apiTargets = Array.from({ length: 9 }, (_, i) => `s${i}.googleapis.com`); }),
     "bucket name upper": mutate((v) => { v.bucket.name = "Bucket"; }), "bucket name slash": mutate((v) => { v.bucket.name = "a/b"; }), "bucket location empty": mutate((v) => { v.bucket.location = ""; }),
     "uniform not bool": mutate((v) => { v.bucket.uniformBucketLevelAccess = "true"; }), "bucket policy digest": mutate((v) => { v.bucket.iamPolicySha256 = "x"; }),
-    "database missing": mutate((v) => { delete v.database; }), "database type empty": mutate((v) => { v.database.type = ""; }), "project policy digest": mutate((v) => { v.queryProjectIamPolicySha256 = "x"; }),
+    "database missing": mutate((v) => { delete v.database; }), "database location empty": mutate((v) => { v.database.locationId = ""; }), "database location control": mutate((v) => { v.database.locationId = "us\ncentral1"; }), "database type empty": mutate((v) => { v.database.type = ""; }), "project policy digest": mutate((v) => { v.queryProjectIamPolicySha256 = "x"; }),
   };
   for (const [name, value] of Object.entries(bad)) assert.throws(() => parsePrivateInputs(value), /invalid private inputs/, name);
   // null is allowed where the bucket's uniform access is unknown to the packet.
@@ -77,6 +78,27 @@ test("getters, accessors, prototypes and inherited fields are not data", async (
   const hidden = good();
   Object.defineProperty(hidden, "hidden", { value: 1, enumerable: false });
   assert.throws(() => parsePrivateInputs(hidden), /invalid private inputs/);
+});
+
+test("only plain data is accepted: foreign prototypes, hidden expected fields, and proxied, padded or sparse arrays are refused", async () => {
+  const { parsePrivateInputs } = await load();
+  const mutate = (fn) => { const value = good(); fn(value); return value; };
+  const target = "identitytoolkit.googleapis.com";
+  const bad = {
+    // Every expected field is an own enumerable data field, but the record is not a plain object.
+    "null prototype": Object.assign(Object.create(null), good()),
+    "foreign prototype": Object.setPrototypeOf(good(), Object.create(Object.prototype)),
+    "nested null prototype": mutate((v) => { v.bucket = Object.assign(Object.create(null), v.bucket); }),
+    // An array cannot pose as a record even with the plain object prototype.
+    "array as a record": mutate((v) => { v.owner = Object.setPrototypeOf(Object.assign([], v.owner), Object.prototype); }),
+    // An expected field that is present but not enumerable is not data.
+    "hidden top field": mutate((v) => { Object.defineProperty(v, "bucket", { value: v.bucket, enumerable: false }); }),
+    "hidden api key": mutate((v) => { Object.defineProperty(v.projects.query, "apiKey", { value: v.projects.query.apiKey, enumerable: false }); }),
+    "proxied targets": mutate((v) => { v.projects.query.apiTargets = new Proxy([target], {}); }),
+    "targets with an extra field": mutate((v) => { v.projects.query.apiTargets = Object.assign([target], { extra: "x" }); }),
+    "sparse targets": mutate((v) => { const targets = []; targets[1] = target; v.projects.query.apiTargets = targets; }),
+  };
+  for (const [name, value] of Object.entries(bad)) assert.throws(() => parsePrivateInputs(value), /invalid private inputs/, name);
 });
 
 async function fixture(t, { mode = 0o600, body = JSON.stringify(good()), prepare } = {}) {
@@ -123,6 +145,37 @@ test("a packet file that is group or world accessible, a link, a directory, fore
   for (const bad of [undefined, null, 1, {}]) await assert.rejects(loadPrivateInputs(bad), /private inputs file refused/);
 });
 
+test("a loaded packet keeps its API keys only under the non-enumerable secrets", async (t) => {
+  const { loadPrivateInputs } = await load();
+  const { path } = await fixture(t);
+  const inputs = await loadPrivateInputs({ path });
+  assert.equal(inputs.secrets.apiKeys.query, "Q".repeat(39));
+  assert.equal(inputs.secrets.apiKeys.idp, "I".repeat(39));
+  assert.equal(Object.getOwnPropertyDescriptor(inputs, "secrets").enumerable, false);
+  assert.equal(Object.keys(inputs).includes("secrets"), false);
+  assert.equal(JSON.stringify(inputs).includes("Q".repeat(39)), false);
+  assert.equal(JSON.stringify({ ...inputs }).includes("I".repeat(39)), false);
+});
+
+test("a relative path is refused even when it names a valid private packet file", async (t) => {
+  const { loadPrivateInputs, readAdcFile } = await load();
+  const { path } = await fixture(t);
+  const relativePath = relative(process.cwd(), path);
+  assert.equal(relativePath.startsWith("/"), false);
+  await assert.rejects(loadPrivateInputs({ path: relativePath }), /private inputs file refused/);
+  const adc = await fixture(t, { body: JSON.stringify(ADC) });
+  await assert.rejects(readAdcFile({ path: relative(process.cwd(), adc.path) }), /ADC file refused/);
+});
+
+test("a named pipe is refused at once instead of waiting for a writer", { timeout: 10000 }, async (t) => {
+  const { loadPrivateInputs, readAdcFile } = await load();
+  const { directory } = await fixture(t);
+  const pipe = join(directory, "pipe.json");
+  execFileSync("mkfifo", ["-m", "600", pipe]);
+  await assert.rejects(loadPrivateInputs({ path: pipe }), /private inputs file refused/);
+  await assert.rejects(readAdcFile({ path: pipe }), /ADC file refused/);
+});
+
 test("a packet file whose content is not a valid packet is refused with the same error and never echoes the content", async (t) => {
   const { loadPrivateInputs } = await load();
   const value = good();
@@ -150,6 +203,45 @@ test("the ADC file is read with the same file checks and reduced to the four fie
   await assert.rejects(readAdcFile({ path: "adc.json" }), /ADC file refused/);
 });
 
+test("an ADC file that is not valid UTF-8 is refused even where the bytes sit in a field that is not kept", async (t) => {
+  const { readAdcFile } = await load();
+  const text = JSON.stringify({ ...ADC, quota_project_id: "INVALID" });
+  const [head, tail] = text.split("INVALID");
+  const { path } = await fixture(t, { body: Buffer.concat([Buffer.from(head), Buffer.from([0xff, 0xfe]), Buffer.from(tail)]) });
+  await assert.rejects(readAdcFile({ path }), /ADC file refused/);
+  // The same file with valid bytes there is read.
+  const valid = await fixture(t, { body: text });
+  assert.equal((await readAdcFile({ path: valid.path })).type, "authorized_user");
+});
+
+test("a repeated key is refused only within one object: a nested or sibling object may use the same key names", async (t) => {
+  const { readAdcFile, loadPrivateInputs } = await load();
+  const fields = JSON.stringify(ADC).slice(1, -1);
+  const accepted = {
+    "nested keys before the same top keys": `{"extra":{"type":"x","client_id":"y"},${fields}}`,
+    "nested keys after the same top keys": `{${fields},"extra":{"type":"x","client_id":"y"}}`,
+    "sibling objects with the same keys": `{"a":{"k":1},"b":{"k":2},${fields}}`,
+    "an array of objects with the same keys": `{"list":[{"k":1},{"k":2}],${fields}}`,
+    "a key name as a string value": `{"quota":"type","label":["type","type"],${fields}}`,
+  };
+  for (const [name, body] of Object.entries(accepted)) {
+    const { path } = await fixture(t, { body });
+    assert.equal((await readAdcFile({ path })).type, "authorized_user", name);
+  }
+  const refused = {
+    "top key repeated after a nested object": `{${fields},"extra":{"a":1},"type":"authorized_user"}`,
+    "repeated key inside a nested object": `{"extra":{"a":1,"b":2,"a":3},${fields}}`,
+    "repeated key inside an object in an array": `{"list":[{"k":1},{"k":2,"k":3}],${fields}}`,
+  };
+  for (const [name, body] of Object.entries(refused)) {
+    const { path } = await fixture(t, { body });
+    await assert.rejects(readAdcFile({ path }), /ADC file refused/, name);
+  }
+  // The packet's two projects share every key name and are read.
+  const { path } = await fixture(t);
+  assert.equal((await loadPrivateInputs({ path })).projects.idp.projectId, "fireemu-oracle-idp");
+});
+
 test("run secrets are fresh, well-formed and never reused: the salt, four passwords and the two malformed credentials", async () => {
   const { generateRunSecrets } = await load();
   const a = generateRunSecrets();
@@ -168,4 +260,7 @@ test("run secrets are fresh, well-formed and never reused: the salt, four passwo
   assert.equal(fixed.digestSalt, "07".repeat(32));
   assert.throws(() => generateRunSecrets({ randomBytes: () => Buffer.alloc(3) }), /invalid random source/);
   assert.throws(() => generateRunSecrets({ randomBytes: () => "x" }), /invalid random source/);
+  // A source of the right size that is not a Buffer is refused too: its toString would not encode the bytes.
+  assert.throws(() => generateRunSecrets({ randomBytes: (size) => "x".repeat(size) }), /invalid random source/);
+  assert.throws(() => generateRunSecrets({ randomBytes: (size) => new Uint8Array(size).fill(7) }), /invalid random source/);
 });

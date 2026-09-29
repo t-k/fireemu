@@ -114,7 +114,8 @@ async function readPrivateFile(options, refusal, uid) {
     if (options === null || typeof options !== "object" || typeof options.path !== "string" || !isAbsolute(options.path) || options.path.includes("\0")) throw new Error();
     const expectedUid = options.uid === undefined ? process.getuid() : options.uid;
     if (!Number.isInteger(expectedUid)) throw new Error();
-    const handle = await open(options.path, constants.O_RDONLY | constants.O_NOFOLLOW);
+    // O_NONBLOCK: opening a FIFO would otherwise wait for a writer forever; it is refused below as not a regular file.
+    const handle = await open(options.path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
     try {
       const stat = await handle.stat();
       if (!stat.isFile() || (stat.mode & 0o077) !== 0 || stat.uid !== expectedUid || stat.nlink !== 1 || stat.size > MAX_FILE_BYTES) throw new Error();

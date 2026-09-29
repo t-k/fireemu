@@ -10,10 +10,15 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ### Changed
 
-- Emulator profile without signers: a custom token's tenant claim is checked only where the official emulator checks it: never on a JSON fake token (`{"uid": …}`), and on an unsigned JWT only in a tenant, where the claim must name that tenant. A JSON token now signs in to the tenant the request names whatever its claim, and a JWT with a tenant claim exchanged in the project signs in to the project; both were refused with `TENANT_ID_MISMATCH` before, which the official emulator never does. This fixes the two known issues listed under 0.9.0. The strict profile, and the emulator profile with signers, keep production's rules.
-- Emulator profile: a tenant's `emailPrivacyConfig` reads back as the official emulator keeps it (firebase-tools 15.28.2): a create keeps none, and an update keeps what it writes, `false` included, while a masked member the body lacks changes nothing. The tenant's privacy behaviour still reads the project's. Before, the document showed the project's value. This fixes the known issue listed under 0.9.0. The strict profile keeps production's answer.
+- Emulator profile without signers: a custom token's tenant claim is checked only where the official emulator checks it: never on a JSON fake token (`{"uid": …}`), and on an unsigned JWT only in a tenant, where the claim must name that tenant. A JSON token now signs in to the tenant the request names whatever its claim, and a JWT with a tenant claim exchanged in the project signs in to the project; both were refused with `TENANT_ID_MISMATCH` before, which the official emulator never does. This fixes the JSON-token and tenant-claim known issue listed under 0.9.0. The strict profile, and the emulator profile with signers, keep production's rules.
+- Emulator profile: a tenant's `emailPrivacyConfig` reads back as the official emulator keeps it (firebase-tools 15.28.2): a create keeps none, and an update keeps what it writes, `false` included, while a masked member the body lacks changes nothing. The tenant's privacy behaviour still reads the project's. Before, the document showed the project's value. This fixes the `emailPrivacyConfig` known issue listed under 0.9.0. The strict profile keeps production's answer.
 - Strict profile: a `pendingToken` continuation of a nonce-bearing OIDC sign-in is resumed instead of being refused as a duplicate credential. The continuation carries the credential the first request consumed, so presenting the same ID token and nonce again is still refused; a forged token or one from another daemon is refused as an unknown continuation. The continuation is not consumed, so it can be resumed more than once within its lifetime, as production answered a repeated resume for a credential without a nonce (its answer for a nonce-bearing credential is unrecorded).
 - Strict profile: a SAML sign-in that ran a blocking function is checked again against the live provider when it commits: a response whose `Destination`, assertion `Issuer` or audience no longer matches the provider's callback URL, identity provider entity ID or SP entity ID answers `INVALID_IDP_RESPONSE`. A name the response does not carry is not compared. The time windows are still read when the request starts. This is fireemu's own guard, not production's.
+
+### Release process
+
+- The release workflow creates a GitHub Release from the version's CHANGELOG section after the npm publish, with the platform archives, their checksums and the SBOMs attached, so the archives can be downloaded without npm.
+- The strict production gate of the release job reruns more of the committed production comparisons against the packaged runner beside the installed binary: AUTH-TENANT-BLOCKING and AUTH-FEDERATION (R13 to R17), FS-RULES (R4) and AUTH-FS-CROSS stage 1 (R18). This closes the release-gate known issue listed under 0.9.0 for those comparisons. The gate refuses to run without a packaged runner, and the workflow contract pins its full-history checkout and the blocking fixture's dependency install.
 
 ### Fixed
 
@@ -352,7 +357,7 @@ Security Rules (FS-RULES): behavior below was measured against a real Firestore 
 - Pub/Sub honors subscription retry policies and refuses unsupported topic, subscription, and push configuration options instead of silently ignoring them.
 - TOTP enrollment eligibility is enforced at enrollment and rechecked during finalize; the ambiguous finalize API was removed and retry state follows the verified model.
 - `fireemu.json` rejects runtime limits that no service reads, and the Firestore capability manifest entries were aligned with the actual scope.
-- The npm packages are published with OIDC Trusted Publishing and provenance. Releases are represented by Git tags rather than GitHub Releases.
+- The npm packages are published with OIDC Trusted Publishing and provenance. At this version releases were Git tags alone; GitHub Releases exist for 0.8.0 and later.
 - The workspace version is now `0.2.0`, so `fireemu doctor`, the UI, the hub locator, and export metadata report the same version as the npm package.
 
 ### Fixed

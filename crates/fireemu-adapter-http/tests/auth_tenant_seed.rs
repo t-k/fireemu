@@ -315,7 +315,8 @@ fn a_declaration_sets_the_switch_when_declared_and_leaves_a_present_tenant_alone
         &format!("{V2}/projects/demo-app/tenants/acme-x7k2q"),
         &json!({}),
     );
-    assert_eq!(document["allowPasswordSignup"], false, "{document}");
+    // The imported document has no multi-factor config; the declared one would have.
+    assert!(document.get("mfaConfig").is_none(), "{document}");
     // Undeclared, the switch is left as the project has it.
     seed_multi_tenancy(&registry, "demo-app", false).unwrap();
     TenantSeeding::new(None, Vec::new())

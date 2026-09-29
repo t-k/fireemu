@@ -47,7 +47,8 @@ export function createController(options) {
     if (kind === "firestore-read") return verdict === "present" || verdict === "absent";
     // A query right after a cancel (the verify rows and recovery's terminal query) must find the session finished; only the first look may find it active.
     if (kind === "session-command") return row.request.headers["x-goog-upload-command"] === "cancel" ? verdict === "acknowledged" : row.family === "session-verify" || /\/terminal$/.test(row.id) ? verdict === "final" : verdict === "active" || verdict === "final";
-    if (kind === "settle-read") return true;
+    // A settle read either shows the witness readable or shows it denied; any other answer (a quota error, a lost witness, wrong bytes) is a surprise, not a cycle that has not settled yet.
+    if (kind === "settle-read") return verdict === "allowed" || verdict === "denied";
     return verdict === "accepted";
   }
 

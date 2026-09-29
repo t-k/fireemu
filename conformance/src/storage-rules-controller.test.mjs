@@ -483,6 +483,31 @@ test("a result never claims a recovery is unneeded while the counter is open", a
   assert.equal(refused.gate.snapshot().mode, "closed");
 });
 
+test("a settle read that is neither allowed nor denied stops the run at once, in a publication settle and in a restore settle, in a run and in recovery", async () => {
+  const publication = await firstSent((r) => r.family === "settle" && r.phase === "normal" && r.programId === "v1");
+  for (const answer of [serverError, () => response(404, { error: { code: 404, message: "Not Found." } }), () => response(429, { error: { code: 429, message: "quota" } }), () => response(401, { error: { code: 401, message: "auth" } }), () => ({ status: 200, rawHeaders: ["Content-Type", "text/plain"], bytes: Buffer.from("not the seed") })]) {
+    const h = await harness({ simulatorOptions: answerAt(await callOf(publication), answer) });
+    const result = await h.controller.run();
+    assert.deepEqual([result.status, result.reason, result.detail.rowId], ["stopped", "unexpected verdict", publication]);
+    assert.equal(sentIds(h).at(-1), publication);
+  }
+  const restore = await firstSent((r) => r.family === "settle" && r.phase === "normal" && r.programId === "restore");
+  const h = await harness({ simulatorOptions: answerAt(await callOf(restore), serverError) });
+  const stopped = await h.controller.run();
+  assert.deepEqual([stopped.reason, stopped.detail.rowId], ["unexpected verdict", restore]);
+  // The same in recovery: the restore settle stops recovery on its first odd answer.
+  const dry = await harness({ credentialsFresh: () => false });
+  await dry.controller.run();
+  await dry.controller.recover();
+  const recoverySettle = sentIds(dry).find((id) => id.startsWith("recovery/settle/restore/"));
+  assert.ok(recoverySettle);
+  const recoveryCall = sentIds(dry).indexOf(recoverySettle) + 1;
+  const stale = await harness({ credentialsFresh: () => false, simulatorOptions: answerAt(recoveryCall, serverError) });
+  await stale.controller.run();
+  const recovered = await stale.controller.recover();
+  assert.deepEqual([recovered.status, recovered.reason, recovered.detail.rowId], ["stopped", "unexpected verdict", recoverySettle]);
+});
+
 test("a response that fails its post-response check stops the run as a failed check", async () => {
   // A publication's after-read must name the Ruleset the run created; a missing release fails that check.
   const after = await harness({ simulatorOptions: answerAt(await callOf("release/v1/after"), rpcNotFound) });

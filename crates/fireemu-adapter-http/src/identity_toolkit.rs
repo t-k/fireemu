@@ -3311,13 +3311,112 @@ fn request_project(
     }
 }
 
+/// The tenant the official Auth emulator creates on the way (emulator profile; firebase-tools
+/// 15.28.2). Every operation reads its target tenant from the path, else the body's `tenantId`,
+/// else the ID token's `firebase.tenant`, and `accounts:batchGet` also from the query; the
+/// emulator's `getProjectStateById` then creates the tenant if the project has none by that name
+/// (`getTenantProject`), with `allowPasswordSignup`, `enableAnonymousUser` and
+/// `enableEmailLinkSignin` on, `disableAuth` off and multi-factor on for `PHONE_SMS`. The
+/// request then goes on as it would for an existing, empty tenant: an account call finds no user,
+/// a tenant document read answers the defaults, a delete removes what was made. The tenant is
+/// made in the request's project, and only for a request whose route exists.
+///
+/// A path tenant and a body or token tenant that differ (`TENANT_ID_MISMATCH`), an empty or
+/// non-string `tenantId`, and a token of another project (the emulator profile refuses one by its
+/// audience) name no tenant to create. The strict profile never creates one: production refuses.
+fn emulator_creates_named_tenant(
+    state: &AuthState,
+    path: &str,
+    query: Option<&str>,
+    body: &Value,
+    resolution: routes::Resolution<'_>,
+) -> Result<Option<String>, JsonResponse> {
+    if !state.stateless_refresh_tokens {
+        return Ok(None);
+    }
+    let (Some(registry), routes::Resolution::Matched { route, .. }) =
+        (state.registry.as_ref(), resolution)
+    else {
+        return Ok(None);
+    };
+    let project = request_project(state, path, query)?;
+    let path_tenant = routes::scoped_target(path).and_then(|(_, tenant)| tenant);
+    let body_tenant = match body.get("tenantId") {
+        Some(Value::String(named)) if !named.is_empty() => Some(named.as_str()),
+        None | Some(Value::Null | Value::String(_)) => None,
+        _ => return Ok(None),
+    };
+    let token_tenant = match str_field(body, "idToken") {
+        None => None,
+        Some(token) => {
+            let signer = state.store.lock().ok().and_then(|s| s.signer_arc());
+            match fireemu_core_auth::jwt::decode_token(token, signer.as_deref()) {
+                Ok(decoded) => {
+                    let payload = &decoded.payload;
+                    let audience = payload
+                        .get("aud")
+                        .and_then(fireemu_core_types::json::JsonValue::as_str);
+                    if audience != Some(project.as_str()) {
+                        return Ok(None);
+                    }
+                    payload
+                        .get("firebase")
+                        .and_then(|firebase| firebase.get("tenant"))
+                        .and_then(fireemu_core_types::json::JsonValue::as_str)
+                        .map(str::to_owned)
+                }
+                Err(_) => None,
+            }
+        }
+    };
+    let query_tenant = if route.handler == routes::Handler::AdminBatchGet {
+        query_selectors(query).ok().and_then(|(_, tenant)| tenant)
+    } else {
+        None
+    };
+    // The named tenants must agree, as the emulator asserts before it looks the tenant up.
+    let mut named = [path_tenant, body_tenant, token_tenant.as_deref()]
+        .into_iter()
+        .flatten();
+    let Some(target) = named.next() else {
+        if let Some(target) = query_tenant.as_deref() {
+            make_tenant_on_the_way(registry, &project, target);
+        }
+        return Ok(None);
+    };
+    if named.any(|other| other != target) {
+        return Ok(None);
+    }
+    Ok(make_tenant_on_the_way(registry, &project, target).then(|| target.to_owned()))
+}
+
+/// Makes `tenant` in `project` if the project has none by that name, with the official
+/// emulator's defaults: the store's own (password sign-up, email-link sign-in and anonymous users
+/// on, authentication not disabled) and multi-factor enabled for `PHONE_SMS`.
+fn make_tenant_on_the_way(
+    registry: &fireemu_core_auth::store::AuthRegistry,
+    project: &str,
+    tenant: &str,
+) -> bool {
+    if registry.tenant_store(project, tenant).is_some() {
+        return false;
+    }
+    let Some(store) = registry.ensure_tenant(project, tenant) else {
+        return false;
+    };
+    if let Ok(mut store) = store.lock() {
+        tenant_document::install_default_mfa(&mut store);
+    }
+    true
+}
+
 /// The tenant an account request's ID token names, answered as the official Auth emulator
 /// answers it (emulator profile; firebase-tools 15.28.2). The emulator takes the target tenant
 /// from the path, else from the body, else from the ID token (`toExegesisOperation`): a path or
 /// body tenant other than the token's is `TENANT_ID_MISMATCH`, and a target tenant that no
 /// longer exists (or never did) finds no user there (`parseIdToken`: `USER_NOT_FOUND`), whatever
-/// the API key or a query tenant say. Unlike the emulator, which creates the missing tenant on
-/// the way, fireemu creates nothing. A token of another project, a signed token that does not
+/// the API key or a query tenant say (`emulator_creates_named_tenant` has made the tenant by
+/// then, so a deleted tenant's token finds no user in a tenant that exists again). A token of another project, a signed token that does not
 /// decode, a `tenantId` that is not a string, and a request without an ID token keep their
 /// current answer.
 ///
@@ -3328,6 +3427,7 @@ fn emulator_named_tenant(
     path: &str,
     query: Option<&str>,
     body: &Value,
+    made_on_the_way: Option<&str>,
 ) -> Result<Option<Value>, JsonResponse> {
     if !state.stateless_refresh_tokens {
         return Ok(None);
@@ -3393,7 +3493,8 @@ fn emulator_named_tenant(
         }
         (None, None) => token_tenant.as_str(),
     };
-    if registry.tenant_store(&project, target).is_none() {
+    // A tenant this request made on the way is empty: the token's user is not in it.
+    if made_on_the_way == Some(target) || registry.tenant_store(&project, target).is_none() {
         return Err(error(400, "USER_NOT_FOUND"));
     }
     Ok(rewritten)
@@ -3621,9 +3722,15 @@ fn handle_with_policy_inner(
         Ok(None) => body,
         Err(response) => return response,
     };
+    // The official emulator makes a tenant it has not seen when a request names one.
+    let made_on_the_way = match emulator_creates_named_tenant(state, path, query, body, resolution)
+    {
+        Ok(made) => made,
+        Err(response) => return response,
+    };
     // The official emulator's reading of an ID token's tenant (emulator profile).
     let emulator_tenant_body;
-    let body = match emulator_named_tenant(state, path, query, body) {
+    let body = match emulator_named_tenant(state, path, query, body, made_on_the_way.as_deref()) {
         Ok(Some(rewritten)) => {
             emulator_tenant_body = rewritten;
             &emulator_tenant_body

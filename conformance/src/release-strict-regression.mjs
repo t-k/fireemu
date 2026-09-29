@@ -24,6 +24,8 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 
+import { bindingProblems } from "./harness-registry.mjs";
+import { EXPECTED_ACTIONS, localSetupDigest } from "./harness-target/local-tenancy.mjs";
 import { findPackagedRunner, packagedRunnerCandidates } from "./packaged-runner.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
@@ -122,7 +124,12 @@ export const RUNS = [
     "fs-config-lifecycle",
     0,
   ),
-  // R4 (fs-rules-comparison-v1) is excluded for v0.9.0: see EXCLUDED_KINDS.
+  {
+    // The local tenant setup runs outside the recorded harness (harness-target/local-tenancy.mjs),
+    // so the export must say what it did.
+    ...laneRun("R4", "fs-rules-comparison-v1", "conformance/src/fs-rules/run.mjs", "fs-rules", 0),
+    localSetup: true,
+  },
   laneRun(
     "R5",
     "auth-account-comparison-v1",
@@ -285,6 +292,17 @@ export const RUNS = [
       },
     ],
   },
+  {
+    // AUTH-FS-CROSS stage 1, the unary conditions; stage 2 is a 61-minute real-time window.
+    ...laneRun(
+      "R18",
+      "auth-fs-cross-comparison-v1",
+      "conformance/src/auth-fs-cross/run.mjs",
+      "auth-fs-cross",
+      0,
+    ),
+    localSetup: true,
+  },
 ];
 
 /** Composite comparison files: which part each run covers. Other keys are metadata. */
@@ -319,22 +337,10 @@ export const EXCLUDED_PARTS = [
  */
 export const EXCLUDED_KINDS = [
   {
-    kind: "fs-rules-comparison-v1",
-    reason:
-      "the recorded FS-RULES harness creates tenants and does not switch multi-tenancy on, which the strict profile now requires as production does; the local tenant setup sits outside the bound harness (ledger line 473). FS-RULES was re-checked on the v0.9.0 final artifact with that setup added outside the harness: 1144 MATCH and 5 DEPENDENCY_REFUSED (owner decision 2026-09-29)",
-    issue: "move-local-only-harness-setup-outside-the-bound-harness-digest.md",
-  },
-  {
-    kind: "auth-fs-cross-comparison-v1",
-    reason:
-      "stage 1 needs the local tenant setup (multi-tenancy switched on) that the recorded harness does not do; its regression ran with that setup added outside the harness (owner decision, ledger line 473)",
-    issue: "move-local-only-harness-setup-outside-the-bound-harness-digest.md",
-  },
-  {
     kind: "auth-fs-cross-stage2-comparison-v1",
     reason:
-      "stage 2 needs the local tenant setup (multi-tenancy switched on) that the recorded harness does not do; its regression ran with that setup added outside the harness (owner decision, ledger line 473)",
-    issue: "move-local-only-harness-setup-outside-the-bound-harness-digest.md",
+      "the stage-2 local window keeps production's timeline in real time (about 61 minutes on the v0.9.0 final artifact) and drives a browser client, which the 45-minute release job and its runner do not allow; the local tenant setup is no longer a reason (it runs outside the recorded harness), and the rows were compared on the final artifact",
+    issue: "auth-fs-cross-stage2-needs-a-long-release-job.md",
   },
 ];
 
@@ -510,12 +516,42 @@ export function planComparisons(
   return { comparisons: planned, excluded, errors };
 }
 
+/**
+ * The plan of the release comparison, and the errors of the harness binding: the recorded rows
+ * are only comparable if their harness digests are still bound, and a shallow clone cannot
+ * verify the lineage, so it stops here (the release job checks out the whole history).
+ */
+export function planRelease(closures, readJson, { binding = bindingProblems } = {}) {
+  const plan = planComparisons(closures, readJson);
+  plan.errors.push(...binding().map((problem) => `harness binding: ${problem}`));
+  return plan;
+}
+
 const brief = (value) => {
   const text = JSON.stringify(value);
   return text === undefined ? "undefined" : text.length > 300 ? `${text.slice(0, 300)}...` : text;
 };
 
 const rowKey = (row) => row?.row ?? row?.id;
+
+/**
+ * A run that prepared the local target outside the recorded harness must say so: the export names
+ * the digest of the helper that did it and exactly the changes it made and read back.
+ */
+export function localSetupDifferences(actual) {
+  const setup = actual?.localSetup;
+  if (!setup || typeof setup !== "object") return ["localSetup: the export names no local setup"];
+  const differences = [];
+  if (setup.digest !== localSetupDigest())
+    differences.push(`localSetup.digest: expected ${localSetupDigest()} got ${brief(setup.digest)}`);
+  if (!isDeepStrictEqual(setup.actions, EXPECTED_ACTIONS))
+    differences.push(
+      `localSetup.actions: expected ${brief(EXPECTED_ACTIONS)} got ${brief(setup.actions)}`,
+    );
+  const extra = Object.keys(setup).filter((key) => key !== "digest" && key !== "actions");
+  if (extra.length) differences.push(`localSetup: unexpected ${extra.join(", ")}`);
+  return differences;
+}
 
 /** Differences between a lane export and the committed comparison file. */
 export function compareLaneExport(expected, actual, binarySha256) {
@@ -888,7 +924,7 @@ async function observe(run, entry, context) {
   return existsSync(path) ? await readJsonFile(path) : undefined;
 }
 
-function judge(comparison, observations, context) {
+export function judge(comparison, observations, context) {
   const expected = context.readJson(comparison.path);
   if (comparison.kind === "fs-data-write-integrated-regression") {
     const lane = context.readJson(expected.current.laneComparisonPath);
@@ -906,7 +942,12 @@ function judge(comparison, observations, context) {
   if (comparison.kind === "functions-http-integrated-regression") {
     return judgeFunctionsHttp(expected, observations.R12);
   }
-  return compareLaneExport(expected, observations[comparison.runIds[0]], context.binarySha256);
+  const observed = observations[comparison.runIds[0]];
+  const run = RUNS.find((r) => r.id === comparison.runIds[0]);
+  return [
+    ...compareLaneExport(expected, observed, context.binarySha256),
+    ...(run?.localSetup ? localSetupDifferences(observed) : []),
+  ];
 }
 
 /**
@@ -952,7 +993,7 @@ async function main() {
   const closures = readdirSync(join(ROOT, CLOSURE_DIR))
     .filter((name) => name.endsWith(".json") && name !== "record-digests.json")
     .map((name) => ({ name, closure: readJson(`${CLOSURE_DIR}/${name}`) }));
-  const plan = planComparisons(closures, readJson);
+  const plan = planRelease(closures, readJson);
   const binarySha256 = await sha256File(binary);
   const tarballs = {};
   if (args.dist) {

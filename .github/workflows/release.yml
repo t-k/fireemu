@@ -323,6 +323,9 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
+          # The whole history: the gate verifies every hop of conformance/harness-lineage.json
+          # against it and refuses a shallow clone.
+          fetch-depth: 0
       - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa
         with:
           version: 10.32.1

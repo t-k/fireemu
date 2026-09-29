@@ -11,6 +11,8 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 
+import { EXPECTED_ACTIONS, localSetupDigest } from "./harness-target/local-tenancy.mjs";
+
 import {
   ALLOWED_MODES,
   EXCLUDED_KINDS,
@@ -21,12 +23,15 @@ import {
   compareLaneExport,
   exportCopies,
   forbiddenEnvironment,
+  judge,
   judgeFsDataWriteCurrent,
   judgeFsDataWriteHistorical,
   judgeFunctionsHttp,
+  localSetupDifferences,
   packagedRunnerError,
   parseArguments,
   planComparisons,
+  planRelease,
 } from "./release-strict-regression.mjs";
 import { COMPARISONS } from "./auth-federation/compare.mjs";
 
@@ -372,9 +377,7 @@ test("an exclusion no verified closure needs stops the release", () => {
 test("the excluded kinds are exactly the ones the release discloses", () => {
   // Removing an exclusion means adding its run; adding one means a disclosure of its own.
   assert.deepEqual(EXCLUDED_KINDS.map((exclusion) => exclusion.kind).toSorted(), [
-    "auth-fs-cross-comparison-v1",
     "auth-fs-cross-stage2-comparison-v1",
-    "fs-rules-comparison-v1",
   ]);
 });
 
@@ -845,5 +848,138 @@ test("the script refuses to start on a build that ships no runner, before it rea
     assert.match(packaged.stderr, /refusing to run with FIREEMU_RUNNER_NODE set/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// --- the local tenant setup (FS-RULES and AUTH-FS-CROSS stage 1) ------------------------------
+
+const SETUP = () => ({ digest: localSetupDigest(), actions: [...EXPECTED_ACTIONS] });
+
+test("FS-RULES (R4) and AUTH-FS-CROSS stage 1 (R18) are rerun, with their local setup named", () => {
+  for (const [id, kind] of [
+    ["R4", "fs-rules-comparison-v1"],
+    ["R18", "auth-fs-cross-comparison-v1"],
+  ]) {
+    const run = RUNS.find((r) => r.id === id);
+    assert.equal(run?.kind, kind, id);
+    assert.equal(run.localSetup, true, id);
+    assert.deepEqual(
+      run.commands.map((c) => c.mode),
+      ["check", "export-comparison"],
+      id,
+    );
+    assert.deepEqual(
+      run.commands.map((c) => c.expectedExitCodes),
+      [[0], [0]],
+      id,
+    );
+    assert.ok(!EXCLUDED_KINDS.some((ex) => ex.kind === kind), `${kind} is not excluded`);
+  }
+});
+
+test("only AUTH-FS-CROSS stage 2 is excluded of the three, for its real-time window", () => {
+  const kinds = EXCLUDED_KINDS.map((ex) => ex.kind);
+  assert.ok(!kinds.includes("fs-rules-comparison-v1"));
+  assert.ok(!kinds.includes("auth-fs-cross-comparison-v1"));
+  const stage2 = EXCLUDED_KINDS.find((ex) => ex.kind === "auth-fs-cross-stage2-comparison-v1");
+  assert.match(stage2.reason, /real time/);
+  assert.match(stage2.reason, /browser/);
+  assert.ok(!/needs the local tenant setup/.test(stage2.reason));
+});
+
+test("a run that prepared the local target must name the setup it made", () => {
+  assert.deepEqual(localSetupDifferences({ localSetup: SETUP() }), []);
+  assert.match(localSetupDifferences({}).join("\n"), /names no local setup/);
+  assert.match(localSetupDifferences(undefined).join("\n"), /names no local setup/);
+  assert.match(localSetupDifferences({ localSetup: "x" }).join("\n"), /names no local setup/);
+  assert.match(
+    localSetupDifferences({ localSetup: { ...SETUP(), digest: "0".repeat(64) } }).join("\n"),
+    /localSetup\.digest/,
+  );
+  assert.match(
+    localSetupDifferences({ localSetup: { ...SETUP(), actions: [] } }).join("\n"),
+    /localSetup\.actions/,
+  );
+  assert.match(
+    localSetupDifferences({ localSetup: { ...SETUP(), actions: EXPECTED_ACTIONS.slice(0, 1) } }).join("\n"),
+    /localSetup\.actions/,
+  );
+  assert.match(
+    localSetupDifferences({ localSetup: { ...SETUP(), extra: 1 } }).join("\n"),
+    /unexpected extra/,
+  );
+});
+
+test("the judgement of a run with a local setup fails without it, and only for those runs", () => {
+  const closure = "spec/compatibility/closure/evidence";
+  // R4's kind is named by two committed files (FS-RULES' own and AUTH-FS-CROSS' copy on its artifact).
+  for (const [runId, file] of [
+    ["R4", "FS-RULES-comparison.json"],
+    ["R4", "AUTH-FS-CROSS-fs-rules-regression.json"],
+    ["R18", "AUTH-FS-CROSS-stage1-comparison.json"],
+  ]) {
+    const path = `${closure}/${file}`;
+    const committed = readJson(path);
+    const comparison = { path, kind: committed.kind, runIds: [runId] };
+    const context = { readJson, binarySha256: BINARY };
+    const observed = { ...committed, artifactSha256: BINARY };
+    assert.match(
+      judge(comparison, { [runId]: observed }, context).join("\n"),
+      /names no local setup/,
+      file,
+    );
+    assert.deepEqual(
+      judge(comparison, { [runId]: { ...observed, localSetup: SETUP() } }, context),
+      [],
+      file,
+    );
+  }
+  // A run without the flag is judged on its rows alone.
+  const path = `${EVIDENCE}/AUTH-MFA-comparison.json`;
+  const observed = exportOf(path);
+  assert.deepEqual(
+    judge({ path, kind: observed.kind, runIds: ["R8"] }, { R8: observed }, { readJson, binarySha256: BINARY }),
+    [],
+  );
+});
+
+test("the release plan stops on a harness binding problem, and is clean with none", () => {
+  const stopped = planRelease(committedClosures(), readJson, { binding: () => ["a", "b"] });
+  assert.deepEqual(
+    stopped.errors.filter((e) => e.startsWith("harness binding")),
+    ["harness binding: a", "harness binding: b"],
+  );
+  assert.deepEqual(planRelease(committedClosures(), readJson, { binding: () => [] }).errors, []);
+  // The binding of this checkout: a shallow clone would fail here, as the release job must.
+  assert.deepEqual(planRelease(committedClosures(), readJson).errors, []);
+});
+
+/** The text of the job of a workflow that holds `needle` (jobs are the two-space keys). */
+const jobContaining = (workflow, needle) => {
+  const text = readFileSync(repo(`.github/workflows/${workflow}`), "utf8");
+  const jobs = text.split(/^(?=  [a-z0-9-]+:\n)/m);
+  const found = jobs.filter((job) => job.includes(needle));
+  assert.equal(found.length, 1, `${workflow}: one job holds ${needle}`);
+  return found[0];
+};
+
+test("the jobs that verify the harness lineage check out the whole history", () => {
+  // A shallow clone cannot verify a hop, and the selftest and the gate both refuse one: without
+  // fetch-depth 0 the release would stop rather than pass unverified.
+  for (const [workflow, needle] of [
+    ["conformance.yml", "pnpm -C conformance run selftest"],
+    ["release.yml", "release-strict-regression.mjs --out strict-regression"],
+  ]) {
+    const job = jobContaining(workflow, needle);
+    const lines = job.split("\n");
+    const checkout = lines.findIndex((line) => /uses: actions\/checkout@/.test(line));
+    assert.ok(checkout >= 0, `${workflow}: a checkout step`);
+    // The `with:` block of the checkout step: the lines indented deeper than the step's `uses`.
+    const block = [];
+    for (const line of lines.slice(checkout + 1)) {
+      if (/^      - /.test(line) || /^    \S/.test(line)) break;
+      block.push(line.trim());
+    }
+    assert.ok(block.includes("fetch-depth: 0"), `${workflow}: the checkout fetches the whole history`);
   }
 });

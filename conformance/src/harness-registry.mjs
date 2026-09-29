@@ -291,16 +291,62 @@ export function enrollmentProblems({
   return problems;
 }
 
+/**
+ * Enrolled lanes whose recorded digest no hop connects to today's, except the ones listed in
+ * KNOWN_UNCONNECTED at their present digest; and known entries that no longer apply.
+ */
+export function unconnectedProblems({
+  lanes = HARNESS_LANES,
+  known = KNOWN_UNCONNECTED,
+  lineage,
+} = {}) {
+  const problems = [];
+  for (const [name, lane] of Object.entries(lanes)) {
+    const status = laneStatus(name, lane, { lineage });
+    const entry = known[name];
+    if (status.state === "stale") {
+      if (!entry)
+        problems.push(
+          `${name}: the recorded digest ${status.saved} is not connected to ${status.current}`,
+        );
+      else if (entry.currentScheme2 !== status.current)
+        problems.push(
+          `${name}: the known-unconnected entry is out of date (now ${status.current})`,
+        );
+      else if (typeof entry.reason !== "string" || entry.reason.length < 20)
+        problems.push(`${name}: the known-unconnected entry needs a reason`);
+    } else if (entry) problems.push(`${name} is connected; drop its known-unconnected entry`);
+  }
+  for (const name of Object.keys(known))
+    if (!lanes[name]) problems.push(`${name}: known-unconnected, but no such lane`);
+  return problems;
+}
+
+/** Whether this checkout has only part of the history (a hop cannot be verified then). */
+export function isShallowCheckout() {
+  return (
+    execFileSync("git", ["rev-parse", "--is-shallow-repository"], {
+      cwd: REPO_ROOT,
+      encoding: "utf8",
+    }).trim() === "true"
+  );
+}
+
+/** Everything the release gate and the selftest refuse: a shallow clone counts. */
+export function bindingProblems({ reader = gitReader, shallow = isShallowCheckout() } = {}) {
+  const lineage = loadLineage();
+  return [
+    ...lineageProblems(lineage, { lanes: HARNESS_LANES, reader, shallow }),
+    ...enrollmentProblems(),
+    ...unconnectedProblems({ lineage: lineage.hops }),
+  ];
+}
+
 // ---- report ------------------------------------------------------------------------------------
 
 /** What `verify` prints: each lane's recorded and current digest and its state. */
 export function verifyReport({ reader = gitReader, shallow } = {}) {
-  const isShallow =
-    shallow ??
-    execFileSync("git", ["rev-parse", "--is-shallow-repository"], {
-      cwd: REPO_ROOT,
-      encoding: "utf8",
-    }).trim() === "true";
+  const isShallow = shallow ?? isShallowCheckout();
   const lineage = loadLineage();
   const lanes = Object.fromEntries(
     Object.entries(HARNESS_LANES).map(([name, lane]) => {

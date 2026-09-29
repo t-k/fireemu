@@ -12,6 +12,7 @@ import {
   enrollmentProblems,
   fixturesWithHarnessDigest,
   gitReader,
+  bindingProblems,
   HARNESS_LANES,
   KNOWN_UNCONNECTED,
   laneStatus,
@@ -22,6 +23,7 @@ import {
   scheme2Digest,
   sourceTokens,
   treeReader,
+  unconnectedProblems,
   WAIVED_FIXTURES,
 } from "./harness-registry.mjs";
 
@@ -273,28 +275,46 @@ test("the checked-in lineage is sound against the git history", () => {
 });
 
 test("every enrolled lane is current, or listed as known unconnected at its present digest", () => {
-  for (const [name, lane] of Object.entries(HARNESS_LANES)) {
-    const status = laneStatus(name, lane);
-    if (status.state === "stale") {
-      const known = KNOWN_UNCONNECTED[name];
-      assert.ok(
-        known,
-        `${name}: fixture digest ${status.saved} is not connected to ${status.current}`,
-      );
-      assert.equal(
-        known.currentScheme2,
-        status.current,
-        `${name}: the known-unconnected entry is out of date`,
-      );
-      assert.ok(known.reason.length > 20, `${name}: reason`);
-    } else {
-      assert.equal(
-        KNOWN_UNCONNECTED[name],
-        undefined,
-        `${name} is connected, drop its known entry`,
-      );
-    }
-  }
+  assert.deepEqual(unconnectedProblems(), []);
+});
+
+test("an unconnected lane, a stale known entry and an unneeded one are each a problem", () => {
+  const name = "auth-fs-cross-stage2";
+  const lanes = { [name]: HARNESS_LANES[name] };
+  assert.match(unconnectedProblems({ lanes, known: {} }).join("\n"), /not connected/);
+  assert.match(
+    unconnectedProblems({
+      lanes,
+      known: { [name]: { ...KNOWN_UNCONNECTED[name], currentScheme2: "0" } },
+    }).join("\n"),
+    /out of date/,
+  );
+  assert.match(
+    unconnectedProblems({
+      lanes,
+      known: { [name]: { ...KNOWN_UNCONNECTED[name], reason: "short" } },
+    }).join("\n"),
+    /needs a reason/,
+  );
+  assert.match(
+    unconnectedProblems({
+      lanes: { "fs-rules": HARNESS_LANES["fs-rules"] },
+      known: { "fs-rules": KNOWN_UNCONNECTED[name] },
+    }).join("\n"),
+    /is connected/,
+  );
+  assert.match(
+    unconnectedProblems({
+      lanes,
+      known: { ...KNOWN_UNCONNECTED, nope: KNOWN_UNCONNECTED[name] },
+    }).join("\n"),
+    /no such lane/,
+  );
+});
+
+test("the release gate's binding check is clean here and refuses a shallow clone", () => {
+  assert.deepEqual(bindingProblems({ shallow: false }), []);
+  assert.match(bindingProblems({ shallow: true }).join("\n"), /shallow clone/);
 });
 
 test("the enrolled lane definitions cover exactly the files their runners digest", () => {
@@ -327,11 +347,17 @@ test("a lane's status is the worst of its recorded digests", () => {
   const recorded = "1".repeat(64);
   const hop = { lane: "lane", from: recorded, to: s2, commit: "c".repeat(40), kind: "scheme" };
   const status = (digests) =>
-    laneStatus("lane", { ...LANE, fixture: "x" }, {
-      read: readTree,
-      lineage: [hop],
-      fixture: { programs: Object.fromEntries(digests.map((d, i) => [`p${i}`, { harnessDigest: d }])) },
-    });
+    laneStatus(
+      "lane",
+      { ...LANE, fixture: "x" },
+      {
+        read: readTree,
+        lineage: [hop],
+        fixture: {
+          programs: Object.fromEntries(digests.map((d, i) => [`p${i}`, { harnessDigest: d }])),
+        },
+      },
+    );
   assert.equal(status([raw, "9".repeat(64)]).state, "stale");
   assert.equal(status(["9".repeat(64), raw]).state, "stale");
   assert.equal(status([raw, recorded]).state, "lineage");
@@ -344,9 +370,14 @@ test("a lane's status is the worst of its recorded digests", () => {
 test("a fixture row without a harnessDigest is an error, not a pass", () => {
   assert.throws(() => recordedDigests("lane", { programs: { a: {} } }), /without a harnessDigest/);
   assert.throws(() => recordedDigests("lane", { programs: {} }), /without a harnessDigest/);
-  assert.throws(() => recordedDigests("lane", { programs: { a: { harnessDigest: "abc" } } }), /without/);
+  assert.throws(
+    () => recordedDigests("lane", { programs: { a: { harnessDigest: "abc" } } }),
+    /without/,
+  );
   assert.throws(() => recordedDigests("auth-fs-cross-stage2", {}), /without a harnessDigest/);
-  assert.deepEqual(recordedDigests("auth-fs-cross-stage2", { harnessDigest: "a".repeat(64) }), ["a".repeat(64)]);
+  assert.deepEqual(recordedDigests("auth-fs-cross-stage2", { harnessDigest: "a".repeat(64) }), [
+    "a".repeat(64),
+  ]);
   const same = { harnessDigest: "b".repeat(64) };
   assert.deepEqual(recordedDigests("lane", { programs: { a: same, b: same } }), ["b".repeat(64)]);
 });
@@ -359,7 +390,11 @@ test("a commit that is not a full lowercase SHA is refused", () => {
 test("a digest that is not 64 lowercase hex is refused, in either field", () => {
   for (const key of ["from", "to"])
     for (const value of ["abc", "9".repeat(63), "9".repeat(65), "F".repeat(64)])
-      assert.match(problems([{ ...goodHop(), [key]: value }]).join("\n"), /64-hex/, `${key} ${value}`);
+      assert.match(
+        problems([{ ...goodHop(), [key]: value }]).join("\n"),
+        /64-hex/,
+        `${key} ${value}`,
+      );
 });
 
 test("the scheme-2 digest of a hop's commit is checked apart from the current tree's", () => {
@@ -373,14 +408,22 @@ test("the scheme-2 digest of a hop's commit is checked apart from the current tr
   };
   const found = lineageProblems(
     { version: 1, hops: [hop] },
-    { lanes: { lane: LANE }, reader: () => (f) => commitText[f], shallow: false, current: readTree },
+    {
+      lanes: { lane: LANE },
+      reader: () => (f) => commitText[f],
+      shallow: false,
+      current: readTree,
+    },
   );
   assert.equal(found.length, 1);
   assert.match(found[0], /scheme-2 digest at/);
 });
 
 test("one bad hop does not hide the next", () => {
-  const found = problems([{ ...goodHop(), extra: 1 }, { ...goodHop(), from: "9".repeat(64) }]);
+  const found = problems([
+    { ...goodHop(), extra: 1 },
+    { ...goodHop(), from: "9".repeat(64) },
+  ]);
   assert.match(found.join("\n"), /unexpected/);
   assert.match(found.join("\n"), /recorded digest does not reproduce/);
 });
@@ -397,7 +440,10 @@ test("a waiver needs a reason of substance", () => {
 test("fixture discovery lists only *-production.json files that hold a harnessDigest", () => {
   const dir = mkdtempSync(join(tmpdir(), "registry-"));
   try {
-    writeFileSync(join(dir, "a-production.json"), '{ "programs": { "p": { "harnessDigest": "x" } } }');
+    writeFileSync(
+      join(dir, "a-production.json"),
+      '{ "programs": { "p": { "harnessDigest": "x" } } }',
+    );
     writeFileSync(join(dir, "b-production.json"), '{ "programs": {} }');
     writeFileSync(join(dir, "c.json"), '{ "harnessDigest": "x" }');
     writeFileSync(join(dir, "d-production.json"), '{"harnessDigest":"x"}');

@@ -3,7 +3,11 @@ import { test } from "node:test";
 
 import { createSession } from "./auth-fs-cross/session.mjs";
 import { createContext, SANDBOX_PROJECT } from "./fs-rules/harness.mjs";
-import { EXPECTED_ACTIONS, localSetupDigest, withLocalMultiTenancy } from "./harness-target/local-tenancy.mjs";
+import {
+  EXPECTED_ACTIONS,
+  localSetupDigest,
+  withLocalMultiTenancy,
+} from "./harness-target/local-tenancy.mjs";
 
 const PROJECT = SANDBOX_PROJECT;
 const CONFIG = `/identitytoolkit.googleapis.com/admin/v2/projects/${PROJECT}/config`;
@@ -297,11 +301,20 @@ test("an answer other than 200 stops the setup, and nothing after it is sent", a
   };
   let ran = false;
   await assert.rejects(
-    withLocalMultiTenancy(localCtx(), async () => { ran = true; }, { fetchImpl: failing }),
+    withLocalMultiTenancy(
+      localCtx(),
+      async () => {
+        ran = true;
+      },
+      { fetchImpl: failing },
+    ),
     /HTTP 500/,
   );
   assert.equal(ran, false);
-  assert.deepEqual(state.requests.map(({ method }) => method), ["GET"]);
+  assert.deepEqual(
+    state.requests.map(({ method }) => method),
+    ["GET"],
+  );
 });
 
 test("an update that took effect but was answered with an error is still restored", async () => {
@@ -315,6 +328,9 @@ test("an update that took effect but was answered with an error is still restore
     }
     return response;
   };
-  await assert.rejects(withLocalMultiTenancy(localCtx(), async () => "ran", { fetchImpl: flaky }), /HTTP 503/);
+  await assert.rejects(
+    withLocalMultiTenancy(localCtx(), async () => "ran", { fetchImpl: flaky }),
+    /HTTP 503/,
+  );
   assert.equal(state.enabled, false);
 });

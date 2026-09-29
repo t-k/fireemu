@@ -16,8 +16,15 @@ import {
   copyProductionCaptureRecord,
 } from "./production-capture-input.mjs";
 
+import {
+  originalProductionArtifactContext,
+  productionArtifactFailureCode,
+} from "./production-artifact-policy.mjs";
+
 const boundaries = new WeakMap();
 const exit = process.exit.bind(process);
+const now = Date.now.bind(Date);
+const Instant = Date;
 const kinds = new Set(["owner", "account", "admission", "secret"]);
 const reasons = new Set([
   "PROVIDER_THREW",
@@ -30,6 +37,26 @@ const reasons = new Set([
 /** Capability identity is checked without reading caller properties. */
 export function isProductionStandaloneFailStop(value) {
   return boundaries.has(value);
+}
+
+/** A persistence writer must share the original owned failure directory. */
+export function productionStandaloneOwnsDirectory(value, directory) {
+  const expected = boundaries.get(value);
+  try {
+    return (
+      typeof directory === "string" &&
+      expected?.directory === directory &&
+      sameDirectory(lstatSync(directory), expected)
+    );
+  } catch {
+    return false;
+  }
+}
+
+/** Only a profile-bound capability can audit a task whose secret scan has become unavailable. */
+export function productionStandaloneUsesArtifactProfile(value, profile) {
+  const expected = boundaries.get(value);
+  return expected?.profile === profile && originalProductionArtifactContext(profile) !== null;
 }
 
 function owned(stat, mode) {
@@ -78,7 +105,13 @@ function metadata(supplied) {
 /** Only the owned standalone may pass this original capability to a process-ending boundary. */
 export function createProductionStandaloneFailStop(supplied) {
   try {
-    const { directory } = copyProductionCaptureRecord(supplied, ["directory"]);
+    const input = copyProductionCaptureRecord(supplied, ["directory", "profile"]);
+    const { directory } = input;
+    const runtime = Object.hasOwn(input, "profile")
+      ? originalProductionArtifactContext(input.profile)
+      : null;
+    if (Object.hasOwn(input, "profile") && !runtime) throw new Error();
+    runtime?.secretRegistry.openScan();
     if (
       typeof directory !== "string" ||
       directory.length > 4096 ||
@@ -90,21 +123,22 @@ export function createProductionStandaloneFailStop(supplied) {
     const stat = lstatSync(directory);
     if (!stat.isDirectory() || !owned(stat, 0o700)) throw new Error();
     const boundary = Object.freeze({});
-    boundaries.set(boundary, { directory, dev: stat.dev, ino: stat.ino });
+    boundaries.set(boundary, {
+      directory,
+      dev: stat.dev,
+      ino: stat.ino,
+      profile: input.profile,
+      runtime,
+    });
     return boundary;
   } catch {
     throw new Error("invalid production standalone boundary");
   }
 }
 
-/** Fixed fields only; neither a provider result nor an error object crosses the persistence boundary. */
-export function failStopProductionStandalone(boundary, supplied) {
-  const expected = boundaries.get(boundary);
-  if (!expected) throw new Error("invalid production standalone boundary");
+function persistFixedRecord(expected, bytes, file) {
   let directoryFd, fileFd;
   try {
-    const value = metadata(supplied);
-    const bytes = Buffer.from(`${JSON.stringify(value)}\n`);
     if (bytes.length > 1024 || !sameDirectory(lstatSync(expected.directory), expected))
       throw new Error();
     directoryFd = openSync(
@@ -112,7 +146,7 @@ export function failStopProductionStandalone(boundary, supplied) {
       constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW,
     );
     if (!sameDirectory(fstatSync(directoryFd), expected)) throw new Error();
-    const path = join(expected.directory, `fatal-r${value.recording}.json`);
+    const path = join(expected.directory, file);
     fileFd = openSync(
       path,
       constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
@@ -144,8 +178,6 @@ export function failStopProductionStandalone(boundary, supplied) {
     )
       throw new Error();
     fsyncSync(directoryFd);
-  } catch {
-    // Uncertain persistence retains the started lease and cannot turn into normal closure.
   } finally {
     for (const fd of [fileFd, directoryFd])
       if (fd !== undefined) {
@@ -155,6 +187,43 @@ export function failStopProductionStandalone(boundary, supplied) {
           /* Exit stays silent even if closing a descriptor fails. */
         }
       }
+  }
+}
+
+/** Fixed source metadata only; unchecked payload or digest bytes are never persisted. */
+export function failStopProductionStandalone(boundary, supplied) {
+  const expected = boundaries.get(boundary);
+  if (!expected) throw new Error("invalid production standalone boundary");
+  try {
+    const value = metadata(supplied);
+    const bytes = Buffer.from(`${JSON.stringify(value)}\n`);
+    let privacyCode = null;
+    if (expected.runtime) {
+      try {
+        if (expected.runtime.secretRegistry.openScan().hasSecretCopy(bytes.toString("utf8")))
+          privacyCode = "artifact-withheld-privacy";
+      } catch {
+        const originalCode = productionArtifactFailureCode(expected.profile);
+        privacyCode = ["artifact-withheld-privacy", "artifact-uncheckable"].includes(originalCode)
+          ? originalCode
+          : "artifact-uncheckable";
+      }
+    }
+    if (privacyCode) {
+      // The coordinator explicitly admits these source-only audit fields even when payload scanning is unavailable.
+      const audit = {
+        reason: privacyCode,
+        timestamp: new Instant(now()).toISOString(),
+        runId: expected.runtime.runIds[value.recording - 1],
+      };
+      persistFixedRecord(
+        expected,
+        Buffer.from(`${JSON.stringify(audit)}\n`),
+        `privacy-r${value.recording}.json`,
+      );
+    } else persistFixedRecord(expected, bytes, `fatal-r${value.recording}.json`);
+  } catch {
+    // Uncertain persistence retains the started lease and cannot turn into normal closure.
   }
   exit(2);
 }

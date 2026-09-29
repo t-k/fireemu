@@ -445,11 +445,20 @@ fn a_token_of_another_project_creates_no_tenant() {
         )
     };
     assert_eq!(status, 200, "{tenant_token}");
-    let (_, _) = client(
+    let (status, refused) = client(
         &state,
         &format!("{V1}/accounts:lookup"),
         &json!({"idToken": tenant_token["idToken"]}),
     );
+    assert_eq!(status, 400, "{refused}");
+    assert!(registry.tenant_store("demo-app", "elsewhere").is_none());
+    // The token names no tenant here, but a tenant the body names is still made.
+    let _ = client(
+        &state,
+        &format!("{V1}/accounts:lookup"),
+        &json!({"idToken": tenant_token["idToken"], "tenantId": "named-anyway"}),
+    );
+    assert!(registry.tenant_store("demo-app", "named-anyway").is_some());
     assert!(registry.tenant_store("demo-app", "elsewhere").is_none());
 }
 
@@ -761,7 +770,7 @@ fn an_action_link_naming_a_tenant_makes_it() {
             &json!({}),
         )
     };
-    let _ = link(&format!("mode=verifyEmail&oobCode=nope&tenantId=t-link"));
+    let _ = link("mode=verifyEmail&oobCode=nope&tenantId=t-link");
     assert!(registry.tenant_store("demo-app", "t-link").is_none());
     let _ = link(&format!(
         "mode=verifyEmail&oobCode=nope&apiKey={KEY}&tenantId=t-link"

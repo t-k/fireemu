@@ -3392,6 +3392,90 @@ struct TenantCreation<'a> {
     at: LogicalInstant,
 }
 
+/// What a request's refresh token says about its tenant.
+enum RefreshTokenTenant {
+    Undecodable,
+    NoTenant,
+    Tenant(String),
+}
+
+/// The tenant an ID token of `project` names in its `firebase.tenant` claim. A token of another
+/// project is refused by its audience, so what it says names no tenant here.
+fn id_token_tenant_of_project(state: &AuthState, project: &str, body: &Value) -> Option<String> {
+    let token = str_field(body, "idToken")?;
+    let signer = state.store.lock().ok().and_then(|s| s.signer_arc());
+    let decoded = fireemu_core_auth::jwt::decode_token(token, signer.as_deref()).ok()?;
+    let payload = &decoded.payload;
+    let audience = payload
+        .get("aud")
+        .and_then(fireemu_core_types::json::JsonValue::as_str);
+    if audience != Some(project) {
+        return None;
+    }
+    payload
+        .get("firebase")
+        .and_then(|firebase| firebase.get("tenant"))
+        .and_then(fireemu_core_types::json::JsonValue::as_str)
+        .map(str::to_owned)
+}
+
+/// Whether a request may make the tenant `target` in `project`, or its refusal: a refresh token is
+/// decoded before the tenant is looked up (one that does not decode, or that belongs to another
+/// tenant, is refused before anything is made), and this daemon's own refusals come before
+/// anything is made, in the order a request for an existing tenant meets them. `Ok(false)`: the
+/// request makes nothing and goes on to meet its own refusal.
+#[allow(clippy::too_many_arguments)]
+fn admit_tenant_creation(
+    state: &AuthState,
+    request: &TenantCreation<'_>,
+    route: &routes::Route,
+    route_project: Option<&str>,
+    project: &str,
+    parent: &Arc<Mutex<AuthStore>>,
+    refresh_tenant: Option<&RefreshTokenTenant>,
+    target: &str,
+) -> Result<bool, JsonResponse> {
+    match refresh_tenant {
+        Some(RefreshTokenTenant::Undecodable) => {
+            return Err(error(400, "INVALID_REFRESH_TOKEN"));
+        }
+        Some(RefreshTokenTenant::Tenant(tenant)) if tenant != target => {
+            return Err(error(
+                400,
+                "TENANT_ID_MISMATCH: ((Refresh token tenant ID does not match target tenant ID.))",
+            ));
+        }
+        _ => {}
+    }
+    // A key no project owns is refused when the store is selected, after the request's other
+    // readings of its tenant; it makes nothing, and the request meets that refusal.
+    if routes::scoped_target(request.path).is_none() {
+        if let Some(key) = query_selectors(request.query).ok().and_then(|(key, _)| key) {
+            if api_key_project(state, &key, "identitytoolkit.googleapis.com").is_err() {
+                return Ok(false);
+            }
+        }
+    }
+    if let Some(denial) =
+        app_check_denial(state, request.path, request.headers, project, request.at)
+    {
+        return Err(denial);
+    }
+    let Ok(parent) = parent.lock() else {
+        return Err(error(500, "INTERNAL"));
+    };
+    privilege_check(
+        state,
+        route.class,
+        route_project,
+        request.headers,
+        request.method,
+        request.api_key,
+        &parent,
+    )?;
+    Ok(true)
+}
+
 /// The tenant the official Auth emulator creates on the way (emulator profile; firebase-tools
 /// 15.28.2). Every operation reads its target tenant from the path, else the body's `tenantId`,
 /// else the ID token's `firebase.tenant`, else the tenant of the body's refresh token; `accounts:batchGet`
@@ -3438,12 +3522,7 @@ fn emulator_creates_named_tenant(
     if !handler_makes_named_tenant(route.handler) {
         return Ok(None);
     }
-    let TenantCreation {
-        path,
-        query,
-        headers,
-        ..
-    } = *request;
+    let (path, query) = (request.path, request.query);
     let project = request_project(state, path, query)?;
     let path_tenant = routes::scoped_target(path).and_then(|(_, tenant)| tenant);
     let body_tenant = match body.get("tenantId") {
@@ -3451,37 +3530,18 @@ fn emulator_creates_named_tenant(
         None | Some(Value::Null | Value::String(_)) => None,
         _ => return Ok(None),
     };
-    let token_tenant = match str_field(body, "idToken") {
-        None => None,
-        Some(token) => {
-            let signer = state.store.lock().ok().and_then(|s| s.signer_arc());
-            match fireemu_core_auth::jwt::decode_token(token, signer.as_deref()) {
-                Ok(decoded) => {
-                    let payload = &decoded.payload;
-                    let audience = payload
-                        .get("aud")
-                        .and_then(fireemu_core_types::json::JsonValue::as_str);
-                    // A token of another project is refused by its audience, so what it says
-                    // names no tenant here.
-                    (audience == Some(project.as_str()))
-                        .then(|| {
-                            payload
-                                .get("firebase")
-                                .and_then(|firebase| firebase.get("tenant"))
-                                .and_then(fireemu_core_types::json::JsonValue::as_str)
-                                .map(str::to_owned)
-                        })
-                        .flatten()
-                }
-                Err(_) => None,
-            }
-        }
-    };
-    // The refresh token is the fourth source: `Some(None)` for one that does not decode.
+    let token_tenant = id_token_tenant_of_project(state, &project, body);
+    // The refresh token is the fourth source.
     let refresh_tenant = str_field(body, "refresh_token")
         .or_else(|| str_field(body, "refreshToken"))
         .filter(|token| !token.is_empty())
-        .map(fireemu_core_auth::store::AuthRegistry::decode_refresh_token_tenant);
+        .map(|token| {
+            match fireemu_core_auth::store::AuthRegistry::decode_refresh_token_tenant(token) {
+                None => RefreshTokenTenant::Undecodable,
+                Some(None) => RefreshTokenTenant::NoTenant,
+                Some(Some(tenant)) => RefreshTokenTenant::Tenant(tenant),
+            }
+        });
     let query_tenant = if matches!(
         route.handler,
         routes::Handler::AdminBatchGet | routes::Handler::EmulatorAction
@@ -3504,7 +3564,7 @@ fn emulator_creates_named_tenant(
             target.to_owned()
         }
         None => match (&refresh_tenant, query_tenant) {
-            (Some(Some(Some(tenant))), _) => tenant.clone(),
+            (Some(RefreshTokenTenant::Tenant(tenant)), _) => tenant.clone(),
             (_, Some(tenant)) => tenant,
             _ => return Ok(None),
         },
@@ -3512,48 +3572,20 @@ fn emulator_creates_named_tenant(
     if registry.tenant_store(&project, &target).is_some() {
         return Ok(None);
     }
-    // A refresh token is decoded before the tenant is looked up: one that does not decode, or
-    // that belongs to another tenant, is refused before anything is made.
-    match &refresh_tenant {
-        Some(None) => return Err(error(400, "INVALID_REFRESH_TOKEN")),
-        Some(Some(Some(tenant))) if *tenant != target => {
-            return Err(error(
-                400,
-                "TENANT_ID_MISMATCH: ((Refresh token tenant ID does not match target tenant ID.))",
-            ));
-        }
-        _ => {}
-    }
-    // This daemon's own refusals come before anything is made, in the order a request for an
-    // existing tenant meets them.
-    // A key no project owns is refused when the store is selected, after the request's other
-    // readings of its tenant; it makes nothing, and the request meets that refusal.
-    if routes::scoped_target(path).is_none() {
-        if let Some(key) = query_selectors(query).ok().and_then(|(key, _)| key) {
-            if api_key_project(state, &key, "identitytoolkit.googleapis.com").is_err() {
-                return Ok(None);
-            }
-        }
-    }
     let Some(parent) = registry.store_for(&project) else {
         return Ok(None);
     };
-    if let Some(denial) = app_check_denial(state, path, headers, &project, request.at) {
-        return Err(denial);
-    }
-    {
-        let Ok(parent) = parent.lock() else {
-            return Err(error(500, "INTERNAL"));
-        };
-        privilege_check(
-            state,
-            route.class,
-            route_project,
-            headers,
-            request.method,
-            request.api_key,
-            &parent,
-        )?;
+    if !admit_tenant_creation(
+        state,
+        request,
+        route,
+        route_project,
+        &project,
+        &parent,
+        refresh_tenant.as_ref(),
+        &target,
+    )? {
+        return Ok(None);
     }
     Ok(registry
         .ensure_tenant_with(&project, &target, tenant_document::install_default_mfa)

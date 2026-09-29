@@ -264,6 +264,9 @@ test("a numeric account ID under an id key is removed from a body, and ordinary 
   for (const body of [`{"id":"${"9".repeat(14)}"}`, `{"id":"${"9".repeat(26)}"}`, `{"id":"bucket/${subject}/17000"}`, `{"id":"abc${subject}"}`, `{"identifier":"${subject}"}`, `{"userid":"${subject}"}`, `{"generation":"${subject}"}`, `{"id":"${subject}x"}`]) {
     assert.equal(r.bytes(Buffer.from(body)).bytes.toString(), body, body);
   }
+  // Only the digits go, so the key and the quoting stay readable.
+  assert.equal(r.bytes(Buffer.from(`{"id":"${subject}","x":1}`)).bytes.toString(), '{"id":"<redacted:account-id>","x":1}');
+  assert.equal(r.bytes(Buffer.from(`{ "id" : ${subject} }`)).bytes.toString(), '{ "id" : <redacted:account-id> }');
   const text = r.text(`owner ${JSON.stringify({ id: subject })} end`);
   assert.equal(text.includes(subject), false);
 });

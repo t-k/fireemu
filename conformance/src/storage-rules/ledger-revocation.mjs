@@ -82,7 +82,7 @@ export function scanRevocations({ ledgerText, taskId, pins, envelopeId, allowlis
       const subject = (line.split("|")[1] ?? "").trim();
       const approvalLine = text.includes(taskKey) && (text.includes("decision=approve") || normalizeLedgerText(subject).endsWith(" envelope"));
       if (approvalLine) keyed.forEach((entry) => approved.add(entry));
-      if (text.includes(pinPrefixes[0]) && text.includes(packetKey)) decisionLine = index + 1;
+      if (text.includes(packetKey)) decisionLine = index + 1;
     } else if (!allowed.has(rowSha256(line))) {
       const namesLane = text.includes(taskKey) || withoutQualifiers(normalizeLedgerText(line.split("|")[1] ?? "")).includes(taskKey);
       const namesThisVersion = pinPrefixes.some((prefix) => text.includes(prefix)) || (envelopeKey !== null && text.includes(envelopeKey));
@@ -94,7 +94,7 @@ export function scanRevocations({ ledgerText, taskId, pins, envelopeId, allowlis
       const isDelegation = text.includes(NORMALIZED_DELEGATION_MARKER);
       if (isDelegation) { if (DELEGATION_WORDS.test(text)) delegation.push(index + 1); }
       // A revocation that names no lane at all (the whole sandbox program, an unscoped "all") is a candidate to stop this lane too.
-      else if (!namesLane && !namesThisVersion && !OTHER_LANE.test(text)) globalCandidates.push(index + 1);
+      else if (!namesLane && !namesThisVersion && !OTHER_LANE.test(text.replaceAll(taskKey, ""))) globalCandidates.push(index + 1);
     }
   });
   // It counts only when it was written after this packet's decision: a decision written later supersedes an earlier global revocation.

@@ -553,7 +553,7 @@ test("a global revocation written after the decision stops the approval, and one
 
 test("a revocation that names another lane, and delegation lines, are not global revocations of this lane", async () => {
   const validate = await load();
-  for (const row of [note("STORAGE-OBJECT stage3-v1", "decision=REVOKED"), note("FS-TRANSACTION p10-grpc-boundary", "revoked"), note("AUTH-FEDERATION record-followup", "取消"), note("FUNCTIONS-EVENTS stage2", "withdrawn"), note("HOSTING-CONFIG x", "撤回")]) {
+  for (const row of [note("STORAGE-OBJECT stage3-v1", "decision=REVOKED"), note("FS-TRANSACTION p10-grpc-boundary", "revoked"), note("AUTH-FEDERATION record-followup", "取消"), note("FUNCTIONS-EVENTS stage2", "withdrawn"), note("HOSTING-CONFIG x", "撤回"), note("FIRESTORE-RULES x", "revoked"), note("APP-CHECK-PROXY x", "revoked"), note("FS-DATA-WRITE x", "REVOKED"), note("AUTH-ACCOUNT x", "REVOKED"), note("FUNCTIONS-HTTP x", "REVOKED")]) {
     assert.equal(validate({ ledgerText: [decision(), row].join("\n"), packet, review }).sendAuthorized, false, row);
   }
   // The delegation rows' own prose uses 中止, 無効 and 取り下げ; only the narrower revocation words revoke a delegation.
@@ -564,12 +564,29 @@ test("a revocation that names another lane, and delegation lines, are not global
   assert.equal(validate({ ledgerText: [decision(), note("調整役への委任（本番の送信）", "decision=REVOKED")].join("\n"), packet, review }).sendAuthorized, false);
 });
 
+test("a global revocation needs a real decision line to follow, and a lane name inside a longer word is not another lane", async () => {
+  const validate = await load();
+  const global = note("全体", "decision=REVOKED; すべて取り消す");
+  // With no approval at all the approval is missing, not revoked.
+  assert.throws(() => validate({ ledgerText: global, packet, review }), /matching owner approval required/);
+  // Only the full packet digest makes a decision line: a status line that shows just its prefix does not move the decision.
+  const prefixNote = note("status", `packet ${packet.packetSha256.slice(0, 8)} was reviewed`);
+  assert.throws(() => validate({ ledgerText: [decision(), global, prefixNote].join("\n"), packet, review }), /approval revoked/);
+  // A lane-like fragment inside a longer word does not name another lane.
+  for (const text of ["the sub-auth-thing revoked", "prefs-x revoked", "myfs-data revoked", "xstorage-object revoked", "unhosting-x revoked"]) {
+    assert.throws(() => validate({ ledgerText: [decision(), note("all", text)].join("\n"), packet, review }), /approval revoked/, text);
+  }
+});
+
 test("only the lane's approval and envelope lines feed the earlier pins a consumed revocation may cite", async () => {
   const validate = await load();
   const status = note(laneSubject, `status update: packetSha256=${foreignSha} was reviewed`);
   const consumed = note(laneSubject, `decision=REVOKED; packetSha256=${foreignSha}`);
   assert.throws(() => validate({ ledgerText: [status, consumed, decision()].join("\n"), packet, review }), /approval revoked/);
   assert.equal(validate({ ledgerText: [v1Approval(), consumed, decision()].join("\n"), packet, review }).sendAuthorized, false);
+  // A subject that only mentions the word envelope is not an envelope row.
+  const notEnvelope = note(`${laneSubject} envelopes (draft)`, `packetSha256=${foreignSha}`);
+  assert.throws(() => validate({ ledgerText: [notEnvelope, consumed, decision()].join("\n"), packet, review }), /approval revoked/);
   const envelopeRow = note(`${laneSubject} envelope`, `envelopeId=${v1EnvelopeId}; project=x`);
   const consumedEnvelope = note(laneSubject, `decision=REVOKED; envelopeId=${v1EnvelopeId}`);
   assert.equal(validate({ ledgerText: [envelopeRow, consumedEnvelope, decision()].join("\n"), packet, review }).sendAuthorized, false);

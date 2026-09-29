@@ -57,6 +57,7 @@ const readJson = (path) =>
 const FIXTURES = {
   "auth-federation-comparison-v1": "conformance/auth-federation-production.json",
   "auth-federation-saml-comparison-v1": "conformance/auth-federation-saml-production.json",
+  "auth-federation-followup-comparison-v1": "conformance/auth-federation-followup-production.json",
   "auth-config-sdk-comparison-v1": "conformance/auth-config-sdk-production.json",
   "auth-action-comparison-v1": "conformance/auth-action-production.json",
   "auth-credential-comparison-v1": "conformance/auth-credential-production.json",

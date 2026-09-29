@@ -1393,17 +1393,20 @@ fn tenants_obey_their_own_settings_and_take_the_projects_privacy_as_their_profil
         untouched_body["displayName"] = json!("Untouched");
         let untouched = tenant_id_of(&create_tenant(&state, &untouched_body));
 
-        // Nothing of the project's shows in a new tenant, except, in the emulator profile, the
-        // project's email privacy it follows.
-        for absent in ["client", "passwordPolicyConfig", "mfaConfig"] {
+        // Nothing of the project's shows in a new tenant, in either profile: the emulator
+        // profile's tenant follows the project's privacy without answering it, as the official
+        // emulator's does (issue emulator-tenant-document-shows-the-projects-email-privacy).
+        for absent in [
+            "emailPrivacyConfig",
+            "client",
+            "passwordPolicyConfig",
+            "mfaConfig",
+        ] {
             assert!(
                 created.get(absent).is_none(),
                 "{profile}: {absent}: {created}"
             );
         }
-        let privacy = |document: &Value| document.get("emailPrivacyConfig").cloned();
-        let followed = (profile == "emulator").then(|| json!({"enableImprovedEmailPrivacy": true}));
-        assert_eq!(privacy(&created), followed, "{profile}: {created}");
         // Its clients obey the tenant's own defaults: a 7-character password (the default
         // policy) while the project enforces 8. Unknown addresses are revealed in the strict
         // profile (the tenant's own privacy, off) and hidden in the emulator profile (the
@@ -1554,7 +1557,10 @@ fn tenants_obey_their_own_settings_and_take_the_projects_privacy_as_their_profil
         for tenant in [&overridden, &untouched] {
             let document = read_tenant(&state, tenant);
             assert!(document.get("client").is_none(), "{profile}: {document}");
-            assert_eq!(privacy(&document), followed, "{profile}: {document}");
+            assert!(
+                document.get("emailPrivacyConfig").is_none(),
+                "{profile}: {document}"
+            );
             assert!(
                 !registry
                     .tenant_store("demo-app", tenant)

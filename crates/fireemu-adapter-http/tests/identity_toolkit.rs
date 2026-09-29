@@ -13571,12 +13571,13 @@ fn tenant_client_permissions_and_privacy_are_namespaced_and_atomic_with_password
         updated.1["client"]["permissions"]["disabledUserDeletion"],
         true
     );
-    // The emulator profile's tenant keeps the project's email privacy (off here), as the
-    // official emulator's does. Its document shows that effective value, not what it wrote,
-    // which neither the official emulator nor production answers (known issue
-    // emulator-tenant-document-shows-the-projects-email-privacy; round-2 integration review M1
-    // and re-review S1).
-    assert_eq!(updated.1["emailPrivacyConfig"], json!({}));
+    // The emulator profile's tenant keeps the project's email privacy (off here) for its
+    // behaviour, as the official emulator's does, and answers the masked write as written
+    // (issue emulator-tenant-document-shows-the-projects-email-privacy).
+    assert_eq!(
+        updated.1["emailPrivacyConfig"],
+        json!({"enableImprovedEmailPrivacy": true})
+    );
     assert_eq!(
         updated.1["passwordPolicyConfig"]["passwordPolicyVersions"][0]["customStrengthOptions"]
             ["minPasswordLength"],
@@ -13596,7 +13597,10 @@ fn tenant_client_permissions_and_privacy_are_namespaced_and_atomic_with_password
     let after = admin(&s, "GET", path, &Value::Null);
     assert_eq!(after.0, 200, "{}", after.1);
     assert_eq!(after.1["client"]["permissions"]["disabledUserSignup"], true);
-    assert_eq!(after.1["emailPrivacyConfig"], json!({}));
+    assert_eq!(
+        after.1["emailPrivacyConfig"],
+        json!({"enableImprovedEmailPrivacy": true})
+    );
     assert_eq!(
         after.1["passwordPolicyConfig"]["passwordPolicyVersions"][0]["customStrengthOptions"]
             ["minPasswordLength"],
@@ -13861,9 +13865,12 @@ fn tenant_config_patch_treats_protojson_null_messages_as_absent_or_clear() {
         "{}",
         cleared.1
     );
-    // Production leaves out a false switch.
-    assert!(
-        cleared.1["emailPrivacyConfig"]["enableImprovedEmailPrivacy"].is_null(),
+    // The emulator profile keeps the tenant's privacy as the official emulator does: a masked
+    // member written as null changes nothing (`applyMask`; issue
+    // emulator-tenant-document-shows-the-projects-email-privacy).
+    assert_eq!(
+        cleared.1["emailPrivacyConfig"],
+        json!({"enableImprovedEmailPrivacy": true}),
         "{}",
         cleared.1
     );
@@ -13939,12 +13946,14 @@ fn tenant_create_rejects_malformed_settings_before_publishing_and_reads_back_sup
         created.body["client"]["permissions"]["disabledUserSignup"],
         true
     );
-    // The emulator profile's tenant keeps the project's email privacy (off here), as the
-    // official emulator's does. Its document shows that effective value, not what it wrote,
-    // which neither the official emulator nor production answers (known issue
-    // emulator-tenant-document-shows-the-projects-email-privacy; round-2 integration review M1
-    // and re-review S1).
-    assert_eq!(created.body["emailPrivacyConfig"], json!({}));
+    // The emulator profile's tenant keeps the project's email privacy (off here) for its
+    // behaviour, and a create keeps no emailPrivacyConfig, as the official emulator's
+    // `createTenant` keeps none (issue emulator-tenant-document-shows-the-projects-email-privacy).
+    assert!(
+        created.body.get("emailPrivacyConfig").is_none(),
+        "{}",
+        created.body
+    );
     assert_eq!(
         created.body["passwordPolicyConfig"]["passwordPolicyVersions"][0]["customStrengthOptions"]
             ["minPasswordLength"],

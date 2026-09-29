@@ -364,6 +364,7 @@ export async function recordRun(deps) {
           recording,
           outcome,
           status: result?.status,
+          reason: result?.reason ?? null,
           requests,
           plan: { runId: ids.runId, prefix },
           ...(outcome === "needs-recovery"

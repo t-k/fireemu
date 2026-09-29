@@ -199,6 +199,7 @@ export async function replayLocalAggregate(options) {
     throw new Error("invalid local aggregate wire provider");
   let current = null,
     status = "LOCAL_BLOCKED",
+    reason = null,
     unresolved = [],
     cleanupFailures = [];
   const results = [];
@@ -331,7 +332,11 @@ export async function replayLocalAggregate(options) {
     else if (counter.snapshot().completedRecipes[0] !== registries[0].length)
       throw new Error("LOCAL_AGGREGATE_RECORDING_INCOMPLETE");
     status = "LOCAL_COMPLETE";
-  } catch {
+  } catch (caught) {
+    // One short line, never a stack: the message says why the run stopped.
+    reason = String(caught?.message ?? caught)
+      .split("\n")[0]
+      .slice(0, 200);
     cleanupFailures = [...(current?.result?.cleanupFailures ?? [])];
     const sender = current?.sender;
     if (sender) {
@@ -359,6 +364,7 @@ export async function replayLocalAggregate(options) {
         type: "aggregate-stop",
         status,
         failedRecipeId: current?.recipeId ?? null,
+        reason,
         completedRecipes: counter.snapshot().completedRecipes,
         unresolved,
         cleanupFailures,
@@ -372,6 +378,7 @@ export async function replayLocalAggregate(options) {
     productionParityProved: false,
     responseCompatibilityProved: false,
     failedRecipeId: status === "LOCAL_COMPLETE" ? null : (current?.recipeId ?? null),
+    reason,
     results,
     unresolved,
     cleanupFailures,

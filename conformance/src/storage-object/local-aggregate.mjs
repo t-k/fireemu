@@ -82,6 +82,7 @@ try {
   });
   result = await replayLocalAggregate({
     plan,
+    recordings: Number(process.env.STORAGE_OBJECT_LOCAL_RECORDINGS ?? "2"),
     storageOrigin,
     authOrigin,
     localControl: { origin: control.origin, token: process.env.FIREEMU_CONTROL_TOKEN },

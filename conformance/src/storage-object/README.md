@@ -120,3 +120,26 @@ Request shapes and chunk constraints follow the [GCS resumable upload guide](htt
 `buildAuthCorpus({ projectId, bucket, runId })` declares the two recipes as 194 named request entries per recording: 138 before cleanup and 56 for cleanup. It gives each program its own valid and competitor accounts, with Admin absence lookup, signup, client token lookup, UID-bound deletion and final absence lookup. Programs must execute sequentially so the fixed permitted email is absent before the second program. All twelve object controls include an initial three-way absence readback, before and after readbacks, and conditional owned-generation cleanup. Secret values remain typed references. These are declarations, not executable authenticated requests or proof that an account or object was created or removed.
 
 `validateSymbolicStorageAuthPlan(plan)` accepts only that exact generated shape and rejects additional properties, including hidden fields, symbols and accessors. `compareStorageRulesBaseline(plan, baseline, before, after)` compares normalized snapshots against a supplied private baseline and rejects an unchanged but wrong Rules body. It cannot authenticate the baseline itself and always reports `rulesBaselineVerified: false` and `sendAuthorized: false`. Neither function has a secret loader or transport. `buildStage3DraftPlan()` combines the base and authentication counts as 2,085 entries per recording and proposes a single 5,600-request cap for two recordings and recovery. `createStage3RequestCounter()` reserves each attempt before a caller-supplied transport, but no production transport is connected. Actual approved-baseline provenance, bucket-project binding, credential values, Rules snapshots, source-bound production evidence and two recordings remain prerequisites for the two recipes and their closure.
+
+## Lean recorder
+
+`run.mjs record-production <1|2>` records one of the two production recordings; each recording is its own run, admitted on its own, at least thirty minutes after the last line any lane wrote on the project. `run.mjs pins` prints the digests a packet pins (the runner's sources, the plan and corpus shapes, the fixed Rules source) and the commit.
+
+A run refuses, before it writes or sends anything, unless: the environment is clean (no proxy, extra CA, `NODE_OPTIONS` or emulator host; Node 24.14.0); the owner ledger approves the packet and the review is a clean approval; the packet's pins equal the code that would run; the tree is clean and at the approved commit; the shared ledger shows no open run, no line inside the quiet interval and a request budget left; and the project lock is free. It then writes a `started` row, runs the local aggregate for one recording through the lean wire, and writes exactly one closing row (`recorded`, `stopped-clean`, or `needs-recovery`, which keeps the project lock). Rows use only events and outcomes other lanes already write (`ledger-rows.mjs`; `storage-object-ledger-compat.test.mjs` feeds them to every other runner's admission).
+
+The sender and the recipe replays run in their local mode against placeholder loopback origins. The lean wire (`lean-wire.mjs`) is the only place a request becomes a real one. It maps each request through a closed route table for one bucket, one run prefix and one project to the real Storage, identity and token hosts; swaps the owner's access token (from `gcloud auth application-default print-access-token`, held in memory) and the Web API key in; hashes tokens, keys and the Authorization header before a capture is written; spaces writes to one object by a second; never follows a redirect and never retries; and stops on a capture failure or an oversize response. Captures are at the `fetch` level (status, headers, body), not raw socket bytes. A run records nothing for the emulator: the private record (`captures.jsonl`, `events.jsonl`, `meta.json`, mode 0600, in a new 0700 directory that git ignores) may hold response bodies with download tokens and a disposable user's ID token.
+
+Exit codes: 0 recorded, 2 refused or failed, 3 stopped clean (nothing recorded), 4 needs recovery. There is no in-run recovery: a run that may have left objects stops, and recovery is a separate reviewed packet.
+
+### Local rehearsal
+
+The one-recording aggregate can be run against a local `fireemu` (no production request):
+
+```
+STORAGE_OBJECT_LOCAL_RECORDINGS=1 STORAGE_OBJECT_RULES_SOURCE=<the fixed Rules source> \
+  fireemu exec --config <cfg> --project example-project --only auth,storage \
+  --http-port 0 --storage-port 0 --hub-port 0 --logging-port 0 -- \
+  node conformance/src/storage-object/local-aggregate.mjs
+```
+
+with `{"schemaVersion":1,"profile":"strict","auth":{"idTokenSigning":"session-rsa"},"storage":{"rules":"<the fixed Rules source>"}}` as `<cfg>`. The local Auth check needs signed ID tokens, so `session-rsa` is required. All 26 recipes complete in about 2,450 requests.

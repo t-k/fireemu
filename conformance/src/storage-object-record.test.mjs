@@ -692,6 +692,7 @@ test("the private summary names the outcome, and the unresolved objects of a run
       recording: 1,
       outcome: "recorded",
       status: "LOCAL_COMPLETE",
+      reason: null,
       requests: 0,
       plan: { runId: RUN, prefix: `storage-object/${RUN}/` },
     },
@@ -699,12 +700,14 @@ test("the private summary names the outcome, and the unresolved objects of a run
   const bad = setup({
     replay: async () => ({
       status: "LOCAL_NEEDS_RECOVERY",
+      reason: "Upload failed",
       wire: { realRequests: 7 },
       unresolved: [{ name: "x" }],
       cleanupFailures: [{ reason: "y" }],
     }),
   });
   await recordRun(bad.deps);
+  assert.equal(bad.privateFiles.meta[0].reason, "Upload failed");
   assert.deepEqual(bad.privateFiles.meta[0].unresolved, [{ name: "x" }]);
   assert.deepEqual(bad.privateFiles.meta[0].cleanupFailures, [{ reason: "y" }]);
   assert.equal(bad.privateFiles.meta[0].requests, 7);

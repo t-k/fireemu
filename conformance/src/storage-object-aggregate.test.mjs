@@ -295,3 +295,19 @@ test("a one-recording run stops after the first recording's recipes and never ad
   assert.deepEqual(result.counter.completedRecipes, [0, 0]);
   assert.equal(f.events.filter((row) => row.type === "started").length, 1);
 });
+
+test("a stopped run journals a short reason without a stack, and the result carries it", async () => {
+  const f = fixture({ uploadFailure: true });
+  const result = await replayLocalAggregate(f.options);
+  const stop = f.events.find((row) => row.type === "aggregate-stop");
+  assert.equal(typeof stop.reason, "string");
+  assert.ok(stop.reason.length > 0 && stop.reason.length <= 200);
+  assert.doesNotMatch(stop.reason, /\n\s+at /);
+  assert.equal(result.reason, stop.reason);
+});
+
+test("a stop before the first request has a reason too", async () => {
+  const f = fixture({ startFailure: true });
+  const result = await replayLocalAggregate(f.options);
+  assert.equal(typeof result.reason, "string", "a stop before the first request has one too");
+});

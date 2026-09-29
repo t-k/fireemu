@@ -18,10 +18,10 @@ const table = {
   both: ["exact-previous-release-or-entry-absence"],
   "post-check": [
     "all-explicit-bucket-permissions-present", "all-explicit-permissions-present-does-not-authorize-send", "bucket-release-absent", "bucketless-release-absent",
-    "empty-items-and-no-next-page-token", "entry-page-has-no-next-token", "release-name-and-created-ruleset-match", "literal-source-digest-match",
+    "approved-ruleset-count-and-cleanup-baseline", "empty-items-and-no-next-page-token", "entry-page-has-no-next-token", "release-name-and-created-ruleset-match", "literal-source-digest-match",
   ],
   admission: [
-    "approved-bucket-policy-baseline-match", "approved-cross-service-grant-and-policy-baseline-match", "approved-private-input-provenance", "approved-ruleset-count-and-cleanup-baseline",
+    "approved-bucket-policy-baseline-match", "approved-cross-service-grant-and-policy-baseline-match", "approved-private-input-provenance",
     "bucket-name-project-number-and-baseline-match", "default-database-project-and-baseline-match", "key-name-uid-not-deleted-and-approved-restrictions-match",
     "private-key-string-matches-key-metadata-and-cached-secret", "project-id-number-active-match", "verified-email-and-subject-match-packet-owner",
   ],

@@ -1,5 +1,6 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import { types } from "node:util";
+import { ENTRY_RULESETS, isEntryList } from "./entry-rulesets.mjs";
 
 // Judges the preflight reads against the private packet of expected values: the owner's identity, both projects and their
 // keys, the bucket, the database and the policy baselines. It returns true only when every fact the probe carries matches;
@@ -9,15 +10,7 @@ const digest = (value) => createHash("sha256").update(value).digest("hex");
 const same = (left, right) => typeof left === "string" && typeof right === "string" && left.length === right.length && timingSafeEqual(Buffer.from(left), Buffer.from(right));
 const equalLists = (left, right) => Array.isArray(left) && left.length === right.length && left.every((entry, index) => entry === right[index]);
 
-// The rulesets production holds on the query project when the recording starts, by name and service: the storage ruleset that stage 2c-pre
-// deliberately kept (the bucket release that pointed at it is removed for the recording and published again after it) and the project's
-// Firestore ruleset. The entry list must be exactly these two, so an unknown ruleset (or a missing one) stops the run before anything is
-// written. The run deletes only rulesets it created itself; these two are never touched (see the run ledger).
-export const ENTRY_RULESETS = Object.freeze([
-  Object.freeze({ name: "projects/fireemu-oracle-query/rulesets/22b746af-a48a-458d-ab5c-7853473bc8c8", services: Object.freeze(["firebase.storage"]) }),
-  Object.freeze({ name: "projects/fireemu-oracle-query/rulesets/d0abf7c6-b0b6-4163-8488-7c8a48ac5dd1", services: Object.freeze(["cloud.firestore"]) }),
-]);
-const isEntryList = (listed) => Array.isArray(listed) && listed.length === ENTRY_RULESETS.length && listed.every((entry, index) => entry?.name === ENTRY_RULESETS[index].name && equalLists(entry.services, ENTRY_RULESETS[index].services));
+export { ENTRY_RULESETS };
 
 export function createPreflightJudge(options) {
   const fail = () => { throw new Error("invalid preflight judge options"); };

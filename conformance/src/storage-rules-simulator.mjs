@@ -6,7 +6,11 @@ import { createHash, randomUUID } from "node:crypto";
 const json = (status, body, headers = {}) => ({ status, rawHeaders: Object.entries({ "Content-Type": "application/json; charset=UTF-8", ...headers }).flat(), bytes: Buffer.from(JSON.stringify(body)), startedAtMs: 1, finishedAtMs: 2 });
 const empty = (status, headers = {}) => ({ status, rawHeaders: Object.entries(headers).flat(), bytes: Buffer.alloc(0), startedAtMs: 1, finishedAtMs: 2 });
 const denial = () => json(403, { error: { code: 403, message: "Permission denied. Could not perform this operation" } });
-const gcsNotFound = (name) => json(404, { error: { code: 404, message: `No such object: ${name}`, errors: [{ message: "No such object", domain: "global", reason: "notFound" }] } });
+// The answers production gave to the stage 2d probe: a missing object is a JSON error for a metadata read (its message names the bucket and the object, and so does
+// its one error), and a plain sentence with a text content type for a media download; a missing document is a Firestore NOT_FOUND that quotes the document name.
+const gcsNotFound = (bucket, name) => json(404, { error: { code: 404, message: `No such object: ${bucket}/${name}`, errors: [{ message: `No such object: ${bucket}/${name}`, domain: "global", reason: "notFound" }] } });
+const gcsMediaNotFound = (bucket, name) => ({ status: 404, rawHeaders: ["Content-Type", "text/html; charset=UTF-8"], bytes: Buffer.from(`No such object: ${bucket}/${name}`), startedAtMs: 1, finishedAtMs: 2 });
+const documentNotFound = (name) => json(404, { error: { code: 404, message: `Document "${name}" not found.`, status: "NOT_FOUND" } });
 const rpcNotFound = () => json(404, { error: { code: 404, message: "Requested entity was not found.", status: "NOT_FOUND" } });
 const sha = (text) => createHash("sha256").update(text).digest("hex");
 const time = () => "2026-09-29T10:00:00.000000Z";
@@ -27,6 +31,9 @@ export function createSimulator({ manifest, options = {} }) {
     { id: "d0abf7c6-b0b6-4163-8488-7c8a48ac5dd1", createTime: "2026-09-23T23:02:05.839536Z", services: ["cloud.firestore"] },
   ]).map((entry) => ({ ...entry, name: `projects/fireemu-oracle-query/rulesets/${entry.id}` }));
   const touchedEntryRulesets = [];
+  let listCalls = 0;
+  // A ruleset another party adds while the run is going: the lists after the first show it (a test's way to prove the final list is compared with the entry list).
+  const stranger = { name: "projects/fireemu-oracle-query/rulesets/aaaaaaaa-0000-4000-8000-000000000000", createTime: "2026-09-29T00:00:00.000000Z", metadata: { services: ["firebase.storage"] } };
   const documents = new Map();
   const sessions = new Map();
   const log = [];
@@ -63,18 +70,18 @@ export function createSimulator({ manifest, options = {} }) {
       const name = decodeURIComponent(match[1]);
       const object = objects.get(name);
       if (method === "GET") {
-        if (!object) return gcsNotFound(name);
+        if (!object) return url.searchParams.get("alt") === "media" ? gcsMediaNotFound(bucket, name) : gcsNotFound(bucket, name);
         return url.searchParams.get("alt") === "media" ? { status: 200, rawHeaders: ["Content-Type", "text/plain", "X-Goog-Generation", String(object.generation)], bytes: object.bytes, startedAtMs: 1, finishedAtMs: 2 } : json(200, objectJson(name, object));
       }
       if (method === "PATCH") {
-        if (!object) return gcsNotFound(name);
+        if (!object) return gcsNotFound(bucket, name);
         const g = url.searchParams.get("ifGenerationMatch"); const m = url.searchParams.get("ifMetagenerationMatch");
         if ((g !== null && g !== String(object.generation)) || (m !== null && m !== String(object.metageneration))) return json(412, { error: { code: 412, message: "Precondition Failed" } });
         object.metageneration++;
         return json(200, objectJson(name, object));
       }
       if (method === "DELETE") {
-        if (!object) return gcsNotFound(name);
+        if (!object) return gcsNotFound(bucket, name);
         const g = url.searchParams.get("ifGenerationMatch");
         if (g !== null && g !== String(object.generation)) return json(412, { error: { code: 412, message: "Precondition Failed" } });
         objects.delete(name);
@@ -185,7 +192,7 @@ export function createSimulator({ manifest, options = {} }) {
       if (method === "DELETE") { rulesets.delete(match[1]); return json(200, {}); }
       return json(200, { name: ruleset.name, createTime: ruleset.createTime, source: { files: [{ name: "storage.rules", content: ruleset.content }] } });
     }
-    if (method === "GET" && path === `/v1/projects/${project}/rulesets`) return json(200, { rulesets: [...entryRulesets.map((entry) => ({ name: entry.name, createTime: entry.createTime, metadata: { services: entry.services } })), ...[...rulesets.values()].map((r) => ({ name: r.name, createTime: r.createTime, metadata: { services: ["firebase.storage"] } }))] });
+    if (method === "GET" && path === `/v1/projects/${project}/rulesets`) return json(200, { rulesets: [...(options.strangerAfterEntry && listCalls++ > 0 ? [stranger] : []), ...entryRulesets.map((entry) => ({ name: entry.name, createTime: entry.createTime, metadata: { services: entry.services } })), ...[...rulesets.values()].map((r) => ({ name: r.name, createTime: r.createTime, metadata: { services: ["firebase.storage"] } }))] });
     const name = `projects/${project}/releases/firebase.storage/${bucket}`;
     const releaseJson = () => ({ name, rulesetName: release, createTime: time(), updateTime: time() });
     if (method === "POST" && path === `/v1/projects/${project}/releases`) { previousSource = activeSource(); release = body.rulesetName; staleReads = options.lag ?? 0; return json(200, releaseJson()); }
@@ -209,7 +216,7 @@ export function createSimulator({ manifest, options = {} }) {
     const stamp = () => { const t = new Date(1790000000000 + ++generation % 1000000).toISOString().replace("Z", "000Z"); return t; };
     if (method === "POST") { name = `${name}/${url.searchParams.get("documentId")}`; const d = { fields: {}, createTime: stamp(), updateTime: stamp() }; documents.set(name, d); return json(200, doc(name, d)); }
     const existing = documents.get(name);
-    if (method === "GET") return existing ? json(200, doc(name, existing)) : rpcNotFound();
+    if (method === "GET") return existing ? json(200, doc(name, existing)) : documentNotFound(name);
     if (method === "PATCH") { const d = { fields: {}, createTime: existing?.createTime ?? stamp(), updateTime: stamp() }; documents.set(name, d); return json(200, doc(name, d)); }
     if (method === "DELETE") { if (!existing) return rpcNotFound(); documents.delete(name); return json(200, {}); }
     return json(404, { error: { code: 404, message: "unrouted", status: "NOT_FOUND" } });

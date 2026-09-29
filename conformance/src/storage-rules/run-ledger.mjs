@@ -1,4 +1,5 @@
 import { REQUIRES_REGISTRY } from "./predicates.mjs";
+import { isEntryList } from "./entry-rulesets.mjs";
 
 // What the run has done to everything that is not an owned object: Firestore documents, resumable sessions, the four
 // Rulesets, the bucket release, the witness and control objects (through the object ledger), and the run-level flags.
@@ -263,6 +264,8 @@ export function createRunLedger(options) {
   const CHECKS = {
     "all-explicit-bucket-permissions-present": (row, o) => o.kind === "preflight-bucket-permissions" && o.facts.missing?.length === 0,
     "all-explicit-permissions-present-does-not-authorize-send": (row, o) => o.kind === "preflight-permissions" && o.facts.missing?.length === 0,
+    // The list of Rulesets is exactly the two production holds, at entry and again at the end: what the run created is gone, and nothing else changed.
+    "approved-ruleset-count-and-cleanup-baseline": (row, o) => o.kind === "rules-list-page" && o.verdict === "accepted" && o.facts.hasNextPage === false && isEntryList(o.facts.rulesets),
     "bucket-release-absent": (row, o) => o.kind === "rules-release-read" && o.verdict === "absent",
     "bucketless-release-absent": (row, o) => o.kind === "rules-release-read" && o.verdict === "absent",
     "empty-items-and-no-next-page-token": (row, o) => o.kind === "gcs-prefix-list" && o.facts.itemCount === 0 && o.facts.hasNextPage === false,

@@ -86,5 +86,5 @@ test("a manifest with an unknown token, state or condition is refused", async ()
 
 test("the reviewed registry is pinned, so any change to a token, category, fact or outcome needs a deliberate update", async () => {
   const { REQUIRES_REGISTRY } = await load();
-  assert.equal(createHash("sha256").update(JSON.stringify(REQUIRES_REGISTRY)).digest("hex"), "6cf3551127131b831cf242c53672e219910a8cc1ffdd9c57e2de45c18a1c37ef");
+  assert.equal(createHash("sha256").update(JSON.stringify(REQUIRES_REGISTRY)).digest("hex"), "1b00eb744a6639f60b63b84f98ff929d15d7399ef8409055a4ffa4a52cd8c047");
 });

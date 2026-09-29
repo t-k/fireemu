@@ -143,9 +143,22 @@ test("GCS media reads carry a digest, the 404 absence and nothing else", async (
   assert.equal(present.verdict, "present");
   assert.deepEqual({ ...present.facts }, { status: 200, bodyBytes: seedBytes.length, bodySha256: sha(seedBytes), generation: "1700000000000001" });
   assert.equal(classifyResponse(media, response(200, seedBytes)).facts.generation, undefined);
-  assert.equal(classifyResponse(media, gcsNotFound(media.request.objectName)).verdict, "absent");
-  for (const bad of [response(200, seedBytes, { "x-goog-generation": "0" }), response(200, seedBytes, { "x-goog-generation": ["1", "2"] }), response(404, ""), response(403, "{}"), response(500, "")]) {
-    assert.equal(classifyResponse(media, bad).verdict, "unexpected");
+  // Production answers a missing object on a media download with a plain sentence that names the bucket and the object (recorded by the stage 2d probe).
+  const sentence = `No such object: ${binding.bucket}/${media.request.objectName}`;
+  for (const type of ["text/html; charset=UTF-8", "text/html", "text/plain; charset=utf-8", "TEXT/HTML;charset=UTF-8"]) assert.equal(classifyResponse(media, response(404, sentence, { "Content-Type": type })).verdict, "absent", type);
+  assert.deepEqual({ ...classifyResponse(media, response(404, sentence, { "Content-Type": "text/html; charset=UTF-8" })).facts }, { status: 404 });
+  for (const bad of [
+    response(200, seedBytes, { "x-goog-generation": "0" }), response(200, seedBytes, { "x-goog-generation": ["1", "2"] }), response(404, ""), response(403, "{}"), response(500, ""),
+    // The JSON error envelope is the metadata answer, not the media one; another object or bucket, a trailing newline, another status or type and bytes that are not UTF-8 are surprises.
+    gcsNotFound(media.request.objectName), response(404, sentence, { "Content-Type": "application/json; charset=UTF-8" }), response(404, sentence), response(404, sentence, { "Content-Type": "text/html; charset=ISO-8859-1" }),
+    response(404, `${sentence}\n`, { "Content-Type": "text/html; charset=UTF-8" }), response(404, `No such object: other-bucket/${media.request.objectName}`, { "Content-Type": "text/html; charset=UTF-8" }),
+    response(404, `No such object: ${binding.bucket}/${media.request.objectName}x`, { "Content-Type": "text/html; charset=UTF-8" }), response(404, sentence.toLowerCase(), { "Content-Type": "text/html; charset=UTF-8" }),
+    response(403, sentence, { "Content-Type": "text/html; charset=UTF-8" }), response(410, sentence, { "Content-Type": "text/html; charset=UTF-8" }), response(200, sentence, { "Content-Type": "text/html; charset=UTF-8" }),
+    response(404, Buffer.concat([Buffer.from(sentence), Buffer.from([0xff])]), { "Content-Type": "text/html; charset=UTF-8" }),
+  ]) {
+    const verdict = classifyResponse(media, bad).verdict;
+    assert.notEqual(verdict, "absent");
+    if (bad.status !== 200) assert.equal(verdict, "unexpected", `${bad.status}`);
   }
 });
 

@@ -333,6 +333,26 @@ test("the final prefix check needs every owned resource proven gone, releases ab
   assert.equal(run.evaluate(prefix, token).decision, "go");
 });
 
+const KNOWN = [
+  { name: "projects/fireemu-oracle-query/rulesets/22b746af-a48a-458d-ab5c-7853473bc8c8", services: ["firebase.storage"] },
+  { name: "projects/fireemu-oracle-query/rulesets/d0abf7c6-b0b6-4163-8488-7c8a48ac5dd1", services: ["cloud.firestore"] },
+];
+test("the Rulesets baseline is a check of the list page itself, at entry and at the end: exactly the two known rulesets, by name and service, on a single page", async () => {
+  const { run } = await fresh();
+  const list = (rulesets, extra = {}) => out("rules-list-page", "accepted", { count: rulesets.length, hasNextPage: false, rulesets, ...extra });
+  const stranger = { name: RS("aaaaaaaa-0000-4000-8000-000000000000"), services: ["firebase.storage"] };
+  for (const id of ["preflight/rulesets-list/entry/1", "rulesets-list/final/1"]) {
+    assert.equal(run.check(row(id), list(KNOWN)).ok, true, id);
+    assert.deepEqual([...run.check(row(id), list([...KNOWN].reverse())).failed], ["approved-ruleset-count-and-cleanup-baseline"], "unsorted");
+    for (const [name, bad] of Object.entries({
+      "empty": list([]), "only storage": list([KNOWN[0]]), "only firestore": list([KNOWN[1]]), "a stranger": list([...KNOWN, stranger]), "a leftover of the run": list([...KNOWN, { name: RS("11111111-0000-4000-8000-000000000000"), services: ["firebase.storage"] }]),
+      "storage replaced": list([stranger, KNOWN[1]]), "services swapped": list([{ ...KNOWN[0], services: ["cloud.firestore"] }, { ...KNOWN[1], services: ["firebase.storage"] }]), "an extra service": list([{ ...KNOWN[0], services: ["cloud.firestore", "firebase.storage"] }, KNOWN[1]]),
+      "no services": list([{ name: KNOWN[0].name, services: [] }, KNOWN[1]]), "a next page": list(KNOWN, { hasNextPage: true, nextPageToken: "t" }), "no rulesets fact": out("rules-list-page", "accepted", { count: 2, hasNextPage: false }),
+      "not accepted": out("rules-list-page", "unexpected", { status: 200 }), "another kind": out("rules-release-read", "absent", { rulesets: KNOWN, hasNextPage: false }), "not an array": out("rules-list-page", "accepted", { count: 2, hasNextPage: false, rulesets: "x" }),
+    })) assert.equal(run.check(row(id), bad).ok, false, `${id} ${name}`);
+  }
+});
+
 test("post-response checks read the classification of their own row", async () => {
   const { run } = await fresh();
   const cases = [
@@ -341,7 +361,7 @@ test("post-response checks read the classification of their own row", async () =
     ["preflight/release/entry/bucket", out("rules-release-read", "absent"), out("rules-release-read", "present", { rulesetName: RS("a") })],
     ["preflight/release/entry/bucketless", out("rules-release-read", "absent"), out("rules-release-read", "present", { rulesetName: RS("a") })],
     ["management/prefix-empty", out("gcs-prefix-list", "accepted", { itemCount: 0, hasNextPage: false }), out("gcs-prefix-list", "accepted", { itemCount: 1, hasNextPage: false })],
-    ["preflight/rulesets-list/entry/1", out("rules-list-page", "accepted", { count: 3, hasNextPage: false }), out("rules-list-page", "accepted", { count: 3, hasNextPage: true, nextPageToken: "t" })],
+    ["preflight/rulesets-list/entry/1", out("rules-list-page", "accepted", { count: 2, hasNextPage: false, rulesets: KNOWN }), out("rules-list-page", "accepted", { count: 2, hasNextPage: true, nextPageToken: "t", rulesets: KNOWN })],
   ];
   for (const [id, good, bad] of cases) {
     assert.equal(run.check(row(id), good).ok, true, id);

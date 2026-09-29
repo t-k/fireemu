@@ -104,6 +104,25 @@ test("stale credentials stop the first row that needs a fresh user token, and th
   assert.equal(h.simulator.state().rulesets, 4);
 });
 
+test("the Rulesets baseline is enforced on the run itself: a wrong entry list stops before admission, and a final list that is not the entry list stops at the end", async () => {
+  for (const entryRulesets of [[], [{ id: "22b746af-a48a-458d-ab5c-7853473bc8c8", createTime: "2026-09-25T11:08:54.358767Z", services: ["firebase.storage"] }], [{ id: "22b746af-a48a-458d-ab5c-7853473bc8c8", createTime: "2026-09-25T11:08:54.358767Z", services: ["firebase.storage"] }, { id: "d0abf7c6-b0b6-4163-8488-7c8a48ac5dd1", createTime: "2026-09-23T23:02:05.839536Z", services: ["cloud.firestore"] }, { id: "bbbbbbbb-0000-4000-8000-000000000000", createTime: "2026-09-23T23:02:05.839536Z", services: ["cloud.firestore"] }]]) {
+    const wrongEntry = await harness({ simulatorOptions: { entryRulesets } });
+    const stopped = await wrongEntry.controller.run();
+    assert.deepEqual([stopped.status, stopped.reason, stopped.detail.rowId], ["stopped", "check failed", "preflight/rulesets-list/entry/1"], JSON.stringify(entryRulesets.length));
+    assert.equal(wrongEntry.trace.at(-1), "preflight/rulesets-list/entry/1", "the run went no further than the list");
+    assert.equal(wrongEntry.simulator.state().calls > 0, true);
+    assert.equal(wrongEntry.simulator.state().objects + wrongEntry.simulator.state().rulesets + wrongEntry.simulator.state().documents, 0, "nothing was written");
+  }
+  const stranger = await harness({ simulatorOptions: { strangerAfterEntry: true } });
+  const result = await stranger.controller.run();
+  assert.equal(result.status, "stopped");
+  assert.match(result.detail?.rowId ?? "", /^rulesets-list\/final\/1$/);
+  // Everything the run created was already cleaned when the final list showed the stranger, and the two known rulesets were never touched.
+  const state = stranger.simulator.state();
+  assert.deepEqual({ objects: state.objects, rulesets: state.rulesets, release: state.release, documents: state.documents }, { objects: 0, rulesets: 0, release: null, documents: 0 });
+  assert.deepEqual(stranger.simulator.touchedEntryRulesets(), []);
+});
+
 test("a refused preflight, a foreign entry release or a malformed answer stops before admission", async () => {
   const refused = await harness({ judge: (row) => row.id !== "preflight/query/project" });
   const one = await refused.controller.run();

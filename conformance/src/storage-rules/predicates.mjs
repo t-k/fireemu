@@ -6,9 +6,9 @@ const entry = (category, needs, onFalse = "stop") => Object.freeze({ category, n
 export const PREDICATE_CATEGORIES = Object.freeze(["guard", "proof", "input", "check", "budget", "policy"]);
 export const PREDICATE_FACTS = Object.freeze([
   "run.state", "credential.fresh", "credential.session-state", "credential.cache-proof",
-  "input.provenance", "input.bucket-policy-baseline", "input.project-policy-baseline", "input.ruleset-baseline",
+  "input.provenance", "input.bucket-policy-baseline", "input.project-policy-baseline",
   "input.identity-match", "input.project-match", "input.bucket-match", "input.database-match", "input.key-match",
-  "response.permissions", "response.page-complete", "response.release-state", "response.source-digest",
+  "response.permissions", "response.page-complete", "response.ruleset-baseline", "response.release-state", "response.source-digest",
   "resource.absent", "resource.started", "resource.provenance", "resource.all-cleaned", "namespace.owned",
   "object.write-history", "object.generation", "document.write-history", "document.update-time",
   "witness.four-confirmed", "witness.retained", "control.final-readbacks",
@@ -31,7 +31,7 @@ export const REQUIRES_REGISTRY = Object.freeze({
   "approved-bucket-policy-baseline-match": entry("input", ["input.bucket-policy-baseline"]),
   "approved-cross-service-grant-and-policy-baseline-match": entry("input", ["input.project-policy-baseline"]),
   "approved-private-input-provenance": entry("input", ["input.provenance"]),
-  "approved-ruleset-count-and-cleanup-baseline": entry("input", ["input.ruleset-baseline"]),
+  "approved-ruleset-count-and-cleanup-baseline": entry("check", ["response.ruleset-baseline"]),
   "at-most-ten-pages-or-stop": entry("budget", ["page.count"]),
   "both-releases-absent": entry("guard", ["release.absent"]),
   "bucket-name-project-number-and-baseline-match": entry("input", ["input.bucket-match"]),

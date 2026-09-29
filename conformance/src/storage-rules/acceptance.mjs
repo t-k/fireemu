@@ -83,6 +83,14 @@ function gcsNotFound(response) {
   const body = jsonBody(response);
   return response.status === 404 && isObject(body) && isObject(body.error) && body.error.code === 404 && Array.isArray(body.error.errors) && isObject(body.error.errors[0]) && body.error.errors[0].reason === "notFound";
 }
+// Production answers a missing object on a media download with a plain sentence, not the JSON error envelope (recorded by the stage 2d probe: 404, a text
+// content type, and exactly `No such object: <bucket>/<object>`). The sentence must name this row's own bucket and object.
+function gcsMediaNotFound(response, bucket, name) {
+  if (response.status !== 404) return false;
+  const type = single(response.headers, "content-type");
+  if (typeof type !== "string" || !/^text\/(?:html|plain)(?:\s*;\s*charset=utf-8)?$/i.test(type.trim())) return false;
+  try { return new TextDecoder("utf-8", { fatal: true }).decode(response.bytes) === `No such object: ${bucket}/${name}`; } catch { return false; }
+}
 function objectContext(row, prefix) {
   const match = new RegExp(`^${prefix}/b/([^/]+)/o(?:/|$)`).exec(row.request.path ?? "");
   if (!match || typeof row.request.objectName !== "string") bad("invalid acceptance kind");
@@ -139,13 +147,13 @@ const CLASSIFIERS = {
     return unexpected("gcs-prefix-list", response);
   },
   "gcs-media-read": (row, response) => {
-    objectContext(row, "/storage/v1");
+    const { bucket, name } = objectContext(row, "/storage/v1");
     if (response.status === 200) {
       const generation = single(response.headers, "x-goog-generation");
       if (generation === null || (generation !== undefined && !decimal(generation))) return unexpected("gcs-media-read", response);
       return result("gcs-media-read", "present", { ...common(response), ...(generation === undefined ? {} : { generation }) });
     }
-    if (gcsNotFound(response)) return result("gcs-media-read", "absent", { status: 404 });
+    if (gcsMediaNotFound(response, bucket, name)) return result("gcs-media-read", "absent", { status: 404 });
     return unexpected("gcs-media-read", response);
   },
 };

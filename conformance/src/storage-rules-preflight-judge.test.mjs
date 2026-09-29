@@ -138,3 +138,115 @@ test("the judge's options are a closed record around parsed inputs", async () =>
   for (const bad of [undefined, null, {}, { inputs: null }, { inputs: {} }, { inputs: packet() }, { inputs: parsePrivateInputs(packet()), extra: 1 }]) assert.throws(() => createPreflightJudge(bad), /invalid preflight judge options/);
   assert.equal(typeof createPreflightJudge({ inputs: parsePrivateInputs(packet()) }), "function");
 });
+
+// The genuine outcome of every probe the judge knows, including the three entry reads judged by their verdicts.
+const absentRelease = (id) => classifyResponse(row(id), raw({ error: { code: 404, message: "not found", status: "NOT_FOUND" } }, 404));
+const genuine = () => ({
+  ...Object.fromEntries(ids.map((id) => [id, seen(id)])),
+  "preflight/rulesets-list/entry/1": classifyResponse(row("preflight/rulesets-list/entry/1"), raw({})),
+  "preflight/release/entry/bucket": absentRelease("preflight/release/entry/bucket"),
+  "preflight/release/entry/bucketless": absentRelease("preflight/release/entry/bucketless"),
+});
+// A copy of an outcome with some fields replaced that keeps the non-enumerable secret facts a plain spread would drop.
+const reshape = (outcome, changes) => Object.defineProperty({ ...outcome, ...changes }, "secretFacts", { value: Object.hasOwn(changes, "secretFacts") ? changes.secretFacts : outcome.secretFacts, enumerable: false });
+
+test("an outcome of another kind carrying the very same facts and secrets is refused, for every probe", async () => {
+  const judge = await judgeWith();
+  const outcomes = genuine();
+  const kinds = [...new Set([...Object.values(outcomes).map((outcome) => outcome.kind), "rules-release-create", "rules-test"])];
+  for (const [id, outcome] of Object.entries(outcomes)) {
+    assert.equal(judge(row(id), reshape(outcome, {})), true, `${id} as read`);
+    for (const kind of kinds.filter((kind) => kind !== outcome.kind)) assert.equal(judge(row(id), reshape(outcome, { kind })), false, `${id} as ${kind}`);
+  }
+});
+
+test("an outcome read for one probe is refused when handed to another probe whose expected facts happen to match", async () => {
+  // The project and bucket policies canonicalise to the same digest here, so only the kind tells the two reads apart.
+  const judge = await judgeWith((v) => { v.bucket.iamPolicySha256 = v.queryProjectIamPolicySha256; });
+  assert.equal(judge(row("preflight/query/iam"), seen("preflight/query/iam")), true);
+  assert.equal(judge(row("preflight/bucket/iam"), seen("preflight/query/iam")), false);
+  assert.equal(judge(row("preflight/query/iam"), seen("preflight/bucket/iam", (b) => ({ ...b, bindings: projectBindings }))), false);
+  // Every permission granted on the bucket says nothing about the projects, and the reverse.
+  const bucketGrants = seen("preflight/bucket/permissions");
+  const queryGrants = seen("preflight/query/permissions");
+  assert.deepEqual([bucketGrants.facts.missing, queryGrants.facts.missing], [[], []]);
+  assert.equal(judge(row("preflight/query/permissions"), bucketGrants), false);
+  assert.equal(judge(row("preflight/idp/permissions"), bucketGrants), false);
+  assert.equal(judge(row("preflight/bucket/permissions"), queryGrants), false);
+  // The Rulesets list and the release reads are well formed only as themselves.
+  const outcomes = genuine();
+  assert.equal(judge(row("preflight/rulesets-list/entry/1"), outcomes["preflight/release/entry/bucket"]), false);
+  assert.equal(judge(row("preflight/release/entry/bucket"), outcomes["preflight/rulesets-list/entry/1"]), false);
+  assert.equal(judge(row("preflight/release/entry/bucketless"), outcomes["preflight/rulesets-list/entry/1"]), false);
+});
+
+test("a row that carries a known id but asks another target is refused even with the genuine outcome", async () => {
+  const judge = await judgeWith();
+  const moved = (id, path) => ({ ...row(id), request: { ...row(id).request, path } });
+  const swaps = [["preflight/query/project", "preflight/idp/project"], ["preflight/query/key-metadata", "preflight/idp/key-metadata"], ["preflight/query/key-string", "preflight/idp/key-string"]];
+  for (const [left, right] of swaps) {
+    assert.equal(judge(moved(left, row(right).request.path), seen(left)), false, left);
+    assert.equal(judge(moved(right, row(left).request.path), seen(right)), false, right);
+  }
+  assert.equal(judge(moved("preflight/bucket/metadata", "/storage/v1/b/another-rules-bucket"), seen("preflight/bucket/metadata")), false);
+  for (const id of ["preflight/query/project", "preflight/query/key-metadata", "preflight/query/key-string", "preflight/bucket/metadata"]) assert.equal(judge(moved(id, row(id).request.path), seen(id)), true, id);
+});
+
+test("a release read that production answered unexpectedly is not a well-formed entry", async () => {
+  const judge = await judgeWith();
+  for (const id of ["preflight/release/entry/bucket", "preflight/release/entry/bucketless"]) {
+    const failed = classifyResponse(row(id), raw({ error: "x" }, 500));
+    assert.equal(failed.verdict, "unexpected");
+    assert.equal(judge(row(id), failed), false, id);
+  }
+});
+
+test("facts the classifier never produces are still refused: inconsistent permission counts and bytes where strings belong", async () => {
+  const value = packet();
+  const judge = await judgeWith();
+  const accepted = (id, facts) => ({ kind: seen(id).kind, verdict: "accepted", facts: { ...seen(id).facts, ...facts } });
+  for (const id of ["preflight/query/permissions", "preflight/idp/permissions", "preflight/bucket/permissions"]) {
+    assert.equal(judge(row(id), accepted(id, { requested: 2, granted: 2, missing: [] })), true, id);
+    assert.equal(judge(row(id), accepted(id, { requested: 2, granted: 2, missing: ["storage.buckets.get"] })), false, `${id} missing`);
+    assert.equal(judge(row(id), accepted(id, { requested: 2, granted: 1, missing: [] })), false, `${id} counts`);
+  }
+  // A buffer or byte array spelling the expected digest is not the digest.
+  const policy = parsePrivateInputs(value).bucket.iamPolicySha256;
+  for (const policySha256 of [Buffer.from(policy), [...Buffer.from(policy)]]) assert.equal(judge(row("preflight/bucket/iam"), accepted("preflight/bucket/iam", { policySha256 })), false);
+  const keyString = seen("preflight/query/key-string");
+  assert.equal(judge(row("preflight/query/key-string"), reshape(keyString, { secretFacts: { keyString: Buffer.from(value.projects.query.apiKey) } })), false);
+  const identity = seen("preflight/owner/identity");
+  assert.equal(judge(row("preflight/owner/identity"), reshape(identity, { secretFacts: { email: Buffer.from("owner@example.test"), subject: Buffer.from("owner-subject") } })), false);
+  assert.equal(judge(row("preflight/owner/identity"), reshape(identity, { secretFacts: { email: "owner@example.test", subject: Buffer.from("owner-subject") } })), false);
+  // An array-like list that reads like the expected targets is not a list.
+  const arrayLike = { length: 1, 0: "identitytoolkit.googleapis.com", every: Array.prototype.every };
+  assert.equal(judge(row("preflight/query/key-metadata"), accepted("preflight/query/key-metadata", { apiTargets: arrayLike })), false);
+  assert.equal(judge(row("preflight/query/key-metadata"), accepted("preflight/query/key-metadata", { apiTargets: ["identitytoolkit.googleapis.com"] })), true);
+});
+
+test("the judge answers false, never another value, for inherited ids, callable outcomes and outcomes that throw", async () => {
+  const judge = await judgeWith();
+  const project = seen("preflight/query/project");
+  // The judge table is an ordinary object: ids that name Object.prototype members must not reach them.
+  for (const id of ["constructor", "toString", "valueOf", "hasOwnProperty", "__proto__"]) assert.equal(judge({ id, request: row("preflight/query/project").request }, project), false, id);
+  assert.equal(judge(row("preflight/query/project"), Object.assign(() => {}, project)), false);
+  assert.equal(judge(row("preflight/query/project"), { kind: project.kind, verdict: "accepted" }), false);
+  assert.equal(judge(row("preflight/query/project"), { get kind() { throw new Error("boom"); } }), false);
+  assert.equal(judge(null, project), false);
+  assert.equal(judge(row("preflight/query/project"), project), true);
+});
+
+test("the judge's options must be a plain record around frozen inputs with string keys behind them", async () => {
+  const { createPreflightJudge } = await load();
+  const inputs = parsePrivateInputs(packet());
+  const withSecrets = (target, secrets) => Object.defineProperty(target, "secrets", { value: secrets, enumerable: false });
+  const bad = [
+    new Proxy({ inputs }, {}),
+    { inputs: withSecrets({ ...inputs }, inputs.secrets) },
+    { inputs: Object.freeze({ ...inputs }) },
+    { inputs: Object.freeze(withSecrets({ ...inputs }, { apiKeys: { query: 1, idp: inputs.secrets.apiKeys.idp } })) },
+    { inputs: Object.freeze(withSecrets({ ...inputs }, { apiKeys: { query: inputs.secrets.apiKeys.query } })) },
+  ];
+  bad.forEach((options, index) => assert.throws(() => createPreflightJudge(options), /invalid preflight judge options/, `#${index}`));
+  assert.equal(typeof createPreflightJudge({ inputs: Object.freeze(withSecrets({ ...inputs }, inputs.secrets)) }), "function");
+});

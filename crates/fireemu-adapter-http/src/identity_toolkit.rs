@@ -4157,8 +4157,9 @@ fn handle_with_policy_inner(
     // sign-in succeeds. A resumed continuation is not a new credential: it carries the one the
     // request that issued it consumed (a continuation this daemon issued, found by its token),
     // so it neither checks nor reserves the used set, and is verified again in every other way.
-    // A repeated resume is not refused (production's answer is unobserved); presenting the ID
-    // token itself again stays a duplicate.
+    // A repeated resume is not refused, as production answers one with 200 for a credential
+    // without a nonce (pending-token, record-oidc 39209e); its answer for a nonce-bearing
+    // credential is unobserved. Presenting the ID token itself again stays a duplicate.
     let mut used_credential = CredentialReservation::default();
     let resuming = resumed_body.is_some();
     if route.handler == routes::Handler::SignInWithIdp {

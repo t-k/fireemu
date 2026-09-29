@@ -10,7 +10,7 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ### Changed
 
-- Strict profile: a `pendingToken` continuation of a nonce-bearing OIDC sign-in is resumed instead of being refused as a duplicate credential. The continuation carries the credential the first request consumed, so presenting the same ID token and nonce again is still refused; a forged token or one from another daemon is refused as an unknown continuation. The continuation is not consumed, so it can be resumed more than once within its lifetime (production's answer to a resume is unrecorded).
+- Strict profile: a `pendingToken` continuation of a nonce-bearing OIDC sign-in is resumed instead of being refused as a duplicate credential. The continuation carries the credential the first request consumed, so presenting the same ID token and nonce again is still refused; a forged token or one from another daemon is refused as an unknown continuation. The continuation is not consumed, so it can be resumed more than once within its lifetime, as production answered a repeated resume for a credential without a nonce (its answer for a nonce-bearing credential is unrecorded).
 - Strict profile: a SAML sign-in that ran a blocking function is checked again against the live provider when it commits: a provider whose callback URL, identity provider entity ID or SP entity ID changed meanwhile answers `INVALID_IDP_RESPONSE`. The time windows are still read when the request starts. This is fireemu's own guard, not production's.
 
 ## [0.9.0] - 2026-09-29

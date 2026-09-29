@@ -1326,7 +1326,8 @@ fn a_continuation_of_a_nonce_sign_in_resumes_without_the_used_credential_refusal
     // The nonce credential the first request consumed is not consumed again by resuming the
     // continuation that request answered with: the continuation is that credential, verified
     // again against the live provider and keys (closure review N10 item 4, N-g). A repeated
-    // resume is not refused (production's answer is unobserved).
+    // resume is not refused, as production answers one with 200 for a credential without a
+    // nonce (pending-token); its answer for a nonce-bearing credential is unobserved.
     let s = continuing_state();
     let first = sign_in(&s, &with_nonce(&nonce_token(), Some("nonce-a")));
     assert_eq!(first.status, 200, "{}", first.body);

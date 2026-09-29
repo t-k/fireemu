@@ -695,7 +695,7 @@
           "MATCH": 4
         }
       },
-      "limits": "A nonce-bearing OIDC sign-in keeps its nonce credential used, so presenting the same ID token and nonce again is refused as a duplicate, including after a 200 answer that carries a continuation. Resuming a pendingToken this daemon issued is not refused for that: the continuation is that credential, verified again against the live provider and keys, and it is not consumed, so it can be resumed more than once within its lifetime. Production's answer to a resume, and to a repeated one, is unrecorded."
+      "limits": "A nonce-bearing OIDC sign-in keeps its nonce credential used, so presenting the same ID token and nonce again is refused as a duplicate, including after a 200 answer that carries a continuation. Resuming a pendingToken this daemon issued is not refused for that: the continuation is that credential, verified again against the live provider and keys, and it is not consumed, so it can be resumed more than once within its lifetime. Production answered a resume, and a repeated one, with 200 for a credential without a nonce (pending-token); its answer for a nonce-bearing credential is unrecorded."
     },
     {
       "conditionId": "AUTH-FEDERATION/idp-claims-sign-in",

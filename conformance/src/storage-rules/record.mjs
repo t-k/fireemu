@@ -10,7 +10,7 @@ import { CLOSURE_SPEC } from "./pins.mjs";
 // needs one, and confirms the close, which releases the project locks, only for the controller's own clean result. Anything else
 // (a stop that needs recovery, a stop that sent nothing, a failed recovery) leaves both locks where they are for the coordinator.
 // The approval file is a private JSON file of this user, `{ "packet": {...}, "review": {...} }`, the objects the approval check reads.
-// It prints one JSON line with no secret: the run ID, the statuses, the reasons, the request counts and whether the locks were released.
+// It prints one JSON line with no secret: the run ID, whether the recording was entered, the statuses, the reasons, the request counts and whether the locks were released.
 const MAX_APPROVAL_BYTES = 64 * 1024;
 const RUN_ID = /^[a-z0-9][a-z0-9-]{0,47}$/;
 const plain = (value) => value !== null && typeof value === "object" && Object.getPrototypeOf(value) === Object.prototype;
@@ -34,7 +34,7 @@ const short = (result) => (result === undefined ? undefined : {
 
 /**
  * The command with its collaborators injected. `entry` is the real `withStorageRulesRecording` unless a test passes another;
- * the command line below never does. Returns the exit code: 0 clean and released, 1 refused before a run, 2 usage, 3 not clean.
+ * the command line below never does. Returns the exit code: 0 clean and released, 1 refused before the recording was entered, 2 usage, 3 not clean (the recording was entered: the locks stay).
  */
 export async function runRecordCommand({ args, codeRoot, entry = withStorageRulesRecording, out, err }) {
   const [inputsPath, approvalPath, runId, ...extra] = args;
@@ -49,6 +49,8 @@ export async function runRecordCommand({ args, codeRoot, entry = withStorageRule
   let failure = null;
   try {
     await entry({ inputsPath, closure, runId, sourceCommit: approval.packet.sourceCommit, packet: approval.packet, review: approval.review }, async (recording) => {
+      // From here the locks are held and requests may be sent: whatever happens next is never "refused before a run".
+      seen.entered = true;
       const first = await recording.run();
       seen.run = short(first);
       let final = first;
@@ -65,7 +67,7 @@ export async function runRecordCommand({ args, codeRoot, entry = withStorageRule
   }
   out(`${JSON.stringify(seen)}\n`);
   if (failure === null && seen.locksReleased === true) return 0;
-  return seen.run === undefined ? 1 : 3;
+  return seen.entered === true ? 3 : 1;
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {

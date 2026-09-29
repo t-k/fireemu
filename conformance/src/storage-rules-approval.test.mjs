@@ -357,6 +357,25 @@ test("another packet's revocation does not revoke this packet", async () => {
   assert.equal(validate({ ledgerText, packet, review }).sendAuthorized, false);
 });
 
+// The envelope and version lines the packet template asks the coordinator to write, filled in with test values: the gate must admit exactly those.
+test("the packet template's own envelope and version lines are admitted, and a semicolon inside a value is refused", async () => {
+  const validate = await load();
+  const name = "stage3-v2";
+  const id = "STORAGE-RULES-stage3-v2-001";
+  const writes = "owned objects under STORAGE-RULES/<run>/, run documents, run Auth users incl. validSince, at most 4 Rulesets per recording, bucket-specific firebase.storage release create/update/delete ending absent";
+  const iam = "none (IAM read-only preflight, no API enablement, no Firestore Rules, index, Auth config or API key change)";
+  const envelopeLine = (iamConfig) => `- 2026-09-29 | STORAGE-RULES ${name} envelope | envelopeId=${id}; project=${packet.projects.join(",")}; maxRequests=12344; reserveUsd=2; writes=${writes}; iamConfig=${iamConfig}; retries=none; onStop=needs-recovery-lock-held; 根拠=${delegationReference} | ${delegatedEnvelopeActor} | private.md`;
+  const versionLine = `- 2026-09-29 | STORAGE-RULES ${name} | decision=APPROVE; ${pins.map((key) => `${key}=${packet[key]}`).join("; ")}; envelopeId=${id} | ${coordinator} | private.md`;
+  const named = { ...packet, packetName: name };
+  const reviewed = { ...review, envelopeId: id, withinEnvelope: true };
+  const admitted = validate({ ledgerText: [delegationRows, envelopeLine(iam), versionLine].join("\n"), packet: named, review: reviewed });
+  assert.deepEqual([admitted.status, admitted.envelopeId, admitted.sendAuthorized], ["APPROVAL_BOUND_LOCAL_ONLY", id, false]);
+  // The same envelope with semicolons inside the parenthesis is a malformed row, not an admission.
+  assert.throws(() => validate({ ledgerText: [delegationRows, envelopeLine(iam.replaceAll(", no ", "; no ")), versionLine].join("\n"), packet: named, review: reviewed }), /malformed target ledger row/);
+  // A pipe inside a value moves the columns and is refused as well.
+  assert.throws(() => validate({ ledgerText: [delegationRows, envelopeLine(`${iam} | x`), versionLine].join("\n"), packet: named, review: reviewed }));
+});
+
 // Revocation spellings (docs.local/issues/open/sandbox-approval-gates-fail-open-on-revocation-spellings.md, rules 1-5).
 function note(subject, body, tail = " | オーナー（local） | note.md") {
   return `- 2026-09-29 | ${subject} | ${body}${tail}`;

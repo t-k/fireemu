@@ -22,14 +22,14 @@ async function scratch(t, { text = JSON.stringify(approval), mode = 0o600 } = {}
   await chmod(path, mode);
   return { root, path };
 }
-function harness({ first, recovered, confirm = () => {}, reject = null, rejectAfter = null } = {}) {
+function harness({ first, recovered, confirm = () => {}, reject = null, rejectAfter = null, runError = null, recoverError = null } = {}) {
   const calls = [];
   const entry = async (options, use) => {
     calls.push(["entry", options]);
     if (reject !== null) throw reject;
     const recording = {
-      run: async () => { calls.push(["run"]); return first; },
-      recover: async () => { calls.push(["recover"]); return recovered; },
+      run: async () => { calls.push(["run"]); if (runError !== null) throw runError; return first; },
+      recover: async () => { calls.push(["recover"]); if (recoverError !== null) throw recoverError; return recovered; },
       confirmCleanClose: (result) => { calls.push(["confirm", result]); return confirm(result); },
     };
     const value = await use(recording);
@@ -47,7 +47,7 @@ test("a clean run is closed with the controller's own result, and the locks are 
   const h = harness({ first: clean });
   const result = await h.run(["/x/inputs.json", path, "run-one"]);
   assert.equal(result.code, 0);
-  assert.deepEqual(JSON.parse(result.out), { runId: "run-one", locksReleased: true, run: { status: "finished", requests: 6172 } });
+  assert.deepEqual(JSON.parse(result.out), { runId: "run-one", locksReleased: true, entered: true, run: { status: "finished", requests: 6172 } });
   assert.equal(result.err, "");
   assert.deepEqual(h.calls.map(([name]) => name), ["entry", "run", "confirm"]);
   assert.equal(h.calls[2][1], clean);
@@ -67,7 +67,7 @@ test("a stop that needs recovery is recovered once, and only a proven recovery i
   assert.equal(done.code, 0);
   assert.deepEqual(ok.calls.map(([name]) => name), ["entry", "run", "recover", "confirm"]);
   assert.equal(ok.calls[3][1], recovered);
-  assert.deepEqual(JSON.parse(done.out), { runId: "run-two", locksReleased: true, run: { status: "stopped", reason: "unexpected verdict", needsRecovery: true, requests: 40, rowId: "compile/release/before" }, recovery: { status: "recovered", requests: 12 } });
+  assert.deepEqual(JSON.parse(done.out), { runId: "run-two", locksReleased: true, entered: true, run: { status: "stopped", reason: "unexpected verdict", needsRecovery: true, requests: 40, rowId: "compile/release/before" }, recovery: { status: "recovered", requests: 12 } });
   assert.equal(done.out.includes("secret-looking"), false);
   const failed = Object.freeze({ status: "stopped", reason: "owned-prefix check skipped", detail: Object.freeze({}), requests: 3, needsRecovery: true });
   const bad = harness({ first: stopped, recovered: failed });
@@ -93,7 +93,7 @@ test("a close the lease refuses, or an entry that fails after the run, is not re
   const refused = harness({ first: clean, confirm: () => { throw new Error("cannot confirm project lock closure"); } });
   const one = await refused.run(["/x/i.json", path, "run-four"]);
   assert.equal(one.code, 3);
-  assert.deepEqual(JSON.parse(one.out), { runId: "run-four", locksReleased: false, run: { status: "finished", requests: 6172 }, closeRefused: true });
+  assert.deepEqual(JSON.parse(one.out), { runId: "run-four", locksReleased: false, entered: true, run: { status: "finished", requests: 6172 }, closeRefused: true });
   const after = harness({ first: clean, rejectAfter: new Error("outbound attempt failed; project locks retained") });
   const two = await after.run(["/x/i.json", path, "run-four"]);
   assert.equal(two.code, 3);
@@ -105,6 +105,28 @@ test("a close the lease refuses, or an entry that fails after the run, is not re
   assert.deepEqual(JSON.parse(three.out), { runId: "run-four", locksReleased: false });
   assert.match(three.err, /pin mismatch: runnerSha256/);
   assert.deepEqual(before.calls.map(([name]) => name), ["entry"]);
+});
+
+test("a failure after the recording was entered is never reported as a refusal before a run", async (t) => {
+  const { path } = await scratch(t);
+  // run() throws after sending (a terminal journal write failure): exit 3 with the recording marked as entered, not exit 1.
+  const thrown = harness({ runError: new Error("journal state is uncertain") });
+  const one = await thrown.run(["/x/i.json", path, "run-five"]);
+  assert.equal(one.code, 3);
+  assert.deepEqual(JSON.parse(one.out), { runId: "run-five", locksReleased: false, entered: true });
+  assert.match(one.err, /journal state is uncertain/);
+  assert.deepEqual(thrown.calls.map(([name]) => name), ["entry", "run"]);
+  // recover() throws after the run needed one.
+  const stopped = Object.freeze({ status: "stopped", reason: "unexpected verdict", detail: Object.freeze({}), requests: 5, needsRecovery: true });
+  const recoverThrown = harness({ first: stopped, recoverError: new Error("journal state is uncertain") });
+  const two = await recoverThrown.run(["/x/i.json", path, "run-five"]);
+  assert.equal(two.code, 3);
+  assert.deepEqual(JSON.parse(two.out), { runId: "run-five", locksReleased: false, entered: true, run: { status: "stopped", reason: "unexpected verdict", needsRecovery: true, requests: 5 } });
+  // An entry that refuses before the callback is the only exit 1, and its output does not say entered.
+  const refused = harness({ reject: new Error("pin mismatch: runnerSha256") });
+  const three = await refused.run(["/x/i.json", path, "run-five"]);
+  assert.equal(three.code, 1);
+  assert.equal(Object.hasOwn(JSON.parse(three.out), "entered"), false);
 });
 
 test("the arguments and the approval file are checked before the entry is reached", async (t) => {

@@ -99,7 +99,7 @@ async function assemble({ simulatorOptions = {}, respond = () => undefined, admi
     if (spec.url.startsWith("https://identitytoolkit.googleapis.com/")) return identity.handle(spec);
     return simulator.send(spec);
   } };
-  const capture = journal ?? { writeIntent: async () => {}, writeResponse: async () => {}, writeFacts: async () => {}, writeProof: async (proof) => { seen.proofs.push(proof); }, writeNote: async () => {}, snapshot: () => ({ uncertain: false }) };
+  const capture = journal ?? { writeIntent: async () => {}, writeResponse: async () => {}, writeFacts: async () => {}, writeProof: async (proof) => { seen.proofs.push(proof); }, writeNote: async () => {}, writeDelegatedTarget: async () => {}, snapshot: () => ({ uncertain: false }) };
   const targets = createTargetBuilder({ manifest, digestSalt: salt });
   const tables = buildRefTables(manifest);
   const refs = createRuntimeRefStore({ tables, runId: options.runId, digestSalt: salt, writeProof: (proof) => capture.writeProof(proof) });
@@ -276,7 +276,7 @@ function unit({ respond = () => undefined } = {}) {
   } };
   const gate = createDispatchGate({
     reservations: { onStarted: async () => {}, onReserve: async (r) => { trace.push(`${r.phase}:${r.operationId}`); }, onTerminal: async (r) => { trace.push(`terminal:${r.outcome}`); } },
-    capture: { writeIntent: async () => {}, writeResponse: async () => {}, writeNote: async () => {}, snapshot: () => ({ uncertain: false }) },
+    capture: { writeIntent: async () => {}, writeResponse: async () => {}, writeNote: async () => {}, writeDelegatedTarget: async () => {}, snapshot: () => ({ uncertain: false }) },
     transport, targets: { verify: () => true, prepare: () => { throw new Error("unused"); } }, credentials: { headersFor: () => ({}) },
     preflightIds: [OWNER_PREFLIGHT, KEYS_PREFLIGHT], admission: { check: async () => ({ admitted: true }), begin: async () => ({ admitted: true }) },
   });

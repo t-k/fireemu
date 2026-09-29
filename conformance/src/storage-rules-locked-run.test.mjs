@@ -58,7 +58,7 @@ async function assemble({ lease, admission, simulatorOptions = {} }, { transport
   const { leaseTransport } = await load();
   const simulator = createSimulator({ manifest, options: { invalidContent, ...simulatorOptions } });
   const trace = [];
-  const capture = { writeIntent: async () => {}, writeResponse: async () => {}, writeFacts: async () => {}, writeProof: async () => {}, writeNote: async () => {}, snapshot: () => ({ uncertain: false }) };
+  const capture = { writeIntent: async () => {}, writeResponse: async () => {}, writeFacts: async () => {}, writeProof: async () => {}, writeNote: async () => {}, writeDelegatedTarget: async () => {}, snapshot: () => ({ uncertain: false }) };
   const targets = createTargetBuilder({ manifest, digestSalt: salt });
   const tables = buildRefTables(manifest);
   const refs = createRuntimeRefStore({ tables, runId: options.runId, digestSalt: salt, writeProof: (proof) => capture.writeProof(proof) });

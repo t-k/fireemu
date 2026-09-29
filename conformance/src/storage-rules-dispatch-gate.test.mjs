@@ -36,6 +36,7 @@ async function harness(delta = {}) {
     writeIntent: async (r) => { trace.push(["intent", r.operationId, r.phase, r.targetSha256, r.redactedTarget, r.mutationKey]); },
     writeResponse: async (r) => { trace.push(["response", r.operationId, r.attempt, r.response.status]); },
     writeNote: async (r) => { trace.push(["note", r.operationId, r.text]); },
+    writeDelegatedTarget: async () => {},
     snapshot: () => Object.freeze({ ...state }),
   };
   const transport = { validate() {}, send: async (spec) => { trace.push(["transport", spec.method, spec.url, JSON.stringify(spec.headers)]); return ok; } };
@@ -366,7 +367,7 @@ test("the request description is a closed record", async () => {
 test("gate options are a closed record of the required parts", async () => {
   const { createDispatchGate } = await import("./storage-rules/dispatch-gate.mjs");
   const targets = createTargetBuilder({ manifest, digestSalt: salt });
-  const good = { reservations: { onStarted() {}, onReserve() {}, onTerminal() {} }, capture: { writeIntent() {}, writeResponse() {}, writeNote() {}, snapshot() {} }, transport: { validate() {}, send() {} }, targets, credentials: { headersFor() {} }, preflightIds, admission: { check() {}, begin() {} } };
+  const good = { reservations: { onStarted() {}, onReserve() {}, onTerminal() {} }, capture: { writeIntent() {}, writeResponse() {}, writeNote() {}, writeDelegatedTarget() {}, snapshot() {} }, transport: { validate() {}, send() {} }, targets, credentials: { headersFor() {} }, preflightIds, admission: { check() {}, begin() {} } };
   assert.doesNotThrow(() => createDispatchGate(good));
   for (const bad of [null, {}, { ...good, extra: 1 }, { ...good, transport: {} }, { ...good, capture: { ...good.capture, writeNote: undefined } }, { ...good, targets: { prepare() {} } }, { ...good, credentials: {} }, { ...good, admission: undefined }, { ...good, admission: {} }, { ...good, admission: { check() {} } }, { ...good, admission: { begin() {} } }, { ...good, transport: { send() {} } }, { ...good, transport: { validate() {} } }, { ...good, reservations: { ...good.reservations, onTerminal: 1 } }]) {
     assert.throws(() => createDispatchGate(bad), /invalid dispatch gate options/);

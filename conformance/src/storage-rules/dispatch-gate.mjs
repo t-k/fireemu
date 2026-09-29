@@ -18,7 +18,7 @@ export function createDispatchGate(options) {
   const fail = () => bad("invalid dispatch gate options");
   closedRecord(options, ["reservations", "capture", "transport", "targets", "credentials", "preflightIds", "admission"], "invalid dispatch gate options");
   const { reservations, capture, transport, targets, credentials, preflightIds, admission } = options;
-  if (![reservations?.onStarted, reservations?.onReserve, reservations?.onTerminal, capture?.writeIntent, capture?.writeResponse, capture?.writeNote, capture?.snapshot, transport?.send, targets?.verify, credentials?.headersFor, admission?.check, admission?.begin, transport?.validate].every(isFunction)) fail();
+  if (![reservations?.onStarted, reservations?.onReserve, reservations?.onTerminal, capture?.writeIntent, capture?.writeResponse, capture?.writeNote, capture?.writeDelegatedTarget, capture?.snapshot, transport?.send, targets?.verify, credentials?.headersFor, admission?.check, admission?.begin, transport?.validate].every(isFunction)) fail();
   let armed = null;
   let busy = false;
   let poisoned = false;
@@ -143,11 +143,9 @@ export function createDispatchGate(options) {
     http: async (spec) => {
       if (httpBudget !== 1) bad("http outside a delegated attempt or more than one request in it");
       httpBudget = 0;
-      // The exact request is bound durably before it leaves: a digest of it (its headers and body may hold secrets, so only the digest is written).
+      // The exact request is bound durably before it leaves; the journal keeps its redacted URL, the headers without the credential and salted HMACs.
       transport.validate(spec);
-      const body = spec.body === null || spec.body === undefined ? null : createHash("sha256").update(spec.body).digest("hex");
-      const digest = createHash("sha256").update(JSON.stringify({ operationId: currentOperation, method: spec.method, url: spec.url, headers: Object.entries(spec.headers ?? {}).sort(([a], [b]) => (a < b ? -1 : 1)), body })).digest("hex");
-      await capture.writeNote({ operationId: currentOperation, text: `delegated target ${digest}` });
+      await capture.writeDelegatedTarget({ operationId: currentOperation, method: spec.method, url: spec.url, headers: spec.headers ?? {}, body: spec.body ?? null });
       return transport.send(spec);
     },
   });

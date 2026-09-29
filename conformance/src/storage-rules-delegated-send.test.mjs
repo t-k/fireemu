@@ -19,18 +19,19 @@ const raw = (body, delta = {}) => ({ status: 200, rawHeaders: ["Cache-Control", 
 
 async function setup({ admission = { check: async () => ({ admitted: true }) }, capture = {}, transport, reservations = {} } = {}) {
   const trace = [];
+  const targets = [];
   const proofs = [];
   const state = { uncertain: false };
   const gate = createDispatchGate({
     reservations: { onStarted: async () => { trace.push("started"); }, onReserve: async (row) => { trace.push(`reserved:${row.operationId}`); }, onTerminal: async (row) => { trace.push(`terminal:${row.outcome}`); }, ...reservations },
-    capture: { writeIntent: async (r) => { trace.push(`intent:${r.operationId}:${r.phase}`); }, writeResponse: async (r) => { trace.push(`response:${r.operationId}`); }, writeNote: async (r) => { trace.push(`note:${r.text}`); }, snapshot: () => ({ ...state }), ...capture },
+    capture: { writeIntent: async (r) => { trace.push(`intent:${r.operationId}:${r.phase}`); }, writeDelegatedTarget: async (r) => { targets.push(r); trace.push(`target:${r.operationId}`); }, writeResponse: async (r) => { trace.push(`response:${r.operationId}`); }, writeNote: async (r) => { trace.push(`note:${r.text}`); }, snapshot: () => ({ ...state }), ...capture },
     transport: transport ? { validate() {}, ...transport } : { validate() {}, send: async (spec) => { trace.push(`http:${spec.url}`); return spec.url === certUrl ? raw({ synthetic: pem }) : raw({ access_token: token, token_type: "Bearer", expires_in: 3600 }); } },
     targets: { verify: () => true, prepare: () => { throw new Error("unused"); } },
     credentials: { headersFor: () => ({}) },
     preflightIds: [ownerPreflight, keyPreflight],
     admission: { check: async () => { trace.push("admission"); return admission.check(); }, begin: async () => { trace.push("admission"); return (admission.begin ?? admission.check)(); } },
   });
-  return { gate, trace, proofs, state };
+  return { gate, trace, proofs, state, targets };
 }
 const cacheOf = (ctx) => createCountedCredentialCache({ adc, counter: ctx.gate.delegated.counter, digestSalt: salt, nowSeconds: () => now, sendHttp: ctx.gate.delegated.http, writeProof: async (proof) => { ctx.proofs.push(proof); } });
 
@@ -49,13 +50,13 @@ test("the real credential cache runs both preflight refreshes and a normal one t
   ctx.trace.length = 0;
   const owner = await cache.refreshOwner(ownerPreflight);
   assert.equal(owner.sendAuthorized, false);
-  assert.deepEqual(ctx.trace.map((entry) => entry.replace(/^note:delegated target [0-9a-f]{64}$/, "note:target")), ["admission", `intent:${ownerPreflight}:preflight`, `reserved:${ownerPreflight}`, "note:target", "http:https://oauth2.googleapis.com/token"]);
+  assert.deepEqual(ctx.trace, ["admission", `intent:${ownerPreflight}:preflight`, `reserved:${ownerPreflight}`, `target:${ownerPreflight}`, "http:https://oauth2.googleapis.com/token"]);
   await cache.fetchSigningKeys(keyPreflight);
   ctx.gate.admit();
   assert.equal(ctx.gate.snapshot().requests, 2);
   ctx.trace.length = 0;
   await cache.refreshOwner("auth-shared/owner-token/1");
-  assert.deepEqual(ctx.trace.map((entry) => entry.replace(/^note:delegated target [0-9a-f]{64}$/, "note:target")), ["admission", "intent:auth-shared/owner-token/1:normal", "reserved:auth-shared/owner-token/1", "note:target", "http:https://oauth2.googleapis.com/token"]);
+  assert.deepEqual(ctx.trace, ["admission", "intent:auth-shared/owner-token/1:normal", "reserved:auth-shared/owner-token/1", "target:auth-shared/owner-token/1", "http:https://oauth2.googleapis.com/token"]);
   assert.equal(ctx.gate.snapshot().requests, 3);
   assert.equal(cache.ownerCredential().accessToken, token);
 });
@@ -333,34 +334,37 @@ test("a delegated request's ID must agree with its phase: recovery IDs only in r
   assert.ok(ctx.trace.some((entry) => entry === "intent:recovery/auth-shared/owner-token/1:recovery"));
 });
 
-test("a delegated request's target is bound durably: a digest of the exact request is journalled before it is sent, without any secret", async () => {
-  const notes = [];
-  const sentSpecs = [];
-  const ctx = await setup({ capture: { writeNote: async (r) => { notes.push(r); } }, transport: { send: async (spec) => { sentSpecs.push(spec); return spec.url === certUrl ? raw({ synthetic: pem }) : raw({ access_token: token, token_type: "Bearer", expires_in: 3600 }); } } });
+test("a delegated request's exact target is handed to the journal before it is sent, and the journal is the only holder of the credential-free record", async () => {
+  const sent = [];
+  let ctx;
+  ctx = await setup({ transport: { send: async (spec) => { sent.push(spec); ctx.trace.push(`http:${spec.url}`); return spec.url === certUrl ? raw({ synthetic: pem }) : raw({ access_token: token, token_type: "Bearer", expires_in: 3600 }); } } });
   const cache = await admitted(ctx);
-  notes.length = 0;
+  ctx.targets.length = 0;
+  sent.length = 0;
+  ctx.trace.length = 0;
   await cache.refreshOwner("auth-shared/owner-token/1");
-  const bound = notes.filter((note) => /delegated target/.test(note.text));
-  assert.equal(bound.length, 1);
-  assert.equal(bound[0].operationId, "auth-shared/owner-token/1");
-  assert.match(bound[0].text, /^delegated target [0-9a-f]{64}$/);
-  const digest = bound[0].text.slice(-64);
-  assert.equal(JSON.stringify(notes).includes(adc.refresh_token), false);
-  assert.equal(JSON.stringify(notes).includes(adc.client_secret), false);
-  // The digest follows the request: another refresh has another digest for the same URL because its body or ID differs, and equal requests digest equally.
-  await cache.refreshOwner("auth-shared/owner-token/2");
-  const second = notes.filter((note) => /delegated target/.test(note.text)).at(-1);
-  assert.notEqual(second.text.slice(-64), digest);
-  assert.equal(sentSpecs.length >= 4, true);
+  await cache.fetchSigningKeys("auth-shared/signing-keys/1");
+  assert.equal(ctx.targets.length, 2);
+  assert.deepEqual(ctx.targets.map((target) => target.operationId), ["auth-shared/owner-token/1", "auth-shared/signing-keys/1"]);
+  sent.forEach((spec, index) => {
+    assert.deepEqual(Object.keys(ctx.targets[index]).sort(), ["body", "headers", "method", "operationId", "url"]);
+    assert.equal(ctx.targets[index].method, spec.method);
+    assert.equal(ctx.targets[index].url, spec.url);
+    assert.deepEqual(ctx.targets[index].headers, spec.headers);
+    assert.deepEqual(ctx.targets[index].body, spec.body);
+  });
+  // Each target reached the journal after the reservation and before the request left.
+  const order = ctx.trace.filter((entry) => /^(reserved|target|http):/.test(entry));
+  assert.deepEqual(order, ["reserved:auth-shared/owner-token/1", "target:auth-shared/owner-token/1", "http:https://oauth2.googleapis.com/token", "reserved:auth-shared/signing-keys/1", "target:auth-shared/signing-keys/1", `http:${certUrl}`]);
 });
 
-test("a target digest that cannot be journalled stops the request before it is sent", async () => {
-  let failNote = false;
+test("a target the journal cannot take stops the request before it is sent", async () => {
+  let failTarget = false;
   const sends = [];
-  const ctx = await setup({ capture: { writeNote: async (r) => { if (failNote && /delegated target/.test(r.text)) throw new Error("disk full"); } }, transport: { send: async (spec) => { sends.push(spec.url); return spec.url === certUrl ? raw({ synthetic: pem }) : raw({ access_token: token, token_type: "Bearer", expires_in: 3600 }); } } });
+  const ctx = await setup({ capture: { writeDelegatedTarget: async () => { if (failTarget) throw new Error("disk full"); } }, transport: { send: async (spec) => { sends.push(spec.url); return spec.url === certUrl ? raw({ synthetic: pem }) : raw({ access_token: token, token_type: "Bearer", expires_in: 3600 }); } } });
   const cache = await admitted(ctx);
   const before = sends.length;
-  failNote = true;
+  failTarget = true;
   await assert.rejects(() => cache.refreshOwner("auth-shared/owner-token/1"), /credential cache request failed/);
   assert.equal(sends.length, before);
 });
@@ -368,34 +372,10 @@ test("a target digest that cannot be journalled stops the request before it is s
 test("a delegated request the transport refuses is not sent and not journalled", async () => {
   let refuse = false;
   const sends = [];
-  const notes = [];
-  const ctx = await setup({ capture: { writeNote: async (r) => { notes.push(r.text); } }, transport: { validate: () => { if (refuse) throw new Error("invalid HTTP transport input"); }, send: async (spec) => { sends.push(spec.url); return spec.url === certUrl ? raw({ synthetic: pem }) : raw({ access_token: token, token_type: "Bearer", expires_in: 3600 }); } } });
+  const ctx = await setup({ transport: { validate: () => { if (refuse) throw new Error("invalid HTTP transport input"); }, send: async (spec) => { sends.push(spec.url); return spec.url === certUrl ? raw({ synthetic: pem }) : raw({ access_token: token, token_type: "Bearer", expires_in: 3600 }); } } });
   const cache = await admitted(ctx);
-  const before = [sends.length, notes.filter((text) => /delegated target/.test(text)).length];
+  const before = [sends.length, ctx.targets.length];
   refuse = true;
   await assert.rejects(() => cache.refreshOwner("auth-shared/owner-token/1"), /credential cache request failed/);
-  assert.deepEqual([sends.length, notes.filter((text) => /delegated target/.test(text)).length], before);
-});
-
-test("the journalled digest is exactly the SHA-256 of the request's operation, method, URL, sorted headers and body digest", async () => {
-  const { createHash } = await import("node:crypto");
-  const notes = [];
-  const sent = [];
-  const ctx = await setup({ capture: { writeNote: async (r) => { notes.push(r); } }, transport: { send: async (spec) => { sent.push(spec); return spec.url === certUrl ? raw({ synthetic: pem }) : raw({ access_token: token, token_type: "Bearer", expires_in: 3600 }); } } });
-  const cache = await admitted(ctx);
-  notes.length = 0;
-  sent.length = 0;
-  await cache.refreshOwner("auth-shared/owner-token/1");
-  await cache.fetchSigningKeys("auth-shared/signing-keys/1");
-  const targets = notes.filter((note) => /delegated target/.test(note.text));
-  assert.equal(targets.length, 2);
-  sent.forEach((spec, index) => {
-    const expected = createHash("sha256").update(JSON.stringify({ operationId: targets[index].operationId, method: spec.method, url: spec.url, headers: Object.entries(spec.headers).sort(([a], [b]) => (a < b ? -1 : 1)), body: spec.body === null ? null : createHash("sha256").update(spec.body).digest("hex") })).digest("hex");
-    assert.equal(targets[index].text, `delegated target ${expected}`, spec.url);
-  });
-  assert.deepEqual(targets.map((note) => note.operationId), ["auth-shared/owner-token/1", "auth-shared/signing-keys/1"]);
-  // A header-less GET and a form-encoded POST have different shapes, so both branches of the digest are covered.
-  assert.equal(sent[0].method, "POST");
-  assert.equal(sent[1].method, "GET");
-  assert.ok(Object.keys(sent[0].headers).length >= 2);
+  assert.deepEqual([sends.length, ctx.targets.length], before);
 });

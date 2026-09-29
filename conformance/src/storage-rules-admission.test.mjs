@@ -237,7 +237,7 @@ test("admission options are closed", async () => {
 });
 
 function memoryCapture() {
-  return { writeIntent: async () => {}, writeResponse: async () => {}, writeFacts: async () => {}, writeProof: async () => {}, writeNote: async () => {}, snapshot: () => ({ uncertain: false }) };
+  return { writeIntent: async () => {}, writeResponse: async () => {}, writeFacts: async () => {}, writeProof: async () => {}, writeNote: async () => {}, writeDelegatedTarget: async () => {}, snapshot: () => ({ uncertain: false }) };
 }
 
 const CERT_URL = "https://www.googleapis.com/robot/v1/metadata/x509/securetoken@system.gserviceaccount.com";

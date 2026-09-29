@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, createHmac } from "node:crypto";
 import { constants } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
 import { createRedactor } from "./redaction.mjs";
@@ -14,6 +14,8 @@ const MAX_ROW_BYTES = 256 * 1024;
 const MAX_BLOB_BYTES = 2 * 1024 * 1024;
 const MAX_NOTE = 4096;
 const MAX_EVIDENCE = 8192;
+const MAX_DELEGATED_BODY = 256 * 1024;
+const CREDENTIAL_HEADERS = new Set(["authorization", "proxy-authorization", "cookie"]);
 const FIXTURE_ACCOUNTS = new Set(["user-a", "user-b", "revoked-token", "foreign-project-token"]);
 const FIXTURE_PROJECTS = new Set(["fireemu-oracle-query", "fireemu-oracle-idp"]);
 
@@ -238,6 +240,30 @@ export async function createCaptureJournal(input) {
         const text = JSON.stringify(proof);
         if (text.length > MAX_EVIDENCE || redactor.text(text) !== text) throw new Error();
         return async () => ({ data: proof });
+      });
+    },
+    // The exact target of a request a delegate carries, bound durably before it is sent: the method, the redacted URL, the headers
+    // without the credential, and salted HMACs of the body and of the whole record. Recomputable from the row and the run's salt.
+    writeDelegatedTarget(input) {
+      return event("delegated-target", () => {
+        const row = record(input, ["operationId", "method", "url", "headers", "body"]);
+        declaredOperation(row.operationId);
+        const bodyOk = row.body === null || (Buffer.isBuffer(row.body) && Object.getPrototypeOf(row.body) === Buffer.prototype && row.body.length <= MAX_DELEGATED_BODY);
+        if (!["GET", "POST", "PUT", "PATCH", "DELETE"].includes(row.method) || typeof row.url !== "string" || row.url.length > 4096 || !bodyOk || !plain(row.headers)) throw new Error();
+        const names = Reflect.ownKeys(row.headers);
+        if (names.length > 64) throw new Error();
+        const pairs = names.map((name) => {
+          const field = Object.getOwnPropertyDescriptor(row.headers, name);
+          if (typeof name !== "string" || !/^[a-z0-9-]{1,64}$/.test(name) || !field?.enumerable || !Object.hasOwn(field, "value") || !matches(field.value, /^[\x20-\x7e]{0,1024}$/)) throw new Error();
+          return [name, field.value];
+        }).filter(([name]) => !CREDENTIAL_HEADERS.has(name)).sort(([a], [b]) => (a < b ? -1 : 1));
+        const flat = redactor.headers(pairs.flat());
+        const headers = pairs.map((_, index) => [flat[index * 2], flat[index * 2 + 1]]);
+        const url = redactor.text(row.url);
+        const salt = Buffer.from(options.digestSalt, "hex");
+        const bodyHmac = row.body === null ? null : createHmac("sha256", salt).update("delegated-body\0").update(row.body).digest("hex");
+        const targetHmac = createHmac("sha256", salt).update("delegated-target\0").update(JSON.stringify({ operationId: row.operationId, method: row.method, url, headers, bodyHmac })).digest("hex");
+        return async () => ({ data: { operationId: row.operationId, method: row.method, url, headers, bodyHmac, targetHmac } });
       });
     },
     // The fixture accounts the run created and proved absent again. Only fixed keys; the address appears as a salted digest.

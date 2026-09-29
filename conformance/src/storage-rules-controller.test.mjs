@@ -31,7 +31,7 @@ function memoryCapture() {
   return {
     events,
     writeIntent: async (r) => { events.push(["intent", r.operationId]); }, writeResponse: async (r) => { events.push(["response", r.operationId]); }, writeFacts: async (r) => { events.push(["facts", r.operationId, r.verdict]); },
-    writeProof: async (r) => { events.push(["proof", r.type]); }, writeNote: async (r) => { events.push(["note", r.text]); }, snapshot: () => ({ uncertain: false }),
+    writeProof: async (r) => { events.push(["proof", r.type]); }, writeNote: async (r) => { events.push(["note", r.text]); }, writeDelegatedTarget: async () => {}, snapshot: () => ({ uncertain: false }),
   };
 }
 

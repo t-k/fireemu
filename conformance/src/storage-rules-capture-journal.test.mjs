@@ -440,3 +440,50 @@ test("a cleanup receipt's UID must be a plain UID of bounded length", async (t) 
   for (const account of ["user-a", "user-b", "revoked-token", "foreign-project-token"]) await j.writeCleanup({ ...cleanup, account, project: account === "foreign-project-token" ? "fireemu-oracle-idp" : "fireemu-oracle-query", uid: "u".repeat(128) });
   assert.equal((await ctx.rows()).length, 5);
 });
+
+// The target of a delegated request is bound durably as a salted HMAC over what is recorded, without the credential.
+import { createHmac } from "node:crypto";
+const targetInput = (delta = {}) => ({ operationId: "case/a/subject/get", method: "POST", url: "https://identitytoolkit.googleapis.com/v1/accounts:signUp?key=AIzaCANARYAPIKEY0123456789abcdefghijklm", headers: { "content-type": "application/json", accept: "application/json", authorization: `Bearer ya29.${"C".repeat(30)}`, "x-goog-user-project": "fireemu-oracle-idp" }, body: Buffer.from('{"password":"CANARY-PASSWORD-VALUE-0123"}'), ...delta });
+const recompute = (data, salt = digestSalt) => createHmac("sha256", Buffer.from(salt, "hex")).update("delegated-target\0").update(JSON.stringify({ operationId: data.operationId, method: data.method, url: data.url, headers: data.headers, bodyHmac: data.bodyHmac })).digest("hex");
+
+test("a delegated target is journalled as its redacted URL, its non-credential headers and salted HMACs of the body and of the whole record", async (t) => {
+  const ctx = await fixture(t);
+  await ctx.journal.writeDelegatedTarget(targetInput());
+  const row = (await ctx.rows()).at(-1);
+  assert.equal(row.event, "delegated-target");
+  assert.deepEqual(Object.keys(row.data).sort(), ["bodyHmac", "headers", "method", "operationId", "targetHmac", "url"]);
+  assert.equal(row.data.operationId, "case/a/subject/get");
+  assert.equal(row.data.method, "POST");
+  assert.equal(row.data.url, "https://identitytoolkit.googleapis.com/v1/accounts:signUp?key=<redacted:url-parameter>");
+  assert.deepEqual(row.data.headers, [["accept", "application/json"], ["content-type", "application/json"], ["x-goog-user-project", "fireemu-oracle-idp"]]);
+  assert.equal(row.data.bodyHmac, createHmac("sha256", Buffer.from(digestSalt, "hex")).update("delegated-body\0").update(targetInput().body).digest("hex"));
+  assert.equal(row.data.targetHmac, recompute(row.data));
+  const text = JSON.stringify(row);
+  for (const secret of ["AIzaCANARY", "ya29.", "CANARY-PASSWORD", "authorization", "Bearer"]) assert.equal(text.includes(secret), false, secret);
+});
+
+test("the delegated target HMAC follows every recorded part and the salt, and a body-less request records no body HMAC", async (t) => {
+  const ctx = await fixture(t);
+  const seen = [];
+  for (const delta of [{}, { operationId: "case/a/subject/put" }, { method: "GET", body: null }, { url: "https://identitytoolkit.googleapis.com/v1/accounts:signUp" }, { headers: { accept: "application/json" } }, { body: Buffer.from("other") }, { body: null }]) {
+    await ctx.journal.writeDelegatedTarget(targetInput(delta));
+    const data = (await ctx.rows()).at(-1).data;
+    assert.equal(data.targetHmac, recompute(data), JSON.stringify(Object.keys(delta)));
+    seen.push(data.targetHmac);
+    if (delta.body === null) assert.equal(data.bodyHmac, null);
+  }
+  assert.equal(new Set(seen).size, seen.length);
+  assert.notEqual(recompute((await ctx.rows()).at(-1).data, "7".repeat(64)), seen.at(-1));
+});
+
+test("a delegated target refuses an undeclared operation, a bad method, a bad body, bad headers and anything past the size limits", async (t) => {
+  const ctx = await fixture(t);
+  const j = ctx.journal;
+  for (const bad of [
+    targetInput({ operationId: "case/undeclared/get" }), targetInput({ method: "TRACE" }), targetInput({ method: "post" }), targetInput({ url: 5 }), targetInput({ url: `https://x/${"a".repeat(5000)}` }),
+    targetInput({ body: "text" }), targetInput({ body: Buffer.alloc(300 * 1024) }), targetInput({ headers: null }), targetInput({ headers: [] }), targetInput({ headers: { Accept: "x" } }), targetInput({ headers: { accept: 5 } }),
+    targetInput({ headers: { accept: "a\nb" } }), targetInput({ headers: Object.fromEntries(Array.from({ length: 65 }, (_, i) => [`x-h${i}`, "v"])) }), { ...targetInput(), extra: 1 }, (({ url, ...rest }) => rest)(targetInput()), null,
+  ]) await assert.rejects(j.writeDelegatedTarget(bad), /event refused/, JSON.stringify(bad)?.slice(0, 50));
+  assert.equal(j.snapshot().uncertain, false);
+  assert.equal((await ctx.rows()).filter((row) => row.event === "delegated-target").length, 0);
+});

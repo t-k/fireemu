@@ -226,3 +226,9 @@ test("the targets refuse a policy that was not parsed, a copy that inherits an i
   assert.throws(() => targets.prepareGrant(IDS.grant, { etag: "", version: 3, bindings: [] }), /invalid policy/);
   assert.throws(() => targets.prepareRevoke(IDS.revoke, { etag: "", version: 3, bindings: [{ role: GRANT_ROLE, members: [MEMBER] }] }), /invalid policy/);
 });
+
+test("two policies that differ only by the role of a binding are different policies", () => {
+  assert.equal(sameBindings(policy([{ role: "roles/a", members: ["m"] }]), policy([{ role: "roles/b", members: ["m"] }])), false);
+  assert.notEqual(bindingsDigest(policy([{ role: "roles/a", members: ["m"] }])), bindingsDigest(policy([{ role: "roles/b", members: ["m"] }])));
+  assert.equal(sameBindings(policy([{ role: GRANT_ROLE, members: [MEMBER] }]), policy([{ role: "roles/owner", members: [MEMBER] }])), false);
+});

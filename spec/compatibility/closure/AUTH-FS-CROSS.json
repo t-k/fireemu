@@ -627,7 +627,7 @@
         "default"
       ],
       "status": "VERIFIED",
-      "note": "The final artifact's AUTH-FS-CROSS comparison, with the FS-RULES comparison re-run on the same artifact because the unary conditions moved there.",
+      "note": "The final artifact's AUTH-FS-CROSS comparison, with the FS-RULES comparison re-run on the same artifact because the unary conditions moved there. Round-2 integration supplementary regression (2026-09-29, local only): on the final integrated release artifact ece3f66b1093e69d24ab16fa820994469120fcfb7ddaff22d6a4fc72cff51167 (integration/round2-2026-09-29 e6a61bd59), stage 1 89 MATCH, the FS-RULES regression 1144 MATCH and 5 DEPENDENCY_REFUSED, and stage 2 56 MATCH and 1 MATCH_NONDETERMINISTIC; local-only tenant setup patched (multiTenant.allowTenants turned on and restored, as the production path does); rows classified by the recorded harness; evidence remains on 890a38d8.",
       "stage": null,
       "observation": {
         "method": "Replay every AUTH-FS-CROSS recipe and the FS-RULES corpus on one final source-bound artifact.",

@@ -19159,6 +19159,74 @@ fn set_project_mfa(s: &AuthState, mfa: &Value) {
     assert_eq!(status, 200, "{body}");
 }
 
+/// The Admin config update refuses an `mfa` value with production's whole body, not only its
+/// message (the refusal wording moved into `MfaConfigRefusal::message`, shared with the config file
+/// `auth.mfa`): the enum parse error with its field violation, the interval range, and the shape.
+#[test]
+fn the_admin_mfa_refusals_keep_their_full_bodies() {
+    let s = strict_state();
+    let refusal = |mfa: Value| {
+        let (status, body) = admin(
+            &s,
+            "PATCH",
+            &format!("{PROJECT_CONFIG}?updateMask=mfa"),
+            &json!({ "mfa": mfa }),
+        );
+        assert_eq!(status, 400, "{body}");
+        body
+    };
+    let enum_message = |field: &str, type_name: &str, value: &str| {
+        format!("Invalid value at '{field}' (type.googleapis.com/google.cloud.identitytoolkit.admin.v2.{type_name}), \"{value}\"")
+    };
+    let state = enum_message(
+        "config.mfa.state",
+        "MultiFactorAuthConfig.State",
+        "NOT_A_STATE",
+    );
+    assert_eq!(
+        refusal(json!({"state": "NOT_A_STATE"})),
+        json!({"error": {
+            "code": 400,
+            "message": state,
+            "status": "INVALID_ARGUMENT",
+            "details": [{
+                "@type": "type.googleapis.com/google.rpc.BadRequest",
+                "fieldViolations": [{"field": "config.mfa.state", "description": state}],
+            }],
+        }})
+    );
+    let provider = enum_message(
+        "config.mfa.enabled_providers[0]",
+        "MultiFactorAuthConfig.Provider",
+        "SMS_TEXT",
+    );
+    assert_eq!(
+        refusal(json!({"state": "ENABLED", "enabledProviders": ["SMS_TEXT"]})),
+        json!({"error": {
+            "code": 400,
+            "message": provider,
+            "status": "INVALID_ARGUMENT",
+            "details": [{
+                "@type": "type.googleapis.com/google.rpc.BadRequest",
+                "fieldViolations": [{"field": "config.mfa.enabled_providers[0]", "description": provider}],
+            }],
+        }})
+    );
+    assert_eq!(
+        refusal(json!({"state": "ENABLED", "providerConfigs": [
+            {"state": "ENABLED", "totpProviderConfig": {"adjacentIntervals": 11}}
+        ]})),
+        json!({"error": {
+            "code": 400,
+            "message": "INVALID_ADJACENT_INTERVAL_RANGE : Allowed number of adjacent intervals must be between 0 and 10, inclusive",
+            "status": "INVALID_ARGUMENT",
+        }})
+    );
+    let shape = refusal(json!({"state": "ENABLED", "unknown": true}));
+    assert_eq!(shape["error"]["code"], 400, "{shape}");
+    assert_eq!(shape["error"]["message"], "INVALID_ARGUMENT", "{shape}");
+}
+
 /// A verified password account's ID token.
 fn verified_session(s: &AuthState, email: &str) -> String {
     create(

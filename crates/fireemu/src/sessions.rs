@@ -27,9 +27,6 @@ pub struct Projects {
     pub registry: Arc<AuthRegistry>,
     /// Session seed (each project's generator derives from it and the project name).
     pub seed: u64,
-    /// The initial multi-factor configuration the daemon declared (`auth.mfa`), which every
-    /// project created later starts with, in place of the default project's live value.
-    pub mfa_seed: Option<fireemu_core_auth::mfa_config::MfaProjectConfig>,
     /// The App Check registry, when App Check is enabled. Creating, resetting and deleting a
     /// project replaces its session epoch, so every token issued before the transition fails
     /// with `WrongEpoch` at its next verification (`AC-LIFE-001`, specification section 14).
@@ -119,8 +116,8 @@ impl ProjectHooks for Projects {
         }
         let mut store = AuthStore::new(project, SplitMix64::new(seed), TotpPolicy::default());
         // The declared initial multi-factor configuration, not the default project's live one.
-        if let Some(mfa) = &self.mfa_seed {
-            store.set_mfa_seed(mfa.clone());
+        if let Some(mfa) = self.registry.new_project_mfa_seed() {
+            store.set_mfa_seed(mfa);
         }
         if let Ok(default) = self.registry.default_store().lock() {
             store.set_config(default.config());
@@ -407,7 +404,6 @@ pub(crate) mod tests {
                 ),
             ),
             seed: 1,
-            mfa_seed: None,
             app_check: Some(gate.clone()),
             pubsub,
             pubsub_handle,
@@ -757,8 +753,8 @@ pub(crate) mod tests {
     #[test]
     fn a_created_project_starts_with_the_seed_and_a_project_reset_returns_to_it() {
         let gate = gate();
-        let mut hooks = projects(&gate);
-        hooks.mfa_seed = Some(totp_seed());
+        let hooks = projects(&gate);
+        hooks.registry.set_new_project_mfa_seed(Some(totp_seed()));
         // The default project's live value is not what a new project inherits.
         hooks
             .registry

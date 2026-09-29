@@ -1581,6 +1581,11 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
         );
         apply_auth_password_policy_overrides(&cfg, &registry)?;
         apply_auth_config_overrides(&cfg, &registry)?;
+        // The declared tenants exist from the start; an `--import` is applied after them and is
+        // authoritative for a tenant of the same id.
+        cfg.tenant_seeding()?
+            .apply(&registry, &cfg.auth_project)
+            .map_err(|error| format!("auth.tenants: {error}"))?;
         let rules = Arc::new(RulesetSlot::new(load_rules(&cfg)?));
         let mut database_rules = std::collections::BTreeMap::new();
         for (database, files) in &cfg.firestore_databases {

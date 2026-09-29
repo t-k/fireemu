@@ -79,7 +79,7 @@ mod tenant_document;
 mod tenant_seed;
 pub use password_hash::restorable_spec as restorable_imported_hash_spec;
 pub use tenant_document::{exportable_tenant_members, restore_tenant_members};
-pub use tenant_seed::{prepare_tenant_seeds, seed_multi_tenancy, TenantSeed};
+pub use tenant_seed::{prepare_tenant_seeds, seed_multi_tenancy, TenantSeed, TenantSeeding};
 mod routes;
 pub mod widget;
 mod widget_templates;

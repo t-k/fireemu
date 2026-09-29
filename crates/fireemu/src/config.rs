@@ -1788,6 +1788,27 @@ fn emulator_addr(entry: &Value, name: &str, current: &str) -> Result<String, Con
 }
 
 impl RuntimeConfig {
+    /// The default project's declared multi-tenancy switch and tenants, ready to apply: at start,
+    /// and again after a default-scope reset. Each tenant is stamped with the clock's start.
+    ///
+    /// # Errors
+    /// The message of the refusal; none for a configuration that was read, which validated it.
+    pub fn tenant_seeding(
+        &self,
+    ) -> Result<fireemu_adapter_http::identity_toolkit::TenantSeeding, String> {
+        let seeds = fireemu_adapter_http::identity_toolkit::prepare_tenant_seeds(
+            &self.auth_tenants,
+            self.profile == CompatibilityProfile::Emulator,
+            self.clock_start.to_rfc3339().ok(),
+        )?;
+        Ok(fireemu_adapter_http::identity_toolkit::TenantSeeding::new(
+            self.auth_multi_tenant_allow_tenants,
+            seeds,
+        ))
+    }
+}
+
+impl RuntimeConfig {
     /// `auth.multiTenant` and `auth.tenants`: the default project's multi-tenancy switch and its
     /// tenants. A tenant document is read by the code the Admin create route reads one with, under
     /// this file's profile, so a file accepts and refuses what the API does. The strict profile

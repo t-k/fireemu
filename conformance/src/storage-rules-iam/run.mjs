@@ -52,7 +52,11 @@ export async function runIamGrant({ gate, cache, targets, local, capture, runId 
     if (!attempted) { await gate.finish("stopped-no-mutation"); throw error; }
     const code = stopCodeOf(error);
     // A refused admission or a failed journal leaves the gate unable to send anything: nothing more can be done through it.
-    if (code === STOP_CODES.admissionRefused || code === STOP_CODES.captureFailed) throw error;
+    if (code === STOP_CODES.admissionRefused || code === STOP_CODES.captureFailed) {
+      // The terminal row still says needs-recovery when the journal can take it (it cannot after a capture failure).
+      if (gate.snapshot().mode !== "closed") await gate.finish("needs-recovery").catch(() => {});
+      throw error;
+    }
     return recover({ gate, targets, member, before, facts });
   }
 }
@@ -69,7 +73,7 @@ async function recoverOnce({ gate, targets, member, before, facts }) {
   if (gate.snapshot().mode === "normal") gate.enterRecovery();
   const meta = { phase: "recovery", mutationKey: null, accept: null };
   const current = policyOf((await gate.send(targets.prepareRead(IDS.current), meta)).raw);
-  if (current === null) { await gate.finish("needs-recovery"); throw tagged(STOP_CODES.outcomeUncertain, "the policy could not be read back"); }
+  if (current === null) throw tagged(STOP_CODES.outcomeUncertain, "the policy could not be read back");
   await facts(IDS.current, current);
   if (sameBindings(current, before)) { await gate.finish("recovered"); return Object.freeze({ status: "recovered", changed: false, requests: gate.snapshot().requests }); }
   if (assess(current, member).state === "present" && sameBindings(withoutGrant(current, member), before)) {
@@ -77,6 +81,6 @@ async function recoverOnce({ gate, targets, member, before, facts }) {
     const read = answer.raw.status === 200 ? policyOf((await gate.send(targets.prepareRead(IDS.absent), meta)).raw) : null;
     if (read !== null && sameBindings(read, before)) { await facts(IDS.absent, read); await gate.finish("recovered"); return Object.freeze({ status: "recovered", changed: false, requests: gate.snapshot().requests }); }
   }
-  await gate.finish("needs-recovery");
+  // The wrapper closes the run as needs-recovery.
   throw tagged(STOP_CODES.outcomeUncertain, "the policy is neither the one before nor the one before with the grant, or the grant could not be removed");
 }

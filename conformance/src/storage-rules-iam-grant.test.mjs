@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { chmod, mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
 import { bindIamEntry } from "./storage-rules-iam/iam-grant.mjs";
@@ -105,10 +106,12 @@ test("an ambiguous grant (conditional, or twice) stops at the read before, with 
   for (const bindings of [[...OTHER_BINDINGS, { role: GRANT_ROLE, members: [MEMBER], condition: { title: "c", expression: "true" } }], [...OTHER_BINDINGS, { role: GRANT_ROLE, members: [MEMBER, MEMBER] }], [...OTHER_BINDINGS, { role: GRANT_ROLE, members: [MEMBER] }, { role: GRANT_ROLE, members: [MEMBER, "user:z@example.test"] }]]) {
     const world = createIamWorld({ bindings });
     const f = await checkout(t, { world });
-    await assert.rejects(f.entry(f.options));
+    await assert.rejects(f.entry(f.options), /preflight failed/);
     assert.equal(world.sets.length, 0);
     assert.equal(f.wire.length, 3);
     assert.deepEqual(await f.lockFiles(), lockedBoth);
+    const { dir, files } = await journals(f);
+    assert.match(await readFile(join(dir, files.find((name) => name.endsWith("reservations.jsonl"))), "utf8"), /preflight-failed/);
   }
 });
 
@@ -117,7 +120,7 @@ test("another owner, an unverified address or a malformed identity stops at the 
     const world = createIamWorld();
     world.hook.identity = identity;
     const f = await checkout(t, { world });
-    await assert.rejects(f.entry(f.options));
+    await assert.rejects(f.entry(f.options), /preflight failed/);
     assert.equal(f.wire.length, 2);
     assert.equal(world.reads, 0);
     assert.equal(world.sets.length, 0);
@@ -129,7 +132,7 @@ test("a policy that cannot be read (error status, wrong shape) stops at the read
     const world = createIamWorld();
     world.hook.read = bad;
     const f = await checkout(t, { world });
-    await assert.rejects(f.entry(f.options));
+    await assert.rejects(f.entry(f.options), /preflight failed/);
     assert.equal(f.wire.length, 3);
     assert.equal(world.sets.length, 0);
   }
@@ -213,10 +216,12 @@ test("a removal the service rejects, or a removal that reads back wrong, keeps t
       if (mode === "rejected") return { status: 403, rawHeaders: ["Content-Type", "application/json"], bytes: Buffer.from("{}") };
       if (mode === "lost") throw new Error("connection reset");
       w.bindings = structuredClone(body.policy.bindings); w.bump(); w.bindings.push({ role: "roles/viewer", members: ["user:late@example.test"] });
-      return undefined;
+      return { status: 200, rawHeaders: ["Content-Type", "application/json"], bytes: Buffer.from(JSON.stringify(w.policyBody())) };
     };
     const f = await checkout(t, { world });
     await assert.rejects(f.entry(f.options), Error, mode);
+    // The removal is tried once; it is read back only when the service said it was applied.
+    assert.equal(f.wire.length, { rejected: 6, lost: 6, readback: 7 }[mode], mode);
     assert.deepEqual(await f.lockFiles(), lockedBoth, mode);
     const { dir, files } = await journals(f);
     assert.match(await readFile(join(dir, files.find((name) => name.endsWith("reservations.jsonl"))), "utf8"), /needs-recovery/, mode);
@@ -384,4 +389,42 @@ test("the binding is a closed record for a main checkout, the real request funct
   for (const bad of [null, {}, { ...good, extra: 1 }, { root: f.root, codeRoot, requestImpl() {}, clock }, { ...good, codeRoot: 5 }, { ...good, git: 5 }, { ...good, requestImpl: 5 }, { ...good, root: 5 }, { ...good, clock: { nowSeconds() {} } }, { ...good, root: join(f.root, "docs.local") }]) {
     assert.throws(() => bindIamEntry(bad), /invalid entry binding|entry root is not a main checkout|main repository root not found/);
   }
+});
+
+test("a run that succeeds leaves the classified facts of the recovery-free path and asks git the exact questions", async (t) => {
+  const f = await checkout(t);
+  await f.entry(f.options);
+  assert.deepEqual(f.gitCalls.map(([where, ...args]) => [where, args.join(" ")]), [[codeRoot, "rev-parse HEAD"], [codeRoot, "status --porcelain --untracked-files=no"], [codeRoot, "status --porcelain --untracked-files=all --ignored -- conformance/src/storage-rules spec/compatibility/closure/STORAGE-RULES.json"], [codeRoot, "status --porcelain --untracked-files=all --ignored -- conformance/src/storage-rules-iam"]]);
+});
+
+test("a recovery journals what it found: the policy now, and the policy after the removal", async (t) => {
+  const world = createIamWorld();
+  world.hook.set = (w, body, count) => { if (count === 1) { w.bindings = structuredClone(body.policy.bindings); w.bump(); throw new Error("connection reset"); } return undefined; };
+  const f = await checkout(t, { world });
+  await assert.rejects(f.entry(f.options), /cannot confirm project lock closure/);
+  const { dir } = await journals(f);
+  const captures = (await readFile(join(dir, (await readdir(dir)).find((name) => name.endsWith("captures.jsonl"))), "utf8")).split("\n").filter(Boolean).map((line) => JSON.parse(line));
+  const facts = captures.filter((row) => row.event === "facts").map((row) => [row.data.operationId, row.data.facts.grant]);
+  assert.deepEqual(facts, [["preflight/query/iam-before", "absent"], ["recovery/iam/query/current", "present"], ["recovery/iam/query/absent", "absent"]]);
+});
+
+test("an unreadable policy in the recovery, or a ledger revoked while the grant is in flight, ends the run as needs-recovery and keeps the lock", async (t) => {
+  // The write is lost after it was applied, and the recovery cannot read the policy back.
+  const unreadable = createIamWorld();
+  unreadable.hook.set = (w, body) => { w.bindings = structuredClone(body.policy.bindings); w.bump(); throw new Error("connection reset"); };
+  unreadable.hook.read = (w, count) => (count === 2 ? { status: 200, rawHeaders: ["Content-Type", "application/json"], bytes: Buffer.from("not json") } : undefined);
+  const a = await checkout(t, { world: unreadable });
+  await assert.rejects(a.entry(a.options), /could not be read back/);
+  assert.deepEqual(await a.lockFiles(), lockedBoth);
+  const first = await journals(a);
+  assert.match(await readFile(join(first.dir, first.files.find((name) => name.endsWith("reservations.jsonl"))), "utf8"), /needs-recovery/);
+  // The owner revokes the approval while the grant is in flight: nothing more is sent, and the journal still says needs-recovery.
+  const revoking = createIamWorld();
+  const b = await checkout(t, { world: revoking });
+  revoking.hook.set = (w, body) => { writeFileSync(join(b.root, "docs.local", "instructions", "owner-decisions.md"), `${ledger}\n- 2026-09-30 | STORAGE-RULES | revoked | オーナー（ローカル試験） | note.md`); return undefined; };
+  await assert.rejects(b.entry(b.options), /admission refused/);
+  assert.equal(b.wire.length, 4);
+  assert.deepEqual(await b.lockFiles(), lockedBoth);
+  const second = await journals(b);
+  assert.match(await readFile(join(second.dir, second.files.find((name) => name.endsWith("reservations.jsonl"))), "utf8"), /needs-recovery/);
 });

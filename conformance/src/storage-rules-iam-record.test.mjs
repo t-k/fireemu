@@ -51,6 +51,8 @@ test("a recovery that proved the grant absent again is reported as such, with ex
   const result = await h.run(["/x/local.json", path, "iam-two"]);
   assert.equal(result.code, 3);
   assert.deepEqual(JSON.parse(result.out), { runId: "iam-two", status: "recovered", changed: false, requests: 8, locksReleased: true });
+  const held = harness(async () => ({ status: "recovered", changed: false, requests: 8, released: false }));
+  assert.equal(JSON.parse((await held.run(["/x/local.json", path, "iam-two"])).out).locksReleased, false);
   const unchanged = harness(async () => ({ status: "finished", changed: false, requests: 3, released: true }));
   const already = await unchanged.run(["/x/local.json", path, "iam-two"]);
   assert.equal(already.code, 0);

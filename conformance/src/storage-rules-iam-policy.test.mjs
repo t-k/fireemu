@@ -166,3 +166,63 @@ test("the IAM transport allows the policy write for a plain POST to one project 
   // The API key list route of stage 2a is not here.
   assert.throws(() => transport.validate({ url: `https://apikeys.googleapis.com/v2/projects/${NUMBERS.query}/locations/global/keys`, method: "GET", headers: {}, body: null }), (error) => error.notSent === true);
 });
+
+test("a parsed policy does not share its condition or members with the response it came from, and a grant is written at version 3 whatever version was read", () => {
+  const body = { etag: "E1", version: 1, bindings: [{ role: "roles/editor", members: ["user:a@example.test"], condition: { title: "t", expression: "true" } }] };
+  const parsed = parsePolicy(body);
+  body.bindings[0].condition.title = "changed";
+  body.bindings[0].members.push("user:late@example.test");
+  assert.equal(parsed.bindings[0].condition.title, "t");
+  assert.deepEqual(parsed.bindings[0].members, ["user:a@example.test"]);
+  assert.equal(parsed.version, 1);
+  const granted = withGrant(parsed, MEMBER);
+  assert.equal(granted.version, 3);
+  assert.equal(setBody(granted).policy.version, 3);
+  assert.equal(withoutGrant(parsePolicy({ etag: "E", version: 0, bindings: [{ role: GRANT_ROLE, members: [MEMBER] }] }), MEMBER).version, 3);
+  granted.bindings[0].condition && assert.notEqual(granted.bindings[0].condition, parsed.bindings[0].condition);
+});
+
+test("removing the grant leaves other bindings of the role alone, including an empty one, and only the binding that held the member changes", () => {
+  const before = policy([{ role: GRANT_ROLE, members: [] }, { role: GRANT_ROLE, members: ["serviceAccount:other@example.test"] }, ...OTHER_BINDINGS]);
+  const granted = parsePolicy({ etag: "E2", version: 3, bindings: [...before.bindings.map((b) => ({ ...b })).slice(0, 1), { role: GRANT_ROLE, members: ["serviceAccount:other@example.test", MEMBER] }, ...OTHER_BINDINGS] });
+  const removed = withoutGrant(granted, MEMBER);
+  assert.deepEqual(removed.bindings.map((b) => [b.role, b.members]).slice(0, 2), [[GRANT_ROLE, []], [GRANT_ROLE, ["serviceAccount:other@example.test"]]]);
+  assert.equal(sameBindings(removed, before), true);
+});
+
+test("the comparison of policies is independent of the order of many bindings, of bindings of one role that differ by condition, and of key order inside a condition that holds lists", () => {
+  const cond = (title) => ({ title, expression: "true", list: [{ b: 1, a: 2 }, { d: 3, c: 4 }] });
+  const forward = policy([{ role: "roles/a", members: ["m"], condition: cond("one") }, { role: "roles/a", members: ["m"], condition: cond("two") }, { role: "roles/a", members: ["m"] }, { role: "roles/b", members: ["m"] }, { role: "roles/c", members: ["x", "y"] }]);
+  const shuffled = policy([{ role: "roles/c", members: ["y", "x"] }, { role: "roles/a", members: ["m"] }, { role: "roles/b", members: ["m"] }, { role: "roles/a", members: ["m"], condition: { list: [{ a: 2, b: 1 }, { c: 4, d: 3 }], expression: "true", title: "two" } }, { role: "roles/a", members: ["m"], condition: { expression: "true", title: "one", list: [{ a: 2, b: 1 }, { c: 4, d: 3 }] } }]);
+  assert.equal(sameBindings(forward, shuffled), true);
+  assert.equal(bindingsDigest(forward), bindingsDigest(shuffled));
+  // A different list order inside a condition is a different condition.
+  const swapped = policy([{ role: "roles/a", members: ["m"], condition: { ...cond("one"), list: [{ c: 4, d: 3 }, { a: 2, b: 1 }] } }, { role: "roles/a", members: ["m"], condition: cond("two") }, { role: "roles/a", members: ["m"] }, { role: "roles/b", members: ["m"] }, { role: "roles/c", members: ["x", "y"] }]);
+  assert.equal(sameBindings(forward, swapped), false);
+  // Two bindings of one role that differ only by condition are told apart whichever order they come in.
+  const first = policy([{ role: "roles/a", members: ["m"], condition: cond("one") }, { role: "roles/a", members: ["m"], condition: cond("two") }]);
+  const second = policy([{ role: "roles/a", members: ["m"], condition: cond("two") }, { role: "roles/a", members: ["m"], condition: cond("one") }]);
+  assert.equal(sameBindings(first, second), true);
+  assert.equal(sameBindings(first, policy([{ role: "roles/a", members: ["m"], condition: cond("one") }, { role: "roles/a", members: ["m"], condition: cond("three") }])), false);
+});
+
+test("the corpus digest is the digest of its own document: the project, the role, the member, the owner digest and the requests", async () => {
+  const { createHash } = await import("node:crypto");
+  const base = iamCorpus({ projectNumber: NUMBERS.query, ownerEmailSha256: ownerDigest });
+  const document = { project: "fireemu-oracle-query", role: GRANT_ROLE, member: MEMBER, ownerEmailSha256: ownerDigest, list: base.list };
+  assert.equal(base.sha256, createHash("sha256").update(JSON.stringify(document)).digest("hex"));
+});
+
+test("the targets refuse a policy that was not parsed, a copy that inherits an issued object's fields, and give the identity read no body headers", () => {
+  const targets = createIamTargets({ projectNumber: NUMBERS.query, digestSalt: "7".repeat(64) });
+  const read = targets.prepareRead(IDS.before);
+  assert.equal(targets.verify(Object.create(read)), false);
+  assert.deepEqual({ ...targets.prepareIdentity(IDS.identity).spec.headers }, {});
+  assert.notDeepEqual({ ...read.spec.headers }, {});
+  for (const bad of [{ etag: "", bindings: [] }, { etag: "E", bindings: "x" }, { bindings: [] }, null]) {
+    assert.throws(() => targets.prepareGrant(IDS.grant, bad), /invalid policy|Cannot read/, JSON.stringify(bad));
+    assert.throws(() => targets.prepareRevoke(IDS.revoke, bad), /invalid policy|Cannot read/, JSON.stringify(bad));
+  }
+  assert.throws(() => targets.prepareGrant(IDS.grant, { etag: "", version: 3, bindings: [] }), /invalid policy/);
+  assert.throws(() => targets.prepareRevoke(IDS.revoke, { etag: "", version: 3, bindings: [{ role: GRANT_ROLE, members: [MEMBER] }] }), /invalid policy/);
+});

@@ -172,12 +172,14 @@ pub fn parse_ttl_policies(path: &str, text: &str) -> Result<TtlCatalog, String> 
                 "{path}: the wildcard field cannot carry a TTL policy (collection group {collection})"
             ));
         }
+        let problem =
+            |e: &dyn std::fmt::Display| format!("{path}: fieldOverride {collection}.{field}: {e}");
         catalog
             .enable(
-                CollectionId::try_new(collection).map_err(|e| e.to_string())?,
-                FieldPath::parse(field).map_err(|e| e.to_string())?,
+                CollectionId::try_new(collection).map_err(|e| problem(&e))?,
+                FieldPath::parse(field).map_err(|e| problem(&e))?,
             )
-            .map_err(|e| format!("{path}: fieldOverride {collection}.{field}: {e}"))?;
+            .map_err(|e| problem(&e))?;
     }
     Ok(catalog)
 }
@@ -477,7 +479,14 @@ mod tests {
     fn a_ttl_that_no_admin_patch_could_set_is_refused() {
         for field in ["*", "__name__"] {
             let config = json!({"fieldOverrides":[{"collectionGroup":"c", "fieldPath":field, "ttl":true, "indexes":[]}]});
-            assert!(ttl_fields(&config).is_err(), "{field}");
+            let error = ttl_fields(&config).unwrap_err();
+            assert!(error.starts_with("test: "), "{field}: {error}");
+            if field == "*" {
+                assert!(
+                    error.contains("wildcard field cannot carry a TTL policy"),
+                    "{error}"
+                );
+            }
         }
         let two_fields = json!({"fieldOverrides":[
             {"collectionGroup":"c", "fieldPath":"a", "ttl":true, "indexes":[]},

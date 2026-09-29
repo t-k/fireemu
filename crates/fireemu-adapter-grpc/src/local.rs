@@ -1628,6 +1628,77 @@ mod tests {
     }
 
     #[test]
+    fn a_snapshot_restore_keeps_a_declared_policy_the_project_cleared_cleared() {
+        let backend = admission_backend();
+        backend.replace_shared_ttl_catalog("(default)", declared_ttl(&[("sessions", "expireAt")]));
+        assert!(backend.disable_ttl(
+            "demo-app",
+            "(default)",
+            &collection("sessions"),
+            &field("expireAt")
+        ));
+        let captured = backend.ttl_catalogs();
+        assert_eq!(
+            captured.len(),
+            1,
+            "the cleared state is part of the project's captured state"
+        );
+        backend.restore_ttl_catalogs(|project| project == "demo-app", &captured);
+        assert!(backend
+            .ttl_policy("demo-app", "(default)", &collection("sessions"))
+            .is_none());
+        assert!(backend
+            .ttl_policy("another-project", "(default)", &collection("sessions"))
+            .is_some());
+    }
+
+    #[test]
+    fn a_restore_of_an_empty_catalog_installs_nothing_where_nothing_is_declared() {
+        let backend = admission_backend();
+        let captured = BTreeMap::from([(
+            ("demo-app".to_owned(), "(default)".to_owned()),
+            TtlCatalog::new(),
+        )]);
+        backend.restore_ttl_catalogs(|_| true, &captured);
+        assert!(backend.ttl_catalogs().is_empty());
+    }
+
+    #[test]
+    fn a_refused_patch_or_a_clear_that_removes_nothing_leaves_the_project_following_the_file() {
+        let backend = admission_backend();
+        backend.replace_shared_ttl_catalog("(default)", declared_ttl(&[("sessions", "expireAt")]));
+        assert!(matches!(
+            backend.enable_ttl(
+                "demo-app",
+                "(default)",
+                collection("sessions"),
+                field("other")
+            ),
+            Err(TtlError::ConflictingField { .. })
+        ));
+        assert!(!backend.disable_ttl(
+            "demo-app",
+            "(default)",
+            &collection("logs"),
+            &field("until")
+        ));
+        assert!(!backend.disable_ttl(
+            "demo-app",
+            "(default)",
+            &collection("sessions"),
+            &field("other")
+        ));
+        assert!(backend.ttl_catalogs().is_empty(), "no copy was made");
+        backend.replace_shared_ttl_catalog("(default)", declared_ttl(&[("logs", "until")]));
+        assert!(backend
+            .ttl_policy("demo-app", "(default)", &collection("sessions"))
+            .is_none());
+        assert!(backend
+            .ttl_policy("demo-app", "(default)", &collection("logs"))
+            .is_some());
+    }
+
+    #[test]
     fn replacing_the_declared_catalog_follows_the_file_and_a_reset_shows_it_again() {
         let backend = admission_backend();
         backend.replace_shared_ttl_catalog("(default)", declared_ttl(&[("sessions", "expireAt")]));
@@ -3025,7 +3096,15 @@ impl LocalBackend {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         current.retain(|(project, _), _| project.as_ref().is_none_or(|p| !owned(p)));
         for ((project, database), catalog) in catalogs {
-            if catalog.is_empty() || !owned(project) {
+            if !owned(project) {
+                continue;
+            }
+            // An empty catalog is state where the configuration declares policies for the
+            // database: it is what keeps a policy the project cleared cleared.
+            let masks_declared = current
+                .get(&(None, database.clone()))
+                .is_some_and(|declared| !declared.is_empty());
+            if catalog.is_empty() && !masks_declared {
                 continue;
             }
             current.insert((Some(project.clone()), database.clone()), catalog.clone());
@@ -3077,13 +3156,16 @@ impl LocalBackend {
             .ttl
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        // A project's first patch starts from the policies its configuration declared.
-        let declared = catalogs
-            .get(&(None, database.to_owned()))
+        // A project's first patch starts from the policies its configuration declared. It
+        // works on a copy that only a patch that succeeds installs: a refused patch leaves
+        // the project following the file.
+        let mut catalog = catalogs
+            .get(&key)
+            .or_else(|| catalogs.get(&(None, database.to_owned())))
             .cloned()
             .unwrap_or_default();
-        let catalog = catalogs.entry(key).or_insert(declared);
         let state = catalog.enable_with_offset(collection_group, field, expiration_offset)?;
+        catalogs.insert(key, catalog);
         drop(catalogs);
         // The policy takes effect now, so the sweep interval is measured from now: a
         // document that was already expired when the policy was created still survives one
@@ -3113,18 +3195,20 @@ impl LocalBackend {
             .ttl
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        // A project that has not patched yet clears from the declared policies.
-        let declared = catalogs
-            .get(&(None, database.to_owned()))
-            .cloned()
-            .unwrap_or_default();
-        let has_declared = !declared.is_empty();
-        let catalog = catalogs.entry(key.clone()).or_insert(declared);
+        // A project that has not patched yet clears from the declared policies, and a clear
+        // that removes nothing changes nothing: the project keeps following the file.
+        let declared = catalogs.get(&(None, database.to_owned()));
+        let has_declared = declared.is_some_and(|catalog| !catalog.is_empty());
+        let mut catalog = catalogs.get(&key).or(declared).cloned().unwrap_or_default();
         let removed = catalog.disable(collection_group, field);
-        // An emptied catalog of a project whose configuration declares policies stays, so
-        // that the cleared policy is not resurrected by the fallback.
-        if catalog.is_empty() && !has_declared {
-            catalogs.remove(&key);
+        if removed {
+            // An emptied catalog of a project whose configuration declares policies stays,
+            // so that the cleared policy is not resurrected by the fallback.
+            if catalog.is_empty() && !has_declared {
+                catalogs.remove(&key);
+            } else {
+                catalogs.insert(key, catalog);
+            }
         }
         removed
     }

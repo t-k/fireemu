@@ -206,3 +206,53 @@ def test_an_interval_needs_both_clocks_to_agree_and_time_to_move_forward():
                 timing(26.0, 26.5, "2026-09-30T00:00:01.000Z", "2026-09-30T00:00:01.500Z")]:
         with pytest.raises(ValueError):
             collector_module.interval(first, bad)
+
+
+def test_a_wait_that_cannot_fit_is_refused_at_its_start_not_after_sleeping_through_it():
+    clock = Clock()
+    value = plan()
+    start = clock.now()
+    collector = Collector(value, TABLE, RequestBudget(value, TABLE), Service(clock, expiry=True), "owner", save=lambda _state: None, monotonic=clock.now, utc=clock.utc, sleep=clock.sleep)
+    collector.observation_deadline = collector.deadline = start + 60
+    receipt = collector.run()
+    assert receipt["failureType"] == "TimeoutError"
+    # keepalive-1 (24 s) fits a 60 s window; keepalive-2 would need 24 s plus the request that follows it (13 s) with 36 s left.
+    assert clock.now() - start < 30, "the second wait was refused before it slept"
+    assert [row["site"] for row in receipt["steps"]][-1] == "rest/keepalive-1"
+
+
+def test_admission_is_rechecked_every_second_of_a_wait_and_a_cancellation_stops_it():
+    clock = Clock()
+    value = plan()
+    calls = {"n": 0}
+    def before_send():
+        calls["n"] += 1
+    collector = Collector(value, TABLE, RequestBudget(value, TABLE), Service(clock, expiry=True), "owner", save=lambda _state: None, before_send=before_send, monotonic=clock.now, utc=clock.utc, sleep=clock.sleep)
+    assert collector.run()["complete"] is True
+    assert calls["n"] >= 556, "one admission check per second of every wait, plus the ones around each request"
+    clock = Clock()
+    seen = {"n": 0}
+    def cancelling():
+        seen["n"] += 1
+        if seen["n"] == 40:
+            raise ValueError("REVOKED")
+    service = Service(clock, expiry=True)
+    collector = Collector(value, TABLE, RequestBudget(value, TABLE), service, "owner", save=lambda _state: None, before_send=cancelling, monotonic=clock.now, utc=clock.utc, sleep=clock.sleep)
+    receipt = collector.run()
+    assert receipt["complete"] is False and receipt["failureType"] == "ValueError"
+    assert sum(1 for call in service.calls if call[0] == "rest" and call[1] == "GetDocument" and "transaction" in call[2]) <= 3, "the cancellation landed inside a wait and no later request went out"
+
+
+def test_the_journal_carries_the_waits_only_when_the_plan_has_them():
+    clock = Clock()
+    value = plan()
+    journal = []
+    collector = Collector(value, TABLE, RequestBudget(value, TABLE), Service(clock, expiry=True), "owner", save=lambda state: journal.append(copy.deepcopy(state)), monotonic=clock.now, utc=clock.utc, sleep=clock.sleep)
+    collector.run()
+    assert [len(state["waits"]) for state in journal][-1] == 22 and all("waits" in state for state in journal)
+    assert max(len(state["waits"]) for state in journal[:10]) < 22
+    import fs_txn_table_p08
+    plain = []
+    p08 = compile_plan(fs_txn_table_p08.TABLE, NONCE, OWNER)
+    Collector(p08, fs_txn_table_p08.TABLE, RequestBudget(p08, fs_txn_table_p08.TABLE), Service(Clock()), "owner", save=lambda state: plain.append(state), monotonic=Clock().now).run()
+    assert plain and all("waits" not in state for state in plain)

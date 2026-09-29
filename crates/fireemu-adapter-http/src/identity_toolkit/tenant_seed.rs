@@ -134,6 +134,44 @@ impl TenantSeed {
     }
 }
 
+/// The declared multi-tenancy switch and tenants of a project, applied together: the switch
+/// first (strict creates tenants only in a project that allows them), then each tenant.
+#[derive(Clone, Default)]
+pub struct TenantSeeding {
+    allow_tenants: Option<bool>,
+    tenants: Vec<TenantSeed>,
+}
+
+impl TenantSeeding {
+    /// A declaration: the switch when the file set it, and the validated tenants in file order.
+    #[must_use]
+    pub fn new(allow_tenants: Option<bool>, tenants: Vec<TenantSeed>) -> Self {
+        Self {
+            allow_tenants,
+            tenants,
+        }
+    }
+
+    /// Whether the file declared neither the switch nor a tenant.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.allow_tenants.is_none() && self.tenants.is_empty()
+    }
+
+    /// Applies the declaration to `project`. The switch is set only when declared, so an
+    /// undeclared one keeps whatever the project has; the tenants are created with the ids of
+    /// the file and fail when one is in use.
+    pub fn apply(&self, registry: &AuthRegistry, project: &str) -> Result<(), String> {
+        if let Some(allow) = self.allow_tenants {
+            seed_multi_tenancy(registry, project, allow)?;
+        }
+        for tenant in &self.tenants {
+            tenant.apply(registry, project)?;
+        }
+        Ok(())
+    }
+}
+
 /// Sets the project's multi-tenancy switch as the config update sets it: the `multiTenant`
 /// member and the private switch the tenant routes read, in one write under the project's gate.
 pub fn seed_multi_tenancy(

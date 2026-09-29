@@ -103,3 +103,27 @@ fn a_restored_snapshot_never_carries_its_source_projects_seed() {
     assert_eq!(same.mfa_seed(), Some(&sms_on()));
     assert_eq!(*same.mfa_config(), totp_on());
 }
+
+#[test]
+fn a_project_routed_on_its_first_admin_request_starts_with_the_new_project_seed() {
+    use fireemu_core_auth::store::AuthRegistry;
+    let default = std::sync::Arc::new(std::sync::Mutex::new(store()));
+    let registry = AuthRegistry::new("demo-seed", default.clone());
+    // Undeclared: multi-factor is off, whatever the default project's live config is.
+    default.lock().unwrap().set_mfa_config(sms_on());
+    let plain = registry
+        .routed_candidate("routed-a")
+        .expect("a valid project");
+    assert_eq!(*plain.mfa_config(), MfaProjectConfig::default());
+    assert_eq!(plain.mfa_seed(), None);
+    // Declared: the seed, kept as the store's seed so a reset of that project returns to it.
+    registry.set_new_project_mfa_seed(Some(totp_on()));
+    let seeded = registry
+        .routed_candidate("routed-b")
+        .expect("a valid project");
+    assert_eq!(*seeded.mfa_config(), totp_on());
+    assert_eq!(seeded.mfa_seed(), Some(&totp_on()));
+    assert_eq!(registry.new_project_mfa_seed(), Some(totp_on()));
+    registry.set_new_project_mfa_seed(None);
+    assert_eq!(registry.new_project_mfa_seed(), None);
+}

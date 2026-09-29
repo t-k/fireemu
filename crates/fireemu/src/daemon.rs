@@ -1587,6 +1587,8 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
                 crate::random_u128()?,
             ),
         );
+        // A project created after start begins with the declared multi-factor configuration.
+        registry.set_new_project_mfa_seed(cfg.auth_mfa.clone());
         apply_auth_password_policy_overrides(&cfg, &registry)?;
         apply_auth_config_overrides(&cfg, &registry)?;
         let rules = Arc::new(RulesetSlot::new(load_rules(&cfg)?));

@@ -5931,6 +5931,10 @@ pub struct AuthRegistry {
     operation_gates: Mutex<BTreeMap<TenantKey, Weak<Mutex<()>>>>,
     /// The session epochs of deleted tenants (see [`RemovedTenantEpochs`]).
     removed_tenant_epochs: Mutex<BTreeMap<TenantKey, RemovedTenantEpochs>>,
+    /// The multi-factor configuration the daemon declared as a project's initial one (`auth.mfa`),
+    /// which every project created after start begins with (a session project, or a namespace
+    /// routed by its first Admin request), in place of the default project's live value.
+    new_project_mfa_seed: Mutex<Option<crate::mfa_config::MfaProjectConfig>>,
     membership_generation: AtomicU64,
     lifecycle_incarnation: Option<u128>,
     next_lifecycle_serial: AtomicU64,
@@ -6145,6 +6149,7 @@ impl AuthRegistry {
             password_policy_overrides: Mutex::new(BTreeMap::new()),
             tenant_config_overrides: Mutex::new(BTreeMap::new()),
             tenant_runtime_config_overrides: Mutex::new(BTreeMap::new()),
+            new_project_mfa_seed: Mutex::new(None),
             deleted_tenants: Mutex::new(BTreeSet::new()),
             operation_gates: Mutex::new(BTreeMap::new()),
             removed_tenant_epochs: Mutex::new(BTreeMap::new()),
@@ -6183,6 +6188,20 @@ impl AuthRegistry {
     #[must_use]
     pub fn routed_store_for(&self, project: &str) -> Option<Arc<Mutex<AuthStore>>> {
         self.projects.lock().ok()?.routed.get(project).cloned()
+    }
+
+    /// Declares the multi-factor configuration every project created from now on begins with
+    /// (`None`: multi-factor off, as a new production project has it).
+    pub fn set_new_project_mfa_seed(&self, seed: Option<crate::mfa_config::MfaProjectConfig>) {
+        if let Ok(mut current) = self.new_project_mfa_seed.lock() {
+            *current = seed;
+        }
+    }
+
+    /// The multi-factor configuration a project created now begins with, if one was declared.
+    #[must_use]
+    pub fn new_project_mfa_seed(&self) -> Option<crate::mfa_config::MfaProjectConfig> {
+        self.new_project_mfa_seed.lock().ok()?.clone()
     }
 
     /// Builds an isolated compatibility store without registering it. A rejected request can
@@ -6243,6 +6262,9 @@ impl AuthRegistry {
         store.set_project_number(self.project_numbers.get(project).copied());
         if let Some(signer) = signer {
             store.set_signer(signer);
+        }
+        if let Some(seed) = self.new_project_mfa_seed() {
+            store.set_mfa_seed(seed);
         }
         Some(store)
     }

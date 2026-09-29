@@ -63,17 +63,57 @@ struct Daemon {
     child: Child,
     banner: Arc<Mutex<String>>,
     stderr: Arc<Mutex<String>>,
-    hub_port: u16,
+    /// The port of a daemon told which one to bind (a quiet daemon prints no banner).
+    fixed_port: Option<u16>,
     _dir: TrustedTempDir,
 }
 
 impl Daemon {
-    /// A daemon under `profile` whose `auth` section is `auth`.
+    /// A daemon under `profile` whose `auth` section is `auth`. Every port is chosen by the
+    /// daemon (`0`) and read from its banner, so no port is picked here and released before the
+    /// daemon binds it.
     fn start(name: &str, profile: &str, auth: &Value) -> Self {
-        Self::start_with_args(name, profile, auth, &[])
+        Self::spawn(name, profile, auth, &[], None)
     }
 
-    fn start_with_args(name: &str, profile: &str, auth: &Value, extra: &[&str]) -> Self {
+    /// A quiet daemon prints no banner, so it is told its port and is ready when it accepts a
+    /// connection. A port taken between the choice and the bind stops the daemon early, and the
+    /// start is tried again with another.
+    fn start_quiet(name: &str, profile: &str, auth: &Value) -> Self {
+        for _ in 0..8 {
+            let port = free_port();
+            let mut daemon = Self::spawn(
+                name,
+                profile,
+                auth,
+                &["--log-verbosity", "quiet"],
+                Some(port),
+            );
+            let deadline = std::time::Instant::now() + Duration::from_secs(60);
+            loop {
+                if TcpStream::connect(("127.0.0.1", port)).is_ok() {
+                    return daemon;
+                }
+                if daemon.child.try_wait().unwrap().is_some() {
+                    break;
+                }
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "the quiet daemon became ready"
+                );
+                std::thread::sleep(Duration::from_millis(50));
+            }
+        }
+        panic!("the quiet daemon never bound a port it was given");
+    }
+
+    fn spawn(
+        name: &str,
+        profile: &str,
+        auth: &Value,
+        extra: &[&str],
+        fixed_port: Option<u16>,
+    ) -> Self {
         let dir = TrustedTempDir::new(&format!("auth-mfa-config-{name}"));
         let config = dir.join("fireemu.json");
         std::fs::write(
@@ -81,7 +121,7 @@ impl Daemon {
             json!({"schemaVersion": 1, "profile": profile, "auth": auth}).to_string(),
         )
         .unwrap();
-        let hub_port = free_port();
+        let http_port = fixed_port.unwrap_or(0).to_string();
         let mut child = Command::new(env!("CARGO_BIN_EXE_fireemu"))
             .args([
                 "up",
@@ -94,7 +134,7 @@ impl Daemon {
                 "--firestore-port",
                 "0",
                 "--http-port",
-                "0",
+                &http_port,
                 "--storage-port",
                 "0",
                 "--functions-port",
@@ -104,8 +144,8 @@ impl Daemon {
                 "--ui-port",
                 "0",
                 "--hub-port",
+                "0",
             ])
-            .arg(hub_port.to_string())
             .args(extra)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
@@ -119,7 +159,7 @@ impl Daemon {
             child,
             banner: Arc::new(Mutex::new(String::new())),
             stderr: Arc::new(Mutex::new(String::new())),
-            hub_port,
+            fixed_port,
             _dir: dir,
         };
         let collected = Arc::clone(&daemon.stderr);
@@ -151,39 +191,34 @@ impl Daemon {
                 }
             }
         });
-        if extra.contains(&"quiet") {
-            // A quiet daemon prints no banner: ready is when the Hub answers.
-            let deadline = std::time::Instant::now() + Duration::from_secs(60);
-            while TcpStream::connect(("127.0.0.1", hub_port)).is_err() {
-                assert!(
-                    std::time::Instant::now() < deadline,
-                    "the daemon became ready"
-                );
-                std::thread::sleep(Duration::from_millis(50));
-            }
-            let _ = rx;
-        } else {
+        if fixed_port.is_none() {
             rx.recv_timeout(Duration::from_secs(60))
                 .expect("the daemon became ready");
         }
         daemon
     }
 
-    fn auth_port(&self) -> u16 {
-        let (status, emulators) = http(self.hub_port, "GET", "/emulators", "", &Value::Null);
-        assert_eq!(status, 200, "{emulators}");
-        u16::try_from(emulators["auth"]["port"].as_u64().unwrap()).unwrap()
-    }
-
-    fn control_port(&self) -> u16 {
+    /// The port a banner line names: `<label> ... 127.0.0.1:PORT`.
+    fn banner_port(&self, label: &str) -> u16 {
+        if let Some(port) = self.fixed_port {
+            return port;
+        }
         let banner = self.banner.lock().unwrap().clone();
         banner
             .lines()
-            .find(|line| line.trim_start().starts_with("control API:"))
-            .and_then(|line| line.split("http://127.0.0.1:").nth(1))
+            .find(|line| line.trim_start().starts_with(label))
+            .and_then(|line| line.split("127.0.0.1:").nth(1))
             .and_then(|rest| rest.split(|c: char| !c.is_ascii_digit()).next())
             .and_then(|digits| digits.parse().ok())
-            .expect("the banner names the control API")
+            .unwrap_or_else(|| panic!("the banner names no {label}: {banner}"))
+    }
+
+    fn auth_port(&self) -> u16 {
+        self.banner_port("auth (REST):")
+    }
+
+    fn control_port(&self) -> u16 {
+        self.banner_port("control API:")
     }
 
     fn stderr(&self) -> String {
@@ -524,6 +559,22 @@ fn a_project_created_without_a_declared_seed_starts_with_mfa_off() {
     assert_eq!(mfa_of(&daemon, "demo-second"), json!({"state": "DISABLED"}));
 }
 
+/// The emulator profile makes a project on its first Admin request (a compatibility namespace);
+/// it starts with the seed too, as every project the daemon creates later does.
+#[test]
+fn a_project_routed_by_its_first_admin_request_starts_with_the_seed() {
+    let daemon = Daemon::start("routed", "emulator", &with_mfa(&totp_on()));
+    // The default project's live configuration moves away from the seed.
+    daemon.set_mfa(&json!({"state": "ENABLED", "enabledProviders": ["PHONE_SMS"]}));
+    assert_eq!(mfa_of(&daemon, "routed-first-request"), totp_on());
+    // Undeclared, such a project starts with multi-factor off (the member is left out of an
+    // emulator config document while it is a new project's).
+    drop(daemon);
+    let daemon = Daemon::start("routed-plain", "emulator", &base());
+    daemon.set_mfa(&totp_on());
+    assert_eq!(mfa_of(&daemon, "routed-first-request"), Value::Null);
+}
+
 #[test]
 fn wiping_accounts_through_the_emulator_route_leaves_the_mfa_config_alone() {
     // Like the official emulator, `DELETE /emulator/v1/projects/{p}/accounts` clears accounts only;
@@ -591,12 +642,7 @@ fn strict_auth_totp_without_an_mfa_enabling_it_warns_naming_auth_mfa() {
     assert!(!quiet.stderr().contains("auth.totp does not enable"));
     drop(quiet);
     // A quiet daemon prints no warning either.
-    let quiet = Daemon::start_with_args(
-        "nowarn-quiet",
-        "strict",
-        &auth,
-        &["--log-verbosity", "quiet"],
-    );
+    let quiet = Daemon::start_quiet("nowarn-quiet", "strict", &auth);
     assert!(!quiet.stderr().contains("auth.totp does not enable"));
     drop(quiet);
     census::assert_no_owned_descendants("the auth mfa daemons", Duration::from_secs(10));

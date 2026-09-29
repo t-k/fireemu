@@ -932,3 +932,90 @@ test("an unsigned response goes only when every Issuer in any spelling is the ru
     assert.throws(() => post(xml), /credential/, name);
   }
 });
+
+test("the follow-up corpus's own SAML sign-ins, with its real names, get through the guard", async () => {
+  // The unsigned row's NameID is fireemu-fed-<run>-saml-signature@example.com: the guard reads
+  // signature markup, never text (pre-send re-review R-M1).
+  const { FOLLOWUP_PROGRAMS } = await import("./auth-federation/corpus-followup.mjs");
+  const { materialize, resolveRun } = await import("./auth-federation/run.mjs");
+  const { generateKeyPairSync } = await import("node:crypto");
+  const { deflateRawSync } = await import("node:zlib");
+  const { privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+  const certificate = "UlVOLUNFUlQ=";
+  const certificatePem = `-----BEGIN CERTIFICATE-----\n${certificate}\n-----END CERTIFICATE-----`;
+  const keys = { run: generateSigningKey({ kid: "run-kid" }), other: generateSigningKey() };
+  const resolve = (programs) =>
+    resolveRun({
+      project: SANDBOX_PROJECT,
+      run: RUN,
+      issuerHost: CHANNEL,
+      keys,
+      certificates: { "saml-a": certificatePem },
+      now: 1_790_000_000,
+      programs,
+    }).programs;
+  const saml = { keys: { run: { privateKey, certificatePem } }, now: () => 1_790_000_000 };
+  const authUri = (id) => {
+    const request = `<samlp:AuthnRequest xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" ID="_${id}" AssertionConsumerServiceURL="https://sp.example/acs"><saml:Issuer xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion">sp</saml:Issuer></samlp:AuthnRequest>`;
+    return `https://idp.example/sso?SAMLRequest=${encodeURIComponent(deflateRawSync(Buffer.from(request)).toString("base64"))}&RelayState=relay-${id}`;
+  };
+  const ctx = production({
+    runCertificates: [certificate],
+    runKids: ["run-kid"],
+    issuerHost: CHANNEL,
+  });
+  const sendSignIns = (programs) => {
+    const program = programs.find(({ id }) => id === "auth-federation/saml/signature");
+    const raw = new Map(
+      program.steps
+        .filter(({ id }) => id.endsWith("-auth-uri"))
+        .map(({ id }) => [id, { authUri: authUri(id.replace(/\W/g, "")), sessionId: `s-${id}` }]),
+    );
+    const signIns = program.steps.filter(({ id }) => id === "tampered" || id === "unsigned");
+    assert.deepEqual(
+      signIns.map(({ id }) => id),
+      ["tampered", "unsigned"],
+    );
+    return signIns.map((step) => {
+      const body = materialize(step.body, raw, program.minted, saml);
+      const xml = Buffer.from(
+        new URLSearchParams(body.postBody).get("SAMLResponse"),
+        "base64",
+      ).toString("utf8");
+      assert.doesNotThrow(() => send(ctx, "POST", `/${step.path}`, body), step.id);
+      return xml;
+    });
+  };
+  const [tampered, unsigned] = sendSignIns(resolve(FOLLOWUP_PROGRAMS));
+  assert.match(unsigned, /saml-signature@example\.com/, "the corpus's own NameID");
+  assert.ok(!/<[\w-]*:?Signature\b/i.test(unsigned), "unsigned");
+  assert.match(tampered, /<ds:Signature\b/, "tampered keeps its signature");
+  // A NameID naming a signature in any case still goes.
+  for (const name of ["Signature", "SIGNATURE", "SignatureValue", "x509"]) {
+    const renamed = structuredClone(FOLLOWUP_PROGRAMS).map((program) => ({
+      ...program,
+      steps: program.steps.map((step) =>
+        step.body?.postBody?.$form?.SAMLResponse?.$saml
+          ? {
+              ...step,
+              body: {
+                ...step.body,
+                postBody: {
+                  $form: {
+                    ...step.body.postBody.$form,
+                    SAMLResponse: {
+                      $saml: {
+                        ...step.body.postBody.$form.SAMLResponse.$saml,
+                        nameId: `${name}@example.com`,
+                      },
+                    },
+                  },
+                },
+              },
+            }
+          : step,
+      ),
+    }));
+    sendSignIns(resolve(renamed));
+  }
+});

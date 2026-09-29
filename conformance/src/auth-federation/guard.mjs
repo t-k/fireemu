@@ -133,11 +133,16 @@ const runSamlIdp = (ctx) => ({
 
 /**
  * Whether an unsigned response is the run's own (pre-send review S1): no signature or
- * certificate markup in any case, and every `Issuer` element (any prefix, any attributes)
- * collected and naming exactly the run's SAML IdP (a comment or CDATA in one is never that).
+ * certificate element (any prefix, any case; the text of other elements, such as a NameID
+ * naming a signature, is not markup, pre-send re-review R-M1), and every `Issuer` element (any
+ * prefix, any attributes) collected and naming exactly the run's SAML IdP (a comment or CDATA
+ * in one is never that).
  */
+const SIGNATURE_MARKUP =
+  /<\/?(?:[\w-]+:)?(?:Signature|SignatureValue|SignedInfo|KeyInfo|X509[A-Za-z]*)\b/i;
+
 function isRunUnsignedResponse(xml, ctx) {
-  if (/signature|x509/i.test(xml)) return false;
+  if (SIGNATURE_MARKUP.test(xml)) return false;
   const openings = xml.match(/<(?:[\w-]+:)?Issuer\b/g) ?? [];
   const issuers = [
     ...xml.matchAll(/<(?:[\w-]+:)?Issuer\b[^>]*>([\s\S]*?)<\/(?:[\w-]+:)?Issuer>/g),

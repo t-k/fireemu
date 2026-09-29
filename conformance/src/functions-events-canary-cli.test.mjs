@@ -77,6 +77,28 @@ test("each canary CLI command pins its project, config, quota project, and one f
   }
 });
 
+test("the delivery probe selects the stdout capture and nothing else can", () => {
+  for (const name of ["fsCreatedV1", "fsCreatedV2"]) {
+    const probe = buildCanaryCli("deploy", "demo-events-prod", name, {
+      ...cliOptions,
+      captureMode: "stdout",
+    });
+    assert.equal(probe.env.FE_EVENTS_CAPTURE_MODE, "stdout");
+    assert.equal(probe.env.FE_EVENTS_MODE, "production");
+    const explicit = buildCanaryCli("deploy", "demo-events-prod", name, {
+      ...cliOptions,
+      captureMode: "reject-canary",
+    });
+    assert.equal(explicit.env.FE_EVENTS_CAPTURE_MODE, "reject-canary");
+    for (const captureMode of ["socket", "", "STDOUT", 1, null]) {
+      assert.throws(
+        () => buildCanaryCli("deploy", "demo-events-prod", name, { ...cliOptions, captureMode }),
+        /capture mode/,
+      );
+    }
+  }
+});
+
 test("canary CLI rejects an unreviewed function or malformed project", () => {
   for (const name of ["authCreatedV1", "fsCreatedV2,storageFinalizedV2", ""]) {
     assert.throws(() => buildCanaryCli("deploy", "demo-events-prod", name, cliOptions));

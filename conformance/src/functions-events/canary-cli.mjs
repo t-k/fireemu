@@ -1,6 +1,7 @@
 import { isAbsolute } from "node:path";
 
 const canaries = new Set(["fsCreatedV1", "fsCreatedV2"]);
+const captureModes = new Set(["reject-canary", "stdout"]);
 
 export function buildCanaryCli(action, projectId, name, options) {
   if (!/^[a-z][a-z0-9-]{4,28}[a-z0-9]$/.test(projectId)) {
@@ -15,6 +16,8 @@ export function buildCanaryCli(action, projectId, name, options) {
   if (typeof options.path !== "string" || !options.path) {
     throw new Error("canary CLI requires an explicit PATH");
   }
+  const captureMode = options.captureMode === undefined ? "reject-canary" : options.captureMode;
+  if (!captureModes.has(captureMode)) throw new Error("canary CLI capture mode is not reviewed");
   let args;
   if (action === "deploy") {
     args = [
@@ -60,7 +63,7 @@ export function buildCanaryCli(action, projectId, name, options) {
       FE_EVENTS_PRIMARY_COLLECTION: "fe_events_primary",
       FE_EVENTS_PRIMARY_BUCKET: `${projectId}.firebasestorage.app`,
       FE_EVENTS_PRIMARY_TOPIC: "fe-events-primary",
-      FE_EVENTS_CAPTURE_MODE: "reject-canary",
+      FE_EVENTS_CAPTURE_MODE: captureMode,
     },
   };
 }

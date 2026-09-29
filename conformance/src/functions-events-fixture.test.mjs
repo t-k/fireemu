@@ -80,13 +80,44 @@ test("production discovery requires exact resources and a rejecting canary captu
     { FE_EVENTS_PRIMARY_COLLECTION: "" },
     { FE_EVENTS_PRIMARY_BUCKET: "other-project.firebasestorage.app" },
     { FE_EVENTS_PRIMARY_TOPIC: "" },
-    { FE_EVENTS_CAPTURE_MODE: "stdout" },
+    { FE_EVENTS_CAPTURE_MODE: "" },
+    { FE_EVENTS_CAPTURE_MODE: "other" },
+    { FE_EVENTS_CAPTURE_MODE: "stdout", FE_EVENTS_CAPTURE_SOCKET: "/tmp/example.sock" },
     { FE_EVENTS_CAPTURE_MODE: "socket", FE_EVENTS_CAPTURE_SOCKET: "/tmp/example.sock" },
     { FE_EVENTS_CAPTURE_SOCKET: "/tmp/example.sock" },
   ]) {
     const result = productionDiscovery(overrides);
     assert.notEqual(result.status, 0, JSON.stringify(overrides));
   }
+});
+
+test("production discovery accepts the stdout capture of the delivery probe", () => {
+  const result = productionDiscovery({ FE_EVENTS_CAPTURE_MODE: "stdout" });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(JSON.parse(result.stdout).names.length, 22);
+});
+
+test("stdout capture prints exactly one FE_EVENTS_FRAME line per event", async () => {
+  const { report } = require(reportPath);
+  const previous = process.env.FE_EVENTS_CAPTURE_MODE;
+  const lines = [];
+  const log = console.log;
+  process.env.FE_EVENTS_CAPTURE_MODE = "stdout";
+  console.log = (line) => lines.push(line);
+  try {
+    await report({ handler: "fsCreatedV2", generation: 2, event: { id: "e1" } });
+  } finally {
+    console.log = log;
+    if (previous === undefined) delete process.env.FE_EVENTS_CAPTURE_MODE;
+    else process.env.FE_EVENTS_CAPTURE_MODE = previous;
+  }
+  assert.equal(lines.length, 1);
+  assert.match(lines[0], /^FE_EVENTS_FRAME \{.*\}$/);
+  assert.deepEqual(JSON.parse(lines[0].slice("FE_EVENTS_FRAME ".length)), {
+    handler: "fsCreatedV2",
+    generation: 2,
+    event: { id: "e1" },
+  });
 });
 
 test("canary capture rejects an unexpected event without serializing its payload", async () => {

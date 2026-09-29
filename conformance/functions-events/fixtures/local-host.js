@@ -83,8 +83,13 @@ function assertFixtureEnvironment(env = process.env) {
   if (!/^fe-events-[a-z0-9-]+$/.test(env.FE_EVENTS_PRIMARY_TOPIC ?? "")) {
     throw new Error("production fixture topic is missing or invalid");
   }
-  if (env.FE_EVENTS_CAPTURE_MODE !== "reject-canary" || env.FE_EVENTS_CAPTURE_SOCKET) {
-    throw new Error("production canary must reject unexpected events");
+  // "stdout" is the delivery probe: each event is printed as one FE_EVENTS_FRAME line for Cloud
+  // Logging. Any other mode, and any capture socket, is refused so a canary never opens a channel.
+  if (
+    (env.FE_EVENTS_CAPTURE_MODE !== "reject-canary" && env.FE_EVENTS_CAPTURE_MODE !== "stdout") ||
+    env.FE_EVENTS_CAPTURE_SOCKET
+  ) {
+    throw new Error("production canary must reject unexpected events or print them to stdout");
   }
   return "production";
 }

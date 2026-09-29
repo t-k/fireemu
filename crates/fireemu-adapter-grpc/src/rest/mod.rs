@@ -79,6 +79,8 @@ pub struct RestRequest {
     pub app_check: Vec<String>,
     /// Parsed JSON body (`{}` when empty).
     pub body: Value,
+    /// Source order of each `BatchWrite` update document's top-level `fields` map.
+    pub batch_field_order: Vec<Vec<String>>,
 }
 
 /// HTTP status + JSON body.
@@ -162,8 +164,8 @@ pub fn drops_connection(response: &RestResponse) -> bool {
 }
 
 /// Production answers an error of a streaming REST method (`runQuery`, `runAggregationQuery`,
-/// `executePipeline`) inside the JSON array that would have carried its results. A fault that
-/// drops the connection keeps its own path.
+/// `executePipeline`, `batchGet`) inside the JSON array that would have carried its results,
+/// body decoding errors included. A fault that drops the connection keeps its own path.
 fn stream_errors(result: Result<RestResponse, Status>) -> Result<RestResponse, Status> {
     result.or_else(|status| {
         if status
@@ -190,7 +192,7 @@ pub const TEXT_KEY: &str = "fireemuText";
 
 /// `404 Not Found` as plain text: what the official emulator's HTTP adapter answers for a
 /// path or method it has no route for, before any JSON error envelope exists.
-fn not_found_text() -> RestResponse {
+pub(crate) fn not_found_text() -> RestResponse {
     RestResponse {
         status: 404,
         body: json!({TEXT_KEY: "Not Found\n"}),
@@ -576,6 +578,33 @@ impl RestState {
         Ok(Caller { principal, epoch })
     }
 
+    /// The caller of a data-plane request, with a credential refusal in the shape REST
+    /// answers it (see `front_end_refusal`).
+    fn request_principal(
+        &self,
+        req: &RestRequest,
+        path: &str,
+        action: Option<&str>,
+    ) -> Result<Caller, Status> {
+        self.principal(
+            req.authorization.as_deref(),
+            crate::service::project_of_resource(path),
+        )
+        .map_err(|status| front_end_refusal(status, &req.method, action))
+    }
+
+    /// Refuses an end user a read-write transaction where production does (see
+    /// `RulesEnforcer::check_new_transaction`).
+    fn check_new_transaction(
+        &self,
+        caller: &Caller,
+        options: Option<&pb::TransactionOptions>,
+    ) -> Result<(), Status> {
+        self.rules.as_ref().map_or(Ok(()), |rules| {
+            rules.check_new_transaction(&caller.principal, options)
+        })
+    }
+
     fn write_guard<'a>(&'a self, caller: &'a Caller) -> rules::BoxedWriteGuard<'a> {
         let inner = rules::write_guard(self.rules.as_ref(), &caller.principal);
         let barrier = self.local.barrier();
@@ -827,6 +856,9 @@ impl RestState {
 
     /// Handles one request.
     pub fn handle(&self, req: &RestRequest) -> RestResponse {
+        if let Some(refused) = crate::admin::rest::foreign_project(self, &req.path) {
+            return refused;
+        }
         match self.dispatch(req) {
             Ok(r) => r,
             Err(s) => {
@@ -928,6 +960,57 @@ impl RestState {
         }
     }
 
+    /// The database inventory, field-configuration and operation routes, which live under
+    /// the database resource and carry no `/documents` segment.
+    fn database_subroute(
+        &self,
+        req: &RestRequest,
+        path: &str,
+        segments: &[&str],
+        action: Option<&str>,
+        params: &BTreeMap<String, Vec<String>>,
+    ) -> Option<Result<RestResponse, Status>> {
+        if req.method == "GET"
+            && action.is_none()
+            && matches!(
+                segments,
+                ["projects", _, "databases"] | ["projects", _, "databases", _]
+            )
+        {
+            return Some(self.admin_inventory_route(req, path, params));
+        }
+        // The field-configuration and operation routes live under the database resource and
+        // carry no `/documents` segment, so they are matched before the document-route guard.
+        if action.is_none()
+            && matches!(
+                segments,
+                [
+                    "projects",
+                    _,
+                    "databases",
+                    _,
+                    "collectionGroups",
+                    _,
+                    "fields",
+                    ..
+                ]
+            )
+        {
+            return Some(self.admin_fields_route(req, segments, params));
+        }
+        if req.method == "GET"
+            && action.is_none()
+            && matches!(
+                segments,
+                ["projects", _, "databases", _, "operations"]
+                    | ["projects", _, "databases", _, "operations", _]
+            )
+        {
+            return Some(self.admin_operations_route(req, segments));
+        }
+        None
+    }
+
     fn dispatch(&self, req: &RestRequest) -> Result<RestResponse, Status> {
         // The custom-method suffix is recognised on the raw path (an encoded colon inside a
         // document ID is data, not routing syntax); segments are decoded afterwards.
@@ -935,6 +1018,10 @@ impl RestState {
             if let Some(rest) = decode_path(&req.path)?.strip_prefix("/emulator/v1/projects/") {
                 return self.emulator_route(req, rest);
             }
+        }
+        // The Admin API's database, location and operation routes (FS-CONFIG-LIFECYCLE).
+        if let Some(response) = crate::admin::rest::route(self, req) {
+            return Ok(response);
         }
         let (raw_resource, action) = match req.path.rsplit_once(':') {
             // The query methods' templates need a document below `documents`; with one
@@ -964,43 +1051,8 @@ impl RestState {
         };
         let params = query_params(&req.query);
         let segments: Vec<&str> = path.split('/').collect();
-        if req.method == "GET"
-            && action.is_none()
-            && matches!(
-                segments.as_slice(),
-                ["projects", _, "databases"] | ["projects", _, "databases", _]
-            )
-        {
-            return self.admin_inventory_route(req, path, &params);
-        }
-        // The field-configuration and operation routes live under the database resource and
-        // carry no `/documents` segment, so they are matched before the document-route guard.
-        if action.is_none()
-            && matches!(
-                segments.as_slice(),
-                [
-                    "projects",
-                    _,
-                    "databases",
-                    _,
-                    "collectionGroups",
-                    _,
-                    "fields",
-                    ..
-                ]
-            )
-        {
-            return self.admin_fields_route(req, &segments, &params);
-        }
-        if req.method == "GET"
-            && action.is_none()
-            && matches!(
-                segments.as_slice(),
-                ["projects", _, "databases", _, "operations"]
-                    | ["projects", _, "databases", _, "operations", _]
-            )
-        {
-            return self.admin_operations_route(req, &segments);
+        if let Some(response) = self.database_subroute(req, path, &segments, action, &params) {
+            return response;
         }
         if !path.contains("/documents") {
             return Ok(not_found_text());
@@ -1008,15 +1060,12 @@ impl RestState {
         // App Check, once the route and the target project are resolved and before the
         // Firebase Auth credential, Security Rules and every mutation (spec 7.4).
         self.admit_app_check(req, path, action)?;
-        let principal = self.principal(
-            req.authorization.as_deref(),
-            crate::service::project_of_resource(path),
-        )?;
+        let principal = self.request_principal(req, path, action)?;
         if let Some(action) = action {
             if req.method != "POST" {
                 return Ok(not_found_text());
             }
-            return self.custom_method(&principal, path, action, &req.body);
+            return self.custom_method(&principal, path, action, &req.body, &req.batch_field_order);
         }
         match (req.method.as_str(), classify(path)?) {
             ("GET", Target::Resource(name)) => self.get(&principal, &name, &params),
@@ -1217,32 +1266,41 @@ impl RestState {
         Ok(ok(json!({})))
     }
 
+    fn begin_transaction(
+        &self,
+        principal: &Caller,
+        resource: &str,
+        body: &Value,
+    ) -> Result<RestResponse, Status> {
+        json::strict_keys(body, &["options", "requestOptions"]).map_err(|e| bad(&e))?;
+        let database = database_of(resource)?;
+        self.check_database_audience(principal, &database)?;
+        let options =
+            transaction_options_from_json(body.get("options"), "options").map_err(|e| bad(&e))?;
+        let request_options =
+            request_options_from_json(body.get("requestOptions")).map_err(|e| bad(&e))?;
+        self.check_new_transaction(principal, Some(&options))?;
+        let token = self.local.begin_transaction(&pb::BeginTransactionRequest {
+            database,
+            options: Some(options),
+            request_options,
+        })?;
+        Ok(ok(json!({"transaction": base64_encode(&token)})))
+    }
+
     fn custom_method(
         &self,
         principal: &Caller,
         resource: &str,
         action: &str,
         body: &Value,
+        batch_field_order: &[Vec<String>],
     ) -> Result<RestResponse, Status> {
         match action {
             "commit" => self.commit(principal, resource, body),
-            "batchWrite" => self.batch_write(principal, resource, body),
-            "batchGet" => self.batch_get(principal, resource, body),
-            "beginTransaction" => {
-                json::strict_keys(body, &["options", "requestOptions"]).map_err(|e| bad(&e))?;
-                let database = database_of(resource)?;
-                self.check_database_audience(principal, &database)?;
-                let token = self.local.begin_transaction(&pb::BeginTransactionRequest {
-                    database,
-                    options: Some(
-                        transaction_options_from_json(body.get("options"), "options")
-                            .map_err(|e| bad(&e))?,
-                    ),
-                    request_options: request_options_from_json(body.get("requestOptions"))
-                        .map_err(|e| bad(&e))?,
-                })?;
-                Ok(ok(json!({"transaction": base64_encode(&token)})))
-            }
+            "batchWrite" => self.batch_write(principal, resource, body, batch_field_order),
+            "batchGet" => stream_errors(self.batch_get(principal, resource, body)),
+            "beginTransaction" => self.begin_transaction(principal, resource, body),
             "rollback" => {
                 let database = database_of(resource)?;
                 self.check_database_audience(principal, &database)?;
@@ -1478,6 +1536,7 @@ impl RestState {
         principal: &Caller,
         resource: &str,
         body: &Value,
+        batch_field_order: &[Vec<String>],
     ) -> Result<RestResponse, Status> {
         if let Some(field) = json::first_unknown_key(body, &["writes", "labels"])
             .filter(|field| *field == "transaction")
@@ -1487,10 +1546,14 @@ impl RestState {
         json::strict_keys(body, &["writes", "labels"]).map_err(|e| bad(&e))?;
         let req = pb::BatchWriteRequest {
             database: database_of(resource)?,
-            writes: batch_writes_from_json(body)?,
+            writes: batch_writes_from_json(body, batch_field_order)?,
             labels: labels_from_json(body)?,
             request_options: None,
         };
+        // End users may not call batchWrite at all (FS-RULES, 2026-09-24).
+        if let Some(rules) = &self.rules {
+            rules.require_owner(principal, "batchWrite")?;
+        }
         let guard = self.write_guard(principal);
         let response = self.local.batch_write_with(&req, &*guard)?;
         Ok(ok(json::without_empty(json!({
@@ -1557,6 +1620,11 @@ impl RestState {
             request_options: None,
             consistency_selector,
         };
+        if let Some(pb::batch_get_documents_request::ConsistencySelector::NewTransaction(options)) =
+            &req.consistency_selector
+        {
+            self.check_new_transaction(principal, Some(options))?;
+        }
         let guard = self.read_guard(principal);
         let outcome = self.local.batch_get_documents(&req, &*guard)?;
         let read_time = optional_timestamp_to_json(Some(&encode_instant(outcome.read_time)));
@@ -1636,6 +1704,11 @@ impl RestState {
             )),
             consistency_selector,
         };
+        if let Some(pb::run_query_request::ConsistencySelector::NewTransaction(options)) =
+            &req.consistency_selector
+        {
+            self.check_new_transaction(principal, Some(options))?;
+        }
         let guard = self.read_guard(principal);
         let (responses, _warnings) = self.local.run_query(&req, &*guard)?;
         let out: Vec<Value> = responses
@@ -1740,6 +1813,12 @@ impl RestState {
             ),
             consistency_selector,
         };
+        if let Some(pb::run_aggregation_query_request::ConsistencySelector::NewTransaction(
+            options,
+        )) = &req.consistency_selector
+        {
+            self.check_new_transaction(principal, Some(options))?;
+        }
         let guard = self.read_guard(principal);
         let response = self.local.run_aggregation_query(&req, &*guard)?;
         let fields: serde_json::Map<String, Value> = response
@@ -1773,7 +1852,7 @@ impl RestState {
 /// an escape that would introduce a `/` changes the structure and is refused.
 const ENCODED_SLASH_PATH_ERROR: &str = "encoded '/' in a path segment";
 
-fn decode_path(path: &str) -> Result<String, Status> {
+pub(crate) fn decode_path(path: &str) -> Result<String, Status> {
     let mut out = String::with_capacity(path.len());
     for (i, segment) in path.split('/').enumerate() {
         if i > 0 {
@@ -1869,6 +1948,43 @@ const CUSTOM_METHODS: &[&str] = &[
     "executePipeline",
 ];
 
+/// The gRPC method a REST route transcodes to, as production's front end names it in the
+/// `ErrorInfo` of a refused credential. A document read is `GetOrListDocuments` (recorded);
+/// the others are the methods of the Firestore service.
+fn transcoded_method(http_method: &str, action: Option<&str>) -> Option<&'static str> {
+    Some(match (http_method, action) {
+        ("GET", None) => "GetOrListDocuments",
+        ("POST", None) => "CreateDocument",
+        ("PATCH", None) => "UpdateDocument",
+        ("DELETE", None) => "DeleteDocument",
+        ("POST", Some("commit")) => "Commit",
+        ("POST", Some("batchWrite")) => "BatchWrite",
+        ("POST", Some("batchGet")) => "BatchGetDocuments",
+        ("POST", Some("beginTransaction")) => "BeginTransaction",
+        ("POST", Some("rollback")) => "Rollback",
+        ("POST", Some("runQuery")) => "RunQuery",
+        ("POST", Some("runAggregationQuery")) => "RunAggregationQuery",
+        ("POST", Some("listCollectionIds")) => "ListCollectionIds",
+        ("POST", Some("partitionQuery")) => "PartitionQuery",
+        ("POST", Some("executePipeline")) => "ExecutePipeline",
+        _ => return None,
+    })
+}
+
+/// A credential refusal as REST carries it: the front end's OAuth refusal gains the
+/// `ErrorInfo` production attaches; every other refusal is unchanged.
+fn front_end_refusal(status: Status, http_method: &str, action: Option<&str>) -> Status {
+    match transcoded_method(http_method, action) {
+        Some(method)
+            if status.code() == Code::Unauthenticated
+                && status.message() == rules::INVALID_CREDENTIALS_MESSAGE =>
+        {
+            crate::production_status::credentials_missing(status.message(), method)
+        }
+        _ => status,
+    }
+}
+
 fn database_of(resource: &str) -> Result<String, Status> {
     resource
         .strip_suffix("/documents")
@@ -1878,9 +1994,9 @@ fn database_of(resource: &str) -> Result<String, Status> {
         })
 }
 
-/// Recognizes only the strict REST Commit resource route. The custom-method suffix is
+/// Recognizes only the REST Commit resource route. The custom-method suffix is
 /// checked before decoding so encoded colons remain document data rather than routing syntax.
-pub(crate) fn is_strict_commit_route(method: &str, raw_path: &str) -> bool {
+pub(crate) fn is_commit_route(method: &str, raw_path: &str) -> bool {
     if method != "POST" {
         return false;
     }
@@ -1944,10 +2060,15 @@ fn writes_from_json(body: &Value) -> Result<Vec<pb::Write>, Status> {
     }
 }
 
-fn batch_writes_from_json(body: &Value) -> Result<Vec<pb::Write>, Status> {
+fn batch_writes_from_json(
+    body: &Value,
+    field_order: &[Vec<String>],
+) -> Result<Vec<pb::Write>, Status> {
     match body.get("writes") {
         None | Some(Value::Null) => Ok(Vec::new()),
-        Some(Value::Array(items)) => batch_write_rows_from_json(items).map_err(|e| bad(&e)),
+        Some(Value::Array(items)) => {
+            batch_write_rows_from_json(items, field_order).map_err(|e| bad(&e))
+        }
         Some(_) => Err(Status::invalid_argument("writes must be an array")),
     }
 }
@@ -1998,7 +2119,7 @@ fn precondition_from_params(
 
 #[cfg(test)]
 mod strict_commit_route_tests {
-    use super::is_strict_commit_route;
+    use super::is_commit_route;
 
     #[test]
     fn encoded_slash_path_error_uses_the_shared_contract() {
@@ -2010,23 +2131,23 @@ mod strict_commit_route_tests {
 
     #[test]
     fn recognizes_only_the_documents_root_commit_route() {
-        assert!(is_strict_commit_route(
+        assert!(is_commit_route(
             "POST",
             "/v1/projects/demo/databases/(default)/documents:commit"
         ));
-        assert!(!is_strict_commit_route(
+        assert!(!is_commit_route(
             "GET",
             "/v1/projects/demo/databases/(default)/documents:commit"
         ));
-        assert!(!is_strict_commit_route(
+        assert!(!is_commit_route(
             "POST",
             "/v1/projects/demo/databases/(default)/documents/cases:commit"
         ));
-        assert!(!is_strict_commit_route(
+        assert!(!is_commit_route(
             "POST",
             "/v1/projects/demo/databases/(default)/documents%3Acommit"
         ));
-        assert!(!is_strict_commit_route(
+        assert!(!is_commit_route(
             "POST",
             "/v1/projects/demo/databases/(default)/documents:commit?x=1"
         ));

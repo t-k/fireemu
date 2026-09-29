@@ -925,6 +925,8 @@ pub struct FirestoreState {
     live_paths: BTreeSet<Arc<DocumentPath>>,
     /// Which limits commits refuse.
     limit_scope: LimitScope,
+    /// The RPC the next commit arrived through, which prices a delete's transaction.
+    write_route: crate::index_usage::WriteRoute,
     version: CommitVersion,
     next_transaction: u64,
     next_query_execution: u64,
@@ -977,6 +979,7 @@ impl Default for FirestoreState {
             live_collection_group_paths: BTreeMap::new(),
             live_paths: BTreeSet::new(),
             limit_scope: LimitScope::default(),
+            write_route: crate::index_usage::WriteRoute::default(),
             version: CommitVersion::default(),
             next_transaction: 0,
             next_query_execution: 0,
@@ -1309,6 +1312,12 @@ impl FirestoreState {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Names the RPC the next commit arrives through. The caller sets it with the database lock
+    /// held, before each commit, as it sets the index catalog.
+    pub fn set_write_route(&mut self, route: crate::index_usage::WriteRoute) {
+        self.write_route = route;
     }
 
     /// Installs the index generation used to validate subsequent writes and imports.
@@ -1938,6 +1947,7 @@ impl FirestoreState {
             live_collection_group_paths,
             live_paths,
             limit_scope: self.limit_scope,
+            write_route: self.write_route,
             version: self.version,
             next_transaction: self.next_transaction,
             next_query_execution: self.next_query_execution,
@@ -1997,8 +2007,11 @@ impl FirestoreState {
                 version: next_version,
             };
             validate_document(&document, self.limit_scope)?;
-            self.index_catalog
-                .document_index_usage(&document.path, &document.fields)?;
+            self.index_catalog.document_index_usage_in(
+                &document.path,
+                &document.fields,
+                self.limit_scope,
+            )?;
             staged.insert(imported.path, document);
         }
         self.last_commit_time = Some(commit_time);
@@ -3337,11 +3350,25 @@ impl FirestoreState {
             let stage = staged.get_mut(&path).unwrap_or_else(|| unreachable!());
             let current = stage.current.as_deref();
             check_precondition(write.precondition.as_ref(), current, &path)?;
+            if let (WriteOp::Delete { .. }, Some(stored), LimitScope::Production) =
+                (&write.op, current, self.limit_scope)
+            {
+                // A delete is priced per route (owner decisions A and D2, 2026-09-25); the
+                // emulator profile adds no refusal the official emulator does not make.
+                self.index_catalog.delete_transaction_check(
+                    &stored.path,
+                    &stored.fields,
+                    self.write_route,
+                )?;
+            }
             let (next, mut result) = apply_write(write, current, commit_time, next_version)?;
             if let Some(Cow::Owned(doc)) = &next {
                 validate_document(doc, self.limit_scope)?;
-                self.index_catalog
-                    .document_index_usage(&doc.path, &doc.fields)?;
+                self.index_catalog.document_index_usage_in(
+                    &doc.path,
+                    &doc.fields,
+                    self.limit_scope,
+                )?;
             }
             if matches!(write.op, WriteOp::Verify { .. }) {
                 // A verify changes nothing and reports the document's current update time,
@@ -5056,6 +5083,15 @@ impl<'a> PropertyPath<'a> {
         }
     }
 
+    /// The top-level property this path descends from.
+    fn top(&self) -> &'a str {
+        let mut current = self;
+        while let Some(parent) = current.parent {
+            current = parent;
+        }
+        current.name
+    }
+
     /// The dotted canonical form. Only a refusal renders one, so walking back up to the root
     /// here costs nothing on the path every accepted write takes.
     fn canonical(&self) -> String {
@@ -5120,6 +5156,11 @@ fn validate_value(
         Value::Map(fields) => {
             let mut total = 0u64;
             for (name, value) in fields {
+                // Production refuses an empty or over-long map key as an invalid nested entity
+                // of the top-level property (`writes/map-key-validation/*`).
+                if name.is_empty() || name.len() > crate::field_path::MAX_FIELD_NAME_BYTES {
+                    return Err(invalid_nested_entity(property_path));
+                }
                 validate_stored_field_name(name)?;
                 // Production accepts a direct field of an array-held map at 1,494 UTF-8
                 // bytes and refuses 1,495, even when the full implied path is shorter
@@ -5145,19 +5186,10 @@ fn validate_value(
         }
         _ => scalar_size(value)?,
     };
-    // `FS-LIMIT-FIELD-VALUE-BYTES` on an aggregate. The catalog's unit is logical bytes, so
-    // a map or an array is measured with the official storage-size formula; a string or a
-    // bytes payload keeps the raw-payload metric observed above. The saved aggregate-map
-    // observations establish that map accounting does not add 32 bytes. The aggregate
-    // threshold itself is not bracketed, so only the strict profile refuses one: the
-    // compatibility contract forbids adding a refusal to the `emulator` profile. The check
-    // runs after the recursion so that the innermost violation is the one reported.
-    if scope == LimitScope::Production
-        && matches!(value, Value::Array(_) | Value::Map(_))
-        && size > limits::MAX_FIELD_PAYLOAD_BYTES as u64
-    {
-        return Err(field_value_too_long(property_path));
-    }
+    // `FS-LIMIT-FIELD-VALUE-BYTES` is not applied to a map or an array as a whole: production
+    // accepted a map of 1,048,488 logical bytes, one over the catalog figure (FS-DATA-WRITE
+    // bracket recording, 2026-09-27), so only `FS-LIMIT-DOCUMENT-BYTES` bounds an aggregate.
+    // A string or a bytes payload keeps the raw-payload limit observed above.
     Ok(size)
 }
 
@@ -5180,8 +5212,21 @@ fn scalar_size(value: &Value) -> Result<u64, FirestoreError> {
     field_value_size(value).map_err(|e| FirestoreError::InvalidArgument(e.to_string()))
 }
 
-/// The production wording for a field value over `FS-LIMIT-FIELD-VALUE-BYTES`.
+/// Production's answer for a violation inside a nested value: it names the top-level property.
+fn invalid_nested_entity(property_path: &PropertyPath) -> FirestoreError {
+    FirestoreError::InvalidArgument(format!(
+        "Property {} contains an invalid nested entity.",
+        property_path.top()
+    ))
+}
+
+/// The production wording for a field value over `FS-LIMIT-FIELD-VALUE-BYTES`. A value nested
+/// in a map is an invalid nested entity of its top-level property
+/// (`writes/limits/aggregate-map/strict-only`); a top-level value is named by its path.
 fn field_value_too_long(property_path: &PropertyPath) -> FirestoreError {
+    if property_path.parent.is_some() {
+        return invalid_nested_entity(property_path);
+    }
     FirestoreError::InvalidArgument(format!(
         "The value of property \"{}\" is longer than {} bytes.",
         property_path.canonical(),

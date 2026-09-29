@@ -27,7 +27,12 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "requireDemoPrefix": { "type": "boolean", "default": true }
+        "requireDemoPrefix": { "type": "boolean", "default": true },
+        "unknownProjects": {
+          "description": "Under the strict profile, refuse a request naming a project other than the daemon's with production's 403 PERMISSION_DENIED (CONSUMER_INVALID) instead of serving it in its own session (scope decision C11 of FS-CONFIG-LIFECYCLE).",
+          "enum": ["serve", "refuse"],
+          "default": "serve"
+        }
       }
     },
     "limits": {
@@ -81,6 +86,13 @@
           "type": "string",
           "format": "date-time",
           "description": "When the daemon's databases were created: the createTime they report and the instant before which a read_time is refused with INVALID_ARGUMENT. Defaults to the daemon's start; a run compared with a production database names that database's createTime. It must not be after the clock start."
+        },
+        "deletedDatabaseIdCooldownSeconds": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 300,
+          "default": 300,
+          "description": "How long the id of a deleted database stays unavailable to databases.create. Production's is 300 seconds; a comparison run may shorten it, because how long a transitional state lasts is not compared (FS-CONFIG-LIFECYCLE scope decision C10)."
         },
         "ttlSweepIntervalSeconds": {
           "type": "integer",
@@ -215,14 +227,41 @@
         },
         "improvedEmailPrivacy": {
           "type": "boolean",
-          "description": "Email enumeration protection, as production enables it for every new project: wrong-password and unknown-address sign-ins answer INVALID_LOGIN_CREDENTIALS and a password reset for an unknown address is acknowledged. Defaults to true; false restores the official Auth emulator's EMAIL_NOT_FOUND and INVALID_PASSWORD answers."
+          "description": "Email enumeration protection, as production enables it for every new project: wrong-password and unknown-address sign-ins answer INVALID_LOGIN_CREDENTIALS and a password reset for an unknown address is acknowledged. Defaults to true under the strict profile and to false, the official Auth emulator's default, under the emulator profile; false gives the official Auth emulator's EMAIL_NOT_FOUND and INVALID_PASSWORD answers."
         },
         "signIn": {
           "type": "object",
           "additionalProperties": false,
           "properties": {
-            "allowDuplicateEmails": { "type": "boolean", "default": false }
-          }
+            "allowDuplicateEmails": { "type": "boolean", "default": false },
+            "email": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "enabled": { "type": "boolean", "default": true },
+                "passwordRequired": { "type": "boolean", "default": false }
+              }
+            },
+            "anonymous": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": { "enabled": { "type": "boolean", "default": true } }
+            },
+            "phoneNumber": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "enabled": { "type": "boolean", "default": true },
+                "testPhoneNumbers": {
+                  "type": "object",
+                  "maxProperties": 10,
+                  "propertyNames": { "pattern": "^\\+[1-9][0-9]{1,14}$" },
+                  "additionalProperties": { "type": "string" }
+                }
+              }
+            }
+          },
+          "description": "The project's sign-in providers. Every provider starts enabled in both profiles (a new production project enables none), so a production project's providers and test phone numbers can be carried over here."
         },
         "client": {
           "type": "object",

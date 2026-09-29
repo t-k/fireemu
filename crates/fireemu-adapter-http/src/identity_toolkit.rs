@@ -31,9 +31,9 @@ use fireemu_core_auth::signup_quota::{
 use fireemu_core_auth::store::{
     AuthError, AuthPrincipal, AuthStore, CredentialNotice, FederatedIdentity,
     InboundSamlProviderConfig, LocalId, NewUser, OAuthResponseType, OidcProviderConfig,
-    OobRequestType, PendingSignInId, PhoneCodeUse, ProjectAuthConfigPatch, RoutedStoreInstall,
-    SecondFactorAssertion, SignInConfig, UserQueryExpression, UserSortField, VerificationCode,
-    VerificationPurpose,
+    OobRequestType, PendingSignInId, PhoneCodeUse, ProjectAuthConfigPatch,
+    ProjectConfigStoreUpdate, RoutedStoreInstall, SecondFactorAssertion, SignInConfig,
+    UserQueryExpression, UserSortField, VerificationCode, VerificationPurpose,
 };
 use fireemu_core_session::clock::VirtualClock;
 pub use fireemu_core_session::loopback::origin_is_local;
@@ -66,7 +66,11 @@ const SIGNUP_QUOTA_FIELDS: [&str; 3] = ["quota", "startTime", "quotaDuration"];
 
 mod custom_token;
 pub use custom_token::{CustomTokenRefusal, CustomTokenTrust};
+mod config_proto;
 mod password_hash;
+mod phone_region;
+mod project_config;
+mod project_mfa;
 pub use password_hash::restorable_spec as restorable_imported_hash_spec;
 mod routes;
 pub mod widget;
@@ -950,6 +954,7 @@ fn auth_error(e: &AuthError) -> JsonResponse {
         AuthError::InvalidPhoneNumber => error(400, "INVALID_PHONE_NUMBER"),
         AuthError::EmailNotFound => error(400, "EMAIL_NOT_FOUND"),
         AuthError::InvalidOobCode => error(400, "INVALID_OOB_CODE"),
+        AuthError::ExpiredOobCode => error(400, "EXPIRED_OOB_CODE"),
         AuthError::InvalidSessionInfo => error(400, "INVALID_SESSION_INFO"),
         AuthError::InvalidVerificationCode => error(400, "INVALID_CODE"),
         AuthError::FederatedUserIdAlreadyLinked => error(400, "FEDERATED_USER_ID_ALREADY_LINKED"),
@@ -1015,6 +1020,17 @@ fn mfa_error(e: &MfaError) -> JsonResponse {
         MfaError::InvalidCode => error(400, "INVALID_CODE"),
         MfaError::CodeAlreadyUsed => error(400, "INVALID_CODE : verification code already used"),
         MfaError::EnrollmentSessionExpired => error(400, "SESSION_EXPIRED"),
+        MfaError::TooManyEnrollmentAttempts => {
+            error(400, "TOO_MANY_ENROLLMENT_ATTEMPTS : restart enrollment")
+        }
+        MfaError::EnrollmentAlreadyComplete => error(
+            400,
+            "MFA_ENROLLMENT_ALREADY_COMPLETE : This MFA enrollment has already been completed.",
+        ),
+        MfaError::TotpChallengeTimeout => error(
+            400,
+            "TOTP_CHALLENGE_TIMEOUT : TOTP challenge timeout, provide first factor again.",
+        ),
         MfaError::EnrollmentSessionUnknown | MfaError::PendingSignInUnknown => {
             error(400, "INVALID_SESSION_INFO")
         }
@@ -1190,6 +1206,8 @@ fn verify_honouring_legacy(
 /// whose behaviour depends on the first factor).
 struct Session {
     uid: LocalId,
+    /// The token's `auth_time` (Unix seconds), when it carries one.
+    auth_time: Option<i64>,
     provider: String,
     second_factor: Option<SecondFactorAssertion>,
     extra_claims: CustomClaims,
@@ -1221,9 +1239,10 @@ fn verify_session_with_error(
 }
 
 /// Whether a route honours the legacy Identity Toolkit token. Production was observed to honour
-/// it on account lookup, update and delete, a verification mail, phone linking, a sign-up
-/// upgrade and MFA enrollment (sandbox recordings 2026-09-24); email-link and identity-provider linking and
-/// session-cookie creation refuse it (the last observed, the others until observed).
+/// it on account lookup, update and delete, a verification mail and an email change, phone
+/// linking, email-link linking, a sign-up upgrade and MFA enrollment (sandbox recordings
+/// 2026-09-24); identity-provider linking and session-cookie creation refuse it (the last
+/// observed, the other until observed).
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum LegacyTokens {
     Honoured,
@@ -1297,6 +1316,7 @@ fn verify_session_accepting(
         .user_by_id(&v.uid)
         .map(|u| Session {
             uid: u.local_id.clone(),
+            auth_time: decoded.payload.get("auth_time").and_then(JsonValue::as_i64),
             provider,
             second_factor,
             extra_claims,
@@ -2475,6 +2495,7 @@ fn dispatch_with_blocking_hook(
                 };
                 Some(Session {
                     uid: session.uid,
+                    auth_time: Some(claims.auth_time),
                     provider: claims.firebase.sign_in_provider,
                     second_factor: session.second_factor,
                     extra_claims: claims.custom,
@@ -2789,6 +2810,16 @@ fn handle_with_policy(
     } else {
         match select_store(state, path, query, body, resolution) {
             Ok(store) => store,
+            // Production answers a client policy read of an unknown tenant with the v2 API's
+            // INVALID_TENANT_ID (sandbox recording 2026-09-25).
+            Err(response) if response.body["error"]["message"] == "TENANT_NOT_FOUND" => {
+                return match resolution {
+                    routes::Resolution::Matched { route, .. } => {
+                        unknown_tenant_refusal(route.handler, response)
+                    }
+                    _ => response,
+                };
+            }
             Err(response) => return response,
         }
     };
@@ -3021,7 +3052,7 @@ fn handle_with_policy(
         return tenant_management(state, route.handler, project, tenant, query, body);
     }
     if tenant.is_some() && store.tenant_id() != tenant {
-        return error(404, "TENANT_NOT_FOUND");
+        return unknown_tenant_refusal(route.handler, error(404, "TENANT_NOT_FOUND"));
     }
     if route.handler == routes::Handler::SignInWithIdp
         && state.idp_continuations == IdpContinuationPolicy::Disabled
@@ -3064,6 +3095,11 @@ fn handle_with_policy(
             return denial;
         }
     }
+    if !state.stateless_refresh_tokens {
+        if let Some(denial) = new_account_code_denial(route.handler, &store, body) {
+            return denial;
+        }
+    }
     // Verify the selected namespace and assertion before any account or transient mutation.
     if route.handler == routes::Handler::SignInWithIdp {
         if let Some(trust) = oidc_trust {
@@ -3076,6 +3112,10 @@ fn handle_with_policy(
             }
         }
     }
+    // Strict (stateful refresh sessions) follows production's action-code lifetimes: a reset
+    // code lives an hour and is then refused as expired (sandbox recording 2026-09-24).
+    store.set_production_oob_lifetimes(!state.stateless_refresh_tokens);
+    store.set_production_mfa(!state.stateless_refresh_tokens);
     // Expired transient credentials are swept before every request is served, so nothing
     // past its lifetime is observable (`AUTH-TRANSIENT-01`, `-02`).
     store.sweep_transient_credentials(at);
@@ -3465,28 +3505,48 @@ fn dispatch(
             options.stateless_refresh_tokens,
             handler == Handler::AdminUpdate,
         ),
-        Handler::Delete => delete_account(store, body, at, false),
-        Handler::SendOobCode => send_oob_code(store, body, at, headers, false),
+        Handler::Delete => {
+            delete_account(store, body, at, false, !options.stateless_refresh_tokens)
+        }
+        Handler::SendOobCode => send_oob_code(
+            store,
+            body,
+            at,
+            headers,
+            false,
+            !options.stateless_refresh_tokens,
+        ),
         Handler::ResetPassword => reset_password(store, body, at, options.stateless_refresh_tokens),
-        Handler::SignInWithEmailLink => sign_in_with_email_link(store, body, at),
-        Handler::SendVerificationCode => send_verification_code(store, body, at),
+        Handler::SignInWithEmailLink => {
+            sign_in_with_email_link(store, body, at, !options.stateless_refresh_tokens)
+        }
+        Handler::SendVerificationCode => {
+            if !options.stateless_refresh_tokens {
+                if let Some(refusal) = sms_region_refusal(store, body) {
+                    return refusal;
+                }
+            }
+            send_verification_code(store, body, at)
+        }
         Handler::SignInWithPhoneNumber => sign_in_with_phone_number(store, body, at),
         Handler::SignInWithIdp => {
             sign_in_with_idp(store, body, at, options.inbound_credential_policy)
         }
-        Handler::CreateAuthUri => create_auth_uri(store, body),
-        Handler::Projects => JsonResponse {
-            status: 200,
-            body: json!({"projectId": store.project_id(), "authorizedDomains": ["localhost"]}),
-        },
-        Handler::RecaptchaParams => JsonResponse {
-            status: 200,
-            body: json!({
+        Handler::CreateAuthUri => create_auth_uri(store, body, !options.stateless_refresh_tokens),
+        Handler::Projects => client_project_config(store, !options.stateless_refresh_tokens),
+        Handler::RecaptchaParams => {
+            let mut body = json!({
                 "kind": "identitytoolkit#GetRecaptchaParamResponse",
                 "recaptchaStoken": "This-is-a-fake-token__Dont-send-this-to-the-Recaptcha-service__The-Auth-Emulator-does-not-support-Recaptcha",
                 "recaptchaSiteKey": "Fake-key__Do-not-send-this-to-Recaptcha_",
-            }),
-        },
+            });
+            // Production also names the reCAPTCHA project; no key of it is real here.
+            if !options.stateless_refresh_tokens {
+                body["producerProjectNumber"] = json!("000000000000");
+            }
+            JsonResponse { status: 200, body }
+        }
+        Handler::RecaptchaConfig => project_config::client_recaptcha_config(store, query),
         Handler::PasswordPolicy => password_policy_json(store.password_policy()),
         // Strict: production's answer when TOTP is not enabled, and the v2 API's error shape
         // (sandbox recording 2026-09-24); the emulator keeps the official emulator's.
@@ -3500,22 +3560,48 @@ fn dispatch(
             ),
             !options.stateless_refresh_tokens,
         ),
-        Handler::MfaEnrollmentFinalize => mfa_enrollment_finalize(store, body, at),
-        Handler::MfaEnrollmentWithdraw => v2_error_shape(
-            mfa_enrollment_withdraw(store, body, at),
+        Handler::MfaEnrollmentFinalize => v2_error_shape(
+            mfa_enrollment_finalize(store, body, at),
             !options.stateless_refresh_tokens,
         ),
-        Handler::MfaSignInStart => mfa_sign_in_start(store, body, at),
-        Handler::MfaSignInFinalize => mfa_sign_in_finalize(store, body, at),
+        Handler::MfaEnrollmentWithdraw => v2_error_shape(
+            if store.second_factor_rules_are_production() {
+                mfa_enrollment_withdraw_production(store, body, at)
+            } else {
+                mfa_enrollment_withdraw(store, body, at)
+            },
+            !options.stateless_refresh_tokens,
+        ),
+        Handler::MfaSignInStart => v2_error_shape(
+            {
+                let production = store.second_factor_rules_are_production();
+                mfa_sign_in_start(store, body, at, production)
+            },
+            !options.stateless_refresh_tokens,
+        ),
+        Handler::MfaSignInFinalize => v2_error_shape(
+            if store.second_factor_rules_are_production() {
+                mfa_sign_in_finalize_production(store, body, at)
+            } else {
+                mfa_sign_in_finalize(store, body, at)
+            },
+            !options.stateless_refresh_tokens,
+        ),
         Handler::Token => {
             secure_token_error_shape(refresh(store, body, at, options.stateless_refresh_tokens))
         }
         Handler::AdminCreate => admin_create(store, body, at),
         Handler::AdminLookup => lookup(store, body, at, true),
-        Handler::AdminDelete => delete_account(store, body, at, true),
+        Handler::AdminDelete => {
+            delete_account(store, body, at, true, !options.stateless_refresh_tokens)
+        }
         Handler::AdminBatchGet => admin_batch_get(store, query, body),
-        Handler::AdminBatchCreate => admin_batch_create(store, body, at),
-        Handler::AdminBatchDelete => admin_batch_delete(store, body),
+        Handler::AdminBatchCreate => {
+            admin_batch_create(store, body, at, !options.stateless_refresh_tokens)
+        }
+        Handler::AdminBatchDelete => {
+            admin_batch_delete(store, body, !options.stateless_refresh_tokens)
+        }
         Handler::AdminQuery => admin_query(store, body, options.query_limits),
         // Admin link generators: the code and link come back to the caller.
         Handler::AdminSendOobCode => {
@@ -3524,7 +3610,14 @@ fn dispatch(
             }
             let mut with_link = body.clone();
             with_link["returnOobLink"] = json!(true);
-            send_oob_code(store, &with_link, at, headers, true)
+            send_oob_code(
+                store,
+                &with_link,
+                at,
+                headers,
+                true,
+                !options.stateless_refresh_tokens,
+            )
         }
         // Stateful refresh sessions mark the strict profile.
         Handler::AdminCreateSessionCookie => {
@@ -3550,11 +3643,47 @@ fn dispatch(
             emulator_route(store, "DELETE", "accounts", headers, body)
         }
         Handler::EmulatorGetConfig => emulator_route(store, "GET", "config", headers, body),
-        Handler::EmulatorPatchConfig => emulator_route(store, "PATCH", "config", headers, body),
+        Handler::EmulatorPatchConfig => {
+            let body = emulator_config_patch(body, !options.stateless_refresh_tokens);
+            emulator_route(store, "PATCH", "config", headers, &body)
+        }
         Handler::EmulatorAction => {
             emulator_action(store, query, headers, at, options.stateless_refresh_tokens)
         }
     }
+}
+
+/// Production's answers to a refused `mfa` value (sandbox recording 2026-09-24,
+/// `auth-mfa/config`): the v2 Admin API's shape, without the v1 `errors` list.
+fn mfa_config_refusal(refusal: &project_mfa::MfaConfigRefusal) -> JsonResponse {
+    use project_mfa::MfaConfigRefusal;
+    let body = match refusal {
+        MfaConfigRefusal::InvalidEnum {
+            field,
+            type_name,
+            value,
+        } => {
+            let message = format!(
+                "Invalid value at '{field}' (type.googleapis.com/google.cloud.identitytoolkit.admin.v2.{type_name}), \"{value}\""
+            );
+            json!({"error": {
+                "code": 400,
+                "message": message,
+                "status": "INVALID_ARGUMENT",
+                "details": [{
+                    "@type": "type.googleapis.com/google.rpc.BadRequest",
+                    "fieldViolations": [{"field": field, "description": message}],
+                }],
+            }})
+        }
+        MfaConfigRefusal::AdjacentIntervalRange => json!({"error": {
+            "code": 400,
+            "message": "INVALID_ADJACENT_INTERVAL_RANGE : Allowed number of adjacent intervals must be between 0 and 10, inclusive",
+            "status": "INVALID_ARGUMENT",
+        }}),
+        MfaConfigRefusal::Shape => return error(400, "INVALID_ARGUMENT"),
+    };
+    JsonResponse { status: 400, body }
 }
 
 fn install_routed_candidate(
@@ -3633,19 +3762,55 @@ fn apply_project_config_fields(
                     &["client", "permissions", "disabledUserDeletion"],
                 )?);
             }
-            field
-                if field == "passwordPolicyConfig"
-                    || field.starts_with("passwordPolicyConfig.")
-                    || SIGN_IN_PROVIDER_FIELDS.contains(&field)
-                    || valid_blocking_config_field(field)
-                    || valid_quota_field(field) => {}
-            _ => return Err(error(400, "INVALID_ARGUMENT")),
+            // The caller refused every field it does not model; the policy, quota, sign-in,
+            // blocking and stored members are applied on their own.
+            _ => {}
         }
     }
     Ok(())
 }
 
-fn password_policy_from_config_json(value: &Value) -> Result<PasswordPolicy, JsonResponse> {
+/// The strength options of a written policy's one version, `None` for the default options.
+/// Production requires exactly one version (sandbox recording 2026-09-25); without
+/// `one_version` a policy without versions takes the default options.
+fn policy_version_options(
+    object: &serde_json::Map<String, Value>,
+    one_version: bool,
+) -> Result<Option<&serde_json::Map<String, Value>>, JsonResponse> {
+    let one_version_refusal =
+        || config_proto::refusal("INVALID_CONFIG : Policy versions list must be of length 1");
+    match object.get("passwordPolicyVersions") {
+        None | Some(Value::Null) if one_version => Err(one_version_refusal()),
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Array(versions)) if versions.len() != 1 => Err(if one_version {
+            one_version_refusal()
+        } else {
+            error(400, "INVALID_ARGUMENT")
+        }),
+        Some(Value::Array(versions)) => {
+            let version = versions[0]
+                .as_object()
+                .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?;
+            if version.keys().any(|field| field != "customStrengthOptions") {
+                return Err(error(400, "INVALID_ARGUMENT"));
+            }
+            match version.get("customStrengthOptions") {
+                Some(Value::Object(options)) => Ok(Some(options)),
+                Some(Value::Null) => Ok(None),
+                None | Some(_) => Err(error(400, "INVALID_ARGUMENT")),
+            }
+        }
+        Some(_) => Err(error(400, "INVALID_ARGUMENT")),
+    }
+}
+
+/// A written password policy. Strict requires exactly one version, as production does
+/// (sandbox recording 2026-09-25); otherwise a policy without versions takes the default
+/// options, as the official emulator (which does not check the policy) takes it.
+fn password_policy_from_config_json(
+    value: &Value,
+    one_version: bool,
+) -> Result<PasswordPolicy, JsonResponse> {
     let object = value
         .as_object()
         .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?;
@@ -3660,6 +3825,7 @@ fn password_policy_from_config_json(value: &Value) -> Result<PasswordPolicy, Jso
         Some(Value::String(value)) => match value.as_str() {
             "OFF" => EnforcementState::Off,
             "ENFORCE" => EnforcementState::Enforce,
+            "PASSWORD_POLICY_ENFORCEMENT_STATE_UNSPECIFIED" => EnforcementState::Unspecified,
             _ => return Err(error(400, "INVALID_ARGUMENT")),
         },
         Some(_) => return Err(error(400, "INVALID_ARGUMENT")),
@@ -3669,23 +3835,7 @@ fn password_policy_from_config_json(value: &Value) -> Result<PasswordPolicy, Jso
         Some(Value::Bool(value)) => *value,
         Some(_) => return Err(error(400, "INVALID_ARGUMENT")),
     };
-    let options = match object.get("passwordPolicyVersions") {
-        None | Some(Value::Null) => None,
-        Some(Value::Array(versions)) if versions.len() == 1 => {
-            let version = versions[0]
-                .as_object()
-                .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?;
-            if version.keys().any(|field| field != "customStrengthOptions") {
-                return Err(error(400, "INVALID_ARGUMENT"));
-            }
-            match version.get("customStrengthOptions") {
-                Some(Value::Object(options)) => Some(options),
-                Some(Value::Null) => None,
-                None | Some(_) => return Err(error(400, "INVALID_ARGUMENT")),
-            }
-        }
-        Some(_) => return Err(error(400, "INVALID_ARGUMENT")),
-    };
+    let options = policy_version_options(object, one_version)?;
     if options.is_some_and(|options| {
         options
             .keys()
@@ -3731,12 +3881,37 @@ fn password_policy_from_config_json(value: &Value) -> Result<PasswordPolicy, Jso
         boolean("containsNonAlphanumericCharacter")?,
         fireemu_core_auth::password_policy::default_allowed_non_alphanumeric(),
     )
-    .map_err(|_| error(400, "INVALID_ARGUMENT"))
+    .map(|mut policy| {
+        policy.min_length_written = options
+            .and_then(|o| o.get("minPasswordLength"))
+            .is_some_and(|v| !v.is_null());
+        policy
+    })
+    .map_err(|refused| password_policy_refusal(refused, max))
+}
+
+/// Production's wording of each password policy refusal (sandbox recording 2026-09-25).
+fn password_policy_refusal(
+    refused: fireemu_core_auth::password_policy::ConfigError,
+    max: Option<usize>,
+) -> JsonResponse {
+    use fireemu_core_auth::password_policy::ConfigError;
+    config_proto::refusal(match refused {
+        ConfigError::InvalidMinimumLength => {
+            "INVALID_CONFIG : Minimum password length must be between 6 and 30"
+        }
+        ConfigError::InvalidMaximumLength if max.is_some_and(|max| max > 4096) => {
+            "INVALID_CONFIG : Maximum password length must be less than or equal to 4096"
+        }
+        ConfigError::InvalidMaximumLength => {
+            "INVALID_CONFIG : Maximum password length must be greater than or equal to the minimum password length"
+        }
+        ConfigError::InvalidAllowedCharacter => "INVALID_CONFIG",
+    })
 }
 
 fn password_policy_config_json(policy: &PasswordPolicy) -> Value {
     let mut options = serde_json::Map::from_iter([
-        ("minPasswordLength".to_owned(), json!(policy.min_length)),
         (
             "containsUppercaseCharacter".to_owned(),
             json!(policy.require_uppercase),
@@ -3754,23 +3929,30 @@ fn password_policy_config_json(policy: &PasswordPolicy) -> Value {
             json!(policy.require_non_alphanumeric),
         ),
     ]);
+    if policy.min_length_written || !policy.configured {
+        options.insert("minPasswordLength".to_owned(), json!(policy.min_length));
+    }
     if let Some(max) = policy.max_length {
         options.insert("maxPasswordLength".to_owned(), json!(max));
     }
-    json!({
-        "passwordPolicyEnforcementState": match policy.enforcement_state {
-            EnforcementState::Off => "OFF",
-            EnforcementState::Enforce => "ENFORCE",
-        },
+    let mut config = json!({
         "forceUpgradeOnSignin": policy.force_upgrade_on_signin,
         "passwordPolicyVersions": [{"customStrengthOptions": options}],
-    })
+    });
+    // Production stores an unspecified state as none.
+    match policy.enforcement_state {
+        EnforcementState::Off => config["passwordPolicyEnforcementState"] = json!("OFF"),
+        EnforcementState::Enforce => config["passwordPolicyEnforcementState"] = json!("ENFORCE"),
+        EnforcementState::Unspecified => {}
+    }
+    config
 }
 
 fn password_policy_from_update(
     current: &PasswordPolicy,
     body: &Value,
     fields: &[String],
+    one_version: bool,
 ) -> Result<Option<PasswordPolicy>, JsonResponse> {
     let policy_fields: Vec<&str> = fields
         .iter()
@@ -3782,9 +3964,8 @@ fn password_policy_from_update(
     if policy_fields.is_empty() {
         return Ok(None);
     }
-    let Some(value) = body.get("passwordPolicyConfig") else {
-        return Err(error(400, "INVALID_ARGUMENT"));
-    };
+    // A masked policy the body leaves out is cleared, as a null one is.
+    let value = body.get("passwordPolicyConfig").unwrap_or(&Value::Null);
     if value.is_null() && policy_fields.contains(&"passwordPolicyConfig") {
         if policy_fields.len() != 1 {
             return Err(error(400, "INVALID_ARGUMENT"));
@@ -3798,18 +3979,25 @@ fn password_policy_from_update(
     };
     // Validate the complete supplied policy before applying the mask. A malformed policy
     // payload must never become a partial successful update merely because its malformed
-    // member was outside the selected mask.
-    if !value.is_null() {
-        let _supplied_policy = password_policy_from_config_json(value)?;
+    // member was outside the selected mask. A leaf update supplies no versions; the merged
+    // policy is checked below.
+    if object.contains_key("passwordPolicyVersions") {
+        let _supplied_policy = password_policy_from_config_json(value, one_version)?;
     }
     if policy_fields.contains(&"passwordPolicyConfig") {
         if policy_fields.len() != 1 {
             return Err(error(400, "INVALID_ARGUMENT"));
         }
-        return password_policy_from_config_json(value).map(Some);
+        return password_policy_from_config_json(value, one_version).map(Some);
     }
 
-    let mut merged = password_policy_config_json(current);
+    // Production merges a leaf into the stored policy, or into none when the project has none
+    // (strict); the emulator profile merges into the default policy, as it always has.
+    let mut merged = if current.configured || !one_version {
+        password_policy_config_json(current)
+    } else {
+        json!({})
+    };
     let merged_object = merged
         .as_object_mut()
         .expect("password policy projection is an object");
@@ -3833,7 +4021,7 @@ fn password_policy_from_update(
             _ => return Err(error(400, "INVALID_ARGUMENT")),
         }
     }
-    password_policy_from_config_json(&merged).map(Some)
+    password_policy_from_config_json(&merged, one_version).map(Some)
 }
 
 fn valid_password_policy_field(field: &str) -> bool {
@@ -3852,13 +4040,12 @@ fn apply_project_config_parent(
     child: &str,
     current: &mut Option<bool>,
 ) -> Result<(), JsonResponse> {
-    let Some(value) = body.get(parent) else {
-        return Ok(());
-    };
-    if value.is_null() {
+    // A masked member the body leaves out is reset, as a null one is (production reads the
+    // body as proto3 JSON, where both are the default message).
+    let Some(value) = body.get(parent).filter(|value| !value.is_null()) else {
         *current = Some(false);
         return Ok(());
-    }
+    };
     let Some(object) = value.as_object() else {
         return Err(error(400, "INVALID_ARGUMENT"));
     };
@@ -3908,7 +4095,8 @@ fn apply_project_config_parent_path(
 fn valid_project_config_field(field: &str) -> bool {
     matches!(
         field,
-        "signIn"
+        "mfa"
+            | "signIn"
             | "signIn.allowDuplicateEmails"
             | "emailPrivacyConfig"
             | "emailPrivacyConfig.enableImprovedEmailPrivacy"
@@ -3947,6 +4135,7 @@ const SIGN_IN_PROVIDER_FIELDS: &[&str] = &[
     "signIn.phoneNumber",
     "signIn.phoneNumber.enabled",
     "signIn.phoneNumber.testPhoneNumbers",
+    "authorizedDomains",
 ];
 
 /// The sign-in configuration a masked Admin config PATCH produces from `current`, or `None`
@@ -3983,6 +4172,24 @@ fn sign_in_config_from_update(
             Some(_) => Err(invalid()),
         }
     };
+    // A masked replacement: an absent or null list clears it, anything but non-empty host
+    // strings is refused.
+    let domains = || -> Result<Vec<String>, JsonResponse> {
+        match body.get("authorizedDomains") {
+            None | Some(Value::Null) => Ok(Vec::new()),
+            Some(Value::Array(entries)) => entries
+                .iter()
+                .map(|entry| {
+                    entry
+                        .as_str()
+                        .filter(|domain| !domain.is_empty())
+                        .map(str::to_owned)
+                        .ok_or_else(invalid)
+                })
+                .collect(),
+            Some(_) => Err(invalid()),
+        }
+    };
     let mut next = current.clone();
     let mut changed = false;
     for field in fields {
@@ -4009,6 +4216,7 @@ fn sign_in_config_from_update(
             "signIn.anonymous.enabled" => next.anonymous_enabled = switch("anonymous", "enabled")?,
             "signIn.phoneNumber.enabled" => next.phone_enabled = switch("phoneNumber", "enabled")?,
             "signIn.phoneNumber.testPhoneNumbers" => next.test_phone_numbers = numbers()?,
+            "authorizedDomains" => next.authorized_domains = Some(domains()?),
             _ => continue,
         }
         changed = true;
@@ -4063,6 +4271,28 @@ fn project_provider_denial(
         )
     {
         return Some(error(400, "OPERATION_NOT_ALLOWED"));
+    }
+    // Production names these refusals as the official emulator does, and sends a password
+    // reset email while the provider is off (sandbox recording 2026-09-25).
+    if !config.email_enabled
+        && matches!(
+            handler,
+            routes::Handler::SignInWithPassword | routes::Handler::ResetPassword
+        )
+    {
+        return Some(error(400, "PASSWORD_LOGIN_DISABLED"));
+    }
+    let anonymous_sign_up = handler == routes::Handler::SignUp
+        && str_field(body, "email").is_none()
+        && str_field(body, "password").is_none()
+        && body.get("idToken").is_none_or(Value::is_null);
+    if anonymous_sign_up && !config.anonymous_enabled {
+        return Some(error(400, "ADMIN_ONLY_OPERATION"));
+    }
+    if handler == routes::Handler::SendOobCode
+        && body.get("requestType").and_then(Value::as_str) == Some("PASSWORD_RESET")
+    {
+        return None;
     }
     let metadata = fireemu_core_auth::store::TenantMetadata {
         allow_password_signup: config.email_enabled,
@@ -4301,35 +4531,31 @@ fn quota_config_from_json(
             {
                 return Err(error(400, "INVALID_ARGUMENT"));
             }
-            let quota_number = quota_object
-                .get("quota")
-                .and_then(Value::as_str)
-                .filter(|value| {
-                    !value.is_empty()
-                        && value.bytes().all(|byte| byte.is_ascii_digit())
-                        && value
-                            .parse::<u64>()
-                            .is_ok_and(|value| i64::try_from(value).is_ok())
-                })
-                .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?
-                .parse::<u64>()
-                .map_err(|_| error(400, "INVALID_ARGUMENT"))?;
-            let start_time = LogicalInstant::parse_rfc3339(
-                quota_object
-                    .get("startTime")
-                    .and_then(Value::as_str)
-                    .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?,
-            )
-            .map_err(|_| error(400, "INVALID_ARGUMENT"))?;
-            let duration = quota_duration_from_json(
-                quota_object
-                    .get("quotaDuration")
-                    .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?,
-            )?;
-            Some(
-                TemporaryQuota::new(quota_number, start_time, duration)
+            // Production takes any quota it can parse: a negative or zero quota, a missing
+            // start (the epoch) and a missing or zero duration (sandbox recording
+            // 2026-09-25). fireemu's quota simulation runs only a quota it can represent;
+            // the written value is kept for the document (`project_config`).
+            let quota_number = match quota_object.get("quota") {
+                None | Some(Value::Null) => Some(0),
+                Some(value) => Some(
+                    value
+                        .as_str()
+                        .and_then(|text| text.parse::<i64>().ok())
+                        .or_else(|| value.as_i64())
+                        .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?,
+                ),
+            }
+            .and_then(|quota| u64::try_from(quota).ok());
+            let start_time = match quota_object.get("startTime").and_then(Value::as_str) {
+                None => LogicalInstant::UNIX_EPOCH,
+                Some(text) => LogicalInstant::parse_rfc3339(text)
                     .map_err(|_| error(400, "INVALID_ARGUMENT"))?,
-            )
+            };
+            let duration = match quota_object.get("quotaDuration") {
+                None | Some(Value::Null) => LogicalDuration::from_nanos(0),
+                Some(value) => quota_duration_from_json(value)?,
+            };
+            quota_number.and_then(|quota| TemporaryQuota::new(quota, start_time, duration).ok())
         };
     }
     if let Some(value) = object
@@ -4396,9 +4622,8 @@ fn quota_config_from_update(
     if quota_fields.contains(&"quota") && quota_fields.len() != 1 {
         return Err(error(400, "INVALID_ARGUMENT"));
     }
-    let Some(quota_value) = body.get("quota") else {
-        return Err(error(400, "INVALID_ARGUMENT"));
-    };
+    // A masked quota the body leaves out is cleared, as a null one is.
+    let quota_value = body.get("quota").unwrap_or(&Value::Null);
     if quota_value.is_null() {
         if quota_fields.contains(&"quota") {
             return Ok(Some(SignupQuotaConfig::default()));
@@ -4441,9 +4666,13 @@ fn quota_config_from_update(
         .iter()
         .any(|field| *field == "quota" || *field == "quota.signUpQuotaConfig")
     {
-        if let Some(value) = quota.get("signUpQuotaConfig") {
-            selected.insert("signUpQuotaConfig".to_owned(), value.clone());
-        }
+        selected.insert(
+            "signUpQuotaConfig".to_owned(),
+            quota
+                .get("signUpQuotaConfig")
+                .cloned()
+                .unwrap_or(Value::Null),
+        );
     }
     if quota_fields
         .iter()
@@ -4529,7 +4758,7 @@ fn quota_config_json(quota: &SignupQuotaConfig) -> Value {
 }
 
 #[allow(clippy::too_many_lines)]
-fn validate_project_config_payload(body: &Value) -> Result<(), JsonResponse> {
+fn validate_project_config_payload(body: &Value, one_version: bool) -> Result<(), JsonResponse> {
     let object = body
         .as_object()
         .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?;
@@ -4542,7 +4771,10 @@ fn validate_project_config_payload(body: &Value) -> Result<(), JsonResponse> {
                 | "passwordPolicyConfig"
                 | "quota"
                 | "blockingFunctions"
-        ) {
+                | "authorizedDomains"
+                | "mfa"
+        ) && !project_config::STORED_MEMBERS.contains(&key.as_str())
+        {
             return Err(error(400, "INVALID_ARGUMENT"));
         }
     }
@@ -4628,8 +4860,9 @@ fn validate_project_config_payload(body: &Value) -> Result<(), JsonResponse> {
         }
     }
     if let Some(value) = object.get("passwordPolicyConfig") {
-        if !value.is_null() {
-            password_policy_from_config_json(value)?;
+        // A leaf update supplies no versions; the merged policy is checked when applied.
+        if value.get("passwordPolicyVersions").is_some() {
+            password_policy_from_config_json(value, one_version)?;
         }
     }
     if let Some(value) = object.get("quota").filter(|value| !value.is_null()) {
@@ -4747,6 +4980,76 @@ fn contains_non_null_value(value: &Value) -> bool {
 }
 
 #[allow(clippy::too_many_lines)]
+/// The Admin v2 config document of `project` as the running profile answers it
+/// ([`project_config`]).
+fn project_config_document(
+    state: &AuthState,
+    project: &str,
+    store: &AuthStore,
+    config: fireemu_core_auth::store::ProjectAuthConfig,
+) -> Value {
+    let quota = quota_config_json(store.signup_quota().config());
+    let mut sign_in = json!({});
+    add_sign_in_config_json(&mut sign_in, store.sign_in_config());
+    let sign_in_written = {
+        let current = store.sign_in_config();
+        let initial = SignInConfig::default();
+        current.email_enabled != initial.email_enabled
+            || current.password_required != initial.password_required
+            || current.anonymous_enabled != initial.anonymous_enabled
+            || current.phone_enabled != initial.phone_enabled
+            || current.test_phone_numbers != initial.test_phone_numbers
+    };
+    let policy = store.password_policy();
+    let tenancy = state.tenancy.as_ref().and_then(|t| t.read().ok());
+    let simulation = quota
+        .get("quotaSimulation")
+        .filter(|value| value.get("mode").and_then(Value::as_str) != Some("off"))
+        .cloned();
+    let sources = project_config::ConfigSources {
+        project,
+        project_number: store.project_number(),
+        api_key: tenancy.as_ref().and_then(|t| t.api_key_for(project)),
+        sign_in: sign_in.get("signIn").cloned().unwrap_or_else(|| json!({})),
+        providers: project_config::sign_in_providers(store.sign_in_config()),
+        policy_update_time: store
+            .stored_config_members()
+            .get(project_config::POLICY_UPDATE_TIME)
+            .and_then(|text| serde_json::from_str::<String>(text).ok()),
+        sign_in_written,
+        allow_duplicate_emails: config.allow_duplicate_emails,
+        improved_email_privacy: config.enable_improved_email_privacy,
+        disabled_user_signup: config.disabled_user_signup,
+        disabled_user_deletion: config.disabled_user_deletion,
+        password_policy: policy
+            .configured
+            .then(|| password_policy_config_json(policy)),
+        sign_up_quota: store
+            .stored_config_members()
+            .get(project_config::SIGN_UP_QUOTA)
+            .and_then(|text| serde_json::from_str(text).ok())
+            .or_else(|| quota.get("signUpQuotaConfig").cloned()),
+        quota_simulation: simulation,
+        authorized_domains: store.authorized_domains(),
+        authorized_domains_written: store.sign_in_config().authorized_domains.is_some(),
+        blocking_functions: state
+            .blocking
+            .as_ref()
+            .filter(|hook| hook.blocking_auth_project() == Some(project))
+            .and_then(|hook| hook.blocking_auth_settings()),
+        members: store.stored_config_members(),
+        mfa: project_mfa::mfa_config_json(store.mfa_config()),
+        mfa_written: *store.mfa_config()
+            != fireemu_core_auth::mfa_config::MfaProjectConfig::default(),
+    };
+    if state.stateless_refresh_tokens {
+        project_config::emulator_document(&sources)
+    } else {
+        project_config::strict_document(&sources)
+    }
+}
+
+#[allow(clippy::too_many_lines)]
 fn project_config_management(
     state: &AuthState,
     handler: routes::Handler,
@@ -4764,29 +5067,16 @@ fn project_config_management(
         let Ok(store) = selected_store.lock() else {
             return error(500, "INTERNAL");
         };
-        let mut body = project_config_json_with_auth_settings(
-            store.config(),
-            store.password_policy(),
-            store.signup_quota().config(),
-        );
-        add_sign_in_config_json(&mut body, store.sign_in_config());
-        if let Some(blocking) = state
-            .blocking
-            .as_ref()
-            .filter(|hook| hook.blocking_auth_project() == Some(project))
-            .and_then(|hook| hook.blocking_auth_settings())
-        {
-            body["blockingFunctions"] = blocking;
-        }
+        let body = project_config_document(state, project, &store, store.config());
         return JsonResponse { status: 200, body };
     }
-    if !body.is_object() {
-        return error(400, "INVALID_ARGUMENT");
-    }
-    if let Err(response) = validate_project_config_payload(body) {
-        return response;
-    }
-    let fields = match update_mask(query) {
+    // Production reads the body as proto3 JSON of its Config message (AUTH-CONFIG-SDK).
+    let parsed = match config_proto::parse_config_body(body) {
+        Ok(parsed) => parsed,
+        Err(response) => return response,
+    };
+    let body = &parsed;
+    let fields = match update_mask_with(query, false) {
         Ok(Some(fields)) => fields,
         Ok(None) => {
             let mut fields = Vec::new();
@@ -4829,13 +5119,41 @@ fn project_config_management(
             {
                 fields.push("blockingFunctions".to_owned());
             }
+            if body
+                .get("authorizedDomains")
+                .is_some_and(|value| !value.is_null())
+            {
+                fields.push("authorizedDomains".to_owned());
+            }
+            if body.get("mfa").is_some_and(|value| !value.is_null()) {
+                fields.push("mfa".to_owned());
+            }
+            for member in project_config::STORED_MEMBERS {
+                if body.get(*member).is_some_and(|value| !value.is_null()) {
+                    fields.push((*member).to_owned());
+                }
+            }
             fields
         }
         Err(response) => return response,
     };
+    // A path production does not know or may not write is ignored, as production ignores it.
+    let fields: Vec<String> = fields
+        .into_iter()
+        .filter(|field| config_proto::known_writable_path(field))
+        .collect();
+    if let Err(response) =
+        project_config::validate_values(body, &fields, !state.stateless_refresh_tokens)
+    {
+        return response;
+    }
+    if let Err(response) = validate_project_config_payload(body, !state.stateless_refresh_tokens) {
+        return response;
+    }
+    // A writable path fireemu does not model (valid_project_config_field names the policy and
+    // blocking paths it models) is refused.
     if fields.iter().any(|field| {
-        (field.starts_with("passwordPolicyConfig") && !valid_password_policy_field(field))
-            || (!valid_project_config_field(field) && !valid_blocking_config_field(field))
+        !valid_project_config_field(field) && !project_config::stored_member_field(field)
     }) {
         return error(400, "INVALID_ARGUMENT");
     }
@@ -4847,11 +5165,33 @@ fn project_config_management(
     if let Err(response) = apply_project_config_fields(&mut patch, body, &fields) {
         return response;
     }
-    // Decode the sign-in providers before anything changes; they are applied after the rest.
-    let updates_sign_in = match sign_in_config_from_update(&SignInConfig::default(), body, &fields)
-    {
-        Ok(update) => update.is_some(),
-        Err(response) => return response,
+    // The masked `mfa` member replaces the project's whole multi-factor configuration.
+    let mfa_update = if fields.iter().any(|field| field == "mfa") {
+        match project_mfa::mfa_config_from_json(body.get("mfa").unwrap_or(&Value::Null)) {
+            Ok(config) => Some(config),
+            Err(refusal) => return mfa_config_refusal(&refusal),
+        }
+    } else {
+        None
+    };
+    // Reject malformed sign-in providers before changing any settings.
+    if let Err(response) = sign_in_config_from_update(&SignInConfig::default(), body, &fields) {
+        return response;
+    }
+    // The stored members too, from the current ones: a masked leaf merges into its member.
+    let stored_members = {
+        let Ok(store) = selected_store.lock() else {
+            return error(500, "INTERNAL");
+        };
+        match project_config::apply_stored_members(
+            store.stored_config_members(),
+            body,
+            &fields,
+            project,
+        ) {
+            Ok(update) => update,
+            Err(()) => return error(400, "INVALID_ARGUMENT"),
+        }
     };
     // Keep a rollback snapshot while the paired Auth candidate is published. Runtime-backed
     // bridges include private discovery markers in this snapshot so a failed Auth update cannot
@@ -4885,35 +5225,58 @@ fn project_config_management(
         }
         response
     };
-    let config = if let Some(registry) = state
+    // Members derived from the write (the normalized sign-up quota, when the policy was
+    // written and which of its options) are stored in the same update as the written members.
+    let derives_members = fields.iter().any(|field| {
+        field == "quota"
+            || field.starts_with("quota.signUpQuotaConfig")
+            || field.starts_with("passwordPolicyConfig")
+    });
+    let written_at = now(state).to_rfc3339().ok();
+    if let Some(registry) = state
         .registry
         .as_ref()
         .filter(|_| pending_project.is_none())
     {
         // Decode masked replacements after the registry has acquired the namespace gate. This
         // keeps a concurrent PATCH from merging against a stale policy or quota snapshot.
-        match registry.patch_project_config_with_current_settings(
-            project,
-            patch,
-            |current_policy, current_quota| {
-                let password_policy = password_policy_from_update(current_policy, body, &fields)?;
-                let signup_quota = quota_config_from_update(current_quota, body, &fields)?;
-                Ok((password_policy, signup_quota))
-            },
-        ) {
-            Ok(Some(config)) => {
-                if updates_sign_in {
-                    match registry.update_project_sign_in_config(project, |current| {
-                        sign_in_config_from_update(current, body, &fields)
-                            .map(|next| next.unwrap_or_else(|| current.clone()))
-                    }) {
-                        Ok(Some(_)) => {}
-                        Ok(None) => return rollback_blocking(error(500, "INTERNAL")),
-                        Err(response) => return rollback_blocking(response),
-                    }
-                }
-                config
-            }
+        match registry.patch_project_config_transaction(project, patch, |store| {
+            let password_policy = password_policy_from_update(
+                store.password_policy(),
+                body,
+                &fields,
+                !state.stateless_refresh_tokens,
+            )?;
+            let signup_quota =
+                quota_config_from_update(store.signup_quota().config(), body, &fields)?;
+            let sign_in = sign_in_config_from_update(store.sign_in_config(), body, &fields)?;
+            let stored_members = if stored_members.is_some() || derives_members {
+                let next = project_config::apply_stored_members(
+                    store.stored_config_members(),
+                    body,
+                    &fields,
+                    project,
+                )
+                .map_err(|()| error(400, "INVALID_ARGUMENT"))?;
+                let mut next = next.unwrap_or_else(|| store.stored_config_members().clone());
+                let configured = password_policy
+                    .as_ref()
+                    .unwrap_or(store.password_policy())
+                    .configured;
+                with_derived_members(&mut next, body, &fields, configured, written_at.as_deref());
+                Some(next)
+            } else {
+                None
+            };
+            Ok(ProjectConfigStoreUpdate {
+                password_policy,
+                signup_quota,
+                sign_in,
+                stored_members,
+                mfa: mfa_update.clone(),
+            })
+        }) {
+            Ok(Some(_)) => {}
             Ok(None) => return rollback_blocking(error(500, "INTERNAL")),
             Err(response) => return rollback_blocking(response),
         }
@@ -4925,7 +5288,12 @@ fn project_config_management(
         };
         let current_policy = store.password_policy().clone();
         let current_quota = store.signup_quota().config().clone();
-        let password_policy = match password_policy_from_update(&current_policy, body, &fields) {
+        let password_policy = match password_policy_from_update(
+            &current_policy,
+            body,
+            &fields,
+            !state.stateless_refresh_tokens,
+        ) {
             Ok(policy) => policy,
             Err(response) => return rollback_blocking(response),
         };
@@ -4937,9 +5305,39 @@ fn project_config_management(
             Ok(sign_in) => sign_in,
             Err(response) => return rollback_blocking(response),
         };
+        // Every refusal is decided before the first write, so a refused PATCH changes nothing.
+        if signup_quota
+            .as_ref()
+            .is_some_and(|quota| quota.validate().is_err())
+            || sign_in.as_ref().is_some_and(|sign_in| !sign_in.is_valid())
+        {
+            return rollback_blocking(error(400, "INVALID_ARGUMENT"));
+        }
+        let has_members = stored_members.is_some() || derives_members;
+        let members = if has_members {
+            // From the members as they are under this lock, so a concurrent write is kept.
+            let Ok(next) = project_config::apply_stored_members(
+                store.stored_config_members(),
+                body,
+                &fields,
+                project,
+            ) else {
+                return rollback_blocking(error(400, "INVALID_ARGUMENT"));
+            };
+            let mut next = next.unwrap_or_else(|| store.stored_config_members().clone());
+            let configured = password_policy
+                .as_ref()
+                .unwrap_or(store.password_policy())
+                .configured;
+            with_derived_members(&mut next, body, &fields, configured, written_at.as_deref());
+            Some(next)
+        } else {
+            None
+        };
         let has_policy = password_policy.is_some();
         let has_quota = signup_quota.is_some();
         let has_sign_in = sign_in.is_some();
+        let has_mfa = mfa_update.is_some();
         let config = patch.apply_to(store.config());
         if !patch.is_empty() {
             store.set_config(config);
@@ -4957,38 +5355,74 @@ fn project_config_management(
                 return rollback_blocking(error(400, "INVALID_ARGUMENT"));
             }
         }
+        if let Some(members) = members {
+            store.set_stored_config_members(members);
+        }
+        if let Some(mfa) = mfa_update {
+            store.set_mfa_config(mfa);
+        }
         drop(store);
-        if !patch.is_empty() || has_policy || has_quota || has_sign_in {
+        if !patch.is_empty() || has_policy || has_quota || has_sign_in || has_members || has_mfa {
             if let Some(project) = pending_project {
                 if let Err(response) = install_routed_candidate(state, project, selected_store) {
                     return rollback_blocking(response);
                 }
             }
         }
-        config
-    };
+    }
     JsonResponse {
         status: 200,
         body: {
             let Ok(store) = selected_store.lock() else {
                 return error(500, "INTERNAL");
             };
-            let mut body = project_config_json_with_auth_settings(
-                config,
-                store.password_policy(),
-                store.signup_quota().config(),
-            );
-            add_sign_in_config_json(&mut body, store.sign_in_config());
-            if let Some(blocking) = state
-                .blocking
-                .as_ref()
-                .filter(|hook| hook.blocking_auth_project() == Some(project))
-                .and_then(|hook| hook.blocking_auth_settings())
-            {
-                body["blockingFunctions"] = blocking;
+            let document = project_config_document(state, project, &store, store.config());
+            if state.stateless_refresh_tokens {
+                document
+            } else {
+                project_config::patch_answer(document)
             }
-            body
         },
+    }
+}
+
+/// The stored members a config write derives: the sign-up quota as production normalizes and
+/// reports it, and when the password policy was last written and which of its options.
+fn with_derived_members(
+    members: &mut fireemu_core_auth::config_members::StoredConfigMembers,
+    body: &Value,
+    fields: &[String],
+    policy_configured: bool,
+    written_at: Option<&str>,
+) {
+    if fields
+        .iter()
+        .any(|field| field == "quota" || field.starts_with("quota.signUpQuotaConfig"))
+    {
+        members.set(
+            project_config::SIGN_UP_QUOTA,
+            project_config::normalized_sign_up_quota(body).map(|quota| quota.to_string()),
+        );
+    }
+    if fields
+        .iter()
+        .any(|field| field.starts_with("passwordPolicyConfig"))
+    {
+        let time = written_at
+            .filter(|_| policy_configured)
+            .map(|time| json!(time).to_string());
+        members.set(project_config::POLICY_UPDATE_TIME, time);
+        if !policy_configured {
+            members.set(project_config::POLICY_WRITTEN_OPTIONS, None);
+        } else if fields.iter().any(|field| {
+            field == "passwordPolicyConfig"
+                || field.starts_with("passwordPolicyConfig.passwordPolicyVersions")
+        }) {
+            members.set(
+                project_config::POLICY_WRITTEN_OPTIONS,
+                project_config::written_policy_options(body).map(|names| json!(names).to_string()),
+            );
+        }
     }
 }
 
@@ -5407,6 +5841,15 @@ fn parse_saml(body: &Value, id: String) -> Result<InboundSamlProviderConfig, Jso
 }
 
 fn update_mask(query: Option<&str>) -> Result<Option<Vec<String>>, JsonResponse> {
+    update_mask_with(query, true)
+}
+
+/// The update mask; `refuse_duplicates` false keeps the first of repeated paths, as the
+/// project config PATCH of production does (AUTH-CONFIG-SDK).
+fn update_mask_with(
+    query: Option<&str>,
+    refuse_duplicates: bool,
+) -> Result<Option<Vec<String>>, JsonResponse> {
     let mut value = None;
     for pair in query
         .unwrap_or_default()
@@ -5448,7 +5891,10 @@ fn update_mask(query: Option<&str>) -> Result<Option<Vec<String>>, JsonResponse>
             return Err(error(400, "INVALID_ARGUMENT"));
         }
         if !seen.insert(field.to_owned()) {
-            return Err(error(400, "INVALID_ARGUMENT"));
+            if refuse_duplicates {
+                return Err(error(400, "INVALID_ARGUMENT"));
+            }
+            continue;
         }
         fields.push(field.to_owned());
     }
@@ -6046,7 +6492,7 @@ fn validate_tenant_update_payload(body: &Value) -> Result<(), JsonResponse> {
 
     if let Some(value) = object.get("passwordPolicyConfig") {
         if !value.is_null() {
-            password_policy_from_config_json(value)?;
+            password_policy_from_config_json(value, false)?;
         }
     }
     Ok(())
@@ -6076,7 +6522,7 @@ fn tenant_management(
             };
             let password_policy = match body.get("passwordPolicyConfig") {
                 None => None,
-                Some(value) => match password_policy_from_config_json(value) {
+                Some(value) => match password_policy_from_config_json(value, false) {
                     Ok(policy) => Some(policy),
                     Err(response) => return response,
                 },
@@ -6215,10 +6661,12 @@ fn tenant_management(
                 None
             };
             let password_policy = match current_policy {
-                Some(current) => match password_policy_from_update(&current, body, &fields) {
-                    Ok(policy) => policy,
-                    Err(response) => return response,
-                },
+                Some(current) => {
+                    match password_policy_from_update(&current, body, &fields, false) {
+                        Ok(policy) => policy,
+                        Err(response) => return response,
+                    }
+                }
                 None => None,
             };
             let patch = match tenant_metadata_patch(body, query) {
@@ -6251,13 +6699,27 @@ fn tenant_management(
     }
 }
 
+/// The refusal of a request for a tenant the emulator does not serve: production answers a
+/// client policy read with the v2 API's `INVALID_TENANT_ID` (sandbox recording 2026-09-25,
+/// AUTH-CONFIG-SDK config/read); other routes keep `refusal`.
+fn unknown_tenant_refusal(handler: routes::Handler, refusal: JsonResponse) -> JsonResponse {
+    if handler == routes::Handler::PasswordPolicy {
+        config_proto::refusal("INVALID_TENANT_ID")
+    } else {
+        refusal
+    }
+}
+
 fn tenant_policy_denial_with_metadata(
     handler: routes::Handler,
     metadata: Option<&fireemu_core_auth::store::TenantMetadata>,
     body: &Value,
 ) -> Option<JsonResponse> {
     let Some(metadata) = metadata else {
-        return Some(error(400, "TENANT_NOT_FOUND"));
+        return Some(unknown_tenant_refusal(
+            handler,
+            error(400, "TENANT_NOT_FOUND"),
+        ));
     };
     let authenticates = matches!(
         handler,
@@ -6323,6 +6785,34 @@ fn end_user_client_permission_denial(
         return Some(auth_error(&AuthError::UserSignupDisabled));
     }
     None
+}
+
+/// Strict: while client sign-up is off, production refuses a phone code for a number and an
+/// Admin email sign-in link for an address that no account holds when they are asked for
+/// (sandbox recording 2026-09-25, auth-config-sdk/client-permissions). A client's email link
+/// request is unobserved (the harness sends no email), so it is not refused here.
+fn new_account_code_denial(
+    handler: routes::Handler,
+    store: &AuthStore,
+    body: &Value,
+) -> Option<JsonResponse> {
+    if store.allows_user_signup(AuthPrincipal::EndUser)
+        || body.get("idToken").is_some_and(|value| !value.is_null())
+    {
+        return None;
+    }
+    let new_account = match handler {
+        routes::Handler::SendVerificationCode => str_field(body, "phoneNumber")
+            .is_some_and(|number| store.user_by_phone(number).is_none()),
+        routes::Handler::AdminSendOobCode => {
+            body.get("requestType").and_then(Value::as_str) == Some("EMAIL_SIGNIN")
+                && str_field(body, "email")
+                    .map(canonicalize_email)
+                    .is_some_and(|email| store.user_by_email(&email).is_none())
+        }
+        _ => false,
+    };
+    new_account.then(|| auth_error(&AuthError::UserSignupDisabled))
 }
 
 fn request_may_create_end_user(
@@ -7090,6 +7580,25 @@ fn custom_token_claims_hold(payload: &JsonValue, now_secs: i64) -> bool {
         && now_secs < exp.saturating_add(leeway)
 }
 
+/// `GET v1/projects`: the project named by its number, as production and the official
+/// emulator both answer, and the project's authorized domains (sandbox read 2026-09-25). The
+/// emulator profile keeps the official emulator's `localhost` until domains are configured.
+fn client_project_config(store: &AuthStore, strict: bool) -> JsonResponse {
+    let project = store.project_number().map_or_else(
+        || store.project_id().to_owned(),
+        |number| number.to_string(),
+    );
+    let domains = if strict || store.sign_in_config().authorized_domains.is_some() {
+        store.authorized_domains()
+    } else {
+        vec!["localhost".to_owned()]
+    };
+    JsonResponse {
+        status: 200,
+        body: json!({"projectId": project, "authorizedDomains": domains}),
+    }
+}
+
 /// The v2 API's refusal: a gRPC status name and no `errors` list (sandbox recording
 /// 2026-09-24, mfaEnrollment:start and :withdraw). Applied in the strict profile only.
 fn v2_error_shape(response: JsonResponse, strict: bool) -> JsonResponse {
@@ -7140,12 +7649,14 @@ fn legacy_sign_in_token(
 }
 
 fn password_policy_notification(code: ViolationCode, policy: &PasswordPolicy) -> Value {
+    // Production words a character class as its refusals do (sandbox recording 2026-09-25,
+    // auth-config-sdk/password-policy/existing#sign-in-weak-notify: "an upper case character").
     let message = match code {
         ViolationCode::MissingLowercaseCharacter => {
-            "Password must contain a lowercase character".to_owned()
+            "Password must contain a lower case character".to_owned()
         }
         ViolationCode::MissingUppercaseCharacter => {
-            "Password must contain an uppercase character".to_owned()
+            "Password must contain an upper case character".to_owned()
         }
         ViolationCode::MissingNumericCharacter => {
             "Password must contain a numeric character".to_owned()
@@ -7286,7 +7797,8 @@ fn finish_sign_in_with_attributes_and_credentials(
     inbound_credentials: Option<&PendingSignInCredentials>,
 ) -> JsonResponse {
     let factors = mfa_info(store, uid, true);
-    if !factors.is_empty() {
+    if !factors.is_empty() && store.second_factor_required_for(uid) {
+        let strict = store.second_factor_rules_are_production();
         // Second factor required: no ID token yet, only a pending credential.
         let email = store.user(uid).and_then(|u| u.email.clone());
         let sign_in_provider = provider
@@ -7309,13 +7821,17 @@ fn finish_sign_in_with_attributes_and_credentials(
                 let mut body = json!({"mfaPendingCredential": pending.as_str(), "mfaInfo": factors, "localId": uid.as_str(), "email": email});
                 for (k, v) in extra {
                     // The pending-second-factor answer carries no profile fields on the
-                    // official emulator (conformance/fixtures/auth/mfa-enrollment-eligibility);
-                    // production's shape for it is unobserved, so the token answer alone
-                    // carries `displayName`.
-                    if *k == "displayName" {
-                        continue;
+                    // official emulator (conformance/fixtures/auth/mfa-enrollment-eligibility).
+                    // Production keeps a password sign-in's `displayName` and leaves out an
+                    // email link's `isNewUser` (sandbox recording 2026-09-24, auth-mfa).
+                    let dropped = if strict {
+                        *k == "isNewUser"
+                    } else {
+                        *k == "displayName"
+                    };
+                    if !dropped {
+                        body[*k] = v.clone();
                     }
-                    body[*k] = v.clone();
                 }
                 JsonResponse { status: 200, body }
             }
@@ -7374,7 +7890,10 @@ fn user_json(store: &AuthStore, uid: &LocalId) -> Value {
     // The official record lists a `password` provider for an email with a password or an
     // email-link sign-in, and nothing for an address that has neither.
     if let Some(email) = &u.email {
-        if store.has_password(uid) || u.provider == fireemu_core_auth::store::Provider::EmailLink {
+        if store.has_password(uid)
+            || u.email_link_signin
+            || u.provider == fireemu_core_auth::store::Provider::EmailLink
+        {
             providers.push(json!({"providerId": "password", "rawId": email, "federatedId": email, "email": email, "displayName": u.display_name, "photoUrl": u.photo_url}));
         }
     }
@@ -7386,7 +7905,11 @@ fn user_json(store: &AuthStore, uid: &LocalId) -> Value {
     // redacted marker production sends a caller without hash-config permission
     // (conformance/auth-production-matrix.json, password/sign-up-and-sign-in#lookup).
     let has_password = store.has_password(uid);
-    let valid_since = (has_password || u.tokens_revoked || u.admin_created || u.custom_auth)
+    let valid_since = (has_password
+        || u.tokens_revoked
+        || u.admin_created
+        || u.custom_auth
+        || u.email_link_created)
         .then_some(u.tokens_valid_after);
     json!({
         "localId": u.local_id.as_str(),
@@ -7411,6 +7934,8 @@ fn user_json(store: &AuthStore, uid: &LocalId) -> Value {
         "lastLoginAt": u.last_sign_in_at.map(|t| (t.as_nanos() / 1_000_000).to_string()),
         "validSince": valid_since.map(|t| (t.as_nanos() / 1_000_000_000).to_string()),
         "customAuth": u.custom_auth.then_some(true),
+        "emailLinkSignin": u.email_link_signin.then_some(true),
+        "initialEmail": u.initial_email,
     })
 }
 
@@ -7752,13 +8277,24 @@ fn parse_phone_factors(entries: &Value) -> Result<Vec<(String, Option<String>)>,
     };
     let mut out = Vec::with_capacity(items.len());
     for item in items {
+        // An entry with `phoneInfo` is a phone factor whatever else it carries, as the official
+        // emulator reads it. Production's words for an entry with only `totpInfo` (sandbox
+        // recording 2026-09-24, auth-mfa/admin-factors#admin-set-totp-factor-ia and
+        // #admin-set-invalid-phone-ia); one with both is unobserved and stays accepted.
         let Some(phone) = str_field(item, "phoneInfo") else {
+            if item.get("totpInfo").is_some_and(|v| !v.is_null()) {
+                return Err(error(
+                    400,
+                    "UNSUPPORTED_SECOND_FACTOR : attempting to add a new TOTP enrollment",
+                ));
+            }
             return Err(error(
                 400,
                 "INVALID_ARGUMENT : only phone second factors (phoneInfo) can be enrolled by an admin",
             ));
         };
-        AuthStore::validate_phone_number(phone).map_err(|e| auth_error(&e))?;
+        AuthStore::validate_phone_number(phone)
+            .map_err(|_| error(400, "INVALID_PHONE_NUMBER : Invalid format."))?;
         out.push((
             phone.to_owned(),
             opt_str(item, "displayName")?.map(str::to_owned),
@@ -7926,7 +8462,9 @@ fn parse_valid_since(body: &Value) -> Result<Option<LogicalInstant>, JsonRespons
     }
 }
 
-fn parse_update(body: &Value) -> Result<UpdatePlan, JsonResponse> {
+/// An update's plan. An administrator may set a password below the minimum length, as
+/// production lets it (sandbox recording 2026-09-25); an end user may not.
+fn parse_update(body: &Value, self_service: bool) -> Result<UpdatePlan, JsonResponse> {
     reject_unsupported(body, UNSUPPORTED_UPDATE_FIELDS)?;
     let claims = match opt_str(body, "customAttributes")? {
         Some(attrs) => Some(parse_custom_claims(attrs)?),
@@ -7934,7 +8472,12 @@ fn parse_update(body: &Value) -> Result<UpdatePlan, JsonResponse> {
     };
     let password = opt_str(body, "password")?.map(str::to_owned);
     if let Some(p) = &password {
-        AuthStore::validate_password(p).map_err(|e| auth_error(&e))?;
+        if self_service {
+            AuthStore::validate_password(p)
+        } else {
+            AuthStore::validate_admin_password(p)
+        }
+        .map_err(|e| auth_error(&e))?;
     }
     let change = |key: &str| -> Result<Change, JsonResponse> {
         Ok(opt_str(body, key)?.map_or(Change::Keep, |v| Change::Set(v.to_owned())))
@@ -8002,9 +8545,14 @@ fn parse_update(body: &Value) -> Result<UpdatePlan, JsonResponse> {
         None | Some(Value::Null) => None,
         Some(v) => Some(parse_identity(v)?),
     };
-    let phone_factors = match body.get("mfa").and_then(|m| m.get("enrollments")) {
+    // `mfa` replaces every factor; without `enrollments` it clears them, as production does
+    // (sandbox recording 2026-09-24, auth-mfa/admin-factors#admin-lookup-cleared).
+    let phone_factors = match body.get("mfa") {
         None | Some(Value::Null) => None,
-        Some(v) => Some(parse_phone_factors(v)?),
+        Some(mfa) => match mfa.get("enrollments") {
+            None | Some(Value::Null) => Some(Vec::new()),
+            Some(v) => Some(parse_phone_factors(v)?),
+        },
     };
     let revoke_at = parse_valid_since(body)?;
     Ok(UpdatePlan {
@@ -8082,7 +8630,7 @@ fn parse_client_update(body: &Value) -> Result<UpdatePlan, JsonResponse> {
             fields.insert("displayName".to_owned(), Value::String(number.to_string()));
         }
     }
-    parse_update(&client)
+    parse_update(&client, true)
 }
 
 #[allow(clippy::too_many_lines)]
@@ -8107,11 +8655,16 @@ fn update(
         .iter()
         .any(|field| body.get(*field).is_some());
     // `applyActionCode`: an email verification / change code instead of a session.
-    if let Some(code) = str_field(body, "oobCode") {
+    // Strict: with an ID token the request is that account's own update and the code is not
+    // applied (sandbox recording 2026-09-24, ownership#apply-a-change-with-b-token); the
+    // official emulator applies the code first.
+    let strict = !stateless_refresh_tokens;
+    let with_session = body.get("idToken").is_some_and(|token| !token.is_null());
+    if let Some(code) = str_field(body, "oobCode").filter(|_| !(strict && with_session)) {
         if has_admin_field {
             return error(400, "OPERATION_NOT_ALLOWED");
         }
-        return apply_oob_code(store, code, at);
+        return apply_oob_code(store, code, at, strict);
     }
     let self_service = !privileged;
     let local_id = if privileged {
@@ -8192,14 +8745,18 @@ fn update(
     let plan = match if self_service {
         parse_client_update(body)
     } else {
-        parse_update(body)
+        parse_update(body, false)
     } {
         Ok(p) => p,
         Err(r) => return r,
     };
     if let Some(password) = &plan.password {
         if let Err(e) = store.validate_password_for(
-            fireemu_core_auth::password_policy::Operation::Change,
+            if self_service {
+                fireemu_core_auth::password_policy::Operation::Change
+            } else {
+                fireemu_core_auth::password_policy::Operation::AdminUpdate
+            },
             password,
         ) {
             return auth_error(&e);
@@ -8367,7 +8924,11 @@ fn update(
             &uid,
             password,
             at,
-            fireemu_core_auth::password_policy::Operation::Change,
+            if self_service {
+                fireemu_core_auth::password_policy::Operation::Change
+            } else {
+                fireemu_core_auth::password_policy::Operation::AdminUpdate
+            },
         ) {
             return auth_error(&e);
         }
@@ -8414,29 +8975,13 @@ fn update(
     if !stateless_refresh_tokens && removes_refresh_credential {
         store.revoke_refresh_tokens(&uid);
     }
-    let mut response =
-        json!({"localId": uid.as_str(), "kind": "identitytoolkit#SetAccountInfoResponse"});
-    if let Some(u) = store.user(&uid) {
-        response["email"] = json!(u.email);
-        // As in a lookup: with an address, and while true after one was removed; never for an
-        // account that had none (sandbox recording 2026-09-24).
-        if u.email.is_some() || u.email_verified || u.email_verified_recorded {
-            response["emailVerified"] = json!(u.email_verified);
-        }
-        response["displayName"] = json!(u.display_name);
-        response["photoUrl"] = json!(u.photo_url);
-        // Production's Admin update answer carries no `newEmail` (sandbox recording
-        // 2026-09-23, `auth-account/admin/update#change-email`).
-        if email_changed && self_service {
-            response["newEmail"] = json!(u.email);
-        }
-    }
-    let record = user_json(store, &uid);
-    for key in ["providerUserInfo", "passwordHash"] {
-        if let Some(value) = record.get(key) {
-            response[key] = value.clone();
-        }
-    }
+    // Production's Admin update answer carries no `newEmail` (sandbox recording 2026-09-23,
+    // `auth-account/admin/update#change-email`).
+    let new_email = store
+        .user(&uid)
+        .and_then(|u| u.email.clone())
+        .filter(|_| email_changed && self_service);
+    let mut response = account_update_answer(store, &uid, new_email.as_deref());
     // Tokens follow a credential change only for an account that is enabled after this
     // update: production (recorded 2026-09-12) applies an administrative password
     // replacement to a disabled account without returning tokens.
@@ -8487,6 +9032,7 @@ fn delete_account(
     body: &Value,
     at: LogicalInstant,
     admin: bool,
+    strict: bool,
 ) -> JsonResponse {
     let uid = if admin {
         match opt_str(body, "localId") {
@@ -8516,6 +9062,7 @@ fn delete_account(
             Err(r) => return r,
         }
     };
+    let email = store.user(&uid).and_then(|u| u.email.clone());
     match store.delete_user_by_id_as(
         if admin {
             AuthPrincipal::Admin
@@ -8524,11 +9071,37 @@ fn delete_account(
         },
         uid.as_str(),
     ) {
-        Ok(()) => JsonResponse {
-            status: 200,
-            body: json!({"kind": "identitytoolkit#DeleteAccountResponse"}),
-        },
+        Ok(()) => {
+            // Strict: a deleted account's codes are refused, inspected or used (sandbox
+            // recording 2026-09-24); the official emulator keeps them.
+            if strict {
+                store.void_oob_codes_of(&uid, email.as_deref());
+            }
+            JsonResponse {
+                status: 200,
+                body: json!({"kind": "identitytoolkit#DeleteAccountResponse"}),
+            }
+        }
         Err(e) => auth_error(&e),
+    }
+}
+
+/// The account an Admin create makes: a password account with an address, a phone account
+/// with only a number (its sessions carry no anonymous `provider_id`, sandbox recording
+/// 2026-09-24, generate/admin#phone-sign-in), and otherwise an anonymous one.
+fn admin_new_user(email: Option<&str>, email_verified: bool, has_phone: bool) -> NewUser {
+    match email {
+        Some(email) => NewUser {
+            email: Some(email.to_owned()),
+            email_verified,
+            provider: fireemu_core_auth::store::Provider::Password,
+        },
+        None if has_phone => NewUser {
+            email: None,
+            email_verified,
+            provider: fireemu_core_auth::store::Provider::Phone,
+        },
+        None => NewUser::anonymous(),
     }
 }
 
@@ -8596,14 +9169,7 @@ fn admin_create(store: &mut AuthStore, body: &Value, at: LogicalInstant) -> Json
     if requested_id.as_deref().is_some_and(local_id_too_long) {
         return backend_internal_error();
     }
-    let new_user = match &email {
-        Some(email) => NewUser {
-            email: Some(email.clone()),
-            email_verified,
-            provider: fireemu_core_auth::store::Provider::Password,
-        },
-        None => NewUser::anonymous(),
-    };
+    let new_user = admin_new_user(email.as_deref(), email_verified, phone.is_some());
     let uid = match store.create_user_with_id_as(
         AuthPrincipal::Admin,
         new_user,
@@ -8644,7 +9210,7 @@ fn admin_create(store: &mut AuthStore, body: &Value, at: LogicalInstant) -> Json
 /// Admin `accounts:batchDelete` (`deleteUsers`): up to 1000 ids; an enabled account is
 /// skipped with a per-row error unless `force` is set (the Admin SDK always sets it); an
 /// unknown id is silently skipped, as the official emulator does.
-fn admin_batch_delete(store: &mut AuthStore, body: &Value) -> JsonResponse {
+fn admin_batch_delete(store: &mut AuthStore, body: &Value, strict: bool) -> JsonResponse {
     let ids = match body.get("localIds") {
         Some(v) => match string_list(v, "localIds") {
             Ok(ids) => ids,
@@ -8665,7 +9231,10 @@ fn admin_batch_delete(store: &mut AuthStore, body: &Value) -> JsonResponse {
             errors.push(json!({"index": index, "localId": id, "message": "NOT_DISABLED : Disable the account before batch deletion."}));
             continue;
         }
-        let _ = store.delete_user_by_id(id);
+        let (uid, email) = (user.local_id.clone(), user.email.clone());
+        if store.delete_user_by_id(id).is_ok() && strict {
+            store.void_oob_codes_of(&uid, email.as_deref());
+        }
     }
     let mut response = json!({});
     if !errors.is_empty() {
@@ -9059,12 +9628,16 @@ fn validate_batch_row_shapes(row: &Value) -> Result<(), JsonResponse> {
 /// The second factors of a `batchCreate` row: phone factors as the official emulator
 /// imports them, and TOTP factors in fireemu's own export shape
 /// (`totpInfo.sharedSecretKey`), which the official emulator has no equivalent for.
+///
+/// Under production's second-factor rules every TOTP factor is refused with production's words
+/// and a factor without an id or a time takes [`AuthStore::imported_factor_defaults`].
 fn batch_row_factors(
     row: &Value,
     local_id: &str,
     has_email: bool,
     email_verified: bool,
     at: LogicalInstant,
+    store: &mut AuthStore,
 ) -> Result<
     (
         Vec<fireemu_core_auth::mfa::TotpFactor>,
@@ -9093,13 +9666,21 @@ fn batch_row_factors(
         }
     }
     for (index, item) in items.iter().enumerate() {
+        if store.second_factor_rules_are_production()
+            && item.get("totpInfo").is_some_and(|v| !v.is_null())
+        {
+            return Err(error(400, "Importing TOTP MFA is not supported."));
+        }
+        let (default_id, default_at) = store
+            .imported_factor_defaults(at)
+            .unwrap_or_else(|| (format!("{local_id}-mfa-{index}"), at));
         let enrollment_id = opt_str(item, "mfaEnrollmentId")?
             .filter(|id| !id.is_empty())
-            .map_or_else(|| format!("{local_id}-mfa-{index}"), str::to_owned);
+            .map_or(default_id, str::to_owned);
         let display_name = opt_str(item, "displayName")?.map(str::to_owned);
         let enrolled_at = opt_str(item, "enrolledAt")?
             .and_then(|t| LogicalInstant::parse_rfc3339(t).ok())
-            .unwrap_or(at);
+            .unwrap_or(default_at);
         if let Some(phone) = opt_str(item, "phoneInfo")? {
             AuthStore::validate_phone_number(phone)
                 .map_err(|_| error(400, "Phone number format is invalid"))?;
@@ -9135,6 +9716,7 @@ fn batch_row_user(
     row: &Value,
     at: LogicalInstant,
     hash_spec: Option<&password_hash::HashSpec>,
+    store: &mut AuthStore,
 ) -> Result<fireemu_core_auth::store::ImportedUser, JsonResponse> {
     use fireemu_core_auth::store::{ImportedUser, Provider};
     validate_batch_row_shapes(row)?;
@@ -9181,7 +9763,7 @@ fn batch_row_user(
     }
     let email_verified = opt_bool(row, "emailVerified")?.unwrap_or(false);
     let (totp_factors, phone_factors) =
-        batch_row_factors(row, local_id, email.is_some(), email_verified, at)?;
+        batch_row_factors(row, local_id, email.is_some(), email_verified, at, store)?;
     let password = batch_row_password(row)?;
     let imported_password = if password.is_none() {
         batch_row_imported_hash(row, hash_spec)?
@@ -9297,7 +9879,14 @@ fn decode_batch_rows(rows: &[Value]) -> Result<(), JsonResponse> {
     Ok(())
 }
 
-fn admin_batch_create(store: &mut AuthStore, body: &Value, at: LogicalInstant) -> JsonResponse {
+/// Admin `accounts:batchCreate` (`importUsers`). Strict follows production's upsert and
+/// duplicate rules; the emulator profile follows the official emulator's refusals.
+fn admin_batch_create(
+    store: &mut AuthStore,
+    body: &Value,
+    at: LogicalInstant,
+    strict: bool,
+) -> JsonResponse {
     let Some(rows) = body
         .get("users")
         .and_then(Value::as_array)
@@ -9310,20 +9899,19 @@ fn admin_batch_create(store: &mut AuthStore, body: &Value, at: LogicalInstant) -
         Some(Value::Bool(value)) => *value,
         Some(_) => return error(400, "INVALID_ARGUMENT : allowOverwrite must be a boolean"),
     };
-    // Production upserts rows by localId whatever allowOverwrite says: a repeated localId in
-    // the request is replaced by its later row and an existing account is replaced without an
-    // error (sandbox recording 2026-09-23). The field is still type-checked above.
-    let _ = allow_overwrite;
-    // sanityCheck refuses an address repeated inside the request, before anything is imported.
-    if body.get("sanityCheck").and_then(Value::as_bool) == Some(true) {
-        let mut seen = std::collections::BTreeSet::new();
-        for row in rows {
-            if let Some(email) = str_field(row, "email").filter(|e| !e.is_empty()) {
-                if !seen.insert(canonicalize_email(email)) {
-                    return error(400, &format!("DUPLICATE_EMAIL : {email}"));
-                }
-            }
-        }
+    let sanity_check = body.get("sanityCheck").and_then(Value::as_bool) == Some(true);
+    let request_refusal = if strict {
+        production_batch_request_refusal(rows, sanity_check)
+    } else {
+        emulator_batch_request_refusal(
+            rows,
+            sanity_check,
+            allow_overwrite,
+            store.config().allow_duplicate_emails,
+        )
+    };
+    if let Some(response) = request_refusal {
+        return response;
     }
     if let Err(response) = decode_batch_rows(rows) {
         return response;
@@ -9340,7 +9928,7 @@ fn admin_batch_create(store: &mut AuthStore, body: &Value, at: LogicalInstant) -
     let mut errors = Vec::new();
     for (index, row) in rows.iter().enumerate() {
         let refused = |message: String| json!({"index": index, "message": message});
-        let user = match batch_row_user(row, at, hash_spec.as_ref()) {
+        let user = match batch_row_user(row, at, hash_spec.as_ref(), store) {
             Ok(u) => u,
             Err(r) => {
                 let message = r.body["error"]["message"]
@@ -9352,7 +9940,16 @@ fn admin_batch_create(store: &mut AuthStore, body: &Value, at: LogicalInstant) -
             }
         };
         let imported_password = user.imported_password.is_some() || user.password.is_some();
-        let import_result = if store.user_by_id(&user.local_id).is_some() {
+        let exists = store.user_by_id(&user.local_id).is_some();
+        if !strict {
+            if let Some(message) =
+                emulator_batch_row_refusal(store, &user, exists, allow_overwrite, sanity_check)
+            {
+                errors.push(refused(message));
+                continue;
+            }
+        }
+        let import_result = if exists {
             // Validate and install a replacement on a copy first. A row can fail after the
             // UID collision check (for example because its email belongs to another account),
             // and a failed import must leave the existing account untouched.
@@ -9384,6 +9981,93 @@ fn admin_batch_create(store: &mut AuthStore, body: &Value, at: LogicalInstant) -
             json!({"kind": "identitytoolkit#UploadAccountResponse", "error": errors})
         },
     }
+}
+
+/// Production's request-level batchCreate refusal: it upserts rows by localId whatever
+/// allowOverwrite says (a repeated localId in the request is replaced by its later row and an
+/// existing account is replaced without an error), and sanityCheck refuses an address repeated
+/// inside the request, before anything is imported (sandbox recording 2026-09-23). The
+/// allowOverwrite field is still type-checked by the caller.
+fn production_batch_request_refusal(rows: &[Value], sanity_check: bool) -> Option<JsonResponse> {
+    if sanity_check {
+        let mut seen = std::collections::BTreeSet::new();
+        for row in rows {
+            if let Some(email) = str_field(row, "email").filter(|e| !e.is_empty()) {
+                if !seen.insert(canonicalize_email(email)) {
+                    return Some(error(400, &format!("DUPLICATE_EMAIL : {email}")));
+                }
+            }
+        }
+    }
+    None
+}
+
+/// The official emulator's request-level batchCreate refusals (firebase-tools 15.28.2,
+/// `operations.js` `batchCreate`): sanityCheck refuses an address repeated inside the request
+/// while one account per address is enforced, and without allowOverwrite a localId repeated
+/// inside the request refuses the request. Rows without a localId are left to their own
+/// per-row refusal, as fireemu did before production's rules were adopted for strict.
+fn emulator_batch_request_refusal(
+    rows: &[Value],
+    sanity_check: bool,
+    allow_overwrite: bool,
+    allow_duplicate_emails: bool,
+) -> Option<JsonResponse> {
+    if sanity_check && !allow_duplicate_emails {
+        let mut seen = std::collections::BTreeSet::new();
+        for row in rows {
+            if let Some(email) = str_field(row, "email").filter(|e| !e.is_empty()) {
+                if !seen.insert(email) {
+                    return Some(error(400, &format!("DUPLICATE_EMAIL : {email}")));
+                }
+            }
+        }
+    }
+    if !allow_overwrite {
+        let mut seen = std::collections::BTreeSet::new();
+        for row in rows {
+            if let Some(id) = str_field(row, "localId").filter(|id| !id.is_empty()) {
+                if !seen.insert(id) {
+                    return Some(error(400, &format!("DUPLICATE_LOCAL_ID : {id}")));
+                }
+            }
+        }
+    }
+    None
+}
+
+/// The official emulator's per-row batchCreate refusals that production does not make: an
+/// address owned by another account (checked first, and only while one account per address is
+/// enforced; fireemu keeps importing a shared address under allowDuplicateEmails), then an
+/// existing localId without allowOverwrite. The official emulator looks the address up as the
+/// request spells it against keys it stores in lowercase (`state.js` `getUserByEmail`), so only
+/// an address already in lowercase can collide.
+fn emulator_batch_row_refusal(
+    store: &AuthStore,
+    user: &fireemu_core_auth::store::ImportedUser,
+    exists: bool,
+    allow_overwrite: bool,
+    sanity_check: bool,
+) -> Option<String> {
+    if let Some(email) = user
+        .email
+        .as_deref()
+        .filter(|e| canonicalize_email(e) == *e)
+    {
+        let owned_by_other = store
+            .users_by_email(email)
+            .iter()
+            .any(|owner| owner.local_id.as_str() != user.local_id);
+        if owned_by_other && !store.config().allow_duplicate_emails {
+            return Some(if sanity_check {
+                "email exists in other account in database".to_owned()
+            } else {
+                format!("((Auth Emulator does not support importing duplicate email: {email}))")
+            });
+        }
+    }
+    (exists && !allow_overwrite)
+        .then(|| "localId belongs to an existing account - can not overwrite.".to_owned())
 }
 
 /// Admin `accounts:batchGet` (`listUsers`): `GET ?maxResults=&nextPageToken=`, users in
@@ -9513,6 +10197,35 @@ fn verify_enrollment_session(
     verify_session_accepting(store, body, at, jwt_error, LegacyTokens::Honoured)
 }
 
+/// Production's answers to an enrollment start's shape and to a full phone slate (sandbox
+/// recording 2026-09-24, auth-mfa/totp/enroll#start-without-info,
+/// interactions#start-both-kinds and #phone-start-at-limit).
+fn production_enrollment_start_refusal(
+    store: &AuthStore,
+    uid: &LocalId,
+    body: &Value,
+) -> Option<JsonResponse> {
+    let totp = body.get("totpEnrollmentInfo").is_some_and(|v| !v.is_null());
+    let phone = body
+        .get("phoneEnrollmentInfo")
+        .is_some_and(|v| !v.is_null());
+    if totp && phone {
+        return Some(oneof_already_set("enrollment_info", "phoneEnrollmentInfo"));
+    }
+    if !totp && !phone {
+        return Some(error(400, "Request contains an invalid argument."));
+    }
+    let full = store
+        .user(uid)
+        .is_some_and(|u| u.mfa.factor_count() >= fireemu_core_auth::mfa::MAX_FACTORS_PER_USER);
+    (phone && full).then(|| {
+        error(
+            400,
+            "SECOND_FACTOR_LIMIT_EXCEEDED : Too many second factors enrolled for this account.",
+        )
+    })
+}
+
 fn mfa_enrollment_start(
     store: &mut AuthStore,
     body: &Value,
@@ -9525,7 +10238,21 @@ fn mfa_enrollment_start(
         Err(r) => return r,
     };
     let uid = session.uid.clone();
+    // Production's second-factor rules (strict, outside tenants, whose second factors keep
+    // their earlier rules under scope decision M2).
+    let production = store.second_factor_rules_are_production();
+    if production {
+        if let Some(refusal) = production_enrollment_start_refusal(store, &uid, body) {
+            return refusal;
+        }
+    }
     if let Some(phone) = body.get("phoneEnrollmentInfo") {
+        // Strict: production refuses a phone factor while the project does not enable SMS
+        // second factors (sandbox recording 2026-09-24, auth-mfa/disabled#phone-start); the
+        // official emulator always enrolls one.
+        if production && !store.mfa_config().sms_enabled() {
+            return error(400, "OPERATION_NOT_ALLOWED : SMS based MFA not enabled.");
+        }
         let number = str_field(phone, "phoneNumber").unwrap_or("");
         if let Some(refusal) = phone_enrollment_refusal(store, &session, Some(number), true) {
             return refusal;
@@ -9551,7 +10278,11 @@ fn mfa_enrollment_start(
             "INVALID_ARGUMENT : totpEnrollmentInfo or phoneEnrollmentInfo is required",
         );
     }
-    if !totp_extension_enabled {
+    // TOTP is on when the project's `mfa` config enables it (production). The fireemu
+    // `auth.totp` extension turns it on too, except under production's rules, where only the
+    // project config does (`auth-mfa/disabled#totp-start`; AUTH-MFA follow-up directive).
+    let extension = totp_extension_enabled && !production;
+    if !extension && !store.mfa_config().totp_enabled() {
         return error(
             400,
             if strict {
@@ -9564,24 +10295,58 @@ fn mfa_enrollment_start(
     if let Some(refusal) = phone_enrollment_refusal(store, &session, None, true) {
         return refusal;
     }
+    if session
+        .auth_time
+        .is_some_and(|auth_time| store.totp_enrollment_login_too_old(auth_time, at))
+    {
+        return error(400, "CREDENTIAL_TOO_OLD_LOGIN_AGAIN");
+    }
     match store.start_totp_enrollment(&uid, at) {
         Ok(material) => {
             let policy = *store.policy();
             JsonResponse {
                 status: 200,
+                // Production's members: `SHA1` and a deadline in microseconds (sandbox
+                // recording 2026-09-24, auth-mfa/totp/enroll#start).
                 body: json!({
                     "totpSessionInfo": {
                         "sharedSecretKey": base32::encode(material.secret_for_test()),
                         "verificationCodeLength": policy.digits,
-                        "hashingAlgorithm": "HMAC_SHA1",
+                        "hashingAlgorithm": "SHA1",
                         "periodSec": policy.period_seconds,
                         "sessionInfo": material.session_id,
-                        "finalizeEnrollmentTime": LogicalInstant::to_rfc3339(material.expires_at).unwrap_or_default(),
+                        "finalizeEnrollmentTime": proto_timestamp(LogicalInstant::from_nanos(
+                            material.expires_at.as_nanos().div_euclid(1_000) * 1_000,
+                        )),
                     }
                 }),
             }
         }
+        Err(e) if production && matches!(e, MfaError::LimitExceeded(_)) => error(
+            400,
+            "SECOND_FACTOR_LIMIT_EXCEEDED : Too many TOTP based second factors enrolled for this account.",
+        ),
         Err(e) => mfa_error(&e),
+    }
+}
+
+/// Production's parse-time refusal of a second member of a oneof (sandbox recording
+/// 2026-09-24, auth-mfa/interactions#start-both-kinds).
+fn oneof_already_set(oneof: &str, member: &str) -> JsonResponse {
+    let message = format!(
+        "Invalid value (oneof), oneof field '{oneof}' is already set. Cannot set '{member}'"
+    );
+    JsonResponse {
+        status: 400,
+        body: json!({"error": {
+            "code": 400,
+            "message": message,
+            "status": "INVALID_ARGUMENT",
+            "details": [{
+                "@type": "type.googleapis.com/google.rpc.BadRequest",
+                "fieldViolations": [{"description": message}],
+            }],
+        }}),
     }
 }
 
@@ -9618,6 +10383,21 @@ fn mfa_enrollment_finalize(
     let session = info
         .and_then(|i| i.get("sessionInfo"))
         .and_then(Value::as_str);
+    let display_name = str_field(body, "displayName")
+        .filter(|name| !name.is_empty())
+        .map(str::to_owned);
+    // Production checks the session, then the display name, then the code (sandbox recording
+    // 2026-09-24, auth-mfa/totp/enroll#finalize-missing-session and #finalize-missing-code);
+    // tenants keep their earlier rules (scope decision M2).
+    let production = store.second_factor_rules_are_production();
+    if production {
+        if session.is_none_or(|session| !store.has_enrollment_session(&uid, session)) {
+            return error(400, "INVALID_SESSION_INFO");
+        }
+        if display_name.is_none() {
+            return error(400, "MISSING_DISPLAY_NAME : display name cannot be empty");
+        }
+    }
     let code = parse_code(info.and_then(|i| i.get("verificationCode")));
     let (Some(session), Some(code)) = (session, code) else {
         return error(
@@ -9625,7 +10405,7 @@ fn mfa_enrollment_finalize(
             "INVALID_CODE : missing sessionInfo or verificationCode",
         );
     };
-    match store.finalize_totp_enrollment(&uid, session, code, at) {
+    match store.finalize_totp_enrollment_named(&uid, session, code, display_name, at) {
         Ok(factor) => {
             let assertion = SecondFactorAssertion {
                 sign_in_second_factor: "totp".to_owned(),
@@ -9633,7 +10413,15 @@ fn mfa_enrollment_finalize(
                 verified_at: at,
             };
             match issue_tokens(store, &uid, Some(&assertion), at) {
-                Ok(tokens) => token_only_response(&tokens, false),
+                Ok(tokens) => {
+                    let mut response = token_only_response(&tokens, false);
+                    // Production's TOTP answer names its factor kind (sandbox recording
+                    // 2026-09-24, auth-mfa/totp/enroll#finalize).
+                    if production {
+                        response.body["totpAuthInfo"] = json!({});
+                    }
+                    response
+                }
                 Err(r) => r,
             }
         }
@@ -9702,6 +10490,80 @@ fn mfa_sign_in_finalize(store: &mut AuthStore, body: &Value, at: LogicalInstant)
     }
 }
 
+/// Strict `mfaSignIn:finalize`: production's refusals and their order (sandbox recording
+/// 2026-09-24, auth-mfa/totp/sign-in, interactions): the request's shape first (`Request
+/// contains an invalid argument.`), then the pending credential (`INVALID_PENDING_TOKEN`, or
+/// `USER_NOT_FOUND` once its account is gone), then the factor (`INVALID_MFA_ENROLLMENT_ID`),
+/// then the code. The store keeps the pending credential after success and completes the
+/// sign-in of an account disabled after its first factor, as production does.
+fn mfa_sign_in_finalize_production(
+    store: &mut AuthStore,
+    body: &Value,
+    at: LogicalInstant,
+) -> JsonResponse {
+    let invalid = || error(400, "Request contains an invalid argument.");
+    let Some(pending) = str_field(body, "mfaPendingCredential").filter(|p| !p.is_empty()) else {
+        return invalid();
+    };
+    if let Some(phone) = body.get("phoneVerificationInfo").filter(|v| !v.is_null()) {
+        return finalize_phone_sign_in(store, pending, phone, at);
+    }
+    let Some(enrollment_id) = str_field(body, "mfaEnrollmentId").filter(|id| !id.is_empty()) else {
+        return invalid();
+    };
+    let Some(code) = parse_code(
+        body.get("totpVerificationInfo")
+            .and_then(|i| i.get("verificationCode")),
+    ) else {
+        return invalid();
+    };
+    let Some(pending_id) = PendingSignInId::parse(pending) else {
+        return error(400, "INVALID_PENDING_TOKEN");
+    };
+    let Some(uid) = store.pending_sign_in_user(&pending_id) else {
+        return error(
+            400,
+            if store.pending_sign_in_orphaned(&pending_id) {
+                "USER_NOT_FOUND"
+            } else {
+                "INVALID_PENDING_TOKEN"
+            },
+        );
+    };
+    if !store.user(&uid).is_some_and(|u| {
+        u.mfa
+            .totp_factors()
+            .iter()
+            .any(|f| f.mfa_enrollment_id == enrollment_id)
+    }) {
+        return error(400, "INVALID_MFA_ENROLLMENT_ID");
+    }
+    let first_factor = store.pending_sign_in_context(&pending_id).cloned();
+    match store.finalize_mfa_sign_in_for_factor(&uid, &pending_id, enrollment_id, code, at) {
+        Ok(assertion) => match issue_tokens_with_sign_in_attributes(
+            store,
+            &uid,
+            Some(&assertion),
+            at,
+            None,
+            first_factor
+                .as_ref()
+                .and_then(PendingSignInContext::sign_in_provider)
+                .map(provider_from_id),
+            first_factor
+                .as_ref()
+                .and_then(PendingSignInContext::sign_in_attributes),
+        ) {
+            Ok(tokens) => token_only_response(&tokens, false),
+            Err(r) => r,
+        },
+        // A code already used is a plain INVALID_CODE (auth-mfa/totp/sign-in
+        // #replayed-sign-in-code).
+        Err(MfaError::CodeAlreadyUsed) => error(400, "INVALID_CODE"),
+        Err(e) => mfa_error(&e),
+    }
+}
+
 fn refresh(
     store: &mut AuthStore,
     body: &Value,
@@ -9754,21 +10616,56 @@ fn mfa_info(store: &AuthStore, uid: &LocalId, redacted: bool) -> Vec<Value> {
     let Some(u) = store.user(uid) else {
         return Vec::new();
     };
-    let mut out: Vec<Value> = u
+    // Production writes a factor's time as a protobuf Timestamp and lists factors in the order
+    // they were enrolled, whatever their kind (sandbox recording 2026-09-24,
+    // auth-mfa/admin-factors#admin-lookup-m).
+    let strict = store.second_factor_rules_are_production();
+    let time = |at: LogicalInstant| {
+        if strict {
+            proto_timestamp(at)
+        } else {
+            LogicalInstant::to_rfc3339(at).unwrap_or_default()
+        }
+    };
+    let mut entries: Vec<(LogicalInstant, Value)> = u
         .mfa
         .totp_factors()
         .iter()
-        .map(|f| json!({"mfaEnrollmentId": f.mfa_enrollment_id, "displayName": f.display_name, "enrolledAt": LogicalInstant::to_rfc3339(f.enrolled_at).unwrap_or_default(), "totpInfo": {}}))
+        .map(|f| (f.enrolled_at, json!({"mfaEnrollmentId": f.mfa_enrollment_id, "displayName": f.display_name, "enrolledAt": time(f.enrolled_at), "totpInfo": {}})))
         .collect();
-    out.extend(u.mfa.phone_factors().iter().map(|f| {
+    entries.extend(u.mfa.phone_factors().iter().map(|f| {
         let phone = if redacted {
             obfuscate_phone_number(&f.phone_number)
         } else {
             f.phone_number.clone()
         };
-        json!({"mfaEnrollmentId": f.mfa_enrollment_id, "displayName": f.display_name, "enrolledAt": LogicalInstant::to_rfc3339(f.enrolled_at).unwrap_or_default(), "phoneInfo": phone})
+        (f.enrolled_at, json!({"mfaEnrollmentId": f.mfa_enrollment_id, "displayName": f.display_name, "enrolledAt": time(f.enrolled_at), "phoneInfo": phone}))
     }));
-    out
+    entries.sort_by_key(|(at, _)| *at);
+    entries.into_iter().map(|(_, entry)| entry).collect()
+}
+
+/// An instant as protobuf's JSON Timestamp: RFC 3339 with 0, 3, 6 or 9 fraction digits, the
+/// fewest that keep its precision.
+fn proto_timestamp(at: LogicalInstant) -> String {
+    let full = LogicalInstant::to_rfc3339(at).unwrap_or_default();
+    let Some(body) = full.strip_suffix('Z') else {
+        return full;
+    };
+    let (seconds, fraction) = body.split_once('.').unwrap_or((body, ""));
+    let mut fraction: String = fraction
+        .chars()
+        .chain(std::iter::repeat('0'))
+        .take(9)
+        .collect();
+    while !fraction.is_empty() && fraction.ends_with("000") {
+        fraction.truncate(fraction.len() - 3);
+    }
+    if fraction.is_empty() {
+        format!("{seconds}Z")
+    } else {
+        format!("{seconds}.{fraction}Z")
+    }
 }
 
 /// The action link of an email action (what the Emulator's console prints).
@@ -9777,8 +10674,14 @@ fn oob_link(
     request_type: OobRequestType,
     code: &str,
     body: &Value,
-    tenant: Option<&str>,
+    store: &AuthStore,
 ) -> String {
+    let tenant = store.tenant_id();
+    // The link names the project's default locale, as production's does (sandbox recording
+    // 2026-09-25, auth-config-sdk/other-fields#reset-under-locale).
+    let lang = percent_encode(&project_config::default_locale(
+        store.stored_config_members(),
+    ));
     let host = headers.host.as_deref().unwrap_or("127.0.0.1:9099");
     let mode = match request_type {
         OobRequestType::PasswordReset => "resetPassword",
@@ -9787,7 +10690,7 @@ fn oob_link(
         OobRequestType::VerifyAndChangeEmail => "verifyAndChangeEmail",
     };
     let mut link = format!(
-        "http://{host}/emulator/action?mode={mode}&lang=en&oobCode={code}&apiKey=fake-api-key"
+        "http://{host}/emulator/action?mode={mode}&lang={lang}&oobCode={code}&apiKey=fake-api-key"
     );
     if let Some(url) = str_field(body, "continueUrl") {
         link.push_str("&continueUrl=");
@@ -9826,21 +10729,34 @@ fn send_oob_code(
     at: LogicalInstant,
     headers: &RequestHeaders,
     privileged: bool,
+    strict: bool,
 ) -> JsonResponse {
     let return_oob_link = match opt_bool(body, "returnOobLink") {
         Ok(Some(value)) => value,
         Ok(None) => false,
         Err(response) => return response,
     };
-    // Only the authenticated Admin route may return a credential to the caller.
-    // Check before creating a code or emitting a delivery notice.
+    // Only the authenticated Admin route may return a credential to the caller. Checked before
+    // a code is created or a delivery notice emitted; production and the official emulator
+    // answer INSUFFICIENT_PERMISSION (sandbox recording 2026-09-24).
     if !privileged && return_oob_link {
-        return error(400, "OPERATION_NOT_ALLOWED");
+        return error(400, "INSUFFICIENT_PERMISSION");
     }
     let request_type = match str_field(body, "requestType") {
+        Some("OOB_REQ_TYPE_UNSPECIFIED") if strict => return error(400, "INVALID_REQ_TYPE"),
         None | Some("" | "OOB_REQ_TYPE_UNSPECIFIED") => return error(400, "MISSING_REQ_TYPE"),
         Some(t) => match OobRequestType::parse(t) {
             Some(t) => t,
+            // Strict: production decodes the enum before anything else looks at the request.
+            None if strict => {
+                return proto_field_error(
+                    "req_type",
+                    &format!(
+                        "Invalid value at 'req_type' (type.googleapis.com/google.cloud.identitytoolkit.v1.OobReqType), {}",
+                        Value::String(t.to_owned())
+                    ),
+                )
+            }
             None => {
                 return JsonResponse {
                     status: 501,
@@ -9849,103 +10765,262 @@ fn send_oob_code(
             }
         },
     };
+    // The official emulator refuses a continue URL that is not absolute before anything else;
+    // strict checks it with production's wording once the address is known (below).
+    if !strict {
+        if let Some(url) = str_field(body, "continueUrl").filter(|url| !url.is_empty()) {
+            if !uri_is_absolute(url) {
+                return error(
+                    400,
+                    "INVALID_CONTINUE_URI : ((expected an absolute URI with valid scheme and host))",
+                );
+            }
+        }
+    }
+    let privacy = store.config().enable_improved_email_privacy;
+    let hidden = |email: &str| JsonResponse {
+        status: 200,
+        body: json!({"kind": "identitytoolkit#GetOobConfirmationCodeResponse", "email": email}),
+    };
     let (email, uid, new_email) = match request_type {
         OobRequestType::PasswordReset => {
             let Some(email) = str_field(body, "email").map(canonicalize_email) else {
                 return error(400, "MISSING_EMAIL");
             };
+            if strict && !is_valid_email(&email) {
+                return error(400, "INVALID_EMAIL");
+            }
             match store.user_by_email(&email) {
                 Some(u) => (email.clone(), Some(u.local_id.clone()), None),
                 // Improved email privacy: an unknown address is answered as if a mail had
-                // been sent, and no code is created. An Admin link generator is already
-                // authenticated and can read every account, so hiding the address from it
-                // would only withhold the link it asked for: it keeps `EMAIL_NOT_FOUND`.
-                None if store.config().enable_improved_email_privacy && !return_oob_link => {
-                    return JsonResponse {
-                        status: 200,
-                        body: json!({"kind": "identitytoolkit#GetOobConfirmationCodeResponse", "email": email}),
-                    }
-                }
+                // been sent, and no code is created, for the Admin link generator too
+                // (sandbox recording 2026-09-24; the official emulator answers the same).
+                // Production answers so before it looks at the continue URL.
+                None if privacy => return hidden(&email),
                 None => return error(400, "EMAIL_NOT_FOUND"),
             }
         }
         OobRequestType::EmailSignIn => {
+            // Strict: the Admin generator is refused while email links are off, as the client
+            // route is (sandbox recording 2026-09-24). The official emulator always reports
+            // email links as enabled (firebase-tools `state.js` `enableEmailLinkSignin`), so the
+            // emulator profile adds no rejection here.
+            let sign_in = store.sign_in_config();
+            if strict && (!sign_in.email_enabled || sign_in.password_required) {
+                return error(400, "OPERATION_NOT_ALLOWED");
+            }
             let Some(email) = str_field(body, "email").map(canonicalize_email) else {
                 return error(400, "MISSING_EMAIL");
             };
             if !email.contains('@') {
                 return error(400, "INVALID_EMAIL");
             }
-            let uid = store.user_by_email(&email).map(|u| u.local_id.clone());
+            // Strict: a sign-in link needs somewhere to continue, and a disabled owner gets
+            // none (sandbox recording 2026-09-24).
+            if strict && str_field(body, "continueUrl").is_none() {
+                return error(400, "MISSING_CONTINUE_URI");
+            }
+            // Only the Admin route was observed; a client under improved email privacy is
+            // not told that an address belongs to a disabled account.
+            let owner = store.user_by_email(&email);
+            if strict && privileged && owner.is_some_and(|u| u.disabled) {
+                return error(400, "USER_DISABLED");
+            }
+            let uid = owner.map(|u| u.local_id.clone());
             (email.clone(), uid, None)
         }
         OobRequestType::VerifyEmail | OobRequestType::VerifyAndChangeEmail => {
-            // Email-based target selection is reserved for authenticated Admin generators.
-            let uid = match (
-                privileged,
-                str_field(body, "idToken"),
-                str_field(body, "email"),
-            ) {
-                (false, _, _) | (true, Some(_), _) => {
-                    match verify_honouring_legacy(store, body, at) {
-                        Ok(uid) => uid,
-                        Err(r) => return r,
-                    }
+            let change = request_type == OobRequestType::VerifyAndChangeEmail;
+            // The Admin generator selects the account by its address, as production and the
+            // official emulator do; production's generator of an address change reads only
+            // the address, a verification also an ID token (sandbox recording 2026-09-24).
+            let by_token = if privileged {
+                str_field(body, "idToken").is_some() && !(strict && change)
+            } else {
+                true
+            };
+            let uid = if by_token {
+                match verify_honouring_legacy(store, body, at) {
+                    Ok(uid) => uid,
+                    Err(r) => return r,
                 }
-                (true, None, Some(email)) => match store.user_by_email(email) {
+            } else {
+                let Some(email) = str_field(body, "email").map(canonicalize_email) else {
+                    return error(400, "MISSING_EMAIL");
+                };
+                match store.user_by_email(&email) {
                     Some(u) => u.local_id.clone(),
-                    None => return error(400, "EMAIL_NOT_FOUND"),
-                },
-                (true, None, None) => return error(400, "MISSING_ID_TOKEN"),
+                    None => return error(400, "USER_NOT_FOUND"),
+                }
             };
             let Some(email) = store.user(&uid).and_then(|u| u.email.clone()) else {
-                return error(400, "MISSING_EMAIL : the user has no email");
+                return error(400, "MISSING_EMAIL");
             };
-            let new_email = if request_type == OobRequestType::VerifyAndChangeEmail {
+            let new_email = if change {
                 let Some(new_email) = str_field(body, "newEmail").map(canonicalize_email) else {
                     return error(400, "MISSING_NEW_EMAIL");
                 };
-                if !store.config().allow_duplicate_emails
-                    && store
-                        .user_by_email(&new_email)
-                        .is_some_and(|u| u.local_id != uid)
-                {
+                if strict && !is_valid_email(&new_email) {
+                    return error(400, "INVALID_NEW_EMAIL");
+                }
+                let taken = store
+                    .user_by_email(&new_email)
+                    .is_some_and(|u| u.local_id != uid);
+                // Strict: improved email privacy hides a taken or unchanged new address
+                // behind the answer of a sent mail (sandbox recording 2026-09-24).
+                if strict && privacy && (taken || new_email == email) {
+                    return hidden(&email);
+                }
+                if taken && !store.config().allow_duplicate_emails {
                     return error(400, "EMAIL_EXISTS");
                 }
-                Some(new_email.clone())
+                Some(new_email)
             } else {
                 None
             };
             (email, Some(uid), new_email)
         }
     };
+    // Strict: production's continue-URL checks, once the address is known.
+    if strict {
+        if let Some(url) = str_field(body, "continueUrl") {
+            if absolute_uri_host(url).is_none() {
+                return error(400, "INVALID_CONTINUE_URI : Missing domain in continue url");
+            }
+            if let Some(response) = unauthorized_continue_url(store, body) {
+                return response;
+            }
+        }
+        if let Some(response) = mobile_link_refusal(store, body) {
+            return response;
+        }
+        // A newer password reset, email change or sign-in link retires the older one; a
+        // verification link cannot be asked for twice within minutes, so its rule is unobserved.
+        if request_type != OobRequestType::VerifyEmail {
+            store.retire_oob_codes(request_type, &email);
+        }
+    }
     let code = match store.create_oob_code(request_type, &email, uid, new_email, at) {
         Ok(code) => code,
         Err(e) => return auth_error(&e),
     };
     let mut response =
         json!({"kind": "identitytoolkit#GetOobConfirmationCodeResponse", "email": email});
+    let mut link = oob_link(headers, request_type, &code, body, store);
+    if strict {
+        link = mobile_link(store, body, link);
+    }
     if return_oob_link {
         response["oobCode"] = json!(code);
-        response["oobLink"] = json!(oob_link(
-            headers,
-            request_type,
-            &code,
-            body,
-            store.tenant_id()
-        ));
+        response["oobLink"] = json!(link);
     } else {
         // The mail that is not sent: the official emulator prints the link instead.
         store.push_credential_notice(CredentialNotice::EmailAction {
             request_type,
             email: email.clone(),
             new_email: store.oob_code(&code).and_then(|c| c.new_email.clone()),
-            link: oob_link(headers, request_type, &code, body, store.tenant_id()),
+            link,
         });
     }
     JsonResponse {
         status: 200,
         body: response,
+    }
+}
+
+/// Whether an action link asks for a mobile app: an iOS bundle or an Android package.
+fn names_mobile_app(body: &Value) -> bool {
+    str_field(body, "iOSBundleId").is_some_and(|id| !id.is_empty())
+        || str_field(body, "androidPackageName").is_some_and(|name| !name.is_empty())
+}
+
+/// Whether an app handles the action link itself (`canHandleCodeInApp`).
+fn handled_in_app(body: &Value) -> bool {
+    body.get("canHandleCodeInApp").and_then(Value::as_bool) == Some(true)
+}
+
+/// Strict: production's refusals of mobile link settings (sandbox recording 2026-09-25,
+/// auth-config-sdk/mobile-links). fireemu configures no Firebase Hosting domain, so every link
+/// domain is refused; Dynamic Links are never activated.
+fn mobile_link_refusal(store: &AuthStore, body: &Value) -> Option<JsonResponse> {
+    if str_field(body, "linkDomain").is_some_and(|domain| !domain.is_empty()) {
+        return Some(error(
+            400,
+            "INVALID_HOSTING_LINK_DOMAIN : The provided hosting link domain is not configured in Firebase Hosting or is not owned by the current project. This cannot be a default hosting domain (web.app or firebaseapp.com).",
+        ));
+    }
+    if handled_in_app(body) && str_field(body, "continueUrl").is_none() {
+        return Some(error(400, "MISSING_CONTINUE_URI"));
+    }
+    let dynamic_links = project_config::member_value(
+        store.stored_config_members(),
+        "mobileLinksConfig",
+        store.project_id(),
+    )
+    .and_then(|config| config.get("domain").cloned())
+        == Some(json!("FIREBASE_DYNAMIC_LINK_DOMAIN"));
+    if dynamic_links && handled_in_app(body) && names_mobile_app(body) {
+        return Some(error(
+            400,
+            "DYNAMIC_LINK_NOT_ACTIVATED : FDL domain is not configured",
+        ));
+    }
+    None
+}
+
+/// Strict: an action link with mobile settings as production gives it. A link an app handles
+/// is wrapped in the hosting domain's `/__/auth/links`; otherwise a mobile app wraps the
+/// continue URL (sandbox recording 2026-09-25, auth-config-sdk/mobile-links).
+fn mobile_link(store: &AuthStore, body: &Value, link: String) -> String {
+    if !names_mobile_app(body) {
+        return link;
+    }
+    let links_handler = format!(
+        "https://{}.firebaseapp.com/__/auth/links?link=",
+        store.project_id()
+    );
+    if handled_in_app(body) {
+        return format!("{links_handler}{}", percent_encode(&link));
+    }
+    let Some(continue_url) = str_field(body, "continueUrl") else {
+        return link;
+    };
+    let direct = format!("continueUrl={}", percent_encode(continue_url));
+    let through_handler = format!(
+        "continueUrl={}",
+        percent_encode(&format!("{links_handler}{continue_url}"))
+    );
+    link.replacen(&direct, &through_handler, 1)
+}
+
+/// The refusal of a continue URL whose host is not one of the project's authorized domains.
+fn unauthorized_continue_url(store: &AuthStore, body: &Value) -> Option<JsonResponse> {
+    let url = str_field(body, "continueUrl")?;
+    let host = absolute_uri_host(url)?;
+    if store
+        .authorized_domains()
+        .iter()
+        .any(|domain| domain.eq_ignore_ascii_case(&host))
+    {
+        return None;
+    }
+    Some(error(
+        400,
+        "UNAUTHORIZED_DOMAIN : Domain not allowlisted by project",
+    ))
+}
+
+/// An outstanding code by value: `INVALID_OOB_CODE` for none, `EXPIRED_OOB_CODE` for one past
+/// its lifetime under production lifetimes (sandbox recording 2026-09-24, auth-action/expiry).
+fn live_oob_code(
+    store: &AuthStore,
+    code: &str,
+    at: LogicalInstant,
+) -> Result<fireemu_core_auth::store::OobCode, JsonResponse> {
+    match store.oob_code(code) {
+        None => Err(error(400, "INVALID_OOB_CODE")),
+        Some(entry) if store.oob_code_expired(entry, at) => Err(error(400, "EXPIRED_OOB_CODE")),
+        Some(entry) => Ok(entry.clone()),
     }
 }
 
@@ -9957,33 +11032,71 @@ fn reset_password(
     at: LogicalInstant,
     stateless_refresh_tokens: bool,
 ) -> JsonResponse {
+    let strict = !stateless_refresh_tokens;
     let Some(code) = str_field(body, "oobCode") else {
         return error(400, "MISSING_OOB_CODE");
     };
-    let Some(entry) = store.oob_code(code).cloned() else {
-        return error(400, "INVALID_OOB_CODE");
+    let entry = match live_oob_code(store, code, at) {
+        Ok(entry) => entry,
+        Err(response) => return response,
     };
     let new_password = match opt_str(body, "newPassword") {
         // Check mode (`checkActionCode` / `verifyPasswordResetCode`): describe the code
         // without consuming it, whatever its type. Only the reset itself is restricted to
-        // `PASSWORD_RESET`.
+        // `PASSWORD_RESET`. The official emulator reads an empty password as none.
         Ok(None) => return check_oob_code(&entry),
+        Ok(Some("")) if !strict => return check_oob_code(&entry),
         Ok(Some(new_password)) => new_password,
         Err(r) => return r,
     };
+    // Strict: production refuses an empty password without the length hint, and only
+    // inspects a sign-in link offered with a password (sandbox recording 2026-09-24).
+    if strict && new_password.is_empty() {
+        return error(400, "WEAK_PASSWORD");
+    }
+    if strict && entry.request_type == OobRequestType::EmailSignIn {
+        return check_oob_code(&entry);
+    }
     if entry.request_type != OobRequestType::PasswordReset {
         return error(400, "INVALID_OOB_CODE");
     }
-    let Some(uid) = entry.uid.clone() else {
-        return error(400, "INVALID_OOB_CODE");
+    // The official `resetPassword` checks the new password before it spends the code and
+    // looks the address up; strict keeps the order observed so far (the lookup first).
+    let validate = |store: &AuthStore| {
+        store.validate_password_for(
+            fireemu_core_auth::password_policy::Operation::Reset,
+            new_password,
+        )
     };
-    if let Err(e) = store.validate_password_for(
-        fireemu_core_auth::password_policy::Operation::Reset,
-        new_password,
-    ) {
-        return auth_error(&e);
+    if !strict {
+        if let Err(e) = validate(store) {
+            return auth_error(&e);
+        }
+    }
+    // The code names an address, and the account that owns it now is reset: production does
+    // so (sandbox recordings 2026-09-24, password-reset#reset-e-after-email-change and
+    // auth-action/address-reuse), and so does the official emulator's `resetPassword`. Nobody
+    // owning it is production's USER_NOT_FOUND, or the official INVALID_OOB_CODE, which spends
+    // the code as the official handler does.
+    let uid = match store.user_by_email(&entry.email) {
+        Some(u) => u.local_id.clone(),
+        None if strict => return error(400, "USER_NOT_FOUND"),
+        None => {
+            let _ = store.consume_oob_code(code, None, at);
+            return error(400, "INVALID_OOB_CODE");
+        }
+    };
+    if strict {
+        if let Err(e) = validate(store) {
+            return auth_error(&e);
+        }
     }
     if store.user(&uid).is_none_or(|u| u.disabled) {
+        // Strict: the refusal spends the code (sandbox recording 2026-09-24,
+        // password-reset#check-f-after-refused-reset).
+        if strict {
+            let _ = store.consume_oob_code(code, Some(OobRequestType::PasswordReset), at);
+        }
         return error(400, "USER_DISABLED");
     }
     if let Err(e) = store.consume_oob_code(code, Some(OobRequestType::PasswordReset), at) {
@@ -9998,12 +11111,10 @@ fn reset_password(
         return auth_error(&e);
     }
     // A reset advances `validSince` and verifies the address (the user read the mail). The
-    // Firebase profile keeps the official emulator's stateless refresh credentials; strict
-    // mode also removes them.
+    // sessions before it are refused as TOKEN_EXPIRED: strict keeps their refresh records so
+    // a refresh answers so too (sandbox recording 2026-09-24), and the emulator profile keeps
+    // the official emulator's stateless refresh credentials.
     let _ = store.revoke_tokens(&uid, at);
-    if !stateless_refresh_tokens {
-        store.revoke_refresh_tokens(&uid);
-    }
     if let Some(u) = store.user_mut(&uid) {
         u.email_verified = true;
     }
@@ -10040,13 +11151,40 @@ fn check_oob_code(entry: &fireemu_core_auth::store::OobCode) -> JsonResponse {
 
 /// `accounts:update` with an `oobCode` (`applyActionCode`): `VERIFY_EMAIL` marks the
 /// address verified, `VERIFY_AND_CHANGE_EMAIL` switches to the new address.
-fn apply_oob_code(store: &mut AuthStore, code: &str, at: LogicalInstant) -> JsonResponse {
-    let Some(entry) = store.oob_code(code).cloned() else {
+fn apply_oob_code(
+    store: &mut AuthStore,
+    code: &str,
+    at: LogicalInstant,
+    strict: bool,
+) -> JsonResponse {
+    let entry = match live_oob_code(store, code, at) {
+        Ok(entry) => entry,
+        Err(response) => return response,
+    };
+    let Some(owner) = entry.uid.clone() else {
         return error(400, "INVALID_OOB_CODE");
     };
-    let Some(uid) = entry.uid.clone() else {
-        return error(400, "INVALID_OOB_CODE");
+    // A verification finds its account by the address it names, as production does (it
+    // answers EMAIL_NOT_FOUND once nobody owns it; sandbox recordings 2026-09-24,
+    // verify-email and auth-action/address-reuse) and as the official emulator's
+    // `setAccountInfo` does (INVALID_OOB_CODE, spending the code). Strict also refuses a
+    // disabled account (sandbox recording 2026-09-24).
+    let uid = if entry.request_type == OobRequestType::VerifyEmail {
+        match store.user_by_email(&entry.email) {
+            Some(u) => u.local_id.clone(),
+            None if strict => return error(400, "EMAIL_NOT_FOUND"),
+            None => {
+                let _ = store.consume_oob_code(code, None, at);
+                return error(400, "INVALID_OOB_CODE");
+            }
+        }
+    } else {
+        owner
     };
+    if strict && store.user(&uid).is_some_and(|u| u.disabled) {
+        return error(400, "USER_DISABLED");
+    }
+    let mut new_email_answer = None;
     match entry.request_type {
         OobRequestType::VerifyEmail => {
             if store.user(&uid).is_none() {
@@ -10063,9 +11201,9 @@ fn apply_oob_code(store: &mut AuthStore, code: &str, at: LogicalInstant) -> Json
             let Some(new_email) = entry.new_email.clone() else {
                 return error(400, "INVALID_OOB_CODE");
             };
-            if store.user(&uid).is_none() {
+            let Some(replaced) = store.user(&uid).map(|u| u.email.clone()) else {
                 return error(400, "INVALID_OOB_CODE");
-            }
+            };
             if let Err(e) = store.validate_email_update(&uid, &new_email) {
                 return auth_error(&e);
             }
@@ -10077,17 +11215,65 @@ fn apply_oob_code(store: &mut AuthStore, code: &str, at: LogicalInstant) -> Json
             }
             if let Some(u) = store.user_mut(&uid) {
                 u.email_verified = true;
+                // Strict: the address the first applied change replaced, as production
+                // records it (the official emulator records it only on a direct update).
+                if strict && u.initial_email.is_none() {
+                    u.initial_email.clone_from(&replaced);
+                }
             }
+            // Strict: the change revokes the sessions before it and voids the verification
+            // codes of the replaced address (sandbox recording 2026-09-24,
+            // change-email#lookup-token-before-change, #apply-old-verify-ch).
+            if strict {
+                let _ = store.revoke_tokens(&uid, at);
+                if let Some(replaced) = replaced.as_deref() {
+                    store.retire_oob_codes(OobRequestType::VerifyEmail, replaced);
+                }
+            }
+            new_email_answer = Some(new_email);
         }
         OobRequestType::PasswordReset | OobRequestType::EmailSignIn => {
             return error(400, "INVALID_OOB_CODE");
         }
+    }
+    if strict {
+        return JsonResponse {
+            status: 200,
+            body: account_update_answer(store, &uid, new_email_answer.as_deref()),
+        };
     }
     let email = store.user(&uid).and_then(|u| u.email.clone());
     JsonResponse {
         status: 200,
         body: json!({"kind": "identitytoolkit#SetAccountInfoResponse", "localId": uid.as_str(), "email": email, "emailVerified": true}),
     }
+}
+
+/// Production's `SetAccountInfoResponse` for an account: its address and verification, profile,
+/// providers and redacted password hash, and `newEmail` after an address change.
+fn account_update_answer(store: &AuthStore, uid: &LocalId, new_email: Option<&str>) -> Value {
+    let mut response =
+        json!({"localId": uid.as_str(), "kind": "identitytoolkit#SetAccountInfoResponse"});
+    if let Some(u) = store.user(uid) {
+        response["email"] = json!(u.email);
+        // As in a lookup: with an address, and while true after one was removed; never for an
+        // account that had none (sandbox recording 2026-09-24).
+        if u.email.is_some() || u.email_verified || u.email_verified_recorded {
+            response["emailVerified"] = json!(u.email_verified);
+        }
+        response["displayName"] = json!(u.display_name);
+        response["photoUrl"] = json!(u.photo_url);
+        if let Some(new_email) = new_email {
+            response["newEmail"] = json!(new_email);
+        }
+    }
+    let record = user_json(store, uid);
+    for key in ["providerUserInfo", "passwordHash"] {
+        if let Some(value) = record.get(key) {
+            response[key] = value.clone();
+        }
+    }
+    response
 }
 
 /// The `authEmulator` JSON document every action-link answer is wrapped in.
@@ -10172,8 +11358,12 @@ fn emulator_action(
             OobRequestType::VerifyEmail,
             continue_url,
             at,
-            ("verify your email", "Try verifying your email again."),
-            |email| json!({"success": "The email has been successfully verified.", "email": email}),
+            ApplyPage {
+                strict: !stateless_refresh_tokens,
+                what: "verify your email",
+                retry: "Try verifying your email again.",
+                success: |email| json!({"success": "The email has been successfully verified.", "email": email}),
+            },
         ),
         Some("verifyAndChangeEmail") => action_apply(
             store,
@@ -10181,12 +11371,16 @@ fn emulator_action(
             OobRequestType::VerifyAndChangeEmail,
             continue_url,
             at,
-            ("change your email", "Try changing your email again."),
-            |email| json!({"success": "The email has been successfully changed.", "newEmail": email}),
+            ApplyPage {
+                strict: !stateless_refresh_tokens,
+                what: "change your email",
+                retry: "Try changing your email again.",
+                success: |email| json!({"success": "The email has been successfully changed.", "newEmail": email}),
+            },
         ),
         Some("signIn") => {
-            if store
-                .oob_code(code)
+            if live_oob_code(store, code, at)
+                .ok()
                 .is_none_or(|entry| entry.request_type != OobRequestType::EmailSignIn)
             {
                 action_expired("sign in", "Try signing in again.")
@@ -10209,22 +11403,16 @@ fn action_reset_password(
     at: LogicalInstant,
     stateless_refresh_tokens: bool,
 ) -> JsonResponse {
-    let Some(entry) = store
-        .oob_code(code)
+    // A code past its lifetime is gone to the action page, also while strict still keeps it.
+    let Some(entry) = live_oob_code(store, code, at)
+        .ok()
         .filter(|c| c.request_type == OobRequestType::PasswordReset)
-        .cloned()
     else {
         return action_expired("reset your password", "Try resetting your password again.");
     };
     let template = format!(
         "{}&newPassword=NEW_PASSWORD_HERE",
-        oob_link(
-            headers,
-            entry.request_type,
-            code,
-            &Value::Null,
-            store.tenant_id()
-        )
+        oob_link(headers, entry.request_type, code, &Value::Null, store)
     );
     let Some(new_password) = new_password else {
         return action_response(
@@ -10266,6 +11454,15 @@ fn action_reset_password(
     }
 }
 
+/// How the action page applies one kind of code: under which profile's rules, and the words
+/// of its refusal and of its success answer.
+struct ApplyPage<'a, F: FnOnce(&Value) -> Value> {
+    strict: bool,
+    what: &'a str,
+    retry: &'a str,
+    success: F,
+}
+
 /// `mode=verifyEmail` and `mode=verifyAndChangeEmail`: `applyActionCode`, with
 /// `INVALID_OOB_CODE` mapped to the official wording and every other API error passed
 /// through unchanged, as the official handler does.
@@ -10275,16 +11472,24 @@ fn action_apply(
     expected: OobRequestType,
     continue_url: Option<&str>,
     at: LogicalInstant,
-    (what, retry): (&str, &str),
-    success: impl FnOnce(&Value) -> Value,
+    page: ApplyPage<'_, impl FnOnce(&Value) -> Value>,
 ) -> JsonResponse {
-    if store
-        .oob_code(code)
+    let ApplyPage {
+        strict,
+        what,
+        retry,
+        success,
+    } = page;
+    if live_oob_code(store, code, at)
+        .ok()
         .is_none_or(|entry| entry.request_type != expected)
     {
         return action_expired(what, retry);
     }
-    let response = apply_oob_code(store, code, at);
+    // The page applies the code as `accounts:update` does, so strict follows the same
+    // production rules on both routes (sessions revoked, `initialEmail` recorded, the replaced
+    // address's verification codes void); only the page's own wording differs.
+    let response = apply_oob_code(store, code, at, strict);
     if response.status != 200 {
         return if response.body["error"]["message"].as_str() == Some("INVALID_OOB_CODE") {
             action_expired(what, retry)
@@ -10407,21 +11612,44 @@ fn sign_in_with_email_link(
     store: &mut AuthStore,
     body: &Value,
     at: LogicalInstant,
+    strict: bool,
 ) -> JsonResponse {
-    let (Some(email), Some(code)) = (str_field(body, "email"), str_field(body, "oobCode")) else {
+    // Production and the official emulator name a missing address before a missing code
+    // (sandbox recording 2026-09-24).
+    let Some(email) = str_field(body, "email") else {
+        return error(400, "MISSING_EMAIL");
+    };
+    let Some(code) = str_field(body, "oobCode") else {
         return error(400, "MISSING_OOB_CODE");
     };
     let email = canonicalize_email(email);
-    let matches = store
-        .oob_code(code)
-        .is_some_and(|c| c.request_type == OobRequestType::EmailSignIn && c.email == email);
-    if !matches {
-        return error(400, "INVALID_OOB_CODE");
+    let entry = match live_oob_code(store, code, at) {
+        Ok(entry) if entry.request_type == OobRequestType::EmailSignIn => entry,
+        Ok(_) => return error(400, "INVALID_OOB_CODE"),
+        Err(response) => return response,
+    };
+    if entry.email != email {
+        return error(
+            400,
+            "INVALID_EMAIL : The email provided does not match the sign-in email address.",
+        );
     }
+    let response_fields = |is_new: bool| {
+        [
+            ("kind", json!("identitytoolkit#EmailLinkSigninResponse")),
+            ("isNewUser", json!(is_new)),
+        ]
+    };
     // With a session: link the (now verified) email to that user instead. The code is
-    // consumed only once the request is known to succeed.
+    // consumed only once the request is known to succeed. Strict honours a legacy token, as
+    // production does (sandbox recording 2026-09-24, auth-action/legacy-token).
     if body.get("idToken").is_some_and(|t| !t.is_null()) {
-        let uid = match verify(store, body, at) {
+        let verified = if strict {
+            verify_honouring_legacy(store, body, at)
+        } else {
+            verify(store, body, at)
+        };
+        let uid = match verified {
             Ok(uid) => uid,
             Err(r) => return r,
         };
@@ -10440,25 +11668,50 @@ fn sign_in_with_email_link(
         }
         if let Some(u) = store.user_mut(&uid) {
             u.email_verified = true;
-        }
-        return match issue_tokens(store, &uid, None, at) {
-            Ok(mut tokens) => {
-                tokens["isNewUser"] = json!(false);
-                JsonResponse {
-                    status: 200,
-                    body: tokens,
-                }
+            u.email_link_signin = true;
+            // A linked anonymous account becomes an email-link account: its session is a
+            // `password` session and it lists the password provider, as in production and
+            // the official emulator.
+            if u.provider == fireemu_core_auth::store::Provider::Anonymous {
+                u.provider = fireemu_core_auth::store::Provider::EmailLink;
             }
-            Err(r) => r,
-        };
+        }
+        return finish_sign_in(
+            store,
+            &uid,
+            at,
+            Some(fireemu_core_auth::store::Provider::EmailLink),
+            &response_fields(false),
+        );
     }
     if let Err(e) = store.consume_oob_code(code, Some(OobRequestType::EmailSignIn), at) {
         return auth_error(&e);
     }
+    // Strict: an account whose address was never verified loses its password when the link
+    // proves the address, as production does (sandbox recording 2026-09-24).
+    let unverified_owner = store
+        .user_by_email(&email)
+        .filter(|u| !u.email_verified && !u.disabled)
+        .map(|u| u.local_id.clone());
     let (uid, is_new) = match store.sign_in_with_email_link(&email, at) {
         Ok(r) => r,
         Err(e) => return auth_error(&e),
     };
+    if strict && unverified_owner.as_ref() == Some(&uid) {
+        if let Err(e) = store.clear_password(&uid) {
+            return auth_error(&e);
+        }
+    }
+    if let Some(u) = store.user_mut(&uid) {
+        u.email_link_signin = true;
+        u.email_link_created |= is_new;
+        // Removing the password leaves an account without a provider; the link makes it an
+        // email-link account, whose sessions carry no anonymous `provider_id` (sandbox
+        // recording 2026-09-24, email-link/session#sign-in-p).
+        if u.provider == fireemu_core_auth::store::Provider::Anonymous {
+            u.provider = fireemu_core_auth::store::Provider::EmailLink;
+        }
+    }
     // The account and the pending credential keep `Provider::EmailLink`, which drives
     // `providerUserInfo`, the `createAuthUri` sign-in methods and the `emailLink` sign-in
     // method Blocking Functions see. The token claim itself is rendered as `password`.
@@ -10467,10 +11720,7 @@ fn sign_in_with_email_link(
         &uid,
         at,
         Some(fireemu_core_auth::store::Provider::EmailLink),
-        &[
-            ("kind", json!("identitytoolkit#EmailLinkSigninResponse")),
-            ("isNewUser", json!(is_new)),
-        ],
+        &response_fields(is_new),
     )
 }
 
@@ -10501,6 +11751,23 @@ fn send_verification_code(store: &mut AuthStore, body: &Value, at: LogicalInstan
         }
         Err(e) => auth_error(&e),
     }
+}
+
+/// Strict: a written SMS region policy refuses a code for a number of a region it does not
+/// allow (sandbox recording 2026-09-25, auth-config-sdk/other-fields).
+fn sms_region_refusal(store: &AuthStore, body: &Value) -> Option<JsonResponse> {
+    let number = str_field(body, "phoneNumber")?;
+    let policy = project_config::member_value(
+        store.stored_config_members(),
+        "smsRegionConfig",
+        store.project_id(),
+    )?;
+    phone_region::policy_refuses(&policy, number).then(|| {
+        error(
+            400,
+            "OPERATION_NOT_ALLOWED : SMS unable to be sent until this region enabled by the app developer.",
+        )
+    })
 }
 
 /// `accounts:signInWithPhoneNumber`: `sessionInfo` + `code`; with an `idToken` the number
@@ -11155,6 +12422,26 @@ fn parse_idp_claims(token: &str) -> Option<Value> {
     Some(payload)
 }
 
+/// The lower-cased host of an absolute `scheme://authority` URI, without user info or port;
+/// `None` when the URI has no scheme or no authority. A backslash ends the authority, as a
+/// browser reads it, so `https://evil.example\@allowed.host/` names `evil.example`.
+fn absolute_uri_host(uri: &str) -> Option<String> {
+    if !uri_is_absolute(uri) {
+        return None;
+    }
+    let (_, rest) = uri.split_once("://")?;
+    let authority = rest.split(['/', '\\', '?', '#']).next().unwrap_or_default();
+    let host_port = authority
+        .rsplit_once('@')
+        .map_or(authority, |(_, host)| host);
+    let host = if let Some(bracketed) = host_port.strip_prefix('[') {
+        bracketed.split_once(']').map(|(host, _)| host)?
+    } else {
+        host_port.split(':').next().unwrap_or_default()
+    };
+    (!host.is_empty()).then(|| host.to_ascii_lowercase())
+}
+
 /// Whether `uri` is an absolute URI (has a scheme), the official `parseAbsoluteUri` guard.
 fn uri_is_absolute(uri: &str) -> bool {
     match uri.find(':') {
@@ -11194,14 +12481,27 @@ fn normalized_idp_params(request_uri: &str, post_body: Option<&str>) -> BTreeMap
 /// `accounts:createAuthUri` (`fetchSignInMethodsForEmail`): whether the email is
 /// registered and how it can sign in. A `providerId` (a sign-in-with-identity-provider request) is not
 /// implemented by the official emulator, and neither is it here.
-fn create_auth_uri(store: &AuthStore, body: &Value) -> JsonResponse {
+/// `accounts:createAuthUri`. Strict answers as production does (sandbox recording
+/// 2026-09-25, auth-config-sdk/email-privacy): a provider that is not configured is refused,
+/// and empty provider lists are left out.
+fn create_auth_uri(store: &AuthStore, body: &Value, strict: bool) -> JsonResponse {
     let session_id = str_field(body, "sessionId")
         .filter(|s| !s.is_empty())
         .unwrap_or("fireemu-session")
         .to_owned();
     // The official emulator does not implement createAuthUri for a provider (it is a legacy
-    // redirect helper the SDKs no longer use); it answers NotImplementedError.
-    if body.get("providerId").is_some_and(|v| !v.is_null()) {
+    // redirect helper the SDKs no longer use); it answers NotImplementedError. Production's
+    // answer for a configured provider is unobserved.
+    if let Some(provider) = body.get("providerId").filter(|v| !v.is_null()) {
+        let configured = provider
+            .as_str()
+            .is_some_and(|id| store.oidc_config(id).is_some() || store.saml_config(id).is_some());
+        if strict && !configured {
+            return error(
+                400,
+                "OPERATION_NOT_ALLOWED : The identity provider configuration is not found.",
+            );
+        }
         return not_implemented("Sign-in with IDP is not yet supported.");
     }
     let Some(identifier) = str_field(body, "identifier") else {
@@ -11237,15 +12537,22 @@ fn create_auth_uri(store: &AuthStore, body: &Value) -> JsonResponse {
         }
         None => false,
     };
+    let mut answer = json!({
+        "kind": "identitytoolkit#CreateAuthUriResponse",
+        "registered": registered,
+        "signinMethods": methods,
+        "allProviders": methods,
+        "sessionId": session_id,
+    });
+    if strict && methods.is_empty() {
+        if let Some(fields) = answer.as_object_mut() {
+            fields.remove("signinMethods");
+            fields.remove("allProviders");
+        }
+    }
     JsonResponse {
         status: 200,
-        body: json!({
-            "kind": "identitytoolkit#CreateAuthUriResponse",
-            "registered": registered,
-            "signinMethods": methods,
-            "allProviders": methods,
-            "sessionId": session_id,
-        }),
+        body: answer,
     }
 }
 
@@ -11279,10 +12586,24 @@ fn finalize_phone_enrollment(
     {
         return refusal;
     }
-    store.consume_phone_code(session_info);
+    // Production accepts a test number's enrollment session again, and then refuses it as the
+    // number now enrolled (sandbox recording 2026-09-24, auth-mfa/sms#finalize-again).
+    let test_number = store
+        .sign_in_config()
+        .test_phone_numbers
+        .contains_key(&verified.phone_number);
+    if !(store.second_factor_rules_are_production() && test_number) {
+        store.consume_phone_code(session_info);
+    }
     let display_name = str_field(body, "displayName").map(str::to_owned);
     match store.enroll_phone_factor(uid, &verified.phone_number, display_name, at) {
         Ok(factor) => {
+            // Production ends the sessions before a phone enrollment (validSince moves;
+            // sandbox recording 2026-09-24, auth-mfa/sms#admin-lookup-s and
+            // lifetime#control-start-s450); a TOTP enrollment leaves them.
+            if store.second_factor_rules_are_production() {
+                let _ = store.revoke_tokens(uid, at);
+            }
             let assertion = SecondFactorAssertion {
                 sign_in_second_factor: "phone".to_owned(),
                 second_factor_identifier: factor.mfa_enrollment_id.clone(),
@@ -11320,8 +12641,102 @@ fn mfa_enrollment_withdraw(
     }
 }
 
+/// Strict `mfaEnrollment:withdraw` (sandbox recording 2026-09-24, auth-mfa/totp/withdraw and
+/// sms#withdraw-first-phone): a missing token is `INVALID_ID_TOKEN` and a missing factor id
+/// `MFA_ENROLLMENT_NOT_FOUND`; a withdrawal ends every session before it (`validSince`), and
+/// the new session keeps the second factor of the one that asked, unless that factor is the
+/// one withdrawn. The answer carries no `expiresIn`.
+fn mfa_enrollment_withdraw_production(
+    store: &mut AuthStore,
+    body: &Value,
+    at: LogicalInstant,
+) -> JsonResponse {
+    if str_field(body, "idToken").is_none_or(str::is_empty) {
+        return error(400, "INVALID_ID_TOKEN");
+    }
+    let uid = match verify_honouring_legacy(store, body, at) {
+        Ok(uid) => uid,
+        Err(r) => return r,
+    };
+    let Some(id) = str_field(body, "mfaEnrollmentId").filter(|id| !id.is_empty()) else {
+        return error(400, "MFA_ENROLLMENT_NOT_FOUND");
+    };
+    // The token was verified above; read its claims with the store's own signer.
+    let signer = store.signer_arc();
+    let kept = str_field(body, "idToken")
+        .and_then(|token| fireemu_core_auth::jwt::decode_token(token, signer.as_deref()).ok())
+        .and_then(|decoded| serde_json::from_str::<Value>(&decoded.payload_json).ok())
+        .and_then(|claims| {
+            let firebase = claims.get("firebase")?;
+            let factor = firebase.get("sign_in_second_factor")?.as_str()?;
+            let identifier = firebase.get("second_factor_identifier")?.as_str()?;
+            (identifier != id).then(|| SecondFactorAssertion {
+                sign_in_second_factor: factor.to_owned(),
+                second_factor_identifier: identifier.to_owned(),
+                verified_at: at,
+            })
+        });
+    match store.unenroll_factor(&uid, id) {
+        Ok(true) => {
+            let _ = store.revoke_tokens(&uid, at);
+            match issue_tokens(store, &uid, kept.as_ref(), at) {
+                Ok(tokens) => token_only_response(&tokens, false),
+                Err(r) => r,
+            }
+        }
+        Ok(false) => error(400, "MFA_ENROLLMENT_NOT_FOUND"),
+        Err(e) => mfa_error(&e),
+    }
+}
+
 /// `mfaSignIn:start`: sends the code of the chosen phone factor (TOTP has no start step).
-fn mfa_sign_in_start(store: &mut AuthStore, body: &Value, at: LogicalInstant) -> JsonResponse {
+fn mfa_sign_in_start(
+    store: &mut AuthStore,
+    body: &Value,
+    at: LogicalInstant,
+    strict: bool,
+) -> JsonResponse {
+    // Strict: production's answers (sandbox recording 2026-09-24, auth-mfa/totp/sign-in
+    // #start-totp and #start-totp-as-phone, sms#sign-in-start-without-info).
+    if strict {
+        let invalid = || error(400, "Request contains an invalid argument.");
+        let (Some(pending), Some(enrollment_id)) = (
+            str_field(body, "mfaPendingCredential").filter(|p| !p.is_empty()),
+            str_field(body, "mfaEnrollmentId").filter(|e| !e.is_empty()),
+        ) else {
+            return invalid();
+        };
+        if body.get("phoneSignInInfo").is_none_or(Value::is_null) {
+            return invalid();
+        }
+        let Some(pending_id) = PendingSignInId::parse(pending) else {
+            return error(400, "INVALID_PENDING_TOKEN");
+        };
+        let Some(uid) = store.pending_sign_in_user(&pending_id) else {
+            return error(
+                400,
+                if store.pending_sign_in_orphaned(&pending_id) {
+                    "USER_NOT_FOUND"
+                } else {
+                    "INVALID_PENDING_TOKEN"
+                },
+            );
+        };
+        if store.user(&uid).is_some_and(|u| {
+            u.mfa
+                .totp_factors()
+                .iter()
+                .any(|f| f.mfa_enrollment_id == enrollment_id)
+        }) {
+            return error(400, "INVALID_PHONE_NUMBER : Invalid format.");
+        }
+        if store.sms_pending_start_expired(&pending_id, at) {
+            return error(
+                400,
+                "INVALID_MFA_PENDING_CREDENTIAL : MFA pending credential is expired.",
+            );
+        }
+    }
     // The official order: both request fields first, then the credential, then the factor.
     let Some(pending) = str_field(body, "mfaPendingCredential").filter(|p| !p.is_empty()) else {
         return error(
@@ -11407,9 +12822,17 @@ fn finalize_phone_sign_in(
         return error(400, "INVALID_MFA_PENDING_CREDENTIAL");
     }
     let first_factor = store.pending_sign_in_context(&pending_id).cloned();
+    let test_number = store
+        .sign_in_config()
+        .test_phone_numbers
+        .contains_key(&verified.phone_number);
     match store.finalize_phone_mfa_sign_in(&uid, &pending_id, &enrollment_id, at) {
         Ok(assertion) => {
-            store.consume_phone_code(session);
+            // Production accepts a test number's session again (sandbox recording
+            // 2026-09-24, auth-mfa/sms#sign-in-finalize-again).
+            if !(store.second_factor_rules_are_production() && test_number) {
+                store.consume_phone_code(session);
+            }
             match issue_tokens_with_sign_in_attributes(
                 store,
                 &uid,
@@ -11452,7 +12875,7 @@ fn emulator_route(
                     json!({
                         "email": c.email,
                         "oobCode": c.code,
-                        "oobLink": oob_link(headers, c.request_type, &c.code, &Value::Null, store.tenant_id()),
+                        "oobLink": oob_link(headers, c.request_type, &c.code, &Value::Null, store),
                         "requestType": c.request_type.as_str(),
                     })
                 })
@@ -11534,14 +12957,29 @@ fn emulator_route(
     }
 }
 
-/// The document `GET` / `PATCH /emulator/v1/projects/{p}/config` serve.
+/// The body `PATCH /emulator/v1/projects/{p}/config` applies. The official emulator's
+/// `updateEmulatorProjectConfig` (firebase-tools 15.28.2) applies only `signIn` and
+/// `emailPrivacyConfig` and ignores `client.permissions`, which it never enforces; the emulator
+/// profile ignores it too, so the route cannot switch client sign-up or deletion off. Strict
+/// keeps applying it (the route has no production counterpart).
+fn emulator_config_patch(body: &Value, strict: bool) -> std::borrow::Cow<'_, Value> {
+    if strict || body.get("client").is_none() {
+        return std::borrow::Cow::Borrowed(body);
+    }
+    let mut body = body.clone();
+    if let Some(object) = body.as_object_mut() {
+        object.remove("client");
+    }
+    std::borrow::Cow::Owned(body)
+}
+
+/// The document `GET` / `PATCH /emulator/v1/projects/{p}/config` serve, in both profiles: the
+/// official emulator's `getEmulatorProjectConfig` (firebase-tools 15.28.2), which has no
+/// `client` member (owner decision K3). The route has no production counterpart. Under strict a
+/// PATCH still applies `client.permissions`, which this document does not echo.
 fn project_config_json(config: fireemu_core_auth::store::ProjectAuthConfig) -> Value {
     json!({
         "signIn": {"allowDuplicateEmails": config.allow_duplicate_emails},
-        "client": {"permissions": {
-            "disabledUserSignup": config.disabled_user_signup,
-            "disabledUserDeletion": config.disabled_user_deletion,
-        }},
         "emailPrivacyConfig": {"enableImprovedEmailPrivacy": config.enable_improved_email_privacy},
     })
 }
@@ -11555,51 +12993,62 @@ fn project_config_json_with_password_policy(
     result
 }
 
-fn project_config_json_with_auth_settings(
-    config: fireemu_core_auth::store::ProjectAuthConfig,
-    policy: &PasswordPolicy,
-    quota: &SignupQuotaConfig,
-) -> Value {
-    let mut result = project_config_json_with_password_policy(config, policy);
-    result["quota"] = quota_config_json(quota);
-    result
-}
-
 fn password_policy_json(policy: &PasswordPolicy) -> JsonResponse {
-    // Production's order first, then any other configured character in code-point order.
-    let order = fireemu_core_auth::password_policy::DEFAULT_NON_ALPHANUMERIC_ORDER;
-    let allowed: Vec<String> = order
-        .chars()
-        .filter(|c| policy.allowed_non_alphanumeric.contains(c))
-        .chain(
-            policy
-                .allowed_non_alphanumeric
-                .iter()
-                .copied()
-                .filter(|c| !order.contains(*c)),
-        )
-        .map(String::from)
-        .collect();
+    // A project without a configured policy answers production's default policy (sandbox
+    // read 2026-09-25): no symbol list and no sign-in upgrade member.
+    if !policy.configured {
+        return JsonResponse {
+            status: 200,
+            body: json!({
+                "customStrengthOptions": {
+                    "minPasswordLength": policy.min_length,
+                    "maxPasswordLength": fireemu_core_auth::password_policy::MAX_PASSWORD_UTF16_UNITS,
+                },
+                "schemaVersion": 1,
+                "enforcementState": "ENFORCE",
+            }),
+        };
+    }
+    // A configured policy as production projects it (sandbox recording 2026-09-25): the
+    // written options without false ones, the symbol list only when a symbol is required, and
+    // the sign-in upgrade only when it is on.
     let options = password_policy_config_json(policy)
         .get("passwordPolicyVersions")
         .and_then(Value::as_array)
         .and_then(|versions| versions.first())
         .and_then(|version| version.get("customStrengthOptions"))
         .cloned()
-        .unwrap_or_else(|| json!({}));
-    JsonResponse {
-        status: 200,
-        body: json!({
-            "customStrengthOptions": options,
-            "allowedNonAlphanumericCharacters": allowed,
-            "enforcementState": match policy.enforcement_state {
-                EnforcementState::Off => "OFF",
-                EnforcementState::Enforce => "ENFORCE",
-            },
-            "forceUpgradeOnSignin": policy.force_upgrade_on_signin,
-            "schemaVersion": 1,
-        }),
+        .map_or_else(|| json!({}), project_config::without_false);
+    let mut body = json!({
+        "customStrengthOptions": options,
+        "schemaVersion": 1,
+        "enforcementState": match policy.enforcement_state {
+            EnforcementState::Off => "OFF",
+            EnforcementState::Enforce => "ENFORCE",
+            EnforcementState::Unspecified => "ENFORCEMENT_STATE_UNSPECIFIED",
+        },
+    });
+    if policy.require_non_alphanumeric {
+        // Production's order first, then any other configured character in code-point order.
+        let order = fireemu_core_auth::password_policy::DEFAULT_NON_ALPHANUMERIC_ORDER;
+        let allowed: Vec<String> = order
+            .chars()
+            .filter(|c| policy.allowed_non_alphanumeric.contains(c))
+            .chain(
+                policy
+                    .allowed_non_alphanumeric
+                    .iter()
+                    .copied()
+                    .filter(|c| !order.contains(*c)),
+            )
+            .map(String::from)
+            .collect();
+        body["allowedNonAlphanumericCharacters"] = json!(allowed);
     }
+    if policy.force_upgrade_on_signin {
+        body["forceUpgradeOnSignin"] = json!(true);
+    }
+    JsonResponse { status: 200, body }
 }
 
 #[cfg(test)]
@@ -11607,6 +13056,40 @@ mod tests {
     use super::*;
     use fireemu_core_auth::mfa::TotpPolicy;
     use fireemu_core_types::determinism::SplitMix64;
+
+    #[test]
+    fn an_absolute_uri_host_is_its_lower_cased_authority_host() {
+        for (uri, host) in [
+            (
+                "https://Demo-App.firebaseapp.com/done?x=1",
+                Some("demo-app.firebaseapp.com"),
+            ),
+            ("http://localhost:5000/done", Some("localhost")),
+            (
+                "https://user:pw@demo-app.web.app#frag",
+                Some("demo-app.web.app"),
+            ),
+            (
+                "https://demo-app.web.app?x=@evil.example.com",
+                Some("demo-app.web.app"),
+            ),
+            ("http://[::1]:8080/x", Some("::1")),
+            ("myapp://callback", Some("callback")),
+            ("not a url", None),
+            ("", None),
+            ("/relative/path", None),
+            ("https://", None),
+            ("mailto:someone@example.com", None),
+            ("http://[::1/x", None),
+            (
+                "https://evil.example\\@demo-app.firebaseapp.com/x",
+                Some("evil.example"),
+            ),
+            ("https:\\\\evil.example", None),
+        ] {
+            assert_eq!(absolute_uri_host(uri).as_deref(), host, "{uri}");
+        }
+    }
 
     struct AllBlockingHooks;
     struct BeforeCreateOnlyHook;
@@ -11930,17 +13413,26 @@ mod tests {
                 "passwordPolicyEnforcementState": "ENFORCE",
                 "passwordPolicyVersions": versions,
             });
-            assert!(password_policy_from_config_json(&body).is_err());
+            assert!(password_policy_from_config_json(&body, true).is_err());
+            assert!(password_policy_from_config_json(&body, false).is_err());
         }
-        assert!(password_policy_from_config_json(&json!({
+        // Production requires exactly one version; the emulator profile takes none as the
+        // default options, as the official emulator takes any policy.
+        let without_versions = json!({
             "passwordPolicyEnforcementState": "ENFORCE",
             "passwordPolicyVersions": null,
-        }))
-        .is_ok());
-        assert!(password_policy_from_config_json(&json!({
-            "passwordPolicyEnforcementState": "ENFORCE",
-            "passwordPolicyVersions": [{"customStrengthOptions": {"minPasswordLength": 12}}]
-        }))
-        .is_ok());
+        });
+        assert!(password_policy_from_config_json(&without_versions, true).is_err());
+        assert!(password_policy_from_config_json(&without_versions, false).is_ok());
+        for one_version in [true, false] {
+            assert!(password_policy_from_config_json(
+                &json!({
+                    "passwordPolicyEnforcementState": "ENFORCE",
+                    "passwordPolicyVersions": [{"customStrengthOptions": {"minPasswordLength": 12}}]
+                }),
+                one_version
+            )
+            .is_ok());
+        }
     }
 }

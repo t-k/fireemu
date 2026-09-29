@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use fireemu_adapter_grpc::gateway::Gateway;
 use fireemu_adapter_grpc::local::LocalBackend;
 use fireemu_adapter_grpc::rest::RestState;
-use fireemu_adapter_grpc::rules::RulesEnforcer;
+use fireemu_adapter_grpc::rules::{RulesEnforcer, TokenSemantics};
 use fireemu_adapter_grpc::serve::serve_multiplexed;
 use fireemu_adapter_grpc::service::GatewayService;
 use fireemu_adapter_http::identity_toolkit::{AuthState, AuthWallClock};
@@ -28,12 +28,12 @@ use fireemu_proto_firestore::google::firestore::v1::firestore_server::FirestoreS
 
 use super::{
     app_check_state, bind_listeners, child_environment, clock_millis, control, control_state,
-    exit_code, functions, hub, hub_emulators, import_export, load_rules, load_storage_rules,
-    logical_system_time, print_banner, print_rules_status, random_secret, reportable_exit_code,
-    runtime_thread_counts, service_admission, session_rsa_cache, spawn_child,
-    start_firestore_config_reload_supervisors, stop_child, storage_state, ui, wait_child,
-    BoundAddrs, ExecPlan, Exporter, Listeners, Options, RedactedRuntimeConfig, RuntimeConfig,
-    Selection, ShutdownSignals, Verbosity,
+    exit_code, functions, hub, hub_emulators, import_export, install_auth_credential_entropy,
+    load_rules, load_storage_rules, logical_system_time, print_banner, print_rules_status,
+    random_secret, reportable_exit_code, runtime_thread_counts, service_admission,
+    session_rsa_cache, spawn_child, start_firestore_config_reload_supervisors, stop_child,
+    storage_state, ui, wait_child, BoundAddrs, ExecPlan, Exporter, Listeners, Options,
+    RedactedRuntimeConfig, RuntimeConfig, Selection, ShutdownSignals, Verbosity,
 };
 
 struct BoundStartup {
@@ -178,6 +178,28 @@ fn auth_project_config(cfg: &RuntimeConfig) -> ProjectAuthConfig {
         disabled_user_signup: cfg.auth_client_permissions.disabled_user_signup,
         disabled_user_deletion: cfg.auth_client_permissions.disabled_user_deletion,
     }
+}
+
+/// The default project's sign-in providers: fireemu's defaults with `auth.signIn`'s members.
+fn auth_sign_in_config(cfg: &RuntimeConfig) -> fireemu_core_auth::store::SignInConfig {
+    let settings = &cfg.auth_sign_in;
+    let mut config = fireemu_core_auth::store::SignInConfig::default();
+    if let Some(value) = settings.email_enabled {
+        config.email_enabled = value;
+    }
+    if let Some(value) = settings.password_required {
+        config.password_required = value;
+    }
+    if let Some(value) = settings.anonymous_enabled {
+        config.anonymous_enabled = value;
+    }
+    if let Some(value) = settings.phone_enabled {
+        config.phone_enabled = value;
+    }
+    if let Some(numbers) = &settings.test_phone_numbers {
+        config.test_phone_numbers.clone_from(numbers);
+    }
+    config
 }
 
 fn auth_namespace_config_patch(
@@ -650,8 +672,24 @@ fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
         storage_admin_capability.clone(),
         control_token.clone(),
     )?;
+    // Managed export and import (the Firestore Admin API) write to and read from this
+    // Storage emulator.
+    backend
+        .admin()
+        .set_managed_storage(Arc::new(crate::managed_storage::StorageBridge::new(
+            storage.clone(),
+        )));
     if let Some(runtime) = &functions_runtime {
         runtime.set_faults(faults.for_project(runtime.project()));
+        let verifier = Arc::new(
+            RulesEnforcer::new(
+                Arc::new(RulesetSlot::default()),
+                auth_store.clone(),
+                clock.clone(),
+            )
+            .with_registry(registry.clone()),
+        );
+        runtime.set_callable_auth_verifier(verifier.clone());
         if let Some(gate) = &app_check_gate {
             // The callable baseline is `unenforced`: the daemon classifies and records
             // every callable token, and the callable's own `enforceAppCheck` decides
@@ -667,14 +705,6 @@ fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
                 fireemu_core_app_check::verify::BaselineMode::Unenforced,
             )
             .ok_or_else(|| "the callable App Check policy is unavailable".to_owned())?;
-            let verifier = Arc::new(
-                RulesEnforcer::new(
-                    Arc::new(RulesetSlot::default()),
-                    auth_store.clone(),
-                    clock.clone(),
-                )
-                .with_registry(registry.clone()),
-            );
             runtime.set_callable_trust(Arc::new(
                 fireemu_adapter_functions::callable::CallableTrust::new(
                     policy,
@@ -892,9 +922,12 @@ fn assemble_suite(assembly: ServiceAssembly, exec_mode: bool) -> Result<ReadySui
     let enforcer = cfg.rules_enforced.then(|| {
         Arc::new(
             RulesEnforcer::new(rules.clone(), auth_store.clone(), clock.clone())
+                .with_token_semantics(TokenSemantics::Firestore)
                 .with_registry(registry.clone())
                 .with_database_rules(database_rules.clone())
-                .with_token_acceptance(cfg.token_acceptance),
+                .with_token_acceptance(cfg.token_acceptance)
+                .with_refusal_without_ruleset(cfg.refuse_without_ruleset)
+                .with_end_user_transactions(cfg.end_user_transactions),
         )
     });
     let mut service = GatewayService::local(gateway.clone(), backend.clone());
@@ -1022,13 +1055,19 @@ async fn serve_suite(
             "gRPC",
             serve_multiplexed(
                 listener,
-                FirestoreServer::new(firestore_service)
-                    .max_decoding_message_size(fireemu_adapter_grpc::serve::MAX_GRPC_MESSAGE_BYTES,)
-                    // Not a catalog limit: the request bound is FS-LIMIT-API-REQUEST-BYTES,
-                    // the response bound is a local memory guard.
-                    .max_encoding_message_size(
-                        fireemu_adapter_grpc::serve::MAX_GRPC_RESPONSE_BYTES,
-                    ),
+                // The Firestore Admin and long-running-operation services share the port.
+                fireemu_adapter_grpc::admin::grpc::AdminRouter::new(
+                    FirestoreServer::new(firestore_service)
+                        .max_decoding_message_size(
+                            fireemu_adapter_grpc::serve::MAX_GRPC_MESSAGE_BYTES,
+                        )
+                        // Not a catalog limit: the request bound is FS-LIMIT-API-REQUEST-BYTES,
+                        // the response bound is a local memory guard.
+                        .max_encoding_message_size(
+                            fireemu_adapter_grpc::serve::MAX_GRPC_RESPONSE_BYTES,
+                        ),
+                    rest.clone(),
+                ),
                 rest.clone(),
             )
         );
@@ -1051,13 +1090,22 @@ async fn serve_suite(
         spawn_server!("Emulator Hub", hub::serve(listener, hub_state.clone()));
     }
     let functions_http_admission = fireemu_adapter_functions::http::HttpAdmission::new();
+    let functions_http_profile = match cfg.profile {
+        crate::config::CompatibilityProfile::Emulator => {
+            fireemu_adapter_functions::http::FunctionsHttpProfile::Emulator
+        }
+        crate::config::CompatibilityProfile::Strict => {
+            fireemu_adapter_functions::http::FunctionsHttpProfile::Strict
+        }
+    };
     if let (Some(listener), Some(runtime)) = (functions_listener, functions_runtime.clone()) {
         spawn_server!(
             "Functions",
-            fireemu_adapter_functions::http::serve_functions(
+            fireemu_adapter_functions::http::serve_functions_with_profile(
                 listener,
                 runtime,
                 functions_http_admission.clone(),
+                functions_http_profile,
             )
         );
     }
@@ -1293,6 +1341,9 @@ fn close_functions_source_admission(
     close();
 }
 
+/// The stack of every runtime thread (see `build_runtime`).
+const RUNTIME_THREAD_STACK_BYTES: usize = 8 * 1024 * 1024;
+
 fn build_runtime() -> Result<tokio::runtime::Runtime, String> {
     let worker_override = std::env::var("FIREEMU_WORKER_THREADS").ok();
     let blocking_override = std::env::var("FIREEMU_MAX_BLOCKING_THREADS").ok();
@@ -1305,6 +1356,10 @@ fn build_runtime() -> Result<tokio::runtime::Runtime, String> {
     tokio::runtime::Builder::new_multi_thread()
         .worker_threads(workers)
         .max_blocking_threads(blocking)
+        // Security Rules evaluate expressions as deep as production compiles them (up to the
+        // evaluator's own bound), which a debug build's frames do not fit into tokio's
+        // default 2 MiB.
+        .thread_stack_size(RUNTIME_THREAD_STACK_BYTES)
         .enable_all()
         .build()
         .map_err(|e| format!("cannot start runtime: {e}"))
@@ -1363,7 +1418,7 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
                 None => IndexSet::default(),
             },
         };
-        let backend = Arc::new(if cfg.clock_start_pinned {
+        let backend = if cfg.clock_start_pinned {
             LocalBackend::new(gateway.clone(), clock.clone(), cfg.seed)
                 .with_contention_wait(fireemu_adapter_grpc::local::DEFAULT_CONTENTION_WAIT)
         } else {
@@ -1377,7 +1432,21 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
         .with_declared_databases(cfg.firestore_databases.keys().cloned())
         .with_ttl_sweep_interval(cfg.ttl_sweep_interval)
         .with_created_at(created_at)
-        .with_implicit_database_creation(cfg.implicit_database_creation));
+        .with_implicit_database_creation(cfg.implicit_database_creation);
+        // Scope decision C11: under the strict profile, projects.unknownProjects = "refuse"
+        // makes the daemon's project the only one that exists.
+        if let Some(seconds) = cfg.deleted_database_id_cooldown {
+            backend.admin().set_deleted_id_cooldown(seconds);
+        }
+        let backend = Arc::new(
+            if cfg.refuse_unknown_projects
+                && cfg.profile == crate::config::CompatibilityProfile::Strict
+            {
+                backend.with_project_boundary(cfg.auth_project.clone())
+            } else {
+                backend
+            },
+        );
         for (database, files) in &cfg.firestore_databases {
             if database != fireemu_core_types::ids::DatabaseId::DEFAULT {
                 if let Some(path) = &files.indexes {
@@ -1397,6 +1466,7 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
         let tenancy: fireemu_core_session::tenancy::SharedTenancy =
             Arc::new(RwLock::new(default_tenancy));
         backend.set_tenancy(tenancy.clone());
+        install_auth_credential_entropy()?;
         let auth_store = Arc::new(Mutex::new(AuthStore::new(
             &cfg.auth_project,
             SplitMix64::new(cfg.seed ^ 0xA0),
@@ -1405,6 +1475,9 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
         if let Ok(mut store) = auth_store.lock() {
             let config = auth_project_config(&cfg);
             store.set_config(config);
+            store
+                .set_sign_in_config(auth_sign_in_config(&cfg))
+                .map_err(|error| format!("auth.signIn: {error:?}"))?;
             if let Some(policy) = &cfg.auth_password_policy {
                 store.set_password_policy(policy.to_auth_policy());
             }
@@ -1666,9 +1739,9 @@ mod tests {
 
     use super::{
         apply_auth_config_overrides, apply_auth_password_policy_overrides, auth_project_config,
-        auth_signup_quota_config, blocking_auth_selection, close_functions_source_admission,
-        function_log_input, reapply_explicit_auth_config, reapply_explicit_auth_password_policies,
-        reapply_explicit_auth_quota,
+        auth_sign_in_config, auth_signup_quota_config, blocking_auth_selection,
+        close_functions_source_admission, function_log_input, reapply_explicit_auth_config,
+        reapply_explicit_auth_password_policies, reapply_explicit_auth_quota,
     };
 
     #[test]
@@ -1694,6 +1767,34 @@ mod tests {
                 disabled_user_signup: true,
                 disabled_user_deletion: true,
             }
+        );
+    }
+
+    #[test]
+    fn auth_sign_in_config_applies_only_the_configured_providers() {
+        let cfg = crate::config::RuntimeConfig::from_json(&json!({
+            "schemaVersion": 1,
+            "auth": {"signIn": {
+                "anonymous": {"enabled": false},
+                "phoneNumber": {"testPhoneNumbers": {"+16505550101": "123456"}},
+            }},
+        }))
+        .expect("valid Auth settings");
+        let config = auth_sign_in_config(&cfg);
+        assert!(config.email_enabled && !config.password_required && config.phone_enabled);
+        assert!(!config.anonymous_enabled);
+        assert_eq!(
+            config
+                .test_phone_numbers
+                .get("+16505550101")
+                .map(String::as_str),
+            Some("123456")
+        );
+        let defaults = crate::config::RuntimeConfig::from_json(&json!({"schemaVersion": 1}))
+            .expect("defaults");
+        assert_eq!(
+            auth_sign_in_config(&defaults),
+            fireemu_core_auth::store::SignInConfig::default()
         );
     }
 

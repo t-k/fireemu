@@ -7,6 +7,7 @@ import {
   freezeSandboxFixture,
   validateSandboxCorpus,
 } from "./fs-data-write-sandbox.mjs";
+import { webchannelSessionProgram } from "./firestore-probe/webchannel-request-bytes.mjs";
 
 test("artifact comparison distinguishes production error reasons as well as status and code", () => {
   const production = {
@@ -386,6 +387,81 @@ test("WebChannel byte probes are limited to the fixed sandbox unknown-session ro
   );
 });
 
+test("valid-session WebChannel programs must equal their fixed four-step shape", () => {
+  const program = webchannelSessionProgram(11_534_337);
+  const sessionCorpus = { ...corpus, restPrograms: [program], restRequestCount: 4 };
+  assert.equal(validateSandboxCorpus(sessionCorpus).requestCount, 4);
+  const altered = (change) => ({
+    ...sessionCorpus,
+    restPrograms: [change(structuredClone(program))],
+  });
+  for (const change of [
+    (value) => ({ ...value, id: "writes/limits/webchannel-request-bytes/11534338" }),
+    (value) => {
+      value.steps[2].webchannelBodyBytes = 11_534_336;
+      return value;
+    },
+    (value) => {
+      value.steps[0].path = value.steps[0].path.replace("fireemu-oracle-sbx", "fireemu-35fe6");
+      return value;
+    },
+    (value) => {
+      value.steps[3].method = "POST";
+      return value;
+    },
+    (value) => {
+      value.steps[1].body = { database: "x" };
+      return value;
+    },
+    (value) => {
+      value.steps.reverse();
+      return value;
+    },
+  ]) {
+    assert.throws(() => validateSandboxCorpus(altered(change)), /sandbox WebChannel/);
+  }
+  assert.throws(
+    () =>
+      validateSandboxCorpus({
+        ...sessionCorpus,
+        restPrograms: [{ ...program, steps: program.steps.slice(0, 3) }],
+        restRequestCount: 3,
+      }),
+    /sandbox WebChannel/,
+  );
+  assert.throws(
+    () =>
+      validateSandboxCorpus({
+        ...corpus,
+        restPrograms: [
+          {
+            id: program.id,
+            area: "writes",
+            steps: [
+              {
+                id: "read",
+                method: "GET",
+                path: "/v1/projects/fireemu-oracle-sbx/databases/(default)/documents/a/b",
+              },
+            ],
+          },
+        ],
+        restRequestCount: 1,
+      }),
+    /sandbox WebChannel/,
+  );
+  // A session step outside its program is refused too.
+  assert.throws(
+    () =>
+      validateSandboxCorpus({
+        ...corpus,
+        restPrograms: [{ id: "writes/other", area: "writes", steps: [program.steps[0]] }],
+        restRequestCount: 1,
+      }),
+    /sandbox WebChannel/,
+  );
+});
+
 test("two recordings must agree row by row before a fixture can be frozen", () => {
   const first = { "writes/control": { steps: { read: { status: 404, code: "NOT_FOUND" } } } };
   const second = { "writes/control": { steps: { read: { code: "NOT_FOUND", status: 404 } } } };
@@ -463,6 +539,69 @@ test("fixture refuses an OAuth bearer echoed into a REST error body", () => {
   );
 });
 
+test("fixture accepts a unary gRPC byte probe, which has a status and no stream events", () => {
+  const unary = {
+    id: "writes/limits/grpc-unary-request-bytes/10485760",
+    transport: "grpc",
+    action: "get-document-transaction-bytes",
+    wireBytes: 10485760,
+    maxFrames: 1,
+  };
+  const withUnary = { ...corpus, streamRecipes: [unary] };
+  const rest = { "writes/control": { steps: { read: { status: 404, code: "NOT_FOUND" } } } };
+  const options = {
+    corpus: withUnary,
+    first: rest,
+    second: rest,
+    recordedAt: ["2026-09-25T00:00:00Z", "2026-09-25T00:01:00Z"],
+    harnessRevision: "a".repeat(40),
+    sdkVersions: { firebaseAdmin: "14.3.0" },
+    credentialToken: "private-test-token",
+  };
+  // The shape the production unary child records (stream-session.mjs).
+  const observed = {
+    [unary.id]: {
+      sentFrames: 1,
+      status: { code: 3, details: "Invalid transaction.", trailers: [] },
+      wireBytes: 10485760,
+    },
+  };
+  const frozen = freezeSandboxFixture({
+    ...options,
+    firstStream: observed,
+    secondStream: observed,
+  });
+  assert.equal(frozen.streams[unary.id].status.code, 3);
+  // A unary result still needs an integer status and the exact wire size it was asked for.
+  for (const broken of [
+    { ...observed[unary.id], status: {} },
+    { ...observed[unary.id], wireBytes: 10485761 },
+  ]) {
+    const recording = { [unary.id]: broken };
+    assert.throws(
+      () => freezeSandboxFixture({ ...options, firstStream: recording, secondStream: recording }),
+      /incomplete stream recording/,
+    );
+  }
+  // A stream recipe still needs its events.
+  const stream = {
+    ...unary,
+    id: "writes/limits/grpc-stream-request-bytes/10485760",
+    action: "write-stream-token-bytes",
+  };
+  const streamResult = { [stream.id]: { sentFrames: 1, status: { code: 0 }, wireBytes: 10485760 } };
+  assert.throws(
+    () =>
+      freezeSandboxFixture({
+        ...options,
+        corpus: { ...corpus, streamRecipes: [stream] },
+        firstStream: streamResult,
+        secondStream: streamResult,
+      }),
+    /incomplete stream recording/,
+  );
+});
+
 test("fixture cannot omit or hide drift in live gRPC stream observations", () => {
   const withStream = {
     ...corpus,
@@ -499,5 +638,138 @@ test("fixture cannot omit or hide drift in live gRPC stream observations", () =>
   assert.ok(
     freezeSandboxFixture({ ...options, firstStream, secondStream: firstStream }).evidence
       .streamRecordingDigests.length === 2,
+  );
+});
+
+test("an eleven-mebibyte body is stored compact and padded to its exact size before sending", async () => {
+  const { padJsonBody, PADDED_BODY_SIZES } = await import("./fs-data-write-sandbox.mjs");
+  const body = '{"documents":["x"]}';
+  for (const size of PADDED_BODY_SIZES) {
+    const padded = padJsonBody(body, size);
+    assert.equal(Buffer.byteLength(padded), size);
+    assert.deepEqual(JSON.parse(padded), JSON.parse(body));
+    assert.ok(padded.startsWith(body.slice(0, -1)) && padded.endsWith(" }"));
+  }
+  assert.throws(() => padJsonBody(body, 10_485_760), /invalid padded/);
+  assert.throws(() => padJsonBody('{"a":1', 11_534_336), /invalid padded/);
+  assert.throws(() => padJsonBody("[1]", 11_534_336), /invalid padded/);
+});
+
+test("a dropped connection is a complete answer only on a WebChannel measured body", async () => {
+  const { assertCompleteRecording } = await import("./fs-data-write-sandbox.mjs");
+  const program = webchannelSessionProgram(16_777_217);
+  const sessionCorpus = { ...corpus, restPrograms: [program], restRequestCount: 4 };
+  const ok = (body) => ({ status: 200, code: "OK", body });
+  const recording = (boundary, control = ok("forward-ack")) => ({
+    [program.id]: {
+      steps: {
+        handshake: ok("session-opened"),
+        control,
+        boundary,
+        terminate: ok("session-terminated"),
+      },
+    },
+  });
+  const reset = (message) => ({ status: 0, code: "connection-reset", message });
+  for (const phase of ["reset-before-response", "reset-during-response"]) {
+    assertCompleteRecording(sessionCorpus, recording(reset(phase)), {});
+  }
+  for (const [label, rows] of [
+    ["unknown phase", recording(reset("reset-somewhere"))],
+    ["reset on the control", recording(ok("forward-ack"), reset("reset-before-response"))],
+    ["untyped failure", recording({ status: 0, code: "probe-error", message: "fetch failed" })],
+  ]) {
+    assert.throws(
+      () => assertCompleteRecording(sessionCorpus, rows, {}),
+      /failed observation/,
+      label,
+    );
+  }
+  // A reset is frozen only when both recordings answered the same way.
+  const frozen = freezeSandboxFixture({
+    corpus: sessionCorpus,
+    first: recording(reset("reset-before-response")),
+    second: recording(reset("reset-before-response")),
+    recordedAt: ["2026-09-27T00:00:00Z", "2026-09-27T00:10:00Z"],
+    harnessRevision: "a".repeat(40),
+    sdkVersions: {},
+    credentialToken: "token-for-leak-check",
+  });
+  assert.deepEqual(frozen.programs[program.id].steps.boundary, reset("reset-before-response"));
+  for (const second of [
+    recording(reset("reset-during-response")),
+    recording({ status: 400, code: "INVALID_ARGUMENT", message: "Request payload size" }),
+  ]) {
+    assert.throws(
+      () =>
+        freezeSandboxFixture({
+          corpus: sessionCorpus,
+          first: recording(reset("reset-before-response")),
+          second,
+          recordedAt: ["2026-09-27T00:00:00Z", "2026-09-27T00:10:00Z"],
+          harnessRevision: "a".repeat(40),
+          sdkVersions: {},
+          credentialToken: "token-for-leak-check",
+        }),
+      /nondeterministic/,
+    );
+  }
+});
+
+test("with auth failures refused, a 401 or 403 on an owner step is a failed observation", async () => {
+  const { assertCompleteRecording } = await import("./fs-data-write-sandbox.mjs");
+  const program = {
+    id: "writes/example",
+    area: "writes",
+    steps: [
+      {
+        id: "write",
+        method: "POST",
+        path: "/v1/projects/fireemu-oracle-sbx/databases/(default)/documents:commit",
+        body: { writes: [] },
+      },
+    ],
+  };
+  const exampleCorpus = { ...corpus, restPrograms: [program], restRequestCount: 1 };
+  const answered = (status, code) => ({
+    [program.id]: { steps: { write: { status, code, message: "x" } } },
+  });
+  for (const [status, code] of [
+    [401, "UNAUTHENTICATED"],
+    [403, "PERMISSION_DENIED"],
+  ]) {
+    // Without the option the older modes keep accepting a typed answer.
+    assertCompleteRecording(exampleCorpus, answered(status, code), {});
+    assert.throws(
+      () =>
+        assertCompleteRecording(
+          exampleCorpus,
+          answered(status, code),
+          {},
+          {
+            refuseAuthFailures: true,
+          },
+        ),
+      /failed observation/,
+    );
+  }
+  assertCompleteRecording(
+    exampleCorpus,
+    answered(400, "INVALID_ARGUMENT"),
+    {},
+    {
+      refuseAuthFailures: true,
+    },
+  );
+  // A step that deliberately sends another credential may expect a refusal.
+  const credentialed = structuredClone(exampleCorpus);
+  credentialed.restPrograms[0].steps[0].credential = "user";
+  assertCompleteRecording(
+    credentialed,
+    answered(403, "PERMISSION_DENIED"),
+    {},
+    {
+      refuseAuthFailures: true,
+    },
   );
 });

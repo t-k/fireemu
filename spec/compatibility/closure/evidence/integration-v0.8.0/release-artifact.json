@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "kind": "integration-release-artifact",
+  "release": "v0.8.0",
+  "sourceCommit": "f8f0611ac35185a0719ae7660601ed4ac584dcad",
+  "command": [
+    "cargo",
+    "build",
+    "--release",
+    "--locked",
+    "-p",
+    "fireemu",
+    "--message-format=json"
+  ],
+  "binaryPath": "target/release/fireemu",
+  "binarySha256": "c258b022c5f452a60a9bc60de68e6de26b3f5aeaf846623cf1bf7e33f28d31df",
+  "version": "fireemu 0.8.0",
+  "rustc": "rustc 1.94.0 (4a4ef493e 2026-03-02)",
+  "platform": "Darwin arm64",
+  "uiDistManifestSha256": "b1ec3ce772e10e4d2e3ebe6a170c27aeb6d041e5b2239305fc511e2f92df2fe1",
+  "uiDistFileCount": 16,
+  "buildJsonlSha256": "57b54ba6259827c1044469ff5cbd4ce59eb28d4fe3f1cdecca617d2a8ab3521a",
+  "buildStderrSha256": "456b8b853a32c0dfeff021030fe3b242f74351585953bce2d3cc1e0dd8a537ca",
+  "gitStatusAtBuild": "",
+  "productionRequests": 0,
+  "note": "One release binary built from the clean integration head; every parent comparison below ran this file inside the checkout, against its saved production recordings only."
+}

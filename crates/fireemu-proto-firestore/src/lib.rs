@@ -1,4 +1,4 @@
-//! Generated protobuf and gRPC types for the Firestore v1 API.
+//! Generated protobuf and gRPC types for the Firestore v1 and Firestore Admin v1 APIs.
 //!
 //! The `.proto` sources under `proto/` are vendored from googleapis at the commit recorded in
 //! `proto/UPSTREAM_COMMIT`; the Rust code under `src/generated/` is produced by
@@ -14,11 +14,21 @@ pub mod google {
     pub mod api {
         include!("generated/google.api.rs");
     }
-    /// `google.firestore.v1`.
+    /// `google.firestore.v1` and `google.firestore.admin.v1`.
     pub mod firestore {
         pub mod v1 {
             include!("generated/google.firestore.v1.rs");
         }
+        /// The Firestore Admin API.
+        pub mod admin {
+            pub mod v1 {
+                include!("generated/google.firestore.admin.v1.rs");
+            }
+        }
+    }
+    /// `google.longrunning`.
+    pub mod longrunning {
+        include!("generated/google.longrunning.rs");
     }
     /// `google.rpc`.
     pub mod rpc {

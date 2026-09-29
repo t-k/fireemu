@@ -2002,3 +2002,168 @@ fn deleting_a_tenant_invalidates_its_credentials_and_leaves_the_sibling_and_proj
             .is_none_or(Vec::is_empty));
     }
 }
+
+/// A tenant's second factors keep the rules they had (AUTH-MFA scope decision M2): the
+/// project's `mfa` config, which a tenant never reads, does not refuse a tenant's phone
+/// enrollment in either profile (AUTH-MFA safety review 2026-09-25, MF-1).
+#[test]
+fn a_tenant_phone_enrollment_keeps_the_earlier_rules() {
+    for (profile, state, _registry) in profiles() {
+        let (status, created) = admin(
+            &state,
+            "POST",
+            &tenant_admin_path(TENANT_A, "accounts"),
+            &json!({"email": "enroll@example.com", "password": "hunter22", "emailVerified": true}),
+        );
+        assert_eq!(status, 200, "{profile}: {created}");
+        let (status, signed_in) = client(
+            &state,
+            &format!("{V1}/accounts:signInWithPassword"),
+            TENANT_A,
+            json!({"email": "enroll@example.com", "password": "hunter22", "returnSecureToken": true}),
+        );
+        assert_eq!(status, 200, "{profile}: {signed_in}");
+        let token = signed_in["idToken"].clone();
+        let (status, started) = client(
+            &state,
+            &format!("{V2}/accounts/mfaEnrollment:start"),
+            TENANT_A,
+            json!({"idToken": token, "phoneEnrollmentInfo": {"phoneNumber": "+15559876543"}}),
+        );
+        assert_eq!(status, 200, "{profile}: {started}");
+        let session = started["phoneSessionInfo"]["sessionInfo"].clone();
+        let code = verification_codes(&state, TENANT_A)
+            .into_iter()
+            .find(|c| c["sessionInfo"] == session)
+            .map(|c| c["code"].clone())
+            .unwrap();
+        let (status, enrolled) = client(
+            &state,
+            &format!("{V2}/accounts/mfaEnrollment:finalize"),
+            TENANT_A,
+            json!({"idToken": token, "phoneVerificationInfo": {"sessionInfo": session, "code": code}}),
+        );
+        assert_eq!(status, 200, "{profile}: {enrolled}");
+    }
+}
+
+/// With a registry, a masked `mfa` update reaches the project's store and reads back in both
+/// profiles (mutation follow-up, docs.local/mutation/auth-mfa/20260925).
+#[test]
+fn a_registry_project_config_update_sets_the_mfa_config() {
+    for (profile, state, registry) in profiles() {
+        let (status, body) = admin(
+            &state,
+            "PATCH",
+            &format!("{PROJECT_CONFIG}?updateMask=mfa"),
+            &json!({"mfa": {"state": "ENABLED", "enabledProviders": ["PHONE_SMS"]}}),
+        );
+        assert_eq!(status, 200, "{profile}: {body}");
+        let (status, read) = admin(&state, "GET", PROJECT_CONFIG, &json!({}));
+        assert_eq!(status, 200, "{profile}: {read}");
+        assert_eq!(read["mfa"]["state"], "ENABLED", "{profile}: {read}");
+        let store = registry.store_for("demo-app").unwrap();
+        assert!(
+            store.lock().unwrap().mfa_config().sms_enabled(),
+            "{profile}"
+        );
+    }
+}
+
+/// With a registry, `mfa` is written in the config transaction with the other members: a
+/// combined PATCH applies both, and a PATCH refused for either leaves both as they were.
+#[test]
+fn a_registry_project_config_update_writes_mfa_with_the_other_members() {
+    let enabled = json!({"state": "ENABLED", "enabledProviders": ["PHONE_SMS"]});
+    for (profile, state, registry) in profiles() {
+        let store = registry.store_for("demo-app").unwrap();
+        let (status, body) = admin(
+            &state,
+            "PATCH",
+            &format!("{PROJECT_CONFIG}?updateMask=mfa,signIn.allowDuplicateEmails"),
+            &json!({"mfa": enabled, "signIn": {"allowDuplicateEmails": true}}),
+        );
+        assert_eq!(status, 200, "{profile}: {body}");
+        assert_eq!(body["mfa"], enabled, "{profile}: {body}");
+        {
+            let current = store.lock().unwrap();
+            assert!(current.mfa_config().sms_enabled(), "{profile}");
+            assert!(current.config().allow_duplicate_emails, "{profile}");
+        }
+
+        let (status, body) = admin(
+            &state,
+            "PATCH",
+            &format!("{PROJECT_CONFIG}?updateMask=mfa,passwordPolicyConfig"),
+            &json!({
+                "mfa": {"state": "DISABLED"},
+                "passwordPolicyConfig": {
+                    "passwordPolicyEnforcementState": "ENFORCE",
+                    "passwordPolicyVersions": [{"customStrengthOptions": {"minPasswordLength": 5}}],
+                },
+            }),
+        );
+        assert_eq!(status, 400, "{profile}: {body}");
+        let (status, body) = admin(
+            &state,
+            "PATCH",
+            &format!("{PROJECT_CONFIG}?updateMask=mfa,signIn.allowDuplicateEmails"),
+            &json!({"mfa": {"state": "NOT_A_STATE"}, "signIn": {"allowDuplicateEmails": false}}),
+        );
+        assert_eq!(status, 400, "{profile}: {body}");
+        let current = store.lock().unwrap();
+        assert!(current.mfa_config().sms_enabled(), "{profile}");
+        assert!(current.config().allow_duplicate_emails, "{profile}");
+        assert!(!current.password_policy().configured, "{profile}");
+    }
+}
+
+/// A strict tenant keeps its earlier second-factor rules (scope decision M2): `auth.totp` still
+/// enables its TOTP enrollment, and an enrolled factor is asked for while the project's `mfa`
+/// config is off (follow-up confirmation SF-2).
+#[test]
+fn a_strict_tenant_keeps_auth_totp_and_asks_for_enrolled_factors() {
+    let mut state = strict_state();
+    state.totp_extension_enabled = true;
+    let registry = Arc::new(AuthRegistry::new("demo-app", state.store.clone()));
+    registry.ensure_tenant("demo-app", TENANT_A).unwrap();
+    state.registry = Some(registry);
+    let (status, created) = admin(
+        &state,
+        "POST",
+        &tenant_admin_path(TENANT_A, "accounts"),
+        &json!({"email": "tenant-totp@example.com", "password": "hunter22", "emailVerified": true}),
+    );
+    assert_eq!(status, 200, "{created}");
+    let (status, signed_in) = client(
+        &state,
+        &format!("{V1}/accounts:signInWithPassword"),
+        TENANT_A,
+        json!({"email": "tenant-totp@example.com", "password": "hunter22", "returnSecureToken": true}),
+    );
+    assert_eq!(status, 200, "{signed_in}");
+    let (status, started) = client(
+        &state,
+        &format!("{V2}/accounts/mfaEnrollment:start"),
+        TENANT_A,
+        json!({"idToken": signed_in["idToken"], "totpEnrollmentInfo": {}}),
+    );
+    assert_eq!(status, 200, "auth.totp enables a tenant's TOTP: {started}");
+    let (status, phone) = admin(
+        &state,
+        "POST",
+        &tenant_admin_path(TENANT_A, "accounts"),
+        &json!({"email": "tenant-phone@example.com", "password": "hunter22", "emailVerified": true,
+            "mfaInfo": [{"phoneInfo": "+15559876543"}]}),
+    );
+    assert_eq!(status, 200, "{phone}");
+    let (status, pending) = client(
+        &state,
+        &format!("{V1}/accounts:signInWithPassword"),
+        TENANT_A,
+        json!({"email": "tenant-phone@example.com", "password": "hunter22", "returnSecureToken": true}),
+    );
+    assert_eq!(status, 200, "{pending}");
+    assert!(pending["mfaPendingCredential"].is_string(), "{pending}");
+    assert!(pending.get("idToken").is_none(), "{pending}");
+}

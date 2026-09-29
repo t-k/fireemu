@@ -993,7 +993,11 @@ mod tests {
         {
             let reused = dir.join("hub-reused.json");
             let locator = owned_locator(&reused);
-            std::fs::remove_file(&reused).expect("the locator is removed");
+            // The original file is moved aside rather than unlinked: Linux file systems hand a
+            // freed inode number straight to the next file, so an unlinked original would let
+            // the replacement carry the very identity it is meant to differ by.
+            std::fs::rename(&reused, dir.join("hub-reused-original.json"))
+                .expect("the locator is moved aside");
             let replacement = owned_locator(&reused);
             assert_ne!(
                 locator.identity, replacement.identity,

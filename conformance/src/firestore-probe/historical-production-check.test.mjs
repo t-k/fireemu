@@ -1,7 +1,14 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { checkHistoricalProduction } from "./historical-production-check.mjs";
+import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
+
+import {
+  checkHistoricalProduction,
+  historicalArtifactIdentity,
+  measureArtifact,
+} from "./historical-production-check.mjs";
 
 const definitions = [{ id: "writes", steps: [{ id: "same" }, { id: "changed" }] }];
 const saved = {
@@ -85,4 +92,55 @@ test("unlisted recipe additions are rejected", () => {
       }),
     /recipe identity/,
   );
+});
+
+test("the historical check records the artifact it ran and refuses one that changed", () => {
+  const sha = "a".repeat(64);
+  assert.deepEqual(
+    historicalArtifactIdentity({
+      root: "/repo",
+      binary: "/repo/target/release/fireemu",
+      before: sha,
+      after: sha,
+      version: "fireemu 0.7.1\n",
+    }),
+    {
+      path: "target/release/fireemu",
+      sha256Before: sha,
+      sha256After: sha,
+      version: "fireemu 0.7.1",
+    },
+  );
+  assert.throws(
+    () =>
+      historicalArtifactIdentity({
+        root: "/repo",
+        binary: "/repo/target/debug/fireemu",
+        before: sha,
+        after: "b".repeat(64),
+        version: "fireemu 0.7.1",
+      }),
+    /changed during the historical check/,
+  );
+  assert.throws(
+    () =>
+      historicalArtifactIdentity({
+        root: "/repo",
+        binary: "/repo/fireemu",
+        before: "not-a-digest",
+        after: "not-a-digest",
+        version: "fireemu 0.7.1",
+      }),
+    /SHA-256/,
+  );
+});
+
+test("an artifact is measured by its bytes and its --version answer", async () => {
+  // The running Node binary stands in for fireemu: both answer --version on stdout.
+  const measured = await measureArtifact(process.execPath);
+  assert.equal(
+    measured.sha256,
+    createHash("sha256").update(readFileSync(process.execPath)).digest("hex"),
+  );
+  assert.equal(measured.version.trim(), process.version);
 });

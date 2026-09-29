@@ -3906,11 +3906,18 @@ async fn the_preflight_of_the_privileged_rules_route_never_admits_put() {
 async fn an_undeclared_set_rules_body_is_cut_off_at_the_control_port_limit() {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     static BUDGET: BodyBudget = BodyBudget::new(32 * 1024 * 1024);
-    /// 16 KiB chunks to 8 MiB: far past the 256 KiB bound and far past any socket buffer, so
-    /// a server that read the whole body would accept every chunk.
+    /// 16 KiB chunks to 8 MiB: far past the 256 KiB bound and far past the socket buffers
+    /// pinned below, so a server that read the whole body would accept every chunk.
     const CHUNKS: usize = 512;
+    /// Both ends' kernel buffers are pinned: Linux otherwise autotunes loopback buffers to
+    /// several MiB, and the client could park that much in the kernel before the refusal's
+    /// reset reaches it, which says nothing about how much the server read.
+    const SOCKET_BUFFER: u32 = 64 * 1024;
 
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let socket = tokio::net::TcpSocket::new_v4().unwrap();
+    socket.set_recv_buffer_size(SOCKET_BUFFER).unwrap();
+    socket.bind("127.0.0.1:0".parse().unwrap()).unwrap();
+    let listener = socket.listen(1024).unwrap();
     let addr = listener.local_addr().unwrap();
     let shared = Arc::new(state(Some(SETR_DENY_ALL)));
     let server = tokio::spawn(serve_storage_with_budget(listener, shared.clone(), &BUDGET));
@@ -3937,7 +3944,9 @@ async fn an_undeclared_set_rules_body_is_cut_off_at_the_control_port_limit() {
 
     // An undeclared one is cut off as it streams: the server stops reading long before the
     // 8 MiB the client is willing to send.
-    let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+    let client = tokio::net::TcpSocket::new_v4().unwrap();
+    client.set_send_buffer_size(SOCKET_BUFFER).unwrap();
+    let mut stream = client.connect(addr).await.unwrap();
     stream
         .write_all(
             b"PUT /internal/setRules HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n",

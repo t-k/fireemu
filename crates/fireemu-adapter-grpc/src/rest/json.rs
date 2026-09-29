@@ -643,7 +643,7 @@ fn value_from_json_at(
                 let depth = nested_depth(parent_depth)?;
                 let fields = path.map(|p| p.field("map_value.fields"));
                 V::MapValue(pb::MapValue {
-                    fields: fields_from_json_at(inner.get("fields"), depth, fields.as_ref())?,
+                    fields: fields_from_json_at(inner.get("fields"), depth, fields.as_ref(), None)?,
                 })
             }
         }
@@ -700,7 +700,7 @@ fn array_from_json(
 
 /// `fields` object → protobuf map.
 pub fn fields_from_json(v: Option<&Value>) -> Result<HashMap<String, pb::Value>, JsonError> {
-    fields_from_json_at(v, 0, None)
+    fields_from_json_at(v, 0, None, None)
 }
 
 /// `path` names the `fields` map itself; each entry is `[n].value` below it, the way
@@ -709,6 +709,7 @@ fn fields_from_json_at(
     v: Option<&Value>,
     parent_depth: u32,
     path: Option<&FieldPath<'_>>,
+    order: Option<&[String]>,
 ) -> Result<HashMap<String, pb::Value>, JsonError> {
     let mut out = HashMap::new();
     let Some(v) = v.filter(|value| !value.is_null()) else {
@@ -717,7 +718,19 @@ fn fields_from_json_at(
     let Some(obj) = v.as_object() else {
         return err("fields must be an object");
     };
-    for (at, (k, v)) in obj.iter().enumerate() {
+    let entries: Vec<_> = order.map_or_else(
+        || obj.iter().collect(),
+        |keys| {
+            let mut ordered: Vec<_> = keys
+                .iter()
+                .filter_map(|key| obj.get_key_value(key))
+                .collect();
+            let seen: std::collections::HashSet<_> = keys.iter().map(String::as_str).collect();
+            ordered.extend(obj.iter().filter(|(key, _)| !seen.contains(key.as_str())));
+            ordered
+        },
+    );
+    for (at, (k, v)) in entries.into_iter().enumerate() {
         let entry = path.map(|p| p.index(at));
         let entry = entry.as_ref().map(|p| p.field("value"));
         let value = value_from_json_at(v, parent_depth, entry.as_ref()).map_err(|error| {
@@ -758,6 +771,14 @@ pub fn document_to_json(d: &pb::Document) -> Value {
 /// `path` is the document's own field in the request that carries it: `writes[0].update` in
 /// a commit, `document` on the document routes.
 pub fn document_from_json(v: &Value, path: &FieldPath<'_>) -> Result<pb::Document, JsonError> {
+    document_from_json_with_order(v, path, None)
+}
+
+fn document_from_json_with_order(
+    v: &Value,
+    path: &FieldPath<'_>,
+    field_order: Option<&[String]>,
+) -> Result<pb::Document, JsonError> {
     if !v.is_object() {
         return err("document must be an object");
     }
@@ -774,7 +795,7 @@ pub fn document_from_json(v: &Value, path: &FieldPath<'_>) -> Result<pb::Documen
             .transpose()?
             .unwrap_or_default()
             .to_owned(),
-        fields: fields_from_json_at(v.get("fields"), 0, Some(&fields))?,
+        fields: fields_from_json_at(v.get("fields"), 0, Some(&fields), field_order)?,
         create_time: None,
         update_time: None,
     })
@@ -941,6 +962,14 @@ fn transform_from_json(
 ///
 /// `path` is the write's own position in the request that carries it, `writes[n]`.
 pub fn write_from_json(v: &Value, path: &FieldPath<'_>) -> Result<pb::Write, JsonError> {
+    write_from_json_with_order(v, path, None)
+}
+
+fn write_from_json_with_order(
+    v: &Value,
+    path: &FieldPath<'_>,
+    field_order: Option<&[String]>,
+) -> Result<pb::Write, JsonError> {
     strict_keys(
         v,
         &[
@@ -962,9 +991,10 @@ pub fn write_from_json(v: &Value, path: &FieldPath<'_>) -> Result<pb::Write, Jso
         return err("Payload isn't valid for request.");
     }
     let operation = if let Some(d) = v.get("update").filter(|value| !value.is_null()) {
-        Some(pb::write::Operation::Update(document_from_json(
+        Some(pb::write::Operation::Update(document_from_json_with_order(
             d,
             &path.field("update"),
+            field_order,
         )?))
     } else if let Some(n) = v.get("delete").filter(|value| !value.is_null()) {
         Some(pb::write::Operation::Delete(
@@ -1028,7 +1058,10 @@ pub fn write_from_json(v: &Value, path: &FieldPath<'_>) -> Result<pb::Write, Jso
 ///
 /// An empty write object is retained as a default protobuf write so the backend can report a
 /// row-local invalid-operation status. Other operation-less objects remain malformed payloads.
-pub fn batch_writes_from_json(items: &[Value]) -> Result<Vec<pb::Write>, JsonError> {
+pub fn batch_writes_from_json(
+    items: &[Value],
+    field_order: &[Vec<String>],
+) -> Result<Vec<pb::Write>, JsonError> {
     let path = FieldPath::root("writes");
     items
         .iter()
@@ -1037,7 +1070,11 @@ pub fn batch_writes_from_json(items: &[Value]) -> Result<Vec<pb::Write>, JsonErr
             if item.as_object().is_some_and(serde_json::Map::is_empty) {
                 Ok(pb::Write::default())
             } else {
-                write_from_json(item, &path.index(at))
+                write_from_json_with_order(
+                    item,
+                    &path.index(at),
+                    field_order.get(at).map(Vec::as_slice),
+                )
             }
         })
         .collect()
@@ -2003,6 +2040,32 @@ mod tests {
                 .expect_err("unscoped parser still reports its local error")
                 .0,
             "integerValue \"not-a-number\" is not an int64"
+        );
+    }
+
+    #[test]
+    fn malformed_batch_write_field_path_uses_source_object_order() {
+        let (body, order) = super::super::json_syntax::parse_with_batch_field_order(
+            br#"{"writes":[{}, {"update":{"name":"projects/demo/databases/(default)/documents/items/one","fields":{"z":{"stringValue":"valid"},"a":{"integerValue":"not-a-number"}}}}]}"#,
+        )
+        .expect("valid REST JSON");
+        let error = batch_writes_from_json(body["writes"].as_array().unwrap(), &order).unwrap_err();
+        assert_eq!(
+            error.0,
+            "Invalid value at 'writes[1].update.fields[1].value.integer_value' (TYPE_INT64), \"not-a-number\""
+        );
+    }
+
+    #[test]
+    fn malformed_batch_write_rejects_first_invalid_field_in_source_order() {
+        let (body, order) = super::super::json_syntax::parse_with_batch_field_order(
+            br"{writes:[{update:{fields:{z:{integerValue:'bad-z'},a:{integerValue:'bad-a'}}}}]}",
+        )
+        .expect("valid REST JSON");
+        let error = batch_writes_from_json(body["writes"].as_array().unwrap(), &order).unwrap_err();
+        assert_eq!(
+            error.0,
+            "Invalid value at 'writes[0].update.fields[0].value.integer_value' (TYPE_INT64), \"bad-z\""
         );
     }
 

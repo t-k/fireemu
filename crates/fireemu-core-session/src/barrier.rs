@@ -76,6 +76,13 @@ impl AdmissionBarrier {
         self.epoch.fetch_add(1, Ordering::SeqCst);
         Exclusive(guard)
     }
+
+    /// Takes the barrier exclusively without starting a new epoch: for a change that must not
+    /// interleave with admitted requests but invalidates no one's credentials or intent
+    /// (deleting one database). A request that started before it is still admitted after it.
+    pub fn pause(&self) -> Exclusive<'_> {
+        Exclusive(self.lock.write().unwrap_or_else(PoisonError::into_inner))
+    }
 }
 
 /// The session was reset between the request's start and its admission.

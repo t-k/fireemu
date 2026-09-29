@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 
 use fireemu_adapter_grpc::gateway::Gateway;
 use fireemu_adapter_grpc::local::{FirestoreSnapshot, LocalBackend};
-use fireemu_adapter_grpc::rules::RulesEnforcer;
+use fireemu_adapter_grpc::rules::{RulesEnforcer, TokenSemantics};
 use fireemu_adapter_grpc::service::GatewayService;
 use fireemu_core_auth::mfa::TotpPolicy;
 use fireemu_core_auth::store::AuthStore;
@@ -93,7 +93,9 @@ async fn start_with_rules_source(
         let rules = Arc::new(RulesetSlot::new(
             LoadedRules::from_source(rules_source).unwrap(),
         ));
-        service = service.with_rules(Arc::new(RulesEnforcer::new(rules, auth, clock)));
+        service = service.with_rules(Arc::new(
+            RulesEnforcer::new(rules, auth, clock).with_token_semantics(TokenSemantics::Firestore),
+        ));
     }
     let svc = FirestoreServer::new(service);
     let handle = tokio::spawn(async move {
@@ -1136,9 +1138,14 @@ service cloud.firestore {
 
 #[tokio::test]
 async fn write_stream_rules_refuse_malformed_and_wrong_audience_auth() {
-    for authorization in [
-        "Bearer malformed",
-        "Bearer eyJhbGciOiJub25lIn0.eyJhdWQiOiJvdGhlciJ9.",
+    // Production's shapes (strict): a bearer value that is not a JWT is the front end's
+    // UNAUTHENTICATED; a JWT that does not verify is the ordinary PERMISSION_DENIED.
+    for (authorization, refusal) in [
+        ("Bearer malformed", tonic::Code::Unauthenticated),
+        (
+            "Bearer eyJhbGciOiJub25lIn0.eyJhdWQiOiJvdGhlciJ9.",
+            tonic::Code::PermissionDenied,
+        ),
     ] {
         let (mut client, handle) = start(true).await;
         let (tx, rx) = mpsc::channel(8);
@@ -1162,7 +1169,7 @@ async fn write_stream_rules_refuse_malformed_and_wrong_audience_auth() {
         .await
         .unwrap();
         let error = responses.next().await.unwrap().unwrap_err();
-        assert_eq!(error.code(), tonic::Code::Unauthenticated);
+        assert_eq!(error.code(), refusal);
         assert!(client
             .get_document(pb::GetDocumentRequest {
                 name: format!("{DOCS}/stream/auth-refused"),

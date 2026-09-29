@@ -10,6 +10,10 @@
 //! The dotenv files are written into a scratch codebase rather than committed: a repository
 //! that carries a file called `.secret.local` is a repository whose secret scanners cry wolf.
 
+#[cfg(target_os = "linux")]
+use std::os::unix::fs::MetadataExt;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
@@ -130,11 +134,315 @@ fn exec_with_profile(source: &Path, project: &str, profile: &str) -> Output {
         .unwrap()
 }
 
-#[test]
-fn a_same_size_rewrite_reloads_and_an_invalid_generation_keeps_the_last_good_one() {
-    if !have_sdk() {
-        return;
+const CORS_PROFILE_PROBE: &str = r"
+const assert = require('node:assert/strict');
+(async () => {
+  const base = `http://${process.env.FIREEMU_FUNCTIONS_HOST}/demo-cors-profile/us-central1`;
+  const profile = process.argv[1];
+  let runs = 0;
+  for (const origin of ['http://localhost:3000', 'https://evil.example', 'http://192.168.1.20:5173', 'https://allowed.example']) {
+  for (const name of ['defaultCors', 'disabledCors', 'enabledCors', 'listedCors']) {
+    const preflight = await fetch(`${base}/${name}`, {
+      method: 'OPTIONS',
+      headers: { origin, 'access-control-request-method': 'GET' },
+    });
+    const wrapped = name === 'enabledCors' || name === 'listedCors' || (profile === 'emulator' && name === 'defaultCors');
+    const allowedOrigin = name === 'listedCors' && profile === 'strict' ? 'https://allowed.example' : origin;
+    assert.equal(preflight.status, wrapped ? 204 : 200, `${profile} ${name} preflight`);
+    assert.equal(preflight.headers.get('access-control-allow-origin'), wrapped ? allowedOrigin : null);
+    assert.equal(preflight.headers.get('access-control-allow-methods'), wrapped ? 'GET,HEAD,PUT,PATCH,POST,DELETE' : null);
+    if (wrapped) assert.equal(await preflight.text(), '');
+    else assert.deepEqual(await preflight.json(), { method: 'OPTIONS' });
+    const get = await fetch(`${base}/${name}`, { headers: { origin } });
+    assert.equal(get.status, 200, `${profile} ${name} GET`);
+    assert.equal(get.headers.get('access-control-allow-origin'), wrapped ? allowedOrigin : null);
+    assert.deepEqual(await get.json(), { method: 'GET' });
+  }
+  for (const name of ['defaultCallable', 'disabledCallable', 'listedCallable', 'multiListedCallable']) {
+    const enabled = name !== 'disabledCallable';
+    const allowedOrigin = !enabled ? null : profile === 'strict' && name === 'listedCallable'
+      ? 'https://allowed.example' : profile === 'strict' && name === 'multiListedCallable'
+        && origin !== 'https://allowed.example' ? null : origin;
+    for (const requestedMethod of ['POST', 'GET']) {
+      const callablePreflight = await fetch(`${base}/${name}`, {
+        method: 'OPTIONS',
+        headers: {
+          origin,
+          'access-control-request-method': requestedMethod,
+          'access-control-request-headers': 'content-type,x-client-header',
+          'sec-fetch-site': 'cross-site',
+          'sec-fetch-mode': 'cors',
+          authorization: 'Bearer malformed',
+          'x-firebase-appcheck': 'malformed',
+        },
+      });
+      assert.equal(callablePreflight.status, enabled ? 204 : 400, `${profile} ${name} ${origin} ${requestedMethod}`);
+      assert.equal(callablePreflight.headers.get('access-control-allow-origin'), allowedOrigin);
+      assert.equal(callablePreflight.headers.get('access-control-allow-methods'), enabled ? 'POST' : null);
+      assert.equal(callablePreflight.headers.get('access-control-allow-headers'), enabled ? 'content-type,x-client-header' : null);
+      if (enabled) assert.equal(await callablePreflight.text(), '');
+      else assert.deepEqual(await callablePreflight.json(), { error: { message: 'Bad Request', status: 'INVALID_ARGUMENT' } });
+      assert.deepEqual(await (await fetch(`${base}/callableCount`)).json(), { runs }, 'OPTIONS must not run the callable handler');
     }
+    const callable = await fetch(`${base}/${name}`, {
+      method: 'POST', headers: { origin, 'content-type': 'application/json' }, body: JSON.stringify({ data: 'cors' }),
+    });
+    assert.equal(callable.status, 200);
+    assert.equal(callable.headers.get('access-control-allow-origin'), allowedOrigin);
+    assert.deepEqual(await callable.json(), { result: { data: 'cors', runs: ++runs } });
+  }
+  }
+})().catch(error => { console.error(error); process.exitCode = 1; });
+";
+
+#[test]
+#[ignore = "requires tools/sdk-smoke dependencies; the SDK workflow runs this test"]
+fn on_request_cors_follows_the_selected_profile_and_explicit_option() {
+    assert!(have_sdk(), "install tools/sdk-smoke dependencies first");
+    let source = scratch_codebase("cors-profile");
+    write(
+        &source,
+        "index.js",
+        r"
+const { onRequest, onCall } = require('firebase-functions/v2/https');
+const handler = (request, response) => response.json({ method: request.method });
+exports.defaultCors = onRequest(handler);
+exports.disabledCors = onRequest({ cors: false }, handler);
+exports.enabledCors = onRequest({ cors: true }, handler);
+exports.listedCors = onRequest({ cors: ['https://allowed.example'] }, handler);
+let callableRuns = 0;
+const callableHandler = request => ({ data: request.data, runs: ++callableRuns });
+exports.defaultCallable = onCall(callableHandler);
+exports.disabledCallable = onCall({ cors: false }, callableHandler);
+exports.listedCallable = onCall({ cors: ['https://allowed.example'] }, callableHandler);
+exports.multiListedCallable = onCall({ cors: ['https://allowed.example', 'https://second.example'] }, callableHandler);
+exports.callableCount = onRequest({ cors: false }, (_request, response) => response.json({ runs: callableRuns }));
+",
+    );
+    let project = "demo-cors-profile";
+
+    for profile in ["emulator", "strict"] {
+        let config = source.join(format!("fireemu-{profile}.json"));
+        write(
+            &source,
+            config.file_name().unwrap().to_str().unwrap(),
+            &format!(
+                r#"{{"schemaVersion":1,"profile":"{profile}","firestore":{{"edition":"standard","apiMode":"native"}}}}"#
+            ),
+        );
+        let output = fireemu_exec(&source, project)
+            .args([
+                "--config",
+                config.to_str().unwrap(),
+                "--",
+                "node",
+                "-e",
+                CORS_PROFILE_PROBE,
+                profile,
+            ])
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{profile} stdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    std::fs::remove_dir_all(source).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+#[ignore = "requires tools/sdk-smoke dependencies; the manual SDK workflow runs this test"]
+fn startup_removes_an_owned_orphan_snapshot_from_a_dead_pid() {
+    assert!(
+        have_sdk(),
+        "install tools/sdk-smoke dependencies before running this test"
+    );
+    let source = scratch_codebase("orphan-snapshot-sweep");
+    write(
+        &source,
+        "index.js",
+        "const { onRequest } = require('firebase-functions/v2/https');\nexports.fxReady = onRequest((_request, response) => response.send('ready'));\n",
+    );
+    let name = format!("fireemu-functions-{}-{}", i32::MAX, std::process::id());
+    #[cfg(target_os = "linux")]
+    let name = format!(
+        "{name}-n{}",
+        std::fs::metadata("/proc/self/ns/pid").unwrap().ino()
+    );
+    let orphan = std::env::temp_dir().join(name);
+    let _ = std::fs::remove_dir_all(&orphan);
+    std::fs::create_dir(&orphan).unwrap();
+    std::fs::set_permissions(&orphan, std::fs::Permissions::from_mode(0o700)).unwrap();
+
+    let output = exec_script_with_arg(
+        &source,
+        "demo-orphan-snapshot-sweep",
+        "i=0; while [ \"$i\" -lt 60 ]; do [ ! -e \"$1\" ] && exit 0; sleep 0.5; i=$((i+1)); done; exit 1",
+        &orphan,
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "orphan sweep did not finish: {stderr}"
+    );
+    assert!(!orphan.exists());
+    std::fs::remove_dir_all(source).unwrap();
+}
+
+#[test]
+#[ignore = "requires tools/sdk-smoke dependencies; the manual SDK workflow runs this test"]
+fn relative_functions_source_sets_runner_cwd_to_codebase_dir() {
+    assert!(
+        have_sdk(),
+        "install tools/sdk-smoke dependencies before running this test"
+    );
+    let dir = scratch_codebase("relative-cwd");
+    write(&dir, "cwd-marker.txt", "relative");
+    write(
+        &dir,
+        "index.js",
+        r"
+const fs = require('node:fs');
+const { onRequest } = require('firebase-functions/v2/https');
+exports.fxCwd = onRequest((_request, response) => response.json({
+  cwd: process.cwd(),
+  marker: fs.readFileSync('cwd-marker.txt', 'utf8'),
+}));
+",
+    );
+    let relative_source = Path::new(dir.file_name().unwrap());
+    let output = fireemu_exec(relative_source, "demo-relative-cwd")
+        .current_dir(dir.parent().unwrap())
+        .args(["--", "node", "-e", r"
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+(async () => {
+  const endpoint = `http://${process.env.FIREEMU_FUNCTIONS_HOST}/demo-relative-cwd/us-central1/fxCwd`;
+  const response = await fetch(endpoint);
+  const body = await response.text();
+  assert.equal(response.status, 200, body);
+  assert.deepEqual(JSON.parse(body), { cwd: fs.realpathSync(process.argv[1]), marker: 'relative' });
+})().catch(error => { console.error(error); process.exitCode = 1; });
+"])
+        .arg(&dir)
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+#[ignore = "requires tools/sdk-smoke dependencies; the manual SDK workflow runs this test"]
+fn http_function_uses_codebase_cwd_and_reload_snapshot_for_relative_reads() {
+    assert!(
+        have_sdk(),
+        "install tools/sdk-smoke dependencies before running this test"
+    );
+    let dir = scratch_codebase("cwd-and-reload");
+    write(&dir, "cwd-marker.txt", "before");
+    write(
+        &dir,
+        "index.js",
+        r"
+const fs = require('node:fs');
+const { onRequest } = require('firebase-functions/v2/https');
+exports.fxCwd = onRequest((_request, response) => response.json({
+  cwd: process.cwd(),
+  marker: fs.readFileSync('cwd-marker.txt', 'utf8'),
+}));
+",
+    );
+    let output = fireemu_exec(&dir, "demo-cwd-and-reload")
+        .args(["--", "node", "-e", r"
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+(async () => {
+  const source = process.argv[1];
+  const sourceCwd = fs.realpathSync(source);
+  const endpoint = `http://${process.env.FIREEMU_FUNCTIONS_HOST}/demo-cwd-and-reload/us-central1/fxCwd`;
+  const get = async () => {
+    const response = await fetch(endpoint);
+    const body = await response.text();
+    assert.equal(response.status, 200, body);
+    return JSON.parse(body);
+  };
+  assert.deepEqual(await get(), { cwd: sourceCwd, marker: 'before' });
+  fs.writeFileSync(path.join(source, 'cwd-marker.txt'), 'after');
+  const deadline = Date.now() + 15000;
+  while (Date.now() < deadline) {
+    const value = await get();
+    if (value.marker === 'after' && value.cwd !== sourceCwd) {
+      assert.equal(path.dirname(value.cwd), fs.realpathSync(os.tmpdir()));
+      assert.match(path.basename(value.cwd), /^fireemu-functions-\d+-\d+(?:-n\d+)?$/);
+      return;
+    }
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+  throw new Error('the reload did not read the marker from its snapshot cwd');
+})().catch(error => { console.error(error); process.exitCode = 1; });
+"])
+        .arg(&dir)
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+#[ignore = "requires tools/sdk-smoke dependencies; the manual SDK workflow runs this test"]
+fn relative_runner_override_starts_from_the_daemon_working_directory() {
+    assert!(
+        have_sdk(),
+        "install tools/sdk-smoke dependencies before running this test"
+    );
+    let dir = scratch_codebase("relative-runner-override");
+    write(
+        &dir,
+        "index.js",
+        "const { onRequest } = require('firebase-functions/v2/https');\nexports.fxReady = onRequest((_request, response) => response.send('ready'));\n",
+    );
+    let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let output = fireemu_exec(&dir, "demo-relative-runner-override")
+        .current_dir(workspace)
+        .env("FIREEMU_RUNNER_NODE", "tools/runner-node/index.mjs")
+        .args(["--", "true"])
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+#[ignore = "requires tools/sdk-smoke dependencies; the SDK workflow runs this test"]
+fn a_same_size_rewrite_reloads_and_an_invalid_generation_keeps_the_last_good_one() {
+    assert!(have_sdk(), "install tools/sdk-smoke dependencies first");
     let dir = scratch_codebase("same-size-reload");
     write(
         &dir,
@@ -191,6 +499,138 @@ test "$latest" = "after!"
     let _ = std::fs::remove_dir_all(dir);
 }
 
+#[cfg(unix)]
+#[test]
+#[ignore = "requires tools/sdk-smoke dependencies; run in the Functions SDK lane"]
+fn a_hoisted_sdk_and_local_package_remain_available_after_reload() {
+    use std::os::unix::fs::symlink;
+
+    let workspace =
+        std::env::temp_dir().join(format!("fireemu-hoisted-sdk-test-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&workspace);
+    let source = workspace.join("functions");
+    std::fs::create_dir_all(source.join("node_modules/local-pkg")).unwrap();
+    symlink(
+        std::fs::canonicalize(sdk_root().join("node_modules")).unwrap(),
+        workspace.join("node_modules"),
+    )
+    .unwrap();
+    write(
+        &source.join("node_modules/local-pkg"),
+        "index.js",
+        "module.exports = 'local-';",
+    );
+    write(
+        &source,
+        "package.json",
+        r#"{"name":"hoisted-reload","private":true,"main":"index.js","engines":{"node":"20"}}"#,
+    );
+    write(
+        &source,
+        "index.js",
+        "const { onRequest } = require('firebase-functions/v2/https');\nconst local = require('local-pkg');\nconst marker = 'before';\nexports.fxHoisted = onRequest((_request, response) => response.status(200).send(local + marker));\n",
+    );
+    let output = exec_script_with_arg(
+        &source,
+        "demo-hoisted-reload",
+        r#"
+set -eu
+endpoint="$FIREEMU_FUNCTIONS_HOST/demo-hoisted-reload/us-central1/fxHoisted"
+first=$(curl -fsS "$endpoint")
+node -e 'const fs=require("fs"); const p=process.argv[1]; const s=fs.readFileSync(p,"utf8"); fs.writeFileSync(p,s.replace("before", "after!"));' "$1"
+latest=""
+for _attempt in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
+  sleep 1
+  latest=$(curl -fsS "$endpoint")
+  if [ "$latest" = "local-after!" ]; then
+    break
+  fi
+done
+printf '%s\n%s\n' "$first" "$latest"
+test "$first" = "local-before"
+test "$latest" = "local-after!"
+"#,
+        &source.join("index.js"),
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    assert!(stderr.contains("reloaded generation 1"), "{stderr}");
+    let _ = std::fs::remove_dir_all(workspace);
+}
+
+#[cfg(unix)]
+#[test]
+#[ignore = "requires tools/sdk-smoke dependencies; the manual SDK workflow runs this test"]
+fn a_reload_reuses_the_daemons_node_probe_results() {
+    assert!(
+        have_sdk(),
+        "install tools/sdk-smoke dependencies before running this test"
+    );
+    let actual_node = std::env::split_paths(&std::env::var_os("PATH").expect("Node requires PATH"))
+        .filter(|directory| directory.is_absolute())
+        .map(|directory| directory.join("node"))
+        .find(|program| program.is_file())
+        .expect("Node must be installed for the SDK workflow");
+    let dir = scratch_codebase("node-probe-reload");
+    write(
+        &dir,
+        "index.js",
+        "const { onRequest } = require('firebase-functions/v2/https');\nexports.fxReload = onRequest((_request, response) => response.status(200).send('before'));\n",
+    );
+    let probe_calls = dir.join("probe-calls");
+    let wrapper = dir.join("node-wrapper");
+    write(
+        &dir,
+        "node-wrapper",
+        &format!(
+            "#!/bin/sh\nif [ \"$1\" = \"--version\" ] || [ \"$1\" = \"-p\" ]; then echo \"$1\" >> '{}'; fi\nexec '{}' \"$@\"\n",
+            probe_calls.display(),
+            actual_node.display()
+        ),
+    );
+    std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o700)).unwrap();
+
+    let output = fireemu_exec(&dir, "demo-node-probe-reload")
+        .args(["--", "node", "-e", r#"
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+(async () => {
+  const endpoint = `http://${process.env.FIREEMU_FUNCTIONS_HOST}/demo-node-probe-reload/us-central1/fxReload`;
+  const get = async () => {
+    const response = await fetch(endpoint);
+    assert.equal(response.status, 200);
+    return response.text();
+  };
+  assert.equal(await get(), 'before');
+  const source = process.argv[1];
+  fs.writeFileSync(source, fs.readFileSync(source, 'utf8').replace("'before'", "'after'"));
+  const deadline = Date.now() + 15000;
+  while (Date.now() < deadline) {
+    if (await get() === 'after') return;
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+  throw new Error('the changed Functions generation was not served');
+})().catch(error => { console.error(error); process.exitCode = 1; });
+"#])
+        .arg(dir.join("index.js"))
+        .env("FIREEMU_NODE", &wrapper)
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{stderr}");
+    assert!(stderr.contains("reloaded generation"), "{stderr}");
+    assert_eq!(
+        std::fs::read_to_string(&probe_calls)
+            .unwrap()
+            .lines()
+            .collect::<Vec<_>>(),
+        ["--version", "-p"],
+        "Node probes ran again after reload: {stderr}"
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 /// The one line the fixture prints at load, parsed.
 fn observed(out: &Output) -> serde_json::Value {
     let err = String::from_utf8_lossy(&out.stderr).into_owned();
@@ -203,10 +643,9 @@ fn observed(out: &Output) -> serde_json::Value {
 }
 
 #[test]
+#[ignore = "requires tools/sdk-smoke dependencies; the SDK workflow runs this test"]
 fn the_emulator_profile_inherits_the_parent_environment_but_strict_stays_isolated() {
-    if !have_sdk() {
-        return;
-    }
+    assert!(have_sdk(), "install tools/sdk-smoke dependencies first");
     let dir = scratch_codebase("parent-env");
     write(
         &dir,
@@ -250,10 +689,9 @@ fn the_emulator_profile_inherits_the_parent_environment_but_strict_stays_isolate
 /// wins, and `.secret.local` and `.runtimeconfig.json` reach the runtime the way they do
 /// under the Firebase CLI.
 #[test]
+#[ignore = "requires tools/sdk-smoke dependencies; the SDK workflow runs this test"]
 fn the_dotenv_chain_secret_overrides_and_runtime_config_reach_the_runtime() {
-    if !have_sdk() {
-        return;
-    }
+    assert!(have_sdk(), "install tools/sdk-smoke dependencies first");
     let dir = scratch_codebase("chain");
     write(
         &dir,
@@ -353,10 +791,9 @@ fn the_dotenv_chain_secret_overrides_and_runtime_config_reach_the_runtime() {
 /// anything starts: a reserved key would otherwise be silently overwritten by the emulator's
 /// own value, and a malformed line silently lose an assignment.
 #[test]
+#[ignore = "requires tools/sdk-smoke dependencies; the SDK workflow runs this test"]
 fn a_dotenv_file_the_official_parser_refuses_stops_the_run_with_its_message() {
-    if !have_sdk() {
-        return;
-    }
+    assert!(have_sdk(), "install tools/sdk-smoke dependencies first");
     for (body, expected) in [
         (
             "FUNCTION_TARGET=mine\n",
@@ -372,7 +809,7 @@ fn a_dotenv_file_the_official_parser_refuses_stops_the_run_with_its_message() {
         ),
         (
             "GOOD=1\nthis is not an assignment\n",
-            "Invalid dotenv file, error on lines: this is not an assignment",
+            "Invalid dotenv file, error on lines: [redacted]",
         ),
     ] {
         let dir = scratch_codebase("refuse");

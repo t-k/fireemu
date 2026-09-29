@@ -86,7 +86,7 @@ fn cache_base_for(
     }
     #[cfg(all(unix, not(target_os = "macos")))]
     {
-        let _ = local_app_data;
+        drop(local_app_data);
         return absolute_path(xdg_cache_home)
             .or_else(|| absolute_path(home).map(|home| home.join(".cache")));
     }

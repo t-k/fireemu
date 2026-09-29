@@ -136,6 +136,19 @@ impl Tenancy {
         Ok(())
     }
 
+    /// The first API key (in key order) of `project`: a registered project's own keys, or the
+    /// default project's declared `auth.apiKeys`. `None` when it has none.
+    #[must_use]
+    pub fn api_key_for(&self, project: &str) -> Option<&str> {
+        if project == self.default_project {
+            return self.default_api_keys.iter().next().map(String::as_str);
+        }
+        self.api_keys
+            .iter()
+            .find(|(_, owner)| owner.as_str() == project)
+            .map(|(key, _)| key.as_str())
+    }
+
     /// Forgets a registered project; `false` when it was not registered.
     pub fn unregister(&mut self, project: &str) -> bool {
         self.api_keys.retain(|_, p| p != project);
@@ -208,6 +221,24 @@ impl Tenancy {
 
 /// The tenancy shared by every adapter.
 pub type SharedTenancy = std::sync::Arc<std::sync::RwLock<Tenancy>>;
+
+#[cfg(test)]
+mod api_key_tests {
+    use super::Tenancy;
+
+    #[test]
+    fn a_project_names_its_first_declared_key() {
+        let mut tenancy = Tenancy::new("demo-app");
+        assert_eq!(tenancy.api_key_for("demo-app"), None);
+        tenancy.declare_default_api_keys(&["k2".to_owned(), "k1".to_owned()]);
+        assert_eq!(tenancy.api_key_for("demo-app"), Some("k1"));
+        tenancy
+            .register("other", &[], &["o2".to_owned(), "o1".to_owned()])
+            .unwrap();
+        assert_eq!(tenancy.api_key_for("other"), Some("o1"));
+        assert_eq!(tenancy.api_key_for("nobody"), None);
+    }
+}
 
 #[cfg(test)]
 mod tests {

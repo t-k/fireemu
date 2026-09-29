@@ -770,6 +770,8 @@ fn apply_auth(auth: &PreparedAuth, endpoints: &Endpoints) -> Result<(), Artifact
 /// generation or compare-and-swap operation. The comparison avoids overwriting a concurrent
 /// settings update in the usual interleaving; a hook implementation needs a generation-aware
 /// API to make this boundary fully atomic against a writer that races after the comparison.
+///
+/// [`AuthBlockingHook`]: fireemu_adapter_http::identity_toolkit::AuthBlockingHook
 fn restore_blocking_settings_if_unchanged(
     blocking: &dyn fireemu_adapter_http::identity_toolkit::AuthBlockingHook,
     snapshot: &serde_json::Value,
@@ -1708,6 +1710,9 @@ fn exported_password_policy(policy: &PasswordPolicy) -> PasswordPolicyRecord {
     PasswordPolicyRecord {
         enforcement_state: match policy.enforcement_state {
             EnforcementState::Off => "OFF".to_owned(),
+            EnforcementState::Unspecified => {
+                "PASSWORD_POLICY_ENFORCEMENT_STATE_UNSPECIFIED".to_owned()
+            }
             EnforcementState::Enforce => "ENFORCE".to_owned(),
         },
         force_upgrade_on_signin: policy.force_upgrade_on_signin,
@@ -1733,6 +1738,7 @@ fn imported_password_policy(
 ) -> Result<PasswordPolicy, ArtifactError> {
     let state = match record.enforcement_state.as_str() {
         "OFF" => EnforcementState::Off,
+        "PASSWORD_POLICY_ENFORCEMENT_STATE_UNSPECIFIED" => EnforcementState::Unspecified,
         "ENFORCE" => EnforcementState::Enforce,
         _ => {
             return Err(ArtifactError::new(
@@ -4115,6 +4121,43 @@ mod tests {
     use fireemu_core_auth::store::{ProjectAuthConfig, TenantMetadata};
     use fireemu_core_export::auth::{AuthConfig, AuthSettingsNamespace, AuthSettingsRecord};
     use fireemu_core_types::time::{days_from_civil, LogicalInstant};
+
+    /// A password policy survives an export and import in each enforcement state, the
+    /// unspecified one included (AUTH-CONFIG-SDK: production stores an unspecified state).
+    #[test]
+    fn password_policies_round_trip_through_the_sidecar() {
+        use fireemu_core_auth::password_policy::{
+            default_allowed_non_alphanumeric, EnforcementState, PasswordPolicy,
+        };
+        let path = std::path::Path::new("policy.json");
+        for state in [
+            EnforcementState::Off,
+            EnforcementState::Unspecified,
+            EnforcementState::Enforce,
+        ] {
+            let policy = PasswordPolicy::try_new(
+                state,
+                true,
+                10,
+                Some(20),
+                true,
+                false,
+                true,
+                false,
+                default_allowed_non_alphanumeric(),
+            )
+            .unwrap();
+            let record = super::exported_password_policy(&policy);
+            let imported = super::imported_password_policy(&record, path).unwrap();
+            assert_eq!(imported.enforcement_state, state);
+            assert_eq!(imported.min_length, 10);
+            assert_eq!(imported.max_length, Some(20));
+            assert!(imported.force_upgrade_on_signin && imported.require_uppercase);
+        }
+        let mut record = super::exported_password_policy(&PasswordPolicy::default());
+        record.enforcement_state = "SOMETIMES".to_owned();
+        assert!(super::imported_password_policy(&record, path).is_err());
+    }
     #[cfg(unix)]
     use fireemu_export_publication::PublicationStage;
 

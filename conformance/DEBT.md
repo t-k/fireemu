@@ -83,7 +83,7 @@ Three kinds of row appear here, and none of them fails `pnpm -C conformance run 
 - what a real project would settle: Identity Platform issues TOTP secrets only for a project with multi-factor authentication enabled in the console; neither the official Auth emulator nor fireemu can produce the production shape, so no local run may stand in for it.
 
 
-## Documented divergences (37)
+## Documented divergences (33)
 
 - `appcheck/enforced-header-matrix#firestore-rest-no-app-check-field` -- The official emulators have no enforcement mode to configure, so they admit the request. This is the whole point of the variant: fireemu denies with 403 PERMISSION_DENIED before Security Rules and before any side effect.
   documented in: capability manifest APPCHECK-ENFORCE-1 (crates/fireemu/src/control.rs); docs/specifications/firebase-app-check.md sections 12.1 and 17
@@ -145,20 +145,12 @@ Three kinds of row appear here, and none of them fails `pnpm -C conformance run 
   documented in: conformance/ORACLE.md, "What the oracle cannot answer"
 - `auth/identity-toolkit-error-shapes#unknown-method` -- Production returns a non-JSON 404 for an unknown method; fireemu follows that response class with static HTML.
   documented in: conformance/PRODUCTION-GAP-FOLLOWUP-2026-09-07.md
-- `firestore/missing-composite-index#admin-equality-plus-inequality` -- Same policy difference for an equality plus an inequality on another field.
-  documented in: README.md, "Gap from the official Firebase Emulator Suite"
 - `firestore/rest-error-shapes#runQuery-needing-a-composite-index` -- The query itself is served on both sides since index merging landed. The official emulator ends the REST runQuery stream with `done: true` on the last response; production omits `done` (probed against the oracle project on 2026-09-08) and fireemu follows production.
   documented in: README.md, "Gap from the official Firebase Emulator Suite"
 - `functions/callable-auth-context#a-forged-bearer-token-is-not-an-identity` -- The official Functions emulator runs the runtime with token verification skipped, so any Bearer value produces a context with hasAuth true and a null uid. fireemu verifies the ID token against the target project's registry and reinserts only a resolved user, so a forged value produces no Auth context at all.
   documented in: capability manifest APPCHECK-FUNCTIONS-1, "callable Authorization integrity" (crates/fireemu/src/control.rs); docs/specifications/firebase-app-check.md section 25 decision 3
 - `functions/callable-auth-context#bearer-owner-is-not-a-callable-identity` -- `Bearer owner` is the privileged emulator credential. The official emulator hands it to the callable as an authenticated context with a null uid; fireemu never treats it as a callable user identity.
   documented in: capability manifest APPCHECK-FUNCTIONS-1, "callable Authorization integrity" (crates/fireemu/src/control.rs); docs/specifications/firebase-app-check.md section 25 decision 3
-- `functions/http-routing-cors-and-timeouts#preflight-on-a-callable-from-a-loopback-origin` -- The official emulator varies its callable preflight response only on Origin and Access-Control-Request-Headers. fireemu also names Access-Control-Request-Method, Sec-Fetch-Site and Sec-Fetch-Mode because those request fields participate in its loopback callable admission decision; this prevents a shared cache from replaying an admitted response for a request that the proxy would refuse.
-  documented in: capability manifest FN-HTTP-1 (crates/fireemu/src/capabilities.json)
-- `functions/http-routing-cors-and-timeouts#preflight-on-a-callable-from-a-remote-origin` -- The official emulator starts its runtime with FIREBASE_DEBUG_FEATURES={"skipTokenVerification":true,"enableCors":true}, so firebase-functions wraps every handler in cors({origin: true}) and answers a preflight from any origin on the internet. fireemu serves the functions port to loopback origins only and answers 403 "forbidden origin" to the rest, the way its other ports do: a page a developer happens to have open must not be able to drive their local backend.
-  documented in: README.md, "Functions"
-- `functions/http-routing-cors-and-timeouts#a-cross-origin-post-to-a-callable` -- The same divergence on the request itself rather than the preflight: the official emulator reflects https://evil.example and hands the callable's result to it. fireemu refuses a non-loopback Origin with 403 before the request reaches the runner. An onRequest function on a loopback origin does get the CORS headers enableCors would have given it, so local browser development is unaffected.
-  documented in: README.md, "Functions"
 
 ## Standing proposal: precision of the App Check boundary rows
 

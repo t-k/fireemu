@@ -41,7 +41,9 @@ impl Default for TotpPolicy {
             period_seconds: 30,
             digits: 6,
             window_steps: 1,
-            enrollment_session_ttl: LogicalDuration::from_seconds(300),
+            // Production announces and applies 900 seconds (sandbox recording 2026-09-24,
+            // auth-mfa/lifetime: finalized at 870 s, refused at 930 s).
+            enrollment_session_ttl: LogicalDuration::from_seconds(900),
             max_totp_factors_per_user: 1,
         }
     }
@@ -160,7 +162,16 @@ pub struct PendingEnrollment {
     pub secret: TotpSecret,
     /// Expiry.
     pub expires_at: LogicalInstant,
+    /// Finalize attempts made with this session (production's rules count them).
+    pub attempts: u8,
+    /// Whether a finalize succeeded (production's rules keep the session until it expires).
+    pub completed: bool,
 }
+
+/// Finalize attempts one enrollment session allows under production's rules: two wrong codes
+/// and the right one, then the session again, was refused as too many (sandbox recording
+/// 2026-09-24, auth-mfa/totp/enroll#finalize-again).
+pub const MAX_ENROLLMENT_ATTEMPTS: u8 = 3;
 
 /// Pending second-factor sign-in.
 #[derive(Clone, PartialEq)]
@@ -169,6 +180,9 @@ pub struct PendingSignIn {
     pub started_at: LogicalInstant,
     /// First-factor provenance retained until the second factor is accepted.
     pub(crate) context: PendingSignInContext,
+    /// Whether a second factor completed it (production's rules keep it usable until it
+    /// expires; it is the first to make room at [`MAX_PENDING_PER_USER`]).
+    pub(crate) completed: bool,
 }
 
 impl fmt::Debug for PendingSignIn {
@@ -176,6 +190,7 @@ impl fmt::Debug for PendingSignIn {
         f.debug_struct("PendingSignIn")
             .field("started_at", &self.started_at)
             .field("context", &self.context)
+            .field("completed", &self.completed)
             .finish()
     }
 }
@@ -444,6 +459,12 @@ pub enum MfaError {
     CodeAlreadyUsed,
     /// Enrollment session expired.
     EnrollmentSessionExpired,
+    /// The enrollment session used up its finalize attempts.
+    TooManyEnrollmentAttempts,
+    /// The enrollment session was finalized already.
+    EnrollmentAlreadyComplete,
+    /// A TOTP sign-in's pending credential is older than production accepts.
+    TotpChallengeTimeout,
     /// Unknown enrollment session.
     EnrollmentSessionUnknown,
     /// Unknown pending sign-in.
@@ -488,6 +509,9 @@ impl fmt::Display for MfaError {
             Self::InvalidCode => f.write_str("invalid verification code"),
             Self::CodeAlreadyUsed => f.write_str("verification code already used"),
             Self::EnrollmentSessionExpired => f.write_str("enrollment session expired"),
+            Self::TooManyEnrollmentAttempts => f.write_str("too many enrollment attempts"),
+            Self::EnrollmentAlreadyComplete => f.write_str("enrollment already complete"),
+            Self::TotpChallengeTimeout => f.write_str("TOTP challenge timeout"),
             Self::EnrollmentSessionUnknown => f.write_str("unknown enrollment session"),
             Self::PendingSignInUnknown => f.write_str("unknown pending sign-in"),
             Self::NoEnrolledFactor => f.write_str("no second factor enrolled"),
@@ -643,6 +667,52 @@ impl MfaState {
 
     pub(crate) fn pending_sign_ins_mut(&mut self) -> &mut BTreeMap<String, PendingSignIn> {
         &mut self.pending_sign_ins
+    }
+
+    /// Drops one entry production's rules keep only for their answers, to make room at
+    /// [`MAX_PENDING_PER_USER`]: the enrollment session that expired first, else the oldest
+    /// completed one, else the oldest completed pending sign-in. Returns the id of a dropped
+    /// sign-in (its owner index is the caller's); nothing is dropped when every entry is live
+    /// and unfinished.
+    pub(crate) fn drop_one_finished(&mut self, now: LogicalInstant) -> Option<String> {
+        let enrollment = self
+            .pending_enrollments
+            .iter()
+            .filter(|(_, p)| p.expires_at < now)
+            .min_by_key(|(_, p)| p.expires_at)
+            .or_else(|| {
+                self.pending_enrollments
+                    .iter()
+                    .filter(|(_, p)| p.completed)
+                    .min_by_key(|(_, p)| p.expires_at)
+            })
+            .map(|(id, _)| id.clone());
+        if let Some(id) = enrollment {
+            self.pending_enrollments.remove(&id);
+            return None;
+        }
+        let sign_in = self
+            .pending_sign_ins
+            .iter()
+            .filter(|(_, p)| p.completed)
+            .min_by_key(|(_, p)| p.started_at)
+            .map(|(id, _)| id.clone())?;
+        self.pending_sign_ins.remove(&sign_in);
+        Some(sign_in)
+    }
+
+    /// Whether `id` names a pending enrollment session (expired or not).
+    #[must_use]
+    pub fn has_enrollment_session(&self, id: &str) -> bool {
+        self.pending_enrollments.contains_key(id)
+    }
+
+    /// Every pending sign-in's id and start.
+    pub(crate) fn pending_sign_in_ids_and_starts(&self) -> Vec<(String, LogicalInstant)> {
+        self.pending_sign_ins
+            .iter()
+            .map(|(id, pending)| (id.clone(), pending.started_at))
+            .collect()
     }
 
     pub(crate) fn has_pending_sign_in(&self, id: &str) -> bool {

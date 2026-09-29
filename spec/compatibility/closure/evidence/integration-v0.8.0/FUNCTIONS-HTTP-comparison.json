@@ -1,0 +1,317 @@
+{
+  "schemaVersion": 1,
+  "kind": "functions-http-integrated-regression",
+  "artifactSha256": "c258b022c5f452a60a9bc60de68e6de26b3f5aeaf846623cf1bf7e33f28d31df",
+  "runnerTreeSha256": "c70c6d835dae46d525b513bcf6828cb1fe551289d8aa231fa4f52a8d6fac4cce",
+  "corpusSha256": "836c138ba213546428e700e7ecb51644089bb5b0cdc91946eb9904a648106bea",
+  "fixtureIndexSha256": "0c481ec6b6ec87db71a2f90550238ce69ec2b923c7a92b7ea5171cb7909886a5",
+  "fixturePackageLockSha256": "9d0a9bc3287ad79bc66ee7174c2486dd078d18e77b2c27d612c3c8712d703eeb",
+  "nodeVersion": "v22.22.1",
+  "strictProductionMatches": 68,
+  "totalCases": 68,
+  "runs": [
+    {
+      "profile": "strict",
+      "executedBinary": "target/release/fireemu",
+      "binarySha256Before": "c258b022c5f452a60a9bc60de68e6de26b3f5aeaf846623cf1bf7e33f28d31df",
+      "binarySha256After": "c258b022c5f452a60a9bc60de68e6de26b3f5aeaf846623cf1bf7e33f28d31df",
+      "exitCode": 0,
+      "recordingSha256": "92e9ea008073ae16897015e552ae7b58cb1560d2d55de14092c3ca71e8fea39f",
+      "sourceHead": "24f300b4f7e2a79dd35388f4c0724b00cd0d19f1"
+    },
+    {
+      "profile": "emulator",
+      "executedBinary": "target/release/fireemu",
+      "binarySha256Before": "c258b022c5f452a60a9bc60de68e6de26b3f5aeaf846623cf1bf7e33f28d31df",
+      "binarySha256After": "c258b022c5f452a60a9bc60de68e6de26b3f5aeaf846623cf1bf7e33f28d31df",
+      "exitCode": 0,
+      "recordingSha256": "ccdddb599c8783e08ab3c81728df7cedb7a61698704d601494ea9f61ee654dca",
+      "sourceHead": "24f300b4f7e2a79dd35388f4c0724b00cd0d19f1"
+    }
+  ],
+  "strictRecordingsIdenticalToLane": true,
+  "profileDifferenceCaseCount": 27,
+  "profileDifferenceCaseSetEqualsProductionOfficial": true,
+  "emulatorOfficialDifferenceCaseCount": 5,
+  "emulatorNewRefusals": 0,
+  "emulatorRecordingsIdenticalToLane": false,
+  "emulatorRecordingsIdenticalToLaneAfterCheckoutPathNormalization": true,
+  "emulatorPathOnlyDifferenceCaseIds": [
+    "functions-http/http/request-bodies#malformed-json",
+    "functions-http/callable/malformed#malformed-json"
+  ],
+  "rows": [
+    {
+      "row": "functions-http/http/request-shape#GET",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/http/request-shape#POST",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/http/request-shape#HEAD",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/http/request-shape#nested-path",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/http/request-shape#repeated-query-key",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/http/request-shape#encoded-query",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/http/request-headers#custom-request-header",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/http/request-headers#x-forwarded-for",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/http/request-headers#x-forwarded-proto",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/http/request-headers#function-execution-id-presence",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/http/request-bodies#json",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/http/request-bodies#raw-text",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/http/request-bodies#form-urlencoded",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/http/request-bodies#empty",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/http/request-bodies#malformed-json",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/http/response-shape#custom-status",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/http/response-shape#custom-header",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/http/response-shape#content-type",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/http/response-shape#no-content",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/http/large-response#one-mib-response-length-and-sha256",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/http/streaming#ordered-chunks-before-completion",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/http/streaming#completed-stream",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/http/streaming#client-disconnect",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/http/cors#options-preflight",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/http/cors#cross-origin-post",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/http/failures#synchronous-throw",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/http/failures#rejected-promise",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/http/failures#handler-exceeds-one-second-timeout",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/http/failures#handler-returns-without-sending-response",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/callable/success#object-result",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/callable/success#scalar-result",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/callable/success#null-result",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/callable/success#data-envelope",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/callable/https-errors#ok",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/callable/https-errors#cancelled",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/callable/https-errors#unknown",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/callable/https-errors#invalid-argument",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/callable/https-errors#deadline-exceeded",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/callable/https-errors#not-found",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/callable/https-errors#already-exists",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/callable/https-errors#permission-denied",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/callable/https-errors#resource-exhausted",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/callable/https-errors#failed-precondition",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/callable/https-errors#aborted",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/callable/https-errors#out-of-range",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/callable/https-errors#unimplemented",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/callable/https-errors#internal",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/callable/https-errors#unavailable",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/callable/https-errors#data-loss",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/callable/https-errors#unauthenticated",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/callable/https-errors#details",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/callable/https-errors#unhandled-error",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/callable/malformed#wrong-method",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/callable/malformed#wrong-content-type",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/callable/malformed#missing-data",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/callable/malformed#extra-field",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/callable/malformed#malformed-json",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/callable/auth-context#no-authorization",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/callable/auth-context#valid-project-id-token",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/callable/auth-context#uid-and-claims",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/callable/auth-refusal#malformed-bearer",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/callable/auth-refusal#invalid-signature",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/callable/auth-refusal#expired-id-token",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/callable/streaming#send-chunk-order",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/callable/streaming#final-result",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/callable/streaming#client-disconnect",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/deployment/public-invocation#http-without-cloud-run-credentials",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/deployment/public-invocation#callable-without-cloud-run-credentials",
+      "status": "MATCH"
+    }
+  ]
+}

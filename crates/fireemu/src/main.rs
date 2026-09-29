@@ -45,6 +45,7 @@ mod functions;
 mod hub;
 mod import_export;
 mod init;
+mod managed_storage;
 mod resources;
 mod session_rsa_cache;
 mod sessions;
@@ -2323,6 +2324,54 @@ fn random_secret() -> Result<String, String> {
         .map_err(|e| format!("cannot draw the control token: {e}"))
 }
 
+/// Installs the operating system CSPRNG as the Auth stores' credential entropy, so a daemon
+/// run with a fixed seed still issues unpredictable action codes, verification sessions,
+/// refresh tokens and TOTP secrets. The daemon refuses to start without one.
+fn install_auth_credential_entropy() -> Result<(), String> {
+    fireemu_adapter_support::entropy::fill(&mut [0_u8; 8])
+        .map_err(|e| format!("cannot draw Auth credentials: {e}"))?;
+    fireemu_core_auth::store::install_credential_entropy(|dest| {
+        fireemu_adapter_support::entropy::fill(dest).is_ok()
+    });
+    Ok(())
+}
+
+#[cfg(test)]
+mod credential_entropy_tests {
+    use fireemu_core_auth::mfa::TotpPolicy;
+    use fireemu_core_auth::store::{AuthStore, OobRequestType};
+    use fireemu_core_types::determinism::SplitMix64;
+    use fireemu_core_types::time::LogicalInstant;
+
+    /// Two daemons with the same seed issue different action codes once the OS CSPRNG is
+    /// installed, and the codes keep their shape.
+    #[test]
+    fn a_seeded_daemon_issues_unpredictable_action_codes() {
+        super::install_auth_credential_entropy().unwrap();
+        let code = || {
+            AuthStore::new(
+                "demo-app",
+                SplitMix64::new(0x2A ^ 0xA0),
+                TotpPolicy::default(),
+            )
+            .create_oob_code(
+                OobRequestType::PasswordReset,
+                "a@example.com",
+                None,
+                None,
+                LogicalInstant::from_unix_seconds(1_788_004_860),
+            )
+            .unwrap()
+        };
+        let (first, second) = (code(), code());
+        assert_ne!(first, second);
+        for code in [first, second] {
+            assert_eq!(code.len(), "oob-".len() + 16 + 4, "{code}");
+            assert!(code.ends_with("0001"), "{code}");
+        }
+    }
+}
+
 /// An unpredictable 128-bit daemon-local incarnation from the operating system CSPRNG.
 fn random_u128() -> Result<u128, String> {
     fireemu_adapter_support::entropy::u128_value()
@@ -2387,6 +2436,9 @@ fn service_admission(
 fn print_rules_status(cfg: &RuntimeConfig, loaded: bool) {
     match (cfg.rules_enforced, loaded) {
         (false, _) => println!("  rules: disabled by config (every request is allowed)"),
+        (true, false) if cfg.refuse_without_ruleset => println!(
+            "  rules: none loaded; every client request is refused, as production refuses it without a release (PUT /v1/rules or rules.source)"
+        ),
         (true, false) => println!(
             "  rules: none loaded; every request is allowed (PUT /v1/rules or rules.source)"
         ),
@@ -2805,13 +2857,15 @@ mod config_reload_tests {
 
     #[test]
     fn unpinned_clock_start_preserves_subsecond_wall_time() {
+        // A multiple of 100 ns: Windows keeps SystemTime in 100 ns ticks, so a finer instant
+        // would already be truncated when the wall time is built, before the conversion runs.
         let wall_time = std::time::UNIX_EPOCH
-            .checked_add(std::time::Duration::new(1_800_000_000, 123_456_789))
+            .checked_add(std::time::Duration::new(1_800_000_000, 123_456_700))
             .unwrap();
 
         assert_eq!(
             logical_system_time(wall_time),
-            LogicalInstant::from_nanos(1_800_000_000_123_456_789)
+            LogicalInstant::from_nanos(1_800_000_000_123_456_700)
         );
     }
 

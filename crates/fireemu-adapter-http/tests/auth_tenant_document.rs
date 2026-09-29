@@ -853,6 +853,20 @@ fn a_tenant_answers_its_email_privacy_as_its_profile_says() {
             Some(expected_lacking),
             "{label}: {lacking}"
         );
+        if !strict {
+            // The masked member named without its switch: `applyMask` keeps the message, and
+            // what it held.
+            let empty_parent = patch(
+                &id,
+                Some("emailPrivacyConfig.enableImprovedEmailPrivacy"),
+                json!({"emailPrivacyConfig": {}}),
+            );
+            assert_eq!(
+                privacy(&empty_parent),
+                Some(on.clone()),
+                "{label}: {empty_parent}"
+            );
+        }
 
         // An update without a mask, in the emulator profile, applies what its body has.
         if !strict {

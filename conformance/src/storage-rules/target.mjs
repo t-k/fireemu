@@ -160,6 +160,9 @@ export function createTargetBuilder(options) {
       if (!ROW_HEADERS.has(name) || typeof value !== "string" || !/^[\x20-\x7e]{0,1024}$/.test(value)) bad();
       headers[name] = value;
     }
+    // A release write names only this run's release, so its body must be JSON that can be checked: no base64 body and no missing one.
+    const releaseWrite = request.origin === RULES && /^\/v1\/projects\/[^/]+\/releases(?:\/|$)/.test(request.path ?? "") && ["POST", "PATCH"].includes(request.method);
+    if (releaseWrite && !closedRecord(request.body, ["json"])) bad();
     let body = null;
     if (request.body !== null && request.body !== undefined) {
       if (closedRecord(request.body, ["base64"])) {
@@ -180,7 +183,7 @@ export function createTargetBuilder(options) {
           return bad();
         };
         const walked = walk(request.body.json);
-        if (request.origin === RULES && /^\/v1\/projects\/[^/]+\/releases(?:\/|$)/.test(request.path ?? "") && ["POST", "PATCH"].includes(request.method)) releaseBodyOk(request, walked);
+        if (releaseWrite) releaseBodyOk(request, walked);
         body = Buffer.from(JSON.stringify(walked));
         if (body.length > MAX_BODY_BYTES) bad();
         if (headers["content-type"] === undefined) headers["content-type"] = "application/json; charset=utf-8";

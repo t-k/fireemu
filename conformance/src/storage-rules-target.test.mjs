@@ -584,3 +584,22 @@ test("a preflight row with no billed project defaults to the query project, for 
     rejects(b, { ...base, request: rest }, `${id} without its project falls to the query project and its own number no longer fits`);
   }
 });
+
+test("a release write must carry a JSON body: a base64 body or none is refused, so the release-name binding cannot be bypassed", async () => {
+  const b = await builder();
+  const owned = `projects/fireemu-oracle-query/releases/firebase.storage/${binding.bucket}`;
+  for (const id of ["release/v1/publish", "release/v2/publish"]) {
+    const base = row(id);
+    const other = Buffer.from(JSON.stringify({ name: "projects/fireemu-oracle-query/releases/cloud.firestore", rulesetName: "projects/fireemu-oracle-query/rulesets/x" })).toString("base64");
+    const owning = Buffer.from(JSON.stringify({ name: owned })).toString("base64");
+    for (const body of [{ base64: other }, { base64: owning }, { base64: "" }, null, undefined]) {
+      const request = { ...base.request, body };
+      if (body === undefined) delete request.body;
+      rejects(b, { ...base, request }, `${id} with ${JSON.stringify(body)?.slice(0, 30)}`);
+    }
+    assert.doesNotThrow(() => b.prepare(base, resolver()), id);
+  }
+  // Reads and deletes of a release carry no body, and other bodies stay as they were.
+  assert.doesNotThrow(() => b.prepare(row("release/restore/delete"), resolver()));
+  assert.doesNotThrow(() => b.prepare(row("release/restore/owner-before-delete"), resolver()));
+});

@@ -294,7 +294,7 @@ test("the expansion changes nothing in the corpus or the declared-request builde
     const { origin, ...request } = r.request;
     return { id: r.id, phase: r.phase, family: r.family, programId: r.programId, stage: r.stage, service: r.service, request, requiredState: r.requiredState, when: r.when };
   });
-  assert.equal(digest(JSON.stringify(rows)), "835fa188cfb869309cab0c5bd0bca8a08f6747e88031234203680d88808511d7");
+  assert.equal(digest(JSON.stringify(rows)), "6a27077688e9a36f114b410703d3e600deb52479be9dd36cc8c8c27b51bff841");
 });
 
 test("every row names its origin from one closed (service, dialect) table", async () => {
@@ -343,4 +343,15 @@ test("each session is verified in the normal path after its cancel, so a cancell
     assert.deepEqual(verify.request.sessionUrlReference, m.rows.find((r) => r.family === "recovery-session" && r.programId === session.caseId).request.sessionUrlReference);
     assert.deepEqual(verify.requires, ["durable-verified-start-url-and-target", "unknown-terminal-shape-remains-needs-recovery"]);
   }
+});
+
+test("the bucket permission read asks only for the five permissions a bucket-level IAM test can report, and stays inside the transport's exact query", () => {
+  const row = build().rows.find((r) => r.id === "preflight/bucket/permissions") ?? assert.fail("no bucket permissions row");
+  assert.deepEqual(row.request.query.permissions, ["storage.buckets.get", "storage.buckets.getIamPolicy", "storage.objects.create", "storage.objects.delete", "storage.objects.list"]);
+  assert.deepEqual(Object.keys(row.request.query), ["permissions"]);
+  assert.equal(row.request.method, "GET");
+  assert.equal(row.request.credential, "admin");
+  assert.deepEqual(row.requires, ["all-explicit-bucket-permissions-present", "approved-private-input-provenance"]);
+  // Object read and update are proven by the run's own object operations, not requested here: bucket-level IAM never reports them for fine-grained access.
+  for (const name of ["storage.objects.get", "storage.objects.update"]) assert.equal(row.request.query.permissions.includes(name), false, name);
 });

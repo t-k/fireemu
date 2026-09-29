@@ -54,6 +54,8 @@ for (const [id, spec] of [
     assert.equal(call.url, `${spec.origin}${spec.path}`);
     assert.equal(call.method, "POST");
     assert.equal(call.headers.authorization, `Bearer ${accessToken}`);
+    // The owner's user credential is billed to the project the account belongs to.
+    assert.equal(call.headers["x-goog-user-project"], spec.project);
     assert.deepEqual(JSON.parse(call.body.toString()), spec.body);
     assert.equal(call.headers["content-type"], "application/json");
     assert.equal(result.status, 200);
@@ -74,6 +76,7 @@ for (const [id, spec] of [
     const call = ctx.calls[0];
     assert.equal(call.url, `${spec.origin}${spec.path}?key=${apiKeys[spec.project]}`);
     assert.ok(!Object.hasOwn(call.headers, "authorization"));
+    assert.ok(!Object.hasOwn(call.headers, "x-goog-user-project"));
     assert.deepEqual(JSON.parse(call.body.toString()), spec.body);
   });
 }

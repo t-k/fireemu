@@ -315,3 +315,4 @@ test("a delegate that fails without an admission refusal stops the run as a fail
   const result = await h.controller.run();
   assert.deepEqual([result.status, result.reason, result.detail.op], ["stopped", "delegate failed", "prepare-query"]);
 });
+

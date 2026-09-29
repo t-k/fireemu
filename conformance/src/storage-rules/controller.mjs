@@ -98,6 +98,13 @@ export function createController(options) {
   }
 
   async function execute(row, phase, { ctx, accept = null } = {}) {
+    // A credential provider may refresh what the row needs (through the gate's seam) before its freshness is judged.
+    if (callable(credentials.ensure)) {
+      try { await credentials.ensure(row); } catch (error) {
+        if (error instanceof RunStop) throw error;
+        throw new RunStop(gate.snapshot().admissionRefused === true ? "admission refused" : "credential refresh failed", { rowId: row.id });
+      }
+    }
     run.setFlag("credentialFresh", credentials.fresh(row) === true);
     const decision = decide(row);
     if (decision.decision === "skip") { skipped.push(row.id); await capture.writeNote({ operationId: null, text: `skipped ${row.id}: ${decision.failed.map((f) => f.token).join(", ")}` }); return null; }

@@ -136,6 +136,7 @@ export function createAuthWireTransport(options) {
           const current = nowSeconds();
           if (!matches(accessToken, /^[!-~]{20,4096}$/) || !Number.isSafeInteger(current) || current <= 0 || !Number.isSafeInteger(expiresAt) || expiresAt - current <= 30) throw new Error();
           headers.authorization = `Bearer ${accessToken}`;
+          headers["x-goog-user-project"] = prepared.project;
         } catch { throw new Error("Auth owner credential unavailable"); }
       }
       let response;

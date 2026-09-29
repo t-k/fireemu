@@ -272,3 +272,22 @@ test("a capability parameter can never be a literal in a row", async () => {
   const comparison = manifest.rows.find((r) => r.request.query?.token?.kind === "firebase-download-token");
   assert.throws(() => b.prepare({ ...comparison, request: { ...comparison.request, query: { alt: "media", token: "0a1b2c3d-1111-2222-3333-444455556666" } } }, resolver()), /invalid target row/);
 });
+
+test("a prepared target carries the project its request is billed to, and the digest binds it", async () => {
+  const b = await builder();
+  const rows = manifest.rows.filter((r) => !UNPREPARED(r));
+  const projects = new Set();
+  for (const r of rows) {
+    const prepared = b.prepare(r, resolver());
+    assert.equal(prepared.project, r.request.project ?? "fireemu-oracle-query", r.id);
+    // Every prepared request names the project it is billed to; a declared case with none is a request against the query project.
+    assert.ok(["fireemu-oracle-idp", "fireemu-oracle-query"].includes(prepared.project), r.id);
+    projects.add(prepared.project);
+  }
+  assert.ok(projects.has("fireemu-oracle-query"));
+  assert.ok([...projects].every((project) => ["fireemu-oracle-idp", "fireemu-oracle-query"].includes(project)));
+  // A different project in the same request is a different target.
+  const original = row("management/control-0/seed");
+  const other = { ...original, request: { ...original.request, project: "fireemu-oracle-idp" } };
+  assert.notEqual(b.prepare(other, resolver()).targetSha256, b.prepare(original, resolver()).targetSha256);
+});

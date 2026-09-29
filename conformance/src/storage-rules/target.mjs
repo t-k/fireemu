@@ -87,7 +87,7 @@ export function createTargetBuilder(options) {
   const refType = (entry) => (entry && typeof entry === "object" && entry.kind !== "runtime-reference" ? referenceOf(entry)?.type : entry?.type);
   const encode = (text) => encodeURIComponent(text);
   const issued = new WeakSet();
-  const digestOf = ({ rowId, method, url, headers, body, credential }) => sha256([digestSalt, JSON.stringify({ rowId, method, url, headers, body: body === null ? null : sha256(body), credential })].join("\0"));
+  const digestOf = ({ rowId, method, url, headers, body, credential, project }) => sha256([digestSalt, JSON.stringify({ rowId, method, url, headers, body: body === null ? null : sha256(body), credential, project })].join("\0"));
 
   function build(row, resolve) {
     if (!row || typeof row !== "object" || typeof row.id !== "string" || !ids.has(row.id) || typeof resolve !== "function") bad();
@@ -167,9 +167,9 @@ export function createTargetBuilder(options) {
       } else bad();
     }
     const sorted = Object.fromEntries(Object.entries(headers).sort(([a], [b]) => (a < b ? -1 : 1)));
-    const targetSha256 = digestOf({ rowId: row.id, method: request.method, url, headers: sorted, body, credential: request.credential });
+    const targetSha256 = digestOf({ rowId: row.id, method: request.method, url, headers: sorted, body, credential: request.credential, project: request.project ?? QUERY });
     const redacted = `${request.method} ${request.origin}${redactedPath}${redactedPieces.length ? `?${redactedPieces.join("&")}` : ""}`;
-    const prepared = { rowId: row.id, credential: request.credential, redacted, targetSha256 };
+    const prepared = { rowId: row.id, credential: request.credential, project: request.project ?? QUERY, redacted, targetSha256 };
     Object.defineProperty(prepared, "spec", { value: Object.freeze({ url, method: request.method, headers: Object.freeze(sorted), body }), enumerable: false });
     Object.freeze(prepared);
     issued.add(prepared);
@@ -181,7 +181,7 @@ export function createTargetBuilder(options) {
     try {
       if (!prepared || typeof prepared !== "object" || !issued.has(prepared) || !prepared.spec) return false;
       const { url, method, headers, body } = prepared.spec;
-      return digestOf({ rowId: prepared.rowId, method, url, headers, body, credential: prepared.credential }) === prepared.targetSha256;
+      return digestOf({ rowId: prepared.rowId, method, url, headers, body, credential: prepared.credential, project: prepared.project }) === prepared.targetSha256;
     } catch { return false; }
   }
 

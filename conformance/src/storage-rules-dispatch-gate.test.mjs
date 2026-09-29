@@ -81,6 +81,18 @@ test("credential headers reach the transport and nothing else", async () => {
   assert.equal(JSON.parse(events(h.trace, "transport")[0][3]).authorization, undefined);
 });
 
+test("the credential provider is told which project the request is billed to", async () => {
+  const seen = [];
+  const h = await harness({ credentials: { headersFor: (credential, context) => { seen.push([credential, context.project, Object.isFrozen(context)]); return credential === "anonymous" ? {} : { authorization: "Bearer t", "x-goog-user-project": context.project }; } } });
+  await h.admit();
+  h.trace.length = 0;
+  const prepared = h.prepare(READ);
+  await h.gate.send(prepared, normalMeta);
+  const call = h.trace.find((entry) => entry[0] === "transport");
+  assert.equal(JSON.parse(call[3])["x-goog-user-project"], prepared.project);
+  assert.ok(seen.some(([credential, project, frozen]) => credential === prepared.credential && project === prepared.project && frozen));
+});
+
 test("credential headers are closed to the two allowed names and printable values, and a refusal sends nothing", async () => {
   for (const headers of [{ cookie: "a=b" }, { authorization: "x\r\nX: y" }, { authorization: 7 }, { authorization: "" }, { "x-other": "1" }, null, []]) {
     const h = await harness({ credentials: { headersFor: () => headers } });

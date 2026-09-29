@@ -38,8 +38,8 @@ export function createDispatchGate(options) {
   }
   const modeOf = (phase) => ({ preflight: "preflight", normal: "normal", recovery: "recovery" })[phase];
 
-  function credentialHeaders(credential) {
-    const headers = credentials.headersFor(credential);
+  function credentialHeaders(prepared) {
+    const headers = credentials.headersFor(prepared.credential, Object.freeze({ project: prepared.project }));
     if (!plain(headers)) bad("invalid credential headers");
     const out = {};
     for (const [name, value] of Object.entries(headers)) {
@@ -68,7 +68,7 @@ export function createDispatchGate(options) {
         if (armed === null || armed.operationId !== operationId || armed.phase !== phase) bad("dispatch is not armed");
         armed = null;
         if (!targets.verify(prepared)) bad("target changed after its intent");
-        const headers = { ...prepared.spec.headers, ...credentialHeaders(prepared.credential) };
+        const headers = { ...prepared.spec.headers, ...credentialHeaders(prepared) };
         dispatched = true;
         const answer = await transport.send({ url: prepared.spec.url, method: prepared.spec.method, headers, body: prepared.spec.body });
         // Only the status, the raw headers and the bytes travel on; timing and any other field of the transport stay behind.

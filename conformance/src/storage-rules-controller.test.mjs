@@ -35,7 +35,7 @@ function memoryCapture() {
   };
 }
 
-async function harness({ capture = memoryCapture(), simulatorOptions = {}, credentialsFresh = () => true, waits = [], delegates = {}, judge } = {}) {
+async function harness({ capture = memoryCapture(), simulatorOptions = {}, credentialsFresh = () => true, ensure, waits = [], delegates = {}, judge } = {}) {
   const simulator = createSimulator({ manifest, options: { invalidContent, ...simulatorOptions } });
   const targets = createTargetBuilder({ manifest, digestSalt: salt });
   const tables = buildRefTables(manifest);
@@ -49,7 +49,7 @@ async function harness({ capture = memoryCapture(), simulatorOptions = {}, crede
   const controller = createController({
     manifest, schedule: buildSchedule(manifest), recoverySchedule: buildRecoverySchedule(manifest), gate, targets, refs, tables, objects, run, capture,
     delegates: { "preflight-cache": noop, "credential-cache": noop, "prepare-query": noop, "foreign-signup": noop, "foreign-cleanup": noop, "cleanup-query": noop, "recover-accounts": noop, ...delegates },
-    wait: async (ms) => { waits.push(ms); }, credentials: { fresh: credentialsFresh }, judgePreflight: judge ?? ((row, outcome) => outcome.verdict !== "unexpected"),
+    wait: async (ms) => { waits.push(ms); }, credentials: { fresh: credentialsFresh, ...(ensure ? { ensure } : {}) }, judgePreflight: judge ?? ((row, outcome) => outcome.verdict !== "unexpected"),
   });
   return { controller, simulator, gate, objects, run, refs, capture, trace, waits };
 }
@@ -199,6 +199,23 @@ test("every request the controller sends is one the schedule names, exactly once
   assert.equal(sent.some((id) => id.startsWith("recovery/")), false);
   const skippedAndSent = result.skipped.filter((id) => sent.includes(id));
   assert.deepEqual(skippedAndSent, []);
+});
+
+test("a credential provider's ensure hook runs before the freshness check of every row and a failure stops the run", async () => {
+  const order = [];
+  const h = await harness({ ensure: async (row) => { order.push(["ensure", row.id]); }, credentialsFresh: (row) => { order.push(["fresh", row.id]); return true; } });
+  const result = await h.controller.run();
+  assert.equal(result.status, "finished");
+  assert.ok(order.length > 4000);
+  for (let index = 0; index < order.length; index += 2) {
+    assert.equal(order[index][0], "ensure");
+    assert.deepEqual([order[index + 1][0], order[index + 1][1]], ["fresh", order[index][1]]);
+  }
+  let calls = 0;
+  const failing = await harness({ ensure: async () => { if (++calls === 30) throw new Error("refresh failed"); } });
+  const stopped = await failing.controller.run();
+  assert.deepEqual([stopped.status, stopped.reason], ["stopped", "credential refresh failed"]);
+  assert.equal(failing.trace.filter((id) => id !== "started").length <= 40, true);
 });
 
 // Recovery: the same controller, ledgers and gate finish what a stopped run left behind, using only the declared recovery rows.

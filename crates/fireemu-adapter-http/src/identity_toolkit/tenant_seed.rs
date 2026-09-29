@@ -159,13 +159,19 @@ impl TenantSeeding {
     }
 
     /// Applies the declaration to `project`. The switch is set only when declared, so an
-    /// undeclared one keeps whatever the project has; the tenants are created with the ids of
-    /// the file and fail when one is in use.
+    /// undeclared one keeps whatever the project has. A tenant is created with the id of the
+    /// file unless the project already has a tenant of that id: after an `--import` that tenant
+    /// is the imported one, which is authoritative for its id.
     pub fn apply(&self, registry: &AuthRegistry, project: &str) -> Result<(), String> {
         if let Some(allow) = self.allow_tenants {
             seed_multi_tenancy(registry, project, allow)?;
         }
-        for tenant in &self.tenants {
+        let present = registry.tenants(project);
+        for tenant in self
+            .tenants
+            .iter()
+            .filter(|t| !present.iter().any(|id| id == t.id()))
+        {
             tenant.apply(registry, project)?;
         }
         Ok(())

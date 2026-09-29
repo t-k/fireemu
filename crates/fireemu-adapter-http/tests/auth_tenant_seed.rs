@@ -286,3 +286,42 @@ fn the_multi_tenancy_switch_is_set_as_the_config_update_sets_it() {
     assert_eq!(read(), json!({}));
     assert!(seed_multi_tenancy(&registry, "no-such-project", true).is_err());
 }
+
+#[test]
+fn a_declaration_sets_the_switch_when_declared_and_leaves_a_present_tenant_alone() {
+    use fireemu_adapter_http::identity_toolkit::TenantSeeding;
+    let (state, registry) = with_registry(strict_state());
+    let documents = [
+        acme(),
+        json!({"tenantId": "beta-a1b2c", "displayName": "beta"}),
+    ];
+    let declaration = TenantSeeding::new(Some(true), seeds(&documents, false).unwrap());
+    assert!(!declaration.is_empty());
+    assert!(TenantSeeding::default().is_empty());
+    assert!(!TenantSeeding::new(None, seeds(&documents, false).unwrap()).is_empty());
+    assert!(!TenantSeeding::new(Some(false), Vec::new()).is_empty());
+    // A tenant of the same id that is already there (an imported one) is kept as it is.
+    let imported =
+        json!({"tenantId": "acme-x7k2q", "displayName": "acme", "allowPasswordSignup": false});
+    seed_multi_tenancy(&registry, "demo-app", true).unwrap();
+    seeds(&[imported], false).unwrap()[0]
+        .apply(&registry, "demo-app")
+        .unwrap();
+    declaration.apply(&registry, "demo-app").unwrap();
+    assert_eq!(registry.tenants("demo-app"), ["acme-x7k2q", "beta-a1b2c"]);
+    let (_, document) = admin(
+        &state,
+        "GET",
+        &format!("{V2}/projects/demo-app/tenants/acme-x7k2q"),
+        &json!({}),
+    );
+    assert_eq!(document["allowPasswordSignup"], false, "{document}");
+    // Undeclared, the switch is left as the project has it.
+    seed_multi_tenancy(&registry, "demo-app", false).unwrap();
+    TenantSeeding::new(None, Vec::new())
+        .apply(&registry, "demo-app")
+        .unwrap();
+    assert!(!state.store.lock().unwrap().allows_tenants());
+    declaration.apply(&registry, "demo-app").unwrap();
+    assert!(state.store.lock().unwrap().allows_tenants());
+}

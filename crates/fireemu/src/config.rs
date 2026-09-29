@@ -1827,9 +1827,12 @@ impl RuntimeConfig {
                             "auth.multiTenant: unknown key {key:?}"
                         )));
                     }
-                    cfg.auth_multi_tenant_allow_tenants = Some(value.as_bool().ok_or_else(|| {
-                        ConfigError("auth.multiTenant.allowTenants must be a boolean".to_owned())
-                    })?);
+                    cfg.auth_multi_tenant_allow_tenants =
+                        Some(value.as_bool().ok_or_else(|| {
+                            ConfigError(
+                                "auth.multiTenant.allowTenants must be a boolean".to_owned(),
+                            )
+                        })?);
                 }
             }
             Some(_) => {
@@ -5463,7 +5466,10 @@ mod tests {
         };
         let tenants = json!({"tenants": [acme_tenant()]});
         let error = file("strict", &tenants).unwrap_err();
-        assert!(error.0.contains("auth.multiTenant.allowTenants"), "{error:?}");
+        assert!(
+            error.0.contains("auth.multiTenant.allowTenants"),
+            "{error:?}"
+        );
         assert!(error.0.contains("auth.tenants"), "{error:?}");
         for refused in [
             json!({"multiTenant": {"allowTenants": false}, "tenants": [acme_tenant()]}),
@@ -5472,7 +5478,11 @@ mod tests {
             assert!(file("strict", &refused).is_err(), "{refused}");
         }
         assert!(file("emulator", &tenants).is_ok());
-        assert!(file("strict", &json!({"multiTenant": {"allowTenants": true}, "tenants": [acme_tenant()]})).is_ok());
+        assert!(file(
+            "strict",
+            &json!({"multiTenant": {"allowTenants": true}, "tenants": [acme_tenant()]})
+        )
+        .is_ok());
         // No tenants declared: nothing to require.
         assert!(file("strict", &json!({"tenants": []})).is_ok());
     }
@@ -5487,13 +5497,28 @@ mod tests {
         for (invalid, expected) in [
             (json!({"tenants": {}}), "auth.tenants must be an array"),
             (json!({"tenants": "acme"}), "auth.tenants must be an array"),
-            (json!({"multiTenant": true}), "auth.multiTenant must be an object"),
-            (json!({"multiTenant": {"allowTenants": "yes"}}), "auth.multiTenant.allowTenants"),
+            (
+                json!({"multiTenant": true}),
+                "auth.multiTenant must be an object",
+            ),
+            (
+                json!({"multiTenant": {"allowTenants": "yes"}}),
+                "auth.multiTenant.allowTenants",
+            ),
             (json!({"multiTenant": {"other": true}}), "other"),
             (json!({"tenants": ["acme-x7k2q"]}), "auth.tenants[0]:"),
-            (json!({"tenants": [with("mfaConfig", json!({"state": "ON"}))]}), "config.mfa.state"),
-            (json!({"tenants": [with("tenantId", json!("wrong"))]}), "tenantId"),
-            (json!({"tenants": [acme_tenant(), acme_tenant()]}), "auth.tenants[1]:"),
+            (
+                json!({"tenants": [with("mfaConfig", json!({"state": "ON"}))]}),
+                "config.mfa.state",
+            ),
+            (
+                json!({"tenants": [with("tenantId", json!("wrong"))]}),
+                "tenantId",
+            ),
+            (
+                json!({"tenants": [acme_tenant(), acme_tenant()]}),
+                "auth.tenants[1]:",
+            ),
         ] {
             for profile in ["strict", "emulator"] {
                 let mut auth = invalid.clone();

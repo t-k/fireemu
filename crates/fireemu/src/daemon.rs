@@ -907,6 +907,11 @@ fn assemble_suite(assembly: ServiceAssembly, exec_mode: bool) -> Result<ReadySui
     reapply_explicit_auth_password_policies(&cfg, &registry)?;
     reapply_explicit_auth_config(&cfg, &registry)?;
     reapply_explicit_auth_quota(&cfg, &registry)?;
+    // The declared switch and tenants come last: an imported tenant is authoritative for its id,
+    // and a tenant the import did not carry is created as declared.
+    cfg.tenant_seeding()?
+        .apply(&registry, &cfg.auth_project)
+        .map_err(|error| format!("auth.tenants: {error}"))?;
     let hub_state = Arc::new(hub::HubState {
         project: cfg.auth_project.clone(),
         addr: hub_addr.unwrap_or(http_addr),
@@ -1581,11 +1586,6 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
         );
         apply_auth_password_policy_overrides(&cfg, &registry)?;
         apply_auth_config_overrides(&cfg, &registry)?;
-        // The declared tenants exist from the start; an `--import` is applied after them and is
-        // authoritative for a tenant of the same id.
-        cfg.tenant_seeding()?
-            .apply(&registry, &cfg.auth_project)
-            .map_err(|error| format!("auth.tenants: {error}"))?;
         let rules = Arc::new(RulesetSlot::new(load_rules(&cfg)?));
         let mut database_rules = std::collections::BTreeMap::new();
         for (database, files) in &cfg.firestore_databases {

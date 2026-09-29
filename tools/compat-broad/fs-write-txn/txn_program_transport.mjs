@@ -70,16 +70,25 @@ export function validateCall(spec) {
       // A fresh transaction, read-write or read-only at its own time; never a retry of another one.
       const mode = Object.keys(request.options)[0];
       if (!['readWrite', 'readOnly'].includes(mode)) throw new Error('program transaction mode differs');
-      keys(request.options, [mode]); keys(request.options[mode], []);
+      keys(request.options, [mode]);
+      if (mode === 'readOnly') { keys(request.options.readOnly, [], ['readTime']); if (request.options.readOnly.readTime !== undefined) timestamp(request.options.readOnly.readTime); } else keys(request.options.readWrite, []);
       break;
     }
     case 'GetDocument':
-      keys(request, ['name'], ['transaction']);
+      keys(request, ['name'], ['transaction', 'readTime']);
       if (!owned(request.name)) throw new Error('program document differs');
+      if (request.transaction !== undefined && request.readTime !== undefined) throw new Error('program read names a transaction and a time');
       if (request.transaction !== undefined) bytes(request.transaction);
+      if (request.readTime !== undefined) timestamp(request.readTime);
       break;
     case 'BatchGetDocuments': {
-      keys(request, ['database', 'documents'], ['transaction']);
+      keys(request, ['database', 'documents'], ['transaction', 'readTime', 'newTransaction']);
+      if (['transaction', 'readTime', 'newTransaction'].filter(key => request[key] !== undefined).length > 1) throw new Error('program batch names more than one consistency selector');
+      if (request.readTime !== undefined) timestamp(request.readTime);
+      if (request.newTransaction !== undefined) {
+        if (!plain(request.newTransaction) || Object.keys(request.newTransaction).length !== 1 || !['readWrite', 'readOnly'].includes(Object.keys(request.newTransaction)[0])) throw new Error('program batch transaction mode differs');
+        keys(request.newTransaction[Object.keys(request.newTransaction)[0]], []);
+      }
       if (request.database !== database || !Array.isArray(request.documents) || !request.documents.length || request.documents.length > spec.documents.length || new Set(request.documents).size !== request.documents.length || !request.documents.every(owned)) throw new Error('program batch documents differ');
       if (request.transaction !== undefined) bytes(request.transaction);
       break;
@@ -137,15 +146,23 @@ function receipt(spec, code, details, response, http = null) {
 }
 
 /** The logical call as one REST request: method, path, query and JSON body. */
+/** A read time as REST spells it: RFC 3339 with all nine digits of the fraction. */
+export function rfc3339(time) {
+  return `${new Date(Number(time.seconds) * 1000).toISOString().slice(0, 19)}.${String(time.nanos).padStart(9, '0')}Z`;
+}
+
 export function restRequest(spec) {
   const database = `projects/${spec.projectId}/databases/(default)`;
   const request = spec.request;
   switch (spec.method) {
-    case 'BeginTransaction': return { method: 'POST', path: `/v1/${database}/documents:beginTransaction`, body: { options: request.options } };
+    case 'BeginTransaction': {
+      const options = request.options.readOnly?.readTime === undefined ? request.options : { readOnly: { readTime: rfc3339(request.options.readOnly.readTime) } };
+      return { method: 'POST', path: `/v1/${database}/documents:beginTransaction`, body: { options } };
+    }
     case 'Commit': return { method: 'POST', path: `/v1/${database}/documents:commit`, body: { writes: request.writes, ...(request.transaction === undefined ? {} : { transaction: request.transaction }) } };
     case 'Rollback': return { method: 'POST', path: `/v1/${database}/documents:rollback`, body: { transaction: request.transaction } };
-    case 'BatchGetDocuments': return { method: 'POST', path: `/v1/${database}/documents:batchGet`, body: { documents: request.documents, ...(request.transaction === undefined ? {} : { transaction: request.transaction }) } };
-    default: return { method: 'GET', path: `/v1/${request.name}${request.transaction === undefined ? '' : `?transaction=${encodeURIComponent(request.transaction)}`}`, body: undefined };
+    case 'BatchGetDocuments': return { method: 'POST', path: `/v1/${database}/documents:batchGet`, body: { documents: request.documents, ...(request.transaction === undefined ? {} : { transaction: request.transaction }), ...(request.readTime === undefined ? {} : { readTime: rfc3339(request.readTime) }), ...(request.newTransaction === undefined ? {} : { newTransaction: request.newTransaction }) } };
+    default: return { method: 'GET', path: `/v1/${request.name}${request.transaction === undefined ? '' : `?transaction=${encodeURIComponent(request.transaction)}`}${request.readTime === undefined ? '' : `?readTime=${encodeURIComponent(rfc3339(request.readTime))}`}`, body: undefined };
   }
 }
 

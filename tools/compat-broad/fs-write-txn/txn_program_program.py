@@ -28,7 +28,7 @@ _LABEL = re.compile(r"[a-z0-9][a-z0-9-]{0,47}\Z")
 MAX_DOCUMENTS = 8
 MAX_STATES = 32
 _STEP_KEYS = ("id", "transport", "rpc", "document", "tokenInput", "tokenOutput", "writes", "caseId", "role", "allow")
-_OPTIONAL_STEP_KEYS = ("deadlineMs", "documents", "mode")
+_OPTIONAL_STEP_KEYS = ("deadlineMs", "documents", "mode", "readAt", "newTransaction")
 
 
 def outcome_class(code):
@@ -62,6 +62,11 @@ def _step(row):
     step["deadlineMs"] = row.get("deadlineMs", DEFAULT_DEADLINE_MS)
     if "mode" in row:
         step["mode"] = row["mode"]
+    if "readAt" in row:
+        # A version of an owned document, by the time its commit was acknowledged: {"document": role, "version": index}.
+        step["readAt"] = dict(row["readAt"]) if isinstance(row["readAt"], dict) else _bad("readAt is not a mapping")
+    if "newTransaction" in row:
+        step["newTransaction"] = row["newTransaction"]
     if "documents" in row:
         # Only a batch read names several documents; an absent key keeps every earlier table's digest.
         step["documents"] = list(row["documents"]) if isinstance(row["documents"], (list, tuple)) else _bad("batch documents are not a list")
@@ -90,7 +95,7 @@ def _validate_table(table):
         _bad("the observation cap is not the step count")
     if caps["tokenCleanup"] < table["maxTokens"] or caps["documentCleanup"] < 3 * len(documents):
         _bad("the cleanup reserve cannot release every token or clean every document")
-    ids, cases, issued, probed, modes = set(), set(), {}, set(), {}
+    ids, cases, issued, probed, modes, acked = set(), set(), {}, set(), {}, {}
     last_use = {}
     for index, step in enumerate(steps):
         if isinstance(step["tokenInput"], str):
@@ -120,6 +125,23 @@ def _validate_table(table):
             _bad(f"{step['id']} names a transaction mode on a request that does not begin one")
         if rpc == "BeginTransaction" and step.get("mode", "readWrite") not in ("readWrite", "readOnly"):
             _bad(f"{step['id']} names an unknown transaction mode")
+        if "readAt" in step:
+            at = step["readAt"]
+            if set(at) != {"document", "version"} or at["document"] not in documents or type(at["version"]) is not int or not 0 <= at["version"] < acked.get(at["document"], 0):
+                _bad(f"{step['id']} reads at a version no earlier step can have acknowledged")
+            if rpc not in ("GetDocument", "BatchGetDocuments") and not (rpc == "BeginTransaction" and step.get("mode") == "readOnly"):
+                _bad(f"{step['id']} reads at a time on a request that cannot")
+            if step["tokenInput"] is not None or "newTransaction" in step:
+                _bad(f"{step['id']} reads at a time inside a transaction")
+        if "newTransaction" in step:
+            if rpc != "BatchGetDocuments" or step["newTransaction"] not in ("readWrite", "readOnly") or step["tokenInput"] is not None or not isinstance(step["tokenOutput"], str) or step["tokenOutput"] in issued:
+                _bad(f"{step['id']} is not a batch read that begins one fresh transaction")
+            if any(last_use.get(token, -1) > index for token in issued):
+                _bad(f"{step['id']} begins while an earlier chain still uses its token")
+            issued[step["tokenOutput"]] = step["transport"]
+            modes[step["tokenOutput"]] = step["newTransaction"]
+        elif rpc != "BeginTransaction" and step["tokenOutput"] is not None:
+            _bad(f"{step['id']} outputs a token without beginning one")
         if rpc == "BeginTransaction":
             if any(last_use.get(token, -1) > index for token in issued):
                 _bad(f"{step['id']} begins while an earlier chain still uses its token")
@@ -128,8 +150,6 @@ def _validate_table(table):
             issued[step["tokenOutput"]] = step["transport"]
             modes[step["tokenOutput"]] = step.get("mode", "readWrite")
             continue
-        if step["tokenOutput"] is not None:
-            _bad(f"{step['id']} outputs a token without beginning one")
         if step["tokenInput"] is not None and issued.get(step["tokenInput"]) != step["transport"]:
             _bad(f"{step['id']} uses a token that is not issued earlier on its transport")
         if rpc != "BatchGetDocuments" and "documents" in step:
@@ -168,6 +188,9 @@ def _validate_table(table):
                     _bad(f"{step['id']} writes {write['document']} before an absence probe")
         if rpc != "Commit" and step["role"] == "outside-writer":
             _bad(f"{step['id']} is an outside writer that is not a commit")
+        if rpc == "Commit":
+            for write in step["writes"]:
+                acked[write["document"]] = acked.get(write["document"], 0) + 1
     if len(issued) != table["maxTokens"]:
         _bad("the token count is not the declared maximum")
     return steps
@@ -253,7 +276,7 @@ def marker_fields(plan, role, state):
     return {name: {"stringValue": entry} for name, entry in {"owner": plan["ownerId"], "nonce": plan["nonce"], "role": role, "state": state}.items()}
 
 
-def request_for_step(value, step, tokens, table):
+def request_for_step(value, step, tokens, table, times=None):
     """Resolve only a declared slot using already issued private token bindings."""
     validate_plan(value, table)
     if step not in value["steps"] or not isinstance(tokens, dict):
@@ -264,14 +287,21 @@ def request_for_step(value, step, tokens, table):
             raise ValueError("step has no earlier issued token")
         token = canonical_token(tokens[step["tokenInput"]])
     rpc = step["rpc"]
+    read_time = None
+    if "readAt" in step:
+        read_time = (times or {}).get(f"{step['readAt']['document']}:{step['readAt']['version']}")
+        if not isinstance(read_time, dict):
+            raise ValueError("step reads at a version that has not been acknowledged")
+        read_time = {"seconds": read_time["seconds"], "nanos": read_time["nanos"]}
     if rpc == "GetDocument":
-        return {"name": value["documents"][step["document"]], **({"transaction": token} if token else {})}
+        return {"name": value["documents"][step["document"]], **({"transaction": token} if token else {}), **({"readTime": read_time} if read_time else {})}
     if rpc == "BatchGetDocuments":
-        return {"database": value["database"], "documents": [value["documents"][role] for role in step["documents"]], **({"transaction": token} if token else {})}
+        return {"database": value["database"], "documents": [value["documents"][role] for role in step["documents"]], **({"transaction": token} if token else {}), **({"readTime": read_time} if read_time else {}), **({"newTransaction": {step["newTransaction"]: {}}} if "newTransaction" in step else {})}
     if rpc == "Rollback":
         return {"database": value["database"], "transaction": token}
     if rpc == "BeginTransaction":
-        return {"database": value["database"], "options": {step.get("mode", "readWrite"): {}}}
+        mode = step.get("mode", "readWrite")
+        return {"database": value["database"], "options": {mode: {"readTime": read_time} if read_time else {}}}
     writes = [{"update": {"name": value["documents"][write["document"]], "fields": marker_fields(value, write["document"], write["state"])}, "currentDocument": {"exists": write["exists"]}} for write in step["writes"]]
     return {"database": value["database"], "writes": writes, **({"transaction": token} if token else {})}
 

@@ -45,6 +45,17 @@ def check_timing(value):
         raise ValueError("UTC and monotonic RPC elapsed differ")
 
 
+def parse_time(value, transport):
+    """A document version stamp or read time as (seconds, nanos), whichever form its transport gives."""
+    if isinstance(value, dict):
+        check_timestamp(value, "grpc")
+        return int(value["seconds"]), value.get("nanos", 0)
+    check_timestamp(value, "rest")
+    moment, _, fraction = value[:-1].partition(".")
+    seconds = int(dt.datetime.fromisoformat(moment + "+00:00").timestamp())
+    return seconds, int((fraction + "000000000")[:9])
+
+
 def check_order(previous, current):
     """A request is sent only after the answer to the one before it, on both clocks."""
     if current["dispatchMonotonic"] < previous["responseMonotonic"] or _utc_seconds(current["dispatchUtc"]) < _utc_seconds(previous["responseUtc"]) - 0.25:
@@ -82,7 +93,8 @@ class Ledger:
         self.tried = {role: set() for role in plan["documents"]}
         # Not part of the recorded snapshot: every state a document was acknowledged in, and what each token could see.
         self.history = {role: [] for role in plan["documents"]}
-        self.since, self.modes = {}, {}
+        self.since, self.modes, self.token_time = {}, {}, {}
+        self.versions = {role: [] for role in plan["documents"]}
 
     def snapshot(self):
         return {
@@ -92,6 +104,10 @@ class Ledger:
             "unknownRollbacks": sorted(self.unknown_rollbacks),
             "unknownCommits": sorted(self.unknown_commits),
         }
+
+    def times(self):
+        """Each acknowledged version of an owned document, by the time its commit was acknowledged."""
+        return {f"{role}:{index}": {"seconds": str(time[0]), "nanos": time[1]} for role, versions in self.versions.items() for index, (_state, time) in enumerate(versions)}
 
     def token_values(self):
         return {role: entry["value"] for role, entry in self.tokens.items()}
@@ -126,7 +142,7 @@ class Ledger:
 
     def guard(self, method, request, step):
         """Refuse a dispatch the graph forbids; nothing is recorded."""
-        if method == "BeginTransaction":
+        if method == "BeginTransaction" or method == "BatchGetDocuments" and "newTransaction" in request:
             if any(entry["state"] in ("open", "unconfirmed-release") for entry in self.tokens.values()):
                 raise ValueError("a prior chain's token is unresolved")
         elif method == "Rollback":
@@ -140,7 +156,7 @@ class Ledger:
     def before(self, site, transport, method, request, step):
         """Record the responsibility a dispatch takes on, once the graph allows it."""
         self.guard(method, request, step)
-        if method == "BeginTransaction":
+        if method == "BeginTransaction" or method == "BatchGetDocuments" and "newTransaction" in request:
             self.unknown_starts.add(site)
         elif method == "Rollback":
             role, entry = self._token_for(request["transaction"])
@@ -192,6 +208,9 @@ class Ledger:
                 self.tokens[step["tokenOutput"]] = {"value": token, "state": "open", "transport": transport, "start": copy.deepcopy(timing), "lastUse": copy.deepcopy(timing)}
                 self.modes[step["tokenOutput"]] = step.get("mode", "readWrite")
                 self.since[step["tokenOutput"]] = {role: len(states) for role, states in self.history.items()}
+                at = request["options"].get("readOnly", {}).get("readTime")
+                if at is not None:
+                    self.token_time[step["tokenOutput"]] = parse_time(at, transport)
             self.unknown_starts.discard(site)
             return
         if method == "Commit":
@@ -203,10 +222,11 @@ class Ledger:
                 for write in writes:
                     check_timestamp(write.get("updateTime"), transport)
                 self.unknown_commits.discard(site)
-                for write in step["writes"]:
+                for write, acknowledged in zip(step["writes"], writes, strict=True):
                     doc = self.docs[write["document"]]
                     doc.update(status="created", state=write["state"], possible=[write["state"]])
                     self.history[write["document"]].append(write["state"])
+                    self.versions[write["document"]].append((write["state"], parse_time(acknowledged["updateTime"], transport)))
                 _role, entry = self._token_for(request.get("transaction"))
                 if entry is not None:
                     entry["state"] = "committed"
@@ -241,39 +261,67 @@ class Ledger:
         if method == "GetDocument":
             self._read(site, transport, request, result, code, step)
         elif method == "BatchGetDocuments":
-            self._batch(transport, request, result, code)
+            self._batch(transport, request, result, code, step, timing)
 
-    def _batch(self, transport, request, result, code):
+    def _batch(self, transport, request, result, code, step, timing):
         """One entry per requested document, each found with its acknowledged marker or reported missing."""
+        starts = "newTransaction" in request
         if code != 0:
+            if starts:
+                self.unknown_starts.discard(step["id"])
             return
         frames = result["response"].get("responses")
-        if not isinstance(frames, list) or len(frames) != len(request["documents"]):
+        seen, minted = set(), None
+        if not isinstance(frames, list):
+            raise ValueError("batch answer is not a list of entries")
+        if starts:
+            # The transaction the batch begins arrives once, first: in an entry of its own that names no document, or
+            # in the first document's entry.
+            head = frames[0] if frames else None
+            if not isinstance(head, dict) or head.get("transaction", "") == "":
+                raise ValueError("the batch that begins a transaction does not answer with the transaction first")
+            minted = canonical_token(head["transaction"])
+            if "found" not in head and "missing" not in head:
+                if set(head) - {"transaction", "readTime", "result"} or head.get("result") not in (None, ""):
+                    raise ValueError("the entry that carries the new transaction is neither a bare head nor a document entry")
+                frames = frames[1:]
+        if len(frames) != len(request["documents"]):
             raise ValueError("batch answer does not carry one entry per requested document")
-        seen = set()
-        for frame in frames:
-            # Native protobuf decoding adds the oneof discriminator `result` and an empty `transaction` (none was requested).
+        for index, frame in enumerate(frames):
+            # Native protobuf decoding adds the oneof discriminator `result` and an empty `transaction`.
             if not isinstance(frame, dict) or ("found" in frame) == ("missing" in frame) or set(frame) - {"found", "missing", "readTime", "transaction", "result"}:
                 raise ValueError("batch entry is neither found nor missing")
-            if frame.get("result", "found" if "found" in frame else "missing") != ("found" if "found" in frame else "missing") or frame.get("transaction", "") != "":
-                raise ValueError("batch entry carries an unrequested transaction or a discriminator that disagrees")
+            if frame.get("result", "found" if "found" in frame else "missing") != ("found" if "found" in frame else "missing"):
+                raise ValueError("batch entry carries a discriminator that disagrees")
+            if frame.get("transaction", "") != "" and not (starts and index == 0 and frame["transaction"] == minted):
+                raise ValueError("batch entry carries an unrequested transaction")
             name = frame["found"].get("name") if "found" in frame and isinstance(frame["found"], dict) else frame.get("missing")
             if name not in request["documents"] or name in seen:
                 raise ValueError("batch entry names a document that was not requested or repeats")
             seen.add(name)
             role = self._role_of(name)
-            doc = self.docs[role]
+            visible = self._visible(role, request)
             if "found" in frame:
-                if doc["state"] is None:
+                if not visible - {None}:
                     raise ValueError("a document this recording never wrote exists")
-                self._owned(role, frame["found"], transport, self._visible(role, request))
-            elif doc["state"] is not None:
+                self._owned(role, frame["found"], transport, visible - {None})
+            elif None not in visible:
                 raise ValueError("an acknowledged document is reported missing")
+        if starts:
+            # Validate the minted transaction before releasing the responsibility (a transaction may exist that no role owns yet).
+            if minted is None or minted in self.token_values().values():
+                raise ValueError("the batch that begins a transaction minted no fresh transaction")
+            self.tokens[step["tokenOutput"]] = {"value": minted, "state": "open", "transport": transport, "start": copy.deepcopy(timing), "lastUse": copy.deepcopy(timing)}
+            self.modes[step["tokenOutput"]] = step["newTransaction"]
+            self.since[step["tokenOutput"]] = {role: len(states) for role, states in self.history.items()}
+            self.unknown_starts.discard(step["id"])
 
     def batch_states(self, request, result):
         """The state each batch-read document showed, by role."""
         states = {}
         for frame in result["response"]["responses"]:
+            if "found" not in frame and "missing" not in frame:
+                continue
             found = "found" in frame
             name = frame["found"]["name"] if found else frame["missing"]
             states[self._role_of(name)] = frame["found"]["fields"]["state"]["stringValue"] if found else None
@@ -295,10 +343,22 @@ class Ledger:
             raise ValueError("document state differs from the acknowledged state")
         return check_timestamp(document.get("updateTime"), transport)
 
+    def _state_at(self, role, moment):
+        """The state of the latest version acknowledged at or before `moment`, or None if there was none."""
+        current = None
+        for state, stamp in self.versions[role]:
+            if stamp <= moment:
+                current = state
+        return current
+
     def _visible(self, role, request):
-        """The states a read may show: the latest, or for a read-only transaction any since it began."""
+        """The states a read may show: the latest, the one at a read time, or for a read-only transaction any since it began."""
         doc = self.docs[role]
+        if "readTime" in request:
+            return {self._state_at(role, parse_time(request["readTime"], "grpc"))}
         token_role, _entry = self._token_for(request.get("transaction"))
+        if token_role in self.token_time:
+            return {self._state_at(role, self.token_time[token_role])}
         if token_role is None or self.modes.get(token_role) != "readOnly":
             return {doc["state"]}
         begun = self.since[token_role][role]
@@ -316,9 +376,10 @@ class Ledger:
             return
         if code != 0:
             return
-        if doc["state"] is None:
+        visible = self._visible(role, request) - {None}
+        if doc["state"] is None or not visible:
             raise ValueError("a document this recording never wrote exists")
-        self._owned(role, result["response"], transport, self._visible(role, request))
+        self._owned(role, result["response"], transport, visible)
 
     def _cleanup_read(self, site, role, transport, result, code):
         doc = self.docs[role]
@@ -406,7 +467,7 @@ class Collector:
         cursor = GraphCursor(self.plan, self.table)
         for declared in self.plan["steps"]:
             step = cursor.claim(declared["id"])
-            request = request_for_step(self.plan, step, self.ledger.token_values(), self.table)
+            request = request_for_step(self.plan, step, self.ledger.token_values(), self.table, self.ledger.times())
             self._rpc(step["id"], step["transport"], step["rpc"], request, "observation", step=step)
             for role in self.ledger.pending_release(step):
                 site = f"cleanup/token/{role}"
@@ -513,7 +574,7 @@ def projection(receipt, table):
             if owed or queue is not None or index >= len(steps) or row != steps[index]:
                 raise ValueError("observation sequence differs")
             declared = plan["steps"][index]
-            if site != declared["id"] or method != declared["rpc"] or transport != declared["transport"] or row.get("caseId") != declared["caseId"] or request != request_for_step(plan, declared, ledger.token_values(), table):
+            if site != declared["id"] or method != declared["rpc"] or transport != declared["transport"] or row.get("caseId") != declared["caseId"] or request != request_for_step(plan, declared, ledger.token_values(), table, ledger.times()):
                 raise ValueError("closed request graph differs")
             ledger.before(site, transport, method, request, declared)
             ledger.after(site, transport, method, request, declared, result, row["timing"])

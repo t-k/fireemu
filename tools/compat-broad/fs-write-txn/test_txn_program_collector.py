@@ -33,10 +33,18 @@ class Service:
         self.locks, self.partial_publish, self.locked = locks, partial_publish, {}
         self.ro_snapshot, self.readonly, self.snapshots = ro_snapshot, set(), {}
         self.ro_empty_refused = ro_empty_refused
-        self.genesis = {}
+        self.genesis, self.hist, self.ro_time = {}, {}, {}
         self.calls, self.documents, self.tokens, self.version = [], {}, {}, 0
         if existing:
             self.documents[existing] = {"name": existing, "fields": {}, "version": self._bump()}
+
+    def _at(self, name, moment):
+        """The document as it stood at a read time (our stamps carry the version in their nanos)."""
+        found = None
+        for entry in self.hist.get(name, []):
+            if entry["version"] <= moment["nanos"]:
+                found = entry
+        return found
 
     def _bump(self):
         self.version += 1
@@ -58,6 +66,8 @@ class Service:
         if method == "BeginTransaction":
             value = base64.b64encode(f"issued-{0 if self.duplicate_tokens else len(self.tokens)}".encode()).decode()
             self.tokens[value] = "open"
+            if request["options"].get("readOnly", {}).get("readTime"):
+                self.ro_time[value] = request["options"]["readOnly"]["readTime"]
             if "readOnly" in request["options"]:
                 self.readonly.add(value)
                 if self.ro_snapshot == "begin": self.snapshots[value] = copy.deepcopy(self.documents)
@@ -66,6 +76,14 @@ class Service:
             if token and (self.tokens.get(token) == "dead" or self.finished_reads_refused and self.tokens.get(token) in ("committed", "rolled-back")):
                 return self._receipt(transport, 10, details="The referenced transaction has expired or is no longer valid.")
             source = self.documents
+            moment = request.get("readTime") or self.ro_time.get(token)
+            if moment:
+                found = self._at(request["name"], moment)
+                if found is None:
+                    return self._receipt(transport, 5, details="not found")
+                response = {**copy.deepcopy(found), "updateTime": self._stamp(transport, found["version"])}
+                del response["version"]
+                return self._receipt(transport, 0, response=response)
             if token in self.readonly and self.ro_snapshot == "ancient":
                 source = self.genesis
             elif token in self.readonly and self.ro_snapshot != "latest":
@@ -86,15 +104,31 @@ class Service:
             if token and self.tokens.get(token) in ("committed", "rolled-back"):
                 return self._receipt(transport, 10, details="The referenced transaction has expired or is no longer valid.")
             frames = []
+            moment = request.get("readTime") or self.ro_time.get(token)
+            minted = None
+            if "newTransaction" in request:
+                minted = base64.b64encode(f"issued-{0 if self.duplicate_tokens else len(self.tokens)}".encode()).decode()
+                self.tokens[minted] = "open"
+                if "readOnly" in request["newTransaction"]:
+                    self.readonly.add(minted)
+                    if self.ro_snapshot == "begin": self.snapshots[minted] = copy.deepcopy(self.documents)
+            if minted:
+                frames.append({"transaction": minted})
             for name in request["documents"]:
-                source = self.snapshots.setdefault(token, copy.deepcopy(self.documents)) if token in self.readonly and self.ro_snapshot != "latest" else self.documents
-                document = source.get(name)
+                if moment:
+                    document = self._at(name, moment)
+                else:
+                    source = self.snapshots.setdefault(token, copy.deepcopy(self.documents)) if token in self.readonly and self.ro_snapshot != "latest" else self.documents
+                    document = source.get(name)
+                    if token and self.locks and self.tokens.get(token) == "open" and document is not None:
+                        self.locked.setdefault(token, set()).add(name)
+                carried = {"transaction": ""} if transport == "grpc" else {}
                 if document is None:
-                    frames.append({"missing": name, "readTime": self._stamp(transport), **({"transaction": "", "result": "missing"} if transport == "grpc" else {})})
+                    frames.append({"missing": name, "readTime": self._stamp(transport), **carried, **({"result": "missing"} if transport == "grpc" else {})})
                 else:
                     found = {**copy.deepcopy(document), "updateTime": self._stamp(transport, document["version"])}
                     del found["version"]
-                    frames.append({"found": found, "readTime": self._stamp(transport), **({"transaction": "", "result": "found"} if transport == "grpc" else {})})
+                    frames.append({"found": found, "readTime": self._stamp(transport), **carried, **({"result": "found"} if transport == "grpc" else {})})
             return self._receipt(transport, 0, response={"responses": frames})
         if method == "Commit":
             return self._commit(transport, request, token)
@@ -163,6 +197,7 @@ class Service:
             version = self._bump()
             self.genesis.setdefault(write["update"]["name"], {"name": write["update"]["name"], "fields": copy.deepcopy(write["update"]["fields"]), "version": version})
             self.documents[write["update"]["name"]] = {"name": write["update"]["name"], "fields": copy.deepcopy(write["update"]["fields"]), "version": version}
+            self.hist.setdefault(write["update"]["name"], []).append(copy.deepcopy(self.documents[write["update"]["name"]]))
             results.append({"updateTime": self._stamp(transport, version)})
         return results
 

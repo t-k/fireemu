@@ -144,6 +144,38 @@ test('gRPC: a stream that fails or overflows is an answer, not a success', async
   assert.equal(flood.call.cancelled, true);
 });
 
+const at = { seconds: '1788004860', nanos: 123456 };
+
+for (const transport of ['rest', 'grpc']) {
+  test(`${transport}: a read time or an embedded new transaction stands in for a transaction, never beside one`, async () => {
+    const { validateCall } = await module();
+    validateCall(spec('GetDocument', { name: name('a'), readTime: at }, transport));
+    validateCall(spec('BatchGetDocuments', { database, documents: [name('a')], readTime: at }, transport));
+    validateCall(spec('BatchGetDocuments', { database, documents: [name('a')], newTransaction: { readWrite: {} } }, transport));
+    validateCall(spec('BatchGetDocuments', { database, documents: [name('a')], newTransaction: { readOnly: {} } }, transport));
+    validateCall(spec('BeginTransaction', { database, options: { readOnly: { readTime: at } } }, transport));
+    for (const [method, request] of [
+      ['GetDocument', { name: name('a'), readTime: at, transaction: token }], ['GetDocument', { name: name('a'), readTime: '2026-09-30T00:00:00Z' }], ['GetDocument', { name: name('a'), readTime: { seconds: 5, nanos: 0 } }],
+      ['BatchGetDocuments', { database, documents: [name('a')], readTime: at, transaction: token }], ['BatchGetDocuments', { database, documents: [name('a')], newTransaction: { readWrite: {} }, readTime: at }],
+      ['BatchGetDocuments', { database, documents: [name('a')], newTransaction: { readWrite: {} }, transaction: token }], ['BatchGetDocuments', { database, documents: [name('a')], newTransaction: {} }],
+      ['BatchGetDocuments', { database, documents: [name('a')], newTransaction: { readWrite: { retryTransaction: token } } }], ['BatchGetDocuments', { database, documents: [name('a')], newTransaction: { readOnly: {}, readWrite: {} } }],
+      ['BatchGetDocuments', { database, documents: [name('a')], newTransaction: { other: {} } }],
+      ['BeginTransaction', { database, options: { readWrite: { readTime: at } } }], ['BeginTransaction', { database, options: { readOnly: { readTime: { seconds: '1', nanos: -1 } } } }],
+    ]) assert.throws(() => validateCall(spec(method, request, transport)), undefined, `${method} ${JSON.stringify(request).slice(0, 70)}`);
+  });
+}
+
+test('REST spells a read time as RFC 3339 with nine digits, wherever the request carries one', async () => {
+  const { restRequest, rfc3339 } = await module();
+  assert.equal(rfc3339(at), '2026-08-29T12:01:00.000123456Z');
+  assert.equal(rfc3339({ seconds: '0', nanos: 5 }), '1970-01-01T00:00:00.000000005Z');
+  assert.equal(restRequest(spec('GetDocument', { name: name('a'), readTime: at }, 'rest')).path, `/v1/${name('a')}?readTime=${encodeURIComponent(rfc3339(at))}`);
+  assert.deepEqual(restRequest(spec('BatchGetDocuments', { database, documents: [name('a')], readTime: at }, 'rest')).body, { documents: [name('a')], readTime: rfc3339(at) });
+  assert.deepEqual(restRequest(spec('BatchGetDocuments', { database, documents: [name('a')], newTransaction: { readOnly: {} } }, 'rest')).body, { documents: [name('a')], newTransaction: { readOnly: {} } });
+  assert.deepEqual(restRequest(spec('BeginTransaction', { database, options: { readOnly: { readTime: at } } }, 'rest')).body, { options: { readOnly: { readTime: rfc3339(at) } } });
+  assert.deepEqual(restRequest(spec('BeginTransaction', { database, options: { readOnly: {} } }, 'rest')).body, { options: { readOnly: {} } });
+});
+
 test('production is the sandbox project alone, and a local target must be a demo project on the loopback', async () => {
   const { validateCall } = await module();
   validateCall({ ...spec('GetDocument', { name: 'projects/fireemu-oracle-sbx/databases/(default)/documents/oracle/' + nonce + '/txn-toy/a' }), target: { kind: 'production' }, projectId: 'fireemu-oracle-sbx', bearer: 'ya29.token-value_1' });

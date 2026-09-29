@@ -256,3 +256,62 @@ def test_the_begin_request_names_its_mode():
     plain = program.compile_plan(support.TABLE, NONCE, OWNER)
     assert program.request_for_step(plain, next(step for step in plain["steps"] if step["id"] == "r/begin"), {}, support.TABLE)["options"] == {"readWrite": {}}
     assert "mode" not in next(step for step in plain["steps"] if step["id"] == "r/begin"), "a table that names no mode keeps its digest"
+
+
+# --- read times and embedded transactions in a table ---
+
+def time_table():
+    # Loaded by name so a framework test does not bind a program table into every other program's manifest.
+    return copy.deepcopy(__import__("importlib").import_module("fs_txn_table_p03").TABLE)
+
+
+def edit(table_, step_id, **changes):
+    table_["steps"] = tuple({**step, **changes} if step["id"] == step_id else step for step in table_["steps"])
+    return table_
+
+
+def drop(table_, step_id, key):
+    table_["steps"] = tuple({k: v for k, v in step.items() if k != key} if step["id"] == step_id else step for step in table_["steps"])
+    return table_
+
+
+@pytest.mark.parametrize("label,change", [
+    ("a version no earlier step acknowledged", lambda t: edit(t, "rest/get-at-v1", readAt={"document": "a", "version": 3})),
+    ("a negative version", lambda t: edit(t, "rest/get-at-v1", readAt={"document": "a", "version": -1})),
+    ("a boolean version", lambda t: edit(t, "rest/get-at-v1", readAt={"document": "a", "version": True})),
+    ("a document nothing ever wrote", lambda t: edit(t, "rest/get-at-v1", readAt={"document": "m", "version": 0})),
+    ("an unknown document", lambda t: edit(t, "rest/get-at-v1", readAt={"document": "z", "version": 0})),
+    ("extra keys", lambda t: edit(t, "rest/get-at-v1", readAt={"document": "a", "version": 1, "extra": 1})),
+    ("a missing key", lambda t: edit(t, "rest/get-at-v1", readAt={"document": "a"})),
+    ("a read time on a commit", lambda t: edit(t, "rest/emb/commit", readAt={"document": "a", "version": 1})),
+    ("a read time on a rollback-less read inside a transaction", lambda t: edit(t, "rest/ro/read-a", readAt={"document": "a", "version": 1})),
+    ("a read time on a read-write begin", lambda t: drop(t, "rest/ro/begin", "mode")),
+    ("a read time beside an embedded transaction", lambda t: edit(t, "rest/emb/batch-new", readAt={"document": "a", "version": 1})),
+    ("a read time before the version exists", lambda t: edit(t, "setup/create-a", readAt={"document": "a", "version": 0})),
+    ("an embedded transaction on a plain read", lambda t: edit(t, "rest/current-a", newTransaction="readWrite")),
+    ("an unknown embedded mode", lambda t: edit(t, "rest/emb/batch-new", newTransaction="readSometimes")),
+    ("an embedded transaction with no token output", lambda t: edit(t, "rest/emb/batch-new", tokenOutput=None)),
+    ("an embedded transaction inside a transaction", lambda t: edit(t, "rest/emb/batch-new", tokenInput="rest-ro")),
+    ("an embedded transaction that reuses a token", lambda t: edit(t, "grpc/emb/batch-new", tokenOutput="rest-emb")),
+    ("a token output on a batch that begins nothing", lambda t: edit(t, "rest/batch-at-v1", tokenOutput="rest-x")),
+])
+def test_a_malformed_read_time_or_embedded_transaction_never_compiles(label, change):
+    with pytest.raises(ValueError, match="table"):
+        program.compile_plan(change(time_table()), NONCE, OWNER)
+
+
+def test_an_embedded_transaction_may_not_start_while_an_earlier_token_is_still_used():
+    table_ = time_table()
+    steps = list(table_["steps"])
+    ro_index = next(i for i, step in enumerate(steps) if step["id"] == "rest/ro/read-a")
+    emb_index = next(i for i, step in enumerate(steps) if step["id"] == "rest/emb/batch-new")
+    steps.insert(ro_index, steps.pop(emb_index))
+    table_["steps"] = tuple(steps)
+    with pytest.raises(ValueError, match="table"):
+        program.compile_plan(table_, NONCE, OWNER)
+
+
+def test_read_times_and_embedded_transactions_do_not_move_an_earlier_tables_digest():
+    plain = program.compile_plan(support.TABLE, NONCE, OWNER)
+    assert not [step for step in plain["steps"] if "readAt" in step or "newTransaction" in step]
+    assert program.corpus_digest(support.TABLE) == "624ee4410100a3a30d90bdc80ad2133bd4c68dadde18978b7c425749bd957099"

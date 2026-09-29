@@ -32,6 +32,7 @@ import { promisify } from "node:util";
 
 import { CONFORMANCE_DIR } from "../config.mjs";
 import { resolveFireemuBinary } from "../evidence.mjs";
+import { findPackagedRunner, packagedRunnerCandidates } from "../packaged-runner.mjs";
 import { BASELINE_CONFIG, CONFIG_DEFAULTS } from "../auth-account/corpus.mjs";
 import { scanFixture } from "../auth-account/fixture-scan.mjs";
 import {
@@ -129,16 +130,62 @@ export function unservedFixtureFunctions(daemonOutput, expected) {
   return missing.length ? `the daemon did not serve ${missing.join(", ")}` : undefined;
 }
 
-/** A digest of the runner's own sources (its tests and dependencies aside). */
-async function runnerSha256() {
+/**
+ * The runner a comparison session runs: the checkout's by default, or, with
+ * AUTH_TENANT_PACKAGED_RUNNER=1 (the release gate), the one shipped beside the binary under test,
+ * as a user's install has it. The packaged choice refuses to proceed when the package ships no
+ * runner: falling back to the checkout's would hide a module missing from the package.
+ */
+export function selectRunner(env, binary, { checkoutDir = RUNNER_DIR, ...lookup } = {}) {
+  if (env.AUTH_TENANT_PACKAGED_RUNNER !== "1") return { source: "checkout", dir: checkoutDir };
+  const script = findPackagedRunner(binary, lookup);
+  if (script === undefined) {
+    throw new Error(
+      `AUTH_TENANT_PACKAGED_RUNNER is set but no packaged runner ships with the binary: ${packagedRunnerCandidates(binary, lookup.realpath).join(", ")}`,
+    );
+  }
+  return { source: "packaged", dir: dirname(script) };
+}
+
+/**
+ * The environment a comparison session's daemon runs in, as to its Functions runner: the
+ * checkout's runner named explicitly for a Functions session, and no override at all when the
+ * packaged runner is selected (the daemon then finds the one beside the binary).
+ */
+export function runnerEnvironment(env, binary, { functions = true, ...selection } = {}) {
+  const { FIREEMU_RUNNER_NODE: _named, ...rest } = env;
+  const runner = selectRunner(env, binary, selection);
+  return runner.source === "checkout" && functions
+    ? { ...rest, FIREEMU_RUNNER_NODE: join(runner.dir, "index.mjs") }
+    : rest;
+}
+
+/** The whole environment of a comparison session's child: the runner choice and the run's paths. */
+export function localSessionEnv(
+  env,
+  binary,
+  { inPath, outPath, signersPath, run, origin, ...runnerOptions },
+) {
+  return {
+    ...runnerEnvironment(env, binary, runnerOptions),
+    AUTH_TENANT_IN: inPath,
+    AUTH_TENANT_OUT: outPath,
+    AUTH_TENANT_SIGNERS: signersPath,
+    AUTH_TENANT_RUN: run,
+    AUTH_TENANT_ORIGIN: origin,
+  };
+}
+
+/** A digest of a runner directory's own sources (its tests and dependencies aside). */
+export async function runnerSha256(dir = RUNNER_DIR) {
   const { readdir } = await import("node:fs/promises");
-  const files = (await readdir(RUNNER_DIR))
+  const files = (await readdir(dir))
     .filter((file) => file.endsWith(".mjs") && !file.endsWith(".test.mjs"))
     .toSorted();
   const hash = createHash("sha256");
   for (const file of files) {
     hash.update(`${file}\n`);
-    hash.update(await readFile(join(RUNNER_DIR, file)));
+    hash.update(await readFile(join(dir, file)));
   }
   return hash.digest("hex");
 }
@@ -1345,15 +1392,14 @@ async function runLocalSession(programs) {
     {
       cwd: CONFORMANCE_DIR,
       stdio: ["ignore", "pipe", "pipe"],
-      env: {
-        ...withoutLockCapability(),
-        ...(functions ? { FIREEMU_RUNNER_NODE: join(RUNNER_DIR, "index.mjs") } : {}),
-        AUTH_TENANT_IN: inPath,
-        AUTH_TENANT_OUT: outPath,
-        AUTH_TENANT_SIGNERS: signersPath,
-        AUTH_TENANT_RUN: String(Date.now()),
-        AUTH_TENANT_ORIGIN: `http://127.0.0.1:${LOCAL_PORT}`,
-      },
+      env: localSessionEnv(withoutLockCapability(), binary, {
+        functions,
+        inPath,
+        outPath,
+        signersPath,
+        run: String(Date.now()),
+        origin: `http://127.0.0.1:${LOCAL_PORT}`,
+      }),
     },
   );
   // The daemon's start banner (`functions loaded:`) is on its stdout, its notes on stderr.
@@ -1433,7 +1479,7 @@ async function check() {
   const fixtureSha256 = fixtureText === undefined ? undefined : sha256(fixtureText);
   await writeFile(
     join(RUN_DIR, "comparison.json"),
-    `${JSON.stringify({ suite: SUITE, artifact: local.binary, artifactSha256, fixtureSha256, runnerSha256: await runnerSha256(), ...(await sourceTree()), summary, orphans, failures: local.failures, rows }, null, 2)}\n`,
+    `${JSON.stringify({ suite: SUITE, artifact: local.binary, artifactSha256, fixtureSha256, runnerSha256: await runnerSha256(selectRunner(process.env, local.binary).dir), ...(await sourceTree()), summary, orphans, failures: local.failures, rows }, null, 2)}\n`,
   );
   const passing = new Set(["MATCH", "MATCH_NONDETERMINISTIC"]);
   for (const row of rows.filter((r) => !passing.has(r.status))) {

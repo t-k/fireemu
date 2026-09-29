@@ -10,6 +10,7 @@ import {
   compareRows,
   differences,
   evidenceOf,
+  parseCommand,
   summarize,
 } from "./auth-federation/compare.mjs";
 import { SOURCES, programDigests } from "./auth-federation/record.mjs";
@@ -135,4 +136,30 @@ test("each corpus is compared with its own fixture under its own evidence kind",
 
 test("the comparison is not part of the recorded harness", () => {
   assert.ok(!SOURCES.some((path) => path.endsWith("/compare.mjs")));
+});
+
+test("the release gate's export-comparison mode is the export mode under its lane name", () => {
+  assert.deepEqual(parseCommand(["check"]), { mode: "check", packet: undefined, out: undefined });
+  assert.deepEqual(parseCommand(["check", "record-saml"]), {
+    mode: "check",
+    packet: "record-saml",
+    out: undefined,
+  });
+  for (const mode of ["export", "export-comparison"]) {
+    assert.deepEqual(parseCommand([mode, "record-followup", "out.json"]), {
+      mode: "export",
+      packet: "record-followup",
+      out: "out.json",
+    });
+    assert.deepEqual(parseCommand([mode, "out.json"]), {
+      mode: "export",
+      packet: undefined,
+      out: "out.json",
+    });
+  }
+});
+
+test("an unknown mode of the comparison script is refused", () => {
+  assert.throws(() => parseCommand(["record"]), /unknown mode record/);
+  assert.throws(() => parseCommand([]), /unknown mode/);
 });

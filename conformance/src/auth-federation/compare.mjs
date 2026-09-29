@@ -4,6 +4,7 @@
 //
 //   node src/auth-federation/compare.mjs check [record-saml|record-followup]
 //   node src/auth-federation/compare.mjs export [record-saml|record-followup] <output.json>
+//   (`export-comparison` is the same mode, under the name the release gate runs)
 //
 // `check` runs `run.mjs local` with FIREEMU_BIN (or the workspace build), classifies each
 // recorded row and writes `.runs/auth-federation/comparison[-record-saml].json`.
@@ -208,9 +209,20 @@ async function exportComparison(packet, out) {
   );
 }
 
-const mode = process.argv[1] === fileURLToPath(import.meta.url) ? process.argv[2] : undefined;
-const args = process.argv.slice(3);
-const packetArg = args[0] && COMPARISONS[args[0]] ? args.shift() : undefined;
-if (mode === "check") await check(packetArg);
-else if (mode === "export") await exportComparison(packetArg, args[0]);
-else if (mode !== undefined) throw new Error(`unknown mode ${mode}`);
+/**
+ * The mode, corpus packet and output path of a command line. `export-comparison` is the name
+ * every lane harness gives its export (the release gate runs it); `export` is the same mode.
+ */
+export function parseCommand(argv) {
+  const [name, ...rest] = argv;
+  const mode = name === "export-comparison" ? "export" : name;
+  if (mode !== "check" && mode !== "export") throw new Error(`unknown mode ${name}`);
+  const packet = rest[0] && COMPARISONS[rest[0]] ? rest.shift() : undefined;
+  return { mode, packet, out: rest[0] };
+}
+
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  const { mode, packet, out } = parseCommand(process.argv.slice(2));
+  if (mode === "check") await check(packet);
+  else await exportComparison(packet, out);
+}

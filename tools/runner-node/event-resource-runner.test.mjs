@@ -168,7 +168,20 @@ for (const form of ['endpoint', 'legacy']) {
     const data = { oldValue: { fields: { x: { integerValue: '1' } } }, value: { fields: { x: { integerValue: '2' } } } };
     const event = { id: 'evt', type: 'google.cloud.firestore.document.v1.updated', time: '2026-01-01T00:00:00Z', source, params: { id: '日本語' }, data };
     assert.equal((await f.invoke('onDocument', 'firestore', event)).ok, true);
-    assert.deepEqual(await f.calls(), [{ name: 'onDocument', data, context: { eventId: 'evt', timestamp: event.time, eventType: 'providers/cloud.firestore/eventTypes/document.update', resource: source, params: event.params } }]);
+    assert.deepEqual(await f.calls(), [{ name: 'onDocument', data, context: { eventId: 'evt-0', timestamp: event.time, eventType: 'providers/cloud.firestore/eventTypes/document.update', resource: source, params: event.params } }]);
+  });
+
+  test(`v1 ${form}: a Firestore legacy event id is the event id plus the trigger index suffix, other products keep it`, { timeout: 10000 }, async t => {
+    // Production (observed 2026-09-30): a Gen1 Firestore handler's context.eventId is `<uuid>-0`.
+    const kinds = { created: 'create', updated: 'update', deleted: 'delete', written: 'write' };
+    const f = await start(t, Object.values(kinds).map(kind => fsEntry(`on_${kind}`, 'projects/demo/databases/(default)/documents/orders/{id}', form, kind)));
+    for (const [type, kind] of Object.entries(kinds)) {
+      const event = { id: 'dc880941-8bb2-410f-9b10-51c47560a33a', type: `google.cloud.firestore.document.v1.${type}`, time: '2026-09-30T12:03:18.846431Z', source: 'projects/demo/databases/(default)/documents/orders/1', params: { id: '1' }, data: {} };
+      assert.equal((await f.invoke(`on_${kind}`, 'firestore', event)).ok, true);
+    }
+    const calls = await f.calls();
+    assert.deepEqual(calls.map(call => call.context.eventId), Object.values(kinds).map(() => 'dc880941-8bb2-410f-9b10-51c47560a33a-0'));
+    assert.deepEqual(calls.map(call => call.context.timestamp), Object.values(kinds).map(() => '2026-09-30T12:03:18.846431Z'));
   });
 
   test(`v1 ${form}: Storage bucket selection does not consume the project named buckets`, { timeout: 10000 }, async t => {

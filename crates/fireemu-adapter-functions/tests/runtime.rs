@@ -2585,6 +2585,51 @@ fn manifest_json_requires_generation_for_second_generation_capacity_options() {
     assert_eq!(second.functions[1].effective_concurrency(), 1);
 }
 
+/// Production's Firestore create event, recorded 2026-09-30 by an exploratory probe of a Gen1 and
+/// a Gen2 handler on one document (`fe_events_primary/<id>`): a UUID `id`, the document's
+/// `createTime` as the event `time` with a six-digit fraction, the document under `subject`,
+/// and the Gen2 type. Only the identity and time forms are asserted here; the JSON keeps the
+/// document resource name as `source` (see the divergence recorded in the contract).
+#[test]
+fn firestore_events_carry_the_production_id_and_time_forms() {
+    let after = doc("fe_events_primary/fe011probe0001", 1);
+    let time = LogicalInstant::from_nanos(1_790_769_798_846_431_000);
+    let event = |seed: &str| {
+        firestore_event(
+            seed,
+            "fireemu-oracle-events",
+            fireemu_core_types::ids::DatabaseId::DEFAULT,
+            "us-central1",
+            "fe_events_primary/fe011probe0001",
+            DocumentEvent::Created,
+            None,
+            Some(&after),
+            time,
+            None,
+        )
+    };
+    let first = event("42-1");
+    assert_eq!(first["time"], "2026-09-30T12:03:18.846431Z");
+    assert_eq!(
+        first["subject"],
+        "documents/fe_events_primary/fe011probe0001"
+    );
+    assert_eq!(first["type"], "google.cloud.firestore.document.v1.created");
+    let id = first["id"].as_str().unwrap();
+    let parts: Vec<&str> = id.split('-').collect();
+    assert_eq!(
+        parts.iter().map(|part| part.len()).collect::<Vec<_>>(),
+        [8, 4, 4, 4, 12],
+        "{id}"
+    );
+    assert!(id
+        .chars()
+        .all(|c| c == '-' || c.is_ascii_digit() || ('a'..='f').contains(&c)));
+    assert_eq!(&id[14..15], "4", "{id}");
+    assert_eq!(event("42-1")["id"], first["id"], "replay keeps the id");
+    assert_ne!(event("42-2")["id"], first["id"]);
+}
+
 #[test]
 fn cloudevents_carry_the_shapes_the_sdk_decodes() {
     let before = doc("todos/t1", 1);

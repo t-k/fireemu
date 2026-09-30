@@ -3565,7 +3565,7 @@ fn a_read_only_transaction_takes_its_snapshot_at_its_first_use() {
     assert_eq!(state.retained_versions(), 2);
 }
 
-// P11 (REST and gRPC, four recordings): a transaction kept alive by reads past its 270 s total
+// P11 (REST and gRPC, P11 v4 two recordings and REST recording 1): a transaction kept alive by reads past its 270 s total
 // lifetime. Recorded: at token ages of 283 to 288 s a read, a Commit and a Rollback each answer ABORTED
 // "no longer valid" (10) and a writer outside the transaction is not held; at 298.7 to 301.0 s a read
 // still answers 10 and the Commit about a second later answers INVALID_ARGUMENT "Invalid transaction."

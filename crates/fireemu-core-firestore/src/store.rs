@@ -630,7 +630,7 @@ struct Transaction {
     /// The transaction ran out of its total lifetime (either profile). It is kept, finished, so that
     /// requests are answered as the profile's service answers them.
     ///
-    /// Production (P11 REST recording 1 and P11 v4, REST and gRPC, four recordings): for as long as the
+    /// Production (P11 REST recording 1 and P11 v4, two recordings that each ran REST and gRPC): for as long as the
     /// token is remembered, every request answers `ABORTED` "no longer valid" (a read, a Commit and a
     /// Rollback alike, the writer outside the transaction is not held); a read at 298.7 to 301.0 s still
     /// answered that, and the Commit about a second after it answered `INVALID_ARGUMENT`
@@ -2470,6 +2470,8 @@ impl FirestoreState {
 
     /// Whether production still remembers this transaction as one that ran out of its total lifetime. Eviction never takes
     /// such a token before its memory ends: at most as many tokens as were active together (4 096) are held this way.
+    /// While the lineage is full, each eviction scans past those held tokens, so a finish costs up to 4 096 steps; the bound
+    /// is deliberate and small, and nothing else grows.
     fn remembered_as_expired(&self, id: &TransactionId) -> bool {
         self.limit_scope == LimitScope::Production
             && self.transactions.get(id).is_some_and(|transaction| {

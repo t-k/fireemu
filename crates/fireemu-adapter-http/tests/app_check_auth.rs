@@ -285,6 +285,147 @@ fn an_admission_for_one_project_does_not_refresh_another_projects_session() {
     assert!(registry.tenant_store("demo-app", "tB").is_none());
 }
 
+fn alg_none(claims: &Value) -> String {
+    use fireemu_core_auth::jwt::base64url_encode;
+    format!(
+        "{}.{}.",
+        base64url_encode(br#"{"alg":"none","typ":"JWT"}"#),
+        base64url_encode(claims.to_string().as_bytes())
+    )
+}
+
+fn claims_of(audience: &str, subject: &str, tenant: Option<&str>) -> Value {
+    let mut firebase = json!({"sign_in_provider": "password", "identities": {}});
+    if let Some(tenant) = tenant {
+        firebase["tenant"] = json!(tenant);
+    }
+    json!({"aud": audience, "iss": format!("https://securetoken.google.com/{audience}"),
+           "sub": subject, "user_id": subject, "iat": 1_788_004_860, "exp": 1_788_008_400,
+           "auth_time": 1_788_004_860, "firebase": firebase})
+}
+
+fn owner_with(h: &Harness) -> RequestHeaders {
+    RequestHeaders {
+        authorization: Some("Bearer owner".to_owned()),
+        app_check: vec![h.valid_token()],
+        ..RequestHeaders::default()
+    }
+}
+
+fn auth_uri_body(extra: Value) -> Value {
+    let mut body = json!({"identifier": "x@example.com", "continueUri": "http://localhost"});
+    for (k, v) in extra.as_object().unwrap() {
+        body[k] = v.clone();
+    }
+    body
+}
+
+/// Whether the daemon serves a request from another project is decided by the store selection
+/// itself, not by a copy of its rules: a verified token of a project with no store, a
+/// `refreshToken` in camelCase (which the selection does not read) and a refresh token beside an
+/// ID token of the request's own project are all served from the default project, so the tenant
+/// they name is made there, as before. Asked with an App Check token, or with the owner
+/// credential (the form the official emulator serves without a key).
+#[test]
+fn a_request_the_selection_serves_from_the_default_project_still_makes_its_tenant() {
+    for as_owner in [false, true] {
+        let (h, registry, _) = two_projects();
+        let send = |body: Value| {
+            if as_owner {
+                handle_with(
+                    &h.auth,
+                    "POST",
+                    &format!("{V1}/accounts:createAuthUri"),
+                    &owner_with(&h),
+                    &body,
+                )
+            } else {
+                h.post(
+                    &format!("{V1}/accounts:createAuthUri"),
+                    &body,
+                    &[&h.valid_token()],
+                )
+            }
+        };
+        // Q1: a token whose project this daemon has no store for.
+        let ghost = alg_none(&claims_of("demo-ghost", "g1", Some("tG")));
+        let r = send(auth_uri_body(json!({"tenantId": "tG", "idToken": ghost})));
+        assert_eq!(r.status, 200, "{as_owner}: {}", r.body);
+        assert!(
+            registry.tenant_store("demo-app", "tG").is_some(),
+            "{as_owner}"
+        );
+        // Q2: the camelCase refresh token, which the store selection does not read.
+        let refresh = refresh_token_of_the_other_tenant(&registry);
+        let r = send(auth_uri_body(
+            json!({"tenantId": "tB", "refreshToken": refresh}),
+        ));
+        assert_eq!(r.status, 200, "{as_owner}: {}", r.body);
+        assert!(
+            registry.tenant_store("demo-app", "tB").is_some(),
+            "{as_owner}"
+        );
+        // Q5: an ID token of the request's own project decides the store; the refresh token of a
+        // user of another project beside it does not stop the tenant the token names being made.
+        let made = handle_with(
+            &h.auth,
+            "POST",
+            "/identitytoolkit.googleapis.com/v1/projects/demo-other/accounts",
+            &RequestHeaders {
+                authorization: Some("Bearer owner".to_owned()),
+                ..RequestHeaders::default()
+            },
+            &json!({"localId": "p1"}),
+        );
+        assert_eq!(made.status, 200, "{}", made.body);
+        let project_refresh = {
+            let store = registry.store_for("demo-other").expect("the project store");
+            let mut store = store.lock().unwrap();
+            let uid = store.user_by_id("p1").expect("the user").local_id.clone();
+            store
+                .issue_refresh_token(&uid, LogicalInstant::from_unix_seconds(fixture::START))
+                .expect("the user exists")
+        };
+        let own = alg_none(&claims_of("demo-app", "z1", Some("tZ")));
+        let _ = send(auth_uri_body(
+            json!({"idToken": own, "refresh_token": project_refresh}),
+        ));
+        assert!(
+            registry.tenant_store("demo-app", "tZ").is_some(),
+            "{as_owner}"
+        );
+    }
+}
+
+/// The compatibility route for a custom token (a routed project's user, matched by uid) serves the
+/// request from that project: nothing is made in the default project on its way.
+#[test]
+fn a_compatibility_custom_token_routed_to_another_project_makes_no_tenant() {
+    let (mut h, registry, _) = two_projects();
+    Arc::get_mut(&mut h.auth)
+        .expect("the harness is the sole AuthState owner")
+        .allow_routed_projects = true;
+    let made = handle_with(
+        &h.auth,
+        "POST",
+        "/identitytoolkit.googleapis.com/v1/projects/demo-routed/accounts",
+        &RequestHeaders {
+            authorization: Some("Bearer owner".to_owned()),
+            ..RequestHeaders::default()
+        },
+        &json!({"localId": "u9", "email": "r@example.com"}),
+    );
+    assert_eq!(made.status, 200, "{}", made.body);
+    let body = json!({"token": "{\"uid\":\"u9\"}", "tenantId": "tQ", "returnSecureToken": true});
+    let r = h.post(
+        &format!("{V1}/accounts:signInWithCustomToken"),
+        &body,
+        &[&h.valid_token()],
+    );
+    assert_ne!(r.status, 200, "{}", r.body);
+    assert!(registry.tenant_store("demo-app", "tQ").is_none());
+}
+
 /// A non-default project that is admitted and served from its own store is observed once.
 #[test]
 fn a_request_for_a_non_default_project_is_observed_once() {

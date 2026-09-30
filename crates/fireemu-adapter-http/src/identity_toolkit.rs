@@ -3430,50 +3430,6 @@ fn id_token_tenant(state: &AuthState, project: &str, body: &Value) -> Option<(St
     Some((tenant.to_owned(), audience == Some(project)))
 }
 
-/// Whether a keyless request that names no project in its path is served from another project's
-/// store than `project` (the default one): by the audience of a verified ID token, or by the
-/// project that issued the refresh token, as `select_store` chooses the store. App Check for such
-/// a request is decided for the project it is served from, by the pipeline, so nothing is made or
-/// admitted here.
-fn routed_to_another_project(
-    state: &AuthState,
-    registry: &fireemu_core_auth::store::AuthRegistry,
-    request: &TenantCreation<'_>,
-    project: &str,
-    body: &Value,
-) -> bool {
-    use fireemu_core_auth::store::RefreshTokenStoreMatch;
-
-    if routes::scoped_target(request.path).is_some() {
-        return false;
-    }
-    if query_selectors(request.query).is_ok_and(|(key, _)| key.is_some()) {
-        return false;
-    }
-    if let Some(token) = str_field(body, "idToken") {
-        let signer = state.store.lock().ok().and_then(|s| s.signer_arc());
-        if let Ok(decoded) = fireemu_core_auth::jwt::decode_token(token, signer.as_deref()) {
-            let audience = decoded
-                .payload
-                .get("aud")
-                .and_then(fireemu_core_types::json::JsonValue::as_str);
-            if audience.is_some_and(|audience| audience != project) {
-                return true;
-            }
-        }
-    }
-    let refresh_token =
-        str_field(body, "refresh_token").or_else(|| str_field(body, "refreshToken"));
-    if let Some(token) = refresh_token.filter(|token| !token.is_empty()) {
-        if let RefreshTokenStoreMatch::Unique(store) = registry.store_for_refresh_token(token) {
-            return store
-                .lock()
-                .is_ok_and(|store| store.project_id() != project);
-        }
-    }
-    false
-}
-
 /// The tenant the query names, for the two routes the official emulator reads it on:
 /// `accounts:batchGet` and the action link (which needs its `apiKey` and `oobCode` to get as far
 /// as looking a tenant up).
@@ -3594,8 +3550,17 @@ fn emulator_creates_named_tenant(
     }
     let (path, query) = (request.path, request.query);
     let project = request_project(state, path, query)?;
-    if routed_to_another_project(state, registry, request, &project, body) {
-        return Ok(None);
+    // A request the daemon serves from another project's store than its own project (chosen by
+    // the store selection itself, not by a copy of its rules) makes nothing here and is admitted
+    // by App Check for the project it is served from, by the pipeline. A selection that fails
+    // (a tenant not made yet) or lands in this project goes on.
+    if let Ok(store) = select_store(state, path, query, body, resolution) {
+        if store
+            .lock()
+            .is_ok_and(|store| store.project_id() != project)
+        {
+            return Ok(None);
+        }
     }
     let path_tenant = routes::scoped_target(path).and_then(|(_, tenant)| tenant);
     let body_tenant = match body.get("tenantId") {

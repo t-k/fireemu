@@ -2529,6 +2529,47 @@ fn a_json_api_session_cancel_answers_the_recorded_499() {
     }
 }
 
+/// A finalized JSON API session answers a status query with the committed object (the recovery
+/// path of a lost final response) but refuses a chunk sent into it.
+#[test]
+fn a_finalized_json_api_session_answers_status_queries_and_refuses_chunks() {
+    for acceptance in BOTH_PROFILES {
+        let s = state_with(Some(ALLOW_ALL_RULES), acceptance);
+        let owner = [("authorization", "Bearer owner")];
+        let start = handle(
+            &s,
+            req(
+                "POST",
+                &format!("/upload/storage/v1/b/{BUCKET}/o?uploadType=resumable&name=f.bin"),
+                &owner,
+                b"",
+            ),
+        );
+        let session = header(&start, "location")
+            .unwrap()
+            .strip_prefix("http://127.0.0.1:9199")
+            .unwrap()
+            .to_owned();
+        let put = |range: &str, body: &[u8]| {
+            handle(
+                &s,
+                req(
+                    "PUT",
+                    &session,
+                    &[("authorization", "Bearer owner"), ("content-range", range)],
+                    body,
+                ),
+            )
+        };
+        assert_eq!(put("bytes 0-3/4", b"abcd").status, 200);
+        let status = put("bytes */4", b"");
+        assert_eq!(status.status, 200, "{acceptance:?}");
+        assert_eq!(json_body(&status)["name"], "f.bin");
+        let refused = put("bytes 0-3/4", b"zzzz");
+        assert_eq!(refused.status, 400, "{acceptance:?}");
+    }
+}
+
 /// `PATCH /storage/v1/b/{bucket}/o/{object}` updates object metadata, as the Cloud Storage
 /// JSON API does in production (recorded: stage 3 v9, `setup/seed-metadata` and
 /// `boundary-gcs-admin-patch-present`, a 200 with the `storage#object` resource; an absent

@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 
 use fireemu_adapter_grpc::gateway::Gateway;
 use fireemu_adapter_grpc::local::{FirestoreSnapshot, LocalBackend};
-use fireemu_adapter_grpc::rules::RulesEnforcer;
+use fireemu_adapter_grpc::rules::{RulesEnforcer, TokenSemantics};
 use fireemu_adapter_grpc::service::GatewayService;
 use fireemu_core_auth::mfa::TotpPolicy;
 use fireemu_core_auth::store::AuthStore;
@@ -93,7 +93,9 @@ async fn start_with_rules_source(
         let rules = Arc::new(RulesetSlot::new(
             LoadedRules::from_source(rules_source).unwrap(),
         ));
-        service = service.with_rules(Arc::new(RulesEnforcer::new(rules, auth, clock)));
+        service = service.with_rules(Arc::new(
+            RulesEnforcer::new(rules, auth, clock).with_token_semantics(TokenSemantics::Firestore),
+        ));
     }
     let svc = FirestoreServer::new(service);
     let handle = tokio::spawn(async move {
@@ -691,15 +693,11 @@ async fn listen_delivers_snapshot_then_live_diffs() {
         .into_inner();
     tx.send(add_query_target(1, "open")).await.unwrap();
     let initial = next_until(&mut responses, "NO_CHANGE[]").await;
+    // As production and the official emulator frame it (AUTH-FS-CROSS stage 2, packet v7):
+    // CURRENT carries the target's token, and no NO_CHANGE for the new target follows it.
     assert_eq!(
         initial,
-        vec![
-            "ADD[1]",
-            "CHANGE a",
-            "CURRENT[1]",
-            "NO_CHANGE[1]",
-            "NO_CHANGE[]"
-        ]
+        vec!["ADD[1]", "CHANGE a", "CURRENT[1]", "NO_CHANGE[]"]
     );
 
     // A commit on the database is pushed as a diff.
@@ -739,13 +737,7 @@ async fn listen_delivers_snapshot_then_live_diffs() {
     let initial = next_until(&mut responses, "NO_CHANGE[]").await;
     assert_eq!(
         initial,
-        vec![
-            "ADD[2]",
-            "CURRENT[2]",
-            "NO_CHANGE[1]",
-            "NO_CHANGE[2]",
-            "NO_CHANGE[]"
-        ],
+        vec!["ADD[2]", "CURRENT[2]", "NO_CHANGE[1]", "NO_CHANGE[]"],
         "every active target reaches the same snapshot before the global boundary"
     );
 
@@ -783,7 +775,7 @@ async fn incremental_listen_preserves_enter_update_remove_and_delete() {
         .unwrap();
     assert_eq!(
         next_until(&mut responses, "NO_CHANGE[]").await,
-        vec!["ADD[1]", "CURRENT[1]", "NO_CHANGE[1]", "NO_CHANGE[]"]
+        vec!["ADD[1]", "CURRENT[1]", "NO_CHANGE[]"]
     );
 
     for (write, expected) in [
@@ -846,13 +838,7 @@ async fn limited_listen_recomputes_the_boundary_after_an_update() {
         .unwrap();
     assert_eq!(
         next_until(&mut responses, "NO_CHANGE[]").await,
-        vec![
-            "ADD[1]",
-            "CHANGE a",
-            "CURRENT[1]",
-            "NO_CHANGE[1]",
-            "NO_CHANGE[]"
-        ]
+        vec!["ADD[1]", "CHANGE a", "CURRENT[1]", "NO_CHANGE[]"]
     );
 
     client
@@ -885,10 +871,7 @@ async fn listen_and_write_streams_enforce_rules() {
     assert_eq!(denied, vec!["ADD[7]", "REMOVE[7] cause=7"]);
     tx.send(add_documents_target(8, &["open/x"])).await.unwrap();
     let ok = next_until(&mut responses, "NO_CHANGE[]").await;
-    assert_eq!(
-        ok,
-        vec!["ADD[8]", "CURRENT[8]", "NO_CHANGE[8]", "NO_CHANGE[]"]
-    );
+    assert_eq!(ok, vec!["ADD[8]", "CURRENT[8]", "NO_CHANGE[]"]);
 
     let (wtx, wrx) = mpsc::channel(8);
     let mut writes = client
@@ -950,13 +933,7 @@ service cloud.firestore {
     tx.send(add_query_target(1, "protected")).await.unwrap();
     assert_eq!(
         next_until(&mut responses, "NO_CHANGE[]").await,
-        vec![
-            "ADD[1]",
-            "CHANGE a",
-            "CURRENT[1]",
-            "NO_CHANGE[1]",
-            "NO_CHANGE[]"
-        ]
+        vec!["ADD[1]", "CHANGE a", "CURRENT[1]", "NO_CHANGE[]"]
     );
 
     client
@@ -1012,13 +989,7 @@ service cloud.firestore {
     assert!(!token.is_empty());
     assert_eq!(
         initial,
-        vec![
-            "ADD[1]",
-            "CHANGE a",
-            "CURRENT[1]",
-            "NO_CHANGE[1]",
-            "NO_CHANGE[]"
-        ]
+        vec!["ADD[1]", "CHANGE a", "CURRENT[1]", "NO_CHANGE[]"]
     );
 
     client
@@ -1075,7 +1046,7 @@ service cloud.firestore {
     )));
     assert_eq!(
         next_until(&mut responses, "NO_CHANGE[]").await,
-        vec!["NO_CHANGE[2]", "NO_CHANGE[]"]
+        vec!["NO_CHANGE[]"]
     );
 
     tx.send(add_query_target(1, "protected")).await.unwrap();
@@ -1136,9 +1107,14 @@ service cloud.firestore {
 
 #[tokio::test]
 async fn write_stream_rules_refuse_malformed_and_wrong_audience_auth() {
-    for authorization in [
-        "Bearer malformed",
-        "Bearer eyJhbGciOiJub25lIn0.eyJhdWQiOiJvdGhlciJ9.",
+    // Production's shapes (strict): a bearer value that is not a JWT is the front end's
+    // UNAUTHENTICATED; a JWT that does not verify is the ordinary PERMISSION_DENIED.
+    for (authorization, refusal) in [
+        ("Bearer malformed", tonic::Code::Unauthenticated),
+        (
+            "Bearer eyJhbGciOiJub25lIn0.eyJhdWQiOiJvdGhlciJ9.",
+            tonic::Code::PermissionDenied,
+        ),
     ] {
         let (mut client, handle) = start(true).await;
         let (tx, rx) = mpsc::channel(8);
@@ -1162,7 +1138,7 @@ async fn write_stream_rules_refuse_malformed_and_wrong_audience_auth() {
         .await
         .unwrap();
         let error = responses.next().await.unwrap().unwrap_err();
-        assert_eq!(error.code(), tonic::Code::Unauthenticated);
+        assert_eq!(error.code(), refusal);
         assert!(client
             .get_document(pb::GetDocumentRequest {
                 name: format!("{DOCS}/stream/auth-refused"),
@@ -1247,7 +1223,6 @@ async fn write_stream_accepts_pipelined_acknowledgements_and_once_targets_are_re
             "CHANGE p2",
             "CHANGE p3",
             "CURRENT[3]",
-            "NO_CHANGE[3]",
             "NO_CHANGE[]",
             "REMOVE[3]"
         ]
@@ -1608,13 +1583,7 @@ async fn a_removed_target_id_can_be_reused_without_delivering_the_old_query() {
     tx.send(add_query_target(1, "first")).await.unwrap();
     assert_eq!(
         next_until(&mut responses, "NO_CHANGE[]").await,
-        vec![
-            "ADD[1]",
-            "CHANGE a",
-            "CURRENT[1]",
-            "NO_CHANGE[1]",
-            "NO_CHANGE[]"
-        ]
+        vec!["ADD[1]", "CHANGE a", "CURRENT[1]", "NO_CHANGE[]"]
     );
     tx.send(pb::ListenRequest {
         database: DB.to_owned(),
@@ -1639,13 +1608,7 @@ async fn a_removed_target_id_can_be_reused_without_delivering_the_old_query() {
     tx.send(add_query_target(1, "second")).await.unwrap();
     assert_eq!(
         next_until(&mut responses, "NO_CHANGE[]").await,
-        vec![
-            "ADD[1]",
-            "CHANGE b",
-            "CURRENT[1]",
-            "NO_CHANGE[1]",
-            "NO_CHANGE[]"
-        ]
+        vec!["ADD[1]", "CHANGE b", "CURRENT[1]", "NO_CHANGE[]"]
     );
     client
         .commit(pb::CommitRequest {
@@ -1861,38 +1824,31 @@ async fn resumed_targets_replay_only_what_changed_since_the_token() {
         t.resume_type = Some(pb::target::ResumeType::ResumeToken(token.clone()));
     }
     ltx.send(resumed).await.unwrap();
+    // As production answers a resume (AUTH-FS-CROSS stage 2, packet v7): a global boundary at
+    // the token first, then what changed since, CURRENT and the boundary; no existence filter.
+    let (early, _) = trace_and_token(&mut listen, "NO_CHANGE[]").await;
+    assert_eq!(early, vec!["ADD[2]", "NO_CHANGE[]"]);
     let (trace, latest) = trace_and_token(&mut listen, "NO_CHANGE[]").await;
     assert_eq!(
         trace,
         vec![
-            "ADD[2]",
             "CHANGE b",
             "CHANGE c",
             "DELETE a",
-            "FILTER 2",
             "CURRENT[2]",
-            "NO_CHANGE[2]",
             "NO_CHANGE[]"
         ]
     );
-    // Nothing changed: a resume replays nothing but the filter and the boundary.
+    // Nothing changed: a resume replays nothing but its boundaries.
     let mut again = add_query_target(3, "r");
     if let Some(pb::listen_request::TargetChange::AddTarget(t)) = &mut again.target_change {
         t.resume_type = Some(pb::target::ResumeType::ResumeToken(latest));
     }
     ltx.send(again).await.unwrap();
+    let early = next_until(&mut listen, "NO_CHANGE[]").await;
+    assert_eq!(early, vec!["ADD[3]", "NO_CHANGE[]"]);
     let trace = next_until(&mut listen, "NO_CHANGE[]").await;
-    assert_eq!(
-        trace,
-        vec![
-            "ADD[3]",
-            "FILTER 2",
-            "CURRENT[3]",
-            "NO_CHANGE[2]",
-            "NO_CHANGE[3]",
-            "NO_CHANGE[]"
-        ]
-    );
+    assert_eq!(trace, vec!["CURRENT[3]", "NO_CHANGE[2]", "NO_CHANGE[]"]);
     // A token from the future (or garbage) resets.
     let mut future = add_query_target(4, "r");
     if let Some(pb::listen_request::TargetChange::AddTarget(t)) = &mut future.target_change {
@@ -1903,6 +1859,77 @@ async fn resumed_targets_replay_only_what_changed_since_the_token() {
     ltx.send(future).await.unwrap();
     let trace = next_until(&mut listen, "NO_CHANGE[]").await;
     assert_eq!(trace[..4], ["ADD[4]", "RESET[4]", "CHANGE b", "CHANGE c"]);
+    handle.abort();
+}
+
+/// The next global boundary's token and read time.
+async fn next_boundary<S>(stream: &mut S) -> (Vec<u8>, Option<prost_types::Timestamp>)
+where
+    S: tokio_stream::Stream<Item = Result<pb::ListenResponse, tonic::Status>> + Unpin,
+{
+    loop {
+        let item = tokio::time::timeout(std::time::Duration::from_secs(5), stream.next())
+            .await
+            .expect("listen response within 5 s")
+            .expect("stream open")
+            .unwrap();
+        if let Some(pb::listen_response::ResponseType::TargetChange(t)) = item.response_type {
+            if t.target_ids.is_empty() && t.target_change_type == 0 {
+                return (t.resume_token, t.read_time);
+            }
+        }
+    }
+}
+
+/// The boundary a resume starts with carries a token for the resume point itself, so a stream
+/// that drops before the diff resumes from there again and skips no change; its read time is
+/// the snapshot's, so a client's snapshot version never goes back.
+#[tokio::test]
+async fn a_resume_starts_with_a_boundary_at_its_token() {
+    let (mut client, handle) = start(false).await;
+    let commit = |writes| pb::CommitRequest {
+        database: DB.to_owned(),
+        writes,
+        ..Default::default()
+    };
+    client
+        .commit(commit(vec![set_write("rb/a", &[("v", s("1"))])]))
+        .await
+        .unwrap();
+    let (ltx, lrx) = mpsc::channel(8);
+    let mut listen = client
+        .listen(ReceiverStream::new(lrx))
+        .await
+        .unwrap()
+        .into_inner();
+    ltx.send(add_query_target(1, "rb")).await.unwrap();
+    let (token, read_time) = next_boundary(&mut listen).await;
+    drop(ltx);
+    client
+        .commit(commit(vec![set_write("rb/b", &[("v", s("1"))])]))
+        .await
+        .unwrap();
+    let (ltx, lrx) = mpsc::channel(8);
+    let mut listen = client
+        .listen(ReceiverStream::new(lrx))
+        .await
+        .unwrap()
+        .into_inner();
+    let mut resumed = add_query_target(2, "rb");
+    if let Some(pb::listen_request::TargetChange::AddTarget(t)) = &mut resumed.target_change {
+        t.resume_type = Some(pb::target::ResumeType::ResumeToken(token.clone()));
+    }
+    ltx.send(resumed).await.unwrap();
+    let (early_token, early_time) = next_boundary(&mut listen).await;
+    assert_eq!(
+        early_token, token,
+        "the early boundary resumes from the same point"
+    );
+    let (later_token, later_time) = next_boundary(&mut listen).await;
+    assert_ne!(later_token, token, "the boundary after the diff moves on");
+    let (read, early, later) = (read_time.unwrap(), early_time.unwrap(), later_time.unwrap());
+    assert!((early.seconds, early.nanos) >= (read.seconds, read.nanos));
+    assert_eq!(early, later, "both boundaries are the same snapshot's");
     handle.abort();
 }
 
@@ -2086,9 +2113,9 @@ async fn resume_tokens_are_refused_after_a_reset_and_for_other_targets() {
         .unwrap()
         .into_inner();
     ltx.send(add_query_target(1, "rt")).await.unwrap();
-    // The per-target boundary carries a token bound to the target (the global one is
-    // accepted by every target, as the SDKs apply it to all of them).
-    let (_, token) = trace_and_token(&mut listen, "NO_CHANGE[1]").await;
+    // CURRENT carries a token bound to the target (the global one is accepted by every
+    // target, as the SDKs apply it to all of them).
+    let (_, token) = trace_and_token(&mut listen, "CURRENT[1]").await;
     let _ = next_until(&mut listen, "NO_CHANGE[]").await;
     // The token of the `rt` target does not resume an `other` target: full replay.
     let mut other = add_query_target(2, "other");
@@ -2233,13 +2260,7 @@ async fn project_restore_replays_a_same_version_document_with_new_fields() {
     }
     assert_eq!(
         trace,
-        vec![
-            "RESET[1]",
-            "CHANGE a",
-            "CURRENT[1]",
-            "NO_CHANGE[1]",
-            "NO_CHANGE[]"
-        ]
+        vec!["RESET[1]", "CHANGE a", "CURRENT[1]", "NO_CHANGE[]"]
     );
     assert_eq!(restored_value.as_deref(), Some("after"));
     handle.abort();
@@ -2404,7 +2425,12 @@ async fn resume_trace(
         t.resume_type = Some(pb::target::ResumeType::ResumeToken(token));
     }
     ltx.send(request).await.unwrap();
-    next_until(&mut listen, "NO_CHANGE[]").await
+    // A resumed target sends a boundary before its changes; a refused one does not.
+    let mut trace = next_until(&mut listen, "NO_CHANGE[]").await;
+    if !trace.iter().any(|t| t.starts_with("CURRENT")) {
+        trace.extend(next_until(&mut listen, "NO_CHANGE[]").await);
+    }
+    trace
 }
 
 /// FS-MVCC-04: a token whose version is still retained resumes with the diff since it, and a
@@ -2449,10 +2475,9 @@ async fn retained_and_compacted_resume_tokens_have_distinct_outcomes() {
         resumed,
         vec![
             "ADD[3]",
+            "NO_CHANGE[]",
             "CHANGE c",
-            "FILTER 3",
             "CURRENT[3]",
-            "NO_CHANGE[3]",
             "NO_CHANGE[]"
         ],
         "a retained token replays only what changed since it"
@@ -2468,7 +2493,6 @@ async fn retained_and_compacted_resume_tokens_have_distinct_outcomes() {
             "CHANGE b",
             "CHANGE c",
             "CURRENT[4]",
-            "NO_CHANGE[4]",
             "NO_CHANGE[]"
         ],
         "a compacted token is refused and the client resyncs from scratch"
@@ -2502,7 +2526,6 @@ async fn a_pinned_clock_version_cap_resets_a_compacted_resume_token() {
             "RESET[2]",
             "CHANGE a",
             "CURRENT[2]",
-            "NO_CHANGE[2]",
             "NO_CHANGE[]"
         ]
     );
@@ -2636,10 +2659,7 @@ async fn a_missing_index_removes_only_its_own_target_and_the_stream_keeps_listen
         .await
         .unwrap();
     let covered = next_until(&mut responses, "NO_CHANGE[]").await;
-    assert_eq!(
-        covered,
-        vec!["ADD[21]", "CURRENT[21]", "NO_CHANGE[21]", "NO_CHANGE[]"]
-    );
+    assert_eq!(covered, vec!["ADD[21]", "CURRENT[21]", "NO_CHANGE[]"]);
 
     // The undeclared one is refused, and the refusal names the target.
     tx.send(add_owner_ordered_target(22, "updatedAt"))

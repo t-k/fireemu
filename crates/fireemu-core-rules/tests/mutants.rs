@@ -9,7 +9,7 @@ use fireemu_core_rules::eval::{
     evaluate_request, Decision, DenyReason, Method, RequestContext, RulesService,
 };
 use fireemu_core_rules::parse::{
-    parse_ruleset, MAX_EXPR_DEPTH, MAX_EXPR_TREE_DEPTH, MAX_PARSE_BYTES,
+    parse_ruleset, MAX_COMPILED_EXPR_DEPTH, MAX_PARSE_BYTES, TOO_COMPLEX,
 };
 use fireemu_core_rules::runtime::LoadedRules;
 use fireemu_core_rules::value::RulesValue;
@@ -375,25 +375,36 @@ fn parser_lexes_numbers_strings_comments_and_enforces_budgets() {
 
 #[test]
 fn nesting_budgets_refuse_deep_sources_without_overflowing() {
-    // Expression nesting budget: just under MAX_EXPR_DEPTH parentheses parse and evaluate
-    // (no stack overflow), the budget itself is a parse error, and so is anything deeper
-    // (a hostile source of thousands of parentheses is refused, never a crash).
+    // Production compiles expressions 99 levels deep and refuses 100 (FS-RULES 2026-09-24):
+    // the deepest accepted parentheses and negations parse and evaluate, the next level is a
+    // compile error, and so is anything deeper (a hostile source of thousands of parentheses
+    // is refused, never a crash).
     let nested = |n: usize| format!("{}true{}", "(".repeat(n), ")".repeat(n));
-    let deepest_ok = MAX_EXPR_DEPTH as usize - 2;
-    assert!(allowed(&nested(deepest_ok)));
-    assert!(parse_ruleset(&rules("read", &nested(MAX_EXPR_DEPTH as usize + 1))).is_err());
+    assert!(allowed(&nested(98)));
+    assert_eq!(
+        parse_ruleset(&rules("read", &nested(99)))
+            .unwrap_err()
+            .message,
+        TOO_COMPLEX
+    );
     assert!(parse_ruleset(&rules("read", &nested(5000))).is_err());
     let negations = |n: usize| format!("{}true", "!".repeat(n));
-    assert!(parse_ruleset(&rules("read", &negations(MAX_EXPR_DEPTH as usize + 1))).is_err());
+    assert!(parse_ruleset(&rules("read", &negations(98))).is_ok());
+    assert_eq!(
+        parse_ruleset(&rules("read", &negations(99)))
+            .unwrap_err()
+            .message,
+        TOO_COMPLEX
+    );
     assert!(parse_ruleset(&rules("read", &negations(5000))).is_err());
     assert!(allowed(&negations(4)));
-    // Left-nested operator chains are bounded while parsing, before recursive consumers see
-    // the tree. A realistic chain still evaluates.
+    // Left-nested operator chains count one level an operator.
     let chained = |n: usize| vec!["1"; n].join(" + ") + &format!(" == {n}");
     assert!(allowed(&chained(40)));
     assert!(parse_ruleset(&rules("read", &chained(5000))).is_err());
     let conjunction = |n: usize| vec!["true"; n].join(" && ");
-    assert!(allowed(&conjunction(500)), "&& / || chains are flattened");
+    assert!(allowed(&conjunction(99)), "&& / || chains are flattened");
+    assert!(parse_ruleset(&rules("read", &conjunction(100))).is_err());
     // Source size budget.
     let padding = "/".repeat(2) + &" ".repeat(MAX_PARSE_BYTES);
     assert!(parse_ruleset(&format!("{padding}\n{}", rules("read", "true"))).is_err());
@@ -406,7 +417,7 @@ fn binary_chain_budget_is_safe_on_a_reload_worker_stack() {
         .stack_size(2 * 1024 * 1024)
         .spawn(|| {
             let conjunction = |terms: usize| vec!["true"; terms].join(" && ");
-            let accepted = rules("read", &conjunction(MAX_EXPR_TREE_DEPTH as usize));
+            let accepted = rules("read", &conjunction(MAX_COMPILED_EXPR_DEPTH as usize));
             let loaded = LoadedRules::from_source(&accepted).expect("boundary chain loads");
             assert!(matches!(
                 evaluate_request(
@@ -426,10 +437,10 @@ fn binary_chain_budget_is_safe_on_a_reload_worker_stack() {
             drop(snapshot);
             drop(loaded);
 
-            let over_budget = rules("read", &conjunction(MAX_EXPR_TREE_DEPTH as usize + 1));
+            let over_budget = rules("read", &conjunction(MAX_COMPILED_EXPR_DEPTH as usize + 1));
             let error = LoadedRules::from_source(&over_budget)
                 .expect_err("chain above the boundary must be rejected");
-            assert!(error.message.contains("expression tree depth"), "{error}");
+            assert!(error.message.contains(TOO_COMPLEX), "{error}");
 
             let hostile = rules("read", &conjunction(30_000));
             assert!(LoadedRules::from_source(&hostile).is_err());

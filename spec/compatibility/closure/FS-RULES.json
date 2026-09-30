@@ -1,0 +1,667 @@
+{
+  "schemaVersion": 1,
+  "parent": "FS-RULES",
+  "parentStatus": "COMPAT_VERIFIED",
+  "oracleTrack": "disposable-sandbox",
+  "oracle": {
+    "project": "fireemu-oracle-idp",
+    "database": "(default)",
+    "edition": "STANDARD",
+    "location": "us-central1"
+  },
+  "closureReview": {
+    "decision": "APPROVED",
+    "decidedOn": "2026-09-27",
+    "reviewer": "independent clean-context closure review, round 2 APPROVE (round 1 REQUEST_CHANGES), with a separate safety review of the widening changes",
+    "reviewedCommit": "3ac1f31f6",
+    "finalArtifactSha256": "82b0c4271e533d199456a44b2aa7a51574f11229e614743fc9a3776d5ccc8a18",
+    "followUps": "Not observed in production and tracked outside the closure: the exact batchGet budget boundary within (18, 25], a commit's get() and getAfter() of one path across writes, read-side getAfter()/existsAfter() counting, the evaluation of a call chain longer than 20, and the actual dispatch times of the expiry requests. The sandbox resources of an interrupted 2026-09-26 expiry timing probe (whose second pass is not evidence) were removed by a bounded cleanup on 2026-09-27 and read back as the pre-run baseline; the probe does not affect this evidence.",
+    "note": "Round 2 approved 3ac1f31f6 on the condition that two texts be corrected (the run-time call-chain limit and the stale open items in the compatibility table); this commit corrects them, qualifies the expiry and budget texts, and requires DEPENDENCY_REFUSED rows to name the same unresolved dependency on both sides, which leaves the committed comparison unchanged (1144 MATCH, 5 DEPENDENCY_REFUSED on 82b0c427). The mutant daemon.rs:1300 that survived the first mutation pass is caught at 234de575c."
+  },
+  "scopeDecisions": [
+    {
+      "id": "R1",
+      "decision": "Closure is defined by these behavioral acceptance conditions, observed with end-user credentials (no credential, or an ID token issued by the same project's Auth) through Firestore REST v1 and gRPC google.firestore.v1 against the disposable Identity Platform sandbox, whose Firestore and Rules this lane owns. Administrator credentials bypass Rules and are used only to prepare and clean up.",
+      "decidedBy": "owner (t-k)",
+      "decidedOn": "2026-09-24"
+    },
+    {
+      "id": "R2",
+      "decision": "gRPC Listen, WebChannel and client SDK paths belong to FS-LISTEN-SDK; Auth state changes observed by listeners and SDKs (sign-out, token refresh while listening, revocation during a listen) belong to AUTH-FS-CROSS.",
+      "decidedBy": "owner (t-k)",
+      "decidedOn": "2026-09-24",
+      "movedTo": "FS-LISTEN-SDK"
+    },
+    {
+      "id": "R3",
+      "decision": "Token issuance, refresh and verification by Identity Toolkit and Secure Token belong to AUTH-CREDENTIAL; this parent observes only what Firestore and Rules do with the token they receive (AUTH-CREDENTIAL scope decision C3).",
+      "decidedBy": "owner (t-k)",
+      "decidedOn": "2026-09-24",
+      "movedTo": "AUTH-CREDENTIAL"
+    },
+    {
+      "id": "R4",
+      "decision": "The Firebase Rules API resources (projects.rulesets, projects.releases, compile issue details, release readback) are a known difference outside this parent: fireemu does not implement them. This parent compares the effect of a publication: decisions after a release switch, compile acceptance or refusal, and refusal of every request without a release.",
+      "decidedBy": "owner (t-k)",
+      "decidedOn": "2026-09-24"
+    },
+    {
+      "id": "R5",
+      "decision": "Production propagates a release switch over tens of seconds, during which different frontends answer with the old and the new ruleset. fireemu switches atomically. The delay is an approved divergence that fireemu does not reproduce; conditions compare decisions after propagation.",
+      "decidedBy": "owner (t-k)",
+      "decidedOn": "2026-09-24"
+    },
+    {
+      "id": "R6",
+      "decision": "A Rules denial answers with production's status and text (PERMISSION_DENIED, \"Missing or insufficient permissions.\") in both profiles. The reason stays available in fireemu's request traces and log. The emulator-profile change is listed in CHANGELOG and contract.json fireemuOnly.",
+      "decidedBy": "owner (t-k)",
+      "decidedOn": "2026-09-24"
+    },
+    {
+      "id": "R7",
+      "decision": "Tenant principals are observed here: the sandbox enables multi-tenancy and creates one tenant for the run, deleted afterwards.",
+      "decidedBy": "owner (t-k)",
+      "decidedOn": "2026-09-24"
+    },
+    {
+      "id": "R8",
+      "decision": "Named databases are observed on a small scale: two named databases per recording, one with its own release and one without, created and deleted by the recording.",
+      "decidedBy": "owner (t-k)",
+      "decidedOn": "2026-09-24",
+      "revisedOn": "2026-09-25"
+    },
+    {
+      "id": "R9",
+      "decision": "The strict profile is the comparison profile. The emulator profile may add no refusal: it keeps accepting unsigned emulator tokens and allows every request while no ruleset is loaded, as the official emulator does. Its differences from production are listed per condition, not compared.",
+      "decidedBy": "owner (t-k), handoff 2026-09-24",
+      "decidedOn": "2026-09-24"
+    },
+    {
+      "id": "R10",
+      "decision": "Cloud Storage Security Rules and the Storage-to-Firestore functions are outside the Firebase Auth and Firestore production-compatibility program.",
+      "decidedBy": "owner (t-k), handoff 2026-09-24",
+      "decidedOn": "2026-09-24"
+    }
+  ],
+  "conditions": [
+    {
+      "conditionId": "FS-RULES/principals",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "fs-rules/principals"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "VERIFIED",
+      "note": "Unauthenticated, anonymous, email/password, test-phone and custom-token principals are told apart by ownership rules and by the explicit request.auth == null clause, on get, list and write.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-25T01:50:53.794Z",
+            "gitSha": "07a33ab871b6cad12a61e949b1289ae75abcdfe6",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "82b0c4271e533d199456a44b2aa7a51574f11229e614743fc9a3776d5ccc8a18",
+        "sourceCommit": "234de575c2a9397e15de54ccd424b3c4f274b5a3",
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-RULES-comparison.json",
+        "rows": {
+          "MATCH": 72
+        }
+      }
+    },
+    {
+      "conditionId": "FS-RULES/auth-token-fields",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "fs-rules/auth-token"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "VERIFIED",
+      "note": "request.auth.uid and request.auth.token per provider: the key set, the type and value of each standard claim (iss, aud, sub, iat, exp, auth_time, email, email_verified, phone_number, name, picture, firebase.sign_in_provider, firebase.identities), account custom claims and custom-token developer claims, and a claim change that is only seen after a token refresh.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-25T01:50:53.794Z",
+            "gitSha": "07a33ab871b6cad12a61e949b1289ae75abcdfe6",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "82b0c4271e533d199456a44b2aa7a51574f11229e614743fc9a3776d5ccc8a18",
+        "sourceCommit": "234de575c2a9397e15de54ccd424b3c4f274b5a3",
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-RULES-comparison.json",
+        "rows": {
+          "MATCH": 628
+        }
+      }
+    },
+    {
+      "conditionId": "FS-RULES/tenant",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "fs-rules/tenant"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "VERIFIED",
+      "note": "A tenant principal carries request.auth.token.firebase.tenant; tenant and project-level principals with the same rule are separated. The tenant ID in request.auth.token.firebase.tenant has production's shape (display name, '-', five characters of [a-z0-9]) since 6c0d5ec3a, a cherry-pick of the AUTH-CONFIG-SDK tenant-only commit 4c9a926c4 (coordinator decision 2026-09-25).",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-25T01:50:53.794Z",
+            "gitSha": "07a33ab871b6cad12a61e949b1289ae75abcdfe6",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "82b0c4271e533d199456a44b2aa7a51574f11229e614743fc9a3776d5ccc8a18",
+        "sourceCommit": "234de575c2a9397e15de54ccd424b3c4f274b5a3",
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-RULES-comparison.json",
+        "rows": {
+          "MATCH": 10
+        }
+      }
+    },
+    {
+      "conditionId": "FS-RULES/request-resource",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "fs-rules/request-resource"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "VERIFIED",
+      "note": "request.resource and resource on create, update (full and masked), merge, delete and field transforms (serverTimestamp against request.time), map diff, request.method, request.path, resource on a missing document, and request.time.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-25T01:50:53.794Z",
+            "gitSha": "07a33ab871b6cad12a61e949b1289ae75abcdfe6",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "82b0c4271e533d199456a44b2aa7a51574f11229e614743fc9a3776d5ccc8a18",
+        "sourceCommit": "234de575c2a9397e15de54ccd424b3c4f274b5a3",
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-RULES-comparison.json",
+        "rows": {
+          "MATCH": 47
+        }
+      }
+    },
+    {
+      "conditionId": "FS-RULES/document-access",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "fs-rules/document-access"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "VERIFIED",
+      "note": "get, exists, getAfter and existsAfter on present and missing documents, in reads, single writes and commits, including the pre- and post-commit state each one sees. Production refuses an end user a read-write transaction (read-only ones open; see refusal-shape), so no transaction commit is judged: the rows that depend on one (read-in-transaction, commit-get-after, commit-denied-write, commit-after-batch-get-transaction) are DEPENDENCY_REFUSED on both sides and confirm only that refusal.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-25T01:50:53.794Z",
+            "gitSha": "07a33ab871b6cad12a61e949b1289ae75abcdfe6",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "82b0c4271e533d199456a44b2aa7a51574f11229e614743fc9a3776d5ccc8a18",
+        "sourceCommit": "234de575c2a9397e15de54ccd424b3c4f274b5a3",
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-RULES-comparison.json",
+        "rows": {
+          "MATCH": 33,
+          "DEPENDENCY_REFUSED": 4
+        }
+      }
+    },
+    {
+      "conditionId": "FS-RULES/query-proofs",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "fs-rules/query"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "VERIFIED",
+      "note": "List authorization from query constraints for runQuery, runAggregationQuery and listDocuments: provable and unprovable filters, request.query limit, offset and orderBy, collection group queries against {path=**}, __name__ queries, and get rules that do not allow list. The recorded rows see production's request.query carry more than the three documented keys (keys().hasOnly of them is denied, hasAll allowed). Exploratory probes on the sandbox (not evidence) named the nine keys and their values for a plain, a nested and a __name__-only query; The probes issued collection runQuery requests only (plain, nested and __name__-only); fireemu's values for collection-group queries (allDescendants true), queries without a collection id (kind empty), listDocuments and aggregation queries follow from each query's own scope and are not observed. The official emulator carries the same nine keys (conformance/fs-rules-official.json).",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-25T01:50:53.794Z",
+            "gitSha": "07a33ab871b6cad12a61e949b1289ae75abcdfe6",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "82b0c4271e533d199456a44b2aa7a51574f11229e614743fc9a3776d5ccc8a18",
+        "sourceCommit": "234de575c2a9397e15de54ccd424b3c4f274b5a3",
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-RULES-comparison.json",
+        "rows": {
+          "MATCH": 85
+        }
+      }
+    },
+    {
+      "conditionId": "FS-RULES/access-budgets",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "fs-rules/budgets"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "VERIFIED",
+      "note": "Document access call budgets: 10 per single-document request at N and N+1 (10 allowed, 11 denied), 20 per multi-document request (a commit at 20 allowed and 21 denied; a batchGet at 18 allowed and 25 denied, so its exact boundary lies in (18, 25]), repeated paths, and get together with getAfter of one path within a single write; a list or query rule may read 20 distinct documents (20 allowed, 21 denied). Two combinations have not been recorded in production: read-side getAfter()/existsAfter(), which a local regression checks counts each distinct path once at 11 and 20 paths, and a commit whose writes call get() and getAfter() of one path in different writes, which fireemu counts as one document read. End-user BatchWrite is refused whole before any budget applies (see atomic-writes), and no transaction is judged (see document-access).",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-25T01:50:53.794Z",
+            "gitSha": "07a33ab871b6cad12a61e949b1289ae75abcdfe6",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "82b0c4271e533d199456a44b2aa7a51574f11229e614743fc9a3776d5ccc8a18",
+        "sourceCommit": "234de575c2a9397e15de54ccd424b3c4f274b5a3",
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-RULES-comparison.json",
+        "rows": {
+          "MATCH": 30
+        }
+      }
+    },
+    {
+      "conditionId": "FS-RULES/compile-limits",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "fs-rules/compile"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "VERIFIED",
+      "note": "Ruleset acceptance and refusal at compile time (production rulesets.create against fireemu's ruleset load): syntax errors, unknown functions, recursion, call depth, function arguments, let bindings, match nesting, path captures and source size, compared as accepted or refused.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-25T01:50:53.794Z",
+            "gitSha": "07a33ab871b6cad12a61e949b1289ae75abcdfe6",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "82b0c4271e533d199456a44b2aa7a51574f11229e614743fc9a3776d5ccc8a18",
+        "sourceCommit": "234de575c2a9397e15de54ccd424b3c4f274b5a3",
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-RULES-comparison.json",
+        "rows": {
+          "MATCH": 57
+        }
+      }
+    },
+    {
+      "conditionId": "FS-RULES/runtime-limits",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "fs-rules/runtime-limits"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "VERIFIED",
+      "note": "Evaluation-time limits and errors: expressions per request (including parentheses), a chain of 20 function calls at run time (a chain of 21 compiles in production, in the official emulator and in fireemu, see compile-limits; its evaluation is not recorded), and how an error in one allow expression (budget, invalid regex, missing member) combines with another allow that already holds; running out of the expression budget denies whatever else holds.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-25T01:50:53.794Z",
+            "gitSha": "07a33ab871b6cad12a61e949b1289ae75abcdfe6",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "82b0c4271e533d199456a44b2aa7a51574f11229e614743fc9a3776d5ccc8a18",
+        "sourceCommit": "234de575c2a9397e15de54ccd424b3c4f274b5a3",
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-RULES-comparison.json",
+        "rows": {
+          "MATCH": 45
+        }
+      }
+    },
+    {
+      "conditionId": "FS-RULES/atomic-writes",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "fs-rules/atomic"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "VERIFIED",
+      "note": "A commit with one denied write is refused as a whole with the post-state unchanged. An end user's BatchWrite is refused as a whole, with production's denial, whatever the rules say of its writes, and an end user's read-write transaction is refused, so the rows that depend on one are DEPENDENCY_REFUSED on both sides.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-25T01:50:53.794Z",
+            "gitSha": "07a33ab871b6cad12a61e949b1289ae75abcdfe6",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "82b0c4271e533d199456a44b2aa7a51574f11229e614743fc9a3776d5ccc8a18",
+        "sourceCommit": "234de575c2a9397e15de54ccd424b3c4f274b5a3",
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-RULES-comparison.json",
+        "rows": {
+          "MATCH": 21,
+          "DEPENDENCY_REFUSED": 1
+        }
+      }
+    },
+    {
+      "conditionId": "FS-RULES/refusal-shape",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "fs-rules/refusals"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "VERIFIED",
+      "note": "The wire shape of refusals over REST and gRPC: permission denial, a malformed, empty or foreign bearer credential, and methods an end user may not call (listCollectionIds, partitionQuery).",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-25T01:50:53.794Z",
+            "gitSha": "07a33ab871b6cad12a61e949b1289ae75abcdfe6",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "82b0c4271e533d199456a44b2aa7a51574f11229e614743fc9a3776d5ccc8a18",
+        "sourceCommit": "234de575c2a9397e15de54ccd424b3c4f274b5a3",
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-RULES-comparison.json",
+        "rows": {
+          "MATCH": 21
+        }
+      }
+    },
+    {
+      "conditionId": "FS-RULES/token-states",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "fs-rules/token-states"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "VERIFIED",
+      "note": "An unexpired ID token of an account whose refresh tokens were revoked, that was disabled, or that was deleted, presented to Firestore after the change.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-25T01:50:53.794Z",
+            "gitSha": "07a33ab871b6cad12a61e949b1289ae75abcdfe6",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "82b0c4271e533d199456a44b2aa7a51574f11229e614743fc9a3776d5ccc8a18",
+        "sourceCommit": "234de575c2a9397e15de54ccd424b3c4f274b5a3",
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-RULES-comparison.json",
+        "rows": {
+          "MATCH": 24
+        }
+      }
+    },
+    {
+      "conditionId": "FS-RULES/token-expiry",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "fs-rules/expiry"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "VERIFIED",
+      "note": "An ID token presented to Firestore at offsets around its exp, to observe the post-expiry allowance. Requests target offset + 0.3 s; the production timer allows a 0.2 s late wakeup, and actual dispatch time is not recorded. Across two half-second-step recordings, nominal targets from 25.3 through 29.8 s were accepted on REST or gRPC, while nominal 30.3 s (REST) and 31.3 s (gRPC) were refused. These observations are consistent with fireemu refusing from exp + 30 s, but do not establish an exact acceptance boundary.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-25T01:50:53.794Z",
+            "gitSha": "07a33ab871b6cad12a61e949b1289ae75abcdfe6",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          },
+          {
+            "recordedAt": "2026-09-25T09:07:58.182Z",
+            "gitSha": "77fce3a86e52f86f19aa576b7fae708440fcee89",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "82b0c4271e533d199456a44b2aa7a51574f11229e614743fc9a3776d5ccc8a18",
+        "sourceCommit": "234de575c2a9397e15de54ccd424b3c4f274b5a3",
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-RULES-comparison.json",
+        "rows": {
+          "MATCH": 43
+        }
+      }
+    },
+    {
+      "conditionId": "FS-RULES/publication",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "fs-rules/publication"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "VERIFIED",
+      "note": "A project with no cloud.firestore release refuses every client request; after a release switch has propagated, the new ruleset governs every decision; a ruleset refused at compile time leaves the previous one in force.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-25T01:50:53.794Z",
+            "gitSha": "07a33ab871b6cad12a61e949b1289ae75abcdfe6",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "82b0c4271e533d199456a44b2aa7a51574f11229e614743fc9a3776d5ccc8a18",
+        "sourceCommit": "234de575c2a9397e15de54ccd424b3c4f274b5a3",
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-RULES-comparison.json",
+        "rows": {
+          "MATCH": 16
+        }
+      }
+    },
+    {
+      "conditionId": "FS-RULES/named-database",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "fs-rules/named-database"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "VERIFIED",
+      "note": "A named database is governed by its own release cloud.firestore/<database>, not by the (default) release, and refuses every client request while it has none.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-25T01:50:53.794Z",
+            "gitSha": "07a33ab871b6cad12a61e949b1289ae75abcdfe6",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "82b0c4271e533d199456a44b2aa7a51574f11229e614743fc9a3776d5ccc8a18",
+        "sourceCommit": "234de575c2a9397e15de54ccd424b3c4f274b5a3",
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-RULES-comparison.json",
+        "rows": {
+          "MATCH": 12
+        }
+      }
+    },
+    {
+      "conditionId": "FS-RULES/final-artifact-regression",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "fs-rules",
+        "auth-credential",
+        "auth-account",
+        "fs-query-index"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "VERIFIED",
+      "note": "The final artifact's FS-RULES comparison, with the AUTH-ACCOUNT, AUTH-CREDENTIAL and FS-QUERY-INDEX (owner decision 2026-09-25) comparisons re-run on the same artifact; their summaries are recorded with the artifact's sha256.",
+      "evidence": {
+        "finalArtifactSha256": "82b0c4271e533d199456a44b2aa7a51574f11229e614743fc9a3776d5ccc8a18",
+        "sourceCommit": "234de575c2a9397e15de54ccd424b3c4f274b5a3",
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-RULES-comparison.json",
+        "rows": {
+          "MATCH": 1144,
+          "DEPENDENCY_REFUSED": 5
+        },
+        "regressions": {
+          "auth-account": {
+            "artifactSha256": "82b0c4271e533d199456a44b2aa7a51574f11229e614743fc9a3776d5ccc8a18",
+            "summary": {
+              "MATCH": 631
+            },
+            "comparisonPath": "spec/compatibility/closure/evidence/FS-RULES-auth-account-regression.json"
+          },
+          "auth-credential": {
+            "artifactSha256": "82b0c4271e533d199456a44b2aa7a51574f11229e614743fc9a3776d5ccc8a18",
+            "summary": {
+              "MATCH": 222
+            },
+            "comparisonPath": "spec/compatibility/closure/evidence/FS-RULES-auth-credential-regression.json"
+          },
+          "fs-query-index": {
+            "artifactSha256": "82b0c4271e533d199456a44b2aa7a51574f11229e614743fc9a3776d5ccc8a18",
+            "summary": {
+              "MATCH": 675,
+              "DIVERGENCE_APPROVED": 35
+            },
+            "comparisonPath": "spec/compatibility/closure/evidence/FS-RULES-fs-query-index-regression.json"
+          }
+        }
+      }
+    },
+    {
+      "conditionId": "FS-RULES/closure-review",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "FS-RULES",
+        "fs-rules"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "VERIFIED",
+      "note": "Independent clean-context closure review and a separate safety review of every change that widens what a request may do.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-25T01:50:53.794Z",
+            "gitSha": "07a33ab871b6cad12a61e949b1289ae75abcdfe6",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          },
+          {
+            "recordedAt": "2026-09-25T09:07:58.182Z",
+            "gitSha": "77fce3a86e52f86f19aa576b7fae708440fcee89",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "82b0c4271e533d199456a44b2aa7a51574f11229e614743fc9a3776d5ccc8a18",
+        "sourceCommit": "234de575c2a9397e15de54ccd424b3c4f274b5a3",
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-RULES-comparison.json",
+        "rows": {
+          "MATCH": 1144,
+          "DEPENDENCY_REFUSED": 5
+        },
+        "reviews": [
+          "docs.local closure review rounds 1 (REQUEST_CHANGES) and 2 (APPROVE with two text fixes, made in the promotion commit), the lane safety review and the request.query delta review; reports kept privately"
+        ]
+      }
+    }
+  ],
+  "integratedRegression": {
+    "release": "v0.8.0",
+    "integrationCommit": "f8f0611ac35185a0719ae7660601ed4ac584dcad",
+    "releaseBinarySha256": "c258b022c5f452a60a9bc60de68e6de26b3f5aeaf846623cf1bf7e33f28d31df",
+    "buildReceiptPath": "spec/compatibility/closure/evidence/integration-v0.8.0/release-artifact.json",
+    "buildReceiptSha256": "439d1f55b447d2621661077fc8c130df1fba8f38d996b0a952adef0d4d8bcd1c",
+    "comparisons": [
+      {
+        "path": "spec/compatibility/closure/evidence/integration-v0.8.0/FS-RULES-comparison.json",
+        "sha256": "1f6fdd5ccbab7f135bb7302b3b83ef7bf5fa5947e59ee4f1b0984ef55d3e61b6",
+        "rows": 1149,
+        "summary": {
+          "MATCH": 1144,
+          "DEPENDENCY_REFUSED": 5
+        },
+        "laneComparisonPath": "spec/compatibility/closure/evidence/FS-RULES-comparison.json",
+        "laneComparisonSha256": "e492410720a2c1c626a422e0c6f4852af0a54c530d514fe5f4c7fc6e4525125a",
+        "identicalRows": 1149,
+        "changedRows": []
+      },
+      {
+        "path": "spec/compatibility/closure/evidence/integration-v0.8.0/AUTH-ACCOUNT-comparison.json",
+        "sha256": "00455bf3da54088e3cc9498fb9717d5f5221e20ec03af4e62ef19cf8ee963603",
+        "rows": 631,
+        "summary": {
+          "MATCH": 631
+        },
+        "laneComparisonPath": "spec/compatibility/closure/evidence/FS-RULES-auth-account-regression.json",
+        "laneComparisonSha256": "d80b4bcc7f74c54742f4f1e58cb85fd9b70bf41db1a08e9317d838626d6be171",
+        "identicalRows": 631,
+        "changedRows": [],
+        "inherited": "AUTH-ACCOUNT"
+      },
+      {
+        "path": "spec/compatibility/closure/evidence/integration-v0.8.0/AUTH-CREDENTIAL-comparison.json",
+        "sha256": "422bb6e490555819eeced8d0c1853077c38cefb378e8f90123bef78de665ed58",
+        "rows": 222,
+        "summary": {
+          "MATCH": 222
+        },
+        "laneComparisonPath": "spec/compatibility/closure/evidence/FS-RULES-auth-credential-regression.json",
+        "laneComparisonSha256": "a2f85e8ddc7b88bdeb0d079e093558d977117efdf52c57ec76033b310d322980",
+        "identicalRows": 222,
+        "changedRows": [],
+        "inherited": "AUTH-CREDENTIAL"
+      },
+      {
+        "path": "spec/compatibility/closure/evidence/integration-v0.8.0/FS-QUERY-INDEX-comparison.json",
+        "sha256": "64bf5068e840993a9369deab599877130771676fe162311454a636ca4dd049b3",
+        "rows": 710,
+        "summary": {
+          "MATCH": 675,
+          "DIVERGENCE_APPROVED": 35
+        },
+        "laneComparisonPath": "spec/compatibility/closure/evidence/FS-RULES-fs-query-index-regression.json",
+        "laneComparisonSha256": "5220c029a10cedf0fea5e7789f778110ac2293c2dab20f1532d23a054558c5a2",
+        "identicalRows": 710,
+        "changedRows": [],
+        "inherited": "FS-QUERY-INDEX"
+      }
+    ],
+    "result": "IDENTICAL_TO_LANE",
+    "productionRequests": 0
+  }
+}

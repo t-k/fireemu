@@ -103,6 +103,20 @@ function freezeResponse(snapshot) {
   return snapshot;
 }
 
+// The customClaims text as the function's JSON.stringify gives it: what the Functions SDK sends
+// Identity Platform, which production reads back as `customAttributes` with its key order
+// (AUTH-TENANT-BLOCKING recording 2026-09-28). The runner owns this member; the daemon uses the
+// text only when it parses to the claims it applies.
+const CUSTOM_CLAIMS_TEXT = "fireemuCustomClaimsText";
+
+function attachCustomClaimsText(snapshot) {
+  delete snapshot[CUSTOM_CLAIMS_TEXT];
+  // validateBlockingResult has admitted only an object, null or no claims.
+  const claims = snapshot.userRecord.customClaims;
+  if (claims != null) snapshot[CUSTOM_CLAIMS_TEXT] = JSON.stringify(claims);
+  return snapshot;
+}
+
 export function blockingResult(value, eventType, HttpsError) {
   // Preserve the runner's established no-result behaviour.
   if (!value || typeof value !== "object") return {};
@@ -117,21 +131,25 @@ export function blockingResult(value, eventType, HttpsError) {
     } else {
       const userRecord = {};
       const updateMask = [];
-      for (const [publicName, wireName] of [
-        ["displayName", "displayName"],
-        ["photoURL", "photoUrl"],
-        ["disabled", "disabled"],
-        ["emailVerified", "emailVerified"],
-        ["customClaims", "customClaims"],
-        ["sessionClaims", "sessionClaims"],
+      // Each field goes under its public name, as the Functions SDK's generateResponsePayload
+      // sends it: Identity Platform does not apply `photoURL` (it reads `photoUrl`), so a
+      // function's photoURL is ignored (AUTH-TENANT-BLOCKING recording 2026-09-28,
+      // ordering#lookup-profile; the official Auth emulator reads `photoUrl` only too).
+      for (const name of [
+        "displayName",
+        "photoURL",
+        "disabled",
+        "emailVerified",
+        "customClaims",
+        "sessionClaims",
       ]) {
-        if (Object.prototype.hasOwnProperty.call(value, publicName)) {
-          const field = value[publicName];
+        if (Object.prototype.hasOwnProperty.call(value, name)) {
+          const field = value[name];
           // Like the Functions SDK's getUpdateMask, undefined means no update;
           // null, false, and an empty string are still explicit updates.
           if (field === undefined) continue;
-          userRecord[wireName] = field;
-          updateMask.push(wireName);
+          userRecord[name] = field;
+          updateMask.push(name);
         }
       }
       if (updateMask.length === 0) return {};
@@ -142,5 +160,5 @@ export function blockingResult(value, eventType, HttpsError) {
   }
   const snapshot = snapshotResponse(candidate, HttpsError);
   validateBlockingResult(snapshot, eventType, HttpsError);
-  return freezeResponse(snapshot);
+  return freezeResponse(attachCustomClaimsText(snapshot));
 }

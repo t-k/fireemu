@@ -51,8 +51,8 @@
   ],
   "digests": {
     ".github/workflows/quint.yml": "3322397d1feaaea0a163de7b8a289a33d071650d51f4674c4a4556df6b45e972",
-    "crates/fireemu-core-rules/src/eval.rs": "20bc939227b5a4c8cbd6ae5c26d115fe92f02235da4dd426414c6944b9fc604f",
-    "crates/fireemu-core-rules/src/parse.rs": "ebcf63731625d6b5237f4a4d1fddfb89ce776d0ce42aa71434b534f61ae2c45c",
+    "crates/fireemu-core-rules/src/eval.rs": "9e869a26fb52e9113f9f5e8293a895996278088c24a6ccc9faff9ec9c869ec85",
+    "crates/fireemu-core-rules/src/parse.rs": "acad9e662374515ad06da52f8a331e6b7be59c3d1ef266b48239a061b748bb71",
     "crates/fireemu-core-rules/src/regex.rs": "873e10444696349edf5be984e590b164c72ba8603864eddb8defce574012b4ee",
     "crates/fireemu-core-rules/src/value.rs": "ca0504c466b8dfe6050d0e44f296e2713e2bf4699eb1e1d0a4544ed82c2a5131",
     "rust-toolchain.toml": "689fafb1dd9b80ee9a2a9b5e2bbb31e8f7ea4adad403717777689b35d4f861b2",
@@ -61,33 +61,47 @@
     "verification/quint/bin/process-group": "b75c438b3ce254d4d112d2005afc52d94e64a1fc22e0d5d86f5652ef30285b94",
     "verification/quint/bin/quint": "ef9df9d26e4e2ee2e081ae407c0e10d82fcad75c75bad6fb93a62046192507ed",
     "verification/quint/configs/RegexAuthorization.json": "e46a8cd3559c3c7c1efb240e78c2b2a4fd54a42dca1736e079c209d290408ff7",
-    "verification/quint/evidence/cargo-authority.json": "650d7da16f13aa92c1afc41b5d4e6c3b190de745bf5ce8bd2d8a163170294289",
+    "verification/quint/evidence/cargo-authority.json": "bb471e7b56d746200e8eb4c80adec2a526421cfe1e7fc0c73b779c143f424695",
     "verification/quint/java/io/fireemu/verification/LoopbackServerProviderAgent.java": "6f4f23bb6cf8f2d8da2d55478c409bfe30f56d1a78296b5259647df4511888dc",
-    "verification/quint/mutations/RegexAuthorization.json": "26b763730808eef896e693f082b49b01d685109064a5f6f034264fee437199cb",
+    "verification/quint/mutations/RegexAuthorization.json": "6df8a9145699ef5df68123933c0320f8e6354f4529df976e9d78cd6057eec760",
     "verification/quint/package.json": "0544cbb331fabdba1e770dbfd72fc7521ace0dc17cf60ee96df0ae27384552d4",
     "verification/quint/pnpm-lock.yaml": "c46de8feb983d78945bf816a5a4d54d505d3840c88f1ebe19772a08acd9f0556",
     "verification/quint/run-verification.sh": "57eeb07ba39d042eea571b8a939e35ab05dd37218a30aa559785788d2aa81b7f",
-    "verification/quint/specs/RegexAuthorization.qnt": "f834e65f52da3d74b89edcc25bb46ee4dc227118e2a6d0c4349fb7ec561c0c25",
+    "verification/quint/specs/RegexAuthorization.qnt": "5ba60a880b3adfa61bd7b8a9b907bdef533433630811e56a9fda8e25fc30655c",
     "verification/quint/src/cargo_authority.rs": "2c67dbd90419daa38f42f44b5f62c87388d5a15637ced48a2110b252dcbbd33a",
     "verification/quint/src/evidence.rs": "2fcf95169ee6ae80bb768c874430e3869d2a29dadf4c87f7cae2794c64dbf4be",
     "verification/quint/src/lib.rs": "2addd005fe8bee74c693854dc7ccb19dde14153b408f3d3e7335c5a8abbe929f",
     "verification/quint/src/main.rs": "f8ada163629ef231fc5e580031fab6d5f2fcdbd9b2e0cff3604a192ff24a043f",
-    "verification/quint/src/model.rs": "74a5503f62e2b182c16e38d394d19bf8933b49beb69acc20542beeca89eef255",
+    "verification/quint/src/model.rs": "3e16546cf010a3bcd0257099b61e92dc935a8d56eb8631fa528eebaf804ba79f",
     "verification/quint/src/process.rs": "56fbdc380eb60993a038366f050f45c030b22f5dc7048971aa451f54883dbb5f",
     "verification/quint/src/publication.rs": "e4b57348c74d51585609b9f114ad56366309f90fa6e2297639546f42922e53a8",
-    "verification/quint/src/regex_authorization.rs": "6d680635e7f683fd4ee6348ee11c1f282908fc31c70e86f16b79b2320acb6ec3",
+    "verification/quint/src/regex_authorization.rs": "01671d142928b58bbd026d7c1e3f311298e84484cf1dcb75967fbad4e0373d4f",
     "verification/quint/src/server.rs": "b0d10768918bf0449419d9e6384a574e14db01f651264e6037856c3367e05c0a",
-    "verification/quint/tests/regex_authorization_connect.rs": "f0ff044eb09b574f090f1779017e75195ac194a9a043e1208c7ecf5b2ce0c82e"
+    "verification/quint/tests/regex_authorization_connect.rs": "db52e501a3e268be7a0faecadb451144cee13c28b3cf2cbbcd71797442dea152"
   },
   "invariants": [
     "TypeOK",
-    "ExhaustionNeverAllows"
+    "ExhaustionNeverAllows",
+    "AlternativesDecide",
+    "CapStops"
   ],
   "temporalProperties": [],
   "mutations": [
     {
       "id": "M-FORMAL-RULES-REGEX-001",
+      "property": "AlternativesDecide",
+      "outcome": "killed_safety",
+      "diagnostic": "TLC invariant violation"
+    },
+    {
+      "id": "M-FORMAL-RULES-REGEX-002",
       "property": "ExhaustionNeverAllows",
+      "outcome": "killed_safety",
+      "diagnostic": "TLC invariant violation"
+    },
+    {
+      "id": "M-FORMAL-RULES-REGEX-003",
+      "property": "CapStops",
       "outcome": "killed_safety",
       "diagnostic": "TLC invariant violation"
     }
@@ -97,6 +111,8 @@
     "notMatched",
     "stepExhausted",
     "depthExhausted",
+    "exhaustedBesideAllow",
+    "exhaustedPastCap",
     "parentNegated",
     "nestedNegated"
   ],

@@ -59,6 +59,118 @@ struct Help {
     links: Vec<Link>,
 }
 
+/// `google.rpc.LocalizedMessage`.
+#[derive(Clone, PartialEq, Message)]
+struct LocalizedMessage {
+    #[prost(string, tag = "1")]
+    locale: String,
+    #[prost(string, tag = "2")]
+    message: String,
+}
+
+/// `google.rpc.QuotaFailure.Violation`.
+#[derive(Clone, PartialEq, Message)]
+struct QuotaViolation {
+    #[prost(string, tag = "1")]
+    subject: String,
+    #[prost(string, tag = "2")]
+    description: String,
+}
+
+/// `google.rpc.QuotaFailure`.
+#[derive(Clone, PartialEq, Message)]
+struct QuotaFailure {
+    #[prost(message, repeated, tag = "1")]
+    violations: Vec<QuotaViolation>,
+}
+
+/// A status carrying the `google.rpc` details of a REST error envelope (`details`): the types
+/// fireemu renders (`ErrorInfo`, `LocalizedMessage`, `Help`, `BadRequest`, `QuotaFailure`) are encoded;
+/// any other is left out. Without details the status is plain.
+#[must_use]
+pub fn from_json_details(code: Code, message: &str, details: &Value) -> Status {
+    let text = |v: &Value, key: &str| v[key].as_str().unwrap_or_default().to_owned();
+    let encoded: Vec<prost_types::Any> = details
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|detail| {
+            let type_url = detail["@type"].as_str()?;
+            let name = type_url.rsplit('/').next()?;
+            Some(match name {
+                "google.rpc.ErrorInfo" => any(
+                    type_url,
+                    &ErrorInfo {
+                        reason: text(detail, "reason"),
+                        domain: text(detail, "domain"),
+                        metadata: detail["metadata"]
+                            .as_object()
+                            .into_iter()
+                            .flatten()
+                            .map(|(k, v)| (k.clone(), v.as_str().unwrap_or_default().to_owned()))
+                            .collect(),
+                    },
+                ),
+                "google.rpc.LocalizedMessage" => any(
+                    type_url,
+                    &LocalizedMessage {
+                        locale: text(detail, "locale"),
+                        message: text(detail, "message"),
+                    },
+                ),
+                "google.rpc.Help" => any(
+                    type_url,
+                    &Help {
+                        links: detail["links"]
+                            .as_array()
+                            .into_iter()
+                            .flatten()
+                            .map(|l| Link {
+                                description: text(l, "description"),
+                                url: text(l, "url"),
+                            })
+                            .collect(),
+                    },
+                ),
+                "google.rpc.BadRequest" => any(
+                    type_url,
+                    &BadRequest {
+                        field_violations: detail["fieldViolations"]
+                            .as_array()
+                            .into_iter()
+                            .flatten()
+                            .map(|v| FieldViolation {
+                                field: text(v, "field"),
+                                description: text(v, "description"),
+                            })
+                            .collect(),
+                    },
+                ),
+                "google.rpc.QuotaFailure" => any(
+                    type_url,
+                    &QuotaFailure {
+                        violations: detail["violations"]
+                            .as_array()
+                            .into_iter()
+                            .flatten()
+                            .map(|v| QuotaViolation {
+                                subject: text(v, "subject"),
+                                description: text(v, "description"),
+                            })
+                            .collect(),
+                    },
+                ),
+                _ => return None,
+            })
+        })
+        .collect();
+    if encoded.is_empty() {
+        Status::new(code, message)
+    } else {
+        with_details(code, message, encoded)
+    }
+}
+
 fn any(type_url: &str, message: &impl Message) -> prost_types::Any {
     prost_types::Any {
         type_url: type_url.to_owned(),
@@ -120,6 +232,31 @@ fn error_info(reason: &str, metadata: &[(&str, String)]) -> prost_types::Any {
                 .map(|(key, value)| ((*key).to_owned(), value.clone()))
                 .collect(),
         },
+    )
+}
+
+/// The front end's refusal of a bearer value that is not a JWT, which it takes for an OAuth
+/// access token, as REST answers it (FS-RULES production recording, 2026-09-24): an
+/// `ErrorInfo` with no domain names the service and the gRPC method the route transcodes to.
+#[must_use]
+pub fn credentials_missing(message: &str, method: &str) -> Status {
+    with_details(
+        Code::Unauthenticated,
+        message,
+        vec![any(
+            ERROR_INFO,
+            &ErrorInfo {
+                reason: "CREDENTIALS_MISSING".to_owned(),
+                domain: String::new(),
+                metadata: [
+                    ("service", "firestore.googleapis.com".to_owned()),
+                    ("method", format!("google.firestore.v1.Firestore.{method}")),
+                ]
+                .into_iter()
+                .map(|(key, value)| (key.to_owned(), value))
+                .collect(),
+            },
+        )],
     )
 }
 
@@ -202,11 +339,10 @@ pub fn details_to_json(details: &[u8]) -> Option<Vec<Value>> {
         .filter_map(|detail| match detail.type_url.as_str() {
             ERROR_INFO => {
                 let info = ErrorInfo::decode(detail.value.as_slice()).ok()?;
-                let mut out = json!({
-                    "@type": ERROR_INFO,
-                    "reason": info.reason,
-                    "domain": info.domain,
-                });
+                let mut out = json!({"@type": ERROR_INFO, "reason": info.reason});
+                if !info.domain.is_empty() {
+                    out["domain"] = json!(info.domain);
+                }
                 if !info.metadata.is_empty() {
                     out["metadata"] = json!(info.metadata);
                 }
@@ -273,6 +409,40 @@ pub fn respec_grpc_message(headers: &mut hyper::HeaderMap) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_the_cosine_refusal_carries_an_error_info() {
+        let status = failed_precondition(COSINE_ZERO_VECTOR);
+        assert_eq!(status.code(), Code::FailedPrecondition);
+        assert_eq!(
+            details_to_json(status.details()),
+            Some(vec![json!({
+                "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                "reason": "COSINE_DISTANCE_ON_ZERO_VECTOR",
+                "domain": "firestore.googleapis.com",
+            })])
+        );
+        let other = failed_precondition("The query requires an index.");
+        assert_eq!(other.code(), Code::FailedPrecondition);
+        assert_eq!(details_to_json(other.details()), None);
+    }
+
+    #[test]
+    fn the_oauth_refusal_names_its_service_and_method_without_a_domain() {
+        let status = credentials_missing("m", "RunQuery");
+        assert_eq!(status.code(), Code::Unauthenticated);
+        assert_eq!(
+            details_to_json(status.details()),
+            Some(vec![json!({
+                "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                "reason": "CREDENTIALS_MISSING",
+                "metadata": {
+                    "method": "google.firestore.v1.Firestore.RunQuery",
+                    "service": "firestore.googleapis.com",
+                },
+            })])
+        );
+    }
 
     #[test]
     fn the_pipeline_refusal_renders_production_details() {

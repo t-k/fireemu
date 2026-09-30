@@ -251,6 +251,9 @@ pub struct Expr {
     pub span: Span,
     /// Byte offset just past the expression's last token.
     pub end: usize,
+    /// How many pairs of parentheses enclose it in the source. They change nothing but the
+    /// nesting depth the compiler counts (see `parse::MAX_COMPILED_EXPR_DEPTH`).
+    pub parens: u32,
 }
 
 impl Expr {
@@ -261,6 +264,7 @@ impl Expr {
             kind: Box::new(kind),
             span,
             end,
+            parens: 0,
         }
     }
 

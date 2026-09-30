@@ -199,10 +199,10 @@ def test_repair_tickets_are_reproducible_and_a_fixed_one_cites_its_commit() -> N
         "FS-CONFIG-RT-001": "FIXED",
         "FS-CONFIG-RT-002": "PARTIALLY_FIXED",
         "FS-CONFIG-RT-003": "FIXED",
-        "FS-CONFIG-RT-004": "OPEN",
+        "FS-CONFIG-RT-004": "FIXED",
         "FS-CONFIG-RT-005": "OPEN",
     }
-    assert matrix["summary"]["openRepairTickets"] == 2
+    assert matrix["summary"]["openRepairTickets"] == 1
     for ticket in matrix["repairTickets"]:
         assert ticket["id"].startswith("FS-CONFIG-RT-")
         assert ticket["reproduction"]

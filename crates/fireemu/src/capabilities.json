@@ -77,7 +77,7 @@
       "callable Authorization integrity: only a Firebase ID token verified against the target project AuthRegistry on the virtual clock and resolved as a user is reinserted. Bearer owner, service credentials, non-Bearer values and duplicate or folded fields are never callable user identities",
       "every caller-supplied copy of a field the daemon owns is stripped before the trusted one is inserted: the App Check field, Authorization, the per-runner secret, and the x-callable-context-auth / x-original-auth channels firebase-functions honours under the debug switch to override v1 callable auth context",
       "ordinary onRequest functions receive the raw App Check field list unclassified, duplicates included: application code owns custom-backend verification there (section 7.3)",
-      "the runner runs with FIREBASE_DEBUG_MODE=true and only the skipTokenVerification debug feature, and only while the callable trusted protocol is active; the runner proves at startup that the installed firebase-functions reads those switches as expected and reports the auth-override header names it honours, which must all be ones the proxy strips",
+      "the emulator profile enables FIREBASE_DEBUG_MODE and enableCors even without callable trust; skipTokenVerification is enabled only while the callable trusted protocol is active, and strict enables no CORS debug feature; the runner proves at startup that the installed firebase-functions reads those switches as expected and reports the auth-override header names it honours, which must all be ones the proxy strips",
       "the runner HTTP server refuses every request when it has no per-runner secret rather than serving them unguarded, and compares the secret it does have in constant time",
       "with App Check active, a configured functions.manifest is reconciled against discovery: it may not call a real callable an onRequest function, which would route the request around the trust boundary entirely",
       "version-bounded loader instrumentation reads each callable enforceAppCheck and consumeAppCheckToken as the callable is declared, by hooking onCallHandler, withInit and wrapTraceContext -- the one path every v1, v2, builder and genkit spelling passes through",
@@ -279,6 +279,7 @@
   "AUTH-PROVIDER-CONFIG-1": {
     "implemented": [
       "project and tenant OAuth IdP and inbound SAML provider configuration create/get/list/update/delete under the public v2 namespaces",
+      "project and tenant default supported IdP configuration (defaultSupportedIdpConfigs: enabled, clientId, clientSecret, appleSignInConfig) create/get/list/update/delete under the public v2 namespaces, from the REST reference; which IdP IDs production accepts and how it validates the members are unobserved",
       "project, tenant, OIDC and SAML stores are isolated; validation completes before mutation and snapshots never export provider configuration or OIDC client secrets",
       "bounded creation-order pagination uses a namespace-local provider cursor and rejects unknown cursors"
     ],
@@ -377,8 +378,8 @@
       "protobuf CloudEvents payloads (JSON is what firebase-functions consumes)"
     ],
     "notes": [
-      "Blocking Functions use a bounded synchronous loopback bridge with the production seven-second response deadline; explicit Functions SDK error classes retain their canonical status in the Identity Toolkit error envelope, an unhandled handler or transport failure is unavailable, and an elapsed deadline returns production's opaque 503 Error code: 47 without publishing speculative user state",
-      "firebase-tools 15.28.2 configures only beforeCreate and beforeSignIn in the Auth emulator; Firebase Functions SDK beforeEmail / beforeSms and beforeEmailSent / beforeSmsSent hooks are production-only and are not a Local Emulator Suite parity gap",
+      "Blocking Functions use a bounded synchronous loopback bridge. The strict profile waits production's seven-second response deadline and the emulator profile the official emulator's sixty seconds; an explicit Functions SDK error below 500 other than 429 answers 400 with the function's own error body in the message, a 429 or 5xx answer, an unhandled handler or transport failure, and a function's own timeout within the deadline answer production's opaque 503 Error code: 47, and an elapsed deadline answers 400 Cloud function deadline exceeded, without publishing speculative user state. A blocking configuration that changes while a request runs is a retryable 409 in the strict profile only",
+      "firebase-tools 15.28.2 configures only beforeCreate and beforeSignIn in the Auth emulator, and the emulator profile does the same; the strict profile also runs beforeEmailSent before a password reset or email sign-in mail, as production does, and lists beforeSmsSent without running it",
       "Eventarc and Cloud Tasks support listeners start with a configured Functions runtime on the official default ports 9299 and 9499; selecting either support service without a Functions codebase is an accepted no-op, matching firebase-tools 15.28.2",
       "no fireemu-only alert-injection route exists: firebase-tools has none either, and its Emulator UI fires an alert by POSTing to /google/publishEvents like any other client",
       "Eventarc trigger definitions are bounded to 256 KiB after project substitution, the registry to 4096 entries and 16 MiB including owned lookup and display indexes, each publish to 256 input events and 256 deliveries after fault expansion, and all active Functions events to 4096 records and 64 MiB; Eventarc is capped at 3072 records and 48 MiB so other sources keep a reservation, refusal is atomic, full custom channel names retain the project boundary, successful official google routes expose CORS only to a loopback origin, and OPTIONS follows the pinned emulator route miss",
@@ -423,15 +424,14 @@
       "streamed v2 responses retain one bounded backpressure slot, obey the function deadline, and enforce production's 10 MiB streaming response limit cumulatively without buffering the whole response",
       "the official emulator's two 404s: `Not Found` (text/plain) for a path that is not a function route, and `Function <region>-<name> does not exist, valid functions are: <trigger keys>` (text/html) for a route whose function is unknown, with the keys in the official order (grouped by region, export order within a region)",
       "timeoutSeconds: a function that overruns it gets the official answer, HTTP 500 with the body {\"code\":\"ECONNRESET\"} and no content-type, and the emulator logs `Your function timed out after ~Ns.`",
-      "CORS for an onRequest function on a loopback origin: the preflight answer cors({origin: true}) produces (204, the origin reflected, GET,HEAD,PUT,PATCH,POST,DELETE, the requested headers, Vary), and Access-Control-Allow-Origin on the ordinary answer"
+      "in the emulator profile, a default onRequest function uses the official enableCors wrapper: a preflight answers 204 with the origin reflected, GET,HEAD,PUT,PATCH,POST,DELETE, the requested headers and Vary, and an ordinary answer reflects the origin; explicit cors: false disables this wrapper, while the strict profile leaves a default preflight to the handler"
     ],
     "notes": [
       "needs functions.source (or --functions <dir>) and the bundled Node runner; the codebase must have express installed (a dependency of firebase-functions)",
       "the real Firebase Web SDK .stream() acceptance test covers ordinary onCall and onCallGenkit chunks, final results, HttpsError after a chunk, non-streaming sendChunk, downstream cancellation, and admission release",
       "streaming accepts only an absent or identity Content-Encoding because the production 10 MiB quota is measured on uncompressed response data; refusing an encoded local runner response prevents compressed data from bypassing the limit",
       "conformance: functions/callable-error-envelope, functions/callable-auth-context, functions/http-routing-cors-and-timeouts (conformance/README.md); this records agreement with the official Local Emulator Suite, never with production",
-      "callable preflights vary on every request field used for admission (Origin, method, requested headers, Fetch Metadata site and mode), while the official emulator varies only on Origin and requested headers; the extra members keep a shared cache from replaying an admitted response for a request the proxy would refuse",
-      "a non-loopback Origin is refused with 403 rather than reflected: the official emulator runs its runtime with enableCors and answers any origin on the internet",
+      "both profiles admit callable requests from loopback, external and LAN origins; callable OPTIONS reaches the SDK CORS wrapper without Auth or App Check admission, respecting cors:false and profile-specific Origin lists, with the SDK response and Vary forwarded unchanged",
       "the timeout does not kill the runner; the official emulator kills the runtime process of the one trigger it runs per process, and one fireemu runner serves a whole codebase"
     ],
     "status": "implemented"

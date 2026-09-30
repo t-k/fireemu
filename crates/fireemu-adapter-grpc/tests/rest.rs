@@ -9,7 +9,7 @@ use std::time::Duration;
 use fireemu_adapter_grpc::gateway::Gateway;
 use fireemu_adapter_grpc::local::LocalBackend;
 use fireemu_adapter_grpc::rest::{RestRequest, RestState};
-use fireemu_adapter_grpc::rules::RulesEnforcer;
+use fireemu_adapter_grpc::rules::{RulesEnforcer, TokenSemantics};
 use fireemu_core_auth::jwt::{base64url_encode, TokenAcceptance};
 use fireemu_core_auth::mfa::TotpPolicy;
 use fireemu_core_auth::store::AuthStore;
@@ -98,7 +98,11 @@ fn state_with_gateway(
             TotpPolicy::default(),
         )));
         let loaded = Arc::new(RulesetSlot::new(LoadedRules::from_source(src).unwrap()));
-        Arc::new(RulesEnforcer::new(loaded, auth, clock.clone()).with_token_acceptance(acceptance))
+        Arc::new(
+            RulesEnforcer::new(loaded, auth, clock.clone())
+                .with_token_semantics(TokenSemantics::Firestore)
+                .with_token_acceptance(acceptance),
+        )
     });
     let state = RestState {
         local,
@@ -131,6 +135,7 @@ fn call_as(
         authorization: authorization.map(str::to_owned),
         app_check: Vec::new(),
         body,
+        batch_field_order: Vec::new(),
         origin: None,
         browser_metadata: false,
     });
@@ -588,14 +593,13 @@ fn rest_collection_create_oversize_reports_the_explicit_document_resource() {
     assert_eq!(status, 404, "{missing}");
 }
 
+// A violation inside a nested map names the top-level property, as production does for
+// `writes/limits/aggregate-map/strict-only` and for over-long keys of an array-held map.
 #[test]
-fn rest_oversized_nested_values_report_canonical_paths_without_publishing() {
+fn rest_oversized_nested_values_report_the_top_level_property_without_publishing() {
     let s = state(None);
     let oversized = "x".repeat(1_048_488);
-    for (document_id, key, expected_path) in [
-        ("dotted-key", "with.dot", "items.`with.dot`"),
-        ("quoted-key", "with\"quote", "items.`with\"quote`"),
-    ] {
+    for (document_id, key) in [("dotted-key", "with.dot"), ("quoted-key", "with\"quote")] {
         let (status, body) = call(
             &s,
             "PATCH",
@@ -614,7 +618,7 @@ fn rest_oversized_nested_values_report_canonical_paths_without_publishing() {
         assert_eq!(body["error"]["status"], "INVALID_ARGUMENT");
         assert_eq!(
             body["error"]["message"],
-            format!("The value of property \"{expected_path}\" is longer than 1048487 bytes.")
+            "Property items contains an invalid nested entity."
         );
 
         let (status, missing) = call(
@@ -1886,6 +1890,157 @@ fn rest_run_query_supports_standard_find_nearest() {
     );
 }
 
+/// Under production's refusals an end user may not open a read-write transaction, by
+/// `beginTransaction` or a read's `newTransaction`, and may open a read-only one (FS-RULES,
+/// 2026-09-25); the owner opens either.
+#[test]
+fn end_users_may_not_open_a_read_write_transaction_over_rest_in_production() {
+    const OPEN: &str = "rules_version = '2';\nservice cloud.firestore { match /databases/{d}/documents { match /{document=**} { allow read, write: if true; } } }";
+    let (mut s, clock) = state_with_clock(Some(OPEN), TokenAcceptance::Verified);
+    let auth = Arc::new(Mutex::new(AuthStore::new(
+        "demo-app",
+        SplitMix64::new(3),
+        TotpPolicy::default(),
+    )));
+    let loaded = Arc::new(RulesetSlot::new(LoadedRules::from_source(OPEN).unwrap()));
+    s.rules = Some(Arc::new(
+        RulesEnforcer::new(loaded, auth, clock).with_end_user_transactions(false),
+    ));
+    let denial = json!({"error": {"code": 403, "message": "Missing or insufficient permissions.", "status": "PERMISSION_DENIED"}});
+    let document = "projects/demo-app/databases/(default)/documents/c/d";
+    let query = json!({"from": [{"collectionId": "c"}]});
+    for body in [json!({}), json!({"options": {"readWrite": {}}})] {
+        let (status, err) = call_as(&s, "POST", &format!("{DOCS}:beginTransaction"), body, None);
+        assert_eq!((status, err), (403, denial.clone()));
+    }
+    let (status, err) = call_as(
+        &s,
+        "POST",
+        &format!("{DOCS}:batchGet"),
+        json!({"documents": [document], "newTransaction": {"readWrite": {}}}),
+        None,
+    );
+    assert_eq!((status, err), (403, json!([denial.clone()])));
+    let (status, err) = call_as(
+        &s,
+        "POST",
+        &format!("{DOCS}:runQuery"),
+        json!({"structuredQuery": query, "newTransaction": {}}),
+        None,
+    );
+    assert_eq!((status, err), (403, json!([denial])));
+    for (path, body) in [
+        (
+            format!("{DOCS}:beginTransaction"),
+            json!({"options": {"readOnly": {}}}),
+        ),
+        (
+            format!("{DOCS}:batchGet"),
+            json!({"documents": [document], "newTransaction": {"readOnly": {}}}),
+        ),
+        (
+            format!("{DOCS}:runQuery"),
+            json!({"structuredQuery": query, "newTransaction": {"readOnly": {}}}),
+        ),
+    ] {
+        let (status, body) = call_as(&s, "POST", &path, body, None);
+        assert_eq!(status, 200, "{path}: {body}");
+    }
+    let (status, body) = call(&s, "POST", &format!("{DOCS}:beginTransaction"), json!({}));
+    assert_eq!(status, 200, "{body}");
+}
+
+/// Every REST route names its gRPC method in the OAuth refusal's `ErrorInfo`.
+#[test]
+fn the_oauth_refusal_names_the_transcoded_method() {
+    let s = state(Some(
+        "rules_version = '2';\nservice cloud.firestore { match /databases/{d}/documents { match /closed/{id} { allow read, write: if false; } } }",
+    ));
+    for (method, path, grpc_method) in [
+        ("GET", format!("{DOCS}/closed"), "GetOrListDocuments"),
+        ("PATCH", format!("{DOCS}/closed/a"), "UpdateDocument"),
+        ("DELETE", format!("{DOCS}/closed/a"), "DeleteDocument"),
+        (
+            "POST",
+            format!("{DOCS}/closed?documentId=a"),
+            "CreateDocument",
+        ),
+        ("POST", format!("{DOCS}:commit"), "Commit"),
+        ("POST", format!("{DOCS}:batchGet"), "BatchGetDocuments"),
+        ("POST", format!("{DOCS}:runQuery"), "RunQuery"),
+        (
+            "POST",
+            format!("{DOCS}:listCollectionIds"),
+            "ListCollectionIds",
+        ),
+        ("POST", format!("{DOCS}:batchWrite"), "BatchWrite"),
+        (
+            "POST",
+            format!("{DOCS}:beginTransaction"),
+            "BeginTransaction",
+        ),
+        ("POST", format!("{DOCS}:rollback"), "Rollback"),
+        (
+            "POST",
+            format!("{DOCS}:runAggregationQuery"),
+            "RunAggregationQuery",
+        ),
+        ("POST", format!("{DOCS}:partitionQuery"), "PartitionQuery"),
+        ("POST", format!("{DOCS}:executePipeline"), "ExecutePipeline"),
+    ] {
+        let (status, err) = call_as(&s, method, &path, json!({}), Some("Bearer not-a-token"));
+        assert_eq!(status, 401, "{method} {path}: {err}");
+        // Only the document read was recorded; the other methods' names are the gRPC methods
+        // the routes transcode to, and their refusals stay plain objects (not observed).
+        assert_eq!(
+            err["error"]["details"][0]["metadata"]["method"],
+            format!("google.firestore.v1.Firestore.{grpc_method}"),
+            "{method} {path}: {err}"
+        );
+    }
+}
+
+/// Only the front end's OAuth refusal carries the `ErrorInfo`: an expired ID token is refused
+/// with Firestore's own "Missing or invalid authentication." and no details.
+#[test]
+fn an_expired_token_is_refused_without_the_front_ends_error_info() {
+    const OPEN: &str = "rules_version = '2';\nservice cloud.firestore { match /databases/{d}/documents { match /{document=**} { allow read: if true; } } }";
+    let (mut s, clock) = state_with_clock(Some(OPEN), TokenAcceptance::Verified);
+    let auth = Arc::new(Mutex::new(AuthStore::new(
+        "demo-app",
+        SplitMix64::new(3),
+        TotpPolicy::default(),
+    )));
+    let expired = {
+        let mut store = auth.lock().unwrap();
+        let start = LogicalInstant::from_unix_seconds(1_788_004_860 - 3_600 - 60);
+        let uid = store
+            .create_user(
+                fireemu_core_auth::store::NewUser::email("late@example.com"),
+                start,
+            )
+            .unwrap();
+        let claims = store.id_token_claims(&uid, None, start).unwrap();
+        fireemu_core_auth::jwt::encode_unsigned(&claims)
+    };
+    let loaded = Arc::new(RulesetSlot::new(LoadedRules::from_source(OPEN).unwrap()));
+    s.rules = Some(Arc::new(
+        RulesEnforcer::new(loaded, auth, clock).with_token_semantics(TokenSemantics::Firestore),
+    ));
+    let (status, err) = call_as(
+        &s,
+        "GET",
+        &format!("{DOCS}/c/d"),
+        json!({}),
+        Some(&format!("Bearer {expired}")),
+    );
+    assert_eq!(status, 401, "{err}");
+    assert_eq!(
+        err,
+        json!({"error": {"code": 401, "message": "Missing or invalid authentication.", "status": "UNAUTHENTICATED"}})
+    );
+}
+
 #[test]
 fn rest_requests_are_authorized_like_grpc() {
     let s = state(Some(
@@ -1907,7 +2062,11 @@ fn rest_requests_are_authorized_like_grpc() {
         None,
     );
     assert_eq!(status, 403, "{err}");
-    assert_eq!(err["error"]["status"], "PERMISSION_DENIED");
+    // Production's body for every Security Rules denial (FS-RULES scope decision R6).
+    assert_eq!(
+        err,
+        json!({"error": {"code": 403, "message": "Missing or insufficient permissions.", "status": "PERMISSION_DENIED"}})
+    );
     let (status, _) = call_as(
         &s,
         "PATCH",
@@ -1924,7 +2083,25 @@ fn rest_requests_are_authorized_like_grpc() {
         Some("Bearer not-a-token"),
     );
     assert_eq!(status, 401, "{err}");
-    let (status, _) = call_as(
+    // The front end's body, with the ErrorInfo it names the method in (FS-RULES production
+    // recording, 2026-09-24): a document read is `GetOrListDocuments`.
+    assert_eq!(
+        err,
+        json!({"error": {
+            "code": 401,
+            "message": "Request had invalid authentication credentials. Expected OAuth 2 access token, login cookie or other valid authentication credential. See https://developers.google.com/identity/sign-in/web/devconsole-project.",
+            "status": "UNAUTHENTICATED",
+            "details": [{
+                "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                "reason": "CREDENTIALS_MISSING",
+                "metadata": {
+                    "service": "firestore.googleapis.com",
+                    "method": "google.firestore.v1.Firestore.GetOrListDocuments",
+                },
+            }],
+        }})
+    );
+    let (status, err) = call_as(
         &s,
         "POST",
         &format!("{DOCS}:runQuery"),
@@ -1932,6 +2109,24 @@ fn rest_requests_are_authorized_like_grpc() {
         None,
     );
     assert_eq!(status, 403);
+    // A streaming method answers its error inside a one-element array.
+    assert_eq!(
+        err[0]["error"]["message"],
+        "Missing or insufficient permissions."
+    );
+    // batchGet streams too (FS-RULES production recording, 2026-09-24).
+    let (status, err) = call_as(
+        &s,
+        "POST",
+        &format!("{DOCS}:batchGet"),
+        json!({"documents": [format!("projects/demo-app/databases/(default)/documents/closed/a")]}),
+        None,
+    );
+    assert_eq!(status, 403, "{err}");
+    assert_eq!(
+        err[0]["error"]["message"],
+        "Missing or insufficient permissions."
+    );
 }
 
 #[test]
@@ -2028,6 +2223,7 @@ fn rest_binds_unknown_mock_tokens_to_the_requested_project() {
     );
     assert_eq!(status, 401, "{body}");
 
+    // The strict profile refuses a token it cannot verify in production's words.
     let strict = state_with(Some(OWNER_RULES), TokenAcceptance::Verified);
     let (status, body) = call_as(
         &strict,
@@ -2036,7 +2232,11 @@ fn rest_binds_unknown_mock_tokens_to_the_requested_project() {
         write,
         Some(&bearer),
     );
-    assert_eq!(status, 401, "{body}");
+    assert_eq!(status, 403, "{body}");
+    assert_eq!(
+        body["error"]["message"], "Missing or insufficient permissions.",
+        "{body}"
+    );
 }
 
 const EMULATOR: &str = "/emulator/v1/projects/demo-app";
@@ -2443,7 +2643,8 @@ fn malformed_batch_get_documents_is_rejected_without_starting_a_transaction() {
             json!({"documents": documents, "newTransaction": {"readWrite": {}}}),
         );
         assert_eq!(status, 400, "{body}");
-        assert_eq!(body["error"]["status"], "INVALID_ARGUMENT", "{body}");
+        // A streaming method's refusal comes inside a one-element array, as for runQuery.
+        assert_eq!(body[0]["error"]["status"], "INVALID_ARGUMENT", "{body}");
     }
 
     let after = s
@@ -2897,6 +3098,12 @@ fn malformed_retry_transaction_token_is_refused_in_productions_wording() {
         );
         let (status, response) = call(&s, "POST", &path, body);
         assert_eq!(status, 400, "{path}: {response}");
+        // batchGet streams, so its refusal comes inside a one-element array.
+        let response = if path.ends_with(":batchGet") {
+            response[0].clone()
+        } else {
+            response
+        };
         assert_eq!(response["error"]["status"], "INVALID_ARGUMENT", "{path}");
         assert_eq!(response["error"]["message"], expected, "{path}");
     }
@@ -4522,7 +4729,10 @@ fn every_data_plane_surface_refuses_a_database_that_was_never_created() {
         // Production answers the streaming methods' errors inside a one-element array (recorded
         // for refusals in FS-QUERY-INDEX; a never-created database was seen so only in an
         // exploratory probe, which is not closure evidence).
-        let body = if path.ends_with(":runQuery") || path.ends_with(":runAggregationQuery") {
+        let body = if path.ends_with(":runQuery")
+            || path.ends_with(":runAggregationQuery")
+            || path.ends_with(":batchGet")
+        {
             body[0].clone()
         } else {
             body
@@ -4579,6 +4789,7 @@ fn the_security_rules_route_needs_the_control_token_from_a_browser() {
             browser_metadata: browser,
             app_check: Vec::new(),
             body: json!({"rules": {"files": [{"name": "firestore.rules", "content": ALLOW}]}}),
+            batch_field_order: Vec::new(),
         });
         (r.status, r.body)
     };
@@ -4647,6 +4858,7 @@ fn the_emulator_clear_route_needs_the_control_token_from_a_browser() {
                 browser_metadata: browser,
                 app_check: Vec::new(),
                 body: json!({}),
+                batch_field_order: Vec::new(),
             });
             (r.status, r.body)
         };
@@ -5447,4 +5659,421 @@ fn refusal_texts_echo_at_most_one_kibibyte_of_client_input() {
             assert!(message.contains("..."), "{what} strict={strict}");
         }
     }
+}
+
+/// A commit a precondition refused ends its transaction over REST as well (production P08, REST recordings): the
+/// same token then reads and commits as 400 `INVALID_ARGUMENT` in strict (409 `ABORTED` in the emulator profile, as
+/// the official emulator answers), a Rollback answers 200 again and again, and a writer outside the transaction is
+/// not held up by the locks the transaction read.
+#[test]
+fn rest_precondition_refusal_ends_the_transaction_as_production_does() {
+    const GONE: &str = "The referenced transaction has expired or is no longer valid.";
+    for strict in [true, false] {
+        let s = state_with_profile(strict);
+        let (expected_status, expected_code) = if strict {
+            (400, "INVALID_ARGUMENT")
+        } else {
+            (409, "ABORTED")
+        };
+        let (status, seeded) = call(
+            &s,
+            "PATCH",
+            &format!("{DOCS}/rest-refused/held"),
+            json!({"fields": {"v": {"integerValue": "1"}}}),
+        );
+        assert_eq!(status, 200, "{seeded}");
+        let (status, begun) = call(
+            &s,
+            "POST",
+            &format!("{DOCS}:beginTransaction"),
+            json!({"options": {"readWrite": {}}}),
+        );
+        assert_eq!(status, 200, "{begun}");
+        let transaction = begun["transaction"].as_str().unwrap().to_owned();
+        let (status, held) = call(
+            &s,
+            "GET",
+            &format!("{DOCS}/rest-refused/held?transaction={transaction}"),
+            Value::Null,
+        );
+        assert_eq!(status, 200, "{held}");
+        let commit = json!({
+            "transaction": transaction,
+            "writes": [
+                {"update": {"name": "projects/demo-app/databases/(default)/documents/rest-refused/held", "fields": {"v": {"integerValue": "9"}}}},
+                {
+                    "update": {"name": "projects/demo-app/databases/(default)/documents/rest-refused/missing", "fields": {"v": {"integerValue": "2"}}},
+                    "currentDocument": {"exists": true}
+                }
+            ]
+        });
+        let (status, refused) = call(&s, "POST", &format!("{DOCS}:commit"), commit.clone());
+        assert_eq!(status, 404, "{refused}");
+        assert_eq!(refused["error"]["status"], "NOT_FOUND", "{refused}");
+        let (status, read) = call(
+            &s,
+            "GET",
+            &format!("{DOCS}/rest-refused/held?transaction={transaction}"),
+            Value::Null,
+        );
+        assert_eq!(status, expected_status, "strict={strict}: {read}");
+        assert_eq!(read["error"]["status"], expected_code, "{read}");
+        assert_eq!(read["error"]["message"], GONE, "{read}");
+        let (status, again) = call(&s, "POST", &format!("{DOCS}:commit"), commit);
+        assert_eq!(status, expected_status, "strict={strict}: {again}");
+        assert_eq!(again["error"]["message"], GONE, "{again}");
+        let (status, writer) = call(
+            &s,
+            "PATCH",
+            &format!("{DOCS}/rest-refused/held"),
+            json!({"fields": {"v": {"integerValue": "3"}}}),
+        );
+        assert_eq!(status, 200, "the lock is gone at once: {writer}");
+        for _ in 0..2 {
+            let (status, rolled_back) = call(
+                &s,
+                "POST",
+                &format!("{DOCS}:rollback"),
+                json!({"transaction": transaction}),
+            );
+            assert_eq!(status, 200, "{rolled_back}");
+        }
+        let (status, document) = call(&s, "GET", &format!("{DOCS}/rest-refused/held"), Value::Null);
+        assert_eq!(status, 200, "{document}");
+        assert_eq!(document["fields"]["v"]["integerValue"], "3");
+    }
+}
+
+/// `FS-DATA-WRITE/map-value-key-validation`: production answers a bad map key by context
+/// (partial supplement `partial-7bfd51026a2ac56617d81504`, recorded twice). A write refuses
+/// the enclosing property, a query filter accepts an empty key, and a `__type__` key holding an
+/// integer is a type-tag error before it is a reserved name.
+#[test]
+fn map_value_keys_are_validated_by_context_like_production() {
+    for strict in [true, false] {
+        let s = state_with_profile(strict);
+        let overlong = "k".repeat(1_501);
+        for (label, key, message) in [
+            ("empty", "", "Property m contains an invalid nested entity."),
+            (
+                "overlong",
+                overlong.as_str(),
+                "Property m contains an invalid nested entity.",
+            ),
+            ("reserved", "__bad__", "field name '__bad__' is reserved."),
+        ] {
+            let (status, body) = call(
+                &s,
+                "POST",
+                &format!("{DOCS}:commit"),
+                json!({"writes": [{"update": {
+                    "name": format!("projects/demo-app/databases/(default)/documents/mapValidation/{label}"),
+                    "fields": {"m": {"mapValue": {"fields": {key: {"integerValue": "1"}}}}}
+                }}]}),
+            );
+            assert_eq!(status, 400, "{label} {strict}: {body}");
+            assert_eq!(body["error"]["status"], "INVALID_ARGUMENT");
+            assert_eq!(body["error"]["message"], message, "{label} {strict}");
+            let (status, _) = call(
+                &s,
+                "GET",
+                &format!("{DOCS}/mapValidation/{label}"),
+                Value::Null,
+            );
+            assert_eq!(status, 404, "{label} {strict}");
+        }
+        let query = |key: &str| {
+            json!({"structuredQuery": {
+                "from": [{"collectionId": "mapValidation"}],
+                "where": {"fieldFilter": {
+                    "field": {"fieldPath": "m"},
+                    "op": "EQUAL",
+                    "value": {"mapValue": {"fields": {key: {"integerValue": "1"}}}}
+                }}
+            }})
+        };
+        let (status, body) = call(&s, "POST", &format!("{DOCS}:runQuery"), query(""));
+        assert_eq!(status, 200, "empty {strict}: {body}");
+        for (label, key, message) in [
+            (
+                "overlong",
+                overlong.as_str(),
+                "value for m is too large to be used in a query",
+            ),
+            ("reserved", "__bad__", "field name '__bad__' is reserved."),
+            (
+                "type-tag",
+                "__type__",
+                "Field __type__ must be a string; founds LONG.",
+            ),
+        ] {
+            let (status, body) = call(&s, "POST", &format!("{DOCS}:runQuery"), query(key));
+            assert_eq!(status, 400, "{label} {strict}: {body}");
+            // runQuery streams its answer, so a refusal before the first result is one element.
+            let error = if body.is_array() {
+                &body[0]["error"]
+            } else {
+                &body["error"]
+            };
+            assert_eq!(
+                error["status"], "INVALID_ARGUMENT",
+                "{label} {strict}: {body}"
+            );
+            assert_eq!(error["message"], message, "{label} {strict}");
+        }
+    }
+}
+
+/// `writes/limits/aggregate-map/strict-only`: an over-long string nested in a map is reported
+/// as an invalid nested entity of the top-level property, not by its dotted path.
+#[test]
+fn an_oversized_value_nested_in_a_map_is_an_invalid_nested_entity() {
+    let s = state_with_profile(true);
+    let (status, body) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}:commit"),
+        json!({"writes": [{"update": {
+            "name": "projects/demo-app/databases/(default)/documents/m/x",
+            "fields": {"m": {"mapValue": {"fields": {"s": {"stringValue": "x".repeat(1_048_500)}}}}}
+        }}]}),
+    );
+    assert_eq!(status, 400, "{body}");
+    assert_eq!(
+        body["error"]["message"],
+        "Property m contains an invalid nested entity."
+    );
+    let (status, _) = call(&s, "GET", &format!("{DOCS}/m/x"), Value::Null);
+    assert_eq!(status, 404);
+}
+
+/// Owner decisions A and D2 (2026-09-25): strict refuses a delete only from the smallest size
+/// every recording refused on its route. With a 1,000-byte name that is 12,113 elements for
+/// REST DELETE and `BatchWrite` and 12,112 for Commit (`near-limit-delete-refusal`, delta-v3 and
+/// the band exploration). `BatchWrite` reports the refusal per write, inside HTTP 200.
+#[test]
+fn deletes_are_refused_from_each_route_s_deterministic_minimum() {
+    // Each collection ID is 997 bytes plus a one-character suffix, so every name is 1,000 bytes.
+    let collection = "c".repeat(997);
+    let seed = |s: &RestState, id: &str, count: i64| {
+        let (status, body) = call(
+            s,
+            "PATCH",
+            &format!("{DOCS}/{collection}{id}/d"),
+            json!({"fields": {"a": {"arrayValue": {"values":
+                (0..count).map(|n| json!({"integerValue": n.to_string()})).collect::<Vec<_>>()
+            }}}}),
+        );
+        assert_eq!(status, 200, "seed {id} {count}: {body}");
+    };
+    let name =
+        |id: &str| format!("projects/demo-app/databases/(default)/documents/{collection}{id}/d");
+    let too_big = "Transaction too big. Decrease transaction size.";
+    let s = state_with_profile(true);
+
+    seed(&s, "r", 12_112);
+    let (status, body) = call(
+        &s,
+        "DELETE",
+        &format!("{DOCS}/{collection}r/d"),
+        Value::Null,
+    );
+    assert_eq!(status, 200, "REST 12,112: {body}");
+    seed(&s, "R", 12_113);
+    let (status, body) = call(
+        &s,
+        "DELETE",
+        &format!("{DOCS}/{collection}R/d"),
+        Value::Null,
+    );
+    assert_eq!(status, 400, "REST 12,113: {body}");
+    assert_eq!(body["error"]["message"], too_big);
+
+    seed(&s, "k", 12_111);
+    let (status, body) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}:commit"),
+        json!({"writes": [{"delete": name("k")}]}),
+    );
+    assert_eq!(status, 200, "Commit 12,111: {body}");
+    seed(&s, "K", 12_112);
+    let (status, body) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}:commit"),
+        json!({"writes": [{"delete": name("K")}]}),
+    );
+    assert_eq!(status, 400, "Commit 12,112: {body}");
+    assert_eq!(body["error"]["message"], too_big);
+
+    seed(&s, "w", 12_112);
+    let (status, body) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}:batchWrite"),
+        json!({"writes": [{"delete": name("w")}]}),
+    );
+    assert_eq!(status, 200, "BatchWrite 12,112: {body}");
+    assert!(body["status"][0].get("code").is_none(), "{body}");
+    seed(&s, "W", 12_113);
+    let (status, body) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}:batchWrite"),
+        json!({"writes": [{"delete": name("W")}]}),
+    );
+    assert_eq!(status, 200, "BatchWrite 12,113: {body}");
+    assert_eq!(body["status"][0]["code"], 3, "{body}");
+    assert_eq!(body["status"][0]["message"], too_big);
+    let (status, _) = call(&s, "GET", &format!("{DOCS}/{collection}W/d"), Value::Null);
+    assert_eq!(status, 200, "a refused delete keeps the document");
+
+    // The emulator profile adds no refusal the official emulator does not make.
+    let emulator = state_with_profile(false);
+    seed(&emulator, "R", 12_113);
+    let (status, body) = call(
+        &emulator,
+        "DELETE",
+        &format!("{DOCS}/{collection}R/d"),
+        Value::Null,
+    );
+    assert_eq!(status, 200, "emulator REST 12,113: {body}");
+}
+
+/// Known edge, unobserved in production (issue: managed Admin operations use Commit-route limits
+/// in strict): a managed `bulkDeleteDocuments` deletes through the Commit route, so under strict
+/// a document inside Commit's delete window (12,112 elements under a 1,000-byte name) refuses
+/// the chunk of up to 500 documents that holds it. The emulator profile deletes it.
+#[test]
+fn strict_bulk_delete_applies_the_commit_route_delete_window() {
+    let collection = format!("{}K", "c".repeat(997));
+    for strict in [true, false] {
+        let s = state_with_profile(strict);
+        let (status, body) = call(
+            &s,
+            "PATCH",
+            &format!("{DOCS}/{collection}/d"),
+            json!({"fields": {"a": {"arrayValue": {"values":
+                (0..12_112).map(|n| json!({"integerValue": n.to_string()})).collect::<Vec<_>>()
+            }}}}),
+        );
+        assert_eq!(status, 200, "strict {strict}: {body}");
+        let (status, answer) = call(
+            &s,
+            "POST",
+            "/v1/projects/demo-app/databases/(default):bulkDeleteDocuments",
+            json!({"collectionIds": [collection]}),
+        );
+        let (after, _) = call(&s, "GET", &format!("{DOCS}/{collection}/d"), Value::Null);
+        if strict {
+            assert_eq!(
+                (status, answer["error"]["message"].as_str()),
+                (400, Some("Transaction too big. Decrease transaction size."))
+            );
+            assert_eq!(after, 200, "a refused bulk delete keeps the document");
+        } else {
+            assert_eq!(status, 200, "{answer}");
+            let (_, done) = call(
+                &s,
+                "GET",
+                &format!("/v1/{}", answer["name"].as_str().unwrap()),
+                Value::Null,
+            );
+            assert_eq!(done["done"], json!(true));
+            assert_eq!(after, 404);
+        }
+    }
+}
+
+/// The same known edge past one chunk: a managed bulk delete commits 500 documents at a time and
+/// stops at the first refused chunk without undoing the earlier ones, so under strict a refused
+/// document that sorts after the first 500 leaves the operation partly done.
+#[test]
+fn strict_bulk_delete_stops_at_the_refused_chunk_after_deleting_earlier_chunks() {
+    let collection = format!("{}K", "c".repeat(997));
+    let s = state_with_profile(true);
+    for n in 0..500 {
+        let (status, body) = call(
+            &s,
+            "PATCH",
+            &format!("{DOCS}/{collection}/a{n:03}"),
+            json!({"fields": {}}),
+        );
+        assert_eq!(status, 200, "{body}");
+    }
+    let (status, body) = call(
+        &s,
+        "PATCH",
+        &format!("{DOCS}/{collection}/d"),
+        json!({"fields": {"a": {"arrayValue": {"values":
+            (0..12_112).map(|n| json!({"integerValue": n.to_string()})).collect::<Vec<_>>()
+        }}}}),
+    );
+    assert_eq!(status, 200, "{body}");
+    let (status, answer) = call(
+        &s,
+        "POST",
+        "/v1/projects/demo-app/databases/(default):bulkDeleteDocuments",
+        json!({"collectionIds": [collection]}),
+    );
+    assert_eq!(
+        (status, answer["error"]["message"].as_str()),
+        (400, Some("Transaction too big. Decrease transaction size."))
+    );
+    let (status, _) = call(&s, "GET", &format!("{DOCS}/{collection}/a000"), Value::Null);
+    assert_eq!(status, 404, "the first chunk stays deleted");
+    let (status, _) = call(&s, "GET", &format!("{DOCS}/{collection}/d"), Value::Null);
+    assert_eq!(status, 200, "the refused chunk keeps its document");
+}
+
+/// Production refuses another project's ID token with its permission denial, also where no
+/// document names the project (a transaction on its database; AUTH-FS-CROSS stage 1).
+#[test]
+fn another_projects_token_is_refused_on_its_database_in_productions_shape() {
+    const OPEN: &str = "rules_version = '2';\nservice cloud.firestore { match /databases/{d}/documents { match /{document=**} { allow read: if true; } } }";
+    let (mut s, clock) = state_with_clock(Some(OPEN), TokenAcceptance::Verified);
+    let auth = Arc::new(Mutex::new(AuthStore::new(
+        "demo-app",
+        SplitMix64::new(3),
+        TotpPolicy::default(),
+    )));
+    let token = {
+        let mut store = auth.lock().unwrap();
+        let now = LogicalInstant::from_unix_seconds(1_788_004_860);
+        let uid = store
+            .create_user(
+                fireemu_core_auth::store::NewUser::email("a@example.com"),
+                now,
+            )
+            .unwrap();
+        fireemu_core_auth::jwt::encode_unsigned(&store.id_token_claims(&uid, None, now).unwrap())
+    };
+    let loaded = Arc::new(RulesetSlot::new(LoadedRules::from_source(OPEN).unwrap()));
+    s.rules = Some(Arc::new(
+        RulesEnforcer::new(loaded, auth, clock)
+            .with_token_semantics(TokenSemantics::Firestore)
+            .with_token_acceptance(TokenAcceptance::Verified),
+    ));
+    let (status, err) = call_as(
+        &s,
+        "POST",
+        "/v1/projects/demo-b/databases/(default)/documents:beginTransaction",
+        json!({"options": {"readOnly": {}}}),
+        Some(&format!("Bearer {token}")),
+    );
+    assert_eq!(status, 403, "{err}");
+    assert_eq!(
+        err,
+        json!({"error": {"code": 403, "message": "Missing or insufficient permissions.", "status": "PERMISSION_DENIED"}})
+    );
+    // Its own project opens the transaction.
+    let (status, _) = call_as(
+        &s,
+        "POST",
+        &format!("{DOCS}:beginTransaction"),
+        json!({"options": {"readOnly": {}}}),
+        Some(&format!("Bearer {token}")),
+    );
+    assert_eq!(status, 200);
 }

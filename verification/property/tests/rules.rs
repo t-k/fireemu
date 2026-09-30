@@ -91,17 +91,24 @@ fn prop_rules_regex_exhaustion_never_allows() {
                 RulesValue::String("a".repeat(10_000)),
             )]));
 
-            assert!(
-                matches!(
-                    evaluate_request(&parsed, &request).decision,
-                    Decision::Deny(DenyReason::BudgetExceeded {
-                        limit_id: "FIREEMU-REGEX-STEPS-PER-MATCH",
-                        current,
-                        maximum,
-                    }) if current > maximum
-                ),
-                "negation={negation}, nested_allow={nested_allow}"
-            );
+            let decision = evaluate_request(&parsed, &request).decision;
+            // Exhaustion never grants anything by itself; an allow that holds on its own still
+            // decides, as allow statements are alternatives (FS-RULES 2026-09-24).
+            if nested_allow {
+                assert!(matches!(decision, Decision::Allow), "negation={negation}");
+            } else {
+                assert!(
+                    matches!(
+                        decision,
+                        Decision::Deny(DenyReason::BudgetExceeded {
+                            limit_id: "FIREEMU-REGEX-STEPS-PER-MATCH",
+                            current,
+                            maximum,
+                        }) if current > maximum
+                    ),
+                    "negation={negation}"
+                );
+            }
         }
     }
 }

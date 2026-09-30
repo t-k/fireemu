@@ -13,6 +13,9 @@ pub enum EnforcementState {
     Off,
     /// New passwords are checked against the configured constraints.
     Enforce,
+    /// Written without a state (production's `PASSWORD_POLICY_ENFORCEMENT_STATE_UNSPECIFIED`,
+    /// which it stores and reports as no state); checks nothing, as `Off`.
+    Unspecified,
 }
 
 /// Operation whose password is being checked.
@@ -24,6 +27,9 @@ pub enum Operation {
     CredentialAddition,
     /// Changing an existing password.
     Change,
+    /// An administrator setting an account's password: production takes one below the
+    /// minimum length (sandbox recording 2026-09-25).
+    AdminUpdate,
     /// Confirming a password reset.
     Reset,
     /// Signing in with an existing password credential.
@@ -97,6 +103,15 @@ pub struct PasswordPolicy {
     pub require_non_alphanumeric: bool,
     /// The server-provided punctuation set used by the SDK projection.
     pub allowed_non_alphanumeric: BTreeSet<char>,
+    /// Whether the project was given this policy. A project starts without one: production
+    /// then reports no `passwordPolicyConfig` and answers clients with its default policy
+    /// (sandbox reads 2026-09-23 and 2026-09-25), while applying the same checks as an unset
+    /// policy here.
+    pub configured: bool,
+    /// Whether the minimum was written. Production reports only the options that were written
+    /// (a policy with a maximum only has no minimum in its projections) while checking the
+    /// minimum of 6 all the same.
+    pub min_length_written: bool,
 }
 
 impl Default for PasswordPolicy {
@@ -111,6 +126,8 @@ impl Default for PasswordPolicy {
             require_numeric: false,
             require_non_alphanumeric: false,
             allowed_non_alphanumeric: default_allowed_non_alphanumeric(),
+            configured: false,
+            min_length_written: false,
         }
     }
 }
@@ -161,6 +178,8 @@ impl PasswordPolicy {
             require_numeric,
             require_non_alphanumeric,
             allowed_non_alphanumeric,
+            configured: true,
+            min_length_written: true,
         })
     }
 
@@ -213,6 +232,10 @@ pub fn default_allowed_non_alphanumeric() -> BTreeSet<char> {
     DEFAULT_NON_ALPHANUMERIC_ORDER.chars().collect()
 }
 
+/// The longest password production accepts, in UTF-16 code units, whatever the policy
+/// (sandbox recording 2026-09-23, `policy/default/routes`).
+pub const MAX_PASSWORD_UTF16_UNITS: usize = 4096;
+
 /// Production's non-alphanumeric characters in the order `v2/passwordPolicy` lists them. `+`
 /// and `=` are not among them (sandbox recording 2026-09-23, `policy/enforce-custom`).
 pub const DEFAULT_NON_ALPHANUMERIC_ORDER: &str = r#"^$*.[]{}()?"!@#%&/\,><':;|_~`-"#;
@@ -223,6 +246,28 @@ mod tests {
         default_allowed_non_alphanumeric, ConfigError, EnforcementState, Operation, PasswordPolicy,
         ViolationCode,
     };
+
+    #[test]
+    fn a_project_starts_without_a_configured_policy_and_any_built_policy_is_configured() {
+        // Production reports no passwordPolicyConfig until one is written (sandbox read
+        // 2026-09-23); the default answers as the policy every project has.
+        assert!(!PasswordPolicy::default().configured);
+        assert!(strict().configured);
+        let same_as_default = PasswordPolicy::try_new(
+            EnforcementState::Off,
+            false,
+            6,
+            None,
+            false,
+            false,
+            false,
+            false,
+            default_allowed_non_alphanumeric(),
+        )
+        .unwrap();
+        assert!(same_as_default.configured);
+        assert_ne!(same_as_default, PasswordPolicy::default());
+    }
 
     fn strict() -> PasswordPolicy {
         PasswordPolicy::try_new(

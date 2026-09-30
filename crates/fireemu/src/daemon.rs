@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use fireemu_adapter_grpc::gateway::Gateway;
 use fireemu_adapter_grpc::local::LocalBackend;
 use fireemu_adapter_grpc::rest::RestState;
-use fireemu_adapter_grpc::rules::RulesEnforcer;
+use fireemu_adapter_grpc::rules::{RulesEnforcer, TokenSemantics};
 use fireemu_adapter_grpc::serve::serve_multiplexed;
 use fireemu_adapter_grpc::service::GatewayService;
 use fireemu_adapter_http::identity_toolkit::{AuthState, AuthWallClock};
@@ -28,12 +28,12 @@ use fireemu_proto_firestore::google::firestore::v1::firestore_server::FirestoreS
 
 use super::{
     app_check_state, bind_listeners, child_environment, clock_millis, control, control_state,
-    exit_code, functions, hub, hub_emulators, import_export, load_rules, load_storage_rules,
-    logical_system_time, print_banner, print_rules_status, random_secret, reportable_exit_code,
-    runtime_thread_counts, service_admission, session_rsa_cache, spawn_child,
-    start_firestore_config_reload_supervisors, stop_child, storage_state, ui, wait_child,
-    BoundAddrs, ExecPlan, Exporter, Listeners, Options, RedactedRuntimeConfig, RuntimeConfig,
-    Selection, ShutdownSignals, Verbosity,
+    exit_code, functions, hub, hub_emulators, import_export, install_auth_credential_entropy,
+    load_rules, load_storage_rules, logical_system_time, print_banner, print_rules_status,
+    random_secret, reportable_exit_code, runtime_thread_counts, service_admission,
+    session_rsa_cache, spawn_child, start_firestore_config_reload_supervisors, stop_child,
+    storage_state, ui, wait_child, BoundAddrs, ExecPlan, Exporter, Listeners, Options,
+    RedactedRuntimeConfig, RuntimeConfig, Selection, ShutdownSignals, Verbosity,
 };
 
 struct BoundStartup {
@@ -180,6 +180,28 @@ fn auth_project_config(cfg: &RuntimeConfig) -> ProjectAuthConfig {
     }
 }
 
+/// The default project's sign-in providers: fireemu's defaults with `auth.signIn`'s members.
+fn auth_sign_in_config(cfg: &RuntimeConfig) -> fireemu_core_auth::store::SignInConfig {
+    let settings = &cfg.auth_sign_in;
+    let mut config = fireemu_core_auth::store::SignInConfig::default();
+    if let Some(value) = settings.email_enabled {
+        config.email_enabled = value;
+    }
+    if let Some(value) = settings.password_required {
+        config.password_required = value;
+    }
+    if let Some(value) = settings.anonymous_enabled {
+        config.anonymous_enabled = value;
+    }
+    if let Some(value) = settings.phone_enabled {
+        config.phone_enabled = value;
+    }
+    if let Some(numbers) = &settings.test_phone_numbers {
+        config.test_phone_numbers.clone_from(numbers);
+    }
+    config
+}
+
 fn auth_namespace_config_patch(
     config: crate::config::AuthNamespaceConfig,
 ) -> AuthNamespaceConfigPatch {
@@ -303,46 +325,55 @@ fn blocking_auth_selection(
     }
 }
 
-fn configure_blocking_auth_bridge(
-    cfg: &RuntimeConfig,
-    runtime: &fireemu_adapter_functions::runtime::FunctionsRuntime,
-) -> Result<
-    (
-        fireemu_core_functions::manifest::BlockingAuthSelections,
-        bool,
-        Option<fireemu_core_functions::manifest::BlockingAuthTokenPolicy>,
-    ),
-    String,
-> {
+/// How `signInWithIdp` assertions are verified (AUTH-FEDERATION owner decision O4). Strict
+/// verifies signed OIDC ID tokens with the `auth.idpSigners` keys, and refuses every `IdP`
+/// sign-in without them; the emulator profile keeps the fixture `IdP` and ignores the keys.
+fn idp_assertion_policy(
+    profile: crate::config::CompatibilityProfile,
+    signers: Option<&serde_json::Map<String, serde_json::Value>>,
+) -> Result<fireemu_adapter_http::identity_toolkit::IdpAssertionPolicy, String> {
+    use fireemu_adapter_http::identity_toolkit::{IdpAssertionPolicy, IdpSignerTrust};
+    Ok(match profile {
+        crate::config::CompatibilityProfile::Emulator => IdpAssertionPolicy::Fixture,
+        crate::config::CompatibilityProfile::Strict => {
+            // Validated when the configuration was parsed; a failure here is a configuration bug.
+            let trust = signers
+                .map(IdpSignerTrust::from_jwks)
+                .transpose()
+                .map_err(|e| format!("auth.idpSigners: {e}"))?
+                .unwrap_or_default();
+            IdpAssertionPolicy::SignedOidc(Arc::new(trust))
+        }
+    })
+}
+
+/// The bridge's selections, global forwarding switch and forwarding restrictions, as the local
+/// configuration gives them.
+type BlockingAuthBridgeSettings = (
+    fireemu_core_functions::manifest::BlockingAuthSelections,
+    bool,
+    Option<fireemu_core_functions::manifest::BlockingAuthTokenPolicy>,
+);
+
+fn blocking_auth_bridge_settings(cfg: &RuntimeConfig) -> BlockingAuthBridgeSettings {
     let Some(config) = cfg.auth_blocking_functions.as_ref() else {
-        return Ok((
+        return (
             fireemu_core_functions::manifest::BlockingAuthSelections::default(),
             cfg.auth_forward_inbound_credentials,
             None,
-        ));
+        );
     };
     let selections = match &config.triggers {
         None => fireemu_core_functions::manifest::BlockingAuthSelections::default(),
+        // The local configuration names beforeCreate and beforeSignIn only; a trigger map it
+        // gives replaces the whole selection, as an Admin update's does.
         Some(triggers) => fireemu_core_functions::manifest::BlockingAuthSelections {
             before_create: blocking_auth_selection(triggers.before_create.as_ref()),
             before_sign_in: blocking_auth_selection(triggers.before_sign_in.as_ref()),
+            before_send_email: fireemu_core_functions::manifest::BlockingAuthSelection::Disabled,
+            before_send_sms: fireemu_core_functions::manifest::BlockingAuthSelection::Disabled,
         },
     };
-    for (event, selection) in [
-        (
-            fireemu_core_functions::manifest::BlockingAuthEvent::BeforeCreate,
-            &selections.before_create,
-        ),
-        (
-            fireemu_core_functions::manifest::BlockingAuthEvent::BeforeSignIn,
-            &selections.before_sign_in,
-        ),
-    ] {
-        runtime
-            .manifest()
-            .blocking_auth_target(event, selection)
-            .map_err(|error| format!("auth.blockingFunctions: {error}"))?;
-    }
     let forwarding_restrictions = config.forward_inbound_credentials.map(|value| {
         fireemu_core_functions::manifest::BlockingAuthTokenPolicy {
             id_token: value.id_token,
@@ -350,11 +381,11 @@ fn configure_blocking_auth_bridge(
             refresh_token: value.refresh_token,
         }
     });
-    Ok((
+    (
         selections,
         cfg.auth_forward_inbound_credentials,
         forwarding_restrictions,
-    ))
+    )
 }
 
 /// Reapplies every explicitly configured password policy after an import.
@@ -431,6 +462,22 @@ pub(crate) fn custom_token_signer_note(cfg: &RuntimeConfig) -> Option<&'static s
         && cfg.auth_custom_token_signers.is_none())
     .then_some(
         "  custom tokens:    refused (strict accepts only signed tokens: set auth.customTokenSigners to the service accounts' public JWK sets, or use profile \"emulator\" for the Admin SDK's unsigned emulator tokens)",
+    )
+}
+
+/// The startup notice for a strict profile without `IdP` signers: strict verifies OIDC ID
+/// tokens only with `auth.idpSigners` keys, so without them it refuses every OIDC sign-in (SAML
+/// responses are verified with each provider's configured certificates).
+pub(crate) fn idp_signer_note(cfg: &RuntimeConfig) -> Option<&'static str> {
+    idp_signer_note_for(cfg.profile, cfg.auth_idp_signers.is_some())
+}
+
+fn idp_signer_note_for(
+    profile: crate::config::CompatibilityProfile,
+    configured: bool,
+) -> Option<&'static str> {
+    (profile == crate::config::CompatibilityProfile::Strict && !configured).then_some(
+        "  identity providers: OIDC refused (strict accepts only signed OIDC ID tokens: set auth.idpSigners to the issuers' public JWK sets); SAML responses are verified with each provider's certificates; use profile \"emulator\" for the fixture IdP",
     )
 }
 
@@ -553,6 +600,7 @@ fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
         })
         .transpose()
         .map_err(|e| format!("auth.customTokenSigners: {e}"))?;
+    let idp_assertions = idp_assertion_policy(cfg.profile, cfg.auth_idp_signers.as_ref())?;
     let auth = Arc::new(AuthState {
         store: auth_store.clone(),
         clock: clock.clone(),
@@ -564,8 +612,9 @@ fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
             .then(|| auth_notice_sink(log_bus.clone(), clock.clone())),
         blocking: match functions_runtime.as_ref() {
             Some(runtime) => {
-                let (selections, forward, restrictions) =
-                    configure_blocking_auth_bridge(&cfg, runtime)?;
+                let (selections, forward, restrictions) = blocking_auth_bridge_settings(&cfg);
+                functions::check_blocking_auth_selections(runtime.manifest(), &selections)
+                    .map_err(|error| format!("auth.blockingFunctions: {error}"))?;
                 Some(Arc::new(
                     functions::BlockingAuthBridge::try_new_with_selections_and_forwarding_policy(
                         runtime.clone(),
@@ -573,7 +622,8 @@ fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
                         forward,
                         restrictions,
                     )
-                    .map_err(|error| format!("auth.blockingFunctions: {error}"))?,
+                    .map_err(|error| format!("auth.blockingFunctions: {error}"))?
+                    .for_profile(cfg.profile),
                 )
                     as Arc<
                         dyn fireemu_adapter_http::identity_toolkit::AuthBlockingHook,
@@ -621,6 +671,7 @@ fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
             }
         },
         custom_token_trust,
+        idp_assertions,
         tenancy: Some(tenancy.clone()),
         app_check: app_check.clone(),
         app_check_policy: auth_policy,
@@ -650,8 +701,24 @@ fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
         storage_admin_capability.clone(),
         control_token.clone(),
     )?;
+    // Managed export and import (the Firestore Admin API) write to and read from this
+    // Storage emulator.
+    backend
+        .admin()
+        .set_managed_storage(Arc::new(crate::managed_storage::StorageBridge::new(
+            storage.clone(),
+        )));
     if let Some(runtime) = &functions_runtime {
         runtime.set_faults(faults.for_project(runtime.project()));
+        let verifier = Arc::new(
+            RulesEnforcer::new(
+                Arc::new(RulesetSlot::default()),
+                auth_store.clone(),
+                clock.clone(),
+            )
+            .with_registry(registry.clone()),
+        );
+        runtime.set_callable_auth_verifier(verifier.clone());
         if let Some(gate) = &app_check_gate {
             // The callable baseline is `unenforced`: the daemon classifies and records
             // every callable token, and the callable's own `enforceAppCheck` decides
@@ -667,14 +734,6 @@ fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
                 fireemu_core_app_check::verify::BaselineMode::Unenforced,
             )
             .ok_or_else(|| "the callable App Check policy is unavailable".to_owned())?;
-            let verifier = Arc::new(
-                RulesEnforcer::new(
-                    Arc::new(RulesetSlot::default()),
-                    auth_store.clone(),
-                    clock.clone(),
-                )
-                .with_registry(registry.clone()),
-            );
             runtime.set_callable_trust(Arc::new(
                 fireemu_adapter_functions::callable::CallableTrust::new(
                     policy,
@@ -746,6 +805,34 @@ fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
         control,
         pubsub: pubsub_handle,
     })
+}
+
+/// The wall time Firestore follows: the strict profile's unpinned daemon judges token expiry
+/// and `request.time` at the time of each request, as production does (FS-RULES token-expiry,
+/// AUTH-FS-CROSS stage 2). A pinned clock keeps moving only when told to (ADR-004), and the
+/// emulator profile keeps its clock as it was, adding no refusal the official emulator lacks.
+fn firestore_wall_source(
+    profile: crate::config::CompatibilityProfile,
+    wall_clock: Option<AuthWallClock>,
+) -> Option<fireemu_adapter_grpc::rules::WallSource> {
+    if profile != crate::config::CompatibilityProfile::Strict {
+        return None;
+    }
+    let wall_clock = wall_clock?;
+    Some(Arc::new(move || wall_clock.now()))
+}
+
+/// The Firestore enforcer's settings that follow from the compatibility profile.
+fn firestore_profile_settings(
+    enforcer: RulesEnforcer,
+    cfg: &crate::config::RuntimeConfig,
+) -> RulesEnforcer {
+    enforcer
+        .with_token_semantics(TokenSemantics::Firestore)
+        .with_token_acceptance(cfg.token_acceptance)
+        .with_refusal_without_ruleset(cfg.refuse_without_ruleset)
+        .with_end_user_transactions(cfg.end_user_transactions)
+        .with_listen_stream_lifetime(cfg.listen_stream_lifetime)
 }
 
 fn assemble_suite(assembly: ServiceAssembly, exec_mode: bool) -> Result<ReadySuite, String> {
@@ -889,12 +976,17 @@ fn assemble_suite(assembly: ServiceAssembly, exec_mode: bool) -> Result<ReadySui
         }
     }
 
+    let wall_source = firestore_wall_source(cfg.profile, auth.wall_clock.clone());
     let enforcer = cfg.rules_enforced.then(|| {
+        let enforcer = RulesEnforcer::new(rules.clone(), auth_store.clone(), clock.clone());
+        let enforcer = match wall_source {
+            Some(source) => enforcer.with_wall_clock(source),
+            None => enforcer,
+        };
         Arc::new(
-            RulesEnforcer::new(rules.clone(), auth_store.clone(), clock.clone())
+            firestore_profile_settings(enforcer, &cfg)
                 .with_registry(registry.clone())
-                .with_database_rules(database_rules.clone())
-                .with_token_acceptance(cfg.token_acceptance),
+                .with_database_rules(database_rules.clone()),
         )
     });
     let mut service = GatewayService::local(gateway.clone(), backend.clone());
@@ -1022,13 +1114,19 @@ async fn serve_suite(
             "gRPC",
             serve_multiplexed(
                 listener,
-                FirestoreServer::new(firestore_service)
-                    .max_decoding_message_size(fireemu_adapter_grpc::serve::MAX_GRPC_MESSAGE_BYTES,)
-                    // Not a catalog limit: the request bound is FS-LIMIT-API-REQUEST-BYTES,
-                    // the response bound is a local memory guard.
-                    .max_encoding_message_size(
-                        fireemu_adapter_grpc::serve::MAX_GRPC_RESPONSE_BYTES,
-                    ),
+                // The Firestore Admin and long-running-operation services share the port.
+                fireemu_adapter_grpc::admin::grpc::AdminRouter::new(
+                    FirestoreServer::new(firestore_service)
+                        .max_decoding_message_size(
+                            fireemu_adapter_grpc::serve::MAX_GRPC_MESSAGE_BYTES,
+                        )
+                        // Not a catalog limit: the request bound is FS-LIMIT-API-REQUEST-BYTES,
+                        // the response bound is a local memory guard.
+                        .max_encoding_message_size(
+                            fireemu_adapter_grpc::serve::MAX_GRPC_RESPONSE_BYTES,
+                        ),
+                    rest.clone(),
+                ),
                 rest.clone(),
             )
         );
@@ -1051,13 +1149,22 @@ async fn serve_suite(
         spawn_server!("Emulator Hub", hub::serve(listener, hub_state.clone()));
     }
     let functions_http_admission = fireemu_adapter_functions::http::HttpAdmission::new();
+    let functions_http_profile = match cfg.profile {
+        crate::config::CompatibilityProfile::Emulator => {
+            fireemu_adapter_functions::http::FunctionsHttpProfile::Emulator
+        }
+        crate::config::CompatibilityProfile::Strict => {
+            fireemu_adapter_functions::http::FunctionsHttpProfile::Strict
+        }
+    };
     if let (Some(listener), Some(runtime)) = (functions_listener, functions_runtime.clone()) {
         spawn_server!(
             "Functions",
-            fireemu_adapter_functions::http::serve_functions(
+            fireemu_adapter_functions::http::serve_functions_with_profile(
                 listener,
                 runtime,
                 functions_http_admission.clone(),
+                functions_http_profile,
             )
         );
     }
@@ -1293,6 +1400,9 @@ fn close_functions_source_admission(
     close();
 }
 
+/// The stack of every runtime thread (see `build_runtime`).
+const RUNTIME_THREAD_STACK_BYTES: usize = 8 * 1024 * 1024;
+
 fn build_runtime() -> Result<tokio::runtime::Runtime, String> {
     let worker_override = std::env::var("FIREEMU_WORKER_THREADS").ok();
     let blocking_override = std::env::var("FIREEMU_MAX_BLOCKING_THREADS").ok();
@@ -1305,6 +1415,10 @@ fn build_runtime() -> Result<tokio::runtime::Runtime, String> {
     tokio::runtime::Builder::new_multi_thread()
         .worker_threads(workers)
         .max_blocking_threads(blocking)
+        // Security Rules evaluate expressions as deep as production compiles them (up to the
+        // evaluator's own bound), which a debug build's frames do not fit into tokio's
+        // default 2 MiB.
+        .thread_stack_size(RUNTIME_THREAD_STACK_BYTES)
         .enable_all()
         .build()
         .map_err(|e| format!("cannot start runtime: {e}"))
@@ -1363,7 +1477,7 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
                 None => IndexSet::default(),
             },
         };
-        let backend = Arc::new(if cfg.clock_start_pinned {
+        let backend = if cfg.clock_start_pinned {
             LocalBackend::new(gateway.clone(), clock.clone(), cfg.seed)
                 .with_contention_wait(fireemu_adapter_grpc::local::DEFAULT_CONTENTION_WAIT)
         } else {
@@ -1377,7 +1491,21 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
         .with_declared_databases(cfg.firestore_databases.keys().cloned())
         .with_ttl_sweep_interval(cfg.ttl_sweep_interval)
         .with_created_at(created_at)
-        .with_implicit_database_creation(cfg.implicit_database_creation));
+        .with_implicit_database_creation(cfg.implicit_database_creation);
+        // Scope decision C11: under the strict profile, projects.unknownProjects = "refuse"
+        // makes the daemon's project the only one that exists.
+        if let Some(seconds) = cfg.deleted_database_id_cooldown {
+            backend.admin().set_deleted_id_cooldown(seconds);
+        }
+        let backend = Arc::new(
+            if cfg.refuse_unknown_projects
+                && cfg.profile == crate::config::CompatibilityProfile::Strict
+            {
+                backend.with_project_boundary(cfg.auth_project.clone())
+            } else {
+                backend
+            },
+        );
         for (database, files) in &cfg.firestore_databases {
             if database != fireemu_core_types::ids::DatabaseId::DEFAULT {
                 if let Some(path) = &files.indexes {
@@ -1397,6 +1525,7 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
         let tenancy: fireemu_core_session::tenancy::SharedTenancy =
             Arc::new(RwLock::new(default_tenancy));
         backend.set_tenancy(tenancy.clone());
+        install_auth_credential_entropy()?;
         let auth_store = Arc::new(Mutex::new(AuthStore::new(
             &cfg.auth_project,
             SplitMix64::new(cfg.seed ^ 0xA0),
@@ -1405,6 +1534,9 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
         if let Ok(mut store) = auth_store.lock() {
             let config = auth_project_config(&cfg);
             store.set_config(config);
+            store
+                .set_sign_in_config(auth_sign_in_config(&cfg))
+                .map_err(|error| format!("auth.signIn: {error:?}"))?;
             if let Some(policy) = &cfg.auth_password_policy {
                 store.set_password_policy(policy.to_auth_policy());
             }
@@ -1666,10 +1798,73 @@ mod tests {
 
     use super::{
         apply_auth_config_overrides, apply_auth_password_policy_overrides, auth_project_config,
-        auth_signup_quota_config, blocking_auth_selection, close_functions_source_admission,
-        function_log_input, reapply_explicit_auth_config, reapply_explicit_auth_password_policies,
-        reapply_explicit_auth_quota,
+        auth_sign_in_config, auth_signup_quota_config, blocking_auth_bridge_settings,
+        blocking_auth_selection, close_functions_source_admission, function_log_input,
+        idp_assertion_policy, reapply_explicit_auth_config,
+        reapply_explicit_auth_password_policies, reapply_explicit_auth_quota,
     };
+
+    /// Only the strict profile's unpinned daemon follows wall time on Firestore; a pinned clock
+    /// and the emulator profile get no wall source.
+    #[test]
+    fn firestore_follows_the_wall_only_in_an_unpinned_strict_daemon() {
+        use crate::config::CompatibilityProfile;
+        use fireemu_adapter_http::identity_toolkit::AuthWallClock;
+
+        let start = LogicalInstant::from_unix_seconds(1_788_004_860);
+        let wall = AuthWallClock::from_anchor(start, std::time::Instant::now());
+        let source = super::firestore_wall_source(CompatibilityProfile::Strict, Some(wall.clone()))
+            .expect("strict and unpinned follow the wall");
+        assert!(source() >= start);
+        assert!(super::firestore_wall_source(CompatibilityProfile::Strict, None).is_none());
+        assert!(super::firestore_wall_source(CompatibilityProfile::Emulator, Some(wall)).is_none());
+    }
+    /// Only the strict profile's Firestore ends an end user's `Listen` stream an hour after it
+    /// opened.
+    #[test]
+    fn only_the_strict_profile_ends_a_listen_stream_after_an_hour() {
+        use fireemu_adapter_grpc::rules::{Principal, RulesEnforcer};
+        use fireemu_core_rules::runtime::RulesetSlot;
+        use fireemu_core_rules::value::AuthContext;
+        use fireemu_core_session::clock::VirtualClock;
+
+        let start = LogicalInstant::from_unix_seconds(1_788_004_860);
+        let user = Principal::User(AuthContext {
+            uid: "held".to_owned(),
+            token: std::collections::BTreeMap::new(),
+        });
+        for (profile, deadline) in [
+            (
+                "strict",
+                Some(LogicalInstant::from_unix_seconds(1_788_008_460)),
+            ),
+            ("emulator", None),
+        ] {
+            let cfg = crate::config::RuntimeConfig::from_json(
+                &json!({"schemaVersion": 1, "profile": profile}),
+            )
+            .unwrap();
+            let enforcer = super::firestore_profile_settings(
+                RulesEnforcer::new(
+                    Arc::new(RulesetSlot::default()),
+                    Arc::new(Mutex::new(AuthStore::new(
+                        "demo-app",
+                        SplitMix64::new(1),
+                        fireemu_core_auth::mfa::TotpPolicy::default(),
+                    ))),
+                    Arc::new(Mutex::new(VirtualClock::new(start))),
+                ),
+                &cfg,
+            );
+            assert_eq!(
+                enforcer.listen_stream_deadline(&user),
+                deadline,
+                "{profile}"
+            );
+            assert_eq!(enforcer.listen_stream_deadline(&Principal::Anonymous), None);
+            assert_eq!(enforcer.listen_stream_deadline(&Principal::Owner), None);
+        }
+    }
 
     #[test]
     fn auth_project_config_propagates_all_default_settings() {
@@ -1694,6 +1889,34 @@ mod tests {
                 disabled_user_signup: true,
                 disabled_user_deletion: true,
             }
+        );
+    }
+
+    #[test]
+    fn auth_sign_in_config_applies_only_the_configured_providers() {
+        let cfg = crate::config::RuntimeConfig::from_json(&json!({
+            "schemaVersion": 1,
+            "auth": {"signIn": {
+                "anonymous": {"enabled": false},
+                "phoneNumber": {"testPhoneNumbers": {"+16505550101": "123456"}},
+            }},
+        }))
+        .expect("valid Auth settings");
+        let config = auth_sign_in_config(&cfg);
+        assert!(config.email_enabled && !config.password_required && config.phone_enabled);
+        assert!(!config.anonymous_enabled);
+        assert_eq!(
+            config
+                .test_phone_numbers
+                .get("+16505550101")
+                .map(String::as_str),
+            Some("123456")
+        );
+        let defaults = crate::config::RuntimeConfig::from_json(&json!({"schemaVersion": 1}))
+            .expect("defaults");
+        assert_eq!(
+            auth_sign_in_config(&defaults),
+            fireemu_core_auth::store::SignInConfig::default()
         );
     }
 
@@ -2075,6 +2298,73 @@ mod tests {
         ));
     }
 
+    /// The bridge starts from the local configuration: no blocking settings keep discovery and
+    /// the global forwarding switch; a trigger map is the whole selection, so the email and SMS
+    /// events it cannot name are disabled; forwarding restrictions map token by token.
+    #[test]
+    fn blocking_bridge_settings_follow_the_local_configuration() {
+        use fireemu_core_functions::manifest::{
+            BlockingAuthSelection, BlockingAuthSelections, BlockingAuthTokenPolicy,
+        };
+        let settings = |auth: serde_json::Value| {
+            blocking_auth_bridge_settings(
+                &crate::config::RuntimeConfig::from_json(
+                    &json!({"schemaVersion": 1, "auth": auth}),
+                )
+                .expect("valid blocking settings"),
+            )
+        };
+        assert_eq!(
+            settings(json!({})),
+            (BlockingAuthSelections::default(), false, None)
+        );
+        assert_eq!(
+            settings(json!({"forwardInboundCredentials": true})),
+            (BlockingAuthSelections::default(), true, None)
+        );
+        let (selections, forward, restrictions) = settings(json!({
+            "forwardInboundCredentials": true,
+            "blockingFunctions": {
+                "triggers": {"beforeCreate": {"function": "checkRegistration"}},
+                "forwardInboundCredentials": {"idToken": true, "accessToken": false, "refreshToken": true}
+            }
+        }));
+        assert_eq!(
+            selections,
+            BlockingAuthSelections {
+                before_create: BlockingAuthSelection::Explicit {
+                    function: "checkRegistration".to_owned(),
+                    region: None,
+                },
+                before_sign_in: BlockingAuthSelection::Disabled,
+                before_send_email: BlockingAuthSelection::Disabled,
+                before_send_sms: BlockingAuthSelection::Disabled,
+            }
+        );
+        assert!(forward);
+        assert_eq!(
+            restrictions,
+            Some(BlockingAuthTokenPolicy {
+                id_token: true,
+                access_token: false,
+                refresh_token: true,
+            })
+        );
+        let (selections, _, restrictions) = settings(json!({
+            "forwardInboundCredentials": true,
+            "blockingFunctions": {"forwardInboundCredentials": {"accessToken": true}}
+        }));
+        assert_eq!(selections, BlockingAuthSelections::default());
+        assert_eq!(
+            restrictions,
+            Some(BlockingAuthTokenPolicy {
+                id_token: false,
+                access_token: true,
+                refresh_token: false,
+            })
+        );
+    }
+
     #[test]
     fn function_user_logs_keep_the_official_logging_metadata() {
         let fields = serde_json::Map::from_iter([
@@ -2267,5 +2557,46 @@ mod tests {
         assert!(registry
             .tenant_store("demo-app", "unrelated-tenant")
             .is_none());
+    }
+
+    #[test]
+    fn only_strict_without_idp_signers_says_identity_providers_are_refused() {
+        use super::idp_signer_note_for;
+        use crate::config::CompatibilityProfile;
+        assert!(idp_signer_note_for(CompatibilityProfile::Strict, false)
+            .is_some_and(|note| note.contains("auth.idpSigners")));
+        assert_eq!(
+            idp_signer_note_for(CompatibilityProfile::Strict, true),
+            None
+        );
+        assert_eq!(
+            idp_signer_note_for(CompatibilityProfile::Emulator, false),
+            None
+        );
+    }
+
+    #[test]
+    fn strict_verifies_idp_assertions_even_without_signers_and_the_emulator_keeps_the_fixture() {
+        use crate::config::CompatibilityProfile;
+        use fireemu_adapter_http::identity_toolkit::IdpAssertionPolicy;
+        // A public 2048-bit modulus; the key it belongs to was discarded.
+        let modulus = "0lwNtQWMVy0QqgEvrBmoFqwky_dcMx8CgS-o2rTesEV7QbG4cvNigTcDV7b_u0twRkJdonkMPjbUs0b8NKe_0_UOZ5vE_kILFG4TtPdeZWub8xnqhETc7WifXhEfqcB8xFbRyIxU9V0d_epsuNnQ-Nd7NlnFsH-aaq6f1HKp55_BVNxudwmHwT49P6JhNDDh7FWyoYBBBFtQ0St8dky4MFQTd2swZP4pEA8xGp-q-1mxbn0g9gfbq5voYWtOaDW9a2lsC_S_d6DecsrNWn4YYJ7Qc5xcx4pI70a23zftkVBj_I-Eip2hcvNUEsZJA4LlR4BgDLsNWu3ZWQxe08fOew";
+        let issuer = "https://idp.example/oidc/run";
+        let signers = json!({issuer: {"keys": [{"kty": "RSA", "alg": "RS256", "use": "sig", "kid": "k", "n": modulus, "e": "AQAB"}]}});
+        let signers = signers.as_object().unwrap();
+        match idp_assertion_policy(CompatibilityProfile::Strict, Some(signers)).unwrap() {
+            IdpAssertionPolicy::SignedOidc(trust) => assert!(trust.key(issuer, "k").is_some()),
+            IdpAssertionPolicy::Fixture => panic!("strict must verify signed assertions"),
+        }
+        match idp_assertion_policy(CompatibilityProfile::Strict, None).unwrap() {
+            IdpAssertionPolicy::SignedOidc(trust) => assert!(!trust.knows(issuer)),
+            IdpAssertionPolicy::Fixture => panic!("strict without signers must still refuse"),
+        }
+        for configured in [None, Some(signers)] {
+            assert!(matches!(
+                idp_assertion_policy(CompatibilityProfile::Emulator, configured).unwrap(),
+                IdpAssertionPolicy::Fixture
+            ));
+        }
     }
 }

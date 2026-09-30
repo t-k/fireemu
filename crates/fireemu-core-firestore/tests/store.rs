@@ -6,7 +6,7 @@ use fireemu_core_firestore::field_path::FieldPath;
 use fireemu_core_firestore::path::DocumentPath;
 use fireemu_core_firestore::store::{
     CommitVersion, FieldTransform, FirestoreError, FirestoreState, LimitScope, Precondition,
-    TransformKind, Write, WriteOp, MAX_TRANSACTION_CONFLICT_LEDGER_BYTES,
+    TransactionId, TransformKind, Write, WriteOp, MAX_TRANSACTION_CONFLICT_LEDGER_BYTES,
     MAX_TRANSACTION_QUERY_RECORDS, TOO_MUCH_CONTENTION,
 };
 use fireemu_core_firestore::value::Value;
@@ -2981,4 +2981,179 @@ fn a_transactional_query_currently_locks_documents_its_filter_excluded() {
         s.get(&path("qf/excluded")).unwrap().fields.get("v"),
         Some(&Value::Integer(3))
     );
+}
+
+// A commit refused by a precondition ends its transaction, as production does (P08, both
+// transports, both recordings): the same token then answers INVALID_ARGUMENT in strict (the
+// official emulator answers ABORTED, measured at v1.21.0), a Rollback is accepted any number of
+// times, the transaction's read locks are gone at once, and the token may still be retried.
+const NO_LONGER_VALID: &str = "The referenced transaction has expired or is no longer valid.";
+
+fn precondition_write(p: &str, precondition: Precondition) -> Write {
+    Write {
+        op: WriteOp::Set {
+            path: path(p),
+            fields: fields(&[("v", Value::Integer(9))]),
+            update_mask: None,
+        },
+        precondition: Some(precondition),
+        transforms: vec![],
+    }
+}
+
+fn refused_commit_state(scope: LimitScope) -> (FirestoreState, TransactionId) {
+    let mut state = FirestoreState::with_limit_scope(scope);
+    state
+        .commit(&[set("p08/held", &[("v", Value::Integer(1))])], None, t(0))
+        .unwrap();
+    let transaction = state.begin_transaction(false, t(1)).unwrap();
+    state
+        .get_in_transaction(&transaction, &path("p08/held"))
+        .unwrap();
+    (state, transaction)
+}
+
+#[test]
+fn a_precondition_refused_commit_ends_its_transaction_with_each_profiles_code() {
+    let refusals = [
+        (
+            precondition_write("p08/missing", Precondition::Exists(true)),
+            "not found",
+        ),
+        (
+            precondition_write("p08/held", Precondition::Exists(false)),
+            "already exists",
+        ),
+        (
+            precondition_write("p08/held", Precondition::UpdateTime(t(500))),
+            "failed precondition",
+        ),
+    ];
+    for (scope, strict) in [
+        (LimitScope::Production, true),
+        (LimitScope::OfficialEmulator, false),
+    ] {
+        for (refusing, label) in &refusals {
+            let (mut state, transaction) = refused_commit_state(scope);
+            let commit = [
+                set("p08/held", &[("v", Value::Integer(9))]),
+                refusing.clone(),
+            ];
+            let refused = state.commit(&commit, Some(&transaction), t(2)).unwrap_err();
+            assert!(
+                matches!(
+                    refused,
+                    FirestoreError::NotFound(_)
+                        | FirestoreError::AlreadyExists(_)
+                        | FirestoreError::FailedPrecondition(_)
+                ),
+                "{label}: the refusal itself keeps its code"
+            );
+            let gone = |result: Result<(), FirestoreError>| match result {
+                Err(FirestoreError::InvalidArgument(message)) if strict => message,
+                Err(FirestoreError::Aborted(message)) if !strict => message,
+                other => panic!("{label} strict={strict}: {other:?}"),
+            };
+            assert_eq!(
+                gone(
+                    state
+                        .get_in_transaction(&transaction, &path("p08/held"))
+                        .map(|_| ())
+                ),
+                NO_LONGER_VALID
+            );
+            assert_eq!(
+                gone(state.commit(&commit, Some(&transaction), t(3)).map(|_| ())),
+                NO_LONGER_VALID
+            );
+            for _ in 0..2 {
+                state.rollback(&transaction).unwrap();
+            }
+            assert_eq!(
+                state
+                    .get(&path("p08/held"))
+                    .unwrap()
+                    .fields
+                    .get("v")
+                    .cloned(),
+                Some(Value::Integer(1)),
+                "{label}: nothing of the refused commit is published"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_precondition_refused_commit_releases_the_transactions_locks_at_once() {
+    for scope in [LimitScope::Production, LimitScope::OfficialEmulator] {
+        let (mut state, transaction) = refused_commit_state(scope);
+        // While the transaction is active its read of `held` locks a writer out.
+        let writer = [set("p08/held", &[("v", Value::Integer(5))])];
+        assert!(matches!(
+            state.commit(&writer, None, t(2)),
+            Err(FirestoreError::Aborted(message)) if message == TOO_MUCH_CONTENTION
+        ));
+        let missing = precondition_write("p08/missing", Precondition::Exists(true));
+        assert!(state.commit(&[missing], Some(&transaction), t(3)).is_err());
+        state.commit(&writer, None, t(4)).unwrap();
+    }
+}
+
+#[test]
+fn a_transaction_with_no_preconditions_refused_is_not_ended_by_other_refusals() {
+    // Only the precondition refusal is measured; a commit that fails for another reason (here a
+    // document that is too large to store) keeps its transaction as before.
+    let (mut state, transaction) = refused_commit_state(LimitScope::Production);
+    let huge = Value::String("x".repeat(1_100_000));
+    let failing = set("p08/held", &[("v", huge)]);
+    assert!(state.commit(&[failing], Some(&transaction), t(2)).is_err());
+    assert!(state
+        .get_in_transaction(&transaction, &path("p08/held"))
+        .is_ok());
+}
+
+#[test]
+fn a_transaction_ended_by_a_refused_commit_may_be_retried_like_a_rolled_back_one() {
+    for scope in [LimitScope::Production, LimitScope::OfficialEmulator] {
+        let (mut state, transaction) = refused_commit_state(scope);
+        let missing = precondition_write("p08/missing", Precondition::Exists(true));
+        assert!(state.commit(&[missing], Some(&transaction), t(2)).is_err());
+        let retried = state.retry_transaction(&transaction, t(3)).unwrap();
+        state
+            .get_in_transaction(&retried, &path("p08/held"))
+            .unwrap();
+        state
+            .commit(
+                &[set("p08/held", &[("v", Value::Integer(2))])],
+                Some(&retried),
+                t(4),
+            )
+            .unwrap();
+    }
+}
+
+#[test]
+fn a_precondition_refused_commit_outside_a_transaction_leaves_every_transaction_alone() {
+    for scope in [LimitScope::Production, LimitScope::OfficialEmulator] {
+        let (mut state, transaction) = refused_commit_state(scope);
+        let missing = precondition_write("p08/missing", Precondition::Exists(true));
+        assert!(matches!(
+            state.commit(&[missing], None, t(2)),
+            Err(FirestoreError::NotFound(_))
+        ));
+        state
+            .get_in_transaction(&transaction, &path("p08/held"))
+            .unwrap();
+        state
+            .commit(
+                &[set("p08/held", &[("v", Value::Integer(4))])],
+                Some(&transaction),
+                t(3),
+            )
+            .unwrap();
+        let fresh = state.begin_transaction(false, t(4)).unwrap();
+        assert!(state
+            .get_in_transaction(&fresh, &path("p08/missing"))
+            .is_ok());
+    }
 }

@@ -142,6 +142,13 @@ impl IndexSet {
         self.composites.push(index);
     }
 
+    /// Removes a composite index (an Admin `indexes.delete`); returns whether it was present.
+    pub fn remove_composite(&mut self, index: &IndexDefinition) -> bool {
+        let before = self.composites.len();
+        self.composites.retain(|existing| existing != index);
+        self.composites.len() != before
+    }
+
     /// Adds a single-field exemption.
     pub fn add_exemption(&mut self, exemption: &SingleFieldExemption) {
         let mut modes = self.single_field_modes(&exemption.collection_group, &exemption.field);
@@ -166,6 +173,18 @@ impl IndexSet {
             (collection.as_str().to_owned(), field.segments().to_vec()),
             unique,
         );
+    }
+
+    /// Removes a literal field's override, so it inherits again (an Admin `fields.patch` that
+    /// clears `indexConfig`); returns whether there was one.
+    pub fn clear_single_field_override(
+        &mut self,
+        collection: &CollectionId,
+        field: &FieldPath,
+    ) -> bool {
+        self.single_fields
+            .remove(&(collection.as_str().to_owned(), field.segments().to_vec()))
+            .is_some()
     }
 
     /// Overrides defaults for every field in a collection group (the unquoted `*`).

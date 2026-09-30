@@ -90,7 +90,7 @@ def test_each_payload_hits_its_claimed_metric_and_declares_competing_limits(fami
     assert case["write"]["currentDocument"] == {"exists": False}
     expected_acceptance = (
         (position != "over" and family != "document-name")
-        or family == "indexed-value"
+        or family in ("indexed-value", "index-sum", "index-entry", "field-map", "field-array")
     )
     assert case["expect"]["accepted"] is expected_acceptance
     if family == "collection-id":

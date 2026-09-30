@@ -163,6 +163,12 @@ fn decode_object(part: &str) -> Result<JsonValue, CustomTokenRefusal> {
     }
 }
 
+/// Checks `key` as a trusted RS256 RSA public key (the rules [`CustomTokenTrust::from_jwks`]
+/// applies), for the other signer sets of the Auth configuration.
+pub(super) fn validate_public_jwk(key: &serde_json::Value) -> Result<(), String> {
+    parse_jwk(key).map(|_| ())
+}
+
 fn parse_jwk(key: &serde_json::Value) -> Result<TrustedKey, String> {
     let field = |name: &str| key.get(name).and_then(serde_json::Value::as_str);
     if field("kty") != Some("RSA") {

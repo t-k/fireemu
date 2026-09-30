@@ -29,7 +29,7 @@ const task=async data=>{
   if(data?.afterSleep)await new Promise(r=>setTimeout(r,data.afterSleep));
   marker('callback-finished','yes');
 };
-task.run=task;task.__endpoint={platform:'gcfv2',scheduleTrigger:{schedule:'every 5 minutes'}};
+task.run=task;task.__endpoint={platform:'gcfv2',scheduleTrigger:{schedule:'every 5 minutes'},secretEnvironmentVariables:[{key:'LOCAL'}]};
 module.exports={task};
 `;
 async function start(t, customSource=source, secrets=false) {

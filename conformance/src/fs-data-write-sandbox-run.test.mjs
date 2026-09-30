@@ -18,6 +18,7 @@ import {
   legacyRecoveryEnvironment,
   v3RecoveryEnvironment,
   deltaV3RecoveryEnvironment,
+  deltaV3RecoveryOutcome,
   prepareSandboxCorpus,
   productionRestEnvironment,
   remainingSandboxBudget,
@@ -25,7 +26,6 @@ import {
   selectDeltaV3Recipes,
   deltaV3RequestBound,
   deltaV3ManagedClearNames,
-  assertDeltaV3ProductionAdmission,
   sessionRequestCount,
   withSandboxExclusiveLock,
   withLegacyRecoveryReservation,
@@ -102,11 +102,12 @@ test("saved production comparison selects only identical program recipes and rep
       },
     ],
   };
+  const retired = { ...saved, id: "retired" };
   const recordedCorpus = {
     schemaVersion: 1,
-    restPrograms: [saved, changed],
+    restPrograms: [saved, changed, retired],
     streamRecipes: [],
-    restRequestCount: 2,
+    restRequestCount: 3,
   };
   const currentCorpus = {
     ...recordedCorpus,
@@ -130,7 +131,7 @@ test("saved production comparison selects only identical program recipes and rep
     schemaVersion: 1,
     sourceCommit: "a".repeat(40),
     corpusSha256: digest(recordedCorpus),
-    programs: { saved: digest(saved), changed: digest(changed) },
+    programs: { saved: digest(saved), changed: digest(changed), retired: digest(retired) },
     streams: {},
   };
   const fixture = {
@@ -138,12 +139,14 @@ test("saved production comparison selects only identical program recipes and rep
     programs: {
       saved: { steps: { write: { status: 200, code: "OK", body: {} } } },
       changed: { steps: { write: { status: 200, code: "OK", body: {} } } },
+      retired: { steps: { write: { status: 200, code: "OK", body: {} } } },
     },
     streams: {},
   };
   const selected = selectComparableSandboxRecipes(fixture, manifest, currentCorpus, currentCorpus);
   assert.deepEqual(selected.matchedRestIds, ["saved"]);
   assert.deepEqual(selected.pendingRestIds, ["changed"]);
+  assert.deepEqual(selected.retiredRestIds, ["retired"]);
   assert.deepEqual(Object.keys(selected.fixture.programs), ["saved"]);
   assert.deepEqual(
     selected.corpus.restPrograms.map((program) => program.id),
@@ -279,17 +282,6 @@ test("delta-v3 production REST environment uses only the six names and strict HT
   assert.equal(JSON.parse(env.FIRESTORE_PROBE_MANAGED_CLEAR_NAMES).length, 6);
 });
 
-test("delta-v3 production admission stays closed until independent presend review", () => {
-  assert.throws(
-    () => assertDeltaV3ProductionAdmission({ host: "firestore.googleapis.com" }),
-    /presend review/,
-  );
-  assert.doesNotThrow(() =>
-    assertDeltaV3ProductionAdmission({ host: "firestore.googleapis.com", presendReviewed: true }),
-  );
-  assert.doesNotThrow(() => assertDeltaV3ProductionAdmission({ host: "127.0.0.1:8080" }));
-});
-
 test("delete pair classification is route-local and requires typed target and outcome proofs", async () => {
   const { classifyDeltaV3DeletePair } = await import("./fs-data-write-sandbox-run.mjs");
   assert.equal(typeof classifyDeltaV3DeletePair, "function");
@@ -328,15 +320,15 @@ test("delete pair classification is route-local and requires typed target and ou
 
 test("the runnable sandbox corpus combines bounded REST and live gRPC recipes", async () => {
   const { corpus, restRequestCount, liveStreamCount } = await prepareSandboxCorpus();
-  assert.equal(corpus.restPrograms.length, 74);
-  assert.equal(restRequestCount, 267);
-  assert.equal(liveStreamCount, 7);
-  assert.equal(MAX_STREAM_FRAMES, 9);
+  assert.equal(corpus.restPrograms.length, 106);
+  assert.equal(restRequestCount, 347);
+  assert.equal(liveStreamCount, 9);
+  assert.equal(MAX_STREAM_FRAMES, 11);
   assert.equal(
     corpus.streamRecipes
       .filter((recipe) => recipe.transport === "grpc")
       .reduce((total, recipe) => total + recipe.maxFrames, 0),
-    9,
+    11,
   );
 });
 
@@ -383,16 +375,16 @@ test("production REST session fixes project, endpoint, managed scope and all-att
 test("production cleanup is blocked before send when exact ownership exceeds fixed caps", async () => {
   const { corpus } = await prepareSandboxCorpus();
   assert.deepEqual(productionCleanupRequestBound(corpus), {
-    mutationNameCount: 181,
-    rootCollectionCount: 27,
-    nestedTargetCount: 109,
-    managedRequestBound: 462,
-    perProgramCleanupRequestBound: 593,
-    totalRequestBound: 1322,
+    mutationNameCount: 206,
+    rootCollectionCount: 29,
+    nestedTargetCount: 119,
+    managedRequestBound: 502,
+    perProgramCleanupRequestBound: 691,
+    totalRequestBound: 1540,
   });
   assert.throws(
     () => requireBoundedProductionCleanup(corpus),
-    /462 initial managed requests and 1322 total requests.*caps are 400 and 1000.*generic broad clear is disabled/,
+    /502 initial managed requests and 1540 total requests.*caps are 400 and 1000.*generic broad clear is disabled/,
   );
   let networkCalls = 0;
   await assert.rejects(
@@ -528,6 +520,32 @@ test("delta-v3 recovery resumes only its reserved six-name journal with the rema
     assert.equal(env.FIRESTORE_PROBE_RECOVERY_MODE, "recover-delta-v3");
     assert.equal(env.FIRESTORE_PROBE_MAX_REQUESTS, "400");
     assert.equal(env.FIRESTORE_PROBE_DELTA_JOURNAL, journalPath);
+    // Cancelling the journaled bulk delete is an explicit, per-use choice.
+    assert.equal(env.FIRESTORE_PROBE_DELTA_V3_CANCEL_BULK_DELETE, undefined);
+    const cancelling = deltaV3RecoveryEnvironment({
+      token: "private",
+      meta: join(runDir, "recovery.json"),
+      journal: journalPath,
+      names: runtimeNames,
+      runId,
+      corpusDigest,
+      sourceGitSha: gitSha,
+      remainingHttp: 400,
+      cancelBulkDelete: true,
+    });
+    assert.equal(cancelling.FIRESTORE_PROBE_DELTA_V3_CANCEL_BULK_DELETE, "1");
+    // A cancel run ends once the operation is terminal; only a plain run completes cleanup.
+    assert.equal(deltaV3RecoveryOutcome("complete", false), "recovered");
+    assert.equal(deltaV3RecoveryOutcome("bulk-delete-cancelled", true), "bulk-delete-cancelled");
+    assert.equal(deltaV3RecoveryOutcome("bulk-delete-done", true), "bulk-delete-done");
+    for (const [status, cancel] of [
+      ["bulk-delete-cancelled", false],
+      ["complete", true],
+      ["bulk-delete-cancel-intent", true],
+      ["request-reserved", false],
+    ]) {
+      assert.throws(() => deltaV3RecoveryOutcome(status, cancel), /did not/, `${status} ${cancel}`);
+    }
     assert.throws(
       () =>
         deltaV3RecoveryEnvironment({

@@ -174,7 +174,7 @@ fn the_command_gets_the_emulator_hosts_and_the_services_stop_with_it() {
     let dir = scratch("env");
     let out = dir.join("env.txt");
     let output = daemon()
-        .args(["--project", "demo-exec", "--", "sh", "-c"])
+        .args(["--project", "demo-exec", "--", "/bin/sh", "-c"])
         .arg(format!("env > {}", out.display()))
         .output()
         .unwrap();
@@ -231,7 +231,7 @@ fn only_selects_the_variables_the_command_receives() {
     let dir = scratch("only");
     let out = dir.join("env.txt");
     let output = daemon()
-        .args(["--only", "auth,firestore", "--", "sh", "-c"])
+        .args(["--only", "auth,firestore", "--", "/bin/sh", "-c"])
         .arg(format!("env > {}", out.display()))
         .output()
         .unwrap();
@@ -285,7 +285,7 @@ fn app_check_variables_are_exported_only_when_the_service_is_selected() {
     let output = daemon()
         .args(["--config"])
         .arg(&config)
-        .args(["--project", "demo-exec", "--", "sh", "-c"])
+        .args(["--project", "demo-exec", "--", "/bin/sh", "-c"])
         .arg(format!("env > {}", out.display()))
         .output()
         .unwrap();
@@ -317,7 +317,7 @@ fn app_check_variables_are_exported_only_when_the_service_is_selected() {
             "--only",
             "auth,firestore",
             "--",
-            "sh",
+            "/bin/sh",
             "-c",
         ])
         .arg(format!("env > {}", out.display()))
@@ -336,7 +336,7 @@ fn app_check_variables_are_exported_only_when_the_service_is_selected() {
 #[test]
 fn the_exit_status_of_the_command_is_propagated() {
     let output = daemon()
-        .args(["--", "sh", "-c", "exit 3"])
+        .args(["--", "/bin/sh", "-c", "exit 3"])
         .output()
         .unwrap();
     assert_eq!(output.status.code(), Some(3));
@@ -383,7 +383,7 @@ fn sigterm_stops_the_command_and_the_services_without_leaving_processes() {
     let out = dir.join("env.txt");
     let supervisor = ChildGuard::new(
         daemon()
-            .args(["--", "sh", "-c"])
+            .args(["--", "/bin/sh", "-c"])
             .arg(format!(
                 "env > {}; echo $$ > {}; exec sleep 30",
                 out.display(),
@@ -466,7 +466,7 @@ fn a_background_job_the_command_leaves_behind_is_swept() {
     let pidfile = dir.join("pid");
     let groupfile = dir.join("pgid");
     let output = daemon()
-        .args(["--", "sh", "-c"])
+        .args(["--", "/bin/sh", "-c"])
         .arg(format!(
             "ps -o pgid= -p $$ | tr -d ' ' > {}; sleep 300 </dev/null >/dev/null 2>&1 & echo $! > {}; exit 0",
             groupfile.display(),
@@ -520,7 +520,7 @@ fn inherited_unselected_emulator_endpoints_are_preserved_and_selected_ones_are_o
     let output = daemon()
         .envs(inherited)
         .env("FIREBASE_AUTH_EMULATOR_HOST", "127.0.0.1:19086")
-        .args(["--only", "auth", "--", "sh", "-c"])
+        .args(["--only", "auth", "--", "/bin/sh", "-c"])
         .arg(format!("env > {}", out.display()))
         .output()
         .unwrap();
@@ -548,7 +548,7 @@ fn sigint_keeps_its_identity_when_forwarded() {
     let pidfile = dir.join("pid");
     let supervisor = ChildGuard::new(
         daemon()
-            .args(["--", "sh", "-c"])
+            .args(["--", "/bin/sh", "-c"])
             .arg(format!("echo $$ > {}; exec sleep 30", pidfile.display()))
             .spawn()
             .unwrap(),
@@ -604,7 +604,7 @@ fn run_selection(name: &str, ports: [u16; 3], extra: &[&str]) -> BTreeMap<String
         .args(["--http-port", &ports[1].to_string()])
         .args(["--storage-port", &ports[2].to_string()])
         .args(extra)
-        .args(["--", "sh", "-c"])
+        .args(["--", "/bin/sh", "-c"])
         .arg(format!("env > {}", out.display()))
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -893,7 +893,7 @@ fn support_services_without_a_functions_codebase_are_accepted_no_ops() {
                 "--hub-port",
                 "0",
                 "--",
-                "sh",
+                "/bin/sh",
                 "-c",
             ])
             .arg(format!("env > {}", out.display()))

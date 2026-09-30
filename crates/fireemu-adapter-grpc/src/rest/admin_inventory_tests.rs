@@ -58,6 +58,7 @@ fn call_request(
         authorization: authorization.map(str::to_owned),
         app_check: Vec::new(),
         body,
+        batch_field_order: Vec::new(),
         origin: None,
         browser_metadata: false,
     });
@@ -171,19 +172,35 @@ fn document_routes_reject_empty_path_segments() {
 }
 
 #[test]
-fn admin_inventory_does_not_claim_non_get_database_routes() {
+fn admin_database_mutations_require_owner_credentials_and_validate_their_input() {
     let state = state();
-    for authorization in [None, Some("Bearer owner")] {
-        for method in ["POST", "PATCH", "DELETE"] {
-            for path in [
-                "/v1/projects/demo/databases",
-                "/v1/projects/demo/databases/(default)",
-            ] {
-                let (status, body) = call_request(&state, authorization, method, path, Value::Null);
-                assert_eq!(status, 404, "{method} {path}: {body}");
-            }
+    for method in ["POST", "PATCH", "DELETE"] {
+        for path in [
+            "/v1/projects/demo/databases",
+            "/v1/projects/demo/databases/(default)",
+        ] {
+            let (status, body) = call_request(&state, None, method, path, Value::Null);
+            assert_eq!(status, 403, "{method} {path}: {body}");
         }
     }
+    // A create without an id, and a patch or delete of a database that does not exist, are
+    // production's own refusals rather than an unknown route.
+    let (status, body) = call_request(
+        &state,
+        Some("Bearer owner"),
+        "POST",
+        "/v1/projects/demo/databases",
+        json!({"locationId": "us-central1", "type": "FIRESTORE_NATIVE"}),
+    );
+    assert_eq!(status, 400, "{body}");
+    let (status, body) = call_request(
+        &state,
+        Some("Bearer owner"),
+        "DELETE",
+        "/v1/projects/demo/databases/never-made",
+        Value::Null,
+    );
+    assert_eq!(status, 404, "{body}");
 }
 
 fn create_database(state: &RestState, project: &str, database: &str) {

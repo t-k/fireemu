@@ -94,7 +94,7 @@ fn every_declared_codebase_is_loaded_on_its_own_runner_and_routed_by_region() {
         &config,
         &[],
         &[
-            "sh",
+            "/bin/sh",
             "-c",
             "curl -sS http://$FIREEMU_FUNCTIONS_HOST/demo-multi/us-central1/fxAlpha; echo; \
              curl -sS http://$FIREEMU_FUNCTIONS_HOST/demo-multi/europe-west1/fxBeta",
@@ -147,7 +147,7 @@ fn only_functions_with_a_codebase_name_loads_that_one_alone() {
         &config,
         &["--only", "functions:beta"],
         &[
-            "sh",
+            "/bin/sh",
             "-c",
             "curl -sS -o /dev/null -w '%{http_code}\\n' \
              http://$FIREEMU_FUNCTIONS_HOST/demo-multi/us-central1/fxAlpha; \

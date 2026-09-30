@@ -65,6 +65,34 @@ enum Token {
     Key,
 }
 
+#[derive(Clone, Copy)]
+enum Location {
+    Root,
+    Writes,
+    Write(usize),
+    Update(usize),
+    Fields(usize),
+    Other,
+}
+
+impl Location {
+    fn member(self, key: &str) -> Self {
+        match (self, key) {
+            (Self::Root, "writes") => Self::Writes,
+            (Self::Write(at), "update") => Self::Update(at),
+            (Self::Update(at), "fields") => Self::Fields(at),
+            _ => Self::Other,
+        }
+    }
+
+    const fn element(self, at: usize) -> Self {
+        match self {
+            Self::Writes => Self::Write(at),
+            _ => Self::Other,
+        }
+    }
+}
+
 struct Parser<'a> {
     body: &'a [u8],
     at: usize,
@@ -72,6 +100,7 @@ struct Parser<'a> {
     finishing: bool,
     /// Where the second pass started: its refusals quote from here on.
     leftover: usize,
+    batch_field_order: Vec<Vec<String>>,
 }
 
 const fn is_letter(byte: u8) -> bool {
@@ -142,7 +171,7 @@ impl Parser<'_> {
         }
     }
 
-    fn value(&mut self, depth: usize, key: &str) -> Result<Value, SyntaxError> {
+    fn value(&mut self, depth: usize, key: &str, location: Location) -> Result<Value, SyntaxError> {
         match self.next_token() {
             Token::Unknown => Err(self.unknown("Expected a value.")),
             Token::BeginObject | Token::BeginArray if depth >= MAX_DEPTH => Err(SyntaxError {
@@ -154,11 +183,11 @@ impl Parser<'_> {
             }),
             Token::BeginObject => {
                 self.at += 1;
-                self.object(depth + 1)
+                self.object(depth + 1, location)
             }
             Token::BeginArray => {
                 self.at += 1;
-                self.array(depth + 1, key)
+                self.array(depth + 1, key, location)
             }
             Token::String => self.string().map(Value::String),
             Token::Number => self.number(),
@@ -184,7 +213,13 @@ impl Parser<'_> {
         }
     }
 
-    fn object(&mut self, depth: usize) -> Result<Value, SyntaxError> {
+    fn object(&mut self, depth: usize, location: Location) -> Result<Value, SyntaxError> {
+        if let Location::Fields(at) = location {
+            if self.batch_field_order.len() <= at {
+                self.batch_field_order.resize_with(at + 1, Vec::new);
+            }
+            self.batch_field_order[at].clear();
+        }
         let mut out = Map::new();
         loop {
             let key = match self.next_token() {
@@ -212,7 +247,13 @@ impl Parser<'_> {
                 Token::Colon => self.at += 1,
                 _ => return Err(self.fail("Expected : between key:value pair.", self.at)),
             }
-            let value = self.value(depth, &key)?;
+            let value = self.value(depth, &key, location.member(&key))?;
+            if let Location::Fields(at) = location {
+                let order = &mut self.batch_field_order[at];
+                if !out.contains_key(&key) {
+                    order.push(key.clone());
+                }
+            }
             out.insert(key, value);
             match self.next_token() {
                 Token::Unknown => {
@@ -228,7 +269,10 @@ impl Parser<'_> {
         }
     }
 
-    fn array(&mut self, depth: usize, key: &str) -> Result<Value, SyntaxError> {
+    fn array(&mut self, depth: usize, key: &str, location: Location) -> Result<Value, SyntaxError> {
+        if matches!(location, Location::Writes) {
+            self.batch_field_order.clear();
+        }
         let mut out = Vec::new();
         loop {
             match self.next_token() {
@@ -240,7 +284,7 @@ impl Parser<'_> {
                     self.at += 1;
                     return Ok(Value::Array(out));
                 }
-                _ => out.push(self.value(depth, key)?),
+                _ => out.push(self.value(depth, key, location.element(out.len()))?),
             }
             match self.next_token() {
                 Token::Unknown => return Err(self.unknown("Expected , or ] after array value.")),
@@ -409,25 +453,57 @@ impl Parser<'_> {
 
 /// Parses a request body as production's front end does.
 pub fn parse(body: &[u8]) -> Result<Value, SyntaxError> {
+    parse_internal(body, false).map(|(value, _)| value)
+}
+
+/// Parses a request and retains the source order of top-level `BatchWrite` document fields.
+pub fn parse_with_batch_field_order(body: &[u8]) -> Result<(Value, Vec<Vec<String>>), SyntaxError> {
+    parse_internal(body, true)
+}
+
+fn parse_internal(
+    body: &[u8],
+    collect_batch_order: bool,
+) -> Result<(Value, Vec<Vec<String>>), SyntaxError> {
     let mut parser = Parser {
         body,
         at: 0,
         finishing: false,
         leftover: 0,
+        batch_field_order: Vec::new(),
     };
-    let value = parser.value(0, "")?;
+    let location = if collect_batch_order {
+        Location::Root
+    } else {
+        Location::Other
+    };
+    let value = parser.value(0, "", location)?;
     while parser.at < body.len() && is_space(body[parser.at]) {
         parser.at += 1;
     }
     if parser.at < body.len() {
         return Err(parser.fail("Parsing terminated before end of input.", parser.at));
     }
-    Ok(value)
+    Ok((value, parser.batch_field_order))
 }
 
 #[cfg(test)]
 mod tests {
     use serde_json::json;
+
+    #[test]
+    fn batch_field_order_uses_decoded_keys_and_last_duplicate_map() {
+        let (body, order) = super::parse_with_batch_field_order(
+            br"{writes:[{update:{fields:{old:{stringValue:'old'}},fields:{'\u007a':{stringValue:'z'},a:{stringValue:'a'},'\u007a':{stringValue:'last'}}}}]}",
+        )
+        .unwrap();
+        assert_eq!(order, vec![vec!["z".to_owned(), "a".to_owned()]]);
+        assert!(body["writes"][0]["update"]["fields"].get("old").is_none());
+        assert_eq!(
+            body["writes"][0]["update"]["fields"]["z"]["stringValue"],
+            "last"
+        );
+    }
 
     use super::*;
 

@@ -9,6 +9,7 @@ import json
 import os
 import sys
 import threading
+import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import ClassVar
@@ -244,6 +245,10 @@ class CampaignAdapter(batch_adapter.Adapter):
         **metadata,
     ):
         self.campaign_operation = metadata
+        # A client SDK always sends its API key, and production (and strict fireemu) refuses a
+        # caller without one; privileged Admin calls carry the owner's credential instead.
+        if service == "auth" and not privileged and "?" not in path:
+            path += "?key=" + urllib.parse.quote(self.auth_query_key(), safe="")
         try:
             return super().request(
                 service, path, body, method=method, privileged=privileged, form=form

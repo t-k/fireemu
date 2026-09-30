@@ -6,10 +6,12 @@
 //! database snapshot; the diff against its last known `(path, version)` set becomes
 //! `DocumentChange` / `DocumentDelete` / `DocumentRemove` messages, followed by one global
 //! `NO_CHANGE` boundary carrying the snapshot read time and a resume token derived from
-//! the snapshot version. A target added with a resume token (or a read time) replays only
-//! what changed since that version: the target's state at the token is recomputed from the
-//! retained history and diffed against the current snapshot, followed by an
-//! `ExistenceFilter` with the current count (production's post-resume check).
+//! the snapshot version; a target made current in that snapshot gets its token with
+//! `CURRENT` instead of a `NO_CHANGE` of its own. A target added with a resume token (or a
+//! read time) replays only what changed since that version: a global boundary with the resume
+//! point's token comes first, then the target's state at the token is recomputed from the
+//! retained history and diffed against the current snapshot, with no existence filter
+//! (production's framing, AUTH-FS-CROSS stage 2).
 //!
 //! A token is only honoured while the store can still reproduce its version exactly
 //! (`FirestoreState::is_retained`: not compacted away by the one-hour retention window, not
@@ -24,10 +26,12 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 
 use fireemu_core_firestore::path::DocumentPath;
 use fireemu_core_firestore::query::Query;
 use fireemu_core_firestore::store::{CommitVersion, Document, Write};
+use fireemu_core_types::time::LogicalInstant;
 use fireemu_proto_firestore::google::firestore::v1 as pb;
 use tokio::sync::mpsc;
 use tokio_stream::StreamExt;
@@ -183,12 +187,65 @@ pub async fn write_stream(
                 break;
             }
         };
+        // Production evaluates an empty write after anything the client already sent: a client
+        // that half-closed right behind it gets a stream that ends OK (trailing-metadata),
+        // one still waiting for the answer gets `empty write operation`
+        // (response-before-half-close). Look once, without waiting.
+        if state.parent.is_some()
+            && req.writes.iter().any(|write| write.operation.is_none())
+            && already_half_closed(&mut inbound)
+        {
+            break;
+        }
+        // Production refuses a first message carrying a token (ABORTED) while the client keeps
+        // sending, but ends the stream OK when the client half-closes right behind it
+        // (coordinator decision D5, 2026-09-27). A large message can finish arriving just
+        // before its half-close does, so only this refusal waits, briefly, for the half-close.
+        // The grace approximates production's processing time; it is not observed.
+        if state.parent.is_none()
+            && !req.stream_token.is_empty()
+            && req.stream_id.is_empty()
+            && req.writes.is_empty()
+            && half_closes_before(
+                &mut inbound,
+                tokio::time::sleep(FIRST_TOKEN_HALF_CLOSE_GRACE),
+            )
+            .await
+        {
+            break;
+        }
         let outcome = handle_write_request(&ctx, &mut state, &req);
         let stop = outcome.is_err();
         if tx.send(outcome).await.is_err() || stop {
             break;
         }
     }
+}
+
+/// How long a refused first-message token waits for the client's half-close (decision D5).
+const FIRST_TOKEN_HALF_CLOSE_GRACE: std::time::Duration = std::time::Duration::from_millis(100);
+
+/// Whether the client ends its side before `deadline` does. The end wins a tie; a message or
+/// the deadline means the client is still sending.
+async fn half_closes_before<S, D>(inbound: &mut S, deadline: D) -> bool
+where
+    S: tokio_stream::Stream + Unpin,
+    D: std::future::Future<Output = ()>,
+{
+    tokio::select! {
+        biased;
+        next = inbound.next() => next.is_none(),
+        () = deadline => false,
+    }
+}
+
+/// Whether the client side of a stream has already ended, without waiting for it.
+fn already_half_closed<S: tokio_stream::Stream + Unpin>(inbound: &mut S) -> bool {
+    let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
+    matches!(
+        std::pin::Pin::new(inbound).poll_next(&mut cx),
+        std::task::Poll::Ready(None)
+    )
 }
 
 fn token_bytes(prefix: u64, n: u64) -> Vec<u8> {
@@ -210,10 +267,13 @@ fn handle_write_request(
                 "the first Write request must name the database",
             ));
         }
-        if !req.stream_id.is_empty() || !req.stream_token.is_empty() {
+        if !req.stream_id.is_empty() {
             return Err(Status::failed_precondition(
                 "write stream resumption is not supported; start a new stream",
             ));
+        }
+        if !req.stream_token.is_empty() {
+            return Err(Status::aborted("resuming a stream not supported"));
         }
         if !req.writes.is_empty() {
             return Err(Status::invalid_argument(
@@ -381,7 +441,18 @@ pub async fn listen_stream(
     inbound: impl tokio_stream::Stream<Item = Result<pb::ListenRequest, Status>> + Unpin + Send,
     tx: mpsc::Sender<Result<pb::ListenResponse, Status>>,
 ) {
-    listen_stream_observed(ctx, inbound, tx, None).await;
+    listen_stream_observed(ctx, inbound, tx, None, ListenTransport::Grpc).await;
+}
+
+/// Which transport carries a `Listen` stream. Production's one-hour close was observed on native
+/// gRPC streams only (AUTH-FS-CROSS stage 2), so only they take it; a `WebChannel` keeps its
+/// stream as before.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ListenTransport {
+    /// A native gRPC `Listen`.
+    Grpc,
+    /// A `Listen` over `WebChannel`.
+    WebChannel,
 }
 
 /// Runs `Listen` with an optional transport observer. The observer sees a completed response
@@ -393,20 +464,42 @@ pub(crate) async fn listen_stream_observed(
     mut inbound: impl tokio_stream::Stream<Item = Result<pb::ListenRequest, Status>> + Unpin + Send,
     tx: mpsc::Sender<Result<pb::ListenResponse, Status>>,
     observer: Option<Arc<dyn ListenObserver>>,
+    transport: ListenTransport,
 ) {
     let mut parent: Option<Parent> = None;
     let mut targets: BTreeMap<i32, TargetState> = BTreeMap::new();
     let mut database_hash_cache = None;
     let mut last_snapshot_version = None;
     let mut events = ctx.local.subscribe();
+    let stream_deadline = ctx
+        .rules
+        .as_ref()
+        .filter(|_| transport == ListenTransport::Grpc)
+        .and_then(|rules| rules.listen_stream_deadline(&ctx.principal));
     loop {
         let mut out: Vec<pb::ListenResponse> = Vec::new();
         let mut request = None;
+        let until_deadline = until_stream_deadline(&ctx, stream_deadline);
+        if until_deadline == Some(Duration::ZERO) {
+            let _ = tx.send(Err(lifetime_reached())).await;
+            return;
+        }
+        // At most a second at a time: a pinned clock moved past the deadline is noticed without
+        // waiting for a commit, as the wall is.
+        let deadline = async {
+            match until_deadline {
+                Some(wait) => tokio::time::sleep(wait.min(DEADLINE_CHECK)).await,
+                None => std::future::pending().await,
+            }
+        };
         let outcome: Result<bool, Status> = tokio::select! {
             () = tx.closed() => Ok(false),
+            // Woken at the deadline or to look again: the loop's head decides.
+            () = deadline => Ok(true),
             msg = inbound.next() => match msg {
                 None => Ok(false),
                 Some(Err(e)) => Err(e),
+                Some(Ok(_)) if deadline_reached(&ctx, stream_deadline) => Err(lifetime_reached()),
                 Some(Ok(req)) => {
                     let result = handle_listen_request(
                         &ctx,
@@ -421,7 +514,11 @@ pub(crate) async fn listen_stream_observed(
                     result
                 },
             },
-            ev = events.recv() => match ev {
+            // A commit met after the deadline (a pinned clock moved past it) ends the stream
+            // as the deadline does.
+            ev = events.recv() => if deadline_reached(&ctx, stream_deadline) {
+                Err(lifetime_reached())
+            } else { match ev {
                 Ok(first) => {
                     // Coalesce: every commit already queued behind this one is covered by
                     // the single refresh below.
@@ -477,7 +574,7 @@ pub(crate) async fn listen_stream_observed(
                     ).map(|()| true)
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => Ok(false),
-            },
+            }},
         };
         if let Some(observer) = observer.as_ref() {
             observer.exchange(request.as_ref(), &out);
@@ -740,6 +837,44 @@ fn decode_target(
     }
 }
 
+/// The longest a held stream waits before it looks at its deadline again.
+const DEADLINE_CHECK: Duration = Duration::from_secs(1);
+
+/// How long until the stream's deadline on the session clock: zero once it has passed, `None`
+/// when the stream has none. A clock that cannot be read counts as passed.
+fn until_stream_deadline(
+    ctx: &StreamContext,
+    deadline: Option<LogicalInstant>,
+) -> Option<Duration> {
+    let deadline = deadline?;
+    let Some(now) = ctx
+        .rules
+        .as_ref()
+        .and_then(|rules| rules.session_now().ok())
+    else {
+        return Some(Duration::ZERO);
+    };
+    // The difference is signed: a deadline already passed is no wait at all.
+    Some(
+        deadline
+            .checked_duration_since(now)
+            .filter(|left| left.is_positive())
+            .map_or(Duration::ZERO, |left| {
+                Duration::from_nanos(u64::try_from(left.as_nanos()).unwrap_or(u64::MAX))
+            }),
+    )
+}
+
+fn deadline_reached(ctx: &StreamContext, deadline: Option<LogicalInstant>) -> bool {
+    until_stream_deadline(ctx, deadline) == Some(Duration::ZERO)
+}
+
+/// How a held stream ends at its deadline. Production's front end resets the HTTP/2 stream
+/// (`RST_STREAM`, `INTERNAL_ERROR`), which gRPC clients report as `INTERNAL` with their own text.
+fn lifetime_reached() -> Status {
+    Status::internal("the stream reached its one-hour lifetime")
+}
+
 /// Refreshes every target against one snapshot, then emits the global boundary. Targets
 /// whose rules now deny are removed with a cause; `once` targets are removed after their
 /// first consistent snapshot.
@@ -801,6 +936,7 @@ fn refresh_all(
             let token = resume_token(version, &binding);
             let delta_paths = complete_delta_paths(&input, version);
             let mut removed = Vec::new();
+            let mut made_current = BTreeSet::new();
             for (id, state) in targets.iter_mut() {
                 let refreshed = authorize_target(ctx, &principal, db, state).and_then(|()| {
                     if state.current && state.resume.is_none() {
@@ -810,13 +946,14 @@ fn refresh_all(
                             }
                         }
                     }
-                    refresh_target_full(db, *id, state, read_time)
+                    refresh_target_full(db, *id, state, read_time, &binding)
                 });
                 match refreshed {
                     Ok(()) => {
                         out.append(&mut state.pending);
                         if !state.current {
                             state.current = true;
+                            made_current.insert(*id);
                             let bound = TokenBinding {
                                 target: state.target_hash,
                                 ..binding
@@ -836,9 +973,10 @@ fn refresh_all(
                     }
                 }
             }
-            Ok((read_time, token, removed, version, binding))
+            Ok((read_time, token, removed, version, binding, made_current))
         });
-    let (read_time, token, removed, version, binding) = match snapshot.and_then(|r| r) {
+    let (read_time, token, removed, version, binding, made_current) = match snapshot.and_then(|r| r)
+    {
         Ok(s) => s,
         Err(e) => {
             for id in targets.keys() {
@@ -855,7 +993,9 @@ fn refresh_all(
     if targets.is_empty() {
         return Ok(());
     }
-    for (id, state) in &*targets {
+    // A target that became current in this snapshot got its token with CURRENT: no NO_CHANGE
+    // follows it, as production and the official emulator frame it (AUTH-FS-CROSS stage 2).
+    for (id, state) in targets.iter().filter(|(id, _)| !made_current.contains(*id)) {
         let bound = TokenBinding {
             target: state.target_hash,
             ..binding
@@ -926,13 +1066,27 @@ fn authorize_target(
 }
 
 /// Recomputes one target and appends the diff against its last known state.
+///
+/// A resumed target starts with a global boundary, as production answers a resume
+/// (AUTH-FS-CROSS stage 2, packet v7): its token is `boundary`'s for the resume point, so a
+/// stream that drops before the diff resumes from there again, and its read time is the
+/// snapshot's, so the client's snapshot version never goes back. The client raises its
+/// snapshot from its cache there, not current, until `CURRENT`.
 fn refresh_target_full(
     db: &fireemu_core_firestore::store::FirestoreState,
     id: i32,
     state: &mut TargetState,
     read_time: prost_types::Timestamp,
+    boundary: &TokenBinding,
 ) -> Result<(), Status> {
-    let resumed = resolve_resume(db, id, state)?;
+    if let Some(from) = resolve_resume(db, id, state)? {
+        state.pending.push(target_change(
+            pb::target_change::TargetChangeType::NoChange,
+            vec![],
+            Some(resume_token(from, boundary)),
+            Some(read_time),
+        ));
+    }
     let current: Vec<Document> = match &state.kind {
         TargetKind::Documents(paths) => paths
             .iter()
@@ -956,19 +1110,6 @@ fn refresh_target_full(
         out_removal(db, path, id, read_time, &mut state.pending);
     }
     state.known = next_known;
-    if resumed {
-        // Production follows a resume with the current count so the client can verify its
-        // cache; the diff above already made it exact.
-        state.pending.push(pb::ListenResponse {
-            response_type: Some(pb::listen_response::ResponseType::Filter(
-                pb::ExistenceFilter {
-                    target_id: id,
-                    count: i32::try_from(current.len()).unwrap_or(i32::MAX),
-                    unchanged_names: None,
-                },
-            )),
-        });
-    }
     Ok(())
 }
 
@@ -1070,7 +1211,7 @@ fn out_removal(
 
 /// Resume: the target's state at the token becomes the known state, so the diff carries
 /// exactly what changed since; a token this daemon cannot honour resets the target.
-/// Returns whether the target resumed.
+/// Returns the version the target resumed from.
 ///
 /// "Cannot honour" includes a version the store compacted away: history older than the
 /// retention window is gone, and replaying a target against a version the store can no
@@ -1080,9 +1221,9 @@ fn resolve_resume(
     db: &fireemu_core_firestore::store::FirestoreState,
     id: i32,
     state: &mut TargetState,
-) -> Result<bool, Status> {
+) -> Result<Option<CommitVersion>, Status> {
     let Some(resume) = state.resume.take() else {
-        return Ok(false);
+        return Ok(None);
     };
     let version = match resume {
         Resume::Version(v) => Some(v),
@@ -1092,7 +1233,7 @@ fn resolve_resume(
     .filter(|v| db.is_retained(*v));
     if let Some(v) = version {
         state.known = known_at(db, &state.kind, v)?;
-        return Ok(true);
+        return Ok(Some(v));
     }
     state.pending.push(target_change(
         pb::target_change::TargetChangeType::Reset,
@@ -1100,7 +1241,7 @@ fn resolve_resume(
         None,
         None,
     ));
-    Ok(false)
+    Ok(None)
 }
 
 /// What a resume token is bound to besides its version.
@@ -1760,5 +1901,157 @@ mod refresh_tests {
                     .expect("unbounded query stays incremental");
         }
         assert_eq!(examined, 50);
+    }
+}
+
+#[cfg(test)]
+mod empty_write_tests {
+    use super::*;
+    use fireemu_core_firestore::index::{IndexSet, IndexValidationPolicy, PlanningContext};
+    use fireemu_core_session::clock::VirtualClock;
+    use fireemu_core_types::edition::{FirestoreApiMode, FirestoreEdition};
+    use fireemu_core_types::time::LogicalInstant;
+
+    fn context() -> StreamContext {
+        let gateway = Gateway {
+            enforce_limits: true,
+            ctx: PlanningContext {
+                edition: FirestoreEdition::Standard,
+                api_mode: FirestoreApiMode::Native,
+                policy: IndexValidationPolicy::Production,
+            },
+            indexes: IndexSet::default(),
+        };
+        let clock = Arc::new(std::sync::Mutex::new(VirtualClock::new(
+            LogicalInstant::UNIX_EPOCH,
+        )));
+        let local = Arc::new(LocalBackend::new(gateway.clone(), clock, 7));
+        StreamContext {
+            local: local.clone(),
+            gateway: Arc::new(gateway),
+            rules: None,
+            principal: Principal::Owner,
+            authorization: None,
+            epoch: local.epoch(),
+            app_check: None,
+        }
+    }
+
+    /// Runs a stream over `requests`; `half_closed` drops the client side before the server
+    /// reads, as when a client half-closes right after its last message.
+    async fn run(half_closed: bool) -> Vec<Result<pb::WriteResponse, Status>> {
+        let (client, inbound) = mpsc::channel(4);
+        client
+            .send(Ok(pb::WriteRequest {
+                database: "projects/demo-app/databases/(default)".to_owned(),
+                ..Default::default()
+            }))
+            .await
+            .unwrap();
+        client
+            .send(Ok(pb::WriteRequest {
+                writes: vec![pb::Write::default()],
+                ..Default::default()
+            }))
+            .await
+            .unwrap();
+        let open = (!half_closed).then_some(client);
+        let (tx, mut rx) = mpsc::channel(4);
+        write_stream(
+            context(),
+            tokio_stream::wrappers::ReceiverStream::new(inbound),
+            tx,
+        )
+        .await;
+        drop(open);
+        let mut out = Vec::new();
+        while let Some(item) = rx.recv().await {
+            out.push(item);
+        }
+        out
+    }
+
+    /// `writes/write-stream-terminal/response-before-half-close` (recorded twice on
+    /// 2026-09-25): a client still waiting for the answer gets `empty write operation`.
+    /// `writes/write-stream-terminal/trailing-metadata`: a client that half-closed right after
+    /// the empty write gets a stream that ends OK. Production evaluates the empty write after
+    /// it has seen the half-close; which one it sees first depends on arrival order.
+    #[tokio::test]
+    async fn an_empty_write_is_refused_only_while_the_client_is_still_sending() {
+        let open = run(false).await;
+        assert_eq!(open.len(), 2, "{open:?}");
+        assert!(open[0].is_ok());
+        let refused = open[1].as_ref().unwrap_err();
+        assert_eq!(refused.code(), tonic::Code::InvalidArgument);
+        assert_eq!(refused.message(), "empty write operation");
+
+        let closed = run(true).await;
+        assert_eq!(closed.len(), 1, "{closed:?}");
+        assert!(
+            closed[0].is_ok(),
+            "only the handshake answer, then an OK end"
+        );
+    }
+
+    /// The half-close race that decides a first-message token, without time: the client's end
+    /// wins over a deadline that is ready at the same moment.
+    #[tokio::test]
+    async fn the_first_token_grace_is_decided_by_what_arrives_first() {
+        use std::future::{pending, ready};
+        let closed = || tokio_stream::iter(Vec::<u8>::new());
+        let open = || tokio_stream::pending::<u8>();
+        assert!(half_closes_before(&mut closed(), pending::<()>()).await);
+        assert!(
+            half_closes_before(&mut closed(), ready(())).await,
+            "the end wins a tie"
+        );
+        assert!(
+            !half_closes_before(&mut open(), ready(())).await,
+            "the deadline passed"
+        );
+        assert!(
+            !half_closes_before(&mut tokio_stream::iter(vec![1_u8]), pending::<()>()).await,
+            "another message means the client is still sending"
+        );
+    }
+
+    /// Production's D5 probe refused an unknown first token while the sender stayed open,
+    /// whereas both 10 MiB request-byte recordings ended OK after an immediate half-close.
+    #[tokio::test]
+    async fn an_unknown_first_token_depends_on_client_half_close() {
+        async fn run(half_closed: bool) -> Vec<Result<pb::WriteResponse, Status>> {
+            let (client, inbound) = mpsc::channel(2);
+            client
+                .send(Ok(pb::WriteRequest {
+                    database: "projects/demo-app/databases/(default)".to_owned(),
+                    stream_token: vec![7; 16],
+                    ..Default::default()
+                }))
+                .await
+                .unwrap();
+            let open = (!half_closed).then_some(client);
+            let (tx, mut rx) = mpsc::channel(2);
+            write_stream(
+                context(),
+                tokio_stream::wrappers::ReceiverStream::new(inbound),
+                tx,
+            )
+            .await;
+            drop(open);
+            let mut out = Vec::new();
+            while let Some(item) = rx.recv().await {
+                out.push(item);
+            }
+            out
+        }
+
+        let open = run(false).await;
+        assert_eq!(open.len(), 1, "{open:?}");
+        let refused = open[0].as_ref().unwrap_err();
+        assert_eq!(refused.code(), tonic::Code::Aborted);
+        assert_eq!(refused.message(), "resuming a stream not supported");
+
+        let closed = run(true).await;
+        assert!(closed.is_empty(), "{closed:?}");
     }
 }

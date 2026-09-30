@@ -17,11 +17,22 @@ import { createHash, randomUUID } from "node:crypto";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { credentialMetadata, selectCredential } from "./credentials.mjs";
+import {
+  parseAdmissionEnvironment,
+  requireChildProductionAdmission,
+} from "../fs-data-write-admission.mjs";
+import { recordingSet, padJsonBody, validateSandboxCorpus } from "../fs-data-write-sandbox.mjs";
 import { normalizeRecordedResponse } from "./production-normalization.mjs";
 import { createRequestBudget } from "./request-budget.mjs";
 import {
+  assertNoProxyEnvironment,
+  isDroppedConnection,
   makeWebChannelFormBody,
+  makeWebChannelHandshakeBody,
+  parseWebChannelOpening,
+  projectWebChannelReset,
   projectWebChannelResponse,
+  projectWebChannelSessionStep,
   WEBCHANNEL_PATH,
 } from "./webchannel-request-bytes.mjs";
 
@@ -32,6 +43,24 @@ const OUT = process.env.FIRESTORE_PROBE_OUT;
 const META_OUT = process.env.FIRESTORE_PROBE_META_OUT;
 const MAX_REQUESTS = process.env.FIRESTORE_PROBE_MAX_REQUESTS;
 const REQUEST_TIMEOUT_MS = Number(process.env.FIRESTORE_PROBE_TIMEOUT_MS ?? 20_000);
+// A WebChannel measured body of up to 33,554,433 bytes: about 150 s at the upload rate seen on
+// 2026-09-27, so it gets its own timeout, four times that. Only a loopback run may shorten it.
+const BOUNDARY_TIMEOUT_MS =
+  /^127\.0\.0\.1:\d+$/.test(process.env.FIRESTORE_PROBE_HOST ?? "") &&
+  process.env.FIRESTORE_PROBE_BOUNDARY_TIMEOUT_MS !== undefined
+    ? Number(process.env.FIRESTORE_PROBE_BOUNDARY_TIMEOUT_MS)
+    : 600_000;
+// A bracket attempt must reach its cleanup while its access token (about an hour) is valid:
+// 30 minutes after the child starts, only terminates still run. Only a loopback run may set
+// another deadline (tests), and outside bracket mode there is none unless it does.
+const LOOPBACK_DEADLINE =
+  /^127\.0\.0\.1:\d+$/.test(process.env.FIRESTORE_PROBE_HOST ?? "") &&
+  process.env.FIRESTORE_PROBE_ATTEMPT_DEADLINE_MS !== undefined
+    ? Number(process.env.FIRESTORE_PROBE_ATTEMPT_DEADLINE_MS)
+    : undefined;
+const ATTEMPT_DEADLINE_MS =
+  LOOPBACK_DEADLINE ?? (process.env.FIRESTORE_PROBE_BRACKET === "1" ? 1_800_000 : undefined);
+const CHILD_STARTED_AT = Date.now();
 const MANAGED_CLEAR_JOURNAL =
   process.env.FIRESTORE_PROBE_DELTA_JOURNAL ?? process.env.FIRESTORE_PROBE_MANAGED_CLEAR_JOURNAL;
 const MANAGED_CLEAR_NAMES = process.env.FIRESTORE_PROBE_MANAGED_CLEAR_NAMES;
@@ -46,6 +75,13 @@ const PRODUCTION = process.env.FIRESTORE_PROBE_TARGET === "production";
 const RECOVERY_MODE = process.env.FIRESTORE_PROBE_RECOVERY_MODE;
 const DELTA_V3_MODE = process.env.FIRESTORE_PROBE_DELTA_V3 === "1";
 const DELTA_LOCK_HELD = process.env.FIRESTORE_PROBE_DELTA_LOCK_HELD === "1";
+// Owner-approved per use: cancel the journaled delta-v3 bulk delete before its cleanup.
+const DELTA_V3_CANCEL_BULK_DELETE = process.env.FIRESTORE_PROBE_DELTA_V3_CANCEL_BULK_DELETE === "1";
+const PARTIAL_MODE = process.env.FIRESTORE_PROBE_PARTIAL === "1";
+const BRACKET_MODE = process.env.FIRESTORE_PROBE_BRACKET === "1";
+// Which pinned recording set a bracket-mode child runs (`bracket` or `followup`).
+const BRACKET_SET_NAME = process.env.FIRESTORE_PROBE_RECORDING_SET ?? "bracket";
+const PARTIAL_BOUNDARY_ID = "writes/limits/index-entry-sum/adjacent";
 const CORPUS_DIGEST = process.env.FIRESTORE_PROBE_CORPUS_DIGEST;
 const SOURCE_GIT_SHA = process.env.FIRESTORE_PROBE_SOURCE_GIT_SHA;
 const MANAGED_POLL_MS = /^127\.0\.0\.1:\d+$/.test(HOST ?? "")
@@ -140,12 +176,85 @@ export function createShrinkRequestCounter(limit, initial = 0) {
   };
 }
 
-export function assertV3ProductionCleanupAllowed({ host, exactDeltaV3 = false }) {
-  if (host && !/^127\.0\.0\.1:\d+$/.test(host) && !exactDeltaV3) {
+export function assertV3ProductionCleanupAllowed({
+  host,
+  exactDeltaV3 = false,
+  exactScope = false,
+}) {
+  if (host && !/^127\.0\.0\.1:\d+$/.test(host) && !exactDeltaV3 && !exactScope) {
     throw new Error(
       "v3 production cleanup is blocked: exact cleanup is over the fixed request caps and generic broad clear is disabled",
     );
   }
+}
+
+/** The partial corpus clears only the six adjacent boundary documents of corpus v3. */
+export function isExactPartialProductionScope({
+  mode,
+  lockHeld,
+  deltaMode,
+  host,
+  scheme,
+  project,
+  maxRequests,
+  managedClearJournal,
+  names,
+}) {
+  if (
+    mode !== true ||
+    lockHeld !== true ||
+    deltaMode === true ||
+    host !== "firestore.googleapis.com" ||
+    scheme !== "https" ||
+    project !== "fireemu-oracle-sbx" ||
+    !Number.isSafeInteger(maxRequests) ||
+    maxRequests < 1 ||
+    maxRequests > 1000 ||
+    typeof managedClearJournal !== "string" ||
+    managedClearJournal.length === 0 ||
+    !Array.isArray(names) ||
+    names.length !== 6
+  ) {
+    return false;
+  }
+  const expected = V3_SHRINK_NAMES.slice(0, 6);
+  return JSON.stringify(names.toSorted()) === JSON.stringify(expected.toSorted());
+}
+
+/** The bracket recording deletes exactly the fourteen documents its recipes can create. */
+export function isExactBracketProductionScope({
+  mode,
+  lockHeld,
+  otherMode,
+  host,
+  scheme,
+  project,
+  maxRequests,
+  managedClearJournal,
+  names,
+  set = "bracket",
+}) {
+  let pinned;
+  try {
+    pinned = recordingSet(set);
+  } catch {
+    return false;
+  }
+  return (
+    mode === true &&
+    lockHeld === true &&
+    otherMode === false &&
+    host === "firestore.googleapis.com" &&
+    scheme === "https" &&
+    project === "fireemu-oracle-sbx" &&
+    Number.isSafeInteger(maxRequests) &&
+    maxRequests >= 1 &&
+    maxRequests <= pinned.httpCap &&
+    typeof managedClearJournal === "string" &&
+    managedClearJournal.length > 0 &&
+    Array.isArray(names) &&
+    JSON.stringify(names.toSorted()) === JSON.stringify(pinned.ownedNames)
+  );
 }
 
 export function isExactDeltaV3ProductionScope({
@@ -198,10 +307,66 @@ export function isExactDeltaV3ProductionScope({
   }
   return false;
 }
+/**
+ * Which exact production cleanup scope, if any, this child's environment asks for. The
+ * parent passes the frozen names with the run marker; the run-specific scope is judged on
+ * the names this run will actually touch.
+ */
+export function productionScopeFromEnvironment(env) {
+  let names = null;
+  try {
+    names = JSON.parse(env.FIRESTORE_PROBE_MANAGED_CLEAR_NAMES ?? "null");
+  } catch {
+    names = null;
+  }
+  const runId = env.FIRESTORE_PROBE_DELETE_RUN_ID;
+  if (Array.isArray(names) && /^[a-f0-9]{32}$/.test(runId ?? "")) {
+    names = names.map((name) =>
+      typeof name === "string" ? name.replaceAll(DELETE_RUN_MARKER, runId) : name,
+    );
+  }
+  const common = {
+    host: env.FIRESTORE_PROBE_HOST,
+    scheme: env.FIRESTORE_PROBE_SCHEME ?? "http",
+    project: env.FIRESTORE_PROBE_PROJECT ?? "demo-conformance",
+    maxRequests: Number(env.FIRESTORE_PROBE_MAX_REQUESTS),
+    managedClearJournal:
+      env.FIRESTORE_PROBE_DELTA_JOURNAL ?? env.FIRESTORE_PROBE_MANAGED_CLEAR_JOURNAL,
+    names,
+  };
+  return {
+    delta: isExactDeltaV3ProductionScope({
+      ...common,
+      mode: env.FIRESTORE_PROBE_DELTA_V3 === "1",
+      lockHeld: env.FIRESTORE_PROBE_DELTA_LOCK_HELD === "1",
+      deltaJournal: env.FIRESTORE_PROBE_DELTA_JOURNAL,
+    }),
+    partial: isExactPartialProductionScope({
+      ...common,
+      mode: env.FIRESTORE_PROBE_PARTIAL === "1",
+      lockHeld: env.FIRESTORE_PROBE_PARTIAL_LOCK_HELD === "1",
+      deltaMode: env.FIRESTORE_PROBE_DELTA_V3 === "1" || env.FIRESTORE_PROBE_BRACKET === "1",
+    }),
+    bracket: isExactBracketProductionScope({
+      ...common,
+      mode: env.FIRESTORE_PROBE_BRACKET === "1",
+      lockHeld: env.FIRESTORE_PROBE_BRACKET_LOCK_HELD === "1",
+      otherMode: env.FIRESTORE_PROBE_DELTA_V3 === "1" || env.FIRESTORE_PROBE_PARTIAL === "1",
+      set: env.FIRESTORE_PROBE_RECORDING_SET ?? "bracket",
+    }),
+  };
+}
+
+export function isLoopbackHost(host) {
+  return /^(?:127\.0\.0\.1|localhost|\[::1\]|::1):\d+$/.test(host ?? "");
+}
+
 let requestCount = 0;
 const requestBudget = MAX_REQUESTS === undefined ? null : createRequestBudget(Number(MAX_REQUESTS));
 let managedClearBlocked = false;
 let managedClearState = null;
+// Set once the bracket preflight proved every owned name absent; cleanup is then exact.
+let bracketState = null;
 
 export function legacyManagedClearNames() {
   return [...LEGACY_SHRINK_NAMES];
@@ -469,6 +634,8 @@ const timeoutSignal = () => AbortSignal.timeout(REQUEST_TIMEOUT_MS);
 
 /** Wipes the emulator's documents so one program never sees another's writes. */
 async function clear(database = "(default)", verifyManagedScope = false) {
+  // Bracket recipes write only owned names, removed by name after the last program.
+  if (bracketState !== null) return;
   if (PRODUCTION) {
     if (managedClearBlocked) throw new Error("managed clear needs operator recovery");
     await clearThroughPublicApi(database, verifyManagedScope);
@@ -991,10 +1158,135 @@ async function writeDeltaCleanupJournal(status, extra = {}) {
     managedRequestCount: managedClearState.shrinkRequestCounter.current(),
     bulkDeleteIntent: managedClearState.bulkDeleteIntent ?? null,
     bulkDeleteOperation: managedClearState.bulkDeleteOperation ?? null,
+    bulkDeleteCancelIntent: managedClearState.bulkDeleteCancelIntent ?? null,
+    bulkDeleteCancelled: managedClearState.bulkDeleteCancelled ?? null,
     pendingMutation: managedClearState.pendingMutation ?? null,
     lastMutation: managedClearState.lastMutation ?? null,
+    cleanupDeleteIntent: managedClearState.cleanupDeleteIntent ?? null,
+    deletedNames: [...(managedClearState.cleanupDeletedNames ?? [])],
     ...extra,
   });
+}
+
+/** The reviewed admission must name the recording set this child was told to run. */
+export function assertAdmissionNamesRecordingSet(env, setName) {
+  if (parseAdmissionEnvironment(env)?.mode !== setName) {
+    throw new Error("the admission's mode differs from the requested recording set");
+  }
+}
+
+/** The bracket child runs only the fixed bracket recipes. */
+export function validateBracketCorpus(corpus, set = "bracket") {
+  validateSandboxCorpus(corpus);
+  const ids = corpus.restPrograms.map((program) => program.id).toSorted();
+  if (JSON.stringify(ids) !== JSON.stringify([...recordingSet(set).restIds].toSorted())) {
+    throw new Error("the bracket child accepts only the fixed bracket recipes");
+  }
+}
+
+/** A typed batchGet answer proves absence only when every name comes back `missing`. */
+export function batchGetProvesAbsent(status, rows, names) {
+  if (status !== 200 || !Array.isArray(rows) || rows.length !== names.length) return false;
+  const missing = new Set(rows.map((row) => (row?.found ? null : row?.missing)));
+  return names.every((name) => missing.has(name));
+}
+
+/**
+ * A runQuery answer proves the collection empty only when it returns a read time and neither a
+ * document nor an error element (an error can arrive mid-stream with status 200).
+ */
+export function runQueryProvesEmpty(status, rows) {
+  return (
+    status === 200 &&
+    Array.isArray(rows) &&
+    rows.every((row) => !row?.document && !row?.error) &&
+    rows.some((row) => typeof row?.readTime === "string")
+  );
+}
+
+const bracketDocuments = () =>
+  `${SCHEME}://${HOST}/v1/projects/${PROJECT}/databases/(default)/documents`;
+
+async function bracketJson(input, init) {
+  const response = await trackedFetch(input, {
+    ...init,
+    headers: authorized(init.body === undefined ? {} : { "content-type": "application/json" }),
+    signal: timeoutSignal(),
+    redirect: "error",
+  });
+  const text = await response.text();
+  let body = null;
+  try {
+    body = JSON.parse(text);
+  } catch {
+    // A non-JSON answer proves nothing.
+  }
+  return { status: response.status, body };
+}
+
+async function bracketOwnedNamesAbsent(names) {
+  const { status, body } = await bracketJson(`${bracketDocuments()}:batchGet`, {
+    method: "POST",
+    body: JSON.stringify({ documents: names }),
+  });
+  return batchGetProvesAbsent(status, body, names);
+}
+
+async function writeBracketJournal(status, extra = {}) {
+  await writePrivateJsonDurably(MANAGED_CLEAR_JOURNAL, {
+    schemaVersion: 1,
+    mode: "cleanup-bracket",
+    status,
+    project: PROJECT,
+    database: "(default)",
+    runId: deleteRunId,
+    corpusDigest: CORPUS_DIGEST,
+    sourceGitSha: SOURCE_GIT_SHA,
+    recordingSet: BRACKET_SET_NAME,
+    names: [...recordingSet(BRACKET_SET_NAME).ownedNames],
+    ...extra,
+  });
+}
+
+/** Before any write: every owned name is absent and the queried collection is empty. */
+async function bracketPreflight() {
+  const set = recordingSet(BRACKET_SET_NAME);
+  if (!(await bracketOwnedNamesAbsent([...set.ownedNames]))) {
+    throw new Error("bracket preflight: an owned document exists or absence is unproven");
+  }
+  if (!set.queriedCollection) return;
+  const { status, body } = await bracketJson(`${bracketDocuments()}:runQuery`, {
+    method: "POST",
+    body: JSON.stringify({
+      structuredQuery: { from: [{ collectionId: set.queriedCollection }], limit: 1 },
+    }),
+  });
+  if (!runQueryProvesEmpty(status, body)) {
+    throw new Error("bracket preflight: the queried collection is not proven empty");
+  }
+}
+
+/** Delete every owned name, then prove all of them absent; otherwise keep the lock. */
+async function bracketCleanup() {
+  await writeBracketJournal("cleaning");
+  let failedDeletes = 0;
+  const owned = recordingSet(BRACKET_SET_NAME).ownedNames;
+  for (const name of owned) {
+    const relative = name.slice(name.indexOf("/documents/") + "/documents/".length);
+    try {
+      const { status } = await bracketJson(`${bracketDocuments()}/${relative}`, {
+        method: "DELETE",
+      });
+      if (status !== 200) failedDeletes += 1;
+    } catch {
+      failedDeletes += 1;
+    }
+  }
+  const absent = failedDeletes === 0 && (await bracketOwnedNamesAbsent([...owned]));
+  await writeBracketJournal(absent ? "complete" : "cleanup-failed", { failedDeletes });
+  if (!absent) {
+    throw new Error("bracket cleanup did not prove every owned document absent; keep the lock");
+  }
 }
 
 async function clearDeltaV3Exact(base, verifyManagedScope) {
@@ -1014,45 +1306,15 @@ async function clearDeltaV3Exact(base, verifyManagedScope) {
       throw new Error("delta-v3 found an absent/changed target or unexpected child collection");
     }
   }
-  const collectionIds = managedClearScope(managedClearState.names, PROJECT, "(default)");
+  managedClearScope(managedClearState.names, PROJECT, "(default)");
   const presentNames = [...managedClearState.preflightUpdateTimes.keys()];
-  const presentCollections = collectionIds.filter((collectionId) =>
-    presentNames.some((name) => name.split("/documents/")[1].split("/")[0] === collectionId),
-  );
-  if (presentCollections.length > 0) {
-    if (managedClearState.bulkDeleteIntent || managedClearState.bulkDeleteOperation) {
-      throw new Error("delta-v3 cleanup has an unresolved prior bulk-delete operation");
-    }
-    managedClearState.bulkDeleteIntent = {
-      collectionIds: presentCollections,
-      names: presentNames,
-      updateTimes: Object.fromEntries(managedClearState.preflightUpdateTimes),
-    };
-    await writeDeltaCleanupJournal("bulk-delete-intent");
-    const api = `${SCHEME}://${HOST}/v1/projects/${PROJECT}/databases/(default)`;
-    const started = await managedShrinkRequest(
-      "delta-v3 bulk-delete start",
-      `${api}:bulkDeleteDocuments`,
-      {
-        method: "POST",
-        headers: authorized({ "content-type": "application/json" }),
-        body: JSON.stringify({ collectionIds: presentCollections, namespaceIds: [""] }),
-        signal: timeoutSignal(),
-      },
-    );
-    if (!started.ok) throw new Error(`delta-v3 bulk-delete start ${started.status}`);
-    const operation = (await started.json()).name;
-    const operationPrefix = `projects/${PROJECT}/databases/(default)/operations/`;
-    if (
-      typeof operation !== "string" ||
-      !operation.startsWith(operationPrefix) ||
-      !/^[A-Za-z0-9_-]+$/.test(operation.slice(operationPrefix.length))
-    ) {
-      throw new Error("delta-v3 bulk-delete operation escaped the fixed sandbox");
-    }
-    managedClearState.bulkDeleteOperation = operation;
-    await writeDeltaCleanupJournal("bulk-delete-active");
-    await pollDeltaV3BulkDelete();
+  if (managedClearState.bulkDeleteIntent || managedClearState.bulkDeleteOperation) {
+    throw new Error("delta-v3 cleanup has an unresolved prior bulk-delete operation");
+  }
+  // Shrink, then delete: a production bulk delete runs for hours, while a refused
+  // document shrinks in a few arrayRemove commits (owner-approved cleanup exception).
+  for (const name of presentNames) {
+    await deleteDeltaV3Document(base, name);
   }
   if (verifyManagedScope) {
     await verifyManagedShrinkScopeAbsent(base);
@@ -1061,27 +1323,111 @@ async function clearDeltaV3Exact(base, verifyManagedScope) {
   managedClearBlocked = false;
 }
 
-async function pollDeltaV3BulkDelete() {
+async function deleteDeltaV3Document(base, name) {
+  const send = async (action, updateTime) => {
+    managedClearState.cleanupDeleteIntent = { action, name, updateTime };
+    await writeDeltaCleanupJournal("cleanup-delete-intent");
+    return managedShrinkRequest(action, `${base}:commit`, {
+      method: "POST",
+      headers: authorized({ "content-type": "application/json" }),
+      body: JSON.stringify({ writes: [{ delete: name, currentDocument: { updateTime } }] }),
+      signal: timeoutSignal(),
+    });
+  };
+  const updateTime = managedClearState.preflightUpdateTimes.get(name);
+  if (!updateTime) throw new Error("delta-v3 cleanup target was not present in its preflight");
+  let response = await send("delta-v3 cleanup delete", updateTime);
+  if (!response.ok) {
+    const body = await response.text();
+    if (!isTransactionTooBigRefusal(response.status, body)) {
+      throw new Error(`delta-v3 cleanup delete ${response.status}`);
+    }
+    const shrunkUpdateTime = await shrinkBoundaryDocument(name);
+    response = await send("delta-v3 cleanup delete retry", shrunkUpdateTime);
+    if (!response.ok) throw new Error(`delta-v3 cleanup delete retry ${response.status}`);
+  }
+  await validateDeleteAcknowledgement(response);
+  managedClearState.cleanupDeleteIntent = null;
+  managedClearState.cleanupDeletedNames.push(name);
+  await writeDeltaCleanupJournal("cleanup-deleted");
+}
+
+// A cancel run stops within this many polls, well inside the parent's 20-minute child
+// timeout, and never starts the shrink-then-delete cleanup itself.
+const DELTA_V3_CANCEL_POLL_LIMIT = 12;
+
+async function readDeltaV3Operation() {
+  const response = await managedShrinkRequest(
+    "delta-v3 bulk-delete poll",
+    `${SCHEME}://${HOST}/v1/${managedClearState.bulkDeleteOperation}`,
+    { headers: authorized(), signal: timeoutSignal() },
+  );
+  if (!response.ok) throw new Error(`delta-v3 bulk-delete poll ${response.status}`);
+  return response.json();
+}
+
+// Records a terminal operation; returns false while it is still running.
+async function settleDeltaV3Operation(state) {
+  if (state.done !== true) return false;
+  const operation = managedClearState.bulkDeleteOperation;
+  if (managedClearState.bulkDeleteCancelIntent === operation && state.error) {
+    // google.rpc.Code CANCELLED after this task's own journaled cancel: the operation
+    // stopped, and a later cleanup deletes what remains.
+    if (state.error.code !== 1 || state.name !== operation) {
+      throw new Error("cancelled delta-v3 bulk delete ended in an unexpected state");
+    }
+    managedClearState.bulkDeleteCancelled = operation;
+  } else {
+    validateManagedClearOperation(state, PROJECT);
+  }
+  managedClearState.bulkDeleteOperation = null;
+  managedClearState.bulkDeleteIntent = null;
+  managedClearState.bulkDeleteCancelIntent = null;
+  await writeDeltaCleanupJournal(
+    managedClearState.bulkDeleteCancelled ? "bulk-delete-cancelled" : "bulk-delete-done",
+  );
+  return true;
+}
+
+async function cancelDeltaV3BulkDelete() {
+  const operation = managedClearState?.bulkDeleteOperation;
+  if (!operation)
+    throw new Error("delta-v3 recovery has no journaled bulk-delete operation to cancel");
+  // A journaled intent means the cancel may already have been sent: never send it again.
+  if (managedClearState.bulkDeleteCancelIntent !== operation) {
+    // Read first: an operation that already ended is recorded, not cancelled.
+    if (await settleDeltaV3Operation(await readDeltaV3Operation())) return;
+    managedClearState.bulkDeleteCancelIntent = operation;
+    await writeDeltaCleanupJournal("bulk-delete-cancel-intent");
+    const response = await managedShrinkRequest(
+      "delta-v3 bulk-delete cancel",
+      `${SCHEME}://${HOST}/v1/${operation}:cancel`,
+      {
+        method: "POST",
+        headers: authorized({ "content-type": "application/json" }),
+        body: "{}",
+        signal: timeoutSignal(),
+      },
+    );
+    if (!response.ok) throw new Error(`delta-v3 bulk-delete cancel ${response.status}`);
+  }
+  await pollDeltaV3BulkDelete(DELTA_V3_CANCEL_POLL_LIMIT);
+}
+
+async function pollDeltaV3BulkDelete(limit = 100) {
   if (!managedClearState?.bulkDeleteOperation) {
     throw new Error("delta-v3 recovery cannot resume without a durable bulk-delete operation");
   }
-  const api = `${SCHEME}://${HOST}/v1`;
-  const pollLimit = Math.min(100, 400 - managedClearState.shrinkRequestCounter.current());
+  const pollLimit = Math.min(limit, 400 - managedClearState.shrinkRequestCounter.current());
   for (let attempt = 0; attempt < pollLimit; attempt += 1) {
-    const response = await managedShrinkRequest(
-      "delta-v3 bulk-delete poll",
-      `${api}/${managedClearState.bulkDeleteOperation}`,
-      { headers: authorized(), signal: timeoutSignal() },
+    // A production bulk delete runs for minutes; poll at the managed interval (60 s).
+    await new Promise((wake) => setTimeout(wake, MANAGED_POLL_MS));
+    if (await settleDeltaV3Operation(await readDeltaV3Operation())) return;
+  }
+  if (managedClearState.bulkDeleteCancelIntent === managedClearState.bulkDeleteOperation) {
+    throw new Error(
+      "delta-v3 bulk delete is still cancelling; the journal keeps the operation and the sent cancel",
     );
-    if (!response.ok) throw new Error(`delta-v3 bulk-delete poll ${response.status}`);
-    const state = await response.json();
-    if (state.done === true) {
-      validateManagedClearOperation(state, PROJECT);
-      managedClearState.bulkDeleteOperation = null;
-      managedClearState.bulkDeleteIntent = null;
-      await writeDeltaCleanupJournal("bulk-delete-done");
-      return;
-    }
   }
   throw new Error(
     "delta-v3 bulk-delete remains nonterminal; preserve its journal and block new sends",
@@ -1594,12 +1940,40 @@ async function runDeltaV3RecoveryOnly() {
     cleanupDeleteIntent: null,
     bulkDeleteIntent: journal.bulkDeleteIntent ?? null,
     bulkDeleteOperation: journal.bulkDeleteOperation ?? null,
+    bulkDeleteCancelled: journal.bulkDeleteCancelled ?? null,
+    bulkDeleteCancelIntent: journal.bulkDeleteCancelIntent ?? null,
     pendingMutation: journal.pendingMutation ?? null,
     lastMutation: journal.lastMutation ?? null,
   };
+  if (
+    managedClearState.bulkDeleteCancelIntent !== null &&
+    managedClearState.bulkDeleteCancelIntent !== managedClearState.bulkDeleteOperation
+  ) {
+    throw new Error("delta-v3 cancel intent names an operation other than the journaled one");
+  }
+  if (
+    managedClearState.bulkDeleteCancelled !== null &&
+    !new RegExp(`^projects/${PROJECT}/databases/\\(default\\)/operations/[A-Za-z0-9_-]+$`).test(
+      managedClearState.bulkDeleteCancelled,
+    )
+  ) {
+    throw new Error("delta-v3 cancelled operation escaped the fixed sandbox");
+  }
+  if (DELTA_V3_CANCEL_BULK_DELETE && !managedClearState.bulkDeleteOperation) {
+    throw new Error("delta-v3 recovery has no journaled bulk-delete operation to cancel");
+  }
   const base = `${SCHEME}://${HOST}/v1/projects/${PROJECT}/databases/(default)/documents`;
   managedClearBlocked = true;
   await resolveDeltaPendingMutation();
+  if (DELTA_V3_CANCEL_BULK_DELETE) {
+    // The cleanup runs as a separate recovery with its own full child timeout, so a
+    // slow cancel can never strand a half-shrunk document.
+    await cancelDeltaV3BulkDelete();
+    if (META_OUT) {
+      await writeFile(META_OUT, `${JSON.stringify({ requestCount })}\n`, { mode: 0o600 });
+    }
+    return;
+  }
   if (managedClearState.bulkDeleteOperation) await pollDeltaV3BulkDelete();
   await clearDeltaV3Exact(base, true);
   if (META_OUT) await writeFile(META_OUT, `${JSON.stringify({ requestCount })}\n`, { mode: 0o600 });
@@ -1966,11 +2340,90 @@ function resolvePath(path, raw) {
   });
 }
 
+/** The document a write names, for the write-ahead intent. Form bodies are never JSON. */
+export function mutationIntentTarget({ body, json, resolvedPath }) {
+  const write = json && body ? JSON.parse(body)?.writes?.[0] : null;
+  const named = write?.update?.name ?? write?.delete ?? write?.transform?.document;
+  if (named) return named;
+  if (resolvedPath.includes("/documents/")) {
+    return resolvedPath.replace(/^\/v1\//, "").split(/[?#]/, 1)[0];
+  }
+  return null;
+}
+
+/**
+ * One step of a valid WebChannel session. The opening's SID and session header stay in `raw`
+ * for the later paths; the recording keeps only shapes. The measured body is sent only after
+ * the control message was acknowledged, and a session that opened is always terminated.
+ */
+export function webchannelSessionPrerequisite(kind, raw, steps) {
+  if (kind === "handshake") return null;
+  if (!raw.get("handshake")) return "the WebChannel session did not open";
+  if (kind === "boundary" && steps.control?.body !== "forward-ack") {
+    return "the WebChannel control message was not acknowledged";
+  }
+  return null;
+}
+
+async function webchannelSessionStep(spec, raw, init) {
+  const kind = spec.webchannelSession;
+  const session = kind === "handshake" ? null : raw.get("handshake");
+  if (spec.method === "POST") {
+    init.headers["content-type"] = "application/x-www-form-urlencoded;charset=UTF-8";
+    init.body =
+      kind === "handshake"
+        ? makeWebChannelHandshakeBody()
+        : makeWebChannelFormBody(spec.webchannelBodyBytes);
+  }
+  init.redirect = "error";
+  init.signal = AbortSignal.timeout(kind === "boundary" ? BOUNDARY_TIMEOUT_MS : REQUEST_TIMEOUT_MS);
+  const noResponse = {
+    recorded: { status: 0, code: "no-response", message: "no response within the timeout" },
+    raw: null,
+  };
+  const timedOut = (error) => error?.name === "TimeoutError" || error?.name === "AbortError";
+  let response;
+  try {
+    // Resolve the session placeholders last so that no URL rewrite can touch the SID.
+    response = await trackedFetch(resolvePath(url(spec.path), raw), init);
+  } catch (error) {
+    if (timedOut(error)) return noResponse;
+    // Only the measured body may end in a dropped connection that is itself the answer.
+    if (kind === "boundary" && isDroppedConnection(error)) {
+      return { recorded: projectWebChannelReset("reset-before-response"), raw: null };
+    }
+    throw error;
+  }
+  let text;
+  try {
+    text = await response.text();
+  } catch (error) {
+    // A timeout while the answer's body arrives is no answer, whatever the step.
+    if (timedOut(error)) return noResponse;
+    if (kind === "boundary" && isDroppedConnection(error)) {
+      return { recorded: projectWebChannelReset("reset-during-response"), raw: null };
+    }
+    throw error;
+  }
+  const opened =
+    kind === "handshake"
+      ? parseWebChannelOpening(response.status, response.headers.get("x-http-session-id"), text)
+      : null;
+  return {
+    recorded: projectWebChannelSessionStep(kind, response.status, text, opened ?? session),
+    raw: opened,
+  };
+}
+
 async function step(spec, raw) {
   const init = { method: spec.method, headers: { ...spec.headers } };
   const credential = selectCredential(spec, { ownerToken: TOKEN, userToken: USER_TOKEN });
   for (const name of spec.credential === undefined ? [] : Object.keys(init.headers)) {
     if (name.toLowerCase() === "authorization") delete init.headers[name];
+  }
+  if (spec.webchannelSession !== undefined) {
+    if (credential.authorization !== null) init.headers.authorization = credential.authorization;
+    return webchannelSessionStep(spec, raw, init);
   }
   if (spec.webchannelBodyBytes !== undefined) {
     if (spec.method !== "POST" || spec.path !== WEBCHANNEL_PATH || spec.body !== undefined) {
@@ -1983,7 +2436,9 @@ async function step(spec, raw) {
     init.headers["content-type"] = "application/json";
     init.body =
       typeof spec.body === "string"
-        ? spec.body
+        ? spec.padToBytes === undefined
+          ? spec.body
+          : padJsonBody(spec.body, spec.padToBytes)
         : JSON.stringify(resolve(substituteProject(spec.body), raw));
   }
   if (credential.authorization !== null) init.headers.authorization = credential.authorization;
@@ -1996,12 +2451,11 @@ async function step(spec, raw) {
     const resolvedPath = resolvePath(spec.path, raw);
     const input = url(resolvedPath);
     if (new Set(["POST", "PATCH", "DELETE"]).has(spec.method.toUpperCase())) {
-      let target;
-      const write = init.body ? JSON.parse(init.body)?.writes?.[0] : null;
-      target = write?.update?.name ?? write?.delete ?? write?.transform?.document;
-      if (!target && resolvedPath.includes("/documents/")) {
-        target = resolvedPath.replace(/^\/v1\//, "").split(/[?#]/, 1)[0];
-      }
+      const target = mutationIntentTarget({
+        body: init.body,
+        json: spec.webchannelBodyBytes === undefined,
+        resolvedPath,
+      });
       if (target) {
         await writeDeltaMutationIntent(
           replaceRunMarker(target),
@@ -2132,6 +2586,32 @@ function validateDeltaV3Corpus(programs, names) {
   }
 }
 
+function validatePartialCorpus(corpus, names) {
+  const programs = corpus?.restPrograms;
+  const reject = () => {
+    throw new Error("partial input differs from the reviewed partial corpus");
+  };
+  if (
+    DELTA_V3_MODE ||
+    corpus?.schemaVersion !== 1 ||
+    corpus.sourceCorpusSha256 !== CORPUS_DIGEST ||
+    !Array.isArray(programs) ||
+    programs.length === 0 ||
+    new Set(programs.map((program) => program.id)).size !== programs.length ||
+    corpus.restRequestCount !==
+      programs.reduce((total, program) => total + program.steps.length, 0) ||
+    programs.some((program) => deleteBoundaryLength(program) !== null) ||
+    programs.at(-1).id !== PARTIAL_BOUNDARY_ID
+  ) {
+    reject();
+  }
+  const boundaryNames = programs
+    .at(-1)
+    .steps.filter((write) => write.id.startsWith("write-"))
+    .map((write) => write.body?.writes?.[0]?.update?.name);
+  if (JSON.stringify(boundaryNames.toSorted()) !== JSON.stringify([...names].toSorted())) reject();
+}
+
 function provesDeleteTargetExists(program, stepSpec, document, recorded) {
   const expectedLength = deleteBoundaryLength(program);
   const expectedName = replaceRunMarker(
@@ -2154,6 +2634,29 @@ function provesDeleteTargetExists(program, stepSpec, document, recorded) {
         Object.keys(value ?? {}).length === 1 && value.integerValue === String(index),
     )
   );
+}
+
+/**
+ * Document names in a runQuery answer. Production answers an empty query with one row
+ * that holds only `readTime`, so only rows carrying a document count. Any other row
+ * shape (an error, a skipped count, a document without a name) is not a proof.
+ */
+export function queryDocumentNames(rows) {
+  if (!Array.isArray(rows)) return null;
+  const names = [];
+  for (const row of rows) {
+    if (row && typeof row === "object" && Object.hasOwn(row, "document")) {
+      if (typeof row.document?.name !== "string") return null;
+      names.push(row.document.name);
+    } else if (
+      !row ||
+      typeof row !== "object" ||
+      Object.keys(row).some((key) => key !== "readTime")
+    ) {
+      return null;
+    }
+  }
+  return names;
 }
 
 function provesDeleteOutcome(program, steps, raw) {
@@ -2180,7 +2683,7 @@ function provesDeleteOutcome(program, steps, raw) {
     return false;
   }
   const afterRaw = raw.get("after-delete");
-  const groupRaw = raw.get("group-after-delete");
+  const groupNames = queryDocumentNames(raw.get("group-after-delete"));
   const count = deleteBoundaryLength(program);
   const beforeSpec = program.steps.find((candidate) => candidate.id === "before-delete");
   const name = replaceRunMarker(
@@ -2191,8 +2694,8 @@ function provesDeleteOutcome(program, steps, raw) {
       Array.isArray(afterRaw) &&
       afterRaw.length === 1 &&
       afterRaw[0]?.missing === name &&
-      Array.isArray(groupRaw) &&
-      groupRaw.length === 0
+      groupNames !== null &&
+      groupNames.length === 0
     );
   }
   const found = Array.isArray(afterRaw) && afterRaw.length === 1 ? afterRaw[0]?.found : null;
@@ -2203,9 +2706,9 @@ function provesDeleteOutcome(program, steps, raw) {
     Array.isArray(foundValues) &&
     foundValues.length === count &&
     foundValues.every((value, index) => value?.integerValue === String(index)) &&
-    Array.isArray(groupRaw) &&
-    groupRaw.length === 1 &&
-    groupRaw[0]?.document?.name === name
+    groupNames !== null &&
+    groupNames.length === 1 &&
+    groupNames[0] === name
   );
 }
 
@@ -2221,7 +2724,7 @@ function deleteBoundaryProof(program, steps, raw, blocked) {
     provesDeleteTargetExists(program, beforeSpec, raw.get("before-delete"), steps["before-delete"]);
   const outcomeProven = targetExists && provesDeleteOutcome(program, steps, raw);
   const after = raw.get("after-delete");
-  const group = raw.get("group-after-delete");
+  const groupNames = queryDocumentNames(raw.get("group-after-delete"));
   const accepted =
     steps.delete?.status >= 200 && steps.delete.status < 300 && steps.delete.code === "OK";
   const refused =
@@ -2235,37 +2738,48 @@ function deleteBoundaryProof(program, steps, raw, blocked) {
     outcome: accepted ? "accepted" : refused ? "refused" : "unknown",
     postDeleteAbsent:
       accepted && Array.isArray(after) && after.length === 1 && after[0]?.missing === name,
-    groupEmpty: accepted && Array.isArray(group) && group.length === 0,
+    groupEmpty: accepted && groupNames !== null && groupNames.length === 0,
     postDeletePresent:
       refused && Array.isArray(after) && after.length === 1 && after[0]?.found?.name === name,
     groupContainsTarget:
-      refused && Array.isArray(group) && group.length === 1 && group[0]?.document?.name === name,
+      refused && groupNames !== null && groupNames.length === 1 && groupNames[0] === name,
   };
 }
 
 async function main() {
-  const deltaNames = (() => {
-    try {
-      return JSON.parse(MANAGED_CLEAR_NAMES ?? "null");
-    } catch {
-      return null;
-    }
-  })();
-  const deltaScope = isExactDeltaV3ProductionScope({
-    mode: DELTA_V3_MODE,
-    lockHeld: DELTA_LOCK_HELD,
-    host: HOST,
-    scheme: SCHEME,
-    project: PROJECT,
-    maxRequests: Number(MAX_REQUESTS),
-    deltaJournal: process.env.FIRESTORE_PROBE_DELTA_JOURNAL,
-    managedClearJournal: MANAGED_CLEAR_JOURNAL,
-    names: deltaNames,
-  });
-  assertV3ProductionCleanupAllowed({ host: HOST, exactDeltaV3: deltaScope });
+  // A child launched by hand with production variables must not reach the service.
+  // Recovery modes only delete this task's own journaled names and keep their own checks.
+  if (RECOVERY_MODE === undefined) {
+    requireChildProductionAdmission({
+      // Any non-loopback host counts, whatever FIRESTORE_PROBE_TARGET says.
+      production: HOST !== undefined && !isLoopbackHost(HOST),
+      env: process.env,
+      runId: process.env.FIRESTORE_PROBE_DELETE_RUN_ID,
+    });
+  }
+  const {
+    delta: deltaScope,
+    partial: partialScope,
+    bracket: bracketScope,
+  } = productionScopeFromEnvironment(process.env);
+  // Recovery modes check their own exact journal and names before any request; the
+  // generic gate is for recordings.
+  if (RECOVERY_MODE === undefined) {
+    assertV3ProductionCleanupAllowed({
+      host: HOST,
+      exactDeltaV3: deltaScope,
+      exactScope: partialScope || bracketScope,
+    });
+  }
+  if (RECOVERY_MODE === undefined && DELTA_V3_CANCEL_BULK_DELETE) {
+    throw new Error("only delta-v3 recovery may cancel a bulk delete");
+  }
   if (RECOVERY_MODE !== undefined) {
     if (!["recover-legacy", "recover-v3", "recover-delta-v3"].includes(RECOVERY_MODE)) {
       throw new Error("unsupported Firestore probe recovery mode");
+    }
+    if (DELTA_V3_CANCEL_BULK_DELETE && RECOVERY_MODE !== "recover-delta-v3") {
+      throw new Error("only delta-v3 recovery may cancel a bulk delete");
     }
     if (!PRODUCTION || PROJECT !== "fireemu-oracle-sbx" || !HOST || !TOKEN) {
       throw new Error("legacy recovery requires the fixed sandbox production target");
@@ -2287,7 +2801,32 @@ async function main() {
     /^[a-f0-9]{32}$/.test(fixedLocalRunId ?? "") && (/^127\.0\.0\.1:\d+$/.test(HOST) || PRODUCTION)
       ? fixedLocalRunId
       : randomUUID().replaceAll("-", "");
-  if (PRODUCTION && (MANAGED_CLEAR_NAMES || MANAGED_CLEAR_JOURNAL)) {
+  if (BRACKET_MODE) {
+    // Production needs the exact scope the runner sends; a loopback rehearsal needs the
+    // same names and journal.
+    const names = JSON.parse(MANAGED_CLEAR_NAMES ?? "null");
+    if (
+      (PRODUCTION ? !bracketScope : !isLoopbackHost(HOST)) ||
+      !Array.isArray(names) ||
+      JSON.stringify(names.toSorted()) !==
+        JSON.stringify(recordingSet(BRACKET_SET_NAME).ownedNames) ||
+      !MANAGED_CLEAR_JOURNAL
+    ) {
+      throw new Error("the bracket child requires its exact scope, names and journal");
+    }
+    validateBracketCorpus(corpusInput, BRACKET_SET_NAME);
+    if (PRODUCTION) {
+      assertNoProxyEnvironment(process.env);
+      assertAdmissionNamesRecordingSet(process.env, BRACKET_SET_NAME);
+    }
+    try {
+      await bracketPreflight();
+    } finally {
+      if (META_OUT) await writeFile(META_OUT, `${JSON.stringify({ requestCount })}\n`);
+    }
+    bracketState = { names };
+    await writeBracketJournal("prepared");
+  } else if (PRODUCTION && (MANAGED_CLEAR_NAMES || MANAGED_CLEAR_JOURNAL)) {
     if (!MANAGED_CLEAR_NAMES || !MANAGED_CLEAR_JOURNAL) {
       throw new Error("managed clear requires both frozen names and a private journal");
     }
@@ -2313,11 +2852,13 @@ async function main() {
         ["legacy", "v3"].includes(shrinkScope) &&
         names.length === 6
       ) &&
+      !(partialScope && shrinkScope === "v3") &&
       shrinkScope !== "delta-v3"
     ) {
       throw new Error("managed clear requires the exact frozen corpus-v3 names");
     }
     if (shrinkScope === "delta-v3") validateDeltaV3Corpus(corpusInput, names);
+    if (PARTIAL_MODE) validatePartialCorpus(corpusInput, names);
     managedClearScope(names, PROJECT, "(default)");
     managedClearState = {
       names,
@@ -2407,6 +2948,24 @@ async function main() {
             continue;
           }
         }
+        if (
+          ATTEMPT_DEADLINE_MS !== undefined &&
+          Date.now() - CHILD_STARTED_AT >= ATTEMPT_DEADLINE_MS &&
+          spec.webchannelSession !== "terminate"
+        ) {
+          steps[spec.id] = { status: 0, code: "not-run", message: "the attempt deadline passed" };
+          raw.set(spec.id, null);
+          continue;
+        }
+        const sessionBlocked =
+          spec.webchannelSession === undefined
+            ? null
+            : webchannelSessionPrerequisite(spec.webchannelSession, raw, steps);
+        if (sessionBlocked !== null) {
+          steps[spec.id] = { status: 0, code: "not-run", message: sessionBlocked };
+          raw.set(spec.id, null);
+          continue;
+        }
         let outcome;
         try {
           outcome = await step(spec, raw);
@@ -2439,9 +2998,13 @@ async function main() {
             }),
       };
     }
+    // Written before the final cleanup, so a slow or failed cleanup keeps the recording
+    // for recovery and review; the runner uses it only when the child exits cleanly.
+    await writeFile(OUT, `${JSON.stringify(results, null, 2)}\n`);
   } finally {
     try {
-      if (!managedClearBlocked) {
+      if (bracketState !== null) await bracketCleanup();
+      else if (!managedClearBlocked) {
         for (const database of touchedDatabases) await clear(database, true);
       }
     } finally {
@@ -2450,7 +3013,6 @@ async function main() {
       }
     }
   }
-  await writeFile(OUT, `${JSON.stringify(results, null, 2)}\n`);
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) await main();

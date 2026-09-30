@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 
@@ -8,8 +8,22 @@ import { compareSandboxArtifact } from "./fs-data-write-sandbox.mjs";
 import {
   prepareSandboxCorpus,
   selectComparableSandboxRecipes,
+  selectSupplementComparisons,
 } from "./fs-data-write-sandbox-run.mjs";
 
+// Broad-run file names keep the commit abbreviation they were recorded under. After the 2026-09-28
+// author correction the history-rewrite record maps each such label to the rewritten commit.
+const historyRewritePath = fileURLToPath(
+  new URL("../../spec/compatibility/history-rewrite-2026-09-28.json", import.meta.url),
+);
+const rewrittenCommitLabels = existsSync(historyRewritePath)
+  ? new Map(
+      JSON.parse(readFileSync(historyRewritePath, "utf8")).labels.map(({ token, new: commit }) => [
+        commit,
+        token,
+      ]),
+    )
+  : new Map();
 const closurePath = fileURLToPath(
   new URL("../../spec/compatibility/closure/FS-DATA-WRITE.json", import.meta.url),
 );
@@ -19,6 +33,480 @@ const fixturePath = fileURLToPath(
 const manifestPath = fileURLToPath(
   new URL("../fs-data-write-recipe-digests.json", import.meta.url),
 );
+const reviewCandidatePath = fileURLToPath(
+  new URL(
+    "../../spec/compatibility/closure/evidence/FS-DATA-WRITE-current-comparison.json",
+    import.meta.url,
+  ),
+);
+const acceptedConditionsPath = fileURLToPath(
+  new URL(
+    "../../spec/compatibility/closure/evidence/FS-DATA-WRITE-current-accepted-conditions.json",
+    import.meta.url,
+  ),
+);
+const acceptedLocalRowsPath = fileURLToPath(
+  new URL(
+    "../../spec/compatibility/closure/evidence/FS-DATA-WRITE-current-accepted-local-rows.json",
+    import.meta.url,
+  ),
+);
+const savedStreamReplayPath = fileURLToPath(
+  new URL(
+    "../../spec/compatibility/closure/evidence/FS-DATA-WRITE-stream-transaction-current-saved-replay.json",
+    import.meta.url,
+  ),
+);
+const listComparisonPath = fileURLToPath(
+  new URL(
+    "../../spec/compatibility/closure/evidence/FS-DATA-WRITE-LIST-comparison.json",
+    import.meta.url,
+  ),
+);
+const historicalRegressionPath = fileURLToPath(
+  new URL(
+    "../../spec/compatibility/closure/evidence/FS-DATA-WRITE-historical-regression.json",
+    import.meta.url,
+  ),
+);
+const releaseBundlePath = fileURLToPath(
+  new URL(
+    "../../spec/compatibility/closure/evidence/FS-DATA-WRITE-release-artifact.json",
+    import.meta.url,
+  ),
+);
+const terminalConditionPath = fileURLToPath(
+  new URL(
+    "../../spec/compatibility/closure/evidence/FS-DATA-WRITE-terminal-local-digests.json",
+    import.meta.url,
+  ),
+);
+// In the order the local checker reads the supplement directory.
+const supplements = [
+  "bracket-fb886aa8eed899746ecf607b.json",
+  "delta-v3-a14f265fea575003423c7ebd.json",
+  "followup-b0aeefc97b4c48765db4a9a1-indexed.json",
+  "followup-b0aeefc97b4c48765db4a9a1-webchannel.json",
+  "partial-7bfd51026a2ac56617d81504.json",
+].map((name) => ({
+  name,
+  fixture: JSON.parse(
+    readFileSync(
+      new URL(`../fs-data-write-production-supplements/${name}`, import.meta.url),
+      "utf8",
+    ),
+  ),
+}));
+
+function currentRecordingSelection(fixture, manifest, corpus) {
+  const base = selectComparableSandboxRecipes(fixture, manifest, corpus, corpus);
+  const supplemental = selectSupplementComparisons(
+    supplements,
+    corpus,
+    base.pendingRestIds,
+    base.pendingStreamIds,
+  );
+  return { base, supplemental };
+}
+
+test("final write comparison has no known or unresolved difference", () => {
+  const candidate = JSON.parse(readFileSync(reviewCandidatePath, "utf8"));
+  assert.equal(candidate.task, "FS-DATA-WRITE");
+  assert.equal(candidate.decision, "PENDING_REVIEW");
+  assert.match(candidate.sourceHead, /^[0-9a-f]{40}$/);
+  assert.match(candidate.executableSha256, /^[0-9a-f]{64}$/);
+  assert.equal(candidate.comparedRestPrograms, 106);
+  assert.equal(candidate.comparedGrpcStreams, 9);
+  assert.deepEqual(candidate.pendingRestIds, []);
+  assert.deepEqual(candidate.pendingStreamIds, []);
+  assert.deepEqual(candidate.otherDifferenceIds, []);
+  assert.equal(candidate.retiredRestIds.length, 10);
+  // The former D3 rows (owner decision, 2026-09-25) all match since the strict single-field
+  // threshold and document-name guard follow production (2026-09-28).
+  assert.deepEqual(candidate.approvedKnownDifferenceIds, []);
+  assert.deepEqual(candidate.pendingOracleDifferenceIds, []);
+  assert.equal(candidate.historicalRegression, undefined);
+  assert.ok(candidate.reviewNotes.every((note) => !note.includes("remain pending integration")));
+  for (const fixture of candidate.productionFixtures) {
+    const path = fileURLToPath(new URL(`../../${fixture.path}`, import.meta.url));
+    const digest = createHash("sha256").update(readFileSync(path)).digest("hex");
+    assert.equal(fixture.sha256, digest, fixture.path);
+    assert.equal(fixture.recordingDigests.length, 2, fixture.path);
+  }
+});
+
+test("current accepted conditions bind every selected row and no difference", async () => {
+  const closure = JSON.parse(readFileSync(closurePath, "utf8"));
+  const candidate = JSON.parse(readFileSync(reviewCandidatePath, "utf8"));
+  const accepted = JSON.parse(readFileSync(acceptedConditionsPath, "utf8"));
+  const localRows = JSON.parse(readFileSync(acceptedLocalRowsPath, "utf8"));
+  const fixture = JSON.parse(readFileSync(fixturePath, "utf8"));
+  const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+  const { corpus } = await prepareSandboxCorpus();
+  const { base, supplemental } = currentRecordingSelection(fixture, manifest, corpus);
+  const sourceById = new Map();
+  for (const selection of [{ name: "base", ...base }, ...supplemental.comparisons]) {
+    for (const id of [...selection.matchedRestIds, ...selection.matchedStreamIds]) {
+      assert.ok(!sourceById.has(id), `${id}: duplicate current recording`);
+      sourceById.set(id, selection);
+    }
+  }
+  const acceptedIds = new Map([
+    ["FS-WRITE-LIMITS-03/batch-undecodable-value", "VERIFIED"],
+    ["FS-DATA-WRITE/map-value-key-validation", "VERIFIED"],
+    ["FS-LIMIT-INDEX-ENTRIES-PER-DOCUMENT", "VERIFIED"],
+    ["FS-LIMIT-FIELD-PATH-BYTES", "VERIFIED"],
+    ["FS-DATA-WRITE/write-stream-trailing-metadata", "VERIFIED"],
+    ["FS-DATA-WRITE/write-stream-empty-write-response", "VERIFIED"],
+    ["FS-LIMIT-INDEX-ENTRY-BYTES", "VERIFIED"],
+    ["FS-LIMIT-INDEX-ENTRY-SUM-PER-DOCUMENT", "VERIFIED"],
+    ["FS-LIMIT-FIELD-VALUE-BYTES/aggregate-map", "VERIFIED"],
+    ["FS-LIMIT-INDEXED-FIELD-VALUE-BYTES", "VERIFIED"],
+    ...NON_COMMIT_REST_ROUTES.map((route) => [
+      `FS-LIMIT-API-REQUEST-BYTES/non-commit-rest/${route}`,
+      "VERIFIED",
+    ]),
+    ["FS-LIMIT-API-REQUEST-BYTES/grpc-unary", "VERIFIED"],
+    // Every row matches; the status records how each bound is closed, not a row difference.
+    ["FS-LIMIT-API-REQUEST-BYTES/grpc-stream", "KNOWN_DIFFERENCE_APPROVED"],
+    ["FS-LIMIT-API-REQUEST-BYTES/webchannel", "KNOWN_DIFFERENCE_APPROVED"],
+  ]);
+  assert.deepEqual(new Set(Object.keys(accepted.conditions)), new Set(acceptedIds.keys()));
+  assert.equal(accepted.sourceHead, candidate.sourceHead);
+  assert.equal(accepted.executableSha256, candidate.executableSha256);
+  assert.equal(
+    accepted.currentComparisonSha256,
+    createHash("sha256").update(readFileSync(reviewCandidatePath)).digest("hex"),
+  );
+  assert.deepEqual(accepted.localResultDigests, candidate.localResultDigests);
+  assert.equal(
+    accepted.localProjectionPath,
+    "spec/compatibility/closure/evidence/FS-DATA-WRITE-current-accepted-local-rows.json",
+  );
+  assert.equal(
+    accepted.localProjectionSha256,
+    createHash("sha256").update(readFileSync(acceptedLocalRowsPath)).digest("hex"),
+  );
+  assert.equal(localRows.sourceHead, accepted.sourceHead);
+  assert.equal(localRows.executableSha256, accepted.executableSha256);
+  assert.deepEqual(localRows.sourceResultDigests, accepted.localResultDigests);
+  const acceptedSha256 = createHash("sha256")
+    .update(readFileSync(acceptedConditionsPath))
+    .digest("hex");
+  const b1Rows = new Set(candidate.approvedKnownDifferenceIds);
+  const usedLocalRows = new Set();
+  for (const [conditionId, status] of acceptedIds) {
+    const condition = closure.conditions.find((row) => row.conditionId === conditionId);
+    const comparison = accepted.conditions[conditionId];
+    assert.equal(condition.status, status, conditionId);
+    assert.deepEqual(new Set(comparison.recipeIds), new Set(condition.recipeIds), conditionId);
+    assert.equal(
+      condition.evidence.comparisonPath,
+      "spec/compatibility/closure/evidence/FS-DATA-WRITE-current-accepted-conditions.json",
+    );
+    assert.equal(condition.evidence.comparisonSha256, acceptedSha256);
+    assert.equal(condition.evidence.finalArtifactSha256, accepted.executableSha256);
+    assert.equal(condition.evidence.sourceHead, accepted.sourceHead);
+    assert.deepEqual(
+      condition.evidence.productionRecordings,
+      comparison.productionRecordingSetDigests,
+    );
+    assert.deepEqual(condition.evidence.productionRecordingSources, comparison.sourceFixtures);
+    const sourceFixtures = new Map();
+    for (const recipeId of condition.recipeIds) {
+      const source = sourceById.get(recipeId);
+      assert.ok(source, `${conditionId}: missing current recording ${recipeId}`);
+      const transport = source.matchedStreamIds.includes(recipeId) ? "grpc" : "rest";
+      const path =
+        source.name === "base"
+          ? "conformance/fs-data-write-production-matrix.json"
+          : `conformance/fs-data-write-production-supplements/${source.name}`;
+      const recordingDigests =
+        transport === "grpc"
+          ? source.fixture.evidence.streamRecordingDigests
+          : source.fixture.evidence.recordingDigests;
+      sourceFixtures.set(`${path}:${transport}`, {
+        path,
+        sha256: createHash("sha256")
+          .update(readFileSync(fileURLToPath(new URL(`../../${path}`, import.meta.url))))
+          .digest("hex"),
+        recordingDigests,
+        transport,
+      });
+    }
+    const expectedSources = [...sourceFixtures.values()].toSorted(
+      (a, b) => a.path.localeCompare(b.path) || a.transport.localeCompare(b.transport),
+    );
+    assert.deepEqual(comparison.sourceFixtures, expectedSources, conditionId);
+    assert.ok(expectedSources.every(({ recordingDigests }) => recordingDigests.length === 2));
+    assert.deepEqual(
+      comparison.productionRecordingSetDigests,
+      [0, 1].map((pass) =>
+        createHash("sha256")
+          .update(
+            JSON.stringify(
+              expectedSources.map(({ path, sha256, recordingDigests, transport }) => ({
+                path,
+                sha256,
+                transport,
+                recordingDigest: recordingDigests[pass],
+              })),
+            ),
+          )
+          .digest("hex"),
+      ),
+      conditionId,
+    );
+    const expectedRows = condition.recipeIds.flatMap((id) => {
+      const source = sourceById.get(id);
+      assert.ok(source, `${conditionId}: missing current recording ${id}`);
+      if (source.matchedStreamIds.includes(id)) return [`${id}#grpc`];
+      return Object.keys(source.fixture.programs[id].steps).map((step) => `${id}#${step}`);
+    });
+    const actualDifferences = new Set();
+    for (const recipeId of condition.recipeIds) {
+      const source = sourceById.get(recipeId);
+      const stream = source.matchedStreamIds.includes(recipeId);
+      const ids = stream
+        ? [`${recipeId}#grpc`]
+        : Object.keys(source.fixture.programs[recipeId].steps).map((step) => `${recipeId}#${step}`);
+      const local = stream
+        ? localRows.rows[ids[0]]
+        : {
+            steps: Object.fromEntries(
+              ids.map((id) => [id.slice(id.lastIndexOf("#") + 1), localRows.rows[id]]),
+            ),
+          };
+      assert.ok(
+        ids.every((id) => localRows.rows[id] !== undefined),
+        recipeId,
+      );
+      ids.forEach((id) => usedLocalRows.add(id));
+      const recipe = corpus.restPrograms.find(({ id }) => id === recipeId);
+      const differences = compareSandboxArtifact(
+        stream
+          ? { streams: { [recipeId]: source.fixture.streams[recipeId] } }
+          : { programs: { [recipeId]: source.fixture.programs[recipeId] } },
+        stream ? {} : { [recipeId]: local },
+        stream ? { [recipeId]: local } : {},
+        { restPrograms: recipe ? [recipe] : [] },
+      );
+      differences.forEach((id) => actualDifferences.add(id));
+    }
+    assert.equal(comparison.rows.length, expectedRows.length, conditionId);
+    assert.equal(new Set(expectedRows).size, expectedRows.length, conditionId);
+    assert.deepEqual(
+      new Set(comparison.rows.map(({ id }) => id)),
+      new Set(expectedRows),
+      conditionId,
+    );
+    const differenceIds = [...actualDifferences].toSorted();
+    const knownIds =
+      status === "DIVERGENCE_APPROVED"
+        ? expectedRows.filter((id) => b1Rows.has(id)).toSorted()
+        : [];
+    assert.deepEqual(differenceIds, knownIds, conditionId);
+    if (status === "DIVERGENCE_APPROVED") {
+      assert.equal(condition.evidence.ownerDecision, "2026-09-25 FS-DATA-WRITE D3");
+      assert.deepEqual(condition.evidence.knownDifferenceIds, differenceIds, conditionId);
+    } else {
+      assert.equal(condition.evidence.knownDifferenceIds, undefined);
+    }
+    for (const row of comparison.rows) {
+      const recipeId = row.id.slice(0, row.id.lastIndexOf("#"));
+      const stepId = row.id.slice(row.id.lastIndexOf("#") + 1);
+      const source = sourceById.get(recipeId);
+      assert.equal(
+        row.fixture,
+        source.name === "base"
+          ? "conformance/fs-data-write-production-matrix.json"
+          : `conformance/fs-data-write-production-supplements/${source.name}`,
+      );
+      const production =
+        stepId === "grpc"
+          ? source.fixture.streams[recipeId]
+          : source.fixture.programs[recipeId].steps[stepId];
+      assert.equal(
+        row.productionSha256,
+        createHash("sha256").update(JSON.stringify(production)).digest("hex"),
+        row.id,
+      );
+      assert.equal(
+        row.productionStatus,
+        stepId === "grpc" ? production.status.code : production.status,
+        row.id,
+      );
+      assert.equal(row.productionCode, stepId === "grpc" ? "GRPC" : production.code, row.id);
+      const local = localRows.rows[row.id];
+      assert.equal(
+        row.localSha256,
+        createHash("sha256").update(JSON.stringify(local)).digest("hex"),
+        row.id,
+      );
+      assert.equal(row.localStatus, stepId === "grpc" ? local.status.code : local.status, row.id);
+      assert.equal(row.localCode, stepId === "grpc" ? "GRPC" : local.code, row.id);
+      const mismatch = actualDifferences.has(row.id);
+      assert.equal(row.comparisonResult, mismatch ? "MISMATCH" : "MATCH", row.id);
+      assert.equal(row.outcome, mismatch ? "DIVERGENCE_APPROVED" : "MATCH", row.id);
+      if (mismatch) {
+        assert.equal(row.outcome, "DIVERGENCE_APPROVED");
+        assert.equal(row.ownerDecision, "2026-09-25 FS-DATA-WRITE D3");
+        assert.ok(b1Rows.has(row.id), row.id);
+      }
+    }
+  }
+  assert.deepEqual(new Set(Object.keys(localRows.rows)), usedLocalRows);
+  assert.deepEqual(new Set(accepted.approvedDifferenceIds), b1Rows);
+  assert.deepEqual(accepted.unresolvedDifferenceIds, candidate.pendingOracleDifferenceIds);
+});
+
+test("conditions bound to older comparisons are covered by the release comparison", async () => {
+  const closure = JSON.parse(readFileSync(closurePath, "utf8"));
+  const candidate = JSON.parse(readFileSync(reviewCandidatePath, "utf8"));
+  const { corpus } = await prepareSandboxCorpus();
+  const restIds = new Set(corpus.restPrograms.map(({ id }) => id));
+  const streamIds = new Set(
+    corpus.streamRecipes.filter(({ transport }) => transport === "grpc").map(({ id }) => id),
+  );
+  // The release comparison compared exactly the current corpus and found no difference at all.
+  assert.equal(
+    candidate.corpusSha256,
+    createHash("sha256").update(JSON.stringify(corpus)).digest("hex"),
+  );
+  assert.equal(candidate.comparedRestPrograms, restIds.size);
+  assert.equal(candidate.comparedGrpcStreams, streamIds.size);
+  assert.deepEqual(candidate.pendingRestIds, []);
+  assert.deepEqual(candidate.pendingStreamIds, []);
+  assert.deepEqual(candidate.approvedKnownDifferenceIds, []);
+  assert.deepEqual(candidate.pendingOracleDifferenceIds, []);
+  assert.deepEqual(candidate.otherDifferenceIds, []);
+  const releaseBound = new Set(
+    [acceptedConditionsPath, terminalConditionPath, listComparisonPath, savedStreamReplayPath].map(
+      (path) => path.slice(path.indexOf("spec/compatibility/")),
+    ),
+  );
+  const coverage = {
+    comparisonPath: "spec/compatibility/closure/evidence/FS-DATA-WRITE-current-comparison.json",
+    comparisonSha256: createHash("sha256").update(readFileSync(reviewCandidatePath)).digest("hex"),
+    finalArtifactSha256: candidate.executableSha256,
+    sourceHead: candidate.sourceHead,
+  };
+  const covered = [];
+  for (const condition of closure.conditions) {
+    if (!["VERIFIED", "KNOWN_DIFFERENCE_APPROVED"].includes(condition.status)) continue;
+    if (
+      ["FS-DATA-WRITE/final-artifact-regression", "FS-DATA-WRITE/closure-review"].includes(
+        condition.conditionId,
+      )
+    ) {
+      continue; // The release regression and the review record themselves.
+    }
+    if (releaseBound.has(condition.evidence?.comparisonPath)) {
+      assert.equal(condition.evidence.currentCoverage, undefined, condition.conditionId);
+      continue;
+    }
+    assert.deepEqual(condition.evidence?.currentCoverage, coverage, condition.conditionId);
+    for (const recipeId of condition.recipeIds) {
+      assert.ok(restIds.has(recipeId) || streamIds.has(recipeId), `${recipeId}: not compared`);
+      assert.ok(!candidate.retiredRestIds.includes(recipeId), `${recipeId}: retired`);
+    }
+    covered.push(condition.conditionId);
+  }
+  assert.equal(covered.length, 12);
+});
+
+test("saved stream transaction recompare binds its one production campaign and current local artifact", () => {
+  const closure = JSON.parse(readFileSync(closurePath, "utf8"));
+  const condition = closure.conditions.find(
+    ({ conditionId }) => conditionId === "FS-DATA-WRITE/stream-transaction-precedence",
+  );
+  const evidence = JSON.parse(readFileSync(savedStreamReplayPath, "utf8"));
+  const publicProductionPath = fileURLToPath(
+    new URL(`../../${evidence.productionPublicResultPath}`, import.meta.url),
+  );
+  const publicSavedPath = fileURLToPath(
+    new URL(`../../${evidence.savedComparisonPath}`, import.meta.url),
+  );
+  const publicProduction = JSON.parse(readFileSync(publicProductionPath, "utf8"));
+  const publicSaved = JSON.parse(readFileSync(publicSavedPath, "utf8"));
+  const recipeDigests = JSON.parse(readFileSync(manifestPath, "utf8"));
+  assert.equal(condition.status, "VERIFIED");
+  assert.deepEqual(condition.recipeIds, ["writes/write-stream-transaction"]);
+  assert.equal(condition.boundaryStatus, "NOT_APPLICABLE");
+  assert.equal(
+    condition.evidence.comparisonPath,
+    "spec/compatibility/closure/evidence/FS-DATA-WRITE-stream-transaction-current-saved-replay.json",
+  );
+  assert.equal(
+    condition.evidence.comparisonSha256,
+    createHash("sha256").update(readFileSync(savedStreamReplayPath)).digest("hex"),
+  );
+  assert.equal(condition.evidence.finalArtifactSha256, evidence.binarySha256);
+  assert.equal(condition.evidence.sourceHead, evidence.sourceCommit);
+  assert.equal(condition.evidence.productionReceiptSha256, evidence.productionReceiptSha256);
+  assert.equal(
+    condition.evidence.savedProductionAuthorityDigest,
+    evidence.savedProductionAuthorityDigest,
+  );
+  assert.equal(condition.evidence.productionRecordings, undefined);
+  assert.equal(evidence.recipeDigest, recipeDigests.streams[condition.recipeIds[0]]);
+  assert.equal(
+    evidence.productionPublicResultSha256,
+    createHash("sha256").update(readFileSync(publicProductionPath)).digest("hex"),
+  );
+  assert.equal(
+    evidence.savedComparisonSha256,
+    createHash("sha256").update(readFileSync(publicSavedPath)).digest("hex"),
+  );
+  assert.equal(
+    publicProduction.privateEvidenceSha256.productionReceipt,
+    evidence.productionReceiptSha256,
+  );
+  assert.equal(publicProduction.production.dataRequests, 23);
+  assert.equal(publicProduction.production.cleanupComplete, true);
+  assert.equal(
+    publicSaved.privateEvidenceSha256.originalProductionReceipt,
+    evidence.productionReceiptSha256,
+  );
+  assert.equal(publicSaved.repairedClassification, "EXPECTED_NONDETERMINISM");
+  assert.deepEqual(evidence.comparison, {
+    v1Classification: "SEMANTIC_MISMATCH",
+    v2Classification: "EXPECTED_NONDETERMINISM",
+    v1ComparedSlotCount: 15,
+    v1DifferingSlotCount: 5,
+    v1DifferenceLeafCount: 32,
+    indeterminate: 0,
+  });
+  assert.deepEqual(evidence.localRun, {
+    gateEvents: 23,
+    observations: 15,
+    recoveryObservations: 10,
+    resourcesAbsent: 3,
+    processStopped: true,
+    listenersClosed: true,
+    reservationReleased: true,
+    configurationUnchanged: true,
+  });
+  assert.match(evidence.sourceCommit, /^[0-9a-f]{40}$/);
+  for (const field of [
+    "binarySha256",
+    "buildManifestSha256",
+    "localReceiptSha256",
+    "productionReceiptSha256",
+    "savedProductionAuthorityDigest",
+    "runtimeInputsDigest",
+  ]) {
+    assert.match(evidence[field], /^[0-9a-f]{64}$/, field);
+  }
+  assert.ok(evidence.runtimeInputCount > 400);
+  for (const [path, digest] of Object.entries(evidence.comparatorSourceSha256)) {
+    const absolute = fileURLToPath(new URL(`../../${path}`, import.meta.url));
+    assert.equal(digest, createHash("sha256").update(readFileSync(absolute)).digest("hex"), path);
+  }
+});
+
+const NON_COMMIT_REST_ROUTES = ["batch-get", "batch-write", "create", "patch", "run-query"];
+const REQUEST_BYTE_POINTS = [10485760, 10485761, 11534336, 11534337];
 
 const requiredConditions = new Set([
   "FS-WRITE-LIMITS-03/batch-malformed-middle",
@@ -41,9 +529,10 @@ const requiredConditions = new Set([
   "FS-WRITE-LIMITS-03/implied-array",
   "FS-LIMIT-API-REQUEST-BYTES/rest-commit-json-accepted-samples",
   "FS-LIMIT-API-REQUEST-BYTES/raw-16mib-over",
-  "FS-LIMIT-API-REQUEST-BYTES/non-commit-rest",
+  ...NON_COMMIT_REST_ROUTES.map((route) => `FS-LIMIT-API-REQUEST-BYTES/non-commit-rest/${route}`),
   "FS-LIMIT-API-REQUEST-BYTES/webchannel",
-  "FS-LIMIT-API-REQUEST-BYTES/grpc",
+  "FS-LIMIT-API-REQUEST-BYTES/grpc-unary",
+  "FS-LIMIT-API-REQUEST-BYTES/grpc-stream",
   "FS-DATA-WRITE/stream-transaction-precedence",
   "FS-DATA-WRITE/write-stream-trailing-metadata",
   "FS-DATA-WRITE/write-stream-half-close",
@@ -101,7 +590,33 @@ const requiredRecipes = new Map([
   ],
   [
     "FS-LIMIT-FIELD-VALUE-BYTES/aggregate-map",
-    new Set(["writes/limits/aggregate-map", "writes/limits/aggregate-map/strict-only"]),
+    new Set([
+      "writes/limits/aggregate-map",
+      "writes/limits/aggregate-map/1048487",
+      "writes/limits/aggregate-map/1048488",
+      "writes/limits/aggregate-map/strict-only",
+    ]),
+  ],
+  [
+    "FS-LIMIT-INDEXED-FIELD-VALUE-BYTES",
+    new Set([
+      "writes/limits/indexed-field-value-bytes",
+      "writes/limits/indexed-field-value-bytes/5200",
+      "writes/limits/indexed-field-value-bytes/6128",
+      ...[
+        "2999/1142",
+        "2999/1143",
+        "2999/1500",
+        "2999/1800",
+        "2999/2100",
+        "2999/2400",
+        "2999/2606",
+        "2999/2607",
+        "2000/2141",
+        "2000/2142",
+        "1500/2642",
+      ].map((point) => `writes/limits/indexed-string-name/${point}`),
+    ]),
   ],
   [
     "FS-LIMIT-API-REQUEST-BYTES/rest-commit-json-accepted-samples",
@@ -112,14 +627,31 @@ const requiredRecipes = new Map([
       "writes/limits/decoded-11x1040000",
     ]),
   ],
+  ...NON_COMMIT_REST_ROUTES.map((route) => [
+    `FS-LIMIT-API-REQUEST-BYTES/non-commit-rest/${route}`,
+    new Set(
+      REQUEST_BYTE_POINTS.map(
+        (bytes) => `writes/limits/non-commit-rest-request-bytes/${route}/${bytes}`,
+      ),
+    ),
+  ]),
   [
-    "FS-LIMIT-API-REQUEST-BYTES/non-commit-rest",
-    new Set(["writes/limits/non-commit-rest-request-bytes"]),
+    "FS-LIMIT-API-REQUEST-BYTES/webchannel",
+    new Set(
+      [...REQUEST_BYTE_POINTS, 12582912, 16777216, 16777217, 33554432, 33554433].map(
+        (bytes) => `writes/limits/webchannel-request-bytes/${bytes}`,
+      ),
+    ),
   ],
-  ["FS-LIMIT-API-REQUEST-BYTES/webchannel", new Set(["writes/limits/webchannel-request-bytes"])],
   [
-    "FS-LIMIT-API-REQUEST-BYTES/grpc",
-    new Set(["writes/limits/grpc-unary-request-bytes", "writes/limits/grpc-stream-request-bytes"]),
+    "FS-LIMIT-API-REQUEST-BYTES/grpc-unary",
+    new Set(REQUEST_BYTE_POINTS.map((bytes) => `writes/limits/grpc-unary-request-bytes/${bytes}`)),
+  ],
+  [
+    "FS-LIMIT-API-REQUEST-BYTES/grpc-stream",
+    new Set(
+      [10485760, 10485761].map((bytes) => `writes/limits/grpc-stream-request-bytes/${bytes}`),
+    ),
   ],
   ["FS-DATA-WRITE/write-stream-half-close", new Set(["writes/write-stream-terminal/half-close"])],
   [
@@ -139,14 +671,48 @@ const requiredRecipes = new Map([
 ]);
 
 function verifyAcceptedCondition(condition) {
-  if (condition.status !== "VERIFIED") return;
+  if (!["VERIFIED", "DIVERGENCE_APPROVED"].includes(condition.status)) return;
+  const observedListCap =
+    condition.conditionId === "FS-DATA-WRITE-LIST/list-documents-rest" &&
+    condition.boundaryStatus === "OBSERVED (page size 300)";
+  const terminalBoundary = new Map([
+    ["FS-DATA-WRITE/near-limit-delete-refusal", "NONDETERMINISTIC_BAND"],
+  ]).get(condition.conditionId);
+  const approvedTerminal = terminalBoundary === condition.boundaryStatus;
   assert.ok(
-    ["BRACKETED", "RULE_TRANSITION", "NOT_APPLICABLE"].includes(condition.boundaryStatus),
+    observedListCap ||
+      approvedTerminal ||
+      ["BRACKETED", "RULE_TRANSITION", "NOT_APPLICABLE"].includes(condition.boundaryStatus),
     `${condition.conditionId}: unresolved boundary cannot be VERIFIED`,
   );
-  assert.equal(condition.evidence?.productionRecordings?.length, 2);
+  if (approvedTerminal && terminalBoundary === "NONDETERMINISTIC_BAND") {
+    assert.equal(condition.terminalOwnerDecision, "2026-09-25 FS-DATA-WRITE A");
+  }
+  // The two closing conditions bind the release regression and the review record, which have
+  // no production recording pair of their own (their own tests check their bindings).
+  if (
+    ["FS-DATA-WRITE/final-artifact-regression", "FS-DATA-WRITE/closure-review"].includes(
+      condition.conditionId,
+    )
+  ) {
+    assert.equal(condition.boundaryStatus, "NOT_APPLICABLE");
+    assert.match(condition.evidence?.finalArtifactSha256 ?? "", /^[0-9a-f]{64}$/);
+    return;
+  }
+  if (condition.conditionId === "FS-DATA-WRITE/stream-transaction-precedence") {
+    assert.equal(condition.boundaryStatus, "NOT_APPLICABLE");
+    assert.match(condition.evidence?.productionReceiptSha256 ?? "", /^[0-9a-f]{64}$/);
+    assert.match(condition.evidence?.savedProductionAuthorityDigest ?? "", /^[0-9a-f]{64}$/);
+    assert.equal(condition.evidence?.productionRecordings, undefined);
+  } else {
+    assert.equal(condition.evidence?.productionRecordings?.length, 2);
+  }
   assert.match(condition.evidence?.finalArtifactSha256 ?? "", /^[0-9a-f]{64}$/);
   assert.ok(condition.evidence?.comparisonPath);
+  if (condition.status === "DIVERGENCE_APPROVED") {
+    assert.equal(condition.boundaryStatus, "BRACKETED");
+    assert.equal(condition.evidence.ownerDecision, "2026-09-25 FS-DATA-WRITE D3");
+  }
 }
 
 test("VERIFIED requires a resolved production boundary classification", () => {
@@ -162,12 +728,15 @@ test("VERIFIED requires a resolved production boundary classification", () => {
   for (const boundaryStatus of ["UNBRACKETED", "PENDING_RECORDING"]) {
     assert.throws(() => verifyAcceptedCondition({ ...condition, boundaryStatus }), /boundary/);
   }
+  for (const boundaryStatus of ["NONDETERMINISTIC_BAND", "INFERRED_UPPER_BOUND"]) {
+    assert.throws(() => verifyAcceptedCondition({ ...condition, boundaryStatus }), /boundary/);
+  }
   for (const boundaryStatus of ["BRACKETED", "RULE_TRANSITION", "NOT_APPLICABLE"]) {
     assert.doesNotThrow(() => verifyAcceptedCondition({ ...condition, boundaryStatus }));
   }
 });
 
-test("list condition proposal remains exact and pending integration", () => {
+test("integrated list conditions retain exact recipe ownership", () => {
   const closure = JSON.parse(readFileSync(closurePath, "utf8"));
   const expected = new Map([
     [
@@ -191,13 +760,13 @@ test("list condition proposal remains exact and pending integration", () => {
     conditionId.startsWith("FS-DATA-WRITE-LIST/"),
   );
 
-  assert.equal(closure.conditions.length, 33);
+  assert.equal(closure.conditions.length, 38);
   assert.equal(listConditions.length, expected.size);
   const recipeIds = [];
   for (const condition of listConditions) {
     const [count, digest] = expected.get(condition.conditionId) ?? [];
     assert.ok(count, `unexpected list condition ${condition.conditionId}`);
-    assert.equal(condition.status, "PENDING_INTEGRATION");
+    assert.equal(condition.status, "VERIFIED");
     assert.equal(condition.recipeIds.length, count, condition.conditionId);
     assert.equal(
       createHash("sha256")
@@ -215,15 +784,17 @@ test("list condition proposal remains exact and pending integration", () => {
       condition.evidence.comparisonPath,
       "spec/compatibility/closure/evidence/FS-DATA-WRITE-LIST-comparison.json",
     );
-    assert.ok(condition.evidence.sourceCommit);
-    assert.ok(condition.evidence.proposedArtifactSha256);
-    assert.equal(condition.evidence.currentArtifact, undefined);
+    assert.equal(condition.evidence.sourceHead, "dd0c4e6fed38d09646fb2575c2fc11251724e0f4");
+    assert.equal(
+      condition.evidence.finalArtifactSha256,
+      "eec383e576e5de8c63fd934ef55dde6592bb6b69888a7f00bb4129c6a9338593",
+    );
     recipeIds.push(...condition.recipeIds);
   }
   assert.equal(recipeIds.length, 201);
   assert.equal(new Set(recipeIds).size, 201, "each proposed recipe must belong to one condition");
-  assert.equal(closure.parentStatus, "WAITING_ORACLE");
-  assert.equal(closure.closureReview.decision, "PENDING");
+  assert.equal(closure.parentStatus, "COMPAT_VERIFIED");
+  assert.equal(closure.closureReview.decision, "APPROVED");
 });
 
 test("verified conditions are bound to their saved comparisons", async () => {
@@ -263,10 +834,60 @@ test("verified conditions are bound to their saved comparisons", async () => {
     assert.ok(verified.some((condition) => condition.conditionId === conditionId));
   }
   for (const condition of verified) {
+    if (
+      ["FS-DATA-WRITE/final-artifact-regression", "FS-DATA-WRITE/closure-review"].includes(
+        condition.conditionId,
+      )
+    ) {
+      continue; // Bound by their own tests.
+    }
     const comparisonPath = fileURLToPath(
       new URL(`../../${condition.evidence.comparisonPath}`, import.meta.url),
     );
     const comparison = JSON.parse(readFileSync(comparisonPath, "utf8"));
+    if (comparisonPath === savedStreamReplayPath) {
+      assert.equal(comparison.sourceCommit, condition.evidence.sourceHead);
+      assert.equal(comparison.binarySha256, condition.evidence.finalArtifactSha256);
+      assert.equal(comparison.productionReceiptSha256, condition.evidence.productionReceiptSha256);
+      continue;
+    }
+    if (comparisonPath === acceptedConditionsPath) {
+      assert.ok(comparison.conditions[condition.conditionId]);
+      assert.equal(
+        condition.evidence.comparisonSha256,
+        createHash("sha256").update(readFileSync(comparisonPath)).digest("hex"),
+      );
+      assert.equal(condition.evidence.finalArtifactSha256, comparison.executableSha256);
+      assert.equal(condition.evidence.sourceHead, comparison.sourceHead);
+      continue;
+    }
+    if (comparisonPath === listComparisonPath) {
+      assert.equal(
+        condition.evidence.comparisonSha256,
+        createHash("sha256").update(readFileSync(comparisonPath)).digest("hex"),
+      );
+      assert.equal(condition.evidence.finalArtifactSha256, comparison.artifactSha256);
+      assert.equal(condition.evidence.sourceHead, "dd0c4e6fed38d09646fb2575c2fc11251724e0f4");
+      assert.deepEqual(
+        new Set(
+          comparison.rows
+            .filter(({ row }) => condition.recipeIds.includes(row))
+            .map(({ row }) => row),
+        ),
+        new Set(condition.recipeIds),
+      );
+      continue;
+    }
+    if (comparisonPath === terminalConditionPath) {
+      assert.ok(comparison.conditions[condition.conditionId]);
+      assert.equal(
+        condition.evidence.comparisonSha256,
+        createHash("sha256").update(readFileSync(comparisonPath)).digest("hex"),
+      );
+      assert.equal(condition.evidence.finalArtifactSha256, comparison.binarySha256);
+      assert.equal(condition.evidence.sourceHead, comparison.sourceHead);
+      continue;
+    }
     assert.equal(comparison.conditionId, condition.conditionId);
     assert.deepEqual(new Set(comparison.recipeIds), new Set(condition.recipeIds));
     const streamComparison = comparison.comparisonMode === "sandbox-stream-comparator";
@@ -289,7 +910,10 @@ test("verified conditions are bound to their saved comparisons", async () => {
     if (streamComparison) {
       assert.match(comparison.artifactSourceCommit, /^[0-9a-f]{40}$/);
       assert.ok(
-        condition.evidence.comparisonPath.includes(comparison.artifactSourceCommit.slice(0, 9)),
+        condition.evidence.comparisonPath.includes(
+          rewrittenCommitLabels.get(comparison.artifactSourceCommit) ??
+            comparison.artifactSourceCommit.slice(0, 9),
+        ),
       );
       assert.equal(
         comparison.localConfigSha256,
@@ -441,8 +1065,9 @@ test("10 MiB accepted samples and strict 11 MiB Commit probes keep separate reci
   }
 });
 
-test("final artifact closure names both saved production regression commands", () => {
+test("final artifact regression binds both saved production regression commands to the release", () => {
   const closure = JSON.parse(readFileSync(closurePath, "utf8"));
+  const bundle = JSON.parse(readFileSync(releaseBundlePath, "utf8"));
   const condition = closure.conditions.find(
     ({ conditionId }) => conditionId === "FS-DATA-WRITE/final-artifact-regression",
   );
@@ -450,60 +1075,156 @@ test("final artifact closure names both saved production regression commands", (
     "pnpm -C conformance firestore:check-production",
     "pnpm -C conformance fs-data-write:check",
   ]);
-  assert.notEqual(condition.status, "VERIFIED");
+  assert.equal(condition.status, "VERIFIED");
+  const digest = (path) => createHash("sha256").update(readFileSync(path)).digest("hex");
+  assert.deepEqual(condition.evidence, {
+    finalArtifactSha256: bundle.binarySha256,
+    sourceHead: bundle.sourceCommit,
+    comparisonPath: "spec/compatibility/closure/evidence/FS-DATA-WRITE-historical-regression.json",
+    comparisonSha256: digest(historicalRegressionPath),
+    currentComparisonPath:
+      "spec/compatibility/closure/evidence/FS-DATA-WRITE-current-comparison.json",
+    currentComparisonSha256: digest(reviewCandidatePath),
+    releaseArtifactPath: "spec/compatibility/closure/evidence/FS-DATA-WRITE-release-artifact.json",
+    releaseArtifactSha256: digest(releaseBundlePath),
+  });
+  const historical = JSON.parse(readFileSync(historicalRegressionPath, "utf8"));
+  assert.equal(historical.counts.newMismatches, 0);
+  assert.equal(historical.counts.newIndeterminateRows, 0);
+  const current = JSON.parse(readFileSync(reviewCandidatePath, "utf8"));
+  assert.equal(current.comparisonExitCode, 0);
 });
 
-test("request-byte transports remain pending production recording after local corpus checks", () => {
+test("closure review names the independent reviews and the decision taken on them", () => {
   const closure = JSON.parse(readFileSync(closurePath, "utf8"));
-  const nonCommitRest = closure.conditions.find(
-    (row) => row.conditionId === "FS-LIMIT-API-REQUEST-BYTES/non-commit-rest",
+  const bundle = JSON.parse(readFileSync(releaseBundlePath, "utf8"));
+  const review = closure.closureReview;
+  assert.equal(review.decision, "APPROVED");
+  assert.equal(review.finalArtifactSha256, bundle.binarySha256);
+  assert.match(review.reviewedCommit, /^[0-9a-f]{9,40}$/);
+  assert.ok(review.reviews.length >= 1);
+  for (const entry of review.reviews) {
+    assert.ok(entry.reviewer.length > 0);
+    assert.match(entry.reportSha256, /^[0-9a-f]{64}$/);
+    assert.match(entry.outcome, /^APPROVE/);
+  }
+  // Recorded by the coordinator after its own check of the review.
+  assert.match(review.decidedOn ?? "", /^\d{4}-\d{2}-\d{2}$/);
+  assert.ok((review.decider ?? "").length > 0);
+  const condition = closure.conditions.find(
+    ({ conditionId }) => conditionId === "FS-DATA-WRITE/closure-review",
   );
-  assert.equal(nonCommitRest.status, "PENDING_RECORDING");
-  assert.equal(nonCommitRest.boundaryStatus, "PENDING_RECORDING");
-  const grpc = closure.conditions.find(
-    (row) => row.conditionId === "FS-LIMIT-API-REQUEST-BYTES/grpc",
-  );
-  assert.equal(grpc.status, "PENDING_RECORDING");
-  assert.equal(grpc.boundaryStatus, "PENDING_RECORDING");
-  const webchannel = closure.conditions.find(
-    (row) => row.conditionId === "FS-LIMIT-API-REQUEST-BYTES/webchannel",
-  );
-  assert.equal(webchannel.status, "PENDING_RECORDING");
-  assert.equal(webchannel.boundaryStatus, "PENDING_RECORDING");
+  assert.equal(condition.status, "VERIFIED");
+  assert.deepEqual(condition.evidence, {
+    reviewedCommit: review.reviewedCommit,
+    finalArtifactSha256: review.finalArtifactSha256,
+    reviewReportSha256: review.reviews.map(({ reportSha256 }) => reportSha256),
+  });
 });
 
-test("new strict-only map observation remains pending production recording", () => {
+test("request-byte transports are bracketed per route, with WebChannel inferred and the stream bound approved", () => {
+  const closure = JSON.parse(readFileSync(closurePath, "utf8"));
+  const find = (id) => closure.conditions.find((row) => row.conditionId === id);
+  const commit = find("FS-LIMIT-API-REQUEST-BYTES/rest-commit-json-accepted-samples");
+  assert.doesNotMatch(commit.scopeNote, /unobserved estimate/);
+  for (const id of [
+    ...NON_COMMIT_REST_ROUTES.map((route) => `FS-LIMIT-API-REQUEST-BYTES/non-commit-rest/${route}`),
+    "FS-LIMIT-API-REQUEST-BYTES/grpc-unary",
+  ]) {
+    const condition = find(id);
+    assert.equal(condition.status, "VERIFIED", id);
+    assert.equal(condition.boundaryStatus, "BRACKETED", id);
+    assert.deepEqual(
+      condition.boundaryEvidence.map((reference) => reference.split("#")[0].split("/").at(-1)),
+      ["11534336", "11534337"],
+      id,
+    );
+    assert.equal(condition.strictLimitEstimateBytes, undefined, id);
+  }
+  const webchannel = find("FS-LIMIT-API-REQUEST-BYTES/webchannel");
+  assert.equal(webchannel.status, "KNOWN_DIFFERENCE_APPROVED");
+  assert.equal(webchannel.boundaryStatus, "INFERRED_UPPER_BOUND");
+  assert.equal(webchannel.strictLimitEstimateBytes, 16777215);
+  assert.match(webchannel.reason, /\(12,582,912, 16,777,216\]/);
+  assert.deepEqual(webchannel.boundaryEvidence, [
+    "writes/limits/webchannel-request-bytes/12582912#boundary",
+    "writes/limits/webchannel-request-bytes/16777216#boundary",
+  ]);
+  assert.ok(isApprovedKnownDifference(closure, webchannel));
+  assert.throws(() => verifyAcceptedCondition({ ...webchannel, status: "VERIFIED" }), /boundary/);
+  const stream = find("FS-LIMIT-API-REQUEST-BYTES/grpc-stream");
+  assert.ok(isApprovedKnownDifference(closure, stream));
+});
+
+test("VERIFIED evidence never depends on a private path", () => {
+  const closure = JSON.parse(readFileSync(closurePath, "utf8"));
+  const verified = closure.conditions.filter(({ status }) => status === "VERIFIED");
+  assert.equal(verified.length, 36);
+  for (const condition of verified) {
+    assert.ok(
+      !JSON.stringify(condition.evidence ?? {}).includes("docs.local/"),
+      condition.conditionId,
+    );
+  }
+});
+
+test("the aggregate map has no refusal boundary after production accepted one byte over", () => {
   const closure = JSON.parse(readFileSync(closurePath, "utf8"));
   const condition = closure.conditions.find(
     ({ conditionId }) => conditionId === "FS-LIMIT-FIELD-VALUE-BYTES/aggregate-map",
   );
   assert.ok(condition.recipeIds.includes("writes/limits/aggregate-map/strict-only"));
-  assert.equal(condition.status, "PENDING_RECORDING");
+  assert.ok(condition.recipeIds.includes("writes/limits/aggregate-map/1048488"));
+  assert.equal(condition.status, "VERIFIED");
+  assert.equal(condition.boundaryStatus, "NOT_APPLICABLE");
 });
 
-test("changed field-path and indexed-value recipes remain pending recording", async () => {
+test("near-limit deletion names all six recorded route and size combinations", () => {
+  const closure = JSON.parse(readFileSync(closurePath, "utf8"));
+  const condition = closure.conditions.find(
+    ({ conditionId }) => conditionId === "FS-DATA-WRITE/near-limit-delete-refusal",
+  );
+  const expected = ["rest", "commit", "batch-write"].flatMap((route) =>
+    [12112, 12113].map((count) => `writes/limits/near-limit-delete-refusal/${route}/${count}`),
+  );
+  assert.deepEqual(new Set(condition.recipeIds), new Set(expected));
+  assert.equal(condition.status, "VERIFIED");
+  assert.equal(condition.boundaryStatus, "NONDETERMINISTIC_BAND");
+  const delta = supplements.find(({ name }) => name.startsWith("delta-v3"));
+  assert.deepEqual(new Set(Object.keys(delta.fixture.programs)), new Set(expected));
+  assert.deepEqual(
+    new Set(delta.fixture.evidence.nondeterministicPrograms),
+    new Set([
+      "writes/limits/near-limit-delete-refusal/rest/12112",
+      "writes/limits/near-limit-delete-refusal/batch-write/12112",
+    ]),
+  );
+});
+
+test("changed field-path and indexed-value recipes are covered by the partial supplement", async () => {
   const closure = JSON.parse(readFileSync(closurePath, "utf8"));
   const fixture = JSON.parse(readFileSync(fixturePath, "utf8"));
   const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
   const { corpus } = await prepareSandboxCorpus();
-  const selected = selectComparableSandboxRecipes(fixture, manifest, corpus, corpus);
+  const { base, supplemental } = currentRecordingSelection(fixture, manifest, corpus);
   for (const [conditionId, recipeId] of [
     ["FS-LIMIT-FIELD-PATH-BYTES", "writes/limits/field-path-mask/1500"],
     ["FS-LIMIT-INDEXED-FIELD-VALUE-BYTES", "writes/limits/indexed-field-value-bytes"],
   ]) {
     const condition = closure.conditions.find((row) => row.conditionId === conditionId);
     assert.ok(condition.recipeIds.includes(recipeId));
-    assert.ok(selected.pendingRestIds.includes(recipeId));
-    assert.equal(condition.status, "PENDING_RECORDING", conditionId);
+    assert.ok(base.pendingRestIds.includes(recipeId));
+    assert.ok(!supplemental.pendingRestIds.includes(recipeId));
+    assert.equal(condition.status, "VERIFIED", conditionId);
   }
 });
 
-test("an unrecorded empty-write response cannot inherit the known trailer mismatch", async () => {
+test("the recorded empty-write response remains separate from half-close and trailing metadata", async () => {
   const closure = JSON.parse(readFileSync(closurePath, "utf8"));
   const fixture = JSON.parse(readFileSync(fixturePath, "utf8"));
   const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
   const { corpus } = await prepareSandboxCorpus();
-  const selected = selectComparableSandboxRecipes(fixture, manifest, corpus, corpus);
+  const { base, supplemental } = currentRecordingSelection(fixture, manifest, corpus);
   const responseId = "writes/write-stream-terminal/response-before-half-close";
   const response = closure.conditions.find(
     ({ conditionId }) => conditionId === "FS-DATA-WRITE/write-stream-empty-write-response",
@@ -511,8 +1232,9 @@ test("an unrecorded empty-write response cannot inherit the known trailer mismat
   const halfClose = closure.conditions.find(
     ({ conditionId }) => conditionId === "FS-DATA-WRITE/write-stream-half-close",
   );
-  assert.ok(selected.pendingStreamIds.includes(responseId));
-  assert.equal(response.status, "PENDING_RECORDING");
+  assert.ok(base.pendingStreamIds.includes(responseId));
+  assert.ok(!supplemental.pendingStreamIds.includes(responseId));
+  assert.equal(response.status, "VERIFIED");
   assert.deepEqual(response.recipeIds, [responseId]);
   assert.equal(halfClose.status, "VERIFIED");
   assert.match(
@@ -563,7 +1285,7 @@ test("half-close accepts the source-bound current run without rewriting historic
       "spec/compatibility/broad-runs/fs-stream-half-close-542b868b7-saved-comparison.json",
   });
   assert.deepEqual(comparison.sourceBinding, {
-    sourceHead: "1cb4758372f21a467306a0a701994b7c1a02a8bb",
+    sourceHead: "281003db604be07f8425fa58142572ec88b86454",
     executableSha256: "2af3f08c4d453459af86c9258f2283cb38fc7e74d83d388018cbdbb29e892a6a",
     executableSha256After: "2af3f08c4d453459af86c9258f2283cb38fc7e74d83d388018cbdbb29e892a6a",
     bindingFileSha256: "ea1c8bf15deb90fb70723e7a9a0ca3e1854779da79fb3473c6f8ab6451f7d37d",
@@ -594,9 +1316,9 @@ test("half-close accepts the source-bound current run without rewriting historic
   const finalRegression = closure.conditions.find(
     ({ conditionId }) => conditionId === "FS-DATA-WRITE/final-artifact-regression",
   );
-  assert.equal(trailingMetadata.status, "MISMATCH");
-  assert.equal(emptyResponse.status, "PENDING_RECORDING");
-  assert.equal(finalRegression.status, "PENDING_REVIEW");
+  assert.equal(trailingMetadata.status, "VERIFIED");
+  assert.equal(emptyResponse.status, "VERIFIED");
+  assert.equal(finalRegression.status, "VERIFIED");
   assert.equal(comparison.result.wholeRunKnownMismatchRows, 9);
   assert.equal(comparison.result.wholeRunPendingStreams, 5);
   assert.notEqual(historical.artifactSha256, comparison.artifactSha256);
@@ -646,10 +1368,17 @@ test("recorded conditions contain no changed or unrecorded runnable recipes", as
   const fixture = JSON.parse(readFileSync(fixturePath, "utf8"));
   const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
   const { corpus } = await prepareSandboxCorpus();
-  const selected = selectComparableSandboxRecipes(fixture, manifest, corpus, corpus);
-  const pending = new Set([...selected.pendingRestIds, ...selected.pendingStreamIds]);
+  const { supplemental } = currentRecordingSelection(fixture, manifest, corpus);
+  const pending = new Set([...supplemental.pendingRestIds, ...supplemental.pendingStreamIds]);
   const failures = closure.conditions
-    .filter(({ status }) => ["PRODUCTION_RECORDED", "VERIFIED"].includes(status))
+    .filter(({ status }) =>
+      [
+        "PRODUCTION_RECORDED",
+        "VERIFIED",
+        "DIVERGENCE_APPROVED",
+        "KNOWN_DIFFERENCE_APPROVED",
+      ].includes(status),
+    )
     .flatMap(({ conditionId, recipeIds }) =>
       recipeIds
         .filter((recipeId) => pending.has(recipeId))
@@ -658,9 +1387,179 @@ test("recorded conditions contain no changed or unrecorded runnable recipes", as
   assert.deepEqual(failures, []);
 });
 
+/**
+ * The owner approved closing the parent without two conditions VERIFIED: the gRPC stream's
+ * request upper bound cannot be observed safely in production (owner-decisions, 2026-09-27),
+ * and WebChannel's form-body bound is an estimate inside a recorded interval (D-2,
+ * 2026-09-28). Such a condition carries its reason and decision, and the closure lists it by name.
+ */
+const APPROVED_KNOWN_DIFFERENCES = new Map([
+  [
+    "FS-LIMIT-API-REQUEST-BYTES/grpc-stream",
+    ["2026-09-27 FS-DATA-WRITE gRPC stream upper bound", "UNOBSERVABLE"],
+  ],
+  [
+    "FS-LIMIT-API-REQUEST-BYTES/webchannel",
+    ["2026-09-28 FS-DATA-WRITE D-2", "INFERRED_UPPER_BOUND"],
+  ],
+]);
+
+function isApprovedKnownDifference(closure, condition) {
+  const [decision, boundaryStatus] = APPROVED_KNOWN_DIFFERENCES.get(condition.conditionId) ?? [];
+  const listed = (closure.approvedKnownDifferences ?? []).filter(
+    (entry) => entry.conditionId === condition.conditionId,
+  );
+  return (
+    decision !== undefined &&
+    condition.status === "KNOWN_DIFFERENCE_APPROVED" &&
+    condition.boundaryStatus === boundaryStatus &&
+    condition.ownerDecision === decision &&
+    typeof condition.reason === "string" &&
+    condition.reason.length > 0 &&
+    listed.length === 1 &&
+    listed[0].ownerDecision === decision &&
+    listed[0].reason === condition.reason
+  );
+}
+
+test("only the owner-approved known differences may close without VERIFIED", () => {
+  const condition = {
+    conditionId: "FS-LIMIT-API-REQUEST-BYTES/grpc-stream",
+    status: "KNOWN_DIFFERENCE_APPROVED",
+    boundaryStatus: "UNOBSERVABLE",
+    ownerDecision: "2026-09-27 FS-DATA-WRITE gRPC stream upper bound",
+    reason: "the upper bound cannot be observed safely in production",
+  };
+  const closure = {
+    approvedKnownDifferences: [
+      {
+        conditionId: condition.conditionId,
+        ownerDecision: condition.ownerDecision,
+        reason: condition.reason,
+      },
+    ],
+  };
+  assert.equal(isApprovedKnownDifference(closure, condition), true);
+  for (const change of [
+    { conditionId: "FS-LIMIT-API-REQUEST-BYTES/grpc-unary" },
+    { status: "MISMATCH" },
+    { boundaryStatus: "UNBRACKETED" },
+    { ownerDecision: "2026-09-27 other" },
+    { reason: "" },
+  ]) {
+    assert.equal(isApprovedKnownDifference(closure, { ...condition, ...change }), false);
+  }
+  assert.equal(isApprovedKnownDifference({}, condition), false);
+  assert.equal(
+    isApprovedKnownDifference(
+      { approvedKnownDifferences: [{ ...closure.approvedKnownDifferences[0], reason: "x" }] },
+      condition,
+    ),
+    false,
+  );
+});
+
+const SIZE_REFUSAL = /^Request payload size exceeds the limit: \d+ bytes\.$/;
+
+/**
+ * Boundary evidence is two references in one recipe family. `programId#stepId` names a REST
+ * step, where the accepted side answers below 300 and the refused side 400 or more (or a typed
+ * dropped connection on a WebChannel measured body). `programId#grpc` names a gRPC recording,
+ * where the accepted side passed the size gate (any answer but the size refusal) and the refused
+ * side is production's size refusal.
+ */
+function checkBoundaryEvidence(condition, allPrograms, allStreams) {
+  const id = condition.conditionId;
+  assert.equal(condition.boundaryEvidence?.length, 2, id);
+  const shape = (reference) => reference.split("#")[0].replace(/\/[^/]+$/, "");
+  assert.equal(
+    shape(condition.boundaryEvidence[0]),
+    shape(condition.boundaryEvidence[1]),
+    `${id}: evidence must keep the same recipe family`,
+  );
+  const pair = condition.boundaryEvidence.map((reference) => {
+    const [programId, stepId] = reference.split("#");
+    if (stepId === "grpc") {
+      const status = allStreams[programId]?.status;
+      assert.ok(Number.isInteger(status?.code), `${id}: missing gRPC recording ${reference}`);
+      const refused = status.code === 3 && SIZE_REFUSAL.test(status.details ?? "");
+      return { accepted: !refused, refused, message: status.details };
+    }
+    const step = allPrograms[programId]?.steps[stepId];
+    assert.ok(step, `${id}: missing fixture step ${reference}`);
+    const reset = step.status === 0 && step.code === "connection-reset";
+    return {
+      accepted: step.status >= 200 && step.status < 300,
+      refused: step.status >= 400 || reset,
+      message: step.message,
+    };
+  });
+  if (condition.boundaryStatus === "BRACKETED") {
+    assert.ok(
+      pair.some((step) => step.accepted),
+      `${id}: no accepted side`,
+    );
+    assert.ok(
+      pair.some((step) => step.refused),
+      `${id}: no refused side`,
+    );
+  } else {
+    assert.ok(
+      pair.every((step) => step.refused),
+      id,
+    );
+    assert.notEqual(pair[0].message, pair[1].message, id);
+  }
+}
+
+test("boundary evidence brackets REST steps, gRPC recordings and typed dropped connections", () => {
+  const programs = {
+    "writes/x/1": { steps: { write: { status: 200, code: "OK", body: {} } } },
+    "writes/x/2": { steps: { write: { status: 400, code: "INVALID_ARGUMENT", message: "no" } } },
+    "writes/x/3": {
+      steps: {
+        boundary: { status: 0, code: "connection-reset", message: "reset-before-response" },
+      },
+    },
+    "writes/x/4": {
+      steps: { boundary: { status: 0, code: "probe-error", message: "fetch failed" } },
+    },
+  };
+  const size = "Request payload size exceeds the limit: 11534336 bytes.";
+  const streams = {
+    "writes/g/1": { status: { code: 3, details: "Invalid transaction." } },
+    "writes/g/2": { status: { code: 3, details: size } },
+    "writes/g/3": { status: { code: 3, details: "Invalid transaction." } },
+  };
+  const bracket = (boundaryEvidence) => ({
+    conditionId: "example",
+    boundaryStatus: "BRACKETED",
+    boundaryEvidence,
+  });
+  const check = (condition) => checkBoundaryEvidence(condition, programs, streams);
+  check(bracket(["writes/x/1#write", "writes/x/2#write"]));
+  check(bracket(["writes/x/1#write", "writes/x/3#boundary"]));
+  check(bracket(["writes/g/1#grpc", "writes/g/2#grpc"]));
+  assert.throws(() => check(bracket(["writes/x/1#write", "writes/x/4#boundary"])), /refused/);
+  assert.throws(() => check(bracket(["writes/g/1#grpc", "writes/g/3#grpc"])), /refused/);
+  assert.throws(() => check(bracket(["writes/x/2#write", "writes/g/2#grpc"])), /family/);
+  assert.throws(() => check(bracket(["writes/g/1#grpc", "writes/g/9#grpc"])), /missing gRPC/);
+  assert.throws(() => check(bracket(["writes/x/1#write"])));
+});
+
 test("FS-DATA-WRITE closure inventory cannot silently omit a declared condition", () => {
   const closure = JSON.parse(readFileSync(closurePath, "utf8"));
   const fixture = JSON.parse(readFileSync(fixturePath, "utf8"));
+  const allPrograms = Object.assign(
+    {},
+    fixture.programs,
+    ...supplements.map(({ fixture: additional }) => additional.programs),
+  );
+  const allStreams = Object.assign(
+    {},
+    fixture.streams,
+    ...supplements.map(({ fixture: additional }) => additional.streams ?? {}),
+  );
   assert.equal(closure.parent, "FS-DATA-WRITE");
   const ids = closure.conditions.map(({ conditionId }) => conditionId);
   assert.equal(ids.length, new Set(ids).size, "condition IDs must be unique");
@@ -674,44 +1573,23 @@ test("FS-DATA-WRITE closure inventory cannot silently omit a declared condition"
         "BRACKETED",
         "RULE_TRANSITION",
         "UNBRACKETED",
+        "NONDETERMINISTIC_BAND",
+        "INFERRED_UPPER_BOUND",
         "NOT_APPLICABLE",
         "PENDING_RECORDING",
         "OBSERVED (page size 300)",
+        "UNOBSERVABLE",
       ].includes(condition.boundaryStatus),
       `${condition.conditionId}: missing boundary classification`,
     );
     if (["BRACKETED", "RULE_TRANSITION"].includes(condition.boundaryStatus)) {
-      assert.equal(condition.boundaryEvidence?.length, 2, condition.conditionId);
-      const shape = (reference) => reference.split("#")[0].replace(/\/[^/]+$/, "");
-      assert.equal(
-        shape(condition.boundaryEvidence[0]),
-        shape(condition.boundaryEvidence[1]),
-        `${condition.conditionId}: evidence must keep the same recipe family`,
-      );
-      const pair = condition.boundaryEvidence.map((reference) => {
-        const [programId, stepId] = reference.split("#");
-        const step = fixture.programs[programId]?.steps[stepId];
-        assert.ok(step, `${condition.conditionId}: missing fixture step ${reference}`);
-        return step;
-      });
-      if (condition.boundaryStatus === "BRACKETED") {
-        assert.ok(
-          pair.some((step) => step.status < 300),
-          condition.conditionId,
-        );
-        assert.ok(
-          pair.some((step) => step.status >= 400),
-          condition.conditionId,
-        );
-      } else {
-        assert.ok(
-          pair.every((step) => step.status >= 400),
-          condition.conditionId,
-        );
-        assert.notEqual(pair[0].message, pair[1].message, condition.conditionId);
-      }
+      checkBoundaryEvidence(condition, allPrograms, allStreams);
     }
-    if (condition.recipeIds.some((recipe) => fixture.programs[recipe])) {
+    // An inferred bound names the recorded ends of its interval: an accepted and a refused side.
+    if (condition.boundaryStatus === "INFERRED_UPPER_BOUND" && condition.boundaryEvidence) {
+      checkBoundaryEvidence({ ...condition, boundaryStatus: "BRACKETED" }, allPrograms, allStreams);
+    }
+    if (condition.recipeIds.some((recipe) => allPrograms[recipe])) {
       assert.notEqual(condition.status, "PENDING_CORPUS", condition.conditionId);
     }
     assert.ok(
@@ -722,8 +1600,10 @@ test("FS-DATA-WRITE closure inventory cannot silently omit a declared condition"
         "PRODUCTION_RECORDED",
         "MISMATCH",
         "VERIFIED",
+        "DIVERGENCE_APPROVED",
         "PENDING_REVIEW",
         "PENDING_INTEGRATION",
+        "KNOWN_DIFFERENCE_APPROVED",
       ].includes(condition.status),
       `${condition.conditionId}: unknown status`,
     );
@@ -737,7 +1617,17 @@ test("FS-DATA-WRITE closure inventory cannot silently omit a declared condition"
       `${conditionId}: incomplete recipe mapping`,
     );
   }
-  const allVerified = closure.conditions.every(({ status }) => status === "VERIFIED");
+  // No condition keeps a DIVERGENCE_APPROVED row: the former D3 rows match since the strict
+  // index-entry rules follow production (2026-09-28).
+  assert.ok(closure.conditions.every(({ status }) => status !== "DIVERGENCE_APPROVED"));
+  for (const condition of closure.conditions) {
+    if (condition.status === "KNOWN_DIFFERENCE_APPROVED") {
+      assert.ok(isApprovedKnownDifference(closure, condition), condition.conditionId);
+    }
+  }
+  const allVerified = closure.conditions.every(
+    (condition) => condition.status === "VERIFIED" || isApprovedKnownDifference(closure, condition),
+  );
   assert.equal(
     closure.parentStatus === "COMPAT_VERIFIED",
     allVerified && closure.closureReview?.decision === "APPROVED",

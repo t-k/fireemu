@@ -1,0 +1,369 @@
+{
+  "kind": "auth-tenant-blocking-comparison-v1",
+  "artifactSha256": "ece3f66b1093e69d24ab16fa820994469120fcfb7ddaff22d6a4fc72cff51167",
+  "fixtureSha256": "99679371f97e17fb12912bb54513424a80c502b19ba40b0f5c2aa4d7ed9a639b",
+  "runnerSha256": "874e01c9322193f689e99568089baf0bafaacb8734c3945f8187b9fa7e8a71bd",
+  "sourceCommit": "67dbcaeb8d972e48cc7ca1f413008c99a7d2e9f5",
+  "treeClean": true,
+  "summary": {
+    "MATCH": 89
+  },
+  "rows": [
+    {
+      "row": "atb/blocking/events#sign-up-password",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/blocking/events#sign-in-password",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/blocking/events#refresh-password",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/blocking/events#sign-up-anonymous",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/blocking/events#admin-create",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/blocking/events#admin-lookup-created",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/blocking/events#sign-in-admin-created",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/blocking/events#admin-import",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/blocking/events#admin-lookup-imported",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/blocking/events#update-profile",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/blocking/events#phone-code-new",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/blocking/events#phone-sign-in-new",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/blocking/events#phone-code-existing",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/blocking/events#phone-sign-in-existing",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/blocking/email-link#link-code-new",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/blocking/email-link#link-sign-in-new",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/blocking/email-link#link-code-existing",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/blocking/email-link#link-sign-in-existing",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/blocking/mfa#create-m1",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/blocking/mfa#sign-in-m1",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/blocking/mfa#phone-start",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/blocking/mfa#phone-finalize",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/blocking/mfa#first-factor",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/blocking/mfa#second-factor-start",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/blocking/mfa#second-factor-finalize",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/blocking/ordering#sign-up-profile",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/blocking/ordering#lookup-profile",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/blocking/ordering#sign-in-profile",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/blocking/refusal#create-permission-denied",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/blocking/refusal#create-invalid-argument",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/blocking/refusal#create-unavailable",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/blocking/refusal#create-resource-exhausted",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/blocking/refusal#create-unhandled",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/blocking/refusal#lookup-refused-creates",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/blocking/refusal#admin-create-refused",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/blocking/refusal#admin-create-sign-in-refused",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/blocking/refusal#sign-in-permission-denied",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/blocking/refusal#admin-create-sign-in-internal",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/blocking/refusal#sign-in-internal",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/blocking/refusal#admin-create-sign-in-unhandled",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/blocking/refusal#sign-in-unhandled",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/blocking/refusal#lookup-after-refused-sign-ins",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/blocking/rollback#sign-up-refused-at-sign-in",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/blocking/rollback#lookup-refused-at-sign-in",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/blocking/rollback#sign-up-again",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/blocking/rollback#sign-up-create-disabled",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/blocking/rollback#lookup-create-disabled",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/blocking/rollback#sign-up-sign-in-disabled",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/blocking/rollback#lookup-sign-in-disabled",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/blocking/timeout#sign-up-slow-create",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/blocking/timeout#lookup-slow-create",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/blocking/timeout#admin-create-slow-sign-in",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/blocking/timeout#sign-in-slow",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/blocking/timeout#lookup-slow-sign-in",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/blocking/claims#create-big-claims",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/blocking/claims#create-reserved-claim",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/blocking/claims#admin-create-big-session",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/blocking/claims#sign-in-big-session",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/blocking/claims#admin-create-reserved-session",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/blocking/claims#sign-in-reserved-session",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/blocking/claims#sign-up-l5",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/blocking/claims#refresh-l5",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/blocking/claims#admin-claims-l5",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/blocking/claims#sign-in-l5-with-claims",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/blocking/claims#lookup-l5",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/blocking/response#create-bad-type",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/blocking/response#create-unknown-member",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/blocking/response#lookup-bad-answers",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/blocking/config#config-blocking",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/blocking/config#tenant-get",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/blocking/config#tenant-patch-blocking",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/blocking/tenant#tenant-sign-up",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/blocking/tenant#tenant-sign-in",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/blocking/tenant#tenant-lookup",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/blocking/send#create-s1",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/blocking/send#reset-mail-echo",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/blocking/send#create-s2",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/blocking/send#reset-mail-refused",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/blocking/send#create-s3",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/blocking/send#reset-mail-blocked",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/blocking/send#sign-in-s1",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/blocking/send#verify-mail-echo",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/blocking/send#admin-reset-link-echo",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/blocking/send#link-mail-echo-in-tenant",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/blocking/send#sms-echo",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/blocking/send#sms-plain",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/blocking/custom-token#custom-new",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/blocking/custom-token#custom-existing",
+      "status": "MATCH"
+    },
+    {
+      "row": "atb/blocking/custom-token#admin-lookup-custom",
+      "status": "MATCH"
+    }
+  ]
+}

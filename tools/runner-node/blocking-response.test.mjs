@@ -91,3 +91,36 @@ test("SDK wire responses cannot bypass claim validation", () => {
     );
   }
 });
+
+test("the custom claims travel with their JSON.stringify text, which the runner owns", () => {
+  // Production reads the claims back as the function's JSON.stringify gave them, key order
+  // included (AUTH-TENANT-BLOCKING recording 2026-09-28, rollback#lookup-refused-at-sign-in).
+  const claims = { b: 1, a: { d: [2, "x"], c: null } };
+  const text = JSON.stringify(claims);
+  assert.equal(text, '{"b":1,"a":{"d":[2,"x"],"c":null}}');
+  const plain = blockingResult({ customClaims: claims }, "beforeCreate", HttpsError);
+  assert.equal(plain.fireemuCustomClaimsText, text);
+  assert.ok(Object.isFrozen(plain));
+  // A wire envelope's own member of that name is replaced, or removed without claims.
+  const wire = blockingResult(
+    {
+      userRecord: { updateMask: "customClaims", customClaims: claims },
+      fireemuCustomClaimsText: '{"a":1}',
+    },
+    "beforeCreate",
+    HttpsError,
+  );
+  assert.equal(wire.fireemuCustomClaimsText, text);
+  for (const value of [
+    { userRecord: { updateMask: "displayName", displayName: "n" }, fireemuCustomClaimsText: "{}" },
+    { userRecord: { updateMask: "customClaims", customClaims: null }, fireemuCustomClaimsText: "{}" },
+  ]) {
+    assert.equal(
+      Object.hasOwn(blockingResult(value, "beforeCreate", HttpsError), "fireemuCustomClaimsText"),
+      false,
+    );
+  }
+  assert.deepEqual(blockingResult({ displayName: "n" }, "beforeCreate", HttpsError), {
+    userRecord: { displayName: "n", updateMask: "displayName" },
+  });
+});

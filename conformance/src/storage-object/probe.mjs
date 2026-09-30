@@ -57,12 +57,19 @@ export function buildProbePlan({ projectId, bucket, runId, otherRunId }) {
     },
     read("gcs-metadata-owner", "storage", gcsObject, {}, "owner"),
     read("gcs-media-owner", "storage", gcsObject, { alt: "media" }, "owner"),
-    read("gcs-list-owner", "storage", `/storage/v1/b/${bucket}/o`, { prefix: scope }, "owner"),
     read("firebase-metadata-owner", "storage", firebaseObject, {}, "owner"),
     read("firebase-media-owner", "storage", firebaseObject, { alt: "media" }, "owner"),
-    read("firebase-list-owner", "storage", `/v0/b/${bucket}/o`, { prefix: scope }, "owner"),
     read("firebase-metadata-none", "storage", firebaseObject, {}, "none"),
     read("firebase-media-none", "storage", firebaseObject, { alt: "media" }, "none"),
+  ];
+  // The two lists come last, after the sessions, so that they also read back what the sessions
+  // could have left under the run's prefix. Only the GCS one is judged, and only for that.
+  const readbacks = [
+    {
+      ...read("gcs-list-owner", "storage", `/storage/v1/b/${bucket}/o`, { prefix: scope }, "owner"),
+      judgesPrefix: true,
+    },
+    read("firebase-list-owner", "storage", `/v0/b/${bucket}/o`, { prefix: scope }, "owner"),
   ];
   const gcsSessionName = `${scope}session-gcs.bin`;
   const firebaseSessionName = `${scope}session-firebase.bin`;
@@ -131,6 +138,7 @@ export function buildProbePlan({ projectId, bucket, runId, otherRunId }) {
     objectName: name,
     steps: Object.freeze(steps),
     sessions: Object.freeze(sessions),
+    readbacks: Object.freeze(readbacks),
   });
 }
 
@@ -162,18 +170,37 @@ export function sessionContinuation(row, url) {
   };
 }
 
+/** Whether a GCS list answer says the prefix holds nothing: a 200 with no items and no next page. */
+function emptyList(status, text) {
+  if (status !== 200) return false;
+  let body;
+  try {
+    body = JSON.parse(text);
+  } catch {
+    return false;
+  }
+  return (
+    body !== null &&
+    typeof body === "object" &&
+    !Array.isArray(body) &&
+    (body.items === undefined || (Array.isArray(body.items) && body.items.length === 0)) &&
+    body.nextPageToken === undefined
+  );
+}
+
 const firstLine = (error) =>
   String(error?.message ?? error)
     .split("\n")[0]
     .slice(0, 200);
 
 /**
- * Send the plan in order, one request at a time: the identity request and the reads, then each
- * session. A response of any status is an answer. A request that throws stops the run at once, so
+ * Send the plan in order, one request at a time: the identity request and the reads, each session,
+ * then the two lists. A response of any status is an answer. A request that throws stops the run at once, so
  * nothing after an identity or connection failure is sent. The one exception is a session
  * request the wire refuses before it sends anything (a session URL of a shape its route table does
  * not know): that is recorded as skipped, with the wire's reason, and the run goes on.
- * Resolves with one row per request: `{ id, status }`, or `{ id, skipped }`.
+ * Resolves with one row per request: `{ id, status }`, or `{ id, skipped }`. The GCS list row also
+ * says whether it showed the prefix empty (`prefixEmpty`), the one thing the run closes on.
  */
 export async function sendProbe({ wire, plan, origins }) {
   const answers = [];
@@ -216,17 +243,33 @@ export async function sendProbe({ wire, plan, origins }) {
         continue;
       }
       const request = sessionContinuation(row, url);
-      const before = wire.snapshot().realRequests;
       try {
         response = await wire.fetch(request.href, request.init);
       } catch (error) {
-        const state = wire.snapshot();
-        if (state.halted || state.realRequests !== before) throw stop(error, row.id);
+        // Only a refusal by the route table (nothing was sent) is an answer. Any other failure, an
+        // unavailable token or wire included, stops the run.
+        if (error?.routeRefused !== true) throw stop(error, row.id);
         answers.push({ id: row.id, skipped: firstLine(error) });
         continue;
       }
       answers.push({ id: row.id, status: response.status });
     }
+  }
+  for (const step of plan.readbacks) {
+    const { href, init } = probeRequest(step, origins);
+    let response;
+    let text;
+    try {
+      response = await wire.fetch(href, init);
+      text = await response.text();
+    } catch (error) {
+      throw stop(error, step.id);
+    }
+    answers.push({
+      id: step.id,
+      status: response.status,
+      ...(step.judgesPrefix ? { prefixEmpty: emptyList(response.status, text) } : {}),
+    });
   }
   return answers;
 }

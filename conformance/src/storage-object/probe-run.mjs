@@ -182,6 +182,15 @@ export async function probeRun(deps) {
         let answers;
         try {
           answers = await lease.dispatch(() => sendProbe({ wire, plan, origins: ORIGINS }));
+          // The closing row says the sandbox is at its baseline, so it is written only after the
+          // run's own prefix was read back empty (the sessions can leave no object, by protocol;
+          // this is the check that would show it if production disagreed).
+          const readback = answers.find((row) => row.id === "gcs-list-owner");
+          if (readback?.prefixEmpty !== true)
+            throw Object.assign(new Error("the probe prefix was not read back as empty"), {
+              probeStep: "gcs-list-owner",
+              answered: answers,
+            });
         } catch (error) {
           const sent = wire.snapshot().realRequests;
           const reason = safe(

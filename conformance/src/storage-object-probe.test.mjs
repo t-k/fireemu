@@ -79,25 +79,27 @@ function shapeOf(call) {
 
 test("the plan is nine requests and two sessions, the identity request first, every Storage name under the run", () => {
   assert.equal(PROBE_MAX_REQUESTS, 17);
-  assert.equal(plan.steps.length, 9);
+  assert.equal(plan.steps.length, 7);
   assert.equal(plan.sessions.length, 2);
+  assert.deepEqual(
+    plan.readbacks.map((step) => step.id),
+    ["gcs-list-owner", "firebase-list-owner"],
+  );
   assert.deepEqual(
     plan.steps.map((step) => step.id),
     [
       "identity-owner-lookup",
       "gcs-metadata-owner",
       "gcs-media-owner",
-      "gcs-list-owner",
       "firebase-metadata-owner",
       "firebase-media-owner",
-      "firebase-list-owner",
       "firebase-metadata-none",
       "firebase-media-none",
     ],
   );
   assert.equal(plan.objectName, `storage-object/${RUN}/probe/absent.bin`);
   assert.equal(plan.scope, `storage-object/${RUN}/probe/`);
-  for (const step of plan.steps.slice(1)) {
+  for (const step of [...plan.steps.slice(1), ...plan.readbacks]) {
     assert.equal(step.method, "GET");
     assert.equal(step.service, "storage");
   }
@@ -118,19 +120,22 @@ test("no request in the plan writes: the one POST is the identity lookup", () =>
 // ---- through the real lean wire --------------------------------------------------------------------
 
 test("through the lean wire each request goes to the real host with exactly these headers", async () => {
-  const { wire, calls } = makeWire();
+  const calls = [];
+  const { wire } = makeWire({ fetchImpl: sessionFetch({ calls }) });
   await sendProbe({ wire, plan, origins: ORIGINS });
   const name = encodeURIComponent(plan.objectName);
   const scope = encodeURIComponent(plan.scope);
   const owner = { authorization: `Bearer ${TOKEN}`, "x-goog-user-project": PROJECT };
   assert.deepEqual(
-    calls.slice(0, 9).map((call) => ({
-      method: call.init.method,
-      url: call.url,
-      headers: Object.fromEntries(
-        [...new Headers(call.init.headers).entries()].toSorted(([a], [b]) => (a < b ? -1 : 1)),
-      ),
-    })),
+    [0, 1, 2, 15, 3, 4, 16, 5, 6]
+      .map((index) => calls[index])
+      .map((call) => ({
+        method: call.init.method,
+        url: call.url,
+        headers: Object.fromEntries(
+          [...new Headers(call.init.headers).entries()].toSorted(([a], [b]) => (a < b ? -1 : 1)),
+        ),
+      })),
     [
       {
         method: "POST",
@@ -228,15 +233,15 @@ test("a lost connection part-way stops there and says what had been answered", a
   let count = 0;
   const { wire } = makeWire({
     fetchImpl: async () => {
-      if (++count === 4) throw new TypeError("fetch failed");
+      if (++count === 5) throw new TypeError("fetch failed");
       return new Response("{}", { status: 404, headers: { "content-type": "application/json" } });
     },
   });
   await assert.rejects(
     sendProbe({ wire, plan, origins: ORIGINS }),
-    (error) => error.probeStep === "gcs-list-owner" && error.answered.length === 3,
+    (error) => error.probeStep === "firebase-media-owner" && error.answered.length === 4,
   );
-  assert.equal(count, 4, "no request went out after the failure");
+  assert.equal(count, 5, "no request went out after the failure");
 });
 
 test("a capture failure stops the run", async () => {
@@ -488,7 +493,7 @@ test("the plan has a GCS and a Firebase session under the run, four requests eac
       "firebase-session-query-after-cancel",
     ],
   );
-  assert.equal(PROBE_MAX_REQUESTS, plan.steps.length + 8);
+  assert.equal(PROBE_MAX_REQUESTS, plan.steps.length + plan.readbacks.length + 8);
   // No request of a session carries an object body: a start has a JSON description only, and the
   // status and cancel requests have no body, so nothing can be uploaded.
   for (const row of plan.sessions.flatMap((group) => group.continuations))
@@ -503,7 +508,7 @@ test("a session's four requests reach the real host with the headers the corpus 
   const calls = [];
   const { wire } = makeWire({ fetchImpl: sessionFetch({ calls }) });
   const answers = await sendProbe({ wire, plan, origins: ORIGINS });
-  const sessionCalls = calls.slice(9);
+  const sessionCalls = calls.slice(7, 15);
   assert.equal(sessionCalls.length, 8);
   const name = (index) => encodeURIComponent(plan.sessions[index].objectName);
   const shape = (call) => ({
@@ -566,7 +571,7 @@ test("a session's four requests reach the real host with the headers the corpus 
   }
   assert.equal(answers.length, 17);
   assert.deepEqual(
-    answers.slice(9).map((row) => row.id),
+    answers.slice(7, 15).map((row) => row.id),
     [
       "gcs-session-start",
       "gcs-session-status",
@@ -584,7 +589,7 @@ test("the session start bodies name the owned object and its type, nothing else"
   const calls = [];
   const { wire } = makeWire({ fetchImpl: sessionFetch({ calls }) });
   await sendProbe({ wire, plan, origins: ORIGINS });
-  const starts = [calls[9], calls[13]];
+  const starts = [calls[7], calls[11]];
   assert.deepEqual(
     starts.map((call) => JSON.parse(Buffer.from(call.init.body).toString())),
     [
@@ -661,7 +666,7 @@ test("a continuation the wire refuses before sending is skipped, and a network f
   });
   await assert.rejects(
     sendProbe({ wire: lost.wire, plan, origins: ORIGINS }),
-    (error) => error.probeStep === "gcs-session-cancel" && error.answered.length === 11,
+    (error) => error.probeStep === "gcs-session-cancel" && error.answered.length === 9,
   );
 });
 
@@ -766,15 +771,15 @@ test("a session start that cannot be completed stops the run there", async () =>
   let count = 0;
   const { wire } = makeWire({
     fetchImpl: async () => {
-      if (++count === 10) throw new TypeError("fetch failed");
+      if (++count === 8) throw new TypeError("fetch failed");
       return new Response("{}", { status: 404, headers: { "content-type": "application/json" } });
     },
   });
   await assert.rejects(
     sendProbe({ wire, plan, origins: ORIGINS }),
-    (error) => error.probeStep === "gcs-session-start" && error.answered.length === 9,
+    (error) => error.probeStep === "gcs-session-start" && error.answered.length === 7,
   );
-  assert.equal(count, 10);
+  assert.equal(count, 8);
 });
 
 test("the status of each session request is what production answered", async () => {
@@ -791,46 +796,185 @@ test("the status of each session request is what production answered", async () 
   });
   const answers = await sendProbe({ wire, plan, origins: ORIGINS });
   assert.deepEqual(
-    answers.slice(9).map((row) => row.status),
+    answers.slice(7, 15).map((row) => row.status),
     [200, 308, 499, 308, 200, 200, 200, 200],
   );
 });
 
-/** A wire that answers the nine reads and the GCS session start, then refuses what comes next. */
-function refusingWire({ message, halted }) {
+/** A wire that answers the reads and the GCS session start, then refuses what comes next. */
+function refusingWire({ message, refused }) {
   let count = 0;
   return {
     fetch: async () => {
       count++;
-      // Request 14 is the Firebase session start; it is answered without a session URL.
-      if (count > 10 && count !== 14) throw new Error(message);
+      // Request 12 is the Firebase session start; it is answered without a session URL.
+      if (count > 8 && count !== 12) {
+        const error = new Error(message);
+        if (refused) error.routeRefused = true;
+        throw error;
+      }
       const headers = new Headers();
-      if (count === 10)
+      if (count === 8)
         headers.set(
           "location",
           "http://127.0.0.1:19199/upload/storage/v1/b/x/o?upload_id=1&name=n",
         );
       return new Response("", { status: 200, headers });
     },
-    snapshot: () => ({ realRequests: 10, halted }),
+    snapshot: () => ({ realRequests: count, halted: false }),
   };
 }
 
 test("a refusal's reason is one short line", async () => {
   const wire = refusingWire({
     message: `route is not in the table\nsecond line ${"x".repeat(300)}`,
-    halted: false,
+    refused: true,
   });
-  const answers = await sendProbe({ wire, plan, origins: ORIGINS });
-  const skipped = answers.filter((row) => row.skipped);
-  assert.equal(skipped[0].skipped, "route is not in the table");
-  assert.ok(skipped.every((row) => row.skipped.length <= 200 && !row.skipped.includes("\n")));
+  // The lists at the end are refused too, so the run stops there and says what it had answered.
+  await assert.rejects(sendProbe({ wire, plan, origins: ORIGINS }), (error) => {
+    const skipped = error.answered.filter((row) => row.skipped);
+    assert.equal(skipped[0].skipped, "route is not in the table");
+    assert.ok(skipped.every((row) => row.skipped.length <= 200 && !row.skipped.includes("\n")));
+    assert.equal(error.probeStep, "gcs-list-owner");
+    return true;
+  });
 });
 
-test("a wire that is halted stops the run even when it refused before sending", async () => {
-  const wire = refusingWire({ message: "LEAN_WIRE_UNAVAILABLE", halted: true });
+test("only a refusal by the route table is skipped: any other failure before a send stops the run", async () => {
+  for (const message of [
+    "owner access token is unavailable",
+    "LEAN_WIRE_UNAVAILABLE",
+    "LEAN_WIRE_BUSY",
+  ]) {
+    const wire = refusingWire({ message, refused: false });
+    await assert.rejects(
+      sendProbe({ wire, plan, origins: ORIGINS }),
+      (error) => error.probeStep === "gcs-session-status" && error.answered.length === 8,
+      message,
+    );
+  }
+});
+
+test("an owner token that cannot be had during a session stops the run, on the real wire", async () => {
+  let tokens = 0;
+  const calls = [];
+  const wire = createLeanWire({
+    bucket: BUCKET,
+    projectId: PROJECT,
+    prefix: plan.prefix,
+    origins: ORIGINS,
+    // Seven reads and the GCS session start have had their token; the next one cannot.
+    adminToken: async () => {
+      if (++tokens > 6) throw new Error("gcloud said something with a secret in it");
+      return TOKEN;
+    },
+    authApiKey: "AIzaSyD-synthetic-web-api-key-value-000000",
+    readRules: async () => ({ source: "x" }),
+    fetchImpl: sessionFetch({ calls }),
+    capture: async () => {},
+    pacer: { dispatch: (_name, attempt) => attempt() },
+  });
   await assert.rejects(
     sendProbe({ wire, plan, origins: ORIGINS }),
-    (error) => error.probeStep === "gcs-session-status" && error.answered.length === 10,
+    (error) =>
+      error.probeStep === "gcs-session-status" &&
+      /owner access token is unavailable/.test(error.message),
+  );
+  assert.equal(calls.filter((call) => call.url.includes("upload_id=AbC-1_x")).length, 0);
+});
+
+test("the lists come last, after both sessions, and the GCS one says whether the prefix is empty", async () => {
+  const calls = [];
+  const { wire } = makeWire({ fetchImpl: sessionFetch({ calls }) });
+  const answers = await sendProbe({ wire, plan, origins: ORIGINS });
+  assert.deepEqual(
+    answers.slice(-2).map((row) => row.id),
+    ["gcs-list-owner", "firebase-list-owner"],
+  );
+  assert.ok(
+    answers.findIndex((row) => row.id === "gcs-list-owner") >
+      answers.findIndex((row) => row.id === "firebase-session-query-after-cancel"),
+  );
+  assert.ok(
+    calls.at(-2).url.startsWith(`https://storage.googleapis.com/storage/v1/b/${BUCKET}/o?prefix=`),
+  );
+  assert.ok(
+    calls.at(-1).url.startsWith(`https://firebasestorage.googleapis.com/v0/b/${BUCKET}/o?prefix=`),
+  );
+  assert.equal("prefixEmpty" in answers.at(-1), false, "only the GCS list is judged");
+});
+
+test("the GCS list shows the prefix empty only for a 200 with no item and no next page", async () => {
+  const cases = [
+    [200, "{}", true],
+    [200, '{"kind":"storage#objects"}', true],
+    [200, '{"kind":"storage#objects","items":[]}', true],
+    [200, '{"items":[{"name":"storage-object/x/probe/session-firebase.bin"}]}', false],
+    [200, '{"nextPageToken":"t"}', false],
+    [200, '{"items":"x"}', false],
+    [200, "not json", false],
+    [200, "[]", false],
+    [200, "null", false],
+    [200, "5", false],
+    [200, '"x"', false],
+    [200, '{"items":""}', false],
+    [404, "{}", false],
+    [403, '{"error":{"code":403}}', false],
+    [500, "{}", false],
+  ];
+  for (const [status, body, empty] of cases) {
+    const { wire } = makeWire({
+      fetchImpl: async (url) =>
+        String(url).includes("/storage/v1/b/") && String(url).includes("?prefix=")
+          ? new Response(body, { status, headers: { "content-type": "application/json" } })
+          : new Response("{}", { status: 404, headers: { "content-type": "application/json" } }),
+    });
+    const answers = await sendProbe({ wire, plan, origins: ORIGINS });
+    assert.equal(
+      answers.find((row) => row.id === "gcs-list-owner").prefixEmpty,
+      empty,
+      `${status} ${body}`,
+    );
+  }
+});
+
+test("the wire marks the refusals of its route table, and nothing else", async () => {
+  const { wire } = makeWire();
+  await assert.rejects(
+    wire.fetch(`${ORIGINS.storage}/v0/b/other-bucket/o/x`, { method: "GET", headers: {} }),
+    (error) => error.routeRefused === true,
+  );
+  await assert.rejects(
+    wire
+      .fetch(`${ORIGINS.storage}/v0/b/${BUCKET}/o/${encodeURIComponent(`${plan.prefix}a`)}`, {
+        method: "GET",
+        headers: { authorization: LEAN_PLACEHOLDER_ADMIN },
+      })
+      .then(() => wire.close())
+      .then(() =>
+        wire.fetch(`${ORIGINS.storage}/v0/b/${BUCKET}/o/x`, { method: "GET", headers: {} }),
+      ),
+    (error) => error.routeRefused !== true,
+  );
+  const failing = createLeanWire({
+    bucket: BUCKET,
+    projectId: PROJECT,
+    prefix: plan.prefix,
+    origins: ORIGINS,
+    adminToken: async () => {
+      throw new Error("no token");
+    },
+    authApiKey: "AIzaSyD-synthetic-web-api-key-value-000000",
+    readRules: async () => ({ source: "x" }),
+    fetchImpl: async () => new Response("{}"),
+    capture: async () => {},
+    pacer: { dispatch: (_name, attempt) => attempt() },
+  });
+  await assert.rejects(
+    failing.fetch(`${ORIGINS.storage}/v0/b/${BUCKET}/o/${encodeURIComponent(`${plan.prefix}a`)}`, {
+      method: "GET",
+      headers: { authorization: LEAN_PLACEHOLDER_ADMIN },
+    }),
+    (error) => error.routeRefused !== true && /token/.test(error.message),
   );
 });

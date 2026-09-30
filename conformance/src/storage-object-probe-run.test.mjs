@@ -109,6 +109,7 @@ function setup(overrides = {}) {
           headers: new Headers(init?.headers),
           method: init?.method,
         });
+        if (isGcsList(url)) return emptyList();
         return new Response("{}", { status: 404, headers: { "content-type": "application/json" } });
       }),
     now: () => new Date(NOW),
@@ -116,6 +117,14 @@ function setup(overrides = {}) {
   };
   return { deps, events, ledgerRows, privateFiles, lockDir, legacy, fetchCalls };
 }
+
+/** A production that answers the GCS list of the probe's prefix with an empty one. */
+const isGcsList = (url) => /\/storage\/v1\/b\/[^/]+\/o\?prefix=/.test(String(url));
+const emptyList = () =>
+  new Response('{"kind":"storage#objects"}', {
+    status: 200,
+    headers: { "content-type": "application/json" },
+  });
 
 const lockFiles = (s) => (existsSync(s.lockDir) ? readdirSync(s.lockDir) : []);
 
@@ -169,7 +178,7 @@ test("the owner token and the quota project go to the owner routes, and to no ot
   const withToken = s.fetchCalls.filter(
     (c) => c.headers.get("authorization") === `Bearer ${TOKEN}`,
   );
-  assert.equal(withToken.length, 9, "seven owner routes and two session starts");
+  assert.equal(withToken.length, 9, "five owner reads, two session starts and two lists");
   for (const call of s.fetchCalls) {
     assert.equal(
       call.headers.get("x-goog-user-project"),
@@ -177,17 +186,23 @@ test("the owner token and the quota project go to the owner routes, and to no ot
     );
   }
   assert.deepEqual(
-    s.fetchCalls.slice(7, 9).map((c) => c.headers.get("authorization")),
+    s.fetchCalls.slice(5, 7).map((c) => c.headers.get("authorization")),
     [null, null],
   );
 });
 
 test("every answer, whatever its status, is captured and the run is still recorded", async () => {
-  const statuses = [403, 403, 404, 200, 401, 404, 500, 401, 404, 404, 500];
+  const statuses = [403, 403, 404, 200, 401, 404, 500, 404, 500, 200, 404];
   let index = 0;
   const s = setup({
-    fetch: async () =>
-      new Response("x", { status: statuses[index++], headers: { "content-type": "text/plain" } }),
+    fetch: async () => {
+      const at = index++;
+      // The tenth request is the GCS list: 200 with an empty prefix.
+      return new Response(at === 9 ? "{}" : "x", {
+        status: statuses[at],
+        headers: { "content-type": at === 9 ? "application/json" : "text/plain" },
+      });
+    },
   });
   const result = await probeRun(s.deps);
   assert.equal(result.outcome, "recorded");
@@ -241,7 +256,7 @@ test("a lost connection part-way stops there, and the summary says how far it go
   assert.equal(calls, 5);
   const meta = s.privateFiles.meta.at(-1);
   assert.equal(meta.outcome, "needs-recovery");
-  assert.equal(meta.stoppedAt, "firebase-metadata-owner");
+  assert.equal(meta.stoppedAt, "firebase-media-owner");
   assert.equal(meta.answered.length, 4);
   assert.equal(meta.requests, 5);
   assert.equal(s.ledgerRows.at(-1).requests, 5);
@@ -525,6 +540,7 @@ function sessionFetch(events, { failAt } = {}) {
           "x-goog-upload-url": `${href}&upload_id=Qz-9_y&upload_protocol=resumable`,
         },
       });
+    if (isGcsList(href)) return emptyList();
     return new Response("{}", { status: 404, headers: { "content-type": "application/json" } });
   };
 }
@@ -539,7 +555,7 @@ test("with both sessions started, seventeen requests go out and the run is recor
   assert.equal(s.ledgerRows.at(-1).requests, 17);
   assert.equal(s.ledgerRows[0].maxRequests, 17);
   assert.deepEqual(
-    events.slice(9).map((e) => e.method),
+    events.slice(7, 15).map((e) => e.method),
     ["POST", "PUT", "DELETE", "PUT", "POST", "POST", "POST", "POST"],
   );
   assert.deepEqual(lockFiles(s), []);
@@ -550,12 +566,12 @@ test("with both sessions started, seventeen requests go out and the run is recor
 
 test("a lost connection on a session's cancel stops the run there, keeps the lock and says where", async () => {
   const events = [];
-  const s = setup({ fetch: sessionFetch(events, { failAt: 12 }) });
+  const s = setup({ fetch: sessionFetch(events, { failAt: 10 }) });
   await assert.rejects(probeRun(s.deps), (error) => error.afterStart === true);
-  assert.equal(events.length, 12, "nothing was sent after the failure");
+  assert.equal(events.length, 10, "nothing was sent after the failure");
   const meta = s.privateFiles.meta.at(-1);
   assert.equal(meta.stoppedAt, "gcs-session-cancel");
-  assert.equal(meta.requests, 12);
+  assert.equal(meta.requests, 10);
   assert.equal(s.ledgerRows.at(-1).event, "needs-recovery");
   assert.equal(lockFiles(s).length, 1);
 });
@@ -568,7 +584,9 @@ test("no request of the probe carries object bytes: every body is a JSON descrip
         method: init.method,
         body: init.body ? Buffer.from(init.body).toString() : null,
       });
-      return new Response("{}", { status: 404, headers: { "content-type": "application/json" } });
+      return isGcsList(url)
+        ? emptyList()
+        : new Response("{}", { status: 404, headers: { "content-type": "application/json" } });
     },
   });
   await probeRun(s.deps);
@@ -729,4 +747,90 @@ test("a first line of an error that is itself long is cut to 200 characters", as
   });
   await assert.rejects(probeRun(s.deps));
   assert.equal(s.privateFiles.meta.at(-1).reason.length, 200);
+});
+
+// ---- the readback before the baseline is claimed -------------------------------------------------------
+
+test("a prefix that reads back with an item closes as needs-recovery, not as recorded, and keeps the lock", async () => {
+  const s = setup({
+    fetch: async (url) =>
+      isGcsList(url)
+        ? new Response('{"items":[{"name":"storage-object/x/probe/session-firebase.bin"}]}', {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          })
+        : new Response("{}", { status: 404, headers: { "content-type": "application/json" } }),
+  });
+  await assert.rejects(probeRun(s.deps), (error) => {
+    assert.equal(error.afterStart, true);
+    assert.match(error.message, /not read back as empty/);
+    return true;
+  });
+  const closing = s.ledgerRows.at(-1);
+  assert.equal(closing.event, "needs-recovery");
+  assert.equal(closing.outcome, "needs-recovery");
+  assert.equal(closing.sandboxAtBaseline, false);
+  assert.equal(closing.requests, 11, "everything was sent, and it is all counted");
+  assert.equal(lockFiles(s).length, 1);
+  assert.equal(
+    s.ledgerRows.some((row) => row.event === "finished"),
+    false,
+  );
+  const meta = s.privateFiles.meta.at(-1);
+  assert.equal(meta.outcome, "needs-recovery");
+  assert.equal(meta.stoppedAt, "gcs-list-owner");
+  assert.equal(meta.answered.length, 17);
+});
+
+test("a GCS list that is not a 200, or that has a next page, is not an empty prefix either", async () => {
+  for (const [status, body] of [
+    [404, "{}"],
+    [403, "{}"],
+    [500, "{}"],
+    [200, '{"nextPageToken":"t"}'],
+    [200, "not json"],
+  ]) {
+    const s = setup({
+      fetch: async (url) =>
+        isGcsList(url)
+          ? new Response(body, { status, headers: { "content-type": "application/json" } })
+          : new Response("{}", { status: 404, headers: { "content-type": "application/json" } }),
+    });
+    await assert.rejects(probeRun(s.deps), /not read back as empty/, `${status} ${body}`);
+    assert.equal(lockFiles(s).length, 1);
+  }
+});
+
+test("only the GCS list closes the run: the Firebase list may answer anything", async () => {
+  const s = setup({
+    fetch: async (url) =>
+      isGcsList(url)
+        ? emptyList()
+        : String(url).startsWith("https://firebasestorage.googleapis.com/v0/b/") &&
+            String(url).includes("?prefix=")
+          ? new Response("boom", { status: 500 })
+          : new Response("{}", { status: 404, headers: { "content-type": "application/json" } }),
+  });
+  assert.equal((await probeRun(s.deps)).outcome, "recorded");
+});
+
+test("the token failing during a session stops the run as needs-recovery, and the reason names no secret", async () => {
+  let tokens = 0;
+  const events = [];
+  const s = setup({
+    fetch: sessionFetch(events),
+    deps: {
+      getToken: async () => {
+        if (++tokens > 6) throw new Error("gcloud printed ya29.secret-value-that-must-not-be-kept");
+        return TOKEN;
+      },
+    },
+  });
+  await assert.rejects(probeRun(s.deps), (error) => error.afterStart === true);
+  assert.equal(events.length, 8, "nothing was sent after the token failed");
+  const meta = s.privateFiles.meta.at(-1);
+  assert.equal(meta.stoppedAt, "gcs-session-status");
+  assert.equal(JSON.stringify(s.privateFiles).includes("secret-value"), false);
+  assert.equal(s.ledgerRows.at(-1).event, "needs-recovery");
+  assert.equal(lockFiles(s).length, 1);
 });

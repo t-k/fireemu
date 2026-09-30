@@ -509,7 +509,15 @@ export function createLeanWire({
       active = true;
       try {
         const method = String(init.method ?? "GET").toUpperCase();
-        const route = resolve(href, method);
+        let route;
+        try {
+          route = resolve(href, method);
+        } catch (error) {
+          // Nothing was sent: the route table refused this request. A caller that may go on after
+          // a refusal (and only after one) tells it from any other failure by this mark.
+          error.routeRefused = true;
+          throw error;
+        }
         const sequence = attempts;
         if (route.kind === "control") {
           // Each real request is counted where it is made, so a read that fails is counted too.

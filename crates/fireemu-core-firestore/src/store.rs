@@ -3569,11 +3569,13 @@ impl FirestoreState {
         }
         let transaction = self.transaction(id)?;
         if transaction.read_only && !writes.is_empty() {
-            // Production ends a read-only transaction whose write commit it refused: the same token
-            // then answers `INVALID_ARGUMENT` "no longer valid" (2026-09-07 matrix row, after this
-            // refusal) and accepts a Rollback (P02). Inferred from that one row and from the
-            // precondition-refused commit of a read-write transaction (P08), not observed
-            // separately; the official emulator profile keeps the transaction open as before.
+            // Production ends a read-only transaction whose write commit it refused: the empty commit
+            // that followed on the same token answered `INVALID_ARGUMENT` "no longer valid"
+            // (observed over REST: conformance/firestore-production-matrix.json, program
+            // `transactions/lifecycle`, case `transactions/lifecycle#read-only-commit-without-writes`,
+            // after `read-only-commit-with-writes`), and P02 accepts a Rollback afterwards. A
+            // GetDocument on that token and the gRPC transport are not yet observed (P02b records
+            // them). The official emulator profile keeps the transaction open as before.
             if self.limit_scope == LimitScope::Production {
                 self.finish_transaction(id, TransactionState::CommitRefused);
             }

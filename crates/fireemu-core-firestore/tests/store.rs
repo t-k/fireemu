@@ -3118,9 +3118,11 @@ fn a_precondition_refused_commit_releases_the_transactions_locks_at_once() {
 
 // P02 (both transports): the empty commit of a fresh read-only transaction succeeds and finishes
 // it; a write commit of one is refused "Cannot modify entities in a read-only transaction." and
-// the Rollback that follows answers 0. The 2026-09-07 matrix row showed the empty commit after
-// such a refusal answering INVALID_ARGUMENT "no longer valid": a refused write commit ends the
-// read-only transaction (inferred from that one row and from P08, not observed separately).
+// the Rollback that follows answers 0. The 2026-09-07 matrix row (conformance/firestore-production-
+// matrix.json, transactions/lifecycle#read-only-commit-without-writes, REST) recorded a refused write
+// commit followed by an empty commit on the same token answering INVALID_ARGUMENT "no longer valid":
+// a refused write commit ends the read-only transaction. A GetDocument on the ended token and the
+// gRPC transport are not yet observed (P02b).
 #[test]
 fn a_read_only_transaction_commits_empty_and_ends_when_a_write_commit_is_refused() {
     let mut state = FirestoreState::with_limit_scope(LimitScope::Production);

@@ -3864,8 +3864,9 @@ fn rest_validation_codes_follow_production() {
 fn rest_read_only_transaction_commit_follows_production() {
     let s = state(None);
     // Production answers the empty commit of a fresh read-only transaction 200 (P02, REST and
-    // gRPC); it refuses a write commit of one and then calls the token no longer valid (the
-    // 2026-09-07 matrix row: a refused write commit first, then an empty commit on the same token).
+    // gRPC); it refuses a write commit of one and then calls the token no longer valid (matrix row
+    // transactions/lifecycle#read-only-commit-without-writes in conformance/firestore-production-matrix.json:
+    // a refused write commit first, then an empty commit on the same token).
     let (status, begun) = call(
         &s,
         "POST",

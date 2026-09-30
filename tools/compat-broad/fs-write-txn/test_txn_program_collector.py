@@ -23,7 +23,7 @@ class Clock:
 class Service:
     """A stand-in for Firestore over both transports; each knob is one production answer a table may allow."""
 
-    def __init__(self, clock, *, fail_code=9, writer_code=0, writer_applies=None, rollback_code=0, repeat_rollback_code=0, after_commit_rollback_code=10, fail_at=None, foreign_marker=False, duplicate_tokens=False, corrupt=None, existing=None, dead_on_failure=False, dead_rollback_code=10, finished_reads_refused=False, locks=False, partial_publish=False, ro_snapshot="begin", ro_empty_refused=False, expiry=False, lifetime=270, idle=120):
+    def __init__(self, clock, *, fail_code=9, writer_code=0, writer_applies=None, rollback_code=0, repeat_rollback_code=0, after_commit_rollback_code=10, fail_at=None, foreign_marker=False, duplicate_tokens=False, corrupt=None, existing=None, dead_on_failure=False, dead_rollback_code=10, finished_reads_refused=False, locks=False, partial_publish=False, ro_snapshot="begin", ro_empty_refused=False, ro_write_ends_token=False, expiry=False, lifetime=270, idle=120):
         self.clock, self.fail_code, self.writer_code, self.rollback_code = clock, fail_code, writer_code, rollback_code
         self.writer_applies = writer_applies if writer_applies is not None else writer_code == 0
         self.repeat_rollback_code, self.after_commit_rollback_code = repeat_rollback_code, after_commit_rollback_code
@@ -33,6 +33,7 @@ class Service:
         self.locks, self.partial_publish, self.locked = locks, partial_publish, {}
         self.ro_snapshot, self.readonly, self.snapshots = ro_snapshot, set(), {}
         self.ro_empty_refused = ro_empty_refused
+        self.ro_write_ends_token = ro_write_ends_token
         self.expiry, self.lifetime, self.idle, self.tstart, self.tlast = expiry, lifetime, idle, {}, {}
         self.genesis, self.hist, self.ro_time = {}, {}, {}
         self.calls, self.documents, self.tokens, self.version = [], {}, {}, 0
@@ -82,6 +83,8 @@ class Service:
                 if self.ro_snapshot == "begin": self.snapshots[value] = copy.deepcopy(self.documents)
             return self._receipt(transport, 0, response={"transaction": value})
         if method == "GetDocument":
+            if token and self.tokens.get(token) == "refused-ended":
+                return self._receipt(transport, 3, details="The referenced transaction has expired or is no longer valid.")
             if token and (self.tokens.get(token) == "dead" or self.finished_reads_refused and self.tokens.get(token) in ("committed", "rolled-back")):
                 return self._receipt(transport, 10, details="The referenced transaction has expired or is no longer valid.")
             source = self.documents
@@ -165,7 +168,10 @@ class Service:
         writes = request["writes"]
         if token and self.tokens.get(token) in ("committed", "rolled-back"):
             return self._receipt(transport, 10, details="The referenced transaction has expired or is no longer valid.")
+        if token and self.tokens.get(token) == "refused-ended":
+            return self._receipt(transport, 3, details="The referenced transaction has expired or is no longer valid.")
         if writes and token in self.readonly:
+            if self.ro_write_ends_token: self.tokens[token] = "refused-ended"
             return self._receipt(transport, 3, details="Cannot write in a read-only transaction.")
         if not writes and token in self.readonly and self.ro_empty_refused:
             return self._receipt(transport, 3, details="The referenced transaction has expired or is no longer valid.")

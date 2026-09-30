@@ -657,6 +657,9 @@ enum TransactionState {
     RetryableAborted,
     RolledBack,
     Committed,
+    /// Ended by a commit that a precondition refused. Production answers every later use of the
+    /// token `INVALID_ARGUMENT` (the official emulator `ABORTED`), and accepts a Rollback.
+    CommitRefused,
     Retried,
     Finished,
 }
@@ -2123,6 +2126,7 @@ impl FirestoreState {
             TransactionState::RetryableAborted
                 | TransactionState::RolledBack
                 | TransactionState::Committed
+                | TransactionState::CommitRefused
         ) {
             return Err(FirestoreError::InvalidArgument(
                 "Invalid retry transaction.".into(),
@@ -2850,6 +2854,16 @@ impl FirestoreState {
             {
                 Ok(t)
             }
+            // A transaction a refused commit ended is `INVALID_ARGUMENT` in production (P08); the
+            // official emulator reports it as it reports every finished transaction.
+            Some(t)
+                if t.state == TransactionState::CommitRefused
+                    && matches!(self.limit_scope, LimitScope::Production) =>
+            {
+                Err(FirestoreError::InvalidArgument(
+                    TRANSACTION_NO_LONGER_VALID.into(),
+                ))
+            }
             // A finished transaction is reported the way the official emulator reports it:
             // `ABORTED`, which is the code the SDKs retry a transaction on.
             Some(_) => Err(FirestoreError::Aborted(TRANSACTION_NO_LONGER_VALID.into())),
@@ -3282,7 +3296,9 @@ impl FirestoreState {
         if self.transactions.get(id).is_some_and(|transaction| {
             matches!(
                 transaction.state,
-                TransactionState::RolledBack | TransactionState::Finished
+                TransactionState::RolledBack
+                    | TransactionState::Finished
+                    | TransactionState::CommitRefused
             )
         }) {
             return Ok(());
@@ -3375,7 +3391,14 @@ impl FirestoreState {
             }
             let stage = staged.get_mut(&path).unwrap_or_else(|| unreachable!());
             let current = stage.current.as_deref();
-            check_precondition(write.precondition.as_ref(), current, &path)?;
+            if let Err(refused) = check_precondition(write.precondition.as_ref(), current, &path) {
+                // Production ends the transaction whose commit a precondition refused, and with it
+                // the locks of what it read (P08). Nothing was published: the writes are staged.
+                if let Some(id) = transaction {
+                    self.finish_transaction(id, TransactionState::CommitRefused);
+                }
+                return Err(refused);
+            }
             let (next, mut result) = apply_write(write, current, commit_time, next_version)?;
             if let Some(Cow::Owned(doc)) = &next {
                 validate_document(doc, self.limit_scope)?;

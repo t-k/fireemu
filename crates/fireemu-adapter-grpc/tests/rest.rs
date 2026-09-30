@@ -5448,3 +5448,86 @@ fn refusal_texts_echo_at_most_one_kibibyte_of_client_input() {
         }
     }
 }
+
+/// A commit a precondition refused ends its transaction over REST as well (production P08, REST recordings): the
+/// same token then reads and commits as 400 `INVALID_ARGUMENT` in strict (409 `ABORTED` in the emulator profile, as
+/// the official emulator answers), a Rollback answers 200 again and again, and a writer outside the transaction is
+/// not held up by the locks the transaction read.
+#[test]
+fn rest_precondition_refusal_ends_the_transaction_as_production_does() {
+    const GONE: &str = "The referenced transaction has expired or is no longer valid.";
+    for strict in [true, false] {
+        let s = state_with_profile(strict);
+        let (expected_status, expected_code) = if strict {
+            (400, "INVALID_ARGUMENT")
+        } else {
+            (409, "ABORTED")
+        };
+        let (status, seeded) = call(
+            &s,
+            "PATCH",
+            &format!("{DOCS}/rest-refused/held"),
+            json!({"fields": {"v": {"integerValue": "1"}}}),
+        );
+        assert_eq!(status, 200, "{seeded}");
+        let (status, begun) = call(
+            &s,
+            "POST",
+            &format!("{DOCS}:beginTransaction"),
+            json!({"options": {"readWrite": {}}}),
+        );
+        assert_eq!(status, 200, "{begun}");
+        let transaction = begun["transaction"].as_str().unwrap().to_owned();
+        let (status, held) = call(
+            &s,
+            "GET",
+            &format!("{DOCS}/rest-refused/held?transaction={transaction}"),
+            Value::Null,
+        );
+        assert_eq!(status, 200, "{held}");
+        let commit = json!({
+            "transaction": transaction,
+            "writes": [
+                {"update": {"name": "projects/demo-app/databases/(default)/documents/rest-refused/held", "fields": {"v": {"integerValue": "9"}}}},
+                {
+                    "update": {"name": "projects/demo-app/databases/(default)/documents/rest-refused/missing", "fields": {"v": {"integerValue": "2"}}},
+                    "currentDocument": {"exists": true}
+                }
+            ]
+        });
+        let (status, refused) = call(&s, "POST", &format!("{DOCS}:commit"), commit.clone());
+        assert_eq!(status, 404, "{refused}");
+        assert_eq!(refused["error"]["status"], "NOT_FOUND", "{refused}");
+        let (status, read) = call(
+            &s,
+            "GET",
+            &format!("{DOCS}/rest-refused/held?transaction={transaction}"),
+            Value::Null,
+        );
+        assert_eq!(status, expected_status, "strict={strict}: {read}");
+        assert_eq!(read["error"]["status"], expected_code, "{read}");
+        assert_eq!(read["error"]["message"], GONE, "{read}");
+        let (status, again) = call(&s, "POST", &format!("{DOCS}:commit"), commit);
+        assert_eq!(status, expected_status, "strict={strict}: {again}");
+        assert_eq!(again["error"]["message"], GONE, "{again}");
+        let (status, writer) = call(
+            &s,
+            "PATCH",
+            &format!("{DOCS}/rest-refused/held"),
+            json!({"fields": {"v": {"integerValue": "3"}}}),
+        );
+        assert_eq!(status, 200, "the lock is gone at once: {writer}");
+        for _ in 0..2 {
+            let (status, rolled_back) = call(
+                &s,
+                "POST",
+                &format!("{DOCS}:rollback"),
+                json!({"transaction": transaction}),
+            );
+            assert_eq!(status, 200, "{rolled_back}");
+        }
+        let (status, document) = call(&s, "GET", &format!("{DOCS}/rest-refused/held"), Value::Null);
+        assert_eq!(status, 200, "{document}");
+        assert_eq!(document["fields"]["v"]["integerValue"], "3");
+    }
+}

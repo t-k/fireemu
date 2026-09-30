@@ -2680,12 +2680,11 @@ async fn commit_late_precondition_failure_is_atomic() {
     handle.abort();
 }
 
-/// The local adapter keeps a failed transactional commit available for rollback. Rollback
-/// releases its read locks so the same document can then be written by another request. This
-/// records local behavior; production parity is unobserved here.
+/// A transactional commit a precondition refused ends its transaction and releases its read locks (production,
+/// P08), so the same document can be written by another request at once; a Rollback is still accepted.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[allow(clippy::too_many_lines)]
-async fn failed_transaction_commit_can_be_rolled_back_and_releases_ownership() {
+async fn refused_transaction_commit_releases_ownership_and_still_accepts_a_rollback() {
     let (mut client, handle) = start_with_contention_wait(std::time::Duration::ZERO).await;
     client
         .commit(pb::CommitRequest {
@@ -2736,7 +2735,7 @@ async fn failed_transaction_commit_can_be_rolled_back_and_releases_ownership() {
         .unwrap_err();
     assert_eq!(failed.code(), tonic::Code::NotFound);
 
-    // The failed transaction published neither staged write before rollback.
+    // The failed transaction published neither staged write.
     let unchanged = client
         .get_document(pb::GetDocumentRequest {
             name: format!("{DOCS}/txn-failure/doc"),
@@ -2758,28 +2757,20 @@ async fn failed_transaction_commit_can_be_rolled_back_and_releases_ownership() {
         tonic::Code::NotFound
     );
 
-    let blocked = client
+    // The refused commit ended the transaction and released its lock (production, P08): a writer
+    // outside it goes through at once, and the explicit Rollback is still accepted.
+    client
         .commit(pb::CommitRequest {
             database: DB.to_owned(),
             writes: vec![update_write("txn-failure/doc", &[("value", i(3))])],
-            ..Default::default()
-        })
-        .await
-        .unwrap_err();
-    assert_eq!(blocked.code(), tonic::Code::Aborted);
-
-    client
-        .rollback(pb::RollbackRequest {
-            database: DB.to_owned(),
-            transaction,
             ..Default::default()
         })
         .await
         .unwrap();
     client
-        .commit(pb::CommitRequest {
+        .rollback(pb::RollbackRequest {
             database: DB.to_owned(),
-            writes: vec![update_write("txn-failure/doc", &[("value", i(3))])],
+            transaction,
             ..Default::default()
         })
         .await
@@ -8305,11 +8296,20 @@ async fn native_transaction_document(
         .into_inner()
 }
 
-/// A repeated late precondition refusal preserves the same token, exact snapshot and read lock until explicit rollback; this is local coverage, not a production observation.
+/// A commit refused by a precondition ends its transaction, as production answers it (P08, recorded on REST and on
+/// native gRPC): the same token then reads and commits as `INVALID_ARGUMENT` in strict (`ABORTED` in the emulator
+/// profile, as the official emulator does), a Rollback is accepted again and again, and the locks the transaction held
+/// are gone at once, so a writer outside it is not refused.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[allow(clippy::too_many_lines)]
-async fn native_precondition_refusal_preserves_same_token_until_explicit_rollback() {
+async fn native_precondition_refusal_ends_the_transaction_as_production_does() {
+    const GONE: &str = "The referenced transaction has expired or is no longer valid.";
     for strict in [true, false] {
+        let gone_code = if strict {
+            tonic::Code::InvalidArgument
+        } else {
+            tonic::Code::Aborted
+        };
         let (mut client, _clock, backend, handle) =
             start_profile_with_state(strict, Some(std::time::Duration::ZERO)).await;
         assert_native_profile_scope(&backend, strict);
@@ -8353,57 +8353,35 @@ async fn native_precondition_refusal_preserves_same_token_until_explicit_rollbac
             ],
             ..Default::default()
         };
-        for _ in 0..2 {
-            let refused = client.commit(failed_request.clone()).await.unwrap_err();
-            assert_eq!(refused.code(), tonic::Code::NotFound, "strict={strict}");
-            assert_eq!(
-                native_transaction_document(
-                    &mut client,
-                    "p08-native/existing",
-                    Some(transaction.clone()),
-                )
-                .await,
-                original,
-                "the failed token still serves the original document and version"
-            );
-            assert_eq!(
-                native_transaction_document(&mut client, "p08-native/existing", None).await,
-                original,
-                "the first staged write was not published"
-            );
-            assert_eq!(
-                client
-                    .get_document(pb::GetDocumentRequest {
-                        name: format!("{DOCS}/p08-native/missing"),
-                        ..Default::default()
-                    })
-                    .await
-                    .unwrap_err()
-                    .code(),
-                tonic::Code::NotFound
-            );
-            assert_eq!(
-                client
-                    .commit(pb::CommitRequest {
-                        database: DB.to_owned(),
-                        writes: vec![update_write("p08-native/existing", &[("value", i(3))])],
-                        ..Default::default()
-                    })
-                    .await
-                    .unwrap_err()
-                    .code(),
-                tonic::Code::Aborted,
-                "a rejected Commit must not release the token's read lock"
-            );
-        }
-        client
-            .rollback(pb::RollbackRequest {
-                database: DB.to_owned(),
-                transaction,
+        let refused = client.commit(failed_request.clone()).await.unwrap_err();
+        assert_eq!(refused.code(), tonic::Code::NotFound, "strict={strict}");
+        assert_eq!(
+            native_transaction_document(&mut client, "p08-native/existing", None).await,
+            original,
+            "the first staged write was not published"
+        );
+        let read = client
+            .get_document(pb::GetDocumentRequest {
+                name: format!("{DOCS}/p08-native/existing"),
+                consistency_selector: Some(
+                    pb::get_document_request::ConsistencySelector::Transaction(transaction.clone()),
+                ),
                 ..Default::default()
             })
             .await
-            .unwrap();
+            .unwrap_err();
+        assert_eq!(
+            (read.code(), read.message()),
+            (gone_code, GONE),
+            "strict={strict}"
+        );
+        let again = client.commit(failed_request.clone()).await.unwrap_err();
+        assert_eq!(
+            (again.code(), again.message()),
+            (gone_code, GONE),
+            "strict={strict}"
+        );
+        // The lock is gone at once: a writer outside the transaction is not refused.
         client
             .commit(pb::CommitRequest {
                 database: DB.to_owned(),
@@ -8412,23 +8390,40 @@ async fn native_precondition_refusal_preserves_same_token_until_explicit_rollbac
             })
             .await
             .unwrap();
+        for _ in 0..2 {
+            client
+                .rollback(pb::RollbackRequest {
+                    database: DB.to_owned(),
+                    transaction: transaction.clone(),
+                    ..Default::default()
+                })
+                .await
+                .unwrap();
+        }
         assert_eq!(
             native_transaction_document(&mut client, "p08-native/existing", None)
                 .await
                 .fields
                 .get("value"),
-            Some(&i(3))
+            Some(&i(3)),
+            "nothing of the refused commit or of the rollbacks was published"
         );
         handle.abort();
         assert!(handle.await.unwrap_err().is_cancelled());
     }
 }
 
-/// Correcting a failed precondition commits with the same token and releases ownership through Commit, separately from the explicit rollback branch.
+/// The same token cannot correct a refused commit: production answers the corrected commit `INVALID_ARGUMENT` with the
+/// same text (P08); a new transaction is the way forward, and the refused commit's writes stay unpublished.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[allow(clippy::too_many_lines)]
-async fn native_corrected_precondition_commits_with_the_same_failed_token() {
+async fn native_corrected_commit_on_the_refused_token_is_refused() {
+    const GONE: &str = "The referenced transaction has expired or is no longer valid.";
     for strict in [true, false] {
+        let gone_code = if strict {
+            tonic::Code::InvalidArgument
+        } else {
+            tonic::Code::Aborted
+        };
         let (mut client, _clock, backend, handle) =
             start_profile_with_state(strict, Some(std::time::Duration::ZERO)).await;
         assert_native_profile_scope(&backend, strict);
@@ -8440,7 +8435,6 @@ async fn native_corrected_precondition_commits_with_the_same_failed_token() {
             })
             .await
             .unwrap();
-        let original = native_transaction_document(&mut client, "p08-native/existing", None).await;
         let transaction = client
             .begin_transaction(pb::BeginTransactionRequest {
                 database: DB.to_owned(),
@@ -8450,15 +8444,6 @@ async fn native_corrected_precondition_commits_with_the_same_failed_token() {
             .unwrap()
             .into_inner()
             .transaction;
-        assert_eq!(
-            native_transaction_document(
-                &mut client,
-                "p08-native/existing",
-                Some(transaction.clone()),
-            )
-            .await,
-            original
-        );
         let mut missing = update_write("p08-native/missing", &[("value", i(2))]);
         missing.current_document = Some(pb::Precondition {
             condition_type: Some(pb::precondition::ConditionType::Exists(true)),
@@ -8476,47 +8461,32 @@ async fn native_corrected_precondition_commits_with_the_same_failed_token() {
             client.commit(request.clone()).await.unwrap_err().code(),
             tonic::Code::NotFound
         );
-        assert_eq!(
-            native_transaction_document(&mut client, "p08-native/existing", None).await,
-            original
-        );
         request.writes[1].current_document = Some(pb::Precondition {
             condition_type: Some(pb::precondition::ConditionType::Exists(false)),
         });
-        let committed = client.commit(request).await.unwrap().into_inner();
-        assert_eq!(committed.write_results.len(), 2);
-        assert!(committed
-            .write_results
-            .iter()
-            .all(|write| write.update_time.is_some()));
+        let corrected = client.commit(request).await.unwrap_err();
+        assert_eq!(
+            (corrected.code(), corrected.message()),
+            (gone_code, GONE),
+            "strict={strict}"
+        );
         assert_eq!(
             native_transaction_document(&mut client, "p08-native/existing", None)
                 .await
                 .fields
                 .get("value"),
-            Some(&i(9))
+            Some(&i(1))
         );
         assert_eq!(
-            native_transaction_document(&mut client, "p08-native/missing", None)
+            client
+                .get_document(pb::GetDocumentRequest {
+                    name: format!("{DOCS}/p08-native/missing"),
+                    ..Default::default()
+                })
                 .await
-                .fields
-                .get("value"),
-            Some(&i(2))
-        );
-        client
-            .commit(pb::CommitRequest {
-                database: DB.to_owned(),
-                writes: vec![update_write("p08-native/existing", &[("value", i(3))])],
-                ..Default::default()
-            })
-            .await
-            .unwrap();
-        assert_eq!(
-            native_transaction_document(&mut client, "p08-native/existing", None)
-                .await
-                .fields
-                .get("value"),
-            Some(&i(3))
+                .unwrap_err()
+                .code(),
+            tonic::Code::NotFound
         );
         handle.abort();
         assert!(handle.await.unwrap_err().is_cancelled());

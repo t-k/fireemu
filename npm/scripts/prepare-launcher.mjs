@@ -39,7 +39,7 @@ export function readmeRef(version) {
 const ABSOLUTE = /^(?:[a-z][a-z0-9+.-]*:|\/\/)/i;
 
 /** Rewrites one link target; absolute targets, anchors and scheme links are returned unchanged. */
-function rewriteTarget(target, { repository, ref, isDirectory, image }) {
+function rewriteTarget(target, { repository, ref, pathKind, image }) {
   if (ABSOLUTE.test(target)) return target;
   const hash = target.indexOf("#");
   const path = hash === -1 ? target : target.slice(0, hash);
@@ -50,12 +50,14 @@ function rewriteTarget(target, { repository, ref, isDirectory, image }) {
   if (clean === ".." || clean.startsWith("../") || path.startsWith("/")) {
     throw new Error(`README link leaves the repository: ${target}`);
   }
+  // A link to a missing file would publish a dead link on the package page.
+  const kind = pathKind(clean);
+  if (kind === undefined) throw new Error(`README link names no file in the repository: ${target}`);
   if (image) {
     const [, owner, name] = repository.match(/^https:\/\/github\.com\/([^/]+)\/([^/]+)$/);
     return `https://raw.githubusercontent.com/${owner}/${name}/${ref}/${clean}${fragment}`;
   }
-  const kind = isDirectory(clean) ? "tree" : "blob";
-  return `${repository}/${kind}/${ref}/${clean}${fragment}`;
+  return `${repository}/${kind === "directory" ? "tree" : "blob"}/${ref}/${clean}${fragment}`;
 }
 
 /** Rewrites the links of one line of prose, leaving inline code spans alone. */
@@ -78,19 +80,21 @@ function rewriteLine(line, options) {
 
 /**
  * The npm package page for a README: a notice line, a blank line, then the README with every
- * relative link made absolute at `ref`. Fenced code blocks are copied unchanged.
+ * relative link made absolute at `ref`. Fenced code blocks are copied unchanged. `pathKind`
+ * answers "file", "directory" or undefined for a repository path; by default it looks under
+ * `root`, and a link to a path it does not know is refused.
  */
-export function npmReadme(markdown, { repository, ref, root, isDirectory }) {
-  const directory =
-    isDirectory ??
+export function npmReadme(markdown, { repository, ref, root, pathKind }) {
+  const kindOf =
+    pathKind ??
     ((path) => {
       try {
-        return statSync(join(root, path)).isDirectory();
+        return statSync(join(root, path)).isDirectory() ? "directory" : "file";
       } catch {
-        return false;
+        return undefined;
       }
     });
-  const options = { repository, ref, isDirectory: directory };
+  const options = { repository, ref, pathKind: kindOf };
   let fence = null;
   const lines = markdown.split("\n").map((line) => {
     const marker = line.match(/^ {0,3}(`{3,}|~{3,})/);

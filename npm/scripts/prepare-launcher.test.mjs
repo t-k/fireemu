@@ -2,6 +2,7 @@
 // repository README rather than kept as a second copy.
 
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -13,8 +14,9 @@ import { npmReadme, prepareLauncher, readmeRef, repositoryWebUrl } from "./prepa
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const REPO = "https://github.com/t-k/fireemu";
 const directories = new Set(["tools/bench", "docs"]);
-const isDirectory = (path) => directories.has(path.replace(/\/$/, ""));
-const render = (markdown, ref = "v1.2.3") => npmReadme(markdown, { repository: REPO, ref, isDirectory });
+const pathKind = (path) =>
+  path === "missing.md" ? undefined : directories.has(path.replace(/\/$/, "")) ? "directory" : "file";
+const render = (markdown, ref = "v1.2.3") => npmReadme(markdown, { repository: REPO, ref, pathKind });
 const body = (markdown) => render(markdown).split("\n").slice(2).join("\n");
 
 test("relative file links point at the file on GitHub at the release tag", () => {
@@ -80,6 +82,12 @@ test("a code span inside a link's text does not stop the link from being rewritt
   assert.equal(body("`[a](docs/x.md)` then [b](LICENSE)"), `\`[a](docs/x.md)\` then [b](${REPO}/blob/v1.2.3/LICENSE)`);
 });
 
+test("a link to a path the repository does not have is refused", () => {
+  assert.throws(() => render("[gone](missing.md)"), /names no file in the repository: missing\.md/);
+  assert.throws(() => render("![gone](missing.md)"), /names no file/);
+  assert.throws(() => render("[gone]: missing.md"), /names no file/);
+});
+
 test("a link that leaves the repository is refused", () => {
   assert.throws(() => render("[up](../outside.md)"), /leaves the repository/);
   assert.throws(() => render("[up](docs/../../outside.md)"), /leaves the repository/);
@@ -101,6 +109,25 @@ test("the generated page has no relative link left and is otherwise the README",
   }
   const undo = text.replaceAll(`${REPO}/blob/v9.9.9/`, "").replaceAll(`${REPO}/tree/v9.9.9/`, "");
   assert.equal(undo, readme);
+  // Raw HTML links are not rewritten, so the README must not use relative ones.
+  for (const [, target] of outsideCode.matchAll(/\b(?:href|src)\s*=\s*["']([^"']+)["']/gi)) {
+    assert.match(target, /^(https?:|#|mailto:)/, `relative HTML link: ${target}`);
+  }
+});
+
+test("every link the generated page makes points at a tracked path of the right kind", () => {
+  const readme = readFileSync(join(repoRoot, "README.md"), "utf8");
+  const page = npmReadme(readme, { repository: REPO, ref: "v9.9.9", root: repoRoot });
+  const tracked = execFileSync("git", ["-C", repoRoot, "ls-files", "-z"], { encoding: "utf8" }).split("\0");
+  const files = new Set(tracked);
+  const prefixes = new Set(tracked.flatMap((file) => file.split("/").slice(0, -1).map((_, i, parts) => parts.slice(0, i + 1).join("/"))));
+  const links = [...page.matchAll(new RegExp(`${REPO}/(blob|tree)/v9\\.9\\.9/([^)#\\s]+)`, "g"))];
+  assert.ok(links.length > 0);
+  for (const [, kind, path] of links) {
+    const clean = path.replace(/\/$/, "");
+    if (kind === "blob") assert.ok(files.has(clean), `blob link to an untracked file: ${path}`);
+    else assert.ok(prefixes.has(clean), `tree link to an untracked directory: ${path}`);
+  }
 });
 
 test("the ref is the release tag, or main for an unstamped development package", () => {
@@ -133,6 +160,20 @@ test("prepareLauncher writes the generated page, the license and the notices", (
     assert.match(page, /See \[docs\]\(https:\/\/github\.com\/t-k\/fireemu\/tree\/v2\.0\.0\/docs\)/);
     assert.match(page, /\[license\]\(https:\/\/github\.com\/t-k\/fireemu\/blob\/v2\.0\.0\/LICENSE\)/);
     assert.equal(readFileSync(join(root, "npm", "fireemu", "LICENSE"), "utf8"), "project license\n");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("prepareLauncher refuses a README link to a file the repository lacks", () => {
+  const root = mkdtempSync(join(tmpdir(), "fireemu-launcher-deadlink-"));
+  try {
+    mkdirSync(join(root, "npm", "fireemu"), { recursive: true });
+    writeFileSync(join(root, "README.md"), "See [notes](docs/notes.md).\n");
+    writeFileSync(join(root, "LICENSE"), "x\n");
+    writeFileSync(join(root, "THIRD_PARTY_LICENSES.txt"), "x\n");
+    writeFileSync(join(root, "npm", "fireemu", "package.json"), JSON.stringify({ version: "1.0.0", repository: REPO }));
+    assert.throws(() => prepareLauncher(root), /names no file in the repository: docs\/notes\.md/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

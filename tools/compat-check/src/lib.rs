@@ -11,7 +11,7 @@
 //! | `CC-03` | a manifest capability that is `implemented` or `partial` and is not bound to at least one existing executed test or conformance fixture |
 //! | `CC-04` | a manifest entry and the contract that disagree on status, an unknown capability ID, or a manifest entry no claim covers |
 //! | `CC-05` | a README that does not carry the version-qualified claim sentence verbatim |
-//! | `CC-06` | a deferred or not-planned product that appears as supported in the manifest, the README or a document the claim scopes (`claim.scopedDocuments`: the release's npm descriptions and READMEs) |
+//! | `CC-06` | a deferred or not-planned product that appears as supported in the manifest, the README or a document the claim scopes (`claim.scopedDocuments`: the release's npm descriptions; the npm package page is generated from the README) |
 //! | `CC-07` | contradictory public statements: an item one entry calls `unimplemented` that another entry, or the contract's shared vocabulary, calls `implemented` |
 //! | `CC-08` | a compatibility profile that sets or declares a configuration key the canonical schema does not define, or a value it does not allow; a declared key without a `hand-written` / `not-implemented` status and a note, or one that is also set; and a profile name the schema's `profile` key does not accept (or accepts and the contract does not declare) |
 //! | `CC-09` | a conformance fixture cited as evidence that records unresolved `debt`, unless the claim excludes that step by name with the issue that owns it; a fixture with no `parity` or `documented-divergence` step (so nothing the local oracle answered); a stale exclusion, and a step status the suite does not define |

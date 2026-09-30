@@ -1633,11 +1633,14 @@ fn api_service(path: &str) -> &'static str {
 /// Refuses an API key the project did not declare, when it declared any.
 fn declared_api_key_check(
     state: &AuthState,
+    tenant_reading: QueryTenant,
     path: &str,
     query: Option<&str>,
 ) -> Result<(), JsonResponse> {
-    let (Ok((Some(key), _)), Some(tenancy)) = (query_selectors(query), state.tenancy.as_ref())
-    else {
+    let (Ok((Some(key), _)), Some(tenancy)) = (
+        query_selectors_reading(query, tenant_reading),
+        state.tenancy.as_ref(),
+    ) else {
         return Ok(());
     };
     let Ok(tenancy) = tenancy.read() else {
@@ -3291,10 +3294,11 @@ fn management_answer(
 /// the key), else the session's.
 fn request_project(
     state: &AuthState,
+    tenant_reading: QueryTenant,
     path: &str,
     query: Option<&str>,
 ) -> Result<String, JsonResponse> {
-    let key_project = query_selectors(query)
+    let key_project = query_selectors_reading(query, tenant_reading)
         .ok()
         .and_then(|(key, _)| key)
         .and_then(|key| {
@@ -3513,7 +3517,11 @@ fn query_tenant_of(handler: routes::Handler, query: Option<&str>) -> Option<Stri
         _ => false,
     };
     reads_the_query
-        .then(|| query_selectors(query).ok().and_then(|(_, tenant)| tenant))
+        .then(|| {
+            query_selectors_reading(query, QueryTenant::ReadEmptyAsNone)
+                .ok()
+                .and_then(|(_, tenant)| tenant)
+        })
         .flatten()
 }
 
@@ -3546,7 +3554,15 @@ fn admit_request(
     parent: &Arc<Mutex<AuthStore>>,
 ) -> Result<bool, JsonResponse> {
     if routes::scoped_target(request.path).is_none() {
-        if let Some(key) = query_selectors(request.query).ok().and_then(|(key, _)| key) {
+        let tenant_reading = query_reads_tenant(
+            state,
+            routes::resolve(request.method, request.path),
+            request.path,
+        );
+        if let Some(key) = query_selectors_reading(request.query, tenant_reading)
+            .ok()
+            .and_then(|(key, _)| key)
+        {
             if api_key_project(state, &key, "identitytoolkit.googleapis.com").is_err() {
                 return Ok(false);
             }
@@ -3620,7 +3636,12 @@ fn emulator_creates_named_tenant(
         return Ok(None);
     }
     let (path, query) = (request.path, request.query);
-    let project = request_project(state, path, query)?;
+    let project = request_project(
+        state,
+        query_reads_tenant(state, resolution, path),
+        path,
+        query,
+    )?;
     // A request the daemon serves from another project's store than its own project (chosen by
     // the store selection itself, not by a copy of its rules) makes nothing here and is admitted
     // by App Check for the project it is served from, by the pipeline. A selection that fails
@@ -3727,6 +3748,7 @@ fn emulator_creates_named_tenant(
 /// reads `""` as no tenant (a project user's token too).
 fn emulator_named_tenant(
     state: &AuthState,
+    resolution: routes::Resolution<'_>,
     path: &str,
     query: Option<&str>,
     body: &Value,
@@ -3763,7 +3785,12 @@ fn emulator_named_tenant(
     }) else {
         return Ok(());
     };
-    let project = request_project(state, path, query)?;
+    let project = request_project(
+        state,
+        query_reads_tenant(state, resolution, path),
+        path,
+        query,
+    )?;
     if audience != project {
         return Ok(());
     }
@@ -3862,7 +3889,8 @@ fn strict_named_tenant(
         return Ok(None);
     }
     let scoped = routes::scoped_target(path);
-    let project = request_project(state, path, query)?;
+    // The strict profile reads the query tenant on every route.
+    let project = request_project(state, QueryTenant::Read, path, query)?;
     if secure_token {
         return strict_refreshed_tenant(registry, &project, body);
     }
@@ -3991,9 +4019,10 @@ fn handle_with_policy_inner(
     };
     // Whether the caller identified itself with an API key; its validity is checked when the
     // store is selected.
-    let api_key = query_selectors(query).is_ok_and(|(key, _)| key.is_some());
-    let at = now(state);
     let resolution = routes::resolve(method, path);
+    let api_key = query_selectors_reading(query, query_reads_tenant(state, resolution, path))
+        .is_ok_and(|(key, _)| key.is_some());
+    let at = now(state);
     // Production's API front end answers a caller without identity before the service reads
     // any selector, tenant or body (sandbox recording 2026-09-23).
     if let Err(response) = caller_identity_check(state, resolution, headers, api_key) {
@@ -4003,7 +4032,12 @@ fn handle_with_policy_inner(
             response
         };
     }
-    if let Err(response) = declared_api_key_check(state, path, query) {
+    if let Err(response) = declared_api_key_check(
+        state,
+        query_reads_tenant(state, resolution, path),
+        path,
+        query,
+    ) {
         return response;
     }
     // Production's reading of the tenant a request names (strict profile).
@@ -4041,9 +4075,14 @@ fn handle_with_policy_inner(
     // A request the tenant admission let through was admitted by App Check there; it is observed once.
     let app_check_admitted = creation.app_check_admitted.take();
     // The official emulator's reading of an ID token's tenant (emulator profile).
-    if let Err(response) =
-        emulator_named_tenant(state, path, query, body, made_on_the_way.as_deref())
-    {
+    if let Err(response) = emulator_named_tenant(
+        state,
+        resolution,
+        path,
+        query,
+        body,
+        made_on_the_way.as_deref(),
+    ) {
         return response;
     }
     let emulator_clear = matches!(
@@ -8991,11 +9030,8 @@ fn select_store(
 ) -> Result<Arc<Mutex<AuthStore>>, JsonResponse> {
     // The emulator profile reads (and refuses a malformed) query tenant only where the official
     // emulator reads it.
-    let (api_key, query_tenant) = query_selectors_reading(
-        query,
-        !state.stateless_refresh_tokens
-            || emulator_query_tenant(resolution, path, Some(String::new())).is_some(),
-    )?;
+    let (api_key, query_tenant) =
+        query_selectors_reading(query, query_reads_tenant(state, resolution, path))?;
     let query_body_scope = state.query_limits == AuthQueryLimits::ProductionBounded
         && matches!(
             resolution,
@@ -9324,20 +9360,66 @@ fn tenant_store_issuing_refresh_token(
     Ok(issued_by_tenant_of_project.then_some(store))
 }
 
+/// Whether the request's query `tenantId` is read at all: always in the strict profile, and in
+/// the emulator profile only on the routes the official emulator reads it on (see
+/// [`emulator_query_tenant`]). Every reader of the query (the store selection, the API key's
+/// project, its declared-key check, the admission of a tenant made on the way) reads the same
+/// way, so a malformed tenant that nothing reads never hides the request's API key.
+fn query_reads_tenant(
+    state: &AuthState,
+    resolution: routes::Resolution<'_>,
+    path: &str,
+) -> QueryTenant {
+    if !state.stateless_refresh_tokens {
+        return QueryTenant::Read;
+    }
+    if emulator_query_tenant(resolution, path, Some(String::new())).is_none() {
+        return QueryTenant::Ignored;
+    }
+    // The routes the official emulator reads it on take an empty value as no tenant (both are
+    // falsy checks: `operations.js:435-437`, `handlers.js:10,27`).
+    match resolution {
+        routes::Resolution::Matched { route, .. }
+            if matches!(
+                route.handler,
+                routes::Handler::AdminBatchGet | routes::Handler::EmulatorAction
+            ) =>
+        {
+            QueryTenant::ReadEmptyAsNone
+        }
+        _ => QueryTenant::Read,
+    }
+}
+
+/// How a request's query `tenantId` is read.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum QueryTenant {
+    /// Not looked at, so a malformed one is no reason to refuse the request.
+    Ignored,
+    /// Read, and refused when malformed, empty or repeated.
+    Read,
+    /// Read as the official emulator reads it: an empty or bare value is no tenant; a repeated
+    /// or malformed one is still refused.
+    ReadEmptyAsNone,
+}
+
 /// The API key (`key`, or the action link's `apiKey`) and the action link's `tenantId` a
 /// query carries, decoded. Keys are declared from [A-Za-z0-9._-], but a client may still
 /// percent-encode them.
 fn query_selectors(query: Option<&str>) -> Result<(Option<String>, Option<String>), JsonResponse> {
-    query_selectors_reading(query, true)
+    query_selectors_reading(query, QueryTenant::Read)
 }
 
-/// [`query_selectors`], reading the `tenantId` parameter only when `read_tenant` (a route whose
+/// [`query_selectors`], reading the `tenantId` parameter as `tenant_reading` says (a route whose
 /// query tenant is ignored has no reason to refuse a malformed one: the official emulator does not
 /// look at it).
 fn query_selectors_reading(
     query: Option<&str>,
-    read_tenant: bool,
+    tenant_reading: QueryTenant,
 ) -> Result<(Option<String>, Option<String>), JsonResponse> {
+    let read_tenant = tenant_reading != QueryTenant::Ignored;
+    let empty_is_none = tenant_reading == QueryTenant::ReadEmptyAsNone;
+    let mut tenant_seen = false;
     let decode = |value: &str| {
         fireemu_core_types::codec::percent_decode(value, fireemu_core_types::codec::PlusMode::Space)
     };
@@ -9346,6 +9428,12 @@ fn query_selectors_reading(
     for kv in query.unwrap_or("").split('&').filter(|kv| !kv.is_empty()) {
         let Some((name, value)) = kv.split_once('=') else {
             let bare = decode(kv);
+            if empty_is_none && bare == "tenantId" {
+                if std::mem::replace(&mut tenant_seen, true) {
+                    return Err(error(400, "INVALID_ARGUMENT"));
+                }
+                continue;
+            }
             if matches!(bare.as_str(), "key" | "apiKey") || (read_tenant && bare == "tenantId") {
                 return Err(error(400, "INVALID_ARGUMENT"));
             }
@@ -9357,7 +9445,17 @@ fn query_selectors_reading(
             "tenantId" if read_tenant => &mut tenant,
             _ => continue,
         };
-        if value.is_empty() || malformed_query_component(name) || malformed_query_component(value) {
+        if malformed_query_component(name) || malformed_query_component(value) {
+            return Err(error(400, "INVALID_ARGUMENT"));
+        }
+        if empty_is_none && decoded_name == "tenantId" {
+            if std::mem::replace(&mut tenant_seen, true) {
+                return Err(error(400, "INVALID_ARGUMENT"));
+            }
+            if value.is_empty() {
+                continue;
+            }
+        } else if value.is_empty() {
             return Err(error(400, "INVALID_ARGUMENT"));
         }
         if slot.is_some() {

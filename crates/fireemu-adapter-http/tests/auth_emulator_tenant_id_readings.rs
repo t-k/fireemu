@@ -680,18 +680,26 @@ fn a_refresh_ignores_the_query_tenant_and_renews_in_the_tokens_own_namespace() {
     assert!(registry.tenant_store("demo-app", "unknown").is_none());
 }
 
-/// Where the query tenant is read (batchGet, the action link) a bare or malformed `tenantId` is
-/// refused as before; a bare parameter of another name is no refusal anywhere.
+/// Where the query tenant is read (batchGet, the action link) an empty or bare `tenantId` is no
+/// tenant, as the official emulator reads it (falsy checks, `operations.js:435-437` and
+/// `handlers.js:10,27`; probed: 200 with the project's users). A repeated one is refused as it is
+/// there, and a bare parameter of another name is no refusal anywhere.
 #[test]
 fn a_malformed_query_tenant_is_refused_only_where_it_is_read() {
     let (state, _) = emulator();
-    let batch = |query: &str| {
+    let (status, up) = client(
+        &state,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"email": "p@example.com", "password": "hunter22"}),
+    );
+    assert_eq!(status, 200, "{up}");
+    let batch = |query: &str, body: &Value| {
         let r = handle_with(
             &state,
             "GET",
             &format!("{V1}/projects/demo-app/accounts:batchGet{query}"),
             &owner(),
-            &json!({}),
+            body,
         );
         (
             r.status,
@@ -699,17 +707,89 @@ fn a_malformed_query_tenant_is_refused_only_where_it_is_read() {
                 .as_str()
                 .unwrap_or("-")
                 .to_owned(),
+            r.body["users"].as_array().map(Vec::len),
         )
     };
-    assert_eq!(batch("?tenantId"), (400, "INVALID_ARGUMENT".to_owned()));
-    assert_eq!(batch("?tenantId="), (400, "INVALID_ARGUMENT".to_owned()));
+    for query in ["?tenantId", "?tenantId=", "?flag"] {
+        assert_eq!(
+            batch(query, &json!({})),
+            (200, "-".to_owned(), Some(1)),
+            "{query}"
+        );
+    }
+    for query in [
+        "?tenantId=a&tenantId=b",
+        "?tenantId&tenantId",
+        "?tenantId=a&tenantId",
+        "?tenantId=&tenantId=a",
+    ] {
+        assert_eq!(
+            batch(query, &json!({})),
+            (400, "INVALID_ARGUMENT".to_owned(), None),
+            "{query}"
+        );
+    }
+    // The GET's body is not read (the official emulator ignores it), `maxResults` included.
     assert_eq!(
-        batch("?tenantId=a&tenantId=b"),
-        (400, "INVALID_ARGUMENT".to_owned())
+        batch("", &json!({"maxResults": 0})),
+        (200, "-".to_owned(), Some(1))
     );
-    assert_eq!(batch("?flag"), (200, "-".to_owned()));
     for profile_state in [emulator().0, profiles().into_iter().nth(1).unwrap().1] {
         let (status, created) = sign_up(&profile_state, "&flag", &account("flag@example.com"));
         assert_eq!(status, 200, "{created}");
     }
+}
+
+/// The action link reads an empty or bare query tenant as no tenant too (probed: a project code is
+/// found), and refuses a repeated one.
+#[test]
+fn the_action_link_reads_an_empty_query_tenant_as_none() {
+    let (state, _) = emulator();
+    let (status, up) = client(
+        &state,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"email": "a@example.com", "password": "hunter22"}),
+    );
+    assert_eq!(status, 200, "{up}");
+    let (status, sent) = client(
+        &state,
+        &format!("{V1}/accounts:sendOobCode"),
+        &json!({"requestType": "VERIFY_EMAIL", "idToken": up["idToken"]}),
+    );
+    assert_eq!(status, 200, "{sent}");
+    // A code is consumed by its first follow, so each row asks for a fresh one.
+    let follow = |query: &str| {
+        let (status, sent) = client(
+            &state,
+            &format!("{V1}/accounts:sendOobCode"),
+            &json!({"requestType": "VERIFY_EMAIL", "idToken": up["idToken"]}),
+        );
+        assert_eq!(status, 200, "{sent}");
+        let (_, codes) = admin(
+            &state,
+            "GET",
+            "/emulator/v1/projects/demo-app/oobCodes",
+            &json!({}),
+        );
+        let code = codes["oobCodes"]
+            .as_array()
+            .and_then(|all| all.last())
+            .and_then(|code| code["oobCode"].as_str())
+            .unwrap()
+            .to_owned();
+        handle_with(
+            &state,
+            "GET",
+            &format!("/emulator/action?mode=verifyEmail&oobCode={code}&apiKey={KEY}{query}"),
+            &RequestHeaders {
+                authorization: None,
+                ..owner()
+            },
+            &json!({}),
+        )
+        .status
+    };
+    assert_eq!(follow("&tenantId"), 200);
+    assert_eq!(follow("&tenantId="), 200);
+    assert_eq!(follow("&tenantId=a&tenantId=b"), 400);
 }

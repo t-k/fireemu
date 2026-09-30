@@ -736,8 +736,8 @@ fn an_admin_create_or_update_with_an_id_token_of_a_new_tenant_finds_no_user() {
 }
 
 /// `parseIdToken` does not look at `exp`, so an expired token of a tenant made on the way finds no
-/// user there (`USER_NOT_FOUND`), for every operation that reads the token; not the expiry's own
-/// refusal (official column probed).
+/// user there (`USER_NOT_FOUND`), for every operation that reads the token, the Admin ones and the
+/// session cookie included; not the expiry's own refusal (official column probed).
 #[test]
 fn an_expired_token_of_a_new_tenant_finds_no_user_in_the_operations_that_parse_it() {
     for (n, (route, body)) in [
@@ -789,8 +789,101 @@ fn the_strict_profile_does_not_scope_a_routed_admin_request_by_the_body_tenant()
         &format!("{V1}/projects/demo-other/accounts:lookup"),
         &json!({"tenantId": "held", "email": ["held@example.com"]}),
     );
-    assert!(
-        !answered.to_string().contains("held@example.com"),
-        "served from the tenant: {answered}"
-    );
+    // The project's own store answers (the body tenant is a scope the routed project's store does
+    // not have); the tenant's store would answer that tenants are not enabled in strict.
+    assert_eq!(message_of(&answered), "TENANT_ID_MISMATCH", "{answered}");
+}
+
+/// The Admin update parses the token (`operations.js:832`) unless it carries an `oobCode`. The
+/// pre-check only speaks for a tenant that was made on the way, where the token's user is not
+/// there: with no `localId` the official emulator answers `MISSING_LOCAL_ID` first (a recorded
+/// difference: fireemu answers `USER_NOT_FOUND`), and with an `oobCode` neither reads the token.
+/// A token of a user the tenant lacks, beside a `localId` of one it has, is `USER_NOT_FOUND`
+/// officially and is served here (also recorded).
+#[test]
+fn an_admin_update_reads_the_token_unless_it_carries_an_oob_code() {
+    within_a_minute(|| {
+        for project in ["demo-app", "demo-other"] {
+            for (n, (case, body, message)) in [
+                (
+                    "no localId",
+                    json!({"displayName": "d"}),
+                    Some("USER_NOT_FOUND"),
+                ),
+                (
+                    "an oobCode",
+                    json!({"displayName": "d", "oobCode": "nope"}),
+                    None,
+                ),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let (state, _registry) = routed_state();
+                let tenant = format!("upd-{n}");
+                let mut body = body;
+                body["tenantId"] = json!(tenant);
+                body["idToken"] = json!(project_token(project, "zz", &tenant));
+                let (_, answered) = admin(
+                    &state,
+                    "POST",
+                    &format!("{V1}/projects/{project}/accounts:update"),
+                    &body,
+                );
+                match message {
+                    Some(message) => assert_eq!(
+                        message_of(&answered),
+                        message,
+                        "{project} {case}: {answered}"
+                    ),
+                    None => assert_ne!(
+                        message_of(&answered),
+                        "USER_NOT_FOUND",
+                        "{project} {case}: the token was read: {answered}"
+                    ),
+                }
+            }
+        }
+    });
+}
+
+#[test]
+fn an_expired_token_of_a_new_tenant_finds_no_user_in_the_admin_operations_that_parse_it() {
+    let expired = |tenant: &str| {
+        alg_none(&json!({
+            "aud": "demo-app", "iss": "https://securetoken.google.com/demo-app",
+            "sub": "u1", "user_id": "u1", "iat": 1_787_000_000, "exp": 1_787_003_600,
+            "auth_time": 1_787_000_000,
+            "firebase": {"sign_in_provider": "password", "identities": {}, "tenant": tenant}
+        }))
+    };
+    for (n, (path, body)) in [
+        (
+            format!("{V1}/projects/demo-app:createSessionCookie"),
+            json!({"validDuration": "3600"}),
+        ),
+        (
+            format!("{V1}/projects/demo-app/accounts"),
+            json!({"email": "m@example.com", "password": "hunter22"}),
+        ),
+        (
+            format!("{V1}/projects/demo-app/accounts:update"),
+            json!({"localId": "x", "displayName": "d"}),
+        ),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let (state, _registry) = emulator();
+        let tenant = format!("aexp-{n}");
+        let mut body = body;
+        body["tenantId"] = json!(tenant);
+        body["idToken"] = json!(expired(&tenant));
+        let (status, answered) = admin(&state, "POST", &path, &body);
+        assert_eq!(
+            (status, message_of(&answered)),
+            (400, "USER_NOT_FOUND".to_owned()),
+            "{path}: {answered}"
+        );
+    }
 }

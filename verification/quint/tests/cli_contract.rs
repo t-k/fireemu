@@ -591,6 +591,126 @@ fn process_group_supervisor_does_not_leak_during_the_launch_window() {
     }
 }
 
+/// A supervised group whose only remaining member is a zombie.
+///
+/// The leader forks a middle process, which forks a child that exits at once.
+/// The middle process waits until that child is a zombie, moves itself into a
+/// group of its own and lets the leader exit with status 7. The zombie stays in
+/// the supervised group until the middle process reaps it, one second after the
+/// supervisor has reaped the leader. Darwin's `killpg` answers `EPERM`, not
+/// `ESRCH`, for a group that exists but has no signalable member, so this pins
+/// the state in which the supervisor used to die with a `PermissionError`.
+#[cfg(unix)]
+const ZOMBIE_ONLY_GROUP_FIXTURE: &str = r#"#!/usr/bin/python3 -I
+import os
+import subprocess
+import sys
+import time
+
+leader = os.getpid()
+ready_read, ready_write = os.pipe()
+middle = os.fork()
+if middle == 0:
+    os.close(ready_read)
+    zombie = os.fork()
+    if zombie == 0:
+        os._exit(0)
+    while True:
+        state = subprocess.run(
+            ["/bin/ps", "-o", "stat=", "-p", str(zombie)],
+            capture_output=True,
+            text=True,
+            check=False,
+        ).stdout.strip()
+        if state.startswith("Z"):
+            break
+        time.sleep(0.01)
+    os.setpgid(0, 0)
+    record = os.environ["SUPERVISOR_PID_FILE"]
+    with open(record + ".tmp", "w") as handle:
+        handle.write(f"{os.getpid()} {zombie}\n")
+    os.rename(record + ".tmp", record)
+    os.write(ready_write, b"x")
+    os.close(ready_write)
+    deadline = time.monotonic() + 30
+    while time.monotonic() < deadline:
+        try:
+            os.kill(leader, 0)
+        except ProcessLookupError:
+            break
+        except PermissionError:
+            pass
+        time.sleep(0.01)
+    time.sleep(1.0)
+    with open(os.environ["SUPERVISOR_REAP_MARKER"], "w") as handle:
+        handle.write("reaping\n")
+    os.waitpid(zombie, 0)
+    os._exit(0)
+os.close(ready_write)
+os.read(ready_read, 1)
+sys.exit(7)
+"#;
+
+#[cfg(unix)]
+#[test]
+fn process_group_supervisor_waits_out_a_group_left_with_only_a_zombie() {
+    let temporary = OwnedTestDirectory::create("group-zombie-only");
+    let fixture = temporary.0.join("zombie-only-group");
+    fs::write(&fixture, ZOMBIE_ONLY_GROUP_FIXTURE).expect("zombie fixture must be written");
+    make_executable(&[&fixture]);
+    let pid_file = temporary.0.join("middle.pid");
+    let reap_marker = temporary.0.join("reaping");
+
+    let mut supervisor = Command::new(process_group_launcher_path())
+        .arg(&fixture)
+        .env("SUPERVISOR_PID_FILE", &pid_file)
+        .env("SUPERVISOR_REAP_MARKER", &reap_marker)
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("process-group supervisor must launch");
+    let exited = wait_until(Duration::from_secs(30), || {
+        supervisor
+            .try_wait()
+            .expect("supervisor wait must succeed")
+            .is_some()
+    });
+    let reaping_when_supervisor_returned = reap_marker.exists();
+    let pids = read_complete_pid_record(&pid_file, 2);
+    if !exited {
+        let _ = supervisor.kill();
+    }
+    let output = supervisor
+        .wait_with_output()
+        .expect("supervisor output must be readable");
+    // The middle process left the supervised group, so the supervisor never
+    // signals it. It exits by itself right after reaping the zombie.
+    if let Some(pids) = &pids {
+        let middle = pids[0];
+        if !wait_until(Duration::from_secs(10), || !process_exists(middle)) {
+            let _ = Command::new("/bin/kill")
+                .args(["-KILL", &middle.to_string()])
+                .status();
+        }
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(exited, "supervisor must return once the zombie is reaped");
+    assert!(pids.is_some(), "zombie fixture must record its processes");
+    assert!(
+        !stderr.contains("Traceback") && !stderr.contains("PermissionError"),
+        "supervisor must not crash on a group with no signalable member:\n{stderr}"
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(7),
+        "supervisor must report the leader's status:\n{stderr}"
+    );
+    assert!(
+        reaping_when_supervisor_returned,
+        "supervisor must not return before its group disappears"
+    );
+}
+
 #[test]
 fn package_manifest_pins_quint_and_pnpm_exactly() {
     let path = package_path();

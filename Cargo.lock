@@ -602,6 +602,7 @@ dependencies = [
  "fireemu-core-storage",
  "fireemu-core-types",
  "fireemu-export-publication",
+ "fireemu-fd-acl",
  "fireemu-proto-firestore",
  "http-body-util",
  "hyper",
@@ -881,6 +882,10 @@ dependencies = [
  "exacl",
  "rustix",
 ]
+
+[[package]]
+name = "fireemu-fd-acl"
+version = "0.9.0"
 
 [[package]]
 name = "fireemu-proto-firestore"

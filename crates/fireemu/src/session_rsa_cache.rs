@@ -250,6 +250,11 @@ type AclReader = fn(std::os::fd::BorrowedFd<'_>) -> std::io::Result<bool>;
 /// The cache holds session signing keys, so an ACL entry, which can grant other users
 /// access that the owner-only mode does not show, keeps the cache unused. A read that fails
 /// refuses the file too, and the caller then generates the key in memory.
+///
+/// The ACL is read through the opened descriptor (`acl_get_fd_np`), never by path. Reading
+/// `/dev/fd/N` by path does not work: Darwin answers `ENOENT` for every descriptor, even when
+/// the file has ACL entries, and a reader that takes that for an empty ACL never detects an
+/// entry.
 #[cfg(target_os = "macos")]
 fn reject_extended_acl(file: &std::fs::File) -> Result<(), ()> {
     use std::os::fd::AsFd as _;
@@ -266,21 +271,7 @@ fn acl_reader() -> AclReader {
     if let Some(reader) = tests::ACL_READER.with(std::cell::Cell::get) {
         return reader;
     }
-    read_descriptor_acl
-}
-
-/// Reads the ACL of an opened descriptor.
-///
-/// No descriptor-based read is available yet, so every ACL is unverifiable and the cache is
-/// not used on macOS. Reading `/dev/fd/N` by path does not work: Darwin answers `ENOENT` for
-/// every descriptor, even when the file has ACL entries, and a reader that takes that for an
-/// empty ACL never detects an entry.
-#[cfg(target_os = "macos")]
-fn read_descriptor_acl(_descriptor: std::os::fd::BorrowedFd<'_>) -> std::io::Result<bool> {
-    Err(std::io::Error::new(
-        std::io::ErrorKind::Unsupported,
-        "the ACL of an opened descriptor cannot be read",
-    ))
+    fireemu_fd_acl::fd_has_extended_acl
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -440,16 +431,6 @@ mod tests {
         body()
     }
 
-    /// A reader that reports no ACL entries, for setting up a cache entry.
-    #[cfg(target_os = "macos")]
-    #[allow(
-        clippy::unnecessary_wraps,
-        reason = "it must match the AclReader signature"
-    )]
-    fn no_acl_entries(_: std::os::fd::BorrowedFd<'_>) -> std::io::Result<bool> {
-        Ok(false)
-    }
-
     /// A reader that fails for every descriptor.
     #[cfg(target_os = "macos")]
     fn unreadable_acl(_: std::os::fd::BorrowedFd<'_>) -> std::io::Result<bool> {
@@ -535,10 +516,6 @@ mod tests {
 
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
-    #[cfg_attr(
-        target_os = "macos",
-        ignore = "the macOS cache stays unused until the ACL of an opened descriptor can be read"
-    )]
     fn a_cache_miss_publishes_one_owner_only_entry_and_the_next_load_hits_it() {
         let root = scratch("hit");
         let first = load_or_generate_at(&root, 7).unwrap();
@@ -628,10 +605,6 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    #[cfg_attr(
-        target_os = "macos",
-        ignore = "the macOS cache stays unused until the ACL of an opened descriptor can be read"
-    )]
     fn an_unsafe_existing_entry_is_ignored_and_never_replaced() {
         use std::os::unix::fs::PermissionsExt as _;
 
@@ -654,10 +627,6 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    #[cfg_attr(
-        target_os = "macos",
-        ignore = "the macOS cache stays unused until the ACL of an opened descriptor can be read"
-    )]
     fn a_symlink_entry_is_ignored_without_touching_its_victim() {
         let root = scratch("symlink");
         let _ = load_or_generate_at(&root, 9).unwrap();
@@ -679,10 +648,6 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    #[cfg_attr(
-        target_os = "macos",
-        ignore = "the macOS cache stays unused until the ACL of an opened descriptor can be read"
-    )]
     fn corrupt_hard_linked_and_wrong_seed_entries_are_left_untouched() {
         use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
 
@@ -717,10 +682,6 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    #[cfg_attr(
-        target_os = "macos",
-        ignore = "the macOS cache stays unused until the ACL of an opened descriptor can be read"
-    )]
     fn a_fifo_entry_is_rejected_without_blocking() {
         use std::os::unix::fs::PermissionsExt as _;
 
@@ -747,10 +708,6 @@ mod tests {
 
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
-    #[cfg_attr(
-        target_os = "macos",
-        ignore = "the macOS cache stays unused until the ACL of an opened descriptor can be read"
-    )]
     fn concurrent_misses_publish_one_complete_entry() {
         let root = scratch("concurrent");
         let root_path = root.path().to_path_buf();
@@ -822,7 +779,8 @@ mod tests {
         for depth in 1..=super::MANAGED_DIRECTORIES.len() {
             let root = scratch("acl-directory");
             let seed = 20 + depth as u64;
-            let _ = with_acl_reader(no_acl_entries, || load_or_generate_at(&root, seed)).unwrap();
+            assert!(!load_or_generate_at(&root, seed).unwrap().hit);
+            assert!(load_or_generate_at(&root, seed).unwrap().hit);
             let entry = cache_entry_path(&root, seed);
             let original = std::fs::read(&entry).unwrap();
             let managed = super::MANAGED_DIRECTORIES[..depth]
@@ -841,6 +799,7 @@ mod tests {
             assert_eq!(std::fs::read(&entry).unwrap(), original);
 
             clear_acl_entries(&root);
+            assert!(load_or_generate_at(&root, seed).unwrap().hit);
             let _ = std::fs::remove_dir_all(root);
         }
     }
@@ -849,13 +808,14 @@ mod tests {
     #[test]
     fn an_entry_file_with_an_acl_entry_is_refused_and_left_untouched() {
         let root = scratch("acl-entry");
-        let first = with_acl_reader(no_acl_entries, || load_or_generate_at(&root, 24)).unwrap();
+        let first = load_or_generate_at(&root, 24).unwrap();
+        assert!(!first.hit);
+        assert!(load_or_generate_at(&root, 24).unwrap().hit);
         let entry = cache_entry_path(&root, 24);
         let original = std::fs::read(&entry).unwrap();
         add_acl_entry(&entry, "everyone allow read");
 
-        // Only the entry's own ACL check is exercised here: the directories are trusted.
-        let directory = with_acl_reader(no_acl_entries, || open_cache_directory(&root)).unwrap();
+        let directory = open_cache_directory(&root).unwrap();
         assert!(matches!(
             load_entry(&directory, &entry_name(24), 24),
             EntryLoad::UnsafeOrInvalid
@@ -867,6 +827,7 @@ mod tests {
         assert!(acl_listing(&entry).contains("everyone allow read"));
 
         clear_acl_entries(&root);
+        assert!(load_or_generate_at(&root, 24).unwrap().hit);
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -887,6 +848,8 @@ mod tests {
         assert!(!cache_entry_path(&root, 25).exists());
 
         clear_acl_entries(&root);
+        assert!(!load_or_generate_at(&root, 25).unwrap().hit);
+        assert!(load_or_generate_at(&root, 25).unwrap().hit);
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -910,11 +873,8 @@ mod tests {
     #[test]
     fn an_unreadable_entry_acl_refuses_the_entry_without_touching_it() {
         let root = scratch("acl-unreadable-entry");
-        let first = with_acl_reader(no_acl_entries, || {
-            let first = load_or_generate_at(&root, 27).unwrap();
-            assert!(load_or_generate_at(&root, 27).unwrap().hit);
-            first
-        });
+        let first = load_or_generate_at(&root, 27).unwrap();
+        assert!(load_or_generate_at(&root, 27).unwrap().hit);
         let entry = cache_entry_path(&root, 27);
         let original = std::fs::read(&entry).unwrap();
 
@@ -929,6 +889,7 @@ mod tests {
             assert_eq!(first.signer.kid(), uncached.signer.kid());
         });
         assert_eq!(std::fs::read(&entry).unwrap(), original);
+        assert!(load_or_generate_at(&root, 27).unwrap().hit);
         let _ = std::fs::remove_dir_all(root);
     }
 

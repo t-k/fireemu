@@ -9,22 +9,28 @@ const options = { runId, projectNumber, now: instant };
 
 function environment(failAt) {
   const rows = [],
-    sends = [];
+    sends = [],
+    waits = [];
   let time = instant;
   return {
     rows,
     sends,
+    waits,
     deps: {
       ...options,
       accessToken: "offline-test-bearer",
       clock: () => time++,
+      sleep: async (ms) => waits.push(ms),
       save: async (row) => rows.push(row),
       send: async (request) => {
         sends.push(request);
         if (request.id === failAt) throw new Error("offline-test-bearer transport failure");
         const body =
           request.id === "identity"
-            ? { projectId: "fireemu-oracle-sbx", name: `projects/${projectNumber}` }
+            ? {
+                name: "projects/fireemu-oracle-sbx/releases/cloud.firestore",
+                rulesetName: "projects/fireemu-oracle-sbx/rulesets/offline",
+              }
             : request.id === "enable-apis"
               ? { name: "operations/offline", done: true }
               : request.id.startsWith("service-")
@@ -206,4 +212,180 @@ test("a successful create with an incomplete body retains conservative cleanup",
   assert.equal(summary.unknown, 1);
   assert.ok(sends.some(({ id }) => id === "delete-topic"));
   assert.ok(!sends.some(({ id }) => id === "create-subscription"));
+});
+
+test("Scheduler job lists stay within the documented500 maximum independently of Pub/Sub", () => {
+  const requests = shapeRequests(options);
+  for (const phase of ["before", "final"]) {
+    assert.equal(
+      new URL(requests.find(({ id }) => id === `${phase}-list-jobs`).url).searchParams.get(
+        "pageSize",
+      ),
+      "500",
+    );
+    assert.equal(
+      new URL(requests.find(({ id }) => id === `${phase}-list-topics`).url).searchParams.get(
+        "pageSize",
+      ),
+      "1000",
+    );
+  }
+});
+
+test("App Engine absence is captured without skipping the native job shape", async () => {
+  const { deps, sends, rows } = environment();
+  const original = deps.send;
+  deps.send = async (request) => {
+    if (request.id !== "appengine-location") return original(request);
+    sends.push(request);
+    return new Response(JSON.stringify({ error: { code: 404, status: "NOT_FOUND" } }), {
+      status: 404,
+    });
+  };
+  const summary = await collectShape(deps);
+  assert.equal(summary.attempted, 31);
+  assert.ok(sends.some(({ id }) => id === "create-job"));
+  assert.ok(
+    rows.some(
+      ({ id, status, state }) =>
+        id === "appengine-location" && status === 404 && state === "response-persisted",
+    ),
+  );
+});
+
+for (const [id, status, body, expected] of [
+  ["identity", 403, { error: { status: "PERMISSION_DENIED", reason: "SERVICE_DISABLED" } }, 1],
+  ["before-job", 403, { error: { status: "PERMISSION_DENIED", reason: "SERVICE_DISABLED" } }, 10],
+  ["service-after-pubsub.googleapis.com", 200, { state: "DISABLED" }, 7],
+  ["before-topic", 200, { name: ownedResources(runId).topic }, 11],
+]) {
+  test(`${id} stop judge blocks all resource mutations`, async () => {
+    const { deps, sends } = environment();
+    const original = deps.send;
+    deps.send = async (request) => {
+      if (request.id !== id) return original(request);
+      sends.push(request);
+      return new Response(JSON.stringify(body), { status });
+    };
+    const summary = await collectShape(deps);
+    assert.equal(summary.attempted, expected);
+    assert.ok(
+      !sends.some(
+        ({ id: requestId }) => requestId.startsWith("create-") || requestId.startsWith("delete-"),
+      ),
+    );
+  });
+}
+
+for (const outcome of ["done", "pending", "error", "malformed"]) {
+  test(`enable operation ${outcome} uses bounded polling before product reads`, async () => {
+    const { deps, sends, waits } = environment();
+    const original = deps.send;
+    deps.send = async (request) => {
+      if (request.id !== "enable-apis" && !request.id.startsWith("enable-poll-"))
+        return original(request);
+      sends.push(request);
+      const done = request.id === "enable-poll-2";
+      const body =
+        outcome === "malformed"
+          ? { name: "../foreign" }
+          : {
+              name: "operations/offline",
+              done: (outcome === "done" && done) || outcome === "error",
+              ...(outcome === "error" ? { error: { code: 7 } } : {}),
+            };
+      return new Response(JSON.stringify(body), { status: 200 });
+    };
+    const summary = await collectShape(deps);
+    const polls = sends.filter(({ id }) => id.startsWith("enable-poll-"));
+    if (outcome === "done") {
+      assert.equal(polls.length, 2);
+      assert.deepEqual(waits, [8000, 8000, 90000]);
+      assert.equal(summary.attempted, 33);
+      assert.ok(sends.some(({ id }) => id === "create-job"));
+    } else {
+      assert.equal(polls.length, outcome === "pending" ? 15 : 0);
+      assert.deepEqual(waits, Array(outcome === "pending" ? 15 : 0).fill(8000));
+      assert.ok(!sends.some(({ url }) => /\/(jobs|topics|subscriptions)/.test(url)));
+    }
+  });
+}
+
+test("successful service readbacks settle before the first product request", async () => {
+  const { deps, waits } = environment();
+  await collectShape(deps);
+  assert.deepEqual(waits, [90000]);
+});
+
+test("identity reads the recorded Rules release route and requires its scoped source", async () => {
+  assert.equal(
+    shapeRequests(options)[0].url,
+    "https://firebaserules.googleapis.com/v1/projects/fireemu-oracle-sbx/releases/cloud.firestore",
+  );
+  for (const body of [
+    { name: "projects/fireemu-oracle-sbx/releases/cloud.firestore" },
+    {
+      name: "projects/fireemu-oracle-sbx/releases/cloud.firestore",
+      rulesetName: "projects/foreign/rulesets/source",
+    },
+    {
+      name: "projects/fireemu-oracle-sbx/releases/cloud.firestore",
+      rulesetName: "projects/fireemu-oracle-sbx/rulesets/../foreign",
+    },
+  ]) {
+    const { deps, sends } = environment();
+    deps.send = async (request) => {
+      sends.push(request);
+      return new Response(JSON.stringify(body), { status: 200 });
+    };
+    const summary = await collectShape(deps);
+    assert.equal(summary.attempted, 1);
+  }
+});
+
+test("the recorded identity predicate requires HTTP 200 exactly", async () => {
+  const { deps, sends } = environment();
+  deps.send = async (request) => {
+    sends.push(request);
+    return new Response(
+      JSON.stringify({
+        name: "projects/fireemu-oracle-sbx/releases/cloud.firestore",
+        rulesetName: "projects/fireemu-oracle-sbx/rulesets/offline",
+      }),
+      { status: 201 },
+    );
+  };
+  await collectShape(deps);
+  assert.equal(sends.length, 1);
+});
+
+test("a reflected bearer stops before persistence and dependent mutation", async () => {
+  const { deps, rows, sends } = environment();
+  deps.send = async (request) => {
+    sends.push(request);
+    return new Response(JSON.stringify({ token: deps.accessToken }), { status: 200 });
+  };
+  await assert.rejects(collectShape(deps), /reflected/);
+  assert.equal(sends.length, 1);
+  assert.ok(!JSON.stringify(rows).includes(deps.accessToken));
+  assert.ok(!rows.some(({ state }) => state === "response-persisted"));
+});
+
+test("a refused enable poll stops before all product reads", async () => {
+  const { deps, sends, waits } = environment();
+  const original = deps.send;
+  deps.send = async (request) => {
+    if (request.id === "enable-apis") {
+      sends.push(request);
+      return new Response(JSON.stringify({ name: "operations/offline" }), { status: 200 });
+    }
+    if (request.id.startsWith("enable-poll-")) {
+      sends.push(request);
+      return new Response(JSON.stringify({ error: { code: 403 } }), { status: 403 });
+    }
+    return original(request);
+  };
+  await collectShape(deps);
+  assert.deepEqual(waits, [8000]);
+  assert.ok(!sends.some(({ id }) => id.startsWith("before-")));
 });

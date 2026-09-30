@@ -36,7 +36,7 @@ export function shapeRequests({ runId, projectNumber, now }) {
     cleanup: phase === "final",
     url:
       kind === "jobs"
-        ? `https://cloudscheduler.googleapis.com/v1/projects/${PROJECT}/locations/us-central1/jobs?pageSize=1000`
+        ? `https://cloudscheduler.googleapis.com/v1/projects/${PROJECT}/locations/us-central1/jobs?pageSize=500`
         : `https://pubsub.googleapis.com/v1/projects/${PROJECT}/${kind}?pageSize=1000`,
   });
   const serviceRead = (phase) =>
@@ -50,7 +50,7 @@ export function shapeRequests({ runId, projectNumber, now }) {
     {
       id: "identity",
       method: "GET",
-      url: `https://cloudresourcemanager.googleapis.com/v3/projects/${PROJECT}`,
+      url: `https://firebaserules.googleapis.com/v1/projects/${PROJECT}/releases/cloud.firestore`,
     },
     ...serviceRead("before"),
     {
@@ -63,6 +63,7 @@ export function shapeRequests({ runId, projectNumber, now }) {
     {
       id: "appengine-location",
       method: "GET",
+      observationOnly: true,
       url: `https://appengine.googleapis.com/v1/apps/${PROJECT}`,
     },
     ...["job", "topic", "subscription"].map((kind) => ({
@@ -245,11 +246,13 @@ export async function collectShape({
     if (stopped && !spec.cleanup) continue;
     if (spec.owned && !intents.has(spec.owned)) continue;
     if (stopped && spec.id.startsWith("final-list-") && !intents.size) continue;
+    if (spec.id === "appengine-location") await sleep(90000);
     if (spec.creates) intents.add(spec.creates);
     const result = await capture(spec);
     // A definitive client refusal does not establish ownership of a conflicting resource.
     if (spec.creates && result?.status >= 400 && result.status < 500) intents.delete(spec.creates);
     if (spec.cleanup) continue;
+    if (spec.observationOnly) continue;
     if (!result || result.bodyUnknown || result.status < 200 || result.status >= 300) {
       if (!(spec.absence && result?.status === 404)) stopped = true;
       continue;
@@ -257,7 +260,10 @@ export async function collectShape({
     if (spec.absence) stopped = true;
     if (
       spec.id === "identity" &&
-      (result.json?.projectId !== PROJECT || result.json?.name !== `projects/${projectNumber}`)
+      (result.status !== 200 ||
+        result.json?.name !== `projects/${PROJECT}/releases/cloud.firestore` ||
+        typeof result.json?.rulesetName !== "string" ||
+        !new RegExp(`^projects/${PROJECT}/rulesets/[A-Za-z0-9_-]+$`).test(result.json.rulesetName))
     )
       stopped = true;
     if (spec.serviceReady && result.json?.state !== "ENABLED") stopped = true;
@@ -269,7 +275,7 @@ export async function collectShape({
       }
       const name = operation.json.name;
       for (let index = 1; operation.json?.done !== true && index <= 15; index++) {
-        await sleep(1000);
+        await sleep(8000);
         operation = await capture({
           id: `enable-poll-${index}`,
           method: "GET",

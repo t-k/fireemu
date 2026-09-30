@@ -57,6 +57,11 @@ function approved(ownerText, pins) {
       .split("|")
       .map((s) => s.trim());
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !subject.startsWith(TASK_ID)) continue;
+    // Withdrawal lines use several layouts, including a word before packetSha256.
+    if (body.includes(pins.packetSha256) && /\b(REVOKED|WITHDRAWN|SUPERSEDED)\b/i.test(body)) {
+      approval = false;
+      continue;
+    }
     const entry = fields(body);
     if (entry.packetSha256 !== pins.packetSha256) continue;
     if (/REVOKED/i.test(body) || (entry.decision && entry.decision !== "APPROVE")) {

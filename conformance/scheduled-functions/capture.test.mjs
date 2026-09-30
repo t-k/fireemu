@@ -149,3 +149,47 @@ test("malformed task costs cannot create budget headroom", async (t) => {
     assert.deepEqual(f.counts(), { tokens: 0, sends: 0 });
   }
 });
+
+for (const word of ["REVOKED", "WITHDRAWN", "SUPERSEDED"]) {
+  for (const layout of ["conventional", "semicolon", "decision"]) {
+    test(`a later ${word} ${layout} ledger line prevents reservation and credentials`, async (t) => {
+      const f = await fixture(t);
+      const ownerPath = join(f.root, "docs.local/instructions/owner-decisions.md");
+      const approval = await readFile(ownerPath, "utf8");
+      const digest = approval.match(/packetSha256=([a-f0-9]{64})/)[1];
+      const body =
+        layout === "conventional"
+          ? `${word} packetSha256=${digest}（used）`
+          : layout === "semicolon"
+            ? `${word}; packetSha256=${digest}; reason=used`
+            : `decision=${word}; packetSha256=${digest}`;
+      await writeFile(
+        ownerPath,
+        approval + `- 2026-09-30 | SCHEDULED-FUNCTIONS withdrawal | ${body} | Claude | private\n`,
+      );
+      await assert.rejects(captureShape(f.options), /approval/);
+      assert.deepEqual(f.counts(), { tokens: 0, sends: 0 });
+      assert.equal(await readFile(join(f.runs, "sandbox-ledger.jsonl"), "utf8"), "");
+      await assert.rejects(lstat(join(f.locks, "fireemu-oracle-sbx.lock")), { code: "ENOENT" });
+    });
+  }
+}
+
+test("approval must bind every source, budget and author field", async (t) => {
+  for (const [before, after] of [
+    ["sourceCommit=" + sourceCommit, "sourceCommit=" + "d".repeat(40)],
+    ["harnessDigest=", "otherDigest="],
+    ["maxRequests=64", "maxRequests=65"],
+    ["reserveUsd=1", "reserveUsd=2"],
+    ["Claude（調整役。委任）", "untrusted"],
+    ["SCHEDULED-FUNCTIONS stage-2 shape packet", "SCHEDULED-FUNCTIONS another packet"],
+  ]) {
+    const f = await fixture(t);
+    const ownerPath = join(f.root, "docs.local/instructions/owner-decisions.md");
+    const approval = await readFile(ownerPath, "utf8");
+    assert.ok(approval.includes(before));
+    await writeFile(ownerPath, approval.replace(before, after));
+    await assert.rejects(captureShape(f.options), /approval/);
+    assert.deepEqual(f.counts(), { tokens: 0, sends: 0 });
+  }
+});

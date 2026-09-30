@@ -364,3 +364,109 @@ fn a_session_project_registers_once_whatever_other_projects_hold() {
     // The default project's name is never a session.
     assert!(!registry.register_session("demo-app", session_store("demo-app")));
 }
+
+/// A tenant created while a session registration is pending belongs to that session: a rollback
+/// removes it (a stray tenant would refuse every later session for the project, and no reset
+/// clears one), and brings back only the displaced routed namespace's tenants.
+#[test]
+fn a_rollback_removes_the_tenants_made_while_the_registration_was_pending() {
+    let registry = registry();
+    // A fresh project id.
+    assert!(registry.register_session("demo-f", session_store("demo-f")));
+    assert!(registry.ensure_tenant("demo-f", "born-pending").is_some());
+    assert_eq!(
+        registry.rollback_session("demo-f"),
+        fireemu_core_auth::store::SessionRegistrationRollback::Restored
+    );
+    assert!(registry.tenants("demo-f").is_empty());
+    assert!(registry.register_session("demo-f", session_store("demo-f")));
+    assert!(registry.commit_session("demo-f"));
+    // A displaced routed namespace.
+    assert!(matches!(
+        install(&registry, "demo-b"),
+        RoutedStoreInstall::Installed(_)
+    ));
+    assert!(registry.ensure_tenant("demo-b", "kept").is_some());
+    assert!(registry.register_session("demo-b", session_store("demo-b")));
+    assert!(registry.ensure_tenant("demo-b", "born-pending").is_some());
+    assert_eq!(
+        registry.rollback_session("demo-b"),
+        fireemu_core_auth::store::SessionRegistrationRollback::Restored
+    );
+    assert_eq!(registry.tenants("demo-b"), ["kept"]);
+}
+
+/// A tenant's runtime settings (what a create or a PATCH wrote) move with the tenant: they are
+/// dropped when a committed session displaces the routed namespace (a tenant of the same id made
+/// afterwards starts clean) and come back with it when the registration rolls back.
+#[test]
+fn a_displaced_tenants_runtime_settings_are_dropped_on_commit_and_restored_on_rollback() {
+    let registry = registry();
+    assert!(matches!(
+        install(&registry, "demo-b"),
+        RoutedStoreInstall::Installed(_)
+    ));
+    let with_setting = || TenantMetadataPatch {
+        allow_duplicate_emails: Some(true),
+        ..TenantMetadataPatch::default()
+    };
+    let setting_of = |project: &str, tenant: &str| {
+        registry
+            .capture_export_snapshot(project)
+            .unwrap()
+            .unwrap()
+            .tenant_config_override(tenant)
+            .and_then(|patch| patch.allow_duplicate_emails)
+    };
+    assert!(registry
+        .create_tenant_with_id(
+            "demo-b",
+            "kept",
+            TenantMetadata::default(),
+            with_setting(),
+            None
+        )
+        .is_some());
+    assert_eq!(setting_of("demo-b", "kept"), Some(true));
+    assert!(registry.register_session("demo-b", session_store("demo-b")));
+    assert_eq!(
+        registry.rollback_session("demo-b"),
+        fireemu_core_auth::store::SessionRegistrationRollback::Restored
+    );
+    assert_eq!(setting_of("demo-b", "kept"), Some(true));
+    assert!(registry.register_session("demo-b", session_store("demo-b")));
+    assert!(registry.commit_session("demo-b"));
+    assert!(registry
+        .create_tenant_with_id(
+            "demo-b",
+            "kept",
+            TenantMetadata::default(),
+            TenantMetadataPatch::default(),
+            None
+        )
+        .is_some());
+    assert_eq!(setting_of("demo-b", "kept"), None);
+}
+
+#[test]
+fn a_project_installed_with_a_declaration_has_a_pending_seed_until_it_is_applied() {
+    let registry = registry();
+    let seed = Arc::new(CountingSeed {
+        applied: Mutex::new(Vec::new()),
+        calls: AtomicUsize::new(0),
+    });
+    // Without a declaration nothing is ever pending.
+    assert!(matches!(
+        install(&registry, "demo-none"),
+        RoutedStoreInstall::Installed(_)
+    ));
+    assert!(!registry.has_pending_project_seeds());
+    registry.set_new_project_tenant_seed(seed);
+    assert!(matches!(
+        install(&registry, "demo-routed"),
+        RoutedStoreInstall::Installed(_)
+    ));
+    assert!(registry.has_pending_project_seeds());
+    registry.apply_pending_project_seeds().unwrap();
+    assert!(!registry.has_pending_project_seeds());
+}

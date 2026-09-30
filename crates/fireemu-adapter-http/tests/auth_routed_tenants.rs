@@ -590,3 +590,120 @@ fn a_disagreeing_foreign_token_on_an_unknown_project_is_a_mismatch_that_installs
     assert!(registry.routed_store_for("demo-late").is_none());
     assert!(registry.tenants("demo-late").is_empty());
 }
+
+fn with_barrier(
+    mut state: AuthState,
+) -> (
+    Arc<AuthState>,
+    Arc<fireemu_core_session::barrier::AdmissionBarrier>,
+) {
+    let barrier = Arc::new(fireemu_core_session::barrier::AdmissionBarrier::default());
+    state.barrier = Some(barrier.clone());
+    (Arc::new(state), barrier)
+}
+
+fn keyless() -> RequestHeaders {
+    RequestHeaders {
+        authorization: None,
+        ..owner()
+    }
+}
+
+/// Sends `path` on its own thread, so the test can hold the barrier while it waits.
+fn send_on_a_thread(
+    state: &Arc<AuthState>,
+    headers: RequestHeaders,
+    path: &str,
+) -> std::sync::mpsc::Receiver<(u16, Value)> {
+    let (done, answer) = std::sync::mpsc::channel();
+    let (state, path) = (state.clone(), path.to_owned());
+    std::thread::spawn(move || {
+        let r = handle_with(&state, "GET", &path, &headers, &json!({}));
+        let _ = done.send((r.status, r.body));
+    });
+    answer
+}
+
+const SOON: std::time::Duration = std::time::Duration::from_millis(400);
+const LONG: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// A request its guards refuse before admission answers at once even while a reset holds the
+/// barrier exclusively, in both profiles, when it installed nothing (a request that installs
+/// nothing takes no admission for a seed).
+#[test]
+fn a_refused_request_does_not_wait_for_a_reset_when_nothing_is_pending() {
+    for (label, state, registry) in profiles() {
+        registry.set_new_project_tenant_seed(declaration(&declared()));
+        let (state, barrier) = with_barrier(state);
+        let reset = barrier.exclusive();
+        let answer = send_on_a_thread(
+            &state,
+            keyless(),
+            &format!("{V2}/projects/demo-app/tenants"),
+        );
+        let (status, body) = answer
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap_or_else(|_| panic!("{label}: a refusal waited for the reset"));
+        assert!(matches!(status, 401 | 403), "{label}: {status} {body}");
+        drop(reset);
+    }
+}
+
+/// A routed project that is installed and not yet seeded is seeded under admission: the next
+/// request through the wrapper waits for a reset that holds the barrier, and seeds after it.
+#[test]
+fn a_pending_seed_is_applied_under_admission() {
+    let (state, registry) = routed_state();
+    registry.set_new_project_tenant_seed(declaration(&declared()));
+    let (state, barrier) = with_barrier(state);
+    let candidate = registry.routed_candidate("demo-pend").unwrap();
+    assert!(matches!(
+        registry.install_routed("demo-pend", Arc::new(Mutex::new(candidate))),
+        fireemu_core_auth::store::RoutedStoreInstall::Installed(_)
+    ));
+    assert!(registry.has_pending_project_seeds());
+    let reset = barrier.exclusive();
+    let answer = send_on_a_thread(
+        &state,
+        keyless(),
+        &format!("{V2}/projects/demo-app/tenants"),
+    );
+    assert!(
+        answer.recv_timeout(SOON).is_err(),
+        "the seed waited for the reset"
+    );
+    assert!(registry.tenants("demo-pend").is_empty());
+    drop(reset);
+    let (status, body) = answer.recv_timeout(LONG).unwrap();
+    assert!(matches!(status, 401 | 403), "{status} {body}");
+    assert_eq!(registry.tenants("demo-pend").len(), 2);
+}
+
+/// A request that names a tenant of a new project installs the project, seeds it and makes the
+/// tenant in one admitted step: while a reset holds the barrier nothing is installed, so the
+/// reset's membership probe stays valid, and after it the request makes all of it.
+#[test]
+fn an_on_the_way_install_is_admitted_as_one_step_and_survives_a_racing_reset() {
+    let (state, registry) = routed_state();
+    registry.set_new_project_tenant_seed(declaration(&declared()));
+    let (state, barrier) = with_barrier(state);
+    let reset = barrier.exclusive();
+    let probe = registry.prepare_default_scope_reset().unwrap();
+    let answer = send_on_a_thread(
+        &state,
+        owner(),
+        &format!("{V2}/projects/demo-race/tenants/acme-x7k2q"),
+    );
+    assert!(
+        answer.recv_timeout(SOON).is_err(),
+        "the request went on under the reset"
+    );
+    assert!(registry.routed_store_for("demo-race").is_none());
+    registry
+        .apply_default_scope_reset(&probe)
+        .expect("nothing was installed between the probe and the reset");
+    drop(reset);
+    let (status, body) = answer.recv_timeout(LONG).unwrap();
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(registry.tenants("demo-race").len(), 2);
+}

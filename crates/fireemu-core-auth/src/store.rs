@@ -6336,6 +6336,15 @@ impl AuthRegistry {
         }
     }
 
+    /// Whether a routed project was installed and not yet seeded. A cheap check, so a request that
+    /// installed nothing does not go on to take the admission barrier for a seed.
+    #[must_use]
+    pub fn has_pending_project_seeds(&self) -> bool {
+        self.pending_project_seeds
+            .lock()
+            .is_ok_and(|pending| !pending.is_empty())
+    }
+
     /// Applies the stored declaration to each routed project installed since the last call, once.
     /// Call it with no registry lock and no project gate held (a request's own gate is released
     /// first). A project a default-scope reset dropped meanwhile is skipped. Returns the first
@@ -6973,21 +6982,25 @@ impl AuthRegistry {
         if let Some(displaced) = pending.displaced {
             projects.routed.insert(project.to_owned(), displaced);
         }
-        if !pending.displaced_tenants.is_empty() {
-            if let (Ok(mut tenants), Ok(mut metadata), Ok(mut runtime_overrides)) = (
-                self.tenants.lock(),
-                self.tenant_metadata.lock(),
-                self.tenant_runtime_config_overrides.lock(),
-            ) {
-                for tenant in pending.displaced_tenants {
-                    if let Some(published) = tenant.metadata {
-                        metadata.insert(tenant.key.clone(), published);
-                    }
-                    if let Some(patch) = tenant.runtime_override {
-                        runtime_overrides.insert(tenant.key.clone(), patch);
-                    }
-                    tenants.insert(tenant.key, tenant.store);
+        if let (Ok(mut tenants), Ok(mut metadata), Ok(mut runtime_overrides)) = (
+            self.tenants.lock(),
+            self.tenant_metadata.lock(),
+            self.tenant_runtime_config_overrides.lock(),
+        ) {
+            // A tenant made while the registration was pending belongs to the session that is
+            // going away: it must not outlive it (a stray tenant refuses every later session
+            // for the project). Only the displaced routed namespace's tenants come back.
+            tenants.retain(|(candidate, _), _| candidate != project);
+            metadata.retain(|(candidate, _), _| candidate != project);
+            runtime_overrides.retain(|(candidate, _), _| candidate != project);
+            for tenant in pending.displaced_tenants {
+                if let Some(published) = tenant.metadata {
+                    metadata.insert(tenant.key.clone(), published);
                 }
+                if let Some(patch) = tenant.runtime_override {
+                    runtime_overrides.insert(tenant.key.clone(), patch);
+                }
+                tenants.insert(tenant.key, tenant.store);
             }
         }
         self.membership_generation.fetch_add(1, Ordering::Release);

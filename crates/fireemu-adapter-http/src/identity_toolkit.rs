@@ -3459,7 +3459,18 @@ fn seed_new_projects(state: &AuthState) {
     let Some(registry) = state.registry.as_ref() else {
         return;
     };
+    // A request that installed nothing (every strict request, and every refused one) takes no
+    // admission, so it never waits for a reset that holds the barrier.
+    if !registry.has_pending_project_seeds() {
+        return;
+    }
     let _admitted = state.barrier.as_ref().map(|barrier| barrier.admit());
+    seed_pending_projects(registry);
+}
+
+/// [`seed_new_projects`] for a caller that already holds admission (taking it twice on one
+/// thread would deadlock behind a waiting reset).
+fn seed_pending_projects(registry: &fireemu_core_auth::store::AuthRegistry) {
     if let Err(error) = registry.apply_pending_project_seeds() {
         eprintln!("warning: auth.tenants: a routed project could not be seeded: {error}");
     }
@@ -3723,14 +3734,19 @@ fn emulator_creates_named_tenant(
     if !admit_request(state, request, route, route_project, &project, &parent)? {
         return Ok(None);
     }
+    // Install, seed and creation are one admitted step, so a reset or a session creation (which
+    // hold the barrier exclusively) never sees half of it: it would wipe the project the request
+    // just installed, fail its membership probe after Firestore and Storage were wiped, or leave
+    // the tenant behind a rolled-back session. No gate is held here, and the admission is
+    // released on return, before the request's own.
+    let _admitted = state.barrier.as_ref().map(|barrier| barrier.admit());
     if let Some(candidate) = candidate {
         if !install_admitted_candidate(registry, &project, candidate) {
             return Ok(None);
         }
         // The project just installed takes the declaration before the tenant this request names
         // is made, so a declared tenant is made from its declaration and not with the defaults.
-        // No gate is held here: the creation runs before the request's gates and barrier.
-        seed_new_projects(state);
+        seed_pending_projects(registry);
     }
     Ok(registry
         .ensure_tenant_with(&project, &target, tenant_document::install_default_mfa)

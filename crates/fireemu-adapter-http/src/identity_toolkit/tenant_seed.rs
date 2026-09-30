@@ -192,6 +192,17 @@ impl TenantSeeding {
     /// file unless the project already has a tenant of that id: after an `--import` that tenant
     /// is the imported one, which is authoritative for its id.
     pub fn apply(&self, registry: &AuthRegistry, project: &str) -> Result<(), String> {
+        self.apply_with(registry, project, &mut |_| {})
+    }
+
+    /// [`Self::apply`], calling `between` for each tenant after the check that it is not there
+    /// and before it is created: the window in which another request can make the same id.
+    fn apply_with(
+        &self,
+        registry: &AuthRegistry,
+        project: &str,
+        between: &mut dyn FnMut(&TenantSeed),
+    ) -> Result<(), String> {
         if let Some(allow) = self.allow_tenants {
             seed_multi_tenancy(registry, project, allow)?;
         }
@@ -202,6 +213,7 @@ impl TenantSeeding {
             if registry.tenant_store(project, tenant.id()).is_some() {
                 continue;
             }
+            between(tenant);
             if let Err(refusal) = tenant.apply_checked(registry, project) {
                 // An id another request made since the check is a tenant that is there.
                 if !refusal.in_use {
@@ -308,5 +320,81 @@ pub fn seed_multi_tenancy(
 impl NewProjectSeed for TenantSeeding {
     fn apply(&self, registry: &AuthRegistry, project: &str) -> Result<(), String> {
         TenantSeeding::apply(self, registry, project)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use fireemu_core_auth::store::{TenantMetadata, TenantMetadataPatch};
+
+    fn registry() -> AuthRegistry {
+        AuthRegistry::new(
+            "demo-app",
+            Arc::new(Mutex::new(AuthStore::new(
+                "demo-app",
+                SplitMix64::new(1),
+                TotpPolicy::default(),
+            ))),
+        )
+    }
+
+    fn seeding() -> TenantSeeding {
+        let documents = [
+            json!({"tenantId": "acme-x7k2q", "displayName": "acme"}),
+            json!({"tenantId": "beta-a1b2c", "displayName": "beta"}),
+        ];
+        TenantSeeding::new(None, prepare_tenant_seeds(&documents, true, None).unwrap())
+    }
+
+    /// An id another request makes between the check and the create is a tenant that is there,
+    /// not a refusal: the other tenants are still made and the declaration reports no error.
+    #[test]
+    fn an_id_made_by_another_request_meanwhile_is_kept_and_the_seed_goes_on() {
+        let registry = registry();
+        let seeding = seeding();
+        let mut raced = false;
+        let result = seeding.apply_with(&registry, "demo-app", &mut |tenant| {
+            if tenant.id() == "acme-x7k2q" {
+                raced = true;
+                assert!(registry
+                    .create_tenant_with_id(
+                        "demo-app",
+                        "acme-x7k2q",
+                        TenantMetadata::default(),
+                        TenantMetadataPatch::default(),
+                        None
+                    )
+                    .is_some());
+            }
+        });
+        assert!(raced);
+        assert_eq!(result, Ok(()));
+        assert!(registry.tenant_store("demo-app", "beta-a1b2c").is_some());
+    }
+
+    /// A refusal that is not "the id is in use" is reported, after every tenant was tried.
+    #[test]
+    fn a_refusal_that_is_not_an_id_in_use_is_reported_and_the_seed_goes_on() {
+        let registry = registry();
+        let seeding = seeding();
+        let unknown = seeding.apply(&registry, "demo-unknown");
+        assert!(unknown.is_err(), "{unknown:?}");
+        // The id's own refusal: an unknown project is not "in use".
+        assert!(seeding.tenants[0]
+            .apply_checked(&registry, "demo-unknown")
+            .is_err_and(|refusal| !refusal.in_use));
+        registry
+            .create_tenant_with_id(
+                "demo-app",
+                "acme-x7k2q",
+                TenantMetadata::default(),
+                TenantMetadataPatch::default(),
+                None,
+            )
+            .unwrap();
+        assert!(seeding.tenants[0]
+            .apply_checked(&registry, "demo-app")
+            .is_err_and(|refusal| refusal.in_use));
     }
 }

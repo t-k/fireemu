@@ -77,6 +77,97 @@ async fn grpc_channel(address: std::net::SocketAddr) -> tonic::transport::Channe
         .unwrap()
 }
 
+#[tokio::test]
+async fn recorded_rest_bootstrap_empty_lists_omit_default_fields() {
+    let address = start().await;
+    for collection in ["topics", "subscriptions"] {
+        let (status, body) = rest_request(
+            address,
+            "GET",
+            &format!("/v1/projects/demo-app/{collection}"),
+            json!({}),
+        )
+        .await;
+        assert_eq!(status, 200);
+        assert_eq!(body, json!({}), "{collection}");
+    }
+}
+
+#[tokio::test]
+async fn recorded_rest_bootstrap_pull_subscription_has_exact_defaults() {
+    let address = start().await;
+    let topic = "projects/demo-app/topics/bootstrap-defaults";
+    let subscription = "projects/demo-app/subscriptions/bootstrap-defaults-sub";
+    let (status, _) = rest_request(address, "PUT", &format!("/v1/{topic}"), json!({})).await;
+    assert_eq!(status, 200);
+    let expected = json!({
+        "name": subscription, "topic": topic, "pushConfig": {}, "ackDeadlineSeconds": 60,
+        "messageRetentionDuration": "604800s", "expirationPolicy": {"ttl": "2678400s"}, "state": "ACTIVE",
+    });
+    let (status, created) = rest_request(
+        address,
+        "PUT",
+        &format!("/v1/{subscription}"),
+        json!({"topic": topic, "ackDeadlineSeconds": 60}),
+    )
+    .await;
+    assert_eq!(status, 200);
+    assert_eq!(created, expected);
+    let (status, fetched) =
+        rest_request(address, "GET", &format!("/v1/{subscription}"), json!({})).await;
+    assert_eq!(status, 200);
+    assert_eq!(fetched, expected);
+    for resource in [subscription, topic] {
+        let (status, deleted) =
+            rest_request(address, "DELETE", &format!("/v1/{resource}"), json!({})).await;
+        assert_eq!(status, 200);
+        assert_eq!(deleted, json!({}));
+        let (status, absent) =
+            rest_request(address, "GET", &format!("/v1/{resource}"), json!({})).await;
+        assert_eq!(status, 404);
+        let leaf = resource.rsplit('/').next().unwrap();
+        assert_eq!(
+            absent,
+            json!({"error": {
+                "code": 404, "message": format!("Resource not found (resource={leaf})."), "status": "NOT_FOUND",
+            }})
+        );
+    }
+    for collection in ["topics", "subscriptions"] {
+        let (status, body) = rest_request(
+            address,
+            "GET",
+            &format!("/v1/projects/demo-app/{collection}"),
+            json!({}),
+        )
+        .await;
+        assert_eq!(status, 200);
+        assert_eq!(body, json!({}));
+    }
+}
+
+#[tokio::test]
+async fn recorded_rest_bootstrap_missing_get_uses_leaf_resource_error() {
+    let address = start().await;
+    for collection in ["topics", "subscriptions"] {
+        let leaf = "bootstrap-never-created";
+        let (status, error) = rest_request(
+            address,
+            "GET",
+            &format!("/v1/projects/demo-app/{collection}/{leaf}"),
+            json!({}),
+        )
+        .await;
+        assert_eq!(status, 404);
+        assert_eq!(
+            error,
+            json!({"error": {
+                "code": 404, "message": format!("Resource not found (resource={leaf})."), "status": "NOT_FOUND",
+            }})
+        );
+    }
+}
+
 async fn assert_subscription_values(
     address: std::net::SocketAddr,
     path: &str,
@@ -383,8 +474,10 @@ async fn a_rejected_rest_subscription_update_keeps_the_previous_configuration() 
     )
     .await;
     assert_eq!(status, 200);
-    assert_eq!(after["ackDeadlineSeconds"], 10);
-    assert!(after.get("pushConfig").is_none());
+    assert_eq!(
+        after, created,
+        "a rejected update must preserve every field"
+    );
 }
 
 #[tokio::test]
@@ -798,7 +891,7 @@ async fn rest_and_grpc_masks_reset_ack_deadline_and_push_config_to_defaults() {
     .await;
     assert_eq!(status, 200, "{reset}");
     assert_eq!(reset["ackDeadlineSeconds"], 10);
-    assert!(reset.get("pushConfig").is_none());
+    assert_eq!(reset["pushConfig"], json!({}));
 
     let mut subscriber = SubscriberClient::new(grpc_channel(address).await);
     let reset = subscriber
@@ -1093,8 +1186,8 @@ async fn both_transports_refuse_every_declared_but_unsupported_subscription_opti
     .await;
     assert_eq!(status, 200);
     assert_eq!(
-        listed["subscriptions"].as_array().unwrap().len(),
-        0,
+        listed,
+        json!({}),
         "a refused option must not leave a listed subscription: {listed}"
     );
 }
@@ -1405,17 +1498,23 @@ async fn assert_subscription_matrix(
         "{id}"
     );
     assert_eq!(from_get["retryPolicy"]["minimumBackoff"], "1.500s", "{id}");
+    // The proto defines mode-independent policy defaults and output-only ACTIVE state.
+    // These fixed REST metadata values do not enable unsupported mutation inputs.
+    assert_eq!(from_get["messageRetentionDuration"], "604800s", "{id}");
+    assert_eq!(
+        from_get["expirationPolicy"],
+        json!({"ttl": "2678400s"}),
+        "{id}"
+    );
+    assert_eq!(from_get["state"], "ACTIVE", "{id}");
     for unsupported in [
         "bigqueryConfig",
         "cloudStorageConfig",
         "bigtableConfig",
         "retainAckedMessages",
-        "messageRetentionDuration",
         "labels",
-        "expirationPolicy",
         "detached",
         "enableExactlyOnceDelivery",
-        "state",
     ] {
         assert!(
             from_get.get(unsupported).is_none(),

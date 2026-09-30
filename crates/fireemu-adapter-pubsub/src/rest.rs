@@ -86,6 +86,14 @@ impl RestError {
             message: error.message().to_owned(),
         }
     }
+
+    fn from_resource_get(error: PubSubError, leaf: &str) -> Self {
+        if error.code() == Code::NotFound {
+            Self::not_found(format!("Resource not found (resource={leaf})."))
+        } else {
+            Self::from_core(error)
+        }
+    }
 }
 
 /// Handles one HTTP/JSON request that was not matched by a gRPC service route.
@@ -97,7 +105,7 @@ pub(crate) async fn handle(request: Request<Body>, handle: PubSubHandle) -> Resp
         Err(error) => {
             return error_response(RestError::invalid(format!(
                 "request body is too large: {error}"
-            )))
+            )));
         }
     };
     let value = if body.is_empty() {
@@ -108,7 +116,7 @@ pub(crate) async fn handle(request: Request<Body>, handle: PubSubHandle) -> Resp
             Err(error) => {
                 return error_response(RestError::invalid(format!(
                     "request body is not JSON: {error}"
-                )))
+                )));
             }
         }
     };
@@ -166,6 +174,9 @@ fn dispatch_topic(
                 topic_json(&name, &labels)
             })
             .collect::<Vec<_>>();
+        if topics.is_empty() {
+            return Ok((StatusCode::OK, json!({})));
+        }
         return Ok((
             StatusCode::OK,
             json!({"topics": topics, "nextPageToken": ""}),
@@ -200,7 +211,7 @@ fn dispatch_topic(
             let labels = state
                 .topic_labels(&topic)
                 .cloned()
-                .map_err(RestError::from_core)?;
+                .map_err(|error| RestError::from_resource_get(error, topic.topic()))?;
             Ok((StatusCode::OK, topic_json(&topic, &labels)))
         }
         (&Method::DELETE, None) => {
@@ -253,6 +264,9 @@ fn dispatch_subscription(
             .into_iter()
             .map(|config| subscription_json(&state, &config))
             .collect::<Vec<_>>();
+        if subscriptions.is_empty() {
+            return Ok((StatusCode::OK, json!({})));
+        }
         return Ok((
             StatusCode::OK,
             json!({"subscriptions": subscriptions, "nextPageToken": ""}),
@@ -494,7 +508,7 @@ fn get_subscription(
     let state = handle.state();
     let config = state
         .subscription_config(&subscription)
-        .map_err(RestError::from_core)?;
+        .map_err(|error| RestError::from_resource_get(error, subscription.subscription()))?;
     Ok((StatusCode::OK, subscription_json(&state, config)))
 }
 
@@ -750,7 +764,7 @@ fn seek(
 ) -> Result<(StatusCode, Value), RestError> {
     match (field(body, "snapshot"), field(body, "time")) {
         (Some(_), Some(_)) => {
-            return Err(RestError::invalid("seek takes either a time or a snapshot"))
+            return Err(RestError::invalid("seek takes either a time or a snapshot"));
         }
         (Some(snapshot), None) => {
             let snapshot = snapshot
@@ -1010,8 +1024,14 @@ fn subscription_json(state: &PubSubState, config: &SubscriptionConfig) -> Value 
         "name": config.name.to_full(),
         "topic": topic,
         "ackDeadlineSeconds": config.ack_deadline_seconds,
-        "enableMessageOrdering": config.enable_message_ordering,
+        "pushConfig": {},
+        "messageRetentionDuration": "604800s",
+        "expirationPolicy": {"ttl": "2678400s"},
+        "state": "ACTIVE",
     });
+    if config.enable_message_ordering {
+        value["enableMessageOrdering"] = json!(true);
+    }
     if !config.push_config.push_endpoint.is_empty() {
         value["pushConfig"] = json!({"pushEndpoint": config.push_config.push_endpoint});
     }

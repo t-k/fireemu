@@ -3314,13 +3314,344 @@ fn request_project(
     }
 }
 
+/// Whether the official emulator serves `handler` through its own operations, which name the
+/// tenant they run in and make it. The tenant IdP-config routes and `tenants:create` are not among
+/// them: the official emulator answers the first with a stub (`501`) and its `tenants.create`
+/// ignores the tenant a body names.
+fn handler_makes_named_tenant(handler: routes::Handler) -> bool {
+    !matches!(
+        handler,
+        routes::Handler::TenantCreate
+            | routes::Handler::ProviderCreate
+            | routes::Handler::ProviderList
+            | routes::Handler::ProviderGet
+            | routes::Handler::ProviderUpdate
+            | routes::Handler::ProviderDelete
+    )
+}
+
+/// A request's `tenantId` when a number stands in the string the API declares: the official
+/// emulator's body validation reads `7` as `"7"` (`validateAndFixRestMappingRequestBody`), so
+/// the request goes on with the string. `None` when the body needs no rewriting (emulator
+/// profile only).
+fn emulator_numeric_tenant_id(state: &AuthState, body: &Value) -> Option<Value> {
+    if !state.stateless_refresh_tokens {
+        return None;
+    }
+    let Some(Value::Number(number)) = body.get("tenantId") else {
+        return None;
+    };
+    let mut rewritten = body.clone();
+    rewritten["tenantId"] = Value::String(number.to_string());
+    Some(rewritten)
+}
+
+/// The project an API key selects: `Ok(None)` when no project owns it and the daemon takes it
+/// for the default project's (a single-namespace daemon, or the default project's own key), and
+/// the refusal a key that belongs to no project earns when projects are registered.
+fn api_key_project(
+    state: &AuthState,
+    key: &str,
+    service: &str,
+) -> Result<Option<String>, JsonResponse> {
+    // A registry without a tenancy selector is the single-namespace adapter/test
+    // configuration. It has no API-key ownership map to consult, so retain the historical
+    // default-store behavior for compatibility keys such as the emulator's fake key.
+    let Some(tenancy) = state.tenancy.as_ref() else {
+        return Ok(None);
+    };
+    let Ok(tenancy) = tenancy.read() else {
+        return Err(error(500, "INTERNAL"));
+    };
+    match tenancy.project_of_api_key(key).map(str::to_owned) {
+        Some(project) => Ok(Some(project)),
+        None if tenancy.registered().is_empty() || tenancy.is_default_api_key(key) => Ok(None),
+        // An explicit API-key selector is an assertion about the target project. Never silently
+        // route an unknown key to the default namespace.
+        None => Err(invalid_api_key(service)),
+    }
+}
+
+/// Whether the query names `parameter` with a value.
+fn query_has(query: Option<&str>, parameter: &str) -> bool {
+    query.unwrap_or("").split('&').any(|kv| {
+        kv.split_once('=').is_some_and(|(name, value)| {
+            !value.is_empty()
+                && fireemu_core_types::codec::percent_decode(
+                    name,
+                    fireemu_core_types::codec::PlusMode::Space,
+                ) == parameter
+        })
+    })
+}
+
+/// The request that may make a tenant, and what the refusals that come before it need.
+struct TenantCreation<'a> {
+    method: &'a str,
+    path: &'a str,
+    query: Option<&'a str>,
+    headers: &'a RequestHeaders,
+    api_key: bool,
+    at: LogicalInstant,
+    /// The project App Check admitted the request for here, so the pipeline does not admit (and
+    /// observe) it again for that project; a request served from another project's store is
+    /// admitted for that one.
+    app_check_admitted: std::cell::RefCell<Option<String>>,
+}
+
+/// What a request's refresh token says about its tenant.
+enum RefreshTokenTenant {
+    Undecodable,
+    NoTenant,
+    Tenant(String),
+}
+
+/// The tenant an ID token names in its `firebase.tenant` claim, and whether the token is one of
+/// `project` that this daemon can verify. Another project's token is refused by its audience and
+/// a token this daemon cannot verify (another key, another algorithm, a production token) is
+/// refused as invalid, so neither is ever the target here; but the official emulator reads the
+/// claim without verifying and asserts it against the path's or the body's tenant before it looks
+/// a tenant up, so it still has to agree with them.
+fn id_token_tenant(state: &AuthState, project: &str, body: &Value) -> Option<(String, bool)> {
+    let token = str_field(body, "idToken")?;
+    let signer = state.store.lock().ok().and_then(|s| s.signer_arc());
+    let Ok(decoded) = fireemu_core_auth::jwt::decode_token(token, signer.as_deref()) else {
+        // Unverified: only the tenant claim, only for the agreement, never the target.
+        return fireemu_core_auth::jwt::unverified_tenant_claim(token)
+            .map(|tenant| (tenant, false));
+    };
+    let payload = &decoded.payload;
+    let audience = payload
+        .get("aud")
+        .and_then(fireemu_core_types::json::JsonValue::as_str);
+    // An empty claim is no tenant (falsy in the official emulator's check).
+    let tenant = payload
+        .get("firebase")
+        .and_then(|firebase| firebase.get("tenant"))
+        .and_then(fireemu_core_types::json::JsonValue::as_str)
+        .filter(|tenant| !tenant.is_empty())?;
+    Some((tenant.to_owned(), audience == Some(project)))
+}
+
+/// The tenant the query names, for the two routes the official emulator reads it on:
+/// `accounts:batchGet` and the action link (which needs its `apiKey` and `oobCode` to get as far
+/// as looking a tenant up).
+fn query_tenant_of(handler: routes::Handler, query: Option<&str>) -> Option<String> {
+    let reads_the_query = match handler {
+        routes::Handler::AdminBatchGet => true,
+        routes::Handler::EmulatorAction => {
+            query_has(query, "apiKey") && query_has(query, "oobCode")
+        }
+        _ => false,
+    };
+    reads_the_query
+        .then(|| query_selectors(query).ok().and_then(|(_, tenant)| tenant))
+        .flatten()
+}
+
+/// The refusal a refresh token earns before a tenant is looked up: `INVALID_REFRESH_TOKEN` for
+/// one that does not decode, and `TENANT_ID_MISMATCH` for one of another tenant than `target`.
+fn refresh_token_refusal(
+    refresh_tenant: Option<&RefreshTokenTenant>,
+    target: &str,
+) -> Option<JsonResponse> {
+    match refresh_tenant {
+        Some(RefreshTokenTenant::Undecodable) => Some(error(400, "INVALID_REFRESH_TOKEN")),
+        Some(RefreshTokenTenant::Tenant(tenant)) if tenant != target => Some(error(
+            400,
+            "TENANT_ID_MISMATCH: ((Refresh token tenant ID does not match target tenant ID.))",
+        )),
+        _ => None,
+    }
+}
+
+/// Whether the request is one this daemon serves, or its refusal: its own refusals come before
+/// anything is made, in the order a request for an existing tenant meets them. `Ok(false)`: an
+/// API key no project owns, which makes nothing and goes on to meet its own refusal when the
+/// store is selected, after the request's other readings of its tenant.
+fn admit_request(
+    state: &AuthState,
+    request: &TenantCreation<'_>,
+    route: &routes::Route,
+    route_project: Option<&str>,
+    project: &str,
+    parent: &Arc<Mutex<AuthStore>>,
+) -> Result<bool, JsonResponse> {
+    if routes::scoped_target(request.path).is_none() {
+        if let Some(key) = query_selectors(request.query).ok().and_then(|(key, _)| key) {
+            if api_key_project(state, &key, "identitytoolkit.googleapis.com").is_err() {
+                return Ok(false);
+            }
+        }
+    }
+    if let Some(denial) =
+        app_check_denial(state, request.path, request.headers, project, request.at)
+    {
+        return Err(denial);
+    }
+    *request.app_check_admitted.borrow_mut() = Some(project.to_owned());
+    let Ok(parent) = parent.lock() else {
+        return Err(error(500, "INTERNAL"));
+    };
+    privilege_check(
+        state,
+        route.class,
+        route_project,
+        request.headers,
+        request.method,
+        request.api_key,
+        &parent,
+    )?;
+    Ok(true)
+}
+
+/// The tenant the official Auth emulator creates on the way (emulator profile; firebase-tools
+/// 15.28.2). Every operation reads its target tenant from the path, else the body's `tenantId`,
+/// else the ID token's `firebase.tenant`, else the tenant of the body's refresh token; `accounts:batchGet`
+/// and the action link also read it from the query. The emulator's `getProjectStateById` then
+/// creates the tenant if the project has none by that name (`getTenantProject`), with
+/// `allowPasswordSignup`, `enableAnonymousUser` and `enableEmailLinkSignin` on, `disableAuth` off
+/// and multi-factor on for `PHONE_SMS`. The request then goes on as it would for an existing,
+/// empty tenant: an account call finds no user, a tenant document read answers the defaults, a
+/// delete removes what was made. The tenant is made in the request's project.
+///
+/// Only a request that would otherwise be served makes a tenant. The refusals of this daemon come
+/// first: the credential and control-token guards of the privileged routes and App Check refuse
+/// the request, which makes nothing (the official emulator answers an unauthorised request before
+/// it looks a tenant up), and an API key no project owns makes nothing and meets its own refusal
+/// when the store is selected.
+///
+/// A path tenant and a body or token tenant that differ, an empty or boolean-, object- or
+/// array-valued `tenantId`, and a tenant a route does not serve (`handler_makes_named_tenant`)
+/// name no tenant to create. A token of another project, or one this daemon cannot verify, is
+/// never the target, but its tenant has to agree with the path's and the body's: a request it
+/// disagrees with is `TENANT_ID_MISMATCH` (after the guards), and makes nothing. A refresh token that does not decode is `INVALID_REFRESH_TOKEN`, and one of
+/// another tenant than the target `TENANT_ID_MISMATCH`, both before any tenant is made. The strict
+/// profile never creates one: production refuses.
+fn emulator_creates_named_tenant(
+    state: &AuthState,
+    request: &TenantCreation<'_>,
+    body: &Value,
+    resolution: routes::Resolution<'_>,
+) -> Result<Option<String>, JsonResponse> {
+    if !state.stateless_refresh_tokens {
+        return Ok(None);
+    }
+    let (
+        Some(registry),
+        routes::Resolution::Matched {
+            route,
+            project: route_project,
+            ..
+        },
+    ) = (state.registry.as_ref(), resolution)
+    else {
+        return Ok(None);
+    };
+    if !handler_makes_named_tenant(route.handler) {
+        return Ok(None);
+    }
+    let (path, query) = (request.path, request.query);
+    let project = request_project(state, path, query)?;
+    // A request the daemon serves from another project's store than its own project (chosen by
+    // the store selection itself, not by a copy of its rules) makes nothing here and is admitted
+    // by App Check for the project it is served from, by the pipeline. A selection that fails
+    // (a tenant not made yet) or lands in this project goes on.
+    if let Ok(store) = select_store(state, path, query, body, resolution) {
+        if store
+            .lock()
+            .is_ok_and(|store| store.project_id() != project)
+        {
+            return Ok(None);
+        }
+    }
+    let path_tenant = routes::scoped_target(path).and_then(|(_, tenant)| tenant);
+    let body_tenant = match body.get("tenantId") {
+        Some(Value::String(named)) if !named.is_empty() => Some(named.as_str()),
+        None | Some(Value::Null | Value::String(_)) => None,
+        _ => return Ok(None),
+    };
+    let (token_tenant, token_of_project) = match id_token_tenant(state, &project, body) {
+        Some((tenant, of_project)) => (Some(tenant), of_project),
+        None => (None, true),
+    };
+    // The refresh token is the fourth source.
+    let refresh_tenant = str_field(body, "refresh_token")
+        .or_else(|| str_field(body, "refreshToken"))
+        .filter(|token| !token.is_empty())
+        .map(|token| {
+            match fireemu_core_auth::store::AuthRegistry::decode_refresh_token_tenant(token) {
+                None => RefreshTokenTenant::Undecodable,
+                Some(None) => RefreshTokenTenant::NoTenant,
+                Some(Some(tenant)) => RefreshTokenTenant::Tenant(tenant),
+            }
+        });
+    let query_tenant = query_tenant_of(route.handler, query);
+    // The named tenants must agree, as the emulator asserts before it looks the tenant up.
+    let mut named = [path_tenant, body_tenant, token_tenant.as_deref()]
+        .into_iter()
+        .flatten();
+    let target = match named.next() {
+        Some(target) => {
+            if named.any(|other| other != target) {
+                // The official emulator asserts the token's tenant against the path's or the
+                // body's before it looks a tenant up. The answer is given only to a request
+                // this daemon admits; the other disagreements meet their own checks later.
+                if token_tenant.is_some() && !token_of_project {
+                    let Some(parent) = registry.store_for(&project) else {
+                        return Ok(None);
+                    };
+                    return if admit_request(
+                        state,
+                        request,
+                        route,
+                        route_project,
+                        &project,
+                        &parent,
+                    )? {
+                        Err(error(400, "TENANT_ID_MISMATCH"))
+                    } else {
+                        Ok(None)
+                    };
+                }
+                return Ok(None);
+            }
+            // A token of another project only takes part in the agreement.
+            if path_tenant.is_none() && body_tenant.is_none() && !token_of_project {
+                return Ok(None);
+            }
+            target.to_owned()
+        }
+        None => match (&refresh_tenant, query_tenant) {
+            (Some(RefreshTokenTenant::Tenant(tenant)), _) => tenant.clone(),
+            (_, Some(tenant)) => tenant,
+            _ => return Ok(None),
+        },
+    };
+    if registry.tenant_store(&project, &target).is_some() {
+        return Ok(None);
+    }
+    let Some(parent) = registry.store_for(&project) else {
+        return Ok(None);
+    };
+    if let Some(refusal) = refresh_token_refusal(refresh_tenant.as_ref(), &target) {
+        return Err(refusal);
+    }
+    if !admit_request(state, request, route, route_project, &project, &parent)? {
+        return Ok(None);
+    }
+    Ok(registry
+        .ensure_tenant_with(&project, &target, tenant_document::install_default_mfa)
+        .map(|_| target))
+}
+
 /// The tenant an account request's ID token names, answered as the official Auth emulator
 /// answers it (emulator profile; firebase-tools 15.28.2). The emulator takes the target tenant
 /// from the path, else from the body, else from the ID token (`toExegesisOperation`): a path or
 /// body tenant other than the token's is `TENANT_ID_MISMATCH`, and a target tenant that no
 /// longer exists (or never did) finds no user there (`parseIdToken`: `USER_NOT_FOUND`), whatever
-/// the API key or a query tenant say. Unlike the emulator, which creates the missing tenant on
-/// the way, fireemu creates nothing. A token of another project, a signed token that does not
+/// the API key or a query tenant say (`emulator_creates_named_tenant` has made the tenant by
+/// then, so a deleted tenant's token finds no user in a tenant that exists again). A token of another project, a signed token that does not
 /// decode, a `tenantId` that is not a string, and a request without an ID token keep their
 /// current answer.
 ///
@@ -3331,6 +3662,7 @@ fn emulator_named_tenant(
     path: &str,
     query: Option<&str>,
     body: &Value,
+    made_on_the_way: Option<&str>,
 ) -> Result<Option<Value>, JsonResponse> {
     if !state.stateless_refresh_tokens {
         return Ok(None);
@@ -3357,6 +3689,7 @@ fn emulator_named_tenant(
             .get("firebase")
             .and_then(|firebase| firebase.get("tenant"))
             .and_then(fireemu_core_types::json::JsonValue::as_str)
+            .filter(|tenant| !tenant.is_empty())
             .map(str::to_owned);
         Some((audience, tenant))
     }) else {
@@ -3396,7 +3729,8 @@ fn emulator_named_tenant(
         }
         (None, None) => token_tenant.as_str(),
     };
-    if registry.tenant_store(&project, target).is_none() {
+    // A tenant this request made on the way is empty: the token's user is not in it.
+    if made_on_the_way == Some(target) || registry.tenant_store(&project, target).is_none() {
         return Err(error(400, "USER_NOT_FOUND"));
     }
     Ok(rewritten)
@@ -3624,9 +3958,33 @@ fn handle_with_policy_inner(
         Ok(None) => body,
         Err(response) => return response,
     };
+    // The official emulator makes a tenant it has not seen when a request names one.
+    let numeric_tenant_body;
+    let body = match emulator_numeric_tenant_id(state, body) {
+        Some(rewritten) => {
+            numeric_tenant_body = rewritten;
+            &numeric_tenant_body
+        }
+        None => body,
+    };
+    let creation = TenantCreation {
+        method,
+        path,
+        query,
+        headers,
+        api_key,
+        at,
+        app_check_admitted: std::cell::RefCell::new(None),
+    };
+    let made_on_the_way = match emulator_creates_named_tenant(state, &creation, body, resolution) {
+        Ok(made) => made,
+        Err(response) => return response,
+    };
+    // A request the tenant admission let through was admitted by App Check there; it is observed once.
+    let app_check_admitted = creation.app_check_admitted.take();
     // The official emulator's reading of an ID token's tenant (emulator profile).
     let emulator_tenant_body;
-    let body = match emulator_named_tenant(state, path, query, body) {
+    let body = match emulator_named_tenant(state, path, query, body, made_on_the_way.as_deref()) {
         Ok(Some(rewritten)) => {
             emulator_tenant_body = rewritten;
             &emulator_tenant_body
@@ -3926,8 +4284,10 @@ fn handle_with_policy_inner(
     // (spec 7.4 and 13.3). Locking the store is not a state transition, so a denial here
     // still leaves no user, no issued or rotated credential, no consumed OOB or phone code,
     // no MFA change and no abuse counter behind.
-    if let Some(denial) = app_check_denial(state, path, headers, store.project_id(), at) {
-        return denial;
+    if app_check_admitted.as_deref() != Some(store.project_id()) {
+        if let Some(denial) = app_check_denial(state, path, headers, store.project_id(), at) {
+            return denial;
+        }
     }
     // The privilege class is decided by the path alone, so a wrong-method request to a
     // privileged path is refused for its missing credential before it is refused for its
@@ -8739,29 +9099,15 @@ fn select_store(
         // A registry without a tenancy selector is the single-namespace adapter/test
         // configuration. It has no API-key ownership map to consult, so retain the historical
         // default-store behavior for compatibility keys such as the emulator's fake key.
-        let selected_project = match state.tenancy.as_ref() {
-            None => None,
-            Some(tenancy) => {
-                let Ok(tenancy) = tenancy.read() else {
-                    return Err(error(500, "INTERNAL"));
-                };
-                match tenancy.project_of_api_key(key).map(str::to_owned) {
-                    Some(project) => Some(project),
-                    None if tenancy.registered().is_empty() || tenancy.is_default_api_key(key) => {
-                        None
-                    }
-                    None => {
-                        // An explicit API-key selector is an assertion about the target
-                        // project. Never silently route an unknown key to the default namespace.
-                        return Err(invalid_api_key(if exchanges_refresh_token {
-                            "securetoken.googleapis.com"
-                        } else {
-                            "identitytoolkit.googleapis.com"
-                        }));
-                    }
-                }
-            }
-        };
+        let selected_project = api_key_project(
+            state,
+            key,
+            if exchanges_refresh_token {
+                "securetoken.googleapis.com"
+            } else {
+                "identitytoolkit.googleapis.com"
+            },
+        )?;
         if let Some(tenant) = requested_tenant {
             let project = selected_project
                 .as_deref()

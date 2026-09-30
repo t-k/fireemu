@@ -352,6 +352,40 @@ pub fn decode_unsigned(token: &str) -> Result<DecodedToken, JwtError> {
     decode_token(token, None)
 }
 
+/// The `firebase.tenant` claim of a token read as it stands, WITHOUT checking its algorithm or
+/// signature: the way the official emulator reads an ID token's tenant before it looks the tenant
+/// up (`jsonwebtoken.decode`). The value is unverified: never use it for authentication,
+/// identity, store or tenant selection or authorization. It is only for a check that can make a
+/// request refuse (the agreement with the tenant a request names), and nothing else of the token
+/// is returned. `None` when the token does not parse, has no string tenant claim, or the claim is
+/// empty (falsy in the official emulator's check).
+#[must_use]
+pub fn unverified_tenant_claim(token: &str) -> Option<String> {
+    let parts: Vec<&str> = token.split('.').collect();
+    let [header_b64, payload, signature] = parts.as_slice() else {
+        return None;
+    };
+    // The official decoder reads nothing unless the whole token matches its JWS pattern, whose
+    // signature segment is empty or base64url.
+    if !signature
+        .bytes()
+        .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+    {
+        return None;
+    }
+    let header = String::from_utf8(base64url_decode(header_b64).ok()?).ok()?;
+    if !matches!(parse(&header), Ok(JsonValue::Object(_))) {
+        return None;
+    }
+    let payload_json = String::from_utf8(base64url_decode(payload).ok()?).ok()?;
+    let claims = parse(&payload_json).ok()?;
+    let tenant = claims
+        .get("firebase")
+        .and_then(|firebase| firebase.get("tenant"))
+        .and_then(JsonValue::as_str)?;
+    (!tenant.is_empty()).then(|| tenant.to_owned())
+}
+
 /// Decodes a token and checks its signature: with a `signer` the token must carry the
 /// signer's algorithm and a valid signature (an unsigned token is refused, so a session
 /// issuing RS256 tokens never accepts forged `alg: none` ones); without one only `alg: none`

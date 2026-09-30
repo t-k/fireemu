@@ -1937,8 +1937,14 @@ fn deleting_a_tenant_invalidates_its_credentials_and_leaves_the_sibling_and_proj
             &format!("{ADMIN_V2}/tenants/{TENANT_A}"),
             &json!({}),
         );
-        assert_eq!(status, 404, "{profile}: {again}");
-        assert_eq!(class(&again), "TENANT_NOT_FOUND");
+        if profile == "emulator" {
+            // The official emulator makes the tenant on the way and then deletes it: a delete
+            // never answers that a tenant is missing.
+            assert_eq!(status, 200, "{profile}: {again}");
+        } else {
+            assert_eq!(status, 404, "{profile}: {again}");
+            assert_eq!(class(&again), "TENANT_NOT_FOUND");
+        }
 
         // The store, metadata, listing, provider configs and Admin routes are gone.
         assert!(
@@ -1967,8 +1973,15 @@ fn deleting_a_tenant_invalidates_its_credentials_and_leaves_the_sibling_and_proj
             &format!("{ADMIN_V2}/tenants/{TENANT_A}"),
             &json!({}),
         );
-        assert_eq!(status, 404, "{profile}: {missing}");
-        assert_eq!(class(&missing), "TENANT_NOT_FOUND");
+        if profile == "emulator" {
+            // The official emulator makes a tenant a request names on the way: the read answers
+            // the defaults, and the tenant is not the deleted one (it holds none of its data).
+            assert_eq!(status, 200, "{profile}: {missing}");
+            assert!(registry.delete_tenant("demo-app", TENANT_A));
+        } else {
+            assert_eq!(status, 404, "{profile}: {missing}");
+            assert_eq!(class(&missing), "TENANT_NOT_FOUND");
+        }
         let (status, missing) = admin(
             &state,
             "GET",
@@ -1976,6 +1989,7 @@ fn deleting_a_tenant_invalidates_its_credentials_and_leaves_the_sibling_and_proj
             &json!({}),
         );
         assert_eq!(status, 404, "{profile}: {missing}");
+        registry.delete_tenant("demo-app", TENANT_A);
         let (status, missing) = admin(
             &state,
             "GET",
@@ -1988,8 +2002,10 @@ fn deleting_a_tenant_invalidates_its_credentials_and_leaves_the_sibling_and_proj
             assert_eq!(status, 400, "{profile}: {missing}");
             assert_eq!(class(&missing), "TENANT_DELETED");
         } else {
-            assert_eq!(status, 404, "{profile}: {missing}");
-            assert_eq!(class(&missing), "TENANT_NOT_FOUND");
+            // Made on the way, empty: no account of the deleted tenant is in it.
+            assert_eq!(status, 200, "{profile}: {missing}");
+            assert!(missing.get("users").is_none(), "{profile}: {missing}");
+            registry.delete_tenant("demo-app", TENANT_A);
         }
 
         // Issued credentials of the deleted tenant no longer authenticate anywhere. An
@@ -1999,31 +2015,37 @@ fn deleting_a_tenant_invalidates_its_credentials_and_leaves_the_sibling_and_proj
         // `toExegesisController`, `parseIdToken`). A refresh keeps its selector's class. Every
         // shape is a refusal without fallback.
         for (selector, lookup_status, lookup_class, refresh_status, refresh_class) in [
+            // A request naming the tenant in its body makes it on the way (the official
+            // emulator's `getProjectStateById`), so its refresh finds an empty tenant and no such
+            // token. A tenant named only in the query is not read as a target, but the refresh
+            // token names the tenant, which is the fourth source of the target and is made too.
             (
                 Selector::KeyAndBody,
                 400,
                 "USER_NOT_FOUND",
-                404,
-                "TENANT_NOT_FOUND",
+                400,
+                "INVALID_REFRESH_TOKEN",
             ),
             (
                 Selector::BodyOnly,
                 400,
                 "USER_NOT_FOUND",
                 400,
-                "TENANT_NOT_FOUND",
+                "INVALID_REFRESH_TOKEN",
             ),
             (
                 Selector::QueryOnly,
                 400,
                 "USER_NOT_FOUND",
-                404,
-                "TENANT_NOT_FOUND",
+                400,
+                "INVALID_REFRESH_TOKEN",
             ),
         ]
         .into_iter()
         .filter(|row| Selector::admitted(&state).contains(&row.0))
         {
+            // Each shape meets the tenant deleted afresh (the emulator profile makes it again).
+            registry.delete_tenant("demo-app", TENANT_A);
             // Strict answers a deleted tenant as production does (AUTH-TENANT-BLOCKING
             // recording 2026-09-27, deletion#lookup-after-delete, refresh-after-delete).
             let (lookup_status, lookup_class, refresh_status, refresh_class) =
@@ -2047,6 +2069,8 @@ fn deleting_a_tenant_invalidates_its_credentials_and_leaves_the_sibling_and_proj
                 lookup_class,
                 "{profile} lookup {selector:?}: {refused}"
             );
+            // The lookup's token made the tenant on the way; the refresh meets it deleted afresh.
+            registry.delete_tenant("demo-app", TENANT_A);
             let (status, refused) = selector.request(
                 &state,
                 SECURE_TOKEN,

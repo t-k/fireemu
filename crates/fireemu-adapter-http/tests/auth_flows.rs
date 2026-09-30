@@ -3434,34 +3434,44 @@ fn tenant_manager_crud_lists_and_removes_explicit_tenants() {
     let listed = handle_with(&s, "GET", &collection, &owner(), &json!({}));
     // Production answers an empty list as `{}` (AUTH-TENANT-BLOCKING recording 2026-09-27).
     assert!(listed.body.get("tenants").is_none(), "{}", listed.body);
+    // The official emulator makes a tenant it has not seen when a request names it, and answers
+    // it with the defaults (`getTenantProject`).
     let implicit = handle_with(&s, "GET", &item, &owner(), &json!({}));
-    assert_eq!(implicit.status, 404, "{}", implicit.body);
-    assert_eq!(implicit.body["error"]["message"], "TENANT_NOT_FOUND");
+    assert_eq!(implicit.status, 200, "{}", implicit.body);
+    assert_eq!(implicit.body["allowPasswordSignup"], true);
+    assert_eq!(implicit.body["enableAnonymousUser"], true);
+    assert_eq!(implicit.body["enableEmailLinkSignin"], true);
 }
 
+/// The emulator profile makes an unknown tenant on the way, as the official emulator does, for a
+/// client request and an Admin request alike (`getProjectStateById`).
 #[test]
-fn untrusted_requests_cannot_create_or_use_an_unknown_tenant() {
+fn requests_naming_an_unknown_tenant_make_it_on_the_way() {
     use fireemu_core_auth::store::AuthRegistry;
 
     let mut s = state();
     let registry = Arc::new(AuthRegistry::new("demo-app", s.store.clone()));
     s.registry = Some(registry.clone());
 
-    let (status, refused) = post(
+    let (status, made) = post(
         &s,
         &format!("{V1}/accounts:signUp"),
-        &json!({"tenantId": "attacker", "email": "a@example.com", "password": "hunter22"}),
+        &json!({"tenantId": "made-one", "email": "a@example.com", "password": "hunter22"}),
     );
-    assert_eq!(status, 400, "{refused}");
-    assert!(registry.tenant_store("demo-app", "attacker").is_none());
+    assert_eq!(status, 200, "{made}");
+    assert!(registry.tenant_store("demo-app", "made-one").is_some());
 
-    let (status, refused) = admin(
+    let (status, made) = admin(
         &s,
-        &format!("{V1}/projects/demo-app/tenants/attacker/accounts"),
-        &json!({"localId": "u1", "email": "a@example.com"}),
+        &format!("{V1}/projects/demo-app/tenants/made-two/accounts"),
+        &json!({"localId": "u1", "email": "b@example.com"}),
     );
-    assert_eq!(status, 404, "{refused}");
-    assert!(registry.tenant_store("demo-app", "attacker").is_none());
+    assert_eq!(status, 200, "{made}");
+    assert!(registry.tenant_store("demo-app", "made-two").is_some());
+    // The tenants are separate namespaces: the project holds neither user.
+    let store = s.store.lock().unwrap();
+    assert!(store.user_by_email("a@example.com").is_none());
+    assert!(store.user_by_email("b@example.com").is_none());
 }
 
 #[test]

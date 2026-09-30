@@ -282,3 +282,79 @@ fn a_removed_tenants_token_names_a_tenant_and_is_checked_against_its_project() {
         Err(JwtError::WrongTenant { .. })
     ));
 }
+
+#[test]
+fn the_tenant_claim_is_read_without_checking_the_algorithm_or_the_signature() {
+    use fireemu_core_auth::jwt::{base64url_encode, unverified_tenant_claim};
+    let token = |header: &str, payload: &str, signature: &str| {
+        format!(
+            "{}.{}.{signature}",
+            base64url_encode(header.as_bytes()),
+            base64url_encode(payload.as_bytes())
+        )
+    };
+    let claims = |firebase: &str| format!(r#"{{"aud":"demo-app","firebase":{firebase}}}"#);
+    assert_eq!(
+        unverified_tenant_claim(&token(
+            r#"{"alg":"RS256","kid":"other"}"#,
+            &claims(r#"{"tenant":"t-x"}"#),
+            "c2ln"
+        )),
+        Some("t-x".to_owned())
+    );
+    // The whole base64url alphabet is allowed in the signature segment.
+    for signature in ["a-b", "a_b", "-", "_", "AZaz09-_"] {
+        assert_eq!(
+            unverified_tenant_claim(&token("{}", &claims(r#"{"tenant":"t-s"}"#), signature)),
+            Some("t-s".to_owned()),
+            "{signature}"
+        );
+    }
+    // An empty signature segment is allowed by the pattern.
+    assert_eq!(
+        unverified_tenant_claim(&token("{}", &claims(r#"{"tenant":"t-e"}"#), "")),
+        Some("t-e".to_owned())
+    );
+    for (name, bad) in [
+        ("no firebase claim", token("{}", r#"{"aud":"a"}"#, "s")),
+        ("no tenant", token("{}", &claims("{}"), "s")),
+        (
+            "an empty tenant",
+            token("{}", &claims(r#"{"tenant":""}"#), "s"),
+        ),
+        ("a number", token("{}", &claims(r#"{"tenant":5}"#), "s")),
+        ("an object", token("{}", &claims(r#"{"tenant":{}}"#), "s")),
+        ("two parts", "a.b".to_owned()),
+        (
+            "four parts",
+            format!("{}.x", token("{}", &claims(r#"{"tenant":"t"}"#), "s")),
+        ),
+        ("one part", "abc".to_owned()),
+        (
+            "a signature with a bang",
+            token("{}", &claims(r#"{"tenant":"t"}"#), "c2ln!"),
+        ),
+        (
+            "a signature with a plus",
+            token("{}", &claims(r#"{"tenant":"t"}"#), "c2ln+/=="),
+        ),
+        (
+            "a signature with a space",
+            token("{}", &claims(r#"{"tenant":"t"}"#), "a b"),
+        ),
+        ("empty", String::new()),
+        (
+            "header not json",
+            token("nope", &claims(r#"{"tenant":"t"}"#), "s"),
+        ),
+        (
+            "header not an object",
+            token("[]", &claims(r#"{"tenant":"t"}"#), "s"),
+        ),
+        ("payload not json", token("{}", "nope", "s")),
+        ("payload not an object", token("{}", "[1]", "s")),
+        ("not base64", "!!.!!.!!".to_owned()),
+    ] {
+        assert_eq!(unverified_tenant_claim(&bad), None, "{name}");
+    }
+}

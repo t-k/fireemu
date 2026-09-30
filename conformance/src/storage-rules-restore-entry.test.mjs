@@ -86,6 +86,11 @@ test("a clean run reads everything first, deletes the objects, then the accounts
     if (new URL(entry.url).pathname === "/oauth2/v2/userinfo") assert.equal(Object.hasOwn(entry.headers, "x-goog-user-project"), false);
     else assert.equal(entry.headers["x-goog-user-project"], "fireemu-oracle-query", entry.url);
   }
+  // Every deletion is journalled under its own mutation key before it is sent; no read has one.
+  const intents = (await readLines(f, "captures.jsonl")).map((row) => row.data ?? row).filter((data) => Object.hasOwn(data, "mutationKey"));
+  assert.equal(intents.length, 39);
+  for (const intent of intents) assert.equal(intent.mutationKey, /^cleanup\/(object|account|ruleset)\/\d+\/delete$/.test(intent.operationId) ? `restore:${intent.operationId}` : null, intent.operationId);
+  assert.equal(intents.filter((intent) => intent.mutationKey !== null).length, 14);
   const facts = await factsOf(f);
   assert.deepEqual(facts.map((fact) => fact.operationId), allIdsOf(state).slice(2));
   assert.ok(facts.every((fact) => fact.facts.expected === true && fact.facts.bodySha256.length === 64));
@@ -273,6 +278,8 @@ test("the local inputs, the state file, the owner ledger and the runs directory 
     "the state file readable by others": async (f) => { await chmod(f.statePath, 0o644); return /local inputs file refused/; },
     "the state file is missing": async (f) => { await rm(f.statePath); return /local inputs file refused/; },
     "the state file names a kept ruleset": async (f) => { await writeFile(f.statePath, JSON.stringify({ ...STATE, rulesets: ["projects/fireemu-oracle-query/rulesets/22b746af-0000-4000-8000-000000000000"] }), { mode: 0o600 }); return /local inputs file refused|the plan is not the approved size/; },
+    "local inputs is not UTF-8": async (f) => { const text = local(f, {}); const at = text.indexOf(f.adcPath) + f.adcPath.length; await writeFile(f.localPath, Buffer.concat([Buffer.from(text.slice(0, at)), Buffer.from([0xff]), Buffer.from(text.slice(at))]), { mode: 0o600 }); return /local inputs file refused/; },
+    "the state file is not UTF-8": async (f) => { const text = JSON.stringify(STATE); const at = text.indexOf(STATE.bucket) + STATE.bucket.length; await writeFile(f.statePath, Buffer.concat([Buffer.from(text.slice(0, at)), Buffer.from([0xff]), Buffer.from(text.slice(at))]), { mode: 0o600 }); return /local inputs file refused/; },
     "the state file is not JSON": async (f) => { await writeFile(f.statePath, "not json", { mode: 0o600 }); return /local inputs file refused/; },
     "ledger writable by others": async (f) => { await chmod(f.ledgerPath, 0o666); return /owner ledger refused/; },
     "ledger is not UTF-8": async (f) => { await writeFile(f.ledgerPath, Buffer.concat([Buffer.from(`${ledger}\n`), Buffer.from([0xff])]), { mode: 0o644 }); return /owner ledger refused/; },
@@ -295,7 +302,7 @@ test("the local inputs, the state file, the owner ledger and the runs directory 
   const binding = { root: f.root, codeRoot, requestImpl: () => {}, clock, git: async () => "" };
   for (const bad of [null, undefined, [], "x", { ...binding, extra: 1 }, { ...binding, root: 5 }, { ...binding, codeRoot: 5 }, { ...binding, git: 5 }, { ...binding, requestImpl: 5 }, { ...binding, clock: { nowSeconds: () => 1 } }, { ...binding, clock: null }]) assert.throws(() => bindRestoreEntry(bad), /invalid entry binding/);
   assert.throws(() => bindRestoreEntry({ ...binding, root: join(f.root, "docs.local") }), /entry root is not a main checkout/);
-  for (const options of [null, undefined, [], "x", { ...f.options, extra: 1 }, { ...f.options, localPath: 5 }, { ...f.options, runId: 5 }, { ...f.options, runId: "Bad Id" }, { ...f.options, sourceCommit: 5 }, { ...f.options, sourceCommit: "abc" }, { ...f.options, sourceCommit: "b".repeat(40) },
+  for (const options of [null, undefined, [], "x", { ...f.options, extra: 1 }, { ...f.options, localPath: 5 }, { ...f.options, runId: 5 }, { ...f.options, runId: "Bad Id" }, { ...f.options, sourceCommit: 5 }, { ...f.options, sourceCommit: "abc" }, { ...f.options, sourceCommit: "b".repeat(40) }, { ...f.options, sourceCommit: "abc", packet: { ...f.options.packet, sourceCommit: "abc" } }, { ...f.options, sourceCommit: "A".repeat(40), packet: { ...f.options.packet, sourceCommit: "A".repeat(40) } }, { ...f.options, packet: null }, { ...f.options, packet: [] }, { ...f.options, review: null }, { ...f.options, review: [] }, { ...f.options, review: "x" },
     ...["runnerSha256", "fixtureSchemaSha256", "manifestSha256"].flatMap((key) => [{ ...f.options, packet: { ...f.options.packet, [key]: "abc" } }, { ...f.options, packet: { ...f.options.packet, [key]: 5 } }])]) {
     await assert.rejects(f.entry(options), /invalid restore options/, JSON.stringify(options)?.slice(0, 80));
   }

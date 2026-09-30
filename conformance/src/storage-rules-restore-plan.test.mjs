@@ -30,7 +30,10 @@ test("the expected state is a closed, sorted record inside the run's namespace t
   };
   for (const [name, value] of Object.entries(spoiled)) assert.throws(() => parseState(value), /invalid expected state/, name);
   for (const bad of [null, undefined, [], "x", 5, Object.assign(Object.create(null), clone())]) assert.throws(() => parseState(bad), /invalid expected state/);
-  assert.doesNotThrow(() => parseState({ ...clone(), objects: [], accounts: [], rulesets: [] }));
+  const empty = { objects: [], accounts: [], rulesets: [] };
+  assert.doesNotThrow(() => parseState({ ...clone(), ...empty }));
+  for (const [runId, prefix] of [["Bad Run", "STORAGE-RULES/Bad Run/"], [5, "STORAGE-RULES/5/"], ["a".repeat(49), `STORAGE-RULES/${"a".repeat(49)}/`], ["", "STORAGE-RULES//"]]) assert.throws(() => parseState({ ...clone(), ...empty, runId, runPrefix: prefix }), /invalid expected state/, String(runId).slice(0, 10));
+  assert.throws(() => parseState({ ...clone(), ...empty, bucket: "Bad Bucket" }), /invalid expected state/);
 });
 
 test("the state digest moves with every part of the state", () => {
@@ -111,6 +114,9 @@ test("targets are built from exact sources: only planned IDs, verify accepts onl
   assert.equal(targets.prepareIdentity("x").spec.url, "https://www.googleapis.com/oauth2/v2/userinfo");
   for (const id of ["preflight/auth/owner-token", "preflight/owner/identity", "cleanup/object/99/delete", "", undefined]) { assert.throws(() => targets.prepare(id), /not a planned request/); assert.throws(() => targets.request(id), /not a planned request/); }
   const read = targets.prepare("preflight/release/bucket");
+  const forged = { rowId: read.rowId, credential: read.credential, project: read.project, redacted: read.redacted, targetSha256: read.targetSha256 };
+  Object.defineProperty(forged, "spec", { value: read.spec, enumerable: false });
+  assert.equal(targets.verify(forged), false);
   for (const value of [null, undefined, {}, { ...read }, JSON.parse(JSON.stringify(read))]) assert.equal(targets.verify(value), false);
   assert.equal(createRestoreTargets({ state, digestSalt: "t".repeat(64) }).verify(read), false);
   assert.deepEqual(Object.keys(read), ["rowId", "credential", "project", "redacted", "targetSha256"]);
@@ -133,6 +139,9 @@ test("the judges accept exactly what the cleanup needs, by the production bodies
   assert.equal(judgeAnswer("rulesets-with-run", entryList(STATE.rulesets), ctx("preflight/rulesets/list")), true);
   assert.equal(judgeAnswer("rulesets-with-run", entryList([...STATE.rulesets].reverse()), ctx("preflight/rulesets/list")), true);
   for (const bad of [entryList(STATE.rulesets.slice(1)), entryList([...STATE.rulesets, "projects/fireemu-oracle-query/rulesets/aaaaaaaa-0000-4000-8000-000000000000"]), entryList([]), entryList(STATE.rulesets, ["cloud.firestore"]), entryList(STATE.rulesets, ["firebase.storage"], ["2026-09-25T11:08:54.358767Z", "2026-09-23T23:02:05.839537Z"]), entryList(STATE.rulesets, ["firebase.storage"], ["2026-09-25T11:08:54.358768Z", "2026-09-23T23:02:05.839536Z"]), rawOf(PRODUCTION.rulesetList), json({ rulesets: STATE.rulesets.map((name) => ({ name, createTime: "2026-09-30T00:23:49Z" })) }), json({ ...JSON.parse(entryList(STATE.rulesets).bytes), nextPageToken: "t" }), json({ ...JSON.parse(entryList(STATE.rulesets).bytes), extra: 1 }), json({}, 500)]) assert.equal(judgeAnswer("rulesets-with-run", bad, ctx("preflight/rulesets/list")), false);
+  const withRunTimes = (times) => json({ rulesets: [...JSON.parse(entryList([]).bytes).rulesets, ...STATE.rulesets.map((name, index) => ({ name, createTime: times[index], metadata: { services: ["firebase.storage"] } }))] });
+  assert.equal(judgeAnswer("rulesets-with-run", withRunTimes(STATE.rulesets.map(() => "2026-09-30T00:23:49.178351Z")), ctx("preflight/rulesets/list")), true);
+  for (const times of [[5, "t", "t", "t"], [undefined, "t", "t", "t"], ["t", null, "t", "t"]]) assert.equal(judgeAnswer("rulesets-with-run", withRunTimes(times), ctx("preflight/rulesets/list")), false, JSON.stringify(times));
   assert.equal(judgeAnswer("rulesets-kept", rawOf(PRODUCTION.rulesetList), ctx("verify/rulesets/list")), true);
   for (const bad of [entryList(STATE.rulesets), json({ rulesets: [] }), json({ rulesets: JSON.parse(rawOf(PRODUCTION.rulesetList).bytes.toString()).rulesets.slice(0, 1) }), entryList([], ["firebase.storage"], ["2026-09-25T11:08:54.358767Z", "2026-09-23T23:02:05.839537Z"]), entryList([], ["firebase.storage"], ["2026-09-25T11:08:54.358768Z", "2026-09-23T23:02:05.839536Z"]), json({ ...JSON.parse(entryList([]).bytes), nextPageToken: "t" }), json({ ...JSON.parse(entryList([]).bytes), extra: 1 }), json({ rulesets: JSON.parse(entryList([]).bytes).rulesets.map((entry) => ({ ...entry, createTime: 5 })) }), json({ rulesets: JSON.parse(entryList([]).bytes).rulesets.map((entry) => ({ name: entry.name, createTime: entry.createTime })) }), json({ rulesets: JSON.parse(entryList([]).bytes).rulesets.map((entry) => ({ ...entry, metadata: { services: [5] } })) }), json({ rulesets: "x" }), json({}, 500)]) assert.equal(judgeAnswer("rulesets-kept", bad, ctx("verify/rulesets/list")), false);
   // Objects: present with the journaled name and generation; absent as the JSON 404 production answers; deleted as a bodiless 204.
@@ -152,6 +161,9 @@ test("the judges accept exactly what the cleanup needs, by the production bodies
   // Accounts: exactly the three uids before, none after.
   const users = (uids) => json({ kind: "identitytoolkit#GetAccountInfoResponse", users: uids.map((localId) => ({ localId, email: "x@example.test" })) });
   assert.equal(judgeAnswer("accounts-present", users(STATE.accounts), ctx("preflight/accounts/lookup")), true);
+  for (const kind of ["identitytoolkit#Other", undefined]) assert.equal(judgeAnswer("accounts-present", json({ kind, users: STATE.accounts.map((localId) => ({ localId })) }), ctx("preflight/accounts/lookup")), false, String(kind));
+  assert.equal(judgeAnswer("accounts-present", json({ kind: "identitytoolkit#GetAccountInfoResponse", users: STATE.accounts.map((localId, index) => (index === 1 ? { localId: 5 } : { localId })) }), ctx("preflight/accounts/lookup")), false);
+  assert.equal(judgeAnswer("accounts-present", json({ kind: "identitytoolkit#GetAccountInfoResponse", users: [...STATE.accounts.map((localId) => ({ localId })).slice(0, 2), null] }), ctx("preflight/accounts/lookup")), false);
   assert.equal(judgeAnswer("accounts-present", users([...STATE.accounts].reverse()), ctx("preflight/accounts/lookup")), true);
   for (const bad of [users(STATE.accounts.slice(1)), users([...STATE.accounts, "storage-rules-other-x"]), users([]), json({ kind: "identitytoolkit#GetAccountInfoResponse" }), json({ users: [{ email: "x" }] }), json({ users: "x" }), json({}, 400), users([STATE.accounts[0], STATE.accounts[0], STATE.accounts[1]])]) assert.equal(judgeAnswer("accounts-present", bad, ctx("preflight/accounts/lookup")), false);
   // The recorded production answer for a lookup of deleted accounts (auth-account/admin/batch-delete, step lookup-after-force): the kind alone.
@@ -161,6 +173,8 @@ test("the judges accept exactly what the cleanup needs, by the production bodies
   assert.equal(judgeAnswer("objects-empty", json({ kind: "storage#objects" }), ctx("verify/objects/list")), true);
   assert.equal(judgeAnswer("objects-empty", json({ kind: "storage#objects", items: [], prefixes: [] }), ctx("verify/objects/list")), true);
   for (const bad of [json({ kind: "storage#objects", items: [{ name: "x" }] }), json({ kind: "storage#objects", prefixes: ["x/"] }), json({ kind: "storage#objects", nextPageToken: "t" }), json({}), json({ kind: "storage#bucket" }), json({ kind: "storage#objects" }, 403)]) assert.equal(judgeAnswer("objects-empty", bad, ctx("verify/objects/list")), false);
+  // A judge that cannot run (no context) refuses, and never accepts.
+  for (const [kind, raw] of [["object-present", present(0)], ["rulesets-with-run", entryList(STATE.rulesets)], ["accounts-present", users(STATE.accounts)]]) for (const context of [undefined, {}, { state: null }]) assert.equal(judgeAnswer(kind, raw, context), false, kind);
   // Unknown kinds, and answers the transport could not have handed over, are never accepted.
   for (const kind of ["", "unknown", "constructor", "__proto__", undefined, null, 5, "json-ok"]) assert.equal(judgeAnswer(kind, json({}), ctx("cleanup/ruleset/0/delete")), false);
   for (const raw of [null, undefined, {}, { status: 200 }, { status: 200, rawHeaders: [], bytes: "text" }]) assert.equal(judgeAnswer("ruleset-delete", raw, ctx("cleanup/ruleset/0/delete")), false);

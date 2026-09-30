@@ -72,7 +72,7 @@ test("the arguments and the approval file are checked before the entry is reache
   const files = [
     (await scratch(t, { mode: 0o644 })).path, link, hard, join(root, "missing.json"),
     (await scratch(t, { text: JSON.stringify({ packet: approval.packet }) })).path, (await scratch(t, { text: JSON.stringify({ ...approval, extra: 1 }) })).path,
-    (await scratch(t, { text: JSON.stringify({ packet: { ...approval.packet, sourceCommit: "abc" }, review: approval.review }) })).path, (await scratch(t, { text: "not json" })).path,
+    (await scratch(t, { text: JSON.stringify({ packet: { ...approval.packet, sourceCommit: "abc" }, review: approval.review }) })).path, (await scratch(t, { text: "not json" })).path, ...(await Promise.all(["null", "[]", "5", "\"x\"", "true"].map(async (text) => (await scratch(t, { text })).path))), (await scratch(t, { text: JSON.stringify({ packet: approval.packet, review: "x" }) })).path, (await scratch(t, { text: JSON.stringify({ packet: "x", review: approval.review }) })).path, (await scratch(t, { text: JSON.stringify({ packet: [], review: approval.review }) })).path, (await scratch(t, { text: JSON.stringify({ packet: approval.packet, review: [] }) })).path,
     (await scratch(t, { text: JSON.stringify({ ...approval, pad: "x".repeat(64 * 1024) }) })).path,
     (await scratch(t, { text: Buffer.concat([Buffer.from(JSON.stringify(approval).replace(/"}}$/, "\"}}").slice(0, -3)), Buffer.from([0xff]), Buffer.from('"}}')]) })).path,
   ];

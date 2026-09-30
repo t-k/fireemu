@@ -586,7 +586,11 @@ _LOCAL_SURFACES: tuple[tuple[str, str, str, str, str, tuple[str, ...]], ...] = (
         "Query acceptance and refusal are decided from this catalog, so a configuration "
         "loaded differently from production's index set changes data-plane results.",
         _IMPLEMENTED,
-        (f"{_CONTROL}:48", f"{_CONTROL}:88", f"{_CONTROL}:148"),
+        (
+            _at(_CONTROL, "pub fn load_index_file("),
+            _at(_CONTROL, "for f in idx"),
+            _at(_CONTROL, "fn parse_field_overrides("),
+        ),
     ),
     _row(
         "config.singleFieldExemption",
@@ -597,8 +601,8 @@ _LOCAL_SURFACES: tuple[tuple[str, str, str, str, str, tuple[str, ...]], ...] = (
         "must agree on the resulting refusal even though the transition differs.",
         _IMPLEMENTED,
         (
-            f"{_CONTROL}:148",
-            f"{_CONTROL}:215",
+            _at(_CONTROL, "fn parse_field_overrides("),
+            _at(_CONTROL, "set.set_default_single_field_indexes(&collection, modes);"),
             _at(_INDEX, "pub struct IndexSet {"),
             _at(_INDEX, "pub fn add_exemption("),
         ),

@@ -77,3 +77,18 @@ test("probe3-production names the missing environment and takes no argument", ()
   assert.equal(withArgument.status, 2);
   assert.match(withArgument.stderr, /probe3-production takes no argument/);
 });
+
+test("probe4-production names the missing environment and takes no argument", () => {
+  const result = spawnSync(process.execPath, [runner, "probe4-production"], {
+    encoding: "utf8",
+    env: { PATH: process.env.PATH },
+  });
+  assert.equal(result.status, 2);
+  assert.match(result.stderr, /missing environment: FIREEMU_STORAGE_OBJECT_PACKET/);
+  const withArgument = spawnSync(process.execPath, [runner, "probe4-production", "1"], {
+    encoding: "utf8",
+    env: { PATH: process.env.PATH },
+  });
+  assert.equal(withArgument.status, 2);
+  assert.match(withArgument.stderr, /probe4-production takes no argument/);
+});

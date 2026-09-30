@@ -1,0 +1,227 @@
+{
+  "schemaVersion": 1,
+  "parent": "EVENTARC",
+  "parentStatus": "IMPLEMENTING",
+  "inventoryStatus": "FROZEN",
+  "frozenOn": "2026-09-30",
+  "freezeAuthority": "docs.local/instructions/owner-decisions.md (2026-09-30 PUBSUB and EVENTARC scope: coordinator rulings)",
+  "oracleTrack": "disposable-sandbox",
+  "oracle": {
+    "project": "fireemu-oracle-idp",
+    "region": "us-central1",
+    "generation": 2
+  },
+  "closureReview": {
+    "decision": "PENDING"
+  },
+  "scopeDecisions": [
+    {
+      "id": "E1",
+      "decision": "Target Eventarc Standard channels used by Firebase custom events: the Admin SDK default channel and a named channel. Include owned provider-less channel create/get/list/delete if production supports it; otherwise record the observed refusal and classify channel lifecycle outside this parent. Provider-linked third-party channels and Eventarc Advanced are outside this parent.",
+      "rationale": "Channel lifecycle applicability is an explicit conditional decision, established by recorded production answers rather than the local implementation.",
+      "status": "FROZEN",
+      "decidedBy": "coordinator (delegated by owner)",
+      "decidedOn": "2026-09-30",
+      "decisionRef": "docs.local/instructions/owner-decisions.md (2026-09-30 PUBSUB and EVENTARC scope: coordinator rulings)"
+    },
+    {
+      "id": "E2",
+      "decision": "1st gen, Audit Logs and other managed providers, Eventarc Advanced, Firebase alerts, Blocking Auth, task queues, scheduled functions, HTTP/callable product behavior, scaling and billing are outside this parent. The google sentinel and emulator registration/getTriggers/reload endpoints are local regressions only.",
+      "rationale": "This parent covers custom events delivered to v2 onCustomEventPublished; other event sources and products have separate scope.",
+      "status": "FROZEN",
+      "decidedBy": "coordinator (delegated by owner)",
+      "decidedOn": "2026-09-30",
+      "decisionRef": "docs.local/instructions/owner-decisions.md (2026-09-30 PUBSUB and EVENTARC scope: coordinator rulings)"
+    },
+    {
+      "id": "E3",
+      "decision": "Include JSON, text and binary publications. Observe type/source/extension filter acceptance or control-plane refusal and the handler-visible event shape; do not assume arbitrary attribute filters are supported.",
+      "rationale": "The current converter does not support binary payloads; implementation absence is debt, while production refusal is recorded explicitly.",
+      "status": "FROZEN",
+      "decidedBy": "coordinator (delegated by owner)",
+      "decidedOn": "2026-09-30",
+      "decisionRef": "docs.local/instructions/owner-decisions.md (2026-09-30 PUBSUB and EVENTARC scope: coordinator rulings)"
+    },
+    {
+      "id": "E4",
+      "decision": "Use the same pinned fixture source and SDKs in production and fireemu, in us-central1. Capture deliveries through an owned fixture using the existing Functions deployment and recording structure.",
+      "rationale": "The observation sink, grants, deployment side effects and image cleanup are reviewed in a separate pre-send packet; no shared Auth, Rules or channel modification is implied.",
+      "status": "FROZEN",
+      "decidedBy": "coordinator (delegated by owner)",
+      "decidedOn": "2026-09-30",
+      "decisionRef": "docs.local/instructions/owner-decisions.md (2026-09-30 PUBSUB and EVENTARC scope: coordinator rulings)"
+    }
+  ],
+  "conditions": [
+    {
+      "conditionId": "EVENTARC/channel-lifecycle",
+      "source": "spec/compatibility/contract.json#EVENTARC-CLAIM-LOCAL-PUBLISH",
+      "recipeIds": ["eventarc/channels"],
+      "cases": [
+        "providerless-create-capability",
+        "get-channel",
+        "list-channels",
+        "duplicate-channel",
+        "invalid-channel-name",
+        "readiness-shape",
+        "delete-owned-channel"
+      ],
+      "transports": ["rest"],
+      "status": "PENDING_CORPUS",
+      "applicability": {
+        "mode": "OBSERVE_CAPABILITY",
+        "unsupportedDisposition": "OUT_OF_SCOPE_OBSERVED",
+        "scopeDecision": "E1",
+        "requiredEvidence": "Two production records of the provider-less create refusal and coordinator scope review; no exclusion inferred from the emulator."
+      }
+    },
+    {
+      "conditionId": "EVENTARC/publish-envelope",
+      "source": "spec/compatibility/contract.json#EVENTARC-CLAIM-LOCAL-PUBLISH",
+      "recipeIds": ["eventarc/publish/wire"],
+      "cases": [
+        "single-event",
+        "multiple-events",
+        "empty-batch",
+        "required-attributes",
+        "invalid-attribute-type",
+        "invalid-timestamp",
+        "response-shape",
+        "event-id-correlation"
+      ],
+      "transports": ["rest"],
+      "status": "PENDING_CORPUS"
+    },
+    {
+      "conditionId": "EVENTARC/publish-content",
+      "source": "spec/compatibility/contract.json#EVENTARC-CLAIM-LOCAL-PUBLISH",
+      "recipeIds": ["eventarc/publish/content"],
+      "cases": [
+        "json-object",
+        "json-scalar",
+        "json-null",
+        "json-array",
+        "text",
+        "binary-data",
+        "absent-data",
+        "invalid-json",
+        "invalid-base64",
+        "oneof-collision"
+      ],
+      "transports": ["rest"],
+      "status": "PENDING_CORPUS"
+    },
+    {
+      "conditionId": "EVENTARC/admin-sdk-publish",
+      "source": "spec/compatibility/contract.json#EVENTARC-CLAIM-LOCAL-PUBLISH",
+      "recipeIds": ["eventarc/sdk"],
+      "cases": [
+        "full-channel",
+        "relative-channel",
+        "default-channel",
+        "single-event",
+        "multiple-events",
+        "generated-metadata",
+        "caller-metadata",
+        "allowed-event-types",
+        "client-validation-refusal"
+      ],
+      "transports": ["rest"],
+      "status": "PENDING_CORPUS"
+    },
+    {
+      "conditionId": "EVENTARC/publish-limits",
+      "source": "spec/compatibility/contract.json#EVENTARC-CLAIM-LOCAL-PUBLISH",
+      "recipeIds": ["eventarc/publish/limits"],
+      "cases": [
+        "request-bytes-boundary",
+        "event-count-boundary",
+        "event-bytes-boundary",
+        "attribute-shape-boundary",
+        "batch-delivered-subset"
+      ],
+      "transports": ["rest"],
+      "status": "PENDING_CORPUS"
+    },
+    {
+      "conditionId": "EVENTARC/custom-handler-envelope",
+      "source": "spec/compatibility/contract.json#EVENTARC-CLAIM-LOCAL-PUBLISH",
+      "recipeIds": ["eventarc/delivery/envelope"],
+      "cases": [
+        "required-attributes",
+        "optional-attribute-absence",
+        "extension-attributes",
+        "json-data",
+        "text-data",
+        "binary-data",
+        "stable-id-correlation"
+      ],
+      "transports": ["rest"],
+      "status": "PENDING_CORPUS"
+    },
+    {
+      "conditionId": "EVENTARC/trigger-filters",
+      "source": "spec/compatibility/contract.json#EVENTARC-CLAIM-LOCAL-PUBLISH",
+      "recipeIds": ["eventarc/delivery/filters"],
+      "cases": [
+        "type",
+        "source",
+        "extension-attribute",
+        "missing-attribute",
+        "nonmatch",
+        "multiple-filters",
+        "channel-isolation",
+        "multiple-handlers",
+        "unsupported-filter-refusal"
+      ],
+      "transports": ["rest"],
+      "status": "PENDING_CORPUS"
+    },
+    {
+      "conditionId": "EVENTARC/delivery-retry-identity",
+      "source": "spec/compatibility/contract.json#EVENTARC-CLAIM-LOCAL-PUBLISH",
+      "recipeIds": ["eventarc/delivery/retry"],
+      "cases": ["fail-then-succeed", "stable-id-and-data"],
+      "transports": ["rest"],
+      "status": "PENDING_CORPUS"
+    },
+    {
+      "conditionId": "EVENTARC/errors-authentication",
+      "source": "spec/compatibility/contract.json#EVENTARC-CLAIM-LOCAL-PUBLISH",
+      "recipeIds": ["eventarc/errors"],
+      "cases": [
+        "missing-channel",
+        "invalid-event",
+        "wrong-project-location",
+        "no-token",
+        "invalid-token",
+        "canonical-error-shape"
+      ],
+      "transports": ["rest"],
+      "status": "PENDING_CORPUS"
+    },
+    {
+      "conditionId": "EVENTARC/final-artifact-regression",
+      "source": "spec/compatibility/contract.json#EVENTARC-CLAIM-LOCAL-PUBLISH",
+      "recipeIds": ["eventarc/final"],
+      "cases": [
+        "strict-production",
+        "emulator-official",
+        "complete-case-set",
+        "same-fixture-source",
+        "same-final-artifact",
+        "runner-tree"
+      ],
+      "transports": ["artifact"],
+      "status": "PENDING_CORPUS"
+    },
+    {
+      "conditionId": "EVENTARC/closure-review",
+      "source": "spec/compatibility/contract.json#EVENTARC-CLAIM-LOCAL-PUBLISH",
+      "recipeIds": ["eventarc/closure"],
+      "cases": ["independent-approval"],
+      "transports": ["artifact"],
+      "status": "PENDING_CORPUS"
+    }
+  ]
+}

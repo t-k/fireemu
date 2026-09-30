@@ -18,6 +18,17 @@ Auth claim-source, MFA and Limits native updates remain local-only; executor `57
 
 One release binary, built from the clean integration head of the v0.8.0 release ([build receipt](../../spec/compatibility/closure/evidence/integration-v0.8.0/release-artifact.json)), reran the local comparison of every closed parent against its saved production recordings, with no production request: FS-DATA-WRITE (the release comparison of 106 REST programs and 9 gRPC streams, the list and query regressions, the historical regression, the saved stream-transaction rows and the emulator profile), FS-QUERY-INDEX, FS-CONFIG-LIFECYCLE, FS-RULES, AUTH-ACCOUNT, AUTH-CREDENTIAL, AUTH-ACTION, AUTH-MFA, AUTH-CONFIG-SDK and FUNCTIONS-HTTP. Every row is identical to the parent's committed comparison; each closure inventory records the result as `integratedRegression`. AUTH-ACCOUNT, AUTH-CREDENTIAL and AUTH-ACTION, which waited for this artifact, are `COMPAT_VERIFIED` again.
 
+## Additional service parent inventories (2026-09-30)
+
+These frozen inventories declare future production observations; they do not add verified parents to the historical Identity Platform and Firestore denominator above.
+
+| Parent | Status | Scope |
+| --- | --- | --- |
+| [PUBSUB](../../spec/compatibility/closure/PUBSUB.json) | `IMPLEMENTING` | REST v1 and native gRPC broker APIs, StreamingPull, retention configuration, ordering, filters, dead letters, snapshots and seek; push configuration without endpoint delivery. Pub/Sub-to-Functions delivery belongs to FUNCTIONS-EVENTS. Managed IAM administration and permission refusal are outside this inventory. |
+| [EVENTARC](../../spec/compatibility/closure/EVENTARC.json) | `IMPLEMENTING` | Firebase custom events on Eventarc Standard channels, Publishing API and Admin SDK publications, v2 handler envelopes and filters. Provider-less channel lifecycle is conditional on recorded production support; third-party providers and Eventarc Advanced are outside this inventory. |
+
+Neither parent has production evidence yet. Each requires two production recordings, complete comparison on the final artifact and independent closure approval before `COMPAT_VERIFIED`.
+
 ## FS-DATA-WRITE current closure correction (2026-09-24)
 
 The [closure inventory](../../spec/compatibility/closure/FS-DATA-WRITE.json) now contains 33 conditions, including four list operation conditions proposed by the FS-QUERY-INDEX lane. Those four retain the proposal's production recording, fixture, artifact and comparison references but are `PENDING_INTEGRATION`: their implementation branch has not merged into the FS-DATA-WRITE source, so the referenced artifact is not the current FS-DATA-WRITE artifact and none of the four conditions is `VERIFIED`. The near-index-limit delete refusal remains `PENDING_CORPUS` and requires an adjacent accepted/refused pair, two production recordings and route-specific comparison. The Write-stream half-close condition is `VERIFIED` against the current source-bound comparison, which includes stable `content-disposition: attachment` trailer metadata and excludes only the recording-varying tracking ID. Twelve of 33 FS-DATA-WRITE conditions are `VERIFIED`; the parent remains `WAITING_ORACLE`. After the list implementation branch merges, compare all four conditions against the FS-DATA-WRITE final artifact before promoting them.

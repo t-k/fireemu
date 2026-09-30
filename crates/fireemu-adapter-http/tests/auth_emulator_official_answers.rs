@@ -186,6 +186,7 @@ fn message_of(body: &Value) -> String {
 /// Rows: (case, route, body without tenant and token, official status, official message).
 /// The official column was probed with `probe2.cjs` against the pinned emulator.
 #[test]
+#[allow(clippy::too_many_lines)]
 fn an_id_token_the_operation_does_not_read_is_not_parsed_for_the_tenant_it_names() {
     let rows: Vec<(&str, &str, Value, u16, &str)> = vec![
         (
@@ -354,6 +355,23 @@ fn the_known_differences_for_the_tenant_phone_and_idp_operations_are_pinned() {
 /// for the default project and for another one (`demo-other`).
 #[test]
 fn an_admin_request_with_a_body_tenant_runs_in_that_tenant_of_the_paths_project() {
+    within_a_minute(admin_body_tenant_table);
+}
+
+/// Runs `run` on its own thread and fails, rather than hangs, when it does not finish (a routed
+/// project's gate held across the tenant's own gate would deadlock the request).
+fn within_a_minute(run: fn()) {
+    let (done, finished) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        run();
+        let _ = done.send(());
+    });
+    finished
+        .recv_timeout(std::time::Duration::from_secs(60))
+        .expect("the requests finished: nothing deadlocked");
+}
+
+fn admin_body_tenant_table() {
     // (case, path suffix, body, official status, official message)
     let rows: Vec<(&str, &str, Value, u16, &str)> = vec![
         (
@@ -511,4 +529,33 @@ fn a_caller_without_the_owner_credential_cannot_pick_a_tenant_through_the_body()
     );
     assert_eq!(r.status, 401, "{}", r.body);
     assert!(registry.routed_store_for("demo-late").is_none());
+}
+
+/// The tenant of an ID token is checked against the tenant the request names for every operation
+/// (`server.js:399-403`, before any operation runs), also for the ones that never read the token:
+/// `TENANT_ID_MISMATCH`, and no tenant is made (official column probed).
+#[test]
+fn a_token_of_another_tenant_is_a_mismatch_for_every_operation() {
+    for (n, (route, body)) in [
+        (
+            "accounts:createAuthUri",
+            json!({"identifier": "x@example.com", "continueUri": "http://localhost"}),
+        ),
+        (
+            "accounts:signInWithCustomToken",
+            json!({"token": "{\"uid\":\"c1\"}"}),
+        ),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let (state, registry) = emulator();
+        let mut body = body;
+        body["tenantId"] = json!(format!("named-{n}"));
+        body["idToken"] = json!(own_token("u1", &format!("token-{n}")));
+        let (status, refused) = client(&state, &format!("{V1}/{route}"), &body);
+        assert_eq!(status, 400, "{route}: {refused}");
+        assert_eq!(message_of(&refused), "TENANT_ID_MISMATCH", "{route}");
+        assert!(registry.tenants("demo-app").is_empty(), "{route}");
+    }
 }

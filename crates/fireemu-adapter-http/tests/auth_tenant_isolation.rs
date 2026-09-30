@@ -1149,25 +1149,16 @@ fn project_level_admin_lookup_does_not_find_tenant_users() {
 
         // The project-level lookup route takes a body tenant as its scope under strict, as
         // production does (AUTH-TENANT-BLOCKING recording 2026-09-27,
-        // selection#admin-lookup-a1-body-tenant); the emulator profile refuses it rather
-        // than rerouting.
+        // selection#admin-lookup-a1-body-tenant); the emulator profile takes it as the official
+        // emulator does (`server.js:395-414`): the operation runs in that tenant.
         let (status, refused) = admin(
             &state,
             "POST",
             &format!("{V1}/projects/demo-app/accounts:lookup"),
             &json!({"localId": ["shared-uid"], "tenantId": TENANT_A}),
         );
-        if profile == "strict" {
-            assert_eq!(status, 200, "{profile}: {refused}");
-            assert_eq!(refused["users"][0]["tenantId"], TENANT_A, "{refused}");
-        } else {
-            assert_eq!(status, 400, "{profile}: {refused}");
-            assert_eq!(
-                class(&refused),
-                "TENANT_ID_MISMATCH",
-                "{profile}: {refused}"
-            );
-        }
+        assert_eq!(status, 200, "{profile}: {refused}");
+        assert_eq!(refused["users"][0]["tenantId"], TENANT_A, "{refused}");
 
         // Listing and query are project-scoped as well.
         let listed = snapshot(&state, None);

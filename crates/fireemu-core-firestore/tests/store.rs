@@ -3121,8 +3121,9 @@ fn a_precondition_refused_commit_releases_the_transactions_locks_at_once() {
 // the Rollback that follows answers 0. The 2026-09-07 matrix row (conformance/firestore-production-
 // matrix.json, transactions/lifecycle#read-only-commit-without-writes, REST) recorded a refused write
 // commit followed by an empty commit on the same token answering INVALID_ARGUMENT "no longer valid":
-// a refused write commit ends the read-only transaction. A GetDocument on the ended token and the
-// gRPC transport are not yet observed (P02b).
+// a refused write commit ends the read-only transaction. P02b (REST and gRPC, two recordings): after
+// the refusal a GetDocument and an empty commit, in either order, answer 3 with the expired text, and
+// a Rollback answers 0.
 #[test]
 fn a_read_only_transaction_commits_empty_and_ends_when_a_write_commit_is_refused() {
     let mut state = FirestoreState::with_limit_scope(LimitScope::Production);
@@ -3150,6 +3151,31 @@ fn a_read_only_transaction_commits_empty_and_ends_when_a_write_commit_is_refused
         Err(FirestoreError::InvalidArgument(message)) if message == NO_LONGER_VALID
     ));
     state.rollback(&refused).unwrap();
+
+    // P02b: a read on the ended token answers 3 with the expired text too, in either order with the
+    // empty commit, and the Rollback still answers 0.
+    for read_first in [true, false] {
+        let ended = state.begin_read_only_transaction(t(7)).unwrap();
+        assert!(state.commit(&write, Some(&ended), t(8)).is_err());
+        let read = |state: &mut FirestoreState| state.touch_transaction(&ended, t(9));
+        if read_first {
+            assert!(matches!(
+                read(&mut state),
+                Err(FirestoreError::InvalidArgument(message)) if message == NO_LONGER_VALID
+            ));
+        }
+        assert!(matches!(
+            state.commit(&[], Some(&ended), t(10)),
+            Err(FirestoreError::InvalidArgument(message)) if message == NO_LONGER_VALID
+        ));
+        if !read_first {
+            assert!(matches!(
+                read(&mut state),
+                Err(FirestoreError::InvalidArgument(message)) if message == NO_LONGER_VALID
+            ));
+        }
+        state.rollback(&ended).unwrap();
+    }
 
     // The official emulator (v1.22.0) keeps the transaction open after that refusal: a later
     // empty commit answers 200 and a read still works. The emulator profile refuses nothing more.
@@ -3399,13 +3425,19 @@ fn evicting_unnoticed_expiries_leaves_no_stale_deadline_entries() {
     assert_eq!(bookkeeping.finished, bookkeeping.finished_deadlines);
 }
 
-// The official emulator (v1.22.0, measured on both transports) reads a read-write transaction at
-// its first use: an outside write between the begin and the first read is shown, and the
-// transaction's commit then succeeds. The emulator profile matches it; production is unobserved
-// (P02b) and keeps the begin-time snapshot.
+// A read-write transaction reads at its first use in both profiles: an outside write between the
+// begin and the first read is shown, and the transaction's commit then succeeds (P02b chain Z, REST
+// and gRPC, two recordings, for production; the official emulator v1.22.0, measured on both
+// transports, for the emulator profile).
 #[test]
-fn the_emulator_profile_reads_a_read_write_transaction_at_its_first_use() {
-    let mut state = FirestoreState::with_limit_scope(LimitScope::OfficialEmulator);
+fn a_read_write_transaction_reads_at_its_first_use_in_both_profiles() {
+    for scope in [LimitScope::Production, LimitScope::OfficialEmulator] {
+        read_write_reads_at_its_first_use(scope);
+    }
+}
+
+fn read_write_reads_at_its_first_use(scope: LimitScope) {
+    let mut state = FirestoreState::with_limit_scope(scope);
     state
         .commit(&[set("p02/doc", &[("v", Value::Integer(1))])], None, t(0))
         .unwrap();

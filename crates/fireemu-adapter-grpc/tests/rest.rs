@@ -4016,6 +4016,30 @@ fn rest_read_only_transaction_commit_follows_production() {
             .contains("read-only transaction"),
         "{body}"
     );
+    // P02b (REST, two recordings): a read on the ended token answers 400 INVALID_ARGUMENT with the
+    // same expired text, before or after the empty commit; the Rollback still answers 200.
+    let (status, body) = call(
+        &s,
+        "GET",
+        &format!(
+            "{DOCS}/ro/x?transaction={}",
+            begun["transaction"].as_str().unwrap()
+        ),
+        Value::Null,
+    );
+    assert_eq!(status, 400, "{body}");
+    assert_eq!(
+        stream_error(&body)["error"]["status"],
+        "INVALID_ARGUMENT",
+        "{body}"
+    );
+    assert!(
+        stream_error(&body)["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("The referenced transaction has expired or is no longer valid."),
+        "{body}"
+    );
     let (status, body) = call(
         &s,
         "POST",

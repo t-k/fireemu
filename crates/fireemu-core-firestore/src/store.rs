@@ -2180,13 +2180,14 @@ impl FirestoreState {
         Ok(id)
     }
 
-    /// Begins a read-write transaction. The official emulator (v1.22.0, measured on both
-    /// transports) reads at the first use: an outside write between the begin and the first read
-    /// is shown by that read, and the transaction's commit then succeeds. The emulator profile
-    /// does the same, or it would refuse a commit the official emulator accepts. In the
-    /// production profile the snapshot stays at the begin: production is unobserved here (P02b
-    /// records it), and no change is made from the emulator's answer. A transaction that begins
-    /// with a read (`newTransaction` on a read) uses [`Self::begin_transaction`].
+    /// Begins a read-write transaction. Its snapshot is taken at its first use, not at the begin:
+    /// an outside write acknowledged between the begin and the first read is shown by that read,
+    /// and the transaction's commit then succeeds. Production does this (P02b chain Z, REST and
+    /// gRPC, two recordings: the first read showed the writer and the commit answered 0), and so
+    /// does the official emulator (v1.22.0, measured on both transports), so both profiles do. A
+    /// transaction that begins with a read (`newTransaction` on a read) uses
+    /// [`Self::begin_transaction`]; a retry attempt ([`Self::retry_transaction`]) is not recorded
+    /// in production.
     pub fn begin_read_write_transaction(
         &mut self,
         now: LogicalInstant,
@@ -2194,7 +2195,7 @@ impl FirestoreState {
         let id = self.begin_transaction(false, now)?;
         if let Some(transaction) = self.transactions.get_mut(&id) {
             transaction.first_read_time = None;
-            transaction.snapshot_pending = self.limit_scope == LimitScope::OfficialEmulator;
+            transaction.snapshot_pending = true;
         }
         Ok(id)
     }
@@ -3818,8 +3819,9 @@ impl FirestoreState {
             // (observed over REST: conformance/firestore-production-matrix.json, program
             // `transactions/lifecycle`, case `transactions/lifecycle#read-only-commit-without-writes`,
             // after `read-only-commit-with-writes`), and P02 accepts a Rollback afterwards. A
-            // GetDocument on that token and the gRPC transport are not yet observed (P02b records
-            // them). The official emulator profile keeps the transaction open as before.
+            // GetDocument on that token answered the same (P02b, REST and gRPC: a read and an empty
+            // commit, in either order, answer `INVALID_ARGUMENT` "no longer valid", and a Rollback
+            // answers 0). The official emulator profile keeps the transaction open as before.
             if self.limit_scope == LimitScope::Production {
                 self.finish_transaction(id, TransactionState::CommitRefused);
             }

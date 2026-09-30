@@ -1542,6 +1542,281 @@ service firebase.storage {
     assert_eq!(json_body(&r)["cacheControl"], "no-cache");
 }
 
+/// Both profiles: a media upload with no custom metadata and no `Authorization` header.
+fn anonymous_media_upload(s: &StorageState, path: &str) -> u16 {
+    handle(
+        s,
+        req(
+            "POST",
+            &format!(
+                "/v0/b/{BUCKET}/o?name={}&uploadType=media",
+                path.replace('/', "%2F")
+            ),
+            &[("content-type", "text/plain")],
+            b"hello",
+        ),
+    )
+    .status
+}
+
+const BOTH_PROFILES: [TokenAcceptance; 2] =
+    [TokenAcceptance::Verified, TokenAcceptance::EmulatorMock];
+
+/// An upload over an existing object is the rules method `create`, in both profiles: production
+/// was measured (stage 3 v9, `method-create-upload-present` 200 and `method-update-upload-present`
+/// 403; `state-upload-create-present` and `state-upload-update-present` agree), and so is the
+/// official emulator, whose upload path hard-codes the create method.
+#[test]
+fn an_upload_over_an_existing_object_is_a_create_for_the_rules_in_both_profiles() {
+    for acceptance in BOTH_PROFILES {
+        let create_only = state_with(
+            Some(
+                "rules_version = '2'; service firebase.storage { match /b/{bucket}/o { match /{path=**} { allow read, create: if true; allow update: if false; } } }",
+            ),
+            acceptance,
+        );
+        assert_eq!(
+            anonymous_media_upload(&create_only, "o.txt"),
+            200,
+            "{acceptance:?}"
+        );
+        assert_eq!(
+            anonymous_media_upload(&create_only, "o.txt"),
+            200,
+            "{acceptance:?}: the second upload is a create as well"
+        );
+
+        let update_only = state_with(
+            Some(
+                "rules_version = '2'; service firebase.storage { match /b/{bucket}/o { match /{path=**} { allow read, update: if true; allow create: if false; } } }",
+            ),
+            acceptance,
+        );
+        assert_eq!(
+            upload_as(&update_only, "o.txt", "Bearer owner"),
+            200,
+            "{acceptance:?}: the owner bypasses the rules and seeds the object"
+        );
+        assert_eq!(
+            anonymous_media_upload(&update_only, "o.txt"),
+            403,
+            "{acceptance:?}: an overwrite is not an update"
+        );
+    }
+}
+
+/// A Firebase v0 `PATCH` of an absent object is refused as a write, never reported as
+/// missing, for every caller: production answered 403 to the anonymous caller
+/// (`method-update-patch-absent`, `method-write-patch-absent`, `stored-null-true-patch-absent`,
+/// `precedence-control-absent-firebase-valid`) and to the owner
+/// (`boundary-firebase-admin-patch-absent`).
+#[test]
+fn a_v0_patch_of_an_absent_object_answers_403_in_both_profiles() {
+    for acceptance in BOTH_PROFILES {
+        let s = state_with(Some(ALLOW_ALL_RULES), acceptance);
+        for authorization in [None, Some("Bearer owner")] {
+            let mut headers = vec![("content-type", "application/json")];
+            if let Some(value) = authorization {
+                headers.push(("authorization", value));
+            }
+            let r = handle(
+                &s,
+                req(
+                    "PATCH",
+                    &format!("/v0/b/{BUCKET}/o/absent.txt"),
+                    &headers,
+                    br#"{"cacheControl": "no-cache"}"#,
+                ),
+            );
+            assert_eq!(
+                r.status,
+                403,
+                "{acceptance:?} {authorization:?}: {}",
+                String::from_utf8_lossy(&r.body)
+            );
+        }
+    }
+}
+
+/// Production evaluates an upload that carries no custom metadata against
+/// `request.resource.metadata == null`, so a rule that reads the map (`"owner" in
+/// request.resource.metadata`) fails and denies (stage 3 v9, `incoming-upload-simple-metadata-true`:
+/// 403, and the object stays absent). The official emulator builds an empty map and the rule
+/// passes; the emulator profile keeps that answer (a published divergence).
+#[test]
+fn an_upload_without_custom_metadata_has_null_request_metadata_only_in_the_strict_profile() {
+    const RULES: &str = "rules_version = '2'; service firebase.storage { match /b/{bucket}/o { match /{path=**} { allow read; allow create: if request.resource != null && !(\"owner\" in request.resource.metadata); } } }";
+    let strict = state_with(Some(RULES), TokenAcceptance::Verified);
+    assert_eq!(anonymous_media_upload(&strict, "plain.txt"), 403);
+    assert_eq!(
+        handle(
+            &strict,
+            req(
+                "GET",
+                &format!("/v0/b/{BUCKET}/o/plain.txt"),
+                &[("authorization", "Bearer owner")],
+                b"",
+            ),
+        )
+        .status,
+        404,
+        "the denied upload leaves nothing behind"
+    );
+
+    let emulator = state_with(Some(RULES), TokenAcceptance::EmulatorMock);
+    assert_eq!(anonymous_media_upload(&emulator, "plain.txt"), 200);
+
+    // Custom metadata makes `request.resource.metadata` a map in both profiles.
+    let (ct, body) = multipart(
+        &json!({"contentType": "text/plain", "metadata": {"other": "x"}}),
+        "text/plain",
+        b"hi",
+    );
+    for (state, name) in [(&strict, "custom.txt"), (&emulator, "custom.txt")] {
+        let r = handle(
+            state,
+            req(
+                "POST",
+                &format!("/v0/b/{BUCKET}/o?name={name}&uploadType=multipart"),
+                &[
+                    ("content-type", &ct),
+                    ("x-goog-upload-protocol", "multipart"),
+                ],
+                &body,
+            ),
+        );
+        assert_eq!(r.status, 200, "{}", String::from_utf8_lossy(&r.body));
+    }
+}
+
+/// `PATCH /storage/v1/b/{bucket}/o/{object}` updates object metadata, as the Cloud Storage
+/// JSON API does in production (recorded: stage 3 v9, `setup/seed-metadata` and
+/// `boundary-gcs-admin-patch-present`, a 200 with the `storage#object` resource; an absent
+/// object answers the 404 `No such object` JSON error). The official emulator registers PATCH
+/// only on the short `/b/...` spelling and answers 501 here; fireemu implements it (a published
+/// divergence), honouring `ifGenerationMatch` and `ifMetagenerationMatch` as production does.
+#[test]
+#[allow(clippy::too_many_lines)]
+fn json_api_patch_on_the_storage_v1_spelling_updates_metadata_as_production_does() {
+    let s = state(None);
+    let (ct, body) = multipart(
+        &json!({"name": "p.bin", "metadata": {"owner": "old"}}),
+        "text/plain",
+        b"base",
+    );
+    let r = handle(
+        &s,
+        req(
+            "POST",
+            &format!("/upload/storage/v1/b/{BUCKET}/o?uploadType=multipart"),
+            &[("content-type", &ct)],
+            &body,
+        ),
+    );
+    assert_eq!(r.status, 200, "{}", String::from_utf8_lossy(&r.body));
+    let first = json_body(&r);
+    let generation = first["generation"].as_str().unwrap().to_owned();
+    assert_eq!(first["metageneration"], "1");
+    let patch = |query: &str, body: &[u8]| {
+        handle(
+            &s,
+            req(
+                "PATCH",
+                &format!("/storage/v1/b/{BUCKET}/o/p.bin{query}"),
+                &[
+                    ("authorization", "Bearer owner"),
+                    ("content-type", "application/json"),
+                ],
+                body,
+            ),
+        )
+    };
+    // The metadata update answers the object resource with the metageneration advanced.
+    let r = patch(
+        &format!("?ifGenerationMatch={generation}&ifMetagenerationMatch=1"),
+        br#"{"metadata": {"owner": "new", "extra": "x"}}"#,
+    );
+    assert_eq!(r.status, 200, "{}", String::from_utf8_lossy(&r.body));
+    let patched = json_body(&r);
+    assert_eq!(patched["kind"], "storage#object");
+    assert_eq!(patched["name"], "p.bin");
+    assert_eq!(patched["generation"].as_str(), Some(generation.as_str()));
+    assert_eq!(patched["metageneration"], "2");
+    assert_eq!(patched["metadata"]["owner"], "new");
+    assert_eq!(patched["metadata"]["extra"], "x");
+    // The object read back shows the update, and a null value removes a key.
+    let r = patch("", br#"{"metadata": {"extra": null}}"#);
+    assert_eq!(r.status, 200);
+    assert_eq!(json_body(&r)["metageneration"], "3");
+    assert!(json_body(&r)["metadata"].get("extra").is_none());
+    // A stale precondition is refused without changing the object.
+    let r = patch(
+        "?ifMetagenerationMatch=1",
+        br#"{"metadata": {"owner": "stale"}}"#,
+    );
+    assert_eq!(r.status, 412);
+    assert_eq!(
+        json_body(&r)["error"]["errors"][0]["reason"],
+        "conditionNotMet"
+    );
+    let r = patch(
+        "?ifGenerationMatch=99999",
+        br#"{"metadata": {"owner": "stale"}}"#,
+    );
+    assert_eq!(r.status, 412);
+    let r = handle(
+        &s,
+        req(
+            "GET",
+            &format!("/storage/v1/b/{BUCKET}/o/p.bin"),
+            &[("authorization", "Bearer owner")],
+            b"",
+        ),
+    );
+    assert_eq!(json_body(&r)["metadata"]["owner"], "new");
+    assert_eq!(json_body(&r)["metageneration"], "3");
+    // An object that is not there is the JSON 404, and malformed preconditions and bodies are 400.
+    let r = handle(
+        &s,
+        req(
+            "PATCH",
+            &format!("/storage/v1/b/{BUCKET}/o/missing.bin"),
+            &[("content-type", "application/json")],
+            br#"{"metadata": {"a": "b"}}"#,
+        ),
+    );
+    assert_eq!(r.status, 404);
+    assert_eq!(
+        json_body(&r)["error"]["message"],
+        format!("No such object: {BUCKET}/missing.bin")
+    );
+    assert_eq!(json_body(&r)["error"]["errors"][0]["reason"], "notFound");
+    assert_eq!(patch("?ifGenerationMatch=garbage", b"{}").status, 400);
+    assert_eq!(patch("", b"{not json").status, 400);
+    // The download spelling stays GET-only, and the short spelling is unchanged.
+    let r = handle(
+        &s,
+        req(
+            "PATCH",
+            &format!("/download/storage/v1/b/{BUCKET}/o/p.bin"),
+            &[("content-type", "application/json")],
+            b"{}",
+        ),
+    );
+    assert_eq!(r.status, 501);
+    let r = handle(
+        &s,
+        req(
+            "PATCH",
+            &format!("/b/{BUCKET}/o/p.bin"),
+            &[("content-type", "application/json")],
+            br#"{"metadata": {"short": "spelling"}}"#,
+        ),
+    );
+    assert_eq!(r.status, 200);
+    assert_eq!(json_body(&r)["metageneration"], "4");
+}
+
 #[test]
 #[allow(clippy::too_many_lines)]
 fn json_api_preconditions_generations_and_ranges_are_strict() {
@@ -1719,7 +1994,13 @@ fn v1_rulesets_never_grant_lists() {
             b"",
         ),
     );
-    assert_eq!(r.status, 403, "{}", String::from_utf8_lossy(&r.body));
+    // Production refuses the list itself, before any rule is read (stage 3 v9,
+    // `list-v1-read-list-present` and `-absent`): 400 with this message.
+    assert_eq!(r.status, 400, "{}", String::from_utf8_lossy(&r.body));
+    assert_eq!(
+        json_body(&r)["error"]["message"],
+        "Listing objects in a bucket is disallowed for rules_version = \"1\".\nPlease update storage security rules to rules_version = \"2\" to use list."
+    );
 }
 
 #[test]
@@ -2061,7 +2342,8 @@ fn storage_tokens_are_bound_to_the_buckets_project() {
     let (ct, body) = multipart(&json!({"contentType": "text/plain"}), "text/plain", b"x");
     let upload = |bucket: &str| format!("/v0/b/{bucket}/o?name=f.txt&uploadType=multipart");
     // A demo-b user on demo-app's bucket, and a demo-app user on demo-b's: refused before
-    // any rule runs.
+    // any rule runs, with production's answer to a token of another project (stage 3 v9,
+    // `token-foreign-project`: 403 "Permission denied.", not an authentication failure).
     for (bucket, token) in [(BUCKET, &token_b), ("demo-b.appspot.com", &token_a)] {
         let r = handle(
             &s,
@@ -2072,8 +2354,8 @@ fn storage_tokens_are_bound_to_the_buckets_project() {
                 &body,
             ),
         );
-        assert_eq!(r.status, 401, "{}", String::from_utf8_lossy(&r.body));
-        assert!(String::from_utf8_lossy(&r.body).contains("audience"));
+        assert_eq!(r.status, 403, "{}", String::from_utf8_lossy(&r.body));
+        assert!(String::from_utf8_lossy(&r.body).contains("Permission denied."));
     }
     // Each user on their own project's bucket.
     for (bucket, token) in [(BUCKET, &token_a), ("demo-b.appspot.com", &token_b)] {
@@ -2675,10 +2957,11 @@ fn the_profile_decides_whether_storage_rules_admit_a_mock_token() {
         403,
         "and the rule, not the token, is what refuses another subject's prefix"
     );
-    // The audience binding survives the profile: a token minted for another project is not
-    // an identity here even though the official emulator would accept it.
+    // The emulator profile never reads the audience, as firebase-tools 15.28.2 does not: a
+    // token minted for another project is the identity it names, and the rule still decides.
     let foreign = format!("Firebase {}", mock_user_token("alice", "demo-other"));
-    assert_eq!(upload_as(&firebase, "owned/alice/y.txt", &foreign), 401);
+    assert_eq!(upload_as(&firebase, "owned/alice/y.txt", &foreign), 200);
+    assert_eq!(upload_as(&firebase, "owned/bob/y.txt", &foreign), 403);
 
     let strict = state_with(Some(OWNED_STORAGE_RULES), TokenAcceptance::Verified);
     assert_eq!(
@@ -2686,6 +2969,8 @@ fn the_profile_decides_whether_storage_rules_admit_a_mock_token() {
         401,
         "under strict the token names no user of the Auth store, so the caller is refused"
     );
+    // Strict keeps the audience check and answers as production does: 403, whatever the rule.
+    assert_eq!(upload_as(&strict, "owned/alice/y.txt", &foreign), 403);
 }
 
 #[test]
@@ -2705,10 +2990,12 @@ fn storage_rules_bind_mock_tokens_to_default_owned_bare_project_buckets() {
         upload_to_bucket_as(&firebase, worker_0, "owned/bob/x.txt", &token_0),
         403
     );
+    // The audience is not read in the emulator profile (firebase-tools 15.28.2 never reads it):
+    // a mock token of another worker project is the identity it names.
     for (bucket, token) in [(worker_0, &token_1), (worker_1, &token_0)] {
         assert_eq!(
             upload_to_bucket_as(&firebase, bucket, "owned/alice/x.txt", token),
-            401
+            200
         );
     }
     let tenant = format!(
@@ -2724,7 +3011,8 @@ fn storage_rules_bind_mock_tokens_to_default_owned_bare_project_buckets() {
     let strict = state_with(Some(OWNED_STORAGE_RULES), TokenAcceptance::Verified);
     assert_eq!(
         upload_to_bucket_as(&strict, worker_0, "owned/alice/x.txt", &token_0),
-        401
+        403,
+        "strict answers a token of another project as production does"
     );
 
     let mut scoped = state_with(Some(OWNED_STORAGE_RULES), TokenAcceptance::EmulatorMock);
@@ -2767,7 +3055,8 @@ fn storage_rules_bind_mock_tokens_to_default_owned_bare_project_buckets() {
     );
     assert_eq!(
         upload_to_bucket_as(&scoped, "demo-team", "owned/alice/x.txt", &team_token,),
-        401
+        200,
+        "the audience is not read in the emulator profile"
     );
     assert_eq!(
         upload_to_bucket_as(
@@ -2776,7 +3065,8 @@ fn storage_rules_bind_mock_tokens_to_default_owned_bare_project_buckets() {
             "owned/alice/x.txt",
             &guest_token,
         ),
-        401
+        200,
+        "a token of an unregistered project is admitted, and admitting it creates no project"
     );
     assert_eq!(scoped.auth.projects(), scoped_projects_before);
     assert_eq!(
@@ -2792,6 +3082,7 @@ fn storage_rules_bind_mock_tokens_to_default_owned_bare_project_buckets() {
 }
 
 #[test]
+#[allow(clippy::too_many_lines)]
 fn worker_project_resumable_uploads_reverify_the_same_mock_audience() {
     let bucket = "demo-app-w0";
     let matching = format!("Firebase {}", mock_user_token("alice", bucket));
@@ -2854,13 +3145,49 @@ fn worker_project_resumable_uploads_reverify_the_same_mock_audience() {
             b"{}",
         ),
     );
-    assert_eq!(foreign_start.status, 401);
+    // The emulator profile admits the other project's token, as the official emulator does.
+    assert_eq!(foreign_start.status, 200);
+    let foreign_session = header(&foreign_start, "x-goog-upload-url")
+        .unwrap()
+        .strip_prefix("http://127.0.0.1:9199")
+        .unwrap()
+        .to_owned();
+    let foreign_finalized = handle(
+        &firebase,
+        req(
+            "POST",
+            &foreign_session,
+            &[
+                ("x-goog-upload-command", "upload, finalize"),
+                ("x-goog-upload-offset", "0"),
+            ],
+            b"hello",
+        ),
+    );
+    assert_eq!(foreign_finalized.status, 200);
+
+    // Strict answers it as production does, before the session exists.
+    let strict = state_with(Some(OWNED_STORAGE_RULES), TokenAcceptance::Verified);
+    let strict_start = handle(
+        &strict,
+        req(
+            "POST",
+            &format!("/v0/b/{bucket}/o?name=owned%2Falice%2Fstrict.txt"),
+            &[
+                ("authorization", &foreign),
+                ("x-goog-upload-protocol", "resumable"),
+                ("x-goog-upload-command", "start"),
+            ],
+            b"{}",
+        ),
+    );
+    assert_eq!(strict_start.status, 403);
     assert_eq!(
         handle(
             &firebase,
             req(
                 "GET",
-                &format!("/v0/b/{bucket}/o/owned%2Falice%2Fforeign.txt"),
+                &format!("/v0/b/{bucket}/o/owned%2Falice%2Fstrict.txt"),
                 &[("authorization", "Bearer owner")],
                 b"",
             ),

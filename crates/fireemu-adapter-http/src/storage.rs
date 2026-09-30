@@ -13,8 +13,10 @@
 //!
 //! - the JSON API dialect is a privileged surface: Security Rules never run on it,
 //!   whatever credential is presented;
-//! - the JSON API registers object update (PATCH) and copy only on the short `/b/...`
-//!   spelling; the `/storage/v1/...` spelling of those falls through to the 501 catch-all;
+//! - the JSON API registers object copy only on the short `/b/...` spelling (and object update
+//!   (PATCH) only there too, upstream); the `/storage/v1/...` spelling of copy falls through to
+//!   the 501 catch-all. fireemu also implements PATCH on `/storage/v1/...`, as production does
+//!   (recorded by the stage 3 v9 recordings), a published divergence from the official emulator;
 //! - an unknown GET with a bucket-shaped path serves object bytes (the XML-ish
 //!   `/{bucket}/{object}` route) and answers `No such object: ...` otherwise;
 //! - the Firebase dialect answers plain-text statuses where the official emulator's
@@ -1568,6 +1570,12 @@ fn storage_rules_value(m: &ObjectMetadata) -> RulesValue {
 /// The `request.resource` of an upload: the whole prospective object, exactly as the
 /// official emulator builds it before its rules run — generation and timestamps included.
 /// The `firebaseStorageDownloadTokens` key never reaches `request.resource.metadata`.
+///
+/// `null_empty_metadata` is production's shape for an upload that carries no custom
+/// metadata: `request.resource.metadata` is `null`, so a rule that reads it (`"owner" in
+/// request.resource.metadata`) fails and denies (stage 3 v9, `incoming-upload-simple-metadata-true`).
+/// The official emulator builds an empty map there and the rule passes, which the emulator
+/// profile keeps.
 #[allow(clippy::too_many_arguments)]
 fn incoming_rules_value(
     bucket: &BucketName,
@@ -1577,6 +1585,7 @@ fn incoming_rules_value(
     hashes: ([u8; 16], u32),
     generation: u64,
     now: LogicalInstant,
+    null_empty_metadata: bool,
 ) -> RulesValue {
     let mut map = BTreeMap::new();
     let s = |v: &str| RulesValue::String(v.to_owned());
@@ -1614,18 +1623,36 @@ fn incoming_rules_value(
     ] {
         map.insert(k.into(), val.as_deref().map_or(RulesValue::Null, s));
     }
+    let custom: BTreeMap<String, RulesValue> = meta
+        .custom
+        .iter()
+        .flatten()
+        .filter(|(k, _)| k.as_str() != TOKENS_KEY)
+        .map(|(k, v)| (k.clone(), s(v)))
+        .collect();
     map.insert(
         "metadata".into(),
-        RulesValue::Map(
-            meta.custom
-                .iter()
-                .flatten()
-                .filter(|(k, _)| k.as_str() != TOKENS_KEY)
-                .map(|(k, v)| (k.clone(), s(v)))
-                .collect(),
-        ),
+        if null_empty_metadata && custom.is_empty() {
+            RulesValue::Null
+        } else {
+            RulesValue::Map(custom)
+        },
     );
     RulesValue::Map(map)
+}
+
+/// Why [`StorageState::principal`] refused a caller.
+enum PrincipalRefusal {
+    /// The credential is not a usable token: 401 with the reason.
+    Unauthenticated(String),
+    /// A token minted for another project, which production answers as any other denial.
+    ForeignAudience,
+}
+
+impl From<String> for PrincipalRefusal {
+    fn from(message: String) -> Self {
+        Self::Unauthenticated(message)
+    }
 }
 
 impl StorageState {
@@ -1653,11 +1680,29 @@ impl StorageState {
     /// eligible default-owned bare project bucket without changing that ownership.
     ///
     /// Under the `emulator` profile a value that does not even decode as a JWT is an
-    /// anonymous caller, as the official emulator's `jwt.decode` answers; a token that
-    /// decodes but names another project's audience, or carries a signature that does not
-    /// verify, is still refused — the published divergence from the official emulator's
-    /// verify-nothing behaviour.
-    fn principal(&self, authorization: Option<&str>, bucket: &str) -> Result<Principal, String> {
+    /// anonymous caller, as the official emulator's `jwt.decode` answers, and an unsigned
+    /// token minted for another project is admitted as the official emulator admits it
+    /// (firebase-tools 15.28.2 never reads `aud`); a token that carries a signature that
+    /// does not verify is still refused — the published divergence from the official
+    /// emulator's verify-nothing behaviour. The `strict` profile answers a foreign audience
+    /// as production does: 403, not an authentication failure.
+    fn principal(
+        &self,
+        authorization: Option<&str>,
+        bucket: &str,
+    ) -> Result<Principal, (u16, String)> {
+        self.principal_or_message(authorization, bucket)
+            .map_err(|refusal| match refusal {
+                PrincipalRefusal::Unauthenticated(message) => (401, message),
+                PrincipalRefusal::ForeignAudience => (403, "Permission denied.".to_owned()),
+            })
+    }
+
+    fn principal_or_message(
+        &self,
+        authorization: Option<&str>,
+        bucket: &str,
+    ) -> Result<Principal, PrincipalRefusal> {
         let Some(value) = authorization else {
             return Ok(Principal::Anonymous);
         };
@@ -1685,7 +1730,7 @@ impl StorageState {
             return if self.token_acceptance == TokenAcceptance::EmulatorMock {
                 Ok(Principal::Anonymous)
             } else {
-                Err("invalid ID token: not a decodable JWT".to_owned())
+                Err("invalid ID token: not a decodable JWT".to_owned().into())
             };
         };
         let aud = decoded_token
@@ -1694,11 +1739,15 @@ impl StorageState {
             .and_then(fireemu_core_types::json::JsonValue::as_str)
             .unwrap_or_default()
             .to_owned();
-        if aud != expected_rules_project {
-            return Err(format!(
-                "invalid ID token: audience {aud:?} does not match the bucket's rules project {expected_rules_project:?}"
-            ));
+        // Production answers a token minted for another project with a plain 403 (stage 3
+        // v9, `token-foreign-project`); the emulator profile admits it like firebase-tools
+        // 15.28.2, which never reads `aud`, and lets the mock-token check below bind the
+        // token to its own audience.
+        let foreign = aud != expected_rules_project;
+        if foreign && self.token_acceptance != TokenAcceptance::EmulatorMock {
+            return Err(PrincipalRefusal::ForeignAudience);
         }
+        let expected_rules_project = if foreign { aud } else { expected_rules_project };
         let tenant = decoded_token
             .payload
             .get("firebase")
@@ -1707,7 +1756,11 @@ impl StorageState {
             .map(str::to_owned);
         drop(parent);
         if tenant.is_some() && expected_rules_project != owner_project {
-            return Err("invalid ID token: tenant claims require a registered project".to_owned());
+            return Err(
+                "invalid ID token: tenant claims require a registered project"
+                    .to_owned()
+                    .into(),
+            );
         }
         let store_arc = match tenant {
             Some(tenant) => self
@@ -1777,8 +1830,12 @@ impl StorageState {
         };
         if method == Method::List && ruleset.version.as_deref() != Some("2") {
             // Storage list requests exist only under rules_version = '2'; a v1 `read` never
-            // grants them.
-            return Err(fb_denied(Method::List));
+            // grants them. Production answers 400 with this message (stage 3 v9,
+            // `list-v1-read-list-present`), not the 403 of a denied rule.
+            return Err(fb_json_error(
+                400,
+                "Listing objects in a bucket is disallowed for rules_version = \"1\".\nPlease update storage security rules to rules_version = \"2\" to use list.",
+            ));
         }
         let path = if object_path.is_empty() {
             format!("/b/{}/o", bucket.as_str())
@@ -1811,18 +1868,6 @@ impl StorageState {
 // routing
 // ------------------------------------------------------------------------------------------
 
-/// Which `/storage/v1`-family spelling addressed an object.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum GcsSpelling {
-    /// `/b/{bucket}/o/{name}` — the only spelling the official emulator registers for
-    /// PATCH and copy.
-    Short,
-    /// `/storage/v1/b/{bucket}/o/{name}` — GET and DELETE only upstream.
-    StorageV1,
-    /// `/download/storage/v1/b/{bucket}/o/{name}` — GET only.
-    Download,
-}
-
 /// Parsed target of a request, method already taken into account the way the official
 /// emulator's express routers register their handlers.
 enum Route {
@@ -1839,11 +1884,7 @@ enum Route {
     /// `GET /b/{bucket}/o` or `GET /storage/v1/b/{bucket}/o`.
     GcsList { bucket: String },
     /// One object on the JSON API.
-    GcsObject {
-        bucket: String,
-        name: String,
-        spelling: GcsSpelling,
-    },
+    GcsObject { bucket: String, name: String },
     /// `POST /b/{b}/o/{n}/(copyTo|rewriteTo)/b/{db}/o/{dn}` (short spelling only).
     GcsCopy {
         bucket: String,
@@ -1896,20 +1937,12 @@ fn route(method: &str, path: &str) -> Result<Route, String> {
         ("GET", ["b", b, "o"] | ["storage", "v1", "b", b, "o"]) => {
             Ok(Route::GcsList { bucket: d(b)? })
         }
-        ("GET" | "PATCH" | "DELETE", ["b", b, "o", n]) => Ok(Route::GcsObject {
+        // PATCH is served on `/storage/v1` as production serves it; the official emulator
+        // registers it on the short spelling only. The download spelling is GET only.
+        ("GET" | "PATCH" | "DELETE", ["b", b, "o", n] | ["storage", "v1", "b", b, "o", n])
+        | ("GET", ["download", "storage", "v1", "b", b, "o", n]) => Ok(Route::GcsObject {
             bucket: d(b)?,
             name: d(n)?,
-            spelling: GcsSpelling::Short,
-        }),
-        ("GET" | "DELETE", ["storage", "v1", "b", b, "o", n]) => Ok(Route::GcsObject {
-            bucket: d(b)?,
-            name: d(n)?,
-            spelling: GcsSpelling::StorageV1,
-        }),
-        ("GET", ["download", "storage", "v1", "b", b, "o", n]) => Ok(Route::GcsObject {
-            bucket: d(b)?,
-            name: d(n)?,
-            spelling: GcsSpelling::Download,
         }),
         ("POST", ["b", b, "o", n, "acl"]) => Ok(Route::GcsAcl {
             bucket: d(b)?,
@@ -2427,7 +2460,7 @@ pub fn handle(state: &StorageState, req: StorageRequest) -> StorageResponse {
         Dialect::Gcs => Principal::Owner,
         Dialect::Firebase => match state.principal(authorization, &bucket_of_route) {
             Ok(p) => p,
-            Err(e) => return error_response(dialect, 401, &e),
+            Err((status, message)) => return error_response(dialect, status, &message),
         },
     };
     let method = req.method.clone();
@@ -2495,13 +2528,9 @@ pub fn handle(state: &StorageState, req: StorageRequest) -> StorageResponse {
         },
         Route::GcsListBuckets => gcs_list_buckets(state, &host),
         Route::GcsList { bucket } => gcs_list(state, &bucket, &params, &host),
-        Route::GcsObject {
-            bucket,
-            name,
-            spelling,
-        } => gcs_object(
-            state, &bucket, &name, spelling, &method, &req, &params, &host,
-        ),
+        Route::GcsObject { bucket, name } => {
+            gcs_object(state, &bucket, &name, &method, &req, &params, &host)
+        }
         Route::GcsCopy {
             bucket,
             name,
@@ -2763,6 +2792,13 @@ fn fb_patch(
     let patch = patch_from_json(&body).map_err(|e| fb_json_error(400, &e))?;
     let mut store = state.store()?;
     let existing = store.get(&b, &n).cloned();
+    // A metadata update of an object that is not there is refused with 403, whatever the rules
+    // say and whichever credential is presented (production, stage 3 v9: `method-write-patch-absent`
+    // under `allow write: if true` and `boundary-firebase-admin-patch-absent` with the owner's
+    // token both answered 403; the official emulator answers 404 after the rules allowed it).
+    if existing.is_none() {
+        return Ok(fb_denied(Method::Update));
+    }
     // Rules run before existence is revealed, as the official emulator orders them.
     let request_resource = existing.as_ref().map_or(RulesValue::Null, |m| {
         let mut preview = patch.apply(m);
@@ -2778,9 +2814,6 @@ fn fb_patch(
         existing.as_ref().map(storage_rules_value),
         request_resource,
     )?;
-    if existing.is_none() {
-        return Ok(plain_status(404));
-    }
     let m = store
         .update_metadata(&b, &n, &patch, Precondition::default(), now)
         .map_err(fb_core_err)?;
@@ -2985,11 +3018,11 @@ fn fb_commit(
     inject_download_token(&mut store, &mut meta);
     let result = (|| {
         let existing = store.get(b, n).cloned();
-        let method = if existing.is_some() {
-            Method::Update
-        } else {
-            Method::Create
-        };
+        // An upload is a `create` for the rules whether or not the object exists: production
+        // was measured (stage 3 v9, `method-create-upload-present` 200 and
+        // `method-update-upload-present` 403), and so is the official emulator, whose
+        // uploadObject hard-codes the create method.
+        let method = Method::Create;
         let next_generation = store.next_generation_preview().map_err(fb_core_err)?;
         let hashes = prepared.digests();
         state
@@ -3007,6 +3040,7 @@ fn fb_commit(
                     hashes.values(),
                     next_generation,
                     now,
+                    state.token_acceptance != TokenAcceptance::EmulatorMock,
                 ),
             )
             .map_err(|denial| denial.with_header("x-goog-upload-status", "final"))?;
@@ -3110,7 +3144,9 @@ fn fb_resumable_command(
             FinalizeError::Denied(denial) => denial.with_header("x-goog-upload-status", "final"),
             FinalizeError::Store(StorageError::UploadNotFound) => plain_status(404),
             FinalizeError::Store(err) => fb_core_err(err),
-            FinalizeError::Auth(message) => error_response(Dialect::Firebase, 401, &message),
+            FinalizeError::Auth((status, message)) => {
+                error_response(Dialect::Firebase, status, &message)
+            }
         })?;
         let (b, n) = (m.bucket.clone(), m.name.clone());
         let m = store
@@ -3126,7 +3162,7 @@ fn fb_resumable_command(
 enum FinalizeError {
     Denied(StorageResponse),
     Store(StorageError),
-    Auth(String),
+    Auth((u16, String)),
 }
 
 /// Authorizes and commits a resumable upload against the bytes actually received (the
@@ -3165,11 +3201,8 @@ fn finalize_resumable(
         .principal(authorization.as_deref(), b.as_str())
         .map_err(FinalizeError::Auth)?;
     let existing = store.get(&b, &n).cloned();
-    let method = if existing.is_some() {
-        Method::Update
-    } else {
-        Method::Create
-    };
+    // Also a `create` over an existing object (see `fb_commit`).
+    let method = Method::Create;
     let next_generation = store
         .next_generation_preview()
         .map_err(FinalizeError::Store)?;
@@ -3179,7 +3212,16 @@ fn finalize_resumable(
         &b,
         n.as_str(),
         existing.as_ref().map(storage_rules_value),
-        incoming_rules_value(&b, &n, &meta, size, hashes, next_generation, now),
+        incoming_rules_value(
+            &b,
+            &n,
+            &meta,
+            size,
+            hashes,
+            next_generation,
+            now,
+            state.token_acceptance != TokenAcceptance::EmulatorMock,
+        ),
     ) {
         let _ = store.mark_upload_denied(id, now);
         return Err(FinalizeError::Denied(denial));
@@ -3265,7 +3307,6 @@ fn gcs_object(
     state: &StorageState,
     bucket: &str,
     name: &str,
-    spelling: GcsSpelling,
     method: &str,
     req: &StorageRequest,
     params: &BTreeMap<String, String>,
@@ -3299,7 +3340,7 @@ fn gcs_object(
                 Ok(StorageResponse::json(200, &gcs_json(&meta, host)))
             }
         }
-        "PATCH" if spelling == GcsSpelling::Short => {
+        "PATCH" => {
             let body: Value = if req.body.is_empty() {
                 Value::Object(Map::new())
             } else {
@@ -3328,7 +3369,6 @@ fn gcs_object(
             store.delete(&b, &n, pre).map_err(gcs_core_err)?;
             Ok(StorageResponse::empty(204))
         }
-        // PATCH on the /storage/v1 spelling falls into the official catch-all.
         _ => Ok(plain_status(501)),
     }
 }
@@ -3734,7 +3774,9 @@ fn gcs_resumable_put(
             // The JSON API dialect runs no rules, so a denial cannot happen here.
             FinalizeError::Denied(denial) => denial,
             FinalizeError::Store(err) => gcs_core_err(err),
-            FinalizeError::Auth(message) => error_response(Dialect::Gcs, 401, &message),
+            FinalizeError::Auth((status, message)) => {
+                error_response(Dialect::Gcs, status, &message)
+            }
         })?;
         return Ok(StorageResponse::json(200, &gcs_json(&m, host)));
     }

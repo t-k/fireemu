@@ -104,8 +104,10 @@ const CLASSIFIERS = {
   ...SESSION_CLASSIFIERS,
   "subject-observed": (row, response) => result("subject-observed", "observed", common(response)),
   "settle-read": (row, response, ctx) => {
-    const body = response.status === 403 ? jsonBody(response) : undefined;
+    const body = response.status === 403 || response.status === 400 ? jsonBody(response) : undefined;
     if (response.status === 200 && digest(response.bytes) === ctx.expectedSha256) return result("settle-read", "allowed", common(response));
+    // With no release on the bucket, Firebase Storage answers 400 (not 403) once the removal has reached the serving plane; until then it keeps answering by the rules it had (stage 3 v7 recording 1, 2026-09-30, attempts 644 to 651: 200 and 403 for 24 s or more, then this body).
+    if (response.status === 400 && isObject(body) && isObject(body.error) && body.error.code === 400 && typeof body.error.message === "string" && body.error.message.startsWith("Your bucket has not been set up properly for Firebase Storage.")) return result("settle-read", "no-release", common(response));
     if (isObject(body) && isObject(body.error) && body.error.code === 403 && typeof body.error.message === "string" && body.error.message.startsWith("Permission denied")) return result("settle-read", "denied", common(response));
     return result("settle-read", "other", common(response));
   },

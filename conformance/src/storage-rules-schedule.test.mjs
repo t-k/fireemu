@@ -276,7 +276,7 @@ test("the recovery restore settle carries the recovery rows, the witnesses and t
   assert.equal(step.intervalMs, manifest.restoration.intervalMs);
   assert.deepEqual(step.config, { kind: "restoration", name: "restore", phase: "recovery", maxCycles: manifest.restoration.maxCycles, requiredConsecutive: manifest.restoration.consecutiveCompleteCycles, witnesses: step.config.witnesses });
   assert.equal(step.config.witnesses.length, 4);
-  assert.ok(step.config.witnesses.every((w) => w.expect === "denied" && manifest.resources.controls.includes(w.objectName)));
+  assert.ok(step.config.witnesses.every((w) => w.expect === "no-release" && manifest.resources.controls.includes(w.objectName)));
   const pages = s.steps.find((entry) => entry.type === "pages");
   assert.equal(pages.rowIds.length, 10);
   assert.equal(pages.stopWhen, "no-next-page-token");

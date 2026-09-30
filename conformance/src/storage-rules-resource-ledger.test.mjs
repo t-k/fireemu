@@ -330,3 +330,65 @@ test("an uncertain create stays residual even after an absent read, since it may
   certain.recordOutcome(row(ids.cleanupAbsence), absent("gcs-metadata-read"));
   assert.equal(certain.residual().includes(name), false);
 });
+
+// A delete-present case: the subject's own delete (a Firebase v0 DELETE by a test user, denied by the case's rules) is not the owner's cleanup delete.
+const deleteCase = "method-read-delete-present";
+const deleteIds = {
+  baseline: `case/${deleteCase}/baseline/baseline-absence-metadata`, seed: `case/${deleteCase}/setup/seed`, subject: `case/${deleteCase}/subject/subject`,
+  afterMetadata: `case/${deleteCase}/after/after-metadata`, cleanupDelete: `case/${deleteCase}/cleanup/cleanup-delete`,
+};
+const deleteSeedAccepted = { kind: "gcs-seed-upload", verdict: "accepted", facts: { status: 200, generation: "1790727977683752", metageneration: "1", size: "4" } };
+const deniedObserved = { kind: "subject-observed", verdict: "observed", facts: { status: 403, bodyBytes: 40, bodySha256: "0".repeat(64) } };
+async function deleteCaseLedger() {
+  const l = await ledger();
+  const name = row(deleteIds.seed).request.objectName;
+  l.recordOutcome(row(deleteIds.baseline), absent("gcs-metadata-read"));
+  l.recordIntent(row(deleteIds.seed));
+  l.recordOutcome(row(deleteIds.seed), deleteSeedAccepted);
+  return { l, name };
+}
+
+test("a subject delete that the rules denied does not use up the owner's cleanup delete", async () => {
+  assert.equal(row(deleteIds.subject).stage, "subject");
+  assert.equal(row(deleteIds.subject).request.method, "DELETE");
+  const { l, name } = await deleteCaseLedger();
+  l.recordIntent(row(deleteIds.subject));
+  l.recordOutcome(row(deleteIds.subject), deniedObserved);
+  l.recordOutcome(row(deleteIds.afterMetadata), present("gcs-metadata-read", "1790727977683752", { metageneration: "2" }));
+  assert.equal(l.object(name).deletable, true);
+  assert.deepEqual(l.evaluate(row(deleteIds.cleanupDelete)).failed, []);
+  assert.equal(l.evaluate(row(deleteIds.cleanupDelete)).decision === "go" || l.evaluate(row(deleteIds.cleanupDelete)).decision === "stop", true);
+  assert.equal(l.evaluate(row(deleteIds.cleanupDelete)).failed.some((entry) => entry.token === "delete-not-attempted"), false);
+  l.recordIntent(row(deleteIds.cleanupDelete));
+  assert.equal(l.evaluate(row(deleteIds.cleanupDelete)).failed.some((entry) => entry.token === "delete-not-attempted"), true, "the owner's own delete is still allowed once");
+  assert.throws(() => l.recordIntent(row(deleteIds.cleanupDelete)), /mutation already attempted/);
+});
+
+test("a subject delete that went through leaves the object absent, so the cleanup delete is skipped, not stopped", async () => {
+  const { l, name } = await deleteCaseLedger();
+  l.recordIntent(row(deleteIds.subject));
+  l.recordOutcome(row(deleteIds.subject), { kind: "subject-observed", verdict: "observed", facts: { status: 204, bodyBytes: 0, bodySha256: "0".repeat(64) } });
+  l.recordOutcome(row(deleteIds.afterMetadata), absent("gcs-metadata-read"));
+  assert.equal(l.object(name).latest, "absent");
+  assert.equal(l.evaluate(row(deleteIds.cleanupDelete)).decision, "skip");
+  assert.deepEqual(l.residual(), []);
+});
+
+test("a subject delete whose answer was lost leaves the object uncertain, and a repeated subject row is still refused", async () => {
+  const { l, name } = await deleteCaseLedger();
+  l.recordIntent(row(deleteIds.subject));
+  l.recordOutcome(row(deleteIds.subject), { uncertain: true });
+  assert.equal(l.object(name).latest, "unknown");
+  assert.equal(l.object(name).deletable, false);
+  assert.throws(() => l.recordIntent(row(deleteIds.subject)), /mutation already attempted/);
+});
+
+test("the owner's cleanup delete and the recovery delete of the same object are still one delete", async () => {
+  const { l } = await deleteCaseLedger();
+  l.recordOutcome(row(deleteIds.afterMetadata), present("gcs-metadata-read", "1790727977683752"));
+  l.recordIntent(row(deleteIds.cleanupDelete));
+  l.recordOutcome(row(deleteIds.cleanupDelete), { kind: "gcs-delete", verdict: "accepted", facts: { status: 204, deleteAcknowledged: true } });
+  const recoveryDelete = manifest.rows.find((r) => /^recovery\/object-\d+\/delete$/.test(r.id) && r.request.objectName === row(deleteIds.seed).request.objectName);
+  assert.ok(recoveryDelete, "the object has a recovery delete row");
+  assert.throws(() => l.recordIntent(recoveryDelete), /mutation already attempted/);
+});

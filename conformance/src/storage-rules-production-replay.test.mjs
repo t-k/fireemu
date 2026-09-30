@@ -24,7 +24,7 @@ const documentRow = manifest.rows.find((row) => row.service === "firestore" && r
 const facts = (outcome) => ({ ...outcome.facts });
 
 test("the recorded production bodies are exactly what the fixtures hold: no secret, no redaction, and the shapes production is known to use", () => {
-  assert.deepEqual(Object.keys(PRODUCTION), ["rulesetList", "objectMetadataAbsent", "objectMediaAbsent", "rulesTestValid", "rulesTestInvalid", "documentAbsent", "releaseAbsent", "releaseBucketlessAbsent", "releasePresent"]);
+  assert.deepEqual(Object.keys(PRODUCTION), ["rulesetList", "objectMetadataAbsent", "objectMediaAbsent", "rulesTestValid", "rulesTestInvalid", "documentAbsent", "releaseAbsent", "releaseBucketlessAbsent", "releasePresent", "noRelease", "settleDenied", "rulesetDeleted", "accountDeleted", "accountsNone", "prefixEmpty", "rulesetCreated", "rulesetNeverExisted", "objectCreated", "objectListed", "objectDeleted", "documentCreated", "documentDeleted"]);
   for (const fixture of Object.values(PRODUCTION)) {
     assert.equal(Object.isFrozen(fixture), true);
     assert.ok(!/redacted|password|apiKey|access_token|Bearer /i.test(fixture.body));

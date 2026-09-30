@@ -83,7 +83,7 @@ function build(manifest) {
   }
 
   rows(["release/restore/owner-before-delete", "release/restore/delete", "release/restore/bucket-absence", "release/restore/bucketless-absence"]);
-  const witnesses = rowsOf((r) => r.family === "settle" && r.phase === "normal" && r.programId === "restore" && r.id.startsWith("settle/restore/1/")).map((r) => ({ objectName: r.request.objectName, expect: "denied" }));
+  const witnesses = rowsOf((r) => r.family === "settle" && r.phase === "normal" && r.programId === "restore" && r.id.startsWith("settle/restore/1/")).map((r) => ({ objectName: r.request.objectName, expect: "no-release" }));
   settleBlock("restore", "restoration", "normal", witnesses);
   rows([0, 1, 2, 3].map((index) => `management/restore-owner-media/${index}`));
   rows(["management/no-release/final/before-metadata", "management/no-release/final/before-media", "management/no-release/final/subject", "management/no-release/final/after-metadata", "management/no-release/final/after-media", "release/final/bucket", "release/final/bucketless"]);
@@ -140,7 +140,7 @@ function buildRecovery(manifest) {
   ["owner-before-delete", "delete"].forEach((stage) => row(`recovery/release/restore/${stage}`, "release-written-not-deleted"));
   ["bucket-absence", "bucketless-absence"].forEach((stage) => row(`recovery/release/restore/${stage}`, "release-written"));
   const settleRows = family("settle").filter((r) => r.programId === "restore");
-  const witnesses = settleRows.filter((r) => r.id.startsWith("recovery/settle/restore/1/")).map((r) => ({ objectName: r.request.objectName, expect: "denied" }));
+  const witnesses = settleRows.filter((r) => r.id.startsWith("recovery/settle/restore/1/")).map((r) => ({ objectName: r.request.objectName, expect: "no-release" }));
   if (witnesses.length !== 4 || settleRows.length !== 60) bad();
   steps.push({
     type: "settle", name: "restore", enabledBy: "restore-needed", rowIds: settleRows.map((r) => r.id), intervalMs: manifest.restoration.intervalMs,

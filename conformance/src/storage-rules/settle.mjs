@@ -2,7 +2,7 @@
 // only when every read gives exactly the verdict that witness expects. The wait settles after the required number of
 // consecutive matching cycles and is exhausted when the cycle limit is spent. Only the closed verdicts count: an answer
 // that is neither allowed nor denied (`other`) never matches, so it can never stand in for a denial.
-const VERDICTS = ["allowed", "denied", "other"];
+const VERDICTS = ["allowed", "denied", "no-release", "other"];
 const bad = (message) => { throw new Error(message); };
 
 function readConfig(input) {
@@ -26,12 +26,12 @@ function readConfig(input) {
     const witness = field.value;
     if (!witness || typeof witness !== "object" || Object.getPrototypeOf(witness) !== Object.prototype || Reflect.ownKeys(witness).length !== 2) fail();
     for (const key of ["objectName", "expect"]) { const inner = Object.getOwnPropertyDescriptor(witness, key); if (!inner?.enumerable || !Object.hasOwn(inner, "value")) fail(); }
-    if (typeof witness.objectName !== "string" || !/^STORAGE-RULES\/[A-Za-z0-9._\/-]{1,900}$/.test(witness.objectName) || !["allowed", "denied"].includes(witness.expect)) fail();
+    if (typeof witness.objectName !== "string" || !/^STORAGE-RULES\/[A-Za-z0-9._\/-]{1,900}$/.test(witness.objectName) || !["allowed", "denied", "no-release"].includes(witness.expect)) fail();
     return Object.freeze({ objectName: witness.objectName, expect: witness.expect });
   });
   if (new Set(witnesses.map((w) => w.objectName)).size !== witnesses.length) fail();
-  // A publication reads one witness that must be allowed and one that must be denied; a restoration reads four that must all be denied.
-  if (kind === "publication" ? witnesses.length !== 2 || witnesses[0].expect !== "allowed" || witnesses[1].expect !== "denied" : witnesses.length !== 4 || witnesses.some((w) => w.expect !== "denied")) fail();
+  // A publication reads one witness that must be allowed and one that must be denied; a restoration reads four that must all answer as a bucket with no release does (the removal has reached the serving plane). Until then the plane still answers by the rules it had, so an allowed or a denied read is a cycle that has not settled yet, never a match.
+  if (kind === "publication" ? witnesses.length !== 2 || witnesses[0].expect !== "allowed" || witnesses[1].expect !== "denied" : witnesses.length !== 4 || witnesses.some((w) => w.expect !== "no-release")) fail();
   return Object.freeze({ kind, name, phase, maxCycles, requiredConsecutive, witnesses: Object.freeze(witnesses) });
 }
 

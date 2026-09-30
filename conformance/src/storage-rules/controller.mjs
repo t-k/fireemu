@@ -47,10 +47,10 @@ export function createController(options) {
       return verdict === "present" || verdict === "absent";
     }
     if (kind === "firestore-read") return verdict === "present" || verdict === "absent";
-    // A query right after a cancel (the verify rows and recovery's terminal query) must find the session finished; only the first look may find it active.
-    if (kind === "session-command") return row.request.headers["x-goog-upload-command"] === "cancel" ? verdict === "acknowledged" : row.family === "session-verify" || /\/terminal$/.test(row.id) ? verdict === "final" : verdict === "active" || verdict === "final";
+    // The Firebase Storage v0 capabilities (a resumable session, a download token) are record-only: whatever production answers is recorded, and it never stops the run or holds back a cleanup, which reads the objects back through the admin API.
+    if (kind === "session-start" || kind === "session-command" || kind === "firebase-create-token") return true;
     // A settle read either shows the witness readable or shows it denied; any other answer (a quota error, a lost witness, wrong bytes) is a surprise, not a cycle that has not settled yet.
-    if (kind === "settle-read") return verdict === "allowed" || verdict === "denied";
+    if (kind === "settle-read") return verdict === "allowed" || verdict === "denied" || verdict === "no-release";
     return verdict === "accepted";
   }
 
@@ -96,8 +96,8 @@ export function createController(options) {
     if (outcome.kind === "session-start") await refs.bind({ ref: ref("session-url", row.request.objectName), value: outcome.secretFacts.sessionUrl, provenance });
     else if (outcome.kind === "firebase-create-token") {
       const token = outcome.secretFacts.downloadTokens;
-      if (token.includes(",")) throw new RunStop("more than one download token", { rowId: row.id });
-      await refs.bind({ ref: ref("download-token", row.request.objectName), value: token, provenance });
+      // A token that is not exactly one (production minted another before, or a list) is not bound: the rows that would use it are skipped, not stopped.
+      if (!token.includes(",")) await refs.bind({ ref: ref("download-token", row.request.objectName), value: token, provenance });
     }
   }
 
@@ -114,8 +114,13 @@ export function createController(options) {
     if (decision.decision === "stop") throw new RunStop("guard failed", { rowId: row.id, tokens: decision.failed.map((f) => f.token) });
     let prepared;
     let unavailable = "target refused";
-    try { prepared = targets.prepare(row, (reference, rowId) => { try { return refs.resolve(reference, rowId); } catch (error) { unavailable = error.message; throw error; } }); } catch { throw new RunStop("target unavailable", { rowId: row.id, cause: unavailable }); }
-    objects.recordIntent(row); run.recordIntent(row);
+    try { prepared = targets.prepare(row, (reference, rowId) => { try { return refs.resolve(reference, rowId); } catch (error) { unavailable = error.message; throw error; } }); } catch {
+      // A row that needs a v0 capability (a session URL, a download token) that was not obtained is skipped: those answers are record-only.
+      if (row.request.sessionUrlReference !== undefined || JSON.stringify(row.request.query ?? {}).includes("download-token")) { skipped.push(row.id); await capture.writeNote({ operationId: null, text: `skipped ${row.id}: v0 capability not obtained` }); return null; }
+      throw new RunStop("target unavailable", { rowId: row.id, cause: unavailable });
+    }
+    // A ledger that refuses a row (a repeated mutation, an unowned resource) ends the run with a reason; it must never escape `run()` as a crash.
+    try { objects.recordIntent(row); run.recordIntent(row); } catch (error) { throw error instanceof RunStop ? error : new RunStop("ledger refused", { rowId: row.id, message: String(error?.message ?? "").slice(0, 120) }); }
     let result;
     try { result = await gate.send(prepared, { phase, mutationKey: mutationKeyOf(row), accept }); } catch (error) {
       const code = stopCodeOf(error);

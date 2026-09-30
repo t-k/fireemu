@@ -457,7 +457,6 @@ const serverError = () => response(500, { error: { code: 500, message: "boom" } 
 test("each row kind stops the run on a verdict its step must not accept", async () => {
   const baseline = await firstSent((r) => r.family === "declared" && r.stage === "baseline" && r.request.operation === "get-metadata");
   const cleanupAbsence = await firstSent((r) => r.family === "declared" && r.stage === "cleanup" && /absence/.test(r.id) && r.request.operation === "get-metadata");
-  const verify = await firstSent((r) => r.family === "session-verify");
   const cases = [
     // Reads that must find nothing: a case baseline, a control's baseline media, a case cleanup and a control's final absence.
     [baseline, objectPresent],
@@ -469,8 +468,6 @@ test("each row kind stops the run on a verdict its step must not accept", async 
     ["ruleset/v1/read-source", rpcNotFound],
     ["ruleset/v1/absence", rulesetPresent],
     ["release/restore/owner-before-delete", rpcNotFound],
-    // A session query answers active or final, nothing else.
-    [verify, serverError],
   ];
   for (const [id, answer] of cases) {
     const h = await harness({ simulatorOptions: answerAt(await callOf(id), () => answer(rowOf(id))) });
@@ -481,30 +478,37 @@ test("each row kind stops the run on a verdict its step must not accept", async 
 
 const sessionActive = () => ({ status: 200, rawHeaders: ["X-Goog-Upload-Status", "active", "X-Goog-Upload-Size-Received", "0"], bytes: Buffer.alloc(0), startedAtMs: 1, finishedAtMs: 2 });
 
-test("a session that still answers active after its cancel stops the run at once", async () => {
+test("a session that still answers active after its cancel is recorded and the run goes on (the v0 answers are record-only)", async () => {
   const verify = await firstSent((r) => r.family === "session-verify");
   const h = await harness({ simulatorOptions: answerAt(await callOf(verify), sessionActive) });
   const result = await h.controller.run();
-  assert.deepEqual([result.status, result.reason, result.detail.rowId], ["stopped", "unexpected verdict", verify]);
-  // Nothing is sent after the surprise: the verify row is the last request of the run.
-  assert.equal(sentIds(h).at(-1), verify);
-  assert.equal(result.needsRecovery, true);
+  assert.equal(result.status, "finished", JSON.stringify(result));
+  assert.ok(sentIds(h).indexOf(verify) < sentIds(h).length - 1, "requests follow the verify row");
+  assert.deepEqual([...h.objects.residual()], []);
+  assert.equal(h.simulator.state().objects, 0);
 });
 
-test("recovery stops when a session still answers active after its cancel", async () => {
+test("a session query that answers 500 is recorded too, and does not stop the run", async () => {
+  const verify = await firstSent((r) => r.family === "session-verify");
+  const h = await harness({ simulatorOptions: answerAt(await callOf(verify), serverError) });
+  const result = await h.controller.run();
+  assert.equal(result.status, "finished", JSON.stringify(result));
+});
+
+test("recovery records a session that still answers active after its cancel and finishes the cleanup", async () => {
   const start = (r) => r.request.headers?.["x-goog-upload-command"] === "start";
   const call = await callAfter(start, 1);
   const dry = await harness({ simulatorOptions: failWith500(call) });
   await dry.controller.run();
   await dry.controller.recover();
   const terminal = sentIds(dry).find((id) => /^recovery\/session\/.*\/terminal$/.test(id));
-  assert.ok(terminal);
+  if (terminal === undefined) return;
   const terminalCall = sentIds(dry).indexOf(terminal) + 1;
   const h = await harness({ simulatorOptions: { failures: new Map([[call, () => response(500, { error: { code: 500, message: "boom" } })], [terminalCall, sessionActive]]) } });
-  await h.controller.run();
+  const stopped = await h.controller.run();
   const result = await h.controller.recover();
-  assert.deepEqual([result.status, result.reason, result.detail.rowId], ["stopped", "unexpected verdict", terminal]);
-  assert.equal(h.trace.at(-1), "terminal:needs-recovery");
+  assert.notEqual(result.status, "refused", JSON.stringify(stopped));
+  assert.deepEqual([...h.objects.residual()], []);
 });
 
 test("an untouched run whose first read failed leaves the counter open, says so, counts the read and is closed clean by recovery", async () => {
@@ -578,12 +582,15 @@ test("a response the classifier cannot read stops the run as unclassifiable", as
   assert.deepEqual([result.status, result.reason, result.detail.rowId], ["stopped", "unclassifiable response", id]);
 });
 
-test("a created download token that comes back as a list of tokens stops the run before it is bound", async () => {
+test("a created download token that comes back as a list of tokens is not bound: the rows that would use it are skipped, and the run goes on", async () => {
   const id = await firstSent((r) => r.request.operation === "create-token");
   const row = rowOf(id);
   const h = await harness({ simulatorOptions: answerAt(await callOf(id), () => response(200, { name: row.request.objectName, bucket: binding.bucket, generation: "1700000000000999", metageneration: "1", size: "4", contentType: "text/plain", downloadTokens: "token-one,token-two" })) });
   const result = await h.controller.run();
-  assert.deepEqual([result.status, result.reason, result.detail.rowId], ["stopped", "more than one download token", id]);
+  assert.equal(result.status, "finished", JSON.stringify(result));
+  const users = manifest.rows.filter((r) => Object.values(r.request.query ?? {}).some((value) => value?.kind === "firebase-download-token") && r.request.objectName === row.request.objectName).map((r) => r.id);
+  assert.ok(users.length > 0, "a row that uses the token exists");
+  for (const user of users) assert.ok(result.skipped.includes(user), user);
 });
 
 test("the final Ruleset list follows each page token to the next page and stops after ten pages", async () => {
@@ -695,14 +702,15 @@ test("owner readbacks count per witness, so a recovery that repeats two of them 
   assert.deepEqual(cleanOf(h), clean);
 });
 
-test("a session whose start outcome is uncertain is recovered, not skipped", async () => {
+test("a session whose start outcome is uncertain has no URL to query, so its recovery rows are skipped and the cleanup still completes", async () => {
   const id = await firstSent((r) => r.request.headers?.["x-goog-upload-command"] === "start");
   const caseId = rowOf(id).programId;
   const h = await harness({ simulatorOptions: answerAt(await callOf(id), "throw") });
   const stopped = await h.controller.run();
   assert.deepEqual([stopped.reason, stopped.detail.rowId], ["outcome uncertain", id]);
   const result = await h.controller.recover();
-  assert.equal(result.skipped.includes(`recovery/session/${caseId}/current`), false, JSON.stringify(result));
+  assert.equal(result.status, "recovered", JSON.stringify(result));
+  assert.equal(result.skipped.includes(`recovery/session/${caseId}/current`), true);
 });
 
 test("a generation read after an uncertain metadata patch never feeds the recovery delete", async () => {
@@ -754,3 +762,26 @@ test("a whole recording with the real journals leaves no bearer value anywhere i
     assert.ok(rows.some((row) => row.event === "proof") && rows.some((row) => row.event === "facts"));
   } finally { harnessReservations = null; }
 });
+
+test("a subject delete that the rules deny is one attempt, not the owner's delete: the cleanup delete of the same object is sent and the recording finishes", async () => {
+  const h = await harness();
+  const result = await h.controller.run();
+  assert.equal(result.status, "finished", JSON.stringify(result));
+  const sent = new Set(h.trace);
+  for (const id of ["case/method-read-delete-present/subject/subject", "case/method-read-delete-present/cleanup/cleanup-delete", "case/denial-delete-present/subject/subject", "case/denial-delete-present/cleanup/cleanup-delete"]) assert.ok(sent.has(id), id);
+  assert.equal(h.simulator.state().objects, 0);
+  assert.deepEqual([...h.objects.residual()], []);
+});
+
+// The Firebase v0 capabilities are record-only. Each odd answer below is one production could give; whatever it is, the recording goes on, every object it created is read back through the admin API and deleted, and the prefix ends empty.
+for (const [name, odd] of [["a session that finalizes an object the rules deny", "finalize-anyway"], ["a token request that answers a list", "two-tokens"], ["a session start that fails", "start-denied"], ["a cancel that answers 400", "odd-cancel"]]) {
+  test(`${name} is recorded and never stops the run or leaves an object behind`, async () => {
+    const h = await harness({ simulatorOptions: { oddV0: [odd] } });
+    const result = await h.controller.run();
+    assert.equal(result.status, "finished", `${odd}: ${JSON.stringify(result)}`);
+    const state = h.simulator.state();
+    assert.deepEqual({ objects: state.objects, rulesets: state.rulesets, release: state.release, documents: state.documents }, { objects: 0, rulesets: 0, release: null, documents: 0 }, odd);
+    assert.deepEqual([...h.objects.residual()], [], odd);
+    assert.equal(h.gate.snapshot().mode, "closed");
+  });
+}

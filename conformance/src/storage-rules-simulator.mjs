@@ -6,6 +6,9 @@ import { createHash, randomUUID } from "node:crypto";
 const json = (status, body, headers = {}) => ({ status, rawHeaders: Object.entries({ "Content-Type": "application/json; charset=UTF-8", ...headers }).flat(), bytes: Buffer.from(JSON.stringify(body)), startedAtMs: 1, finishedAtMs: 2 });
 const empty = (status, headers = {}) => ({ status, rawHeaders: Object.entries(headers).flat(), bytes: Buffer.alloc(0), startedAtMs: 1, finishedAtMs: 2 });
 const denial = () => json(403, { error: { code: 403, message: "Permission denied. Could not perform this operation" } });
+// The answer production gave to a Firebase Storage v0 request on a bucket with no release (stage 3 v7 recording 1, 2026-09-30, `management/no-release/entry/subject` and the last
+// restoration settle reads: status 400, this body, `application/json; charset=UTF-8`; the fixture `noRelease` of the production fixtures).
+const noRelease = () => json(400, { error: { code: 400, message: "Your bucket has not been set up properly for Firebase Storage. Please visit 'https://console.firebase.google.com/project/fireemu-oracle-query/storage/rules' to set up security rules." } });
 // The answers production gave to the stage 2d probe: a missing object is a JSON error for a metadata read (its message names the bucket and the object, and so does
 // its one error), and a plain sentence with a text content type for a media download; a missing document is a Firestore NOT_FOUND that quotes the document name.
 const gcsNotFound = (bucket, name) => json(404, { error: { code: 404, message: `No such object: ${bucket}/${name}`, errors: [{ message: `No such object: ${bucket}/${name}`, domain: "global", reason: "notFound" }] } });
@@ -15,6 +18,16 @@ const rpcNotFound = () => json(404, { error: { code: 404, message: "Requested en
 const sha = (text) => createHash("sha256").update(text).digest("hex");
 const time = () => "2026-09-29T10:00:00.000000Z";
 
+// The delete cases whose subject (a Firebase v0 DELETE by a test user) the case's own rules deny, so the object stays: 403 "Permission denied." by the rules, not by a missing release
+// (stage 3 v7 recording 1, `method-read-delete-present`, attempt 636, blob 8cb089d6: 403 with this body). The list is deterministic from the rules each case states; the simulator does not
+// evaluate rules, so it takes the answer from here. A case that is not listed answers by the release, as before.
+export const DENIED_SUBJECT_DELETE_CASES = Object.freeze([
+  "method-read-delete-present", "method-get-delete-present", "method-list-delete-present", "method-create-delete-present", "method-update-delete-present",
+  "stored-size-false-delete-present", "stored-contentType-false-delete-present", "stored-name-false-delete-present", "stored-metadata-false-delete-present",
+  "state-delete-nonnull-present", "stored-null-true-delete-present", "denial-delete-present", "boundary-firebase-user-a-delete-present",
+]);
+const rulesDenial = () => json(403, { error: { code: 403, message: "Permission denied." } });
+
 export function createSimulator({ manifest, options = {} }) {
   const { bucket } = manifest.binding;
   const project = "fireemu-oracle-query";
@@ -22,6 +35,10 @@ export function createSimulator({ manifest, options = {} }) {
   const witnessOf = { v1: controls[0], v2: controls[1], A: controls[3], B: controls[4] };
   const sourceBySha = new Map(manifest.sources.map((entry) => [entry.sha256, entry.id]));
   const invalidContent = options.invalidContent ?? null;
+  const deniedDeleteCases = options.deniedSubjectDeleteCases ?? DENIED_SUBJECT_DELETE_CASES;
+  // Answers of the Firebase v0 capabilities that a recording must survive (they are record-only): `finalize-anyway` (a session finalizes an object the rules deny), `two-tokens` (a token request
+  // answers a list), `start-denied` (a session start fails), `odd-cancel` (a cancel answers 400). Off by default.
+  const odd = new Set(options.oddV0 ?? []);
   const objects = new Map();
   const rulesets = new Map();
   // The rulesets that exist in production before the run (a storage one and a Firestore one, listed with their metadata). The run never creates,
@@ -42,6 +59,7 @@ export function createSimulator({ manifest, options = {} }) {
   let release = null;
   let staleReads = 0;
   let previousSource = null;
+  let previousRelease = null;
   const state = { failures: options.failures ?? new Map(), calls: 0 };
   for (const name of options.preexisting ?? []) objects.set(name, { bytes: Buffer.from("foreign"), generation: ++generation, metageneration: 1, previous: null });
 
@@ -51,6 +69,9 @@ export function createSimulator({ manifest, options = {} }) {
     return ruleset ? sourceBySha.get(sha(ruleset.content)) ?? null : null;
   };
   const effectiveSource = () => (staleReads > 0 ? previousSource : activeSource());
+  // What the serving plane still answers by: the release before the last change while it is stale, the current one after. A bucket with none answers 400, not 403.
+  const servingRelease = () => (staleReads > 0 ? previousRelease : release);
+  const refusal = () => (servingRelease() === null ? noRelease() : denial());
   const allowed = (name) => {
     const source = effectiveSource();
     if (source === null) return false;
@@ -114,12 +135,13 @@ export function createSimulator({ manifest, options = {} }) {
       const object = objects.get(name);
       if (method === "POST" && url.searchParams.get("create_token") === "true") {
         if (!object) return json(404, { error: { code: 404, message: "Not Found." } });
-        object.token = object.token ? `${object.token},${randomUUID()}` : randomUUID();
+        object.token = odd.has("two-tokens") ? `${randomUUID()},${randomUUID()}` : object.token ? `${object.token},${randomUUID()}` : randomUUID();
         secrets.push(object.token);
         return json(200, firebaseJson(name, object, { downloadTokens: object.token }));
       }
       consumeStale();
-      if (!allowed(name)) return denial();
+      if (method === "DELETE" && servingRelease() !== null && deniedDeleteCases.some((id) => name.includes(`/${id}/`))) return rulesDenial();
+      if (!allowed(name)) return refusal();
       if (method === "GET") {
         if (!object) return json(404, { error: { code: 404, message: "Not Found." } });
         return url.searchParams.get("alt") === "media" ? { status: 200, rawHeaders: ["Content-Type", "text/plain"], bytes: object.bytes, startedAtMs: 1, finishedAtMs: 2 } : json(200, firebaseJson(name, object));
@@ -130,20 +152,21 @@ export function createSimulator({ manifest, options = {} }) {
     if (method === "GET" && path === `/v0/b/${bucket}/o`) {
       consumeStale();
       const prefix = url.searchParams.get("prefix") ?? "";
-      if (!allowed(`${prefix}x`)) return denial();
+      if (!allowed(`${prefix}x`)) return refusal();
       return json(200, { prefixes: [], items: [...objects.keys()].filter((name) => name.startsWith(prefix)).slice(0, 3).map((name) => ({ name, bucket })) });
     }
     if (method === "POST" && path === `/v0/b/${bucket}/o`) {
       const name = url.searchParams.get("name");
       consumeStale();
       if (command === "start") {
-        if (!allowed(name)) return denial();
+        if (odd.has("start-denied")) return json(500, { error: { code: 500, message: "Internal error encountered." } });
+        if (!allowed(name)) return refusal();
         const id = `SIMSESSION${sessions.size}${randomUUID().replaceAll("-", "").slice(0, 12)}`;
         sessions.set(id, { name, state: "active" });
         secrets.push(id);
         return json(200, {}, { "X-Goog-Upload-URL": `https://firebasestorage.googleapis.com/v0/b/${bucket}/o?name=${encodeURIComponent(name)}&upload_id=${id}&upload_protocol=resumable`, "X-Goog-Upload-Status": "active", "X-GUploader-UploadID": id });
       }
-      if (!allowed(name)) return denial();
+      if (!allowed(name)) return refusal();
       return json(200, firebaseJson(name, putObject(name, spec.body ?? Buffer.alloc(0))));
     }
     return json(404, { error: { code: 404, message: "unrouted" } });
@@ -162,9 +185,10 @@ export function createSimulator({ manifest, options = {} }) {
     if (!entry) return json(404, { error: { code: 404, message: "Not Found." } });
     consumeStale();
     if (command === "query") return { status: 200, rawHeaders: ["X-Goog-Upload-Status", entry.state === "active" ? "active" : "final", "X-Goog-Upload-Size-Received", entry.state === "final" && entry.received ? "4" : "0"], bytes: Buffer.alloc(0), startedAtMs: 1, finishedAtMs: 2 };
+    if (command === "cancel" && odd.has("odd-cancel")) return json(400, { error: { code: 400, message: "Bad request." } });
     if (command === "cancel") { if (entry.state === "active") entry.state = "cancelled"; return { status: 200, rawHeaders: ["X-Goog-Upload-Status", "cancelled"], bytes: Buffer.alloc(0), startedAtMs: 1, finishedAtMs: 2 }; }
     if (command === "upload, finalize") {
-      if (!allowed(entry.name) || entry.state !== "active") return denial();
+      if ((!allowed(entry.name) && !odd.has("finalize-anyway")) || entry.state !== "active") return refusal();
       entry.state = "final"; entry.received = true;
       return json(200, firebaseJson(entry.name, putObject(entry.name, spec.body ?? Buffer.alloc(0))));
     }
@@ -195,11 +219,11 @@ export function createSimulator({ manifest, options = {} }) {
     if (method === "GET" && path === `/v1/projects/${project}/rulesets`) return json(200, { rulesets: [...(options.strangerAfterEntry && listCalls++ > 0 ? [stranger] : []), ...entryRulesets.map((entry) => ({ name: entry.name, createTime: entry.createTime, metadata: { services: entry.services } })), ...[...rulesets.values()].map((r) => ({ name: r.name, createTime: r.createTime, metadata: { services: ["firebase.storage"] } }))] });
     const name = `projects/${project}/releases/firebase.storage/${bucket}`;
     const releaseJson = () => ({ name, rulesetName: release, createTime: time(), updateTime: time() });
-    if (method === "POST" && path === `/v1/projects/${project}/releases`) { previousSource = activeSource(); release = body.rulesetName; staleReads = options.lag ?? 0; return json(200, releaseJson()); }
+    if (method === "POST" && path === `/v1/projects/${project}/releases`) { previousSource = activeSource(); previousRelease = release; release = body.rulesetName; staleReads = options.lag ?? 0; return json(200, releaseJson()); }
     if (path === `/v1/${name}`) {
       if (method === "GET") return release === null ? rpcNotFound() : json(200, releaseJson());
-      if (method === "PATCH") { previousSource = activeSource(); release = body.release.rulesetName; staleReads = options.lag ?? 0; return json(200, releaseJson()); }
-      if (method === "DELETE") { if (release === null) return rpcNotFound(); previousSource = activeSource(); release = null; staleReads = options.lag ?? 0; return json(200, {}); }
+      if (method === "PATCH") { previousSource = activeSource(); previousRelease = release; release = body.release.rulesetName; staleReads = options.lag ?? 0; return json(200, releaseJson()); }
+      if (method === "DELETE") { if (release === null) return rpcNotFound(); previousSource = activeSource(); previousRelease = release; release = null; staleReads = options.lag ?? 0; return json(200, {}); }
     }
     if (method === "GET" && path === `/v1/projects/${project}/releases/firebase.storage`) return rpcNotFound();
     return json(404, { error: { code: 404, message: "unrouted", status: "NOT_FOUND" } });

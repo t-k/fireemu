@@ -35,7 +35,11 @@ export function createResourceLedger(options) {
     if (!["POST", "PATCH", "PUT", "DELETE"].includes(method)) return null;
     return operation === "delete" || method === "DELETE" ? "delete" : operation === "patch" || method === "PATCH" ? "patch" : "create";
   };
-  const mutationKey = (row, verb) => (verb === "delete" ? `object|${row.request.objectName}|delete` : `object|${row.request.objectName}|${verb}|${row.id}`);
+  // A subject or comparison row is the service's answer to a request made with a test credential, not a write by the run's owner: the rules decide whether it took effect (the
+  // next readback shows it). It is a different attempt from the owner's one allowed delete, so it does not consume it (the 2026-09-30 stop: a denied subject delete was counted as the
+  // owner's), and its key names the row.
+  const isSubjectRow = (row) => row.stage === "subject" || row.stage === "comparison";
+  const mutationKey = (row, verb) => (verb === "delete" && !isSubjectRow(row) ? `object|${row.request.objectName}|delete` : `object|${row.request.objectName}|${verb}|${row.id}`);
 
   function recordIntent(row) {
     if (!isObjectRow(row)) return;
@@ -48,7 +52,7 @@ export function createResourceLedger(options) {
     object.started = true;
     object.writes++;
     object.latest = "unknown";
-    if (verb === "delete") object.deleteAttempted = true;
+    if (verb === "delete" && !isSubjectRow(row)) object.deleteAttempted = true;
   }
 
   function recordOutcome(row, outcome) {
@@ -84,7 +88,7 @@ export function createResourceLedger(options) {
       return;
     }
     if (verb === "delete") {
-      if (verdict !== "accepted") object.uncertainOther = true;
+      if (verdict !== "accepted" && !isSubjectRow(row)) object.uncertainOther = true;
       object.latest = "unknown";
       return;
     }

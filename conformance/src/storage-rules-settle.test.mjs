@@ -10,7 +10,7 @@ const load = async () => {
   return module;
 };
 const publication = (overrides = {}) => ({ kind: "publication", name: "v1", maxCycles: 30, requiredConsecutive: 2, witnesses: [{ objectName: "STORAGE-RULES/r/allow.bin", expect: "allowed" }, { objectName: "STORAGE-RULES/r/deny.bin", expect: "denied" }], ...overrides });
-const restoration = (overrides = {}) => ({ kind: "restoration", name: "restore", maxCycles: 15, requiredConsecutive: 2, witnesses: ["a", "b", "c", "d"].map((n) => ({ objectName: `STORAGE-RULES/r/${n}.bin`, expect: "denied" })), ...overrides });
+const restoration = (overrides = {}) => ({ kind: "restoration", name: "restore", maxCycles: 15, requiredConsecutive: 2, witnesses: ["a", "b", "c", "d"].map((n) => ({ objectName: `STORAGE-RULES/r/${n}.bin`, expect: "no-release" })), ...overrides });
 
 // A reference model written independently of the reducer: read the verdicts cycle by cycle, count consecutive complete matches.
 function reference(config, verdicts) {
@@ -75,9 +75,9 @@ test("exhausting the cycle limit ends the wait without settling", async () => {
   assert.equal((await run(publication(), almost)).state.status, "exhausted");
 });
 
-test("a restoration counts a cycle only when all four witnesses are denied, and other answers never count as denied", async () => {
-  const deniedCycle = Array(4).fill("denied");
-  for (const broken of [["denied", "denied", "denied", "allowed"], ["denied", "denied", "denied", "other"], ["other", "other", "other", "other"], ["allowed", "allowed", "allowed", "allowed"]]) {
+test("a restoration counts a cycle only when all four witnesses answer as a bucket with no release does; allowed, denied and other answers never count", async () => {
+  const deniedCycle = Array(4).fill("no-release");
+  for (const broken of [["no-release", "no-release", "no-release", "allowed"], ["no-release", "no-release", "no-release", "denied"], ["no-release", "no-release", "no-release", "other"], ["other", "other", "other", "other"], ["allowed", "allowed", "allowed", "allowed"], ["denied", "denied", "denied", "denied"]]) {
     const { state, reads } = await run(restoration(), [...deniedCycle, ...broken, ...deniedCycle]);
     assert.equal(state.status, "running", JSON.stringify(broken));
     assert.equal(reads, 12);
@@ -88,6 +88,17 @@ test("a restoration counts a cycle only when all four witnesses are denied, and 
   assert.equal((await run(restoration(), Array(15 * 4).fill("other"))).state.status, "exhausted");
 });
 
+test("a restoration settles on the sequence production gave after a release was removed: two stale cycles, then the 400 of a bucket with no release, twice", async () => {
+  // Stage 3 v7 recording 1, attempts 643 to 650 (two cycles of 403, 200, 403, 403 while the serving plane still held the old rules) and then the 400 answers.
+  const stale = ["denied", "allowed", "denied", "denied"];
+  const settled = Array(4).fill("no-release");
+  const { state, reads } = await run(restoration(), [...stale, ...stale, ...settled, ...settled]);
+  assert.equal(state.status, "settled");
+  assert.equal(reads, 16);
+  // One 400 cycle is not enough, and a stale cycle in between starts the count again.
+  assert.equal((await run(restoration(), [...stale, ...settled, ...stale, ...settled])).state.status, "running");
+});
+
 test("the reducer agrees with the reference model on random verdict sequences and never reads past its bound", async () => {
   const random = prng(20260929);
   const pick = (weights) => { const roll = random(); let sum = 0; for (const [verdict, weight] of weights) { sum += weight; if (roll < sum) return verdict; } return "other"; };
@@ -96,7 +107,7 @@ test("the reducer agrees with the reference model on random verdict sequences an
       const positive = random();
       const verdicts = Array.from({ length: config.maxCycles * config.witnesses.length + 3 }, (_, index) => {
         const expect = config.witnesses[index % config.witnesses.length].expect;
-        return random() < positive ? expect : pick([["allowed", 0.25], ["denied", 0.25], ["other", 0.5]]);
+        return random() < positive ? expect : pick([["allowed", 0.2], ["denied", 0.2], ["no-release", 0.1], ["other", 0.5]]);
       });
       const { state, reads } = await run(config, verdicts);
       const expected = reference(config, verdicts);
@@ -164,7 +175,7 @@ test("every read the reducer offers is a declared settle row for the same witnes
   }
   for (const phase of ["normal", "recovery"]) {
     const rows = manifest.rows.filter((r) => r.family === "settle" && r.phase === phase && r.programId === "restore");
-    plans.push({ kind: "restoration", name: "restore", phase, maxCycles: manifest.restoration.maxCycles, requiredConsecutive: manifest.restoration.consecutiveCompleteCycles, witnesses: rows.slice(0, 4).map((r) => ({ objectName: r.request.objectName, expect: "denied" })) });
+    plans.push({ kind: "restoration", name: "restore", phase, maxCycles: manifest.restoration.maxCycles, requiredConsecutive: manifest.restoration.consecutiveCompleteCycles, witnesses: rows.slice(0, 4).map((r) => ({ objectName: r.request.objectName, expect: "no-release" })) });
   }
   for (const plan of plans) {
     let state = createSettleState(plan);
@@ -189,7 +200,10 @@ test("each configuration rule holds on its own with well-formed witness names", 
   const w = (name, expect) => ({ objectName: `STORAGE-RULES/r/${name}.bin`, expect });
   const bad = [
     publication({ witnesses: [w("same", "allowed"), w("same", "denied")] }),
-    restoration({ witnesses: [w("a", "denied"), w("b", "denied"), w("c", "denied"), w("a", "denied")] }),
+    restoration({ witnesses: [w("a", "no-release"), w("b", "no-release"), w("c", "no-release"), w("a", "no-release")] }),
+    restoration({ witnesses: [w("a", "denied"), w("b", "denied"), w("c", "denied"), w("d", "denied")] }),
+    restoration({ witnesses: [w("a", "no-release"), w("b", "no-release"), w("c", "allowed"), w("d", "no-release")] }),
+    publication({ witnesses: [w("allow", "allowed"), w("deny", "no-release")] }),
     publication({ witnesses: [w("allow", "allowed")] }),
     publication({ witnesses: [w("allow", "allowed"), w("deny", "denied"), w("more", "denied")] }),
     publication({ witnesses: [w("deny", "denied"), w("allow", "allowed")] }),

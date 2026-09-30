@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { generateKeyPairSync, sign } from "node:crypto";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import { createStage3RequestCounter } from "./storage-rules/request-counter.mjs";
 
@@ -400,4 +401,38 @@ test("concurrent preparation cannot send a second account request", async () => 
   unblock();
   await preparing;
   await ctx.session.cleanupQuery();
+});
+
+// The idp foreign-project fixture (baseline lookup, sign-up, lookup by token, delete, absence) against the shapes the Auth lanes recorded on the Identity Platform sandbox
+// (conformance/auth-account-production.json): the absence answer (`auth-account/admin/batch-delete`, step `lookup-after-force`), the sign-up answer
+// (`auth-account/client/delete-effects`, step `sign-up`), a password user's lookup (any recorded lookup of a user with an email, a password hash and provider info, and no custom claims) and the delete answer
+// (`auth-account/admin/delete`, step `delete`). Placeholders are replaced by the run's own values; every other key is the recorded one.
+test("the foreign-project fixture accepts the answers production recorded for sign-up, lookup, delete and absence", async () => {
+  const recorded = JSON.parse(readFileSync(new URL("../auth-account-production.json", import.meta.url)));
+  const step = (program, name) => recorded.programs[program]?.steps?.[name]?.body ?? assert.fail(`${program} ${name}`);
+  const absent = step("auth-account/admin/batch-delete", "lookup-after-force");
+  const signUp = step("auth-account/client/delete-effects", "sign-up");
+  const deleted = step("auth-account/admin/delete", "delete");
+  const passwordUser = Object.values(recorded.programs).flatMap((program) => Object.values(program.steps ?? {})).map((entry) => entry.body?.users?.[0]).find((user) => user && typeof user.email === "string" && typeof user.passwordHash === "string" && Array.isArray(user.providerUserInfo) && !Object.hasOwn(user, "customAttributes") && !Object.hasOwn(user, "tenantId")) ?? assert.fail("no recorded password user");
+  assert.deepEqual(absent, { kind: "identitytoolkit#GetAccountInfoResponse" });
+  assert.equal(signUp.kind, "identitytoolkit#SignupNewUserResponse");
+  assert.deepEqual(deleted, { kind: "identitytoolkit#DeleteAccountResponse" });
+  assert.ok(!Object.hasOwn(passwordUser, "tenantId") && !Object.hasOwn(passwordUser, "customAttributes"));
+  const mutate = (id, spec, response) => {
+    const foreign = id.startsWith("auth/foreign-project-token/");
+    if (!foreign) return response;
+    if (id.endsWith("/baseline") || id.endsWith("/absence")) return { status: 200, body: structuredClone(absent) };
+    if (id.endsWith("/sign-up")) return { status: 200, body: { ...structuredClone(signUp), idToken: response.body.idToken, email: response.body.email, refreshToken: response.body.refreshToken, localId: response.body.localId } };
+    if (id.endsWith("/lookup-token")) return { status: 200, body: { kind: "identitytoolkit#GetAccountInfoResponse", users: response.body.users.map((user) => ({ ...structuredClone(passwordUser), localId: user.localId, email: user.email, emailVerified: false, validSince: user.validSince })) } };
+    if (id.endsWith("/delete")) return { status: 200, body: structuredClone(deleted) };
+    return response;
+  };
+  const ctx = await setup({ mutate });
+  await ctx.session.prepareQuery();
+  await ctx.session.withForeignFixture(async () => {});
+  await ctx.session.cleanupQuery();
+  assert.equal(ctx.users.size, 0);
+  assert.equal(ctx.session.snapshot().mode, "closed");
+  assert.equal(ctx.cleanup.length, 4);
+  assert.deepEqual(ctx.requests.filter((request) => request.id.startsWith("auth/foreign-project-token/")).map((request) => request.id.split("/")[2]), ["baseline", "sign-up", "lookup-token", "delete", "absence"]);
 });

@@ -12,7 +12,7 @@ const table = {
     "confirmed-document-write-history-and-current-version", "durable-verified-start-url-and-target", "entry-baseline-unchanged", "exact-owned-current-release-and-absent-entry-baseline",
     "exact-release-source-and-effective-settle", "owned-control-confirmed-present", "owned-control-retained-through-final-readback", "owned-control-still-present-and-version-matches",
     "owned-ruleset-and-source-readback", "owned-ruleset-and-unreferenced-after-restore", "restore-controls-retained-until-owner-readbacks", "restore-without-unowned-release-change",
-    "two-complete-all-denied-restore-cycles", "document-not-absent-per-latest-readback", "session-active-per-latest-query",
+    "two-complete-no-release-restore-cycles", "document-not-absent-per-latest-readback", "session-active-per-latest-query",
   ],
   // Answered by the run ledger before a write that depends on it and again as a check on the read that produced the state.
   both: ["exact-previous-release-or-entry-absence"],

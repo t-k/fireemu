@@ -262,13 +262,13 @@ test("a session cancel goes only for a known-active session and only once, and s
   run.recordOutcome(start, out("session-start", "accepted", { uploadStatus: "active" }));
   assert.equal(run.evaluate(cancel, tokens).decision, "go");
   run.recordIntent(finalize);
-  assert.equal(run.evaluate(cancel, tokens).decision, "stop");
+  assert.equal(run.evaluate(cancel, tokens).decision, "skip");
   run.recordOutcome(row(`recovery/session/${session.caseId}/current`), out("session-command", "final", { uploadStatus: "final", sizeReceived: 4 }));
   assert.equal(run.evaluate(cancel, tokens).decision, "skip");
   run.recordOutcome(row(`recovery/session/${session.caseId}/current`), out("session-command", "active", { uploadStatus: "active", sizeReceived: 0 }));
   assert.equal(run.evaluate(cancel, tokens).decision, "go");
   run.recordIntent(cancel);
-  assert.equal(run.evaluate(cancel, tokens).decision, "stop");
+  assert.equal(run.evaluate(cancel, tokens).decision, "skip");
   assert.throws(() => run.recordIntent(row(`recovery/session/${session.caseId}/cancel`)), /mutation already attempted/);
 });
 
@@ -290,16 +290,16 @@ test("witnesses may be deleted in recovery only after the owner readbacks, other
 test("the owner readbacks need present witnesses at the seeded version and a settled restoration", async () => {
   const { objects, run } = await fresh();
   const readback = row("management/restore-owner-media/0");
-  const tokens = ["owned-control-still-present-and-version-matches", "two-complete-all-denied-restore-cycles"];
+  const tokens = ["owned-control-still-present-and-version-matches", "two-complete-no-release-restore-cycles"];
   assert.deepEqual(run.evaluate(readback, tokens).failed.map((f) => f.token).sort(), [...tokens].sort());
   seedControls(objects, [0]);
-  assert.deepEqual(run.evaluate(readback, tokens).failed.map((f) => f.token), ["two-complete-all-denied-restore-cycles"]);
+  assert.deepEqual(run.evaluate(readback, tokens).failed.map((f) => f.token), ["two-complete-no-release-restore-cycles"]);
   run.recordSettle("restore", "settled");
   assert.equal(run.evaluate(readback, tokens).decision, "go");
   objects.recordOutcome(row("management/control-0/seed-metadata"), out("gcs-metadata-read", "present", { generation: "1700000000009999", metageneration: "1" }));
   assert.equal(run.evaluate(readback, tokens).decision, "stop");
   run.recordSettle("restore", "exhausted");
-  assert.equal(run.evaluate(readback, ["two-complete-all-denied-restore-cycles"]).decision, "stop");
+  assert.equal(run.evaluate(readback, ["two-complete-no-release-restore-cycles"]).decision, "stop");
 });
 
 test("the final prefix check needs every owned resource proven gone, releases absent and sessions finished", async () => {
@@ -319,7 +319,7 @@ test("the final prefix check needs every owned resource proven gone, releases ab
   const start = manifest.rows.find((r) => r.request.headers["x-goog-upload-command"] === "start" && r.programId === session.caseId);
   run.recordIntent(start);
   run.recordOutcome(start, out("session-start", "accepted", { uploadStatus: "active" }));
-  assert.equal(run.evaluate(prefix, token).decision, "stop");
+  assert.equal(run.evaluate(prefix, token).decision, "go", "an active session is record-only");
   run.recordOutcome(row(`recovery/session/${session.caseId}/current`), out("session-command", "final", { uploadStatus: "final", sizeReceived: 4 }));
   assert.equal(run.evaluate(prefix, token).decision, "go");
   const ruleset = row("ruleset/v1/create");
@@ -389,7 +389,7 @@ test("uncertain outcomes are remembered and inputs are closed", async () => {
   assert.throws(() => run.check(create, null), /invalid run ledger outcome/);
 });
 
-test("a cancelled session that is not proven final, or one in an unknown state, keeps the cleanup guard false until it is verified final", async () => {
+test("a session that is active, cancelled, unverified or in an unknown state never holds back the final prefix check: its answers are record-only", async () => {
   const { run } = await fresh();
   const prefix = row("management/prefix-empty");
   const token = ["all-owned-resources-and-sessions-cleaned"];
@@ -401,15 +401,15 @@ test("a cancelled session that is not proven final, or one in an unknown state, 
   const verify = row(`session-verify/${session.caseId}`);
   run.recordIntent(start);
   run.recordOutcome(start, out("session-start", "accepted", { uploadStatus: "active" }));
-  assert.equal(run.evaluate(prefix, token).decision, "stop");
+  assert.equal(run.evaluate(prefix, token).decision, "go");
   run.recordIntent(cancel);
   run.recordOutcome(cancel, out("session-command", "acknowledged"));
-  assert.equal(run.evaluate(prefix, token).decision, "stop");
+  assert.equal(run.evaluate(prefix, token).decision, "go");
   run.recordIntent(verify);
   run.recordOutcome(verify, out("session-command", "active", { uploadStatus: "active", sizeReceived: 0 }));
-  assert.equal(run.evaluate(prefix, token).decision, "stop");
+  assert.equal(run.evaluate(prefix, token).decision, "go");
   run.recordOutcome(verify, { uncertain: true });
-  assert.equal(run.evaluate(prefix, token).decision, "stop");
+  assert.equal(run.evaluate(prefix, token).decision, "go");
   run.recordOutcome(verify, out("session-command", "final", { uploadStatus: "final", sizeReceived: 0 }));
   assert.equal(run.evaluate(prefix, token).decision, "go");
   assert.equal(run.snapshot().sessions, 1);
@@ -421,12 +421,12 @@ test("a finalize decides the session: accepted means final, a denial leaves it a
   const cancel = manifest.rows.find((r) => r.family === "declared" && r.stage === "cleanup" && r.programId === session.caseId && r.request.headers["x-goog-upload-command"] === "cancel");
   const start = manifest.rows.find((r) => r.request.headers["x-goog-upload-command"] === "start" && r.programId === session.caseId);
   const tokens = ["session-active-per-latest-query"];
-  for (const [status, expected] of [[200, "skip"], [403, "go"], [500, "stop"], [412, "stop"]]) {
+  for (const [status, expected] of [[200, "skip"], [403, "go"], [500, "skip"], [412, "skip"]]) {
     const { run } = await fresh();
     run.recordIntent(start);
     run.recordOutcome(start, out("session-start", "accepted", { uploadStatus: "active" }));
     run.recordIntent(finalize);
-    assert.equal(run.evaluate(cancel, tokens).decision, "stop", `before the answer ${status}`);
+    assert.equal(run.evaluate(cancel, tokens).decision, "skip", `before the answer ${status}`);
     run.recordOutcome(finalize, { kind: "subject-observed", verdict: "observed", facts: { status, bodyBytes: 0, bodySha256: "0".repeat(64) } });
     assert.equal(run.evaluate(cancel, tokens).decision, expected, String(status));
   }
@@ -435,7 +435,7 @@ test("a finalize decides the session: accepted means final, a denial leaves it a
   run.recordOutcome(start, out("session-start", "accepted", { uploadStatus: "active" }));
   run.recordIntent(finalize);
   run.recordOutcome(finalize, { uncertain: true });
-  assert.equal(run.evaluate(cancel, tokens).decision, "stop");
+  assert.equal(run.evaluate(cancel, tokens).decision, "skip");
 });
 
 test("the absence reads of a control follow its final readback and its deletion, and every other control row precedes the deletion", async () => {
@@ -706,9 +706,9 @@ test("a confirmed session is active only while its latest state is active", asyn
   run.recordOutcome(start, out("session-start", "accepted", { uploadStatus: "active" }));
   assert.equal(run.evaluate(cancel, token).decision, "go");
   run.recordOutcome(row(`recovery/session/${session.caseId}/current`), out("session-command", "final", { uploadStatus: "final", sizeReceived: 4 }));
-  assert.equal(run.evaluate(cancel, token).decision, "stop");
+  assert.equal(run.evaluate(cancel, token).decision, "skip");
   run.recordOutcome(row(`recovery/session/${session.caseId}/current`), { uncertain: true });
-  assert.equal(run.evaluate(cancel, token).decision, "stop");
+  assert.equal(run.evaluate(cancel, token).decision, "skip");
 });
 
 test("the final prefix check needs every written document proven absent", async () => {

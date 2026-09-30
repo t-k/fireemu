@@ -202,7 +202,7 @@ export function createRunLedger(options) {
     "acknowledged-ruleset-create": (row) => rulesetFor(row).createAck,
     "all-final-control-readbacks-complete": () => controlReadbacks.size === controlCount,
     "all-four-controls-confirmed-and-retained": () => witnessesConfirmed(),
-    "all-owned-resources-and-sessions-cleaned": () => objects.residual().length === 0 && [...documents.values()].every((d) => !d.started || d.latest === "absent") && [...rulesets.values()].every((r) => !r.createAttempted || (r.deleteAcked && r.absentConfirmed)) && [...sessions.values()].every((s) => s.state === "none" || s.state === "final") && release.bucket === "absent" && release.bucketless === "absent",
+    "all-owned-resources-and-sessions-cleaned": () => objects.residual().length === 0 && [...documents.values()].every((d) => !d.started || d.latest === "absent") && [...rulesets.values()].every((r) => !r.createAttempted || (r.deleteAcked && r.absentConfirmed)) && release.bucket === "absent" && release.bucketless === "absent",
     "both-releases-absent": () => release.bucket === "absent" && release.bucketless === "absent",
     "cancel-not-attempted": (row) => !sessionFor(row).cancelAttempted,
     "canonical-program-state-and-fresh-credential": () => flags.credentialFresh === true,
@@ -233,7 +233,7 @@ export function createRunLedger(options) {
     "owned-ruleset-and-unreferenced-after-restore": (row) => { const r = rulesetFor(row); return r.createAck && release.bucket === "absent" && !r.uncertain; },
     "restore-controls-retained-until-owner-readbacks": (row) => !witnesses.includes(row.request.objectName) || ownerMedia.size === WITNESS_INDEXES.length,
     "restore-without-unowned-release-change": () => !release.unownedChange && !release.uncertain,
-    "two-complete-all-denied-restore-cycles": () => settled.get("restore") === "settled",
+    "two-complete-no-release-restore-cycles": () => settled.get("restore") === "settled",
     // Shared with objects: answered here for the other resource kinds.
     "delete-not-attempted": (row) => (isRelease(row) ? !release.deleteAttempted : !resourceOf(row)?.deleteAttempted),
     "resource-started-and-provenance-matches": (row) => { const r = resourceOf(row); return r === null ? false : isSession(row) ? r.startConfirmed || r.state !== "none" : isRuleset(row) ? r.createAttempted : r.started; },
@@ -241,6 +241,7 @@ export function createRunLedger(options) {
     "session-active-per-latest-query": (row) => { const s = sessionFor(row); return s.state === "active" ? true : s.state === "final" || s.state === "cancelled" || s.state === "none" ? false : "unknown"; },
   };
   const OWNED_TOKENS = new Set(Object.keys(HANDLERS));
+  const SESSION_TOKENS = new Set(["cancel-not-attempted", "confirmed-active-session", "durable-verified-start-url-and-target", "session-active-per-latest-query"]);
 
   function evaluate(row, tokens) {
     requireRow(row);
@@ -252,7 +253,8 @@ export function createRunLedger(options) {
     for (const token of handled) {
       const result = HANDLERS[token](row);
       if (result === true) continue;
-      const outcome = result === "unknown" ? "stop" : REQUIRES_REGISTRY[token].onFalse;
+      // A doubt about a resource stops the run, except a session: its answers are recorded, never a reason to stop.
+      const outcome = result === "unknown" ? (SESSION_TOKENS.has(token) ? "skip" : "stop") : REQUIRES_REGISTRY[token].onFalse;
       failed.push(Object.freeze({ token, outcome }));
       if (outcome === "skip") skip = true;
     }

@@ -39,10 +39,13 @@ test("every entry has a closed category, a closed fact list and a stop-or-skip o
   assert.equal(new Set(PREDICATE_FACTS).size, PREDICATE_FACTS.length);
 });
 
-test("only the three explicit conditional-cleanup guards and the resource-started guard may skip a row", async () => {
+// The Firebase v0 capabilities (a session, a download token) are record-only: what a session row needs from the session is a reason to skip it, never to stop the run.
+const SESSION_SKIP_TOKENS = ["cancel-not-attempted", "confirmed-active-session", "durable-verified-start-url-and-target"];
+test("only the three explicit conditional-cleanup guards, the resource-started guard and the three record-only session guards may skip a row", async () => {
   const { REQUIRES_REGISTRY } = await load();
-  assert.deepEqual(Object.entries(REQUIRES_REGISTRY).filter(([, e]) => e.onFalse === "skip").map(([t]) => t).sort(), [...SKIP_TOKENS, STARTED_TOKEN].sort());
-  for (const token of [...SKIP_TOKENS, STARTED_TOKEN]) assert.equal(REQUIRES_REGISTRY[token].category, "guard");
+  assert.deepEqual(Object.entries(REQUIRES_REGISTRY).filter(([, e]) => e.onFalse === "skip").map(([t]) => t).sort(), [...SKIP_TOKENS, STARTED_TOKEN, ...SESSION_SKIP_TOKENS].sort());
+  for (const token of [...SKIP_TOKENS, STARTED_TOKEN, "cancel-not-attempted", "confirmed-active-session"]) assert.equal(REQUIRES_REGISTRY[token].category, "guard");
+  assert.equal(REQUIRES_REGISTRY["durable-verified-start-url-and-target"].category, "proof");
 });
 
 test("required-state and when values are closed sets equal to the manifest's", async () => {
@@ -86,5 +89,5 @@ test("a manifest with an unknown token, state or condition is refused", async ()
 
 test("the reviewed registry is pinned, so any change to a token, category, fact or outcome needs a deliberate update", async () => {
   const { REQUIRES_REGISTRY } = await load();
-  assert.equal(createHash("sha256").update(JSON.stringify(REQUIRES_REGISTRY)).digest("hex"), "1b00eb744a6639f60b63b84f98ff929d15d7399ef8409055a4ffa4a52cd8c047");
+  assert.equal(createHash("sha256").update(JSON.stringify(REQUIRES_REGISTRY)).digest("hex"), "5b459003f4d0f8883ac747043dd532bc6f3f5646dec88482e3537fbfc4a541e3");
 });

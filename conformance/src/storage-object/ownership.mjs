@@ -1,3 +1,13 @@
+/**
+ * Whether a write's status says the write was refused: an error status (400 to 599), or 304, which
+ * production answers, with no body, to a write whose `ifGenerationNotMatch` or
+ * `ifMetagenerationNotMatch` names the object's current value (probe-v4: PATCH, PUT, upload and
+ * DELETE). A refused write changes nothing, and the caller proves that by fresh readbacks.
+ */
+export function isRefusedWriteStatus(status) {
+  return Number.isInteger(status) && (status === 304 || (status >= 400 && status <= 599));
+}
+
 /** Local ownership evidence for one run prefix; this module performs no HTTP requests. */
 export function createRunOwnership({ bucket, prefix } = {}) {
   if (
@@ -147,9 +157,7 @@ export function createRunOwnership({ bucket, prefix } = {}) {
         !object ||
         object.state !== "pending" ||
         response?.operationId !== object.operationId ||
-        !Number.isInteger(response.status) ||
-        response.status < 400 ||
-        response.status > 599
+        !isRefusedWriteStatus(response.status)
       )
         throw new Error("refused mutation is not bound to a pending request");
       const previous = object.previous;
@@ -196,9 +204,7 @@ export function createRunOwnership({ bucket, prefix } = {}) {
         object.state !== "pending" ||
         object.previous?.state !== "absent" ||
         proof?.operationId !== object.operationId ||
-        !Number.isInteger(proof.status) ||
-        proof.status < 400 ||
-        proof.status > 599 ||
+        !isRefusedWriteStatus(proof.status) ||
         proof.metadataStatus !== 404 ||
         proof.mediaStatus !== 404 ||
         proof.prefixPagesComplete !== true ||

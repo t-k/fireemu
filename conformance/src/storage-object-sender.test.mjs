@@ -627,3 +627,93 @@ test("subject deletion and repeated 404 are bound to complete absence reads", as
   assert.equal(sender.unresolved().length, 0);
   assert.equal(sender.snapshot().total, calls);
 });
+
+test("confirmRefused accepts a write answered 304 or 400 to 599, and refuses one that was accepted or redirected", async () => {
+  const body = Buffer.from("a");
+  const object = { bucket: "example.appspot.com", name, generation: "123" };
+  const attempt = async (patchStatus) => {
+    const sender = createLocalStorageSender({
+      plan: plan(),
+      origin: "http://127.0.0.1:9199",
+      credentials: { admin: "Bearer owner" },
+      onStart: async () => {},
+      onReserve: async () => {},
+      onJournal: async () => {},
+      fetchImpl: async (href, init) => {
+        const url = new URL(href);
+        if (url.pathname === "/storage/v1/b/example.appspot.com/o")
+          return Response.json({ items: [] });
+        if (init.method === "POST") return Response.json(object);
+        if (init.method === "PATCH")
+          return patchStatus === 200
+            ? Response.json(object)
+            : new Response(null, { status: patchStatus });
+        if (url.searchParams.get("alt") === "media") return new Response(body);
+        return Response.json(object);
+      },
+    });
+    await sender.start();
+    await sender.admitNamespace();
+    sender.admitObject(name);
+    const step = (id, method, query = {}, extra = {}) => ({
+      id,
+      dialect: "gcs",
+      method,
+      objectName: name,
+      path:
+        method === "POST"
+          ? "/upload/storage/v1/b/example.appspot.com/o"
+          : `/storage/v1/b/example.appspot.com/o/${encodeURIComponent(name)}`,
+      query,
+      ...extra,
+    });
+    await sender.sendStep(
+      step(
+        "upload",
+        "POST",
+        { uploadType: "media", name, ifGenerationMatch: "0" },
+        { body: { base64: "YQ==" } },
+      ),
+    );
+    for (const [id, query] of [
+      ["metadata", {}],
+      ["media", { alt: "media" }],
+    ])
+      await sender.sendStep(step(id, "GET", query));
+    sender.confirmOwned({
+      name,
+      uploadOperationId: "upload",
+      metadataOperationId: "metadata",
+      mediaOperationId: "media",
+      expectedBytesSha256: createHash("sha256").update(body).digest("hex"),
+    });
+    await sender.sendStep(
+      step(
+        "patch",
+        "PATCH",
+        { ifGenerationNotMatch: "123" },
+        { body: { json: { metadata: { marker: "changed" } } } },
+      ),
+    );
+    for (const [id, query] of [
+      ["metadata-after", {}],
+      ["media-after", { alt: "media" }],
+    ])
+      await sender.sendStep(step(id, "GET", query));
+    return () =>
+      sender.confirmRefused({
+        name,
+        mutationOperationId: "patch",
+        metadataOperationId: "metadata-after",
+        mediaOperationId: "media-after",
+      });
+  };
+  for (const status of [304, 400, 412, 501, 599])
+    assert.equal((await attempt(status))(), "123", String(status));
+  for (const status of [200, 204, 303, 305])
+    assert.throws(
+      await attempt(status),
+      /refused mutation or unchanged owned state/,
+      String(status),
+    );
+});

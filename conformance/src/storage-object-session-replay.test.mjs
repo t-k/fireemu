@@ -10,6 +10,8 @@ function fixture({
   failChunk = false,
   cancellationUnsupported = false,
   uncertainFinish = false,
+  uriName = "own",
+  recordedShapes = false,
 } = {}) {
   const bucket = "example.appspot.com",
     origin = "http://127.0.0.1:9199";
@@ -46,7 +48,18 @@ function fixture({
             session.cancelled = true;
             session.chunks = [];
           }
-          return new Response(null, { status: dialect === "gcs" ? 499 : 200 });
+          return new Response(null, {
+            status: dialect === "gcs" ? 499 : 200,
+            // Production (probe-v4): a Firebase cancel says `cancelled`, in a text/plain answer.
+            ...(recordedShapes && dialect === "firebase"
+              ? {
+                  headers: {
+                    "content-type": "text/plain; charset=utf-8",
+                    "x-goog-upload-status": "cancelled",
+                  },
+                }
+              : {}),
+          });
         }
         const query = command === "query" || init.headers["content-range"]?.startsWith("bytes */");
         const received = session.chunks.reduce((sum, bytes) => sum + bytes.length, 0);
@@ -60,7 +73,14 @@ function fixture({
                     : session.done
                       ? "final"
                       : "active",
-                  "x-goog-upload-size-received": `${received}`,
+                  // Production (probe-v4): an active session also says its chunk granularity, and a
+                  // cancelled one says no size.
+                  ...(recordedShapes && session.cancelled
+                    ? {}
+                    : { "x-goog-upload-size-received": `${received}` }),
+                  ...(recordedShapes && !session.cancelled && !session.done
+                    ? { "x-goog-upload-chunk-granularity": "262144" }
+                    : {}),
                 },
               })
             : session.cancelled
@@ -73,7 +93,12 @@ function fixture({
                   });
         if (failChunk) throw new Error(`failed fetch ${href}`);
         if (command === "upload" && init.headers["x-goog-upload-offset"] === "1")
-          return new Response(null, { status: 400 });
+          return recordedShapes
+            ? new Response("Client uploaded to the wrong offset (1 instead of 0).", {
+                status: 400,
+                headers: { "content-type": "text/plain; charset=utf-8" },
+              })
+            : new Response(null, { status: 400 });
         session.chunks.push(Buffer.from(init.body));
         const finish =
           command === "upload, finalize" ||
@@ -107,7 +132,12 @@ function fixture({
         const name = url.searchParams.get("name"),
           sessionId = `private_session_${sessions.size}`;
         sessions.set(sessionId, { name, chunks: [], done: false, cancelled: false });
-        const uri = `${origin}${url.pathname}?name=${encodeURIComponent(name)}&${dialect === "gcs" ? "uploadType" : "upload_protocol"}=resumable&upload_id=${sessionId}`;
+        const uriNames = {
+          own: `name=${encodeURIComponent(name)}&`,
+          missing: "",
+          other: `name=${encodeURIComponent(`${name}-other`)}&`,
+        };
+        const uri = `${origin}${url.pathname}?${uriNames[uriName]}${dialect === "gcs" ? "uploadType" : "upload_protocol"}=resumable&upload_id=${sessionId}`;
         return new Response(null, {
           status: 200,
           headers:
@@ -183,4 +213,34 @@ test("a lost finish reply cannot authorize deleting the unconfirmed published ob
   assert.equal(run.objects.size, 1);
   assert.equal(result.unresolved.length, 1);
   assert.equal(JSON.stringify(result).includes("private_session"), false);
+});
+
+test("a session URL that lacks the initiate's name, or names another object, is refused before any chunk", async () => {
+  for (const dialect of ["firebase", "gcs"])
+    for (const uriName of ["missing", "other"]) {
+      const run = fixture({ dialect, uriName });
+      const result = await run.run();
+      // The server opened a session the sender cannot address, so the run cannot call it clean.
+      assert.equal(result.status, "LOCAL_NEEDS_RECOVERY", `${dialect} ${uriName}`);
+      assert.equal(result.failure.reason, "LOCAL_SESSION_REQUEST_OR_PROOF_FAILED");
+      assert.equal(result.unresolved.length, 1);
+      assert.ok([...run.sessions.values()].every((row) => row.chunks.length === 0));
+      assert.equal(JSON.stringify(result).includes("private_session"), false);
+    }
+});
+
+test("the Firebase sessions, with the answers probe-v4 recorded for the wrong-offset chunk, the queries and the cancel, complete with owned cleanup", async () => {
+  const run = fixture({ recordedShapes: true });
+  const result = await run.run();
+  assert.equal(result.status, "LOCAL_COMPLETE");
+  assert.deepEqual(result.unresolved, []);
+  assert.equal(run.objects.size, 0);
+  assert.equal([...run.sessions.values()].filter((row) => row.cancelled).length, 2);
+  // The wrong-offset chunk took no bytes, and the session it left alive was then cancelled.
+  const wrong = run.captures.find((row) => row.operationId === "wrong-offset");
+  assert.equal(wrong.status, 400);
+  assert.match(Buffer.from(wrong.bodyBase64, "base64").toString(), /wrong offset/);
+  const afterCancel = run.captures.find((row) => row.operationId === "query-after-cancel-wrong");
+  assert.equal(afterCancel.headers["x-goog-upload-status"], "cancelled");
+  assert.equal("x-goog-upload-size-received" in afterCancel.headers, false);
 });

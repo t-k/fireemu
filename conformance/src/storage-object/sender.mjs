@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { createRunOwnership } from "./ownership.mjs";
+import { createRunOwnership, isRefusedWriteStatus } from "./ownership.mjs";
 import { createStage3RequestCounter, claimStage3RecipeContext } from "./request-counter.mjs";
 import { isDeepStrictEqual, types } from "node:util";
 import { resolveDeclaredQuery } from "./reference-resolution.mjs";
@@ -591,8 +591,8 @@ function createStorageSender(
   /**
    * The session URL an initiate answered with. Production repeats the initiate's own query
    * (`ifGenerationMatch=0` on the GCS insert) and adds `upload_id`; the local runtime does not
-   * repeat it. So the URL carries `name`, the protocol key and `upload_id`, and may also carry any
-   * other key the initiate declared, with the value it declared, and nothing else.
+   * repeat it. So the URL carries the initiate's `name`, the protocol key and `upload_id`, and may
+   * also carry any other key the initiate declared, with the value it declared, and nothing else.
    */
   function localSessionUrl(value, dialect, name, path, declared = {}) {
     if (typeof value !== "string" || !value || Buffer.byteLength(value) > 8192 || /\s/.test(value))
@@ -619,6 +619,7 @@ function createStorageSender(
       [...declaredKeys].some(
         (key) => url.searchParams.has(key) && url.searchParams.get(key) !== String(declared[key]),
       ) ||
+      url.searchParams.get("name") !== name ||
       url.searchParams.get(protocolKey) !== "resumable" ||
       !/^[A-Za-z0-9_-]{1,4096}$/.test(url.searchParams.get("upload_id") ?? "")
     )
@@ -1210,8 +1211,7 @@ function createStorageSender(
         !mutation ||
         mutation.step.objectName !== name ||
         !["POST", "PUT", "PATCH", "DELETE"].includes(mutation.step.method) ||
-        mutation.response.status < 400 ||
-        mutation.response.status > 599 ||
+        !isRefusedWriteStatus(mutation.response.status) ||
         mutation.ordinal !== lastMutation.get(name) ||
         !prior ||
         prior.generation !== current.generation ||

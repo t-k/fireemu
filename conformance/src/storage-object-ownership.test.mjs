@@ -237,3 +237,71 @@ test("invalid-name refusal needs a complete run list equal to known owned names"
   ownership.noteRefusedAbsentFromRunList(invalid, proof);
   assert.deepEqual(ownership.unresolved(), [name]);
 });
+
+test("a 304, production's answer to a not-match guard that names the current value, is a refused write; 399 and 600 are not", () => {
+  for (const status of [304, 400, 412, 501, 599]) {
+    const ownership = createRunOwnership(options);
+    ownership.assertInitialEmpty({ ...options, pages: emptyPages });
+    ownership.noteInitialAbsent(name, absent);
+    ownership.noteMutationAttempt(name, "initial-upload");
+    ownership.observeOwnedGeneration(
+      name,
+      { ...owned, operationId: "initial-upload" },
+      owned.bytesSha256,
+    );
+    ownership.noteMutationAttempt(name, "refused-write");
+    ownership.noteRefusedMutation(name, { operationId: "refused-write", status }, owned);
+    // The object is known and owned again, with no write pending: the next write may start.
+    ownership.noteMutationAttempt(name, "next-write");
+  }
+  for (const status of [200, 204, 303, 305, 399, 600, 304.5, "304", null]) {
+    const ownership = createRunOwnership(options);
+    ownership.assertInitialEmpty({ ...options, pages: emptyPages });
+    ownership.noteInitialAbsent(name, absent);
+    ownership.noteMutationAttempt(name, "initial-upload");
+    ownership.observeOwnedGeneration(
+      name,
+      { ...owned, operationId: "initial-upload" },
+      owned.bytesSha256,
+    );
+    ownership.noteMutationAttempt(name, "refused-write");
+    assert.throws(
+      () => ownership.noteRefusedMutation(name, { operationId: "refused-write", status }, owned),
+      /not bound to a pending request/,
+      String(status),
+    );
+  }
+});
+
+test("a 304 on a write to an absent object is a refused absent write, with the same absence proof", () => {
+  for (const [status, accepted] of [
+    [304, true],
+    [404, true],
+    [599, true],
+    [399, false],
+    [600, false],
+    [204, false],
+  ]) {
+    const ownership = createRunOwnership(options);
+    ownership.assertInitialEmpty({ ...options, pages: emptyPages });
+    ownership.noteInitialAbsent(name, absent);
+    ownership.noteMutationAttempt(name, "refused-upload");
+    const proof = {
+      operationId: "refused-upload",
+      status,
+      metadataStatus: 404,
+      mediaStatus: 404,
+      prefixPagesComplete: true,
+      nameFound: false,
+    };
+    if (accepted) {
+      ownership.noteRefusedAbsent(name, proof);
+      assert.deepEqual(ownership.unresolved(), [], String(status));
+    } else
+      assert.throws(
+        () => ownership.noteRefusedAbsent(name, proof),
+        /refused absent mutation/,
+        String(status),
+      );
+  }
+});

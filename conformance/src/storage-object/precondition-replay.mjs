@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { isRefusedWriteStatus } from "./ownership.mjs";
 import { evaluatePresentRequires } from "./present-requires.mjs";
 import { assertUnchangedReadbacks } from "./read-state.mjs";
 import { resolveDeclaredQuery } from "./reference-resolution.mjs";
@@ -128,7 +129,7 @@ export async function replayLocalPreconditions({ sender, recipe, bucket, onCaptu
             await sender.confirmAbsent(proof);
             state.owned = false;
             state.expectedBytesSha256 = null;
-          } else if (state.mutationStatus >= 400) {
+          } else if (isRefusedWriteStatus(state.mutationStatus)) {
             sender.confirmRefused(proof);
             state.owned = true;
           } else {

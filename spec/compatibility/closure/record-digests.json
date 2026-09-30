@@ -93,7 +93,7 @@
     "spec/compatibility/closure/evidence/integration-v0.8.0/FUNCTIONS-HTTP-comparison.json": "73215bfc9eff6bf583d7ef41a0179a8791dd0c2e0f15ba68a2d4f5a7b701a701",
     "spec/compatibility/closure/evidence/integration-v0.8.0/release-artifact.json": "439d1f55b447d2621661077fc8c130df1fba8f38d996b0a952adef0d4d8bcd1c",
     "spec/compatibility/closure/evidence/integration-v0.9.0/release-artifact.json": "5de64ae72ddab9c30a3544f3957d95dbb1d3708c390f0319e09ddf97f29e6e3f",
-    "spec/compatibility/contract.json": "54e845cf1edf345d2e1995d5b3c7abf7172fdb4f0622c216fb107422da12137e",
+    "spec/compatibility/contract.json": "3224770a06cf889ac0dda7674943a521f98072d1fcd65afb1c3191471f02f961",
     "spec/compatibility/gaps.json": "bc22d5f813b12d99682a2a05bd3e2a47d930767c79be57f35d1f481e42b46a7e",
     "spec/limits/firestore-standard-2026-08-25.json": "8f2a4c383aa17a838d1e87ca8c404595d6bb7f55c683e1cbe1c77cee2a2be48f"
   }

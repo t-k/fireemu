@@ -344,9 +344,10 @@ fn firebase_protocol_upload_download_list_update_delete() {
         &s,
         req("GET", &format!("/v0/b/{BUCKET}/o/{enc}"), &owner, b""),
     );
-    // The official Firebase dialect answers a missing object with a bare status text.
+    // Production answers a missing object with the `Not Found.` JSON, where the official
+    // Firebase dialect writes a bare status text (see the dedicated test).
     assert_eq!(r.status, 404);
-    assert_eq!(r.body.as_ref(), b"Not Found");
+    assert_eq!(json_body(&r)["error"]["message"], "Not Found.");
 }
 
 #[test]
@@ -2074,6 +2075,30 @@ fn the_firebase_dialect_omits_empty_metadata_and_absent_tokens() {
         assert!(cleared.get("metadata").is_none(), "{cleared}");
         let empty = patch("g.txt", br#"{"metadata": {}}"#);
         assert!(empty.get("metadata").is_none(), "{empty}");
+    }
+}
+
+/// An absent object answers the recorded `Not Found.` JSON on a Firebase read or delete in both
+/// profiles (stage 3 v9: 15 rows, `application/json; charset=UTF-8`).
+#[test]
+fn an_absent_firebase_object_answers_the_recorded_json_not_found() {
+    const NOT_FOUND: &str =
+        "{\n  \"error\": {\n    \"code\": 404,\n    \"message\": \"Not Found.\"\n  }\n}";
+    for acceptance in BOTH_PROFILES {
+        let s = state_with(Some(ALLOW_ALL_RULES), acceptance);
+        for (method, path) in [
+            ("GET", format!("/v0/b/{BUCKET}/o/absent.txt")),
+            ("GET", format!("/v0/b/{BUCKET}/o/absent.txt?alt=media")),
+            ("DELETE", format!("/v0/b/{BUCKET}/o/absent.txt")),
+        ] {
+            let r = handle(&s, req(method, &path, &[], b""));
+            assert_eq!(r.status, 404, "{acceptance:?} {method} {path}");
+            assert_eq!(String::from_utf8_lossy(&r.body), NOT_FOUND);
+            assert_eq!(
+                header(&r, "content-type"),
+                Some("application/json; charset=UTF-8")
+            );
+        }
     }
 }
 

@@ -850,6 +850,14 @@ fn production_invalid_credentials() -> StorageResponse {
     }
 }
 
+/// The Firebase dialect's answer for an absent object on a read or a delete: production's
+/// `Not Found.` JSON (recorded, stage 3 v9: metadata read, media read and delete of an absent
+/// object, 15 rows, one body), where the official emulator's `sendStatus` writes the bare text
+/// `Not Found`.
+fn fb_object_not_found() -> StorageResponse {
+    production_error(404, "Not Found.")
+}
+
 /// The answer to a caller [`StorageState::principal`] refused: production's bytes for the 403 of a
 /// foreign-project token under strict, the ordinary error envelope otherwise.
 fn principal_refusal_response(dialect: Dialect, status: u16, message: &str) -> StorageResponse {
@@ -2742,7 +2750,7 @@ fn fb_get(
         )?;
     }
     let Some(mut meta) = meta else {
-        return Ok(plain_status(404));
+        return Ok(fb_object_not_found());
     };
     let media = params.get("alt").map(String::as_str) == Some("media");
     if media {
@@ -2939,7 +2947,7 @@ fn fb_delete(state: &StorageState, principal: &Principal, bucket: &str, name: &s
         RulesValue::Null,
     )?;
     if existing.is_none() {
-        return Ok(plain_status(404));
+        return Ok(fb_object_not_found());
     }
     store
         .delete(&b, &n, Precondition::default())

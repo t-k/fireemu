@@ -350,7 +350,7 @@ class Ledger:
                 raise ValueError("batch entry names a document that was not requested or repeats")
             seen.add(name)
             role = self._role_of(name)
-            visible = self._visible(role, request)
+            visible = self._visible(role, request, step)
             if kind == "found":
                 if not visible - {None}:
                     raise ValueError("a document this recording never wrote exists")
@@ -395,15 +395,16 @@ class Ledger:
                 current = state
         return current
 
-    def _visible(self, role, request):
-        """The states a read may show: the latest, the one at a read time, or for a read-only transaction any since it began."""
+    def _visible(self, role, request, step=None):
+        """The states a read may show: the latest, the one at a read time, or for a read-only transaction (and a read-write
+        transaction's read the table marks `sinceBegin`) any since it began."""
         doc = self.docs[role]
         if "readTime" in request:
             return {self._state_at(role, parse_time(request["readTime"], "grpc"))}
         token_role, _entry = self._token_for(request.get("transaction"))
         if token_role in self.token_time:
             return {self._state_at(role, self.token_time[token_role])}
-        if token_role is None or self.modes.get(token_role) != "readOnly":
+        if token_role is None or self.modes.get(token_role) != "readOnly" and not (step and step.get("sinceBegin")):
             return {doc["state"]}
         begun = self.since[token_role][role]
         # A transaction that began before the document existed may also see it absent.
@@ -421,7 +422,7 @@ class Ledger:
             return
         if code != 0:
             return
-        visible = self._visible(role, request) - {None}
+        visible = self._visible(role, request, step) - {None}
         if doc["state"] is None or not visible:
             raise ValueError("a document this recording never wrote exists")
         self._owned(role, result["response"], transport, visible)

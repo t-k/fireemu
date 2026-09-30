@@ -29,7 +29,7 @@ MAX_DOCUMENTS = 8
 MAX_WAIT_SECONDS = 600
 MAX_STATES = 32
 _STEP_KEYS = ("id", "transport", "rpc", "document", "tokenInput", "tokenOutput", "writes", "caseId", "role", "allow")
-_OPTIONAL_STEP_KEYS = ("deadlineMs", "documents", "mode", "readAt", "newTransaction", "waitSeconds")
+_OPTIONAL_STEP_KEYS = ("deadlineMs", "documents", "mode", "readAt", "newTransaction", "waitSeconds", "sinceBegin")
 
 
 def outcome_class(code):
@@ -68,6 +68,10 @@ def _step(row):
         step["readAt"] = dict(row["readAt"]) if isinstance(row["readAt"], dict) else _bad("readAt is not a mapping")
     if "newTransaction" in row:
         step["newTransaction"] = row["newTransaction"]
+    if "sinceBegin" in row:
+        # A read-write transaction's first read may show any state acknowledged since its begin (the snapshot may be taken
+        # at the begin or at the read); only present on that read.
+        step["sinceBegin"] = row["sinceBegin"]
     if "waitSeconds" in row:
         # Idle time, in seconds, before this request is sent; only present on a step that waits.
         step["waitSeconds"] = row["waitSeconds"]
@@ -103,6 +107,7 @@ def _validate_table(table):
     if caps["tokenCleanup"] < table["maxTokens"] or caps["documentCleanup"] < 3 * len(documents):
         _bad("the cleanup reserve cannot release every token or clean every document")
     ids, cases, issued, probed, modes, acked = set(), set(), {}, set(), {}, {}
+    plain_reads = set()
     last_use = {}
     for index, step in enumerate(steps):
         if isinstance(step["tokenInput"], str):
@@ -145,6 +150,11 @@ def _validate_table(table):
                 _bad(f"{step['id']} reads at a time on a request that cannot")
             if step["tokenInput"] is not None or "newTransaction" in step:
                 _bad(f"{step['id']} reads at a time inside a transaction")
+        if "sinceBegin" in step:
+            if step["sinceBegin"] is not True or rpc not in ("GetDocument", "BatchGetDocuments") or step["role"] != "observation" or modes.get(step["tokenInput"]) != "readWrite" or step["tokenInput"] in plain_reads:
+                _bad(f"{step['id']} marks a read that is not the first observation read of a read-write transaction")
+        if step["tokenInput"] is not None and rpc in ("GetDocument", "BatchGetDocuments"):
+            plain_reads.add(step["tokenInput"])
         if "newTransaction" in step:
             if rpc != "BatchGetDocuments" or step["newTransaction"] not in ("readWrite", "readOnly") or step["tokenInput"] is not None or not isinstance(step["tokenOutput"], str) or step["tokenOutput"] in issued:
                 _bad(f"{step['id']} is not a batch read that begins one fresh transaction")

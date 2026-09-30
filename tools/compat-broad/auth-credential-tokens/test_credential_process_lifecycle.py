@@ -79,6 +79,35 @@ def test_unready_daemon_cannot_block_readline_or_escape_caller_ownership(tmp_pat
         assert not monitor.thread.is_alive()
 
 
+@pytest.mark.parametrize("program,diagnostic_type,expected_bytes,exit_signal", [
+    ("os.write(1,b'partial no newline'); time.sleep(60)",
+     "DaemonStartupDeadlineExceeded", len(b"partial no newline"), signal.SIGTERM),
+    ("signal.signal(signal.SIGTERM,signal.SIG_IGN); time.sleep(60)",
+     "DaemonStartupDeadlineExceeded", 0, signal.SIGKILL),
+    ("os.write(1,b'x'*9000); time.sleep(60)",
+     "StartupLineLimit", None, signal.SIGTERM),
+])
+def test_delayed_unready_setup_reaches_its_actual_branch(
+    tmp_path, owned, program, diagnostic_type, expected_bytes, exit_signal
+):
+    """Interpreter preparation must not substitute a different startup branch."""
+    binary = executable(tmp_path, "time.sleep(.6); " + program)
+    with pytest.raises(runtime.StartupError) as caught:
+        runtime.start_daemon(binary, private_work(tmp_path))
+    diagnostic = caught.value.diagnostics
+    receipt = caught.value.shutdown
+    observation = {"diagnostic": diagnostic, "shutdown": receipt}
+    assert diagnostic["type"] == diagnostic_type, observation
+    if expected_bytes is not None:
+        assert diagnostic["bytes"] == expected_bytes, observation
+    else:
+        assert diagnostic["bytes"] > runtime.MAX_STARTUP_LINE_BYTES, observation
+    assert receipt["exitCode"] == -exit_signal, observation
+    assert receipt["processStopped"] is True, observation
+    assert receipt["remainingChildren"] == 0, observation
+    assert receipt["outputDrainerStopped"] is True, observation
+
+
 def test_startup_failure_retains_bounded_private_output_and_verified_shutdown(tmp_path, owned):
     secret = b"PRIVATE-STARTUP-DETAIL"
     binary = executable(tmp_path, "os.write(1, b'PRIVATE-STARTUP-DETAIL'); time.sleep(60)")

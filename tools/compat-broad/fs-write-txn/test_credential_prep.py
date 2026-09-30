@@ -922,3 +922,26 @@ def test_short_parent_deadline_kills_once_and_preserves_unconfirmed_reap(monkeyp
     assert ("workerPid" in result) is not reaped
     if not reaped:
         assert result["workerPid"] == worker.pid
+
+
+@pytest.mark.parametrize("scenario", ["tokeninfo-stall", "immediate-body", "delayed-headers"])
+def test_body_diagnostic_does_not_depend_on_interpreter_setup(request, monkeypatch, scenario):
+    """A prepared HTTP phase must keep its diagnostic when child setup is slow."""
+    import subprocess
+
+    launch = subprocess.Popen
+
+    def delayed_launch(*args, **kwargs):
+        # Delay launch after the parent deadline starts, before child stdin and the actual HTTP phase.
+        time.sleep(.8)
+        return launch(*args, **kwargs)
+
+    monkeypatch.setattr(subprocess, "Popen", delayed_launch)
+    if scenario == "tokeninfo-stall":
+        test_private_worker_tokeninfo_stall_times_out_before_kill(
+            request.getfixturevalue("oauth_server")
+        )
+    elif scenario == "immediate-body":
+        test_immediate_body_stall_has_a_diagnostic()
+    else:
+        test_header_delay_must_not_consume_the_body_diagnostic_margin(2.0)

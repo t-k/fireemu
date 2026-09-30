@@ -1,0 +1,136 @@
+{
+  "provenance": "STORAGE-OBJECT probe-v2, run 3a7bff7b1f317c1f1665, 2026-09-30T13:44:38Z to 13:44:50Z, query project, owner token (packet probe-v2, commit 120ae819b). Selected headers and the body of each answer; session URLs are replaced by a marker and are rebuilt by the tests from the recorded shape.",
+  "answers": {
+    "identity-owner-lookup": {
+      "status": 200,
+      "headers": {
+        "content-type": "application/json; charset=UTF-8"
+      },
+      "body": "{\"kind\":\"identitytoolkit#GetAccountInfoResponse\"}"
+    },
+    "gcs-metadata-owner": {
+      "status": 404,
+      "headers": {
+        "content-type": "application/json; charset=UTF-8"
+      },
+      "body": "{\"error\":{\"code\":404,\"message\":\"No such object: fireemu-oracle-query.firebasestorage.app/storage-object/3a7bff7b1f317c1f1665/probe/absent.bin\",\"errors\":[{\"message\":\"No such object: fireemu-oracle-query.firebasestorage.app/storage-object/3a7bff7b1f317c1f1665/probe/absent.bin\",\"domain\":\"global\",\"reason\":\"notFound\"}]}}"
+    },
+    "gcs-media-owner": {
+      "status": 404,
+      "headers": {
+        "content-type": "text/html; charset=UTF-8"
+      },
+      "body": "No such object: fireemu-oracle-query.firebasestorage.app/storage-object/3a7bff7b1f317c1f1665/probe/absent.bin"
+    },
+    "firebase-metadata-owner": {
+      "status": 404,
+      "headers": {
+        "content-type": "application/json; charset=UTF-8"
+      },
+      "body": "{\"error\":{\"code\":404,\"message\":\"Not Found.\"}}"
+    },
+    "firebase-media-owner": {
+      "status": 404,
+      "headers": {
+        "content-type": "application/json; charset=UTF-8"
+      },
+      "body": "{\"error\":{\"code\":404,\"message\":\"Not Found.\"}}"
+    },
+    "firebase-metadata-none": {
+      "status": 403,
+      "headers": {
+        "content-type": "application/json; charset=UTF-8"
+      },
+      "body": "{\"error\":{\"code\":403,\"message\":\"Permission denied.\"}}"
+    },
+    "firebase-media-none": {
+      "status": 403,
+      "headers": {
+        "content-type": "application/json; charset=UTF-8"
+      },
+      "body": "{\"error\":{\"code\":403,\"message\":\"Permission denied.\"}}"
+    },
+    "gcs-session-start": {
+      "status": 200,
+      "headers": {
+        "content-type": "text/plain; charset=utf-8"
+      },
+      "body": ""
+    },
+    "gcs-session-status": {
+      "status": 308,
+      "headers": {
+        "content-type": "text/plain; charset=utf-8"
+      },
+      "body": ""
+    },
+    "gcs-session-cancel": {
+      "status": 499,
+      "headers": {
+        "content-type": "application/json; charset=UTF-8"
+      },
+      "body": "{\"error\":{\"code\":499,\"message\":\"clientClosedRequest\",\"errors\":[{\"message\":\"clientClosedRequest\",\"domain\":\"global\",\"reason\":\"clientClosedRequest\"}]}}"
+    },
+    "gcs-session-status-after-cancel": {
+      "status": 499,
+      "headers": {
+        "content-type": "application/json; charset=UTF-8"
+      },
+      "body": "{\"error\":{\"code\":499,\"message\":\"clientClosedRequest\",\"errors\":[{\"message\":\"clientClosedRequest\",\"domain\":\"global\",\"reason\":\"clientClosedRequest\"}]}}"
+    },
+    "firebase-session-start": {
+      "status": 200,
+      "headers": {
+        "content-type": "text/plain; charset=utf-8",
+        "x-goog-upload-chunk-granularity": "262144",
+        "x-goog-upload-status": "active"
+      },
+      "body": ""
+    },
+    "firebase-session-query": {
+      "status": 200,
+      "headers": {
+        "content-type": "text/plain; charset=utf-8",
+        "x-goog-upload-chunk-granularity": "262144",
+        "x-goog-upload-size-received": "0",
+        "x-goog-upload-status": "active"
+      },
+      "body": ""
+    },
+    "firebase-session-cancel": {
+      "status": 200,
+      "headers": {
+        "content-type": "text/plain; charset=utf-8",
+        "x-goog-upload-status": "cancelled"
+      },
+      "body": ""
+    },
+    "firebase-session-query-after-cancel": {
+      "status": 200,
+      "headers": {
+        "content-type": "text/plain; charset=utf-8",
+        "x-goog-upload-status": "cancelled"
+      },
+      "body": ""
+    },
+    "gcs-list-owner": {
+      "status": 200,
+      "headers": {
+        "content-type": "application/json; charset=UTF-8"
+      },
+      "body": "{\"kind\":\"storage#objects\"}"
+    },
+    "firebase-list-owner": {
+      "status": 200,
+      "headers": {
+        "content-type": "application/json; charset=UTF-8"
+      },
+      "body": "{\"prefixes\":[],\"items\":[]}"
+    }
+  },
+  "sessionUrlShapes": {
+    "gcsLocation": "https://storage.googleapis.com/upload/storage/v1/b/<bucket>/o?uploadType=resumable&name=<name>&ifGenerationMatch=0&upload_id=<id>",
+    "firebaseUploadUrl": "https://firebasestorage.googleapis.com/v0/b/<bucket>/o?name=<name>&upload_id=<id>&upload_protocol=resumable",
+    "firebaseControlUrlEqualsUploadUrl": true
+  }
+}

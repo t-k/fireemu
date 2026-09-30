@@ -588,7 +588,13 @@ function createStorageSender(
     return canonical;
   }
 
-  function localSessionUrl(value, dialect, name, path) {
+  /**
+   * The session URL an initiate answered with. Production repeats the initiate's own query
+   * (`ifGenerationMatch=0` on the GCS insert) and adds `upload_id`; the local runtime does not
+   * repeat it. So the URL carries `name`, the protocol key and `upload_id`, and may also carry any
+   * other key the initiate declared, with the value it declared, and nothing else.
+   */
+  function localSessionUrl(value, dialect, name, path, declared = {}) {
     if (typeof value !== "string" || !value || Buffer.byteLength(value) > 8192 || /\s/.test(value))
       throw new Error("invalid local session URI");
     let url;
@@ -599,6 +605,8 @@ function createStorageSender(
     }
     const keys = [...url.searchParams.keys()];
     const protocolKey = dialect === "gcs" ? "uploadType" : "upload_protocol";
+    const required = new Set(["name", protocolKey, "upload_id"]);
+    const declaredKeys = new Set(Object.keys(declared));
     if (
       url.href !== value ||
       url.origin !== base ||
@@ -606,8 +614,11 @@ function createStorageSender(
       url.password ||
       url.hash ||
       url.pathname !== path ||
-      keys.toSorted().join(",") !== ["name", protocolKey, "upload_id"].toSorted().join(",") ||
-      url.searchParams.get("name") !== name ||
+      new Set(keys).size !== keys.length ||
+      keys.some((key) => !required.has(key) && !declaredKeys.has(key)) ||
+      [...declaredKeys].some(
+        (key) => url.searchParams.has(key) && url.searchParams.get(key) !== String(declared[key]),
+      ) ||
       url.searchParams.get(protocolKey) !== "resumable" ||
       !/^[A-Za-z0-9_-]{1,4096}$/.test(url.searchParams.get("upload_id") ?? "")
     )
@@ -902,6 +913,7 @@ function createStorageSender(
           start.dialect,
           start.objectName,
           start.path,
+          start.query,
         );
         uriSha256 = createHash("sha256").update(uri.href).digest("hex");
       }
@@ -1063,8 +1075,11 @@ function createStorageSender(
           ? (cancel && cancel.response.status !== 200) ||
             query.response.status !== 200 ||
             query.response.headers["x-goog-upload-status"] !== "cancelled" ||
-            query.response.headers["x-goog-upload-size-received"] !== "0"
-          : cancel?.response.status !== 499 || ![400, 404].includes(query.response.status))
+            // Production sends no size once a session is cancelled; a size that is there is 0.
+            ![undefined, "0"].includes(query.response.headers["x-goog-upload-size-received"])
+          : // Production answers the status after a cancel with 499 again; the documented 400 and
+            // 404 (and the local runtime's 400) also say the session is gone.
+            cancel?.response.status !== 499 || ![400, 404, 499].includes(query.response.status))
       )
         throw new Error("local session cancellation is not terminally confirmed");
       if (

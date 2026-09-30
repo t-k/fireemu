@@ -118,6 +118,6 @@ function envelopeIdPattern(taskKey) {
 function namesOtherTopic(line, text) {
   const subject = withoutQualifiers(normalizeLedgerText(line.split("|")[1] ?? ""));
   if (SCOPE_SUBJECT.test(subject)) return false;
-  if (HYPHENATED_SUBJECT.test(subject)) return true;
-  return FAMILY_SUBJECT.test(subject) && !UNIVERSAL.test(text);
+  if (FAMILY_SUBJECT.test(subject)) return !UNIVERSAL.test(text);
+  return HYPHENATED_SUBJECT.test(subject);
 }

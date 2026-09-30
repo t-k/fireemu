@@ -572,6 +572,10 @@ test("a global revocation written after the decision stops the approval, and one
     "a bare lane family with a universal word": note("codex", "全レーンの送信を中止"),
     "a bare pubsub with a universal word": note("pubsub", "revoke all sends"),
     "a scope word in a qualifier": note("Overall-plan", "withdrawn"),
+    "everything": note("everything-stops", "revoked"),
+    "entire": note("entire-program", "取消"),
+    "whole": note("whole-sandbox", "withdrawn"),
+    "a trailing hyphen is not a lane name": note("some-lane-", "revoked"),
   };
   for (const [name, row] of Object.entries(after)) {
     assert.throws(() => validate({ ledgerText: [decision(), row].join("\n"), packet, review }), /approval revoked/, name);
@@ -583,6 +587,15 @@ test("a global revocation written after the decision stops the approval, and one
 
 // A lane the scanner has no name for (the ledger grew PUBSUB-EVENTARC and SCHEDULED-FUNCTIONS after it was written) is still another topic: a REVOKED line names its own topic in the subject
 // column and is global only in the explicit global forms. One such line written after this lane's decision (the lane's own approval stays valid; a global one would void it).
+// Each bare lane-family name is a topic of its own when the line has no universal word, and global when it has one (fail closed).
+test("a bare lane-family subject revokes its own topic, unless the line says all", async () => {
+  const validate = await load();
+  for (const family of ["pubsub", "functions", "storage", "auth", "fs", "hosting", "firestore", "app-check", "codex", "fe", "ci", "CODEX", "Functions"]) {
+    assert.equal(validate({ ledgerText: [decision(), note(family, "decision=REVOKED")].join("\n"), packet, review }).sendAuthorized, false, family);
+    assert.throws(() => validate({ ledgerText: [decision(), note(family, "全レーンの承認を取り消す")].join("\n"), packet, review }), /approval revoked/, `${family} with a universal word`);
+  }
+});
+
 test("a REVOKED line of a lane the scanner does not know is not a global revocation, however the lane is named", async () => {
   const validate = await load();
   const rows = {

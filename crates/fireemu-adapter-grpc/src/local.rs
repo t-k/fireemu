@@ -1535,6 +1535,194 @@ mod tests {
             fireemu_core_firestore::index::IndexSet::default(),
         ));
     }
+
+    fn collection(name: &str) -> CollectionId {
+        CollectionId::try_new(name).unwrap()
+    }
+
+    fn field(path: &str) -> FieldPath {
+        FieldPath::parse(path).unwrap()
+    }
+
+    fn declared_ttl(entries: &[(&str, &str)]) -> TtlCatalog {
+        let mut catalog = TtlCatalog::new();
+        for (group, path) in entries {
+            catalog.enable(collection(group), field(path)).unwrap();
+        }
+        catalog
+    }
+
+    #[test]
+    fn a_declared_ttl_catalog_is_in_force_for_every_project() {
+        let backend = admission_backend();
+        backend.replace_shared_ttl_catalog("(default)", declared_ttl(&[("sessions", "expireAt")]));
+        for project in ["demo-app", "another-project"] {
+            let policy = backend
+                .ttl_policy(project, "(default)", &collection("sessions"))
+                .unwrap();
+            assert_eq!(policy.field, field("expireAt"));
+            assert_eq!(policy.state, TtlState::Active);
+        }
+        // Another database and another collection group have none.
+        assert!(backend
+            .ttl_policy("demo-app", "staging", &collection("sessions"))
+            .is_none());
+        assert!(backend
+            .ttl_policy("demo-app", "(default)", &collection("logs"))
+            .is_none());
+        // What the configuration installed is not any project's exportable state.
+        assert!(backend.ttl_catalogs().is_empty());
+    }
+
+    #[test]
+    fn a_patch_on_a_project_starts_from_the_declared_policies() {
+        let backend = admission_backend();
+        backend.replace_shared_ttl_catalog("(default)", declared_ttl(&[("sessions", "expireAt")]));
+        backend
+            .enable_ttl("demo-app", "(default)", collection("logs"), field("until"))
+            .unwrap();
+        let catalog = backend.ttl_catalog("demo-app", "(default)");
+        assert_eq!(catalog.len(), 2, "the declared policy survives the patch");
+        // A second TTL field of a declared collection group is refused, as production does.
+        assert!(matches!(
+            backend.enable_ttl(
+                "demo-app",
+                "(default)",
+                collection("sessions"),
+                field("other")
+            ),
+            Err(TtlError::ConflictingField { .. })
+        ));
+        // Another project still sees only the declared policy.
+        assert_eq!(backend.ttl_catalog("another-project", "(default)").len(), 1);
+    }
+
+    #[test]
+    fn clearing_a_declared_policy_in_one_project_leaves_the_others_and_stays_cleared() {
+        let backend = admission_backend();
+        backend.replace_shared_ttl_catalog("(default)", declared_ttl(&[("sessions", "expireAt")]));
+        assert!(backend.disable_ttl(
+            "demo-app",
+            "(default)",
+            &collection("sessions"),
+            &field("expireAt")
+        ));
+        assert!(backend
+            .ttl_policy("demo-app", "(default)", &collection("sessions"))
+            .is_none());
+        assert!(backend
+            .ttl_policy("another-project", "(default)", &collection("sessions"))
+            .is_some());
+        // Clearing what is not there is still a no-op.
+        assert!(!backend.disable_ttl(
+            "demo-app",
+            "(default)",
+            &collection("sessions"),
+            &field("expireAt")
+        ));
+        // Re-declaring in the file does not resurrect it in a project that cleared it.
+        backend.replace_shared_ttl_catalog("(default)", declared_ttl(&[("sessions", "expireAt")]));
+        assert!(backend
+            .ttl_policy("demo-app", "(default)", &collection("sessions"))
+            .is_none());
+    }
+
+    #[test]
+    fn a_snapshot_restore_keeps_a_declared_policy_the_project_cleared_cleared() {
+        let backend = admission_backend();
+        backend.replace_shared_ttl_catalog("(default)", declared_ttl(&[("sessions", "expireAt")]));
+        assert!(backend.disable_ttl(
+            "demo-app",
+            "(default)",
+            &collection("sessions"),
+            &field("expireAt")
+        ));
+        let captured = backend.ttl_catalogs();
+        assert_eq!(
+            captured.len(),
+            1,
+            "the cleared state is part of the project's captured state"
+        );
+        backend.restore_ttl_catalogs(|project| project == "demo-app", &captured);
+        assert!(backend
+            .ttl_policy("demo-app", "(default)", &collection("sessions"))
+            .is_none());
+        assert!(backend
+            .ttl_policy("another-project", "(default)", &collection("sessions"))
+            .is_some());
+    }
+
+    #[test]
+    fn a_restore_of_an_empty_catalog_installs_nothing_where_nothing_is_declared() {
+        let backend = admission_backend();
+        let captured = BTreeMap::from([(
+            ("demo-app".to_owned(), "(default)".to_owned()),
+            TtlCatalog::new(),
+        )]);
+        backend.restore_ttl_catalogs(|_| true, &captured);
+        assert!(backend.ttl_catalogs().is_empty());
+    }
+
+    #[test]
+    fn a_refused_patch_or_a_clear_that_removes_nothing_leaves_the_project_following_the_file() {
+        let backend = admission_backend();
+        backend.replace_shared_ttl_catalog("(default)", declared_ttl(&[("sessions", "expireAt")]));
+        assert!(matches!(
+            backend.enable_ttl(
+                "demo-app",
+                "(default)",
+                collection("sessions"),
+                field("other")
+            ),
+            Err(TtlError::ConflictingField { .. })
+        ));
+        assert!(!backend.disable_ttl(
+            "demo-app",
+            "(default)",
+            &collection("logs"),
+            &field("until")
+        ));
+        assert!(!backend.disable_ttl(
+            "demo-app",
+            "(default)",
+            &collection("sessions"),
+            &field("other")
+        ));
+        assert!(backend.ttl_catalogs().is_empty(), "no copy was made");
+        backend.replace_shared_ttl_catalog("(default)", declared_ttl(&[("logs", "until")]));
+        assert!(backend
+            .ttl_policy("demo-app", "(default)", &collection("sessions"))
+            .is_none());
+        assert!(backend
+            .ttl_policy("demo-app", "(default)", &collection("logs"))
+            .is_some());
+    }
+
+    #[test]
+    fn replacing_the_declared_catalog_follows_the_file_and_a_reset_shows_it_again() {
+        let backend = admission_backend();
+        backend.replace_shared_ttl_catalog("(default)", declared_ttl(&[("sessions", "expireAt")]));
+        backend.replace_shared_ttl_catalog("(default)", declared_ttl(&[("logs", "until")]));
+        assert!(backend
+            .ttl_policy("demo-app", "(default)", &collection("sessions"))
+            .is_none());
+        assert!(backend
+            .ttl_policy("demo-app", "(default)", &collection("logs"))
+            .is_some());
+        backend.replace_shared_ttl_catalog("(default)", TtlCatalog::new());
+        assert!(backend
+            .ttl_policy("demo-app", "(default)", &collection("logs"))
+            .is_none());
+        // A project's own state is dropped by a reset, and the declared policy applies again.
+        backend.replace_shared_ttl_catalog("(default)", declared_ttl(&[("sessions", "expireAt")]));
+        backend
+            .enable_ttl("demo-app", "(default)", collection("logs"), field("until"))
+            .unwrap();
+        backend.restore_ttl_catalogs(|_| true, &BTreeMap::new());
+        let after = backend.ttl_catalog("demo-app", "(default)");
+        assert_eq!(after.len(), 1);
+        assert!(after.policy(&collection("sessions")).is_some());
+    }
 }
 
 impl LocalBackend {
@@ -2853,6 +3041,25 @@ impl LocalBackend {
         }
     }
 
+    /// Installs the time-to-live policies a configuration file declares for one database.
+    ///
+    /// They are in force for every project of the database, and a session reset does not
+    /// remove them, exactly as the shared index catalog of the same file. A project that has
+    /// patched its own policies starts from them (see [`Self::enable_ttl_with_offset`]), so
+    /// the declared policies are part of the state a patch then changes. The catalog belongs
+    /// to the configuration, so it is neither exported nor captured by a snapshot.
+    pub fn replace_shared_ttl_catalog(&self, database: &str, catalog: TtlCatalog) {
+        let mut catalogs = self
+            .ttl
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if catalog.is_empty() {
+            catalogs.remove(&(None, database.to_owned()));
+        } else {
+            catalogs.insert((None, database.to_owned()), catalog);
+        }
+    }
+
     /// Every configured time-to-live catalog, keyed by project and database.
     ///
     /// Only the project-specific entries are reported: the shared fallback belongs to the
@@ -2889,7 +3096,15 @@ impl LocalBackend {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         current.retain(|(project, _), _| project.as_ref().is_none_or(|p| !owned(p)));
         for ((project, database), catalog) in catalogs {
-            if catalog.is_empty() || !owned(project) {
+            if !owned(project) {
+                continue;
+            }
+            // An empty catalog is state where the configuration declares policies for the
+            // database: it is what keeps a policy the project cleared cleared.
+            let masks_declared = current
+                .get(&(None, database.clone()))
+                .is_some_and(|declared| !declared.is_empty());
+            if catalog.is_empty() && !masks_declared {
                 continue;
             }
             current.insert((Some(project.clone()), database.clone()), catalog.clone());
@@ -2941,8 +3156,16 @@ impl LocalBackend {
             .ttl
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let catalog = catalogs.entry(key).or_default();
+        // A project's first patch starts from the policies its configuration declared. It
+        // works on a copy that only a patch that succeeds installs: a refused patch leaves
+        // the project following the file.
+        let mut catalog = catalogs
+            .get(&key)
+            .or_else(|| catalogs.get(&(None, database.to_owned())))
+            .cloned()
+            .unwrap_or_default();
         let state = catalog.enable_with_offset(collection_group, field, expiration_offset)?;
+        catalogs.insert(key, catalog);
         drop(catalogs);
         // The policy takes effect now, so the sweep interval is measured from now: a
         // document that was already expired when the policy was created still survives one
@@ -2972,12 +3195,20 @@ impl LocalBackend {
             .ttl
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let Some(catalog) = catalogs.get_mut(&key) else {
-            return false;
-        };
+        // A project that has not patched yet clears from the declared policies, and a clear
+        // that removes nothing changes nothing: the project keeps following the file.
+        let declared = catalogs.get(&(None, database.to_owned()));
+        let has_declared = declared.is_some_and(|catalog| !catalog.is_empty());
+        let mut catalog = catalogs.get(&key).or(declared).cloned().unwrap_or_default();
         let removed = catalog.disable(collection_group, field);
-        if catalog.is_empty() {
-            catalogs.remove(&key);
+        if removed {
+            // An emptied catalog of a project whose configuration declares policies stays,
+            // so that the cleared policy is not resurrected by the fallback.
+            if catalog.is_empty() && !has_declared {
+                catalogs.remove(&key);
+            } else {
+                catalogs.insert(key, catalog);
+            }
         }
         removed
     }

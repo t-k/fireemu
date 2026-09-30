@@ -4,6 +4,7 @@ use fireemu_core_firestore::field_path::FieldPath;
 use fireemu_core_firestore::index::{
     IndexDefinition, IndexField, IndexFieldMode, IndexQueryScope, IndexSet,
 };
+use fireemu_core_firestore::ttl::TtlCatalog;
 use fireemu_core_types::ids::CollectionId;
 use serde_json::{json, Value};
 
@@ -42,12 +43,6 @@ pub fn load_text_indexes(
         }
     }
     Ok(set)
-}
-
-/// Loads `firestore.indexes.json` (composite indexes and single-field exemptions).
-pub fn load_indexes(path: &str) -> Result<IndexSet, String> {
-    let text = std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))?;
-    parse_indexes(path, &text)
 }
 
 /// Parses one `firestore.indexes.json` generation already read by a reload supervisor.
@@ -145,6 +140,72 @@ pub fn parse_indexes(path: &str, text: &str) -> Result<IndexSet, String> {
     Ok(set)
 }
 
+/// Reads the time-to-live policies a `firestore.indexes.json` declares, as `firebase deploy`
+/// creates them: a field override with `ttl: true` becomes a policy on that field of that
+/// collection group. `ttl: false` and an absent `ttl` declare none (deploy leaves an
+/// existing policy alone in the second case, and a fresh emulator has none). The result is
+/// the policy state `fields.patch` sets, checked by the same catalog: one TTL field per
+/// collection group, not `__name__`, not the `*` wildcard, at most
+/// [`MAX_TTL_FIELDS_PER_DATABASE`](fireemu_core_firestore::ttl::MAX_TTL_FIELDS_PER_DATABASE).
+pub fn parse_ttl_policies(path: &str, text: &str) -> Result<TtlCatalog, String> {
+    let json: Value = serde_json::from_str(text).map_err(|e| format!("{path}: {e}"))?;
+    let mut catalog = TtlCatalog::new();
+    for ov in json
+        .get("fieldOverrides")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        let collection = ov
+            .get("collectionGroup")
+            .and_then(Value::as_str)
+            .ok_or("fieldOverride without collectionGroup")?;
+        let field = ov
+            .get("fieldPath")
+            .and_then(Value::as_str)
+            .ok_or("fieldOverride without fieldPath")?;
+        if !override_ttl(ov, field)? {
+            continue;
+        }
+        if field == "*" {
+            return Err(format!(
+                "{path}: the wildcard field cannot carry a TTL policy (collection group {collection})"
+            ));
+        }
+        let problem =
+            |e: &dyn std::fmt::Display| format!("{path}: fieldOverride {collection}.{field}: {e}");
+        catalog
+            .enable(
+                CollectionId::try_new(collection).map_err(|e| problem(&e))?,
+                FieldPath::parse(field).map_err(|e| problem(&e))?,
+            )
+            .map_err(|e| problem(&e))?;
+    }
+    Ok(catalog)
+}
+
+/// Loads `firestore.indexes.json` as a whole: the query-planning indexes and the time-to-live
+/// policies the same file declares, from one read of the file.
+pub fn load_index_file(path: &str) -> Result<(IndexSet, TtlCatalog), String> {
+    let text = std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))?;
+    parse_index_file(path, &text)
+}
+
+/// Parses one generation of `firestore.indexes.json`, both halves or neither: a file whose
+/// indexes are valid but whose TTL declaration is not is refused as a whole.
+pub fn parse_index_file(path: &str, text: &str) -> Result<(IndexSet, TtlCatalog), String> {
+    Ok((parse_indexes(path, text)?, parse_ttl_policies(path, text)?))
+}
+
+/// A field override's `ttl`. `firebase deploy` refuses one that is not a boolean.
+fn override_ttl(ov: &Value, field: &str) -> Result<bool, String> {
+    match ov.get("ttl") {
+        None => Ok(false),
+        Some(Value::Bool(ttl)) => Ok(*ttl),
+        Some(_) => Err(format!("field override {field}: ttl must be a boolean")),
+    }
+}
+
 fn parse_field_overrides(json: &Value, set: &mut IndexSet) -> Result<(), String> {
     for ov in json
         .get("fieldOverrides")
@@ -160,6 +221,7 @@ fn parse_field_overrides(json: &Value, set: &mut IndexSet) -> Result<(), String>
             .get("fieldPath")
             .and_then(Value::as_str)
             .ok_or("fieldOverride without fieldPath")?;
+        override_ttl(ov, path)?;
         if let Some(indexes) = ov.get("indexes").and_then(Value::as_array) {
             let mut modes = Vec::new();
             for index in indexes {
@@ -347,6 +409,116 @@ mod tests {
         );
         let config = json!({"fieldOverrides":[{"collectionGroup":"tasks", "fieldPath":"a", "indexes":[{"order":"ASCENDING", "arrayConfig":"CONTAINS"}]}]});
         assert!(parse_indexes("test", &config.to_string()).is_err());
+    }
+
+    fn ttl_fields(config: &Value) -> Result<Vec<(String, String)>, String> {
+        parse_ttl_policies("test", &config.to_string()).map(|catalog| {
+            catalog
+                .iter()
+                .map(|(collection, policy)| {
+                    (collection.as_str().to_owned(), policy.field.canonical())
+                })
+                .collect()
+        })
+    }
+
+    #[test]
+    fn a_field_override_with_ttl_true_becomes_a_policy_like_fields_patch_sets() {
+        let config = json!({"fieldOverrides":[
+            {"collectionGroup":"sessions", "fieldPath":"expireAt", "ttl":true, "indexes":[]},
+            {"collectionGroup":"logs", "fieldPath":"meta.until", "ttl":true, "indexes":[{"order":"ASCENDING", "queryScope":"COLLECTION"}]},
+        ]});
+        assert_eq!(
+            ttl_fields(&config).unwrap(),
+            vec![
+                ("logs".to_owned(), "meta.until".to_owned()),
+                ("sessions".to_owned(), "expireAt".to_owned()),
+            ]
+        );
+        let catalog = parse_ttl_policies("test", &config.to_string()).unwrap();
+        let policy = catalog
+            .policy(&CollectionId::try_new("sessions").unwrap())
+            .unwrap();
+        assert_eq!(policy.state, fireemu_core_firestore::ttl::TtlState::Active);
+        assert_eq!(policy.expiration_offset, None);
+        // The index half of the same override is read as before.
+        let indexes = parse_indexes("test", &config.to_string()).unwrap();
+        assert_eq!(
+            indexes.single_field_modes(
+                &CollectionId::try_new("logs").unwrap(),
+                &FieldPath::parse("meta.until").unwrap()
+            ),
+            vec![(IndexQueryScope::Collection, IndexFieldMode::Ascending)]
+        );
+    }
+
+    #[test]
+    fn ttl_false_or_absent_declares_no_policy() {
+        for ttl in [Some(false), None] {
+            let mut item =
+                json!({"collectionGroup":"sessions", "fieldPath":"expireAt", "indexes":[]});
+            if let Some(ttl) = ttl {
+                item["ttl"] = json!(ttl);
+            }
+            let config = json!({"fieldOverrides":[item]});
+            assert!(ttl_fields(&config).unwrap().is_empty(), "{ttl:?}");
+        }
+        assert!(ttl_fields(&json!({})).unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_ttl_that_is_not_a_boolean_is_refused_by_both_readers() {
+        for ttl in [json!("true"), json!(1), json!(null), json!({})] {
+            let config = json!({"fieldOverrides":[{"collectionGroup":"c", "fieldPath":"f", "ttl":ttl, "indexes":[]}]});
+            assert!(ttl_fields(&config).is_err(), "{ttl}");
+            assert!(parse_indexes("test", &config.to_string()).is_err(), "{ttl}");
+        }
+    }
+
+    #[test]
+    fn a_ttl_that_no_admin_patch_could_set_is_refused() {
+        for field in ["*", "__name__"] {
+            let config = json!({"fieldOverrides":[{"collectionGroup":"c", "fieldPath":field, "ttl":true, "indexes":[]}]});
+            let error = ttl_fields(&config).unwrap_err();
+            assert!(error.starts_with("test: "), "{field}: {error}");
+            if field == "*" {
+                assert!(
+                    error.contains("wildcard field cannot carry a TTL policy"),
+                    "{error}"
+                );
+            }
+        }
+        let two_fields = json!({"fieldOverrides":[
+            {"collectionGroup":"c", "fieldPath":"a", "ttl":true, "indexes":[]},
+            {"collectionGroup":"c", "fieldPath":"b", "ttl":true, "indexes":[]},
+        ]});
+        let error = ttl_fields(&two_fields).unwrap_err();
+        assert!(
+            error.contains('c') && error.contains("at most one TTL field"),
+            "{error}"
+        );
+        let repeated = json!({"fieldOverrides":[
+            {"collectionGroup":"c", "fieldPath":"a", "ttl":true, "indexes":[]},
+            {"collectionGroup":"c", "fieldPath":"a", "ttl":true, "indexes":[]},
+        ]});
+        assert_eq!(ttl_fields(&repeated).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn the_ttl_policy_count_is_bounded_like_the_catalog() {
+        let overrides = |count: usize| {
+            (0..count)
+                .map(|i| json!({"collectionGroup":format!("c{i}"), "fieldPath":"t", "ttl":true, "indexes":[]}))
+                .collect::<Vec<_>>()
+        };
+        let limit = fireemu_core_firestore::ttl::MAX_TTL_FIELDS_PER_DATABASE;
+        assert_eq!(
+            ttl_fields(&json!({"fieldOverrides": overrides(limit)}))
+                .unwrap()
+                .len(),
+            limit
+        );
+        assert!(ttl_fields(&json!({"fieldOverrides": overrides(limit + 1)})).is_err());
     }
 
     #[test]

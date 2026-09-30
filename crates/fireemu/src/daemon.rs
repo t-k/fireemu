@@ -20,7 +20,7 @@ use fireemu_core_auth::signup_quota::{
 use fireemu_core_auth::store::{
     AuthNamespaceConfigPatch, AuthStore, ProjectAuthConfig, ProjectAuthConfigPatch,
 };
-use fireemu_core_firestore::index::{IndexSet, PlanningContext};
+use fireemu_core_firestore::index::PlanningContext;
 use fireemu_core_rules::runtime::{LoadedRules, RulesetSlot};
 use fireemu_core_session::clock::VirtualClock;
 use fireemu_core_types::determinism::SplitMix64;
@@ -1465,6 +1465,11 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
                 cfg.clock_start.to_rfc3339().unwrap_or_default()
             ));
         }
+        // The index file declares the query-planning indexes and the TTL policies together.
+        let (default_indexes, default_ttl_policies) = match &cfg.index_file {
+            Some(path) => control::load_index_file(path)?,
+            None => Default::default(),
+        };
         let gateway = Gateway {
             enforce_limits: cfg.enforce_limits,
             ctx: PlanningContext {
@@ -1472,10 +1477,7 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
                 api_mode: cfg.api_mode,
                 policy: cfg.index_policy,
             },
-            indexes: match &cfg.index_file {
-                Some(path) => control::load_indexes(path)?,
-                None => IndexSet::default(),
-            },
+            indexes: default_indexes,
         };
         let backend = if cfg.clock_start_pinned {
             LocalBackend::new(gateway.clone(), clock.clone(), cfg.seed)
@@ -1506,10 +1508,16 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
                 backend
             },
         );
+        backend.replace_shared_ttl_catalog(
+            fireemu_core_types::ids::DatabaseId::DEFAULT,
+            default_ttl_policies,
+        );
         for (database, files) in &cfg.firestore_databases {
             if database != fireemu_core_types::ids::DatabaseId::DEFAULT {
                 if let Some(path) = &files.indexes {
-                    backend.replace_database_indexes(database, control::load_indexes(path)?);
+                    let (indexes, ttl_policies) = control::load_index_file(path)?;
+                    backend.replace_database_indexes(database, indexes);
+                    backend.replace_shared_ttl_catalog(database, ttl_policies);
                 }
             }
         }

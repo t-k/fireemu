@@ -559,3 +559,67 @@ fn a_token_of_another_tenant_is_a_mismatch_for_every_operation() {
         assert!(registry.tenants("demo-app").is_empty(), "{route}");
     }
 }
+
+/// `sendOobCode` for `VERIFY_EMAIL` asks for the link alone (no ID token read) only when it has
+/// `returnOobLink` and no token (`operations.js:678`); a token reads it even with the flag
+/// (official column probed, owner credential, no `email` so the two paths answer differently).
+#[test]
+fn a_verify_email_link_request_reads_the_token_it_carries() {
+    let (state, _registry) = emulator();
+    let mut body =
+        json!({"requestType": "VERIFY_EMAIL", "returnOobLink": true, "tenantId": "link-t"});
+    body["idToken"] = json!(own_token("u1", "link-t"));
+    let (status, answered) = admin(&state, "POST", &format!("{V1}/accounts:sendOobCode"), &body);
+    assert_eq!(
+        (status, message_of(&answered)),
+        (400, "USER_NOT_FOUND".to_owned()),
+        "{answered}"
+    );
+}
+
+/// The body-tenant scope of the Admin account operations is the emulator profile's alone: under
+/// strict only the project-level lookup takes a body tenant as its scope (production's Admin
+/// operations on a project path ignore it), so a create or a batch create with one writes to the
+/// project, never to the tenant it names.
+#[test]
+fn the_strict_profile_does_not_scope_admin_writes_by_the_body_tenant() {
+    let (_, state, registry) = profiles()
+        .into_iter()
+        .find(|(label, ..)| *label == "strict")
+        .unwrap();
+    let (status, created) = admin(
+        &state,
+        "POST",
+        &format!("{V2}/projects/demo-app/tenants"),
+        &json!({"displayName": "held"}),
+    );
+    assert_eq!(status, 200, "{created}");
+    let tenant = created["name"]
+        .as_str()
+        .unwrap()
+        .rsplit('/')
+        .next()
+        .unwrap()
+        .to_owned();
+    let held = registry.tenant_store("demo-app", &tenant).unwrap();
+    for (suffix, body) in [
+        (
+            "accounts",
+            json!({"email": "m@example.com", "password": "hunter22"}),
+        ),
+        (
+            "accounts:batchCreate",
+            json!({"users": [{"localId": "u", "email": "b@example.com"}]}),
+        ),
+    ] {
+        let mut body = body;
+        body["tenantId"] = json!(tenant);
+        let (_, answered) = admin(
+            &state,
+            "POST",
+            &format!("{V1}/projects/demo-app/{suffix}"),
+            &body,
+        );
+        assert_eq!(held.lock().unwrap().user_count(), 0, "{suffix}: {answered}");
+    }
+}

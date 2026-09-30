@@ -6593,8 +6593,10 @@ fn lookup_authorization_separates_end_user_identity_from_admin_selectors() {
                     }
                 }
             }
-            // Even the emulator owner header cannot change an end-user handler's role: the
-            // session's subject is the only account answered.
+            // The owner header cannot change an end-user handler's role in the strict profile:
+            // the session's subject is the only account answered. The emulator profile serves a
+            // request with the owner credential as the official emulator's `Oauth2` branch does
+            // (`operations.js:225`): by the selectors, with no ID token read.
             query["idToken"] = signed[0]["idToken"].clone();
             let response = handle_with(
                 &s,
@@ -6605,7 +6607,12 @@ fn lookup_authorization_separates_end_user_identity_from_admin_selectors() {
             );
             assert_eq!(response.status, 200, "{}", response.body);
             assert_eq!(response.body["users"].as_array().unwrap().len(), 1);
-            assert_eq!(response.body["users"][0]["localId"], signed[0]["localId"]);
+            let answered = if s.stateless_refresh_tokens {
+                &signed[1]
+            } else {
+                &signed[0]
+            };
+            assert_eq!(response.body["users"][0]["localId"], answered["localId"]);
         }
         assert_eq!(
             post(
@@ -9245,6 +9252,13 @@ fn assert_custom_session_cookie_handoff(state: &AuthState, tenant: &str, token: 
             &other,
             &json!({"idToken": token, "validDuration": "300"}),
         );
+        // The emulator profile takes the token's tenant as the target of a project-path cookie
+        // request when the path and the body name none, as the official emulator does
+        // (`server.js:398-406`); a tenant path of another tenant is still refused.
+        if state.stateless_refresh_tokens && !other.contains("/tenants/") {
+            assert_eq!(status, 200, "{refused}");
+            continue;
+        }
         assert_eq!(status, 400);
         assert!(refused.get("sessionCookie").is_none());
     }

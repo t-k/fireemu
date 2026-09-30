@@ -129,6 +129,10 @@ fn cache_entries(base: &Path) -> Vec<std::fs::DirEntry> {
 }
 
 #[test]
+#[cfg_attr(
+    target_os = "macos",
+    ignore = "the macOS cache stays unused until the ACL of an opened descriptor can be read"
+)]
 fn concurrent_processes_publish_one_complete_entry_and_later_processes_reuse_it() {
     use std::os::unix::fs::PermissionsExt as _;
 
@@ -187,6 +191,10 @@ fn concurrent_processes_publish_one_complete_entry_and_later_processes_reuse_it(
 }
 
 #[test]
+#[cfg_attr(
+    target_os = "macos",
+    ignore = "the macOS cache stays unused until the ACL of an opened descriptor can be read"
+)]
 fn app_check_keys_remain_per_process_and_app_check_only_never_creates_an_auth_cache() {
     let root = scratch("key-separation");
     let base = cache_base(&root);

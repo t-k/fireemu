@@ -583,7 +583,6 @@ name = "fireemu"
 version = "0.9.0"
 dependencies = [
  "bytes",
- "exacl",
  "fireemu-adapter-functions",
  "fireemu-adapter-grpc",
  "fireemu-adapter-http",

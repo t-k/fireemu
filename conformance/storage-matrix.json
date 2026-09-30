@@ -6,8 +6,8 @@
   },
   "project": "demo-storage-probe",
   "summary": {
-    "parity": 111,
-    "documented-divergence": 108,
+    "parity": 108,
+    "documented-divergence": 111,
     "debt": 0
   },
   "programs": [
@@ -2629,8 +2629,8 @@
         },
         {
           "id": "paged",
-          "status": "parity",
-          "value": {
+          "status": "documented-divergence",
+          "oracle": {
             "0": {
               "hasNext": true,
               "items": [
@@ -2654,7 +2654,37 @@
               ],
               "status": 200
             }
-          }
+          },
+          "fireemu": {
+            "0": {
+              "hasNext": true,
+              "items": [
+                "open/lst/a.txt",
+                "open/lst/b.txt"
+              ],
+              "prefixes": [],
+              "status": 200
+            },
+            "1": {
+              "hasNext": true,
+              "items": [],
+              "prefixes": [
+                "open/lst/dir/",
+                "open/lst/dir2/"
+              ],
+              "status": 200
+            },
+            "2": {
+              "hasNext": false,
+              "items": [
+                "open/lst/zz.txt"
+              ],
+              "prefixes": [],
+              "status": 200
+            }
+          },
+          "documents": "README.md, \"Storage\"; capability manifest ST-OBJ-1 (crates/fireemu/src/capabilities.json); spec/compatibility/contract.json",
+          "reason": "The Firebase list API counts items and folded prefixes together toward maxResults and limits a page to 1000 entries. fireemu places each prefix on only one page, an inference from paging the combined ordered entries rather than an explicit statement in the reference. The official emulator pages items alone and repeats every folded prefix on every page."
         },
         {
           "id": "page-token-shape",
@@ -5157,8 +5187,8 @@
             },
             "status": 200
           },
-          "documents": "README.md, \"Storage\"; capability manifest ST-OBJ-1 (crates/fireemu/src/capabilities.json)",
-          "reason": "PATCH /storage/v1/b/<bucket>/o/<object> updates the object's metadata in fireemu, as the Cloud Storage JSON API does in production (recorded: a 200 with the storage#object resource, and the 404 `No such object` JSON error for an absent object). The official emulator registers PATCH only on the short /b/... spelling and answers this one with its 501 catch-all."
+          "documents": "spec/compatibility/contract.json ST-CLAIM-OBJECTS; CHANGELOG.md [Unreleased]",
+          "reason": "The official emulator answers 501 on the /storage/v1 PATCH spelling. Cloud Storage documents this production route, so fireemu applies the metadata patch in both profiles."
         },
         {
           "id": "put-update",
@@ -5313,8 +5343,8 @@
         },
         {
           "id": "list-paged",
-          "status": "parity",
-          "value": {
+          "status": "documented-divergence",
+          "oracle": {
             "0": {
               "hasNext": true,
               "names": [
@@ -5335,7 +5365,35 @@
               ],
               "status": 200
             }
-          }
+          },
+          "fireemu": {
+            "0": {
+              "hasNext": true,
+              "names": [
+                "open/gcsu/list/a.txt"
+              ],
+              "prefixes": null,
+              "status": 200
+            },
+            "1": {
+              "hasNext": true,
+              "names": [
+                "open/gcsu/list/b.txt"
+              ],
+              "prefixes": null,
+              "status": 200
+            },
+            "2": {
+              "hasNext": false,
+              "names": [],
+              "prefixes": [
+                "open/gcsu/list/dir/"
+              ],
+              "status": 200
+            }
+          },
+          "documents": "README.md, \"Storage\"; capability manifest ST-OBJ-1 (crates/fireemu/src/capabilities.json); spec/compatibility/contract.json",
+          "reason": "The Cloud Storage JSON API counts items and folded prefixes together toward maxResults. fireemu places each prefix on only one page, an inference from paging the combined ordered entries rather than an explicit statement in the reference; the official emulator pages items alone and repeats every folded prefix."
         },
         {
           "id": "list-short-route",
@@ -6255,14 +6313,48 @@
         },
         {
           "id": "copy-storage-v1-spelling",
-          "status": "parity",
-          "value": {
+          "status": "documented-divergence",
+          "oracle": {
             "body": "Not Implemented",
             "headers": {
               "content-type": "text/plain; charset=utf-8"
             },
             "status": 501
-          }
+          },
+          "fireemu": {
+            "body": {
+              "bucket": "demo-storage-probe.appspot.com",
+              "cacheControl": "max-age=3",
+              "contentDisposition": "inline",
+              "contentType": "text/plain",
+              "crc32c": "wYbcfA==",
+              "etag": "<etag>",
+              "generation": "<generation>",
+              "id": "demo-storage-probe.appspot.com/open/copy/long.txt/<generation>",
+              "kind": "storage#object",
+              "md5Hash": "Vv4LFAmlZi1wz+3EVV1HcQ==",
+              "mediaLink": "http://<host>/download/storage/v1/b/demo-storage-probe.appspot.com/o/open%2Fcopy%2Flong.txt?generation=<generation>&alt=media",
+              "metadata": {
+                "firebaseStorageDownloadTokens": "src-token",
+                "k": "v"
+              },
+              "metageneration": "1",
+              "name": "open/copy/long.txt",
+              "selfLink": "http://<host>/storage/v1/b/demo-storage-probe.appspot.com/o/open%2Fcopy%2Flong.txt",
+              "size": "7",
+              "storageClass": "STANDARD",
+              "timeCreated": "<timestamp>",
+              "timeFinalized": "<timestamp>",
+              "timeStorageClassUpdated": "<timestamp>",
+              "updated": "<timestamp>"
+            },
+            "headers": {
+              "content-type": "application/json; charset=utf-8"
+            },
+            "status": 200
+          },
+          "documents": "spec/compatibility/contract.json ST-CLAIM-OBJECTS; CHANGELOG.md [Unreleased]",
+          "reason": "The official emulator answers 501 on the /storage/v1 copyTo spelling. Cloud Storage documents this production route, so fireemu performs the copy in both profiles."
         },
         {
           "id": "copy-onto-itself",
@@ -6395,11 +6487,11 @@
                 "errors": [
                   {
                     "domain": "global",
-                    "message": "ifGenerationMatch 0 but the current generation is 60",
+                    "message": "ifGenerationMatch 0 but the current generation is 61",
                     "reason": "conditionNotMet"
                   }
                 ],
-                "message": "ifGenerationMatch 0 but the current generation is 60"
+                "message": "ifGenerationMatch 0 but the current generation is 61"
               }
             },
             "headers": {
@@ -6496,8 +6588,8 @@
             },
             "status": 412
           },
-          "documents": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)",
-          "reason": "PATCH /storage/v1/b/<bucket>/o/<object> honours ifMetagenerationMatch in fireemu and answers 412 on a mismatch, as production does. The official emulator registers PATCH on the short spelling only and answers this spelling with 501 (see patch-storage-v1-spelling)."
+          "documents": "spec/compatibility/contract.json ST-CLAIM-OBJECTS; CHANGELOG.md [Unreleased]",
+          "reason": "The official emulator answers 501 before checking a precondition on /storage/v1 PATCH. Cloud Storage documents the route, and fireemu checks the supplied metageneration before applying the patch."
         },
         {
           "id": "get-if-generation-not-match-current",
@@ -6550,11 +6642,11 @@
                 "errors": [
                   {
                     "domain": "global",
-                    "message": "ifGenerationMatch 1 but the current generation is 61",
+                    "message": "ifGenerationMatch 1 but the current generation is 62",
                     "reason": "conditionNotMet"
                   }
                 ],
-                "message": "ifGenerationMatch 1 but the current generation is 61"
+                "message": "ifGenerationMatch 1 but the current generation is 62"
               }
             },
             "headers": {

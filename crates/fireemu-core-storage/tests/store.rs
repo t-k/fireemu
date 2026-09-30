@@ -422,7 +422,98 @@ fn resumable_uploads_are_an_explicit_state_machine() {
 }
 
 #[test]
-fn pagination_pages_items_only_and_repeats_every_prefix() {
+fn pagination_counts_items_and_prefixes_once_across_pages() {
+    // https://firebase.google.com/docs/reference/js/storage.listoptions counts both entry
+    // kinds toward maxResults; https://cloud.google.com/storage/docs/json_api/v1/objects/list
+    // makes the same requirement for the JSON API.
+    let mut store = StorageState::new(1);
+    let bucket = bucket();
+    for object_name in ["a", "b", "dir/x", "dir2/x", "zz"] {
+        store
+            .put(
+                &bucket,
+                &name(object_name),
+                Vec::new(),
+                NewMetadata::default(),
+                Precondition::default(),
+                t(1),
+            )
+            .unwrap();
+    }
+
+    let first = store.list(&bucket, "", Some("/"), None, Some(2));
+    assert_eq!(
+        first
+            .items
+            .iter()
+            .map(|item| item.name.as_str())
+            .collect::<Vec<_>>(),
+        ["a", "b"]
+    );
+    assert!(first.prefixes.is_empty());
+
+    let second = store.list(
+        &bucket,
+        "",
+        Some("/"),
+        first.next_page_token.as_deref(),
+        Some(2),
+    );
+    assert!(second.items.is_empty());
+    assert_eq!(second.prefixes, ["dir/", "dir2/"]);
+
+    let third = store.list(
+        &bucket,
+        "",
+        Some("/"),
+        second.next_page_token.as_deref(),
+        Some(2),
+    );
+    assert_eq!(
+        third
+            .items
+            .iter()
+            .map(|item| item.name.as_str())
+            .collect::<Vec<_>>(),
+        ["zz"]
+    );
+    assert!(third.prefixes.is_empty());
+    assert!(third.next_page_token.is_none());
+}
+
+#[test]
+fn pagination_caps_page_size_at_1000() {
+    let mut store = StorageState::new(1);
+    let bucket = bucket();
+    for index in 0..1001 {
+        store
+            .put(
+                &bucket,
+                &name(&format!("item-{index:04}")),
+                Vec::new(),
+                NewMetadata::default(),
+                Precondition::default(),
+                t(1),
+            )
+            .unwrap();
+    }
+
+    let first = store.list(&bucket, "", None, None, Some(1500));
+    assert_eq!(first.items.len(), 1000);
+    assert_eq!(first.next_page_token.as_deref(), Some("item-1000"));
+    let second = store.list(
+        &bucket,
+        "",
+        None,
+        first.next_page_token.as_deref(),
+        Some(1500),
+    );
+    assert_eq!(second.items.len(), 1);
+    assert!(second.next_page_token.is_none());
+}
+
+#[test]
+fn pagination_restarts_for_unknown_tokens() {
     let mut s = StorageState::new(1);
     let b = bucket();
     for n in ["dir/a", "dir/b", "other/x", "root", "root2"] {
@@ -436,26 +527,22 @@ fn pagination_pages_items_only_and_repeats_every_prefix() {
         )
         .unwrap();
     }
-    // Folded prefixes are not paged: every page carries all of them; only items count
-    // against max_results, and the token names the first item of the next page.
     let page1 = s.list(&b, "", Some("/"), None, Some(1));
-    assert_eq!(page1.prefixes, vec!["dir/", "other/"]);
-    assert_eq!(page1.items.len(), 1);
-    assert_eq!(page1.items[0].name.as_str(), "root");
-    assert_eq!(page1.next_page_token.as_deref(), Some("root2"));
+    assert_eq!(page1.prefixes, ["dir/"]);
+    assert!(page1.items.is_empty());
+    assert_eq!(page1.next_page_token.as_deref(), Some("other/"));
     let page2 = s.list(&b, "", Some("/"), page1.next_page_token.as_deref(), Some(1));
-    assert_eq!(page2.prefixes, vec!["dir/", "other/"]);
-    assert_eq!(page2.items[0].name.as_str(), "root2");
-    assert!(page2.next_page_token.is_none());
-    // A token that names no item restarts from the beginning, as the official emulator's
-    // `findIndex` fallback does.
+    assert_eq!(page2.prefixes, ["other/"]);
+    assert!(page2.items.is_empty());
+    assert_eq!(page2.next_page_token.as_deref(), Some("root"));
+    // A token that names no visible entry restarts from the beginning.
     let restarted = s.list(&b, "", Some("/"), Some("no-such-item"), None);
     assert_eq!(restarted.items.len(), 2);
-    // An explicit max_results of 0 is an empty page whose token names the first item.
-    let empty = s.list(&b, "", Some("/"), None, Some(0));
-    assert!(empty.items.is_empty());
-    assert_eq!(empty.prefixes, vec!["dir/", "other/"]);
-    assert_eq!(empty.next_page_token.as_deref(), Some("root"));
+    assert_eq!(restarted.prefixes, ["dir/", "other/"]);
+    let zero = s.list(&b, "", Some("/"), None, Some(0));
+    assert!(zero.items.is_empty());
+    assert_eq!(zero.prefixes, ["dir/", "other/"]);
+    assert_eq!(zero.next_page_token.as_deref(), Some("root"));
 }
 
 #[test]
@@ -485,7 +572,11 @@ fn folded_object_names_are_not_valid_page_tokens() {
     let page = s.list(&b, "", Some("/"), Some("z/folded"), Some(1));
     assert_eq!(page.items.len(), 1);
     assert_eq!(page.items[0], item);
-    assert_eq!(page.prefixes, ["z/"]);
+    assert!(page.prefixes.is_empty());
+    assert_eq!(page.next_page_token.as_deref(), Some("z/"));
+    let continuation = s.list(&b, "", Some("/"), page.next_page_token.as_deref(), Some(1));
+    assert!(continuation.items.is_empty());
+    assert_eq!(continuation.prefixes, ["z/"]);
 
     let first = s.shared_bytes(&item);
     let second = s.shared_bytes(&item);

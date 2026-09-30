@@ -18,8 +18,8 @@ use fireemu_core_auth::store::{AuthStore, NewUser};
 use fireemu_core_rules::runtime::{LoadedRules, RulesetSlot};
 use fireemu_core_session::clock::VirtualClock;
 use fireemu_core_storage::name::{BucketName, ObjectName};
-use fireemu_core_storage::store::StorageEvent;
 use fireemu_core_storage::store::StorageState as ObjectStore;
+use fireemu_core_storage::store::{NewMetadata, Precondition, StorageEvent};
 use fireemu_core_types::determinism::SplitMix64;
 use fireemu_core_types::time::LogicalInstant;
 use serde_json::{json, Value};
@@ -348,6 +348,76 @@ fn firebase_protocol_upload_download_list_update_delete() {
     // Firebase dialect writes a bare status text (see the dedicated test).
     assert_eq!(r.status, 404);
     assert_eq!(json_body(&r)["error"]["message"], "Not Found.");
+}
+
+#[test]
+fn firebase_and_json_api_list_pages_share_the_combined_entry_budget() {
+    let storage = state(None);
+    {
+        let mut store = storage.store.lock().unwrap();
+        let bucket = BucketName::try_new(BUCKET).unwrap();
+        for object_name in ["a", "b", "dir/x", "dir2/x", "zz"] {
+            store
+                .put(
+                    &bucket,
+                    &ObjectName::try_new(object_name).unwrap(),
+                    Vec::new(),
+                    NewMetadata::default(),
+                    Precondition::default(),
+                    START,
+                )
+                .unwrap();
+        }
+    }
+
+    for route in [
+        format!("/v0/b/{BUCKET}/o"),
+        format!("/storage/v1/b/{BUCKET}/o"),
+    ] {
+        let mut token: Option<String> = None;
+        for (expected_items, expected_prefixes, expected_token) in [
+            (vec!["a", "b"], vec![], Some("dir/")),
+            (vec![], vec!["dir/", "dir2/"], Some("zz")),
+            (vec!["zz"], vec![], None),
+        ] {
+            let query = token.as_ref().map_or_else(
+                || "delimiter=%2F&maxResults=2".to_owned(),
+                |value| format!("delimiter=%2F&maxResults=2&pageToken={value}"),
+            );
+            let response = handle(
+                &storage,
+                req(
+                    "GET",
+                    &format!("{route}?{query}"),
+                    &[("authorization", "Bearer owner")],
+                    b"",
+                ),
+            );
+            assert_eq!(
+                response.status,
+                200,
+                "{route}: {}",
+                String::from_utf8_lossy(&response.body)
+            );
+            let body = json_body(&response);
+            let items: Vec<&str> = body["items"].as_array().map_or_else(Vec::new, |values| {
+                values
+                    .iter()
+                    .map(|item| item["name"].as_str().unwrap())
+                    .collect()
+            });
+            let prefixes: Vec<&str> = body["prefixes"].as_array().map_or_else(Vec::new, |values| {
+                values
+                    .iter()
+                    .map(|prefix| prefix.as_str().unwrap())
+                    .collect()
+            });
+            assert_eq!(items, expected_items, "{route}");
+            assert_eq!(prefixes, expected_prefixes, "{route}");
+            assert_eq!(body["nextPageToken"].as_str(), expected_token, "{route}");
+            token = expected_token.map(str::to_owned);
+        }
+    }
 }
 
 #[test]
@@ -787,21 +857,46 @@ fn json_api_dialect_for_the_admin_sdk() {
     let listed = json_body(&r);
     assert_eq!(listed["kind"], "storage#objects");
     assert_eq!(listed["items"][0]["name"], "a/b.txt");
-    // Copy routes exist only on the short /b/... spelling, as the official emulator
-    // registers them; the /storage/v1 spelling is its 501 catch-all.
-    assert_eq!(
-        handle(
-            &s,
-            req(
-                "POST",
-                &format!("/storage/v1/b/{BUCKET}/o/a%2Fb.txt/rewriteTo/b/{BUCKET}/o/copy.txt"),
-                &owner,
-                b"",
-            ),
-        )
-        .status,
-        501
+    // Production JSON API routes also accept the /storage/v1 spelling.
+    // https://cloud.google.com/storage/docs/json_api/v1/objects/patch
+    // https://cloud.google.com/storage/docs/json_api/v1/objects/rewrite
+    // https://cloud.google.com/storage/docs/json_api/v1/objects/copy
+    let patched = handle(
+        &s,
+        req(
+            "PATCH",
+            &format!("/storage/v1/b/{BUCKET}/o/a%2Fb.txt"),
+            &owner,
+            br#"{"cacheControl":"no-cache"}"#,
+        ),
     );
+    assert_eq!(patched.status, 200);
+    assert_eq!(json_body(&patched)["cacheControl"], "no-cache");
+    let rewritten_long = handle(
+        &s,
+        req(
+            "POST",
+            &format!("/storage/v1/b/{BUCKET}/o/a%2Fb.txt/rewriteTo/b/{BUCKET}/o/long-copy.txt"),
+            &owner,
+            b"",
+        ),
+    );
+    assert_eq!(rewritten_long.status, 200);
+    assert_eq!(
+        json_body(&rewritten_long)["resource"]["name"],
+        "long-copy.txt"
+    );
+    let copied_long = handle(
+        &s,
+        req(
+            "POST",
+            &format!("/storage/v1/b/{BUCKET}/o/a%2Fb.txt/copyTo/b/{BUCKET}/o/long-copied.txt"),
+            &owner,
+            b"",
+        ),
+    );
+    assert_eq!(copied_long.status, 200);
+    assert_eq!(json_body(&copied_long)["name"], "long-copied.txt");
     let r = handle(
         &s,
         req(
@@ -846,6 +941,57 @@ fn json_api_dialect_for_the_admin_sdk() {
     );
     assert_eq!(r.status, 404);
     assert!(json_body(&r)["error"]["errors"].is_array());
+}
+
+#[test]
+fn strict_json_list_rejects_filters_it_cannot_apply() {
+    // https://cloud.google.com/storage/docs/json_api/v1/objects/list
+    let strict = state(None);
+    let emulator = state_with(None, TokenAcceptance::EmulatorMock);
+    let uploaded = handle(
+        &strict,
+        req(
+            "POST",
+            &format!("/upload/storage/v1/b/{BUCKET}/o?uploadType=media&name=current.txt"),
+            &[],
+            b"current",
+        ),
+    );
+    assert_eq!(uploaded.status, 200);
+    for filter in [
+        "matchGlob=*.txt",
+        "startOffset=b",
+        "endOffset=z",
+        "includeTrailingDelimiter=true",
+    ] {
+        let path = format!("/storage/v1/b/{BUCKET}/o?{filter}");
+        let rejected = handle(&strict, req("GET", &path, &[], b""));
+        assert_eq!(rejected.status, 400, "{filter}");
+        let compatible = handle(&emulator, req("GET", &path, &[], b""));
+        assert_eq!(compatible.status, 200, "{filter}");
+    }
+    for filter in [
+        "versions=false",
+        "versions=true",
+        "includeTrailingDelimiter=false",
+    ] {
+        let path = format!("/storage/v1/b/{BUCKET}/o?{filter}");
+        assert_eq!(handle(&strict, req("GET", &path, &[], b"")).status, 200);
+    }
+    let listed = |versions: &str| {
+        handle(
+            &strict,
+            req(
+                "GET",
+                &format!("/storage/v1/b/{BUCKET}/o?versions={versions}"),
+                &[],
+                b"",
+            ),
+        )
+    };
+    let current_only = listed("false");
+    assert_eq!(listed("true").body, current_only.body);
+    assert_eq!(json_body(&current_only)["items"][0]["name"], "current.txt");
 }
 
 #[test]
@@ -2795,9 +2941,44 @@ fn json_api_preconditions_generations_and_ranges_are_strict() {
     assert_eq!((r.status, r.body.as_ref()), (206, &b"89"[..]));
     let r = get("bytes=2-4");
     assert_eq!((r.status, r.body.as_ref()), (206, &b"234"[..]));
-    // An unsatisfiable range is ignored and the whole object served, as the official
-    // emulator (express `req.range` answering -1) serves it.
+    // Production rejects a valid but unsatisfiable range, while emulator mode keeps the
+    // official emulator's whole-object fallback.
+    // https://cloud.google.com/storage/docs/json_api/v1/status-codes
+    // https://www.rfc-editor.org/rfc/rfc9110.html#section-14.4
     let r = get("bytes=10-");
+    assert_eq!(r.status, 416);
+    assert_eq!(header(&r, "content-range"), Some("bytes */10"));
+    let r = handle(
+        &s,
+        req(
+            "GET",
+            &format!("/v0/b/{BUCKET}/o/g.bin?alt=media"),
+            &[("authorization", "Bearer owner"), ("range", "bytes=10-")],
+            b"",
+        ),
+    );
+    assert_eq!(r.status, 416);
+    assert_eq!(header(&r, "content-range"), Some("bytes */10"));
+    let compatible = state_with(None, TokenAcceptance::EmulatorMock);
+    let uploaded = handle(
+        &compatible,
+        req(
+            "POST",
+            &format!("/upload/storage/v1/b/{BUCKET}/o?uploadType=multipart"),
+            &[("content-type", &ct)],
+            &body,
+        ),
+    );
+    assert_eq!(uploaded.status, 200);
+    let r = handle(
+        &compatible,
+        req(
+            "GET",
+            &format!("{object}?alt=media"),
+            &[("range", "bytes=10-")],
+            b"",
+        ),
+    );
     assert_eq!((r.status, r.body.as_ref()), (200, &b"0123456789"[..]));
     // Resumable JSON API: the declared span must match the body and the total.
     let r = handle(
@@ -2840,6 +3021,35 @@ fn json_api_preconditions_generations_and_ranges_are_strict() {
     );
     assert_eq!(r.status, 200, "{}", String::from_utf8_lossy(&r.body));
     assert_eq!(json_body(&r)["size"], "6");
+}
+
+#[test]
+fn strict_empty_object_accepts_nonzero_suffix_range() {
+    // RFC 9110 section 14.1.1 allows a nonzero suffix on a zero-length representation.
+    // https://www.rfc-editor.org/rfc/rfc9110.html#section-14.1.1
+    let s = state(None);
+    let object = format!("/storage/v1/b/{BUCKET}/o/empty.bin");
+    let uploaded = handle(
+        &s,
+        req(
+            "POST",
+            &format!("/upload/storage/v1/b/{BUCKET}/o?uploadType=media&name=empty.bin"),
+            &[],
+            b"",
+        ),
+    );
+    assert_eq!(uploaded.status, 200);
+    let response = handle(
+        &s,
+        req(
+            "GET",
+            &format!("{object}?alt=media"),
+            &[("range", "bytes=-5")],
+            b"",
+        ),
+    );
+    assert_eq!(response.status, 200);
+    assert!(response.body.is_empty());
 }
 
 #[test]
@@ -2906,8 +3116,7 @@ service firebase.storage {
     );
     assert_eq!(r.status, 200);
     let generation = json_body(&r)["generation"].as_str().unwrap().to_owned();
-    // The JSON API is the privileged dialect: rules never run on it, and the copy routes
-    // exist only on the short /b/... spelling (the long one is the official 501 catch-all).
+    // The JSON API is the privileged dialect: rules never run on either spelling.
     let r = handle(
         &s,
         req(
@@ -2917,7 +3126,8 @@ service firebase.storage {
             b"",
         ),
     );
-    assert_eq!(r.status, 501);
+    assert_eq!(r.status, 200);
+    assert_eq!(json_body(&r)["resource"]["name"], "open/dst");
     let r = handle(&s, req(
             "POST",
             &format!("/b/{BUCKET}/o/closed%2Fmissing/rewriteTo/b/{BUCKET}/o/open%2Fdst?ifSourceGenerationMatch=1"),
@@ -3472,6 +3682,34 @@ fn a_multipart_upload_carves_the_data_part_out_of_its_request_buffer() {
 }
 
 #[test]
+fn a_form_upload_carves_the_file_part_out_of_its_request_buffer() {
+    let s = state(None);
+    let data = payload();
+    let boundary = "form-storage-buffer";
+    let mut body = format!(
+        "--{boundary}\r\nContent-Disposition: form-data; name=\"key\"\r\n\r\nform.bin\r\n--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"form.bin\"\r\nContent-Type: application/octet-stream\r\n\r\n"
+    )
+    .into_bytes();
+    body.extend_from_slice(&data);
+    body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
+    let arrived_at = body.as_ptr();
+    let r = handle(
+        &s,
+        owned_req(
+            "POST",
+            &format!("/{BUCKET}"),
+            &[(
+                "content-type",
+                &format!("multipart/form-data; boundary={boundary}"),
+            )],
+            body,
+        ),
+    );
+    assert_eq!(r.status, 204, "{}", String::from_utf8_lossy(&r.body));
+    assert_eq!(stored_buffer(&s, "form.bin"), (arrived_at, data.len()));
+}
+
+#[test]
 fn a_resumable_upload_adopts_the_request_buffer_of_its_only_chunk() {
     let s = state(None);
     let start = handle(
@@ -3574,6 +3812,152 @@ async fn read_response(stream: &mut tokio::net::TcpStream) -> String {
     let mut response = Vec::new();
     stream.read_to_end(&mut response).await.unwrap();
     String::from_utf8_lossy(&response).into_owned()
+}
+
+#[test]
+fn four_large_uploads_leave_tokio_workers_available() {
+    use std::io::{Read, Write};
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    static BUDGET: BodyBudget = BodyBudget::new(64 * 1024 * 1024);
+    const BODY_BYTES: usize = 8 * 1024 * 1024;
+
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .unwrap();
+    let shared = Arc::new(state(None));
+    let listener = runtime
+        .block_on(tokio::net::TcpListener::bind("127.0.0.1:0"))
+        .unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = runtime.spawn(serve_storage_with_budget(listener, shared.clone(), &BUDGET));
+
+    // Holding the store lock makes all admitted handlers wait at the same synchronous
+    // boundary. Each 8 MiB write exceeds the socket buffer, so completed writes show
+    // that at least two handlers have drained most of their request bodies.
+    let store_guard = shared.store.lock().unwrap();
+    let payload = Arc::new(vec![7u8; BODY_BYTES]);
+    let (written_tx, written_rx) = mpsc::channel();
+    let clients: Vec<_> = (0..4)
+        .map(|index| {
+            let payload = payload.clone();
+            let written_tx = written_tx.clone();
+            std::thread::spawn(move || {
+                let mut stream = std::net::TcpStream::connect(address).unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(120)))
+                    .unwrap();
+                stream
+                    .set_write_timeout(Some(Duration::from_secs(30)))
+                    .unwrap();
+                stream
+                    .write_all(upload_head(&format!("worker-{index}.bin"), BODY_BYTES).as_bytes())
+                    .unwrap();
+                stream.write_all(&payload).unwrap();
+                written_tx.send(()).unwrap();
+                let mut response = [0u8; 4096];
+                let received = stream.read(&mut response).unwrap();
+                String::from_utf8_lossy(&response[..received]).into_owned()
+            })
+        })
+        .collect();
+    drop(written_tx);
+    let handlers_reached_lock =
+        (0..2).all(|_| written_rx.recv_timeout(Duration::from_secs(10)).is_ok());
+    std::thread::sleep(Duration::from_millis(20));
+
+    let (heartbeat_tx, heartbeat_rx) = mpsc::channel();
+    runtime.spawn(async move {
+        let _ = heartbeat_tx.send(());
+    });
+    let heartbeat_responded = heartbeat_rx
+        .recv_timeout(Duration::from_millis(500))
+        .is_ok();
+
+    drop(store_guard);
+    for client in clients {
+        let response = client.join().unwrap();
+        assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+    }
+    server.abort();
+    runtime.block_on(async {
+        let _ = server.await;
+    });
+    assert!(
+        handlers_reached_lock,
+        "two upload bodies did not reach the handler"
+    );
+    assert!(
+        heartbeat_responded,
+        "Storage handlers blocked both Tokio workers"
+    );
+    assert_eq!(BUDGET.in_flight(), 0);
+}
+
+#[test]
+fn more_than_sixteen_storage_handlers_wait_instead_of_rejecting() {
+    use std::io::{Read, Write};
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    static BUDGET: BodyBudget = BodyBudget::new(32 * 1024 * 1024);
+    const REQUESTS: usize = 17;
+    const BODY_BYTES: usize = 1024;
+
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .unwrap();
+    let shared = Arc::new(state(None));
+    let listener = runtime
+        .block_on(tokio::net::TcpListener::bind("127.0.0.1:0"))
+        .unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = runtime.spawn(serve_storage_with_budget(listener, shared.clone(), &BUDGET));
+
+    let store_guard = shared.store.lock().unwrap();
+    let (written_tx, written_rx) = mpsc::channel();
+    let clients: Vec<_> = (0..REQUESTS)
+        .map(|index| {
+            let written_tx = written_tx.clone();
+            std::thread::spawn(move || {
+                let mut stream = std::net::TcpStream::connect(address).unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(60)))
+                    .unwrap();
+                stream
+                    .write_all(upload_head(&format!("queued-{index}.bin"), BODY_BYTES).as_bytes())
+                    .unwrap();
+                stream.write_all(&[7u8; BODY_BYTES]).unwrap();
+                written_tx.send(()).unwrap();
+                let mut response = [0u8; 4096];
+                let received = stream.read(&mut response).unwrap();
+                String::from_utf8_lossy(&response[..received]).into_owned()
+            })
+        })
+        .collect();
+    drop(written_tx);
+    for _ in 0..REQUESTS {
+        written_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    }
+    // Give the server time to admit each buffered body while all handlers wait on the lock.
+    std::thread::sleep(Duration::from_millis(200));
+    let buffered = BUDGET.in_flight();
+    drop(store_guard);
+    for client in clients {
+        let response = client.join().unwrap();
+        assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+    }
+    server.abort();
+    runtime.block_on(async {
+        let _ = server.await;
+    });
+    assert_eq!(buffered, REQUESTS * CHUNK);
+    assert_eq!(BUDGET.in_flight(), 0);
 }
 
 #[tokio::test]

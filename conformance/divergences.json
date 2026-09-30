@@ -629,6 +629,43 @@
         "approvalRecord": "Google Cloud Pub/Sub replay overview, 'Replay and purge messages with seek'; capability manifest PUBSUB-WIRE-1 (crates/fireemu/src/capabilities.json)"
       }
     },
+    "storage-probe/fb-list#paged": {
+      "documents": "README.md, \"Storage\"; capability manifest ST-OBJ-1 (crates/fireemu/src/capabilities.json); spec/compatibility/contract.json",
+      "reason": "The Firebase list API counts items and folded prefixes together toward maxResults and limits a page to 1000 entries. fireemu places each prefix on only one page, an inference from paging the combined ordered entries rather than an explicit statement in the reference. The official emulator pages items alone and repeats every folded prefix on every page.",
+      "authority": {
+        "kind": "production-spec",
+        "sourceUrls": [
+          "https://firebase.google.com/docs/reference/js/storage.listoptions",
+          "https://cloud.google.com/storage/docs/json_api/v1/objects/list",
+          "https://github.com/firebase/firebase-tools/tree/v15.28.2"
+        ],
+        "checkedOn": "2026-09-25",
+        "officialBaseline": {
+          "package": "firebase-tools",
+          "version": "15.28.2"
+        },
+        "fixture": "conformance/storage-matrix.json#fb-list#paged",
+        "approvalRecord": "README.md, \"Storage\"; capability manifest ST-OBJ-1 (crates/fireemu/src/capabilities.json); spec/compatibility/contract.json"
+      }
+    },
+    "storage-probe/gcs-update-list-delete#list-paged": {
+      "documents": "README.md, \"Storage\"; capability manifest ST-OBJ-1 (crates/fireemu/src/capabilities.json); spec/compatibility/contract.json",
+      "reason": "The Cloud Storage JSON API counts items and folded prefixes together toward maxResults. fireemu places each prefix on only one page, an inference from paging the combined ordered entries rather than an explicit statement in the reference; the official emulator pages items alone and repeats every folded prefix.",
+      "authority": {
+        "kind": "production-spec",
+        "sourceUrls": [
+          "https://cloud.google.com/storage/docs/json_api/v1/objects/list",
+          "https://github.com/firebase/firebase-tools/tree/v15.28.2"
+        ],
+        "checkedOn": "2026-09-25",
+        "officialBaseline": {
+          "package": "firebase-tools",
+          "version": "15.28.2"
+        },
+        "fixture": "conformance/storage-matrix.json#gcs-update-list-delete#list-paged",
+        "approvalRecord": "README.md, \"Storage\"; capability manifest ST-OBJ-1 (crates/fireemu/src/capabilities.json); spec/compatibility/contract.json"
+      }
+    },
     "storage-probe/fb-resumable-upload#upload-with-wrong-offset": {
       "documents": "README.md, \"Storage\"; capability manifest ST-OBJ-1 (crates/fireemu/src/capabilities.json)",
       "reason": "fireemu checks X-Goog-Upload-Offset against the bytes already received and refuses a mismatch with 400, as production does. The official emulator never reads the offset: it appends whatever arrives, so a chunk sent with a wrong offset was measured to commit a corrupt object.",
@@ -2553,6 +2590,47 @@
         },
         "fixture": "conformance/storage-matrix.json#triggers#metadata-update-on-token-creation",
         "approvalRecord": "README.md, \"Storage\"; capability manifest FN-EVT-1 (crates/fireemu/src/capabilities.json)"
+      }
+    },
+    "storage-probe/gcs-update-list-delete#patch-storage-v1-spelling": {
+      "documents": "spec/compatibility/contract.json ST-CLAIM-OBJECTS; CHANGELOG.md [Unreleased]",
+      "reason": "The official emulator answers 501 on the /storage/v1 PATCH spelling. Cloud Storage documents this production route, so fireemu applies the metadata patch in both profiles.",
+      "authority": {
+        "kind": "production-spec",
+        "sourceUrls": ["https://cloud.google.com/storage/docs/json_api/v1/objects/patch"],
+        "checkedOn": "2026-09-25",
+        "officialBaseline": {"package": "firebase-tools", "version": "15.28.2"},
+        "fixture": "conformance/storage-matrix.json#gcs-update-list-delete#patch-storage-v1-spelling",
+        "approvalRecord": "spec/compatibility/contract.json ST-CLAIM-OBJECTS; CHANGELOG.md [Unreleased]"
+      }
+    },
+    "storage-probe/gcs-preconditions#patch-if-metageneration-mismatch": {
+      "documents": "spec/compatibility/contract.json ST-CLAIM-OBJECTS; CHANGELOG.md [Unreleased]",
+      "reason": "The official emulator answers 501 before checking a precondition on /storage/v1 PATCH. Cloud Storage documents the route, and fireemu checks the supplied metageneration before applying the patch.",
+      "authority": {
+        "kind": "production-spec",
+        "sourceUrls": ["https://cloud.google.com/storage/docs/json_api/v1/objects/patch"],
+        "checkedOn": "2026-09-25",
+        "officialBaseline": {"package": "firebase-tools", "version": "15.28.2"},
+        "fixture": "conformance/storage-matrix.json#gcs-preconditions#patch-if-metageneration-mismatch",
+        "approvalRecord": "spec/compatibility/contract.json ST-CLAIM-OBJECTS; CHANGELOG.md [Unreleased]"
+      }
+    },
+    "storage-probe/gcs-copy-rewrite#copy-storage-v1-spelling": {
+      "documents": "spec/compatibility/contract.json ST-CLAIM-OBJECTS; CHANGELOG.md [Unreleased]",
+      "reason": "The official emulator answers 501 on the /storage/v1 copyTo spelling. Cloud Storage documents this production route, so fireemu performs the copy in both profiles.",
+      "authority": {
+        "kind": "production-spec",
+        "sourceUrls": [
+          "https://cloud.google.com/storage/docs/json_api/v1/objects/copy"
+        ],
+        "checkedOn": "2026-09-25",
+        "officialBaseline": {
+          "package": "firebase-tools",
+          "version": "15.28.2"
+        },
+        "fixture": "conformance/storage-matrix.json#gcs-copy-rewrite#copy-storage-v1-spelling",
+        "approvalRecord": "spec/compatibility/contract.json ST-CLAIM-OBJECTS; CHANGELOG.md [Unreleased]"
       }
     },
     "storage-probe/gcs-update-list-delete#get-missing-media": {

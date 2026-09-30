@@ -12,7 +12,7 @@ nothing until they are ruled on (they fail no claim while excluded by name).
 
 ## firebase-protocol
 
-parity: 58 &middot; documented-divergence: 44
+parity: 57 &middot; documented-divergence: 45
 
 | program | step | status |
 | --- | --- | --- |
@@ -108,7 +108,7 @@ parity: 58 &middot; documented-divergence: 44
 | `fb-list` | `flat` | parity |
 | `fb-list` | `subdirectory` | parity |
 | `fb-list` | `empty-prefix` | parity |
-| `fb-list` | `paged` | parity |
+| `fb-list` | `paged` | documented-divergence |
 | `fb-list` | `page-token-shape` | parity |
 | `fb-list` | `list-closed-prefix` | parity |
 | `fb-list` | `list-listable-prefix-anonymous` | parity |
@@ -161,7 +161,7 @@ parity: 17 &middot; documented-divergence: 16
 
 ## json-api
 
-parity: 34 &middot; documented-divergence: 41
+parity: 32 &middot; documented-divergence: 43
 
 | program | step | status |
 | --- | --- | --- |
@@ -198,7 +198,7 @@ parity: 34 &middot; documented-divergence: 41
 | `gcs-update-list-delete` | `list-delimited` | documented-divergence |
 | `gcs-update-list-delete` | `list-flat-names` | parity |
 | `gcs-update-list-delete` | `list-empty` | parity |
-| `gcs-update-list-delete` | `list-paged` | parity |
+| `gcs-update-list-delete` | `list-paged` | documented-divergence |
 | `gcs-update-list-delete` | `list-short-route` | parity |
 | `gcs-update-list-delete` | `list-without-credentials` | documented-divergence |
 | `gcs-update-list-delete` | `delete` | parity |
@@ -213,7 +213,7 @@ parity: 34 &middot; documented-divergence: 41
 | `gcs-copy-rewrite` | `copy-into-closed-path` | documented-divergence |
 | `gcs-copy-rewrite` | `copy-without-credentials` | documented-divergence |
 | `gcs-copy-rewrite` | `copy-missing-source` | parity |
-| `gcs-copy-rewrite` | `copy-storage-v1-spelling` | parity |
+| `gcs-copy-rewrite` | `copy-storage-v1-spelling` | documented-divergence |
 | `gcs-copy-rewrite` | `copy-onto-itself` | documented-divergence |
 | `gcs-copy-rewrite` | `copied-bytes` | parity |
 | `gcs-preconditions` | `insert-if-generation-match-zero-on-existing` | documented-divergence |

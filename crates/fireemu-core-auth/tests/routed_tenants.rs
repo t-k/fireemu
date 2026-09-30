@@ -388,12 +388,35 @@ fn a_rollback_removes_the_tenants_made_while_the_registration_was_pending() {
     ));
     assert!(registry.ensure_tenant("demo-b", "kept").is_some());
     assert!(registry.register_session("demo-b", session_store("demo-b")));
-    assert!(registry.ensure_tenant("demo-b", "born-pending").is_some());
+    assert!(registry
+        .create_tenant_with_id(
+            "demo-b",
+            "born-pending",
+            TenantMetadata::default(),
+            TenantMetadataPatch {
+                allow_duplicate_emails: Some(true),
+                ..TenantMetadataPatch::default()
+            },
+            None
+        )
+        .is_some());
     assert_eq!(
         registry.rollback_session("demo-b"),
         fireemu_core_auth::store::SessionRegistrationRollback::Restored
     );
     assert_eq!(registry.tenants("demo-b"), ["kept"]);
+    // Nor do its runtime settings: a tenant of the same id made now starts clean.
+    assert!(registry
+        .create_tenant_with_id(
+            "demo-b",
+            "born-pending",
+            TenantMetadata::default(),
+            TenantMetadataPatch::default(),
+            None
+        )
+        .is_some());
+    let snapshot = registry.capture_export_snapshot("demo-b").unwrap().unwrap();
+    assert_eq!(snapshot.tenant_config_override("born-pending"), None);
 }
 
 /// A tenant's runtime settings (what a create or a PATCH wrote) move with the tenant: they are

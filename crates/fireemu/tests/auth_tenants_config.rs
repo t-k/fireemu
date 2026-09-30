@@ -152,9 +152,14 @@ impl Daemon {
 
     /// The tenant ids the Admin list route returns, sorted.
     fn tenant_ids(&self) -> Vec<String> {
+        self.tenant_ids_in(PROJECT)
+    }
+
+    /// The tenant ids of `project` the Admin list route returns, sorted.
+    fn tenant_ids_in(&self, project: &str) -> Vec<String> {
         let (status, listed) = self.admin(
             "GET",
-            &format!("{V2}/projects/{PROJECT}/tenants"),
+            &format!("{V2}/projects/{project}/tenants"),
             &json!({}),
         );
         assert_eq!(status, 200, "{listed}");
@@ -325,28 +330,134 @@ fn the_emulator_profile_takes_tenants_without_the_switch() {
     assert_eq!(daemon.tenant_ids(), ["acme-x7k2q", "beta-a1b2c"]);
 }
 
+/// Runs `fireemu up` on a file that must stop it, with every port chosen by the daemon and a
+/// bounded wait: a daemon that starts anyway is killed and fails the test, and never lingers.
+fn refused_at_start(name: &str, auth: &Value) -> (Option<i32>, String) {
+    let dir = TrustedTempDir::new(&format!("auth-tenants-config-{name}"));
+    let config = dir.join("fireemu.json");
+    std::fs::write(
+        &config,
+        json!({"schemaVersion": 1, "profile": "strict", "auth": auth}).to_string(),
+    )
+    .unwrap();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_fireemu"))
+        .args(["up", "--config", config.to_str().unwrap(), "--only", "auth"])
+        .args([
+            "--firestore-port",
+            "0",
+            "--http-port",
+            "0",
+            "--storage-port",
+            "0",
+            "--functions-port",
+            "0",
+            "--logging-port",
+            "0",
+            "--ui-port",
+            "0",
+            "--hub-port",
+            "0",
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut stderr = child.stderr.take().unwrap();
+    let reader = std::thread::spawn(move || {
+        let mut text = String::new();
+        let _ = stderr.read_to_string(&mut text);
+        text
+    });
+    let deadline = std::time::Instant::now() + Duration::from_secs(60);
+    let status = loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            break Some(status);
+        }
+        if std::time::Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            break None;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    let text = reader.join().unwrap_or_default();
+    assert!(
+        status.is_some(),
+        "the daemon started although the file is refused: {text}"
+    );
+    (status.and_then(|s| s.code()), text)
+}
+
 #[test]
 fn strict_refuses_tenants_without_the_switch_before_it_starts() {
-    let dir = TrustedTempDir::new("auth-tenants-config-refused");
-    for auth in [
+    for (n, auth) in [
         json!({"tenants": [acme()]}),
         json!({"multiTenant": {"allowTenants": false}, "tenants": [acme()]}),
-        json!({"multiTenant": {"allowTenants": true}, "tenants": [{"tenantId": "wrong", "displayName": "acme"}]}),
-    ] {
-        let config = dir.join("fireemu.json");
-        std::fs::write(
-            &config,
-            json!({"schemaVersion": 1, "profile": "strict", "auth": auth}).to_string(),
-        )
-        .unwrap();
-        let out = Command::new(env!("CARGO_BIN_EXE_fireemu"))
-            .args(["up", "--config", config.to_str().unwrap(), "--only", "auth"])
-            .stdin(Stdio::null())
-            .output()
-            .unwrap();
-        assert!(!out.status.success(), "{auth}");
-        let text = String::from_utf8_lossy(&out.stderr);
-        assert!(text.contains("auth."), "{auth}: {text}");
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let (code, text) = refused_at_start(&format!("refused-{n}"), &auth);
+        assert_eq!(code, Some(1), "{auth}: {text}");
+        assert!(text.contains("auth.tenants"), "{auth}: {text}");
+        assert!(
+            text.contains("auth.multiTenant.allowTenants"),
+            "{auth}: {text}"
+        );
+    }
+    let bad_id = json!({
+        "multiTenant": {"allowTenants": true},
+        "tenants": [{"tenantId": "wrong", "displayName": "acme"}]
+    });
+    let (code, text) = refused_at_start("refused-id", &bad_id);
+    assert_eq!(code, Some(1), "{text}");
+    assert!(text.contains("auth.tenants[0]"), "{text}");
+}
+
+#[test]
+fn a_session_project_starts_with_the_declared_tenants_and_its_reset_returns_to_them() {
+    for profile in ["strict", "emulator"] {
+        let daemon = Daemon::start(&format!("session-{profile}"), profile, &declared(true));
+        let (status, created) = http(
+            daemon.control_port(),
+            "POST",
+            "/v1/sessions",
+            "",
+            &json!({"project": "demo-worker"}),
+        );
+        assert_eq!(status, 200, "{profile}: {created}");
+        assert_eq!(
+            daemon.tenant_ids_in("demo-worker"),
+            ["acme-x7k2q", "beta-a1b2c"],
+            "{profile}"
+        );
+        let (status, extra) = daemon.admin(
+            "POST",
+            &format!("{V2}/projects/demo-worker/tenants"),
+            &json!({"displayName": "extra"}),
+        );
+        assert_eq!(status, 200, "{profile}: {extra}");
+        assert_eq!(daemon.tenant_ids_in("demo-worker").len(), 3, "{profile}");
+        let (status, reset) = http(
+            daemon.control_port(),
+            "POST",
+            "/v1/sessions/demo-worker/reset",
+            "",
+            &json!({}),
+        );
+        assert_eq!(status, 200, "{profile}: {reset}");
+        assert_eq!(
+            daemon.tenant_ids_in("demo-worker"),
+            ["acme-x7k2q", "beta-a1b2c"],
+            "{profile}"
+        );
+        // The default project keeps its own.
+        assert_eq!(
+            daemon.tenant_ids(),
+            ["acme-x7k2q", "beta-a1b2c"],
+            "{profile}"
+        );
     }
 }
 
@@ -497,4 +608,31 @@ fn an_import_is_authoritative_for_a_tenant_of_the_same_id_and_the_seed_keeps_the
     assert_eq!(field("ACME ")["allowPasswordSignup"], true, "{log}");
     // The tenant only the seed declares is still there.
     assert_eq!(field("BETA ")["displayName"], "beta", "{log}");
+}
+
+/// A namespace the emulator profile routes by the first Admin request for an unknown project id
+/// holds no tenants at all (it cannot create one), so there is nothing to seed there; a session
+/// project (`POST /v1/sessions`) is the isolated project that has tenants.
+#[test]
+fn a_routed_namespace_has_no_tenants_to_seed() {
+    let daemon = Daemon::start("routed", "emulator", &declared(true));
+    let (status, listed) = daemon.admin(
+        "GET",
+        &format!("{V2}/projects/demo-routed/tenants"),
+        &json!({}),
+    );
+    assert_eq!((status, listed), (200, json!({})));
+    let (status, refused) = daemon.admin(
+        "POST",
+        &format!("{V2}/projects/demo-routed/tenants"),
+        &json!({"displayName": "x"}),
+    );
+    assert_eq!(status, 400, "{refused}");
+    assert_eq!(refused["error"]["message"], "INVALID_PROJECT_ID");
+    let (status, _) = daemon.admin(
+        "GET",
+        &format!("{V2}/projects/demo-routed/tenants/acme-x7k2q"),
+        &json!({}),
+    );
+    assert_eq!(status, 404);
 }

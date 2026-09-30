@@ -7854,28 +7854,6 @@ impl AuthRegistry {
         .map(|(_, metadata, policy)| (metadata, policy))
     }
 
-    /// [`Self::create_tenant_with_id`], only if the parent config enables tenant operations at
-    /// the project gate.
-    #[allow(clippy::needless_pass_by_value)]
-    pub fn create_tenant_with_id_guarded(
-        &self,
-        project: &str,
-        tenant: &str,
-        metadata: TenantMetadata,
-        patch: TenantMetadataPatch,
-        password_policy: Option<PasswordPolicy>,
-    ) -> Option<(TenantMetadata, PasswordPolicy)> {
-        self.create_tenant_with_password_policy_inner(
-            project,
-            Some(tenant),
-            metadata,
-            patch,
-            password_policy,
-            true,
-        )
-        .map(|(_, metadata, policy)| (metadata, policy))
-    }
-
     /// Creates a tenant only if its parent config enables tenant operations at the project gate.
     #[allow(clippy::needless_pass_by_value)]
     pub fn create_tenant_with_password_policy_guarded(

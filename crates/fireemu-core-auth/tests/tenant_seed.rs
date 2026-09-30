@@ -4,7 +4,6 @@
 
 use std::sync::{Arc, Mutex};
 
-use fireemu_core_auth::config_members::ALLOW_TENANTS;
 use fireemu_core_auth::mfa::TotpPolicy;
 use fireemu_core_auth::store::{AuthRegistry, AuthStore, TenantMetadata, TenantMetadataPatch};
 use fireemu_core_types::determinism::SplitMix64;
@@ -122,25 +121,21 @@ fn generated_ids_do_not_collide_with_a_chosen_one() {
 }
 
 #[test]
-fn a_guarded_chosen_id_needs_multi_tenancy_on() {
-    let (parent, registry) = registry();
-    let guarded = |id: &str| {
-        registry
-            .create_tenant_with_id_guarded(
-                "demo-app",
-                id,
-                named("acme"),
-                TenantMetadataPatch::default(),
-                None,
-            )
-            .is_some()
-    };
-    assert!(!guarded("acme-x7k2q"));
-    {
-        let mut store = parent.lock().unwrap();
-        let mut members = store.stored_config_members().clone();
-        members.set(ALLOW_TENANTS, Some("true".to_owned()));
-        store.set_stored_config_members(members);
-    }
-    assert!(guarded("acme-x7k2q"));
+fn a_name_that_was_deleted_is_free_again_and_carries_nothing_of_the_old_tenant() {
+    let (_, registry) = registry();
+    assert!(create(&registry, "acme-x7k2q", "acme"));
+    assert!(registry.delete_tenant("demo-app", "acme-x7k2q"));
+    assert!(registry.tenant_deleted("demo-app", "acme-x7k2q"));
+    assert!(registry
+        .removed_tenant_epochs("demo-app", "acme-x7k2q")
+        .is_some());
+    // Created again, the name no longer holds the epochs of the tenant that was deleted.
+    assert!(create(&registry, "acme-x7k2q", "acme"));
+    assert!(registry
+        .removed_tenant_epochs("demo-app", "acme-x7k2q")
+        .is_none());
+    // And a reset that wipes it does not bring the old "deleted" reading back.
+    let reset = registry.prepare_default_scope_reset().unwrap();
+    registry.apply_default_scope_reset(&reset).unwrap();
+    assert!(!registry.tenant_deleted("demo-app", "acme-x7k2q"));
 }

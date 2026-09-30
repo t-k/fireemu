@@ -133,6 +133,10 @@ impl ProjectHooks for Projects {
         if !self.registry.register_session(project, store) {
             return Err(format!("project {project:?} already has an Auth store"));
         }
+        // The declared switch and tenants are the new project's, as the default project's are.
+        self.tenant_seeding
+            .apply(&self.registry, project)
+            .map_err(|error| format!("auth.tenants: {error}"))?;
         Ok(())
     }
 
@@ -189,10 +193,6 @@ impl ProjectHooks for Projects {
                             .expect("the default Auth reset was prepared"),
                     )
                     .map_err(|reason| TransitionFailure::new("auth", reason))?;
-                // The declared tenants and switch return to the wiped default project.
-                self.tenant_seeding
-                    .apply(&self.registry, self.registry.default_project())
-                    .map_err(|reason| TransitionFailure::new("auth", reason))?;
             }
         }
         self.pubsub
@@ -207,6 +207,21 @@ impl ProjectHooks for Projects {
                     "the provisional Auth store changed during session creation",
                 ));
             }
+        }
+        // The declared tenants and switch return to the wiped project. This is the last step, so
+        // a failure to seed leaves a session whose epochs and stores are consistent.
+        let seeded = match scope {
+            Scope::AllExcept(_) => Some(self.registry.default_project().to_owned()),
+            Scope::Project(project) => self
+                .registry
+                .store_for(project)
+                .is_some()
+                .then(|| project.clone()),
+        };
+        if let Some(project) = seeded {
+            self.tenant_seeding
+                .apply(&self.registry, &project)
+                .map_err(|reason| TransitionFailure::new("auth", reason))?;
         }
         Ok(())
     }
@@ -771,6 +786,50 @@ pub(crate) mod tests {
             .expect("the reset succeeds");
         assert!(registry.tenants("demo-app").is_empty());
         assert!(registry.default_store().lock().unwrap().allows_tenants());
+    }
+
+    #[test]
+    fn a_created_session_project_starts_with_the_declared_tenants_and_a_session_reset_returns_to_them(
+    ) {
+        let gate = gate();
+        let mut hooks = projects(&gate);
+        hooks.tenant_seeding = acme_seed();
+        let registry = hooks.registry.clone();
+        hooks
+            .create(SECOND_PROJECT)
+            .expect("the project is created");
+        assert_eq!(registry.tenants(SECOND_PROJECT), ["acme-x7k2q"]);
+        assert!(registry
+            .store_for(SECOND_PROJECT)
+            .unwrap()
+            .lock()
+            .unwrap()
+            .allows_tenants());
+        // The default project is not touched by creating another.
+        assert!(registry.tenants("demo-app").is_empty());
+        // The session's reset wipes what the run made and returns to the declaration.
+        assert!(registry
+            .create_tenant(SECOND_PROJECT, Default::default())
+            .is_some());
+        assert_eq!(registry.tenants(SECOND_PROJECT).len(), 2);
+        fireemu_adapter_http::identity_toolkit::seed_multi_tenancy(
+            &registry,
+            SECOND_PROJECT,
+            false,
+        )
+        .unwrap();
+        hooks
+            .reset_scope(&Scope::Project(SECOND_PROJECT.to_owned()))
+            .expect("the reset succeeds");
+        assert_eq!(registry.tenants(SECOND_PROJECT), ["acme-x7k2q"]);
+        assert!(registry
+            .store_for(SECOND_PROJECT)
+            .unwrap()
+            .lock()
+            .unwrap()
+            .allows_tenants());
+        // A session project that does not exist seeds nothing and is not an error of the reset.
+        assert!(registry.tenants("demo-app").is_empty());
     }
 
     #[test]

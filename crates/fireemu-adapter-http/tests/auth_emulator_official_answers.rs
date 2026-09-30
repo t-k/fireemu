@@ -166,8 +166,14 @@ fn alg_none(claims: &Value) -> String {
 }
 
 fn own_token(user: &str, tenant: &str) -> String {
+    project_token("demo-app", user, tenant)
+}
+
+/// An unsigned ID token of `project` (the emulator profile refuses another project's audience,
+/// where the official emulator does not look at it).
+fn project_token(project: &str, user: &str, tenant: &str) -> String {
     alg_none(&json!({
-        "aud": "demo-app", "iss": "https://securetoken.google.com/demo-app",
+        "aud": project, "iss": format!("https://securetoken.google.com/{project}"),
         "sub": user, "user_id": user, "iat": 1_788_004_860, "exp": 1_788_008_400,
         "auth_time": 1_788_004_860,
         "firebase": {"sign_in_provider": "password", "identities": {}, "tenant": tenant}
@@ -376,59 +382,66 @@ fn admin_body_tenant_table() {
     let rows: Vec<(&str, &str, Value, u16, &str)> = vec![
         (
             "lookup",
-            "accounts:lookup",
+            "/accounts:lookup",
             json!({"localId": ["x"]}),
             200,
             "-",
         ),
         (
             "create",
-            "accounts",
+            "/accounts",
             json!({"email": "m@example.com", "password": "hunter22"}),
             200,
             "-",
         ),
         (
             "update",
-            "accounts:update",
+            "/accounts:update",
             json!({"localId": "x", "displayName": "d"}),
             400,
             "USER_NOT_FOUND",
         ),
         (
             "delete",
-            "accounts:delete",
+            "/accounts:delete",
             json!({"localId": "x"}),
             400,
             "USER_NOT_FOUND",
         ),
         (
             "batchCreate",
-            "accounts:batchCreate",
+            "/accounts:batchCreate",
             json!({"users": [{"localId": "u", "email": "b@example.com"}]}),
             200,
             "-",
         ),
         (
             "batchDelete",
-            "accounts:batchDelete",
+            "/accounts:batchDelete",
             json!({"localIds": ["x"], "force": true}),
             200,
             "-",
         ),
         (
             "query",
-            "accounts:query",
+            "/accounts:query",
             json!({"returnUserInfo": false}),
             200,
             "-",
         ),
         (
             "sendOobCode",
-            "accounts:sendOobCode",
+            "/accounts:sendOobCode",
             json!({"requestType": "PASSWORD_RESET", "email": "x@example.com", "returnOobLink": true}),
             400,
             "EMAIL_NOT_FOUND",
+        ),
+        (
+            "createSessionCookie",
+            ":createSessionCookie",
+            json!({"validDuration": "3600"}),
+            400,
+            "USER_NOT_FOUND",
         ),
     ];
     for project in ["demo-other", "demo-app"] {
@@ -437,10 +450,13 @@ fn admin_body_tenant_table() {
             let tenant = format!("body-{n}");
             let mut body = body.clone();
             body["tenantId"] = json!(tenant);
+            if *case == "createSessionCookie" {
+                body["idToken"] = json!(project_token(project, "u1", &tenant));
+            }
             let (got, answered) = admin(
                 &state,
                 "POST",
-                &format!("{V1}/projects/{project}/{suffix}"),
+                &format!("{V1}/projects/{project}{suffix}"),
                 &body,
             );
             assert_eq!(
@@ -622,4 +638,35 @@ fn the_strict_profile_does_not_scope_admin_writes_by_the_body_tenant() {
         );
         assert_eq!(held.lock().unwrap().user_count(), 0, "{suffix}: {answered}");
     }
+}
+
+/// A body `tenantId` on a tenant-management route selects no tenant store: `tenants:create` on a
+/// routed project with one is refused as it was (the official emulator makes the tenant and then
+/// refuses), and nothing is made in, or added to, the tenant the body names.
+#[test]
+fn a_body_tenant_on_a_tenant_route_selects_no_tenant_store() {
+    within_a_minute(|| {
+        let (state, registry) = routed_state();
+        let create = |body: Value| {
+            admin(
+                &state,
+                "POST",
+                &format!("{V2}/projects/demo-other/tenants"),
+                &body,
+            )
+        };
+        let (status, first) = create(json!({"displayName": "first"}));
+        assert_eq!(status, 200, "{first}");
+        let named = first["name"]
+            .as_str()
+            .unwrap()
+            .rsplit('/')
+            .next()
+            .unwrap()
+            .to_owned();
+        assert!(registry.tenant_store("demo-other", &named).is_some());
+        let (status, second) = create(json!({"displayName": "second", "tenantId": named}));
+        assert_eq!(status, 400, "{second}");
+        assert_eq!(tenant_names(&state, "demo-other"), vec![named]);
+    });
 }

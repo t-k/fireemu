@@ -925,7 +925,12 @@ fn an_expired_token_of_a_new_tenant_finds_no_user_in_the_admin_operations_that_p
 fn an_id_token_names_the_target_tenant_of_an_admin_operation_and_the_owner_credential_skips_it() {
     within_a_minute(|| {
         for project in ["demo-app", "demo-other"] {
-            let (state, registry) = routed_state();
+            // The default project is selected by the store selection, a routed one by its own block.
+            let (state, registry) = if project == "demo-app" {
+                emulator()
+            } else {
+                routed_state()
+            };
             let path = |suffix: &str| format!("{V1}/projects/{project}{suffix}");
             // A tenant `tt` that holds the user `l1`, made through the Admin create.
             let (status, made) = admin(
@@ -1065,7 +1070,11 @@ fn the_tokens_tenant_is_not_the_target_for_another_projects_token_an_empty_claim
                 ),
                 ("an empty tenant claim", with_claim(project, "")),
             ] {
-                let (state, registry) = routed_state();
+                let (state, registry) = if project == "demo-app" {
+                    emulator()
+                } else {
+                    routed_state()
+                };
                 setup(&state, project);
                 let (status, answered) = admin(
                     &state,
@@ -1078,16 +1087,22 @@ fn the_tokens_tenant_is_not_the_target_for_another_projects_token_an_empty_claim
             }
         }
         // Strict: the token never picks the tenant of an Admin delete.
-        let (mut state, registry) = routed_state();
-        setup(&state, "demo-other");
-        state.stateless_refresh_tokens = strict_state().stateless_refresh_tokens;
-        let (status, answered) = admin(
-            &state,
-            "POST",
-            &format!("{V1}/projects/demo-other/accounts:delete"),
-            &json!({"localId": "p1", "idToken": project_token("demo-other", "l1", "tt")}),
-        );
-        assert_eq!(status, 200, "strict: {answered}");
-        assert_eq!(tenant_users(&registry, "demo-other"), 1, "strict");
+        for project in ["demo-app", "demo-other"] {
+            let (mut state, registry) = if project == "demo-app" {
+                emulator()
+            } else {
+                routed_state()
+            };
+            setup(&state, project);
+            state.stateless_refresh_tokens = strict_state().stateless_refresh_tokens;
+            let (status, answered) = admin(
+                &state,
+                "POST",
+                &format!("{V1}/projects/{project}/accounts:delete"),
+                &json!({"localId": "p1", "idToken": project_token(project, "l1", "tt")}),
+            );
+            assert_eq!(status, 200, "strict {project}: {answered}");
+            assert_eq!(tenant_users(&registry, project), 1, "strict {project}");
+        }
     });
 }

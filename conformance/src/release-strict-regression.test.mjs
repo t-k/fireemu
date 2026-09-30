@@ -18,6 +18,7 @@ import {
   EXCLUDED_KINDS,
   EXCLUDED_PARTS,
   RUNS,
+  runEntry,
   assertNoOutboundNetwork,
   commandModes,
   compareLaneExport,
@@ -981,5 +982,32 @@ test("the jobs that verify the harness lineage check out the whole history", () 
       block.push(line.trim());
     }
     assert.ok(block.includes("fetch-depth: 0"), `${workflow}: the checkout fetches the whole history`);
+  }
+});
+
+test("unsupported OpenSSL records a failure for each federation run before either harness command", async () => {
+  const { chmodSync } = await import("node:fs");
+  const dir = mkdtempSync(join(tmpdir(), "fireemu-release-openssl-"));
+  try {
+    const tool = join(dir, "openssl");
+    writeFileSync(tool, '#!/bin/sh\necho "OpenSSL 3.0.22"\n');
+    chmodSync(tool, 0o700);
+    for (const run of RUNS.filter(({ id }) => ["R15", "R16", "R17"].includes(id))) {
+      const entry = await runEntry(run, {
+        binary: "/unused/fireemu",
+        functionsNode: process.execPath,
+        out: dir,
+        env: { PATH: process.env.PATH, FIREEMU_FEDERATION_OPENSSL_DIR: dir },
+      });
+      assert.deepEqual(entry.record.commands, []);
+      assert.deepEqual(entry.outputs, []);
+      assert.equal(entry.record.errors.length, 1);
+      assert.match(
+        entry.record.errors[0],
+        new RegExp(`${run.id} requires OpenSSL >= 3\\.4.*3\\.0\\.22`),
+      );
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
   }
 });

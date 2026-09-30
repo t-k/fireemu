@@ -1477,8 +1477,8 @@ fn patch_from_json(v: &Value) -> Result<MetadataPatch, String> {
 /// The Firebase dialect's metadata document (`OutgoingFirebaseMetadata`): `crc32c` is the
 /// base64 spelling production answers (recorded, stage 3 v9: `12ox+Q==`; the official emulator
 /// writes the decimal one, which only the rules' `request.resource.crc32c` keeps),
-/// `contentEncoding` defaults to `identity` in the response, and the
-/// `metadata` member exists exactly when custom metadata is defined, even when empty.
+/// `contentEncoding` defaults to `identity` in the response, `downloadTokens` exists exactly
+/// when the object has a token and `metadata` exactly when a custom key is set.
 fn firebase_json(m: &ObjectMetadata) -> Value {
     let mut v = json!({
         "name": m.name.as_str(),
@@ -1493,10 +1493,15 @@ fn firebase_json(m: &ObjectMetadata) -> Value {
         "md5Hash": m.md5_base64(),
         "crc32c": m.crc32c_base64(),
         "etag": m.etag(),
-        "downloadTokens": m.download_tokens.join(","),
         "contentEncoding": m.content_encoding.as_deref().unwrap_or("identity"),
     });
-    if m.custom_defined {
+    // Production writes `downloadTokens` only for an object that has one (stage 3 v9: a v0
+    // PATCH answer of an object that was never read carries none) and `metadata` only when a
+    // key is set (an upload with no custom metadata answers without it).
+    if !m.download_tokens.is_empty() {
+        v["downloadTokens"] = Value::String(m.download_tokens.join(","));
+    }
+    if !m.custom.is_empty() {
         v["metadata"] = json!(m.custom);
     }
     for (k, val) in [

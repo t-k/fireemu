@@ -2020,6 +2020,63 @@ fn only_a_metadata_read_mints_the_first_download_token() {
     }
 }
 
+/// The Firebase dialect writes `downloadTokens` only for an object that has a token and
+/// `metadata` only when a custom key is set (recorded, stage 3 v9: a v0 upload with no custom
+/// metadata answers a token and no `metadata`; a v0 PATCH of an object that was never read
+/// answers no `downloadTokens`; an empty map is never written).
+#[test]
+fn the_firebase_dialect_omits_empty_metadata_and_absent_tokens() {
+    for acceptance in BOTH_PROFILES {
+        let s = state_with(Some(ALLOW_ALL_RULES), acceptance);
+        let uploaded = json_body(&handle(
+            &s,
+            req(
+                "POST",
+                &format!("/v0/b/{BUCKET}/o?name=e.txt&uploadType=media"),
+                &[("content-type", "text/plain")],
+                b"hello",
+            ),
+        ));
+        assert!(!uploaded["downloadTokens"].as_str().unwrap().is_empty());
+        assert!(
+            uploaded.get("metadata").is_none(),
+            "{acceptance:?}: {uploaded}"
+        );
+
+        let seeded = handle(
+            &s,
+            req(
+                "POST",
+                &format!("/upload/storage/v1/b/{BUCKET}/o?name=g.txt&uploadType=media"),
+                &[
+                    ("authorization", "Bearer owner"),
+                    ("content-type", "text/plain"),
+                ],
+                b"hello",
+            ),
+        );
+        assert_eq!(seeded.status, 200);
+        let patch = |name: &str, body: &[u8]| {
+            json_body(&handle(
+                &s,
+                req(
+                    "PATCH",
+                    &format!("/v0/b/{BUCKET}/o/{name}"),
+                    &[("content-type", "application/json")],
+                    body,
+                ),
+            ))
+        };
+        let with_key = patch("g.txt", br#"{"metadata": {"owner": "new"}}"#);
+        assert!(with_key.get("downloadTokens").is_none(), "{with_key}");
+        assert_eq!(with_key["metadata"], json!({"owner": "new"}));
+        let cleared = patch("g.txt", br#"{"metadata": null}"#);
+        assert!(cleared.get("metadata").is_none(), "{cleared}");
+        let empty = patch("g.txt", br#"{"metadata": {}}"#);
+        assert!(empty.get("metadata").is_none(), "{empty}");
+    }
+}
+
 /// `PATCH /storage/v1/b/{bucket}/o/{object}` updates object metadata, as the Cloud Storage
 /// JSON API does in production (recorded: stage 3 v9, `setup/seed-metadata` and
 /// `boundary-gcs-admin-patch-present`, a 200 with the `storage#object` resource; an absent

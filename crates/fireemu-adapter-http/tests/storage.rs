@@ -2383,6 +2383,55 @@ fn an_undecodable_bearer_is_anonymous_and_a_revoked_id_token_is_honoured() {
     }
 }
 
+/// The resumable path evaluates `request.resource.metadata` the same way at finalization: null
+/// for a session that carries no custom metadata under strict, the official empty map under the
+/// emulator profile, and a map in both once a key is set.
+#[test]
+fn a_resumable_upload_without_custom_metadata_has_null_request_metadata_only_in_strict() {
+    const RULES: &str = "rules_version = '2'; service firebase.storage { match /b/{bucket}/o { match /{path=**} { allow read; allow create: if request.resource != null && !(\"owner\" in request.resource.metadata); } } }";
+    let finalize = |acceptance: TokenAcceptance, name: &str, start_body: &[u8]| {
+        let s = state_with(Some(RULES), acceptance);
+        let start = handle(
+            &s,
+            req(
+                "POST",
+                &format!("/v0/b/{BUCKET}/o?name={name}"),
+                &[
+                    ("x-goog-upload-protocol", "resumable"),
+                    ("x-goog-upload-command", "start"),
+                ],
+                start_body,
+            ),
+        );
+        let session = header(&start, "x-goog-upload-url")
+            .unwrap()
+            .strip_prefix("http://127.0.0.1:9199")
+            .unwrap()
+            .to_owned();
+        handle(
+            &s,
+            req(
+                "POST",
+                &session,
+                &[
+                    ("x-goog-upload-command", "upload, finalize"),
+                    ("x-goog-upload-offset", "0"),
+                ],
+                b"hello",
+            ),
+        )
+        .status
+    };
+    assert_eq!(finalize(TokenAcceptance::Verified, "r.txt", b"{}"), 403);
+    assert_eq!(finalize(TokenAcceptance::EmulatorMock, "r.txt", b"{}"), 200);
+    let with_key = br#"{"metadata": {"other": "x"}}"#;
+    assert_eq!(finalize(TokenAcceptance::Verified, "k.txt", with_key), 200);
+    assert_eq!(
+        finalize(TokenAcceptance::EmulatorMock, "k.txt", with_key),
+        200
+    );
+}
+
 /// `PATCH /storage/v1/b/{bucket}/o/{object}` updates object metadata, as the Cloud Storage
 /// JSON API does in production (recorded: stage 3 v9, `setup/seed-metadata` and
 /// `boundary-gcs-admin-patch-present`, a 200 with the `storage#object` resource; an absent

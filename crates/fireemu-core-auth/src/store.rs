@@ -5802,6 +5802,18 @@ impl ProjectStores {
 struct PendingSessionRegistration {
     registered: SharedAuthStore,
     displaced: Option<SharedAuthStore>,
+    /// The tenants of the displaced routed namespace, restored with it if the registration rolls
+    /// back and dropped when it commits.
+    displaced_tenants: Vec<DisplacedTenant>,
+}
+
+/// A tenant of a routed namespace a session registration displaced.
+#[derive(Debug)]
+struct DisplacedTenant {
+    key: TenantKey,
+    store: SharedAuthStore,
+    metadata: Option<TenantMetadata>,
+    runtime_override: Option<AuthNamespaceConfigPatch>,
 }
 
 /// Outcome of rolling back a session registration that has not completed its initial reset.
@@ -5900,8 +5912,9 @@ pub struct AuthRegistry {
     projects: Mutex<ProjectStores>,
     /// The declaration applied to a routed project when it is installed.
     new_project_tenant_seed: Mutex<Option<Arc<dyn NewProjectSeed>>>,
-    /// Routed projects installed and not yet seeded.
-    pending_project_seeds: Mutex<BTreeSet<String>>,
+    /// Routed projects installed and not yet seeded, with the store that was installed (a
+    /// project a session displaced or a reset re-created meanwhile is another incarnation).
+    pending_project_seeds: Mutex<BTreeMap<String, SharedAuthStore>>,
     /// Explicit project policies configured before a project session is registered. An entry
     /// does not create or route the project; it is applied to the matching namespace when it
     /// later appears.
@@ -6134,7 +6147,7 @@ impl AuthRegistry {
             scoped_refresh_routing,
             projects: Mutex::new(ProjectStores::default()),
             new_project_tenant_seed: Mutex::new(None),
-            pending_project_seeds: Mutex::new(BTreeSet::new()),
+            pending_project_seeds: Mutex::new(BTreeMap::new()),
             project_password_policy_overrides: Mutex::new(BTreeMap::new()),
             project_config_overrides: Mutex::new(BTreeMap::new()),
             tenants: Mutex::new(BTreeMap::new()),
@@ -6309,7 +6322,7 @@ impl AuthRegistry {
             .is_ok_and(|seed| seed.is_some())
         {
             if let Ok(mut pending) = self.pending_project_seeds.lock() {
-                pending.insert(project.to_owned());
+                pending.insert(project.to_owned(), store.clone());
             }
         }
         RoutedStoreInstall::Installed(store)
@@ -6344,8 +6357,13 @@ impl AuthRegistry {
             return Ok(());
         };
         let mut first_error = None;
-        for project in pending {
-            if self.routed_store_for(&project).is_none() {
+        for (project, installed) in pending {
+            // Only the incarnation that was installed is seeded: a project a session displaced,
+            // or a reset dropped and a later request re-created, is not this one.
+            if !self
+                .routed_store_for(&project)
+                .is_some_and(|current| Arc::ptr_eq(&current, &installed))
+            {
                 continue;
             }
             if let Err(error) = seed.apply(self, &project) {
@@ -6830,13 +6848,19 @@ impl AuthRegistry {
         let Ok(metadata) = self.tenant_metadata.lock() else {
             return false;
         };
+        // Tenants the project owns belong to the routed namespace the session displaces (they
+        // move with it); tenants of any other project of that name are stray and refuse it.
+        let owns_tenants = tenants.keys().any(|(candidate, _)| candidate == project)
+            || metadata.keys().any(|(candidate, _)| candidate == project);
         if projects.registered.contains_key(project)
             || projects.pending_sessions.contains_key(project)
-            || tenants.keys().any(|(candidate, _)| candidate == project)
-            || metadata.keys().any(|(candidate, _)| candidate == project)
+            || (owns_tenants && !projects.routed.contains_key(project))
         {
             return false;
         }
+        let Ok(runtime_overrides) = self.tenant_runtime_config_overrides.lock() else {
+            return false;
+        };
         if self.lifecycle_incarnation.is_some() {
             let Some(epoch) = self.next_lifecycle_epoch() else {
                 return false;
@@ -6862,6 +6886,29 @@ impl AuthRegistry {
         }
         store.set_project_number(self.project_numbers.get(project).copied());
         let displaced = projects.routed.remove(project);
+        let (mut tenants, mut metadata, mut runtime_overrides) =
+            (tenants, metadata, runtime_overrides);
+        let displaced_tenants = if displaced.is_some() {
+            let keys = tenants
+                .keys()
+                .filter(|(candidate, _)| candidate == project)
+                .cloned()
+                .collect::<Vec<_>>();
+            keys.into_iter()
+                .filter_map(|key| {
+                    let store = tenants.remove(&key)?;
+                    Some(DisplacedTenant {
+                        metadata: metadata.remove(&key),
+                        runtime_override: runtime_overrides.remove(&key),
+                        key,
+                        store,
+                    })
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+        drop(runtime_overrides);
         drop(metadata);
         drop(tenants);
         let registered = Arc::new(Mutex::new(store));
@@ -6873,6 +6920,7 @@ impl AuthRegistry {
             PendingSessionRegistration {
                 registered,
                 displaced,
+                displaced_tenants,
             },
         );
         self.membership_generation.fetch_add(1, Ordering::Release);
@@ -6924,6 +6972,23 @@ impl AuthRegistry {
         projects.registered.remove(project);
         if let Some(displaced) = pending.displaced {
             projects.routed.insert(project.to_owned(), displaced);
+        }
+        if !pending.displaced_tenants.is_empty() {
+            if let (Ok(mut tenants), Ok(mut metadata), Ok(mut runtime_overrides)) = (
+                self.tenants.lock(),
+                self.tenant_metadata.lock(),
+                self.tenant_runtime_config_overrides.lock(),
+            ) {
+                for tenant in pending.displaced_tenants {
+                    if let Some(published) = tenant.metadata {
+                        metadata.insert(tenant.key.clone(), published);
+                    }
+                    if let Some(patch) = tenant.runtime_override {
+                        runtime_overrides.insert(tenant.key.clone(), patch);
+                    }
+                    tenants.insert(tenant.key, tenant.store);
+                }
+            }
         }
         self.membership_generation.fetch_add(1, Ordering::Release);
         SessionRegistrationRollback::Restored

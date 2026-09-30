@@ -456,3 +456,137 @@ fn concurrent_requests_naming_a_new_project_install_and_seed_it_once() {
     expected.sort();
     assert_eq!(tenants, expected);
 }
+
+/// Runs `request` on its own thread and fails, rather than hangs, when it does not finish: a seed
+/// applied under the routed project's gate would deadlock its installing request.
+fn within_a_minute<T: Send + 'static>(request: impl FnOnce() -> T + Send + 'static) -> T {
+    let (done, finished) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = done.send(request());
+    });
+    finished
+        .recv_timeout(std::time::Duration::from_secs(60))
+        .expect("the request finished: nothing deadlocked")
+}
+
+fn declaration(documents: &[Value]) -> Arc<fireemu_adapter_http::identity_toolkit::TenantSeeding> {
+    use fireemu_adapter_http::identity_toolkit::{prepare_tenant_seeds, TenantSeeding};
+    Arc::new(TenantSeeding::new(
+        Some(true),
+        prepare_tenant_seeds(documents, true, None).unwrap(),
+    ))
+}
+
+/// Every request that installs a routed project seeds it, and none of them does it under a gate:
+/// `tenants:create`, an Admin user create, a provider create.
+#[test]
+fn every_installing_request_seeds_the_project_and_none_deadlocks() {
+    let (state, registry) = routed_state();
+    registry.set_new_project_tenant_seed(declaration(&declared()));
+    let state = Arc::new(state);
+    let call = |method: &'static str, path: String, body: Value| {
+        let state = state.clone();
+        within_a_minute(move || {
+            let r = handle_with(&state, method, &path, &owner(), &body);
+            (r.status, r.body)
+        })
+    };
+    let (status, made) = call(
+        "POST",
+        "/identitytoolkit.googleapis.com/v2/projects/demo-tc/tenants".to_owned(),
+        json!({"displayName": "x"}),
+    );
+    assert_eq!(status, 200, "{made}");
+    let (status, made) = call(
+        "POST",
+        format!("{V1}/projects/demo-user/accounts"),
+        json!({"email": "a@example.com", "password": "hunter22"}),
+    );
+    assert_eq!(status, 200, "{made}");
+    for (project, extra) in [("demo-tc", 1), ("demo-user", 0)] {
+        let mut tenants = registry.tenants(project);
+        tenants.sort();
+        assert_eq!(tenants.len(), 2 + extra, "{project}: {tenants:?}");
+        assert!(tenants.contains(&"acme-x7k2q".to_owned()), "{project}");
+        assert!(tenants.contains(&"beta-a1b2c".to_owned()), "{project}");
+    }
+}
+
+/// The declared document is what a declared tenant reads back, whichever request installs the
+/// project: also when that request is the one that names the tenant.
+#[test]
+fn a_declared_tenant_named_by_the_installing_request_keeps_its_declared_settings() {
+    let declared = vec![json!({
+        "tenantId": "acme-x7k2q",
+        "displayName": "acme",
+        "allowPasswordSignup": false,
+        "enableEmailLinkSignin": false
+    })];
+    for (project, request) in [("demo-acc", "account create"), ("demo-get", "tenant read")] {
+        let (state, registry) = routed_state();
+        registry.set_new_project_tenant_seed(declaration(&declared));
+        let (status, answered) = if request == "account create" {
+            admin(
+                &state,
+                "POST",
+                &format!("{V1}/projects/{project}/tenants/acme-x7k2q/accounts"),
+                &json!({"email": "a@example.com", "password": "hunter22"}),
+            )
+        } else {
+            admin(
+                &state,
+                "GET",
+                &format!(
+                    "/identitytoolkit.googleapis.com/v2/projects/{project}/tenants/acme-x7k2q"
+                ),
+                &json!({}),
+            )
+        };
+        assert_eq!(status, 200, "{request}: {answered}");
+        let (status, document) = admin(
+            &state,
+            "GET",
+            &format!("/identitytoolkit.googleapis.com/v2/projects/{project}/tenants/acme-x7k2q"),
+            &json!({}),
+        );
+        assert_eq!(status, 200, "{request}: {document}");
+        assert_eq!(document["displayName"], "acme", "{request}: {document}");
+        assert!(
+            document.get("allowPasswordSignup").is_none(),
+            "{request}: {document}"
+        );
+        assert!(
+            document.get("enableEmailLinkSignin").is_none(),
+            "{request}: {document}"
+        );
+        assert!(document.get("mfaConfig").is_none(), "{request}: {document}");
+    }
+}
+
+/// A foreign ID token whose tenant disagrees with the path's, on a project only this request
+/// names: `TENANT_ID_MISMATCH`, and nothing is installed.
+#[test]
+fn a_disagreeing_foreign_token_on_an_unknown_project_is_a_mismatch_that_installs_nothing() {
+    use fireemu_core_auth::jwt::base64url_encode;
+    let (state, registry) = routed_state();
+    let token = format!(
+        "{}.{}.{}",
+        base64url_encode(br#"{"alg":"RS256","kid":"other","typ":"JWT"}"#),
+        base64url_encode(
+            json!({"aud": "demo-late", "firebase": {"tenant": "t-x"}})
+                .to_string()
+                .as_bytes()
+        ),
+        base64url_encode(b"signature")
+    );
+    let (status, refused) = admin(
+        &state,
+        "POST",
+        &format!("{V1}/projects/demo-late/tenants/t-y/accounts:lookup"),
+        &json!({"idToken": token}),
+    );
+    assert_eq!(status, 400, "{refused}");
+    assert_eq!(refused["error"]["message"], "TENANT_ID_MISMATCH");
+    assert!(registry.routed_store_for("demo-late").is_none());
+    assert!(registry.tenants("demo-late").is_empty());
+}

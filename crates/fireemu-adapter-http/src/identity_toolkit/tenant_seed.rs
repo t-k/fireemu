@@ -175,15 +175,21 @@ impl TenantSeeding {
         if let Some(allow) = self.allow_tenants {
             seed_multi_tenancy(registry, project, allow)?;
         }
-        let present = registry.tenants(project);
-        for tenant in self
-            .tenants
-            .iter()
-            .filter(|t| !present.iter().any(|id| id == t.id()))
-        {
-            tenant.apply(registry, project)?;
+        let mut first_error = None;
+        for tenant in &self.tenants {
+            // A tenant that is there (an imported one, or one another request made) is kept. One
+            // refused tenant does not stop the others.
+            if registry.tenant_store(project, tenant.id()).is_some() {
+                continue;
+            }
+            if let Err(error) = tenant.apply(registry, project) {
+                // An id another request made since the check is a tenant that is there.
+                if registry.tenant_store(project, tenant.id()).is_none() {
+                    first_error.get_or_insert(error);
+                }
+            }
         }
-        Ok(())
+        first_error.map_or(Ok(()), Err)
     }
 }
 

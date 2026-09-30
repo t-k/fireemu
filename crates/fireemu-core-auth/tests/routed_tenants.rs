@@ -261,3 +261,81 @@ fn a_project_dropped_before_its_seed_is_applied_is_skipped() {
     assert!(registry.apply_pending_project_seeds().is_ok());
     assert_eq!(seed.calls.load(Ordering::SeqCst), 0);
 }
+
+fn session_store(project: &str) -> AuthStore {
+    AuthStore::new(project, SplitMix64::new(9), TotpPolicy::default())
+}
+
+/// A session registered over a routed namespace displaces it together with its tenants (the
+/// closed issue session-create-for-routed-auth-store-fails-500-in-emulator-profile).
+#[test]
+fn a_session_displaces_a_routed_project_with_its_tenants_and_a_rollback_restores_them() {
+    let registry = registry();
+    assert!(matches!(
+        install(&registry, "demo-b"),
+        RoutedStoreInstall::Installed(_)
+    ));
+    assert!(registry.ensure_tenant("demo-b", "kept").is_some());
+    let routed = registry.routed_store_for("demo-b").unwrap();
+    assert!(registry.register_session("demo-b", session_store("demo-b")));
+    // The session starts without the routed namespace's tenants; the routed store is displaced.
+    assert!(registry.tenants("demo-b").is_empty());
+    assert!(registry.tenant_store("demo-b", "kept").is_none());
+    assert!(registry.routed_store_for("demo-b").is_none());
+    // Rolled back, the routed namespace and its tenants are what they were.
+    assert_eq!(
+        registry.rollback_session("demo-b"),
+        fireemu_core_auth::store::SessionRegistrationRollback::Restored
+    );
+    assert!(Arc::ptr_eq(
+        &registry.routed_store_for("demo-b").unwrap(),
+        &routed
+    ));
+    assert_eq!(registry.tenants("demo-b"), ["kept"]);
+    assert!(registry.tenant_store("demo-b", "kept").is_some());
+    // Committed, the displaced tenants are gone for good.
+    assert!(registry.register_session("demo-b", session_store("demo-b")));
+    assert!(registry.commit_session("demo-b"));
+    assert!(registry.tenants("demo-b").is_empty());
+    assert!(registry.store_for("demo-b").is_some());
+}
+
+#[test]
+fn tenants_of_no_routed_project_still_refuse_a_session() {
+    let registry = registry();
+    assert!(matches!(
+        install(&registry, "demo-b"),
+        RoutedStoreInstall::Installed(_)
+    ));
+    assert!(registry.ensure_tenant("demo-b", "kept").is_some());
+    // A default-scope reset drops the routed namespace; nothing of it may block a session.
+    let reset = registry.prepare_default_scope_reset().unwrap();
+    registry.apply_default_scope_reset(&reset).unwrap();
+    assert!(registry.register_session("demo-b", session_store("demo-b")));
+    // A registered project's own tenants are not displaced by registering it again.
+    assert!(registry.commit_session("demo-b"));
+    assert!(registry.ensure_tenant("demo-b", "own").is_some());
+    assert!(!registry.register_session("demo-b", session_store("demo-b")));
+    assert_eq!(registry.tenants("demo-b"), ["own"]);
+}
+
+/// A pending seed belongs to the incarnation that was installed: a session that displaced the
+/// project, or a reset and a re-install, are not seeded by it.
+#[test]
+fn a_seed_pending_for_a_displaced_incarnation_is_not_applied_to_its_successor() {
+    let registry = registry();
+    let seed = Arc::new(CountingSeed {
+        applied: Mutex::new(Vec::new()),
+        calls: AtomicUsize::new(0),
+    });
+    registry.set_new_project_tenant_seed(seed.clone());
+    assert!(matches!(
+        install(&registry, "demo-b"),
+        RoutedStoreInstall::Installed(_)
+    ));
+    assert!(registry.register_session("demo-b", session_store("demo-b")));
+    assert!(registry.commit_session("demo-b"));
+    registry.apply_pending_project_seeds().unwrap();
+    assert_eq!(seed.calls.load(Ordering::SeqCst), 0);
+    assert!(registry.tenants("demo-b").is_empty());
+}

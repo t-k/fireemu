@@ -270,7 +270,7 @@
         },
         "tenants": {
           "type": ["array", "null"],
-          "description": "The default project's tenants, each an Admin v2 Tenant document with its tenantId (a display name, a hyphen and five characters of [a-z0-9], as production generates it). A document is read by the code the Admin tenant create route reads one with, so a value production refuses stops the daemon at startup. The tenants are created empty in the default project when the daemon starts, in every session project created later, and again after a control-plane reset of a session (the default session's included); an --import is authoritative for a tenant of the same id. A namespace the emulator profile creates for an unknown project id is seeded when a request writes a tenant there. Absent or null, no tenant is created.",
+          "description": "The default project's tenants, each an Admin v2 Tenant document with its tenantId (a display name, a hyphen and five characters of [a-z0-9], as production generates it). A document is read by the code the Admin tenant create route reads one with, so a value production refuses stops the daemon at startup. The tenants are created empty in the default project when the daemon starts, in every session project created later, and again after a control-plane reset of a session (the default session's included); an --import is authoritative for a tenant of the same id. A namespace the emulator profile creates for an unknown project id is seeded when it is created (by a request that writes a tenant there, or by an Admin user, provider or project-setting write). Absent or null, no tenant is created.",
           "items": {
             "type": "object",
             "required": ["tenantId", "displayName"],

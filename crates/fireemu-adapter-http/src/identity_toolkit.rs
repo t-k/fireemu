@@ -3169,9 +3169,7 @@ fn handle_with_policy(
     let response = handle_with_policy_inner(state, method, path, headers, body, oidc_trust);
     // A routed project this request installed takes the declared tenants now, with the request's
     // own gate and every registry lock released (the seed creates tenants under that gate).
-    if let Some(registry) = state.registry.as_ref() {
-        let _ = registry.apply_pending_project_seeds();
-    }
+    seed_new_projects(state);
     if state.stateless_refresh_tokens {
         return response;
     }
@@ -3453,6 +3451,20 @@ fn query_tenant_of(handler: routes::Handler, query: Option<&str>) -> Option<Stri
         .flatten()
 }
 
+/// Applies the declaration to the routed projects installed since the last call, under shared
+/// admission as every other tenant write is (a reset or a session create hold the barrier
+/// exclusively, so they never interleave with it). Call it with no gate held. A refusal is
+/// reported, not dropped.
+fn seed_new_projects(state: &AuthState) {
+    let Some(registry) = state.registry.as_ref() else {
+        return;
+    };
+    let _admitted = state.barrier.as_ref().map(|barrier| barrier.admit());
+    if let Err(error) = registry.apply_pending_project_seeds() {
+        eprintln!("warning: auth.tenants: a routed project could not be seeded: {error}");
+    }
+}
+
 /// See [`creation_parent`].
 struct CreationParent {
     parent: Arc<Mutex<AuthStore>>,
@@ -3711,9 +3723,14 @@ fn emulator_creates_named_tenant(
     if !admit_request(state, request, route, route_project, &project, &parent)? {
         return Ok(None);
     }
-    if !candidate.is_none_or(|candidate| install_admitted_candidate(registry, &project, candidate))
-    {
-        return Ok(None);
+    if let Some(candidate) = candidate {
+        if !install_admitted_candidate(registry, &project, candidate) {
+            return Ok(None);
+        }
+        // The project just installed takes the declaration before the tenant this request names
+        // is made, so a declared tenant is made from its declaration and not with the defaults.
+        // No gate is held here: the creation runs before the request's gates and barrier.
+        seed_new_projects(state);
     }
     Ok(registry
         .ensure_tenant_with(&project, &target, tenant_document::install_default_mfa)
@@ -15766,6 +15783,42 @@ mod tests {
     use super::*;
     use fireemu_core_auth::mfa::TotpPolicy;
     use fireemu_core_types::determinism::SplitMix64;
+
+    /// A routed project another request installed between the creation's parent lookup and its
+    /// install is the project the tenant is made in (`Existing`); a registered project is not
+    /// replaced, and a project nobody may install is refused.
+    #[test]
+    fn installing_an_admitted_candidate_accepts_a_project_that_is_already_there() {
+        let default = Arc::new(Mutex::new(AuthStore::new(
+            "demo-app",
+            SplitMix64::new(1),
+            TotpPolicy::default(),
+        )));
+        let registry = fireemu_core_auth::store::AuthRegistry::new("demo-app", default);
+        let candidate = |registry: &fireemu_core_auth::store::AuthRegistry, project: &str| {
+            Arc::new(Mutex::new(registry.routed_candidate(project).unwrap()))
+        };
+        let first = candidate(&registry, "demo-routed");
+        let second = candidate(&registry, "demo-routed");
+        assert!(install_admitted_candidate(&registry, "demo-routed", first));
+        // Someone else installed it first: the existing store is the project.
+        assert!(install_admitted_candidate(&registry, "demo-routed", second));
+        assert!(registry.routed_store_for("demo-routed").is_some());
+        // The default project is never a routed project.
+        let other = candidate(&registry, "demo-other");
+        assert!(!install_admitted_candidate(&registry, "demo-app", other));
+        // A registered project is not replaced.
+        assert!(registry.register_session(
+            "demo-session",
+            AuthStore::new("demo-session", SplitMix64::new(2), TotpPolicy::default())
+        ));
+        let session_candidate = candidate(&registry, "demo-session");
+        assert!(!install_admitted_candidate(
+            &registry,
+            "demo-session",
+            session_candidate
+        ));
+    }
 
     /// A management error without a `status` gets the v2 status of its HTTP code; one with a
     /// status keeps it, and the v1 `errors` list is dropped.

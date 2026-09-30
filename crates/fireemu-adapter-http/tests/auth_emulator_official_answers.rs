@@ -907,19 +907,22 @@ fn an_expired_token_of_a_new_tenant_finds_no_user_in_the_admin_operations_that_p
     }
 }
 
-/// Differences measured on both emulators for an ID token on an Admin route or with the owner
-/// credential, pinned as fireemu answers them so a fix flips them deliberately (official column
-/// probed against firebase-tools 15.28.2; owner credential; default and routed project). Each
-/// row: (case, fireemu's answer, official's answer).
+/// The official emulator takes the token's tenant as the third source of an operation's target
+/// (`server.js:398-406`), and does not parse the token on an end-user route reached with the owner
+/// credential (`operations.js:225`, `:546-551`, `:753`). Official column probed against
+/// firebase-tools 15.28.2; owner credential; default and routed project.
 ///
-/// - (a) the Admin delete and update take the token's tenant as their target when the body names
-///   none (`server.js:405`); fireemu selects by the body only and refuses (over-refusals);
-/// - (b) the Admin create with a token reads it (`operations.js:181`); fireemu ignores it and
-///   creates a user (it accepts more);
-/// - (c) the end-user lookup with the owner credential does not parse the token
-///   (`operations.js:225`); fireemu's pre-check refuses (an over-refusal).
+/// - the Admin update and delete with only an ID token naming an existing tenant run in that tenant
+///   (both answered `USER_NOT_FOUND` from the project's store before);
+/// - the end-user lookup, delete and update with the owner credential are served by their
+///   selectors, with no token read (they answered `USER_NOT_FOUND` before): a lookup with a
+///   selector that matches nothing is 200, a delete without a `localId` is `MISSING_LOCAL_ID`;
+/// - still different, recorded: the Admin create with a token creates the user (in the token's
+///   tenant now; the official emulator answers `USER_NOT_FOUND` when the token's user is missing),
+///   and an update with the owner credential and no `localId` answers `INVALID_ID_TOKEN` (the
+///   official emulator `MISSING_LOCAL_ID`).
 #[test]
-fn the_differences_for_an_id_token_on_an_admin_route_are_pinned() {
+fn an_id_token_names_the_target_tenant_of_an_admin_operation_and_the_owner_credential_skips_it() {
     within_a_minute(|| {
         for project in ["demo-app", "demo-other"] {
             let (state, registry) = routed_state();
@@ -936,67 +939,159 @@ fn the_differences_for_an_id_token_on_an_admin_route_are_pinned() {
             let users_in = |store: Option<Arc<Mutex<AuthStore>>>| {
                 store.map_or(0, |store| store.lock().unwrap().user_count())
             };
-            // (a) delete and update with only the token naming the tenant.
-            let (status, answered) = admin(
-                &state,
-                "POST",
-                &path("/accounts:delete"),
-                &json!({"localId": "l1", "idToken": token}),
-            );
-            assert_eq!(
-                (status, message_of(&answered)),
-                (400, "USER_NOT_FOUND".to_owned()),
-                "{project} delete (official: 200, l1 deleted from tt): {answered}"
-            );
+            let project_store = || {
+                registry
+                    .store_for(project)
+                    .or_else(|| registry.routed_store_for(project))
+            };
+            // The update and the delete run in the token's tenant.
             let (status, answered) = admin(
                 &state,
                 "POST",
                 &path("/accounts:update"),
                 &json!({"localId": "l1", "displayName": "d", "idToken": token}),
             );
-            assert_eq!(
-                (status, message_of(&answered)),
-                (400, "USER_NOT_FOUND".to_owned()),
-                "{project} update (official: 200): {answered}"
+            assert_eq!(status, 200, "{project} update: {answered}");
+            let (status, answered) = admin(
+                &state,
+                "POST",
+                &path("/accounts:delete"),
+                &json!({"localId": "l1", "idToken": token}),
             );
+            assert_eq!(status, 200, "{project} delete: {answered}");
             assert_eq!(
                 users_in(registry.tenant_store(project, "tt")),
-                1,
+                0,
                 "{project}"
             );
-            // (b) create with a token of a tenant that exists and lacks the token's user.
+            // A create with a token names its tenant too, so the user lands there (the official
+            // emulator refuses with USER_NOT_FOUND: the token's user is missing).
             let (status, answered) = admin(
                 &state,
                 "POST",
                 &path("/accounts"),
                 &json!({"email": "m@example.com", "password": "hunter22", "idToken": project_token(project, "u9", "tt")}),
             );
+            assert_eq!(status, 200, "{project} create: {answered}");
             assert_eq!(
-                status, 200,
-                "{project} create (official: 400 USER_NOT_FOUND): {answered}"
-            );
-            let project_store = registry
-                .store_for(project)
-                .or_else(|| registry.routed_store_for(project));
-            assert_eq!(
-                users_in(project_store),
+                users_in(registry.tenant_store(project, "tt")),
                 1,
-                "{project}: created in the project"
+                "{project}"
+            );
+            assert_eq!(users_in(project_store()), 0, "{project}");
+        }
+        // The end-user routes with the owner credential and a token of a tenant made on the way.
+        for (route, body, status, message) in [
+            ("lookup", json!({"email": ["nobody@example.com"]}), 200, "-"),
+            ("delete", json!({}), 400, "MISSING_LOCAL_ID"),
+            // Official: MISSING_LOCAL_ID.
+            (
+                "update",
+                json!({"displayName": "d"}),
+                400,
+                "INVALID_ID_TOKEN",
+            ),
+        ] {
+            let (state, _registry) = emulator();
+            let mut body = body;
+            body["tenantId"] = json!("tc");
+            body["idToken"] = json!(own_token("u1", "tc"));
+            let (got, answered) = admin(
+                &state,
+                "POST",
+                &format!("{V1}/accounts:{route}?key={KEY}"),
+                &body,
+            );
+            assert_eq!(
+                (got, message_of(&answered)),
+                (status, message.to_owned()),
+                "{route} with Bearer owner: {answered}"
             );
         }
-        // (c) the end-user lookup with the owner credential and a token of a tenant made on the
-        // way.
-        let (state, _registry) = emulator();
-        let (status, answered) = admin(
+    });
+}
+
+/// The token's tenant is the target only for a token of this project, with a tenant claim, in the
+/// emulator profile: a token of another project's audience (this daemon refuses it), an empty
+/// tenant claim (no tenant, as in the official emulator) and the strict profile all leave the
+/// request in the project's store, where the tenant's user is not.
+#[test]
+fn the_tokens_tenant_is_not_the_target_for_another_projects_token_an_empty_claim_or_strict() {
+    within_a_minute(|| {
+        let with_claim = |project: &str, tenant: &str| {
+            alg_none(&json!({
+                "aud": project, "iss": format!("https://securetoken.google.com/{project}"),
+                "sub": "l1", "user_id": "l1", "iat": 1_788_004_860, "exp": 1_788_008_400,
+                "auth_time": 1_788_004_860,
+                "firebase": {"sign_in_provider": "password", "identities": {}, "tenant": tenant}
+            }))
+        };
+        for project in ["demo-app", "demo-other"] {
+            let (state, registry) = routed_state();
+            let path = format!("{V1}/projects/{project}/accounts:delete");
+            let (status, made) = admin(
+                &state,
+                "POST",
+                &format!("{V1}/projects/{project}/accounts"),
+                &json!({"tenantId": "tt", "localId": "l1", "email": "l1@example.com", "password": "hunter22"}),
+            );
+            assert_eq!(status, 200, "{project}: {made}");
+            let tenant_users = || {
+                registry
+                    .tenant_store(project, "tt")
+                    .map_or(0, |store| store.lock().unwrap().user_count())
+            };
+            // (case, token): none of them selects the tenant `tt`.
+            for (case, token) in [
+                (
+                    "another project's audience",
+                    with_claim("demo-elsewhere", "tt"),
+                ),
+                ("an empty tenant claim", with_claim(project, "")),
+            ] {
+                let (_, answered) = admin(
+                    &state,
+                    "POST",
+                    &path,
+                    &json!({"localId": "l1", "idToken": token}),
+                );
+                assert_ne!(status_of(&answered), 200, "{project} {case}: {answered}");
+                assert_eq!(
+                    tenant_users(),
+                    1,
+                    "{project} {case}: the tenant is untouched"
+                );
+            }
+        }
+        // Strict: the token never picks the tenant of an Admin delete.
+        let (mut state, registry) = routed_state();
+        let (status, made) = admin(
             &state,
             "POST",
-            &format!("{V1}/accounts:lookup?key={KEY}"),
-            &json!({"tenantId": "tc", "idToken": own_token("u1", "tc")}),
+            &format!("{V1}/projects/demo-other/accounts"),
+            &json!({"tenantId": "tt", "localId": "l1", "email": "l1@example.com", "password": "hunter22"}),
         );
+        assert_eq!(status, 200, "{made}");
+        let strict = strict_state();
+        state.stateless_refresh_tokens = strict.stateless_refresh_tokens;
+        let (_, answered) = admin(
+            &state,
+            "POST",
+            &format!("{V1}/projects/demo-other/accounts:delete"),
+            &json!({"localId": "l1", "idToken": project_token("demo-other", "l1", "tt")}),
+        );
+        assert_ne!(status_of(&answered), 200, "strict: {answered}");
         assert_eq!(
-            (status, message_of(&answered)),
-            (400, "USER_NOT_FOUND".to_owned()),
-            "lookup with Bearer owner (official: 200): {answered}"
+            registry
+                .tenant_store("demo-other", "tt")
+                .map_or(0, |store| store.lock().unwrap().user_count()),
+            1,
+            "strict: the tenant is untouched"
         );
     });
+}
+
+/// The status of an answer body: 200 for a success, else the error code.
+fn status_of(body: &Value) -> u64 {
+    body["error"]["code"].as_u64().unwrap_or(200)
 }

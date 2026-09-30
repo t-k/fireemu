@@ -78,6 +78,8 @@ mod project_config;
 pub use project_config::{exportable_config_members, restored_config_members};
 pub mod project_mfa;
 pub use project_mfa::{mfa_config_from_json, MfaConfigRefusal};
+mod provider_seeds;
+pub use provider_seeds::provider_config_seeds;
 mod tenant_document;
 mod tenant_seed;
 pub use password_hash::restorable_spec as restorable_imported_hash_spec;

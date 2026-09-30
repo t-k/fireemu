@@ -1567,6 +1567,8 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
                 store.set_authorized_domains_seed(domains.clone())
                     .map_err(|error| format!("auth.authorizedDomains: {error:?}"))?;
             }
+            store.set_provider_config_seeds(cfg.auth_provider_seeds.clone())
+                .map_err(|error| format!("auth.providers: {error}"))?;
             if let Some(policy) = &cfg.auth_password_policy {
                 store.set_password_policy(policy.to_auth_policy());
             }
@@ -1615,6 +1617,7 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
         // A project created after start begins with the declared multi-factor configuration.
         registry.set_new_project_mfa_seed(cfg.auth_mfa.clone());
         registry.set_new_project_authorized_domains_seed(cfg.auth_authorized_domains.clone());
+        registry.set_new_project_provider_config_seeds(cfg.auth_provider_seeds.clone());
         apply_auth_password_policy_overrides(&cfg, &registry)?;
         apply_auth_config_overrides(&cfg, &registry)?;
         let rules = Arc::new(RulesetSlot::new(load_rules(&cfg)?));

@@ -912,7 +912,7 @@ impl fmt::Debug for OidcProviderConfig {
 }
 
 /// A project or tenant inbound SAML provider configuration.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct InboundSamlProviderConfig {
     /// Provider configuration ID.
     pub id: String,
@@ -932,6 +932,31 @@ pub struct InboundSamlProviderConfig {
     pub sp_entity_id: String,
     /// SAML assertion callback URI.
     pub callback_uri: String,
+}
+
+impl fmt::Debug for InboundSamlProviderConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("InboundSamlProviderConfig")
+            .field("id", &self.id)
+            .field("display_name", &self.display_name)
+            .field("enabled", &self.enabled)
+            .field("idp_entity_id", &self.idp_entity_id)
+            .field("sso_url", &self.sso_url)
+            .field("idp_certificates", &"<redacted>")
+            .field("sign_request", &self.sign_request)
+            .field("sp_entity_id", &self.sp_entity_id)
+            .field("callback_uri", &self.callback_uri)
+            .finish()
+    }
+}
+
+/// Startup declarations for custom provider resources. None leaves a kind undeclared; an empty vector explicitly replaces that kind with no resources.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ProviderConfigSeeds {
+    /// OIDC resources in declared creation order; client secrets are redacted in Debug.
+    pub oidc: Option<Vec<OidcProviderConfig>>,
+    /// SAML resources in declared creation order; certificate bodies are redacted in Debug.
+    pub saml: Option<Vec<InboundSamlProviderConfig>>,
 }
 
 /// A project or tenant configuration of a default supported identity provider (Identity Platform
@@ -1304,6 +1329,8 @@ pub struct AuthStore {
     /// Deterministic, local-only sign-up quota state. Admin/import paths do not use it unless
     /// their caller explicitly requests a reservation through the typed API.
     signup_quota: SignupQuota,
+    /// Explicit startup declarations, independent of live Admin changes.
+    provider_config_seeds: ProviderConfigSeeds,
     /// OAuth/OIDC provider configurations in this namespace.
     oidc_configs: BTreeMap<String, OidcProviderConfig>,
     /// OAuth/OIDC configuration IDs in creation order.
@@ -1645,6 +1672,7 @@ impl AuthStore {
             mfa_seed: None,
             stored_members: crate::config_members::StoredConfigMembers::default(),
             signup_quota: SignupQuota::default(),
+            provider_config_seeds: ProviderConfigSeeds::default(),
             oidc_configs: BTreeMap::new(),
             oidc_order: Vec::new(),
             saml_configs: BTreeMap::new(),
@@ -2423,6 +2451,57 @@ impl AuthStore {
         self.oidc_order
             .iter()
             .filter_map(|id| self.oidc_configs.get(id))
+    }
+
+    /// The declared provider resources, independent of current Admin changes.
+    #[must_use]
+    pub const fn provider_config_seeds(&self) -> &ProviderConfigSeeds {
+        &self.provider_config_seeds
+    }
+
+    /// Installs a validated declaration and replaces only its declared kinds. Duplicate IDs are checked across both collections before anything changes; field acceptance belongs to the shared Admin adapter.
+    pub fn set_provider_config_seeds(
+        &mut self,
+        seeds: ProviderConfigSeeds,
+    ) -> Result<(), &'static str> {
+        if seeds.oidc.as_ref().is_some_and(|configs| {
+            configs
+                .iter()
+                .map(|config| &config.id)
+                .collect::<BTreeSet<_>>()
+                .len()
+                != configs.len()
+        }) || seeds.saml.as_ref().is_some_and(|configs| {
+            configs
+                .iter()
+                .map(|config| &config.id)
+                .collect::<BTreeSet<_>>()
+                .len()
+                != configs.len()
+        }) {
+            return Err("duplicate provider ID");
+        }
+        self.provider_config_seeds = seeds;
+        self.restore_provider_config_seeds();
+        Ok(())
+    }
+
+    /// Restores declared collections in their original order, preserving undeclared kinds and built-in providers.
+    pub fn restore_provider_config_seeds(&mut self) {
+        if let Some(configs) = &self.provider_config_seeds.oidc {
+            self.oidc_order = configs.iter().map(|config| config.id.clone()).collect();
+            self.oidc_configs = configs
+                .iter()
+                .map(|config| (config.id.clone(), config.clone()))
+                .collect();
+        }
+        if let Some(configs) = &self.provider_config_seeds.saml {
+            self.saml_order = configs.iter().map(|config| config.id.clone()).collect();
+            self.saml_configs = configs
+                .iter()
+                .map(|config| (config.id.clone(), config.clone()))
+                .collect();
+        }
     }
 
     /// Gets one OAuth/OIDC configuration by ID.
@@ -5567,6 +5646,7 @@ impl AuthSnapshot {
         copy.pending_idp = PendingIdpCache::default();
         // Provider configurations are process-local control-plane state. In particular,
         // OIDC client secrets must never become transferable snapshot material.
+        copy.provider_config_seeds = ProviderConfigSeeds::default();
         copy.oidc_configs.clear();
         copy.oidc_order.clear();
         copy.saml_configs.clear();
@@ -5638,6 +5718,9 @@ impl AuthSnapshot {
         restored
             .authorized_domains_seed
             .clone_from(&live.authorized_domains_seed);
+        restored
+            .provider_config_seeds
+            .clone_from(&live.provider_config_seeds);
         restored.oidc_configs = live.oidc_configs.clone();
         restored.oidc_order.clone_from(&live.oidc_order);
         restored.saml_configs = live.saml_configs.clone();
@@ -5936,6 +6019,7 @@ fn generated_tenant_id(display_name: Option<&str>, sequence: u64) -> String {
 #[derive(Debug)]
 pub struct AuthRegistry {
     default_project: String,
+    new_project_provider_config_seeds: Mutex<ProviderConfigSeeds>,
     project_numbers: BTreeMap<String, u64>,
     default: SharedAuthStore,
     scoped_refresh_routing: bool,
@@ -6173,6 +6257,7 @@ impl AuthRegistry {
         });
         Self {
             default_project: default_project.to_owned(),
+            new_project_provider_config_seeds: Mutex::new(ProviderConfigSeeds::default()),
             project_numbers: BTreeMap::new(),
             default,
             scoped_refresh_routing,
@@ -6196,6 +6281,22 @@ impl AuthRegistry {
             #[cfg(test)]
             refresh_token_scans: AtomicU64::new(0),
         }
+    }
+
+    /// Records the daemon declaration for future projects, independently of the default store's live resources.
+    pub fn set_new_project_provider_config_seeds(&self, seeds: ProviderConfigSeeds) {
+        if let Ok(mut declared) = self.new_project_provider_config_seeds.lock() {
+            *declared = seeds;
+        }
+    }
+
+    /// Returns the declaration future projects inherit.
+    #[must_use]
+    pub fn new_project_provider_config_seeds(&self) -> ProviderConfigSeeds {
+        self.new_project_provider_config_seeds
+            .lock()
+            .map(|seeds| seeds.clone())
+            .unwrap_or_default()
     }
 
     /// The default project.
@@ -6282,6 +6383,7 @@ impl AuthRegistry {
             .ok()?
             .get(project)
             .copied();
+        let provider_seeds = self.new_project_provider_config_seeds.lock().ok()?.clone();
         let (policy, config, quota, signer) = {
             let default = self.default.lock().ok()?;
             (
@@ -6309,6 +6411,7 @@ impl AuthRegistry {
         if let Some(epoch) = lifecycle_epoch {
             store.set_lifecycle_epoch(epoch);
         }
+        store.set_provider_config_seeds(provider_seeds).ok()?;
         store.set_config(explicit_config.map_or(config, |patch| patch.apply_to(config)));
         store.set_signup_quota_config(quota).ok()?;
         store.set_project_number(self.project_numbers.get(project).copied());
@@ -6597,6 +6700,7 @@ impl AuthRegistry {
         // configuration (a no-op without one, as for the rest of the project configuration).
         default.restore_mfa_seed();
         default.restore_authorized_domains_seed();
+        default.restore_provider_config_seeds();
         for store in &mut routed_guards {
             store.clear();
         }
@@ -6731,6 +6835,7 @@ impl AuthRegistry {
         parent.clear();
         parent.restore_mfa_seed();
         parent.restore_authorized_domains_seed();
+        parent.restore_provider_config_seeds();
         for store in &mut tenant_guards {
             store.clear();
         }
@@ -12786,5 +12891,43 @@ mod quota_snapshot_tests {
             (0, 0),
             "tenant quota usage must remain isolated across tenant restore"
         );
+    }
+}
+
+#[cfg(test)]
+mod provider_seed_snapshot_tests {
+    use super::{AuthSnapshot, AuthStore};
+    use crate::mfa::TotpPolicy;
+    use fireemu_core_types::determinism::SplitMix64;
+    #[test]
+    fn provider_seed_snapshot_capture_contains_neither_declaration_nor_credentials() {
+        let mut source = AuthStore::new("demo-app", SplitMix64::new(1), TotpPolicy::default());
+        source
+            .set_provider_config_seeds(super::ProviderConfigSeeds {
+                oidc: Some(vec![super::OidcProviderConfig {
+                    id: "oidc.seed".into(),
+                    display_name: None,
+                    enabled: true,
+                    client_id: "client".into(),
+                    issuer: "https://issuer.test".into(),
+                    client_secret: Some("secret-only-in-live-store".into()),
+                    response_type: super::OAuthResponseType {
+                        id_token: true,
+                        code: false,
+                        token: false,
+                    },
+                }]),
+                saml: Some(vec![]),
+            })
+            .unwrap();
+        let snapshot = AuthSnapshot::capture(&source);
+        assert_eq!(
+            snapshot.0.provider_config_seeds,
+            super::ProviderConfigSeeds::default()
+        );
+        assert!(snapshot.0.oidc_configs.is_empty());
+        assert!(source.provider_config_seeds.oidc.as_ref().unwrap()[0]
+            .client_secret
+            .is_some());
     }
 }

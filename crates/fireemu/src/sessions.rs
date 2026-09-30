@@ -122,6 +122,9 @@ impl ProjectHooks for Projects {
         if let Some(mfa) = self.registry.new_project_mfa_seed() {
             store.set_mfa_seed(mfa);
         }
+        store
+            .set_provider_config_seeds(self.registry.new_project_provider_config_seeds())
+            .map_err(|error| format!("auth.providers: {error}"))?;
         if let Ok(default) = self.registry.default_store().lock() {
             store.set_config(default.config());
             store

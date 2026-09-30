@@ -47,8 +47,10 @@ export function configForCase(entry = CASE) {
     requireThat(
       entry.indexFilePath === "conformance/firestore.indexes.json" &&
         entry.indexFileBlob === "7c1ef93940752d8981ae29cfea40c210f27560f8" &&
-        entry.indexFileSha256 === "sha256-8a4d4bd7a72c3ce2bed4e0f8c4adc0cdb3a7c428477578295e44a11ae063d01c" &&
-        entry.indexFilesDigest === "sha256-ad4a66f22bbfb41fd0a2e7585ed0cbd82f88e854a915049ee724e9f2afd4d01a" &&
+        entry.indexFileSha256 ===
+          "sha256-8a4d4bd7a72c3ce2bed4e0f8c4adc0cdb3a7c428477578295e44a11ae063d01c" &&
+        entry.indexFilesDigest ===
+          "sha256-ad4a66f22bbfb41fd0a2e7585ed0cbd82f88e854a915049ee724e9f2afd4d01a" &&
         entry.indexFileBytes === 2484,
       "index-file-config-pin",
     );
@@ -274,12 +276,20 @@ async function replay(prepared, options, directory) {
               artifactProfile: build?.artifactProfile,
               runtimeSourceCommit: build?.runtimeSourceCommit,
               sourceInputsDigest: build?.sourceInputsDigest,
-              runDirectory: { path: directory, dev: info.dev, ino: info.ino, mode: info.mode & 0o777 },
+              runDirectory: {
+                path: directory,
+                dev: info.dev,
+                ino: info.ino,
+                mode: info.mode & 0o777,
+              },
               import: null,
               exportOnExit: null,
             };
             const bytes = Buffer.from(JSON.stringify(receipt) + "\n");
-            writeFileSync(join(directory, "launch-receipt.json"), bytes, { flag: "wx", mode: 0o600 });
+            writeFileSync(join(directory, "launch-receipt.json"), bytes, {
+              flag: "wx",
+              mode: 0o600,
+            });
           }
         : null,
   });
@@ -303,11 +313,11 @@ async function replay(prepared, options, directory) {
         )
       : entry.adapter === "commit-transform"
         ? await commitTransformSourceUnchanged(
-          options.repo,
-          prepared.entry,
-          prepared.state,
-          prepared.provenance.implementation.adapterSha256,
-        )
+            options.repo,
+            prepared.entry,
+            prepared.state,
+            prepared.provenance.implementation.adapterSha256,
+          )
         : await g0SourceUnchanged(
             options.repo,
             prepared.state,
@@ -330,7 +340,11 @@ async function replay(prepared, options, directory) {
       listenerClosed: portClosed,
     },
     ...(entry.adapter === "g0"
-      ? { launchReceiptSha256: sha256(await readSource(directory, "launch-receipt.json", 128 * 1024)) }
+      ? {
+          launchReceiptSha256: sha256(
+            await readSource(directory, "launch-receipt.json", 128 * 1024),
+          ),
+        }
       : {}),
     cleanup: session.cleanup,
     artifact,

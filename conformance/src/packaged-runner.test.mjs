@@ -17,17 +17,17 @@ const withTree = (build, check) => {
 };
 
 test("the candidates are beside the real binary, then one directory above it", () => {
-  assert.deepEqual(packagedRunnerCandidates("/pkg/bin/fireemu", (path) => path), [
-    "/pkg/bin/runner-node/index.mjs",
-    "/pkg/runner-node/index.mjs",
-  ]);
+  assert.deepEqual(
+    packagedRunnerCandidates("/pkg/bin/fireemu", (path) => path),
+    ["/pkg/bin/runner-node/index.mjs", "/pkg/runner-node/index.mjs"],
+  );
 });
 
 test("the candidates follow a symlink to the real binary", () => {
-  assert.deepEqual(packagedRunnerCandidates("/pkg/.bin/fireemu", () => "/real/bin/fireemu"), [
-    "/real/bin/runner-node/index.mjs",
-    "/real/runner-node/index.mjs",
-  ]);
+  assert.deepEqual(
+    packagedRunnerCandidates("/pkg/.bin/fireemu", () => "/real/bin/fireemu"),
+    ["/real/bin/runner-node/index.mjs", "/real/runner-node/index.mjs"],
+  );
 });
 
 test("a runner script beside the binary is found; a checkout runner is not", () => {

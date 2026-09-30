@@ -253,9 +253,8 @@ test("AUTH-ACCOUNT A12 and final regression bind to the current attested artifac
   );
   assert.equal(regression.evidence.sourceCommit, "9f012a27b5ed5596b5da0af6891f6c2fe9e25393");
   assert.equal(
-    closure.conditions.find(
-      ({ conditionId }) => conditionId === "AUTH-ACCOUNT/closure-review",
-    ).status,
+    closure.conditions.find(({ conditionId }) => conditionId === "AUTH-ACCOUNT/closure-review")
+      .status,
     "VERIFIED",
   );
 });

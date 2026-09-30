@@ -543,7 +543,9 @@ export function localSetupDifferences(actual) {
   if (!setup || typeof setup !== "object") return ["localSetup: the export names no local setup"];
   const differences = [];
   if (setup.digest !== localSetupDigest())
-    differences.push(`localSetup.digest: expected ${localSetupDigest()} got ${brief(setup.digest)}`);
+    differences.push(
+      `localSetup.digest: expected ${localSetupDigest()} got ${brief(setup.digest)}`,
+    );
   if (!isDeepStrictEqual(setup.actions, EXPECTED_ACTIONS))
     differences.push(
       `localSetup.actions: expected ${brief(EXPECTED_ACTIONS)} got ${brief(setup.actions)}`,

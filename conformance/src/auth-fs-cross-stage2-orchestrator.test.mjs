@@ -382,8 +382,18 @@ test("each native stream's end is kept with its time since opening and against i
   });
   const program = {
     steps: [
-      { do: "stream", name: "grpc-a", as: "a", targets: [{ targetId: 1, document: "afc2-owned/a" }] },
-      { do: "stream", name: "grpc-b", as: "b", targets: [{ targetId: 1, document: "afc2-owned/b" }] },
+      {
+        do: "stream",
+        name: "grpc-a",
+        as: "a",
+        targets: [{ targetId: 1, document: "afc2-owned/a" }],
+      },
+      {
+        do: "stream",
+        name: "grpc-b",
+        as: "b",
+        targets: [{ targetId: 1, document: "afc2-owned/b" }],
+      },
     ],
   };
   const interpreter = createInterpreter(program, {
@@ -500,7 +510,13 @@ test("a resume probe reopens a listener from its resume token, as its own and as
   const resumed = [
     { kind: "targetChange", type: "ADD", targetIds: [1], cause: null, resumeToken: false },
     { kind: "boundary", resumeToken: false },
-    { kind: "documentChange", doc: "afc2-open/resume", n: "1", targetIds: [1], removedTargetIds: [] },
+    {
+      kind: "documentChange",
+      doc: "afc2-open/resume",
+      n: "1",
+      targetIds: [1],
+      removedTargetIds: [],
+    },
     { kind: "targetChange", type: "CURRENT", targetIds: [1], cause: null, resumeToken: true },
     { kind: "boundary", resumeToken: true },
   ];
@@ -509,7 +525,13 @@ test("a resume probe reopens a listener from its resume token, as its own and as
     conditions: ["X"],
     first: [
       { kind: "targetChange", type: "ADD", targetIds: [1], cause: null, resumeToken: false },
-      { kind: "documentChange", doc: "afc2-open/resume", n: "0", targetIds: [1], removedTargetIds: [] },
+      {
+        kind: "documentChange",
+        doc: "afc2-open/resume",
+        n: "0",
+        targetIds: [1],
+        removedTargetIds: [],
+      },
       { kind: "targetChange", type: "CURRENT", targetIds: [1], cause: null, resumeToken: false },
       { kind: "boundary", resumeToken: true },
     ],

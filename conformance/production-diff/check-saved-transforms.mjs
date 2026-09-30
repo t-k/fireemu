@@ -13,7 +13,9 @@ const here = dirname(fileURLToPath(import.meta.url));
 try {
   if (process.argv.length > 3) throw new Error("invalid-arguments");
   const repo = resolve(process.argv[2] ?? resolve(here, "../.."));
-  const fixture = JSON.parse(await fs.readFile(resolve(here, "test/fixtures/saved-transforms.json"), "utf8"));
+  const fixture = JSON.parse(
+    await fs.readFile(resolve(here, "test/fixtures/saved-transforms.json"), "utf8"),
+  );
   const prepared = await prepare(repo, TRANSFORMS_CASE);
   for (const key of ["matrixPath", "matrixBlob", "corpusPath", "corpusBlob", "observedSource"])
     assert.equal(fixture.source[key], TRANSFORMS_CASE[key]);
@@ -21,26 +23,43 @@ try {
   assert.equal(fixture.newProductionObservation, false);
   const actual = {
     [TRANSFORMS_CASE.programId]: {
-      steps: Object.fromEntries(Object.entries(fixture.production.programs[0].steps)
-        .map(([id, row]) => [id, row.production])),
+      steps: Object.fromEntries(
+        Object.entries(fixture.production.programs[0].steps).map(([id, row]) => [
+          id,
+          row.production,
+        ]),
+      ),
     },
   };
   const comparison = compareRecords({ ...prepared, actual });
   assert.equal(comparison.verdict, "MATCH");
   assert.deepEqual(comparison.counts, { match: 18, mismatch: 0, indeterminate: 0 });
-  console.log(JSON.stringify({
-    caseId: TRANSFORMS_CASE.id,
-    fixtureJoinValidated: true,
-    repository: prepared.state,
-    historicalSource: TRANSFORMS_CASE.observedSource,
-    programDigest: digestJson(prepared.program),
-    oracleProjectionDigest: prepared.provenance.oracle.projectionDigest,
-    checkedDecisionRows: comparison.rows.length,
-    nativeExecuted: false,
-    productionExecuted: false,
-    parentPromotion: false,
-  }, null, 2));
+  console.log(
+    JSON.stringify(
+      {
+        caseId: TRANSFORMS_CASE.id,
+        fixtureJoinValidated: true,
+        repository: prepared.state,
+        historicalSource: TRANSFORMS_CASE.observedSource,
+        programDigest: digestJson(prepared.program),
+        oracleProjectionDigest: prepared.provenance.oracle.projectionDigest,
+        checkedDecisionRows: comparison.rows.length,
+        nativeExecuted: false,
+        productionExecuted: false,
+        parentPromotion: false,
+      },
+      null,
+      2,
+    ),
+  );
 } catch (error) {
-  console.error(JSON.stringify({ fixtureJoinValidated: false, code: safeCode(error), nativeExecuted: false, productionExecuted: false }));
+  console.error(
+    JSON.stringify({
+      fixtureJoinValidated: false,
+      code: safeCode(error),
+      nativeExecuted: false,
+      productionExecuted: false,
+    }),
+  );
   process.exitCode = 2;
 }

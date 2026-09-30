@@ -26,14 +26,8 @@ test("current AUTH-ACCOUNT comparison and inherited regression cover the saved f
 
   for (const comparison of comparisons) {
     assert.equal(comparison.kind, "auth-account-comparison-v1");
-    assert.equal(
-      comparison.fixtureSha256,
-      createHash("sha256").update(fixtureText).digest("hex"),
-    );
-    assert.deepEqual(
-      comparison.rows.map(({ row }) => row).toSorted(),
-      expectedRows.toSorted(),
-    );
+    assert.equal(comparison.fixtureSha256, createHash("sha256").update(fixtureText).digest("hex"));
+    assert.deepEqual(comparison.rows.map(({ row }) => row).toSorted(), expectedRows.toSorted());
     assert.deepEqual(comparison.summary, { MATCH: expectedRows.length });
     assert.ok(comparison.rows.every(({ status }) => status === "MATCH"));
     assert.equal(
@@ -51,24 +45,34 @@ test("current AUTH-ACCOUNT comparison and inherited regression cover the saved f
   assert.match(execution.buildReceiptSha256, /^[0-9a-f]{64}$/);
   assert.equal(execution.runId, "auth-a12-attested-recompare-20260924T124006Z");
   assert.deepEqual(
-    execution.commands.map(({ argv, selector, rowCount, fixtureSha256, sanitizedExportSha256 }) => ({
-      argv,
-      selector,
-      rowCount,
-      fixtureSha256,
-      sanitizedExportSha256,
-    })),
+    execution.commands.map(
+      ({ argv, selector, rowCount, fixtureSha256, sanitizedExportSha256 }) => ({
+        argv,
+        selector,
+        rowCount,
+        fixtureSha256,
+        sanitizedExportSha256,
+      }),
+    ),
     [
       {
         argv: ["node", "src/auth-account/run.mjs", "check"],
-        selector: { environment: "AUTH_ACCOUNT_PROGRAMS", state: "unset", meaning: "all corpus programs" },
+        selector: {
+          environment: "AUTH_ACCOUNT_PROGRAMS",
+          state: "unset",
+          meaning: "all corpus programs",
+        },
         rowCount: 631,
         fixtureSha256: "58ce3d60402cc096c5d80a68fc198c993c93b6dfe2b0f07e466ac9dc65903a88",
         sanitizedExportSha256: "ac7bfb7faf098cf45a590be10151d405d364e9a979ac07232bacdaef466b804b",
       },
       {
         argv: ["node", "src/auth-credential/run.mjs", "check"],
-        selector: { environment: "AUTH_CREDENTIAL_PROGRAMS", state: "unset", meaning: "all corpus programs" },
+        selector: {
+          environment: "AUTH_CREDENTIAL_PROGRAMS",
+          state: "unset",
+          meaning: "all corpus programs",
+        },
         rowCount: 222,
         fixtureSha256: "72bee92e3f5c7890fd71f18471335c09955ff880e9d114e13643cdc0fc91a884",
         sanitizedExportSha256: "114089e4e0cb660ae8bdd2ac5d3b69c867aa8c164c34a79efc4e2e03301f3e5c",

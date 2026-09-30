@@ -1080,7 +1080,12 @@ const PROGRAMS_RAW = [
       // next rows check: a (default) created in this run, with no document and no index. Both
       // sides run them, so ids are numbered alike, but they are not compared: what they find
       // is what the previous run left.
-      { id: "prepare-delete", method: "DELETE", path: "v1/{project}/databases/(default)", compare: false },
+      {
+        id: "prepare-delete",
+        method: "DELETE",
+        path: "v1/{project}/databases/(default)",
+        compare: false,
+      },
       {
         ...pollPath("prepare-absent", "v1/{project}/databases/(default)", "notFound", {
           max: 20,
@@ -1121,16 +1126,26 @@ const PROGRAMS_RAW = [
       }),
       // A deleted (default) keeps serving its data for a while (C10): read until it stops.
       // The seeded document reads back while it serves and NOT_FOUND once it stops.
-      pollPath("document-without-default", "v1/{project}/databases/(default)/documents/items/a", "notFound", {
-        max: 40,
-        intervalMs: 15_000,
-      }),
-      pollPath("query-without-default", "v1/{project}/databases/(default)/documents:runQuery", "httpError", {
-        max: 40,
-        intervalMs: 15_000,
-        method: "POST",
-        body: query("(default)"),
-      }),
+      pollPath(
+        "document-without-default",
+        "v1/{project}/databases/(default)/documents/items/a",
+        "notFound",
+        {
+          max: 40,
+          intervalMs: 15_000,
+        },
+      ),
+      pollPath(
+        "query-without-default",
+        "v1/{project}/databases/(default)/documents:runQuery",
+        "httpError",
+        {
+          max: 40,
+          intervalMs: 15_000,
+          method: "POST",
+          body: query("(default)"),
+        },
+      ),
       get("list-without-default", "v1/{project}/databases", { filterDatabases: true }),
       // Its index list is served for a while too, then refused (C10): read until it is.
       pollPath(

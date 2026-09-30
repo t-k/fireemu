@@ -6,11 +6,18 @@ import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { publish, publishJson } from "./io.mjs";
 import { requireThat, digestJson, safeCode } from "./core.mjs";
-import { canonicalG0Origins, g0SessionPythonSource, readOwnedProcessArgv, resolveLockedUvCommand } from "./g0.mjs";
+import {
+  canonicalG0Origins,
+  g0SessionPythonSource,
+  readOwnedProcessArgv,
+  resolveLockedUvCommand,
+} from "./g0.mjs";
 
 const directory = process.env.PILOT_RUN_DIR;
 requireThat(typeof directory === "string", "missing-run-directory");
-const root = resolve(process.env.PILOT_REPO ?? resolve(dirname(fileURLToPath(import.meta.url)), "../.."));
+const root = resolve(
+  process.env.PILOT_REPO ?? resolve(dirname(fileURLToPath(import.meta.url)), "../.."),
+);
 const inventoryProject = resolve(root, "tools/compat-inventory");
 const plan = JSON.parse(await fs.readFile(join(directory, "program.json"), "utf8"));
 const canonicalProgramDigest = process.env.PILOT_PROGRAM_DIGEST;
@@ -21,9 +28,15 @@ requireThat(receiptInfo.isFile() && !receiptInfo.isSymbolicLink(), "g0-launch-re
 const receiptBytes = await fs.readFile(receiptPath);
 const receipt = JSON.parse(receiptBytes);
 const runInfo = await fs.stat(directory);
-const binaryHash = createHash("sha256").update(await fs.readFile(join(directory, "fireemu"))).digest("hex");
-const configHash = createHash("sha256").update(await fs.readFile(join(directory, "fireemu.json"))).digest("hex");
-const rulesHash = createHash("sha256").update(await fs.readFile(join(directory, "firestore.rules"))).digest("hex");
+const binaryHash = createHash("sha256")
+  .update(await fs.readFile(join(directory, "fireemu")))
+  .digest("hex");
+const configHash = createHash("sha256")
+  .update(await fs.readFile(join(directory, "fireemu.json")))
+  .digest("hex");
+const rulesHash = createHash("sha256")
+  .update(await fs.readFile(join(directory, "firestore.rules")))
+  .digest("hex");
 function observedArgv(pid) {
   return readOwnedProcessArgv(pid);
 }
@@ -47,7 +60,8 @@ requireThat(
   "g0-launch-receipt-invalid",
 );
 requireThat(
-  Array.isArray(launcherArgv) && JSON.stringify(launcherArgv) === JSON.stringify([receipt.command, ...receipt.args]),
+  Array.isArray(launcherArgv) &&
+    JSON.stringify(launcherArgv) === JSON.stringify([receipt.command, ...receipt.args]),
   "g0-launch-argv-invalid",
 );
 const expectedProvenance = {
@@ -57,14 +71,27 @@ const expectedProvenance = {
   sourceInputsDigest: process.env.G0_SOURCE_INPUTS_DIGEST,
 };
 requireThat(
-  Object.values(expectedProvenance).every((value) => typeof value === "string" && value.length > 0) &&
-    Object.entries(expectedProvenance).every(([key, value]) => receipt[key] === value),
+  Object.values(expectedProvenance).every(
+    (value) => typeof value === "string" && value.length > 0,
+  ) && Object.entries(expectedProvenance).every(([key, value]) => receipt[key] === value),
   "g0-build-provenance-invalid",
 );
 const canonicalOrigins = canonicalG0Origins(process.env);
 const pythonCommand = resolveLockedUvCommand();
 const python = g0SessionPythonSource();
-const pythonArgs = ["run", "--project", inventoryProject, "--locked", "--python", "3.12", "python", "-c", python, root, directory];
+const pythonArgs = [
+  "run",
+  "--project",
+  inventoryProject,
+  "--locked",
+  "--python",
+  "3.12",
+  "python",
+  "-c",
+  python,
+  root,
+  directory,
+];
 const freshness = {
   schema: "fireemu-g0-freshness-v1",
   parentPid: receipt.pid,
@@ -86,15 +113,11 @@ const freshness = {
 };
 await publishJson(join(directory, "freshness-handshake.json"), freshness);
 const result = await new Promise((done) => {
-  const child = spawn(
-    pythonCommand,
-    pythonArgs,
-    {
-      cwd: root,
-      env: { ...process.env, PYTHONUNBUFFERED: "1" },
-      stdio: ["ignore", "ignore", "pipe"],
-    },
-  );
+  const child = spawn(pythonCommand, pythonArgs, {
+    cwd: root,
+    env: { ...process.env, PYTHONUNBUFFERED: "1" },
+    stdio: ["ignore", "ignore", "pipe"],
+  });
   let stderrBytes = 0;
   let stderrTruncated = false;
   const stderrChunks = [];
@@ -124,12 +147,19 @@ const result = await new Promise((done) => {
         truncated: stderrTruncated,
       };
     } catch {
-      stderrArtifact = { path: "python-stderr.log", bytes: 0, sha256: null, truncated: stderrTruncated };
+      stderrArtifact = {
+        path: "python-stderr.log",
+        bytes: 0,
+        sha256: null,
+        truncated: stderrTruncated,
+      };
     }
     done({ code, error, stage, stderrBytes, stderrTruncated, stderrArtifact });
   };
   child.once("error", () => complete(null, "python-start-failed", "python-start"));
-  child.once("close", (code) => complete(code, code === 0 ? null : "shared-g0-execution-failed", "python-g0-execute"));
+  child.once("close", (code) =>
+    complete(code, code === 0 ? null : "shared-g0-execution-failed", "python-g0-execute"),
+  );
 });
 if (result.code !== 0) {
   await publishJson(join(directory, "session-result.json"), {
@@ -158,12 +188,17 @@ const batch = JSON.parse(await fs.readFile(join(directory, "batch", "result.json
 const binary = await fs.readFile(join(directory, "fireemu"));
 const local = {
   batch,
-  executionCommit: (await new Promise((done) => {
-    const child = spawn("git", ["-C", root, "rev-parse", "HEAD"], { stdio: ["ignore", "pipe", "ignore"] });
-    const chunks = [];
-    child.stdout.on("data", (chunk) => chunks.push(chunk));
-    child.once("close", (code) => done(code === 0 ? Buffer.concat(chunks).toString().trim() : null));
-  })) ?? "",
+  executionCommit:
+    (await new Promise((done) => {
+      const child = spawn("git", ["-C", root, "rev-parse", "HEAD"], {
+        stdio: ["ignore", "pipe", "ignore"],
+      });
+      const chunks = [];
+      child.stdout.on("data", (chunk) => chunks.push(chunk));
+      child.once("close", (code) =>
+        done(code === 0 ? Buffer.concat(chunks).toString().trim() : null),
+      );
+    })) ?? "",
   runtimeArtifactSha256: createHash("sha256").update(binary).digest("hex"),
 };
 await publishJson(join(directory, "local.json"), local);
@@ -172,7 +207,9 @@ await publishJson(join(directory, "session-result.json"), {
   schema: "fireemu-production-diff-session-v1",
   caseId: process.env.PILOT_CASE_ID,
   programDigest: canonicalProgramDigest,
-  localSha256: createHash("sha256").update(JSON.stringify(local, null, 2) + "\n").digest("hex"),
+  localSha256: createHash("sha256")
+    .update(JSON.stringify(local, null, 2) + "\n")
+    .digest("hex"),
   completed: result.code === 0 && batch.completed,
   failure: result.error,
   cleanup,

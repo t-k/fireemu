@@ -100,7 +100,9 @@ test("every promoted parent binds its comparisons to the release binary", () => 
 test("every comparison and regression of a promoted parent is in its integrated regression", () => {
   const files = readdirSync(repo(EVIDENCE));
   for (const parent of PARENTS) {
-    const covered = new Set(closure(parent).integratedRegression.comparisons.map(({ path }) => path));
+    const covered = new Set(
+      closure(parent).integratedRegression.comparisons.map(({ path }) => path),
+    );
     for (const name of files.filter(
       (file) =>
         file.startsWith(`${parent}-`) &&

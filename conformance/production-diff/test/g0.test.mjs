@@ -4,7 +4,14 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { test } from "node:test";
-import { canonicalG0Origins, compareG0, g0SessionPythonSource, readOwnedProcessArgv, resolveLockedUvCommand, validateG0Origins } from "../g0.mjs";
+import {
+  canonicalG0Origins,
+  compareG0,
+  g0SessionPythonSource,
+  readOwnedProcessArgv,
+  resolveLockedUvCommand,
+  validateG0Origins,
+} from "../g0.mjs";
 import { verifyG0ProgramDigest } from "../pilot.mjs";
 import { digestJson } from "../core.mjs";
 import { G0_CASE } from "../registry.mjs";
@@ -47,10 +54,17 @@ test("G0 origin binding requires both real loopback services", () => {
   );
   for (const env of [
     { FIRESTORE_EMULATOR_HOST: "127.0.0.1:18080" },
-    { FIRESTORE_EMULATOR_HOST: "example.invalid:18080", FIREBASE_AUTH_EMULATOR_HOST: "127.0.0.1:19090" },
-  ]) assert.throws(() => validateG0Origins(env), /g0-owned-origin-required/);
+    {
+      FIRESTORE_EMULATOR_HOST: "example.invalid:18080",
+      FIREBASE_AUTH_EMULATOR_HOST: "127.0.0.1:19090",
+    },
+  ])
+    assert.throws(() => validateG0Origins(env), /g0-owned-origin-required/);
   assert.deepEqual(
-    canonicalG0Origins({ FIRESTORE_EMULATOR_HOST: "127.0.0.1:18080", FIREBASE_AUTH_EMULATOR_HOST: "127.0.0.1:19090" }),
+    canonicalG0Origins({
+      FIRESTORE_EMULATOR_HOST: "127.0.0.1:18080",
+      FIREBASE_AUTH_EMULATOR_HOST: "127.0.0.1:19090",
+    }),
     { firestore: "http://127.0.0.1:18080", auth: "http://127.0.0.1:19090" },
   );
 });
@@ -96,9 +110,10 @@ test("G0 session rejects stale or substituted launcher receipts before Python di
     "receipt.configSha256 === configHash",
     "receipt.rulesSha256 === rulesHash",
     "receipt.runDirectory?.ino === runInfo.ino",
-    "!receipt.args.includes(\"--import\")",
+    '!receipt.args.includes("--import")',
     "receipt.import === null",
-  ]) assert.ok(source.includes(token), token);
+  ])
+    assert.ok(source.includes(token), token);
 });
 
 test("G0 process identity uses the OS-native exact argv of a real owned child", async () => {
@@ -121,7 +136,14 @@ test("G0 session startup resolves the locked uv executable through its real laun
 test("G0 session results retain the validated owned Firestore endpoint for closure checks", () => {
   const source = readFileSync(new URL("../g0-session.mjs", import.meta.url), "utf8");
   assert.equal((source.match(/endpoint: canonicalOrigins\.firestore/g) ?? []).length, 2);
-  assert.throws(() => canonicalG0Origins({ FIRESTORE_EMULATOR_HOST: "example.invalid:8080", FIREBASE_AUTH_EMULATOR_HOST: "127.0.0.1:19090" }), /g0-owned-origin-required/);
+  assert.throws(
+    () =>
+      canonicalG0Origins({
+        FIRESTORE_EMULATOR_HOST: "example.invalid:8080",
+        FIREBASE_AUTH_EMULATOR_HOST: "127.0.0.1:19090",
+      }),
+    /g0-owned-origin-required/,
+  );
 });
 
 test("locked uv Python startup failure is retained as bounded private diagnostics before Gate or wire startup", async () => {
@@ -163,7 +185,9 @@ const nativeG0PathEnvironment = [
 ];
 export function nativeG0ReadyFor(env) {
   return (
-    nativeG0PathEnvironment.every((name) => typeof env[name] === "string" && env[name].startsWith("/")) &&
+    nativeG0PathEnvironment.every(
+      (name) => typeof env[name] === "string" && env[name].startsWith("/"),
+    ) &&
     typeof env.G0_ARTIFACT_PROFILE === "string" &&
     /^[a-z0-9][a-z0-9-]{1,80}$/.test(env.G0_ARTIFACT_PROFILE)
   );
@@ -184,41 +208,62 @@ test("native G0 readiness separates absolute inputs from the registered profile 
   assert.equal(nativeG0ReadyFor({ ...valid, G0_NATIVE_OUTPUT_ROOT: "relative" }), false);
 });
 
-test("G0 opt-in native handoff reaches the real worker and closes every recovery slot", { skip: !nativeG0Ready }, async () => {
-  assert.equal(existsSync(process.env.G0_NATIVE_OUTPUT_ROOT), true, "native output parent must exist");
-  const output = join(process.env.G0_NATIVE_OUTPUT_ROOT, `g0-native-${process.pid}-${Date.now()}`);
-  assert.equal(existsSync(output), false);
-  const pilot = spawn(
-    process.execPath,
-    [
-      resolve(process.cwd(), "conformance/production-diff/pilot.mjs"),
-      "replay",
-      "--case",
-      "fs.g0.saved-68012694.v1",
-      "--binary",
-      process.env.G0_RETAINED_ARTIFACT,
-      "--out",
-      output,
-      "--timeout",
-      "600",
-    ],
-    { cwd: process.cwd(), env: process.env, stdio: ["ignore", "ignore", "pipe"] },
-  );
-  let stderrBytes = 0;
-  let stderrTruncated = false;
-  pilot.stderr.on("data", (chunk) => {
-    stderrBytes += chunk.length;
-    if (stderrBytes > 64 * 1024) stderrTruncated = true;
-  });
-  const exitCode = await new Promise((resolveExit) => pilot.once("close", resolveExit));
-  assert.equal(exitCode, 0, `native G0 replay failed; retained output: ${output}; stderrBytes=${stderrBytes}; stderrTruncated=${stderrTruncated}`);
-  const batch = JSON.parse(readFileSync(join(output, "batch", "result.json"), "utf8"));
-  assert.equal(batch.completed, true);
-  const jobs = Object.values(batch.jobs);
-  assert.equal(jobs.reduce((total, result) => total + result.rows.length, 0), 12);
-  assert.equal(jobs.reduce((total, result) => total + result.cleanup.length, 0), 12);
-  assert.equal(new Set(Object.values(batch.gate.jobs).flatMap((job) => job.absent)).size, 4);
-});
+test(
+  "G0 opt-in native handoff reaches the real worker and closes every recovery slot",
+  { skip: !nativeG0Ready },
+  async () => {
+    assert.equal(
+      existsSync(process.env.G0_NATIVE_OUTPUT_ROOT),
+      true,
+      "native output parent must exist",
+    );
+    const output = join(
+      process.env.G0_NATIVE_OUTPUT_ROOT,
+      `g0-native-${process.pid}-${Date.now()}`,
+    );
+    assert.equal(existsSync(output), false);
+    const pilot = spawn(
+      process.execPath,
+      [
+        resolve(process.cwd(), "conformance/production-diff/pilot.mjs"),
+        "replay",
+        "--case",
+        "fs.g0.saved-68012694.v1",
+        "--binary",
+        process.env.G0_RETAINED_ARTIFACT,
+        "--out",
+        output,
+        "--timeout",
+        "600",
+      ],
+      { cwd: process.cwd(), env: process.env, stdio: ["ignore", "ignore", "pipe"] },
+    );
+    let stderrBytes = 0;
+    let stderrTruncated = false;
+    pilot.stderr.on("data", (chunk) => {
+      stderrBytes += chunk.length;
+      if (stderrBytes > 64 * 1024) stderrTruncated = true;
+    });
+    const exitCode = await new Promise((resolveExit) => pilot.once("close", resolveExit));
+    assert.equal(
+      exitCode,
+      0,
+      `native G0 replay failed; retained output: ${output}; stderrBytes=${stderrBytes}; stderrTruncated=${stderrTruncated}`,
+    );
+    const batch = JSON.parse(readFileSync(join(output, "batch", "result.json"), "utf8"));
+    assert.equal(batch.completed, true);
+    const jobs = Object.values(batch.jobs);
+    assert.equal(
+      jobs.reduce((total, result) => total + result.rows.length, 0),
+      12,
+    );
+    assert.equal(
+      jobs.reduce((total, result) => total + result.cleanup.length, 0),
+      12,
+    );
+    assert.equal(new Set(Object.values(batch.gate.jobs).flatMap((job) => job.absent)).size, 4);
+  },
+);
 
 test("G0 session binds validated origins before the real Gate and Adapter are constructed", () => {
   const directory = mkdtempSync(join(tmpdir(), "g0-binding-"));
@@ -269,11 +314,11 @@ for mutation in ("origin", "nonce", "observer"):
 print("binding-ok")
 `;
   try {
-    const output = execFileSync(
-      "uv",
-      ["run", "python", "-c", script, process.cwd(), directory],
-      { cwd: process.cwd(), encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
-    );
+    const output = execFileSync("uv", ["run", "python", "-c", script, process.cwd(), directory], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
     assert.equal(output.trim(), "binding-ok");
   } finally {
     rmSync(directory, { recursive: true, force: true });
@@ -286,6 +331,9 @@ test("session verification binds the prepared canonical program, not its runtime
   verifyG0ProgramDigest(canonical, prepared);
   const runtimePlan = { ...prepared, localOrigins: { firestore: "127.0.0.1:18080" } };
   assert.notEqual(digestJson(runtimePlan), canonical);
-  assert.throws(() => verifyG0ProgramDigest(digestJson(runtimePlan), prepared), /local-record-binding/);
+  assert.throws(
+    () => verifyG0ProgramDigest(digestJson(runtimePlan), prepared),
+    /local-record-binding/,
+  );
   assert.throws(() => verifyG0ProgramDigest("0".repeat(64), prepared), /local-record-binding/);
 });

@@ -95,11 +95,10 @@ export async function stage2HarnessDigest(
 /** The harness digest of the files at `commit` (the principals are this checkout's). */
 export async function stage2HarnessDigestAt(commit) {
   return stage2HarnessDigest(async (file) => {
-    const { stdout } = await execFileAsync(
-      "git",
-      ["show", `${commit}:conformance/src/${file}`],
-      { cwd: CONFORMANCE_DIR, maxBuffer: 64 * 1024 * 1024 },
-    );
+    const { stdout } = await execFileAsync("git", ["show", `${commit}:conformance/src/${file}`], {
+      cwd: CONFORMANCE_DIR,
+      maxBuffer: 64 * 1024 * 1024,
+    });
     return stdout;
   });
 }

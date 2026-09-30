@@ -38,16 +38,24 @@ export function resolveRecordedValue(value, replies) {
   if (Array.isArray(value)) return value.map((item) => resolveRecordedValue(item, replies));
   if (!object(value)) return value;
   if (typeof value.$from === "string") {
-    requireThat(typeof value.path === "string" && replies.has(value.$from), "recorder-reference-unavailable");
+    requireThat(
+      typeof value.path === "string" && replies.has(value.$from),
+      "recorder-reference-unavailable",
+    );
     let found = replies.get(value.$from);
     for (const key of value.path.split(".")) {
-      requireThat(found !== null && typeof found === "object" && Object.hasOwn(found, key), "recorder-reference-unavailable");
+      requireThat(
+        found !== null && typeof found === "object" && Object.hasOwn(found, key),
+        "recorder-reference-unavailable",
+      );
       found = found[key];
     }
     requireThat(found !== undefined, "recorder-reference-unavailable");
     return structuredClone(found);
   }
-  return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, resolveRecordedValue(item, replies)]));
+  return Object.fromEntries(
+    Object.entries(value).map(([key, item]) => [key, resolveRecordedValue(item, replies)]),
+  );
 }
 
 /** Resolve the pinned recorder's path references from this run's raw replies.
@@ -76,20 +84,45 @@ export function expectedCleanupDocuments(entry, requests) {
     if (!rows.length) continue; // A stopped run may never have sent this operation.
     const row = rows[0];
     const prefix = `projects/${entry.project}/databases/(default)/documents/${collection}/`;
-    requireThat(row.method === "POST" && row.path === `/v1/${prefix.slice(0, -1)}`, "generated-document-receipt-invalid");
-    requireThat(row.status === null || (Number.isInteger(row.status) && row.status >= 200 && row.status <= 599), "generated-document-receipt-invalid");
+    requireThat(
+      row.method === "POST" && row.path === `/v1/${prefix.slice(0, -1)}`,
+      "generated-document-receipt-invalid",
+    );
+    requireThat(
+      row.status === null ||
+        (Number.isInteger(row.status) && row.status >= 200 && row.status <= 599),
+      "generated-document-receipt-invalid",
+    );
     if (row.status === null || row.status < 200 || row.status >= 300) {
-      requireThat(row.generatedDocument === undefined && row.generatedResponseText === undefined, "generated-document-receipt-invalid");
+      requireThat(
+        row.generatedDocument === undefined && row.generatedResponseText === undefined,
+        "generated-document-receipt-invalid",
+      );
       continue;
     }
-    requireThat(Number.isInteger(row.status) && typeof row.generatedDocument === "string" &&
-      row.generatedDocument.startsWith(prefix) && /^[A-Za-z0-9]{20}$/.test(row.generatedDocument.slice(prefix.length)),
-      "generated-document-receipt-invalid");
-    requireThat(typeof row.generatedResponseText === "string" && Buffer.byteLength(row.generatedResponseText) <= 65536 &&
-      sha256(row.generatedResponseText) === row.responseSha256, "generated-document-response-binding");
+    requireThat(
+      Number.isInteger(row.status) &&
+        typeof row.generatedDocument === "string" &&
+        row.generatedDocument.startsWith(prefix) &&
+        /^[A-Za-z0-9]{20}$/.test(row.generatedDocument.slice(prefix.length)),
+      "generated-document-receipt-invalid",
+    );
+    requireThat(
+      typeof row.generatedResponseText === "string" &&
+        Buffer.byteLength(row.generatedResponseText) <= 65536 &&
+        sha256(row.generatedResponseText) === row.responseSha256,
+      "generated-document-response-binding",
+    );
     let responseBody;
-    try { responseBody = JSON.parse(row.generatedResponseText); } catch { throw new Error("generated-document-response-binding"); }
-    requireThat(object(responseBody) && responseBody.name === row.generatedDocument, "generated-document-response-binding");
+    try {
+      responseBody = JSON.parse(row.generatedResponseText);
+    } catch {
+      throw new Error("generated-document-response-binding");
+    }
+    requireThat(
+      object(responseBody) && responseBody.name === row.generatedDocument,
+      "generated-document-response-binding",
+    );
     const path = `${collection}/${row.generatedDocument.slice(prefix.length)}`;
     requireThat(!paths.includes(path), "generated-document-receipt-invalid");
     paths.push(path);
@@ -99,12 +132,14 @@ export function expectedCleanupDocuments(entry, requests) {
 
 export function validateProgram(program, entry) {
   requireThat(
-    object(program) && program.id === entry.programId &&
+    object(program) &&
+      program.id === entry.programId &&
       program.area === (entry.programArea ?? "writes"),
     "program-identity",
   );
   requireThat(
-    Array.isArray(program.seed) && program.seed.length === (entry.seedCount ?? 1) &&
+    Array.isArray(program.seed) &&
+      program.seed.length === (entry.seedCount ?? 1) &&
       Array.isArray(program.steps),
     "program-structure",
   );

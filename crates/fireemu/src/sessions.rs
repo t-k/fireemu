@@ -115,6 +115,9 @@ impl ProjectHooks for Projects {
             seed = (seed ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3);
         }
         let mut store = AuthStore::new(project, SplitMix64::new(seed), TotpPolicy::default());
+        store
+            .set_provider_config_seeds(self.registry.new_project_provider_config_seeds())
+            .map_err(|error| format!("auth.providers: {error}"))?;
         if let Ok(default) = self.registry.default_store().lock() {
             store.set_config(default.config());
             store

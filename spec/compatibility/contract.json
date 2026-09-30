@@ -1330,14 +1330,23 @@
           "evidence": {
             "tests": [],
             "integration": [
-              "crates/fireemu-adapter-http/tests/identity_toolkit.rs"
+              "crates/fireemu-adapter-http/tests/identity_toolkit.rs",
+              "crates/fireemu-core-auth/tests/provider_config_seeds.rs",
+              "crates/fireemu-adapter-http/tests/provider_config_seeds.rs",
+              "crates/fireemu-adapter-http/tests/auth_federation_provider_config.rs",
+              "crates/fireemu/tests/auth_provider_seeds.rs"
             ],
             "conformance": []
           },
           "officialLimitations": [
             "the pinned official Auth emulator does not serve project or tenant OAuth IdP and inbound SAML configuration resources"
           ],
-          "fireemuOnly": [],
+          "fireemuOnly": [
+            {
+              "behaviour": "auth.providers.oidc and auth.providers.saml declare ID-named project resources through the selected profile's complete existing Admin create validation. Declared kinds replace defaults, initialize future session/routed projects and return on session reset; missing/null kinds remain undeclared. Admin changes affect live state only. Tenant and built-in resources remain separate; snapshots and Auth export/import never transfer declarations or provider credentials. Strict keeps existing enabled-resource, issuer, audience, signature and SAML certificate checks. Emulator signInWithIdp still requires no provider resource or enabled flag, as firebase-tools 15.28.2 operations.js signInWithIdp (1128-1286) parses fixture credentials without reading provider configs; declaration affects Admin readback only.",
+              "precision": "exact-for-local-semantics"
+            }
+          ],
           "productionOnly": [
             "live provider discovery, redirects, assertion exchange and production configuration parity"
           ],

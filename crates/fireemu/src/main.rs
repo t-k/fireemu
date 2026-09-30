@@ -771,7 +771,8 @@ fn read_config_file(path: &Path) -> Result<(serde_json::Value, bool), CliError> 
                 let auth = json.get("auth")?;
                 config::AUTH_KEYS
                     .iter()
-                    .find(|key| auth.get(**key).is_some())
+                    // Firebase deployment configuration also uses auth.providers. Without schemaVersion it remains deployment data, never a Fireemu seed.
+                    .find(|key| **key != "providers" && auth.get(**key).is_some())
                     .map(|key| format!("auth.{key}"))
             });
         if let Some(key) = key {
@@ -2795,7 +2796,7 @@ mod config_reload_tests {
                 "storage":{"rules":"storage.rules"},
                 "functions":{"source":"functions"},
                 "hosting":{"public":"dist"},
-                "auth":{"providers":{}},
+                "auth":{"providers":{"oidc":[{"name":"oidc.firebase-deploy","clientId":"deploy-client","issuer":"https://issuer.test"}]}},
                 "customMetadata":{"profile":"strict","auth":{"totp":{}}}
             })
             .to_string(),
@@ -2814,6 +2815,10 @@ mod config_reload_tests {
             let (cfg, _) = load_project_config(&raw, &Selection::default())
                 .unwrap_or_else(|e| panic!("{}", e.message));
             assert!(cfg.http_addr.ends_with(":9199"));
+            assert_eq!(
+                cfg.auth_provider_seeds,
+                fireemu_core_auth::store::ProviderConfigSeeds::default()
+            );
         }
         std::fs::remove_dir_all(dir).unwrap();
     }

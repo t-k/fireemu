@@ -1041,6 +1041,8 @@ pub struct RuntimeConfig {
     pub auth_improved_email_privacy_explicit: bool,
     /// `auth.signIn`'s providers.
     pub auth_sign_in: AuthSignInSettings,
+    /// Declared custom provider resources, validated by the existing Admin create path.
+    pub auth_provider_seeds: fireemu_core_auth::store::ProviderConfigSeeds,
     /// `auth.logActionCodes`: print every email action link and SMS code to the daemon's
     /// standard output as the official Auth emulator does, on by default. `false` keeps the
     /// codes off the console; they stay readable from the emulator inspection routes.
@@ -1354,6 +1356,7 @@ impl Default for RuntimeConfig {
             auth_improved_email_privacy: true,
             auth_improved_email_privacy_explicit: false,
             auth_sign_in: AuthSignInSettings::default(),
+            auth_provider_seeds: fireemu_core_auth::store::ProviderConfigSeeds::default(),
             auth_log_action_codes: true,
             auth_password_policy: None,
             auth_password_policy_overrides: Vec::new(),
@@ -1421,13 +1424,14 @@ impl Default for RuntimeConfig {
 }
 
 /// The keys of the `auth` section (spec/config/fireemu.schema.json).
-pub(crate) const AUTH_KEYS: [&str; 19] = [
+pub(crate) const AUTH_KEYS: [&str; 20] = [
     "enabled",
     "apiKeys",
     "projectIssuer",
     "idTokenSigning",
     "customTokenSigners",
     "idpSigners",
+    "providers",
     "totp",
     "secretMaterialization",
     "forwardInboundCredentials",
@@ -3478,6 +3482,14 @@ impl RuntimeConfig {
                 fireemu_adapter_http::identity_toolkit::IdpSignerTrust::from_jwks(signers)
                     .map_err(|e| ConfigError(format!("auth.idpSigners: {e}")))?;
                 cfg.auth_idp_signers = Some(signers.clone());
+            }
+            if let Some(providers) = auth.get("providers") {
+                cfg.auth_provider_seeds =
+                    fireemu_adapter_http::identity_toolkit::provider_config_seeds(
+                        providers,
+                        cfg.profile == CompatibilityProfile::Strict,
+                    )
+                    .map_err(ConfigError)?;
             }
             if let Some(forward) = auth.get("forwardInboundCredentials") {
                 cfg.auth_forward_inbound_credentials = forward.as_bool().ok_or_else(|| {
@@ -5640,5 +5652,52 @@ mod tests {
             .unwrap()
             .auth_signup_quota
             .is_none());
+    }
+}
+
+#[cfg(test)]
+mod provider_seed_tests {
+    use super::RuntimeConfig;
+    use serde_json::{json, Value};
+    #[test]
+    fn auth_provider_seeds_canonical_null_empty_and_strict_refusals() {
+        for value in [Value::Null, json!({}), json!({"oidc":null})] {
+            let cfg =
+                RuntimeConfig::from_json(&json!({"schemaVersion":1,"auth":{"providers":value}}))
+                    .unwrap();
+            assert!(cfg.auth_provider_seeds.oidc.is_none());
+        }
+        let cfg =
+            RuntimeConfig::from_json(&json!({"schemaVersion":1,"auth":{"providers":{"oidc":[]}}}))
+                .unwrap();
+        assert_eq!(cfg.auth_provider_seeds.oidc, Some(vec![]));
+        let error=RuntimeConfig::from_json(&json!({"schemaVersion":1,"profile":"strict","auth":{"providers":{"oidc":[{"name":"oidc.test","issuer":"https://issuer.test","clientSecret":"NO-LOG"}]}}})).unwrap_err().to_string();
+        assert!(error.contains("auth.providers.oidc[0]"));
+        assert!(error.contains("MISSING_OAUTH_CLIENT_ID"));
+        assert!(!error.contains("NO-LOG"));
+    }
+    #[test]
+    fn auth_provider_seeds_schema_examples_match_canonical_loader() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../spec/config");
+        for (directory, valid) in [("examples", true), ("invalid-examples", false)] {
+            for path in std::fs::read_dir(root.join(directory))
+                .unwrap()
+                .map(|entry| entry.unwrap().path())
+                .filter(|path| {
+                    path.file_name()
+                        .unwrap()
+                        .to_string_lossy()
+                        .starts_with("auth-providers-")
+                })
+            {
+                let value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+                assert_eq!(
+                    RuntimeConfig::from_json(&value).is_ok(),
+                    valid,
+                    "{}",
+                    path.display()
+                );
+            }
+        }
     }
 }

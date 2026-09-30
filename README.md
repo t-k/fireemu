@@ -215,10 +215,15 @@ The `auth` section of `fireemu.json` lets you configure sign-in methods, passwor
 | Email enumeration protection | `auth.improvedEmailPrivacy` |
 | Project- and tenant-specific password policies and account permissions | `auth.passwordPolicyOverrides`, `auth.configOverrides` |
 | Blocking functions before account creation or sign-in, and credential forwarding to those functions | `auth.blockingFunctions` |
+| Initial custom OIDC and SAML provider resources | `auth.providers.oidc`, `auth.providers.saml` |
 | Public keys for verifying custom tokens and OIDC ID tokens | `auth.customTokenSigners`, `auth.idpSigners` |
 | Sign-up quota configuration and local quota-exceeded simulation | `auth.quota`, `auth.quotaSimulation` |
 
 See the [configuration schema](spec/config/fireemu.schema.json) for the format and accepted values of each setting.  
+
+Declare project OIDC and SAML resources with `auth.providers.oidc` and `auth.providers.saml`, using the Admin v2 resource fields and an ID-only `name` such as `oidc.fixture` or `saml.fixture`. Full resource names are refused. For example, `"providers": {"oidc": [{"name": "oidc.fixture", "enabled": true, "clientId": "local-client", "issuer": "https://issuer.test", "responseType": {"idToken": true}}]}` initializes that provider in both profiles. Strict OIDC sign-in also needs matching public issuer keys in `auth.idpSigners`; no key is fetched. Strict SAML uses the declared provider certificates and retains its existing assertion checks.
+
+Each declared array replaces that provider kind; `[]` explicitly starts it empty, while an absent or `null` kind declares no initial resources. Admin operations change live resources until a session reset restores the declared kinds. Later session and routed projects inherit the declaration independently of the default project's live changes. Tenant resources and built-in providers remain separate. Clearing accounts preserves live resources; snapshots and Auth export/import transfer no provider resources or declarations. The emulator profile continues to accept its unsigned fixture credentials without requiring configured or enabled provider resources. These declarations require a canonical document with `"schemaVersion": 1`; a Firebase deployment `auth.providers` section without that version remains deployment data and installs no provider seeds.
 
 #### Example configuration
 

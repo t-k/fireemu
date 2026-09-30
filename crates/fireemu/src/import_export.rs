@@ -5846,3 +5846,48 @@ mod tests {
         assert!(error.contains("at most one TTL field"), "{error}");
     }
 }
+
+#[cfg(test)]
+mod provider_seed_account_boundary_tests {
+    use fireemu_core_auth::{mfa::TotpPolicy, store::AuthStore};
+    use fireemu_core_export::auth::UserRecord;
+    use fireemu_core_types::determinism::SplitMix64;
+    use serde_json::json;
+    #[test]
+    fn auth_provider_seeds_account_roundtrip_transfers_neither_resources_nor_declarations() {
+        let path = std::path::Path::new("offline.json");
+        let mut source = AuthStore::new("demo-app", SplitMix64::new(1), TotpPolicy::default());
+        let seed=fireemu_adapter_http::identity_toolkit::provider_config_seeds(&json!({"oidc":[{"name":"oidc.source","clientId":"client","issuer":"https://issuer.test","clientSecret":"private-control-plane-secret"}]}),true).unwrap();
+        source.set_provider_config_seeds(seed).unwrap();
+        let record = UserRecord {
+            local_id: "u".into(),
+            email: Some("import@example.test".into()),
+            created_at: Some("100000".into()),
+            ..UserRecord::default()
+        };
+        source
+            .import_user(super::imported_user(&record, path).unwrap())
+            .unwrap();
+        let exported = super::exported_account(&source, source.user_by_id("u").unwrap(), None);
+        for value in [
+            json!({}),
+            json!({"oidc":[{"name":"oidc.destination","clientId":"destination","issuer":"https://destination.test"}]}),
+        ] {
+            let declaration =
+                fireemu_adapter_http::identity_toolkit::provider_config_seeds(&value, true)
+                    .unwrap();
+            let mut target = AuthStore::new("demo-app", SplitMix64::new(2), TotpPolicy::default());
+            target
+                .set_provider_config_seeds(declaration.clone())
+                .unwrap();
+            target
+                .import_user_trusted(super::imported_user(&exported, path).unwrap())
+                .unwrap();
+            assert!(target.user_by_id("u").is_some());
+            assert_eq!(target.provider_config_seeds(), &declaration);
+            assert!(target.oidc_config("oidc.source").is_none());
+            target.restore_provider_config_seeds();
+            assert!(target.oidc_config("oidc.source").is_none());
+        }
+    }
+}

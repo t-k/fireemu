@@ -3631,26 +3631,73 @@ fn an_expiry_nobody_asked_about_is_forgotten_after_the_retention_bound() {
     invalid_transaction(state.touch_transaction(&transaction, t(271 + 602)));
 }
 
-#[test]
-fn the_emulator_profile_keeps_its_answers_after_the_total_lifetime() {
-    let mut state = FirestoreState::with_limit_scope(LimitScope::OfficialEmulator);
-    let transaction = state.begin_transaction(false, t(0)).unwrap();
-    for second in (30..=240).step_by(30) {
-        state.touch_transaction(&transaction, t(second)).unwrap();
+fn invalid_argument_expired(result: Result<(), FirestoreError>) {
+    match result {
+        Err(FirestoreError::InvalidArgument(message)) if message == NO_LONGER_VALID => {}
+        other => panic!("expected INVALID_ARGUMENT no longer valid, got {other:?}"),
     }
-    // Unchanged by the production-profile rule above: the transaction is gone once maintenance ran.
-    aborted_no_longer_valid(state.touch_transaction(&transaction, t(271)));
-    invalid_transaction(state.touch_transaction(&transaction, t(272)));
+}
 
-    // Maintenance at the deadline forgets it at once (the production profile keeps it for the
-    // first request that is refused).
+fn emulator_aged_transaction() -> (FirestoreState, TransactionId) {
     let mut state = FirestoreState::with_limit_scope(LimitScope::OfficialEmulator);
+    state
+        .commit(&[set("p11/doc", &[("v", Value::Integer(1))])], None, t(0))
+        .unwrap();
     let transaction = state.begin_transaction(false, t(0)).unwrap();
     for second in (30..=240).step_by(30) {
         state.touch_transaction(&transaction, t(second)).unwrap();
     }
+    (state, transaction)
+}
+
+// The official emulator (v1.22.0, REST, real time, measured): a transaction kept alive by reads answers a
+// read at 270.3 s HTTP 400 INVALID_ARGUMENT "no longer valid", a Commit right after HTTP 409 ABORTED with the
+// same text, and a Rollback 200. The emulator profile matches it in each order below; only read, Commit,
+// Rollback was measured, the rest keeps the same answers by request kind. gRPC's wire form is unmeasured.
+#[test]
+fn the_emulator_profile_answers_a_read_after_the_total_lifetime_invalid_argument() {
+    let (mut state, transaction) = emulator_aged_transaction();
+    invalid_argument_expired(state.touch_transaction(&transaction, t(271)));
+    // Maintenance at the deadline (another begin) keeps the transaction for the first request that asks.
+    let (mut state, transaction) = emulator_aged_transaction();
     let _other = state.begin_transaction(true, t(271)).unwrap();
-    invalid_transaction(state.touch_transaction(&transaction, t(272)));
+    invalid_argument_expired(state.touch_transaction(&transaction, t(272)));
+}
+
+#[test]
+fn the_emulator_profile_answers_a_commit_after_the_total_lifetime_aborted_also_after_a_read() {
+    let write = [set("p11/doc", &[("v", Value::Integer(2))])];
+    let (mut state, transaction) = emulator_aged_transaction();
+    aborted_no_longer_valid(state.commit(&write, Some(&transaction), t(271)).map(|_| ()));
+    let (mut state, transaction) = emulator_aged_transaction();
+    invalid_argument_expired(state.touch_transaction(&transaction, t(271)));
+    aborted_no_longer_valid(state.commit(&write, Some(&transaction), t(272)).map(|_| ()));
+    let (mut state, transaction) = emulator_aged_transaction();
+    let _other = state.begin_transaction(true, t(271)).unwrap();
+    aborted_no_longer_valid(state.commit(&write, Some(&transaction), t(272)).map(|_| ()));
+}
+
+#[test]
+fn the_emulator_profile_accepts_a_rollback_after_the_total_lifetime() {
+    let write = [set("p11/doc", &[("v", Value::Integer(2))])];
+    let (mut state, transaction) = emulator_aged_transaction();
+    invalid_argument_expired(state.touch_transaction(&transaction, t(271)));
+    aborted_no_longer_valid(state.commit(&write, Some(&transaction), t(272)).map(|_| ()));
+    state.rollback(&transaction).unwrap();
+    // As the first request, whether the request or maintenance found the expiry.
+    let (mut state, transaction) = emulator_aged_transaction();
+    state.rollback(&transaction).unwrap();
+    let (mut state, transaction) = emulator_aged_transaction();
+    let _other = state.begin_transaction(true, t(271)).unwrap();
+    state.rollback(&transaction).unwrap();
+}
+
+// Bounded, like the production profile's: an expiry nobody asked about is forgotten after the retention bound.
+#[test]
+fn the_emulator_profile_forgets_an_unasked_lifetime_expiry_after_the_retention_bound() {
+    let (mut state, transaction) = emulator_aged_transaction();
+    let _other = state.begin_transaction(true, t(271 + 601)).unwrap();
+    invalid_transaction(state.touch_transaction(&transaction, t(271 + 602)));
 }
 
 #[test]

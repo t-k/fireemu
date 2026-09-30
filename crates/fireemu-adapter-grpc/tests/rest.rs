@@ -4099,6 +4099,114 @@ fn rest_kindless_queries_and_transform_budget_follow_production() {
     );
 }
 
+/// A read-write transaction kept alive by reads past its 270 s total lifetime, over REST. Production (P11,
+/// one recording): the read answers 409 `ABORTED` "no longer valid", then a Commit 400 `INVALID_ARGUMENT`
+/// "Invalid transaction." and a Rollback the same. The official emulator (v1.22.0, REST, measured): the read
+/// answers 400 `INVALID_ARGUMENT` with the expired text, a Commit 409 `ABORTED` with it, a Rollback 200. The gRPC
+/// wire forms are unmeasured; they map the same statuses.
+#[test]
+fn a_rest_transaction_kept_alive_past_its_total_lifetime_is_answered_per_profile() {
+    const GONE: &str = "The referenced transaction has expired or is no longer valid.";
+    for strict in [true, false] {
+        let gateway = Gateway {
+            enforce_limits: strict,
+            ctx: PlanningContext {
+                edition: FirestoreEdition::Standard,
+                api_mode: FirestoreApiMode::Native,
+                policy: if strict {
+                    IndexValidationPolicy::Production
+                } else {
+                    IndexValidationPolicy::Emulator
+                },
+            },
+            indexes: IndexSet::default(),
+        };
+        let (s, clock) = state_with_gateway(gateway, None, TokenAcceptance::Verified);
+        let document = "projects/demo-app/databases/(default)/documents/lifetime/doc";
+        let (status, seeded) = call(
+            &s,
+            "PATCH",
+            &format!("{DOCS}/lifetime/doc"),
+            json!({"fields": {"v": {"integerValue": "1"}}}),
+        );
+        assert_eq!(status, 200, "{seeded}");
+        let (status, begun) = call(
+            &s,
+            "POST",
+            &format!("{DOCS}:beginTransaction"),
+            json!({"options": {"readWrite": {}}}),
+        );
+        assert_eq!(status, 200, "{begun}");
+        let transaction = begun["transaction"].as_str().unwrap().to_owned();
+        let read = |s: &RestState| {
+            call(
+                s,
+                "GET",
+                &format!("{DOCS}/lifetime/doc?transaction={transaction}"),
+                Value::Null,
+            )
+        };
+        let advance = |seconds: i64| {
+            let _ = clock.lock().unwrap().advance(
+                fireemu_core_types::time::LogicalDuration::from_seconds(seconds),
+            );
+        };
+        for _ in 0..8 {
+            advance(30);
+            let (status, body) = read(&s);
+            assert_eq!(status, 200, "a read every 30 s keeps it alive: {body}");
+        }
+        advance(31);
+        let (status, expired) = read(&s);
+        let (code, label) = if strict {
+            (409, "ABORTED")
+        } else {
+            (400, "INVALID_ARGUMENT")
+        };
+        assert_eq!(
+            (status, expired["error"]["status"].as_str()),
+            (code, Some(label)),
+            "{expired}"
+        );
+        assert_eq!(expired["error"]["message"], GONE, "{expired}");
+        let (status, committed) = call(
+            &s,
+            "POST",
+            &format!("{DOCS}:commit"),
+            json!({
+                "transaction": transaction,
+                "writes": [{"update": {"name": document, "fields": {"v": {"integerValue": "2"}}}}]
+            }),
+        );
+        let (status_expected, label, message) = if strict {
+            (400, "INVALID_ARGUMENT", "Invalid transaction.")
+        } else {
+            (409, "ABORTED", GONE)
+        };
+        assert_eq!(status, status_expected, "strict={strict} {committed}");
+        assert_eq!(committed["error"]["status"], label, "{committed}");
+        assert_eq!(committed["error"]["message"], message, "{committed}");
+        let (status, rolled) = call(
+            &s,
+            "POST",
+            &format!("{DOCS}:rollback"),
+            json!({"transaction": transaction}),
+        );
+        if strict {
+            assert_eq!(status, 400, "{rolled}");
+            assert_eq!(
+                rolled["error"]["message"], "Invalid transaction.",
+                "{rolled}"
+            );
+        } else {
+            assert_eq!(status, 200, "{rolled}");
+        }
+        let (status, after) = call(&s, "GET", &format!("{DOCS}/lifetime/doc"), Value::Null);
+        assert_eq!(status, 200, "{after}");
+        assert_eq!(after["fields"]["v"]["integerValue"], "1");
+    }
+}
+
 #[test]
 fn an_idle_rest_transaction_expires_and_releases_its_document_lock() {
     let (s, clock) = state_with_clock(None, TokenAcceptance::Verified);

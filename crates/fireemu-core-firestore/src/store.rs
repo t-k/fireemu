@@ -637,6 +637,11 @@ struct Transaction {
     /// answers 10, a Commit and a Rollback answer 3". This model keeps the first rule; P12 records
     /// the first-request orders and decides between them.
     expiry_unnoticed: bool,
+    /// The transaction ran out of its total lifetime (any profile). The emulator profile keeps it, finished,
+    /// for the retention bound below: the official emulator (v1.22.0, REST measured) answers a read after
+    /// the lifetime `INVALID_ARGUMENT` "no longer valid", a Commit `ABORTED` with the same text, and accepts
+    /// a Rollback. Only that order (read, Commit, Rollback) is measured there.
+    lifetime_expired: bool,
     /// The time of the transaction's first read: its snapshot time for a read-only transaction. The
     /// empty commit of a transaction that has read answers this time and uses up no commit time
     /// (production, P01 REST read-write and P02 both transports); one that has not read answers none
@@ -1127,7 +1132,7 @@ fn transaction_lineage_deadline(transaction: &Transaction) -> LogicalInstant {
 
 fn finished_lineage_deadline(transaction: &Transaction) -> LogicalInstant {
     let deadline = transaction_lineage_deadline(transaction);
-    if transaction.expiry_unnoticed {
+    if transaction.lifetime_expired {
         deadline
             .checked_add(LogicalDuration::from_seconds(
                 UNNOTICED_EXPIRY_RETENTION_SECONDS,
@@ -2295,6 +2300,7 @@ impl FirestoreState {
             waiting_to_commit: false,
             snapshot_pending: false,
             expiry_unnoticed: false,
+            lifetime_expired: false,
             first_read_time: None,
         };
         self.active_transaction_deadlines.insert((
@@ -2327,8 +2333,9 @@ impl FirestoreState {
                 continue;
             }
             transaction.state = TransactionState::Finished;
-            transaction.expiry_unnoticed = self.limit_scope == LimitScope::Production
-                && deadline == transaction_lineage_deadline(transaction);
+            transaction.lifetime_expired = deadline == transaction_lineage_deadline(transaction);
+            transaction.expiry_unnoticed =
+                transaction.lifetime_expired && self.limit_scope == LimitScope::Production;
             self.active_transaction_conflict_ledger_bytes = self
                 .active_transaction_conflict_ledger_bytes
                 .saturating_sub(transaction.conflict_ledger_bytes);
@@ -2374,6 +2381,31 @@ impl FirestoreState {
             self.finished_transactions.remove(id);
             self.transactions.remove(id);
         }
+    }
+
+    /// An active transaction found past its total lifetime by a request (emulator profile): keep it, finished, for the
+    /// retention bound, as maintenance does, so a Commit and a Rollback after the read that found it are answered as the
+    /// official emulator answers them. Returns whether the transaction ran out of its total lifetime.
+    fn keep_lifetime_expired_transaction(
+        &mut self,
+        id: &TransactionId,
+        deadline: LogicalInstant,
+    ) -> bool {
+        let Some(transaction) = self.transactions.get_mut(id) else {
+            return false;
+        };
+        if self.limit_scope != LimitScope::OfficialEmulator
+            || deadline != transaction_lineage_deadline(transaction)
+        {
+            return false;
+        }
+        let plain = (finished_lineage_deadline(transaction), id.clone());
+        transaction.lifetime_expired = true;
+        let kept = (finished_lineage_deadline(transaction), id.clone());
+        if self.finished_transaction_deadlines.remove(&plain) {
+            self.finished_transaction_deadlines.insert(kept);
+        }
+        true
     }
 
     fn ensure_transaction_capacity(&self) -> Result<(), FirestoreError> {
@@ -2534,7 +2566,8 @@ impl FirestoreState {
     ) -> Result<(), FirestoreError> {
         if let Err(error) = self.transaction(id) {
             self.forget_noticed_expiry(id);
-            return Err(error);
+            // The emulator profile answers a read after the total lifetime `INVALID_ARGUMENT`.
+            return Err(self.read_error_after_lifetime(id, error));
         }
         let t = self.transaction(id)?;
         // Expiry is inclusive at the deadline (`now >= deadline`). Commit validation uses
@@ -2543,7 +2576,13 @@ impl FirestoreState {
         let expired = now >= previous_deadline;
         if expired {
             self.finish_transaction(id, TransactionState::Finished);
+            let lifetime = self.keep_lifetime_expired_transaction(id, previous_deadline);
             self.compact(now);
+            if lifetime {
+                return Err(FirestoreError::InvalidArgument(
+                    TRANSACTION_NO_LONGER_VALID.into(),
+                ));
+            }
             return Err(FirestoreError::Aborted(TRANSACTION_NO_LONGER_VALID.into()));
         }
         self.active_transaction_deadlines
@@ -3009,6 +3048,24 @@ impl FirestoreState {
         id: &TransactionId,
     ) -> Result<CommitVersion, FirestoreError> {
         Ok(self.reading_transaction(id)?.read_version)
+    }
+
+    /// The error a read gets: the emulator profile answers a read of a transaction that ran out of its total lifetime
+    /// `INVALID_ARGUMENT` with the same text (official emulator v1.22.0, REST measured), a Commit `ABORTED`.
+    fn read_error_after_lifetime(
+        &self,
+        id: &TransactionId,
+        error: FirestoreError,
+    ) -> FirestoreError {
+        let lifetime = self.limit_scope == LimitScope::OfficialEmulator
+            && self.transactions.get(id).is_some_and(|transaction| {
+                transaction.lifetime_expired && transaction.state == TransactionState::Finished
+            });
+        if lifetime && matches!(error, FirestoreError::Aborted(_)) {
+            FirestoreError::InvalidArgument(TRANSACTION_NO_LONGER_VALID.into())
+        } else {
+            error
+        }
     }
 
     /// [`Self::transaction`] for a read: a pending snapshot must have been pinned (by
@@ -3750,6 +3807,7 @@ impl FirestoreState {
         let deadline = transaction_deadline(transaction, self.limit_scope);
         if now >= deadline {
             self.finish_transaction(id, TransactionState::Finished);
+            self.keep_lifetime_expired_transaction(id, deadline);
             self.compact(now);
             return Err(FirestoreError::Aborted(TRANSACTION_NO_LONGER_VALID.into()));
         }

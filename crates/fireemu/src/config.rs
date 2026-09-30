@@ -5488,6 +5488,47 @@ mod tests {
     }
 
     #[test]
+    fn a_declared_tenant_follows_the_files_profile_for_the_projects_settings() {
+        use fireemu_core_auth::mfa::TotpPolicy;
+        use fireemu_core_auth::store::{AuthRegistry, AuthStore};
+        use fireemu_core_types::determinism::SplitMix64;
+        use std::sync::{Arc, Mutex};
+
+        // The emulator profile's tenant reads the project's duplicate-email setting, as the
+        // official emulator's does; the strict profile's tenant has its own, off, as production's.
+        for (profile, follows_the_project) in [("emulator", true), ("strict", false)] {
+            let cfg = RuntimeConfig::from_json(&json!({
+                "schemaVersion": 1,
+                "profile": profile,
+                "auth": {"multiTenant": {"allowTenants": true}, "tenants": [acme_tenant()]}
+            }))
+            .unwrap();
+            let project = Arc::new(Mutex::new(AuthStore::new(
+                "demo-app",
+                SplitMix64::new(1),
+                TotpPolicy::default(),
+            )));
+            {
+                let mut store = project.lock().unwrap();
+                let mut config = store.config();
+                config.allow_duplicate_emails = true;
+                store.set_config(config);
+            }
+            let registry = AuthRegistry::new("demo-app", project);
+            cfg.tenant_seeding()
+                .unwrap()
+                .apply(&registry, "demo-app")
+                .unwrap();
+            let tenant = registry.tenant_store("demo-app", "acme-x7k2q").unwrap();
+            assert_eq!(
+                tenant.lock().unwrap().config().allow_duplicate_emails,
+                follows_the_project,
+                "{profile}"
+            );
+        }
+    }
+
+    #[test]
     fn auth_tenants_are_refused_as_the_admin_create_refuses_them_naming_the_key() {
         let with = |member: &str, value: Value| {
             let mut doc = acme_tenant();

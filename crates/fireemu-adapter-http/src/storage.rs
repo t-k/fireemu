@@ -823,6 +823,33 @@ fn production_error(status: u16, message: &str) -> StorageResponse {
     }
 }
 
+/// Production's answer to a Cloud Storage JSON API request whose `Bearer` credential is not a
+/// valid OAuth access token (recorded, stage 3 v9: the four `precedence-*-gcs-malformed-*` rows,
+/// status, content type, `Vary`, `Cache-Control`, `Expires` and the body bytes). The recording
+/// redacted the values of `WWW-Authenticate`, `Pragma` and `X-GUploader-UploadID`, so they are
+/// not reproduced.
+fn production_invalid_credentials() -> StorageResponse {
+    // The recorded bytes; the key order is production's, which a serialized map would not keep.
+    const BODY: &str = "{\n  \"error\": {\n    \"code\": 401,\n    \"message\": \"Invalid Credentials\",\n    \"errors\": [\n      {\n        \"message\": \"Invalid Credentials\",\n        \"domain\": \"global\",\n        \"reason\": \"authError\",\n        \"locationType\": \"header\",\n        \"location\": \"Authorization\"\n      }\n    ]\n  }\n}";
+    StorageResponse {
+        status: 401,
+        headers: vec![
+            (
+                "content-type".into(),
+                "application/json; charset=UTF-8".into(),
+            ),
+            ("vary".into(), "Origin".into()),
+            ("vary".into(), "X-Origin".into()),
+            (
+                "cache-control".into(),
+                "no-cache, no-store, max-age=0, must-revalidate".into(),
+            ),
+            ("expires".into(), "Mon, 01 Jan 1990 00:00:00 GMT".into()),
+        ],
+        body: bytes::Bytes::from_static(BODY.as_bytes()),
+    }
+}
+
 /// The answer to a caller [`StorageState::principal`] refused: production's bytes for the 403 of a
 /// foreign-project token under strict, the ordinary error envelope otherwise.
 fn principal_refusal_response(dialect: Dialect, status: u16, message: &str) -> StorageResponse {
@@ -2468,6 +2495,20 @@ pub fn handle(state: &StorageState, req: StorageRequest) -> StorageResponse {
     let json_api_authenticated = dialect == Dialect::Gcs
         && (authorization == Some(crate::identity_toolkit::OWNER_CREDENTIAL)
             || admin_storage_authenticated(state, &req));
+    // The strict profile refuses a `Bearer` credential that is not the emulator's owner
+    // credential on the one JSON API route production was recorded refusing it on (the
+    // `PATCH /storage/v1/b/<bucket>/o/<object>` of the precedence rows), before anything else
+    // about the request is read; the emulator profile ignores the credential, as the official
+    // emulator does. An absent credential and the other JSON API routes were not recorded.
+    if state.is_strict()
+        && !json_api_authenticated
+        && req.method == "PATCH"
+        && matches!(route, Route::GcsObject { .. })
+        && req.path.starts_with("/storage/v1/")
+        && authorization.is_some_and(|value| value.starts_with("Bearer "))
+    {
+        return production_invalid_credentials();
+    }
     // App Check, before the fault plan, the Auth credential, the rules and every mutation.
     let admitted = if state.app_check_policy.is_some() {
         // The bypass classification reads the object store for a download-token URL, so it

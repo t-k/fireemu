@@ -1783,6 +1783,102 @@ fn strict_refusals_carry_production_bytes_and_the_emulator_profile_the_official_
     }
 }
 
+/// The recorded production body of the four `precedence-*-gcs-malformed-*` rows (stage 3 v9).
+const PRODUCTION_INVALID_CREDENTIALS_BODY: &str = "{\n  \"error\": {\n    \"code\": 401,\n    \"message\": \"Invalid Credentials\",\n    \"errors\": [\n      {\n        \"message\": \"Invalid Credentials\",\n        \"domain\": \"global\",\n        \"reason\": \"authError\",\n        \"locationType\": \"header\",\n        \"location\": \"Authorization\"\n      }\n    ]\n  }\n}";
+
+/// Strict refuses a malformed `Bearer` credential on the Cloud Storage JSON API PATCH with
+/// production's recorded 401 (status, content type, headers that were not redacted, body), before
+/// the body or the object is read; the emulator profile ignores the credential as the official
+/// emulator does, and so does every route production was not recorded refusing it on.
+#[test]
+fn strict_refuses_a_malformed_bearer_on_the_json_api_patch_as_production_does() {
+    let patch = |s: &StorageState, path: &str, authorization: Option<&str>, body: &[u8]| {
+        let mut headers = vec![("content-type", "application/json")];
+        if let Some(value) = authorization {
+            headers.push(("authorization", value));
+        }
+        handle(s, req("PATCH", path, &headers, body))
+    };
+    let malformed = "Bearer ya29.abcdefghijklmnopqrstuvwx";
+    let strict = state_with(Some(ALLOW_ALL_RULES), TokenAcceptance::Verified);
+    assert_eq!(
+        anonymous_media_upload(&strict, "present.txt"),
+        200,
+        "the object the present rows patch"
+    );
+    let gcs = |name: &str| format!("/storage/v1/b/{BUCKET}/o/{name}");
+    for (name, body) in [
+        ("present.txt", br#"{"cacheControl": "no-store"}"# as &[u8]),
+        ("present.txt", b"{not json"),
+        ("absent.txt", br#"{"cacheControl": "no-store"}"#),
+        ("absent.txt", b"{not json"),
+    ] {
+        let r = patch(&strict, &gcs(name), Some(malformed), body);
+        assert_eq!(r.status, 401, "{name} {}", String::from_utf8_lossy(body));
+        assert_eq!(
+            String::from_utf8_lossy(&r.body),
+            PRODUCTION_INVALID_CREDENTIALS_BODY
+        );
+        assert_eq!(
+            header(&r, "content-type"),
+            Some("application/json; charset=UTF-8")
+        );
+        assert_eq!(
+            header(&r, "cache-control"),
+            Some("no-cache, no-store, max-age=0, must-revalidate")
+        );
+        assert_eq!(header(&r, "expires"), Some("Mon, 01 Jan 1990 00:00:00 GMT"));
+        let vary: Vec<&str> = r
+            .headers
+            .iter()
+            .filter(|(k, _)| k == "vary")
+            .map(|(_, v)| v.as_str())
+            .collect();
+        assert_eq!(vary, ["Origin", "X-Origin"]);
+    }
+    // The emulator's owner credential is the valid one; the object was not touched above.
+    let r = patch(
+        &strict,
+        &gcs("present.txt"),
+        Some("Bearer owner"),
+        br#"{"cacheControl": "no-store"}"#,
+    );
+    assert_eq!(r.status, 200, "{}", String::from_utf8_lossy(&r.body));
+    assert_eq!(json_body(&r)["cacheControl"], "no-store");
+    // Not recorded, so not refused: no credential, the short spelling and another method.
+    assert_ne!(patch(&strict, &gcs("present.txt"), None, b"{}").status, 401);
+    assert_ne!(
+        patch(
+            &strict,
+            &format!("/b/{BUCKET}/o/present.txt"),
+            Some(malformed),
+            b"{}"
+        )
+        .status,
+        401
+    );
+    let get = handle(
+        &strict,
+        req(
+            "GET",
+            &gcs("present.txt"),
+            &[("authorization", malformed)],
+            b"",
+        ),
+    );
+    assert_ne!(get.status, 401);
+    // The emulator profile ignores the credential, as the official emulator does.
+    let emulator = state_with(Some(ALLOW_ALL_RULES), TokenAcceptance::EmulatorMock);
+    assert_eq!(anonymous_media_upload(&emulator, "present.txt"), 200);
+    let r = patch(
+        &emulator,
+        &gcs("present.txt"),
+        Some(malformed),
+        br#"{"cacheControl": "no-store"}"#,
+    );
+    assert_eq!(r.status, 200, "{}", String::from_utf8_lossy(&r.body));
+}
+
 /// `PATCH /storage/v1/b/{bucket}/o/{object}` updates object metadata, as the Cloud Storage
 /// JSON API does in production (recorded: stage 3 v9, `setup/seed-metadata` and
 /// `boundary-gcs-admin-patch-present`, a 200 with the `storage#object` resource; an absent

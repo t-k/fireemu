@@ -1459,7 +1459,9 @@
             "tests": [],
             "integration": [
               "crates/fireemu-core-auth/tests/totp.rs",
-              "crates/fireemu-core-auth/tests/mfa.rs"
+              "crates/fireemu-core-auth/tests/mfa.rs",
+              "crates/fireemu-core-auth/tests/mfa_seed.rs",
+              "crates/fireemu/tests/auth_mfa_config.rs"
             ],
             "conformance": [
               "auth/mfa-error-shapes",
@@ -1473,6 +1475,10 @@
           "fireemuOnly": [
             {
               "behaviour": "declaring auth.totp enables local TOTP enrollment and sign-in in the emulator profile; its acceptance window and enrolment session TTL are policies driven by the virtual clock, while an absent auth.totp preserves the official emulator's INVALID_ARGUMENT refusal. In the strict profile only the project mfa config enables TOTP, as in production, and an account with a TOTP factor is asked for it even while that config is off (fail closed; production was seen to skip only a phone factor then)",
+              "precision": "boundary-conformance"
+            },
+            {
+              "behaviour": "auth.mfa in the canonical configuration is a config seed of the project's mfa member, in the Identity Platform Config.mfa shape and validated by the validator the Admin config update uses: it is the project's mfa config when the daemon starts, in both profiles, and that of every project created later, a session project or a namespace routed by its first Admin request (the declared seed, not the default project's live value), and a control-plane session reset returns to it only when one is declared (without one an Admin-set config survives a reset, as the rest of the project configuration does; DELETE /emulator/v1/projects/{p}/accounts clears accounts only). The runtime gate stays production-exact: only the project's mfa config enables a second factor under the strict profile, an Admin update replaces the live config (the seed is kept, and a declared-seed reset returns to it) and disabling refuses as production does, auth.totp alone enables nothing there (a start-up warning names auth.mfa), and a tenant follows its own mfaConfig, never the project's seed. Without auth.mfa a project starts with multi-factor off, as a new production project does. Export and import carry accounts and their factors, not this config",
               "precision": "boundary-conformance"
             },
             {

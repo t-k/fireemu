@@ -260,6 +260,35 @@
             "enrollmentSessionTtlSeconds": { "type": "integer", "minimum": 1 }
           }
         },
+        "mfa": {
+          "type": ["object", "null"],
+          "description": "The project's initial multi-factor configuration, in the Identity Platform Config.mfa shape: it is the project's configuration when the daemon starts and for every project it creates later, and a control-plane reset (POST /v1/sessions/{s}/reset) returns to it. It is validated as the Admin API validates an update of the mfa member. Under the strict profile TOTP is enabled only by this configuration (auth.totp alone enables nothing, as in production); an Admin API update replaces the live configuration (the seed is kept, and a reset returns to it), and disabling refuses TOTP as production does. Absent or null, a project starts with multi-factor off, as a new production project does, and a reset leaves an Admin-set configuration alone.",
+          "additionalProperties": false,
+          "properties": {
+            "state": { "enum": ["STATE_UNSPECIFIED", "DISABLED", "ENABLED", "MANDATORY"] },
+            "enabledProviders": {
+              "type": ["array", "null"],
+              "items": { "enum": ["PROVIDER_UNSPECIFIED", "PHONE_SMS"] }
+            },
+            "providerConfigs": {
+              "type": ["array", "null"],
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "state": { "enum": ["STATE_UNSPECIFIED", "DISABLED", "ENABLED", "MANDATORY"] },
+                  "totpProviderConfig": {
+                    "type": ["object", "null"],
+                    "additionalProperties": false,
+                    "properties": {
+                      "adjacentIntervals": { "type": ["integer", "null"], "minimum": 0, "maximum": 10 }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
         "secretMaterialization": { "enum": ["redact", "allow"] },
         "forwardInboundCredentials": {
           "type": "boolean",

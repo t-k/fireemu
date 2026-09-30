@@ -115,6 +115,10 @@ impl ProjectHooks for Projects {
             seed = (seed ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3);
         }
         let mut store = AuthStore::new(project, SplitMix64::new(seed), TotpPolicy::default());
+        // The declared initial multi-factor configuration, not the default project's live one.
+        if let Some(mfa) = self.registry.new_project_mfa_seed() {
+            store.set_mfa_seed(mfa);
+        }
         if let Ok(default) = self.registry.default_store().lock() {
             store.set_config(default.config());
             store
@@ -702,6 +706,96 @@ pub(crate) mod tests {
         let after = token(&gate);
         assert!(admits(&gate, &after), "a token of the new epoch verifies");
         assert_ne!(before, after);
+    }
+
+    fn totp_seed() -> fireemu_core_auth::mfa_config::MfaProjectConfig {
+        use fireemu_core_auth::mfa_config::{MfaConfigState, MfaProjectConfig, TotpProviderConfig};
+        MfaProjectConfig {
+            state: MfaConfigState::Enabled,
+            phone_sms: false,
+            totp: Some(TotpProviderConfig {
+                state: MfaConfigState::Enabled,
+                adjacent_intervals: Some(1),
+            }),
+        }
+    }
+
+    fn sms_config() -> fireemu_core_auth::mfa_config::MfaProjectConfig {
+        use fireemu_core_auth::mfa_config::{MfaConfigState, MfaProjectConfig};
+        MfaProjectConfig {
+            state: MfaConfigState::Enabled,
+            phone_sms: true,
+            totp: None,
+        }
+    }
+
+    #[test]
+    fn a_default_scope_reset_returns_a_declared_mfa_seed_and_keeps_an_undeclared_config() {
+        let gate = gate();
+        let hooks = projects(&gate);
+        let default = hooks.registry.default_store();
+        // No seed declared: an Admin-set configuration survives the reset, as the rest of the
+        // project configuration does.
+        default.lock().unwrap().set_mfa_config(sms_config());
+        hooks
+            .reset_scope(&Scope::AllExcept(BTreeSet::new()))
+            .expect("the reset succeeds");
+        assert_eq!(*default.lock().unwrap().mfa_config(), sms_config());
+        // A declared seed is what the reset returns to, after any Admin change.
+        default.lock().unwrap().set_mfa_seed(totp_seed());
+        default.lock().unwrap().set_mfa_config(sms_config());
+        hooks
+            .reset_scope(&Scope::AllExcept(BTreeSet::new()))
+            .expect("the reset succeeds");
+        assert_eq!(*default.lock().unwrap().mfa_config(), totp_seed());
+    }
+
+    #[test]
+    fn a_created_project_starts_with_the_seed_and_a_project_reset_returns_to_it() {
+        let gate = gate();
+        let hooks = projects(&gate);
+        hooks.registry.set_new_project_mfa_seed(Some(totp_seed()));
+        // The default project's live value is not what a new project inherits.
+        hooks
+            .registry
+            .default_store()
+            .lock()
+            .unwrap()
+            .set_mfa_config(sms_config());
+        hooks
+            .create(SECOND_PROJECT)
+            .expect("the project is created");
+        let store = hooks.registry.store_for(SECOND_PROJECT).expect("its store");
+        assert_eq!(*store.lock().unwrap().mfa_config(), totp_seed());
+        store
+            .lock()
+            .unwrap()
+            .set_mfa_config(fireemu_core_auth::mfa_config::MfaProjectConfig::default());
+        hooks
+            .reset_scope(&Scope::Project(SECOND_PROJECT.to_owned()))
+            .expect("the reset succeeds");
+        assert_eq!(*store.lock().unwrap().mfa_config(), totp_seed());
+    }
+
+    #[test]
+    fn a_created_project_without_a_declared_seed_starts_with_mfa_off() {
+        let gate = gate();
+        let hooks = projects(&gate);
+        hooks
+            .registry
+            .default_store()
+            .lock()
+            .unwrap()
+            .set_mfa_config(sms_config());
+        hooks
+            .create(SECOND_PROJECT)
+            .expect("the project is created");
+        let store = hooks.registry.store_for(SECOND_PROJECT).expect("its store");
+        assert_eq!(
+            *store.lock().unwrap().mfa_config(),
+            fireemu_core_auth::mfa_config::MfaProjectConfig::default()
+        );
+        assert_eq!(store.lock().unwrap().mfa_seed(), None);
     }
 
     #[test]

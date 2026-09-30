@@ -211,6 +211,7 @@ The `auth` section of `fireemu.json` lets you configure sign-in methods, passwor
 | Handling of accounts that share an email address | `auth.signIn.allowDuplicateEmails` |
 | Password length and character requirements, and policy enforcement at sign-in | `auth.passwordPolicy` |
 | TOTP-based multi-factor authentication | `auth.totp` |
+| Initial multi-factor authentication (MFA) configuration of a project, such as enabling TOTP under the `strict` profile | `auth.mfa` |
 | Restrictions on end-user account creation and deletion | `auth.client.permissions` |
 | Email enumeration protection | `auth.improvedEmailPrivacy` |
 | Project- and tenant-specific password policies and account permissions | `auth.passwordPolicyOverrides`, `auth.configOverrides` |
@@ -278,6 +279,31 @@ For an existing `fireemu.json`, add the settings you need to its `auth` section.
 Use `auth.passwordPolicyOverrides` to specify different password policies for individual projects or tenants. Use `auth.configOverrides` to customize account creation and deletion permissions and email enumeration protection.
 
 These settings are separate from creating the project or tenant. Naming a tenant in the configuration does not create it.  
+
+#### Enable multi-factor authentication at start
+
+Under the `strict` profile, TOTP is enabled only through the project's MFA configuration, as in production, so `auth.totp` alone enables nothing there. Use `auth.mfa` to declare that configuration in the file instead of calling the Admin API in every session. It has the shape Identity Platform uses (`state`, `enabledProviders`, and `providerConfigs` with `totpProviderConfig.adjacentIntervals`):
+
+```json
+{
+  "schemaVersion": 1,
+  "profile": "strict",
+  "auth": {
+    "mfa": {
+      "state": "ENABLED",
+      "providerConfigs": [
+        { "state": "ENABLED", "totpProviderConfig": { "adjacentIntervals": 1 } }
+      ]
+    }
+  }
+}
+```
+
+- The configuration applies when the daemon starts, in both profiles, and to every project created afterward (not the default project's current value). It is validated as the Admin API validates an update of `mfa`, and a value production would refuse stops the daemon at startup.
+- Nothing else changes. An Admin API update replaces the current configuration, and disabling MFA refuses TOTP as production does. A tenant follows its own `mfaConfig`, not this setting.
+- `POST /v1/sessions/{session}/reset` returns the project to the declared configuration. Without `auth.mfa`, a reset leaves a configuration set through the Admin API alone, as it does the rest of the project configuration. `DELETE /emulator/v1/projects/{project}/accounts` clears accounts only.
+- An export does not carry the project's `mfa` configuration, so an imported project keeps its own `auth.mfa` or Admin-set configuration.
+- The `emulator` profile keeps `auth.totp` working. Under `strict`, `auth.totp` without an `auth.mfa` that enables TOTP prints a startup warning naming `auth.mfa`.
 
 #### Enable multi-tenancy
 

@@ -1537,12 +1537,20 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
             store
                 .set_sign_in_config(auth_sign_in_config(&cfg))
                 .map_err(|error| format!("auth.signIn: {error:?}"))?;
+            // The declared initial multi-factor configuration is the project's configuration
+            // now, and what a control-plane reset returns to.
+            if let Some(mfa) = &cfg.auth_mfa {
+                store.set_mfa_seed(mfa.clone());
+            }
             if let Some(policy) = &cfg.auth_password_policy {
                 store.set_password_policy(policy.to_auth_policy());
             }
             store
                 .set_signup_quota_config(auth_signup_quota_config(&cfg)?)
                 .map_err(|error| format!("auth.quotaSimulation: {error:?}"))?;
+        }
+        if let (Some(warning), false) = (cfg.auth_totp_warning(), quiet) {
+            eprintln!("warning: {warning}");
         }
         // Both keys are 2048-bit RSA and slow to generate in a debug build; when both are
         // wanted they are generated concurrently on blocking tasks. They are always separate
@@ -1579,6 +1587,8 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
                 crate::random_u128()?,
             ),
         );
+        // A project created after start begins with the declared multi-factor configuration.
+        registry.set_new_project_mfa_seed(cfg.auth_mfa.clone());
         apply_auth_password_policy_overrides(&cfg, &registry)?;
         apply_auth_config_overrides(&cfg, &registry)?;
         let rules = Arc::new(RulesetSlot::new(load_rules(&cfg)?));

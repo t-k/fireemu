@@ -1294,6 +1294,9 @@ pub struct AuthStore {
     sign_in: SignInConfig,
     /// The project's multi-factor configuration (Admin v2 `Config.mfa`).
     mfa_config: crate::mfa_config::MfaProjectConfig,
+    /// The multi-factor configuration the daemon declared as the project's initial one
+    /// (`auth.mfa`), if it declared one. A control-plane reset returns `mfa_config` to it.
+    mfa_seed: Option<crate::mfa_config::MfaProjectConfig>,
     /// Written config members read back as written ([`crate::config_members`]).
     stored_members: crate::config_members::StoredConfigMembers,
     /// Deterministic, local-only sign-up quota state. Admin/import paths do not use it unless
@@ -1636,6 +1639,7 @@ impl AuthStore {
             config: ProjectAuthConfig::default(),
             sign_in: SignInConfig::default(),
             mfa_config: crate::mfa_config::MfaProjectConfig::default(),
+            mfa_seed: None,
             stored_members: crate::config_members::StoredConfigMembers::default(),
             signup_quota: SignupQuota::default(),
             oidc_configs: BTreeMap::new(),
@@ -2176,6 +2180,32 @@ impl AuthStore {
     /// Replaces the project's multi-factor configuration (the adapter validates it).
     pub fn set_mfa_config(&mut self, config: crate::mfa_config::MfaProjectConfig) {
         self.mfa_config = config;
+    }
+
+    /// The initial multi-factor configuration the daemon declared, if any.
+    #[must_use]
+    pub const fn mfa_seed(&self) -> Option<&crate::mfa_config::MfaProjectConfig> {
+        self.mfa_seed.as_ref()
+    }
+
+    /// Declares the project's initial multi-factor configuration (the caller validated it): it
+    /// is the live configuration now, and what [`Self::restore_mfa_seed`] returns to.
+    pub fn set_mfa_seed(&mut self, config: crate::mfa_config::MfaProjectConfig) {
+        self.mfa_config = config.clone();
+        self.mfa_seed = Some(config);
+    }
+
+    /// Returns the live multi-factor configuration to the declared initial one. Without a
+    /// declared one nothing changes (the other project configuration survives a reset the same
+    /// way). Reports whether a seed was restored.
+    pub fn restore_mfa_seed(&mut self) -> bool {
+        match &self.mfa_seed {
+            Some(seed) => {
+                self.mfa_config = seed.clone();
+                true
+            }
+            None => false,
+        }
     }
 
     /// The project's authorized domains: the configured list, or the one a new Firebase
@@ -5573,6 +5603,8 @@ impl AuthSnapshot {
             live.generated_local_id_reservation_ticket.clone();
         // A snapshot intentionally has no provider configurations. Preserve the destination's
         // control-plane state instead of allowing a cross-project restore to transfer it.
+        // The declared initial multi-factor configuration is the daemon's, not captured data.
+        restored.mfa_seed.clone_from(&live.mfa_seed);
         restored.oidc_configs = live.oidc_configs.clone();
         restored.oidc_order.clone_from(&live.oidc_order);
         restored.saml_configs = live.saml_configs.clone();
@@ -5899,6 +5931,10 @@ pub struct AuthRegistry {
     operation_gates: Mutex<BTreeMap<TenantKey, Weak<Mutex<()>>>>,
     /// The session epochs of deleted tenants (see [`RemovedTenantEpochs`]).
     removed_tenant_epochs: Mutex<BTreeMap<TenantKey, RemovedTenantEpochs>>,
+    /// The multi-factor configuration the daemon declared as a project's initial one (`auth.mfa`),
+    /// which every project created after start begins with (a session project, or a namespace
+    /// routed by its first Admin request), in place of the default project's live value.
+    new_project_mfa_seed: Mutex<Option<crate::mfa_config::MfaProjectConfig>>,
     membership_generation: AtomicU64,
     lifecycle_incarnation: Option<u128>,
     next_lifecycle_serial: AtomicU64,
@@ -6113,6 +6149,7 @@ impl AuthRegistry {
             password_policy_overrides: Mutex::new(BTreeMap::new()),
             tenant_config_overrides: Mutex::new(BTreeMap::new()),
             tenant_runtime_config_overrides: Mutex::new(BTreeMap::new()),
+            new_project_mfa_seed: Mutex::new(None),
             deleted_tenants: Mutex::new(BTreeSet::new()),
             operation_gates: Mutex::new(BTreeMap::new()),
             removed_tenant_epochs: Mutex::new(BTreeMap::new()),
@@ -6151,6 +6188,20 @@ impl AuthRegistry {
     #[must_use]
     pub fn routed_store_for(&self, project: &str) -> Option<Arc<Mutex<AuthStore>>> {
         self.projects.lock().ok()?.routed.get(project).cloned()
+    }
+
+    /// Declares the multi-factor configuration every project created from now on begins with
+    /// (`None`: multi-factor off, as a new production project has it).
+    pub fn set_new_project_mfa_seed(&self, seed: Option<crate::mfa_config::MfaProjectConfig>) {
+        if let Ok(mut current) = self.new_project_mfa_seed.lock() {
+            *current = seed;
+        }
+    }
+
+    /// The multi-factor configuration a project created now begins with, if one was declared.
+    #[must_use]
+    pub fn new_project_mfa_seed(&self) -> Option<crate::mfa_config::MfaProjectConfig> {
+        self.new_project_mfa_seed.lock().ok()?.clone()
     }
 
     /// Builds an isolated compatibility store without registering it. A rejected request can
@@ -6211,6 +6262,9 @@ impl AuthRegistry {
         store.set_project_number(self.project_numbers.get(project).copied());
         if let Some(signer) = signer {
             store.set_signer(signer);
+        }
+        if let Some(seed) = self.new_project_mfa_seed() {
+            store.set_mfa_seed(seed);
         }
         Some(store)
     }
@@ -6484,6 +6538,9 @@ impl AuthRegistry {
             );
         }
         default.clear();
+        // A control-plane reset returns the project to its declared initial multi-factor
+        // configuration (a no-op without one, as for the rest of the project configuration).
+        default.restore_mfa_seed();
         for store in &mut routed_guards {
             store.clear();
         }
@@ -6616,6 +6673,7 @@ impl AuthRegistry {
             );
         }
         parent.clear();
+        parent.restore_mfa_seed();
         for store in &mut tenant_guards {
             store.clear();
         }

@@ -2771,6 +2771,77 @@ fn strict_makes_only_a_value_that_is_not_jwt_shaped_anonymous() {
     }
 }
 
+/// Strict frames JSON answers as production does (stage 3 v9, compared headers and bytes): an
+/// uppercase charset on both dialects, the Google-fronted JSON API's error in its pretty layout
+/// with a final line feed, a bare `application/json` on its 204. The emulator profile keeps the
+/// official emulator's framing.
+#[test]
+fn strict_frames_json_answers_as_production_does_and_the_emulator_profile_as_the_official_one() {
+    let owner = [("authorization", "Bearer owner")];
+    let probe = |acceptance: TokenAcceptance| {
+        let s = state_with(Some(ALLOW_ALL_RULES), acceptance);
+        assert_eq!(anonymous_media_upload(&s, "f.txt"), 200);
+        let absent = handle(
+            &s,
+            req(
+                "GET",
+                &format!("/storage/v1/b/{BUCKET}/o/absent.txt"),
+                &owner,
+                b"",
+            ),
+        );
+        let present = handle(
+            &s,
+            req(
+                "GET",
+                &format!("/storage/v1/b/{BUCKET}/o/f.txt"),
+                &owner,
+                b"",
+            ),
+        );
+        let firebase = handle(&s, req("GET", &format!("/v0/b/{BUCKET}/o/f.txt"), &[], b""));
+        let deleted = handle(
+            &s,
+            req(
+                "DELETE",
+                &format!("/storage/v1/b/{BUCKET}/o/f.txt"),
+                &owner,
+                b"",
+            ),
+        );
+        (absent, present, firebase, deleted)
+    };
+    let (absent, present, firebase, deleted) = probe(TokenAcceptance::Verified);
+    assert_eq!(absent.status, 404);
+    assert_eq!(
+        String::from_utf8_lossy(&absent.body),
+        format!(
+            "{{\n  \"error\": {{\n    \"code\": 404,\n    \"message\": \"No such object: {BUCKET}/absent.txt\",\n    \"errors\": [\n      {{\n        \"message\": \"No such object: {BUCKET}/absent.txt\",\n        \"domain\": \"global\",\n        \"reason\": \"notFound\"\n      }}\n    ]\n  }}\n}}\n"
+        )
+    );
+    for response in [&absent, &present, &firebase] {
+        assert_eq!(
+            header(response, "content-type"),
+            Some("application/json; charset=UTF-8")
+        );
+    }
+    assert_eq!(deleted.status, 204);
+    assert_eq!(header(&deleted, "content-type"), Some("application/json"));
+
+    let (absent, present, firebase, deleted) = probe(TokenAcceptance::EmulatorMock);
+    for response in [&absent, &present, &firebase] {
+        assert_eq!(
+            header(response, "content-type"),
+            Some("application/json; charset=utf-8")
+        );
+    }
+    assert!(
+        absent.body.len() < 200,
+        "the official emulator's compact body"
+    );
+    assert!(header(&deleted, "content-type").is_none());
+}
+
 /// `PATCH /storage/v1/b/{bucket}/o/{object}` updates object metadata, as the Cloud Storage
 /// JSON API does in production (recorded: stage 3 v9, `setup/seed-metadata` and
 /// `boundary-gcs-admin-patch-present`, a 200 with the `storage#object` resource; an absent

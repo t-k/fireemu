@@ -2763,7 +2763,68 @@ pub fn handle(state: &StorageState, req: StorageRequest) -> StorageResponse {
         Route::XmlStyle { bucket, name } => xml_style_get(state, &bucket, &name, &req, &params),
         Route::NotImplemented => Ok(plain_status(501)),
     };
-    respond(outcome)
+    let response = respond(outcome);
+    if state.is_strict() {
+        production_framing(dialect, response)
+    } else {
+        response
+    }
+}
+
+/// The strict profile's framing of a JSON answer, compared with production's headers and bytes
+/// (stage 3 v9, both dialects): `application/json; charset=UTF-8` where the official emulator
+/// writes a lowercase charset, the Google-fronted JSON API's error bodies in its pretty layout
+/// (key order code, message, errors[message, domain, reason]; a final line feed), and a bare
+/// `application/json` content type on the JSON API's 204. The emulator profile keeps the
+/// official emulator's framing. The JSON API's media 404 stays `text/plain`, not production's
+/// `text/html`: the message reflects the object name, a reflected-XSS vector on the emulator's
+/// own origin (see `gcs_no_such_object`).
+fn production_framing(dialect: Dialect, mut response: StorageResponse) -> StorageResponse {
+    const JSON_LOWER: &str = "application/json; charset=utf-8";
+    const JSON_UPPER: &str = "application/json; charset=UTF-8";
+    let mut is_json = false;
+    for (name, value) in &mut response.headers {
+        if name.eq_ignore_ascii_case("content-type") && value.as_str() == JSON_LOWER {
+            *value = JSON_UPPER.to_owned();
+        }
+        if name.eq_ignore_ascii_case("content-type") && value.as_str() == JSON_UPPER {
+            is_json = true;
+        }
+    }
+    if dialect != Dialect::Gcs {
+        return response;
+    }
+    if response.status == 204
+        && !response
+            .headers
+            .iter()
+            .any(|(name, _)| name.eq_ignore_ascii_case("content-type"))
+    {
+        response
+            .headers
+            .push(("content-type".into(), "application/json".into()));
+    }
+    if is_json && response.status >= 400 && !response.body.starts_with(b"{\n") {
+        if let Some(text) = google_error_layout(&response.body) {
+            response.body = bytes::Bytes::from(text);
+        }
+    }
+    response
+}
+
+/// `{"error": {"code", "message", "errors": [{"message", "domain", "reason"}]}}` in the layout
+/// the Google-fronted JSON API writes, or `None` for a body of another shape.
+fn google_error_layout(body: &[u8]) -> Option<String> {
+    let value: Value = serde_json::from_slice(body).ok()?;
+    let error = value.get("error")?;
+    let entry = error.get("errors")?.as_array()?.first()?;
+    let quote = |v: &Value| serde_json::to_string(v.as_str()?).ok();
+    let (message, inner_message) = (quote(error.get("message")?)?, quote(entry.get("message")?)?);
+    let (domain, reason) = (quote(entry.get("domain")?)?, quote(entry.get("reason")?)?);
+    let code = error.get("code")?.as_u64()?;
+    Some(format!(
+        "{{\n  \"error\": {{\n    \"code\": {code},\n    \"message\": {message},\n    \"errors\": [\n      {{\n        \"message\": {inner_message},\n        \"domain\": {domain},\n        \"reason\": {reason}\n      }}\n    ]\n  }}\n}}\n"
+    ))
 }
 
 // ------------------------------------------------------------------------------------------

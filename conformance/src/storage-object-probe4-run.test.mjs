@@ -107,7 +107,7 @@ test("an honest run: started, the refusals, removal, one closing row `recorded`,
   assert.equal(result.outcome, "recorded");
   assert.equal(s.fake.store.size, 0);
   assert.equal(result.requests, s.fake.calls.length);
-  assert.ok(result.requests <= 40, `${result.requests}`);
+  assert.equal(result.requests, 24);
   assert.deepEqual(s.events, ["ledger-append:started", "ledger-append:finished:recorded"]);
   const [started, closing] = s.ledgerRows;
   assert.equal(started.maxRequests, 60);

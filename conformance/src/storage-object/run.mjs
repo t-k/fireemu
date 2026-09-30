@@ -3,8 +3,9 @@
 // record.mjs) and needs an approved packet, an owner ledger row, a project lock and a clean tree;
 // `probe-production` runs the probe (reads and two cancelled sessions; no object; see probe.mjs) and
 // `probe3-production` runs probe-v3 (seven small objects, recorded and removed; see probe3.mjs),
-// and `probe4-production` runs probe-v4 (three small objects and the refusals; see probe4.mjs), under
-// the same conditions. A probe packet is named for its kit (`probe-v2`, `probe-v3`, `probe-v4`).
+// and `probe4-production` runs probe-v4 (two small objects and the write answers recording 1
+// depends on; see probe4.mjs), under the same conditions. A probe packet is named for its kit
+// (`probe-v2`, `probe-v3`, `probe-v4`).
 
 import { buildStage3DraftPlan } from "./stage3-plan.mjs";
 

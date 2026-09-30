@@ -1,6 +1,7 @@
-// probe-v4: the refusals it asks for, the values it asks them with, and above all that its cleanup
-// finds and removes everything it can have created even when production accepts what it should have
-// refused. The production is a stateful fake (storage-object-probe4-fake.mjs).
+// probe-v4: the "not match" refusals, the accepted PUTs and the Firebase wrong-offset session it asks
+// for, the values it asks them with, and above all that its cleanup finds and removes everything it
+// can have created even when production accepts what it should have refused. The production is a
+// stateful fake (storage-object-probe4-fake.mjs).
 
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -52,18 +53,24 @@ const ids = (answers) => answers.map((row) => row.id);
 const status = (answers, id) => answers.find((row) => row.id === id)?.status;
 const at = (fake, predicate) => fake.calls.find(predicate);
 const q = (call) => new URL(call.href).searchParams;
+const decoded = (call) => decodeURIComponent(new URL(call.href).pathname);
+const respond = (body, code = 200) =>
+  new Response(JSON.stringify(body), {
+    status: code,
+    headers: { "content-type": "application/json" },
+  });
+const isTarget = (call) => decoded(call).endsWith(`/o/${plan.names.target}`);
+const isGcsList = (call) => new URL(call.href).pathname === `/storage/v1/b/${BUCKET}/o`;
 
 // ---- the plan --------------------------------------------------------------------------------------------
 
-test("the plan is three fixed names under the probe's own prefix, whatever the answers", () => {
+test("the plan is two fixed names under the probe's own prefix, whatever the answers", () => {
   assert.equal(plan.scope, `storage-object/${RUN}/probe4/`);
   assert.deepEqual(plan.objects, [
     `${plan.scope}pre/target.bin`,
-    `${plan.scope}copy/source.bin`,
-    `${plan.scope}copy/refused-copy.bin`,
+    `${plan.scope}firebase/resumable-wrong-offset.bin`,
   ]);
   for (const name of Object.values(plan.names)) assert.ok(name.startsWith(plan.scope), name);
-  assert.equal(new Set(Object.values(plan.names)).size, Object.keys(plan.names).length);
   const again = buildProbe4Plan({
     projectId: PROJECT,
     bucket: BUCKET,
@@ -78,14 +85,14 @@ test("the plan is three fixed names under the probe's own prefix, whatever the a
 
 // ---- an honest production -----------------------------------------------------------------------------------
 
-test("an honest run asks for every refusal, gets them, removes its three objects, and closes on an empty prefix", async () => {
+test("an honest run asks for every shape, gets the answers, removes its objects, and closes on an empty prefix", async () => {
   const { fake, answers, interrupted } = await run();
   assert.equal(interrupted, null);
   assert.equal(fake.store.size, 0);
   const closing = probe4ClosingRow(answers);
   assert.equal(closing.id, "final-list");
   assert.equal(closing.prefixEmpty, true);
-  assert.ok(fake.calls.length <= 40, `${fake.calls.length} requests`);
+  assert.equal(fake.calls.length, 24);
   assert.deepEqual(
     answers.filter((row) => row.skipped),
     [],
@@ -93,118 +100,110 @@ test("an honest run asks for every refusal, gets them, removes its three objects
   const expected = {
     "target-create": 200,
     "target-metadata": 200,
-    "upload-zero-present": 412,
-    "upload-generation-stale": 412,
-    "patch-generation-stale": 412,
-    "patch-metageneration-stale": 412,
-    "patch-metageneration-empty": 400,
-    "patch-metageneration-text": 400,
-    "put-metageneration-stale": 412,
-    "firebase-patch-generation-stale": 200,
-    "firebase-upload-zero-present": 200,
-    "delete-generation-stale": 412,
-    "delete-generation-not-match-current": 412,
-    "copy-source-create": 200,
-    "copy-live-create": 200,
-    "copy-missing-source": 404,
-    "rewrite-missing-source": 404,
-    "copy-live-destination": 412,
-    "rewrite-live-destination": 412,
-    "gcs-session-start": 200,
-    "gcs-session-wrong-offset": 400,
-    "gcs-session-cancel": 499,
-    "gcs-session-invalid": 404,
+    "patch-generation-not-match": 412,
+    "patch-metageneration-not-match": 412,
+    "put-generation-not-match": 412,
+    "put-metageneration-not-match": 412,
+    "upload-generation-not-match": 412,
+    "upload-metageneration-not-match": 412,
+    "put-metageneration-match": 200,
+    "put-metageneration-not-match-stale": 200,
+    "target-metadata-again": 200,
+    "delete-generation-not-match": 412,
+    "delete-metageneration-not-match": 412,
     "firebase-session-start": 200,
+    "firebase-session-query": 200,
     "firebase-session-wrong-offset": 400,
+    "firebase-session-query-after": 200,
     "firebase-session-cancel": 200,
-    "list-start-offset": 200,
-    "list-match-glob": 200,
-    "firebase-list-page-1": 200,
-    "firebase-list-page-2": 200,
+    "firebase-session-query-after-cancel": 200,
   };
+  assert.deepEqual(
+    answers.slice(0, 19).map((row) => row.id),
+    Object.keys(expected),
+  );
   for (const [id, wanted] of Object.entries(expected))
     assert.equal(status(answers, id), wanted, id);
-  assert.equal(
-    ids(answers).filter(
-      (id) => !(id in expected) && !id.startsWith("cleanup-") && !id.startsWith("final-"),
-    ).length,
-    0,
-  );
 });
 
-test("every GCS create carries ifGenerationMatch=0: the target, the source, the destination, the session", async () => {
+test("every GCS create of the target carries ifGenerationMatch=0, or the guard it tests", async () => {
   const { fake } = await run();
   const creates = fake.calls.filter(
-    (call) =>
-      call.method === "POST" &&
-      call.href.includes("/upload/storage/v1/b/") &&
-      !q(call).has("upload_id") &&
-      (q(call).get("name") === plan.names.target
-        ? call === fake.calls.find((c) => q(c).get("name") === plan.names.target)
-        : true),
+    (c) => c.method === "POST" && c.href.includes("/upload/storage/v1/b/"),
   );
-  const names = creates.map((call) => q(call).get("name"));
-  assert.deepEqual(
-    names.toSorted(),
-    [plan.names.gcsSession, plan.names.live, plan.names.source, plan.names.target].toSorted(),
-  );
-  for (const call of creates) assert.equal(q(call).get("ifGenerationMatch"), "0", call.href);
+  assert.equal(creates.length, 3);
+  for (const call of creates) assert.equal(q(call).get("name"), plan.names.target);
+  assert.equal(q(creates[0]).get("ifGenerationMatch"), "0");
+  assert.equal(q(creates[0]).has("ifGenerationNotMatch"), false);
+  const target = fake.history.find((row) => row.name === plan.names.target);
+  assert.equal(q(creates[1]).get("ifGenerationNotMatch"), target.generation);
+  assert.equal(q(creates[1]).has("ifGenerationMatch"), false);
+  assert.equal(q(creates[2]).get("ifMetagenerationNotMatch"), "1");
+  assert.equal(q(creates[2]).has("ifGenerationMatch"), false);
+  for (const call of creates) assert.equal(q(call).get("uploadType"), "media");
 });
 
-test("the preconditions are the target's own values, made stale by one: the generation and the metageneration", async () => {
+test("the guards are the target's own current values, on each of POST, PATCH, PUT and DELETE", async () => {
   const { fake } = await run();
   const target = fake.history.find((row) => row.name === plan.names.target);
-  const later = (BigInt(target.generation) + 1n).toString();
-  const patch = fake.calls.filter((c) => c.method === "PATCH" && c.href.includes("/storage/v1/"));
-  assert.equal(patch.length, 4);
-  assert.deepEqual(
-    patch.map((c) => [q(c).get("ifGenerationMatch"), q(c).get("ifMetagenerationMatch")]),
+  const guards = (call) =>
     [
-      [later, null],
-      [target.generation, "2"],
-      [target.generation, ""],
-      [target.generation, "abc"],
-    ],
-  );
-  const put = at(fake, (c) => c.method === "PUT" && c.href.includes("/storage/v1/"));
-  assert.deepEqual(
-    [q(put).get("ifGenerationMatch"), q(put).get("ifMetagenerationMatch")],
-    [target.generation, "2"],
-  );
-  const deletes = fake.calls.filter(
-    (c) => c.method === "DELETE" && decodeURIComponent(c.href).includes(`/o/${plan.names.target}?`),
-  );
-  assert.deepEqual(
-    deletes
-      .slice(0, 2)
-      .map((c) => [q(c).get("ifGenerationMatch"), q(c).get("ifGenerationNotMatch")]),
-    [
-      [later, null],
-      [null, target.generation],
-    ],
-  );
-  // The v0 routes get the same stale generation, and a create-only precondition on the live object.
-  const v0Patch = at(fake, (c) => c.method === "PATCH" && c.href.includes("/v0/"));
-  assert.equal(q(v0Patch).get("ifGenerationMatch"), later);
-  const v0Upload = at(
-    fake,
-    (c) =>
-      c.href.includes("/v0/b/") && c.method === "POST" && q(c).get("ifGenerationMatch") === "0",
-  );
-  assert.equal(q(v0Upload).get("name"), plan.names.target);
+      "ifGenerationMatch",
+      "ifGenerationNotMatch",
+      "ifMetagenerationMatch",
+      "ifMetagenerationNotMatch",
+    ]
+      .filter((key) => q(call).has(key))
+      .map((key) => `${key}=${q(call).get(key)}`);
+  const patches = fake.calls.filter((c) => c.method === "PATCH");
+  assert.deepEqual(patches.map(guards), [
+    [`ifGenerationNotMatch=${target.generation}`],
+    [`ifGenerationMatch=${target.generation}`, "ifMetagenerationNotMatch=1"],
+  ]);
+  const puts = fake.calls.filter((c) => c.method === "PUT");
+  assert.deepEqual(puts.map(guards), [
+    [`ifGenerationNotMatch=${target.generation}`],
+    [`ifGenerationMatch=${target.generation}`, "ifMetagenerationNotMatch=1"],
+    [`ifGenerationMatch=${target.generation}`, "ifMetagenerationMatch=1"],
+    [`ifGenerationMatch=${target.generation}`, "ifMetagenerationNotMatch=1"],
+  ]);
+  // The metageneration is 1 until an accepted PUT raises it: the deletes carry the fresh value, 3.
+  const deletes = fake.calls.filter((c) => c.method === "DELETE" && isTarget(c));
+  assert.deepEqual(deletes.slice(0, 2).map(guards), [
+    [`ifGenerationNotMatch=${target.generation}`],
+    ["ifMetagenerationNotMatch=3"],
+  ]);
 });
 
-test("the two deletes of the target come after every other write to it", async () => {
+test("the deletes and the accepted PUTs come after every refusal test, and the deletes come last on the target", async () => {
   const { fake } = await run();
   const writes = fake.calls.filter(
     (c) =>
       ["POST", "PATCH", "PUT", "DELETE"].includes(c.method) &&
-      (decodeURIComponent(c.href).includes(`/${plan.names.target}`) ||
-        q(c).get("name") === plan.names.target),
+      (isTarget(c) || q(c).get("name") === plan.names.target),
   );
-  const firstDelete = writes.findIndex((c) => c.method === "DELETE");
-  assert.ok(firstDelete > 0);
-  for (const call of writes.slice(firstDelete).slice(0, 2)) assert.equal(call.method, "DELETE");
+  assert.deepEqual(
+    writes.map((c) => c.method),
+    [
+      "POST",
+      "PATCH",
+      "PATCH",
+      "PUT",
+      "PUT",
+      "POST",
+      "POST",
+      "PUT",
+      "PUT",
+      "DELETE",
+      "DELETE",
+      "DELETE",
+    ],
+  );
+  // A metadata read of the target sits between the last PUT and the first delete, and gives the deletes their value.
+  const order = fake.calls.filter(isTarget).map((c) => c.method);
+  const lastPut = order.lastIndexOf("PUT");
+  assert.equal(order[lastPut + 1], "GET");
+  assert.equal(order[lastPut + 2], "DELETE");
 });
 
 test("the requests have the corpus's methods, headers and bodies", async () => {
@@ -212,77 +211,44 @@ test("the requests have the corpus's methods, headers and bodies", async () => {
   const corpus = buildCorpus({ bucket: BUCKET, prefix: plan.scope });
   const step = (recipe, id) =>
     corpus.recipes.find((r) => r.id === recipe).steps.find((s) => s.id === id);
-  const patchStep = step(
-    "storage-object/gcs/metageneration-preconditions",
-    "patch-ifMetagenerationMatch-stale",
-  );
-  const patch = at(fake, (c) => c.method === "PATCH" && c.href.includes("/storage/v1/"));
+  const meta = "storage-object/gcs/metageneration-preconditions";
+  const patchStep = step(meta, "patch-ifMetagenerationMatch-stale");
+  const patch = at(fake, (c) => c.method === "PATCH");
   assert.equal(patch.headers.get("content-type"), patchStep.headers["content-type"]);
   assert.deepEqual(JSON.parse(patch.body), patchStep.body.json);
-  const create = step(
+  const putStep = step(meta, "put-ifMetagenerationMatch-stale");
+  for (const put of fake.calls.filter((c) => c.method === "PUT")) {
+    assert.equal(put.headers.get("content-type"), putStep.headers["content-type"]);
+    assert.deepEqual(JSON.parse(put.body), putStep.body.json);
+  }
+  const createStep = step(
     "storage-object/gcs/generation-preconditions",
     "upload-ifGenerationMatch-zero-present",
   );
-  const post = at(fake, (c) => c.method === "POST" && c.href.includes("uploadType=media"));
-  assert.equal(post.body.toString("base64"), create.body.base64);
-  assert.equal(post.headers.get("content-type"), "application/octet-stream");
-  const copy = at(fake, (c) => c.href.includes("/copyTo/") && c.href.includes("missing-source"));
-  assert.deepEqual(JSON.parse(copy.body), {});
-  assert.equal(q(copy).get("ifGenerationMatch"), "0");
-  const rewriteMissing = at(
-    fake,
-    (c) => c.href.includes("/rewriteTo/") && c.href.includes("rewrite-missing-source"),
-  );
-  assert.equal(rewriteMissing.headers.get("content-type"), "application/json");
-  const live = at(fake, (c) => c.href.includes("/copyTo/") && c.href.includes("refused-copy"));
-  assert.ok(decodeURIComponent(live.href).includes(`/${plan.names.source}/copyTo/`));
-  assert.equal(q(live).get("ifGenerationMatch"), "0");
+  for (const post of fake.calls.filter(
+    (c) => c.method === "POST" && c.href.includes("uploadType=media"),
+  )) {
+    assert.equal(post.body.toString("base64"), createStep.body.base64);
+    assert.equal(post.headers.get("content-type"), createStep.headers["content-type"]);
+  }
   for (const row of fake.calls) {
     assert.equal(row.headers.get("authorization"), `Bearer ${TOKEN}`);
     assert.equal(row.headers.get("x-goog-user-project"), PROJECT);
   }
 });
 
-test("the sessions get a chunk at a wrong offset, a cancel, and (GCS) an invalid session", async () => {
+test("the Firebase session is the recipe's own sequence: start, query, a chunk at the wrong offset, query, cancel, query", async () => {
   const { fake } = await run();
-  const wrong = at(
-    fake,
-    (c) => c.method === "PUT" && c.headers.get("content-range") === "bytes 100-262143/262147",
-  );
-  assert.equal(wrong.body.length, 262044);
-  const cancel = at(fake, (c) => c.method === "DELETE" && q(c).has("upload_id"));
-  assert.match(q(cancel).get("upload_id"), /^s/);
-  const invalid = at(fake, (c) => q(c).get("upload_id") === "invalid-session-id");
-  assert.equal(invalid.method, "PUT");
-  assert.equal(invalid.headers.get("content-range"), "bytes */262147");
-  const firebase = fake.calls.filter((c) => q(c).get("upload_id")?.startsWith("f"));
+  const session = fake.calls.filter((c) => c.href.includes("/v0/b/"));
   assert.deepEqual(
-    firebase.map((c) => c.headers.get("x-goog-upload-command")),
-    ["upload", "cancel"],
+    session.map((c) => c.headers.get("x-goog-upload-command")),
+    ["start", "query", "upload", "query", "cancel", "query"],
   );
-  assert.equal(firebase[0].headers.get("x-goog-upload-offset"), "1");
-  assert.equal(firebase[0].body.length, 1);
-});
-
-test("the list filters and Firebase paging are asked for while the prefix holds objects", async () => {
-  const { fake } = await run();
-  const offset = at(fake, (c) => q(c).has("startOffset"));
-  assert.equal(q(offset).get("prefix"), plan.scope);
-  assert.equal(q(offset).get("startOffset"), `${plan.scope}copy/`);
-  assert.equal(q(offset).get("endOffset"), `${plan.scope}pre/`);
-  const glob = at(fake, (c) => q(c).has("matchGlob"));
-  assert.equal(q(glob).get("matchGlob"), `${plan.scope}copy/*`);
-  const page1 = at(
-    fake,
-    (c) =>
-      c.href.includes("/v0/b/") &&
-      c.method === "GET" &&
-      q(c).get("maxResults") === "1" &&
-      !q(c).has("pageToken"),
-  );
-  const page2 = at(fake, (c) => c.href.includes("/v0/b/") && q(c).has("pageToken"));
-  assert.equal(q(page1).get("prefix"), plan.scope);
-  assert.equal(q(page2).get("pageToken"), "1");
+  assert.equal(q(session[0]).get("name"), plan.names.firebaseSession);
+  const chunk = session[2];
+  assert.equal(chunk.headers.get("x-goog-upload-offset"), "1");
+  assert.equal(chunk.body.length, 1);
+  for (const call of session.slice(1)) assert.match(q(call).get("upload_id"), /^f/);
 });
 
 // ---- production that accepts what it should refuse --------------------------------------------------------------------
@@ -291,10 +257,20 @@ test("when production accepts every write it should refuse, cleanup still ends p
   const { fake, answers } = await run({ acceptRefused: true });
   assert.equal(fake.store.size, 0, "what the accepted writes made is removed");
   assert.equal(probe4ClosingRow(answers).prefixEmpty, true);
-  assert.ok(fake.calls.length <= PROBE4_MAX_REQUESTS, `${fake.calls.length}`);
-  // The accepted copies of a missing source made objects the plan does not name: removed by name.
-  assert.ok(ids(answers).some((id) => id.startsWith("cleanup-extra-delete-")));
-  assert.equal(status(answers, "copy-missing-source"), 200);
+  assert.equal(fake.calls.length, 22);
+  assert.equal(status(answers, "upload-generation-not-match"), 200);
+  // The accepted delete removed the target: what follows it is a 404, and cleanup finds it absent.
+  assert.equal(status(answers, "delete-generation-not-match"), 204);
+});
+
+test("the deletes carry the values of a fresh read, so an accepted create that replaced the target changes them", async () => {
+  const { fake } = await run({ acceptRefused: true });
+  const generations = fake.history.filter((row) => row.name === plan.names.target);
+  assert.equal(generations.length, 3);
+  const latest = generations.at(-1).generation;
+  assert.notEqual(latest, generations[0].generation);
+  const remove = at(fake, (c) => c.method === "DELETE" && q(c).has("ifGenerationNotMatch"));
+  assert.equal(q(remove).get("ifGenerationNotMatch"), latest);
 });
 
 test("when every recording step answers something unexpected, the run still ends prefix-empty", async () => {
@@ -303,48 +279,53 @@ test("when every recording step answers something unexpected, the run still ends
   assert.equal(fake.store.size, 0);
   assert.equal(probe4ClosingRow(answers).prefixEmpty, true);
   const skipped = answers.filter((row) => row.skipped);
-  for (const row of skipped)
-    assert.match(row.skipped, /no session URL|no target metadata|no next page token/);
-  assert.ok(skipped.length >= 5);
+  for (const row of skipped) assert.match(row.skipped, /no session URL|no target metadata/);
+  assert.equal(skipped.length, 8 + 2 + 5);
   for (const name of plan.objects)
     assert.ok(
-      fake.calls.some(
-        (c) => c.method === "GET" && decodeURIComponent(c.href).endsWith(`/o/${name}`),
-      ),
+      fake.calls.some((c) => c.method === "GET" && decoded(c).endsWith(`/o/${name}`)),
       name,
     );
 });
 
-test("a target whose metadata is unusable skips the precondition refusals, with the reason, and cleanup goes on", async () => {
-  const fake = production({});
-  const original = fake.fetchImpl;
-  fake.fetchImpl = async (url, init) => {
-    if (
-      init.method === "GET" &&
-      String(url).endsWith(`/o/${encodeURIComponent(plan.names.target)}`) &&
-      !fake.calls.some((c) => c.method === "DELETE")
-    )
-      return new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
-    return original(url, init);
-  };
-  const result = await sendProbe4({ wire: makeWire(fake), plan, origins: ORIGINS });
-  const skipped = result.answers
-    .filter((row) => row.skipped === "no target metadata")
-    .map((row) => row.id);
-  assert.equal(skipped.length, 11);
-  assert.ok(skipped.includes("delete-generation-not-match-current"));
-  assert.equal(fake.store.size, 0);
-  assert.ok(!fake.calls.some((c) => c.method === "PATCH"));
+test("a target whose metadata is unusable skips the guarded requests with the reason, and cleanup goes on", async () => {
+  for (const drop of ["generation", "metageneration", "both"]) {
+    const fake = production({});
+    const original = fake.fetchImpl;
+    fake.fetchImpl = async (url, init) => {
+      const response = await original(url, init);
+      if (
+        init.method === "GET" &&
+        decoded({ href: String(url) }).endsWith(`/o/${plan.names.target}`) &&
+        !fake.calls.some((c) => c.method === "DELETE")
+      ) {
+        const body = await response.json();
+        if (drop !== "metageneration") delete body.generation;
+        if (drop !== "generation") delete body.metageneration;
+        return respond(body);
+      }
+      return response;
+    };
+    const { answers } = await sendProbe4({ wire: makeWire(fake), plan, origins: ORIGINS });
+    const skipped = answers
+      .filter((row) => row.skipped === "no target metadata")
+      .map((row) => row.id);
+    assert.equal(skipped.length, 10, drop);
+    assert.ok(skipped.includes("put-metageneration-match"), drop);
+    assert.ok(skipped.includes("delete-metageneration-not-match"), drop);
+    assert.ok(!fake.calls.some((c) => c.method === "PATCH" || c.method === "PUT"), drop);
+    assert.equal(fake.store.size, 0, drop);
+  }
 });
 
 test("a session start without a URL skips its follow-ups with the reason", async () => {
   const { answers, fake } = await run({ odd: true });
   for (const id of [
-    "gcs-session-wrong-offset",
-    "gcs-session-cancel",
-    "gcs-session-invalid",
+    "firebase-session-query",
     "firebase-session-wrong-offset",
+    "firebase-session-query-after",
     "firebase-session-cancel",
+    "firebase-session-query-after-cancel",
   ])
     assert.deepEqual(
       answers.find((row) => row.id === id),
@@ -353,29 +334,19 @@ test("a session start without a URL skips its follow-ups with the reason", async
   assert.equal(fake.store.size, 0);
 });
 
-test("a Firebase list without a next-page token skips its second page", async () => {
-  const { answers } = await run({ noToken: true });
-  assert.deepEqual(
-    answers.find((row) => row.id === "firebase-list-page-2"),
-    {
-      id: "firebase-list-page-2",
-      skipped: "no next page token",
-    },
-  );
-});
-
 // ---- cleanup does not depend on an answer --------------------------------------------------------------------------
 
 test("a metadata read that gives no generation is followed by a delete by name", async () => {
   const { fake, answers } = await run({ noGeneration: true });
   assert.equal(fake.store.size, 0);
-  const deletes = fake.calls.filter((c) => c.method === "DELETE" && !q(c).has("upload_id"));
-  assert.ok(deletes.length >= 3);
+  const deletes = fake.calls.filter((c) => c.method === "DELETE" && isTarget(c));
+  assert.equal(deletes.length, 3);
+  assert.equal(q(deletes[2]).has("ifGenerationMatch"), false);
   assert.equal(probe4ClosingRow(answers).prefixEmpty, true);
 });
 
 test("an object that cannot be removed leaves the closing row not empty, and no more than ten are tried by name", async () => {
-  const stuck = plan.objects[1];
+  const stuck = plan.objects[0];
   const { fake, answers } = await run({ deleteFails: stuck });
   assert.ok(fake.store.has(stuck));
   const closing = probe4ClosingRow(answers);
@@ -389,7 +360,8 @@ test("at most ten leftovers are removed by name, and the worst case stays inside
   const { fake, answers } = await run({ strays: 15, strayPrefix, acceptRefused: true });
   assert.equal(ids(answers).filter((id) => id.startsWith("cleanup-extra-delete-")).length, 10);
   assert.equal(probe4ClosingRow(answers).prefixEmpty, false);
-  assert.ok(fake.calls.length <= PROBE4_MAX_REQUESTS, `${fake.calls.length}`);
+  assert.equal(fake.calls.length, 33);
+  assert.ok(fake.calls.length + 4 <= PROBE4_MAX_REQUESTS);
 });
 
 test("a connection lost at any request ends in a clean prefix or in an error, never in a leftover with a clean row", async () => {
@@ -415,13 +387,13 @@ test("a connection lost at any request ends in a clean prefix or in an error, ne
 });
 
 test("a connection lost during the recording ends the recording, and the objects made so far are removed", async () => {
-  const { fake, answers, interrupted } = await run({ failAt: 12 });
+  const { fake, answers, interrupted } = await run({ failAt: 8 });
   assert.ok(interrupted);
   assert.match(interrupted.reason, /fetch failed/);
-  assert.equal(typeof interrupted.step, "string");
+  assert.equal(interrupted.step, "upload-metageneration-not-match");
   assert.equal(fake.store.size, 0);
   assert.equal(probe4ClosingRow(answers).prefixEmpty, true);
-  assert.ok(!ids(answers).includes("list-match-glob"));
+  assert.ok(!ids(answers).includes("firebase-session-start"));
 });
 
 test("a capture failure halts the wire, and cleanup cannot go on either: the run stops", async () => {
@@ -440,7 +412,7 @@ test("a request the route table refuses is recorded as skipped and the run goes 
   const wire = makeWire(fake);
   const refusing = {
     fetch: async (href, init) => {
-      if (String(href).includes("matchGlob=")) {
+      if (init.method === "DELETE" && String(href).includes("ifMetagenerationNotMatch=")) {
         const error = new Error("route is not in the table");
         error.routeRefused = true;
         throw error;
@@ -451,216 +423,11 @@ test("a request the route table refuses is recorded as skipped and the run goes 
   };
   const result = await sendProbe4({ wire: refusing, plan, origins: ORIGINS });
   assert.deepEqual(
-    result.answers.find((row) => row.id === "list-match-glob"),
-    {
-      id: "list-match-glob",
-      skipped: "route is not in the table",
-    },
+    result.answers.find((row) => row.id === "delete-metageneration-not-match"),
+    { id: "delete-metageneration-not-match", skipped: "route is not in the table" },
   );
+  assert.equal(result.interrupted, null);
   assert.equal(fake.store.size, 0);
-});
-
-test("a multi-line error message ends the recording with its first line only", async () => {
-  const fake = production();
-  const original = fake.fetchImpl;
-  let count = 0;
-  fake.fetchImpl = async (url, init) => {
-    if (++count === 5) throw new TypeError("connection reset\nsecond line with detail");
-    return original(url, init);
-  };
-  const result = await sendProbe4({ wire: makeWire(fake), plan, origins: ORIGINS });
-  assert.equal(result.interrupted.reason, "connection reset");
-});
-
-test("the request count: an honest run is at most 40, and the worst case at most 51", async () => {
-  const honest = await run();
-  assert.ok(honest.fake.calls.length <= 40, `${honest.fake.calls.length}`);
-  const worst = await run({ acceptRefused: true, deleteFails: plan.objects[0] });
-  assert.ok(worst.fake.calls.length <= 51, `${worst.fake.calls.length}`);
-});
-
-// ---- what each request is, one by one -----------------------------------------------------------------------------------
-
-const decoded = (call) => decodeURIComponent(new URL(call.href).pathname);
-
-test("each refused create, copy and rewrite carries ifGenerationMatch=0 and the names the plan fixes", async () => {
-  const { fake } = await run();
-  const target = fake.calls.filter(
-    (c) =>
-      c.method === "POST" &&
-      q(c).get("name") === plan.names.target &&
-      c.href.includes("/upload/storage/"),
-  );
-  assert.deepEqual(
-    target.map((c) => q(c).get("ifGenerationMatch")),
-    ["0", "0", `${BigInt(fake.history.find((h) => h.name === plan.names.target).generation) + 1n}`],
-  );
-  const transfers = fake.calls
-    .filter((c) => /\/(copyTo|rewriteTo)\//.test(c.href))
-    .map((c) => {
-      const [, from, verb, to] = /\/o\/(.+)\/(copyTo|rewriteTo)\/b\/[^/]+\/o\/(.+)$/.exec(
-        decoded(c),
-      );
-      return [from, verb, to, q(c).get("ifGenerationMatch")];
-    });
-  assert.deepEqual(transfers, [
-    [plan.names.missingSource, "copyTo", plan.names.missingDestination, "0"],
-    [plan.names.rewriteMissingSource, "rewriteTo", plan.names.rewriteMissingDestination, "0"],
-    [plan.names.source, "copyTo", plan.names.live, "0"],
-    [plan.names.source, "rewriteTo", plan.names.live, "0"],
-  ]);
-});
-
-test("the PUT is the corpus's put step, the v0 upload is a binary create on the target, the v0 patch is the patch step", async () => {
-  const { fake } = await run();
-  const corpus = buildCorpus({ bucket: BUCKET, prefix: plan.scope });
-  const step = (id) =>
-    corpus.recipes
-      .find((r) => r.id === "storage-object/gcs/metageneration-preconditions")
-      .steps.find((s) => s.id === id);
-  const put = at(fake, (c) => c.method === "PUT" && c.href.includes("/storage/v1/"));
-  assert.equal(
-    put.headers.get("content-type"),
-    step("put-ifMetagenerationMatch-stale").headers["content-type"],
-  );
-  assert.deepEqual(JSON.parse(put.body), step("put-ifMetagenerationMatch-stale").body.json);
-  const v0 = at(
-    fake,
-    (c) =>
-      c.method === "POST" &&
-      c.href.includes("/v0/b/") &&
-      !q(c).has("upload_id") &&
-      !c.headers.has("x-goog-upload-command"),
-  );
-  assert.equal(v0.headers.get("content-type"), "application/octet-stream");
-  assert.equal(q(v0).get("name"), plan.names.target);
-  assert.equal(q(v0).get("ifGenerationMatch"), "0");
-  const v0Patch = at(fake, (c) => c.method === "PATCH" && c.href.includes("/v0/"));
-  assert.equal(v0Patch.headers.get("authorization"), `Bearer ${TOKEN}`);
-  assert.equal(decoded(v0Patch), `/v0/b/${BUCKET}/o/${plan.names.target}`);
-});
-
-test("the sessions are opened for their own fixed names and the GCS lists use the GCS route", async () => {
-  const { fake } = await run();
-  const starts = fake.calls.filter(
-    (c) =>
-      !q(c).has("upload_id") &&
-      (q(c).get("uploadType") === "resumable" ||
-        c.headers.get("x-goog-upload-command") === "start"),
-  );
-  assert.deepEqual(
-    starts.map((c) => q(c).get("name")),
-    [plan.names.gcsSession, plan.names.firebaseSession],
-  );
-  const gcsLists = fake.calls.filter((c) => q(c).has("startOffset") || q(c).has("matchGlob"));
-  for (const call of gcsLists)
-    assert.equal(new URL(call.href).pathname, `/storage/v1/b/${BUCKET}/o`);
-  const pages = fake.calls.filter(
-    (c) =>
-      new URL(c.href).pathname === `/v0/b/${BUCKET}/o` &&
-      c.method === "GET" &&
-      q(c).get("maxResults") === "1",
-  );
-  assert.equal(pages.length, 2);
-});
-
-test("metadata with only a generation, or only a metageneration, is not enough to make the refusals", async () => {
-  for (const drop of ["generation", "metageneration"]) {
-    const fake = production({});
-    const original = fake.fetchImpl;
-    fake.fetchImpl = async (url, init) => {
-      const response = await original(url, init);
-      if (
-        init.method === "GET" &&
-        String(url).endsWith(`/o/${encodeURIComponent(plan.names.target)}`) &&
-        !fake.calls.some((c) => c.method === "DELETE")
-      ) {
-        const body = await response.json();
-        delete body[drop];
-        return new Response(JSON.stringify(body), {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        });
-      }
-      return response;
-    };
-    const { answers } = await sendProbe4({ wire: makeWire(fake), plan, origins: ORIGINS });
-    assert.equal(answers.filter((row) => row.skipped === "no target metadata").length, 11, drop);
-    assert.ok(!fake.calls.some((c) => c.method === "PATCH"), drop);
-    assert.equal(fake.store.size, 0);
-  }
-});
-
-test("an empty next-page token is no token: the second page is skipped", async () => {
-  const fake = production({});
-  const original = fake.fetchImpl;
-  fake.fetchImpl = async (url, init) => {
-    const response = await original(url, init);
-    if (
-      new URL(String(url)).pathname === `/v0/b/${BUCKET}/o` &&
-      init.method === "GET" &&
-      !new URL(String(url)).searchParams.has("pageToken")
-    )
-      return new Response(JSON.stringify({ items: [], nextPageToken: "" }), {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      });
-    return response;
-  };
-  const { answers } = await sendProbe4({ wire: makeWire(fake), plan, origins: ORIGINS });
-  assert.deepEqual(
-    answers.find((row) => row.id === "firebase-list-page-2"),
-    { id: "firebase-list-page-2", skipped: "no next page token" },
-  );
-  assert.ok(!fake.calls.some((c) => new URL(c.href).searchParams.has("pageToken")));
-});
-
-// ---- the shared cleanup, judged through this probe ----------------------------------------------------------------
-
-const respond = (body, code = 200) =>
-  new Response(JSON.stringify(body), {
-    status: code,
-    headers: { "content-type": "application/json" },
-  });
-
-test("a generation that is not a plain number of at most twenty digits is not a precondition: the object is deleted by name", async () => {
-  for (const generation of ["1234567890123456789012", "12x4", "0", "abc1"]) {
-    const fake = production({});
-    const original = fake.fetchImpl;
-    fake.fetchImpl = async (url, init) => {
-      const response = await original(url, init);
-      const path = new URL(String(url)).pathname;
-      if (
-        init.method === "GET" &&
-        path === `/storage/v1/b/${BUCKET}/o/${encodeURIComponent(plan.names.source)}` &&
-        fake.calls.some((c) => c.method === "DELETE")
-      ) {
-        const body = await response.json();
-        return respond({ ...body, generation });
-      }
-      return response;
-    };
-    const { answers } = await sendProbe4({ wire: makeWire(fake), plan, origins: ORIGINS });
-    const deletes = fake.calls.filter(
-      (c) => c.method === "DELETE" && decoded(c).endsWith(`/o/${plan.names.source}`),
-    );
-    assert.equal(deletes.length, 1, generation);
-    assert.equal(q(deletes[0]).has("ifGenerationMatch"), false, generation);
-    assert.equal(fake.store.size, 0, generation);
-    assert.equal(probe4ClosingRow(answers).prefixEmpty, true, generation);
-  }
-});
-
-test("an error message longer than 200 characters is cut in the record", async () => {
-  const fake = production({});
-  const original = fake.fetchImpl;
-  let count = 0;
-  fake.fetchImpl = async (url, init) => {
-    if (++count === 5) throw new TypeError("x".repeat(500));
-    return original(url, init);
-  };
-  const { interrupted } = await sendProbe4({ wire: makeWire(fake), plan, origins: ORIGINS });
-  assert.equal(interrupted.reason.length, 200);
 });
 
 test("only an error marked routeRefused=true is a refusal by the route table; any other error ends the recording", async () => {
@@ -669,7 +436,7 @@ test("only an error marked routeRefused=true is a refusal by the route table; an
     const wire = makeWire(fake);
     const failing = {
       fetch: async (href, init) => {
-        if (String(href).includes("matchGlob=")) {
+        if (init.method === "DELETE" && String(href).includes("ifMetagenerationNotMatch=")) {
           const error = new Error("boom");
           if (marker !== undefined) error.routeRefused = marker;
           throw error;
@@ -679,8 +446,11 @@ test("only an error marked routeRefused=true is a refusal by the route table; an
       snapshot: () => wire.snapshot(),
     };
     const { answers, interrupted } = await sendProbe4({ wire: failing, plan, origins: ORIGINS });
-    assert.equal(interrupted?.step, "list-match-glob", String(marker));
-    assert.ok(!answers.some((row) => row.id === "list-match-glob" && row.skipped), String(marker));
+    assert.equal(interrupted?.step, "delete-metageneration-not-match", String(marker));
+    assert.ok(
+      !answers.some((row) => row.id === "delete-metageneration-not-match" && row.skipped),
+      String(marker),
+    );
     assert.equal(fake.store.size, 0);
   }
 });
@@ -690,7 +460,7 @@ test("a session start the route table refused skips the session's follow-ups, wi
   const wire = makeWire(fake);
   const refusing = {
     fetch: async (href, init) => {
-      if (String(href).includes("uploadType=resumable")) {
+      if (init.headers["x-goog-upload-command"] === "start") {
         const error = new Error("route is not in the table");
         error.routeRefused = true;
         throw error;
@@ -702,17 +472,69 @@ test("a session start the route table refused skips the session's follow-ups, wi
   const { answers, interrupted } = await sendProbe4({ wire: refusing, plan, origins: ORIGINS });
   assert.equal(interrupted, null);
   assert.deepEqual(
-    answers.find((row) => row.id === "gcs-session-start"),
-    {
-      id: "gcs-session-start",
-      skipped: "route is not in the table",
-    },
+    answers.find((row) => row.id === "firebase-session-start"),
+    { id: "firebase-session-start", skipped: "route is not in the table" },
   );
-  for (const id of ["gcs-session-wrong-offset", "gcs-session-cancel", "gcs-session-invalid"])
-    assert.deepEqual(
-      answers.find((row) => row.id === id),
-      { id, skipped: "no session URL" },
+  assert.deepEqual(
+    answers.find((row) => row.id === "firebase-session-cancel"),
+    { id: "firebase-session-cancel", skipped: "no session URL" },
+  );
+});
+
+test("a multi-line error message ends the recording with its first line only, cut at 200 characters", async () => {
+  for (const [message, wanted] of [
+    ["connection reset\nsecond line with detail", "connection reset"],
+    ["x".repeat(500), "x".repeat(200)],
+  ]) {
+    const fake = production();
+    const original = fake.fetchImpl;
+    let count = 0;
+    fake.fetchImpl = async (url, init) => {
+      if (++count === 5) throw new TypeError(message);
+      return original(url, init);
+    };
+    const result = await sendProbe4({ wire: makeWire(fake), plan, origins: ORIGINS });
+    assert.equal(result.interrupted.reason, wanted);
+  }
+});
+
+test("the request count: an honest run is 24, and the worst case, with ten leftovers, 37 at most", async () => {
+  const honest = await run();
+  assert.equal(honest.fake.calls.length, 24);
+  const worst = await run({
+    acceptRefused: true,
+    deleteFails: plan.objects[0],
+    strays: 15,
+    strayPrefix: `${plan.scope}stray/`,
+  });
+  assert.ok(worst.fake.calls.length <= 37, `${worst.fake.calls.length}`);
+});
+
+// ---- the shared cleanup, judged through this probe ----------------------------------------------------------------
+
+test("a generation that is not a plain number of at most twenty digits is not a precondition: the object is deleted by name", async () => {
+  for (const generation of ["1234567890123456789012", "12x4", "0", "abc1"]) {
+    const fake = production({});
+    const original = fake.fetchImpl;
+    fake.fetchImpl = async (url, init) => {
+      const response = await original(url, init);
+      if (
+        init.method === "GET" &&
+        decoded({ href: String(url) }).endsWith(`/o/${plan.names.firebaseSession}`) &&
+        fake.calls.some((c) => c.method === "DELETE")
+      ) {
+        return respond({ kind: "storage#object", name: plan.names.firebaseSession, generation });
+      }
+      return response;
+    };
+    const { answers } = await sendProbe4({ wire: makeWire(fake), plan, origins: ORIGINS });
+    const deletes = fake.calls.filter(
+      (c) => c.method === "DELETE" && decoded(c).endsWith(`/o/${plan.names.firebaseSession}`),
     );
+    assert.equal(deletes.length, 1, generation);
+    assert.equal(q(deletes[0]).has("ifGenerationMatch"), false, generation);
+    assert.equal(probe4ClosingRow(answers).prefixEmpty, true, generation);
+  }
 });
 
 test("what the final list holds is removed by name only when it is a string under the probe's own scope", async () => {
@@ -721,8 +543,10 @@ test("what the final list holds is removed by name only when it is a string unde
   const outside = `${plan.prefix}other-probe/foreign.bin`;
   fake.fetchImpl = async (url, init) => {
     const response = await original(url, init);
-    const u = new URL(String(url));
-    if (u.pathname === `/storage/v1/b/${BUCKET}/o` && u.searchParams.get("maxResults") === "1000")
+    if (
+      isGcsList({ href: String(url) }) &&
+      new URL(String(url)).searchParams.get("maxResults") === "1000"
+    )
       return respond({
         items: [
           { name: outside },
@@ -736,9 +560,7 @@ test("what the final list holds is removed by name only when it is a string unde
   };
   const { answers } = await sendProbe4({ wire: makeWire(fake), plan, origins: ORIGINS });
   const extra = fake.calls.filter(
-    (c) =>
-      (c.method === "DELETE" && decoded(c).includes("/o/") && decoded(c).endsWith("left.bin")) ||
-      decoded(c).endsWith("foreign.bin"),
+    (c) => c.method === "DELETE" && /(left|foreign)\.bin$/.test(decoded(c)),
   );
   assert.deepEqual(
     extra.map((c) => decoded(c).split("/o/")[1]),

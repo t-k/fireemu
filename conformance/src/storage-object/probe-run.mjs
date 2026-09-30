@@ -87,8 +87,9 @@ export const PROBE_V3_KIT = Object.freeze({
 });
 
 /**
- * probe-v4: the refusals whose absence could turn an accepted-when-refused write into needs-recovery
- * (three small objects, recorded and removed); closes on its last list of the prefix.
+ * probe-v4: the "not match" refusals, the accepted PUTs and the Firebase wrong-offset session that
+ * recording 1 depends on (two small objects, recorded and removed); closes on its last list of the
+ * prefix.
  */
 export const PROBE_V4_KIT = Object.freeze({
   name: "probe-v4",

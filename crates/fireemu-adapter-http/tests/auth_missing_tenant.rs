@@ -953,6 +953,20 @@ fn an_unverifiable_id_tokens_tenant_has_to_agree_with_the_named_tenant() {
         &json!({"idToken": without, "tenantId": "t-z"}),
     );
     assert!(registry.tenant_store("demo-app", "t-z").is_some());
+}
+
+#[test]
+fn an_empty_or_unreadable_token_tenant_names_no_tenant() {
+    use fireemu_core_auth::jwt::base64url_encode;
+    let (state, registry) = emulator();
+    let token = |claims: &Value| {
+        format!(
+            "{}.{}.{}",
+            base64url_encode(br#"{"alg":"RS256","kid":"other","typ":"JWT"}"#),
+            base64url_encode(claims.to_string().as_bytes()),
+            base64url_encode(b"signature")
+        )
+    };
     // An empty tenant claim is no tenant, as it is falsy in the official emulator's check: the
     // body tenant is made on a route that does not parse the token.
     let empty = token(&json!({"aud": "demo-app", "firebase": {"tenant": ""}}));

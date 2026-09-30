@@ -3474,6 +3474,22 @@ fn routed_to_another_project(
     false
 }
 
+/// The tenant the query names, for the two routes the official emulator reads it on:
+/// `accounts:batchGet` and the action link (which needs its `apiKey` and `oobCode` to get as far
+/// as looking a tenant up).
+fn query_tenant_of(handler: routes::Handler, query: Option<&str>) -> Option<String> {
+    let reads_the_query = match handler {
+        routes::Handler::AdminBatchGet => true,
+        routes::Handler::EmulatorAction => {
+            query_has(query, "apiKey") && query_has(query, "oobCode")
+        }
+        _ => false,
+    };
+    reads_the_query
+        .then(|| query_selectors(query).ok().and_then(|(_, tenant)| tenant))
+        .flatten()
+}
+
 /// The refusal a refresh token earns before a tenant is looked up: `INVALID_REFRESH_TOKEN` for
 /// one that does not decode, and `TENANT_ID_MISMATCH` for one of another tenant than `target`.
 fn refresh_token_refusal(
@@ -3602,16 +3618,7 @@ fn emulator_creates_named_tenant(
                 Some(Some(tenant)) => RefreshTokenTenant::Tenant(tenant),
             }
         });
-    let query_tenant = if matches!(
-        route.handler,
-        routes::Handler::AdminBatchGet | routes::Handler::EmulatorAction
-    ) && (route.handler != routes::Handler::EmulatorAction
-        || (query_has(query, "apiKey") && query_has(query, "oobCode")))
-    {
-        query_selectors(query).ok().and_then(|(_, tenant)| tenant)
-    } else {
-        None
-    };
+    let query_tenant = query_tenant_of(route.handler, query);
     // The named tenants must agree, as the emulator asserts before it looks the tenant up.
     let mut named = [path_tenant, body_tenant, token_tenant.as_deref()]
         .into_iter()

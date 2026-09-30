@@ -3861,6 +3861,44 @@ fn emulator_creates_named_tenant(
         .map(|_| target))
 }
 
+/// Whether the official emulator's operation for the route reads the request's ID token
+/// (`parseIdToken`, `operations.js:1715`, which finds the user in the token's tenant): `signUp`
+/// (an anonymous upgrade), `lookup`, `update`, `delete`, the session cookie, `signInWithEmailLink`,
+/// `signInWithIdp`, `signInWithPhoneNumber`, the MFA enrollment operations, and `sendOobCode` for
+/// the request types that use it (`VERIFY_EMAIL` and `VERIFY_AND_CHANGE_EMAIL`, unless it asks
+/// for the link with an email and no token, `operations.js:683-703`). `createAuthUri`,
+/// `resetPassword`, `signInWithCustomToken`, `sendOobCode` for `PASSWORD_RESET` and `EMAIL_SIGNIN`
+/// and the rest never read it.
+fn official_reads_the_id_token(resolution: routes::Resolution<'_>, body: &Value) -> bool {
+    let routes::Resolution::Matched { route, .. } = resolution else {
+        return false;
+    };
+    match route.handler {
+        routes::Handler::SignUp
+        | routes::Handler::Lookup
+        | routes::Handler::Update
+        | routes::Handler::Delete
+        | routes::Handler::AdminCreateSessionCookie
+        | routes::Handler::SignInWithEmailLink
+        | routes::Handler::SignInWithIdp
+        | routes::Handler::SignInWithPhoneNumber
+        | routes::Handler::MfaEnrollmentStart
+        | routes::Handler::MfaEnrollmentFinalize
+        | routes::Handler::MfaEnrollmentWithdraw => true,
+        routes::Handler::SendOobCode | routes::Handler::AdminSendOobCode => {
+            let asks_for_the_link_alone = body
+                .get("returnOobLink")
+                .is_some_and(|flag| flag.as_bool().unwrap_or(false))
+                && str_field(body, "idToken").is_none_or(str::is_empty);
+            matches!(
+                str_field(body, "requestType"),
+                Some("VERIFY_EMAIL" | "VERIFY_AND_CHANGE_EMAIL")
+            ) && !asks_for_the_link_alone
+        }
+        _ => false,
+    }
+}
+
 /// The tenant an account request's ID token names, answered as the official Auth emulator
 /// answers it (emulator profile; firebase-tools 15.28.2). The emulator takes the target tenant
 /// from the path, else from the body, else from the ID token (`toExegesisOperation`): a path or
@@ -3887,6 +3925,10 @@ fn emulator_named_tenant(
     let Some(registry) = state.registry.as_ref() else {
         return Ok(());
     };
+    // The official emulator parses the ID token only in the operations that read it.
+    if !official_reads_the_id_token(resolution, body) {
+        return Ok(());
+    }
     let account_api = path.starts_with("/identitytoolkit.googleapis.com/v1/")
         && !path.ends_with(":queryAccounts")
         && !path.ends_with("/accounts:query");

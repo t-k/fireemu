@@ -1147,6 +1147,15 @@ fn encode_segment(s: &str) -> String {
 
 /// The official emulator's `encodeRFC5987`: `encodeURIComponent`, with `'`, `(`, `)` and
 /// `*` escaped and `|`, `` ` `` and `^` kept literal.
+/// The `contentDisposition` a Firebase-protocol upload gets when it names none: `inline` with the
+/// object's last path segment as its file name (recorded, stage 3 v9:
+/// `inline; filename*=utf-8''object.bin` in the upload answer and on every later read; the
+/// official emulator stores a bare `inline`).
+fn default_content_disposition(name: &ObjectName) -> String {
+    let file = name.as_str().rsplit('/').next().unwrap_or(name.as_str());
+    format!("inline; filename*=utf-8''{}", rfc5987_encode(file))
+}
+
 fn rfc5987_encode(s: &str) -> String {
     use std::fmt::Write as _;
     let mut out = String::with_capacity(s.len());
@@ -1172,7 +1181,7 @@ fn rfc3339(t: LogicalInstant) -> String {
         return full;
     };
     let (whole, fraction) = seconds.split_once('.').unwrap_or((seconds, ""));
-    format!("{whole}.{:0<3.3}Z", fraction)
+    format!("{whole}.{fraction:0<3.3}Z")
 }
 
 // ------------------------------------------------------------------------------------------
@@ -2822,9 +2831,16 @@ fn send_file_bytes(
         ("content-type".to_owned(), meta.content_type.clone()),
         (
             "content-disposition".to_owned(),
+            // The disposition type, then the file name the official emulator appends; a stored
+            // value that already names the file (the Firebase upload default) contributes only
+            // its type, so the header keeps the official shape and carries one `filename*`.
             format!(
                 "{}; filename*={}",
-                meta.content_disposition.as_deref().unwrap_or("attachment"),
+                meta.content_disposition
+                    .as_deref()
+                    .map_or("attachment", |stored| stored
+                        .split_once("; filename*=")
+                        .map_or(stored, |(kind, _)| kind)),
                 rfc5987_encode(filename)
             ),
         ),
@@ -3186,7 +3202,7 @@ fn fb_commit(
             .put_prepared(b, n, prepared, meta, Precondition::default(), now)
             .map_err(fb_core_err)?;
         let m = store
-            .default_content_disposition_inline(b, n)
+            .default_content_disposition(b, n, &default_content_disposition(n))
             .map_err(fb_core_err)?;
         Ok(StorageResponse::json(200, &firebase_json(&m)))
     })();
@@ -3292,7 +3308,7 @@ fn fb_resumable_command(
         })?;
         let (b, n) = (m.bucket.clone(), m.name.clone());
         let m = store
-            .default_content_disposition_inline(&b, &n)
+            .default_content_disposition(&b, &n, &default_content_disposition(&n))
             .map_err(fb_core_err)?;
         return Ok(StorageResponse::json(200, &firebase_json(&m))
             .with_header("x-goog-upload-status", "final"));

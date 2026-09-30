@@ -1902,7 +1902,7 @@ fn object_timestamps_have_millisecond_precision_in_both_dialects() {
             let text = value.as_str().unwrap().to_owned();
             assert_eq!(text.len(), 24, "{text}");
             assert_eq!(&text[19..20], ".", "{text}");
-            assert!(text.ends_with(".987Z"), "{acceptance:?}: {text}");
+            assert_eq!(&text[19..], ".987Z", "{acceptance:?}: {text}");
         };
         let firebase = handle(&s, req("GET", &format!("/v0/b/{BUCKET}/o/t.txt"), &[], b""));
         let firebase = json_body(&firebase);
@@ -2246,6 +2246,80 @@ fn resumable_start_has_no_body_and_a_late_cancel_says_why() {
             ),
         );
         assert_eq!(cancel.status, 200);
+    }
+}
+
+/// A Firebase-protocol upload that names no `contentDisposition` gets `inline` with the object's
+/// last path segment as its file name, in the answer and on later reads of both dialects
+/// (recorded, stage 3 v9: `inline; filename*=utf-8''object.bin`); one it names is kept.
+#[test]
+fn a_firebase_upload_defaults_the_content_disposition_to_inline_with_the_file_name() {
+    for acceptance in BOTH_PROFILES {
+        let s = state_with(Some(ALLOW_ALL_RULES), acceptance);
+        let upload = |name: &str| {
+            json_body(&handle(
+                &s,
+                req(
+                    "POST",
+                    &format!("/v0/b/{BUCKET}/o?name={name}&uploadType=media"),
+                    &[("content-type", "text/plain")],
+                    b"hello",
+                ),
+            ))
+        };
+        assert_eq!(
+            upload("object.bin")["contentDisposition"],
+            "inline; filename*=utf-8''object.bin"
+        );
+        assert_eq!(
+            upload("dir%2Fsub%20dir%2Fb%20c.txt")["contentDisposition"],
+            "inline; filename*=utf-8''b%20c.txt"
+        );
+        let gcs = json_body(&handle(
+            &s,
+            req(
+                "GET",
+                &format!("/storage/v1/b/{BUCKET}/o/object.bin"),
+                &[("authorization", "Bearer owner")],
+                b"",
+            ),
+        ));
+        assert_eq!(
+            gcs["contentDisposition"],
+            "inline; filename*=utf-8''object.bin"
+        );
+        let (ct, body) = multipart(
+            &json!({"contentType": "text/plain", "contentDisposition": "attachment"}),
+            "text/plain",
+            b"hi",
+        );
+        let named = handle(
+            &s,
+            req(
+                "POST",
+                &format!("/v0/b/{BUCKET}/o?name=named.txt&uploadType=multipart"),
+                &[
+                    ("content-type", &ct),
+                    ("x-goog-upload-protocol", "multipart"),
+                ],
+                &body,
+            ),
+        );
+        assert_eq!(json_body(&named)["contentDisposition"], "attachment");
+        // The download header keeps the official shape and names the file once.
+        let media = handle(
+            &s,
+            req(
+                "GET",
+                &format!("/v0/b/{BUCKET}/o/object.bin?alt=media"),
+                &[],
+                b"",
+            ),
+        );
+        assert_eq!(
+            header(&media, "content-disposition"),
+            Some("inline; filename*=object.bin")
+        );
     }
 }
 

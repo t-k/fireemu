@@ -1049,6 +1049,57 @@ fn upload_sessions_expire_are_capped_and_reject_oversized_totals() {
 }
 
 #[test]
+fn the_default_content_disposition_fills_only_an_absent_value_without_a_bump_or_event() {
+    let mut s = StorageState::new(1);
+    let b = bucket();
+    let named = name("a/b.txt");
+    s.put(
+        &b,
+        &named,
+        b"x".to_vec(),
+        NewMetadata::default(),
+        Precondition::default(),
+        t(1),
+    )
+    .unwrap();
+    let before = s.get(&b, &named).unwrap().clone();
+    let filled = s
+        .default_content_disposition(&b, &named, "inline; filename*=utf-8''b.txt")
+        .unwrap();
+    assert_eq!(
+        filled.content_disposition.as_deref(),
+        Some("inline; filename*=utf-8''b.txt")
+    );
+    assert_eq!(filled.metageneration, before.metageneration);
+    assert_eq!(filled.updated, before.updated);
+    // A value that is already there is kept.
+    let again = s.default_content_disposition(&b, &named, "other").unwrap();
+    assert_eq!(
+        again.content_disposition.as_deref(),
+        Some("inline; filename*=utf-8''b.txt")
+    );
+    let kept = name("c.txt");
+    s.put(
+        &b,
+        &kept,
+        b"x".to_vec(),
+        NewMetadata {
+            content_disposition: Some("attachment".to_owned()),
+            ..NewMetadata::default()
+        },
+        Precondition::default(),
+        t(1),
+    )
+    .unwrap();
+    let still = s.default_content_disposition(&b, &kept, "inline").unwrap();
+    assert_eq!(still.content_disposition.as_deref(), Some("attachment"));
+    assert!(matches!(
+        s.default_content_disposition(&b, &name("absent"), "inline"),
+        Err(StorageError::NotFound)
+    ));
+}
+
+#[test]
 fn absent_objects_satisfy_only_if_generation_match_zero() {
     let mut s = StorageState::new(1);
     let b = bucket();

@@ -2166,21 +2166,22 @@ impl StorageState {
         result
     }
 
-    /// Applies the Firebase dialect's post-commit `contentDisposition: "inline"` default to
-    /// a stored object, exactly as the official emulator mutates the stored metadata after
-    /// its rules ran and after the finalize event was built: no metageneration bump and no
-    /// event. Returns the updated metadata.
-    pub fn default_content_disposition_inline(
+    /// Applies the Firebase dialect's post-commit `contentDisposition` default (`value`) to a
+    /// stored object that has none, exactly as the official emulator mutates the stored
+    /// metadata after its rules ran and after the finalize event was built: no metageneration
+    /// bump and no event. Returns the updated metadata.
+    pub fn default_content_disposition(
         &mut self,
         bucket: &BucketName,
         name: &ObjectName,
+        value: &str,
     ) -> Result<ObjectMetadata, StorageError> {
         let meta = self
             .objects
             .get_mut(&(bucket.clone(), name.clone()))
             .ok_or(StorageError::NotFound)?;
         if meta.content_disposition.is_none() {
-            meta.content_disposition = Some("inline".to_owned());
+            meta.content_disposition = Some(value.to_owned());
         }
         Ok(meta.clone())
     }

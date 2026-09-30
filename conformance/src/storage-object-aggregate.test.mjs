@@ -20,6 +20,8 @@ function fixture({
   preflightPresent = false,
   transportFailsAt = null,
   throttleAt = null,
+  throttleStatus = 503,
+  bumpAt = null,
 } = {}) {
   const plan = buildStage3DraftPlan({
     projectId: "example-project",
@@ -59,8 +61,10 @@ function fixture({
       }
       if (throttleAt === requests.length) {
         throttled++;
-        return new Response("{}", { status: 503 });
+        return new Response("{}", { status: throttleStatus });
       }
+      // An answer the recipe accepts, that the wire nevertheless counts as throttled.
+      if (bumpAt === requests.length) throttled++;
       const url = new URL(href);
       if (url.pathname === "/v1/storage/rules")
         return Response.json({
@@ -472,4 +476,32 @@ test("the failure of a recipe is journaled with the recipe, its reason and a pro
   assert.equal(result.failedRecipes[0].recording, 1);
   assert.equal(result.failedRecipes[0].reason, finish.result.failure.reason);
   assert.equal(f.objects.size, 0);
+});
+
+test("a recipe that completes but met a throttled answer (a 429 or a 5xx it captured) stops the run before it gets credit", async () => {
+  for (const status of [429, 503]) {
+    const f = fixture({ throttleStatus: status, bumpAt: 6 });
+    const result = await replayLocalAggregate(f.options);
+    assert.equal(result.status, "LOCAL_BLOCKED", String(status));
+    assert.equal(result.reason, "LOCAL_AGGREGATE_WIRE_TROUBLE");
+    assert.deepEqual(result.failedRecipes, []);
+    assert.deepEqual(result.counter.completedRecipes, [0, 0]);
+    assert.deepEqual(result.unresolved, []);
+    assert.equal(f.events.filter((row) => row.type === "recipe-finish").length, 0);
+    // The recipe itself was complete and journaled; only the credit was withheld.
+    const journaled = f.events.find((row) => row.type === "aggregate-recipe-result");
+    assert.equal(journaled.result.status, "LOCAL_COMPLETE");
+    assert.equal(f.objects.size, 0);
+    assert.equal(f.requests.length, 13, "and nothing more is sent");
+  }
+});
+
+test("a real 429 or 5xx answer inside a recipe that completes anyway stops the run", async () => {
+  for (const options of [{ throttleAt: 6 }, { throttleAt: 6, throttleStatus: 429 }]) {
+    const f = fixture(options);
+    const result = await replayLocalAggregate(f.options);
+    assert.notEqual(result.status, "LOCAL_COMPLETE");
+    assert.equal(f.events.filter((row) => row.type === "recipe-finish").length, 0);
+    assert.deepEqual(result.failedRecipes, []);
+  }
 });

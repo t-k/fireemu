@@ -141,7 +141,7 @@ const firstLine = (error) =>
 
 /**
  * Whether the wire saw a failed transport or a throttled (429) or failed (5xx) answer since
- * `before`, or halted: those end the run, whatever recipe met them.
+ * `before`, or halted: those end the run, whatever recipe met them and whatever it made of them.
  */
 export function wireTroubleSince(wire, before) {
   const state = wire.snapshot();
@@ -181,6 +181,51 @@ export async function recoverFailedRecipe({ sender, recipeId, error, wire, wireR
     cleanupFailures: [],
     unresolved: [],
   };
+}
+
+/**
+ * Everything between a recipe's adapter and its completion credit, in one place: the adapter runs
+ * (a thrown failure is recovered only if nothing is pending), its result is journaled, and then,
+ * before `finish` gives credit, the wire must have seen no failed transport, no 429, no 5xx and no
+ * halt since `before`. That last check is on every result, complete or blocked: an adapter that
+ * catches its own errors (the precondition, copy, session and auth recipes) returns a clean blocked
+ * result, and a recipe that takes a throttled answer as capture-only completes, and neither may go
+ * on. The sender is closed by then, so the caller's stop path has nothing left to clean up.
+ */
+export async function settleRecipe({
+  replay,
+  sender,
+  recipe,
+  bucket,
+  prefix,
+  onCapture,
+  wire,
+  wireReady,
+  before,
+  journal,
+  finish,
+}) {
+  let result;
+  try {
+    result = freeze(
+      await replay({ sender, recipe, bucket, prefix, onCapture, allowKnownLocalListGaps: true }),
+    );
+  } catch (error) {
+    const recovered = await recoverFailedRecipe({
+      sender,
+      recipeId: recipe.id,
+      error,
+      wire,
+      wireReady,
+      before,
+    });
+    if (!recovered) throw error;
+    result = freeze(recovered);
+  }
+  await journal(result);
+  if (wireTroubleSince(wire, before)) throw new Error("LOCAL_AGGREGATE_WIRE_TROUBLE");
+  await finish();
+  return result;
 }
 
 /** Execute the trusted local registry through one counter and one shared wire provider. */
@@ -373,38 +418,30 @@ export async function replayLocalAggregate(options) {
           onJournal,
         });
         const before = wire.snapshot();
-        try {
-          current.result = freeze(
-            await replay({
-              sender: current.sender,
-              recipe,
-              bucket: plan.bucket,
-              prefix: plan.recordings[recording].prefix,
-              onCapture,
-              allowKnownLocalListGaps: true,
-            }),
-          );
-        } catch (error) {
-          const recovered = await recoverFailedRecipe({
-            sender: current.sender,
-            recipeId: current.recipeId,
-            error,
-            wire,
-            wireReady,
-            before,
-          });
-          if (!recovered) throw error;
-          current.result = freeze(recovered);
-        }
-        await onJournal(
-          Object.freeze({
-            type: "aggregate-recipe-result",
-            recording: recording + 1,
-            recipeId: recipe.id,
-            result: current.result,
-          }),
-        );
-        await counter.finishRecipe(token);
+        await settleRecipe({
+          replay,
+          sender: current.sender,
+          recipe,
+          bucket: plan.bucket,
+          prefix: plan.recordings[recording].prefix,
+          onCapture,
+          wire,
+          wireReady,
+          before,
+          // The counter's terminal check reads `current.result`, so it is set before `finish`.
+          journal: (result) => {
+            current.result = result;
+            return onJournal(
+              Object.freeze({
+                type: "aggregate-recipe-result",
+                recording: recording + 1,
+                recipeId: recipe.id,
+                result,
+              }),
+            );
+          },
+          finish: () => counter.finishRecipe(token),
+        });
         if (current.result.status !== "LOCAL_COMPLETE")
           failedRecipes.push(
             Object.freeze({

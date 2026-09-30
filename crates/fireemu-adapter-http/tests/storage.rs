@@ -2827,6 +2827,42 @@ fn strict_frames_json_answers_as_production_does_and_the_emulator_profile_as_the
     }
     assert_eq!(deleted.status, 204);
     assert_eq!(header(&deleted, "content-type"), Some("application/json"));
+    // Only the 204 gains a content type: a status query answers 308 without one, and a non-error
+    // JSON body is not rewritten.
+    let strict = state_with(Some(ALLOW_ALL_RULES), TokenAcceptance::Verified);
+    let start = handle(
+        &strict,
+        req(
+            "POST",
+            &format!("/upload/storage/v1/b/{BUCKET}/o?uploadType=resumable&name=r.bin"),
+            &owner,
+            b"",
+        ),
+    );
+    let session = header(&start, "location")
+        .unwrap()
+        .strip_prefix("http://127.0.0.1:9199")
+        .unwrap()
+        .to_owned();
+    let status = handle(
+        &strict,
+        req(
+            "PUT",
+            &session,
+            &[
+                ("authorization", "Bearer owner"),
+                ("content-range", "bytes */4"),
+            ],
+            b"",
+        ),
+    );
+    assert_eq!(status.status, 308);
+    assert!(header(&status, "content-type").is_none());
+    assert!(present.body.starts_with(b"{"));
+    assert!(
+        !present.body.starts_with(b"{\n"),
+        "an object resource is not an error layout"
+    );
 
     let (absent, present, firebase, deleted) = probe(TokenAcceptance::EmulatorMock);
     for response in [&absent, &present, &firebase] {

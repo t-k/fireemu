@@ -2782,29 +2782,27 @@ pub fn handle(state: &StorageState, req: StorageRequest) -> StorageResponse {
 fn production_framing(dialect: Dialect, mut response: StorageResponse) -> StorageResponse {
     const JSON_LOWER: &str = "application/json; charset=utf-8";
     const JSON_UPPER: &str = "application/json; charset=UTF-8";
-    let mut is_json = false;
-    for (name, value) in &mut response.headers {
-        if name.eq_ignore_ascii_case("content-type") && value.as_str() == JSON_LOWER {
-            *value = JSON_UPPER.to_owned();
-        }
-        if name.eq_ignore_ascii_case("content-type") && value.as_str() == JSON_UPPER {
-            is_json = true;
+    let content_type = response
+        .headers
+        .iter_mut()
+        .find(|(name, _)| name.eq_ignore_ascii_case("content-type"));
+    let has_content_type = content_type.is_some();
+    if let Some((_, value)) = content_type {
+        if value.as_str() == JSON_LOWER {
+            JSON_UPPER.clone_into(value);
         }
     }
     if dialect != Dialect::Gcs {
         return response;
     }
-    if response.status == 204
-        && !response
-            .headers
-            .iter()
-            .any(|(name, _)| name.eq_ignore_ascii_case("content-type"))
-    {
+    if response.status == 204 && !has_content_type {
         response
             .headers
             .push(("content-type".into(), "application/json".into()));
     }
-    if is_json && response.status >= 400 && !response.body.starts_with(b"{\n") {
+    // Only an error body in the JSON API's shape (an `error` object with an `errors` entry)
+    // is rewritten; every other body, successful or not, is left as it is.
+    if !response.body.starts_with(b"{\n") {
         if let Some(text) = google_error_layout(&response.body) {
             response.body = bytes::Bytes::from(text);
         }

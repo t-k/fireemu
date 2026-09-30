@@ -1,5 +1,9 @@
 // Injected outbound admission only; no connection, peer status or process-quiescence proof.
 import { createHash } from "node:crypto";
+const typedArrayPrototype = Object.getPrototypeOf(Uint8Array.prototype);
+const byteLengthOf = Object.getOwnPropertyDescriptor(typedArrayPrototype, "byteLength").get;
+const byteOffsetOf = Object.getOwnPropertyDescriptor(typedArrayPrototype, "byteOffset").get;
+const bufferOf = Object.getOwnPropertyDescriptor(typedArrayPrototype, "buffer").get;
 
 export function createStreamingWriteGate({
   maxFrames,
@@ -89,7 +93,8 @@ export function createStreamingWriteGate({
     controller.abort();
     tracked("containment", () => contain({ signal: controller.signal, origin: stopOrigin })).then(
       () => {
-        containmentSettled = true;
+        if (performance.now() >= deadline) unsettledObserved = true;
+        else containmentSettled = true;
       },
       () => {
         containmentFailed = true;
@@ -145,21 +150,24 @@ export function createStreamingWriteGate({
     if (kind !== "open" && direction === "NEW") throw new Error("opening required");
     if ((kind === "frame" || kind === "half-close") && direction !== "OPEN")
       throw new Error("write direction is closed");
-    if (kind === "frame" && !Buffer.isBuffer(input) && !(input instanceof Uint8Array))
+    if (kind === "frame" && (!ArrayBuffer.isView(input) || !(input instanceof Uint8Array)))
       throw new Error("raw frame bytes required");
-    const length = kind === "frame" ? input.length + 5 : 0;
+    const payloadLength = kind === "frame" ? byteLengthOf.call(input) : 0;
+    const length = kind === "frame" ? payloadLength + 5 : 0;
     if (
       attemptedActions >= maxActions ||
       (kind === "frame" &&
-        (input.length > maxFrameBytes ||
+        (payloadLength > maxFrameBytes ||
           frameReservations >= maxFrames ||
           length > maxOutgoingBytes - outgoingBytes))
     )
       throw new Error("streaming reservation bound exceeded");
     const wire = kind === "frame" ? Buffer.alloc(length) : undefined;
     if (wire) {
-      wire.writeUInt32BE(input.length, 1);
-      Buffer.from(input).copy(wire, 5);
+      wire.writeUInt32BE(payloadLength, 1);
+      Buffer.from(
+        new Uint8Array(bufferOf.call(input), byteOffsetOf.call(input), payloadLength),
+      ).copy(wire, 5);
     }
     if (secret && wire?.includes(secret)) throw new Error("credential reflection refused");
     const intent = Object.freeze({
@@ -231,7 +239,7 @@ export function createStreamingWriteGate({
       clearTimeout(timer);
       signal?.removeEventListener("abort", onAbort);
     }
-    unsettledObserved = unsettledObserved || pending.size > 0;
+    unsettledObserved = unsettledObserved || pending.size > 0 || performance.now() >= deadline;
     return {
       deadlineAt: deadline,
       attemptedActions,

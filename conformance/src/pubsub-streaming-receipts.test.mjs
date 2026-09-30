@@ -371,3 +371,16 @@ test(
     }
   },
 );
+test("late receipt stop acknowledgment cannot beat an overdue absolute deadline timer", async () => {
+  const deadlineAt = performance.now() + 30;
+  const { q } = await queue({
+    deadlineAt,
+    stopOwned: () =>
+      Promise.resolve().then(() => {
+        while (performance.now() < deadlineAt + 5) {
+          /* Deliberately hold timer dispatch. */
+        }
+      }),
+  });
+  assert.equal((await q.done()).terminationRequired, true);
+});

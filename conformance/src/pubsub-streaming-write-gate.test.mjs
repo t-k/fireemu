@@ -402,3 +402,37 @@ test(
     }
   },
 );
+test("late containment acknowledgment cannot beat an overdue absolute deadline timer", async () => {
+  const deadlineAt = performance.now() + 30;
+  const { g } = await gate({
+    deadlineAt,
+    contain: () =>
+      Promise.resolve().then(() => {
+        while (performance.now() < deadlineAt + 5) {
+          /* Deliberately hold timer dispatch. */
+        }
+      }),
+  });
+  assert.equal((await g.done()).terminationRequired, true);
+});
+test("overridden outgoing byte-view properties cannot reenter finite frame admission", async () => {
+  const { g, issued } = await gate({ maxFrames: 1 });
+  await g.open();
+  let getters = 0;
+  const input = new Uint8Array([9]);
+  Object.defineProperty(input, "length", {
+    get() {
+      getters++;
+      g.write(Buffer.alloc(0)).catch(() => {});
+      return 1;
+    },
+  });
+  try {
+    await g.write(input);
+    assert.equal(getters, 0);
+    assert.equal(issued.length, 2);
+    assert.deepEqual(issued[1][1], Buffer.from([0, 0, 0, 0, 1, 9]));
+  } finally {
+    await g.done();
+  }
+});

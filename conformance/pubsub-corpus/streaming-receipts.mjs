@@ -81,7 +81,8 @@ export function createStreamingReceiptQueue({
     ownedStarted = true;
     track("owned-stop", () => stopOwned({ signal: controller.signal, reason })).then(
       () => {
-        ownedSettled = true;
+        if (performance.now() >= deadline) uncertainSeen = true;
+        else ownedSettled = true;
       },
       () => {
         ownedFailed = true;
@@ -248,7 +249,11 @@ export function createStreamingReceiptQueue({
     await boundedWait(Promise.allSettled(pending.values()));
     clearTimeout(timer);
     signal?.removeEventListener("abort", onAbort);
-    uncertainSeen = uncertainSeen || pending.size > 0 || drainedEvents !== events;
+    uncertainSeen =
+      uncertainSeen ||
+      pending.size > 0 ||
+      drainedEvents !== events ||
+      performance.now() >= deadline;
     return {
       deadlineAt: deadline,
       events,

@@ -3334,6 +3334,122 @@ fn a_read_only_transaction_takes_its_snapshot_at_its_first_use() {
     assert_eq!(state.retained_versions(), 2);
 }
 
+// P11 (REST): a transaction kept alive by reads past its 270 s total lifetime. The first request
+// after it answers ABORTED "no longer valid"; a Commit and a Rollback after that answer
+// INVALID_ARGUMENT "Invalid transaction." (the transaction is forgotten). An idle expiry keeps the
+// lineage until the total lifetime, so its later requests still answer ABORTED.
+fn invalid_transaction(result: Result<(), FirestoreError>) {
+    match result {
+        Err(FirestoreError::InvalidArgument(message)) if message == "Invalid transaction." => {}
+        other => panic!("expected Invalid transaction., got {other:?}"),
+    }
+}
+
+fn aborted_no_longer_valid(result: Result<(), FirestoreError>) {
+    match result {
+        Err(FirestoreError::Aborted(message)) if message == NO_LONGER_VALID => {}
+        other => panic!("expected ABORTED no longer valid, got {other:?}"),
+    }
+}
+
+fn aged_transaction() -> (FirestoreState, TransactionId) {
+    let mut state = FirestoreState::with_limit_scope(LimitScope::Production);
+    state
+        .commit(&[set("p11/doc", &[("v", Value::Integer(1))])], None, t(0))
+        .unwrap();
+    let transaction = state.begin_transaction(false, t(0)).unwrap();
+    for second in (24..=264).step_by(24) {
+        state.touch_transaction(&transaction, t(second)).unwrap();
+    }
+    (state, transaction)
+}
+
+#[test]
+fn after_the_total_lifetime_the_first_read_is_aborted_and_a_commit_and_rollback_are_invalid() {
+    let (mut state, transaction) = aged_transaction();
+    aborted_no_longer_valid(state.touch_transaction(&transaction, t(271)));
+    let write = [set("p11/doc", &[("v", Value::Integer(2))])];
+    invalid_transaction(state.commit(&write, Some(&transaction), t(272)).map(|_| ()));
+    invalid_transaction(state.rollback(&transaction));
+    invalid_transaction(state.touch_transaction(&transaction, t(273)));
+    assert_eq!(state.transaction_bookkeeping_stats().active, 0);
+}
+
+#[test]
+fn a_first_request_that_finds_the_lifetime_expired_after_other_maintenance_is_still_aborted() {
+    let (mut state, transaction) = aged_transaction();
+    // Maintenance at the deadline (here another begin) must not forget it before a request refused it.
+    let other = state.begin_transaction(true, t(271)).unwrap();
+    aborted_no_longer_valid(state.touch_transaction(&transaction, t(272)));
+    invalid_transaction(state.rollback(&transaction));
+    state.rollback(&other).unwrap();
+}
+
+#[test]
+fn a_commit_as_the_first_request_after_the_lifetime_is_aborted_and_a_rollback_then_invalid() {
+    let (mut state, transaction) = aged_transaction();
+    let write = [set("p11/doc", &[("v", Value::Integer(2))])];
+    aborted_no_longer_valid(state.commit(&write, Some(&transaction), t(271)).map(|_| ()));
+    invalid_transaction(state.rollback(&transaction));
+}
+
+#[test]
+fn a_commit_that_finds_the_lifetime_expired_after_other_maintenance_is_aborted_and_the_next_is_invalid(
+) {
+    let (mut state, transaction) = aged_transaction();
+    let other = state.begin_transaction(true, t(271)).unwrap();
+    let write = [set("p11/doc", &[("v", Value::Integer(2))])];
+    aborted_no_longer_valid(state.commit(&write, Some(&transaction), t(272)).map(|_| ()));
+    invalid_transaction(state.commit(&write, Some(&transaction), t(273)).map(|_| ()));
+    state.rollback(&other).unwrap();
+}
+
+#[test]
+fn a_rollback_as_the_first_request_after_the_lifetime_is_accepted_once() {
+    let (mut state, transaction) = aged_transaction();
+    let other = state.begin_transaction(true, t(271)).unwrap();
+    state.rollback(&transaction).unwrap();
+    invalid_transaction(state.rollback(&transaction));
+    state.rollback(&other).unwrap();
+}
+
+#[test]
+fn an_idle_expiry_keeps_answering_aborted_until_the_total_lifetime() {
+    let mut state = FirestoreState::with_limit_scope(LimitScope::Production);
+    let transaction = state.begin_transaction(false, t(0)).unwrap();
+    aborted_no_longer_valid(state.touch_transaction(&transaction, t(130)));
+    aborted_no_longer_valid(state.touch_transaction(&transaction, t(131)));
+}
+
+#[test]
+fn an_expiry_nobody_asked_about_is_forgotten_after_the_retention_bound() {
+    let (mut state, transaction) = aged_transaction();
+    let _other = state.begin_transaction(true, t(271 + 601)).unwrap();
+    invalid_transaction(state.touch_transaction(&transaction, t(271 + 602)));
+}
+
+#[test]
+fn the_emulator_profile_keeps_its_answers_after_the_total_lifetime() {
+    let mut state = FirestoreState::with_limit_scope(LimitScope::OfficialEmulator);
+    let transaction = state.begin_transaction(false, t(0)).unwrap();
+    for second in (30..=240).step_by(30) {
+        state.touch_transaction(&transaction, t(second)).unwrap();
+    }
+    // Unchanged by the production-profile rule above: the transaction is gone once maintenance ran.
+    aborted_no_longer_valid(state.touch_transaction(&transaction, t(271)));
+    invalid_transaction(state.touch_transaction(&transaction, t(272)));
+
+    // Maintenance at the deadline forgets it at once (the production profile keeps it for the
+    // first request that is refused).
+    let mut state = FirestoreState::with_limit_scope(LimitScope::OfficialEmulator);
+    let transaction = state.begin_transaction(false, t(0)).unwrap();
+    for second in (30..=240).step_by(30) {
+        state.touch_transaction(&transaction, t(second)).unwrap();
+    }
+    let _other = state.begin_transaction(true, t(271)).unwrap();
+    invalid_transaction(state.touch_transaction(&transaction, t(272)));
+}
+
 #[test]
 fn a_transaction_with_no_preconditions_refused_is_not_ended_by_other_refusals() {
     // Only the precondition refusal is measured; a commit that fails for another reason (here a

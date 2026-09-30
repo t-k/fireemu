@@ -590,6 +590,9 @@ pub struct HistoryProjection {
 
 impl std::error::Error for FirestoreError {}
 
+// Each flag is an independent fact about one transaction (mode, a pending lock wait, an unpinned
+// snapshot, an expiry nobody was refused for); a state enum would multiply them.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone)]
 struct Transaction {
     read_only: bool,
@@ -619,6 +622,11 @@ struct Transaction {
     /// at its begin (P02: an outside write between the begin and the first read is shown). The
     /// emulator profile does the same for a read-write transaction (the official emulator's read).
     snapshot_pending: bool,
+    /// Production profile: the transaction ran out of its total lifetime and no request has been
+    /// refused for it yet. The first request answers `ABORTED` "no longer valid"; after that the
+    /// transaction is forgotten and every use answers `INVALID_ARGUMENT` "Invalid transaction."
+    /// (P11: a read, then a Commit and a Rollback, REST).
+    expiry_unnoticed: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -1065,6 +1073,9 @@ const MAX_FINISHED_TRANSACTION_LINEAGE: usize = 8_192;
 // This is a provisional bracket, not an exact production threshold.
 // The pinned official emulator retains its nominal idle budget without this allowance.
 const TRANSACTION_IDLE_ALLOWANCE_SECONDS: i64 = 60;
+/// How long a transaction that ran out of its total lifetime waits for the first request that is
+/// refused for it, before it is forgotten anyway. Unobserved; a bound so nothing is kept forever.
+const UNNOTICED_EXPIRY_RETENTION_SECONDS: i64 = 600;
 
 fn transaction_ttl() -> LogicalDuration {
     seconds_limit(limits::TRANSACTION_TOTAL_TIME, 270)
@@ -1097,6 +1108,19 @@ fn transaction_lineage_deadline(transaction: &Transaction) -> LogicalInstant {
         .started_at
         .checked_add(transaction_ttl())
         .unwrap_or(LogicalInstant::MAX)
+}
+
+fn finished_lineage_deadline(transaction: &Transaction) -> LogicalInstant {
+    let deadline = transaction_lineage_deadline(transaction);
+    if transaction.expiry_unnoticed {
+        deadline
+            .checked_add(LogicalDuration::from_seconds(
+                UNNOTICED_EXPIRY_RETENTION_SECONDS,
+            ))
+            .unwrap_or(LogicalInstant::MAX)
+    } else {
+        deadline
+    }
 }
 
 fn decrement_version_count(versions: &mut BTreeMap<CommitVersion, usize>, version: CommitVersion) {
@@ -2242,6 +2266,7 @@ impl FirestoreState {
             activity: 0,
             waiting_to_commit: false,
             snapshot_pending: false,
+            expiry_unnoticed: false,
         };
         self.active_transaction_deadlines.insert((
             transaction_deadline(&transaction, self.limit_scope),
@@ -2273,6 +2298,8 @@ impl FirestoreState {
                 continue;
             }
             transaction.state = TransactionState::Finished;
+            transaction.expiry_unnoticed = self.limit_scope == LimitScope::Production
+                && deadline == transaction_lineage_deadline(transaction);
             self.active_transaction_conflict_ledger_bytes = self
                 .active_transaction_conflict_ledger_bytes
                 .saturating_sub(transaction.conflict_ledger_bytes);
@@ -2285,7 +2312,7 @@ impl FirestoreState {
                 transaction.read_version,
             );
             self.finished_transaction_deadlines
-                .insert((transaction_lineage_deadline(transaction), id.clone()));
+                .insert((finished_lineage_deadline(transaction), id.clone()));
             self.finished_transactions.insert(id);
         }
         while let Some((deadline, id)) = self.finished_transaction_deadlines.first().cloned() {
@@ -2304,6 +2331,21 @@ impl FirestoreState {
             }
         }
         self.evict_finished_transactions();
+    }
+
+    /// Forgets a transaction that ran out of its total lifetime once a request has been refused
+    /// for it (production profile); a later use answers "Invalid transaction.".
+    fn forget_noticed_expiry(&mut self, id: &TransactionId) {
+        if self
+            .transactions
+            .get(id)
+            .is_some_and(|transaction| transaction.expiry_unnoticed)
+        {
+            self.finished_transaction_deadlines
+                .retain(|(_, finished)| finished != id);
+            self.finished_transactions.remove(id);
+            self.transactions.remove(id);
+        }
     }
 
     fn ensure_transaction_capacity(&self) -> Result<(), FirestoreError> {
@@ -2462,6 +2504,10 @@ impl FirestoreState {
         id: &TransactionId,
         now: LogicalInstant,
     ) -> Result<(), FirestoreError> {
+        if let Err(error) = self.transaction(id) {
+            self.forget_noticed_expiry(id);
+            return Err(error);
+        }
         let t = self.transaction(id)?;
         // Expiry is inclusive at the deadline (`now >= deadline`). Commit validation uses
         // this same boundary, so the transaction is gone at the exact deadline.
@@ -3390,6 +3436,7 @@ impl FirestoreState {
                     | TransactionState::CommitRefused
             )
         }) {
+            self.forget_noticed_expiry(id);
             return Ok(());
         }
         self.transaction(id)?;
@@ -3645,8 +3692,13 @@ impl FirestoreState {
         writes: &[Write],
         now: LogicalInstant,
     ) -> Result<(), FirestoreError> {
+        if let Err(error) = self.transaction(id) {
+            self.forget_noticed_expiry(id);
+            return Err(error);
+        }
         let transaction = self.transaction(id)?;
-        if now >= transaction_deadline(transaction, self.limit_scope) {
+        let deadline = transaction_deadline(transaction, self.limit_scope);
+        if now >= deadline {
             self.finish_transaction(id, TransactionState::Finished);
             self.compact(now);
             return Err(FirestoreError::Aborted(TRANSACTION_NO_LONGER_VALID.into()));

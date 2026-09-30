@@ -23,7 +23,7 @@ class Clock:
 class Service:
     """A stand-in for Firestore over both transports; each knob is one production answer a table may allow."""
 
-    def __init__(self, clock, *, fail_code=9, writer_code=0, writer_applies=None, rollback_code=0, repeat_rollback_code=0, after_commit_rollback_code=10, fail_at=None, foreign_marker=False, duplicate_tokens=False, corrupt=None, existing=None, dead_on_failure=False, dead_rollback_code=10, finished_reads_refused=False, locks=False, partial_publish=False, ro_snapshot="begin", ro_empty_refused=False, ro_write_ends_token=False, rw_snapshot="latest", rw_commit_code=0, expiry=False, lifetime=270, idle=120):
+    def __init__(self, clock, *, fail_code=9, writer_code=0, writer_applies=None, rollback_code=0, repeat_rollback_code=0, after_commit_rollback_code=10, fail_at=None, foreign_marker=False, duplicate_tokens=False, corrupt=None, existing=None, dead_on_failure=False, dead_rollback_code=10, finished_reads_refused=False, locks=False, partial_publish=False, ro_snapshot="begin", ro_empty_refused=False, ro_write_ends_token=False, rw_snapshot="latest", rw_commit_code=0, rollback_details=None, expiry=False, lifetime=270, idle=120):
         self.clock, self.fail_code, self.writer_code, self.rollback_code = clock, fail_code, writer_code, rollback_code
         self.writer_applies = writer_applies if writer_applies is not None else writer_code == 0
         self.repeat_rollback_code, self.after_commit_rollback_code = repeat_rollback_code, after_commit_rollback_code
@@ -37,6 +37,7 @@ class Service:
         self.rw_snapshot = rw_snapshot
         self.rw_pinned = set()
         self.rw_commit_code = rw_commit_code
+        self.rollback_details = rollback_details
         self.expiry, self.lifetime, self.idle, self.tstart, self.tlast = expiry, lifetime, idle, {}, {}
         self.genesis, self.hist, self.ro_time = {}, {}, {}
         self.calls, self.documents, self.tokens, self.version = [], {}, {}, 0
@@ -158,7 +159,7 @@ class Service:
             if state is None: return self._receipt(transport, 3, details="unknown transaction")
             def answer(code):
                 gone = "The referenced transaction has expired or is no longer valid."
-                return self._receipt(transport, code, details="" if code == 0 else gone if code == 10 else "refused", response={} if code == 0 else None)
+                return self._receipt(transport, code, details="" if code == 0 else self.rollback_details or (gone if code == 10 else "Invalid transaction." if code == 3 else "refused"), response={} if code == 0 else None)
             if state == "dead": return answer(self.dead_rollback_code)
             if state == "open":
                 if self.rollback_code == 0: self.tokens[token] = "rolled-back"
@@ -320,6 +321,20 @@ def test_a_refused_rollback_the_table_allows_finishes_the_token_as_refused():
     receipt = fixture(rollback_code=10)[0].run()
     assert receipt["complete"] is True
     assert {entry["state"] for entry in receipt["tokens"].values()} == {"released-refused"}
+
+
+def test_a_refused_rollback_with_the_recorded_invalid_transaction_body_finishes_the_token():
+    # P11 (REST): the cleanup Rollback of a token that outlived its total lifetime answers 3 "Invalid transaction.".
+    receipt = fixture(rollback_code=3)[0].run()
+    assert receipt["complete"] is True
+    assert {entry["state"] for entry in receipt["tokens"].values()} == {"released-refused"}
+
+
+def test_a_refused_rollback_with_that_code_but_another_body_proves_nothing():
+    collector, service, _budget, _journal, _clock, _plan = fixture(rollback_code=3, rollback_details="something else")
+    receipt = collector.run()
+    assert receipt["complete"] is False
+    assert receipt["openTokens"] == ["rest-r"] and receipt["unrecovered"] is True
 
 
 def test_an_undeclared_rollback_refusal_leaves_the_token_open_for_one_recovery_release():

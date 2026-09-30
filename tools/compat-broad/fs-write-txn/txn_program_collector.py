@@ -20,6 +20,9 @@ RESOLVED_TOKENS = ("committed", "rolled-back", "released-refused")
 # The one refusal that proves a transaction is gone: what production answers for a finished or expired token.
 GONE_CODE = 10
 GONE_DETAILS = "The referenced transaction has expired or is no longer valid."
+# A token that outlived its total lifetime and was refused once is forgotten: its Rollback answers this (P11, REST).
+INVALID_CODE = 3
+INVALID_DETAILS = "Invalid transaction."
 _GRPC_TIME = "gRPC updateTime"
 _REST_TIME = re.compile(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d{1,9})?Z\Z")
 
@@ -290,7 +293,7 @@ class Ledger:
                 self.unknown_rollbacks.discard(role)
                 if code == 0:
                     entry["state"] = "rolled-back"
-                elif code == GONE_CODE and result["details"] == GONE_DETAILS or self.modes.get(role) == "readOnly":
+                elif (code, result["details"]) in ((GONE_CODE, GONE_DETAILS), (INVALID_CODE, INVALID_DETAILS)) or self.modes.get(role) == "readOnly":
                     # Production says the transaction no longer exists, so no lock of it can remain; a read-only
                     # transaction holds no lock at all, so any definitive refusal of its release finishes it.
                     entry["state"] = "released-refused"

@@ -1027,6 +1027,8 @@ pub struct RuntimeConfig {
     /// fireemu-only TOTP policy. Absence preserves the official Auth emulator's rejection
     /// of TOTP enrollment; declaring `auth.totp` explicitly enables the extension.
     pub auth_totp: Option<TotpPolicy>,
+    /// The initial authorized domains; a declared list replaces defaults and is restored on reset.
+    pub auth_authorized_domains: Option<Vec<String>>,
     /// Whether the Functions blocking Auth bridge may receive raw inbound `IdP` credentials.
     /// This is disabled by default because those values are sensitive and are not needed by
     /// ordinary blocking handlers.
@@ -1350,6 +1352,7 @@ impl Default for RuntimeConfig {
             auth_project: "demo-app".to_owned(),
             auth_project_numbers: BTreeMap::new(),
             auth_totp: None,
+            auth_authorized_domains: None,
             auth_forward_inbound_credentials: false,
             auth_improved_email_privacy: true,
             auth_improved_email_privacy_explicit: false,
@@ -1421,7 +1424,7 @@ impl Default for RuntimeConfig {
 }
 
 /// The keys of the `auth` section (spec/config/fireemu.schema.json).
-pub(crate) const AUTH_KEYS: [&str; 19] = [
+pub(crate) const AUTH_KEYS: [&str; 20] = [
     "enabled",
     "apiKeys",
     "projectIssuer",
@@ -1429,6 +1432,7 @@ pub(crate) const AUTH_KEYS: [&str; 19] = [
     "customTokenSigners",
     "idpSigners",
     "totp",
+    "authorizedDomains",
     "secretMaterialization",
     "forwardInboundCredentials",
     "improvedEmailPrivacy",
@@ -3698,6 +3702,25 @@ impl RuntimeConfig {
                     ..defaults
                 });
             }
+            if let Some(value) = auth
+                .get("authorizedDomains")
+                .filter(|value| !value.is_null())
+            {
+                cfg.auth_authorized_domains = Some(
+                    fireemu_adapter_http::identity_toolkit::authorized_domains_from_json(
+                        value,
+                        cfg.profile == CompatibilityProfile::Strict,
+                    )
+                    .map_err(|refusal| {
+                        ConfigError(format!(
+                            "auth.authorizedDomains: {}",
+                            refusal.body["error"]["message"]
+                                .as_str()
+                                .unwrap_or("INVALID_ARGUMENT"),
+                        ))
+                    })?,
+                );
+            }
         }
         if let Some(app_check) = obj.get("appCheck") {
             let app_check = app_check
@@ -5294,6 +5317,109 @@ mod tests {
                 "auth.logActionCodes must be a boolean".to_owned()
             ))
         );
+    }
+
+    #[test]
+    fn auth_authorized_domains_normalizes_as_admin_and_uses_the_selected_profile() {
+        assert_eq!(parse(&json!({})).unwrap().auth_authorized_domains, None);
+        assert_eq!(
+            parse(&json!({"authorizedDomains": null}))
+                .unwrap()
+                .auth_authorized_domains,
+            None
+        );
+        assert_eq!(
+            parse(&json!({"authorizedDomains": []}))
+                .unwrap()
+                .auth_authorized_domains,
+            Some(vec![])
+        );
+        assert_eq!(
+            parse(&json!({"authorizedDomains": [1, true, null, "UPPER.test", "UPPER.test"]}))
+                .unwrap()
+                .auth_authorized_domains,
+            Some(vec![
+                "1".to_owned(),
+                "true".to_owned(),
+                "UPPER.test".to_owned(),
+                "UPPER.test".to_owned()
+            ])
+        );
+        for profile in ["strict", "emulator"] {
+            let build = |domains: Value| {
+                RuntimeConfig::from_json(
+                    &json!({"schemaVersion": 1, "profile": profile, "auth": {"authorizedDomains": domains}}),
+                )
+            };
+            let result = build(json!(["https://app.test", "*.test"]));
+            if profile == "strict" {
+                assert!(result
+                    .unwrap_err()
+                    .0
+                    .contains("auth.authorizedDomains: INVALID_AUTHORIZED_DOMAIN"));
+            } else {
+                assert_eq!(
+                    result.unwrap().auth_authorized_domains,
+                    Some(vec!["https://app.test".to_owned(), "*.test".to_owned()])
+                );
+            }
+            assert_eq!(build(json!([""])).unwrap_err().0, "auth.authorizedDomains: INVALID_AUTHORIZED_DOMAIN : An authorized domain is empty.");
+            assert!(build(json!([{}]))
+                .unwrap_err()
+                .0
+                .contains("config.authorized_domains[0]"));
+        }
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../spec/config");
+        for directory in ["examples", "invalid-examples"] {
+            for entry in std::fs::read_dir(root.join(directory)).unwrap() {
+                let path = entry.unwrap().path();
+                if path
+                    .file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .starts_with("auth-authorized-domains")
+                {
+                    let config: Value =
+                        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+                    assert_eq!(
+                        RuntimeConfig::from_json(&config).is_ok(),
+                        directory == "examples",
+                        "{}",
+                        path.display()
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn auth_authorized_domains_accepts_replacement_lists_and_rejects_bad_shapes() {
+        for domains in [
+            json!(null),
+            json!([]),
+            json!(["localhost", "app.test"]),
+            json!(["UPPER.test", "UPPER.test", 1, true, null]),
+        ] {
+            assert!(
+                parse(&json!({"authorizedDomains": domains})).is_ok(),
+                "{domains}"
+            );
+        }
+        for domains in [
+            json!(false),
+            json!("app.test"),
+            json!({}),
+            json!([{}]),
+            json!([[]]),
+            json!([""]),
+            json!(["https://app.test"]),
+        ] {
+            let error = parse(&json!({"authorizedDomains": domains})).unwrap_err();
+            assert!(
+                error.0.starts_with("auth.authorizedDomains"),
+                "{domains}: {error:?}"
+            );
+        }
     }
 
     #[test]

@@ -1292,6 +1292,8 @@ pub struct AuthStore {
     config: ProjectAuthConfig,
     /// The project's sign-in providers and test phone numbers.
     sign_in: SignInConfig,
+    /// The declared startup domains; session reset restores only this sign-in field.
+    authorized_domains_seed: Option<Vec<String>>,
     /// The project's multi-factor configuration (Admin v2 `Config.mfa`).
     mfa_config: crate::mfa_config::MfaProjectConfig,
     /// Written config members read back as written ([`crate::config_members`]).
@@ -1635,6 +1637,7 @@ impl AuthStore {
             credential_notices: Vec::new(),
             config: ProjectAuthConfig::default(),
             sign_in: SignInConfig::default(),
+            authorized_domains_seed: None,
             mfa_config: crate::mfa_config::MfaProjectConfig::default(),
             stored_members: crate::config_members::StoredConfigMembers::default(),
             signup_quota: SignupQuota::default(),
@@ -2189,6 +2192,33 @@ impl AuthStore {
                 format!("{}.web.app", self.project_id),
             ]
         })
+    }
+
+    /// The startup domain declaration, independently of the live Admin configuration.
+    #[must_use]
+    pub const fn authorized_domains_seed(&self) -> Option<&Vec<String>> {
+        self.authorized_domains_seed.as_ref()
+    }
+
+    /// Validates and installs a startup declaration, replacing the live domain list.
+    pub fn set_authorized_domains_seed(&mut self, domains: Vec<String>) -> Result<(), AuthError> {
+        let config = SignInConfig {
+            authorized_domains: Some(domains.clone()),
+            ..self.sign_in.clone()
+        };
+        self.set_sign_in_config(config)?;
+        self.authorized_domains_seed = Some(domains);
+        Ok(())
+    }
+
+    /// Restores declared domains only. Without a declaration the live list is retained.
+    pub fn restore_authorized_domains_seed(&mut self) -> bool {
+        if let Some(seed) = &self.authorized_domains_seed {
+            self.sign_in.authorized_domains = Some(seed.clone());
+            true
+        } else {
+            false
+        }
     }
 
     /// Replaces the sign-in providers and test phone numbers; an invalid configuration is
@@ -5573,6 +5603,9 @@ impl AuthSnapshot {
             live.generated_local_id_reservation_ticket.clone();
         // A snapshot intentionally has no provider configurations. Preserve the destination's
         // control-plane state instead of allowing a cross-project restore to transfer it.
+        restored
+            .authorized_domains_seed
+            .clone_from(&live.authorized_domains_seed);
         restored.oidc_configs = live.oidc_configs.clone();
         restored.oidc_order.clone_from(&live.oidc_order);
         restored.saml_configs = live.saml_configs.clone();
@@ -5899,6 +5932,8 @@ pub struct AuthRegistry {
     operation_gates: Mutex<BTreeMap<TenantKey, Weak<Mutex<()>>>>,
     /// The session epochs of deleted tenants (see [`RemovedTenantEpochs`]).
     removed_tenant_epochs: Mutex<BTreeMap<TenantKey, RemovedTenantEpochs>>,
+    /// The daemon declaration inherited by new projects, independently of live domains.
+    new_project_authorized_domains_seed: Mutex<Option<Vec<String>>>,
     membership_generation: AtomicU64,
     lifecycle_incarnation: Option<u128>,
     next_lifecycle_serial: AtomicU64,
@@ -6116,6 +6151,7 @@ impl AuthRegistry {
             deleted_tenants: Mutex::new(BTreeSet::new()),
             operation_gates: Mutex::new(BTreeMap::new()),
             removed_tenant_epochs: Mutex::new(BTreeMap::new()),
+            new_project_authorized_domains_seed: Mutex::new(None),
             membership_generation: AtomicU64::new(0),
             lifecycle_incarnation: None,
             next_lifecycle_serial: AtomicU64::new(1),
@@ -6151,6 +6187,22 @@ impl AuthRegistry {
     #[must_use]
     pub fn routed_store_for(&self, project: &str) -> Option<Arc<Mutex<AuthStore>>> {
         self.projects.lock().ok()?.routed.get(project).cloned()
+    }
+
+    /// Sets the validated startup domain declaration inherited by future projects.
+    pub fn set_new_project_authorized_domains_seed(&self, seed: Option<Vec<String>>) {
+        if let Ok(mut current) = self.new_project_authorized_domains_seed.lock() {
+            *current = seed;
+        }
+    }
+
+    /// The startup domain declaration for a project created now.
+    #[must_use]
+    pub fn new_project_authorized_domains_seed(&self) -> Option<Vec<String>> {
+        self.new_project_authorized_domains_seed
+            .lock()
+            .ok()?
+            .clone()
     }
 
     /// Builds an isolated compatibility store without registering it. A rejected request can
@@ -6211,6 +6263,9 @@ impl AuthRegistry {
         store.set_project_number(self.project_numbers.get(project).copied());
         if let Some(signer) = signer {
             store.set_signer(signer);
+        }
+        if let Some(seed) = self.new_project_authorized_domains_seed() {
+            store.set_authorized_domains_seed(seed).ok()?;
         }
         Some(store)
     }
@@ -6484,6 +6539,7 @@ impl AuthRegistry {
             );
         }
         default.clear();
+        default.restore_authorized_domains_seed();
         for store in &mut routed_guards {
             store.clear();
         }
@@ -6616,6 +6672,7 @@ impl AuthRegistry {
             );
         }
         parent.clear();
+        parent.restore_authorized_domains_seed();
         for store in &mut tenant_guards {
             store.clear();
         }

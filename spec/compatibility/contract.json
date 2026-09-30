@@ -1210,7 +1210,9 @@
             "integration": [
               "crates/fireemu-adapter-http/tests/auth_flows.rs",
               "crates/fireemu-adapter-http/tests/identity_toolkit.rs",
-              "tools/sdk-smoke/auth.mjs"
+              "tools/sdk-smoke/auth.mjs",
+              "crates/fireemu/tests/auth_authorized_domains.rs",
+              "crates/fireemu-core-auth/tests/authorized_domains_seed.rs"
             ],
             "conformance": [
               "auth/sign-up-and-sign-in-errors",
@@ -1275,6 +1277,10 @@
             {
               "behaviour": "the strict profile accepts only signed custom tokens verified against auth.customTokenSigners, answers password and custom-token sign-in without returnSecureToken with production's legacy Identity Toolkit token (honoured where production was observed to honour it: account lookup, update and delete, a verification mail and an email change, phone linking, email-link linking, a sign-up upgrade and MFA enrollment; refused by identity-provider linking and session-cookie creation), answers MFA enrollment with production's v2 error shape and TOTP-disabled refusal, and applies production's custom-token claim rules; the emulator profile keeps the official emulator's unsigned and JSON fake tokens and secure tokens",
               "precision": "documented-divergence"
+            },
+            {
+              "behaviour": "auth.authorizedDomains declares the initial project-wide domain list in both profiles using the Admin PATCH validation and normalization; a declared list replaces defaults, initializes future session and routed projects, and is restored on session reset. An Admin update changes only the live list; absent or null declarations preserve the existing defaults and unseeded reset behavior. Account clearing does not restore the declaration; Auth export/import transfers neither it nor the live list. Strict continues to enforce the live domains and emulator continues to allow external continue-URL hosts",
+              "precision": "exact-for-local-semantics"
             },
             {
               "behaviour": "the Admin project config carries authorizedDomains (localhost and the project's Hosting domains by default) in both profiles, and the strict profile refuses an action-code continueUrl outside them with UNAUTHORIZED_DOMAIN as production does (AUTH-ACTION sandbox recording 2026-09-24); the official emulator's config has no authorizedDomains and checks no domain",

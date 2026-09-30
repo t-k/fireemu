@@ -8,6 +8,10 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ## [Unreleased]
 
+### Added
+
+- `auth.authorizedDomains` declares the initial project-wide action-link domain list in either profile, validated through the existing Admin API rules. The list replaces defaults, initializes later session and routed projects, and is restored on session reset only when declared. Admin updates change the live list; account clearing and export/import keep their existing behavior. Strict continues to enforce live domains, and the emulator profile keeps its permissive continue-URL handling.
+
 ### Changed
 
 - Emulator profile without signers: a custom token's tenant claim is checked only where the official emulator checks it: never on a JSON fake token (`{"uid": …}`), and on an unsigned JWT only in a tenant, where the claim must name that tenant. A JSON token now signs in to the tenant the request names whatever its claim, and a JWT with a tenant claim exchanged in the project signs in to the project; both were refused with `TENANT_ID_MISMATCH` before, which the official emulator never does. This fixes the JSON-token and tenant-claim known issue listed under 0.9.0. The strict profile, and the emulator profile with signers, keep production's rules.

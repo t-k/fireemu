@@ -249,6 +249,12 @@
             }
           }
         },
+        "authorizedDomains": {
+          "type": ["array", "null"],
+          "description": "The project's initial authorized domains, replacing the whole default list (include localhost if needed). Empty means no authorized host under strict; absent or null declares no seed and keeps localhost plus the project's Firebase Hosting domains. Validated with the selected profile's Admin PATCH rules: empty strings are refused in both profiles, strict also checks hostname syntax, numeric and boolean entries become strings, and null entries are omitted. Prefer string entries. Admin updates change the live list without changing this declaration; session reset restores only declared domains. Later projects inherit the declaration rather than the default project's live list. Account clearing does not restore it; Auth export/import carries neither the live list nor the declaration. The emulator profile still does not enforce the continue-URL allowlist.",
+          "items": { "type": ["string", "number", "boolean", "null"], "minLength": 1 },
+          "examples": [["localhost", "app.test"], [], null]
+        },
         "totp": {
           "type": "object",
           "description": "Explicitly enables fireemu's TOTP extension. When absent, TOTP enrollment matches the official Auth emulator and is rejected.",
@@ -619,5 +625,39 @@
         }
       }
     }
-  }
+  },
+  "allOf": [
+    {
+      "if": {
+        "not": {
+          "required": [
+            "profile"
+          ],
+          "properties": {
+            "profile": {
+              "const": "emulator"
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "auth": {
+            "properties": {
+              "authorizedDomains": {
+                "items": {
+                  "if": {
+                    "type": "string"
+                  },
+                  "then": {
+                    "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
 }

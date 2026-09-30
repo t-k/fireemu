@@ -3627,6 +3627,25 @@ fn an_expired_token_that_no_request_asked_about_is_still_aborted_until_300_s_and
     invalid_transaction(late.touch_transaction(&transaction, t(302)));
 }
 
+// P12 (REST, two recordings): at a token age of about 325 s every request answers "Invalid transaction.", the first
+// request (a Commit or a Rollback, or a read) included.
+#[test]
+fn every_first_request_past_the_forgetting_age_answers_invalid_transaction() {
+    let write = [set("p11/doc", &[("v", Value::Integer(2))])];
+    let (mut state, transaction) = aged_transaction();
+    invalid_transaction(state.commit(&write, Some(&transaction), t(325)).map(|_| ()));
+    invalid_transaction(state.touch_transaction(&transaction, t(326)));
+    invalid_transaction(state.rollback_at(&transaction, t(327)));
+
+    let (mut state, transaction) = aged_transaction();
+    invalid_transaction(state.rollback_at(&transaction, t(325)));
+    invalid_transaction(state.touch_transaction(&transaction, t(326)));
+    invalid_transaction(state.commit(&write, Some(&transaction), t(327)).map(|_| ()));
+
+    let (mut state, transaction) = aged_transaction();
+    invalid_transaction(state.touch_transaction(&transaction, t(325)));
+}
+
 #[test]
 fn a_commit_or_a_rollback_as_the_first_request_after_the_lifetime_is_aborted_like_a_read() {
     let write = [set("p11/doc", &[("v", Value::Integer(2))])];

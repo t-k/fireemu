@@ -11,13 +11,14 @@ and refused at 298.7 to 301.0 s, so the lifetime lies in (246.8, 301.0]; the wai
 request is about 325 s (P11 pace: an RPC about 1.1 to 1.3 s, each wait about 0.6 s long). The 90 s idle before that request is
 inside the idle a recorded request was accepted after (75 to 110 s, P10-C). The documented 270 s is not relied on.
 
-P11 recorded only read, Commit, Rollback (10, 3, 3). Models that fit it: A "the first refused request answers 10, then everything
-answers 3"; B "a read answers 10, a Commit and a Rollback answer 3"; C "the first request answers by its RPC (a read 10, a Commit
-or Rollback 3) and the token is then forgotten, so a later read answers 3"; and D "production forgets an expired transaction at
-about 300 s, and every request after that answers 3". C and R separate A, B and C by their first answers and by `read-after`;
-D is not separated from A at ages of 300 s or less, and this table starts past that age. Past 300 s model D predicts the same
-answers as model C, so this table cannot separate C from D; P11 v3's Commit at about 283 s (model C: 3, model D: 10) can, which is why
-P11 v3 runs before this table. A result that looks like A after 301 s is named as such when it is judged.
+When this table was written P11 had recorded only a read, a Commit and a Rollback (10, 3, 3), and four models fit: A "the first refused
+request answers 10, then everything answers 3"; B "a read answers 10, a Commit and a Rollback answer 3"; C "the first request answers by
+its RPC and the token is then forgotten"; and D "production remembers an expired transaction, answering 10 to everything, until about
+300 s of token age, and forgets it after that". P11 v4 (run c82deaf32c18e7dd: a read, then a Commit, at about 283 to 288 s both answered
+10) refuted A, B and C and left D. This table starts past D's forgetting age (a token age of about 325 s), so it tests D's prediction that
+every request there answers 3 "Invalid transaction.", the first request included (an alternative that remembered an unasked-about token
+would answer the first request 10). Recorded result (run 6cf142d8830cd02d, two recordings that agree): every request answered 3, so D holds
+past the forgetting age.
 
 Every answer after the wait is observed, never judged (any code is allowed); the keepalive reads are observations without case
 ids. The release of the token is judged, narrowly: a Rollback finishes it on an accepted answer, on 10 with the expired text, or on

@@ -1442,6 +1442,25 @@ fn verify_session_accepting(
     map_error: fn(&fireemu_core_auth::jwt::JwtError) -> JsonResponse,
     legacy_tokens: LegacyTokens,
 ) -> Result<Session, JsonResponse> {
+    verify_session_accepting_with_leeway(
+        store,
+        body,
+        at,
+        map_error,
+        legacy_tokens,
+        fireemu_core_auth::jwt::IDENTITY_TOOLKIT_EXPIRY_LEEWAY_SECONDS,
+    )
+}
+
+/// [`verify_session_accepting`] with an explicit expiry leeway.
+fn verify_session_accepting_with_leeway(
+    store: &AuthStore,
+    body: &Value,
+    at: LogicalInstant,
+    map_error: fn(&fireemu_core_auth::jwt::JwtError) -> JsonResponse,
+    legacy_tokens: LegacyTokens,
+    leeway: i64,
+) -> Result<Session, JsonResponse> {
     let token = match body.get("idToken") {
         None | Some(Value::Null) => return Err(error(400, "MISSING_ID_TOKEN")),
         Some(Value::String(t)) => t.as_str(),
@@ -1449,7 +1468,6 @@ fn verify_session_accepting(
     };
     // Account lookup, update and delete also honour the legacy Identity Toolkit token (sandbox
     // recording 2026-09-24); every other route verifies ID tokens only.
-    let leeway = fireemu_core_auth::jwt::IDENTITY_TOOLKIT_EXPIRY_LEEWAY_SECONDS;
     let (v, decoded) =
         match fireemu_core_auth::jwt::verify_id_token_decoded_with_leeway(token, store, at, leeway)
         {
@@ -11225,6 +11243,16 @@ fn parse_client_update(body: &Value) -> Result<UpdatePlan, JsonResponse> {
     parse_update(&client, true)
 }
 
+/// The error of an ID token the official `parseIdToken` refuses: a user the store lacks is
+/// `USER_NOT_FOUND`.
+fn parse_id_token_error(error: &fireemu_core_auth::jwt::JwtError) -> JsonResponse {
+    if matches!(error, fireemu_core_auth::jwt::JwtError::UnknownUser) {
+        self::error(400, "USER_NOT_FOUND")
+    } else {
+        jwt_error(error)
+    }
+}
+
 #[allow(clippy::too_many_lines)]
 fn update(
     store: &mut AuthStore,
@@ -11312,7 +11340,26 @@ fn update(
     } else {
         // Authenticate the client before planning any mutation. A supplied localId is
         // never a client selector, and does not change self-service invalidation rules.
-        match verify_session_accepting(store, body, at, jwt_error, LegacyTokens::Honoured) {
+        // The privileged update resolves the token's user as the official `parseIdToken` does
+        // (`operations.js:1715-1731`): the expiry is not looked at, and a user the store lacks is
+        // `USER_NOT_FOUND`.
+        let (map_error, leeway): (fn(&fireemu_core_auth::jwt::JwtError) -> JsonResponse, i64) =
+            if token_names_the_user {
+                (parse_id_token_error, i64::MAX)
+            } else {
+                (
+                    jwt_error,
+                    fireemu_core_auth::jwt::IDENTITY_TOOLKIT_EXPIRY_LEEWAY_SECONDS,
+                )
+            };
+        match verify_session_accepting_with_leeway(
+            store,
+            body,
+            at,
+            map_error,
+            LegacyTokens::Honoured,
+            leeway,
+        ) {
             Ok(session) => {
                 if self_service {
                     if let Err(response) = validate_client_update_shapes(body) {

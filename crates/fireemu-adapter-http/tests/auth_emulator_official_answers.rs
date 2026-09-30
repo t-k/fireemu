@@ -1191,3 +1191,96 @@ fn the_strict_admin_update_without_a_local_id_still_updates_the_tokens_user() {
     assert_eq!(status, 200, "{answered}");
     assert_eq!(answered["localId"], up["localId"]);
 }
+
+/// The privileged update resolves the ID token's user as the official `parseIdToken` does
+/// (`operations.js:1715-1731`, probed against firebase-tools 15.28.2): the expiry is not looked at,
+/// so an owner or Admin update with `localId` A and an expired token of B updates B (200); a
+/// token of a user the store lacks is `USER_NOT_FOUND`. The strict Admin update is unchanged: it
+/// resolves by `localId` and never reads the token.
+#[test]
+fn a_privileged_update_reads_an_expired_token_and_a_missing_user_as_the_official_emulator_does() {
+    let (state, registry) = emulator();
+    let sign_up = |email: &str| {
+        let (status, up) = client(
+            &state,
+            &format!("{V1}/accounts:signUp"),
+            &json!({"email": email, "password": "hunter22", "returnSecureToken": true}),
+        );
+        assert_eq!(status, 200, "{up}");
+        up
+    };
+    let (a, b) = (sign_up("a@example.com"), sign_up("b@example.com"));
+    let token_of = |user: &Value, exp: i64| {
+        alg_none(&json!({
+            "aud": "demo-app", "iss": "https://securetoken.google.com/demo-app",
+            "sub": user, "user_id": user, "iat": 1_788_004_860, "exp": exp,
+            "auth_time": 1_788_004_860,
+            "firebase": {"sign_in_provider": "password", "identities": {}}
+        }))
+    };
+    let name_of = |local_id: &Value| {
+        let store = registry
+            .store_for("demo-app")
+            .unwrap_or_else(|| state.store.clone());
+        let store = store.lock().unwrap();
+        store
+            .user_by_id(local_id.as_str().unwrap())
+            .and_then(|user| user.display_name.clone())
+    };
+    let routes = [
+        format!("{V1}/accounts:update?key={KEY}"),
+        format!("{V1}/projects/demo-app/accounts:update"),
+    ];
+    for (n, route) in routes.iter().enumerate() {
+        // An expired token of B, beside A's localId: B changes.
+        let changed = format!("expired-{n}");
+        let response = handle_with(
+            &state,
+            "POST",
+            route,
+            &owner(),
+            &json!({"localId": a["localId"], "displayName": changed,
+                    "idToken": token_of(&b["localId"], 1_788_004_800)}),
+        );
+        assert_eq!(response.status, 200, "{route}: {}", response.body);
+        assert_eq!(response.body["localId"], b["localId"], "{route}");
+        assert_eq!(name_of(&b["localId"]), Some(changed), "{route}");
+        assert_eq!(name_of(&a["localId"]), None, "{route}");
+        // A token of a user the store lacks: the official USER_NOT_FOUND.
+        let response = handle_with(
+            &state,
+            "POST",
+            route,
+            &owner(),
+            &json!({"localId": a["localId"], "displayName": "x",
+                    "idToken": token_of(&json!("ghost"), 1_788_008_400)}),
+        );
+        assert_eq!(
+            (response.status, message_of(&response.body)),
+            (400, "USER_NOT_FOUND".to_owned()),
+            "{route}: {}",
+            response.body
+        );
+    }
+    // Strict: the Admin update resolves by localId and reads no token.
+    let (_, strict, strict_registry) = profiles()
+        .into_iter()
+        .find(|(label, ..)| *label == "strict")
+        .unwrap();
+    let (status, up) = client(
+        &strict,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"email": "s@example.com", "password": "hunter22", "returnSecureToken": true}),
+    );
+    assert_eq!(status, 200, "{up}");
+    let _ = strict_registry;
+    let (status, answered) = admin(
+        &strict,
+        "POST",
+        &format!("{V1}/projects/demo-app/accounts:update"),
+        &json!({"localId": up["localId"], "displayName": "strict",
+                "idToken": token_of(&json!("ghost"), 1_788_004_800)}),
+    );
+    assert_eq!(status, 200, "{answered}");
+    assert_eq!(answered["localId"], up["localId"]);
+}

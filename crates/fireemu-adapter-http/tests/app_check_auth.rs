@@ -349,18 +349,35 @@ fn a_request_the_selection_serves_from_the_default_project_still_makes_its_tenan
         };
         // Q1: a token whose project this daemon has no store for.
         let ghost = alg_none(&claims_of("demo-ghost", "g1", Some("tG")));
+        let (app_before, other_before) = (
+            observed_count(&h, "demo-app"),
+            observed_count(&h, "demo-other"),
+        );
         let r = send(auth_uri_body(&json!({"tenantId": "tG", "idToken": ghost})));
         assert_eq!(r.status, 200, "{as_owner}: {}", r.body);
+        if !as_owner {
+            // Admitted by App Check once, for the project the request is served from.
+            assert_eq!(observed_count(&h, "demo-app"), app_before + 1);
+            assert_eq!(observed_count(&h, "demo-other"), other_before);
+        }
         assert!(
             registry.tenant_store("demo-app", "tG").is_some(),
             "{as_owner}"
         );
         // Q2: the camelCase refresh token, which the store selection does not read.
         let refresh = refresh_token_of_the_other_tenant(&registry);
+        let (app_before, other_before) = (
+            observed_count(&h, "demo-app"),
+            observed_count(&h, "demo-other"),
+        );
         let r = send(auth_uri_body(
             &json!({"tenantId": "tB", "refreshToken": refresh}),
         ));
         assert_eq!(r.status, 200, "{as_owner}: {}", r.body);
+        if !as_owner {
+            assert_eq!(observed_count(&h, "demo-app"), app_before + 1);
+            assert_eq!(observed_count(&h, "demo-other"), other_before);
+        }
         assert!(
             registry.tenant_store("demo-app", "tB").is_some(),
             "{as_owner}"
@@ -387,9 +404,14 @@ fn a_request_the_selection_serves_from_the_default_project_still_makes_its_tenan
                 .expect("the user exists")
         };
         let own = alg_none(&claims_of("demo-app", "z1", Some("tZ")));
-        let _ = send(auth_uri_body(
+        // The tenant the token names is made, and the request is answered `USER_NOT_FOUND`, where
+        // the official emulator answers 200 (`createAuthUri` does not parse the ID token): the
+        // open issue emulator-create-auth-uri-answers-user-not-found-for-a-tenant-made-on-the-way.
+        let r = send(auth_uri_body(
             &json!({"idToken": own, "refresh_token": project_refresh}),
         ));
+        assert_eq!(r.status, 400, "{as_owner}: {}", r.body);
+        assert_eq!(r.body["error"]["message"], "USER_NOT_FOUND", "{as_owner}");
         assert!(
             registry.tenant_store("demo-app", "tZ").is_some(),
             "{as_owner}"
@@ -416,14 +438,21 @@ fn a_compatibility_custom_token_routed_to_another_project_makes_no_tenant() {
         &json!({"localId": "u9", "email": "r@example.com"}),
     );
     assert_eq!(made.status, 200, "{}", made.body);
+    let app_before = observed_count(&h, "demo-app");
     let body = json!({"token": "{\"uid\":\"u9\"}", "tenantId": "tQ", "returnSecureToken": true});
     let r = h.post(
         &format!("{V1}/accounts:signInWithCustomToken"),
         &body,
         &[&h.valid_token()],
     );
-    assert_ne!(r.status, 200, "{}", r.body);
+    // Served from the routed project's store, which refuses the body tenant (the open issue
+    // emulator-compat-custom-token-routing-ignores-the-body-tenant: a fix updates this test).
+    assert_eq!(r.status, 400, "{}", r.body);
+    assert_eq!(r.body["error"]["message"], "TENANT_ID_MISMATCH");
     assert!(registry.tenant_store("demo-app", "tQ").is_none());
+    // Nothing was admitted for the default project, and the routed project is not observed by
+    // the creation (the pipeline decides App Check for the store it serves).
+    assert_eq!(observed_count(&h, "demo-app"), app_before);
 }
 
 /// A non-default project that is admitted and served from its own store is observed once.

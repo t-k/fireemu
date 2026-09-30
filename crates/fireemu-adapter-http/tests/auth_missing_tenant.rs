@@ -1044,3 +1044,41 @@ fn an_empty_or_unreadable_token_tenant_names_no_tenant() {
     );
     assert!(registry.tenant_store("demo-app", "t-w").is_some());
 }
+
+/// A keyed request for a project other than the default: an ID token naming a tenant that was
+/// deleted finds no user, and the tenant is made again in that project, never in the default one.
+#[test]
+fn a_deleted_tenants_token_of_a_non_default_project_makes_the_tenant_in_that_project() {
+    let (mut state, registry) = emulator();
+    let alpha = AuthStore::new("worker-alpha", SplitMix64::new(11), TotpPolicy::default());
+    assert!(registry.register_session("worker-alpha", alpha));
+    let mut tenancy = Tenancy::new("demo-app");
+    tenancy
+        .register("worker-alpha", &[], &["alpha-key".to_owned()])
+        .unwrap();
+    state.tenancy = Some(Arc::new(RwLock::new(tenancy)));
+    let sign_up = handle(
+        &state,
+        "POST",
+        "/identitytoolkit.googleapis.com/v1/accounts:signUp?key=alpha-key",
+        &json!({"email": "a@example.com", "password": "hunter22", "tenantId": "gone"}),
+    );
+    assert_eq!(sign_up.status, 200, "{}", sign_up.body);
+    assert!(registry.delete_tenant("worker-alpha", "gone"));
+    no_tenant(
+        &registry,
+        &["worker-alpha", "demo-app"],
+        &["gone"],
+        "after the delete",
+    );
+    let lookup = handle(
+        &state,
+        "POST",
+        "/identitytoolkit.googleapis.com/v1/accounts:lookup?key=alpha-key",
+        &json!({"idToken": sign_up.body["idToken"]}),
+    );
+    assert_eq!(lookup.status, 400, "{}", lookup.body);
+    assert_eq!(lookup.body["error"]["message"], "USER_NOT_FOUND");
+    assert!(registry.tenant_store("worker-alpha", "gone").is_some());
+    assert!(registry.tenant_store("demo-app", "gone").is_none());
+}

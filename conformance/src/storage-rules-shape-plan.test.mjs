@@ -33,6 +33,16 @@ test("the plan is 19 requests in a fixed order: 5 preflight, 11 steps and 3 prov
   assert.throws(() => staticRequests(5), /invalid bucket/);
 });
 
+test("each request has the phase and the kind that says what the run expects of its answer", () => {
+  assert.deepEqual(statics.map((entry) => [entry.id, entry.phase, entry.kind]), [
+    ["preflight/rulesets/list", "preflight", "kept-rulesets"], ["preflight/objects/list", "preflight", "objects-empty"], ["preflight/document/absent", "preflight", "document-absent"],
+    ["shape/ruleset/never", "normal", "record"], ["shape/ruleset/create", "normal", "own-ruleset"], ["shape/object/create", "normal", "own-object"], ["shape/object/list", "normal", "record"],
+    ["shape/document/create", "normal", "own-document"], ["shape/document/read", "normal", "record"],
+    ["verify/rulesets/list", "normal", "kept-rulesets"], ["verify/objects/list", "normal", "objects-empty"], ["verify/document/absent", "normal", "document-absent"],
+  ]);
+  for (const id of DEPENDENT_IDS) assert.deepEqual([dependentRequest(id, proofs, BUCKET).phase, dependentRequest(id, proofs, BUCKET).kind], ["normal", "record"], id);
+});
+
 test("each request is exactly the read or the write it names: URL, method, body and content type", () => {
   const obj = `https://storage.googleapis.com/storage/v1/b/${BUCKET}/o/${encodeURIComponent(OBJECT_NAME)}`;
   const list = `https://storage.googleapis.com/storage/v1/b/${BUCKET}/o?prefix=${encodeURIComponent("STORAGE-RULES/probe-2f/")}&maxResults=1`;
@@ -144,6 +154,9 @@ test("an ownership proof is read only from a create answer that names exactly wh
   const ctx = { bucket: BUCKET };
   const ruleset = (delta = {}) => json({ name: RULESET, createTime: "2026-09-30T02:30:00.123456Z", ...delta });
   assert.equal(proofOf("own-ruleset", ruleset(), ctx), RULESET);
+  assert.equal(judgeAnswer("own-ruleset", ruleset(), ctx), true);
+  assert.equal(judgeAnswer("own-object", json({ kind: "storage#object", bucket: BUCKET, name: OBJECT_NAME, generation: "1790727977683752" }), ctx), true);
+  assert.equal(judgeAnswer("own-document", json({ name: DOCUMENT_NAME, updateTime: "2026-09-30T02:30:01.654321Z" }), ctx), true);
   for (const bad of [ruleset({ name: ENTRY_RULESETS[0].name }), ruleset({ name: ENTRY_RULESETS[1].name }), ruleset({ name: `${RULESET}x` }), ruleset({ name: "projects/other/rulesets/3f2a9c1e-7b64-4d0a-9e51-0c8a6f2b7d14" }), ruleset({ name: 5 }), ruleset({ createTime: 5 }), json({}), json({ name: RULESET }), json({}, 500), json({ name: RULESET, createTime: "t" }, 403), json([]), { status: 200, rawHeaders: [], bytes: Buffer.alloc(0) }]) assert.equal(proofOf("own-ruleset", bad, ctx), null);
   const object = (delta = {}) => json({ kind: "storage#object", bucket: BUCKET, name: OBJECT_NAME, generation: "1790727977683752", metageneration: "1", ...delta });
   assert.equal(proofOf("own-object", object(), ctx), "1790727977683752");

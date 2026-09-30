@@ -157,6 +157,29 @@ const HITS = {
   "verify/rulesets/list": () => nth("preflight/rulesets/list", 2), "verify/objects/list": () => nth("preflight/objects/list", 3), "verify/document/absent": () => nth("preflight/document/absent", 3),
 };
 
+test("a content type is recorded only when it is short, printable and free of markup, and is null when absent", async (t) => {
+  const answers = {
+    "no header": { rawHeaders: [], expected: null }, "markup": { rawHeaders: ["Content-Type", "text/<b>x</b>"], expected: null }, "control character": { rawHeaders: ["Content-Type", "text/plain\u0007"], expected: null },
+    "too long": { rawHeaders: ["Content-Type", `text/${"a".repeat(101)}`], expected: null }, "empty": { rawHeaders: ["Content-Type", ""], expected: null },
+    "printable": { rawHeaders: ["Content-Type", "text/plain; charset=utf-8"], expected: "text/plain; charset=utf-8" }, "upper-case name": { rawHeaders: ["CONTENT-TYPE", "text/plain"], expected: "text/plain" },
+    "the first of two": { rawHeaders: ["Content-Type", "text/plain", "Content-Type", "text/html"], expected: "text/plain" }, "exactly 100": { rawHeaders: ["Content-Type", `t/${"a".repeat(98)}`], expected: `t/${"a".repeat(98)}` },
+    "a lower-case angle only after": { rawHeaders: ["X-Other", "a", "Content-Type", "text/plain"], expected: "text/plain" },
+  };
+  for (const [name, { rawHeaders, expected }] of Object.entries(answers)) {
+    const f = await checkout(t);
+    f.world.hook.any = (spec) => (at("shape/ruleset/never")(spec) ? { status: 404, rawHeaders: rawHeaders.map((value) => value.replace("\\u0007", String.fromCharCode(7))), bytes: Buffer.from("{}") } : undefined);
+    await f.entry(f.options);
+    assert.equal((await factsOf(f)).find((fact) => fact.operationId === "shape/ruleset/never").facts.contentType, expected, name);
+  }
+});
+
+test("the identity answer must be well-formed UTF-8, and the run stops before the first read of the environment", async (t) => {
+  const f = await checkout(t);
+  f.world.hook.any = (spec) => (new URL(spec.url).pathname === "/oauth2/v2/userinfo" ? { status: 200, rawHeaders: ["Content-Type", "application/json"], bytes: Buffer.concat([Buffer.from('{"id":"1","email":"owner@example.test","verified_email":true,"note":"'), Buffer.from([0xff]), Buffer.from('"}')]) } : undefined);
+  await assert.rejects(f.entry(f.options));
+  assert.deepEqual(urls(f), ["POST oauth2.googleapis.com/token", "GET www.googleapis.com/oauth2/v2/userinfo"]);
+});
+
 test("a shape step that answers something unexpected is recorded and the run goes on, so everything created is still deleted", async (t) => {
   const odd = {
     "the ruleset that never existed answers 500": ["shape/ruleset/never", (w) => w.json({ error: { code: 500, message: "boom" } }, 500)],

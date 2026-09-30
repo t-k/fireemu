@@ -1801,8 +1801,9 @@ impl StorageState {
     /// bucket owner's store. The Firebase profile also admits a mock audience for an
     /// eligible default-owned bare project bucket without changing that ownership.
     ///
-    /// Under the `emulator` profile a value that does not even decode as a JWT is an
-    /// anonymous caller, as the official emulator's `jwt.decode` answers, and an unsigned
+    /// A value that does not even decode as a JWT is an anonymous caller in both profiles, as the
+    /// official emulator's `jwt.decode` answers and production was recorded answering. Under the
+    /// `emulator` profile an unsigned
     /// token minted for another project is admitted as the official emulator admits it
     /// (firebase-tools 15.28.2 never reads `aud`); a token that carries a signature that
     /// does not verify is still refused — the published divergence from the official
@@ -1848,12 +1849,12 @@ impl StorageState {
         // The audience is checked before the signature so a token of another session
         // says so, instead of failing as an unknown user of this one.
         let decoded = fireemu_core_auth::jwt::decode_token(token, parent.signer());
+        // A value that is not a JWT at all is an anonymous caller in both profiles: production
+        // answered `Firebase <garbage>` exactly as it answers no credential (stage 3 v9,
+        // `token-malformed`: 403 from the rules, and the body parser's 400 first on a malformed
+        // PATCH body), and so does the official emulator's `jwt.decode`.
         let Ok(decoded_token) = decoded else {
-            return if self.token_acceptance == TokenAcceptance::EmulatorMock {
-                Ok(Principal::Anonymous)
-            } else {
-                Err("invalid ID token: not a decodable JWT".to_owned().into())
-            };
+            return Ok(Principal::Anonymous);
         };
         let aud = decoded_token
             .payload
@@ -1894,14 +1895,20 @@ impl StorageState {
         let store = store_arc
             .lock()
             .map_err(|_| "auth store poisoned".to_owned())?;
-        let decoded = verify_rules_token_for_project(
+        let decoded = match verify_rules_token_for_project(
             token,
             &store,
             self.now(),
             self.token_acceptance,
             &expected_rules_project,
-        )
-        .map_err(|e| format!("invalid ID token: {e}"))?;
+        ) {
+            Ok(decoded) => decoded,
+            // Storage honours an ID token whose refresh tokens were revoked (production, stage 3
+            // v9, `token-revoked`: the read is allowed). Revocation is the last check of the
+            // verification, so the signature, expiry, audience and account have all passed.
+            Err(fireemu_core_auth::jwt::JwtError::Revoked) => decoded_token,
+            Err(e) => return Err(format!("invalid ID token: {e}").into()),
+        };
         drop(store);
         let ctx = AuthContext::from_id_token_json(&decoded.payload_json)
             .map_err(|e| format!("invalid ID token claims: {e}"))?;

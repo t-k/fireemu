@@ -1174,7 +1174,8 @@ service firebase.storage {
         .status,
         403
     );
-    // Admin credentials bypass the rules; a forged token is unauthenticated.
+    // Admin credentials bypass the rules; a value that is not a token at all is an anonymous
+    // caller, so the rules refuse it (production, stage 3 v9: `token-malformed` answers 403).
     assert_eq!(
         handle(
             &s,
@@ -1199,7 +1200,7 @@ service firebase.storage {
             )
         )
         .status,
-        401
+        403
     );
 }
 
@@ -2319,6 +2320,65 @@ fn a_firebase_upload_defaults_the_content_disposition_to_inline_with_the_file_na
         assert_eq!(
             header(&media, "content-disposition"),
             Some("inline; filename*=object.bin")
+        );
+    }
+}
+
+/// In both profiles a value that is no JWT is an anonymous caller (production, stage 3 v9: the rules'
+/// 403, and the parser's 400 first for a malformed PATCH body), and an ID token whose refresh tokens
+/// were revoked is still honoured on Storage (`token-revoked`: allowed).
+#[test]
+fn an_undecodable_bearer_is_anonymous_and_a_revoked_id_token_is_honoured() {
+    const AUTH_ONLY: &str = "rules_version = '2'; service firebase.storage { match /b/{bucket}/o { match /{path=**} { allow read, write: if request.auth != null; } } }";
+    for acceptance in BOTH_PROFILES {
+        let s = state_with(Some(AUTH_ONLY), acceptance);
+        assert_eq!(
+            upload_as(&s, "garbage.txt", "Firebase not-a-token"),
+            403,
+            "{acceptance:?}: anonymous, so the rule refuses"
+        );
+        let malformed = handle(
+            &s,
+            req(
+                "PATCH",
+                &format!("/v0/b/{BUCKET}/o/absent.txt"),
+                &[
+                    ("authorization", "Firebase not-a-token"),
+                    ("content-type", "application/json"),
+                ],
+                b"{",
+            ),
+        );
+        assert_eq!(malformed.status, 400, "{acceptance:?}");
+        assert_eq!(json_body(&malformed)["error"]["message"], "Parser Error");
+
+        let store = s.auth.default_store();
+        let (uid, token) = {
+            let mut store = store.lock().unwrap();
+            let uid = store
+                .create_user(NewUser::email("revoked@example.com"), START)
+                .unwrap();
+            let claims = store.id_token_claims(&uid, None, START).unwrap();
+            let token = format!(
+                "Firebase {}",
+                fireemu_core_auth::jwt::encode_unsigned(&claims)
+            );
+            (uid, token)
+        };
+        assert_eq!(upload_as(&s, "live.txt", &token), 200, "{acceptance:?}");
+        {
+            let revoked_at = LogicalInstant::from_nanos(START.as_nanos() + 10_000_000_000);
+            s.clock.lock().unwrap().set(revoked_at).unwrap();
+            store
+                .lock()
+                .unwrap()
+                .revoke_tokens(&uid, revoked_at)
+                .unwrap();
+        }
+        assert_eq!(
+            upload_as(&s, "revoked.txt", &token),
+            200,
+            "{acceptance:?}: Storage does not check revocation"
         );
     }
 }

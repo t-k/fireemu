@@ -12,17 +12,7 @@ refuses a receipt that carries credential material.
 
 Two independent sandbox recordings completed all 13 cases with 75 external requests each, confirmed absence of all five owned documents, and left no open transaction or unresolved resource. The [recorded comparison](../../spec/compatibility/broad-runs/fs-transaction-expiry-retry-04-recorded-comparison-v1.json) binds those receipts, the source build and both local profiles. It records normalized codes, diagnostics and post-state, retaining the historical preparation's four disagreements.
 
-The repaired source is `6fc6da362aab0123096d46994c542a157a8064dd`. A clean build produced artifact SHA-256 `22d98b730e6daaadefee3e10a392ab7e0f7b12e3fcf10922f866b583bcbec65d`; identical artifact bytes were copied into each profile's owned local run. Both strict and emulator agree with both production receipts on all 13 cases. Production used measured wall time; local runs used the control clock. These controls establish success before the observed expiry and failure sufficiently afterward; they do not identify the exact idle-expiry threshold.
-
-| Case | Actual recorded result in both production recordings |
-| --- | --- |
-| `idle-expiry/rollback-after-idle` | `OK` |
-| `finished-token/rollback-after-rollback` | `OK` |
-| `retry-token/retry-with-committed-previous` | `OK` |
-| `retry-token/retry-with-read-only-previous` | `INVALID_ARGUMENT`, `Cannot retry a read-only transaction` |
-| `finished-token/rollback-after-commit` | `ABORTED`, `The referenced transaction has expired or is no longer valid.` |
-
-This is partial evidence for idle-expiry, retry-token-lifecycle and the finished-token subset of failed-commit-and-rollback. Separate [native idle-candidate evidence](fs-transaction-idle-candidates.md) now covers representative P10 recipes and their provisional strict repair; it does not establish exact expiry or the remaining failed-commit chain. The other 15 frozen conditions receive no observation from this REST corpus; the [18-condition closure](../../spec/compatibility/closure/FS-TRANSACTION.json), final regression, independent closure review and official emulator profile gate remain open. No condition or parent is promoted and this comparison grants no further production permission.
+The repaired source is `6fc6da362aab0123096d46994c542a157a8064dd`. A clean build produced artifact SHA-256 `22d98b730e6daaadefee3e10a392ab7e0f7b12e3fcf10922f866b583bcbec65d`; identical artifact bytes were copied into each profile's owned local run. Both strict and emulator agree with both production receipts on all 13 cases. Production used measured wall time; local runs used the control clock. These controls establish success before the observed expiry and failure sufficiently afterward; they do not identify the exact idle-expiry threshold. The five results that differ from the historical expectations are tabulated in the last section of this document.
 
 ## Historical preparation scope
 
@@ -548,3 +538,17 @@ document:
   profile.
 - Independent O7 admission review and an owner-minted approval outside the
   package.
+
+## Recorded partial comparison: results
+
+The table and the scope statement that belong to the recorded partial comparison above.
+
+| Case | Actual recorded result in both production recordings |
+| --- | --- |
+| `idle-expiry/rollback-after-idle` | `OK` |
+| `finished-token/rollback-after-rollback` | `OK` |
+| `retry-token/retry-with-committed-previous` | `OK` |
+| `retry-token/retry-with-read-only-previous` | `INVALID_ARGUMENT`, `Cannot retry a read-only transaction` |
+| `finished-token/rollback-after-commit` | `ABORTED`, `The referenced transaction has expired or is no longer valid.` |
+
+This is partial evidence for idle-expiry, retry-token-lifecycle and the finished-token subset of failed-commit-and-rollback. Separate [native idle-candidate evidence](fs-transaction-idle-candidates.md) now covers representative P10 recipes and their provisional strict repair; it does not establish exact expiry or the remaining failed-commit chain. The other 15 frozen conditions receive no observation from this REST corpus; the [18-condition closure](../../spec/compatibility/closure/FS-TRANSACTION.json), final regression, independent closure review and official emulator profile gate remain open. No condition or parent is promoted and this comparison grants no further production permission.

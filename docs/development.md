@@ -27,6 +27,10 @@ scripts/cargo-session --session parser-fix -- cargo nextest run -p fireemu-core-
 
 Use `cargo nextest run --workspace --profile pr` as the full local gate. Do not add `--test-threads=1`; tests that require serialization must declare a nextest test group instead of disabling parallelism for the suite.
 
+## CI dependency caches
+
+The parallel `lint` and `test` jobs and protobuf verification restore the same `pr-normal` dependency cache into `target/normal`; only `test` on `main` saves it. The protobuf cache step sets `CARGO_TARGET_DIR` as the normal jobs do, so the cache fingerprint matches. Loom keeps a separate `pr-loom` cache and `target/loom` with its own `RUSTFLAGS`. These caches reuse dependencies, not workspace crate builds. `ruby scripts/ci-workflow-contract.test.rb` checks cache ownership, targets, flags and the independent job topology with temporary workflow fixtures. Cache availability and runner timing determine any wall-time improvement.
+
 ## Local regression gate
 
 Every job in `.github/workflows/ci.yml` runs on pull requests, on pushes to `main` and on demand (`workflow_dispatch`): the quick `pr` job formats and compiles every target, and the `lint`, `test`, `verify`, platform, `package` and `ui` jobs run the runtime suite. Runtime tests also run locally. To record a local run as evidence, run nextest through the gate:

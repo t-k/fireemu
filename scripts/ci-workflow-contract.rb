@@ -20,6 +20,48 @@ assert(trigger.key?("workflow_dispatch"), "CI must retain a manual full-suite tr
 assert(trigger.key?("pull_request"), "CI must run on pull requests")
 assert(trigger.dig("push", "branches") == ["main"], "CI must run on pushes to main")
 
+# Normal builds share one dependency cache; only the test job on main saves it.
+normal_consumers = jobs.flat_map do |job, definition|
+  definition.fetch("steps").select { |step| step["uses"]&.start_with?("Swatinem/rust-cache@") && step.dig("with", "shared-key") == "pr-normal" }.map { job }
+end
+%w[lint test verify].each do |name|
+  job = jobs.fetch(name)
+  assert(!job.key?("needs") && !job.key?("if"), "#{name} must remain an independent automatic job")
+  caches = job.fetch("steps").select { |step| step["uses"]&.start_with?("Swatinem/rust-cache@") && step.dig("with", "shared-key") == "pr-normal" }
+  assert(!caches.empty?, "#{name} must restore pr-normal")
+  assert(caches.length == 1, "#{name} must have exactly one normal cache")
+  cache = caches.first
+  assert(cache.dig("with", "workspaces") == ". -> target/normal", "#{name} normal cache must map target/normal")
+  environment = workflow.fetch("env", {}).merge(job.fetch("env", {})).merge(cache.fetch("env", {}))
+  assert(environment["CARGO_TARGET_DIR"] == "target/normal", "#{name} normal cache must use target/normal")
+  assert(!environment.key?("RUSTFLAGS"), "#{name} normal cache must not set RUSTFLAGS")
+  assert(cache.dig("with", "cache-bin") == "false", "#{name} normal cache must not cache installed binaries")
+  if name == "test"
+    assert(cache.dig("with", "save-if") == "${{ github.ref == 'refs/heads/main' }}", "test must save the normal cache only on main")
+  else
+    assert(cache.dig("with", "save-if") == "false", "#{name} must only restore the normal cache")
+  end
+end
+assert(normal_consumers.sort == %w[lint test verify], "normal cache consumers must be lint, test and verify")
+
+verify = jobs.fetch("verify")
+verify_steps = verify.fetch("steps")
+proto = verify_steps.find { |step| step["run"]&.include?("cargo run -p proto-gen -- check") }
+assert(proto, "verify must retain the proto-gen check")
+proto_environment = workflow.fetch("env", {}).merge(verify.fetch("env", {})).merge(proto.fetch("env", {}))
+assert(proto_environment["CARGO_TARGET_DIR"] == "target/normal", "proto-gen must use target/normal")
+assert(!proto_environment.key?("RUSTFLAGS"), "proto-gen must not use loom flags")
+normal_cache_index = verify_steps.index { |step| step.dig("with", "shared-key") == "pr-normal" }
+assert(normal_cache_index < verify_steps.index(proto), "normal cache restore must precede proto-gen")
+loom_caches = verify_steps.select { |step| step["uses"]&.start_with?("Swatinem/rust-cache@") && step.dig("with", "shared-key") == "pr-loom" }
+assert(loom_caches.length == 1, "verify must retain exactly one loom cache")
+loom_cache = loom_caches.first
+assert(loom_cache.dig("with", "workspaces") == ". -> target/loom", "loom cache must map target/loom")
+assert(loom_cache.dig("env", "RUSTFLAGS") == "--cfg loom -D warnings", "loom cache must use the loom flags")
+assert(loom_cache.dig("with", "save-if") == "${{ github.ref == 'refs/heads/main' }}", "verify must save the loom cache only on main")
+loom = verify_steps.find { |step| step["run"] == "cargo test -p fireemu-verification-loom --release --target-dir target/loom" }
+assert(loom && loom.dig("env", "RUSTFLAGS") == "--cfg loom -D warnings", "verify must retain the separate release loom test and flags")
+
 pr = jobs.fetch("pr")
 assert(!pr.key?("needs"), "the minimal pr job must not depend on manual jobs")
 assert(pr.dig("env", "CARGO_TARGET_DIR") == "target/minimal", "the minimal pr job must use target/minimal")

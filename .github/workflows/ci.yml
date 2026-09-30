@@ -36,7 +36,9 @@ jobs:
         with:
           tool: cargo-deny
       - name: CI workflow topology and cache ownership
-        run: ruby scripts/ci-workflow-contract.rb
+        run: |
+          ruby scripts/ci-workflow-contract.rb
+          ruby scripts/ci-workflow-contract.test.rb
       - name: fmt
         run: cargo fmt --all --check
       - name: clippy
@@ -90,6 +92,15 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - name: the pinned toolchain is the one in use
         run: rustc --version | tee /dev/stderr | grep -q "$(sed -n 's/^channel = \"\(.*\)\"/\1/p' rust-toolchain.toml)"
+      - name: restore normal dependencies for protobuf verification
+        uses: Swatinem/rust-cache@v2
+        env:
+          CARGO_TARGET_DIR: target/normal
+        with:
+          shared-key: pr-normal
+          workspaces: . -> target/normal
+          cache-bin: "false"
+          save-if: "false"
       - uses: Swatinem/rust-cache@v2
         env:
           RUSTFLAGS: --cfg loom -D warnings
@@ -103,7 +114,7 @@ jobs:
           sudo apt-get install -y protobuf-compiler
           cargo run -p proto-gen -- check
         env:
-          CARGO_TARGET_DIR: target/verify
+          CARGO_TARGET_DIR: target/normal
       - name: loom scenarios
         run: cargo test -p fireemu-verification-loom --release --target-dir target/loom
         env:
@@ -125,7 +136,9 @@ jobs:
           workspaces: . -> target/minimal
           cache-bin: "false"
       - name: CI workflow cost contract
-        run: ruby scripts/ci-workflow-contract.rb
+        run: |
+          ruby scripts/ci-workflow-contract.rb
+          ruby scripts/ci-workflow-contract.test.rb
       - name: fmt
         run: cargo fmt --all --check
       - name: compile every target

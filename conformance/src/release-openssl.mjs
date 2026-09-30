@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { delimiter, isAbsolute, join } from "node:path";
+import { delimiter, isAbsolute, sep } from "node:path";
 
 /** Select the certificate tool only for the federation comparisons, without changing their frozen harness. */
 export function federationEnvironment(id, env, execute = execFileSync) {
@@ -12,7 +12,7 @@ export function federationEnvironment(id, env, execute = execFileSync) {
   const requirement = `${id} requires OpenSSL >= 3.4 for the frozen federation certificate fixture`;
   let version;
   try {
-    version = execute(directory ? join(directory, "openssl") : "openssl", ["version"], {
+    version = execute(directory ? `${directory}${sep}openssl` : "openssl", ["version"], {
       env: selected,
       encoding: "utf8",
       timeout: 5000,

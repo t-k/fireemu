@@ -263,6 +263,8 @@ export async function collectShape({
     if (spec.owned && !intents.has(spec.owned)) continue;
     if (stopped && spec.id.startsWith("final-list-") && !intents.size) continue;
     if (spec.id === "appengine-location") await sleep(90000);
+    // Native Scheduler can reject DELETE while the preceding pause mutation settles.
+    if (spec.id === "delete-job") await sleep(60000);
     if (spec.creates) intents.add(spec.creates);
     const result = await capture(spec);
     // A definitive client refusal does not establish ownership of a conflicting resource.

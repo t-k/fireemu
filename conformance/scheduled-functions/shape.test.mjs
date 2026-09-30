@@ -99,6 +99,25 @@ test("an ambiguous job create still pauses and deletes the exact owned resources
   assert.ok(!JSON.stringify(rows).includes("offline-test-bearer"));
 });
 
+test("job cleanup waits for native mutation settlement even after an uncertain pause", async () => {
+  for (const failAt of [undefined, "pause-job"]) {
+    const { deps, rows } = environment(failAt);
+    let time = instant;
+    deps.clock = () => time++;
+    deps.sleep = async (ms) => {
+      time += ms;
+    };
+    await collectShape(deps);
+    const pause = rows.find((row) => row.id === "pause-job" && row.state === "before-send");
+    const deletion = rows.find((row) => row.id === "delete-job" && row.state === "before-send");
+    assert.ok(pause && deletion);
+    assert.ok(
+      Date.parse(deletion.dispatchAt) - Date.parse(pause.dispatchAt) >= 60000,
+      "DELETE must allow the preceding pause mutation to settle",
+    );
+  }
+});
+
 test("pre-existing or unreadable owned name stops before mutation and deletion", async () => {
   const { deps, sends } = environment();
   const original = deps.send;
@@ -300,7 +319,7 @@ for (const outcome of ["done", "pending", "error", "malformed"]) {
     const polls = sends.filter(({ id }) => id.startsWith("enable-poll-"));
     if (outcome === "done") {
       assert.equal(polls.length, 2);
-      assert.deepEqual(waits, [8000, 8000, 90000]);
+      assert.deepEqual(waits, [8000, 8000, 90000, 60000]);
       assert.equal(summary.attempted, 33);
       assert.ok(sends.some(({ id }) => id === "create-job"));
     } else {
@@ -314,7 +333,7 @@ for (const outcome of ["done", "pending", "error", "malformed"]) {
 test("successful service readbacks settle before the first product request", async () => {
   const { deps, waits } = environment();
   await collectShape(deps);
-  assert.deepEqual(waits, [90000]);
+  assert.deepEqual(waits, [90000, 60000]);
 });
 
 test("identity reads the recorded Rules release route and requires its scoped source", async () => {

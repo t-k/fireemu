@@ -1127,9 +1127,19 @@ fn rfc5987_encode(s: &str) -> String {
     out
 }
 
+/// An object timestamp as production writes it: RFC 3339 UTC with exactly three fractional
+/// digits (recorded, stage 3 v9: every `timeCreated`, `updated` and `timeFinalized` of both
+/// dialects, `2026-09-30T10:58:30.639Z`). The logical clock keeps nanoseconds; the extra digits
+/// are cut, not rounded, as a millisecond clock would never have produced them.
 fn rfc3339(t: LogicalInstant) -> String {
-    t.to_rfc3339()
-        .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_owned())
+    let full = t
+        .to_rfc3339()
+        .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_owned());
+    let Some(seconds) = full.strip_suffix('Z') else {
+        return full;
+    };
+    let (whole, fraction) = seconds.split_once('.').unwrap_or((seconds, ""));
+    format!("{whole}.{:0<3.3}Z", fraction)
 }
 
 // ------------------------------------------------------------------------------------------

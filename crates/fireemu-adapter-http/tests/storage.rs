@@ -1879,6 +1879,45 @@ fn strict_refuses_a_malformed_bearer_on_the_json_api_patch_as_production_does() 
     assert_eq!(r.status, 200, "{}", String::from_utf8_lossy(&r.body));
 }
 
+/// Object timestamps carry exactly three fractional digits in both dialects, cut (not rounded)
+/// from the logical clock's nanoseconds, as production writes them (recorded, stage 3 v9:
+/// `2026-09-30T10:58:30.639Z` on every `timeCreated`, `updated` and `timeFinalized`).
+#[test]
+fn object_timestamps_have_millisecond_precision_in_both_dialects() {
+    for acceptance in BOTH_PROFILES {
+        let s = state_with(Some(ALLOW_ALL_RULES), acceptance);
+        s.clock
+            .lock()
+            .unwrap()
+            .set(LogicalInstant::from_nanos(START.as_nanos() + 987_654_321))
+            .unwrap();
+        assert_eq!(anonymous_media_upload(&s, "t.txt"), 200);
+        let shape = |value: &Value| {
+            let text = value.as_str().unwrap().to_owned();
+            assert_eq!(text.len(), 24, "{text}");
+            assert_eq!(&text[19..20], ".", "{text}");
+            assert!(text.ends_with(".987Z"), "{acceptance:?}: {text}");
+        };
+        let firebase = handle(&s, req("GET", &format!("/v0/b/{BUCKET}/o/t.txt"), &[], b""));
+        let firebase = json_body(&firebase);
+        shape(&firebase["timeCreated"]);
+        shape(&firebase["updated"]);
+        let gcs = handle(
+            &s,
+            req(
+                "GET",
+                &format!("/storage/v1/b/{BUCKET}/o/t.txt"),
+                &[("authorization", "Bearer owner")],
+                b"",
+            ),
+        );
+        let gcs = json_body(&gcs);
+        shape(&gcs["timeCreated"]);
+        shape(&gcs["updated"]);
+        shape(&gcs["timeStorageClassUpdated"]);
+    }
+}
+
 /// `PATCH /storage/v1/b/{bucket}/o/{object}` updates object metadata, as the Cloud Storage
 /// JSON API does in production (recorded: stage 3 v9, `setup/seed-metadata` and
 /// `boundary-gcs-admin-patch-present`, a 200 with the `storage#object` resource; an absent

@@ -895,7 +895,7 @@ fn a_declared_key_check_still_sees_the_key_beside_a_malformed_query_tenant() {
     }
 }
 
-/// The strict profile's session-independent GET of the supported IdPs answers a caller with an API
+/// The strict profile's session-independent GET of the supported providers answers a caller with an API
 /// key and no credential as a request with a key (`INSUFFICIENT_PERMISSION`), and one with neither
 /// as an unregistered caller (403).
 #[test]

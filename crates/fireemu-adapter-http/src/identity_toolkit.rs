@@ -3526,6 +3526,20 @@ fn query_tenant_of(handler: routes::Handler, query: Option<&str>) -> Option<Stri
         .flatten()
 }
 
+/// What the request's refresh token (`refresh_token`, or `refreshToken`) says about its tenant.
+fn request_refresh_token_tenant(body: &Value) -> Option<RefreshTokenTenant> {
+    str_field(body, "refresh_token")
+        .or_else(|| str_field(body, "refreshToken"))
+        .filter(|token| !token.is_empty())
+        .map(|token| {
+            match fireemu_core_auth::store::AuthRegistry::decode_refresh_token_tenant(token) {
+                None => RefreshTokenTenant::Undecodable,
+                Some(None) => RefreshTokenTenant::NoTenant,
+                Some(Some(tenant)) => RefreshTokenTenant::Tenant(tenant),
+            }
+        })
+}
+
 /// The refusal a refresh token earns before a tenant is looked up: `INVALID_REFRESH_TOKEN` for
 /// one that does not decode, and `TENANT_ID_MISMATCH` for one of another tenant than `target`.
 fn refresh_token_refusal(
@@ -3666,16 +3680,7 @@ fn emulator_creates_named_tenant(
         None => (None, true),
     };
     // The refresh token is the fourth source.
-    let refresh_tenant = str_field(body, "refresh_token")
-        .or_else(|| str_field(body, "refreshToken"))
-        .filter(|token| !token.is_empty())
-        .map(|token| {
-            match fireemu_core_auth::store::AuthRegistry::decode_refresh_token_tenant(token) {
-                None => RefreshTokenTenant::Undecodable,
-                Some(None) => RefreshTokenTenant::NoTenant,
-                Some(Some(tenant)) => RefreshTokenTenant::Tenant(tenant),
-            }
-        });
+    let refresh_tenant = request_refresh_token_tenant(body);
     let query_tenant = query_tenant_of(route.handler, query);
     // The named tenants must agree, as the emulator asserts before it looks the tenant up.
     let mut named = [path_tenant, body_tenant, token_tenant.as_deref()]

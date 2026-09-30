@@ -2878,6 +2878,59 @@ fn strict_frames_json_answers_as_production_does_and_the_emulator_profile_as_the
     assert!(header(&deleted, "content-type").is_none());
 }
 
+/// Routing edges the JSON API keeps from the official router: the ACL stub answers, an unknown
+/// verb after an object is not a copy, and a single-byte range is served while a reversed one is
+/// ignored (whole object); strict answers an unsatisfiable range 416 on the XML-style route as on
+/// the others, the emulator profile serves the whole object.
+#[test]
+fn json_api_routing_and_range_edges() {
+    for acceptance in BOTH_PROFILES {
+        let s = state_with(Some(ALLOW_ALL_RULES), acceptance);
+        let owner = [("authorization", "Bearer owner")];
+        assert_eq!(anonymous_media_upload(&s, "f.txt"), 200);
+        let acl = handle(
+            &s,
+            req(
+                "POST",
+                &format!("/b/{BUCKET}/o/f.txt/acl"),
+                &owner,
+                br#"{"entity":"allUsers","role":"READER"}"#,
+            ),
+        );
+        assert_eq!(acl.status, 200, "{acceptance:?}");
+        assert_eq!(json_body(&acl)["kind"], "storage#objectAccessControl");
+        // `copyTo` and `rewriteTo` are the only verbs: anything else falls through to 501.
+        let other = handle(
+            &s,
+            req(
+                "POST",
+                &format!("/b/{BUCKET}/o/f.txt/moveTo/b/{BUCKET}/o/g.txt"),
+                &owner,
+                b"",
+            ),
+        );
+        assert_eq!(other.status, 501, "{acceptance:?}");
+        let get = |path: &str, range: &str| handle(&s, req("GET", path, &[("range", range)], b""));
+        let media = format!("/v0/b/{BUCKET}/o/f.txt?alt=media");
+        let one = get(&media, "bytes=2-2");
+        assert_eq!(one.status, 206, "{acceptance:?}");
+        assert_eq!(one.body.as_ref(), b"l");
+        assert_eq!(header(&one, "content-range"), Some("bytes 2-2/5"));
+        let reversed = get(&media, "bytes=3-1");
+        assert_eq!(reversed.status, 200, "{acceptance:?}");
+        assert_eq!(reversed.body.as_ref(), b"hello");
+        let xml = format!("/{BUCKET}/f.txt");
+        let beyond = get(&xml, "bytes=50-60");
+        if acceptance == TokenAcceptance::Verified {
+            assert_eq!(beyond.status, 416);
+            assert_eq!(header(&beyond, "content-range"), Some("bytes */5"));
+        } else {
+            assert_eq!(beyond.status, 200);
+            assert_eq!(beyond.body.as_ref(), b"hello");
+        }
+    }
+}
+
 /// `PATCH /storage/v1/b/{bucket}/o/{object}` updates object metadata, as the Cloud Storage
 /// JSON API does in production (recorded: stage 3 v9, `setup/seed-metadata` and
 /// `boundary-gcs-admin-patch-present`, a 200 with the `storage#object` resource; an absent

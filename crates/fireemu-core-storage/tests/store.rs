@@ -1219,6 +1219,32 @@ fn list_tokens_outside_the_prefix_restart_and_an_empty_page_names_the_first_item
 }
 
 #[test]
+fn an_empty_page_treats_only_an_unfolded_entry_under_the_prefix_as_a_token() {
+    let mut s = StorageState::new(1);
+    let b = bucket();
+    for n in ["p/a", "p/x/y", "q/m/n", "q/zzz"] {
+        s.put(
+            &b,
+            &name(n),
+            b"x".to_vec(),
+            NewMetadata::default(),
+            Precondition::default(),
+            t(1),
+        )
+        .unwrap();
+    }
+    // A token outside the prefix, and a token that names a folded entry, are not item tokens:
+    // the empty page restarts at the first item under the prefix.
+    for token in ["q/zzz", "p/x/y"] {
+        let page = s.list(&b, "p/", Some("/"), Some(token), Some(0));
+        assert_eq!(page.next_page_token.as_deref(), Some("p/a"), "{token}");
+    }
+    // The scan stops at the end of the prefix: nothing of `q/` is folded into the prefixes.
+    let page = s.list(&b, "p/", Some("/"), None, Some(0));
+    assert_eq!(page.prefixes, ["p/x/"]);
+}
+
+#[test]
 fn absent_objects_satisfy_only_if_generation_match_zero() {
     let mut s = StorageState::new(1);
     let b = bucket();

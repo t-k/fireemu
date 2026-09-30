@@ -502,3 +502,29 @@ pub async fn serve_storage_with_budget(
         });
     }
 }
+
+#[cfg(test)]
+mod handler_error_tests {
+    use super::*;
+
+    /// The answer to a handler that failed carries its status, its message, the retry hint only
+    /// when asked and the CORS headers of the request's origin.
+    #[test]
+    fn a_failed_handler_answers_its_status_message_retry_hint_and_origin() {
+        let failed = handler_error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            b"storage handler failed",
+            Some("http://localhost:5173"),
+            false,
+        );
+        assert_eq!(failed.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert!(failed.headers().get("retry-after").is_none());
+        assert!(failed
+            .headers()
+            .get("access-control-allow-origin")
+            .is_some());
+        let busy = handler_error_response(StatusCode::SERVICE_UNAVAILABLE, b"busy", None, true);
+        assert_eq!(busy.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(busy.headers().get("retry-after").unwrap(), "1");
+    }
+}

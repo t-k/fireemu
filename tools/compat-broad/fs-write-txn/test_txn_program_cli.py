@@ -285,3 +285,36 @@ def test_the_packets_own_path_cannot_climb(packet, table):
     path, baseline, envelope, value, _load = packet
     with pytest.raises(ValueError, match="path"):
         cli.load_packet(path, cli.sha(path.read_bytes()), baseline, envelope, table=table, source_commit="b" * 40, packet_relative="docs.local/reviews/../toy-unit.json", envelope_relative=value["envelopePath"])
+
+
+def test_a_packet_never_pins_a_virtualenv_interpreter(tmp_path, table):
+    # a virtualenv is a `pyvenv.cfg` beside the interpreter's directory or its parent; a plain interpreter has neither
+    plain = tmp_path / "plain" / "bin" / "python3.12"
+    venv = tmp_path / "venv" / "bin" / "python3"
+    for path in (plain, venv):
+        path.parent.mkdir(parents=True); path.write_text("")
+    (tmp_path / "venv" / "pyvenv.cfg").write_text("home = /x\n")
+    cli.refuse_virtualenv({"pythonExecutable": str(plain)})
+    cli.refuse_virtualenv({"reviewed": True})
+    with pytest.raises(ValueError, match="virtualenv"):
+        cli.refuse_virtualenv({"pythonExecutable": str(venv)})
+    (tmp_path / "beside").mkdir()
+    (tmp_path / "beside" / "pyvenv.cfg").write_text("home = /x\n")
+    (tmp_path / "beside" / "python3").write_text("")
+    with pytest.raises(ValueError, match="virtualenv"):
+        cli.refuse_virtualenv({"pythonExecutable": str(tmp_path / "beside" / "python3")})
+    args = dict(table=table, source_commit="b" * 40, baseline_sha256="0" * 64, envelope_sha256="1" * 64, packet_id="fs-transaction-toy-failed-commit-unit", envelope_relative="docs.local/reviews/toy-envelope.md")
+    with pytest.raises(ValueError, match="virtualenv"):
+        cli.packet_value(runtime={"pythonExecutable": str(venv)}, **args)
+    cli.packet_value(runtime={"pythonExecutable": str(plain)}, **args)
+
+
+def test_the_interpreter_running_the_builder_is_refused_when_it_is_a_virtualenv(monkeypatch):
+    import sys
+    monkeypatch.setattr(sys, "prefix", "/venv")
+    monkeypatch.setattr(sys, "base_prefix", "/base")
+    with pytest.raises(ValueError, match="virtualenv"):
+        cli.refuse_virtualenv({"pythonExecutable": sys.executable})
+    monkeypatch.setattr(sys, "prefix", "/base")
+    if not any((base / "pyvenv.cfg").exists() for base in (Path(sys.executable).parent, Path(sys.executable).parent.parent)):
+        cli.refuse_virtualenv({"pythonExecutable": sys.executable})

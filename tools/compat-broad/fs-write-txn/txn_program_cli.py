@@ -91,7 +91,21 @@ def requests_per_recording(table):
     return sum(table['caps'].values())
 
 
+def refuse_virtualenv(runtime):
+    """A packet pins the plain interpreter, never a virtualenv's. A virtualenv runs `_virtualenv.pth` and imports from a `site-packages`
+    that other sessions install into, so under it the runner would run code the review did not see. A virtualenv is recognised by a
+    `pyvenv.cfg` beside the pinned executable's directory or its parent, and, for the interpreter running this code, by a prefix that
+    differs from the base prefix."""
+    executable = runtime.get('pythonExecutable') if isinstance(runtime, dict) else None
+    if executable is None:
+        return
+    path = Path(executable)
+    if any((base / 'pyvenv.cfg').exists() for base in (path.parent, path.parent.parent)) or (executable == sys.executable and sys.prefix != sys.base_prefix):
+        raise ValueError('program packet pins a virtualenv interpreter; build it with the plain interpreter')
+
+
 def packet_value(*, table, source_commit, runtime, baseline_sha256, envelope_sha256, packet_id, envelope_relative):
+    refuse_virtualenv(runtime)
     plan = compile_plan(table, 'a' * 32, 'b' * 32)
     return {'schemaVersion': 1, 'program': table['program'], 'packetName': table['name'], 'packetId': packet_id, 'project': 'fireemu-oracle-sbx', 'database': '(default)', 'recordings': 2, 'requestsPerRecording': requests_per_recording(table), 'estimatedUsdPerRecording': 0.01, 'sourceCommit': source_commit, 'runnerSha256': runner_sha256(table['name']), 'closureSha256': sha(CLOSURE.read_bytes()), 'corpusDigest': corpus_digest(table), 'planSourceDigest': source_digest(table), 'baselineSha256': baseline_sha256, 'envelopeId': table['envelopeId'], 'envelopePath': envelope_relative, 'envelopeSha256': envelope_sha256, 'runtime': runtime, 'iamConfig': 'none', 'retries': 'none', 'onStop': 'needs-recovery-lock-held', 'observationSeconds': plan['observationSeconds'], 'recoverySeconds': plan['recoverySeconds'], 'maxTokens': plan['maxTokens'], 'timing': 'wall-clock', 'timingSource': 'parent-wire-envelope', 'reserveUsd': 0.04, 'maxUnresolvedTokens': plan['maxUnresolvedTokens'], 'releasePolicy': plan['releasePolicy'], 'caps': plan['caps'], 'cases': plan['cases'], 'scope': envelope_scope(table)}
 

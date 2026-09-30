@@ -1915,6 +1915,12 @@ fn object_timestamps_have_millisecond_precision_in_both_dialects() {
         shape(&gcs["timeCreated"]);
         shape(&gcs["updated"]);
         shape(&gcs["timeStorageClassUpdated"]);
+        shape(&gcs["timeFinalized"]);
+        assert_eq!(gcs["timeFinalized"], gcs["timeCreated"]);
+        assert!(
+            firebase.get("timeFinalized").is_none(),
+            "the Firebase dialect never carried it"
+        );
     }
 }
 

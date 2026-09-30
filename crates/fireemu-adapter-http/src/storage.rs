@@ -1532,6 +1532,9 @@ fn gcs_json(m: &ObjectMetadata, host: &str) -> Value {
         "timeCreated": rfc3339(m.time_created),
         "updated": rfc3339(m.updated),
         "timeStorageClassUpdated": rfc3339(m.time_created),
+        // Production sets it with the upload and never moves it here: equal to `timeCreated` in
+        // all 735 recorded object resources (stage 3 v9).
+        "timeFinalized": rfc3339(m.time_created),
     });
     let mut metadata = m.custom.clone();
     if !m.download_tokens.is_empty() {

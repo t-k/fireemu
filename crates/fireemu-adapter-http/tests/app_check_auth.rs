@@ -404,14 +404,12 @@ fn a_request_the_selection_serves_from_the_default_project_still_makes_its_tenan
                 .expect("the user exists")
         };
         let own = alg_none(&claims_of("demo-app", "z1", Some("tZ")));
-        // The tenant the token names is made, and the request is answered `USER_NOT_FOUND`, where
-        // the official emulator answers 200 (`createAuthUri` does not parse the ID token): the
-        // open issue emulator-create-auth-uri-answers-user-not-found-for-a-tenant-made-on-the-way.
+        // The tenant the token names is made, and the request is served as the official emulator
+        // serves it (`createAuthUri` does not parse the ID token).
         let r = send(auth_uri_body(
             &json!({"idToken": own, "refresh_token": project_refresh}),
         ));
-        assert_eq!(r.status, 400, "{as_owner}: {}", r.body);
-        assert_eq!(r.body["error"]["message"], "USER_NOT_FOUND", "{as_owner}");
+        assert_eq!(r.status, 200, "{as_owner}: {}", r.body);
         assert!(
             registry.tenant_store("demo-app", "tZ").is_some(),
             "{as_owner}"

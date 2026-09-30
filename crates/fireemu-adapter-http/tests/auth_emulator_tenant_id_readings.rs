@@ -679,3 +679,37 @@ fn a_refresh_ignores_the_query_tenant_and_renews_in_the_tokens_own_namespace() {
     );
     assert!(registry.tenant_store("demo-app", "unknown").is_none());
 }
+
+/// Where the query tenant is read (batchGet, the action link) a bare or malformed `tenantId` is
+/// refused as before; a bare parameter of another name is no refusal anywhere.
+#[test]
+fn a_malformed_query_tenant_is_refused_only_where_it_is_read() {
+    let (state, _) = emulator();
+    let batch = |query: &str| {
+        let r = handle_with(
+            &state,
+            "GET",
+            &format!("{V1}/projects/demo-app/accounts:batchGet{query}"),
+            &owner(),
+            &json!({}),
+        );
+        (
+            r.status,
+            r.body["error"]["message"]
+                .as_str()
+                .unwrap_or("-")
+                .to_owned(),
+        )
+    };
+    assert_eq!(batch("?tenantId"), (400, "INVALID_ARGUMENT".to_owned()));
+    assert_eq!(batch("?tenantId="), (400, "INVALID_ARGUMENT".to_owned()));
+    assert_eq!(
+        batch("?tenantId=a&tenantId=b"),
+        (400, "INVALID_ARGUMENT".to_owned())
+    );
+    assert_eq!(batch("?flag"), (200, "-".to_owned()));
+    for profile_state in [emulator().0, profiles().into_iter().nth(1).unwrap().1] {
+        let (status, created) = sign_up(&profile_state, "&flag", &account("flag@example.com"));
+        assert_eq!(status, 200, "{created}");
+    }
+}

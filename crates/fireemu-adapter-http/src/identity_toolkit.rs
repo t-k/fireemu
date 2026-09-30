@@ -9001,11 +9001,6 @@ fn select_store(
         !state.stateless_refresh_tokens
             || emulator_query_tenant(resolution, path, Some(String::new())).is_some(),
     )?;
-    let query_tenant = if state.stateless_refresh_tokens {
-        emulator_query_tenant(resolution, path, query_tenant)
-    } else {
-        query_tenant
-    };
     let query_body_scope = state.query_limits == AuthQueryLimits::ProductionBounded
         && matches!(
             resolution,

@@ -1,0 +1,338 @@
+{
+  "provenance": "STORAGE-OBJECT probe-v3, run 04356b24ca763689c109, 2026-09-30T15:46:45Z to 15:47:19Z, query project, owner token (packet probe-v3, commit 823620060). Selected headers and the body of each answer, in request order. Session URLs are not kept; download tokens are replaced by synthetic UUIDs of the same form.",
+  "runId": "04356b24ca763689c109",
+  "answers": {
+    "multipart-create": {
+      "status": 200,
+      "headers": {
+        "content-type": "application/json; charset=UTF-8",
+        "etag": "CPGux6fTlpcDEAE="
+      },
+      "body": "{\"kind\":\"storage#object\",\"id\":\"fireemu-oracle-query.firebasestorage.app/storage-object/04356b24ca763689c109/probe3/multipart/gcs/valid.bin/1790783207364465\",\"selfLink\":\"https://www.googleapis.com/storage/v1/b/fireemu-oracle-query.firebasestorage.app/o/storage-object%2F04356b24ca763689c109%2Fprobe3%2Fmultipart%2Fgcs%2Fvalid.bin\",\"mediaLink\":\"https://storage.googleapis.com/download/storage/v1/b/fireemu-oracle-query.firebasestorage.app/o/storage-object%2F04356b24ca763689c109%2Fprobe3%2Fmultipart%2Fgcs%2Fvalid.bin?generation=1790783207364465&alt=media\",\"name\":\"storage-object/04356b24ca763689c109/probe3/multipart/gcs/valid.bin\",\"bucket\":\"fireemu-oracle-query.firebasestorage.app\",\"generation\":\"1790783207364465\",\"metageneration\":\"1\",\"contentType\":\"application/octet-stream\",\"storageClass\":\"STANDARD\",\"size\":\"5\",\"md5Hash\":\"/upD6bdvwxw0vOxAPcxL+A==\",\"crc32c\":\"1Kspzg==\",\"etag\":\"CPGux6fTlpcDEAE=\",\"timeCreated\":\"2026-09-30T15:46:47.379Z\",\"updated\":\"2026-09-30T15:46:47.379Z\",\"timeStorageClassUpdated\":\"2026-09-30T15:46:47.379Z\",\"timeFinalized\":\"2026-09-30T15:46:47.379Z\",\"metadata\":{\"marker\":\"multipart-observation\"}}"
+    },
+    "gcs-resumable-start": {
+      "status": 200,
+      "headers": {
+        "content-type": "text/plain; charset=utf-8"
+      },
+      "body": ""
+    },
+    "gcs-resumable-chunk": {
+      "status": 308,
+      "headers": {
+        "content-type": "text/plain; charset=utf-8",
+        "range": "bytes=0-262143"
+      },
+      "body": ""
+    },
+    "gcs-resumable-status": {
+      "status": 308,
+      "headers": {
+        "content-type": "text/plain; charset=utf-8",
+        "range": "bytes=0-262143"
+      },
+      "body": ""
+    },
+    "gcs-resumable-finish": {
+      "status": 200,
+      "headers": {
+        "content-type": "application/json; charset=UTF-8",
+        "etag": "CMTq0KnTlpcDEAE="
+      },
+      "body": "{\"kind\":\"storage#object\",\"id\":\"fireemu-oracle-query.firebasestorage.app/storage-object/04356b24ca763689c109/probe3/gcs/resumable.bin/1790783211713860\",\"selfLink\":\"https://www.googleapis.com/storage/v1/b/fireemu-oracle-query.firebasestorage.app/o/storage-object%2F04356b24ca763689c109%2Fprobe3%2Fgcs%2Fresumable.bin\",\"mediaLink\":\"https://storage.googleapis.com/download/storage/v1/b/fireemu-oracle-query.firebasestorage.app/o/storage-object%2F04356b24ca763689c109%2Fprobe3%2Fgcs%2Fresumable.bin?generation=1790783211713860&alt=media\",\"name\":\"storage-object/04356b24ca763689c109/probe3/gcs/resumable.bin\",\"bucket\":\"fireemu-oracle-query.firebasestorage.app\",\"generation\":\"1790783211713860\",\"metageneration\":\"1\",\"contentType\":\"application/octet-stream\",\"storageClass\":\"STANDARD\",\"size\":\"262147\",\"md5Hash\":\"cc8pme/fiR/h+9YRkZOzww==\",\"crc32c\":\"xNDiAQ==\",\"etag\":\"CMTq0KnTlpcDEAE=\",\"timeCreated\":\"2026-09-30T15:46:51.722Z\",\"updated\":\"2026-09-30T15:46:51.722Z\",\"timeStorageClassUpdated\":\"2026-09-30T15:46:51.722Z\",\"timeFinalized\":\"2026-09-30T15:46:51.722Z\",\"metadata\":{\"marker\":\"gcs-resumable\"}}"
+    },
+    "firebase-resumable-start": {
+      "status": 200,
+      "headers": {
+        "content-type": "text/plain; charset=utf-8",
+        "x-goog-upload-chunk-granularity": "262144",
+        "x-goog-upload-status": "active"
+      },
+      "body": ""
+    },
+    "firebase-resumable-query": {
+      "status": 200,
+      "headers": {
+        "content-type": "text/plain; charset=utf-8",
+        "x-goog-upload-chunk-granularity": "262144",
+        "x-goog-upload-size-received": "0",
+        "x-goog-upload-status": "active"
+      },
+      "body": ""
+    },
+    "firebase-resumable-chunk": {
+      "status": 200,
+      "headers": {
+        "content-type": "text/plain; charset=utf-8",
+        "x-goog-upload-status": "active"
+      },
+      "body": ""
+    },
+    "firebase-resumable-query-after-chunk": {
+      "status": 200,
+      "headers": {
+        "content-type": "text/plain; charset=utf-8",
+        "x-goog-upload-chunk-granularity": "262144",
+        "x-goog-upload-size-received": "262144",
+        "x-goog-upload-status": "active"
+      },
+      "body": ""
+    },
+    "firebase-resumable-finish": {
+      "status": 200,
+      "headers": {
+        "content-type": "application/json; charset=UTF-8",
+        "x-goog-upload-status": "final"
+      },
+      "body": "{\"name\":\"storage-object/04356b24ca763689c109/probe3/firebase/resumable.bin\",\"bucket\":\"fireemu-oracle-query.firebasestorage.app\",\"generation\":\"1790783220281776\",\"metageneration\":\"1\",\"contentType\":\"application/octet-stream\",\"timeCreated\":\"2026-09-30T15:47:00.294Z\",\"updated\":\"2026-09-30T15:47:00.294Z\",\"storageClass\":\"STANDARD\",\"size\":\"262147\",\"md5Hash\":\"cc8pme/fiR/h+9YRkZOzww==\",\"contentEncoding\":\"identity\",\"contentDisposition\":\"inline; filename*=utf-8''resumable.bin\",\"crc32c\":\"xNDiAQ==\",\"etag\":\"CLDj263TlpcDEAE=\",\"downloadTokens\":\"00000000-0000-4000-8000-000000000001\"}"
+    },
+    "copy-source-create": {
+      "status": 200,
+      "headers": {
+        "content-type": "application/json; charset=UTF-8",
+        "etag": "CNiyhK7TlpcDEAE="
+      },
+      "body": "{\"kind\":\"storage#object\",\"id\":\"fireemu-oracle-query.firebasestorage.app/storage-object/04356b24ca763689c109/probe3/copy/source.bin/1790783220947288\",\"selfLink\":\"https://www.googleapis.com/storage/v1/b/fireemu-oracle-query.firebasestorage.app/o/storage-object%2F04356b24ca763689c109%2Fprobe3%2Fcopy%2Fsource.bin\",\"mediaLink\":\"https://storage.googleapis.com/download/storage/v1/b/fireemu-oracle-query.firebasestorage.app/o/storage-object%2F04356b24ca763689c109%2Fprobe3%2Fcopy%2Fsource.bin?generation=1790783220947288&alt=media\",\"name\":\"storage-object/04356b24ca763689c109/probe3/copy/source.bin\",\"bucket\":\"fireemu-oracle-query.firebasestorage.app\",\"generation\":\"1790783220947288\",\"metageneration\":\"1\",\"contentType\":\"application/octet-stream\",\"storageClass\":\"STANDARD\",\"size\":\"5\",\"md5Hash\":\"/upD6bdvwxw0vOxAPcxL+A==\",\"crc32c\":\"1Kspzg==\",\"etag\":\"CNiyhK7TlpcDEAE=\",\"timeCreated\":\"2026-09-30T15:47:00.957Z\",\"updated\":\"2026-09-30T15:47:00.957Z\",\"timeStorageClassUpdated\":\"2026-09-30T15:47:00.957Z\",\"timeFinalized\":\"2026-09-30T15:47:00.957Z\"}"
+    },
+    "copy-source-metadata": {
+      "status": 200,
+      "headers": {
+        "content-type": "application/json; charset=UTF-8",
+        "etag": "CNiyhK7TlpcDEAE="
+      },
+      "body": "{\"kind\":\"storage#object\",\"id\":\"fireemu-oracle-query.firebasestorage.app/storage-object/04356b24ca763689c109/probe3/copy/source.bin/1790783220947288\",\"selfLink\":\"https://www.googleapis.com/storage/v1/b/fireemu-oracle-query.firebasestorage.app/o/storage-object%2F04356b24ca763689c109%2Fprobe3%2Fcopy%2Fsource.bin\",\"mediaLink\":\"https://storage.googleapis.com/download/storage/v1/b/fireemu-oracle-query.firebasestorage.app/o/storage-object%2F04356b24ca763689c109%2Fprobe3%2Fcopy%2Fsource.bin?generation=1790783220947288&alt=media\",\"name\":\"storage-object/04356b24ca763689c109/probe3/copy/source.bin\",\"bucket\":\"fireemu-oracle-query.firebasestorage.app\",\"generation\":\"1790783220947288\",\"metageneration\":\"1\",\"contentType\":\"application/octet-stream\",\"storageClass\":\"STANDARD\",\"size\":\"5\",\"md5Hash\":\"/upD6bdvwxw0vOxAPcxL+A==\",\"crc32c\":\"1Kspzg==\",\"etag\":\"CNiyhK7TlpcDEAE=\",\"timeCreated\":\"2026-09-30T15:47:00.957Z\",\"updated\":\"2026-09-30T15:47:00.957Z\",\"timeStorageClassUpdated\":\"2026-09-30T15:47:00.957Z\",\"timeFinalized\":\"2026-09-30T15:47:00.957Z\"}"
+    },
+    "copy-to": {
+      "status": 200,
+      "headers": {
+        "content-type": "application/json; charset=UTF-8",
+        "etag": "CPjxv67TlpcDEAE="
+      },
+      "body": "{\"kind\":\"storage#object\",\"id\":\"fireemu-oracle-query.firebasestorage.app/storage-object/04356b24ca763689c109/probe3/copy/copied.bin/1790783221922040\",\"selfLink\":\"https://www.googleapis.com/storage/v1/b/fireemu-oracle-query.firebasestorage.app/o/storage-object%2F04356b24ca763689c109%2Fprobe3%2Fcopy%2Fcopied.bin\",\"mediaLink\":\"https://storage.googleapis.com/download/storage/v1/b/fireemu-oracle-query.firebasestorage.app/o/storage-object%2F04356b24ca763689c109%2Fprobe3%2Fcopy%2Fcopied.bin?generation=1790783221922040&alt=media\",\"name\":\"storage-object/04356b24ca763689c109/probe3/copy/copied.bin\",\"bucket\":\"fireemu-oracle-query.firebasestorage.app\",\"generation\":\"1790783221922040\",\"metageneration\":\"1\",\"contentType\":\"application/octet-stream\",\"storageClass\":\"STANDARD\",\"size\":\"5\",\"md5Hash\":\"/upD6bdvwxw0vOxAPcxL+A==\",\"crc32c\":\"1Kspzg==\",\"etag\":\"CPjxv67TlpcDEAE=\",\"timeCreated\":\"2026-09-30T15:47:01.930Z\",\"updated\":\"2026-09-30T15:47:01.930Z\",\"timeStorageClassUpdated\":\"2026-09-30T15:47:01.930Z\",\"timeFinalized\":\"2026-09-30T15:47:01.930Z\",\"owner\":{\"entity\":\"user-t.kaniwa@reckona.co.jp\"}}"
+    },
+    "rewrite-0": {
+      "status": 200,
+      "headers": {
+        "content-type": "application/json; charset=UTF-8"
+      },
+      "body": "{\"kind\":\"storage#rewriteResponse\",\"totalBytesRewritten\":\"5\",\"objectSize\":\"5\",\"done\":true,\"resource\":{\"kind\":\"storage#object\",\"id\":\"fireemu-oracle-query.firebasestorage.app/storage-object/04356b24ca763689c109/probe3/copy/rewritten.bin/1790783222614030\",\"selfLink\":\"https://www.googleapis.com/storage/v1/b/fireemu-oracle-query.firebasestorage.app/o/storage-object%2F04356b24ca763689c109%2Fprobe3%2Fcopy%2Frewritten.bin\",\"mediaLink\":\"https://storage.googleapis.com/download/storage/v1/b/fireemu-oracle-query.firebasestorage.app/o/storage-object%2F04356b24ca763689c109%2Fprobe3%2Fcopy%2Frewritten.bin?generation=1790783222614030&alt=media\",\"name\":\"storage-object/04356b24ca763689c109/probe3/copy/rewritten.bin\",\"bucket\":\"fireemu-oracle-query.firebasestorage.app\",\"generation\":\"1790783222614030\",\"metageneration\":\"1\",\"contentType\":\"text/plain\",\"storageClass\":\"STANDARD\",\"size\":\"5\",\"md5Hash\":\"/upD6bdvwxw0vOxAPcxL+A==\",\"crc32c\":\"1Kspzg==\",\"etag\":\"CI6Q6q7TlpcDEAE=\",\"timeCreated\":\"2026-09-30T15:47:02.620Z\",\"updated\":\"2026-09-30T15:47:02.620Z\",\"timeStorageClassUpdated\":\"2026-09-30T15:47:02.620Z\",\"timeFinalized\":\"2026-09-30T15:47:02.620Z\",\"metadata\":{\"marker\":\"rewrite-override\"},\"owner\":{\"entity\":\"user-t.kaniwa@reckona.co.jp\"}}}"
+    },
+    "token-upload": {
+      "status": 200,
+      "headers": {
+        "content-type": "application/json; charset=UTF-8"
+      },
+      "body": "{\"name\":\"storage-object/04356b24ca763689c109/probe3/firebase/tokens.bin\",\"bucket\":\"fireemu-oracle-query.firebasestorage.app\",\"generation\":\"1790783223093243\",\"metageneration\":\"1\",\"contentType\":\"application/octet-stream\",\"timeCreated\":\"2026-09-30T15:47:03.102Z\",\"updated\":\"2026-09-30T15:47:03.102Z\",\"storageClass\":\"STANDARD\",\"size\":\"3\",\"md5Hash\":\"/7uM1aIyt9kGkEUz6WCfSA==\",\"contentEncoding\":\"identity\",\"contentDisposition\":\"inline; filename*=utf-8''tokens.bin\",\"crc32c\":\"3rtoXA==\",\"etag\":\"CPuvh6/TlpcDEAE=\",\"downloadTokens\":\"00000000-0000-4000-8000-000000000002\"}"
+    },
+    "token-create": {
+      "status": 200,
+      "headers": {
+        "content-type": "application/json; charset=UTF-8"
+      },
+      "body": "{\"name\":\"storage-object/04356b24ca763689c109/probe3/firebase/tokens.bin\",\"bucket\":\"fireemu-oracle-query.firebasestorage.app\",\"generation\":\"1790783223093243\",\"metageneration\":\"2\",\"contentType\":\"application/octet-stream\",\"timeCreated\":\"2026-09-30T15:47:03.102Z\",\"updated\":\"2026-09-30T15:47:04.836Z\",\"storageClass\":\"STANDARD\",\"size\":\"3\",\"md5Hash\":\"/7uM1aIyt9kGkEUz6WCfSA==\",\"contentEncoding\":\"identity\",\"contentDisposition\":\"inline; filename*=utf-8''tokens.bin\",\"crc32c\":\"3rtoXA==\",\"etag\":\"CPuvh6/TlpcDEAI=\",\"downloadTokens\":\"00000000-0000-4000-8000-000000000003,00000000-0000-4000-8000-000000000002\"}"
+    },
+    "token-delete": {
+      "status": 200,
+      "headers": {
+        "content-type": "application/json; charset=UTF-8"
+      },
+      "body": "{\"name\":\"storage-object/04356b24ca763689c109/probe3/firebase/tokens.bin\",\"bucket\":\"fireemu-oracle-query.firebasestorage.app\",\"generation\":\"1790783223093243\",\"metageneration\":\"3\",\"contentType\":\"application/octet-stream\",\"timeCreated\":\"2026-09-30T15:47:03.102Z\",\"updated\":\"2026-09-30T15:47:06.567Z\",\"storageClass\":\"STANDARD\",\"size\":\"3\",\"md5Hash\":\"/7uM1aIyt9kGkEUz6WCfSA==\",\"contentEncoding\":\"identity\",\"contentDisposition\":\"inline; filename*=utf-8''tokens.bin\",\"crc32c\":\"3rtoXA==\",\"etag\":\"CPuvh6/TlpcDEAM=\",\"downloadTokens\":\"00000000-0000-4000-8000-000000000002\"}"
+    },
+    "list-page-1": {
+      "status": 200,
+      "headers": {
+        "content-type": "application/json; charset=UTF-8"
+      },
+      "body": "{\"kind\":\"storage#objects\",\"nextPageToken\":\"Cj1zdG9yYWdlLW9iamVjdC8wNDM1NmIyNGNhNzYzNjg5YzEwOS9wcm9iZTMvY29weS9yZXdyaXR0ZW4uYmlu\",\"items\":[{\"kind\":\"storage#object\",\"id\":\"fireemu-oracle-query.firebasestorage.app/storage-object/04356b24ca763689c109/probe3/copy/copied.bin/1790783221922040\",\"selfLink\":\"https://www.googleapis.com/storage/v1/b/fireemu-oracle-query.firebasestorage.app/o/storage-object%2F04356b24ca763689c109%2Fprobe3%2Fcopy%2Fcopied.bin\",\"mediaLink\":\"https://storage.googleapis.com/download/storage/v1/b/fireemu-oracle-query.firebasestorage.app/o/storage-object%2F04356b24ca763689c109%2Fprobe3%2Fcopy%2Fcopied.bin?generation=1790783221922040&alt=media\",\"name\":\"storage-object/04356b24ca763689c109/probe3/copy/copied.bin\",\"bucket\":\"fireemu-oracle-query.firebasestorage.app\",\"generation\":\"1790783221922040\",\"metageneration\":\"1\",\"contentType\":\"application/octet-stream\",\"storageClass\":\"STANDARD\",\"size\":\"5\",\"md5Hash\":\"/upD6bdvwxw0vOxAPcxL+A==\",\"crc32c\":\"1Kspzg==\",\"etag\":\"CPjxv67TlpcDEAE=\",\"timeCreated\":\"2026-09-30T15:47:01.930Z\",\"updated\":\"2026-09-30T15:47:01.930Z\",\"timeStorageClassUpdated\":\"2026-09-30T15:47:01.930Z\",\"timeFinalized\":\"2026-09-30T15:47:01.930Z\"},{\"kind\":\"storage#object\",\"id\":\"fireemu-oracle-query.firebasestorage.app/storage-object/04356b24ca763689c109/probe3/copy/rewritten.bin/1790783222614030\",\"selfLink\":\"https://www.googleapis.com/storage/v1/b/fireemu-oracle-query.firebasestorage.app/o/storage-object%2F04356b24ca763689c109%2Fprobe3%2Fcopy%2Frewritten.bin\",\"mediaLink\":\"https://storage.googleapis.com/download/storage/v1/b/fireemu-oracle-query.firebasestorage.app/o/storage-object%2F04356b24ca763689c109%2Fprobe3%2Fcopy%2Frewritten.bin?generation=1790783222614030&alt=media\",\"name\":\"storage-object/04356b24ca763689c109/probe3/copy/rewritten.bin\",\"bucket\":\"fireemu-oracle-query.firebasestorage.app\",\"generation\":\"1790783222614030\",\"metageneration\":\"1\",\"contentType\":\"text/plain\",\"storageClass\":\"STANDARD\",\"size\":\"5\",\"md5Hash\":\"/upD6bdvwxw0vOxAPcxL+A==\",\"crc32c\":\"1Kspzg==\",\"etag\":\"CI6Q6q7TlpcDEAE=\",\"timeCreated\":\"2026-09-30T15:47:02.620Z\",\"updated\":\"2026-09-30T15:47:02.620Z\",\"timeStorageClassUpdated\":\"2026-09-30T15:47:02.620Z\",\"timeFinalized\":\"2026-09-30T15:47:02.620Z\",\"metadata\":{\"marker\":\"rewrite-override\"}}]}"
+    },
+    "list-page-2": {
+      "status": 200,
+      "headers": {
+        "content-type": "application/json; charset=UTF-8"
+      },
+      "body": "{\"kind\":\"storage#objects\",\"nextPageToken\":\"CkFzdG9yYWdlLW9iamVjdC8wNDM1NmIyNGNhNzYzNjg5YzEwOS9wcm9iZTMvZmlyZWJhc2UvcmVzdW1hYmxlLmJpbg==\",\"items\":[{\"kind\":\"storage#object\",\"id\":\"fireemu-oracle-query.firebasestorage.app/storage-object/04356b24ca763689c109/probe3/copy/source.bin/1790783220947288\",\"selfLink\":\"https://www.googleapis.com/storage/v1/b/fireemu-oracle-query.firebasestorage.app/o/storage-object%2F04356b24ca763689c109%2Fprobe3%2Fcopy%2Fsource.bin\",\"mediaLink\":\"https://storage.googleapis.com/download/storage/v1/b/fireemu-oracle-query.firebasestorage.app/o/storage-object%2F04356b24ca763689c109%2Fprobe3%2Fcopy%2Fsource.bin?generation=1790783220947288&alt=media\",\"name\":\"storage-object/04356b24ca763689c109/probe3/copy/source.bin\",\"bucket\":\"fireemu-oracle-query.firebasestorage.app\",\"generation\":\"1790783220947288\",\"metageneration\":\"1\",\"contentType\":\"application/octet-stream\",\"storageClass\":\"STANDARD\",\"size\":\"5\",\"md5Hash\":\"/upD6bdvwxw0vOxAPcxL+A==\",\"crc32c\":\"1Kspzg==\",\"etag\":\"CNiyhK7TlpcDEAE=\",\"timeCreated\":\"2026-09-30T15:47:00.957Z\",\"updated\":\"2026-09-30T15:47:00.957Z\",\"timeStorageClassUpdated\":\"2026-09-30T15:47:00.957Z\",\"timeFinalized\":\"2026-09-30T15:47:00.957Z\"},{\"kind\":\"storage#object\",\"id\":\"fireemu-oracle-query.firebasestorage.app/storage-object/04356b24ca763689c109/probe3/firebase/resumable.bin/1790783220281776\",\"selfLink\":\"https://www.googleapis.com/storage/v1/b/fireemu-oracle-query.firebasestorage.app/o/storage-object%2F04356b24ca763689c109%2Fprobe3%2Ffirebase%2Fresumable.bin\",\"mediaLink\":\"https://storage.googleapis.com/download/storage/v1/b/fireemu-oracle-query.firebasestorage.app/o/storage-object%2F04356b24ca763689c109%2Fprobe3%2Ffirebase%2Fresumable.bin?generation=1790783220281776&alt=media\",\"name\":\"storage-object/04356b24ca763689c109/probe3/firebase/resumable.bin\",\"bucket\":\"fireemu-oracle-query.firebasestorage.app\",\"generation\":\"1790783220281776\",\"metageneration\":\"1\",\"contentType\":\"application/octet-stream\",\"storageClass\":\"STANDARD\",\"size\":\"262147\",\"md5Hash\":\"cc8pme/fiR/h+9YRkZOzww==\",\"contentDisposition\":\"inline; filename*=utf-8''resumable.bin\",\"crc32c\":\"xNDiAQ==\",\"etag\":\"CLDj263TlpcDEAE=\",\"timeCreated\":\"2026-09-30T15:47:00.294Z\",\"updated\":\"2026-09-30T15:47:00.294Z\",\"timeStorageClassUpdated\":\"2026-09-30T15:47:00.294Z\",\"timeFinalized\":\"2026-09-30T15:47:00.294Z\",\"metadata\":{\"firebaseStorageDownloadTokens\":\"00000000-0000-4000-8000-000000000001\"}}]}"
+    },
+    "list-page-3": {
+      "status": 200,
+      "headers": {
+        "content-type": "application/json; charset=UTF-8"
+      },
+      "body": "{\"kind\":\"storage#objects\",\"nextPageToken\":\"CjxzdG9yYWdlLW9iamVjdC8wNDM1NmIyNGNhNzYzNjg5YzEwOS9wcm9iZTMvZ2NzL3Jlc3VtYWJsZS5iaW4=\",\"items\":[{\"kind\":\"storage#object\",\"id\":\"fireemu-oracle-query.firebasestorage.app/storage-object/04356b24ca763689c109/probe3/firebase/tokens.bin/1790783223093243\",\"selfLink\":\"https://www.googleapis.com/storage/v1/b/fireemu-oracle-query.firebasestorage.app/o/storage-object%2F04356b24ca763689c109%2Fprobe3%2Ffirebase%2Ftokens.bin\",\"mediaLink\":\"https://storage.googleapis.com/download/storage/v1/b/fireemu-oracle-query.firebasestorage.app/o/storage-object%2F04356b24ca763689c109%2Fprobe3%2Ffirebase%2Ftokens.bin?generation=1790783223093243&alt=media\",\"name\":\"storage-object/04356b24ca763689c109/probe3/firebase/tokens.bin\",\"bucket\":\"fireemu-oracle-query.firebasestorage.app\",\"generation\":\"1790783223093243\",\"metageneration\":\"3\",\"contentType\":\"application/octet-stream\",\"storageClass\":\"STANDARD\",\"size\":\"3\",\"md5Hash\":\"/7uM1aIyt9kGkEUz6WCfSA==\",\"contentDisposition\":\"inline; filename*=utf-8''tokens.bin\",\"crc32c\":\"3rtoXA==\",\"etag\":\"CPuvh6/TlpcDEAM=\",\"timeCreated\":\"2026-09-30T15:47:03.102Z\",\"updated\":\"2026-09-30T15:47:06.567Z\",\"timeStorageClassUpdated\":\"2026-09-30T15:47:03.102Z\",\"timeFinalized\":\"2026-09-30T15:47:03.102Z\",\"metadata\":{\"firebaseStorageDownloadTokens\":\"00000000-0000-4000-8000-000000000002\"}},{\"kind\":\"storage#object\",\"id\":\"fireemu-oracle-query.firebasestorage.app/storage-object/04356b24ca763689c109/probe3/gcs/resumable.bin/1790783211713860\",\"selfLink\":\"https://www.googleapis.com/storage/v1/b/fireemu-oracle-query.firebasestorage.app/o/storage-object%2F04356b24ca763689c109%2Fprobe3%2Fgcs%2Fresumable.bin\",\"mediaLink\":\"https://storage.googleapis.com/download/storage/v1/b/fireemu-oracle-query.firebasestorage.app/o/storage-object%2F04356b24ca763689c109%2Fprobe3%2Fgcs%2Fresumable.bin?generation=1790783211713860&alt=media\",\"name\":\"storage-object/04356b24ca763689c109/probe3/gcs/resumable.bin\",\"bucket\":\"fireemu-oracle-query.firebasestorage.app\",\"generation\":\"1790783211713860\",\"metageneration\":\"1\",\"contentType\":\"application/octet-stream\",\"storageClass\":\"STANDARD\",\"size\":\"262147\",\"md5Hash\":\"cc8pme/fiR/h+9YRkZOzww==\",\"crc32c\":\"xNDiAQ==\",\"etag\":\"CMTq0KnTlpcDEAE=\",\"timeCreated\":\"2026-09-30T15:46:51.722Z\",\"updated\":\"2026-09-30T15:46:51.722Z\",\"timeStorageClassUpdated\":\"2026-09-30T15:46:51.722Z\",\"timeFinalized\":\"2026-09-30T15:46:51.722Z\",\"metadata\":{\"marker\":\"gcs-resumable\"}}]}"
+    },
+    "list-page-4": {
+      "status": 200,
+      "headers": {
+        "content-type": "application/json; charset=UTF-8"
+      },
+      "body": "{\"kind\":\"storage#objects\",\"items\":[{\"kind\":\"storage#object\",\"id\":\"fireemu-oracle-query.firebasestorage.app/storage-object/04356b24ca763689c109/probe3/multipart/gcs/valid.bin/1790783207364465\",\"selfLink\":\"https://www.googleapis.com/storage/v1/b/fireemu-oracle-query.firebasestorage.app/o/storage-object%2F04356b24ca763689c109%2Fprobe3%2Fmultipart%2Fgcs%2Fvalid.bin\",\"mediaLink\":\"https://storage.googleapis.com/download/storage/v1/b/fireemu-oracle-query.firebasestorage.app/o/storage-object%2F04356b24ca763689c109%2Fprobe3%2Fmultipart%2Fgcs%2Fvalid.bin?generation=1790783207364465&alt=media\",\"name\":\"storage-object/04356b24ca763689c109/probe3/multipart/gcs/valid.bin\",\"bucket\":\"fireemu-oracle-query.firebasestorage.app\",\"generation\":\"1790783207364465\",\"metageneration\":\"1\",\"contentType\":\"application/octet-stream\",\"storageClass\":\"STANDARD\",\"size\":\"5\",\"md5Hash\":\"/upD6bdvwxw0vOxAPcxL+A==\",\"crc32c\":\"1Kspzg==\",\"etag\":\"CPGux6fTlpcDEAE=\",\"timeCreated\":\"2026-09-30T15:46:47.379Z\",\"updated\":\"2026-09-30T15:46:47.379Z\",\"timeStorageClassUpdated\":\"2026-09-30T15:46:47.379Z\",\"timeFinalized\":\"2026-09-30T15:46:47.379Z\",\"metadata\":{\"marker\":\"multipart-observation\"}}]}"
+    },
+    "list-delimiter": {
+      "status": 200,
+      "headers": {
+        "content-type": "application/json; charset=UTF-8"
+      },
+      "body": "{\"kind\":\"storage#objects\",\"prefixes\":[\"storage-object/04356b24ca763689c109/probe3/copy/\",\"storage-object/04356b24ca763689c109/probe3/firebase/\",\"storage-object/04356b24ca763689c109/probe3/gcs/\",\"storage-object/04356b24ca763689c109/probe3/multipart/\"]}"
+    },
+    "cleanup-metadata-0": {
+      "status": 200,
+      "headers": {
+        "content-type": "application/json; charset=UTF-8",
+        "etag": "CPGux6fTlpcDEAE="
+      },
+      "body": "{\"kind\":\"storage#object\",\"id\":\"fireemu-oracle-query.firebasestorage.app/storage-object/04356b24ca763689c109/probe3/multipart/gcs/valid.bin/1790783207364465\",\"selfLink\":\"https://www.googleapis.com/storage/v1/b/fireemu-oracle-query.firebasestorage.app/o/storage-object%2F04356b24ca763689c109%2Fprobe3%2Fmultipart%2Fgcs%2Fvalid.bin\",\"mediaLink\":\"https://storage.googleapis.com/download/storage/v1/b/fireemu-oracle-query.firebasestorage.app/o/storage-object%2F04356b24ca763689c109%2Fprobe3%2Fmultipart%2Fgcs%2Fvalid.bin?generation=1790783207364465&alt=media\",\"name\":\"storage-object/04356b24ca763689c109/probe3/multipart/gcs/valid.bin\",\"bucket\":\"fireemu-oracle-query.firebasestorage.app\",\"generation\":\"1790783207364465\",\"metageneration\":\"1\",\"contentType\":\"application/octet-stream\",\"storageClass\":\"STANDARD\",\"size\":\"5\",\"md5Hash\":\"/upD6bdvwxw0vOxAPcxL+A==\",\"crc32c\":\"1Kspzg==\",\"etag\":\"CPGux6fTlpcDEAE=\",\"timeCreated\":\"2026-09-30T15:46:47.379Z\",\"updated\":\"2026-09-30T15:46:47.379Z\",\"timeStorageClassUpdated\":\"2026-09-30T15:46:47.379Z\",\"timeFinalized\":\"2026-09-30T15:46:47.379Z\",\"metadata\":{\"marker\":\"multipart-observation\"}}"
+    },
+    "cleanup-delete-0": {
+      "status": 204,
+      "headers": {
+        "content-type": "application/json"
+      },
+      "body": ""
+    },
+    "cleanup-absent-0": {
+      "status": 404,
+      "headers": {
+        "content-type": "application/json; charset=UTF-8"
+      },
+      "body": "{\"error\":{\"code\":404,\"message\":\"No such object: fireemu-oracle-query.firebasestorage.app/storage-object/04356b24ca763689c109/probe3/multipart/gcs/valid.bin\",\"errors\":[{\"message\":\"No such object: fireemu-oracle-query.firebasestorage.app/storage-object/04356b24ca763689c109/probe3/multipart/gcs/valid.bin\",\"domain\":\"global\",\"reason\":\"notFound\"}]}}"
+    },
+    "cleanup-metadata-1": {
+      "status": 200,
+      "headers": {
+        "content-type": "application/json; charset=UTF-8",
+        "etag": "CMTq0KnTlpcDEAE="
+      },
+      "body": "{\"kind\":\"storage#object\",\"id\":\"fireemu-oracle-query.firebasestorage.app/storage-object/04356b24ca763689c109/probe3/gcs/resumable.bin/1790783211713860\",\"selfLink\":\"https://www.googleapis.com/storage/v1/b/fireemu-oracle-query.firebasestorage.app/o/storage-object%2F04356b24ca763689c109%2Fprobe3%2Fgcs%2Fresumable.bin\",\"mediaLink\":\"https://storage.googleapis.com/download/storage/v1/b/fireemu-oracle-query.firebasestorage.app/o/storage-object%2F04356b24ca763689c109%2Fprobe3%2Fgcs%2Fresumable.bin?generation=1790783211713860&alt=media\",\"name\":\"storage-object/04356b24ca763689c109/probe3/gcs/resumable.bin\",\"bucket\":\"fireemu-oracle-query.firebasestorage.app\",\"generation\":\"1790783211713860\",\"metageneration\":\"1\",\"contentType\":\"application/octet-stream\",\"storageClass\":\"STANDARD\",\"size\":\"262147\",\"md5Hash\":\"cc8pme/fiR/h+9YRkZOzww==\",\"crc32c\":\"xNDiAQ==\",\"etag\":\"CMTq0KnTlpcDEAE=\",\"timeCreated\":\"2026-09-30T15:46:51.722Z\",\"updated\":\"2026-09-30T15:46:51.722Z\",\"timeStorageClassUpdated\":\"2026-09-30T15:46:51.722Z\",\"timeFinalized\":\"2026-09-30T15:46:51.722Z\",\"metadata\":{\"marker\":\"gcs-resumable\"}}"
+    },
+    "cleanup-delete-1": {
+      "status": 204,
+      "headers": {
+        "content-type": "application/json"
+      },
+      "body": ""
+    },
+    "cleanup-absent-1": {
+      "status": 404,
+      "headers": {
+        "content-type": "application/json; charset=UTF-8"
+      },
+      "body": "{\"error\":{\"code\":404,\"message\":\"No such object: fireemu-oracle-query.firebasestorage.app/storage-object/04356b24ca763689c109/probe3/gcs/resumable.bin\",\"errors\":[{\"message\":\"No such object: fireemu-oracle-query.firebasestorage.app/storage-object/04356b24ca763689c109/probe3/gcs/resumable.bin\",\"domain\":\"global\",\"reason\":\"notFound\"}]}}"
+    },
+    "cleanup-metadata-2": {
+      "status": 200,
+      "headers": {
+        "content-type": "application/json; charset=UTF-8",
+        "etag": "CLDj263TlpcDEAE="
+      },
+      "body": "{\"kind\":\"storage#object\",\"id\":\"fireemu-oracle-query.firebasestorage.app/storage-object/04356b24ca763689c109/probe3/firebase/resumable.bin/1790783220281776\",\"selfLink\":\"https://www.googleapis.com/storage/v1/b/fireemu-oracle-query.firebasestorage.app/o/storage-object%2F04356b24ca763689c109%2Fprobe3%2Ffirebase%2Fresumable.bin\",\"mediaLink\":\"https://storage.googleapis.com/download/storage/v1/b/fireemu-oracle-query.firebasestorage.app/o/storage-object%2F04356b24ca763689c109%2Fprobe3%2Ffirebase%2Fresumable.bin?generation=1790783220281776&alt=media\",\"name\":\"storage-object/04356b24ca763689c109/probe3/firebase/resumable.bin\",\"bucket\":\"fireemu-oracle-query.firebasestorage.app\",\"generation\":\"1790783220281776\",\"metageneration\":\"1\",\"contentType\":\"application/octet-stream\",\"storageClass\":\"STANDARD\",\"size\":\"262147\",\"md5Hash\":\"cc8pme/fiR/h+9YRkZOzww==\",\"contentDisposition\":\"inline; filename*=utf-8''resumable.bin\",\"crc32c\":\"xNDiAQ==\",\"etag\":\"CLDj263TlpcDEAE=\",\"timeCreated\":\"2026-09-30T15:47:00.294Z\",\"updated\":\"2026-09-30T15:47:00.294Z\",\"timeStorageClassUpdated\":\"2026-09-30T15:47:00.294Z\",\"timeFinalized\":\"2026-09-30T15:47:00.294Z\",\"metadata\":{\"firebaseStorageDownloadTokens\":\"00000000-0000-4000-8000-000000000001\"}}"
+    },
+    "cleanup-delete-2": {
+      "status": 204,
+      "headers": {
+        "content-type": "application/json"
+      },
+      "body": ""
+    },
+    "cleanup-absent-2": {
+      "status": 404,
+      "headers": {
+        "content-type": "application/json; charset=UTF-8"
+      },
+      "body": "{\"error\":{\"code\":404,\"message\":\"No such object: fireemu-oracle-query.firebasestorage.app/storage-object/04356b24ca763689c109/probe3/firebase/resumable.bin\",\"errors\":[{\"message\":\"No such object: fireemu-oracle-query.firebasestorage.app/storage-object/04356b24ca763689c109/probe3/firebase/resumable.bin\",\"domain\":\"global\",\"reason\":\"notFound\"}]}}"
+    },
+    "cleanup-metadata-3": {
+      "status": 200,
+      "headers": {
+        "content-type": "application/json; charset=UTF-8",
+        "etag": "CNiyhK7TlpcDEAE="
+      },
+      "body": "{\"kind\":\"storage#object\",\"id\":\"fireemu-oracle-query.firebasestorage.app/storage-object/04356b24ca763689c109/probe3/copy/source.bin/1790783220947288\",\"selfLink\":\"https://www.googleapis.com/storage/v1/b/fireemu-oracle-query.firebasestorage.app/o/storage-object%2F04356b24ca763689c109%2Fprobe3%2Fcopy%2Fsource.bin\",\"mediaLink\":\"https://storage.googleapis.com/download/storage/v1/b/fireemu-oracle-query.firebasestorage.app/o/storage-object%2F04356b24ca763689c109%2Fprobe3%2Fcopy%2Fsource.bin?generation=1790783220947288&alt=media\",\"name\":\"storage-object/04356b24ca763689c109/probe3/copy/source.bin\",\"bucket\":\"fireemu-oracle-query.firebasestorage.app\",\"generation\":\"1790783220947288\",\"metageneration\":\"1\",\"contentType\":\"application/octet-stream\",\"storageClass\":\"STANDARD\",\"size\":\"5\",\"md5Hash\":\"/upD6bdvwxw0vOxAPcxL+A==\",\"crc32c\":\"1Kspzg==\",\"etag\":\"CNiyhK7TlpcDEAE=\",\"timeCreated\":\"2026-09-30T15:47:00.957Z\",\"updated\":\"2026-09-30T15:47:00.957Z\",\"timeStorageClassUpdated\":\"2026-09-30T15:47:00.957Z\",\"timeFinalized\":\"2026-09-30T15:47:00.957Z\"}"
+    },
+    "cleanup-delete-3": {
+      "status": 204,
+      "headers": {
+        "content-type": "application/json"
+      },
+      "body": ""
+    },
+    "cleanup-absent-3": {
+      "status": 404,
+      "headers": {
+        "content-type": "application/json; charset=UTF-8"
+      },
+      "body": "{\"error\":{\"code\":404,\"message\":\"No such object: fireemu-oracle-query.firebasestorage.app/storage-object/04356b24ca763689c109/probe3/copy/source.bin\",\"errors\":[{\"message\":\"No such object: fireemu-oracle-query.firebasestorage.app/storage-object/04356b24ca763689c109/probe3/copy/source.bin\",\"domain\":\"global\",\"reason\":\"notFound\"}]}}"
+    },
+    "cleanup-metadata-4": {
+      "status": 200,
+      "headers": {
+        "content-type": "application/json; charset=UTF-8",
+        "etag": "CPjxv67TlpcDEAE="
+      },
+      "body": "{\"kind\":\"storage#object\",\"id\":\"fireemu-oracle-query.firebasestorage.app/storage-object/04356b24ca763689c109/probe3/copy/copied.bin/1790783221922040\",\"selfLink\":\"https://www.googleapis.com/storage/v1/b/fireemu-oracle-query.firebasestorage.app/o/storage-object%2F04356b24ca763689c109%2Fprobe3%2Fcopy%2Fcopied.bin\",\"mediaLink\":\"https://storage.googleapis.com/download/storage/v1/b/fireemu-oracle-query.firebasestorage.app/o/storage-object%2F04356b24ca763689c109%2Fprobe3%2Fcopy%2Fcopied.bin?generation=1790783221922040&alt=media\",\"name\":\"storage-object/04356b24ca763689c109/probe3/copy/copied.bin\",\"bucket\":\"fireemu-oracle-query.firebasestorage.app\",\"generation\":\"1790783221922040\",\"metageneration\":\"1\",\"contentType\":\"application/octet-stream\",\"storageClass\":\"STANDARD\",\"size\":\"5\",\"md5Hash\":\"/upD6bdvwxw0vOxAPcxL+A==\",\"crc32c\":\"1Kspzg==\",\"etag\":\"CPjxv67TlpcDEAE=\",\"timeCreated\":\"2026-09-30T15:47:01.930Z\",\"updated\":\"2026-09-30T15:47:01.930Z\",\"timeStorageClassUpdated\":\"2026-09-30T15:47:01.930Z\",\"timeFinalized\":\"2026-09-30T15:47:01.930Z\"}"
+    },
+    "cleanup-delete-4": {
+      "status": 204,
+      "headers": {
+        "content-type": "application/json"
+      },
+      "body": ""
+    },
+    "cleanup-absent-4": {
+      "status": 404,
+      "headers": {
+        "content-type": "application/json; charset=UTF-8"
+      },
+      "body": "{\"error\":{\"code\":404,\"message\":\"No such object: fireemu-oracle-query.firebasestorage.app/storage-object/04356b24ca763689c109/probe3/copy/copied.bin\",\"errors\":[{\"message\":\"No such object: fireemu-oracle-query.firebasestorage.app/storage-object/04356b24ca763689c109/probe3/copy/copied.bin\",\"domain\":\"global\",\"reason\":\"notFound\"}]}}"
+    },
+    "cleanup-metadata-5": {
+      "status": 200,
+      "headers": {
+        "content-type": "application/json; charset=UTF-8",
+        "etag": "CI6Q6q7TlpcDEAE="
+      },
+      "body": "{\"kind\":\"storage#object\",\"id\":\"fireemu-oracle-query.firebasestorage.app/storage-object/04356b24ca763689c109/probe3/copy/rewritten.bin/1790783222614030\",\"selfLink\":\"https://www.googleapis.com/storage/v1/b/fireemu-oracle-query.firebasestorage.app/o/storage-object%2F04356b24ca763689c109%2Fprobe3%2Fcopy%2Frewritten.bin\",\"mediaLink\":\"https://storage.googleapis.com/download/storage/v1/b/fireemu-oracle-query.firebasestorage.app/o/storage-object%2F04356b24ca763689c109%2Fprobe3%2Fcopy%2Frewritten.bin?generation=1790783222614030&alt=media\",\"name\":\"storage-object/04356b24ca763689c109/probe3/copy/rewritten.bin\",\"bucket\":\"fireemu-oracle-query.firebasestorage.app\",\"generation\":\"1790783222614030\",\"metageneration\":\"1\",\"contentType\":\"text/plain\",\"storageClass\":\"STANDARD\",\"size\":\"5\",\"md5Hash\":\"/upD6bdvwxw0vOxAPcxL+A==\",\"crc32c\":\"1Kspzg==\",\"etag\":\"CI6Q6q7TlpcDEAE=\",\"timeCreated\":\"2026-09-30T15:47:02.620Z\",\"updated\":\"2026-09-30T15:47:02.620Z\",\"timeStorageClassUpdated\":\"2026-09-30T15:47:02.620Z\",\"timeFinalized\":\"2026-09-30T15:47:02.620Z\",\"metadata\":{\"marker\":\"rewrite-override\"}}"
+    },
+    "cleanup-delete-5": {
+      "status": 204,
+      "headers": {
+        "content-type": "application/json"
+      },
+      "body": ""
+    },
+    "cleanup-absent-5": {
+      "status": 404,
+      "headers": {
+        "content-type": "application/json; charset=UTF-8"
+      },
+      "body": "{\"error\":{\"code\":404,\"message\":\"No such object: fireemu-oracle-query.firebasestorage.app/storage-object/04356b24ca763689c109/probe3/copy/rewritten.bin\",\"errors\":[{\"message\":\"No such object: fireemu-oracle-query.firebasestorage.app/storage-object/04356b24ca763689c109/probe3/copy/rewritten.bin\",\"domain\":\"global\",\"reason\":\"notFound\"}]}}"
+    },
+    "cleanup-metadata-6": {
+      "status": 200,
+      "headers": {
+        "content-type": "application/json; charset=UTF-8",
+        "etag": "CPuvh6/TlpcDEAM="
+      },
+      "body": "{\"kind\":\"storage#object\",\"id\":\"fireemu-oracle-query.firebasestorage.app/storage-object/04356b24ca763689c109/probe3/firebase/tokens.bin/1790783223093243\",\"selfLink\":\"https://www.googleapis.com/storage/v1/b/fireemu-oracle-query.firebasestorage.app/o/storage-object%2F04356b24ca763689c109%2Fprobe3%2Ffirebase%2Ftokens.bin\",\"mediaLink\":\"https://storage.googleapis.com/download/storage/v1/b/fireemu-oracle-query.firebasestorage.app/o/storage-object%2F04356b24ca763689c109%2Fprobe3%2Ffirebase%2Ftokens.bin?generation=1790783223093243&alt=media\",\"name\":\"storage-object/04356b24ca763689c109/probe3/firebase/tokens.bin\",\"bucket\":\"fireemu-oracle-query.firebasestorage.app\",\"generation\":\"1790783223093243\",\"metageneration\":\"3\",\"contentType\":\"application/octet-stream\",\"storageClass\":\"STANDARD\",\"size\":\"3\",\"md5Hash\":\"/7uM1aIyt9kGkEUz6WCfSA==\",\"contentDisposition\":\"inline; filename*=utf-8''tokens.bin\",\"crc32c\":\"3rtoXA==\",\"etag\":\"CPuvh6/TlpcDEAM=\",\"timeCreated\":\"2026-09-30T15:47:03.102Z\",\"updated\":\"2026-09-30T15:47:06.567Z\",\"timeStorageClassUpdated\":\"2026-09-30T15:47:03.102Z\",\"timeFinalized\":\"2026-09-30T15:47:03.102Z\",\"metadata\":{\"firebaseStorageDownloadTokens\":\"00000000-0000-4000-8000-000000000002\"}}"
+    },
+    "cleanup-delete-6": {
+      "status": 204,
+      "headers": {
+        "content-type": "application/json"
+      },
+      "body": ""
+    },
+    "cleanup-absent-6": {
+      "status": 404,
+      "headers": {
+        "content-type": "application/json; charset=UTF-8"
+      },
+      "body": "{\"error\":{\"code\":404,\"message\":\"No such object: fireemu-oracle-query.firebasestorage.app/storage-object/04356b24ca763689c109/probe3/firebase/tokens.bin\",\"errors\":[{\"message\":\"No such object: fireemu-oracle-query.firebasestorage.app/storage-object/04356b24ca763689c109/probe3/firebase/tokens.bin\",\"domain\":\"global\",\"reason\":\"notFound\"}]}}"
+    },
+    "final-list": {
+      "status": 200,
+      "headers": {
+        "content-type": "application/json; charset=UTF-8"
+      },
+      "body": "{\"kind\":\"storage#objects\"}"
+    }
+  }
+}

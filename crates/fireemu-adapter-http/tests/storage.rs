@@ -2153,6 +2153,102 @@ fn a_malformed_patch_body_answers_the_recorded_parser_errors() {
     }
 }
 
+/// The resumable start answers no body, and cancelling a finished session answers the recorded
+/// text (stage 3 v9: `Content-Length: 0` for every start, `Upload has already been finalized.`
+/// for the four cancels after a denied session), in both profiles.
+#[test]
+fn resumable_start_has_no_body_and_a_late_cancel_says_why() {
+    const DENY: &str = "rules_version = '2'; service firebase.storage { match /b/{bucket}/o { match /{path=**} { allow read, write: if false; } } }";
+    for acceptance in BOTH_PROFILES {
+        let s = state_with(Some(DENY), acceptance);
+        let start = handle(
+            &s,
+            req(
+                "POST",
+                &format!("/v0/b/{BUCKET}/o?name=r.txt"),
+                &[
+                    ("authorization", "Bearer owner"),
+                    ("x-goog-upload-protocol", "resumable"),
+                    ("x-goog-upload-command", "start"),
+                ],
+                b"{}",
+            ),
+        );
+        assert_eq!(start.status, 200);
+        assert!(start.body.is_empty(), "{acceptance:?}");
+        assert_eq!(
+            header(&start, "content-type"),
+            Some("text/plain; charset=utf-8")
+        );
+        let session = header(&start, "x-goog-upload-url")
+            .unwrap()
+            .strip_prefix("http://127.0.0.1:9199")
+            .unwrap()
+            .to_owned();
+        // An anonymous caller is refused at finalization, which ends the session.
+        let anonymous = format!("/v0/b/{BUCKET}/o?name=a.txt");
+        let start = handle(
+            &s,
+            req(
+                "POST",
+                &anonymous,
+                &[
+                    ("x-goog-upload-protocol", "resumable"),
+                    ("x-goog-upload-command", "start"),
+                ],
+                b"{}",
+            ),
+        );
+        let denied_session = header(&start, "x-goog-upload-url")
+            .unwrap()
+            .strip_prefix("http://127.0.0.1:9199")
+            .unwrap()
+            .to_owned();
+        let finalize = handle(
+            &s,
+            req(
+                "POST",
+                &denied_session,
+                &[
+                    ("x-goog-upload-command", "upload, finalize"),
+                    ("x-goog-upload-offset", "0"),
+                ],
+                b"hello",
+            ),
+        );
+        assert_eq!(finalize.status, 403);
+        let cancel = handle(
+            &s,
+            req(
+                "POST",
+                &denied_session,
+                &[("x-goog-upload-command", "cancel")],
+                b"",
+            ),
+        );
+        assert_eq!(cancel.status, 400);
+        assert_eq!(
+            String::from_utf8_lossy(&cancel.body),
+            "Upload has already been finalized."
+        );
+        assert_eq!(
+            header(&cancel, "content-type"),
+            Some("text/plain; charset=utf-8")
+        );
+        // An active session still cancels cleanly.
+        let cancel = handle(
+            &s,
+            req(
+                "POST",
+                &session,
+                &[("x-goog-upload-command", "cancel")],
+                b"",
+            ),
+        );
+        assert_eq!(cancel.status, 200);
+    }
+}
+
 /// `PATCH /storage/v1/b/{bucket}/o/{object}` updates object metadata, as the Cloud Storage
 /// JSON API does in production (recorded: stage 3 v9, `setup/seed-metadata` and
 /// `boundary-gcs-admin-patch-present`, a 200 with the `storage#object` resource; an absent

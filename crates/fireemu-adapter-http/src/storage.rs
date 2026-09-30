@@ -3084,7 +3084,9 @@ fn fb_object_post(
                 encode_segment(n.as_str()),
                 id.as_str()
             );
-            return Ok(plain_status(200)
+            // The start answer has no body (recorded, stage 3 v9: `Content-Length: 0` under
+            // `text/plain; charset=utf-8`); the official emulator writes the text `OK`.
+            return Ok(plain_text(200, "")
                 .with_header("x-goog-upload-chunk-granularity", "10000")
                 .with_header("x-goog-upload-control-url", "")
                 .with_header("x-goog-upload-status", "active")
@@ -3239,7 +3241,11 @@ fn fb_resumable_command(
     if commands.contains(&"cancel") {
         return match store.cancel_upload(&id, now) {
             Ok(()) => Ok(plain_status(200)),
-            Err(StorageError::UploadFinalized) => Ok(plain_status(400)),
+            // Cancelling a session that already finished, refused ones included, answers this
+            // text (recorded, stage 3 v9: the cancel after a denied resumable upload).
+            Err(StorageError::UploadFinalized) => {
+                Ok(plain_text(400, "Upload has already been finalized."))
+            }
             Err(e) => Ok(fb_core_err(e)),
         };
     }

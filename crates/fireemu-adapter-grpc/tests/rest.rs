@@ -3858,8 +3858,14 @@ fn rest_validation_codes_follow_production() {
         missing_database_message("Upper"),
         "{body}"
     );
+}
 
-    // A read-only transaction cannot be committed, even without writes.
+#[test]
+fn rest_read_only_transaction_commit_follows_production() {
+    let s = state(None);
+    // Production answers the empty commit of a fresh read-only transaction 200 (P02, REST and
+    // gRPC); it refuses a write commit of one and then calls the token no longer valid (the
+    // 2026-09-07 matrix row: a refused write commit first, then an empty commit on the same token).
     let (status, begun) = call(
         &s,
         "POST",
@@ -3867,6 +3873,37 @@ fn rest_validation_codes_follow_production() {
         json!({"options": {"readOnly": {}}}),
     );
     assert_eq!(status, 200, "{begun}");
+    let (status, body) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}:commit"),
+        json!({"transaction": begun["transaction"], "writes": []}),
+    );
+    assert_eq!(status, 200, "{body}");
+    let (status, begun) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}:beginTransaction"),
+        json!({"options": {"readOnly": {}}}),
+    );
+    assert_eq!(status, 200, "{begun}");
+    let (status, body) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}:commit"),
+        json!({"transaction": begun["transaction"], "writes": [{"update": {
+            "name": "projects/demo-app/databases/(default)/documents/ro/x",
+            "fields": {"v": {"integerValue": "1"}},
+        }}]}),
+    );
+    assert_eq!(status, 400, "{body}");
+    assert!(
+        stream_error(&body)["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("read-only transaction"),
+        "{body}"
+    );
     let (status, body) = call(
         &s,
         "POST",
@@ -3886,6 +3923,13 @@ fn rest_validation_codes_follow_production() {
             .contains("no longer valid"),
         "{body}"
     );
+    let (status, body) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}:rollback"),
+        json!({"transaction": begun["transaction"]}),
+    );
+    assert_eq!(status, 200, "{body}");
 }
 
 /// A query without a collection selector, or with an empty collection id, scans every document

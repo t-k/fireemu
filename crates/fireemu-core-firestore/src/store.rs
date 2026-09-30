@@ -3569,15 +3569,16 @@ impl FirestoreState {
         }
         let transaction = self.transaction(id)?;
         if transaction.read_only && !writes.is_empty() {
+            // Production ends a read-only transaction whose write commit it refused: the same token
+            // then answers `INVALID_ARGUMENT` "no longer valid" (2026-09-07 matrix row, after this
+            // refusal) and accepts a Rollback (P02). Inferred from that one row and from the
+            // precondition-refused commit of a read-write transaction (P08), not observed
+            // separately; the official emulator profile keeps the transaction open as before.
+            if self.limit_scope == LimitScope::Production {
+                self.finish_transaction(id, TransactionState::CommitRefused);
+            }
             return Err(FirestoreError::InvalidArgument(
                 "Cannot modify entities in a read-only transaction.".into(),
-            ));
-        }
-        if transaction.read_only {
-            // Production refuses committing a read-only transaction at all, even with no
-            // writes, and calls the transaction no longer valid.
-            return Err(FirestoreError::InvalidArgument(
-                TRANSACTION_NO_LONGER_VALID.into(),
             ));
         }
         if self.transaction_conflicted(id)? {

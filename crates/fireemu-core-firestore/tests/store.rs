@@ -3116,6 +3116,40 @@ fn a_precondition_refused_commit_releases_the_transactions_locks_at_once() {
     }
 }
 
+// P02 (both transports): the empty commit of a fresh read-only transaction succeeds and finishes
+// it; a write commit of one is refused "Cannot modify entities in a read-only transaction." and
+// the Rollback that follows answers 0. The 2026-09-07 matrix row showed the empty commit after
+// such a refusal answering INVALID_ARGUMENT "no longer valid": a refused write commit ends the
+// read-only transaction (inferred from that one row and from P08, not observed separately).
+#[test]
+fn a_read_only_transaction_commits_empty_and_ends_when_a_write_commit_is_refused() {
+    let mut state = FirestoreState::with_limit_scope(LimitScope::Production);
+    state
+        .commit(&[set("p02/doc", &[("v", Value::Integer(1))])], None, t(0))
+        .unwrap();
+    let empty = state.begin_transaction(true, t(1)).unwrap();
+    state.get_in_transaction(&empty, &path("p02/doc")).unwrap();
+    state.commit(&[], Some(&empty), t(2)).unwrap();
+    assert!(matches!(
+        state.commit(&[], Some(&empty), t(3)),
+        Err(FirestoreError::Aborted(message)) if message == NO_LONGER_VALID
+    ));
+
+    let refused = state.begin_transaction(true, t(4)).unwrap();
+    let write = [set("p02/doc", &[("v", Value::Integer(2))])];
+    assert!(matches!(
+        state.commit(&write, Some(&refused), t(5)),
+        Err(FirestoreError::InvalidArgument(message))
+            if message == "Cannot modify entities in a read-only transaction."
+    ));
+    assert_eq!(state.transaction_bookkeeping_stats().active, 0);
+    assert!(matches!(
+        state.commit(&[], Some(&refused), t(6)),
+        Err(FirestoreError::InvalidArgument(message)) if message == NO_LONGER_VALID
+    ));
+    state.rollback(&refused).unwrap();
+}
+
 #[test]
 fn a_transaction_with_no_preconditions_refused_is_not_ended_by_other_refusals() {
     // Only the precondition refusal is measured; a commit that fails for another reason (here a

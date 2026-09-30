@@ -108,6 +108,95 @@ def test_delayed_unready_setup_reaches_its_actual_branch(
     assert receipt["outputDrainerStopped"] is True, observation
 
 
+@pytest.mark.parametrize("reaped", [True, False])
+def test_short_stop_policy_is_inert_and_keeps_unconfirmed_reap(monkeypatch, reaped):
+    import subprocess
+    import threading
+    from unittest.mock import Mock
+
+    assert threading.enumerate() == [threading.main_thread()]
+    probe = subprocess.run(["ps", "-axo", "pid="], capture_output=True, text=True, check=True)
+    existing = {int(value) for value in probe.stdout.split()}
+    pid = next(value for value in range(99999, 90000, -1)
+               if value not in existing and value - 1 not in existing)
+    child = pid - 1
+    assert pid not in existing and child not in existing
+    operations = []
+    timeout_error = subprocess.TimeoutExpired
+    completed_process = subprocess.CompletedProcess
+    real_os, real_subprocess = runtime.os, runtime.subprocess
+
+    class Output:
+        closed = False
+
+        def close(self):
+            operations.append(("stdout-close",))
+            self.closed = True
+
+    def stop_monitor():
+        operations.append(("monitor-stop",))
+        return True
+
+    class Process:
+        _credential_owned_group = True
+        returncode = None
+        waits = 0
+
+        def __init__(self):
+            self.pid = pid
+            self.stdout = Output()
+            self._credential_output_monitor = SimpleNamespace(failure=None, stop=stop_monitor)
+
+        def poll(self):
+            return self.returncode
+
+        def wait(self, *, timeout):
+            self.waits += 1
+            operations.append(("wait", timeout))
+            if self.waits == 1 or not reaped:
+                raise timeout_error("inert-daemon", timeout)
+            self.returncode = -signal.SIGKILL
+            return self.returncode
+
+    def census(args, **kwargs):
+        assert args == ["/usr/bin/pgrep", "-P", str(pid)]
+        assert kwargs == {"capture_output": True, "text": True,
+                          "timeout": runtime.CENSUS_SECONDS, "check": False}
+        operations.append(("census",))
+        return completed_process(args, 0, str(child) + "\n", "")
+
+    def signal_group(target, value):
+        assert target == pid
+        operations.append(("signal", value))
+
+    def check_child(target, value):
+        assert target == child and value == 0
+        operations.append(("alive", target, value))
+        raise ProcessLookupError
+
+    # The runtime routes to inert fakes; independent guards reject any bypass through the real modules.
+    monkeypatch.setattr(runtime, "os", SimpleNamespace(killpg=signal_group, kill=check_child))
+    monkeypatch.setattr(runtime, "subprocess", SimpleNamespace(run=census, TimeoutExpired=timeout_error))
+    guards = [Mock(side_effect=lambda *_args, **_kwargs: pytest.fail("real process operation reached"))
+              for _ in range(3)]
+    monkeypatch.setattr(real_os, "killpg", guards[0])
+    monkeypatch.setattr(real_os, "kill", guards[1])
+    monkeypatch.setattr(real_subprocess, "run", guards[2])
+    monkeypatch.setattr(runtime, "STOP_SECONDS", .15)
+    process = Process()
+    receipt = runtime.stop_daemon(process)
+    assert operations == [("census",), ("signal", signal.SIGTERM), ("wait", .15),
+                          ("signal", signal.SIGKILL), ("wait", .15), ("alive", child, 0),
+                          ("monitor-stop",), ("stdout-close",)]
+    assert receipt == {"exitCode": -signal.SIGKILL if reaped else None,
+                       "processStopped": reaped, "childrenBeforeStop": 1, "remainingChildren": 0,
+                       "outputDrainerStopped": True,
+                       "failures": [] if reaped else ["process-stop-TimeoutExpired"]}
+    assert process.stdout.closed is True
+    for guard in guards:
+        guard.assert_not_called()
+
+
 def test_startup_failure_retains_bounded_private_output_and_verified_shutdown(tmp_path, owned):
     secret = b"PRIVATE-STARTUP-DETAIL"
     binary = executable(tmp_path, "os.write(1, b'PRIVATE-STARTUP-DETAIL'); time.sleep(60)")

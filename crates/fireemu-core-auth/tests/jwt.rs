@@ -302,6 +302,14 @@ fn the_tenant_claim_is_read_without_checking_the_algorithm_or_the_signature() {
         )),
         Some("t-x".to_owned())
     );
+    // The whole base64url alphabet is allowed in the signature segment.
+    for signature in ["a-b", "a_b", "-", "_", "AZaz09-_"] {
+        assert_eq!(
+            unverified_tenant_claim(&token("{}", &claims(r#"{"tenant":"t-s"}"#), signature)),
+            Some("t-s".to_owned()),
+            "{signature}"
+        );
+    }
     // An empty signature segment is allowed by the pattern.
     assert_eq!(
         unverified_tenant_claim(&token("{}", &claims(r#"{"tenant":"t-e"}"#), "")),

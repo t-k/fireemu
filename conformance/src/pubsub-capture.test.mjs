@@ -108,3 +108,26 @@ test("capture rejects public output paths before calling the transport", async (
     );
   });
 });
+
+test("new run directory is durable before any send and failed parent sync prevents sending", async () => {
+  await withCapture(async (capture, directory) => {
+    let called = false;
+    await assert.rejects(
+      capture({
+        directory,
+        projectNumber: "123456789012",
+        accessToken: "test-secret-token",
+        syncParent: async (parent) => {
+          called = true;
+          assert.equal(parent, dirname(directory));
+          assert.ok((await stat(directory)).isDirectory());
+          assert.deepEqual(await readdir(directory), []);
+          throw new Error("simulated parent fsync failure");
+        },
+        send: async () => assert.fail("no request before durable directory"),
+      }),
+      /parent fsync failure/,
+    );
+    assert.ok(called);
+  });
+});

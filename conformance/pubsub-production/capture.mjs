@@ -1,4 +1,4 @@
-// Concrete private response capture; the coordinator holds the existing project lock and supplies its token through stdin.
+// Private capture invoked by the coordinator executor with its token only through stdin.
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { mkdir, open, realpath } from "node:fs/promises";
@@ -6,6 +6,15 @@ import { dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { collectPreflight } from "./preflight.mjs";
+
+async function syncDirectory(path) {
+  const directory = await open(path, "r");
+  try {
+    await directory.sync();
+  } finally {
+    await directory.close();
+  }
+}
 
 async function durableFile(path, value, flags = "wx") {
   const handle = await open(path, flags, 0o600);
@@ -15,12 +24,7 @@ async function durableFile(path, value, flags = "wx") {
   } finally {
     await handle.close();
   }
-  const directory = await open(dirname(path), "r");
-  try {
-    await directory.sync();
-  } finally {
-    await directory.close();
-  }
+  await syncDirectory(dirname(path));
 }
 
 export async function capturePreflight({
@@ -28,6 +32,7 @@ export async function capturePreflight({
   projectNumber,
   accessToken,
   send = (request) => fetch(request.url, request),
+  syncParent = syncDirectory,
 }) {
   const common = execFileSync("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], {
     cwd: fileURLToPath(new URL("../../", import.meta.url)),
@@ -35,6 +40,7 @@ export async function capturePreflight({
   }).trim();
   const base = join(dirname(common), "docs.local/runs/codex-lane7");
   await mkdir(base, { recursive: true, mode: 0o700 });
+  await syncDirectory(dirname(base));
   if (
     typeof directory !== "string" ||
     !isAbsolute(directory) ||
@@ -48,6 +54,7 @@ export async function capturePreflight({
     throw new Error("capture requires an owned private run directory");
   }
   await mkdir(directory, { mode: 0o700 });
+  await syncParent(dirname(directory));
   let attempted = 0,
     completed = 0;
   let outcome = "recorded-preflight";

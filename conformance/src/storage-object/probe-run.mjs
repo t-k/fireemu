@@ -32,6 +32,14 @@ import {
   probe3ClosingRow,
   sendProbe3,
 } from "./probe3.mjs";
+import {
+  buildProbe4Plan,
+  PROBE4_ESTIMATE_USD,
+  PROBE4_MAX_REQUESTS,
+  PROBE4_RESERVE_USD,
+  probe4ClosingRow,
+  sendProbe4,
+} from "./probe4.mjs";
 import { createObjectMutationPacer } from "./production-pacing.mjs";
 import { withProjectLocks } from "./project-locks.mjs";
 import {
@@ -78,6 +86,28 @@ export const PROBE_V3_KIT = Object.freeze({
   pacer: (plan) => createObjectMutationPacer({ ownedPrefixes: [plan.prefix] }),
 });
 
+/**
+ * probe-v4: the refusals whose absence could turn an accepted-when-refused write into needs-recovery
+ * (three small objects, recorded and removed); closes on its last list of the prefix.
+ */
+export const PROBE_V4_KIT = Object.freeze({
+  name: "probe-v4",
+  command: "probe4-production",
+  maxRequests: PROBE4_MAX_REQUESTS,
+  reserveUsd: PROBE4_RESERVE_USD,
+  estimateUsd: PROBE4_ESTIMATE_USD,
+  buildPlan: buildProbe4Plan,
+  run: sendProbe4,
+  closingRow: probe4ClosingRow,
+  pacer: (plan) => createObjectMutationPacer({ ownedPrefixes: [plan.prefix] }),
+});
+
+/** The packet names the kit it approves: a packet for one kit never runs another kit's requests. */
+export function refuseKitMismatch(packet, kit) {
+  if (packet?.packetName !== kit.name)
+    throw new Error(`the packet is ${packet?.packetName}, this run is ${kit.name}`);
+}
+
 const iso = (date) => date.toISOString();
 
 /** Whether any earlier run of this packet has a closing row: a probe packet runs once. */
@@ -116,6 +146,7 @@ export async function probeRun(deps, kit = PROBE_V2_KIT) {
     now,
   } = deps;
   refuseUnsafeEnvironment(env, nodeVersion);
+  refuseKitMismatch(packet, kit);
   if (
     !RUN_ID.test(ids?.runId ?? "") ||
     !RUN_ID.test(ids?.otherRunId ?? "") ||

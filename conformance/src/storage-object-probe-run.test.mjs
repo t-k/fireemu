@@ -30,7 +30,7 @@ const PINS = [
 const COMMIT = "b".repeat(40);
 const packet = {
   taskId: "STORAGE-OBJECT",
-  packetName: "probe-v1",
+  packetName: "probe-v2",
   projectId: RECORD_PROJECT,
   maxRequests: PROBE_MAX_REQUESTS,
   reserveUsd: PROBE_RESERVE_USD,
@@ -47,7 +47,7 @@ const review = {
   envelopeId: null,
   withinEnvelope: false,
 };
-const approvalText = `- 2026-10-01 | STORAGE-OBJECT probe-v1 | decision=APPROVE; ${PINS.map((key) => `${key}=${packet[key]}`).join("; ")} | オーナー（ローカル試験） | packet.md\n`;
+const approvalText = `- 2026-10-01 | STORAGE-OBJECT probe-v2 | decision=APPROVE; ${PINS.map((key) => `${key}=${packet[key]}`).join("; ")} | オーナー（ローカル試験） | packet.md\n`;
 const NOW = Date.parse("2026-10-02T09:00:00Z");
 const RUN = "0123456789abcdef0123";
 const OTHER = "fedcba9876543210fedc";
@@ -154,7 +154,7 @@ test("a clean run checks, locks, writes started, sends nine requests, writes one
   assert.equal(started.estimatedUsd, 0.01);
   assert.equal(started.project, RECORD_PROJECT);
   assert.equal(started.runId, RUN);
-  assert.equal(started.packetId, "probe-v1");
+  assert.equal(started.packetId, "probe-v2");
   assert.equal(closing.requests, 11);
   assert.equal(closing.sandboxAtBaseline, true);
   assert.equal(closing.runId, RUN);
@@ -313,7 +313,7 @@ test("refuses without a matching approval, and after a revocation", async () => 
   none.deps.ownerDecisionsText = "";
   await refused(none, /approval/);
   const revoked = setup();
-  revoked.deps.ownerDecisionsText = `${approvalText}- 2026-10-01 | STORAGE-OBJECT probe-v1 | REVOKED packetSha256=${packet.packetSha256} | オーナー（ローカル試験） | x\n`;
+  revoked.deps.ownerDecisionsText = `${approvalText}- 2026-10-01 | STORAGE-OBJECT probe-v2 | REVOKED packetSha256=${packet.packetSha256} | オーナー（ローカル試験） | x\n`;
   await refused(revoked, /revoked/);
 });
 
@@ -395,7 +395,7 @@ test("the ledger is judged again once the lock is held", async () => {
 test("a probe packet runs once: any closing row of it, a recovery row included, refuses a second run", async () => {
   const ids = {
     runId: "aaaaaaaaaaaaaaaaaaaa",
-    packetId: "probe-v1",
+    packetId: "probe-v2",
     packetSha256: packet.packetSha256,
     gitSha: COMMIT,
     corpusDigest: "c".repeat(64),

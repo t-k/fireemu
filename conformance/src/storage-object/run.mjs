@@ -3,7 +3,8 @@
 // record.mjs) and needs an approved packet, an owner ledger row, a project lock and a clean tree;
 // `probe-production` runs the probe (reads and two cancelled sessions; no object; see probe.mjs) and
 // `probe3-production` runs probe-v3 (seven small objects, recorded and removed; see probe3.mjs),
-// under the same conditions.
+// and `probe4-production` runs probe-v4 (three small objects and the refusals; see probe4.mjs), under
+// the same conditions. A probe packet is named for its kit (`probe-v2`, `probe-v3`, `probe-v4`).
 
 import { buildStage3DraftPlan } from "./stage3-plan.mjs";
 
@@ -24,6 +25,15 @@ if (command === "record-production") {
     realDeps(),
     PROBE_V3_KIT,
   );
+} else if (command === "probe4-production") {
+  const { probeCommand, realDeps } = await import("./record-cli.mjs");
+  const { PROBE_V4_KIT } = await import("./probe-run.mjs");
+  process.exitCode = await probeCommand(
+    process.argv.slice(3),
+    process.env,
+    realDeps(),
+    PROBE_V4_KIT,
+  );
 } else if (command === "pins") {
   const { pinsCommand, realDeps } = await import("./record-cli.mjs");
   process.exitCode = await pinsCommand(realDeps());
@@ -41,7 +51,8 @@ if (command === "record-production") {
       "       node src/storage-object/run.mjs pins\n" +
       "       node src/storage-object/run.mjs record-production <1|2>\n" +
       "       node src/storage-object/run.mjs probe-production\n" +
-      "       node src/storage-object/run.mjs probe3-production\n",
+      "       node src/storage-object/run.mjs probe3-production\n" +
+      "       node src/storage-object/run.mjs probe4-production\n",
   );
   process.exitCode = 2;
 }

@@ -20,7 +20,7 @@ import {
   createPrivateRunFactory,
   readGitState,
 } from "./record-io.mjs";
-import { PROBE_V2_KIT, probeRun } from "./probe-run.mjs";
+import { PROBE_V2_KIT, probeRun, refuseKitMismatch } from "./probe-run.mjs";
 import {
   createTokenProvider,
   PACKET_MAX_REQUESTS,
@@ -251,7 +251,7 @@ export async function recordCommand(argv, env, deps = realDeps()) {
 }
 
 /**
- * `run.mjs probe-production` (probe-v2) and `run.mjs probe3-production` (probe-v3, the `kit`): the
+ * `run.mjs probe-production` (probe-v2) and `run.mjs probe3-production` (probe-v3) and `run.mjs probe4-production` (probe-v4), each with its `kit`: the
  * probe, once per packet. It holds no Web API key.
  */
 export async function probeCommand(argv, env, deps = realDeps(), kit = PROBE_V2_KIT) {
@@ -267,6 +267,7 @@ export async function probeCommand(argv, env, deps = realDeps(), kit = PROBE_V2_
       maxRequests: kit.maxRequests,
       reserveUsd: kit.reserveUsd,
     });
+    refuseKitMismatch(packet, kit);
     const review = await readJson(env.FIREEMU_STORAGE_OBJECT_REVIEW, "review file");
     const paths = pinnedPaths(deps.mainCheckout());
     const ownerDecisionsText = await readOwnerLedger(paths.ownerLedger);

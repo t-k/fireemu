@@ -10,7 +10,7 @@ import test from "node:test";
 import { admissionProblems } from "./auth-fs-cross/sandbox.mjs";
 import { production } from "./storage-object-probe3-fake.mjs";
 import { encodeRow } from "./storage-object/ledger-rows.mjs";
-import { PROBE_V2_KIT, PROBE_V3_KIT, probeRun } from "./storage-object/probe-run.mjs";
+import { PROBE_V2_KIT, PROBE_V3_KIT, PROBE_V4_KIT, probeRun } from "./storage-object/probe-run.mjs";
 import { PROBE3_MAX_REQUESTS, PROBE3_RESERVE_USD } from "./storage-object/probe3.mjs";
 import { RECORD_PROJECT } from "./storage-object/record.mjs";
 
@@ -196,7 +196,10 @@ test("a connection lost during cleanup is needs-recovery with the lock kept", as
 test("the packet's limits must be the kit's: probe-v2's packet does not run probe-v3, and the reverse", async () => {
   const v2 = { ...packet, maxRequests: 17, reserveUsd: 0.05 };
   await assert.rejects(probeRun(setup({}, { packet: v2 }).deps, FAST), /limit/);
-  await assert.rejects(probeRun(setup().deps, PROBE_V2_KIT), /limit/);
+  await assert.rejects(
+    probeRun(setup().deps, { ...PROBE_V2_KIT, name: PROBE_V3_KIT.name }),
+    /limit/,
+  );
   const s = setup();
   s.deps.packet = { ...packet, reserveUsd: 1 };
   await assert.rejects(probeRun(s.deps, FAST), /limit/);
@@ -287,4 +290,19 @@ test("the shipped pacer accepts any name under the run's prefix, not only under 
     ran = true;
   });
   assert.equal(ran, true);
+});
+
+test("the packet must be named for the kit that runs: another kit's packet is refused before anything is written", async () => {
+  for (const name of ["probe-v2", "probe-v4", "probe-v3-b"]) {
+    const s = setup({}, { packet: { ...packet, packetName: name } });
+    await assert.rejects(
+      probeRun(s.deps, FAST),
+      new RegExp(`packet is ${name}, this run is probe-v3`),
+    );
+    assert.deepEqual(s.ledgerRows, []);
+  }
+  await assert.rejects(
+    probeRun(setup({}, { packet: { ...packet, packetName: "probe-v3" } }).deps, PROBE_V4_KIT),
+    /this run is probe-v4/,
+  );
 });

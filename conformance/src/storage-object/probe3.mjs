@@ -16,23 +16,24 @@
 // `ifGenerationMatch=0`; the Firebase v0 creates have no such precondition.
 
 import { buildCorpus } from "./corpus.mjs";
-import { emptyList } from "./probe.mjs";
+import {
+  cleanUpAndList,
+  createExchange,
+  finalListRow,
+  firstLine,
+  GENERATION,
+  OWNER,
+  parse,
+  requestOf,
+} from "./probe-common.mjs";
 import { buildStage3DraftPlan } from "./stage3-plan.mjs";
 
 export const PROBE3_MAX_REQUESTS = 60;
 export const PROBE3_RESERVE_USD = 0.05;
 export const PROBE3_ESTIMATE_USD = 0.02;
 
-const OWNER = "Bearer owner";
-const GENERATION = /^[1-9][0-9]{0,19}$/;
 const REWRITE_CALLS = 3;
 const LIST_PAGES = 4;
-const EXTRA_DELETES = 10;
-
-const firstLine = (error) =>
-  String(error?.message ?? error)
-    .split("\n")[0]
-    .slice(0, 200);
 
 /**
  * The plan of one probe-v3 run: the corpus steps for this probe's prefix, and the seven object
@@ -90,40 +91,6 @@ export function buildProbe3Plan({ projectId, bucket, runId, otherRunId }) {
   return Object.freeze({ prefix, scope, bucket, steps, objects: Object.freeze(objects) });
 }
 
-const bytesOf = (body) => {
-  if (body?.base64 !== undefined) return Buffer.from(body.base64, "base64");
-  if (body?.json !== undefined) return JSON.stringify(body.json);
-  return undefined;
-};
-
-/** A corpus step as the placeholder URL and init the lean wire takes. */
-function requestOf(step, origins, { query, href } = {}) {
-  let target = href;
-  if (target === undefined) {
-    const url = new URL(step.path, origins.storage);
-    for (const [key, value] of Object.entries(query ?? step.query ?? {}))
-      url.searchParams.set(key, value);
-    target = url.href;
-  }
-  const body = bytesOf(step.body);
-  return {
-    href: target,
-    init: {
-      method: step.method,
-      headers: { ...step.headers, authorization: OWNER },
-      ...(body === undefined ? {} : { body }),
-    },
-  };
-}
-
-const parse = (text) => {
-  try {
-    return JSON.parse(text);
-  } catch {
-    return null;
-  }
-};
-
 const tokensOf = (body) =>
   typeof body?.downloadTokens === "string" ? body.downloadTokens.split(",") : [];
 
@@ -136,38 +103,7 @@ const tokensOf = (body) =>
  * only when cleanup itself cannot be completed.
  */
 export async function sendProbe3({ wire, plan, origins }) {
-  const answers = [];
-  const stop = (error, id) => {
-    error.probeStep = id;
-    error.answered = answers;
-    return error;
-  };
-  /** One request. Resolves with `{ status, text, headers }`, or `null` when the wire refused it. */
-  async function exchange(id, { href, init }) {
-    let response;
-    let text;
-    try {
-      response = await wire.fetch(href, init);
-      text = await response.text();
-    } catch (error) {
-      if (error?.routeRefused === true) {
-        answers.push({ id, skipped: firstLine(error) });
-        return null;
-      }
-      throw stop(error, id);
-    }
-    answers.push({ id, status: response.status });
-    return { status: response.status, text, headers: response.headers };
-  }
-  const skip = (id, reason) => answers.push({ id, skipped: reason });
-  const placeholders = Object.values(origins);
-  const sessionUrl = (result, header) => {
-    if (!result || result.status >= 300) return null;
-    const url = result.headers.get(header);
-    return typeof url === "string" && placeholders.some((origin) => url.startsWith(`${origin}/`))
-      ? url
-      : null;
-  };
+  const { answers, exchange, skip, sessionUrl } = createExchange({ wire, origins });
   const gcsCreate = (step) => ({ ...step.query, ifGenerationMatch: "0" });
   const { steps } = plan;
 
@@ -294,59 +230,9 @@ export async function sendProbe3({ wire, plan, origins }) {
   }
 
   // Cleanup: every fixed name, found by a metadata read and removed, whatever the recording said.
-  const objectPath = (name) => `/storage/v1/b/${plan.bucket}/o/${encodeURIComponent(name)}`;
-  const gcsRequest = (method, name, query = {}) => {
-    const url = new URL(objectPath(name), origins.storage);
-    for (const [key, value] of Object.entries(query)) url.searchParams.set(key, value);
-    return { href: url.href, init: { method, headers: { authorization: OWNER } } };
-  };
-  for (const [index, name] of plan.objects.entries()) {
-    const metadata = await exchange(`cleanup-metadata-${index}`, gcsRequest("GET", name));
-    if (metadata === null) continue;
-    if (metadata.status === 404) continue;
-    const generation = parse(metadata.text)?.generation;
-    const conditional = metadata.status === 200 && GENERATION.test(generation ?? "");
-    await exchange(
-      `cleanup-delete-${index}`,
-      gcsRequest("DELETE", name, conditional ? { ifGenerationMatch: generation } : {}),
-    );
-    await exchange(`cleanup-absent-${index}`, gcsRequest("GET", name));
-  }
-
-  // The final list decides the closing row; whatever it still holds under the prefix is removed by
-  // name (a bounded number of them) and the list is read once more.
-  const finalList = async (id) => {
-    const result = await exchange(id, {
-      href: (() => {
-        const url = new URL(`/storage/v1/b/${plan.bucket}/o`, origins.storage);
-        url.searchParams.set("prefix", plan.scope);
-        url.searchParams.set("maxResults", "1000");
-        return url.href;
-      })(),
-      init: { method: "GET", headers: { authorization: OWNER } },
-    });
-    if (result === null) return null;
-    const row = answers.at(-1);
-    row.prefixEmpty = emptyList(result.status, result.text);
-    return result;
-  };
-  const first = await finalList("final-list");
-  if (first !== null && answers.at(-1).prefixEmpty !== true) {
-    const items = parse(first.text)?.items;
-    const left = (Array.isArray(items) ? items : [])
-      .map((item) => item?.name)
-      .filter((name) => typeof name === "string" && name.startsWith(plan.scope))
-      .slice(0, EXTRA_DELETES);
-    if (left.length > 0) {
-      for (const [index, name] of left.entries())
-        await exchange(`cleanup-extra-delete-${index}`, gcsRequest("DELETE", name));
-      await finalList("final-list-again");
-    }
-  }
+  await cleanUpAndList({ exchange, answers, plan, origins });
   return { answers, interrupted };
 }
 
 /** The list row the closing row is decided on: the last one of the run. */
-export function probe3ClosingRow(answers) {
-  return answers.findLast((row) => row.id.startsWith("final-list"));
-}
+export const probe3ClosingRow = finalListRow;

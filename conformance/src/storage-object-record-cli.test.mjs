@@ -8,7 +8,7 @@ import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { PROBE_V3_KIT } from "./storage-object/probe-run.mjs";
+import { PROBE_V2_KIT, PROBE_V3_KIT, PROBE_V4_KIT } from "./storage-object/probe-run.mjs";
 import {
   mainRepositoryRoot,
   pinnedPaths,
@@ -393,7 +393,7 @@ function probeFixture(overrides = {}) {
   let received;
   const f = fixture({
     ...overrides,
-    packet: overrides.packet ?? { ...packetFile, packetName: "probe-v1" },
+    packet: overrides.packet ?? { ...packetFile, packetName: "probe-v2" },
   });
   f.deps.probeRun =
     overrides.probeRun ??
@@ -434,7 +434,7 @@ test("the probe gets its own limits, the packet, the review, the pinned paths an
   const options = f.probeReceived();
   assert.deepEqual(options.packet, {
     taskId: "STORAGE-OBJECT",
-    packetName: "probe-v1",
+    packetName: "probe-v2",
     projectId: "fireemu-oracle-query",
     maxRequests: 17,
     reserveUsd: 0.05,
@@ -495,7 +495,7 @@ test("a probe that had started and then failed exits 4, and a refusal exits 2, w
 });
 
 test("a probe packet file holds exactly the name and the pins", async () => {
-  const f = probeFixture({ packet: { ...packetFile, packetName: "probe-v1", extra: "x" } });
+  const f = probeFixture({ packet: { ...packetFile, packetName: "probe-v2", extra: "x" } });
   assert.equal(await probeCommand([], f.env, f.deps), 2);
   assert.match(f.err.join(""), /packet file must hold exactly/);
   assert.equal(f.probeReceived(), undefined);
@@ -532,7 +532,7 @@ test("a probe that stopped clean exits 3, and one that needs recovery exits 4", 
   const stopped = probeFixture({
     probeRun: async () => ({ outcome: "stopped-clean", requests: 20 }),
   });
-  assert.equal(await probeCommand([], stopped.env, stopped.deps, PROBE_V3_KIT), 3);
+  assert.equal(await probeCommand([], stopped.env, stopped.deps), 3);
   const recovery = probeFixture({
     probeRun: async () => {
       const error = new Error("the probe prefix was not read back as empty");
@@ -540,5 +540,22 @@ test("a probe that stopped clean exits 3, and one that needs recovery exits 4", 
       throw error;
     },
   });
-  assert.equal(await probeCommand([], recovery.env, recovery.deps, PROBE_V3_KIT), 4);
+  assert.equal(await probeCommand([], recovery.env, recovery.deps), 4);
+});
+
+test("a packet runs only the kit it is named for: probe-v2, probe-v3 and probe-v4 packets do not run each other's requests", async () => {
+  const kits = [PROBE_V2_KIT, PROBE_V3_KIT, PROBE_V4_KIT];
+  for (const packetKit of kits)
+    for (const runKit of kits) {
+      const f = probeFixture({ packet: { ...packetFile, packetName: packetKit.name } });
+      const code = await probeCommand([], f.env, f.deps, runKit);
+      if (packetKit === runKit) assert.notEqual(code, 2, `${packetKit.name} runs itself`);
+      else {
+        assert.equal(code, 2, `${packetKit.name} packet, ${runKit.name} kit`);
+        assert.match(
+          f.err.join(""),
+          new RegExp(`packet is ${packetKit.name}, this run is ${runKit.name}`),
+        );
+      }
+    }
 });

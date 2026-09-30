@@ -562,6 +562,16 @@ test("a global revocation written after the decision stops the approval, and one
     "中止": note("全体", "承認を中止"),
     "無効": note("全体", "承認は無効"),
     "取り下げ": note("全体", "承認を取り下げ"),
+    // Hyphenated or cased subjects that are scope words, not lanes: the scanner fails closed.
+    "all-lanes": note("all-lanes", "REVOKED 全ての送信の承認"),
+    "ALL-LANES": note("ALL-LANES", "all approvals revoked"),
+    "sandbox-oracles": note("sandbox-oracles", "全ての承認を取り消す"),
+    "sandbox-wide": note("sandbox-wide", "revoke every approval"),
+    "every-lane": note("every-lane", "REVOKED"),
+    "global-stop": note("global-stop", "全ての送信を中止"),
+    "a bare lane family with a universal word": note("codex", "全レーンの送信を中止"),
+    "a bare pubsub with a universal word": note("pubsub", "revoke all sends"),
+    "a scope word in a qualifier": note("Overall-plan", "withdrawn"),
   };
   for (const [name, row] of Object.entries(after)) {
     assert.throws(() => validate({ ledgerText: [decision(), row].join("\n"), packet, review }), /approval revoked/, name);

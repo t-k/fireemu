@@ -50,10 +50,14 @@ export function rowSha256(line) {
 const KEYED = /(packetsha256|sourcecommit|runnersha256|manifestsha256|fixtureschemasha256|envelopeid)=([a-z0-9][a-z0-9._-]*)/g;
 // A lane other than this one, named the way the ledger names lanes: the revocation of another lane is not a revocation of this one.
 const OTHER_LANE = /(?<![a-z0-9-])(?:fs|auth|functions|storage|hosting|firestore|app-check)-[a-z][a-z0-9-]*/;
-// A revocation names its own topic in the subject column (the ledger's second column): a lane (FS-TRANSACTION, PUBSUB-EVENTARC, SCHEDULED-FUNCTIONS, AUTH-MFA ...), the bare name of a lane family (pubsub, functions,
-// storage, auth, fs ...) or a hyphenated work item. Such a line revokes that topic only; it is global only in the explicit global forms: a universal quantifier in the line, a subject that names no topic
-// (全体, all, sandbox, an empty or a plain-word subject) or a line with no subject column. The list of lanes is not needed to tell them apart: a new lane that follows the ledger's naming is another topic.
-const TOPIC_SUBJECT = /^(?:[a-z][a-z0-9]*(?:-[a-z0-9]+)+|pubsub|functions|storage|auth|fs|hosting|firestore|app-check|codex|fe|ci)(?![a-z0-9-])/;
+// A revocation names its own topic in the subject column (the ledger's second column): a lane or work item (FS-TRANSACTION, PUBSUB-EVENTARC, SCHEDULED-FUNCTIONS, AUTH-MFA ...) or the bare name of a lane family
+// (pubsub, functions, storage, auth, fs, codex ...). Such a line revokes that topic only; it is global only in the explicit global forms. The scanner fails closed: a subject that starts with a word of scope
+// (all, every, global, sandbox, overall, entire, whole: "all-lanes", "ALL-LANES", "sandbox-oracles", "sandbox-wide", "every-lane", "global-stop") is never a topic, however it is hyphenated, and a bare lane-family
+// name is a topic only when the line carries no universal word ("codex | 全レーンの送信を中止" is global). A hyphenated name that does not start with a scope word is a lane or a work item of its own.
+// Global also stays: a subject that names no topic (全体, an empty or a plain-word subject), a line with no subject column, a line that names no lane at all.
+const SCOPE_SUBJECT = /^(?:all|every|everything|global|sandbox|overall|entire|whole)(?![a-z0-9])/;
+const HYPHENATED_SUBJECT = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)+(?![a-z0-9-])/;
+const FAMILY_SUBJECT = /^(?:pubsub|functions|storage|auth|fs|hosting|firestore|app-check|codex|fe|ci)(?![a-z0-9-])/;
 const HEX_REFERENCE = /(?<![0-9a-f])(?:[0-9a-f]{40}|[0-9a-f]{64})(?![0-9a-f])/g;
 
 /**
@@ -99,7 +103,7 @@ export function scanRevocations({ ledgerText, taskId, pins, envelopeId, allowlis
       const isDelegation = text.includes(NORMALIZED_DELEGATION_MARKER);
       if (isDelegation) { if (DELEGATION_WORDS.test(text)) delegation.push(index + 1); }
       // A revocation that names no lane at all (the whole sandbox program, an unscoped "all"), or that says all and names other lanes only as examples, is a candidate to stop this lane too.
-      else if (!namesLane && !namesThisVersion && !TOPIC_SUBJECT.test(withoutQualifiers(normalizeLedgerText(line.split("|")[1] ?? ""))) && (UNIVERSAL.test(text) || !OTHER_LANE.test(text))) globalCandidates.push(index + 1);
+      else if (!namesLane && !namesThisVersion && !namesOtherTopic(line, text) && (UNIVERSAL.test(text) || !OTHER_LANE.test(text))) globalCandidates.push(index + 1);
     }
   });
   // The caller decides whether a global candidate counts: only one written after the decision row it selected does, so a decision written later supersedes an earlier global revocation.
@@ -108,4 +112,12 @@ export function scanRevocations({ ledgerText, taskId, pins, envelopeId, allowlis
 
 function envelopeIdPattern(taskKey) {
   return new RegExp(`(?<![a-z0-9-])${taskKey.replace(/[^a-z0-9]/g, "\\$&")}-[a-z0-9][a-z0-9.-]*-\\d+(?![a-z0-9.-])`, "g");
+}
+
+/** Whether the line's subject column names a topic of another lane or work item (see SCOPE_SUBJECT above): such a line revokes that topic only. */
+function namesOtherTopic(line, text) {
+  const subject = withoutQualifiers(normalizeLedgerText(line.split("|")[1] ?? ""));
+  if (SCOPE_SUBJECT.test(subject)) return false;
+  if (HYPHENATED_SUBJECT.test(subject)) return true;
+  return FAMILY_SUBJECT.test(subject) && !UNIVERSAL.test(text);
 }

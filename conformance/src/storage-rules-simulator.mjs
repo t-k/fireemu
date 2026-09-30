@@ -37,7 +37,7 @@ export function createSimulator({ manifest, options = {} }) {
   const invalidContent = options.invalidContent ?? null;
   const deniedDeleteCases = options.deniedSubjectDeleteCases ?? DENIED_SUBJECT_DELETE_CASES;
   // Answers of the Firebase v0 capabilities that a recording must survive (they are record-only): `finalize-anyway` (a session finalizes an object the rules deny), `two-tokens` (a token request
-  // answers a list), `start-denied` (a session start fails), `odd-cancel` (a cancel answers 400). Off by default.
+  // answers a list), `token-403`, `token-400`, `token-empty`, `token-bad-generation` (other odd answers to a token request), `start-denied` (a session start fails), `odd-cancel` (a cancel answers 400). Off by default.
   const odd = new Set(options.oddV0 ?? []);
   const objects = new Map();
   const rulesets = new Map();
@@ -135,6 +135,11 @@ export function createSimulator({ manifest, options = {} }) {
       const object = objects.get(name);
       if (method === "POST" && url.searchParams.get("create_token") === "true") {
         if (!object) return json(404, { error: { code: 404, message: "Not Found." } });
+        // Odd answers to the token request (record-only): the route refused, a bad request, a 200 with no token, a 200 with a generation that is not a number.
+        if (odd.has("token-403")) return rulesDenial();
+        if (odd.has("token-400")) return json(400, { error: { code: 400, message: "Bad request." } });
+        if (odd.has("token-empty")) return json(200, firebaseJson(name, object));
+        if (odd.has("token-bad-generation")) return json(200, { ...firebaseJson(name, object, { downloadTokens: randomUUID() }), generation: "not-a-number" });
         object.token = odd.has("two-tokens") ? `${randomUUID()},${randomUUID()}` : object.token ? `${object.token},${randomUUID()}` : randomUUID();
         secrets.push(object.token);
         return json(200, firebaseJson(name, object, { downloadTokens: object.token }));

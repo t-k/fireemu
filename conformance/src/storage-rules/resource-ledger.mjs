@@ -39,6 +39,9 @@ export function createResourceLedger(options) {
   // next readback shows it). It is a different attempt from the owner's one allowed delete, so it does not consume it (the 2026-09-30 stop: a denied subject delete was counted as the
   // owner's), and its key names the row.
   const isSubjectRow = (row) => row.stage === "subject" || row.stage === "comparison";
+  // A download-token request (Firebase v0 `create_token`) changes the object's metadata, never whether it exists or its generation, and cleanup deletes by the generation read back through the admin API.
+  // Whatever the answer is (a refusal, a bad body, a lost answer), it is recorded and never changes whether the object may be deleted (the answer is record-only).
+  const isTokenMint = (row) => row?.request?.operation === "create-token";
   const mutationKey = (row, verb) => (verb === "delete" && !isSubjectRow(row) ? `object|${row.request.objectName}|delete` : `object|${row.request.objectName}|${verb}|${row.id}`);
 
   function recordIntent(row) {
@@ -61,6 +64,7 @@ export function createResourceLedger(options) {
     const uncertain = plain(outcome) && Reflect.ownKeys(outcome).length === 1 && outcome.uncertain === true;
     if (!uncertain && (!plain(outcome) || Reflect.ownKeys(outcome).length !== 3 || typeof outcome.kind !== "string" || typeof outcome.verdict !== "string" || !plain(outcome.facts))) bad("invalid resource ledger outcome");
     const verb = verbOf(row);
+    if (isTokenMint(row)) { object.latest = "unknown"; return; }
     if (uncertain) {
       if (verb === "create") object.uncertainCreate = true;
       else if (verb !== null) object.uncertainOther = true;

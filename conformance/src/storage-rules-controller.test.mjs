@@ -807,3 +807,46 @@ test("a release removal that the serving plane reflects late (stale answers firs
   assert.ok(failing.trace.filter((id) => /^recovery\/settle\/restore\/\d+\/0$/.test(id)).length >= 3, "the recovery settle read three cycles or more");
   assert.deepEqual([...failing.objects.residual()], []);
 });
+
+// The download-token request is record-only, and so is the object it touches: whatever the request answers, even when the answer is lost, the object is read back through the admin API and deleted by that generation.
+const TOKEN_ROW = "case/download-token-deny/setup/create-token";
+const TOKEN_CLEANUP = "case/download-token-deny/cleanup/cleanup-delete";
+for (const odd of ["token-403", "token-400", "token-empty", "token-bad-generation", "two-tokens"]) {
+  test(`a token request answered as ${odd} is recorded, the object is still deleted, and the prefix ends empty`, async () => {
+    const h = await harness({ simulatorOptions: { oddV0: [odd] } });
+    const result = await h.controller.run();
+    assert.equal(result.status, "finished", `${odd}: ${JSON.stringify(result)}`);
+    assert.ok(h.trace.includes(TOKEN_ROW), "the token request was sent");
+    assert.ok(h.trace.includes(TOKEN_CLEANUP), "the cleanup delete of the object was sent");
+    assert.ok(h.trace.includes("management/prefix-empty"), "the final prefix check was sent");
+    // Only the row that needs the token itself is skipped; nothing is skipped because the object's name contains "download-token".
+    const skipped = result.skipped.filter((id) => id.includes("download-token"));
+    assert.deepEqual(skipped, ["case/download-token-deny/comparison/comparison"], odd);
+    assert.equal(h.simulator.state().objects, 0, odd);
+    assert.deepEqual([...h.objects.residual()], [], odd);
+  });
+}
+
+test("a stop after an unexpected token answer is recovered, and so is a stop whose token answer was lost", async () => {
+  // A case after the token request answers a surprise while a release is published.
+  const stopAt = "case/download-token-deny/before/before-metadata";
+  const dry = await harness({ simulatorOptions: { oddV0: ["token-403"] } });
+  await dry.controller.run();
+  const stopCall = sentIds(dry).indexOf(stopAt) + 1;
+  assert.ok(stopCall > 0);
+  const odd = await harness({ simulatorOptions: { oddV0: ["token-403"], failures: new Map([[stopCall, () => serverError()]]) } });
+  assert.equal((await odd.controller.run()).status, "stopped");
+  const recovered = await odd.controller.recover();
+  assert.equal(recovered.status, "recovered", JSON.stringify(recovered));
+  assert.equal(odd.simulator.state().objects, 0);
+  assert.deepEqual([...odd.objects.residual()], []);
+  // The token answer itself is lost: the run stops there, and its own recovery deletes the object by the generation it reads back.
+  const tokenCall = sentIds(dry).indexOf(TOKEN_ROW) + 1;
+  const lost = await harness({ simulatorOptions: { failures: new Map([[tokenCall, "throw"]]) } });
+  const stopped = await lost.controller.run();
+  assert.deepEqual([stopped.status, stopped.reason, stopped.detail.rowId], ["stopped", "outcome uncertain", TOKEN_ROW]);
+  const after = await lost.controller.recover();
+  assert.equal(after.status, "recovered", JSON.stringify(after));
+  assert.equal(lost.simulator.state().objects, 0);
+  assert.deepEqual([...lost.objects.residual()], []);
+});

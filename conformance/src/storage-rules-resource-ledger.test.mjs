@@ -409,3 +409,42 @@ test("an owner delete that was accepted does not make the object undeletable: on
   other.recordOutcome(row(deleteIds.afterMetadata), present("gcs-metadata-read", "1790727977683752"));
   assert.equal(other.object(otherName).deletable, false);
 });
+
+// A download-token request (Firebase v0 `create_token`) is record-only: whatever it answers, and even when its answer is lost, the object stays owned and deletable by the generation read back.
+const tokenCase = "download-token-deny";
+const tokenIds = { baseline: `case/${tokenCase}/baseline/baseline-absence-metadata`, seed: `case/${tokenCase}/setup/seed`, token: `case/${tokenCase}/setup/create-token`, readback: `case/${tokenCase}/after/after-metadata`, cleanupDelete: `case/${tokenCase}/cleanup/cleanup-delete` };
+async function tokenLedger() {
+  const l = await ledger();
+  const name = row(tokenIds.seed).request.objectName;
+  l.recordOutcome(row(tokenIds.baseline), absent("gcs-metadata-read"));
+  l.recordIntent(row(tokenIds.seed));
+  l.recordOutcome(row(tokenIds.seed), { kind: "gcs-seed-upload", verdict: "accepted", facts: { status: 200, generation: "1790727977683752", metageneration: "1", size: "4" } });
+  return { l, name };
+}
+test("an answer to the token request, whatever it is, leaves the object owned and deletable", async () => {
+  assert.equal(row(tokenIds.token).request.operation, "create-token");
+  for (const [name, outcome] of Object.entries({
+    "accepted": { kind: "firebase-create-token", verdict: "accepted", facts: { status: 200, generation: "1790727977683752", metageneration: "2", hasDownloadToken: true } },
+    "a refusal": { kind: "firebase-create-token", verdict: "unexpected", facts: { status: 403, bodyBytes: 40, bodySha256: "0".repeat(64) } },
+    "a bad request": { kind: "firebase-create-token", verdict: "unexpected", facts: { status: 400, bodyBytes: 40, bodySha256: "0".repeat(64) } },
+    "a lost answer": { uncertain: true },
+  })) {
+    const { l, name: object } = await tokenLedger();
+    l.recordIntent(row(tokenIds.token));
+    l.recordOutcome(row(tokenIds.token), outcome);
+    assert.equal(l.object(object).latest, "unknown", name);
+    l.recordOutcome(row(tokenIds.readback), present("gcs-metadata-read", "1790727977683752", { metageneration: "3" }));
+    const seen = l.object(object);
+    assert.deepEqual([seen.owned, seen.deletable, seen.generation], [true, true, "1790727977683752"], name);
+    assert.deepEqual(l.evaluate(row(tokenIds.cleanupDelete)).failed, [], name);
+  }
+});
+
+test("an owner write that is not a token request still makes the object undeletable when its answer is unexpected or lost", async () => {
+  const { l, name } = await tokenLedger();
+  const patch = manifest.rows.find((r) => r.request.operation === "patch" && r.stage === "setup" && r.request.objectName === name) ?? assert.fail("no setup patch");
+  l.recordIntent(patch);
+  l.recordOutcome(patch, { kind: "gcs-patch", verdict: "unexpected", facts: { status: 500, bodyBytes: 0, bodySha256: "0".repeat(64) } });
+  l.recordOutcome(row(tokenIds.readback), present("gcs-metadata-read", "1790727977683752"));
+  assert.equal(l.object(name).deletable, false);
+});

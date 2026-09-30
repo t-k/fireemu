@@ -116,7 +116,7 @@ export function createController(options) {
     let unavailable = "target refused";
     try { prepared = targets.prepare(row, (reference, rowId) => { try { return refs.resolve(reference, rowId); } catch (error) { unavailable = error.message; throw error; } }); } catch {
       // A row that needs a v0 capability (a session URL, a download token) that was not obtained is skipped: those answers are record-only.
-      if (row.request.sessionUrlReference !== undefined || JSON.stringify(row.request.query ?? {}).includes("download-token")) { skipped.push(row.id); await capture.writeNote({ operationId: null, text: `skipped ${row.id}: v0 capability not obtained` }); return null; }
+      if (row.request.sessionUrlReference !== undefined || Object.values(row.request.query ?? {}).some((value) => value?.kind === "firebase-download-token")) { skipped.push(row.id); await capture.writeNote({ operationId: null, text: `skipped ${row.id}: v0 capability not obtained` }); return null; }
       throw new RunStop("target unavailable", { rowId: row.id, cause: unavailable });
     }
     // A ledger that refuses a row (a repeated mutation, an unowned resource) ends the run with a reason; it must never escape `run()` as a crash.

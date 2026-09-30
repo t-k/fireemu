@@ -2711,7 +2711,7 @@ fn fb_list(
 }
 
 /// `GET /v0/b/{bucket}/o/{name}`: metadata or bytes, with the download-token bypass, and
-/// the official emulator's quirk of minting a download token on first read.
+/// production's minting of a download token on the first metadata read.
 fn fb_get(
     state: &StorageState,
     principal: &Principal,
@@ -2739,17 +2739,21 @@ fn fb_get(
     let Some(mut meta) = meta else {
         return Ok(plain_status(404));
     };
-    // The official emulator mints a download token the first time the Firebase dialect
-    // reads an object that has none; that is a metadata update, event included.
-    if meta.download_tokens.is_empty() {
-        meta = store.add_download_token(&b, &n, now).map_err(fb_core_err)?;
-    }
     let media = params.get("alt").map(String::as_str) == Some("media");
     if media {
+        // A media read leaves the object as it is (production, stage 3 v9: the metadata read
+        // after `get-media` still has its metageneration and no token).
         let bytes = store.shared_bytes(&meta);
         drop(store);
         Ok(send_file_bytes(bytes, &meta, req))
     } else {
+        // Production mints a download token the first time the Firebase dialect reads the
+        // metadata of an object that has none (stage 3 v9: `get-metadata-present` answers
+        // a token and the metageneration one higher); that is a metadata update, event
+        // included. The official emulator mints on media reads too.
+        if meta.download_tokens.is_empty() {
+            meta = store.add_download_token(&b, &n, now).map_err(fb_core_err)?;
+        }
         Ok(StorageResponse::json(200, &firebase_json(&meta)))
     }
 }

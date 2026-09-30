@@ -1961,6 +1961,65 @@ fn the_firebase_dialect_spells_crc32c_in_base64_on_every_answer() {
     }
 }
 
+/// The Firebase dialect mints a download token on the first metadata read of an object that has
+/// none, never on a media read (recorded, stage 3 v9: after `get-media` the object keeps
+/// metageneration 2 and no token; after `get-metadata` it has a token and metageneration 3). The
+/// official emulator mints on both.
+#[test]
+fn only_a_metadata_read_mints_the_first_download_token() {
+    for acceptance in BOTH_PROFILES {
+        let s = state_with(Some(ALLOW_ALL_RULES), acceptance);
+        let seeded = handle(
+            &s,
+            req(
+                "POST",
+                &format!("/upload/storage/v1/b/{BUCKET}/o?name=m.txt&uploadType=media"),
+                &[
+                    ("authorization", "Bearer owner"),
+                    ("content-type", "text/plain"),
+                ],
+                b"hello",
+            ),
+        );
+        assert_eq!(
+            seeded.status,
+            200,
+            "{}",
+            String::from_utf8_lossy(&seeded.body)
+        );
+        let gcs_meta = || {
+            json_body(&handle(
+                &s,
+                req(
+                    "GET",
+                    &format!("/storage/v1/b/{BUCKET}/o/m.txt"),
+                    &[("authorization", "Bearer owner")],
+                    b"",
+                ),
+            ))
+        };
+        assert_eq!(gcs_meta()["metageneration"], "1");
+        let media = handle(
+            &s,
+            req(
+                "GET",
+                &format!("/v0/b/{BUCKET}/o/m.txt?alt=media"),
+                &[],
+                b"",
+            ),
+        );
+        assert_eq!(media.status, 200);
+        let after_media = gcs_meta();
+        assert_eq!(after_media["metageneration"], "1", "{acceptance:?}");
+        assert!(after_media.get("metadata").is_none(), "no token minted");
+        let metadata = handle(&s, req("GET", &format!("/v0/b/{BUCKET}/o/m.txt"), &[], b""));
+        let metadata = json_body(&metadata);
+        assert_eq!(metadata["metageneration"], "2");
+        assert!(!metadata["downloadTokens"].as_str().unwrap().is_empty());
+        assert_eq!(gcs_meta()["metageneration"], "2");
+    }
+}
+
 /// `PATCH /storage/v1/b/{bucket}/o/{object}` updates object metadata, as the Cloud Storage
 /// JSON API does in production (recorded: stage 3 v9, `setup/seed-metadata` and
 /// `boundary-gcs-admin-patch-present`, a 200 with the `storage#object` resource; an absent

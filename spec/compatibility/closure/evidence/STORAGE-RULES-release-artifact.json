@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "kind": "storage-rules-release-artifact",
-  "sourceCommit": "418418e5552016087a3917049e9accc7fb8bf329",
+  "sourceCommit": "bbb3b7259481d89c651af6c113ce763fca52edeb",
   "command": [
     "cargo",
     "build",
@@ -11,11 +11,13 @@
     "fireemu"
   ],
   "binaryPath": "target/release/fireemu",
-  "binarySha256": "d166e562f5695fded5c4f344fc1857b76226d7b84ce0a6b4b11eb2c16a0e2394",
+  "binarySha256": "d3e68542cfbbfc8914ba7305e5996dbaaafa0f887dba323472e08d116362adbd",
   "version": "fireemu 0.9.0",
   "rustc": "rustc 1.94.0 (4a4ef493e 2026-03-02)",
   "platform": "Darwin arm64",
   "gitStatusAtBuild": "",
+  "buildPath": ".worktree/storage-rules-closure (a git worktree of the repository; the absolute path is embedded in the binary's linker UUID, so a rebuild in another directory differs by those 48 bytes only)",
+  "uiDist": "absent: ui/dist was not built, so the embedded UI is empty in this binary; no Storage or Auth route reads it",
   "productionRequests": 0,
-  "note": "One release binary built from the clean merge commit of the Storage parity branch and the Storage Rules lane; the strict production comparison, the storage probe check and the Storage conformance scenarios ran on this exact copy. No crate source changed after the source commit; the closure files that follow change only spec and evidence."
+  "note": "One release binary built from the clean source commit; the strict production comparison (status, content type and error bytes), the storage probe check and the Storage conformance scenarios ran on this exact copy. The closure files that follow change only spec and evidence."
 }

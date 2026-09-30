@@ -1,7 +1,7 @@
 {
   "kind": "storage-rules-official-regression-v1",
-  "artifactSha256": "d166e562f5695fded5c4f344fc1857b76226d7b84ce0a6b4b11eb2c16a0e2394",
-  "sourceCommit": "418418e5552016087a3917049e9accc7fb8bf329",
+  "artifactSha256": "d3e68542cfbbfc8914ba7305e5996dbaaafa0f887dba323472e08d116362adbd",
+  "sourceCommit": "bbb3b7259481d89c651af6c113ce763fca52edeb",
   "storageProbe": {
     "command": "node conformance/src/storage-probe/run.mjs check",
     "programs": 18,

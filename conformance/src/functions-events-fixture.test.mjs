@@ -259,6 +259,69 @@ test("the fixture retains raw event identity, time, resource, and document field
   assert.equal(event.data.after.data.value, "after");
 });
 
+test("stdout capture adds the event and context member listing; other modes keep the frame bytes", () => {
+  const { v1Context, v2Event } = require(reportPath);
+  const context = {
+    eventId: "id-1",
+    timestamp: "2026-09-30T12:00:00.000Z",
+    eventType: "google.storage.object.finalize",
+    resource: { service: "storage.googleapis.com", name: "projects/_/buckets/b/objects/o#1" },
+    params: {},
+    authType: undefined,
+    authId: undefined,
+    extraFlag: true,
+    extraCount: 7,
+    extraNote: "x".repeat(300),
+    extraObject: { token: "must-not-be-printed", uid: "u" },
+    extraList: [1, 2, 3],
+  };
+  const event = {
+    id: "e",
+    time: "2026-09-30T12:00:00Z",
+    type: "google.cloud.storage.object.v1.finalized",
+    source: "//storage.googleapis.com/projects/_/buckets/b",
+    subject: "objects/o",
+    specversion: "1.0",
+    bucket: "b",
+    location: "us-central1",
+    data: { name: "o" },
+  };
+  const previous = process.env.FE_EVENTS_CAPTURE_MODE;
+  try {
+    for (const mode of [undefined, "socket", "reject-canary"]) {
+      if (mode === undefined) delete process.env.FE_EVENTS_CAPTURE_MODE;
+      else process.env.FE_EVENTS_CAPTURE_MODE = mode;
+      assert.equal(Object.hasOwn(v1Context(context), "contextKeys"), false, String(mode));
+      assert.equal(Object.hasOwn(v1Context(context), "contextExtras"), false, String(mode));
+      assert.equal(Object.hasOwn(v2Event(event, null), "eventKeys"), false, String(mode));
+      assert.equal(Object.hasOwn(v2Event(event, null), "extensionAttributes"), false, String(mode));
+    }
+    process.env.FE_EVENTS_CAPTURE_MODE = "stdout";
+    const printedContext = v1Context(context);
+    assert.deepEqual(printedContext.contextKeys, [
+      "authId", "authType", "eventId", "eventType", "extraCount", "extraFlag", "extraList",
+      "extraNote", "extraObject", "params", "resource", "timestamp",
+    ]);
+    assert.deepEqual(printedContext.contextExtras, {
+      extraCount: 7,
+      extraFlag: true,
+      extraList: { type: "array", length: 3 },
+      extraNote: { type: "string", length: 300 },
+      extraObject: { type: "object", keys: ["token", "uid"] },
+    });
+    assert.equal(JSON.stringify(printedContext).includes("must-not-be-printed"), false);
+    const printedEvent = v2Event(event, { name: "o" });
+    assert.deepEqual(printedEvent.eventKeys, [
+      "bucket", "data", "id", "location", "source", "specversion", "subject", "time", "type",
+    ]);
+    assert.deepEqual(printedEvent.extensionAttributes, { bucket: "b", location: "us-central1" });
+    assert.deepEqual(printedEvent.data, { name: "o" });
+  } finally {
+    if (previous === undefined) delete process.env.FE_EVENTS_CAPTURE_MODE;
+    else process.env.FE_EVENTS_CAPTURE_MODE = previous;
+  }
+});
+
 test("Firestore snapshots do not require the local SDK readTime getter", () => {
   const { firestoreData } = require(reportPath);
   const value = {

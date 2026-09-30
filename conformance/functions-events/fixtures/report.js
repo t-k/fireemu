@@ -20,8 +20,40 @@ function firestoreData(value) {
   return snapshot(value);
 }
 
+// The delivery probe (FE_EVENTS_CAPTURE_MODE=stdout) also lists which members the framework put on the
+// context and the CloudEvent, so a member outside the named ones is not lost. Other capture modes keep
+// their frame bytes. Values are metadata only: a string of at most 256 characters, a number, a boolean or
+// null is printed as is; a longer string, an array or an object is reduced to its type and size or key
+// names, so a token inside an object is never printed.
+const CONTEXT_MEMBERS = new Set(["eventId", "timestamp", "eventType", "resource", "params", "authType", "authId"]);
+const EVENT_MEMBERS = new Set([
+  "id", "time", "type", "source", "subject", "specversion", "datacontenttype", "params", "authType", "authId", "data",
+]);
+
+function probeListing() {
+  return process.env.FE_EVENTS_CAPTURE_MODE === "stdout";
+}
+
+function describeMember(value) {
+  if (value === null || typeof value === "boolean" || typeof value === "number") return value;
+  if (typeof value === "string") {
+    return value.length <= 256 ? value : { type: "string", length: value.length };
+  }
+  if (Array.isArray(value)) return { type: "array", length: value.length };
+  if (typeof value === "object") return { type: "object", keys: Object.keys(value).sort().slice(0, 32) };
+  return { type: typeof value };
+}
+
+function otherMembers(source, named) {
+  const out = {};
+  for (const key of Object.keys(source).sort()) {
+    if (!named.has(key)) out[key] = describeMember(source[key]);
+  }
+  return out;
+}
+
 function v1Context(context) {
-  return {
+  const printed = {
     eventId: context.eventId,
     timestamp: context.timestamp,
     eventType: context.eventType,
@@ -30,10 +62,15 @@ function v1Context(context) {
     authType: context.authType ?? null,
     authId: context.authId ?? null,
   };
+  if (probeListing()) {
+    printed.contextKeys = Object.keys(context).sort();
+    printed.contextExtras = otherMembers(context, CONTEXT_MEMBERS);
+  }
+  return printed;
 }
 
 function v2Event(event, data) {
-  return {
+  const printed = {
     id: event.id,
     time: event.time,
     type: event.type,
@@ -46,6 +83,11 @@ function v2Event(event, data) {
     authId: event.authId ?? null,
     data,
   };
+  if (probeListing()) {
+    printed.eventKeys = Object.keys(event).sort();
+    printed.extensionAttributes = otherMembers(event, EVENT_MEMBERS);
+  }
+  return printed;
 }
 
 function report(frame) {

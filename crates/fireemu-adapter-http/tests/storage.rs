@@ -5213,7 +5213,7 @@ fn no_loaded_ruleset_denies_every_end_user_request(acceptance: TokenAcceptance) 
     if acceptance == TokenAcceptance::EmulatorMock {
         // A project that is not a `demo-*` one: the official emulator refuses to start there
         // without a rules file, so fireemu keeps its own fail-closed 403.
-        s.project = "real-app".to_owned();
+        "real-app".clone_into(&mut s.project);
     }
 
     // Seed an object through the privileged JSON API, on which rules never run.

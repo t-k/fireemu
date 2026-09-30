@@ -1817,6 +1817,28 @@ impl StorageState {
         })
     }
 
+    /// The refusal of an end-user request while no ruleset is loaded. Production answers a bucket
+    /// without a release with 400 and this message (recorded, stage 3 v9: both recordings, the
+    /// `no-release` entry row); the strict profile answers those bytes for the bucket's project,
+    /// the emulator profile keeps its own 403.
+    fn no_release_refusal(&self, bucket: &BucketName) -> StorageResponse {
+        if self.is_strict() {
+            let project = self.project_of_bucket(bucket.as_str());
+            production_error(
+                400,
+                &format!(
+                    "Your bucket has not been set up properly for Firebase Storage. Please visit 'https://console.firebase.google.com/project/{project}/storage/rules' to set up security rules."
+                ),
+            )
+        } else {
+            error_response(
+                Dialect::Firebase,
+                403,
+                "Permission denied. Storage Emulator has no loaded ruleset.",
+            )
+        }
+    }
+
     /// Whether this is the strict profile, which answers as production does.
     fn is_strict(&self) -> bool {
         self.token_acceptance != TokenAcceptance::EmulatorMock
@@ -1981,11 +2003,7 @@ impl StorageState {
             .slot_for_bucket(bucket.as_str())
             .map_err(|_| error_response(Dialect::Firebase, 500, "rules poisoned"))?;
         let Some(slot) = selected else {
-            return Err(error_response(
-                Dialect::Firebase,
-                403,
-                "Permission denied. Storage Emulator has no loaded ruleset.",
-            ));
+            return Err(self.no_release_refusal(bucket));
         };
         let rules = slot
             .snapshot()
@@ -1996,12 +2014,10 @@ impl StorageState {
             // and the rules a project is created with admit no anonymous access, so the
             // end-user surface fails closed here rather than publishing every object; the
             // owner credential returned above keeps its documented bypass. The official
-            // emulator refuses an SDK request with no loaded ruleset in the same way.
-            return Err(error_response(
-                Dialect::Firebase,
-                403,
-                "Permission denied. Storage Emulator has no loaded ruleset.",
-            ));
+            // emulator has no such state (measured, firebase-tools 15.28.2: it refuses to start
+            // a non-demo project without a rules file and opens the rules of a demo project), so
+            // the emulator profile's 403 is fireemu's own fail-closed choice.
+            return Err(self.no_release_refusal(bucket));
         };
         if method == Method::List && ruleset.version.as_deref() != Some("2") {
             // Storage list requests exist only under rules_version = '2'; a v1 `read` never

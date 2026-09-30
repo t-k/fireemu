@@ -197,7 +197,8 @@ fn targeted_storage_rules_are_isolated_by_bucket_and_unknown_buckets_fail_closed
     );
     assert_eq!(
         anonymous_multipart_upload_to(&s, "unknown.example.test", "unknown.txt").status,
-        403
+        // A bucket with no release: production's 400 under strict (see the no-ruleset test).
+        400
     );
     let (owner_content_type, owner_body) = multipart(&json!({}), "text/plain", b"owner");
     assert_eq!(
@@ -4998,13 +4999,27 @@ fn a_status_check_of_a_finalized_resumable_upload_answers_the_committed_object()
 }
 
 /// SNORULE-1: a run with no loaded Storage ruleset denies every end-user request instead of
-/// admitting it. Production has no rules-absent state and its default rules admit no
-/// anonymous access, and the official emulator refuses an SDK request with no loaded ruleset
-/// as well, so the open default was the one configuration where forgetting `storage.rules`
-/// silently published every object. The owner credential keeps its documented Rules bypass.
+/// admitting it, so forgetting `storage.rules` never silently publishes every object. Strict
+/// answers as production answers a bucket without a release (recorded, stage 3 v9, both
+/// recordings: 400 with the "Your bucket has not been set up properly" body); the emulator
+/// profile keeps its own fail-closed 403, because the official emulator has no such state
+/// (measured, firebase-tools 15.28.2: it refuses to start a non-demo project without a rules
+/// file and opens the rules of a demo project). The owner credential keeps its documented
+/// Rules bypass.
 #[test]
 fn a_run_with_no_loaded_ruleset_denies_every_end_user_request() {
-    let s = state(None);
+    for acceptance in BOTH_PROFILES {
+        no_loaded_ruleset_denies_every_end_user_request(acceptance);
+    }
+}
+
+fn no_loaded_ruleset_denies_every_end_user_request(acceptance: TokenAcceptance) {
+    let refused = if acceptance == TokenAcceptance::Verified {
+        400
+    } else {
+        403
+    };
+    let s = state_with(None, acceptance);
 
     // Seed an object through the privileged JSON API, on which rules never run.
     let seeded = handle(
@@ -5026,14 +5041,14 @@ fn a_run_with_no_loaded_ruleset_denies_every_end_user_request() {
         String::from_utf8_lossy(&seeded.body)
     );
 
-    assert_eq!(anonymous_multipart_upload(&s, "anon.txt").status, 403);
+    assert_eq!(anonymous_multipart_upload(&s, "anon.txt").status, refused);
     assert_eq!(
         handle(
             &s,
             req("GET", &format!("/v0/b/{BUCKET}/o/seeded.txt"), &[], b"")
         )
         .status,
-        403
+        refused
     );
     assert_eq!(
         handle(
@@ -5046,11 +5061,11 @@ fn a_run_with_no_loaded_ruleset_denies_every_end_user_request() {
             ),
         )
         .status,
-        403
+        refused
     );
     assert_eq!(
         handle(&s, req("GET", &format!("/v0/b/{BUCKET}/o"), &[], b"")).status,
-        403
+        refused
     );
     assert_eq!(
         handle(
@@ -5058,8 +5073,20 @@ fn a_run_with_no_loaded_ruleset_denies_every_end_user_request() {
             req("DELETE", &format!("/v0/b/{BUCKET}/o/seeded.txt"), &[], b""),
         )
         .status,
-        403
+        refused
     );
+
+    if acceptance == TokenAcceptance::Verified {
+        let denied = anonymous_multipart_upload(&s, "anon.txt");
+        assert_eq!(
+            String::from_utf8_lossy(&denied.body),
+            "{\n  \"error\": {\n    \"code\": 400,\n    \"message\": \"Your bucket has not been set up properly for Firebase Storage. Please visit 'https://console.firebase.google.com/project/demo-app/storage/rules' to set up security rules.\"\n  }\n}"
+        );
+        assert_eq!(
+            header(&denied, "content-type"),
+            Some("application/json; charset=UTF-8")
+        );
+    }
 
     // The owner credential is unaffected on the Firebase dialect.
     for (method, path) in [

@@ -927,6 +927,7 @@ fn rejected_email_change_preserves_oob_code_and_account_state() {
 }
 
 #[test]
+#[allow(clippy::too_many_lines)]
 fn rejected_email_change_preserves_code_for_an_inactive_duplicate_owner() {
     let s = state();
     let config_path = format!("{EMU}/config");
@@ -941,15 +942,26 @@ fn rejected_email_change_preserves_code_for_an_inactive_duplicate_owner() {
 
     let owner_user = sign_up(&s, "oob-inactive-owner@example.com");
     let target_a = sign_up(&s, "oob-inactive-target@example.com");
-    // A second owner of the address can only be imported: production refuses a second
-    // password account even in duplicate-email mode.
+    // The emulator checks the raw address before storing it in lowercase, so a case
+    // variant creates duplicate owners without relying on importing a taken lowercase
+    // address. Keep this email-action regression under the emulator profile.
     let (status, imported) = admin(
         &s,
         &format!("{V1}/projects/demo-app/accounts:batchCreate"),
-        &json!({"users": [{"localId": "oob-inactive-target-b", "email": "oob-inactive-target@example.com"}]}),
+        &json!({"users": [{"localId": "oob-inactive-target-b", "email": "Oob-Inactive-Target@Example.com"}]}),
     );
     assert_eq!(status, 200, "{imported}");
     assert!(imported.get("error").is_none(), "{imported}");
+    assert_eq!(
+        s.store
+            .lock()
+            .unwrap()
+            .user_by_id("oob-inactive-target-b")
+            .unwrap()
+            .email
+            .as_deref(),
+        Some("oob-inactive-target@example.com")
+    );
     let target_b = json!({"localId": "oob-inactive-target-b"});
     let (status, verified) = admin(
         &s,

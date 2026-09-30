@@ -11813,9 +11813,9 @@ fn production_batch_request_refusal(rows: &[Value], sanity_check: bool) -> Optio
 
 /// The official emulator's request-level batchCreate refusals (firebase-tools 15.28.2,
 /// `operations.js` `batchCreate`): sanityCheck refuses an address repeated inside the request
-/// while one account per address is enforced, and without allowOverwrite a localId repeated
-/// inside the request refuses the request. Rows without a localId are left to their own
-/// per-row refusal, as fireemu did before production's rules were adopted for strict.
+/// while one account per address is enforced, then a repeated provider key. Without
+/// allowOverwrite a repeated localId refuses the request, with missing/null/empty IDs sharing
+/// the empty key. These checks precede all row validation and writes.
 fn emulator_batch_request_refusal(
     rows: &[Value],
     sanity_check: bool,
@@ -11832,13 +11832,40 @@ fn emulator_batch_request_refusal(
             }
         }
     }
+    if sanity_check {
+        let mut seen = std::collections::BTreeSet::new();
+        for row in rows {
+            let Some(providers) = row.get("providerUserInfo").and_then(Value::as_array) else {
+                continue;
+            };
+            for provider in providers {
+                let (Some(provider_id), Some(raw_id)) = (
+                    str_field(provider, "providerId"),
+                    str_field(provider, "rawId"),
+                ) else {
+                    // Keep malformed scalar handling in the existing row decoder; only
+                    // string provider keys have source-backed HTTP semantics here.
+                    continue;
+                };
+                if !seen.insert(format!("{provider_id}:{raw_id}")) {
+                    return Some(error(
+                        400,
+                        &format!("DUPLICATE_RAW_ID : Provider id({provider_id}), Raw id({raw_id})"),
+                    ));
+                }
+            }
+        }
+    }
     if !allow_overwrite {
         let mut seen = std::collections::BTreeSet::new();
         for row in rows {
-            if let Some(id) = str_field(row, "localId").filter(|id| !id.is_empty()) {
-                if !seen.insert(id) {
-                    return Some(error(400, &format!("DUPLICATE_LOCAL_ID : {id}")));
-                }
+            let id = match row.get("localId") {
+                None | Some(Value::Null) => "",
+                Some(Value::String(id)) => id.as_str(),
+                Some(_) => continue,
+            };
+            if !seen.insert(id) {
+                return Some(error(400, &format!("DUPLICATE_LOCAL_ID : {id}")));
             }
         }
     }
@@ -11846,11 +11873,10 @@ fn emulator_batch_request_refusal(
 }
 
 /// The official emulator's per-row batchCreate refusals that production does not make: an
-/// address owned by another account (checked first, and only while one account per address is
-/// enforced; fireemu keeps importing a shared address under allowDuplicateEmails), then an
-/// existing localId without allowOverwrite. The official emulator looks the address up as the
-/// request spells it against keys it stores in lowercase (`state.js` `getUserByEmail`), so only
-/// an address already in lowercase can collide.
+/// address indexed to another account (regardless of allowDuplicateEmails), then an existing
+/// localId without allowOverwrite. The official emulator looks the address up as the request
+/// spells it against its single active owner index in lowercase (`state.js` `getUserByEmail`),
+/// so only an address already in lowercase can collide.
 fn emulator_batch_row_refusal(
     store: &AuthStore,
     user: &fireemu_core_auth::store::ImportedUser,
@@ -11864,11 +11890,10 @@ fn emulator_batch_row_refusal(
         .filter(|e| canonicalize_email(e) == *e)
     {
         let owned_by_other = store
-            .users_by_email(email)
-            .iter()
-            .any(|owner| owner.local_id.as_str() != user.local_id);
-        if owned_by_other && !store.config().allow_duplicate_emails {
-            return Some(if sanity_check {
+            .user_by_email(email)
+            .is_some_and(|owner| owner.local_id.as_str() != user.local_id);
+        if owned_by_other {
+            return Some(if sanity_check && !store.config().allow_duplicate_emails {
                 "email exists in other account in database".to_owned()
             } else {
                 format!("((Auth Emulator does not support importing duplicate email: {email}))")

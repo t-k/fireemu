@@ -5849,7 +5849,7 @@ fn batch_import_treats_null_optional_fields_as_unset() {
 
 #[test]
 fn batch_import_reports_each_missing_local_id_without_blocking_neighbors() {
-    let s = state();
+    let s = strict_state();
     let (status, response) = admin(
         &s,
         "POST",
@@ -11529,7 +11529,7 @@ fn custom_attributes_read_back_as_set() {
 /// `auth-account/config/duplicate-email`).
 #[test]
 fn duplicate_email_mode_keeps_password_accounts_unique() {
-    let s = state();
+    let s = strict_state();
     let (status, body) = admin(
         &s,
         "PATCH",
@@ -12584,7 +12584,7 @@ fn an_admin_update_takes_a_short_password_and_a_client_update_does_not() {
 /// auth-config-sdk/duplicate-email).
 #[test]
 fn a_password_sign_in_of_a_duplicate_address_reaches_its_earliest_owner() {
-    let s = state();
+    let s = strict_state();
     let (status, config) = patch_sign_in(
         &s,
         "signIn.allowDuplicateEmails",
@@ -17406,8 +17406,8 @@ fn emulator_batch_create_looks_addresses_up_as_spelled() {
 }
 
 /// Without sanityCheck an address repeated inside the request is refused row by row under the
-/// emulator profile (the official emulator imports the first row and refuses the next), and
-/// under allowDuplicateEmails fireemu keeps importing a shared address, sanityCheck or not.
+/// emulator profile (the official emulator imports the first row and refuses the next).
+/// allowDuplicateEmails skips request-level email checks, but not the row-level refusal.
 #[test]
 fn emulator_batch_create_checks_repeated_addresses_row_by_row() {
     let s = state();
@@ -17437,9 +17437,339 @@ fn emulator_batch_create_checks_repeated_addresses_row_by_row() {
         &s,
         &json!({"sanityCheck": true, "users": [{"localId": "r3", "email": "r@example.com"}, {"localId": "r4", "email": "r@example.com"}]}),
     );
-    assert_eq!((status, body.get("error").is_none()), (200, true), "{body}");
-    assert_eq!(looked_up(&s, "r3")["email"], "r@example.com");
-    assert_eq!(looked_up(&s, "r4")["email"], "r@example.com");
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(
+        row_errors(&body),
+        [
+            json!({"index": 0, "message": "((Auth Emulator does not support importing duplicate email: r@example.com))"}),
+            json!({"index": 1, "message": "((Auth Emulator does not support importing duplicate email: r@example.com))"}),
+        ],
+        "{body}"
+    );
+    assert!(looked_up(&s, "r3").is_null());
+    assert!(looked_up(&s, "r4").is_null());
+}
+
+/// Official emulator source: operations.js:278-290,382-407 (firebase-tools 15.28.2).
+#[test]
+fn emulator_batch_import_missing_ids_refuse_the_request_before_writes() {
+    for first in [json!({}), json!({"localId": null}), json!({"localId": ""})] {
+        for second in [json!({}), json!({"localId": null}), json!({"localId": ""})] {
+            for flag in [json!({}), json!({"allowOverwrite": false})] {
+                let s = state();
+                let (_, seeded) = batch_import(
+                    &s,
+                    &json!({"users": [{"localId": "kept", "displayName": "Original"}]}),
+                );
+                assert!(row_errors(&seeded).is_empty(), "{seeded}");
+                let before = looked_up(&s, "kept");
+                let mut request = flag;
+                request["users"] = json!([
+                    {"localId": "new-before", "displayName": "Must not import"},
+                    first, second,
+                    {"localId": "kept", "displayName": "Must not replace"},
+                ]);
+                let (status, body) = batch_import(&s, &request);
+                assert_eq!(status, 400, "{request}: {body}");
+                assert_eq!(
+                    body["error"]["message"], "DUPLICATE_LOCAL_ID : ",
+                    "{request}: {body}"
+                );
+                assert_eq!(
+                    body["error"]["errors"][0]["message"],
+                    "DUPLICATE_LOCAL_ID : "
+                );
+                assert!(looked_up(&s, "new-before").is_null());
+                assert_eq!(looked_up(&s, "kept"), before);
+            }
+        }
+    }
+}
+
+#[test]
+fn emulator_batch_import_missing_ids_remain_row_errors_when_not_repeated_or_overwriting() {
+    for missing in [json!({}), json!({"localId": null}), json!({"localId": ""})] {
+        for allow_overwrite in [false, true] {
+            let s = state();
+            let mut rows = vec![json!({"localId": "before"}), missing.clone()];
+            if allow_overwrite {
+                rows.push(missing.clone());
+            }
+            rows.push(json!({"localId": "after"}));
+            let (status, body) = batch_import(
+                &s,
+                &json!({"allowOverwrite": allow_overwrite, "users": rows}),
+            );
+            assert_eq!(status, 200, "{body}");
+            let expected: Vec<_> = (1..=if allow_overwrite { 2 } else { 1 })
+                .map(|index| json!({"index": index, "message": "localId is missing"}))
+                .collect();
+            assert_eq!(row_errors(&body), expected);
+            assert!(!looked_up(&s, "before").is_null());
+            assert!(!looked_up(&s, "after").is_null());
+        }
+    }
+}
+
+/// The preflight uses string concatenation and includes password/phone and within-row entries.
+#[test]
+fn emulator_batch_import_sanity_checks_all_repeated_provider_keys_before_writes() {
+    for (left, right) in [
+        (
+            json!({"providerId": "google.com", "rawId": "subject"}),
+            json!({"providerId": "google.com", "rawId": "subject"}),
+        ),
+        (
+            json!({"providerId": "password", "rawId": "subject"}),
+            json!({"providerId": "password", "rawId": "subject"}),
+        ),
+        (
+            json!({"providerId": "phone", "rawId": "subject"}),
+            json!({"providerId": "phone", "rawId": "subject"}),
+        ),
+        (
+            json!({"providerId": "", "rawId": ""}),
+            json!({"providerId": "", "rawId": ""}),
+        ),
+        (
+            json!({"providerId": "a:b", "rawId": "c"}),
+            json!({"providerId": "a", "rawId": "b:c"}),
+        ),
+    ] {
+        for within_row in [false, true] {
+            for allow_overwrite in [false, true] {
+                for allow_duplicate_emails in [false, true] {
+                    let s = state();
+                    let (status, config) = patch_sign_in(
+                        &s,
+                        "signIn.allowDuplicateEmails",
+                        &json!({"signIn": {"allowDuplicateEmails": allow_duplicate_emails}}),
+                    );
+                    assert_eq!(status, 200, "{config}");
+                    let (_, seeded) = batch_import(
+                        &s,
+                        &json!({"users": [{"localId": "kept", "displayName": "Original"}]}),
+                    );
+                    assert!(row_errors(&seeded).is_empty(), "{seeded}");
+                    let before = looked_up(&s, "kept");
+                    let mut rows = vec![json!({"localId": "new-before"})];
+                    if within_row {
+                        rows.push(
+                            json!({"localId": "provider-a", "providerUserInfo": [left, right]}),
+                        );
+                    } else {
+                        rows.push(json!({"localId": "provider-a", "providerUserInfo": [left]}));
+                        rows.push(json!({"localId": "provider-b", "providerUserInfo": [right]}));
+                    }
+                    let (status, body) = batch_import(
+                        &s,
+                        &json!({"sanityCheck": true, "allowOverwrite": allow_overwrite, "users": rows}),
+                    );
+                    let message = format!(
+                        "DUPLICATE_RAW_ID : Provider id({}), Raw id({})",
+                        right["providerId"].as_str().unwrap(),
+                        right["rawId"].as_str().unwrap()
+                    );
+                    assert_eq!(status, 400, "{left} {right}: {body}");
+                    assert_eq!(body["error"]["message"], message);
+                    assert_eq!(body["error"]["errors"][0]["message"], message);
+                    for id in ["new-before", "provider-a", "provider-b"] {
+                        assert!(looked_up(&s, id).is_null());
+                    }
+                    assert_eq!(looked_up(&s, "kept"), before);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn emulator_batch_import_provider_sanity_has_no_strict_or_disabled_preflight() {
+    for strict in [false, true] {
+        for sanity_check in [false, true] {
+            if !strict && sanity_check {
+                continue;
+            }
+            let s = if strict { strict_state() } else { state() };
+            let (status, body) = batch_import(
+                &s,
+                &json!({"sanityCheck": sanity_check, "users": [
+                    {"localId": "before"},
+                    {"localId": "one", "providerUserInfo": [{"providerId": "google.com", "rawId": "shared"}]},
+                    {"localId": "two", "providerUserInfo": [{"providerId": "google.com", "rawId": "shared"}]},
+                    {"localId": "after"},
+                ]}),
+            );
+            assert_eq!(status, 200, "strict={strict} sanity={sanity_check}: {body}");
+            // Preserve the current non-preflight path; its cross-row provider ownership
+            // behavior is a separate compatibility issue from sanityCheck's request check.
+            assert!(row_errors(&body).is_empty(), "{body}");
+            for id in ["before", "one", "two", "after"] {
+                assert!(!looked_up(&s, id).is_null());
+            }
+        }
+    }
+    for providers in [
+        json!([{"providerId": "google.com", "rawId": "one"}, {"providerId": "google.com", "rawId": "two"}]),
+        json!([{"providerId": "google.com", "rawId": "one"}, {"providerId": "github.com", "rawId": "one"}]),
+    ] {
+        let s = state();
+        let (status, body) = batch_import(
+            &s,
+            &json!({"sanityCheck": true, "users": [{"localId": "distinct", "providerUserInfo": providers}]}),
+        );
+        assert_eq!(status, 200, "{body}");
+        assert!(row_errors(&body).is_empty(), "{body}");
+        assert!(!looked_up(&s, "distinct").is_null());
+    }
+}
+
+#[test]
+fn emulator_batch_import_request_checks_follow_email_provider_local_id_order() {
+    for (sanity_check, allow_duplicate_emails, expected) in [
+        (true, false, "DUPLICATE_EMAIL : shared@example.com"),
+        (
+            true,
+            true,
+            "DUPLICATE_RAW_ID : Provider id(google.com), Raw id(shared)",
+        ),
+        (false, false, "DUPLICATE_LOCAL_ID : "),
+        (false, true, "DUPLICATE_LOCAL_ID : "),
+    ] {
+        let s = state();
+        let (status, config) = patch_sign_in(
+            &s,
+            "signIn.allowDuplicateEmails",
+            &json!({"signIn": {"allowDuplicateEmails": allow_duplicate_emails}}),
+        );
+        assert_eq!(status, 200, "{config}");
+        let (status, body) = batch_import(
+            &s,
+            &json!({"sanityCheck": sanity_check, "users": [
+                {"localId": "before"},
+                {"email": "shared@example.com", "providerUserInfo": [{"providerId": "google.com", "rawId": "shared"}]},
+                {"email": "shared@example.com", "providerUserInfo": [{"providerId": "google.com", "rawId": "shared"}]},
+            ]}),
+        );
+        assert_eq!(status, 400, "{body}");
+        assert_eq!(body["error"]["message"], expected);
+        assert!(looked_up(&s, "before").is_null());
+    }
+}
+
+#[test]
+fn emulator_batch_import_shared_email_refusals_ignore_duplicate_and_overwrite_flags() {
+    for sanity_check in [false, true] {
+        for allow_duplicate_emails in [false, true] {
+            for allow_overwrite in [false, true] {
+                let s = state();
+                let (status, config) = patch_sign_in(
+                    &s,
+                    "signIn.allowDuplicateEmails",
+                    &json!({"signIn": {"allowDuplicateEmails": allow_duplicate_emails}}),
+                );
+                assert_eq!(status, 200, "{config}");
+                let (_, seeded) = batch_import(
+                    &s,
+                    &json!({"users": [
+                        {"localId": "owner", "email": "shared@example.com"},
+                        {"localId": "target", "email": "target@example.com", "displayName": "Original"},
+                    ]}),
+                );
+                assert!(row_errors(&seeded).is_empty(), "{seeded}");
+                let before = looked_up(&s, "target");
+                let (status, body) = batch_import(
+                    &s,
+                    &json!({"sanityCheck": sanity_check, "allowOverwrite": allow_overwrite, "users": [
+                        {"localId": "before"},
+                        {"localId": "target", "email": "shared@example.com", "displayName": "Must not replace"},
+                        {"localId": "after"},
+                    ]}),
+                );
+                assert_eq!(status, 200, "{body}");
+                let message = if sanity_check && !allow_duplicate_emails {
+                    "email exists in other account in database"
+                } else {
+                    "((Auth Emulator does not support importing duplicate email: shared@example.com))"
+                };
+                assert_eq!(
+                    row_errors(&body),
+                    [json!({"index": 1, "message": message})],
+                    "{body}"
+                );
+                assert_eq!(looked_up(&s, "target"), before);
+                for id in ["before", "after"] {
+                    assert!(!looked_up(&s, id).is_null());
+                }
+            }
+        }
+    }
+}
+
+/// The emulator email index has one active owner, and deleting any owner removes that index.
+#[test]
+fn emulator_batch_import_uses_the_current_email_owner_and_preserves_raw_casing() {
+    for allow_duplicate_emails in [false, true] {
+        for sanity_check in [false, true] {
+            let s = state();
+            let (status, config) = patch_sign_in(
+                &s,
+                "signIn.allowDuplicateEmails",
+                &json!({"signIn": {"allowDuplicateEmails": allow_duplicate_emails}}),
+            );
+            assert_eq!(status, 200, "{config}");
+            for (id, email) in [
+                ("old", "shared@example.com"),
+                ("current", "Shared@Example.com"),
+            ] {
+                let (status, body) = batch_import(
+                    &s,
+                    &json!({"sanityCheck": sanity_check, "users": [{"localId": id, "email": email}]}),
+                );
+                assert_eq!(status, 200, "{body}");
+                assert!(row_errors(&body).is_empty(), "{body}");
+            }
+            let (status, body) = batch_import(
+                &s,
+                &json!({"allowOverwrite": true, "sanityCheck": sanity_check, "users": [{"localId": "current", "email": "shared@example.com", "displayName": "Current"}]}),
+            );
+            assert_eq!(status, 200, "{body}");
+            assert!(row_errors(&body).is_empty(), "{body}");
+            let (status, updated) = admin(
+                &s,
+                "POST",
+                &format!("{ADMIN}/accounts:update"),
+                &json!({"localId": "old", "displayName": "Activated"}),
+            );
+            assert_eq!(status, 200, "{updated}");
+            let (status, body) = batch_import(
+                &s,
+                &json!({"allowOverwrite": true, "sanityCheck": sanity_check, "users": [{"localId": "old", "email": "shared@example.com", "displayName": "Owner"}]}),
+            );
+            assert_eq!(status, 200, "{body}");
+            assert!(row_errors(&body).is_empty(), "{body}");
+            let (_, body) = batch_import(
+                &s,
+                &json!({"sanityCheck": sanity_check, "users": [{"localId": "refused", "email": "shared@example.com"}]}),
+            );
+            assert_eq!(row_errors(&body).len(), 1, "{body}");
+            let (status, deleted) = admin(
+                &s,
+                "POST",
+                &format!("{ADMIN}/accounts:delete"),
+                &json!({"localId": "current"}),
+            );
+            assert_eq!(status, 200, "{deleted}");
+            let (status, body) = batch_import(
+                &s,
+                &json!({"sanityCheck": sanity_check, "users": [{"localId": "after-delete", "email": "shared@example.com"}]}),
+            );
+            assert_eq!(status, 200, "{body}");
+            assert!(row_errors(&body).is_empty(), "{body}");
+            assert!(!looked_up(&s, "old").is_null());
+            assert!(!looked_up(&s, "after-delete").is_null());
+        }
+    }
 }
 
 /// The project config carries its authorized domains: the domains a new Firebase project

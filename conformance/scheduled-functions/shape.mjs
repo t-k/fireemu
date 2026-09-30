@@ -147,26 +147,22 @@ async function responseBytes(response) {
   }
 }
 
-export async function collectShape({
-  runId,
-  projectNumber,
+export function createRequestCapture({
   accessToken,
   save,
   send = (request) => fetch(request.url, request),
   clock = Date.now,
-  sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
-  now = clock(),
+  maxRequests = MAX_REQUESTS,
 }) {
-  const requests = shapeRequests({ runId, projectNumber, now });
   if (typeof accessToken !== "string" || !accessToken || /[\r\n]/.test(accessToken))
     throw new Error("coordinator token required");
   if (typeof save !== "function") throw new Error("private persistence required");
-  const intents = new Set();
+  if (!Number.isSafeInteger(maxRequests) || maxRequests < 1 || maxRequests > MAX_REQUESTS)
+    throw new Error("invalid request cap");
   let attempted = 0,
-    completed = 0,
-    stopped = false;
+    completed = 0;
   async function capture(spec) {
-    if (attempted >= MAX_REQUESTS) throw new Error("request cap exceeded");
+    if (attempted >= maxRequests) throw new Error("request cap exceeded");
     const dispatchAt = new Date(clock()).toISOString();
     try {
       await save({
@@ -242,6 +238,26 @@ export async function collectShape({
     }
     return { status: response.status, json };
   }
+  return {
+    capture,
+    counts: () => ({ attempted, completed, unknown: attempted - completed }),
+  };
+}
+
+export async function collectShape({
+  runId,
+  projectNumber,
+  accessToken,
+  save,
+  send = (request) => fetch(request.url, request),
+  clock = Date.now,
+  sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  now = clock(),
+}) {
+  const requests = shapeRequests({ runId, projectNumber, now });
+  const { capture, counts } = createRequestCapture({ accessToken, save, send, clock });
+  const intents = new Set();
+  let stopped = false;
   for (const spec of requests) {
     if (stopped && !spec.cleanup) continue;
     if (spec.owned && !intents.has(spec.owned)) continue;
@@ -288,9 +304,7 @@ export async function collectShape({
   }
   return {
     outcome: "shape-needs-review",
-    attempted,
-    completed,
-    unknown: attempted - completed,
+    ...counts(),
     ownedIntents: [...intents],
     cleanupVerified: false,
   };

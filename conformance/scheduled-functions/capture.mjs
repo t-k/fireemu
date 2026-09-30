@@ -10,7 +10,8 @@ import {
   fields,
 } from "../src/auth-fs-cross/stage2-sandbox.mjs";
 import { admissionProblems } from "../src/auth-fs-cross/sandbox.mjs";
-import { collectShape, PROJECT, MAX_REQUESTS, shapeRequests } from "./shape.mjs";
+import { collectShape, PROJECT, MAX_REQUESTS, shapeRequests, ownedResources } from "./shape.mjs";
+import { collectRecovery, RECOVERY_MAX_REQUESTS } from "./recovery.mjs";
 
 const REPO = fileURLToPath(new URL("../../", import.meta.url));
 const TASK_ID = "SCHEDULED-FUNCTIONS";
@@ -18,6 +19,7 @@ const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const SOURCES = [
   "conformance/scheduled-functions/shape.mjs",
   "conformance/scheduled-functions/capture.mjs",
+  "conformance/scheduled-functions/recovery.mjs",
   "conformance/src/auth-fs-cross/stage2-sandbox.mjs",
   "conformance/src/auth-fs-cross/sandbox.mjs",
 ];
@@ -49,7 +51,7 @@ async function durable(path, value, flags = "wx") {
   }
 }
 
-function approved(ownerText, pins) {
+function approved(ownerText, pins, recovery = false) {
   let approval = false;
   for (const line of ownerText.split("\n")) {
     const [date, subject = "", body = "", author = ""] = line
@@ -69,20 +71,26 @@ function approved(ownerText, pins) {
       continue;
     }
     if (
-      subject === "SCHEDULED-FUNCTIONS stage-2 shape packet" &&
+      subject ===
+        (recovery
+          ? "SCHEDULED-FUNCTIONS stage-2 job recovery packet"
+          : "SCHEDULED-FUNCTIONS stage-2 shape packet") &&
       entry.decision === "APPROVE" &&
       /^(オーナー|Claude|調整役)/.test(author) &&
       entry.sourceCommit === pins.sourceCommit &&
       entry.harnessDigest === pins.harnessDigest &&
-      entry.maxRequests === "64" &&
-      entry.reserveUsd === "1"
+      entry.maxRequests === String(recovery ? RECOVERY_MAX_REQUESTS : MAX_REQUESTS) &&
+      entry.reserveUsd === String(recovery ? 0.25 : 1) &&
+      (!recovery ||
+        (entry.originalRunId === pins.originalRunId &&
+          entry.originalPacketSha256 === pins.originalPacketSha256))
     )
       approval = true;
   }
   return approval;
 }
 
-function budget(rows) {
+function budget(rows, reserveUsd = 1) {
   const amounts = new Map();
   for (const [index, row] of rows.entries()) {
     if (row.taskId !== TASK_ID) continue;
@@ -98,19 +106,73 @@ function budget(rows) {
     const key = row.attemptId ?? `unlinked-${index}`;
     amounts.set(key, Math.max(amounts.get(key) ?? 0, amount));
   }
-  if ([...amounts.values()].reduce((a, b) => a + b, 0) + 1 > 10)
+  if ([...amounts.values()].reduce((a, b) => a + b, 0) + reserveUsd > 10)
     throw new Error("task budget exhausted");
 }
 
-export async function captureShape({
-  root,
-  packetPath,
-  sourceCommit,
-  coordinatorSend = false,
-  getToken,
-  send,
-  clock = () => new Date(),
-}) {
+async function recoveryAdmission({ plan, rows, ledgerText, lane, now }) {
+  const target = (row) =>
+    row.project === PROJECT &&
+    row.taskId === TASK_ID &&
+    row.attemptId === plan.originalRunId &&
+    row.packetSha256 === plan.originalPacketSha256;
+  const lines = ledgerText.split("\n").filter((line) => line.trim());
+  const index = rows.findLastIndex(target);
+  const original = rows[index];
+  if (
+    !original ||
+    sha256(lines[index]) !== plan.originalLedgerRowSha256 ||
+    original.event !== "needs-recovery" ||
+    original.outcome !== "shape-needs-review" ||
+    original.sandboxAtBaseline !== false ||
+    original.requests !== 32
+  )
+    throw new Error("original recovery ledger proof differs");
+  const then = Date.parse(original.ts);
+  if (!Number.isFinite(then) || !Number.isFinite(now) || now - then < 30 * 60000)
+    throw new Error("recovery must keep the 30-minute spacing");
+  if (
+    rows.some(
+      (row) =>
+        row.project === PROJECT &&
+        (!Number.isFinite(Date.parse(row.ts)) || Date.parse(row.ts) > then),
+    )
+  )
+    throw new Error("newer or unreadable sandbox activity blocks recovery");
+  const journal = await readFile(join(lane, "shape-" + plan.originalRunId, "requests.jsonl"));
+  if (sha256(journal) !== plan.originalJournalSha256)
+    throw new Error("original recovery journal differs");
+  const remaining = rows.filter((row) => !target(row));
+  const problems = admissionProblems(remaining.map(JSON.stringify).join("\n"), PROJECT, now);
+  // The shared helper groups by task. Also check each other attempt independently.
+  const attempts = new Map();
+  for (const row of remaining) {
+    if (row.project !== PROJECT || typeof row.taskId !== "string") continue;
+    const key = row.taskId + "|" + (row.attemptId ?? "unlinked");
+    const group = attempts.get(key) ?? [];
+    group.push(
+      row.event === undefined && row.outcome === "reserved" ? { ...row, event: "started" } : row,
+    );
+    attempts.set(key, group);
+  }
+  for (const group of attempts.values())
+    problems.push(...admissionProblems(group.map(JSON.stringify).join("\n"), PROJECT, now));
+  return problems;
+}
+
+async function captureAttempt(
+  {
+    root,
+    packetPath,
+    sourceCommit,
+    coordinatorSend = false,
+    getToken,
+    send,
+    clock = () => new Date(),
+    sleep,
+  },
+  recovery = false,
+) {
   if (!coordinatorSend) throw new Error("explicit coordinator send required");
   const lane = await realpath(join(root, "docs.local/runs/codex-lane8"));
   const packet = await realpath(packetPath);
@@ -125,14 +187,25 @@ export async function captureShape({
   if (
     plan.schemaVersion !== 1 ||
     plan.project !== PROJECT ||
-    plan.maxRequests !== MAX_REQUESTS ||
-    plan.reserveUsd !== 1 ||
+    plan.maxRequests !== (recovery ? RECOVERY_MAX_REQUESTS : MAX_REQUESTS) ||
+    plan.reserveUsd !== (recovery ? 0.25 : 1) ||
+    (recovery ? plan.kind !== "job-recovery" : plan.kind !== undefined) ||
     !/^[a-f0-9]{40}$/.test(plan.sourceCommit ?? "") ||
     sourceCommit !== plan.sourceCommit ||
     plan.harnessDigest !== (await harnessDigest())
   )
     throw new Error("packet source or runner binding differs");
-  shapeRequests({ ...plan, now: clock().getTime() });
+  if (recovery) {
+    ownedResources(plan.originalRunId);
+    ownedResources(plan.runId);
+    if (
+      plan.originalRunId === plan.runId ||
+      ![plan.originalPacketSha256, plan.originalLedgerRowSha256, plan.originalJournalSha256].every(
+        (v) => /^[a-f0-9]{64}$/.test(v ?? ""),
+      )
+    )
+      throw new Error("invalid original recovery proof");
+  } else shapeRequests({ ...plan, now: clock().getTime() });
   if (typeof getToken !== "function") throw new Error("coordinator credential provider required");
   const runs = join(root, "docs.local/runs");
   const ledger = join(runs, "sandbox-ledger.jsonl");
@@ -161,13 +234,19 @@ export async function captureShape({
       .filter((s) => s.trim())
       .map((s) => JSON.parse(s));
     if (
-      !approved(await readFile(join(root, "docs.local/instructions/owner-decisions.md"), "utf8"), {
-        ...plan,
-        packetSha256,
-      })
+      !approved(
+        await readFile(join(root, "docs.local/instructions/owner-decisions.md"), "utf8"),
+        {
+          ...plan,
+          packetSha256,
+        },
+        recovery,
+      )
     )
       throw new Error("packet approval missing or revoked");
-    const problems = admissionProblems(ledgerText, PROJECT, clock().getTime());
+    const problems = recovery
+      ? await recoveryAdmission({ plan, rows, ledgerText, lane, now: clock().getTime() })
+      : admissionProblems(ledgerText, PROJECT, clock().getTime());
     if (problems.length) throw new Error(`sandbox admission refused: ${problems.join("; ")}`);
     if (
       rows.some(
@@ -176,8 +255,8 @@ export async function captureShape({
       )
     )
       throw new Error("this packet or run already started");
-    budget(rows);
-    const directory = join(lane, `shape-${plan.runId}`);
+    budget(rows, plan.reserveUsd);
+    const directory = join(lane, (recovery ? "recovery-" : "shape-") + plan.runId);
     await mkdir(directory, { mode: 0o700 });
     const laneHandle = await open(lane, "r");
     try {
@@ -196,7 +275,10 @@ export async function captureShape({
       harnessDigest: plan.harnessDigest,
       attemptId: plan.runId,
       runDir: directory,
-      estimatedUsd: 1,
+      estimatedUsd: plan.reserveUsd,
+      ...(recovery
+        ? { originalAttemptId: plan.originalRunId, originalPacketSha256: plan.originalPacketSha256 }
+        : {}),
     };
     // Any failure after the reservation leaves the lock and conservative budget charge.
     reserved = true;
@@ -214,15 +296,20 @@ export async function captureShape({
     let summary;
     try {
       const token = await getToken();
-      summary = await collectShape({
+      summary = await (recovery ? collectRecovery : collectShape)({
         ...plan,
         accessToken: token,
         send,
+        sleep,
         clock: () => clock().getTime(),
         save: (row) => durable(join(directory, "requests.jsonl"), row, "a"),
       });
     } catch {
-      summary = { outcome: "shape-needs-review", cleanupVerified: false, captureError: true };
+      summary = {
+        outcome: recovery ? "recovery-needs-review" : "shape-needs-review",
+        cleanupVerified: false,
+        captureError: true,
+      };
     }
     const afterGuard = await lstat(guardPath);
     summary.guardUnchanged =
@@ -238,7 +325,7 @@ export async function captureShape({
         ...common,
         ts: clock().toISOString(),
         event: "needs-recovery",
-        outcome: "shape-needs-review",
+        outcome: recovery ? "recovery-needs-review" : "shape-needs-review",
         requests: summary.attempted ?? null,
         sandboxAtBaseline: false,
       },
@@ -252,7 +339,10 @@ export async function captureShape({
 
 if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.meta.url) {
   try {
-    if (process.argv.length !== 4 || process.argv[3] !== "--coordinator-send")
+    if (
+      process.argv.length !== 4 ||
+      !["--coordinator-send", "--coordinator-recover"].includes(process.argv[3])
+    )
       throw new Error("coordinator command required");
     const common = execFileSync(
       "git",
@@ -263,7 +353,9 @@ if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.m
       cwd: REPO,
       encoding: "utf8",
     }).trim();
-    const summary = await captureShape({
+    const summary = await (
+      process.argv[3] === "--coordinator-recover" ? captureRecovery : captureShape
+    )({
       root: dirname(common),
       packetPath: process.argv[2],
       sourceCommit,
@@ -283,4 +375,12 @@ if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.m
     );
     process.exitCode = 1;
   }
+}
+
+export async function captureShape(options) {
+  return captureAttempt(options);
+}
+
+export async function captureRecovery(options) {
+  return captureAttempt(options, true);
 }

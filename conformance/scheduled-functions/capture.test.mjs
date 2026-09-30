@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { createHash } from "node:crypto";
-import { captureShape, harnessDigest } from "./capture.mjs";
+import { captureShape, captureRecovery, harnessDigest } from "./capture.mjs";
 
 const sha256 = (value) => createHash("sha256").update(value).digest("hex");
 const sourceCommit = "a".repeat(40);
@@ -191,5 +191,130 @@ test("approval must bind every source, budget and author field", async (t) => {
     await writeFile(ownerPath, approval.replace(before, after));
     await assert.rejects(captureShape(f.options), /approval/);
     assert.deepEqual(f.counts(), { tokens: 0, sends: 0 });
+  }
+});
+
+async function recoveryFixture(t) {
+  const f = await fixture(t);
+  f.options.clock = () => new Date("2026-09-30T11:10:00Z");
+  const originalRunId = "d1".repeat(8);
+  const originalPacketSha256 = "e".repeat(64);
+  const original = {
+    project: "fireemu-oracle-sbx",
+    database: null,
+    taskId: "SCHEDULED-FUNCTIONS",
+    attemptId: originalRunId,
+    packetSha256: originalPacketSha256,
+    estimatedUsd: 1,
+    ts: "2026-09-30T10:36:23.996Z",
+    event: "needs-recovery",
+    outcome: "shape-needs-review",
+    requests: 32,
+    sandboxAtBaseline: false,
+  };
+  const originalLine = JSON.stringify(original);
+  const ledgerPath = join(f.runs, "sandbox-ledger.jsonl");
+  await writeFile(ledgerPath, originalLine + String.fromCharCode(10));
+  const originalDir = join(f.runs, "codex-lane8", "shape-" + originalRunId);
+  await mkdir(originalDir);
+  const journal = "{}" + String.fromCharCode(10);
+  await writeFile(join(originalDir, "requests.jsonl"), journal);
+  const plan = {
+    ...JSON.parse(await readFile(f.options.packetPath, "utf8")),
+    kind: "job-recovery",
+    maxRequests: 8,
+    reserveUsd: 0.25,
+    originalRunId,
+    originalPacketSha256,
+    originalLedgerRowSha256: sha256(originalLine),
+    originalJournalSha256: sha256(journal),
+  };
+  const bytes = JSON.stringify(plan);
+  await writeFile(f.options.packetPath, bytes);
+  const approval =
+    "- 2026-09-30 | SCHEDULED-FUNCTIONS stage-2 job recovery packet | decision=APPROVE; packetSha256=" +
+    sha256(bytes) +
+    "; sourceCommit=" +
+    sourceCommit +
+    "; harnessDigest=" +
+    plan.harnessDigest +
+    "; maxRequests=8; reserveUsd=0.25; originalRunId=" +
+    originalRunId +
+    "; originalPacketSha256=" +
+    originalPacketSha256 +
+    " | Claude | private" +
+    String.fromCharCode(10);
+  await writeFile(join(f.root, "docs.local/instructions/owner-decisions.md"), approval);
+  return { ...f, original, originalLine, originalDir, ledgerPath, plan, approval };
+}
+
+test("recovery exempts only its bound original attempt and durably reserves its separate cost", async (t) => {
+  const f = await recoveryFixture(t);
+  const provider = f.options.getToken;
+  f.options.getToken = async () => {
+    const rows = (await readFile(f.ledgerPath, "utf8"))
+      .trim()
+      .split(String.fromCharCode(10))
+      .map(JSON.parse);
+    const latest = rows.at(-1);
+    assert.equal(latest.event, "started");
+    assert.equal(latest.attemptId, f.plan.runId);
+    assert.equal(latest.estimatedUsd, 0.25);
+    return provider();
+  };
+  const summary = await captureRecovery(f.options);
+  assert.equal(summary.outcome, "recovery-needs-review");
+  assert.deepEqual(f.counts(), { tokens: 1, sends: 1 });
+  const rows = (await readFile(f.ledgerPath, "utf8"))
+    .trim()
+    .split(String.fromCharCode(10))
+    .map(JSON.parse);
+  assert.deepEqual(rows[0], f.original);
+  assert.equal(rows.at(-1).sandboxAtBaseline, false);
+  assert.equal(rows.at(-1).originalAttemptId, f.plan.originalRunId);
+  assert.equal(rows.at(-1).estimatedUsd, 0.25);
+  await lstat(join(f.locks, "fireemu-oracle-sbx.lock"));
+  assert.equal(await readFile(f.guard, "utf8"), "foreign guard");
+});
+
+test("recovery refuses retained locks, spacing, changed proof and missing approval before credentials", async (t) => {
+  for (const kind of ["lock", "spacing", "journal", "row", "approval"]) {
+    const f = await recoveryFixture(t);
+    if (kind === "lock") await writeFile(join(f.locks, "fireemu-oracle-sbx.lock"), "retained");
+    if (kind === "spacing") f.options.clock = () => new Date("2026-09-30T10:50:00Z");
+    if (kind === "journal") await writeFile(join(f.originalDir, "requests.jsonl"), "changed");
+    if (kind === "row")
+      await writeFile(
+        f.ledgerPath,
+        JSON.stringify({ ...f.original, requests: 31 }) + String.fromCharCode(10),
+      );
+    if (kind === "approval")
+      await writeFile(join(f.root, "docs.local/instructions/owner-decisions.md"), "");
+    await assert.rejects(captureRecovery(f.options));
+    assert.deepEqual(f.counts(), { tokens: 0, sends: 0 });
+    if (kind === "lock")
+      assert.equal(await readFile(join(f.locks, "fireemu-oracle-sbx.lock"), "utf8"), "retained");
+    else await assert.rejects(lstat(join(f.locks, "fireemu-oracle-sbx.lock")), { code: "ENOENT" });
+  }
+});
+
+test("newer sbx activity, another open attempt and recovery replay stay blocked", async (t) => {
+  for (const kind of ["newer", "open", "replay"]) {
+    const f = await recoveryFixture(t);
+    const other = {
+      project: "fireemu-oracle-sbx",
+      taskId: kind === "replay" ? "SCHEDULED-FUNCTIONS" : "OTHER",
+      attemptId: kind === "replay" ? f.plan.runId : "foreign",
+      ts: kind === "newer" ? "2026-09-30T10:40:00Z" : "2026-09-30T09:00:00Z",
+      event: kind === "open" ? "started" : "finished",
+      outcome: kind === "open" ? "reserved" : "recorded",
+      sandboxAtBaseline: true,
+    };
+    const ledger =
+      f.originalLine + String.fromCharCode(10) + JSON.stringify(other) + String.fromCharCode(10);
+    await writeFile(f.ledgerPath, ledger);
+    await assert.rejects(captureRecovery(f.options));
+    assert.deepEqual(f.counts(), { tokens: 0, sends: 0 });
+    assert.equal(await readFile(f.ledgerPath, "utf8"), ledger);
   }
 });

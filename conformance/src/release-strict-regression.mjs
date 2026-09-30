@@ -24,6 +24,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 
+import { federationEnvironment } from "./release-openssl.mjs";
 import { bindingProblems } from "./harness-registry.mjs";
 import { EXPECTED_ACTIONS, localSetupDigest } from "./harness-target/local-tenancy.mjs";
 import { findPackagedRunner, packagedRunnerCandidates } from "./packaged-runner.mjs";
@@ -815,8 +816,7 @@ const lastJsonLine = (text) => {
 
 const readJsonFile = async (path) => JSON.parse(await readFile(path, "utf8"));
 
-async function runEntry(run, context) {
-  await clearRunDirs(run.clear);
+export async function runEntry(run, context) {
   const record = { id: run.id, kind: run.kind, part: run.part, commands: [], errors: [] };
   const values = {
     bin: context.binary,
@@ -825,12 +825,20 @@ async function runEntry(run, context) {
     runDir: "",
   };
   const outputs = [];
+  let runEnv;
+  try {
+    runEnv = federationEnvironment(run.id, context.env);
+  } catch (error) {
+    record.errors.push(error.message);
+    return { record, outputs, values };
+  }
+  await clearRunDirs(run.clear);
   for (const [index, command] of run.commands.entries()) {
     if (!ALLOWED_MODES.has(command.mode) || !command.argv.includes(command.mode)) {
       throw new Error(`${run.id}: mode ${command.mode} is not allowed`);
     }
     const argv = fill(command.argv, values);
-    const env = { ...context.env, ...command.env };
+    const env = { ...runEnv, ...command.env };
     if (command.functionsNodeOnPath) {
       env.PATH = `${dirname(context.functionsNode)}:${env.PATH}`;
     }

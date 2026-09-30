@@ -4,6 +4,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -28,7 +29,7 @@ FIXTURE_PRINCIPAL = {
 }
 
 
-def _artifacts(tmp_path):
+def _artifacts(tmp_path, *, now=None):
     descriptor = campaign.descriptor()
     plan = descriptor.plan_compiler(NONCE)
     artifact = tmp_path / "artifact"
@@ -53,7 +54,7 @@ def _artifacts(tmp_path):
     manifest_path.write_bytes(manifest_bytes)
     launcher = tmp_path / "launcher"
     launcher.write_bytes(b"offline launcher")
-    now = time.time()
+    now = time.time() if now is None else now
     approval = {
         "kind": campaign.APPROVAL_KIND,
         "status": "approved",
@@ -185,3 +186,19 @@ def test_artifact_approval_can_bind_a_fixture_epoch(tmp_path):
     descriptor, *_, approval = _artifacts(tmp_path, now=epoch)
     assert approval["windowStartsAt"] == epoch - 1
     assert approval["windowExpiresAt"] == epoch + descriptor.window_seconds + 10
+
+
+@pytest.fixture
+def admission_clock(monkeypatch):
+    # Replace only O7's module reference; request and Ledger clocks stay real.
+    clock = SimpleNamespace(now=time.time())
+    monkeypatch.setattr(admission.o8_admission, "time", SimpleNamespace(time=lambda: clock.now))
+    return clock
+
+
+def test_admission_clock_is_scoped_and_mutable(admission_clock):
+    assert admission.o8_admission.time is not time
+    assert admission.o8_admission.time.time() == admission_clock.now
+    admission_clock.now += 11
+    assert admission.o8_admission.time.time() == admission_clock.now
+    assert callable(time.monotonic)

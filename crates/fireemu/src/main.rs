@@ -2567,6 +2567,9 @@ fn control_state(
             storage: storage.clone(),
             registry: registry.clone(),
             seed: cfg.seed,
+            tenant_seeding: cfg
+                .tenant_seeding()
+                .expect("the tenants were validated when the configuration was read"),
             app_check: app_check.clone(),
             pubsub: pubsub.clone(),
             pubsub_handle: pubsub_handle.clone(),

@@ -7937,11 +7937,36 @@ impl AuthRegistry {
     ) -> Option<(String, TenantMetadata, PasswordPolicy)> {
         self.create_tenant_with_password_policy_inner(
             project,
+            None,
             metadata,
             patch,
             password_policy,
             false,
         )
+    }
+
+    /// Creates a tenant with an id its caller chose (a tenant declared in the configuration
+    /// file), published as [`Self::create_tenant_with_password_policy`] publishes a generated one.
+    /// `None` when the id is in use, cannot address a tenant, or the project is unknown. A name
+    /// that was deleted, or wiped by a reset, is free again and stops reading as deleted.
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn create_tenant_with_id(
+        &self,
+        project: &str,
+        tenant: &str,
+        metadata: TenantMetadata,
+        patch: TenantMetadataPatch,
+        password_policy: Option<PasswordPolicy>,
+    ) -> Option<(TenantMetadata, PasswordPolicy)> {
+        self.create_tenant_with_password_policy_inner(
+            project,
+            Some(tenant),
+            metadata,
+            patch,
+            password_policy,
+            false,
+        )
+        .map(|(_, metadata, policy)| (metadata, policy))
     }
 
     /// Creates a tenant only if its parent config enables tenant operations at the project gate.
@@ -7955,6 +7980,7 @@ impl AuthRegistry {
     ) -> Option<(String, TenantMetadata, PasswordPolicy)> {
         self.create_tenant_with_password_policy_inner(
             project,
+            None,
             metadata,
             patch,
             password_policy,
@@ -7966,12 +7992,16 @@ impl AuthRegistry {
     fn create_tenant_with_password_policy_inner(
         &self,
         project: &str,
+        chosen_id: Option<&str>,
         metadata: TenantMetadata,
         patch: TenantMetadataPatch,
         password_policy: Option<PasswordPolicy>,
         require_enabled: bool,
     ) -> Option<(String, TenantMetadata, PasswordPolicy)> {
         if project.is_empty() || project.contains(['/', '\\']) {
+            return None;
+        }
+        if chosen_id.is_some_and(|id| id.is_empty() || id.contains(['/', '\\'])) {
             return None;
         }
         let gate = self.operation_gate(project, None)?;
@@ -7992,8 +8022,13 @@ impl AuthRegistry {
             .flatten()
             .or_else(|| metadata.display_name.clone());
         loop {
-            let sequence = self.next_tenant_id.fetch_add(1, Ordering::Relaxed);
-            let tenant = generated_tenant_id(display_name.as_deref(), sequence);
+            let tenant = chosen_id.map_or_else(
+                || {
+                    let sequence = self.next_tenant_id.fetch_add(1, Ordering::Relaxed);
+                    generated_tenant_id(display_name.as_deref(), sequence)
+                },
+                str::to_owned,
+            );
             let store = self.build_tenant_store(project, &tenant, parent)?;
             if let Some(patch) =
                 self.effective_tenant_config_override(&(project.to_owned(), tenant.clone()))
@@ -8029,8 +8064,21 @@ impl AuthRegistry {
                         let previous = overrides.get(&key).copied().unwrap_or_default();
                         overrides.insert(key, previous.merge(config_override));
                     }
+                    if chosen_id.is_some() {
+                        // A name in use again is neither deleted nor carries the epochs of the
+                        // tenant that held it.
+                        let key = (project.to_owned(), tenant.clone());
+                        if let Ok(mut deleted) = self.deleted_tenants.lock() {
+                            deleted.remove(&key);
+                        }
+                        if let Ok(mut removed) = self.removed_tenant_epochs.lock() {
+                            removed.remove(&key);
+                        }
+                    }
                     return Some((tenant, next_metadata, next_policy));
                 }
+                // A chosen id that is taken is refused; a generated one tries the next.
+                TenantPublication::Existing { .. } if chosen_id.is_some() => return None,
                 TenantPublication::Existing {
                     unpublished_metadata,
                     ..

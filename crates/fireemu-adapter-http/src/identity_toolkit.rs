@@ -79,8 +79,10 @@ pub use project_config::{exportable_config_members, restored_config_members};
 pub mod project_mfa;
 pub use project_mfa::{mfa_config_from_json, MfaConfigRefusal};
 mod tenant_document;
+mod tenant_seed;
 pub use password_hash::restorable_spec as restorable_imported_hash_spec;
 pub use tenant_document::{exportable_tenant_members, restore_tenant_members};
+pub use tenant_seed::{prepare_tenant_seeds, seed_multi_tenancy, TenantSeed, TenantSeeding};
 mod routes;
 pub mod widget;
 mod widget_templates;
@@ -8342,6 +8344,73 @@ fn tenant_answer(
     }
 }
 
+/// A tenant document read for a create, ready to publish: what the Admin create route and a
+/// seeded tenant of the configuration file share, so both validate and default one way.
+#[derive(Clone)]
+pub(crate) struct PreparedTenantCreate {
+    metadata: fireemu_core_auth::store::TenantMetadata,
+    patch: fireemu_core_auth::store::TenantMetadataPatch,
+    password_policy: Option<PasswordPolicy>,
+    written: tenant_document::WrittenMembers,
+}
+
+/// Reads a tenant document as the create route reads it (`emulator`: as the emulator profile
+/// does, which ignores the members a `Tenant` does not have). `written_at` stamps a written
+/// password policy.
+pub(crate) fn prepare_tenant_create(
+    body: &Value,
+    emulator: bool,
+    written_at: Option<String>,
+) -> Result<PreparedTenantCreate, JsonResponse> {
+    let strict = !emulator;
+    let parsed = tenant_body(body, strict)?;
+    if strict {
+        if let Some(response) = tenant_document::display_name_refusal(parsed.get("displayName")) {
+            return Err(response);
+        }
+    }
+    let metadata = tenant_metadata(&tenant_metadata_members(&parsed))?;
+    let password_policy = match parsed.get("passwordPolicyConfig") {
+        None => None,
+        Some(value) => Some(password_policy_from_config_json(value, false)?),
+    };
+    let mut written = tenant_document::WrittenMembers::from_body(&parsed, |member| {
+        parsed.get(member).is_some_and(|value| !value.is_null())
+    })?;
+    if password_policy.is_some() {
+        written = written.with_policy_write(
+            &parsed,
+            vec!["passwordPolicyConfig".to_owned()],
+            password_policy
+                .as_ref()
+                .is_some_and(|policy| policy.configured),
+            written_at,
+        );
+    }
+    // A tenant's clients obey the tenant's own permissions, which start off. The strict
+    // profile's tenant takes none of the project's settings, at creation or later
+    // (AUTH-TENANT-BLOCKING recording 2026-09-27, inheritance program): every setting a
+    // tenant could inherit is written, as sent or off. The emulator profile's tenant
+    // reads the project's duplicate-email and email privacy settings, as the official
+    // emulator's does.
+    let mut patch = tenant_client_config_patch(&parsed);
+    patch.disabled_user_signup = Some(patch.disabled_user_signup.unwrap_or(false));
+    patch.disabled_user_deletion = Some(patch.disabled_user_deletion.unwrap_or(false));
+    if emulator {
+        follow_the_project_settings_the_official_emulator_shares(&mut patch);
+    } else {
+        patch.enable_improved_email_privacy =
+            Some(patch.enable_improved_email_privacy.unwrap_or(false));
+        patch.allow_duplicate_emails = Some(false);
+    }
+    Ok(PreparedTenantCreate {
+        metadata,
+        patch,
+        password_policy,
+        written,
+    })
+}
+
 fn tenant_management_disabled(state: &AuthState, registry: &AuthRegistry, project: &str) -> bool {
     !state.stateless_refresh_tokens
         && registry
@@ -8379,61 +8448,20 @@ fn tenant_management(
     }
     match handler {
         Handler::TenantCreate => {
-            let strict = !state.stateless_refresh_tokens;
-            let parsed = match tenant_body(body, strict) {
-                Ok(parsed) => parsed,
+            let prepared = match prepare_tenant_create(
+                body,
+                state.stateless_refresh_tokens,
+                now(state).to_rfc3339().ok(),
+            ) {
+                Ok(prepared) => prepared,
                 Err(response) => return response,
             };
-            if strict {
-                if let Some(response) =
-                    tenant_document::display_name_refusal(parsed.get("displayName"))
-                {
-                    return response;
-                }
-            }
-            let metadata = match tenant_metadata(&tenant_metadata_members(&parsed)) {
-                Ok(metadata) => metadata,
-                Err(response) => return response,
-            };
-            let password_policy = match parsed.get("passwordPolicyConfig") {
-                None => None,
-                Some(value) => match password_policy_from_config_json(value, false) {
-                    Ok(policy) => Some(policy),
-                    Err(response) => return response,
-                },
-            };
-            let mut written = match tenant_document::WrittenMembers::from_body(&parsed, |member| {
-                parsed.get(member).is_some_and(|value| !value.is_null())
-            }) {
-                Ok(written) => written,
-                Err(response) => return response,
-            };
-            if password_policy.is_some() {
-                written = written.with_policy_write(
-                    &parsed,
-                    vec!["passwordPolicyConfig".to_owned()],
-                    password_policy
-                        .as_ref()
-                        .is_some_and(|policy| policy.configured),
-                    now(state).to_rfc3339().ok(),
-                );
-            }
-            // A tenant's clients obey the tenant's own permissions, which start off. The strict
-            // profile's tenant takes none of the project's settings, at creation or later
-            // (AUTH-TENANT-BLOCKING recording 2026-09-27, inheritance program): every setting a
-            // tenant could inherit is written, as sent or off. The emulator profile's tenant
-            // reads the project's duplicate-email and email privacy settings, as the official
-            // emulator's does.
-            let mut patch = tenant_client_config_patch(&parsed);
-            patch.disabled_user_signup = Some(patch.disabled_user_signup.unwrap_or(false));
-            patch.disabled_user_deletion = Some(patch.disabled_user_deletion.unwrap_or(false));
-            if state.stateless_refresh_tokens {
-                follow_the_project_settings_the_official_emulator_shares(&mut patch);
-            } else {
-                patch.enable_improved_email_privacy =
-                    Some(patch.enable_improved_email_privacy.unwrap_or(false));
-                patch.allow_duplicate_emails = Some(false);
-            }
+            let PreparedTenantCreate {
+                metadata,
+                patch,
+                password_policy,
+                written,
+            } = prepared;
             let created = if state.stateless_refresh_tokens {
                 registry.create_tenant_with_password_policy(
                     project,

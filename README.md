@@ -215,6 +215,7 @@ The `auth` section of `fireemu.json` lets you configure sign-in methods, passwor
 | Password length and character requirements, and policy enforcement at sign-in | `auth.passwordPolicy` |
 | TOTP-based multi-factor authentication | `auth.totp` |
 | Initial multi-factor authentication (MFA) configuration of a project, such as enabling TOTP under the `strict` profile | `auth.mfa` |
+| Tenants that exist when the daemon starts, and the multi-tenancy switch | `auth.tenants`, `auth.multiTenant` |
 | Restrictions on end-user account creation and deletion | `auth.client.permissions` |
 | Email enumeration protection | `auth.improvedEmailPrivacy` |
 | Project- and tenant-specific password policies and account permissions | `auth.passwordPolicyOverrides`, `auth.configOverrides` |
@@ -285,7 +286,7 @@ For an existing `fireemu.json`, add the settings you need to its `auth` section.
 
 Use `auth.passwordPolicyOverrides` to specify different password policies for individual projects or tenants. Use `auth.configOverrides` to customize account creation and deletion permissions and email enumeration protection.
 
-These settings are separate from creating the project or tenant. Naming a tenant in the configuration does not create it.  
+These settings are separate from creating the project or tenant. Naming a tenant in `auth.configOverrides` or `auth.passwordPolicyOverrides` does not create it (declare it in `auth.tenants` to have it created).  
 
 #### Enable multi-factor authentication at start
 
@@ -314,7 +315,35 @@ Under the `strict` profile, TOTP is enabled only through the project's MFA confi
 
 #### Enable multi-tenancy
 
-Under the `strict` profile, enable `multiTenant.allowTenants` through the Admin API before using multi-tenancy. See the [compatibility documentation](docs/compatibility-contract.md) for the supported Admin API scope. 
+Under the `strict` profile, enable `multiTenant.allowTenants` before using multi-tenancy: through the Admin API, or with `auth.multiTenant` in the file (see "Start with tenants" below). See the [compatibility documentation](docs/compatibility-contract.md) for the supported Admin API scope. 
+
+#### Start with tenants
+
+Instead of creating tenants through the Admin API in every session, declare the default project's tenants and the multi-tenancy switch in the file. Each entry of `auth.tenants` is an Admin v2 `Tenant` document plus its `tenantId`, which has the form production generates, the display name, a hyphen, and five characters of `a-z0-9`:
+
+```json
+{
+  "schemaVersion": 1,
+  "profile": "strict",
+  "auth": {
+    "multiTenant": { "allowTenants": true },
+    "tenants": [
+      {
+        "tenantId": "acme-x7k2q",
+        "displayName": "acme",
+        "allowPasswordSignup": true,
+        "mfaConfig": { "state": "ENABLED", "enabledProviders": ["PHONE_SMS"] }
+      }
+    ]
+  }
+}
+```
+
+- A document is read by the code the Admin tenant create route reads one with, so a value production refuses stops the daemon at startup. The tenants are created empty, in file order, and settings such as `mfaConfig` and `passwordPolicyConfig` come from the document. The file is stricter than the route in the `emulator` profile: it also refuses an unknown member and a missing or invalid `displayName`, as production does.
+- A declared tenant has what an Admin create with that document gives: an omitted `allowPasswordSignup`, `enableEmailLinkSignin` or `enableAnonymousUser` is off and multi-factor is off. A tenant the `emulator` profile creates on the way for a request that names an unknown id gets the official emulator's defaults instead (all three on, `PHONE_SMS` multi-factor), so declare what your test needs.
+- Under the `strict` profile tenants are created only in a project that allows them, as in production, so `auth.tenants` needs `auth.multiTenant.allowTenants: true` (the daemon refuses to start otherwise). The `emulator` profile takes tenants without the switch.
+- The default project and every session project (`POST /v1/sessions`) start with the declared switch and tenants. `POST /v1/sessions/{session}/reset` (the default session's included) creates them again, empty, and returns the switch to the declared value; without these keys a reset leaves an Admin-set switch alone. A namespace the `emulator` profile routes by the first Admin request for an unknown project id cannot hold tenants yet (a current limit: the official emulator creates them there), so nothing is seeded there until that is fixed.
+- With `--import`, an imported tenant is authoritative for its id, and a declared tenant the import did not carry is still created. If you keep re-importing your own export (`--import dir --export-on-exit dir`), an edit to a declared tenant is therefore ignored once its exported copy exists: the daemon prints a warning naming the tenant when the imported tenant's document differs from the declared one (every setting the file can declare is compared). The switch is the other way round: a declared `allowTenants` wins over the import. After a reset the declared version of a tenant comes back, not the imported one.
 
 #### Test quota-exceeded behavior
 

@@ -27,6 +27,9 @@ pub struct Projects {
     pub registry: Arc<AuthRegistry>,
     /// Session seed (each project's generator derives from it and the project name).
     pub seed: u64,
+    /// The default project's declared multi-tenancy switch and tenants (`auth.multiTenant`,
+    /// `auth.tenants[]`), which a default-scope reset applies again to the wiped project.
+    pub tenant_seeding: fireemu_adapter_http::identity_toolkit::TenantSeeding,
     /// The App Check registry, when App Check is enabled. Creating, resetting and deleting a
     /// project replaces its session epoch, so every token issued before the transition fails
     /// with `WrongEpoch` at its next verification (`AC-LIFE-001`, specification section 14).
@@ -139,6 +142,9 @@ impl ProjectHooks for Projects {
         if !self.registry.register_session(project, store) {
             return Err(format!("project {project:?} already has an Auth store"));
         }
+        // The declared switch and tenants are not seeded here: the control plane resets the new
+        // session straight after creating it, which seeds them once the session is committed (a
+        // seed made here would be wiped and redone, and would outlive a failed creation).
         Ok(())
     }
 
@@ -209,6 +215,21 @@ impl ProjectHooks for Projects {
                     "the provisional Auth store changed during session creation",
                 ));
             }
+        }
+        // The declared tenants and switch return to the wiped project. This is the last step, so
+        // a failure to seed leaves a session whose epochs and stores are consistent.
+        let seeded = match scope {
+            Scope::AllExcept(_) => Some(self.registry.default_project().to_owned()),
+            Scope::Project(project) => self
+                .registry
+                .store_for(project)
+                .is_some()
+                .then(|| project.clone()),
+        };
+        if let Some(project) = seeded {
+            self.tenant_seeding
+                .apply(&self.registry, &project)
+                .map_err(|reason| TransitionFailure::new("auth", reason))?;
         }
         Ok(())
     }
@@ -409,6 +430,7 @@ pub(crate) mod tests {
                 ),
             ),
             seed: 1,
+            tenant_seeding: fireemu_adapter_http::identity_toolkit::TenantSeeding::default(),
             app_check: Some(gate.clone()),
             pubsub,
             pubsub_handle,
@@ -862,6 +884,120 @@ pub(crate) mod tests {
             fireemu_core_auth::mfa_config::MfaProjectConfig::default()
         );
         assert_eq!(store.lock().unwrap().mfa_seed(), None);
+    }
+
+    fn acme_seed() -> fireemu_adapter_http::identity_toolkit::TenantSeeding {
+        let documents = [serde_json::json!({
+            "tenantId": "acme-x7k2q",
+            "displayName": "acme",
+            "mfaConfig": {"state": "ENABLED", "enabledProviders": ["PHONE_SMS"]}
+        })];
+        fireemu_adapter_http::identity_toolkit::TenantSeeding::new(
+            Some(true),
+            fireemu_adapter_http::identity_toolkit::prepare_tenant_seeds(&documents, true, None)
+                .expect("the document is valid"),
+        )
+    }
+
+    #[test]
+    fn a_default_scope_reset_creates_the_seeded_tenants_again_empty_and_restores_the_switch() {
+        let gate = gate();
+        let mut hooks = projects(&gate);
+        hooks.tenant_seeding = acme_seed();
+        let registry = hooks.registry.clone();
+        hooks.tenant_seeding.apply(&registry, "demo-app").unwrap();
+        let store = registry.default_store();
+        // An Admin write turns the switch off; a tenant the run created is not in the seed.
+        assert!(store.lock().unwrap().allows_tenants());
+        fireemu_adapter_http::identity_toolkit::seed_multi_tenancy(&registry, "demo-app", false)
+            .unwrap();
+        assert_eq!(registry.tenants("demo-app"), ["acme-x7k2q"]);
+        hooks
+            .reset_scope(&Scope::AllExcept(BTreeSet::new()))
+            .expect("the reset succeeds");
+        assert_eq!(registry.tenants("demo-app"), ["acme-x7k2q"]);
+        assert!(
+            store.lock().unwrap().allows_tenants(),
+            "the declared switch returns"
+        );
+        let tenant = registry.tenant_store("demo-app", "acme-x7k2q").unwrap();
+        assert!(tenant.lock().unwrap().mfa_config().sms_enabled());
+    }
+
+    #[test]
+    fn a_default_scope_reset_without_a_declared_seed_leaves_the_switch_and_drops_the_tenants() {
+        let gate = gate();
+        let hooks = projects(&gate);
+        let registry = hooks.registry.clone();
+        fireemu_adapter_http::identity_toolkit::seed_multi_tenancy(&registry, "demo-app", true)
+            .unwrap();
+        fireemu_adapter_http::identity_toolkit::prepare_tenant_seeds(
+            &[serde_json::json!({"tenantId": "acme-x7k2q", "displayName": "acme"})],
+            true,
+            None,
+        )
+        .unwrap()[0]
+            .apply(&registry, "demo-app")
+            .unwrap();
+        assert_eq!(registry.tenants("demo-app"), ["acme-x7k2q"]);
+        hooks
+            .reset_scope(&Scope::AllExcept(BTreeSet::new()))
+            .expect("the reset succeeds");
+        assert!(registry.tenants("demo-app").is_empty());
+        assert!(registry.default_store().lock().unwrap().allows_tenants());
+    }
+
+    #[test]
+    fn a_created_session_project_starts_with_the_declared_tenants_and_a_session_reset_returns_to_them(
+    ) {
+        let gate = gate();
+        let mut hooks = projects(&gate);
+        hooks.tenant_seeding = acme_seed();
+        let registry = hooks.registry.clone();
+        // The control plane creates a session and resets it straight away (control.rs), which
+        // is what seeds it once the session is committed.
+        hooks
+            .create(SECOND_PROJECT)
+            .expect("the project is created");
+        assert!(registry.tenants(SECOND_PROJECT).is_empty());
+        hooks
+            .reset_scope(&Scope::Project(SECOND_PROJECT.to_owned()))
+            .expect("the reset succeeds");
+        assert_eq!(registry.tenants(SECOND_PROJECT), ["acme-x7k2q"]);
+        assert!(registry
+            .store_for(SECOND_PROJECT)
+            .unwrap()
+            .lock()
+            .unwrap()
+            .allows_tenants());
+        // The default project is not touched by creating another.
+        assert!(registry.tenants("demo-app").is_empty());
+        // The session's reset wipes what the run made and returns to the declaration.
+        assert!(registry
+            .create_tenant(
+                SECOND_PROJECT,
+                fireemu_core_auth::store::TenantMetadata::default(),
+            )
+            .is_some());
+        assert_eq!(registry.tenants(SECOND_PROJECT).len(), 2);
+        fireemu_adapter_http::identity_toolkit::seed_multi_tenancy(
+            &registry,
+            SECOND_PROJECT,
+            false,
+        )
+        .unwrap();
+        hooks
+            .reset_scope(&Scope::Project(SECOND_PROJECT.to_owned()))
+            .expect("the reset succeeds");
+        assert_eq!(registry.tenants(SECOND_PROJECT), ["acme-x7k2q"]);
+        assert!(registry
+            .store_for(SECOND_PROJECT)
+            .unwrap()
+            .lock()
+            .unwrap()
+            .allows_tenants());
+        // A session project that does not exist seeds nothing and is not an error of the reset.
+        assert!(registry.tenants("demo-app").is_empty());
     }
 
     #[test]

@@ -109,7 +109,7 @@ pub(super) fn install_default_mfa(store: &mut AuthStore) {
 }
 
 /// The written members an update sets or clears, parsed and checked before anything changes.
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 pub(super) struct WrittenMembers {
     /// `(member, Some(value))` writes, `(member, None)` clears.
     members: Vec<(&'static str, Option<Value>)>,
@@ -128,7 +128,7 @@ pub(super) struct WrittenMembers {
 
 /// A change to the `emailPrivacyConfig` the emulator profile answers: the update's paths,
 /// applied to its body as the official emulator's `updateTenant` applies a mask (`applyMask`).
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(super) struct EmulatorPrivacyWrite {
     pub(super) paths: Vec<String>,
     pub(super) body: Value,

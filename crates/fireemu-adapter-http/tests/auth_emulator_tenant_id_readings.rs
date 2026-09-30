@@ -406,3 +406,276 @@ fn the_action_link_reads_its_query_tenant_to_find_the_tenants_code() {
     assert_eq!(status, 200, "{done}");
     assert!(registry.tenant_store("demo-app", "pt").is_some());
 }
+
+/// The two GET routes that read a tenant from the query read no body in the official emulator, so
+/// a body tenant beside them selects nothing and makes nothing (official column probed: the action
+/// link with `?tenantId=pt` and a body tenant answers in `pt`; batchGet with a query tenant and a
+/// body tenant answers with the query tenant's users).
+#[test]
+fn the_get_routes_that_read_the_query_tenant_read_no_body() {
+    let (state, registry) = emulator();
+    let (status, up) = client(
+        &state,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"email": "t@example.com", "password": "hunter22", "tenantId": "pt"}),
+    );
+    assert_eq!(status, 200, "{up}");
+    let (status, sent) = client(
+        &state,
+        &format!("{V1}/accounts:sendOobCode"),
+        &json!({"requestType": "VERIFY_EMAIL", "idToken": up["idToken"], "tenantId": "pt"}),
+    );
+    assert_eq!(status, 200, "{sent}");
+    let (_, codes) = admin(
+        &state,
+        "GET",
+        "/emulator/v1/projects/demo-app/tenants/pt/oobCodes",
+        &json!({}),
+    );
+    let code = codes["oobCodes"][0]["oobCode"].as_str().unwrap().to_owned();
+    let follow = |query: &str, body: &Value| {
+        let r = handle_with(
+            &state,
+            "GET",
+            &format!("/emulator/action?mode=verifyEmail&oobCode={code}&apiKey={KEY}{query}"),
+            &RequestHeaders {
+                authorization: None,
+                ..owner()
+            },
+            body,
+        );
+        (r.status, r.body)
+    };
+    // Action link: the query's tenant, whatever the body says, and no tenant is made for the body.
+    let (status, done) = follow("&tenantId=pt", &json!({"tenantId": "other"}));
+    assert_eq!(status, 200, "{done}");
+    assert!(registry.tenant_store("demo-app", "other").is_none());
+    // No query tenant: the project, where the code is not (a body tenant selects nothing).
+    let (status, refused) = follow("", &json!({"tenantId": "pt"}));
+    assert_eq!(status, 400, "{refused}");
+    // batchGet: the query's tenant's users; a body tenant is not read and makes nothing.
+    let batch = |query: &str, body: &Value| {
+        let r = handle_with(
+            &state,
+            "GET",
+            &format!("{V1}/projects/demo-app/accounts:batchGet{query}"),
+            &owner(),
+            body,
+        );
+        (r.status, r.body)
+    };
+    let (status, listed) = batch("?tenantId=pt", &json!({"tenantId": "bt"}));
+    assert_eq!(status, 200, "{listed}");
+    assert_eq!(
+        listed["users"].as_array().map(Vec::len),
+        Some(1),
+        "{listed}"
+    );
+    assert!(registry.tenant_store("demo-app", "bt").is_none());
+    let (status, listed) = batch("", &json!({"tenantId": "pt"}));
+    assert_eq!(status, 200, "{listed}");
+    assert!(
+        listed
+            .get("users")
+            .is_none_or(|u| u.as_array().is_some_and(Vec::is_empty)),
+        "{listed}"
+    );
+}
+
+/// Routes the official emulator serves ignore the query's tenant (`operations.js:15-86`), so they
+/// answer with it as they do without it; the routes it does not serve keep fireemu's reading.
+#[test]
+fn the_official_routes_ignore_the_query_tenant_and_the_others_keep_it() {
+    let (state, registry) = emulator();
+    let tenants = format!("{V2}/projects/demo-app/tenants");
+    let (status, made) = admin(
+        &state,
+        "POST",
+        &format!("{tenants}?tenantId=unk"),
+        &json!({"displayName": "held"}),
+    );
+    assert_eq!(status, 200, "{made}");
+    let held = made["name"]
+        .as_str()
+        .unwrap()
+        .rsplit('/')
+        .next()
+        .unwrap()
+        .to_owned();
+    // (case, method, path with a query tenant naming a tenant that does not exist or another one,
+    // body): the official emulator answers 200 for each.
+    let official: Vec<(&str, &str, String, Value)> = vec![
+        (
+            "getProjects",
+            "GET",
+            format!("{V1}/projects?key={KEY}&tenantId=unk"),
+            json!({}),
+        ),
+        (
+            "recaptchaParams",
+            "GET",
+            format!("{V1}/recaptchaParams?key={KEY}&tenantId=unk"),
+            json!({}),
+        ),
+        (
+            "v2 config get",
+            "GET",
+            "/identitytoolkit.googleapis.com/admin/v2/projects/demo-app/config?tenantId=unk"
+                .to_owned(),
+            json!({}),
+        ),
+        (
+            "tenants list",
+            "GET",
+            format!("{tenants}?tenantId=unk"),
+            json!({}),
+        ),
+        (
+            "tenants create",
+            "POST",
+            format!("{tenants}?tenantId=unk"),
+            json!({"displayName": "second"}),
+        ),
+        (
+            "tenants get",
+            "GET",
+            format!("{tenants}/{held}?tenantId=other"),
+            json!({}),
+        ),
+        (
+            "tenants patch",
+            "PATCH",
+            format!("{tenants}/{held}?tenantId=other&updateMask=displayName"),
+            json!({"displayName": "renamed"}),
+        ),
+    ];
+    for (case, method, path, body) in official {
+        let (status, answered) = admin(&state, method, &path, &body);
+        assert_eq!(status, 200, "{case}: {answered}");
+    }
+    // Delete last: it removes the tenant the rows above used.
+    let (status, deleted) = admin(
+        &state,
+        "DELETE",
+        &format!("{tenants}/{held}?tenantId=other"),
+        &json!({}),
+    );
+    assert_eq!(status, 200, "{deleted}");
+    assert!(registry.tenant_store("demo-app", &held).is_none());
+    // Routes the official emulator does not serve (501 there) keep fireemu's reading of the query.
+    for (case, path) in [
+        (
+            "passwordPolicy",
+            format!("{V2}/passwordPolicy?key={KEY}&tenantId=unk"),
+        ),
+        (
+            "recaptchaConfig",
+            format!("{V2}/recaptchaConfig?key={KEY}&tenantId=unk"),
+        ),
+    ] {
+        let (status, refused) = admin(&state, "GET", &path, &json!({}));
+        assert!(status >= 400, "{case}: {status} {refused}");
+    }
+}
+
+/// A deleted tenant's ID token, with an API key and no body tenant, is made the target by the
+/// token's tenant and finds no user there: `USER_NOT_FOUND`, as the official emulator answers for
+/// every route that reads the token.
+#[test]
+fn a_deleted_tenants_token_without_a_body_tenant_finds_no_user() {
+    let (state, registry) = emulator();
+    let (status, up) = client(
+        &state,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"email": "g@example.com", "password": "hunter22", "tenantId": "gone"}),
+    );
+    assert_eq!(status, 200, "{up}");
+    for (route, body) in [
+        (
+            "accounts:sendOobCode",
+            json!({"requestType": "VERIFY_EMAIL"}),
+        ),
+        ("accounts:update", json!({"displayName": "x"})),
+        ("accounts:lookup", json!({})),
+        ("accounts:delete", json!({})),
+    ] {
+        assert!(registry.delete_tenant("demo-app", "gone"));
+        let mut body = body;
+        body["idToken"] = up["idToken"].clone();
+        let (status, refused) = client(&state, &format!("{V1}/{route}"), &body);
+        assert_eq!(status, 400, "{route}: {refused}");
+        assert_eq!(refused["error"]["message"], "USER_NOT_FOUND", "{route}");
+    }
+}
+
+/// A `tenantId` the official schema refuses (`/tenantId must be string`) is read as no tenant here:
+/// a recorded divergence that accepts more and makes nothing. Strict is unchanged.
+#[test]
+fn a_tenant_id_of_another_type_is_no_tenant_in_the_emulator_profile() {
+    let (state, registry) = emulator();
+    for (n, value) in [json!(null), json!(true), json!({}), json!(["one"])]
+        .into_iter()
+        .enumerate()
+    {
+        let (status, created) = sign_up(
+            &state,
+            "",
+            &with(account(&format!("types{n}@example.com")), "tenantId", value),
+        );
+        assert_eq!(status, 200, "{n}: {created}");
+    }
+    assert!(registry.tenants("demo-app").is_empty());
+    assert_eq!(project_users(&state), 4);
+}
+
+/// A refresh with a query tenant renews the session in the token's own namespace, whatever tenant
+/// the query names (the official emulator ignores it), and rotates nothing in the other tenant.
+#[test]
+fn a_refresh_ignores_the_query_tenant_and_renews_in_the_tokens_own_namespace() {
+    let (state, registry) = emulator();
+    let (status, up) = client(
+        &state,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"email": "r@example.com", "password": "hunter22", "tenantId": "tenant-a"}),
+    );
+    assert_eq!(status, 200, "{up}");
+    let (status, other) = client(
+        &state,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"email": "o@example.com", "password": "hunter22", "tenantId": "tenant-b"}),
+    );
+    assert_eq!(status, 200, "{other}");
+    let before_b = registry
+        .tenant_store("demo-app", "tenant-b")
+        .unwrap()
+        .lock()
+        .unwrap()
+        .user_count();
+    for query in ["&tenantId=tenant-b", "&tenantId=unknown", "&tenantId="] {
+        let r = handle(
+            &state,
+            "POST",
+            &format!("{SECURE_TOKEN}?key={KEY}{query}"),
+            &json!({"grant_type": "refresh_token", "refresh_token": up["refreshToken"]}),
+        );
+        assert_eq!(r.status, 200, "{query}: {}", r.body);
+        assert_eq!(r.body["user_id"], up["localId"], "{query}");
+        assert!(
+            r.body["refresh_token"]
+                .as_str()
+                .unwrap()
+                .contains("tenant-a"),
+            "{query}: the renewed session is tenant-a's"
+        );
+    }
+    assert_eq!(
+        registry
+            .tenant_store("demo-app", "tenant-b")
+            .unwrap()
+            .lock()
+            .unwrap()
+            .user_count(),
+        before_b
+    );
+    assert!(registry.tenant_store("demo-app", "unknown").is_none());
+}

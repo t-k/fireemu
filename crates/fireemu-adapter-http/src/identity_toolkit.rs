@@ -3331,16 +3331,42 @@ fn handler_makes_named_tenant(handler: routes::Handler) -> bool {
 /// a number stands in the string the API declares and is read as that string, as its body
 /// validation converts it (`validateAndFixRestMappingRequestBody`), and an empty string is no
 /// tenant (`server.js:395-398`: JavaScript falsiness), so the key is dropped and the request goes
-/// on as if it named none. `None` when the body needs no rewriting. (`null` and a boolean are
-/// refused by the official schema and read as no tenant here: a recorded divergence.)
-fn emulator_tenant_id_reading(state: &AuthState, body: &Value) -> Option<Value> {
+/// on as if it named none. `None` when the body needs no rewriting. `null`, a boolean, an object
+/// and an array, which the official schema refuses (`/tenantId must be string`), are read as no
+/// tenant here (`null` is dropped, the others left for every reader to ignore): a recorded
+/// divergence that accepts more and makes nothing. The two GET routes that read a tenant from the
+/// query, `accounts:batchGet` and the action link, read no body in the official emulator, so
+/// their body is ignored.
+fn emulator_tenant_id_reading(
+    state: &AuthState,
+    body: &Value,
+    resolution: routes::Resolution<'_>,
+) -> Option<Value> {
     if !state.stateless_refresh_tokens {
         return None;
+    }
+    if matches!(
+        resolution,
+        routes::Resolution::Matched { route, .. }
+            if matches!(
+                route.handler,
+                routes::Handler::AdminBatchGet | routes::Handler::EmulatorAction
+            )
+    ) {
+        return body
+            .as_object()
+            .is_some_and(|members| !members.is_empty())
+            .then(|| json!({}));
     }
     match body.get("tenantId")? {
         Value::Number(number) => {
             let mut rewritten = body.clone();
             rewritten["tenantId"] = Value::String(number.to_string());
+            Some(rewritten)
+        }
+        Value::Null => {
+            let mut rewritten = body.clone();
+            rewritten.as_object_mut()?.remove("tenantId");
             Some(rewritten)
         }
         Value::String(named) if named.is_empty() => {
@@ -3440,11 +3466,14 @@ fn id_token_tenant(state: &AuthState, project: &str, body: &Value) -> Option<(St
 }
 
 /// The query's `tenantId` as the official emulator reads it (emulator profile only): only
-/// `accounts:batchGet` (`operations.js:438`, and only when the request names no tenant elsewhere:
-/// a tenant project reads its own accounts, so the query is neither a mismatch nor a selector then)
-/// and the action link (`handlers.js`) read it, and every other route ignores it, so a request that
-/// names no other tenant is a project request. The query never overrides or fills in for a tenant
-/// the path or the body names.
+/// `accounts:batchGet` (`operations.js:435-437`, and only when the request names no tenant
+/// elsewhere: a tenant project reads its own accounts, so the query is neither a mismatch nor a
+/// selector then) and the action link (`handlers.js:10,27`) read it; every other route of the
+/// official emulator ignores it (`getProjects`, `recaptchaParams`, the v2 config and tenant
+/// management routes included), so a request that names no other tenant is a project request. The
+/// query never overrides or fills in for a tenant the path names. Only the routes the official
+/// emulator does not serve (`passwordPolicy` and `recaptchaConfig` answer 501 there, the provider
+/// routes 501, `Jwks` 403 without a key) keep fireemu's reading of it.
 fn emulator_query_tenant(
     resolution: routes::Resolution<'_>,
     path: &str,
@@ -3461,27 +3490,17 @@ fn emulator_query_tenant(
                 routes::scoped_target(path).is_some_and(|(_, tenant)| tenant.is_some());
             query_tenant.filter(|_| !names_a_tenant)
         }
-        // The action link is the query's tenant's own route (the official handler reads it), and
-        // routes the official emulator does not serve (the client policy reads and the like) have
-        // no official reading of the query to follow, and keep theirs.
+        // The action link is the query tenant's own route (the official handler reads it).
         routes::Handler::EmulatorAction
+        // Routes the official emulator does not serve have no official reading to follow.
         | routes::Handler::PasswordPolicy
-        | routes::Handler::RecaptchaParams
         | routes::Handler::RecaptchaConfig
-        | routes::Handler::Projects
         | routes::Handler::Jwks
-        | routes::Handler::TenantCreate
-        | routes::Handler::TenantList
-        | routes::Handler::TenantGet
-        | routes::Handler::TenantUpdate
-        | routes::Handler::TenantDelete
         | routes::Handler::ProviderCreate
         | routes::Handler::ProviderList
         | routes::Handler::ProviderGet
         | routes::Handler::ProviderUpdate
-        | routes::Handler::ProviderDelete
-        | routes::Handler::AdminGetProjectConfig
-        | routes::Handler::AdminUpdateProjectConfig => query_tenant,
+        | routes::Handler::ProviderDelete => query_tenant,
         // Every other route is one of the official emulator's operations, which ignore it.
         _ => None,
     }
@@ -4004,7 +4023,7 @@ fn handle_with_policy_inner(
     };
     // The official emulator makes a tenant it has not seen when a request names one.
     let read_tenant_body;
-    let body = match emulator_tenant_id_reading(state, body) {
+    let body = match emulator_tenant_id_reading(state, body, resolution) {
         Some(rewritten) => {
             read_tenant_body = rewritten;
             &read_tenant_body
@@ -8975,7 +8994,13 @@ fn select_store(
     body: &Value,
     resolution: routes::Resolution<'_>,
 ) -> Result<Arc<Mutex<AuthStore>>, JsonResponse> {
-    let (api_key, query_tenant) = query_selectors(query)?;
+    // The emulator profile reads (and refuses a malformed) query tenant only where the official
+    // emulator reads it.
+    let (api_key, query_tenant) = query_selectors_reading(
+        query,
+        !state.stateless_refresh_tokens
+            || emulator_query_tenant(resolution, path, Some(String::new())).is_some(),
+    )?;
     let query_tenant = if state.stateless_refresh_tokens {
         emulator_query_tenant(resolution, path, query_tenant)
     } else {
@@ -9313,6 +9338,16 @@ fn tenant_store_issuing_refresh_token(
 /// query carries, decoded. Keys are declared from [A-Za-z0-9._-], but a client may still
 /// percent-encode them.
 fn query_selectors(query: Option<&str>) -> Result<(Option<String>, Option<String>), JsonResponse> {
+    query_selectors_reading(query, true)
+}
+
+/// [`query_selectors`], reading the `tenantId` parameter only when `read_tenant` (a route whose
+/// query tenant is ignored has no reason to refuse a malformed one: the official emulator does not
+/// look at it).
+fn query_selectors_reading(
+    query: Option<&str>,
+    read_tenant: bool,
+) -> Result<(Option<String>, Option<String>), JsonResponse> {
     let decode = |value: &str| {
         fireemu_core_types::codec::percent_decode(value, fireemu_core_types::codec::PlusMode::Space)
     };
@@ -9320,7 +9355,8 @@ fn query_selectors(query: Option<&str>) -> Result<(Option<String>, Option<String
     let mut tenant = None;
     for kv in query.unwrap_or("").split('&').filter(|kv| !kv.is_empty()) {
         let Some((name, value)) = kv.split_once('=') else {
-            if matches!(decode(kv).as_str(), "key" | "apiKey" | "tenantId") {
+            let bare = decode(kv);
+            if matches!(bare.as_str(), "key" | "apiKey") || (read_tenant && bare == "tenantId") {
                 return Err(error(400, "INVALID_ARGUMENT"));
             }
             continue;
@@ -9328,7 +9364,7 @@ fn query_selectors(query: Option<&str>) -> Result<(Option<String>, Option<String
         let decoded_name = decode(name);
         let slot = match decoded_name.as_str() {
             "key" | "apiKey" => &mut api_key,
-            "tenantId" => &mut tenant,
+            "tenantId" if read_tenant => &mut tenant,
             _ => continue,
         };
         if value.is_empty() || malformed_query_component(name) || malformed_query_component(value) {

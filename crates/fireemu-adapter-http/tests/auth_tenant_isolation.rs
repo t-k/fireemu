@@ -625,7 +625,9 @@ fn sdk_shaped_refresh_keeps_project_refresh_and_contradicting_selectors_unchange
                 (String::new(), Some(TENANT_B), "TENANT_ID_MISMATCH"),
             ] {
                 // The emulator profile ignores the query's tenant on a refresh, as the official
-                // emulator does: such a request is a plain renewal, not a refusal.
+                // emulator does: such a request is a plain renewal, not a refusal, and it is
+                // asserted in auth_emulator_tenant_id_readings.rs
+                // (`a_refresh_ignores_the_query_tenant_and_renews_in_the_tokens_own_namespace`).
                 if profile != "strict" && query.contains("tenantId=") {
                     continue;
                 }

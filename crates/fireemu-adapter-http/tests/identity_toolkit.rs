@@ -14708,6 +14708,16 @@ fn explicit_tenant_never_falls_back_when_tenancy_selector_is_unavailable() {
         // The query is ignored and the body's tenant is the target: no mismatch, and nothing is
         // written to tenant-a.
         assert_eq!(status, 200, "{label}: {refused}");
+        assert!(
+            registry
+                .tenant_store("demo-app", "tenant-b")
+                .unwrap()
+                .lock()
+                .unwrap()
+                .user_by_email(format!("mismatch-{label}@example.com").as_str())
+                .is_some(),
+            "{label}: the account landed in the body's tenant"
+        );
         assert!(registry
             .tenant_store("demo-app", "tenant-a")
             .unwrap()
@@ -14810,20 +14820,25 @@ fn scoped_tenant_selectors_must_match_body_and_query_before_auth_work() {
         &format!("{path}?tenantId=tenant-b"),
         &Value::Null,
     );
-    assert_eq!(query_mismatch.0, 400, "{}", query_mismatch.1);
-    assert_eq!(query_mismatch.1["error"]["message"], "TENANT_ID_MISMATCH");
+    // Tenant management ignores the query's tenant, as the official emulator does
+    // (`operations.js:15-86`): the path's tenant is read.
+    assert_eq!(query_mismatch.0, 200, "{}", query_mismatch.1);
+    assert_eq!(
+        query_mismatch.1["name"],
+        "projects/demo-app/tenants/tenant-a"
+    );
 
-    let patch_query_mismatch = admin(
+    let patch_query_ignored = admin(
         &s,
         "PATCH",
         &format!("{path}?tenantId=tenant-b&updateMask=displayName"),
-        &json!({"displayName": "must-not-commit"}),
+        &json!({"displayName": "via-query"}),
     );
-    assert_eq!(patch_query_mismatch.0, 400, "{}", patch_query_mismatch.1);
-    assert_eq!(
-        patch_query_mismatch.1["error"]["message"],
-        "TENANT_ID_MISMATCH"
-    );
+    assert_eq!(patch_query_ignored.0, 200, "{}", patch_query_ignored.1);
+    assert_eq!(patch_query_ignored.1["displayName"], "via-query");
+    assert!(registry
+        .tenant_metadata("demo-app", "tenant-b")
+        .is_some_and(|metadata| metadata.display_name.as_deref() != Some("via-query")));
 
     let patch_body_mismatch = admin(
         &s,
@@ -15296,12 +15311,13 @@ fn a_named_tenant_must_match_id_token_before_auth_work() {
             "returnSecureToken": true
         }),
     );
-    // A project user's token does not serve in a tenant the body names; whichever way the
-    // request is refused, nothing is applied.
+    // A project user's token does not serve in a tenant the body names. Fireemu answers
+    // `INVALID_ID_TOKEN`, the official emulator `USER_NOT_FOUND` (`operations.js:1721-1726`); both
+    // are 400 refusals that apply nothing, so the emulator does not refuse more. Filed in
+    // docs.local/issues/open/emulator-project-token-with-a-body-tenant-answers-invalid-id-token.md.
     assert_eq!(status, 400, "{project_refused}");
-    assert!(
-        ["TENANT_ID_MISMATCH", "INVALID_ID_TOKEN"]
-            .contains(&project_refused["error"]["message"].as_str().unwrap_or("")),
+    assert_eq!(
+        project_refused["error"]["message"], "INVALID_ID_TOKEN",
         "{project_refused}"
     );
     assert!(project_refused.get("idToken").is_none());
@@ -15409,32 +15425,25 @@ fn duplicate_query_selectors_fail_closed_without_mutation() {
     let tenant = registry.tenant_store("demo-app", "tenant-a").unwrap();
     s.registry = Some(registry.clone());
 
-    for query in [
+    // The query's tenant is ignored on this route (the official emulator does not read it), so
+    // a repeated one is no refusal either: a project sign-up.
+    for (index, query) in [
         "tenantId=tenant-a&tenantId=tenant-a",
         "tenantId=tenant-a&tenantId=tenant-b",
         "tenantId=tenant-b&tenantId=tenant-a",
-    ] {
-        let (status, refused) = post(
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let email = format!("duplicate-query-tenant-{index}@example.com");
+        let (status, created) = post(
             &s,
             &format!("{V1}/accounts:signUp?{query}"),
-            &json!({
-                "email": "duplicate-query-tenant@example.com",
-                "password": "password1",
-            }),
+            &json!({"email": email, "password": "password1"}),
         );
-        assert_eq!(status, 400, "{query}: {refused}");
-        assert_eq!(refused["error"]["message"], "INVALID_ARGUMENT", "{query}");
-        assert!(s
-            .store
-            .lock()
-            .unwrap()
-            .user_by_email("duplicate-query-tenant@example.com")
-            .is_none());
-        assert!(tenant
-            .lock()
-            .unwrap()
-            .user_by_email("duplicate-query-tenant@example.com")
-            .is_none());
+        assert_eq!(status, 200, "{query}: {created}");
+        assert!(s.store.lock().unwrap().user_by_email(&email).is_some());
+        assert!(tenant.lock().unwrap().user_by_email(&email).is_none());
     }
 
     for (index, query) in [
@@ -15481,20 +15490,39 @@ fn malformed_query_selectors_fail_closed_without_mutation() {
     let tenant = registry.tenant_store("demo-app", "tenant-a").unwrap();
     s.registry = Some(registry);
 
+    // A malformed tenant in the query is ignored where the query's tenant is (the official emulator
+    // does not look at it): a project sign-up.
     for (index, query) in [
         "tenantId",
         "%74enantId",
-        "key",
-        "apiKey",
         "key=valid-key&tenantId",
         "tenantId&key=valid-key",
         "tenantId=",
         "%74enantId=",
+        "tenantId=%ZZ",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let email = format!("ignored-tenant-selector-{index}@example.com");
+        let (status, created) = post(
+            &s,
+            &format!("{V1}/accounts:signUp?{query}"),
+            &json!({"email": email, "password": "password1"}),
+        );
+        assert_eq!(status, 200, "{query}: {created}");
+        assert!(tenant.lock().unwrap().user_by_email(&email).is_none());
+        assert!(s.store.lock().unwrap().user_by_email(&email).is_some());
+    }
+
+    // A malformed API key is refused as before.
+    for (index, query) in [
+        "key",
+        "apiKey",
         "key=",
         "apiKey=",
         "%6bey=",
         "%61piKey=%ZZ",
-        "tenantId=%ZZ",
         "key=valid%ZZ",
         "apiKey=%A",
     ]

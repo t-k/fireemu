@@ -353,9 +353,9 @@ fn what_names_no_servable_tenant_creates_nothing() {
     let attempts: Vec<(&str, String, &str, Value)> = vec![
         (
             "mismatch",
-            format!("{V1}/projects/demo-app/tenants/one/accounts:batchGet"),
-            "GET",
-            json!({"tenantId": "two"}),
+            format!("{V1}/projects/demo-app/tenants/one/accounts"),
+            "POST",
+            json!({"tenantId": "two", "email": "a@example.com", "password": "hunter22"}),
         ),
         (
             "empty",

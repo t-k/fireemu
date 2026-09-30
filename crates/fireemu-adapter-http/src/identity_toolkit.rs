@@ -3899,6 +3899,26 @@ fn official_reads_the_id_token(resolution: routes::Resolution<'_>, body: &Value)
     }
 }
 
+/// The Admin account operations of the official emulator, which run in the tenant the request's
+/// body names when its path names only the project (`server.js:395-414`, no Admin special case).
+/// The store selection reads the body's tenant for them in the emulator profile; the request's
+/// credential is checked against the selected store's project as for a tenant path, and a caller
+/// the guards refuse gets its refusal before anything is served.
+fn official_admin_account_handler(handler: routes::Handler) -> bool {
+    matches!(
+        handler,
+        routes::Handler::AdminCreate
+            | routes::Handler::AdminLookup
+            | routes::Handler::AdminUpdate
+            | routes::Handler::AdminDelete
+            | routes::Handler::AdminBatchCreate
+            | routes::Handler::AdminBatchDelete
+            | routes::Handler::AdminQuery
+            | routes::Handler::AdminSendOobCode
+            | routes::Handler::AdminCreateSessionCookie
+    )
+}
+
 /// The tenant an account request's ID token names, answered as the official Auth emulator
 /// answers it (emulator profile; firebase-tools 15.28.2). The emulator takes the target tenant
 /// from the path, else from the body, else from the ID token (`toExegesisOperation`): a path or
@@ -4375,7 +4395,16 @@ fn handle_with_policy_inner(
         else {
             return error(400, "INVALID_PROJECT_ID");
         };
-        store
+        // An official Admin account operation runs in the tenant its body names (the request's
+        // tenant was made on the way, after the guards admitted it): as a tenant path selects it.
+        let body_tenant_store = str_field(body, "tenantId")
+            .filter(|tenant| !tenant.is_empty())
+            .filter(|_| {
+                matches!(resolution, routes::Resolution::Matched { route, .. }
+                    if official_admin_account_handler(route.handler))
+            })
+            .and_then(|tenant| registry.tenant_store(project, tenant));
+        body_tenant_store.unwrap_or(store)
     } else {
         match select_store(state, path, query, body, resolution) {
             Ok(store) => store,
@@ -9362,8 +9391,9 @@ fn select_store(
         // Strict: on the project path an Admin lookup takes the body's tenantId as its scope
         // (selection#admin-lookup-a1-body-tenant), and a session cookie is minted in the
         // tenant of the ID token it is given (credentials#cookie-in-project).
-        let body_scoped =
-            query_body_scope || (strict && handler == Some(routes::Handler::AdminLookup));
+        let body_scoped = query_body_scope
+            || (strict && handler == Some(routes::Handler::AdminLookup))
+            || (!strict && handler.is_some_and(official_admin_account_handler));
         let token_scoped = (strict && handler == Some(routes::Handler::AdminCreateSessionCookie))
             .then(|| {
                 id_token_target

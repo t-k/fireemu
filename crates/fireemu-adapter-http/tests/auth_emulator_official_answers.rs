@@ -347,3 +347,168 @@ fn the_known_differences_for_the_tenant_phone_and_idp_operations_are_pinned() {
         );
     }
 }
+
+/// An Admin request on a project path with a body `tenantId` runs in that tenant of the path's
+/// project (`server.js:395-414`): the tenant is made there, the operation answers as it does for a
+/// tenant path, and nothing is made in another project. Official column probed with `probe2.cjs`
+/// for the default project and for another one (`demo-other`).
+#[test]
+fn an_admin_request_with_a_body_tenant_runs_in_that_tenant_of_the_paths_project() {
+    // (case, path suffix, body, official status, official message)
+    let rows: Vec<(&str, &str, Value, u16, &str)> = vec![
+        (
+            "lookup",
+            "accounts:lookup",
+            json!({"localId": ["x"]}),
+            200,
+            "-",
+        ),
+        (
+            "create",
+            "accounts",
+            json!({"email": "m@example.com", "password": "hunter22"}),
+            200,
+            "-",
+        ),
+        (
+            "update",
+            "accounts:update",
+            json!({"localId": "x", "displayName": "d"}),
+            400,
+            "USER_NOT_FOUND",
+        ),
+        (
+            "delete",
+            "accounts:delete",
+            json!({"localId": "x"}),
+            400,
+            "USER_NOT_FOUND",
+        ),
+        (
+            "batchCreate",
+            "accounts:batchCreate",
+            json!({"users": [{"localId": "u", "email": "b@example.com"}]}),
+            200,
+            "-",
+        ),
+        (
+            "batchDelete",
+            "accounts:batchDelete",
+            json!({"localIds": ["x"], "force": true}),
+            200,
+            "-",
+        ),
+        (
+            "query",
+            "accounts:query",
+            json!({"returnUserInfo": false}),
+            200,
+            "-",
+        ),
+        (
+            "sendOobCode",
+            "accounts:sendOobCode",
+            json!({"requestType": "PASSWORD_RESET", "email": "x@example.com", "returnOobLink": true}),
+            400,
+            "EMAIL_NOT_FOUND",
+        ),
+    ];
+    for project in ["demo-other", "demo-app"] {
+        for (n, (case, suffix, body, status, message)) in rows.iter().enumerate() {
+            let (state, registry) = routed_state();
+            let tenant = format!("body-{n}");
+            let mut body = body.clone();
+            body["tenantId"] = json!(tenant);
+            let (got, answered) = admin(
+                &state,
+                "POST",
+                &format!("{V1}/projects/{project}/{suffix}"),
+                &body,
+            );
+            assert_eq!(
+                (got, message_of(&answered)),
+                (*status, (*message).to_owned()),
+                "{project} {case}: {answered}"
+            );
+            // The tenant is the path's project's, and nothing landed in the other project.
+            assert!(
+                registry.tenant_store(project, &tenant).is_some(),
+                "{project} {case}"
+            );
+            let other = if project == "demo-app" {
+                "demo-other"
+            } else {
+                "demo-app"
+            };
+            assert!(
+                registry.tenant_store(other, &tenant).is_none(),
+                "{project} {case}"
+            );
+        }
+    }
+}
+
+/// The body's tenant is a selector only for a request the owner (or control) guard admitted: a
+/// caller without the credential is refused as it is for a tenant path, and nothing is served
+/// from, or written to, the tenant.
+#[test]
+fn a_caller_without_the_owner_credential_cannot_pick_a_tenant_through_the_body() {
+    let (state, registry) = routed_state();
+    // The tenant exists and holds an account.
+    let (status, created) = admin(
+        &state,
+        "POST",
+        &format!("{V1}/projects/demo-app/tenants/held/accounts"),
+        &json!({"email": "held@example.com", "password": "hunter22"}),
+    );
+    assert_eq!(status, 200, "{created}");
+    let garbage = RequestHeaders {
+        authorization: Some("Bearer garbage".to_owned()),
+        ..owner()
+    };
+    let keyless = RequestHeaders {
+        authorization: None,
+        ..owner()
+    };
+    for headers in [garbage, keyless] {
+        for (suffix, body) in [
+            (
+                "accounts:lookup",
+                json!({"tenantId": "held", "email": ["held@example.com"]}),
+            ),
+            (
+                "accounts",
+                json!({"tenantId": "held", "email": "x@example.com", "password": "hunter22"}),
+            ),
+        ] {
+            let r = handle_with(
+                &state,
+                "POST",
+                &format!("{V1}/projects/demo-app/{suffix}"),
+                &headers,
+                &body,
+            );
+            assert!(
+                matches!(r.status, 401 | 403 | 404 | 405),
+                "{suffix}: {} {}",
+                r.status,
+                r.body
+            );
+        }
+    }
+    let held = registry.tenant_store("demo-app", "held").unwrap();
+    assert_eq!(held.lock().unwrap().user_count(), 1);
+    // A refused request on an unknown project makes and installs nothing.
+    let r = handle_with(
+        &state,
+        "POST",
+        &format!("{V1}/projects/demo-late/accounts:lookup"),
+        &RequestHeaders {
+            authorization: Some("Bearer garbage".to_owned()),
+            ..owner()
+        },
+        &json!({"tenantId": "t", "localId": ["x"]}),
+    );
+    assert_eq!(r.status, 401, "{}", r.body);
+    assert!(registry.routed_store_for("demo-late").is_none());
+}

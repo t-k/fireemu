@@ -55,7 +55,7 @@ export function createRestoreWorld(state = STATE) {
     if (url.host === "www.googleapis.com" && url.pathname === "/oauth2/v2/userinfo") return json({ id: OWNER_SUBJECT, email: OWNER_EMAIL, verified_email: true });
     if (url.host === "firebaserules.googleapis.com") {
       if (url.pathname.includes("/releases/")) return json(rpcNotFound, 404);
-      if (spec.method === "GET" && url.pathname.endsWith("/rulesets")) return json({ rulesets: [...ENTRY_RULESETS.map((entry) => ({ name: entry.name, createTime: "2026-09-25T11:08:54.358767Z", metadata: { services: [...entry.services] } })), ...[...world.rulesets].map((name) => ({ name, createTime: "2026-09-30T00:23:49.178351Z", metadata: { services: ["firebase.storage"] } }))] });
+      if (spec.method === "GET" && url.pathname.endsWith("/rulesets")) return json({ rulesets: [...ENTRY_RULESETS.map((entry, index) => ({ name: entry.name, createTime: ["2026-09-25T11:08:54.358767Z", "2026-09-23T23:02:05.839536Z"][index], metadata: { services: [...entry.services] } })), ...[...world.rulesets].map((name) => ({ name, createTime: "2026-09-30T00:23:49.178351Z", metadata: { services: ["firebase.storage"] } }))] });
       const match = /^\/v1\/(projects\/fireemu-oracle-query\/rulesets\/[^/]+)$/.exec(url.pathname);
       if (spec.method === "DELETE" && match) { world.deletes.push(match[1]); if (!world.rulesets.has(match[1])) return json(rpcNotFound, 404); world.rulesets.delete(match[1]); return json({}); }
     }

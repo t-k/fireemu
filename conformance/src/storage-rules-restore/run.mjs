@@ -8,7 +8,7 @@ import { IDENTITY_ID, restoreRequests, TOKEN_ID } from "./plan.mjs";
 // answer must be the one the plan expects; the verification reads that follow must show the state clean. Any surprise after the first deletion ends the run
 // as needs-recovery (the locks stay), and nothing is retried: the reads of a later run decide what is left.
 const sha = (value) => createHash("sha256").update(value).digest("hex");
-const WRITES = new Set(["object-delete", "json-ok"]);
+const WRITES = new Set(["object-delete", "account-delete", "ruleset-delete"]);
 
 export async function runRestore({ gate, cache, targets, state, local, capture, runId }) {
   const requests = restoreRequests(state);

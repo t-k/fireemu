@@ -28,8 +28,8 @@ export function restoreRequests(state) {
   state.objects.forEach((object, index) => add({ id: `preflight/object/${index}`, phase: "preflight", kind: "object-present", method: "GET", url: objectUrl(state, object.name), index }));
   add({ id: "preflight/accounts/lookup", phase: "preflight", kind: "accounts-present", method: "POST", url: accountUrl("lookup"), body: json({ localId: [...state.accounts] }) });
   state.objects.forEach((object, index) => add({ id: `cleanup/object/${index}/delete`, phase: "normal", kind: "object-delete", method: "DELETE", url: `${objectUrl(state, object.name)}?ifGenerationMatch=${object.generation}`, index }));
-  state.accounts.forEach((uid, index) => add({ id: `cleanup/account/${index}/delete`, phase: "normal", kind: "json-ok", method: "POST", url: accountUrl("delete"), body: json({ localId: uid }), index }));
-  state.rulesets.forEach((name, index) => add({ id: `cleanup/ruleset/${index}/delete`, phase: "normal", kind: "json-ok", method: "DELETE", url: `${RULES_HOST}/v1/${name}`, index }));
+  state.accounts.forEach((uid, index) => add({ id: `cleanup/account/${index}/delete`, phase: "normal", kind: "account-delete", method: "POST", url: accountUrl("delete"), body: json({ localId: uid }), index }));
+  state.rulesets.forEach((name, index) => add({ id: `cleanup/ruleset/${index}/delete`, phase: "normal", kind: "ruleset-delete", method: "DELETE", url: `${RULES_HOST}/v1/${name}`, index }));
   state.objects.forEach((object, index) => add({ id: `verify/object/${index}/absent`, phase: "normal", kind: "object-absent", method: "GET", url: objectUrl(state, object.name), index }));
   add({ id: "verify/accounts/lookup", phase: "normal", kind: "accounts-absent", method: "POST", url: accountUrl("lookup"), body: json({ localId: [...state.accounts] }) });
   add({ id: "verify/rulesets/list", phase: "normal", kind: "rulesets-kept", method: "GET", url: rulesetList });

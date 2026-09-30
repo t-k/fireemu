@@ -3568,16 +3568,18 @@ fn admit_request(
     project: &str,
     parent: &Arc<Mutex<AuthStore>>,
 ) -> Result<bool, JsonResponse> {
+    // A query that does not parse is refused by the store selection (which reads it the same
+    // way), so it makes nothing: not in the key's project, not in the default project.
+    let tenant_reading = query_reads_tenant(
+        state,
+        routes::resolve(request.method, request.path),
+        request.path,
+    );
+    let Ok((key, _)) = query_selectors_reading(request.query, tenant_reading) else {
+        return Ok(false);
+    };
     if routes::scoped_target(request.path).is_none() {
-        let tenant_reading = query_reads_tenant(
-            state,
-            routes::resolve(request.method, request.path),
-            request.path,
-        );
-        if let Some(key) = query_selectors_reading(request.query, tenant_reading)
-            .ok()
-            .and_then(|(key, _)| key)
-        {
+        if let Some(key) = key {
             if api_key_project(state, &key, "identitytoolkit.googleapis.com").is_err() {
                 return Ok(false);
             }

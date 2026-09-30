@@ -710,21 +710,6 @@ fn a_malformed_query_tenant_is_refused_only_where_it_is_read() {
             r.body["users"].as_array().map(Vec::len),
         )
     };
-    // A bare or empty API key is refused wherever the tenant is read as none.
-    for query in [
-        "?key",
-        "?key=",
-        "?apiKey",
-        "?key=a&key=b",
-        "?key=%ZZ",
-        "?tenantId=%ZZ",
-    ] {
-        assert_eq!(
-            batch(query, &json!({})),
-            (400, "INVALID_ARGUMENT".to_owned(), None),
-            "{query}"
-        );
-    }
     for query in ["?tenantId", "?tenantId=", "?flag"] {
         assert_eq!(
             batch(query, &json!({})),
@@ -733,6 +718,7 @@ fn a_malformed_query_tenant_is_refused_only_where_it_is_read() {
         );
     }
     for query in [
+        "?tenantId=%ZZ",
         "?tenantId=a&tenantId=b",
         "?tenantId&tenantId",
         "?tenantId=a&tenantId",
@@ -920,4 +906,25 @@ fn the_strict_supported_idps_read_tells_a_key_from_no_identity() {
     assert_eq!(keyed.status, 400, "{}", keyed.body);
     let keyless = get("");
     assert_eq!(keyless.status, 403, "{}", keyless.body);
+}
+
+/// A divergence, recorded: fireemu refuses a bare, empty, repeated or percent-malformed API key on
+/// the owner's batchGet, where the official emulator answers 200 to all of them (it checks no key
+/// on an owner-authorised request; `signUp` reads `key=%ZZ` literally, and answers 403 to the other
+/// malformed keys). Filed as `emulator-malformed-api-key-is-refused-where-the-official-emulator-
+/// ignores-it`; strict keeps the same refusal for production's reasons.
+#[test]
+fn fireemu_refuses_a_malformed_api_key_on_batch_get_where_the_official_emulator_answers_200() {
+    let (state, _) = emulator();
+    for query in ["?key", "?key=", "?apiKey", "?key=a&key=b", "?key=%ZZ"] {
+        let r = handle_with(
+            &state,
+            "GET",
+            &format!("{V1}/projects/demo-app/accounts:batchGet{query}"),
+            &owner(),
+            &json!({}),
+        );
+        assert_eq!(r.status, 400, "{query}: {}", r.body);
+        assert_eq!(r.body["error"]["message"], "INVALID_ARGUMENT", "{query}");
+    }
 }

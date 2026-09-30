@@ -353,9 +353,33 @@ fn a_declared_tenant_an_import_replaced_with_other_settings_is_reported() {
             .unwrap();
         declared.shadowed_by_existing(&registry, "demo-app")
     };
+    assert!(other(|_| {}).is_empty());
+    // A tenant of the same id with another display name (an imported one) is a difference too.
+    let (_, renamed) = with_registry(emulator_state());
+    assert!(renamed
+        .create_tenant_with_id(
+            "demo-app",
+            "acme-x7k2q",
+            fireemu_core_auth::store::TenantMetadata {
+                display_name: Some("other".to_owned()),
+                allow_password_signup: true,
+                ..Default::default()
+            },
+            fireemu_core_auth::store::TenantMetadataPatch::default(),
+            None,
+        )
+        .is_some());
+    let plain = TenantSeeding::new(
+        None,
+        seeds(
+            &[json!({"tenantId": "acme-x7k2q", "displayName": "acme", "allowPasswordSignup": true})],
+            true,
+        )
+        .unwrap(),
+    );
     assert_eq!(
-        other(|d| d["displayName"] = json!("acme")),
-        Vec::<String>::new()
+        plain.shadowed_by_existing(&renamed, "demo-app"),
+        ["acme-x7k2q"]
     );
     assert_eq!(
         other(|d| d["allowPasswordSignup"] = json!(false)),
@@ -378,4 +402,19 @@ fn a_declared_tenant_an_import_replaced_with_other_settings_is_reported() {
         other(|d| d["client"] = json!({"permissions": {"disabledUserSignup": true}})),
         ["acme-x7k2q"]
     );
+}
+
+#[test]
+fn an_undeclared_switch_is_left_as_the_project_has_it() {
+    use fireemu_adapter_http::identity_toolkit::TenantSeeding;
+    let (state, registry) = with_registry(strict_state());
+    seed_multi_tenancy(&registry, "demo-app", true).unwrap();
+    TenantSeeding::new(None, Vec::new())
+        .apply(&registry, "demo-app")
+        .unwrap();
+    assert!(state.store.lock().unwrap().allows_tenants());
+    TenantSeeding::new(Some(false), Vec::new())
+        .apply(&registry, "demo-app")
+        .unwrap();
+    assert!(!state.store.lock().unwrap().allows_tenants());
 }

@@ -3674,6 +3674,49 @@ fn a_commit_or_a_rollback_as_the_first_request_after_the_lifetime_is_aborted_lik
 }
 
 #[test]
+fn a_rollback_after_the_token_is_forgotten_answers_invalid_transaction() {
+    // A read at 271 s finds the lifetime over (10); the Rollback that follows at 301 s finds the token forgotten (3).
+    let (mut state, transaction) = aged_transaction();
+    aborted_no_longer_valid(state.touch_transaction(&transaction, t(271)));
+    invalid_transaction(state.rollback_at(&transaction, t(301)));
+}
+
+// INFERRED, not recorded: a transaction that an idle expiry finished before its 270 s lifetime answers a Rollback after
+// 270 s with 0, because the idle expiry (not the lifetime) finished it.
+#[test]
+fn a_rollback_of_an_idle_expired_token_after_270_s_is_accepted() {
+    let mut state = FirestoreState::with_limit_scope(LimitScope::Production);
+    let transaction = state.begin_transaction(false, t(0)).unwrap();
+    state.rollback_at(&transaction, t(290)).unwrap();
+}
+
+// Production remembers an expired token for 30 s even when more than 8 192 finished transactions pile up in the
+// meantime: eviction takes the oldest finished lineage first, but never a token still remembered as expired.
+#[test]
+fn a_flood_of_finished_transactions_does_not_make_production_forget_an_expired_token_early() {
+    let (mut state, transaction) = aged_transaction();
+    aborted_no_longer_valid(state.touch_transaction(&transaction, t(271)));
+    for _ in 0..9_000 {
+        let other = state.begin_transaction(false, t(272)).unwrap();
+        state.rollback_at(&other, t(272)).unwrap();
+    }
+    let bookkeeping = state.transaction_bookkeeping_stats();
+    assert_eq!(bookkeeping.finished, 8_192);
+    assert_eq!(bookkeeping.finished, bookkeeping.finished_deadlines);
+    aborted_no_longer_valid(state.touch_transaction(&transaction, t(280)));
+    invalid_transaction(state.touch_transaction(&transaction, t(301)));
+}
+
+// The emulator profile is exactly as before: a bare Rollback past 270 s finishes the transaction, and a later read
+// answers ABORTED (not INVALID_ARGUMENT), as it did before production began to prune first.
+#[test]
+fn the_emulator_profiles_bare_rollback_past_the_lifetime_is_unchanged() {
+    let (mut state, transaction) = emulator_aged_transaction();
+    state.rollback_at(&transaction, t(275)).unwrap();
+    aborted_no_longer_valid(state.touch_transaction(&transaction, t(276)));
+}
+
+#[test]
 fn a_writer_outside_an_expired_transaction_is_not_held_by_its_locks() {
     // P11 v4: the outside writer after the expiry answered 0 at normal pace.
     let (mut state, transaction) = aged_transaction();

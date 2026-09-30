@@ -9985,3 +9985,72 @@ async fn native_expired_transaction_is_remembered_until_about_300_seconds_in_pro
     }
     handle.abort();
 }
+
+/// A Rollback as the very first request after the 270 s total lifetime, over native gRPC: production answers `ABORTED`
+/// "no longer valid" (INFERRED for a first request; P11 v4 recorded the Rollback after a read), the emulator profile
+/// accepts it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn native_rollback_as_the_first_request_after_the_total_lifetime_is_answered_per_profile() {
+    const GONE: &str = "The referenced transaction has expired or is no longer valid.";
+    for strict in [true, false] {
+        let (mut client, clock, backend, handle) = start_profile_with_state(strict, None).await;
+        assert_native_profile_scope(&backend, strict);
+        client
+            .commit(pb::CommitRequest {
+                database: DB.to_owned(),
+                writes: vec![update_write(
+                    "p11-native/first-rollback",
+                    &[("value", i(0))],
+                )],
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let transaction = client
+            .begin_transaction(pb::BeginTransactionRequest {
+                database: DB.to_owned(),
+                ..Default::default()
+            })
+            .await
+            .unwrap()
+            .into_inner()
+            .transaction;
+        let mut previous = 0;
+        for current in [0, 59, 118, 177, 236] {
+            clock
+                .lock()
+                .unwrap()
+                .advance(LogicalDuration::from_seconds(current - previous))
+                .unwrap();
+            native_transaction_document(
+                &mut client,
+                "p11-native/first-rollback",
+                Some(transaction.clone()),
+            )
+            .await;
+            previous = current;
+        }
+        clock
+            .lock()
+            .unwrap()
+            .advance(LogicalDuration::from_seconds(283 - previous))
+            .unwrap();
+        let rolled = client
+            .rollback(pb::RollbackRequest {
+                database: DB.to_owned(),
+                transaction,
+                ..Default::default()
+            })
+            .await;
+        if strict {
+            let status = rolled.unwrap_err();
+            assert_eq!(
+                (status.code(), status.message()),
+                (tonic::Code::Aborted, GONE)
+            );
+        } else {
+            rolled.unwrap();
+        }
+        handle.abort();
+    }
+}

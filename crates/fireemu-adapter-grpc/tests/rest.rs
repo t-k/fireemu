@@ -4241,6 +4241,90 @@ fn a_rest_transaction_kept_alive_past_its_total_lifetime_is_answered_per_profile
     }
 }
 
+/// A Rollback as the very first request after the 270 s total lifetime, over REST. Production remembers the expired
+/// token until about 300 s of its age and answers every request 409 `ABORTED` "no longer valid", a Rollback included
+/// (P11 v4: the chain-end Rollback after the expiry read answered 10); as the first request it is INFERRED to answer the
+/// same. The emulator profile accepts it (official emulator: Rollback 200), and the compaction after it forgets the token.
+#[test]
+fn a_rest_rollback_as_the_first_request_after_the_total_lifetime_is_answered_per_profile() {
+    const GONE: &str = "The referenced transaction has expired or is no longer valid.";
+    for strict in [true, false] {
+        let gateway = Gateway {
+            enforce_limits: strict,
+            ctx: PlanningContext {
+                edition: FirestoreEdition::Standard,
+                api_mode: FirestoreApiMode::Native,
+                policy: if strict {
+                    IndexValidationPolicy::Production
+                } else {
+                    IndexValidationPolicy::Emulator
+                },
+            },
+            indexes: IndexSet::default(),
+        };
+        let (s, clock) = state_with_gateway(gateway, None, TokenAcceptance::Verified);
+        let (status, begun) = call(
+            &s,
+            "POST",
+            &format!("{DOCS}:beginTransaction"),
+            json!({"options": {"readWrite": {}}}),
+        );
+        assert_eq!(status, 200, "{begun}");
+        let transaction = begun["transaction"].as_str().unwrap().to_owned();
+        let advance = |seconds: i64| {
+            let _ = clock.lock().unwrap().advance(
+                fireemu_core_types::time::LogicalDuration::from_seconds(seconds),
+            );
+        };
+        let (status, seeded) = call(
+            &s,
+            "PATCH",
+            &format!("{DOCS}/lifetime/first-rollback"),
+            json!({"fields": {"v": {"integerValue": "1"}}}),
+        );
+        assert_eq!(status, 200, "{seeded}");
+        for _ in 0..8 {
+            advance(30);
+            let (status, body) = call(
+                &s,
+                "GET",
+                &format!("{DOCS}/lifetime/first-rollback?transaction={transaction}"),
+                Value::Null,
+            );
+            assert_eq!(status, 200, "a read every 30 s keeps it alive: {body}");
+        }
+        advance(31);
+        let (status, rolled) = call(
+            &s,
+            "POST",
+            &format!("{DOCS}:rollback"),
+            json!({"transaction": transaction}),
+        );
+        if strict {
+            assert_eq!(status, 409, "{rolled}");
+            assert_eq!(rolled["error"]["status"], "ABORTED", "{rolled}");
+            assert_eq!(rolled["error"]["message"], GONE, "{rolled}");
+        } else {
+            assert_eq!(status, 200, "{rolled}");
+        }
+        let (status, after) = call(
+            &s,
+            "GET",
+            &format!("{DOCS}/lifetime/first-rollback?transaction={transaction}"),
+            Value::Null,
+        );
+        if strict {
+            assert_eq!(status, 409, "{after}");
+            assert_eq!(after["error"]["message"], GONE, "{after}");
+        } else {
+            // the adapter compacts after the Rollback, which forgets a rolled-back token past its lineage deadline
+            // (as it always did): the later read finds no such transaction
+            assert_eq!(status, 400, "{after}");
+            assert_eq!(after["error"]["message"], "Invalid transaction.", "{after}");
+        }
+    }
+}
+
 #[test]
 fn an_idle_rest_transaction_expires_and_releases_its_document_lock() {
     let (s, clock) = state_with_clock(None, TokenAcceptance::Verified);

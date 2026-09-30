@@ -2404,7 +2404,11 @@ impl FirestoreState {
         let Some(transaction) = self.transactions.get_mut(id) else {
             return false;
         };
-        if deadline != transaction_lineage_deadline(transaction) {
+        // Production prunes before it looks (see `touch_transaction`), so only the emulator profile finds an active transaction
+        // past its total lifetime here.
+        if self.limit_scope != LimitScope::OfficialEmulator
+            || deadline != transaction_lineage_deadline(transaction)
+        {
             return false;
         }
         let scope = self.limit_scope;
@@ -2414,7 +2418,7 @@ impl FirestoreState {
         if self.finished_transaction_deadlines.remove(&plain) {
             self.finished_transaction_deadlines.insert(kept);
         }
-        scope == LimitScope::OfficialEmulator
+        true
     }
 
     fn ensure_transaction_capacity(&self) -> Result<(), FirestoreError> {
@@ -2464,11 +2468,26 @@ impl FirestoreState {
         self.evict_finished_transactions();
     }
 
+    /// Whether production still remembers this transaction as one that ran out of its total lifetime. Eviction never takes
+    /// such a token before its memory ends: at most as many tokens as were active together (4 096) are held this way.
+    fn remembered_as_expired(&self, id: &TransactionId) -> bool {
+        self.limit_scope == LimitScope::Production
+            && self.transactions.get(id).is_some_and(|transaction| {
+                transaction.lifetime_expired && transaction.state == TransactionState::Finished
+            })
+    }
+
     fn evict_finished_transactions(&mut self) {
         while self.finished_transactions.len() > MAX_FINISHED_TRANSACTION_LINEAGE {
-            let Some(id) = self.finished_transactions.pop_first() else {
+            let Some(id) = self
+                .finished_transactions
+                .iter()
+                .find(|id| !self.remembered_as_expired(id))
+                .cloned()
+            else {
                 break;
             };
+            self.finished_transactions.remove(&id);
             if let Some(transaction) = self.transactions.get(&id) {
                 self.finished_transaction_deadlines.remove(&(
                     finished_lineage_deadline(transaction, self.limit_scope),
@@ -2577,7 +2596,9 @@ impl FirestoreState {
         id: &TransactionId,
         now: LogicalInstant,
     ) -> Result<(), FirestoreError> {
-        if self.prune_transactions(now) {
+        // Production remembers an expired token for a bounded time, so a request first forgets the tokens whose memory has
+        // ended. The emulator profile keeps its own flow below, unchanged.
+        if self.limit_scope == LimitScope::Production && self.prune_transactions(now) {
             self.compact(now);
         }
         if let Err(error) = self.transaction(id) {
@@ -3547,14 +3568,16 @@ impl FirestoreState {
     ) -> Result<(), FirestoreError> {
         // A transaction that ran out of its total lifetime is finished first, so its Rollback is answered like any
         // other request; an idle one still becomes a rolled-back transaction, which keeps its retry lineage.
-        let lifetime_over = self.transactions.get(id).is_some_and(|transaction| {
-            transaction.state == TransactionState::Active
-                && now >= transaction_lineage_deadline(transaction)
-        });
-        if lifetime_over {
-            self.prune_transactions(now);
-        } else {
-            self.forget_elapsed_finished_transactions(now);
+        if self.limit_scope == LimitScope::Production {
+            let lifetime_over = self.transactions.get(id).is_some_and(|transaction| {
+                transaction.state == TransactionState::Active
+                    && now >= transaction_lineage_deadline(transaction)
+            });
+            if lifetime_over {
+                self.prune_transactions(now);
+            } else {
+                self.forget_elapsed_finished_transactions(now);
+            }
         }
         self.rollback(id)
     }
@@ -3843,7 +3866,9 @@ impl FirestoreState {
         writes: &[Write],
         now: LogicalInstant,
     ) -> Result<(), FirestoreError> {
-        self.prune_transactions(now);
+        if self.limit_scope == LimitScope::Production {
+            self.prune_transactions(now);
+        }
         self.transaction(id)?;
         let transaction = self.transaction(id)?;
         let deadline = transaction_deadline(transaction, self.limit_scope);

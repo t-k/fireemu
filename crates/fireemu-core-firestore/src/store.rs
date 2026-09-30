@@ -2108,18 +2108,22 @@ impl FirestoreState {
         self.insert_transaction(read_only, self.version, read_time, now)
     }
 
-    /// Begins a read-only transaction whose snapshot is taken at its first use (the client's next
-    /// request on the token), as production does (P02, REST and gRPC): a write acknowledged
-    /// between the begin and the first read is shown by that read, and every later read shows the
-    /// snapshot of the first. A transaction that begins with a read (`newTransaction` on a read)
-    /// uses [`Self::begin_transaction`], whose snapshot is the moment of that read.
+    /// Begins a read-only transaction. In the production profile its snapshot is taken at its
+    /// first use (the client's next request on the token), as production does (P02, REST and
+    /// gRPC): a write acknowledged between the begin and the first read is shown by that read, and
+    /// every later read shows the snapshot of the first. The official emulator (v1.22.0, measured
+    /// on both transports) takes the snapshot at the begin, so the emulator profile keeps that. A
+    /// transaction that begins with a read (`newTransaction` on a read) uses
+    /// [`Self::begin_transaction`], whose snapshot is the moment of that read.
     pub fn begin_read_only_transaction(
         &mut self,
         now: LogicalInstant,
     ) -> Result<TransactionId, FirestoreError> {
         let id = self.begin_transaction(true, now)?;
-        if let Some(transaction) = self.transactions.get_mut(&id) {
-            transaction.snapshot_pending = true;
+        if self.limit_scope == LimitScope::Production {
+            if let Some(transaction) = self.transactions.get_mut(&id) {
+                transaction.snapshot_pending = true;
+            }
         }
         Ok(id)
     }

@@ -3205,6 +3205,18 @@ fn a_read_only_transaction_takes_its_snapshot_at_its_first_use() {
         "a begun-with-a-read transaction keeps its begin"
     );
 
+    // The official emulator (v1.22.0, measured, REST and gRPC) takes the snapshot at the begin.
+    let mut emulator = FirestoreState::with_limit_scope(LimitScope::OfficialEmulator);
+    emulator
+        .commit(&[set("p02/doc", &[("v", Value::Integer(1))])], None, t(0))
+        .unwrap();
+    let pinned = emulator.begin_read_only_transaction(t(1)).unwrap();
+    emulator
+        .commit(&[set("p02/doc", &[("v", Value::Integer(2))])], None, t(2))
+        .unwrap();
+    emulator.touch_transaction(&pinned, t(3)).unwrap();
+    assert_eq!(value(&emulator, &pinned), Some(Value::Integer(1)));
+
     let unused = state.begin_read_only_transaction(t(9)).unwrap();
     state.rollback(&unused).unwrap();
     assert_eq!(state.transaction_bookkeeping_stats().active, 2);

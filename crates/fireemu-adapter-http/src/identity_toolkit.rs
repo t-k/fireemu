@@ -3749,10 +3749,13 @@ fn emulator_creates_named_tenant(
         if !install_admitted_candidate(registry, &project, candidate) {
             return Ok(None);
         }
-        // The project just installed takes the declaration before the tenant this request names
-        // is made, so a declared tenant is made from its declaration and not with the defaults.
-        seed_pending_projects(registry);
     }
+    // Every project installed so far takes the declaration before the tenant this request names
+    // is made, so a declared tenant is made from its declaration and not with the defaults. This
+    // runs whether or not this request installed the project: a project another request
+    // installed may still be waiting for its seed (or have it in flight), and the drain lets
+    // this call through only once those seeds are applied.
+    seed_pending_projects(registry);
     Ok(registry
         .ensure_tenant_with(&project, &target, tenant_document::install_default_mfa)
         .map(|_| target))

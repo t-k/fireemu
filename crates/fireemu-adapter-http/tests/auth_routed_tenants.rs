@@ -707,3 +707,206 @@ fn an_on_the_way_install_is_admitted_as_one_step_and_survives_a_racing_reset() {
     assert_eq!(status, 200, "{body}");
     assert_eq!(registry.tenants("demo-race").len(), 2);
 }
+
+/// A seed that holds up the first project it is applied to until the test lets it go, or that
+/// lets a test act while the seed is applied under its request's admission.
+struct ProbedSeed {
+    inner: Arc<fireemu_adapter_http::identity_toolkit::TenantSeeding>,
+    /// Sent when the seed is entered for `hold_project`; the seed then waits for `release`.
+    hold_project: &'static str,
+    entered: Mutex<Option<std::sync::mpsc::Sender<()>>>,
+    release: Mutex<Option<std::sync::mpsc::Receiver<()>>>,
+    /// Slows every application, so a concurrent drain lands inside the window.
+    delay: std::time::Duration,
+    /// Run once, on the first application, before the seed's own work.
+    on_first: Mutex<Option<Box<dyn FnOnce() + Send>>>,
+    /// After the seed's own work, another thread holds the project's gate for this long (the
+    /// tenant creation that follows has to wait for it).
+    hold_gate: std::time::Duration,
+}
+
+impl std::fmt::Debug for ProbedSeed {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("ProbedSeed")
+    }
+}
+
+impl ProbedSeed {
+    fn new(documents: &[Value]) -> Self {
+        Self {
+            inner: declaration(documents),
+            hold_project: "",
+            entered: Mutex::new(None),
+            release: Mutex::new(None),
+            delay: std::time::Duration::ZERO,
+            on_first: Mutex::new(None),
+            hold_gate: std::time::Duration::ZERO,
+        }
+    }
+}
+
+impl fireemu_core_auth::store::NewProjectSeed for ProbedSeed {
+    fn apply(&self, registry: &AuthRegistry, project: &str) -> Result<(), String> {
+        if let Some(first) = self.on_first.lock().unwrap().take() {
+            first();
+        }
+        if project == self.hold_project {
+            if let Some(entered) = self.entered.lock().unwrap().take() {
+                let _ = entered.send(());
+                if let Some(release) = self.release.lock().unwrap().take() {
+                    let _ = release.recv_timeout(LONG);
+                }
+            }
+        }
+        std::thread::sleep(self.delay);
+        let applied =
+            fireemu_core_auth::store::NewProjectSeed::apply(&*self.inner, registry, project);
+        if !self.hold_gate.is_zero() {
+            let gate = registry.operation_gate(project, None).unwrap();
+            let hold = self.hold_gate;
+            let (locked, is_locked) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                let _held = gate.lock().unwrap();
+                let _ = locked.send(());
+                std::thread::sleep(hold);
+            });
+            is_locked.recv_timeout(LONG).unwrap();
+        }
+        applied
+    }
+}
+
+fn display_name_of(registry: &AuthRegistry, project: &str, tenant: &str) -> Option<String> {
+    registry
+        .tenant_metadata(project, tenant)
+        .and_then(|metadata| metadata.display_name)
+}
+
+/// A request naming a declared tenant while its project's seed is in flight (drained, not yet
+/// applied) waits for that seed and finds the tenant as declared, instead of making it with the
+/// on-the-way defaults that the seed would then keep.
+#[test]
+fn a_declared_tenant_named_while_the_projects_seed_is_in_flight_keeps_its_declaration() {
+    let (state, registry) = routed_state();
+    let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    let mut seed = ProbedSeed::new(&declared());
+    seed.hold_project = "demo-gx";
+    seed.entered = Mutex::new(Some(entered_tx));
+    seed.release = Mutex::new(Some(release_rx));
+    registry.set_new_project_tenant_seed(Arc::new(seed));
+    let state = Arc::new(state);
+    // The installing request: an Admin user create, whose wrapper drains the seed and is held.
+    let installer = {
+        let state = state.clone();
+        std::thread::spawn(move || {
+            handle_with(
+                &state,
+                "POST",
+                &format!("{V1}/projects/demo-gx/accounts"),
+                &owner(),
+                &json!({"email": "a@example.com", "password": "hunter22"}),
+            )
+            .status
+        })
+    };
+    entered_rx.recv_timeout(LONG).expect("the seed was entered");
+    // Another request names the declared tenant meanwhile: it waits for the seed.
+    let named = send_on_a_thread(
+        &state,
+        owner(),
+        &format!("{V2}/projects/demo-gx/tenants/acme-x7k2q"),
+    );
+    assert!(
+        named.recv_timeout(SOON).is_err(),
+        "the request went on while the seed was in flight"
+    );
+    release_tx.send(()).unwrap();
+    assert_eq!(installer.join().unwrap(), 200);
+    let (status, body) = named.recv_timeout(LONG).unwrap();
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(
+        display_name_of(&registry, "demo-gx", "acme-x7k2q").as_deref(),
+        Some("acme")
+    );
+}
+
+/// The same holds for the installing request itself when other requests drain the pending list
+/// at the same time (a bounded stress: it lost the declaration in 4 of 400 before the drain was
+/// serialized).
+#[test]
+fn an_installing_request_keeps_the_declaration_while_other_requests_drain_the_seeds() {
+    let (state, registry) = routed_state();
+    let mut seed = ProbedSeed::new(&declared());
+    seed.delay = std::time::Duration::from_millis(2);
+    registry.set_new_project_tenant_seed(Arc::new(seed));
+    let state = Arc::new(state);
+    let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let drainer = {
+        let (registry, stop) = (registry.clone(), stop.clone());
+        std::thread::spawn(move || {
+            while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+                let _ = registry.apply_pending_project_seeds();
+                std::thread::yield_now();
+            }
+        })
+    };
+    let mut lost = Vec::new();
+    for n in 0..200 {
+        let project = format!("demo-dr{n}");
+        let answer = send_on_a_thread(
+            &state,
+            owner(),
+            &format!("{V2}/projects/{project}/tenants/acme-x7k2q"),
+        );
+        let (status, body) = answer.recv_timeout(LONG).unwrap();
+        assert_eq!(status, 200, "{project}: {body}");
+        if display_name_of(&registry, &project, "acme-x7k2q").as_deref() != Some("acme") {
+            lost.push(project);
+        }
+    }
+    stop.store(true, std::sync::atomic::Ordering::Relaxed);
+    drainer.join().unwrap();
+    assert!(lost.is_empty(), "declared settings lost in {lost:?}");
+}
+
+/// The tenant an on-the-way request makes is made inside the same admission as the install and
+/// the seed: a reset that starts waiting for the barrier while the seed runs cannot begin (and
+/// probe the membership) until the request is done with all three. The seed holds the project's
+/// gate for a while after it is applied, so the tenant creation that follows is slow: a creation
+/// outside the admission would change the membership between the reset's probe and its apply.
+#[test]
+fn the_on_the_way_tenant_is_made_inside_the_admission_a_reset_waits_on() {
+    let (state, registry) = routed_state();
+    let (state, barrier) = with_barrier(state);
+    let (result_tx, result_rx) = std::sync::mpsc::channel();
+    let mut seed = ProbedSeed::new(&declared());
+    seed.delay = std::time::Duration::from_millis(100);
+    seed.hold_gate = std::time::Duration::from_millis(300);
+    {
+        let (registry, barrier) = (registry.clone(), barrier.clone());
+        *seed.on_first.lock().unwrap() = Some(Box::new(move || {
+            std::thread::spawn(move || {
+                // A reset: it holds the barrier exclusively across probe and apply.
+                let _reset = barrier.exclusive();
+                let probe = registry.prepare_default_scope_reset().unwrap();
+                std::thread::sleep(std::time::Duration::from_millis(600));
+                let _ = result_tx.send(registry.apply_default_scope_reset(&probe));
+            });
+        }));
+    }
+    registry.set_new_project_tenant_seed(Arc::new(seed));
+    let answer = send_on_a_thread(
+        &state,
+        owner(),
+        &format!("{V2}/projects/demo-seam/tenants/named"),
+    );
+    // The request is admitted first; the reset queues behind it and runs once it is done.
+    let (status, body) = answer.recv_timeout(LONG).unwrap();
+    assert!(matches!(status, 200 | 404), "{status} {body}");
+    let reset = result_rx.recv_timeout(LONG).unwrap();
+    assert!(
+        reset.is_ok(),
+        "the reset's membership probe changed under it: {reset:?}"
+    );
+}

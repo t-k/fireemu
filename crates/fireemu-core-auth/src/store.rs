@@ -6064,6 +6064,11 @@ pub struct AuthRegistry {
     /// Routed projects installed and not yet seeded, with the store that was installed (a
     /// project a session displaced or a reset re-created meanwhile is another incarnation).
     pending_project_seeds: Mutex<BTreeMap<String, SharedAuthStore>>,
+    /// Held from taking the pending list until its seeds are applied, so a caller that gets
+    /// through [`Self::apply_pending_project_seeds`] knows every seed drained before its call has
+    /// been applied (a request naming a declared tenant would otherwise make it with the
+    /// on-the-way defaults while its project's seed is in flight, and the seed would keep that).
+    seed_drain: Mutex<()>,
     /// Explicit project policies configured before a project session is registered. An entry
     /// does not create or route the project; it is applied to the matching namespace when it
     /// later appears.
@@ -6304,6 +6309,7 @@ impl AuthRegistry {
             projects: Mutex::new(ProjectStores::default()),
             new_project_tenant_seed: Mutex::new(None),
             pending_project_seeds: Mutex::new(BTreeMap::new()),
+            seed_drain: Mutex::new(()),
             project_password_policy_overrides: Mutex::new(BTreeMap::new()),
             project_config_overrides: Mutex::new(BTreeMap::new()),
             tenants: Mutex::new(BTreeMap::new()),
@@ -6565,6 +6571,13 @@ impl AuthRegistry {
     /// # Errors
     /// The message of the first project the declaration could not be applied to.
     pub fn apply_pending_project_seeds(&self) -> Result<(), String> {
+        // One drain at a time: a second caller waits until the first has applied its seeds. The
+        // drain mutex is the outermost lock here and nothing that holds a gate or a registry lock
+        // takes it (the seeds themselves run under it, with no gate held).
+        let _draining = self
+            .seed_drain
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let pending = match self.pending_project_seeds.lock() {
             Ok(mut pending) if !pending.is_empty() => std::mem::take(&mut *pending),
             _ => return Ok(()),

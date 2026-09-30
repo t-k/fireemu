@@ -47,7 +47,7 @@ export function preflightRequests(projectNumber) {
   ];
 }
 
-async function responseBytes(response) {
+export async function responseBytes(response) {
   const reader = response.body?.getReader();
   if (!reader) return Buffer.alloc(0);
   const chunks = [];

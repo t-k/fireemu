@@ -31,10 +31,10 @@ def utc(value):
     return result
 
 
-def check_ledger(rows, now, packet_sha):
+def check_ledger(rows, now, packet_sha, task=TASK, reserve=0.01):
     if any(row.get("packetSha256") == packet_sha for row in rows):
         raise Rejected("packet already consumed")
-    relevant = [row for row in rows if row.get("project") == PROJECT]
+    relevant = [row for row in rows if PROJECT in {part.strip() for part in row.get("project", "").split(",")}]
     if not relevant or now < max(utc(row["ts"]) for row in relevant) + dt.timedelta(minutes=30):
         raise Rejected("project setup or 30-minute spacing is missing")
     for index, row in enumerate(relevant):
@@ -46,7 +46,19 @@ def check_ledger(rows, now, packet_sha):
                 and candidate.get("recoveredFinishedTs") == row["ts"]
                 and candidate.get("taskId") == row.get("taskId")
                 for candidate in relevant[index + 1:])
-            if not recovered:
+            identity = next((key for key in ("runDir", "runId", "attemptId") if row.get(key)), None)
+            starts = [start for start in relevant[:index] if start.get("event") in ("reserved", "started")
+                and start.get("taskId") == row.get("taskId") and identity
+                and start.get(identity) == row[identity]]
+            project_side = any(candidate.get("event") == "finished"
+                and candidate.get("project") == PROJECT and candidate.get("sandboxAtBaseline") is True
+                and candidate.get("outcome") == "cleanup-verified"
+                and candidate.get("taskId") == row.get("taskId") and identity
+                and candidate.get(identity) == row[identity]
+                and any(candidate.get("closesStartedAt") == start["ts"] for start in starts)
+                and utc(candidate["ts"]) > utc(row["ts"])
+                for candidate in relevant[index + 1:])
+            if not recovered and not project_side:
                 raise Rejected("unresolved project recovery")
         if row.get("event") not in ("reserved", "started") and row.get("outcome") != "reserved":
             continue
@@ -60,14 +72,14 @@ def check_ledger(rows, now, packet_sha):
             raise Rejected("unclosed project reservation")
     consumed = {}
     for index, row in enumerate(rows):
-        if row.get("taskId") != TASK:
+        if row.get("taskId") != task:
             continue
         value = row.get("estimatedUsd", 0)
         if not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0:
             raise Rejected("invalid task cost")
         key = row.get("runDir") or row.get("runId") or row.get("attemptId") or f"legacy-{index}"
         consumed[key] = max(consumed.get(key, 0), value)
-    if sum(consumed.values()) + 0.01 > 10:
+    if sum(consumed.values()) + reserve > 10:
         raise Rejected("task cost cap exceeded")
 
 

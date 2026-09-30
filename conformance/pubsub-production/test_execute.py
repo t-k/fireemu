@@ -50,6 +50,26 @@ class ExecutorTests(unittest.TestCase):
             m.check_ledger(baseline() + [start, terminal], NOW, "a" * 64)
         m.check_ledger(baseline() + [start, {**terminal, "event": "finished"}], NOW, "a" * 64)
 
+    def test_combined_project_spacing_and_exact_project_side_recovery(self):
+        m = load()
+        recent = {"ts": "2026-09-30T11:59:00Z", "project": "fireemu-oracle-query, fireemu-oracle-idp",
+                  "event": "finished", "taskId": "OTHER", "outcome": "recorded"}
+        with self.assertRaises(m.Rejected):
+            m.check_ledger(baseline() + [recent], NOW, "a" * 64)
+        start = {"ts": "2026-09-30T09:00:00Z", "project": "fireemu-oracle-query,fireemu-oracle-idp",
+                 "event": "reserved", "taskId": "OTHER", "runId": "combined"}
+        failed = {**start, "ts": "2026-09-30T09:10:00Z", "event": "finished", "outcome": "needs-recovery"}
+        closed = {"ts": "2026-09-30T10:00:00Z", "project": PROJECT, "event": "finished",
+                  "taskId": "OTHER", "runId": "combined", "outcome": "cleanup-verified",
+                  "sandboxAtBaseline": True, "closesStartedAt": start["ts"]}
+        with self.assertRaises(m.Rejected):
+            m.check_ledger(baseline() + [start, failed], NOW, "a" * 64)
+        m.check_ledger(baseline() + [start, failed, closed], NOW, "a" * 64)
+        for changed in ({"runId": "foreign"}, {"taskId": "foreign"}, {"closesStartedAt": "wrong"},
+                        {"sandboxAtBaseline": False}, {"project": "fireemu-oracle-query"}):
+            with self.subTest(changed=changed), self.assertRaises(m.Rejected):
+                m.check_ledger(baseline() + [start, failed, {**closed, **changed}], NOW, "a" * 64)
+
     def test_budget_does_not_double_count_reservation_and_terminal(self):
         m = load()
         rows = baseline() + [{"ts": "2026-09-30T10:00:00Z", "project": PROJECT,

@@ -7,7 +7,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { collectPreflight } from "./preflight.mjs";
 
-async function syncDirectory(path) {
+export async function syncDirectory(path) {
   const directory = await open(path, "r");
   try {
     await directory.sync();
@@ -16,7 +16,7 @@ async function syncDirectory(path) {
   }
 }
 
-async function durableFile(path, value, flags = "wx") {
+export async function durableFile(path, value, flags = "wx") {
   const handle = await open(path, flags, 0o600);
   try {
     await handle.writeFile(`${JSON.stringify(value)}\n`);
@@ -27,13 +27,7 @@ async function durableFile(path, value, flags = "wx") {
   await syncDirectory(dirname(path));
 }
 
-export async function capturePreflight({
-  directory,
-  projectNumber,
-  accessToken,
-  send = (request) => fetch(request.url, request),
-  syncParent = syncDirectory,
-}) {
+export async function createCaptureDirectory(directory, syncParent = syncDirectory) {
   const common = execFileSync("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], {
     cwd: fileURLToPath(new URL("../../", import.meta.url)),
     encoding: "utf8",
@@ -55,6 +49,16 @@ export async function capturePreflight({
   }
   await mkdir(directory, { mode: 0o700 });
   await syncParent(dirname(directory));
+}
+
+export async function capturePreflight({
+  directory,
+  projectNumber,
+  accessToken,
+  send = (request) => fetch(request.url, request),
+  syncParent = syncDirectory,
+}) {
+  await createCaptureDirectory(directory, syncParent);
   let attempted = 0,
     completed = 0;
   let outcome = "recorded-preflight";

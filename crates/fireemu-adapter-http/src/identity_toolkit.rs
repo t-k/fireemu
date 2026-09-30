@@ -3167,6 +3167,11 @@ fn handle_with_policy(
         }
     }
     let response = handle_with_policy_inner(state, method, path, headers, body, oidc_trust);
+    // A routed project this request installed takes the declared tenants now, with the request's
+    // own gate and every registry lock released (the seed creates tenants under that gate).
+    if let Some(registry) = state.registry.as_ref() {
+        let _ = registry.apply_pending_project_seeds();
+    }
     if state.stateless_refresh_tokens {
         return response;
     }
@@ -3630,7 +3635,23 @@ fn emulator_creates_named_tenant(
     if registry.tenant_store(&project, &target).is_some() {
         return Ok(None);
     }
-    let Some(parent) = registry.store_for(&project) else {
+    // The parent is a project the daemon holds, or (emulator profile) the routed project a request
+    // on a project path names for the first time: the official emulator makes any project on
+    // demand. The candidate is installed only once the request is admitted.
+    let held = registry
+        .store_for(&project)
+        .or_else(|| registry.routed_store_for(&project));
+    let candidate = match held {
+        Some(_) => None,
+        None if state.allow_routed_projects && routes::scoped_target(path).is_some() => {
+            let Some(candidate) = registry.routed_candidate(&project) else {
+                return Ok(None);
+            };
+            Some(Arc::new(Mutex::new(candidate)))
+        }
+        None => return Ok(None),
+    };
+    let Some(parent) = held.or_else(|| candidate.clone()) else {
         return Ok(None);
     };
     if let Some(refusal) = refresh_token_refusal(refresh_tenant.as_ref(), &target) {
@@ -3638,6 +3659,12 @@ fn emulator_creates_named_tenant(
     }
     if !admit_request(state, request, route, route_project, &project, &parent)? {
         return Ok(None);
+    }
+    if let Some(candidate) = candidate {
+        match registry.install_routed(&project, candidate) {
+            RoutedStoreInstall::Installed(_) | RoutedStoreInstall::Existing(_) => {}
+            _ => return Ok(None),
+        }
     }
     Ok(registry
         .ensure_tenant_with(&project, &target, tenant_document::install_default_mfa)
@@ -4403,6 +4430,21 @@ fn handle_with_policy_inner(
         // project's configuration. Release the request's selected store before that registry
         // operation so initialization never attempts to reacquire the same non-reentrant lock.
         drop(store);
+        // Creating a tenant is state, so a project only this request has named (a routed
+        // candidate) is installed to be the tenant's parent, once the body is a tenant the
+        // create would accept: a refused create installs nothing.
+        if route.handler == routes::Handler::TenantCreate {
+            if let Some(routed) = pending_routed_project.as_deref() {
+                if let Err(response) =
+                    prepare_tenant_create(body, state.stateless_refresh_tokens, None)
+                {
+                    return response;
+                }
+                if let Err(response) = install_routed_candidate(state, routed, &store_arc) {
+                    return response;
+                }
+            }
+        }
         // Reads keep an existing routed gate through response construction. Writes release it
         // because the registry's guarded mutation acquires the project gate itself.
         let _routed_read_operation = if matches!(
@@ -8349,7 +8391,7 @@ fn tenant_answer(
 
 /// A tenant document read for a create, ready to publish: what the Admin create route and a
 /// seeded tenant of the configuration file share, so both validate and default one way.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub(crate) struct PreparedTenantCreate {
     metadata: fireemu_core_auth::store::TenantMetadata,
     patch: fireemu_core_auth::store::TenantMetadataPatch,

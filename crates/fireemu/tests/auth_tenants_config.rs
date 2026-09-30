@@ -628,14 +628,11 @@ fn an_import_is_authoritative_for_a_tenant_of_the_same_id_and_the_seed_keeps_the
     assert_eq!(field("BETA ")["displayName"], "beta", "{log}");
 }
 
-/// Pins a KNOWN DIVERGENCE, not a design: a namespace the emulator profile routes by the first
-/// Admin request for an unknown project id cannot hold tenants yet (the official emulator creates
-/// them on demand), so there is nothing to seed there. The fix (open issue
-/// `emulator-routed-namespaces-cannot-hold-tenants`, before the release) makes routed projects
-/// hold and be seeded with tenants and replaces this test; a session project
-/// (`POST /v1/sessions`) is the isolated project that has tenants today.
+/// A namespace the emulator profile routes by a request for an unknown project id holds tenants
+/// as the official emulator's project does, and starts with the declared ones. A read alone
+/// installs nothing.
 #[test]
-fn a_routed_namespace_has_no_tenants_to_seed() {
+fn a_routed_namespace_holds_tenants_and_starts_with_the_declared_ones() {
     let daemon = Daemon::start("routed", "emulator", &declared(true));
     let (status, listed) = daemon.admin(
         "GET",
@@ -643,17 +640,35 @@ fn a_routed_namespace_has_no_tenants_to_seed() {
         &json!({}),
     );
     assert_eq!((status, listed), (200, json!({})));
-    let (status, refused) = daemon.admin(
-        "POST",
-        &format!("{V2}/projects/demo-routed/tenants"),
-        &json!({"displayName": "x"}),
+    // A tenant the request names installs the project, with the declared tenants beside it.
+    let (status, made) = daemon.admin(
+        "GET",
+        &format!("{V2}/projects/demo-routed/tenants/on-the-way"),
+        &json!({}),
     );
-    assert_eq!(status, 400, "{refused}");
-    assert_eq!(refused["error"]["message"], "INVALID_PROJECT_ID");
-    let (status, _) = daemon.admin(
+    assert_eq!(status, 200, "{made}");
+    assert_eq!(
+        daemon.tenant_ids_in("demo-routed"),
+        ["acme-x7k2q", "beta-a1b2c", "on-the-way"]
+    );
+    let (status, acme) = daemon.admin(
         "GET",
         &format!("{V2}/projects/demo-routed/tenants/acme-x7k2q"),
         &json!({}),
     );
-    assert_eq!(status, 404);
+    assert_eq!(status, 200, "{acme}");
+    assert_eq!(acme["allowPasswordSignup"], true, "{acme}");
+    // A default-scope reset drops the routed project; it is seeded again when next installed.
+    daemon.reset();
+    assert_eq!(daemon.tenant_ids_in("demo-routed"), Vec::<String>::new());
+    let (status, _) = daemon.admin(
+        "GET",
+        &format!("{V2}/projects/demo-routed/tenants/second"),
+        &json!({}),
+    );
+    assert_eq!(status, 200);
+    assert_eq!(
+        daemon.tenant_ids_in("demo-routed"),
+        ["acme-x7k2q", "beta-a1b2c", "second"]
+    );
 }

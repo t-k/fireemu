@@ -920,6 +920,10 @@ fn assemble_suite(assembly: ServiceAssembly, exec_mode: bool) -> Result<ReadySui
     seeding
         .apply(&registry, &cfg.auth_project)
         .map_err(|error| format!("auth.tenants: {error}"))?;
+    // A compatibility-routed project (emulator profile) gets the declaration when it is installed.
+    if !seeding.is_empty() {
+        registry.set_new_project_tenant_seed(Arc::new(seeding));
+    }
     let hub_state = Arc::new(hub::HubState {
         project: cfg.auth_project.clone(),
         addr: hub_addr.unwrap_or(http_addr),

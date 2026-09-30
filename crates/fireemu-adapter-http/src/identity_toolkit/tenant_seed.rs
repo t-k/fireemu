@@ -12,7 +12,7 @@
 use std::sync::{Arc, Mutex};
 
 use fireemu_core_auth::mfa::TotpPolicy;
-use fireemu_core_auth::store::{AuthRegistry, AuthStore};
+use fireemu_core_auth::store::{AuthRegistry, AuthStore, NewProjectSeed};
 use fireemu_core_types::determinism::SplitMix64;
 use serde_json::{json, Value};
 
@@ -22,7 +22,7 @@ use super::{
 };
 
 /// A tenant of the configuration file, validated and ready to create.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct TenantSeed {
     id: String,
     prepared: PreparedTenantCreate,
@@ -145,7 +145,7 @@ impl TenantSeed {
 
 /// The declared multi-tenancy switch and tenants of a project, applied together: the switch
 /// first (strict creates tenants only in a project that allows them), then each tenant.
-#[derive(Clone, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct TenantSeeding {
     allow_tenants: Option<bool>,
     tenants: Vec<TenantSeed>,
@@ -252,7 +252,10 @@ pub fn seed_multi_tenancy(
     allow_tenants: bool,
 ) -> Result<(), String> {
     let unknown = || format!("cannot set multiTenant.allowTenants: project {project:?} is unknown");
-    let store = registry.store_for(project).ok_or_else(unknown)?;
+    let store = registry
+        .store_for(project)
+        .or_else(|| registry.routed_store_for(project))
+        .ok_or_else(unknown)?;
     let gate = registry.operation_gate(project, None).ok_or_else(unknown)?;
     let _operation = gate
         .lock()
@@ -273,4 +276,11 @@ pub fn seed_multi_tenancy(
     with_derived_members(&mut members, &body, &fields, false, None);
     store.set_stored_config_members(members);
     Ok(())
+}
+
+/// The declaration is what a routed project is seeded with when it is installed.
+impl NewProjectSeed for TenantSeeding {
+    fn apply(&self, registry: &AuthRegistry, project: &str) -> Result<(), String> {
+        TenantSeeding::apply(self, registry, project)
+    }
 }

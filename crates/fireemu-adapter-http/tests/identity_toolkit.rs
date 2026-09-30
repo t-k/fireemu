@@ -17453,6 +17453,8 @@ fn emulator_batch_create_checks_repeated_addresses_row_by_row() {
 /// Official emulator source: operations.js:278-290,382-407 (firebase-tools 15.28.2).
 #[test]
 fn emulator_batch_import_missing_ids_refuse_the_request_before_writes() {
+    // Null follows fireemu's ProtoJSON-null-as-unset convention. The official HTTP validator
+    // refuses it first with INVALID_ARGUMENT: /users/0/localId must be string.
     for first in [json!({}), json!({"localId": null}), json!({"localId": ""})] {
         for second in [json!({}), json!({"localId": null}), json!({"localId": ""})] {
             for flag in [json!({}), json!({"allowOverwrite": false})] {
@@ -17488,6 +17490,7 @@ fn emulator_batch_import_missing_ids_refuse_the_request_before_writes() {
 
 #[test]
 fn emulator_batch_import_missing_ids_remain_row_errors_when_not_repeated_or_overwriting() {
+    // Null is a fireemu convention, not the official HTTP validator's answer (see above).
     for missing in [json!({}), json!({"localId": null}), json!({"localId": ""})] {
         for allow_overwrite in [false, true] {
             let s = state();
@@ -17508,6 +17511,37 @@ fn emulator_batch_import_missing_ids_remain_row_errors_when_not_repeated_or_over
             assert!(!looked_up(&s, "before").is_null());
             assert!(!looked_up(&s, "after").is_null());
         }
+    }
+}
+
+/// Request preflight precedes field decoding and hash-option validation, with no writes.
+#[test]
+fn emulator_batch_import_request_refusal_precedes_row_decode() {
+    for malformed in [
+        json!({"createdAt": "abc"}),
+        json!({"passwordHash": "%%%"}),
+        json!({}),
+    ] {
+        let s = state();
+        let (_, seeded) = batch_import(&s, &json!({"users": [{"localId": "kept"}]}));
+        assert!(row_errors(&seeded).is_empty());
+        let before = looked_up(&s, "kept");
+        let mut request = json!({"users": [
+            {"localId": "new-before"}, malformed, {},
+            {"localId": "kept", "displayName": "Must not replace"},
+        ]});
+        if request["users"][1] == json!({}) {
+            request["hashAlgorithm"] = json!("INVALID_HASH_ALGORITHM");
+        }
+        let (status, body) = batch_import(&s, &request);
+        assert_eq!(status, 400, "{body}");
+        assert_eq!(body["error"]["message"], "DUPLICATE_LOCAL_ID : ", "{body}");
+        assert_eq!(
+            body["error"]["errors"][0]["message"],
+            "DUPLICATE_LOCAL_ID : "
+        );
+        assert!(looked_up(&s, "new-before").is_null());
+        assert_eq!(looked_up(&s, "kept"), before);
     }
 }
 

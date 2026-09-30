@@ -1770,13 +1770,13 @@
               "precision": "conservative"
             },
             {
-              "behaviour": "a 2nd gen Firestore event's `source` is the document resource name (projects/P/databases/D/documents/C/ID) where production's is the database resource name (//firestore.googleapis.com/projects/P/databases/D); the firebase-functions JSON path takes the name of an absent document side from `source`, so production's value needs protobuf binary-mode delivery, which this runtime does not offer. Recorded from a production delivery on 2026-09-30; a handler that reads `event.source` sees the difference, one that reads `event.document`, `event.params` or the snapshot does not",
+              "behaviour": "a 2nd gen Firestore event's `source` is the document resource name (projects/P/databases/D/documents/C/ID) where production's is the database resource name (//firestore.googleapis.com/projects/P/databases/D), observed on a create on 2026-09-30. With firebase-functions 7.3.2 the JSON path reads `source` only for a snapshot side the data does not carry (the `written` event of a create or a delete) and the 1st gen resource the runner builds reads it too, so created, updated and deleted 2nd gen deliveries could carry production's value today; only `written` deliveries of a create or a delete need protobuf binary-mode delivery, which this runtime does not offer. A handler that reads `event.source` sees the difference, one that reads `event.document`, `event.params` or the snapshot does not",
               "precision": "conservative"
             }
           ],
           "productionOnly": [
             "Cloud Tasks applies maxDispatchesPerSecond to every first or retry attempt; fireemu follows that production contract while the pinned Tasks emulator only consumes a token for the first attempt",
-            "A Firestore event's id is a UUID and its time is printed as a protobuf JSON Timestamp (none, 3, 6 or 9 fraction digits; a microsecond commit time prints six), and a 1st gen Firestore handler's context.eventId is that id followed by -0; fireemu follows these forms as recorded from a production create delivery on 2026-09-30, with the UUID derived from the session and the event counter so that a run replays"
+            "Observed in one production Firestore create delivery on 2026-09-30: a 2nd gen event's id is a UUID, its time carries a six-digit fraction (the microsecond commit time), and a 1st gen handler's context.eventId is that id followed by -0. Inferred, not observed: the zero, three and nine digit fractions (the protobuf JSON Timestamp mapping prints the shortest of 0, 3, 6 or 9 digits) and the same id, time and -0 forms for updated, deleted and written events. fireemu follows both, with the UUID derived from the session and the event counter so that a run replays"
           ],
           "preview": []
         },

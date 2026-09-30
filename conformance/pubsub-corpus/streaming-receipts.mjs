@@ -11,6 +11,7 @@ export function createStreamingReceiptQueue({
   maxHeaderPairs,
   maxEvents,
   wallMs,
+  deadlineAt,
   credential,
   persist,
   onFrame,
@@ -23,6 +24,10 @@ export function createStreamingReceiptQueue({
   if (wallMs > 2147483647) throw new Error("finite timer bound required");
   for (const callback of [persist, onFrame, stopOwned])
     if (typeof callback !== "function") throw new Error("owned receipt callbacks required");
+  const startedAt = performance.now(),
+    deadline = deadlineAt === undefined ? startedAt + wallMs : deadlineAt;
+  if (!Number.isFinite(deadline) || deadline <= startedAt || deadline > startedAt + wallMs)
+    throw new Error("live bounded monotonic deadline required");
   const decoder = createStreamingFrameDecoder({
     maxFrameBytes,
     maxTotalBytes,
@@ -31,8 +36,7 @@ export function createStreamingReceiptQueue({
     credential,
   });
   const secret = credential === undefined ? undefined : Buffer.from(credential);
-  const deadline = performance.now() + wallMs,
-    controller = new AbortController(),
+  const controller = new AbortController(),
     pending = new Map();
   let events = 0,
     persistedEvents = 0,
@@ -75,7 +79,7 @@ export function createStreamingReceiptQueue({
   function requestOwnedStop() {
     if (ownedStarted) return;
     ownedStarted = true;
-    track("owned-stop", () => stopOwned({ signal: controller.signal })).then(
+    track("owned-stop", () => stopOwned({ signal: controller.signal, reason })).then(
       () => {
         ownedSettled = true;
       },
@@ -92,7 +96,7 @@ export function createStreamingReceiptQueue({
   const onAbort = () => stop("abort");
   signal?.addEventListener("abort", onAbort, { once: true });
   if (signal?.aborted) stop("abort");
-  const timer = setTimeout(() => stop("deadline"), wallMs);
+  const timer = setTimeout(() => stop("deadline"), Math.max(0, deadline - performance.now()));
   timer.unref();
   function checkBudget() {
     if (performance.now() >= deadline) {
@@ -246,6 +250,7 @@ export function createStreamingReceiptQueue({
     signal?.removeEventListener("abort", onAbort);
     uncertainSeen = uncertainSeen || pending.size > 0 || drainedEvents !== events;
     return {
+      deadlineAt: deadline,
       events,
       persistedEvents,
       unknownEvents: events - persistedEvents,

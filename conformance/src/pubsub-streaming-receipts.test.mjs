@@ -318,3 +318,56 @@ test("metadata bytes are cumulative and malformed or unbounded receipt inputs ar
     assert.equal((await invalidQueue.done()).reason, "invalid-headers");
   }
 });
+test(
+  "the same absolute monotonic deadline bounds receipt draining instead of restarting its window",
+  { timeout: 500 },
+  async () => {
+    const exact = performance.now() + 200;
+    const { q } = await queue({ deadlineAt: exact });
+    assert.equal((await q.done()).deadlineAt, exact);
+    let release;
+    const hung = new Promise((resolve) => {
+      release = resolve;
+    });
+    const { q: bounded } = await queue({ deadlineAt: performance.now() + 30, persist: () => hung });
+    bounded.data(frame(Buffer.alloc(0)));
+    try {
+      const result = await bounded.done();
+      assert.equal(result.terminationRequired, true);
+      assert.ok(result.pendingCallbacks.length > 0);
+    } finally {
+      release();
+    }
+  },
+);
+test("invalid or extended receipt deadlines are refused without starting owned callbacks", async () => {
+  for (const deadlineAt of [
+    NaN,
+    Infinity,
+    -Infinity,
+    -1,
+    performance.now() - 1,
+    performance.now() + 10000,
+  ])
+    await assert.rejects(queue({ deadlineAt }), /deadline/);
+});
+test(
+  "idle receipt stop uses the shared deadline and supplies its bounded reason",
+  { timeout: 500 },
+  async () => {
+    let stops = 0;
+    const { q } = await queue({
+      deadlineAt: performance.now() + 30,
+      stopOwned: ({ reason }) => {
+        assert.equal(reason, "deadline");
+        stops++;
+      },
+    });
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 60));
+      assert.equal(stops, 1);
+    } finally {
+      await q.done();
+    }
+  },
+);

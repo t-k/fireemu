@@ -321,3 +321,84 @@ test("an already-settled promise still violates either synchronous source contra
     assert.equal(result.stopOrigin, "uncertain");
   }
 });
+test("owned containment begins inline while authority is pending and remains single", async () => {
+  let release,
+    stopped = 0;
+  const held = new Promise((resolve) => {
+    release = resolve;
+  });
+  const { g, issued } = await gate({
+    guard: () => held,
+    contain: ({ origin }) => {
+      assert.equal(origin, "abort");
+      stopped++;
+    },
+  });
+  const work = g.open();
+  try {
+    g.stop("abort");
+    assert.equal(stopped, 1);
+    g.stop("deadline");
+    assert.equal(stopped, 1);
+  } finally {
+    release();
+    await assert.rejects(work, /stopped/);
+    await g.done();
+  }
+  assert.equal(issued.length, 0);
+});
+test(
+  "an absolute shared monotonic deadline is retained and bounds hung authority",
+  { timeout: 500 },
+  async () => {
+    const exact = performance.now() + 200;
+    const { g } = await gate({ deadlineAt: exact });
+    assert.equal((await g.done()).deadlineAt, exact);
+    let release;
+    const hung = new Promise((resolve) => {
+      release = resolve;
+    });
+    const { g: bounded, issued } = await gate({
+      deadlineAt: performance.now() + 30,
+      guard: () => hung,
+    });
+    try {
+      await assert.rejects(bounded.open(), /stopped/);
+      assert.equal(issued.length, 0);
+      assert.equal((await bounded.done()).terminationRequired, true);
+    } finally {
+      release();
+    }
+  },
+);
+test("expired malformed or extended absolute deadlines are refused before callbacks", async () => {
+  for (const deadlineAt of [
+    NaN,
+    Infinity,
+    -Infinity,
+    -1,
+    performance.now() - 1,
+    performance.now() + 10000,
+  ])
+    await assert.rejects(gate({ deadlineAt }), /deadline/);
+});
+test(
+  "idle containment timer uses the absolute deadline without waiting for an action",
+  { timeout: 500 },
+  async () => {
+    let stops = 0;
+    const { g } = await gate({
+      deadlineAt: performance.now() + 30,
+      contain: ({ origin }) => {
+        assert.equal(origin, "deadline");
+        stops++;
+      },
+    });
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 60));
+      assert.equal(stops, 1);
+    } finally {
+      await g.done();
+    }
+  },
+);

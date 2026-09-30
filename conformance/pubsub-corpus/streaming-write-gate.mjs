@@ -7,6 +7,7 @@ export function createStreamingWriteGate({
   maxOutgoingBytes,
   maxActions,
   wallMs,
+  deadlineAt,
   guard,
   liveCheck,
   persist,
@@ -29,8 +30,11 @@ export function createStreamingWriteGate({
   )
     throw new Error("bounded credential required");
   const secret = credential === undefined ? undefined : Buffer.from(credential);
-  const deadline = performance.now() + wallMs,
-    controller = new AbortController(),
+  const startedAt = performance.now(),
+    deadline = deadlineAt === undefined ? startedAt + wallMs : deadlineAt;
+  if (!Number.isFinite(deadline) || deadline <= startedAt || deadline > startedAt + wallMs)
+    throw new Error("live bounded monotonic deadline required");
+  const controller = new AbortController(),
     pending = new Map();
   let attemptedActions = 0,
     issuedActions = 0,
@@ -56,7 +60,11 @@ export function createStreamingWriteGate({
   ]);
   let timer;
   function tracked(id, callback) {
-    const work = Promise.resolve().then(callback);
+    let resolve, reject;
+    const work = new Promise((r, j) => {
+      resolve = r;
+      reject = j;
+    });
     const observed = work.then(
       (value) => {
         pending.delete(id);
@@ -68,13 +76,18 @@ export function createStreamingWriteGate({
       },
     );
     pending.set(id, observed);
+    try {
+      resolve(callback());
+    } catch (error) {
+      reject(error);
+    }
     return observed;
   }
   function stop(origin = "uncertain") {
     if (stopOrigin) return;
     stopOrigin = origins.has(origin) ? origin : "uncertain";
     controller.abort();
-    tracked("containment", () => contain({ signal: controller.signal })).then(
+    tracked("containment", () => contain({ signal: controller.signal, origin: stopOrigin })).then(
       () => {
         containmentSettled = true;
       },
@@ -86,7 +99,7 @@ export function createStreamingWriteGate({
   const onAbort = () => stop("abort");
   signal?.addEventListener("abort", onAbort, { once: true });
   if (signal?.aborted) stop("abort");
-  timer = setTimeout(() => stop("deadline"), wallMs);
+  timer = setTimeout(() => stop("deadline"), Math.max(0, deadline - performance.now()));
   timer.unref();
   function check() {
     if (performance.now() >= deadline) stop("deadline");
@@ -220,6 +233,7 @@ export function createStreamingWriteGate({
     }
     unsettledObserved = unsettledObserved || pending.size > 0;
     return {
+      deadlineAt: deadline,
       attemptedActions,
       issuedActions,
       completedActions,

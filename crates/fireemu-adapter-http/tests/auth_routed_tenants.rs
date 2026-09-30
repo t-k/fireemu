@@ -4,7 +4,9 @@
 //! tenant (creating one, or naming one that does not exist yet), never for a read alone, and never
 //! for a request its guards refuse. The strict profile is unchanged.
 
-use std::sync::{Arc, Mutex, RwLock};
+#![allow(dead_code)] // the helpers are shared with the other tenant test files
+
+use std::sync::{Arc, Mutex};
 
 use fireemu_adapter_http::identity_toolkit::{
     handle, handle_with, AuthQueryLimits, AuthState, ClientApiKeyPolicy, FakeCustomTokenExpiry,
@@ -14,7 +16,6 @@ use fireemu_core_auth::jwt::decode_unsigned;
 use fireemu_core_auth::mfa::TotpPolicy;
 use fireemu_core_auth::store::{AuthRegistry, AuthStore};
 use fireemu_core_session::clock::VirtualClock;
-use fireemu_core_session::tenancy::Tenancy;
 use fireemu_core_types::determinism::SplitMix64;
 use fireemu_core_types::time::LogicalInstant;
 use serde_json::{json, Value};
@@ -166,7 +167,7 @@ fn creating_a_tenant_on_an_unknown_project_installs_the_project_and_makes_the_te
         .next()
         .unwrap()
         .to_owned();
-    assert_eq!(registry.tenants("demo-routed"), [id.clone()]);
+    assert_eq!(registry.tenants("demo-routed"), std::slice::from_ref(&id));
     let (status, listed) = admin(&state, "GET", ROUTED_TENANTS, &json!({}));
     assert_eq!(status, 200, "{listed}");
     assert_eq!(

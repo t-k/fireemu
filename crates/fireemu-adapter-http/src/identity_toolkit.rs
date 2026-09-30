@@ -3453,6 +3453,85 @@ fn query_tenant_of(handler: routes::Handler, query: Option<&str>) -> Option<Stri
         .flatten()
 }
 
+/// See [`creation_parent`].
+struct CreationParent {
+    parent: Arc<Mutex<AuthStore>>,
+    candidate: Option<Arc<Mutex<AuthStore>>>,
+}
+
+/// The store a tenant made for `project` is a child of, and (when the project is one only this
+/// request has named) the routed candidate to install once the request is admitted: a project the
+/// daemon holds is its own parent, and on a project path (emulator profile) any other valid
+/// project id is made on demand, as the official emulator makes it.
+fn creation_parent(
+    state: &AuthState,
+    registry: &fireemu_core_auth::store::AuthRegistry,
+    project: &str,
+    path: &str,
+) -> Option<CreationParent> {
+    if let Some(held) = registry
+        .store_for(project)
+        .or_else(|| registry.routed_store_for(project))
+    {
+        return Some(CreationParent {
+            parent: held,
+            candidate: None,
+        });
+    }
+    if !state.allow_routed_projects || routes::scoped_target(path).is_none() {
+        return None;
+    }
+    let candidate = Arc::new(Mutex::new(registry.routed_candidate(project)?));
+    Some(CreationParent {
+        parent: candidate.clone(),
+        candidate: Some(candidate),
+    })
+}
+
+/// Installs the routed candidate of an admitted request; whether the project is there now.
+fn install_admitted_candidate(
+    registry: &fireemu_core_auth::store::AuthRegistry,
+    project: &str,
+    candidate: Arc<Mutex<AuthStore>>,
+) -> bool {
+    matches!(
+        registry.install_routed(project, candidate),
+        RoutedStoreInstall::Installed(_) | RoutedStoreInstall::Existing(_)
+    )
+}
+
+/// The answer to a foreign or unverifiable ID token whose tenant disagrees with the tenant a
+/// request names: `TENANT_ID_MISMATCH`, given only to a request this daemon admits (its own
+/// refusals come first), and `Ok(None)` when it is not admitted or has no parent to admit it.
+fn token_tenant_disagreement(
+    state: &AuthState,
+    request: &TenantCreation<'_>,
+    resolution: routes::Resolution<'_>,
+    project: &str,
+) -> Result<Option<String>, JsonResponse> {
+    let (
+        Some(registry),
+        routes::Resolution::Matched {
+            route,
+            project: route_project,
+            ..
+        },
+    ) = (state.registry.as_ref(), resolution)
+    else {
+        return Ok(None);
+    };
+    let Some(CreationParent { parent, .. }) =
+        creation_parent(state, registry, project, request.path)
+    else {
+        return Ok(None);
+    };
+    if admit_request(state, request, route, route_project, project, &parent)? {
+        Err(error(400, "TENANT_ID_MISMATCH"))
+    } else {
+        Ok(None)
+    }
+}
+
 /// The refusal a refresh token earns before a tenant is looked up: `INVALID_REFRESH_TOKEN` for
 /// one that does not decode, and `TENANT_ID_MISMATCH` for one of another tenant than `target`.
 fn refresh_token_refusal(
@@ -3599,24 +3678,10 @@ fn emulator_creates_named_tenant(
         Some(target) => {
             if named.any(|other| other != target) {
                 // The official emulator asserts the token's tenant against the path's or the
-                // body's before it looks a tenant up. The answer is given only to a request
-                // this daemon admits; the other disagreements meet their own checks later.
+                // body's before it looks a tenant up (`token_tenant_disagreement`); the other
+                // disagreements meet their own checks later.
                 if token_tenant.is_some() && !token_of_project {
-                    let Some(parent) = registry.store_for(&project) else {
-                        return Ok(None);
-                    };
-                    return if admit_request(
-                        state,
-                        request,
-                        route,
-                        route_project,
-                        &project,
-                        &parent,
-                    )? {
-                        Err(error(400, "TENANT_ID_MISMATCH"))
-                    } else {
-                        Ok(None)
-                    };
+                    return token_tenant_disagreement(state, request, resolution, &project);
                 }
                 return Ok(None);
             }
@@ -3635,23 +3700,9 @@ fn emulator_creates_named_tenant(
     if registry.tenant_store(&project, &target).is_some() {
         return Ok(None);
     }
-    // The parent is a project the daemon holds, or (emulator profile) the routed project a request
-    // on a project path names for the first time: the official emulator makes any project on
-    // demand. The candidate is installed only once the request is admitted.
-    let held = registry
-        .store_for(&project)
-        .or_else(|| registry.routed_store_for(&project));
-    let candidate = match held {
-        Some(_) => None,
-        None if state.allow_routed_projects && routes::scoped_target(path).is_some() => {
-            let Some(candidate) = registry.routed_candidate(&project) else {
-                return Ok(None);
-            };
-            Some(Arc::new(Mutex::new(candidate)))
-        }
-        None => return Ok(None),
-    };
-    let Some(parent) = held.or_else(|| candidate.clone()) else {
+    let Some(CreationParent { parent, candidate }) =
+        creation_parent(state, registry, &project, path)
+    else {
         return Ok(None);
     };
     if let Some(refusal) = refresh_token_refusal(refresh_tenant.as_ref(), &target) {
@@ -3660,11 +3711,9 @@ fn emulator_creates_named_tenant(
     if !admit_request(state, request, route, route_project, &project, &parent)? {
         return Ok(None);
     }
-    if let Some(candidate) = candidate {
-        match registry.install_routed(&project, candidate) {
-            RoutedStoreInstall::Installed(_) | RoutedStoreInstall::Existing(_) => {}
-            _ => return Ok(None),
-        }
+    if !candidate.is_none_or(|candidate| install_admitted_candidate(registry, &project, candidate))
+    {
+        return Ok(None);
     }
     Ok(registry
         .ensure_tenant_with(&project, &target, tenant_document::install_default_mfa)

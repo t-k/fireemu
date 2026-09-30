@@ -879,8 +879,16 @@ def test_trickle_body_deadline_reaches_response_without_interpreter_setup(oauth_
 
 
 @pytest.mark.parametrize("reaped", [True, False])
-def test_short_parent_deadline_kills_once_and_preserves_unconfirmed_reap(monkeypatch, reaped):
+@pytest.mark.parametrize("launch_seconds", [0, .6])
+def test_short_parent_deadline_kills_once_and_preserves_unconfirmed_reap(
+    monkeypatch, reaped, launch_seconds
+):
     import subprocess
+    from types import SimpleNamespace
+
+    assert threading.enumerate() == [threading.main_thread()]
+    clock = SimpleNamespace(now=0.0)
+    monkeypatch.setattr(time, "monotonic", lambda: clock.now)
 
     class Worker:
         pid = 123456
@@ -892,6 +900,7 @@ def test_short_parent_deadline_kills_once_and_preserves_unconfirmed_reap(monkeyp
 
         def communicate(self, raw=None, *, timeout):
             self.calls.append((raw, timeout))
+            clock.now += timeout
             if len(self.calls) == 1 or not reaped:
                 raise subprocess.TimeoutExpired("synthetic-worker", timeout)
             self.returncode = -9
@@ -908,13 +917,17 @@ def test_short_parent_deadline_kills_once_and_preserves_unconfirmed_reap(monkeyp
 
     def launch(*args, **kwargs):
         launches.append((args, kwargs))
+        clock.now += launch_seconds
         return worker
 
     monkeypatch.setattr(subprocess, "Popen", launch)
-    result = prep()._private_request("tokeninfo", "synthetic-access-secret", deadline=.5)
+    result = prep()._private_request(
+        "tokeninfo", "synthetic-access-secret", deadline=.5,
+        fixture_origin="http://127.0.0.1:65535",
+    )
     assert len(launches) == 1 and len(worker.calls) == 2
-    assert 0 < worker.calls[0][1] <= .375
-    assert 0 < worker.calls[1][1] <= .5
+    assert worker.calls[0][1] == pytest.approx(.375 if launch_seconds == 0 else 0)
+    assert worker.calls[1][1] == pytest.approx(.125 if launch_seconds == 0 else 0)
     assert worker.calls[0][0] is not None and worker.calls[1][0] is None
     assert result["complete"] is False and result["failure"] == "deadline"
     assert result["workerReaped"] is reaped
@@ -922,6 +935,64 @@ def test_short_parent_deadline_kills_once_and_preserves_unconfirmed_reap(monkeyp
     assert ("workerPid" in result) is not reaped
     if not reaped:
         assert result["workerPid"] == worker.pid
+
+
+@pytest.mark.parametrize("deadline,socket_budget,parent_budget", [(2, 1.25, 1.75), (12, 11.25, 11.75)])
+@pytest.mark.parametrize("complete", [True, False])
+def test_parent_accepts_serialized_worker_receipt_with_its_bounded_payload(
+    monkeypatch, deadline, socket_budget, parent_budget, complete
+):
+    import subprocess
+    from types import SimpleNamespace
+
+    assert threading.enumerate() == [threading.main_thread()]
+    clock = SimpleNamespace(now=0.0)
+    monkeypatch.setattr(time, "monotonic", lambda: clock.now)
+    receipt = {"complete": complete, "status": 200, "receivedBytes": 2 if complete else 0,
+               "declaredLength": 2, "phase": "body", "socketTimeoutSeconds": socket_budget,
+               "elapsedSeconds": socket_budget}
+    if complete:
+        receipt["body"] = {}
+    else:
+        receipt["failure"] = "read-timeout"
+    calls = []
+
+    class Worker:
+        returncode = None
+
+        def communicate(self, raw, *, timeout):
+            payload = json.loads(raw)
+            calls.append((payload, timeout))
+            assert payload == {"slot": "tokeninfo", "secret": "synthetic-access-secret",
+                               "socketTimeoutSeconds": socket_budget,
+                               "fixtureOrigin": "http://127.0.0.1:65535"}
+            assert timeout == pytest.approx(parent_budget - .1)
+            assert socket_budget < timeout
+            clock.now += socket_budget
+            self.returncode = 0
+            return json.dumps(receipt).encode(), b""
+
+        def poll(self):
+            return self.returncode
+
+        def kill(self):
+            pytest.fail("a serialized receipt within the parent budget must not be killed")
+
+    launches = []
+
+    def launch(*args, **kwargs):
+        launches.append((args, kwargs))
+        clock.now += .1
+        return Worker()
+
+    monkeypatch.setattr(subprocess, "Popen", launch)
+    result = prep()._private_request(
+        "tokeninfo", "synthetic-access-secret", deadline=deadline,
+        fixture_origin="http://127.0.0.1:65535",
+    )
+    assert len(launches) == len(calls) == 1
+    assert result == {**receipt, "workerReaped": True}
+    assert "synthetic-access-secret" not in json.dumps(result)
 
 
 @pytest.mark.parametrize("scenario", ["tokeninfo-stall", "immediate-body", "delayed-headers"])

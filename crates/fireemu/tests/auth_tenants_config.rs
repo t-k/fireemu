@@ -628,9 +628,12 @@ fn an_import_is_authoritative_for_a_tenant_of_the_same_id_and_the_seed_keeps_the
     assert_eq!(field("BETA ")["displayName"], "beta", "{log}");
 }
 
-/// A namespace the emulator profile routes by the first Admin request for an unknown project id
-/// holds no tenants at all (it cannot create one), so there is nothing to seed there; a session
-/// project (`POST /v1/sessions`) is the isolated project that has tenants.
+/// Pins a KNOWN DIVERGENCE, not a design: a namespace the emulator profile routes by the first
+/// Admin request for an unknown project id cannot hold tenants yet (the official emulator creates
+/// them on demand), so there is nothing to seed there. The fix (open issue
+/// `emulator-routed-namespaces-cannot-hold-tenants`, before the release) makes routed projects
+/// hold and be seeded with tenants and replaces this test; a session project
+/// (`POST /v1/sessions`) is the isolated project that has tenants today.
 #[test]
 fn a_routed_namespace_has_no_tenants_to_seed() {
     let daemon = Daemon::start("routed", "emulator", &declared(true));

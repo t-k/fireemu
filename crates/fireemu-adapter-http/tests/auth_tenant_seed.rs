@@ -402,6 +402,17 @@ fn a_declared_tenant_an_import_replaced_with_other_settings_is_reported() {
         other(|d| d["client"] = json!({"permissions": {"disabledUserSignup": true}})),
         ["acme-x7k2q"]
     );
+    assert_eq!(
+        other(|d| d["passwordPolicyConfig"] = json!({
+            "passwordPolicyEnforcementState": "ENFORCE",
+            "passwordPolicyVersions": [{"customStrengthOptions": {"minPasswordLength": 12}}]
+        })),
+        ["acme-x7k2q"]
+    );
+    assert_eq!(
+        other(|d| d["testPhoneNumbers"] = json!({"+16505550101": "123456"})),
+        ["acme-x7k2q"]
+    );
 }
 
 #[test]
@@ -417,4 +428,34 @@ fn an_undeclared_switch_is_left_as_the_project_has_it() {
         .apply(&registry, "demo-app")
         .unwrap();
     assert!(!state.store.lock().unwrap().allows_tenants());
+}
+
+/// A setting the tenant only takes from its project is not a difference: the same declaration
+/// applied in a project with other settings is not reported.
+#[test]
+fn a_project_setting_a_tenant_follows_is_not_a_shadowing_difference() {
+    use fireemu_adapter_http::identity_toolkit::TenantSeeding;
+    for emulator in [true, false] {
+        let (state, registry) = with_registry(if emulator {
+            emulator_state()
+        } else {
+            strict_state()
+        });
+        {
+            let mut store = state.store.lock().unwrap();
+            let mut config = store.config();
+            config.allow_duplicate_emails = true;
+            config.disabled_user_signup = true;
+            config.enable_improved_email_privacy = true;
+            store.set_config(config);
+        }
+        let declared = TenantSeeding::new(None, seeds(&[acme()], emulator).unwrap());
+        declared.apply(&registry, "demo-app").unwrap();
+        assert!(
+            declared
+                .shadowed_by_existing(&registry, "demo-app")
+                .is_empty(),
+            "{emulator}"
+        );
+    }
 }

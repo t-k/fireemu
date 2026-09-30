@@ -26,6 +26,7 @@ use super::{
 pub struct TenantSeed {
     id: String,
     prepared: PreparedTenantCreate,
+    emulator: bool,
 }
 
 /// The message of a refusal: the API's error message.
@@ -84,7 +85,11 @@ fn prepare_one(
     }
     let prepared = prepare_tenant_create(&members, emulator, written_at)
         .map_err(|response| message(&response))?;
-    Ok(TenantSeed { id, prepared })
+    Ok(TenantSeed {
+        id,
+        prepared,
+        emulator,
+    })
 }
 
 /// Validates the entries of `auth.tenants`, in order. An error names the entry (`auth.tenants[i]:`).
@@ -185,16 +190,14 @@ impl TenantSeeding {
 impl TenantSeeding {
     /// The ids of declared tenants that `project` already has (after an `--import`) with settings
     /// other than the declared ones: the imported tenant is used, so its declaration is ignored.
-    /// Compared: the display name, the sign-in switches, the client permissions and the tenant's
-    /// multi-factor config; a setting a tenant only inherits from its project is not.
+    /// The two are compared as the Admin document a read answers, without the members that only
+    /// say where a tenant lives or what it takes from its project (`name`, `inheritance`, and the
+    /// project's `hashConfig`), so every setting the file can declare is compared.
     #[must_use]
     pub fn shadowed_by_existing(&self, registry: &AuthRegistry, project: &str) -> Vec<String> {
         let mut shadowed = Vec::new();
         for tenant in &self.tenants {
-            let (Some(present), Some(present_store)) = (
-                registry.tenant_metadata(project, tenant.id()),
-                registry.tenant_store(project, tenant.id()),
-            ) else {
+            let Some(present) = tenant.document_in(registry, project) else {
                 continue;
             };
             let scratch = AuthRegistry::new(
@@ -208,28 +211,36 @@ impl TenantSeeding {
             if tenant.apply(&scratch, project).is_err() {
                 continue;
             }
-            let (Some(declared), Some(declared_store)) = (
-                scratch.tenant_metadata(project, tenant.id()),
-                scratch.tenant_store(project, tenant.id()),
-            ) else {
-                continue;
-            };
-            let same_metadata = declared.display_name == present.display_name
-                && declared.allow_password_signup == present.allow_password_signup
-                && declared.enable_email_link_signin == present.enable_email_link_signin
-                && declared.enable_anonymous_user == present.enable_anonymous_user
-                && declared.disable_auth == present.disable_auth
-                && declared.disabled_user_signup == present.disabled_user_signup
-                && declared.disabled_user_deletion == present.disabled_user_deletion;
-            let same_mfa = match (declared_store.lock(), present_store.lock()) {
-                (Ok(declared), Ok(present)) => declared.mfa_config() == present.mfa_config(),
-                _ => true,
-            };
-            if !(same_metadata && same_mfa) {
+            if tenant.document_in(&scratch, project) != Some(present) {
                 shadowed.push(tenant.id().to_owned());
             }
         }
         shadowed
+    }
+}
+
+impl TenantSeed {
+    /// The document `project` answers for this tenant's id, without the members that name a
+    /// place or come from the project.
+    fn document_in(&self, registry: &AuthRegistry, project: &str) -> Option<Value> {
+        let metadata = registry.tenant_metadata(project, &self.id)?;
+        let store = registry.tenant_store(project, &self.id)?;
+        let store = store.lock().ok()?;
+        let mut document = tenant_document::document(
+            project,
+            project,
+            &self.id,
+            &metadata,
+            &store,
+            tenant_document::View::Read,
+            self.emulator,
+        );
+        if let Some(members) = document.as_object_mut() {
+            for member in ["name", "inheritance", "hashConfig"] {
+                members.remove(member);
+            }
+        }
+        Some(document)
     }
 }
 

@@ -133,10 +133,9 @@ impl ProjectHooks for Projects {
         if !self.registry.register_session(project, store) {
             return Err(format!("project {project:?} already has an Auth store"));
         }
-        // The declared switch and tenants are the new project's, as the default project's are.
-        self.tenant_seeding
-            .apply(&self.registry, project)
-            .map_err(|error| format!("auth.tenants: {error}"))?;
+        // The declared switch and tenants are not seeded here: the control plane resets the new
+        // session straight after creating it, which seeds them once the session is committed (a
+        // seed made here would be wiped and redone, and would outlive a failed creation).
         Ok(())
     }
 
@@ -795,9 +794,15 @@ pub(crate) mod tests {
         let mut hooks = projects(&gate);
         hooks.tenant_seeding = acme_seed();
         let registry = hooks.registry.clone();
+        // The control plane creates a session and resets it straight away (control.rs), which
+        // is what seeds it once the session is committed.
         hooks
             .create(SECOND_PROJECT)
             .expect("the project is created");
+        assert!(registry.tenants(SECOND_PROJECT).is_empty());
+        hooks
+            .reset_scope(&Scope::Project(SECOND_PROJECT.to_owned()))
+            .expect("the reset succeeds");
         assert_eq!(registry.tenants(SECOND_PROJECT), ["acme-x7k2q"]);
         assert!(registry
             .store_for(SECOND_PROJECT)

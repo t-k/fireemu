@@ -1050,8 +1050,9 @@ fn check_scope_leakage(
         .map(|v| strings(v, "scopeDisclaimers"))
         .unwrap_or_default();
     // The README plus every document the claim scopes (`claim.scopedDocuments`: the npm
-    // package descriptions and READMEs a release ships) are read the same way, so release
-    // wording cannot name a deferred product as supported when the README may not.
+    // package descriptions a release ships; the npm package page is generated from the README)
+    // are read the same way, so release wording cannot name a deferred product as supported
+    // when the README may not.
     let mut documents: Vec<(&str, String)> = vec![(
         README_PATH,
         fs::read_to_string(root.join(README_PATH)).unwrap_or_default(),

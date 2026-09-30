@@ -200,6 +200,7 @@ jobs:
       - run: pnpm -C ui install --frozen-lockfile
       - run: pnpm -C ui build
       - run: node --test npm/scripts/distribution-licenses.test.mjs
+      - run: node --test npm/scripts/prepare-launcher.test.mjs
       - run: node --test npm/scripts/release-metadata.test.mjs
       - run: node --test npm/scripts/changelog-section.test.mjs
       - run: cargo build --release --locked -p fireemu

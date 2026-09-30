@@ -2714,17 +2714,43 @@ fn a_finalized_json_api_session_answers_status_queries_and_refuses_chunks() {
         assert_eq!(json_body(&status)["name"], "f.bin");
         let refused = put("bytes 0-3/4", b"zzzz");
         assert_eq!(refused.status, 400, "{acceptance:?}");
+        // Refused by the phase check, before any chunk is appended: the bare status text, not the
+        // store's JSON `upload already finalized`.
+        assert_eq!(String::from_utf8_lossy(&refused.body), "Bad Request");
+        assert_eq!(
+            header(&refused, "content-type"),
+            Some("text/plain; charset=utf-8")
+        );
+        // The phase check also comes before the bucket check: a chunk under another bucket's
+        // session URL is the same 400, not a 404.
+        let other = session.replace(BUCKET, "demo-other.appspot.com");
+        let elsewhere = handle(
+            &s,
+            req(
+                "PUT",
+                &other,
+                &[
+                    ("authorization", "Bearer owner"),
+                    ("content-range", "bytes 0-3/4"),
+                ],
+                b"zzzz",
+            ),
+        );
+        assert_eq!(elsewhere.status, 400, "{acceptance:?}");
+        assert_eq!(String::from_utf8_lossy(&elsewhere.body), "Bad Request");
     }
 }
 
-/// Only a value that is not JWT-shaped is an anonymous caller under strict (production, stage 3 v9:
-/// the recorded 24-character value answers as no credential; the official emulator, measured with
-/// firebase-tools 15.28.2: no dots, two and four segments are unauthenticated). A three-segment
-/// value that does not decode or verify stays a refusal, so a tampered signature, an unknown key
-/// id or an unsupported algorithm never becomes a public caller. The emulator profile maps every
-/// decode failure to an anonymous caller, as before.
+/// Under strict only the recorded shape is an anonymous caller: `Firebase ` followed by a value
+/// without a dot (stage 3 v9: the recorded value is 32 base64url characters; production answered it
+/// as it answers no credential; the official emulator, measured with firebase-tools 15.28.2, also
+/// treats no dots, two and four segments as unauthenticated). Every other value that fails to
+/// decode stays a refusal under strict: two or four segments, `Bearer` on the Firebase dialect, a
+/// three-segment value with a tampered signature, an unknown key id or an unsupported algorithm,
+/// so none of them becomes a public caller. The emulator profile maps every decode failure to an
+/// anonymous caller (never to the claimed user), as before.
 #[test]
-fn strict_makes_only_a_value_that_is_not_jwt_shaped_anonymous() {
+fn strict_makes_only_the_recorded_shape_anonymous() {
     const PUBLIC: &str = "rules_version = '2'; service firebase.storage { match /b/{bucket}/o { match /{path=**} { allow read, write: if true; } } }";
     const AUTHED: &str = "rules_version = '2'; service firebase.storage { match /b/{bucket}/o { match /{path=**} { allow read, write: if request.auth != null; } } }";
     let b64 = |text: &str| base64url_encode(text.as_bytes());
@@ -2733,38 +2759,42 @@ fn strict_makes_only_a_value_that_is_not_jwt_shaped_anonymous() {
     );
     let rs256 = b64(r#"{"alg":"RS256","kid":"unknown"}"#);
     let none = b64(r#"{"alg":"none"}"#);
-    // (value, anonymous under strict)
+    let dot_free = "abcdefghijklmnopqrstuvwxyz012345";
+    // (authorization, anonymous under strict)
     let values: Vec<(String, bool)> = vec![
-        ("abcdefghijklmnopqrstuvwx".to_owned(), true),
-        (format!("{none}.{payload}"), true),
-        (format!("{none}.{payload}..x"), true),
-        ("a.b.c".to_owned(), false),
-        (format!("{rs256}.{payload}.AAAAAAAAAAAA"), false),
-        (format!("{rs256}.{payload}."), false),
-        (format!("{none}.{}.", b64("not json")), false),
+        (format!("Firebase {dot_free}"), true),
+        ("Firebase x".to_owned(), true),
+        (format!("Bearer {dot_free}"), false),
+        (format!("Firebase {none}.{payload}"), false),
+        (format!("Firebase {none}.{payload}..x"), false),
+        ("Firebase a.b".to_owned(), false),
+        ("Firebase a.b.c.d".to_owned(), false),
+        ("Firebase a.b.c".to_owned(), false),
+        (format!("Firebase {rs256}.{payload}.AAAAAAAAAAAA"), false),
+        (format!("Firebase {rs256}.{payload}."), false),
+        (format!("Firebase {none}.{}.", b64("not json")), false),
     ];
-    for (value, anonymous) in &values {
-        let authorization = format!("Firebase {value}");
+    for (authorization, anonymous) in &values {
         for acceptance in BOTH_PROFILES {
             let strict = acceptance == TokenAcceptance::Verified;
             let expect_anonymous = *anonymous || !strict;
             let public = state_with(Some(PUBLIC), acceptance);
             let authed = state_with(Some(AUTHED), acceptance);
             let (public_status, authed_status) = (
-                upload_as(&public, "p.txt", &authorization),
-                upload_as(&authed, "p.txt", &authorization),
+                upload_as(&public, "p.txt", authorization),
+                upload_as(&authed, "p.txt", authorization),
             );
             if expect_anonymous {
                 assert_eq!(
                     (public_status, authed_status),
                     (200, 403),
-                    "{acceptance:?} {value}"
+                    "{acceptance:?} {authorization}"
                 );
             } else {
                 assert_eq!(
                     (public_status, authed_status),
                     (401, 401),
-                    "{acceptance:?} {value}"
+                    "{acceptance:?} {authorization}"
                 );
             }
         }
@@ -5161,11 +5191,11 @@ fn a_status_check_of_a_finalized_resumable_upload_answers_the_committed_object()
 /// SNORULE-1: a run with no loaded Storage ruleset denies every end-user request instead of
 /// admitting it, so forgetting `storage.rules` never silently publishes every object. Strict
 /// answers as production answers a bucket without a release (recorded, stage 3 v9, both
-/// recordings: 400 with the "Your bucket has not been set up properly" body); the emulator
-/// profile keeps its own fail-closed 403, because the official emulator has no such state
-/// (measured, firebase-tools 15.28.2: it refuses to start a non-demo project without a rules
-/// file and opens the rules of a demo project). The owner credential keeps its documented
-/// Rules bypass.
+/// recordings: 400 with the "Your bucket has not been set up properly" body). The emulator profile
+/// keeps its own fail-closed 403 for a project that is not a `demo-*` one, where the official
+/// emulator refuses to start without a rules file (measured, firebase-tools 15.28.2); for a
+/// `demo-*` project it admits every request, as the official emulator does with its default open
+/// rules (see the next test). The owner credential keeps its documented Rules bypass.
 #[test]
 fn a_run_with_no_loaded_ruleset_denies_every_end_user_request() {
     for acceptance in BOTH_PROFILES {
@@ -5179,7 +5209,12 @@ fn no_loaded_ruleset_denies_every_end_user_request(acceptance: TokenAcceptance) 
     } else {
         403
     };
-    let s = state_with(None, acceptance);
+    let mut s = state_with(None, acceptance);
+    if acceptance == TokenAcceptance::EmulatorMock {
+        // A project that is not a `demo-*` one: the official emulator refuses to start there
+        // without a rules file, so fireemu keeps its own fail-closed 403.
+        s.project = "real-app".to_owned();
+    }
 
     // Seed an object through the privileged JSON API, on which rules never run.
     let seeded = handle(
@@ -5276,6 +5311,31 @@ fn no_loaded_ruleset_denies_every_end_user_request(acceptance: TokenAcceptance) 
         ),
     );
     assert_eq!(r.status, 200);
+}
+
+/// A `demo-*` project with no Storage rules gets the official emulator's default open rules in
+/// the emulator profile (measured, firebase-tools 15.28.2: `allow read, write` for every path), so
+/// nothing is refused that the official emulator admits; strict still answers production's 400.
+#[test]
+fn the_emulator_profile_opens_a_demo_project_without_storage_rules() {
+    let s = state_with(None, TokenAcceptance::EmulatorMock);
+    assert_eq!(s.project, "demo-app");
+    assert_eq!(anonymous_media_upload(&s, "open.txt"), 200);
+    for (method, path) in [
+        ("GET", format!("/v0/b/{BUCKET}/o/open.txt")),
+        ("GET", format!("/v0/b/{BUCKET}/o/open.txt?alt=media")),
+        ("GET", format!("/v0/b/{BUCKET}/o")),
+        ("DELETE", format!("/v0/b/{BUCKET}/o/open.txt")),
+    ] {
+        let r = handle(&s, req(method, &path, &[], b""));
+        assert!(
+            r.status == 200 || r.status == 204,
+            "{method} {path}: {}",
+            r.status
+        );
+    }
+    let strict = state_with(None, TokenAcceptance::Verified);
+    assert_eq!(anonymous_media_upload(&strict, "open.txt"), 400);
 }
 
 /// The browser-metadata set must not hinge on one header an old or unusual browser may omit:

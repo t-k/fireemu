@@ -1817,10 +1817,22 @@ impl StorageState {
         })
     }
 
+    /// The decision for an end-user request while no ruleset is loaded. The emulator profile
+    /// admits it for a `demo-*` project, as the official emulator does (it loads its default open
+    /// rules there) and refuses it otherwise (fireemu's own fail-closed choice: the official
+    /// emulator refuses to start a non-demo project without a rules file); strict refuses as
+    /// production does.
+    fn no_release_decision(&self, bucket: &BucketName) -> Result<(), StorageResponse> {
+        if !self.is_strict() && self.project_of_bucket(bucket.as_str()).starts_with("demo-") {
+            return Ok(());
+        }
+        Err(self.no_release_refusal(bucket))
+    }
+
     /// The refusal of an end-user request while no ruleset is loaded. Production answers a bucket
     /// without a release with 400 and this message (recorded, stage 3 v9: both recordings, the
     /// `no-release` entry row); the strict profile answers those bytes for the bucket's project,
-    /// the emulator profile keeps its own 403.
+    /// the emulator profile keeps its own 403 for a project that is not a `demo-*` one.
     fn no_release_refusal(&self, bucket: &BucketName) -> StorageResponse {
         if self.is_strict() {
             let project = self.project_of_bucket(bucket.as_str());
@@ -1883,6 +1895,7 @@ impl StorageState {
         let Some(value) = authorization else {
             return Ok(Principal::Anonymous);
         };
+        let firebase_scheme = value.starts_with("Firebase ");
         let token = value
             .strip_prefix("Bearer ")
             .or_else(|| value.strip_prefix("Firebase "))
@@ -1903,22 +1916,22 @@ impl StorageState {
         // The audience is checked before the signature so a token of another session
         // says so, instead of failing as an unknown user of this one.
         let decoded = fireemu_core_auth::jwt::decode_token(token, parent.signer());
-        // A value that is not JWT-shaped at all (no dots, or not three dot-separated segments) is an
-        // anonymous caller in both profiles: production answered the recorded 24-character value
-        // exactly as it answers no credential (stage 3 v9, `token-malformed`: 403 from the rules, and
-        // the body parser's 400 first on a malformed PATCH body), and the official emulator's
-        // `jwt.decode` does the same (measured: firebase-tools 15.28.2, a value without dots, with
-        // two or with four segments is unauthenticated). A well-formed JWT that does not decode or
-        // verify is not that: under strict it stays a refusal (401), so a tampered signature, an
-        // unknown `kid` or an unsupported algorithm never becomes a public caller. The emulator
-        // profile keeps its earlier mapping of every decode failure to an anonymous caller; the
-        // official emulator verifies nothing and admits such a token as its user, which this
-        // profile has never done (a published divergence of the compatibility contract).
+        // Under strict only the recorded shape is an anonymous caller: `Firebase ` followed by a
+        // value without a dot (stage 3 v9, `token-malformed`: the recorded value is 32 base64url
+        // characters, answered exactly as no credential is, 403 from the rules and the body
+        // parser's 400 first on a malformed PATCH body). Every other value that fails to decode
+        // is refused with 401: a two- or four-segment value, a `Bearer` value on the Firebase
+        // dialect, a three-segment value with a tampered signature, an unknown `kid` or an
+        // unsupported algorithm. The emulator profile keeps its earlier mapping of every decode
+        // failure to an anonymous caller (the official emulator's `jwt.decode` treats a value
+        // without a dot, with two or with four segments as unauthenticated, but admits a
+        // decodable three-segment value as its user, which this profile has never done; a
+        // published divergence of the compatibility contract).
         let decoded_token = match decoded {
             Ok(decoded_token) => decoded_token,
             Err(error) => {
-                let jwt_shaped = token.split('.').count() == 3;
-                if jwt_shaped && self.token_acceptance != TokenAcceptance::EmulatorMock {
+                let recorded_shape = firebase_scheme && !token.contains('.');
+                if !recorded_shape && self.token_acceptance != TokenAcceptance::EmulatorMock {
                     return Err(format!("invalid ID token: {error}").into());
                 }
                 return Ok(Principal::Anonymous);
@@ -2003,7 +2016,7 @@ impl StorageState {
             .slot_for_bucket(bucket.as_str())
             .map_err(|_| error_response(Dialect::Firebase, 500, "rules poisoned"))?;
         let Some(slot) = selected else {
-            return Err(self.no_release_refusal(bucket));
+            return self.no_release_decision(bucket);
         };
         let rules = slot
             .snapshot()
@@ -2013,11 +2026,11 @@ impl StorageState {
             // whose rules the control API explicitly dropped. Production has no such state,
             // and the rules a project is created with admit no anonymous access, so the
             // end-user surface fails closed here rather than publishing every object; the
-            // owner credential returned above keeps its documented bypass. The official
-            // emulator has no such state (measured, firebase-tools 15.28.2: it refuses to start
-            // a non-demo project without a rules file and opens the rules of a demo project), so
-            // the emulator profile's 403 is fireemu's own fail-closed choice.
-            return Err(self.no_release_refusal(bucket));
+            // owner credential returned above keeps its documented bypass. The official emulator
+            // has no such state (measured, firebase-tools 15.28.2): it refuses to start a
+            // non-demo project without a rules file and loads open rules (`allow read, write`)
+            // for a demo project, which `no_release_decision` follows in the emulator profile.
+            return self.no_release_decision(bucket);
         };
         if method == Method::List && ruleset.version.as_deref() != Some("2") {
             // Storage list requests exist only under rules_version = '2'; a v1 `read` never

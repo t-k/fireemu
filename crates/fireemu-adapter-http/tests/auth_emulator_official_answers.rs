@@ -984,6 +984,12 @@ fn an_id_token_names_the_target_tenant_of_an_admin_operation_and_the_owner_crede
         for (route, body, status, message) in [
             ("lookup", json!({"email": ["nobody@example.com"]}), 200, "-"),
             ("delete", json!({}), 400, "MISSING_LOCAL_ID"),
+            (
+                "update",
+                json!({"localId": "nobody", "displayName": "d"}),
+                400,
+                "USER_NOT_FOUND",
+            ),
             // Official: MISSING_LOCAL_ID.
             (
                 "update",
@@ -1014,7 +1020,8 @@ fn an_id_token_names_the_target_tenant_of_an_admin_operation_and_the_owner_crede
 /// The token's tenant is the target only for a token of this project, with a tenant claim, in the
 /// emulator profile: a token of another project's audience (this daemon refuses it), an empty
 /// tenant claim (no tenant, as in the official emulator) and the strict profile all leave the
-/// request in the project's store, where the tenant's user is not.
+/// request in the project's store: the delete of the project's own user `p1` succeeds there, and
+/// the tenant `tt` (which holds `l1`) is untouched.
 #[test]
 fn the_tokens_tenant_is_not_the_target_for_another_projects_token_an_empty_claim_or_strict() {
     within_a_minute(|| {
@@ -1026,21 +1033,30 @@ fn the_tokens_tenant_is_not_the_target_for_another_projects_token_an_empty_claim
                 "firebase": {"sign_in_provider": "password", "identities": {}, "tenant": tenant}
             }))
         };
+        // The project holds `p1`, the tenant `tt` holds `l1`.
+        let setup = |state: &AuthState, project: &str| {
+            for (tenant, id) in [(None, "p1"), (Some("tt"), "l1")] {
+                let mut body = json!({
+                    "localId": id, "email": format!("{id}@example.com"), "password": "hunter22"
+                });
+                if let Some(tenant) = tenant {
+                    body["tenantId"] = json!(tenant);
+                }
+                let (status, made) = admin(
+                    state,
+                    "POST",
+                    &format!("{V1}/projects/{project}/accounts"),
+                    &body,
+                );
+                assert_eq!(status, 200, "{project}: {made}");
+            }
+        };
+        let tenant_users = |registry: &AuthRegistry, project: &str| {
+            registry
+                .tenant_store(project, "tt")
+                .map_or(0, |store| store.lock().unwrap().user_count())
+        };
         for project in ["demo-app", "demo-other"] {
-            let (state, registry) = routed_state();
-            let path = format!("{V1}/projects/{project}/accounts:delete");
-            let (status, made) = admin(
-                &state,
-                "POST",
-                &format!("{V1}/projects/{project}/accounts"),
-                &json!({"tenantId": "tt", "localId": "l1", "email": "l1@example.com", "password": "hunter22"}),
-            );
-            assert_eq!(status, 200, "{project}: {made}");
-            let tenant_users = || {
-                registry
-                    .tenant_store(project, "tt")
-                    .map_or(0, |store| store.lock().unwrap().user_count())
-            };
             // (case, token): none of them selects the tenant `tt`.
             for (case, token) in [
                 (
@@ -1049,49 +1065,29 @@ fn the_tokens_tenant_is_not_the_target_for_another_projects_token_an_empty_claim
                 ),
                 ("an empty tenant claim", with_claim(project, "")),
             ] {
-                let (_, answered) = admin(
+                let (state, registry) = routed_state();
+                setup(&state, project);
+                let (status, answered) = admin(
                     &state,
                     "POST",
-                    &path,
-                    &json!({"localId": "l1", "idToken": token}),
+                    &format!("{V1}/projects/{project}/accounts:delete"),
+                    &json!({"localId": "p1", "idToken": token}),
                 );
-                assert_ne!(status_of(&answered), 200, "{project} {case}: {answered}");
-                assert_eq!(
-                    tenant_users(),
-                    1,
-                    "{project} {case}: the tenant is untouched"
-                );
+                assert_eq!(status, 200, "{project} {case}: {answered}");
+                assert_eq!(tenant_users(&registry, project), 1, "{project} {case}");
             }
         }
         // Strict: the token never picks the tenant of an Admin delete.
         let (mut state, registry) = routed_state();
-        let (status, made) = admin(
-            &state,
-            "POST",
-            &format!("{V1}/projects/demo-other/accounts"),
-            &json!({"tenantId": "tt", "localId": "l1", "email": "l1@example.com", "password": "hunter22"}),
-        );
-        assert_eq!(status, 200, "{made}");
-        let strict = strict_state();
-        state.stateless_refresh_tokens = strict.stateless_refresh_tokens;
-        let (_, answered) = admin(
+        setup(&state, "demo-other");
+        state.stateless_refresh_tokens = strict_state().stateless_refresh_tokens;
+        let (status, answered) = admin(
             &state,
             "POST",
             &format!("{V1}/projects/demo-other/accounts:delete"),
-            &json!({"localId": "l1", "idToken": project_token("demo-other", "l1", "tt")}),
+            &json!({"localId": "p1", "idToken": project_token("demo-other", "l1", "tt")}),
         );
-        assert_ne!(status_of(&answered), 200, "strict: {answered}");
-        assert_eq!(
-            registry
-                .tenant_store("demo-other", "tt")
-                .map_or(0, |store| store.lock().unwrap().user_count()),
-            1,
-            "strict: the tenant is untouched"
-        );
+        assert_eq!(status, 200, "strict: {answered}");
+        assert_eq!(tenant_users(&registry, "demo-other"), 1, "strict");
     });
-}
-
-/// The status of an answer body: 200 for a success, else the error code.
-fn status_of(body: &Value) -> u64 {
-    body["error"]["code"].as_u64().unwrap_or(200)
 }

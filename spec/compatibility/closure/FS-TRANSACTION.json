@@ -133,7 +133,7 @@
         ],
         "recordingsRequired": 2
       },
-      "note": "Historical recordings are reference only. Two new sandbox recordings and a final-artifact comparison are required for this condition. The 13-case recorded expiry/retry corpus supplies no production observation for this condition.",
+      "note": "Historical recordings are reference only. Two new sandbox recordings and a final-artifact comparison are required for this condition. The 13-case recorded expiry/retry corpus supplies no production observation for this condition. Private sandbox observations, cited by run-directory name only, no status change: P01 fs-transaction-p01-lifecycle-98a788f2f2a2a5e4 (REST and gRPC, two agreeing recordings): after a Commit, an empty Commit or a Rollback, every further Commit, read, batch read and Rollback on the token answers 10 with the expired text. P02b fs-transaction-p02b-readonly-refused-956ffb458f823440 chain Z (both transports, two agreeing recordings): an outside write acknowledged between a read-write begin and its first read is shown by that first read, the Commit then answers 0, and a later Rollback answers 10. Neither is a published redacted record yet.",
       "productionObservation": "UNOBSERVED_BY_RECORDED_CORPUS"
     },
     {
@@ -166,7 +166,7 @@
         ],
         "recordingsRequired": 2
       },
-      "note": "Historical recordings are reference only. Two new sandbox recordings and a final-artifact comparison are required for this condition. The 13-case recorded expiry/retry corpus supplies no production observation for this condition.",
+      "note": "Historical recordings are reference only. Two new sandbox recordings and a final-artifact comparison are required for this condition. The 13-case recorded expiry/retry corpus supplies no production observation for this condition. Private sandbox observations, cited by run-directory name only, no status change: P02 fs-transaction-p02-readonly-88511624ef5da4ff (REST and gRPC, two agreeing recordings): a read-only transaction's snapshot is taken at its first read, a second read shows the same state, an empty read-only Commit answers 0, a write Commit answers 3 \"Cannot modify entities in a read-only transaction.\" and a Rollback after it answers 0. P02b fs-transaction-p02b-readonly-refused-956ffb458f823440 chains X and Y (both transports, two agreeing recordings): after that refused write a read and an empty Commit, in either order, answer 3 with the expired text and a Rollback answers 0. Neither is a published redacted record yet.",
       "productionObservation": "UNOBSERVED_BY_RECORDED_CORPUS"
     },
     {
@@ -200,7 +200,7 @@
         ],
         "recordingsRequired": 2
       },
-      "note": "Historical recordings are reference only. Two new sandbox recordings and a final-artifact comparison are required for this condition. The 13-case recorded expiry/retry corpus supplies no production observation for this condition.",
+      "note": "Historical recordings are reference only. Two new sandbox recordings and a final-artifact comparison are required for this condition. The 13-case recorded expiry/retry corpus supplies no production observation for this condition. Private sandbox observation, cited by run-directory name only, no status change: P03 fs-transaction-p03-readtime-70b0ae21e52fc135 (REST and gRPC, two agreeing recordings, 15 cases per recording: readTime GetDocument and BatchGetDocuments, read-only reads and an embedded newTransaction batch with its Commit) answered 0 in every case. Not a published redacted record yet.",
       "productionObservation": "UNOBSERVED_BY_RECORDED_CORPUS"
     },
     {
@@ -235,7 +235,7 @@
         ],
         "recordingsRequired": 2
       },
-      "note": "Historical recordings are reference only. Two new sandbox recordings and a final-artifact comparison are required for this condition. The 13-case recorded expiry/retry corpus supplies no production observation for this condition.",
+      "note": "Historical recordings are reference only. Two new sandbox recordings and a final-artifact comparison are required for this condition. The 13-case recorded expiry/retry corpus supplies no production observation for this condition. Private sandbox observation, cited by run-directory name only, no status change: P01 fs-transaction-p01-lifecycle-98a788f2f2a2a5e4 recorded the finished-token uses (10 with the expired text, REST and gRPC). Malformed, unknown and foreign tokens are unobserved.",
       "productionObservation": "UNOBSERVED_BY_RECORDED_CORPUS"
     },
     {
@@ -270,7 +270,7 @@
         ],
         "recordingsRequired": 2
       },
-      "note": "Historical recordings are reference only. Two new sandbox recordings and a final-artifact comparison are required for this condition. The 13-case recorded expiry/retry corpus supplies no production observation for this condition.",
+      "note": "Historical recordings are reference only. Two new sandbox recordings and a final-artifact comparison are required for this condition. The 13-case recorded expiry/retry corpus supplies no production observation for this condition. Private sandbox observations, cited by run-directory name only, no status change: P06 fs-transaction-p06-multiwrite-4a0a698be7b88e15 (REST and gRPC): recording 1 refused a multi-document write that met a holder's lock with 10 \"Too much contention on these documents. Please try again.\" after about 21 s; recording 2 was incomplete (the writer was still held at its 30 s deadline and landed about 1.2 s after the recovery released the holder), so the two disagreed. P05 v2 fs-transaction-p05-readlock-66e77ae565076eef (REST and gRPC, two agreeing recordings): with the holder released 5 s in, the outside writer that met its read lock was held and committed 0 after the holder's Commit or Rollback in all four pairs (elapsed 6.8 to 7.5 s), and a read after the Commit pair showed that writer's state. Neither is a published redacted record yet.",
       "productionObservation": "UNOBSERVED_BY_RECORDED_CORPUS"
     },
     {
@@ -375,7 +375,7 @@
         ],
         "recordingsRequired": 2
       },
-      "note": "Two sandbox recordings and both fireemu profiles agree for this REST subset. The refused-commit, token-reuse, explicit-rollback and lock-release chain is not recorded. Representative gRPC is not recorded. This condition remains open.",
+      "note": "Two sandbox recordings and both fireemu profiles agree for this REST subset. The refused-commit, token-reuse, explicit-rollback and lock-release chain is not recorded. Representative gRPC is not recorded. This condition remains open. Private sandbox observation added later, cited by run-directory name only, no status change: P08 fs-transaction-p08-failed-commit-b5da53e6fa1ae0ce (REST and gRPC, two agreeing recordings, 26 cases per recording): a Commit refused by an exists precondition answers 5 and ends the transaction, so a same-token read and the corrected Commit answer 3 with the expired text, a Rollback answers 0 (also when repeated), the lock is gone (an outside writer answers 0), and a Rollback after a successful Commit answers 10. This covers the refused-commit chain named above as not recorded, but it is not a published redacted record yet.",
       "partialEvidence": {
         "coverage": "PARTIAL",
         "reference": "spec/compatibility/broad-runs/fs-transaction-expiry-retry-04-recorded-comparison-v1.json",
@@ -432,7 +432,7 @@
         ],
         "recordingsRequired": 2
       },
-      "note": "Two sandbox recordings and both fireemu profiles agree for this REST subset. Representative gRPC is not recorded. This condition remains open.",
+      "note": "Two sandbox recordings and both fireemu profiles agree for this REST subset. Representative gRPC is not recorded. This condition remains open. Inferred, not recorded in production: strict reads a retry attempt (retryTransaction) at its begin; the official emulator reads it at first use (REST measured). A candidate for a later recording, not COMPAT_VERIFIED.",
       "partialEvidence": {
         "coverage": "PARTIAL",
         "reference": "spec/compatibility/broad-runs/fs-transaction-expiry-retry-04-recorded-comparison-v1.json",
@@ -489,7 +489,7 @@
         ],
         "recordingsRequired": 2
       },
-      "note": "Two sandbox recordings and both fireemu profiles agreed for this REST subset when it was recorded; that agreement was measured at strict's old 10 s idle allowance, with 90 s of local idle for idle-expiry/commit-after-idle, so it no longer describes current strict behavior (120 s limit) for three idle rows (commit-after-idle, rollback-after-idle and lock-released-after-idle, each driven at 90 s of local idle) or for the post-state and transaction releases that comparison compares: at 120 s, strict would commit that transaction, not expire it. Native gRPC sweeps (P10-B, nominal idle 65 to 70 s; P10-C, 75 to 120 s; each recorded twice) accepted every Commit through a nominal 110 s idle and refused the 120 s Commit with code 10, expired or no longer valid. The measured idle of the accepted 110 s Commit was [110.58, 113.12] s and of the refused 120 s Commit [120.54, 122.97] s. The REST refusal in the recorded run had idled about 121 s (idleSeconds 121.15 and 120.35), not the nominal 70 s wait. The exact idle threshold is not identified: it lies in [110.70, 122.96) s. Strict takes 120 s as a provisional limit, strict accepts the unobserved 113.12 to 120 s gap and refuses the unobserved 120 to 120.54 s gap. The final source-bound regression redoes the REST comparison with a driver-level override that advances the local control clock to the measured production idle (about 121 s), with new evidence versions (local shadow v5, comparison v2), leaving the recorded plan and the production fixtures untouched. This condition remains open.",
+      "note": "Two sandbox recordings and both fireemu profiles agreed for this REST subset when it was recorded; that agreement was measured at strict's old 10 s idle allowance, with 90 s of local idle for idle-expiry/commit-after-idle, so it no longer describes current strict behavior (120 s limit) for three idle rows (commit-after-idle, rollback-after-idle and lock-released-after-idle, each driven at 90 s of local idle) or for the post-state and transaction releases that comparison compares: at 120 s, strict would commit that transaction, not expire it. Native gRPC sweeps (P10-B, nominal idle 65 to 70 s; P10-C, 75 to 120 s; each recorded twice) accepted every Commit through a nominal 110 s idle and refused the 120 s Commit with code 10, expired or no longer valid. The measured idle of the accepted 110 s Commit was [110.58, 113.12] s and of the refused 120 s Commit [120.54, 122.97] s. The REST refusal in the recorded run had idled about 121 s (idleSeconds 121.15 and 120.35), not the nominal 70 s wait. The exact idle threshold is not identified: it lies in [110.70, 122.96) s. Strict takes 120 s as a provisional limit, strict accepts the unobserved 113.12 to 120 s gap and refuses the unobserved 120 to 120.54 s gap. The final source-bound regression redoes the REST comparison with a driver-level override that advances the local control clock to the measured production idle (about 121 s), with new evidence versions (local shadow v5, comparison v2), leaving the recorded plan and the production fixtures untouched. This condition remains open. Inferred, not recorded in production: strict remembers a transaction that an idle expiry finished until about 300 s of its token age and answers every request 10 until then (E003 follows idle-expired tokens only up to about 121 s). A candidate for a later recording, not COMPAT_VERIFIED.",
       "partialEvidence": {
         "coverage": "PARTIAL",
         "reference": "spec/compatibility/broad-runs/fs-transaction-expiry-retry-04-recorded-comparison-v1.json",
@@ -538,7 +538,7 @@
         ],
         "recordingsRequired": 2
       },
-      "note": "A finite sandbox corpus, two recordings, complete cleanup and final-artifact comparison remain required. The 13-case recorded expiry/retry corpus supplies no production observation for this condition.",
+      "note": "A finite sandbox corpus, two recordings, complete cleanup and final-artifact comparison remain required. The 13-case recorded expiry/retry corpus supplies no production observation for this condition. Private sandbox observations, cited by run-directory name only, no status change: P11 fs-transaction-p11-lifetime-0478164e4f3b1948 (REST, recording 1, stopped by the old recorder): a read at 298.7 to 301.0 s answered 10 with the expired text, then a Commit and a Rollback 3 \"Invalid transaction.\". P11 v4 fs-transaction-p11-lifetime-c82deaf32c18e7dd (REST and gRPC, two agreeing recordings): keepalive reads answered 0, the live read 0 at token age 250.6 to 253.3 s (gRPC 248.8 to 251.2), the expiry read 10 with the expired text at 284.8 to 287.9 s (gRPC 282.9 to 285.5), the Commit after it 10 with the same text, an outside writer 0 and the chain-end Rollback 10. Together they fit one model: the token is remembered until about 300 s of its age (every request 10), then forgotten (3). Inferred, not recorded, candidates for a later recording and not COMPAT_VERIFIED: the exact forgetting age inside (298.7, 302.2] s (strict takes 300 s) and a Commit or Rollback as the first request between 283 and 300 s (strict answers 10 as for a read). Not published redacted records yet.",
       "productionObservation": "UNOBSERVED_BY_RECORDED_CORPUS"
     },
     {
@@ -826,7 +826,7 @@
       "OPTIMISTIC mode follow-up issue"
     ]
   },
-  "note": "The frozen denominator remains 18 behavioral conditions. Two sandbox recordings and source-bound strict/emulator comparisons cover only the 13-case REST subset of three conditions. The other 15 conditions, official emulator gate and parent closure remain open.",
+  "note": "The frozen denominator remains 18 behavioral conditions. Two sandbox recordings and source-bound strict/emulator comparisons cover only the 13-case REST subset of three conditions. The other 15 conditions, official emulator gate and parent closure remain open. Inferred strict answers that no recording covers are listed on their conditions (retry snapshot, idle-expiry memory, forgetting age, first-request Commit or Rollback between 283 and 300 s); each is a candidate for a later recording and none is COMPAT_VERIFIED.",
   "profileComparison": {
     "profile": "strict",
     "emulatorCompatibilityCheck": "PENDING_LOCAL_OBSERVATION",

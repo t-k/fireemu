@@ -319,7 +319,7 @@
       "observation": {
         "method": "A query inside a read-write transaction followed by a matching phantom write and an outside-range control; compare outcome and post-state. On PESSIMISTIC mode, hold the competing writer in a separate task, release by commit or rollback, then compare outcome and order. A bounded timeout is INDETERMINATE.",
         "existingCaseOrCampaignRefs": [
-          "conformance/firestore-production-matrix.json#transactions/lifecycle/phantom-write"
+          "conformance/firestore-production-matrix.json#phantom-write"
         ],
         "credentials": "Admin OAuth; server transaction bypasses Firestore Rules.",
         "representativeGrpc": "Record one representative gRPC case for this condition when the API supports it; REST carries the full set."

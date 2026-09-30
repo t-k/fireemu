@@ -302,6 +302,11 @@ fn the_tenant_claim_is_read_without_checking_the_algorithm_or_the_signature() {
         )),
         Some("t-x".to_owned())
     );
+    // An empty signature segment is allowed by the pattern.
+    assert_eq!(
+        unverified_tenant_claim(&token("{}", &claims(r#"{"tenant":"t-e"}"#), "")),
+        Some("t-e".to_owned())
+    );
     for (name, bad) in [
         ("no firebase claim", token("{}", r#"{"aud":"a"}"#, "s")),
         ("no tenant", token("{}", &claims("{}"), "s")),
@@ -317,6 +322,18 @@ fn the_tenant_claim_is_read_without_checking_the_algorithm_or_the_signature() {
             format!("{}.x", token("{}", &claims(r#"{"tenant":"t"}"#), "s")),
         ),
         ("one part", "abc".to_owned()),
+        (
+            "a signature with a bang",
+            token("{}", &claims(r#"{"tenant":"t"}"#), "c2ln!"),
+        ),
+        (
+            "a signature with a plus",
+            token("{}", &claims(r#"{"tenant":"t"}"#), "c2ln+/=="),
+        ),
+        (
+            "a signature with a space",
+            token("{}", &claims(r#"{"tenant":"t"}"#), "a b"),
+        ),
         ("empty", String::new()),
         (
             "header not json",

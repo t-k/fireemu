@@ -976,13 +976,43 @@ fn an_unverifiable_id_tokens_tenant_has_to_agree_with_the_named_tenant() {
                 .as_bytes()
         )
     );
-    // (What the request itself answers for such a token is the pipeline's, not the creation's.)
-    let _ = client(
+    let (status, answered) = client(
         &state,
         &format!("{V1}/accounts:createAuthUri"),
         &json!({"identifier": "x@example.com", "continueUri": "http://localhost", "tenantId": "t-v", "idToken": verified_empty}),
     );
+    assert_ne!(
+        answered["error"]["message"], "TENANT_ID_MISMATCH",
+        "{status} {answered}"
+    );
     assert!(registry.tenant_store("demo-app", "t-v").is_some());
+    // A signature segment outside base64url makes the official decoder read nothing, so the
+    // token's tenant does not take part in the agreement.
+    for (n, signature) in ["c2ln!", "c2ln+/==", "a b"].into_iter().enumerate() {
+        let bad = format!(
+            "{}.{}.{signature}",
+            base64url_encode(br#"{"alg":"RS256","kid":"other","typ":"JWT"}"#),
+            base64url_encode(
+                json!({"aud": "demo-app", "firebase": {"tenant": "t-x"}})
+                    .to_string()
+                    .as_bytes()
+            )
+        );
+        let name = format!("t-sig{n}");
+        let (status, answered) = client(
+            &state,
+            &format!("{V1}/accounts:createAuthUri"),
+            &json!({"identifier": "x@example.com", "continueUri": "http://localhost", "tenantId": name, "idToken": bad}),
+        );
+        assert_ne!(
+            answered["error"]["message"], "TENANT_ID_MISMATCH",
+            "{signature}: {status} {answered}"
+        );
+        assert!(
+            registry.tenant_store("demo-app", &name).is_some(),
+            "{signature}"
+        );
+    }
     // A tenant claim that is not a string is a recorded divergence: the official emulator asserts
     // it against the body's tenant, and here it names none.
     let number = token(&json!({"aud": "demo-app", "firebase": {"tenant": 5}}));

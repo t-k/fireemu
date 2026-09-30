@@ -216,7 +216,7 @@ fn observed_count(h: &Harness, project: &str) -> usize {
 
 #[test]
 fn an_admission_for_one_project_does_not_serve_another_projects_store() {
-    let (h, _, id_token) = two_projects();
+    let (h, registry, id_token) = two_projects();
     let body = json!({"idToken": id_token, "tenantId": "tB"});
     let before = observed_count(&h, "demo-other");
     // A valid demo-app credential, and no credential for demo-other, whose tenant the token names.
@@ -229,30 +229,46 @@ fn an_admission_for_one_project_does_not_serve_another_projects_store() {
     );
     assert!(!first.body.to_string().contains("victim@example.com"));
     assert_eq!(observed_count(&h, "demo-other"), before + 1);
-    // The same request again is refused the same way (the tenant now exists in demo-app).
+    // The refused request made nothing in the default project, and asked App Check nothing for it.
+    assert!(registry.tenant_store("demo-app", "tB").is_none());
+    assert_eq!(observed_count(&h, "demo-app"), 0);
+    // Refused again the same way.
     let second = h.post(&format!("{V1}/accounts:lookup"), &body, &[&h.valid_token()]);
     assert_eq!(second.status, 403, "{}", second.body);
-    // With demo-other's own credential the request is served from its store.
+    assert!(registry.tenant_store("demo-app", "tB").is_none());
+}
+
+/// The credential of the project the request is served from admits it, on a fresh daemon, and the
+/// default project gets no tenant.
+#[test]
+fn the_credential_of_the_served_project_admits_a_keyless_request() {
+    let (h, registry, id_token) = two_projects();
+    let body = json!({"idToken": id_token, "tenantId": "tB"});
     let other = fixture::token(&h.app_check, "demo-other", fixture::OTHER_APP_ID);
+    let before = observed_count(&h, "demo-other");
     let served = h.post(&format!("{V1}/accounts:lookup"), &body, &[&other]);
     assert_eq!(served.status, 200, "{}", served.body);
+    assert_eq!(observed_count(&h, "demo-other"), before + 1);
+    assert!(registry.tenant_store("demo-app", "tB").is_none());
+}
+
+fn refresh_token_of_the_other_tenant(registry: &fireemu_core_auth::store::AuthRegistry) -> String {
+    let tenant_store = registry.tenant_store("demo-other", "tB").expect("tenant");
+    let mut store = tenant_store.lock().unwrap();
+    let uid = store
+        .user_by_id("u1")
+        .expect("the user exists")
+        .local_id
+        .clone();
+    store
+        .issue_refresh_token(&uid, LogicalInstant::from_unix_seconds(fixture::START))
+        .expect("the user exists")
 }
 
 #[test]
 fn an_admission_for_one_project_does_not_refresh_another_projects_session() {
     let (h, registry, _) = two_projects();
-    let tenant_store = registry.tenant_store("demo-other", "tB").expect("tenant");
-    let refresh_token = {
-        let mut store = tenant_store.lock().unwrap();
-        let uid = store
-            .user_by_id("u1")
-            .expect("the user exists")
-            .local_id
-            .clone();
-        store
-            .issue_refresh_token(&uid, LogicalInstant::from_unix_seconds(fixture::START))
-            .expect("the user exists")
-    };
+    let refresh_token = refresh_token_of_the_other_tenant(&registry);
     let body = json!({"grant_type": "refresh_token", "refresh_token": refresh_token});
     let denied = h.post(REFRESH, &body, &[&h.valid_token()]);
     assert_eq!(denied.status, 403, "{}", denied.body);
@@ -262,9 +278,32 @@ fn an_admission_for_one_project_does_not_refresh_another_projects_session() {
         denied.body
     );
     assert!(denied.body.get("id_token").is_none());
+    assert!(registry.tenant_store("demo-app", "tB").is_none());
     let other = fixture::token(&h.app_check, "demo-other", fixture::OTHER_APP_ID);
     let served = h.post(REFRESH, &body, &[&other]);
     assert_eq!(served.status, 200, "{}", served.body);
+    assert!(registry.tenant_store("demo-app", "tB").is_none());
+}
+
+/// A non-default project that is admitted and served from its own store is observed once.
+#[test]
+fn a_request_for_a_non_default_project_is_observed_once() {
+    let (h, registry, _) = two_projects();
+    let before = observed_count(&h, "demo-other");
+    let listed = handle_with(
+        &h.auth,
+        "GET",
+        "/emulator/v1/projects/demo-other/tenants/tNew/oobCodes",
+        &RequestHeaders {
+            authorization: Some(format!("Bearer {}", fixture::CONTROL_TOKEN)),
+            ..RequestHeaders::default()
+        },
+        &json!({}),
+    );
+    assert_eq!(listed.status, 200, "{}", listed.body);
+    assert!(registry.tenant_store("demo-other", "tNew").is_some());
+    assert_eq!(observed_count(&h, "demo-other"), before + 1);
+    assert_eq!(observed_count(&h, "demo-app"), 0);
 }
 
 /// A request the admission lets through for the project it is served from is observed once, not

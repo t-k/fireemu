@@ -362,9 +362,17 @@ pub fn decode_unsigned(token: &str) -> Result<DecodedToken, JwtError> {
 #[must_use]
 pub fn unverified_tenant_claim(token: &str) -> Option<String> {
     let parts: Vec<&str> = token.split('.').collect();
-    let [header_b64, payload, _signature] = parts.as_slice() else {
+    let [header_b64, payload, signature] = parts.as_slice() else {
         return None;
     };
+    // The official decoder reads nothing unless the whole token matches its JWS pattern, whose
+    // signature segment is empty or base64url.
+    if !signature
+        .bytes()
+        .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+    {
+        return None;
+    }
     let header = String::from_utf8(base64url_decode(header_b64).ok()?).ok()?;
     if !matches!(parse(&header), Ok(JsonValue::Object(_))) {
         return None;

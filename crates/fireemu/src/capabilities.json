@@ -720,14 +720,14 @@
   },
   "ST-OBJ-1": {
     "implemented": [
-      "Firebase Storage protocol (/v0/b, the X-Goog-Upload resumable command grammar with terminal denied sessions, download tokens incl. the ?create_token / ?delete_token routes and the official first-read minting, the official plain-status and rules-denial bodies)",
+      "Firebase Storage protocol (/v0/b, the X-Goog-Upload resumable command grammar with terminal denied sessions, download tokens incl. the ?create_token / ?delete_token routes and production's first-metadata-read token minting (a media read does not mint; the official emulator mints on both), the official plain-status and rules-denial bodies)",
       "JSON API with the official route table (/b short spelling for every object method; /storage/v1 and /download/storage/v1 for reads and deletes; /upload/storage/v1 uploads; object update (PATCH) also on /storage/v1, as production serves it (the official emulator registers it on the short spelling only and answers 501; a published divergence), copy registered on the short spelling only, exactly as the official emulator registers it, with 501 Not Implemented on the rest; the XML-style GET /{bucket}/{object} fallback, GET /b bucket listing, the multipart/form-data POST /{bucket} upload and the ACL stub)",
       "generation / metageneration preconditions (match / not-match / source) and declared-checksum verification, honoured as production honours them; the official emulator ignores both, and every such step is pinned as a documented divergence in conformance/storage-matrix.json",
       "generation selectors (current generation only, JSON API dialect)",
       "prefix / delimiter listing with the official pagination (all folded prefixes on every page, items paged, the token names the first item of the next page)",
       "MD5 / CRC32C (X-Goog-Hash verified before commit)",
       "Range: bytes=a-b / a- / -n; an unsatisfiable range serves the whole object, as the official emulator serves it",
-      "custom metadata keeps the official defined-versus-absent distinction (an empty-but-defined map serializes as metadata: {} on the Firebase dialect)"
+      "object resources follow the production recording of stage 3 v9 (2026-09-30) wherever no refusal is involved: timestamps with three fractional digits, timeFinalized on the JSON API resource, base64 crc32c and a default contentDisposition of `inline; filename*=utf-8''<file>` on the Firebase dialect, no `metadata` for an empty custom map and no `downloadTokens` for an object without a token, the `Not Found.` JSON for an absent object, the `Parser Error` and `Parse Error: ...` bodies of a malformed PATCH, an empty resumable start and the `Upload has already been finalized.` late cancel; each differs from the official emulator and is pinned as a documented divergence in conformance/storage-matrix.json"
     ],
     "notes": [
       "Storage object triggers are not part of this entry: FN-EVT-1 delivers object finalized / deleted / metadataUpdated events, and this entry owns the object surface only",

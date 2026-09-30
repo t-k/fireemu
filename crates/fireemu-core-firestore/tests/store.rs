@@ -2985,8 +2985,11 @@ fn a_transactional_query_currently_locks_documents_its_filter_excluded() {
 
 // A commit refused by a precondition ends its transaction, as production does (P08, both
 // transports, both recordings): the same token then answers INVALID_ARGUMENT in strict (the
-// official emulator answers ABORTED, measured at v1.21.0), a Rollback is accepted any number of
+// official emulator answers ABORTED, measured at v1.22.0), a Rollback is accepted any number of
 // times, the transaction's read locks are gone at once, and the token may still be retried.
+// Observed: only the `exists: true` refusal (code 5, "No document to update"). The refusals by
+// `exists: false` and by `update_time` are inferred to end the transaction the same way, not
+// observed; the rows below stay until a production recording settles them.
 const NO_LONGER_VALID: &str = "The referenced transaction has expired or is no longer valid.";
 
 fn precondition_write(p: &str, precondition: Precondition) -> Write {
@@ -3020,6 +3023,7 @@ fn a_precondition_refused_commit_ends_its_transaction_with_each_profiles_code() 
             precondition_write("p08/missing", Precondition::Exists(true)),
             "not found",
         ),
+        // Inferred, not observed: `exists: false` and `update_time` refusals.
         (
             precondition_write("p08/held", Precondition::Exists(false)),
             "already exists",
@@ -3048,6 +3052,19 @@ fn a_precondition_refused_commit_ends_its_transaction_with_each_profiles_code() 
                         | FirestoreError::FailedPrecondition(_)
                 ),
                 "{label}: the refusal itself keeps its code"
+            );
+            // The transaction is finished in the bookkeeping too, not only marked: a state that
+            // was set without `finish_transaction` would leave it counted as active.
+            let bookkeeping = state.transaction_bookkeeping_stats();
+            assert_eq!(
+                (
+                    bookkeeping.active,
+                    bookkeeping.finished,
+                    bookkeeping.deadlines,
+                    bookkeeping.conflict_ledger_bytes,
+                ),
+                (0, 1, 0, 0),
+                "{label}: the refused transaction is finished"
             );
             let gone = |result: Result<(), FirestoreError>| match result {
                 Err(FirestoreError::InvalidArgument(message)) if strict => message,

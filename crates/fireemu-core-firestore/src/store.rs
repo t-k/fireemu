@@ -659,6 +659,8 @@ enum TransactionState {
     Committed,
     /// Ended by a commit that a precondition refused. Production answers every later use of the
     /// token `INVALID_ARGUMENT` (the official emulator `ABORTED`), and accepts a Rollback.
+    /// Observed only for the `exists: true` refusal (P08); that `exists: false` and `update_time`
+    /// refusals end the transaction too is inferred, not observed.
     CommitRefused,
     Retried,
     Finished,
@@ -3406,7 +3408,9 @@ impl FirestoreState {
             let current = stage.current.as_deref();
             if let Err(refused) = check_precondition(write.precondition.as_ref(), current, &path) {
                 // Production ends the transaction whose commit a precondition refused, and with it
-                // the locks of what it read (P08). Nothing was published: the writes are staged.
+                // the locks of what it read (P08, observed for `exists: true`; the other two
+                // precondition kinds are inferred to behave alike). Nothing was published: the
+                // writes are staged.
                 if let Some(id) = transaction {
                     self.finish_transaction(id, TransactionState::CommitRefused);
                 }

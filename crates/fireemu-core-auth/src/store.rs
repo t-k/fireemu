@@ -5768,11 +5768,34 @@ enum TenantPublication {
 /// Maximum compatibility-routed Auth project namespaces retained by one daemon.
 pub const MAX_ROUTED_AUTH_PROJECTS: usize = 1_024;
 
+/// A declaration applied to every compatibility-routed project when it is installed (the
+/// configuration file's tenants). It is held by the registry as data and applied by
+/// [`AuthRegistry::apply_pending_project_seeds`], a step of its own that runs with no registry
+/// lock and no project gate held: an installing request still holds the routed project's gate,
+/// and a seed creates tenants under that same gate.
+pub trait NewProjectSeed: Send + Sync + std::fmt::Debug {
+    /// Applies the declaration to `project`, idempotently (what is there already is kept).
+    ///
+    /// # Errors
+    /// The message of the refusal.
+    fn apply(&self, registry: &AuthRegistry, project: &str) -> Result<(), String>;
+}
+
 #[derive(Debug, Default)]
 struct ProjectStores {
     registered: BTreeMap<String, SharedAuthStore>,
     routed: BTreeMap<String, SharedAuthStore>,
     pending_sessions: BTreeMap<String, PendingSessionRegistration>,
+}
+
+impl ProjectStores {
+    /// The store a tenant of `project` is a child of: a registered project's, else a
+    /// compatibility-routed project's.
+    fn tenant_parent(&self, project: &str) -> Option<&SharedAuthStore> {
+        self.registered
+            .get(project)
+            .or_else(|| self.routed.get(project))
+    }
 }
 
 #[derive(Debug)]
@@ -5875,6 +5898,10 @@ pub struct AuthRegistry {
     default: SharedAuthStore,
     scoped_refresh_routing: bool,
     projects: Mutex<ProjectStores>,
+    /// The declaration applied to a routed project when it is installed.
+    new_project_tenant_seed: Mutex<Option<Arc<dyn NewProjectSeed>>>,
+    /// Routed projects installed and not yet seeded.
+    pending_project_seeds: Mutex<BTreeSet<String>>,
     /// Explicit project policies configured before a project session is registered. An entry
     /// does not create or route the project; it is applied to the matching namespace when it
     /// later appears.
@@ -6106,6 +6133,8 @@ impl AuthRegistry {
             default,
             scoped_refresh_routing,
             projects: Mutex::new(ProjectStores::default()),
+            new_project_tenant_seed: Mutex::new(None),
+            pending_project_seeds: Mutex::new(BTreeSet::new()),
             project_password_policy_overrides: Mutex::new(BTreeMap::new()),
             project_config_overrides: Mutex::new(BTreeMap::new()),
             tenants: Mutex::new(BTreeMap::new()),
@@ -6274,7 +6303,56 @@ impl AuthRegistry {
         }
         projects.routed.insert(project.to_owned(), store.clone());
         self.membership_generation.fetch_add(1, Ordering::Release);
+        if self
+            .new_project_tenant_seed
+            .lock()
+            .is_ok_and(|seed| seed.is_some())
+        {
+            if let Ok(mut pending) = self.pending_project_seeds.lock() {
+                pending.insert(project.to_owned());
+            }
+        }
         RoutedStoreInstall::Installed(store)
+    }
+
+    /// Stores the declaration applied to every compatibility-routed project when it is installed
+    /// (see [`NewProjectSeed`]).
+    pub fn set_new_project_tenant_seed(&self, seed: Arc<dyn NewProjectSeed>) {
+        if let Ok(mut current) = self.new_project_tenant_seed.lock() {
+            *current = Some(seed);
+        }
+    }
+
+    /// Applies the stored declaration to each routed project installed since the last call, once.
+    /// Call it with no registry lock and no project gate held (a request's own gate is released
+    /// first). A project a default-scope reset dropped meanwhile is skipped. Returns the first
+    /// refusal, after trying every project.
+    ///
+    /// # Errors
+    /// The message of the first project the declaration could not be applied to.
+    pub fn apply_pending_project_seeds(&self) -> Result<(), String> {
+        let pending = match self.pending_project_seeds.lock() {
+            Ok(mut pending) if !pending.is_empty() => std::mem::take(&mut *pending),
+            _ => return Ok(()),
+        };
+        let Some(seed) = self
+            .new_project_tenant_seed
+            .lock()
+            .ok()
+            .and_then(|seed| seed.clone())
+        else {
+            return Ok(());
+        };
+        let mut first_error = None;
+        for project in pending {
+            if self.routed_store_for(&project).is_none() {
+                continue;
+            }
+            if let Err(error) = seed.apply(self, &project) {
+                first_error.get_or_insert(error);
+            }
+        }
+        first_error.map_or(Ok(()), Err)
     }
 
     /// Clears every compatibility namespace owned by the default session.
@@ -6932,7 +7010,7 @@ impl AuthRegistry {
         let parent = if project == self.default_project {
             &self.default
         } else {
-            projects.registered.get(project)?
+            projects.tenant_parent(project)?
         };
         self.build_tenant_import_candidate(project, tenant, parent)
     }
@@ -7766,7 +7844,7 @@ impl AuthRegistry {
         let parent = if project == self.default_project {
             &self.default
         } else {
-            projects.registered.get(project)?
+            projects.tenant_parent(project)?
         };
         let key = (project.to_owned(), tenant.to_owned());
         if let Some(store) = self.existing_tenant_with_metadata(&key) {
@@ -7895,7 +7973,7 @@ impl AuthRegistry {
         let parent = if project == self.default_project {
             &self.default
         } else {
-            projects.registered.get(project)?
+            projects.tenant_parent(project)?
         };
         if require_enabled && !parent.lock().ok()?.allows_tenants() {
             return None;

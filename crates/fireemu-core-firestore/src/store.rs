@@ -2968,6 +2968,14 @@ impl FirestoreState {
         Ok(transaction.read_time)
     }
 
+    /// Whether a transaction is read-only (`None` for a token this database does not know).
+    #[must_use]
+    pub fn transaction_is_read_only(&self, id: &TransactionId) -> Option<bool> {
+        self.transactions
+            .get(id)
+            .map(|transaction| transaction.read_only)
+    }
+
     /// Snapshot version a transaction reads at.
     pub fn transaction_read_version(
         &self,

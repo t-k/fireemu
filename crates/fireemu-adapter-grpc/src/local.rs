@@ -4691,12 +4691,31 @@ impl LocalBackend {
         req: &pb::CommitRequest,
         guard: WriteGuard<'_>,
     ) -> Result<pb::CommitResponse, Status> {
+        self.commit_once_wire(req, guard, false)
+    }
+
+    /// [`Self::commit_once`] for a native gRPC caller. In the production profile the empty
+    /// commit of a read-write transaction carries no `commit_time` there (P01, gRPC), while over
+    /// REST it answers one; the empty commit of a read-only transaction carries its snapshot time
+    /// on both (P02). `native` selects the gRPC form.
+    pub fn commit_once_wire(
+        &self,
+        req: &pb::CommitRequest,
+        guard: WriteGuard<'_>,
+        native: bool,
+    ) -> Result<pb::CommitResponse, Status> {
         let (parent, writes) = Self::plan_commit(req)?;
         self.fault(parent.project.as_str(), "firestore.commit")?;
         let txn = self.txn(&parent, &req.transaction)?;
         let now = self.write_time();
-        let result = self.with_db(&parent, |db| {
+        let (result, unstamped) = self.with_db(&parent, |db| {
             guard(db, &writes, now)?;
+            let unstamped = native
+                && writes.is_empty()
+                && db.limit_scope() == fireemu_core_firestore::store::LimitScope::Production
+                && txn
+                    .as_ref()
+                    .is_some_and(|id| db.transaction_is_read_only(id) == Some(false));
             let result = self.commit_with_events(
                 &parent,
                 db,
@@ -4705,9 +4724,13 @@ impl LocalBackend {
                 now,
                 WriteRoute::Commit,
             )?;
-            Ok(result)
+            Ok((result, unstamped))
         })?;
-        Ok(encode_commit(&result))
+        let mut response = encode_commit(&result);
+        if unstamped {
+            response.commit_time = None;
+        }
+        Ok(response)
     }
 
     /// Runs `attempt` until it is not refused for lock contention. A refusal runs the lease

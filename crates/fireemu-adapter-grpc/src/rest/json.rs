@@ -1092,15 +1092,19 @@ pub fn write_result_to_json(w: &pb::WriteResult) -> Value {
     without_empty(out)
 }
 
-/// Commit response → JSON. A commit without writes answers `{}`: no write results, and no
-/// commit time either, which is what the official emulator answers for it.
+/// Commit response → JSON. A commit without writes answers `{}` under the emulator profile: no
+/// write results, and no commit time either, which is what the official emulator answers for it.
+/// Production answers a `commitTime` and no write results (P01 and P02, REST), so the
+/// production profile keeps the time.
 #[must_use]
-pub fn commit_to_json(c: &pb::CommitResponse) -> Value {
+pub fn commit_to_json(c: &pb::CommitResponse, production: bool) -> Value {
     let mut out = json!({
         "writeResults": c.write_results.iter().map(write_result_to_json).collect::<Vec<_>>(),
     });
-    if let (Some(t), false) = (&c.commit_time, c.write_results.is_empty()) {
-        out["commitTime"] = timestamp_to_json(t);
+    if let Some(t) = &c.commit_time {
+        if production || !c.write_results.is_empty() {
+            out["commitTime"] = timestamp_to_json(t);
+        }
     }
     without_empty(out)
 }

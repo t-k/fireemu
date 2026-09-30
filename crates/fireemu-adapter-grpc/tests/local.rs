@@ -8296,6 +8296,50 @@ async fn native_transaction_document(
         .into_inner()
 }
 
+/// The empty commit of a transaction over native gRPC (P01, P02): production answers no
+/// `commit_time` for a read-write transaction and the snapshot time for a read-only one; the
+/// emulator profile keeps a time for both.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn native_empty_commit_time_follows_the_transaction_mode_in_production() {
+    for strict in [true, false] {
+        let (mut client, _clock, _backend, handle) =
+            start_profile_with_state(strict, Some(std::time::Duration::ZERO)).await;
+        for read_only in [false, true] {
+            let options = read_only.then(|| pb::TransactionOptions {
+                mode: Some(pb::transaction_options::Mode::ReadOnly(
+                    pb::transaction_options::ReadOnly::default(),
+                )),
+            });
+            let transaction = client
+                .begin_transaction(pb::BeginTransactionRequest {
+                    database: DB.to_owned(),
+                    options,
+                    ..Default::default()
+                })
+                .await
+                .unwrap()
+                .into_inner()
+                .transaction;
+            let response = client
+                .commit(pb::CommitRequest {
+                    database: DB.to_owned(),
+                    transaction,
+                    ..Default::default()
+                })
+                .await
+                .unwrap()
+                .into_inner();
+            assert!(response.write_results.is_empty());
+            assert_eq!(
+                response.commit_time.is_some(),
+                !strict || read_only,
+                "strict={strict} read_only={read_only}"
+            );
+        }
+        handle.abort();
+    }
+}
+
 /// A commit refused by a precondition ends its transaction, as production answers it (P08, recorded on REST and on
 /// native gRPC): the same token then reads and commits as `INVALID_ARGUMENT` in strict (`ABORTED` in the emulator
 /// profile, as the official emulator does), a Rollback is accepted again and again, and the locks the transaction held

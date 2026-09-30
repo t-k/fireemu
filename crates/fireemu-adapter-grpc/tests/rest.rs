@@ -3860,6 +3860,37 @@ fn rest_validation_codes_follow_production() {
     );
 }
 
+/// The empty commit of a transaction (P01, P02, REST): production answers a `commitTime` and no write
+/// results, for a read-write and a read-only transaction; the official emulator answers `{}`.
+#[test]
+fn rest_empty_commit_answers_a_commit_time_in_production_only() {
+    for strict in [true, false] {
+        for options in [json!({"readWrite": {}}), json!({"readOnly": {}})] {
+            let s = state_with_profile(strict);
+            let (status, begun) = call(
+                &s,
+                "POST",
+                &format!("{DOCS}:beginTransaction"),
+                json!({"options": options}),
+            );
+            assert_eq!(status, 200, "{begun}");
+            let (status, body) = call(
+                &s,
+                "POST",
+                &format!("{DOCS}:commit"),
+                json!({"transaction": begun["transaction"], "writes": []}),
+            );
+            assert_eq!(status, 200, "{body}");
+            if strict {
+                assert!(body["commitTime"].is_string(), "strict {options}: {body}");
+                assert!(body.get("writeResults").is_none(), "{body}");
+            } else {
+                assert_eq!(body, json!({}), "emulator {options}");
+            }
+        }
+    }
+}
+
 /// A read-only transaction takes its snapshot at its first read, not at its begin (P02): a write
 /// acknowledged between the two is shown, and a write after the first read is not.
 #[test]

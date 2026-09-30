@@ -593,7 +593,7 @@ impl Firestore for GatewayService {
             return local
                 .retry_on_contention_async(&parent, own.as_ref(), &writes, || {
                     let guard = self.write_guard(&caller);
-                    local.commit_once(request.get_ref(), &*guard)
+                    local.commit_once_wire(request.get_ref(), &*guard, true)
                 })
                 .await
                 .map(Response::new);

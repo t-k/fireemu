@@ -222,8 +222,17 @@ def test_short_stop_policy_is_inert_and_keeps_unconfirmed_reap(monkeypatch, reap
     import threading
     from unittest.mock import Mock
 
-    assert threading.enumerate() == [threading.main_thread()]
-    probe = subprocess.run(["ps", "-axo", "pid="], capture_output=True, text=True, check=True)
+    owner = threading.current_thread()
+    started_threads = []
+    original_start = threading.Thread.start
+
+    def start(thread, *args, **kwargs):
+        if threading.current_thread() is owner:
+            started_threads.append(thread)
+        return original_start(thread, *args, **kwargs)
+
+    monkeypatch.setattr(threading.Thread, "start", start)
+    probe = subprocess.run(["ps", "-A", "-o", "pid="], capture_output=True, text=True, check=True)
     existing = {int(value) for value in probe.stdout.split()}
     pid = next(value for value in range(99999, 90000, -1)
                if value not in existing and value - 1 not in existing)
@@ -287,9 +296,16 @@ def test_short_stop_policy_is_inert_and_keeps_unconfirmed_reap(monkeypatch, reap
     monkeypatch.setattr(runtime, "subprocess", SimpleNamespace(run=census, TimeoutExpired=timeout_error))
     guards = [Mock(side_effect=lambda *_args, **_kwargs: pytest.fail("real process operation reached"))
               for _ in range(3)]
-    monkeypatch.setattr(real_os, "killpg", guards[0])
-    monkeypatch.setattr(real_os, "kill", guards[1])
-    monkeypatch.setattr(real_subprocess, "run", guards[2])
+    def scoped_guard(original, guard):
+        def operation(*args, **kwargs):
+            if threading.current_thread() is owner:
+                return guard(*args, **kwargs)
+            return original(*args, **kwargs)
+        return operation
+
+    monkeypatch.setattr(real_os, "killpg", scoped_guard(real_os.killpg, guards[0]))
+    monkeypatch.setattr(real_os, "kill", scoped_guard(real_os.kill, guards[1]))
+    monkeypatch.setattr(real_subprocess, "run", scoped_guard(real_subprocess.run, guards[2]))
     monkeypatch.setattr(runtime, "STOP_SECONDS", .15)
     process = Process()
     receipt = runtime.stop_daemon(process)
@@ -303,6 +319,46 @@ def test_short_stop_policy_is_inert_and_keeps_unconfirmed_reap(monkeypatch, reap
     assert process.stdout.closed is True
     for guard in guards:
         guard.assert_not_called()
+    lingering = [thread for thread in started_threads if thread.is_alive()]
+    assert not lingering, [(thread.name, thread.ident) for thread in lingering]
+
+
+def test_inert_stop_does_not_reject_or_intercept_a_foreign_thread(monkeypatch):
+    import subprocess
+    import threading
+
+    release = threading.Event()
+    entered = threading.Event()
+    observations = []
+    commands = []
+    original_run = subprocess.run
+
+    def run(*args, **kwargs):
+        commands.append(args[0])
+        return original_run(*args, **kwargs)
+
+    monkeypatch.setattr(subprocess, "run", run)
+
+    def foreign():
+        entered.set()
+        release.wait(5)
+        try:
+            observations.append(subprocess.run(["ps", "-A", "-o", "pid="],
+                                               capture_output=True, text=True, check=True).returncode)
+        except BaseException as error:
+            observations.append(error)
+
+    thread = threading.Thread(target=foreign, name="foreign-inert-control", daemon=True)
+    thread.start()
+    assert entered.wait(2)
+    try:
+        test_short_stop_policy_is_inert_and_keeps_unconfirmed_reap(monkeypatch, True)
+    finally:
+        release.set()
+        thread.join(timeout=2)
+    assert not thread.is_alive()
+    assert observations == [0], observations
+    assert commands == [["ps", "-A", "-o", "pid="]] * 2
 
 
 def test_startup_failure_retains_bounded_private_output_and_verified_shutdown(tmp_path, owned):

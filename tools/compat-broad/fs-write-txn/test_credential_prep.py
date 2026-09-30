@@ -903,6 +903,30 @@ def test_trickle_body_deadline_reaches_response_without_interpreter_setup(oauth_
     assert "synthetic" not in json.dumps(result)
 
 
+def _patch_test_thread_clock(monkeypatch, clock):
+    owner = threading.current_thread()
+    started_threads = []
+    original_start = threading.Thread.start
+    real_monotonic = time.monotonic
+
+    def start(thread, *args, **kwargs):
+        if threading.current_thread() is owner:
+            started_threads.append(thread)
+        return original_start(thread, *args, **kwargs)
+
+    def monotonic():
+        return clock.now if threading.current_thread() is owner else real_monotonic()
+
+    monkeypatch.setattr(time, "monotonic", monotonic)
+    monkeypatch.setattr(threading.Thread, "start", start)
+    return started_threads
+
+
+def _assert_no_started_threads(started_threads):
+    lingering = [thread for thread in started_threads if thread.is_alive()]
+    assert not lingering, [(thread.name, thread.ident) for thread in lingering]
+
+
 @pytest.mark.parametrize("reaped", [True, False])
 @pytest.mark.parametrize("launch_seconds", [0, .6])
 def test_short_parent_deadline_kills_once_and_preserves_unconfirmed_reap(
@@ -911,9 +935,8 @@ def test_short_parent_deadline_kills_once_and_preserves_unconfirmed_reap(
     import subprocess
     from types import SimpleNamespace
 
-    assert threading.enumerate() == [threading.main_thread()]
     clock = SimpleNamespace(now=0.0)
-    monkeypatch.setattr(time, "monotonic", lambda: clock.now)
+    initial_threads = _patch_test_thread_clock(monkeypatch, clock)
 
     class Worker:
         pid = 123456
@@ -960,6 +983,7 @@ def test_short_parent_deadline_kills_once_and_preserves_unconfirmed_reap(
     assert ("workerPid" in result) is not reaped
     if not reaped:
         assert result["workerPid"] == worker.pid
+    _assert_no_started_threads(initial_threads)
 
 
 @pytest.mark.parametrize("deadline,socket_budget,parent_budget", [(2, 1.25, 1.75), (12, 11.25, 11.75)])
@@ -970,9 +994,8 @@ def test_parent_accepts_serialized_worker_receipt_with_its_bounded_payload(
     import subprocess
     from types import SimpleNamespace
 
-    assert threading.enumerate() == [threading.main_thread()]
     clock = SimpleNamespace(now=0.0)
-    monkeypatch.setattr(time, "monotonic", lambda: clock.now)
+    initial_threads = _patch_test_thread_clock(monkeypatch, clock)
     receipt = {"complete": complete, "status": 200, "receivedBytes": 2 if complete else 0,
                "declaredLength": 2, "phase": "body", "socketTimeoutSeconds": socket_budget,
                "elapsedSeconds": socket_budget}
@@ -1018,16 +1041,19 @@ def test_parent_accepts_serialized_worker_receipt_with_its_bounded_payload(
     assert len(launches) == len(calls) == 1
     assert result == {**receipt, "workerReaped": True}
     assert "synthetic-access-secret" not in json.dumps(result)
+    _assert_no_started_threads(initial_threads)
 
 
 @pytest.mark.parametrize("scenario", ["tokeninfo-stall", "immediate-body", "delayed-headers"])
 def test_body_diagnostic_does_not_depend_on_interpreter_setup(request, monkeypatch, scenario):
-    """A prepared HTTP phase must keep its diagnostic when child setup is slow."""
+    """Exact HTTP diagnostics use the prepared direct path and launch no interpreter."""
     import subprocess
 
     launch = subprocess.Popen
+    launches = []
 
     def delayed_launch(*args, **kwargs):
+        launches.append((args, kwargs))
         # Delay launch after the parent deadline starts, before child stdin and the actual HTTP phase.
         time.sleep(.8)
         return launch(*args, **kwargs)
@@ -1041,3 +1067,33 @@ def test_body_diagnostic_does_not_depend_on_interpreter_setup(request, monkeypat
         test_immediate_body_stall_has_a_diagnostic()
     else:
         test_header_delay_must_not_consume_the_body_diagnostic_margin(2.0)
+    assert launches == []
+
+
+@pytest.mark.parametrize("kind", ["deadline", "serialized"])
+def test_fake_parent_clock_preserves_a_foreign_threads_real_clock(monkeypatch, kind):
+    release = threading.Event()
+    entered = threading.Event()
+    observations = []
+    real_started = time.monotonic()
+
+    def foreign():
+        entered.set()
+        release.wait(5)
+        observations.append(time.monotonic())
+
+    thread = threading.Thread(target=foreign, name="foreign-clock-control", daemon=True)
+    thread.start()
+    assert entered.wait(2)
+    try:
+        if kind == "deadline":
+            test_short_parent_deadline_kills_once_and_preserves_unconfirmed_reap(monkeypatch, True, .6)
+        else:
+            test_parent_accepts_serialized_worker_receipt_with_its_bounded_payload(
+                monkeypatch, 12, 11.25, 11.75, False,
+            )
+    finally:
+        release.set()
+        thread.join(timeout=2)
+    assert not thread.is_alive()
+    assert len(observations) == 1 and observations[0] >= real_started, observations

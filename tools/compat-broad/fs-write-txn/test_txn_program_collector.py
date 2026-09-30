@@ -4,6 +4,8 @@ import base64
 import copy
 import datetime as dt
 import importlib
+import threading
+import time
 
 import pytest
 
@@ -23,7 +25,7 @@ class Clock:
 class Service:
     """A stand-in for Firestore over both transports; each knob is one production answer a table may allow."""
 
-    def __init__(self, clock, *, fail_code=9, writer_code=0, writer_applies=None, rollback_code=0, repeat_rollback_code=0, after_commit_rollback_code=10, fail_at=None, foreign_marker=False, duplicate_tokens=False, corrupt=None, existing=None, dead_on_failure=False, dead_rollback_code=10, finished_reads_refused=False, locks=False, partial_publish=False, ro_snapshot="begin", ro_empty_refused=False, ro_write_ends_token=False, rw_snapshot="latest", rw_commit_code=0, rollback_details=None, rpc_seconds=1 / 64, expiry=False, lifetime=270, idle=120):
+    def __init__(self, clock, *, fail_code=9, writer_code=0, writer_applies=None, rollback_code=0, repeat_rollback_code=0, after_commit_rollback_code=10, fail_at=None, foreign_marker=False, duplicate_tokens=False, corrupt=None, existing=None, dead_on_failure=False, dead_rollback_code=10, finished_reads_refused=False, locks=False, partial_publish=False, ro_snapshot="begin", ro_empty_refused=False, ro_write_ends_token=False, rw_snapshot="latest", rw_commit_code=0, rollback_details=None, rpc_seconds=1 / 64, hold_writers=False, hold_timeout=5.0, contention_refusal=False, never_release=False, expiry=False, lifetime=270, idle=120):
         self.clock, self.fail_code, self.writer_code, self.rollback_code = clock, fail_code, writer_code, rollback_code
         self.writer_applies = writer_applies if writer_applies is not None else writer_code == 0
         self.repeat_rollback_code, self.after_commit_rollback_code = repeat_rollback_code, after_commit_rollback_code
@@ -39,6 +41,11 @@ class Service:
         self.rw_commit_code = rw_commit_code
         self.rollback_details = rollback_details
         self.rpc_seconds = rpc_seconds
+        # A writer that meets a held lock waits, on a real thread, for the holder's release (production held one until then, P06
+        # recording 2) instead of being refused after a virtual 25 s.
+        self.hold_writers, self.hold_timeout = hold_writers, hold_timeout
+        self.contention_refusal, self.never_release = contention_refusal, never_release
+        self._lock, self.released = threading.RLock(), threading.Event()
         self.expiry, self.lifetime, self.idle, self.tstart, self.tlast = expiry, lifetime, idle, {}, {}
         self.genesis, self.hist, self.ro_time = {}, {}, {}
         self.calls, self.documents, self.tokens, self.version = [], {}, {}, 0
@@ -64,7 +71,35 @@ class Service:
     def _receipt(self, transport, code, *, details="", response=None, complete=True):
         return {"kind": "txn-program-receipt-v1", "transport": transport, "complete": complete, "code": code, "details": details, "response": response, "http": None if transport == "grpc" else (200 if code == 0 else 409), "dispatchedRequests": 1, "childReaped": True}
 
-    def send(self, transport, method, request, **_kwargs):
+    def send(self, transport, method, request, **kwargs):
+        if self.hold_writers and method == "Commit" and not request.get("transaction"):
+            with self._lock:
+                names = {write["update"]["name"] for write in request["writes"]}
+                held = {name for token, locked in self.locked.items() if self.tokens.get(token) == "open" for name in locked}
+                contended = bool(self.locks and held & names)
+                if contended:
+                    self.released.clear()
+            if contended and self.contention_refusal:
+                with self._lock:
+                    self.calls.append((transport, method, copy.deepcopy(request)))
+                    return self._receipt(transport, 10, details="Too much contention on these documents. Please try again.")
+            if contended and self.never_release:
+                time.sleep(self.hold_timeout)
+                with self._lock:
+                    self.calls.append((transport, method, copy.deepcopy(request)))
+                    return self._receipt(transport, 4, details="deadline", complete=False)
+            if contended and not self.released.wait(self.hold_timeout):
+                with self._lock:
+                    self.calls.append((transport, method, copy.deepcopy(request)))
+                    return self._receipt(transport, 4, details="deadline", complete=False)
+        with self._lock:
+            result = self._send(transport, method, request, **kwargs)
+            token = request.get("transaction")
+            if token and method in ("Commit", "Rollback") and self.tokens.get(token) != "open":
+                self.released.set()
+            return result
+
+    def _send(self, transport, method, request, **_kwargs):
         self.calls.append((transport, method, copy.deepcopy(request)))
         self.clock.sleep(self.rpc_seconds)
         if len(self.calls) == self.fail_at:

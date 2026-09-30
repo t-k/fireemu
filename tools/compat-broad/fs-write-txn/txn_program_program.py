@@ -29,7 +29,7 @@ MAX_DOCUMENTS = 8
 MAX_WAIT_SECONDS = 600
 MAX_STATES = 32
 _STEP_KEYS = ("id", "transport", "rpc", "document", "tokenInput", "tokenOutput", "writes", "caseId", "role", "allow")
-_OPTIONAL_STEP_KEYS = ("deadlineMs", "documents", "mode", "readAt", "newTransaction", "waitSeconds", "sinceBegin")
+_OPTIONAL_STEP_KEYS = ("deadlineMs", "documents", "mode", "readAt", "newTransaction", "waitSeconds", "sinceBegin", "concurrentWith")
 
 
 def outcome_class(code):
@@ -72,6 +72,10 @@ def _step(row):
         # A read-write transaction's first read may show any state acknowledged since its begin (the snapshot may be taken
         # at the begin or at the read); only present on that read.
         step["sinceBegin"] = row["sinceBegin"]
+    if "concurrentWith" in row:
+        # An outside writer sent while the step before it (its anchor: a holder's Commit or Rollback, after the anchor's wait) is
+        # still to be sent: the writer may be held by the holder's locks, and its answer is collected after the anchor's.
+        step["concurrentWith"] = row["concurrentWith"]
     if "waitSeconds" in row:
         # Idle time, in seconds, before this request is sent; only present on a step that waits.
         step["waitSeconds"] = row["waitSeconds"]
@@ -157,6 +161,12 @@ def _validate_table(table):
                 _bad(f"{step['id']} marks a read that is not the first observation read of a read-write transaction")
         if step["tokenInput"] is not None and rpc in ("GetDocument", "BatchGetDocuments"):
             plain_reads.add(step["tokenInput"])
+        if "concurrentWith" in step:
+            anchor = steps[index - 1] if index else None
+            if anchor is None or step["concurrentWith"] != anchor["id"] or "concurrentWith" in anchor or step["role"] != "outside-writer" or rpc != "Commit" or step["tokenInput"] is not None or not step["writes"] or "waitSeconds" in step:
+                _bad(f"{step['id']} is not a concurrent outside writer of the step before it")
+            if not isinstance(anchor["tokenInput"], str) or anchor["rpc"] not in ("Commit", "Rollback") or type(anchor.get("waitSeconds")) is not int or not 1 <= anchor["waitSeconds"] <= step["deadlineMs"] / 1000 - 10:
+                _bad(f"{step['id']} has an anchor that is not a holder release after a wait that lands inside the writer's deadline")
         if "newTransaction" in step:
             if rpc != "BatchGetDocuments" or step["newTransaction"] not in ("readWrite", "readOnly") or step["tokenInput"] is not None or not isinstance(step["tokenOutput"], str) or step["tokenOutput"] in issued:
                 _bad(f"{step['id']} is not a batch read that begins one fresh transaction")

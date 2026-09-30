@@ -10,12 +10,15 @@ import copy
 import datetime as dt
 import math
 import re
+import threading
 import time
 
 from txn_program_program import GraphCursor, canonical_token, compile_plan, corpus_digest, marker_fields, outcome_class, request_for_step, source_digest, validate_plan
 
 RECEIPT_KIND = "txn-program-receipt-v1"
 RECORDING_KIND = "txn-program-recording-v1"
+# Seconds a recovery waits, after releasing the tokens, for a write of unknown outcome that may still land before it reads the owned documents.
+SETTLE_SECONDS = 5
 RESOLVED_TOKENS = ("committed", "rolled-back", "released-refused", "released-expired")
 # The one refusal that proves a transaction is gone: what production answers for a finished or expired token.
 GONE_CODE = 10
@@ -104,6 +107,13 @@ def check_order(previous, current):
         raise ValueError("requests overlap or ran out of order")
 
 
+def check_concurrent_order(before_anchor, current):
+    """A request sent while the next one is sent (a concurrent outside writer): it starts after the answer to the request that
+    came before that one and ends after it started, on both clocks."""
+    if current["responseMonotonic"] < current["dispatchMonotonic"] or current["dispatchMonotonic"] < before_anchor["responseMonotonic"] or _utc_seconds(current["dispatchUtc"]) < _utc_seconds(before_anchor["responseUtc"]) - 0.25:
+        raise ValueError("a concurrent request starts before the request that precedes its anchor")
+
+
 def check_timestamp(value, transport):
     """A document version stamp as its transport answers it: gRPC seconds and nanos, REST RFC 3339."""
     if transport == "rest":
@@ -141,6 +151,9 @@ class Ledger:
         # Tokens some request was refused for as expired or no longer valid (10 with the recorded text). Kept out
         # of the recorded snapshot: replaying the rows rebuilds it.
         self.gone_seen = set()
+        # Documents a concurrent outside writer and its anchor both wrote: the writer may have landed before or after the anchor, so a
+        # read may show the state before the writer's as well as the writer's, until a later write settles it. Also outside the snapshot.
+        self.ambiguous = {}
 
     def snapshot(self):
         return {
@@ -222,7 +235,10 @@ class Ledger:
             self._prior[site] = {}
             for write in step["writes"] if step else []:
                 doc = self.docs[write["document"]]
-                self._prior[site][write["document"]] = copy.deepcopy(doc)
+                if not (step and step.get("concurrentWith")):
+                    # A concurrent writer sent beside its anchor has no state of its own to return to when refused: the anchor may
+                    # have changed the document since (the labels it tried still widen what a read may show).
+                    self._prior[site][write["document"]] = copy.deepcopy(doc)
                 self.tried[write["document"]].add(write["state"])
                 if doc["status"] != "created":
                     doc["status"] = "possibly-owned"
@@ -280,7 +296,11 @@ class Ledger:
                 self.unknown_commits.discard(site)
                 for write, acknowledged in zip(step["writes"], writes, strict=True):
                     doc = self.docs[write["document"]]
-                    doc.update(status="created", state=write["state"], possible=[write["state"]])
+                    if step.get("concurrentWith"):
+                        self.ambiguous[write["document"]] = {doc["state"]} - {None}
+                    else:
+                        self.ambiguous.pop(write["document"], None)
+                    doc.update(status="created", state=write["state"], possible=[write["state"]] + ([doc["state"]] if step.get("concurrentWith") and doc["state"] not in (None, write["state"]) else []))
                     self.history[write["document"]].append(write["state"])
                     stamp = parse_time(acknowledged["updateTime"], transport)
                     self.versions[write["document"]].append((write["state"], stamp))
@@ -427,7 +447,7 @@ class Ledger:
         if token_role in self.token_time:
             return {self._state_at(role, self.token_time[token_role])}
         if token_role is None or self.modes.get(token_role) != "readOnly" and not (step and step.get("sinceBegin")):
-            return {doc["state"]}
+            return {doc["state"]} | self.ambiguous.get(role, set())
         begun = self.since[token_role][role]
         # A transaction that began before the document existed may also see it absent.
         return set(self.history[role][max(0, begun - 1):]) | ({None} if begun == 0 else set()) or {doc["state"]}
@@ -473,6 +493,9 @@ class Collector:
         self.deadline = self.observation_deadline
         self.rows, self.cleanup_rows = [], []
         self.pending = None
+        self.pending_concurrent = None
+        self.concurrent = any(step.get("concurrentWith") for step in self.plan["steps"])
+        self.started = None
         self.journal_failure = False
         self._last_monotonic = monotonic()
         self.last_timing = None
@@ -485,7 +508,7 @@ class Collector:
         return current
 
     def _state(self):
-        return {"kind": "txn-program-responsibility-v1", "plan": self.plan, **self.ledger.snapshot(), "pending": copy.deepcopy(self.pending), "rows": copy.deepcopy(self.rows), "cleanupRows": copy.deepcopy(self.cleanup_rows), "requests": self.budget.total, **({"waits": copy.deepcopy(self.waits)} if self.plan["waits"] else {})}
+        return {"kind": "txn-program-responsibility-v1", "plan": self.plan, **self.ledger.snapshot(), "pending": copy.deepcopy(self.pending), **({"pendingConcurrent": copy.deepcopy(self.pending_concurrent)} if self.concurrent else {}), "rows": copy.deepcopy(self.rows), "cleanupRows": copy.deepcopy(self.cleanup_rows), "requests": self.budget.total, **({"waits": copy.deepcopy(self.waits)} if self.plan["waits"] else {})}
 
     def _persist(self):
         try:
@@ -496,6 +519,12 @@ class Collector:
             raise
 
     def _rpc(self, site, transport, method, request, phase, *, step=None):
+        context = self._begin_rpc(site, transport, method, request, phase, step=step)
+        result = self.wire.send(transport, method, request, nonce=self.plan["nonce"], owner_id=self.plan["ownerId"], bearer=self.bearer, deadline_ms=context["deadlineMs"])
+        return self._end_rpc(context, result)
+
+    def _begin_rpc(self, site, transport, method, request, phase, *, step=None, concurrent=False):
+        """Everything before the dispatch: admission, the budget, the responsibility, and the durable journal."""
         if self.journal_failure:
             raise ValueError("journal failed; no further dispatch is safe")
         self.before_send()
@@ -506,29 +535,48 @@ class Collector:
         self.ledger.guard(method, request, step)
         self.budget.charge(phase)
         self.ledger.before(site, transport, method, request, step)
-        self.pending = {"site": site, "rpc": method, "transport": transport}
+        entry = {"site": site, "rpc": method, "transport": transport}
+        if concurrent:
+            self.pending_concurrent = entry
+        else:
+            self.pending = entry
         self._persist()
         self.before_send()
         remaining = self.deadline - self._now()
         if remaining < need:
             raise TimeoutError("dispatch no longer fits after durable journal")
         timing = {"dispatchMonotonic": self._now(), "dispatchUtc": self.utc()}
-        result = self.wire.send(transport, method, request, nonce=self.plan["nonce"], owner_id=self.plan["ownerId"], bearer=self.bearer, deadline_ms=int(wanted * 1000))
-        timing.update(responseMonotonic=self._now(), responseUtc=self.utc())
+        return {"site": site, "transport": transport, "method": method, "request": request, "phase": phase, "step": step, "timing": timing, "deadlineMs": int(wanted * 1000), "concurrent": concurrent}
+
+    def _end_rpc(self, context, result, response_timing=None):
+        """Everything after the answer: the row, the clock checks and the ledger. A concurrent request carries the clocks read when
+        its answer arrived, since it is collected after the request it ran beside."""
+        site, transport, method, request, phase, step, timing = (context[key] for key in ("site", "transport", "method", "request", "phase", "step", "timing"))
+        concurrent = context["concurrent"]
+        timing.update(response_timing or {"responseMonotonic": self._now(), "responseUtc": self.utc()})
         row = {"sequence": len(self.rows) + len(self.cleanup_rows), "phase": phase, "timing": timing, "site": site, "transport": transport, "rpc": method, "caseId": step["caseId"] if step else None, "request": copy.deepcopy(request), "result": copy.deepcopy(result)}
         (self.rows if phase == "observation" else self.cleanup_rows).append(row)
         try:
             # The answer is kept in the rows even when its clocks are refused.
             check_timing(timing)
-            if self.last_timing is not None:
-                check_order(self.last_timing, timing)
-            self.last_timing = copy.deepcopy(timing)
+            if concurrent:
+                check_concurrent_order(context["before"], timing)
+                # The next request follows the later of the two answers.
+                if self.last_timing is None or timing["responseMonotonic"] > self.last_timing["responseMonotonic"]:
+                    self.last_timing = copy.deepcopy(timing)
+            else:
+                if self.last_timing is not None:
+                    check_order(self.last_timing, timing)
+                self.last_timing = copy.deepcopy(timing)
             self.ledger.after(site, transport, method, request, step, result, timing)
         except (Exception, KeyboardInterrupt):
             self._persist()
             raise
         row["outcomeClass"] = outcome_class(result["code"])
-        self.pending = None
+        if concurrent:
+            self.pending_concurrent = None
+        else:
+            self.pending = None
         self._persist()
         return result
 
@@ -553,10 +601,56 @@ class Collector:
             raise TimeoutError("a wait overshot its scheduling slack")
         self._persist()
 
+    def _start_concurrent(self, step):
+        """Send an outside writer on its own thread; it may be held by a holder's locks until the anchor step that follows releases them."""
+        request = request_for_step(self.plan, step, self.ledger.token_values(), self.table, self.ledger.times())
+        context = self._begin_rpc(step["id"], step["transport"], step["rpc"], request, "observation", step=step, concurrent=True)
+        context["before"] = copy.deepcopy(self.last_timing) if self.last_timing is not None else {"responseMonotonic": context["timing"]["dispatchMonotonic"], "responseUtc": context["timing"]["dispatchUtc"]}
+        box = {}
+
+        def send():
+            try:
+                box["result"] = self.wire.send(context["transport"], context["method"], request, nonce=self.plan["nonce"], owner_id=self.plan["ownerId"], bearer=self.bearer, deadline_ms=context["deadlineMs"])
+            except BaseException as error:  # noqa: BLE001 - carried to the collecting thread
+                box["error"] = error
+            box["response"] = {"responseMonotonic": self.monotonic(), "responseUtc": self.utc()}
+
+        thread = threading.Thread(target=send, name=f"concurrent-{step['id']}", daemon=True)
+        self.started = {"context": context, "thread": thread, "box": box, "limit": context["deadlineMs"] / 1000 + 10}
+        thread.start()
+
+    def _finish_concurrent(self):
+        """Collect the concurrent writer's answer as its own row, after the anchor's."""
+        started, self.started = self.started, None
+        if started is None:
+            return
+        started["thread"].join(started["limit"])
+        if started["thread"].is_alive():
+            self.started = started
+            raise TimeoutError("a concurrent writer did not answer within its deadline; its outcome stays unknown")
+        box = started["box"]
+        if "error" in box:
+            raise box["error"]
+        self._end_rpc(started["context"], box["result"], response_timing=box["response"])
+
+    def _settle_concurrent(self):
+        """Before the cleanup: wait for a writer still in flight and record its answer if it came, so the cleanup read sees its effect."""
+        try:
+            self._finish_concurrent()
+        except (Exception, KeyboardInterrupt):
+            pass
+
     def _observe(self):
         cursor = GraphCursor(self.plan, self.table)
-        for declared in self.plan["steps"]:
+        steps = self.plan["steps"]
+        index = 0
+        while index < len(steps):
+            declared = steps[index]
+            following = steps[index + 1] if index + 1 < len(steps) else None
+            concurrent = following if following is not None and following.get("concurrentWith") == declared["id"] else None
             step = cursor.claim(declared["id"])
+            if concurrent is not None:
+                self._start_concurrent(cursor.claim(concurrent["id"]))
             if "waitSeconds" in step:
                 self._wait(step)
                 previous = self.rows[-1]
@@ -565,11 +659,14 @@ class Collector:
             if "waitSeconds" in step:
                 self.waits.append(wait_entry(step, previous, self.rows[-1]["timing"], self.ledger.tokens))
                 self._persist()
+            if concurrent is not None:
+                self._finish_concurrent()
             for role in self.ledger.pending_release(step):
                 site = f"cleanup/token/{role}"
                 self._rpc(site, self.ledger.tokens[role]["transport"], "Rollback", self.ledger.release_request(role), "tokenCleanup")
                 if self.ledger.tokens[role]["state"] not in ("rolled-back", "released-refused", "released-expired"):
                     raise ValueError("chain release is unconfirmed; next chain forbidden")
+            index += 2 if concurrent is not None else 1
         return cursor.complete
 
     def _cleanup(self):
@@ -581,6 +678,16 @@ class Collector:
             except (Exception, KeyboardInterrupt):
                 # A release attempted during observation or recovery cannot repeat.
                 continue
+        # A concurrent writer still in flight is held by the holder's locks until the release above; wait for it and record its answer if it came.
+        self._settle_concurrent()
+        if self.ledger.unknown_commits:
+            # A write whose outcome is unknown (a writer that timed out) may still land, held by a lock until the token above was released
+            # (P06 recording 2: about 1.2 s after the release); wait a few seconds, within the recovery clock, before the read that decides
+            # the delete, so that read is not older than the write.
+            for _second in range(SETTLE_SECONDS):
+                if self.deadline - self._now() < 20:
+                    break
+                self.sleep(1)
         for role in self.ledger.owed_documents():
             try:
                 self._rpc(f"cleanup/read/{role}", "grpc", "GetDocument", self.ledger.cleanup_request("read", role), "documentCleanup")
@@ -661,10 +768,15 @@ def projection(receipt, table):
     index, owed, queue, releases = 0, [], None, 0
     observations, reads, waits = [], [], []
     previous_timing = None
-    for row in sorted(rows, key=lambda row: row["sequence"]):
+    ordered = sorted(rows, key=lambda row: row["sequence"])
+    position = 0
+    while position < len(ordered):
+        row = ordered[position]
+        position += 1
         check_timing(row.get("timing"))
         if previous_timing is not None:
             check_order(previous_timing, row["timing"])
+        before_anchor = previous_timing
         previous_timing = row["timing"]
         site, transport, method, request, result = row.get("site"), row.get("transport"), row.get("rpc"), row.get("request"), row.get("result")
         if row.get("phase") == "observation":
@@ -673,6 +785,15 @@ def projection(receipt, table):
             declared = plan["steps"][index]
             if site != declared["id"] or method != declared["rpc"] or transport != declared["transport"] or row.get("caseId") != declared["caseId"] or request != request_for_step(plan, declared, ledger.token_values(), table, ledger.times()):
                 raise ValueError("closed request graph differs")
+            following = plan["steps"][index + 1] if index + 1 < len(plan["steps"]) else None
+            partner = None
+            if following is not None and following.get("concurrentWith") == declared["id"]:
+                # The concurrent outside writer was sent before its anchor, so the ledger takes it on before the anchor and its answer after.
+                partner = ordered[position] if position < len(ordered) else None
+                if partner is None or partner.get("phase") != "observation" or index + 1 >= len(steps) or partner != steps[index + 1] or partner.get("site") != following["id"] or partner.get("rpc") != following["rpc"] or partner.get("transport") != following["transport"] or partner.get("caseId") != following["caseId"] or partner.get("request") != request_for_step(plan, following, ledger.token_values(), table, ledger.times()):
+                    raise ValueError("concurrent request graph differs")
+                position += 1
+                ledger.before(partner["site"], partner["transport"], partner["rpc"], partner["request"], following)
             ledger.before(site, transport, method, request, declared)
             ledger.after(site, transport, method, request, declared, result, row["timing"])
             if "waitSeconds" in declared:
@@ -689,6 +810,17 @@ def projection(receipt, table):
                 reads.append({"site": site, "code": result["code"], "state": None})
             if method == "BatchGetDocuments":
                 reads.append({"site": site, "code": result["code"], "documents": ledger.batch_states(request, result) if result["code"] == 0 else None})
+            if partner is not None:
+                check_timing(partner.get("timing"))
+                check_concurrent_order(before_anchor if before_anchor is not None else {"responseMonotonic": partner["timing"]["dispatchMonotonic"], "responseUtc": partner["timing"]["dispatchUtc"]}, partner["timing"])
+                ledger.after(partner["site"], partner["transport"], partner["rpc"], partner["request"], following, partner["result"], partner["timing"])
+                if partner.get("outcomeClass") != outcome_class(partner["result"]["code"]):
+                    raise ValueError("outcome class differs from its code")
+                if following["caseId"]:
+                    observations.append(partner)
+                if partner["timing"]["responseMonotonic"] > previous_timing["responseMonotonic"]:
+                    previous_timing = partner["timing"]
+                index += 1
             owed = ledger.pending_release(declared)
             index += 1
         elif row.get("phase") == "tokenCleanup":

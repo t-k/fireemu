@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "kind": "storage-rules-release-artifact",
+  "sourceCommit": "418418e5552016087a3917049e9accc7fb8bf329",
+  "command": [
+    "cargo",
+    "build",
+    "--release",
+    "--locked",
+    "-p",
+    "fireemu"
+  ],
+  "binaryPath": "target/release/fireemu",
+  "binarySha256": "d166e562f5695fded5c4f344fc1857b76226d7b84ce0a6b4b11eb2c16a0e2394",
+  "version": "fireemu 0.9.0",
+  "rustc": "rustc 1.94.0 (4a4ef493e 2026-03-02)",
+  "platform": "Darwin arm64",
+  "gitStatusAtBuild": "",
+  "productionRequests": 0,
+  "note": "One release binary built from the clean merge commit of the Storage parity branch and the Storage Rules lane; the strict production comparison, the storage probe check and the Storage conformance scenarios ran on this exact copy. No crate source changed after the source commit; the closure files that follow change only spec and evidence."
+}

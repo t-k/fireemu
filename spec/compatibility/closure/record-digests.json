@@ -81,6 +81,8 @@
     "spec/compatibility/closure/evidence/FS-RULES-comparison.json": "e492410720a2c1c626a422e0c6f4852af0a54c530d514fe5f4c7fc6e4525125a",
     "spec/compatibility/closure/evidence/FS-RULES-fs-query-index-regression.json": "5220c029a10cedf0fea5e7789f778110ac2293c2dab20f1532d23a054558c5a2",
     "spec/compatibility/closure/evidence/FUNCTIONS-HTTP-comparison.json": "659186bb0bcf4e0a1bb655fcf7cf9b32309c5a76d52cd9a76e6269e5504169d2",
+    "spec/compatibility/closure/evidence/STORAGE-RULES-comparison.json": "323c6b0b8c110a15f16455e4e6417ebca5971bd633595ba9f07bcd88c161af59",
+    "spec/compatibility/closure/evidence/STORAGE-RULES-official-regression.json": "e59ffdd995174b8500f4c040255555cb68a8c0833e5555462929f9cd1f8ed53e",
     "spec/compatibility/closure/evidence/integration-v0.8.0/AUTH-ACCOUNT-comparison.json": "00455bf3da54088e3cc9498fb9717d5f5221e20ec03af4e62ef19cf8ee963603",
     "spec/compatibility/closure/evidence/integration-v0.8.0/AUTH-ACTION-comparison.json": "28a7dd84c79bb85df5e0aacafa2a1f2203df8297067fa27ea269782332ab8e74",
     "spec/compatibility/closure/evidence/integration-v0.8.0/AUTH-CONFIG-SDK-comparison.json": "eecebaa075cb9ea991cca74e35476f79f4eacae74d9551dd00dabf51333e9416",

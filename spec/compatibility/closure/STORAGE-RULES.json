@@ -4,7 +4,9 @@
   "parentStatus": "IMPLEMENTING",
   "oracleTrack": "disposable-sandbox",
   "inventoryState": "FROZEN",
-  "closureReview": { "decision": "PENDING_REVIEW" },
+  "closureReview": {
+    "decision": "PENDING_REVIEW"
+  },
   "observationContract": {
     "project": "fireemu-oracle-query",
     "profile": "strict",
@@ -13,38 +15,798 @@
     "finalArtifact": "Compare the two production recordings with the same copied fireemu binary used for the official-emulator Storage regression; retain the binary SHA-256, source commit, clean build receipt, corpus digest and comparison outputs. Independent closure review must approve that artifact before promotion."
   },
   "scopeDecisions": [
-    { "id": "S1", "status": "APPROVED", "decidedBy": "coordinator (delegated)", "decidedOn": "2026-09-25", "decisionRef": "docs.local/instructions/owner-decisions.md (2026-09-25 STORAGE-RULES S1)", "decision": "The Firebase object API is the Rules enforcement surface. A GCS JSON API request and an Admin credential are boundary controls for their production bypass behavior; IAM administration belongs outside this parent.", "recommendation": "Approve the boundary controls and keep object-data behavior in STORAGE-OBJECT." },
-    { "id": "S2", "status": "APPROVED", "decidedBy": "owner", "decidedOn": "2026-09-25", "decisionRef": "docs.local/instructions/owner-decisions.md (2026-09-25 STORAGE-RULES S2)", "decision": "Signed URLs and App Check are outside this Rules parent. Firebase download-token URLs remain an in-scope Rules-bypass control because the Firebase API serves them.", "recommendation": "Approve this split; keep download-token lifecycle in STORAGE-OBJECT and App Check in its existing claim." },
-    { "id": "S3", "status": "APPROVED", "decidedBy": "coordinator (delegated)", "decidedOn": "2026-09-25", "decisionRef": "docs.local/instructions/owner-decisions.md (2026-09-25 STORAGE-RULES S3)", "decision": "Common Rules expression grammar, functions and evaluator limits use FS-RULES evidence where the same evaluator behavior is demonstrated. Storage service declarations, method mapping, path matching, request and resource values, and firestore.get/exists require Storage-specific production rows.", "recommendation": "Approve evidence reuse only for identical shared semantics; a Storage-specific mismatch reopens this inventory." },
-    { "id": "S4", "status": "APPROVED", "decidedBy": "owner", "decidedOn": "2026-09-25", "decisionRef": "docs.local/instructions/owner-decisions.md (2026-09-25 STORAGE-RULES S4)", "decision": "The Firebase Rules API's management response schema is outside this parent. Publication acceptance and effective authorization after a cloud.storage release switch are in scope. Propagation delay itself is a proposed known difference; compare only after the new release has settled.", "recommendation": "Approve the same delay boundary as FS-RULES, while recording the settling criterion and both effective decisions." },
-    { "id": "S5", "status": "APPROVED", "decidedBy": "owner", "decidedOn": "2026-09-25", "decisionRef": "docs.local/instructions/owner-decisions.md (2026-09-25 STORAGE-RULES S5)", "ownerDecisionRequired": true, "decision": "firestore.get and firestore.exists must read the same project's default Firestore database. The proposed production fixture uses only a dedicated STORAGE-RULES collection in fireemu-oracle-query/(default); it never clears the database or changes its indexes or Firestore Rules.", "recommendation": "Approve narrowly scoped writes and verified deletion of that collection, with exclusive recording windows against FS-QUERY-INDEX and other users of (default). Do not send a production request or change the database before the owner records this decision." },
-    { "id": "S6", "status": "APPROVED", "decidedBy": "coordinator (delegated)", "decidedOn": "2026-09-25", "decisionRef": "docs.local/instructions/owner-decisions.md (2026-09-25 STORAGE-RULES S6)", "decision": "The corpus compares raw REST requests and server results. Browser and mobile SDK client behavior is outside this parent; STORAGE-OBJECT has the same client boundary.", "recommendation": "Approve, while keeping local SDK checks as regression evidence only." },
-    { "id": "S7", "status": "APPROVED", "decidedBy": "owner", "decidedOn": "2026-09-27", "decisionRef": "docs.local/instructions/owner-decisions.md (2026-09-27 STORAGE-RULES credential fixtures)", "decision": "A valid OAuth principal denied by IAM is outside this parent because preparing it requires IAM changes outside S1. An authentic expired Firebase ID token is outside this parent because the two recordings would hold the shared lock for about 130 minutes to observe a refusal the owner classifies as before Rules evaluation; avoiding that lock time would require a separate decision to retain an account between recording windows. Keep both as explicit unobserved scope limits; do not present either production outcome as verified.", "recommendation": "Retain malformed, foreign-project, revoked and valid token controls and GCS/Admin bypass controls without the excluded fixtures." }
+    {
+      "id": "S1",
+      "status": "APPROVED",
+      "decidedBy": "coordinator (delegated)",
+      "decidedOn": "2026-09-25",
+      "decisionRef": "docs.local/instructions/owner-decisions.md (2026-09-25 STORAGE-RULES S1)",
+      "decision": "The Firebase object API is the Rules enforcement surface. A GCS JSON API request and an Admin credential are boundary controls for their production bypass behavior; IAM administration belongs outside this parent.",
+      "recommendation": "Approve the boundary controls and keep object-data behavior in STORAGE-OBJECT."
+    },
+    {
+      "id": "S2",
+      "status": "APPROVED",
+      "decidedBy": "owner",
+      "decidedOn": "2026-09-25",
+      "decisionRef": "docs.local/instructions/owner-decisions.md (2026-09-25 STORAGE-RULES S2)",
+      "decision": "Signed URLs and App Check are outside this Rules parent. Firebase download-token URLs remain an in-scope Rules-bypass control because the Firebase API serves them.",
+      "recommendation": "Approve this split; keep download-token lifecycle in STORAGE-OBJECT and App Check in its existing claim."
+    },
+    {
+      "id": "S3",
+      "status": "APPROVED",
+      "decidedBy": "coordinator (delegated)",
+      "decidedOn": "2026-09-25",
+      "decisionRef": "docs.local/instructions/owner-decisions.md (2026-09-25 STORAGE-RULES S3)",
+      "decision": "Common Rules expression grammar, functions and evaluator limits use FS-RULES evidence where the same evaluator behavior is demonstrated. Storage service declarations, method mapping, path matching, request and resource values, and firestore.get/exists require Storage-specific production rows.",
+      "recommendation": "Approve evidence reuse only for identical shared semantics; a Storage-specific mismatch reopens this inventory."
+    },
+    {
+      "id": "S4",
+      "status": "APPROVED",
+      "decidedBy": "owner",
+      "decidedOn": "2026-09-25",
+      "decisionRef": "docs.local/instructions/owner-decisions.md (2026-09-25 STORAGE-RULES S4)",
+      "decision": "The Firebase Rules API's management response schema is outside this parent. Publication acceptance and effective authorization after a cloud.storage release switch are in scope. Propagation delay itself is a proposed known difference; compare only after the new release has settled.",
+      "recommendation": "Approve the same delay boundary as FS-RULES, while recording the settling criterion and both effective decisions."
+    },
+    {
+      "id": "S5",
+      "status": "APPROVED",
+      "decidedBy": "owner",
+      "decidedOn": "2026-09-25",
+      "decisionRef": "docs.local/instructions/owner-decisions.md (2026-09-25 STORAGE-RULES S5)",
+      "ownerDecisionRequired": true,
+      "decision": "firestore.get and firestore.exists must read the same project's default Firestore database. The proposed production fixture uses only a dedicated STORAGE-RULES collection in fireemu-oracle-query/(default); it never clears the database or changes its indexes or Firestore Rules.",
+      "recommendation": "Approve narrowly scoped writes and verified deletion of that collection, with exclusive recording windows against FS-QUERY-INDEX and other users of (default). Do not send a production request or change the database before the owner records this decision."
+    },
+    {
+      "id": "S6",
+      "status": "APPROVED",
+      "decidedBy": "coordinator (delegated)",
+      "decidedOn": "2026-09-25",
+      "decisionRef": "docs.local/instructions/owner-decisions.md (2026-09-25 STORAGE-RULES S6)",
+      "decision": "The corpus compares raw REST requests and server results. Browser and mobile SDK client behavior is outside this parent; STORAGE-OBJECT has the same client boundary.",
+      "recommendation": "Approve, while keeping local SDK checks as regression evidence only."
+    },
+    {
+      "id": "S7",
+      "status": "APPROVED",
+      "decidedBy": "owner",
+      "decidedOn": "2026-09-27",
+      "decisionRef": "docs.local/instructions/owner-decisions.md (2026-09-27 STORAGE-RULES credential fixtures)",
+      "decision": "A valid OAuth principal denied by IAM is outside this parent because preparing it requires IAM changes outside S1. An authentic expired Firebase ID token is outside this parent because the two recordings would hold the shared lock for about 130 minutes to observe a refusal the owner classifies as before Rules evaluation; avoiding that lock time would require a separate decision to retain an account between recording windows. Keep both as explicit unobserved scope limits; do not present either production outcome as verified.",
+      "recommendation": "Retain malformed, foreign-project, revoked and valid token controls and GCS/Admin bypass controls without the excluded fixtures."
+    }
   ],
   "conditions": [
-    { "conditionId": "STORAGE-RULES/method-grants", "source": "spec/compatibility/contract.json#ST-CLAIM-RULES", "recipeIds": ["storage-rules/method-grants"], "checks": ["For existing and absent objects, read/write aliases and get/list/create/update/delete grants and denials select the production operation; refused writes leave bytes and metadata unchanged."], "status": "PENDING_CORPUS" },
-    { "conditionId": "STORAGE-RULES/list-v2", "source": "https://firebase.google.com/docs/storage/security/core-syntax", "recipeIds": ["storage-rules/list-v2"], "checks": ["List versus get is separated under Rules v2, and the v1 list boundary follows production; denied listing reveals no names."], "status": "PENDING_CORPUS" },
-    { "conditionId": "STORAGE-RULES/anonymous-and-id-token", "source": "https://firebase.google.com/docs/storage/security/rules-conditions", "recipeIds": ["storage-rules/principals"], "checks": ["An unauthenticated request has null request.auth; a same-project Firebase ID token exposes the expected uid and authorizes only its own path."], "status": "PENDING_CORPUS" },
-    { "conditionId": "STORAGE-RULES/token-claims", "source": "https://firebase.google.com/docs/storage/security/rules-conditions", "recipeIds": ["storage-rules/token-claims"], "checks": ["Standard token fields and a deliberately minted custom claim are visible under request.auth.token; mismatched claims deny and publish no object."], "status": "PENDING_CORPUS" },
-    { "conditionId": "STORAGE-RULES/token-refusal", "source": "crates/fireemu-adapter-http/src/storage.rs#principal", "recipeIds": ["storage-rules/token-refusal"], "checks": ["Missing, malformed, foreign-project, revoked and valid same-project tokens produce the production authentication-versus-Rules refusal boundary without disclosing token bytes. The S7 expired-token scope limit remains unobserved."], "status": "PENDING_CORPUS" },
-    { "conditionId": "STORAGE-RULES/upload-request-resource", "source": "spec/compatibility/contract.json#ST-CLAIM-RULES", "recipeIds": ["storage-rules/request-resource-upload"], "checks": ["Simple, multipart and resumable finalization evaluate actual received size, contentType, name and custom metadata; accepted bytes persist and rejected bytes do not."], "status": "PENDING_CORPUS" },
-    { "conditionId": "STORAGE-RULES/metadata-request-resource", "source": "https://firebase.google.com/docs/storage/security/rules-conditions", "recipeIds": ["storage-rules/request-resource-metadata"], "checks": ["Metadata update evaluates the proposed object fields and custom metadata while preserving bytes; denial leaves the old metadata and metageneration intact."], "status": "PENDING_CORPUS" },
-    { "conditionId": "STORAGE-RULES/stored-resource", "source": "https://firebase.google.com/docs/storage/security/rules-conditions", "recipeIds": ["storage-rules/stored-resource"], "checks": ["Read, update and delete can inspect the existing object's name, size, contentType and metadata; an absent object has the production resource value."], "status": "PENDING_CORPUS" },
-    { "conditionId": "STORAGE-RULES/create-update-delete-state", "source": "spec/compatibility/contract.json#ST-CLAIM-RULES", "recipeIds": ["storage-rules/state-transitions"], "checks": ["Overwrite is evaluated as production create or update, delete has the production request.resource value, and each allowed or refused transition has matching read-back state."], "status": "PENDING_CORPUS" },
-    { "conditionId": "STORAGE-RULES/request-time", "source": "https://firebase.google.com/docs/storage/security/rules-conditions", "recipeIds": ["storage-rules/request-time"], "checks": ["A bounded time predicate on request.time has both an allowed and a denied observation, with server-time uncertainty recorded rather than masked as a match."], "status": "PENDING_CORPUS" },
-    { "conditionId": "STORAGE-RULES/path-variables", "source": "https://firebase.google.com/docs/storage/security/core-syntax", "recipeIds": ["storage-rules/path-variables"], "checks": ["Bucket and object path captures distinguish matching, nonmatching and sibling paths without leaking a denied object."], "status": "PENDING_CORPUS" },
-    { "conditionId": "STORAGE-RULES/recursive-wildcard", "source": "https://firebase.google.com/docs/storage/security/core-syntax", "recipeIds": ["storage-rules/recursive-wildcard"], "checks": ["A {name=**} path in Rules v2 and a valid v1 control match production at zero, one and multiple object segments."], "status": "PENDING_CORPUS" },
-    { "conditionId": "STORAGE-RULES/storage-service-compile", "source": "https://firebase.google.com/docs/storage/security/core-syntax", "recipeIds": ["storage-rules/storage-service-compile"], "checks": ["The Storage service declaration and Storage-specific method or wildcard rules used by this corpus have production compile acceptance; a deliberately invalid Storage rule is refused without changing the effective release."], "status": "PENDING_CORPUS" },
-    { "conditionId": "STORAGE-RULES/firestore-get", "source": "https://firebase.google.com/docs/storage/security/rules-conditions", "recipeIds": ["storage-rules/firestore-get"], "checks": ["A same-project default-database document field can allow or deny Storage access; missing and changed documents have the production decision and refused requests do not mutate objects."], "status": "PENDING_CORPUS" },
-    { "conditionId": "STORAGE-RULES/firestore-exists", "source": "https://firebase.google.com/docs/storage/security/rules-conditions", "recipeIds": ["storage-rules/firestore-exists"], "checks": ["An interpolated fully qualified document path allows when the owned default-database document exists and denies after verified deletion."], "status": "PENDING_CORPUS" },
-    { "conditionId": "STORAGE-RULES/firestore-access-budget", "source": "https://firebase.google.com/docs/storage/security/rules-conditions", "recipeIds": ["storage-rules/firestore-access-budget"], "checks": ["The two-document access boundary, a distinct third access and a repeated-document access have production decisions and error shapes."], "status": "PENDING_CORPUS" },
-    { "conditionId": "STORAGE-RULES/firebase-denial-shape", "source": "spec/compatibility/contract.json#ST-CLAIM-RULES", "recipeIds": ["storage-rules/errors/firebase-denial"], "checks": ["Firebase get, list, upload, metadata update and delete denials match production status, stable headers and body, with no unauthorized bytes or object mutation."], "status": "PENDING_CORPUS" },
-    { "conditionId": "STORAGE-RULES/denial-precedence", "source": "crates/fireemu-adapter-http/src/storage.rs#authorize", "recipeIds": ["storage-rules/errors/precedence"], "checks": ["For absent and present objects, malformed input and invalid credentials, compare which refusal wins between authentication, Rules, validation and existence checks in both Firebase and GCS JSON APIs."], "status": "PENDING_CORPUS" },
-    { "conditionId": "STORAGE-RULES/gcs-admin-boundary", "source": "spec/compatibility/contract.json#ST-CLAIM-RULES", "recipeIds": ["storage-rules/gcs-admin-boundary"], "checks": ["A fixed deny release blocks Firebase end users while authenticated GCS JSON and Admin controls follow production bypass behavior; read-back confirms the boundary. The S7 IAM-denied principal scope limit remains unobserved."], "status": "PENDING_CORPUS" },
-    { "conditionId": "STORAGE-RULES/download-token-boundary", "source": "crates/fireemu-adapter-http/src/storage.rs#fb_get", "recipeIds": ["storage-rules/download-token-boundary"], "checks": ["A token-bearing Firebase download and the same request without that token have the production Rules decision and bytes, while token values remain private."], "status": "PENDING_CORPUS" },
-    { "conditionId": "STORAGE-RULES/release-switch", "source": "spec/compatibility/contract.json#ST-CLAIM-RULES", "recipeIds": ["storage-rules/release-switch"], "checks": ["After a cloud.storage release switch has settled, the old allow becomes deny and the new allow becomes effective for the same request; release identities and settle checks are recorded."], "status": "PENDING_CORPUS" },
-    { "conditionId": "STORAGE-RULES/no-release", "source": "crates/fireemu-adapter-http/src/storage.rs#authorize", "recipeIds": ["storage-rules/no-release"], "checks": ["A project without an effective Storage release follows production denial behavior while Admin cleanup remains possible."], "status": "PENDING_CORPUS" },
-    { "conditionId": "STORAGE-RULES/final-artifact-regression", "source": "spec/compatibility/closure/STORAGE-OBJECT.json#observationContract", "recipeIds": ["storage-rules/final-artifact"], "checks": ["The same copied binary and SHA-256 produce a complete strict-profile production Rules comparison and official-emulator Storage regression, with a clean source-bound build receipt."], "status": "PENDING_CORPUS" },
-    { "conditionId": "STORAGE-RULES/closure-review", "source": "spec/compatibility/closure/STORAGE-OBJECT.json#closureReview", "recipeIds": ["storage-rules/closure-review"], "checks": ["An independent reviewer approves every condition, scope decision, two production recordings, cleanup and final-artifact binding before COMPAT_VERIFIED."], "status": "PENDING_REVIEW" }
+    {
+      "conditionId": "STORAGE-RULES/method-grants",
+      "source": "spec/compatibility/contract.json#ST-CLAIM-RULES",
+      "recipeIds": [
+        "storage-rules/method-grants"
+      ],
+      "checks": [
+        "For existing and absent objects, read/write aliases and get/list/create/update/delete grants and denials select the production operation; refused writes leave bytes and metadata unchanged."
+      ],
+      "status": "VERIFIED",
+      "note": "Strict profile, local Auth tokens, recording stage3-20260930c compared with stage3-20260930d identical after masking; every row of the recipe matches production by status and masked body.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-30T10:58:15.000Z",
+            "gitSha": "5c48b355f7f13b2136697086dcf2a5f5c269329d",
+            "runId": "stage3-20260930c",
+            "project": "fireemu-oracle-query"
+          },
+          {
+            "recordedAt": "2026-09-30T12:05:55.000Z",
+            "gitSha": "5c48b355f7f13b2136697086dcf2a5f5c269329d",
+            "runId": "stage3-20260930d",
+            "project": "fireemu-oracle-query"
+          }
+        ],
+        "finalArtifactSha256": "d166e562f5695fded5c4f344fc1857b76226d7b84ce0a6b4b11eb2c16a0e2394",
+        "sourceCommit": "418418e5552016087a3917049e9accc7fb8bf329",
+        "comparisonPath": "spec/compatibility/closure/evidence/STORAGE-RULES-comparison.json",
+        "rows": {
+          "MATCH": 882
+        }
+      }
+    },
+    {
+      "conditionId": "STORAGE-RULES/list-v2",
+      "source": "https://firebase.google.com/docs/storage/security/core-syntax",
+      "recipeIds": [
+        "storage-rules/list-v2"
+      ],
+      "checks": [
+        "List versus get is separated under Rules v2, and the v1 list boundary follows production; denied listing reveals no names."
+      ],
+      "status": "VERIFIED",
+      "note": "Strict profile, local Auth tokens, recording stage3-20260930c compared with stage3-20260930d identical after masking; every row of the recipe matches production by status and masked body.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-30T10:58:15.000Z",
+            "gitSha": "5c48b355f7f13b2136697086dcf2a5f5c269329d",
+            "runId": "stage3-20260930c",
+            "project": "fireemu-oracle-query"
+          },
+          {
+            "recordedAt": "2026-09-30T12:05:55.000Z",
+            "gitSha": "5c48b355f7f13b2136697086dcf2a5f5c269329d",
+            "runId": "stage3-20260930d",
+            "project": "fireemu-oracle-query"
+          }
+        ],
+        "finalArtifactSha256": "d166e562f5695fded5c4f344fc1857b76226d7b84ce0a6b4b11eb2c16a0e2394",
+        "sourceCommit": "418418e5552016087a3917049e9accc7fb8bf329",
+        "comparisonPath": "spec/compatibility/closure/evidence/STORAGE-RULES-comparison.json",
+        "rows": {
+          "MATCH": 168
+        }
+      }
+    },
+    {
+      "conditionId": "STORAGE-RULES/anonymous-and-id-token",
+      "source": "https://firebase.google.com/docs/storage/security/rules-conditions",
+      "recipeIds": [
+        "storage-rules/principals"
+      ],
+      "checks": [
+        "An unauthenticated request has null request.auth; a same-project Firebase ID token exposes the expected uid and authorizes only its own path."
+      ],
+      "status": "VERIFIED",
+      "note": "Strict profile, local Auth tokens, recording stage3-20260930c compared with stage3-20260930d identical after masking; every row of the recipe matches production by status and masked body.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-30T10:58:15.000Z",
+            "gitSha": "5c48b355f7f13b2136697086dcf2a5f5c269329d",
+            "runId": "stage3-20260930c",
+            "project": "fireemu-oracle-query"
+          },
+          {
+            "recordedAt": "2026-09-30T12:05:55.000Z",
+            "gitSha": "5c48b355f7f13b2136697086dcf2a5f5c269329d",
+            "runId": "stage3-20260930d",
+            "project": "fireemu-oracle-query"
+          }
+        ],
+        "finalArtifactSha256": "d166e562f5695fded5c4f344fc1857b76226d7b84ce0a6b4b11eb2c16a0e2394",
+        "sourceCommit": "418418e5552016087a3917049e9accc7fb8bf329",
+        "comparisonPath": "spec/compatibility/closure/evidence/STORAGE-RULES-comparison.json",
+        "rows": {
+          "MATCH": 164
+        }
+      }
+    },
+    {
+      "conditionId": "STORAGE-RULES/token-claims",
+      "source": "https://firebase.google.com/docs/storage/security/rules-conditions",
+      "recipeIds": [
+        "storage-rules/token-claims"
+      ],
+      "checks": [
+        "Standard token fields and a deliberately minted custom claim are visible under request.auth.token; mismatched claims deny and publish no object."
+      ],
+      "status": "VERIFIED",
+      "note": "Strict profile, local Auth tokens, recording stage3-20260930c compared with stage3-20260930d identical after masking; every row of the recipe matches production by status and masked body.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-30T10:58:15.000Z",
+            "gitSha": "5c48b355f7f13b2136697086dcf2a5f5c269329d",
+            "runId": "stage3-20260930c",
+            "project": "fireemu-oracle-query"
+          },
+          {
+            "recordedAt": "2026-09-30T12:05:55.000Z",
+            "gitSha": "5c48b355f7f13b2136697086dcf2a5f5c269329d",
+            "runId": "stage3-20260930d",
+            "project": "fireemu-oracle-query"
+          }
+        ],
+        "finalArtifactSha256": "d166e562f5695fded5c4f344fc1857b76226d7b84ce0a6b4b11eb2c16a0e2394",
+        "sourceCommit": "418418e5552016087a3917049e9accc7fb8bf329",
+        "comparisonPath": "spec/compatibility/closure/evidence/STORAGE-RULES-comparison.json",
+        "rows": {
+          "MATCH": 193
+        }
+      }
+    },
+    {
+      "conditionId": "STORAGE-RULES/token-refusal",
+      "source": "crates/fireemu-adapter-http/src/storage.rs#principal",
+      "recipeIds": [
+        "storage-rules/token-refusal"
+      ],
+      "checks": [
+        "Missing, malformed, foreign-project, revoked and valid same-project tokens produce the production authentication-versus-Rules refusal boundary without disclosing token bytes. The S7 expired-token scope limit remains unobserved."
+      ],
+      "status": "VERIFIED",
+      "note": "Strict profile, local Auth tokens, recording stage3-20260930c compared with stage3-20260930d identical after masking; every row of the recipe matches production by status and masked body.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-30T10:58:15.000Z",
+            "gitSha": "5c48b355f7f13b2136697086dcf2a5f5c269329d",
+            "runId": "stage3-20260930c",
+            "project": "fireemu-oracle-query"
+          },
+          {
+            "recordedAt": "2026-09-30T12:05:55.000Z",
+            "gitSha": "5c48b355f7f13b2136697086dcf2a5f5c269329d",
+            "runId": "stage3-20260930d",
+            "project": "fireemu-oracle-query"
+          }
+        ],
+        "finalArtifactSha256": "d166e562f5695fded5c4f344fc1857b76226d7b84ce0a6b4b11eb2c16a0e2394",
+        "sourceCommit": "418418e5552016087a3917049e9accc7fb8bf329",
+        "comparisonPath": "spec/compatibility/closure/evidence/STORAGE-RULES-comparison.json",
+        "rows": {
+          "MATCH": 60
+        }
+      }
+    },
+    {
+      "conditionId": "STORAGE-RULES/upload-request-resource",
+      "source": "spec/compatibility/contract.json#ST-CLAIM-RULES",
+      "recipeIds": [
+        "storage-rules/request-resource-upload"
+      ],
+      "checks": [
+        "Simple, multipart and resumable finalization evaluate actual received size, contentType, name and custom metadata; accepted bytes persist and rejected bytes do not."
+      ],
+      "status": "VERIFIED",
+      "note": "Strict profile, local Auth tokens, recording stage3-20260930c compared with stage3-20260930d identical after masking; every row of the recipe matches production by status and masked body.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-30T10:58:15.000Z",
+            "gitSha": "5c48b355f7f13b2136697086dcf2a5f5c269329d",
+            "runId": "stage3-20260930c",
+            "project": "fireemu-oracle-query"
+          },
+          {
+            "recordedAt": "2026-09-30T12:05:55.000Z",
+            "gitSha": "5c48b355f7f13b2136697086dcf2a5f5c269329d",
+            "runId": "stage3-20260930d",
+            "project": "fireemu-oracle-query"
+          }
+        ],
+        "finalArtifactSha256": "d166e562f5695fded5c4f344fc1857b76226d7b84ce0a6b4b11eb2c16a0e2394",
+        "sourceCommit": "418418e5552016087a3917049e9accc7fb8bf329",
+        "comparisonPath": "spec/compatibility/closure/evidence/STORAGE-RULES-comparison.json",
+        "rows": {
+          "MATCH": 239
+        }
+      }
+    },
+    {
+      "conditionId": "STORAGE-RULES/metadata-request-resource",
+      "source": "https://firebase.google.com/docs/storage/security/rules-conditions",
+      "recipeIds": [
+        "storage-rules/request-resource-metadata"
+      ],
+      "checks": [
+        "Metadata update evaluates the proposed object fields and custom metadata while preserving bytes; denial leaves the old metadata and metageneration intact."
+      ],
+      "status": "VERIFIED",
+      "note": "Strict profile, local Auth tokens, recording stage3-20260930c compared with stage3-20260930d identical after masking; every row of the recipe matches production by status and masked body.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-30T10:58:15.000Z",
+            "gitSha": "5c48b355f7f13b2136697086dcf2a5f5c269329d",
+            "runId": "stage3-20260930c",
+            "project": "fireemu-oracle-query"
+          },
+          {
+            "recordedAt": "2026-09-30T12:05:55.000Z",
+            "gitSha": "5c48b355f7f13b2136697086dcf2a5f5c269329d",
+            "runId": "stage3-20260930d",
+            "project": "fireemu-oracle-query"
+          }
+        ],
+        "finalArtifactSha256": "d166e562f5695fded5c4f344fc1857b76226d7b84ce0a6b4b11eb2c16a0e2394",
+        "sourceCommit": "418418e5552016087a3917049e9accc7fb8bf329",
+        "comparisonPath": "spec/compatibility/closure/evidence/STORAGE-RULES-comparison.json",
+        "rows": {
+          "MATCH": 96
+        }
+      }
+    },
+    {
+      "conditionId": "STORAGE-RULES/stored-resource",
+      "source": "https://firebase.google.com/docs/storage/security/rules-conditions",
+      "recipeIds": [
+        "storage-rules/stored-resource"
+      ],
+      "checks": [
+        "Read, update and delete can inspect the existing object's name, size, contentType and metadata; an absent object has the production resource value."
+      ],
+      "status": "VERIFIED",
+      "note": "Strict profile, local Auth tokens, recording stage3-20260930c compared with stage3-20260930d identical after masking; every row of the recipe matches production by status and masked body.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-30T10:58:15.000Z",
+            "gitSha": "5c48b355f7f13b2136697086dcf2a5f5c269329d",
+            "runId": "stage3-20260930c",
+            "project": "fireemu-oracle-query"
+          },
+          {
+            "recordedAt": "2026-09-30T12:05:55.000Z",
+            "gitSha": "5c48b355f7f13b2136697086dcf2a5f5c269329d",
+            "runId": "stage3-20260930d",
+            "project": "fireemu-oracle-query"
+          }
+        ],
+        "finalArtifactSha256": "d166e562f5695fded5c4f344fc1857b76226d7b84ce0a6b4b11eb2c16a0e2394",
+        "sourceCommit": "418418e5552016087a3917049e9accc7fb8bf329",
+        "comparisonPath": "spec/compatibility/closure/evidence/STORAGE-RULES-comparison.json",
+        "rows": {
+          "MATCH": 668
+        }
+      }
+    },
+    {
+      "conditionId": "STORAGE-RULES/create-update-delete-state",
+      "source": "spec/compatibility/contract.json#ST-CLAIM-RULES",
+      "recipeIds": [
+        "storage-rules/state-transitions"
+      ],
+      "checks": [
+        "Overwrite is evaluated as production create or update, delete has the production request.resource value, and each allowed or refused transition has matching read-back state."
+      ],
+      "status": "VERIFIED",
+      "note": "Strict profile, local Auth tokens, recording stage3-20260930c compared with stage3-20260930d identical after masking; every row of the recipe matches production by status and masked body.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-30T10:58:15.000Z",
+            "gitSha": "5c48b355f7f13b2136697086dcf2a5f5c269329d",
+            "runId": "stage3-20260930c",
+            "project": "fireemu-oracle-query"
+          },
+          {
+            "recordedAt": "2026-09-30T12:05:55.000Z",
+            "gitSha": "5c48b355f7f13b2136697086dcf2a5f5c269329d",
+            "runId": "stage3-20260930d",
+            "project": "fireemu-oracle-query"
+          }
+        ],
+        "finalArtifactSha256": "d166e562f5695fded5c4f344fc1857b76226d7b84ce0a6b4b11eb2c16a0e2394",
+        "sourceCommit": "418418e5552016087a3917049e9accc7fb8bf329",
+        "comparisonPath": "spec/compatibility/closure/evidence/STORAGE-RULES-comparison.json",
+        "rows": {
+          "MATCH": 84
+        }
+      }
+    },
+    {
+      "conditionId": "STORAGE-RULES/request-time",
+      "source": "https://firebase.google.com/docs/storage/security/rules-conditions",
+      "recipeIds": [
+        "storage-rules/request-time"
+      ],
+      "checks": [
+        "A bounded time predicate on request.time has both an allowed and a denied observation, with server-time uncertainty recorded rather than masked as a match."
+      ],
+      "status": "VERIFIED",
+      "note": "Strict profile, local Auth tokens, recording stage3-20260930c compared with stage3-20260930d identical after masking; every row of the recipe matches production by status and masked body.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-30T10:58:15.000Z",
+            "gitSha": "5c48b355f7f13b2136697086dcf2a5f5c269329d",
+            "runId": "stage3-20260930c",
+            "project": "fireemu-oracle-query"
+          },
+          {
+            "recordedAt": "2026-09-30T12:05:55.000Z",
+            "gitSha": "5c48b355f7f13b2136697086dcf2a5f5c269329d",
+            "runId": "stage3-20260930d",
+            "project": "fireemu-oracle-query"
+          }
+        ],
+        "finalArtifactSha256": "d166e562f5695fded5c4f344fc1857b76226d7b84ce0a6b4b11eb2c16a0e2394",
+        "sourceCommit": "418418e5552016087a3917049e9accc7fb8bf329",
+        "comparisonPath": "spec/compatibility/closure/evidence/STORAGE-RULES-comparison.json",
+        "rows": {
+          "MATCH": 43
+        }
+      }
+    },
+    {
+      "conditionId": "STORAGE-RULES/path-variables",
+      "source": "https://firebase.google.com/docs/storage/security/core-syntax",
+      "recipeIds": [
+        "storage-rules/path-variables"
+      ],
+      "checks": [
+        "Bucket and object path captures distinguish matching, nonmatching and sibling paths without leaking a denied object."
+      ],
+      "status": "VERIFIED",
+      "note": "Strict profile, local Auth tokens, recording stage3-20260930c compared with stage3-20260930d identical after masking; every row of the recipe matches production by status and masked body.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-30T10:58:15.000Z",
+            "gitSha": "5c48b355f7f13b2136697086dcf2a5f5c269329d",
+            "runId": "stage3-20260930c",
+            "project": "fireemu-oracle-query"
+          },
+          {
+            "recordedAt": "2026-09-30T12:05:55.000Z",
+            "gitSha": "5c48b355f7f13b2136697086dcf2a5f5c269329d",
+            "runId": "stage3-20260930d",
+            "project": "fireemu-oracle-query"
+          }
+        ],
+        "finalArtifactSha256": "d166e562f5695fded5c4f344fc1857b76226d7b84ce0a6b4b11eb2c16a0e2394",
+        "sourceCommit": "418418e5552016087a3917049e9accc7fb8bf329",
+        "comparisonPath": "spec/compatibility/closure/evidence/STORAGE-RULES-comparison.json",
+        "rows": {
+          "MATCH": 67
+        }
+      }
+    },
+    {
+      "conditionId": "STORAGE-RULES/recursive-wildcard",
+      "source": "https://firebase.google.com/docs/storage/security/core-syntax",
+      "recipeIds": [
+        "storage-rules/recursive-wildcard"
+      ],
+      "checks": [
+        "A {name=**} path in Rules v2 and a valid v1 control match production at zero, one and multiple object segments."
+      ],
+      "status": "VERIFIED",
+      "note": "Strict profile, local Auth tokens, recording stage3-20260930c compared with stage3-20260930d identical after masking; every row of the recipe matches production by status and masked body.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-30T10:58:15.000Z",
+            "gitSha": "5c48b355f7f13b2136697086dcf2a5f5c269329d",
+            "runId": "stage3-20260930c",
+            "project": "fireemu-oracle-query"
+          },
+          {
+            "recordedAt": "2026-09-30T12:05:55.000Z",
+            "gitSha": "5c48b355f7f13b2136697086dcf2a5f5c269329d",
+            "runId": "stage3-20260930d",
+            "project": "fireemu-oracle-query"
+          }
+        ],
+        "finalArtifactSha256": "d166e562f5695fded5c4f344fc1857b76226d7b84ce0a6b4b11eb2c16a0e2394",
+        "sourceCommit": "418418e5552016087a3917049e9accc7fb8bf329",
+        "comparisonPath": "spec/compatibility/closure/evidence/STORAGE-RULES-comparison.json",
+        "rows": {
+          "MATCH": 72
+        }
+      }
+    },
+    {
+      "conditionId": "STORAGE-RULES/storage-service-compile",
+      "source": "https://firebase.google.com/docs/storage/security/core-syntax",
+      "recipeIds": [
+        "storage-rules/storage-service-compile"
+      ],
+      "checks": [
+        "The Storage service declaration and Storage-specific method or wildcard rules used by this corpus have production compile acceptance; a deliberately invalid Storage rule is refused without changing the effective release."
+      ],
+      "status": "PRODUCTION_RECORDED",
+      "note": "Recorded in production by the two stage 3 v9 recordings (and the 2c-pre/2c-post publication runs). The Firebase Rules API is outside this parent (S4) and fireemu serves rules by replacement, so there is no local row comparison; the effect of a publication (old allow becomes deny after settling, no release refuses every request) is covered by the recorded settle and no-release rows and the local rules-replacement tests."
+    },
+    {
+      "conditionId": "STORAGE-RULES/firestore-get",
+      "source": "https://firebase.google.com/docs/storage/security/rules-conditions",
+      "recipeIds": [
+        "storage-rules/firestore-get"
+      ],
+      "checks": [
+        "A same-project default-database document field can allow or deny Storage access; missing and changed documents have the production decision and refused requests do not mutate objects."
+      ],
+      "status": "VERIFIED",
+      "note": "Strict profile, local Auth tokens, recording stage3-20260930c compared with stage3-20260930d identical after masking; every row of the recipe matches production by status and masked body.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-30T10:58:15.000Z",
+            "gitSha": "5c48b355f7f13b2136697086dcf2a5f5c269329d",
+            "runId": "stage3-20260930c",
+            "project": "fireemu-oracle-query"
+          },
+          {
+            "recordedAt": "2026-09-30T12:05:55.000Z",
+            "gitSha": "5c48b355f7f13b2136697086dcf2a5f5c269329d",
+            "runId": "stage3-20260930d",
+            "project": "fireemu-oracle-query"
+          }
+        ],
+        "finalArtifactSha256": "d166e562f5695fded5c4f344fc1857b76226d7b84ce0a6b4b11eb2c16a0e2394",
+        "sourceCommit": "418418e5552016087a3917049e9accc7fb8bf329",
+        "comparisonPath": "spec/compatibility/closure/evidence/STORAGE-RULES-comparison.json",
+        "rows": {
+          "MATCH": 34
+        }
+      }
+    },
+    {
+      "conditionId": "STORAGE-RULES/firestore-exists",
+      "source": "https://firebase.google.com/docs/storage/security/rules-conditions",
+      "recipeIds": [
+        "storage-rules/firestore-exists"
+      ],
+      "checks": [
+        "An interpolated fully qualified document path allows when the owned default-database document exists and denies after verified deletion."
+      ],
+      "status": "VERIFIED",
+      "note": "Strict profile, local Auth tokens, recording stage3-20260930c compared with stage3-20260930d identical after masking; every row of the recipe matches production by status and masked body.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-30T10:58:15.000Z",
+            "gitSha": "5c48b355f7f13b2136697086dcf2a5f5c269329d",
+            "runId": "stage3-20260930c",
+            "project": "fireemu-oracle-query"
+          },
+          {
+            "recordedAt": "2026-09-30T12:05:55.000Z",
+            "gitSha": "5c48b355f7f13b2136697086dcf2a5f5c269329d",
+            "runId": "stage3-20260930d",
+            "project": "fireemu-oracle-query"
+          }
+        ],
+        "finalArtifactSha256": "d166e562f5695fded5c4f344fc1857b76226d7b84ce0a6b4b11eb2c16a0e2394",
+        "sourceCommit": "418418e5552016087a3917049e9accc7fb8bf329",
+        "comparisonPath": "spec/compatibility/closure/evidence/STORAGE-RULES-comparison.json",
+        "rows": {
+          "MATCH": 22
+        }
+      }
+    },
+    {
+      "conditionId": "STORAGE-RULES/firestore-access-budget",
+      "source": "https://firebase.google.com/docs/storage/security/rules-conditions",
+      "recipeIds": [
+        "storage-rules/firestore-access-budget"
+      ],
+      "checks": [
+        "The two-document access boundary, a distinct third access and a repeated-document access have production decisions and error shapes."
+      ],
+      "status": "VERIFIED",
+      "note": "Strict profile, local Auth tokens, recording stage3-20260930c compared with stage3-20260930d identical after masking; every row of the recipe matches production by status and masked body.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-30T10:58:15.000Z",
+            "gitSha": "5c48b355f7f13b2136697086dcf2a5f5c269329d",
+            "runId": "stage3-20260930c",
+            "project": "fireemu-oracle-query"
+          },
+          {
+            "recordedAt": "2026-09-30T12:05:55.000Z",
+            "gitSha": "5c48b355f7f13b2136697086dcf2a5f5c269329d",
+            "runId": "stage3-20260930d",
+            "project": "fireemu-oracle-query"
+          }
+        ],
+        "finalArtifactSha256": "d166e562f5695fded5c4f344fc1857b76226d7b84ce0a6b4b11eb2c16a0e2394",
+        "sourceCommit": "418418e5552016087a3917049e9accc7fb8bf329",
+        "comparisonPath": "spec/compatibility/closure/evidence/STORAGE-RULES-comparison.json",
+        "rows": {
+          "MATCH": 78
+        }
+      }
+    },
+    {
+      "conditionId": "STORAGE-RULES/firebase-denial-shape",
+      "source": "spec/compatibility/contract.json#ST-CLAIM-RULES",
+      "recipeIds": [
+        "storage-rules/errors/firebase-denial"
+      ],
+      "checks": [
+        "Firebase get, list, upload, metadata update and delete denials match production status, stable headers and body, with no unauthorized bytes or object mutation."
+      ],
+      "status": "VERIFIED",
+      "note": "Strict profile, local Auth tokens, recording stage3-20260930c compared with stage3-20260930d identical after masking; every row of the recipe matches production by status and masked body.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-30T10:58:15.000Z",
+            "gitSha": "5c48b355f7f13b2136697086dcf2a5f5c269329d",
+            "runId": "stage3-20260930c",
+            "project": "fireemu-oracle-query"
+          },
+          {
+            "recordedAt": "2026-09-30T12:05:55.000Z",
+            "gitSha": "5c48b355f7f13b2136697086dcf2a5f5c269329d",
+            "runId": "stage3-20260930d",
+            "project": "fireemu-oracle-query"
+          }
+        ],
+        "finalArtifactSha256": "d166e562f5695fded5c4f344fc1857b76226d7b84ce0a6b4b11eb2c16a0e2394",
+        "sourceCommit": "418418e5552016087a3917049e9accc7fb8bf329",
+        "comparisonPath": "spec/compatibility/closure/evidence/STORAGE-RULES-comparison.json",
+        "rows": {
+          "MATCH": 126
+        }
+      }
+    },
+    {
+      "conditionId": "STORAGE-RULES/denial-precedence",
+      "source": "crates/fireemu-adapter-http/src/storage.rs#authorize",
+      "recipeIds": [
+        "storage-rules/errors/precedence"
+      ],
+      "checks": [
+        "For absent and present objects, malformed input and invalid credentials, compare which refusal wins between authentication, Rules, validation and existence checks in both Firebase and GCS JSON APIs."
+      ],
+      "status": "VERIFIED",
+      "note": "Strict profile, local Auth tokens, recording stage3-20260930c compared with stage3-20260930d identical after masking; every row of the recipe matches production by status and masked body.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-30T10:58:15.000Z",
+            "gitSha": "5c48b355f7f13b2136697086dcf2a5f5c269329d",
+            "runId": "stage3-20260930c",
+            "project": "fireemu-oracle-query"
+          },
+          {
+            "recordedAt": "2026-09-30T12:05:55.000Z",
+            "gitSha": "5c48b355f7f13b2136697086dcf2a5f5c269329d",
+            "runId": "stage3-20260930d",
+            "project": "fireemu-oracle-query"
+          }
+        ],
+        "finalArtifactSha256": "d166e562f5695fded5c4f344fc1857b76226d7b84ce0a6b4b11eb2c16a0e2394",
+        "sourceCommit": "418418e5552016087a3917049e9accc7fb8bf329",
+        "comparisonPath": "spec/compatibility/closure/evidence/STORAGE-RULES-comparison.json",
+        "rows": {
+          "MATCH": 252
+        }
+      }
+    },
+    {
+      "conditionId": "STORAGE-RULES/gcs-admin-boundary",
+      "source": "spec/compatibility/contract.json#ST-CLAIM-RULES",
+      "recipeIds": [
+        "storage-rules/gcs-admin-boundary"
+      ],
+      "checks": [
+        "A fixed deny release blocks Firebase end users while authenticated GCS JSON and Admin controls follow production bypass behavior; read-back confirms the boundary. The S7 IAM-denied principal scope limit remains unobserved."
+      ],
+      "status": "VERIFIED",
+      "note": "Strict profile, local Auth tokens, recording stage3-20260930c compared with stage3-20260930d identical after masking; every row of the recipe matches production by status and masked body.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-30T10:58:15.000Z",
+            "gitSha": "5c48b355f7f13b2136697086dcf2a5f5c269329d",
+            "runId": "stage3-20260930c",
+            "project": "fireemu-oracle-query"
+          },
+          {
+            "recordedAt": "2026-09-30T12:05:55.000Z",
+            "gitSha": "5c48b355f7f13b2136697086dcf2a5f5c269329d",
+            "runId": "stage3-20260930d",
+            "project": "fireemu-oracle-query"
+          }
+        ],
+        "finalArtifactSha256": "d166e562f5695fded5c4f344fc1857b76226d7b84ce0a6b4b11eb2c16a0e2394",
+        "sourceCommit": "418418e5552016087a3917049e9accc7fb8bf329",
+        "comparisonPath": "spec/compatibility/closure/evidence/STORAGE-RULES-comparison.json",
+        "rows": {
+          "MATCH": 378
+        }
+      }
+    },
+    {
+      "conditionId": "STORAGE-RULES/download-token-boundary",
+      "source": "crates/fireemu-adapter-http/src/storage.rs#fb_get",
+      "recipeIds": [
+        "storage-rules/download-token-boundary"
+      ],
+      "checks": [
+        "A token-bearing Firebase download and the same request without that token have the production Rules decision and bytes, while token values remain private."
+      ],
+      "status": "VERIFIED",
+      "note": "Strict profile, local Auth tokens, recording stage3-20260930c compared with stage3-20260930d identical after masking; every row of the recipe matches production by status and masked body.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-30T10:58:15.000Z",
+            "gitSha": "5c48b355f7f13b2136697086dcf2a5f5c269329d",
+            "runId": "stage3-20260930c",
+            "project": "fireemu-oracle-query"
+          },
+          {
+            "recordedAt": "2026-09-30T12:05:55.000Z",
+            "gitSha": "5c48b355f7f13b2136697086dcf2a5f5c269329d",
+            "runId": "stage3-20260930d",
+            "project": "fireemu-oracle-query"
+          }
+        ],
+        "finalArtifactSha256": "d166e562f5695fded5c4f344fc1857b76226d7b84ce0a6b4b11eb2c16a0e2394",
+        "sourceCommit": "418418e5552016087a3917049e9accc7fb8bf329",
+        "comparisonPath": "spec/compatibility/closure/evidence/STORAGE-RULES-comparison.json",
+        "rows": {
+          "MATCH": 15
+        }
+      }
+    },
+    {
+      "conditionId": "STORAGE-RULES/release-switch",
+      "source": "spec/compatibility/contract.json#ST-CLAIM-RULES",
+      "recipeIds": [
+        "storage-rules/release-switch"
+      ],
+      "checks": [
+        "After a cloud.storage release switch has settled, the old allow becomes deny and the new allow becomes effective for the same request; release identities and settle checks are recorded."
+      ],
+      "status": "PRODUCTION_RECORDED",
+      "note": "Recorded in production by the two stage 3 v9 recordings (and the 2c-pre/2c-post publication runs). The Firebase Rules API is outside this parent (S4) and fireemu serves rules by replacement, so there is no local row comparison; the effect of a publication (old allow becomes deny after settling, no release refuses every request) is covered by the recorded settle and no-release rows and the local rules-replacement tests."
+    },
+    {
+      "conditionId": "STORAGE-RULES/no-release",
+      "source": "crates/fireemu-adapter-http/src/storage.rs#authorize",
+      "recipeIds": [
+        "storage-rules/no-release"
+      ],
+      "checks": [
+        "A project without an effective Storage release follows production denial behavior while Admin cleanup remains possible."
+      ],
+      "status": "PRODUCTION_RECORDED",
+      "note": "Recorded in production by the two stage 3 v9 recordings (and the 2c-pre/2c-post publication runs). The Firebase Rules API is outside this parent (S4) and fireemu serves rules by replacement, so there is no local row comparison; the effect of a publication (old allow becomes deny after settling, no release refuses every request) is covered by the recorded settle and no-release rows and the local rules-replacement tests."
+    },
+    {
+      "conditionId": "STORAGE-RULES/final-artifact-regression",
+      "source": "spec/compatibility/closure/STORAGE-OBJECT.json#observationContract",
+      "recipeIds": [
+        "storage-rules/final-artifact"
+      ],
+      "checks": [
+        "The same copied binary and SHA-256 produce a complete strict-profile production Rules comparison and official-emulator Storage regression, with a clean source-bound build receipt."
+      ],
+      "status": "VERIFIED",
+      "note": "The same copied release binary runs the strict production comparison, the storage probe check and the official-emulator Storage conformance scenarios.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-30T10:58:15.000Z",
+            "gitSha": "5c48b355f7f13b2136697086dcf2a5f5c269329d",
+            "runId": "stage3-20260930c",
+            "project": "fireemu-oracle-query"
+          },
+          {
+            "recordedAt": "2026-09-30T12:05:55.000Z",
+            "gitSha": "5c48b355f7f13b2136697086dcf2a5f5c269329d",
+            "runId": "stage3-20260930d",
+            "project": "fireemu-oracle-query"
+          }
+        ],
+        "finalArtifactSha256": "d166e562f5695fded5c4f344fc1857b76226d7b84ce0a6b4b11eb2c16a0e2394",
+        "sourceCommit": "418418e5552016087a3917049e9accc7fb8bf329",
+        "comparisonPath": "spec/compatibility/closure/evidence/STORAGE-RULES-official-regression.json",
+        "rows": {
+          "GATED_STEPS_PASSED": 234
+        }
+      }
+    },
+    {
+      "conditionId": "STORAGE-RULES/closure-review",
+      "source": "spec/compatibility/closure/STORAGE-OBJECT.json#closureReview",
+      "recipeIds": [
+        "storage-rules/closure-review"
+      ],
+      "checks": [
+        "An independent reviewer approves every condition, scope decision, two production recordings, cleanup and final-artifact binding before COMPAT_VERIFIED."
+      ],
+      "status": "PENDING_REVIEW"
+    }
   ]
 }

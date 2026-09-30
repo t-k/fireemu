@@ -56,3 +56,24 @@ fn provider_seed_preserves_admin_strict_refusals_and_safe_diagnostics() {
             .contains("auth.providers"));
     }
 }
+
+#[test]
+fn provider_seed_deploy_wrapper_mistakes_name_the_key_and_configuration_source() {
+    for strict in [false, true] {
+        for key in ["anonymous", "emailPassword", "googleSignIn"] {
+            let error =
+                provider_config_seeds(&json!({key:{"clientSecret":"DO-NOT-PRINT"}}), strict)
+                    .unwrap_err();
+            assert!(
+                error.contains(&format!("unknown config key auth.providers.{key}")),
+                "{error}"
+            );
+            assert!(error.contains("firebase.json"), "{error}");
+            assert!(error.contains("auth.signIn"), "{error}");
+            assert!(!error.contains("DO-NOT-PRINT"), "{error}");
+        }
+        let error = provider_config_seeds(&json!({"unknown\nkey":true}), strict).unwrap_err();
+        assert!(error.contains("unknown\\nkey"), "{error:?}");
+        assert!(!error.contains('\n'), "{error:?}");
+    }
+}

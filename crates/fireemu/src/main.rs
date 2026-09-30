@@ -2787,38 +2787,56 @@ mod config_reload_tests {
         let dir = scratch("firebase-schema-compatibility");
         // Format detection is based on content, even when the filename says fireemu.
         let source = dir.join("fireemu.json");
+        let canonical = dir.join("canonical.json");
         std::fs::write(
-            &source,
-            serde_json::json!({
-                "$schema":"https://example.com/firebase.schema.json",
-                "emulators":{"auth":{"port":9199}},
-                "firestore":{"rules":"firestore.rules"},
-                "storage":{"rules":"storage.rules"},
-                "functions":{"source":"functions"},
-                "hosting":{"public":"dist"},
-                "auth":{"providers":{"oidc":[{"name":"oidc.firebase-deploy","clientId":"deploy-client","issuer":"https://issuer.test"}]}},
-                "customMetadata":{"profile":"strict","auth":{"totp":{}}}
-            })
-            .to_string(),
+            &canonical,
+            r#"{"schemaVersion":1,"firebaseJson":"fireemu.json"}"#,
         )
         .unwrap();
-        for raw in [
-            RawOptions {
-                config_path: Some(source.clone()),
-                ..RawOptions::default()
-            },
-            RawOptions {
-                firebase_json: Some(source.clone()),
-                ..RawOptions::default()
-            },
+        for providers in [
+            serde_json::json!({"oidc":[{"name":"oidc.firebase-deploy","clientId":"deploy-client","issuer":"https://issuer.test"}]}),
+            // firebase-tools 15.28.2 lib/deploy/auth/deploy.js reads these deployment fields.
+            serde_json::json!({"anonymous":true,"emailPassword":true,"googleSignIn":{"oAuthBrandDisplayName":"Fixture","supportEmail":"support@example.test","authorizedRedirectUris":["https://fixture.test/__/auth/handler"]}}),
+            serde_json::Value::Null,
+            serde_json::json!("deployment-extension"),
         ] {
-            let (cfg, _) = load_project_config(&raw, &Selection::default())
-                .unwrap_or_else(|e| panic!("{}", e.message));
-            assert!(cfg.http_addr.ends_with(":9199"));
-            assert_eq!(
-                cfg.auth_provider_seeds,
-                fireemu_core_auth::store::ProviderConfigSeeds::default()
-            );
+            std::fs::write(
+                &source,
+                serde_json::json!({
+                    "$schema":"https://example.com/firebase.schema.json",
+                    "emulators":{"auth":{"port":9199}},
+                    "firestore":{"rules":"firestore.rules"},
+                    "storage":{"rules":"storage.rules"},
+                    "functions":{"source":"functions"},
+                    "hosting":{"public":"dist"},
+                    "auth":{"providers":providers},
+                    "customMetadata":{"profile":"strict","auth":{"totp":{}}}
+                })
+                .to_string(),
+            )
+            .unwrap();
+            for raw in [
+                RawOptions {
+                    config_path: Some(source.clone()),
+                    ..RawOptions::default()
+                },
+                RawOptions {
+                    firebase_json: Some(source.clone()),
+                    ..RawOptions::default()
+                },
+                RawOptions {
+                    config_path: Some(canonical.clone()),
+                    ..RawOptions::default()
+                },
+            ] {
+                let (cfg, _) = load_project_config(&raw, &Selection::default())
+                    .unwrap_or_else(|e| panic!("{}", e.message));
+                assert!(cfg.http_addr.ends_with(":9199"));
+                assert_eq!(
+                    cfg.auth_provider_seeds,
+                    fireemu_core_auth::store::ProviderConfigSeeds::default()
+                );
+            }
         }
         std::fs::remove_dir_all(dir).unwrap();
     }

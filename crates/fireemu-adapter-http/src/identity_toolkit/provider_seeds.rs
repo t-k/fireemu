@@ -14,11 +14,11 @@ pub fn provider_config_seeds(value: &Value, strict: bool) -> Result<ProviderConf
     let object = value
         .as_object()
         .ok_or("auth.providers must be an object")?;
-    if object
+    if let Some(key) = object
         .keys()
-        .any(|key| !matches!(key.as_str(), "oidc" | "saml"))
+        .find(|key| !matches!(key.as_str(), "oidc" | "saml"))
     {
-        return Err("auth.providers accepts only oidc and saml".into());
+        return Err(format!("unknown config key auth.providers.{}; accepts only oidc and saml. anonymous/emailPassword/googleSignIn are firebase.json deployment settings; use auth.signIn for Fireemu sign-in methods", key.escape_debug()));
     }
     let store = Arc::new(Mutex::new(AuthStore::new(
         "config-validation",

@@ -793,3 +793,31 @@ fn the_action_link_reads_an_empty_query_tenant_as_none() {
     assert_eq!(follow("&tenantId="), 200);
     assert_eq!(follow("&tenantId=a&tenantId=b"), 400);
 }
+
+/// The API key of a request is still seen when its query carries a malformed tenant that nothing
+/// reads: an Admin route reached with a key and no credential answers as a request with a key
+/// does (`INSUFFICIENT_PERMISSION`), not as one without any identity (403).
+#[test]
+fn a_malformed_query_tenant_does_not_hide_the_api_key_from_the_caller_checks() {
+    let (state, _) = emulator();
+    for malformed in ["&tenantId=a&tenantId=b", "&tenantId", "&tenantId="] {
+        let r = handle_with(
+            &state,
+            "GET",
+            &format!("{V2}/projects/demo-app/tenants?key={KEY}{malformed}"),
+            &RequestHeaders {
+                authorization: None,
+                ..owner()
+            },
+            &json!({}),
+        );
+        assert_eq!(r.status, 400, "{malformed}: {}", r.body);
+        assert!(
+            r.body["error"]["message"]
+                .as_str()
+                .is_some_and(|m| m.starts_with("INSUFFICIENT_PERMISSION")),
+            "{malformed}: {}",
+            r.body
+        );
+    }
+}

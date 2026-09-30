@@ -147,11 +147,13 @@ impl Harness {
                 format!("{}.{:09}s", d.seconds, d.nanos)
             }
         });
+        // An unset retention is reported by REST as the recorded default of seven days (the shape of
+        // a created subscription in the recorded bootstrap responses); gRPC leaves the field unset.
         assert_eq!(
             from_rest
                 .get("messageRetentionDuration")
                 .and_then(Value::as_str),
-            expected_duration.as_deref()
+            Some(expected_duration.as_deref().unwrap_or("604800s"))
         );
         assert_eq!(from_rest["ackDeadlineSeconds"], ack);
         let (status, list) = self

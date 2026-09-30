@@ -44,7 +44,7 @@ rustix = { version = "1", features = ["fs", "process"] }
 zeroize = "1"
 
 [target.'cfg(target_os = "macos")'.dependencies]
-exacl = "0.13"
+fireemu-fd-acl = { path = "../fireemu-fd-acl" }
 
 [target.'cfg(windows)'.dependencies]
 process-wrap = { version = "8.2.1", default-features = false, features = ["job-object", "kill-on-drop", "tokio1"] }

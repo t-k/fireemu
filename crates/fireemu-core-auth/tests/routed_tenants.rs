@@ -339,3 +339,28 @@ fn a_seed_pending_for_a_displaced_incarnation_is_not_applied_to_its_successor() 
     assert_eq!(seed.calls.load(Ordering::SeqCst), 0);
     assert!(registry.tenants("demo-b").is_empty());
 }
+
+/// A project registers once: not again while its registration is provisional, nor after it is
+/// committed; and the tenants of other projects are no reason to refuse a new one.
+#[test]
+fn a_session_project_registers_once_whatever_other_projects_hold() {
+    let registry = registry();
+    assert!(registry
+        .ensure_tenant("demo-app", "default-tenant")
+        .is_some());
+    assert!(matches!(
+        install(&registry, "demo-routed"),
+        RoutedStoreInstall::Installed(_)
+    ));
+    assert!(registry
+        .ensure_tenant("demo-routed", "routed-tenant")
+        .is_some());
+    assert!(registry.register_session("demo-x", session_store("demo-x")));
+    // Provisional: a second registration is refused.
+    assert!(!registry.register_session("demo-x", session_store("demo-x")));
+    assert!(registry.commit_session("demo-x"));
+    // Committed, with no tenants of its own: still refused.
+    assert!(!registry.register_session("demo-x", session_store("demo-x")));
+    // The default project's name is never a session.
+    assert!(!registry.register_session("demo-app", session_store("demo-app")));
+}

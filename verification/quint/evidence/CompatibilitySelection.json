@@ -56,9 +56,9 @@
   "digests": {
     ".github/workflows/quint.yml": "3322397d1feaaea0a163de7b8a289a33d071650d51f4674c4a4556df6b45e972",
     "crates/fireemu-adapter-functions/src/node_selection.rs": "b0d3581e3c8887e6d39fdb76f3dd56a1be420e37905c58e87e0f46791aac5a21",
-    "crates/fireemu-adapter-http/src/identity_toolkit.rs": "5d1bfc858a3937de89bfb1748af410b419268b19a283ff1961be9a53cedef8e7",
+    "crates/fireemu-adapter-http/src/identity_toolkit.rs": "b0b18036445d9a07ad4dbe680197be7d8accd48f444f0d23de68c101658479e1",
     "crates/fireemu-adapter-http/tests/auth_flows.rs": "caece0c6a738045fdd5d641820830719d20999bb08b8c0fc01ed9ac6f00f2860",
-    "crates/fireemu-core-auth/src/store.rs": "052714c176d7db767688641592ccfaa8b4765868b5ab58efcc0e6da6f5896524",
+    "crates/fireemu-core-auth/src/store.rs": "6d90dfdfa24f8553c70eef506f4f616bf476ee0503171fcb0dd14208d22e2ee4",
     "crates/fireemu-core-auth/tests/store.rs": "03129ba4815f53065cc4cebc061c87211261085b3c2f34f12367efcf3c7f3548",
     "crates/fireemu/src/functions.rs": "07fd0737972ae74bb619f862ebe302d63bd6a4dacf8e530ec64c785c3ed5725a",
     "rust-toolchain.toml": "689fafb1dd9b80ee9a2a9b5e2bbb31e8f7ea4adad403717777689b35d4f861b2",

@@ -123,6 +123,12 @@ impl TenantSeed {
     /// Creates the tenant in `project`: as the create route creates one, under the id of the
     /// file. An error when the project is unknown or the id is already in use.
     pub fn apply(&self, registry: &AuthRegistry, project: &str) -> Result<(), String> {
+        self.apply_checked(registry, project)
+            .map_err(|refusal| refusal.message)
+    }
+
+    /// [`Self::apply`], saying whether the refusal is that the id is in use.
+    fn apply_checked(&self, registry: &AuthRegistry, project: &str) -> Result<(), SeedRefusal> {
         let PreparedTenantCreate {
             metadata,
             patch,
@@ -133,14 +139,28 @@ impl TenantSeed {
             .create_tenant_with_id(project, &self.id, metadata, patch, password_policy)
             .is_none()
         {
-            return Err(format!(
-                "cannot create tenant {:?} in project {project:?}: the project is unknown or the id is in use",
-                self.id
-            ));
+            return Err(SeedRefusal {
+                in_use: registry.tenant_store(project, &self.id).is_some(),
+                message: format!(
+                    "cannot create tenant {:?} in project {project:?}: the project is unknown or the id is in use",
+                    self.id
+                ),
+            });
         }
-        with_tenant_store(registry, project, &self.id, |store| written.apply(store))
-            .map_err(|response| message(&response))
+        with_tenant_store(registry, project, &self.id, |store| written.apply(store)).map_err(
+            |response| SeedRefusal {
+                in_use: false,
+                message: message(&response),
+            },
+        )
     }
+}
+
+/// Why a tenant of a declaration was not made.
+struct SeedRefusal {
+    /// The id is a tenant that is there (made by another request first).
+    in_use: bool,
+    message: String,
 }
 
 /// The declared multi-tenancy switch and tenants of a project, applied together: the switch
@@ -182,10 +202,10 @@ impl TenantSeeding {
             if registry.tenant_store(project, tenant.id()).is_some() {
                 continue;
             }
-            if let Err(error) = tenant.apply(registry, project) {
+            if let Err(refusal) = tenant.apply_checked(registry, project) {
                 // An id another request made since the check is a tenant that is there.
-                if registry.tenant_store(project, tenant.id()).is_none() {
-                    first_error.get_or_insert(error);
+                if !refusal.in_use {
+                    first_error.get_or_insert(refusal.message);
                 }
             }
         }

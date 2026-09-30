@@ -392,3 +392,20 @@ test("the owner's cleanup delete and the recovery delete of the same object are 
   assert.ok(recoveryDelete, "the object has a recovery delete row");
   assert.throws(() => l.recordIntent(recoveryDelete), /mutation already attempted/);
 });
+
+test("an owner delete that was accepted does not make the object undeletable: only an answer that is not an acknowledged delete does", async () => {
+  const { l, name } = await deleteCaseLedger();
+  l.recordOutcome(row(deleteIds.afterMetadata), present("gcs-metadata-read", "1790727977683752"));
+  l.recordIntent(row(deleteIds.cleanupDelete));
+  l.recordOutcome(row(deleteIds.cleanupDelete), { kind: "gcs-delete", verdict: "accepted", facts: { status: 204, deleteAcknowledged: true } });
+  // A later read that still shows the object (a read that has not caught up) leaves it deletable in the ledger's own terms; the guard against a second delete is delete-not-attempted, not this flag.
+  l.recordOutcome(row(deleteIds.afterMetadata), present("gcs-metadata-read", "1790727977683752"));
+  assert.equal(l.object(name).deletable, true);
+  // An answer that is not an acknowledged delete does make it undeletable.
+  const { l: other, name: otherName } = await deleteCaseLedger();
+  other.recordOutcome(row(deleteIds.afterMetadata), present("gcs-metadata-read", "1790727977683752"));
+  other.recordIntent(row(deleteIds.cleanupDelete));
+  other.recordOutcome(row(deleteIds.cleanupDelete), { kind: "gcs-delete", verdict: "unexpected", facts: { status: 500, bodyBytes: 0, bodySha256: "0".repeat(64) } });
+  other.recordOutcome(row(deleteIds.afterMetadata), present("gcs-metadata-read", "1790727977683752"));
+  assert.equal(other.object(otherName).deletable, false);
+});

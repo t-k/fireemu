@@ -785,3 +785,25 @@ for (const [name, odd] of [["a session that finalizes an object the rules deny",
     assert.equal(h.gate.snapshot().mode, "closed");
   });
 }
+
+test("a release removal that the serving plane reflects late (stale answers first, then the 400 of a bucket with no release) settles after more than two cycles, in the normal run and in recovery", async () => {
+  // Production kept answering by the removed rules for at least 24 seconds (two cycles) before it answered 400; the simulator's lag counts the reads that are still stale.
+  const h = await harness({ simulatorOptions: { lag: 9 } });
+  const result = await h.controller.run();
+  assert.equal(result.status, "finished", JSON.stringify(result));
+  const cycles = h.trace.filter((id) => /^settle\/restore\/\d+\/0$/.test(id));
+  assert.ok(cycles.length >= 3, `the restoration settle read ${cycles.length} cycles`);
+  assert.equal(h.simulator.state().release, null);
+  // The same in recovery: stop the run while a release is published (a case answers a surprise), then recover, as in the 2026-09-30 recording.
+  const stopAt = "case/method-read-get-metadata-present/before/before-metadata";
+  const call = sentIds(h).indexOf(stopAt) + 1;
+  assert.ok(call > 0);
+  const failing = await harness({ simulatorOptions: { lag: 9, failures: new Map([[call, () => serverError()]]) } });
+  const stopped = await failing.controller.run();
+  assert.equal(stopped.status, "stopped");
+  assert.equal(stopped.reason, "unexpected verdict");
+  const recovered = await failing.controller.recover();
+  assert.equal(recovered.status, "recovered", JSON.stringify(recovered));
+  assert.ok(failing.trace.filter((id) => /^recovery\/settle\/restore\/\d+\/0$/.test(id)).length >= 3, "the recovery settle read three cycles or more");
+  assert.deepEqual([...failing.objects.residual()], []);
+});

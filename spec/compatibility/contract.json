@@ -1216,6 +1216,10 @@
           ],
           "fireemuOnly": [
             {
+              "behaviour": "the emulator profile's accounts:batchCreate treats a null localId as unset under fireemu's ProtoJSON-null convention: repeated null/missing/empty IDs without allowOverwrite answer DUPLICATE_LOCAL_ID : (with a trailing space), while a single null ID is a per-row localId is missing error. The official emulator HTTP validator (firebase-tools 15.28.2) instead refuses a null localId before import with INVALID_ARGUMENT and Invalid JSON payload received. /users/0/localId must be string (the index follows the row). This is a documented message/validation-order difference; strict behavior and missing or empty string IDs are unchanged",
+              "precision": "documented-divergence"
+            },
+            {
               "behaviour": "normal daemon starts re-key generated credential handles from a CSPRNG lifecycle incarnation so restart or namespace recreation cannot replay them; tests may inject a fixed incarnation for reproducibility",
               "precision": "exact-for-local-semantics"
             },

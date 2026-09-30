@@ -937,6 +937,8 @@ def test_short_parent_deadline_kills_once_and_preserves_unconfirmed_reap(
 
     clock = SimpleNamespace(now=0.0)
     initial_threads = _patch_test_thread_clock(monkeypatch, clock)
+    owner = threading.current_thread()
+    original_launch = subprocess.Popen
 
     class Worker:
         pid = 123456
@@ -964,6 +966,8 @@ def test_short_parent_deadline_kills_once_and_preserves_unconfirmed_reap(
     launches = []
 
     def launch(*args, **kwargs):
+        if threading.current_thread() is not owner:
+            return original_launch(*args, **kwargs)
         launches.append((args, kwargs))
         clock.now += launch_seconds
         return worker
@@ -996,6 +1000,8 @@ def test_parent_accepts_serialized_worker_receipt_with_its_bounded_payload(
 
     clock = SimpleNamespace(now=0.0)
     initial_threads = _patch_test_thread_clock(monkeypatch, clock)
+    owner = threading.current_thread()
+    original_launch = subprocess.Popen
     receipt = {"complete": complete, "status": 200, "receivedBytes": 2 if complete else 0,
                "declaredLength": 2, "phase": "body", "socketTimeoutSeconds": socket_budget,
                "elapsedSeconds": socket_budget}
@@ -1029,6 +1035,8 @@ def test_parent_accepts_serialized_worker_receipt_with_its_bounded_payload(
     launches = []
 
     def launch(*args, **kwargs):
+        if threading.current_thread() is not owner:
+            return original_launch(*args, **kwargs)
         launches.append((args, kwargs))
         clock.now += .1
         return Worker()
@@ -1072,6 +1080,8 @@ def test_body_diagnostic_does_not_depend_on_interpreter_setup(request, monkeypat
 
 @pytest.mark.parametrize("kind", ["deadline", "serialized"])
 def test_fake_parent_clock_preserves_a_foreign_threads_real_clock(monkeypatch, kind):
+    import subprocess
+
     release = threading.Event()
     entered = threading.Event()
     observations = []
@@ -1080,7 +1090,12 @@ def test_fake_parent_clock_preserves_a_foreign_threads_real_clock(monkeypatch, k
     def foreign():
         entered.set()
         release.wait(5)
-        observations.append(time.monotonic())
+        try:
+            observed_clock = time.monotonic()
+            code = subprocess.run(["ps", "-A", "-o", "pid="], capture_output=True, text=True, check=True).returncode
+            observations.append({"clock": observed_clock, "returncode": code})
+        except BaseException as error:
+            observations.append(error)
 
     thread = threading.Thread(target=foreign, name="foreign-clock-control", daemon=True)
     thread.start()
@@ -1096,4 +1111,5 @@ def test_fake_parent_clock_preserves_a_foreign_threads_real_clock(monkeypatch, k
         release.set()
         thread.join(timeout=2)
     assert not thread.is_alive()
-    assert len(observations) == 1 and observations[0] >= real_started, observations
+    assert len(observations) == 1 and isinstance(observations[0], dict), observations
+    assert observations[0]["clock"] >= real_started and observations[0]["returncode"] == 0, observations

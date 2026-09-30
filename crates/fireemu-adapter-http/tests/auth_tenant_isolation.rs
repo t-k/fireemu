@@ -245,8 +245,6 @@ enum Selector {
 }
 
 impl Selector {
-    const ALL: [Self; 3] = [Self::KeyAndBody, Self::BodyOnly, Self::QueryOnly];
-
     /// The shapes a profile serves. The strict profile refuses a client request without an
     /// API key before any selector is read, as production does, so only the SDK shape reaches
     /// tenant selection there (`strict_keyless_tenant_selectors_are_unregistered_callers`).
@@ -254,7 +252,9 @@ impl Selector {
         if state.client_api_key == ClientApiKeyPolicy::Required {
             &[Self::KeyAndBody]
         } else {
-            &Self::ALL
+            // The emulator profile ignores the query's tenant on these routes, as the official
+            // emulator does (`auth_emulator_tenant_id_readings.rs`), so it is no selector there.
+            &[Self::KeyAndBody, Self::BodyOnly]
         }
     }
 
@@ -624,6 +624,13 @@ fn sdk_shaped_refresh_keeps_project_refresh_and_contradicting_selectors_unchange
                 (format!("?tenantId={TENANT_B}"), None, "TENANT_ID_MISMATCH"),
                 (String::new(), Some(TENANT_B), "TENANT_ID_MISMATCH"),
             ] {
+                // The emulator profile ignores the query's tenant on a refresh, as the official
+                // emulator does: such a request is a plain renewal, not a refusal, and it is
+                // asserted in auth_emulator_tenant_id_readings.rs
+                // (`a_refresh_ignores_the_query_tenant_and_renews_in_the_tokens_own_namespace`).
+                if profile != "strict" && query.contains("tenantId=") {
+                    continue;
+                }
                 let mut body = json!({"grant_type": "refresh_token", "refresh_token": refresh_a});
                 if let Some(tenant) = body_tenant {
                     body["tenantId"] = Value::String(tenant.to_owned());

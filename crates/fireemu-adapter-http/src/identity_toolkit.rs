@@ -1640,11 +1640,14 @@ fn api_service(path: &str) -> &'static str {
 /// Refuses an API key the project did not declare, when it declared any.
 fn declared_api_key_check(
     state: &AuthState,
+    tenant_reading: QueryTenant,
     path: &str,
     query: Option<&str>,
 ) -> Result<(), JsonResponse> {
-    let (Ok((Some(key), _)), Some(tenancy)) = (query_selectors(query), state.tenancy.as_ref())
-    else {
+    let (Ok((Some(key), _)), Some(tenancy)) = (
+        query_selectors_reading(query, tenant_reading),
+        state.tenancy.as_ref(),
+    ) else {
         return Ok(());
     };
     let Ok(tenancy) = tenancy.read() else {
@@ -3166,7 +3169,8 @@ fn handle_with_policy(
             .split_once('?')
             .map_or((path, None), |(bare, query)| (bare, Some(query)));
         if bare_path == SUPPORTED_IDPS_PATH {
-            let api_key = query_selectors(query).is_ok_and(|(key, _)| key.is_some());
+            let api_key = query_selectors_reading(query, QueryTenant::Read)
+                .is_ok_and(|(key, _)| key.is_some());
             return admin_request_guard(headers, method, api_key)
                 .map_or_else(|refusal| refusal, |()| supported_idps());
         }
@@ -3301,10 +3305,11 @@ fn management_answer(
 /// the key), else the session's.
 fn request_project(
     state: &AuthState,
+    tenant_reading: QueryTenant,
     path: &str,
     query: Option<&str>,
 ) -> Result<String, JsonResponse> {
-    let key_project = query_selectors(query)
+    let key_project = query_selectors_reading(query, tenant_reading)
         .ok()
         .and_then(|(key, _)| key)
         .and_then(|key| {
@@ -3337,20 +3342,50 @@ fn handler_makes_named_tenant(handler: routes::Handler) -> bool {
     )
 }
 
-/// A request's `tenantId` when a number stands in the string the API declares: the official
-/// emulator's body validation reads `7` as `"7"` (`validateAndFixRestMappingRequestBody`), so
-/// the request goes on with the string. `None` when the body needs no rewriting (emulator
-/// profile only).
-fn emulator_numeric_tenant_id(state: &AuthState, body: &Value) -> Option<Value> {
+/// The body of a request as the official emulator reads its `tenantId` (emulator profile only):
+/// a number stands in the string the API declares and is read as that string, as its body
+/// validation converts it (`validateAndFixRestMappingRequestBody`), and an empty string is no
+/// tenant (`server.js:395-398`: JavaScript falsiness), so the key is dropped and the request goes
+/// on as if it named none. `None` when the body needs no rewriting. `null`, a boolean, an object
+/// and an array, which the official schema refuses (`/tenantId must be string`), are read as no
+/// tenant here (every reader treats `null` as an absent member and ignores the others): a
+/// recorded divergence that accepts more and makes nothing. The two GET routes that read a tenant from the
+/// query, `accounts:batchGet` and the action link, read no body in the official emulator, so
+/// their body is ignored.
+fn emulator_tenant_id_reading(
+    state: &AuthState,
+    body: &Value,
+    resolution: routes::Resolution<'_>,
+) -> Option<Value> {
     if !state.stateless_refresh_tokens {
         return None;
     }
-    let Some(Value::Number(number)) = body.get("tenantId") else {
-        return None;
-    };
-    let mut rewritten = body.clone();
-    rewritten["tenantId"] = Value::String(number.to_string());
-    Some(rewritten)
+    if matches!(
+        resolution,
+        routes::Resolution::Matched { route, .. }
+            if matches!(
+                route.handler,
+                routes::Handler::AdminBatchGet | routes::Handler::EmulatorAction
+            )
+    ) {
+        return body
+            .as_object()
+            .is_some_and(|members| !members.is_empty())
+            .then(|| json!({}));
+    }
+    match body.get("tenantId")? {
+        Value::Number(number) => {
+            let mut rewritten = body.clone();
+            rewritten["tenantId"] = Value::String(number.to_string());
+            Some(rewritten)
+        }
+        Value::String(named) if named.is_empty() => {
+            let mut rewritten = body.clone();
+            rewritten.as_object_mut()?.remove("tenantId");
+            Some(rewritten)
+        }
+        _ => None,
+    }
 }
 
 /// The project an API key selects: `Ok(None)` when no project owns it and the daemon takes it
@@ -3440,6 +3475,47 @@ fn id_token_tenant(state: &AuthState, project: &str, body: &Value) -> Option<(St
     Some((tenant.to_owned(), audience == Some(project)))
 }
 
+/// The query's `tenantId` as the official emulator reads it (emulator profile only): only
+/// `accounts:batchGet` (`operations.js:435-437`, and only when the request names no tenant
+/// elsewhere: a tenant project reads its own accounts, so the query is neither a mismatch nor a
+/// selector then) and the action link (`handlers.js:10,27`) read it; every other route of the
+/// official emulator ignores it (`getProjects`, `recaptchaParams`, the v2 config and tenant
+/// management routes included), so a request that names no other tenant is a project request. The
+/// query never overrides or fills in for a tenant the path names. Only the routes the official
+/// emulator does not serve (`passwordPolicy` and `recaptchaConfig` answer 501 there, the provider
+/// routes 501, `Jwks` 403 without a key) keep fireemu's reading of it.
+fn emulator_query_tenant(
+    resolution: routes::Resolution<'_>,
+    path: &str,
+    query_tenant: Option<String>,
+) -> Option<String> {
+    let routes::Resolution::Matched { route, .. } = resolution else {
+        return None;
+    };
+    match route.handler {
+        routes::Handler::AdminBatchGet => {
+            // `accounts:batchGet` has no body; a tenant on its path is a tenant project, which
+            // reads its own accounts.
+            let names_a_tenant =
+                routes::scoped_target(path).is_some_and(|(_, tenant)| tenant.is_some());
+            query_tenant.filter(|_| !names_a_tenant)
+        }
+        // The action link is the query tenant's own route (the official handler reads it).
+        routes::Handler::EmulatorAction
+        // Routes the official emulator does not serve have no official reading to follow.
+        | routes::Handler::PasswordPolicy
+        | routes::Handler::RecaptchaConfig
+        | routes::Handler::Jwks
+        | routes::Handler::ProviderCreate
+        | routes::Handler::ProviderList
+        | routes::Handler::ProviderGet
+        | routes::Handler::ProviderUpdate
+        | routes::Handler::ProviderDelete => query_tenant,
+        // Every other route is one of the official emulator's operations, which ignore it.
+        _ => None,
+    }
+}
+
 /// The tenant the query names, for the two routes the official emulator reads it on:
 /// `accounts:batchGet` and the action link (which needs its `apiKey` and `oobCode` to get as far
 /// as looking a tenant up).
@@ -3452,7 +3528,11 @@ fn query_tenant_of(handler: routes::Handler, query: Option<&str>) -> Option<Stri
         _ => false,
     };
     reads_the_query
-        .then(|| query_selectors(query).ok().and_then(|(_, tenant)| tenant))
+        .then(|| {
+            query_selectors_reading(query, QueryTenant::ReadEmptyAsNone)
+                .ok()
+                .and_then(|(_, tenant)| tenant)
+        })
         .flatten()
 }
 
@@ -3560,6 +3640,20 @@ fn token_tenant_disagreement(
     }
 }
 
+/// What the request's refresh token (`refresh_token`, or `refreshToken`) says about its tenant.
+fn request_refresh_token_tenant(body: &Value) -> Option<RefreshTokenTenant> {
+    str_field(body, "refresh_token")
+        .or_else(|| str_field(body, "refreshToken"))
+        .filter(|token| !token.is_empty())
+        .map(|token| {
+            match fireemu_core_auth::store::AuthRegistry::decode_refresh_token_tenant(token) {
+                None => RefreshTokenTenant::Undecodable,
+                Some(None) => RefreshTokenTenant::NoTenant,
+                Some(Some(tenant)) => RefreshTokenTenant::Tenant(tenant),
+            }
+        })
+}
+
 /// The refusal a refresh token earns before a tenant is looked up: `INVALID_REFRESH_TOKEN` for
 /// one that does not decode, and `TENANT_ID_MISMATCH` for one of another tenant than `target`.
 fn refresh_token_refusal(
@@ -3588,8 +3682,18 @@ fn admit_request(
     project: &str,
     parent: &Arc<Mutex<AuthStore>>,
 ) -> Result<bool, JsonResponse> {
+    // A query that does not parse is refused by the store selection (which reads it the same
+    // way), so it makes nothing: not in the key's project, not in the default project.
+    let tenant_reading = query_reads_tenant(
+        state,
+        routes::resolve(request.method, request.path),
+        request.path,
+    );
+    let Ok((key, _)) = query_selectors_reading(request.query, tenant_reading) else {
+        return Ok(false);
+    };
     if routes::scoped_target(request.path).is_none() {
-        if let Some(key) = query_selectors(request.query).ok().and_then(|(key, _)| key) {
+        if let Some(key) = key {
             if api_key_project(state, &key, "identitytoolkit.googleapis.com").is_err() {
                 return Ok(false);
             }
@@ -3663,7 +3767,12 @@ fn emulator_creates_named_tenant(
         return Ok(None);
     }
     let (path, query) = (request.path, request.query);
-    let project = request_project(state, path, query)?;
+    let project = request_project(
+        state,
+        query_reads_tenant(state, resolution, path),
+        path,
+        query,
+    )?;
     // A request the daemon serves from another project's store than its own project (chosen by
     // the store selection itself, not by a copy of its rules) makes nothing here and is admitted
     // by App Check for the project it is served from, by the pipeline. A selection that fails
@@ -3687,16 +3796,7 @@ fn emulator_creates_named_tenant(
         None => (None, true),
     };
     // The refresh token is the fourth source.
-    let refresh_tenant = str_field(body, "refresh_token")
-        .or_else(|| str_field(body, "refreshToken"))
-        .filter(|token| !token.is_empty())
-        .map(|token| {
-            match fireemu_core_auth::store::AuthRegistry::decode_refresh_token_tenant(token) {
-                None => RefreshTokenTenant::Undecodable,
-                Some(None) => RefreshTokenTenant::NoTenant,
-                Some(Some(tenant)) => RefreshTokenTenant::Tenant(tenant),
-            }
-        });
+    let refresh_tenant = request_refresh_token_tenant(body);
     let query_tenant = query_tenant_of(route.handler, query);
     // The named tenants must agree, as the emulator asserts before it looks the tenant up.
     let mut named = [path_tenant, body_tenant, token_tenant.as_deref()]
@@ -3771,26 +3871,27 @@ fn emulator_creates_named_tenant(
 /// decode, a `tenantId` that is not a string, and a request without an ID token keep their
 /// current answer.
 ///
-/// `Ok(Some(body))` is the body the request continues with: an empty `tenantId` is dropped, as
-/// the emulator reads `""` as no tenant (a project user's token too).
+/// An empty body `tenantId` is already dropped (`emulator_tenant_id_reading`), as the emulator
+/// reads `""` as no tenant (a project user's token too).
 fn emulator_named_tenant(
     state: &AuthState,
+    resolution: routes::Resolution<'_>,
     path: &str,
     query: Option<&str>,
     body: &Value,
     made_on_the_way: Option<&str>,
-) -> Result<Option<Value>, JsonResponse> {
+) -> Result<(), JsonResponse> {
     if !state.stateless_refresh_tokens {
-        return Ok(None);
+        return Ok(());
     }
     let Some(registry) = state.registry.as_ref() else {
-        return Ok(None);
+        return Ok(());
     };
     let account_api = path.starts_with("/identitytoolkit.googleapis.com/v1/")
         && !path.ends_with(":queryAccounts")
         && !path.ends_with("/accounts:query");
     if !account_api {
-        return Ok(None);
+        return Ok(());
     }
     let Some((audience, token_tenant)) = str_field(body, "idToken").and_then(|token| {
         let signer = state.store.lock().ok().and_then(|s| s.signer_arc());
@@ -3809,29 +3910,24 @@ fn emulator_named_tenant(
             .map(str::to_owned);
         Some((audience, tenant))
     }) else {
-        return Ok(None);
+        return Ok(());
     };
-    let project = request_project(state, path, query)?;
+    let project = request_project(
+        state,
+        query_reads_tenant(state, resolution, path),
+        path,
+        query,
+    )?;
     if audience != project {
-        return Ok(None);
+        return Ok(());
     }
-    // `""` is no tenant to the emulator (JavaScript falsiness), so it is dropped.
-    let mut rewritten = None;
     let body_tenant = match body.get("tenantId") {
         Some(Value::String(named)) if !named.is_empty() => Some(named.as_str()),
         None | Some(Value::Null) => None,
-        Some(Value::String(_)) => {
-            let mut without = body.clone();
-            if let Some(object) = without.as_object_mut() {
-                object.remove("tenantId");
-            }
-            rewritten = Some(without);
-            None
-        }
-        _ => return Ok(None),
+        _ => return Ok(()),
     };
     let Some(token_tenant) = token_tenant else {
-        return Ok(rewritten);
+        return Ok(());
     };
     // The target is the path's tenant, else the body's, else the token's. A path and a body
     // tenant that differ are also `TENANT_ID_MISMATCH` (one of them is not the token's).
@@ -3849,7 +3945,7 @@ fn emulator_named_tenant(
     if made_on_the_way == Some(target) || registry.tenant_store(&project, target).is_none() {
         return Err(error(400, "USER_NOT_FOUND"));
     }
-    Ok(rewritten)
+    Ok(())
 }
 
 /// The Admin v2 list of the identity providers a `defaultSupportedIdpConfigs` entry may name.
@@ -3920,7 +4016,8 @@ fn strict_named_tenant(
         return Ok(None);
     }
     let scoped = routes::scoped_target(path);
-    let project = request_project(state, path, query)?;
+    // The strict profile reads the query tenant on every route.
+    let project = request_project(state, QueryTenant::Read, path, query)?;
     if secure_token {
         return strict_refreshed_tenant(registry, &project, body);
     }
@@ -4049,9 +4146,10 @@ fn handle_with_policy_inner(
     };
     // Whether the caller identified itself with an API key; its validity is checked when the
     // store is selected.
-    let api_key = query_selectors(query).is_ok_and(|(key, _)| key.is_some());
-    let at = now(state);
     let resolution = routes::resolve(method, path);
+    let api_key = query_selectors_reading(query, query_reads_tenant(state, resolution, path))
+        .is_ok_and(|(key, _)| key.is_some());
+    let at = now(state);
     // Production's API front end answers a caller without identity before the service reads
     // any selector, tenant or body (sandbox recording 2026-09-23).
     if let Err(response) = caller_identity_check(state, resolution, headers, api_key) {
@@ -4061,7 +4159,12 @@ fn handle_with_policy_inner(
             response
         };
     }
-    if let Err(response) = declared_api_key_check(state, path, query) {
+    if let Err(response) = declared_api_key_check(
+        state,
+        query_reads_tenant(state, resolution, path),
+        path,
+        query,
+    ) {
         return response;
     }
     // Production's reading of the tenant a request names (strict profile).
@@ -4075,11 +4178,11 @@ fn handle_with_policy_inner(
         Err(response) => return response,
     };
     // The official emulator makes a tenant it has not seen when a request names one.
-    let numeric_tenant_body;
-    let body = match emulator_numeric_tenant_id(state, body) {
+    let read_tenant_body;
+    let body = match emulator_tenant_id_reading(state, body, resolution) {
         Some(rewritten) => {
-            numeric_tenant_body = rewritten;
-            &numeric_tenant_body
+            read_tenant_body = rewritten;
+            &read_tenant_body
         }
         None => body,
     };
@@ -4099,15 +4202,16 @@ fn handle_with_policy_inner(
     // A request the tenant admission let through was admitted by App Check there; it is observed once.
     let app_check_admitted = creation.app_check_admitted.take();
     // The official emulator's reading of an ID token's tenant (emulator profile).
-    let emulator_tenant_body;
-    let body = match emulator_named_tenant(state, path, query, body, made_on_the_way.as_deref()) {
-        Ok(Some(rewritten)) => {
-            emulator_tenant_body = rewritten;
-            &emulator_tenant_body
-        }
-        Ok(None) => body,
-        Err(response) => return response,
-    };
+    if let Err(response) = emulator_named_tenant(
+        state,
+        resolution,
+        path,
+        query,
+        body,
+        made_on_the_way.as_deref(),
+    ) {
+        return response;
+    }
     let emulator_clear = matches!(
         resolution,
         routes::Resolution::Matched {
@@ -9086,7 +9190,10 @@ fn select_store(
     body: &Value,
     resolution: routes::Resolution<'_>,
 ) -> Result<Arc<Mutex<AuthStore>>, JsonResponse> {
-    let (api_key, query_tenant) = query_selectors(query)?;
+    // The emulator profile reads (and refuses a malformed) query tenant only where the official
+    // emulator reads it.
+    let (api_key, query_tenant) =
+        query_selectors_reading(query, query_reads_tenant(state, resolution, path))?;
     let query_body_scope = state.query_limits == AuthQueryLimits::ProductionBounded
         && matches!(
             resolution,
@@ -9415,10 +9522,60 @@ fn tenant_store_issuing_refresh_token(
     Ok(issued_by_tenant_of_project.then_some(store))
 }
 
-/// The API key (`key`, or the action link's `apiKey`) and the action link's `tenantId` a
-/// query carries, decoded. Keys are declared from [A-Za-z0-9._-], but a client may still
-/// percent-encode them.
-fn query_selectors(query: Option<&str>) -> Result<(Option<String>, Option<String>), JsonResponse> {
+/// Whether the request's query `tenantId` is read at all: always in the strict profile, and in
+/// the emulator profile only on the routes the official emulator reads it on (see
+/// [`emulator_query_tenant`]). Every reader of the query (the store selection, the API key's
+/// project, its declared-key check, the admission of a tenant made on the way) reads the same
+/// way, so a malformed tenant that nothing reads never hides the request's API key.
+fn query_reads_tenant(
+    state: &AuthState,
+    resolution: routes::Resolution<'_>,
+    path: &str,
+) -> QueryTenant {
+    if !state.stateless_refresh_tokens {
+        return QueryTenant::Read;
+    }
+    if emulator_query_tenant(resolution, path, Some(String::new())).is_none() {
+        return QueryTenant::Ignored;
+    }
+    // The routes the official emulator reads it on take an empty value as no tenant (both are
+    // falsy checks: `operations.js:435-437`, `handlers.js:10,27`).
+    match resolution {
+        routes::Resolution::Matched { route, .. }
+            if matches!(
+                route.handler,
+                routes::Handler::AdminBatchGet | routes::Handler::EmulatorAction
+            ) =>
+        {
+            QueryTenant::ReadEmptyAsNone
+        }
+        _ => QueryTenant::Read,
+    }
+}
+
+/// How a request's query `tenantId` is read.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum QueryTenant {
+    /// Not looked at, so a malformed one is no reason to refuse the request.
+    Ignored,
+    /// Read, and refused when malformed, empty or repeated.
+    Read,
+    /// Read as the official emulator reads it: an empty or bare value is no tenant; a repeated
+    /// or malformed one is still refused.
+    ReadEmptyAsNone,
+}
+
+/// The API key (`key`, or the action link's `apiKey`) and the action link's `tenantId` a query
+/// carries, decoded. Keys are declared from [A-Za-z0-9._-], but a client may still percent-encode
+/// them. The `tenantId` parameter is read as `tenant_reading` says (a route whose query tenant is
+/// ignored has no reason to refuse a malformed one: the official emulator does not look at it).
+fn query_selectors_reading(
+    query: Option<&str>,
+    tenant_reading: QueryTenant,
+) -> Result<(Option<String>, Option<String>), JsonResponse> {
+    let read_tenant = tenant_reading != QueryTenant::Ignored;
+    let empty_is_none = tenant_reading == QueryTenant::ReadEmptyAsNone;
+    let mut tenant_seen = false;
     let decode = |value: &str| {
         fireemu_core_types::codec::percent_decode(value, fireemu_core_types::codec::PlusMode::Space)
     };
@@ -9426,7 +9583,14 @@ fn query_selectors(query: Option<&str>) -> Result<(Option<String>, Option<String
     let mut tenant = None;
     for kv in query.unwrap_or("").split('&').filter(|kv| !kv.is_empty()) {
         let Some((name, value)) = kv.split_once('=') else {
-            if matches!(decode(kv).as_str(), "key" | "apiKey" | "tenantId") {
+            let bare = decode(kv);
+            if empty_is_none && bare == "tenantId" {
+                if std::mem::replace(&mut tenant_seen, true) {
+                    return Err(error(400, "INVALID_ARGUMENT"));
+                }
+                continue;
+            }
+            if matches!(bare.as_str(), "key" | "apiKey") || (read_tenant && bare == "tenantId") {
                 return Err(error(400, "INVALID_ARGUMENT"));
             }
             continue;
@@ -9434,10 +9598,20 @@ fn query_selectors(query: Option<&str>) -> Result<(Option<String>, Option<String
         let decoded_name = decode(name);
         let slot = match decoded_name.as_str() {
             "key" | "apiKey" => &mut api_key,
-            "tenantId" => &mut tenant,
+            "tenantId" if read_tenant => &mut tenant,
             _ => continue,
         };
-        if value.is_empty() || malformed_query_component(name) || malformed_query_component(value) {
+        if malformed_query_component(name) || malformed_query_component(value) {
+            return Err(error(400, "INVALID_ARGUMENT"));
+        }
+        if empty_is_none && decoded_name == "tenantId" {
+            if std::mem::replace(&mut tenant_seen, true) {
+                return Err(error(400, "INVALID_ARGUMENT"));
+            }
+            if value.is_empty() {
+                continue;
+            }
+        } else if value.is_empty() {
             return Err(error(400, "INVALID_ARGUMENT"));
         }
         if slot.is_some() {

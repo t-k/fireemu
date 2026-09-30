@@ -353,9 +353,9 @@ fn what_names_no_servable_tenant_creates_nothing() {
     let attempts: Vec<(&str, String, &str, Value)> = vec![
         (
             "mismatch",
-            format!("{V1}/projects/demo-app/tenants/one/accounts:batchGet"),
-            "GET",
-            json!({"tenantId": "two"}),
+            format!("{V1}/projects/demo-app/tenants/one/accounts"),
+            "POST",
+            json!({"tenantId": "two", "email": "a@example.com", "password": "hunter22"}),
         ),
         (
             "empty",
@@ -758,6 +758,188 @@ fn an_unknown_api_key_makes_no_tenant_in_any_project() {
     assert_eq!(r.status, 200, "{}", r.body);
     assert!(registry.tenant_store("worker-alpha", "owned").is_some());
     assert!(registry.tenant_store("demo-app", "owned").is_none());
+}
+
+/// A malformed query `tenantId` on a route that never reads it (the official emulator ignores it
+/// there) does not hide the API key: the request is served from the key's project, and an unknown
+/// key still makes no tenant. Probed against the official emulator: `signUp?key=fake&tenantId=a&
+/// tenantId=b` with a body tenant answers 200 in the body's tenant.
+#[test]
+fn a_malformed_query_tenant_on_a_route_that_ignores_it_keeps_the_api_keys_project() {
+    for (n, malformed) in ["&tenantId=a&tenantId=b", "&tenantId", "&tenantId="]
+        .into_iter()
+        .enumerate()
+    {
+        let (mut state, registry) = emulator();
+        let alpha = AuthStore::new("worker-alpha", SplitMix64::new(11), TotpPolicy::default());
+        assert!(registry.register_session("worker-alpha", alpha));
+        let mut tenancy = Tenancy::new("demo-app");
+        tenancy
+            .register("worker-alpha", &[], &["alpha-key".to_owned()])
+            .unwrap();
+        state.tenancy = Some(Arc::new(RwLock::new(tenancy)));
+        let sign_up = |key: &str, body: Value| {
+            handle(
+                &state,
+                "POST",
+                &format!("/identitytoolkit.googleapis.com/v1/accounts:signUp?key={key}{malformed}"),
+                &body,
+            )
+        };
+        // The project's own key, with a body tenant: served, and the tenant is the key's project's.
+        let r = sign_up(
+            "alpha-key",
+            json!({"email": "a@example.com", "password": "hunter22", "tenantId": "owned"}),
+        );
+        assert_eq!(r.status, 200, "{malformed}: {}", r.body);
+        assert!(registry.tenant_store("worker-alpha", "owned").is_some());
+        assert!(registry.tenant_store("demo-app", "owned").is_none());
+        // Without a body tenant: served from the key's project, not the default one.
+        let r = sign_up(
+            "alpha-key",
+            json!({"email": format!("b{n}@example.com"), "password": "hunter22"}),
+        );
+        assert_eq!(r.status, 200, "{malformed}: {}", r.body);
+        assert_eq!(
+            r.body["localId"].as_str().map(|id| registry
+                .store_for("worker-alpha")
+                .is_some_and(|store| store.lock().unwrap().user_count() == 1)
+                && id.len() > 3),
+            Some(true)
+        );
+        // An unknown key: refused, and the body's tenant is made in no project.
+        let r = sign_up(
+            "unknown-key",
+            json!({"email": "c@example.com", "password": "hunter22", "tenantId": "stray"}),
+        );
+        assert_eq!(r.status, 400, "{malformed}: {}", r.body);
+        assert_eq!(
+            r.body["error"]["details"][0]["reason"], "API_KEY_INVALID",
+            "{malformed}: {}",
+            r.body
+        );
+        no_tenant(
+            &registry,
+            &["demo-app", "worker-alpha"],
+            &["stray"],
+            "unknown key",
+        );
+    }
+}
+
+/// The emulator profile with a second project, `worker-alpha`, that owns `alpha-key`.
+fn alpha_state() -> (AuthState, Arc<AuthRegistry>) {
+    let (mut state, registry) = emulator();
+    let alpha = AuthStore::new("worker-alpha", SplitMix64::new(11), TotpPolicy::default());
+    assert!(registry.register_session("worker-alpha", alpha));
+    let mut tenancy = Tenancy::new("demo-app");
+    tenancy
+        .register("worker-alpha", &[], &["alpha-key".to_owned()])
+        .unwrap();
+    state.tenancy = Some(Arc::new(RwLock::new(tenancy)));
+    (state, registry)
+}
+
+/// A query that does not parse (a repeated, empty, bare or percent-malformed key, or a malformed
+/// tenant on a route that reads it) makes nothing: the request is refused by the store selection,
+/// which reads the query the same way, and no tenant is made for it in the default project or in
+/// the key's. The official emulator answers 403 for a repeated, empty or bare key and makes
+/// nothing, and reads `key=%ZZ` literally (200); fireemu refuses that one too, a recorded
+/// divergence (`emulator-malformed-api-key-is-refused-where-the-official-emulator-ignores-it`).
+#[test]
+fn a_query_that_does_not_parse_makes_no_tenant() {
+    let (state, registry) = alpha_state();
+    for (n, query) in [
+        "key=alpha-key&key=alpha-key",
+        "key=",
+        "key",
+        "key=%ZZ",
+        "key=unknown-key&key=unknown-key",
+        "key=alpha-key&apiKey=alpha-key",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let tenant = format!("stray-{n}");
+        let r = handle(
+            &state,
+            "POST",
+            &format!("/identitytoolkit.googleapis.com/v1/accounts:signUp?{query}"),
+            &json!({"email": "a@example.com", "password": "hunter22", "tenantId": tenant}),
+        );
+        assert_eq!(r.status, 400, "{query}: {}", r.body);
+        no_tenant(&registry, &["demo-app", "worker-alpha"], &[&tenant], query);
+    }
+    // The routes that keep reading the query tenant: a malformed tenant beside a body tenant, an
+    // unknown key or the project's own.
+    for (n, route) in ["passwordPolicy", "recaptchaConfig"]
+        .into_iter()
+        .enumerate()
+    {
+        for (m, query) in [
+            "key=unknown-key&tenantId=a&tenantId=b",
+            "key=alpha-key&tenantId=",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let tenant = format!("keep-{n}-{m}");
+            let r = handle_with(
+                &state,
+                "GET",
+                &format!("/identitytoolkit.googleapis.com/v2/{route}?{query}"),
+                &owner(),
+                &json!({"tenantId": tenant}),
+            );
+            assert_eq!(r.status, 400, "{route}?{query}: {}", r.body);
+            no_tenant(
+                &registry,
+                &["demo-app", "worker-alpha"],
+                &[&tenant],
+                &format!("{route}?{query}"),
+            );
+        }
+    }
+}
+
+/// An ID token of a deleted tenant of the key's project, with a malformed query tenant on a route
+/// that ignores it, finds no user: the key still names its project, so the token's audience is the
+/// request's project and the tenant that no longer exists is looked for there.
+#[test]
+fn a_deleted_tenants_token_beside_a_malformed_query_tenant_finds_no_user_in_the_keys_project() {
+    let (state, registry) = alpha_state();
+    let up = handle(
+        &state,
+        "POST",
+        "/identitytoolkit.googleapis.com/v1/accounts:signUp?key=alpha-key",
+        &json!({"email": "g@example.com", "password": "hunter22", "tenantId": "gone"}),
+    );
+    assert_eq!(up.status, 200, "{}", up.body);
+    for (route, body) in [
+        (
+            "accounts:sendOobCode",
+            json!({"requestType": "VERIFY_EMAIL"}),
+        ),
+        ("accounts:update", json!({"displayName": "x"})),
+        ("accounts:lookup", json!({})),
+        ("accounts:delete", json!({})),
+    ] {
+        assert!(registry.delete_tenant("worker-alpha", "gone"));
+        let mut body = body;
+        body["idToken"] = up.body["idToken"].clone();
+        let r = handle(
+            &state,
+            "POST",
+            &format!("{V1}/{route}?key=alpha-key&tenantId=a&tenantId=b"),
+            &body,
+        );
+        assert_eq!(r.status, 400, "{route}: {}", r.body);
+        assert_eq!(
+            r.body["error"]["message"], "USER_NOT_FOUND",
+            "{route}: {}",
+            r.body
+        );
+    }
 }
 
 /// The refresh token is the fourth place a target tenant comes from, and it is decoded before the

@@ -3448,7 +3448,6 @@ fn id_token_tenant(state: &AuthState, project: &str, body: &Value) -> Option<(St
 fn emulator_query_tenant(
     resolution: routes::Resolution<'_>,
     path: &str,
-    body: &Value,
     query_tenant: Option<String>,
 ) -> Option<String> {
     let routes::Resolution::Matched { route, .. } = resolution else {
@@ -3457,9 +3456,10 @@ fn emulator_query_tenant(
     match route.handler {
         routes::Handler::EmulatorAction => query_tenant,
         routes::Handler::AdminBatchGet => {
-            let names_a_tenant = routes::scoped_target(path)
-                .is_some_and(|(_, tenant)| tenant.is_some())
-                || str_field(body, "tenantId").is_some_and(|tenant| !tenant.is_empty());
+            // `accounts:batchGet` has no body; a tenant on its path is a tenant project, which
+            // reads its own accounts.
+            let names_a_tenant =
+                routes::scoped_target(path).is_some_and(|(_, tenant)| tenant.is_some());
             query_tenant.filter(|_| !names_a_tenant)
         }
         // Routes the official emulator does not serve (the client policy reads and the like) have
@@ -8976,7 +8976,7 @@ fn select_store(
 ) -> Result<Arc<Mutex<AuthStore>>, JsonResponse> {
     let (api_key, query_tenant) = query_selectors(query)?;
     let query_tenant = if state.stateless_refresh_tokens {
-        emulator_query_tenant(resolution, path, body, query_tenant)
+        emulator_query_tenant(resolution, path, query_tenant)
     } else {
         query_tenant
     };

@@ -361,3 +361,47 @@ fn the_strict_profile_reads_the_query_tenant_as_before() {
     assert_eq!(refused["error"]["message"], "TENANT_NOT_FOUND");
     assert!(registry.tenants("demo-app").is_empty());
 }
+
+#[test]
+fn the_action_link_reads_its_query_tenant_to_find_the_tenants_code() {
+    let (state, registry) = emulator();
+    let (status, up) = client(
+        &state,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"email": "t@example.com", "password": "hunter22", "tenantId": "pt"}),
+    );
+    assert_eq!(status, 200, "{up}");
+    let (status, sent) = client(
+        &state,
+        &format!("{V1}/accounts:sendOobCode"),
+        &json!({"requestType": "VERIFY_EMAIL", "idToken": up["idToken"], "tenantId": "pt"}),
+    );
+    assert_eq!(status, 200, "{sent}");
+    let (status, codes) = admin(
+        &state,
+        "GET",
+        "/emulator/v1/projects/demo-app/tenants/pt/oobCodes",
+        &json!({}),
+    );
+    assert_eq!(status, 200, "{codes}");
+    let code = codes["oobCodes"][0]["oobCode"].as_str().unwrap().to_owned();
+    let follow = |query: &str| {
+        let r = handle_with(
+            &state,
+            "GET",
+            &format!("/emulator/action?mode=verifyEmail&oobCode={code}&apiKey={KEY}{query}"),
+            &RequestHeaders {
+                authorization: None,
+                ..owner()
+            },
+            &json!({}),
+        );
+        (r.status, r.body)
+    };
+    // Without its tenant the project has no such code; with the query's tenant it is found.
+    let (status, refused) = follow("");
+    assert_eq!(status, 400, "{refused}");
+    let (status, done) = follow("&tenantId=pt");
+    assert_eq!(status, 200, "{done}");
+    assert!(registry.tenant_store("demo-app", "pt").is_some());
+}

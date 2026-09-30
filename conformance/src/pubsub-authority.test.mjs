@@ -56,6 +56,21 @@ test("normalized delegation revocation and global stops block the next write", a
     await assert.rejects(check([...ledger(), row]));
   }
 });
+test("writer also refuses later universal stops naming old pins or delegation", async () => {
+  const old = "e".repeat(64);
+  for (const stop of [
+    `all production stop PUBSUB-EVENTARC packetSha256=${old}`,
+    "all production stop including 調整役への委任",
+  ]) {
+    const lines = ledger();
+    lines.splice(
+      2,
+      0,
+      `- 2026-09-30 | PUBSUB-EVENTARC old | decision=APPROVE; packetSha256=${old} | owner | old`,
+    );
+    await assert.rejects(check([...lines, stop], { decisionLine: 5 }));
+  }
+});
 test("consumed old own packets and other lane revocations do not revoke this fresh packet", async () => {
   const old = "e".repeat(64);
   const lines = ledger();

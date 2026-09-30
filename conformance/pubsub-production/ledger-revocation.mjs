@@ -117,11 +117,13 @@ export function scanRevocations({
       if (namesThisVersion || (namesLane && !wellFormed)) lane.push(index + 1);
       else if (namesLane) consumed.push(index + 1);
       const isDelegation = text.includes(NORMALIZED_DELEGATION_MARKER);
+      // Universal scope is independent of an old version reference or delegation wording.
+      if (UNIVERSAL.test(text)) globalCandidates.push(index + 1);
       if (isDelegation) {
         if (DELEGATION_WORDS.test(text)) delegation.push(index + 1);
       }
       // A revocation that names no lane at all (the whole sandbox program, an unscoped "all"), or that says all and names other lanes only as examples, is a candidate to stop this lane too.
-      else if (!namesLane && !namesThisVersion && (UNIVERSAL.test(text) || !OTHER_LANE.test(text)))
+      else if (!namesLane && !namesThisVersion && !UNIVERSAL.test(text) && !OTHER_LANE.test(text))
         globalCandidates.push(index + 1);
     }
   });

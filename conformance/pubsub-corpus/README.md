@@ -10,6 +10,8 @@ These modules record bounded REST and native unary exchanges from the same canon
 
 Source-only verification:
 
+`bootstrap-shapes.mjs` recognizes the exact semantic JSON forms observed in the single capture-only REST bootstrap. It accepts the recorded labelled topic, pull subscription defaults, leaf-only missing-resource error and empty response shapes. Only explicitly supplied resource identities and labels vary. Extra, missing or changed fields and statuses remain unknown. It does not establish ownership, authorize cleanup, compare an emulator artifact or supply either full compatibility recording.
+
 ```sh
 node --test conformance/src/pubsub-wire-methods.test.mjs conformance/src/pubsub-unary-session.test.mjs conformance/src/pubsub-grpc-transport.test.mjs conformance/src/pubsub-native-codec.test.mjs conformance/src/pubsub-peer-grpc-transport.test.mjs
 ```

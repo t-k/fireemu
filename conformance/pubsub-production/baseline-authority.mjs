@@ -31,8 +31,8 @@ export function assertBaselineAuthority({
   reserveUsd,
 }) {
   if (
-    subject !== "PUBSUB-EVENTARC fixture-baseline-001" ||
-    envelopeId !== "PUBSUB-EVENTARC-fixture-baseline-001" ||
+    subject !== "PUBSUB-EVENTARC fixture-baseline-002" ||
+    envelopeId !== "PUBSUB-EVENTARC-fixture-baseline-002" ||
     maxRequests !== 3 ||
     reserveUsd !== 0.01
   )

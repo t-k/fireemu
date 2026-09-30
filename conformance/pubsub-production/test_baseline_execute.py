@@ -31,7 +31,7 @@ class BaselineExecutorTests(unittest.TestCase):
                 "project": m.PROJECT, "taskId": "OTHER", "outcome": "cleanup-verified"}) + "\n")
             locks, calls, guards = Mock(), [], []
             clock = [0]
-            manifest = dict(sourceCommit="b" * 40, runId="a" * 32, projectNumber="123456789012")
+            manifest = dict(sourceCommit="b" * 40, runId="a" * 32, projectNumber="123456789012", nodeExecutable="/synthetic/pinned/node")
             manifest["requests"] = m.baseline_requests(manifest["projectNumber"])
 
             def authority(*, timeout=10):
@@ -43,6 +43,10 @@ class BaselineExecutorTests(unittest.TestCase):
                     raise m.Rejected("authority stopped")
 
             def command(argv, **kwargs):
+                if argv[0] != "gcloud":
+                    self.assertEqual(argv[0], manifest["nodeExecutable"], "collector must bypass a PATH shim")
+                else:
+                    self.assertEqual(kwargs.get("policy"), "credential-wrapper")
                 self.assertTrue(locks.acquire.called)
                 self.assertEqual(json.loads(ledger.read_text().splitlines()[-1])["event"], "reserved")
                 calls.append(argv)
@@ -64,7 +68,7 @@ class BaselineExecutorTests(unittest.TestCase):
                     return Mock(returncode=0, stdout="synthetic-secret", processQuiescent=True, directChildReaped=True)
                 data = json.loads(kwargs["input"])
                 self.assertEqual(data["accessToken"], "synthetic-secret")
-                directory = root / "docs.local/runs/codex-lane7" / ("fixture-baseline-001-" + manifest["runId"])
+                directory = root / "docs.local/runs/codex-lane7" / ("fixture-baseline-002-" + manifest["runId"])
                 directory.mkdir(parents=True)
                 rows = []
                 for index, request in enumerate(manifest["requests"]):
@@ -117,10 +121,11 @@ class BaselineExecutorTests(unittest.TestCase):
             self.assertEqual(terminal["event"], "finished")
             self.assertEqual(result["mutationAttempts"], 0)
             if mode == "complete":
-                self.assertEqual(result["outcome"], "captured-read-only-baseline")
+                self.assertEqual(result["outcome"], "exploration-recorded-read-only-baseline")
                 self.assertEqual((result["attempted"], result["completed"], result["unknown"]), (3, 3, 0))
                 self.assertGreaterEqual(len(guards), 2)
             if mode == "partial":
+                self.assertEqual(result["outcome"], "exploration-incomplete-read-only-baseline")
                 self.assertEqual((result["attempted"], result["completed"], result["unknown"]), (2, 1, 1))
             if mode in ("corrupt-wal", "bad-body", "bad-header"):
                 self.assertEqual(result["unknown"], 3)
@@ -160,6 +165,54 @@ class BaselineExecutorTests(unittest.TestCase):
         for flags in ("000", "001", "010", "011", "100", "101", "110", "111"):
             with self.subTest(flags=flags):
                 self.scenario("process-state-" + flags)
+
+    def test_local_only_prereservation_authority_stop_cannot_leave_an_unexplained_lock(self):
+        m = load()
+        for q in (True, False):
+            with self.subTest(quiescent=q), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                ledger = root / "docs.local/runs/sandbox-ledger.jsonl"
+                ledger.parent.mkdir(parents=True)
+                ledger.write_text("")
+                manifest = dict(sourceCommit="b"*40, runId="a"*32, projectNumber="123456789012")
+                manifest["requests"] = m.baseline_requests(manifest["projectNumber"])
+                locks, command = Mock(), Mock()
+                def stopped(**_):
+                    raise m.ProcessStopped(quiescent=q, reaped=q)
+                with self.assertRaises(m.ProcessStopped):
+                    m.execute(root=root, worktree=root, manifest=manifest, packet_sha="c"*64,
+                              manifest_sha="d"*64, locks=locks, authority_input={},
+                              check_authority=stopped, command=command)
+                command.assert_not_called()
+                if q:
+                    self.assertFalse(locks.close.call_args.kwargs["retain"])
+                else:
+                    terminal = json.loads(ledger.read_text().splitlines()[-1])
+                    self.assertEqual(terminal["event"], "finished")
+                    self.assertEqual(terminal["outcome"], "needs-recovery")
+                    self.assertTrue(terminal["localOnly"])
+                    self.assertEqual(terminal["attempted"], 0)
+                    self.assertEqual(terminal["credentialCliAttempts"], 0)
+                    self.assertTrue(locks.close.call_args.kwargs["retain"])
+
+    def test_real_node_pin_is_canonical_executable_and_integrity_bound(self):
+        m = load()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            node = root / "node"
+            node.write_bytes(b"synthetic installed runtime")
+            node.chmod(0o700)
+            manifest = dict(nodeExecutable=str(node), nodeExecutableSha256=m.sha(node))
+            self.assertEqual(m.pinned_node(manifest), str(node))
+            for bad in (dict(manifest, nodeExecutable="node"),
+                        dict(manifest, nodeExecutableSha256="0"*64),
+                        dict(manifest, nodeExecutable=str(root/"missing"))):
+                with self.subTest(bad=bad), self.assertRaises(m.Rejected):
+                    m.pinned_node(bad)
+            linked = root / "linked"
+            linked.symlink_to(node)
+            with self.assertRaises(m.Rejected):
+                m.pinned_node(dict(manifest, nodeExecutable=str(linked)))
 
     def test_private_helper_executes_the_single_hash_verified_byte_snapshot(self):
         m = load()

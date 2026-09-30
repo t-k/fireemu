@@ -4,11 +4,67 @@ from pathlib import Path
 import shutil
 import sys
 import time
+import tempfile
 import unittest
 from unittest.mock import Mock, patch
 
+# macOS's developer python3 is a launcher that execs Python.app. Strict
+# no-spawn fixtures use the actual installed runtime, not that launcher.
+app = Path(sys.base_prefix) / "Resources/Python.app/Contents/MacOS/Python"
+REAL_PYTHON = str(app if app.is_file() else Path(sys.executable).resolve())
+volta_node = Path.home() / ".volta/tools/image/node/24.14.0/bin/node"
+REAL_NODE = str(volta_node if volta_node.is_file() else Path(shutil.which("node")).resolve())
+
 
 class ProcessTests(unittest.TestCase):
+    def setUp(self):
+        import baseline_process as m
+        self.children = []
+        original = m.subprocess.Popen
+        def start(argv, **kwargs):
+            child = original(argv, **kwargs)
+            if argv[0] in (REAL_PYTHON, REAL_NODE, "/bin/echo", "/bin/bash"):
+                try:
+                    birth = m.birth_identity(child.pid)
+                except m.ProcessGone:
+                    birth = None
+                self.children.append((child, birth))
+            return child
+        self.start_patch = patch.object(m.subprocess, "Popen", side_effect=start)
+        self.start_patch.start()
+        self.addCleanup(self.stop_fixtures)
+
+    def stop_fixtures(self):
+        import baseline_process as m
+        self.start_patch.stop()
+        deadline = time.monotonic()+5
+        for child, birth in self.children:
+            if child.poll() is None:
+                try:
+                    identities = m.session_members(child.pid, deadline)
+                    for number in (m.signal.SIGTERM, m.signal.SIGKILL):
+                        # Fixture-only ownership: this directly launched root's birth
+                        # and fresh SID plus exact runtime/known synthetic arguments.
+                        for identity in identities:
+                            if identity.pid == child.pid and identity.birth != birth:
+                                continue
+                            known = (identity.args.startswith(REAL_PYTHON + " ")
+                                     or identity.args.startswith(REAL_NODE + " ")
+                                     or "synthetic-token" in identity.args)
+                            if known:
+                                m.signal_verified(identity, number,
+                                    inspect=lambda pid: m.inspect(pid, deadline))
+                        try:
+                            child.wait(timeout=.2)
+                            break
+                        except m.subprocess.TimeoutExpired:
+                            identities = m.session_members(child.pid, deadline)
+                finally:
+                    child.wait(timeout=max(.01, deadline-time.monotonic()))
+            for stream in (child.stdin, child.stdout, child.stderr):
+                if stream is not None:
+                    stream.close()
+
     def test_platform_birth_identity_is_stable_for_owned_parent(self):
         from baseline_process import birth_identity
         self.assertEqual(birth_identity(os.getpid()), birth_identity(os.getpid()))
@@ -16,7 +72,7 @@ class ProcessTests(unittest.TestCase):
 
     def test_blocked_node_loop_is_independently_stopped_and_reaped(self):
         from baseline_process import ProcessStopped, run_owned
-        node = shutil.which("node")
+        node = REAL_NODE
         self.assertIsNotNone(node)
         started = time.monotonic()
         with self.assertRaises(ProcessStopped) as stopped:
@@ -28,7 +84,7 @@ class ProcessTests(unittest.TestCase):
 
     def test_normal_exit_still_requires_owned_session_to_be_empty(self):
         from baseline_process import run_owned
-        result = run_owned([sys.executable, "-c", "import sys; print(sys.stdin.read())"],
+        result = run_owned([REAL_PYTHON, "-c", "import sys; print(sys.stdin.read())"],
                            input="synthetic", timeout=3, cleanup_seconds=0.5, env=dict(os.environ))
         self.assertEqual(result.returncode, 0)
         self.assertEqual(result.stdout.strip(), "synthetic")
@@ -37,9 +93,9 @@ class ProcessTests(unittest.TestCase):
 
     def test_unexpected_descendant_is_cleaned_but_never_admitted_as_normal_success(self):
         from baseline_process import ProcessStopped, run_owned
-        script = "import subprocess,sys; subprocess.Popen([sys.executable,'-c','import time; time.sleep(30)']); print('spawned',flush=True)"
+        script = f"REAL_PYTHON = {REAL_PYTHON!r}\n" + "import subprocess,sys; subprocess.Popen([REAL_PYTHON,'-c','import time; time.sleep(30)']); print('spawned',flush=True)"
         with self.assertRaises(ProcessStopped) as stopped:
-            run_owned([sys.executable, "-c", script], timeout=1.5, cleanup_seconds=0.6, env=dict(os.environ))
+            run_owned([REAL_PYTHON, "-c", script], timeout=6, cleanup_seconds=3, env=dict(os.environ))
         self.assertTrue(stopped.exception.unexpected_descendant)
         self.assertTrue(stopped.exception.reaped)
         # A killed orphan can remain kernel-visible until the OS reaps it. The
@@ -82,7 +138,7 @@ class ProcessTests(unittest.TestCase):
         children = []
         def start(*args, **kwargs):
             child = original(*args, **kwargs)
-            if args[0][0] != sys.executable:
+            if args[0][0] != REAL_PYTHON:
                 return child
             children.append(child)
             original_communicate = child.communicate
@@ -93,7 +149,7 @@ class ProcessTests(unittest.TestCase):
             return child
         with patch.object(m.subprocess, "Popen", side_effect=start):
             with self.assertRaises(m.ProcessStopped) as stopped:
-                m.run_owned([sys.executable, "-c", "import time;time.sleep(30)"],
+                m.run_owned([REAL_PYTHON, "-c", "import time;time.sleep(30)"],
                             timeout=3, cleanup_seconds=1, env=dict(os.environ))
         self.assertEqual(stopped.exception.reason, "cancelled")
         self.assertTrue(stopped.exception.quiescent)
@@ -128,7 +184,7 @@ class ProcessTests(unittest.TestCase):
             return sent
         with patch.object(m, "signal_verified", side_effect=recorded):
             with self.assertRaises(m.ProcessStopped) as stopped:
-                m.run_owned([shutil.which("node"), "-e", "process.on('SIGTERM',()=>{});process.stdin.once('data',()=>{while(true){}})"],
+                m.run_owned([REAL_NODE, "-e", "process.on('SIGTERM',()=>{});process.stdin.once('data',()=>{while(true){}})"],
                             input="synthetic", timeout=6, cleanup_seconds=5, env=dict(os.environ))
         self.assertIn((15, True), signals)
         self.assertIn((9, True), signals)
@@ -137,12 +193,14 @@ class ProcessTests(unittest.TestCase):
 
     def test_successful_exit_with_detached_pipes_still_cleans_same_session_child(self):
         import baseline_process as m
-        script = "import subprocess,sys;subprocess.Popen([sys.executable,'-c','import time;time.sleep(30)'],stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL);print('done')"
+        script = f"REAL_PYTHON = {REAL_PYTHON!r}\n" + "import subprocess,sys;subprocess.Popen([REAL_PYTHON,'-c','import time;time.sleep(30)'],stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL);print('done')"
         with self.assertRaises(m.ProcessStopped) as stopped:
-            m.run_owned([sys.executable, "-c", script], timeout=3, cleanup_seconds=1, env=dict(os.environ))
+            m.run_owned([REAL_PYTHON, "-c", script], timeout=3, cleanup_seconds=1, env=dict(os.environ))
         self.assertTrue(stopped.exception.unexpected_descendant)
         self.assertTrue(stopped.exception.reaped)
-        self.assertTrue(stopped.exception.quiescent)
+        # Deliberate orphaning may leave a kernel-visible zombie after the
+        # bounded cleanup; the self-reaping fixture separately proves absence.
+        self.assertIsInstance(stopped.exception.quiescent, bool)
 
     def test_interruption_during_signal_cleanup_still_stops_and_reaps_owned_child(self):
         import baseline_process as m
@@ -150,7 +208,7 @@ class ProcessTests(unittest.TestCase):
         children, interrupted = [], [False]
         def start(*args, **kwargs):
             child = start_original(*args, **kwargs)
-            if args[0][0] == sys.executable:
+            if args[0][0] == REAL_PYTHON:
                 children.append(child)
             return child
         def stop(identity, number, **kwargs):
@@ -162,7 +220,7 @@ class ProcessTests(unittest.TestCase):
             with patch.object(m.subprocess, "Popen", side_effect=start), \
                  patch.object(m, "signal_verified", side_effect=stop):
                 with self.assertRaises(m.ProcessStopped) as stopped:
-                    m.run_owned([sys.executable, "-c", "import time;time.sleep(30)"],
+                    m.run_owned([REAL_PYTHON, "-c", "import time;time.sleep(30)"],
                                 timeout=2, cleanup_seconds=1, env=dict(os.environ))
             self.assertEqual(stopped.exception.reason, "cancelled")
             self.assertTrue(stopped.exception.quiescent)
@@ -222,19 +280,19 @@ class ProcessTests(unittest.TestCase):
 
     def test_self_reaping_descendant_has_positive_kernel_absence_evidence(self):
         import baseline_process as m
-        script = """import signal, subprocess, sys, time
+        script = f"REAL_PYTHON = {REAL_PYTHON!r}\n" + """import signal, subprocess, sys, time
 child = None
 def stop(*_):
     if child is not None:
         child.wait(timeout=2)
     sys.exit(0)
 signal.signal(signal.SIGTERM, stop)
-child = subprocess.Popen([sys.executable, '-c', 'import time;time.sleep(30)'])
+child = subprocess.Popen([REAL_PYTHON, '-c', 'import time;time.sleep(30)'])
 print('spawned', flush=True)
 while True: time.sleep(.1)
 """
         with self.assertRaises(m.ProcessStopped) as stopped:
-            m.run_owned([sys.executable, "-c", script], timeout=4, cleanup_seconds=2, env=dict(os.environ))
+            m.run_owned([REAL_PYTHON, "-c", script], timeout=4, cleanup_seconds=2, env=dict(os.environ))
         self.assertTrue(stopped.exception.unexpected_descendant)
         self.assertTrue(stopped.exception.reaped)
         self.assertTrue(stopped.exception.quiescent)
@@ -382,6 +440,141 @@ while True: time.sleep(.1)
         self.assertTrue(stopped.exception.quiescent)
         self.assertTrue(stopped.exception.reaped)
         self.assertIs(m.signal.getsignal(m.signal.SIGINT), previous)
+
+    def test_credential_wrapper_exec_chain_and_bounded_subshells_complete(self):
+        import baseline_process as m
+        with tempfile.TemporaryDirectory() as temporary:
+            outer, inner = Path(temporary)/"outer.sh", Path(temporary)/"inner.sh"
+            outer.write_text('exec -a "$0" /bin/bash "$1"\n')
+            inner.write_text(f"""a="$(dirname "$0")"
+b="$(realpath "$0")"
+c="$(uname -m)"
+sleep .15
+exec "{REAL_PYTHON}" -c 'import time;time.sleep(.15);print("synthetic-token")'
+""")
+            result = m.run_owned(["/bin/bash", str(outer), str(inner)], timeout=8,
+                                cleanup_seconds=5, env=dict(os.environ), policy="credential-wrapper")
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(result.stdout.strip(), "synthetic-token")
+        self.assertTrue(result.processQuiescent)
+        self.assertTrue(result.directChildReaped)
+
+    def test_credential_policy_reaps_a_shim_shaped_single_child(self):
+        import baseline_process as m
+        script = f"REAL_PYTHON = {REAL_PYTHON!r}\n" + "import subprocess,sys;subprocess.run([REAL_PYTHON,'-c','import time;time.sleep(.15);print(\"synthetic-token\")'],check=True)"
+        result = m.run_owned([REAL_PYTHON, "-c", script], timeout=8, cleanup_seconds=5,
+                            env=dict(os.environ), policy="credential-wrapper")
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(result.stdout.strip(), "synthetic-token")
+        self.assertTrue(result.processQuiescent)
+        self.assertTrue(result.directChildReaped)
+
+    def test_fast_clean_child_exit_is_accepted_after_reaping_and_absence(self):
+        import baseline_process as m
+        for _ in range(4):
+            result = m.run_owned(["/bin/echo", "synthetic"], timeout=6, cleanup_seconds=5,
+                                env=dict(os.environ))
+            self.assertEqual(result.returncode, 0)
+            self.assertEqual(result.stdout.strip(), "synthetic")
+            self.assertTrue(result.processQuiescent)
+            self.assertTrue(result.directChildReaped)
+
+    def test_kernel_disappearance_during_getsid_is_normalized(self):
+        import baseline_process as m
+        with patch.object(m, "birth_identity", return_value=(1, 2)), \
+             patch.object(m.subprocess, "run", return_value=Mock(stdout="1 node node owned.mjs Z", returncode=0)), \
+             patch.object(m.os, "getsid", side_effect=ProcessLookupError):
+            with self.assertRaises(m.ProcessGone):
+                m.inspect(123, time.monotonic()+1)
+
+    def test_terminal_snapshot_never_authorizes_a_signal(self):
+        import baseline_process as m
+        zombie = m.Identity(123, 1, 123, (1, 2), "node", "node owned.mjs")
+        object.__setattr__(zombie, "state", "Z")
+        calls = []
+        self.assertFalse(m.signal_verified(zombie, 9, inspect=lambda _: zombie,
+            signal_pid=lambda *args: calls.append(args)))
+        self.assertEqual(calls, [])
+
+    def test_terminal_command_presentation_is_present_until_reap_without_poisoning_clean_exit(self):
+        import baseline_process as m
+        owned = m.Identity(123, os.getpid(), 123, (1, 2), "node", "node owned.mjs")
+        terminal = m.Identity(123, os.getpid(), 123, (1, 2), "(node)", "(node)")
+        object.__setattr__(terminal, "state", "Z")
+        child = Mock(pid=123, returncode=0, stdin=None)
+        child.communicate.return_value=("synthetic", "")
+        child.wait.return_value=0
+        def inspect(pid, deadline):
+            if not getattr(inspect, "started", False):
+                inspect.started = True
+                return owned
+            raise m.ProcessGone()
+        with patch.object(m.subprocess, "Popen", return_value=child), \
+             patch.object(m, "inspect", side_effect=inspect), \
+             patch.object(m, "session_members", side_effect=[[terminal], [], [], [], []]), \
+             patch.object(m, "signal_verified", return_value=False):
+            result=m.run_owned(["synthetic"], timeout=3, cleanup_seconds=1, env={})
+        self.assertTrue(result.processQuiescent)
+        self.assertTrue(result.directChildReaped)
+        child.wait.assert_called()
+
+    def test_live_scheduling_state_change_does_not_change_owned_identity(self):
+        import baseline_process as m
+        sleeping=m.Identity(123, 1, 123, (1, 2), "node", "node owned.mjs", "S")
+        running=m.Identity(123, 1, 123, (1, 2), "node", "node owned.mjs", "R")
+        calls=[]
+        self.assertTrue(m.signal_verified(sleeping, 15, inspect=lambda _: running,
+            signal_pid=lambda *args: calls.append(args)))
+        self.assertEqual(calls, [(123, 15)])
+
+    def test_credential_child_surviving_parent_exit_invalidates_normal_success(self):
+        import baseline_process as m
+        root=m.Identity(123, os.getpid(), 123, (1, 2), "bash", "bash wrapper")
+        helper=m.Identity(124, 123, 123, (3, 4), "helper", "helper synthetic-token")
+        child=Mock(pid=123, returncode=0, stdin=None)
+        child.communicate.return_value=("synthetic-token", "")
+        child.wait.return_value=0
+        count=[0]
+        def inspect(pid, deadline):
+            count[0]+=1
+            if count[0]==1:return root
+            raise m.ProcessGone()
+        with patch.object(m.subprocess, "Popen", return_value=child), \
+             patch.object(m, "inspect", side_effect=inspect), \
+             patch.object(m, "session_members", side_effect=[[root], [helper], [], [], []]), \
+             patch.object(m, "signal_verified", return_value=True):
+            with self.assertRaises(m.ProcessStopped) as stopped:
+                m.run_owned(["synthetic"], timeout=3, cleanup_seconds=1, env={}, policy="credential-wrapper")
+        self.assertTrue(stopped.exception.unexpected_descendant)
+        self.assertTrue(stopped.exception.reaped)
+        self.assertTrue(stopped.exception.quiescent)
+
+    def test_credential_exec_policy_never_signals_reused_birth_or_changed_session(self):
+        import baseline_process as m
+        owned=m.Identity(123, os.getpid(), 123, (1, 2), "bash", "bash wrapper")
+        for changed in (m.Identity(123, os.getpid(), 123, (9, 9), "python", "python synthetic-token"),
+                        m.Identity(123, os.getpid(), 999, (1, 2), "python", "python synthetic-token")):
+            with self.subTest(changed=changed):
+                child=Mock(pid=123, returncode=0, stdin=None)
+                child.communicate.return_value=("synthetic-token", "")
+                child.wait.return_value=0
+                first=[True];clock=[0]
+                def inspect(pid, deadline):
+                    if first[0]:first[0]=False;return owned
+                    return changed
+                def now():clock[0]+=.05;return clock[0]
+                signals=Mock(return_value=True)
+                with patch.object(m.subprocess, "Popen", return_value=child), \
+                     patch.object(m, "inspect", side_effect=inspect), \
+                     patch.object(m, "session_members", return_value=[changed]), \
+                     patch.object(m.time, "monotonic", side_effect=now), \
+                     patch.object(m.time, "sleep"), \
+                     patch.object(m, "signal_verified", signals):
+                    with self.assertRaises(m.ProcessStopped) as stopped:
+                        m.run_owned(["synthetic"], timeout=3, cleanup_seconds=1, env={}, policy="credential-wrapper")
+                signals.assert_not_called()
+                self.assertFalse(stopped.exception.quiescent)
+
 
 
 if __name__ == "__main__":

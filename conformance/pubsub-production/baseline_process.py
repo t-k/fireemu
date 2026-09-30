@@ -1,9 +1,9 @@
 """Bounded coordinator child ownership; never signals a process group.
 
-Admission requires reviewed no-spawn commands. A session census detects unexpected children but does not prove containment of arbitrary session-escaping programs.
+Node admission requires reviewed no-spawn commands. The fixed credential wrapper may exec and run bounded in-session helpers. A session census does not prove containment of arbitrary session-escaping programs.
 """
 import ctypes
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import os
 from pathlib import Path
 import signal
@@ -20,6 +20,7 @@ class Identity:
     birth: tuple
     comm: str
     args: str
+    state: str = field(default="", compare=False)
 
 
 class ProcessGone(ProcessLookupError):
@@ -88,20 +89,25 @@ def inspect(pid, deadline):
     remaining = deadline - time.monotonic()
     if remaining <= 0:
         raise TimeoutError("process metadata deadline")
-    row = subprocess.run(["ps", "-p", str(pid), "-o", "ppid=", "-o", "comm=", "-o", "args="],
+    row = subprocess.run(["/bin/ps", "-ww", "-p", str(pid), "-o", "ppid=", "-o", "comm=", "-o", "args=", "-o", "stat="],
         capture_output=True, text=True, timeout=remaining, check=False)
-    fields = row.stdout.strip().split(None, 2)
-    if row.returncode != 0 or len(fields) != 3:
+    columns = row.stdout.strip().rsplit(None, 1)
+    fields = columns[0].split(None, 2) if columns else []
+    if row.returncode != 0 or len(columns) != 2 or len(fields) != 3:
         gone_or_unavailable(pid)
-    sid = os.getsid(pid)
+    try:
+        sid = os.getsid(pid)
+    except ProcessLookupError:
+        raise ProcessGone("process disappeared") from None
     if before != birth_identity(pid):
         raise InspectionUnavailable("process identity changed during inspection")
-    return Identity(pid, int(fields[0]), sid, before, fields[1], fields[2])
+    return Identity(pid, int(fields[0]), sid, before, fields[1], fields[2], columns[1])
 
 
 def signal_verified(identity, number, *, inspect, signal_pid=os.kill):
     try:
-        if inspect(identity.pid) != identity:
+        current = inspect(identity.pid)
+        if identity.state.startswith("Z") or current.state.startswith("Z") or current != identity:
             return False
         signal_pid(identity.pid, number)
         return True
@@ -113,7 +119,7 @@ def session_members(sid, deadline):
     remaining = deadline - time.monotonic()
     if remaining <= 0:
         raise TimeoutError("process census deadline")
-    census = subprocess.run(["ps", "-A", "-o", "pid="], capture_output=True,
+    census = subprocess.run(["/bin/ps", "-A", "-o", "pid="], capture_output=True,
         text=True, timeout=remaining, check=True)
     members, uncertain = [], False
     for field in census.stdout.split():
@@ -135,8 +141,10 @@ def session_members(sid, deadline):
     return members
 
 
-def run_owned(argv, *, input=None, timeout, env, cleanup_seconds=5):
+def run_owned(argv, *, input=None, timeout, env, cleanup_seconds=5, policy="no-spawn"):
     """Main-thread owner; asynchronous operator signals never escape shutdown phases."""
+    if policy not in ("no-spawn", "credential-wrapper"):
+        raise ValueError("closed reviewed process policy required")
     cancelled, previous = [False], {}
     def defer(*_):
         cancelled[0] = True
@@ -147,7 +155,7 @@ def run_owned(argv, *, input=None, timeout, env, cleanup_seconds=5):
             previous[number] = signal.getsignal(number)
             signal.signal(number, defer)
         result = _run_owned(argv, input=input, timeout=timeout, env=env,
-                            cleanup_seconds=cleanup_seconds, cancelled=lambda: cancelled[0])
+                            cleanup_seconds=cleanup_seconds, cancelled=lambda: cancelled[0], policy=policy)
     finally:
         for number, handler in previous.items():
             signal.signal(number, handler)
@@ -157,7 +165,7 @@ def run_owned(argv, *, input=None, timeout, env, cleanup_seconds=5):
     return result
 
 
-def _run_owned(argv, *, input, timeout, env, cleanup_seconds, cancelled):
+def _run_owned(argv, *, input, timeout, env, cleanup_seconds, cancelled, policy):
     if timeout <= cleanup_seconds or cleanup_seconds <= 0:
         raise ValueError("execution budget must include positive shutdown reserve")
     deadline = time.monotonic() + timeout
@@ -169,15 +177,22 @@ def _run_owned(argv, *, input, timeout, env, cleanup_seconds, cancelled):
     observed = {}
     unavailable = object()
 
-    def observe(members):
+    def observe(members, *, shutdown=False):
         nonlocal unexpected, cleanup_unverified
+        wrapper = policy == "credential-wrapper"
+        if wrapper and (len(members) > 16 or len(set(observed) | {member.pid for member in members}) > 64):
+            unexpected, cleanup_unverified = True, True
         for identity in members:
-            unexpected = unexpected or identity.pid != child.pid
+            if identity.pid not in observed and len(observed) >= 64:
+                unexpected, cleanup_unverified = True, True
+                continue
+            unexpected = unexpected or (identity.pid != child.pid and (not wrapper or shutdown))
             previous = observed.get(identity.pid)
-            # Reparenting can follow the owned parent's exit. Birth, command and session
-            # must remain unchanged before a refreshed identity can authorize a signal.
-            if previous is not None and (identity.birth, identity.comm, identity.args, identity.sid) != (
-                    previous.birth, previous.comm, previous.args, previous.sid):
+            # Reparenting can follow the owned parent's exit. Birth and session must
+            # remain unchanged; only reviewed credential wrappers may change command.
+            changed_ownership = previous is not None and (identity.birth, identity.sid) != (previous.birth, previous.sid)
+            changed_command = previous is not None and (identity.comm, identity.args) != (previous.comm, previous.args)
+            if changed_ownership or changed_command and not wrapper and not identity.state.startswith("Z"):
                 cleanup_unverified = True
                 continue
             observed[identity.pid] = identity
@@ -201,24 +216,36 @@ def _run_owned(argv, *, input, timeout, env, cleanup_seconds, cancelled):
         def census():
             nonlocal cleanup_unverified
             try:
-                return observe(session_members(child.pid, deadline))
+                return observe(session_members(child.pid, deadline), shutdown=True)
             except InspectionUnavailable as error:
                 cleanup_unverified = True
-                return observe(error.members)
+                return observe(error.members, shutdown=True)
         return cleanup_step(census)
 
     def terminate(number):
         for identity in list(observed.values()):
             def stop():
                 nonlocal cleanup_unverified
-                sent = signal_verified(identity, number, inspect=lambda pid: inspect(pid, deadline))
+                if identity.state.startswith("Z"):
+                    return
+                current = identity
+                if policy == "credential-wrapper":
+                    try:
+                        current = inspect(identity.pid, deadline)
+                    except ProcessGone:
+                        return
+                    if (current.birth, current.sid) != (identity.birth, identity.sid):
+                        cleanup_unverified = True
+                        return
+                sent = signal_verified(current, number, inspect=lambda pid: inspect(pid, deadline))
                 if not sent:
                     try:
-                        inspect(identity.pid, deadline)
+                        remaining_identity = inspect(identity.pid, deadline)
                     except ProcessGone:
                         pass
                     else:
-                        cleanup_unverified = True
+                        if not remaining_identity.state.startswith("Z"):
+                            cleanup_unverified = True
             cleanup_step(stop)
 
     def absence():
@@ -231,10 +258,14 @@ def _run_owned(argv, *, input, timeout, env, cleanup_seconds, cancelled):
         return True
 
     try:
-        initial = inspect(child.pid, execution_deadline)
-        if initial.ppid != os.getpid() or initial.sid != child.pid:
-            raise RuntimeError("owned child session unavailable")
-        observe([initial])
+        try:
+            initial = inspect(child.pid, execution_deadline)
+        except ProcessGone:
+            initial = None
+        if initial is not None:
+            if initial.ppid != os.getpid() or initial.sid != child.pid:
+                raise RuntimeError("owned child session unavailable")
+            observe([initial])
         pending_input = input
         while time.monotonic() < execution_deadline:
             if cancelled():

@@ -15,7 +15,7 @@ async function fixture(run) {
     await run(captureBaseline, {
       root,
       base,
-      directory: join(base, `fixture-baseline-001-${runId}`),
+      directory: join(base, `fixture-baseline-002-${runId}`),
     });
   } finally {
     await rm(root, { recursive: true });

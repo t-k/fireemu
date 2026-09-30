@@ -9,8 +9,8 @@ const pins = {
   runnerSha256: "c".repeat(64),
   sourceCommit: "d".repeat(40),
 };
-const subject = "PUBSUB-EVENTARC fixture-baseline-001",
-  envelopeId = "PUBSUB-EVENTARC-fixture-baseline-001";
+const subject = "PUBSUB-EVENTARC fixture-baseline-002",
+  envelopeId = "PUBSUB-EVENTARC-fixture-baseline-002";
 function ledger() {
   return [
     "- 2026-09-28 | 調整役への委任（本番の送信） | decision=APPROVE; historical owner prose. | オーナー（direct） | source",

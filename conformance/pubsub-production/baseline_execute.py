@@ -34,7 +34,7 @@ _process = source_module("lane7_baseline_process", Path(__file__).with_name("bas
 Rejected, append_ledger, check_ledger, sha = _common.Rejected, _common.append_ledger, _common.check_ledger, _common.sha
 ProcessStopped, run_owned = _process.ProcessStopped, _process.run_owned
 PROJECT, LOCK_HELPER = _common.PROJECT, _common.LOCK_HELPER
-TASK, ENVELOPE, SUBJECT = "PUBSUB-EVENTARC-FIXTURE-BASELINE", "PUBSUB-EVENTARC-fixture-baseline-001", "PUBSUB-EVENTARC fixture-baseline-001"
+TASK, ENVELOPE, SUBJECT = "PUBSUB-EVENTARC-FIXTURE-BASELINE", "PUBSUB-EVENTARC-fixture-baseline-002", "PUBSUB-EVENTARC fixture-baseline-002"
 RESERVE, CAP = 0.01, 3
 
 
@@ -118,7 +118,7 @@ def execute(*, root, worktree, manifest, packet_sha, manifest_sha, locks, author
         raise Rejected("fixed read-only requests and fresh run required")
     started = monotonic()
     ledger = root / "docs.local/runs/sandbox-ledger.jsonl"
-    directory = root / "docs.local/runs/codex-lane7" / ("fixture-baseline-001-" + manifest["runId"])
+    directory = root / "docs.local/runs/codex-lane7" / ("fixture-baseline-002-" + manifest["runId"])
     reserved, terminal, retain = False, False, False
     credential_attempts, child_started, quiescent = 0, False, True
     def admit():
@@ -126,6 +126,9 @@ def execute(*, root, worktree, manifest, packet_sha, manifest_sha, locks, author
         if remaining <= 10:
             raise Rejected("wall budget exhausted before live authority")
         check_authority(timeout=min(10, remaining - 5))
+    common = dict(taskId=TASK, project=PROJECT, runDir=str(directory), runId=manifest["runId"],
+        packetId="fixture-baseline-002", envelopeId=ENVELOPE, packetSha256=packet_sha,
+        corpusDigest=manifest_sha, sourceCommit=manifest["sourceCommit"], estimatedUsd=RESERVE)
     locks.acquire()
     try:
         if directory.exists() or directory.is_symlink():
@@ -133,13 +136,10 @@ def execute(*, root, worktree, manifest, packet_sha, manifest_sha, locks, author
         admit()
         check_ledger([json.loads(line) for line in ledger.read_text().splitlines() if line.strip()],
                      now(), packet_sha, task=TASK, reserve=RESERVE)
-        common = dict(taskId=TASK, project=PROJECT, runDir=str(directory), runId=manifest["runId"],
-            packetId="fixture-baseline-001", envelopeId=ENVELOPE, packetSha256=packet_sha,
-            corpusDigest=manifest_sha, sourceCommit=manifest["sourceCommit"], estimatedUsd=RESERVE)
         append(ledger, {**common, "ts": now().isoformat(), "event": "reserved", "maxRequests": CAP,
                        "maxCredentialCliAttempts": 1, "writes": "none"})
         reserved = True
-        result = dict(outcome="incomplete-read-only-baseline", attempted=0, completed=0, unknown=0, mutationAttempts=0)
+        result = dict(outcome="exploration-incomplete-read-only-baseline", attempted=0, completed=0, unknown=0, mutationAttempts=0)
         try:
             env = safe_environment()
             remaining = 600 - (monotonic() - started)
@@ -153,7 +153,7 @@ def execute(*, root, worktree, manifest, packet_sha, manifest_sha, locks, author
             locks.mark_sent(mutation=False)
             quiescent = False
             token_result = command(["gcloud", "auth", "application-default", "print-access-token"],
-                timeout=min(60, remaining - 5), env=env)
+                timeout=min(60, remaining - 5), env=env, policy="credential-wrapper")
             quiescent = token_result.processQuiescent is True and token_result.directChildReaped is True
             token = token_result.stdout.strip()
             if not quiescent or token_result.returncode != 0 or not token or len(token) > 16384 or any(ch.isspace() for ch in token):
@@ -163,7 +163,7 @@ def execute(*, root, worktree, manifest, packet_sha, manifest_sha, locks, author
             if remaining <= 10:
                 raise Rejected("wall budget exhausted before collector")
             child_started, quiescent = True, False
-            child = command(["node", str(worktree / "conformance/pubsub-production/baseline-capture.mjs")],
+            child = command([manifest["nodeExecutable"], str(worktree / "conformance/pubsub-production/baseline-capture.mjs")],
                 input=json.dumps(dict(root=str(root), projectNumber=manifest["projectNumber"],
                     runId=manifest["runId"], accessToken=token, authority=authority_input)),
                 timeout=remaining - 5, env=env)
@@ -176,7 +176,7 @@ def execute(*, root, worktree, manifest, packet_sha, manifest_sha, locks, author
             if any(summary.get(k) != v for k, v in counts.items()):
                 raise Rejected("summary disagrees with durable raw receipts")
             if child.returncode == 0 and counts == dict(attempted=3, completed=3, unknown=0) and summary.get("outcome") == "captured-read-only-baseline" and not summary.get("terminationRequired"):
-                result["outcome"] = "captured-read-only-baseline"
+                result["outcome"] = "exploration-recorded-read-only-baseline"
         except (Exception, KeyboardInterrupt) as error:
             if isinstance(error, ProcessStopped):
                 quiescent = error.quiescent and error.reaped
@@ -199,8 +199,15 @@ def execute(*, root, worktree, manifest, packet_sha, manifest_sha, locks, author
         append(ledger, {**common, "ts": now().isoformat(), "event": "finished", **result})
         terminal = True
         return result
-    except ProcessStopped:
-        retain = True
+    except ProcessStopped as error:
+        retain = not (error.quiescent and error.reaped) or error.unexpected_descendant
+        if retain and not reserved:
+            append(ledger, {**common, "ts": now().isoformat(), "event": "finished",
+                "outcome": "needs-recovery", "phase": "pre-reservation-authority", "localOnly": True,
+                "attempted": 0, "completed": 0, "unknown": 0, "mutationAttempts": 0,
+                "credentialCliAttempts": 0, "processQuiescent": error.quiescent,
+                "directChildReaped": error.reaped, "sandboxAtBaseline": False})
+            terminal = True
         raise
     finally:
         locks.close(success=terminal and not retain, retain=retain or reserved and not terminal)
@@ -210,6 +217,15 @@ def private_file(root, path):
     if path.is_symlink() or not path.resolve().is_relative_to(root / "docs.local") or not path.is_file():
         raise Rejected("private regular file required")
     return path
+
+
+def pinned_node(manifest):
+    path = Path(manifest["nodeExecutable"])
+    if (not path.is_absolute() or path.is_symlink() or path.resolve() != path
+        or not path.is_file() or not os.access(path, os.X_OK)
+        or sha(path) != manifest["nodeExecutableSha256"]):
+        raise Rejected("canonical reviewed real Node binary required")
+    return str(path)
 
 
 def main():
@@ -240,8 +256,9 @@ def main():
         path = worktree / entry["path"]
         if path.is_symlink() or sha(path) != entry["sha256"]:
             raise Rejected("reviewed source hash mismatch")
+    node = pinned_node(manifest)
     requests = baseline_requests(manifest["projectNumber"])
-    node_requests = json.loads(subprocess.check_output(["node", "--input-type=module", "-e",
+    node_requests = json.loads(subprocess.check_output([node, "--input-type=module", "-e",
         "import {baselineRequests} from './conformance/pubsub-production/fixture-baseline.mjs'; process.stdout.write(JSON.stringify(baselineRequests(process.argv[1])))",
         manifest["projectNumber"]], cwd=worktree, text=True, timeout=10, env=env))
     if requests != node_requests or manifest["requests"] != requests or manifest["bounds"] != dict(maxResourceRequests=3, maxCredentialCliInvocations=1, maxWallSeconds=600, reserveUsd=RESERVE, taskCapUsd=10):
@@ -265,7 +282,7 @@ def main():
     def authority(*, timeout):
         if (root / "docs.local/runs/QUIET-WINDOW").exists():
             raise Rejected("quiet window active")
-        checked = run_owned(["node", str(worktree / "conformance/pubsub-production/baseline-authority.mjs")],
+        checked = run_owned([node, str(worktree / "conformance/pubsub-production/baseline-authority.mjs")],
             input=json.dumps({**authority_input, "ledgerText": (root / "docs.local/instructions/owner-decisions.md").read_text()}),
             timeout=timeout, env=env)
         if checked.returncode != 0:
@@ -278,7 +295,7 @@ def main():
         result = execute(root=root, worktree=worktree, manifest=manifest, packet_sha=packet_sha,
             manifest_sha=manifest_sha, locks=locks, authority_input=authority_input, check_authority=authority)
         print(json.dumps(result))
-        if result["outcome"] != "captured-read-only-baseline":
+        if result["outcome"] != "exploration-recorded-read-only-baseline":
             raise SystemExit(1)
     finally:
         signal.signal(signal.SIGTERM, previous)

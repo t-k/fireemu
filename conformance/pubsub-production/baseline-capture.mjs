@@ -24,7 +24,7 @@ export async function captureBaseline({
   const base = join(canonicalRoot, "docs.local/runs/codex-lane7");
   if (resolve(root) !== canonicalRoot || (await realpath(base)) !== base)
     throw new Error("canonical private root required");
-  const directory = join(base, `fixture-baseline-001-${runId}`);
+  const directory = join(base, `fixture-baseline-002-${runId}`);
   await mkdir(directory, { mode: 0o700 });
   await syncParent(base);
   const summary = await collectBaseline({

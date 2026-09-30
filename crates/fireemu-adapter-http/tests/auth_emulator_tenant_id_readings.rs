@@ -10,7 +10,9 @@
 //!
 //! The strict profile follows the production recordings and is unchanged.
 
-use std::sync::{Arc, Mutex, RwLock};
+#![allow(dead_code)] // helpers shared with the other tenant test files
+
+use std::sync::{Arc, Mutex};
 
 use fireemu_adapter_http::identity_toolkit::{
     handle, handle_with, AuthQueryLimits, AuthState, ClientApiKeyPolicy, FakeCustomTokenExpiry,
@@ -20,7 +22,6 @@ use fireemu_core_auth::jwt::decode_unsigned;
 use fireemu_core_auth::mfa::TotpPolicy;
 use fireemu_core_auth::store::{AuthRegistry, AuthStore};
 use fireemu_core_session::clock::VirtualClock;
-use fireemu_core_session::tenancy::Tenancy;
 use fireemu_core_types::determinism::SplitMix64;
 use fireemu_core_types::time::LogicalInstant;
 use serde_json::{json, Value};

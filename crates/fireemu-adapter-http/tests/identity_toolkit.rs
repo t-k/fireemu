@@ -15235,6 +15235,7 @@ fn the_query_tenant_does_not_bind_a_refresh_token_namespace_in_the_emulator_prof
 }
 
 #[test]
+#[allow(clippy::too_many_lines)]
 fn a_named_tenant_must_match_id_token_before_auth_work() {
     let mut s = state();
     let registry = Arc::new(fireemu_core_auth::store::AuthRegistry::new(

@@ -3454,7 +3454,6 @@ fn emulator_query_tenant(
         return None;
     };
     match route.handler {
-        routes::Handler::EmulatorAction => query_tenant,
         routes::Handler::AdminBatchGet => {
             // `accounts:batchGet` has no body; a tenant on its path is a tenant project, which
             // reads its own accounts.
@@ -3462,9 +3461,11 @@ fn emulator_query_tenant(
                 routes::scoped_target(path).is_some_and(|(_, tenant)| tenant.is_some());
             query_tenant.filter(|_| !names_a_tenant)
         }
-        // Routes the official emulator does not serve (the client policy reads and the like) have
+        // The action link is the query's tenant's own route (the official handler reads it), and
+        // routes the official emulator does not serve (the client policy reads and the like) have
         // no official reading of the query to follow, and keep theirs.
-        routes::Handler::PasswordPolicy
+        routes::Handler::EmulatorAction
+        | routes::Handler::PasswordPolicy
         | routes::Handler::RecaptchaParams
         | routes::Handler::RecaptchaConfig
         | routes::Handler::Projects

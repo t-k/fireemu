@@ -7916,13 +7916,13 @@ impl AuthRegistry {
             .flatten()
             .or_else(|| metadata.display_name.clone());
         loop {
-            let tenant = match chosen_id {
-                Some(id) => id.to_owned(),
-                None => {
+            let tenant = chosen_id.map_or_else(
+                || {
                     let sequence = self.next_tenant_id.fetch_add(1, Ordering::Relaxed);
                     generated_tenant_id(display_name.as_deref(), sequence)
-                }
-            };
+                },
+                str::to_owned,
+            );
             let store = self.build_tenant_store(project, &tenant, parent)?;
             if let Some(patch) =
                 self.effective_tenant_config_override(&(project.to_owned(), tenant.clone()))

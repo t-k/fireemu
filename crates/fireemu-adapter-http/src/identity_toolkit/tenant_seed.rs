@@ -87,11 +87,11 @@ fn prepare_one(
 pub fn prepare_tenant_seeds(
     documents: &[Value],
     emulator: bool,
-    written_at: Option<String>,
+    written_at: Option<&str>,
 ) -> Result<Vec<TenantSeed>, String> {
     let mut seeds: Vec<TenantSeed> = Vec::with_capacity(documents.len());
     for (index, document) in documents.iter().enumerate() {
-        let seed = prepare_one(document, emulator, written_at.clone())
+        let seed = prepare_one(document, emulator, written_at.map(str::to_owned))
             .map_err(|error| format!("auth.tenants[{index}]: {error}"))?;
         if seeds.iter().any(|earlier| earlier.id == seed.id) {
             return Err(format!(

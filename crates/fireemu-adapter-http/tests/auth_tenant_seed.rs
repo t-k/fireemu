@@ -5,14 +5,14 @@
 use std::sync::{Arc, Mutex};
 
 use fireemu_adapter_http::identity_toolkit::{
-    handle, handle_with, AuthQueryLimits, AuthState, ClientApiKeyPolicy, FakeCustomTokenExpiry,
+    handle_with, AuthQueryLimits, AuthState, ClientApiKeyPolicy, FakeCustomTokenExpiry,
     IdpContinuationPolicy, RequestHeaders,
 };
 use fireemu_core_auth::mfa::TotpPolicy;
 use fireemu_core_auth::store::{AuthRegistry, AuthStore};
 use fireemu_core_session::clock::VirtualClock;
 use fireemu_core_types::determinism::SplitMix64;
-use fireemu_core_types::time::{LogicalDuration, LogicalInstant};
+use fireemu_core_types::time::LogicalInstant;
 use serde_json::{json, Value};
 
 const V2: &str = "/identitytoolkit.googleapis.com/v2";
@@ -139,7 +139,9 @@ fn the_seed_reads_the_document_as_the_create_route_does() {
     // a value the route reads as written is read the same way.
     let refused = |doc: Value, expected: &str| {
         for emulator in [true, false] {
-            let error = seeds(&[doc.clone()], emulator).err().unwrap_or_default();
+            let error = seeds(std::slice::from_ref(&doc), emulator)
+                .err()
+                .unwrap_or_default();
             assert!(error.starts_with("auth.tenants[0]:"), "{doc}: {error}");
             assert!(error.contains(expected), "{doc}: {error}");
         }

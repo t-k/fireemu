@@ -1442,6 +1442,25 @@ fn verify_session_accepting(
     map_error: fn(&fireemu_core_auth::jwt::JwtError) -> JsonResponse,
     legacy_tokens: LegacyTokens,
 ) -> Result<Session, JsonResponse> {
+    verify_session_accepting_with_leeway(
+        store,
+        body,
+        at,
+        map_error,
+        legacy_tokens,
+        fireemu_core_auth::jwt::IDENTITY_TOOLKIT_EXPIRY_LEEWAY_SECONDS,
+    )
+}
+
+/// [`verify_session_accepting`] with an explicit expiry leeway.
+fn verify_session_accepting_with_leeway(
+    store: &AuthStore,
+    body: &Value,
+    at: LogicalInstant,
+    map_error: fn(&fireemu_core_auth::jwt::JwtError) -> JsonResponse,
+    legacy_tokens: LegacyTokens,
+    leeway: i64,
+) -> Result<Session, JsonResponse> {
     let token = match body.get("idToken") {
         None | Some(Value::Null) => return Err(error(400, "MISSING_ID_TOKEN")),
         Some(Value::String(t)) => t.as_str(),
@@ -1449,7 +1468,6 @@ fn verify_session_accepting(
     };
     // Account lookup, update and delete also honour the legacy Identity Toolkit token (sandbox
     // recording 2026-09-24); every other route verifies ID tokens only.
-    let leeway = fireemu_core_auth::jwt::IDENTITY_TOOLKIT_EXPIRY_LEEWAY_SECONDS;
     let (v, decoded) =
         match fireemu_core_auth::jwt::verify_id_token_decoded_with_leeway(token, store, at, leeway)
         {
@@ -3872,24 +3890,38 @@ fn emulator_creates_named_tenant(
 /// called for a request whose ID token decoded, so the official exemption of `sendOobCode`
 /// `returnOobLink` without a token needs no test here. The v2 MFA enrollment routes read it too
 /// but are not `/v1/` routes, which `emulator_named_tenant` does not pre-check (a difference the
-/// contract lists).
-fn official_reads_the_id_token(resolution: routes::Resolution<'_>, body: &Value) -> bool {
+/// contract lists). `lookup` and `delete` do not parse it for a request with the owner credential
+/// (`privileged`: the official `Oauth2` security branch); the privileged `update` asserts its
+/// `localId` first and parses the token unless it carries an `oobCode`.
+fn official_reads_the_id_token(
+    resolution: routes::Resolution<'_>,
+    body: &Value,
+    privileged: bool,
+) -> bool {
     let routes::Resolution::Matched { route, .. } = resolution else {
         return false;
     };
     match route.handler {
         routes::Handler::SignUp
         | routes::Handler::AdminCreate
-        | routes::Handler::Lookup
-        | routes::Handler::Update
-        | routes::Handler::Delete
         | routes::Handler::AdminCreateSessionCookie
         | routes::Handler::SignInWithEmailLink
         | routes::Handler::SignInWithIdp
         | routes::Handler::SignInWithPhoneNumber => true,
-        // The non-`oobCode` branch of `setAccountInfo` parses the token; the `oobCode` one does
-        // not.
-        routes::Handler::AdminUpdate => str_field(body, "oobCode").is_none_or(str::is_empty),
+        // A request with the owner credential takes the official emulator's `Oauth2` branch in
+        // these two, which does not parse the token (`operations.js:225`, `:546-551`).
+        routes::Handler::Lookup | routes::Handler::Delete => !privileged,
+        // The privileged update asserts its `localId` before it parses the token, and the
+        // `oobCode` branch does not parse it (`operations.js:769`, `:831-832`).
+        routes::Handler::Update => {
+            !privileged
+                || (str_field(body, "localId").is_some_and(|id| !id.is_empty())
+                    && str_field(body, "oobCode").is_none_or(str::is_empty))
+        }
+        routes::Handler::AdminUpdate => {
+            str_field(body, "localId").is_some_and(|id| !id.is_empty())
+                && str_field(body, "oobCode").is_none_or(str::is_empty)
+        }
         routes::Handler::SendOobCode | routes::Handler::AdminSendOobCode => matches!(
             str_field(body, "requestType"),
             Some("VERIFY_EMAIL" | "VERIFY_AND_CHANGE_EMAIL")
@@ -3898,9 +3930,18 @@ fn official_reads_the_id_token(resolution: routes::Resolution<'_>, body: &Value)
     }
 }
 
+/// The tenant an ID token of `project` names (an empty claim names none), read as the official
+/// emulator reads it: the third source of an operation's target tenant.
+fn token_tenant_of_project(state: &AuthState, project: &str, body: &Value) -> Option<String> {
+    id_token_tenant(state, project, body)
+        .filter(|(_, of_project)| *of_project)
+        .map(|(tenant, _)| tenant)
+}
+
 /// The Admin account operations of the official emulator, which run in the tenant the request's
-/// body names when its path names only the project (`server.js:395-414`, no Admin special case).
-/// The store selection reads the body's tenant for them in the emulator profile; the request's
+/// body names, else its ID token names, when its path names only the project (`server.js:395-414`,
+/// no Admin special case). The store selection reads the body's tenant, then the token's, for them
+/// in the emulator profile; the request's
 /// credential is checked against the selected store's project as for a tenant path, and a caller
 /// the guards refuse gets its refusal before anything is served.
 fn official_admin_account_handler(handler: routes::Handler) -> bool {
@@ -3936,6 +3977,7 @@ fn emulator_named_tenant(
     path: &str,
     query: Option<&str>,
     body: &Value,
+    privileged: bool,
     made_on_the_way: Option<&str>,
 ) -> Result<(), JsonResponse> {
     if !state.stateless_refresh_tokens {
@@ -4001,7 +4043,7 @@ fn emulator_named_tenant(
     // The tenant agreement above is asserted for every operation (`toExegesisOperation`,
     // `server.js:399-403`); the user is looked for in the token's tenant only by the operations
     // that parse the token (`parseIdToken`, `operations.js:1715`).
-    if !official_reads_the_id_token(resolution, body) {
+    if !official_reads_the_id_token(resolution, body, privileged) {
         return Ok(());
     }
     // A tenant this request made on the way is empty: the token's user is not in it.
@@ -4271,6 +4313,7 @@ fn handle_with_policy_inner(
         path,
         query,
         body,
+        headers.authorization.as_deref() == Some(OWNER_CREDENTIAL),
         made_on_the_way.as_deref(),
     ) {
         return response;
@@ -4396,17 +4439,20 @@ fn handle_with_policy_inner(
         else {
             return error(400, "INVALID_PROJECT_ID");
         };
-        // An official Admin account operation runs in the tenant its body names (the request's
-        // tenant was made on the way, after the guards admitted it): as a tenant path selects it.
+        // An official Admin account operation runs in the tenant its body names, else the one
+        // its ID token names (the request's tenant was made on the way, after the guards
+        // admitted it): as a tenant path selects it.
         let body_tenant_store = str_field(body, "tenantId")
             .filter(|tenant| !tenant.is_empty())
+            .map(str::to_owned)
+            .or_else(|| token_tenant_of_project(state, project, body))
             .filter(|_| {
                 // The emulator profile only (as the store selection's arm below is).
                 state.stateless_refresh_tokens
                     && matches!(resolution, routes::Resolution::Matched { route, .. }
                         if official_admin_account_handler(route.handler))
             })
-            .and_then(|tenant| registry.tenant_store(project, tenant));
+            .and_then(|tenant| registry.tenant_store(project, &tenant));
         if body_tenant_store.is_some() {
             // A tenant's request takes the project's gate itself, as a tenant path's does, so the
             // routed namespace's gate is released first.
@@ -5278,6 +5324,8 @@ fn dispatch(
     options: &DispatchOptions,
 ) -> JsonResponse {
     use routes::Handler;
+    let owner_on_end_user_route = options.stateless_refresh_tokens
+        && headers.authorization.as_deref() == Some(OWNER_CREDENTIAL);
     match handler {
         Handler::Jwks => {
             // The public keys signed ID tokens verify against (empty for unsigned sessions).
@@ -5308,17 +5356,27 @@ fn dispatch(
             options.custom_token_trust.as_deref(),
             options.legacy_tokens,
         ),
-        Handler::Lookup => lookup(store, body, at, false),
+        // The emulator profile serves an end-user lookup, update or delete that carries the owner
+        // credential as the official emulator's `Oauth2` branch does: a lookup by the body's
+        // selectors and a delete by its `localId` read no ID token (`operations.js:225`,
+        // `:546-551`); the update is the privileged `setAccountInfo` (`operations.js:753`
+        // sets `privileged`), which asserts the `localId` and then updates the ID token's user
+        // when it carries a token (`operations.js:769`, `:831-838`).
+        Handler::Lookup => lookup(store, body, at, owner_on_end_user_route),
         Handler::Update | Handler::AdminUpdate => update(
             store,
             body,
             at,
             options.stateless_refresh_tokens,
-            handler == Handler::AdminUpdate,
+            handler == Handler::AdminUpdate || owner_on_end_user_route,
         ),
-        Handler::Delete => {
-            delete_account(store, body, at, false, !options.stateless_refresh_tokens)
-        }
+        Handler::Delete => delete_account(
+            store,
+            body,
+            at,
+            owner_on_end_user_route,
+            !options.stateless_refresh_tokens,
+        ),
         Handler::SendOobCode => send_oob_code(
             store,
             body,
@@ -9402,13 +9460,20 @@ fn select_store(
         let body_scoped = query_body_scope
             || (strict && handler == Some(routes::Handler::AdminLookup))
             || (!strict && handler.is_some_and(official_admin_account_handler));
-        let token_scoped = (strict && handler == Some(routes::Handler::AdminCreateSessionCookie))
-            .then(|| {
-                id_token_target
-                    .as_ref()
-                    .and_then(|(_, tenant)| tenant.as_deref())
-            })
-            .flatten();
+        // The token is the third source of the target tenant after the path and the body
+        // (`server.js:398-406`): read by the emulator profile for the official Admin account
+        // operations, when it is a token of this project (this daemon refuses another project's
+        // audience).
+        let token_scoped = ((strict && handler == Some(routes::Handler::AdminCreateSessionCookie))
+            || (!strict && handler.is_some_and(official_admin_account_handler)))
+        .then(|| {
+            id_token_target
+                .as_ref()
+                .filter(|(audience, _)| strict || audience == project)
+                .and_then(|(_, tenant)| tenant.as_deref())
+                .filter(|tenant| strict || !tenant.is_empty())
+        })
+        .flatten();
         let selected_tenant = query_tenant
             .as_deref()
             .or(if body_scoped { body_tenant } else { None })
@@ -11178,6 +11243,16 @@ fn parse_client_update(body: &Value) -> Result<UpdatePlan, JsonResponse> {
     parse_update(&client, true)
 }
 
+/// The error of an ID token the official `parseIdToken` refuses: a user the store lacks is
+/// `USER_NOT_FOUND`.
+fn parse_id_token_error(error: &fireemu_core_auth::jwt::JwtError) -> JsonResponse {
+    if matches!(error, fireemu_core_auth::jwt::JwtError::UnknownUser) {
+        self::error(400, "USER_NOT_FOUND")
+    } else {
+        jwt_error(error)
+    }
+}
+
 #[allow(clippy::too_many_lines)]
 fn update(
     store: &mut AuthStore,
@@ -11205,6 +11280,13 @@ fn update(
     // official emulator applies the code first.
     let strict = !stateless_refresh_tokens;
     let with_session = body.get("idToken").is_some_and(|token| !token.is_null());
+    // The official emulator's privileged update (`setAccountInfoImpl`, `operations.js:769`)
+    // asserts the `localId` before anything else, and then, without an `oobCode`, updates the
+    // user of the ID token when it carries one, over the `localId` (`operations.js:831-838`).
+    let official_privileged = privileged && !strict;
+    if official_privileged && str_field(body, "localId").is_none_or(str::is_empty) {
+        return error(400, "MISSING_LOCAL_ID");
+    }
     if let Some(code) = str_field(body, "oobCode").filter(|_| !(strict && with_session)) {
         if has_admin_field {
             return error(400, "OPERATION_NOT_ALLOWED");
@@ -11212,7 +11294,9 @@ fn update(
         return apply_oob_code(store, code, at, strict);
     }
     let self_service = !privileged;
-    let local_id = if privileged {
+    let token_names_the_user =
+        official_privileged && str_field(body, "idToken").is_some_and(|t| !t.is_empty());
+    let local_id = if privileged && !token_names_the_user {
         match opt_str(body, "localId") {
             Ok(v) => v,
             Err(r) => return r,
@@ -11256,7 +11340,29 @@ fn update(
     } else {
         // Authenticate the client before planning any mutation. A supplied localId is
         // never a client selector, and does not change self-service invalidation rules.
-        match verify_session_accepting(store, body, at, jwt_error, LegacyTokens::Honoured) {
+        // The privileged update resolves the token's user as the official `parseIdToken`
+        // (`operations.js:1715-1731`) does in these respects: the expiry is not looked at, and a
+        // user the store lacks is `USER_NOT_FOUND`. The signature, issuer, audience, session epoch
+        // and future `iat` / `auth_time` are still checked, where the official emulator only
+        // decodes: a hand-crafted token of a foreign issuer is refused here (a recorded
+        // difference).
+        let (map_error, leeway): (fn(&fireemu_core_auth::jwt::JwtError) -> JsonResponse, i64) =
+            if token_names_the_user {
+                (parse_id_token_error, i64::MAX)
+            } else {
+                (
+                    jwt_error,
+                    fireemu_core_auth::jwt::IDENTITY_TOOLKIT_EXPIRY_LEEWAY_SECONDS,
+                )
+            };
+        match verify_session_accepting_with_leeway(
+            store,
+            body,
+            at,
+            map_error,
+            LegacyTokens::Honoured,
+            leeway,
+        ) {
             Ok(session) => {
                 if self_service {
                     if let Err(response) = validate_client_update_shapes(body) {

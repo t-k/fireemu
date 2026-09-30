@@ -11340,9 +11340,12 @@ fn update(
     } else {
         // Authenticate the client before planning any mutation. A supplied localId is
         // never a client selector, and does not change self-service invalidation rules.
-        // The privileged update resolves the token's user as the official `parseIdToken` does
-        // (`operations.js:1715-1731`): the expiry is not looked at, and a user the store lacks is
-        // `USER_NOT_FOUND`.
+        // The privileged update resolves the token's user as the official `parseIdToken`
+        // (`operations.js:1715-1731`) does in these respects: the expiry is not looked at, and a
+        // user the store lacks is `USER_NOT_FOUND`. The signature, issuer, audience, session epoch
+        // and future `iat` / `auth_time` are still checked, where the official emulator only
+        // decodes: a hand-crafted token of a foreign issuer is refused here (a recorded
+        // difference).
         let (map_error, leeway): (fn(&fireemu_core_auth::jwt::JwtError) -> JsonResponse, i64) =
             if token_names_the_user {
                 (parse_id_token_error, i64::MAX)

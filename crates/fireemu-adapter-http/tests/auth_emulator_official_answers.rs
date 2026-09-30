@@ -1240,7 +1240,7 @@ fn a_privileged_update_reads_an_expired_token_and_a_missing_user_as_the_official
             route,
             &owner(),
             &json!({"localId": a["localId"], "displayName": changed,
-                    "idToken": token_of(&b["localId"], 1_788_004_800)}),
+                    "idToken": token_of(&b["localId"], 1_000)}),
         );
         assert_eq!(response.status, 200, "{route}: {}", response.body);
         assert_eq!(response.body["localId"], b["localId"], "{route}");
@@ -1283,4 +1283,52 @@ fn a_privileged_update_reads_an_expired_token_and_a_missing_user_as_the_official
     );
     assert_eq!(status, 200, "{answered}");
     assert_eq!(answered["localId"], up["localId"]);
+}
+
+/// The pre-check of a privileged update reads the ID token only when the update would
+/// (`operations.js:769`, `:831-832`): with a `localId` and no `oobCode`. Its answer for a tenant
+/// made on the way is `USER_NOT_FOUND`, also for a token the handler would refuse for its issuer
+/// (the official emulator decodes without checking the issuer); with an `oobCode` the token is not
+/// read and the code is refused.
+#[test]
+fn the_pre_check_of_a_privileged_update_reads_the_token_only_when_the_update_would() {
+    let foreign_issuer = |tenant: &str| {
+        alg_none(&json!({
+            "aud": "demo-app", "iss": "https://evil.example/demo-app",
+            "sub": "u1", "user_id": "u1", "iat": 1_788_004_860, "exp": 1_788_008_400,
+            "auth_time": 1_788_004_860,
+            "firebase": {"sign_in_provider": "password", "identities": {}, "tenant": tenant}
+        }))
+    };
+    let (state, _registry) = emulator();
+    for (n, route) in [
+        format!("{V1}/accounts:update?key={KEY}"),
+        format!("{V1}/projects/demo-app/accounts:update"),
+    ]
+    .iter()
+    .enumerate()
+    {
+        for (case, extra, expected) in [
+            ("a localId", json!({}), "USER_NOT_FOUND"),
+            (
+                "a localId and an oobCode",
+                json!({"oobCode": "nope"}),
+                "INVALID_OOB_CODE",
+            ),
+        ] {
+            let tenant = format!("pre-{n}-{}", case.len());
+            let mut body = json!({"localId": "x", "displayName": "d", "tenantId": tenant,
+                                  "idToken": foreign_issuer(&tenant)});
+            for (key, value) in extra.as_object().into_iter().flatten() {
+                body[key] = value.clone();
+            }
+            let response = handle_with(&state, "POST", route, &owner(), &body);
+            assert_eq!(
+                (response.status, message_of(&response.body)),
+                (400, expected.to_owned()),
+                "{route} {case}: {}",
+                response.body
+            );
+        }
+    }
 }

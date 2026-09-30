@@ -915,15 +915,31 @@ fn a_deleted_tenants_token_beside_a_malformed_query_tenant_finds_no_user_in_the_
         &json!({"email": "g@example.com", "password": "hunter22", "tenantId": "gone"}),
     );
     assert_eq!(up.status, 200, "{}", up.body);
-    assert!(registry.delete_tenant("worker-alpha", "gone"));
-    let r = handle(
-        &state,
-        "POST",
-        "/identitytoolkit.googleapis.com/v1/accounts:lookup?key=alpha-key&tenantId=a&tenantId=b",
-        &json!({"idToken": up.body["idToken"]}),
-    );
-    assert_eq!(r.status, 400, "{}", r.body);
-    assert_eq!(r.body["error"]["message"], "USER_NOT_FOUND", "{}", r.body);
+    for (route, body) in [
+        (
+            "accounts:sendOobCode",
+            json!({"requestType": "VERIFY_EMAIL"}),
+        ),
+        ("accounts:update", json!({"displayName": "x"})),
+        ("accounts:lookup", json!({})),
+        ("accounts:delete", json!({})),
+    ] {
+        assert!(registry.delete_tenant("worker-alpha", "gone"));
+        let mut body = body;
+        body["idToken"] = up.body["idToken"].clone();
+        let r = handle(
+            &state,
+            "POST",
+            &format!("{V1}/{route}?key=alpha-key&tenantId=a&tenantId=b"),
+            &body,
+        );
+        assert_eq!(r.status, 400, "{route}: {}", r.body);
+        assert_eq!(
+            r.body["error"]["message"], "USER_NOT_FOUND",
+            "{route}: {}",
+            r.body
+        );
+    }
 }
 
 /// The refresh token is the fourth place a target tenant comes from, and it is decoded before the

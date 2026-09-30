@@ -2716,6 +2716,60 @@ fn a_finalized_json_api_session_answers_status_queries_and_refuses_chunks() {
     }
 }
 
+/// Only a value that is not JWT-shaped is an anonymous caller under strict (production, stage 3 v9:
+/// the recorded 24-character value answers as no credential; the official emulator, measured with
+/// firebase-tools 15.28.2: no dots, two and four segments are unauthenticated). A three-segment
+/// value that does not decode or verify stays a refusal, so a tampered signature, an unknown key
+/// id or an unsupported algorithm never becomes a public caller. The emulator profile maps every
+/// decode failure to an anonymous caller, as before.
+#[test]
+fn strict_makes_only_a_value_that_is_not_jwt_shaped_anonymous() {
+    const PUBLIC: &str = "rules_version = '2'; service firebase.storage { match /b/{bucket}/o { match /{path=**} { allow read, write: if true; } } }";
+    const AUTHED: &str = "rules_version = '2'; service firebase.storage { match /b/{bucket}/o { match /{path=**} { allow read, write: if request.auth != null; } } }";
+    let b64 = |text: &str| base64url_encode(text.as_bytes());
+    let payload = b64(
+        r#"{"iss":"https://securetoken.google.com/demo-app","aud":"demo-app","iat":0,"exp":3600,"sub":"u1","user_id":"u1"}"#,
+    );
+    let rs256 = b64(r#"{"alg":"RS256","kid":"unknown"}"#);
+    let none = b64(r#"{"alg":"none"}"#);
+    // (value, anonymous under strict)
+    let values: Vec<(String, bool)> = vec![
+        ("abcdefghijklmnopqrstuvwx".to_owned(), true),
+        (format!("{none}.{payload}"), true),
+        (format!("{none}.{payload}..x"), true),
+        ("a.b.c".to_owned(), false),
+        (format!("{rs256}.{payload}.AAAAAAAAAAAA"), false),
+        (format!("{rs256}.{payload}."), false),
+        (format!("{none}.{}.", b64("not json")), false),
+    ];
+    for (value, anonymous) in &values {
+        let authorization = format!("Firebase {value}");
+        for acceptance in BOTH_PROFILES {
+            let strict = acceptance == TokenAcceptance::Verified;
+            let expect_anonymous = *anonymous || !strict;
+            let public = state_with(Some(PUBLIC), acceptance);
+            let authed = state_with(Some(AUTHED), acceptance);
+            let (public_status, authed_status) = (
+                upload_as(&public, "p.txt", &authorization),
+                upload_as(&authed, "p.txt", &authorization),
+            );
+            if expect_anonymous {
+                assert_eq!(
+                    (public_status, authed_status),
+                    (200, 403),
+                    "{acceptance:?} {value}"
+                );
+            } else {
+                assert_eq!(
+                    (public_status, authed_status),
+                    (401, 401),
+                    "{acceptance:?} {value}"
+                );
+            }
+        }
+    }
+}
+
 /// `PATCH /storage/v1/b/{bucket}/o/{object}` updates object metadata, as the Cloud Storage
 /// JSON API does in production (recorded: stage 3 v9, `setup/seed-metadata` and
 /// `boundary-gcs-admin-patch-present`, a 200 with the `storage#object` resource; an absent

@@ -1881,12 +1881,26 @@ impl StorageState {
         // The audience is checked before the signature so a token of another session
         // says so, instead of failing as an unknown user of this one.
         let decoded = fireemu_core_auth::jwt::decode_token(token, parent.signer());
-        // A value that is not a JWT at all is an anonymous caller in both profiles: production
-        // answered `Firebase <garbage>` exactly as it answers no credential (stage 3 v9,
-        // `token-malformed`: 403 from the rules, and the body parser's 400 first on a malformed
-        // PATCH body), and so does the official emulator's `jwt.decode`.
-        let Ok(decoded_token) = decoded else {
-            return Ok(Principal::Anonymous);
+        // A value that is not JWT-shaped at all (no dots, or not three dot-separated segments) is an
+        // anonymous caller in both profiles: production answered the recorded 24-character value
+        // exactly as it answers no credential (stage 3 v9, `token-malformed`: 403 from the rules, and
+        // the body parser's 400 first on a malformed PATCH body), and the official emulator's
+        // `jwt.decode` does the same (measured: firebase-tools 15.28.2, a value without dots, with
+        // two or with four segments is unauthenticated). A well-formed JWT that does not decode or
+        // verify is not that: under strict it stays a refusal (401), so a tampered signature, an
+        // unknown `kid` or an unsupported algorithm never becomes a public caller. The emulator
+        // profile keeps its earlier mapping of every decode failure to an anonymous caller; the
+        // official emulator verifies nothing and admits such a token as its user, which this
+        // profile has never done (a published divergence of the compatibility contract).
+        let decoded_token = match decoded {
+            Ok(decoded_token) => decoded_token,
+            Err(error) => {
+                let jwt_shaped = token.split('.').count() == 3;
+                if jwt_shaped && self.token_acceptance != TokenAcceptance::EmulatorMock {
+                    return Err(format!("invalid ID token: {error}").into());
+                }
+                return Ok(Principal::Anonymous);
+            }
         };
         let aud = decoded_token
             .payload

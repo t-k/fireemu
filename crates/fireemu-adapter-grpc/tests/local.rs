@@ -122,7 +122,9 @@ fn observing_transaction_expiry_releases_aggregate_history_capacity() {
             &fireemu_adapter_grpc::rules::allow_all_reads,
         )
         .unwrap_err();
-    assert_eq!(expired.code(), tonic::Code::Aborted);
+    // An hour past its begin the token is long forgotten (production remembers an expired token until about
+    // 300 s of its age), so the read finds no such transaction.
+    assert_eq!(expired.code(), tonic::Code::InvalidArgument);
 
     backend
         .commit_with(
@@ -9864,4 +9866,122 @@ async fn native_read_write_transaction_reads_at_its_first_use_in_both_profiles()
             .unwrap();
         handle.abort();
     }
+}
+
+/// P11 (native gRPC, P11 v4, two recordings): a transaction kept alive past its 270 s total lifetime answers a
+/// read, a Commit and a Rollback `ABORTED` "no longer valid" while it is remembered, and holds no lock (an outside
+/// writer succeeds); once it is forgotten, at about 300 s of its age, each answers `INVALID_ARGUMENT` "Invalid
+/// transaction.". The emulator profile follows the official emulator instead (a read `INVALID_ARGUMENT`, a Commit
+/// `ABORTED`, a Rollback accepted).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[allow(clippy::too_many_lines)]
+async fn native_expired_transaction_is_remembered_until_about_300_seconds_in_production() {
+    const GONE: &str = "The referenced transaction has expired or is no longer valid.";
+    let (mut client, clock, backend, handle) = start_profile_with_state(true, None).await;
+    assert_native_profile_scope(&backend, true);
+    client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: vec![update_write("p11-native/remembered", &[("value", i(0))])],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let transaction = client
+        .begin_transaction(pb::BeginTransactionRequest {
+            database: DB.to_owned(),
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner()
+        .transaction;
+    let mut previous = 0;
+    for current in [0, 59, 118, 177, 236] {
+        clock
+            .lock()
+            .unwrap()
+            .advance(LogicalDuration::from_seconds(current - previous))
+            .unwrap();
+        native_transaction_document(
+            &mut client,
+            "p11-native/remembered",
+            Some(transaction.clone()),
+        )
+        .await;
+        previous = current;
+    }
+    let advance_to = |target: i64, previous: &mut i64| {
+        clock
+            .lock()
+            .unwrap()
+            .advance(LogicalDuration::from_seconds(target - *previous))
+            .unwrap();
+        *previous = target;
+    };
+    advance_to(283, &mut previous);
+    let read = |mut client: FirestoreClient<tonic::transport::Channel>, transaction: Vec<u8>| async move {
+        client
+            .get_document(pb::GetDocumentRequest {
+                name: format!("{DOCS}/p11-native/remembered"),
+                consistency_selector: Some(
+                    pb::get_document_request::ConsistencySelector::Transaction(transaction),
+                ),
+                ..Default::default()
+            })
+            .await
+            .unwrap_err()
+    };
+    let commit = |mut client: FirestoreClient<tonic::transport::Channel>, transaction: Vec<u8>| async move {
+        client
+            .commit(pb::CommitRequest {
+                database: DB.to_owned(),
+                transaction,
+                writes: vec![update_write("p11-native/remembered", &[("value", i(1))])],
+                ..Default::default()
+            })
+            .await
+            .unwrap_err()
+    };
+    let rollback = |mut client: FirestoreClient<tonic::transport::Channel>,
+                    transaction: Vec<u8>| async move {
+        client
+            .rollback(pb::RollbackRequest {
+                database: DB.to_owned(),
+                transaction,
+                ..Default::default()
+            })
+            .await
+            .unwrap_err()
+    };
+    for status in [
+        read(client.clone(), transaction.clone()).await,
+        commit(client.clone(), transaction.clone()).await,
+        rollback(client.clone(), transaction.clone()).await,
+    ] {
+        assert_eq!(
+            (status.code(), status.message()),
+            (tonic::Code::Aborted, GONE)
+        );
+    }
+    client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: vec![update_write("p11-native/remembered", &[("value", i(2))])],
+            ..Default::default()
+        })
+        .await
+        .expect("an expired token holds no lock");
+    advance_to(301, &mut previous);
+    for status in [
+        read(client.clone(), transaction.clone()).await,
+        commit(client.clone(), transaction.clone()).await,
+        rollback(client.clone(), transaction.clone()).await,
+    ] {
+        assert_eq!(
+            (status.code(), status.message()),
+            (tonic::Code::InvalidArgument, "Invalid transaction.")
+        );
+    }
+    handle.abort();
 }

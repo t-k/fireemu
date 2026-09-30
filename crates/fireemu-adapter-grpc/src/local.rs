@@ -4899,7 +4899,8 @@ impl LocalBackend {
         let txn = self.required_txn(&parent, &req.transaction)?;
         let now = self.write_time();
         self.with_db(&parent, |db| {
-            db.rollback(&txn).map_err(|e| status_from_error(&e))?;
+            db.rollback_at(&txn, now)
+                .map_err(|e| status_from_error(&e))?;
             db.compact(now);
             self.reconcile_history(&parent, db.history_usage());
             Ok(())

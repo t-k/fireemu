@@ -3401,13 +3401,15 @@ fn an_idle_expiry_found_by_maintenance_still_answers_aborted_and_accepts_a_rollb
     state.rollback(&transaction).unwrap();
 }
 
-// Evicting finished lineage removes the deadline key an unnoticed expiry was filed under.
+// Evicting finished lineage removes the deadline key an expired token was filed under. The emulator
+// profile keeps an expired token for 600 s, long enough for three waves to overflow the bounded lineage
+// (production remembers for 30 s and holds at most 4 096 active transactions, so it cannot overflow it).
 #[test]
-fn evicting_unnoticed_expiries_leaves_no_stale_deadline_entries() {
-    let mut state = FirestoreState::with_limit_scope(LimitScope::Production);
+fn evicting_expired_tokens_leaves_no_stale_deadline_entries() {
+    let mut state = FirestoreState::with_limit_scope(LimitScope::OfficialEmulator);
     // Three waves of 4 000 transactions, each kept alive by reads until its total lifetime ends and
-    // found by the next wave's begin, overflow the bounded finished lineage (8 192) inside the
-    // retention of an expiry nobody was refused for.
+    // found by the next wave's begin, overflow the bounded finished lineage (8 192) inside that
+    // retention.
     for wave in 0..3 {
         let base = wave * 271;
         let ids: Vec<_> = (0..4_000)
@@ -3563,13 +3565,12 @@ fn a_read_only_transaction_takes_its_snapshot_at_its_first_use() {
     assert_eq!(state.retained_versions(), 2);
 }
 
-// P11 (REST): a transaction kept alive by reads past its 270 s total lifetime. Recorded: a read
-// answers ABORTED "no longer valid", then a Commit and a Rollback answer INVALID_ARGUMENT
-// "Invalid transaction.". The tests below that start with a Commit, a Rollback or a second read,
-// and every gRPC answer, pin an INFERRED model (the first refused request answers ABORTED, then
-// the transaction is forgotten); the recording fits "reads ABORTED, Commit and Rollback invalid"
-// equally well, and P12 decides. An idle expiry keeps the lineage until the total lifetime, so its
-// later requests still answer ABORTED (E003).
+// P11 (REST and gRPC, four recordings): a transaction kept alive by reads past its 270 s total
+// lifetime. Recorded: at token ages of 283 to 288 s a read, a Commit and a Rollback each answer ABORTED
+// "no longer valid" (10) and a writer outside the transaction is not held; at 298.7 to 301.0 s a read
+// still answers 10 and the Commit about a second later answers INVALID_ARGUMENT "Invalid transaction."
+// (3), as does a Rollback after it: the token is forgotten at about 300 s. An idle expiry keeps the
+// lineage until the total lifetime, so its later requests still answer ABORTED (E003).
 fn invalid_transaction(result: Result<(), FirestoreError>) {
     match result {
         Err(FirestoreError::InvalidArgument(message)) if message == "Invalid transaction." => {}
@@ -3597,55 +3598,59 @@ fn aged_transaction() -> (FirestoreState, TransactionId) {
 }
 
 #[test]
-fn after_the_total_lifetime_the_first_read_is_aborted_and_a_commit_and_rollback_are_invalid() {
+fn after_the_total_lifetime_every_request_is_aborted_until_the_token_is_forgotten_at_300_s() {
     let (mut state, transaction) = aged_transaction();
-    aborted_no_longer_valid(state.touch_transaction(&transaction, t(271)));
     let write = [set("p11/doc", &[("v", Value::Integer(2))])];
-    invalid_transaction(state.commit(&write, Some(&transaction), t(272)).map(|_| ()));
-    invalid_transaction(state.rollback(&transaction));
-    invalid_transaction(state.touch_transaction(&transaction, t(273)));
+    aborted_no_longer_valid(state.touch_transaction(&transaction, t(271)));
+    aborted_no_longer_valid(state.commit(&write, Some(&transaction), t(272)).map(|_| ()));
+    aborted_no_longer_valid(state.rollback(&transaction));
+    aborted_no_longer_valid(state.touch_transaction(&transaction, t(299)));
     assert_eq!(state.transaction_bookkeeping_stats().active, 0);
+    // forgotten by 301 s of token age: every request now answers "Invalid transaction."
+    invalid_transaction(state.touch_transaction(&transaction, t(301)));
+    invalid_transaction(state.commit(&write, Some(&transaction), t(302)).map(|_| ()));
+    invalid_transaction(state.rollback(&transaction));
 }
 
 #[test]
-fn a_first_request_that_finds_the_lifetime_expired_after_other_maintenance_is_still_aborted() {
+fn an_expired_token_that_no_request_asked_about_is_still_aborted_until_300_s_and_then_invalid() {
     let (mut state, transaction) = aged_transaction();
-    // Maintenance at the deadline (here another begin) must not forget it before a request refused it.
+    // Maintenance at the deadline (here another begin) must not forget it before its 300 s.
     let other = state.begin_transaction(true, t(271)).unwrap();
     aborted_no_longer_valid(state.touch_transaction(&transaction, t(272)));
-    // Forgetting the expiry removes the deadline entry it was filed under.
     let bookkeeping = state.transaction_bookkeeping_stats();
     assert_eq!(bookkeeping.finished, bookkeeping.finished_deadlines);
-    invalid_transaction(state.rollback(&transaction));
     state.rollback(&other).unwrap();
+
+    let (mut late, transaction) = aged_transaction();
+    let _other = late.begin_transaction(true, t(301)).unwrap();
+    invalid_transaction(late.touch_transaction(&transaction, t(302)));
 }
 
 #[test]
-fn a_commit_as_the_first_request_after_the_lifetime_is_aborted_and_a_rollback_then_invalid() {
-    let (mut state, transaction) = aged_transaction();
+fn a_commit_or_a_rollback_as_the_first_request_after_the_lifetime_is_aborted_like_a_read() {
     let write = [set("p11/doc", &[("v", Value::Integer(2))])];
+    let (mut state, transaction) = aged_transaction();
     aborted_no_longer_valid(state.commit(&write, Some(&transaction), t(271)).map(|_| ()));
-    invalid_transaction(state.rollback(&transaction));
-}
-
-#[test]
-fn a_commit_that_finds_the_lifetime_expired_after_other_maintenance_is_aborted_and_the_next_is_invalid(
-) {
-    let (mut state, transaction) = aged_transaction();
-    let other = state.begin_transaction(true, t(271)).unwrap();
-    let write = [set("p11/doc", &[("v", Value::Integer(2))])];
     aborted_no_longer_valid(state.commit(&write, Some(&transaction), t(272)).map(|_| ()));
-    invalid_transaction(state.commit(&write, Some(&transaction), t(273)).map(|_| ()));
+    aborted_no_longer_valid(state.touch_transaction(&transaction, t(273)));
+    aborted_no_longer_valid(state.rollback(&transaction));
+
+    let (mut state, transaction) = aged_transaction();
+    let other = state.begin_transaction(true, t(271)).unwrap();
+    aborted_no_longer_valid(state.rollback(&transaction));
+    aborted_no_longer_valid(state.rollback(&transaction));
     state.rollback(&other).unwrap();
 }
 
 #[test]
-fn a_rollback_as_the_first_request_after_the_lifetime_is_accepted_once() {
+fn a_writer_outside_an_expired_transaction_is_not_held_by_its_locks() {
+    // P11 v4: the outside writer after the expiry answered 0 at normal pace.
     let (mut state, transaction) = aged_transaction();
-    let other = state.begin_transaction(true, t(271)).unwrap();
-    state.rollback(&transaction).unwrap();
-    invalid_transaction(state.rollback(&transaction));
-    state.rollback(&other).unwrap();
+    aborted_no_longer_valid(state.touch_transaction(&transaction, t(271)));
+    state
+        .commit(&[set("p11/doc", &[("v", Value::Integer(3))])], None, t(272))
+        .unwrap();
 }
 
 #[test]
@@ -3654,13 +3659,6 @@ fn an_idle_expiry_keeps_answering_aborted_until_the_total_lifetime() {
     let transaction = state.begin_transaction(false, t(0)).unwrap();
     aborted_no_longer_valid(state.touch_transaction(&transaction, t(130)));
     aborted_no_longer_valid(state.touch_transaction(&transaction, t(131)));
-}
-
-#[test]
-fn an_expiry_nobody_asked_about_is_forgotten_after_the_retention_bound() {
-    let (mut state, transaction) = aged_transaction();
-    let _other = state.begin_transaction(true, t(271 + 601)).unwrap();
-    invalid_transaction(state.touch_transaction(&transaction, t(271 + 602)));
 }
 
 fn invalid_argument_expired(result: Result<(), FirestoreError>) {

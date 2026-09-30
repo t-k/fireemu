@@ -4123,12 +4123,14 @@ fn rest_kindless_queries_and_transform_budget_follow_production() {
     );
 }
 
-/// A read-write transaction kept alive by reads past its 270 s total lifetime, over REST. Production (P11,
-/// one recording): the read answers 409 `ABORTED` "no longer valid", then a Commit 400 `INVALID_ARGUMENT`
-/// "Invalid transaction." and a Rollback the same. The official emulator (v1.22.0, REST, measured): the read
+/// A read-write transaction kept alive by reads past its 270 s total lifetime, over REST. Production (P11 REST
+/// recording 1 and P11 v4): until the token is forgotten at about 300 s of its age a read, a Commit and a Rollback
+/// each answer 409 `ABORTED` "no longer valid"; after that each answers 400 `INVALID_ARGUMENT` "Invalid
+/// transaction.". The official emulator (v1.22.0, REST, measured): the read
 /// answers 400 `INVALID_ARGUMENT` with the expired text, a Commit 409 `ABORTED` with it, a Rollback 200. The gRPC
 /// wire forms are unmeasured; they map the same statuses.
 #[test]
+#[allow(clippy::too_many_lines)]
 fn a_rest_transaction_kept_alive_past_its_total_lifetime_is_answered_per_profile() {
     const GONE: &str = "The referenced transaction has expired or is no longer valid.";
     for strict in [true, false] {
@@ -4193,35 +4195,43 @@ fn a_rest_transaction_kept_alive_past_its_total_lifetime_is_answered_per_profile
             "{expired}"
         );
         assert_eq!(expired["error"]["message"], GONE, "{expired}");
-        let (status, committed) = call(
-            &s,
-            "POST",
-            &format!("{DOCS}:commit"),
-            json!({
-                "transaction": transaction,
-                "writes": [{"update": {"name": document, "fields": {"v": {"integerValue": "2"}}}}]
-            }),
-        );
-        let (status_expected, label, message) = if strict {
-            (400, "INVALID_ARGUMENT", "Invalid transaction.")
-        } else {
-            (409, "ABORTED", GONE)
+        let commit = |s: &RestState| {
+            call(
+                s,
+                "POST",
+                &format!("{DOCS}:commit"),
+                json!({
+                    "transaction": transaction,
+                    "writes": [{"update": {"name": document, "fields": {"v": {"integerValue": "2"}}}}]
+                }),
+            )
         };
+        let rollback = |s: &RestState| {
+            call(
+                s,
+                "POST",
+                &format!("{DOCS}:rollback"),
+                json!({"transaction": transaction}),
+            )
+        };
+        let (status, committed) = commit(&s);
+        let (status_expected, label, message) = (409, "ABORTED", GONE);
         assert_eq!(status, status_expected, "strict={strict} {committed}");
         assert_eq!(committed["error"]["status"], label, "{committed}");
         assert_eq!(committed["error"]["message"], message, "{committed}");
-        let (status, rolled) = call(
-            &s,
-            "POST",
-            &format!("{DOCS}:rollback"),
-            json!({"transaction": transaction}),
-        );
+        let (status, rolled) = rollback(&s);
         if strict {
-            assert_eq!(status, 400, "{rolled}");
-            assert_eq!(
-                rolled["error"]["message"], "Invalid transaction.",
-                "{rolled}"
-            );
+            assert_eq!(status, 409, "{rolled}");
+            assert_eq!(rolled["error"]["message"], GONE, "{rolled}");
+            let (status, again) = read(&s);
+            assert_eq!(status, 409, "{again}");
+            // forgotten at about 300 s of token age
+            advance(30);
+            for (status, body) in [read(&s), commit(&s), rollback(&s)] {
+                assert_eq!(status, 400, "{body}");
+                assert_eq!(body["error"]["status"], "INVALID_ARGUMENT", "{body}");
+                assert_eq!(body["error"]["message"], "Invalid transaction.", "{body}");
+            }
         } else {
             assert_eq!(status, 200, "{rolled}");
         }

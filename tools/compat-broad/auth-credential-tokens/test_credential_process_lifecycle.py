@@ -65,7 +65,6 @@ def owned(monkeypatch):
     "os.write(1,b'auth (REST): external.invalid:8123\\n'); time.sleep(60)",
     "os.write(1,b'auth (REST): 127.0.0.1:8123/private\\n'); time.sleep(60)",
     "os.write(1,b'auth (REST): localhost:8123\\n'); time.sleep(60)",
-    "sys.exit(3)",
 ])
 def test_unready_daemon_cannot_block_readline_or_escape_caller_ownership(tmp_path, owned, program):
     binary = executable(tmp_path, program)
@@ -260,14 +259,32 @@ def test_config_is_not_overwritten_or_reused(tmp_path, owned):
     assert not owned and config.read_text() == "keep"
 
 
-def test_real_exit_three_is_observed_before_shutdown(tmp_path, owned, monkeypatch):
+@pytest.mark.parametrize("setup_seconds", [0, .6])
+def test_real_exit_three_is_observed_before_shutdown(tmp_path, owned, monkeypatch, setup_seconds):
     # Slow fixture setup must not masquerade as an exit(3) observation.
-    binary = executable(tmp_path, "time.sleep(.6); sys.exit(3)")
+    binary = executable(tmp_path, f"time.sleep({setup_seconds}); sys.exit(3)")
     work = private_work(tmp_path)
     operations = []
     stop = runtime.stop_daemon
+    launch = runtime.subprocess.Popen
+
+    def await_fixture_exit(*args, **kwargs):
+        process = launch(*args, **kwargs)
+        if kwargs.get("start_new_session"):
+            # Setup is bounded independently of the .35/.15 readiness/stop fixture.
+            assert process.wait(timeout=20) == 3
+            operations.append(("exit", process.returncode))
+        return process
+
+    monkeypatch.setattr(runtime.subprocess, "Popen", await_fixture_exit)
 
     def capture_stop(process):
+        # A silent exited child has real EOF, not validated readiness output.
+        monitor = process._credential_output_monitor
+        monitor.thread.join(timeout=20)
+        assert not monitor.thread.is_alive()
+        assert monitor.failure == "startup-output-ended"
+        operations.append(("output-ended", monitor.failure))
         operations.append(("shutdown", process.poll()))
         return stop(process)
 
@@ -275,10 +292,10 @@ def test_real_exit_three_is_observed_before_shutdown(tmp_path, owned, monkeypatc
     with pytest.raises(runtime.StartupError) as caught:
         runtime.start_daemon(binary, work)
     receipt = caught.value.shutdown
-    assert operations == [("shutdown", 3)]
+    assert operations == [("exit", 3), ("output-ended", "startup-output-ended"), ("shutdown", 3)]
     assert receipt["exitCode"] == 3 and receipt["processStopped"] is True
     assert receipt["remainingChildren"] == 0
     assert receipt["outputDrainerStopped"] is True
-    assert receipt["failures"] == []
+    assert receipt["failures"] == ["daemon-output-unconfirmed"]
     assert owned[0].poll() == 3
     assert not owned[0]._credential_output_monitor.thread.is_alive()

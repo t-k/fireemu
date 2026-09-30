@@ -109,13 +109,15 @@ def test_authorized_user_digest_covers_exactly_four_canonical_fields():
 def oauth_server():
     import http.server
     import threading
-    import time
     from urllib.parse import urlsplit
 
     state = {"requests": [], "scenario": "success"}
+    stop = threading.Event()
+    handlers = []
 
     class Handler(http.server.BaseHTTPRequestHandler):
         def do_POST(self):
+            handlers.append(threading.current_thread())
             path = urlsplit(self.path).path
             state["requests"].append(("POST", path))
             if "before_response" in state:
@@ -141,6 +143,9 @@ def oauth_server():
                 self.send_header("Location", state["origin"] + "/unexpected")
             else:
                 self.send_response(200)
+            if state["scenario"] == "trickle":
+                # Keep both valid JSON bodies slower than the normal worker budget.
+                raw += b" " * 256
             if state["scenario"] == "oversize":
                 raw = b"x" * 16385
             elif state["scenario"] == "malformed-json":
@@ -152,7 +157,8 @@ def oauth_server():
                     for byte in raw:
                         self.wfile.write(bytes([byte]))
                         self.wfile.flush()
-                        time.sleep(0.1)
+                        if stop.wait(0.1):
+                            break
                 elif state["scenario"] == "truncated":
                     # Declares the full length but only ever writes half the
                     # body, then returns; the handler's default HTTP/1.0
@@ -166,7 +172,7 @@ def oauth_server():
                     # Declares the full length, writes nothing at all, and
                     # blocks well past any test-side socket timeout so the
                     # client's own read times out instead of hitting EOF.
-                    time.sleep(2.0)
+                    stop.wait(20.0)
                 else:
                     self.wfile.write(raw)
             except (BrokenPipeError, ConnectionResetError):
@@ -183,10 +189,14 @@ def oauth_server():
     try:
         yield state
     finally:
+        stop.set()
         server.shutdown()
         server.server_close()
         thread.join(timeout=2)
         assert not thread.is_alive()
+        for handler in handlers:
+            handler.join(timeout=2)
+            assert not handler.is_alive()
 
 
 SCOPE = PRINCIPAL["requiredScopes"][0]
@@ -216,14 +226,15 @@ def test_private_worker_is_bounded_and_never_retries(oauth_server, scenario):
     module = prep()
     assert hasattr(module, "_private_request")
     oauth_server["scenario"] = scenario
+    # This integration includes interpreter setup; the short body bound is separate.
     started = time.monotonic()
     result = module._private_request(
         "refresh",
         ADC,
         fixture_origin=oauth_server["origin"],
-        deadline=0.5 if scenario == "trickle" else 3,
+        deadline=module.REQUEST_SECONDS if scenario == "trickle" else 3,
     )
-    assert time.monotonic() - started < 4
+    assert time.monotonic() - started < (module.REQUEST_SECONDS + 2 if scenario == "trickle" else 4)
     assert oauth_server["requests"] == [("POST", "/token")]
     assert result["workerReaped"] is True
     if scenario == "success":
@@ -246,14 +257,15 @@ def test_private_worker_tokeninfo_slot_is_bounded_and_never_retries(
 
     module = prep()
     oauth_server["scenario"] = scenario
+    # This integration includes interpreter setup; the short body bound is separate.
     started = time.monotonic()
     result = module._private_request(
         "tokeninfo",
         "synthetic-access-secret",
         fixture_origin=oauth_server["origin"],
-        deadline=0.5 if scenario == "trickle" else 3,
+        deadline=module.REQUEST_SECONDS if scenario == "trickle" else 3,
     )
-    assert time.monotonic() - started < 4
+    assert time.monotonic() - started < (module.REQUEST_SECONDS + 2 if scenario == "trickle" else 4)
     assert oauth_server["requests"] == [("POST", "/oauth2/v1/tokeninfo")]
     assert result["workerReaped"] is True
     if scenario == "success":
@@ -830,10 +842,12 @@ def test_trickle_worker_reaches_post_after_separate_interpreter_setup(oauth_serv
     monkeypatch.setattr(subprocess, "Popen", delayed_launch)
     oauth_server["scenario"] = "trickle"
     try:
+        started = time.monotonic()
         result = prep()._private_request(
             "tokeninfo", "synthetic-access-secret",
-            fixture_origin=oauth_server["origin"], deadline=.5,
+            fixture_origin=oauth_server["origin"],
         )
+        assert time.monotonic() - started < prep().REQUEST_SECONDS + 2
         assert oauth_server["requests"] == [("POST", "/oauth2/v1/tokeninfo")]
         assert result["complete"] is False and result["workerReaped"] is True
     finally:
@@ -844,3 +858,67 @@ def test_trickle_worker_reaches_post_after_separate_interpreter_setup(oauth_serv
             for stream in (process.stdin, process.stdout):
                 if stream is not None and not stream.closed:
                     stream.close()
+
+
+@pytest.mark.parametrize("slot", ["refresh", "tokeninfo"])
+def test_trickle_body_deadline_reaches_response_without_interpreter_setup(oauth_server, slot):
+    oauth_server["scenario"] = "trickle"
+    result = prep()._http_request(
+        slot, ADC if slot == "refresh" else "synthetic-access-secret",
+        oauth_server["origin"], timeout=.5,
+    )
+    path = "/token" if slot == "refresh" else "/oauth2/v1/tokeninfo"
+    assert oauth_server["requests"] == [("POST", path)]
+    assert result["complete"] is False
+    assert result["status"] == 200 and result["phase"] == "body"
+    assert result["failure"] == "read-timeout"
+    assert 0 < result["receivedBytes"] < result["declaredLength"]
+    assert result["socketTimeoutSeconds"] == .5
+    assert result["elapsedSeconds"] < 1.5
+    assert "synthetic" not in json.dumps(result)
+
+
+@pytest.mark.parametrize("reaped", [True, False])
+def test_short_parent_deadline_kills_once_and_preserves_unconfirmed_reap(monkeypatch, reaped):
+    import subprocess
+
+    class Worker:
+        pid = 123456
+        returncode = None
+
+        def __init__(self):
+            self.calls = []
+            self.kills = 0
+
+        def communicate(self, raw=None, *, timeout):
+            self.calls.append((raw, timeout))
+            if len(self.calls) == 1 or not reaped:
+                raise subprocess.TimeoutExpired("synthetic-worker", timeout)
+            self.returncode = -9
+            return b"", b""
+
+        def kill(self):
+            self.kills += 1
+
+        def poll(self):
+            return self.returncode
+
+    worker = Worker()
+    launches = []
+
+    def launch(*args, **kwargs):
+        launches.append((args, kwargs))
+        return worker
+
+    monkeypatch.setattr(subprocess, "Popen", launch)
+    result = prep()._private_request("tokeninfo", "synthetic-access-secret", deadline=.5)
+    assert len(launches) == 1 and len(worker.calls) == 2
+    assert 0 < worker.calls[0][1] <= .375
+    assert 0 < worker.calls[1][1] <= .5
+    assert worker.calls[0][0] is not None and worker.calls[1][0] is None
+    assert result["complete"] is False and result["failure"] == "deadline"
+    assert result["workerReaped"] is reaped
+    assert worker.kills == (1 if reaped else 2)
+    assert ("workerPid" in result) is not reaped
+    if not reaped:
+        assert result["workerPid"] == worker.pid

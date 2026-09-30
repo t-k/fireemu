@@ -351,7 +351,7 @@ def test_a_stop_after_the_first_case_recovers_the_created_documents(built, tmp_p
     assert collection["unrecovered"] == [] and collection["openTransactions"] == []
     assert sorted(
         entry["transaction"] for entry in collection["transactionReleases"]
-    ) == ["a", "b", "c", "d"]
+    ) == ["a", "b", "c"]
     assert all(entry["released"] for entry in collection["transactionReleases"])
     gate = json.loads((output / "gate-snapshot.json").read_bytes())
     job = gate["jobs"][gate_module.JOB]
@@ -533,3 +533,30 @@ def test_the_adapter_returns_an_incomplete_answer_for_a_gate_side_skip(built):
     )
     assert response["complete"] is False and response["blocked"] == "gate-skipped"
     assert rows == []
+
+
+@pytest.mark.parametrize("field,value", [("projectId", "fireemu-35fe6"), ("projectNumber", "222222222222")])
+def test_foreign_project_attestation_stops_before_every_data_call(built, tmp_path, field, value):
+    backend = offline.Backend()
+    original = backend.management
+
+    def management(call):
+        response = original(call)
+        if call["slot"] == "project":
+            response = {**response, "body": {**response["body"], field: value}}
+        return response
+
+    result = production.rehearse(
+        inputs=built.inputs,
+        permission=built.permission,
+        ledger_root=built.ledger,
+        output=tmp_path / "foreign-project",
+        transport=backend.transport,
+        management_transport=management,
+        token=offline.TOKEN,
+        rehearsal=production.Rehearsal(sleep_scale=0.001),
+    )
+    assert result["dataRequestsSent"] == 0
+    assert result["collection"] is None
+    assert backend.calls == []
+    assert result["preflightComplete"] is False

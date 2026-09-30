@@ -3858,8 +3858,81 @@ fn rest_validation_codes_follow_production() {
         missing_database_message("Upper"),
         "{body}"
     );
+}
 
-    // A read-only transaction cannot be committed, even without writes.
+/// The empty commit over REST. Production answers `{}` outside a transaction (matrix
+/// `writes/preconditions-and-masks#empty-commit`), and inside one the time of the transaction's first
+/// read as `commitTime` with no write results (P01 read-write and P02 read-only, after a read); a
+/// transaction that has not read is unrecorded and follows the gRPC rule (no time). The official
+/// emulator answers `{}` for all of them.
+#[test]
+fn rest_empty_commit_answers_the_first_read_time_in_production_only() {
+    for strict in [true, false] {
+        let s = state_with_profile(strict);
+        let name = "projects/demo-app/databases/(default)/documents/empty-time/doc";
+        let (status, body) = call(
+            &s,
+            "POST",
+            &format!("{DOCS}:commit"),
+            json!({"writes": [{"update": {"name": name, "fields": {"v": {"integerValue": "1"}}}}]}),
+        );
+        assert_eq!(status, 200, "{body}");
+        let (status, body) = call(&s, "POST", &format!("{DOCS}:commit"), json!({"writes": []}));
+        assert_eq!(status, 200, "{body}");
+        assert_eq!(body, json!({}), "no transaction, strict={strict}");
+        for options in [json!({"readWrite": {}}), json!({"readOnly": {}})] {
+            for has_read in [false, true] {
+                let (status, begun) = call(
+                    &s,
+                    "POST",
+                    &format!("{DOCS}:beginTransaction"),
+                    json!({"options": options}),
+                );
+                assert_eq!(status, 200, "{begun}");
+                let transaction = begun["transaction"].as_str().unwrap().to_owned();
+                if has_read {
+                    let (status, body) = call(
+                        &s,
+                        "GET",
+                        &format!("{DOCS}/empty-time/doc?transaction={transaction}"),
+                        Value::Null,
+                    );
+                    assert_eq!(status, 200, "{body}");
+                }
+                let (status, body) = call(
+                    &s,
+                    "POST",
+                    &format!("{DOCS}:commit"),
+                    json!({"transaction": transaction, "writes": []}),
+                );
+                assert_eq!(status, 200, "{body}");
+                if strict && has_read {
+                    assert!(body["commitTime"].is_string(), "{options} {body}");
+                    assert!(body.get("writeResults").is_none(), "{body}");
+                } else {
+                    assert_eq!(body, json!({}), "strict={strict} {options} read={has_read}");
+                }
+            }
+        }
+    }
+}
+
+/// A read-only transaction takes its snapshot at its first read, not at its begin (P02): a write
+/// acknowledged between the two is shown, and a write after the first read is not.
+#[test]
+fn rest_read_only_transaction_snapshot_is_taken_at_its_first_read() {
+    let s = state(None);
+    let name = "projects/demo-app/databases/(default)/documents/ro-snapshot/a";
+    let write = |s: &RestState, value: &str| {
+        let (status, body) = call(
+            s,
+            "POST",
+            &format!("{DOCS}:commit"),
+            json!({"writes": [{"update": {"name": name, "fields": {"v": {"stringValue": value}}}}]}),
+        );
+        assert_eq!(status, 200, "{body}");
+    };
+    write(&s, "created");
     let (status, begun) = call(
         &s,
         "POST",
@@ -3867,6 +3940,106 @@ fn rest_validation_codes_follow_production() {
         json!({"options": {"readOnly": {}}}),
     );
     assert_eq!(status, 200, "{begun}");
+    let transaction = begun["transaction"].as_str().unwrap().to_owned();
+    write(&s, "between");
+    let read = |s: &RestState| {
+        let (status, body) = call(
+            s,
+            "GET",
+            &format!("{DOCS}/ro-snapshot/a?transaction={transaction}"),
+            Value::Null,
+        );
+        assert_eq!(status, 200, "{body}");
+        body["fields"]["v"]["stringValue"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    };
+    assert_eq!(read(&s), "between");
+    write(&s, "after");
+    assert_eq!(read(&s), "between");
+    let (status, body) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}:batchGet"),
+        json!({"documents": [name], "transaction": transaction}),
+    );
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(
+        body[0]["found"]["fields"]["v"]["stringValue"], "between",
+        "{body}"
+    );
+}
+
+#[test]
+fn rest_read_only_transaction_commit_follows_production() {
+    let s = state(None);
+    // Production answers the empty commit of a fresh read-only transaction 200 (P02, REST and
+    // gRPC); it refuses a write commit of one and then calls the token no longer valid (matrix row
+    // transactions/lifecycle#read-only-commit-without-writes in conformance/firestore-production-matrix.json:
+    // a refused write commit first, then an empty commit on the same token).
+    let (status, begun) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}:beginTransaction"),
+        json!({"options": {"readOnly": {}}}),
+    );
+    assert_eq!(status, 200, "{begun}");
+    let (status, body) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}:commit"),
+        json!({"transaction": begun["transaction"], "writes": []}),
+    );
+    assert_eq!(status, 200, "{body}");
+    let (status, begun) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}:beginTransaction"),
+        json!({"options": {"readOnly": {}}}),
+    );
+    assert_eq!(status, 200, "{begun}");
+    let (status, body) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}:commit"),
+        json!({"transaction": begun["transaction"], "writes": [{"update": {
+            "name": "projects/demo-app/databases/(default)/documents/ro/x",
+            "fields": {"v": {"integerValue": "1"}},
+        }}]}),
+    );
+    assert_eq!(status, 400, "{body}");
+    assert!(
+        stream_error(&body)["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("read-only transaction"),
+        "{body}"
+    );
+    // P02b (REST, two recordings): a read on the ended token answers 400 INVALID_ARGUMENT with the
+    // same expired text, before or after the empty commit; the Rollback still answers 200.
+    let (status, body) = call(
+        &s,
+        "GET",
+        &format!(
+            "{DOCS}/ro/x?transaction={}",
+            begun["transaction"].as_str().unwrap()
+        ),
+        Value::Null,
+    );
+    assert_eq!(status, 400, "{body}");
+    assert_eq!(
+        stream_error(&body)["error"]["status"],
+        "INVALID_ARGUMENT",
+        "{body}"
+    );
+    assert!(
+        stream_error(&body)["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("The referenced transaction has expired or is no longer valid."),
+        "{body}"
+    );
     let (status, body) = call(
         &s,
         "POST",
@@ -3886,6 +4059,13 @@ fn rest_validation_codes_follow_production() {
             .contains("no longer valid"),
         "{body}"
     );
+    let (status, body) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}:rollback"),
+        json!({"transaction": begun["transaction"]}),
+    );
+    assert_eq!(status, 200, "{body}");
 }
 
 /// A query without a collection selector, or with an empty collection id, scans every document
@@ -3943,6 +4123,208 @@ fn rest_kindless_queries_and_transform_budget_follow_production() {
     );
 }
 
+/// A read-write transaction kept alive by reads past its 270 s total lifetime, over REST. Production (P11 REST
+/// recording 1 and P11 v4): until the token is forgotten at about 300 s of its age a read, a Commit and a Rollback
+/// each answer 409 `ABORTED` "no longer valid"; after that each answers 400 `INVALID_ARGUMENT` "Invalid
+/// transaction.". The official emulator (v1.22.0, REST, measured): the read
+/// answers 400 `INVALID_ARGUMENT` with the expired text, a Commit 409 `ABORTED` with it, a Rollback 200. The gRPC
+/// wire forms are unmeasured; they map the same statuses.
+#[test]
+#[allow(clippy::too_many_lines)]
+fn a_rest_transaction_kept_alive_past_its_total_lifetime_is_answered_per_profile() {
+    const GONE: &str = "The referenced transaction has expired or is no longer valid.";
+    for strict in [true, false] {
+        let gateway = Gateway {
+            enforce_limits: strict,
+            ctx: PlanningContext {
+                edition: FirestoreEdition::Standard,
+                api_mode: FirestoreApiMode::Native,
+                policy: if strict {
+                    IndexValidationPolicy::Production
+                } else {
+                    IndexValidationPolicy::Emulator
+                },
+            },
+            indexes: IndexSet::default(),
+        };
+        let (s, clock) = state_with_gateway(gateway, None, TokenAcceptance::Verified);
+        let document = "projects/demo-app/databases/(default)/documents/lifetime/doc";
+        let (status, seeded) = call(
+            &s,
+            "PATCH",
+            &format!("{DOCS}/lifetime/doc"),
+            json!({"fields": {"v": {"integerValue": "1"}}}),
+        );
+        assert_eq!(status, 200, "{seeded}");
+        let (status, begun) = call(
+            &s,
+            "POST",
+            &format!("{DOCS}:beginTransaction"),
+            json!({"options": {"readWrite": {}}}),
+        );
+        assert_eq!(status, 200, "{begun}");
+        let transaction = begun["transaction"].as_str().unwrap().to_owned();
+        let read = |s: &RestState| {
+            call(
+                s,
+                "GET",
+                &format!("{DOCS}/lifetime/doc?transaction={transaction}"),
+                Value::Null,
+            )
+        };
+        let advance = |seconds: i64| {
+            let _ = clock.lock().unwrap().advance(
+                fireemu_core_types::time::LogicalDuration::from_seconds(seconds),
+            );
+        };
+        for _ in 0..8 {
+            advance(30);
+            let (status, body) = read(&s);
+            assert_eq!(status, 200, "a read every 30 s keeps it alive: {body}");
+        }
+        advance(31);
+        let (status, expired) = read(&s);
+        let (code, label) = if strict {
+            (409, "ABORTED")
+        } else {
+            (400, "INVALID_ARGUMENT")
+        };
+        assert_eq!(
+            (status, expired["error"]["status"].as_str()),
+            (code, Some(label)),
+            "{expired}"
+        );
+        assert_eq!(expired["error"]["message"], GONE, "{expired}");
+        let commit = |s: &RestState| {
+            call(
+                s,
+                "POST",
+                &format!("{DOCS}:commit"),
+                json!({
+                    "transaction": transaction,
+                    "writes": [{"update": {"name": document, "fields": {"v": {"integerValue": "2"}}}}]
+                }),
+            )
+        };
+        let rollback = |s: &RestState| {
+            call(
+                s,
+                "POST",
+                &format!("{DOCS}:rollback"),
+                json!({"transaction": transaction}),
+            )
+        };
+        let (status, committed) = commit(&s);
+        let (status_expected, label, message) = (409, "ABORTED", GONE);
+        assert_eq!(status, status_expected, "strict={strict} {committed}");
+        assert_eq!(committed["error"]["status"], label, "{committed}");
+        assert_eq!(committed["error"]["message"], message, "{committed}");
+        let (status, rolled) = rollback(&s);
+        if strict {
+            assert_eq!(status, 409, "{rolled}");
+            assert_eq!(rolled["error"]["message"], GONE, "{rolled}");
+            let (status, again) = read(&s);
+            assert_eq!(status, 409, "{again}");
+            // forgotten at about 300 s of token age
+            advance(30);
+            for (status, body) in [read(&s), commit(&s), rollback(&s)] {
+                assert_eq!(status, 400, "{body}");
+                assert_eq!(body["error"]["status"], "INVALID_ARGUMENT", "{body}");
+                assert_eq!(body["error"]["message"], "Invalid transaction.", "{body}");
+            }
+        } else {
+            assert_eq!(status, 200, "{rolled}");
+        }
+        let (status, after) = call(&s, "GET", &format!("{DOCS}/lifetime/doc"), Value::Null);
+        assert_eq!(status, 200, "{after}");
+        assert_eq!(after["fields"]["v"]["integerValue"], "1");
+    }
+}
+
+/// A Rollback as the very first request after the 270 s total lifetime, over REST. Production remembers the expired
+/// token until about 300 s of its age and answers every request 409 `ABORTED` "no longer valid", a Rollback included
+/// (P11 v4: the chain-end Rollback after the expiry read answered 10); as the first request it is INFERRED to answer the
+/// same. The emulator profile accepts it (official emulator: Rollback 200), and the compaction after it forgets the token.
+#[test]
+fn a_rest_rollback_as_the_first_request_after_the_total_lifetime_is_answered_per_profile() {
+    const GONE: &str = "The referenced transaction has expired or is no longer valid.";
+    for strict in [true, false] {
+        let gateway = Gateway {
+            enforce_limits: strict,
+            ctx: PlanningContext {
+                edition: FirestoreEdition::Standard,
+                api_mode: FirestoreApiMode::Native,
+                policy: if strict {
+                    IndexValidationPolicy::Production
+                } else {
+                    IndexValidationPolicy::Emulator
+                },
+            },
+            indexes: IndexSet::default(),
+        };
+        let (s, clock) = state_with_gateway(gateway, None, TokenAcceptance::Verified);
+        let (status, begun) = call(
+            &s,
+            "POST",
+            &format!("{DOCS}:beginTransaction"),
+            json!({"options": {"readWrite": {}}}),
+        );
+        assert_eq!(status, 200, "{begun}");
+        let transaction = begun["transaction"].as_str().unwrap().to_owned();
+        let advance = |seconds: i64| {
+            let _ = clock.lock().unwrap().advance(
+                fireemu_core_types::time::LogicalDuration::from_seconds(seconds),
+            );
+        };
+        let (status, seeded) = call(
+            &s,
+            "PATCH",
+            &format!("{DOCS}/lifetime/first-rollback"),
+            json!({"fields": {"v": {"integerValue": "1"}}}),
+        );
+        assert_eq!(status, 200, "{seeded}");
+        for _ in 0..8 {
+            advance(30);
+            let (status, body) = call(
+                &s,
+                "GET",
+                &format!("{DOCS}/lifetime/first-rollback?transaction={transaction}"),
+                Value::Null,
+            );
+            assert_eq!(status, 200, "a read every 30 s keeps it alive: {body}");
+        }
+        advance(31);
+        let (status, rolled) = call(
+            &s,
+            "POST",
+            &format!("{DOCS}:rollback"),
+            json!({"transaction": transaction}),
+        );
+        if strict {
+            assert_eq!(status, 409, "{rolled}");
+            assert_eq!(rolled["error"]["status"], "ABORTED", "{rolled}");
+            assert_eq!(rolled["error"]["message"], GONE, "{rolled}");
+        } else {
+            assert_eq!(status, 200, "{rolled}");
+        }
+        let (status, after) = call(
+            &s,
+            "GET",
+            &format!("{DOCS}/lifetime/first-rollback?transaction={transaction}"),
+            Value::Null,
+        );
+        if strict {
+            assert_eq!(status, 409, "{after}");
+            assert_eq!(after["error"]["message"], GONE, "{after}");
+        } else {
+            // the adapter compacts after the Rollback, which forgets a rolled-back token past its lineage deadline
+            // (as it always did): the later read finds no such transaction
+            assert_eq!(status, 400, "{after}");
+            assert_eq!(after["error"]["message"], "Invalid transaction.", "{after}");
+        }
+    }
+}
+
 #[test]
 fn an_idle_rest_transaction_expires_and_releases_its_document_lock() {
     let (s, clock) = state_with_clock(None, TokenAcceptance::Verified);
@@ -3971,10 +4353,13 @@ fn an_idle_rest_transaction_expires_and_releases_its_document_lock() {
     );
     assert_eq!(status, 200, "{held}");
 
+    // The REST commit that production refused (expiry recording, run e823) had a measured idleSeconds
+    // of 121.15 and 120.35 (response to response); strict's limit is 120 s, so 125 s is a later
+    // local sample. It claims no exact production threshold.
     let _ = clock
         .lock()
         .unwrap()
-        .advance(fireemu_core_types::time::LogicalDuration::from_seconds(61));
+        .advance(fireemu_core_types::time::LogicalDuration::from_seconds(125));
     let (status, expired) = call(
         &s,
         "POST",
@@ -5655,6 +6040,89 @@ fn refusal_texts_echo_at_most_one_kibibyte_of_client_input() {
             );
             assert!(message.contains("..."), "{what} strict={strict}");
         }
+    }
+}
+
+/// A commit a precondition refused ends its transaction over REST as well (production P08, REST recordings): the
+/// same token then reads and commits as 400 `INVALID_ARGUMENT` in strict (409 `ABORTED` in the emulator profile, as
+/// the official emulator answers), a Rollback answers 200 again and again, and a writer outside the transaction is
+/// not held up by the locks the transaction read.
+#[test]
+fn rest_precondition_refusal_ends_the_transaction_as_production_does() {
+    const GONE: &str = "The referenced transaction has expired or is no longer valid.";
+    for strict in [true, false] {
+        let s = state_with_profile(strict);
+        let (expected_status, expected_code) = if strict {
+            (400, "INVALID_ARGUMENT")
+        } else {
+            (409, "ABORTED")
+        };
+        let (status, seeded) = call(
+            &s,
+            "PATCH",
+            &format!("{DOCS}/rest-refused/held"),
+            json!({"fields": {"v": {"integerValue": "1"}}}),
+        );
+        assert_eq!(status, 200, "{seeded}");
+        let (status, begun) = call(
+            &s,
+            "POST",
+            &format!("{DOCS}:beginTransaction"),
+            json!({"options": {"readWrite": {}}}),
+        );
+        assert_eq!(status, 200, "{begun}");
+        let transaction = begun["transaction"].as_str().unwrap().to_owned();
+        let (status, held) = call(
+            &s,
+            "GET",
+            &format!("{DOCS}/rest-refused/held?transaction={transaction}"),
+            Value::Null,
+        );
+        assert_eq!(status, 200, "{held}");
+        let commit = json!({
+            "transaction": transaction,
+            "writes": [
+                {"update": {"name": "projects/demo-app/databases/(default)/documents/rest-refused/held", "fields": {"v": {"integerValue": "9"}}}},
+                {
+                    "update": {"name": "projects/demo-app/databases/(default)/documents/rest-refused/missing", "fields": {"v": {"integerValue": "2"}}},
+                    "currentDocument": {"exists": true}
+                }
+            ]
+        });
+        let (status, refused) = call(&s, "POST", &format!("{DOCS}:commit"), commit.clone());
+        assert_eq!(status, 404, "{refused}");
+        assert_eq!(refused["error"]["status"], "NOT_FOUND", "{refused}");
+        let (status, read) = call(
+            &s,
+            "GET",
+            &format!("{DOCS}/rest-refused/held?transaction={transaction}"),
+            Value::Null,
+        );
+        assert_eq!(status, expected_status, "strict={strict}: {read}");
+        assert_eq!(read["error"]["status"], expected_code, "{read}");
+        assert_eq!(read["error"]["message"], GONE, "{read}");
+        let (status, again) = call(&s, "POST", &format!("{DOCS}:commit"), commit);
+        assert_eq!(status, expected_status, "strict={strict}: {again}");
+        assert_eq!(again["error"]["message"], GONE, "{again}");
+        let (status, writer) = call(
+            &s,
+            "PATCH",
+            &format!("{DOCS}/rest-refused/held"),
+            json!({"fields": {"v": {"integerValue": "3"}}}),
+        );
+        assert_eq!(status, 200, "the lock is gone at once: {writer}");
+        for _ in 0..2 {
+            let (status, rolled_back) = call(
+                &s,
+                "POST",
+                &format!("{DOCS}:rollback"),
+                json!({"transaction": transaction}),
+            );
+            assert_eq!(status, 200, "{rolled_back}");
+        }
+        let (status, document) = call(&s, "GET", &format!("{DOCS}/rest-refused/held"), Value::Null);
+        assert_eq!(status, 200, "{document}");
+        assert_eq!(document["fields"]["v"]["integerValue"], "3");
     }
 }
 

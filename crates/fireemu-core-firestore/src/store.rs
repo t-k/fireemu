@@ -262,6 +262,11 @@ pub struct CommitResult {
     pub version: CommitVersion,
     /// Documents that actually changed, in path order (no-op writes are not listed).
     pub changes: Arc<[DocumentChange]>,
+    /// Whether the answer to the client carries `commit_time`. Production leaves it out of the
+    /// empty commit of a transaction that has not read (P01 gRPC) and of an empty commit outside a
+    /// transaction (matrix `writes/preconditions-and-masks#empty-commit`); the emulator profile
+    /// always carries it. Every commit with writes carries it.
+    pub stamped: bool,
 }
 
 struct StagedDocument {
@@ -590,6 +595,9 @@ pub struct HistoryProjection {
 
 impl std::error::Error for FirestoreError {}
 
+// Each flag is an independent fact about one transaction (mode, a pending lock wait, an unpinned
+// snapshot, an expiry nobody was refused for); a state enum would multiply them.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone)]
 struct Transaction {
     read_only: bool,
@@ -615,6 +623,28 @@ struct Transaction {
     /// this one's locks is the deadlock production resolves by aborting one side: that other
     /// side is aborted, so this one can proceed.
     waiting_to_commit: bool,
+    /// A read-only transaction begun without a `readTime` takes its snapshot at its first use, not
+    /// at its begin (P02: an outside write between the begin and the first read is shown). The
+    /// emulator profile does the same for a read-write transaction (the official emulator's read).
+    snapshot_pending: bool,
+    /// The transaction ran out of its total lifetime (either profile). It is kept, finished, so that
+    /// requests are answered as the profile's service answers them.
+    ///
+    /// Production (P11 REST recording 1 and P11 v4, two recordings that each ran REST and gRPC): for as long as the
+    /// token is remembered, every request answers `ABORTED` "no longer valid" (a read, a Commit and a
+    /// Rollback alike, the writer outside the transaction is not held); a read at 298.7 to 301.0 s still
+    /// answered that, and the Commit about a second after it answered `INVALID_ARGUMENT`
+    /// "Invalid transaction." (the token forgotten), so it is forgotten at about 300 s of its age.
+    ///
+    /// Emulator profile: the official emulator (v1.22.0, REST measured) answers a read after the
+    /// lifetime `INVALID_ARGUMENT` "no longer valid", a Commit `ABORTED` with the same text, and accepts
+    /// a Rollback. Only that order (read, Commit, Rollback) is measured there.
+    lifetime_expired: bool,
+    /// The time of the transaction's first read: its snapshot time for a read-only transaction. The
+    /// empty commit of a transaction that has read answers this time and uses up no commit time
+    /// (production, P01 REST read-write and P02 both transports); one that has not read answers none
+    /// in production. Only the first read is recorded; a later read's time is unobserved.
+    first_read_time: Option<LogicalInstant>,
 }
 
 #[derive(Debug, Clone)]
@@ -656,6 +686,12 @@ enum TransactionState {
     Active,
     RetryableAborted,
     RolledBack,
+    Committed,
+    /// Ended by a commit that a precondition refused. Production answers every later use of the
+    /// token `INVALID_ARGUMENT` (the official emulator `ABORTED`), and accepts a Rollback.
+    /// Observed only for the `exists: true` refusal (P08); that `exists: false` and `update_time`
+    /// refusals end the transaction too is inferred, not observed.
+    CommitRefused,
     Retried,
     Finished,
 }
@@ -1043,6 +1079,26 @@ const TRANSACTION_CONCURRENT_MODIFICATION: &str =
 /// transaction holds on what it read (`concurrencyMode: PESSIMISTIC`).
 pub const TOO_MUCH_CONTENTION: &str = "Too much contention on these documents. Please try again.";
 const MAX_FINISHED_TRANSACTION_LINEAGE: usize = 8_192;
+// Strict allows a transaction to sit idle 120 s (the nominal 60 s quota plus this allowance).
+// Production accepted a native Commit after a nominal 110 s idle (measured idle in [110.58,
+// 113.12] s) and refused one after 120 s ([120.54, 122.97] s), each twice (P10-C), and the earlier
+// native samples of 65 to 70 s (up to 72.9 s) were accepted. The REST refusals of the expiry
+// recording (run e823, idleSeconds 121.15 and 120.35, response to response) are consistent with
+// this but bound nothing.
+// Strict must not refuse what production accepted (at least 113.12 s) and must refuse what it
+// refused (below 120.54 s); it takes 120 s. The unobserved 113.12 to 120 s gap is accepted and
+// the unobserved 120 to 120.54 s gap is refused.
+// This is a provisional bracket, not an exact production threshold.
+// The pinned official emulator retains its nominal idle budget without this allowance.
+const TRANSACTION_IDLE_ALLOWANCE_SECONDS: i64 = 60;
+/// How long production remembers a transaction that ran out of its total lifetime, counted from that
+/// deadline (270 s of token age): it answers "no longer valid" until about 300 s of token age and is forgotten
+/// after that (P11, REST and gRPC: read and Commit at 282.9 to 287.9 s answered 10; a read at 298.7 to 301.0
+/// s answered 10 and the Commit after it 3 "Invalid transaction."). The bracket is (298.7, 302.2] s; 300 s is
+/// taken.
+const EXPIRED_TOKEN_MEMORY_SECONDS: i64 = 30;
+/// How long the emulator profile keeps such a transaction; a bound so nothing is kept forever.
+const EMULATOR_EXPIRED_TOKEN_RETENTION_SECONDS: i64 = 600;
 
 fn transaction_ttl() -> LogicalDuration {
     seconds_limit(limits::TRANSACTION_TOTAL_TIME, 270)
@@ -1052,11 +1108,20 @@ fn transaction_idle_ttl() -> LogicalDuration {
     seconds_limit(limits::TRANSACTION_IDLE_TIME, 60)
 }
 
-fn transaction_deadline(transaction: &Transaction) -> LogicalInstant {
+fn transaction_deadline(transaction: &Transaction, scope: LimitScope) -> LogicalInstant {
     let total = transaction_lineage_deadline(transaction);
     let idle = transaction
         .last_activity
         .checked_add(transaction_idle_ttl())
+        .and_then(|deadline| {
+            if scope == LimitScope::Production {
+                deadline.checked_add(LogicalDuration::from_seconds(
+                    TRANSACTION_IDLE_ALLOWANCE_SECONDS,
+                ))
+            } else {
+                Some(deadline)
+            }
+        })
         .unwrap_or(LogicalInstant::MAX);
     total.min(idle)
 }
@@ -1066,6 +1131,27 @@ fn transaction_lineage_deadline(transaction: &Transaction) -> LogicalInstant {
         .started_at
         .checked_add(transaction_ttl())
         .unwrap_or(LogicalInstant::MAX)
+}
+
+fn finished_lineage_deadline(transaction: &Transaction, scope: LimitScope) -> LogicalInstant {
+    let deadline = transaction_lineage_deadline(transaction);
+    // Production remembers a transaction that a timeout finished (its total lifetime, or an idle expiry the
+    // recordings only follow up to the first minutes) until about 300 s of token age; the emulator profile keeps
+    // only a lifetime expiry, for its own bound.
+    if transaction.lifetime_expired
+        || (scope == LimitScope::Production && transaction.state == TransactionState::Finished)
+    {
+        let memory = if scope == LimitScope::Production {
+            EXPIRED_TOKEN_MEMORY_SECONDS
+        } else {
+            EMULATOR_EXPIRED_TOKEN_RETENTION_SECONDS
+        };
+        deadline
+            .checked_add(LogicalDuration::from_seconds(memory))
+            .unwrap_or(LogicalInstant::MAX)
+    } else {
+        deadline
+    }
 }
 
 fn decrement_version_count(versions: &mut BTreeMap<CommitVersion, usize>, version: CommitVersion) {
@@ -2022,6 +2108,7 @@ impl FirestoreState {
                 write_results: Vec::new(),
                 version: self.version,
                 changes: Arc::from([]),
+                stamped: true,
             });
         }
         self.version = next_version;
@@ -2065,6 +2152,7 @@ impl FirestoreState {
             write_results: Vec::new(),
             version: next_version,
             changes: Arc::from(changes),
+            stamped: true,
         })
     }
 
@@ -2075,7 +2163,52 @@ impl FirestoreState {
         now: LogicalInstant,
     ) -> Result<TransactionId, FirestoreError> {
         let read_time = self.read_time(now);
-        self.insert_transaction(read_only, self.version, read_time, now)
+        let id = self.insert_transaction(read_only, self.version, read_time, now)?;
+        // The eager begin (a read's `newTransaction`) reads in the same request; an explicit begin
+        // clears this (`begin_read_only_transaction`, `begin_read_write_transaction`).
+        if let Some(transaction) = self.transactions.get_mut(&id) {
+            transaction.first_read_time = Some(read_time);
+        }
+        Ok(id)
+    }
+
+    /// Begins a read-only transaction. In the production profile its snapshot is taken at its
+    /// first use (the client's next request on the token), as production does (P02, REST and
+    /// gRPC): a write acknowledged between the begin and the first read is shown by that read, and
+    /// every later read shows the snapshot of the first. The official emulator (v1.22.0, measured
+    /// on both transports) takes the snapshot at the begin, so the emulator profile keeps that. A
+    /// transaction that begins with a read (`newTransaction` on a read) uses
+    /// [`Self::begin_transaction`], whose snapshot is the moment of that read.
+    pub fn begin_read_only_transaction(
+        &mut self,
+        now: LogicalInstant,
+    ) -> Result<TransactionId, FirestoreError> {
+        let id = self.begin_transaction(true, now)?;
+        if let Some(transaction) = self.transactions.get_mut(&id) {
+            transaction.first_read_time = None;
+            transaction.snapshot_pending = self.limit_scope == LimitScope::Production;
+        }
+        Ok(id)
+    }
+
+    /// Begins a read-write transaction. Its snapshot is taken at its first use, not at the begin:
+    /// an outside write acknowledged between the begin and the first read is shown by that read,
+    /// and the transaction's commit then succeeds. Production does this (P02b chain Z, REST and
+    /// gRPC, two recordings: the first read showed the writer and the commit answered 0), and so
+    /// does the official emulator (v1.22.0, measured on both transports), so both profiles do. A
+    /// transaction that begins with a read (`newTransaction` on a read) uses
+    /// [`Self::begin_transaction`]; a retry attempt ([`Self::retry_transaction`]) is not recorded
+    /// in production.
+    pub fn begin_read_write_transaction(
+        &mut self,
+        now: LogicalInstant,
+    ) -> Result<TransactionId, FirestoreError> {
+        let id = self.begin_transaction(false, now)?;
+        if let Some(transaction) = self.transactions.get_mut(&id) {
+            transaction.first_read_time = None;
+            transaction.snapshot_pending = true;
+        }
+        Ok(id)
     }
 
     /// Begins a retry attempt linked to a transaction previously issued by this database.
@@ -2094,7 +2227,7 @@ impl FirestoreState {
         };
         if previous_attempt.read_only {
             return Err(FirestoreError::InvalidArgument(
-                "read-only transaction cannot be retried as read-write".into(),
+                "Cannot retry a read-only transaction".into(),
             ));
         }
         // A client retrying an attempt that is still active (its commit was held back by
@@ -2111,7 +2244,10 @@ impl FirestoreState {
         };
         if !matches!(
             previous_attempt.state,
-            TransactionState::RetryableAborted | TransactionState::RolledBack
+            TransactionState::RetryableAborted
+                | TransactionState::RolledBack
+                | TransactionState::Committed
+                | TransactionState::CommitRefused
         ) {
             return Err(FirestoreError::InvalidArgument(
                 "Invalid retry transaction.".into(),
@@ -2122,7 +2258,14 @@ impl FirestoreState {
             previous_attempt.state = TransactionState::Retried;
         }
         let read_time = self.read_time(now);
-        self.insert_transaction(false, self.version, read_time, now)
+        let id = self.insert_transaction(false, self.version, read_time, now)?;
+        // The official emulator (v1.22.0, REST measured) reads a retried read-write transaction at
+        // its first use, like a plain begin (`begin_read_write_transaction`); production is
+        // unobserved, so strict keeps the begin-time snapshot.
+        if let Some(transaction) = self.transactions.get_mut(&id) {
+            transaction.snapshot_pending = self.limit_scope == LimitScope::OfficialEmulator;
+        }
+        Ok(id)
     }
 
     /// Starts a read-only transaction over the snapshot at `read_time` (the latest version
@@ -2167,9 +2310,14 @@ impl FirestoreState {
             state: TransactionState::Active,
             activity: 0,
             waiting_to_commit: false,
+            snapshot_pending: false,
+            lifetime_expired: false,
+            first_read_time: None,
         };
-        self.active_transaction_deadlines
-            .insert((transaction_deadline(&transaction), id.clone()));
+        self.active_transaction_deadlines.insert((
+            transaction_deadline(&transaction, self.limit_scope),
+            id.clone(),
+        ));
         *self
             .active_transaction_versions
             .entry(read_version)
@@ -2179,7 +2327,10 @@ impl FirestoreState {
         Ok(id)
     }
 
-    fn prune_transactions(&mut self, now: LogicalInstant) {
+    /// Finishes the active transactions whose deadline has passed and forgets the finished ones whose retention has
+    /// ended. Returns whether it changed anything.
+    fn prune_transactions(&mut self, now: LogicalInstant) -> bool {
+        let mut changed = false;
         while let Some((deadline, id)) = self.active_transaction_deadlines.first().cloned() {
             if deadline > now {
                 break;
@@ -2191,11 +2342,12 @@ impl FirestoreState {
                 continue;
             };
             if transaction.state != TransactionState::Active
-                || transaction_deadline(transaction) != deadline
+                || transaction_deadline(transaction, self.limit_scope) != deadline
             {
                 continue;
             }
             transaction.state = TransactionState::Finished;
+            transaction.lifetime_expired = deadline == transaction_lineage_deadline(transaction);
             self.active_transaction_conflict_ledger_bytes = self
                 .active_transaction_conflict_ledger_bytes
                 .saturating_sub(transaction.conflict_ledger_bytes);
@@ -2207,10 +2359,20 @@ impl FirestoreState {
                 &mut self.active_transaction_versions,
                 transaction.read_version,
             );
-            self.finished_transaction_deadlines
-                .insert((transaction_lineage_deadline(transaction), id.clone()));
+            self.finished_transaction_deadlines.insert((
+                finished_lineage_deadline(transaction, self.limit_scope),
+                id.clone(),
+            ));
             self.finished_transactions.insert(id);
+            changed = true;
         }
+        changed |= self.forget_elapsed_finished_transactions(now);
+        changed
+    }
+
+    /// Forgets the finished transactions whose retention has ended at `now`. Returns whether it changed anything.
+    fn forget_elapsed_finished_transactions(&mut self, now: LogicalInstant) -> bool {
+        let mut changed = false;
         while let Some((deadline, id)) = self.finished_transaction_deadlines.first().cloned() {
             if deadline > now {
                 break;
@@ -2218,6 +2380,7 @@ impl FirestoreState {
             self.finished_transaction_deadlines
                 .remove(&(deadline, id.clone()));
             self.finished_transactions.remove(&id);
+            changed = true;
             if self
                 .transactions
                 .get(&id)
@@ -2227,6 +2390,35 @@ impl FirestoreState {
             }
         }
         self.evict_finished_transactions();
+        changed
+    }
+
+    /// An active transaction found past its total lifetime by a request (emulator profile): keep it, finished, for the
+    /// retention bound, as maintenance does, so a Commit and a Rollback after the read that found it are answered as the
+    /// official emulator answers them. Returns whether the transaction ran out of its total lifetime.
+    fn keep_lifetime_expired_transaction(
+        &mut self,
+        id: &TransactionId,
+        deadline: LogicalInstant,
+    ) -> bool {
+        let Some(transaction) = self.transactions.get_mut(id) else {
+            return false;
+        };
+        // Production prunes before it looks (see `touch_transaction`), so only the emulator profile finds an active transaction
+        // past its total lifetime here.
+        if self.limit_scope != LimitScope::OfficialEmulator
+            || deadline != transaction_lineage_deadline(transaction)
+        {
+            return false;
+        }
+        let scope = self.limit_scope;
+        let plain = (finished_lineage_deadline(transaction, scope), id.clone());
+        transaction.lifetime_expired = true;
+        let kept = (finished_lineage_deadline(transaction, scope), id.clone());
+        if self.finished_transaction_deadlines.remove(&plain) {
+            self.finished_transaction_deadlines.insert(kept);
+        }
+        true
     }
 
     fn ensure_transaction_capacity(&self) -> Result<(), FirestoreError> {
@@ -2244,7 +2436,7 @@ impl FirestoreState {
             .transactions
             .get(id)
             .filter(|transaction| transaction.state == TransactionState::Active)
-            .map(transaction_deadline);
+            .map(|transaction| transaction_deadline(transaction, self.limit_scope));
         let Some(deadline) = deadline else {
             if let Some(transaction) = self.transactions.get_mut(id) {
                 transaction.state = state;
@@ -2276,14 +2468,33 @@ impl FirestoreState {
         self.evict_finished_transactions();
     }
 
+    /// Whether production still remembers this transaction as one that ran out of its total lifetime. Eviction never takes
+    /// such a token before its memory ends: at most as many tokens as were active together (4 096) are held this way.
+    /// While the lineage is full, each eviction scans past those held tokens, so a finish costs up to 4 096 steps; the bound
+    /// is deliberate and small, and nothing else grows.
+    fn remembered_as_expired(&self, id: &TransactionId) -> bool {
+        self.limit_scope == LimitScope::Production
+            && self.transactions.get(id).is_some_and(|transaction| {
+                transaction.lifetime_expired && transaction.state == TransactionState::Finished
+            })
+    }
+
     fn evict_finished_transactions(&mut self) {
         while self.finished_transactions.len() > MAX_FINISHED_TRANSACTION_LINEAGE {
-            let Some(id) = self.finished_transactions.pop_first() else {
+            let Some(id) = self
+                .finished_transactions
+                .iter()
+                .find(|id| !self.remembered_as_expired(id))
+                .cloned()
+            else {
                 break;
             };
+            self.finished_transactions.remove(&id);
             if let Some(transaction) = self.transactions.get(&id) {
-                self.finished_transaction_deadlines
-                    .remove(&(transaction_lineage_deadline(transaction), id.clone()));
+                self.finished_transaction_deadlines.remove(&(
+                    finished_lineage_deadline(transaction, self.limit_scope),
+                    id.clone(),
+                ));
             }
             if self
                 .transactions
@@ -2312,8 +2523,10 @@ impl FirestoreState {
     pub fn abandon_transaction(&mut self, id: &TransactionId) {
         if let Some(transaction) = self.transactions.remove(id) {
             if transaction.state == TransactionState::Active {
-                self.active_transaction_deadlines
-                    .remove(&(transaction_deadline(&transaction), id.clone()));
+                self.active_transaction_deadlines.remove(&(
+                    transaction_deadline(&transaction, self.limit_scope),
+                    id.clone(),
+                ));
                 self.active_transaction_count = self.active_transaction_count.saturating_sub(1);
                 decrement_version_count(
                     &mut self.active_transaction_versions,
@@ -2324,8 +2537,10 @@ impl FirestoreState {
                     .saturating_sub(transaction.conflict_ledger_bytes);
             } else {
                 self.finished_transactions.remove(id);
-                self.finished_transaction_deadlines
-                    .remove(&(transaction_lineage_deadline(&transaction), id.clone()));
+                self.finished_transaction_deadlines.remove(&(
+                    finished_lineage_deadline(&transaction, self.limit_scope),
+                    id.clone(),
+                ));
             }
         }
     }
@@ -2383,14 +2598,29 @@ impl FirestoreState {
         id: &TransactionId,
         now: LogicalInstant,
     ) -> Result<(), FirestoreError> {
+        // Production remembers an expired token for a bounded time, so a request first forgets the tokens whose memory has
+        // ended. The emulator profile keeps its own flow below, unchanged.
+        if self.limit_scope == LimitScope::Production && self.prune_transactions(now) {
+            self.compact(now);
+        }
+        if let Err(error) = self.transaction(id) {
+            // The emulator profile answers a read after the total lifetime `INVALID_ARGUMENT`.
+            return Err(self.read_error_after_lifetime(id, error));
+        }
         let t = self.transaction(id)?;
         // Expiry is inclusive at the deadline (`now >= deadline`). Commit validation uses
         // this same boundary, so the transaction is gone at the exact deadline.
-        let previous_deadline = transaction_deadline(t);
+        let previous_deadline = transaction_deadline(t, self.limit_scope);
         let expired = now >= previous_deadline;
         if expired {
             self.finish_transaction(id, TransactionState::Finished);
+            let lifetime = self.keep_lifetime_expired_transaction(id, previous_deadline);
             self.compact(now);
+            if lifetime {
+                return Err(FirestoreError::InvalidArgument(
+                    TRANSACTION_NO_LONGER_VALID.into(),
+                ));
+            }
             return Err(FirestoreError::Aborted(TRANSACTION_NO_LONGER_VALID.into()));
         }
         self.active_transaction_deadlines
@@ -2399,8 +2629,41 @@ impl FirestoreState {
             transaction.last_activity = now;
             transaction.wall_last_activity = std::time::Instant::now();
             transaction.activity = transaction.activity.wrapping_add(1);
-            self.active_transaction_deadlines
-                .insert((transaction_deadline(transaction), id.clone()));
+            if transaction.snapshot_pending {
+                transaction.snapshot_pending = false;
+                let (version, time) = (
+                    self.version,
+                    match self.last_commit_time {
+                        Some(last) if last.as_nanos() > now.as_nanos() => last,
+                        _ => now,
+                    },
+                );
+                if version != transaction.read_version {
+                    decrement_version_count(
+                        &mut self.active_transaction_versions,
+                        transaction.read_version,
+                    );
+                    *self.active_transaction_versions.entry(version).or_default() += 1;
+                    transaction.read_version = version;
+                }
+                transaction.read_time = time;
+            }
+            if transaction.first_read_time.is_none() {
+                // A read-only transaction's snapshot time; a read-write transaction reads at this
+                // request's time.
+                transaction.first_read_time = Some(if transaction.read_only {
+                    transaction.read_time
+                } else {
+                    match self.last_commit_time {
+                        Some(last) if last.as_nanos() > now.as_nanos() => last,
+                        _ => now,
+                    }
+                });
+            }
+            self.active_transaction_deadlines.insert((
+                transaction_deadline(transaction, self.limit_scope),
+                id.clone(),
+            ));
         }
         Ok(())
     }
@@ -2547,7 +2810,7 @@ impl FirestoreState {
             .values()
             .filter(|transaction| {
                 transaction.state == TransactionState::Active
-                    && transaction_deadline(transaction) > now
+                    && transaction_deadline(transaction, self.limit_scope) > now
             })
             .map(|transaction| transaction.read_version)
             .min()
@@ -2814,7 +3077,7 @@ impl FirestoreState {
         &self,
         id: &TransactionId,
     ) -> Result<LogicalInstant, FirestoreError> {
-        Ok(self.transaction(id)?.read_time)
+        Ok(self.reading_transaction(id)?.read_time)
     }
 
     /// Snapshot version a transaction reads at.
@@ -2822,7 +3085,36 @@ impl FirestoreState {
         &self,
         id: &TransactionId,
     ) -> Result<CommitVersion, FirestoreError> {
-        Ok(self.transaction(id)?.read_version)
+        Ok(self.reading_transaction(id)?.read_version)
+    }
+
+    /// The error a read gets: the emulator profile answers a read of a transaction that ran out of its total lifetime
+    /// `INVALID_ARGUMENT` with the same text (official emulator v1.22.0, REST measured), a Commit `ABORTED`.
+    fn read_error_after_lifetime(
+        &self,
+        id: &TransactionId,
+        error: FirestoreError,
+    ) -> FirestoreError {
+        let lifetime = self.limit_scope == LimitScope::OfficialEmulator
+            && self.transactions.get(id).is_some_and(|transaction| {
+                transaction.lifetime_expired && transaction.state == TransactionState::Finished
+            });
+        if lifetime && matches!(error, FirestoreError::Aborted(_)) {
+            FirestoreError::InvalidArgument(TRANSACTION_NO_LONGER_VALID.into())
+        } else {
+            error
+        }
+    }
+
+    /// [`Self::transaction`] for a read: a pending snapshot must have been pinned (by
+    /// [`Self::touch_transaction`]) before the transaction is read at its version or time.
+    fn reading_transaction(&self, id: &TransactionId) -> Result<&Transaction, FirestoreError> {
+        let transaction = self.transaction(id)?;
+        debug_assert!(
+            !transaction.snapshot_pending,
+            "a read path must touch the transaction (pinning its snapshot) before it reads"
+        );
+        Ok(transaction)
     }
 
     fn transaction(&self, id: &TransactionId) -> Result<&Transaction, FirestoreError> {
@@ -2832,6 +3124,16 @@ impl FirestoreState {
                     && t.read_version >= self.compaction_floor =>
             {
                 Ok(t)
+            }
+            // A transaction a refused commit ended is `INVALID_ARGUMENT` in production (P08); the
+            // official emulator reports it as it reports every finished transaction.
+            Some(t)
+                if t.state == TransactionState::CommitRefused
+                    && matches!(self.limit_scope, LimitScope::Production) =>
+            {
+                Err(FirestoreError::InvalidArgument(
+                    TRANSACTION_NO_LONGER_VALID.into(),
+                ))
             }
             // A finished transaction is reported the way the official emulator reports it:
             // `ABORTED`, which is the code the SDKs retry a transaction on.
@@ -2849,7 +3151,7 @@ impl FirestoreState {
         id: &TransactionId,
         path: &DocumentPath,
     ) -> Result<Option<Document>, FirestoreError> {
-        let read_version = self.transaction(id)?.read_version;
+        let read_version = self.reading_transaction(id)?.read_version;
         let doc = self.get_at(path, read_version).cloned();
         self.record_transaction_read(id, path, doc.as_ref())?;
         Ok(doc)
@@ -2912,7 +3214,7 @@ impl FirestoreState {
         execution_id: QueryExecutionId,
         complete: bool,
     ) -> Result<(Vec<Document>, QueryStats), FirestoreError> {
-        let read_version = self.transaction(id)?.read_version;
+        let read_version = self.reading_transaction(id)?.read_version;
         let (docs, stats) = self.run_query_with_stats(query, Some(read_version))?;
         self.record_transaction_query_observation(
             id,
@@ -2951,7 +3253,7 @@ impl FirestoreState {
         execution_id: QueryExecutionId,
         complete: bool,
     ) -> Result<(Vec<Document>, QueryStats), FirestoreError> {
-        let read_version = self.transaction(id)?.read_version;
+        let read_version = self.reading_transaction(id)?.read_version;
         let (docs, stats) = self.run_query_with_stats(query, Some(read_version))?;
         self.record_transaction_query_observation(
             id,
@@ -2978,7 +3280,7 @@ impl FirestoreState {
         continuation: bool,
         complete: bool,
     ) -> Result<(Vec<Document>, QueryStats), FirestoreError> {
-        let read_version = self.transaction(id)?.read_version;
+        let read_version = self.reading_transaction(id)?.read_version;
         let (docs, stats) =
             self.documents_at_query_paths_with_stats(query, paths, Some(read_version));
         self.record_transaction_query_observation(
@@ -3001,7 +3303,7 @@ impl FirestoreState {
         query: &Query,
         after: &DocumentPath,
     ) -> Result<(Vec<Document>, QueryStats), FirestoreError> {
-        let read_version = self.transaction(id)?.read_version;
+        let read_version = self.reading_transaction(id)?.read_version;
         let (docs, stats) =
             self.run_query_after_document_with_stats(query, Some(read_version), after)?;
         let mut observed_query = query.clone();
@@ -3042,7 +3344,7 @@ impl FirestoreState {
         execution_id: QueryExecutionId,
         complete: bool,
     ) -> Result<(Vec<Document>, QueryStats), FirestoreError> {
-        let read_version = self.transaction(id)?.read_version;
+        let read_version = self.reading_transaction(id)?.read_version;
         let (docs, stats) =
             self.run_query_after_document_with_stats(query, Some(read_version), after)?;
         self.record_transaction_query_observation(
@@ -3259,8 +3561,51 @@ impl FirestoreState {
         Ok(self.transaction(id)?.queries.len())
     }
 
-    /// Rolls back (finishes) a transaction.
+    /// Rolls back an active transaction. Repeated rollback and rollback after expiry are
+    /// successful no-ops; a committed or consumed predecessor remains unusable.
+    pub fn rollback_at(
+        &mut self,
+        id: &TransactionId,
+        now: LogicalInstant,
+    ) -> Result<(), FirestoreError> {
+        // A transaction that ran out of its total lifetime is finished first, so its Rollback is answered like any
+        // other request; an idle one still becomes a rolled-back transaction, which keeps its retry lineage.
+        if self.limit_scope == LimitScope::Production {
+            let lifetime_over = self.transactions.get(id).is_some_and(|transaction| {
+                transaction.state == TransactionState::Active
+                    && now >= transaction_lineage_deadline(transaction)
+            });
+            if lifetime_over {
+                self.prune_transactions(now);
+            } else {
+                self.forget_elapsed_finished_transactions(now);
+            }
+        }
+        self.rollback(id)
+    }
+
+    /// Rolls back without maintenance; [`Self::rollback_at`] first forgets the transactions whose retention has
+    /// ended at `now`.
     pub fn rollback(&mut self, id: &TransactionId) -> Result<(), FirestoreError> {
+        if self.transactions.get(id).is_some_and(|transaction| {
+            matches!(
+                transaction.state,
+                TransactionState::RolledBack
+                    | TransactionState::Finished
+                    | TransactionState::CommitRefused
+            )
+        }) {
+            // Production remembers a transaction that ran out of its total lifetime for a while, and answers
+            // its Rollback like every other request (P11 v4: 10 with the expired text).
+            if self.limit_scope == LimitScope::Production
+                && self.transactions.get(id).is_some_and(|transaction| {
+                    transaction.lifetime_expired && transaction.state == TransactionState::Finished
+                })
+            {
+                return Err(FirestoreError::Aborted(TRANSACTION_NO_LONGER_VALID.into()));
+            }
+            return Ok(());
+        }
         self.transaction(id)?;
         self.finish_transaction(id, TransactionState::RolledBack);
         Ok(())
@@ -3322,7 +3667,22 @@ impl FirestoreState {
 
         // Commit times are microsecond-aligned (Firestore update-time precision) and advance
         // by one microsecond when the clock did not move between commits.
-        let commit_time = self.next_commit_time(now);
+        // The empty commit of a transaction that has read answers the time of its first read and
+        // consumes no commit time. Recorded: a read-write transaction over REST (P01: the time lies
+        // inside the read's window, before the Commit was sent) and a read-only one over both
+        // transports (P02: the snapshot time, before an outside writer's commit acknowledged in
+        // between). One that has not read carries no time in production (P01 gRPC read-write; the
+        // matrix `writes/preconditions-and-masks#empty-commit` outside a transaction, `{}`).
+        // Unobserved and inferred from those rows: a REST read-write empty commit with no read, a
+        // gRPC read-write one after a read, a read-only one with no read, and a later read's time.
+        let snapshot_time = transaction
+            .and_then(|id| self.transactions.get(id))
+            .filter(|_| writes.is_empty())
+            .and_then(|t| t.first_read_time);
+        let commit_time = snapshot_time.unwrap_or_else(|| self.next_commit_time(now));
+        let stamped = !writes.is_empty()
+            || snapshot_time.is_some()
+            || self.limit_scope != LimitScope::Production;
 
         // Stage every write against a working copy; fail before touching state. A write
         // whose result equals the current document is a no-op: it keeps the existing version
@@ -3349,7 +3709,16 @@ impl FirestoreState {
             }
             let stage = staged.get_mut(&path).unwrap_or_else(|| unreachable!());
             let current = stage.current.as_deref();
-            check_precondition(write.precondition.as_ref(), current, &path)?;
+            if let Err(refused) = check_precondition(write.precondition.as_ref(), current, &path) {
+                // Production ends the transaction whose commit a precondition refused, and with it
+                // the locks of what it read (P08, observed for `exists: true`; the other two
+                // precondition kinds are inferred to behave alike). Nothing was published: the
+                // writes are staged.
+                if let Some(id) = transaction {
+                    self.finish_transaction(id, TransactionState::CommitRefused);
+                }
+                return Err(refused);
+            }
             if let (WriteOp::Delete { .. }, Some(stored), LimitScope::Production) =
                 (&write.op, current, self.limit_scope)
             {
@@ -3417,6 +3786,7 @@ impl FirestoreState {
             write_results: results,
             version,
             changes: published_changes,
+            stamped,
         };
         let before = self.history_usage();
         let (uncompacted, after) = self.projected_history_usage(&staged_changes, now);
@@ -3424,8 +3794,11 @@ impl FirestoreState {
         let reservation = admit(&result, HistoryProjection { before, after })?;
 
         // Publish. All fallible validation and external admission completed above. Every
-        // accepted commit consumes a commit time, changed documents or not.
-        self.last_commit_time = Some(commit_time);
+        // accepted commit consumes a commit time, changed documents or not, except the empty
+        // commit of a transaction that has read, which answers the time of its first read.
+        if snapshot_time.is_none() {
+            self.last_commit_time = Some(commit_time);
+        }
         self.compaction_forecast = None;
         self.history_usage = uncompacted;
         if changed {
@@ -3455,7 +3828,7 @@ impl FirestoreState {
             }
         }
         if let Some(id) = transaction {
-            self.finish_transaction(id, TransactionState::Finished);
+            self.finish_transaction(id, TransactionState::Committed);
         }
         // Retention is owned by the store: every commit drops the history that has fallen
         // out of the read window and is not pinned by an active transaction.
@@ -3495,23 +3868,33 @@ impl FirestoreState {
         writes: &[Write],
         now: LogicalInstant,
     ) -> Result<(), FirestoreError> {
+        if self.limit_scope == LimitScope::Production {
+            self.prune_transactions(now);
+        }
+        self.transaction(id)?;
         let transaction = self.transaction(id)?;
-        if now >= transaction_deadline(transaction) {
+        let deadline = transaction_deadline(transaction, self.limit_scope);
+        if now >= deadline {
             self.finish_transaction(id, TransactionState::Finished);
+            self.keep_lifetime_expired_transaction(id, deadline);
             self.compact(now);
             return Err(FirestoreError::Aborted(TRANSACTION_NO_LONGER_VALID.into()));
         }
         let transaction = self.transaction(id)?;
         if transaction.read_only && !writes.is_empty() {
+            // Production ends a read-only transaction whose write commit it refused: the empty commit
+            // that followed on the same token answered `INVALID_ARGUMENT` "no longer valid"
+            // (observed over REST: conformance/firestore-production-matrix.json, program
+            // `transactions/lifecycle`, case `transactions/lifecycle#read-only-commit-without-writes`,
+            // after `read-only-commit-with-writes`), and P02 accepts a Rollback afterwards. A
+            // GetDocument on that token answered the same (P02b, REST and gRPC: a read and an empty
+            // commit, in either order, answer `INVALID_ARGUMENT` "no longer valid", and a Rollback
+            // answers 0). The official emulator profile keeps the transaction open as before.
+            if self.limit_scope == LimitScope::Production {
+                self.finish_transaction(id, TransactionState::CommitRefused);
+            }
             return Err(FirestoreError::InvalidArgument(
                 "Cannot modify entities in a read-only transaction.".into(),
-            ));
-        }
-        if transaction.read_only {
-            // Production refuses committing a read-only transaction at all, even with no
-            // writes, and calls the transaction no longer valid.
-            return Err(FirestoreError::InvalidArgument(
-                TRANSACTION_NO_LONGER_VALID.into(),
             ));
         }
         if self.transaction_conflicted(id)? {
@@ -4632,7 +5015,7 @@ impl FirestoreState {
         let mut rows = Vec::new();
         let stats = self.select(
             query,
-            Some(self.transaction(id)?.read_version),
+            Some(self.reading_transaction(id)?.read_version),
             &required_fields,
             Consumption::Unordered,
             |document| {

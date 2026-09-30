@@ -24,10 +24,12 @@ RUNS = ROOT / "spec/compatibility/broad-runs"
 LEGACY_MANIFEST = RUNS / "fs-transaction-expiry-retry-04-manifest.json"
 PREVIOUS_MANIFEST = RUNS / "fs-transaction-expiry-retry-04-manifest-v2.json"
 PREVIOUS_MANIFEST_V3 = RUNS / "fs-transaction-expiry-retry-04-manifest-v3.json"
-MANIFEST = RUNS / "fs-transaction-expiry-retry-04-manifest-v4.json"
-# The current record. Earlier records stay byte-identical below; each one was
-# produced by the collector of its day against the prefix of its day.
-SHADOW = RUNS / "fs-transaction-expiry-retry-04-local-shadow-v3.json"
+PREVIOUS_MANIFEST_V4 = RUNS / "fs-transaction-expiry-retry-04-manifest-v4.json"
+MANIFEST = RUNS / "fs-transaction-expiry-retry-04-manifest-v5.json"
+# Historical preproduction preparation. Its bytes and expectedLocal contract
+# remain unchanged after actual production observations repair the runtime.
+SHADOW = RUNS / "fs-transaction-expiry-retry-04-local-shadow-v4.json"
+HISTORICAL_SHADOW_V3 = RUNS / "fs-transaction-expiry-retry-04-local-shadow-v3.json"
 HISTORICAL_SHADOW = RUNS / "fs-transaction-expiry-retry-04-local-shadow.json"
 HISTORICAL_SHADOW_V2 = RUNS / "fs-transaction-expiry-retry-04-local-shadow-v2.json"
 
@@ -104,6 +106,7 @@ def test_the_published_shadow_is_exactly_what_the_generator_emits():
                 "runtimeInputsDigest",
                 "runtimeInputCount",
                 "runtimeInputsClean",
+                "pythonRuntime",
             )
         },
         version=value["runtime"]["version"],
@@ -212,23 +215,22 @@ def test_published_evidence_contains_no_absolute_filesystem_path():
             assert needle not in text, f"{path.name} records {needle}"
 
 
-def test_local_shadow_runtime_inputs_match_the_current_rust_source():
-    """The artifact must still describe the Rust source in this worktree.
+def test_historical_shadow_runtime_inputs_match_its_recorded_source_commit():
+    """Retain the preparation record without rebinding it to a repaired runtime.
 
-    The commit itself moves whenever tooling or documentation is committed, so
-    the binding that matters is the hashed Rust input set, not the SHA.
+    The current production comparison has its own current-input guard in
+    test_txn_recorded_partial_evidence.py.
     """
     import sys as _sys
 
     _sys.path.insert(0, str(ROOT / "tools/compat-inventory"))
     from broad_contract import digest
-    from evidence_common import runtime_inputs
+    from evidence_common import runtime_inputs_at_commit
 
     value = shadow()
-    assert value["runtime"]["runtimeInputsDigest"] == digest(runtime_inputs(ROOT)), (
-        "regenerate the local shadow: the recorded artifact no longer describes "
-        "the Rust source in this worktree"
-    )
+    inputs = runtime_inputs_at_commit(value["runtime"]["sourceCommit"], ROOT)
+    assert value["runtime"]["runtimeInputsDigest"] == digest(inputs)
+    assert value["runtime"]["runtimeInputCount"] == len(inputs)
 
 
 def _stable(value, volatile):
@@ -309,7 +311,7 @@ def test_current_preparation_is_reproducible_but_grants_no_production_permission
     value = manifest()
     expected = plan.proposal("o3expiry-reference-000000001", "0" * 32)
     expected.update(
-        preparationVersion=4,
+        preparationVersion=5,
         authorizesProduction=False,
         productionExecuted=False,
         requiresFreshPermissionBinding=True,
@@ -329,6 +331,25 @@ def test_prior_v3_preparation_stays_immutable():
         hashlib.sha256(PREVIOUS_MANIFEST_V3.read_bytes()).hexdigest()
         == "b2ff7225572eca6a536e4ace10cc1304e7a0d801d35faad37bd85a32a3beb61d"
     )
+
+
+def test_prior_v4_preparation_and_v3_shadow_stay_immutable():
+    import hashlib
+
+    assert hashlib.sha256(PREVIOUS_MANIFEST_V4.read_bytes()).hexdigest() == "0b4e5370f57d4c84fb68de0ac2ba01602c1594de3d54898550d1310323d5d070"
+    assert hashlib.sha256(HISTORICAL_SHADOW_V3.read_bytes()).hexdigest() == "937e70181230f449003de66facd0bec82387f8832df0ac367a83d23a9e518a33"
+
+
+def test_current_shadow_binds_the_reviewed_python_in_parent_and_child():
+    import hashlib
+
+    value = shadow()
+    parent = value["runtime"]["pythonRuntime"]
+    assert parent == value["runtime"]["childPythonRuntime"] == value["receipt"]["pythonRuntime"]
+    assert parent["pythonVersion"] == "3.12.13"
+    assert parent["pythonSysVersion"].startswith("3.12.13 ")
+    assert len(parent["pythonExecutableSha256"]) == hashlib.sha256().digest_size * 2
+    assert value["receipt"]["projectId"] == "demo-local-shadow"
 
 
 def test_the_current_shadow_owns_documents_below_the_oracle_prefix():

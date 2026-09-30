@@ -787,6 +787,8 @@ const closedRow = (over = {}) =>
     packetSha256: packet.packetSha256,
     requests: 100,
     estimatedUsd: 0.01,
+    failedRecipeCount: 0,
+    failedRecipeIds: [],
     ...over,
   })}\n`;
 
@@ -1642,4 +1644,69 @@ test("a recording that went on past failed recipes is recorded, and the private 
   const t = setup();
   await recordRun(t.deps);
   assert.deepEqual(t.privateFiles.meta.at(-1).failedRecipes, []);
+});
+
+test("the closing row of a recording that went on past failed recipes names them, by ID only", async () => {
+  const failed = [
+    { recording: 1, recipeId: "storage-object/gcs/copy-rewrite", reason: "rewrite answer differs" },
+    { recording: 1, recipeId: "storage-object/errors/range", reason: "another" },
+  ];
+  const s = setup({
+    replay: async (options) => {
+      const wire = options.wireFactory({
+        origins: [options.storageOrigin, options.authOrigin, options.localControl.origin],
+        limits: options.plan,
+        captureDirectory: options.captureDirectory,
+        onByteReserve: async () => {},
+      });
+      return {
+        status: "LOCAL_COMPLETE",
+        wire: wire.snapshot(),
+        failedRecipes: failed,
+        unresolved: [],
+        cleanupFailures: [],
+      };
+    },
+  });
+  await recordRun(s.deps);
+  const closing = s.ledgerRows.at(-1);
+  assert.equal(closing.outcome, "recorded");
+  assert.equal(closing.failedRecipeCount, 2);
+  assert.deepEqual(closing.failedRecipeIds, [
+    "storage-object/gcs/copy-rewrite",
+    "storage-object/errors/range",
+  ]);
+  assert.ok(!JSON.stringify(closing).includes("rewrite answer differs"), "no reason in the ledger");
+  // A clean recording says none.
+  const t = setup();
+  await recordRun(t.deps);
+  assert.equal(t.ledgerRows.at(-1).failedRecipeCount, 0);
+  assert.deepEqual(t.ledgerRows.at(-1).failedRecipeIds, []);
+});
+
+test("recording 2 is refused after a first recording with failed recipes, or one that does not say", async () => {
+  for (const over of [
+    { failedRecipeCount: 1, failedRecipeIds: ["storage-object/gcs/copy-rewrite"] },
+    { failedRecipeCount: undefined, failedRecipeIds: undefined },
+    { failedRecipeCount: "0" },
+    { failedRecipeCount: null },
+  ]) {
+    const s = setup({ ledgerText: closedRow(over) });
+    s.deps.recording = 2;
+    await refused(s, /failed recipes: the second recording needs a new packet version/);
+    assert.equal(s.ledgerRows.length, 0, "nothing is written");
+    assert.deepEqual(lockFiles(s), []);
+  }
+  const clean = setup({ ledgerText: closedRow() });
+  clean.deps.recording = 2;
+  assert.equal((await recordRun(clean.deps)).outcome, "recorded");
+});
+
+test("a stopped-clean row with failed recipes does not block a retry of recording 1", async () => {
+  const stopped = closedRow({
+    outcome: "stopped-clean",
+    failedRecipeCount: 2,
+    failedRecipeIds: ["storage-object/gcs/copy-rewrite", "storage-object/errors/range"],
+  });
+  assert.equal((await recordRun(setup({ ledgerText: stopped }).deps)).outcome, "recorded");
 });

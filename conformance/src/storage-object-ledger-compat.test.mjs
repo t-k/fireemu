@@ -270,6 +270,17 @@ const RECENT_ABORT_READERS = [
 const STATES = {
   open: () => [started(0)],
   closed: () => [started(0), finished(20)],
+  closedWithFailedRecipes: () => [
+    started(0),
+    finishedRow({
+      ...RUN,
+      ts: at(20),
+      outcome: "recorded",
+      requests: 2100,
+      estimatedUsd: 0.15,
+      failedRecipeIds: ["storage-object/gcs/copy-rewrite", "storage-object/errors/range"],
+    }),
+  ],
   recovering: () => [started(0), needsRecovery(20)],
   recovered: () => [started(0), needsRecovery(20), finished(60, "recovered-no-observation")],
 };
@@ -432,4 +443,58 @@ test("every exported ledger reader is one of those this task's rows were proved 
     }
   }
   assert.deepEqual(found.toSorted(), [...KNOWN_READERS].toSorted());
+});
+
+test("a closing row names the recipes that failed cleanly, by ID, and other readers still read it as closed", () => {
+  const ids = ["storage-object/gcs/copy-rewrite", "storage-object/auth/firebase-id-token"];
+  const row = finishedRow({
+    ...RUN,
+    ts: at(1),
+    outcome: "recorded",
+    requests: 5,
+    estimatedUsd: 0,
+    failedRecipeIds: ids,
+  });
+  assert.equal(row.failedRecipeCount, 2);
+  assert.deepEqual(row.failedRecipeIds, ids);
+  assert.notEqual(row.failedRecipeIds, ids, "a copy, not the caller's list");
+  const clean = finished(5);
+  assert.equal(clean.failedRecipeCount, 0);
+  assert.deepEqual(clean.failedRecipeIds, []);
+  // The shared admission reads only the event, outcome and baseline: extra fields change nothing.
+  const rows = encodeRow(started(0)) + encodeRow(row);
+  assert.deepEqual(admissionProblems(rows, SANDBOX_PROJECT, Date.parse(at(90))), []);
+});
+
+test("the recipe IDs of a closing row are checked: a list of at most 64 storage-object recipe IDs", () => {
+  const build = (failedRecipeIds) =>
+    finishedRow({
+      ...RUN,
+      ts: at(1),
+      outcome: "recorded",
+      requests: 1,
+      estimatedUsd: 0,
+      failedRecipeIds,
+    });
+  assert.doesNotThrow(() => build([]));
+  assert.doesNotThrow(() => build(Array.from({ length: 64 }, (_, i) => `storage-object/r-${i}`)));
+  assert.throws(() => build(Array.from({ length: 65 }, (_, i) => `storage-object/r-${i}`)), /list/);
+  assert.throws(() => build("storage-object/a"), /list/);
+  assert.throws(() => build(null), /list/);
+  for (const bad of [
+    7,
+    "",
+    "gcs/copy-rewrite",
+    "storage-object/",
+    "storage-object/UPPER",
+    "storage-object/a b",
+    "storage-object/a\nb",
+    "storage-object/a;b",
+    "x/storage-object/gcs/a",
+    ["storage-object/a"],
+    { toString: () => "storage-object/a" },
+    `storage-object/${"a".repeat(97)}`,
+  ])
+    assert.throws(() => build([bad]), /recipe IDs/, String(bad));
+  assert.doesNotThrow(() => build([`storage-object/${"a".repeat(96)}`]));
 });

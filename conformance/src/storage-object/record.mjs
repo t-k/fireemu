@@ -247,9 +247,11 @@ function priorRuns(ledgerText, packetSha256) {
         row.packetSha256 === packetSha256 &&
         row.event !== "started",
     );
+  const recorded = closing.filter((row) => row.event === "finished" && row.outcome === "recorded");
   return {
-    recorded: closing.filter((row) => row.event === "finished" && row.outcome === "recorded")
-      .length,
+    recorded: recorded.length,
+    // A recorded row that does not say how many recipes failed is treated as one that had failures.
+    recordedWithFailedRecipes: recorded.filter((row) => row.failedRecipeCount !== 0).length,
     // A closing row without a request count is charged as a whole run.
     requests: closing.reduce(
       (total, row) =>
@@ -351,6 +353,10 @@ export async function recordRun(deps) {
       throw new Error("this packet's first recording is already recorded");
     if (recording === 2 && prior.recorded !== 1)
       throw new Error("the second recording needs the first recording recorded");
+    if (recording === 2 && prior.recordedWithFailedRecipes > 0)
+      throw new Error(
+        "the first recording has failed recipes: the second recording needs a new packet version",
+      );
     if (prior.requests + RUN_MAX_REQUESTS > packet.maxRequests)
       throw new Error("the packet's request budget would be exceeded");
   }
@@ -521,6 +527,7 @@ export async function recordRun(deps) {
               outcome,
               requests,
               estimatedUsd: usd(requests),
+              failedRecipeIds: (result?.failedRecipes ?? []).map((row) => row.recipeId),
             }),
           );
           lease.confirmClosed();

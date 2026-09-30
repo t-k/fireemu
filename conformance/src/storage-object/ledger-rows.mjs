@@ -94,10 +94,30 @@ export function startedRow(input) {
   };
 }
 
-/** The line that closes a run whose own objects were read back as absent. */
+const RECIPE_ID = /^storage-object\/[a-z0-9][a-z0-9/-]{0,95}$/;
+
+/**
+ * The recipes that failed cleanly in a run that went on (each was cleaned up and its prefix read
+ * back empty), as public-safe recipe IDs. The reasons stay in the private record.
+ */
+function failedRecipeIds(value) {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.length > 64) throw new Error("failedRecipeIds must be a list");
+  for (const id of value)
+    if (typeof id !== "string" || !RECIPE_ID.test(id))
+      throw new Error("failedRecipeIds must be recipe IDs");
+  return [...value];
+}
+
+/**
+ * The line that closes a run whose own objects were read back as absent. It names the recipes that
+ * failed cleanly on the way (`failedRecipeCount`, `failedRecipeIds`), so that a partial recording is
+ * visible in the shared ledger; no other reader looks at these fields.
+ */
 export function finishedRow(input) {
   const base = identity(input);
   if (!CLOSING_OUTCOMES.includes(input.outcome)) throw new Error("not a closing outcome");
+  const failed = failedRecipeIds(input.failedRecipeIds);
   return {
     ts: base.ts,
     event: "finished",
@@ -112,6 +132,8 @@ export function finishedRow(input) {
     requests: count(input.requests, "requests", 0),
     estimatedUsd: cost(input.estimatedUsd),
     sandboxAtBaseline: true,
+    failedRecipeCount: failed.length,
+    failedRecipeIds: failed,
   };
 }
 

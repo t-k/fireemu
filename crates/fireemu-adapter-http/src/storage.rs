@@ -823,6 +823,9 @@ fn production_error(status: u16, message: &str) -> StorageResponse {
     }
 }
 
+/// The Google-fronted JSON API (unlike the Firebase dialect's Express answers) ends its error
+/// bodies with a line feed (recorded, stage 3 v9: 285 bytes for the 401, 318 for the parse error).
+///
 /// Production's answer to a Cloud Storage JSON API request whose `Bearer` credential is not a
 /// valid OAuth access token (recorded, stage 3 v9: the four `precedence-*-gcs-malformed-*` rows,
 /// status, content type, `Vary`, `Cache-Control`, `Expires` and the body bytes). The recording
@@ -830,7 +833,7 @@ fn production_error(status: u16, message: &str) -> StorageResponse {
 /// not reproduced.
 fn production_invalid_credentials() -> StorageResponse {
     // The recorded bytes; the key order is production's, which a serialized map would not keep.
-    const BODY: &str = "{\n  \"error\": {\n    \"code\": 401,\n    \"message\": \"Invalid Credentials\",\n    \"errors\": [\n      {\n        \"message\": \"Invalid Credentials\",\n        \"domain\": \"global\",\n        \"reason\": \"authError\",\n        \"locationType\": \"header\",\n        \"location\": \"Authorization\"\n      }\n    ]\n  }\n}";
+    const BODY: &str = "{\n  \"error\": {\n    \"code\": 401,\n    \"message\": \"Invalid Credentials\",\n    \"errors\": [\n      {\n        \"message\": \"Invalid Credentials\",\n        \"domain\": \"global\",\n        \"reason\": \"authError\",\n        \"locationType\": \"header\",\n        \"location\": \"Authorization\"\n      }\n    ]\n  }\n}\n";
     StorageResponse {
         status: 401,
         headers: vec![
@@ -858,6 +861,22 @@ fn fb_object_not_found() -> StorageResponse {
     production_error(404, "Not Found.")
 }
 
+/// Production's answer to a request on a cancelled JSON API resumable session (recorded,
+/// probe-v2, 2026-09-30: the `DELETE` that cancels and the status query after it, 499,
+/// `application/json; charset=UTF-8`, 224 bytes, ending in a line feed like every Google-fronted
+/// body).
+fn production_client_closed_request() -> StorageResponse {
+    const BODY: &str = "{\n  \"error\": {\n    \"code\": 499,\n    \"message\": \"clientClosedRequest\",\n    \"errors\": [\n      {\n        \"message\": \"clientClosedRequest\",\n        \"domain\": \"global\",\n        \"reason\": \"clientClosedRequest\"\n      }\n    ]\n  }\n}\n";
+    StorageResponse {
+        status: 499,
+        headers: vec![(
+            "content-type".into(),
+            "application/json; charset=UTF-8".into(),
+        )],
+        body: bytes::Bytes::from_static(BODY.as_bytes()),
+    }
+}
+
 /// The JSON API's answer to a request body that is not JSON. Production's parser words it
 /// (`Parse Error: Unexpected end of string. Expected an object key or }.` for the recorded body
 /// `{`, stage 3 v9, both objects and both credentials), with the error repeated in `errors`, and
@@ -871,7 +890,7 @@ fn gcs_parse_error(body: &[u8], e: &serde_json::Error) -> StorageResponse {
     };
     let quoted = serde_json::to_string(&message).unwrap_or_default();
     let text = format!(
-        "{{\n  \"error\": {{\n    \"code\": 400,\n    \"message\": {quoted},\n    \"errors\": [\n      {{\n        \"message\": {quoted},\n        \"domain\": \"global\",\n        \"reason\": \"invalid\"\n      }}\n    ]\n  }}\n}}"
+        "{{\n  \"error\": {{\n    \"code\": 400,\n    \"message\": {quoted},\n    \"errors\": [\n      {{\n        \"message\": {quoted},\n        \"domain\": \"global\",\n        \"reason\": \"invalid\"\n      }}\n    ]\n  }}\n}}\n"
     );
     StorageResponse {
         status: 400,
@@ -2090,7 +2109,7 @@ fn route(method: &str, path: &str) -> Result<Route, String> {
                 dst_name: d(dn)?,
             })
         }
-        ("POST" | "PUT", ["upload", "storage", "v1", "b", b, "o"]) => {
+        ("POST" | "PUT" | "DELETE", ["upload", "storage", "v1", "b", b, "o"]) => {
             Ok(Route::GcsUpload { bucket: d(b)? })
         }
         _ => fallthrough(method, &segments),
@@ -3709,6 +3728,23 @@ fn gcs_upload(
 ) -> Outcome {
     let b = bucket_name(bucket)?;
     let now = state.now();
+    if req.method == "DELETE" {
+        // Cancelling a resumable session: production answers 499 (recorded, probe-v2), where
+        // the official emulator has no such route and answers 501.
+        let Some(upload_id) = params.get("upload_id") else {
+            return Ok(plain_status(400));
+        };
+        let id = UploadId::from_str_unchecked(upload_id);
+        let mut store = state.store()?;
+        if store.upload_bucket(&id, now).is_ok_and(|owner| *owner != b) {
+            return Ok(plain_status(404));
+        }
+        return match store.cancel_upload(&id, now) {
+            Ok(()) => Ok(production_client_closed_request()),
+            Err(StorageError::UploadNotFound) => Ok(plain_status(404)),
+            Err(e) => Ok(gcs_core_err(e)),
+        };
+    }
     if req.method == "PUT" {
         // The PUT continuation of a resumable session.
         let Some(upload_id) = params.get("upload_id") else {
@@ -3766,13 +3802,15 @@ fn gcs_upload(
                     now,
                 )
                 .map_err(gcs_core_err)?;
+            // The session URL repeats the start request's query and adds `upload_id` (recorded,
+            // probe-v2: `…&ifGenerationMatch=0&upload_id=…`); the start has no body.
             let session_url = format!(
-                "http://{host}/upload/storage/v1/b/{}/o?name={}&uploadType=resumable&upload_id={}",
+                "http://{host}/upload/storage/v1/b/{}/o?{}&upload_id={}",
                 encode_segment(b.as_str()),
-                encode_segment(n.as_str()),
+                req.query,
                 id.as_str()
             );
-            Ok(plain_status(200).with_header("location", session_url))
+            Ok(plain_text(200, "").with_header("location", session_url))
         }
         Some("multipart") => {
             let content_type = req
@@ -3881,7 +3919,9 @@ fn gcs_resumable_put(
         // Only a finalized session has an object to report; a refused or cancelled session
         // never published one, and a chunk sent into any terminal session is still a 400.
         Ok(UploadPhase::Finalized(_)) if status_check => {}
-        Ok(UploadPhase::Finalized(_) | UploadPhase::Denied(_) | UploadPhase::Cancelled(_)) => {
+        // A cancelled session answers 499 to a status query and to a chunk alike (recorded).
+        Ok(UploadPhase::Cancelled(_)) => return Ok(production_client_closed_request()),
+        Ok(UploadPhase::Finalized(_) | UploadPhase::Denied(_)) => {
             return Ok(plain_status(400));
         }
         Ok(UploadPhase::Active(_)) => {}

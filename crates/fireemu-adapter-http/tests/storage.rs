@@ -1791,7 +1791,7 @@ fn strict_refusals_carry_production_bytes_and_the_emulator_profile_the_official_
 }
 
 /// The recorded production body of the four `precedence-*-gcs-malformed-*` rows (stage 3 v9).
-const PRODUCTION_INVALID_CREDENTIALS_BODY: &str = "{\n  \"error\": {\n    \"code\": 401,\n    \"message\": \"Invalid Credentials\",\n    \"errors\": [\n      {\n        \"message\": \"Invalid Credentials\",\n        \"domain\": \"global\",\n        \"reason\": \"authError\",\n        \"locationType\": \"header\",\n        \"location\": \"Authorization\"\n      }\n    ]\n  }\n}";
+const PRODUCTION_INVALID_CREDENTIALS_BODY: &str = "{\n  \"error\": {\n    \"code\": 401,\n    \"message\": \"Invalid Credentials\",\n    \"errors\": [\n      {\n        \"message\": \"Invalid Credentials\",\n        \"domain\": \"global\",\n        \"reason\": \"authError\",\n        \"locationType\": \"header\",\n        \"location\": \"Authorization\"\n      }\n    ]\n  }\n}\n";
 
 /// Strict refuses a malformed `Bearer` credential on the Cloud Storage JSON API PATCH with
 /// production's recorded 401 (status, content type, headers that were not redacted, body), before
@@ -1799,6 +1799,11 @@ const PRODUCTION_INVALID_CREDENTIALS_BODY: &str = "{\n  \"error\": {\n    \"code
 /// emulator does, and so does every route production was not recorded refusing it on.
 #[test]
 fn strict_refuses_a_malformed_bearer_on_the_json_api_patch_as_production_does() {
+    assert_eq!(
+        PRODUCTION_INVALID_CREDENTIALS_BODY.len(),
+        285,
+        "the recorded Content-Length, a final line feed included"
+    );
     let patch = |s: &StorageState, path: &str, authorization: Option<&str>, body: &[u8]| {
         let mut headers = vec![("content-type", "application/json")];
         if let Some(value) = authorization {
@@ -2110,7 +2115,9 @@ fn an_absent_firebase_object_answers_the_recorded_json_not_found() {
 fn a_malformed_patch_body_answers_the_recorded_parser_errors() {
     const FIREBASE: &str =
         "{\n  \"error\": {\n    \"code\": 400,\n    \"message\": \"Parser Error\"\n  }\n}";
-    const GCS: &str = "{\n  \"error\": {\n    \"code\": 400,\n    \"message\": \"Parse Error: Unexpected end of string. Expected an object key or }.\\n\\n^\",\n    \"errors\": [\n      {\n        \"message\": \"Parse Error: Unexpected end of string. Expected an object key or }.\\n\\n^\",\n        \"domain\": \"global\",\n        \"reason\": \"invalid\"\n      }\n    ]\n  }\n}";
+    const GCS: &str = "{\n  \"error\": {\n    \"code\": 400,\n    \"message\": \"Parse Error: Unexpected end of string. Expected an object key or }.\\n\\n^\",\n    \"errors\": [\n      {\n        \"message\": \"Parse Error: Unexpected end of string. Expected an object key or }.\\n\\n^\",\n        \"domain\": \"global\",\n        \"reason\": \"invalid\"\n      }\n    ]\n  }\n}\n";
+    // Recorded: 67 bytes for the Express answer, 318 for the Google-fronted one (a final line feed).
+    assert_eq!((FIREBASE.len(), GCS.len()), (67, 318));
     for acceptance in BOTH_PROFILES {
         let s = state_with(Some(ALLOW_ALL_RULES), acceptance);
         assert_eq!(anonymous_media_upload(&s, "p.txt"), 200);
@@ -2430,6 +2437,96 @@ fn a_resumable_upload_without_custom_metadata_has_null_request_metadata_only_in_
         finalize(TokenAcceptance::EmulatorMock, "k.txt", with_key),
         200
     );
+}
+
+/// The JSON API resumable session: the start has no body and repeats its query in the session URL,
+/// a status query before any byte is a 308 without `Range`, the cancel (`DELETE` on the session
+/// URL) answers 499 and so does a status query after it (recorded, STORAGE-OBJECT probe-v2,
+/// 2026-09-30: 224-byte `clientClosedRequest` body, `application/json; charset=UTF-8`), in both
+/// profiles.
+#[test]
+fn a_json_api_session_cancel_answers_the_recorded_499() {
+    const BODY: &str = "{\n  \"error\": {\n    \"code\": 499,\n    \"message\": \"clientClosedRequest\",\n    \"errors\": [\n      {\n        \"message\": \"clientClosedRequest\",\n        \"domain\": \"global\",\n        \"reason\": \"clientClosedRequest\"\n      }\n    ]\n  }\n}\n";
+    assert_eq!(BODY.len(), 224);
+    for acceptance in BOTH_PROFILES {
+        let s = state_with(Some(ALLOW_ALL_RULES), acceptance);
+        let owner = [("authorization", "Bearer owner")];
+        let start = handle(
+            &s,
+            req(
+                "POST",
+                &format!("/upload/storage/v1/b/{BUCKET}/o?uploadType=resumable&name=c.bin&ifGenerationMatch=0"),
+                &owner,
+                b"",
+            ),
+        );
+        assert_eq!(start.status, 200);
+        assert!(start.body.is_empty());
+        assert_eq!(
+            header(&start, "content-type"),
+            Some("text/plain; charset=utf-8")
+        );
+        let location = header(&start, "location").unwrap();
+        assert!(
+            location.contains("?uploadType=resumable&name=c.bin&ifGenerationMatch=0&upload_id="),
+            "{location}"
+        );
+        let session = location
+            .strip_prefix("http://127.0.0.1:9199")
+            .unwrap()
+            .to_owned();
+        let probe = |method: &str| {
+            handle(
+                &s,
+                req(
+                    method,
+                    &session,
+                    &[
+                        ("authorization", "Bearer owner"),
+                        ("content-range", "bytes */4"),
+                        ("content-length", "0"),
+                    ],
+                    b"",
+                ),
+            )
+        };
+        let before = probe("PUT");
+        assert_eq!(before.status, 308);
+        assert!(header(&before, "range").is_none());
+        assert!(before.body.is_empty());
+        for response in [
+            handle(&s, req("DELETE", &session, &owner, b"")),
+            probe("PUT"),
+        ] {
+            assert_eq!(response.status, 499, "{acceptance:?}");
+            assert_eq!(String::from_utf8_lossy(&response.body), BODY);
+            assert_eq!(
+                header(&response, "content-type"),
+                Some("application/json; charset=UTF-8")
+            );
+        }
+        // Nothing was published, and an unknown session is not found.
+        let absent = handle(
+            &s,
+            req(
+                "GET",
+                &format!("/storage/v1/b/{BUCKET}/o/c.bin"),
+                &owner,
+                b"",
+            ),
+        );
+        assert_eq!(absent.status, 404);
+        let unknown = handle(
+            &s,
+            req(
+                "DELETE",
+                &format!("/upload/storage/v1/b/{BUCKET}/o?uploadType=resumable&upload_id=nope"),
+                &owner,
+                b"",
+            ),
+        );
+        assert_eq!(unknown.status, 404);
+    }
 }
 
 /// `PATCH /storage/v1/b/{bucket}/o/{object}` updates object metadata, as the Cloud Storage

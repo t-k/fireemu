@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "source": "GitHub Actions ubuntu-latest, one pytest process per file (broad-timing run 36079229984, 2026-09-25); files that run did not reach use a local measurement. test_o5_user_token_comparator_v2.py is an estimate: about 120 s per test locally and at least 40 s per test on the runner (PR run 36085595169, shard 6), taken as 160 s for each of its 178 tests",
+  "source": "GitHub Actions ubuntu-latest, one pytest process per file (broad-timing run 36079229984, 2026-09-25); files that run did not reach use a local measurement. test_o5_user_token_comparator_v2.py is an estimate: about 120 s per test locally and at least 40 s per test on the runner (PR run 36085595169, shard 6), taken as 160 s for each of its 178 tests; C2 credential lifecycle and credential prep refreshed on local macOS-26.3.1-arm64-arm-64bit, 2026-09-30: one run per file, uv run --project tools/compat-inventory --locked --python 3.12 -m pytest <file> -q --junitxml=<private log> -o junit_family=legacy (52.7 s and 79.9 s including launcher overhead)",
   "seconds": {
     "tools/compat-broad/auth-account-federation/test_corpus.py": 0.8,
     "tools/compat-broad/auth-account-linking/test_o1_auth_account_linking_prep.py": 0.9,
@@ -36,7 +36,7 @@
     "tools/compat-broad/auth-credential-tokens/test_credential_local_http.py": 2.7,
     "tools/compat-broad/auth-credential-tokens/test_credential_lookup_identity.py": 8.2,
     "tools/compat-broad/auth-credential-tokens/test_credential_plan.py": 0.3,
-    "tools/compat-broad/auth-credential-tokens/test_credential_process_lifecycle.py": 2.8,
+    "tools/compat-broad/auth-credential-tokens/test_credential_process_lifecycle.py": 52.7,
     "tools/compat-broad/auth-credential-tokens/test_credential_production.py": 6.0,
     "tools/compat-broad/auth-credential-tokens/test_credential_recovery.py": 0.7,
     "tools/compat-broad/auth-credential-tokens/test_credential_recovery_executor.py": 4.0,
@@ -232,7 +232,7 @@
     "tools/compat-broad/fs-write-txn-recompare-v2/test_fresh_authority.py": 0.3,
     "tools/compat-broad/fs-write-txn-recompare-v2/test_saved_authority.py": 0.2,
     "tools/compat-broad/fs-write-txn/test_credential_framing_f99.py": 6.0,
-    "tools/compat-broad/fs-write-txn/test_credential_prep.py": 26.6,
+    "tools/compat-broad/fs-write-txn/test_credential_prep.py": 79.9,
     "tools/compat-broad/fs-write-txn/test_stream_bridge.py": 21.7,
     "tools/compat-broad/fs-write-txn/test_stream_production.py": 13.9,
     "tools/compat-broad/fs-write-txn/test_stream_shadow.py": 1.2,

@@ -371,30 +371,42 @@ def test_bounded_socket_timeout_stays_below_kill_deadline_with_a_floor():
     assert module._bounded_socket_timeout(0.1, 0.025) == 1.0
 
 
-def test_private_worker_tokeninfo_stall_times_out_before_kill(oauth_server):
-    """The socket-level timeout used to be a hardcoded REQUEST_SECONDS (12s)
-    regardless of the deadline handed to `_private_request`, and that
-    deadline can never exceed REQUEST_SECONDS -- so the coordinator's own
-    SIGKILL always won the race and the worker's graceful, labeled
-    read-timeout path was unreachable in production. This proves the fixed
-    per-call socket timeout now fires first."""
+def test_tokeninfo_body_stall_is_bounded_without_interpreter_setup(oauth_server):
+    """The real HTTP body budget reports its own diagnostic independently of child setup."""
     module = prep()
     oauth_server["scenario"] = "stall"
+    budget = module._bounded_socket_timeout(2, .25)
+    result = module._http_request(
+        "tokeninfo", "synthetic-access-secret", fixture_origin=oauth_server["origin"], timeout=budget,
+    )
+    observation = {"result": result, "requests": oauth_server["requests"]}
+    assert oauth_server["requests"] == [("POST", "/oauth2/v1/tokeninfo")], observation
+    assert result["complete"] is False and result["status"] == 200, observation
+    assert result["failure"] == "read-timeout" and result["phase"] == "body", observation
+    assert result["declaredLength"] > 0 and result["receivedBytes"] == 0, observation
+    assert result["socketTimeoutSeconds"] == pytest.approx(budget), observation
+    assert budget - module.PHASE_MARGIN_SECONDS - .1 <= result["elapsedSeconds"] < budget + .5, observation
+    assert "synthetic" not in json.dumps({key: value for key, value in result.items() if key != "body"})
+
+
+def test_real_worker_stall_records_its_actual_failure_and_reap(oauth_server, record_property):
+    module = prep()
+    oauth_server["scenario"] = "stall"
+    started = time.monotonic()
     result = module._private_request(
-        "tokeninfo",
-        "synthetic-access-secret",
-        fixture_origin=oauth_server["origin"],
-        deadline=2.0,
+        "tokeninfo", "synthetic-access-secret", fixture_origin=oauth_server["origin"],
+        deadline=module.REQUEST_SECONDS,
     )
-    assert result["workerReaped"] is True
-    assert result["complete"] is False
-    assert result["failure"] == "read-timeout"
-    expected = module._bounded_socket_timeout(2.0, min(0.25, 2.0 / 4))
-    assert result["socketTimeoutSeconds"] == pytest.approx(expected)
-    assert result["elapsedSeconds"] < 2.0
-    assert "synthetic" not in json.dumps(
-        {k: v for k, v in result.items() if k != "body"}
-    )
+    observation = {"result": result, "requests": oauth_server["requests"],
+                   "callerElapsedSeconds": time.monotonic() - started}
+    record_property("workerObservation", json.dumps(observation))
+    assert oauth_server["requests"] == [("POST", "/oauth2/v1/tokeninfo")], observation
+    assert result["complete"] is False and result["workerReaped"] is True, observation
+    assert result["failure"] in {"read-timeout", "deadline"}, observation
+    assert observation["callerElapsedSeconds"] < module.REQUEST_SECONDS + 2, observation
+    if result["failure"] == "read-timeout":
+        assert result["status"] == 200 and result["phase"] == "body", observation
+    assert "synthetic" not in json.dumps({key: value for key, value in result.items() if key != "body"})
 
 
 # --- Owner review a54c5abc8 regression coverage -----------------------------
@@ -412,11 +424,18 @@ def test_private_worker_tokeninfo_stall_times_out_before_kill(oauth_server):
 def _boundary_server(scenario: str):
     state = {"requests": 0, "sentBodyBytes": 0, "scenario": scenario}
     stop = threading.Event()
+    handlers = []
 
     class Handler(http.server.BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
 
         def do_POST(self):
+            try:
+                self.respond()
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+
+        def respond(self):
             state["requests"] += 1
             self.rfile.read(int(self.headers.get("Content-Length", "0")))
             self.close_connection = True
@@ -460,7 +479,14 @@ def _boundary_server(scenario: str):
         def log_message(self, *_args):
             pass
 
-    httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    class FixtureServer(http.server.ThreadingHTTPServer):
+        def process_request(self, request, client_address):
+            handler = threading.Thread(target=self.process_request_thread,
+                                       args=(request, client_address), daemon=True)
+            handlers.append(handler)
+            handler.start()
+
+    httpd = FixtureServer(("127.0.0.1", 0), Handler)
     httpd.daemon_threads = True
     thread = threading.Thread(
         target=httpd.serve_forever, kwargs={"poll_interval": 0.02}
@@ -474,9 +500,12 @@ def _boundary_server(scenario: str):
         httpd.server_close()
         thread.join(timeout=2)
         assert not thread.is_alive()
+        for handler in handlers:
+            handler.join(timeout=2)
+            assert not handler.is_alive()
 
 
-def _observe(module, scenario: str, *, private: bool, deadline: float = 2.0):
+def _observe(module, scenario: str, *, private: bool, deadline: float = 2.0, timeout: float = .3):
     with _boundary_server(scenario) as (origin, state):
         start = time.monotonic()
         if private:
@@ -491,7 +520,7 @@ def _observe(module, scenario: str, *, private: bool, deadline: float = 2.0):
                 "tokeninfo",
                 "synthetic-review-token",
                 fixture_origin=origin,
-                timeout=0.3,
+                timeout=timeout,
             )
         elapsed = time.monotonic() - start
     observation = {
@@ -507,31 +536,27 @@ def _observe(module, scenario: str, *, private: bool, deadline: float = 2.0):
 
 def test_immediate_body_stall_has_a_diagnostic():
     module = prep()
-    observation = _observe(module, "immediate_stall", private=True)
+    budget = module._bounded_socket_timeout(2, .25)
+    observation = _observe(module, "immediate_stall", private=False, timeout=budget)
     result = observation["result"]
     assert result["complete"] is False
-    assert result["workerReaped"] is True
-    assert result["failure"] == "read-timeout", observation
-    assert result["status"] == 200
+    assert result["failure"] == "read-timeout" and result["phase"] == "body", observation
+    assert result["status"] == 200 and result["declaredLength"] == 32, observation
+    assert budget - module.PHASE_MARGIN_SECONDS - .1 <= result["elapsedSeconds"] < budget + .5, observation
 
 
 @pytest.mark.parametrize("deadline", [2.0, 12.0])
 def test_header_delay_must_not_consume_the_body_diagnostic_margin(deadline):
-    """Regression for owner review a54c5abc8 item 1: a fixed per-op socket
-    timeout let a 0.9s header delay plus a fresh full-length body timeout
-    exceed the coordinator's own kill deadline, so the worker was reaped
-    before it could return its own labeled diagnostic. With an absolute
-    per-call deadline, time spent waiting on headers comes out of the same
-    budget as the body read, so the worker always reports before the kill."""
+    """Earlier header time consumes the same HTTP deadline as body reads (owner review a54c5abc8 item1)."""
     module = prep()
-    observation = _observe(
-        module, "delayed_headers_stall", private=True, deadline=deadline
-    )
+    budget = module._bounded_socket_timeout(deadline, min(.25, deadline / 4))
+    observation = _observe(module, "delayed_headers_stall", private=False, timeout=budget)
     result = observation["result"]
     assert result["complete"] is False
-    assert result["workerReaped"] is True
-    assert result["failure"] == "read-timeout", observation
-    assert result["status"] == 200, observation
+    assert result["failure"] == "read-timeout" and result["phase"] == "body", observation
+    assert result["status"] == 200 and result["declaredLength"] == 32, observation
+    assert result["socketTimeoutSeconds"] == pytest.approx(budget), observation
+    assert budget - module.PHASE_MARGIN_SECONDS - .1 <= result["elapsedSeconds"] < budget + .5, observation
 
 
 def test_partial_body_timeout_retains_received_byte_count():
@@ -1009,7 +1034,7 @@ def test_body_diagnostic_does_not_depend_on_interpreter_setup(request, monkeypat
 
     monkeypatch.setattr(subprocess, "Popen", delayed_launch)
     if scenario == "tokeninfo-stall":
-        test_private_worker_tokeninfo_stall_times_out_before_kill(
+        test_tokeninfo_body_stall_is_bounded_without_interpreter_setup(
             request.getfixturevalue("oauth_server")
         )
     elif scenario == "immediate-body":

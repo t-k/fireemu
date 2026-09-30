@@ -156,21 +156,130 @@ fn an_enforced_request_naming_a_missing_tenant_makes_no_tenant_when_denied() {
         .observations("demo-app");
     assert_eq!(observed.len(), 2, "{observed:?}");
     assert_eq!(observed.iter().filter(|o| o.admitted).count(), 1);
-    // A request the admission let through but that made no tenant (a name that cannot be one) is
-    // observed once too.
-    let slashed = h.post(
-        &format!("{V1}/accounts:signUp"),
-        &json!({"email": "b@example.com", "password": "hunter22", "tenantId": "a/b"}),
-        &[&h.valid_token()],
+}
+
+/// Two projects under one daemon, `demo-other` with a tenant `tB` holding the user `u1`, and a
+/// request without an API key: the project it is admitted for is the default project's, but the
+/// store it is served from can be another project's, which App Check has to admit it for too.
+fn two_projects() -> (Harness, Arc<fireemu_core_auth::store::AuthRegistry>, String) {
+    use fireemu_core_auth::jwt::base64url_encode;
+    let mut h = harness(BaselineMode::Enforced);
+    let registry = Arc::new(fireemu_core_auth::store::AuthRegistry::new(
+        "demo-app",
+        h.auth.store.clone(),
+    ));
+    assert!(registry.register(
+        "demo-other",
+        AuthStore::new("demo-other", SplitMix64::new(7), TotpPolicy::default())
+    ));
+    assert!(registry
+        .ensure_tenant_with("demo-other", "tB", |_| {})
+        .is_some());
+    Arc::get_mut(&mut h.auth)
+        .expect("the harness is the sole AuthState owner")
+        .registry = Some(registry.clone());
+    let owner = RequestHeaders {
+        authorization: Some("Bearer owner".to_owned()),
+        ..RequestHeaders::default()
+    };
+    let made = handle_with(
+        &h.auth,
+        "POST",
+        "/identitytoolkit.googleapis.com/v1/projects/demo-other/tenants/tB/accounts",
+        &owner,
+        &json!({"localId": "u1", "email": "victim@example.com"}),
     );
-    assert_ne!(slashed.status, 200, "{}", slashed.body);
-    let observed = h
-        .app_check
+    assert_eq!(made.status, 200, "{}", made.body);
+    let id_token = format!(
+        "{}.{}.",
+        base64url_encode(br#"{"alg":"none","typ":"JWT"}"#),
+        base64url_encode(
+            json!({"aud": "demo-other", "iss": "https://securetoken.google.com/demo-other",
+                   "sub": "u1", "user_id": "u1", "iat": 1_788_004_860, "exp": 1_788_008_400,
+                   "auth_time": 1_788_004_860,
+                   "firebase": {"tenant": "tB", "sign_in_provider": "password", "identities": {}}})
+            .to_string()
+            .as_bytes()
+        )
+    );
+    (h, registry, id_token)
+}
+
+fn observed_count(h: &Harness, project: &str) -> usize {
+    h.app_check
         .registry
         .read()
         .expect("readable")
-        .observations("demo-app");
-    assert_eq!(observed.len(), 3, "{observed:?}");
+        .observations(project)
+        .len()
+}
+
+#[test]
+fn an_admission_for_one_project_does_not_serve_another_projects_store() {
+    let (h, _, id_token) = two_projects();
+    let body = json!({"idToken": id_token, "tenantId": "tB"});
+    let before = observed_count(&h, "demo-other");
+    // A valid demo-app credential, and no credential for demo-other, whose tenant the token names.
+    let first = h.post(&format!("{V1}/accounts:lookup"), &body, &[&h.valid_token()]);
+    assert_eq!(first.status, 403, "{}", first.body);
+    assert!(
+        first.body.to_string().contains("APP_CHECK"),
+        "{}",
+        first.body
+    );
+    assert!(!first.body.to_string().contains("victim@example.com"));
+    assert_eq!(observed_count(&h, "demo-other"), before + 1);
+    // The same request again is refused the same way (the tenant now exists in demo-app).
+    let second = h.post(&format!("{V1}/accounts:lookup"), &body, &[&h.valid_token()]);
+    assert_eq!(second.status, 403, "{}", second.body);
+    // With demo-other's own credential the request is served from its store.
+    let other = fixture::token(&h.app_check, "demo-other", fixture::OTHER_APP_ID);
+    let served = h.post(&format!("{V1}/accounts:lookup"), &body, &[&other]);
+    assert_eq!(served.status, 200, "{}", served.body);
+}
+
+#[test]
+fn an_admission_for_one_project_does_not_refresh_another_projects_session() {
+    let (h, registry, _) = two_projects();
+    let tenant_store = registry.tenant_store("demo-other", "tB").expect("tenant");
+    let refresh_token = {
+        let mut store = tenant_store.lock().unwrap();
+        let uid = store
+            .user_by_id("u1")
+            .expect("the user exists")
+            .local_id
+            .clone();
+        store
+            .issue_refresh_token(&uid, LogicalInstant::from_unix_seconds(fixture::START))
+            .expect("the user exists")
+    };
+    let body = json!({"grant_type": "refresh_token", "refresh_token": refresh_token});
+    let denied = h.post(REFRESH, &body, &[&h.valid_token()]);
+    assert_eq!(denied.status, 403, "{}", denied.body);
+    assert!(
+        denied.body.to_string().contains("APP_CHECK"),
+        "{}",
+        denied.body
+    );
+    assert!(denied.body.get("id_token").is_none());
+    let other = fixture::token(&h.app_check, "demo-other", fixture::OTHER_APP_ID);
+    let served = h.post(REFRESH, &body, &[&other]);
+    assert_eq!(served.status, 200, "{}", served.body);
+}
+
+/// A request the admission lets through for the project it is served from is observed once, not
+/// once for the admission and once for the pipeline.
+#[test]
+fn a_request_served_from_the_admitted_project_is_observed_once() {
+    let (h, _, _) = two_projects();
+    let before = observed_count(&h, "demo-app");
+    let made = h.post(
+        &format!("{V1}/accounts:signUp"),
+        &json!({"email": "once@example.com", "password": "hunter22", "tenantId": "once-tenant"}),
+        &[&h.valid_token()],
+    );
+    assert_eq!(made.status, 200, "{}", made.body);
+    assert_eq!(observed_count(&h, "demo-app"), before + 1);
 }
 
 // ------------------------------------------------------------------------------------------

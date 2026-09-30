@@ -3390,8 +3390,10 @@ struct TenantCreation<'a> {
     headers: &'a RequestHeaders,
     api_key: bool,
     at: LogicalInstant,
-    /// Set when the admission ran here, so the request is not admitted (and observed) again.
-    app_check_admitted: std::cell::Cell<bool>,
+    /// The project App Check admitted the request for here, so the pipeline does not admit (and
+    /// observe) it again for that project; a request served from another project's store is
+    /// admitted for that one.
+    app_check_admitted: std::cell::RefCell<Option<String>>,
 }
 
 /// What a request's refresh token says about its tenant.
@@ -3410,21 +3412,22 @@ enum RefreshTokenTenant {
 fn id_token_tenant(state: &AuthState, project: &str, body: &Value) -> Option<(String, bool)> {
     let token = str_field(body, "idToken")?;
     let signer = state.store.lock().ok().and_then(|s| s.signer_arc());
-    let (payload, verified) = match fireemu_core_auth::jwt::decode_token(token, signer.as_deref()) {
-        Ok(decoded) => (decoded.payload, true),
-        Err(_) => (
-            fireemu_core_auth::jwt::decode_claims_unverified(token).ok()?,
-            false,
-        ),
+    let Ok(decoded) = fireemu_core_auth::jwt::decode_token(token, signer.as_deref()) else {
+        // Unverified: only the tenant claim, only for the agreement, never the target.
+        return fireemu_core_auth::jwt::unverified_tenant_claim(token)
+            .map(|tenant| (tenant, false));
     };
+    let payload = &decoded.payload;
     let audience = payload
         .get("aud")
         .and_then(fireemu_core_types::json::JsonValue::as_str);
+    // An empty claim is no tenant (falsy in the official emulator's check).
     let tenant = payload
         .get("firebase")
         .and_then(|firebase| firebase.get("tenant"))
-        .and_then(fireemu_core_types::json::JsonValue::as_str)?;
-    Some((tenant.to_owned(), verified && audience == Some(project)))
+        .and_then(fireemu_core_types::json::JsonValue::as_str)
+        .filter(|tenant| !tenant.is_empty())?;
+    Some((tenant.to_owned(), audience == Some(project)))
 }
 
 /// The refusal a refresh token earns before a tenant is looked up: `INVALID_REFRESH_TOKEN` for
@@ -3467,7 +3470,7 @@ fn admit_request(
     {
         return Err(denial);
     }
-    request.app_check_admitted.set(true);
+    *request.app_check_admitted.borrow_mut() = Some(project.to_owned());
     let Ok(parent) = parent.lock() else {
         return Err(error(500, "INTERNAL"));
     };
@@ -3948,14 +3951,14 @@ fn handle_with_policy_inner(
         headers,
         api_key,
         at,
-        app_check_admitted: std::cell::Cell::new(false),
+        app_check_admitted: std::cell::RefCell::new(None),
     };
     let made_on_the_way = match emulator_creates_named_tenant(state, &creation, body, resolution) {
         Ok(made) => made,
         Err(response) => return response,
     };
     // A request the tenant admission let through was admitted by App Check there; it is observed once.
-    let app_check_admitted = creation.app_check_admitted.get();
+    let app_check_admitted = creation.app_check_admitted.take();
     // The official emulator's reading of an ID token's tenant (emulator profile).
     let emulator_tenant_body;
     let body = match emulator_named_tenant(state, path, query, body, made_on_the_way.as_deref()) {
@@ -4258,7 +4261,7 @@ fn handle_with_policy_inner(
     // (spec 7.4 and 13.3). Locking the store is not a state transition, so a denial here
     // still leaves no user, no issued or rotated credential, no consumed OOB or phone code,
     // no MFA change and no abuse counter behind.
-    if !app_check_admitted {
+    if app_check_admitted.as_deref() != Some(store.project_id()) {
         if let Some(denial) = app_check_denial(state, path, headers, store.project_id(), at) {
             return denial;
         }

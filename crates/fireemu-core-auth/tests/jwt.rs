@@ -284,8 +284,8 @@ fn a_removed_tenants_token_names_a_tenant_and_is_checked_against_its_project() {
 }
 
 #[test]
-fn claims_are_read_without_checking_the_algorithm_or_the_signature() {
-    use fireemu_core_auth::jwt::{base64url_encode, decode_claims_unverified};
+fn the_tenant_claim_is_read_without_checking_the_algorithm_or_the_signature() {
+    use fireemu_core_auth::jwt::{base64url_encode, unverified_tenant_claim};
     let token = |header: &str, payload: &str, signature: &str| {
         format!(
             "{}.{}.{signature}",
@@ -293,28 +293,43 @@ fn claims_are_read_without_checking_the_algorithm_or_the_signature() {
             base64url_encode(payload.as_bytes())
         )
     };
-    let read = decode_claims_unverified(&token(
-        r#"{"alg":"RS256","kid":"other"}"#,
-        r#"{"aud":"demo-app","firebase":{"tenant":"t-x"}}"#,
-        "c2ln",
-    ))
-    .expect("an unverifiable token still has claims");
+    let claims = |firebase: &str| format!(r#"{{"aud":"demo-app","firebase":{firebase}}}"#);
     assert_eq!(
-        read.get("firebase")
-            .and_then(|f| f.get("tenant"))
-            .and_then(fireemu_core_types::json::JsonValue::as_str),
-        Some("t-x")
+        unverified_tenant_claim(&token(
+            r#"{"alg":"RS256","kid":"other"}"#,
+            &claims(r#"{"tenant":"t-x"}"#),
+            "c2ln"
+        )),
+        Some("t-x".to_owned())
     );
     for (name, bad) in [
+        ("no firebase claim", token("{}", r#"{"aud":"a"}"#, "s")),
+        ("no tenant", token("{}", &claims("{}"), "s")),
+        (
+            "an empty tenant",
+            token("{}", &claims(r#"{"tenant":""}"#), "s"),
+        ),
+        ("a number", token("{}", &claims(r#"{"tenant":5}"#), "s")),
+        ("an object", token("{}", &claims(r#"{"tenant":{}}"#), "s")),
         ("two parts", "a.b".to_owned()),
-        ("four parts", "a.b.c.d".to_owned()),
+        (
+            "four parts",
+            format!("{}.x", token("{}", &claims(r#"{"tenant":"t"}"#), "s")),
+        ),
+        ("one part", "abc".to_owned()),
         ("empty", String::new()),
-        ("header not json", token("nope", r#"{"a":1}"#, "s")),
-        ("header not an object", token("[]", r#"{"a":1}"#, "s")),
+        (
+            "header not json",
+            token("nope", &claims(r#"{"tenant":"t"}"#), "s"),
+        ),
+        (
+            "header not an object",
+            token("[]", &claims(r#"{"tenant":"t"}"#), "s"),
+        ),
         ("payload not json", token("{}", "nope", "s")),
         ("payload not an object", token("{}", "[1]", "s")),
         ("not base64", "!!.!!.!!".to_owned()),
     ] {
-        assert!(decode_claims_unverified(&bad).is_err(), "{name}");
+        assert_eq!(unverified_tenant_claim(&bad), None, "{name}");
     }
 }

@@ -352,26 +352,30 @@ pub fn decode_unsigned(token: &str) -> Result<DecodedToken, JwtError> {
     decode_token(token, None)
 }
 
-/// The claims of a token read as they are, without checking its algorithm or signature: the way
-/// the official emulator reads an ID token's tenant before it looks the tenant up
-/// (`jsonwebtoken.decode`). Only for a decision that can make a request refuse more, never for
-/// one that admits or selects anything.
-pub fn decode_claims_unverified(token: &str) -> Result<JsonValue, JwtError> {
+/// The `firebase.tenant` claim of a token read as it stands, WITHOUT checking its algorithm or
+/// signature: the way the official emulator reads an ID token's tenant before it looks the tenant
+/// up (`jsonwebtoken.decode`). The value is unverified: never use it for authentication,
+/// identity, store or tenant selection or authorization. It is only for a check that can make a
+/// request refuse (the agreement with the tenant a request names), and nothing else of the token
+/// is returned. `None` when the token does not parse, has no string tenant claim, or the claim is
+/// empty (falsy in the official emulator's check).
+#[must_use]
+pub fn unverified_tenant_claim(token: &str) -> Option<String> {
     let parts: Vec<&str> = token.split('.').collect();
     let [header_b64, payload, _signature] = parts.as_slice() else {
-        return Err(JwtError::Malformed);
+        return None;
     };
-    let header =
-        String::from_utf8(base64url_decode(header_b64)?).map_err(|_| JwtError::Malformed)?;
+    let header = String::from_utf8(base64url_decode(header_b64).ok()?).ok()?;
     if !matches!(parse(&header), Ok(JsonValue::Object(_))) {
-        return Err(JwtError::Malformed);
+        return None;
     }
-    let payload_json =
-        String::from_utf8(base64url_decode(payload)?).map_err(|_| JwtError::Malformed)?;
-    match parse(&payload_json) {
-        Ok(parsed @ JsonValue::Object(_)) => Ok(parsed),
-        _ => Err(JwtError::Malformed),
-    }
+    let payload_json = String::from_utf8(base64url_decode(payload).ok()?).ok()?;
+    let claims = parse(&payload_json).ok()?;
+    let tenant = claims
+        .get("firebase")
+        .and_then(|firebase| firebase.get("tenant"))
+        .and_then(JsonValue::as_str)?;
+    (!tenant.is_empty()).then(|| tenant.to_owned())
 }
 
 /// Decodes a token and checks its signature: with a `signer` the token must carry the

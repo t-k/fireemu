@@ -953,6 +953,45 @@ fn an_unverifiable_id_tokens_tenant_has_to_agree_with_the_named_tenant() {
         &json!({"idToken": without, "tenantId": "t-z"}),
     );
     assert!(registry.tenant_store("demo-app", "t-z").is_some());
+    // An empty tenant claim is no tenant, as it is falsy in the official emulator's check: the
+    // body tenant is made on a route that does not parse the token.
+    let empty = token(&json!({"aud": "demo-app", "firebase": {"tenant": ""}}));
+    let (status, answered) = client(
+        &state,
+        &format!("{V1}/accounts:createAuthUri"),
+        &json!({"identifier": "x@example.com", "continueUri": "http://localhost", "tenantId": "t-e", "idToken": empty}),
+    );
+    assert_ne!(
+        answered["error"]["message"], "TENANT_ID_MISMATCH",
+        "{status} {answered}"
+    );
+    assert!(registry.tenant_store("demo-app", "t-e").is_some());
+    // The same for a token this daemon verifies (unsigned, in a daemon without a signer).
+    let verified_empty = format!(
+        "{}.{}.",
+        base64url_encode(br#"{"alg":"none","typ":"JWT"}"#),
+        base64url_encode(
+            json!({"aud": "demo-app", "firebase": {"tenant": ""}})
+                .to_string()
+                .as_bytes()
+        )
+    );
+    // (What the request itself answers for such a token is the pipeline's, not the creation's.)
+    let _ = client(
+        &state,
+        &format!("{V1}/accounts:createAuthUri"),
+        &json!({"identifier": "x@example.com", "continueUri": "http://localhost", "tenantId": "t-v", "idToken": verified_empty}),
+    );
+    assert!(registry.tenant_store("demo-app", "t-v").is_some());
+    // A tenant claim that is not a string is a recorded divergence: the official emulator asserts
+    // it against the body's tenant, and here it names none.
+    let number = token(&json!({"aud": "demo-app", "firebase": {"tenant": 5}}));
+    let _ = client(
+        &state,
+        &format!("{V1}/accounts:lookup"),
+        &json!({"idToken": number, "tenantId": "t-n"}),
+    );
+    assert!(registry.tenant_store("demo-app", "t-n").is_some());
     // A token that is no JWT at all is not read.
     let _ = client(
         &state,

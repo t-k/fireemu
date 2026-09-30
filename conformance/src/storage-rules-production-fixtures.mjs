@@ -46,6 +46,12 @@ export const PRODUCTION = Object.freeze({
   documentCreated: Object.freeze({ status: 200, contentType: "application/json; charset=UTF-8", body: "{\n  \"name\": \"projects/fireemu-oracle-query/databases/(default)/documents/STORAGE-RULES/probe-2f-doc\",\n  \"fields\": {\n    \"probe\": {\n      \"stringValue\": \"2f\"\n    }\n  },\n  \"createTime\": \"2026-09-30T03:28:25.413574Z\",\n  \"updateTime\": \"2026-09-30T03:28:25.413574Z\"\n}\n" }),
   // stage 2f, shape/document/delete: DELETE with currentDocument.updateTime
   documentDeleted: Object.freeze({ status: 200, contentType: "application/json; charset=UTF-8", body: "{}\n" }),
+  // stage 3 v9 recording 1 (2026-09-30T10:58Z), release/v1/publish: POST releases (the read of the same release, release/v1/after, answers the same body)
+  releaseCreated: Object.freeze({ status: 200, contentType: "application/json; charset=UTF-8", body: "{\n  \"name\": \"projects/fireemu-oracle-query/releases/firebase.storage/fireemu-oracle-query.firebasestorage.app\",\n  \"rulesetName\": \"projects/fireemu-oracle-query/rulesets/7d23076a-fc6d-4323-8148-56294a69fb9a\",\n  \"createTime\": \"2026-09-30T11:04:49.044386Z\",\n  \"updateTime\": \"2026-09-30T11:04:49.044386Z\"\n}\n" }),
+  // stage 2c-pre (2026-09-29T14:19Z), preflight/ruleset/saved: GET of the ruleset the bucket release points at
+  rulesetSaved: Object.freeze({ status: 200, contentType: "application/json; charset=UTF-8", body: "{\n  \"name\": \"projects/fireemu-oracle-query/rulesets/22b746af-a48a-458d-ab5c-7853473bc8c8\",\n  \"source\": {\n    \"files\": [\n      {\n        \"content\": \"rules_version = '2';\\nservice firebase.storage {\\n  match /b/{bucket}/o {\\n    match /storage-object/{run}/{allPaths=**} {\\n      allow read, write: if request.auth != null && request.auth.token.email == '<redacted:email>';\\n    }\\n  }\\n}\\n\",\n        \"name\": \"storage.rules\"\n      }\n    ]\n  },\n  \"createTime\": \"2026-09-25T11:08:54.358767Z\",\n  \"metadata\": {\n    \"services\": [\n      \"firebase.storage\"\n    ]\n  }\n}\n" }),
+  // stage 2c-pre, release/bucket/delete: DELETE of the bucket release (status 200, the empty object)
+  releaseDeleted: Object.freeze({ status: 200, contentType: "application/json; charset=UTF-8", body: "{}\n" }),
 });
 /** A recorded answer as the transport hands it to a classifier. */
 export const rawOf = (fixture) => ({ status: fixture.status, rawHeaders: fixture.contentType === null ? [] : ["Content-Type", fixture.contentType], bytes: Buffer.from(fixture.body, "utf8") });

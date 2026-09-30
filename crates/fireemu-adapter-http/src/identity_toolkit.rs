@@ -3945,10 +3945,6 @@ fn emulator_named_tenant(
     let Some(registry) = state.registry.as_ref() else {
         return Ok(());
     };
-    // The official emulator parses the ID token only in the operations that read it.
-    if !official_reads_the_id_token(resolution, body) {
-        return Ok(());
-    }
     let account_api = path.starts_with("/identitytoolkit.googleapis.com/v1/")
         && !path.ends_with(":queryAccounts")
         && !path.ends_with("/accounts:query");
@@ -4003,6 +3999,12 @@ fn emulator_named_tenant(
         }
         (None, None) => token_tenant.as_str(),
     };
+    // The tenant agreement above is asserted for every operation (`toExegesisOperation`,
+    // `server.js:399-403`); the user is looked for in the token's tenant only by the operations
+    // that parse the token (`parseIdToken`, `operations.js:1715`).
+    if !official_reads_the_id_token(resolution, body) {
+        return Ok(());
+    }
     // A tenant this request made on the way is empty: the token's user is not in it.
     if made_on_the_way == Some(target) || registry.tenant_store(&project, target).is_none() {
         return Err(error(400, "USER_NOT_FOUND"));
@@ -4343,7 +4345,7 @@ fn handle_with_policy_inner(
     } else {
         None
     };
-    let routed_operation = match routed_gate.as_ref() {
+    let mut routed_operation = match routed_gate.as_ref() {
         Some(gate) => match gate.lock() {
             Ok(operation) => Some(operation),
             Err(_) => return error(500, "INTERNAL"),
@@ -4404,6 +4406,11 @@ fn handle_with_policy_inner(
                     if official_admin_account_handler(route.handler))
             })
             .and_then(|tenant| registry.tenant_store(project, tenant));
+        if body_tenant_store.is_some() {
+            // A tenant's request takes the project's gate itself, as a tenant path's does, so the
+            // routed namespace's gate is released first.
+            routed_operation = None;
+        }
         body_tenant_store.unwrap_or(store)
     } else {
         match select_store(state, path, query, body, resolution) {

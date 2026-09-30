@@ -615,6 +615,9 @@ struct Transaction {
     /// this one's locks is the deadlock production resolves by aborting one side: that other
     /// side is aborted, so this one can proceed.
     waiting_to_commit: bool,
+    /// A read-only transaction begun without a `readTime` takes its snapshot at its first use, not
+    /// at its begin (P02: an outside write between the begin and the first read is shown).
+    snapshot_pending: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -2105,6 +2108,22 @@ impl FirestoreState {
         self.insert_transaction(read_only, self.version, read_time, now)
     }
 
+    /// Begins a read-only transaction whose snapshot is taken at its first use (the client's next
+    /// request on the token), as production does (P02, REST and gRPC): a write acknowledged
+    /// between the begin and the first read is shown by that read, and every later read shows the
+    /// snapshot of the first. A transaction that begins with a read (`newTransaction` on a read)
+    /// uses [`Self::begin_transaction`], whose snapshot is the moment of that read.
+    pub fn begin_read_only_transaction(
+        &mut self,
+        now: LogicalInstant,
+    ) -> Result<TransactionId, FirestoreError> {
+        let id = self.begin_transaction(true, now)?;
+        if let Some(transaction) = self.transactions.get_mut(&id) {
+            transaction.snapshot_pending = true;
+        }
+        Ok(id)
+    }
+
     /// Begins a retry attempt linked to a transaction previously issued by this database.
     /// The previous attempt may already be finished after an `ABORTED` commit, but an unknown
     /// handle is never accepted as retry lineage.
@@ -2197,6 +2216,7 @@ impl FirestoreState {
             state: TransactionState::Active,
             activity: 0,
             waiting_to_commit: false,
+            snapshot_pending: false,
         };
         self.active_transaction_deadlines.insert((
             transaction_deadline(&transaction, self.limit_scope),
@@ -2433,6 +2453,25 @@ impl FirestoreState {
             transaction.last_activity = now;
             transaction.wall_last_activity = std::time::Instant::now();
             transaction.activity = transaction.activity.wrapping_add(1);
+            if transaction.snapshot_pending {
+                transaction.snapshot_pending = false;
+                let (version, time) = (
+                    self.version,
+                    match self.last_commit_time {
+                        Some(last) if last.as_nanos() > now.as_nanos() => last,
+                        _ => now,
+                    },
+                );
+                if version != transaction.read_version {
+                    decrement_version_count(
+                        &mut self.active_transaction_versions,
+                        transaction.read_version,
+                    );
+                    *self.active_transaction_versions.entry(version).or_default() += 1;
+                    transaction.read_version = version;
+                }
+                transaction.read_time = time;
+            }
             self.active_transaction_deadlines.insert((
                 transaction_deadline(transaction, self.limit_scope),
                 id.clone(),

@@ -4648,7 +4648,7 @@ impl LocalBackend {
                             let at = self.read_time_selector(ts, now, db.read_time(now))?;
                             db.begin_transaction_at(at, now)
                         }
-                        None => db.begin_transaction(true, now),
+                        None => db.begin_read_only_transaction(now),
                     }
                 }
                 Some(pb::transaction_options::Mode::ReadWrite(read_write))

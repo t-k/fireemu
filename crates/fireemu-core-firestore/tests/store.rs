@@ -3152,6 +3152,79 @@ fn a_read_only_transaction_commits_empty_and_ends_when_a_write_commit_is_refused
     state.rollback(&refused).unwrap();
 }
 
+// P02 (both transports): a read-only transaction takes its snapshot at its first use, not at its
+// begin. A write acknowledged between the two is shown by the first read (S1), and a write after
+// the first read is not shown by the second (S2). A read-only transaction begun through a read's
+// `newTransaction` (the eager begin) and one begun at a `readTime` keep their begin-time snapshot.
+#[test]
+fn a_read_only_transaction_takes_its_snapshot_at_its_first_use() {
+    let value = |state: &FirestoreState, transaction: &TransactionId| {
+        state
+            .transaction_read_version(transaction)
+            .map(|version| {
+                state
+                    .get_at(&path("p02/doc"), version)
+                    .and_then(|d| d.fields.get("v").cloned())
+            })
+            .unwrap()
+    };
+    let mut state = FirestoreState::with_limit_scope(LimitScope::Production);
+    state
+        .commit(&[set("p02/doc", &[("v", Value::Integer(1))])], None, t(0))
+        .unwrap();
+
+    let lazy = state.begin_read_only_transaction(t(1)).unwrap();
+    state
+        .commit(&[set("p02/doc", &[("v", Value::Integer(2))])], None, t(2))
+        .unwrap();
+    state.touch_transaction(&lazy, t(3)).unwrap();
+    assert_eq!(
+        value(&state, &lazy),
+        Some(Value::Integer(2)),
+        "the first use pins the snapshot"
+    );
+    assert!(state.transaction_read_time(&lazy).unwrap() >= t(3));
+    state
+        .commit(&[set("p02/doc", &[("v", Value::Integer(3))])], None, t(4))
+        .unwrap();
+    state.touch_transaction(&lazy, t(5)).unwrap();
+    assert_eq!(
+        value(&state, &lazy),
+        Some(Value::Integer(2)),
+        "later reads keep the first snapshot"
+    );
+
+    let eager = state.begin_transaction(true, t(6)).unwrap();
+    state
+        .commit(&[set("p02/doc", &[("v", Value::Integer(4))])], None, t(7))
+        .unwrap();
+    state.touch_transaction(&eager, t(8)).unwrap();
+    assert_eq!(
+        value(&state, &eager),
+        Some(Value::Integer(3)),
+        "a begun-with-a-read transaction keeps its begin"
+    );
+
+    let unused = state.begin_read_only_transaction(t(9)).unwrap();
+    state.rollback(&unused).unwrap();
+    assert_eq!(state.transaction_bookkeeping_stats().active, 2);
+
+    // Pinning moves the transaction's hold on history from its begin to its snapshot: once every
+    // transaction is finished and the one-hour window has passed, only the newest version and the
+    // one at the floor remain.
+    state.rollback(&lazy).unwrap();
+    state.rollback(&eager).unwrap();
+    assert_eq!(state.transaction_bookkeeping_stats().active, 0);
+    state
+        .commit(
+            &[set("p02/doc", &[("v", Value::Integer(5))])],
+            None,
+            t(10_000),
+        )
+        .unwrap();
+    assert_eq!(state.retained_versions(), 2);
+}
+
 #[test]
 fn a_transaction_with_no_preconditions_refused_is_not_ended_by_other_refusals() {
     // Only the precondition refusal is measured; a commit that fails for another reason (here a

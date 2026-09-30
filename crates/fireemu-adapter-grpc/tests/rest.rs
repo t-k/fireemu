@@ -3860,6 +3860,60 @@ fn rest_validation_codes_follow_production() {
     );
 }
 
+/// A read-only transaction takes its snapshot at its first read, not at its begin (P02): a write
+/// acknowledged between the two is shown, and a write after the first read is not.
+#[test]
+fn rest_read_only_transaction_snapshot_is_taken_at_its_first_read() {
+    let s = state(None);
+    let name = "projects/demo-app/databases/(default)/documents/ro-snapshot/a";
+    let write = |s: &RestState, value: &str| {
+        let (status, body) = call(
+            s,
+            "POST",
+            &format!("{DOCS}:commit"),
+            json!({"writes": [{"update": {"name": name, "fields": {"v": {"stringValue": value}}}}]}),
+        );
+        assert_eq!(status, 200, "{body}");
+    };
+    write(&s, "created");
+    let (status, begun) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}:beginTransaction"),
+        json!({"options": {"readOnly": {}}}),
+    );
+    assert_eq!(status, 200, "{begun}");
+    let transaction = begun["transaction"].as_str().unwrap().to_owned();
+    write(&s, "between");
+    let read = |s: &RestState| {
+        let (status, body) = call(
+            s,
+            "GET",
+            &format!("{DOCS}/ro-snapshot/a?transaction={transaction}"),
+            Value::Null,
+        );
+        assert_eq!(status, 200, "{body}");
+        body["fields"]["v"]["stringValue"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    };
+    assert_eq!(read(&s), "between");
+    write(&s, "after");
+    assert_eq!(read(&s), "between");
+    let (status, body) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}:batchGet"),
+        json!({"documents": [name], "transaction": transaction}),
+    );
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(
+        body[0]["found"]["fields"]["v"]["stringValue"], "between",
+        "{body}"
+    );
+}
+
 #[test]
 fn rest_read_only_transaction_commit_follows_production() {
     let s = state(None);

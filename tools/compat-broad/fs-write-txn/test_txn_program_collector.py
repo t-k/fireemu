@@ -355,6 +355,11 @@ def test_an_invalid_transaction_release_finishes_a_token_only_after_an_expired_r
     plan, ledger = _expired_ledger()
     ledger._apply("release", "rest", "Rollback", {"transaction": "dG9rZW4="}, None, _answer(3, "Invalid transaction.", 400), timing(), 3)
     assert ledger.tokens["rest-k"]["state"] == "unconfirmed-release"
+    # A 10 with other text does not count as an expired refusal.
+    plan, ledger = _expired_ledger()
+    ledger._apply("rest/expiry-read", "rest", "GetDocument", request, None, _answer(10, "something else", 409), timing(), 10)
+    ledger._apply("release", "rest", "Rollback", {"transaction": "dG9rZW4="}, None, _answer(3, "Invalid transaction.", 400), timing(), 3)
+    assert ledger.tokens["rest-k"]["state"] == "unconfirmed-release"
     # Another body with code 3 never finishes it.
     plan, ledger = _expired_ledger()
     ledger._apply("rest/expiry-read", "rest", "GetDocument", request, None, _answer(10, gone, 409), timing(), 10)

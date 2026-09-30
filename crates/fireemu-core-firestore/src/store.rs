@@ -2241,7 +2241,14 @@ impl FirestoreState {
             previous_attempt.state = TransactionState::Retried;
         }
         let read_time = self.read_time(now);
-        self.insert_transaction(false, self.version, read_time, now)
+        let id = self.insert_transaction(false, self.version, read_time, now)?;
+        // The official emulator (v1.22.0, REST measured) reads a retried read-write transaction at
+        // its first use, like a plain begin (`begin_read_write_transaction`); production is
+        // unobserved, so strict keeps the begin-time snapshot.
+        if let Some(transaction) = self.transactions.get_mut(&id) {
+            transaction.snapshot_pending = self.limit_scope == LimitScope::OfficialEmulator;
+        }
+        Ok(id)
     }
 
     /// Starts a read-only transaction over the snapshot at `read_time` (the latest version
@@ -2467,7 +2474,7 @@ impl FirestoreState {
             } else {
                 self.finished_transactions.remove(id);
                 self.finished_transaction_deadlines
-                    .remove(&(transaction_lineage_deadline(&transaction), id.clone()));
+                    .remove(&(finished_lineage_deadline(&transaction), id.clone()));
             }
         }
     }
@@ -3662,7 +3669,7 @@ impl FirestoreState {
 
         // Publish. All fallible validation and external admission completed above. Every
         // accepted commit consumes a commit time, changed documents or not, except the empty
-        // commit of a read-only transaction, which answers its snapshot time.
+        // commit of a transaction that has read, which answers the time of its first read.
         if snapshot_time.is_none() {
             self.last_commit_time = Some(commit_time);
         }

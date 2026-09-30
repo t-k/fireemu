@@ -3284,6 +3284,74 @@ fn an_empty_commit_of_a_read_time_transaction_answers_that_read_time() {
     assert_eq!(empty.commit_time, t(2));
 }
 
+// A `readTime` begin and a retry attempt have not read either: their empty commits carry no time in
+// production until they read (inferred from the rule; only explicit begins are recorded).
+#[test]
+fn a_read_time_begin_and_a_retry_attempt_answer_no_time_until_they_read() {
+    let mut state = FirestoreState::with_limit_scope(LimitScope::Production);
+    state
+        .commit(&[set("p03/doc", &[("v", Value::Integer(1))])], None, t(1))
+        .unwrap();
+    let at = state.begin_transaction_at(t(1), t(5)).unwrap();
+    assert!(!state.commit(&[], Some(&at), t(6)).unwrap().stamped);
+
+    let first = state.begin_read_write_transaction(t(7)).unwrap();
+    state.rollback(&first).unwrap();
+    let retried = state.retry_transaction(&first, t(8)).unwrap();
+    assert!(!state.commit(&[], Some(&retried), t(9)).unwrap().stamped);
+}
+
+// The official emulator (v1.22.0, REST measured) reads a retried read-write transaction at its first
+// use, like a plain begin, and its commit succeeds; the emulator profile matches it.
+#[test]
+fn the_emulator_profile_reads_a_retried_transaction_at_its_first_use() {
+    let mut state = FirestoreState::with_limit_scope(LimitScope::OfficialEmulator);
+    state
+        .commit(&[set("p02/doc", &[("v", Value::Integer(1))])], None, t(0))
+        .unwrap();
+    let first = state.begin_read_write_transaction(t(1)).unwrap();
+    state.rollback(&first).unwrap();
+    let retried = state.retry_transaction(&first, t(2)).unwrap();
+    state
+        .commit(&[set("p02/doc", &[("v", Value::Integer(2))])], None, t(3))
+        .unwrap();
+    state.touch_transaction(&retried, t(4)).unwrap();
+    let shown = state
+        .get_in_transaction(&retried, &path("p02/doc"))
+        .unwrap()
+        .and_then(|document| document.fields.get("v").cloned());
+    assert_eq!(
+        shown,
+        Some(Value::Integer(2)),
+        "the first read shows the writer"
+    );
+    state
+        .commit(
+            &[set("p02/doc", &[("v", Value::Integer(3))])],
+            Some(&retried),
+            t(5),
+        )
+        .unwrap();
+
+    // Production keeps the begin-time snapshot (unobserved).
+    let mut strict = FirestoreState::with_limit_scope(LimitScope::Production);
+    strict
+        .commit(&[set("p02/doc", &[("v", Value::Integer(1))])], None, t(0))
+        .unwrap();
+    let first = strict.begin_read_write_transaction(t(1)).unwrap();
+    strict.rollback(&first).unwrap();
+    let retried = strict.retry_transaction(&first, t(2)).unwrap();
+    strict
+        .commit(&[set("p02/doc", &[("v", Value::Integer(2))])], None, t(3))
+        .unwrap();
+    strict.touch_transaction(&retried, t(4)).unwrap();
+    let shown = strict
+        .get_in_transaction(&retried, &path("p02/doc"))
+        .unwrap()
+        .and_then(|document| document.fields.get("v").cloned());
+    assert_eq!(shown, Some(Value::Integer(1)));
+}
+
 // An embedded `newTransaction` reads in the request that begins it, so its empty commit already
 // answers that time.
 #[test]
@@ -3513,6 +3581,9 @@ fn a_first_request_that_finds_the_lifetime_expired_after_other_maintenance_is_st
     // Maintenance at the deadline (here another begin) must not forget it before a request refused it.
     let other = state.begin_transaction(true, t(271)).unwrap();
     aborted_no_longer_valid(state.touch_transaction(&transaction, t(272)));
+    // Forgetting the expiry removes the deadline entry it was filed under.
+    let bookkeeping = state.transaction_bookkeeping_stats();
+    assert_eq!(bookkeeping.finished, bookkeeping.finished_deadlines);
     invalid_transaction(state.rollback(&transaction));
     state.rollback(&other).unwrap();
 }
@@ -3602,6 +3673,7 @@ fn a_transaction_ended_by_a_refused_commit_may_be_retried_like_a_rolled_back_one
         let missing = precondition_write("p08/missing", Precondition::Exists(true));
         assert!(state.commit(&[missing], Some(&transaction), t(2)).is_err());
         let retried = state.retry_transaction(&transaction, t(3)).unwrap();
+        state.touch_transaction(&retried, t(3)).unwrap();
         state
             .get_in_transaction(&retried, &path("p08/held"))
             .unwrap();

@@ -69,10 +69,62 @@ function metadataValues(metadata, credential) {
     ]),
   );
 }
+const nativeReasons = new Set([
+  "deadline",
+  "abort",
+  "close",
+  "stream-error",
+  "stream-close",
+  "session-error",
+  "session-close",
+  "session-goaway",
+  "response-bound",
+  "header-bound",
+  "protocol",
+  "invalid-status",
+  "invalid-headers",
+  "extra-headers",
+]);
+function nativeWire(wire, credential, bodyLimit, headerLimit) {
+  if (wire === undefined) return undefined;
+  const headers = wire.headers,
+    trailers = wire.trailers;
+  const additional = wire.additionalHeaders ?? [];
+  if (!Array.isArray(additional)) throw new Error("bounded raw native wire required");
+  const blocks = [headers, trailers, ...additional];
+  if (
+    !blocks.every(
+      (raw) =>
+        Array.isArray(raw) &&
+        raw.length % 2 === 0 &&
+        raw.every((value) => typeof value === "string"),
+    ) ||
+    typeof wire.dataBase64 !== "string"
+  )
+    throw new Error("bounded raw native wire required");
+  if (blocks.flat().reduce((size, value) => size + Buffer.byteLength(value), 0) > headerLimit)
+    throw new Error("native header bound exceeded");
+  for (const raw of blocks)
+    for (let i = 0; i < raw.length; i += 2)
+      if (raw[i].endsWith("-bin"))
+        for (const value of raw[i + 1].split(","))
+          rawBytes(Buffer.from(value.trim(), "base64"), credential);
+  const bytes = Buffer.from(wire.dataBase64, "base64");
+  if (bytes.toString("base64") !== wire.dataBase64 || bytes.length > bodyLimit + 5)
+    throw new Error("native frame capture bound exceeded");
+  return {
+    headers: headers.slice(),
+    trailers: trailers.slice(),
+    ...(additional.length ? { additionalHeaders: additional.map((raw) => raw.slice()) } : {}),
+    data: rawBytes(bytes, credential),
+    ...(wire.truncated === true ? { truncated: true } : {}),
+  };
+}
 export function createUnarySession({
   target,
   maxRequests,
   maxResponseBytes,
+  maxWireHeaderBytes = maxResponseBytes,
   wallMs,
   requestMs,
   persist,
@@ -85,7 +137,7 @@ export function createUnarySession({
   target = snapshot(target);
   if (!target || !["local", "production"].includes(target.kind) || typeof persist !== "function")
     throw new Error("explicit target and durable receipt sink required");
-  for (const value of [maxRequests, maxResponseBytes, wallMs, requestMs])
+  for (const value of [maxRequests, maxResponseBytes, maxWireHeaderBytes, wallMs, requestMs])
     if (!Number.isSafeInteger(value) || value <= 0)
       throw new Error("finite positive bounds required");
   if (target.kind === "production" && typeof guard !== "function")
@@ -226,14 +278,23 @@ export function createUnarySession({
       });
       const available = response.responseBytes !== undefined;
       const bytes = available ? Buffer.from(response.responseBytes) : undefined;
-      if (
-        (available && bytes.length > maxResponseBytes) ||
-        !Number.isInteger(response.status?.code)
-      )
+      if (available && bytes.length > maxResponseBytes)
         throw new Error("bounded native response required");
+      const wire = nativeWire(
+        response.wire,
+        target.accessToken,
+        maxResponseBytes,
+        maxWireHeaderBytes,
+      );
+      const validStatus =
+        Number.isInteger(response.status?.code) &&
+        response.status.code >= 0 &&
+        response.status.code <= 16;
       const confirmed =
+        validStatus &&
         !response.interruption &&
-        (response.statusOrigin === "peer-trailers" ||
+        !response.reason &&
+        ((response.statusOrigin === "peer-trailers" && wire && !wire.truncated) ||
           (response.statusOrigin === "successful-response" &&
             response.status.code === 0 &&
             available));
@@ -241,15 +302,21 @@ export function createUnarySession({
         responseType: built.responseType,
         responseBytesAvailable: available,
         ...(available ? rawBytes(bytes, target.accessToken) : {}),
+        ...(wire ? { nativeWire: wire } : {}),
+        ...(nativeReasons.has(response.reason) ? { nativeReason: response.reason } : {}),
         statusOrigin: confirmed ? response.statusOrigin : "unverified",
         ...(!confirmed ? { transportUncertain: true } : {}),
         ...(Number.isInteger(response.callbackCode) ? { callbackCode: response.callbackCode } : {}),
         ...(response.interruption === "deadline" ? { interruption: "deadline" } : {}),
-        grpcStatus: {
-          code: response.status.code,
-          details: response.status.details ?? "",
-          metadata: metadataValues(response.status.metadata, target.accessToken),
-        },
+        ...(validStatus
+          ? {
+              grpcStatus: {
+                code: response.status.code,
+                details: response.status.details ?? "",
+                metadata: metadataValues(response.status.metadata, target.accessToken),
+              },
+            }
+          : {}),
       };
     });
   }

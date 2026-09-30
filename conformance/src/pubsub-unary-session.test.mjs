@@ -448,3 +448,128 @@ test("field-unaware snapshots cannot coerce binary attributes into accepted stri
   );
   assert.equal(sent, 0);
 });
+test("direct peer refusal wire fields are durable before a confirmed native error result", async () => {
+  const rows = [];
+  const wire = {
+    headers: [":status", "200", "content-type", "application/grpc"],
+    trailers: ["grpc-status", "5"],
+    dataBase64: "",
+  };
+  const s = await session(
+    options({
+      codec: { serialize: () => Buffer.alloc(0) },
+      persist: async (r) => rows.push(r),
+      sendGrpc: async () => ({
+        statusOrigin: "peer-trailers",
+        status: { code: 5, details: "missing", metadata: {} },
+        wire,
+      }),
+    }),
+  );
+  const r = await s.grpc(step);
+  assert.equal(r.outcome, "recorded");
+  assert.equal(r.grpcStatus.code, 5);
+  assert.deepEqual(rows.at(-1).nativeWire.headers, wire.headers);
+  assert.deepEqual(rows.at(-1).nativeWire.trailers, wire.trailers);
+  assert.equal(r.responseBytesAvailable, false);
+  assert.equal(rows.at(-1).nativeWire.data.bodyBytes, 0);
+  assert.equal(s.counts().completed, 1);
+});
+test("missing native terminal preserves bounded wire evidence as uncertain without inventing grpc status", async () => {
+  const rows = [];
+  const s = await session(
+    options({
+      codec: { serialize: () => Buffer.alloc(0) },
+      persist: async (r) => rows.push(r),
+      sendGrpc: async () => ({
+        statusOrigin: "unverified",
+        reason: "stream-error",
+        wire: { headers: [":status", "200"], trailers: [], dataBase64: "AAA=" },
+      }),
+    }),
+  );
+  const r = await s.grpc(step);
+  assert.equal(r.outcome, "transport-uncertain");
+  assert.equal(rows.at(-1).nativeReason, "stream-error");
+  assert.equal(rows.at(-1).nativeWire.data.bodyBase64, "AAA=");
+  assert.ok(!Object.hasOwn(rows.at(-1), "grpcStatus"));
+});
+test("wire bounds and credential reflections cannot enter durable native response receipts", async () => {
+  for (const mode of [
+    "body",
+    "headers",
+    "reflection",
+    "binary-reflection",
+    "additional-headers",
+    "additional-reflection",
+  ]) {
+    const rows = [];
+    const wire = {
+      headers: [":status", "200"],
+      trailers: [],
+      dataBase64: Buffer.from([1]).toString("base64"),
+    };
+    if (mode === "body") wire.dataBase64 = Buffer.alloc(1030).toString("base64");
+    if (mode === "headers") wire.headers = ["key", "x".repeat(1100)];
+    if (mode === "additional-headers") wire.additionalHeaders = [["key", "x".repeat(1100)]];
+    if (mode === "additional-reflection")
+      wire.additionalHeaders = [["key-bin", Buffer.from("secret-token").toString("base64")]];
+    if (mode === "reflection") wire.dataBase64 = Buffer.from("secret-token").toString("base64");
+    if (mode === "binary-reflection")
+      wire.headers = ["key-bin", Buffer.from("secret-token").toString("base64")];
+    const s = await session(
+      options({
+        target: {
+          kind: "production",
+          restEndpoint: "https://pubsub.googleapis.com",
+          accessToken: "secret-token",
+        },
+        guard: async () => {},
+        codec: { serialize: () => Buffer.alloc(0) },
+        persist: async (r) => rows.push(r),
+        sendGrpc: async () => ({
+          statusOrigin: "peer-trailers",
+          status: { code: 5, metadata: {} },
+          wire,
+        }),
+      }),
+    );
+    assert.equal((await s.grpc(step)).outcome, "transport-uncertain");
+    assert.ok(!Object.hasOwn(rows.at(-1), "nativeWire"));
+    assert.equal(s.counts().completed, 0);
+  }
+});
+test("additional native header blocks stay raw under uncertainty and halt the receipt session", async () => {
+  const { EventEmitter } = await import("node:events");
+  const { createPeerGrpcTransport } = await import("../pubsub-corpus/peer-grpc-transport.mjs");
+  const client = new EventEmitter(),
+    stream = new EventEmitter();
+  stream.close = () => stream.emit("close");
+  client.destroy = () => {};
+  client.request = () => stream;
+  const raw = [":status", "103", "hint", "small"];
+  stream.end = () => queueMicrotask(() => stream.emit("headers", { ":status": 103 }, 0, raw));
+  const transport = createPeerGrpcTransport(client, {
+      authority: "http://127.0.0.1:1234",
+      maxResponseBytes: 1024,
+      maxHeaderBytes: 128,
+    }),
+    rows = [];
+  try {
+    const s = await session(
+      options({
+        codec: { serialize: () => Buffer.alloc(0) },
+        sendGrpc: transport.send,
+        persist: async (row) => rows.push(row),
+      }),
+    );
+    const r = await s.grpc(step);
+    assert.equal(r.outcome, "transport-uncertain");
+    assert.equal(rows.at(-1).nativeReason, "extra-headers");
+    assert.deepEqual(rows.at(-1).nativeWire.additionalHeaders, [raw]);
+    assert.equal(s.counts().unknown, 1);
+    await assert.rejects(s.grpc({ ...step, id: "must-not-follow" }));
+  } finally {
+    transport.close();
+  }
+});

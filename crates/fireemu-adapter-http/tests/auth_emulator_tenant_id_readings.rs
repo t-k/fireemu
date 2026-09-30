@@ -711,7 +711,14 @@ fn a_malformed_query_tenant_is_refused_only_where_it_is_read() {
         )
     };
     // A bare or empty API key is refused wherever the tenant is read as none.
-    for query in ["?key", "?key=", "?apiKey", "?key=a&key=b"] {
+    for query in [
+        "?key",
+        "?key=",
+        "?apiKey",
+        "?key=a&key=b",
+        "?key=%ZZ",
+        "?tenantId=%ZZ",
+    ] {
         assert_eq!(
             batch(query, &json!({})),
             (400, "INVALID_ARGUMENT".to_owned(), None),

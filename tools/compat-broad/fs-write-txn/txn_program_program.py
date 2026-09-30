@@ -99,8 +99,10 @@ def _validate_table(table):
     if any(type(table[key]) is not int or table[key] <= 0 for key in ("observationSeconds", "recoverySeconds", "maxTokens")):
         _bad("clock or token limits are malformed")
     thresholds = table.get("thresholds")
-    if thresholds is not None and (not isinstance(thresholds, dict) or set(thresholds) != {"totalAgeSeconds"} or type(thresholds["totalAgeSeconds"]) is not int or thresholds["totalAgeSeconds"] <= 0):
+    if thresholds is not None and (not isinstance(thresholds, dict) or not {"totalAgeSeconds"} <= set(thresholds) <= {"totalAgeSeconds", "releaseAfterAgeSeconds"} or type(thresholds["totalAgeSeconds"]) is not int or thresholds["totalAgeSeconds"] <= 0):
         _bad("thresholds are malformed")
+    if thresholds is not None and "releaseAfterAgeSeconds" in thresholds and (type(thresholds["releaseAfterAgeSeconds"]) is not int or thresholds["releaseAfterAgeSeconds"] < thresholds["totalAgeSeconds"]):
+        _bad("the release age is malformed or below the total-age threshold")
     steps = [_step(row) for row in table["steps"]]
     if not steps or caps["observation"] != len(steps):
         _bad("the observation cap is not the step count")

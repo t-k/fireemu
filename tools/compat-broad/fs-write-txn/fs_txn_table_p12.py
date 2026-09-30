@@ -1,19 +1,31 @@
-"""FS-TRANSACTION P12: what a transaction answers as its FIRST request after its total lifetime, and the requests after it.
+"""FS-TRANSACTION P12 (REST): what a transaction answers as its FIRST request after its total lifetime, and the requests after it.
 
-This table grants no send permission. Owned document: `a`, created in setup. Per transport (REST, then native gRPC), two
-chains, each a fresh read-write transaction that is kept alive by reads (9 reads 24 s apart, then one 62 s wait, at least
-278 s old and never idle for long) and then meets an expiry, not a read, first:
+This table grants no send permission. Owned document: `a`, created in setup. Two chains over REST, each a fresh read-write
+transaction that is kept alive by reads (9 reads 24 s apart, then one 90 s wait) and then meets an expiry, not a read, first:
 
 - C (Commit first): the first request after the wait is a Commit that writes; then two reads; then a Rollback.
 - R (Rollback first): the first request after the wait is a Rollback; then a read; then a Commit that writes.
 
-P11 recorded only read, Commit, Rollback over REST (10, 3, 3). Two models fit that recording: "the first refused request
-answers 10, everything after answers 3" and "a read answers 10, a Commit and a Rollback answer 3". C and R separate them: a
-Commit first answers 10 under the first and 3 under the second, a Rollback first answers 0 or 10 under the first and 3 under
-the second, and a second read answers 3 under the first and 10 under the second. Every answer of the requests after the wait is
-observed, never judged (any code is allowed); the keepalive reads are observations without case ids. A Rollback that
-answers 3 "Invalid transaction." finishes the token only after the token was refused as expired, so the reads sit before the
-last Rollback of chain C and the chain-end release of chain R."""
+The first request lands at a token age past 301 s. P11 recording 1 (REST) saw a request live at a token age of 246.8 to 249.2 s
+and refused at 298.7 to 301.0 s, so the lifetime lies in (246.8, 301.0]; the waits alone total 306 s, and the real age at the first
+request is about 325 s (P11 pace: an RPC about 1.1 to 1.3 s, each wait about 0.6 s long). The 90 s idle before that request is
+inside the idle a recorded request was accepted after (75 to 110 s, P10-C). The documented 270 s is not relied on.
+
+P11 recorded only read, Commit, Rollback (10, 3, 3). Models that fit it: A "the first refused request answers 10, then everything
+answers 3"; B "a read answers 10, a Commit and a Rollback answer 3"; C "the first request answers by its RPC (a read 10, a Commit
+or Rollback 3) and the token is then forgotten, so a later read answers 3"; and D "production forgets an expired transaction at
+about 300 s, and every request after that answers 3". C and R separate A, B and C by their first answers and by `read-after`;
+D is not separated from A at ages of 300 s or less, and this table starts past that age, so a result that looks like A after 301 s
+is named as such when it is judged.
+
+Every answer after the wait is observed, never judged (any code is allowed); the keepalive reads are observations without case
+ids. The release of the token is judged, narrowly: a Rollback finishes it on an accepted answer, on 10 with the expired text, or on
+3 "Invalid transaction." after such a 10; and, because the table declares `releaseAfterAgeSeconds` 301, on any definitive refusal
+of a Rollback once the token is certainly older than 301 s (state `released-expired`, shown in the projection). Without that rule
+a recording under model C would stop after the first chain with the token unconfirmed. Its premise, that a token past its
+lifetime holds no lock, is what P11's outside writer after expiry records.
+
+gRPC follows in its own packet (one representative chain C) after P11 has recorded the gRPC lifetime."""
 
 from pathlib import Path
 
@@ -21,8 +33,8 @@ REFUSED = (3, 5, 9, 10)
 ANY_ANSWER = (0,) + REFUSED
 KEEPALIVES = 9
 KEEPALIVE_WAIT = 24
-EXPIRY_WAIT = 62
-STATES = ("created",) + tuple(f"{transport}-{label}" for transport in ("rest", "grpc") for label in ("c-commit", "r-commit"))
+EXPIRY_WAIT = 90
+STATES = ("created",) + tuple(f"{transport}-{label}" for transport in ("rest",) for label in ("c-commit", "r-commit"))
 
 
 def _step(step_id, transport, rpc, role, *, document=None, token_in=None, token_out=None, writes=(), case=None, allow=(0,), wait=None):
@@ -72,7 +84,7 @@ _SETUP = [
     _step("setup/create-a", "grpc", "Commit", "control", writes=(("a", "created", False),)),
 ]
 
-STEPS = tuple(_SETUP + _commit_first("rest") + _rollback_first("rest") + _commit_first("grpc") + _rollback_first("grpc"))
+STEPS = tuple(_SETUP + _commit_first("rest") + _rollback_first("rest"))
 
 TABLE = {
     "name": "p12-first-request",
@@ -82,12 +94,12 @@ TABLE = {
     "documents": ("a",),
     "states": STATES,
     "steps": STEPS,
-    "thresholds": {"totalAgeSeconds": 270},
+    "thresholds": {"totalAgeSeconds": 270, "releaseAfterAgeSeconds": 301},
     # Observation is one request per step; cleanup reserves 7 per owned document.
-    "caps": {"observation": len(STEPS), "tokenCleanup": 4, "documentCleanup": 7, "management": 7, "credential": 2},
-    # Four chains of about 300 s each (278 s of waits and a few seconds per request) with the admission re-check before every request.
-    "observationSeconds": 1500,
+    "caps": {"observation": len(STEPS), "tokenCleanup": 2, "documentCleanup": 7, "management": 7, "credential": 2},
+    # Two chains of about 336 s each (306 s of waits and about 30 s of requests) with the admission re-check before every request.
+    "observationSeconds": 900,
     "recoverySeconds": 180,
-    "maxTokens": 4,
+    "maxTokens": 2,
     "sourceFile": Path(__file__),
 }

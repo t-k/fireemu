@@ -16,7 +16,7 @@ from txn_program_program import GraphCursor, canonical_token, compile_plan, corp
 
 RECEIPT_KIND = "txn-program-receipt-v1"
 RECORDING_KIND = "txn-program-recording-v1"
-RESOLVED_TOKENS = ("committed", "rolled-back", "released-refused")
+RESOLVED_TOKENS = ("committed", "rolled-back", "released-refused", "released-expired")
 # The one refusal that proves a transaction is gone: what production answers for a finished or expired token.
 GONE_CODE = 10
 GONE_DETAILS = "The referenced transaction has expired or is no longer valid."
@@ -164,6 +164,12 @@ class Ledger:
                 return role, entry
         return None, None
 
+    def _certainly_expired(self, entry, timing):
+        """Whether the token is certainly older than the table's declared release age at this request (its dispatch, against the
+        answer to its begin, so the bound is a lower one)."""
+        limit = (self.plan.get("thresholds") or {}).get("releaseAfterAgeSeconds")
+        return limit is not None and interval(entry["start"], timing)["lowerSeconds"] > limit
+
     def unresolved_tokens(self):
         return [role for role, entry in self.tokens.items() if entry["state"] in ("open", "unconfirmed-release")]
 
@@ -305,6 +311,11 @@ class Ledger:
                     # Production says the transaction no longer exists, so no lock of it can remain; a read-only
                     # transaction holds no lock at all, so any definitive refusal of its release finishes it.
                     entry["state"] = "released-refused"
+                elif outcome_class(code) == "REFUSED" and self._certainly_expired(entry, timing):
+                    # A table that declares `releaseAfterAgeSeconds` (the age past which production has refused a request as
+                    # expired, from a recording) treats a definitive refusal of the release of a token that is certainly older
+                    # than that as its release, whatever the code and text: the token is past its lifetime, so it holds no lock.
+                    entry["state"] = "released-expired"
                 else:
                     # Any other refusal proves nothing: a declared step may try again, a recovery release never repeats.
                     entry["state"] = "open" if step is not None else "unconfirmed-release"
@@ -557,7 +568,7 @@ class Collector:
             for role in self.ledger.pending_release(step):
                 site = f"cleanup/token/{role}"
                 self._rpc(site, self.ledger.tokens[role]["transport"], "Rollback", self.ledger.release_request(role), "tokenCleanup")
-                if self.ledger.tokens[role]["state"] not in ("rolled-back", "released-refused"):
+                if self.ledger.tokens[role]["state"] not in ("rolled-back", "released-refused", "released-expired"):
                     raise ValueError("chain release is unconfirmed; next chain forbidden")
         return cursor.complete
 
@@ -685,7 +696,7 @@ def projection(receipt, table):
                 raise ValueError("per-chain release proof differs")
             ledger.before(site, transport, method, request, None)
             ledger.after(site, transport, method, request, None, result, row["timing"])
-            if ledger.tokens[owed[0]]["state"] not in ("rolled-back", "released-refused"):
+            if ledger.tokens[owed[0]]["state"] not in ("rolled-back", "released-refused", "released-expired"):
                 raise ValueError("chain release is unconfirmed")
             owed.pop(0)
             releases += 1

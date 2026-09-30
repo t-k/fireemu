@@ -6,9 +6,12 @@ transport (REST first, then native gRPC), each a fresh read-write transaction:
 - it begins and reads `a`, then reads `a` again nine times, 24 s apart (well inside the idle limit), so the transaction
   is never idle for long but grows old;
 - a read after a further 12 s (a transaction close to four minutes old) is the live control;
-- a read after another 50 s (at least 278 s old, past the 270 s total lifetime the documentation gives, and still
-  only 50 s idle) and a commit
-  that writes are the expiry observation; the commit is expected to be refused;
+- a read after another 32 s and a commit that writes are the expiry observation; the commit is expected to be refused.
+  The waits alone total 260 s, and each request takes about 1.1 to 1.3 s, so at the recorded pace the read lands at a
+  token age of about 281 to 283 s: past the 270 s total lifetime the documentation gives, and still below 298.7 s, the
+  youngest age at which P11 recording 1 saw a request refused. It is deliberately off that 300 s boundary: the recorded
+  answers also fit a model in which production forgets an expired transaction at about 300 s, and a request after that
+  answers 3 whatever it is. Below it, every model ends in an answer the recorder already accepts;
 - an outside writer then writes `a`, which succeeds once the expired transaction's lock is gone.
 
 The keepalive reads are observations without case ids: a refused one is recorded in the rows and the recording goes on,
@@ -23,7 +26,7 @@ ANY_ANSWER = (0,) + REFUSED
 KEEPALIVES = 9
 KEEPALIVE_WAIT = 24
 LIVE_WAIT = 12
-EXPIRY_WAIT = 50
+EXPIRY_WAIT = 32
 STATES = ("created",) + tuple(f"{transport}-{label}" for transport in ("rest", "grpc") for label in ("commit", "writer"))
 
 
@@ -75,7 +78,7 @@ TABLE = {
     "thresholds": {"totalAgeSeconds": 270},
     # Observation is one request per step; cleanup reserves 7 per owned document.
     "caps": {"observation": len(STEPS), "tokenCleanup": 2, "documentCleanup": 14, "management": 7, "credential": 2},
-    # Two chains of about 300 s each (278 s of waits and a few seconds per request) with the admission re-check before every request; the last wait must still fit.
+    # Two chains of about 300 s each (260 s of waits and about 40 s of requests) with the admission re-check before every request; the last wait must still fit.
     "observationSeconds": 840,
     "recoverySeconds": 180,
     "maxTokens": 2,

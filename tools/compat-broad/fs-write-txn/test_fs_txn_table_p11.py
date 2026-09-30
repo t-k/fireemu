@@ -37,7 +37,7 @@ def test_the_requests_and_waits_stay_inside_their_clock():
     assert len(value["steps"]) == 35 and len(value["cases"]) == 8
     assert value["caps"] == {"observation": 35, "tokenCleanup": 2, "documentCleanup": 14, "management": 7, "credential": 2}
     assert value["maxRequests"] == 60 and value["maxTokens"] == 2
-    assert sum(value["waits"].values()) == 2 * (9 * 24 + 12 + 50) == 556
+    assert sum(value["waits"].values()) == 2 * (9 * 24 + 12 + 32) == 520
     assert value["observationSeconds"] == 840 and value["recoverySeconds"] == 180
     assert value["thresholds"] == {"totalAgeSeconds": 270}
     assert TABLE["envelopeId"] == "FS-TRANSACTION-p11-lifetime-002"
@@ -48,7 +48,11 @@ def test_every_wait_is_inside_the_idle_limit_and_the_chain_grows_old_by_keepaliv
         chain = [step for step in plan()["steps"] if step["id"].startswith(f"{transport}/")]
         assert [step["id"].split("/", 1)[1] for step in chain][:2] == ["begin", "read-a"] and [step["id"].split("/", 1)[1] for step in chain][-5:] == ["live-read", "expiry-read", "expiry-commit", "writer", "post-read-a"]
         waits = [step["waitSeconds"] for step in chain if "waitSeconds" in step]
-        assert waits == [24] * 9 + [12, 50] and max(waits) < 60 and 9 * 24 + 12 + 50 > 270, "even with no per-request time the expiry read is older than the lifetime"
+        assert waits == [24] * 9 + [12, 32] and max(waits) < 60
+        # Recorded pace (P11 recording 1): an RPC takes about 1.1 to 1.3 s and each wait runs about 0.6 s long, so the expiry read
+        # lands at about 260 + 12 requests * 1.2 s + 12 waits * 0.6 s = about 282 s: past 270 s and below 298.7 s.
+        estimate = sum(waits) + 12 * 1.2 + 11 * 0.6
+        assert 274 < estimate < 298.7
         assert all(step["tokenInput"] for step in chain if "waitSeconds" in step)
 
 
@@ -65,11 +69,13 @@ def test_only_the_expiry_reads_and_commit_may_be_refused_the_writer_and_setup_ma
 
 def test_the_digest_binds_the_table():
     assert corpus_digest(TABLE) == plan()["corpusDigest"]
-    assert corpus_digest(TABLE) == "d862cd04fe13954bba022dacd19f35cb8d0084feb3d6c9a4c244a11fa847333f"
+    assert corpus_digest(TABLE) == "c0a0857c152271b104dd6ae30b81cff924b855bc29753a28f9519b465e676b97"
 
 
 def test_a_recording_with_the_documented_lifetime_expires_the_token_after_the_live_read():
-    receipt, service, clock = record(expiry=True, lifetime=270, idle=120)
+    # A stand-in RPC takes 1.25 s (the recorded pace of P11 recording 1 is 1.1 to 1.3 s; 1.25 is exact in binary), so the expiry read
+    # lands at about 283 s, past the documented 270 s.
+    receipt, service, clock = record(expiry=True, lifetime=270, idle=120, rpc_seconds=1.25)
     assert receipt["complete"] is True, receipt["failureType"]
     projected = projection(receipt, TABLE)
     cases = {case["caseId"]: case["code"] for case in projected["cases"]}
@@ -229,7 +235,7 @@ def test_admission_is_rechecked_every_second_of_a_wait_and_a_cancellation_stops_
         calls["n"] += 1
     collector = Collector(value, TABLE, RequestBudget(value, TABLE), Service(clock, expiry=True), "owner", save=lambda _state: None, before_send=before_send, monotonic=clock.now, utc=clock.utc, sleep=clock.sleep)
     assert collector.run()["complete"] is True
-    assert calls["n"] >= 556, "one admission check per second of every wait, plus the ones around each request"
+    assert calls["n"] >= 520, "one admission check per second of every wait, plus the ones around each request"
     clock = Clock()
     seen = {"n": 0}
     def cancelling():

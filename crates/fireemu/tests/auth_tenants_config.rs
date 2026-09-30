@@ -478,8 +478,10 @@ fn an_import_is_authoritative_for_a_tenant_of_the_same_id_and_the_seed_keeps_the
     let field = |prefix: &str| -> Value {
         log.lines()
             .find_map(|line| line.strip_prefix(prefix))
-            .map(|rest| serde_json::from_str(rest).unwrap_or(Value::Null))
-            .unwrap_or_else(|| panic!("{prefix} was printed: {log}"))
+            .map_or_else(
+                || panic!("{prefix} was printed: {log}"),
+                |rest| serde_json::from_str(rest).unwrap_or(Value::Null),
+            )
     };
     let listed = field("LIST ");
     let mut ids: Vec<&str> = listed["tenants"]

@@ -1799,7 +1799,7 @@ impl RuntimeConfig {
         let seeds = fireemu_adapter_http::identity_toolkit::prepare_tenant_seeds(
             &self.auth_tenants,
             self.profile == CompatibilityProfile::Emulator,
-            self.clock_start.to_rfc3339().ok(),
+            self.clock_start.to_rfc3339().ok().as_deref(),
         )?;
         Ok(fireemu_adapter_http::identity_toolkit::TenantSeeding::new(
             self.auth_multi_tenant_allow_tenants,

@@ -321,10 +321,10 @@
     ]
   },
   "artifact": {
-    "sourceCommit": "6fc6da362aab0123096d46994c542a157a8064dd",
-    "runtimeInputsDigest": "981212367b6740dfe9b126a13b9a39c2258d041f78c9ebffeffa5914077a2218",
-    "runtimeInputCount": 444,
-    "artifactSha256": "22d98b730e6daaadefee3e10a392ab7e0f7b12e3fcf10922f866b583bcbec65d",
+    "sourceCommit": "0c33c3be4a470664d233bdd482b3eec789ccb7bd",
+    "runtimeInputsDigest": "6157e6d8b9ecef4a793a6bc19cb417716a5915aa67c13070163cfc03693ece6c",
+    "runtimeInputCount": 516,
+    "artifactSha256": "d59730ab77988ec9da5a491c31a88c423db0e0be9ad8a45ae3d2a417067b1ac8",
     "buildCommand": [
       "cargo",
       "build",
@@ -334,21 +334,21 @@
       "--bin",
       "fireemu"
     ],
-    "buildLogSha256": "dde009b3d76e0414b4d49ecefc74ac077d54514db74f8c9dc8a4d7552a568804",
+    "buildLogSha256": "8b72000bc2f589286fb83da462e6025fa1e4996d20b92ae4d911239358d6ede6",
     "sourceUnchanged": true,
     "exitCode": 0
   },
   "buildReceipt": {
-    "path": "docs.local/runs/fs-transaction-postproduction-build/build-receipt.json",
-    "sha256": "8f9bb75c1cfd1d03a075c5710d5b22eb927fec46ac32fe3fa39d8a0476da2a9c"
+    "path": "docs.local/runs/fs-transaction-postproduction-build-r3/build-receipt.json",
+    "sha256": "9682c07f3ce492011ba158da4b255cbaa671f6bcf09dc81b408e89fd94dd21ec"
   },
   "profiles": {
     "strict": {
       "acquisitionComplete": true,
-      "sourceCommit": "6fc6da362aab0123096d46994c542a157a8064dd",
-      "artifactSha256": "22d98b730e6daaadefee3e10a392ab7e0f7b12e3fcf10922f866b583bcbec65d",
-      "runtimeInputsDigest": "981212367b6740dfe9b126a13b9a39c2258d041f78c9ebffeffa5914077a2218",
-      "runtimeInputCount": 444,
+      "sourceCommit": "0c33c3be4a470664d233bdd482b3eec789ccb7bd",
+      "artifactSha256": "d59730ab77988ec9da5a491c31a88c423db0e0be9ad8a45ae3d2a417067b1ac8",
+      "runtimeInputsDigest": "6157e6d8b9ecef4a793a6bc19cb417716a5915aa67c13070163cfc03693ece6c",
+      "runtimeInputCount": 516,
       "runtimeInputsClean": true,
       "pythonRuntime": {
         "pythonExecutableSha256": "80832da5c8b59015babb813a4939e8537de700a13ee4ad5be00279c4e7b32ce0",
@@ -356,7 +356,7 @@
         "pythonVersion": "3.12.13"
       },
       "productionRequests": 0,
-      "localDataRequests": 67,
+      "localDataRequests": 66,
       "ownedDocumentsAbsent": 5,
       "openTransactions": 0,
       "unconfirmedTransactionStarts": 0,
@@ -381,42 +381,26 @@
         ]
       },
       "receipt": {
-        "path": "docs.local/runs/fs-transaction-recorded-local-after-strict/receipt.json",
-        "sha256": "a9513246a3e8ad52c8953fe66d7d5ca55e479e5c56d43cee7654f8180d9092ce"
+        "path": "docs.local/runs/fs-transaction-recorded-local-r3-after-strict/receipt.json",
+        "sha256": "c4391f03044c94736b41d3c56cff1f0f7f3fcdb6dc28498aa48fa85d2fe3636f"
       },
       "comparison": {
-        "path": "docs.local/runs/fs-transaction-recorded-local-after-strict/production-comparison.json",
-        "sha256": "e5b090969d86d105be7001181b647771819374e1cde8285b54559985f84c0ded"
+        "path": "docs.local/runs/fs-transaction-recorded-local-r3-after-strict/production-comparison.json",
+        "sha256": "9102967e728de7562f03851567752c51cdbc89421410cfa0a904c024d5185fed"
       },
       "results": [
         {
           "acquisitionValidated": false,
           "bindings": {
             "casesDigest": "c0731c5add47c487a520817d094fc0208d1e135dc31ea45885da5d5d861856fe",
-            "localPostStateDigest": "c99f0ee1ad872287f6673daa3bc8989df86badd3c78e44a9655d0f5cda7bff17",
-            "localProjectionDigest": "48904d5db505be87efcf3c9fc8faf537d49e6b995ca67c0d62fe012ba035cea2",
+            "localPostStateDigest": "9ee261b875609bf1629e3541f547b3e267d4b65c09c3c9a58de7ab050e44bdac",
+            "localProjectionDigest": "e74cc0922e90619df33afebbf80f2519631f3c9f7f2072270deae957a6f9459e",
             "localSourceDigest": "87e8ecd63c57c215104cbffd2e91379c8362d669e919c4630ec756d6e1dc7ed4",
             "productionPostStateDigest": "c99f0ee1ad872287f6673daa3bc8989df86badd3c78e44a9655d0f5cda7bff17",
             "productionProjectionDigest": "48904d5db505be87efcf3c9fc8faf537d49e6b995ca67c0d62fe012ba035cea2",
             "productionSourceDigest": "87e8ecd63c57c215104cbffd2e91379c8362d669e919c4630ec756d6e1dc7ed4"
           },
           "campaign": "FS-TRANSACTION-EXPIRY-RETRY-04",
-          "casesCompared": [
-            "finished-token/rollback-after-begin",
-            "finished-token/rollback-after-commit",
-            "finished-token/rollback-after-rollback",
-            "idle-expiry/commit-after-idle",
-            "idle-expiry/commit-before-idle",
-            "idle-expiry/lock-held-before-idle",
-            "idle-expiry/lock-released-after-idle",
-            "idle-expiry/rollback-after-idle",
-            "retry-token/retry-with-committed-previous",
-            "retry-token/retry-with-malformed-previous",
-            "retry-token/retry-with-read-only-previous",
-            "retry-token/retry-with-rolled-back-previous",
-            "retry-token/retry-with-unissued-previous"
-          ],
-          "classification": "EXPECTED_NONDETERMINISM",
           "kind": "txn-expiry-comparison-v1",
           "promotionReady": false,
           "timing": {
@@ -426,21 +410,21 @@
               "finished-token/rollback-after-rollback": null,
               "idle-expiry/commit-after-idle": {
                 "checkpoints": 1,
-                "endedAt": "2026-09-28T03:43:00.122595Z",
+                "endedAt": "2026-09-30T06:26:01.856264Z",
                 "measuredSeconds": 70.0,
                 "mode": "control-clock",
                 "requestedSeconds": 70,
-                "startedAt": "2026-09-28T03:42:59.751743Z",
-                "wallSeconds": 0.37085580825805664
+                "startedAt": "2026-09-30T06:26:01.704741Z",
+                "wallSeconds": 0.15152597427368164
               },
               "idle-expiry/commit-before-idle": {
                 "checkpoints": 1,
-                "endedAt": "2026-09-28T03:42:59.222574Z",
+                "endedAt": "2026-09-30T06:26:01.542924Z",
                 "measuredSeconds": 20.0,
                 "mode": "control-clock",
                 "requestedSeconds": 20,
-                "startedAt": "2026-09-28T03:42:58.624329Z",
-                "wallSeconds": 0.5982511043548584
+                "startedAt": "2026-09-30T06:26:01.395500Z",
+                "wallSeconds": 0.14742708206176758
               },
               "idle-expiry/lock-held-before-idle": null,
               "idle-expiry/lock-released-after-idle": null,
@@ -484,36 +468,156 @@
               "retry-token/retry-with-rolled-back-previous": null,
               "retry-token/retry-with-unissued-previous": null
             }
-          }
-        },
-        {
-          "acquisitionValidated": false,
-          "bindings": {
-            "casesDigest": "c0731c5add47c487a520817d094fc0208d1e135dc31ea45885da5d5d861856fe",
-            "localPostStateDigest": "c99f0ee1ad872287f6673daa3bc8989df86badd3c78e44a9655d0f5cda7bff17",
-            "localProjectionDigest": "48904d5db505be87efcf3c9fc8faf537d49e6b995ca67c0d62fe012ba035cea2",
-            "localSourceDigest": "87e8ecd63c57c215104cbffd2e91379c8362d669e919c4630ec756d6e1dc7ed4",
-            "productionPostStateDigest": "c99f0ee1ad872287f6673daa3bc8989df86badd3c78e44a9655d0f5cda7bff17",
-            "productionProjectionDigest": "48904d5db505be87efcf3c9fc8faf537d49e6b995ca67c0d62fe012ba035cea2",
-            "productionSourceDigest": "87e8ecd63c57c215104cbffd2e91379c8362d669e919c4630ec756d6e1dc7ed4"
           },
-          "campaign": "FS-TRANSACTION-EXPIRY-RETRY-04",
+          "classification": "EXPECTED_NONDETERMINISM_EXCEPT_SUPERSEDED_CASES",
           "casesCompared": [
             "finished-token/rollback-after-begin",
             "finished-token/rollback-after-commit",
             "finished-token/rollback-after-rollback",
-            "idle-expiry/commit-after-idle",
             "idle-expiry/commit-before-idle",
             "idle-expiry/lock-held-before-idle",
-            "idle-expiry/lock-released-after-idle",
-            "idle-expiry/rollback-after-idle",
             "retry-token/retry-with-committed-previous",
             "retry-token/retry-with-malformed-previous",
             "retry-token/retry-with-read-only-previous",
             "retry-token/retry-with-rolled-back-previous",
             "retry-token/retry-with-unissued-previous"
           ],
-          "classification": "EXPECTED_NONDETERMINISM",
+          "supersededCases": [
+            "idle-expiry/commit-after-idle",
+            "idle-expiry/lock-released-after-idle",
+            "idle-expiry/rollback-after-idle"
+          ],
+          "supersededDifferences": {
+            "idle-expiry/commit-after-idle": {
+              "local": {
+                "code": 0,
+                "message": null,
+                "role": "locked-a",
+                "rpc": "Commit",
+                "status": "OK"
+              },
+              "production": {
+                "code": 10,
+                "message": "The referenced transaction has expired or is no longer valid.",
+                "role": "locked-a",
+                "rpc": "Commit",
+                "status": "ABORTED"
+              }
+            },
+            "idle-expiry/commit-after-idle#postState": {
+              "local": {
+                "document": {
+                  "code": 0,
+                  "exists": true,
+                  "fields": {
+                    "nonce": {
+                      "stringValue": "<fireemu:o3-txn-expiry:token>"
+                    },
+                    "owner": {
+                      "stringValue": "<fireemu:o3-txn-expiry:owner>"
+                    },
+                    "role": {
+                      "stringValue": "locked-a"
+                    },
+                    "state": {
+                      "stringValue": "committed-after-idle"
+                    }
+                  },
+                  "name": "<fireemu:o3-txn-expiry:resource>",
+                  "updateTime": "<fireemu:o3-txn-expiry:token>",
+                  "updateTimeOrdinal": 1
+                },
+                "role": "locked-a"
+              },
+              "production": {
+                "document": {
+                  "code": 0,
+                  "exists": true,
+                  "fields": {
+                    "nonce": {
+                      "stringValue": "<fireemu:o3-txn-expiry:token>"
+                    },
+                    "owner": {
+                      "stringValue": "<fireemu:o3-txn-expiry:owner>"
+                    },
+                    "role": {
+                      "stringValue": "locked-a"
+                    },
+                    "state": {
+                      "stringValue": "created"
+                    }
+                  },
+                  "name": "<fireemu:o3-txn-expiry:resource>",
+                  "updateTime": "<fireemu:o3-txn-expiry:token>",
+                  "updateTimeOrdinal": 0
+                },
+                "role": "locked-a"
+              }
+            },
+            "idle-expiry/lock-released-after-idle#postState": {
+              "local": {
+                "document": {
+                  "code": 0,
+                  "exists": true,
+                  "fields": {
+                    "nonce": {
+                      "stringValue": "<fireemu:o3-txn-expiry:token>"
+                    },
+                    "owner": {
+                      "stringValue": "<fireemu:o3-txn-expiry:owner>"
+                    },
+                    "role": {
+                      "stringValue": "locked-a"
+                    },
+                    "state": {
+                      "stringValue": "written-after-expiry"
+                    }
+                  },
+                  "name": "<fireemu:o3-txn-expiry:resource>",
+                  "updateTime": "<fireemu:o3-txn-expiry:token>",
+                  "updateTimeOrdinal": 2
+                },
+                "role": "locked-a"
+              },
+              "production": {
+                "document": {
+                  "code": 0,
+                  "exists": true,
+                  "fields": {
+                    "nonce": {
+                      "stringValue": "<fireemu:o3-txn-expiry:token>"
+                    },
+                    "owner": {
+                      "stringValue": "<fireemu:o3-txn-expiry:owner>"
+                    },
+                    "role": {
+                      "stringValue": "locked-a"
+                    },
+                    "state": {
+                      "stringValue": "written-after-expiry"
+                    }
+                  },
+                  "name": "<fireemu:o3-txn-expiry:resource>",
+                  "updateTime": "<fireemu:o3-txn-expiry:token>",
+                  "updateTimeOrdinal": 1
+                },
+                "role": "locked-a"
+              }
+            }
+          }
+        },
+        {
+          "acquisitionValidated": false,
+          "bindings": {
+            "casesDigest": "c0731c5add47c487a520817d094fc0208d1e135dc31ea45885da5d5d861856fe",
+            "localPostStateDigest": "9ee261b875609bf1629e3541f547b3e267d4b65c09c3c9a58de7ab050e44bdac",
+            "localProjectionDigest": "e74cc0922e90619df33afebbf80f2519631f3c9f7f2072270deae957a6f9459e",
+            "localSourceDigest": "87e8ecd63c57c215104cbffd2e91379c8362d669e919c4630ec756d6e1dc7ed4",
+            "productionPostStateDigest": "c99f0ee1ad872287f6673daa3bc8989df86badd3c78e44a9655d0f5cda7bff17",
+            "productionProjectionDigest": "48904d5db505be87efcf3c9fc8faf537d49e6b995ca67c0d62fe012ba035cea2",
+            "productionSourceDigest": "87e8ecd63c57c215104cbffd2e91379c8362d669e919c4630ec756d6e1dc7ed4"
+          },
+          "campaign": "FS-TRANSACTION-EXPIRY-RETRY-04",
           "kind": "txn-expiry-comparison-v1",
           "promotionReady": false,
           "timing": {
@@ -523,21 +627,21 @@
               "finished-token/rollback-after-rollback": null,
               "idle-expiry/commit-after-idle": {
                 "checkpoints": 1,
-                "endedAt": "2026-09-28T03:43:00.122595Z",
+                "endedAt": "2026-09-30T06:26:01.856264Z",
                 "measuredSeconds": 70.0,
                 "mode": "control-clock",
                 "requestedSeconds": 70,
-                "startedAt": "2026-09-28T03:42:59.751743Z",
-                "wallSeconds": 0.37085580825805664
+                "startedAt": "2026-09-30T06:26:01.704741Z",
+                "wallSeconds": 0.15152597427368164
               },
               "idle-expiry/commit-before-idle": {
                 "checkpoints": 1,
-                "endedAt": "2026-09-28T03:42:59.222574Z",
+                "endedAt": "2026-09-30T06:26:01.542924Z",
                 "measuredSeconds": 20.0,
                 "mode": "control-clock",
                 "requestedSeconds": 20,
-                "startedAt": "2026-09-28T03:42:58.624329Z",
-                "wallSeconds": 0.5982511043548584
+                "startedAt": "2026-09-30T06:26:01.395500Z",
+                "wallSeconds": 0.14742708206176758
               },
               "idle-expiry/lock-held-before-idle": null,
               "idle-expiry/lock-released-after-idle": null,
@@ -581,16 +685,152 @@
               "retry-token/retry-with-rolled-back-previous": null,
               "retry-token/retry-with-unissued-previous": null
             }
+          },
+          "classification": "EXPECTED_NONDETERMINISM_EXCEPT_SUPERSEDED_CASES",
+          "casesCompared": [
+            "finished-token/rollback-after-begin",
+            "finished-token/rollback-after-commit",
+            "finished-token/rollback-after-rollback",
+            "idle-expiry/commit-before-idle",
+            "idle-expiry/lock-held-before-idle",
+            "retry-token/retry-with-committed-previous",
+            "retry-token/retry-with-malformed-previous",
+            "retry-token/retry-with-read-only-previous",
+            "retry-token/retry-with-rolled-back-previous",
+            "retry-token/retry-with-unissued-previous"
+          ],
+          "supersededCases": [
+            "idle-expiry/commit-after-idle",
+            "idle-expiry/lock-released-after-idle",
+            "idle-expiry/rollback-after-idle"
+          ],
+          "supersededDifferences": {
+            "idle-expiry/commit-after-idle": {
+              "local": {
+                "code": 0,
+                "message": null,
+                "role": "locked-a",
+                "rpc": "Commit",
+                "status": "OK"
+              },
+              "production": {
+                "code": 10,
+                "message": "The referenced transaction has expired or is no longer valid.",
+                "role": "locked-a",
+                "rpc": "Commit",
+                "status": "ABORTED"
+              }
+            },
+            "idle-expiry/commit-after-idle#postState": {
+              "local": {
+                "document": {
+                  "code": 0,
+                  "exists": true,
+                  "fields": {
+                    "nonce": {
+                      "stringValue": "<fireemu:o3-txn-expiry:token>"
+                    },
+                    "owner": {
+                      "stringValue": "<fireemu:o3-txn-expiry:owner>"
+                    },
+                    "role": {
+                      "stringValue": "locked-a"
+                    },
+                    "state": {
+                      "stringValue": "committed-after-idle"
+                    }
+                  },
+                  "name": "<fireemu:o3-txn-expiry:resource>",
+                  "updateTime": "<fireemu:o3-txn-expiry:token>",
+                  "updateTimeOrdinal": 1
+                },
+                "role": "locked-a"
+              },
+              "production": {
+                "document": {
+                  "code": 0,
+                  "exists": true,
+                  "fields": {
+                    "nonce": {
+                      "stringValue": "<fireemu:o3-txn-expiry:token>"
+                    },
+                    "owner": {
+                      "stringValue": "<fireemu:o3-txn-expiry:owner>"
+                    },
+                    "role": {
+                      "stringValue": "locked-a"
+                    },
+                    "state": {
+                      "stringValue": "created"
+                    }
+                  },
+                  "name": "<fireemu:o3-txn-expiry:resource>",
+                  "updateTime": "<fireemu:o3-txn-expiry:token>",
+                  "updateTimeOrdinal": 0
+                },
+                "role": "locked-a"
+              }
+            },
+            "idle-expiry/lock-released-after-idle#postState": {
+              "local": {
+                "document": {
+                  "code": 0,
+                  "exists": true,
+                  "fields": {
+                    "nonce": {
+                      "stringValue": "<fireemu:o3-txn-expiry:token>"
+                    },
+                    "owner": {
+                      "stringValue": "<fireemu:o3-txn-expiry:owner>"
+                    },
+                    "role": {
+                      "stringValue": "locked-a"
+                    },
+                    "state": {
+                      "stringValue": "written-after-expiry"
+                    }
+                  },
+                  "name": "<fireemu:o3-txn-expiry:resource>",
+                  "updateTime": "<fireemu:o3-txn-expiry:token>",
+                  "updateTimeOrdinal": 2
+                },
+                "role": "locked-a"
+              },
+              "production": {
+                "document": {
+                  "code": 0,
+                  "exists": true,
+                  "fields": {
+                    "nonce": {
+                      "stringValue": "<fireemu:o3-txn-expiry:token>"
+                    },
+                    "owner": {
+                      "stringValue": "<fireemu:o3-txn-expiry:owner>"
+                    },
+                    "role": {
+                      "stringValue": "locked-a"
+                    },
+                    "state": {
+                      "stringValue": "written-after-expiry"
+                    }
+                  },
+                  "name": "<fireemu:o3-txn-expiry:resource>",
+                  "updateTime": "<fireemu:o3-txn-expiry:token>",
+                  "updateTimeOrdinal": 1
+                },
+                "role": "locked-a"
+              }
+            }
           }
         }
       ]
     },
     "emulator": {
       "acquisitionComplete": true,
-      "sourceCommit": "6fc6da362aab0123096d46994c542a157a8064dd",
-      "artifactSha256": "22d98b730e6daaadefee3e10a392ab7e0f7b12e3fcf10922f866b583bcbec65d",
-      "runtimeInputsDigest": "981212367b6740dfe9b126a13b9a39c2258d041f78c9ebffeffa5914077a2218",
-      "runtimeInputCount": 444,
+      "sourceCommit": "0c33c3be4a470664d233bdd482b3eec789ccb7bd",
+      "artifactSha256": "d59730ab77988ec9da5a491c31a88c423db0e0be9ad8a45ae3d2a417067b1ac8",
+      "runtimeInputsDigest": "6157e6d8b9ecef4a793a6bc19cb417716a5915aa67c13070163cfc03693ece6c",
+      "runtimeInputCount": 516,
       "runtimeInputsClean": true,
       "pythonRuntime": {
         "pythonExecutableSha256": "80832da5c8b59015babb813a4939e8537de700a13ee4ad5be00279c4e7b32ce0",
@@ -623,12 +863,12 @@
         ]
       },
       "receipt": {
-        "path": "docs.local/runs/fs-transaction-recorded-local-after-emulator/receipt.json",
-        "sha256": "0b1430ed8549e288cfcabb23ff2bd56beca76e3cf117714b5659989ca596c3b5"
+        "path": "docs.local/runs/fs-transaction-recorded-local-r3-after-emulator/receipt.json",
+        "sha256": "4275d4a08bdf3b969ca0df4691cf27990f48e1ed157e2c7e414339a92e3cc63e"
       },
       "comparison": {
-        "path": "docs.local/runs/fs-transaction-recorded-local-after-emulator/production-comparison.json",
-        "sha256": "ea3e6ae0dd45727f68488312a2df5f00c00e84014c92b8d9ac920bc690767edd"
+        "path": "docs.local/runs/fs-transaction-recorded-local-r3-after-emulator/production-comparison.json",
+        "sha256": "6a661cd079a0f54fbfdd4c5a3b83c0e389a5c72218422ce7debbd8393e9a558b"
       },
       "results": [
         {
@@ -668,21 +908,21 @@
               "finished-token/rollback-after-rollback": null,
               "idle-expiry/commit-after-idle": {
                 "checkpoints": 1,
-                "endedAt": "2026-09-28T03:45:16.714234Z",
+                "endedAt": "2026-09-30T06:26:22.975781Z",
                 "measuredSeconds": 70.0,
                 "mode": "control-clock",
                 "requestedSeconds": 70,
-                "startedAt": "2026-09-28T03:45:16.331860Z",
-                "wallSeconds": 0.38237690925598145
+                "startedAt": "2026-09-30T06:26:22.839986Z",
+                "wallSeconds": 0.13579702377319336
               },
               "idle-expiry/commit-before-idle": {
                 "checkpoints": 1,
-                "endedAt": "2026-09-28T03:45:15.909393Z",
+                "endedAt": "2026-09-30T06:26:22.676052Z",
                 "measuredSeconds": 20.0,
                 "mode": "control-clock",
                 "requestedSeconds": 20,
-                "startedAt": "2026-09-28T03:45:15.572922Z",
-                "wallSeconds": 0.3364746570587158
+                "startedAt": "2026-09-30T06:26:22.518192Z",
+                "wallSeconds": 0.1578667163848877
               },
               "idle-expiry/lock-held-before-idle": null,
               "idle-expiry/lock-released-after-idle": null,
@@ -765,21 +1005,21 @@
               "finished-token/rollback-after-rollback": null,
               "idle-expiry/commit-after-idle": {
                 "checkpoints": 1,
-                "endedAt": "2026-09-28T03:45:16.714234Z",
+                "endedAt": "2026-09-30T06:26:22.975781Z",
                 "measuredSeconds": 70.0,
                 "mode": "control-clock",
                 "requestedSeconds": 70,
-                "startedAt": "2026-09-28T03:45:16.331860Z",
-                "wallSeconds": 0.38237690925598145
+                "startedAt": "2026-09-30T06:26:22.839986Z",
+                "wallSeconds": 0.13579702377319336
               },
               "idle-expiry/commit-before-idle": {
                 "checkpoints": 1,
-                "endedAt": "2026-09-28T03:45:15.909393Z",
+                "endedAt": "2026-09-30T06:26:22.676052Z",
                 "measuredSeconds": 20.0,
                 "mode": "control-clock",
                 "requestedSeconds": 20,
-                "startedAt": "2026-09-28T03:45:15.572922Z",
-                "wallSeconds": 0.3364746570587158
+                "startedAt": "2026-09-30T06:26:22.518192Z",
+                "wallSeconds": 0.1578667163848877
               },
               "idle-expiry/lock-held-before-idle": null,
               "idle-expiry/lock-released-after-idle": null,
@@ -833,8 +1073,45 @@
     "Refused commit, token reuse, explicit rollback, lock release and representative gRPC for failed-commit-and-rollback.",
     "The other 15 frozen conditions remain unobserved by this corpus, including final-artifact-regression and closure-review.",
     "Official emulator profile observations remain pending; fireemu's emulator profile is not the official emulator.",
-    "The wall-clock controls do not identify the exact idle-expiry threshold."
+    "The wall-clock controls do not identify the exact idle-expiry threshold.",
+    "The strict profile is not replayed against three REST idle-expiry cases (superseded, see supersededForStrict)."
   ],
+  "supersededForStrict": {
+    "declaredOn": "2026-09-30",
+    "cases": [
+      "idle-expiry/commit-after-idle",
+      "idle-expiry/lock-released-after-idle",
+      "idle-expiry/rollback-after-idle"
+    ],
+    "reason": "P10-C superseded the 60 + 30 second idle policy these cases were replayed for (strict now expires an idle transaction above 120 seconds). The REST rows record only a response-to-response idle (120.345 to 121.150 seconds for commit-after-idle), so the server-side idle they observed lies within about one request round trip (1.2 to 2 seconds in recent REST recordings) of that value and its interval contains 120 seconds: no wait chosen for a replay would decide strict's answer by evidence. The P10-B and P10-C native recordings carry dispatch and response bounds for every request and decide strict's limit.",
+    "supersededBy": [
+      {
+        "reference": {
+          "path": "docs.local/runs/fs-transaction-p10-b6d7f14a3148649c/recording-1.json",
+          "sha256": "b51b7eef2f013d6e9acd427ed6973a0ba52e3e262c75a5a66a655c9aeaeb5e43"
+        }
+      },
+      {
+        "reference": {
+          "path": "docs.local/runs/fs-transaction-p10-b6d7f14a3148649c/recording-2.json",
+          "sha256": "e010620ee5504f26085786e98282a27cd4ff08979ea5d8792672570f932d4569"
+        }
+      },
+      {
+        "reference": {
+          "path": "docs.local/runs/fs-transaction-p10b-2eae6448f3388382/recording-1.json",
+          "sha256": "3ff2787a3c2fca1e185ad3568449b1f6fdbc4ce1550373863216e3d88bc5a49e"
+        }
+      },
+      {
+        "reference": {
+          "path": "docs.local/runs/fs-transaction-p10b-2eae6448f3388382/recording-2.json",
+          "sha256": "5e2fd291a3c26ddbb695189ed36e7fcc27c4ba0d03c8571c919e0b08600cdb61"
+        }
+      }
+    ],
+    "history": "The 2026-09-28 statement that both profiles matched both production receipts on all 13 cases is kept as history: it held for the policy of that date. A later re-recording of idle cases must keep per-request dispatch and response times (see the P12 design)."
+  },
   "historicalEvidence": {
     "preproductionExpectationsRetained": true,
     "note": "The frozen expectedLocal table and earlier local-shadow bytes are historical preparation evidence. Actual production receipts decide this comparison."

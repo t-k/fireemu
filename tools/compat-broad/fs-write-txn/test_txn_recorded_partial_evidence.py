@@ -15,6 +15,7 @@ from evidence_common import runtime_inputs, runtime_inputs_at_commit
 ROOT = Path(__file__).resolve().parents[3]
 PATH = ROOT / "spec/compatibility/broad-runs/fs-transaction-expiry-retry-04-recorded-comparison-v1.json"
 CLOSURE = ROOT / "spec/compatibility/closure/FS-TRANSACTION.json"
+STRICT_CLASSIFICATION = "EXPECTED_NONDETERMINISM_EXCEPT_SUPERSEDED_CASES"
 
 
 def evidence():
@@ -66,6 +67,7 @@ def test_both_profiles_match_every_case_in_both_production_recordings():
     value = evidence()
     assert set(value["profiles"]) == {"strict", "emulator"}
     ids = sorted(row["caseId"] for row in value["cases"])
+    superseded = set(value["supersededForStrict"]["cases"])
     for profile in value["profiles"].values():
         assert profile["acquisitionComplete"] is True
         assert profile["artifactSha256"] == value["artifact"]["artifactSha256"]
@@ -79,14 +81,56 @@ def test_both_profiles_match_every_case_in_both_production_recordings():
         assert profile["historicalLocalSelfContract"] == comparison.SEMANTIC_MISMATCH
         assert len(profile["results"]) == 2
         for result in profile["results"]:
-            assert result["classification"] == comparison.EXPECTED_NONDETERMINISM
-            assert not result.get("differences") and result["casesCompared"] == ids
+            if profile is value["profiles"]["strict"]:
+                # Three REST idle-expiry rows are declared superseded for strict (see the declaration test below).
+                assert result["classification"] == STRICT_CLASSIFICATION
+                assert result["casesCompared"] == [case for case in ids if case not in superseded]
+                assert result["supersededCases"] == sorted(superseded) or set(result["supersededCases"]) == superseded
+                assert not result.get("differences")
+                allowed = superseded | {case + comparison.POST_STATE for case in superseded}
+                assert "idle-expiry/commit-after-idle" in result["supersededDifferences"]
+                assert set(result["supersededDifferences"]) <= allowed
+            else:
+                assert result["classification"] == comparison.EXPECTED_NONDETERMINISM
+                assert not result.get("differences") and result["casesCompared"] == ids
             assert result["acquisitionValidated"] is False and result["promotionReady"] is False
             binding = result["bindings"]
             assert binding["productionSourceDigest"] == binding["localSourceDigest"] == value["sourceDigest"]
-            assert binding["productionProjectionDigest"] == binding["localProjectionDigest"] == value["recordings"][0]["projectionDigest"]
-            assert binding["productionPostStateDigest"] == binding["localPostStateDigest"] == value["recordings"][0]["postStateDigest"]
+            assert binding["productionProjectionDigest"] == value["recordings"][0]["projectionDigest"]
+            assert binding["productionPostStateDigest"] == value["recordings"][0]["postStateDigest"]
+            if profile is value["profiles"]["strict"]:
+                # Strict differs from production only in the superseded cases, so its digests differ by exactly those.
+                assert binding["localProjectionDigest"] != binding["productionProjectionDigest"]
+            else:
+                assert binding["productionProjectionDigest"] == binding["localProjectionDigest"]
+                assert binding["productionPostStateDigest"] == binding["localPostStateDigest"]
             assert result["timing"]["mechanismDiffers"] is True
+
+
+def test_the_superseded_idle_cases_are_declared_with_their_reason_and_their_superseding_recordings():
+    value = evidence()
+    declaration = value["supersededForStrict"]
+    assert declaration["declaredOn"] == "2026-09-30"
+    assert declaration["cases"] == ["idle-expiry/commit-after-idle", "idle-expiry/lock-released-after-idle", "idle-expiry/rollback-after-idle"]
+    assert set(declaration["cases"]) <= {row["caseId"] for row in value["cases"]}
+    assert "P10-C" in declaration["reason"] and "120" in declaration["reason"] and "straddle" in declaration["reason"] or "contains 120" in declaration["reason"]
+    assert "history" in declaration and "2026-09-28" in declaration["history"]
+    assert len(declaration["supersededBy"]) == 4
+    for entry in declaration["supersededBy"]:
+        assert re.fullmatch(r"[a-f0-9]{64}", entry["reference"]["sha256"]) and "p10" in entry["reference"]["path"]
+    # Only strict is declared: the emulator profile matches every case.
+    assert all(not result.get("supersededCases") for result in value["profiles"]["emulator"]["results"])
+
+
+def test_the_recorded_idle_intervals_of_the_superseded_cases_straddle_strict_idle_limit():
+    """The recorded idle is response to response; one request round trip either side contains strict's 120 s limit."""
+    value = evidence()
+    # An assumed REST round trip of 1.5 s (recent recordings through the same worker took 1.2 to 2 s per request); the
+    # rows carry no per-request times, so no tighter bound exists.
+    limit, round_trip = 120.0, 1.5
+    for recording in value["recordings"]:
+        idle = recording["idleSeconds"]["idle-expiry/commit-after-idle"]
+        assert idle - round_trip < limit < idle + round_trip, idle
 
 
 def test_repaired_cases_preserve_the_committed_rollback_refusal():

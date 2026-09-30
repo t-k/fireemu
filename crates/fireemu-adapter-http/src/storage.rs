@@ -1475,7 +1475,9 @@ fn patch_from_json(v: &Value) -> Result<MetadataPatch, String> {
 }
 
 /// The Firebase dialect's metadata document (`OutgoingFirebaseMetadata`): `crc32c` is the
-/// decimal spelling, `contentEncoding` defaults to `identity` in the response, and the
+/// base64 spelling production answers (recorded, stage 3 v9: `12ox+Q==`; the official emulator
+/// writes the decimal one, which only the rules' `request.resource.crc32c` keeps),
+/// `contentEncoding` defaults to `identity` in the response, and the
 /// `metadata` member exists exactly when custom metadata is defined, even when empty.
 fn firebase_json(m: &ObjectMetadata) -> Value {
     let mut v = json!({
@@ -1489,7 +1491,7 @@ fn firebase_json(m: &ObjectMetadata) -> Value {
         "storageClass": "STANDARD",
         "size": m.size.to_string(),
         "md5Hash": m.md5_base64(),
-        "crc32c": m.crc32c.to_string(),
+        "crc32c": m.crc32c_base64(),
         "etag": m.etag(),
         "downloadTokens": m.download_tokens.join(","),
         "contentEncoding": m.content_encoding.as_deref().unwrap_or("identity"),

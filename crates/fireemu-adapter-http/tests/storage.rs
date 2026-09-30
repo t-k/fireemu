@@ -421,10 +421,15 @@ fn event_admission_refusal_returns_429_without_publishing_the_object() {
 #[test]
 #[allow(clippy::too_many_lines)]
 fn upload_digests_seen_by_rules_match_the_committed_bytes_on_every_firebase_path() {
+    // The rules read the official emulator's decimal crc32c; the answers carry production's
+    // base64 one (`.2`).
     let expected = |bytes: &[u8]| {
         (
             fireemu_core_storage::hash::base64(&fireemu_core_storage::hash::md5(bytes)),
             fireemu_core_storage::hash::crc32c(bytes).to_string(),
+            fireemu_core_storage::hash::base64(
+                &fireemu_core_storage::hash::crc32c(bytes).to_be_bytes(),
+            ),
         )
     };
     let abc = expected(b"abc");
@@ -458,7 +463,7 @@ service firebase.storage {{
         String::from_utf8_lossy(&media.body)
     );
     assert_eq!(json_body(&media)["md5Hash"], abc.0);
-    assert_eq!(json_body(&media)["crc32c"], abc.1);
+    assert_eq!(json_body(&media)["crc32c"], abc.2);
 
     let (content_type, body) = multipart(&json!({}), "application/octet-stream", b"abc");
     let multipart_response = handle(
@@ -480,7 +485,7 @@ service firebase.storage {{
         String::from_utf8_lossy(&multipart_response.body)
     );
     assert_eq!(json_body(&multipart_response)["md5Hash"], abc.0);
-    assert_eq!(json_body(&multipart_response)["crc32c"], abc.1);
+    assert_eq!(json_body(&multipart_response)["crc32c"], abc.2);
 
     let start = handle(
         &state,
@@ -533,7 +538,7 @@ service firebase.storage {{
         String::from_utf8_lossy(&finalized.body)
     );
     assert_eq!(json_body(&finalized)["md5Hash"], overlap.0);
-    assert_eq!(json_body(&finalized)["crc32c"], overlap.1);
+    assert_eq!(json_body(&finalized)["crc32c"], overlap.2);
 
     for (name, bytes) in [
         ("media.bin", &b"abc"[..]),
@@ -1921,6 +1926,38 @@ fn object_timestamps_have_millisecond_precision_in_both_dialects() {
             firebase.get("timeFinalized").is_none(),
             "the Firebase dialect never carried it"
         );
+    }
+}
+
+/// The Firebase dialect spells `crc32c` in base64, as production answers it (recorded, stage 3 v9:
+/// `12ox+Q==` and `jxTouw==` for the recorder's four-byte objects), on uploads, metadata reads and
+/// updates; the official emulator's decimal spelling stays in the rules.
+#[test]
+fn the_firebase_dialect_spells_crc32c_in_base64_on_every_answer() {
+    for acceptance in BOTH_PROFILES {
+        let s = state_with(Some(ALLOW_ALL_RULES), acceptance);
+        let upload = handle(
+            &s,
+            req(
+                "POST",
+                &format!("/v0/b/{BUCKET}/o?name=c.txt&uploadType=media"),
+                &[("content-type", "text/plain")],
+                b"abc",
+            ),
+        );
+        assert_eq!(json_body(&upload)["crc32c"], "Nks/tw==");
+        let read = handle(&s, req("GET", &format!("/v0/b/{BUCKET}/o/c.txt"), &[], b""));
+        assert_eq!(json_body(&read)["crc32c"], "Nks/tw==");
+        let patch = handle(
+            &s,
+            req(
+                "PATCH",
+                &format!("/v0/b/{BUCKET}/o/c.txt"),
+                &[("content-type", "application/json")],
+                br#"{"cacheControl": "no-cache"}"#,
+            ),
+        );
+        assert_eq!(json_body(&patch)["crc32c"], "Nks/tw==");
     }
 }
 

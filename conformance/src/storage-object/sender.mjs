@@ -960,20 +960,24 @@ function createStorageSender(
         throw new Error("local session request has the wrong budget phase");
       const condition = step.continuation;
       const preceding = observed.get(condition.afterStep);
+      // The status the preceding answer must have had is enforced only where production's answer
+      // has been recorded: after a GCS cancel (the DELETE, answered 499; the initiate's 200 is proved by
+      // `bindSession` before any continuation). The answers
+      // to a chunk, a progress query and a refused chunk (their `Range`, upload status and size
+      // headers, and the 308) have not been recorded, so a difference there is an answer to
+      // capture, not a reason to stop: the next request is still sent, and the session is closed by
+      // the cancellation and its readbacks. The other conditions of a continuation (`uploadStatus`,
+      // `receivedBytes`, `range`) are kept in the declaration as what the local runtime answers, and
+      // are captured, not enforced.
+      const precedingIsCancel = preceding?.step.method === "DELETE";
       if (
         !condition ||
         !session.attempted.has(condition.afterStep) ||
         (condition.afterStep !== session.initiateOperationId &&
           preceding?.sessionBinding !== session) ||
-        (condition.status !== undefined && preceding?.response.status !== condition.status) ||
-        (condition.uploadStatus !== undefined &&
-          preceding?.response.headers["x-goog-upload-status"] !== condition.uploadStatus) ||
-        (condition.receivedBytes !== undefined &&
-          preceding?.response.headers["x-goog-upload-size-received"] !==
-            `${condition.receivedBytes}`) ||
-        (condition.range !== undefined &&
-          (preceding?.response.headers.range !== condition.range ||
-            preceding.response.raw.length !== 0)) ||
+        (precedingIsCancel &&
+          condition.status !== undefined &&
+          preceding?.response.status !== condition.status) ||
         (condition.completionUnconfirmed === true && session.completed) ||
         (condition.cancellationUnconfirmed === true && session.cancelled)
       )

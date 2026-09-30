@@ -286,13 +286,27 @@ test("off-origin, foreign-name and ambiguous session URLs cannot supply a follow
   }
 });
 
-test("final bytes require the captured exact status range from the same session", async () => {
+test("a progress answer that differs from the declared range is captured, not judged: the final bytes are still sent and the session stays unresolved", async () => {
+  // Production's answers to a chunk and to a progress query have not been recorded, so the recorder
+  // sends the next declared request whatever the last answer was. Ownership is still proved only
+  // by an owned readback, so the session is not discharged.
   const run = await fixture({ range: "bytes=0-7" });
   run.sender.bindSession({ recipe: run.recipe, initiateOperationId: "initiate" });
   await run.sender.sendSessionStep({ recipe: run.recipe, stepIndex: 1 });
   await run.sender.sendSessionStep({ recipe: run.recipe, stepIndex: 2 });
-  await assert.rejects(run.sender.sendSessionStep({ recipe: run.recipe, stepIndex: 3 }));
-  assert.equal(run.sent.length, 4);
+  const finish = await run.sender.sendSessionStep({ recipe: run.recipe, stepIndex: 3 });
+  assert.equal(finish.status, 308, "the answer is returned as it came");
+  assert.equal(run.sent.length, 5);
+  assert.equal(run.sender.unresolved().length, 1);
+});
+
+test("a refused chunk does not stop the progress query after it, and is captured", async () => {
+  const run = await fixture({ chunkStatus: 400 });
+  run.sender.bindSession({ recipe: run.recipe, initiateOperationId: "initiate" });
+  const chunk = await run.sender.sendSessionStep({ recipe: run.recipe, stepIndex: 1 });
+  assert.equal(chunk.status, 400);
+  const progress = await run.sender.sendSessionStep({ recipe: run.recipe, stepIndex: 2 });
+  assert.equal(progress.status, 400);
   assert.equal(run.sender.unresolved().length, 1);
 });
 

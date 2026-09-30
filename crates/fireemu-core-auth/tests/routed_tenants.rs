@@ -85,6 +85,23 @@ fn a_routed_project_holds_tenants_that_a_default_scope_reset_drops() {
 }
 
 #[test]
+fn an_import_candidate_for_a_tenant_takes_a_routed_project_as_its_parent() {
+    let registry = registry();
+    assert!(registry
+        .tenant_import_candidate("demo-routed", "t")
+        .is_none());
+    assert!(matches!(
+        install(&registry, "demo-routed"),
+        RoutedStoreInstall::Installed(_)
+    ));
+    let candidate = registry
+        .tenant_import_candidate("demo-routed", "t")
+        .expect("a routed project is a parent");
+    assert_eq!(candidate.project_id(), "demo-routed");
+    assert_eq!(candidate.tenant_id(), Some("t"));
+}
+
+#[test]
 fn a_project_the_registry_does_not_hold_still_takes_no_tenant() {
     let registry = registry();
     assert!(registry.ensure_tenant("demo-unknown", "t").is_none());
@@ -196,4 +213,51 @@ fn concurrent_installs_of_one_project_seed_it_once_and_nothing_deadlocks() {
     assert_eq!(installed.load(Ordering::SeqCst), 1);
     assert_eq!(seed.calls.load(Ordering::SeqCst), 1);
     assert_eq!(registry.tenants("demo-routed"), ["seeded"]);
+}
+
+#[derive(Debug)]
+struct FailingSeed(Mutex<Vec<String>>);
+
+impl NewProjectSeed for FailingSeed {
+    fn apply(&self, _: &AuthRegistry, project: &str) -> Result<(), String> {
+        self.0.lock().unwrap().push(project.to_owned());
+        Err(format!("cannot seed {project}"))
+    }
+}
+
+#[test]
+fn a_refused_seed_is_reported_after_every_project_was_tried() {
+    let registry = registry();
+    let seed = Arc::new(FailingSeed(Mutex::new(Vec::new())));
+    registry.set_new_project_tenant_seed(seed.clone());
+    for project in ["demo-routed", "demo-second"] {
+        assert!(matches!(
+            install(&registry, project),
+            RoutedStoreInstall::Installed(_)
+        ));
+    }
+    let error = registry.apply_pending_project_seeds().unwrap_err();
+    assert_eq!(error, "cannot seed demo-routed");
+    assert_eq!(*seed.0.lock().unwrap(), ["demo-routed", "demo-second"]);
+    // Nothing stays pending for a retry: a project is seeded at its install, once.
+    assert!(registry.apply_pending_project_seeds().is_ok());
+}
+
+#[test]
+fn a_project_dropped_before_its_seed_is_applied_is_skipped() {
+    let registry = registry();
+    let seed = Arc::new(CountingSeed {
+        applied: Mutex::new(Vec::new()),
+        calls: AtomicUsize::new(0),
+    });
+    registry.set_new_project_tenant_seed(seed.clone());
+    assert!(matches!(
+        install(&registry, "demo-routed"),
+        RoutedStoreInstall::Installed(_)
+    ));
+    let reset = registry.prepare_default_scope_reset().unwrap();
+    registry.apply_default_scope_reset(&reset).unwrap();
+    // The seed would refuse the project that is gone; skipping it is not an error.
+    assert!(registry.apply_pending_project_seeds().is_ok());
+    assert_eq!(seed.calls.load(Ordering::SeqCst), 0);
 }

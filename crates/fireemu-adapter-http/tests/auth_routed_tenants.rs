@@ -270,6 +270,22 @@ fn a_refused_request_installs_no_project() {
     assert!(registry.tenants("demo-routed").is_empty());
 }
 
+/// A create the create route would refuse installs nothing: the project is made for a tenant, not
+/// for a request.
+#[test]
+fn a_tenant_create_the_route_refuses_installs_no_project() {
+    let (state, registry) = routed_state();
+    let (status, refused) = admin(
+        &state,
+        "POST",
+        ROUTED_TENANTS,
+        &json!({"displayName": "x", "mfaConfig": {"state": "ON"}}),
+    );
+    assert_eq!(status, 400, "{refused}");
+    assert!(registry.routed_store_for("demo-routed").is_none());
+    assert!(registry.tenants("demo-routed").is_empty());
+}
+
 #[test]
 fn two_routed_projects_do_not_share_a_tenant_id() {
     let (state, registry) = routed_state();

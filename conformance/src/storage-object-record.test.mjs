@@ -849,9 +849,6 @@ test("a closing row without a request count is charged as a whole run", async ()
 // ---- the release baseline (owner ledger line 535) ----------------------------------------------------------
 
 test("a recorder whose Rules release baseline is not pinned refuses before anything else is written", async () => {
-  const s = setup();
-  delete s.deps.releaseBaseline;
-  await refused(s, /baseline is not pinned/);
   for (const baseline of [
     { ...BASELINE, createTime: null },
     { ...BASELINE, updateTime: null },
@@ -863,14 +860,53 @@ test("a recorder whose Rules release baseline is not pinned refuses before anyth
   }
 });
 
-test("the shipped baseline names the fixed ruleset and waits for its times", () => {
-  assert.equal(
-    RELEASE_BASELINE.rulesetName,
-    `projects/${RECORD_PROJECT}/rulesets/22b746af-a48a-458d-ab5c-7853473bc8c8`,
-  );
-  assert.equal(RELEASE_BASELINE.createTime, null);
-  assert.equal(RELEASE_BASELINE.updateTime, null);
+test("the shipped baseline is the release STORAGE-RULES 2c-post restored, with its two times", () => {
+  assert.deepEqual(RELEASE_BASELINE, {
+    rulesetName: `projects/${RECORD_PROJECT}/rulesets/22b746af-a48a-458d-ab5c-7853473bc8c8`,
+    createTime: "2026-09-30T13:13:41.329229Z",
+    updateTime: "2026-09-30T13:13:41.329229Z",
+  });
   assert.ok(Object.isFrozen(RELEASE_BASELINE));
+});
+
+test("a run without an injected baseline is held to the shipped one", async () => {
+  const readsRules = async (options) => {
+    const wire = options.wireFactory({
+      origins: [options.storageOrigin, options.authOrigin, options.localControl.origin],
+      limits: options.plan,
+      captureDirectory: options.captureDirectory,
+      onByteReserve: async () => {},
+    });
+    const answer = await wire.fetch(`${options.localControl.origin}/v1/storage/rules`, {
+      method: "GET",
+      headers: {},
+    });
+    assert.equal((await answer.json()).loaded, true);
+    return { status: "LOCAL_COMPLETE", wire: wire.snapshot(), unresolved: [], cleanupFailures: [] };
+  };
+  // The default fake production answers with other times than the shipped baseline: the Rules
+  // read stops the run.
+  const s = setup({ replay: readsRules });
+  delete s.deps.releaseBaseline;
+  await assert.rejects(recordRun(s.deps), /differs from its pinned baseline/);
+  // The same run, answered with the shipped values, is accepted.
+  const t = setup({
+    replay: readsRules,
+    fetch: async (url) =>
+      String(url).includes("/releases/")
+        ? Response.json({
+            rulesetName: RELEASE_BASELINE.rulesetName,
+            createTime: RELEASE_BASELINE.createTime,
+            updateTime: RELEASE_BASELINE.updateTime,
+          })
+        : String(url).includes("/rulesets/")
+          ? Response.json({
+              source: { files: [{ name: "storage.rules", content: "fixed rules text" }] },
+            })
+          : new Response("{}"),
+  });
+  delete t.deps.releaseBaseline;
+  assert.equal((await recordRun(t.deps)).outcome, "recorded");
 });
 
 test("a release that is not the pinned one stops the Rules read", async () => {

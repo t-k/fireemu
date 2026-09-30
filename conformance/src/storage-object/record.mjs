@@ -54,14 +54,16 @@ const PLACEHOLDERS = Object.freeze({
 });
 
 /**
- * The Storage Rules release the run expects. Ledger line 535 has the recording pin the restored
- * release's metadata after STORAGE-RULES restores it; until `createTime` and `updateTime` are
- * filled in (a new commit, so a new runner pin and a new review), the recorder refuses to start.
+ * The Storage Rules release the run expects: the one STORAGE-RULES 2c-post restored on the query
+ * project (owner ledger line 535), read back at 2026-09-30T13:13:42Z (run
+ * `storage-rules-release-stage2c-post-20260930a`, operation `release/bucket/after`). A run stops if
+ * the release it reads differs from this in name, ruleset, `createTime` or `updateTime`. A release
+ * written again changes these, and pinning the new values is a new commit and a new review.
  */
 export const RELEASE_BASELINE = Object.freeze({
   rulesetName: `projects/${SANDBOX_PROJECT}/rulesets/22b746af-a48a-458d-ab5c-7853473bc8c8`,
-  createTime: null,
-  updateTime: null,
+  createTime: "2026-09-30T13:13:41.329229Z",
+  updateTime: "2026-09-30T13:13:41.329229Z",
 });
 
 const UNSAFE_ENVIRONMENT = Object.freeze(

@@ -5,3 +5,7 @@ import "../scheduled-functions/recovery.test.mjs";
 import "../scheduled-functions/calendar.test.mjs";
 import "../scheduled-functions/calendar-recovery.test.mjs";
 import "../scheduled-functions/calendar-capture.test.mjs";
+import "../scheduled-functions/calendar-local.test.mjs";
+import "../scheduled-functions/calendar-processes.test.mjs";
+import "../scheduled-functions/calendar-session.test.mjs";
+import "../scheduled-functions/calendar-recording.test.mjs";

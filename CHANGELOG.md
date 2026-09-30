@@ -10,7 +10,7 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ### Added
 
-- `auth.authorizedDomains` declares the initial project-wide action-link domain list in either profile, validated through the existing Admin API rules. The list replaces defaults, initializes later session and routed projects, and is restored on session reset only when declared. Admin updates change the live list; account clearing and export/import keep their existing behavior. Strict continues to enforce live domains, and the emulator profile keeps its permissive continue-URL handling.
+- `auth.authorizedDomains` declares the initial project-wide action-link domain list in either profile, validated through the existing Admin API rules. The list replaces defaults, initializes later session and routed projects, and is restored on session reset only when declared. Admin updates change the live list; account clearing and export/import keep their existing behavior. Strict continues to enforce live domains, and the emulator profile keeps its permissive continue-URL handling. Tenant-scoped strict action links currently check the tenant's default domains rather than this project declaration; support for the parent project's live list is pending. (Fireemu-only)
 
 ### Changed
 

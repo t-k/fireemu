@@ -21,6 +21,33 @@ function listBody(response) {
   return parsed;
 }
 
+/**
+ * The zero-limit list (`maxResults=0`): production answers the Firebase dialect 400 with a JSON
+ * error envelope ("Expect maxResults to be a positive number."), and the GCS dialect with a list.
+ * Either is the recorded answer; nothing else is.
+ */
+function zeroLimitAnswer(response) {
+  if (response.status === 200) return { status: 200, body: listBody(response) };
+  let parsed = null;
+  try {
+    parsed = JSON.parse(response.raw.toString("utf8"));
+  } catch {
+    // Not JSON: rejected below.
+  }
+  if (
+    response.status !== 400 ||
+    !parsed ||
+    typeof parsed !== "object" ||
+    Array.isArray(parsed) ||
+    !parsed.error ||
+    typeof parsed.error !== "object" ||
+    parsed.error.code !== 400 ||
+    typeof parsed.error.message !== "string"
+  )
+    throw new Error("list zero-limit answer was neither a list nor a 400 error");
+  return { status: 400, body: null };
+}
+
 function nextToken(body, cap) {
   const token = body.nextPageToken;
   if (token === undefined) return null;
@@ -149,6 +176,8 @@ export async function replayLocalList({
   const pageSummaries = [];
   let pageToken = null;
   let pageFinished = false;
+  let zeroLimit = null;
+  const unobservedSteps = [];
   for (const step of recipe.steps) {
     if (step.collection) {
       if (step.continuation && pageFinished) continue;
@@ -165,7 +194,27 @@ export async function replayLocalList({
         localDifferenceCandidates.push(candidate);
         continue;
       }
-      const body = listBody(response);
+      if (step.query.maxResults === "0") {
+        const answered = zeroLimitAnswer(response);
+        zeroLimit = { stepId: step.id, status: answered.status };
+        continue;
+      }
+      // Production has not answered every Firebase list step in a run: a read that answers something
+      // else, or a body that does not parse, is recorded and the recipe goes on. Ownership, the seed
+      // readbacks and cleanup are proved through the GCS routes, not through these reads.
+      const captureOnly = step.dialect === "firebase";
+      let body;
+      try {
+        body = listBody(response);
+      } catch (error) {
+        if (!captureOnly) throw error;
+        unobservedSteps.push({ stepId: step.id, status: response.status });
+        if (step.id.startsWith("page-")) {
+          pageSummaries.push({ stepId: step.id, unobserved: true, status: response.status });
+          pageFinished = true;
+        }
+        continue;
+      }
       if (step.id.startsWith("page-")) {
         pageRecords.push({
           stepId: step.id,
@@ -173,7 +222,17 @@ export async function replayLocalList({
           status: response.status,
           bodyBase64: response.raw.toString("base64"),
         });
-        pageToken = nextToken(body, step.continuation?.maxTokenBytes ?? 4096);
+        try {
+          pageToken = nextToken(body, step.continuation?.maxTokenBytes ?? 4096);
+        } catch (error) {
+          if (!captureOnly) throw error;
+          pageToken = null;
+          unobservedSteps.push({
+            stepId: step.id,
+            status: response.status,
+            reason: "next page token",
+          });
+        }
         pageSummaries.push({
           stepId: step.id,
           items: body.items?.length ?? 0,
@@ -208,7 +267,8 @@ export async function replayLocalList({
       state.confirmed = true;
     }
   }
-  if ([...states.values()].some((state) => !state.confirmed) || !pageFinished)
+  const firebaseList = recipe.steps.some((step) => step.collection && step.dialect === "firebase");
+  if ([...states.values()].some((state) => !state.confirmed) || (!pageFinished && !firebaseList))
     throw new Error(`${recipeId}: seed or list traversal is incomplete`);
   let pageEvaluation;
   try {
@@ -246,6 +306,8 @@ export async function replayLocalList({
     requests: sender.snapshot().total,
     pageEvaluation,
     pageSummaries,
+    zeroLimit,
+    unobservedSteps,
     localDifferenceCandidates,
   };
 }

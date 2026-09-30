@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { replayLocalBasic } from "./storage-object/basic-replay.mjs";
 import { replayLocalAdmin } from "./storage-object/admin-replay.mjs";
@@ -15,6 +16,7 @@ function fixture({
   occupied = false,
   localListGapStatus = null,
   localListGapReason = "invalid",
+  listAnswer = null,
 } = {}) {
   const plan = buildStage3DraftPlan({
     projectId: "example-project",
@@ -30,6 +32,7 @@ function fixture({
     deleted = [],
     events = [];
   let generation = 9007199254740993n;
+  const listCalls = new Map();
   let sender;
   sender = createLocalStorageSender({
     plan,
@@ -62,6 +65,10 @@ function fixture({
             { status: localListGapStatus },
           );
         }
+        const nth = (listCalls.get(url.pathname) ?? 0) + 1;
+        listCalls.set(url.pathname, nth);
+        const scripted = listAnswer?.({ url, path: url.pathname, nth, query: url.searchParams });
+        if (scripted) return scripted;
         const scope = url.searchParams.get("prefix");
         const delimiter = url.searchParams.get("delimiter");
         const entries = new Map();
@@ -385,4 +392,230 @@ test("exhausting the subject cap still leaves exception cleanup and final absenc
   await f.sender.verifyRunEmpty();
   f.sender.close();
   assert.deepEqual(f.sender.snapshot().recordings[0], { subject: 2000, cleanup: 6 });
+});
+
+// ---- the Firebase list steps production has not (all) answered ---------------------------------
+
+const V0 = (path) => path.startsWith("/v0/");
+const zeroLimit = ({ query }) => query.get("maxResults") === "0";
+const productionZeroLimit = () =>
+  Response.json(
+    { error: { code: 400, message: "Expect maxResults to be a positive number." } },
+    { status: 400 },
+  );
+const listOf = (recipeId, listAnswer) => fixture({ recipeId, listAnswer });
+const replay = (f) =>
+  replayLocalList({ ...f, allowKnownLocalListGaps: true, onCapture: async () => {} });
+
+test("the zero-limit list, answered 400 with a JSON error envelope (production, Firebase), is recorded and the recipe completes", async () => {
+  const f = listOf("storage-object/firebase/list", (ctx) =>
+    V0(ctx.path) && zeroLimit(ctx) ? productionZeroLimit() : undefined,
+  );
+  const result = await replay(f);
+  assert.equal(result.status, "LOCAL_COMPLETE");
+  assert.deepEqual(result.zeroLimit, { stepId: "max-results-zero", status: 400 });
+  assert.deepEqual(result.unobservedSteps, []);
+  assert.equal(f.objects.size, 0);
+  assert.deepEqual(f.sender.unresolved(), []);
+  assert.ok(result.pageSummaries.length > 0, "the page steps after it still ran");
+});
+
+test("the zero-limit list answered 200 with a list (GCS, or a fireemu) is recorded too, and a body that is not a list fails", async () => {
+  for (const recipeId of ["storage-object/firebase/list", "storage-object/gcs/list"]) {
+    const ok = await replay(listOf(recipeId, () => undefined));
+    assert.equal(ok.status, "LOCAL_COMPLETE", recipeId);
+    assert.deepEqual(ok.zeroLimit, { stepId: "max-results-zero", status: 200 }, recipeId);
+    const bad = listOf(recipeId, (ctx) =>
+      zeroLimit(ctx) ? Response.json({ items: "not a list" }) : undefined,
+    );
+    await assert.rejects(replay(bad), /invalid collection data/, recipeId);
+  }
+});
+
+test("the zero-limit list answered anything else is neither a list nor the recorded 400, and fails the recipe", async () => {
+  const answers = {
+    "400 text": () =>
+      new Response("Expect maxResults", { status: 400, headers: { "content-type": "text/plain" } }),
+    "400 not an object": () => Response.json(["x"], { status: 400 }),
+    "400 no error": () => Response.json({ message: "x" }, { status: 400 }),
+    "400 error is a string": () => Response.json({ error: "x" }, { status: 400 }),
+    "400 wrong code": () => Response.json({ error: { code: 403, message: "x" } }, { status: 400 }),
+    "400 no message": () => Response.json({ error: { code: 400 } }, { status: 400 }),
+    "400 message number": () =>
+      Response.json({ error: { code: 400, message: 7 } }, { status: 400 }),
+    "400 empty": () => new Response(null, { status: 400 }),
+    "400 error null": () => Response.json({ error: null }, { status: 400 }),
+    "401 with a 400 envelope": () =>
+      Response.json({ error: { code: 400, message: "x" } }, { status: 401 }),
+    "500 with a 400 envelope": () =>
+      Response.json({ error: { code: 400, message: "x" } }, { status: 500 }),
+    403: () => Response.json({ error: { code: 403, message: "x" } }, { status: 403 }),
+    404: () => Response.json({ error: { code: 404, message: "x" } }, { status: 404 }),
+  };
+  for (const [name, answer] of Object.entries(answers))
+    for (const recipeId of ["storage-object/firebase/list", "storage-object/gcs/list"]) {
+      const f = listOf(recipeId, (ctx) => (zeroLimit(ctx) ? answer() : undefined));
+      await assert.rejects(replay(f), /zero-limit answer was neither/, `${name} ${recipeId}`);
+    }
+});
+
+test("the other Firebase list steps are capture-only: an answer that is not a list is recorded and the recipe goes on", async () => {
+  const bad = {
+    "400 json": () => Response.json({ error: { code: 400, message: "x" } }, { status: 400 }),
+    403: () =>
+      Response.json({ error: { code: 403, message: "Permission denied." } }, { status: 403 }),
+    "html 200": () => new Response("<html></html>", { status: 200 }),
+    "text 404": () => new Response("Not Found", { status: 404 }),
+    "items not a list": () => Response.json({ items: {} }),
+    "prefixes not a list": () => Response.json({ prefixes: "x" }),
+    null: () => Response.json(null),
+  };
+  for (const [name, answer] of Object.entries(bad)) {
+    // Every Firebase list after the baseline, other than the zero-limit one, answers badly.
+    const f = listOf("storage-object/firebase/list", (ctx) =>
+      V0(ctx.path) && ctx.nth > 1 ? (zeroLimit(ctx) ? productionZeroLimit() : answer()) : undefined,
+    );
+    const result = await replay(f);
+    assert.equal(result.status, "LOCAL_COMPLETE", name);
+    assert.ok(result.unobservedSteps.length >= 4, name);
+    assert.ok(
+      result.unobservedSteps.every((row) => row.stepId !== "max-results-zero"),
+      name,
+    );
+    assert.deepEqual(
+      result.pageSummaries.map((row) => [row.stepId, row.unobserved]),
+      [["page-0", true]],
+      name,
+    );
+    assert.equal(f.objects.size, 0, name);
+    assert.deepEqual(f.sender.unresolved(), [], name);
+    assert.equal(f.sender.snapshot().mode, "closed", name);
+  }
+});
+
+test("an unusable page answer ends the page walk, and later pages are not sent", async () => {
+  let pages = 0;
+  const f = listOf("storage-object/firebase/list", (ctx) => {
+    if (!V0(ctx.path) || ctx.nth <= 1) return undefined;
+    if (zeroLimit(ctx)) return productionZeroLimit();
+    if (ctx.query.get("maxResults") === "2") {
+      pages++;
+      return pages < 3
+        ? Response.json({ items: [], prefixes: [], nextPageToken: `t${pages}` })
+        : Response.json({ error: { code: 400, message: "x" } }, { status: 400 });
+    }
+    return undefined;
+  });
+  const result = await replay(f);
+  assert.equal(pages, 3);
+  assert.equal(result.pageSummaries.length, 3);
+  assert.deepEqual(
+    result.pageSummaries.map((row) => row.unobserved ?? false),
+    [false, false, true],
+  );
+  assert.equal(result.unobservedSteps.at(-1).status, 400);
+});
+
+test("a Firebase next-page token that is not a usable string is recorded, and the walk ends", async () => {
+  for (const token of [7, "", "x".repeat(5000), "a\u0001b"]) {
+    const f = listOf("storage-object/firebase/list", (ctx) => {
+      if (!V0(ctx.path) || ctx.nth <= 1) return undefined;
+      if (zeroLimit(ctx)) return productionZeroLimit();
+      if (ctx.query.get("maxResults") === "2")
+        return Response.json({ items: [], nextPageToken: token });
+      return undefined;
+    });
+    const result = await replay(f);
+    assert.equal(result.status, "LOCAL_COMPLETE", String(token));
+    assert.equal(result.pageSummaries.length, 1);
+    assert.equal(result.unobservedSteps.at(-1).reason, "next page token");
+  }
+});
+
+test("a Firebase page walk that never ends is not a failure, where the same in GCS is", async () => {
+  const endless = (ctx) =>
+    ctx.query.get("maxResults") === "2" || ctx.query.get("maxResults") === "3"
+      ? Response.json({ items: [], prefixes: [], nextPageToken: "more" })
+      : undefined;
+  const firebase = await replay(
+    listOf("storage-object/firebase/list", (ctx) => (V0(ctx.path) ? endless(ctx) : undefined)),
+  );
+  assert.equal(firebase.status, "LOCAL_COMPLETE");
+  assert.equal(firebase.pageSummaries.length, 12);
+  await assert.rejects(
+    replay(listOf("storage-object/gcs/list", (ctx) => (V0(ctx.path) ? undefined : endless(ctx)))),
+    /seed or list traversal is incomplete/,
+  );
+});
+
+test("the baseline list, and every GCS list step, are still judged: a bad answer fails the recipe", async () => {
+  // The Firebase baseline is the first Firebase list of the recipe.
+  await assert.rejects(
+    replay(
+      listOf("storage-object/firebase/list", (ctx) =>
+        V0(ctx.path) && ctx.nth === 1
+          ? Response.json({ error: { code: 403, message: "x" } }, { status: 403 })
+          : undefined,
+      ),
+    ),
+    /list response was not 200/,
+  );
+  await assert.rejects(
+    replay(
+      listOf("storage-object/firebase/list", (ctx) =>
+        V0(ctx.path) && ctx.nth === 1 ? Response.json({ items: [{ name: "x" }] }) : undefined,
+      ),
+    ),
+    /baseline list was not empty/,
+  );
+  for (const nthFrom of [2, 3, 5, 9]) {
+    const f = listOf("storage-object/gcs/list", (ctx) =>
+      !V0(ctx.path) && ctx.nth === nthFrom
+        ? Response.json({ error: { code: 403, message: "x" } }, { status: 403 })
+        : undefined,
+    );
+    await assert.rejects(replay(f), /list response was not 200/, `GCS list ${nthFrom}`);
+  }
+});
+
+test("the answers production gave to the first Firebase list requests of recording 1 (recorded/recording1-firebase-list.json) go through the list judge, and the zero-limit 400 no longer stops the recipe", async () => {
+  const recorded = JSON.parse(
+    readFileSync(
+      new URL("./storage-object/recorded/recording1-firebase-list.json", import.meta.url),
+      "utf8",
+    ),
+  );
+  assert.equal(recorded.answers["max-results-zero"].status, 400);
+  const order = [
+    "baseline-list-firebase",
+    "flat",
+    "delimited",
+    "subdirectory",
+    "empty",
+    "max-results-zero",
+  ];
+  const f = fixture({ recipeId: "storage-object/firebase/list" });
+  const moved = (text) =>
+    text.replaceAll(
+      `storage-object/${recorded.runId}/`,
+      `${f.recipe.objects[0].split("list/")[0]}`,
+    );
+  const served = [];
+  const scripted = fixture({
+    recipeId: "storage-object/firebase/list",
+    listAnswer: ({ path, nth }) => {
+      if (!V0(path) || nth > order.length) return undefined;
+      const row = recorded.answers[order[nth - 1]];
+      served.push(order[nth - 1]);
+      return new Response(moved(row.body), { status: row.status, headers: row.headers });
+    },
+  });
+  const result = await replay(scripted);
+  assert.equal(result.status, "LOCAL_COMPLETE");
+  assert.deepEqual(served, order);
+  assert.deepEqual(result.zeroLimit, { stepId: "max-results-zero", status: 400 });
+  assert.deepEqual(result.unobservedSteps, []);
+  assert.equal(scripted.objects.size, 0);
+  assert.deepEqual(scripted.sender.unresolved(), []);
+  assert.ok(f.recipe);
 });

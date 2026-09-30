@@ -1,0 +1,55 @@
+{
+  "provenance": "STORAGE-OBJECT lean-v4 recording 1, run 9d4b0726ac89c07f3d89, 2026-09-30T17:14:32Z to 17:28:28Z, query project, owner token (packet lean-v4, commit f42f1dfd0). The answers of the first seven list requests of the firebase/list recipe, in order; the recipe stopped at the zero-limit list (400).",
+  "runId": "9d4b0726ac89c07f3d89",
+  "answers": {
+    "baseline-list-firebase": {
+      "status": 200,
+      "headers": {
+        "content-type": "application/json; charset=UTF-8"
+      },
+      "body": "{\"prefixes\":[],\"items\":[]}"
+    },
+    "baseline-list-gcs": {
+      "status": 200,
+      "headers": {
+        "content-type": "application/json; charset=UTF-8"
+      },
+      "body": "{\"kind\":\"storage#objects\"}"
+    },
+    "flat": {
+      "status": 200,
+      "headers": {
+        "content-type": "application/json; charset=UTF-8"
+      },
+      "body": "{\"prefixes\":[],\"items\":[{\"name\":\"storage-object/9d4b0726ac89c07f3d89/list/firebase/a.txt\",\"bucket\":\"fireemu-oracle-query.firebasestorage.app\"},{\"name\":\"storage-object/9d4b0726ac89c07f3d89/list/firebase/b.txt\",\"bucket\":\"fireemu-oracle-query.firebasestorage.app\"},{\"name\":\"storage-object/9d4b0726ac89c07f3d89/list/firebase/dir/c.txt\",\"bucket\":\"fireemu-oracle-query.firebasestorage.app\"},{\"name\":\"storage-object/9d4b0726ac89c07f3d89/list/firebase/dir/d.txt\",\"bucket\":\"fireemu-oracle-query.firebasestorage.app\"},{\"name\":\"storage-object/9d4b0726ac89c07f3d89/list/firebase/dir2/e.txt\",\"bucket\":\"fireemu-oracle-query.firebasestorage.app\"},{\"name\":\"storage-object/9d4b0726ac89c07f3d89/list/firebase/zz.txt\",\"bucket\":\"fireemu-oracle-query.firebasestorage.app\"}]}"
+    },
+    "delimited": {
+      "status": 200,
+      "headers": {
+        "content-type": "application/json; charset=UTF-8"
+      },
+      "body": "{\"prefixes\":[\"storage-object/9d4b0726ac89c07f3d89/list/firebase/dir/\",\"storage-object/9d4b0726ac89c07f3d89/list/firebase/dir2/\"],\"items\":[{\"name\":\"storage-object/9d4b0726ac89c07f3d89/list/firebase/a.txt\",\"bucket\":\"fireemu-oracle-query.firebasestorage.app\"},{\"name\":\"storage-object/9d4b0726ac89c07f3d89/list/firebase/b.txt\",\"bucket\":\"fireemu-oracle-query.firebasestorage.app\"},{\"name\":\"storage-object/9d4b0726ac89c07f3d89/list/firebase/zz.txt\",\"bucket\":\"fireemu-oracle-query.firebasestorage.app\"}]}"
+    },
+    "subdirectory": {
+      "status": 200,
+      "headers": {
+        "content-type": "application/json; charset=UTF-8"
+      },
+      "body": "{\"prefixes\":[],\"items\":[{\"name\":\"storage-object/9d4b0726ac89c07f3d89/list/firebase/dir/c.txt\",\"bucket\":\"fireemu-oracle-query.firebasestorage.app\"},{\"name\":\"storage-object/9d4b0726ac89c07f3d89/list/firebase/dir/d.txt\",\"bucket\":\"fireemu-oracle-query.firebasestorage.app\"}]}"
+    },
+    "empty": {
+      "status": 200,
+      "headers": {
+        "content-type": "application/json; charset=UTF-8"
+      },
+      "body": "{\"prefixes\":[],\"items\":[]}"
+    },
+    "max-results-zero": {
+      "status": 400,
+      "headers": {
+        "content-type": "application/json; charset=UTF-8"
+      },
+      "body": "{\"error\":{\"code\":400,\"message\":\"Expect maxResults to be a positive number.\"}}"
+    }
+  }
+}

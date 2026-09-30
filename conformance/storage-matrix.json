@@ -6,8 +6,8 @@
   },
   "project": "demo-storage-probe",
   "summary": {
-    "parity": 195,
-    "documented-divergence": 24,
+    "parity": 193,
+    "documented-divergence": 26,
     "debt": 0
   },
   "programs": [
@@ -408,7 +408,16 @@
           "id": "multipart-data-ending-in-line-breaks",
           "status": "parity",
           "value": {
-            "bytes": [108, 105, 110, 101, 13, 10, 13, 10],
+            "bytes": [
+              108,
+              105,
+              110,
+              101,
+              13,
+              10,
+              13,
+              10
+            ],
             "status": 200
           }
         }
@@ -1340,14 +1349,28 @@
         },
         {
           "id": "patch-missing",
-          "status": "parity",
-          "value": {
+          "status": "documented-divergence",
+          "oracle": {
             "body": "Not Found",
             "headers": {
               "content-type": "text/plain; charset=utf-8"
             },
             "status": 404
-          }
+          },
+          "fireemu": {
+            "body": {
+              "error": {
+                "code": 403,
+                "message": "Permission denied. No WRITE permission."
+              }
+            },
+            "headers": {
+              "content-type": "application/json; charset=utf-8"
+            },
+            "status": 403
+          },
+          "documents": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)",
+          "reason": "A Firebase v0 metadata PATCH of an absent object is refused as a write with 403 in fireemu, for every caller, as production answers it (recorded 2026-09-30, stage 3 v9: method-update, method-write and stored-null patch-absent rows and the owner's boundary-firebase-admin-patch-absent row). The official emulator lets the rules allow it and then answers a plain 404."
         },
         {
           "id": "patch-closed",
@@ -1709,7 +1732,10 @@
                   "name": "open/lst/zz.txt"
                 }
               ],
-              "prefixes": ["open/lst/dir/", "open/lst/dir2/"]
+              "prefixes": [
+                "open/lst/dir/",
+                "open/lst/dir2/"
+              ]
             },
             "headers": {
               "content-type": "application/json; charset=utf-8"
@@ -1799,14 +1825,25 @@
           "value": {
             "0": {
               "hasNext": true,
-              "items": ["open/lst/a.txt", "open/lst/b.txt"],
-              "prefixes": ["open/lst/dir/", "open/lst/dir2/"],
+              "items": [
+                "open/lst/a.txt",
+                "open/lst/b.txt"
+              ],
+              "prefixes": [
+                "open/lst/dir/",
+                "open/lst/dir2/"
+              ],
               "status": 200
             },
             "1": {
               "hasNext": false,
-              "items": ["open/lst/zz.txt"],
-              "prefixes": ["open/lst/dir/", "open/lst/dir2/"],
+              "items": [
+                "open/lst/zz.txt"
+              ],
+              "prefixes": [
+                "open/lst/dir/",
+                "open/lst/dir2/"
+              ],
               "status": 200
             }
           }
@@ -1815,7 +1852,10 @@
           "id": "page-token-shape",
           "status": "parity",
           "value": {
-            "items": ["open/lst/a.txt", "open/lst/b.txt"],
+            "items": [
+              "open/lst/a.txt",
+              "open/lst/b.txt"
+            ],
             "nextPageToken": "open/lst/dir/c.txt"
           }
         },
@@ -2265,8 +2305,8 @@
         },
         {
           "id": "overwrite-locked-is-an-update",
-          "status": "documented-divergence",
-          "oracle": {
+          "status": "parity",
+          "value": {
             "body": {
               "bucket": "demo-storage-probe.appspot.com",
               "contentDisposition": "inline",
@@ -2289,22 +2329,7 @@
               "content-type": "application/json; charset=utf-8"
             },
             "status": 200
-          },
-          "fireemu": {
-            "body": {
-              "error": {
-                "code": 403,
-                "message": "Permission denied. No WRITE permission."
-              }
-            },
-            "headers": {
-              "content-type": "application/json; charset=utf-8",
-              "x-goog-upload-status": "final"
-            },
-            "status": 403
-          },
-          "documents": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)",
-          "reason": "An upload over an existing object evaluates the rules `update` method in fireemu, as production evaluates it. The official emulator evaluates every upload as `create` (its uploadObject hard-codes the CREATE method), so a rule that guards update was measured to admit an anonymous overwrite."
+          }
         },
         {
           "id": "delete-locked",
@@ -3446,14 +3471,47 @@
         },
         {
           "id": "patch-storage-v1-spelling",
-          "status": "parity",
-          "value": {
+          "status": "documented-divergence",
+          "oracle": {
             "body": "Not Implemented",
             "headers": {
               "content-type": "text/plain; charset=utf-8"
             },
             "status": 501
-          }
+          },
+          "fireemu": {
+            "body": {
+              "bucket": "demo-storage-probe.appspot.com",
+              "cacheControl": "no-store",
+              "contentEncoding": "identity",
+              "contentLanguage": "de",
+              "contentType": "text/markdown",
+              "crc32c": "zegzwA==",
+              "etag": "<etag>",
+              "generation": "<generation>",
+              "id": "demo-storage-probe.appspot.com/open/gcsu/doc.txt/<generation>",
+              "kind": "storage#object",
+              "md5Hash": "mgm039qC4+Zl4xCS0cPsjQ==",
+              "mediaLink": "http://<host>/download/storage/v1/b/demo-storage-probe.appspot.com/o/open%2Fgcsu%2Fdoc.txt?generation=<generation>&alt=media",
+              "metadata": {
+                "b": "2"
+              },
+              "metageneration": "4",
+              "name": "open/gcsu/doc.txt",
+              "selfLink": "http://<host>/storage/v1/b/demo-storage-probe.appspot.com/o/open%2Fgcsu%2Fdoc.txt",
+              "size": "3",
+              "storageClass": "STANDARD",
+              "timeCreated": "<timestamp>",
+              "timeStorageClassUpdated": "<timestamp>",
+              "updated": "<timestamp>"
+            },
+            "headers": {
+              "content-type": "application/json; charset=utf-8"
+            },
+            "status": 200
+          },
+          "documents": "README.md, \"Storage\"; capability manifest ST-OBJ-1 (crates/fireemu/src/capabilities.json)",
+          "reason": "PATCH /storage/v1/b/<bucket>/o/<object> updates the object's metadata in fireemu, as the Cloud Storage JSON API does in production (recorded: a 200 with the storage#object resource, and the 404 `No such object` JSON error for an absent object). The official emulator registers PATCH only on the short /b/... spelling and answers this one with its 501 catch-all."
         },
         {
           "id": "put-update",
@@ -3512,7 +3570,9 @@
                 }
               ],
               "kind": "storage#objects",
-              "prefixes": ["open/gcsu/list/dir/"]
+              "prefixes": [
+                "open/gcsu/list/dir/"
+              ]
             },
             "headers": {
               "content-type": "application/json; charset=utf-8"
@@ -3554,14 +3614,22 @@
           "value": {
             "0": {
               "hasNext": true,
-              "names": ["open/gcsu/list/a.txt"],
-              "prefixes": ["open/gcsu/list/dir/"],
+              "names": [
+                "open/gcsu/list/a.txt"
+              ],
+              "prefixes": [
+                "open/gcsu/list/dir/"
+              ],
               "status": 200
             },
             "1": {
               "hasNext": false,
-              "names": ["open/gcsu/list/b.txt"],
-              "prefixes": ["open/gcsu/list/dir/"],
+              "names": [
+                "open/gcsu/list/b.txt"
+              ],
+              "prefixes": [
+                "open/gcsu/list/dir/"
+              ],
               "status": 200
             }
           }
@@ -3570,7 +3638,10 @@
           "id": "list-short-route",
           "status": "parity",
           "value": {
-            "names": ["open/gcsu/list/dir/c.txt", "open/gcsu/list/dir/d.txt"],
+            "names": [
+              "open/gcsu/list/dir/c.txt",
+              "open/gcsu/list/dir/d.txt"
+            ],
             "status": 200
           }
         },
@@ -4199,11 +4270,11 @@
                 "errors": [
                   {
                     "domain": "global",
-                    "message": "ifGenerationMatch 0 but the current generation is 59",
+                    "message": "ifGenerationMatch 0 but the current generation is 60",
                     "reason": "conditionNotMet"
                   }
                 ],
-                "message": "ifGenerationMatch 0 but the current generation is 59"
+                "message": "ifGenerationMatch 0 but the current generation is 60"
               }
             },
             "headers": {
@@ -4245,14 +4316,35 @@
         },
         {
           "id": "patch-if-metageneration-mismatch",
-          "status": "parity",
-          "value": {
+          "status": "documented-divergence",
+          "oracle": {
             "body": "Not Implemented",
             "headers": {
               "content-type": "text/plain; charset=utf-8"
             },
             "status": 501
-          }
+          },
+          "fireemu": {
+            "body": {
+              "error": {
+                "code": 412,
+                "errors": [
+                  {
+                    "domain": "global",
+                    "message": "ifMetagenerationMatch 999 but the current metageneration is 1",
+                    "reason": "conditionNotMet"
+                  }
+                ],
+                "message": "ifMetagenerationMatch 999 but the current metageneration is 1"
+              }
+            },
+            "headers": {
+              "content-type": "application/json; charset=utf-8"
+            },
+            "status": 412
+          },
+          "documents": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)",
+          "reason": "PATCH /storage/v1/b/<bucket>/o/<object> honours ifMetagenerationMatch in fireemu and answers 412 on a mismatch, as production does. The official emulator registers PATCH on the short spelling only and answers this spelling with 501 (see patch-storage-v1-spelling)."
         },
         {
           "id": "get-if-generation-not-match-current",
@@ -4305,11 +4397,11 @@
                 "errors": [
                   {
                     "domain": "global",
-                    "message": "ifGenerationMatch 1 but the current generation is 60",
+                    "message": "ifGenerationMatch 1 but the current generation is 61",
                     "reason": "conditionNotMet"
                   }
                 ],
-                "message": "ifGenerationMatch 1 but the current generation is 60"
+                "message": "ifGenerationMatch 1 but the current generation is 61"
               }
             },
             "headers": {
@@ -4698,7 +4790,9 @@
           "status": "parity",
           "value": {
             "kind": "storage#buckets",
-            "names": ["demo-storage-probe.appspot.com"],
+            "names": [
+              "demo-storage-probe.appspot.com"
+            ],
             "status": 200
           }
         },

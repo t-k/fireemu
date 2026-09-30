@@ -665,21 +665,57 @@
         "approvalRecord": "README.md, \"Storage\"; capability manifest ST-OBJ-1 (crates/fireemu/src/capabilities.json)"
       }
     },
-    "storage-probe/rules-request-model#overwrite-locked-is-an-update": {
-      "documents": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)",
-      "reason": "An upload over an existing object evaluates the rules `update` method in fireemu, as production evaluates it. The official emulator evaluates every upload as `create` (its uploadObject hard-codes the CREATE method), so a rule that guards update was measured to admit an anonymous overwrite.",
+    "storage-probe/gcs-update-list-delete#patch-storage-v1-spelling": {
+      "documents": "README.md, \"Storage\"; capability manifest ST-OBJ-1 (crates/fireemu/src/capabilities.json)",
+      "reason": "PATCH /storage/v1/b/<bucket>/o/<object> updates the object's metadata in fireemu, as the Cloud Storage JSON API does in production (recorded: a 200 with the storage#object resource, and the 404 `No such object` JSON error for an absent object). The official emulator registers PATCH only on the short /b/... spelling and answers this one with its 501 catch-all.",
       "authority": {
         "kind": "production-spec",
         "sourceUrls": [
-          "https://firebase.google.com/docs/storage/security/core-syntax",
+          "https://cloud.google.com/storage/docs/json_api/v1/objects/patch",
           "https://github.com/firebase/firebase-tools/tree/v15.28.2"
         ],
-        "checkedOn": "2026-09-05",
+        "checkedOn": "2026-09-30",
         "officialBaseline": {
           "package": "firebase-tools",
           "version": "15.28.2"
         },
-        "fixture": "conformance/storage-matrix.json#rules-request-model#overwrite-locked-is-an-update",
+        "fixture": "conformance/storage-matrix.json#gcs-update-list-delete#patch-storage-v1-spelling",
+        "approvalRecord": "README.md, \"Storage\"; capability manifest ST-OBJ-1 (crates/fireemu/src/capabilities.json)"
+      }
+    },
+    "storage-probe/fb-metadata-update#patch-missing": {
+      "documents": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)",
+      "reason": "A Firebase v0 metadata PATCH of an absent object is refused as a write with 403 in fireemu, for every caller, as production answers it (recorded 2026-09-30, stage 3 v9: method-update, method-write and stored-null patch-absent rows and the owner's boundary-firebase-admin-patch-absent row). The official emulator lets the rules allow it and then answers a plain 404.",
+      "authority": {
+        "kind": "production-spec",
+        "sourceUrls": [
+          "https://cloud.google.com/storage/docs/json_api/v1/objects/patch",
+          "https://github.com/firebase/firebase-tools/tree/v15.28.2"
+        ],
+        "checkedOn": "2026-09-30",
+        "officialBaseline": {
+          "package": "firebase-tools",
+          "version": "15.28.2"
+        },
+        "fixture": "conformance/storage-matrix.json#fb-metadata-update#patch-missing",
+        "approvalRecord": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)"
+      }
+    },
+    "storage-probe/gcs-preconditions#patch-if-metageneration-mismatch": {
+      "documents": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)",
+      "reason": "PATCH /storage/v1/b/<bucket>/o/<object> honours ifMetagenerationMatch in fireemu and answers 412 on a mismatch, as production does. The official emulator registers PATCH on the short spelling only and answers this spelling with 501 (see patch-storage-v1-spelling).",
+      "authority": {
+        "kind": "production-spec",
+        "sourceUrls": [
+          "https://cloud.google.com/storage/docs/json_api/v1/objects/patch",
+          "https://github.com/firebase/firebase-tools/tree/v15.28.2"
+        ],
+        "checkedOn": "2026-09-30",
+        "officialBaseline": {
+          "package": "firebase-tools",
+          "version": "15.28.2"
+        },
+        "fixture": "conformance/storage-matrix.json#gcs-preconditions#patch-if-metageneration-mismatch",
         "approvalRecord": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)"
       }
     },

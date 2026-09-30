@@ -12,7 +12,7 @@ nothing until they are ruled on (they fail no claim while excluded by name).
 
 ## firebase-protocol
 
-parity: 100 &middot; documented-divergence: 2
+parity: 99 &middot; documented-divergence: 3
 
 | program | step | status |
 | --- | --- | --- |
@@ -80,7 +80,7 @@ parity: 100 &middot; documented-divergence: 2
 | `fb-metadata-update` | `clear-all-custom-metadata` | parity |
 | `fb-metadata-update` | `non-string-custom-value` | parity |
 | `fb-metadata-update` | `empty-patch-bumps-metageneration` | parity |
-| `fb-metadata-update` | `patch-missing` | parity |
+| `fb-metadata-update` | `patch-missing` | documented-divergence |
 | `fb-metadata-update` | `patch-closed` | parity |
 | `fb-metadata-update` | `patch-closed-and-missing` | parity |
 | `fb-metadata-update` | `response-headers-of-patch` | parity |
@@ -121,7 +121,7 @@ parity: 100 &middot; documented-divergence: 2
 
 ## rules
 
-parity: 30 &middot; documented-divergence: 3
+parity: 31 &middot; documented-divergence: 2
 
 | program | step | status |
 | --- | --- | --- |
@@ -138,7 +138,7 @@ parity: 30 &middot; documented-divergence: 3
 | `rules-request-model` | `hashes-present-in-request-resource` | parity |
 | `rules-request-model` | `update-unlocked` | parity |
 | `rules-request-model` | `update-locked` | parity |
-| `rules-request-model` | `overwrite-locked-is-an-update` | documented-divergence |
+| `rules-request-model` | `overwrite-locked-is-an-update` | parity |
 | `rules-request-model` | `delete-locked` | parity |
 | `rules-request-model` | `delete-unlocked` | parity |
 | `rules-request-model` | `delete-missing-under-resource-rule` | parity |
@@ -161,7 +161,7 @@ parity: 30 &middot; documented-divergence: 3
 
 ## json-api
 
-parity: 63 &middot; documented-divergence: 12
+parity: 61 &middot; documented-divergence: 14
 
 | program | step | status |
 | --- | --- | --- |
@@ -193,7 +193,7 @@ parity: 63 &middot; documented-divergence: 12
 | `gcs-update-list-delete` | `patch` | parity |
 | `gcs-update-list-delete` | `patch-remove-custom-key` | parity |
 | `gcs-update-list-delete` | `patch-missing` | parity |
-| `gcs-update-list-delete` | `patch-storage-v1-spelling` | parity |
+| `gcs-update-list-delete` | `patch-storage-v1-spelling` | documented-divergence |
 | `gcs-update-list-delete` | `put-update` | parity |
 | `gcs-update-list-delete` | `list-delimited` | parity |
 | `gcs-update-list-delete` | `list-flat-names` | parity |
@@ -218,7 +218,7 @@ parity: 63 &middot; documented-divergence: 12
 | `gcs-copy-rewrite` | `copied-bytes` | parity |
 | `gcs-preconditions` | `insert-if-generation-match-zero-on-existing` | documented-divergence |
 | `gcs-preconditions` | `insert-if-generation-match-current` | parity |
-| `gcs-preconditions` | `patch-if-metageneration-mismatch` | parity |
+| `gcs-preconditions` | `patch-if-metageneration-mismatch` | documented-divergence |
 | `gcs-preconditions` | `get-if-generation-not-match-current` | documented-divergence |
 | `gcs-preconditions` | `delete-if-generation-mismatch` | documented-divergence |
 | `gcs-preconditions` | `malformed-precondition` | documented-divergence |

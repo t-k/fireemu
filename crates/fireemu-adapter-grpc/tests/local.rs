@@ -8296,45 +8296,65 @@ async fn native_transaction_document(
         .into_inner()
 }
 
-/// The empty commit of a transaction over native gRPC (P01, P02): production answers no
-/// `commit_time` for a read-write transaction and the snapshot time for a read-only one; the
-/// emulator profile keeps a time for both.
+/// The empty commit of a transaction over native gRPC. Production answers the time of the
+/// transaction's first read and no `commit_time` when it has not read (P01 gRPC read-write without
+/// a read; P02 read-only after a read); the emulator profile keeps a time for every empty commit.
+/// A gRPC read-write empty commit after a read, and a read-only one without a read, are not
+/// recorded: they follow the same rule.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn native_empty_commit_time_follows_the_transaction_mode_in_production() {
+async fn native_empty_commit_time_follows_whether_the_transaction_has_read_in_production() {
     for strict in [true, false] {
         let (mut client, _clock, _backend, handle) =
             start_profile_with_state(strict, Some(std::time::Duration::ZERO)).await;
+        client
+            .commit(pb::CommitRequest {
+                database: DB.to_owned(),
+                writes: vec![update_write("empty-time/doc", &[("value", i(1))])],
+                ..Default::default()
+            })
+            .await
+            .unwrap();
         for read_only in [false, true] {
-            let options = read_only.then(|| pb::TransactionOptions {
-                mode: Some(pb::transaction_options::Mode::ReadOnly(
-                    pb::transaction_options::ReadOnly::default(),
-                )),
-            });
-            let transaction = client
-                .begin_transaction(pb::BeginTransactionRequest {
-                    database: DB.to_owned(),
-                    options,
-                    ..Default::default()
-                })
-                .await
-                .unwrap()
-                .into_inner()
-                .transaction;
-            let response = client
-                .commit(pb::CommitRequest {
-                    database: DB.to_owned(),
-                    transaction,
-                    ..Default::default()
-                })
-                .await
-                .unwrap()
-                .into_inner();
-            assert!(response.write_results.is_empty());
-            assert_eq!(
-                response.commit_time.is_some(),
-                !strict || read_only,
-                "strict={strict} read_only={read_only}"
-            );
+            for has_read in [false, true] {
+                let options = read_only.then(|| pb::TransactionOptions {
+                    mode: Some(pb::transaction_options::Mode::ReadOnly(
+                        pb::transaction_options::ReadOnly::default(),
+                    )),
+                });
+                let transaction = client
+                    .begin_transaction(pb::BeginTransactionRequest {
+                        database: DB.to_owned(),
+                        options,
+                        ..Default::default()
+                    })
+                    .await
+                    .unwrap()
+                    .into_inner()
+                    .transaction;
+                if has_read {
+                    native_transaction_document(
+                        &mut client,
+                        "empty-time/doc",
+                        Some(transaction.clone()),
+                    )
+                    .await;
+                }
+                let response = client
+                    .commit(pb::CommitRequest {
+                        database: DB.to_owned(),
+                        transaction,
+                        ..Default::default()
+                    })
+                    .await
+                    .unwrap()
+                    .into_inner();
+                assert!(response.write_results.is_empty());
+                assert_eq!(
+                    response.commit_time.is_some(),
+                    !strict || has_read,
+                    "strict={strict} read_only={read_only} has_read={has_read}"
+                );
+            }
         }
         handle.abort();
     }

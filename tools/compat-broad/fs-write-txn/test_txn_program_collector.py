@@ -323,18 +323,43 @@ def test_a_refused_rollback_the_table_allows_finishes_the_token_as_refused():
     assert {entry["state"] for entry in receipt["tokens"].values()} == {"released-refused"}
 
 
-def test_a_refused_rollback_with_the_recorded_invalid_transaction_body_finishes_the_token():
-    # P11 (REST): the cleanup Rollback of a token that outlived its total lifetime answers 3 "Invalid transaction.".
-    receipt = fixture(rollback_code=3)[0].run()
-    assert receipt["complete"] is True
-    assert {entry["state"] for entry in receipt["tokens"].values()} == {"released-refused"}
+from test_txn_program_hardening import timing  # noqa: E402
 
 
-def test_a_refused_rollback_with_that_code_but_another_body_proves_nothing():
-    collector, service, _budget, _journal, _clock, _plan = fixture(rollback_code=3, rollback_details="something else")
-    receipt = collector.run()
-    assert receipt["complete"] is False
-    assert receipt["openTokens"] == ["rest-r"] and receipt["unrecovered"] is True
+def _expired_ledger():
+    p11 = __import__("importlib").import_module("fs_txn_table_p11")
+    plan = program.compile_plan(p11.TABLE, NONCE, OWNER)
+    ledger = collector_module.Ledger(plan)
+    ledger.docs["a"].update(status="created", state="created")
+    ledger.docs["m"].update(status="confirmed-absent")
+    ledger.history["a"].append("created")
+    ledger.tokens["rest-k"] = {"value": "dG9rZW4=", "state": "open", "transport": "rest", "start": timing(), "lastUse": timing()}
+    ledger.modes["rest-k"] = "readWrite"; ledger.since["rest-k"] = {"a": 1, "m": 0}
+    return plan, ledger
+
+
+def _answer(code, details, http):
+    return {"code": code, "details": details, "response": None, "http": http}
+
+
+def test_an_invalid_transaction_release_finishes_a_token_only_after_an_expired_refusal():
+    # P11 (REST): a read answered 10 with the expired text, then the cleanup Rollback answered 3 "Invalid transaction.".
+    gone = "The referenced transaction has expired or is no longer valid."
+    plan, ledger = _expired_ledger()
+    request = {"name": plan["documents"]["a"], "transaction": "dG9rZW4="}
+    ledger.before("rest/expiry-read", "rest", "GetDocument", request, None)
+    ledger._apply("rest/expiry-read", "rest", "GetDocument", request, None, _answer(10, gone, 409), timing(), 10)
+    ledger._apply("release", "rest", "Rollback", {"transaction": "dG9rZW4="}, None, _answer(3, "Invalid transaction.", 400), timing(), 3)
+    assert ledger.tokens["rest-k"]["state"] == "released-refused"
+    # Without an earlier expired refusal the same body proves nothing (a token that was never known answers it too).
+    plan, ledger = _expired_ledger()
+    ledger._apply("release", "rest", "Rollback", {"transaction": "dG9rZW4="}, None, _answer(3, "Invalid transaction.", 400), timing(), 3)
+    assert ledger.tokens["rest-k"]["state"] == "unconfirmed-release"
+    # Another body with code 3 never finishes it.
+    plan, ledger = _expired_ledger()
+    ledger._apply("rest/expiry-read", "rest", "GetDocument", request, None, _answer(10, gone, 409), timing(), 10)
+    ledger._apply("release", "rest", "Rollback", {"transaction": "dG9rZW4="}, None, _answer(3, "something else", 400), timing(), 3)
+    assert ledger.tokens["rest-k"]["state"] == "unconfirmed-release"
 
 
 def test_an_undeclared_rollback_refusal_leaves_the_token_open_for_one_recovery_release():

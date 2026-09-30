@@ -20,7 +20,8 @@ RESOLVED_TOKENS = ("committed", "rolled-back", "released-refused")
 # The one refusal that proves a transaction is gone: what production answers for a finished or expired token.
 GONE_CODE = 10
 GONE_DETAILS = "The referenced transaction has expired or is no longer valid."
-# A token that outlived its total lifetime and was refused once is forgotten: its Rollback answers this (P11, REST).
+# A token that outlived its total lifetime and was refused once as expired is forgotten: its Rollback answers this (P11,
+# REST). Production answers the same for a token it never knew, so it finishes a release only after such a refusal.
 INVALID_CODE = 3
 INVALID_DETAILS = "Invalid transaction."
 _GRPC_TIME = "gRPC updateTime"
@@ -137,6 +138,9 @@ class Ledger:
         self.since, self.modes, self.token_time = {}, {}, {}
         self.versions = {role: [] for role in plan["documents"]}
         self.acked_at = {}
+        # Tokens some request was refused for as expired or no longer valid (10 with the recorded text). Kept out
+        # of the recorded snapshot: replaying the rows rebuilds it.
+        self.gone_seen = set()
 
     def snapshot(self):
         return {
@@ -241,6 +245,10 @@ class Ledger:
             raise ValueError(f"outcome {code} at {site} is outside the declared set")
 
     def _apply(self, site, transport, method, request, step, result, timing, code):
+        if code == GONE_CODE and result["details"] == GONE_DETAILS:
+            gone_role, _entry = self._token_for(request.get("transaction"))
+            if gone_role is not None:
+                self.gone_seen.add(gone_role)
         if method == "BeginTransaction":
             # Validate before releasing the responsibility: a transaction may exist that no role owns yet.
             if code == 0:
@@ -293,7 +301,7 @@ class Ledger:
                 self.unknown_rollbacks.discard(role)
                 if code == 0:
                     entry["state"] = "rolled-back"
-                elif (code, result["details"]) in ((GONE_CODE, GONE_DETAILS), (INVALID_CODE, INVALID_DETAILS)) or self.modes.get(role) == "readOnly":
+                elif (code, result["details"]) == (GONE_CODE, GONE_DETAILS) or (code, result["details"]) == (INVALID_CODE, INVALID_DETAILS) and role in self.gone_seen or self.modes.get(role) == "readOnly":
                     # Production says the transaction no longer exists, so no lock of it can remain; a read-only
                     # transaction holds no lock at all, so any definitive refusal of its release finishes it.
                     entry["state"] = "released-refused"

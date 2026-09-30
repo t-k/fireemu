@@ -3202,6 +3202,135 @@ fn an_empty_read_only_commit_answers_the_snapshot_time_and_consumes_no_commit_ti
     assert!(plain.commit_time > writer.commit_time);
 }
 
+// The empty commit of a transaction answers the time of its first read, and none when it has not
+// read (P01 REST and gRPC read-write, P02 read-only, matrix `#empty-commit`); it uses up no commit
+// time. Not recorded, and inferred from those rows: a read-write one after a read over gRPC, one
+// without a read over REST, a read-only one without a read, and the time of a later read.
+#[test]
+fn an_empty_commit_answers_the_first_read_time_of_its_transaction_or_none() {
+    for read_only in [false, true] {
+        let mut state = FirestoreState::with_limit_scope(LimitScope::Production);
+        state
+            .commit(&[set("p01/doc", &[("v", Value::Integer(1))])], None, t(0))
+            .unwrap();
+        let transaction = if read_only {
+            state.begin_read_only_transaction(t(1))
+        } else {
+            state.begin_read_write_transaction(t(1))
+        }
+        .unwrap();
+        state.touch_transaction(&transaction, t(2)).unwrap();
+        state.touch_transaction(&transaction, t(3)).unwrap();
+        let writer = state
+            .commit(&[set("p01/other", &[("v", Value::Integer(2))])], None, t(4))
+            .unwrap();
+        let next = state.next_commit_time(t(4));
+        let empty = state.commit(&[], Some(&transaction), t(5)).unwrap();
+        assert!(empty.stamped, "read_only={read_only}");
+        assert_eq!(
+            empty.commit_time,
+            t(2),
+            "the first read's time, read_only={read_only}"
+        );
+        assert!(empty.commit_time < writer.commit_time);
+        assert_eq!(
+            state.next_commit_time(t(4)),
+            next,
+            "no commit time is used up"
+        );
+
+        // Without a read the answer carries no time, and it consumes one as before.
+        let unread = if read_only {
+            state.begin_read_only_transaction(t(6))
+        } else {
+            state.begin_read_write_transaction(t(6))
+        }
+        .unwrap();
+        let bare = state.commit(&[], Some(&unread), t(7)).unwrap();
+        assert!(!bare.stamped, "read_only={read_only}");
+        assert!(bare.commit_time > writer.commit_time);
+    }
+    let mut state = FirestoreState::with_limit_scope(LimitScope::Production);
+    assert!(
+        !state.commit(&[], None, t(0)).unwrap().stamped,
+        "outside a transaction"
+    );
+    let written = state
+        .commit(&[set("p01/doc", &[("v", Value::Integer(1))])], None, t(1))
+        .unwrap();
+    assert!(
+        written.stamped,
+        "a commit with writes always carries its time"
+    );
+    // The emulator profile stamps every commit.
+    let mut emulator = FirestoreState::with_limit_scope(LimitScope::OfficialEmulator);
+    assert!(emulator.commit(&[], None, t(0)).unwrap().stamped);
+    let bare = emulator.begin_transaction(false, t(1)).unwrap();
+    assert!(emulator.commit(&[], Some(&bare), t(2)).unwrap().stamped);
+}
+
+// A read-only transaction begun at a `readTime` has the read time as its snapshot time; its empty
+// commit answering that time is unrecorded and follows the read-only rule (P02).
+#[test]
+fn an_empty_commit_of_a_read_time_transaction_answers_that_read_time() {
+    let mut state = FirestoreState::with_limit_scope(LimitScope::Production);
+    state
+        .commit(&[set("p03/doc", &[("v", Value::Integer(1))])], None, t(1))
+        .unwrap();
+    let transaction = state.begin_transaction_at(t(2), t(5)).unwrap();
+    state.touch_transaction(&transaction, t(6)).unwrap();
+    let empty = state.commit(&[], Some(&transaction), t(7)).unwrap();
+    assert!(empty.stamped);
+    assert_eq!(empty.commit_time, t(2));
+}
+
+// An embedded `newTransaction` reads in the request that begins it, so its empty commit already
+// answers that time.
+#[test]
+fn an_empty_commit_of_an_embedded_transaction_answers_its_begin_time() {
+    let mut state = FirestoreState::with_limit_scope(LimitScope::Production);
+    let transaction = state.begin_transaction(false, t(1)).unwrap();
+    let empty = state.commit(&[], Some(&transaction), t(5)).unwrap();
+    assert!(empty.stamped);
+    assert_eq!(empty.commit_time, t(1));
+}
+
+// An idle expiry found by maintenance keeps its lineage (E003: the first request ABORTED, a later
+// read ABORTED, a Rollback 0); only a total-lifetime expiry is forgotten after a refused request.
+#[test]
+fn an_idle_expiry_found_by_maintenance_still_answers_aborted_and_accepts_a_rollback() {
+    let mut state = FirestoreState::with_limit_scope(LimitScope::Production);
+    let transaction = state.begin_transaction(false, t(0)).unwrap();
+    let _other = state.begin_transaction(true, t(130)).unwrap();
+    aborted_no_longer_valid(state.touch_transaction(&transaction, t(131)));
+    aborted_no_longer_valid(state.touch_transaction(&transaction, t(132)));
+    state.rollback(&transaction).unwrap();
+}
+
+// Evicting finished lineage removes the deadline key an unnoticed expiry was filed under.
+#[test]
+fn evicting_unnoticed_expiries_leaves_no_stale_deadline_entries() {
+    let mut state = FirestoreState::with_limit_scope(LimitScope::Production);
+    // Three waves of 4 000 transactions, each kept alive by reads until its total lifetime ends and
+    // found by the next wave's begin, overflow the bounded finished lineage (8 192) inside the
+    // retention of an expiry nobody was refused for.
+    for wave in 0..3 {
+        let base = wave * 271;
+        let ids: Vec<_> = (0..4_000)
+            .map(|_| state.begin_transaction(false, t(base)).unwrap())
+            .collect();
+        for second in (24..=264).step_by(24) {
+            for id in &ids {
+                state.touch_transaction(id, t(base + second)).unwrap();
+            }
+        }
+    }
+    let _late = state.begin_transaction(true, t(3 * 271)).unwrap();
+    let bookkeeping = state.transaction_bookkeeping_stats();
+    assert_eq!(bookkeeping.finished, 8_192);
+    assert_eq!(bookkeeping.finished, bookkeeping.finished_deadlines);
+}
+
 // The official emulator (v1.22.0, measured on both transports) reads a read-write transaction at
 // its first use: an outside write between the begin and the first read is shown, and the
 // transaction's commit then succeeds. The emulator profile matches it; production is unobserved
@@ -3334,10 +3463,13 @@ fn a_read_only_transaction_takes_its_snapshot_at_its_first_use() {
     assert_eq!(state.retained_versions(), 2);
 }
 
-// P11 (REST): a transaction kept alive by reads past its 270 s total lifetime. The first request
-// after it answers ABORTED "no longer valid"; a Commit and a Rollback after that answer
-// INVALID_ARGUMENT "Invalid transaction." (the transaction is forgotten). An idle expiry keeps the
-// lineage until the total lifetime, so its later requests still answer ABORTED.
+// P11 (REST): a transaction kept alive by reads past its 270 s total lifetime. Recorded: a read
+// answers ABORTED "no longer valid", then a Commit and a Rollback answer INVALID_ARGUMENT
+// "Invalid transaction.". The tests below that start with a Commit, a Rollback or a second read,
+// and every gRPC answer, pin an INFERRED model (the first refused request answers ABORTED, then
+// the transaction is forgotten); the recording fits "reads ABORTED, Commit and Rollback invalid"
+// equally well, and P12 decides. An idle expiry keeps the lineage until the total lifetime, so its
+// later requests still answer ABORTED (E003).
 fn invalid_transaction(result: Result<(), FirestoreError>) {
     match result {
         Err(FirestoreError::InvalidArgument(message)) if message == "Invalid transaction." => {}

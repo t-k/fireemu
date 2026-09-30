@@ -84,7 +84,7 @@ def test_a_refused_recovery_release_is_sent_once():
     assert receipt_["phaseRequests"]["tokenCleanup"] == 1
 
 
-@pytest.mark.parametrize("code,details,finishes", [(10, GONE, True), (10, "another refusal", False), (5, GONE, False), (9, GONE, False), (3, "Invalid transaction.", True), (3, "another refusal", False), (10, "Invalid transaction.", False)])
+@pytest.mark.parametrize("code,details,finishes", [(10, GONE, True), (10, "another refusal", False), (5, GONE, False), (9, GONE, False), (3, "Invalid transaction.", False), (3, "another refusal", False), (10, "Invalid transaction.", False)])
 def test_only_the_gone_answer_finishes_a_token_a_declared_rollback_refused(code, details, finishes):
     collector, service, *_ = fixture(rollback_code=10)
     original = service.send

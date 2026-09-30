@@ -262,6 +262,11 @@ pub struct CommitResult {
     pub version: CommitVersion,
     /// Documents that actually changed, in path order (no-op writes are not listed).
     pub changes: Arc<[DocumentChange]>,
+    /// Whether the answer to the client carries `commit_time`. Production leaves it out of the
+    /// empty commit of a transaction that has not read (P01 gRPC) and of an empty commit outside a
+    /// transaction (matrix `writes/preconditions-and-masks#empty-commit`); the emulator profile
+    /// always carries it. Every commit with writes carries it.
+    pub stamped: bool,
 }
 
 struct StagedDocument {
@@ -624,9 +629,19 @@ struct Transaction {
     snapshot_pending: bool,
     /// Production profile: the transaction ran out of its total lifetime and no request has been
     /// refused for it yet. The first request answers `ABORTED` "no longer valid"; after that the
-    /// transaction is forgotten and every use answers `INVALID_ARGUMENT` "Invalid transaction."
-    /// (P11: a read, then a Commit and a Rollback, REST).
+    /// transaction is forgotten and every use answers `INVALID_ARGUMENT` "Invalid transaction.".
+    ///
+    /// Recorded (P11, REST, one recording): a read at about 300 s answers 10, then a Commit 3, then a
+    /// Rollback 3. Everything else here is unobserved: a Commit or a Rollback as the first request,
+    /// a second read, and all of gRPC. The recording fits a second rule equally well: "a read
+    /// answers 10, a Commit and a Rollback answer 3". This model keeps the first rule; P12 records
+    /// the first-request orders and decides between them.
     expiry_unnoticed: bool,
+    /// The time of the transaction's first read: its snapshot time for a read-only transaction. The
+    /// empty commit of a transaction that has read answers this time and uses up no commit time
+    /// (production, P01 REST read-write and P02 both transports); one that has not read answers none
+    /// in production. Only the first read is recorded; a later read's time is unobserved.
+    first_read_time: Option<LogicalInstant>,
 }
 
 #[derive(Debug, Clone)]
@@ -2077,6 +2092,7 @@ impl FirestoreState {
                 write_results: Vec::new(),
                 version: self.version,
                 changes: Arc::from([]),
+                stamped: true,
             });
         }
         self.version = next_version;
@@ -2120,6 +2136,7 @@ impl FirestoreState {
             write_results: Vec::new(),
             version: next_version,
             changes: Arc::from(changes),
+            stamped: true,
         })
     }
 
@@ -2130,7 +2147,13 @@ impl FirestoreState {
         now: LogicalInstant,
     ) -> Result<TransactionId, FirestoreError> {
         let read_time = self.read_time(now);
-        self.insert_transaction(read_only, self.version, read_time, now)
+        let id = self.insert_transaction(read_only, self.version, read_time, now)?;
+        // The eager begin (a read's `newTransaction`) reads in the same request; an explicit begin
+        // clears this (`begin_read_only_transaction`, `begin_read_write_transaction`).
+        if let Some(transaction) = self.transactions.get_mut(&id) {
+            transaction.first_read_time = Some(read_time);
+        }
+        Ok(id)
     }
 
     /// Begins a read-only transaction. In the production profile its snapshot is taken at its
@@ -2145,10 +2168,9 @@ impl FirestoreState {
         now: LogicalInstant,
     ) -> Result<TransactionId, FirestoreError> {
         let id = self.begin_transaction(true, now)?;
-        if self.limit_scope == LimitScope::Production {
-            if let Some(transaction) = self.transactions.get_mut(&id) {
-                transaction.snapshot_pending = true;
-            }
+        if let Some(transaction) = self.transactions.get_mut(&id) {
+            transaction.first_read_time = None;
+            transaction.snapshot_pending = self.limit_scope == LimitScope::Production;
         }
         Ok(id)
     }
@@ -2165,10 +2187,9 @@ impl FirestoreState {
         now: LogicalInstant,
     ) -> Result<TransactionId, FirestoreError> {
         let id = self.begin_transaction(false, now)?;
-        if self.limit_scope == LimitScope::OfficialEmulator {
-            if let Some(transaction) = self.transactions.get_mut(&id) {
-                transaction.snapshot_pending = true;
-            }
+        if let Some(transaction) = self.transactions.get_mut(&id) {
+            transaction.first_read_time = None;
+            transaction.snapshot_pending = self.limit_scope == LimitScope::OfficialEmulator;
         }
         Ok(id)
     }
@@ -2267,6 +2288,7 @@ impl FirestoreState {
             waiting_to_commit: false,
             snapshot_pending: false,
             expiry_unnoticed: false,
+            first_read_time: None,
         };
         self.active_transaction_deadlines.insert((
             transaction_deadline(&transaction, self.limit_scope),
@@ -2336,13 +2358,12 @@ impl FirestoreState {
     /// Forgets a transaction that ran out of its total lifetime once a request has been refused
     /// for it (production profile); a later use answers "Invalid transaction.".
     fn forget_noticed_expiry(&mut self, id: &TransactionId) {
-        if self
-            .transactions
-            .get(id)
-            .is_some_and(|transaction| transaction.expiry_unnoticed)
-        {
-            self.finished_transaction_deadlines
-                .retain(|(_, finished)| finished != id);
+        let Some(transaction) = self.transactions.get(id) else {
+            return;
+        };
+        if transaction.expiry_unnoticed {
+            let key = (finished_lineage_deadline(transaction), id.clone());
+            self.finished_transaction_deadlines.remove(&key);
             self.finished_transactions.remove(id);
             self.transactions.remove(id);
         }
@@ -2402,7 +2423,7 @@ impl FirestoreState {
             };
             if let Some(transaction) = self.transactions.get(&id) {
                 self.finished_transaction_deadlines
-                    .remove(&(transaction_lineage_deadline(transaction), id.clone()));
+                    .remove(&(finished_lineage_deadline(transaction), id.clone()));
             }
             if self
                 .transactions
@@ -2542,6 +2563,18 @@ impl FirestoreState {
                     transaction.read_version = version;
                 }
                 transaction.read_time = time;
+            }
+            if transaction.first_read_time.is_none() {
+                // A read-only transaction's snapshot time; a read-write transaction reads at this
+                // request's time.
+                transaction.first_read_time = Some(if transaction.read_only {
+                    transaction.read_time
+                } else {
+                    match self.last_commit_time {
+                        Some(last) if last.as_nanos() > now.as_nanos() => last,
+                        _ => now,
+                    }
+                });
             }
             self.active_transaction_deadlines.insert((
                 transaction_deadline(transaction, self.limit_scope),
@@ -2960,20 +2993,7 @@ impl FirestoreState {
         &self,
         id: &TransactionId,
     ) -> Result<LogicalInstant, FirestoreError> {
-        let transaction = self.transaction(id)?;
-        debug_assert!(
-            !transaction.snapshot_pending,
-            "a read path must touch the transaction (pinning its snapshot) before it reads its time"
-        );
-        Ok(transaction.read_time)
-    }
-
-    /// Whether a transaction is read-only (`None` for a token this database does not know).
-    #[must_use]
-    pub fn transaction_is_read_only(&self, id: &TransactionId) -> Option<bool> {
-        self.transactions
-            .get(id)
-            .map(|transaction| transaction.read_only)
+        Ok(self.reading_transaction(id)?.read_time)
     }
 
     /// Snapshot version a transaction reads at.
@@ -2981,12 +3001,18 @@ impl FirestoreState {
         &self,
         id: &TransactionId,
     ) -> Result<CommitVersion, FirestoreError> {
+        Ok(self.reading_transaction(id)?.read_version)
+    }
+
+    /// [`Self::transaction`] for a read: a pending snapshot must have been pinned (by
+    /// [`Self::touch_transaction`]) before the transaction is read at its version or time.
+    fn reading_transaction(&self, id: &TransactionId) -> Result<&Transaction, FirestoreError> {
         let transaction = self.transaction(id)?;
         debug_assert!(
             !transaction.snapshot_pending,
-            "a read path must touch the transaction (pinning its snapshot) before it reads its version"
+            "a read path must touch the transaction (pinning its snapshot) before it reads"
         );
-        Ok(transaction.read_version)
+        Ok(transaction)
     }
 
     fn transaction(&self, id: &TransactionId) -> Result<&Transaction, FirestoreError> {
@@ -3023,7 +3049,7 @@ impl FirestoreState {
         id: &TransactionId,
         path: &DocumentPath,
     ) -> Result<Option<Document>, FirestoreError> {
-        let read_version = self.transaction(id)?.read_version;
+        let read_version = self.reading_transaction(id)?.read_version;
         let doc = self.get_at(path, read_version).cloned();
         self.record_transaction_read(id, path, doc.as_ref())?;
         Ok(doc)
@@ -3086,7 +3112,7 @@ impl FirestoreState {
         execution_id: QueryExecutionId,
         complete: bool,
     ) -> Result<(Vec<Document>, QueryStats), FirestoreError> {
-        let read_version = self.transaction(id)?.read_version;
+        let read_version = self.reading_transaction(id)?.read_version;
         let (docs, stats) = self.run_query_with_stats(query, Some(read_version))?;
         self.record_transaction_query_observation(
             id,
@@ -3125,7 +3151,7 @@ impl FirestoreState {
         execution_id: QueryExecutionId,
         complete: bool,
     ) -> Result<(Vec<Document>, QueryStats), FirestoreError> {
-        let read_version = self.transaction(id)?.read_version;
+        let read_version = self.reading_transaction(id)?.read_version;
         let (docs, stats) = self.run_query_with_stats(query, Some(read_version))?;
         self.record_transaction_query_observation(
             id,
@@ -3152,7 +3178,7 @@ impl FirestoreState {
         continuation: bool,
         complete: bool,
     ) -> Result<(Vec<Document>, QueryStats), FirestoreError> {
-        let read_version = self.transaction(id)?.read_version;
+        let read_version = self.reading_transaction(id)?.read_version;
         let (docs, stats) =
             self.documents_at_query_paths_with_stats(query, paths, Some(read_version));
         self.record_transaction_query_observation(
@@ -3175,7 +3201,7 @@ impl FirestoreState {
         query: &Query,
         after: &DocumentPath,
     ) -> Result<(Vec<Document>, QueryStats), FirestoreError> {
-        let read_version = self.transaction(id)?.read_version;
+        let read_version = self.reading_transaction(id)?.read_version;
         let (docs, stats) =
             self.run_query_after_document_with_stats(query, Some(read_version), after)?;
         let mut observed_query = query.clone();
@@ -3216,7 +3242,7 @@ impl FirestoreState {
         execution_id: QueryExecutionId,
         complete: bool,
     ) -> Result<(Vec<Document>, QueryStats), FirestoreError> {
-        let read_version = self.transaction(id)?.read_version;
+        let read_version = self.reading_transaction(id)?.read_version;
         let (docs, stats) =
             self.run_query_after_document_with_stats(query, Some(read_version), after)?;
         self.record_transaction_query_observation(
@@ -3508,14 +3534,22 @@ impl FirestoreState {
 
         // Commit times are microsecond-aligned (Firestore update-time precision) and advance
         // by one microsecond when the clock did not move between commits.
-        // The empty commit of a read-only transaction answers the snapshot time and consumes no
-        // commit time (P02, REST and gRPC: production's `commitTime` lies inside the first read's
-        // window and before an outside writer's commit acknowledged in between).
+        // The empty commit of a transaction that has read answers the time of its first read and
+        // consumes no commit time. Recorded: a read-write transaction over REST (P01: the time lies
+        // inside the read's window, before the Commit was sent) and a read-only one over both
+        // transports (P02: the snapshot time, before an outside writer's commit acknowledged in
+        // between). One that has not read carries no time in production (P01 gRPC read-write; the
+        // matrix `writes/preconditions-and-masks#empty-commit` outside a transaction, `{}`).
+        // Unobserved and inferred from those rows: a REST read-write empty commit with no read, a
+        // gRPC read-write one after a read, a read-only one with no read, and a later read's time.
         let snapshot_time = transaction
             .and_then(|id| self.transactions.get(id))
-            .filter(|t| t.read_only && writes.is_empty())
-            .map(|t| t.read_time);
+            .filter(|_| writes.is_empty())
+            .and_then(|t| t.first_read_time);
         let commit_time = snapshot_time.unwrap_or_else(|| self.next_commit_time(now));
+        let stamped = !writes.is_empty()
+            || snapshot_time.is_some()
+            || self.limit_scope != LimitScope::Production;
 
         // Stage every write against a working copy; fail before touching state. A write
         // whose result equals the current document is a no-op: it keeps the existing version
@@ -3619,6 +3653,7 @@ impl FirestoreState {
             write_results: results,
             version,
             changes: published_changes,
+            stamped,
         };
         let before = self.history_usage();
         let (uncompacted, after) = self.projected_history_usage(&staged_changes, now);
@@ -4845,7 +4880,7 @@ impl FirestoreState {
         let mut rows = Vec::new();
         let stats = self.select(
             query,
-            Some(self.transaction(id)?.read_version),
+            Some(self.reading_transaction(id)?.read_version),
             &required_fields,
             Consumption::Unordered,
             |document| {

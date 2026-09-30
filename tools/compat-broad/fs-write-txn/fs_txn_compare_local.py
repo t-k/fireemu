@@ -89,7 +89,9 @@ def main():
     out = Path(sys.argv[2])
     metadata = {key[8:].lower(): value for key, value in os.environ.items() if key.startswith("COMPARE_")}
     metadata.update({"table": table["name"], "program": table["program"], "planCorpusDigest": plan["corpusDigest"],
-                     "productionCorpusDigest": production["corpusDigest"], "productionFile": "recording" if recorded else "freeze",
+                     "productionCorpusDigest": production["corpusDigest"], "productionFile": str(Path(sys.argv[1])),
+                     "productionFileSha256": hashlib.sha256(Path(sys.argv[1]).read_bytes()).hexdigest(),
+                     "productionFileKind": "recording" if recorded else "freeze",
                      "localProject": "demo-program", "compareToolSha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest()})
     result = {"metadata": metadata, "complete": receipt["complete"], "failure": receipt["failureType"], "cases": None, "reads": None, "commitTimes": None}
     if receipt["complete"]:

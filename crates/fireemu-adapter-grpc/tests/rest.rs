@@ -3860,32 +3860,58 @@ fn rest_validation_codes_follow_production() {
     );
 }
 
-/// The empty commit of a transaction (P01, P02, REST): production answers a `commitTime` and no write
-/// results, for a read-write and a read-only transaction; the official emulator answers `{}`.
+/// The empty commit over REST. Production answers `{}` outside a transaction (matrix
+/// `writes/preconditions-and-masks#empty-commit`), and inside one the time of the transaction's first
+/// read as `commitTime` with no write results (P01 read-write and P02 read-only, after a read); a
+/// transaction that has not read is unrecorded and follows the gRPC rule (no time). The official
+/// emulator answers `{}` for all of them.
 #[test]
-fn rest_empty_commit_answers_a_commit_time_in_production_only() {
+fn rest_empty_commit_answers_the_first_read_time_in_production_only() {
     for strict in [true, false] {
+        let s = state_with_profile(strict);
+        let name = "projects/demo-app/databases/(default)/documents/empty-time/doc";
+        let (status, body) = call(
+            &s,
+            "POST",
+            &format!("{DOCS}:commit"),
+            json!({"writes": [{"update": {"name": name, "fields": {"v": {"integerValue": "1"}}}}]}),
+        );
+        assert_eq!(status, 200, "{body}");
+        let (status, body) = call(&s, "POST", &format!("{DOCS}:commit"), json!({"writes": []}));
+        assert_eq!(status, 200, "{body}");
+        assert_eq!(body, json!({}), "no transaction, strict={strict}");
         for options in [json!({"readWrite": {}}), json!({"readOnly": {}})] {
-            let s = state_with_profile(strict);
-            let (status, begun) = call(
-                &s,
-                "POST",
-                &format!("{DOCS}:beginTransaction"),
-                json!({"options": options}),
-            );
-            assert_eq!(status, 200, "{begun}");
-            let (status, body) = call(
-                &s,
-                "POST",
-                &format!("{DOCS}:commit"),
-                json!({"transaction": begun["transaction"], "writes": []}),
-            );
-            assert_eq!(status, 200, "{body}");
-            if strict {
-                assert!(body["commitTime"].is_string(), "strict {options}: {body}");
-                assert!(body.get("writeResults").is_none(), "{body}");
-            } else {
-                assert_eq!(body, json!({}), "emulator {options}");
+            for has_read in [false, true] {
+                let (status, begun) = call(
+                    &s,
+                    "POST",
+                    &format!("{DOCS}:beginTransaction"),
+                    json!({"options": options}),
+                );
+                assert_eq!(status, 200, "{begun}");
+                let transaction = begun["transaction"].as_str().unwrap().to_owned();
+                if has_read {
+                    let (status, body) = call(
+                        &s,
+                        "GET",
+                        &format!("{DOCS}/empty-time/doc?transaction={transaction}"),
+                        Value::Null,
+                    );
+                    assert_eq!(status, 200, "{body}");
+                }
+                let (status, body) = call(
+                    &s,
+                    "POST",
+                    &format!("{DOCS}:commit"),
+                    json!({"transaction": transaction, "writes": []}),
+                );
+                assert_eq!(status, 200, "{body}");
+                if strict && has_read {
+                    assert!(body["commitTime"].is_string(), "{options} {body}");
+                    assert!(body.get("writeResults").is_none(), "{body}");
+                } else {
+                    assert_eq!(body, json!({}), "strict={strict} {options} read={has_read}");
+                }
             }
         }
     }

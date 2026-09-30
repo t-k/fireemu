@@ -308,10 +308,11 @@ Instead of creating tenants through the Admin API in every session, declare the 
 }
 ```
 
-- A document is read by the code the Admin tenant create route reads one with, so a value production refuses stops the daemon at startup. The tenants are created empty, in file order, and settings such as `mfaConfig` and `passwordPolicyConfig` come from the document.
+- A document is read by the code the Admin tenant create route reads one with, so a value production refuses stops the daemon at startup. The tenants are created empty, in file order, and settings such as `mfaConfig` and `passwordPolicyConfig` come from the document. The file is stricter than the route in the `emulator` profile: it also refuses an unknown member and a missing or invalid `displayName`, as production does.
+- A declared tenant has what an Admin create with that document gives: an omitted `allowPasswordSignup`, `enableEmailLinkSignin` or `enableAnonymousUser` is off and multi-factor is off. A tenant the `emulator` profile creates on the way for a request that names an unknown id gets the official emulator's defaults instead (all three on, `PHONE_SMS` multi-factor), so declare what your test needs.
 - Under the `strict` profile tenants are created only in a project that allows them, as in production, so `auth.tenants` needs `auth.multiTenant.allowTenants: true` (the daemon refuses to start otherwise). The `emulator` profile takes tenants without the switch.
-- `POST /v1/sessions/{session}/reset` creates the declared tenants again, empty, and returns the switch to the declared value. Without these keys a reset leaves an Admin-set switch alone.
-- Only the default project is seeded. With `--import`, an imported tenant is authoritative for its id, and a declared tenant the import did not carry is still created.
+- The default project and every session project (`POST /v1/sessions`) start with the declared switch and tenants. `POST /v1/sessions/{session}/reset` (the default session's included) creates them again, empty, and returns the switch to the declared value; without these keys a reset leaves an Admin-set switch alone. A namespace the `emulator` profile routes by the first Admin request for an unknown project id holds no tenants at all, so nothing is seeded there.
+- With `--import`, an imported tenant is authoritative for its id, and a declared tenant the import did not carry is still created. If you keep re-importing your own export (`--import dir --export-on-exit dir`), an edit to a declared tenant is therefore ignored once its exported copy exists: the daemon prints a warning naming the tenant when the imported settings differ from the declared ones. The switch is the other way round: a declared `allowTenants` wins over the import. After a reset the declared version of a tenant comes back, not the imported one.
 
 #### Test quota-exceeded behavior
 

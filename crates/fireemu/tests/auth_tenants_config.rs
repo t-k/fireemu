@@ -581,11 +581,24 @@ fn an_import_is_authoritative_for_a_tenant_of_the_same_id_and_the_seed_keeps_the
     changed["allowPasswordSignup"] = json!(false);
     let second = write_config("second.json", &json!([changed, beta()]));
     let read = format!(
-        r#"printf '%s\n' "LIST $(curl -s "{base}/v2/projects/{PROJECT}/tenants" {admin})"; printf '%s\n' "ACME $(curl -s "{acme}" {admin})"; printf '%s\n' "BETA $(curl -s "{beta}" {admin})""#,
+        r#"printf '%s\n' "LIST $(curl -s "{base}/v2/projects/{PROJECT}/tenants" {admin})"; printf '%s\n' "ACME $(curl -s "{acme}" {admin})"; printf '%s\n' "BETA $(curl -s "{beta}" {admin})"; printf '%s\n' "USERS $(curl -s -X POST "{base}/v1/projects/{PROJECT}/tenants/acme-x7k2q/accounts:query" {admin} -d '{{"returnUserInfo": true}}')""#,
         acme = tenant("acme-x7k2q"),
         beta = tenant("beta-a1b2c"),
     );
     let log = exec(&second, &["--import", out.to_str().unwrap()], &read);
+    // The declaration of acme differs from the imported tenant, so the run says so; the tenant
+    // only the file declares is not reported.
+    assert!(
+        log.contains("warning: auth.tenants: the imported tenant \"acme-x7k2q\" is used"),
+        "{log}"
+    );
+    assert!(!log.contains("\"beta-a1b2c\" is used"), "{log}");
+    // A declaration that matches the export is not reported.
+    let unchanged = exec(&first, &["--import", out.to_str().unwrap()], &read);
+    assert!(
+        !unchanged.contains("is used and its declared settings"),
+        "{unchanged}"
+    );
     let field = |prefix: &str| -> Value {
         log.lines()
             .find_map(|line| line.strip_prefix(prefix))
@@ -604,6 +617,11 @@ fn an_import_is_authoritative_for_a_tenant_of_the_same_id_and_the_seed_keeps_the
         .collect();
     ids.sort_unstable();
     assert_eq!(ids, ["acme-x7k2q", "beta-a1b2c"], "{log}");
+    // The imported account survived in the imported tenant.
+    assert!(
+        field("USERS ").to_string().contains("kept@example.test"),
+        "{log}"
+    );
     // The imported document wins for the tenant of the same id.
     assert_eq!(field("ACME ")["allowPasswordSignup"], true, "{log}");
     // The tenant only the seed declares is still there.

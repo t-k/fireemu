@@ -262,7 +262,7 @@
         },
         "multiTenant": {
           "type": ["object", "null"],
-          "description": "The default project's multi-tenancy switch, as the Admin API's multiTenant.allowTenants: it is set when the daemon starts and after a control-plane reset (POST /v1/sessions/{s}/reset). Under the strict profile tenants are created only in a project that allows them, as in production, so declaring auth.tenants there requires allowTenants: true. Absent or null, the project starts with the switch unset, as a new production project does, and a reset leaves an Admin-set value alone.",
+          "description": "The default project's multi-tenancy switch, as the Admin API's multiTenant.allowTenants: it is set when the daemon starts, for every session project created later, and after a control-plane reset (POST /v1/sessions/{s}/reset). Under the strict profile tenants are created only in a project that allows them, as in production, so declaring auth.tenants there requires allowTenants: true. Absent or null, the project starts with the switch unset, as a new production project does, and a reset leaves an Admin-set value alone.",
           "additionalProperties": false,
           "properties": {
             "allowTenants": { "type": "boolean" }
@@ -270,13 +270,13 @@
         },
         "tenants": {
           "type": ["array", "null"],
-          "description": "The default project's tenants, each an Admin v2 Tenant document with its tenantId (a display name, a hyphen and five characters of [a-z0-9], as production generates it). A document is read by the code the Admin tenant create route reads one with, so a value production refuses stops the daemon at startup. The tenants are created empty when the daemon starts and again after a control-plane reset; an --import is authoritative for a tenant of the same id. Absent or null, no tenant is created.",
+          "description": "The default project's tenants, each an Admin v2 Tenant document with its tenantId (a display name, a hyphen and five characters of [a-z0-9], as production generates it). A document is read by the code the Admin tenant create route reads one with, so a value production refuses stops the daemon at startup. The tenants are created empty in the default project when the daemon starts, in every session project created later, and again after a control-plane reset of a session (the default session's included); an --import is authoritative for a tenant of the same id. A namespace the emulator profile routes by its first Admin request holds no tenants and is not seeded. Absent or null, no tenant is created.",
           "items": {
             "type": "object",
             "required": ["tenantId", "displayName"],
             "properties": {
-              "tenantId": { "type": "string", "pattern": "^.+-[a-z0-9]{5}$" },
-              "displayName": { "type": "string" }
+              "tenantId": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9-]{3,19}-[a-z0-9]{5}$" },
+              "displayName": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9-]{3,19}$" }
             }
           }
         },

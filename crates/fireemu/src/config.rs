@@ -1809,11 +1809,13 @@ impl RuntimeConfig {
 }
 
 impl RuntimeConfig {
-    /// `auth.multiTenant` and `auth.tenants`: the default project's multi-tenancy switch and its
-    /// tenants. A tenant document is read by the code the Admin create route reads one with, under
-    /// this file's profile, so a file accepts and refuses what the API does. The strict profile
-    /// creates tenants only in a project that allows them, so declaring tenants there without
-    /// `auth.multiTenant.allowTenants: true` is refused at load.
+    /// `auth.multiTenant` and `auth.tenants`: the multi-tenancy switch and the tenants of the
+    /// default project and of every session project. A tenant document is read by the code the
+    /// Admin create route reads one with, under this file's profile: exactly as the route reads it
+    /// under the strict profile, and under the emulator profile with production's checks added
+    /// (an unknown member, a missing or invalid display name and the id shape are refused there
+    /// too). The strict profile creates tenants only in a project that allows them, so declaring
+    /// tenants there without `auth.multiTenant.allowTenants: true` is refused at load.
     fn parse_auth_tenants(
         auth: &serde_json::Map<String, Value>,
         cfg: &mut Self,
@@ -4408,6 +4410,32 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(parsed.app_check, AppCheckConfig::disabled());
+    }
+
+    #[test]
+    fn every_canonical_example_loads_and_the_tenants_example_declares_its_tenants() {
+        let dir =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../spec/config/examples");
+        let mut loaded = 0;
+        for entry in std::fs::read_dir(&dir).expect("the examples are readable") {
+            let path = entry.unwrap().path();
+            if path.extension().is_none_or(|e| e != "json") {
+                continue;
+            }
+            let json: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap())
+                .unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+            RuntimeConfig::from_json(&json)
+                .unwrap_or_else(|e| panic!("{} must load: {e:?}", path.display()));
+            loaded += 1;
+        }
+        assert!(loaded >= 7, "the corpus must not silently shrink");
+        let json: Value =
+            serde_json::from_str(&std::fs::read_to_string(dir.join("auth-tenants.json")).unwrap())
+                .unwrap();
+        let cfg = RuntimeConfig::from_json(&json).unwrap();
+        assert_eq!(cfg.auth_multi_tenant_allow_tenants, Some(true));
+        assert_eq!(cfg.auth_tenants.len(), 2);
+        assert_eq!(cfg.tenant_seeding().unwrap().is_empty(), false);
     }
 
     #[test]

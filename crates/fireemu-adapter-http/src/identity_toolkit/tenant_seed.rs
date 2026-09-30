@@ -9,7 +9,11 @@
 //! creates the tenant in the registry and writes the members, which lets a reset (holding the
 //! admission barrier) create its tenants again.
 
-use fireemu_core_auth::store::AuthRegistry;
+use std::sync::{Arc, Mutex};
+
+use fireemu_core_auth::mfa::TotpPolicy;
+use fireemu_core_auth::store::{AuthRegistry, AuthStore};
+use fireemu_core_types::determinism::SplitMix64;
 use serde_json::{json, Value};
 
 use super::{
@@ -175,6 +179,57 @@ impl TenantSeeding {
             tenant.apply(registry, project)?;
         }
         Ok(())
+    }
+}
+
+impl TenantSeeding {
+    /// The ids of declared tenants that `project` already has (after an `--import`) with settings
+    /// other than the declared ones: the imported tenant is used, so its declaration is ignored.
+    /// Compared: the display name, the sign-in switches, the client permissions and the tenant's
+    /// multi-factor config; a setting a tenant only inherits from its project is not.
+    #[must_use]
+    pub fn shadowed_by_existing(&self, registry: &AuthRegistry, project: &str) -> Vec<String> {
+        let mut shadowed = Vec::new();
+        for tenant in &self.tenants {
+            let (Some(present), Some(present_store)) = (
+                registry.tenant_metadata(project, tenant.id()),
+                registry.tenant_store(project, tenant.id()),
+            ) else {
+                continue;
+            };
+            let scratch = AuthRegistry::new(
+                project,
+                Arc::new(Mutex::new(AuthStore::new(
+                    project,
+                    SplitMix64::new(0),
+                    TotpPolicy::default(),
+                ))),
+            );
+            if tenant.apply(&scratch, project).is_err() {
+                continue;
+            }
+            let (Some(declared), Some(declared_store)) = (
+                scratch.tenant_metadata(project, tenant.id()),
+                scratch.tenant_store(project, tenant.id()),
+            ) else {
+                continue;
+            };
+            let same_metadata = declared.display_name == present.display_name
+                && declared.allow_password_signup == present.allow_password_signup
+                && declared.enable_email_link_signin == present.enable_email_link_signin
+                && declared.enable_anonymous_user == present.enable_anonymous_user
+                && declared.disable_auth == present.disable_auth
+                && declared.disabled_user_signup == present.disabled_user_signup
+                && declared.disabled_user_deletion == present.disabled_user_deletion;
+            let same_mfa = match (declared_store.lock(), present_store.lock()) {
+                (Ok(declared), Ok(present)) => declared.mfa_config() == present.mfa_config(),
+                _ => true,
+            };
+            if !(same_metadata && same_mfa) {
+                shadowed.push(tenant.id().to_owned());
+            }
+        }
+        shadowed
     }
 }
 

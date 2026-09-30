@@ -1192,6 +1192,9 @@
             "integration": [
               "crates/fireemu-adapter-http/tests/auth_flows.rs",
               "crates/fireemu-adapter-http/tests/identity_toolkit.rs",
+              "crates/fireemu-adapter-http/tests/auth_tenant_seed.rs",
+              "crates/fireemu-core-auth/tests/tenant_seed.rs",
+              "crates/fireemu/tests/auth_tenants_config.rs",
               "tools/sdk-smoke/auth.mjs"
             ],
             "conformance": [
@@ -1295,7 +1298,7 @@
               "precision": "documented-divergence"
             },
             {
-              "behaviour": "auth.multiTenant.allowTenants and auth.tenants[] in the canonical configuration are a config seed of the default project's multi-tenancy switch and tenants: each entry is an Admin v2 Tenant document with its tenantId, read by the code the Admin tenant create route reads a document with (under the file's profile, so a file accepts and refuses what the route does; the id must have production's displayName-xxxxx shape in both profiles), and created empty with that id when the daemon starts, and again by a control-plane session reset, which also returns the switch to the declared value; an --import is applied first and is authoritative for a tenant of the same id, and a declared tenant it did not carry is created as declared. The runtime gates are unchanged: the strict profile creates tenants only in a project that allows them, so declaring tenants there without allowTenants: true stops the daemon at start, and the emulator profile takes tenants without the switch. Without the keys nothing is created and a reset leaves an Admin-set switch alone, as it does the rest of the project configuration. Only the default project is seeded; a tenant's own settings (mfaConfig, passwordPolicyConfig, ...) come from its document",
+              "behaviour": "auth.multiTenant.allowTenants and auth.tenants[] in the canonical configuration are a config seed of the default project's multi-tenancy switch and tenants: each entry is an Admin v2 Tenant document with its tenantId, read by the code the Admin tenant create route reads a document with (the strict profile exactly as the route reads it; the emulator profile the route's reading plus production's checks, so an unknown member, a missing or invalid displayName and an id without production's displayName-xxxxx shape are refused in both profiles), and created empty with that id when the daemon starts, in every session project created later, and again by a control-plane session reset (the default session's included), which also returns the switch to the declared value; an --import is applied first and is authoritative for a tenant of the same id (a startup warning names a declared tenant it replaced with other settings), and a declared tenant it did not carry is created as declared. The runtime gates are unchanged: the strict profile creates tenants only in a project that allows them, so declaring tenants there without allowTenants: true stops the daemon at start, and the emulator profile takes tenants without the switch. Without the keys nothing is created and a reset leaves an Admin-set switch alone, as it does the rest of the project configuration. A namespace the emulator profile routes by the first Admin request for an unknown project id holds no tenants (it cannot create one), so nothing is seeded there; a declared tenant has the Admin create defaults, not the on-the-way ones; a tenant's own settings (mfaConfig, passwordPolicyConfig, ...) come from its document",
               "precision": "boundary-conformance"
             },
             {

@@ -909,7 +909,15 @@ fn assemble_suite(assembly: ServiceAssembly, exec_mode: bool) -> Result<ReadySui
     reapply_explicit_auth_quota(&cfg, &registry)?;
     // The declared switch and tenants come last: an imported tenant is authoritative for its id,
     // and a tenant the import did not carry is created as declared.
-    cfg.tenant_seeding()?
+    let seeding = cfg.tenant_seeding()?;
+    if !quiet {
+        for id in seeding.shadowed_by_existing(&registry, &cfg.auth_project) {
+            eprintln!(
+                "warning: auth.tenants: the imported tenant {id:?} is used and its declared settings are ignored (an --import is authoritative for a tenant of the same id)"
+            );
+        }
+    }
+    seeding
         .apply(&registry, &cfg.auth_project)
         .map_err(|error| format!("auth.tenants: {error}"))?;
     let hub_state = Arc::new(hub::HubState {

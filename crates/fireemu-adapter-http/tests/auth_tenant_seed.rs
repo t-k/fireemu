@@ -328,3 +328,54 @@ fn a_declaration_sets_the_switch_when_declared_and_leaves_a_present_tenant_alone
     declaration.apply(&registry, "demo-app").unwrap();
     assert!(state.store.lock().unwrap().allows_tenants());
 }
+
+#[test]
+fn a_declared_tenant_an_import_replaced_with_other_settings_is_reported() {
+    use fireemu_adapter_http::identity_toolkit::TenantSeeding;
+    let (_, registry) = with_registry(emulator_state());
+    let declared = TenantSeeding::new(None, seeds(&[acme()], true).unwrap());
+    // Nothing there yet: nothing shadows.
+    assert!(declared
+        .shadowed_by_existing(&registry, "demo-app")
+        .is_empty());
+    // The same declaration is not a difference.
+    declared.apply(&registry, "demo-app").unwrap();
+    assert!(declared
+        .shadowed_by_existing(&registry, "demo-app")
+        .is_empty());
+    // Another tenant of the same id, with other settings, is.
+    let other = |change: fn(&mut Value)| {
+        let (_, registry) = with_registry(emulator_state());
+        let mut document = acme();
+        change(&mut document);
+        seeds(&[document], true).unwrap()[0]
+            .apply(&registry, "demo-app")
+            .unwrap();
+        declared.shadowed_by_existing(&registry, "demo-app")
+    };
+    assert_eq!(
+        other(|d| d["displayName"] = json!("acme")),
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        other(|d| d["allowPasswordSignup"] = json!(false)),
+        ["acme-x7k2q"]
+    );
+    assert_eq!(
+        other(|d| d["mfaConfig"] = json!({"state": "DISABLED"})),
+        ["acme-x7k2q"]
+    );
+    assert_eq!(
+        other(|d| d["enableAnonymousUser"] = json!(true)),
+        ["acme-x7k2q"]
+    );
+    assert_eq!(other(|d| d["disableAuth"] = json!(true)), ["acme-x7k2q"]);
+    assert_eq!(
+        other(|d| d["enableEmailLinkSignin"] = json!(true)),
+        ["acme-x7k2q"]
+    );
+    assert_eq!(
+        other(|d| d["client"] = json!({"permissions": {"disabledUserSignup": true}})),
+        ["acme-x7k2q"]
+    );
+}

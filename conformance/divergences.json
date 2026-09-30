@@ -2159,6 +2159,60 @@
         "approvalRecord": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)"
       }
     },
+    "storage-probe/gcs-resumable-upload#start": {
+      "documents": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)",
+      "reason": "In fireemu, the JSON API resumable start answers no body and a session URL that repeats the start request's query and adds upload_id (recorded, STORAGE-OBJECT probe-v2, 2026-09-30), as production does, where the official emulator writes the text `OK` and rebuilds the query from the object name. Recorded against production in stage 3 v9 (2026-09-30) and pinned by the crate tests.",
+      "authority": {
+        "kind": "production-spec",
+        "sourceUrls": [
+          "https://cloud.google.com/storage/docs/json_api/v1/objects",
+          "https://github.com/firebase/firebase-tools/tree/v15.28.2"
+        ],
+        "checkedOn": "2026-09-30",
+        "officialBaseline": {
+          "package": "firebase-tools",
+          "version": "15.28.2"
+        },
+        "fixture": "conformance/storage-matrix.json#gcs-resumable-upload#start",
+        "approvalRecord": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)"
+      }
+    },
+    "storage-probe/gcs-resumable-upload#start-name-in-query": {
+      "documents": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)",
+      "reason": "In fireemu, the JSON API resumable start answers no body and a session URL that repeats the start request's query and adds upload_id (recorded, STORAGE-OBJECT probe-v2, 2026-09-30), as production does, where the official emulator writes the text `OK` and rebuilds the query from the object name. Recorded against production in stage 3 v9 (2026-09-30) and pinned by the crate tests.",
+      "authority": {
+        "kind": "production-spec",
+        "sourceUrls": [
+          "https://cloud.google.com/storage/docs/json_api/v1/objects",
+          "https://github.com/firebase/firebase-tools/tree/v15.28.2"
+        ],
+        "checkedOn": "2026-09-30",
+        "officialBaseline": {
+          "package": "firebase-tools",
+          "version": "15.28.2"
+        },
+        "fixture": "conformance/storage-matrix.json#gcs-resumable-upload#start-name-in-query",
+        "approvalRecord": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)"
+      }
+    },
+    "storage-probe/gcs-resumable-upload#start-chunked": {
+      "documents": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)",
+      "reason": "In fireemu, the JSON API resumable start answers no body and a session URL that repeats the start request's query and adds upload_id (recorded, STORAGE-OBJECT probe-v2, 2026-09-30), as production does, where the official emulator writes the text `OK` and rebuilds the query from the object name. Recorded against production in stage 3 v9 (2026-09-30) and pinned by the crate tests.",
+      "authority": {
+        "kind": "production-spec",
+        "sourceUrls": [
+          "https://cloud.google.com/storage/docs/json_api/v1/objects",
+          "https://github.com/firebase/firebase-tools/tree/v15.28.2"
+        ],
+        "checkedOn": "2026-09-30",
+        "officialBaseline": {
+          "package": "firebase-tools",
+          "version": "15.28.2"
+        },
+        "fixture": "conformance/storage-matrix.json#gcs-resumable-upload#start-chunked",
+        "approvalRecord": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)"
+      }
+    },
     "storage-probe/rules-request-model#cache-control-visible-to-rules": {
       "documents": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)",
       "reason": "resource.cacheControl is a production rules field. fireemu passes it; the official emulator's rules resource omits it, so reading it raises and the read was measured to deny.",

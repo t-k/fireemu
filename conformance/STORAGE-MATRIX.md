@@ -161,7 +161,7 @@ parity: 17 &middot; documented-divergence: 16
 
 ## json-api
 
-parity: 37 &middot; documented-divergence: 38
+parity: 34 &middot; documented-divergence: 41
 
 | program | step | status |
 | --- | --- | --- |
@@ -179,14 +179,14 @@ parity: 37 &middot; documented-divergence: 38
 | `gcs-insert-and-get` | `insert-with-user-token-bypasses-rules` | documented-divergence |
 | `gcs-insert-and-get` | `get-closed-with-user-token` | documented-divergence |
 | `gcs-insert-and-get` | `get-with-garbage-bearer` | documented-divergence |
-| `gcs-resumable-upload` | `start` | parity |
+| `gcs-resumable-upload` | `start` | documented-divergence |
 | `gcs-resumable-upload` | `put-whole-body` | documented-divergence |
 | `gcs-resumable-upload` | `put-after-finish` | parity |
 | `gcs-resumable-upload` | `put-unknown-session` | parity |
 | `gcs-resumable-upload` | `put-without-upload-id` | parity |
 | `gcs-resumable-upload` | `start-without-name` | parity |
-| `gcs-resumable-upload` | `start-name-in-query` | parity |
-| `gcs-resumable-upload` | `start-chunked` | parity |
+| `gcs-resumable-upload` | `start-name-in-query` | documented-divergence |
+| `gcs-resumable-upload` | `start-chunked` | documented-divergence |
 | `gcs-resumable-upload` | `chunk-one` | documented-divergence |
 | `gcs-resumable-upload` | `chunk-two` | documented-divergence |
 | `gcs-resumable-upload` | `chunked-object` | documented-divergence |

@@ -6,8 +6,8 @@
   },
   "project": "demo-storage-probe",
   "summary": {
-    "parity": 114,
-    "documented-divergence": 105,
+    "parity": 111,
+    "documented-divergence": 108,
     "debt": 0
   },
   "programs": [
@@ -4681,15 +4681,25 @@
       "steps": [
         {
           "id": "start",
-          "status": "parity",
-          "value": {
+          "status": "documented-divergence",
+          "oracle": {
             "body": "OK",
             "headers": {
               "content-type": "text/plain; charset=utf-8",
               "location": "http://<host>/upload/storage/v1/b/demo-storage-probe.appspot.com/o?name=open%2Fgcs%2Fresumable.bin&uploadType=resumable&upload_id=<upload-id>"
             },
             "status": 200
-          }
+          },
+          "fireemu": {
+            "body": "",
+            "headers": {
+              "content-type": "text/plain; charset=utf-8",
+              "location": "http://<host>/upload/storage/v1/b/demo-storage-probe.appspot.com/o?uploadType=resumable&upload_id=<upload-id>"
+            },
+            "status": 200
+          },
+          "documents": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)",
+          "reason": "In fireemu, the JSON API resumable start answers no body and a session URL that repeats the start request's query and adds upload_id (recorded, STORAGE-OBJECT probe-v2, 2026-09-30), as production does, where the official emulator writes the text `OK` and rebuilds the query from the object name. Recorded against production in stage 3 v9 (2026-09-30) and pinned by the crate tests."
         },
         {
           "id": "put-whole-body",
@@ -4800,27 +4810,47 @@
         },
         {
           "id": "start-name-in-query",
-          "status": "parity",
-          "value": {
+          "status": "documented-divergence",
+          "oracle": {
             "body": "OK",
             "headers": {
               "content-type": "text/plain; charset=utf-8",
               "location": "http://<host>/upload/storage/v1/b/demo-storage-probe.appspot.com/o?name=open%2Fgcs%2Fquery-named.bin&uploadType=resumable&upload_id=<upload-id>"
             },
             "status": 200
-          }
+          },
+          "fireemu": {
+            "body": "",
+            "headers": {
+              "content-type": "text/plain; charset=utf-8",
+              "location": "http://<host>/upload/storage/v1/b/demo-storage-probe.appspot.com/o?uploadType=resumable&name=open%2Fgcs%2Fquery-named.bin&upload_id=<upload-id>"
+            },
+            "status": 200
+          },
+          "documents": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)",
+          "reason": "In fireemu, the JSON API resumable start answers no body and a session URL that repeats the start request's query and adds upload_id (recorded, STORAGE-OBJECT probe-v2, 2026-09-30), as production does, where the official emulator writes the text `OK` and rebuilds the query from the object name. Recorded against production in stage 3 v9 (2026-09-30) and pinned by the crate tests."
         },
         {
           "id": "start-chunked",
-          "status": "parity",
-          "value": {
+          "status": "documented-divergence",
+          "oracle": {
             "body": "OK",
             "headers": {
               "content-type": "text/plain; charset=utf-8",
               "location": "http://<host>/upload/storage/v1/b/demo-storage-probe.appspot.com/o?name=open%2Fgcs%2Fchunked.bin&uploadType=resumable&upload_id=<upload-id>"
             },
             "status": 200
-          }
+          },
+          "fireemu": {
+            "body": "",
+            "headers": {
+              "content-type": "text/plain; charset=utf-8",
+              "location": "http://<host>/upload/storage/v1/b/demo-storage-probe.appspot.com/o?uploadType=resumable&name=open%2Fgcs%2Fchunked.bin&upload_id=<upload-id>"
+            },
+            "status": 200
+          },
+          "documents": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)",
+          "reason": "In fireemu, the JSON API resumable start answers no body and a session URL that repeats the start request's query and adds upload_id (recorded, STORAGE-OBJECT probe-v2, 2026-09-30), as production does, where the official emulator writes the text `OK` and rebuilds the query from the object name. Recorded against production in stage 3 v9 (2026-09-30) and pinned by the crate tests."
         },
         {
           "id": "chunk-one",

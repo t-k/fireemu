@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  isLocalAggregateRecipeCleanlyBlocked,
   isLocalAggregateResultComplete,
   localAggregateRecipeIds,
   replayLocalAggregate,
@@ -16,6 +17,9 @@ function fixture({
   haltAfterMediaRead = false,
   finishFailure = false,
   startFailure = false,
+  preflightPresent = false,
+  transportFailsAt = null,
+  throttleAt = null,
 } = {}) {
   const plan = buildStage3DraftPlan({
     projectId: "example-project",
@@ -28,6 +32,8 @@ function fixture({
   let factories = 0,
     closes = 0,
     providerCalls = 0,
+    transportFailures = 0,
+    throttled = 0,
     halted = false;
   const wire = {
     snapshot: () => ({
@@ -37,6 +43,8 @@ function fixture({
       halted,
       closed: closes > 0,
       readAfterHaltBytes: 0,
+      transportFailures,
+      throttled,
     }),
     close: async () => {
       closes++;
@@ -45,6 +53,14 @@ function fixture({
       providerCalls++;
       assert.equal(halted, false, "no new transport after halt");
       requests.push({ href, ...init });
+      if (transportFailsAt === requests.length) {
+        transportFailures++;
+        throw new TypeError("fetch failed");
+      }
+      if (throttleAt === requests.length) {
+        throttled++;
+        return new Response("{}", { status: 503 });
+      }
       const url = new URL(href);
       if (url.pathname === "/v1/storage/rules")
         return Response.json({
@@ -81,6 +97,10 @@ function fixture({
         objects.delete(name);
         return new Response(null, { status: 204 });
       }
+      if (!object && preflightPresent && init.method === "GET")
+        return url.searchParams.get("alt") === "media"
+          ? new Response("present")
+          : Response.json({ bucket: plan.bucket, name, generation: "9", metageneration: "1" });
       if (!object) return Response.json({ error: "missing" }, { status: 404 });
       if (haltAfterMediaRead && url.searchParams.get("alt") === "media") halted = true;
       return url.searchParams.get("alt") === "media"
@@ -353,4 +373,103 @@ test("the stop reason is the first line of the error, at most 200 characters", a
     throw new Error("short\nsecond");
   };
   assert.equal((await replayLocalAggregate(short.options)).reason, "short");
+});
+
+// ---- a recipe that fails without a transport failure or a throttled answer ends only that recipe ----------
+
+/** Stop the run at the recipe boundary once `count` recipes have finished. */
+const stopAfterFinished = (f, count) => () =>
+  f.events.filter((row) => row.type === "recipe-finish").length >= count;
+
+test("a recipe that fails cleanly (nothing owned, prefix empty) ends only that recipe, and the next one runs", async () => {
+  const f = fixture({ preflightPresent: true });
+  f.options.stopAfter = stopAfterFinished(f, 3);
+  const result = await replayLocalAggregate(f.options);
+  assert.equal(result.reason, "RUN_DEADLINE_REACHED", "the run went on until the boundary we set");
+  assert.deepEqual(result.counter.completedRecipes, [3, 0]);
+  assert.equal(result.failedRecipes.length, 3);
+  assert.deepEqual(
+    result.failedRecipes.map((row) => row.recipeId),
+    localAggregateRecipeIds(f.options.plan, 0).slice(0, 3),
+  );
+  for (const row of result.failedRecipes) assert.match(row.reason, /\S/);
+  assert.deepEqual(result.unresolved, []);
+  assert.deepEqual(result.cleanupFailures, []);
+  // Each failed recipe has its own finish record, saying it failed, and a proven-empty prefix.
+  const finishes = f.events.filter((row) => row.type === "recipe-finish");
+  assert.equal(finishes.length, 3);
+  for (const row of finishes) {
+    assert.equal(row.result.status, "LOCAL_BLOCKED");
+    assert.ok(row.result.failure);
+  }
+  assert.equal(f.events.filter((row) => row.type === "recipe-begin").length, 3);
+  assert.equal(result.results.length, 3);
+});
+
+test("a recipe that fails after a failed transport, or after a throttled answer, stops the whole run", async () => {
+  for (const options of [{ transportFailsAt: 3 }, { throttleAt: 3 }]) {
+    const f = fixture({ preflightPresent: true, ...options });
+    f.options.stopAfter = stopAfterFinished(f, 3);
+    const result = await replayLocalAggregate(f.options);
+    assert.notEqual(result.reason, "RUN_DEADLINE_REACHED", JSON.stringify(options));
+    assert.deepEqual(result.failedRecipes, [], "the recipe that met it is not a local failure");
+    assert.deepEqual(result.counter.completedRecipes, [0, 0]);
+    assert.equal(f.events.filter((row) => row.type === "recipe-finish").length, 0);
+  }
+});
+
+test("a recipe whose cleanup cannot be proven still stops the run, as before", async () => {
+  const f = fixture({ uploadFailure: true });
+  const result = await replayLocalAggregate(f.options);
+  assert.equal(result.status, "LOCAL_NEEDS_RECOVERY");
+  assert.deepEqual(result.failedRecipes, []);
+  assert.deepEqual(result.counter.completedRecipes, [0, 0]);
+});
+
+test("a run whose recipes all pass reports no failed recipe", async () => {
+  const f = fixture();
+  f.options.stopAfter = stopAfterFinished(f, 1);
+  const result = await replayLocalAggregate(f.options);
+  assert.deepEqual(result.failedRecipes, []);
+});
+
+test("only a clean, failed recipe with a matching request count is a recipe-local failure", () => {
+  const blocked = {
+    status: "LOCAL_BLOCKED",
+    recipeId: "storage-object/firebase/simple-upload",
+    requests: 13,
+    failure: { reason: "an answer that differs" },
+    cleanupFailures: [],
+    unresolved: [],
+  };
+  const accepts = (result, sequence = 13) =>
+    isLocalAggregateRecipeCleanlyBlocked(result, blocked.recipeId, sequence);
+  assert.equal(accepts(blocked), true);
+  assert.equal(accepts({ ...blocked, status: "LOCAL_COMPLETE" }), false);
+  assert.equal(accepts({ ...blocked, status: "LOCAL_NEEDS_RECOVERY" }), false);
+  assert.equal(accepts({ ...blocked, failure: null }), false);
+  assert.equal(accepts({ ...blocked, failure: undefined }), false);
+  assert.equal(accepts({ ...blocked, recipeId: "different" }), false);
+  assert.equal(accepts({ ...blocked, cleanupFailures: ["failed"] }), false);
+  assert.equal(accepts({ ...blocked, cleanupFailures: undefined }), false);
+  assert.equal(accepts({ ...blocked, unresolved: ["owned"] }), false);
+  assert.equal(accepts({ ...blocked, unresolved: undefined }), false);
+  assert.equal(accepts({ ...blocked, requests: 12 }), false);
+  assert.equal(accepts(blocked, NaN), false);
+  assert.equal(accepts(blocked, -1), false);
+  assert.equal(accepts(undefined), false);
+  assert.equal(accepts(null), false);
+});
+
+test("the failure of a recipe is journaled with the recipe, its reason and a proven-empty prefix", async () => {
+  const f = fixture({ preflightPresent: true });
+  f.options.stopAfter = stopAfterFinished(f, 1);
+  const result = await replayLocalAggregate(f.options);
+  const finish = f.events.find((row) => row.type === "recipe-finish");
+  assert.equal(finish.recipeId, "storage-object/firebase/simple-upload");
+  assert.equal(finish.result.status, "LOCAL_BLOCKED");
+  assert.match(finish.result.failure.reason, /INITIAL_ABSENCE_FAILED|absent|baseline/i);
+  assert.equal(result.failedRecipes[0].recording, 1);
+  assert.equal(result.failedRecipes[0].reason, finish.result.failure.reason);
+  assert.equal(f.objects.size, 0);
 });

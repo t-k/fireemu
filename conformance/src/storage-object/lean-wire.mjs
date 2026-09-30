@@ -323,6 +323,10 @@ export function createLeanWire({
 
   let attempts = 0;
   let realRequests = 0;
+  // What a caller must not go on after: transports that failed, and throttled (429) or failed (5xx)
+  // answers. A recipe that fails without either may be followed by the next recipe.
+  let transportFailures = 0;
+  let throttled = 0;
   let active = false;
   let halted = false;
   let closed = false;
@@ -444,6 +448,7 @@ export function createLeanWire({
           : await pacer.dispatch(route.name, attempt);
       bytes = Buffer.from(await response.arrayBuffer());
     } catch (error) {
+      transportFailures++;
       await record({
         sequence,
         at: new Date().toISOString(),
@@ -452,6 +457,7 @@ export function createLeanWire({
       });
       throw error;
     }
+    if (response.status === 429 || response.status >= 500) throttled++;
     if (bytes.length > MAX_RESPONSE_BYTES) {
       halted = true;
       await record({
@@ -538,6 +544,8 @@ export function createLeanWire({
       Object.freeze({
         attempts,
         realRequests,
+        transportFailures,
+        throttled,
         active: false,
         busy: active,
         halted,

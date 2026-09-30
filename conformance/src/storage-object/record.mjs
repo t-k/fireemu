@@ -496,6 +496,8 @@ export async function recordRun(deps) {
               outcome,
               status: result?.status,
               reason: result?.reason ?? null,
+              // Recipes that failed and were cleaned up, each with its reason: the recording went on.
+              failedRecipes: result?.failedRecipes ?? [],
               requests,
               plan: { runId: ids.runId, prefix },
               ...(outcome === "needs-recovery"

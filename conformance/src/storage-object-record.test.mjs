@@ -701,6 +701,7 @@ test("the private summary names the outcome, and the unresolved objects of a run
       outcome: "recorded",
       status: "LOCAL_COMPLETE",
       reason: null,
+      failedRecipes: [],
       requests: 0,
       plan: { runId: RUN, prefix: `storage-object/${RUN}/` },
     },
@@ -1609,4 +1610,36 @@ test("a row of several projects that does not name this one changes nothing", as
     sandboxAtBaseline: true,
   });
   assert.equal((await recordRun(setup({ ledgerText: other }).deps)).outcome, "recorded");
+});
+
+test("a recording that went on past failed recipes is recorded, and the private summary names them", async () => {
+  const failed = [
+    { recording: 1, recipeId: "storage-object/gcs/copy-rewrite", reason: "rewrite answer differs" },
+  ];
+  const s = setup({
+    replay: async (options) => {
+      const wire = options.wireFactory({
+        origins: [options.storageOrigin, options.authOrigin, options.localControl.origin],
+        limits: options.plan,
+        captureDirectory: options.captureDirectory,
+        onByteReserve: async () => {},
+      });
+      return {
+        status: "LOCAL_COMPLETE",
+        wire: wire.snapshot(),
+        failedRecipes: failed,
+        unresolved: [],
+        cleanupFailures: [],
+      };
+    },
+  });
+  const result = await recordRun(s.deps);
+  assert.equal(result.outcome, "recorded");
+  assert.equal(s.ledgerRows.at(-1).outcome, "recorded");
+  assert.deepEqual(s.privateFiles.meta.at(-1).failedRecipes, failed);
+  assert.deepEqual(lockFiles(s), []);
+  // A result without the field says none.
+  const t = setup();
+  await recordRun(t.deps);
+  assert.deepEqual(t.privateFiles.meta.at(-1).failedRecipes, []);
 });

@@ -114,6 +114,75 @@ export function isLocalAggregateResultComplete(result, recipeId, sequence) {
   );
 }
 
+/**
+ * A recipe that stopped on its own account: it failed, its owned objects were cleaned up, and the
+ * run prefix was read back empty, so it holds nothing pending and the next recipe may run.
+ */
+export function isLocalAggregateRecipeCleanlyBlocked(result, recipeId, sequence) {
+  return Boolean(
+    result &&
+    result.status === "LOCAL_BLOCKED" &&
+    result.failure &&
+    result.recipeId === recipeId &&
+    Array.isArray(result.cleanupFailures) &&
+    result.cleanupFailures.length === 0 &&
+    Array.isArray(result.unresolved) &&
+    result.unresolved.length === 0 &&
+    Number.isSafeInteger(sequence) &&
+    sequence >= 0 &&
+    result.requests === sequence,
+  );
+}
+
+const firstLine = (error) =>
+  String(error?.message ?? error)
+    .split("\n")[0]
+    .slice(0, 200);
+
+/**
+ * Whether the wire saw a failed transport or a throttled (429) or failed (5xx) answer since
+ * `before`, or halted: those end the run, whatever recipe met them.
+ */
+export function wireTroubleSince(wire, before) {
+  const state = wire.snapshot();
+  return (
+    state.halted === true ||
+    (state.transportFailures ?? 0) > (before.transportFailures ?? 0) ||
+    (state.throttled ?? 0) > (before.throttled ?? 0)
+  );
+}
+
+/**
+ * A recipe that threw is a recipe-local failure only if nothing it owns is pending: its confirmed
+ * objects are deleted, the run prefix reads back empty, its sender is closed, and the wire saw no
+ * transport failure and no throttled answer. Resolves with the recipe's result (blocked, with its
+ * failure) or with `null`, in which case nothing has been decided and the caller's stop path
+ * (cleanup, then needs-recovery or stopped-clean) runs as before.
+ */
+export async function recoverFailedRecipe({ sender, recipeId, error, wire, wireReady, before }) {
+  if (!wireReady() || wireTroubleSince(wire, before)) return null;
+  try {
+    if (sender.snapshot().mode === "subject") sender.beginCleanup();
+    if (sender.snapshot().mode === "cleanup") {
+      const cleanup = await sender.cleanupConfirmedOwned({ canSend: wireReady });
+      if (cleanup.cleanupFailures.length > 0 || cleanup.unresolved.length > 0) return null;
+      await sender.verifyRunEmpty();
+      sender.close();
+    }
+    if (sender.unresolved().length > 0 || wireTroubleSince(wire, before)) return null;
+  } catch {
+    return null;
+  }
+  return {
+    recipeId,
+    status: "LOCAL_BLOCKED",
+    requests: sender.snapshot().total,
+    failure: { reason: firstLine(error) },
+    cleanupFailures: [],
+    unresolved: [],
+  };
+}
+
 /** Execute the trusted local registry through one counter and one shared wire provider. */
 export async function replayLocalAggregate(options) {
   const keys = new Set([
@@ -207,6 +276,7 @@ export async function replayLocalAggregate(options) {
     unresolved = [],
     cleanupFailures = [];
   const results = [];
+  const failedRecipes = [];
   const wireReady = () => {
     const state = wire.snapshot();
     return (
@@ -232,11 +302,16 @@ export async function replayLocalAggregate(options) {
         Boolean(
           current &&
           current.token === proof.recipeToken &&
-          isLocalAggregateResultComplete(
+          (isLocalAggregateResultComplete(
             current.result,
             proof.recipeId,
             counter.snapshot().total,
-          ) &&
+          ) ||
+            isLocalAggregateRecipeCleanlyBlocked(
+              current.result,
+              proof.recipeId,
+              counter.snapshot().total,
+            )) &&
           wireReady() &&
           wire.snapshot().attempts === counter.snapshot().total &&
           verifyLocalRecipeTerminal(current.sender, proof),
@@ -297,16 +372,30 @@ export async function replayLocalAggregate(options) {
           fetchImpl: guardedFetch,
           onJournal,
         });
-        current.result = freeze(
-          await replay({
+        const before = wire.snapshot();
+        try {
+          current.result = freeze(
+            await replay({
+              sender: current.sender,
+              recipe,
+              bucket: plan.bucket,
+              prefix: plan.recordings[recording].prefix,
+              onCapture,
+              allowKnownLocalListGaps: true,
+            }),
+          );
+        } catch (error) {
+          const recovered = await recoverFailedRecipe({
             sender: current.sender,
-            recipe,
-            bucket: plan.bucket,
-            prefix: plan.recordings[recording].prefix,
-            onCapture,
-            allowKnownLocalListGaps: true,
-          }),
-        );
+            recipeId: current.recipeId,
+            error,
+            wire,
+            wireReady,
+            before,
+          });
+          if (!recovered) throw error;
+          current.result = freeze(recovered);
+        }
         await onJournal(
           Object.freeze({
             type: "aggregate-recipe-result",
@@ -316,6 +405,14 @@ export async function replayLocalAggregate(options) {
           }),
         );
         await counter.finishRecipe(token);
+        if (current.result.status !== "LOCAL_COMPLETE")
+          failedRecipes.push(
+            Object.freeze({
+              recording: recording + 1,
+              recipeId: recipe.id,
+              reason: current.result.failure.reason,
+            }),
+          );
         results.push(
           Object.freeze({
             ...current.result,
@@ -388,6 +485,7 @@ export async function replayLocalAggregate(options) {
     failedRecipeId: status === "LOCAL_COMPLETE" ? null : (current?.recipeId ?? null),
     reason,
     results,
+    failedRecipes,
     unresolved,
     cleanupFailures,
     counter: counter.snapshot(),

@@ -1407,3 +1407,68 @@ test("the configuration is checked before any request", () => {
     );
   }
 });
+
+// ---- the counts an aggregate uses to tell a recipe-local failure from a run-level one ----------------------
+
+test("the wire counts what a caller must not go on after: failed transports and throttled or failed answers", async () => {
+  const COUNT_BUCKET = "fireemu-oracle-query.firebasestorage.app";
+  const COUNT_PREFIX = "storage-object/0123456789abcdef0123/";
+  let next = () => new Response("{}", { status: 404 });
+  const wire = createLeanWire({
+    bucket: COUNT_BUCKET,
+    projectId: "fireemu-oracle-query",
+    prefix: COUNT_PREFIX,
+    origins: {
+      storage: "http://127.0.0.1:19199",
+      auth: "http://127.0.0.1:19099",
+      control: "http://127.0.0.1:19198",
+    },
+    adminToken: async () => "ya29.synthetic-owner-access-token-value",
+    authApiKey: "AIzaSyD-synthetic-web-api-key-value-000000",
+    readRules: async () => ({ source: "x" }),
+    fetchImpl: async () => next(),
+    capture: async () => {},
+    pacer: { dispatch: (_name, attempt) => attempt() },
+  });
+  const read = () =>
+    wire.fetch(
+      `http://127.0.0.1:19199/v0/b/${COUNT_BUCKET}/o/${encodeURIComponent(`${COUNT_PREFIX}a.bin`)}`,
+      {
+        method: "GET",
+        headers: {},
+      },
+    );
+  assert.equal(wire.snapshot().transportFailures, 0);
+  assert.equal(wire.snapshot().throttled, 0);
+  // Ordinary answers, refusals included, count for nothing.
+  for (const status of [200, 204, 400, 401, 403, 404, 409, 412, 499]) {
+    next = () => new Response(null, { status: [204].includes(status) ? 204 : status });
+    await (await read()).arrayBuffer();
+  }
+  assert.equal(wire.snapshot().throttled, 0);
+  // A 429 and any 5xx are counted, and the answer is still returned and captured.
+  for (const [status, count] of [
+    [429, 1],
+    [500, 2],
+    [503, 3],
+    [599, 4],
+  ]) {
+    next = () => new Response("{}", { status });
+    assert.equal((await read()).status, status);
+    assert.equal(wire.snapshot().throttled, count, `${status}`);
+  }
+  // A transport that fails is counted where it fails, and the error goes on to the caller.
+  next = () => {
+    throw new TypeError("fetch failed");
+  };
+  await assert.rejects(read(), /fetch failed/);
+  assert.equal(wire.snapshot().transportFailures, 1);
+  await assert.rejects(read(), /fetch failed/);
+  assert.equal(wire.snapshot().transportFailures, 2);
+  assert.equal(wire.snapshot().throttled, 4, "a failed transport is not a throttled answer");
+  // A refusal of the route table sends nothing and counts for neither.
+  await assert.rejects(
+    wire.fetch("http://127.0.0.1:19199/v0/b/other-bucket/o/x", { method: "GET", headers: {} }),
+  );
+  assert.equal(wire.snapshot().transportFailures, 2);
+});

@@ -609,18 +609,31 @@ test("a rate-limited MFA answer is indeterminate, never a behavior", async () =>
 
 test("a phone control start matches any answer production recorded for a control start", async () => {
   const { classify, timingAlternatives } = await import("./auth-mfa/run.mjs");
-  const refusal = (message) => ({ status: 400, body: { error: { code: 400, message, status: "INVALID_ARGUMENT" } } });
-  const exists = refusal("SECOND_FACTOR_EXISTS : Phone number already enrolled as second factor for this account.");
+  const refusal = (message) => ({
+    status: 400,
+    body: { error: { code: 400, message, status: "INVALID_ARGUMENT" } },
+  });
+  const exists = refusal(
+    "SECOND_FACTOR_EXISTS : Phone number already enrolled as second factor for this account.",
+  );
   const expired = refusal("TOKEN_EXPIRED");
   const saved = {
-    steps: { "control-start-s450": expired, "control-start-s600": exists, "aged-session-s600": exists },
+    steps: {
+      "control-start-s450": expired,
+      "control-start-s600": exists,
+      "aged-session-s600": exists,
+    },
     second: { "control-start-s600": expired },
   };
   const program = "auth-mfa/lifetime";
   const known = timingAlternatives(program, "control-start-s450", saved);
   assert.deepEqual(known, [expired, exists]);
   const row = (fireemu) =>
-    classify({ production: expired, fireemu, timing: timingAlternatives(program, "control-start-s450", saved) });
+    classify({
+      production: expired,
+      fireemu,
+      timing: timingAlternatives(program, "control-start-s450", saved),
+    });
   assert.equal(row(expired), "MATCH");
   assert.equal(row(exists), "MATCH_TIMING_DEPENDENT");
   assert.equal(row(refusal("INVALID_ID_TOKEN")), "MISMATCH");
@@ -653,10 +666,14 @@ test("quota-free sends each account one wrong code and mints no token", async ()
 test("a quota-limited row passes only through its matching re-observation", async () => {
   const { REOBSERVED, reobservedStatus } = await import("./auth-mfa/run.mjs");
   assert.deepEqual(REOBSERVED, {
-    "auth-mfa/totp/sign-in#replayed-enrollment-code": "auth-mfa/totp/quota-free#replayed-enrollment-code",
+    "auth-mfa/totp/sign-in#replayed-enrollment-code":
+      "auth-mfa/totp/quota-free#replayed-enrollment-code",
     "auth-mfa/totp/sign-in#older-unused-code": "auth-mfa/totp/quota-free#older-unused-code",
   });
-  const refusal = (message) => ({ status: 400, body: { error: { code: 400, message, status: "INVALID_ARGUMENT" } } });
+  const refusal = (message) => ({
+    status: 400,
+    body: { error: { code: 400, message, status: "INVALID_ARGUMENT" } },
+  });
   const invalid = refusal("INVALID_CODE");
   const quota = refusal("QUOTA_EXCEEDED : Exceeded quota.");
   const rows = new Map([
@@ -671,7 +688,10 @@ test("a quota-limited row passes only through its matching re-observation", asyn
   assert.equal(row(original, "INDETERMINATE", { status: 500, body: {} }), "INDETERMINATE");
   assert.equal(row(original, "INDETERMINATE", { status: 200, body: {} }), "INDETERMINATE");
   // The re-observation itself must match.
-  assert.equal(row("auth-mfa/totp/sign-in#older-unused-code", "INDETERMINATE", invalid), "INDETERMINATE");
+  assert.equal(
+    row("auth-mfa/totp/sign-in#older-unused-code", "INDETERMINATE", invalid),
+    "INDETERMINATE",
+  );
   // A determinate row keeps its own status; other indeterminate rows are not rescued.
   assert.equal(row(original, "MISMATCH", invalid), "MISMATCH");
   assert.equal(row("auth-mfa/sms#x", "INDETERMINATE", invalid), "INDETERMINATE");
@@ -679,6 +699,9 @@ test("a quota-limited row passes only through its matching re-observation", asyn
 
 test("the local session's pinned clock starts at the current second with non-zero microseconds", async () => {
   const { pinnedClockStart } = await import("./auth-mfa/run.mjs");
-  assert.equal(pinnedClockStart(Date.parse("2026-09-25T08:30:12.987Z")), "2026-09-25T08:30:12.123456789Z");
+  assert.equal(
+    pinnedClockStart(Date.parse("2026-09-25T08:30:12.987Z")),
+    "2026-09-25T08:30:12.123456789Z",
+  );
   assert.match(pinnedClockStart(), /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.123456789Z$/);
 });

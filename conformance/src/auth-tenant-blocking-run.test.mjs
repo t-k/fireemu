@@ -1084,7 +1084,10 @@ const runnerCase = (env, files = []) => {
 
 test("without the packaged-runner switch a comparison session runs the checkout's runner", () => {
   assert.equal(runnerCase({ PATH: "/bin" }).FIREEMU_RUNNER_NODE, CHECKOUT_RUNNER);
-  assert.equal(runnerCase({ AUTH_TENANT_PACKAGED_RUNNER: "0" }).FIREEMU_RUNNER_NODE, CHECKOUT_RUNNER);
+  assert.equal(
+    runnerCase({ AUTH_TENANT_PACKAGED_RUNNER: "0" }).FIREEMU_RUNNER_NODE,
+    CHECKOUT_RUNNER,
+  );
 });
 
 test("with the packaged-runner switch the session runs the runner beside the binary", () => {
@@ -1126,15 +1129,22 @@ test("the packaged-runner switch resolves a symlinked binary before it looks bes
 
 test("the runner a session runs is named with its directory, packaged or checkout", () => {
   const present = new Set(["/install/bin/runner-node/index.mjs"]);
-  const deps = { checkoutDir: "/checkout/tools/runner-node", exists: (p) => present.has(p), realpath: (p) => p };
+  const deps = {
+    checkoutDir: "/checkout/tools/runner-node",
+    exists: (p) => present.has(p),
+    realpath: (p) => p,
+  };
   assert.deepEqual(selectRunner({}, "/install/bin/fireemu", deps), {
     source: "checkout",
     dir: "/checkout/tools/runner-node",
   });
-  assert.deepEqual(selectRunner({ AUTH_TENANT_PACKAGED_RUNNER: "1" }, "/install/bin/fireemu", deps), {
-    source: "packaged",
-    dir: "/install/bin/runner-node",
-  });
+  assert.deepEqual(
+    selectRunner({ AUTH_TENANT_PACKAGED_RUNNER: "1" }, "/install/bin/fireemu", deps),
+    {
+      source: "packaged",
+      dir: "/install/bin/runner-node",
+    },
+  );
   assert.throws(
     () => selectRunner({ AUTH_TENANT_PACKAGED_RUNNER: "1" }, "/other/bin/fireemu", deps),
     /packaged runner/,
@@ -1190,7 +1200,10 @@ test("the session environment names the checkout runner only for a Functions ses
 });
 
 test("the session environment of a packaged run has no runner override, or the session does not start", () => {
-  const packaged = { AUTH_TENANT_PACKAGED_RUNNER: "1", FIREEMU_RUNNER_NODE: "/elsewhere/index.mjs" };
+  const packaged = {
+    AUTH_TENANT_PACKAGED_RUNNER: "1",
+    FIREEMU_RUNNER_NODE: "/elsewhere/index.mjs",
+  };
   const env = sessionCase(packaged, {}, ["/install/bin/runner-node/index.mjs"]);
   assert.equal("FIREEMU_RUNNER_NODE" in env, false);
   assert.equal(env.AUTH_TENANT_IN, "/run/programs.json");
@@ -1218,5 +1231,8 @@ test("the session's child environment and the comparison's runner digest go thro
   // Only runnerEnvironment names the runner override (once to strip it, once to set it); the spawn uses the builder; the digest follows the choice.
   assert.equal(source.match(/FIREEMU_RUNNER_NODE/g).length, 2);
   assert.match(source, /env: localSessionEnv\(withoutLockCapability\(\), binary, \{/);
-  assert.match(source, /runnerSha256: await runnerSha256\(selectRunner\(process\.env, local\.binary\)\.dir\)/);
+  assert.match(
+    source,
+    /runnerSha256: await runnerSha256\(selectRunner\(process\.env, local\.binary\)\.dir\)/,
+  );
 });

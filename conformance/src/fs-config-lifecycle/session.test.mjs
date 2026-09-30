@@ -262,7 +262,12 @@ test("a concurrent-change refusal is retried unless an etag asked for it; persis
     databases: ["a", "b"],
     steps: [
       { id: "raced", method: "DELETE", path: "v1/{project}/databases/{db:a}" },
-      { id: "stale", method: "DELETE", path: "v1/{project}/databases/{db:a}", query: { etag: "e30=" } },
+      {
+        id: "stale",
+        method: "DELETE",
+        path: "v1/{project}/databases/{db:a}",
+        query: { etag: "e30=" },
+      },
       { id: "stuck", method: "DELETE", path: "v1/{project}/databases/{db:b}" },
     ],
   };

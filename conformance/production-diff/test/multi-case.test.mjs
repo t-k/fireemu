@@ -4,7 +4,17 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { test } from "node:test";
-import { CASE, CASES, COMMIT_TRANSFORM_CASE, G0_CASE, TRANSFORMS_CASE, PRECONDITIONS_CASE, PROJECTION_CASE, AGGREGATIONS_CASE, selectCase } from "../registry.mjs";
+import {
+  CASE,
+  CASES,
+  COMMIT_TRANSFORM_CASE,
+  G0_CASE,
+  TRANSFORMS_CASE,
+  PRECONDITIONS_CASE,
+  PROJECTION_CASE,
+  AGGREGATIONS_CASE,
+  selectCase,
+} from "../registry.mjs";
 import { buildExecArgs, main } from "../pilot.mjs";
 import { resultEnvelope } from "../core.mjs";
 
@@ -24,7 +34,15 @@ async function captureStdout(run) {
 test("registry exposes registered cases and rejects an unknown id", () => {
   assert.deepEqual(
     CASES.map((c) => c.id),
-    [CASE.id, COMMIT_TRANSFORM_CASE.id, G0_CASE.id, TRANSFORMS_CASE.id, PRECONDITIONS_CASE.id, PROJECTION_CASE.id, AGGREGATIONS_CASE.id],
+    [
+      CASE.id,
+      COMMIT_TRANSFORM_CASE.id,
+      G0_CASE.id,
+      TRANSFORMS_CASE.id,
+      PRECONDITIONS_CASE.id,
+      PROJECTION_CASE.id,
+      AGGREGATIONS_CASE.id,
+    ],
   );
   assert.equal(selectCase(COMMIT_TRANSFORM_CASE.id).adapter, "commit-transform");
   assert.equal(selectCase(G0_CASE.id).adapter, "g0");
@@ -37,7 +55,15 @@ test("pilot.mjs list reports registered cases", async () => {
   const parsed = JSON.parse(lines[0]);
   assert.deepEqual(
     parsed.cases.map((c) => c.id),
-    [CASE.id, COMMIT_TRANSFORM_CASE.id, G0_CASE.id, TRANSFORMS_CASE.id, PRECONDITIONS_CASE.id, PROJECTION_CASE.id, AGGREGATIONS_CASE.id],
+    [
+      CASE.id,
+      COMMIT_TRANSFORM_CASE.id,
+      G0_CASE.id,
+      TRANSFORMS_CASE.id,
+      PRECONDITIONS_CASE.id,
+      PROJECTION_CASE.id,
+      AGGREGATIONS_CASE.id,
+    ],
   );
 });
 
@@ -131,7 +157,14 @@ test("buildExecArgs defaults to the batch-write project and accepts an override"
 });
 
 test("buildExecArgs selects auth and firestore only for G0", () => {
-  const args = buildExecArgs("/binary", "/dir", "/entry.mjs", "/node", G0_CASE.project, "auth,firestore").args;
+  const args = buildExecArgs(
+    "/binary",
+    "/dir",
+    "/entry.mjs",
+    "/node",
+    G0_CASE.project,
+    "auth,firestore",
+  ).args;
   assert.equal(args[args.indexOf("--only") + 1], "auth,firestore");
   assert.equal(args.includes("--auth-port"), false);
   assert.equal(args[args.indexOf("--firestore-port") + 1], "0");
@@ -145,7 +178,10 @@ test("buildExecArgs uses only options supported by the fireemu exec interface", 
   }
   let help;
   try {
-    help = execFileSync(binary, ["--help"], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+    help = execFileSync(binary, ["--help"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
   } catch (error) {
     assert.equal(error.status, 2);
     help = error.stderr;
@@ -153,8 +189,18 @@ test("buildExecArgs uses only options supported by the fireemu exec interface", 
   assert.match(help, /exec\|emulators:exec/);
   assert.match(help, /--firestore-port <n>/);
   assert.doesNotMatch(help, /--auth-port/);
-  const args = buildExecArgs(binary, "/dir", "/entry.mjs", "/node", G0_CASE.project, "auth,firestore").args;
-  assert.equal(args.some((arg) => arg === "--auth-port"), false);
+  const args = buildExecArgs(
+    binary,
+    "/dir",
+    "/entry.mjs",
+    "/node",
+    G0_CASE.project,
+    "auth,firestore",
+  ).args;
+  assert.equal(
+    args.some((arg) => arg === "--auth-port"),
+    false,
+  );
 });
 
 // Requires the actual pinned matrix and historical Git objects, not a synthetic oracle.

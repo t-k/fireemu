@@ -209,3 +209,9 @@ Browser / WebChannel, Android, Apple, Unity, Java, Python and Go SDKs; import an
 Realtime Database, Hosting, App Hosting, Extensions and Data Connect; Windows and Linux
 matrix rows; and any production oracle. `DEBT.md` and the two issues under
 `docs.local/issues/open/` track the rest.
+
+## Formatting
+
+Run `pnpm -C conformance fmt:check` to check the included files and `pnpm -C conformance fmt` to format them. The exact exclusions in `.oxfmtrc.json` preserve 16 recorded JSON files and five raw or frozen harness sources whose bytes are bound to existing evidence. The JSON records participate in fixture hashes or closure record digests; the harness sources participate in recorded harness digests or frozen approval bindings. Formatting them requires a separate evidence migration. These 21 exclusions retain their formatting debt, so a successful check does not mean every conformance file is formatted.
+
+The harness source exceptions are `src/fs-config-lifecycle/harness.mjs`, `src/auth-fs-cross/stage2-orchestrator.mjs`, and `src/auth-federation/{corpus,corpus-saml,saml}.mjs`. Ordinary source and test files remain checked, including new files in those directories. The exceptions use exact paths rather than a directory-wide or JSON-wide ignore pattern. A newly recorded evidence file needs its own binding review before it is formatted or excluded. `src/format-scope.test.mjs` checks this boundary with temporary fixtures: excluded evidence bytes remain unchanged, and a new badly formatted ordinary source is rejected.

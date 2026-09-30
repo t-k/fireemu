@@ -87,16 +87,20 @@ const readRepo = (path) =>
   JSON.parse(readFileSync(fileURLToPath(new URL(`../../${path}`, import.meta.url)), "utf8"));
 
 test("FN-HTTP-001 reflects the approved Functions Origin policy in the generated inventory", () => {
-  const requirement = readRepo("verification/requirements/requirements.json")
-    .requirements.find(({ id }) => id === "FN-HTTP-001");
+  const requirement = readRepo("verification/requirements/requirements.json").requirements.find(
+    ({ id }) => id === "FN-HTTP-001",
+  );
   assert.ok(requirement);
   assert.doesNotMatch(requirement.statement, /refus\w*[^.]*non-loopback\s+Origin/i);
-  assert.ok(requirement.artifacts.integration.includes(
-    "crates/fireemu-adapter-functions/tests/app_check_callable.rs",
-  ));
-  const inventory = readFileSync(fileURLToPath(new URL(
-    "../../docs/compatibility/requirements.md", import.meta.url,
-  )), "utf8");
+  assert.ok(
+    requirement.artifacts.integration.includes(
+      "crates/fireemu-adapter-functions/tests/app_check_callable.rs",
+    ),
+  );
+  const inventory = readFileSync(
+    fileURLToPath(new URL("../../docs/compatibility/requirements.md", import.meta.url)),
+    "utf8",
+  );
   assert.ok(inventory.includes(requirement.statement));
 });
 
@@ -157,7 +161,11 @@ test("FUNCTIONS-HTTP closure keeps every declared condition and scope decision",
 
     const runs = condition.evidence?.productionRecordings ?? [];
     assert.equal(runs.length, 2, `${label}: exactly two production recordings`);
-    assert.deepEqual(runs.map(({ pass }) => pass), [1, 2], `${label}: distinct corpus passes`);
+    assert.deepEqual(
+      runs.map(({ pass }) => pass),
+      [1, 2],
+      `${label}: distinct corpus passes`,
+    );
     for (const run of runs) {
       assert.equal(run.project, "fireemu-oracle-query", label);
       assert.match(run.corpusDigest, /^[0-9a-f]{64}$/, label);

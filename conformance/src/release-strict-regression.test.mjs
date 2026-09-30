@@ -5,7 +5,15 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -195,7 +203,13 @@ test("a verified closure with a comparison of an unknown kind stops the release"
 // --- several comparison files of one kind -----------------------------------------------------
 
 const SYNTHETIC_KIND = "synthetic-two-suites-v1";
-const suiteRun = (id, rowPrefix) => ({ id, kind: SYNTHETIC_KIND, rowPrefix, clear: [], commands: [] });
+const suiteRun = (id, rowPrefix) => ({
+  id,
+  kind: SYNTHETIC_KIND,
+  rowPrefix,
+  clear: [],
+  commands: [],
+});
 const suiteRuns = [suiteRun("S1", "one/"), suiteRun("S2", "two/")];
 const noRunError = (path) =>
   `${path}: no run of kind ${SYNTHETIC_KIND} has a row prefix covering every row of the file`;
@@ -213,11 +227,17 @@ const planSuites = (...files) => {
       integratedRegression: { comparisons: files.map(({ path }) => ({ path })) },
     },
   };
-  return planComparisons([fake], (path) => byPath.get(path), { excludedKinds: [], runs: suiteRuns });
+  return planComparisons([fake], (path) => byPath.get(path), {
+    excludedKinds: [],
+    runs: suiteRuns,
+  });
 };
 
 test("comparison files of one kind are each served by the run whose row prefix covers them", () => {
-  const plan = planSuites(suiteFile("a.json", ["one/a#1", "one/b#1"]), suiteFile("b.json", ["two/a#1"]));
+  const plan = planSuites(
+    suiteFile("a.json", ["one/a#1", "one/b#1"]),
+    suiteFile("b.json", ["two/a#1"]),
+  );
   assert.deepEqual(plan.errors, []);
   assert.deepEqual(
     plan.comparisons.map((c) => [c.path, c.runIds]),
@@ -256,8 +276,13 @@ test("a file two runs' prefixes both cover stops the release", () => {
   const overlapping = [suiteRun("S1", "one/"), suiteRun("S3", "one/x")];
   const file = suiteFile("a.json", ["one/x#1"]);
   const fake = verifiedWith("SUITES", "a.json");
-  const plan = planComparisons([fake], () => file.document, { excludedKinds: [], runs: overlapping });
-  assert.ok(plan.errors.some((error) => error.includes("a.json") && error.includes("more than one")));
+  const plan = planComparisons([fake], () => file.document, {
+    excludedKinds: [],
+    runs: overlapping,
+  });
+  assert.ok(
+    plan.errors.some((error) => error.includes("a.json") && error.includes("more than one")),
+  );
 });
 
 test("a file without rows cannot be assigned to a run and stops the release", () => {
@@ -282,7 +307,10 @@ test("every export is copied once per comparison file, under that file's name", 
 
 function suiteRunsWithExport() {
   const exporting = (run) => ({ ...run, commands: [{ mode: "export-comparison" }] });
-  return [...suiteRuns.map(exporting), { id: "C1", kind: "c", clear: [], commands: [{ mode: "check-local" }] }];
+  return [
+    ...suiteRuns.map(exporting),
+    { id: "C1", kind: "c", clear: [], commands: [{ mode: "check-local" }] },
+  ];
 }
 
 test("the committed ATB tenant, blocking and federation copies are served by the right runs", () => {
@@ -312,9 +340,13 @@ test("a comparison of an excluded kind is planned as excluded, with its reason a
     issue: "synthetic.md",
   };
   const read = (path) => (path === "new/excluded.json" ? { kind: exclusion.kind } : readJson(path));
-  const plan = planComparisons([...committedClosures(), verifiedWith("NEW", "new/excluded.json")], read, {
-    excludedKinds: [...EXCLUDED_KINDS, exclusion],
-  });
+  const plan = planComparisons(
+    [...committedClosures(), verifiedWith("NEW", "new/excluded.json")],
+    read,
+    {
+      excludedKinds: [...EXCLUDED_KINDS, exclusion],
+    },
+  );
   assert.deepEqual(plan.errors, []);
   assert.ok(!plan.comparisons.some((c) => c.path === "new/excluded.json"));
   const excluded = plan.excluded.find((c) => c.path === "new/excluded.json");
@@ -328,8 +360,12 @@ test("a comparison of an excluded kind is planned as excluded, with its reason a
 });
 
 test("an unlisted kind with no run still stops the release", () => {
-  const read = (path) => (path === "new/unlisted.json" ? { kind: "unlisted-kind-v1" } : readJson(path));
-  const plan = planComparisons([...committedClosures(), verifiedWith("NEW", "new/unlisted.json")], read);
+  const read = (path) =>
+    path === "new/unlisted.json" ? { kind: "unlisted-kind-v1" } : readJson(path);
+  const plan = planComparisons(
+    [...committedClosures(), verifiedWith("NEW", "new/unlisted.json")],
+    read,
+  );
   assert.ok(plan.errors.some((error) => error.includes("unlisted-kind-v1")));
   assert.ok(!plan.excluded.some((c) => c.kind === "unlisted-kind-v1"));
 });
@@ -341,7 +377,11 @@ test("an exclusion without a reason or an issue stops the release", () => {
   });
   assert.ok(withReason.errors.some((error) => error.includes("x-v1") && error.includes("reason")));
   const withIssue = planComparisons(committedClosures(), readJson, {
-    excludedKinds: kinds({ kind: "y-v1", reason: "a reason long enough to be a real one", issue: "" }),
+    excludedKinds: kinds({
+      kind: "y-v1",
+      reason: "a reason long enough to be a real one",
+      issue: "",
+    }),
   });
   assert.ok(withIssue.errors.some((error) => error.includes("y-v1") && error.includes("issue")));
   const withPath = planComparisons(committedClosures(), readJson, {
@@ -755,7 +795,9 @@ test("an exclusion of a kind an injected run reproduces stops the release", () =
     excludedKinds: [{ kind, reason: "a reason long enough to be a real one", issue: "s.md" }],
     runs: [{ id: "S1", kind, clear: [], commands: [] }],
   });
-  assert.ok(plan.errors.some((error) => error.includes(kind) && error.includes("a run reproduces")));
+  assert.ok(
+    plan.errors.some((error) => error.includes(kind) && error.includes("a run reproduces")),
+  );
   // The live table's runs do not stand in for the injected ones.
   const live = planComparisons([], () => undefined, {
     excludedKinds: [{ kind, reason: "a reason long enough to be a real one", issue: "s.md" }],
@@ -791,8 +833,13 @@ test("every AUTH-TENANT-BLOCKING run names its suite and the rows of that suite"
 });
 
 test("every AUTH-FEDERATION run runs the packet of its own kind, in both commands", () => {
-  const runs = RUNS.filter((run) => run.commands[0].argv.some((arg) => arg.endsWith("auth-federation/compare.mjs")));
-  assert.deepEqual(runs.map((run) => run.id), ["R15", "R16", "R17"]);
+  const runs = RUNS.filter((run) =>
+    run.commands[0].argv.some((arg) => arg.endsWith("auth-federation/compare.mjs")),
+  );
+  assert.deepEqual(
+    runs.map((run) => run.id),
+    ["R15", "R16", "R17"],
+  );
   for (const run of runs) {
     const [check, exported] = run.commands;
     const packet = check.argv[check.argv.indexOf("check") + 1];
@@ -841,7 +888,12 @@ test("the script refuses to start on a build that ships no runner, before it rea
       process.execPath,
       [repo("conformance/src/release-strict-regression.mjs"), "--out", out],
       {
-        env: { PATH: process.env.PATH, FIREEMU_BIN: binary, FIREEMU_NODE: process.execPath, FIREEMU_RUNNER_NODE: "x" },
+        env: {
+          PATH: process.env.PATH,
+          FIREEMU_BIN: binary,
+          FIREEMU_NODE: process.execPath,
+          FIREEMU_RUNNER_NODE: "x",
+        },
         encoding: "utf8",
       },
     );
@@ -901,7 +953,9 @@ test("a run that prepared the local target must name the setup it made", () => {
     /localSetup\.actions/,
   );
   assert.match(
-    localSetupDifferences({ localSetup: { ...SETUP(), actions: EXPECTED_ACTIONS.slice(0, 1) } }).join("\n"),
+    localSetupDifferences({
+      localSetup: { ...SETUP(), actions: EXPECTED_ACTIONS.slice(0, 1) },
+    }).join("\n"),
     /localSetup\.actions/,
   );
   assert.match(
@@ -938,7 +992,11 @@ test("the judgement of a run with a local setup fails without it, and only for t
   const path = `${EVIDENCE}/AUTH-MFA-comparison.json`;
   const observed = exportOf(path);
   assert.deepEqual(
-    judge({ path, kind: observed.kind, runIds: ["R8"] }, { R8: observed }, { readJson, binarySha256: BINARY }),
+    judge(
+      { path, kind: observed.kind, runIds: ["R8"] },
+      { R8: observed },
+      { readJson, binarySha256: BINARY },
+    ),
     [],
   );
 });
@@ -980,6 +1038,9 @@ test("the jobs that verify the harness lineage check out the whole history", () 
       if (line.startsWith("      - ") || /^    \S/.test(line)) break;
       block.push(line.trim());
     }
-    assert.ok(block.includes("fetch-depth: 0"), `${workflow}: the checkout fetches the whole history`);
+    assert.ok(
+      block.includes("fetch-depth: 0"),
+      `${workflow}: the checkout fetches the whole history`,
+    );
   }
 });

@@ -352,15 +352,11 @@ test("the API keys read passes only when every key serves the run's clients", ()
     problems(key({ browserKeyRestrictions: { allowedReferrers: [] }, apiTargets: targets })),
     [],
   );
-  assert.deepEqual(
-    problems(key({ apiTargets: targets.map((t) => ({ ...t, methods: [] })) })),
-    [],
-  );
+  assert.deepEqual(problems(key({ apiTargets: targets.map((t) => ({ ...t, methods: [] })) })), []);
   // A browser restriction with referrers refuses the page and this host.
-  assert.deepEqual(
-    problems(key({ browserKeyRestrictions: { allowedReferrers: ["x.example"] } })),
-    ["API key k may refuse the run's clients (browser-referrers)"],
-  );
+  assert.deepEqual(problems(key({ browserKeyRestrictions: { allowedReferrers: ["x.example"] } })), [
+    "API key k may refuse the run's clients (browser-referrers)",
+  ]);
   // Any other application restriction refuses them, even when it names nothing.
   for (const [restriction, why] of [
     ["serverKeyRestrictions", "server"],

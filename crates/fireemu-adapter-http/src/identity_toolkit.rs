@@ -3162,7 +3162,8 @@ fn handle_with_policy(
             .split_once('?')
             .map_or((path, None), |(bare, query)| (bare, Some(query)));
         if bare_path == SUPPORTED_IDPS_PATH {
-            let api_key = query_selectors(query).is_ok_and(|(key, _)| key.is_some());
+            let api_key = query_selectors_reading(query, QueryTenant::Read)
+                .is_ok_and(|(key, _)| key.is_some());
             return admin_request_guard(headers, method, api_key)
                 .map_or_else(|refusal| refusal, |()| supported_idps());
         }
@@ -9403,16 +9404,10 @@ enum QueryTenant {
     ReadEmptyAsNone,
 }
 
-/// The API key (`key`, or the action link's `apiKey`) and the action link's `tenantId` a
-/// query carries, decoded. Keys are declared from [A-Za-z0-9._-], but a client may still
-/// percent-encode them.
-fn query_selectors(query: Option<&str>) -> Result<(Option<String>, Option<String>), JsonResponse> {
-    query_selectors_reading(query, QueryTenant::Read)
-}
-
-/// [`query_selectors`], reading the `tenantId` parameter as `tenant_reading` says (a route whose
-/// query tenant is ignored has no reason to refuse a malformed one: the official emulator does not
-/// look at it).
+/// The API key (`key`, or the action link's `apiKey`) and the action link's `tenantId` a query
+/// carries, decoded. Keys are declared from [A-Za-z0-9._-], but a client may still percent-encode
+/// them. The `tenantId` parameter is read as `tenant_reading` says (a route whose query tenant is
+/// ignored has no reason to refuse a malformed one: the official emulator does not look at it).
 fn query_selectors_reading(
     query: Option<&str>,
     tenant_reading: QueryTenant,

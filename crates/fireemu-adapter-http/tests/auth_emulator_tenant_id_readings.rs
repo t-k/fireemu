@@ -710,6 +710,14 @@ fn a_malformed_query_tenant_is_refused_only_where_it_is_read() {
             r.body["users"].as_array().map(Vec::len),
         )
     };
+    // A bare or empty API key is refused wherever the tenant is read as none.
+    for query in ["?key", "?key=", "?apiKey", "?key=a&key=b"] {
+        assert_eq!(
+            batch(query, &json!({})),
+            (400, "INVALID_ARGUMENT".to_owned(), None),
+            "{query}"
+        );
+    }
     for query in ["?tenantId", "?tenantId=", "?flag"] {
         assert_eq!(
             batch(query, &json!({})),
@@ -820,4 +828,89 @@ fn a_malformed_query_tenant_does_not_hide_the_api_key_from_the_caller_checks() {
             r.body
         );
     }
+}
+
+/// The routes the official emulator does not serve keep fireemu's reading of the query tenant,
+/// and with it the refusal of an empty or bare one (only batchGet and the action link read an
+/// empty value as no tenant).
+#[test]
+fn the_routes_the_official_emulator_does_not_serve_still_refuse_an_empty_query_tenant() {
+    let (state, _) = emulator();
+    for route in ["passwordPolicy", "recaptchaConfig"] {
+        for query in ["?tenantId", "?tenantId="] {
+            let r = handle_with(
+                &state,
+                "GET",
+                &format!("{V2}/{route}?key={KEY}{}", query.replace('?', "&")),
+                &owner(),
+                &json!({}),
+            );
+            assert_eq!(r.status, 400, "{route}{query}: {}", r.body);
+            assert_eq!(
+                r.body["error"]["message"], "INVALID_ARGUMENT",
+                "{route}{query}: {}",
+                r.body
+            );
+        }
+    }
+}
+
+/// A key the default project did not declare is refused, on a route that ignores a malformed query
+/// tenant too (the key is still read), where the default project declared its keys and no session
+/// project is registered (so the store selection alone would let it through).
+#[test]
+fn a_declared_key_check_still_sees_the_key_beside_a_malformed_query_tenant() {
+    let (mut state, _) = emulator();
+    let mut tenancy = fireemu_core_session::tenancy::Tenancy::new("demo-app");
+    tenancy.declare_default_api_keys(&["declared-key".to_owned()]);
+    state.tenancy = Some(Arc::new(std::sync::RwLock::new(tenancy)));
+    for (n, malformed) in ["&tenantId=a&tenantId=b", "&tenantId", "&tenantId="]
+        .into_iter()
+        .enumerate()
+    {
+        let sign_up = |key: &str| {
+            handle(
+                &state,
+                "POST",
+                &format!("{V1}/accounts:signUp?key={key}{malformed}"),
+                &json!({"email": format!("{key}{n}@example.com"), "password": "hunter22"}),
+            )
+        };
+        let refused = sign_up("other-key");
+        assert_eq!(refused.status, 400, "{malformed}: {}", refused.body);
+        assert_eq!(
+            refused.body["error"]["details"][0]["reason"], "API_KEY_INVALID",
+            "{malformed}: {}",
+            refused.body
+        );
+        let served = sign_up("declared-key");
+        assert_eq!(served.status, 200, "{malformed}: {}", served.body);
+    }
+}
+
+/// The strict profile's session-independent GET of the supported IdPs answers a caller with an API
+/// key and no credential as a request with a key (`INSUFFICIENT_PERMISSION`), and one with neither
+/// as an unregistered caller (403).
+#[test]
+fn the_strict_supported_idps_read_tells_a_key_from_no_identity() {
+    let (_, state, _) = profiles()
+        .into_iter()
+        .find(|(label, ..)| *label == "strict")
+        .unwrap();
+    let get = |query: &str| {
+        handle_with(
+            &state,
+            "GET",
+            &format!("/identitytoolkit.googleapis.com/admin/v2/defaultSupportedIdps{query}"),
+            &RequestHeaders {
+                authorization: None,
+                ..owner()
+            },
+            &json!({}),
+        )
+    };
+    let keyed = get(&format!("?key={KEY}"));
+    assert_eq!(keyed.status, 400, "{}", keyed.body);
+    let keyless = get("");
+    assert_eq!(keyless.status, 403, "{}", keyless.body);
 }

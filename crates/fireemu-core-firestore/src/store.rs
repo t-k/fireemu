@@ -2366,6 +2366,13 @@ impl FirestoreState {
             self.finished_transactions.insert(id);
             changed = true;
         }
+        changed |= self.forget_elapsed_finished_transactions(now);
+        changed
+    }
+
+    /// Forgets the finished transactions whose retention has ended at `now`. Returns whether it changed anything.
+    fn forget_elapsed_finished_transactions(&mut self, now: LogicalInstant) -> bool {
+        let mut changed = false;
         while let Some((deadline, id)) = self.finished_transaction_deadlines.first().cloned() {
             if deadline > now {
                 break;
@@ -3538,7 +3545,17 @@ impl FirestoreState {
         id: &TransactionId,
         now: LogicalInstant,
     ) -> Result<(), FirestoreError> {
-        self.prune_transactions(now);
+        // A transaction that ran out of its total lifetime is finished first, so its Rollback is answered like any
+        // other request; an idle one still becomes a rolled-back transaction, which keeps its retry lineage.
+        let lifetime_over = self.transactions.get(id).is_some_and(|transaction| {
+            transaction.state == TransactionState::Active
+                && now >= transaction_lineage_deadline(transaction)
+        });
+        if lifetime_over {
+            self.prune_transactions(now);
+        } else {
+            self.forget_elapsed_finished_transactions(now);
+        }
         self.rollback(id)
     }
 

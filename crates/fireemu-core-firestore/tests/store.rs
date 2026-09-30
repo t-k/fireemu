@@ -3655,6 +3655,17 @@ fn a_commit_or_a_rollback_as_the_first_request_after_the_lifetime_is_aborted_lik
     aborted_no_longer_valid(state.touch_transaction(&transaction, t(273)));
     aborted_no_longer_valid(state.rollback(&transaction));
 
+    // With no maintenance in between, the Rollback itself finds the lifetime over.
+    let (mut state, transaction) = aged_transaction();
+    aborted_no_longer_valid(state.rollback_at(&transaction, t(271)));
+    aborted_no_longer_valid(state.touch_transaction(&transaction, t(272)));
+
+    // An idle expiry keeps its retry lineage when the Rollback comes first (rolled back, not finished).
+    let mut idle = FirestoreState::with_limit_scope(LimitScope::Production);
+    let transaction = idle.begin_transaction(false, t(0)).unwrap();
+    idle.rollback_at(&transaction, t(200)).unwrap();
+    idle.retry_transaction(&transaction, t(201)).unwrap();
+
     let (mut state, transaction) = aged_transaction();
     let other = state.begin_transaction(true, t(271)).unwrap();
     aborted_no_longer_valid(state.rollback(&transaction));

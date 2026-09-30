@@ -97,11 +97,11 @@ fn stderr(out: &Output) -> String {
 #[test]
 fn the_official_command_names_are_aliases_of_the_short_ones() {
     // `emulators:exec` runs a command and propagates its status, exactly as `exec` does.
-    let out = exec_with(&[], &["sh", "-c", "exit 7"]);
+    let out = exec_with(&[], &["/bin/sh", "-c", "exit 7"]);
     assert_eq!(out.status.code(), Some(7));
     let mut args: Vec<&str> = vec!["emulators:exec"];
     args.extend_from_slice(&PORTS);
-    args.extend_from_slice(&["--", "sh", "-c", "exit 7"]);
+    args.extend_from_slice(&["--", "/bin/sh", "-c", "exit 7"]);
     assert_eq!(run(&args).status.code(), Some(7));
 
     // `emulators:start` is `up`; both refuse the same unknown argument the same way.
@@ -141,7 +141,13 @@ fn emulators_exec_accepts_the_official_positional_shell_script() {
 fn explicit_exec_argv_does_not_shell_expand_metacharacters() {
     let out = exec_with(
         &[],
-        &["sh", "-c", "test \"$1\" = '$HOME;*'", "fireemu", "$HOME;*"],
+        &[
+            "/bin/sh",
+            "-c",
+            "test \"$1\" = '$HOME;*'",
+            "fireemu",
+            "$HOME;*",
+        ],
     );
 
     assert!(out.status.success(), "{}", stderr(&out));
@@ -166,7 +172,7 @@ fn exec_does_not_copy_command_secrets_or_control_text_into_its_log() {
     let explicit = exec_with(
         &[],
         &[
-            "sh",
+            "/bin/sh",
             "-c",
             "test \"$1\" = \"$2\"",
             "fireemu",
@@ -646,7 +652,7 @@ fn env_of(dir: &Path, extra: &[&str]) -> std::collections::BTreeMap<String, Stri
     let mut args: Vec<&str> = vec!["exec"];
     args.extend_from_slice(&PORTS);
     args.extend_from_slice(extra);
-    args.extend_from_slice(&["--", "sh", "-c", &script]);
+    args.extend_from_slice(&["--", "/bin/sh", "-c", &script]);
     let out = run(&args);
     assert!(out.status.success(), "{}", stderr(&out));
     std::fs::read_to_string(&out_file)

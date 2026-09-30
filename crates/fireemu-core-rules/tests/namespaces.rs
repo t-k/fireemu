@@ -218,6 +218,50 @@ impl DocumentAccess for Access {
     }
 }
 
+/// The Firestore answers the FS-RULES lane observed (a missing document is null; in a read,
+/// `getAfter()` reads the current state) are Firestore's: Storage rules keep refusing
+/// `getAfter()`/`existsAfter()` and treating a missing document as an error.
+#[test]
+fn storage_rules_keep_their_answers_for_after_reads_and_missing_documents() {
+    let access = Access {
+        before: BTreeMap::from([(
+            "databases/(default)/documents/c/present".to_owned(),
+            doc(&[("n", RulesValue::Int(1))]),
+        )]),
+        after: None,
+    };
+    let decide = |cond: &str| {
+        let source = format!(
+            "rules_version = '2';\nservice firebase.storage {{\n  match /b/{{bucket}}/o {{\n    match /{{file=**}} {{ allow read: if {cond}; }}\n  }}\n}}"
+        );
+        let request = RequestContext {
+            service: RulesService::Storage,
+            method: Method::Get,
+            path: "/b/demo/o/f".to_owned(),
+            auth: None,
+            resource: None,
+            request_resource: None,
+            time_unix_nanos: 0,
+            abstract_path: false,
+            request_query: None,
+        };
+        evaluate_request_with(&parse_ruleset(&source).unwrap(), &request, Some(&access)).decision
+    };
+    let present = "/databases/(default)/documents/c/present";
+    let missing = "/databases/(default)/documents/c/missing";
+    assert!(matches!(
+        decide(&format!("firestore.get({present}).data.n == 1")),
+        Decision::Allow
+    ));
+    for cond in [
+        format!("getAfter({present}) != null"),
+        format!("existsAfter({present})"),
+        format!("firestore.get({missing}) == null"),
+    ] {
+        assert!(!matches!(decide(&cond), Decision::Allow), "{cond}");
+    }
+}
+
 #[test]
 fn get_after_reads_the_state_after_the_write_and_fails_closed_elsewhere() {
     let n1 = "databases/(default)/documents/notes/n1";
@@ -258,16 +302,21 @@ fn get_after_reads_the_state_after_the_write_and_fails_closed_elsewhere() {
         eval(&format!("!exists(/databases/$(database)/documents/nothing) && getAfter({counter_path}).data.n == 2"), &deleted),
         Decision::Deny(DenyReason::NoMatchingAllow)
     ));
-    // Reads (no after-state) fail closed with an explicit reason.
+    // In a read there is no write to apply: getAfter() and existsAfter() read the current
+    // state, as production answers (FS-RULES, 2026-09-24).
     let read_only = Access {
         before: access.before.clone(),
         after: None,
     };
-    assert!(matches!(
-        eval(&format!("getAfter({counter_path}).data.n == 2"), &read_only),
-        Decision::Deny(DenyReason::Unsupported(_))
-    ));
-    // Budget: get and getAfter of one path are two accesses.
+    for cond in [
+        format!("getAfter({counter_path}).data.n == 1"),
+        format!("existsAfter({counter_path})"),
+        "!existsAfter(/databases/$(database)/documents/counters/x)".to_owned(),
+    ] {
+        assert!(matches!(eval(&cond, &read_only), Decision::Allow), "{cond}");
+    }
+    // Budget: get and getAfter of one path are one access (production allows ten distinct
+    // documents read with both); an eleventh distinct document exceeds the budget.
     let mut terms: Vec<String> = (0..5)
         .map(|i| {
             format!(
@@ -275,7 +324,7 @@ fn get_after_reads_the_state_after_the_write_and_fails_closed_elsewhere() {
             )
         })
         .collect();
-    terms.push("exists(/databases/$(database)/documents/d/extra)".to_owned());
+    terms.push("!exists(/databases/$(database)/documents/d/extra)".to_owned());
     let many = terms.join(" && ");
     let docs: BTreeMap<String, RulesValue> = (0..5)
         .map(|i| {
@@ -289,13 +338,42 @@ fn get_after_reads_the_state_after_the_write_and_fails_closed_elsewhere() {
         before: docs.clone(),
         after: Some(docs),
     };
+    assert!(matches!(eval(&many, &full), Decision::Allow));
+    let eleven = format!(
+        "{many} && !exists(/databases/$(database)/documents/d/a) && !exists(/databases/$(database)/documents/d/b) && !exists(/databases/$(database)/documents/d/c) && !exists(/databases/$(database)/documents/d/e) && !exists(/databases/$(database)/documents/d/f)"
+    );
     assert!(matches!(
-        eval(&many, &full),
+        eval(&eleven, &full),
         Decision::Deny(DenyReason::BudgetExceeded {
             limit_id: "RULES-DOC-ACCESS-SINGLE",
             current: 11,
             maximum: 10
         })
+    ));
+}
+
+#[test]
+fn get_of_a_missing_document_is_null() {
+    let access = Access {
+        before: BTreeMap::new(),
+        after: Some(BTreeMap::new()),
+    };
+    let c = ctx(&[]);
+    let eval = |cond: &str| {
+        evaluate_request_with(&parse_ruleset(&rules(cond)).unwrap(), &c, Some(&access)).decision
+    };
+    let missing = "/databases/$(database)/documents/nothing/here";
+    for cond in [
+        format!("get({missing}) == null"),
+        format!("getAfter({missing}) == null"),
+        format!("!exists({missing}) && !existsAfter({missing})"),
+    ] {
+        assert!(matches!(eval(&cond), Decision::Allow), "{cond}");
+    }
+    // Reading a member of it is still an error, which makes that allow false.
+    assert!(matches!(
+        eval(&format!("get({missing}).data.n == 1")),
+        Decision::Deny(DenyReason::NoMatchingAllow)
     ));
 }
 
@@ -363,4 +441,123 @@ fn array_contains_any_proves_only_what_every_candidate_satisfies() {
     let one = field(&[s("a")]);
     assert!(allow("'a' in resource.data.tags", &one));
     assert!(allow("resource.data.tags.hasAny(['a'])", &one));
+}
+
+#[test]
+fn exists_after_reads_presence_in_the_state_after_the_write() {
+    let kept = "databases/(default)/documents/pairs/kept";
+    let removed = "databases/(default)/documents/pairs/removed";
+    let added = "databases/(default)/documents/pairs/added";
+    let access = Access {
+        before: BTreeMap::from([
+            (kept.to_owned(), doc(&[("v", RulesValue::Int(1))])),
+            (removed.to_owned(), doc(&[("v", RulesValue::Int(1))])),
+        ]),
+        after: Some(BTreeMap::from([
+            (kept.to_owned(), doc(&[("v", RulesValue::Int(1))])),
+            (added.to_owned(), doc(&[("v", RulesValue::Int(1))])),
+        ])),
+    };
+    let c = ctx(&[]);
+    let eval = |cond: &str, access: &Access| {
+        evaluate_request_with(&parse_ruleset(&rules(cond)).unwrap(), &c, Some(access)).decision
+    };
+    let p = |id: &str| format!("/databases/$(database)/documents/pairs/{id}");
+    for cond in [
+        format!("existsAfter({})", p("kept")),
+        format!("existsAfter({}) && !exists({})", p("added"), p("added")),
+        format!("!existsAfter({}) && exists({})", p("removed"), p("removed")),
+        format!("!existsAfter({})", p("never")),
+    ] {
+        assert!(matches!(eval(&cond, &access), Decision::Allow), "{cond}");
+    }
+    // existsAfter and getAfter of one path are one post-state access: ten paths, both calls
+    // on each, stay within the single-request budget of ten.
+    let ten: BTreeMap<String, RulesValue> = (0..10)
+        .map(|i| {
+            (
+                format!("databases/(default)/documents/pairs/m{i}"),
+                doc(&[("v", RulesValue::Int(1))]),
+            )
+        })
+        .collect();
+    let full = Access {
+        before: BTreeMap::new(),
+        after: Some(ten),
+    };
+    let both: Vec<String> = (0..10)
+        .map(|i| {
+            format!(
+                "existsAfter({0}) && getAfter({0}).data.v == 1",
+                p(&format!("m{i}"))
+            )
+        })
+        .collect();
+    assert!(matches!(eval(&both.join(" && "), &full), Decision::Allow));
+}
+
+/// Allow statements are alternatives: one that holds allows the request whatever another one
+/// raises (a document-access budget, an invalid regex), in either order, as production and the
+/// official emulator answer (FS-RULES 2026-09-24).
+#[test]
+fn an_allow_that_holds_wins_over_errors_in_the_others() {
+    let eleven = (0..11)
+        .map(|i| format!("exists(/databases/$(database)/documents/m/{i})"))
+        .collect::<Vec<_>>()
+        .join(" || ");
+    let access = Access {
+        before: BTreeMap::new(),
+        after: None,
+    };
+    let c = ctx(&[("p", RulesValue::String("(".into()))]);
+    let decide_allows = |allows: &[&str]| {
+        let statements = allows.iter().fold(String::new(), |mut out, condition| {
+            out.push_str("allow write: if ");
+            out.push_str(condition);
+            out.push_str("; ");
+            out
+        });
+        let source = format!(
+            "rules_version = '2';\nservice cloud.firestore {{ match /databases/{{database}}/documents {{ match /notes/{{id}} {{ {statements}}} }} }}"
+        );
+        evaluate_request_with(&parse_ruleset(&source).unwrap(), &c, Some(&access)).decision
+    };
+    for allows in [
+        ["true", eleven.as_str()],
+        [eleven.as_str(), "true"],
+        ["'a'.matches(resource.data.p)", "true"],
+        ["true", "'a'.matches(resource.data.p)"],
+    ] {
+        assert!(
+            matches!(decide_allows(&allows), Decision::Allow),
+            "{allows:?}"
+        );
+    }
+    // With no allow holding, the error still denies.
+    assert!(matches!(
+        decide_allows(&[eleven.as_str(), "false"]),
+        Decision::Deny(_)
+    ));
+}
+
+/// A pair of parentheses is one more expression evaluated: a balanced conjunction of 334
+/// leaves (334 leaves, 333 operators, 332 parenthesised subtrees) fits the budget of 1,000,
+/// one of 335 leaves does not (FS-RULES 2026-09-24 and the official emulator).
+#[test]
+fn parentheses_count_toward_the_expression_budget() {
+    fn balanced(n: usize) -> String {
+        if n == 1 {
+            "true".to_owned()
+        } else {
+            format!("({} && {})", balanced(n / 2), balanced(n - n / 2))
+        }
+    }
+    assert!(holds(&balanced(334)));
+    assert!(matches!(
+        decide(&balanced(335), &ctx(&[])),
+        Decision::Deny(DenyReason::BudgetExceeded {
+            limit_id: "RULES-EXPRESSIONS-PER-REQUEST",
+            ..
+        })
+    ));
 }

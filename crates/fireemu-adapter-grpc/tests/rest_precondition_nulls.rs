@@ -50,6 +50,7 @@ fn call(state: &RestState, method: &str, path: &str, body: Value) -> RestRespons
         browser_metadata: false,
         app_check: Vec::new(),
         body,
+        batch_field_order: Vec::new(),
     })
 }
 

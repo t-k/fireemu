@@ -148,11 +148,15 @@ def test_historical_worktree_parent_refuses_a_symlink_escape(tmp_path: Path) -> 
         authority.historical_worktree_parent(tmp_path)
 
 
-def test_historical_worktree_parent_accepts_the_real_repository_parent() -> None:
+def test_historical_worktree_parent_accepts_a_real_worktree_directory(
+    tmp_path: Path,
+) -> None:
+    # A CI checkout has no .worktree directory, so build a real one here instead of
+    # depending on the developer's repository layout.
     authority = load_authority()
-    assert authority.historical_worktree_parent(WORKTREE_ROOT) == (
-        WORKTREE_ROOT / ".worktree"
-    )
+    root = tmp_path.resolve()
+    (root / ".worktree").mkdir()
+    assert authority.historical_worktree_parent(root) == root / ".worktree"
 
 
 def git_setup(root: Path, *args: str) -> None:
@@ -284,7 +288,7 @@ def test_private_saved_pair_is_bound_and_comparison_is_preserved(
     }
     assert (
         summary["bindings"]["runtimeSourceCommit"]
-        == "c1d24250a62d23b38bcfed6da51f1ba4ed5798bb"
+        == "83fd0307b727b3c13164daaf19f2f8dd6a5f0ac2"
     )
     assert summary["bindings"]["runtimeInputCount"] == 434
     assert stat.S_IMODE((tmp_path / "out.json").stat().st_mode) == 0o600

@@ -1,0 +1,562 @@
+{
+  "schemaVersion": 1,
+  "kind": "fs-data-write-historical-regression",
+  "command": "pnpm -C conformance firestore:check-production",
+  "sourceCommit": "dd0c4e6fed38d09646fb2575c2fc11251724e0f4",
+  "binarySha256": "eec383e576e5de8c63fd934ef55dde6592bb6b69888a7f00bb4129c6a9338593",
+  "binarySha256Before": "eec383e576e5de8c63fd934ef55dde6592bb6b69888a7f00bb4129c6a9338593",
+  "binarySha256After": "eec383e576e5de8c63fd934ef55dde6592bb6b69888a7f00bb4129c6a9338593",
+  "configPath": "conformance/firestore-probe.fireemu.json",
+  "configSha256": "69b6695dbd921ecd7a3c44314070e5c816675a8a0459f97c2469069294b18808",
+  "inputs": {
+    "programsSha256": "24f0c58a215406dffe211d236a39fbd322bc365bd510149bee7e53ac6ed072b2",
+    "productionMatrixPath": "conformance/firestore-production-matrix.json",
+    "productionMatrixSha256": "4bcb04ac9427e73bfe89aab5bc9916f318b2ea60efbf156d79cdf47632d58f56"
+  },
+  "privateResultSha256": "6a57991123cfccbd3123e0e07ad1099f72d3f2ce2488a32c9b184f7ccf6eac2a",
+  "counts": {
+    "comparableRows": 322,
+    "knownMismatches": 16,
+    "indeterminateRows": 1,
+    "newMismatches": 0,
+    "newIndeterminateRows": 0
+  },
+  "explanation": "docs/compatibility/fs-data-write-historical-regression.md",
+  "rows": [
+    {
+      "row": "errors/rest-shapes#wrong-project",
+      "classification": "known-mismatch",
+      "productionStatus": 403,
+      "fireemuStatus": 404,
+      "reason": "Environment-dependent difference: production reports the API unavailable in the other project; the local answer reports missing data.",
+      "references": [
+        {
+          "path": "conformance/FIRESTORE-PRODUCTION-MATRIX.md",
+          "line": 126,
+          "contains": "| errors/rest-shapes#wrong-project |"
+        },
+        {
+          "path": "conformance/firestore-production-matrix.json",
+          "line": 23005,
+          "contains": "\"wrong-project\": {"
+        },
+        {
+          "path": "docs/compatibility/fs-data-write-historical-regression.md",
+          "line": 33,
+          "contains": "`errors/rest-shapes#wrong-project`"
+        },
+        {
+          "path": "docs/compatibility/second-broad-exploration.md",
+          "line": 44,
+          "contains": "`errors/rest-shapes#wrong-project`"
+        }
+      ]
+    },
+    {
+      "row": "emulator/routes#clear-database",
+      "classification": "known-mismatch",
+      "productionStatus": 404,
+      "fireemuStatus": 200,
+      "reason": "A row of the local-only program `emulator/routes` (area `emulator`), classified excluded-local-only in the production matrix.",
+      "references": [
+        {
+          "path": "conformance/FIRESTORE-PRODUCTION-MATRIX.md",
+          "line": 138,
+          "contains": "| emulator/routes#clear-database |"
+        },
+        {
+          "path": "conformance/firestore-production-matrix.json",
+          "line": 31178,
+          "contains": "\"clear-database\": {"
+        },
+        {
+          "path": "docs/compatibility/fs-data-write-historical-regression.md",
+          "line": 13,
+          "contains": "`emulator/routes#clear-database`"
+        },
+        {
+          "path": "conformance/src/firestore-probe/run.mjs",
+          "line": 319,
+          "contains": "localOnly: p.area === \"emulator\""
+        }
+      ]
+    },
+    {
+      "row": "emulator/routes#cleared-document-is-gone",
+      "classification": "known-mismatch",
+      "productionStatus": 200,
+      "fireemuStatus": 404,
+      "reason": "A row of the local-only program `emulator/routes` (area `emulator`), classified excluded-local-only in the production matrix.",
+      "references": [
+        {
+          "path": "conformance/FIRESTORE-PRODUCTION-MATRIX.md",
+          "line": 139,
+          "contains": "| emulator/routes#cleared-document-is-gone |"
+        },
+        {
+          "path": "conformance/firestore-production-matrix.json",
+          "line": 31196,
+          "contains": "\"cleared-document-is-gone\": {"
+        },
+        {
+          "path": "docs/compatibility/fs-data-write-historical-regression.md",
+          "line": 14,
+          "contains": "`emulator/routes#cleared-document-is-gone`"
+        },
+        {
+          "path": "conformance/src/firestore-probe/run.mjs",
+          "line": 319,
+          "contains": "localOnly: p.area === \"emulator\""
+        }
+      ],
+      "comparedElsewhere": [
+        {
+          "conditionId": "FS-LIMIT-API-REQUEST-BYTES/non-commit-rest/create",
+          "rows": [
+            "writes/limits/non-commit-rest-request-bytes/create/11534336#readback",
+            "writes/limits/non-commit-rest-request-bytes/create/11534337#readback"
+          ]
+        }
+      ]
+    },
+    {
+      "row": "emulator/routes#cleared-subcollection-is-gone",
+      "classification": "known-mismatch",
+      "productionStatus": 200,
+      "fireemuStatus": 404,
+      "reason": "A row of the local-only program `emulator/routes` (area `emulator`), classified excluded-local-only in the production matrix.",
+      "references": [
+        {
+          "path": "conformance/FIRESTORE-PRODUCTION-MATRIX.md",
+          "line": 140,
+          "contains": "| emulator/routes#cleared-subcollection-is-gone |"
+        },
+        {
+          "path": "conformance/firestore-production-matrix.json",
+          "line": 31223,
+          "contains": "\"cleared-subcollection-is-gone\": {"
+        },
+        {
+          "path": "docs/compatibility/fs-data-write-historical-regression.md",
+          "line": 15,
+          "contains": "`emulator/routes#cleared-subcollection-is-gone`"
+        },
+        {
+          "path": "conformance/src/firestore-probe/run.mjs",
+          "line": 319,
+          "contains": "localOnly: p.area === \"emulator\""
+        }
+      ],
+      "comparedElsewhere": [
+        {
+          "conditionId": "FS-LIMIT-FIELD-PATH-BYTES",
+          "rows": [
+            "writes/limits/implied-map#observation-3",
+            "writes/limits/implied-map#observation-2"
+          ]
+        }
+      ]
+    },
+    {
+      "row": "emulator/routes#clear-unknown-database",
+      "classification": "known-mismatch",
+      "productionStatus": 404,
+      "fireemuStatus": 200,
+      "reason": "A row of the local-only program `emulator/routes` (area `emulator`), classified excluded-local-only in the production matrix.",
+      "references": [
+        {
+          "path": "conformance/FIRESTORE-PRODUCTION-MATRIX.md",
+          "line": 141,
+          "contains": "| emulator/routes#clear-unknown-database |"
+        },
+        {
+          "path": "conformance/firestore-production-matrix.json",
+          "line": 31250,
+          "contains": "\"clear-unknown-database\": {"
+        },
+        {
+          "path": "docs/compatibility/fs-data-write-historical-regression.md",
+          "line": 16,
+          "contains": "`emulator/routes#clear-unknown-database`"
+        },
+        {
+          "path": "conformance/src/firestore-probe/run.mjs",
+          "line": 319,
+          "contains": "localOnly: p.area === \"emulator\""
+        }
+      ]
+    },
+    {
+      "row": "emulator/routes#put-rules-that-do-not-compile",
+      "classification": "known-mismatch",
+      "productionStatus": 404,
+      "fireemuStatus": 400,
+      "reason": "A row of the local-only program `emulator/routes` (area `emulator`), classified excluded-local-only in the production matrix.",
+      "references": [
+        {
+          "path": "conformance/FIRESTORE-PRODUCTION-MATRIX.md",
+          "line": 143,
+          "contains": "| emulator/routes#put-rules-that-do-not-compile |"
+        },
+        {
+          "path": "conformance/firestore-production-matrix.json",
+          "line": 31286,
+          "contains": "\"put-rules-that-do-not-compile\": {"
+        },
+        {
+          "path": "docs/compatibility/fs-data-write-historical-regression.md",
+          "line": 17,
+          "contains": "`emulator/routes#put-rules-that-do-not-compile`"
+        },
+        {
+          "path": "conformance/src/firestore-probe/run.mjs",
+          "line": 319,
+          "contains": "localOnly: p.area === \"emulator\""
+        }
+      ]
+    },
+    {
+      "row": "emulator/routes#put-rules-with-a-warning",
+      "classification": "known-mismatch",
+      "productionStatus": 404,
+      "fireemuStatus": 200,
+      "reason": "A row of the local-only program `emulator/routes` (area `emulator`), classified excluded-local-only in the production matrix.",
+      "references": [
+        {
+          "path": "conformance/FIRESTORE-PRODUCTION-MATRIX.md",
+          "line": 144,
+          "contains": "| emulator/routes#put-rules-with-a-warning |"
+        },
+        {
+          "path": "conformance/firestore-production-matrix.json",
+          "line": 31304,
+          "contains": "\"put-rules-with-a-warning\": {"
+        },
+        {
+          "path": "docs/compatibility/fs-data-write-historical-regression.md",
+          "line": 18,
+          "contains": "`emulator/routes#put-rules-with-a-warning`"
+        },
+        {
+          "path": "conformance/src/firestore-probe/run.mjs",
+          "line": 319,
+          "contains": "localOnly: p.area === \"emulator\""
+        }
+      ]
+    },
+    {
+      "row": "emulator/routes#put-rules-without-files",
+      "classification": "known-mismatch",
+      "productionStatus": 404,
+      "fireemuStatus": 400,
+      "reason": "A row of the local-only program `emulator/routes` (area `emulator`), classified excluded-local-only in the production matrix.",
+      "references": [
+        {
+          "path": "conformance/FIRESTORE-PRODUCTION-MATRIX.md",
+          "line": 145,
+          "contains": "| emulator/routes#put-rules-without-files |"
+        },
+        {
+          "path": "conformance/firestore-production-matrix.json",
+          "line": 31322,
+          "contains": "\"put-rules-without-files\": {"
+        },
+        {
+          "path": "docs/compatibility/fs-data-write-historical-regression.md",
+          "line": 19,
+          "contains": "`emulator/routes#put-rules-without-files`"
+        },
+        {
+          "path": "conformance/src/firestore-probe/run.mjs",
+          "line": 319,
+          "contains": "localOnly: p.area === \"emulator\""
+        }
+      ]
+    },
+    {
+      "row": "emulator/routes#put-rules-restores-open-rules",
+      "classification": "known-mismatch",
+      "productionStatus": 404,
+      "fireemuStatus": 200,
+      "reason": "A row of the local-only program `emulator/routes` (area `emulator`), classified excluded-local-only in the production matrix.",
+      "references": [
+        {
+          "path": "conformance/FIRESTORE-PRODUCTION-MATRIX.md",
+          "line": 146,
+          "contains": "| emulator/routes#put-rules-restores-open-rules |"
+        },
+        {
+          "path": "conformance/firestore-production-matrix.json",
+          "line": 31340,
+          "contains": "\"put-rules-restores-open-rules\": {"
+        },
+        {
+          "path": "docs/compatibility/fs-data-write-historical-regression.md",
+          "line": 20,
+          "contains": "`emulator/routes#put-rules-restores-open-rules`"
+        },
+        {
+          "path": "conformance/src/firestore-probe/run.mjs",
+          "line": 319,
+          "contains": "localOnly: p.area === \"emulator\""
+        }
+      ]
+    },
+    {
+      "row": "emulator/routes#commit-on-the-named-database-route",
+      "classification": "known-mismatch",
+      "productionStatus": 404,
+      "fireemuStatus": 200,
+      "reason": "A row of the local-only program `emulator/routes` (area `emulator`), classified excluded-local-only in the production matrix. The named database was never created; production refused it and the emulator profile materializes it on first touch (FS-CONFIG-RT-001).",
+      "references": [
+        {
+          "path": "conformance/FIRESTORE-PRODUCTION-MATRIX.md",
+          "line": 150,
+          "contains": "| emulator/routes#commit-on-the-named-database-route |"
+        },
+        {
+          "path": "conformance/firestore-production-matrix.json",
+          "line": 31419,
+          "contains": "\"commit-on-the-named-database-route\": {"
+        },
+        {
+          "path": "docs/compatibility/fs-data-write-historical-regression.md",
+          "line": 21,
+          "contains": "`emulator/routes#commit-on-the-named-database-route`"
+        },
+        {
+          "path": "conformance/src/firestore-probe/run.mjs",
+          "line": 319,
+          "contains": "localOnly: p.area === \"emulator\""
+        },
+        {
+          "path": "docs/compatibility/fs-config-lifecycle-classification.md",
+          "line": 127,
+          "contains": "### FS-CONFIG-RT-001"
+        }
+      ]
+    },
+    {
+      "row": "emulator/routes#named-database-document",
+      "classification": "known-mismatch",
+      "productionStatus": 404,
+      "fireemuStatus": 200,
+      "reason": "A row of the local-only program `emulator/routes` (area `emulator`), classified excluded-local-only in the production matrix. The named database was never created; production refused it and the emulator profile materializes it on first touch (FS-CONFIG-RT-001).",
+      "references": [
+        {
+          "path": "conformance/FIRESTORE-PRODUCTION-MATRIX.md",
+          "line": 151,
+          "contains": "| emulator/routes#named-database-document |"
+        },
+        {
+          "path": "conformance/firestore-production-matrix.json",
+          "line": 31451,
+          "contains": "\"named-database-document\": {"
+        },
+        {
+          "path": "docs/compatibility/fs-data-write-historical-regression.md",
+          "line": 22,
+          "contains": "`emulator/routes#named-database-document`"
+        },
+        {
+          "path": "conformance/src/firestore-probe/run.mjs",
+          "line": 319,
+          "contains": "localOnly: p.area === \"emulator\""
+        },
+        {
+          "path": "docs/compatibility/fs-config-lifecycle-classification.md",
+          "line": 127,
+          "contains": "### FS-CONFIG-RT-001"
+        }
+      ]
+    },
+    {
+      "row": "emulator/routes#default-database-is-separate",
+      "classification": "known-mismatch",
+      "productionStatus": 200,
+      "fireemuStatus": 404,
+      "reason": "A row of the local-only program `emulator/routes` (area `emulator`), classified excluded-local-only in the production matrix.",
+      "references": [
+        {
+          "path": "conformance/FIRESTORE-PRODUCTION-MATRIX.md",
+          "line": 152,
+          "contains": "| emulator/routes#default-database-is-separate |"
+        },
+        {
+          "path": "conformance/firestore-production-matrix.json",
+          "line": 31487,
+          "contains": "\"default-database-is-separate\": {"
+        },
+        {
+          "path": "docs/compatibility/fs-data-write-historical-regression.md",
+          "line": 23,
+          "contains": "`emulator/routes#default-database-is-separate`"
+        },
+        {
+          "path": "conformance/src/firestore-probe/run.mjs",
+          "line": 319,
+          "contains": "localOnly: p.area === \"emulator\""
+        }
+      ],
+      "comparedElsewhere": [
+        {
+          "conditionId": "FS-LIMIT-API-REQUEST-BYTES/non-commit-rest/create",
+          "rows": [
+            "writes/limits/non-commit-rest-request-bytes/create/11534336#readback",
+            "writes/limits/non-commit-rest-request-bytes/create/11534337#readback"
+          ]
+        }
+      ]
+    },
+    {
+      "row": "emulator/routes#clear-named-database",
+      "classification": "known-mismatch",
+      "productionStatus": 404,
+      "fireemuStatus": 200,
+      "reason": "A row of the local-only program `emulator/routes` (area `emulator`), classified excluded-local-only in the production matrix.",
+      "references": [
+        {
+          "path": "conformance/FIRESTORE-PRODUCTION-MATRIX.md",
+          "line": 153,
+          "contains": "| emulator/routes#clear-named-database |"
+        },
+        {
+          "path": "conformance/firestore-production-matrix.json",
+          "line": 31514,
+          "contains": "\"clear-named-database\": {"
+        },
+        {
+          "path": "docs/compatibility/fs-data-write-historical-regression.md",
+          "line": 24,
+          "contains": "`emulator/routes#clear-named-database`"
+        },
+        {
+          "path": "conformance/src/firestore-probe/run.mjs",
+          "line": 319,
+          "contains": "localOnly: p.area === \"emulator\""
+        }
+      ]
+    },
+    {
+      "row": "emulator/routes#list-databases",
+      "classification": "known-mismatch",
+      "productionStatus": 200,
+      "fireemuStatus": 200,
+      "reason": "A row of the local-only program `emulator/routes` (area `emulator`), classified excluded-local-only in the production matrix.",
+      "references": [
+        {
+          "path": "conformance/FIRESTORE-PRODUCTION-MATRIX.md",
+          "line": 156,
+          "contains": "| emulator/routes#list-databases |"
+        },
+        {
+          "path": "conformance/firestore-production-matrix.json",
+          "line": 31568,
+          "contains": "\"list-databases\": {"
+        },
+        {
+          "path": "docs/compatibility/fs-data-write-historical-regression.md",
+          "line": 25,
+          "contains": "`emulator/routes#list-databases`"
+        },
+        {
+          "path": "conformance/src/firestore-probe/run.mjs",
+          "line": 319,
+          "contains": "localOnly: p.area === \"emulator\""
+        }
+      ]
+    },
+    {
+      "row": "emulator/routes#get-database",
+      "classification": "known-mismatch",
+      "productionStatus": 200,
+      "fireemuStatus": 200,
+      "reason": "A row of the local-only program `emulator/routes` (area `emulator`), classified excluded-local-only in the production matrix.",
+      "references": [
+        {
+          "path": "conformance/FIRESTORE-PRODUCTION-MATRIX.md",
+          "line": 157,
+          "contains": "| emulator/routes#get-database |"
+        },
+        {
+          "path": "conformance/firestore-production-matrix.json",
+          "line": 31608,
+          "contains": "\"get-database\": {"
+        },
+        {
+          "path": "docs/compatibility/fs-data-write-historical-regression.md",
+          "line": 26,
+          "contains": "`emulator/routes#get-database`"
+        },
+        {
+          "path": "conformance/src/firestore-probe/run.mjs",
+          "line": 319,
+          "contains": "localOnly: p.area === \"emulator\""
+        }
+      ]
+    },
+    {
+      "row": "emulator/routes#get-named-database",
+      "classification": "known-mismatch",
+      "productionStatus": 404,
+      "fireemuStatus": 200,
+      "reason": "A row of the local-only program `emulator/routes` (area `emulator`), classified excluded-local-only in the production matrix. The named database was never created; production refused it and the emulator profile materializes it on first touch (FS-CONFIG-RT-001).",
+      "references": [
+        {
+          "path": "conformance/FIRESTORE-PRODUCTION-MATRIX.md",
+          "line": 158,
+          "contains": "| emulator/routes#get-named-database |"
+        },
+        {
+          "path": "conformance/firestore-production-matrix.json",
+          "line": 31644,
+          "contains": "\"get-named-database\": {"
+        },
+        {
+          "path": "docs/compatibility/fs-data-write-historical-regression.md",
+          "line": 27,
+          "contains": "`emulator/routes#get-named-database`"
+        },
+        {
+          "path": "conformance/src/firestore-probe/run.mjs",
+          "line": 319,
+          "contains": "localOnly: p.area === \"emulator\""
+        },
+        {
+          "path": "docs/compatibility/fs-config-lifecycle-classification.md",
+          "line": 127,
+          "contains": "### FS-CONFIG-RT-001"
+        }
+      ]
+    },
+    {
+      "row": "transactions/lifecycle#phantom-write",
+      "classification": "indeterminate",
+      "productionStatus": 0,
+      "fireemuStatus": 409,
+      "reason": "The single production attempt timed out and is recorded as unverified.",
+      "references": [
+        {
+          "path": "conformance/FIRESTORE-PRODUCTION-MATRIX.md",
+          "line": 122,
+          "contains": "| transactions/lifecycle#phantom-write |"
+        },
+        {
+          "path": "conformance/firestore-production-matrix.json",
+          "line": 22443,
+          "contains": "\"phantom-write\": {"
+        },
+        {
+          "path": "docs/compatibility/fs-data-write-historical-regression.md",
+          "line": 37,
+          "contains": "`transactions/lifecycle#phantom-write`"
+        },
+        {
+          "path": "docs/compatibility/fs-transaction-next-campaign-preparation.md",
+          "line": 445,
+          "contains": "`transactions/lifecycle#phantom-write`"
+        }
+      ]
+    }
+  ]
+}

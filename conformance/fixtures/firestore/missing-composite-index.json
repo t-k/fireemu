@@ -10,8 +10,8 @@
   "variant": "baseline",
   "oracle": "official Local Emulator Suite, pinned in ORACLE.md",
   "summary": {
-    "parity": 4,
-    "documented-divergence": 1,
+    "parity": 5,
+    "documented-divergence": 0,
     "debt": 0,
     "pending": 0
   },
@@ -33,33 +33,13 @@
     },
     {
       "id": "admin-equality-plus-inequality",
-      "status": "documented-divergence",
-      "oracle": {
+      "status": "parity",
+      "value": {
         "ids": [
           "one"
         ],
         "size": 1
-      },
-      "testd": {
-        "thrown": true,
-        "code": "9",
-        "message": "9 FAILED_PRECONDITION: The query requires an index. missing index (city Ascending, age Ascending, __name__ Ascending)\nAdd to firestore.indexes.json:\n{\n  \"collectionGroup\": \"conf_index\",\n  \"queryScope\": \"COLLECTION\",\n  \"fields\": [\n      {\"fieldPath\": \"city\", \"order\": \"ASCENDING\"},\n      {\"fieldPath\": \"age\", \"order\": \"ASCENDING\"},\n      {\"fieldPath\": \"__name__\", \"order\": \"ASCENDING\"}\n  ]\n}",
-        "details": "The query requires an index. missing index (city Ascending, age Ascending, __name__ Ascending)\nAdd to firestore.indexes.json:\n{\n  \"collectionGroup\": \"conf_index\",\n  \"queryScope\": \"COLLECTION\",\n  \"fields\": [\n      {\"fieldPath\": \"city\", \"order\": \"ASCENDING\"},\n      {\"fieldPath\": \"age\", \"order\": \"ASCENDING\"},\n      {\"fieldPath\": \"__name__\", \"order\": \"ASCENDING\"}\n  ]\n}",
-        "trailers": [
-          {
-            "key": "content-type",
-            "kind": "ascii",
-            "value": "application/grpc"
-          },
-          {
-            "key": "fireemu-reason",
-            "kind": "ascii",
-            "value": "FS_GW_MISSING_INDEX"
-          }
-        ]
-      },
-      "documents": "README.md, \"Gap from the official Firebase Emulator Suite\"",
-      "reason": "Same policy difference for an equality plus an inequality on another field."
+      }
     },
     {
       "id": "client-two-equality-filters",

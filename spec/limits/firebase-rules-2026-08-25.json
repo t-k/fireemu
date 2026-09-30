@@ -49,12 +49,12 @@
       "class": "hard-resource",
       "boundary": "inclusive-maximum",
       "unit": "count",
-      "maximum": 10,
+      "maximum": 11,
       "precision": "exact",
       "enforcementStage": "rules-compile",
       "implemented": "unsupported",
       "officialText": "Maximum number of nested match statement levels: 10",
-      "notes": ""
+      "notes": "Counted here with the /databases/{database}/documents match: production and the official compiler accept ten match levels below it and refuse eleven (\"Maximum allowed resource rule depth of 10\"), FS-RULES production recording 2026-09-24."
     },
     {
       "id": "RULES-MATCH-PATH-SEGMENTS",
@@ -109,12 +109,12 @@
       "class": "hard-resource",
       "boundary": "inclusive-maximum",
       "unit": "count",
-      "maximum": 10,
+      "maximum": 11,
       "precision": "exact",
       "enforcementStage": "rules-compile",
       "implemented": "unsupported",
       "officialText": "Maximum number of let variable bindings per function: 10",
-      "notes": ""
+      "notes": "Production and the official compiler accept 11 let bindings in a function and refuse 12, although the documentation and the compiler's own message say 10 (FS-RULES production recording 2026-09-24 and official emulator probe 2026-09-25)."
     },
     {
       "id": "RULES-RECURSION",

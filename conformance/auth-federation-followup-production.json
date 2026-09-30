@@ -1,0 +1,129 @@
+{
+  "version": 1,
+  "recordedAgainst": {
+    "target": "production Identity Toolkit, Secure Token and Admin v2 REST, Identity Platform sandbox; the OIDC issuer the run's preview channel of the sandbox's Hosting, its discovery document listing scopes_supported; the SAML responses made locally at each step, tampered or unsigned (owner decisions O1, O5; the coordinator's T12 (c), 2026-09-29)",
+    "project": "<project>",
+    "note": "Two recordings per program. The run's issuer host, run tag, project and project number are placeholders; tokens are recorded as their header and claims with times relative to iat; refresh, access and pending tokens, session IDs, local IDs and certificates are masked. `second` holds the other recording of rows that differed."
+  },
+  "programs": {
+    "auth-federation/oidc/scopes": {
+      "corpusDigest": "9d4ecef3875d3d62f651b645773a13ed2cf60d8fd6110ffc16a48d0932f0ab6e",
+      "harnessDigest": "9862230ff29b1c8d5a6ced121d0dbfcea82c83c8a54ff0e2b3658dfd55a20bd4",
+      "recordedAt": "2026-09-29T01:34:56.451Z",
+      "gitSha": "4d0635d711c8dbab3637eebe5082d870d6929ee6",
+      "steps": {
+        "create-provider": {
+          "status": 200,
+          "body": {
+            "name": "projects/<project-number>/oauthIdpConfigs/oidc.fireemu-<run>-sc",
+            "clientId": "client-sc",
+            "issuer": "https://<issuer-host>/oidc/<run>",
+            "enabled": true,
+            "responseType": {
+              "idToken": true
+            }
+          }
+        },
+        "create-auth-uri": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#CreateAuthUriResponse",
+            "authUri": "https://<issuer-host>/oidc/<run>/authorize?response_type=id_token&client_id=client-sc&redirect_uri=https://<project>.firebaseapp.com/__/auth/handler&state=<state>&scope=openid+email+profile&nonce=<nonce:hex64>",
+            "providerId": "oidc.fireemu-<run>-sc",
+            "sessionId": "<session-id>"
+          }
+        }
+      }
+    },
+    "auth-federation/saml/signature": {
+      "corpusDigest": "6eb9f961b375f6094a67e590d3b67f604934313163df67931061b32a782cc8f7",
+      "harnessDigest": "9862230ff29b1c8d5a6ced121d0dbfcea82c83c8a54ff0e2b3658dfd55a20bd4",
+      "recordedAt": "2026-09-29T01:34:56.451Z",
+      "gitSha": "4d0635d711c8dbab3637eebe5082d870d6929ee6",
+      "steps": {
+        "create-provider": {
+          "status": 200,
+          "body": {
+            "name": "projects/<project-number>/inboundSamlConfigs/saml.fireemu-<run>-sg",
+            "idpConfig": {
+              "idpEntityId": "https://<project>.web.app/saml/<run>",
+              "ssoUrl": "https://<project>.web.app/saml/<run>/sso",
+              "idpCertificates": [
+                {
+                  "x509Certificate": "<certificate>"
+                }
+              ]
+            },
+            "spConfig": {
+              "spEntityId": "https://<project>.firebaseapp.com/saml/<run>",
+              "callbackUri": "https://<project>.firebaseapp.com/__/auth/handler"
+            },
+            "enabled": true
+          }
+        },
+        "tampered-auth-uri": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#CreateAuthUriResponse",
+            "authUri": {
+              "<saml-authn-request>": {
+                "endpoint": "https://<project>.web.app/saml/<run>/sso",
+                "request": "<?xml version=\"1.0\" encoding=\"UTF-8\"?><saml2p:AuthnRequest xmlns:saml2p=\"urn:oasis:names:tc:SAML:2.0:protocol\" AssertionConsumerServiceURL=\"https://<project>.firebaseapp.com/__/auth/handler\" Destination=\"https://<project>.web.app/saml/<run>/sso\" ID=\"<id:_hex>\" IssueInstant=\"<time:millis>\" ProtocolBinding=\"urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST\" Version=\"2.0\"><saml2:Issuer xmlns:saml2=\"urn:oasis:names:tc:SAML:2.0:assertion\">https://<project>.firebaseapp.com/saml/<run></saml2:Issuer></saml2p:AuthnRequest>",
+                "relayState": "<relay-state>"
+              }
+            },
+            "providerId": "saml.fireemu-<run>-sg",
+            "sessionId": "<session-id>"
+          }
+        },
+        "tampered": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "INVALID_IDP_RESPONSE : Failed to verify the signature in SAMLResponse",
+              "errors": [
+                {
+                  "message": "INVALID_IDP_RESPONSE : Failed to verify the signature in SAMLResponse",
+                  "domain": "global",
+                  "reason": "invalid"
+                }
+              ]
+            }
+          }
+        },
+        "unsigned-auth-uri": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#CreateAuthUriResponse",
+            "authUri": {
+              "<saml-authn-request>": {
+                "endpoint": "https://<project>.web.app/saml/<run>/sso",
+                "request": "<?xml version=\"1.0\" encoding=\"UTF-8\"?><saml2p:AuthnRequest xmlns:saml2p=\"urn:oasis:names:tc:SAML:2.0:protocol\" AssertionConsumerServiceURL=\"https://<project>.firebaseapp.com/__/auth/handler\" Destination=\"https://<project>.web.app/saml/<run>/sso\" ID=\"<id:_hex>\" IssueInstant=\"<time:millis>\" ProtocolBinding=\"urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST\" Version=\"2.0\"><saml2:Issuer xmlns:saml2=\"urn:oasis:names:tc:SAML:2.0:assertion\">https://<project>.firebaseapp.com/saml/<run></saml2:Issuer></saml2p:AuthnRequest>",
+                "relayState": "<relay-state>"
+              }
+            },
+            "providerId": "saml.fireemu-<run>-sg",
+            "sessionId": "<session-id>"
+          }
+        },
+        "unsigned": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "INVALID_IDP_RESPONSE : Missing signature in Assertion and Response enclosing it (if present).",
+              "errors": [
+                {
+                  "message": "INVALID_IDP_RESPONSE : Missing signature in Assertion and Response enclosing it (if present).",
+                  "domain": "global",
+                  "reason": "invalid"
+                }
+              ]
+            }
+          }
+        }
+      }
+    }
+  }
+}

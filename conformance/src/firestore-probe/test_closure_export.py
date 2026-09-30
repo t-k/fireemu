@@ -37,10 +37,14 @@ def test_delta_v3_contains_only_six_delete_recipes_and_one_stream_recipe() -> No
     assert {program["id"] for program in programs} == expected_ids
     assert len(programs) == 6
     assert len(delta["sourceCorpusSha256"]) == 64
-    assert delta["restRequestCount"] == sum(len(program["steps"]) for program in programs) == 30
-    assert {
-        recipe["id"] for recipe in delta["streamRecipes"]
-    } == {"writes/write-stream-terminal/response-before-half-close"}
+    assert (
+        delta["restRequestCount"]
+        == sum(len(program["steps"]) for program in programs)
+        == 30
+    )
+    assert {recipe["id"] for recipe in delta["streamRecipes"]} == {
+        "writes/write-stream-terminal/response-before-half-close"
+    }
     assert delta["streamRecipes"][0]["maxFrames"] == 2
     for program in programs:
         assert [step["id"] for step in program["steps"]] == [
@@ -56,7 +60,7 @@ def test_sandbox_corpus_covers_the_frozen_closure_recipes() -> None:
     corpus = _corpus()
     programs = corpus["restPrograms"]
     ids = [program["id"] for program in programs]
-    assert len(ids) == len(set(ids)) == 74
+    assert len(ids) == len(set(ids)) == 106
     assert {
         "writes/limits/field-path-mask/1499",
         "writes/limits/field-path-mask/1500",
@@ -87,8 +91,17 @@ def test_sandbox_corpus_covers_the_frozen_closure_recipes() -> None:
         "writes/limits/non-commit-rest-request-bytes/patch/10485761",
         "writes/limits/webchannel-request-bytes/10485760",
         "writes/limits/webchannel-request-bytes/10485761",
+        "writes/limits/webchannel-request-bytes/11534336",
+        "writes/limits/webchannel-request-bytes/11534337",
+        "writes/limits/webchannel-request-bytes/12582912",
+        "writes/limits/webchannel-request-bytes/16777216",
+        "writes/limits/webchannel-request-bytes/16777217",
+        "writes/limits/webchannel-request-bytes/33554432",
+        "writes/limits/webchannel-request-bytes/33554433",
+        "writes/limits/indexed-string-name/2999/1142",
+        "writes/limits/indexed-string-name/2000/2142",
     }.issubset(ids)
-    assert len(corpus["streamRecipes"]) == 8
+    assert len(corpus["streamRecipes"]) == 10
     assert {recipe["id"] for recipe in corpus["streamRecipes"]} == {
         "writes/write-stream-transaction",
         "writes/write-stream-terminal/trailing-metadata",
@@ -96,6 +109,8 @@ def test_sandbox_corpus_covers_the_frozen_closure_recipes() -> None:
         "writes/write-stream-terminal/response-before-half-close",
         "writes/limits/grpc-unary-request-bytes/10485760",
         "writes/limits/grpc-unary-request-bytes/10485761",
+        "writes/limits/grpc-unary-request-bytes/11534336",
+        "writes/limits/grpc-unary-request-bytes/11534337",
         "writes/limits/grpc-stream-request-bytes/10485760",
         "writes/limits/grpc-stream-request-bytes/10485761",
     }
@@ -131,6 +146,8 @@ def test_sandbox_corpus_covers_the_frozen_closure_recipes() -> None:
             condition["conditionId"].startswith("FS-DATA-WRITE/final-")
             or condition["conditionId"] == "FS-DATA-WRITE/closure-review"
             or condition["status"] == "PENDING_CORPUS"
+            # The list lane records its own corpus; its recipes are not sandbox programs.
+            or condition["conditionId"].startswith("FS-DATA-WRITE-LIST/")
         ):
             continue
         for recipe in condition["recipeIds"]:

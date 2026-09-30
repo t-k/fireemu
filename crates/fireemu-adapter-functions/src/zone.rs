@@ -45,7 +45,7 @@ pub fn resolve(name: Option<&str>) -> Result<SharedZone, String> {
     }
     fixed_offset_seconds(Some(name))
         .map(|o| Arc::new(FixedOffset(o)) as SharedZone)
-        .map_err(|e| e.to_string())
+        .map_err(|_| format!("unknown time zone {name:?}"))
 }
 
 /// The version of the bundled zone database (recorded in traces / status).

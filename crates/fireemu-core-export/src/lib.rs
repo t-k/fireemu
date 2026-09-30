@@ -39,6 +39,7 @@ pub mod auth;
 pub mod firestore;
 pub mod json;
 pub mod leveldb;
+pub mod managed;
 pub mod metadata;
 pub mod storage;
 pub mod wire;

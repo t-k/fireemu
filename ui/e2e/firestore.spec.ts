@@ -670,6 +670,12 @@ test.describe("Firestore data browser", () => {
     await api(request, "PATCH", `${DOCS}/scope/a`, {
       fields: { local: { stringValue: "before" } },
     });
+    // The daemon runs the strict profile, where a named database answers NOT_FOUND until
+    // databases.create has run, as production does.
+    await api(request, "POST", "firestore/v1/projects/demo-app/databases?databaseId=scope-db", {
+      type: "FIRESTORE_NATIVE",
+      locationId: "nam5",
+    });
     const alternateDocs = "firestore/v1/projects/demo-app/databases/scope-db/documents";
     await api(request, "PATCH", `${alternateDocs}/scope/a`, {
       fields: { identity: { stringValue: "alternate-database" } },

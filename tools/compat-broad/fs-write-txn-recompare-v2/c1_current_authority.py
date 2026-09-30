@@ -14,7 +14,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-RUNTIME_COMMIT = "c1d24250a62d23b38bcfed6da51f1ba4ed5798bb"
+RUNTIME_COMMIT = "83fd0307b727b3c13164daaf19f2f8dd6a5f0ac2"
 ARTIFACT_REL = Path("docs.local/runs/fs-write-txn-current-c1-shadow/fireemu")
 MANIFEST_REL = Path("docs.local/runs/fs-write-txn-current-c1-build/local.json")
 RECEIPT_REL = Path("docs.local/runs/fs-write-txn-current-c1-shadow/receipt.json")

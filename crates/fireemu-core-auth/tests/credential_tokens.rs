@@ -43,6 +43,7 @@ fn legacy_payloads_carry_the_provider_at_the_top_level_and_no_session_claims() {
             email: Some(("a@example.com", false)),
             extra_claims: None,
             session_epoch: None,
+            tenant: None,
         },
     );
     assert_eq!(
@@ -60,6 +61,7 @@ fn legacy_payloads_carry_the_provider_at_the_top_level_and_no_session_claims() {
             email: None,
             extra_claims: Some(&claims),
             session_epoch: None,
+            tenant: None,
         },
     );
     assert_eq!(
@@ -76,9 +78,32 @@ fn legacy_payloads_carry_the_provider_at_the_top_level_and_no_session_claims() {
             email: None,
             extra_claims: Some(&empty),
             session_epoch: None,
+            tenant: None,
         },
     );
     assert!(!without.contains("extra_claims"), "{without}");
+}
+
+/// A tenant's legacy token names the tenant at the top level (AUTH-TENANT-BLOCKING sandbox
+/// recording 2026-09-27, settings#password-off-update-password).
+#[test]
+fn a_tenant_legacy_payload_names_the_tenant() {
+    let payload = legacy_token_payload(
+        "demo-app",
+        T0,
+        &LegacyToken {
+            uid: "s1",
+            sign_in_provider: "password",
+            email: Some(("s1@example.com", true)),
+            extra_claims: None,
+            session_epoch: None,
+            tenant: Some("atb-set-s-abcde"),
+        },
+    );
+    assert_eq!(
+        payload,
+        r#"{"aud":"demo-app","email":"s1@example.com","exp":1789214460,"iat":1788004860,"iss":"https://identitytoolkit.google.com/","sign_in_provider":"password","tenant":"atb-set-s-abcde","user_id":"s1","verified":true}"#
+    );
 }
 
 fn legacy(project: &str, issuer: &str, uid: &str, iat: i64) -> String {
@@ -91,6 +116,7 @@ fn legacy(project: &str, issuer: &str, uid: &str, iat: i64) -> String {
             email: None,
             extra_claims: None,
             session_epoch: None,
+            tenant: None,
         },
     )
     .replace(LEGACY_TOKEN_ISSUER, issuer);

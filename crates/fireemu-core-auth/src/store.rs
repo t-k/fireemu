@@ -15,7 +15,7 @@ use fireemu_core_types::determinism::{DeterministicRng, SplitMix64};
 use fireemu_core_types::hash::sha256;
 use fireemu_core_types::time::{LogicalDuration, LogicalInstant};
 
-use crate::claims::{CustomClaims, FirebaseClaims, IdTokenClaims};
+use crate::claims::{ClaimValue, CustomClaims, FirebaseClaims, IdTokenClaims};
 use crate::federation::PendingIdpCache;
 use crate::mfa::{
     match_code, CodeMatch, EnrolledFactor, MfaError, MfaState, PendingEnrollment, PendingSignIn,
@@ -166,6 +166,17 @@ pub enum IdpSignIn {
         /// The federated providers already linked to that account (`verifiedProvider`).
         verified_providers: Vec<String>,
     },
+}
+
+/// How a federated sign-in's new account holds an email another account already holds (with
+/// `allowDuplicateEmails`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DuplicateIdpEmail {
+    /// The new account holds the email too, as the official emulator does.
+    Stored,
+    /// The new account holds no email; its provider information keeps it (production,
+    /// AUTH-FEDERATION record-saml 7789f0, 2026-09-28).
+    Omitted,
 }
 
 /// Out-of-band (email action) code kinds.
@@ -331,6 +342,9 @@ pub struct RefreshSession {
     pub claims: CustomClaims,
     /// Second factor of the session.
     pub second_factor: Option<SecondFactorAssertion>,
+    /// The sign-in's `firebase.sign_in_attributes`, for a caller that carries them into
+    /// refreshed ID tokens (production does, for an OIDC sign-in).
+    pub sign_in_attributes: Option<ClaimValue>,
 }
 
 /// User record.
@@ -379,6 +393,15 @@ pub struct UserRecord {
     /// Whether a custom-token sign-in created the account. Production then reports
     /// `customAuth` and `validSince` in every read of it (sandbox recording 2026-09-24).
     pub custom_auth: bool,
+    /// Whether the account ever signed in by email link. Production then reports
+    /// `emailLinkSignin` (sandbox recording 2026-09-24, auth-action/email-link).
+    pub email_link_signin: bool,
+    /// Whether an email-link sign-in created the account: production then reports
+    /// `validSince` in every read of it (sandbox recording 2026-09-24).
+    pub email_link_created: bool,
+    /// `initialEmail`: the address an applied email change replaced first (sandbox recording
+    /// 2026-09-24, auth-action/change-email). An Admin email change does not set it.
+    pub initial_email: Option<String>,
     /// `passwordUpdatedAt` of a password credential that was since removed: production keeps
     /// reporting it (sandbox recording 2026-09-23, auth-account/provider).
     pub removed_password_updated_at: Option<LogicalInstant>,
@@ -647,6 +670,9 @@ pub struct SignInConfig {
     /// `signIn.phoneNumber.testPhoneNumbers`: E.164 number to its fixed six-digit code. No
     /// message is sent for these numbers and the code never changes.
     pub test_phone_numbers: BTreeMap<String, String>,
+    /// `authorizedDomains`: the hosts an action link's continue URL may name. `None` is the
+    /// list a new Firebase project starts with ([`AuthStore::authorized_domains`]).
+    pub authorized_domains: Option<Vec<String>>,
 }
 
 impl Default for SignInConfig {
@@ -657,6 +683,7 @@ impl Default for SignInConfig {
             anonymous_enabled: true,
             phone_enabled: true,
             test_phone_numbers: BTreeMap::new(),
+            authorized_domains: None,
         }
     }
 }
@@ -665,16 +692,19 @@ impl SignInConfig {
     /// Identity Platform documents at most ten test phone numbers per project.
     pub const MAX_TEST_PHONE_NUMBERS: usize = 10;
 
-    /// Whether every test number is valid E.164 with a six-digit code, within the documented
-    /// count.
+    /// Whether every test number is valid E.164, within the documented count.
     #[must_use]
     pub fn is_valid(&self) -> bool {
-        self.test_phone_numbers.len() <= Self::MAX_TEST_PHONE_NUMBERS
-            && self.test_phone_numbers.iter().all(|(number, code)| {
-                AuthStore::validate_phone_number(number).is_ok()
-                    && code.len() == 6
-                    && code.bytes().all(|b| b.is_ascii_digit())
-            })
+        self.authorized_domains
+            .as_ref()
+            .is_none_or(|domains| domains.iter().all(|domain| !domain.is_empty()))
+            && self.test_phone_numbers.len() <= Self::MAX_TEST_PHONE_NUMBERS
+            // Production takes any code for a test number, six digits or not (sandbox
+            // recording 2026-09-25, AUTH-CONFIG-SDK config/invalid).
+            && self
+                .test_phone_numbers
+                .keys()
+                .all(|number| AuthStore::validate_phone_number(number).is_ok())
     }
 }
 
@@ -706,6 +736,21 @@ pub struct ProjectAuthConfigPatch {
     pub disabled_user_signup: Option<bool>,
     /// `None` preserves the current end-user deletion permission.
     pub disabled_user_deletion: Option<bool>,
+}
+
+/// Values prepared from one project's current store before a config transaction publishes.
+#[derive(Debug, Default)]
+pub struct ProjectConfigStoreUpdate {
+    /// A replacement password policy, if the request writes it.
+    pub password_policy: Option<PasswordPolicy>,
+    /// A replacement sign-up quota, if the request writes it.
+    pub signup_quota: Option<SignupQuotaConfig>,
+    /// Replacement sign-in providers and domains, if the request writes them.
+    pub sign_in: Option<SignInConfig>,
+    /// Written and derived project config members, if the request writes them.
+    pub stored_members: Option<crate::config_members::StoredConfigMembers>,
+    /// A replacement multi-factor configuration, if the request writes it.
+    pub mfa: Option<crate::mfa_config::MfaProjectConfig>,
 }
 
 /// The trust boundary used by operations affected by client permission settings.
@@ -889,6 +934,40 @@ pub struct InboundSamlProviderConfig {
     pub callback_uri: String,
 }
 
+/// A project or tenant configuration of a default supported identity provider (Identity Platform
+/// `defaultSupportedIdpConfigs`, such as `google.com` or `apple.com`).
+#[derive(Clone, PartialEq, Eq)]
+pub struct DefaultIdpConfig {
+    /// The identity provider ID (`idpId`).
+    pub id: String,
+    /// Whether sign-in with this provider is enabled.
+    pub enabled: bool,
+    /// OAuth client ID.
+    pub client_id: Option<String>,
+    /// OAuth client secret.
+    pub client_secret: Option<String>,
+    /// `appleSignInConfig`, kept as written (JSON text).
+    pub apple_sign_in_config: Option<String>,
+}
+
+impl fmt::Debug for DefaultIdpConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("DefaultIdpConfig")
+            .field("id", &self.id)
+            .field("enabled", &self.enabled)
+            .field("client_id", &self.client_id)
+            .field(
+                "client_secret",
+                &self.client_secret.as_ref().map(|_| "<redacted>"),
+            )
+            .field(
+                "apple_sign_in_config",
+                &self.apple_sign_in_config.as_ref().map(|_| "<redacted>"),
+            )
+            .finish()
+    }
+}
+
 /// Why an account an import artifact recorded was refused.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ImportUserError {
@@ -1003,6 +1082,8 @@ pub enum AuthError {
     EmailNotFound,
     /// Unknown, consumed or mismatched action code.
     InvalidOobCode,
+    /// An action code past its lifetime (production lifetimes only).
+    ExpiredOobCode,
     /// Unknown phone verification session.
     InvalidSessionInfo,
     /// Wrong phone verification code.
@@ -1044,6 +1125,7 @@ impl fmt::Display for AuthError {
             Self::InvalidPhoneNumber => f.write_str("invalid phone number"),
             Self::EmailNotFound => f.write_str("email not found"),
             Self::InvalidOobCode => f.write_str("invalid action code"),
+            Self::ExpiredOobCode => f.write_str("expired action code"),
             Self::InvalidSessionInfo => f.write_str("invalid verification session"),
             Self::InvalidVerificationCode => f.write_str("invalid verification code"),
             Self::ControlCharacterInText(field) => {
@@ -1172,6 +1254,13 @@ pub struct AuthStore {
     /// Whether this store has issued a legacy Identity Toolkit token. Only then does it honour
     /// one, so a store that never issues them (the emulator profile) refuses a forged one.
     legacy_tokens_issued: bool,
+    /// Whether action codes follow production's lifetimes: a password reset code lives an
+    /// hour, the other kinds longer, and an expired code is refused as expired. Otherwise every
+    /// code lives an hour and then disappears (the emulator profile's local policy).
+    production_oob_lifetimes: bool,
+    /// Whether second factors follow production's project rules (the strict profile): the
+    /// project's `mfa` config decides whether a sign-in asks for one.
+    production_mfa: bool,
     oob_codes: Arc<BTreeMap<String, OobCode>>,
     verification_codes: Arc<BTreeMap<String, VerificationCode>>,
     /// Outstanding phone `temporaryProof`s: proof to the verified number and its issue time.
@@ -1180,6 +1269,8 @@ pub struct AuthStore {
     /// credential is resolved directly rather than by scanning every user
     /// (`AUTH-TRANSIENT-04`). Kept in step with the users' own pending maps.
     pending_sign_in_owners: Arc<BTreeMap<String, LocalId>>,
+    /// Pending sign-ins of deleted accounts and when they started (production's rules).
+    orphaned_pending_sign_ins: Arc<BTreeMap<String, LogicalInstant>>,
     /// Process-local raw `IdP` requests; detached from default snapshots and restore.
     pending_idp: PendingIdpCache,
     /// Generated IDs held by in-flight blocking Auth candidates, grouped by reset generation and
@@ -1189,10 +1280,6 @@ pub struct AuthStore {
     generated_local_id_reservations: Arc<Mutex<GeneratedLocalIdReservations>>,
     /// Monotonic request tickets that identify one generated-ID reservation owner.
     generated_local_id_reservation_ticket: Arc<AtomicU64>,
-    /// Monotonic count of ordinary generated-ID allocations that skipped an in-flight blocking
-    /// reservation. A blocking candidate captures this before its hook runs; a change at commit
-    /// means a nested ordinary Admin allocation changed the identity allocation boundary.
-    generated_id_interference: Arc<AtomicU64>,
     /// Users that currently own a pending enrollment or sign-in. Credential sweeping only
     /// visits this bounded subset instead of cloning or scanning every account.
     pending_user_ids: BTreeSet<LocalId>,
@@ -1205,6 +1292,10 @@ pub struct AuthStore {
     config: ProjectAuthConfig,
     /// The project's sign-in providers and test phone numbers.
     sign_in: SignInConfig,
+    /// The project's multi-factor configuration (Admin v2 `Config.mfa`).
+    mfa_config: crate::mfa_config::MfaProjectConfig,
+    /// Written config members read back as written ([`crate::config_members`]).
+    stored_members: crate::config_members::StoredConfigMembers,
     /// Deterministic, local-only sign-up quota state. Admin/import paths do not use it unless
     /// their caller explicitly requests a reservation through the typed API.
     signup_quota: SignupQuota,
@@ -1216,6 +1307,10 @@ pub struct AuthStore {
     saml_configs: BTreeMap<String, InboundSamlProviderConfig>,
     /// Inbound SAML configuration IDs in creation order.
     saml_order: Vec<String>,
+    /// Default supported identity provider configurations in this namespace.
+    default_idp_configs: BTreeMap<String, DefaultIdpConfig>,
+    /// Default supported identity provider configuration IDs in creation order.
+    default_idp_order: Vec<String>,
 }
 
 /// What a phone verification code was issued for, as the official emulator names it in
@@ -1302,10 +1397,67 @@ impl CredentialNotice {
     }
 }
 
+/// A source of unpredictable bytes for bearer credentials: it fills the buffer and answers
+/// whether it could. The daemon installs the operating system CSPRNG
+/// (`fireemu-adapter-support::entropy`); the core itself never touches the operating system.
+pub type CredentialEntropy = fn(&mut [u8]) -> bool;
+
+static CREDENTIAL_ENTROPY: std::sync::OnceLock<CredentialEntropy> = std::sync::OnceLock::new();
+
+/// Installs the process-wide credential entropy, once; answers whether this call installed it.
+///
+/// Action codes, verification sessions, phone proofs, MFA sessions and pending credentials,
+/// refresh tokens and TOTP secrets then draw from it instead of the seeded stream, which a
+/// client could otherwise invert from one value it was given (the seeded stream's output
+/// function is a bijection). Their shapes do not change. Identifiers that are not secrets
+/// (account and factor ids, salts) keep the seeded stream, so a seed still reproduces them.
+pub fn install_credential_entropy(source: CredentialEntropy) -> bool {
+    CREDENTIAL_ENTROPY.set(source).is_ok()
+}
+
 /// Email action codes expire after an hour of virtual time.
 pub const OOB_CODE_TTL_SECONDS: i64 = 3_600;
+/// Under production lifetimes, a verification, email-change or sign-in code outlives the hour
+/// a password reset code has: production answered all three this long after their generation
+/// (sandbox recording 2026-09-24, auth-action/expiry). Their lifetime is unobserved and no
+/// Google document states one (searched 2026-09-25), so such a code is never refused as
+/// expired (owner decision 2026-09-25): refusing earlier could refuse what production accepts.
+pub const OBSERVED_LONG_OOB_CODE_SECONDS: i64 = 3_900;
+/// Under production lifetimes an expired code is kept this long after its lifetime, so it is
+/// refused as expired rather than as unknown.
+pub const EXPIRED_OOB_CODE_RETENTION_SECONDS: i64 = 86_400;
 /// Phone verification codes expire after ten minutes of virtual time.
 pub const SMS_CODE_TTL_SECONDS: i64 = 600;
+/// Under production's second-factor rules a phone enrollment session does not expire:
+/// production enrolled with sessions of every age it was shown, up to about 1803 seconds
+/// (sandbox recording 2026-09-24, `auth-mfa/lifetime#aged-session-s1800`, both recordings; the
+/// run waits 1800 seconds and a 3-second margin), and never refused one. Its lifetime is
+/// unobserved, so it is not refused as expired (owner decision M12, as AUTH-ACTION's long
+/// codes). An account holds a bounded number of them (`bound_phone_enrollment_sessions`).
+pub const OBSERVED_MFA_PHONE_ENROLLMENT_SECONDS: i64 = 1_805;
+/// Under production's second-factor rules a TOTP sign-in whose pending credential is at least
+/// this old is `TOTP_CHALLENGE_TIMEOUT`: production accepted one 293 seconds old and refused
+/// one 303 seconds old (sandbox recordings 2026-09-24, `auth-mfa/lifetime-short#aged-pending-q290`
+/// and `auth-mfa/lifetime#aged-pending-p300`). Those ages run from one request's send to the
+/// next's, so the age the server saw differs from them by the two requests' latencies; the
+/// boundary sits one second below the refusal to absorb that, well above the accepted 293.
+/// Younger ages are unobserved and stay accepted.
+pub const OBSERVED_TOTP_CHALLENGE_TIMEOUT_SECONDS: i64 = 302;
+/// Under production's second-factor rules a TOTP enrollment start whose session signed in at
+/// least this long ago is `CREDENTIAL_TOO_OLD_LOGIN_AGAIN`: production started one with a
+/// sign-in 244 seconds old and refused one 333 seconds old (sandbox recording 2026-09-24,
+/// `auth-mfa/lifetime-short#aged-token-start-r240` and `-r330`). Refused from the youngest
+/// refused age only; `auth_time` is whole seconds cut down from the sign-in, which makes the
+/// age the server computes up to a second older than the one the harness measured.
+pub const OBSERVED_TOTP_ENROLLMENT_LOGIN_AGE_SECONDS: i64 = 333;
+/// Under production's second-factor rules an SMS step started for a pending credential at least
+/// this old is `INVALID_MFA_PENDING_CREDENTIAL : MFA pending credential is expired.`:
+/// production started one about 453 seconds old and refused one about 603 seconds old (sandbox
+/// recording 2026-09-25, `auth-mfa/lifetime-sms`, response to response). As
+/// [`OBSERVED_TOTP_CHALLENGE_TIMEOUT_SECONDS`], the boundary sits one second below the refusal
+/// to absorb the requests' latency (the coordinator's delegated decision under the owner's M9
+/// exception). A finalize after an accepted start is not refused, as that was not observed.
+pub const OBSERVED_SMS_PENDING_START_SECONDS: i64 = 602;
 /// A pending second-factor sign-in (`mfaPendingCredential`) expires after an hour of virtual
 /// time. The official emulator's credential is stateless and never expires; this is a local
 /// lifecycle policy, not a claimed production value.
@@ -1426,15 +1578,17 @@ impl AuthStore {
                     .map(|email| (email, user.email_verified)),
                 extra_claims: developer_claims.map(CustomClaims::entries_map),
                 session_epoch: epoch.as_deref(),
+                tenant: self.tenant_id.as_deref(),
             },
         );
         self.legacy_tokens_issued = true;
         Ok(payload)
     }
 
-    /// The private control-session incarnation expected in locally issued ID tokens.
+    /// The private control-session incarnation expected in locally issued ID tokens (the session
+    /// epoch claim this store's ID tokens carry), if it has one.
     #[must_use]
-    pub(crate) fn lifecycle_epoch_claim(&self) -> Option<String> {
+    pub fn lifecycle_epoch_claim(&self) -> Option<String> {
         self.lifecycle_epoch.map(AuthLifecycleEpoch::wire_value)
     }
 
@@ -1465,25 +1619,31 @@ impl AuthStore {
             credential_epoch: None,
             lifecycle_epoch: None,
             legacy_tokens_issued: false,
+            production_oob_lifetimes: false,
+            production_mfa: false,
             oob_codes: Arc::new(BTreeMap::new()),
             verification_codes: Arc::new(BTreeMap::new()),
             temporary_proofs: BTreeMap::new(),
             pending_sign_in_owners: Arc::new(BTreeMap::new()),
+            orphaned_pending_sign_ins: Arc::new(BTreeMap::new()),
             pending_idp: PendingIdpCache::default(),
             generated_local_id_reservations: Arc::new(Mutex::new(BTreeMap::new())),
             generated_local_id_reservation_ticket: Arc::new(AtomicU64::new(0)),
-            generated_id_interference: Arc::new(AtomicU64::new(0)),
             pending_user_ids: BTreeSet::new(),
             created_users: Vec::new(),
             deleted_users: Vec::new(),
             credential_notices: Vec::new(),
             config: ProjectAuthConfig::default(),
             sign_in: SignInConfig::default(),
+            mfa_config: crate::mfa_config::MfaProjectConfig::default(),
+            stored_members: crate::config_members::StoredConfigMembers::default(),
             signup_quota: SignupQuota::default(),
             oidc_configs: BTreeMap::new(),
             oidc_order: Vec::new(),
             saml_configs: BTreeMap::new(),
             saml_order: Vec::new(),
+            default_idp_configs: BTreeMap::new(),
+            default_idp_order: Vec::new(),
         }
     }
 
@@ -1623,13 +1783,37 @@ impl AuthStore {
         self.local_id_for_email.remove(&email);
     }
 
+    /// 64 bits for a bearer credential: the installed credential entropy, or the seeded stream
+    /// when none is installed (unit tests and embedded stores). A source that is installed but
+    /// fails stops the request rather than falling back to a predictable value.
+    fn secret_u64(&mut self) -> u64 {
+        match CREDENTIAL_ENTROPY.get() {
+            Some(source) => {
+                let mut bytes = [0_u8; 8];
+                assert!(
+                    source(&mut bytes),
+                    "the operating system random number generator is unavailable"
+                );
+                u64::from_be_bytes(bytes)
+            }
+            None => self.rng.next_u64(),
+        }
+    }
+
+    /// A bearer credential of the shape `{prefix}{16 hex digits}{4 decimal digits}`.
     fn next_id(&mut self, prefix: &str) -> String {
         self.counter += 1;
         format!(
             "{prefix}{:016x}{:04}",
-            self.rng.next_u64(),
+            self.secret_u64(),
             self.counter % 10_000
         )
+    }
+
+    /// A fresh opaque value of the bearer-credential shape, for a value the service makes and
+    /// the caller hands back unread (a `createAuthUri` session ID, state or nonce).
+    pub fn next_opaque_value(&mut self) -> String {
+        self.next_id("")
     }
 
     fn next_refresh_token(&mut self) -> String {
@@ -1669,7 +1853,7 @@ impl AuthStore {
     fn random_secret(&mut self) -> TotpSecret {
         let mut bytes = Vec::with_capacity(20);
         for _ in 0..3 {
-            bytes.extend_from_slice(&self.rng.next_u64().to_be_bytes());
+            bytes.extend_from_slice(&self.secret_u64().to_be_bytes());
         }
         bytes.truncate(20);
         TotpSecret::new(bytes)
@@ -1728,6 +1912,20 @@ impl AuthStore {
             }
         }
         self.remove_refresh_tokens_for(&key);
+        // Production answers a deleted account's pending credential USER_NOT_FOUND (sandbox
+        // recording 2026-09-24, auth-mfa/interactions#finalize-y-deleted); the ids are kept
+        // for the pending lifetime only.
+        if self.second_factor_rules_are_production() {
+            let started: Vec<(String, LogicalInstant)> = user
+                .mfa
+                .pending_sign_in_ids_and_starts()
+                .into_iter()
+                .collect();
+            if !started.is_empty() {
+                let orphaned = Arc::make_mut(&mut self.orphaned_pending_sign_ins);
+                orphaned.extend(started);
+            }
+        }
         Arc::make_mut(&mut self.pending_sign_in_owners).retain(|_, owner| *owner != key);
         self.pending_user_ids.remove(&key);
         Arc::make_mut(&mut self.verification_codes).retain(|_, c| match &c.purpose {
@@ -1755,6 +1953,7 @@ impl AuthStore {
         self.verification_codes = Arc::new(BTreeMap::new());
         self.temporary_proofs.clear();
         self.pending_sign_in_owners = Arc::new(BTreeMap::new());
+        self.orphaned_pending_sign_ins = Arc::new(BTreeMap::new());
         self.pending_idp = PendingIdpCache::default();
         self.reset_generation.fetch_add(1, Ordering::AcqRel);
         self.pending_user_ids.clear();
@@ -1781,23 +1980,45 @@ impl AuthStore {
         if self
             .oob_codes
             .values()
-            .any(|code| Self::expired(code.created_at, OOB_CODE_TTL_SECONDS, now))
+            .any(|code| Self::oob_code_swept(self.production_oob_lifetimes, code, now))
         {
+            let production = self.production_oob_lifetimes;
             Arc::make_mut(&mut self.oob_codes)
-                .retain(|_, code| !Self::expired(code.created_at, OOB_CODE_TTL_SECONDS, now));
+                .retain(|_, code| !Self::oob_code_swept(production, code, now));
         }
+        let production = self.second_factor_rules_are_production();
         if self
             .verification_codes
             .values()
-            .any(|code| Self::expired(code.created_at, SMS_CODE_TTL_SECONDS, now))
+            .any(|code| Self::phone_code_expired(production, code, now))
         {
             Arc::make_mut(&mut self.verification_codes)
-                .retain(|_, code| !Self::expired(code.created_at, SMS_CODE_TTL_SECONDS, now));
+                .retain(|_, code| !Self::phone_code_expired(production, code, now));
         }
         self.temporary_proofs
             .retain(|_, (_, issued)| !Self::expired(*issued, TEMPORARY_PROOF_TTL_SECONDS, now));
         let sign_in_ttl = LogicalDuration::from_seconds(PENDING_SIGN_IN_TTL_SECONDS);
-        let enrollment_grace = self.policy.enrollment_session_ttl;
+        if self.orphaned_pending_sign_ins.values().any(|started| {
+            started
+                .checked_add(sign_in_ttl)
+                .unwrap_or(LogicalInstant::MAX)
+                < now
+        }) {
+            Arc::make_mut(&mut self.orphaned_pending_sign_ins).retain(|_, started| {
+                started
+                    .checked_add(sign_in_ttl)
+                    .unwrap_or(LogicalInstant::MAX)
+                    >= now
+            });
+        }
+        // Production still answers SESSION_EXPIRED twice the lifetime later (sandbox recording
+        // 2026-09-24, auth-mfa/lifetime at 1805 s), so its expired sessions stay a day; the
+        // per-user budget bounds them.
+        let enrollment_grace = if self.second_factor_rules_are_production() {
+            LogicalDuration::from_seconds(86_400)
+        } else {
+            self.policy.enrollment_session_ttl
+        };
         let candidates: Vec<LocalId> = self.pending_user_ids.iter().cloned().collect();
         for uid in candidates {
             let mut remains_pending = false;
@@ -1937,6 +2158,39 @@ impl AuthStore {
         &self.sign_in
     }
 
+    /// The project's multi-factor configuration.
+    #[must_use]
+    pub const fn mfa_config(&self) -> &crate::mfa_config::MfaProjectConfig {
+        &self.mfa_config
+    }
+
+    /// Accepted TOTP steps on either side of the current one: the project config's
+    /// `adjacentIntervals` while it enables TOTP with one, else the store's policy.
+    #[must_use]
+    pub fn totp_window(&self) -> u8 {
+        self.mfa_config
+            .totp_window()
+            .unwrap_or(self.policy.window_steps)
+    }
+
+    /// Replaces the project's multi-factor configuration (the adapter validates it).
+    pub fn set_mfa_config(&mut self, config: crate::mfa_config::MfaProjectConfig) {
+        self.mfa_config = config;
+    }
+
+    /// The project's authorized domains: the configured list, or the one a new Firebase
+    /// project starts with (`localhost` and the project's two Firebase Hosting domains).
+    #[must_use]
+    pub fn authorized_domains(&self) -> Vec<String> {
+        self.sign_in.authorized_domains.clone().unwrap_or_else(|| {
+            vec![
+                "localhost".to_owned(),
+                format!("{}.firebaseapp.com", self.project_id),
+                format!("{}.web.app", self.project_id),
+            ]
+        })
+    }
+
     /// Replaces the sign-in providers and test phone numbers; an invalid configuration is
     /// refused and changes nothing.
     pub fn set_sign_in_config(&mut self, config: SignInConfig) -> Result<(), AuthError> {
@@ -1945,6 +2199,28 @@ impl AuthStore {
         }
         self.sign_in = config;
         Ok(())
+    }
+
+    /// The project's written config members ([`crate::config_members`]).
+    #[must_use]
+    pub const fn stored_config_members(&self) -> &crate::config_members::StoredConfigMembers {
+        &self.stored_members
+    }
+
+    /// Whether the project's Admin v2 config currently admits tenant operations.
+    #[must_use]
+    pub fn allows_tenants(&self) -> bool {
+        self.stored_members
+            .get(crate::config_members::ALLOW_TENANTS)
+            == Some("true")
+    }
+
+    /// Replaces the project's written config members.
+    pub fn set_stored_config_members(
+        &mut self,
+        members: crate::config_members::StoredConfigMembers,
+    ) {
+        self.stored_members = members;
     }
 
     /// Whether a principal may create an end-user account in this namespace.
@@ -2164,6 +2440,47 @@ impl AuthStore {
         true
     }
 
+    /// Lists default supported identity provider configurations in creation order.
+    pub fn default_idp_configs(&self) -> impl Iterator<Item = &DefaultIdpConfig> {
+        self.default_idp_order
+            .iter()
+            .filter_map(|id| self.default_idp_configs.get(id))
+    }
+
+    /// Gets one default supported identity provider configuration by identity provider ID.
+    #[must_use]
+    pub fn default_idp_config(&self, id: &str) -> Option<&DefaultIdpConfig> {
+        self.default_idp_configs.get(id)
+    }
+
+    /// Creates a default supported identity provider configuration. Returns `false` when its ID is used.
+    pub fn create_default_idp_config(&mut self, config: DefaultIdpConfig) -> bool {
+        if self.default_idp_configs.contains_key(&config.id) {
+            return false;
+        }
+        self.default_idp_order.push(config.id.clone());
+        self.default_idp_configs.insert(config.id.clone(), config);
+        true
+    }
+
+    /// Replaces a default supported identity provider configuration. Returns `false` when its ID is unknown.
+    pub fn replace_default_idp_config(&mut self, config: DefaultIdpConfig) -> bool {
+        if !self.default_idp_configs.contains_key(&config.id) {
+            return false;
+        }
+        self.default_idp_configs.insert(config.id.clone(), config);
+        true
+    }
+
+    /// Deletes a default supported identity provider configuration. Returns `false` when its ID is unknown.
+    pub fn delete_default_idp_config(&mut self, id: &str) -> bool {
+        if self.default_idp_configs.remove(id).is_none() {
+            return false;
+        }
+        self.default_idp_order.retain(|candidate| candidate != id);
+        true
+    }
+
     /// The password credential of a user, when it has one. An export reads it to write the
     /// emulator's `passwordHash` and `salt` back out.
     #[must_use]
@@ -2293,6 +2610,9 @@ impl AuthStore {
                 federated: user.federated,
                 admin_created: true,
                 custom_auth: false,
+                email_link_signin: false,
+                email_link_created: false,
+                initial_email: None,
                 removed_password_updated_at: None,
                 email_verified_recorded: true,
                 password,
@@ -2736,18 +3056,11 @@ impl AuthStore {
         self.reset_generation.load(Ordering::Acquire)
     }
 
-    /// Returns the monotonic count of ordinary generated-ID allocations that crossed an
-    /// in-flight blocking candidate reservation.
-    #[must_use]
-    pub fn generated_id_interference_count(&self) -> u64 {
-        self.generated_id_interference.load(Ordering::Acquire)
-    }
-
     /// Reserves the next generated local ID for a speculative blocking request.
     ///
     /// The reservation is shared by snapshots, but the live random stream is unchanged. This
-    /// keeps concurrent blocking candidates distinct while preserving the established identity
-    /// change check when an ordinary nested Admin request consumes the same generated ID.
+    /// keeps concurrent blocking candidates distinct, and an ordinary account created while the
+    /// hook runs skips the reserved id instead of taking it (`BHRNG-1`).
     pub fn reserve_next_generated_local_id(&mut self) -> String {
         self.reserve_next_generated_local_id_with_generation().0
     }
@@ -2783,10 +3096,10 @@ impl AuthStore {
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             let entries = reservations.entry(candidate.clone()).or_default();
-            if entries
-                .iter()
-                .any(|(reserved_generation, _)| *reserved_generation == generation)
-            {
+            // A reservation from before a reset still holds the id until its request returns:
+            // the emulator profile commits that request into the reset state (closure re-review
+            // S1'', 2026-09-28), as the official emulator's account wipe keeps pendingLocalIds.
+            if !entries.is_empty() {
                 continue;
             }
             if entries.insert((generation, ticket)) {
@@ -2796,17 +3109,37 @@ impl AuthStore {
         }
     }
 
-    /// Uses a previously reserved ID for the next generated account and retires one reservation
-    /// from the current generation. New blocking requests use the ticketed variant below so a
-    /// later guard release cannot affect another request's reservation.
-    pub fn use_reserved_generated_local_id(&mut self, id: &str) {
-        let generation = self.reset_generation();
-        let mut reservations = self
-            .generated_local_id_reservations
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        Self::release_reservation_generation(&mut reservations, id, generation);
+    /// Names an id reserved before a reset for the next generated account, as the emulator
+    /// profile does when it commits a request across an account wipe. It releases nothing: the
+    /// request's own reservation stays in the ledger under its older generation until its guard
+    /// releases it by ticket, and no reservation of the current generation can hold the same id,
+    /// since a reservation skips every id the ledger holds.
+    pub fn use_generated_local_id_reserved_before_reset(&mut self, id: &str) {
+        debug_assert!(
+            {
+                let generation = self.reset_generation();
+                self.generated_local_id_reservations
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .get(&LocalId(id.to_owned()))
+                    .is_some_and(|entries| {
+                        entries
+                            .iter()
+                            .all(|(reserved_generation, _)| *reserved_generation != generation)
+                    })
+            },
+            "only a reservation from before a reset names the id"
+        );
         self.next_id_override = Some(id.to_owned());
+    }
+
+    /// Whether an in-flight request holds `id` as its generated local id, in any reset
+    /// generation.
+    pub fn holds_generated_local_id(&self, id: &str) -> bool {
+        self.generated_local_id_reservations
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .contains_key(&LocalId(id.to_owned()))
     }
 
     /// Uses and retires exactly one request-owned generated ID reservation.
@@ -2948,16 +3281,9 @@ impl AuthStore {
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .get(&candidate)
-                    .is_some_and(|entries| {
-                        entries
-                            .iter()
-                            .any(|(generation, _)| *generation == self.reset_generation())
-                    });
-                if reserved {
-                    self.generated_id_interference
-                        .fetch_add(1, Ordering::AcqRel);
-                    continue;
-                }
+                    .is_some_and(|entries| !entries.is_empty());
+                // An in-flight blocking request keeps the id it reserved, across a reset too:
+                // this account skips it.
                 if !self.users.contains_key(&candidate) && !reserved {
                     break candidate;
                 }
@@ -2990,6 +3316,9 @@ impl AuthStore {
             federated: Vec::new(),
             admin_created: false,
             custom_auth: false,
+            email_link_signin: false,
+            email_link_created: false,
+            initial_email: None,
             removed_password_updated_at: None,
             email_verified_recorded: false,
             password: None,
@@ -3017,6 +3346,31 @@ impl AuthStore {
         let email = Self::canonicalize_email(email);
         let new_email = new_email.map(|value| Self::canonicalize_email(&value));
         self.sweep_transient_credentials(now);
+        // At the cap, codes kept past their lifetime (production lifetimes) make room first,
+        // so abandoned codes cannot hold the cap for their whole retention.
+        if self.oob_codes.len() >= MAX_OUTSTANDING_CODES {
+            let production = self.production_oob_lifetimes;
+            Arc::make_mut(&mut self.oob_codes).retain(|_, code| {
+                Self::oob_ttl(production, code.request_type)
+                    .is_none_or(|ttl| !Self::expired(code.created_at, ttl, now))
+            });
+        }
+        // A code without a lifetime never leaves by age, so at the cap the oldest one that
+        // production was not seen to answer (older than the observed lower bound) makes room.
+        if self.oob_codes.len() >= MAX_OUTSTANDING_CODES && self.production_oob_lifetimes {
+            let oldest = self
+                .oob_codes
+                .values()
+                .filter(|code| {
+                    Self::oob_ttl(true, code.request_type).is_none()
+                        && Self::expired(code.created_at, OBSERVED_LONG_OOB_CODE_SECONDS, now)
+                })
+                .min_by_key(|code| (code.created_at, code.sequence))
+                .map(|code| code.code.clone());
+            if let Some(oldest) = oldest {
+                Arc::make_mut(&mut self.oob_codes).remove(&oldest);
+            }
+        }
         if self.oob_codes.len() >= MAX_OUTSTANDING_CODES {
             return Err(AuthError::TooManyOutstandingCodes);
         }
@@ -3034,6 +3388,93 @@ impl AuthStore {
             },
         );
         Ok(code)
+    }
+
+    /// Retires every outstanding code of `request_type` for `email`: production keeps only the
+    /// newest password reset, email change and sign-in link of an address (sandbox recording
+    /// 2026-09-24).
+    pub fn retire_oob_codes(&mut self, request_type: OobRequestType, email: &str) {
+        let email = Self::canonicalize_email(email);
+        let retired = |c: &OobCode| c.request_type == request_type && c.email == email;
+        if self.oob_codes.values().any(retired) {
+            Arc::make_mut(&mut self.oob_codes).retain(|_, c| !retired(c));
+        }
+    }
+
+    /// Voids every outstanding code of a deleted account: those it owned and those for its
+    /// address (production refuses them all, sandbox recording 2026-09-24).
+    pub fn void_oob_codes_of(&mut self, uid: &LocalId, email: Option<&str>) {
+        let email = email.map(Self::canonicalize_email);
+        let voided = |c: &OobCode| c.uid.as_ref() == Some(uid) || email.as_ref() == Some(&c.email);
+        if self.oob_codes.values().any(voided) {
+            Arc::make_mut(&mut self.oob_codes).retain(|_, c| !voided(c));
+        }
+    }
+
+    /// Switches second factors to production's project rules (see `production_mfa`).
+    pub fn set_production_mfa(&mut self, production: bool) {
+        self.production_mfa = production;
+    }
+
+    /// Whether a sign-in of `uid`, an account with enrolled factors, must ask for one: always
+    /// under the official emulator's rules and while the namespace's MFA is on. Under
+    /// production's rules with the project's MFA off, production was seen to skip only a phone
+    /// factor (sandbox recording 2026-09-24, `auth-mfa/disabled#sign-in-a-with-factor`), so a
+    /// project account with a TOTP factor is still asked (fail closed; AUTH-MFA follow-up
+    /// directive). A tenant with its MFA off asks for no factor, TOTP included (sandbox
+    /// recording 2026-09-27, `atb/tenant/mfa#sign-in-m1-mfa-off`).
+    #[must_use]
+    pub fn second_factor_required_for(&self, uid: &LocalId) -> bool {
+        !self.second_factor_rules_are_production()
+            || self.mfa_config.state.is_on()
+            || (self.tenant_id.is_none()
+                && self
+                    .users
+                    .get(uid)
+                    .is_some_and(|user| !user.mfa.totp_factors().is_empty()))
+    }
+
+    /// Whether second factors follow production's rules (the strict profile). A tenant's follow
+    /// them as the project's do, with the tenant's own MFA config (AUTH-TENANT-BLOCKING sandbox
+    /// recording 2026-09-27, `atb/tenant/mfa` and `inheritance`; AUTH-MFA scope decision M2
+    /// left them to this parent).
+    #[must_use]
+    pub const fn second_factor_rules_are_production(&self) -> bool {
+        self.production_mfa
+    }
+
+    /// Switches action codes to production's lifetimes (see `production_oob_lifetimes`).
+    pub fn set_production_oob_lifetimes(&mut self, production: bool) {
+        self.production_oob_lifetimes = production;
+    }
+
+    /// A code's lifetime in seconds; `None` when it has none (production lifetimes, every kind
+    /// but a password reset: see [`OBSERVED_LONG_OOB_CODE_SECONDS`]).
+    const fn oob_ttl(production: bool, request_type: OobRequestType) -> Option<i64> {
+        match request_type {
+            OobRequestType::PasswordReset => Some(OOB_CODE_TTL_SECONDS),
+            _ if production => None,
+            _ => Some(OOB_CODE_TTL_SECONDS),
+        }
+    }
+
+    const fn oob_retention(production: bool, request_type: OobRequestType) -> Option<i64> {
+        match Self::oob_ttl(production, request_type) {
+            Some(ttl) if production => Some(ttl + EXPIRED_OOB_CODE_RETENTION_SECONDS),
+            ttl => ttl,
+        }
+    }
+
+    fn oob_code_swept(production: bool, code: &OobCode, now: LogicalInstant) -> bool {
+        Self::oob_retention(production, code.request_type)
+            .is_some_and(|retention| Self::expired(code.created_at, retention, now))
+    }
+
+    /// Whether an outstanding code is past its lifetime at `now`.
+    #[must_use]
+    pub fn oob_code_expired(&self, code: &OobCode, now: LogicalInstant) -> bool {
+        Self::oob_ttl(self.production_oob_lifetimes, code.request_type)
+            .is_some_and(|ttl| Self::expired(code.created_at, ttl, now))
     }
 
     /// Outstanding email action codes, oldest first.
@@ -3067,10 +3508,14 @@ impl AuthStore {
         if self
             .oob_codes
             .get(code)
-            .is_some_and(|c| Self::expired(c.created_at, OOB_CODE_TTL_SECONDS, now))
+            .is_some_and(|c| self.oob_code_expired(c, now))
         {
             Arc::make_mut(&mut self.oob_codes).remove(code);
-            return Err(AuthError::InvalidOobCode);
+            return Err(if self.production_oob_lifetimes {
+                AuthError::ExpiredOobCode
+            } else {
+                AuthError::InvalidOobCode
+            });
         }
         Arc::make_mut(&mut self.oob_codes)
             .remove(code)
@@ -3079,6 +3524,108 @@ impl AuthStore {
 
     fn expired(created_at: LogicalInstant, ttl_seconds: i64, now: LogicalInstant) -> bool {
         now.as_nanos() - created_at.as_nanos() > i128::from(ttl_seconds) * 1_000_000_000
+    }
+
+    /// Under production's rules, where finished pending entries are kept for their answers,
+    /// drops one of them when `user` is at [`crate::mfa::MAX_PENDING_PER_USER`], so the budget
+    /// refuses only live, unfinished flows (safety review 2026-09-25, MF-2). A dropped pending
+    /// credential is then unknown (`INVALID_PENDING_TOKEN`) and a dropped expired enrollment
+    /// session `INVALID_SESSION_INFO`; this local bound is not a production quota.
+    fn make_pending_room(
+        user: &mut UserRecord,
+        owners: &mut Arc<BTreeMap<String, LocalId>>,
+        now: LogicalInstant,
+    ) {
+        if user.mfa.pending_count() < crate::mfa::MAX_PENDING_PER_USER {
+            return;
+        }
+        if let Some(sign_in) = user.mfa.drop_one_finished(now) {
+            Arc::make_mut(owners).remove(&sign_in);
+        }
+    }
+
+    /// Whether `now` is at least `seconds` after `since` (an observed refusal age).
+    fn expired_at(since: LogicalInstant, seconds: i64, now: LogicalInstant) -> bool {
+        now.as_nanos() - since.as_nanos() >= i128::from(seconds) * 1_000_000_000
+    }
+
+    /// Whether the SMS step of `pending` is refused as expired under production's rules (see
+    /// [`OBSERVED_SMS_PENDING_START_SECONDS`]).
+    #[must_use]
+    pub fn sms_pending_start_expired(
+        &self,
+        pending: &PendingSignInId,
+        now: LogicalInstant,
+    ) -> bool {
+        if !self.second_factor_rules_are_production() {
+            return false;
+        }
+        let Some(uid) = self.pending_sign_in_owners.get(&pending.0) else {
+            return false;
+        };
+        self.users
+            .get(uid)
+            .and_then(|user| user.mfa.pending_sign_in(&pending.0))
+            .is_some_and(|p| {
+                Self::expired_at(p.started_at, OBSERVED_SMS_PENDING_START_SECONDS, now)
+            })
+    }
+
+    /// Whether a TOTP enrollment start is refused for its session's sign-in time
+    /// (`auth_time`, Unix seconds): under production's second-factor rules, at
+    /// [`OBSERVED_TOTP_ENROLLMENT_LOGIN_AGE_SECONDS`] or older.
+    #[must_use]
+    pub fn totp_enrollment_login_too_old(&self, auth_time: i64, now: LogicalInstant) -> bool {
+        self.second_factor_rules_are_production()
+            && Self::expired_at(
+                LogicalInstant::from_unix_seconds(auth_time),
+                OBSERVED_TOTP_ENROLLMENT_LOGIN_AGE_SECONDS,
+                now,
+            )
+    }
+
+    /// Whether a phone code is past its lifetime: never for a phone enrollment under
+    /// production's second-factor rules (see [`OBSERVED_MFA_PHONE_ENROLLMENT_SECONDS`]), else
+    /// after [`SMS_CODE_TTL_SECONDS`].
+    fn phone_code_expired(production: bool, code: &VerificationCode, now: LogicalInstant) -> bool {
+        match code.purpose {
+            VerificationPurpose::Enrollment { .. } if production => false,
+            _ => Self::expired(code.created_at, SMS_CODE_TTL_SECONDS, now),
+        }
+    }
+
+    /// Under production's rules a phone enrollment session never leaves by age, so `uid` holds
+    /// at most [`crate::mfa::MAX_PENDING_PER_USER`] of them. At that number, or at the
+    /// project's [`MAX_OUTSTANDING_CODES`], its own oldest session older than production's
+    /// observed ages makes room; another account's sessions are never dropped. Refused when
+    /// the account is at its bound with no session that old.
+    fn bound_phone_enrollment_sessions(
+        &mut self,
+        uid: &LocalId,
+        now: LogicalInstant,
+    ) -> Result<(), AuthError> {
+        let own = |code: &&VerificationCode| matches!(&code.purpose, VerificationPurpose::Enrollment { uid: owner } if owner == uid);
+        let held = self.verification_codes.values().filter(own).count();
+        let full = held >= crate::mfa::MAX_PENDING_PER_USER;
+        if full || self.verification_codes.len() >= MAX_OUTSTANDING_CODES {
+            let oldest = self
+                .verification_codes
+                .values()
+                .filter(own)
+                .filter(|code| {
+                    Self::expired(code.created_at, OBSERVED_MFA_PHONE_ENROLLMENT_SECONDS, now)
+                })
+                .min_by_key(|code| (code.created_at, code.sequence))
+                .map(|code| code.session_info.clone());
+            match oldest {
+                Some(oldest) => {
+                    Arc::make_mut(&mut self.verification_codes).remove(&oldest);
+                }
+                None if full => return Err(AuthError::TooManyOutstandingCodes),
+                None => {}
+            }
+        }
+        Ok(())
     }
 
     /// Creates a phone verification code for `phone` (a deterministic six-digit code).
@@ -3092,12 +3639,17 @@ impl AuthStore {
     ) -> Result<VerificationCode, AuthError> {
         Self::validate_phone_number(phone)?;
         self.sweep_transient_credentials(now);
+        if let VerificationPurpose::Enrollment { uid } = &purpose {
+            if self.second_factor_rules_are_production() {
+                self.bound_phone_enrollment_sessions(uid, now)?;
+            }
+        }
         if self.verification_codes.len() >= MAX_OUTSTANDING_CODES {
             return Err(AuthError::TooManyOutstandingCodes);
         }
         let session_info = self.next_id("sms-");
         // A test number always takes its configured code (sandbox recording 2026-09-23).
-        let random = self.rng.next_u64() % 1_000_000;
+        let random = self.secret_u64() % 1_000_000;
         let code = self
             .sign_in
             .test_phone_numbers
@@ -3128,7 +3680,7 @@ impl AuthStore {
         if self.temporary_proofs.len() >= MAX_OUTSTANDING_CODES {
             return Err(AuthError::TooManyOutstandingCodes);
         }
-        let proof = format!("{}{:016x}", self.next_id("proof-"), self.rng.next_u64());
+        let proof = format!("{}{:016x}", self.next_id("proof-"), self.secret_u64());
         self.temporary_proofs
             .insert(proof.clone(), (phone.to_owned(), now));
         Ok(proof)
@@ -3175,7 +3727,7 @@ impl AuthStore {
             .verification_codes
             .get(session_info)
             .ok_or(AuthError::InvalidSessionInfo)?;
-        if Self::expired(entry.created_at, SMS_CODE_TTL_SECONDS, now) {
+        if Self::phone_code_expired(self.second_factor_rules_are_production(), entry, now) {
             return Err(AuthError::InvalidSessionInfo);
         }
         if entry.code != code {
@@ -3367,6 +3919,18 @@ impl AuthStore {
         email_verified: bool,
         now: LogicalInstant,
     ) -> Result<IdpSignIn, AuthError> {
+        self.sign_in_with_idp_as(identity, email_verified, now, DuplicateIdpEmail::Stored)
+    }
+
+    /// [`Self::sign_in_with_idp`], with how a new account holds an email another account
+    /// already holds (only possible with `allowDuplicateEmails`).
+    pub fn sign_in_with_idp_as(
+        &mut self,
+        identity: FederatedIdentity,
+        email_verified: bool,
+        now: LogicalInstant,
+        duplicate_email: DuplicateIdpEmail,
+    ) -> Result<IdpSignIn, AuthError> {
         // Before anything is created, recycled or copied into a profile.
         identity.validate()?;
         // 1. An account already linking this exact provider identity signs straight in.
@@ -3426,9 +3990,12 @@ impl AuthStore {
             }
         }
         // 3. No match: a new account, linked to the identity.
+        let email = identity.email.clone().filter(|email| {
+            duplicate_email == DuplicateIdpEmail::Stored || !self.email_owned_by_other(email, None)
+        });
         let new_user = NewUser {
-            email: identity.email.clone(),
-            email_verified: identity.email.is_some() && email_verified,
+            email_verified: email.is_some() && email_verified,
+            email,
             provider: Provider::Federated(identity.provider_id.clone()),
         };
         let uid = if self.config.allow_duplicate_emails {
@@ -3471,7 +4038,11 @@ impl AuthStore {
             })
             .unwrap_or_default();
         if let Some(user) = self.users.get_mut(uid).map(Arc::make_mut) {
-            user.password = None;
+            // The password's change time stays, as after an Admin password removal
+            // (AUTH-FEDERATION record-oidc 39209e).
+            if let Some(updated_at) = user.password.take().and_then(|p| p.updated_at) {
+                user.removed_password_updated_at = Some(updated_at);
+            }
             user.phone_number = None;
             user.federated.clear();
             user.provider = Provider::Federated(provider_id.to_owned());
@@ -3516,11 +4087,23 @@ impl AuthStore {
         display_name: Option<String>,
         now: LogicalInstant,
     ) -> Result<EnrolledFactor, MfaError> {
+        self.enroll_phone_factor_by(uid, phone, display_name, now, false)
+    }
+
+    fn enroll_phone_factor_by(
+        &mut self,
+        uid: &LocalId,
+        phone: &str,
+        display_name: Option<String>,
+        now: LogicalInstant,
+        by_admin: bool,
+    ) -> Result<EnrolledFactor, MfaError> {
+        let now = self.factor_time(now, by_admin);
         AuthStore::validate_phone_number(phone).map_err(|_| MfaError::InvalidCode)?;
         // Before the enrollment id is drawn: a refused request must not advance the random
         // stream or touch the account.
         crate::mfa::validate_factor_display_name(display_name.as_deref())?;
-        let enrollment_id = self.random_id28();
+        let enrollment_id = self.new_enrollment_id();
         let user = self
             .users
             .get_mut(uid)
@@ -3597,11 +4180,14 @@ impl AuthStore {
         now: LogicalInstant,
     ) -> Result<(), MfaError> {
         self.check_phone_factors(uid, &factors)?;
+        // The list replaces every factor, TOTP ones included (production clears them all,
+        // sandbox recording 2026-09-24, auth-mfa/interactions#finalize-x-after-factors-cleared).
         if let Some(user) = self.users.get_mut(uid).map(Arc::make_mut) {
             user.mfa.phone_factors_mut().clear();
+            user.mfa.totp_factors_mut().clear();
         }
         for (phone, display_name) in factors {
-            self.enroll_phone_factor(uid, &phone, display_name, now)?;
+            self.enroll_phone_factor_by(uid, &phone, display_name, now, true)?;
         }
         self.activate_email_owner(uid);
         Ok(())
@@ -3640,6 +4226,7 @@ impl AuthStore {
         enrollment_id: &str,
         now: LogicalInstant,
     ) -> Result<SecondFactorAssertion, MfaError> {
+        let production = self.second_factor_rules_are_production();
         let user = self
             .users
             .get_mut(uid)
@@ -3661,10 +4248,18 @@ impl AuthStore {
         {
             return Err(MfaError::NoEnrolledFactor);
         }
-        user.mfa.pending_sign_ins_mut().remove(&pending.0);
-        Arc::make_mut(&mut self.pending_sign_in_owners).remove(&pending.0);
-        if user.mfa.pending_count() == 0 {
-            self.pending_user_ids.remove(uid);
+        // Production keeps the pending credential after success (sandbox recording
+        // 2026-09-24, auth-mfa/sms#sign-in-finalize-again).
+        if production {
+            if let Some(kept) = user.mfa.pending_sign_ins_mut().get_mut(&pending.0) {
+                kept.completed = true;
+            }
+        } else {
+            user.mfa.pending_sign_ins_mut().remove(&pending.0);
+            Arc::make_mut(&mut self.pending_sign_in_owners).remove(&pending.0);
+            if user.mfa.pending_count() == 0 {
+                self.pending_user_ids.remove(uid);
+            }
         }
         user.last_sign_in_at = Some(now);
         self.activate_email_owner(uid);
@@ -3694,6 +4289,16 @@ impl AuthStore {
         Ok(())
     }
 
+    /// Validates a password an administrator sets: production takes one below the minimum
+    /// length (sandbox recording 2026-09-25, five characters); an empty one is unobserved and
+    /// stays refused.
+    pub fn validate_admin_password(password: &str) -> Result<(), AuthError> {
+        if password.is_empty() {
+            return Err(AuthError::WeakPassword);
+        }
+        Self::validate_imported_password(password)
+    }
+
     /// Validates a password without storing it (lets callers fail before mutating).
     pub fn validate_password(password: &str) -> Result<(), AuthError> {
         if password.encode_utf16().count() < Self::MIN_PASSWORD_CHARS {
@@ -3715,7 +4320,11 @@ impl AuthStore {
         operation: PasswordPolicyOperation,
         password: &str,
     ) -> Result<Vec<ViolationCode>, AuthError> {
-        Self::validate_password(password)?;
+        if operation == PasswordPolicyOperation::AdminUpdate {
+            Self::validate_admin_password(password)?;
+        } else {
+            Self::validate_password(password)?;
+        }
         let violations = if self.password_policy.enforcement_state
             == crate::password_policy::EnforcementState::Enforce
         {
@@ -4038,14 +4647,12 @@ impl AuthStore {
         owners
     }
 
-    /// The account a password sign-in with `email` reaches: the active owner when it holds a
-    /// password, else the earliest owner that does (an imported duplicate without a password
-    /// does not hide the password account, sandbox recording 2026-09-23).
+    /// The account a password sign-in with `email` reaches: the earliest owner that holds a
+    /// password, else the active owner. An imported duplicate without a password does not
+    /// hide the password account (sandbox recording 2026-09-23), and of two imported password
+    /// accounts the earlier one is reached (sandbox recording 2026-09-25).
     fn password_owner_by_email(&self, email: &str) -> Option<&UserRecord> {
         let active = self.user_by_email(email)?;
-        if active.password.is_some() {
-            return Some(active);
-        }
         Some(
             self.users_by_email(email)
                 .into_iter()
@@ -4096,6 +4703,7 @@ impl AuthStore {
                 provider,
                 claims,
                 second_factor,
+                sign_in_attributes: None,
             },
         );
         Arc::make_mut(&mut self.tokens_by_user)
@@ -4138,6 +4746,22 @@ impl AuthStore {
         Ok(committed)
     }
 
+    /// Records the sign-in attributes of the session behind a refresh token.
+    ///
+    /// # Errors
+    /// [`AuthError::InvalidRefreshToken`] for a token without a session.
+    pub fn set_refresh_sign_in_attributes(
+        &mut self,
+        token: &str,
+        attributes: Option<ClaimValue>,
+    ) -> Result<(), AuthError> {
+        let session = Arc::make_mut(&mut self.refresh_tokens)
+            .get_mut(token)
+            .ok_or(AuthError::InvalidRefreshToken)?;
+        session.sign_in_attributes = attributes;
+        Ok(())
+    }
+
     /// The session behind a refresh token (validated like [`Self::redeem_refresh_token`]).
     pub fn refresh_session(&self, token: &str) -> Result<&RefreshSession, AuthError> {
         self.validate_refresh_token(token, true)?;
@@ -4174,6 +4798,15 @@ impl AuthStore {
         };
         let uid = session.uid.clone();
         if let Some(user) = self.users.get_mut(&uid).map(Arc::make_mut) {
+            user.last_refresh_at = Some(user.last_refresh_at.map_or(at, |old| old.max(at)));
+        }
+    }
+
+    /// Records the issuance time of a sign-up that a blocking function refused after it created
+    /// the account: production keeps that time although it answers no token
+    /// (AUTH-TENANT-BLOCKING recording 2026-09-28).
+    pub fn record_refused_sign_up_issuance(&mut self, uid: &LocalId, at: LogicalInstant) {
+        if let Some(user) = self.users.get_mut(uid).map(Arc::make_mut) {
             user.last_refresh_at = Some(user.last_refresh_at.map_or(at, |old| old.max(at)));
         }
     }
@@ -4317,6 +4950,14 @@ impl AuthStore {
         // Expired sessions are swept before the budget is measured, so an abandoned flow
         // frees its slot on expiry; a refused start creates no secret and no session.
         self.sweep_transient_credentials(now);
+        if self.second_factor_rules_are_production() {
+            let user = self
+                .users
+                .get_mut(uid)
+                .map(Arc::make_mut)
+                .ok_or(MfaError::UserNotFound)?;
+            Self::make_pending_room(user, &mut self.pending_sign_in_owners, now);
+        }
         let user = self.users.get(uid).ok_or(MfaError::UserNotFound)?;
         if user.mfa.pending_count() >= crate::mfa::MAX_PENDING_PER_USER {
             return Err(MfaError::TooManyPending);
@@ -4339,14 +4980,24 @@ impl AuthStore {
             .get_mut(uid)
             .map(Arc::make_mut)
             .ok_or(MfaError::UserNotFound)?;
-        user.mfa
-            .pending_enrollments_mut()
-            .insert(session_id, PendingEnrollment { secret, expires_at });
+        user.mfa.pending_enrollments_mut().insert(
+            session_id,
+            PendingEnrollment {
+                secret,
+                expires_at,
+                attempts: 0,
+                completed: false,
+            },
+        );
         self.pending_user_ids.insert(uid.clone());
         Ok(material)
     }
 
     /// Finalizes enrollment with a code generated from the proposed secret.
+    ///
+    /// Under production's rules the session counts its attempts
+    /// ([`crate::mfa::MAX_ENROLLMENT_ATTEMPTS`]) and stays after it succeeds, so offering it
+    /// again is refused as complete; under the official emulator's it is gone.
     pub fn finalize_totp_enrollment(
         &mut self,
         uid: &LocalId,
@@ -4354,8 +5005,22 @@ impl AuthStore {
         code: u32,
         now: LogicalInstant,
     ) -> Result<EnrolledFactor, MfaError> {
+        self.finalize_totp_enrollment_named(uid, session_id, code, None, now)
+    }
+
+    /// [`Self::finalize_totp_enrollment`] with the factor's display name.
+    pub fn finalize_totp_enrollment_named(
+        &mut self,
+        uid: &LocalId,
+        session_id: &str,
+        code: u32,
+        display_name: Option<String>,
+        now: LogicalInstant,
+    ) -> Result<EnrolledFactor, MfaError> {
         let policy = self.policy;
-        let enrollment_id = self.random_id28();
+        let window = self.totp_window();
+        let production = self.second_factor_rules_are_production();
+        let enrollment_id = self.new_enrollment_id();
         let user = self
             .users
             .get_mut(uid)
@@ -4368,11 +5033,26 @@ impl AuthStore {
             .cloned()
             .ok_or(MfaError::EnrollmentSessionUnknown)?;
         if now > pending.expires_at {
-            user.mfa.pending_enrollments_mut().remove(session_id);
-            if user.mfa.pending_count() == 0 {
-                self.pending_user_ids.remove(uid);
+            // Production keeps an expired session (the sweep reaps it much later) so that it
+            // keeps answering SESSION_EXPIRED; the official emulator's rules drop it here.
+            if !production {
+                user.mfa.pending_enrollments_mut().remove(session_id);
+                if user.mfa.pending_count() == 0 {
+                    self.pending_user_ids.remove(uid);
+                }
             }
             return Err(MfaError::EnrollmentSessionExpired);
+        }
+        if production {
+            if pending.attempts >= crate::mfa::MAX_ENROLLMENT_ATTEMPTS {
+                return Err(MfaError::TooManyEnrollmentAttempts);
+            }
+            if pending.completed {
+                return Err(MfaError::EnrollmentAlreadyComplete);
+            }
+            if let Some(entry) = user.mfa.pending_enrollments_mut().get_mut(session_id) {
+                entry.attempts = entry.attempts.saturating_add(1);
+            }
         }
         // Disabled while the enrollment was pending: refused before the code is matched, so
         // the pending enrollment survives a later re-enablement. Same class as the sign-in
@@ -4380,35 +5060,97 @@ impl AuthStore {
         if user.disabled {
             return Err(MfaError::UserDisabled);
         }
-        let step = match match_code(
-            &pending.secret,
-            &policy.params(),
-            policy.window_steps,
-            None,
-            code,
-            now,
-        ) {
+        let step = match match_code(&pending.secret, &policy.params(), window, None, code, now) {
             CodeMatch::Accepted { step } => step,
             CodeMatch::Replayed | CodeMatch::NoMatch => return Err(MfaError::InvalidCode),
         };
-        user.mfa.pending_enrollments_mut().remove(session_id);
-        if user.mfa.pending_count() == 0 {
-            self.pending_user_ids.remove(uid);
+        if production {
+            if let Some(entry) = user.mfa.pending_enrollments_mut().get_mut(session_id) {
+                entry.completed = true;
+            }
+        } else {
+            user.mfa.pending_enrollments_mut().remove(session_id);
+            if user.mfa.pending_count() == 0 {
+                self.pending_user_ids.remove(uid);
+            }
         }
+        let enrolled_at = if production {
+            LogicalInstant::from_nanos(now.as_nanos().div_euclid(1_000) * 1_000)
+        } else {
+            now
+        };
         let factor = TotpFactor {
             mfa_enrollment_id: enrollment_id.clone(),
-            display_name: None,
+            display_name: display_name.clone(),
             secret: pending.secret,
-            enrolled_at: now,
+            enrolled_at,
             last_accepted_step: Some(step),
         };
         user.mfa.totp_factors_mut().push(factor);
         self.activate_email_owner(uid);
         Ok(EnrolledFactor {
             mfa_enrollment_id: enrollment_id,
-            display_name: None,
-            enrolled_at: now,
+            display_name,
+            enrolled_at,
         })
+    }
+
+    /// Whether `session_id` names an enrollment session of `uid` (expired or not).
+    #[must_use]
+    pub fn has_enrollment_session(&self, uid: &LocalId, session_id: &str) -> bool {
+        self.users
+            .get(uid)
+            .is_some_and(|user| user.mfa.has_enrollment_session(session_id))
+    }
+
+    /// A factor's enrollment time at the precision production keeps (sandbox recording
+    /// 2026-09-24, auth-mfa): microseconds when the user enrolls it, milliseconds when the
+    /// Admin API writes it. Unchanged under the official emulator's rules.
+    fn factor_time(&self, now: LogicalInstant, by_admin: bool) -> LogicalInstant {
+        if !self.second_factor_rules_are_production() {
+            return now;
+        }
+        let unit: i128 = if by_admin { 1_000_000 } else { 1_000 };
+        LogicalInstant::from_nanos(now.as_nanos().div_euclid(unit) * unit)
+    }
+
+    /// The id and time of a factor an admin imports without them (`batchCreate`): under
+    /// production's rules a version-4 UUID and `now` in milliseconds (sandbox recording
+    /// 2026-09-24, `auth-mfa/admin-factors#admin-lookup-imported`); `None` keeps the caller's
+    /// own defaults.
+    pub fn imported_factor_defaults(
+        &mut self,
+        now: LogicalInstant,
+    ) -> Option<(String, LogicalInstant)> {
+        self.second_factor_rules_are_production()
+            .then(|| (self.new_enrollment_id(), self.factor_time(now, true)))
+    }
+
+    /// A new factor's enrollment id: a version-4 UUID under production's rules (production
+    /// issues them, sandbox recording 2026-09-24), else the 28-character id of the official
+    /// shape. It names a factor and is not a secret, so it follows the seeded stream.
+    fn new_enrollment_id(&mut self) -> String {
+        if !self.second_factor_rules_are_production() {
+            return self.random_id28();
+        }
+        let mut bytes = [0_u8; 16];
+        bytes[..8].copy_from_slice(&self.rng.next_u64().to_be_bytes());
+        bytes[8..].copy_from_slice(&self.rng.next_u64().to_be_bytes());
+        bytes[6] = (bytes[6] & 0x0f) | 0x40;
+        bytes[8] = (bytes[8] & 0x3f) | 0x80;
+        let hex = bytes.iter().fold(String::with_capacity(32), |mut out, b| {
+            use core::fmt::Write as _;
+            let _ = write!(out, "{b:02x}");
+            out
+        });
+        format!(
+            "{}-{}-{}-{}-{}",
+            &hex[..8],
+            &hex[8..12],
+            &hex[12..16],
+            &hex[16..20],
+            &hex[20..]
+        )
     }
 
     /// Starts the second-factor step of a sign-in.
@@ -4429,6 +5171,7 @@ impl AuthStore {
         context: PendingSignInContext,
     ) -> Result<PendingSignInId, MfaError> {
         self.sweep_transient_credentials(now);
+        let production = self.second_factor_rules_are_production();
         let pending_id = self.next_id("signin-");
         let user = self
             .users
@@ -4441,6 +5184,9 @@ impl AuthStore {
         if user.mfa.is_empty() {
             return Err(MfaError::NoEnrolledFactor);
         }
+        if production {
+            Self::make_pending_room(user, &mut self.pending_sign_in_owners, now);
+        }
         if user.mfa.pending_count() >= crate::mfa::MAX_PENDING_PER_USER {
             return Err(MfaError::TooManyPending);
         }
@@ -4449,11 +5195,19 @@ impl AuthStore {
             PendingSignIn {
                 started_at: now,
                 context,
+                completed: false,
             },
         );
         Arc::make_mut(&mut self.pending_sign_in_owners).insert(pending_id.clone(), uid.clone());
         self.pending_user_ids.insert(uid.clone());
         Ok(PendingSignInId(pending_id))
+    }
+
+    /// Whether `pending` was a pending sign-in of an account deleted since (production's
+    /// rules, within the pending lifetime).
+    #[must_use]
+    pub fn pending_sign_in_orphaned(&self, pending: &PendingSignInId) -> bool {
+        self.orphaned_pending_sign_ins.contains_key(&pending.0)
     }
 
     /// User that owns a pending sign-in, if any: a direct lookup in the ownership index,
@@ -4507,18 +5261,26 @@ impl AuthStore {
         now: LogicalInstant,
     ) -> Result<SecondFactorAssertion, MfaError> {
         let policy = self.policy;
+        let window = self.totp_window();
         let (accepted_identifier, accepted_step) = {
             let user = self
                 .users
                 .get(uid)
                 .map(Arc::as_ref)
                 .ok_or(MfaError::UserNotFound)?;
-            if user.mfa.pending_sign_in(&pending.0).is_none() {
+            let Some(started) = user.mfa.pending_sign_in(&pending.0).map(|p| p.started_at) else {
                 return Err(MfaError::PendingSignInUnknown);
+            };
+            if self.second_factor_rules_are_production()
+                && Self::expired_at(started, OBSERVED_TOTP_CHALLENGE_TIMEOUT_SECONDS, now)
+            {
+                return Err(MfaError::TotpChallengeTimeout);
             }
             // Disabled after the first factor: refused before the code is matched, so
-            // neither the pending credential nor the code's step is consumed.
-            if user.disabled {
+            // neither the pending credential nor the code's step is consumed. Production
+            // completes the sign-in of an account disabled after its first factor (sandbox
+            // recording 2026-09-24, auth-mfa/interactions#finalize-x-disabled).
+            if user.disabled && !self.second_factor_rules_are_production() {
                 return Err(MfaError::UserDisabled);
             }
 
@@ -4533,7 +5295,7 @@ impl AuthStore {
             match match_code(
                 &factor.secret,
                 &policy.params(),
-                policy.window_steps,
+                window,
                 factor.last_accepted_step,
                 code,
                 now,
@@ -4551,17 +5313,27 @@ impl AuthStore {
             })?
         };
 
+        let production = self.second_factor_rules_are_production();
         let user = self
             .users
             .get_mut(uid)
             .map(Arc::make_mut)
             .ok_or(MfaError::UserNotFound)?;
-        if user.mfa.pending_sign_ins_mut().remove(&pending.0).is_none() {
-            return Err(MfaError::PendingSignInUnknown);
-        }
-        Arc::make_mut(&mut self.pending_sign_in_owners).remove(&pending.0);
-        if user.mfa.pending_count() == 0 {
-            self.pending_user_ids.remove(uid);
+        // Production keeps a pending credential usable after it succeeded, until it expires
+        // (sandbox recording 2026-09-24, auth-mfa/totp/sign-in#pending-1-again).
+        if production {
+            let Some(kept) = user.mfa.pending_sign_ins_mut().get_mut(&pending.0) else {
+                return Err(MfaError::PendingSignInUnknown);
+            };
+            kept.completed = true;
+        } else {
+            if user.mfa.pending_sign_ins_mut().remove(&pending.0).is_none() {
+                return Err(MfaError::PendingSignInUnknown);
+            }
+            Arc::make_mut(&mut self.pending_sign_in_owners).remove(&pending.0);
+            if user.mfa.pending_count() == 0 {
+                self.pending_user_ids.remove(uid);
+            }
         }
         let factor = user
             .mfa
@@ -4739,6 +5511,8 @@ impl AuthSnapshot {
         copy.oidc_order.clear();
         copy.saml_configs.clear();
         copy.saml_order.clear();
+        copy.default_idp_configs.clear();
+        copy.default_idp_order.clear();
         for user in copy.users.values_mut() {
             if user.mfa.holds_no_totp_secret() && user.mfa.holds_no_inbound_credentials() {
                 continue;
@@ -4797,13 +5571,16 @@ impl AuthSnapshot {
         restored.generated_local_id_reservations = live.generated_local_id_reservations.clone();
         restored.generated_local_id_reservation_ticket =
             live.generated_local_id_reservation_ticket.clone();
-        restored.generated_id_interference = live.generated_id_interference.clone();
         // A snapshot intentionally has no provider configurations. Preserve the destination's
         // control-plane state instead of allowing a cross-project restore to transfer it.
         restored.oidc_configs = live.oidc_configs.clone();
         restored.oidc_order.clone_from(&live.oidc_order);
         restored.saml_configs = live.saml_configs.clone();
         restored.saml_order.clone_from(&live.saml_order);
+        restored.default_idp_configs = live.default_idp_configs.clone();
+        restored
+            .default_idp_order
+            .clone_from(&live.default_idp_order);
         let namespace_matches =
             restored.project_id == live.project_id && restored.tenant_id == live.tenant_id;
         if !namespace_matches {
@@ -4819,6 +5596,8 @@ impl AuthSnapshot {
             // silently transfer those settings.
             restored.config = live.config;
             restored.sign_in = live.sign_in.clone();
+            restored.mfa_config = live.mfa_config.clone();
+            restored.stored_members = live.stored_members.clone();
             // A temporary proof is a credential of the captured namespace.
             restored.temporary_proofs.clear();
             // The local sign-up quota is namespace-owned control state as well. Preserve both
@@ -4912,8 +5691,70 @@ impl AuthExportSnapshot {
     }
 }
 
+/// The tenant namespaces of one project captured for a session snapshot (`TENRST-2`).
+///
+/// Each tenant store is an [`AuthSnapshot`], so the capture holds no TOTP secret material or
+/// raw identity-provider credential (`INV-AUTH-003`). The tenant's published metadata and the
+/// settings changed through the tenant management API travel with it; startup configuration
+/// overrides stay with the registry, as configuration does.
+#[derive(Debug, Clone)]
+pub struct AuthTenantsSnapshot {
+    tenants: Vec<CapturedTenant>,
+}
+
+#[derive(Debug, Clone)]
+struct CapturedTenant {
+    tenant: String,
+    store: AuthSnapshot,
+    metadata: TenantMetadata,
+    runtime_override: Option<AuthNamespaceConfigPatch>,
+}
+
+impl AuthTenantsSnapshot {
+    /// An estimate of the heap bytes the captured tenant stores retain (`SNAP-MEM-01`).
+    #[must_use]
+    pub fn retained_bytes(&self) -> u64 {
+        self.tenants.iter().fold(0_u64, |total, captured| {
+            total.saturating_add(captured.store.retained_bytes())
+        })
+    }
+
+    /// Whether no captured tenant user holds TOTP secret material.
+    #[must_use]
+    pub fn holds_no_totp_secret(&self) -> bool {
+        self.tenants
+            .iter()
+            .all(|captured| captured.store.holds_no_totp_secret())
+    }
+}
+
+/// The exact tenant state of one project before a snapshot restore, used to undo the restore
+/// when a later service fails. Unlike [`AuthTenantsSnapshot`] it keeps the live store handles
+/// and full store contents, secrets included; it never leaves the process.
+#[derive(Debug, Clone)]
+pub struct AuthTenantsRollback {
+    tenants: Vec<RolledBackTenant>,
+}
+
+#[derive(Debug, Clone)]
+struct RolledBackTenant {
+    key: TenantKey,
+    handle: SharedAuthStore,
+    contents: AuthStore,
+    metadata: TenantMetadata,
+    runtime_override: Option<AuthNamespaceConfigPatch>,
+}
+
 type SharedAuthStore = Arc<Mutex<AuthStore>>;
 type TenantKey = (String, String);
+
+/// A project's published tenants: key, store handle, metadata and management-API override.
+type OwnedTenants = Vec<(
+    TenantKey,
+    SharedAuthStore,
+    TenantMetadata,
+    Option<AuthNamespaceConfigPatch>,
+)>;
 
 enum TenantPublication {
     Published(SharedAuthStore),
@@ -4994,6 +5835,36 @@ pub enum RefreshTokenStoreMatch {
     Unavailable,
 }
 
+/// The ID of a tenant created with `display_name`. A display name of the documented form
+/// (4-20 letters, digits and hyphens, beginning with a letter: Identity Platform's "Managing
+/// tenants programmatically") gives production's shape, the display name, a hyphen and five
+/// characters of `[a-z0-9]` (FS-RULES sandbox recording 2026-09-25). The suffix is drawn from
+/// the creation sequence so that a run is reproducible; a taken ID moves on to the next one.
+/// Unobserved: whether production changes the case of a display name (it is kept as written
+/// here) and the suffix alphabet beyond `[a-z0-9]`. A display name outside the documented
+/// form, which production refuses according to the documentation, and a missing one keep
+/// fireemu's generated name: tenant validation belongs to AUTH-TENANT-BLOCKING.
+fn generated_tenant_id(display_name: Option<&str>, sequence: u64) -> String {
+    const ALPHABET: &[u8] = b"abcdefghijklmnopqrstuvwxyz0123456789";
+    let documented = display_name.filter(|name| {
+        (4..=20).contains(&name.len())
+            && name.starts_with(|c: char| c.is_ascii_alphabetic())
+            && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+    });
+    let Some(name) = documented else {
+        return format!("fireemu-{sequence:020}");
+    };
+    let mut word = SplitMix64::new(sequence ^ 0x7465_6e61_6e74_6964).next_u64();
+    let suffix: String = (0..5)
+        .map(|_| {
+            let index = usize::try_from(word % 36).unwrap_or(0);
+            word /= 36;
+            char::from(ALPHABET[index])
+        })
+        .collect();
+    format!("{name}-{suffix}")
+}
+
 /// The Auth stores of every project a daemon serves: the configured (default) project plus
 /// the projects created as sessions through the control API. Tokens name their project in
 /// `aud`, so a verifier picks the store by audience.
@@ -5022,13 +5893,30 @@ pub struct AuthRegistry {
     /// Non-password settings changed through the tenant management API. These are scoped to the
     /// current tenant lifetime and are discarded when that tenant is deleted.
     tenant_runtime_config_overrides: Mutex<BTreeMap<TenantKey, AuthNamespaceConfigPatch>>,
+    /// Tenants deleted in this run: production answers requests naming them `TENANT_DELETED`
+    /// rather than as unknown ids (AUTH-TENANT-BLOCKING recording 2026-09-27, deletion program).
+    deleted_tenants: Mutex<BTreeSet<TenantKey>>,
     operation_gates: Mutex<BTreeMap<TenantKey, Weak<Mutex<()>>>>,
+    /// The session epochs of deleted tenants (see [`RemovedTenantEpochs`]).
+    removed_tenant_epochs: Mutex<BTreeMap<TenantKey, RemovedTenantEpochs>>,
     membership_generation: AtomicU64,
     lifecycle_incarnation: Option<u128>,
     next_lifecycle_serial: AtomicU64,
     next_tenant_id: AtomicU64,
     #[cfg(test)]
     refresh_token_scans: AtomicU64,
+}
+
+/// The session epochs a tenant and its project had when the tenant was deleted. Firestore
+/// honours a deleted tenant's unexpired ID token (AUTH-FS-CROSS stage 1), so the token is still
+/// checked against its own tenant's epoch; the project's epoch tells whether the session it
+/// belonged to still exists (a reset of the project moves it on).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RemovedTenantEpochs {
+    /// The deleted tenant's session epoch claim.
+    pub tenant: Option<String>,
+    /// The project's session epoch claim at the deletion.
+    pub project: Option<String>,
 }
 
 /// A project-scoped Auth reset prepared without mutating registry or credential state.
@@ -5225,7 +6113,9 @@ impl AuthRegistry {
             password_policy_overrides: Mutex::new(BTreeMap::new()),
             tenant_config_overrides: Mutex::new(BTreeMap::new()),
             tenant_runtime_config_overrides: Mutex::new(BTreeMap::new()),
+            deleted_tenants: Mutex::new(BTreeSet::new()),
             operation_gates: Mutex::new(BTreeMap::new()),
+            removed_tenant_epochs: Mutex::new(BTreeMap::new()),
             membership_generation: AtomicU64::new(0),
             lifecycle_incarnation: None,
             next_lifecycle_serial: AtomicU64::new(1),
@@ -6385,6 +7275,300 @@ impl AuthRegistry {
         Some(gate)
     }
 
+    fn project_operation_gate(&self, project: &str) -> Result<Arc<Mutex<()>>, &'static str> {
+        self.operation_gate(project, None)
+            .ok_or("the Auth operation-gate registry is poisoned")
+    }
+
+    /// The published tenants of `project`, read under the membership locks and returned with
+    /// the locks released.
+    fn owned_tenants(&self, project: &str) -> Result<OwnedTenants, &'static str> {
+        let tenants = self
+            .tenants
+            .lock()
+            .map_err(|_| "tenant registry is poisoned")?;
+        let metadata = self
+            .tenant_metadata
+            .lock()
+            .map_err(|_| "tenant metadata registry is poisoned")?;
+        let runtime_overrides = self
+            .tenant_runtime_config_overrides
+            .lock()
+            .map_err(|_| "tenant runtime config override registry is poisoned")?;
+        let mut owned = Vec::new();
+        for (key, store) in tenants
+            .iter()
+            .filter(|((candidate, _), _)| candidate == project)
+        {
+            let published = metadata
+                .get(key)
+                .cloned()
+                .ok_or("tenant store and metadata membership differ")?;
+            owned.push((
+                key.clone(),
+                store.clone(),
+                published,
+                runtime_overrides.get(key).copied(),
+            ));
+        }
+        if metadata.keys().any(|(candidate, tenant)| {
+            candidate == project && !tenants.contains_key(&(candidate.clone(), tenant.clone()))
+        }) {
+            return Err("tenant store and metadata membership differ");
+        }
+        Ok(owned)
+    }
+
+    /// Captures every tenant namespace of `project` for a session snapshot (`TENRST-2`).
+    ///
+    /// The project operation gate excludes tenant creation, deletion and configuration
+    /// changes while the tenants are copied.
+    ///
+    /// # Errors
+    /// A poisoned registry, gate or tenant store, or inconsistent tenant membership.
+    pub fn capture_tenants_snapshot(
+        &self,
+        project: &str,
+    ) -> Result<AuthTenantsSnapshot, &'static str> {
+        let gate = self.project_operation_gate(project)?;
+        let _operation = gate
+            .lock()
+            .map_err(|_| "the Auth operation gate is poisoned")?;
+        let mut tenants = Vec::new();
+        for ((_, tenant), store, metadata, runtime_override) in self.owned_tenants(project)? {
+            let store = store
+                .lock()
+                .map_err(|_| "a tenant Auth store is poisoned")?;
+            tenants.push(CapturedTenant {
+                tenant,
+                store: AuthSnapshot::capture(&store),
+                metadata,
+                runtime_override,
+            });
+        }
+        Ok(AuthTenantsSnapshot { tenants })
+    }
+
+    /// Captures the exact tenant state of `project` so a failed session restore can undo
+    /// [`Self::restore_tenants_snapshot`].
+    ///
+    /// # Errors
+    /// A poisoned registry, gate or tenant store, or inconsistent tenant membership.
+    pub fn capture_tenants_rollback(
+        &self,
+        project: &str,
+    ) -> Result<AuthTenantsRollback, &'static str> {
+        let gate = self.project_operation_gate(project)?;
+        let _operation = gate
+            .lock()
+            .map_err(|_| "the Auth operation gate is poisoned")?;
+        let mut tenants = Vec::new();
+        for (key, handle, metadata, runtime_override) in self.owned_tenants(project)? {
+            let contents = handle
+                .lock()
+                .map_err(|_| "a tenant Auth store is poisoned")?
+                .clone();
+            tenants.push(RolledBackTenant {
+                key,
+                handle,
+                contents,
+                metadata,
+                runtime_override,
+            });
+        }
+        Ok(AuthTenantsRollback { tenants })
+    }
+
+    /// Replaces the tenant namespaces of `project` with a captured set (`TENRST-2`).
+    ///
+    /// A tenant that still exists is restored in place, as the project store is: the restore
+    /// starts a new lifecycle epoch, so credentials issued before it stop working. A captured
+    /// tenant deleted since is published again under a fresh lifecycle epoch. A tenant created
+    /// since the capture is cleared and removed with its credentials. Every store is locked
+    /// before the first change, so a poisoned store leaves the tenants as they were.
+    ///
+    /// # Errors
+    /// The project has no Auth store, a lock is poisoned, or the tenant membership changed
+    /// while the restore was prepared.
+    pub fn restore_tenants_snapshot(
+        &self,
+        project: &str,
+        snapshot: &AuthTenantsSnapshot,
+    ) -> Result<RestoreReport, &'static str> {
+        let gate = self.project_operation_gate(project)?;
+        let _operation = gate
+            .lock()
+            .map_err(|_| "the Auth operation gate is poisoned")?;
+        let parent = self
+            .store_for(project)
+            .ok_or("the project has no Auth store")?;
+        let generation = self.membership_generation.load(Ordering::Acquire);
+        let live = self.owned_tenants(project)?;
+        // Building a namespace reads the startup overrides and the parent store, so every
+        // recreated tenant is built before the membership locks are taken.
+        let mut recreated = Vec::new();
+        for captured in &snapshot.tenants {
+            if !live
+                .iter()
+                .any(|((_, tenant), ..)| tenant == &captured.tenant)
+            {
+                let store = self
+                    .build_tenant_store(project, &captured.tenant, &parent)
+                    .ok_or("cannot build a tenant Auth store")?;
+                recreated.push((captured, store));
+            }
+        }
+        let mut tenants = self
+            .tenants
+            .lock()
+            .map_err(|_| "tenant registry is poisoned")?;
+        let mut metadata = self
+            .tenant_metadata
+            .lock()
+            .map_err(|_| "tenant metadata registry is poisoned")?;
+        let mut runtime_overrides = self
+            .tenant_runtime_config_overrides
+            .lock()
+            .map_err(|_| "tenant runtime config override registry is poisoned")?;
+        let mut gates = self
+            .operation_gates
+            .lock()
+            .map_err(|_| "tenant operation-gate registry is poisoned")?;
+        if self.membership_generation.load(Ordering::Acquire) != generation {
+            return Err("Auth tenant membership changed during the restore");
+        }
+        let mut live_guards = Vec::with_capacity(live.len());
+        for (key, store, ..) in &live {
+            live_guards.push((
+                key,
+                store
+                    .lock()
+                    .map_err(|_| "a tenant Auth store is poisoned")?,
+            ));
+        }
+        let mut recreated_guards = Vec::with_capacity(recreated.len());
+        for (captured, store) in &recreated {
+            recreated_guards.push((
+                *captured,
+                store,
+                store
+                    .lock()
+                    .map_err(|_| "a tenant Auth store is poisoned")?,
+            ));
+        }
+        let mut report = RestoreReport::default();
+        for (key, guard) in &mut live_guards {
+            if let Some(captured) = snapshot.tenants.iter().find(|c| c.tenant == key.1) {
+                report.totp_factors_dropped +=
+                    captured.store.restore_into(guard).totp_factors_dropped;
+            } else {
+                guard.clear();
+                tenants.remove(*key);
+                gates.remove(*key);
+            }
+        }
+        for (captured, store, guard) in &mut recreated_guards {
+            report.totp_factors_dropped += captured.store.restore_into(guard).totp_factors_dropped;
+            tenants.insert(
+                (project.to_owned(), captured.tenant.clone()),
+                (*store).clone(),
+            );
+        }
+        metadata.retain(|(candidate, _), _| candidate != project);
+        runtime_overrides.retain(|(candidate, _), _| candidate != project);
+        for captured in &snapshot.tenants {
+            let key = (project.to_owned(), captured.tenant.clone());
+            metadata.insert(key.clone(), captured.metadata.clone());
+            if let Some(runtime_override) = captured.runtime_override {
+                runtime_overrides.insert(key, runtime_override);
+            }
+        }
+        self.membership_generation.fetch_add(1, Ordering::Release);
+        Ok(report)
+    }
+
+    /// Puts the tenant namespaces of `project` back exactly as [`Self::capture_tenants_rollback`]
+    /// saw them: the same store handles, contents and settings. A tenant published since is
+    /// cleared and removed.
+    ///
+    /// # Errors
+    /// A poisoned registry, gate or tenant store; nothing is changed then.
+    pub fn rollback_tenants(
+        &self,
+        project: &str,
+        rollback: &AuthTenantsRollback,
+    ) -> Result<(), &'static str> {
+        let gate = self.project_operation_gate(project)?;
+        let _operation = gate
+            .lock()
+            .map_err(|_| "the Auth operation gate is poisoned")?;
+        let mut tenants = self
+            .tenants
+            .lock()
+            .map_err(|_| "tenant registry is poisoned")?;
+        let mut metadata = self
+            .tenant_metadata
+            .lock()
+            .map_err(|_| "tenant metadata registry is poisoned")?;
+        let mut runtime_overrides = self
+            .tenant_runtime_config_overrides
+            .lock()
+            .map_err(|_| "tenant runtime config override registry is poisoned")?;
+        let mut gates = self
+            .operation_gates
+            .lock()
+            .map_err(|_| "tenant operation-gate registry is poisoned")?;
+        let published_since = tenants
+            .iter()
+            .filter(|((candidate, _), store)| {
+                candidate == project
+                    && !rollback
+                        .tenants
+                        .iter()
+                        .any(|saved| Arc::ptr_eq(&saved.handle, store))
+            })
+            .map(|(key, store)| (key.clone(), store.clone()))
+            .collect::<Vec<_>>();
+        let mut saved_guards = Vec::with_capacity(rollback.tenants.len());
+        for saved in &rollback.tenants {
+            saved_guards.push((
+                saved,
+                saved
+                    .handle
+                    .lock()
+                    .map_err(|_| "a tenant Auth store is poisoned")?,
+            ));
+        }
+        let mut published_since_guards = Vec::with_capacity(published_since.len());
+        for (key, store) in &published_since {
+            published_since_guards.push((
+                key,
+                store
+                    .lock()
+                    .map_err(|_| "a tenant Auth store is poisoned")?,
+            ));
+        }
+        for (key, guard) in &mut published_since_guards {
+            guard.clear();
+            gates.remove(*key);
+        }
+        for (saved, guard) in &mut saved_guards {
+            **guard = saved.contents.clone();
+        }
+        tenants.retain(|(candidate, _), _| candidate != project);
+        metadata.retain(|(candidate, _), _| candidate != project);
+        runtime_overrides.retain(|(candidate, _), _| candidate != project);
+        for saved in &rollback.tenants {
+            tenants.insert(saved.key.clone(), saved.handle.clone());
+            metadata.insert(saved.key.clone(), saved.metadata.clone());
+            if let Some(runtime_override) = saved.runtime_override {
+                runtime_overrides.insert(saved.key.clone(), runtime_override);
+            }
+        }
+        self.membership_generation.fetch_add(1, Ordering::Release);
+        Ok(())
+    }
+
     /// Captures the project store and every published tenant store as one export view.
     ///
     /// The project operation gate excludes configuration and tenant-publication transitions
@@ -6623,6 +7807,42 @@ impl AuthRegistry {
         patch: TenantMetadataPatch,
         password_policy: Option<PasswordPolicy>,
     ) -> Option<(String, TenantMetadata, PasswordPolicy)> {
+        self.create_tenant_with_password_policy_inner(
+            project,
+            metadata,
+            patch,
+            password_policy,
+            false,
+        )
+    }
+
+    /// Creates a tenant only if its parent config enables tenant operations at the project gate.
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn create_tenant_with_password_policy_guarded(
+        &self,
+        project: &str,
+        metadata: TenantMetadata,
+        patch: TenantMetadataPatch,
+        password_policy: Option<PasswordPolicy>,
+    ) -> Option<(String, TenantMetadata, PasswordPolicy)> {
+        self.create_tenant_with_password_policy_inner(
+            project,
+            metadata,
+            patch,
+            password_policy,
+            true,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    fn create_tenant_with_password_policy_inner(
+        &self,
+        project: &str,
+        metadata: TenantMetadata,
+        patch: TenantMetadataPatch,
+        password_policy: Option<PasswordPolicy>,
+        require_enabled: bool,
+    ) -> Option<(String, TenantMetadata, PasswordPolicy)> {
         if project.is_empty() || project.contains(['/', '\\']) {
             return None;
         }
@@ -6634,10 +7854,18 @@ impl AuthRegistry {
         } else {
             projects.registered.get(project)?
         };
+        if require_enabled && !parent.lock().ok()?.allows_tenants() {
+            return None;
+        }
         let mut metadata = metadata;
+        let display_name = patch
+            .display_name
+            .clone()
+            .flatten()
+            .or_else(|| metadata.display_name.clone());
         loop {
             let sequence = self.next_tenant_id.fetch_add(1, Ordering::Relaxed);
-            let tenant = format!("fireemu-{sequence:020}");
+            let tenant = generated_tenant_id(display_name.as_deref(), sequence);
             let store = self.build_tenant_store(project, &tenant, parent)?;
             if let Some(patch) =
                 self.effective_tenant_config_override(&(project.to_owned(), tenant.clone()))
@@ -6664,6 +7892,15 @@ impl AuthRegistry {
                 next_metadata.clone(),
             ) {
                 TenantPublication::Published(_) => {
+                    // The settings a create writes are the tenant's own, as a PATCH's are: a
+                    // later project update reapplies them instead of replacing them.
+                    let config_override = patch.config_override();
+                    if !config_override.is_empty() {
+                        let mut overrides = self.tenant_runtime_config_overrides.lock().ok()?;
+                        let key = (project.to_owned(), tenant.clone());
+                        let previous = overrides.get(&key).copied().unwrap_or_default();
+                        overrides.insert(key, previous.merge(config_override));
+                    }
                     return Some((tenant, next_metadata, next_policy));
                 }
                 TenantPublication::Existing {
@@ -6735,6 +7972,30 @@ impl AuthRegistry {
         patch: TenantMetadataPatch,
         password_policy: Option<PasswordPolicy>,
     ) -> Option<(TenantMetadata, PasswordPolicy)> {
+        self.patch_tenant_with_password_policy_inner(project, tenant, patch, password_policy, false)
+    }
+
+    /// Patches a tenant only if its parent config enables tenant operations at the project gate.
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn patch_tenant_with_password_policy_guarded(
+        &self,
+        project: &str,
+        tenant: &str,
+        patch: TenantMetadataPatch,
+        password_policy: Option<PasswordPolicy>,
+    ) -> Option<(TenantMetadata, PasswordPolicy)> {
+        self.patch_tenant_with_password_policy_inner(project, tenant, patch, password_policy, true)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    fn patch_tenant_with_password_policy_inner(
+        &self,
+        project: &str,
+        tenant: &str,
+        patch: TenantMetadataPatch,
+        password_policy: Option<PasswordPolicy>,
+        require_enabled: bool,
+    ) -> Option<(TenantMetadata, PasswordPolicy)> {
         if project.is_empty()
             || project.contains(['/', '\\'])
             || tenant.is_empty()
@@ -6744,6 +8005,9 @@ impl AuthRegistry {
         }
         let gate = self.operation_gate(project, None)?;
         let _operation = gate.lock().ok()?;
+        if require_enabled && !self.project_store(project)?.lock().ok()?.allows_tenants() {
+            return None;
+        }
         let key = (project.to_owned(), tenant.to_owned());
         let tenants = self.tenants.lock().ok()?;
         let store = tenants.get(&key).cloned()?;
@@ -6900,6 +8164,36 @@ impl AuthRegistry {
         Ok(Some(next))
     }
 
+    /// Replaces a project's written config members under its namespace gate, as
+    /// [`Self::update_project_sign_in_config`] does for its sign-in providers. `Ok(None)`: no
+    /// such project, or its gate or store is unavailable.
+    pub fn update_project_stored_members<F, E>(
+        &self,
+        project: &str,
+        update: F,
+    ) -> Result<Option<crate::config_members::StoredConfigMembers>, E>
+    where
+        F: FnOnce(
+            &crate::config_members::StoredConfigMembers,
+        ) -> Result<crate::config_members::StoredConfigMembers, E>,
+    {
+        let Some(gate) = self.operation_gate(project, None) else {
+            return Ok(None);
+        };
+        let Ok(_operation) = gate.lock() else {
+            return Ok(None);
+        };
+        let Some(parent) = self.project_store(project) else {
+            return Ok(None);
+        };
+        let Ok(mut parent) = parent.lock() else {
+            return Ok(None);
+        };
+        let next = update(parent.stored_config_members())?;
+        parent.set_stored_config_members(next.clone());
+        Ok(Some(next))
+    }
+
     /// Applies a project settings update after taking the namespace gate and reading the
     /// current policy and quota under that same gate. The callback is used by adapters that
     /// decode a masked replacement from the current value; keeping that merge inside the gate
@@ -6941,7 +8235,56 @@ impl AuthRegistry {
                 return Ok(None);
             }
         }
-        Ok(self.patch_project_config_under_gate(project, patch, password_policy, signup_quota))
+        Ok(self.patch_project_config_under_gate(
+            project,
+            patch,
+            ProjectConfigStoreUpdate {
+                password_policy,
+                signup_quota,
+                ..ProjectConfigStoreUpdate::default()
+            },
+        ))
+    }
+
+    /// Computes every project config value from one store snapshot and publishes them under one
+    /// namespace gate and one parent store lock. Readers cannot observe a new quota with old
+    /// derived members, or new providers with old config members.
+    pub fn patch_project_config_transaction<F, E>(
+        &self,
+        project: &str,
+        patch: ProjectAuthConfigPatch,
+        prepare: F,
+    ) -> Result<Option<ProjectAuthConfig>, E>
+    where
+        F: FnOnce(&AuthStore) -> Result<ProjectConfigStoreUpdate, E>,
+    {
+        let Some(gate) = self.operation_gate(project, None) else {
+            return Ok(None);
+        };
+        let Ok(_operation) = gate.lock() else {
+            return Ok(None);
+        };
+        let Some(parent) = self.project_store(project) else {
+            return Ok(None);
+        };
+        let update = {
+            let Ok(parent) = parent.lock() else {
+                return Ok(None);
+            };
+            prepare(&parent)?
+        };
+        if update
+            .signup_quota
+            .as_ref()
+            .is_some_and(|quota| SignupQuota::new(quota.clone()).is_err())
+            || update
+                .sign_in
+                .as_ref()
+                .is_some_and(|sign_in| !sign_in.is_valid())
+        {
+            return Ok(None);
+        }
+        Ok(self.patch_project_config_under_gate(project, patch, update))
     }
 
     /// Registers a non-password Auth config override without creating the project namespace.
@@ -7186,13 +8529,20 @@ impl AuthRegistry {
         true
     }
 
+    #[allow(clippy::too_many_lines)]
     fn patch_project_config_under_gate(
         &self,
         project: &str,
         patch: ProjectAuthConfigPatch,
-        password_policy: Option<PasswordPolicy>,
-        signup_quota: Option<SignupQuotaConfig>,
+        update: ProjectConfigStoreUpdate,
     ) -> Option<ProjectAuthConfig> {
+        let ProjectConfigStoreUpdate {
+            password_policy,
+            signup_quota,
+            sign_in,
+            stored_members,
+            mfa,
+        } = update;
         let projects = self.projects.lock().ok()?;
         let parent = if project == self.default_project {
             &self.default
@@ -7202,7 +8552,13 @@ impl AuthRegistry {
                 .get(project)
                 .or_else(|| projects.routed.get(project))?
         };
-        if patch.is_empty() && password_policy.is_none() && signup_quota.is_none() {
+        if patch.is_empty()
+            && password_policy.is_none()
+            && signup_quota.is_none()
+            && sign_in.is_none()
+            && stored_members.is_none()
+            && mfa.is_none()
+        {
             return Some(parent.lock().ok()?.config());
         }
         if !patch.is_empty() {
@@ -7259,12 +8615,6 @@ impl AuthRegistry {
                     .copied()
                     .map_or(config, |override_patch| override_patch.apply_to(config));
                 tenant.set_config(tenant_config);
-            }
-            for (key, _) in &tenant_stores {
-                let tenant_config = tenant_overrides
-                    .get(key)
-                    .copied()
-                    .map_or(config, |override_patch| override_patch.apply_to(config));
                 metadata.get_mut(key)?.apply_effective_config(tenant_config);
             }
             if let Some(password_policy) = password_policy {
@@ -7274,9 +8624,13 @@ impl AuthRegistry {
                     .expect("a password policy patch holds the override lock")
                     .insert(project.to_owned(), password_policy);
             }
-            if let Some(quota) = signup_quota {
-                parent.set_signup_quota_config(quota).ok()?;
-            }
+            Self::publish_project_config_members(
+                &mut parent,
+                signup_quota,
+                sign_in,
+                stored_members,
+                mfa,
+            )?;
             return Some(config);
         }
         let mut overrides = match password_policy.as_ref() {
@@ -7292,10 +8646,36 @@ impl AuthRegistry {
                 .expect("a password policy patch holds the override lock")
                 .insert(project.to_owned(), password_policy);
         }
+        Self::publish_project_config_members(
+            &mut parent,
+            signup_quota,
+            sign_in,
+            stored_members,
+            mfa,
+        )?;
+        Some(config)
+    }
+
+    fn publish_project_config_members(
+        parent: &mut AuthStore,
+        signup_quota: Option<SignupQuotaConfig>,
+        sign_in: Option<SignInConfig>,
+        stored_members: Option<crate::config_members::StoredConfigMembers>,
+        mfa: Option<crate::mfa_config::MfaProjectConfig>,
+    ) -> Option<()> {
         if let Some(quota) = signup_quota {
             parent.set_signup_quota_config(quota).ok()?;
         }
-        Some(config)
+        if let Some(sign_in) = sign_in {
+            parent.set_sign_in_config(sign_in).ok()?;
+        }
+        if let Some(stored_members) = stored_members {
+            parent.set_stored_config_members(stored_members);
+        }
+        if let Some(mfa) = mfa {
+            parent.set_mfa_config(mfa);
+        }
+        Some(())
     }
 
     fn project_store(&self, project: &str) -> Option<SharedAuthStore> {
@@ -7312,6 +8692,15 @@ impl AuthRegistry {
 
     /// Deletes a tenant namespace and its metadata.
     pub fn delete_tenant(&self, project: &str, tenant: &str) -> bool {
+        self.delete_tenant_inner(project, tenant, false)
+    }
+
+    /// Deletes a tenant only if its parent config enables tenant operations at the project gate.
+    pub fn delete_tenant_guarded(&self, project: &str, tenant: &str) -> bool {
+        self.delete_tenant_inner(project, tenant, true)
+    }
+
+    fn delete_tenant_inner(&self, project: &str, tenant: &str, require_enabled: bool) -> bool {
         // Tenant authentication and tenant configuration updates use the project gate. Hold the
         // same gate before inspecting membership so deletion cannot detach a namespace while an
         // in-flight request is committing against its previously selected store.
@@ -7321,24 +8710,88 @@ impl AuthRegistry {
         let Ok(_operation) = gate.lock() else {
             return false;
         };
+        if require_enabled
+            && !self
+                .project_store(project)
+                .and_then(|store| store.lock().ok().map(|store| store.allows_tenants()))
+                .unwrap_or(false)
+        {
+            return false;
+        }
         let key = (project.to_owned(), tenant.to_owned());
-        let removed = self.tenants.lock().ok().and_then(|mut stores| {
+        let removed_store = self.tenants.lock().ok().and_then(|mut stores| {
             let mut metadata = self.tenant_metadata.lock().ok()?;
             let mut runtime_overrides = self.tenant_runtime_config_overrides.lock().ok()?;
-            let removed = stores.remove(&key).is_some();
+            let removed = stores.remove(&key);
             metadata.remove(&key);
-            if removed {
+            if removed.is_some() {
                 runtime_overrides.remove(&key);
             }
             Some(removed)
         });
+        let removed = removed_store.as_ref().map(Option::is_some);
+        if let Some(Some(store)) = removed_store {
+            // Remember the epochs its tokens were issued under (store locks after the registry
+            // maps, as everywhere on this path).
+            let tenant_epoch = store.lock().ok().and_then(|s| s.lifecycle_epoch_claim());
+            let project_epoch = self
+                .store_for(project)
+                .and_then(|parent| parent.lock().ok().and_then(|p| p.lifecycle_epoch_claim()));
+            if let Ok(mut epochs) = self.removed_tenant_epochs.lock() {
+                epochs.insert(
+                    key.clone(),
+                    RemovedTenantEpochs {
+                        tenant: tenant_epoch,
+                        project: project_epoch,
+                    },
+                );
+            }
+        }
         if let Ok(mut gates) = self.operation_gates.lock() {
             gates.remove(&key);
         }
         if removed == Some(true) {
             self.membership_generation.fetch_add(1, Ordering::Release);
+            if let Ok(mut deleted) = self.deleted_tenants.lock() {
+                deleted.insert(key);
+            }
         }
         removed.unwrap_or(false)
+    }
+
+    /// Whether `tenant` of `project` was deleted in this run (and is not live).
+    #[must_use]
+    pub fn tenant_deleted(&self, project: &str, tenant: &str) -> bool {
+        let key = (project.to_owned(), tenant.to_owned());
+        self.deleted_tenants
+            .lock()
+            .is_ok_and(|deleted| deleted.contains(&key))
+            && self
+                .tenants
+                .lock()
+                .is_ok_and(|tenants| !tenants.contains_key(&key))
+    }
+
+    /// The `(project, tenant)` a refresh token this version issued names, when it names a
+    /// tenant.
+    #[must_use]
+    pub fn refresh_token_tenant(token: &str) -> Option<(String, String)> {
+        let (project, tenant) = refresh_token_namespace(token)?;
+        Some((project.to_owned(), tenant?.to_owned()))
+    }
+
+    /// The session epochs `tenant` of `project` had when it was deleted, if it was.
+    #[must_use]
+    pub fn removed_tenant_epochs(
+        &self,
+        project: &str,
+        tenant: &str,
+    ) -> Option<RemovedTenantEpochs> {
+        self.removed_tenant_epochs
+            .lock()
+            .ok()?
+            .get(&(project.to_owned(), tenant.to_owned()))
+            .cloned()
     }
 
     /// The first store (the default first, then the registered ones in name order) that
@@ -8506,6 +9959,79 @@ mod compatibility_routing_tests {
         );
     }
 
+    /// A deleted tenant is remembered as deleted, not unknown, until one with its id is live
+    /// again (AUTH-TENANT-BLOCKING recording 2026-09-27, deletion program).
+    #[test]
+    fn a_deleted_tenant_is_told_from_an_unknown_one() {
+        let registry = AuthRegistry::new("demo-app", store("demo-app", 1));
+        registry.ensure_tenant("demo-app", "gone").unwrap();
+        registry.ensure_tenant("demo-app", "kept").unwrap();
+        assert!(!registry.tenant_deleted("demo-app", "gone"));
+        assert!(registry.delete_tenant("demo-app", "gone"));
+        assert!(registry.tenant_deleted("demo-app", "gone"));
+        assert!(!registry.tenant_deleted("demo-app", "kept"));
+        assert!(!registry.tenant_deleted("demo-app", "never"));
+        assert!(!registry.tenant_deleted("other-app", "gone"));
+        registry.ensure_tenant("demo-app", "gone").unwrap();
+        assert!(!registry.tenant_deleted("demo-app", "gone"));
+    }
+
+    #[test]
+    fn a_refresh_token_names_its_tenant() {
+        assert_eq!(
+            AuthRegistry::refresh_token_tenant("rt1.8.4.demo-appabcd.entropy"),
+            Some(("demo-app".to_owned(), "abcd".to_owned()))
+        );
+        assert_eq!(
+            AuthRegistry::refresh_token_tenant("rt1.8.0.demo-app.entropy"),
+            None
+        );
+        assert_eq!(AuthRegistry::refresh_token_tenant("opaque"), None);
+    }
+
+    /// The settings a create writes are the tenant's own: a later project update reapplies them,
+    /// as it does a PATCH's (AUTH-TENANT-BLOCKING recording 2026-09-27, inheritance program).
+    #[test]
+    fn a_created_tenants_written_settings_survive_later_project_updates() {
+        let registry = AuthRegistry::new("demo-app", store("demo-app", 1));
+        let (tenant, _, _) = registry
+            .create_tenant_with_password_policy(
+                "demo-app",
+                TenantMetadata::default(),
+                TenantMetadataPatch {
+                    allow_duplicate_emails: Some(false),
+                    enable_improved_email_privacy: Some(false),
+                    disabled_user_signup: Some(false),
+                    disabled_user_deletion: Some(true),
+                    ..TenantMetadataPatch::default()
+                },
+                None,
+            )
+            .unwrap();
+        assert!(registry.set_project_config(
+            "demo-app",
+            super::ProjectAuthConfig {
+                allow_duplicate_emails: true,
+                enable_improved_email_privacy: true,
+                disabled_user_signup: true,
+                disabled_user_deletion: false,
+            }
+        ));
+        let config = registry
+            .tenant_store("demo-app", &tenant)
+            .unwrap()
+            .lock()
+            .unwrap()
+            .config();
+        assert!(!config.allow_duplicate_emails);
+        assert!(!config.enable_improved_email_privacy);
+        assert!(!config.disabled_user_signup);
+        assert!(config.disabled_user_deletion);
+        let metadata = registry.tenant_metadata("demo-app", &tenant).unwrap();
+        assert!(!metadata.enable_improved_email_privacy && !metadata.disabled_user_signup);
+        assert!(metadata.disabled_user_deletion);
+    }
+
     #[test]
     #[allow(clippy::too_many_lines)]
     fn tenant_effective_config_preserves_explicit_false_and_project_isolation() {
@@ -9631,6 +11157,23 @@ mod broad_project_number_tests {
     }
 
     #[test]
+    fn a_refused_sign_up_records_its_issuance_time_without_moving_it_back() {
+        let mut store = AuthStore::new("demo-one", SplitMix64::new(1), TotpPolicy::default());
+        let early = LogicalInstant::from_unix_seconds(100);
+        let late = LogicalInstant::from_unix_seconds(200);
+        let uid = store
+            .create_user_with_id(NewUser::email("refused@example.com"), Some("r"), early)
+            .unwrap();
+        store.record_refused_sign_up_issuance(&uid, late);
+        assert_eq!(store.user(&uid).unwrap().last_refresh_at, Some(late));
+        store.record_refused_sign_up_issuance(&uid, early);
+        assert_eq!(store.user(&uid).unwrap().last_refresh_at, Some(late));
+        let missing = LocalId("missing".to_owned());
+        store.record_refused_sign_up_issuance(&missing, late);
+        assert!(store.user(&missing).is_none());
+    }
+
+    #[test]
     fn mutable_user_reactivation_keeps_email_index_canonical() {
         let mut store = AuthStore::new("demo-one", SplitMix64::new(1), TotpPolicy::default());
         let at = LogicalInstant::from_unix_seconds(100);
@@ -9656,8 +11199,8 @@ mod broad_project_number_tests {
 mod password_policy_namespace_tests {
     use super::{
         AuthNamespaceConfigPatch, AuthPrincipal, AuthRegistry, AuthSnapshot, AuthStore,
-        ProjectAuthConfig, ProjectAuthConfigPatch, RoutedStoreInstall, TenantMetadata,
-        TenantMetadataPatch,
+        ProjectAuthConfig, ProjectAuthConfigPatch, ProjectConfigStoreUpdate, RoutedStoreInstall,
+        TenantMetadata, TenantMetadataPatch,
     };
     use crate::mfa::TotpPolicy;
     use crate::password_policy::{EnforcementState, PasswordPolicy};
@@ -10614,6 +12157,72 @@ mod password_policy_namespace_tests {
     }
 
     #[test]
+    fn concurrent_project_transactions_publish_quota_and_members_together() {
+        let registry = Arc::new(AuthRegistry::new(
+            "demo-app",
+            Arc::new(Mutex::new(AuthStore::new(
+                "demo-app",
+                SplitMix64::new(1),
+                TotpPolicy::default(),
+            ))),
+        ));
+        let ready = Arc::new(Barrier::new(3));
+        std::thread::scope(|scope| {
+            for value in [5, 7] {
+                let registry = Arc::clone(&registry);
+                let ready = Arc::clone(&ready);
+                scope.spawn(move || {
+                    ready.wait();
+                    for _ in 0..128 {
+                        registry
+                            .patch_project_config_transaction(
+                                "demo-app",
+                                ProjectAuthConfigPatch::default(),
+                                |store| {
+                                    let mut quota = store.signup_quota().config().clone();
+                                    quota.default_quota_per_hour = value;
+                                    let mut members = store.stored_config_members().clone();
+                                    members.set("testQuota", Some(value.to_string()));
+                                    Ok::<_, ()>(ProjectConfigStoreUpdate {
+                                        signup_quota: Some(quota),
+                                        stored_members: Some(members),
+                                        ..ProjectConfigStoreUpdate::default()
+                                    })
+                                },
+                            )
+                            .expect("transaction is accepted")
+                            .expect("project exists");
+                    }
+                });
+            }
+            let registry = Arc::clone(&registry);
+            scope.spawn(move || {
+                ready.wait();
+                for _ in 0..10_000 {
+                    let store = registry.default_store();
+                    let store = store.lock().expect("default store");
+                    let quota = store.signup_quota().config().default_quota_per_hour;
+                    let recorded = store
+                        .stored_config_members()
+                        .get("testQuota")
+                        .map_or(quota, |text| text.parse().expect("recorded quota"));
+                    assert_eq!(quota, recorded);
+                }
+            });
+        });
+        let store = registry.default_store();
+        let store = store.lock().expect("default store");
+        assert_eq!(
+            store
+                .signup_quota()
+                .config()
+                .default_quota_per_hour
+                .to_string(),
+            store.stored_config_members().get("testQuota").unwrap()
+        );
+    }
+
+    #[test]
     fn routed_candidate_inherits_default_quota_configuration_without_usage() {
         let default = Arc::new(Mutex::new(AuthStore::new(
             "demo-app",
@@ -10698,19 +12307,95 @@ mod generated_id_tests {
         assert_ne!(nested_admin.as_str(), reserved);
     }
 
+    fn held(live: &AuthStore, id: &str) -> bool {
+        live.holds_generated_local_id(id)
+    }
+
+    /// A reset keeps the id of a request still in flight: the emulator profile commits that
+    /// request into the reset state, as the official emulator's account wipe keeps its
+    /// pendingLocalIds (closure re-review S1'', 2026-09-28). Released, the id is free again.
     #[test]
-    fn clearing_a_store_releases_reservations() {
+    fn a_reset_keeps_an_in_flight_reservation_until_it_is_released() {
         let mut live = AuthStore::new("demo-app", SplitMix64::new(7), TotpPolicy::default());
         let mut candidate = live.clone();
-        let reserved = candidate.reserve_next_generated_local_id();
+        let (reserved, generation) = candidate.reserve_next_generated_local_id_with_generation();
         live.clear();
 
-        let fresh_reserved = live.clone().reserve_next_generated_local_id();
-        assert_eq!(fresh_reserved, reserved);
+        let (fresh, fresh_generation) = live
+            .clone()
+            .reserve_next_generated_local_id_with_generation();
+        assert_ne!(fresh, reserved);
+        let created = live
+            .create_user(NewUser::email("after-reset@example.test"), NOW)
+            .expect("an account created after the reset succeeds");
+        assert_ne!(created.as_str(), reserved);
+        assert_ne!(created.as_str(), fresh);
+
+        live.release_reserved_generated_local_id_at_generation(&reserved, generation);
+        live.release_reserved_generated_local_id_at_generation(&fresh, fresh_generation);
+        assert!(!held(&live, &reserved), "a released id is free again");
+        assert!(!held(&live, &fresh));
+    }
+
+    /// Committing across a reset names the reserved id for the next account and releases
+    /// nothing: the request's own reservation stays until its guard releases it (closure
+    /// re-review 3, 2026-09-28).
+    #[test]
+    fn using_a_reservation_from_before_a_reset_releases_nothing() {
+        let mut live = AuthStore::new("demo-app", SplitMix64::new(7), TotpPolicy::default());
+        let (reserved, generation) = live
+            .clone()
+            .reserve_next_generated_local_id_with_generation();
+        live.clear();
+
+        let mut committed = live.clone();
+        committed.use_generated_local_id_reserved_before_reset(&reserved);
+        assert!(held(&live, &reserved));
+        let created = committed
+            .create_user(NewUser::email("across-reset@example.test"), NOW)
+            .expect("the request's account is created with its id");
+        assert_eq!(created.as_str(), reserved);
+        assert!(held(&live, &reserved), "only the guard releases it");
+
+        live.release_reserved_generated_local_id_at_generation(&reserved, generation);
+        assert!(!held(&live, &reserved));
+    }
+
+    /// A restore brings back an account whose id an in-flight request holds: the restore wins,
+    /// and the request cannot create its account (400 `DUPLICATE_LOCAL_ID` in the emulator
+    /// profile; the strict profile refuses it first as a reset). The official emulator has no
+    /// restore while a request runs (closure re-review 3, 2026-09-28).
+    #[test]
+    fn a_restored_account_wins_over_an_in_flight_reservation_of_its_id() {
+        let mut live = AuthStore::new("demo-app", SplitMix64::new(7), TotpPolicy::default());
+        let (reserved, generation) = live
+            .clone()
+            .reserve_next_generated_local_id_with_generation();
+        let mut source = AuthStore::new("demo-app", SplitMix64::new(11), TotpPolicy::default());
+        source
+            .create_user_with_id(
+                NewUser::email("restored@example.test"),
+                Some(&reserved),
+                NOW,
+            )
+            .expect("the source holds an account with that id");
+        let report = AuthSnapshot::capture(&source).restore_into(&mut live);
+        assert_eq!(report, super::RestoreReport::default());
+        assert!(live.user_by_id(&reserved).is_some());
+        assert!(held(&live, &reserved));
+
+        let mut committed = live.clone();
+        committed.use_generated_local_id_reserved_before_reset(&reserved);
+        assert_eq!(
+            committed.create_user(NewUser::email("request@example.test"), NOW),
+            Err(super::AuthError::LocalIdExists)
+        );
+        live.release_reserved_generated_local_id_at_generation(&reserved, generation);
+        assert!(!held(&live, &reserved));
     }
 
     #[test]
-    fn restoring_a_snapshot_releases_stale_reservations() {
+    fn a_restore_keeps_an_in_flight_reservation_until_it_is_released() {
         let mut live = AuthStore::new("demo-app", SplitMix64::new(7), TotpPolicy::default());
         let mut candidate = live.clone();
         let reserved = candidate.reserve_next_generated_local_id();
@@ -10718,24 +12403,24 @@ mod generated_id_tests {
         let report = snapshot.restore_into(&mut live);
         assert_eq!(report, super::RestoreReport::default());
         let fresh_reserved = live.clone().reserve_next_generated_local_id();
-        assert_eq!(fresh_reserved, reserved);
+        assert_ne!(fresh_reserved, reserved);
         live.release_reserved_generated_local_id(&reserved);
-        let next_reserved = live.clone().reserve_next_generated_local_id();
-        assert_ne!(next_reserved, fresh_reserved);
+        assert!(!held(&live, &reserved));
+        assert!(held(&live, &fresh_reserved));
     }
 
     #[test]
-    fn releasing_a_pre_reset_reservation_keeps_the_new_same_id_reservation() {
+    fn releasing_a_pre_reset_reservation_keeps_the_newer_reservation() {
         let mut live = AuthStore::new("demo-app", SplitMix64::new(7), TotpPolicy::default());
         let old_reservation = live.clone().reserve_next_generated_local_id();
 
         live.clear();
         let new_reservation = live.clone().reserve_next_generated_local_id();
-        assert_eq!(new_reservation, old_reservation);
+        assert_ne!(new_reservation, old_reservation);
 
         live.release_reserved_generated_local_id(&old_reservation);
-        let next_reservation = live.clone().reserve_next_generated_local_id();
-        assert_ne!(next_reservation, new_reservation);
+        assert!(!held(&live, &old_reservation));
+        assert!(held(&live, &new_reservation));
     }
 
     #[test]
@@ -10749,18 +12434,19 @@ mod generated_id_tests {
         let (new_id, new_generation) = live
             .clone()
             .reserve_next_generated_local_id_with_generation();
-        assert_eq!(new_id, old_id);
+        assert_ne!(new_id, old_id);
         assert_ne!(new_generation, old_generation);
 
-        // This models the old guard being dropped after the newer reservation was created.
+        // This models the old guard being dropped after the newer reservation was created. A
+        // release naming the wrong generation removes nothing.
+        live.release_reserved_generated_local_id_at_generation(&new_id, old_generation);
+        assert!(held(&live, &new_id));
         live.release_reserved_generated_local_id_at_generation(&old_id, old_generation);
-        let (next_id, next_generation) = live
-            .clone()
-            .reserve_next_generated_local_id_with_generation();
-        assert_ne!(next_id, new_id);
+        assert!(!held(&live, &old_id));
+        assert!(held(&live, &new_id));
 
         live.release_reserved_generated_local_id_at_generation(&new_id, new_generation);
-        live.release_reserved_generated_local_id_at_generation(&next_id, next_generation);
+        assert!(!held(&live, &new_id));
     }
 
     #[test]
@@ -10774,10 +12460,10 @@ mod generated_id_tests {
         let (new_id, new_generation) = live
             .clone()
             .reserve_next_generated_local_id_with_generation();
-        assert_eq!(new_id, old_id);
+        assert_ne!(new_id, old_id);
 
-        // The newer guard may be dropped before the older one. Its exact ticket must not be
-        // confused with the older reservation, which remains in the shared ledger.
+        // The newer guard may be dropped before the older one; the older reservation remains
+        // in the shared ledger.
         live.release_reserved_generated_local_id_at_generation(&new_id, new_generation);
         assert!(live
             .generated_local_id_reservations
@@ -10792,11 +12478,7 @@ mod generated_id_tests {
             }));
 
         live.release_reserved_generated_local_id_at_generation(&old_id, old_generation);
-        assert!(!live
-            .generated_local_id_reservations
-            .lock()
-            .unwrap()
-            .contains_key(&LocalId(old_id)));
+        assert!(!held(&live, &old_id));
     }
 
     #[test]

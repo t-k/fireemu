@@ -5,8 +5,10 @@
 //! nothing. A `BatchWrite` is not, so the refusal is one entry in the per-write `status`
 //! vector and its siblings still publish, which is what production does.
 //!
-//! The aggregate-value rule is strict-only: the `emulator` profile may not gain a refusal.
-//! The field-path rule already applied under both profiles and still does.
+//! A map or array is not refused for its aggregate size in either profile: production accepted
+//! a map one byte over the field-value figure (FS-DATA-WRITE bracket recording, 2026-09-27).
+//! The refusals exercised here are a single string payload over the figure and the field path,
+//! both of which apply under both profiles.
 
 use std::sync::{Arc, Mutex};
 
@@ -80,10 +82,16 @@ fn call(s: &RestState, method: &str, path: &str, body: Value) -> (u16, Value) {
         authorization: Some("Bearer owner".to_owned()),
         app_check: Vec::new(),
         body,
+        batch_field_order: Vec::new(),
         origin: None,
         browser_metadata: false,
     });
     (r.status, r.body)
+}
+
+/// A JSON string one byte over the single-payload maximum, refused under both profiles.
+fn string_over_json() -> Value {
+    json!({"stringValue": "x".repeat(FIELD_VALUE_MAXIMUM + 1)})
 }
 
 /// A JSON `mapValue` whose aggregate storage size is exactly `total` bytes.
@@ -135,33 +143,43 @@ fn nested_path_json(bytes: usize) -> (String, Value) {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn a_rest_commit_accepts_the_aggregate_value_boundary_and_refuses_one_more_byte() {
-    let s = state(true);
-    let (status, body) = call(
-        &s,
-        "PATCH",
-        &format!("{DOCS}/limits/exact"),
-        json!({"fields": {"v": aggregate_map_json(FIELD_VALUE_MAXIMUM)}}),
-    );
-    assert_eq!(status, 200, "{}", body["error"]);
+fn a_rest_commit_accepts_an_aggregate_value_over_the_figure_and_refuses_a_single_payload_over_it() {
+    for enforce_limits in [true, false] {
+        let s = state(enforce_limits);
+        for (name, total) in [
+            ("exact", FIELD_VALUE_MAXIMUM),
+            ("over", FIELD_VALUE_MAXIMUM + 1),
+        ] {
+            let (status, body) = call(
+                &s,
+                "PATCH",
+                &format!("{DOCS}/limits/{name}"),
+                json!({"fields": {"v": aggregate_map_json(total)}}),
+            );
+            assert_eq!(status, 200, "{enforce_limits} {name}: {}", body["error"]);
+        }
 
-    let (status, body) = call(
-        &s,
-        "PATCH",
-        &format!("{DOCS}/limits/over"),
-        json!({"fields": {"v": aggregate_map_json(FIELD_VALUE_MAXIMUM + 1)}}),
-    );
-    assert_eq!(status, 400, "{}", body["error"]);
-    assert_eq!(body["error"]["status"], "INVALID_ARGUMENT");
-    // Not the document-bytes message: this document is 1,048,550 logical bytes.
-    assert_eq!(body["error"]["message"], OVER_VALUE);
-
-    let (status, missing) = call(&s, "GET", &format!("{DOCS}/limits/over"), Value::Null);
-    assert_eq!(status, 404, "{missing}");
+        let (status, body) = call(
+            &s,
+            "PATCH",
+            &format!("{DOCS}/limits/string-over"),
+            json!({"fields": {"v": string_over_json()}}),
+        );
+        assert_eq!(status, 400, "{}", body["error"]);
+        assert_eq!(body["error"]["status"], "INVALID_ARGUMENT");
+        assert_eq!(body["error"]["message"], OVER_VALUE);
+        let (status, missing) = call(
+            &s,
+            "GET",
+            &format!("{DOCS}/limits/string-over"),
+            Value::Null,
+        );
+        assert_eq!(status, 404, "{missing}");
+    }
 }
 
 #[test]
-fn a_rest_commit_over_the_aggregate_value_boundary_publishes_none_of_its_writes() {
+fn a_rest_commit_over_the_field_value_limit_publishes_none_of_its_writes() {
     let s = state(true);
     let (status, _) = call(
         &s,
@@ -179,7 +197,7 @@ fn a_rest_commit_over_the_aggregate_value_boundary_publishes_none_of_its_writes(
             {"update": {"name": format!("{NAMES}/atomic/control"),
                         "fields": {"n": {"integerValue": "2"}}}},
             {"update": {"name": format!("{NAMES}/atomic/over"),
-                        "fields": {"v": aggregate_map_json(FIELD_VALUE_MAXIMUM + 1)}}},
+                        "fields": {"v": string_over_json()}}},
             {"update": {"name": format!("{NAMES}/atomic/after"),
                         "fields": {"n": {"integerValue": "3"}}}}
         ]}),
@@ -209,7 +227,7 @@ fn a_rest_batch_write_reports_the_refusal_per_item_and_still_publishes_its_sibli
             {"update": {"name": format!("{NAMES}/batch/ok-first"),
                         "fields": {"n": {"integerValue": "1"}}}},
             {"update": {"name": format!("{NAMES}/batch/over"),
-                        "fields": {"v": aggregate_map_json(FIELD_VALUE_MAXIMUM + 1)}}},
+                        "fields": {"v": string_over_json()}}},
             {"update": {"name": format!("{NAMES}/batch/ok-last"),
                         "fields": {"n": {"integerValue": "2"}}}}
         ]}),
@@ -228,20 +246,6 @@ fn a_rest_batch_write_reports_the_refusal_per_item_and_still_publishes_its_sibli
     }
     let (status, _) = call(&s, "GET", &format!("{DOCS}/batch/over"), Value::Null);
     assert_eq!(status, 404, "the refused entry must publish nothing");
-}
-
-#[test]
-fn the_emulator_profile_gains_no_aggregate_value_refusal_over_rest() {
-    let s = state(false);
-    let (status, body) = call(
-        &s,
-        "PATCH",
-        &format!("{DOCS}/limits/over"),
-        json!({"fields": {"v": aggregate_map_json(FIELD_VALUE_MAXIMUM + 1)}}),
-    );
-    assert_eq!(status, 200, "{}", body["error"]);
-    let (status, stored) = call(&s, "GET", &format!("{DOCS}/limits/over"), Value::Null);
-    assert_eq!(status, 200, "{stored}");
 }
 
 // ---------------------------------------------------------------------------
@@ -335,22 +339,48 @@ fn write(name: &str, total: usize) -> pb::Write {
     }
 }
 
+/// A write whose single string payload is one byte over the maximum.
+fn string_over_write(name: &str) -> pb::Write {
+    pb::Write {
+        operation: Some(pb::write::Operation::Update(pb::Document {
+            name: format!("{NAMES}/{name}"),
+            fields: [(
+                "v".to_owned(),
+                pb::Value {
+                    value_type: Some(pb::value::ValueType::StringValue(
+                        "x".repeat(FIELD_VALUE_MAXIMUM + 1),
+                    )),
+                },
+            )]
+            .into_iter()
+            .collect(),
+            ..Default::default()
+        })),
+        ..Default::default()
+    }
+}
+
 async fn grpc_cases() {
     let (mut client, server) = start(true).await;
 
-    client
-        .commit(pb::CommitRequest {
-            database: "projects/demo-app/databases/(default)".to_owned(),
-            writes: vec![write("grpc/exact", FIELD_VALUE_MAXIMUM)],
-            ..Default::default()
-        })
-        .await
-        .expect("the inclusive maximum is accepted");
+    for (name, total) in [
+        ("grpc/exact", FIELD_VALUE_MAXIMUM),
+        ("grpc/aggregate-over", FIELD_VALUE_MAXIMUM + 1),
+    ] {
+        client
+            .commit(pb::CommitRequest {
+                database: "projects/demo-app/databases/(default)".to_owned(),
+                writes: vec![write(name, total)],
+                ..Default::default()
+            })
+            .await
+            .unwrap_or_else(|error| panic!("{name}: {error}"));
+    }
 
     let refused = client
         .commit(pb::CommitRequest {
             database: "projects/demo-app/databases/(default)".to_owned(),
-            writes: vec![write("grpc/over", FIELD_VALUE_MAXIMUM + 1)],
+            writes: vec![string_over_write("grpc/over")],
             ..Default::default()
         })
         .await
@@ -388,7 +418,7 @@ async fn grpc_cases() {
         .unwrap();
     tx.send(pb::WriteRequest {
         stream_token: handshake.stream_token.clone(),
-        writes: vec![write("stream/over", FIELD_VALUE_MAXIMUM + 1)],
+        writes: vec![string_over_write("stream/over")],
         ..Default::default()
     })
     .await
@@ -429,7 +459,7 @@ async fn grpc_emulator_profile_case() {
 }
 
 #[test]
-fn the_grpc_write_surfaces_apply_the_aggregate_value_boundary() {
+fn the_grpc_write_surfaces_apply_the_field_value_limit() {
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()

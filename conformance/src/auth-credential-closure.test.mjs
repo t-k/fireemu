@@ -307,12 +307,12 @@ test("AUTH-CREDENTIAL final regression requires current 631-row and 222-row comp
     "spec/compatibility/closure/evidence/AUTH-CREDENTIAL-comparison.json",
   );
   assert.equal(regression.status, "VERIFIED");
-  assert.equal(closure.parentStatus, "IMPLEMENTING");
+  assert.equal(closure.parentStatus, "COMPAT_VERIFIED");
   assert.equal(
     regression.evidence.finalArtifactSha256,
     "a8bfc5dc1737dee01bae028b2e3dd421f04326e12640cb4936d896ebfcfa358a",
   );
-  assert.equal(regression.evidence.sourceCommit, "c86b8490c1717bce2881eac051bef94388a84001");
+  assert.equal(regression.evidence.sourceCommit, "9f012a27b5ed5596b5da0af6891f6c2fe9e25393");
   assert.deepEqual(accountComparison.summary, { MATCH: 631 });
   assert.equal(accountComparison.artifactSha256, regression.evidence.finalArtifactSha256);
   assert.deepEqual(credentialComparison.summary, { MATCH: 222 });
@@ -333,7 +333,7 @@ test("AUTH-CREDENTIAL final regression requires current 631-row and 222-row comp
     closure.conditions.find(
       ({ conditionId }) => conditionId === "AUTH-CREDENTIAL/closure-review",
     ).status,
-    "PENDING_REVIEW",
+    "VERIFIED",
   );
 });
 

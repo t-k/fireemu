@@ -11,7 +11,7 @@
       "corpusDigest": "b7511f6ac91c4596aeb882075a7bf034bc9723d5b131377e4d42d1f0e873bfb8",
       "harnessDigest": "90b887b7d0dd7052cabb5b9b60e7f53f39258327f42cbaa95e8990a5dd65bb90",
       "recordedAt": "2026-09-24T10:02:08.101Z",
-      "gitSha": "4f02a25833659fc15d62d39aa6afd20951239c78",
+      "gitSha": "c093cfea9679f362e7486e7b4c87d7b042c4c163",
       "steps": {
         "root": {
           "transport": "grpc",
@@ -101,7 +101,7 @@
       "corpusDigest": "e9e3b26658299ca40a287a4d35b6669a8426041ab27651e846067a8b31296f94",
       "harnessDigest": "90b887b7d0dd7052cabb5b9b60e7f53f39258327f42cbaa95e8990a5dd65bb90",
       "recordedAt": "2026-09-24T10:02:08.101Z",
-      "gitSha": "4f02a25833659fc15d62d39aa6afd20951239c78",
+      "gitSha": "c093cfea9679f362e7486e7b4c87d7b042c4c163",
       "steps": {
         "default": {
           "transport": "grpc",
@@ -931,7 +931,7 @@
       "corpusDigest": "5e82d2a8f112444f53762ce28d7bb3291237d105617cc0598789879f4ee0d00d",
       "harnessDigest": "90b887b7d0dd7052cabb5b9b60e7f53f39258327f42cbaa95e8990a5dd65bb90",
       "recordedAt": "2026-09-24T10:02:08.101Z",
-      "gitSha": "4f02a25833659fc15d62d39aa6afd20951239c78",
+      "gitSha": "c093cfea9679f362e7486e7b4c87d7b042c4c163",
       "steps": {
         "root": {
           "status": 200,
@@ -1242,7 +1242,7 @@
       "corpusDigest": "9e5d555cfe972842c044a547a2cfdea6f3c27b83738bf8fb5c4f843e26cc71a2",
       "harnessDigest": "90b887b7d0dd7052cabb5b9b60e7f53f39258327f42cbaa95e8990a5dd65bb90",
       "recordedAt": "2026-09-24T10:02:08.101Z",
-      "gitSha": "4f02a25833659fc15d62d39aa6afd20951239c78",
+      "gitSha": "c093cfea9679f362e7486e7b4c87d7b042c4c163",
       "steps": {
         "default": {
           "status": 200,
@@ -4774,7 +4774,7 @@
       "corpusDigest": "7fc0ac4a3782d6d7eb3eddd609e02ada35c49dc663772a87839c8c51a07ffa56",
       "harnessDigest": "90b887b7d0dd7052cabb5b9b60e7f53f39258327f42cbaa95e8990a5dd65bb90",
       "recordedAt": "2026-09-24T10:02:08.101Z",
-      "gitSha": "4f02a25833659fc15d62d39aa6afd20951239c78",
+      "gitSha": "c093cfea9679f362e7486e7b4c87d7b042c4c163",
       "steps": {
         "page-size-1": {
           "status": 200,
@@ -4941,7 +4941,7 @@
       "corpusDigest": "c509ae699bf9d5bddc82d52569e0c50ca8a4bd13d0698e4c1f932c2964046022",
       "harnessDigest": "90b887b7d0dd7052cabb5b9b60e7f53f39258327f42cbaa95e8990a5dd65bb90",
       "recordedAt": "2026-09-24T10:02:08.101Z",
-      "gitSha": "4f02a25833659fc15d62d39aa6afd20951239c78",
+      "gitSha": "c093cfea9679f362e7486e7b4c87d7b042c4c163",
       "steps": {
         "order-by-field": {
           "status": 200,
@@ -6078,7 +6078,7 @@
       "corpusDigest": "aa3e13e9cac993f62f83dc503c6694068b184a1b5cff208bd5e6d620aa405f00",
       "harnessDigest": "90b887b7d0dd7052cabb5b9b60e7f53f39258327f42cbaa95e8990a5dd65bb90",
       "recordedAt": "2026-09-24T10:02:08.101Z",
-      "gitSha": "4f02a25833659fc15d62d39aa6afd20951239c78",
+      "gitSha": "c093cfea9679f362e7486e7b4c87d7b042c4c163",
       "steps": {
         "default": {
           "status": 200,
@@ -6970,7 +6970,7 @@
       "corpusDigest": "41df516fa88c30f84dc033122a6e73e0ec001eeb354bccba8b336be41154fd17",
       "harnessDigest": "90b887b7d0dd7052cabb5b9b60e7f53f39258327f42cbaa95e8990a5dd65bb90",
       "recordedAt": "2026-09-24T10:02:08.101Z",
-      "gitSha": "4f02a25833659fc15d62d39aa6afd20951239c78",
+      "gitSha": "c093cfea9679f362e7486e7b4c87d7b042c4c163",
       "steps": {
         "page-1": {
           "status": 200,
@@ -7304,7 +7304,7 @@
       "corpusDigest": "07c69f762dd9e64215df8c5e0997b1551ac4955bfaa87bef124a1f857cc2be5d",
       "harnessDigest": "90b887b7d0dd7052cabb5b9b60e7f53f39258327f42cbaa95e8990a5dd65bb90",
       "recordedAt": "2026-09-24T10:02:08.101Z",
-      "gitSha": "4f02a25833659fc15d62d39aa6afd20951239c78",
+      "gitSha": "c093cfea9679f362e7486e7b4c87d7b042c4c163",
       "steps": {
         "write-1": {
           "status": 200,
@@ -7813,7 +7813,7 @@
       "corpusDigest": "0b0db9628df69d6571f4d014c777bff2149258c237e280c98014a343a3ff2932",
       "harnessDigest": "90b887b7d0dd7052cabb5b9b60e7f53f39258327f42cbaa95e8990a5dd65bb90",
       "recordedAt": "2026-09-24T10:02:08.101Z",
-      "gitSha": "4f02a25833659fc15d62d39aa6afd20951239c78",
+      "gitSha": "c093cfea9679f362e7486e7b4c87d7b042c4c163",
       "steps": {
         "subcollection": {
           "status": 200,
@@ -8311,7 +8311,7 @@
       "corpusDigest": "919696fa31212c59e2e3fe7f4133a1b627f6a46c13414a5ac48863841e01e0ab",
       "harnessDigest": "90b887b7d0dd7052cabb5b9b60e7f53f39258327f42cbaa95e8990a5dd65bb90",
       "recordedAt": "2026-09-24T10:02:08.101Z",
-      "gitSha": "4f02a25833659fc15d62d39aa6afd20951239c78",
+      "gitSha": "c093cfea9679f362e7486e7b4c87d7b042c4c163",
       "steps": {
         "show-missing": {
           "status": 200,

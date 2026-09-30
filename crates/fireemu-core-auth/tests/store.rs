@@ -2,11 +2,15 @@
 //! credentials, refresh sessions and token validity.
 
 use fireemu_core_auth::mfa::TotpPolicy;
+use fireemu_core_auth::mfa_config::{MfaConfigState, MfaProjectConfig};
+use fireemu_core_auth::signup_quota::SignupQuotaConfig;
 use fireemu_core_auth::store::{
-    AuthError, AuthStore, LocalId, NewUser, PendingSignInId, ProjectAuthConfig, Provider,
+    AuthError, AuthRegistry, AuthStore, LocalId, NewUser, PendingSignInId, ProjectAuthConfig,
+    ProjectAuthConfigPatch, ProjectConfigStoreUpdate, Provider,
 };
 use fireemu_core_types::determinism::SplitMix64;
 use fireemu_core_types::time::{LogicalDuration, LogicalInstant};
+use std::sync::{Arc, Mutex};
 
 fn t0() -> LogicalInstant {
     LogicalInstant::from_unix_seconds(1_788_004_860)
@@ -19,6 +23,158 @@ fn t(seconds: i64) -> LogicalInstant {
 
 fn store() -> AuthStore {
     AuthStore::new("demo-app", SplitMix64::new(11), TotpPolicy::default())
+}
+
+#[test]
+fn project_config_transaction_refuses_invalid_members_before_publishing() {
+    let shared = Arc::new(Mutex::new(store()));
+    let registry = AuthRegistry::new("demo-app", Arc::clone(&shared));
+    let patch = ProjectAuthConfigPatch {
+        disabled_user_signup: Some(true),
+        ..ProjectAuthConfigPatch::default()
+    };
+    let quota = SignupQuotaConfig {
+        default_quota_per_hour: 1_000_001,
+        ..SignupQuotaConfig::default()
+    };
+    let sign_in = fireemu_core_auth::store::SignInConfig {
+        authorized_domains: Some(vec![String::new()]),
+        ..fireemu_core_auth::store::SignInConfig::default()
+    };
+
+    for update in [
+        ProjectConfigStoreUpdate {
+            signup_quota: Some(quota),
+            ..ProjectConfigStoreUpdate::default()
+        },
+        ProjectConfigStoreUpdate {
+            sign_in: Some(sign_in),
+            ..ProjectConfigStoreUpdate::default()
+        },
+    ] {
+        let result =
+            registry.patch_project_config_transaction("demo-app", patch, |_| Ok::<_, ()>(update));
+        assert!(matches!(result, Ok(None)));
+        let current = shared.lock().expect("project store");
+        assert!(!current.config().disabled_user_signup);
+        assert_eq!(
+            current.signup_quota().config(),
+            &SignupQuotaConfig::default()
+        );
+        assert!(current.sign_in_config().email_enabled);
+    }
+}
+
+#[test]
+fn project_config_transaction_publishes_a_valid_sign_in_candidate() {
+    let shared = Arc::new(Mutex::new(store()));
+    let registry = AuthRegistry::new("demo-app", Arc::clone(&shared));
+    let sign_in = fireemu_core_auth::store::SignInConfig {
+        email_enabled: false,
+        ..fireemu_core_auth::store::SignInConfig::default()
+    };
+    let result = registry.patch_project_config_transaction(
+        "demo-app",
+        ProjectAuthConfigPatch::default(),
+        |_| {
+            Ok::<_, ()>(ProjectConfigStoreUpdate {
+                sign_in: Some(sign_in),
+                ..ProjectConfigStoreUpdate::default()
+            })
+        },
+    );
+    assert!(matches!(result, Ok(Some(_))));
+    assert!(
+        !shared
+            .lock()
+            .expect("project store")
+            .sign_in_config()
+            .email_enabled
+    );
+}
+
+fn sms_mfa() -> MfaProjectConfig {
+    MfaProjectConfig {
+        state: MfaConfigState::Enabled,
+        phone_sms: true,
+        totp: None,
+    }
+}
+
+/// The project `mfa` config is published by the config transaction under the same parent lock
+/// as the other members, and an update of `mfa` alone is not taken for an empty one.
+#[test]
+fn project_config_transaction_publishes_the_mfa_config_with_the_other_members() {
+    let shared = Arc::new(Mutex::new(store()));
+    let registry = AuthRegistry::new("demo-app", Arc::clone(&shared));
+    let result = registry.patch_project_config_transaction(
+        "demo-app",
+        ProjectAuthConfigPatch::default(),
+        |_| {
+            Ok::<_, ()>(ProjectConfigStoreUpdate {
+                mfa: Some(sms_mfa()),
+                ..ProjectConfigStoreUpdate::default()
+            })
+        },
+    );
+    assert!(matches!(result, Ok(Some(_))));
+    assert_eq!(
+        shared.lock().expect("project store").mfa_config(),
+        &sms_mfa()
+    );
+
+    let sign_in = fireemu_core_auth::store::SignInConfig {
+        email_enabled: false,
+        ..fireemu_core_auth::store::SignInConfig::default()
+    };
+    let result = registry.patch_project_config_transaction(
+        "demo-app",
+        ProjectAuthConfigPatch::default(),
+        |_| {
+            Ok::<_, ()>(ProjectConfigStoreUpdate {
+                sign_in: Some(sign_in),
+                mfa: Some(MfaProjectConfig::default()),
+                ..ProjectConfigStoreUpdate::default()
+            })
+        },
+    );
+    assert!(matches!(result, Ok(Some(_))));
+    let current = shared.lock().expect("project store");
+    assert!(!current.sign_in_config().email_enabled);
+    assert_eq!(current.mfa_config(), &MfaProjectConfig::default());
+}
+
+/// A refused config transaction leaves the project `mfa` config as it was.
+#[test]
+fn a_refused_project_config_transaction_keeps_the_mfa_config() {
+    let shared = Arc::new(Mutex::new(store()));
+    let registry = AuthRegistry::new("demo-app", Arc::clone(&shared));
+    let quota = SignupQuotaConfig {
+        default_quota_per_hour: 1_000_001,
+        ..SignupQuotaConfig::default()
+    };
+    let result = registry.patch_project_config_transaction(
+        "demo-app",
+        ProjectAuthConfigPatch::default(),
+        |_| {
+            Ok::<_, ()>(ProjectConfigStoreUpdate {
+                signup_quota: Some(quota),
+                mfa: Some(sms_mfa()),
+                ..ProjectConfigStoreUpdate::default()
+            })
+        },
+    );
+    assert!(matches!(result, Ok(None)));
+    let refused = registry.patch_project_config_transaction(
+        "demo-app",
+        ProjectAuthConfigPatch::default(),
+        |_| Err::<ProjectConfigStoreUpdate, _>("refused"),
+    );
+    assert!(matches!(refused, Err("refused")));
+    assert_eq!(
+        shared.lock().expect("project store").mfa_config(),
+        &MfaProjectConfig::default()
+    );
 }
 
 /// An ID that belonged to a user who no longer exists.
@@ -243,6 +399,80 @@ fn duplicate_email_mode_refuses_password_duplicates_and_admits_idp_accounts() {
         s.user_by_email("shared@example.com").is_none(),
         "the official emulator clears its single email index when any duplicate is deleted"
     );
+}
+
+#[test]
+fn an_omitted_duplicate_email_leaves_the_new_account_without_one() {
+    // AUTH-FEDERATION record-saml 7789f0: production's new account holds no email another
+    // account holds; its provider information keeps it, and the owner keeps the email.
+    use fireemu_core_auth::store::{DuplicateIdpEmail, IdpSignIn};
+    let mut s = store();
+    let owner = s
+        .create_user(NewUser::email("shared@example.com"), t0())
+        .unwrap();
+    s.set_config(ProjectAuthConfig {
+        allow_duplicate_emails: true,
+        ..ProjectAuthConfig::default()
+    });
+    let Ok(IdpSignIn::SignedIn { uid, is_new, .. }) = s.sign_in_with_idp_as(
+        federated("oidc.partner", "subject-1", Some("Shared@example.com")),
+        true,
+        t(1),
+        DuplicateIdpEmail::Omitted,
+    ) else {
+        panic!("expected a completed IdP sign-in");
+    };
+    assert!(is_new);
+    let user = s.user(&uid).unwrap();
+    assert_eq!(user.email, None);
+    assert!(!user.email_verified);
+    assert_eq!(
+        user.federated[0].email.as_deref(),
+        Some("Shared@example.com")
+    );
+    assert_eq!(
+        s.user_by_email("shared@example.com").unwrap().local_id,
+        owner
+    );
+    // An email nobody holds is stored.
+    let Ok(IdpSignIn::SignedIn { uid, .. }) = s.sign_in_with_idp_as(
+        federated("oidc.partner", "subject-2", Some("own@example.com")),
+        true,
+        t(2),
+        DuplicateIdpEmail::Omitted,
+    ) else {
+        panic!("expected a completed IdP sign-in");
+    };
+    assert_eq!(
+        s.user(&uid).unwrap().email.as_deref(),
+        Some("own@example.com")
+    );
+    assert!(s.user(&uid).unwrap().email_verified);
+}
+
+#[test]
+fn a_verified_idp_email_recycling_an_account_keeps_its_password_change_time() {
+    // AUTH-FEDERATION record-oidc 39209e: production's lookup of the recycled account still
+    // reports `passwordUpdatedAt`, as after an Admin password removal.
+    let mut s = store();
+    let owner = s
+        .create_user_with_password(NewUser::email("owner@example.com"), "hunter22", t(1))
+        .unwrap();
+    let changed = s.password_updated_at(&owner);
+    assert!(changed.is_some());
+    let result = s
+        .sign_in_with_idp(
+            federated("oidc.partner", "subject-1", Some("owner@example.com")),
+            true,
+            t(2),
+        )
+        .unwrap();
+    let fireemu_core_auth::store::IdpSignIn::SignedIn { uid, .. } = result else {
+        panic!("expected a completed IdP sign-in");
+    };
+    assert_eq!(uid, owner, "the unverified account is recycled");
+    assert!(!s.has_password(&owner));
+    assert_eq!(s.password_updated_at(&owner), changed);
 }
 
 #[test]
@@ -518,6 +748,36 @@ fn refresh_tokens_and_id_tokens_respect_revocation_and_disablement() {
     ] {
         assert!(!e.to_string().is_empty());
     }
+}
+
+#[test]
+fn a_refresh_session_keeps_the_sign_in_attributes_recorded_for_it() {
+    use fireemu_core_auth::claims::ClaimValue;
+
+    let mut s = store();
+    let uid = s
+        .create_user(NewUser::email("attributes@example.com"), t0())
+        .unwrap();
+    let token = s.issue_refresh_token(&uid, t(1)).unwrap();
+    assert_eq!(s.refresh_session(&token).unwrap().sign_in_attributes, None);
+    let attributes = ClaimValue::Map(
+        [(
+            "department".to_owned(),
+            ClaimValue::String("fireemu".to_owned()),
+        )]
+        .into_iter()
+        .collect(),
+    );
+    s.set_refresh_sign_in_attributes(&token, Some(attributes.clone()))
+        .unwrap();
+    assert_eq!(
+        s.refresh_session(&token).unwrap().sign_in_attributes,
+        Some(attributes.clone())
+    );
+    assert_eq!(
+        s.set_refresh_sign_in_attributes("unknown", Some(attributes)),
+        Err(AuthError::InvalidRefreshToken)
+    );
 }
 
 #[test]
@@ -884,4 +1144,331 @@ fn temporary_proofs_do_not_cross_namespaces_on_restore() {
     snapshot.restore_into(&mut other);
     assert!(!other.check_temporary_proof(&proof, "+16505550101", t(1)));
     assert!(source.check_temporary_proof(&proof, "+16505550101", t(1)));
+}
+
+// ---- AUTH-ACTION (sandbox recording 2026-09-24) -------------------------------------------
+
+use fireemu_core_auth::store::{OobRequestType, SignInConfig};
+
+#[test]
+fn sign_in_config_validity_covers_authorized_domains_and_test_numbers() {
+    let mut config = SignInConfig::default();
+    assert!(config.is_valid());
+    config.authorized_domains = Some(vec!["demo-app.web.app".to_owned()]);
+    assert!(config.is_valid());
+    config.authorized_domains = Some(vec!["demo-app.web.app".to_owned(), String::new()]);
+    assert!(!config.is_valid());
+    config.authorized_domains = Some(Vec::new());
+    assert!(config.is_valid());
+    let numbers = |n: u64| {
+        (0..n)
+            .map(|i| (format!("+1650555{:04}", 101 + i), "123456".to_owned()))
+            .collect()
+    };
+    config.test_phone_numbers = numbers(SignInConfig::MAX_TEST_PHONE_NUMBERS as u64);
+    assert!(config.is_valid());
+    config.test_phone_numbers = numbers(SignInConfig::MAX_TEST_PHONE_NUMBERS as u64 + 1);
+    assert!(!config.is_valid());
+}
+
+#[test]
+fn authorized_domains_default_to_a_new_projects_and_follow_the_config() {
+    let mut s = store();
+    assert_eq!(
+        s.authorized_domains(),
+        ["localhost", "demo-app.firebaseapp.com", "demo-app.web.app"]
+    );
+    let mut config = s.sign_in_config().clone();
+    config.authorized_domains = Some(vec!["demo-app.web.app".to_owned()]);
+    s.set_sign_in_config(config).unwrap();
+    assert_eq!(s.authorized_domains(), ["demo-app.web.app"]);
+}
+
+fn codes(s: &AuthStore) -> Vec<(OobRequestType, String)> {
+    s.oob_codes()
+        .iter()
+        .map(|c| (c.request_type, c.email.clone()))
+        .collect()
+}
+
+#[test]
+fn retiring_codes_removes_only_that_kind_for_that_address() {
+    let mut s = store();
+    for (kind, email) in [
+        (OobRequestType::PasswordReset, "a@example.com"),
+        (OobRequestType::PasswordReset, "a@example.com"),
+        (OobRequestType::PasswordReset, "b@example.com"),
+        (OobRequestType::VerifyEmail, "a@example.com"),
+    ] {
+        s.create_oob_code(kind, email, None, None, t0()).unwrap();
+    }
+    s.retire_oob_codes(OobRequestType::PasswordReset, "A@Example.com");
+    assert_eq!(
+        codes(&s),
+        [
+            (OobRequestType::PasswordReset, "b@example.com".to_owned()),
+            (OobRequestType::VerifyEmail, "a@example.com".to_owned()),
+        ]
+    );
+    s.retire_oob_codes(OobRequestType::EmailSignIn, "b@example.com");
+    assert_eq!(codes(&s).len(), 2);
+    // A store holding only the retired codes ends up empty.
+    let mut s = store();
+    s.create_oob_code(
+        OobRequestType::PasswordReset,
+        "a@example.com",
+        None,
+        None,
+        t0(),
+    )
+    .unwrap();
+    s.retire_oob_codes(OobRequestType::PasswordReset, "a@example.com");
+    assert!(codes(&s).is_empty());
+}
+
+#[test]
+fn voiding_a_deleted_accounts_codes_takes_its_own_and_its_addresses() {
+    let mut s = store();
+    let owner = s
+        .create_user_with_id(NewUser::email("a@example.com"), Some("owner"), t0())
+        .unwrap();
+    let other = s
+        .create_user_with_id(NewUser::email("b@example.com"), Some("other"), t0())
+        .unwrap();
+    s.create_oob_code(
+        OobRequestType::PasswordReset,
+        "a@example.com",
+        Some(owner.clone()),
+        None,
+        t0(),
+    )
+    .unwrap();
+    // A code of the account whose address has since changed, and a link for its address.
+    s.create_oob_code(
+        OobRequestType::VerifyEmail,
+        "old@example.com",
+        Some(owner.clone()),
+        None,
+        t0(),
+    )
+    .unwrap();
+    s.create_oob_code(
+        OobRequestType::EmailSignIn,
+        "a@example.com",
+        None,
+        None,
+        t0(),
+    )
+    .unwrap();
+    s.create_oob_code(
+        OobRequestType::PasswordReset,
+        "b@example.com",
+        Some(other),
+        None,
+        t0(),
+    )
+    .unwrap();
+    s.void_oob_codes_of(&owner, Some("A@example.com"));
+    assert_eq!(
+        codes(&s),
+        [(OobRequestType::PasswordReset, "b@example.com".to_owned())]
+    );
+    let lone = s
+        .create_oob_code(
+            OobRequestType::EmailSignIn,
+            "c@example.com",
+            None,
+            None,
+            t0(),
+        )
+        .unwrap();
+    s.void_oob_codes_of(&owner, None);
+    assert!(s.oob_code(&lone).is_some());
+}
+
+#[test]
+fn production_lifetimes_keep_long_codes_and_refuse_an_expired_reset() {
+    for production in [false, true] {
+        let mut s = store();
+        s.set_production_oob_lifetimes(production);
+        let reset = s
+            .create_oob_code(
+                OobRequestType::PasswordReset,
+                "a@example.com",
+                None,
+                None,
+                t0(),
+            )
+            .unwrap();
+        let verify = s
+            .create_oob_code(
+                OobRequestType::VerifyEmail,
+                "a@example.com",
+                None,
+                None,
+                t0(),
+            )
+            .unwrap();
+        let expired = |s: &AuthStore, code: &str, at| {
+            let entry = s.oob_code(code).unwrap().clone();
+            s.oob_code_expired(&entry, at)
+        };
+        assert!(!expired(&s, &reset, t(3_600)));
+        assert!(expired(&s, &reset, t(3_601)));
+        assert_eq!(expired(&s, &verify, t(3_601)), !production);
+        if production {
+            // No published lifetime and none observed: production answered after 3900 s, so
+            // a long-lived code is never refused as expired (owner decision 2026-09-25).
+            for later in [3_901, 259_201, 31_536_000] {
+                assert!(!expired(&s, &verify, t(later)), "{later}");
+            }
+        }
+        // An expired reset code is kept a day under production lifetimes, to be refused as
+        // expired; the local policy sweeps it at once.
+        s.sweep_transient_credentials(t(3_601));
+        assert_eq!(s.oob_code(&reset).is_some(), production);
+        s.sweep_transient_credentials(t(3_600 + 86_400));
+        assert_eq!(s.oob_code(&reset).is_some(), production);
+        s.sweep_transient_credentials(t(3_600 + 86_401));
+        assert!(s.oob_code(&reset).is_none());
+        assert_eq!(s.oob_code(&verify).is_some(), production);
+        s.sweep_transient_credentials(t(31_536_000));
+        assert_eq!(s.oob_code(&verify).is_some(), production);
+        if production {
+            assert!(s.consume_oob_code(&verify, None, t(31_536_000)).is_ok());
+        }
+    }
+    let mut s = store();
+    s.set_production_oob_lifetimes(true);
+    let reset = s
+        .create_oob_code(
+            OobRequestType::PasswordReset,
+            "a@example.com",
+            None,
+            None,
+            t0(),
+        )
+        .unwrap();
+    assert_eq!(
+        s.consume_oob_code(&reset, None, t(3_601)),
+        Err(AuthError::ExpiredOobCode)
+    );
+    assert!(s.oob_code(&reset).is_none());
+    let mut s = store();
+    let reset = s
+        .create_oob_code(
+            OobRequestType::PasswordReset,
+            "a@example.com",
+            None,
+            None,
+            t0(),
+        )
+        .unwrap();
+    assert_eq!(
+        s.consume_oob_code(&reset, None, t(3_601)),
+        Err(AuthError::InvalidOobCode)
+    );
+}
+
+#[test]
+fn codes_kept_past_their_lifetime_make_room_at_the_cap() {
+    let mut s = store();
+    s.set_production_oob_lifetimes(true);
+    for i in 0..fireemu_core_auth::store::MAX_OUTSTANDING_CODES {
+        s.create_oob_code(
+            OobRequestType::PasswordReset,
+            &format!("u{i}@example.com"),
+            None,
+            None,
+            t0(),
+        )
+        .unwrap();
+    }
+    assert_eq!(
+        s.create_oob_code(
+            OobRequestType::PasswordReset,
+            "late@example.com",
+            None,
+            None,
+            t(10)
+        ),
+        Err(AuthError::TooManyOutstandingCodes)
+    );
+    // An hour later every reset code is expired but still kept; a new one fits.
+    let fresh = s
+        .create_oob_code(
+            OobRequestType::PasswordReset,
+            "late@example.com",
+            None,
+            None,
+            t(3_601),
+        )
+        .unwrap();
+    assert_eq!(s.oob_codes().len(), 1);
+    assert!(s.oob_code(&fresh).is_some());
+}
+
+#[test]
+fn long_lived_codes_make_room_at_the_cap_only_past_the_observed_lower_bound() {
+    use fireemu_core_auth::store::{MAX_OUTSTANDING_CODES, OBSERVED_LONG_OOB_CODE_SECONDS};
+    let mut s = store();
+    s.set_production_oob_lifetimes(true);
+    let mut first = None;
+    for i in 0..MAX_OUTSTANDING_CODES {
+        let code = s
+            .create_oob_code(
+                OobRequestType::VerifyEmail,
+                &format!("u{i}@example.com"),
+                None,
+                None,
+                t(i64::try_from(i).unwrap()),
+            )
+            .unwrap();
+        first.get_or_insert(code);
+    }
+    let first = first.unwrap();
+    let late = |s: &mut AuthStore, at| {
+        s.create_oob_code(
+            OobRequestType::VerifyEmail,
+            "late@example.com",
+            None,
+            None,
+            at,
+        )
+    };
+    // Every code is still within what production was seen to answer: the cap refuses.
+    assert_eq!(
+        late(&mut s, t(OBSERVED_LONG_OOB_CODE_SECONDS)),
+        Err(AuthError::TooManyOutstandingCodes)
+    );
+    assert!(s.oob_code(&first).is_some());
+    // Past the observed lower bound the oldest code alone makes room; the rest stay usable.
+    let fresh = late(&mut s, t(OBSERVED_LONG_OOB_CODE_SECONDS + 1)).unwrap();
+    assert!(s.oob_code(&first).is_none());
+    assert!(s.oob_code(&fresh).is_some());
+    assert_eq!(s.oob_codes().len(), MAX_OUTSTANDING_CODES);
+}
+
+#[test]
+fn below_the_cap_no_long_lived_code_is_evicted() {
+    let mut s = store();
+    s.set_production_oob_lifetimes(true);
+    let old = s
+        .create_oob_code(
+            OobRequestType::VerifyEmail,
+            "a@example.com",
+            None,
+            None,
+            t0(),
+        )
+        .unwrap();
+    s.create_oob_code(
+        OobRequestType::VerifyEmail,
+        "b@example.com",
+        None,
+        None,
+        t(fireemu_core_auth::store::OBSERVED_LONG_OOB_CODE_SECONDS + 100),
+    )
+    .unwrap();
+    assert!(s.oob_code(&old).is_some());
 }

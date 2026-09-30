@@ -172,6 +172,7 @@ def test_registration_failure_cannot_skip_parent_termination(tmp_path):
 
 def test_one_bad_registration_does_not_skip_other_owned_children(tmp_path):
     import json
+    import signal
     import subprocess
 
     import broad
@@ -184,7 +185,11 @@ def test_one_bad_registration_does_not_skip_other_owned_children(tmp_path):
     try:
         with pytest.raises(ValueError):
             broad.stop_registered(tmp_path, 100, "nonce")
-        child.wait(timeout=3)
+        # stop_registered has already delivered the signal. Wait for the exit itself, not for a
+        # short timer: a loaded runner can delay a signalled child by seconds. The deadline
+        # exists only to fail with a diagnosis before the child's own sixty-second sleep ends.
+        returncode = child.wait(timeout=45)
+        assert returncode in (-signal.SIGTERM, -signal.SIGKILL)
     finally:
         if child.poll() is None:
             child.terminate()

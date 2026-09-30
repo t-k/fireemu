@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { constants, homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const launcher =
   process.env.FIREEMU_TEST_LAUNCHER ??
@@ -276,4 +276,91 @@ for (const signal of ["SIGTERM", "SIGINT"]) {
       await assert.rejects(fetch(url, { signal: AbortSignal.timeout(500) }));
     },
   );
+}
+
+// A signal that reaches the launcher around its spawn() is delivered on demand: a preload wraps
+// child_process.spawn and signals the launcher's own process, then spins so that JavaScript is
+// still running synchronously when the OS delivers it. "after" delivers it once spawn() has
+// returned (the window in which a handler registered after the spawn does not exist yet),
+// "before" delivers it before the daemon exists.
+const spawnHook = `
+import { createRequire, syncBuiltinESMExports } from "node:module";
+const cp = createRequire(import.meta.url)("node:child_process");
+const real = cp.spawn;
+const spin = (ms) => { const end = Date.now() + ms; while (Date.now() < end); };
+cp.spawn = function (...args) {
+  const at = process.env.HOOK_AT;
+  if (at === "before") { process.kill(process.pid, process.env.HOOK_SIGNAL); spin(150); }
+  const child = real.apply(this, args);
+  if (at === "after") { process.kill(process.pid, process.env.HOOK_SIGNAL); spin(150); }
+  return child;
+};
+syncBuiltinESMExports();
+`;
+
+// The daemon logs its PID and each signal it gets, exits 0 shortly after one, and otherwise
+// exits 7 after three seconds (a daemon left running by a dead launcher is still alive then).
+const fakeDaemon = `
+import { appendFileSync, writeFileSync } from "node:fs";
+const log = process.env.DAEMON_LOG;
+writeFileSync(log, "pid " + process.pid + "\\n");
+for (const s of ["SIGTERM", "SIGINT"]) {
+  process.on(s, () => { appendFileSync(log, "got " + s + "\\n"); setTimeout(() => process.exit(0), 50); });
+}
+setTimeout(() => { appendFileSync(log, "timeout\\n"); process.exit(7); }, 3000);
+`;
+
+for (const at of ["after", "before"]) {
+  for (const signal of ["SIGTERM", "SIGINT"]) {
+    test(
+      `a ${signal} delivered ${at} the launcher spawns the daemon leaves no daemon behind`,
+      { skip: !unix },
+      async (t) => {
+        const dir = mkdtempSync(join(tmpdir(), "fireemu-launcher-window-"));
+        t.after(() => rmSync(dir, { recursive: true, force: true }));
+        const hook = join(dir, "hook.mjs");
+        const daemon = join(dir, "daemon.mjs");
+        const log = join(dir, "daemon.log");
+        writeFileSync(hook, spawnHook);
+        writeFileSync(daemon, fakeDaemon);
+        const token = `fireemu-window-${process.pid}-${at}-${signal}`;
+        const child = spawn(
+          process.execPath,
+          ["--import", pathToFileURL(hook).href, launcher, daemon, token],
+          {
+            env: {
+              ...process.env,
+              FIREEMU_BINARY_PATH: process.execPath,
+              HOOK_AT: at,
+              HOOK_SIGNAL: signal,
+              DAEMON_LOG: log,
+            },
+            stdio: "ignore",
+          },
+        );
+        const [code, killedBy] = await new Promise((resolve, reject) => {
+          child.once("error", reject);
+          child.once("exit", (exitCode, exitSignal) => resolve([exitCode, exitSignal]));
+        });
+        const pid = existsSync(log)
+          ? Number(/pid (\d+)/.exec(readFileSync(log, "utf8"))?.[1])
+          : undefined;
+        t.after(() => stopOwned(pid, token));
+        // Give an orphaned daemon its chance to be seen: it lives for three seconds.
+        await delay(300);
+        assert.equal(killedBy, null, "the launcher exits with a status, it is not killed");
+        assert.equal(pid !== undefined && alive(pid), false, "no daemon is left running");
+        const number = constants.signals[signal];
+        if (at === "after") {
+          // The daemon got the forwarded signal, shut down, and the launcher passed its status on.
+          assert.equal(code, 0);
+          assert.ok(readFileSync(log, "utf8").includes(`got ${signal}`), "the daemon got the signal");
+        } else {
+          // Delivered before the daemon existed: forwarded to it once it does, so it dies of the
+          // signal (128 + n) or, if already listening, exits cleanly; never a daemon left behind.
+          assert.ok([0, 128 + number].includes(code), `exit status ${code}`);
+        }
+      },
+    );
+  }
 }

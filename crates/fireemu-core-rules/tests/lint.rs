@@ -74,23 +74,22 @@ fn function_with_lets(n: usize) -> String {
     ))
 }
 
+/// Production and the official compiler accept 11 let bindings and refuse 12 (FS-RULES,
+/// 2026-09-24), one more than the documentation's 10.
 #[test]
-fn let_bindings_8_9_10_11() {
+fn let_bindings_up_to_eleven_compile() {
     assert_eq!(level_of(&function_with_lets(7), "RULES-LET-BINDINGS"), None);
+    for n in [9, 10, 11] {
+        assert!(
+            !matches!(
+                level_of(&function_with_lets(n), "RULES-LET-BINDINGS"),
+                Some(DiagnosticLevel::Error)
+            ),
+            "{n} lets"
+        );
+    }
     assert_eq!(
-        level_of(&function_with_lets(8), "RULES-LET-BINDINGS"),
-        Some(DiagnosticLevel::Warning(WarningSeverity::Notice))
-    );
-    assert_eq!(
-        level_of(&function_with_lets(9), "RULES-LET-BINDINGS"),
-        Some(DiagnosticLevel::Warning(WarningSeverity::Warning))
-    );
-    assert_eq!(
-        level_of(&function_with_lets(10), "RULES-LET-BINDINGS"),
-        Some(DiagnosticLevel::Warning(WarningSeverity::Critical))
-    );
-    assert_eq!(
-        level_of(&function_with_lets(11), "RULES-LET-BINDINGS"),
+        level_of(&function_with_lets(12), "RULES-LET-BINDINGS"),
         Some(DiagnosticLevel::Error)
     );
 }
@@ -160,17 +159,19 @@ fn nested_matches(depth: usize) -> String {
     wrap(&s)
 }
 
+/// Ten match levels below `/databases/{database}/documents` compile and eleven do not, as in
+/// production ("Maximum allowed resource rule depth of 10", FS-RULES 2026-09-24).
 #[test]
-fn match_depth_10_11() {
-    assert_eq!(
-        level_of(&nested_matches(9), "RULES-MATCH-DEPTH"),
-        Some(DiagnosticLevel::Warning(WarningSeverity::Critical))
-    );
-    assert_eq!(
+fn match_depth_ten_below_the_databases_match() {
+    assert_eq!(level_of(&nested_matches(6), "RULES-MATCH-DEPTH"), None);
+    assert!(!matches!(
         level_of(&nested_matches(10), "RULES-MATCH-DEPTH"),
         Some(DiagnosticLevel::Error)
+    ));
+    assert_eq!(
+        level_of(&nested_matches(11), "RULES-MATCH-DEPTH"),
+        Some(DiagnosticLevel::Error)
     );
-    assert_eq!(level_of(&nested_matches(6), "RULES-MATCH-DEPTH"), None);
 }
 
 #[test]

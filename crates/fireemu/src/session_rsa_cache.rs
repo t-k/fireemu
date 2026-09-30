@@ -241,13 +241,42 @@ fn open_cache_directory(root: &Path) -> Result<std::fs::File, ()> {
     Ok(directory)
 }
 
+/// Reads of an opened file's ACL before the cache is refused.
+///
+/// Darwin resolves `/dev/fd/N` through fdesc vnodes that are shared by descriptor number
+/// across processes. While other processes look up the same number, the lookup can fail
+/// with `EBADF` or `ENOENT` although the descriptor is open. With ten processes doing so,
+/// about 0.15% of lookups failed and every one succeeded on a later attempt.
+#[cfg(target_os = "macos")]
+const ACL_READ_ATTEMPTS: usize = 4;
+
+/// Accepts the opened file only when its ACL is readable and has no entries.
+///
+/// A failed read is retried up to [`ACL_READ_ATTEMPTS`] times. An ACL with entries is
+/// refused at once, and the file stays refused when every read fails.
 #[cfg(target_os = "macos")]
 fn reject_extended_acl(file: &std::fs::File) -> Result<(), ()> {
+    reject_extended_acl_with(file, |path| {
+        exacl::getfacl(path, None).map(|entries| entries.is_empty())
+    })
+}
+
+#[cfg(target_os = "macos")]
+fn reject_extended_acl_with<E>(
+    file: &std::fs::File,
+    mut acl_is_empty: impl FnMut(&str) -> Result<bool, E>,
+) -> Result<(), ()> {
     use std::os::fd::AsRawFd as _;
 
     let path = format!("/dev/fd/{}", file.as_raw_fd());
-    let entries = exacl::getfacl(path, None).map_err(|_| ())?;
-    entries.is_empty().then_some(()).ok_or(())
+    for _ in 0..ACL_READ_ATTEMPTS {
+        match acl_is_empty(&path) {
+            Ok(true) => return Ok(()),
+            Ok(false) => return Err(()),
+            Err(_) => {}
+        }
+    }
+    Err(())
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -383,6 +412,8 @@ mod tests {
     use super::{cache_base_for, load_or_generate_at, secure_file_metadata, CacheFileMetadata};
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     use super::{cache_entry_path, entry_name, load_entry, open_cache_directory, EntryLoad};
+    #[cfg(target_os = "macos")]
+    use super::{reject_extended_acl_with, ACL_READ_ATTEMPTS};
     #[cfg(unix)]
     use crate::import_export::trusted_temp::TrustedTempDir;
 
@@ -674,6 +705,72 @@ mod tests {
             .unwrap();
         assert_eq!(entries.len(), 1);
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// Runs `reject_extended_acl_with` on an opened directory with a scripted reader.
+    ///
+    /// Each script step is the answer of one read: `Ok(true)` for an empty ACL,
+    /// `Ok(false)` for an ACL with entries, `Err(())` for a failed lookup.
+    #[cfg(target_os = "macos")]
+    fn scripted_acl_check(script: &[Result<bool, ()>]) -> (Result<(), ()>, Vec<String>) {
+        use std::os::fd::AsRawFd as _;
+
+        let root = scratch("acl-retry");
+        let file = std::fs::File::open(&root).unwrap();
+        let mut paths = Vec::new();
+        let mut answers = script.iter().copied();
+        let result = reject_extended_acl_with(&file, |path: &str| {
+            paths.push(path.to_owned());
+            answers
+                .next()
+                .expect("reader called more often than scripted")
+        });
+        let expected = format!("/dev/fd/{}", file.as_raw_fd());
+        assert!(paths.iter().all(|path| *path == expected), "{paths:?}");
+        drop(file);
+        let _ = std::fs::remove_dir_all(root);
+        (result, paths)
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_transient_acl_lookup_failure_is_retried_before_the_cache_is_refused() {
+        // Darwin can fail a `/dev/fd/N` lookup with EBADF or ENOENT while other
+        // processes look up the same descriptor number, although the descriptor
+        // is open. The cache must not be skipped for that.
+        let (result, paths) = scripted_acl_check(&[Err(()), Ok(true)]);
+        assert_eq!(result, Ok(()));
+        assert_eq!(paths.len(), 2);
+
+        let mut script = vec![Err(()); ACL_READ_ATTEMPTS - 1];
+        script.push(Ok(true));
+        let (result, paths) = scripted_acl_check(&script);
+        assert_eq!(result, Ok(()));
+        assert_eq!(paths.len(), ACL_READ_ATTEMPTS);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn an_acl_that_cannot_be_read_or_has_entries_is_refused() {
+        let (result, paths) = scripted_acl_check(&[Err(()); ACL_READ_ATTEMPTS]);
+        assert_eq!(result, Err(()));
+        assert_eq!(paths.len(), ACL_READ_ATTEMPTS);
+
+        let (result, paths) = scripted_acl_check(&[Ok(false)]);
+        assert_eq!(result, Err(()));
+        assert_eq!(
+            paths.len(),
+            1,
+            "an ACL with entries is refused without a retry"
+        );
+
+        let (result, paths) = scripted_acl_check(&[Err(()), Ok(false)]);
+        assert_eq!(result, Err(()));
+        assert_eq!(paths.len(), 2);
+
+        let (result, paths) = scripted_acl_check(&[Ok(true)]);
+        assert_eq!(result, Ok(()));
+        assert_eq!(paths.len(), 1);
     }
 
     #[test]

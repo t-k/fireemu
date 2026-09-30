@@ -3,7 +3,7 @@
 //! `datacontenttype: application/json`.
 
 use fireemu_adapter_grpc::encode::encode_document;
-use fireemu_adapter_grpc::rest::json::document_to_json;
+use fireemu_adapter_grpc::rest::json::{document_to_json, shorten_fraction};
 use fireemu_core_auth::store::UserRecord;
 use fireemu_core_firestore::store::Document;
 use fireemu_core_functions::event::{
@@ -22,25 +22,13 @@ fn rfc3339(t: LogicalInstant) -> String {
 }
 
 /// A Firestore event's time as protobuf JSON prints a `Timestamp`: a fraction of zero, three,
-/// six or nine digits, whichever is the shortest that is exact. Production's Firestore events
-/// carry the document's `createTime` in this form (`2026-09-30T12:03:18.846431Z`, observed
-/// 2026-09-30 in an exploratory probe), where the generic form always prints nine digits.
+/// six or nine digits, whichever is the shortest that is exact (the rule `document_to_json`
+/// applies to a document's `createTime`). Production's Firestore create event carries its time
+/// this way (`2026-09-30T12:03:18.846431Z`, observed 2026-09-30 in an exploratory probe), where
+/// the generic form always prints nine digits.
 #[must_use]
 pub fn firestore_time(t: LogicalInstant) -> String {
-    let text = rfc3339(t);
-    let Some(dot) = text.find('.') else {
-        return text;
-    };
-    let (head, fraction) = text.split_at(dot + 1);
-    let digits = fraction.trim_end_matches('Z');
-    let keep = if digits.ends_with("000000") {
-        3
-    } else if digits.ends_with("000") {
-        6
-    } else {
-        9
-    };
-    format!("{head}{}Z", &digits[..keep.min(digits.len())])
+    shorten_fraction(&rfc3339(t))
 }
 
 /// A UUID-shaped (version 4, variant 1) event id derived from `seed`. Production's Firestore

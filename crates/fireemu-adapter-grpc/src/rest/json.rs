@@ -220,7 +220,12 @@ pub(crate) fn timestamp_to_json(t: &prost_types::Timestamp) -> Value {
     Value::String(shorten_fraction(&full))
 }
 
-fn shorten_fraction(rfc3339: &str) -> String {
+/// Shorten the fraction of an RFC 3339 UTC time to the protobuf JSON form: none, three, six or
+/// nine digits, whichever is the shortest exact rendering. A text without a fraction or without
+/// the `Z` suffix is returned unchanged. The Functions event builder shares this rule, so an
+/// event's time and a document's `createTime` cannot print differently.
+#[must_use]
+pub fn shorten_fraction(rfc3339: &str) -> String {
     let Some((head, fraction)) = rfc3339.strip_suffix('Z').and_then(|s| s.split_once('.')) else {
         return rfc3339.to_owned();
     };
@@ -1906,6 +1911,60 @@ pub fn write_response_to_json(r: &pb::WriteResponse) -> Value {
         v["commitTime"] = timestamp_to_json(t);
     }
     v
+}
+
+#[cfg(test)]
+mod fraction_tests {
+    use super::shorten_fraction;
+
+    #[test]
+    fn a_fraction_prints_in_the_shortest_of_three_six_or_nine_digits() {
+        for (input, expected) in [
+            ("2026-09-30T12:03:18Z", "2026-09-30T12:03:18Z"),
+            ("2026-09-30T12:03:18.000000000Z", "2026-09-30T12:03:18Z"),
+            ("2026-09-30T12:03:18.846000000Z", "2026-09-30T12:03:18.846Z"),
+            ("2026-09-30T12:03:18.840000000Z", "2026-09-30T12:03:18.840Z"),
+            ("2026-09-30T12:03:18.800000000Z", "2026-09-30T12:03:18.800Z"),
+            (
+                "2026-09-30T12:03:18.846431000Z",
+                "2026-09-30T12:03:18.846431Z",
+            ),
+            (
+                "2026-09-30T12:03:18.846430000Z",
+                "2026-09-30T12:03:18.846430Z",
+            ),
+            (
+                "2026-09-30T12:03:18.000001000Z",
+                "2026-09-30T12:03:18.000001Z",
+            ),
+            (
+                "2026-09-30T12:03:18.846431500Z",
+                "2026-09-30T12:03:18.846431500Z",
+            ),
+            (
+                "2026-09-30T12:03:18.000000001Z",
+                "2026-09-30T12:03:18.000000001Z",
+            ),
+            (
+                "2026-09-30T12:03:18.846431001Z",
+                "2026-09-30T12:03:18.846431001Z",
+            ),
+        ] {
+            assert_eq!(shorten_fraction(input), expected, "{input}");
+        }
+    }
+
+    #[test]
+    fn a_text_that_is_not_a_utc_fraction_is_returned_unchanged() {
+        for input in [
+            "",
+            "not a time",
+            "2026-09-30T12:03:18.846431+09:00",
+            "2026-09-30T12:03:18.846431",
+        ] {
+            assert_eq!(shorten_fraction(input), input);
+        }
+    }
 }
 
 #[cfg(test)]

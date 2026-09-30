@@ -2,3 +2,6 @@
 import "../scheduled-functions/shape.test.mjs";
 import "../scheduled-functions/capture.test.mjs";
 import "../scheduled-functions/recovery.test.mjs";
+import "../scheduled-functions/calendar.test.mjs";
+import "../scheduled-functions/calendar-recovery.test.mjs";
+import "../scheduled-functions/calendar-capture.test.mjs";

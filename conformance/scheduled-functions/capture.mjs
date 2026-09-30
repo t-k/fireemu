@@ -24,9 +24,58 @@ const SOURCES = [
   "conformance/src/auth-fs-cross/sandbox.mjs",
 ];
 
-export async function harnessDigest() {
+const MODES = Object.freeze({
+  shape: {
+    kind: undefined,
+    subject: "SCHEDULED-FUNCTIONS stage-2 shape packet",
+    maxRequests: MAX_REQUESTS,
+    reserveUsd: 1,
+    prefix: "shape-",
+    outcome: "shape-needs-review",
+    collect: collectShape,
+  },
+  "job-recovery": {
+    kind: "job-recovery",
+    subject: "SCHEDULED-FUNCTIONS stage-2 job recovery packet",
+    maxRequests: RECOVERY_MAX_REQUESTS,
+    reserveUsd: 0.25,
+    prefix: "recovery-",
+    outcome: "recovery-needs-review",
+    collect: collectRecovery,
+  },
+  "calendar-seed": {
+    kind: "calendar-seed",
+    subject: "SCHEDULED-FUNCTIONS calendar seed packet",
+    maxRequests: 64,
+    reserveUsd: 0.25,
+    prefix: "calendar-",
+    outcome: "calendar-needs-review",
+    collect: async (options) => (await import("./calendar.mjs")).collectCalendar(options),
+  },
+  "calendar-recovery": {
+    kind: "calendar-recovery",
+    subject: "SCHEDULED-FUNCTIONS calendar recovery packet",
+    maxRequests: 64,
+    reserveUsd: 0.25,
+    prefix: "calendar-recovery-",
+    outcome: "calendar-recovery-needs-review",
+    collect: async (options) =>
+      (await import("./calendar-recovery.mjs")).collectCalendarRecovery(options),
+  },
+});
+
+export async function harnessDigest(mode = "shape") {
+  if (!Object.hasOwn(MODES, mode)) throw new Error("unknown capture mode");
   const hash = createHash("sha256");
-  for (const path of SOURCES)
+  const sources = mode.startsWith("calendar-")
+    ? [
+        ...SOURCES,
+        "conformance/scheduled-functions/calendar.mjs",
+        "conformance/scheduled-functions/calendar-recovery.mjs",
+        "conformance/scheduled-functions/calendar-cases.json",
+      ]
+    : SOURCES;
+  for (const path of sources)
     hash
       .update(path)
       .update("\0")
@@ -35,10 +84,10 @@ export async function harnessDigest() {
   return hash.digest("hex");
 }
 
-async function durable(path, value, flags = "wx") {
+async function durable(path, value, flags = "wx", raw = false) {
   const handle = await open(path, flags, 0o600);
   try {
-    await handle.writeFile(`${JSON.stringify(value)}\n`);
+    await handle.writeFile(raw ? value : `${JSON.stringify(value)}\n`);
     await handle.sync();
   } finally {
     await handle.close();
@@ -51,7 +100,23 @@ async function durable(path, value, flags = "wx") {
   }
 }
 
-function approved(ownerText, pins, recovery = false) {
+async function privateProof(path, lane) {
+  const stat = await lstat(path),
+    resolved = await realpath(path);
+  if (
+    !stat.isFile() ||
+    stat.isSymbolicLink() ||
+    stat.mode & 0o077 ||
+    !resolved.startsWith(lane + sep)
+  )
+    throw new Error("original recovery proof must be a private regular lane file");
+  return readFile(path);
+}
+
+function approved(ownerText, pins, mode = "shape") {
+  const config = MODES[mode],
+    recovery = mode === "job-recovery" || mode === "calendar-recovery",
+    calendar = mode.startsWith("calendar-");
   let approval = false;
   for (const line of ownerText.split("\n")) {
     const [date, subject = "", body = "", author = ""] = line
@@ -71,16 +136,16 @@ function approved(ownerText, pins, recovery = false) {
       continue;
     }
     if (
-      subject ===
-        (recovery
-          ? "SCHEDULED-FUNCTIONS stage-2 job recovery packet"
-          : "SCHEDULED-FUNCTIONS stage-2 shape packet") &&
+      subject === config.subject &&
       entry.decision === "APPROVE" &&
       /^(オーナー|Claude|調整役)/.test(author) &&
       entry.sourceCommit === pins.sourceCommit &&
       entry.harnessDigest === pins.harnessDigest &&
-      entry.maxRequests === String(recovery ? RECOVERY_MAX_REQUESTS : MAX_REQUESTS) &&
-      entry.reserveUsd === String(recovery ? 0.25 : 1) &&
+      entry.maxRequests === String(config.maxRequests) &&
+      entry.reserveUsd === String(config.reserveUsd) &&
+      (!calendar || entry.corpusDigest === pins.corpusDigest) &&
+      (mode !== "calendar-seed" || entry.maxExtraRequests === "3") &&
+      (mode !== "calendar-recovery" || entry.maxDeleteAttemptsPerJob === "3") &&
       (!recovery ||
         (entry.originalRunId === pins.originalRunId &&
           entry.originalPacketSha256 === pins.originalPacketSha256))
@@ -110,22 +175,32 @@ function budget(rows, reserveUsd = 1) {
     throw new Error("task budget exhausted");
 }
 
-async function recoveryAdmission({ plan, rows, ledgerText, lane, now }) {
+async function recoveryAdmission({ plan, rows, ledgerText, lane, now, mode = "job-recovery" }) {
+  const calendar = mode === "calendar-recovery";
   const target = (row) =>
-    row.project === PROJECT &&
-    row.taskId === TASK_ID &&
-    row.attemptId === plan.originalRunId &&
-    row.packetSha256 === plan.originalPacketSha256;
+    row.project === PROJECT && row.taskId === TASK_ID && row.attemptId === plan.originalRunId;
   const lines = ledgerText.split("\n").filter((line) => line.trim());
   const index = rows.findLastIndex(target);
   const original = rows[index];
   if (
     !original ||
+    original.packetSha256 !== plan.originalPacketSha256 ||
+    rows.some(
+      (row) =>
+        target(row) &&
+        row.packetSha256 !== undefined &&
+        row.packetSha256 !== plan.originalPacketSha256,
+    ) ||
     sha256(lines[index]) !== plan.originalLedgerRowSha256 ||
     original.event !== "needs-recovery" ||
-    original.outcome !== "shape-needs-review" ||
+    original.outcome !== (calendar ? "calendar-needs-review" : "shape-needs-review") ||
     original.sandboxAtBaseline !== false ||
-    original.requests !== 32
+    original.requests !== (calendar ? plan.originalRequests : 32) ||
+    (calendar &&
+      (original.kind !== "calendar-seed" ||
+        original.gitSha !== plan.originalSourceCommit ||
+        original.harnessDigest !== plan.originalHarnessDigest ||
+        original.corpusDigest !== plan.originalCorpusDigest))
   )
     throw new Error("original recovery ledger proof differs");
   const then = Date.parse(original.ts);
@@ -139,14 +214,101 @@ async function recoveryAdmission({ plan, rows, ledgerText, lane, now }) {
     )
   )
     throw new Error("newer or unreadable sandbox activity blocks recovery");
-  const journal = await readFile(join(lane, "shape-" + plan.originalRunId, "requests.jsonl"));
+  const originalDirectory = join(lane, (calendar ? "calendar-" : "shape-") + plan.originalRunId);
+  const journal = calendar
+    ? await privateProof(join(originalDirectory, "requests.jsonl"), lane)
+    : await readFile(join(originalDirectory, "requests.jsonl"));
   if (sha256(journal) !== plan.originalJournalSha256)
     throw new Error("original recovery journal differs");
-  const remaining = rows.filter((row) => !target(row));
-  const problems = admissionProblems(remaining.map(JSON.stringify).join("\n"), PROJECT, now);
+  if (calendar) {
+    const rawPacket = await privateProof(join(originalDirectory, "raw-packet.json"), lane);
+    if (sha256(rawPacket) !== plan.originalPacketSha256)
+      throw new Error("original recovery packet differs");
+    const originalPacket = JSON.parse(rawPacket);
+    if (
+      originalPacket.schemaVersion !== 1 ||
+      originalPacket.kind !== "calendar-seed" ||
+      originalPacket.project !== PROJECT ||
+      originalPacket.runId !== plan.originalRunId ||
+      originalPacket.sourceCommit !== plan.originalSourceCommit ||
+      originalPacket.harnessDigest !== plan.originalHarnessDigest ||
+      originalPacket.corpusDigest !== plan.originalCorpusDigest ||
+      originalPacket.maxRequests !== 64 ||
+      originalPacket.maxExtraRequests !== 3 ||
+      originalPacket.reserveUsd !== 0.25
+    )
+      throw new Error("original recovery packet binding differs");
+    const journalRows = journal
+      .toString("utf8")
+      .split("\n")
+      .filter((line) => line.trim())
+      .map((line) => JSON.parse(line));
+    const before = journalRows.filter((row) => row.state === "before-send");
+    if (
+      before.length !== plan.originalRequests ||
+      new Set(before.map((row) => row.id)).size !== before.length
+    )
+      throw new Error("original recovery journal request count differs");
+    const templates = new Map(
+      (await import("./calendar.mjs"))
+        .calendarRequests(
+          plan.originalRunId,
+          originalPacket.projectNumber,
+          before.length ? Date.parse(before[0].dispatchAt) : then,
+        )
+        .map((spec) => [spec.id, spec]),
+    );
+    let extras = 0;
+    const sent = new Set();
+    for (const row of journalRows) {
+      if (
+        !row ||
+        typeof row.id !== "string" ||
+        ![
+          "before-send",
+          "response-headers",
+          "response-persisted",
+          "transport-unknown",
+          "body-unknown",
+        ].includes(row.state)
+      )
+        throw new Error("original recovery journal row differs");
+      if (row.state !== "before-send") {
+        if (!sent.has(row.id)) throw new Error("original recovery journal ordering differs");
+        continue;
+      }
+      sent.add(row.id);
+      let id = row.id;
+      if (/^c0[1-8]-read-before-pause$/.test(id)) {
+        id = id.slice(0, 3) + "-read-paused";
+        extras++;
+      } else if (/^c0[1-8]-delete-retry-[1-3]$/.test(id)) {
+        id = id.slice(0, 3) + "-delete";
+        extras++;
+      }
+      const spec = templates.get(id);
+      if (
+        !spec ||
+        row.method !== spec.method ||
+        row.url !== spec.url ||
+        !Number.isFinite(Date.parse(row.dispatchAt)) ||
+        JSON.stringify(row.json ?? null) !== JSON.stringify(spec.json ?? null)
+      )
+        throw new Error("original recovery journal request binding differs");
+    }
+    if (extras > 3) throw new Error("original recovery journal extra-request budget differs");
+  }
+  return projectAdmissionProblems(
+    rows.filter((row) => !target(row)),
+    now,
+  );
+}
+
+function projectAdmissionProblems(rows, now) {
+  const problems = admissionProblems(rows.map(JSON.stringify).join("\n"), PROJECT, now);
   // The shared helper groups by task. Also check each other attempt independently.
   const attempts = new Map();
-  for (const row of remaining) {
+  for (const row of rows) {
     if (row.project !== PROJECT || typeof row.taskId !== "string") continue;
     const key = row.taskId + "|" + (row.attemptId ?? "unlinked");
     const group = attempts.get(key) ?? [];
@@ -171,8 +333,12 @@ async function captureAttempt(
     clock = () => new Date(),
     sleep,
   },
-  recovery = false,
+  mode = "shape",
 ) {
+  if (!Object.hasOwn(MODES, mode)) throw new Error("unknown capture mode");
+  const config = MODES[mode],
+    recovery = mode === "job-recovery" || mode === "calendar-recovery",
+    calendar = mode.startsWith("calendar-");
   if (!coordinatorSend) throw new Error("explicit coordinator send required");
   const lane = await realpath(join(root, "docs.local/runs/codex-lane8"));
   const packet = await realpath(packetPath);
@@ -187,14 +353,21 @@ async function captureAttempt(
   if (
     plan.schemaVersion !== 1 ||
     plan.project !== PROJECT ||
-    plan.maxRequests !== (recovery ? RECOVERY_MAX_REQUESTS : MAX_REQUESTS) ||
-    plan.reserveUsd !== (recovery ? 0.25 : 1) ||
-    (recovery ? plan.kind !== "job-recovery" : plan.kind !== undefined) ||
+    plan.maxRequests !== config.maxRequests ||
+    plan.reserveUsd !== config.reserveUsd ||
+    plan.kind !== config.kind ||
     !/^[a-f0-9]{40}$/.test(plan.sourceCommit ?? "") ||
     sourceCommit !== plan.sourceCommit ||
-    plan.harnessDigest !== (await harnessDigest())
+    plan.harnessDigest !== (await harnessDigest(mode))
   )
     throw new Error("packet source or runner binding differs");
+  if (
+    calendar &&
+    (plan.corpusDigest !== (await calendarCorpusDigest()) ||
+      (mode === "calendar-seed" && plan.maxExtraRequests !== 3) ||
+      (mode === "calendar-recovery" && plan.maxDeleteAttemptsPerJob !== 3))
+  )
+    throw new Error("calendar corpus or packet binding differs");
   if (recovery) {
     ownedResources(plan.originalRunId);
     ownedResources(plan.runId);
@@ -205,7 +378,25 @@ async function captureAttempt(
       )
     )
       throw new Error("invalid original recovery proof");
-  } else shapeRequests({ ...plan, now: clock().getTime() });
+  } else if (calendar)
+    (await import("./calendar.mjs")).calendarRequests(
+      plan.runId,
+      plan.projectNumber,
+      clock().getTime(),
+    );
+  else shapeRequests({ ...plan, now: clock().getTime() });
+  if (
+    mode === "calendar-recovery" &&
+    (!Number.isSafeInteger(plan.originalRequests) ||
+      plan.originalRequests < 0 ||
+      plan.originalRequests > 64 ||
+      !/^[a-f0-9]{40}$/.test(plan.originalSourceCommit ?? "") ||
+      ![plan.originalHarnessDigest, plan.originalCorpusDigest].every((pin) =>
+        /^[a-f0-9]{64}$/.test(pin ?? ""),
+      ) ||
+      plan.originalCorpusDigest !== plan.corpusDigest)
+  )
+    throw new Error("original calendar recovery binding differs");
   if (typeof getToken !== "function") throw new Error("coordinator credential provider required");
   const runs = join(root, "docs.local/runs");
   const ledger = join(runs, "sandbox-ledger.jsonl");
@@ -240,13 +431,13 @@ async function captureAttempt(
           ...plan,
           packetSha256,
         },
-        recovery,
+        mode,
       )
     )
       throw new Error("packet approval missing or revoked");
     const problems = recovery
-      ? await recoveryAdmission({ plan, rows, ledgerText, lane, now: clock().getTime() })
-      : admissionProblems(ledgerText, PROJECT, clock().getTime());
+      ? await recoveryAdmission({ plan, rows, ledgerText, lane, now: clock().getTime(), mode })
+      : projectAdmissionProblems(rows, clock().getTime());
     if (problems.length) throw new Error(`sandbox admission refused: ${problems.join("; ")}`);
     if (
       rows.some(
@@ -256,7 +447,7 @@ async function captureAttempt(
     )
       throw new Error("this packet or run already started");
     budget(rows, plan.reserveUsd);
-    const directory = join(lane, (recovery ? "recovery-" : "shape-") + plan.runId);
+    const directory = join(lane, config.prefix + plan.runId);
     await mkdir(directory, { mode: 0o700 });
     const laneHandle = await open(lane, "r");
     try {
@@ -265,12 +456,14 @@ async function captureAttempt(
       await laneHandle.close();
     }
     await durable(join(directory, "packet.json"), plan);
+    if (calendar) await durable(join(directory, "raw-packet.json"), bytes, "wx", true);
     const common = {
       project: PROJECT,
       database: null,
       taskId: TASK_ID,
       gitSha: sourceCommit,
-      corpusDigest: packetSha256,
+      corpusDigest: calendar ? plan.corpusDigest : packetSha256,
+      ...(calendar ? { kind: config.kind } : {}),
       packetSha256,
       harnessDigest: plan.harnessDigest,
       attemptId: plan.runId,
@@ -296,7 +489,7 @@ async function captureAttempt(
     let summary;
     try {
       const token = await getToken();
-      summary = await (recovery ? collectRecovery : collectShape)({
+      summary = await config.collect({
         ...plan,
         accessToken: token,
         send,
@@ -306,7 +499,7 @@ async function captureAttempt(
       });
     } catch {
       summary = {
-        outcome: recovery ? "recovery-needs-review" : "shape-needs-review",
+        outcome: config.outcome,
         cleanupVerified: false,
         captureError: true,
       };
@@ -325,7 +518,7 @@ async function captureAttempt(
         ...common,
         ts: clock().toISOString(),
         event: "needs-recovery",
-        outcome: recovery ? "recovery-needs-review" : "shape-needs-review",
+        outcome: config.outcome,
         requests: summary.attempted ?? null,
         sandboxAtBaseline: false,
       },
@@ -339,10 +532,13 @@ async function captureAttempt(
 
 if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.meta.url) {
   try {
-    if (
-      process.argv.length !== 4 ||
-      !["--coordinator-send", "--coordinator-recover"].includes(process.argv[3])
-    )
+    const executors = {
+      "--coordinator-send": captureShape,
+      "--coordinator-recover": captureRecovery,
+      "--coordinator-calendar": captureCalendar,
+      "--coordinator-calendar-recover": captureCalendarRecovery,
+    };
+    if (process.argv.length !== 4 || !Object.hasOwn(executors, process.argv[3]))
       throw new Error("coordinator command required");
     const common = execFileSync(
       "git",
@@ -353,9 +549,7 @@ if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.m
       cwd: REPO,
       encoding: "utf8",
     }).trim();
-    const summary = await (
-      process.argv[3] === "--coordinator-recover" ? captureRecovery : captureShape
-    )({
+    const summary = await executors[process.argv[3]]({
       root: dirname(common),
       packetPath: process.argv[2],
       sourceCommit,
@@ -368,10 +562,10 @@ if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.m
         }).trim(),
     });
     process.stdout.write(`${JSON.stringify(summary)}\n`);
-    process.exitCode = 2; // Shape outcomes always require coordinator review before lock release.
+    process.exitCode = 2; // Every mode requires coordinator review before lock release.
   } catch {
     process.stderr.write(
-      "Scheduled shape capture did not complete; inspect the private journal and lock.\n",
+      "Scheduled capture did not complete; inspect the private journal and lock.\n",
     );
     process.exitCode = 1;
   }
@@ -382,5 +576,16 @@ export async function captureShape(options) {
 }
 
 export async function captureRecovery(options) {
-  return captureAttempt(options, true);
+  return captureAttempt(options, "job-recovery");
+}
+
+export async function calendarCorpusDigest() {
+  return sha256(await readFile(join(REPO, "conformance/scheduled-functions/calendar-cases.json")));
+}
+
+export async function captureCalendar(options) {
+  return captureAttempt(options, "calendar-seed");
+}
+export async function captureCalendarRecovery(options) {
+  return captureAttempt(options, "calendar-recovery");
 }

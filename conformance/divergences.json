@@ -8589,7 +8589,7 @@
         "status": 400,
         "code": "INVALID_ARGUMENT"
       },
-      "reason": "Production refuses committing a read-only transaction even without writes (INVALID_ARGUMENT, 'The referenced transaction has expired or is no longer valid.'); the official emulator answers an empty commit. fireemu follows production.",
+      "reason": "In this sequence production answers the empty commit of a read-only transaction INVALID_ARGUMENT ('The referenced transaction has expired or is no longer valid.') because the write commit it refused just before on the same token ended the transaction; a fresh read-only token commits empty with code 0 (P02, REST and gRPC). The official emulator answers 200 here and keeps the transaction open. The fireemu answer recorded here is the strict profile's; the emulator profile answers 200 like the official emulator.",
       "authority": {
         "kind": "production-spec",
         "sourceUrls": [

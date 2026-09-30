@@ -4657,7 +4657,7 @@ impl LocalBackend {
                     let previous = self.required_txn(&parent, &read_write.retry_transaction)?;
                     db.retry_transaction(&previous, now)
                 }
-                _ => db.begin_transaction(false, now),
+                _ => db.begin_read_write_transaction(now),
             }
             .map_err(|e| status_from_error(&e))?;
             Ok(self.token(&parent, &id))

@@ -3150,6 +3150,103 @@ fn a_read_only_transaction_commits_empty_and_ends_when_a_write_commit_is_refused
         Err(FirestoreError::InvalidArgument(message)) if message == NO_LONGER_VALID
     ));
     state.rollback(&refused).unwrap();
+
+    // The official emulator (v1.22.0) keeps the transaction open after that refusal: a later
+    // empty commit answers 200 and a read still works. The emulator profile refuses nothing more.
+    let mut emulator = FirestoreState::with_limit_scope(LimitScope::OfficialEmulator);
+    emulator
+        .commit(&[set("p02/doc", &[("v", Value::Integer(1))])], None, t(0))
+        .unwrap();
+    let kept = emulator.begin_read_only_transaction(t(1)).unwrap();
+    assert!(matches!(
+        emulator.commit(&write, Some(&kept), t(2)),
+        Err(FirestoreError::InvalidArgument(message))
+            if message == "Cannot modify entities in a read-only transaction."
+    ));
+    assert_eq!(emulator.transaction_bookkeeping_stats().active, 1);
+    emulator
+        .get_in_transaction(&kept, &path("p02/doc"))
+        .unwrap();
+    emulator.commit(&[], Some(&kept), t(3)).unwrap();
+}
+
+// P02 (both transports): the empty commit of a read-only transaction answers the snapshot time and
+// consumes no commit time; production's `commitTime` lies before an outside writer's commit that
+// was acknowledged between the snapshot and the empty commit.
+#[test]
+fn an_empty_read_only_commit_answers_the_snapshot_time_and_consumes_no_commit_time() {
+    let mut state = FirestoreState::with_limit_scope(LimitScope::Production);
+    state
+        .commit(&[set("p02/doc", &[("v", Value::Integer(1))])], None, t(0))
+        .unwrap();
+    let transaction = state.begin_read_only_transaction(t(1)).unwrap();
+    state.touch_transaction(&transaction, t(2)).unwrap();
+    let snapshot = state.transaction_read_time(&transaction).unwrap();
+    let writer = state
+        .commit(&[set("p02/doc", &[("v", Value::Integer(2))])], None, t(3))
+        .unwrap();
+    // At the writer's own instant the next commit time is one microsecond later; an empty commit that
+    // wrote the older snapshot time into the commit clock would take that back.
+    let next = state.next_commit_time(t(3));
+    assert!(next > writer.commit_time);
+    let empty = state.commit(&[], Some(&transaction), t(4)).unwrap();
+    assert_eq!(empty.commit_time, snapshot);
+    assert!(empty.commit_time < writer.commit_time);
+    assert_eq!(
+        state.next_commit_time(t(3)),
+        next,
+        "no commit time is used up or moved back"
+    );
+    // A commit outside a transaction, and a read-write empty commit, still take a new time.
+    let plain = state.commit(&[], None, t(5)).unwrap();
+    assert!(plain.commit_time > writer.commit_time);
+}
+
+// The official emulator (v1.22.0, measured on both transports) reads a read-write transaction at
+// its first use: an outside write between the begin and the first read is shown, and the
+// transaction's commit then succeeds. The emulator profile matches it; production is unobserved
+// (P02b) and keeps the begin-time snapshot.
+#[test]
+fn the_emulator_profile_reads_a_read_write_transaction_at_its_first_use() {
+    let mut state = FirestoreState::with_limit_scope(LimitScope::OfficialEmulator);
+    state
+        .commit(&[set("p02/doc", &[("v", Value::Integer(1))])], None, t(0))
+        .unwrap();
+    let transaction = state.begin_read_write_transaction(t(1)).unwrap();
+    state
+        .commit(&[set("p02/doc", &[("v", Value::Integer(2))])], None, t(2))
+        .unwrap();
+    state.touch_transaction(&transaction, t(3)).unwrap();
+    let shown = state
+        .get_in_transaction(&transaction, &path("p02/doc"))
+        .unwrap()
+        .and_then(|document| document.fields.get("v").cloned());
+    assert_eq!(
+        shown,
+        Some(Value::Integer(2)),
+        "the first read shows the writer"
+    );
+    state
+        .commit(
+            &[set("p02/doc", &[("v", Value::Integer(3))])],
+            Some(&transaction),
+            t(4),
+        )
+        .unwrap();
+
+    // A transaction that began with a read is not moved by a later use.
+    let eager = state.begin_transaction(false, t(5)).unwrap();
+    state
+        .commit(&[set("p02/doc", &[("v", Value::Integer(4))])], None, t(6))
+        .unwrap();
+    state.touch_transaction(&eager, t(7)).unwrap();
+    assert_eq!(
+        state
+            .get_in_transaction(&eager, &path("p02/doc"))
+            .unwrap()
+            .and_then(|document| document.fields.get("v").cloned()),
+        Some(Value::Integer(3))
+    );
 }
 
 // P02 (both transports): a read-only transaction takes its snapshot at its first use, not at its

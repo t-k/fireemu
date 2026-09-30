@@ -616,7 +616,8 @@ struct Transaction {
     /// side is aborted, so this one can proceed.
     waiting_to_commit: bool,
     /// A read-only transaction begun without a `readTime` takes its snapshot at its first use, not
-    /// at its begin (P02: an outside write between the begin and the first read is shown).
+    /// at its begin (P02: an outside write between the begin and the first read is shown). The
+    /// emulator profile does the same for a read-write transaction (the official emulator's read).
     snapshot_pending: bool,
 }
 
@@ -2128,6 +2129,26 @@ impl FirestoreState {
         Ok(id)
     }
 
+    /// Begins a read-write transaction. The official emulator (v1.22.0, measured on both
+    /// transports) reads at the first use: an outside write between the begin and the first read
+    /// is shown by that read, and the transaction's commit then succeeds. The emulator profile
+    /// does the same, or it would refuse a commit the official emulator accepts. In the
+    /// production profile the snapshot stays at the begin: production is unobserved here (P02b
+    /// records it), and no change is made from the emulator's answer. A transaction that begins
+    /// with a read (`newTransaction` on a read) uses [`Self::begin_transaction`].
+    pub fn begin_read_write_transaction(
+        &mut self,
+        now: LogicalInstant,
+    ) -> Result<TransactionId, FirestoreError> {
+        let id = self.begin_transaction(false, now)?;
+        if self.limit_scope == LimitScope::OfficialEmulator {
+            if let Some(transaction) = self.transactions.get_mut(&id) {
+                transaction.snapshot_pending = true;
+            }
+        }
+        Ok(id)
+    }
+
     /// Begins a retry attempt linked to a transaction previously issued by this database.
     /// The previous attempt may already be finished after an `ABORTED` commit, but an unknown
     /// handle is never accepted as retry lineage.
@@ -2893,7 +2914,12 @@ impl FirestoreState {
         &self,
         id: &TransactionId,
     ) -> Result<LogicalInstant, FirestoreError> {
-        Ok(self.transaction(id)?.read_time)
+        let transaction = self.transaction(id)?;
+        debug_assert!(
+            !transaction.snapshot_pending,
+            "a read path must touch the transaction (pinning its snapshot) before it reads its time"
+        );
+        Ok(transaction.read_time)
     }
 
     /// Snapshot version a transaction reads at.
@@ -2901,7 +2927,12 @@ impl FirestoreState {
         &self,
         id: &TransactionId,
     ) -> Result<CommitVersion, FirestoreError> {
-        Ok(self.transaction(id)?.read_version)
+        let transaction = self.transaction(id)?;
+        debug_assert!(
+            !transaction.snapshot_pending,
+            "a read path must touch the transaction (pinning its snapshot) before it reads its version"
+        );
+        Ok(transaction.read_version)
     }
 
     fn transaction(&self, id: &TransactionId) -> Result<&Transaction, FirestoreError> {
@@ -3422,7 +3453,14 @@ impl FirestoreState {
 
         // Commit times are microsecond-aligned (Firestore update-time precision) and advance
         // by one microsecond when the clock did not move between commits.
-        let commit_time = self.next_commit_time(now);
+        // The empty commit of a read-only transaction answers the snapshot time and consumes no
+        // commit time (P02, REST and gRPC: production's `commitTime` lies inside the first read's
+        // window and before an outside writer's commit acknowledged in between).
+        let snapshot_time = transaction
+            .and_then(|id| self.transactions.get(id))
+            .filter(|t| t.read_only && writes.is_empty())
+            .map(|t| t.read_time);
+        let commit_time = snapshot_time.unwrap_or_else(|| self.next_commit_time(now));
 
         // Stage every write against a working copy; fail before touching state. A write
         // whose result equals the current document is a no-op: it keeps the existing version
@@ -3533,8 +3571,11 @@ impl FirestoreState {
         let reservation = admit(&result, HistoryProjection { before, after })?;
 
         // Publish. All fallible validation and external admission completed above. Every
-        // accepted commit consumes a commit time, changed documents or not.
-        self.last_commit_time = Some(commit_time);
+        // accepted commit consumes a commit time, changed documents or not, except the empty
+        // commit of a read-only transaction, which answers its snapshot time.
+        if snapshot_time.is_none() {
+            self.last_commit_time = Some(commit_time);
+        }
         self.compaction_forecast = None;
         self.history_usage = uncompacted;
         if changed {

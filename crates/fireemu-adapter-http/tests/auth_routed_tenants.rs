@@ -720,6 +720,9 @@ struct ProbedSeed {
     delay: std::time::Duration,
     /// Run once, on the first application, before the seed's own work.
     on_first: Mutex<Option<Box<dyn FnOnce() + Send>>>,
+    /// After the seed's own work, another thread holds the project's gate for this long (the
+    /// tenant creation that follows has to wait for it).
+    hold_gate: std::time::Duration,
 }
 
 impl std::fmt::Debug for ProbedSeed {
@@ -737,6 +740,7 @@ impl ProbedSeed {
             release: Mutex::new(None),
             delay: std::time::Duration::ZERO,
             on_first: Mutex::new(None),
+            hold_gate: std::time::Duration::ZERO,
         }
     }
 }
@@ -755,7 +759,20 @@ impl fireemu_core_auth::store::NewProjectSeed for ProbedSeed {
             }
         }
         std::thread::sleep(self.delay);
-        fireemu_core_auth::store::NewProjectSeed::apply(&*self.inner, registry, project)
+        let applied =
+            fireemu_core_auth::store::NewProjectSeed::apply(&*self.inner, registry, project);
+        if !self.hold_gate.is_zero() {
+            let gate = registry.operation_gate(project, None).unwrap();
+            let hold = self.hold_gate;
+            let (locked, is_locked) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                let _held = gate.lock().unwrap();
+                let _ = locked.send(());
+                std::thread::sleep(hold);
+            });
+            is_locked.recv_timeout(LONG).unwrap();
+        }
+        applied
     }
 }
 
@@ -855,14 +872,17 @@ fn an_installing_request_keeps_the_declaration_while_other_requests_drain_the_se
 
 /// The tenant an on-the-way request makes is made inside the same admission as the install and
 /// the seed: a reset that starts waiting for the barrier while the seed runs cannot begin (and
-/// probe the membership) until the request is done with all three.
+/// probe the membership) until the request is done with all three. The seed holds the project's
+/// gate for a while after it is applied, so the tenant creation that follows is slow: a creation
+/// outside the admission would change the membership between the reset's probe and its apply.
 #[test]
 fn the_on_the_way_tenant_is_made_inside_the_admission_a_reset_waits_on() {
     let (state, registry) = routed_state();
     let (state, barrier) = with_barrier(state);
     let (result_tx, result_rx) = std::sync::mpsc::channel();
     let mut seed = ProbedSeed::new(&declared());
-    seed.delay = std::time::Duration::from_millis(200);
+    seed.delay = std::time::Duration::from_millis(100);
+    seed.hold_gate = std::time::Duration::from_millis(300);
     {
         let (registry, barrier) = (registry.clone(), barrier.clone());
         *seed.on_first.lock().unwrap() = Some(Box::new(move || {
@@ -870,7 +890,7 @@ fn the_on_the_way_tenant_is_made_inside_the_admission_a_reset_waits_on() {
                 // A reset: it holds the barrier exclusively across probe and apply.
                 let _reset = barrier.exclusive();
                 let probe = registry.prepare_default_scope_reset().unwrap();
-                std::thread::sleep(std::time::Duration::from_millis(400));
+                std::thread::sleep(std::time::Duration::from_millis(600));
                 let _ = result_tx.send(registry.apply_default_scope_reset(&probe));
             });
         }));

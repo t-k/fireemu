@@ -670,3 +670,127 @@ fn a_body_tenant_on_a_tenant_route_selects_no_tenant_store() {
         assert_eq!(tenant_names(&state, "demo-other"), vec![named]);
     });
 }
+
+/// The Admin create and the Admin update (without an `oobCode`) parse an ID token too
+/// (`operations.js:181` and `:832`, privileged requests included): a token of a tenant that was
+/// made on the way finds no user there, so the create is refused and creates nothing, in the
+/// default project and in a routed one alike (official column probed, owner credential).
+#[test]
+fn an_admin_create_or_update_with_an_id_token_of_a_new_tenant_finds_no_user() {
+    within_a_minute(|| {
+        for project in ["demo-app", "demo-other"] {
+            // (case, path suffix, body without the token, whether the body names the tenant)
+            let rows: Vec<(&str, &str, Value, bool)> = vec![
+                (
+                    "create in a body tenant",
+                    "/accounts",
+                    json!({"email": "m@example.com", "password": "hunter22"}),
+                    true,
+                ),
+                (
+                    "create with the token's tenant only",
+                    "/accounts",
+                    json!({"email": "m@example.com", "password": "hunter22"}),
+                    false,
+                ),
+                (
+                    "update by localId",
+                    "/accounts:update",
+                    json!({"localId": "x", "displayName": "d"}),
+                    true,
+                ),
+            ];
+            for (n, (case, suffix, body, names_tenant)) in rows.into_iter().enumerate() {
+                let (state, registry) = routed_state();
+                let tenant = format!("adm-{n}");
+                let mut body = body;
+                if names_tenant {
+                    body["tenantId"] = json!(tenant);
+                }
+                body["idToken"] = json!(project_token(project, "u1", &tenant));
+                let (status, answered) = admin(
+                    &state,
+                    "POST",
+                    &format!("{V1}/projects/{project}{suffix}"),
+                    &body,
+                );
+                assert_eq!(
+                    (status, message_of(&answered)),
+                    (400, "USER_NOT_FOUND".to_owned()),
+                    "{project} {case}: {answered}"
+                );
+                // Nothing was created: not in the tenant, and not in the project.
+                if let Some(store) = registry.tenant_store(project, &tenant) {
+                    assert_eq!(store.lock().unwrap().user_count(), 0, "{project} {case}");
+                }
+                let project_users = if project == "demo-app" {
+                    registry.store_for(project)
+                } else {
+                    registry.routed_store_for(project)
+                }
+                .map_or(0, |store| store.lock().unwrap().user_count());
+                assert_eq!(project_users, 0, "{project} {case}");
+            }
+        }
+    });
+}
+
+/// `parseIdToken` does not look at `exp`, so an expired token of a tenant made on the way finds no
+/// user there (`USER_NOT_FOUND`), for every operation that reads the token; not the expiry's own
+/// refusal (official column probed).
+#[test]
+fn an_expired_token_of_a_new_tenant_finds_no_user_in_the_operations_that_parse_it() {
+    for (n, (route, body)) in [
+        ("accounts:lookup", json!({})),
+        ("accounts:delete", json!({})),
+        ("accounts:update", json!({"displayName": "x"})),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let (state, _registry) = emulator();
+        let tenant = format!("exp-{n}");
+        let mut body = body;
+        body["tenantId"] = json!(tenant);
+        body["idToken"] = json!(alg_none(&json!({
+            "aud": "demo-app", "iss": "https://securetoken.google.com/demo-app",
+            "sub": "u1", "user_id": "u1", "iat": 1_787_000_000, "exp": 1_787_003_600,
+            "auth_time": 1_787_000_000,
+            "firebase": {"sign_in_provider": "password", "identities": {}, "tenant": tenant}
+        })));
+        let (status, answered) = client(&state, &format!("{V1}/{route}"), &body);
+        assert_eq!(
+            (status, message_of(&answered)),
+            (400, "USER_NOT_FOUND".to_owned()),
+            "{route}: {answered}"
+        );
+    }
+}
+
+/// The body-tenant selection of the routed block is the emulator profile's alone: a strict state
+/// that is allowed routed projects (an embedding, a test) still serves a body tenant of a routed
+/// project's Admin request from the project, never from the tenant it names.
+#[test]
+fn the_strict_profile_does_not_scope_a_routed_admin_request_by_the_body_tenant() {
+    let (emulator_state, registry) = routed_state();
+    let (status, created) = admin(
+        &emulator_state,
+        "POST",
+        &format!("{V1}/projects/demo-other/tenants/held/accounts"),
+        &json!({"email": "held@example.com", "password": "hunter22"}),
+    );
+    assert_eq!(status, 200, "{created}");
+    let mut state = strict_state();
+    state.registry = Some(registry);
+    state.allow_routed_projects = true;
+    let (_, answered) = admin(
+        &state,
+        "POST",
+        &format!("{V1}/projects/demo-other/accounts:lookup"),
+        &json!({"tenantId": "held", "email": ["held@example.com"]}),
+    );
+    assert!(
+        !answered.to_string().contains("held@example.com"),
+        "served from the tenant: {answered}"
+    );
+}

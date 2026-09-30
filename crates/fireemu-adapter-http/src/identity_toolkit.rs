@@ -3863,38 +3863,37 @@ fn emulator_creates_named_tenant(
 
 /// Whether the official emulator's operation for the route reads the request's ID token
 /// (`parseIdToken`, `operations.js:1715`, which finds the user in the token's tenant): `signUp`
-/// (an anonymous upgrade), `lookup`, `update`, `delete`, the session cookie, `signInWithEmailLink`,
-/// `signInWithIdp`, `signInWithPhoneNumber`, the MFA enrollment operations, and `sendOobCode` for
-/// the request types that use it (`VERIFY_EMAIL` and `VERIFY_AND_CHANGE_EMAIL`, unless it asks
-/// for the link with an email and no token, `operations.js:683-703`). `createAuthUri`,
-/// `resetPassword`, `signInWithCustomToken`, `sendOobCode` for `PASSWORD_RESET` and `EMAIL_SIGNIN`
-/// and the rest never read it.
+/// (an anonymous upgrade, the Admin create too, `operations.js:181`), `lookup`, `update` (and the
+/// Admin update, unless it carries an `oobCode`, `operations.js:832`), `delete`, the session
+/// cookie, `signInWithEmailLink`, `signInWithIdp`, `signInWithPhoneNumber`, and `sendOobCode` for
+/// the request types that use it (`VERIFY_EMAIL` and `VERIFY_AND_CHANGE_EMAIL`,
+/// `operations.js:683-703`). `createAuthUri`, `resetPassword`, `signInWithCustomToken`,
+/// `sendOobCode` for `PASSWORD_RESET` and `EMAIL_SIGNIN` and the rest never read it. This is
+/// called for a request whose ID token decoded, so the official exemption of `sendOobCode`
+/// `returnOobLink` without a token needs no test here. The v2 MFA enrollment routes read it too
+/// but are not `/v1/` routes, which `emulator_named_tenant` does not pre-check (a difference the
+/// contract lists).
 fn official_reads_the_id_token(resolution: routes::Resolution<'_>, body: &Value) -> bool {
     let routes::Resolution::Matched { route, .. } = resolution else {
         return false;
     };
     match route.handler {
         routes::Handler::SignUp
+        | routes::Handler::AdminCreate
         | routes::Handler::Lookup
         | routes::Handler::Update
         | routes::Handler::Delete
         | routes::Handler::AdminCreateSessionCookie
         | routes::Handler::SignInWithEmailLink
         | routes::Handler::SignInWithIdp
-        | routes::Handler::SignInWithPhoneNumber
-        | routes::Handler::MfaEnrollmentStart
-        | routes::Handler::MfaEnrollmentFinalize
-        | routes::Handler::MfaEnrollmentWithdraw => true,
-        routes::Handler::SendOobCode | routes::Handler::AdminSendOobCode => {
-            let asks_for_the_link_alone = body
-                .get("returnOobLink")
-                .is_some_and(|flag| flag.as_bool().unwrap_or(false))
-                && str_field(body, "idToken").is_none_or(str::is_empty);
-            matches!(
-                str_field(body, "requestType"),
-                Some("VERIFY_EMAIL" | "VERIFY_AND_CHANGE_EMAIL")
-            ) && !asks_for_the_link_alone
-        }
+        | routes::Handler::SignInWithPhoneNumber => true,
+        // The non-`oobCode` branch of `setAccountInfo` parses the token; the `oobCode` one does
+        // not.
+        routes::Handler::AdminUpdate => str_field(body, "oobCode").is_none_or(str::is_empty),
+        routes::Handler::SendOobCode | routes::Handler::AdminSendOobCode => matches!(
+            str_field(body, "requestType"),
+            Some("VERIFY_EMAIL" | "VERIFY_AND_CHANGE_EMAIL")
+        ),
         _ => false,
     }
 }
@@ -4402,8 +4401,10 @@ fn handle_with_policy_inner(
         let body_tenant_store = str_field(body, "tenantId")
             .filter(|tenant| !tenant.is_empty())
             .filter(|_| {
-                matches!(resolution, routes::Resolution::Matched { route, .. }
-                    if official_admin_account_handler(route.handler))
+                // The emulator profile only (as the store selection's arm below is).
+                state.stateless_refresh_tokens
+                    && matches!(resolution, routes::Resolution::Matched { route, .. }
+                        if official_admin_account_handler(route.handler))
             })
             .and_then(|tenant| registry.tenant_store(project, tenant));
         if body_tenant_store.is_some() {

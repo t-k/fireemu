@@ -1191,6 +1191,34 @@ fn the_default_content_disposition_fills_only_an_absent_value_without_a_bump_or_
 }
 
 #[test]
+fn list_tokens_outside_the_prefix_restart_and_an_empty_page_names_the_first_item() {
+    let mut s = StorageState::new(1);
+    let b = bucket();
+    for n in ["p/a", "p/b", "p/c", "q/zzz"] {
+        s.put(
+            &b,
+            &name(n),
+            b"x".to_vec(),
+            NewMetadata::default(),
+            Precondition::default(),
+            t(1),
+        )
+        .unwrap();
+    }
+    // A token that names an entry beyond the prefix is unknown: the listing restarts.
+    let page = s.list(&b, "p/", None, Some("q/zzz"), None);
+    let names: Vec<&str> = page.items.iter().map(|m| m.name.as_str()).collect();
+    assert_eq!(names, ["p/a", "p/b", "p/c"]);
+    // `maxResults=0` answers no items and names the first item as the next page, not the last.
+    let empty = s.list(&b, "p/", None, None, Some(0));
+    assert!(empty.items.is_empty());
+    assert_eq!(empty.next_page_token.as_deref(), Some("p/a"));
+    // A token from that page keeps naming the item it points at.
+    let again = s.list(&b, "p/", None, Some("p/b"), Some(0));
+    assert_eq!(again.next_page_token.as_deref(), Some("p/b"));
+}
+
+#[test]
 fn absent_objects_satisfy_only_if_generation_match_zero() {
     let mut s = StorageState::new(1);
     let b = bucket();

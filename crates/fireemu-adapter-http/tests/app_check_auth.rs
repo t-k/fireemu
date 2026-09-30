@@ -312,7 +312,7 @@ fn owner_with(h: &Harness) -> RequestHeaders {
     }
 }
 
-fn auth_uri_body(extra: Value) -> Value {
+fn auth_uri_body(extra: &Value) -> Value {
     let mut body = json!({"identifier": "x@example.com", "continueUri": "http://localhost"});
     for (k, v) in extra.as_object().unwrap() {
         body[k] = v.clone();
@@ -349,7 +349,7 @@ fn a_request_the_selection_serves_from_the_default_project_still_makes_its_tenan
         };
         // Q1: a token whose project this daemon has no store for.
         let ghost = alg_none(&claims_of("demo-ghost", "g1", Some("tG")));
-        let r = send(auth_uri_body(json!({"tenantId": "tG", "idToken": ghost})));
+        let r = send(auth_uri_body(&json!({"tenantId": "tG", "idToken": ghost})));
         assert_eq!(r.status, 200, "{as_owner}: {}", r.body);
         assert!(
             registry.tenant_store("demo-app", "tG").is_some(),
@@ -358,7 +358,7 @@ fn a_request_the_selection_serves_from_the_default_project_still_makes_its_tenan
         // Q2: the camelCase refresh token, which the store selection does not read.
         let refresh = refresh_token_of_the_other_tenant(&registry);
         let r = send(auth_uri_body(
-            json!({"tenantId": "tB", "refreshToken": refresh}),
+            &json!({"tenantId": "tB", "refreshToken": refresh}),
         ));
         assert_eq!(r.status, 200, "{as_owner}: {}", r.body);
         assert!(
@@ -388,7 +388,7 @@ fn a_request_the_selection_serves_from_the_default_project_still_makes_its_tenan
         };
         let own = alg_none(&claims_of("demo-app", "z1", Some("tZ")));
         let _ = send(auth_uri_body(
-            json!({"idToken": own, "refresh_token": project_refresh}),
+            &json!({"idToken": own, "refresh_token": project_refresh}),
         ));
         assert!(
             registry.tenant_store("demo-app", "tZ").is_some(),

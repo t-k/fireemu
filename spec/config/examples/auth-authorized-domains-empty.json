@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "auth": {
+    "authorizedDomains": []
+  },
+  "profile": "strict",
+  "firestore": {
+    "edition": "standard",
+    "apiMode": "native"
+  },
+  "limits": {
+    "catalog": "firestore-standard-2026-08-25",
+    "queryCatalog": "firestore-standard-query-2026-08-25",
+    "rulesCatalog": "firebase-rules-2026-08-25"
+  }
+}

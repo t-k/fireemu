@@ -208,6 +208,7 @@ The `auth` section of `fireemu.json` lets you configure sign-in methods, passwor
 |---|---|
 | Enable or disable email/password, anonymous, and phone sign-in | `auth.signIn` |
 | Test phone numbers and verification codes | `auth.signIn.phoneNumber.testPhoneNumbers` |
+| Initial authorized domains for action-link continue URLs | `auth.authorizedDomains` |
 | Handling of accounts that share an email address | `auth.signIn.allowDuplicateEmails` |
 | Password length and character requirements, and policy enforcement at sign-in | `auth.passwordPolicy` |
 | TOTP-based multi-factor authentication | `auth.totp` |
@@ -220,6 +221,10 @@ The `auth` section of `fireemu.json` lets you configure sign-in methods, passwor
 | Sign-up quota configuration and local quota-exceeded simulation | `auth.quota`, `auth.quotaSimulation` |
 
 See the [configuration schema](spec/config/fireemu.schema.json) for the format and accepted values of each setting.  
+
+Declare `auth.authorizedDomains`, for example `["localhost", "app.test"]`, to set the initial project-wide list in either profile. The list replaces the defaults, so include `localhost` if your tests use it. An empty list authorizes no host under `strict`; an absent or `null` setting keeps the existing defaults (`localhost` and the project's `firebaseapp.com` and `web.app` domains). Validation uses the Admin API's rules for the selected profile, including its conversion of numeric and boolean entries to strings and omission of `null` entries; use strings when writing the list. Fireemu intentionally keeps `localhost` in its defaults for development. The [recorded production sandbox baseline](conformance/auth-action-production.json) does not include it; new production projects may also omit it. This default is a Fireemu-only convenience, and declaring the list replaces it. Tenant-scoped strict action links currently check the tenant's default domains rather than this project declaration; support for the parent project's live list is pending.
+
+An Admin update changes the live list. A session reset restores the declared list, when present, and preserves an Admin-written list when no initial list was declared. Projects created later receive the declaration word for word, independently of the default project's live list; listing a particular project's `firebaseapp.com` or `web.app` domain therefore gives later projects that same domain. Clearing accounts leaves the live list alone. Auth export/import carries accounts without the domain list or its declaration. The `emulator` profile accepts the setting and exposes the list, while continuing to allow action-link continue URLs outside it.
 
 #### Example configuration
 

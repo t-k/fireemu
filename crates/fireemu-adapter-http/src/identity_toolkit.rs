@@ -69,6 +69,8 @@ mod idp_signers;
 mod strict_saml;
 pub use custom_token::{CustomTokenRefusal, CustomTokenTrust};
 pub use idp_signers::IdpSignerTrust;
+mod authorized_domains;
+pub use authorized_domains::authorized_domains_from_json;
 mod config_proto;
 mod password_hash;
 mod phone_region;

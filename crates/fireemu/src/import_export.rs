@@ -5291,6 +5291,48 @@ mod tests {
     /// A foreign hash imported through `accounts:batchCreate` survives an export and restore
     /// instead of being dropped (external review 2026-09-24).
     #[test]
+    fn auth_authorized_domains_account_export_import_transfers_neither_live_list_nor_seed() {
+        use fireemu_core_auth::store::AuthStore;
+        use fireemu_core_export::auth::UserRecord;
+        let path = std::path::Path::new("offline.json");
+        let mut source = AuthStore::new(
+            "demo-app",
+            fireemu_core_types::determinism::SplitMix64::new(1),
+            fireemu_core_auth::mfa::TotpPolicy::default(),
+        );
+        source
+            .set_authorized_domains_seed(vec!["source.test".to_owned()])
+            .unwrap();
+        let record = UserRecord {
+            local_id: "u".to_owned(),
+            email: Some("seed@example.com".to_owned()),
+            created_at: Some("100000".to_owned()),
+            ..UserRecord::default()
+        };
+        source
+            .import_user(super::imported_user(&record, path).unwrap())
+            .unwrap();
+        let exported = super::exported_account(&source, source.user_by_id("u").unwrap(), None);
+        for declared in [Some(vec!["target.test".to_owned()]), None] {
+            let mut target = AuthStore::new(
+                "demo-app",
+                fireemu_core_types::determinism::SplitMix64::new(2),
+                fireemu_core_auth::mfa::TotpPolicy::default(),
+            );
+            if let Some(seed) = &declared {
+                target.set_authorized_domains_seed(seed.clone()).unwrap();
+            }
+            let before = target.authorized_domains();
+            target
+                .import_user_trusted(super::imported_user(&exported, path).unwrap())
+                .unwrap();
+            assert!(target.user_by_id("u").is_some());
+            assert_eq!(target.authorized_domains(), before);
+            assert_eq!(target.authorized_domains_seed(), declared.as_ref());
+        }
+    }
+
+    #[test]
     fn an_imported_foreign_hash_round_trips_through_export() {
         use fireemu_core_auth::{
             mfa::TotpPolicy,

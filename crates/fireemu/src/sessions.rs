@@ -131,6 +131,11 @@ impl ProjectHooks for Projects {
                 store.set_signer(signer);
             }
         }
+        if let Some(seed) = self.registry.new_project_authorized_domains_seed() {
+            store
+                .set_authorized_domains_seed(seed)
+                .map_err(|error| format!("cannot seed authorized domains: {error:?}"))?;
+        }
         if !self.registry.register_session(project, store) {
             return Err(format!("project {project:?} already has an Auth store"));
         }
@@ -473,6 +478,67 @@ pub(crate) mod tests {
             .unwrap();
         drop(pubsub);
         (topic, snapshot)
+    }
+
+    #[test]
+    fn auth_authorized_domains_session_reset_and_creation_use_only_declared_seed() {
+        let gate = gate();
+        let hooks = projects(&gate);
+        let default = hooks.registry.default_store();
+        let patch = |store: &mut AuthStore| {
+            let mut config = store.sign_in_config().clone();
+            config.authorized_domains = Some(vec!["live.test".to_owned()]);
+            config.email_enabled = false;
+            store.set_sign_in_config(config).unwrap();
+        };
+        patch(&mut default.lock().unwrap());
+        hooks
+            .reset_scope(&Scope::AllExcept(BTreeSet::new()))
+            .unwrap();
+        assert_eq!(
+            default.lock().unwrap().authorized_domains(),
+            vec!["live.test"]
+        );
+        hooks.create(SECOND_PROJECT).unwrap();
+        assert_eq!(
+            hooks
+                .registry
+                .store_for(SECOND_PROJECT)
+                .unwrap()
+                .lock()
+                .unwrap()
+                .authorized_domains(),
+            vec![
+                "localhost",
+                "demo-second.firebaseapp.com",
+                "demo-second.web.app"
+            ]
+        );
+        hooks.remove(SECOND_PROJECT).unwrap();
+        let seed = vec!["seed.test".to_owned()];
+        default
+            .lock()
+            .unwrap()
+            .set_authorized_domains_seed(seed.clone())
+            .unwrap();
+        hooks
+            .registry
+            .set_new_project_authorized_domains_seed(Some(seed.clone()));
+        patch(&mut default.lock().unwrap());
+        hooks
+            .reset_scope(&Scope::AllExcept(BTreeSet::new()))
+            .unwrap();
+        assert_eq!(default.lock().unwrap().authorized_domains(), seed);
+        assert!(!default.lock().unwrap().sign_in_config().email_enabled);
+        hooks.create(SECOND_PROJECT).unwrap();
+        let created = hooks.registry.store_for(SECOND_PROJECT).unwrap();
+        assert_eq!(created.lock().unwrap().authorized_domains(), seed);
+        patch(&mut created.lock().unwrap());
+        hooks
+            .reset_scope(&Scope::Project(SECOND_PROJECT.to_owned()))
+            .unwrap();
+        assert_eq!(created.lock().unwrap().authorized_domains(), seed);
+        assert!(!created.lock().unwrap().sign_in_config().email_enabled);
     }
 
     #[test]

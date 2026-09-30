@@ -26,7 +26,7 @@ test("the production Firebase config contains only the event fixture codebase", 
 });
 
 test("each canary CLI command pins its project, config, quota project, and one function", () => {
-  for (const name of ["fsCreatedV1", "fsCreatedV2"]) {
+  for (const name of ["fsCreatedV1", "fsCreatedV2", "storageFinalizedV1", "storageFinalizedV2"]) {
     const deploy = buildCanaryCli("deploy", "demo-events-prod", name, cliOptions);
     assert.deepEqual(deploy.args, [
       "deploy",
@@ -78,7 +78,7 @@ test("each canary CLI command pins its project, config, quota project, and one f
 });
 
 test("the delivery probe selects the stdout capture and nothing else can", () => {
-  for (const name of ["fsCreatedV1", "fsCreatedV2"]) {
+  for (const name of ["fsCreatedV1", "fsCreatedV2", "storageFinalizedV1", "storageFinalizedV2"]) {
     const probe = buildCanaryCli("deploy", "demo-events-prod", name, {
       ...cliOptions,
       captureMode: "stdout",
@@ -100,7 +100,7 @@ test("the delivery probe selects the stdout capture and nothing else can", () =>
 });
 
 test("canary CLI rejects an unreviewed function or malformed project", () => {
-  for (const name of ["authCreatedV1", "fsCreatedV2,storageFinalizedV2", ""]) {
+  for (const name of ["authCreatedV1", "storageDeletedV1", "storageFinalizedV2,fsCreatedV2", "fsCreatedV2,storageFinalizedV2", ""]) {
     assert.throws(() => buildCanaryCli("deploy", "demo-events-prod", name, cliOptions));
   }
   assert.throws(() => buildCanaryCli("deploy", "futaba-prod;other", "fsCreatedV1", cliOptions));

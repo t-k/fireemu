@@ -1,6 +1,6 @@
 import { isAbsolute } from "node:path";
 
-const canaries = new Set(["fsCreatedV1", "fsCreatedV2"]);
+const canaries = new Set(["fsCreatedV1", "fsCreatedV2", "storageFinalizedV1", "storageFinalizedV2"]);
 const captureModes = new Set(["reject-canary", "stdout"]);
 
 export function buildCanaryCli(action, projectId, name, options) {

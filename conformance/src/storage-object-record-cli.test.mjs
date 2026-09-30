@@ -8,6 +8,7 @@ import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { PROBE_V3_KIT } from "./storage-object/probe-run.mjs";
 import {
   mainRepositoryRoot,
   pinnedPaths,
@@ -498,4 +499,46 @@ test("a probe packet file holds exactly the name and the pins", async () => {
   assert.equal(await probeCommand([], f.env, f.deps), 2);
   assert.match(f.err.join(""), /packet file must hold exactly/);
   assert.equal(f.probeReceived(), undefined);
+});
+
+test("probe-v3 runs through the same command with its own limits, name and kit", async () => {
+  let kitSeen;
+  const f = probeFixture({
+    packet: { ...packetFile, packetName: "probe-v3" },
+    probeRun: async (options, kit) => {
+      kitSeen = kit;
+      return { outcome: "recorded", requests: 44, answers: [{ id: "final-list", status: 200 }] };
+    },
+  });
+  assert.equal(await probeCommand([], f.env, f.deps, PROBE_V3_KIT), 0);
+  assert.equal(kitSeen, PROBE_V3_KIT);
+  assert.deepEqual(JSON.parse(f.out.join("")), {
+    outcome: "recorded",
+    requests: 44,
+    runId: "0123456789abcdef0123",
+    answers: [{ id: "final-list", status: 200 }],
+  });
+  // The packet the run reads carries the kit's limits.
+  const g = probeFixture({ packet: { ...packetFile, packetName: "probe-v3" } });
+  await probeCommand([], g.env, g.deps, PROBE_V3_KIT);
+  assert.equal(g.probeReceived().packet.maxRequests, 60);
+  assert.equal(g.probeReceived().packet.reserveUsd, 0.05);
+  const h = probeFixture();
+  assert.equal(await probeCommand(["1"], h.env, h.deps, PROBE_V3_KIT), 2);
+  assert.match(h.err.join(""), /probe3-production takes no argument/);
+});
+
+test("a probe that stopped clean exits 3, and one that needs recovery exits 4", async () => {
+  const stopped = probeFixture({
+    probeRun: async () => ({ outcome: "stopped-clean", requests: 20 }),
+  });
+  assert.equal(await probeCommand([], stopped.env, stopped.deps, PROBE_V3_KIT), 3);
+  const recovery = probeFixture({
+    probeRun: async () => {
+      const error = new Error("the probe prefix was not read back as empty");
+      error.afterStart = true;
+      throw error;
+    },
+  });
+  assert.equal(await probeCommand([], recovery.env, recovery.deps, PROBE_V3_KIT), 4);
 });

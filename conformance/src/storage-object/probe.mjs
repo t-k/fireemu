@@ -171,7 +171,7 @@ export function sessionContinuation(row, url) {
 }
 
 /** Whether a GCS list answer says the prefix holds nothing: a 200 with no items and no next page. */
-function emptyList(status, text) {
+export function emptyList(status, text) {
   if (status !== 200) return false;
   let body;
   try {

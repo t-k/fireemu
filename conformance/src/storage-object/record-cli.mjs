@@ -20,8 +20,7 @@ import {
   createPrivateRunFactory,
   readGitState,
 } from "./record-io.mjs";
-import { probeRun } from "./probe-run.mjs";
-import { PROBE_MAX_REQUESTS, PROBE_RESERVE_USD } from "./probe.mjs";
+import { PROBE_V2_KIT, probeRun } from "./probe-run.mjs";
 import {
   createTokenProvider,
   PACKET_MAX_REQUESTS,
@@ -251,42 +250,48 @@ export async function recordCommand(argv, env, deps = realDeps()) {
   }
 }
 
-/** `run.mjs probe-production`: the probe, once per packet. It holds no Web API key. */
-export async function probeCommand(argv, env, deps = realDeps()) {
+/**
+ * `run.mjs probe-production` (probe-v2) and `run.mjs probe3-production` (probe-v3, the `kit`): the
+ * probe, once per packet. It holds no Web API key.
+ */
+export async function probeCommand(argv, env, deps = realDeps(), kit = PROBE_V2_KIT) {
   const fail = (message) => {
     deps.stderr(`${message}\n`);
     return 2;
   };
-  if (argv.length !== 0) return fail("probe-production takes no argument");
+  if (argv.length !== 0) return fail(`${kit.command} takes no argument`);
   const missing = probeRequiredEnvironment.filter((name) => !env[name]);
   if (missing.length > 0) return fail(`missing environment: ${missing.join(", ")}`);
   try {
     const packet = await readPacket(env.FIREEMU_STORAGE_OBJECT_PACKET, {
-      maxRequests: PROBE_MAX_REQUESTS,
-      reserveUsd: PROBE_RESERVE_USD,
+      maxRequests: kit.maxRequests,
+      reserveUsd: kit.reserveUsd,
     });
     const review = await readJson(env.FIREEMU_STORAGE_OBJECT_REVIEW, "review file");
     const paths = pinnedPaths(deps.mainCheckout());
     const ownerDecisionsText = await readOwnerLedger(paths.ownerLedger);
     const pins = await deps.pins();
     const ids = deps.randomRunIds();
-    const result = await deps.probeRun({
-      ids,
-      packet,
-      review,
-      ownerDecisionsText,
-      actualPins: Object.fromEntries(PIN_KEYS.map((key) => [key, pins[key]])),
-      env,
-      nodeVersion: deps.nodeVersion,
-      ledger: createLedgerFile(paths.ledger),
-      git: () => deps.git(),
-      admission: admissionProblems,
-      locks: { lockDir: paths.lockDir, legacyLockPath: paths.legacyLock, pid: process.pid },
-      privateRun: createPrivateRunFactory({ root: env.FIREEMU_STORAGE_OBJECT_PRIVATE_DIR }),
-      getToken: createTokenProvider({ run: deps.gcloud, now: () => deps.now().getTime() }),
-      fetch: deps.fetch,
-      now: deps.now,
-    });
+    const result = await deps.probeRun(
+      {
+        ids,
+        packet,
+        review,
+        ownerDecisionsText,
+        actualPins: Object.fromEntries(PIN_KEYS.map((key) => [key, pins[key]])),
+        env,
+        nodeVersion: deps.nodeVersion,
+        ledger: createLedgerFile(paths.ledger),
+        git: () => deps.git(),
+        admission: admissionProblems,
+        locks: { lockDir: paths.lockDir, legacyLockPath: paths.legacyLock, pid: process.pid },
+        privateRun: createPrivateRunFactory({ root: env.FIREEMU_STORAGE_OBJECT_PRIVATE_DIR }),
+        getToken: createTokenProvider({ run: deps.gcloud, now: () => deps.now().getTime() }),
+        fetch: deps.fetch,
+        now: deps.now,
+      },
+      kit,
+    );
     deps.stdout(
       `${JSON.stringify({
         outcome: result.outcome,

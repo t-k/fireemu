@@ -1,8 +1,10 @@
-// One run of the probe (see probe.mjs): the same admission as a recording (environment,
-// approved packet, pins, clean tree at the approved commit, the shared ledger, the project lock)
-// around up to seventeen requests through the lean wire. It writes a `started` row, sends the plan, and writes
-// one closing row. A run that cannot finish its requests writes `needs-recovery` and keeps
-// the project lock, as a recording does; nothing here retries, and a packet runs once.
+// One run of a probe (probe-v2 in probe.mjs, probe-v3 in probe3.mjs, each a "kit"): the same
+// admission as a recording (environment, approved packet, pins, clean tree at the approved commit,
+// the shared ledger, the project lock) around the kit's requests through the lean wire. It writes a
+// `started` row, sends the plan, and writes one closing row: `recorded`, or `stopped-clean` when
+// the kit's recording was cut short and its prefix is still read back empty. A run that cannot
+// finish, or whose prefix is not read back empty, writes `needs-recovery` and keeps the project
+// lock, as a recording does; nothing here retries, and a packet runs once.
 //
 // Every collaborator is passed in, so the order is tested without a network.
 
@@ -22,6 +24,15 @@ import {
   PROBE_RESERVE_USD,
   sendProbe,
 } from "./probe.mjs";
+import {
+  buildProbe3Plan,
+  PROBE3_ESTIMATE_USD,
+  PROBE3_MAX_REQUESTS,
+  PROBE3_RESERVE_USD,
+  probe3ClosingRow,
+  sendProbe3,
+} from "./probe3.mjs";
+import { createObjectMutationPacer } from "./production-pacing.mjs";
 import { withProjectLocks } from "./project-locks.mjs";
 import {
   RECORD_BUCKET,
@@ -39,6 +50,33 @@ const ORIGINS = Object.freeze({
 // The probe sends no user route, so it holds no Web API key. The wire wants a well-formed one; this
 // is not a credential and matches no project's key.
 const INERT_API_KEY = "probe-holds-no-web-api-key";
+
+/** probe-v2: nine reads and two cancelled sessions, no object; closes on its final GCS list. */
+export const PROBE_V2_KIT = Object.freeze({
+  name: "probe-v2",
+  command: "probe-production",
+  maxRequests: PROBE_MAX_REQUESTS,
+  reserveUsd: PROBE_RESERVE_USD,
+  estimateUsd: PROBE_ESTIMATE_USD,
+  buildPlan: buildProbePlan,
+  run: async (input) => ({ answers: await sendProbe(input), interrupted: null }),
+  closingRow: (answers) => answers.find((row) => row.id === "gcs-list-owner"),
+  pacer: () => ({ dispatch: (_name, attempt) => attempt() }),
+});
+
+/** probe-v3: seven small objects, recorded and removed; closes on its last list of the prefix. */
+export const PROBE_V3_KIT = Object.freeze({
+  name: "probe-v3",
+  command: "probe3-production",
+  maxRequests: PROBE3_MAX_REQUESTS,
+  reserveUsd: PROBE3_RESERVE_USD,
+  estimateUsd: PROBE3_ESTIMATE_USD,
+  buildPlan: buildProbe3Plan,
+  run: sendProbe3,
+  closingRow: probe3ClosingRow,
+  // Writes to one object are spaced, as the recorder's are.
+  pacer: (plan) => createObjectMutationPacer({ ownedPrefixes: [plan.prefix] }),
+});
 
 const iso = (date) => date.toISOString();
 
@@ -60,7 +98,7 @@ function packetHasClosingRow(ledgerText, packetSha256) {
 }
 
 /** Run the probe once. Resolves with `{ outcome, requests, answers }`. */
-export async function probeRun(deps) {
+export async function probeRun(deps, kit = PROBE_V2_KIT) {
   const {
     ids,
     packet,
@@ -90,8 +128,8 @@ export async function probeRun(deps) {
     review,
     runner: {
       projectId: RECORD_PROJECT,
-      maxRequests: PROBE_MAX_REQUESTS,
-      reserveUsd: PROBE_RESERVE_USD,
+      maxRequests: kit.maxRequests,
+      reserveUsd: kit.reserveUsd,
     },
   });
   for (const key of ["runnerSha256", "planSha256", "corpusSha256", "rulesSourceSha256"]) {
@@ -118,7 +156,7 @@ export async function probeRun(deps) {
   }
   await admit();
 
-  const plan = buildProbePlan({
+  const plan = kit.buildPlan({
     projectId: RECORD_PROJECT,
     bucket: RECORD_BUCKET,
     runId: ids.runId,
@@ -161,8 +199,8 @@ export async function probeRun(deps) {
         await ledger.append(
           startedRow({
             ...identity(now()),
-            maxRequests: PROBE_MAX_REQUESTS,
-            estimatedUsd: PROBE_ESTIMATE_USD,
+            maxRequests: kit.maxRequests,
+            estimatedUsd: kit.estimateUsd,
           }),
         );
         const wire = createLeanWire({
@@ -177,18 +215,21 @@ export async function probeRun(deps) {
           },
           fetchImpl,
           capture: (record) => priv.capture(safe(record)),
-          pacer: { dispatch: (_name, attempt) => attempt() },
+          pacer: kit.pacer(plan),
         });
         let answers;
+        let interrupted;
         try {
-          answers = await lease.dispatch(() => sendProbe({ wire, plan, origins: ORIGINS }));
+          ({ answers, interrupted } = await lease.dispatch(() =>
+            kit.run({ wire, plan, origins: ORIGINS }),
+          ));
           // The closing row says the sandbox is at its baseline, so it is written only after the
-          // run's own prefix was read back empty (the sessions can leave no object, by protocol;
-          // this is the check that would show it if production disagreed).
-          const readback = answers.find((row) => row.id === "gcs-list-owner");
+          // run's own prefix was read back empty (a probe that makes nothing checks that it made
+          // nothing; one that makes objects checks that it removed them).
+          const readback = kit.closingRow(answers);
           if (readback?.prefixEmpty !== true)
             throw Object.assign(new Error("the probe prefix was not read back as empty"), {
-              probeStep: "gcs-list-owner",
+              probeStep: readback?.id ?? null,
               answered: answers,
             });
         } catch (error) {
@@ -217,18 +258,21 @@ export async function probeRun(deps) {
               needsRecoveryRow({
                 ...identity(now()),
                 requests: sent,
-                estimatedUsd: PROBE_ESTIMATE_USD,
+                estimatedUsd: kit.estimateUsd,
               }),
             )
             .catch(() => {});
           throw error;
         }
         const requests = wire.snapshot().realRequests;
+        // A recording that was cut short, with its prefix read back empty, is not a recording.
+        const outcome = interrupted ? "stopped-clean" : "recorded";
         await priv.meta(
           safe({
             runId: ids.runId,
-            outcome: "recorded",
-            status: "PROBE_COMPLETE",
+            outcome,
+            status: interrupted ? "PROBE_INTERRUPTED" : "PROBE_COMPLETE",
+            ...(interrupted ? { interrupted } : {}),
             answers,
             requests,
             plan: { runId: ids.runId, prefix: plan.prefix },
@@ -237,13 +281,13 @@ export async function probeRun(deps) {
         await ledger.append(
           finishedRow({
             ...identity(now()),
-            outcome: "recorded",
+            outcome,
             requests,
-            estimatedUsd: PROBE_ESTIMATE_USD,
+            estimatedUsd: kit.estimateUsd,
           }),
         );
         lease.confirmClosed();
-        return { outcome: "recorded", requests, answers };
+        return { outcome, requests, answers };
       } catch (error) {
         if (error && typeof error === "object") error.afterStart = true;
         throw error;

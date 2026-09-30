@@ -3333,8 +3333,8 @@ fn handler_makes_named_tenant(handler: routes::Handler) -> bool {
 /// tenant (`server.js:395-398`: JavaScript falsiness), so the key is dropped and the request goes
 /// on as if it named none. `None` when the body needs no rewriting. `null`, a boolean, an object
 /// and an array, which the official schema refuses (`/tenantId must be string`), are read as no
-/// tenant here (`null` is dropped, the others left for every reader to ignore): a recorded
-/// divergence that accepts more and makes nothing. The two GET routes that read a tenant from the
+/// tenant here (every reader treats `null` as an absent member and ignores the others): a
+/// recorded divergence that accepts more and makes nothing. The two GET routes that read a tenant from the
 /// query, `accounts:batchGet` and the action link, read no body in the official emulator, so
 /// their body is ignored.
 fn emulator_tenant_id_reading(
@@ -3362,11 +3362,6 @@ fn emulator_tenant_id_reading(
         Value::Number(number) => {
             let mut rewritten = body.clone();
             rewritten["tenantId"] = Value::String(number.to_string());
-            Some(rewritten)
-        }
-        Value::Null => {
-            let mut rewritten = body.clone();
-            rewritten.as_object_mut()?.remove("tenantId");
             Some(rewritten)
         }
         Value::String(named) if named.is_empty() => {

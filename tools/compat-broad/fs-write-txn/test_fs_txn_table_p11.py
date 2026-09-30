@@ -40,7 +40,7 @@ def test_the_requests_and_waits_stay_inside_their_clock():
     assert sum(value["waits"].values()) == 2 * (9 * 24 + 12 + 50) == 556
     assert value["observationSeconds"] == 840 and value["recoverySeconds"] == 180
     assert value["thresholds"] == {"totalAgeSeconds": 270}
-    assert TABLE["envelopeId"] == "FS-TRANSACTION-p11-lifetime-001"
+    assert TABLE["envelopeId"] == "FS-TRANSACTION-p11-lifetime-002"
 
 
 def test_every_wait_is_inside_the_idle_limit_and_the_chain_grows_old_by_keepalive():

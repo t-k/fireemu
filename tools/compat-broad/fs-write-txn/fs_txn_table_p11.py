@@ -67,7 +67,7 @@ STEPS = tuple(_SETUP + _chain("rest") + _chain("grpc"))
 TABLE = {
     "name": "p11-lifetime",
     "program": "FS-TRANSACTION-P11-LIFETIME",
-    "envelopeId": "FS-TRANSACTION-p11-lifetime-001",
+    "envelopeId": "FS-TRANSACTION-p11-lifetime-002",
     "slug": "txn-p11",
     "documents": ("a", "m"),
     "states": STATES,

@@ -813,3 +813,34 @@ def test_private_worker_uses_isolated_stdlib_interpreter(oauth_server, monkeypat
     assert set(calls[0][1]) == {"PATH", "LANG"}
     assert result["complete"] is True and result["workerReaped"] is True
     assert oauth_server["requests"] == [("POST", "/token")]
+
+
+def test_trickle_worker_reaches_post_after_separate_interpreter_setup(oauth_server, monkeypatch):
+    import subprocess
+
+    processes = []
+    launch = subprocess.Popen
+
+    def delayed_launch(*args, **kwargs):
+        process = launch(*args, **kwargs)
+        processes.append(process)
+        time.sleep(1)
+        return process
+
+    monkeypatch.setattr(subprocess, "Popen", delayed_launch)
+    oauth_server["scenario"] = "trickle"
+    try:
+        result = prep()._private_request(
+            "tokeninfo", "synthetic-access-secret",
+            fixture_origin=oauth_server["origin"], deadline=.5,
+        )
+        assert oauth_server["requests"] == [("POST", "/oauth2/v1/tokeninfo")]
+        assert result["complete"] is False and result["workerReaped"] is True
+    finally:
+        for process in processes:
+            if process.poll() is None:
+                process.kill()
+            process.wait(timeout=2)
+            for stream in (process.stdin, process.stdout):
+                if stream is not None and not stream.closed:
+                    stream.close()

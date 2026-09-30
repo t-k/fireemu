@@ -178,3 +178,10 @@ def test_forged_plan_binding_is_rejected(tmp_path, field):
             artifact_path=artifact,
             launcher_path=launcher,
         )
+
+
+def test_artifact_approval_can_bind_a_fixture_epoch(tmp_path):
+    epoch = 1000.0
+    descriptor, *_, approval = _artifacts(tmp_path, now=epoch)
+    assert approval["windowStartsAt"] == epoch - 1
+    assert approval["windowExpiresAt"] == epoch + descriptor.window_seconds + 10

@@ -258,3 +258,27 @@ def test_config_is_not_overwritten_or_reused(tmp_path, owned):
     with pytest.raises(FileExistsError):
         runtime.start_daemon(binary, work)
     assert not owned and config.read_text() == "keep"
+
+
+def test_real_exit_three_is_observed_before_shutdown(tmp_path, owned, monkeypatch):
+    # Slow fixture setup must not masquerade as an exit(3) observation.
+    binary = executable(tmp_path, "time.sleep(.6); sys.exit(3)")
+    work = private_work(tmp_path)
+    operations = []
+    stop = runtime.stop_daemon
+
+    def capture_stop(process):
+        operations.append(("shutdown", process.poll()))
+        return stop(process)
+
+    monkeypatch.setattr(runtime, "stop_daemon", capture_stop)
+    with pytest.raises(runtime.StartupError) as caught:
+        runtime.start_daemon(binary, work)
+    receipt = caught.value.shutdown
+    assert operations == [("shutdown", 3)]
+    assert receipt["exitCode"] == 3 and receipt["processStopped"] is True
+    assert receipt["remainingChildren"] == 0
+    assert receipt["outputDrainerStopped"] is True
+    assert receipt["failures"] == []
+    assert owned[0].poll() == 3
+    assert not owned[0]._credential_output_monitor.thread.is_alive()

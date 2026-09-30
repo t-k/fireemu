@@ -808,9 +808,37 @@ fn fb_json_error(status: u16, message: &str) -> StorageResponse {
     )
 }
 
+/// A Google-fronted error as production serves it (recorded, stage 3 v9): two-space pretty JSON
+/// and `application/json; charset=UTF-8`. The strict profile answers rules refusals with these
+/// exact bytes; the emulator profile keeps the official emulator's own framing and wording.
+fn production_error(status: u16, message: &str) -> StorageResponse {
+    let body = json!({"error": {"code": status, "message": message}});
+    StorageResponse {
+        status,
+        headers: vec![(
+            "content-type".into(),
+            "application/json; charset=UTF-8".into(),
+        )],
+        body: bytes::Bytes::from(serde_json::to_vec_pretty(&body).unwrap_or_default()),
+    }
+}
+
+/// The answer to a caller [`StorageState::principal`] refused: production's bytes for the 403 of a
+/// foreign-project token under strict, the ordinary error envelope otherwise.
+fn principal_refusal_response(dialect: Dialect, status: u16, message: &str) -> StorageResponse {
+    if status == 403 {
+        production_error(403, message)
+    } else {
+        error_response(dialect, status, message)
+    }
+}
+
 /// The Firebase dialect's rules denial, worded per operation as the official emulator words
 /// it. The detailed rules trace is a control-API diagnostic, not an API body.
-fn fb_denied(method: Method) -> StorageResponse {
+fn fb_denied(strict: bool, method: Method) -> StorageResponse {
+    if strict {
+        return production_error(403, "Permission denied.");
+    }
     let verb = match method {
         Method::Get => "READ",
         Method::List => "LIST",
@@ -1668,6 +1696,11 @@ impl StorageState {
         })
     }
 
+    /// Whether this is the strict profile, which answers as production does.
+    fn is_strict(&self) -> bool {
+        self.token_acceptance != TokenAcceptance::EmulatorMock
+    }
+
     fn now(&self) -> LogicalInstant {
         self.clock
             .lock()
@@ -1832,10 +1865,12 @@ impl StorageState {
             // Storage list requests exist only under rules_version = '2'; a v1 `read` never
             // grants them. Production answers 400 with this message (stage 3 v9,
             // `list-v1-read-list-present`), not the 403 of a denied rule.
-            return Err(fb_json_error(
-                400,
-                "Listing objects in a bucket is disallowed for rules_version = \"1\".\nPlease update storage security rules to rules_version = \"2\" to use list.",
-            ));
+            const MESSAGE: &str = "Listing objects in a bucket is disallowed for rules_version = \"1\".\nPlease update storage security rules to rules_version = \"2\" to use list.";
+            return Err(if self.is_strict() {
+                production_error(400, MESSAGE)
+            } else {
+                fb_json_error(400, MESSAGE)
+            });
         }
         let path = if object_path.is_empty() {
             format!("/b/{}/o", bucket.as_str())
@@ -1859,7 +1894,7 @@ impl StorageState {
         let access = self.firestore.as_deref().map(|a| a as &dyn DocumentAccess);
         match evaluate_request_with(ruleset, &ctx, access).decision {
             Decision::Allow => Ok(()),
-            Decision::Deny(_) => Err(fb_denied(method)),
+            Decision::Deny(_) => Err(fb_denied(self.is_strict(), method)),
         }
     }
 }
@@ -2460,7 +2495,9 @@ pub fn handle(state: &StorageState, req: StorageRequest) -> StorageResponse {
         Dialect::Gcs => Principal::Owner,
         Dialect::Firebase => match state.principal(authorization, &bucket_of_route) {
             Ok(p) => p,
-            Err((status, message)) => return error_response(dialect, status, &message),
+            Err((status, message)) => {
+                return principal_refusal_response(dialect, status, &message);
+            }
         },
     };
     let method = req.method.clone();
@@ -2797,7 +2834,7 @@ fn fb_patch(
     // under `allow write: if true` and `boundary-firebase-admin-patch-absent` with the owner's
     // token both answered 403; the official emulator answers 404 after the rules allowed it).
     if existing.is_none() {
-        return Ok(fb_denied(Method::Update));
+        return Ok(fb_denied(state.is_strict(), Method::Update));
     }
     // Rules run before existence is revealed, as the official emulator orders them.
     let request_resource = existing.as_ref().map_or(RulesValue::Null, |m| {
@@ -3145,7 +3182,7 @@ fn fb_resumable_command(
             FinalizeError::Store(StorageError::UploadNotFound) => plain_status(404),
             FinalizeError::Store(err) => fb_core_err(err),
             FinalizeError::Auth((status, message)) => {
-                error_response(Dialect::Firebase, status, &message)
+                principal_refusal_response(Dialect::Firebase, status, &message)
             }
         })?;
         let (b, n) = (m.bucket.clone(), m.name.clone());
@@ -3775,7 +3812,7 @@ fn gcs_resumable_put(
             FinalizeError::Denied(denial) => denial,
             FinalizeError::Store(err) => gcs_core_err(err),
             FinalizeError::Auth((status, message)) => {
-                error_response(Dialect::Gcs, status, &message)
+                principal_refusal_response(Dialect::Gcs, status, &message)
             }
         })?;
         return Ok(StorageResponse::json(200, &gcs_json(&m, host)));

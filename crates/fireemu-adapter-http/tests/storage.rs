@@ -1065,11 +1065,9 @@ service firebase.storage {
         ),
     );
     assert_eq!(r.status, 403);
-    // The denial body is the official emulator's fixed envelope.
-    assert_eq!(
-        json_body(&r)["error"]["message"],
-        "Permission denied. No WRITE permission."
-    );
+    // The strict profile's denial body is production's (the emulator profile keeps the
+    // official emulator's `Permission denied. No WRITE permission.`).
+    assert_eq!(json_body(&r)["error"]["message"], "Permission denied.");
     let r = handle(
         &s,
         req(
@@ -1686,6 +1684,102 @@ fn an_upload_without_custom_metadata_has_null_request_metadata_only_in_the_stric
             ),
         );
         assert_eq!(r.status, 200, "{}", String::from_utf8_lossy(&r.body));
+    }
+}
+
+/// Production's recorded refusal bytes (stage 3 v9, every `Permission denied.` subject row of
+/// recordings c and d: 192 rows, one body): two-space pretty JSON, `application/json; charset=UTF-8`.
+const PRODUCTION_DENIED_BODY: &str =
+    "{\n  \"error\": {\n    \"code\": 403,\n    \"message\": \"Permission denied.\"\n  }\n}";
+const PRODUCTION_LIST_V1_BODY: &str = "{\n  \"error\": {\n    \"code\": 400,\n    \"message\": \"Listing objects in a bucket is disallowed for rules_version = \\\"1\\\".\\nPlease update storage security rules to rules_version = \\\"2\\\" to use list.\"\n  }\n}";
+
+/// Strict answers a rules refusal with production's exact status, content type and body; the
+/// emulator profile keeps the official emulator's wording (`Permission denied. No WRITE
+/// permission.`), a published body divergence.
+#[test]
+fn strict_refusals_carry_production_bytes_and_the_emulator_profile_the_official_wording() {
+    const DENY: &str = "rules_version = '2'; service firebase.storage { match /b/{bucket}/o { match /{path=**} { allow read, write: if false; } } }";
+    const V1_LIST: &str =
+        "service firebase.storage { match /b/{bucket}/o { match /{allPaths=**} { allow read; } } }";
+    let denied = |acceptance, authorization: Option<&str>| {
+        let s = state_with(Some(DENY), acceptance);
+        let mut headers = vec![("content-type", "text/plain")];
+        if let Some(value) = authorization {
+            headers.push(("authorization", value));
+        }
+        handle(
+            &s,
+            req(
+                "POST",
+                &format!("/v0/b/{BUCKET}/o?name=o.txt&uploadType=media"),
+                &headers,
+                b"hello",
+            ),
+        )
+    };
+    let strict = denied(TokenAcceptance::Verified, None);
+    assert_eq!(strict.status, 403);
+    assert_eq!(
+        header(&strict, "content-type"),
+        Some("application/json; charset=UTF-8")
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&strict.body),
+        PRODUCTION_DENIED_BODY
+    );
+
+    let emulator = denied(TokenAcceptance::EmulatorMock, None);
+    assert_eq!(emulator.status, 403);
+    assert_eq!(
+        json_body(&emulator)["error"]["message"],
+        "Permission denied. No WRITE permission."
+    );
+
+    // A token of another project under strict carries the same bytes.
+    let foreign = format!("Firebase {}", mock_user_token("alice", "demo-other"));
+    let foreign = denied(TokenAcceptance::Verified, Some(&foreign));
+    assert_eq!(foreign.status, 403);
+    assert_eq!(
+        header(&foreign, "content-type"),
+        Some("application/json; charset=UTF-8")
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&foreign.body),
+        PRODUCTION_DENIED_BODY
+    );
+
+    // So does a metadata PATCH of an absent object, and a list under rules_version 1.
+    let strict_state = state_with(Some(ALLOW_ALL_RULES), TokenAcceptance::Verified);
+    let patch = handle(
+        &strict_state,
+        req(
+            "PATCH",
+            &format!("/v0/b/{BUCKET}/o/absent.txt"),
+            &[("content-type", "application/json")],
+            b"{}",
+        ),
+    );
+    assert_eq!(patch.status, 403);
+    assert_eq!(String::from_utf8_lossy(&patch.body), PRODUCTION_DENIED_BODY);
+    for (acceptance, exact) in [
+        (TokenAcceptance::Verified, true),
+        (TokenAcceptance::EmulatorMock, false),
+    ] {
+        let s = state_with(Some(V1_LIST), acceptance);
+        let list = handle(&s, req("GET", &format!("/v0/b/{BUCKET}/o"), &[], b""));
+        assert_eq!(list.status, 400);
+        if exact {
+            assert_eq!(
+                header(&list, "content-type"),
+                Some("application/json; charset=UTF-8")
+            );
+            assert_eq!(String::from_utf8_lossy(&list.body), PRODUCTION_LIST_V1_BODY);
+        } else {
+            assert_eq!(
+                json_body(&list),
+                serde_json::from_str::<Value>(PRODUCTION_LIST_V1_BODY).unwrap()
+            );
+        }
     }
 }
 

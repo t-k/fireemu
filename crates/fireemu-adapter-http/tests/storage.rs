@@ -2102,6 +2102,57 @@ fn an_absent_firebase_object_answers_the_recorded_json_not_found() {
     }
 }
 
+/// A PATCH body that is not JSON is refused with production's recorded bytes (stage 3 v9, the body
+/// `{` on an absent and a present object): `Parser Error` on the Firebase dialect, the parser's
+/// `Parse Error: ...` with the repeated `errors` entry on the JSON API, in both profiles.
+#[test]
+fn a_malformed_patch_body_answers_the_recorded_parser_errors() {
+    const FIREBASE: &str =
+        "{\n  \"error\": {\n    \"code\": 400,\n    \"message\": \"Parser Error\"\n  }\n}";
+    const GCS: &str = "{\n  \"error\": {\n    \"code\": 400,\n    \"message\": \"Parse Error: Unexpected end of string. Expected an object key or }.\\n\\n^\",\n    \"errors\": [\n      {\n        \"message\": \"Parse Error: Unexpected end of string. Expected an object key or }.\\n\\n^\",\n        \"domain\": \"global\",\n        \"reason\": \"invalid\"\n      }\n    ]\n  }\n}";
+    for acceptance in BOTH_PROFILES {
+        let s = state_with(Some(ALLOW_ALL_RULES), acceptance);
+        assert_eq!(anonymous_media_upload(&s, "p.txt"), 200);
+        for (path, authorization, expected) in [
+            (format!("/v0/b/{BUCKET}/o/p.txt"), "Bearer owner", FIREBASE),
+            (
+                format!("/v0/b/{BUCKET}/o/absent.txt"),
+                "Bearer owner",
+                FIREBASE,
+            ),
+            (
+                format!("/storage/v1/b/{BUCKET}/o/p.txt"),
+                "Bearer owner",
+                GCS,
+            ),
+            (
+                format!("/storage/v1/b/{BUCKET}/o/absent.txt"),
+                "Bearer owner",
+                GCS,
+            ),
+        ] {
+            let r = handle(
+                &s,
+                req(
+                    "PATCH",
+                    &path,
+                    &[
+                        ("authorization", authorization),
+                        ("content-type", "application/json"),
+                    ],
+                    b"{",
+                ),
+            );
+            assert_eq!(r.status, 400, "{acceptance:?} {path}");
+            assert_eq!(String::from_utf8_lossy(&r.body), expected, "{path}");
+            assert_eq!(
+                header(&r, "content-type"),
+                Some("application/json; charset=UTF-8")
+            );
+        }
+    }
+}
+
 /// `PATCH /storage/v1/b/{bucket}/o/{object}` updates object metadata, as the Cloud Storage
 /// JSON API does in production (recorded: stage 3 v9, `setup/seed-metadata` and
 /// `boundary-gcs-admin-patch-present`, a 200 with the `storage#object` resource; an absent

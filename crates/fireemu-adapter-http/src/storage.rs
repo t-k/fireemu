@@ -858,6 +858,31 @@ fn fb_object_not_found() -> StorageResponse {
     production_error(404, "Not Found.")
 }
 
+/// The JSON API's answer to a request body that is not JSON. Production's parser words it
+/// (`Parse Error: Unexpected end of string. Expected an object key or }.` for the recorded body
+/// `{`, stage 3 v9, both objects and both credentials), with the error repeated in `errors`, and
+/// the recorded key order. Other malformed bodies keep the parser-neutral message until they are
+/// recorded.
+fn gcs_parse_error(body: &[u8], e: &serde_json::Error) -> StorageResponse {
+    let message = if body.trim_ascii() == b"{" {
+        "Parse Error: Unexpected end of string. Expected an object key or }.\n\n^".to_owned()
+    } else {
+        format!("metadata JSON: {e}")
+    };
+    let quoted = serde_json::to_string(&message).unwrap_or_default();
+    let text = format!(
+        "{{\n  \"error\": {{\n    \"code\": 400,\n    \"message\": {quoted},\n    \"errors\": [\n      {{\n        \"message\": {quoted},\n        \"domain\": \"global\",\n        \"reason\": \"invalid\"\n      }}\n    ]\n  }}\n}}"
+    );
+    StorageResponse {
+        status: 400,
+        headers: vec![(
+            "content-type".into(),
+            "application/json; charset=UTF-8".into(),
+        )],
+        body: bytes::Bytes::from(text),
+    }
+}
+
 /// The answer to a caller [`StorageState::principal`] refused: production's bytes for the 403 of a
 /// foreign-project token under strict, the ordinary error envelope otherwise.
 fn principal_refusal_response(dialect: Dialect, status: u16, message: &str) -> StorageResponse {
@@ -2896,8 +2921,9 @@ fn fb_patch(
     let body: Value = if req.body.is_empty() {
         Value::Object(Map::new())
     } else {
-        serde_json::from_slice(&req.body)
-            .map_err(|e| fb_json_error(400, &format!("metadata JSON: {e}")))?
+        // Production answers a body that is not JSON with this fixed message (recorded, stage
+        // 3 v9: the body `{` on an absent and on a present object, both credentials).
+        serde_json::from_slice(&req.body).map_err(|_| production_error(400, "Parser Error"))?
     };
     let patch = patch_from_json(&body).map_err(|e| fb_json_error(400, &e))?;
     let mut store = state.store()?;
@@ -3454,8 +3480,7 @@ fn gcs_object(
             let body: Value = if req.body.is_empty() {
                 Value::Object(Map::new())
             } else {
-                serde_json::from_slice(&req.body)
-                    .map_err(|e| gcs_json_error(400, &format!("metadata JSON: {e}"), "invalid"))?
+                serde_json::from_slice(&req.body).map_err(|e| gcs_parse_error(&req.body, &e))?
             };
             let pre = precondition(params)?;
             let mut store = state.store()?;

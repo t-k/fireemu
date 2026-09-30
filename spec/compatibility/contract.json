@@ -138,10 +138,9 @@
     "documents": [
       "README.md"
     ],
-    "rule": "The claim is version-qualified and product-enumerated. It may not be widened to a complete-suite or unqualified superset claim while any surface in this contract has scope deferred or not-planned. The documents under scopedDocuments (what a release ships as its description) are held to the same scope rule as the README: a deferred or not-planned product may be named there only with its scope disclaimer.",
+    "rule": "The claim is version-qualified and product-enumerated. It may not be widened to a complete-suite or unqualified superset claim while any surface in this contract has scope deferred or not-planned. The npm package page is generated from README.md at pack time (npm/scripts/prepare-launcher.mjs), so the README rule covers it. The documents under scopedDocuments (what a release ships as its description) are held to the same scope rule as the README: a deferred or not-planned product may be named there only with its scope disclaimer.",
     "scopedDocuments": [
-      "npm/fireemu/package.json",
-      "npm/README.md"
+      "npm/fireemu/package.json"
     ]
   },
   "profiles": {

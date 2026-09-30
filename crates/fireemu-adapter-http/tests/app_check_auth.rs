@@ -455,6 +455,50 @@ fn a_compatibility_custom_token_routed_to_another_project_makes_no_tenant() {
     assert_eq!(observed_count(&h, "demo-app"), app_before);
 }
 
+/// A request App Check denies installs no routed project, and one it admits installs the project
+/// and is observed once.
+#[test]
+fn an_app_check_denial_installs_no_routed_project() {
+    let (mut h, registry, _) = two_projects();
+    Arc::get_mut(&mut h.auth)
+        .expect("the harness is the sole AuthState owner")
+        .allow_routed_projects = true;
+    let admin_read = |h: &Harness, app_check: Vec<String>| {
+        handle_with(
+            &h.auth,
+            "GET",
+            "/identitytoolkit.googleapis.com/v2/projects/demo-routed/tenants/named",
+            &RequestHeaders {
+                authorization: Some("Bearer owner".to_owned()),
+                app_check,
+                ..RequestHeaders::default()
+            },
+            &json!({}),
+        )
+    };
+    // The owner credential is the explicit App Check bypass for Admin routes; a client-shaped
+    // credential is not. Without the bypass (an ordinary end-user request to the same path) the
+    // request is denied and nothing is installed.
+    let denied = handle_with(
+        &h.auth,
+        "GET",
+        "/identitytoolkit.googleapis.com/v2/projects/demo-routed/tenants/named",
+        &RequestHeaders {
+            authorization: Some("Bearer not-the-owner".to_owned()),
+            ..RequestHeaders::default()
+        },
+        &json!({}),
+    );
+    assert_eq!(denied.status, 403, "{}", denied.body);
+    assert!(registry.routed_store_for("demo-routed").is_none());
+    assert!(registry.tenants("demo-routed").is_empty());
+    // The owner's request is served, installs the project and makes the tenant.
+    let served = admin_read(&h, vec![]);
+    assert_eq!(served.status, 200, "{}", served.body);
+    assert!(registry.routed_store_for("demo-routed").is_some());
+    assert_eq!(registry.tenants("demo-routed"), ["named"]);
+}
+
 /// A non-default project that is admitted and served from its own store is observed once.
 #[test]
 fn a_request_for_a_non_default_project_is_observed_once() {

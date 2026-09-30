@@ -12,7 +12,7 @@
 use std::sync::{Arc, Mutex};
 
 use fireemu_core_auth::mfa::TotpPolicy;
-use fireemu_core_auth::store::{AuthRegistry, AuthStore};
+use fireemu_core_auth::store::{AuthRegistry, AuthStore, NewProjectSeed};
 use fireemu_core_types::determinism::SplitMix64;
 use serde_json::{json, Value};
 
@@ -22,7 +22,7 @@ use super::{
 };
 
 /// A tenant of the configuration file, validated and ready to create.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct TenantSeed {
     id: String,
     prepared: PreparedTenantCreate,
@@ -123,6 +123,12 @@ impl TenantSeed {
     /// Creates the tenant in `project`: as the create route creates one, under the id of the
     /// file. An error when the project is unknown or the id is already in use.
     pub fn apply(&self, registry: &AuthRegistry, project: &str) -> Result<(), String> {
+        self.apply_checked(registry, project)
+            .map_err(|refusal| refusal.message)
+    }
+
+    /// [`Self::apply`], saying whether the refusal is that the id is in use.
+    fn apply_checked(&self, registry: &AuthRegistry, project: &str) -> Result<(), SeedRefusal> {
         let PreparedTenantCreate {
             metadata,
             patch,
@@ -133,19 +139,33 @@ impl TenantSeed {
             .create_tenant_with_id(project, &self.id, metadata, patch, password_policy)
             .is_none()
         {
-            return Err(format!(
-                "cannot create tenant {:?} in project {project:?}: the project is unknown or the id is in use",
-                self.id
-            ));
+            return Err(SeedRefusal {
+                in_use: registry.tenant_store(project, &self.id).is_some(),
+                message: format!(
+                    "cannot create tenant {:?} in project {project:?}: the project is unknown or the id is in use",
+                    self.id
+                ),
+            });
         }
-        with_tenant_store(registry, project, &self.id, |store| written.apply(store))
-            .map_err(|response| message(&response))
+        with_tenant_store(registry, project, &self.id, |store| written.apply(store)).map_err(
+            |response| SeedRefusal {
+                in_use: false,
+                message: message(&response),
+            },
+        )
     }
+}
+
+/// Why a tenant of a declaration was not made.
+struct SeedRefusal {
+    /// The id is a tenant that is there (made by another request first).
+    in_use: bool,
+    message: String,
 }
 
 /// The declared multi-tenancy switch and tenants of a project, applied together: the switch
 /// first (strict creates tenants only in a project that allows them), then each tenant.
-#[derive(Clone, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct TenantSeeding {
     allow_tenants: Option<bool>,
     tenants: Vec<TenantSeed>,
@@ -172,18 +192,36 @@ impl TenantSeeding {
     /// file unless the project already has a tenant of that id: after an `--import` that tenant
     /// is the imported one, which is authoritative for its id.
     pub fn apply(&self, registry: &AuthRegistry, project: &str) -> Result<(), String> {
+        self.apply_with(registry, project, &mut |_| {})
+    }
+
+    /// [`Self::apply`], calling `between` for each tenant after the check that it is not there
+    /// and before it is created: the window in which another request can make the same id.
+    fn apply_with(
+        &self,
+        registry: &AuthRegistry,
+        project: &str,
+        between: &mut dyn FnMut(&TenantSeed),
+    ) -> Result<(), String> {
         if let Some(allow) = self.allow_tenants {
             seed_multi_tenancy(registry, project, allow)?;
         }
-        let present = registry.tenants(project);
-        for tenant in self
-            .tenants
-            .iter()
-            .filter(|t| !present.iter().any(|id| id == t.id()))
-        {
-            tenant.apply(registry, project)?;
+        let mut first_error = None;
+        for tenant in &self.tenants {
+            // A tenant that is there (an imported one, or one another request made) is kept. One
+            // refused tenant does not stop the others.
+            if registry.tenant_store(project, tenant.id()).is_some() {
+                continue;
+            }
+            between(tenant);
+            if let Err(refusal) = tenant.apply_checked(registry, project) {
+                // An id another request made since the check is a tenant that is there.
+                if !refusal.in_use {
+                    first_error.get_or_insert(refusal.message);
+                }
+            }
         }
-        Ok(())
+        first_error.map_or(Ok(()), Err)
     }
 }
 
@@ -252,7 +290,10 @@ pub fn seed_multi_tenancy(
     allow_tenants: bool,
 ) -> Result<(), String> {
     let unknown = || format!("cannot set multiTenant.allowTenants: project {project:?} is unknown");
-    let store = registry.store_for(project).ok_or_else(unknown)?;
+    let store = registry
+        .store_for(project)
+        .or_else(|| registry.routed_store_for(project))
+        .ok_or_else(unknown)?;
     let gate = registry.operation_gate(project, None).ok_or_else(unknown)?;
     let _operation = gate
         .lock()
@@ -273,4 +314,87 @@ pub fn seed_multi_tenancy(
     with_derived_members(&mut members, &body, &fields, false, None);
     store.set_stored_config_members(members);
     Ok(())
+}
+
+/// The declaration is what a routed project is seeded with when it is installed.
+impl NewProjectSeed for TenantSeeding {
+    fn apply(&self, registry: &AuthRegistry, project: &str) -> Result<(), String> {
+        TenantSeeding::apply(self, registry, project)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use fireemu_core_auth::store::{TenantMetadata, TenantMetadataPatch};
+
+    fn registry() -> AuthRegistry {
+        AuthRegistry::new(
+            "demo-app",
+            Arc::new(Mutex::new(AuthStore::new(
+                "demo-app",
+                SplitMix64::new(1),
+                TotpPolicy::default(),
+            ))),
+        )
+    }
+
+    fn seeding() -> TenantSeeding {
+        let documents = [
+            json!({"tenantId": "acme-x7k2q", "displayName": "acme"}),
+            json!({"tenantId": "beta-a1b2c", "displayName": "beta"}),
+        ];
+        TenantSeeding::new(None, prepare_tenant_seeds(&documents, true, None).unwrap())
+    }
+
+    /// An id another request makes between the check and the create is a tenant that is there,
+    /// not a refusal: the other tenants are still made and the declaration reports no error.
+    #[test]
+    fn an_id_made_by_another_request_meanwhile_is_kept_and_the_seed_goes_on() {
+        let registry = registry();
+        let seeding = seeding();
+        let mut raced = false;
+        let result = seeding.apply_with(&registry, "demo-app", &mut |tenant| {
+            if tenant.id() == "acme-x7k2q" {
+                raced = true;
+                assert!(registry
+                    .create_tenant_with_id(
+                        "demo-app",
+                        "acme-x7k2q",
+                        TenantMetadata::default(),
+                        TenantMetadataPatch::default(),
+                        None
+                    )
+                    .is_some());
+            }
+        });
+        assert!(raced);
+        assert_eq!(result, Ok(()));
+        assert!(registry.tenant_store("demo-app", "beta-a1b2c").is_some());
+    }
+
+    /// A refusal that is not "the id is in use" is reported, after every tenant was tried.
+    #[test]
+    fn a_refusal_that_is_not_an_id_in_use_is_reported_and_the_seed_goes_on() {
+        let registry = registry();
+        let seeding = seeding();
+        let unknown = seeding.apply(&registry, "demo-unknown");
+        assert!(unknown.is_err(), "{unknown:?}");
+        // The id's own refusal: an unknown project is not "in use".
+        assert!(seeding.tenants[0]
+            .apply_checked(&registry, "demo-unknown")
+            .is_err_and(|refusal| !refusal.in_use));
+        registry
+            .create_tenant_with_id(
+                "demo-app",
+                "acme-x7k2q",
+                TenantMetadata::default(),
+                TenantMetadataPatch::default(),
+                None,
+            )
+            .unwrap();
+        assert!(seeding.tenants[0]
+            .apply_checked(&registry, "demo-app")
+            .is_err_and(|refusal| refusal.in_use));
+    }
 }

@@ -3172,6 +3172,9 @@ fn handle_with_policy(
         }
     }
     let response = handle_with_policy_inner(state, method, path, headers, body, oidc_trust);
+    // A routed project this request installed takes the declared tenants now, with the request's
+    // own gate and every registry lock released (the seed creates tenants under that gate).
+    seed_new_projects(state);
     if state.stateless_refresh_tokens {
         return response;
     }
@@ -3453,6 +3456,110 @@ fn query_tenant_of(handler: routes::Handler, query: Option<&str>) -> Option<Stri
         .flatten()
 }
 
+/// Applies the declaration to the routed projects installed since the last call, under shared
+/// admission as every other tenant write is (a reset or a session create hold the barrier
+/// exclusively, so they never interleave with it). Call it with no gate held. A refusal is
+/// reported, not dropped.
+fn seed_new_projects(state: &AuthState) {
+    let Some(registry) = state.registry.as_ref() else {
+        return;
+    };
+    // A request that installed nothing (every strict request, and every refused one) takes no
+    // admission, so it never waits for a reset that holds the barrier.
+    if !registry.has_pending_project_seeds() {
+        return;
+    }
+    let _admitted = state.barrier.as_ref().map(|barrier| barrier.admit());
+    seed_pending_projects(registry);
+}
+
+/// [`seed_new_projects`] for a caller that already holds admission (taking it twice on one
+/// thread would deadlock behind a waiting reset).
+fn seed_pending_projects(registry: &fireemu_core_auth::store::AuthRegistry) {
+    if let Err(error) = registry.apply_pending_project_seeds() {
+        eprintln!("warning: auth.tenants: a routed project could not be seeded: {error}");
+    }
+}
+
+/// See [`creation_parent`].
+struct CreationParent {
+    parent: Arc<Mutex<AuthStore>>,
+    candidate: Option<Arc<Mutex<AuthStore>>>,
+}
+
+/// The store a tenant made for `project` is a child of, and (when the project is one only this
+/// request has named) the routed candidate to install once the request is admitted: a project the
+/// daemon holds is its own parent, and on a project path (emulator profile) any other valid
+/// project id is made on demand, as the official emulator makes it.
+fn creation_parent(
+    state: &AuthState,
+    registry: &fireemu_core_auth::store::AuthRegistry,
+    project: &str,
+    path: &str,
+) -> Option<CreationParent> {
+    if let Some(held) = registry
+        .store_for(project)
+        .or_else(|| registry.routed_store_for(project))
+    {
+        return Some(CreationParent {
+            parent: held,
+            candidate: None,
+        });
+    }
+    if !state.allow_routed_projects || routes::scoped_target(path).is_none() {
+        return None;
+    }
+    let candidate = Arc::new(Mutex::new(registry.routed_candidate(project)?));
+    Some(CreationParent {
+        parent: candidate.clone(),
+        candidate: Some(candidate),
+    })
+}
+
+/// Installs the routed candidate of an admitted request; whether the project is there now.
+fn install_admitted_candidate(
+    registry: &fireemu_core_auth::store::AuthRegistry,
+    project: &str,
+    candidate: Arc<Mutex<AuthStore>>,
+) -> bool {
+    matches!(
+        registry.install_routed(project, candidate),
+        RoutedStoreInstall::Installed(_) | RoutedStoreInstall::Existing(_)
+    )
+}
+
+/// The answer to a foreign or unverifiable ID token whose tenant disagrees with the tenant a
+/// request names: `TENANT_ID_MISMATCH`, given only to a request this daemon admits (its own
+/// refusals come first), and `Ok(None)` when it is not admitted or has no parent to admit it.
+fn token_tenant_disagreement(
+    state: &AuthState,
+    request: &TenantCreation<'_>,
+    resolution: routes::Resolution<'_>,
+    project: &str,
+) -> Result<Option<String>, JsonResponse> {
+    let (
+        Some(registry),
+        routes::Resolution::Matched {
+            route,
+            project: route_project,
+            ..
+        },
+    ) = (state.registry.as_ref(), resolution)
+    else {
+        return Ok(None);
+    };
+    let Some(CreationParent { parent, .. }) =
+        creation_parent(state, registry, project, request.path)
+    else {
+        return Ok(None);
+    };
+    if admit_request(state, request, route, route_project, project, &parent)? {
+        Err(error(400, "TENANT_ID_MISMATCH"))
+    } else {
+        Ok(None)
+    }
+}
+
 /// The refusal a refresh token earns before a tenant is looked up: `INVALID_REFRESH_TOKEN` for
 /// one that does not decode, and `TENANT_ID_MISMATCH` for one of another tenant than `target`.
 fn refresh_token_refusal(
@@ -3599,24 +3706,10 @@ fn emulator_creates_named_tenant(
         Some(target) => {
             if named.any(|other| other != target) {
                 // The official emulator asserts the token's tenant against the path's or the
-                // body's before it looks a tenant up. The answer is given only to a request
-                // this daemon admits; the other disagreements meet their own checks later.
+                // body's before it looks a tenant up (`token_tenant_disagreement`); the other
+                // disagreements meet their own checks later.
                 if token_tenant.is_some() && !token_of_project {
-                    let Some(parent) = registry.store_for(&project) else {
-                        return Ok(None);
-                    };
-                    return if admit_request(
-                        state,
-                        request,
-                        route,
-                        route_project,
-                        &project,
-                        &parent,
-                    )? {
-                        Err(error(400, "TENANT_ID_MISMATCH"))
-                    } else {
-                        Ok(None)
-                    };
+                    return token_tenant_disagreement(state, request, resolution, &project);
                 }
                 return Ok(None);
             }
@@ -3635,7 +3728,9 @@ fn emulator_creates_named_tenant(
     if registry.tenant_store(&project, &target).is_some() {
         return Ok(None);
     }
-    let Some(parent) = registry.store_for(&project) else {
+    let Some(CreationParent { parent, candidate }) =
+        creation_parent(state, registry, &project, path)
+    else {
         return Ok(None);
     };
     if let Some(refusal) = refresh_token_refusal(refresh_tenant.as_ref(), &target) {
@@ -3643,6 +3738,20 @@ fn emulator_creates_named_tenant(
     }
     if !admit_request(state, request, route, route_project, &project, &parent)? {
         return Ok(None);
+    }
+    // Install, seed and creation are one admitted step, so a reset or a session creation (which
+    // hold the barrier exclusively) never sees half of it: it would wipe the project the request
+    // just installed, fail its membership probe after Firestore and Storage were wiped, or leave
+    // the tenant behind a rolled-back session. No gate is held here, and the admission is
+    // released on return, before the request's own.
+    let _admitted = state.barrier.as_ref().map(|barrier| barrier.admit());
+    if let Some(candidate) = candidate {
+        if !install_admitted_candidate(registry, &project, candidate) {
+            return Ok(None);
+        }
+        // The project just installed takes the declaration before the tenant this request names
+        // is made, so a declared tenant is made from its declaration and not with the defaults.
+        seed_pending_projects(registry);
     }
     Ok(registry
         .ensure_tenant_with(&project, &target, tenant_document::install_default_mfa)
@@ -4408,6 +4517,21 @@ fn handle_with_policy_inner(
         // project's configuration. Release the request's selected store before that registry
         // operation so initialization never attempts to reacquire the same non-reentrant lock.
         drop(store);
+        // Creating a tenant is state, so a project only this request has named (a routed
+        // candidate) is installed to be the tenant's parent, once the body is a tenant the
+        // create would accept: a refused create installs nothing.
+        if route.handler == routes::Handler::TenantCreate {
+            if let Some(routed) = pending_routed_project.as_deref() {
+                if let Err(response) =
+                    prepare_tenant_create(body, state.stateless_refresh_tokens, None)
+                {
+                    return response;
+                }
+                if let Err(response) = install_routed_candidate(state, routed, &store_arc) {
+                    return response;
+                }
+            }
+        }
         // Reads keep an existing routed gate through response construction. Writes release it
         // because the registry's guarded mutation acquires the project gate itself.
         let _routed_read_operation = if matches!(
@@ -8348,7 +8472,7 @@ fn tenant_answer(
 
 /// A tenant document read for a create, ready to publish: what the Admin create route and a
 /// seeded tenant of the configuration file share, so both validate and default one way.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub(crate) struct PreparedTenantCreate {
     metadata: fireemu_core_auth::store::TenantMetadata,
     patch: fireemu_core_auth::store::TenantMetadataPatch,
@@ -15699,6 +15823,42 @@ mod tests {
     use super::*;
     use fireemu_core_auth::mfa::TotpPolicy;
     use fireemu_core_types::determinism::SplitMix64;
+
+    /// A routed project another request installed between the creation's parent lookup and its
+    /// install is the project the tenant is made in (`Existing`); a registered project is not
+    /// replaced, and a project nobody may install is refused.
+    #[test]
+    fn installing_an_admitted_candidate_accepts_a_project_that_is_already_there() {
+        let default = Arc::new(Mutex::new(AuthStore::new(
+            "demo-app",
+            SplitMix64::new(1),
+            TotpPolicy::default(),
+        )));
+        let registry = fireemu_core_auth::store::AuthRegistry::new("demo-app", default);
+        let candidate = |registry: &fireemu_core_auth::store::AuthRegistry, project: &str| {
+            Arc::new(Mutex::new(registry.routed_candidate(project).unwrap()))
+        };
+        let first = candidate(&registry, "demo-routed");
+        let second = candidate(&registry, "demo-routed");
+        assert!(install_admitted_candidate(&registry, "demo-routed", first));
+        // Someone else installed it first: the existing store is the project.
+        assert!(install_admitted_candidate(&registry, "demo-routed", second));
+        assert!(registry.routed_store_for("demo-routed").is_some());
+        // The default project is never a routed project.
+        let other = candidate(&registry, "demo-other");
+        assert!(!install_admitted_candidate(&registry, "demo-app", other));
+        // A registered project is not replaced.
+        assert!(registry.register_session(
+            "demo-session",
+            AuthStore::new("demo-session", SplitMix64::new(2), TotpPolicy::default())
+        ));
+        let session_candidate = candidate(&registry, "demo-session");
+        assert!(!install_admitted_candidate(
+            &registry,
+            "demo-session",
+            session_candidate
+        ));
+    }
 
     /// A management error without a `status` gets the v2 status of its HTTP code; one with a
     /// status keeps it, and the v1 `errors` list is dropped.

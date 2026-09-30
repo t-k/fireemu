@@ -628,14 +628,11 @@ fn an_import_is_authoritative_for_a_tenant_of_the_same_id_and_the_seed_keeps_the
     assert_eq!(field("BETA ")["displayName"], "beta", "{log}");
 }
 
-/// Pins a KNOWN DIVERGENCE, not a design: a namespace the emulator profile routes by the first
-/// Admin request for an unknown project id cannot hold tenants yet (the official emulator creates
-/// them on demand), so there is nothing to seed there. The fix (open issue
-/// `emulator-routed-namespaces-cannot-hold-tenants`, before the release) makes routed projects
-/// hold and be seeded with tenants and replaces this test; a session project
-/// (`POST /v1/sessions`) is the isolated project that has tenants today.
+/// A namespace the emulator profile routes by a request for an unknown project id holds tenants
+/// as the official emulator's project does, and starts with the declared ones. A read alone
+/// installs nothing.
 #[test]
-fn a_routed_namespace_has_no_tenants_to_seed() {
+fn a_routed_namespace_holds_tenants_and_starts_with_the_declared_ones() {
     let daemon = Daemon::start("routed", "emulator", &declared(true));
     let (status, listed) = daemon.admin(
         "GET",
@@ -643,17 +640,90 @@ fn a_routed_namespace_has_no_tenants_to_seed() {
         &json!({}),
     );
     assert_eq!((status, listed), (200, json!({})));
-    let (status, refused) = daemon.admin(
-        "POST",
-        &format!("{V2}/projects/demo-routed/tenants"),
-        &json!({"displayName": "x"}),
+    // A tenant the request names installs the project, with the declared tenants beside it.
+    let (status, made) = daemon.admin(
+        "GET",
+        &format!("{V2}/projects/demo-routed/tenants/on-the-way"),
+        &json!({}),
     );
-    assert_eq!(status, 400, "{refused}");
-    assert_eq!(refused["error"]["message"], "INVALID_PROJECT_ID");
-    let (status, _) = daemon.admin(
+    assert_eq!(status, 200, "{made}");
+    assert_eq!(
+        daemon.tenant_ids_in("demo-routed"),
+        ["acme-x7k2q", "beta-a1b2c", "on-the-way"]
+    );
+    let (status, acme) = daemon.admin(
         "GET",
         &format!("{V2}/projects/demo-routed/tenants/acme-x7k2q"),
         &json!({}),
     );
-    assert_eq!(status, 404);
+    assert_eq!(status, 200, "{acme}");
+    assert_eq!(acme["allowPasswordSignup"], true, "{acme}");
+    // A default-scope reset drops the routed project; it is seeded again when next installed.
+    daemon.reset();
+    assert_eq!(daemon.tenant_ids_in("demo-routed"), Vec::<String>::new());
+    let (status, _) = daemon.admin(
+        "GET",
+        &format!("{V2}/projects/demo-routed/tenants/second"),
+        &json!({}),
+    );
+    assert_eq!(status, 200);
+    assert_eq!(
+        daemon.tenant_ids_in("demo-routed"),
+        ["acme-x7k2q", "beta-a1b2c", "second"]
+    );
+}
+
+/// A routed namespace can become a session project (the closed issue
+/// session-create-for-routed-auth-store-fails-500-in-emulator-profile): the session displaces it
+/// together with the tenants it holds, and starts with the declared ones, with or without a
+/// declaration.
+#[test]
+fn a_session_can_be_created_over_a_routed_namespace_that_holds_tenants() {
+    for declared_tenants in [true, false] {
+        let auth = if declared_tenants {
+            declared(true)
+        } else {
+            json!({"apiKeys": ["fake-api-key"]})
+        };
+        let daemon = Daemon::start(
+            &format!("session-over-routed-{declared_tenants}"),
+            "emulator",
+            &auth,
+        );
+        // The routed namespace gets its tenants two ways: an Admin user create installs it (and
+        // seeds it when a declaration is set), and a tenant create writes to it.
+        let (status, made) = daemon.admin(
+            "POST",
+            &format!("{V1}/projects/demo-b/accounts"),
+            &json!({"email": "a@example.com", "password": "hunter22"}),
+        );
+        assert_eq!(status, 200, "{declared_tenants}: {made}");
+        let (status, made) = daemon.admin(
+            "POST",
+            &format!("{V2}/projects/demo-b/tenants"),
+            &json!({"displayName": "routed"}),
+        );
+        assert_eq!(status, 200, "{declared_tenants}: {made}");
+        assert!(!daemon.tenant_ids_in("demo-b").is_empty());
+        let (status, created) = http(
+            daemon.control_port(),
+            "POST",
+            "/v1/sessions",
+            "",
+            &json!({"project": "demo-b"}),
+        );
+        assert_eq!(status, 200, "{declared_tenants}: {created}");
+        // The session starts as a session does: the routed namespace's own tenants are gone and
+        // the declared ones (when there are any) are the project's.
+        let expected: &[&str] = if declared_tenants {
+            &["acme-x7k2q", "beta-a1b2c"]
+        } else {
+            &[]
+        };
+        assert_eq!(
+            daemon.tenant_ids_in("demo-b"),
+            expected,
+            "{declared_tenants}"
+        );
+    }
 }

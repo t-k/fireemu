@@ -452,14 +452,36 @@ fn a_token_of_another_project_creates_no_tenant() {
     );
     assert_eq!(status, 400, "{refused}");
     assert!(registry.tenant_store("demo-app", "elsewhere").is_none());
-    // The token names no tenant here, but a tenant the body names is still made.
+    // The token's tenant still has to agree with the tenant the body names, as the official
+    // emulator asserts before it looks a tenant up: a mismatch makes nothing.
     let _ = client(
         &state,
         &format!("{V1}/accounts:lookup"),
         &json!({"idToken": tenant_token["idToken"], "tenantId": "named-anyway"}),
     );
-    assert!(registry.tenant_store("demo-app", "named-anyway").is_some());
+    assert!(registry.tenant_store("demo-app", "named-anyway").is_none());
     assert!(registry.tenant_store("demo-app", "elsewhere").is_none());
+    // An agreeing body tenant is the target, and is made.
+    let _ = client(
+        &state,
+        &format!("{V1}/accounts:lookup"),
+        &json!({"idToken": tenant_token["idToken"], "tenantId": "elsewhere"}),
+    );
+    assert!(registry.tenant_store("demo-app", "elsewhere").is_some());
+}
+
+/// A body the official schema check rejects still makes the tenant it names: Fireemu validates in
+/// each handler, after the tenant is made (a recorded divergence).
+#[test]
+fn a_body_the_official_schema_rejects_still_makes_the_tenant() {
+    let (state, registry) = emulator();
+    let (status, refused) = client(
+        &state,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"tenantId": "t-badbody", "email": {"x": 1}}),
+    );
+    assert_eq!(status, 400, "{refused}");
+    assert!(registry.tenant_store("demo-app", "t-badbody").is_some());
 }
 
 /// The strict profile refuses a tenant that does not exist and creates nothing, as production.

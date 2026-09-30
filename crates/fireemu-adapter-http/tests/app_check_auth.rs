@@ -146,6 +146,16 @@ fn an_enforced_request_naming_a_missing_tenant_makes_no_tenant_when_denied() {
     assert!(registry
         .tenant_store("demo-app", "admitted-tenant")
         .is_some());
+    // The denied request and the admitted one are each observed once, the admitted one although
+    // it made a tenant on the way.
+    let observed = h
+        .app_check
+        .registry
+        .read()
+        .expect("readable")
+        .observations("demo-app");
+    assert_eq!(observed.len(), 2, "{observed:?}");
+    assert_eq!(observed.iter().filter(|o| o.admitted).count(), 1);
 }
 
 // ------------------------------------------------------------------------------------------

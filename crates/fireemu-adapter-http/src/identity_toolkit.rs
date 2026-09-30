@@ -3390,6 +3390,8 @@ struct TenantCreation<'a> {
     headers: &'a RequestHeaders,
     api_key: bool,
     at: LogicalInstant,
+    /// Set when the admission ran here, so the request is not admitted (and observed) again.
+    app_check_admitted: std::cell::Cell<bool>,
 }
 
 /// What a request's refresh token says about its tenant.
@@ -3399,9 +3401,10 @@ enum RefreshTokenTenant {
     Tenant(String),
 }
 
-/// The tenant an ID token of `project` names in its `firebase.tenant` claim. A token of another
-/// project is refused by its audience, so what it says names no tenant here.
-fn id_token_tenant_of_project(state: &AuthState, project: &str, body: &Value) -> Option<String> {
+/// The tenant an ID token names in its `firebase.tenant` claim, and whether the token is one of
+/// `project`. A token of another project is refused by its audience, so its tenant is never the
+/// target here, but it still has to agree with the tenant the path or the body names.
+fn id_token_tenant(state: &AuthState, project: &str, body: &Value) -> Option<(String, bool)> {
     let token = str_field(body, "idToken")?;
     let signer = state.store.lock().ok().and_then(|s| s.signer_arc());
     let decoded = fireemu_core_auth::jwt::decode_token(token, signer.as_deref()).ok()?;
@@ -3409,14 +3412,11 @@ fn id_token_tenant_of_project(state: &AuthState, project: &str, body: &Value) ->
     let audience = payload
         .get("aud")
         .and_then(fireemu_core_types::json::JsonValue::as_str);
-    if audience != Some(project) {
-        return None;
-    }
-    payload
+    let tenant = payload
         .get("firebase")
         .and_then(|firebase| firebase.get("tenant"))
-        .and_then(fireemu_core_types::json::JsonValue::as_str)
-        .map(str::to_owned)
+        .and_then(fireemu_core_types::json::JsonValue::as_str)?;
+    Some((tenant.to_owned(), audience == Some(project)))
 }
 
 /// Whether a request may make the tenant `target` in `project`, or its refusal: a refresh token is
@@ -3461,6 +3461,7 @@ fn admit_tenant_creation(
     {
         return Err(denial);
     }
+    request.app_check_admitted.set(true);
     let Ok(parent) = parent.lock() else {
         return Err(error(500, "INTERNAL"));
     };
@@ -3530,7 +3531,10 @@ fn emulator_creates_named_tenant(
         None | Some(Value::Null | Value::String(_)) => None,
         _ => return Ok(None),
     };
-    let token_tenant = id_token_tenant_of_project(state, &project, body);
+    let (token_tenant, token_of_project) = match id_token_tenant(state, &project, body) {
+        Some((tenant, of_project)) => (Some(tenant), of_project),
+        None => (None, true),
+    };
     // The refresh token is the fourth source.
     let refresh_tenant = str_field(body, "refresh_token")
         .or_else(|| str_field(body, "refreshToken"))
@@ -3559,6 +3563,10 @@ fn emulator_creates_named_tenant(
     let target = match named.next() {
         Some(target) => {
             if named.any(|other| other != target) {
+                return Ok(None);
+            }
+            // A token of another project only takes part in the agreement.
+            if path_tenant.is_none() && body_tenant.is_none() && !token_of_project {
                 return Ok(None);
             }
             target.to_owned()
@@ -3920,11 +3928,14 @@ fn handle_with_policy_inner(
         headers,
         api_key,
         at,
+        app_check_admitted: std::cell::Cell::new(false),
     };
     let made_on_the_way = match emulator_creates_named_tenant(state, &creation, body, resolution) {
         Ok(made) => made,
         Err(response) => return response,
     };
+    // A request that made a tenant was admitted by App Check on the way; it is observed once.
+    let app_check_admitted = made_on_the_way.is_some() && creation.app_check_admitted.get();
     // The official emulator's reading of an ID token's tenant (emulator profile).
     let emulator_tenant_body;
     let body = match emulator_named_tenant(state, path, query, body, made_on_the_way.as_deref()) {
@@ -4227,8 +4238,10 @@ fn handle_with_policy_inner(
     // (spec 7.4 and 13.3). Locking the store is not a state transition, so a denial here
     // still leaves no user, no issued or rotated credential, no consumed OOB or phone code,
     // no MFA change and no abuse counter behind.
-    if let Some(denial) = app_check_denial(state, path, headers, store.project_id(), at) {
-        return denial;
+    if !app_check_admitted {
+        if let Some(denial) = app_check_denial(state, path, headers, store.project_id(), at) {
+            return denial;
+        }
     }
     // The privilege class is decided by the path alone, so a wrong-method request to a
     // privileged path is refused for its missing credential before it is refused for its

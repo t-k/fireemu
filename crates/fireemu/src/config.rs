@@ -4435,7 +4435,7 @@ mod tests {
         let cfg = RuntimeConfig::from_json(&json).unwrap();
         assert_eq!(cfg.auth_multi_tenant_allow_tenants, Some(true));
         assert_eq!(cfg.auth_tenants.len(), 2);
-        assert_eq!(cfg.tenant_seeding().unwrap().is_empty(), false);
+        assert!(!cfg.tenant_seeding().unwrap().is_empty());
     }
 
     #[test]

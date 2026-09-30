@@ -809,7 +809,10 @@ pub(crate) mod tests {
         assert!(registry.tenants("demo-app").is_empty());
         // The session's reset wipes what the run made and returns to the declaration.
         assert!(registry
-            .create_tenant(SECOND_PROJECT, Default::default())
+            .create_tenant(
+                SECOND_PROJECT,
+                fireemu_core_auth::store::TenantMetadata::default(),
+            )
             .is_some());
         assert_eq!(registry.tenants(SECOND_PROJECT).len(), 2);
         fireemu_adapter_http::identity_toolkit::seed_multi_tenancy(

@@ -108,6 +108,8 @@ def _validate_table(table):
     if thresholds is not None and "releaseAfterAgeSeconds" in thresholds and (type(thresholds["releaseAfterAgeSeconds"]) is not int or thresholds["releaseAfterAgeSeconds"] < thresholds["totalAgeSeconds"]):
         _bad("the release age is malformed or below the total-age threshold")
     steps = [_step(row) for row in table["steps"]]
+    if thresholds is not None and "releaseAfterAgeSeconds" in thresholds and any(step["transport"] == "grpc" and (step["rpc"] == "BeginTransaction" or step["tokenInput"] or step["tokenOutput"]) for step in steps):
+        _bad("the release age rests on the REST lifetime; no table with a gRPC transaction may declare it until the gRPC lifetime is recorded")
     if not steps or caps["observation"] != len(steps):
         _bad("the observation cap is not the step count")
     if caps["tokenCleanup"] < table["maxTokens"] or caps["documentCleanup"] < 3 * len(documents):

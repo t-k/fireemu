@@ -6,7 +6,8 @@ created in setup. Per transport (REST first, then native gRPC), two chains, each
 - C (released by its commit): the transaction reads `a` and stays open; an outside writer writes `b` (unrelated, expected to
   succeed at once); then an outside writer writes `a` while the transaction commits a write to `a` 5 s later: the writer is sent
   first and may be held by the read lock, so the commit is sent while it is still pending (a concurrent step); an outside writer
-  then writes `a` and succeeds; plain reads keep the final values.
+  then writes `a` and succeeds; plain reads keep the final values. A plain read of `a` right after the pair records which of the two
+  writes landed last (the projection's `reads`); the later writer then settles the document.
 - R (released by its rollback): the transaction reads `a` and stays open; an outside writer writes `a` and the transaction
   rolls back 5 s later, while the writer is still pending; an outside writer then writes `a` and succeeds; a plain read keeps the
   final value.
@@ -18,7 +19,12 @@ the release (P06 recording 2). The holder here releases 5 s in, inside the first
 "hold the competing writer in a separate task, release by commit or rollback, then compare outcome and order". Every answer a
 step may give is fixed here; an answer outside the set stops the recording, and an unknown outcome (a timeout at the writer's
 30 s, UNAVAILABLE, INTERNAL) is never resent. The document a concurrent pair both write may end in either writer's state, so a
-read after it may show either until a later write settles it."""
+read after it may show either until a later write settles it.
+
+Disclosed limit: the holder's commit and rollback (the anchors) carry the framework's 10 s deadline for a transaction step, while
+production answered a contended writer only after 21 s or more (P06). The holder is released 5 s in and its own commit or rollback
+is not expected to wait on the writer; if production does make it wait past 10 s, its answer is an unknown outcome (a timeout), the
+recording stops and the recovery releases the token, and the observation is recorded as unavailable rather than judged."""
 
 from pathlib import Path
 
@@ -61,6 +67,7 @@ def _chains(transport):
         _writer(transport, "c", "writer-b", "b", "c-unrelated"),
         _step(f"{transport}/c/commit", transport, "Commit", "observation", token_in=f"{transport}-c", writes=(("a", f"{transport}-c-commit", True),), case=f"{transport}/c-commit", allow=(0,) + REFUSED, wait=HOLD_SECONDS),
         _writer(transport, "c", "writer-a", "a", "c-conflict", concurrent_with=f"{transport}/c/commit"),
+        _step(f"{transport}/c/read-after-pair", transport, "GetDocument", "observation", document="a"),
         _writer(transport, "c", "writer-after-commit", "a", "c-after"),
         _post(transport, "c", "a"),
         _post(transport, "c", "b"),

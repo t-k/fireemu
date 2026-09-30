@@ -31,8 +31,12 @@ def collector(service, clock):
     return Collector(value, TABLE, RequestBudget(value, TABLE), service, "owner", save=lambda _state: None, monotonic=clock.now, utc=clock.utc, sleep=clock.sleep)
 
 
+RECORDED_PACE = 1.25   # seconds per request: P11 recorded 1.1 to 1.3 s; the release rule's margin is judged at this pace
+
+
 def record(**knobs):
     clock = Clock()
+    knobs.setdefault("rpc_seconds", RECORDED_PACE)
     service = Service(clock, **knobs)
     return collector(service, clock).run(), service, clock
 
@@ -48,7 +52,7 @@ def test_the_requests_and_waits_stay_inside_their_clock():
     assert value["caps"] == {"observation": 33, "tokenCleanup": 2, "documentCleanup": 7, "management": 7, "credential": 2}
     assert value["maxRequests"] == 51 and value["maxTokens"] == 2
     assert sum(value["waits"].values()) == 2 * (9 * 24 + 90) == 612
-    assert value["thresholds"] == {"totalAgeSeconds": 270, "releaseAfterAgeSeconds": 301}
+    assert value["thresholds"] == {"totalAgeSeconds": 270, "releaseAfterAgeSeconds": 315}
     assert TABLE["envelopeId"] == "FS-TRANSACTION-p12-first-request-001"
     assert all(step["transport"] in ("rest", "grpc") for step in value["steps"]) and {step["transport"] for step in value["steps"] if step["id"].startswith("rest/")} == {"rest"}
 
@@ -67,11 +71,13 @@ def test_the_timing_is_tied_to_the_recorded_lifetime_bracket_and_idle():
         # from waits alone, with no request time at all, the first request is past the age a request was refused at
         assert sum(waits) >= REFUSED_AGE + 1
         # the last keepalive stays below the age a request was live at (with the recorded pace: 11 requests at 1.3 s and 10 waits 0.6 s long)
-        assert sum(waits[:9]) + 11 * 1.3 + 9 * 0.6 < LIVE_AGE + 50
+        # (the keepalive check is tight: the age before the first request's wait stays under the age a request was live at)
+        assert sum(waits[:9]) + 11 * 1.3 + 9 * 0.6 < LIVE_AGE
         assert waits[-1] <= ACCEPTED_IDLE - 10 and max(waits[:9]) < 60
         assert next(step for step in steps if step["id"] == f"rest/{chain}/{first}")["waitSeconds"] == 90
         assert not any("waitSeconds" in step for step in steps if step["id"].startswith(f"rest/{chain}/") and step["id"].endswith(("read-after", "read-again", "rollback-last", "commit-last")))
-    assert TABLE["thresholds"]["releaseAfterAgeSeconds"] >= REFUSED_AGE
+    # the release rule's margin: the certain age at the first request (waits plus ten requests at the recorded minimum pace) exceeds the rule's age
+    assert TABLE["thresholds"]["releaseAfterAgeSeconds"] == 315 and sum(waits) + 10 * 1.1 > TABLE["thresholds"]["releaseAfterAgeSeconds"] + 1
 
 
 def test_the_observation_clock_fits_all_the_chains_at_the_worst_recorded_pace():
@@ -97,7 +103,7 @@ def test_every_state_label_is_declared_and_used():
 
 def test_the_digest_binds_the_table():
     assert corpus_digest(TABLE) == plan()["corpusDigest"]
-    assert corpus_digest(TABLE) == "268cbd9caae672e7b0b14f72920c24c230850be49361f0ca96e88037f817e110"
+    assert corpus_digest(TABLE) == "6b95437d01903a57ba6a15ef3a9294f6816596c532f6e92cda2c344a379aa61a"
 
 
 def answering(model):
@@ -136,7 +142,7 @@ def answering(model):
 @pytest.mark.parametrize("model", ["A", "B", "C", "P08", "rollback-zero"])
 def test_a_recording_completes_under_every_model_and_records_all_seven_cases(model):
     clock = Clock()
-    service = answering(model)(Service(clock, expiry=True, lifetime=270, idle=120))
+    service = answering(model)(Service(clock, expiry=True, lifetime=270, idle=120, rpc_seconds=RECORDED_PACE))
     receipt = collector(service, clock).run()
     assert receipt["complete"] is True, (model, receipt["failureType"], receipt["openTokens"])
     cases = {case["caseId"]: case["code"] for case in projection(receipt, TABLE)["cases"]}
@@ -153,7 +159,7 @@ def test_a_recording_completes_under_every_model_and_records_all_seven_cases(mod
 def test_a_release_the_narrow_rule_would_not_accept_is_released_by_age_and_shown():
     # model C: nothing on chain C ever answers 10 with the expired text, so only the age rule can release the token
     clock = Clock()
-    service = answering("C")(Service(clock, expiry=True, lifetime=270, idle=120))
+    service = answering("C")(Service(clock, expiry=True, lifetime=270, idle=120, rpc_seconds=RECORDED_PACE))
     receipt = collector(service, clock).run()
     assert receipt["complete"] is True
     assert receipt["tokens"]["rest-c"]["state"] == "released-expired"

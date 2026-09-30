@@ -659,13 +659,15 @@ class Collector:
             if "waitSeconds" in step:
                 self.waits.append(wait_entry(step, previous, self.rows[-1]["timing"], self.ledger.tokens))
                 self._persist()
-            if concurrent is not None:
-                self._finish_concurrent()
+            # The holder is released before the writer is joined: a holder whose release was refused and that kept its lock would
+            # otherwise hold the writer until its own deadline, and the recording would stop on the writer's timeout.
             for role in self.ledger.pending_release(step):
                 site = f"cleanup/token/{role}"
                 self._rpc(site, self.ledger.tokens[role]["transport"], "Rollback", self.ledger.release_request(role), "tokenCleanup")
                 if self.ledger.tokens[role]["state"] not in ("rolled-back", "released-refused", "released-expired"):
                     raise ValueError("chain release is unconfirmed; next chain forbidden")
+            if concurrent is not None:
+                self._finish_concurrent()
             index += 2 if concurrent is not None else 1
         return cursor.complete
 
@@ -768,32 +770,42 @@ def projection(receipt, table):
     index, owed, queue, releases = 0, [], None, 0
     observations, reads, waits = [], [], []
     previous_timing = None
-    ordered = sorted(rows, key=lambda row: row["sequence"])
-    position = 0
-    while position < len(ordered):
-        row = ordered[position]
-        position += 1
+    waiting = None   # the concurrent writer sent beside the anchor just replayed: (its step, its request at dispatch, the timing before the anchor)
+    for row in sorted(rows, key=lambda row: row["sequence"]):
         check_timing(row.get("timing"))
+        site, transport, method, request, result = row.get("site"), row.get("transport"), row.get("rpc"), row.get("request"), row.get("result")
+        if waiting is not None and not owed and row.get("phase") == "observation":
+            # The writer's own row: it follows the anchor and the anchor's release rows, and started before the anchor did.
+            following, dispatched_request, before_anchor = waiting
+            if index >= len(steps) or row != steps[index] or site != following["id"] or method != following["rpc"] or transport != following["transport"] or row.get("caseId") != following["caseId"] or request != dispatched_request:
+                raise ValueError("concurrent request graph differs")
+            check_concurrent_order(before_anchor, row["timing"])
+            ledger.after(site, transport, method, request, following, result, row["timing"])
+            if row.get("outcomeClass") != outcome_class(result["code"]):
+                raise ValueError("outcome class differs from its code")
+            if following["caseId"]:
+                observations.append(row)
+            if row["timing"]["responseMonotonic"] > previous_timing["responseMonotonic"]:
+                previous_timing = row["timing"]
+            waiting = None
+            index += 1
+            continue
         if previous_timing is not None:
             check_order(previous_timing, row["timing"])
         before_anchor = previous_timing
         previous_timing = row["timing"]
-        site, transport, method, request, result = row.get("site"), row.get("transport"), row.get("rpc"), row.get("request"), row.get("result")
         if row.get("phase") == "observation":
-            if owed or queue is not None or index >= len(steps) or row != steps[index]:
+            if waiting is not None or owed or queue is not None or index >= len(steps) or row != steps[index]:
                 raise ValueError("observation sequence differs")
             declared = plan["steps"][index]
             if site != declared["id"] or method != declared["rpc"] or transport != declared["transport"] or row.get("caseId") != declared["caseId"] or request != request_for_step(plan, declared, ledger.token_values(), table, ledger.times()):
                 raise ValueError("closed request graph differs")
             following = plan["steps"][index + 1] if index + 1 < len(plan["steps"]) else None
-            partner = None
             if following is not None and following.get("concurrentWith") == declared["id"]:
                 # The concurrent outside writer was sent before its anchor, so the ledger takes it on before the anchor and its answer after.
-                partner = ordered[position] if position < len(ordered) else None
-                if partner is None or partner.get("phase") != "observation" or index + 1 >= len(steps) or partner != steps[index + 1] or partner.get("site") != following["id"] or partner.get("rpc") != following["rpc"] or partner.get("transport") != following["transport"] or partner.get("caseId") != following["caseId"] or partner.get("request") != request_for_step(plan, following, ledger.token_values(), table, ledger.times()):
-                    raise ValueError("concurrent request graph differs")
-                position += 1
-                ledger.before(partner["site"], partner["transport"], partner["rpc"], partner["request"], following)
+                dispatched_request = request_for_step(plan, following, ledger.token_values(), table, ledger.times())
+                ledger.before(following["id"], following["transport"], following["rpc"], dispatched_request, following)
+                waiting = (following, dispatched_request, before_anchor if before_anchor is not None else {"responseMonotonic": row["timing"]["dispatchMonotonic"], "responseUtc": row["timing"]["dispatchUtc"]})
             ledger.before(site, transport, method, request, declared)
             ledger.after(site, transport, method, request, declared, result, row["timing"])
             if "waitSeconds" in declared:
@@ -810,17 +822,6 @@ def projection(receipt, table):
                 reads.append({"site": site, "code": result["code"], "state": None})
             if method == "BatchGetDocuments":
                 reads.append({"site": site, "code": result["code"], "documents": ledger.batch_states(request, result) if result["code"] == 0 else None})
-            if partner is not None:
-                check_timing(partner.get("timing"))
-                check_concurrent_order(before_anchor if before_anchor is not None else {"responseMonotonic": partner["timing"]["dispatchMonotonic"], "responseUtc": partner["timing"]["dispatchUtc"]}, partner["timing"])
-                ledger.after(partner["site"], partner["transport"], partner["rpc"], partner["request"], following, partner["result"], partner["timing"])
-                if partner.get("outcomeClass") != outcome_class(partner["result"]["code"]):
-                    raise ValueError("outcome class differs from its code")
-                if following["caseId"]:
-                    observations.append(partner)
-                if partner["timing"]["responseMonotonic"] > previous_timing["responseMonotonic"]:
-                    previous_timing = partner["timing"]
-                index += 1
             owed = ledger.pending_release(declared)
             index += 1
         elif row.get("phase") == "tokenCleanup":
@@ -847,7 +848,7 @@ def projection(receipt, table):
             ledger.after(site, transport, method, request, None, result, row["timing"])
         else:
             raise ValueError("undeclared native phase")
-    if index != len(steps) or owed or queue or releases != counts["tokenCleanup"] or not ledger.all_absent() or ledger.unresolved_tokens() or observations != receipt.get("observations") or ledger.snapshot()["tokens"] != receipt.get("tokens") or ledger.snapshot()["documents"] != receipt.get("documents") or (waits or receipt.get("waits")) and waits != receipt.get("waits"):
+    if index != len(steps) or waiting is not None or owed or queue or releases != counts["tokenCleanup"] or not ledger.all_absent() or ledger.unresolved_tokens() or observations != receipt.get("observations") or ledger.snapshot()["tokens"] != receipt.get("tokens") or ledger.snapshot()["documents"] != receipt.get("documents") or (waits or receipt.get("waits")) and waits != receipt.get("waits"):
         raise ValueError("completion claims cannot be derived from native rows")
     if receipt.get("timingMode") != "wall-clock" or receipt.get("timingSource") != "parent-wire-envelope":
         raise ValueError("timing provenance differs")

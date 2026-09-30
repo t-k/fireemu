@@ -194,9 +194,15 @@ def test_a_recording_stopped_while_a_writer_is_in_flight_releases_the_holder_fir
     value = compile_plan(TABLE, NONCE, OWNER)
     service = Service(clock, locks=True, hold_writers=True)
     original = service.send
+    writer_waiting = threading.Event()
+    real_wait = service.released.wait
+    def noting_wait(timeout=None):
+        writer_waiting.set()
+        return real_wait(timeout)
+    service.released.wait = noting_wait
     def failing_anchor(transport, method, request, **kwargs):
         if method == "Commit" and request.get("transaction") and request.get("writes"):
-            time.sleep(0.05)   # let the writer reach its wait
+            assert writer_waiting.wait(5), "the writer never reached its wait"
             raise ValueError("the wire failed before the holder's release")
         return original(transport, method, request, **kwargs)
     service.send = failing_anchor
@@ -207,3 +213,19 @@ def test_a_recording_stopped_while_a_writer_is_in_flight_releases_the_holder_fir
     writer = next(row for row in receipt["steps"] if row["site"] == "rest/c/writer-a")
     assert writer["result"]["code"] == 0, "the writer that waited for the release landed, and its answer is recorded"
     assert not receipt["unknownCommits"] or receipt["unknownCommits"] == ["rest/c/commit"]
+
+
+def test_a_refused_holder_commit_that_keeps_its_lock_is_released_before_the_writer_is_joined():
+    # The stand-in of review finding D-S1: the holder's Commit is refused (10), so its token stays open and keeps the lock the writer waits
+    # on. Joining the writer first would let it time out (answer 4) and stop the recording; the release has to go out first.
+    clock = Clock()
+    value = compile_plan(TABLE, NONCE, OWNER)
+    service = Service(clock, locks=True, hold_writers=True, rw_commit_code=10)
+    receipt = Collector(value, TABLE, RequestBudget(value, TABLE), service, "owner", save=lambda _state: None, monotonic=clock.now, utc=clock.utc, sleep=clock.sleep).run()
+    assert receipt["complete"] is True, receipt.get("failureType")
+    assert [row for row in receipt["steps"] if row["site"].endswith("/writer-a") and row["result"]["code"] == 4] == []
+    order = [row["site"] for row in sorted(receipt["steps"] + receipt["cleanupSteps"], key=lambda row: row["sequence"])]
+    commit = order.index("rest/c/commit")
+    assert order[commit + 1].startswith("cleanup/token/"), "the holder is released right after its anchor"
+    assert order.index("rest/c/writer-a") > commit + 1
+    projection(receipt, TABLE)

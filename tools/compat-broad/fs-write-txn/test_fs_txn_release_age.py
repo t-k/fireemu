@@ -40,28 +40,28 @@ def release(ledger, code, details, dispatch, step=None):
 
 
 def test_the_release_age_is_declared_by_the_tables_that_need_it():
-    assert p12.TABLE["thresholds"] == {"totalAgeSeconds": 270, "releaseAfterAgeSeconds": 301}
+    assert p12.TABLE["thresholds"] == {"totalAgeSeconds": 270, "releaseAfterAgeSeconds": 315}
     assert "releaseAfterAgeSeconds" not in p11.TABLE["thresholds"]
 
 
 @pytest.mark.parametrize("code,details", [(3, "Invalid transaction."), (10, "Too much contention"), (3, GONE), (5, "not found"), (9, "failed precondition")])
 def test_a_definitive_refusal_of_a_release_of_a_token_certainly_past_the_age_releases_it(code, details):
-    # begin answered at 2.0 s; the Rollback is dispatched at 304.0 s, so the token is at least 302.0 s old
-    assert release(ledger_for(p12.TABLE), code, details, 304.0) == "released-expired"
+    # begin answered at 2.0 s; the Rollback is dispatched at 320.0 s, so the token is at least 318.0 s old
+    assert release(ledger_for(p12.TABLE), code, details, 320.0) == "released-expired"
 
 
 def test_it_also_finishes_a_declared_release_step_and_not_only_a_chain_end_release():
     declared = {"id": "rest/c/rollback-last"}
-    assert release(ledger_for(p12.TABLE), 3, "Invalid transaction.", 304.0, step=declared) == "released-expired"
+    assert release(ledger_for(p12.TABLE), 3, "Invalid transaction.", 320.0, step=declared) == "released-expired"
 
 
-@pytest.mark.parametrize("dispatch,expected", [(303.0, "unconfirmed-release"), (303.01, "released-expired"), (250.0, "unconfirmed-release")])
+@pytest.mark.parametrize("dispatch,expected", [(317.0, "unconfirmed-release"), (317.01, "released-expired"), (303.0, "unconfirmed-release"), (250.0, "unconfirmed-release")])
 def test_the_age_bound_is_strict_and_a_lower_one(dispatch, expected):
-    # begin answered at 2.0 s: at a dispatch of 303.0 the lower bound is exactly 301.0 s, which is not past it
+    # begin answered at 2.0 s: at a dispatch of 317.0 the lower bound is exactly 315.0 s, which is not past it; 303.0 (301 s) is inside the margin
     assert release(ledger_for(p12.TABLE), 3, "Invalid transaction.", dispatch) == expected
 
 
-@pytest.mark.parametrize("code", [1, 2, 4, 13, 14])
+@pytest.mark.parametrize("code", [1, 2, 4, 6, 7, 8, 13, 14])
 def test_an_unknown_outcome_never_releases_a_token(code):
     assert release(ledger_for(p12.TABLE), code, "unknown", 400.0) == "unconfirmed-release"
 
@@ -81,7 +81,22 @@ def test_the_narrow_answers_still_release_a_token_at_any_age_and_stay_distinct()
 
 
 def test_a_release_age_below_the_total_age_threshold_never_compiles():
-    for changes in ({"releaseAfterAgeSeconds": 100}, {"releaseAfterAgeSeconds": "301"}, {"releaseAfterAgeSeconds": 301, "other": 1}):
+    for changes in ({"releaseAfterAgeSeconds": 100}, {"releaseAfterAgeSeconds": "315"}, {"releaseAfterAgeSeconds": 315, "other": 1}):
         table = {**p12.TABLE, "thresholds": {"totalAgeSeconds": 270, **changes}}
         with pytest.raises(ValueError, match="txn-program table"):
             program.compile_plan(table, NONCE, OWNER)
+
+
+def test_no_table_with_a_grpc_transaction_may_declare_the_release_age_until_the_grpc_lifetime_is_recorded():
+    # P12's setup steps are gRPC and stay allowed; a gRPC token step (Begin, or a step that uses or issues a token) is what the REST-only premise excludes.
+    program.compile_plan(p12.TABLE, NONCE, OWNER)
+    for change in ({"transport": "grpc"},):
+        steps = tuple({**step, **change} if step["id"] == "rest/c/begin" else step for step in p12.TABLE["steps"])
+        with pytest.raises(ValueError, match="no table with a gRPC transaction"):
+            program.compile_plan({**p12.TABLE, "steps": steps}, NONCE, OWNER)
+    steps = tuple({**step, "transport": "grpc"} if step["id"] == "rest/c/read-a" else step for step in p12.TABLE["steps"])
+    with pytest.raises(ValueError, match="no table with a gRPC transaction"):
+        program.compile_plan({**p12.TABLE, "steps": steps}, NONCE, OWNER)
+    grpc_table = {**p11.TABLE, "thresholds": {"totalAgeSeconds": 270, "releaseAfterAgeSeconds": 315}}
+    with pytest.raises(ValueError, match="no table with a gRPC transaction"):
+        program.compile_plan(grpc_table, NONCE, OWNER)

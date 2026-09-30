@@ -49,10 +49,17 @@ def test_every_wait_is_inside_the_idle_limit_and_the_chain_grows_old_by_keepaliv
         assert [step["id"].split("/", 1)[1] for step in chain][:2] == ["begin", "read-a"] and [step["id"].split("/", 1)[1] for step in chain][-5:] == ["live-read", "expiry-read", "expiry-commit", "writer", "post-read-a"]
         waits = [step["waitSeconds"] for step in chain if "waitSeconds" in step]
         assert waits == [24] * 9 + [12, 32] and max(waits) < 60
-        # Recorded pace (P11 recording 1): an RPC takes about 1.1 to 1.3 s and each wait runs about 0.6 s long, so the expiry read
-        # lands at about 260 + 12 requests * 1.2 s + 12 waits * 0.6 s = about 282 s: past 270 s and below 298.7 s.
-        estimate = sum(waits) + 12 * 1.2 + 11 * 0.6
-        assert 274 < estimate < 298.7
+        # Recorded pace (P11 recording 1): an RPC takes 1.1 to 1.3 s and each wait runs about 0.6 s longer than declared. A wait is before its
+        # step, so the age at a step's dispatch is the waits up to and including it, the requests before it, and one overhead per wait.
+        ids = [step["id"] for step in chain]
+        def age(step_id, rpc_seconds):
+            before = chain[1: ids.index(step_id)]
+            return sum(step.get("waitSeconds", 0) for step in chain[: ids.index(step_id) + 1]) + len(before) * rpc_seconds + 0.6 * sum("waitSeconds" in step for step in chain[: ids.index(step_id) + 1])
+        # the expiry read is certainly past the documented 270 s with a margin (at the fastest recorded pace)
+        assert age(f"{transport}/expiry-read", 1.1) >= 275
+        # the chain-end release is still below the age a request was refused at (298.7 s) at the slowest recorded pace
+        release = sum(waits) + (len(chain) - 1) * 1.3 + 0.6 * len(waits)
+        assert release <= 290
         assert all(step["tokenInput"] for step in chain if "waitSeconds" in step)
 
 

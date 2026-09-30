@@ -39,18 +39,18 @@ def test_the_table_is_registered_and_bound():
 
 def test_the_requests_and_the_clock_stay_inside_the_corpus_cap():
     value = plan()
-    assert len(value["steps"]) == 31 and len(value["cases"]) == 14
-    assert value["caps"] == {"observation": 31, "tokenCleanup": 4, "documentCleanup": 14, "management": 7, "credential": 2}
-    assert value["maxRequests"] == 58 <= 72 and value["maxTokens"] == 4
+    assert len(value["steps"]) == 33 and len(value["cases"]) == 14
+    assert value["caps"] == {"observation": 33, "tokenCleanup": 4, "documentCleanup": 14, "management": 7, "credential": 2}
+    assert value["maxRequests"] == 60 <= 72 and value["maxTokens"] == 4
     assert sum(value["waits"].values()) == 4 * p05.HOLD_SECONDS == 20
     assert TABLE["envelopeId"] == "FS-TRANSACTION-p05-readlock-001"
-    # ten outside writers at their full 30 s, 31 requests at up to 2 s, the four holds, and room for the last request
-    assert 10 * 30 + 31 * 2 + 20 + 13 <= TABLE["observationSeconds"] == 420
+    # ten outside writers at their full 30 s, 33 requests at up to 2 s, the four holds, and room for the last request
+    assert 10 * 30 + 33 * 2 + 20 + 13 <= TABLE["observationSeconds"] == 420
 
 
 def test_each_transport_runs_both_chains_with_the_writer_beside_its_holder_release():
     for transport in ["rest", "grpc"]:
-        assert names(transport, "c") == ["begin", "read-a", "writer-b", "commit", "writer-a", "writer-after-commit", "post-read-a", "post-read-b"]
+        assert names(transport, "c") == ["begin", "read-a", "writer-b", "commit", "writer-a", "read-after-pair", "writer-after-commit", "post-read-a", "post-read-b"]
         assert names(transport, "r") == ["begin", "read-a", "rollback", "writer-a", "writer-after-rollback", "post-read-a"]
     assert [step["id"] for step in plan()["steps"][:3]] == ["setup/absence-a", "setup/absence-b", "setup/create-a-and-b"]
 
@@ -81,7 +81,7 @@ def test_every_state_label_is_declared_and_used():
 
 def test_the_digest_binds_the_table():
     assert corpus_digest(TABLE) == plan()["corpusDigest"]
-    assert corpus_digest(TABLE) == "4d8fde602f109d69ea55ce38f9c1da2ab5f30186dad1214b8f8ef69f2370b0f9"
+    assert corpus_digest(TABLE) == "97e0a0dbe4089029fdecc9483b67102bd5f445bed4112a96d171657176a76f3d"
 
 
 @pytest.mark.parametrize("label,knobs", [
@@ -92,7 +92,7 @@ def test_the_digest_binds_the_table():
 def test_a_full_recording_completes_and_projects(label, knobs):
     receipt, _service, _clock = record(**knobs)
     assert receipt["complete"] is True, (label, receipt["failureType"], receipt["unknownCommits"])
-    assert receipt["phaseRequests"]["observation"] == 31
+    assert receipt["phaseRequests"]["observation"] == 33
     projected = projection(receipt, TABLE)
     assert [case["caseId"] for case in projected["cases"]] == plan()["cases"]
 
@@ -140,3 +140,13 @@ def test_a_writer_that_lands_late_is_seen_by_the_cleanup_read_after_the_settle_w
 
 def test_two_recordings_of_one_service_project_identically():
     assert projection(record(locks=True, hold_writers=True)[0], TABLE) == projection(record(locks=True, hold_writers=True)[0], TABLE)
+
+
+def test_the_read_right_after_a_pair_records_which_write_landed_last():
+    # held writer: it commits after the holder's release, so it is the last write to `a`; a refused writer leaves the holder's commit
+    for knobs, state in (({"locks": True, "hold_writers": True}, "rest-c-conflict"), ({"locks": True, "hold_writers": True, "contention_refusal": True}, "rest-c-commit")):
+        receipt, _service, _clock = record(**knobs)
+        assert receipt["complete"] is True
+        reads = {entry["site"]: entry for entry in projection(receipt, TABLE)["reads"]}
+        assert reads["rest/c/read-after-pair"] == {"site": "rest/c/read-after-pair", "code": 0, "state": state}
+        assert reads["grpc/c/read-after-pair"]["state"] == state.replace("rest", "grpc")

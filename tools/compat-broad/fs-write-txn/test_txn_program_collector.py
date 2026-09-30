@@ -16,10 +16,21 @@ collector_module = importlib.import_module("txn_program_collector")
 
 
 class Clock:
-    def __init__(self): self.seconds = 100.0
-    def now(self): return self.seconds
-    def utc(self): return (dt.datetime(2026, 9, 30, tzinfo=dt.timezone.utc) + dt.timedelta(seconds=self.seconds)).isoformat().replace("+00:00", "Z")
-    def sleep(self, seconds): self.seconds += seconds
+    """The fake clock; a lock guards the read-modify-write because the concurrent-writer tests advance it from two threads."""
+
+    def __init__(self):
+        self.seconds, self._lock = 100.0, threading.Lock()
+
+    def now(self):
+        with self._lock:
+            return self.seconds
+
+    def utc(self):
+        return (dt.datetime(2026, 9, 30, tzinfo=dt.timezone.utc) + dt.timedelta(seconds=self.now())).isoformat().replace("+00:00", "Z")
+
+    def sleep(self, seconds):
+        with self._lock:
+            self.seconds += seconds
 
 
 class Service:

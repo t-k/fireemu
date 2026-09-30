@@ -107,8 +107,8 @@
             "project": "fireemu-oracle-query"
           }
         ],
-        "finalArtifactSha256": "d3e68542cfbbfc8914ba7305e5996dbaaafa0f887dba323472e08d116362adbd",
-        "sourceCommit": "bbb3b7259481d89c651af6c113ce763fca52edeb",
+        "finalArtifactSha256": "d55d608c3111b147cb1d9eeeba00593928f8b38fbc89b0681a4a3e124ff30ab0",
+        "sourceCommit": "42f62ee44581ce64eb387fecbdca1104c65f2037",
         "comparisonPath": "spec/compatibility/closure/evidence/STORAGE-RULES-comparison.json",
         "rows": {
           "RECORDED_DIVERGENCE": 252,
@@ -142,8 +142,8 @@
             "project": "fireemu-oracle-query"
           }
         ],
-        "finalArtifactSha256": "d3e68542cfbbfc8914ba7305e5996dbaaafa0f887dba323472e08d116362adbd",
-        "sourceCommit": "bbb3b7259481d89c651af6c113ce763fca52edeb",
+        "finalArtifactSha256": "d55d608c3111b147cb1d9eeeba00593928f8b38fbc89b0681a4a3e124ff30ab0",
+        "sourceCommit": "42f62ee44581ce64eb387fecbdca1104c65f2037",
         "comparisonPath": "spec/compatibility/closure/evidence/STORAGE-RULES-comparison.json",
         "rows": {
           "RECORDED_DIVERGENCE": 48,
@@ -177,8 +177,8 @@
             "project": "fireemu-oracle-query"
           }
         ],
-        "finalArtifactSha256": "d3e68542cfbbfc8914ba7305e5996dbaaafa0f887dba323472e08d116362adbd",
-        "sourceCommit": "bbb3b7259481d89c651af6c113ce763fca52edeb",
+        "finalArtifactSha256": "d55d608c3111b147cb1d9eeeba00593928f8b38fbc89b0681a4a3e124ff30ab0",
+        "sourceCommit": "42f62ee44581ce64eb387fecbdca1104c65f2037",
         "comparisonPath": "spec/compatibility/closure/evidence/STORAGE-RULES-comparison.json",
         "rows": {
           "MATCH": 124,
@@ -212,8 +212,8 @@
             "project": "fireemu-oracle-query"
           }
         ],
-        "finalArtifactSha256": "d3e68542cfbbfc8914ba7305e5996dbaaafa0f887dba323472e08d116362adbd",
-        "sourceCommit": "bbb3b7259481d89c651af6c113ce763fca52edeb",
+        "finalArtifactSha256": "d55d608c3111b147cb1d9eeeba00593928f8b38fbc89b0681a4a3e124ff30ab0",
+        "sourceCommit": "42f62ee44581ce64eb387fecbdca1104c65f2037",
         "comparisonPath": "spec/compatibility/closure/evidence/STORAGE-RULES-comparison.json",
         "rows": {
           "MATCH": 143,
@@ -247,8 +247,8 @@
             "project": "fireemu-oracle-query"
           }
         ],
-        "finalArtifactSha256": "d3e68542cfbbfc8914ba7305e5996dbaaafa0f887dba323472e08d116362adbd",
-        "sourceCommit": "bbb3b7259481d89c651af6c113ce763fca52edeb",
+        "finalArtifactSha256": "d55d608c3111b147cb1d9eeeba00593928f8b38fbc89b0681a4a3e124ff30ab0",
+        "sourceCommit": "42f62ee44581ce64eb387fecbdca1104c65f2037",
         "comparisonPath": "spec/compatibility/closure/evidence/STORAGE-RULES-comparison.json",
         "rows": {
           "MATCH": 50,
@@ -282,8 +282,8 @@
             "project": "fireemu-oracle-query"
           }
         ],
-        "finalArtifactSha256": "d3e68542cfbbfc8914ba7305e5996dbaaafa0f887dba323472e08d116362adbd",
-        "sourceCommit": "bbb3b7259481d89c651af6c113ce763fca52edeb",
+        "finalArtifactSha256": "d55d608c3111b147cb1d9eeeba00593928f8b38fbc89b0681a4a3e124ff30ab0",
+        "sourceCommit": "42f62ee44581ce64eb387fecbdca1104c65f2037",
         "comparisonPath": "spec/compatibility/closure/evidence/STORAGE-RULES-comparison.json",
         "rows": {
           "RECORDED_DIVERGENCE": 85,
@@ -317,8 +317,8 @@
             "project": "fireemu-oracle-query"
           }
         ],
-        "finalArtifactSha256": "d3e68542cfbbfc8914ba7305e5996dbaaafa0f887dba323472e08d116362adbd",
-        "sourceCommit": "bbb3b7259481d89c651af6c113ce763fca52edeb",
+        "finalArtifactSha256": "d55d608c3111b147cb1d9eeeba00593928f8b38fbc89b0681a4a3e124ff30ab0",
+        "sourceCommit": "42f62ee44581ce64eb387fecbdca1104c65f2037",
         "comparisonPath": "spec/compatibility/closure/evidence/STORAGE-RULES-comparison.json",
         "rows": {
           "MATCH": 80,
@@ -352,8 +352,8 @@
             "project": "fireemu-oracle-query"
           }
         ],
-        "finalArtifactSha256": "d3e68542cfbbfc8914ba7305e5996dbaaafa0f887dba323472e08d116362adbd",
-        "sourceCommit": "bbb3b7259481d89c651af6c113ce763fca52edeb",
+        "finalArtifactSha256": "d55d608c3111b147cb1d9eeeba00593928f8b38fbc89b0681a4a3e124ff30ab0",
+        "sourceCommit": "42f62ee44581ce64eb387fecbdca1104c65f2037",
         "comparisonPath": "spec/compatibility/closure/evidence/STORAGE-RULES-comparison.json",
         "rows": {
           "RECORDED_DIVERGENCE": 196,
@@ -387,8 +387,8 @@
             "project": "fireemu-oracle-query"
           }
         ],
-        "finalArtifactSha256": "d3e68542cfbbfc8914ba7305e5996dbaaafa0f887dba323472e08d116362adbd",
-        "sourceCommit": "bbb3b7259481d89c651af6c113ce763fca52edeb",
+        "finalArtifactSha256": "d55d608c3111b147cb1d9eeeba00593928f8b38fbc89b0681a4a3e124ff30ab0",
+        "sourceCommit": "42f62ee44581ce64eb387fecbdca1104c65f2037",
         "comparisonPath": "spec/compatibility/closure/evidence/STORAGE-RULES-comparison.json",
         "rows": {
           "RECORDED_DIVERGENCE": 24,
@@ -422,8 +422,8 @@
             "project": "fireemu-oracle-query"
           }
         ],
-        "finalArtifactSha256": "d3e68542cfbbfc8914ba7305e5996dbaaafa0f887dba323472e08d116362adbd",
-        "sourceCommit": "bbb3b7259481d89c651af6c113ce763fca52edeb",
+        "finalArtifactSha256": "d55d608c3111b147cb1d9eeeba00593928f8b38fbc89b0681a4a3e124ff30ab0",
+        "sourceCommit": "42f62ee44581ce64eb387fecbdca1104c65f2037",
         "comparisonPath": "spec/compatibility/closure/evidence/STORAGE-RULES-comparison.json",
         "rows": {
           "MATCH": 32,
@@ -457,8 +457,8 @@
             "project": "fireemu-oracle-query"
           }
         ],
-        "finalArtifactSha256": "d3e68542cfbbfc8914ba7305e5996dbaaafa0f887dba323472e08d116362adbd",
-        "sourceCommit": "bbb3b7259481d89c651af6c113ce763fca52edeb",
+        "finalArtifactSha256": "d55d608c3111b147cb1d9eeeba00593928f8b38fbc89b0681a4a3e124ff30ab0",
+        "sourceCommit": "42f62ee44581ce64eb387fecbdca1104c65f2037",
         "comparisonPath": "spec/compatibility/closure/evidence/STORAGE-RULES-comparison.json",
         "rows": {
           "MATCH": 52,
@@ -492,8 +492,8 @@
             "project": "fireemu-oracle-query"
           }
         ],
-        "finalArtifactSha256": "d3e68542cfbbfc8914ba7305e5996dbaaafa0f887dba323472e08d116362adbd",
-        "sourceCommit": "bbb3b7259481d89c651af6c113ce763fca52edeb",
+        "finalArtifactSha256": "d55d608c3111b147cb1d9eeeba00593928f8b38fbc89b0681a4a3e124ff30ab0",
+        "sourceCommit": "42f62ee44581ce64eb387fecbdca1104c65f2037",
         "comparisonPath": "spec/compatibility/closure/evidence/STORAGE-RULES-comparison.json",
         "rows": {
           "MATCH": 60,
@@ -539,8 +539,8 @@
             "project": "fireemu-oracle-query"
           }
         ],
-        "finalArtifactSha256": "d3e68542cfbbfc8914ba7305e5996dbaaafa0f887dba323472e08d116362adbd",
-        "sourceCommit": "bbb3b7259481d89c651af6c113ce763fca52edeb",
+        "finalArtifactSha256": "d55d608c3111b147cb1d9eeeba00593928f8b38fbc89b0681a4a3e124ff30ab0",
+        "sourceCommit": "42f62ee44581ce64eb387fecbdca1104c65f2037",
         "comparisonPath": "spec/compatibility/closure/evidence/STORAGE-RULES-comparison.json",
         "rows": {
           "RECORDED_DIVERGENCE": 17,
@@ -574,8 +574,8 @@
             "project": "fireemu-oracle-query"
           }
         ],
-        "finalArtifactSha256": "d3e68542cfbbfc8914ba7305e5996dbaaafa0f887dba323472e08d116362adbd",
-        "sourceCommit": "bbb3b7259481d89c651af6c113ce763fca52edeb",
+        "finalArtifactSha256": "d55d608c3111b147cb1d9eeeba00593928f8b38fbc89b0681a4a3e124ff30ab0",
+        "sourceCommit": "42f62ee44581ce64eb387fecbdca1104c65f2037",
         "comparisonPath": "spec/compatibility/closure/evidence/STORAGE-RULES-comparison.json",
         "rows": {
           "RECORDED_DIVERGENCE": 9,
@@ -609,8 +609,8 @@
             "project": "fireemu-oracle-query"
           }
         ],
-        "finalArtifactSha256": "d3e68542cfbbfc8914ba7305e5996dbaaafa0f887dba323472e08d116362adbd",
-        "sourceCommit": "bbb3b7259481d89c651af6c113ce763fca52edeb",
+        "finalArtifactSha256": "d55d608c3111b147cb1d9eeeba00593928f8b38fbc89b0681a4a3e124ff30ab0",
+        "sourceCommit": "42f62ee44581ce64eb387fecbdca1104c65f2037",
         "comparisonPath": "spec/compatibility/closure/evidence/STORAGE-RULES-comparison.json",
         "rows": {
           "RECORDED_DIVERGENCE": 48,
@@ -644,8 +644,8 @@
             "project": "fireemu-oracle-query"
           }
         ],
-        "finalArtifactSha256": "d3e68542cfbbfc8914ba7305e5996dbaaafa0f887dba323472e08d116362adbd",
-        "sourceCommit": "bbb3b7259481d89c651af6c113ce763fca52edeb",
+        "finalArtifactSha256": "d55d608c3111b147cb1d9eeeba00593928f8b38fbc89b0681a4a3e124ff30ab0",
+        "sourceCommit": "42f62ee44581ce64eb387fecbdca1104c65f2037",
         "comparisonPath": "spec/compatibility/closure/evidence/STORAGE-RULES-comparison.json",
         "rows": {
           "RECORDED_DIVERGENCE": 36,
@@ -679,8 +679,8 @@
             "project": "fireemu-oracle-query"
           }
         ],
-        "finalArtifactSha256": "d3e68542cfbbfc8914ba7305e5996dbaaafa0f887dba323472e08d116362adbd",
-        "sourceCommit": "bbb3b7259481d89c651af6c113ce763fca52edeb",
+        "finalArtifactSha256": "d55d608c3111b147cb1d9eeeba00593928f8b38fbc89b0681a4a3e124ff30ab0",
+        "sourceCommit": "42f62ee44581ce64eb387fecbdca1104c65f2037",
         "comparisonPath": "spec/compatibility/closure/evidence/STORAGE-RULES-comparison.json",
         "rows": {
           "RECORDED_DIVERGENCE": 72,
@@ -714,8 +714,8 @@
             "project": "fireemu-oracle-query"
           }
         ],
-        "finalArtifactSha256": "d3e68542cfbbfc8914ba7305e5996dbaaafa0f887dba323472e08d116362adbd",
-        "sourceCommit": "bbb3b7259481d89c651af6c113ce763fca52edeb",
+        "finalArtifactSha256": "d55d608c3111b147cb1d9eeeba00593928f8b38fbc89b0681a4a3e124ff30ab0",
+        "sourceCommit": "42f62ee44581ce64eb387fecbdca1104c65f2037",
         "comparisonPath": "spec/compatibility/closure/evidence/STORAGE-RULES-comparison.json",
         "rows": {
           "RECORDED_DIVERGENCE": 109,
@@ -749,8 +749,8 @@
             "project": "fireemu-oracle-query"
           }
         ],
-        "finalArtifactSha256": "d3e68542cfbbfc8914ba7305e5996dbaaafa0f887dba323472e08d116362adbd",
-        "sourceCommit": "bbb3b7259481d89c651af6c113ce763fca52edeb",
+        "finalArtifactSha256": "d55d608c3111b147cb1d9eeeba00593928f8b38fbc89b0681a4a3e124ff30ab0",
+        "sourceCommit": "42f62ee44581ce64eb387fecbdca1104c65f2037",
         "comparisonPath": "spec/compatibility/closure/evidence/STORAGE-RULES-comparison.json",
         "rows": {
           "MATCH": 13,
@@ -808,8 +808,8 @@
             "project": "fireemu-oracle-query"
           }
         ],
-        "finalArtifactSha256": "d3e68542cfbbfc8914ba7305e5996dbaaafa0f887dba323472e08d116362adbd",
-        "sourceCommit": "bbb3b7259481d89c651af6c113ce763fca52edeb",
+        "finalArtifactSha256": "d55d608c3111b147cb1d9eeeba00593928f8b38fbc89b0681a4a3e124ff30ab0",
+        "sourceCommit": "42f62ee44581ce64eb387fecbdca1104c65f2037",
         "comparisonPath": "spec/compatibility/closure/evidence/STORAGE-RULES-official-regression.json",
         "rows": {
           "GATED_STEPS_PASSED": 234

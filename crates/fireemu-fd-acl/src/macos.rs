@@ -140,11 +140,15 @@ mod tests {
         absent_acl_answer, fd_has_extended_acl, first_entry_answer, raw_fd_has_extended_acl,
     };
 
-    /// `ENOENT`, `EBADF`, `ENOMEM` and `EINVAL` in `<sys/errno.h>`.
+    /// `EPERM`, `ENOENT`, `EBADF`, `ENOMEM`, `EACCES`, `EINVAL` and `ENOTSUP` in
+    /// `<sys/errno.h>`.
+    const EPERM: i32 = 1;
     const ENOENT: i32 = 2;
     const EBADF: i32 = 9;
     const ENOMEM: i32 = 12;
+    const EACCES: i32 = 13;
     const EINVAL: i32 = 22;
+    const ENOTSUP: i32 = 45;
 
     /// An owner-only scratch directory, removed with its ACLs on drop.
     struct Scratch(PathBuf);
@@ -270,6 +274,42 @@ mod tests {
     }
 
     #[test]
+    fn an_acl_the_owner_may_not_read_is_an_error_not_an_empty_acl() {
+        // `everyone deny readsecurity` denies the owner too: `acl_get_fd_np` then returns NULL
+        // with `EACCES`, while `fstat` on the same descriptor still succeeds. With an allow
+        // entry behind the deny, this is an ACL that grants another user access and hides it,
+        // so reading it must fail, never answer "no entries". The allow entry is added first:
+        // once the deny is in place, `chmod +a` cannot read the ACL it extends and replaces
+        // it with the new entry alone. `Scratch` removes both entries with `chmod -RN`, which
+        // the owner may still run, even when an assertion fails.
+        let scratch = Scratch::new("unreadable");
+        let file = scratch.path().join("file");
+        std::fs::write(&file, b"key").unwrap();
+        let directory = scratch.path().join("directory");
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&directory)
+            .unwrap();
+
+        for (path, allow) in [
+            (&file, "user:nobody allow read"),
+            (&directory, "user:nobody allow list,search"),
+        ] {
+            chmod(&["+a", allow], path);
+            assert!(has_extended_acl(path).unwrap());
+            chmod(&["+a", "everyone deny readsecurity"], path);
+
+            let opened = std::fs::File::open(path).unwrap();
+            assert!(opened.metadata().is_ok(), "fstat of {}", path.display());
+            let error = fd_has_extended_acl(opened.as_fd()).unwrap_err();
+            assert_eq!(error.raw_os_error(), Some(EACCES), "{}", path.display());
+        }
+
+        chmod(&["-N"], &file);
+        assert!(!has_extended_acl(&file).unwrap());
+    }
+
+    #[test]
     fn concurrent_reads_of_one_descriptor_all_see_the_entry() {
         let scratch = Scratch::new("concurrent");
         let path = scratch.path().join("file");
@@ -296,7 +336,7 @@ mod tests {
     #[test]
     fn only_enoent_from_acl_get_fd_np_means_no_acl() {
         assert!(!absent_acl_answer(std::io::Error::from_raw_os_error(ENOENT)).unwrap());
-        for errno in [EBADF, ENOMEM, EINVAL] {
+        for errno in [EPERM, EBADF, ENOMEM, EACCES, EINVAL, ENOTSUP] {
             let error = absent_acl_answer(std::io::Error::from_raw_os_error(errno)).unwrap_err();
             assert_eq!(error.raw_os_error(), Some(errno));
         }

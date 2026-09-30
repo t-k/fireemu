@@ -893,6 +893,105 @@ mod tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
+    /// Runs `chmod -RN` on a path when dropped, so that a failing test leaves no ACL entry.
+    #[cfg(target_os = "macos")]
+    struct AclCleanup(std::path::PathBuf);
+
+    #[cfg(target_os = "macos")]
+    impl Drop for AclCleanup {
+        fn drop(&mut self) {
+            let _ = std::process::Command::new("/bin/chmod")
+                .arg("-RN")
+                .arg(&self.0)
+                .status();
+        }
+    }
+
+    /// Gives `path` the allow entry `allow` behind `everyone deny readsecurity`.
+    ///
+    /// The deny applies to the owner too, so the owner can no longer read the ACL, while
+    /// `fstat` still succeeds: the owner-only metadata check passes and only the ACL read
+    /// stands between the cache and a key that another user may read. The allow entry is
+    /// added first, because once the deny is in place `chmod +a` cannot read the ACL it
+    /// extends and replaces it with the new entry alone. The owner may still run `chmod -N`.
+    #[cfg(target_os = "macos")]
+    fn add_acl_entry_behind_unreadable_security(path: &std::path::Path, allow: &str) {
+        add_acl_entry(path, allow);
+        assert!(acl_listing(path).contains(allow));
+        add_acl_entry(path, "everyone deny readsecurity");
+
+        assert!(std::fs::File::open(path).unwrap().metadata().is_ok());
+        let listing = std::process::Command::new("/bin/ls")
+            .arg("-led")
+            .arg(path)
+            .output()
+            .unwrap();
+        assert!(
+            !listing.status.success(),
+            "{} ACL is readable",
+            path.display()
+        );
+        assert!(String::from_utf8_lossy(&listing.stderr).contains("Permission denied"));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn an_entry_file_whose_acl_the_owner_cannot_read_is_refused() {
+        let root = scratch("acl-eacces-entry");
+        let _cleanup = AclCleanup(root.to_path_buf());
+        let first = load_or_generate_at(&root, 28).unwrap();
+        assert!(!first.hit);
+        assert!(load_or_generate_at(&root, 28).unwrap().hit);
+        let entry = cache_entry_path(&root, 28);
+        let original = std::fs::read(&entry).unwrap();
+        add_acl_entry_behind_unreadable_security(&entry, "user:nobody allow read");
+
+        let directory = open_cache_directory(&root).unwrap();
+        assert!(matches!(
+            load_entry(&directory, &entry_name(28), 28),
+            EntryLoad::UnsafeOrInvalid
+        ));
+        let uncached = load_or_generate_at(&root, 28).unwrap();
+        assert!(!uncached.hit);
+        assert_eq!(first.signer.kid(), uncached.signer.kid());
+        assert_eq!(std::fs::read(&entry).unwrap(), original);
+
+        clear_acl_entries(&root);
+        assert!(load_or_generate_at(&root, 28).unwrap().hit);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_managed_directory_whose_acl_the_owner_cannot_read_is_refused() {
+        for depth in 1..=super::MANAGED_DIRECTORIES.len() {
+            let root = scratch("acl-eacces-directory");
+            let _cleanup = AclCleanup(root.to_path_buf());
+            let seed = 30 + depth as u64;
+            let first = load_or_generate_at(&root, seed).unwrap();
+            assert!(!first.hit);
+            assert!(load_or_generate_at(&root, seed).unwrap().hit);
+            let entry = cache_entry_path(&root, seed);
+            let original = std::fs::read(&entry).unwrap();
+            let managed = super::MANAGED_DIRECTORIES[..depth]
+                .iter()
+                .fold(root.to_path_buf(), |path, component| path.join(component));
+            add_acl_entry_behind_unreadable_security(&managed, "user:nobody allow list,search");
+
+            assert!(
+                open_cache_directory(&root).is_err(),
+                "{} has an unreadable ACL",
+                managed.display()
+            );
+            let uncached = load_or_generate_at(&root, seed).unwrap();
+            assert!(!uncached.hit, "{} has an unreadable ACL", managed.display());
+            assert_eq!(first.signer.kid(), uncached.signer.kid());
+            assert_eq!(std::fs::read(&entry).unwrap(), original);
+
+            clear_acl_entries(&root);
+            assert!(load_or_generate_at(&root, seed).unwrap().hit);
+        }
+    }
+
     #[test]
     fn opened_file_metadata_must_match_the_owner_only_contract() {
         let valid = CacheFileMetadata {

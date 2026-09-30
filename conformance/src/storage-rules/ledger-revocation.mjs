@@ -50,6 +50,10 @@ export function rowSha256(line) {
 const KEYED = /(packetsha256|sourcecommit|runnersha256|manifestsha256|fixtureschemasha256|envelopeid)=([a-z0-9][a-z0-9._-]*)/g;
 // A lane other than this one, named the way the ledger names lanes: the revocation of another lane is not a revocation of this one.
 const OTHER_LANE = /(?<![a-z0-9-])(?:fs|auth|functions|storage|hosting|firestore|app-check)-[a-z][a-z0-9-]*/;
+// A revocation names its own topic in the subject column (the ledger's second column): a lane (FS-TRANSACTION, PUBSUB-EVENTARC, SCHEDULED-FUNCTIONS, AUTH-MFA ...), the bare name of a lane family (pubsub, functions,
+// storage, auth, fs ...) or a hyphenated work item. Such a line revokes that topic only; it is global only in the explicit global forms: a universal quantifier in the line, a subject that names no topic
+// (全体, all, sandbox, an empty or a plain-word subject) or a line with no subject column. The list of lanes is not needed to tell them apart: a new lane that follows the ledger's naming is another topic.
+const TOPIC_SUBJECT = /^(?:[a-z][a-z0-9]*(?:-[a-z0-9]+)+|pubsub|functions|storage|auth|fs|hosting|firestore|app-check|codex|fe|ci)(?![a-z0-9-])/;
 const HEX_REFERENCE = /(?<![0-9a-f])(?:[0-9a-f]{40}|[0-9a-f]{64})(?![0-9a-f])/g;
 
 /**
@@ -95,7 +99,7 @@ export function scanRevocations({ ledgerText, taskId, pins, envelopeId, allowlis
       const isDelegation = text.includes(NORMALIZED_DELEGATION_MARKER);
       if (isDelegation) { if (DELEGATION_WORDS.test(text)) delegation.push(index + 1); }
       // A revocation that names no lane at all (the whole sandbox program, an unscoped "all"), or that says all and names other lanes only as examples, is a candidate to stop this lane too.
-      else if (!namesLane && !namesThisVersion && (UNIVERSAL.test(text) || !OTHER_LANE.test(text))) globalCandidates.push(index + 1);
+      else if (!namesLane && !namesThisVersion && !TOPIC_SUBJECT.test(withoutQualifiers(normalizeLedgerText(line.split("|")[1] ?? ""))) && (UNIVERSAL.test(text) || !OTHER_LANE.test(text))) globalCandidates.push(index + 1);
     }
   });
   // The caller decides whether a global candidate counts: only one written after the decision row it selected does, so a decision written later supersedes an earlier global revocation.

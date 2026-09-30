@@ -571,6 +571,32 @@ test("a global revocation written after the decision stops the approval, and one
   }
 });
 
+// A lane the scanner has no name for (the ledger grew PUBSUB-EVENTARC and SCHEDULED-FUNCTIONS after it was written) is still another topic: a REVOKED line names its own topic in the subject
+// column and is global only in the explicit global forms. One such line written after this lane's decision (the lane's own approval stays valid; a global one would void it).
+test("a REVOKED line of a lane the scanner does not know is not a global revocation, however the lane is named", async () => {
+  const validate = await load();
+  const rows = {
+    "PUBSUB-EVENTARC": note("PUBSUB-EVENTARC preflight-002", "decision=REVOKED; packetSha256=" + "9".repeat(64) + "（使った）"),
+    "PUBSUB-EVENTARC envelope": note("PUBSUB-EVENTARC preflight-002 envelope", "REVOKED envelopeId=PUBSUB-EVENTARC-preflight-002-001"),
+    "SCHEDULED-FUNCTIONS": note("SCHEDULED-FUNCTIONS stage1", "REVOKED packetSha256=" + "8".repeat(64)),
+    "a bare pubsub": note("pubsub", "revoked"),
+    "a lane with a qualifier": note("SCHEDULED-FUNCTIONS（訂正）", "取消"),
+    "a worker lane": note("codex-lane7 stage2", "withdrawn"),
+    "a new lane that follows the naming": note("GCS-LIFECYCLE record-1", "撤回"),
+    "a universal word in the prose of another lane's line": note("PUBSUB-EVENTARC preflight-002", "REVOKED（全ての要求を使い切った。every request was sent）"),
+    "an envelope line of another lane that mentions a revocation": note("SCHEDULED-FUNCTIONS stage1 envelope", "envelopeId=SCHEDULED-FUNCTIONS-stage1-001; 取消は全て調整役が行う"),
+  };
+  for (const [name, row] of Object.entries(rows)) {
+    assert.equal(validate({ ledgerText: [decision(), row].join("\n"), packet, review }).sendAuthorized, false, name);
+    assert.equal(validate({ ledgerText: [decision(), "- 2026-09-29 | unrelated | fine | note.md", row].join("\n"), packet, review }).sendAuthorized, false, `${name} later`);
+    assert.equal(validate({ ledgerText: [row, decision(), row].join("\n"), packet, review }).sendAuthorized, false, `${name} around`);
+  }
+  // The explicit global forms still void the approval, next to lines of such lanes.
+  for (const global of [note("全体", "decision=REVOKED; すべて取り消す"), note("all", "revoked"), note("sandbox", "withdrawn: all sends"), "- 2026-09-29 |  | decision=REVOKED | オーナー | note.md"]) {
+    assert.throws(() => validate({ ledgerText: [decision(), rows["PUBSUB-EVENTARC"], global].join("\n"), packet, review }), /approval revoked/, global);
+  }
+});
+
 test("a revocation that names another lane, and delegation lines, are not global revocations of this lane", async () => {
   const validate = await load();
   for (const row of [note("STORAGE-OBJECT stage3-v1", "decision=REVOKED"), note("FS-TRANSACTION p10-grpc-boundary", "revoked"), note("AUTH-FEDERATION record-followup", "取消"), note("FUNCTIONS-EVENTS stage2", "withdrawn"), note("HOSTING-CONFIG x", "撤回"), note("FIRESTORE-RULES x", "revoked"), note("APP-CHECK-PROXY x", "revoked"), note("FS-DATA-WRITE x", "REVOKED"), note("AUTH-ACCOUNT x", "REVOKED"), note("FUNCTIONS-HTTP x", "REVOKED")]) {

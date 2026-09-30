@@ -156,6 +156,21 @@ fn an_enforced_request_naming_a_missing_tenant_makes_no_tenant_when_denied() {
         .observations("demo-app");
     assert_eq!(observed.len(), 2, "{observed:?}");
     assert_eq!(observed.iter().filter(|o| o.admitted).count(), 1);
+    // A request the admission let through but that made no tenant (a name that cannot be one) is
+    // observed once too.
+    let slashed = h.post(
+        &format!("{V1}/accounts:signUp"),
+        &json!({"email": "b@example.com", "password": "hunter22", "tenantId": "a/b"}),
+        &[&h.valid_token()],
+    );
+    assert_ne!(slashed.status, 200, "{}", slashed.body);
+    let observed = h
+        .app_check
+        .registry
+        .read()
+        .expect("readable")
+        .observations("demo-app");
+    assert_eq!(observed.len(), 3, "{observed:?}");
 }
 
 // ------------------------------------------------------------------------------------------

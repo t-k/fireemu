@@ -352,6 +352,28 @@ pub fn decode_unsigned(token: &str) -> Result<DecodedToken, JwtError> {
     decode_token(token, None)
 }
 
+/// The claims of a token read as they are, without checking its algorithm or signature: the way
+/// the official emulator reads an ID token's tenant before it looks the tenant up
+/// (`jsonwebtoken.decode`). Only for a decision that can make a request refuse more, never for
+/// one that admits or selects anything.
+pub fn decode_claims_unverified(token: &str) -> Result<JsonValue, JwtError> {
+    let parts: Vec<&str> = token.split('.').collect();
+    let [header_b64, payload, _signature] = parts.as_slice() else {
+        return Err(JwtError::Malformed);
+    };
+    let header =
+        String::from_utf8(base64url_decode(header_b64)?).map_err(|_| JwtError::Malformed)?;
+    if !matches!(parse(&header), Ok(JsonValue::Object(_))) {
+        return Err(JwtError::Malformed);
+    }
+    let payload_json =
+        String::from_utf8(base64url_decode(payload)?).map_err(|_| JwtError::Malformed)?;
+    match parse(&payload_json) {
+        Ok(parsed @ JsonValue::Object(_)) => Ok(parsed),
+        _ => Err(JwtError::Malformed),
+    }
+}
+
 /// Decodes a token and checks its signature: with a `signer` the token must carry the
 /// signer's algorithm and a valid signature (an unsigned token is refused, so a session
 /// issuing RS256 tokens never accepts forged `alg: none` ones); without one only `alg: none`

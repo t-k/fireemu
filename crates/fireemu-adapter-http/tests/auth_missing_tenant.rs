@@ -454,13 +454,39 @@ fn a_token_of_another_project_creates_no_tenant() {
     assert!(registry.tenant_store("demo-app", "elsewhere").is_none());
     // The token's tenant still has to agree with the tenant the body names, as the official
     // emulator asserts before it looks a tenant up: a mismatch makes nothing.
-    let _ = client(
+    let (status, refused) = client(
         &state,
         &format!("{V1}/accounts:lookup"),
         &json!({"idToken": tenant_token["idToken"], "tenantId": "named-anyway"}),
     );
+    assert_eq!(status, 400, "{refused}");
+    assert_eq!(refused["error"]["message"], "TENANT_ID_MISMATCH");
     assert!(registry.tenant_store("demo-app", "named-anyway").is_none());
     assert!(registry.tenant_store("demo-app", "elsewhere").is_none());
+    // The same through the path, and a credential the guard refuses is still refused first.
+    let path = format!("{V1}/projects/demo-app/tenants/named-by-path/accounts:lookup");
+    let r = handle_with(
+        &state,
+        "POST",
+        &path,
+        &owner(),
+        &json!({"idToken": tenant_token["idToken"]}),
+    );
+    assert_eq!(r.status, 400, "{}", r.body);
+    assert_eq!(r.body["error"]["message"], "TENANT_ID_MISMATCH");
+    let garbage = RequestHeaders {
+        authorization: Some("Bearer garbage".to_owned()),
+        ..owner()
+    };
+    let r = handle_with(
+        &state,
+        "POST",
+        &path,
+        &garbage,
+        &json!({"idToken": tenant_token["idToken"]}),
+    );
+    assert_eq!(r.status, 401, "{}", r.body);
+    assert!(registry.tenant_store("demo-app", "named-by-path").is_none());
     // An agreeing body tenant is the target, and is made.
     let _ = client(
         &state,
@@ -881,4 +907,57 @@ fn tenants_create_makes_no_tenant_the_body_names() {
     assert_eq!(status, 400, "{created}");
     assert!(registry.tenant_store("demo-app", "named-in-body").is_none());
     assert!(tenant_names(&state, "demo-app").is_empty());
+}
+
+/// An ID token this daemon cannot verify (another algorithm, another key, a production token) is
+/// read as the official emulator reads it, without verification, for the agreement with the named
+/// tenant only: it is never the target, and a disagreement makes nothing.
+#[test]
+fn an_unverifiable_id_tokens_tenant_has_to_agree_with_the_named_tenant() {
+    use fireemu_core_auth::jwt::base64url_encode;
+    let (state, registry) = emulator();
+    let token = |claims: &Value| {
+        format!(
+            "{}.{}.{}",
+            base64url_encode(br#"{"alg":"RS256","kid":"other","typ":"JWT"}"#),
+            base64url_encode(claims.to_string().as_bytes()),
+            base64url_encode(b"signature")
+        )
+    };
+    let with_tenant = token(&json!({"aud": "demo-app", "firebase": {"tenant": "t-x"}}));
+    let (status, refused) = client(
+        &state,
+        &format!("{V1}/accounts:lookup"),
+        &json!({"idToken": with_tenant, "tenantId": "t-y"}),
+    );
+    assert_eq!(status, 400, "{refused}");
+    assert_eq!(refused["error"]["message"], "TENANT_ID_MISMATCH");
+    // Alone it is no target either, and agreeing it changes nothing about who is made.
+    let _ = client(
+        &state,
+        &format!("{V1}/accounts:lookup"),
+        &json!({"idToken": with_tenant}),
+    );
+    assert!(registry.tenant_store("demo-app", "t-x").is_none());
+    let _ = client(
+        &state,
+        &format!("{V1}/accounts:lookup"),
+        &json!({"idToken": with_tenant, "tenantId": "t-x"}),
+    );
+    assert!(registry.tenant_store("demo-app", "t-x").is_some());
+    // A token with no tenant claim names none.
+    let without = token(&json!({"aud": "demo-app"}));
+    let _ = client(
+        &state,
+        &format!("{V1}/accounts:lookup"),
+        &json!({"idToken": without, "tenantId": "t-z"}),
+    );
+    assert!(registry.tenant_store("demo-app", "t-z").is_some());
+    // A token that is no JWT at all is not read.
+    let _ = client(
+        &state,
+        &format!("{V1}/accounts:lookup"),
+        &json!({"idToken": "not.a.token", "tenantId": "t-w"}),
+    );
+    assert!(registry.tenant_store("demo-app", "t-w").is_some());
 }

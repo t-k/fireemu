@@ -282,3 +282,39 @@ fn a_removed_tenants_token_names_a_tenant_and_is_checked_against_its_project() {
         Err(JwtError::WrongTenant { .. })
     ));
 }
+
+#[test]
+fn claims_are_read_without_checking_the_algorithm_or_the_signature() {
+    use fireemu_core_auth::jwt::{base64url_encode, decode_claims_unverified};
+    let token = |header: &str, payload: &str, signature: &str| {
+        format!(
+            "{}.{}.{signature}",
+            base64url_encode(header.as_bytes()),
+            base64url_encode(payload.as_bytes())
+        )
+    };
+    let read = decode_claims_unverified(&token(
+        r#"{"alg":"RS256","kid":"other"}"#,
+        r#"{"aud":"demo-app","firebase":{"tenant":"t-x"}}"#,
+        "c2ln",
+    ))
+    .expect("an unverifiable token still has claims");
+    assert_eq!(
+        read.get("firebase")
+            .and_then(|f| f.get("tenant"))
+            .and_then(fireemu_core_types::json::JsonValue::as_str),
+        Some("t-x")
+    );
+    for (name, bad) in [
+        ("two parts", "a.b".to_owned()),
+        ("four parts", "a.b.c.d".to_owned()),
+        ("empty", String::new()),
+        ("header not json", token("nope", r#"{"a":1}"#, "s")),
+        ("header not an object", token("[]", r#"{"a":1}"#, "s")),
+        ("payload not json", token("{}", "nope", "s")),
+        ("payload not an object", token("{}", "[1]", "s")),
+        ("not base64", "!!.!!.!!".to_owned()),
+    ] {
+        assert!(decode_claims_unverified(&bad).is_err(), "{name}");
+    }
+}

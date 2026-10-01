@@ -744,3 +744,106 @@ test("byte views other than live Uint8Array records are refused as invalid recor
   assert.equal(result.terminationRequired, true);
   assert.equal(rows.length, 0);
 });
+// The adapter contract: a sender may only use the journal through journalPersist, which resolves
+// after the row's `.committed`; the injected write acknowledges only after the row is written and
+// both the file and its parent directory are fsynced.
+async function journalGate({ storage, issue = () => {} }) {
+  const { createStreamingWriteGate } = await import(
+    new URL("../pubsub-corpus/streaming-write-gate.mjs", import.meta.url).href
+  );
+  const { journalPersist } = await import(target.href);
+  const deadlineAt = performance.now() + 1000,
+    steps = [];
+  const { j } = await journal({
+    maxEntryBytes: 1024,
+    maxTotalBytes: 4096,
+    deadlineAt,
+    write: async (row) => {
+      for (const step of ["write", "fsync-file", "fsync-directory"]) {
+        await storage(step, row);
+        steps.push(`${step}:${row.index}`);
+      }
+    },
+  });
+  const g = createStreamingWriteGate({
+    maxFrames: 2,
+    maxFrameBytes: 64,
+    maxOutgoingBytes: 256,
+    maxActions: 4,
+    wallMs: 1000,
+    deadlineAt,
+    guard: async () => {},
+    liveCheck: () => true,
+    persist: journalPersist(j, (record) => Buffer.from(JSON.stringify(record))),
+    issue: (intent) => {
+      steps.push(`issue:${intent.index}`);
+      return issue(intent);
+    },
+    contain: async () => {},
+  });
+  return { g, j, steps };
+}
+test("a sender wired through journalPersist issues only after the intent row is written and fsynced with its directory", async () => {
+  const released = [];
+  const { g, j, steps } = await journalGate({
+    storage: (step, row) =>
+      new Promise((resolve) => released.push({ name: `${step}:${row.index}`, resolve })),
+  });
+  const opening = g.open();
+  // Release one storage step at a time; issue must not run before the directory fsync of row 0.
+  for (let turn = 0; turn < 6; turn++) {
+    while (!released.length) await new Promise((resolve) => setImmediate(resolve));
+    const next = released.shift();
+    if (next.name === "fsync-directory:0") assert.deepEqual(steps, ["write:0", "fsync-file:0"]);
+    next.resolve();
+  }
+  await opening;
+  assert.deepEqual(steps, [
+    "write:0",
+    "fsync-file:0",
+    "fsync-directory:0",
+    "issue:0",
+    "write:1",
+    "fsync-file:1",
+    "fsync-directory:1",
+  ]);
+  const gate = await g.done();
+  assert.equal(gate.completedActions, 1);
+  assert.equal(gate.terminationRequired, false);
+  assert.equal((await j.done()).acknowledgedEntries, 2);
+});
+test("a failed directory fsync of the intent row means issue is never entered and nothing is retried", async () => {
+  const { g, j, steps } = await journalGate({
+    storage: async (step) => {
+      if (step === "fsync-directory") throw new Error("parent directory fsync failed");
+    },
+  });
+  await assert.rejects(g.open(), /stopped/);
+  assert.deepEqual(steps, ["write:0", "fsync-file:0"]);
+  const gate = await g.done();
+  assert.equal(gate.issuedActions, 0);
+  assert.equal(gate.unknownActions, 1);
+  assert.equal(gate.terminationRequired, false);
+  const journalResult = await j.done();
+  assert.equal(journalResult.reason, "persistence");
+  assert.equal(journalResult.acknowledgedEntries, 0);
+});
+test("a lost acknowledgement of the issued row reaches the gate as an unknown outcome that requires termination", async () => {
+  const { g, steps } = await journalGate({
+    storage: async (step, row) => {
+      if (row.index === 1 && step === "fsync-file") throw new Error("file fsync failed");
+    },
+  });
+  await assert.rejects(g.open(), /stopped/);
+  assert.deepEqual(steps, ["write:0", "fsync-file:0", "fsync-directory:0", "issue:0", "write:1"]);
+  const gate = await g.done();
+  assert.equal(gate.issuedActions, 1);
+  assert.equal(gate.unknownActions, 1);
+  assert.equal(gate.terminationRequired, true);
+});
+test("journalPersist refuses a non-journal and a missing encoder before any write", async () => {
+  const { journalPersist } = await import(target.href);
+  assert.throws(() => journalPersist({}, (record) => record), /journal/);
+  const { j } = await journal();
+  assert.throws(() => journalPersist(j), /encoder/);
+});

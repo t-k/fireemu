@@ -201,3 +201,14 @@ export function createStreamingJournal({
   }
   return { append, done };
 }
+// The only supported way to store a sender's rows in the journal: the returned persist callback
+// resolves only after the row's `.committed`, so a gate or queue cannot dispatch while storage is
+// pending. The injected `write` must acknowledge only after the row is written and both the file and
+// its parent directory are fsynced; this module cannot check that.
+export function journalPersist(journal, encode) {
+  if (typeof journal?.append !== "function") throw new Error("streaming journal required");
+  if (typeof encode !== "function") throw new Error("record encoder required");
+  return async (record) => {
+    await journal.append(encode(record)).committed;
+  };
+}

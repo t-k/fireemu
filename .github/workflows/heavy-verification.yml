@@ -93,6 +93,9 @@ jobs:
           INPUT_TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
+          # Bracket ranges follow the locale's collation under glibc (so [a-z] can match an accented
+          # letter in en_US.UTF-8); every pattern below means ASCII only.
+          export LC_ALL=C
           fail() { echo "::error::$1"; exit 1; }
           # The cache is scoped by the ref this run belongs to. Never run from the default branch or a
           # tag: code under test would share a cache scope with ci.yml and release.yml.

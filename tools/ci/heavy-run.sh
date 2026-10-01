@@ -17,6 +17,8 @@
 # What the run produced is data written by the code under test: it is downloaded into --out (which
 # must be new or empty) and printed through a filter that keeps printable ASCII only.
 set -euo pipefail
+# Bracket ranges follow the locale under glibc ([a-z] can match an accented letter); keep every pattern ASCII.
+export LC_ALL=C
 
 usage() {
   awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0"

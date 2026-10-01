@@ -37,6 +37,8 @@ export function validateRecords(files) {
     if (byRole.has(header.role)) problems.push(`${name}: a second ${header.role} record file`);
     else byRole.set(header.role, { name, header, rows });
   }
+  const versions = new Set([...byRole.values()].map(({ header }) => header.harnessVersion));
+  if (versions.size > 1) problems.push("record files disagree on the harness version");
   const lanes = new Map(),
     purposes = {};
   for (const [fileRole, { name, rows }] of byRole) {
@@ -165,6 +167,12 @@ function judgePass(rows, ctx) {
       inconclusive.push({ row, reason: "session query failed" });
       continue;
     }
+    // The inventory reads `lstart` with TZ=UTC, so no daylight-saving change can shift it.
+    const startedAt = Date.parse(row.started + " GMT");
+    if (!Number.isFinite(startedAt)) {
+      inconclusive.push({ row, reason: "unreadable start time" });
+      continue;
+    }
     const zombie = /^Z/.test(row.stat ?? "");
     const rules = [];
     if (row.sid === ctx.sessionId) rules.push("session");
@@ -176,7 +184,7 @@ function judgePass(rows, ctx) {
     )
       rules.push("identity");
     const path =
-      Date.parse(row.started) >= ctx.launchTime &&
+      startedAt >= ctx.launchTime &&
       typeof row.args === "string" &&
       row.args.includes(ctx.privateDir);
     if (path) rules.push("path");
@@ -186,15 +194,16 @@ function judgePass(rows, ctx) {
       survivors.push({ row, rules });
       continue;
     }
-    if (row.sid !== "ESRCH") continue;
     const parent = byPid.get(row.ppid);
     if (zombie) {
-      // A zombie whose live parent is outside the session is someone else's; otherwise unknown.
+      // A zombie clause 4 does not cover, whatever its session answer, is someone else's when
+      // its live parent is outside the session; otherwise the run is inconclusive.
       if (parent && typeof parent.sid === "number" && parent.sid !== ctx.sessionId)
         unrelatedZombies.push(row);
       else inconclusive.push({ row, reason: "zombie with an unknown parent" });
       continue;
     }
+    if (row.sid !== "ESRCH") continue;
     // Only a row that could have been in the session asks for another pass.
     if (row.ppid === 1 || members.has(row.ppid) || recordedPid(row.ppid) || parent?.sid === "ESRCH")
       trigger = true;
@@ -325,6 +334,7 @@ export function refusalLineCheck(line, { functionName, timeZone, sources }) {
 
 const PINNED = [
   "sourceCommit",
+  "harnessVersion",
   "binarySha256",
   "runnerSha256",
   "fixtureSha256",
@@ -354,6 +364,8 @@ export function refusalVerdict(run) {
     };
   };
   check("A", ["pins", "identity", "refusalCheck", "daemon"], (fail) => {
+    if (run.identity.controlMode !== undefined || run.identity.controlsSha256 !== undefined)
+      fail.push("the run's identity names a control fixture");
     if (run.refusalCheck.ok !== true)
       fail.push(...(run.refusalCheck.problems?.length ? run.refusalCheck.problems : ["unchecked"]));
     for (const key of PINNED)
@@ -383,10 +395,18 @@ export function refusalVerdict(run) {
     if (run.records.ok !== true)
       fail.push(...(run.records.problems?.length ? run.records.problems : ["records invalid"]));
   });
-  check("D", ["records", "daemon", "settle"], (fail) => {
+  check("D", ["records", "daemon", "settle", "supervision"], (fail, unknown) => {
     if ((run.records.signals ?? []).length)
       fail.push(`${run.records.signals.length} harness signal(s)`);
     if (run.daemon.timedOut || run.daemon.cancelled) fail.push("the daemon did not exit by itself");
+    for (const role of ["inner", "outer"]) {
+      const supervision = run.supervision[role];
+      if (supervision?.timedOut !== false || supervision?.cancelled !== false)
+        fail.push(`the ${role} supervision timed out, was cancelled or did not say`);
+      // A failed tracker poll may have missed a sighting that (E) clause 2 relies on.
+      if (supervision?.inventoryFailures !== 0)
+        unknown.push(`the ${role} supervision's tracker polls failed or were not counted`);
+    }
     if (run.settle.inner !== true || run.settle.outer !== true)
       fail.push("a settle phase did not empty without escalation");
   });
@@ -404,9 +424,10 @@ export function refusalVerdict(run) {
     else if (lsof.some((answer) => answer.result !== "none"))
       unknown.push("an lsof answer is inconclusive");
   });
-  check("G", ["escalation"], (fail) => {
-    if (run.certificate !== false && run.escalation !== "on")
-      fail.push("escalation off is for control runs only");
+  check("G", ["escalation", "validatorControls"], (fail) => {
+    if (run.certificate !== true) fail.push("not a certificate run");
+    else if (run.escalation !== "on") fail.push("escalation off is for control runs only");
+    if (run.validatorControls.ok !== true) fail.push("a validator control did not hold");
   });
   const outcomes = Object.values(conditions).map((condition) => condition.outcome);
   const verdict = outcomes.includes("fail")
@@ -454,7 +475,8 @@ export function controlOutcome(control, result) {
     const seen =
       result.observation?.runner === true &&
       result.observation?.child === true &&
-      result.observation?.matched === true;
+      result.observation?.matched === true &&
+      result.observation?.cleanupVerified === true;
     return { counts: ok && seen, rulesFired: [] };
   }
   const pid = control.injected?.pid;
@@ -463,7 +485,9 @@ export function controlOutcome(control, result) {
   const listened = (result.ports?.lsof ?? []).some(
     (answer) => answer.result === "listener" && answer.pids?.includes(pid),
   );
-  if (listened) rulesFired.push("port");
+  // (iii) counts only when its helper recorded the bind before the final inventory began.
+  if (listened && (control.mode !== "listener" || control.bound?.beforeInventory === true))
+    rulesFired.push("port");
   if ((result.records?.signals ?? []).some((signal) => signal.target?.pid === pid))
     rulesFired.push("harness-signal");
   const named = {
@@ -473,4 +497,99 @@ export function controlOutcome(control, result) {
     leftover: "harness-signal",
   }[control.mode];
   return { counts: Number.isSafeInteger(pid) && rulesFired.includes(named), rulesFired };
+}
+
+const LANE_FILES = ["outer.jsonl", "inner.jsonl"];
+
+/**
+ * The validator controls of condition (G), run on a run's own records: a removed lane-owned
+ * file (control (v)), a dropped exit row and a failed spawn with a PID are refused, and PID reuse
+ * across two short children is paired by handle.
+ */
+export function validatorControls(files) {
+  const controls = [];
+  if (!files || typeof files !== "object" || validateRecords(files).ok !== true)
+    return { ok: false, controls, reason: "the base records do not validate" };
+  const copy = () => structuredClone(files);
+  const probe = (name, expected, change) => {
+    const set = copy();
+    change(set);
+    const observed = validateRecords(set).ok ? "accepted" : "refused";
+    controls.push({ name, expected, observed });
+  };
+  for (const name of LANE_FILES) probe(`${name} removed`, "refused", (set) => delete set[name]);
+  probe("dropped exit row", "refused", (set) => {
+    const rows = set["measure.jsonl"];
+    rows.splice(
+      rows.findIndex((row) => row.type === "exit"),
+      1,
+    );
+  });
+  const extra = (set, rows) => set["measure.jsonl"].push(...rows);
+  const last = (set) =>
+    set["measure.jsonl"]
+      .filter((row) => /^\d+$/.test(row.spawnMonoNs ?? row.exitMonoNs ?? ""))
+      .map((row) => BigInt(row.spawnMonoNs ?? row.exitMonoNs))
+      .reduce((a, b) => (a > b ? a : b), 0n);
+  probe("spawn-failed with a PID", "refused", (set) =>
+    extra(set, [
+      { type: "spawn-failed", handle: "measure:control-failed", pid: 4242, purpose: "ps" },
+    ]),
+  );
+  probe("PID reuse across two short children", "accepted", (set) => {
+    let mono = last(set);
+    const child = (handle) => [
+      {
+        type: "birth",
+        handle,
+        pid: 4242,
+        uid: 501,
+        purpose: "ps",
+        file: "ps",
+        argvSha256: "0".repeat(64),
+        spawnMonoNs: String((mono += 1n)),
+      },
+      { type: "exit", handle, code: 0, signal: null, exitMonoNs: String((mono += 1n)) },
+    ];
+    extra(set, [...child("measure:control-a"), ...child("measure:control-b")]);
+  });
+  return {
+    ok: controls.length === 5 && controls.every((control) => control.observed === control.expected),
+    controls,
+  };
+}
+
+const CONTROL_KINDS = ["positive", "orphan", "escaper", "listener", "leftover"];
+const utcDay = (time) => (Number.isFinite(time) ? new Date(time).toISOString().slice(0, 10) : null);
+
+/**
+ * The certificate (condition (G)): a passing refusal run and every control, each counting, all
+ * under the same harness version H and on the same UTC day, each with its validator controls.
+ */
+export function certificateVerdict({ refusal, controls }) {
+  const problems = [];
+  if (refusal?.kind !== "certificate") problems.push("the refusal report is not a certificate run");
+  if (refusal?.verdict?.verdict !== "pass") problems.push("the refusal run did not pass");
+  if (refusal?.validatorControls?.ok !== true)
+    problems.push("the refusal run's validator controls did not hold");
+  const day = utcDay(refusal?.launchTime);
+  if (!day || typeof refusal?.harnessVersion !== "string")
+    problems.push("the refusal run names no harness version or day");
+  for (const kind of CONTROL_KINDS) {
+    const found = (Array.isArray(controls) ? controls : []).filter(
+      (report) => report?.kind === kind || report?.control?.mode === kind,
+    );
+    if (found.length !== 1) {
+      problems.push(`control ${kind}: ${found.length} report(s)`);
+      continue;
+    }
+    const [report] = found;
+    if (report.control?.counts !== true) problems.push(`control ${kind} did not count`);
+    if (report.harnessVersion !== refusal?.harnessVersion)
+      problems.push(`control ${kind} ran another harness version`);
+    if (utcDay(report.launchTime) !== day) problems.push(`control ${kind} ran on another day`);
+    if (report.validatorControls?.ok !== true)
+      problems.push(`control ${kind}: validator controls did not hold`);
+  }
+  return { verdict: problems.length ? "fail" : "pass", problems };
 }

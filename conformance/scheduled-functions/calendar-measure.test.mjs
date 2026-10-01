@@ -5,7 +5,7 @@ import { access, chmod, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { measure, planKind } from "./calendar-measure.mjs";
+import { certify, harnessVersion, measure, planKind } from "./calendar-measure.mjs";
 import { calendarFixture } from "./calendar-local.mjs";
 import { readRecords } from "./calendar-recorder.mjs";
 import { refusalVerdict, validateRecords } from "./calendar-accounting.mjs";
@@ -60,7 +60,10 @@ async function fakeRoot(t) {
   return { root, binary, runner: here("testdata/fake-runner.cjs") };
 }
 
-async function planFor(t, { timeZone, control, positive }) {
+// The reports of this file's runs, for the certificate test at the end.
+const reports = {};
+
+async function planFor(t, { timeZone, control, positive, portctlPath = portctl }) {
   const { root, binary, runner } = await fakeRoot(t);
   const input = { schedule: "every 5 minutes", timeZone, scheduleTime: "2026-10-02T00:05:00Z" };
   const plan = {
@@ -74,7 +77,7 @@ async function planFor(t, { timeZone, control, positive }) {
       anchor,
       input,
     },
-    portctl,
+    portctl: portctlPath,
     sourceRepo,
     pins: {
       sourceCommit: PINNED_SOURCE,
@@ -84,7 +87,8 @@ async function planFor(t, { timeZone, control, positive }) {
       configSha256: digest(
         JSON.stringify({ schemaVersion: 1, profile: "strict", daemon: { clockStart: anchor } }),
       ),
-      portctlSha256: digest(await readFile(portctl)),
+      portctlSha256: digest(await readFile(portctlPath)),
+      harnessVersion: await harnessVersion(),
       exitCode: 1,
       refusalLine,
     },
@@ -150,6 +154,18 @@ test(
       JSON.stringify({ ...plan, pins: { ...plan.pins, sourceCommit: "a".repeat(40) } }),
     );
     await assert.rejects(measure(path), /not explained by the pinned source/);
+    for (const [key, pattern] of [
+      ["harnessVersion", /harnessVersion differs from its pin/],
+      ["binarySha256", /binarySha256 differs from its pin/],
+      ["fixtureSha256", /fixtureSha256 differs from its pin/],
+      ["portctlSha256", /portctlSha256 differs from its pin/],
+    ]) {
+      await writeFile(
+        path,
+        JSON.stringify({ ...plan, pins: { ...plan.pins, [key]: "0".repeat(64) } }),
+      );
+      await assert.rejects(measure(path), pattern, key);
+    }
     const runs = join(plan.session.root, "conformance/.runs");
     for (const name of await readdir(runs)) {
       const records = await readRecords(join(runs, name, "records/measure.jsonl"));
@@ -167,7 +183,10 @@ test(
     for (const [letter, condition] of Object.entries(report.verdict.conditions))
       assert.equal(condition.outcome, "pass", `${letter}: ${condition.reasons}`);
     assert.equal(report.verdict.verdict, "pass");
+    assert.equal(report.kind, "certificate");
+    assert.equal(report.validatorControls.ok, true);
     assert.equal(report.control, null);
+    reports.certificate = report;
     assert.equal(report.chain.outerSid, report.chain.outerPid);
     assert.notEqual(report.chain.rootSid, report.chain.outerSid);
     assert.deepEqual(report.claims, []);
@@ -183,6 +202,7 @@ test(
     const { path, plan } = await planFor(t, { timeZone: "Asia/Tokyo", positive: true });
     const report = await measure(path);
     assert.equal(report.control.counts, true, JSON.stringify(report.verdict.conditions));
+    reports.positive = report;
     assert.equal(report.verdict.conditions.A.outcome, "fail", "exit 0 is not the pinned refusal");
     // Control (v): the same run's records with one lane-owned file removed.
     const records = join(report.accountingDirectory, "records");
@@ -215,6 +235,8 @@ for (const [mode, timeZone, rule] of [
       assert.equal(report.verdict.verdict, "fail", "a control is never a pass");
       assert.ok(report.control.rulesFired.includes(rule), JSON.stringify(report.control));
       assert.equal(report.control.counts, true);
+      if (mode === "listener") assert.equal(report.control.bound.beforeInventory, true);
+      reports[mode] = report;
       assert.ok(
         report.control.injected.firstSighting,
         "the helper's first sighting is recorded (F2)",
@@ -234,3 +256,54 @@ for (const [mode, timeZone, rule] of [
       assert.equal(alive(report.control.injected.pid), false, "post-verdict cleanup stopped it");
     },
   );
+
+test(
+  "a run that fails after the launch is inconclusive and still stops every process it started",
+  { skip, timeout: 240000 },
+  async (t) => {
+    // A stand-in portctl that claims a port but keeps no registry, so the claim read fails.
+    const fake = join(await mkdtemp(join(tmpdir(), "calendar-portctl-")), "portctl.py");
+    t.after(() => rm(fake, { force: true }));
+    await writeFile(
+      fake,
+      'import json, socket, sys\nif "claim" in sys.argv:\n    s = socket.socket(); s.bind(("127.0.0.1", 0)); port = s.getsockname()[1]; s.close()\n    print(json.dumps({"port": port, "token": "t"}))\n',
+    );
+    const { path } = await planFor(t, {
+      timeZone: REFUSAL_ZONE,
+      control: { mode: "orphan", hold: 150 },
+      portctlPath: fake,
+    });
+    const report = await measure(path);
+    assert.equal(report.verdict.verdict, "inconclusive");
+    assert.match(report.error, /claim proof is unreadable/);
+    const post = await readRecords(join(report.accountingDirectory, "post-verdict.jsonl"));
+    const stopped = post.filter((row) => row.type === "signal").map((row) => row.target.pid);
+    assert.ok(stopped.length > 0, "the orphan helper was stopped");
+    for (let i = 0; i < 40 && stopped.some(alive); i++)
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.deepEqual(stopped.filter(alive), []);
+  },
+);
+
+test("the certificate holds over this file's refusal run and controls", { skip }, async (t) => {
+  const kinds = ["certificate", "positive", "orphan", "escaper", "listener", "leftover"];
+  if (!kinds.every((kind) => reports[kind])) return t.skip("a run above did not complete");
+  const directory = await mkdtemp(join(tmpdir(), "calendar-certify-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const paths = {};
+  for (const kind of kinds) {
+    paths[kind] = join(directory, kind + ".json");
+    await writeFile(paths[kind], JSON.stringify(reports[kind]));
+  }
+  const list = join(directory, "list.json");
+  await writeFile(
+    list,
+    JSON.stringify({ refusal: paths.certificate, controls: kinds.slice(1).map((k) => paths[k]) }),
+  );
+  assert.deepEqual(await certify(list), { verdict: "pass", problems: [] });
+  await writeFile(
+    list,
+    JSON.stringify({ refusal: paths.certificate, controls: kinds.slice(2).map((k) => paths[k]) }),
+  );
+  assert.equal((await certify(list)).verdict, "fail", "without the positive control");
+});

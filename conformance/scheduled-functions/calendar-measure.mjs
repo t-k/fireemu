@@ -5,10 +5,12 @@
 import { chmod, mkdir, mkdtemp, readFile, readdir, writeFile } from "node:fs/promises";
 import { createHash, randomBytes } from "node:crypto";
 import { join, resolve } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
-import { createRecorder, createSelfRecorder, readRecords } from "./calendar-recorder.mjs";
+import { createRecorder, createSelfRecorder, psEnv, readRecords } from "./calendar-recorder.mjs";
 import {
   REFUSAL_FORMATS,
+  certificateVerdict,
   controlOutcome,
   interpretLsof,
   judgeInventory,
@@ -16,9 +18,15 @@ import {
   refusalLineCheck,
   refusalVerdict,
   validateRecords,
+  validatorControls,
 } from "./calendar-accounting.mjs";
 import { parseProcessSnapshot } from "./calendar-processes.mjs";
-import { prepareCalendarSession, superviseCalendarProcess } from "./calendar-session.mjs";
+import {
+  calendarConfig,
+  prepareCalendarSession,
+  superviseCalendarProcess,
+} from "./calendar-session.mjs";
+import { calendarFixture } from "./calendar-local.mjs";
 import { CONTROL_VARIANTS } from "./calendar-controls.mjs";
 
 const here = (name) => fileURLToPath(new URL("./" + name, import.meta.url));
@@ -60,7 +68,7 @@ export async function snapshotWith(recorder) {
   const answer = await recorder.execFile(
     "ps",
     ["-ww", "-axo", "pid=,ppid=,pgid=,uid=,lstart=,comm=,args="],
-    { env: { PATH: process.env.PATH ?? "/usr/bin:/bin", LC_ALL: "C" } },
+    { env: psEnv() },
     "ps",
   );
   if (answer.code !== 0) throw new Error("process snapshot failed");
@@ -88,7 +96,7 @@ export async function inventoryPass(recorder) {
   const answer = await recorder.execFile(
     "ps",
     ["-ww", "-axo", "pid=,ppid=,pgid=,uid=,lstart=,stat=,args="],
-    { env: { PATH: process.env.PATH ?? "/usr/bin:/bin", LC_ALL: "C" } },
+    { env: psEnv() },
     "inventory",
   );
   if (answer.code !== 0) throw new Error("inventory failed");
@@ -115,7 +123,7 @@ export async function finalInventory(recorder, ctx) {
 
 /** Condition (F): `lsof` field output with a timeout, interpreted strictly. */
 export async function listenersOn(recorder, { port, pids = [] }) {
-  const env = { PATH: process.env.PATH ?? "/usr/bin:/bin", LC_ALL: "C" };
+  const env = psEnv();
   const answers = [];
   const run = async (args) =>
     interpretLsof(await recorder.execFile("lsof", args, { env, timeoutMs: 10000 }, "lsof"));
@@ -229,30 +237,56 @@ export function planKind(plan) {
   return { kind: "certificate", escalation: "on", certificate: true };
 }
 
+/** Stops a recorded child by its recorded identity and waits for its exit (failure paths only). */
+async function stopRecordedChild(recorder, child, started) {
+  const exited = child.recordExit.then(() => true);
+  const target = { pid: child.pid, uid: process.getuid(), started: started ?? "unknown" };
+  for (const [kind, waitMs] of [
+    ["SIGTERM", 5000],
+    ["SIGKILL", 5000],
+  ]) {
+    await recorder.signal(target, kind, async () => {
+      try {
+        process.kill(child.pid, kind);
+      } catch {
+        /* It has already exited; its exit row still comes from the wait. */
+      }
+    });
+    if (await Promise.race([exited, delay(waitMs).then(() => false)])) return;
+  }
+  await exited;
+}
+
 /** The outer launcher: prepares the run, claims the port, starts and waits for the inner supervisor. */
 export async function accountingOuter(accDir) {
   const plan = JSON.parse(await readFile(join(accDir, "plan.json"), "utf8"));
+  // Each lane-owned process hashes the harness it loaded itself; (C) needs every header to agree.
   const recorder = await createSelfRecorder({
     path: join(accDir, "records", "outer.jsonl"),
     role: "outer",
-    harnessVersion: plan.harnessVersion,
+    harnessVersion: await harnessVersion(),
   });
   const result = { phase: "prepare" };
-  const write = () => privateJson(join(accDir, "outer-result.json"), result);
+  let inner = null,
+    innerStarted,
+    claim = null,
+    database,
+    service,
+    prepared;
   try {
     const control = plan.control
       ? { ...plan.control, helperPath: here("calendar-control-helper.py") }
       : undefined;
-    const prepared = await prepareCalendarSession({
+    prepared = await prepareCalendarSession({
       ...plan.session,
       childPath: runLocal,
       control,
     });
     result.identity = prepared.identity;
     result.directory = prepared.directory;
-    const database = join(prepared.directory, "ports.sqlite3"),
-      service = "lane8-calendar-" + randomBytes(8).toString("hex"),
-      conformanceRoot = join(plan.session.root, "conformance");
+    database = join(prepared.directory, "ports.sqlite3");
+    service = "lane8-calendar-" + randomBytes(8).toString("hex");
+    const conformanceRoot = join(plan.session.root, "conformance");
     Object.assign(result, { phase: "claim", database, service });
     const claimed = await recorder.execFile(
       "python3",
@@ -261,9 +295,10 @@ export async function accountingOuter(accDir) {
       "claim",
     );
     if (claimed.code !== 0) throw new Error("port claim failed");
-    const claim = JSON.parse(claimed.stdout);
-    if (!Number.isSafeInteger(claim.port) || typeof claim.token !== "string")
+    const answer = JSON.parse(claimed.stdout);
+    if (!Number.isSafeInteger(answer.port) || typeof answer.token !== "string")
       throw new Error("port claim answer is unreadable");
+    claim = answer;
     result.port = claim.port;
     await privateJson(join(prepared.directory, "port.json"), { port: claim.port });
     const launcherPath = join(prepared.directory, "launcher.json");
@@ -272,11 +307,10 @@ export async function accountingOuter(accDir) {
       conformanceRoot,
       accDir,
       escalation: plan.escalation,
-      harnessVersion: plan.harnessVersion,
     });
     result.phase = "inner";
     const state = { done: false, code: null };
-    const inner = recorder.spawn(
+    inner = recorder.spawn(
       process.execPath,
       [runLocal, "--calendar-supervisor", launcherPath],
       {
@@ -299,8 +333,13 @@ export async function accountingOuter(accDir) {
       state.done = true;
       state.code = code ?? -1;
     });
-    if (Number.isSafeInteger(inner.pid))
-      recorder.identity(inner.recordHandle, inner.pid, await recorder.startedOf(inner.pid));
+    if (!Number.isSafeInteger(inner.pid)) {
+      await inner.recordExit;
+      inner = null;
+      throw new Error("the inner supervisor did not start");
+    }
+    innerStarted = await recorder.startedOf(inner.pid);
+    recorder.identity(inner.recordHandle, inner.pid, innerStarted);
     const rows = await snapshotWith(recorder);
     const root = rows.find((row) => row.pid === process.pid);
     if (!root) throw new Error("outer launcher identity unavailable");
@@ -321,15 +360,8 @@ export async function accountingOuter(accDir) {
       killGraceMs: 2000,
     });
     await inner.recordExit;
-    result.phase = "release";
-    const released = await recorder.execFile(
-      "python3",
-      [plan.portctl, "--db", database, "release", "--token", claim.token],
-      { env: cleanEnv(), timeoutMs: 10000 },
-      "release",
-    );
-    result.releaseCode = released.code;
-    result.claimsAfter = (await readOwnClaims(recorder, { service, database })).claims;
+    inner = null;
+    result.phase = "collect";
     try {
       result.inner = JSON.parse(await readFile(prepared.supervisorOutputPath, "utf8"));
     } catch {
@@ -340,77 +372,132 @@ export async function accountingOuter(accDir) {
     } catch {
       result.callback = null;
     }
-    result.phase = "done";
   } catch (error) {
     result.error = String(error?.message ?? error);
+  } finally {
+    // A failure after the inner supervisor started never leaves it unwaited, and the claim is
+    // always released by its token before the record file closes.
+    if (inner) await stopRecordedChild(recorder, inner, innerStarted).catch(() => {});
+    if (claim) {
+      try {
+        const released = await recorder.execFile(
+          "python3",
+          [plan.portctl, "--db", database, "release", "--token", claim.token],
+          { env: cleanEnv(), timeoutMs: 10000 },
+          "release",
+        );
+        result.releaseCode = released.code;
+        result.claimsAfter = (await readOwnClaims(recorder, { service, database })).claims;
+      } catch (error) {
+        result.error ??= String(error?.message ?? error);
+      }
+    }
   }
-  await write();
+  if (!result.error) result.phase = "done";
+  await privateJson(join(accDir, "outer-result.json"), result);
   recorder.close();
   if (result.phase !== "done") process.exitCode = 1;
 }
 
 async function recordFiles(directory) {
   const files = {};
-  for (const name of (await readdir(directory)).filter((value) => value.endsWith(".jsonl")).sort())
-    files[name] = await readRecords(join(directory, name));
+  for (const name of (await readdir(directory)).sort())
+    try {
+      files[name] = name.endsWith(".jsonl") ? await readRecords(join(directory, name)) : [];
+    } catch {
+      // An unreadable file stays in the set without a header, so (C) refuses it.
+      files[name] = [];
+    }
   return files;
 }
 
-/**
- * The measuring entry: verifies the pins it can before launching, starts the outer launcher in
- * a new session (the only `detached` spawn in the harness), waits for it, and judges the run.
- */
-export async function measure(planPath) {
-  const plan = JSON.parse(await readFile(planPath, "utf8"));
-  const { escalation, certificate } = planKind(plan);
-  const version = await harnessVersion();
-  const base = join(plan.session.root, "conformance/.runs");
-  await mkdir(base, { recursive: true, mode: 0o700 });
-  const accDir = await mkdtemp(join(base, "accounting-"));
-  await chmod(accDir, 0o700);
-  await mkdir(join(accDir, "records"), { mode: 0o700 });
-  const recorder = await createSelfRecorder({
-    path: join(accDir, "records", "measure.jsonl"),
-    role: "measure",
-    harnessVersion: version,
-  });
-  const portctlSha256 = digest(await readFile(plan.portctl));
-  const refusalCheck = await checkPinnedRefusalLine(recorder, {
-    sourceRepo: plan.sourceRepo,
-    sourceCommit: plan.pins?.sourceCommit,
-    line: plan.pins?.refusalLine,
-    input: plan.session.input,
-  });
-  // Checked before the launch: a certificate whose pinned line the source does not explain is
-  // never run.
-  if (certificate && !refusalCheck.ok) {
-    recorder.close();
-    throw new Error("the pinned refusal line is not explained by the pinned source");
+const readJson = async (path) => {
+  try {
+    return JSON.parse(await readFile(path, "utf8"));
+  } catch {
+    return null;
   }
-  await privateJson(join(accDir, "plan.json"), { ...plan, escalation, harnessVersion: version });
-  const launchTime = Math.floor(Date.now() / 1000) * 1000;
-  const rootRows = await snapshotWith(recorder);
-  const root = rootRows.find((row) => row.pid === process.pid);
-  const rootSid = (await sessionsOf(recorder, [process.pid]))[process.pid];
-  const outer = recorder.spawn(
-    process.execPath,
-    [runLocal, "--accounting-outer", accDir],
-    { detached: true, stdio: "ignore", env: cleanEnv() },
-    "outer",
-  );
-  const chain = { rootSid, outerPid: outer.pid, outerSid: null };
+};
+
+/**
+ * Condition (A), checked before the launch: every run kind uses the pinned source, build,
+ * runner, portctl and harness version H; the certificate also uses the pinned refusal fixture and
+ * config, and a refusal line the pinned source explains.
+ */
+export async function preLaunchProblems({
+  plan,
+  certificate,
+  version,
+  portctlSha256,
+  refusalCheck,
+}) {
+  const pins = plan.pins ?? {},
+    session = plan.session ?? {},
+    problems = [];
+  const fileDigest = async (path) => {
+    try {
+      return digest(await readFile(path));
+    } catch {
+      return null;
+    }
+  };
+  for (const [key, value] of [
+    ["sourceCommit", session.sourceCommit],
+    ["binarySha256", session.binarySha256],
+    ["binarySha256", await fileDigest(session.binary)],
+    ["runnerSha256", session.runnerSha256],
+    ["runnerSha256", await fileDigest(session.runner)],
+    ["portctlSha256", portctlSha256],
+    ["harnessVersion", version],
+  ])
+    if (typeof value !== "string" || value !== pins[key])
+      problems.push(`${key} differs from its pin`);
+  if (certificate) {
+    let fixture = null;
+    try {
+      fixture = digest(calendarFixture(session.input));
+    } catch {
+      /* An unreadable fixture differs from its pin. */
+    }
+    if (fixture !== pins.fixtureSha256) problems.push("fixtureSha256 differs from its pin");
+    if (digest(calendarConfig(session.anchor)) !== pins.configSha256)
+      problems.push("configSha256 differs from its pin");
+    if (refusalCheck?.ok !== true)
+      problems.push("the pinned refusal line is not explained by the pinned source");
+  }
+  return problems;
+}
+
+const supervisionOf = (result) =>
+  result
+    ? {
+        timedOut: result.timedOut,
+        cancelled: result.cancelled,
+        inventoryFailures: result.inventoryFailures,
+      }
+    : undefined;
+
+/** Judges a launched run once the outer launcher has been reaped. */
+async function judgeRun({
+  plan,
+  kind,
+  version,
+  recorder,
+  accDir,
+  launchTime,
+  chain,
+  outer,
+  extra,
+}) {
+  const { escalation, certificate } = kind;
   if (Number.isSafeInteger(outer.pid)) {
     recorder.identity(outer.recordHandle, outer.pid, await recorder.startedOf(outer.pid));
     chain.outerSid = (await sessionsOf(recorder, [outer.pid]))[outer.pid];
   }
   await outer.recordExit;
-  let outerResult = null;
-  try {
-    outerResult = JSON.parse(await readFile(join(accDir, "outer-result.json"), "utf8"));
-  } catch {
-    /* Missing proof fails the verdict. */
-  }
+  const outerResult = await readJson(join(accDir, "outer-result.json"));
   const prepared = outerResult?.directory;
+  extra.prepared = prepared;
   const recorded = [];
   for (const rows of Object.values(await recordFiles(join(accDir, "records"))))
     for (const row of rows) if (row.type === "identity") recorded.push(row);
@@ -420,12 +507,14 @@ export async function measure(planPath) {
   const identities = recorded
     .filter((row) => row.pid !== process.pid)
     .map((row) => ({ pid: row.pid, uid: row.uid ?? process.getuid(), started: row.started }));
+  const inventoryStartedAt = Date.now();
   const inventory = await finalInventory(recorder, {
     sessionId: chain.outerSid,
     recorded: identities,
     privateDir: prepared ?? accDir,
     launchTime,
   });
+  extra.survivors = inventory.survivors;
   const claims = outerResult?.service
     ? (
         await readOwnClaims(recorder, {
@@ -439,13 +528,21 @@ export async function measure(planPath) {
     ? await listenersOn(recorder, { port: outerResult.port, pids: alive })
     : [];
   recorder.close();
-  const records = validateRecords(await recordFiles(join(accDir, "records")));
+  const files = await recordFiles(join(accDir, "records"));
+  const records = validateRecords(files);
+  const validator = validatorControls(files);
+  const supervision = {
+    inner: supervisionOf(inner),
+    outer: supervisionOf(outerResult?.supervision),
+  };
   const verdict = refusalVerdict({
     certificate,
     escalation,
     pins: plan.pins,
-    identity: outerResult?.identity ? { ...outerResult.identity, portctlSha256 } : undefined,
-    refusalCheck,
+    identity: outerResult?.identity
+      ? { ...outerResult.identity, portctlSha256: extra.portctlSha256, harnessVersion: version }
+      : undefined,
+    refusalCheck: extra.refusalCheck,
     daemon: inner
       ? {
           exitCode: inner.exitCode,
@@ -463,21 +560,30 @@ export async function measure(planPath) {
             outer: outerResult.supervision.settledWithoutEscalation,
           }
         : undefined,
+    supervision,
     inventory,
     ports: claims ? { claims, lsof } : undefined,
+    validatorControls: validator,
   });
   let control = null;
-  if (plan.control || plan.positive) {
-    let injected;
-    try {
-      injected = JSON.parse(await readFile(join(prepared, "control-ready.json"), "utf8"));
-    } catch {
-      injected = undefined;
+  if (kind.kind !== "certificate") {
+    const injected = prepared ? await readJson(join(prepared, "control-ready.json")) : null;
+    let bound = null;
+    if (plan.control?.mode === "listener" && prepared) {
+      const written = await readJson(join(prepared, "bound.json"));
+      bound = written && {
+        ...written,
+        beforeInventory:
+          Number.isFinite(written.boundAt) && written.boundAt * 1000 < inventoryStartedAt,
+      };
     }
+    const mode = kind.kind === "positive" ? "positive" : plan.control.mode;
     control = {
+      mode,
       injected: inner?.injected ?? null,
+      bound,
       ...controlOutcome(
-        plan.positive ? { mode: "positive" } : { mode: plan.control.mode, injected },
+        mode === "positive" ? { mode } : { mode, injected: injected ?? undefined, bound },
         {
           ...verdict,
           inventory,
@@ -487,19 +593,22 @@ export async function measure(planPath) {
             runner: inner?.observationHandshake === true,
             child: inner?.observationHandshake === true,
             matched: outerResult?.callback?.matched === true,
+            cleanupVerified:
+              inner?.cleanupVerified === true &&
+              outerResult?.supervision?.cleanupVerified === true &&
+              outerResult?.releaseCode === 0 &&
+              Array.isArray(outerResult?.claimsAfter) &&
+              outerResult.claimsAfter.length === 0,
           },
         },
       ),
     };
   }
-  const report = {
-    harnessVersion: version,
-    root: root ? identityOf(root) : null,
-    rootSid,
-    launchTime,
-    chain,
+  return {
     verdict,
     control,
+    validatorControls: validator,
+    supervision,
     inventory: {
       outcome: inventory.outcome,
       reason: inventory.reason,
@@ -515,36 +624,142 @@ export async function measure(planPath) {
     },
     claims,
     records: { ok: records.ok, problems: records.problems, signals: records.signals.length },
-    accountingDirectory: accDir,
   };
-  await privateJson(join(accDir, "verdict.json"), report);
-  // Controls leave their helpers running on purpose; stop them now, by verified identity, in a
-  // record file outside the judged set.
-  if (plan.control) {
-    const post = createRecorder({
-      path: join(accDir, "post-verdict.jsonl"),
-      role: "measure",
-      pid: process.pid,
-      started: root?.started ?? "unknown",
-      harnessVersion: version,
-    });
-    const current = await snapshotWith(post);
-    const targets = inventory.survivors
-      .map((entry) =>
-        current.find((row) => row.pid === entry.row.pid && row.started === entry.row.started),
-      )
-      .filter(Boolean);
-    // The injected helper, too, when it is not a survivor (it may hold the port from outside S).
-    const helper = current.find(
-      (row) =>
-        row.pid === control?.injected?.pid &&
-        typeof prepared === "string" &&
-        row.args.includes(prepared + "/"),
-    );
-    if (helper && !targets.some((row) => row.pid === helper.pid)) targets.push(helper);
-    for (const live of targets)
+}
+
+/**
+ * After the verdict, in a record file outside the judged set: stops by verified identity every
+ * process of the run still alive (survivors, a control's helper, anything left in the run's
+ * session or naming its private directories after a failure).
+ */
+async function postVerdictCleanup({ accDir, root, version, launchTime, chain, extra }) {
+  const post = createRecorder({
+    path: join(accDir, "post-verdict.jsonl"),
+    role: "measure",
+    pid: process.pid,
+    started: root?.started ?? "unknown",
+    harnessVersion: version,
+  });
+  try {
+    const rows = await inventoryPass(post);
+    const dirs = [accDir, extra.prepared].filter((dir) => typeof dir === "string");
+    const ours = (row) =>
+      row.pid !== process.pid &&
+      Date.parse(row.started + " GMT") >= launchTime &&
+      ((Number.isSafeInteger(chain.outerSid) &&
+        chain.outerSid !== chain.rootSid &&
+        row.sid === chain.outerSid) ||
+        dirs.some((dir) => row.args.includes(dir + "/")) ||
+        (extra.survivors ?? []).some(
+          (entry) => entry.row.pid === row.pid && entry.row.started === row.started,
+        ));
+    for (const live of rows.filter(ours))
       await post.signal(identityOf(live), "SIGKILL", async () => process.kill(live.pid, "SIGKILL"));
+  } finally {
     post.close();
   }
+}
+
+/**
+ * The measuring entry: verifies the pins before launching, starts the outer launcher in a new
+ * session (the only `detached` spawn in the harness), waits for it, judges the run, and cleans up.
+ */
+export async function measure(planPath) {
+  const plan = JSON.parse(await readFile(planPath, "utf8"));
+  const kind = planKind(plan);
+  const version = await harnessVersion();
+  const base = join(plan.session.root, "conformance/.runs");
+  await mkdir(base, { recursive: true, mode: 0o700 });
+  const accDir = await mkdtemp(join(base, "accounting-"));
+  await chmod(accDir, 0o700);
+  await mkdir(join(accDir, "records"), { mode: 0o700 });
+  const recorder = await createSelfRecorder({
+    path: join(accDir, "records", "measure.jsonl"),
+    role: "measure",
+    harnessVersion: version,
+  });
+  const extra = {};
+  extra.portctlSha256 = digest(await readFile(plan.portctl));
+  extra.refusalCheck = await checkPinnedRefusalLine(recorder, {
+    sourceRepo: plan.sourceRepo,
+    sourceCommit: plan.pins?.sourceCommit,
+    line: plan.pins?.refusalLine,
+    input: plan.session.input,
+  });
+  const problems = await preLaunchProblems({
+    plan,
+    certificate: kind.certificate,
+    version,
+    portctlSha256: extra.portctlSha256,
+    refusalCheck: extra.refusalCheck,
+  });
+  if (problems.length) {
+    recorder.close();
+    throw new Error("not launched: " + problems.join("; "));
+  }
+  await privateJson(join(accDir, "plan.json"), {
+    ...plan,
+    kind: kind.kind,
+    escalation: kind.escalation,
+  });
+  const launchTime = Math.floor(Date.now() / 1000) * 1000;
+  const rootRows = await snapshotWith(recorder);
+  const root = rootRows.find((row) => row.pid === process.pid);
+  const rootSid = (await sessionsOf(recorder, [process.pid]))[process.pid];
+  const outer = recorder.spawn(
+    process.execPath,
+    [runLocal, "--accounting-outer", accDir],
+    { detached: true, stdio: "ignore", env: cleanEnv() },
+    "outer",
+  );
+  const chain = { rootSid, outerPid: outer.pid, outerSid: null };
+  const header = {
+    kind: kind.kind,
+    escalation: kind.escalation,
+    harnessVersion: version,
+    root: root ? identityOf(root) : null,
+    rootSid,
+    launchTime,
+    chain,
+  };
+  let report;
+  try {
+    report = {
+      ...header,
+      ...(await judgeRun({
+        plan,
+        kind,
+        version,
+        recorder,
+        accDir,
+        launchTime,
+        chain,
+        outer,
+        extra,
+      })),
+    };
+  } catch (error) {
+    // The outer launcher is still waited for; the run is inconclusive and its processes are
+    // cleaned up below like any other run's.
+    await outer.recordExit;
+    recorder.close();
+    report = {
+      ...header,
+      error: String(error?.message ?? error),
+      verdict: { verdict: "inconclusive", conditions: {} },
+      control: null,
+    };
+  }
+  report.accountingDirectory = accDir;
+  await privateJson(join(accDir, "verdict.json"), report);
+  await postVerdictCleanup({ accDir, root, version, launchTime, chain, extra });
   return report;
+}
+
+/** Condition (G): the certificate over one refusal report and the control reports. */
+export async function certify(listPath) {
+  const list = JSON.parse(await readFile(listPath, "utf8"));
+  const refusal = await readJson(list.refusal);
+  const controls = await Promise.all((list.controls ?? []).map((path) => readJson(path)));
+  return certificateVerdict({ refusal, controls });
 }

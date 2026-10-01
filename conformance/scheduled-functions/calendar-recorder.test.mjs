@@ -3,7 +3,8 @@ import { test } from "node:test";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createRecorder, createSelfRecorder, readRecords } from "./calendar-recorder.mjs";
+import { EventEmitter } from "node:events";
+import { createRecorder, createSelfRecorder, psEnv, readRecords } from "./calendar-recorder.mjs";
 import { validateRecords } from "./calendar-accounting.mjs";
 
 async function scratch(t) {
@@ -144,4 +145,34 @@ test("a lane-owned process records its own start time with a recorded ps of itse
     "outer.jsonl": await readRecords(path),
   });
   assert.deepEqual(result.problems, []);
+});
+
+test("only the measuring entry may start a session, and only for the outer launcher", async (t) => {
+  const directory = await scratch(t);
+  const started = [];
+  const spawnImpl = (file, args, options) => {
+    started.push(options);
+    const child = new EventEmitter();
+    child.pid = 4242;
+    return child;
+  };
+  const measure = createRecorder({ path: join(directory, "m.jsonl"), ...header, spawnImpl });
+  measure.spawn("node", ["x"], { detached: true }, "outer");
+  assert.throws(() => measure.spawn("node", ["x"], { detached: true }, "inner"), /session/);
+  const inner = createRecorder({
+    path: join(directory, "i.jsonl"),
+    ...header,
+    role: "inner",
+    spawnImpl,
+  });
+  assert.throws(() => inner.spawn("node", ["x"], { detached: true }, "outer"), /session/);
+  assert.throws(() => inner.spawn("node", ["x"], { ...{ detached: 1 } }, "daemon"), /session/);
+  inner.spawn("node", ["x"], { detached: false }, "daemon");
+  assert.equal(started.length, 2, "a refused spawn starts nothing");
+  const rows = await readRecords(join(directory, "i.jsonl"));
+  assert.equal(rows.filter((row) => row.type === "birth").length, 1);
+});
+
+test("every ps the harness runs reads start times in UTC", () => {
+  assert.deepEqual(psEnv(), { PATH: process.env.PATH ?? "/usr/bin:/bin", LC_ALL: "C", TZ: "UTC" });
 });

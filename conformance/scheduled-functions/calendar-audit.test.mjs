@@ -12,10 +12,42 @@ const ENTRY = "calendar-run-local.mjs";
 const RECORDER = "calendar-recorder.mjs";
 const MEASURE = "calendar-measure.mjs";
 
+// Every module specifier: `import … from "x"`, `export … from "x"` and a side-effect `import "x"`.
+const specifiers = (source) =>
+  [
+    ...source.matchAll(
+      /(?:^|\n)\s*(?:(?:import|export)\b[^;]*?\bfrom\s*|import\s*)["']([^"']+)["']/g,
+    ),
+  ].map((match) => match[1]);
 const localImports = (source) =>
-  [...source.matchAll(/(?:^|\n)\s*(?:import|export)\b[^;]*?\bfrom\s*["']\.\/([^"']+)["']/g)].map(
-    (match) => match[1],
-  );
+  specifiers(source)
+    .filter((name) => /^\.\/[^/]+$/.test(name))
+    .map((name) => name.slice(2));
+const BUILTINS = new Set([
+  "node:child_process",
+  "node:crypto",
+  "node:fs",
+  "node:fs/promises",
+  "node:path",
+  "node:timers/promises",
+  "node:url",
+]);
+
+/** The spans of every `.signal(` call's arguments, by parenthesis matching. */
+function signalSpans(source) {
+  const spans = [];
+  for (const match of source.matchAll(/\.signal\(/g)) {
+    let depth = 1,
+      index = match.index + match[0].length;
+    while (index < source.length && depth > 0) {
+      if (source[index] === "(") depth++;
+      else if (source[index] === ")") depth--;
+      index++;
+    }
+    spans.push([match.index, index]);
+  }
+  return spans;
+}
 
 /** The relative-import closure of `entry`, read through `load(name)`. */
 export async function importClosure(entry, load) {
@@ -55,6 +87,14 @@ export function auditSources(sources) {
     const allowed = name === MEASURE ? 1 : 0;
     if (sessions !== allowed) problems.push(`${name}: ${sessions} detached spawn(s)`);
     if (/\bsetsid\b/.test(source)) problems.push(`${name}: setsid`);
+    for (const specifier of specifiers(source))
+      if (!/^\.\/[^/]+\.mjs$/.test(specifier) && !BUILTINS.has(specifier))
+        problems.push(`${name}: import of ${specifier}`);
+    // Condition (D): every signal the harness sends goes through the recorder's signal row.
+    const spans = signalSpans(source);
+    for (const match of source.matchAll(/\.kill\(/g))
+      if (!spans.some(([from, to]) => match.index > from && match.index < to))
+        problems.push(`${name}: a kill outside a recorded signal`);
   }
   const measure = sources.get(MEASURE) ?? "";
   if (!/\{\s*detached:\s*true,[^}]*\},\s*"outer",?\s*\)/.test(measure))
@@ -71,6 +111,19 @@ test("the audit refuses each kind of call site it exists to catch", async () => 
     [MEASURE, 'recorder.spawn(node, [x], { detached: true, stdio: "ignore" }, "outer");\n'],
   ]);
   assert.deepEqual(auditSources(base), []);
+  assert.deepEqual(
+    auditSources(
+      new Map([
+        ...base,
+        [
+          "calendar-ok.mjs",
+          'await r.signal(t, "SIGTERM", async () => process.kill(p, "SIGTERM"));',
+        ],
+      ]),
+    ),
+    [],
+    "a kill inside a recorded signal call is allowed",
+  );
   const withFile = (name, source) => new Map([...base, [name, source]]);
   for (const [source, expected] of [
     ['import { execFile } from "node:child_process";', "child_process outside the recorder"],
@@ -82,6 +135,13 @@ test("the audit refuses each kind of call site it exists to catch", async () => 
     ["process.dlopen(module, path);", "native binding"],
     ["recorder.spawn(a, b, { detached: true }, 'inner');", "1 detached spawn(s)"],
     ["os.setsid()", "setsid"],
+    ['import "../side-effect.mjs";', "import of ../side-effect.mjs"],
+    ['import { x } from "../up.mjs";', "import of ../up.mjs"],
+    ['import pkg from "some-package";', "import of some-package"],
+    ['import { readFileSync } from "fs";', "import of fs"],
+    ['export { y } from "./z.cjs";', "import of ./z.cjs"],
+    ["process.kill(pid, 'SIGTERM');", "a kill outside a recorded signal"],
+    ["child.kill('SIGKILL');", "a kill outside a recorded signal"],
   ])
     assert.ok(
       auditSources(withFile("calendar-other.mjs", source)).includes(
@@ -98,6 +158,16 @@ test("the audit refuses each kind of call site it exists to catch", async () => 
   );
   const twice = new Map([...base, [MEASURE, base.get(MEASURE).repeat(2)]]);
   assert.ok(auditSources(twice).includes(`${MEASURE}: 2 detached spawn(s)`));
+});
+
+test("the closure follows side-effect and re-exported local imports", async () => {
+  const sources = {
+    "a.mjs": 'import "./b.mjs";\nexport { c } from "./c.mjs";\n',
+    "b.mjs": "",
+    "c.mjs": "export const c = 1;\n",
+  };
+  const closure = await importClosure("a.mjs", async (name) => sources[name]);
+  assert.deepEqual([...closure.keys()].sort(), ["a.mjs", "b.mjs", "c.mjs"]);
 });
 
 test("the harness's import closure passes the audit and is exactly its versioned module set", async () => {

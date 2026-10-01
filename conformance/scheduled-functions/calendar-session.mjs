@@ -8,6 +8,11 @@ import { calendarFixture } from "./calendar-local.mjs";
 import { controlFixture } from "./calendar-controls.mjs";
 
 const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
+/** The run's fireemu config text (its hash is pinned as configSha256). */
+export function calendarConfig(anchor) {
+  return JSON.stringify({ schemaVersion: 1, profile: "strict", daemon: { clockStart: anchor } });
+}
+
 export async function prepareCalendarSession({
   root,
   binary,
@@ -64,11 +69,7 @@ export async function prepareCalendarSession({
     controls = generated.controls;
     await writeFile(join(fixturePath, "controls.cjs"), controls, { mode: 0o600 });
   }
-  const config = JSON.stringify({
-    schemaVersion: 1,
-    profile: "strict",
-    daemon: { clockStart: anchor },
-  });
+  const config = calendarConfig(anchor);
   const configPath = join(directory, "fireemu.json"),
     inputPath = join(directory, "input.json");
   await writeFile(join(fixturePath, "index.cjs"), fixture, { mode: 0o600 });
@@ -103,7 +104,13 @@ export async function prepareCalendarSession({
       cliVersion: cli.version,
       fixtureSha256: digest(fixture),
       configSha256: digest(config),
-      ...(control ? { controlMode: control.mode, controlsSha256: digest(controls) } : {}),
+      ...(control
+        ? {
+            controlMode: control.mode,
+            controlsSha256: digest(controls),
+            helperSha256: digest(await readFile(control.helperPath)),
+          }
+        : {}),
       anchor,
     },
   };

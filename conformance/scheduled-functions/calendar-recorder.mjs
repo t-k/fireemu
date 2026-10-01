@@ -32,10 +32,14 @@ export function createRecorder({
   append({ type: "header", role, pid, started, harnessVersion });
   for (const row of prelude) append(row);
   const uid = process.getuid();
-  let next = 0;
+  let next = 0,
+    closed = false;
   const recorder = {
     /** Starts a child; its exit row comes from this process's own wait (`exit`). */
     spawn(file, args, options = {}, purpose) {
+      // Condition (C): only the measuring entry starts a new session, for the outer launcher.
+      if (options.detached && !(role === "measure" && purpose === "outer"))
+        throw new Error("only the measuring entry may start a session, for the outer launcher");
       const handle = `${role}:${++next}`;
       const spawnMonoNs = mono(),
         argvSha256 = argvDigest(file, args);
@@ -141,6 +145,8 @@ export function createRecorder({
       await send();
     },
     close() {
+      if (closed) return;
+      closed = true;
       closeSync(fd);
     },
   };
@@ -156,7 +162,8 @@ export async function readRecords(path) {
 
 /** `ps -o lstart=` text, normalised the way inventories normalise it. */
 const normaliseStart = (text) => text.trim().replace(/\s+/g, " ");
-const psEnv = () => ({ PATH: process.env.PATH ?? "/usr/bin:/bin", LC_ALL: "C" });
+/** The environment of every `ps` the harness runs: C locale, and start times in UTC. */
+export const psEnv = () => ({ PATH: process.env.PATH ?? "/usr/bin:/bin", LC_ALL: "C", TZ: "UTC" });
 
 /**
  * A recorder for the calling lane-owned process. Its own start time comes from a `ps` of itself,

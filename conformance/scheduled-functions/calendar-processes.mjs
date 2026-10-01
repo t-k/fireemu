@@ -96,8 +96,8 @@ export function ownedProcessTracker(root, { branchPid, canAcquireBranch = () => 
             !invalidGroups.has(row.pgid) &&
             (!captain || same(anchor, captain)) &&
             row.uid === anchor.uid &&
-            Number.isFinite(Date.parse(row.started)) &&
-            Date.parse(row.started) >= Date.parse(anchor.started);
+            Number.isFinite(Date.parse(row.started + " GMT")) &&
+            Date.parse(row.started + " GMT") >= Date.parse(anchor.started + " GMT");
           if (
             sameGroup ||
             (parent &&

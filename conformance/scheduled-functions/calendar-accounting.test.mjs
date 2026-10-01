@@ -10,6 +10,8 @@ import {
   REFUSAL_FORMATS,
   rustDebugString,
   refusalLineCheck,
+  validatorControls,
+  certificateVerdict,
 } from "./calendar-accounting.mjs";
 
 function generated(seed) {
@@ -274,7 +276,7 @@ const ctx = {
   sessionId: 300,
   recorded: [{ pid: 400, uid: 501, started: "Fri Oct  2 06:00:03 2026" }],
   privateDir: "/private/run-1",
-  launchTime: Date.parse("Fri Oct  2 06:00:00 2026"),
+  launchTime: Date.parse("2026-10-02T06:00:00Z"),
 };
 const row = (overrides) => ({
   pid: 5000,
@@ -400,7 +402,7 @@ test("the survivor report names every rule that fired", () => {
   });
   const result = judgeInventory([[member], [member]], {
     ...ctx,
-    launchTime: Date.parse("Fri Oct  2 06:00:00 2026"),
+    launchTime: Date.parse("2026-10-02T06:00:00Z"),
   });
   assert.deepEqual(result.survivors[0].rules, ["session", "identity", "path"]);
 });
@@ -428,6 +430,7 @@ test("lsof answers are none only for a silent exit 1", () => {
 function verdictInput() {
   const pins = {
     sourceCommit: "a".repeat(40),
+    harnessVersion: "h",
     binarySha256: "b".repeat(64),
     runnerSha256: "c".repeat(64),
     fixtureSha256: "d".repeat(64),
@@ -443,6 +446,11 @@ function verdictInput() {
     pins,
     identity: { ...pins, exitCode: undefined, refusalLine: undefined },
     refusalCheck: { ok: true, problems: [] },
+    supervision: {
+      inner: { timedOut: false, cancelled: false, inventoryFailures: 0 },
+      outer: { timedOut: false, cancelled: false, inventoryFailures: 0 },
+    },
+    validatorControls: { ok: true, controls: [] },
     daemon: {
       exitCode: 1,
       diagnostics: ["functions loaded: none", pins.refusalLine],
@@ -513,15 +521,19 @@ test("each broken condition is reported under its letter", () => {
   }
 });
 
-test("a control run may turn escalation off, and a missing input is never a pass", () => {
+test("a control run may turn escalation off but never passes, and a missing input is never a pass", () => {
   const control = verdictInput();
   control.certificate = false;
   control.escalation = "off";
-  assert.equal(refusalVerdict(control).conditions.G.ok, true);
+  const G = refusalVerdict(control).conditions.G;
+  assert.equal(G.ok, false);
+  assert.deepEqual(G.reasons, ["not a certificate run"]);
   for (const key of [
     "pins",
     "identity",
     "refusalCheck",
+    "supervision",
+    "validatorControls",
     "daemon",
     "chain",
     "records",
@@ -598,7 +610,7 @@ test("a negative control counts only when its named rule fired on the injected r
   );
   assert.equal(
     controlOutcome(
-      { mode: "listener", injected },
+      { mode: "listener", injected, bound: { beforeInventory: true } },
       { ...base, ports: { lsof: [{ result: "listener", pids: [777] }] } },
     ).counts,
     true,
@@ -638,7 +650,7 @@ test("the positive control passes B-F, including D, and observes the runner and 
   const passing = {
     verdict: "pass",
     conditions,
-    observation: { runner: true, child: true, matched: true },
+    observation: { runner: true, child: true, matched: true, cleanupVerified: true },
   };
   assert.equal(controlOutcome({ mode: "positive" }, passing).counts, true);
   for (const letter of ["B", "C", "D", "E", "F"]) {
@@ -649,7 +661,10 @@ test("the positive control passes B-F, including D, and observes the runner and 
   assert.equal(
     controlOutcome(
       { mode: "positive" },
-      { ...passing, observation: { runner: false, child: true, matched: true } },
+      {
+        ...passing,
+        observation: { runner: false, child: true, matched: true, cleanupVerified: true },
+      },
     ).counts,
     false,
   );
@@ -707,4 +722,221 @@ test("the pinned refusal line is explained by the format strings at the pinned s
     sources: pinnedSources(),
   });
   assert.equal(unmodelled.ok, false);
+});
+
+// Review round 1 of harness H (2026-10-02): M1-M3, S1-S3, S7, S8 and the validator controls.
+test("record files must agree on the harness version, and the version is pinned", () => {
+  const set = recordSet();
+  set["inner.jsonl"][0] = { ...set["inner.jsonl"][0], harnessVersion: "other" };
+  const result = validateRecords(set);
+  assert.equal(result.ok, false);
+  assert.ok(result.problems.some((problem) => problem.includes("harness version")));
+  const input = verdictInput();
+  input.identity.harnessVersion = "edited";
+  assert.equal(refusalVerdict(input).conditions.A.ok, false);
+});
+
+test("only a certificate run with escalation on and a clean identity can pass", () => {
+  for (const [name, apply] of [
+    ["a control run", (v) => (v.certificate = false)],
+    ["certificate missing", (v) => delete v.certificate],
+    ["escalation off", (v) => (v.escalation = "off")],
+    ["a control identity", (v) => (v.identity.controlMode = "orphan")],
+    ["a control preamble hash", (v) => (v.identity.controlsSha256 = "0".repeat(64))],
+  ]) {
+    const input = verdictInput();
+    apply(input);
+    assert.notEqual(refusalVerdict(input).verdict, "pass", name);
+  }
+});
+
+test("(D) judges both supervisions: a timeout fails, a failed tracker poll is inconclusive", () => {
+  for (const [name, apply, outcome] of [
+    ["outer timed out", (v) => (v.supervision.outer.timedOut = true), "fail"],
+    ["outer cancelled", (v) => (v.supervision.outer.cancelled = true), "fail"],
+    ["inner timed out", (v) => (v.supervision.inner.timedOut = true), "fail"],
+    ["inner poll failed", (v) => (v.supervision.inner.inventoryFailures = 1), "inconclusive"],
+    ["outer poll failed", (v) => (v.supervision.outer.inventoryFailures = 2), "inconclusive"],
+    ["poll count missing", (v) => delete v.supervision.outer.inventoryFailures, "inconclusive"],
+    ["no supervision", (v) => delete v.supervision, "inconclusive"],
+  ]) {
+    const input = verdictInput();
+    apply(input);
+    const verdict = refusalVerdict(input);
+    assert.equal(verdict.conditions.D.outcome, outcome, name);
+    assert.equal(verdict.verdict, outcome, name);
+  }
+});
+
+test("(G) in one run needs the validator controls on that run's own records", () => {
+  const missing = verdictInput();
+  delete missing.validatorControls;
+  assert.equal(refusalVerdict(missing).conditions.G.outcome, "inconclusive");
+  const failed = verdictInput();
+  failed.validatorControls = { ok: false, controls: [] };
+  assert.equal(refusalVerdict(failed).conditions.G.outcome, "fail");
+});
+
+test("the validator controls refuse a removed file, a dropped exit and a failed spawn with a PID, and pair PID reuse", () => {
+  const result = validatorControls(recordSet());
+  assert.equal(result.ok, true, JSON.stringify(result.controls));
+  assert.deepEqual(
+    result.controls.map((control) => [control.name, control.expected, control.observed]),
+    [
+      ["outer.jsonl removed", "refused", "refused"],
+      ["inner.jsonl removed", "refused", "refused"],
+      ["dropped exit row", "refused", "refused"],
+      ["spawn-failed with a PID", "refused", "refused"],
+      ["PID reuse across two short children", "accepted", "accepted"],
+    ],
+  );
+  const broken = recordSet();
+  broken["inner.jsonl"].push({ type: "note" });
+  assert.equal(validatorControls(broken).ok, false, "controls need valid base records");
+  assert.equal(validatorControls(undefined).ok, false);
+});
+
+test("an uncovered zombie is unrelated only when its parent is alive outside the session", () => {
+  const zombie = (sid, ppid) => row({ pid: 5000, ppid, stat: "Z", sid });
+  assert.equal(
+    judgeInventory([[zombie(77, 6001)], [zombie(77, 6001)]], ctx).outcome,
+    "inconclusive",
+  );
+  const withParent = [zombie(77, 6000), parentRow];
+  const result = judgeInventory([withParent, withParent], ctx);
+  assert.equal(result.outcome, "clean");
+  assert.equal(result.passes[0].unrelatedZombies.length, 1, "logged");
+  const insideParent = [zombie(77, 6000), { ...parentRow, sid: "ESRCH" }];
+  assert.equal(judgeInventory([insideParent, insideParent], ctx).outcome, "inconclusive");
+});
+
+test("start times are read in UTC, and an unreadable one is inconclusive", () => {
+  const late = row({ started: "Fri Oct 2 06:00:01 2026", args: "x /private/run-1/y" });
+  assert.equal(judgeInventory([[late], [late]], ctx).outcome, "survivors");
+  const early = row({ started: "Fri Oct 2 05:59:59 2026", args: "x /private/run-1/y" });
+  assert.equal(judgeInventory([[early], [early]], ctx).outcome, "clean");
+  const unreadable = row({ started: "Fri Foo 2 05:59:59 2026" });
+  assert.equal(judgeInventory([[unreadable], [unreadable]], ctx).outcome, "inconclusive");
+});
+
+test("an ESRCH row asks for another pass when its parent could have been in the session", () => {
+  const member = row({ pid: 6100, sid: 300, args: "member" });
+  for (const [name, rows] of [
+    ["parent a recorded identity", [row({ pid: 5000, ppid: 400, sid: "ESRCH" })]],
+    [
+      "parent an ESRCH row",
+      [row({ pid: 5000, ppid: 6200, sid: "ESRCH" }), row({ pid: 6200, ppid: 6300, sid: "ESRCH" })],
+    ],
+  ]) {
+    const clean = [row({ pid: 5001 })];
+    assert.equal(judgeInventory([clean, rows, clean], ctx).outcome, "inconclusive", name);
+    assert.equal(judgeInventory([clean, rows, clean, clean], ctx).outcome, "clean", name);
+  }
+  // A session member parent makes the member itself a survivor, so the run fails either way.
+  assert.equal(
+    judgeInventory([[member, row({ pid: 5000, ppid: 6100, sid: "ESRCH" })]], ctx).outcome,
+    "survivors",
+  );
+});
+
+test("the listener control counts only when its helper bound before the final inventory", () => {
+  const injected = { pid: 777 };
+  const listening = {
+    ports: { lsof: [{ result: "listener", pids: [777] }] },
+  };
+  assert.equal(
+    controlOutcome({ mode: "listener", injected, bound: { beforeInventory: true } }, listening)
+      .counts,
+    true,
+  );
+  for (const bound of [undefined, { beforeInventory: false }])
+    assert.equal(controlOutcome({ mode: "listener", injected, bound }, listening).counts, false);
+});
+
+test("the positive control needs verified cleanup and a released claim", () => {
+  const conditions = Object.fromEntries(
+    ["B", "C", "D", "E", "F"].map((letter) => [letter, { ok: true }]),
+  );
+  const observation = { runner: true, child: true, matched: true, cleanupVerified: true };
+  assert.equal(controlOutcome({ mode: "positive" }, { conditions, observation }).counts, true);
+  assert.equal(
+    controlOutcome(
+      { mode: "positive" },
+      { conditions, observation: { ...observation, cleanupVerified: false } },
+    ).counts,
+    false,
+  );
+});
+
+// The certificate (condition (G)): the refusal run and every control under the same H, same day.
+function report(kind, overrides = {}) {
+  return {
+    kind,
+    harnessVersion: "h1",
+    launchTime: Date.parse("2026-10-02T03:00:00Z"),
+    verdict: { verdict: kind === "certificate" ? "pass" : "fail" },
+    validatorControls: { ok: true },
+    control:
+      kind === "certificate"
+        ? null
+        : { mode: kind === "positive" ? "positive" : kind, counts: true },
+    ...overrides,
+  };
+}
+const allControls = () =>
+  ["positive", "orphan", "escaper", "listener", "leftover"].map((kind) => report(kind));
+
+test("a certificate needs the refusal run and every control, same harness version, same UTC day", () => {
+  assert.deepEqual(
+    certificateVerdict({ refusal: report("certificate"), controls: allControls() }),
+    {
+      verdict: "pass",
+      problems: [],
+    },
+  );
+  for (const [name, refusal, controls] of [
+    [
+      "the refusal run failed",
+      report("certificate", { verdict: { verdict: "inconclusive" } }),
+      allControls(),
+    ],
+    ["not a certificate run", report("positive"), allControls()],
+    ["a control is missing", report("certificate"), allControls().slice(1)],
+    [
+      "a control did not count",
+      report("certificate"),
+      allControls().map((r) =>
+        r.kind === "escaper" ? { ...r, control: { ...r.control, counts: false } } : r,
+      ),
+    ],
+    [
+      "another harness version",
+      report("certificate"),
+      allControls().map((r) => (r.kind === "orphan" ? { ...r, harnessVersion: "h2" } : r)),
+    ],
+    [
+      "another day",
+      report("certificate"),
+      allControls().map((r) =>
+        r.kind === "leftover" ? { ...r, launchTime: Date.parse("2026-10-03T00:00:01Z") } : r,
+      ),
+    ],
+    [
+      "validator controls failed in a control run",
+      report("certificate"),
+      allControls().map((r) =>
+        r.kind === "listener" ? { ...r, validatorControls: { ok: false } } : r,
+      ),
+    ],
+    [
+      "validator controls failed in the refusal run",
+      report("certificate", { validatorControls: { ok: false } }),
+      allControls(),
+    ],
+    ["no controls", report("certificate"), undefined],
+  ]) {
+    const result = certificateVerdict({ refusal, controls });
+    assert.equal(result.verdict, "fail", name);
+    assert.ok(result.problems.length > 0, name);
+  }
 });

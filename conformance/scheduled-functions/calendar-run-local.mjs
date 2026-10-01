@@ -11,7 +11,13 @@ import {
   superviseCalendarProcess,
   calendarOwnedBranches,
 } from "./calendar-session.mjs";
-import { accountingOuter, measure, snapshotWith } from "./calendar-measure.mjs";
+import {
+  accountingOuter,
+  certify,
+  harnessVersion,
+  measure,
+  snapshotWith,
+} from "./calendar-measure.mjs";
 
 const self = fileURLToPath(import.meta.url);
 const sameIdentity = (a, b) =>
@@ -77,7 +83,7 @@ async function superviseSession(path) {
   const recorder = await createSelfRecorder({
     path: join(plan.accDir, "records", "inner.jsonl"),
     role: "inner",
-    harnessVersion: plan.harnessVersion,
+    harnessVersion: await harnessVersion(),
   });
   const snapshot = () => snapshotWith(recorder);
   const before = await snapshot(),
@@ -137,6 +143,8 @@ async function superviseSession(path) {
   };
   daemon.stdout?.on("data", collect);
   daemon.stderr?.on("data", collect);
+  // Diagnostics are read once the daemon's pipes close, so a buffered refusal line is not lost.
+  const drained = new Promise((resolve) => daemon.once("close", resolve));
   const result = await superviseCalendarProcess({
     root,
     child: { pid: daemon.pid, state: () => state },
@@ -164,6 +172,10 @@ async function superviseSession(path) {
     },
   });
   await daemon.recordExit;
+  result.diagnosticsDrained = await Promise.race([
+    drained.then(() => true),
+    delay(2000).then(() => false),
+  ]);
   result.observationHandshake = observed;
   if (injected) result.injected = { acquired: false, firstSighting: null, ...injected };
   result.parentLost = parentLost;
@@ -185,7 +197,11 @@ if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.m
     if (mode === "--calendar-child") await childSession(argument);
     else if (mode === "--calendar-supervisor") await superviseSession(argument);
     else if (mode === "--accounting-outer") await accountingOuter(argument);
-    else if (mode === "--measure") {
+    else if (mode === "--certify") {
+      const result = await certify(argument);
+      console.log(JSON.stringify(result));
+      if (result.verdict !== "pass") process.exitCode = 1;
+    } else if (mode === "--measure") {
       const report = await measure(argument);
       console.log(
         JSON.stringify({

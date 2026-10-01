@@ -47,6 +47,7 @@ export function createStreamingReceiptQueue({
     headerEvents = 0,
     reason,
     closed = false,
+    persistHalted = false,
     chain = Promise.resolve(),
     ownedStarted = false,
     ownedSettled = false,
@@ -122,9 +123,12 @@ export function createStreamingReceiptQueue({
     chain = chain.then(async () => {
       try {
         checkBudget();
+        // Like the journal, a failed acknowledgement halts storage: rows queued behind it stay unknown.
+        if (persistHalted) return;
         try {
           await track(`receipt:${row.index}`, () => persist(row, { signal: controller.signal }));
         } catch {
+          persistHalted = true;
           stop("persistence");
           return;
         }

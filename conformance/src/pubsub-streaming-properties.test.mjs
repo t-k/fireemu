@@ -751,8 +751,13 @@ const LIFECYCLE = [
 ];
 // Reference receipt queue admission: first refusal wins and every later event is refused. Raw
 // receipts of admitted events are persisted in order at drain points; candidate frames are
-// delivered only while no stop is recorded. A hung persist blocks the rest of the chain.
-function modelReceipts({ maxHeaderBytes, maxHeaderEvents, maxHeaderPairs, maxEvents }, hungAt) {
+// delivered only while no stop is recorded. A hung persist blocks the rest of the chain; a failed
+// persist stops admission and no later queued row is persisted.
+function modelReceipts(
+  { maxHeaderBytes, maxHeaderEvents, maxHeaderPairs, maxEvents },
+  hungAt,
+  failAt,
+) {
   const state = {
       reason: undefined,
       kinds: [],
@@ -761,6 +766,7 @@ function modelReceipts({ maxHeaderBytes, maxHeaderEvents, maxHeaderPairs, maxEve
       payloads: [],
       persisted: 0,
       blocked: false,
+      halted: false,
     },
     queued = [];
   const refuse = (why) => {
@@ -809,6 +815,16 @@ function modelReceipts({ maxHeaderBytes, maxHeaderEvents, maxHeaderPairs, maxEve
           state.blocked = true;
           break;
         }
+        if (state.halted) {
+          queued.shift();
+          continue;
+        }
+        if (queued[0].index === failAt) {
+          queued.shift();
+          state.halted = true;
+          state.reason ??= "persistence";
+          continue;
+        }
         const { payloads } = queued.shift();
         state.persisted++;
         if (!state.reason) state.payloads.push(...payloads);
@@ -830,7 +846,8 @@ test(
         maxEvents: r.int(1, 10),
       };
       const hungAt = r.chance(0.25) ? r.int(0, 8) : -1;
-      const model = modelReceipts(bounds, hungAt);
+      const failAt = r.chance(0.25) ? r.int(0, 8) : -1;
+      const model = modelReceipts(bounds, hungAt, failAt);
       const order = [],
         persisted = [],
         observed = [];
@@ -848,6 +865,7 @@ test(
           wallMs: 60000,
           persist: async (row) => {
             if (row.index === hungAt) return new Promise(() => {});
+            if (row.index === failAt) throw new Error("store refused");
             persisted.push(row);
             order.push(`persist:${row.index}`);
           },
@@ -920,6 +938,9 @@ test(
           model.state.reason ?? "clean",
           mode,
           ...(observed.length ? ["frame-delivered"] : []),
+          ...(model.state.halted && model.state.kinds.length > failAt + 1
+            ? ["queued-after-failure"]
+            : []),
         ];
       } finally {
         mock.timers.reset();
@@ -935,6 +956,8 @@ test(
       "header-bound",
       "invalid-lifecycle",
       "frame-delivered",
+      "persistence",
+      "queued-after-failure",
       "late",
       "hung-late",
       "hung-waiting",

@@ -805,3 +805,25 @@ test("no stored row holds the credential's first eight bytes in data or metadata
   assert.equal(result.reason, undefined);
   assert.equal(saved.length, 3);
 });
+test("after a failed persist, rows already queued behind it are never persisted and stay unknown", async () => {
+  const attempts = [];
+  const { q, frames } = await queue({
+    persist: async (row) => {
+      attempts.push(row.index);
+      if (row.index === 1) throw new Error("store refused");
+    },
+  });
+  // Four events are queued before the chain runs, so rows 2 and 3 wait behind the failing row 1.
+  assert.equal(q.lifecycle("end"), true);
+  assert.equal(q.data(frame(Buffer.from("a"))), true);
+  assert.equal(q.headers("trailers", ["grpc-status", "0"], 1), true);
+  assert.equal(q.lifecycle("close"), true);
+  const result = await q.done();
+  assert.deepEqual(attempts, [0, 1]);
+  assert.equal(result.reason, "persistence");
+  assert.equal(result.events, 4);
+  assert.equal(result.persistedEvents, 1);
+  assert.equal(result.unknownEvents, 3);
+  assert.equal(frames.length, 0);
+  assert.equal(result.terminationRequired, false);
+});

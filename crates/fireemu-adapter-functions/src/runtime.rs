@@ -5668,6 +5668,41 @@ mod schedule_capacity_tests {
         finish(&runtime).await;
     }
 
+    /// A job's later runs wait behind its refused one, even when a later run would fit: here
+    /// only the first delivery decision duplicates, so 12:05 needs two slots and 12:10 one.
+    #[tokio::test]
+    async fn a_later_run_of_a_job_never_overtakes_its_refused_run() {
+        let (runtime, clock) = runtime(CatchUpPolicy::All).await;
+        let faults = Arc::new(Mutex::new(FaultState::default()));
+        faults.lock().unwrap().install(FaultPlan {
+            seed: 1,
+            rules: vec![FaultRule {
+                matches: FaultMatch {
+                    operation: "functions.deliver".to_owned(),
+                    nth: Some(1),
+                    function: Some("tick".to_owned()),
+                    event_type: None,
+                },
+                action: FaultAction::Duplicate { count: 1 },
+            }],
+        });
+        runtime.set_faults(faults);
+        set_room(&runtime, 1);
+        advance(&clock, 600);
+        runtime.on_clock_changed();
+        assert!(admitted(&runtime).is_empty(), "{:?}", admitted(&runtime));
+        set_room(&runtime, 10);
+        runtime.on_clock_changed();
+        assert_eq!(
+            admitted(&runtime),
+            vec![
+                run("tick", "2026-08-29T12:05:00Z"),
+                run("tick", "2026-08-29T12:10:00Z")
+            ]
+        );
+        finish(&runtime).await;
+    }
+
     #[tokio::test]
     async fn freed_capacity_goes_to_the_oldest_due_run_across_jobs() {
         let (runtime, clock) = runtime(CatchUpPolicy::All).await;

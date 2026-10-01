@@ -181,7 +181,8 @@ pub fn frame(shape: &Shape, mut response: StorageResponse) -> (StorageResponse, 
         .is_some_and(|value| value.starts_with("text/plain"));
     let mut object_etag = None;
     if is_json {
-        if let Ok(value) = serde_json::from_slice::<Value>(&response.body) {
+        if let Ok(mut value) = serde_json::from_slice::<Value>(&response.body) {
+            set_production_etags(&mut value);
             // The JSON API repeats an object resource's `etag` as a header (recorded: every 200
             // that answers an object, from a read, an update, an upload or a copy).
             if shape.wire == Wire::Gcs
@@ -247,6 +248,54 @@ pub fn frame(shape: &Shape, mut response: StorageResponse) -> (StorageResponse, 
         }
     }
     (response, true)
+}
+
+/// An object's `etag` as production writes it: the standard base64 of a protobuf message with the
+/// generation as field 1 and the metageneration as field 2, both varints (recorded, lean-v4: the
+/// generation 1790789164648913 at metageneration 2 is `CNGTm8DplpcDEAI=`, at 3 `CNGTm8DplpcDEAM=`).
+#[must_use]
+pub fn production_etag(generation: u64, metageneration: u64) -> String {
+    fn varint(mut value: u64, out: &mut Vec<u8>) {
+        while value >= 0x80 {
+            out.push(u8::try_from(value & 0x7f).unwrap_or(0) | 0x80);
+            value >>= 7;
+        }
+        out.push(u8::try_from(value).unwrap_or(0));
+    }
+    let mut message = vec![0x08];
+    varint(generation, &mut message);
+    message.push(0x10);
+    varint(metageneration, &mut message);
+    fireemu_core_storage::hash::base64(&message)
+}
+
+/// Rewrites the `etag` of every object resource in `value` (an object, a list of objects or a
+/// rewrite response) to production's.
+fn set_production_etags(value: &mut Value) {
+    match value {
+        Value::Object(map) => {
+            let ids = |map: &serde_json::Map<String, Value>, key: &str| {
+                map.get(key)
+                    .and_then(Value::as_str)
+                    .and_then(|text| text.parse::<u64>().ok())
+            };
+            if let (Some(generation), Some(metageneration)) =
+                (ids(map, "generation"), ids(map, "metageneration"))
+            {
+                if map.contains_key("etag") {
+                    map.insert(
+                        "etag".to_owned(),
+                        Value::String(production_etag(generation, metageneration)),
+                    );
+                }
+            }
+            for member in map.values_mut() {
+                set_production_etags(member);
+            }
+        }
+        Value::Array(items) => items.iter_mut().for_each(set_production_etags),
+        _ => {}
+    }
 }
 
 /// `Thu, 01 Oct 2026 03:26:31 GMT` for a count of seconds since the Unix epoch.
@@ -1186,5 +1235,146 @@ mod tests {
         assert_eq!(header(&answered, "cache-control"), Some(PRIVATE));
         assert_eq!(header(&answered, "pragma"), None);
         assert_eq!(header(&answered, "content-disposition"), None);
+    }
+
+    #[test]
+    fn the_etag_is_the_protobuf_of_generation_and_metageneration() {
+        // Recorded, lean-v4: the resource of tokens.bin after create_token and delete_token.
+        assert_eq!(
+            production_etag(1_790_789_164_648_913, 2),
+            "CNGTm8DplpcDEAI="
+        );
+        assert_eq!(
+            production_etag(1_790_789_164_648_913, 3),
+            "CNGTm8DplpcDEAM="
+        );
+        assert_eq!(production_etag(1, 1), "CAEQAQ==");
+    }
+
+    #[test]
+    fn every_object_resource_gets_its_production_etag() {
+        let body = br#"{"kind":"storage#objects","items":[{"kind":"storage#object","generation":"1790789164648913","metageneration":"2","etag":"1-2","name":"a","bucket":"b"}]}"#;
+        let shape = shape(Wire::Gcs, "GET");
+        let mut list = shape;
+        list.list = true;
+        let answered = frame(
+            &list,
+            response(200, JSON, std::str::from_utf8(body).unwrap(), &[]),
+        );
+        let value: Value = serde_json::from_slice(&answered.body).unwrap();
+        assert_eq!(value["items"][0]["etag"], "CNGTm8DplpcDEAI=");
+    }
+
+    mod properties {
+        use super::super::*;
+        use proptest::prelude::*;
+
+        fn scalar() -> impl Strategy<Value = Value> {
+            prop_oneof![
+                any::<bool>().prop_map(Value::Bool),
+                any::<i32>().prop_map(Value::from),
+                "[a-zA-Z0-9 /_.-]{0,12}".prop_map(Value::String),
+                Just(Value::Null),
+            ]
+        }
+
+        /// An object whose keys are drawn from the recorded order, plus unknown keys, with a
+        /// `metadata` map whose keys may equal recorded ones and a nested list.
+        fn resource(order: &'static [&'static str]) -> impl Strategy<Value = Value> {
+            (
+                proptest::collection::btree_map(
+                    proptest::sample::select(order),
+                    scalar(),
+                    0..=order.len(),
+                ),
+                proptest::collection::btree_map("[a-z]{1,6}", scalar(), 0..=3),
+                proptest::collection::btree_map(
+                    proptest::sample::select(order),
+                    "[a-z]{0,4}".prop_map(Value::String),
+                    0..=3,
+                ),
+                proptest::collection::vec(scalar(), 0..=2),
+            )
+                .prop_map(|(known, unknown, metadata, list)| {
+                    let mut object = serde_json::Map::new();
+                    for (key, value) in known {
+                        object.insert((*key).to_owned(), value);
+                    }
+                    for (key, value) in unknown {
+                        object.insert(format!("zz{key}"), value);
+                    }
+                    if !metadata.is_empty() {
+                        object.insert(
+                            "metadata".to_owned(),
+                            Value::Object(
+                                metadata
+                                    .into_iter()
+                                    .map(|(k, v)| ((*k).to_owned(), v))
+                                    .collect(),
+                            ),
+                        );
+                    }
+                    object.insert("items".to_owned(), Value::Array(list));
+                    Value::Object(object)
+                })
+        }
+
+        /// The top-level keys of a laid-out object, in the order they are written.
+        fn written_keys(text: &str) -> Vec<String> {
+            text.lines()
+                .filter_map(|line| {
+                    let rest = line.strip_prefix("  \"")?;
+                    if rest.starts_with(' ') {
+                        return None;
+                    }
+                    Some(rest.split_once("\": ")?.0.to_owned())
+                })
+                .collect()
+        }
+
+        proptest! {
+            /// Laying a body out never changes its value, is idempotent, ends with a line feed on
+            /// the JSON API only, and writes the recorded keys in the recorded order with unknown
+            /// keys after them and the maps under `metadata` left alphabetical.
+            #[test]
+            fn layout_preserves_the_value_and_writes_the_recorded_order(
+                gcs in resource(GCS_ORDER),
+                firebase in resource(FIREBASE_ORDER),
+            ) {
+                for (wire, value, order) in [(Wire::Gcs, gcs, GCS_ORDER), (Wire::Firebase, firebase, FIREBASE_ORDER)] {
+                    let compact = serde_json::to_vec(&value).unwrap();
+                    let laid_out = layout_json(wire, &compact).expect("an object is laid out");
+                    let text = String::from_utf8(laid_out.clone()).unwrap();
+                    prop_assert_eq!(serde_json::from_slice::<Value>(&laid_out).unwrap(), value.clone());
+                    prop_assert_eq!(text.ends_with("}\n"), wire == Wire::Gcs);
+                    prop_assert_eq!(layout_json(wire, &laid_out), None);
+                    let keys = written_keys(&text);
+                    let recorded: Vec<usize> = keys
+                        .iter()
+                        .filter_map(|key| order.iter().position(|known| known == key))
+                        .collect();
+                    let mut sorted = recorded.clone();
+                    sorted.sort_unstable();
+                    prop_assert_eq!(recorded, sorted, "recorded keys out of order: {:?}", keys);
+                    // Unknown keys follow every recorded key.
+                    let first_unknown = keys.iter().position(|key| !order.contains(&key.as_str()));
+                    if let Some(first_unknown) = first_unknown {
+                        prop_assert!(keys[first_unknown..].iter().all(|key| !order.contains(&key.as_str())),
+                            "a recorded key after an unknown one: {:?}", keys);
+                    }
+                    if let Some(metadata) = value.get("metadata").and_then(Value::as_object) {
+                        let section = text.split("\"metadata\": {").nth(1).unwrap_or("");
+                        let inner: Vec<String> = section
+                            .lines()
+                            .skip(1)
+                            .take_while(|line| line.starts_with("    "))
+                            .filter_map(|line| Some(line.trim_start().strip_prefix('"')?.split_once("\": ")?.0.to_owned()))
+                            .collect();
+                        let expected: Vec<String> = metadata.keys().cloned().collect();
+                        prop_assert_eq!(inner, expected);
+                    }
+                }
+            }
+        }
     }
 }

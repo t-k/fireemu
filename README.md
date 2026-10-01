@@ -391,7 +391,7 @@ Check support for the specific APIs and conditions your application uses, rather
 
 ### Network exposure of the Storage port
 
-Like the official emulator, the Storage port reflects the requested object name in the HTML body of its 404 for a missing media read (`text/html`, as production answers). A web page opened on the developer's machine could therefore run script on that origin. Keep the emulator bound to localhost, which is the default, and do not expose the Storage port to other hosts or networks.
+Like the official emulator, the Storage port reflects the requested object name in the HTML body of its 404 for a missing media read (`text/html`, as production answers). A web page opened on the developer's machine could therefore run script on that origin. Keep the emulator bound to localhost, which is the default, and do not expose the Storage port to other hosts or networks. The strict profile sends no `X-Content-Type-Options: nosniff` on the JSON API answers where production sends none, so it does not add that defence in depth; the emulator profile keeps the official emulator's header.
 
 ### Changes between versions
 

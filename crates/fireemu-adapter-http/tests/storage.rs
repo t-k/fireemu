@@ -264,7 +264,9 @@ fn firebase_protocol_upload_download_list_update_delete() {
         &s,
         req("GET", &format!("/v0/b/{BUCKET}/o/{enc}"), &owner, b""),
     );
-    assert_eq!(json_body(&r)["generation"], "1");
+    // Under strict a generation is the commit's microsecond timestamp (the virtual clock's start
+    // here), 16 digits as production's are.
+    assert_eq!(json_body(&r)["generation"], "1788004860000000");
     let r = handle(
         &s,
         req(
@@ -330,7 +332,7 @@ fn firebase_protocol_upload_download_list_update_delete() {
             patched["generation"].as_str(),
             patched["metageneration"].as_str()
         ),
-        (Some("1"), Some("2"))
+        (Some("1788004860000000"), Some("2"))
     );
     assert_eq!(patched["cacheControl"], "public, max-age=60");
     assert!(patched["metadata"].get("k").is_none());
@@ -485,7 +487,7 @@ fn event_admission_refusal_returns_429_without_publishing_the_object() {
             &body,
         ),
     );
-    assert_eq!(json_body(&accepted)["generation"], "1");
+    assert_eq!(json_body(&accepted)["generation"], "1788004860000000");
     let control = state(None);
     let expected = handle(
         &control,
@@ -962,7 +964,7 @@ fn json_api_dialect_for_the_admin_sdk() {
 }
 
 #[test]
-fn strict_json_list_rejects_filters_it_cannot_apply() {
+fn strict_json_list_rejects_the_filter_it_cannot_apply() {
     // https://cloud.google.com/storage/docs/json_api/v1/objects/list
     let strict = state(None);
     let emulator = state_with(None, TokenAcceptance::EmulatorMock);
@@ -976,18 +978,14 @@ fn strict_json_list_rejects_filters_it_cannot_apply() {
         ),
     );
     assert_eq!(uploaded.status, 200);
-    for filter in [
-        "matchGlob=*.txt",
-        "startOffset=b",
-        "endOffset=z",
-        "includeTrailingDelimiter=true",
-    ] {
-        let path = format!("/storage/v1/b/{BUCKET}/o?{filter}");
-        let rejected = handle(&strict, req("GET", &path, &[], b""));
-        assert_eq!(rejected.status, 400, "{filter}");
-        let compatible = handle(&emulator, req("GET", &path, &[], b""));
-        assert_eq!(compatible.status, 200, "{filter}");
-    }
+    // `includeTrailingDelimiter=true` was not recorded; the offsets and the glob are honoured
+    // (see `strict_json_list_filters_follow_the_recorded_rows`).
+    let filter = "includeTrailingDelimiter=true";
+    let path = format!("/storage/v1/b/{BUCKET}/o?{filter}");
+    let rejected = handle(&strict, req("GET", &path, &[], b""));
+    assert_eq!(rejected.status, 400, "{filter}");
+    let compatible = handle(&emulator, req("GET", &path, &[], b""));
+    assert_eq!(compatible.status, 200, "{filter}");
     for filter in [
         "versions=false",
         "versions=true",
@@ -6913,4 +6911,351 @@ fn strict_answers_that_follow_single_recorded_rows() {
             ));
         }
     }
+}
+
+// ------------------------------------------------------------------------------------------
+// properties of the Firebase list over the handler
+// ------------------------------------------------------------------------------------------
+
+mod list_properties {
+    use super::*;
+    use proptest::prelude::*;
+
+    const SEGMENTS: &[&str] = &["a", "b", "c", "dir", "dir2", "x"];
+
+    /// The standard base64 (with padding) of an entry name, as production writes the page token.
+    fn token_of(entry: &str) -> String {
+        fireemu_core_storage::hash::base64(entry.as_bytes())
+    }
+
+    fn percent(text: &str) -> String {
+        text.bytes()
+            .map(|b| match b {
+                b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                    char::from(b).to_string()
+                }
+                other => format!("%{other:02X}"),
+            })
+            .collect()
+    }
+
+    proptest! {
+        /// Following `nextPageToken` through the Firebase list of both profiles gives the
+        /// single-page listing: items and prefixes in one name order, none twice, none missing,
+        /// at most `maxResults` per page, and every token the base64 of the last entry returned.
+        #[test]
+        fn firebase_list_pages_follow_their_tokens(
+            names in proptest::collection::btree_set(
+                proptest::collection::vec(proptest::sample::select(SEGMENTS), 1..=3)
+                    .prop_map(|segments| segments.join("/")),
+                0..=16,
+            ),
+            prefix in proptest::sample::select(&["", "a/", "dir/"][..]),
+            delimiter in proptest::sample::select(&["", "/"][..]),
+            max in 1usize..=4,
+            strict in any::<bool>(),
+        ) {
+            let acceptance = if strict { TokenAcceptance::Verified } else { TokenAcceptance::EmulatorMock };
+            let s = state_with(Some(ALLOW_ALL_RULES), acceptance);
+            let owner = [("authorization", "Bearer owner")];
+            for name in &names {
+                let uploaded = handle(
+                    &s,
+                    req(
+                        "POST",
+                        &format!("/upload/storage/v1/b/{BUCKET}/o?uploadType=media&name={}", percent(name)),
+                        &owner,
+                        b"x",
+                    ),
+                );
+                prop_assert_eq!(uploaded.status, 200);
+            }
+            let mut expected: Vec<String> = Vec::new();
+            {
+                let mut entries = std::collections::BTreeSet::new();
+                for name in &names {
+                    let Some(rest) = name.strip_prefix(prefix) else { continue };
+                    match (delimiter.is_empty(), rest.find(delimiter)) {
+                        (false, Some(i)) => { entries.insert(format!("{prefix}{}{delimiter}", &rest[..i])); }
+                        _ => { entries.insert(name.clone()); }
+                    }
+                }
+                expected.extend(entries);
+            }
+            let mut seen: Vec<String> = Vec::new();
+            let mut token: Option<String> = None;
+            for _ in 0..expected.len() + 2 {
+                let route = format!(
+                    "/v0/b/{BUCKET}/o?maxResults={max}{}{}{}",
+                    if prefix.is_empty() { String::new() } else { format!("&prefix={}", percent(prefix)) },
+                    if delimiter.is_empty() { String::new() } else { format!("&delimiter={}", percent(delimiter)) },
+                    token.as_ref().map_or_else(String::new, |t| format!("&pageToken={}", percent(t))),
+                );
+                let page = handle(&s, req("GET", &route, &owner, b""));
+                prop_assert_eq!(page.status, 200);
+                let body = json_body(&page);
+                let mut page_entries: Vec<String> = body["items"].as_array().unwrap_or(&Vec::new()).iter()
+                    .map(|item| item["name"].as_str().unwrap().to_owned())
+                    .chain(body["prefixes"].as_array().unwrap_or(&Vec::new()).iter().map(|p| p.as_str().unwrap().to_owned()))
+                    .collect();
+                page_entries.sort();
+                prop_assert!(page_entries.len() <= max);
+                seen.extend(page_entries.clone());
+                if let Some(next) = body["nextPageToken"].as_str() {
+                    prop_assert_eq!(page_entries.len(), max);
+                    prop_assert_eq!(next, token_of(page_entries.last().unwrap()));
+                    token = Some(next.to_owned());
+                } else {
+                    prop_assert_eq!(seen, expected);
+                    return Ok(());
+                }
+            }
+            prop_assert!(false, "the walk did not end");
+        }
+    }
+}
+
+/// The three list filters under strict, as lean-v5 recorded them (`startOffset=b.txt` with
+/// `endOffset=zz.txt`, and the glob `dir/*`); the emulator profile and the official emulator
+/// ignore all of them (measured: the whole listing).
+#[test]
+fn strict_json_list_filters_follow_the_recorded_rows() {
+    let names = [
+        "a.txt",
+        "b.txt",
+        "dir/c.txt",
+        "dir/d.txt",
+        "dir2/e.txt",
+        "zz.txt",
+    ];
+    for acceptance in BOTH_PROFILES {
+        let s = state_with(Some(ALLOW_ALL_RULES), acceptance);
+        for name in names {
+            let uploaded = handle(
+                &s,
+                req(
+                    "POST",
+                    &format!(
+                        "/upload/storage/v1/b/{BUCKET}/o?uploadType=media&name={}",
+                        name.replace('/', "%2F")
+                    ),
+                    &[("authorization", "Bearer owner")],
+                    b"x",
+                ),
+            );
+            assert_eq!(uploaded.status, 200);
+        }
+        let listed = |query: &str| -> Vec<String> {
+            let r = handle(
+                &s,
+                req(
+                    "GET",
+                    &format!("/storage/v1/b/{BUCKET}/o?{query}"),
+                    &[("authorization", "Bearer owner")],
+                    b"",
+                ),
+            );
+            assert_eq!(r.status, 200, "{acceptance:?} {query}");
+            json_body(&r)["items"]
+                .as_array()
+                .map(|items| {
+                    items
+                        .iter()
+                        .map(|i| i["name"].as_str().unwrap().to_owned())
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+        let all: Vec<String> = names.iter().map(|n| (*n).to_owned()).collect();
+        let strict = acceptance == TokenAcceptance::Verified;
+        let expect = |filtered: &[&str]| -> Vec<String> {
+            if strict {
+                filtered.iter().map(|n| (*n).to_owned()).collect()
+            } else {
+                all.clone()
+            }
+        };
+        assert_eq!(
+            listed("startOffset=b.txt&endOffset=zz.txt"),
+            expect(&["b.txt", "dir/c.txt", "dir/d.txt", "dir2/e.txt"]),
+            "{acceptance:?}"
+        );
+        assert_eq!(
+            listed("matchGlob=dir%2F*"),
+            expect(&["dir/c.txt", "dir/d.txt"]),
+            "{acceptance:?}"
+        );
+        assert_eq!(listed("matchGlob=**.txt"), all, "{acceptance:?}");
+        assert_eq!(
+            listed("matchGlob=*.txt"),
+            expect(&["a.txt", "b.txt", "zz.txt"])
+        );
+        // A prefix appears only when a matching object lies under it.
+        let r = handle(
+            &s,
+            req(
+                "GET",
+                &format!("/storage/v1/b/{BUCKET}/o?delimiter=%2F&matchGlob=dir2%2F*"),
+                &[("authorization", "Bearer owner")],
+                b"",
+            ),
+        );
+        assert_eq!(
+            json_body(&r)["prefixes"],
+            if strict {
+                json!(["dir2/"])
+            } else {
+                json!(["dir/", "dir2/"])
+            }
+        );
+    }
+}
+
+/// Production numbers: strict draws generations as microsecond timestamps that never repeat, never
+/// run backwards and give the production etag; a minted token is listed first; the emulator profile
+/// keeps counting from 1 and appending (the official emulator draws epoch milliseconds).
+#[test]
+fn strict_generations_are_timestamps_and_tokens_are_newest_first() {
+    for (acceptance, s) in seeded_pair() {
+        let strict = acceptance == TokenAcceptance::Verified;
+        let owner = [("authorization", "Bearer owner")];
+        let first = json_body(&handle(
+            &s,
+            req(
+                "GET",
+                &format!("/storage/v1/b/{BUCKET}/o/g.bin"),
+                &owner,
+                b"",
+            ),
+        ));
+        let again = handle(
+            &s,
+            req(
+                "POST",
+                &format!("/upload/storage/v1/b/{BUCKET}/o?uploadType=media&name=g.bin"),
+                &[owner[0], ("content-type", "text/plain")],
+                b"second",
+            ),
+        );
+        let second = json_body(&again);
+        let (g1, g2) = (
+            first["generation"]
+                .as_str()
+                .unwrap()
+                .parse::<u64>()
+                .unwrap(),
+            second["generation"]
+                .as_str()
+                .unwrap()
+                .parse::<u64>()
+                .unwrap(),
+        );
+        assert!(g2 > g1, "{acceptance:?}: {g1} then {g2}");
+        if strict {
+            assert!(g1 >= 1_788_004_860_000_000, "a microsecond timestamp: {g1}");
+            assert_eq!(second["etag"], production_etag_text(g2, 1));
+        } else {
+            assert!(g1 < 1_000, "a counter: {g1}");
+        }
+        // Two minted tokens: the newer one first under strict.
+        let mint = |n: u8| {
+            let _ = n;
+            handle(
+                &s,
+                req(
+                    "POST",
+                    &format!("/v0/b/{BUCKET}/o/g.bin?create_token=true"),
+                    &owner,
+                    b"",
+                ),
+            )
+        };
+        let first_token = json_body(&mint(1))["downloadTokens"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let tokens = json_body(&mint(2))["downloadTokens"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let listed: Vec<&str> = tokens.split(',').collect();
+        assert_eq!(listed.len(), 2, "{acceptance:?}");
+        if strict {
+            assert_eq!(listed[1], first_token, "the older token is last");
+        } else {
+            assert_eq!(listed[0], first_token, "the older token stays first");
+        }
+    }
+}
+
+/// The recorded checksums of a JSON API 308 under strict: `x-goog-running-hash` and `x-range-md5`
+/// of the bytes the session holds (lean-v5: 262,144 bytes of 0x5A give md5 `fc47c91a...` and crc32c
+/// `PjCw/w==`).
+#[test]
+fn strict_resumable_308_carries_the_running_checksums() {
+    let s = state_with(Some(ALLOW_ALL_RULES), TokenAcceptance::Verified);
+    let owner = [("authorization", "Bearer owner")];
+    let start = handle(
+        &s,
+        req(
+            "POST",
+            &format!("/upload/storage/v1/b/{BUCKET}/o?uploadType=resumable&name=r.bin"),
+            &[owner[0], ("content-type", "application/json")],
+            b"{}",
+        ),
+    );
+    let session = header(&start, "location")
+        .unwrap()
+        .strip_prefix("http://127.0.0.1:9199")
+        .unwrap()
+        .to_owned();
+    let chunk = vec![90u8; 262_144];
+    let sent = handle(
+        &s,
+        req(
+            "PUT",
+            &session,
+            &[owner[0], ("content-range", "bytes 0-262143/262147")],
+            &chunk,
+        ),
+    );
+    assert_eq!(sent.status, 308);
+    assert_eq!(header(&sent, "range"), Some("bytes=0-262143"));
+    assert_eq!(
+        header(&sent, "x-range-md5"),
+        Some("fc47c91acf3074fb684c73ef7584605f")
+    );
+    assert_eq!(
+        header(&sent, "x-goog-running-hash"),
+        Some("crc32c=PjCw/w==")
+    );
+    let query = handle(
+        &s,
+        req(
+            "PUT",
+            &session,
+            &[owner[0], ("content-range", "bytes */262147")],
+            b"",
+        ),
+    );
+    assert_eq!(
+        header(&query, "x-range-md5"),
+        Some("fc47c91acf3074fb684c73ef7584605f")
+    );
+}
+
+/// Production's etag text, computed here from the recorded vectors rather than by the code under
+/// test: the protobuf of generation and metageneration in base64 (the recorded
+/// `CNGTm8DplpcDEAI=` is checked in the module's own tests; this one uses a small value).
+fn production_etag_text(generation: u64, metageneration: u64) -> String {
+    let mut bytes = vec![0x08];
+    let mut value = generation;
+    while value >= 0x80 {
+        bytes.push(u8::try_from(value & 0x7f).unwrap() | 0x80);
+        value >>= 7;
+    }
+    bytes.push(u8::try_from(value).unwrap());
+    bytes.push(0x10);
+    bytes.push(u8::try_from(metageneration).unwrap());
+    fireemu_core_storage::hash::base64(&bytes)
 }

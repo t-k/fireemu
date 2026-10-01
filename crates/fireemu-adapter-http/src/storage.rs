@@ -1893,6 +1893,9 @@ impl StorageState {
             .store
             .lock()
             .map_err(|_| (500, "store poisoned".to_owned()))?;
+        let mut guard = guard;
+        // Production's generation numbering and token order belong to the strict profile.
+        guard.set_production_order(self.is_strict());
         Ok(StoreGuard {
             guard,
             sink: self.events.as_ref(),
@@ -3497,7 +3500,9 @@ fn production_media_headers(
         "etag",
         match style {
             RangeStyle::Firebase => format!("\"{}\"", fireemu_core_storage::hash::hex(&meta.md5)),
-            RangeStyle::Gcs => meta.etag(),
+            RangeStyle::Gcs => {
+                crate::storage_production::production_etag(meta.generation, meta.metageneration)
+            }
         },
     );
     add(
@@ -3924,7 +3929,7 @@ fn fb_commit(
         // `method-update-upload-present` 403), and so is the official emulator, whose
         // uploadObject hard-codes the create method.
         let method = Method::Create;
-        let next_generation = store.next_generation_preview().map_err(fb_core_err)?;
+        let next_generation = store.next_generation_preview(now).map_err(fb_core_err)?;
         let hashes = prepared.digests();
         state
             .authorize(
@@ -4145,7 +4150,7 @@ fn finalize_resumable(
     // Also a `create` over an existing object (see `fb_commit`).
     let method = Method::Create;
     let next_generation = store
-        .next_generation_preview()
+        .next_generation_preview(now)
         .map_err(FinalizeError::Store)?;
     if let Err(denial) = state.authorize(
         &principal,
@@ -4215,27 +4220,37 @@ fn gcs_list(
     params: &BTreeMap<String, String>,
     host: &str,
 ) -> Outcome {
-    // These production filters change the answer and cannot be silently ignored in strict
-    // mode. This store has no archived generations, so `versions=true` has the same result
-    // as `versions=false`. Explicit `false` is the default for includeTrailingDelimiter.
+    // Under strict the production filters change the answer and are honoured: `startOffset`
+    // (inclusive), `endOffset` (exclusive) and `matchGlob` apply to object names (recorded,
+    // lean-v5: the offsets `b.txt` and `zz.txt` list `b.txt`, `dir/c.txt`, `dir/d.txt` and
+    // `dir2/e.txt`; the glob `dir/*` lists `dir/c.txt` and `dir/d.txt`). The official emulator
+    // ignores all of them (measured, firebase-tools 15.28.2: the whole listing), as does the
+    // emulator profile. `includeTrailingDelimiter=true` was not recorded and is refused under
+    // strict; this store has no archived generations, so `versions=true` has the same result
+    // as `versions=false`.
     // https://cloud.google.com/storage/docs/json_api/v1/objects/list
-    if state.token_acceptance == TokenAcceptance::Verified {
-        let unsupported = ["matchGlob", "startOffset", "endOffset"]
-            .into_iter()
-            .find(|name| params.contains_key(*name))
-            .or_else(|| {
-                ["includeTrailingDelimiter"]
-                    .into_iter()
-                    .find(|name| params.get(*name).is_some_and(|value| value != "false"))
-            });
-        if let Some(name) = unsupported {
-            return Err(gcs_json_error(
-                400,
-                &format!("unsupported JSON API list parameter: {name}"),
-                "invalid",
-            ));
-        }
+    let strict = state.token_acceptance == TokenAcceptance::Verified;
+    if strict
+        && params
+            .get("includeTrailingDelimiter")
+            .is_some_and(|value| value != "false")
+    {
+        return Err(gcs_json_error(
+            400,
+            "unsupported JSON API list parameter: includeTrailingDelimiter",
+            "invalid",
+        ));
     }
+    let start_offset = strict.then(|| params.get("startOffset").cloned()).flatten();
+    let end_offset = strict.then(|| params.get("endOffset").cloned()).flatten();
+    let glob = strict.then(|| params.get("matchGlob").cloned()).flatten();
+    let name_filter = |name: &str| {
+        start_offset.as_deref().is_none_or(|start| name >= start)
+            && end_offset.as_deref().is_none_or(|end| name < end)
+            && glob
+                .as_deref()
+                .is_none_or(|pattern| fireemu_core_storage::glob::glob_matches(pattern, name))
+    };
     let b = bucket_name(bucket)?;
     let prefix = params.get("prefix").cloned().unwrap_or_default();
     let delimiter = params.get("delimiter").cloned().unwrap_or_default();
@@ -4257,12 +4272,13 @@ fn gcs_list(
         });
     }
     let store = state.store()?;
-    let page = store.list(
+    let page = store.list_matching(
         &b,
         &prefix,
         Some(delimiter.as_str()),
         page_token.as_deref(),
         max_results,
+        &name_filter,
     );
     let mut body = json!({"kind": "storage#objects"});
     if let Some(t) = page.next_page_token {
@@ -4795,7 +4811,10 @@ fn gcs_resumable_put(
             return Ok(if let Some(m) = committed {
                 StorageResponse::json(200, &gcs_json(&m, host))
             } else {
-                incomplete(received)
+                incomplete(
+                    received,
+                    running_hashes(state, &mut store, &id, received, now),
+                )
             });
         }
         ContentRange::Span { start, end, total } => (start, end, total),
@@ -4845,18 +4864,47 @@ fn gcs_resumable_put(
         return Ok(StorageResponse::json(200, &gcs_json(&m, host)));
     }
     let (received, _) = store.upload_status(&id, now).map_err(gcs_core_err)?;
-    Ok(incomplete(received))
+    Ok(incomplete(
+        received,
+        running_hashes(state, &mut store, &id, received, now),
+    ))
+}
+
+/// The checksums of the bytes a session holds, which production sends with every 308 that names
+/// a range (recorded, lean-v5: `x-goog-running-hash: crc32c=...` and `x-range-md5` of the first
+/// chunk); the official emulator has no such protocol.
+fn running_hashes(
+    state: &StorageState,
+    store: &mut StoreGuard<'_>,
+    id: &UploadId,
+    received: u64,
+    now: LogicalInstant,
+) -> Option<(u32, [u8; 16])> {
+    if !state.is_strict() || received == 0 {
+        return None;
+    }
+    store.upload_running_hashes(id, now).ok()
 }
 
 /// `308 Resume Incomplete` with the persisted range. Production types it `text/plain` (recorded,
-/// lean-v5); it also sends `x-goog-running-hash` and `x-range-md5` of the bytes held, which are
-/// not reproduced yet.
-fn incomplete(received: u64) -> StorageResponse {
+/// lean-v5) and, under strict, sends the checksums of the bytes held as well.
+fn incomplete(received: u64, hashes: Option<(u32, [u8; 16])>) -> StorageResponse {
     let r = StorageResponse::empty(308).with_header("content-type", "text/plain; charset=utf-8");
-    if received > 0 {
-        r.with_header("range", format!("bytes=0-{}", received - 1))
-    } else {
-        r
+    if received == 0 {
+        return r;
+    }
+    let r = r.with_header("range", format!("bytes=0-{}", received - 1));
+    match hashes {
+        Some((crc32c, md5)) => r
+            .with_header(
+                "x-goog-running-hash",
+                format!(
+                    "crc32c={}",
+                    fireemu_core_storage::hash::base64(&crc32c.to_be_bytes())
+                ),
+            )
+            .with_header("x-range-md5", fireemu_core_storage::hash::hex(&md5)),
+        None => r,
     }
 }
 

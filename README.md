@@ -141,7 +141,7 @@ On Windows, `emulators:export` and `--export-on-exit` are not currently availabl
 
 On Unix-like systems, the destination and its ancestor directories are subject to ownership and permission restrictions. Use a dedicated, non-shared directory rather than `/tmp` or a shared directory. 
 
-On macOS, an ACL on an ancestor directory is refused only when an `allow` entry lets a principal other than the owner or root change it (for example `group:everyone allow add_file,delete_child`, or a mutating right for another user or any group). `deny` entries and read-only `allow` entries are accepted, so a standard home directory (which carries `group:everyone deny delete`) and the folders below it work. When an export is refused for an ACL, the message names the entry; remove it (`chmod -a`) or export to another directory, for example one under `$TMPDIR`. Check an ancestor with `ls -led <directory>`.
+On macOS, an ancestor directory with an ACL is refused when the ACL has an `allow` entry for anyone but the owner, root or the user running the export, whatever permissions the entry shows (the kernel grants rights that `ls -le` does not list). `deny` entries are accepted, so a standard home directory (which carries `group:everyone deny delete`) and the folders below it work. When an export is refused for an ACL, the message names the entry; remove it (`chmod -a`) or export to another directory, for example one under `$TMPDIR`. Check an ancestor with `/bin/ls -led <directory>`.
 
 ### Troubleshooting
 

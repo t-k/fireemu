@@ -15,5 +15,8 @@ rustix = { version = "1", features = ["fs", "process"] }
 exacl = "0.13"
 nix = { version = "0.30", default-features = false, features = ["user"] }
 
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+proptest.workspace = true
+
 [lints]
 workspace = true

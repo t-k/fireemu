@@ -254,10 +254,9 @@ fn extended_acl_namespace_ancestor_is_refused() {
 
     assert!(error.contains("extended ACL"), "{error}");
     // The diagnostic names the entry and a way out.
-    assert!(error.contains("everyone"), "{error}");
-    assert!(error.contains("add_file"), "{error}");
+    assert!(error.contains("group:everyone allow"), "{error}");
     assert!(error.contains("delete_child"), "{error}");
-    assert!(error.contains("TMPDIR"), "{error}");
+    assert!(error.contains("$TMPDIR"), "{error}");
 }
 
 /// The reproduction of the macOS home directory: `group:everyone deny delete` only removes rights.
@@ -288,18 +287,153 @@ fn another_users_write_allow_on_an_ancestor_is_refused() {
     assert!(error.contains("nobody"), "{error}");
 }
 
+/// A read-only allow is refused too: the kernel grants rights `exacl` does not report, so an allow
+/// entry of another principal is not proven harmless by the permissions that are visible.
 #[cfg(target_os = "macos")]
 #[test]
-fn a_read_only_allow_on_an_ancestor_is_accepted() {
-    create_stage_under_acl(
+fn a_read_only_allow_on_an_ancestor_is_refused() {
+    let error = create_stage_under_acl(
         "acl-read-only",
         "everyone allow list,search,readattr,readextattr,readsecurity",
     )
-    .expect("a read-only allow is safe");
+    .unwrap_err();
+
+    assert!(error.contains("group:everyone allow"), "{error}");
 }
 
-/// The owner and root hold their rights anyway: their entries, resolved through the system's user
-/// database, are accepted.
+/// A raw ACE with a `KAUTH_ACE_GENERIC_*` right, which `exacl` reports as no permissions at all and
+/// the kernel expands into real ones, set through the C library from Python (the crate itself stays
+/// free of unsafe code).
+#[cfg(target_os = "macos")]
+const RAW_ACE_SCRIPT: &str = r#"
+import ctypes, ctypes.util, struct, sys, pwd
+path, user, rights, kind = sys.argv[1], sys.argv[2], int(sys.argv[3], 0), sys.argv[4]
+libc = ctypes.CDLL(ctypes.util.find_library("c"), use_errno=True)
+libc.acl_copy_int_native.restype = ctypes.c_void_p
+libc.acl_copy_int_native.argtypes = [ctypes.c_void_p]
+libc.acl_set_file.argtypes = [ctypes.c_char_p, ctypes.c_int, ctypes.c_void_p]
+libc.mbr_uid_to_uuid.argtypes = [ctypes.c_uint, ctypes.c_char * 16]
+guid = (ctypes.c_char * 16)()
+assert libc.mbr_uid_to_uuid(pwd.getpwnam(user).pw_uid, guid) == 0
+flags = 1 if kind == "allow" else 2
+ace = bytes(guid) + struct.pack("<II", flags, rights)
+filesec = struct.pack("<I", 0x012CC16D) + b"\x00" * 32 + struct.pack("<II", 1, 0) + ace
+buf = ctypes.create_string_buffer(filesec, len(filesec))
+acl = libc.acl_copy_int_native(ctypes.cast(buf, ctypes.c_void_p))
+assert acl, ctypes.get_errno()
+assert libc.acl_set_file(path.encode(), 0x100, ctypes.c_void_p(acl)) == 0, ctypes.get_errno()
+"#;
+
+#[cfg(target_os = "macos")]
+fn install_raw_ace(dir: &Path, user: &str, rights: u32, kind: &str) {
+    let output = std::process::Command::new("python3")
+        .args(["-c", RAW_ACE_SCRIPT])
+        .arg(dir)
+        .arg(user)
+        .arg(format!("{rights:#x}"))
+        .arg(kind)
+        .output()
+        .expect("run python3");
+    assert!(
+        output.status.success(),
+        "install raw ACE: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// `user:nobody allow GENERIC_ALL` (`KAUTH_ACE_GENERIC_ALL`, 1 << 21) on an ancestor.
+#[cfg(target_os = "macos")]
+#[test]
+fn an_ancestor_with_a_raw_generic_allow_ace_is_refused() {
+    let root = TestRoot::new("acl-generic-all");
+    let parent = root.0.join("private-parent");
+    create_private_dir(&parent);
+    install_raw_ace(&root.0, "nobody", 1 << 21, "allow");
+    // The premise: `exacl` sees an allow entry with no permissions at all.
+    let seen = exacl::getfacl(&root.0, None).expect("read the ACL");
+    assert_eq!(seen.len(), 1, "{seen:?}");
+    assert!(seen[0].allow && seen[0].perms.is_empty(), "{seen:?}");
+    let _cleanup = Acl(&root.0);
+
+    let error = PublicationStage::create(&parent.join("export"), |_| Ok(())).unwrap_err();
+
+    assert!(error.contains("user:nobody allow"), "{error}");
+    assert!(error.contains("no permissions are visible"), "{error}");
+}
+
+/// The same for the other generic rights, and a generic deny is still only a deny.
+#[cfg(target_os = "macos")]
+#[test]
+fn each_raw_generic_allow_ace_is_refused_and_a_raw_generic_deny_is_accepted() {
+    for (name, bit) in [
+        ("execute", 1u32 << 22),
+        ("write", 1 << 23),
+        ("read", 1 << 24),
+    ] {
+        let root = TestRoot::new(&format!("acl-generic-{name}"));
+        let parent = root.0.join("private-parent");
+        create_private_dir(&parent);
+        install_raw_ace(&root.0, "nobody", bit, "allow");
+        let _cleanup = Acl(&root.0);
+        let error = PublicationStage::create(&parent.join("export"), |_| Ok(())).unwrap_err();
+        assert!(error.contains("user:nobody allow"), "{name}: {error}");
+    }
+    let root = TestRoot::new("acl-generic-deny");
+    let parent = root.0.join("private-parent");
+    create_private_dir(&parent);
+    install_raw_ace(&root.0, "nobody", 1 << 23, "deny");
+    let _cleanup = Acl(&root.0);
+    PublicationStage::create(&parent.join("export"), |_| Ok(())).expect("a deny entry is safe");
+}
+
+/// An inheritable `deny delete` on an accepted ancestor reaches the stage: the stage's ACL is
+/// cleared as it is created, so the rename that publishes it and the cleanup still work.
+#[cfg(target_os = "macos")]
+#[test]
+fn an_inherited_deny_delete_does_not_break_the_stage_or_its_publication() {
+    let root = TestRoot::new("acl-inherited-deny");
+    let parent = root.0.join("private-parent");
+    create_private_dir(&parent);
+    let _acl = Acl::install(
+        &root.0,
+        "everyone deny delete,file_inherit,directory_inherit",
+    );
+    // The parent inherits the entry too.
+    create_private_dir(&parent.join("inner"));
+    let target = parent.join("inner").join("export");
+    let stage = PublicationStage::create(&target, |_| Ok(())).expect("an inherited deny is safe");
+    assert_eq!(
+        exacl::getfacl(stage.root(), None).expect("read the stage ACL"),
+        Vec::new(),
+        "the stage starts with no ACL"
+    );
+    write(stage.root(), "marker", "exported");
+    assert_eq!(
+        exacl::getfacl(stage.root().join("marker"), None).expect("read the file ACL"),
+        Vec::new(),
+        "and so do the files made in it"
+    );
+    stage.complete().publish().expect("the stage is published");
+
+    assert_eq!(
+        std::fs::read_to_string(target.join("marker")).unwrap(),
+        "exported"
+    );
+    let leftovers: Vec<_> = std::fs::read_dir(parent.join("inner"))
+        .unwrap()
+        .flatten()
+        .filter(|entry| {
+            entry
+                .file_name()
+                .to_string_lossy()
+                .contains("fireemu-stage")
+        })
+        .collect();
+    assert!(leftovers.is_empty(), "{leftovers:?}");
+}
+
+/// The owner and root hold their rights anyway: their entries, named by the system's user database,
+/// are accepted.
 #[cfg(target_os = "macos")]
 #[test]
 fn the_current_users_and_roots_mutating_allow_on_an_ancestor_is_accepted() {
@@ -349,6 +483,59 @@ fn each_mutating_right_on_an_everyone_allow_is_refused() {
             .unwrap_err();
         assert!(error.contains("extended ACL"), "{right}: {error}");
     }
+}
+
+/// A stage name that is already taken is skipped, and the taken one is left alone.
+#[cfg(unix)]
+#[test]
+fn a_taken_stage_name_is_skipped() {
+    let root = TestRoot::new("taken-stage-name");
+    let parent = root.0.join("private-parent");
+    create_private_dir(&parent);
+    let taken: Vec<PathBuf> = (1..=8)
+        .map(|id| parent.join(format!(".export.fireemu-stage-{}-{id}", std::process::id())))
+        .collect();
+    for path in &taken {
+        create_private_dir(path);
+        std::fs::write(path.join("owned-by-someone-else"), "keep").expect("mark the taken name");
+    }
+
+    let stage = PublicationStage::create(&parent.join("export"), |_| Ok(()))
+        .expect("a free stage name is found");
+
+    assert!(
+        taken.iter().all(|path| path != stage.root()),
+        "{:?}",
+        stage.root()
+    );
+    for path in &taken {
+        assert_eq!(
+            std::fs::read_to_string(path.join("owned-by-someone-else")).unwrap(),
+            "keep"
+        );
+    }
+}
+
+/// A stage that cannot be created for another reason than a taken name is reported as such.
+#[cfg(unix)]
+#[test]
+fn a_stage_that_cannot_be_created_is_reported_with_its_reason() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let root = TestRoot::new("unwritable-parent");
+    let parent = root.0.join("private-parent");
+    create_private_dir(&parent);
+    std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o500))
+        .expect("make the parent read-only");
+
+    let error = PublicationStage::create(&parent.join("export"), |_| Ok(())).unwrap_err();
+
+    std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o700))
+        .expect("restore the parent");
+    assert!(
+        error.contains("cannot create private export stage"),
+        "{error}"
+    );
 }
 
 #[cfg(unix)]

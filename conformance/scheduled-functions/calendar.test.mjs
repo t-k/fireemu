@@ -994,3 +994,74 @@ test("a refused CREATE settles on the recorded detailed absence and the topic cl
     assert.ok(!f.sends.some(({ id }) => id === "delete-topic"), String(refusal));
   }
 });
+
+// Generated refusals against an independent model of the settlement rules. A refused job settles
+// on the plain recorded absence ("Job not found."), and after a complete 400 also on the recorded
+// detailed absence for the run's own job (calendar-5a73ba99b7014cfd seq 150/153). Any other
+// refusal stops the run after that job's cleanup read, and an unreadable 400 leaves the create
+// unsettled. The run is closure-ready, and deletes its topic, only when every attempted job settled.
+test("generated refusals settle the detailed absence only after a complete 400 and stop on any other refusal", async () => {
+  let state = 0x5eed400;
+  const random = () => {
+    state ^= state << 13;
+    state ^= state >>> 17;
+    state ^= state << 5;
+    return state >>> 0;
+  };
+  // Half the draws take the recorded shape (the first entry), so settled runs are frequent.
+  const pick = (values) =>
+    random() % 2 ? values[0] : values[1 + (random() % (values.length - 1))];
+  const refusals = ["complete-400", "unreadable-400", 403, 409, 429];
+  const bodies = {
+    recorded: (id, owned) => detailedAbsence(owned.jobs[id]),
+    compact: (id, owned) => JSON.stringify(JSON.parse(detailedAbsence(owned.jobs[id]))),
+    foreign: (id, owned) => detailedAbsence(owned.jobs[id === "c01" ? "c02" : "c01"]),
+    padded: (id, owned) => detailedAbsence(owned.jobs[id]) + " ",
+    plain: () =>
+      JSON.stringify({ error: { code: 404, status: "NOT_FOUND", message: "Job not found." } }),
+  };
+  const bodyNames = Object.keys(bodies);
+  for (let i = 0; i < 64; i++) {
+    const plan = new Map();
+    for (const { id } of CALENDAR_CASES)
+      if (random() % 3 === 0) plan.set(id, { refusal: pick(refusals), body: pick(bodyNames) });
+    let expected = true;
+    for (const { id } of CALENDAR_CASES) {
+      const step = plan.get(id);
+      if (!step) continue;
+      if (step.refusal === "unreadable-400") {
+        expected = false;
+        break;
+      }
+      const complete400 = step.refusal === "complete-400";
+      expected &&= step.body === "plain" || (complete400 && step.body === "recorded");
+      if (!complete400) break;
+    }
+    const e = environment(),
+      original = e.deps.send;
+    e.deps.send = async (request) => {
+      const step = plan.get(request.id.slice(0, 3));
+      if (step && request.id.endsWith("-create")) {
+        e.sends.push(request);
+        if (step.refusal === "unreadable-400")
+          return new Response(new ReadableStream({ pull: (c) => c.error(new Error("lost")) }), {
+            status: 400,
+          });
+        return new Response("{}", { status: step.refusal === "complete-400" ? 400 : step.refusal });
+      }
+      if (step && request.id.endsWith("-read-deleted")) {
+        e.sends.push(request);
+        return new Response(bodies[step.body](request.id.slice(0, 3), e.owned), { status: 404 });
+      }
+      return original(request);
+    };
+    const result = await collectCalendar(e.deps);
+    const label = `seed5eed400/${i}/${JSON.stringify([...plan])}`;
+    assert.equal(result.closureReady, expected, label);
+    assert.equal(
+      e.sends.some(({ id }) => id === "delete-topic"),
+      expected,
+      label,
+    );
+  }
+});

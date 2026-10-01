@@ -6138,6 +6138,18 @@ async fn an_undeclared_set_rules_body_is_cut_off_at_the_control_port_limit() {
     /// reset reaches it, which says nothing about how much the server read.
     const SOCKET_BUFFER: u32 = 64 * 1024;
 
+    async fn write_chunks(
+        writer: &mut tokio::net::tcp::OwnedWriteHalf,
+        header: &str,
+        chunk: &[u8],
+        count: usize,
+    ) {
+        for _ in 0..count {
+            writer.write_all(header.as_bytes()).await.unwrap();
+            writer.write_all(chunk).await.unwrap();
+            writer.write_all(b"\r\n").await.unwrap();
+        }
+    }
     let socket = tokio::net::TcpSocket::new_v4().unwrap();
     socket.set_recv_buffer_size(SOCKET_BUFFER).unwrap();
     socket.bind("127.0.0.1:0".parse().unwrap()).unwrap();
@@ -6200,18 +6212,6 @@ async fn an_undeclared_set_rules_body_is_cut_off_at_the_control_port_limit() {
     });
     let chunk = vec![b' '; 16 * 1024];
     let header = format!("{:x}\r\n", chunk.len());
-    async fn write_chunks(
-        writer: &mut tokio::net::tcp::OwnedWriteHalf,
-        header: &str,
-        chunk: &[u8],
-        count: usize,
-    ) {
-        for _ in 0..count {
-            writer.write_all(header.as_bytes()).await.unwrap();
-            writer.write_all(chunk).await.unwrap();
-            writer.write_all(b"\r\n").await.unwrap();
-        }
-    }
     // 128 chunks are 2 MiB: eight times the bound, a quarter of what the client is willing to send.
     write_chunks(&mut writer, &header, &chunk, 128).await;
     let early = tokio::time::timeout(std::time::Duration::from_secs(10), status_rx)

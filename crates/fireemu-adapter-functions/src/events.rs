@@ -610,4 +610,56 @@ mod tests {
             );
         }
     }
+    mod properties {
+        use super::{object_created_at, SECOND};
+        use crate::events::{firestore_time, object_json, storage_event_id, storage_time};
+        use fireemu_core_functions::manifest::ObjectEvent;
+        use fireemu_core_types::time::LogicalInstant;
+        use proptest::prelude::*;
+
+        proptest! {
+            #[test]
+            fn a_storage_event_id_is_always_seventeen_digits(seed in ".*") {
+                let id = storage_event_id(&seed);
+                prop_assert_eq!(id.len(), 17);
+                prop_assert!(id.bytes().all(|b| b.is_ascii_digit()));
+                prop_assert!(!id.starts_with('0'));
+                prop_assert_eq!(storage_event_id(&seed), id);
+            }
+
+            #[test]
+            fn object_resource_times_always_have_three_digits_and_are_cut_not_rounded(nanos in 0_i128..4_000_000_000_000_000_000) {
+                let created = SECOND + nanos;
+                let json = object_json(&object_created_at(created));
+                for key in ["timeCreated", "updated", "timeStorageClassUpdated"] {
+                    let text = json[key].as_str().unwrap();
+                    let fraction = text.strip_suffix('Z').unwrap().rsplit('.').next().unwrap();
+                    prop_assert_eq!(fraction.len(), 3, "{}", text);
+                    let parsed = LogicalInstant::parse_rfc3339(text).unwrap().as_nanos();
+                    prop_assert!(parsed <= created && created - parsed < 1_000_000, "{} for {}", text, created);
+                }
+            }
+
+            #[test]
+            fn a_finalize_time_is_the_creation_instant_cut_to_the_microsecond(nanos in 0_i128..4_000_000_000_000_000_000, admitted in 0_i128..4_000_000_000_000_000_000) {
+                let created = SECOND + nanos;
+                let object = object_created_at(created);
+                let time = storage_time(ObjectEvent::Finalized, &object, LogicalInstant::from_nanos(SECOND + admitted));
+                let parsed = LogicalInstant::parse_rfc3339(&time).unwrap().as_nanos();
+                prop_assert_eq!(parsed, created - created.rem_euclid(1_000));
+                prop_assert_eq!(&time, &firestore_time(LogicalInstant::from_nanos(parsed)));
+            }
+
+            #[test]
+            fn the_other_kinds_use_the_admission_instant_to_the_microsecond(nanos in 0_i128..4_000_000_000_000_000_000, admitted in 0_i128..4_000_000_000_000_000_000) {
+                let object = object_created_at(SECOND + nanos);
+                let at = SECOND + admitted;
+                for kind in [ObjectEvent::Deleted, ObjectEvent::MetadataUpdated] {
+                    let time = storage_time(kind, &object, LogicalInstant::from_nanos(at));
+                    let parsed = LogicalInstant::parse_rfc3339(&time).unwrap().as_nanos();
+                    prop_assert_eq!(parsed, at - at.rem_euclid(1_000));
+                }
+            }
+        }
+    }
 }

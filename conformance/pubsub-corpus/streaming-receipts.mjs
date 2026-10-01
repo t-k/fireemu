@@ -1,6 +1,13 @@
 // Bounded durable inbound candidates only; peer terminal and owned process proofs belong to the collector.
 import { createStreamingFrameDecoder, credentialPrefix } from "./streaming-frames.mjs";
 
+// Linear in the value length: a regular expression anchored at the end is quadratic on a long run of
+// padding followed by another character, and metadata values are peer-controlled.
+function unpadded(text) {
+  let end = text.length;
+  while (end > 0 && text[end - 1] === "=") end--;
+  return text.slice(0, end);
+}
 export function createStreamingReceiptQueue({
   maxFrameBytes,
   maxTotalBytes,
@@ -215,7 +222,7 @@ export function createStreamingReceiptQueue({
               decoded = Buffer.from(text, "base64");
             // Node's decoder stops at the first padding and skips foreign characters, so only a
             // canonical value is screened reliably; anything else is refused unstored.
-            if (decoded.toString("base64").replace(/=+$/, "") !== text.replace(/=+$/, "")) {
+            if (unpadded(decoded.toString("base64")) !== unpadded(text)) {
               stop("invalid-headers");
               return false;
             }

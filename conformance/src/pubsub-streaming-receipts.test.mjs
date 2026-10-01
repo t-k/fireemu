@@ -854,3 +854,30 @@ test("a binary metadata value that is not canonical base64 is refused, so decodi
   assert.equal(result.reason, undefined);
   assert.equal(saved.length, 4);
 });
+test("screening a long binary value of padding stays linear in its length", async () => {
+  // Runs in a child process: a quadratic padding trim takes tens of seconds on this value, and a
+  // busy loop cannot be interrupted in-process.
+  const script = `const [target] = process.argv.slice(1);
+    const { createStreamingReceiptQueue } = await import(target);
+    const q = createStreamingReceiptQueue({
+      maxFrameBytes: 64, maxTotalBytes: 512, maxFrames: 8, maxChunks: 16, maxHeaderBytes: 300000,
+      maxHeaderEvents: 4, maxHeaderPairs: 16, maxEvents: 24, wallMs: 60000,
+      credential: "SYNTHETIC-SECRET",
+      persist: async () => {}, onFrame: async () => {}, stopOwned: async () => {},
+    });
+    const accepted = q.headers("trailers", ["details-bin", "=".repeat(262144) + "x"], 0);
+    const result = await q.done();
+    process.stdout.write(JSON.stringify({ accepted, reason: result.reason }));`;
+  let outcome;
+  try {
+    const { stdout } = await promisify(execFile)(
+      process.execPath,
+      ["--input-type=module", "--eval", script, target.href],
+      { timeout: 8000, killSignal: "SIGKILL" },
+    );
+    outcome = JSON.parse(stdout);
+  } catch (error) {
+    outcome = error.killed ? "screening did not return" : `screening failed: ${error.stderr}`;
+  }
+  assert.deepEqual(outcome, { accepted: false, reason: "invalid-headers" });
+});

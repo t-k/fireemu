@@ -342,3 +342,61 @@ export function refusalVerdict(run) {
       : "pass";
   return { verdict, conditions };
 }
+
+/** Rows of `ps -ww -axo pid=,ppid=,pgid=,uid=,lstart=,stat=,args=` (condition (E) inventory). */
+export function parseInventory(text) {
+  if (typeof text !== "string" || !text.trim()) throw new Error("unreadable inventory");
+  return text
+    .split("\n")
+    .filter((line) => line.trim())
+    .map((line) => {
+      const match =
+        /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\S+\s+\S+\s+\d+\s+\d{2}:\d{2}:\d{2}\s+\d{4})\s+(\S+)\s+(.+)$/.exec(
+          line,
+        );
+      if (!match) throw new Error("unreadable inventory row");
+      return {
+        pid: Number(match[1]),
+        ppid: Number(match[2]),
+        pgid: Number(match[3]),
+        uid: Number(match[4]),
+        started: match[5].replace(/\s+/g, " "),
+        stat: match[6],
+        args: match[7],
+      };
+    });
+}
+
+/**
+ * Whether a control run showed what it is for (condition (G)). A negative control counts only
+ * when its named rule fired on the injected row; the positive control must pass (B)-(F),
+ * including (D), and observe the runner and the `--calendar-child` branch.
+ */
+export function controlOutcome(control, result) {
+  if (control.mode === "positive") {
+    const ok = ["B", "C", "D", "E", "F"].every(
+      (letter) => result.conditions?.[letter]?.ok === true,
+    );
+    const seen =
+      result.observation?.runner === true &&
+      result.observation?.child === true &&
+      result.observation?.matched === true;
+    return { counts: ok && seen, rulesFired: [] };
+  }
+  const pid = control.injected?.pid;
+  const survivor = (result.inventory?.survivors ?? []).find((entry) => entry.row?.pid === pid);
+  const rulesFired = [...(survivor?.rules ?? [])];
+  const listened = (result.ports?.lsof ?? []).some(
+    (answer) => answer.result === "listener" && answer.pids?.includes(pid),
+  );
+  if (listened) rulesFired.push("port");
+  if ((result.records?.signals ?? []).some((signal) => signal.target?.pid === pid))
+    rulesFired.push("harness-signal");
+  const named = {
+    orphan: "session",
+    escaper: "identity",
+    listener: "port",
+    leftover: "harness-signal",
+  }[control.mode];
+  return { counts: Number.isSafeInteger(pid) && rulesFired.includes(named), rulesFired };
+}

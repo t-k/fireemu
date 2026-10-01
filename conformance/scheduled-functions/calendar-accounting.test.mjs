@@ -5,6 +5,8 @@ import {
   judgeInventory,
   interpretLsof,
   refusalVerdict,
+  parseInventory,
+  controlOutcome,
 } from "./calendar-accounting.mjs";
 
 function generated(seed) {
@@ -535,4 +537,107 @@ test("generated combinations of breaks: any failure fails, else any unknown is i
         : "pass";
     assert.equal(refusalVerdict(input).verdict, model, `seedd786/${i}/${chosen}`);
   }
+});
+
+test("inventory rows keep the state column and refuse an unreadable row", () => {
+  const rows = parseInventory(
+    "  100     1   100   501 Fri Oct  2 06:00:00 2026     Ss   /bin/zsh -l\n  4242   100  4242   501 Fri Oct  2 06:00:01 2026     Z    (sleep)\n",
+  );
+  assert.deepEqual(rows[1], {
+    pid: 4242,
+    ppid: 100,
+    pgid: 4242,
+    uid: 501,
+    started: "Fri Oct 2 06:00:01 2026",
+    stat: "Z",
+    args: "(sleep)",
+  });
+  assert.throws(() => parseInventory("garbage\n"));
+  assert.throws(() => parseInventory(""));
+});
+
+test("a negative control counts only when its named rule fired on the injected row", () => {
+  const base = {
+    verdict: "fail",
+    conditions: { D: { ok: true }, E: { ok: true }, F: { ok: true } },
+  };
+  const injected = { pid: 777, uid: 501, started: "s" };
+  const withSurvivor = (rules) => ({
+    ...base,
+    inventory: { survivors: [{ row: { pid: 777 }, rules }] },
+  });
+  assert.equal(
+    controlOutcome({ mode: "orphan", injected }, withSurvivor(["session", "path"])).counts,
+    true,
+  );
+  assert.equal(
+    controlOutcome({ mode: "orphan", injected }, withSurvivor(["identity"])).counts,
+    false,
+  );
+  assert.equal(
+    controlOutcome({ mode: "escaper", injected }, withSurvivor(["identity"])).counts,
+    true,
+  );
+  assert.equal(
+    controlOutcome({ mode: "orphan", injected: { pid: 1 } }, withSurvivor(["session"])).counts,
+    false,
+    "another row's survival does not count",
+  );
+  assert.equal(
+    controlOutcome(
+      { mode: "listener", injected },
+      { ...base, ports: { lsof: [{ result: "listener", pids: [777] }] } },
+    ).counts,
+    true,
+  );
+  assert.equal(
+    controlOutcome(
+      { mode: "listener", injected },
+      { ...base, ports: { lsof: [{ result: "listener", pids: [9] }] } },
+    ).counts,
+    false,
+  );
+  assert.equal(
+    controlOutcome(
+      { mode: "leftover", injected },
+      { ...base, records: { signals: [{ target: { pid: 777 } }] } },
+    ).counts,
+    true,
+  );
+  assert.equal(
+    controlOutcome(
+      { mode: "leftover", injected },
+      { ...base, records: { signals: [{ target: { pid: 9 } }] } },
+    ).counts,
+    false,
+  );
+  const fired = controlOutcome(
+    { mode: "orphan", injected },
+    withSurvivor(["session", "path"]),
+  ).rulesFired;
+  assert.deepEqual(fired, ["session", "path"]);
+});
+
+test("the positive control passes B-F, including D, and observes the runner and the child", () => {
+  const conditions = Object.fromEntries(
+    ["A", "B", "C", "D", "E", "F", "G"].map((letter) => [letter, { ok: true }]),
+  );
+  const passing = {
+    verdict: "pass",
+    conditions,
+    observation: { runner: true, child: true, matched: true },
+  };
+  assert.equal(controlOutcome({ mode: "positive" }, passing).counts, true);
+  for (const letter of ["B", "C", "D", "E", "F"]) {
+    const broken = structuredClone(passing);
+    broken.conditions[letter].ok = false;
+    assert.equal(controlOutcome({ mode: "positive" }, broken).counts, false, letter);
+  }
+  assert.equal(
+    controlOutcome(
+      { mode: "positive" },
+      { ...passing, observation: { runner: false, child: true, matched: true } },
+    ).counts,
+    false,
+  );
 });

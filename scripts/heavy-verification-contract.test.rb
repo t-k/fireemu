@@ -75,7 +75,7 @@ class HeavyVerificationContractTest < Minitest::Test
     assert_violation(REAL.gsub('save-if: "false"', 'save-if: "true"'), "must not save")
     assert_violation(REAL.gsub('save-if: "false"', "save-if: ${{ github.ref == 'refs/heads/main' }}"), "must not save")
     cache = "      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830\n        with:\n          path: target\n          key: k\n"
-    assert_violation(REAL.sub("      - uses: Swatinem/rust-cache", cache + "      - uses: Swatinem/rust-cache"), "actions/cache")
+    assert_violation(REAL.sub("      - uses: Swatinem/rust-cache", cache + "      - uses: Swatinem/rust-cache"), "must never be used")
   end
 
   def test_persisted_checkout_credentials_are_refused

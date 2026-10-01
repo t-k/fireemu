@@ -57,9 +57,22 @@ validate() {
 accepts() {
   if validate "$@"; then pass "accepts: $*"; else flunk "accepts: $* ($(cat "$work/log"))"; fi
 }
+# A refusal must come from a check of the script (an ::error:: line, containing $EXPECT when given),
+# not from an incidental failure further down.
 refuses() {
-  if validate "$@"; then flunk "refuses: ${*//$'\n'/ }"; elif [[ -s $work/output ]]; then flunk "refuses without output: $*"; else pass "refuses: ${*//$'\n'/ }"; fi
+  local expect=${EXPECT-::error::}
+  if validate "$@"; then
+    flunk "refuses: ${*//$'\n'/ }"
+  elif [[ -s $work/output ]]; then
+    flunk "refuses without output: $*"
+  elif ! grep -qF -- "$expect" "$work/log"; then
+    flunk "refuses for another reason: ${*//$'\n'/ } (wanted '$expect', got: $(head -c 300 "$work/log"))"
+  else
+    pass "refuses: ${*//$'\n'/ }"
+  fi
 }
+syntax_refuses() { EXPECT="must be a branch name or a full commit SHA" refuses "$@"; }
+unresolved_refuses() { EXPECT="is not a branch of this repository, nor a commit of one" refuses "$@"; }
 
 for locale in C.UTF-8 en_US.UTF-8; do
   export LC_ALL=$locale
@@ -80,6 +93,13 @@ for locale in C.UTF-8 en_US.UTF-8; do
     flunk "the outputs carry the resolved commits and the validated values ($(cat "$work/output"))"
   fi
 
+  validate mutants work/my-branch "" release/1.0 3 "" ""
+  if grep -qx "base=$(git_in "$work/src" rev-parse release/1.0)" "$work/output" && grep -qx "ref=$mine_sha" "$work/output"; then
+    pass "a base named by a branch is resolved to its commit"
+  else
+    flunk "a base named by a branch is resolved to its commit ($(cat "$work/output"))"
+  fi
+
   # The run must not belong to the default branch, a tag or anything but a branch.
   for scope in refs/heads/main refs/tags/v1.0.0 refs/pull/1/merge HEAD ""; do
     GITHUB_REF_UNDER_TEST=$scope refuses mutants work/my-branch "" main 8 "" ""
@@ -87,32 +107,36 @@ for locale in C.UTF-8 en_US.UTF-8; do
   GITHUB_REF_UNDER_TEST=refs/heads/work/my-branch accepts mutants work/my-branch "" main 8 "" ""
 
   # What names a ref outside refs/heads, or a commit this repository does not hold.
-  refuses mutants refs/pull/1/head "" main 8 "" ""
-  refuses mutants refs/heads/main "" main 8 "" ""
-  refuses mutants refs/remotes/origin/x "" main 8 "" ""
-  refuses mutants HEAD "" main 8 "" ""
-  refuses mutants FETCH_HEAD "" main 8 "" ""
-  refuses mutants "$pr_sha" "" main 8 "" ""
-  refuses mutants "$fork_sha" "" main 8 "" ""
-  refuses mutants no-such-branch "" main 8 "" ""
-  refuses mutants deadbeef "" main 8 "" ""
-  refuses mutants work/my-branch "" refs/pull/1/head 8 "" ""
-  refuses mutants work/my-branch "" "$fork_sha" 8 "" ""
+  syntax_refuses mutants refs/pull/1/head "" main 8 "" ""
+  syntax_refuses mutants refs/heads/main "" main 8 "" ""
+  syntax_refuses mutants refs/remotes/origin/x "" main 8 "" ""
+  syntax_refuses mutants HEAD "" main 8 "" ""
+  syntax_refuses mutants FETCH_HEAD "" main 8 "" ""
+  unresolved_refuses mutants "$pr_sha" "" main 8 "" ""
+  unresolved_refuses mutants "$fork_sha" "" main 8 "" ""
+  unresolved_refuses mutants no-such-branch "" main 8 "" ""
+  unresolved_refuses mutants deadbeef "" main 8 "" ""
+  EXPECT="base must be a branch name or a full commit SHA" refuses mutants work/my-branch "" refs/pull/1/head 8 "" ""
+  EXPECT="base is not a branch of this repository" refuses mutants work/my-branch "" "$fork_sha" 8 "" ""
+  # A full SHA only: an abbreviation is not a branch either.
+  unresolved_refuses mutants "${main_sha:0:12}" "" main 8 "" ""
+  syntax_refuses mutants ORIG_HEAD "" main 8 "" ""
+  syntax_refuses mutants refs/heads/work/my-branch "" main 8 "" ""
 
   refuses publish main "" main 8 "" ""
   refuses mutants "" "" main 8 "" ""
-  refuses mutants -rf "" main 8 "" ""
-  refuses mutants a..b "" main 8 "" ""
-  refuses mutants a//b "" main 8 "" ""
-  refuses mutants a/ "" main 8 "" ""
-  refuses mutants 'a b' "" main 8 "" ""
-  refuses mutants 'a;id' "" main 8 "" ""
-  refuses mutants "$(printf 'a\nb')" "" main 8 "" ""
+  syntax_refuses mutants -rf "" main 8 "" ""
+  syntax_refuses mutants a..b "" main 8 "" ""
+  syntax_refuses mutants a//b "" main 8 "" ""
+  syntax_refuses mutants a/ "" main 8 "" ""
+  syntax_refuses mutants 'a b' "" main 8 "" ""
+  syntax_refuses mutants 'a;id' "" main 8 "" ""
+  syntax_refuses mutants "$(printf 'a\nb')" "" main 8 "" ""
   # shellcheck disable=SC2016
-  refuses mutants 'x$(id)' "" main 8 "" ""
-  refuses mutants "$(printf 'a\xc3\xa9')" "" main 8 "" ""
-  refuses mutants "$(printf 'a\xe2\x80\xaeb')" "" main 8 "" ""
-  refuses mutants work/my-branch "" -x 8 "" ""
+  syntax_refuses mutants 'x$(id)' "" main 8 "" ""
+  syntax_refuses mutants "$(printf 'a\xc3\xa9')" "" main 8 "" ""
+  syntax_refuses mutants "$(printf 'a\xe2\x80\xaeb')" "" main 8 "" ""
+  EXPECT="base must be a branch name or a full commit SHA" refuses mutants work/my-branch "" -x 8 "" ""
   refuses mutants work/my-branch "" main 0 "" ""
   refuses mutants work/my-branch "" main 17 "" ""
   refuses mutants work/my-branch "" main 8x "" ""

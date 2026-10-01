@@ -6,12 +6,17 @@
 //! they created.
 //!
 //! Unix cleanup requires every canonical namespace ancestor to be root/current-user owned and
-//! not group/world writable; macOS extended ACLs are refused. Staged export publication is
+//! not group/world writable; on macOS an ACL entry that lets another principal change an ancestor
+//! (every `allow` entry of a principal but the owner, root and the user running the export) is refused,
+//! and a `deny` entry is accepted; the stage's own ACL is cleared when it is created. Staged export publication is
 //! unavailable on Windows and fails before creating or modifying any export path.
 
 use std::path::{Path, PathBuf};
 #[cfg(unix)]
 use std::sync::atomic::{AtomicU64, Ordering};
+
+#[cfg(target_os = "macos")]
+mod acl;
 
 #[cfg(unix)]
 static NEXT_STAGE_ID: AtomicU64 = AtomicU64::new(1);
@@ -256,27 +261,12 @@ fn trusted_canonical_parent(parent: &Path) -> Result<PathBuf, String> {
             ));
         }
         #[cfg(target_os = "macos")]
-        reject_extended_acl(ancestor)?;
+        acl::reject_unsafe_acl(
+            ancestor,
+            &acl::Trusted::of_uids(metadata.uid(), effective_uid, &acl::user_name),
+        )?;
     }
     Ok(parent)
-}
-
-#[cfg(target_os = "macos")]
-fn reject_extended_acl(path: &Path) -> Result<(), String> {
-    let entries = exacl::getfacl(path, None).map_err(|error| {
-        format!(
-            "cannot inspect the ACL on export namespace ancestor {}: {error}",
-            path.display()
-        )
-    })?;
-    if entries.is_empty() {
-        Ok(())
-    } else {
-        Err(format!(
-            "export namespace ancestor {} has an extended ACL, so staged cleanup cannot be made safe",
-            path.display()
-        ))
-    }
 }
 
 #[cfg(unix)]
@@ -288,7 +278,15 @@ fn create_stage_sibling(target: &Path, parent: &Path) -> Result<PathBuf, String>
         let id = NEXT_STAGE_ID.fetch_add(1, Ordering::Relaxed);
         let stage = parent.join(format!(".{name}.fireemu-stage-{}-{id}", std::process::id()));
         match create_private_stage(&stage) {
-            Ok(()) => return Ok(stage),
+            Ok(()) => {
+                // The stage starts with no ACL of its own: it must not inherit one from its parent.
+                #[cfg(target_os = "macos")]
+                if let Err(error) = acl::clear_stage_acl(&stage) {
+                    let _ = std::fs::remove_dir(&stage);
+                    return Err(error);
+                }
+                return Ok(stage);
+            }
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
             Err(error) => return Err(format!("cannot create private export stage: {error}")),
         }

@@ -528,6 +528,76 @@ fn glob_constructs_match_as_documented() {
     }
 }
 
+/// Runs `work` on a thread with the 2 MiB stack of a tokio blocking-pool thread and fails the test
+/// when it has not finished within `seconds` (a pattern that takes exponential time) or when it
+/// panics. A stack overflow aborts the whole test process, which fails the test as well.
+fn finishes_within<T: Send + 'static>(
+    seconds: u64,
+    work: impl FnOnce() -> T + Send + 'static,
+) -> T {
+    let (sender, receiver) = std::sync::mpsc::channel();
+    std::thread::Builder::new()
+        .stack_size(2 * 1024 * 1024)
+        .spawn(move || {
+            let _ = sender.send(work());
+        })
+        .unwrap();
+    receiver
+        .recv_timeout(std::time::Duration::from_secs(seconds))
+        .expect("the glob did not finish in time")
+}
+
+/// The patterns that were exponential or recursion-deep (measured on the first matcher: braces
+/// that never close re-parse the rest after every rewind, empty alternatives retry the rest, and
+/// runs of `**` followed by `*a` backtrack). Each must finish in a time that grows with the
+/// pattern times the name, whatever its shape.
+#[test]
+fn hostile_globs_finish_in_bounded_time() {
+    use fireemu_core_storage::glob::glob_matches;
+    let long_name = "a".repeat(1_024);
+    let cases: Vec<(String, String)> = vec![
+        ("{".repeat(40), "zz".to_owned()),
+        ("{".repeat(2_000), "{{{".to_owned()),
+        (format!("{}z", "{,}".repeat(40)), "a".to_owned()),
+        (format!("{}z", "{,}".repeat(2_000)), long_name.clone()),
+        (format!("**{}", "*a".repeat(20)), long_name.clone()),
+        (format!("**{}", "*a".repeat(2_000)), long_name.clone()),
+        ("[".repeat(20_000), "[[[".to_owned()),
+        (format!("{}]", "[\\".repeat(10_000)), "a".to_owned()),
+        (
+            format!("{}x{}", "{a,".repeat(500), "}".repeat(500)),
+            "a".to_owned(),
+        ),
+        ("?*".repeat(2_000), long_name.clone()),
+        ("{a,b".repeat(2_000), "a".to_owned()),
+        ("{[}],".repeat(2_000), "a".to_owned()),
+    ];
+    for (pattern, name) in cases {
+        let shown: String = pattern.chars().take(24).collect();
+        let started = std::time::Instant::now();
+        finishes_within(10, move || glob_matches(&pattern, &name));
+        assert!(started.elapsed().as_secs() < 10, "{shown}");
+    }
+}
+
+/// A pattern that nests deeper than the stack could hold frames (the request line allows far more
+/// than 100,000 characters) is read and matched without recursion.
+#[test]
+fn deeply_nested_globs_do_not_overflow_the_stack() {
+    use fireemu_core_storage::glob::glob_matches;
+    for depth in [20_000usize, 100_000, 400_000] {
+        let nested = format!("{}x{}", "{a,".repeat(depth), "}".repeat(depth));
+        let matched = finishes_within(60, move || glob_matches(&nested, "x"));
+        assert!(matched, "depth {depth}");
+        let unterminated = "{a,".repeat(depth);
+        let name = unterminated.clone();
+        assert!(
+            finishes_within(60, move || glob_matches(&unterminated, &name)),
+            "depth {depth}"
+        );
+    }
+}
+
 #[test]
 fn the_recorded_globs_match_as_production_listed_them() {
     use fireemu_core_storage::glob::glob_matches;

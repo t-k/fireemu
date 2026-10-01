@@ -10,8 +10,13 @@
 # The private directories live under one root per user, `fireemu-test-tmp-<uid>` in TMPDIR (or
 # /tmp). The root must be a real directory owned by the user with mode 0700; anything else (a
 # symbolic link, another user's directory, one others can write) is refused, because the wrapper
-# deletes directories under it. A wrapper killed outright (SIGKILL) cannot clean up; its
-# directory `run-<pid>.XXXXXX` is removed by the next wrapper that finds that pid gone.
+# deletes directories under it. The root must also be spelled as an absolute path without a
+# trailing `/` or empty, `.` or `..` components: `link/` or `link/.` would make the checks look
+# through a symbolic link at the directory behind it. A wrapper killed outright (SIGKILL) cannot
+# clean up; its directory `run-<pid>.XXXXXX` is removed by a later wrapper once `kill -0` reports
+# that pid as "No such process" and the directory is more than a day old. Any other answer (EPERM
+# for a pid of another user or sandbox) keeps it, and the age covers a live wrapper in another
+# pid namespace that shares this TMPDIR.
 #
 # Not covered: a process the test started and left running can write into the directory after
 # it is removed (nextest's leak detection reports such processes when they keep the test's
@@ -26,8 +31,15 @@ refuse() {
 # A test that runs nextest itself (crates/fireemu/tests/leak_fixture.rs) passes the root on, so
 # the nested wrapper's directories are siblings and nothing is created inside the outer test's.
 parent=${TMPDIR:-/tmp}
-parent=${parent%/}
+while [ "$parent" != "${parent%/}" ]; do parent=${parent%/}; done
 root=${FIREEMU_TEST_TMP_ROOT:-$parent/fireemu-test-tmp-$(id -u)}
+case $root in
+/*) ;;
+*) refuse "$root is not an absolute path" ;;
+esac
+case $root/ in
+*//* | */./* | */../*) refuse "$root is not canonical (a trailing /, or an empty, . or .. component)" ;;
+esac
 (umask 077 && mkdir -p "$root") 2>/dev/null || refuse "cannot create $root"
 [ -L "$root" ] && refuse "$root is a symbolic link"
 # shellcheck disable=SC3067 # test -O is in dash, bash and busybox; without it the root is refused.
@@ -51,7 +63,16 @@ for stale in "$root"/run-*; do
     pid=${name#run-}
     pid=${pid%.*}
     case $pid in '' | *[!0-9]*) continue ;; esac
-    kill -0 "$pid" 2>/dev/null && continue
+    answer=$(
+        LC_ALL=C
+        export LC_ALL
+        kill -0 "$pid" 2>&1
+    ) && continue
+    case $answer in
+    *'o such process'*) ;;
+    *) continue ;;
+    esac
+    [ -n "$(find "$stale" -prune -mtime +0)" ] || continue
     chmod -R u+rwx "$stale" 2>/dev/null
     rm -rf "$stale"
 done

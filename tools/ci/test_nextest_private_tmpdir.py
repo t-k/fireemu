@@ -17,6 +17,12 @@ WRAPPER = Path(__file__).with_name("nextest-private-tmpdir.sh")
 SHELL = os.environ.get("WRAPPER_TEST_SHELL", "/bin/sh")
 
 
+def backdate(path, days=2):
+    """Makes `path` look older than the wrapper's one-day reclaim threshold."""
+    then = time.time() - days * 86400
+    os.utime(path, (then, then), follow_symlinks=False)
+
+
 class WrapperTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -29,7 +35,7 @@ class WrapperTest(unittest.TestCase):
         self.tmp.cleanup()
 
     def run_wrapped(self, script, env=None):
-        environment = dict(os.environ, TMPDIR=str(self.parent) + "/", **(env or {}))
+        environment = {**os.environ, "TMPDIR": str(self.parent) + "/", **(env or {})}
         return subprocess.run(
             [SHELL, str(WRAPPER), SHELL, "-c", script],
             env=environment,
@@ -139,6 +145,8 @@ class WrapperTest(unittest.TestCase):
         (outside / "kept").mkdir(parents=True)
         link = self.root / f"run-{dead.pid}.CCCCCC"
         link.symlink_to(outside)
+        for entry in self.root.iterdir():
+            backdate(entry)
         self.assertEqual(self.run_wrapped("exit 0").returncode, 0)
         self.assertFalse(stale.exists(), "the killed wrapper's directory is removed")
         self.assertTrue(live.exists(), "a running wrapper's directory is kept")
@@ -149,6 +157,30 @@ class WrapperTest(unittest.TestCase):
         self.assertTrue(not_a_pid.exists(), "nor a name without a pid")
         self.assertTrue(link.is_symlink(), "a symbolic link is left alone")
         self.assertTrue((outside / "kept").is_dir(), "and so is what it points to")
+
+    def test_a_dead_wrappers_directory_younger_than_a_day_is_kept(self):
+        # A pid that reads as gone may be alive in another pid namespace that shares this TMPDIR.
+        self.root.mkdir(mode=0o700)
+        dead = subprocess.Popen(["true"])
+        dead.wait()
+        fresh = self.root / f"run-{dead.pid}.AAAAAA"
+        fresh.mkdir()
+        old = self.root / f"run-{dead.pid}.BBBBBB"
+        old.mkdir()
+        backdate(old)
+        self.assertEqual(self.run_wrapped("exit 0").returncode, 0)
+        self.assertTrue(fresh.exists(), "a directory younger than a day is kept")
+        self.assertFalse(old.exists(), "the same directory older than a day is reclaimed")
+
+    @unittest.skipIf(os.getuid() == 0, "root may signal pid 1")
+    def test_a_directory_whose_pid_exists_but_cannot_be_signalled_is_kept(self):
+        # pid 1 exists and belongs to root: kill -0 fails with EPERM, not "No such process".
+        self.root.mkdir(mode=0o700)
+        other = self.root / "run-1.AAAAAA"
+        (other / "data").mkdir(parents=True)
+        backdate(other)
+        self.assertEqual(self.run_wrapped("exit 0").returncode, 0)
+        self.assertTrue((other / "data").is_dir(), "only a pid that is certainly gone is reclaimed")
 
     def test_a_terminated_run_still_removes_the_private_directory(self):
         process = self.start_wrapped('mkdir "$TMPDIR/x"; trap "exit 143" TERM; while :; do sleep 0.1; done')
@@ -211,6 +243,11 @@ class WrapperTest(unittest.TestCase):
         for entry in victim.iterdir():
             self.assertTrue((entry / "data").is_dir(), entry)
 
+    def assert_untouched_runs(self, victim):
+        for entry in victim.iterdir():
+            if entry.name != "x":
+                self.assertTrue((entry / "data").is_dir(), entry)
+
     def test_a_symlinked_root_is_refused_and_nothing_behind_it_is_deleted(self):
         victim = self.victim()
         victim.chmod(0o700)
@@ -241,6 +278,40 @@ class WrapperTest(unittest.TestCase):
             self.run_wrapped("exit 0", env={"FIREEMU_TEST_TMP_ROOT": str(link)}), "is a symbolic link"
         )
         self.assertEqual(len(list(victim.iterdir())), 2)
+
+    def test_a_root_spelled_through_a_symlink_alias_is_refused(self):
+        # `link/`, `link/.` and `link/x/..` resolve through the link, so `test -L` and `ls -ld` would
+        # look at the directory behind it; only a canonical absolute spelling is accepted.
+        victim = self.victim()
+        victim.chmod(0o700)
+        (victim / "x").mkdir()
+        link = self.parent / "link-root"
+        link.symlink_to(victim)
+        for spelling in (f"{link}/", f"{link}/.", f"{link}/x/..", f"{link}//", f"{self.parent}//link-root"):
+            with self.subTest(root=spelling):
+                result = self.run_wrapped("exit 0", env={"FIREEMU_TEST_TMP_ROOT": spelling})
+                self.refused(result, "canonical")
+                self.assertEqual(len(list(victim.iterdir())), 3)
+                self.assert_untouched_runs(victim)
+
+    def test_a_relative_root_is_refused(self):
+        victim = self.victim()
+        victim.chmod(0o700)
+        result = subprocess.run(
+            [SHELL, str(WRAPPER), SHELL, "-c", "exit 0"],
+            env=dict(os.environ, TMPDIR=str(self.parent) + "/", FIREEMU_TEST_TMP_ROOT="victim"),
+            cwd=self.parent,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        self.refused(result, "absolute")
+        self.assert_untouched(victim)
+
+    def test_a_tmpdir_with_several_trailing_slashes_still_works(self):
+        result = self.run_wrapped('printf "%s" "$TMPDIR"', env={"TMPDIR": str(self.parent) + "///"})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(Path(result.stdout).parent, self.root)
 
     def test_a_root_owned_by_another_user_is_refused(self):
         # A private (0700) directory of another user: /root on Linux, /var/audit on macOS.

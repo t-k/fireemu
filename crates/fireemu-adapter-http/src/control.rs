@@ -21,6 +21,9 @@
 //! `INVALID_ID_TOKEN`, and Firestore and Storage Rules do not admit it. Expiry still applies in
 //! both profiles. A rewind below an account's creation or revocation time makes even a new
 //! sign-in's token count as revoked.
+//! Conversely, a revocation or password change made after a rewind does not revoke tokens
+//! issued later on the timeline (accepted at once in `emulator`, once the clock catches up in
+//! `strict`).
 //!
 //! The daemon currently runs one implicit session; every session name maps to it. Sessions,
 //! snapshots and `await-idle` arrive with the session runtime.

@@ -394,3 +394,41 @@ fn rules_entry_points_take_future_claims_from_the_acceptance_not_the_store() {
         FutureClaims::Accept
     );
 }
+
+proptest::proptest! {
+    #![proptest_config(proptest::test_runner::Config {
+        cases: 256,
+        ..proptest::test_runner::Config::default()
+    })]
+
+    /// Security review T2: the emulator profile's policy differs from strict's only on the two
+    /// future-time comparisons. For any `iat`, `auth_time` and `exp` around now, Identity
+    /// Toolkit's and Firestore's verifiers give the same answer under `Accept` and `Refuse`
+    /// whenever neither claim is later than now; otherwise `Refuse` refuses.
+    #[test]
+    fn accept_and_refuse_differ_only_on_future_iat_or_auth_time(
+        iat_offset in -7_200i64..=7_200,
+        auth_offset in -7_200i64..=7_200,
+        exp_after_iat in -600i64..=7_200,
+    ) {
+        let (mut strict, mut claims, _) = fixture();
+        claims.iat = NOW + iat_offset;
+        claims.auth_time = NOW + auth_offset;
+        claims.exp = claims.iat + exp_after_iat;
+        let token = encode_unsigned(&claims);
+        let refuse_lookup = verify_id_token(&token, &strict, at(NOW));
+        let refuse_firestore = verify_firestore_token(&token, &strict, at(NOW)).map(|_| ());
+        strict.set_future_id_token_claims(FutureClaims::Accept);
+        let accept_lookup = verify_id_token(&token, &strict, at(NOW));
+        let accept_firestore = verify_firestore_token(&token, &strict, at(NOW)).map(|_| ());
+        if iat_offset <= 0 && auth_offset <= 0 {
+            proptest::prop_assert_eq!(&accept_lookup, &refuse_lookup);
+            proptest::prop_assert_eq!(&accept_firestore, &refuse_firestore);
+        } else {
+            proptest::prop_assert!(refuse_lookup.is_err());
+            proptest::prop_assert!(refuse_firestore.is_err());
+            proptest::prop_assert_ne!(accept_lookup, Err(JwtError::Malformed));
+            proptest::prop_assert_ne!(accept_firestore, Err(JwtError::Malformed));
+        }
+    }
+}

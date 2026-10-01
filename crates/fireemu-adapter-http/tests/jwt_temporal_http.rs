@@ -577,3 +577,50 @@ fn the_expiry_allowance_boundary_is_exact_in_both_profiles() {
         assert_eq!(lookup_status(&state, &token), 400, "{profile:?}");
     }
 }
+
+/// Security review S1, option (a), pinned in both profiles. After a rewind, a revocation does
+/// not revoke a token the server issued later on the timeline: revocation compares the
+/// token's `auth_time` with the account's bound, which the rewound clock sets lower. The
+/// emulator profile then accepts the token at once (its `iat` is in the future, which ledger
+/// 781 accepts); strict refuses it only until the clock reaches its issue time. README and
+/// the control API header document this.
+#[test]
+fn a_revocation_on_a_rewound_clock_does_not_revoke_tokens_issued_later() {
+    for profile in [Profile::Emulator, Profile::Strict] {
+        let (state, _, _, _) = setup_with(profile, true);
+        let control = control_over(state.clock.clone());
+        // Sign in at T1 = AT + 600 s.
+        assert_eq!(set_clock(&control, at_offset(600_000_000_000), false), 200);
+        let signed_in = handle(
+            &state,
+            "POST",
+            "/identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=k",
+            &json!({
+                "email": "temporal@example.invalid",
+                "password": "password1",
+                "returnSecureToken": true
+            }),
+        );
+        assert_eq!(signed_in.status, 200, "{}", signed_in.body);
+        let later = signed_in.body["idToken"].as_str().unwrap().to_owned();
+        let uid = signed_in.body["localId"].as_str().unwrap().to_owned();
+        // Rewind to T0 = AT + 10 s and revoke there (Admin validSince = now).
+        assert_eq!(set_clock(&control, at_offset(10_000_000_000), true), 200);
+        let revoked = handle_with(
+            &state,
+            "POST",
+            "/identitytoolkit.googleapis.com/v1/projects/demo-app/accounts:update",
+            &owner(),
+            &json!({"localId": uid, "validSince": (NOW + 10).to_string()}),
+        );
+        assert_eq!(revoked.status, 200, "{}", revoked.body);
+        assert_eq!(set_clock(&control, at_offset(11_000_000_000), false), 200);
+        let at_t0 = lookup_status(&state, &later);
+        assert_eq!(set_clock(&control, at_offset(601_000_000_000), false), 200);
+        let after_t1 = lookup_status(&state, &later);
+        match profile {
+            Profile::Emulator => assert_eq!((at_t0, after_t1), (200, 200), "{profile:?}"),
+            Profile::Strict => assert_eq!((at_t0, after_t1), (400, 200), "{profile:?}"),
+        }
+    }
+}

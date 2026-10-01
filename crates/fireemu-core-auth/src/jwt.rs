@@ -756,7 +756,9 @@ pub fn verify_id_token_decoded(
 pub const IDENTITY_TOOLKIT_EXPIRY_LEEWAY_SECONDS: i64 = 300;
 
 /// [`verify_id_token_decoded`] that still honours a token up to `leeway_seconds` past `exp`.
-/// Future time claims follow the store's profile ([`AuthStore::future_id_token_claims`]).
+/// Future time claims follow the store's profile ([`AuthStore::future_id_token_claims`]), which
+/// Identity Toolkit sets on every request. A caller outside Identity Toolkit should take the
+/// profile from a [`TokenAcceptance`] (as the Rules entry points do) instead of relying on it.
 pub fn verify_id_token_decoded_with_leeway(
     token: &str,
     store: &AuthStore,
@@ -817,7 +819,8 @@ fn verify_id_token_with(
 /// `auth_time` are not in the future. Unlike Identity Toolkit it does not consult the
 /// account: a token of an account whose refresh tokens were revoked, that was disabled, or
 /// that was deleted is honoured until it expires (FS-RULES production recording,
-/// 2026-09-24).
+/// 2026-09-24). Future time claims follow the store's profile, as in
+/// [`verify_id_token_decoded_with_leeway`]; Rules callers use [`verify_firestore_rules_token`].
 pub fn verify_firestore_token(
     token: &str,
     store: &AuthStore,

@@ -6208,3 +6208,85 @@ async fn an_undeclared_set_rules_body_is_cut_off_at_the_control_port_limit() {
     );
     server.abort();
 }
+
+/// A signer that signs by reversing the input: enough to make the store verify signatures.
+struct ReversingSigner;
+
+impl fireemu_core_auth::jwt::IdTokenSigner for ReversingSigner {
+    fn alg(&self) -> &'static str {
+        "RS256"
+    }
+    fn kid(&self) -> &'static str {
+        "test"
+    }
+    fn sign(&self, signing_input: &[u8]) -> Vec<u8> {
+        signing_input.iter().rev().copied().collect()
+    }
+    fn verify(&self, signing_input: &[u8], signature: &[u8]) -> bool {
+        self.sign(signing_input) == signature
+    }
+    fn public_jwk_json(&self) -> String {
+        "{}".to_owned()
+    }
+}
+
+/// Ledger 781 on Storage: a signed (session-RSA) ID token whose `iat` and `auth_time` are in
+/// the future is not admitted as a user in strict (`Verified`), and is evaluated as its user in
+/// the emulator profile (`EmulatorMock`), as the official emulator reads no time claim.
+#[test]
+fn a_future_dated_signed_token_follows_the_profile_on_storage() {
+    for acceptance in [TokenAcceptance::Verified, TokenAcceptance::EmulatorMock] {
+        let s = state_with(
+            Some(
+                "rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    match /users/{uid}/{file=**} {
+      allow write: if request.auth != null && request.auth.uid == uid;
+    }
+  }
+}",
+            ),
+            acceptance,
+        );
+        let (uid, future) = {
+            let store = s.auth.default_store();
+            let mut store = store.lock().unwrap();
+            store.set_signer(Arc::new(ReversingSigner));
+            let uid = store
+                .create_user(NewUser::email("future@example.com"), START)
+                .unwrap();
+            let mut claims = store.id_token_claims(&uid, None, START).unwrap();
+            claims.iat += 600;
+            claims.auth_time += 600;
+            (
+                uid.as_str().to_owned(),
+                fireemu_core_auth::jwt::encode_with(&claims, store.signer()),
+            )
+        };
+        let firebase_auth = format!("Firebase {future}");
+        let (ct, body) = multipart(&json!({"contentType": "text/plain"}), "text/plain", b"mine");
+        let own = format!("/v0/b/{BUCKET}/o?name=users%2F{uid}%2Fnote.txt&uploadType=multipart");
+        let r = handle(
+            &s,
+            req(
+                "POST",
+                &own,
+                &[
+                    ("authorization", &firebase_auth),
+                    ("content-type", &ct),
+                    ("x-goog-upload-protocol", "multipart"),
+                ],
+                &body,
+            ),
+        );
+        match acceptance {
+            TokenAcceptance::Verified => {
+                assert_ne!(r.status, 200, "{}", String::from_utf8_lossy(&r.body));
+            }
+            TokenAcceptance::EmulatorMock => {
+                assert_eq!(r.status, 200, "{}", String::from_utf8_lossy(&r.body));
+            }
+        }
+    }
+}

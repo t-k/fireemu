@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { lstat, mkdtemp, mkdir, readFile, rename, rm, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
+import { replaceFile } from "./test-replace-file.mjs";
 import { join } from "node:path";
 import test from "node:test";
 
@@ -272,8 +273,7 @@ test("verifyHeld proves each owned lock is still this run's and refuses once one
       proven.push("held");
       // A replaced file (same body, different inode) is not this run's lock.
       const body = await readFile(own(projects[1]), "utf8");
-      await unlink(own(projects[1]));
-      await writeFile(own(projects[1]), body, { mode: 0o600 });
+      await replaceFile(own(projects[1]), body, { mode: 0o600 });
       await assert.rejects(() => lease.verifyHeld(), /ownership changed/);
       proven.push("replaced");
       await unlink(own(projects[1]));

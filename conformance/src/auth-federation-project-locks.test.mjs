@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { replaceFile } from "./test-replace-file.mjs";
 import { spawnSync } from "node:child_process";
 import { test } from "node:test";
 
@@ -126,8 +127,7 @@ test("locks stay after a failure once something was sent, and another's lock is 
   await rm(path);
   // A lock replaced by another holder (another inode or text) is left alone.
   const handle = await takeProjectLocks(ledger, ["fireemu-oracle-idp"], HOLDER);
-  await rm(path);
-  await writeFile(path, '{"taskId":"OTHER"}\n');
+  await replaceFile(path, '{"taskId":"OTHER"}\n');
   await releaseProjectLocks(handle);
   assert.equal(await readFile(path, "utf8"), '{"taskId":"OTHER"}\n');
   await rm(path);
@@ -140,8 +140,7 @@ test("locks stay after a failure once something was sent, and another's lock is 
   // Recreated with the very same text (another inode): left alone.
   const recreated = await takeProjectLocks(ledger, ["fireemu-oracle-idp"], HOLDER);
   const text = await readFile(path, "utf8");
-  await rm(path);
-  await writeFile(path, text);
+  await replaceFile(path, text);
   await releaseProjectLocks(recreated);
   assert.ok(existsSync(path));
 });

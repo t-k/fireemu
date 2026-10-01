@@ -55,6 +55,14 @@ jobs:
       - name: install the pinned conformance toolchain
         run: pnpm -C conformance install --frozen-lockfile
 
+      # The frozen federation certificate fixtures (and the gate's own tests of them) need the req
+      # validity flags of OpenSSL 3.4; the runner's OpenSSL is older. Same pinned build the release uses.
+      - name: pinned OpenSSL for the frozen federation certificate fixtures
+        run: |
+          sh npm/scripts/install-federation-openssl.sh "$RUNNER_TEMP/fireemu-federation-openssl"
+          echo "$RUNNER_TEMP/fireemu-federation-openssl/bin" >> "$GITHUB_PATH"
+          echo "FIREEMU_FEDERATION_OPENSSL_DIR=$RUNNER_TEMP/fireemu-federation-openssl/bin" >> "$GITHUB_ENV"
+
       - name: the gate's own tests
         run: pnpm -C conformance run selftest
 

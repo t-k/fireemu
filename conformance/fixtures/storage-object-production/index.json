@@ -50,7 +50,7 @@
     {
       "id": "ORIGIN",
       "mask": "<ORIGIN>",
-      "reason": "the selfLink and mediaLink members point at the server that answered: production at www.googleapis.com (selfLink) and storage.googleapis.com (mediaLink), a local run at its own loopback address, by design. Only those expected origins are masked, so a swap of the two production hosts still shows; the path and the query are compared exactly"
+      "reason": "the selfLink and mediaLink members and the x-goog-upload-control-url header point at the server that answered: production at www.googleapis.com (selfLink), storage.googleapis.com (mediaLink) and firebasestorage.googleapis.com (the header), a local run at its own loopback address, by design. Only those expected origins are masked, so a swap of the two production hosts still shows; the path and the query are compared exactly"
     },
     {
       "id": "PAGE_TOKEN",
@@ -302,8 +302,8 @@
       "file": "firebase--resumable-upload.json",
       "rows": 51,
       "digests": {
-        "056c7ca3a8c6daa38e0a": "d4094da4243720d36b30bea965c656b4d873fdda531d2e1d9c4b639969e59081",
-        "202dd40ac90863add783": "d4094da4243720d36b30bea965c656b4d873fdda531d2e1d9c4b639969e59081"
+        "056c7ca3a8c6daa38e0a": "805c1a6219cd096e37f854400ad0fb56e0d15654429ced1cd909fb71269c0e9b",
+        "202dd40ac90863add783": "805c1a6219cd096e37f854400ad0fb56e0d15654429ced1cd909fb71269c0e9b"
       }
     },
     {

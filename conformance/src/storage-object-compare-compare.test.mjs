@@ -421,10 +421,63 @@ test("a stand-in answer whose body disagrees with production in an object's stat
     { metageneration: "3" },
     { metadata: { a: "2" } },
     { contentType: "text/plain" },
+    { contentEncoding: "gzip" },
+    { contentDisposition: "attachment" },
+    { contentLanguage: "ja" },
+    { cacheControl: "no-cache" },
     { size: "9" },
+    { crc32c: "AAAAAA==" },
+    { md5Hash: "AAAAAAAAAAAAAAAAAAAAAA==" },
   ])
     assert.deepEqual(run(base, object({ generation: "<GEN:1>", etag: "<ETAG:1>", ...state })), [
       "LOCAL_UNIMPLEMENTED",
       "TAINTED",
     ]);
+});
+
+test("the taint check looks at the state members whatever else differs before them, and only at those exact members", () => {
+  const stand = {
+    "content-type": "application/json; charset=UTF-8",
+    "cache-control": "private",
+    [STANDIN_HEADER]: "1",
+  };
+  // Nine members that sort before the state members and differ: more than the capped list of body differences holds.
+  const many = (value, extra) => ({
+    type: "json",
+    value: {
+      ...Object.fromEntries(Array.from({ length: 9 }, (_, i) => [`a${i}`, `${value}${i}`])),
+      metageneration: "2",
+      size: "5",
+      ...extra,
+    },
+  });
+  const run = (production, local) =>
+    outcomes(
+      compareRecipe({
+        production: [row(1, { body: production }), row(2)],
+        local: [row(1, { body: local, headers: stand }), row(2)],
+      }),
+    );
+  assert.deepEqual(run(many("p"), many("l", { metageneration: "3" })), [
+    "LOCAL_UNIMPLEMENTED",
+    "TAINTED",
+  ]);
+  assert.deepEqual(run(many("p"), many("l", { size: "6" })), ["LOCAL_UNIMPLEMENTED", "TAINTED"]);
+  assert.deepEqual(run(many("p"), many("l")), ["LOCAL_UNIMPLEMENTED", "MATCH"]);
+  // A member that only starts with a state member's name is not state.
+  for (const name of ["sizeX", "metadataX", "metagenerationX", "xsize", "crc32cc"])
+    assert.deepEqual(run(many("p", { [name]: "1" }), many("p", { [name]: "2" })), [
+      "LOCAL_UNIMPLEMENTED",
+      "MATCH",
+    ]);
+  // A body that is not JSON on one side is not compared member by member.
+  assert.deepEqual(
+    outcomes(
+      compareRecipe({
+        production: [row(1, { body: many("p") }), row(2)],
+        local: [row(1, { body: { type: "text", value: "x" }, headers: stand }), row(2)],
+      }),
+    ),
+    ["LOCAL_UNIMPLEMENTED", "MATCH"],
+  );
 });

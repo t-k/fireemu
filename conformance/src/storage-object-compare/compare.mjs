@@ -134,13 +134,26 @@ export const STANDIN_HEADER = "x-compare-standin";
 // The members of an object resource that an update changes. A stand-in answer that differs from
 // production in one of them (or in the status) has left the object in another state. The generation,
 // the etag, the id and the links are formats of the server that answered, not state.
-const STATE_MEMBERS =
-  /^\$\.(metageneration|metadata|contentType|contentEncoding|contentDisposition|contentLanguage|cacheControl|size|crc32c|md5Hash)(?!\w)/;
+const STATE_MEMBERS = [
+  "metageneration",
+  "metadata",
+  "contentType",
+  "contentEncoding",
+  "contentDisposition",
+  "contentLanguage",
+  "cacheControl",
+  "size",
+  "crc32c",
+  "md5Hash",
+];
 
+// Checked member by member, not through the capped list of body differences: any number of other
+// differences before them must not hide a difference in the object's state.
 function standInDisagrees(production, local) {
   if (local.status !== production.status) return true;
-  return differences(production, local).some(
-    (diff) => diff.kind === "body" && STATE_MEMBERS.test(diff.path ?? ""),
+  if (production.body?.type !== "json" || local.body?.type !== "json") return false;
+  return STATE_MEMBERS.some(
+    (name) => !same(production.body.value?.[name], local.body.value?.[name]),
   );
 }
 

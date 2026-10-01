@@ -738,3 +738,33 @@ test("a JSON document sent as text is compared in its compact form and its layou
   assert.equal(plain.body.type, "bytes");
   assert.equal(plain.layout, 0);
 });
+
+test("the origin of x-goog-upload-control-url is masked under the link rule: production's host for it or a loopback address, path and query exact", () => {
+  const path = `/v0/b/${BUCKET}/o?name=a.bin&upload_id=AP6rU81BlvOGz-fcTGYWUv7Mij3H11bx&upload_protocol=resumable`;
+  const masked = (value) =>
+    normalizeHeaders({ "x-goog-upload-control-url": value }, ctx())["x-goog-upload-control-url"];
+  const production = masked(`https://firebasestorage.googleapis.com${path}`);
+  assert.equal(
+    production,
+    "<ORIGIN>/v0/b/<BUCKET>/o?name=a.bin&upload_id=<UPLOAD_ID>&upload_protocol=resumable",
+  );
+  assert.equal(masked(`http://127.0.0.1:9199${path}`), production);
+  assert.equal(masked(`http://localhost:9199${path}`), production);
+  // Another host, another scheme, the other production hosts, another path or query still differ.
+  for (const other of [
+    "http://example.com:9199",
+    "https://127.0.0.1:9199",
+    "https://storage.googleapis.com",
+    "https://www.googleapis.com",
+  ])
+    assert.notEqual(masked(`${other}${path}`), production, other);
+  assert.notEqual(masked(`http://127.0.0.1:9199${path.replace("a.bin", "b.bin")}`), production);
+  assert.notEqual(masked(`http://127.0.0.1:9199${path}&x=1`), production);
+  // Only that header: x-goog-upload-url keeps its host.
+  assert.match(
+    normalizeHeaders({ "x-goog-upload-url": `http://127.0.0.1:9199${path}` }, ctx())[
+      "x-goog-upload-url"
+    ],
+    /^http:\/\/127\.0\.0\.1:9199\/v0/,
+  );
+});

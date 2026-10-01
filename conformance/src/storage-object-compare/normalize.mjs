@@ -59,7 +59,7 @@ export const NORMALIZATIONS = Object.freeze([
     id: "ORIGIN",
     mask: "<ORIGIN>",
     reason:
-      "the selfLink and mediaLink members point at the server that answered: production at www.googleapis.com (selfLink) and storage.googleapis.com (mediaLink), a local run at its own loopback address, by design. Only those expected origins are masked, so a swap of the two production hosts still shows; the path and the query are compared exactly",
+      "the selfLink and mediaLink members and the x-goog-upload-control-url header point at the server that answered: production at www.googleapis.com (selfLink), storage.googleapis.com (mediaLink) and firebasestorage.googleapis.com (the header), a local run at its own loopback address, by design. Only those expected origins are masked, so a swap of the two production hosts still shows; the path and the query are compared exactly",
   },
   {
     id: "PAGE_TOKEN",
@@ -177,6 +177,8 @@ function maskHeaderValue(name, value, ctx) {
     return OPAQUE_ETAG.test(value) ? maskEtag(value, ctx) : maskText(value, ctx);
   }
   if (name === "last-modified" && HTTPDATE_WHOLE.test(value)) return "<HTTPDATE>";
+  if (PRODUCTION_HEADER_ORIGINS.has(name))
+    return maskOrigin(maskText(value, ctx), PRODUCTION_HEADER_ORIGINS.get(name));
   return maskText(value, ctx);
 }
 
@@ -220,6 +222,17 @@ const PRODUCTION_ORIGINS = new Map([
 ]);
 const LOOPBACK_ORIGIN = /^http:\/\/(?:127\.0\.0\.1|localhost|\[::1\]):\d+$/;
 const ORIGIN_PREFIX = /^[a-z][a-z0-9+.-]*:\/\/[^/?#]*/i;
+// The same rule for a header that carries an address of the server that answered.
+const PRODUCTION_HEADER_ORIGINS = new Map([
+  ["x-goog-upload-control-url", "https://firebasestorage.googleapis.com"],
+]);
+
+/** `masked` with its origin replaced by <ORIGIN> when it is production's own or a loopback address. */
+function maskOrigin(masked, productionOrigin) {
+  const origin = ORIGIN_PREFIX.exec(masked)?.[0];
+  const expected = origin === productionOrigin || LOOPBACK_ORIGIN.test(origin ?? "");
+  return expected ? `<ORIGIN>${masked.slice(origin.length)}` : masked;
+}
 
 function maskJson(value, ctx, key = "", parent = "") {
   if (Array.isArray(value)) return value.map((item) => maskJson(item, ctx, key, parent));
@@ -241,12 +254,8 @@ function maskJson(value, ctx, key = "", parent = "") {
   if (typeof value === "string") {
     if (SECRET_MEMBERS.has(key)) return SECRET_MEMBERS.get(key);
     if (ctx.contentCarriesRun && DIGEST_MEMBERS.has(key)) return "<DIGEST>";
-    if (PRODUCTION_ORIGINS.has(key)) {
-      const masked = maskText(value, ctx);
-      const origin = ORIGIN_PREFIX.exec(masked)?.[0];
-      const expected = origin === PRODUCTION_ORIGINS.get(key) || LOOPBACK_ORIGIN.test(origin ?? "");
-      return expected ? `<ORIGIN>${masked.slice(origin.length)}` : masked;
-    }
+    if (PRODUCTION_ORIGINS.has(key))
+      return maskOrigin(maskText(value, ctx), PRODUCTION_ORIGINS.get(key));
     if (key === "etag")
       return OPAQUE_ETAG.test(value) ? maskEtag(value, ctx) : maskText(value, ctx);
     return maskText(value, ctx);

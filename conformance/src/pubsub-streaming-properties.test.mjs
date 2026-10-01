@@ -2,7 +2,7 @@
 // replays a fixed seed sequence, so a failure names the seed and case that reproduce it.
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { test } from "node:test";
+import { mock, test } from "node:test";
 
 const corpus = new URL("../pubsub-corpus/", import.meta.url);
 const load = async (name) => import(new URL(name, corpus).href);
@@ -26,14 +26,14 @@ function rng(seed) {
     bytes: (length) => Buffer.from(Array.from({ length }, () => int(0, 255))),
   };
 }
-// A property returns the label of the case it exercised; every label in mustSee has to occur, so
-// a generator that drifts away from a branch fails instead of passing vacuously.
+// A property returns the label (or labels) of the case it exercised; every label in mustSee has to
+// occur, so a generator that drifts away from a branch fails instead of passing vacuously.
 function forAll(name, property, mustSee = []) {
   return async () => {
     const seen = new Set();
     for (let seed = 1; seed <= CASES; seed++) {
       try {
-        seen.add(await property(rng(seed)));
+        for (const label of [await property(rng(seed))].flat()) seen.add(label);
       } catch (error) {
         error.message = `${name} seed ${seed}: ${error.message}`;
         throw error;
@@ -278,9 +278,210 @@ test(
   }),
 );
 
-// Reference journal: sequential bookkeeping with the drain applied at explicit flush points.
-function modelJournal({ maxEntries, maxEntryBytes, maxTotalBytes }) {
-  const state = { entries: 0, totalBytes: 0, acknowledged: 0, reason: undefined, halted: false },
+const ORIGINS = [
+  "peer-terminal",
+  "client-cancel",
+  "revocation",
+  "abort",
+  "deadline",
+  "local-close",
+  "uncertain",
+];
+const FAILURES = [
+  "guard-before",
+  "persist-before",
+  "guard-after",
+  "live-false",
+  "issue-throws",
+  "persist-issued",
+];
+// Reference write gate for awaited, sequential actions: synchronous refusals change nothing,
+// admitted actions reserve first and then either complete or stop the gate at their failure point.
+function modelGate({ maxFrames, maxFrameBytes, maxOutgoingBytes, maxActions }) {
+  const state = {
+    attempted: 0,
+    issued: 0,
+    completed: 0,
+    openings: 0,
+    frames: 0,
+    outgoing: 0,
+    direction: "NEW",
+    origin: undefined,
+  };
+  const stop = (origin) => {
+    state.origin ??= ORIGINS.includes(origin) ? origin : "uncertain";
+  };
+  return {
+    state,
+    stop,
+    action(kind, length, failure) {
+      if (state.origin) return "throws";
+      if (kind === "open" && state.openings) return "throws";
+      if (kind !== "open" && state.direction === "NEW") return "throws";
+      if ((kind === "frame" || kind === "half-close") && state.direction !== "OPEN")
+        return "throws";
+      if (
+        state.attempted >= maxActions ||
+        (kind === "frame" &&
+          (length > maxFrameBytes ||
+            state.frames >= maxFrames ||
+            length + 5 > maxOutgoingBytes - state.outgoing))
+      )
+        return "throws";
+      state.attempted++;
+      if (kind === "open") state.openings++;
+      if (kind === "frame") {
+        state.frames++;
+        state.outgoing += length + 5;
+      }
+      if (["guard-before", "persist-before", "guard-after", "issue-throws"].includes(failure)) {
+        stop("uncertain");
+        return "rejects";
+      }
+      if (failure === "live-false") {
+        stop("revocation");
+        return "rejects";
+      }
+      state.issued++;
+      if (kind === "open") state.direction = "OPEN";
+      if (kind === "half-close") state.direction = "HALF_CLOSED";
+      if (failure === "persist-issued") {
+        stop("uncertain");
+        return "rejects";
+      }
+      state.completed++;
+      if (kind === "client-cancel") stop("client-cancel");
+      return "resolves";
+    },
+  };
+}
+
+test(
+  "write gate reservations, refusals, failure points, direction and stop origin match the reference model",
+  forAll(
+    "gate-model",
+    async (r) => {
+      const { createStreamingWriteGate } = await load("streaming-write-gate.mjs");
+      const bounds = {
+        maxFrames: r.int(1, 3),
+        maxFrameBytes: r.int(1, 12),
+        maxOutgoingBytes: r.int(5, 40),
+        maxActions: r.int(1, 6),
+      };
+      const model = modelGate(bounds);
+      let failure,
+        guardCalls = 0,
+        contained = 0;
+      const issued = [];
+      const g = createStreamingWriteGate({
+        ...bounds,
+        wallMs: 60000,
+        guard: async () => {
+          guardCalls++;
+          if (failure === (guardCalls === 1 ? "guard-before" : "guard-after"))
+            throw new Error("authority lost");
+        },
+        liveCheck: () => failure !== "live-false",
+        persist: async (row) => {
+          if (failure === (row.state === "before-send" ? "persist-before" : "persist-issued"))
+            throw new Error("lost acknowledgement");
+        },
+        issue: (intent, bytes) => {
+          if (failure === "issue-throws") throw new Error("native write failed");
+          issued.push([intent.kind, bytes]);
+        },
+        contain: async () => contained++,
+      });
+      const outcomes = new Set();
+      for (let step = r.int(1, 10); step > 0; step--) {
+        if (r.chance(0.08)) {
+          const origin = r.chance(0.8) ? r.pick(ORIGINS) : "bogus";
+          g.stop(origin);
+          model.stop(origin);
+          continue;
+        }
+        const kind = r.pick(["open", "frame", "frame", "half-close", "client-cancel"]);
+        const length = r.int(0, 14);
+        failure = r.chance(0.15) ? r.pick(FAILURES) : undefined;
+        guardCalls = 0;
+        const expected = model.action(kind, length, failure);
+        const call = {
+          open: () => g.open(),
+          frame: () => g.write(r.bytes(length)),
+          "half-close": () => g.halfClose(),
+          "client-cancel": () => g.cancel(),
+        }[kind];
+        let actual;
+        try {
+          const pending = call();
+          actual = await pending.then(
+            () => "resolves",
+            () => "rejects",
+          );
+        } catch {
+          actual = "throws";
+        }
+        assert.equal(actual, expected, `${kind} with ${failure ?? "no failure"}`);
+        outcomes.add(`${kind}:${actual}`);
+      }
+      const result = await g.done();
+      model.stop("local-close");
+      const state = model.state;
+      assert.deepEqual(
+        {
+          attemptedActions: result.attemptedActions,
+          issuedActions: result.issuedActions,
+          completedActions: result.completedActions,
+          unknownActions: result.unknownActions,
+          openingReservations: result.openingReservations,
+          frameReservations: result.frameReservations,
+          outgoingBytes: result.outgoingBytes,
+          direction: result.direction,
+          stopOrigin: result.stopOrigin,
+          pendingCallbacks: result.pendingCallbacks,
+          terminationRequired: result.terminationRequired,
+        },
+        {
+          attemptedActions: state.attempted,
+          issuedActions: state.issued,
+          completedActions: state.completed,
+          unknownActions: state.attempted - state.completed,
+          openingReservations: state.openings,
+          frameReservations: state.frames,
+          outgoingBytes: state.outgoing,
+          direction: state.direction,
+          stopOrigin: state.origin,
+          pendingCallbacks: [],
+          terminationRequired: false,
+        },
+      );
+      assert.equal(contained, 1);
+      assert.equal(issued.length, state.issued);
+      return [state.origin, ...outcomes];
+    },
+    [
+      ...ORIGINS.filter((origin) => !["abort", "deadline"].includes(origin)),
+      "open:throws",
+      "frame:throws",
+      "frame:resolves",
+      "frame:rejects",
+      "half-close:resolves",
+      "client-cancel:resolves",
+    ],
+  ),
+);
+
+// Reference journal: sequential bookkeeping with the drain applied at explicit flush points. A
+// hung write blocks the chain: it and every later entry stay unsettled.
+function modelJournal({ maxEntries, maxEntryBytes, maxTotalBytes }, hungAt) {
+  const state = {
+      entries: 0,
+      totalBytes: 0,
+      acknowledged: 0,
+      reason: undefined,
+      halted: false,
+      blocked: false,
+    },
     queued = [],
     outcomes = [];
   return {
@@ -302,8 +503,12 @@ function modelJournal({ maxEntries, maxEntryBytes, maxTotalBytes }) {
       return "admitted";
     },
     flush() {
-      for (const { index, fail } of queued.splice(0)) {
-        if (state.halted || fail) {
+      while (queued.length && !state.blocked) {
+        const { index, fail } = queued.shift();
+        if (!state.halted && index === hungAt) {
+          state.blocked = true;
+          queued.unshift({ index, fail });
+        } else if (state.halted || fail) {
           state.reason ??= "persistence";
           state.halted = true;
           outcomes[index] = "rejected";
@@ -315,9 +520,23 @@ function modelJournal({ maxEntries, maxEntryBytes, maxTotalBytes }) {
     },
   };
 }
+const tick = () => new Promise((resolve) => setImmediate(resolve));
+// Drives a promise to settlement while setTimeout is mocked: every turn advances mocked timers by
+// one millisecond, which fires the helper's overdue cutoffs without any real wait.
+async function settleWithMockedTimers(promise) {
+  let finished = false;
+  const settled = promise.finally(() => {
+    finished = true;
+  });
+  while (!finished) {
+    mock.timers.tick(1);
+    await tick();
+  }
+  return settled;
+}
 
 test(
-  "journal counters, refusals and commit outcomes match the reference model for random operation sequences",
+  "journal counters, refusals, hung writes, late drains and commit outcomes match the reference model",
   forAll(
     "journal-model",
     async (r) => {
@@ -327,66 +546,92 @@ test(
         maxEntryBytes: r.int(1, 24),
         maxTotalBytes: r.int(1, 64),
       };
-      const model = modelJournal(bounds);
+      const hungAt = r.chance(0.25) ? r.int(0, 6) : -1;
+      const model = modelJournal(bounds, hungAt);
       const failing = new Set(),
         written = [],
         tickets = [];
-      let stops = 0;
-      const j = createStreamingJournal({
-        ...bounds,
-        deadlineAt: performance.now() + 60000,
-        write: async (row) => {
-          if (failing.has(row.index)) throw new Error("lost acknowledgement");
-          written.push(row);
-        },
-        stopOwned: () => stops++,
-      });
-      for (let step = r.int(0, 14); step > 0; step--) {
-        if (r.chance(0.25)) {
-          await new Promise((resolve) => setImmediate(resolve));
-          model.flush();
-          continue;
+      let stops = 0,
+        now = 1000;
+      const clock = mock.method(performance, "now", () => now);
+      mock.timers.enable({ apis: ["setTimeout"] });
+      try {
+        const deadlineAt = now + 60000;
+        const j = createStreamingJournal({
+          ...bounds,
+          deadlineAt,
+          write: async (row) => {
+            if (row.index === hungAt) return new Promise(() => {});
+            if (failing.has(row.index)) throw new Error("lost acknowledgement");
+            written.push(row);
+          },
+          stopOwned: () => stops++,
+        });
+        for (let step = r.int(0, 14); step > 0; step--) {
+          if (r.chance(0.25)) {
+            await tick();
+            model.flush();
+            continue;
+          }
+          const op = { valid: !r.chance(0.08), length: r.int(0, 30), fail: r.chance(0.12) };
+          const input = op.valid ? r.bytes(op.length) : "not bytes";
+          const expected = model.append(op);
+          if (expected === "throws") {
+            assert.throws(() => j.append(input), /journal stopped/);
+            continue;
+          }
+          if (op.fail) failing.add(model.state.entries - 1);
+          const ticket = j.append(input);
+          assert.equal(ticket.index, model.state.entries - 1);
+          tickets.push({ ticket, bytes: input });
         }
-        const op = { valid: !r.chance(0.08), length: r.int(0, 30), fail: r.chance(0.12) };
-        const input = op.valid ? r.bytes(op.length) : "not bytes";
-        const expected = model.append(op);
-        if (expected === "throws") {
-          assert.throws(() => j.append(input), /journal stopped/);
-          continue;
+        await tick();
+        model.flush();
+        const late = model.state.blocked || r.chance(0.2);
+        if (late) now = deadlineAt + 1;
+        const result = await settleWithMockedTimers(j.done());
+        const reason = late ? (model.state.reason ?? "deadline") : model.state.reason;
+        assert.equal(result.entries, model.state.entries);
+        assert.equal(result.totalBytes, model.state.totalBytes);
+        assert.equal(result.acknowledgedEntries, model.state.acknowledged);
+        assert.equal(result.unknownEntries, model.state.entries - model.state.acknowledged);
+        assert.equal(result.reason, reason);
+        assert.deepEqual(result.pendingCallbacks, model.state.blocked ? [`write:${hungAt}`] : []);
+        assert.equal(result.terminationRequired, late);
+        assert.equal(stops, 1);
+        for (const { ticket, bytes } of tickets) {
+          const outcome = model.outcomes[ticket.index];
+          const settled = await Promise.race([
+            ticket.committed.then(
+              (receipt) => receipt,
+              () => "rejected",
+            ),
+            tick().then(() => "unsettled"),
+          ]);
+          if (outcome === undefined) assert.equal(settled, "unsettled");
+          else if (outcome === "rejected") assert.equal(settled, "rejected");
+          else
+            assert.deepEqual(settled, {
+              index: ticket.index,
+              sha256: sha(bytes),
+              bodyBytes: bytes.length,
+            });
         }
-        if (op.fail) failing.add(model.state.entries - 1);
-        const ticket = j.append(input);
-        assert.equal(ticket.index, model.state.entries - 1);
-        tickets.push({ ticket, bytes: input });
-      }
-      model.flush();
-      const result = await j.done();
-      assert.equal(result.entries, model.state.entries);
-      assert.equal(result.totalBytes, model.state.totalBytes);
-      assert.equal(result.acknowledgedEntries, model.state.acknowledged);
-      assert.equal(result.unknownEntries, model.state.entries - model.state.acknowledged);
-      assert.equal(result.reason, model.state.reason);
-      assert.deepEqual(result.pendingCallbacks, []);
-      assert.equal(result.terminationRequired, false);
-      assert.equal(stops, 1);
-      for (const { ticket, bytes } of tickets) {
-        const settled = await ticket.committed.then(
-          (receipt) => receipt,
-          () => "rejected",
+        assert.deepEqual(
+          written.map((row) => row.index),
+          tickets
+            .map(({ ticket }) => ticket.index)
+            .filter((i) => model.outcomes[i] === "committed"),
         );
-        if (model.outcomes[ticket.index] === "rejected") assert.equal(settled, "rejected");
-        else
-          assert.deepEqual(settled, {
-            index: ticket.index,
-            sha256: sha(bytes),
-            bodyBytes: bytes.length,
-          });
+        return [
+          model.state.reason ?? "clean",
+          ...(model.state.blocked ? ["hung"] : []),
+          ...(late ? ["late"] : []),
+        ];
+      } finally {
+        mock.timers.reset();
+        clock.mock.restore();
       }
-      assert.deepEqual(
-        written.map((row) => row.index),
-        tickets.map(({ ticket }) => ticket.index).filter((i) => model.outcomes[i] === "committed"),
-      );
-      return model.state.reason ?? "clean";
     },
     [
       "clean",
@@ -395,6 +640,8 @@ test(
       "entry-byte-bound",
       "total-byte-bound",
       "persistence",
+      "hung",
+      "late",
     ],
   ),
 );
@@ -410,23 +657,33 @@ const LIFECYCLE = [
   "half-close",
 ];
 // Reference receipt queue admission: first refusal wins and every later event is refused. Raw
-// receipts of admitted events are always persisted, but candidate frames still queued when a stop
-// is recorded never reach the observer.
-function modelReceipts({ maxHeaderBytes, maxHeaderEvents, maxHeaderPairs, maxEvents }) {
-  const state = { reason: undefined, kinds: [], headerBytes: 0, headerEvents: 0, payloads: [] },
+// receipts of admitted events are persisted in order at drain points; candidate frames are
+// delivered only while no stop is recorded. A hung persist blocks the rest of the chain.
+function modelReceipts({ maxHeaderBytes, maxHeaderEvents, maxHeaderPairs, maxEvents }, hungAt) {
+  const state = {
+      reason: undefined,
+      kinds: [],
+      headerBytes: 0,
+      headerEvents: 0,
+      payloads: [],
+      persisted: 0,
+      blocked: false,
+    },
     queued = [];
   const refuse = (why) => {
     state.reason ??= why;
     return false;
   };
   const admit = () => !state.reason && (state.kinds.length < maxEvents || refuse("event-bound"));
+  const enqueue = (kind, payloads = []) => {
+    queued.push({ index: state.kinds.length, payloads });
+    state.kinds.push(kind);
+    return true;
+  };
   return {
     state,
     data(payload) {
-      if (!admit()) return false;
-      state.kinds.push("data");
-      queued.push(payload);
-      return true;
+      return admit() && enqueue("data", [payload]);
     },
     headers(kind, raw, flags) {
       if (!admit()) return false;
@@ -446,24 +703,29 @@ function modelReceipts({ maxHeaderBytes, maxHeaderEvents, maxHeaderPairs, maxEve
       }
       state.headerBytes += size;
       state.headerEvents++;
-      state.kinds.push(kind);
-      return true;
+      return enqueue(kind);
     },
     lifecycle(kind) {
       if (!admit()) return false;
       if (!LIFECYCLE.includes(kind)) return refuse("invalid-lifecycle");
-      state.kinds.push(kind);
-      return true;
+      return enqueue(kind);
     },
     flush() {
-      if (!state.reason) state.payloads.push(...queued);
-      queued.length = 0;
+      while (queued.length && !state.blocked) {
+        if (queued[0].index === hungAt) {
+          state.blocked = true;
+          break;
+        }
+        const { payloads } = queued.shift();
+        state.persisted++;
+        if (!state.reason) state.payloads.push(...payloads);
+      }
     },
   };
 }
 
 test(
-  "receipt queue admission, bounds and durable-before-visible order match the reference model",
+  "receipt queue admission, bounds, hung persistence, late drains and durable-before-visible order match the reference model",
   forAll(
     "receipts-model",
     async (r) => {
@@ -474,74 +736,93 @@ test(
         maxHeaderPairs: r.int(1, 3),
         maxEvents: r.int(1, 10),
       };
-      const model = modelReceipts(bounds);
+      const hungAt = r.chance(0.25) ? r.int(0, 8) : -1;
+      const model = modelReceipts(bounds, hungAt);
       const order = [],
         persisted = [],
         observed = [];
-      let stops = 0;
-      const q = createStreamingReceiptQueue({
-        maxFrameBytes: 16,
-        maxTotalBytes: 4096,
-        maxFrames: 64,
-        maxChunks: 64,
-        ...bounds,
-        wallMs: 60000,
-        persist: async (row) => {
-          persisted.push(row);
-          order.push(`persist:${row.index}`);
-        },
-        onFrame: async (frame) => {
-          observed.push(frame);
-          order.push(`frame:${persisted.length - 1}`);
-        },
-        stopOwned: () => stops++,
-      });
-      const text = () => "abcdefgh".slice(0, r.int(0, 8));
-      for (let step = r.int(0, 14); step > 0; step--) {
-        const choice = r.int(0, 3);
-        if (choice === 3) {
-          await new Promise((resolve) => setImmediate(resolve));
-          model.flush();
-        } else if (choice === 0) {
-          const payload = r.bytes(r.int(0, 16));
-          assert.equal(q.data(envelope(payload)), model.data(payload));
-        } else if (choice === 1) {
-          const kind = r.chance(0.9) ? r.pick(["response", "trailers", "additional"]) : "bogus";
-          const flags = r.chance(0.9) ? r.int(0, 255) : r.pick([-1, 256, 1.5]);
-          const raw = Array.from({ length: r.int(0, 7) }, text);
-          assert.equal(q.headers(kind, raw, flags), model.headers(kind, raw, flags));
-        } else {
-          const kind = r.chance(0.9) ? r.pick(LIFECYCLE) : "bogus";
-          assert.equal(q.lifecycle(kind), model.lifecycle(kind));
+      let stops = 0,
+        now = 1000;
+      const clock = mock.method(performance, "now", () => now);
+      mock.timers.enable({ apis: ["setTimeout"] });
+      try {
+        const q = createStreamingReceiptQueue({
+          maxFrameBytes: 16,
+          maxTotalBytes: 4096,
+          maxFrames: 64,
+          maxChunks: 64,
+          ...bounds,
+          wallMs: 60000,
+          persist: async (row) => {
+            if (row.index === hungAt) return new Promise(() => {});
+            persisted.push(row);
+            order.push(`persist:${row.index}`);
+          },
+          onFrame: async (frame) => {
+            observed.push(frame);
+            order.push(`frame:${persisted.length - 1}`);
+          },
+          stopOwned: () => stops++,
+        });
+        const text = () => "abcdefgh".slice(0, r.int(0, 8));
+        for (let step = r.int(0, 14); step > 0; step--) {
+          const choice = r.int(0, 3);
+          if (choice === 3) {
+            await tick();
+            model.flush();
+          } else if (choice === 0) {
+            const payload = r.bytes(r.int(0, 16));
+            assert.equal(q.data(envelope(payload)), model.data(payload));
+          } else if (choice === 1) {
+            const kind = r.chance(0.9) ? r.pick(["response", "trailers", "additional"]) : "bogus";
+            const flags = r.chance(0.9) ? r.int(0, 255) : r.pick([-1, 256, 1.5]);
+            const raw = Array.from({ length: r.int(0, 7) }, text);
+            assert.equal(q.headers(kind, raw, flags), model.headers(kind, raw, flags));
+          } else {
+            const kind = r.chance(0.9) ? r.pick(LIFECYCLE) : "bogus";
+            assert.equal(q.lifecycle(kind), model.lifecycle(kind));
+          }
         }
+        await tick();
+        model.flush();
+        const late = model.state.blocked || r.chance(0.2);
+        if (late) now += 60001;
+        const result = await settleWithMockedTimers(q.done());
+        const kinds = model.state.kinds;
+        assert.equal(result.events, kinds.length);
+        assert.equal(result.persistedEvents, model.state.persisted);
+        assert.equal(result.unknownEvents, kinds.length - model.state.persisted);
+        assert.equal(result.reason, model.state.reason);
+        assert.equal(result.headerBytes, model.state.headerBytes);
+        assert.equal(result.headerEvents, model.state.headerEvents);
+        assert.equal(result.frameAttempts, model.state.payloads.length);
+        assert.equal(result.acknowledgedFrames, model.state.payloads.length);
+        assert.deepEqual(result.pendingCallbacks, model.state.blocked ? [`receipt:${hungAt}`] : []);
+        assert.equal(result.terminationRequired, late);
+        assert.equal(stops, 1);
+        assert.deepEqual(
+          persisted.map((row) => [row.index, row.kind]),
+          kinds.slice(0, model.state.persisted).map((kind, index) => [index, kind]),
+        );
+        assert.deepEqual(
+          observed.map((frame) => [frame.index, Buffer.from(frame.bodyBase64, "base64")]),
+          model.state.payloads.map((payload, index) => [index, payload]),
+        );
+        for (const entry of order.filter((item) => item.startsWith("frame:"))) {
+          const row = Number(entry.slice(6));
+          assert.equal(persisted[row].kind, "data");
+          assert.ok(order.indexOf(`persist:${row}`) < order.indexOf(entry));
+        }
+        return [
+          model.state.reason ?? "clean",
+          ...(observed.length ? ["frame-delivered"] : []),
+          ...(model.state.blocked ? ["hung"] : []),
+          ...(late ? ["late"] : []),
+        ];
+      } finally {
+        mock.timers.reset();
+        clock.mock.restore();
       }
-      const result = await q.done();
-      model.flush();
-      const kinds = model.state.kinds;
-      assert.equal(result.events, kinds.length);
-      assert.equal(result.persistedEvents, kinds.length);
-      assert.equal(result.unknownEvents, 0);
-      assert.equal(result.reason, model.state.reason);
-      assert.equal(result.headerBytes, model.state.headerBytes);
-      assert.equal(result.headerEvents, model.state.headerEvents);
-      assert.equal(result.frameAttempts, model.state.payloads.length);
-      assert.equal(result.acknowledgedFrames, model.state.payloads.length);
-      assert.equal(result.terminationRequired, false);
-      assert.equal(stops, 1);
-      assert.deepEqual(
-        persisted.map((row) => [row.index, row.kind]),
-        kinds.map((kind, index) => [index, kind]),
-      );
-      assert.deepEqual(
-        observed.map((frame) => [frame.index, Buffer.from(frame.bodyBase64, "base64")]),
-        model.state.payloads.map((payload, index) => [index, payload]),
-      );
-      for (const entry of order.filter((item) => item.startsWith("frame:"))) {
-        const row = Number(entry.slice(6));
-        assert.equal(persisted[row].kind, "data");
-        assert.ok(order.indexOf(`persist:${row}`) < order.indexOf(entry));
-      }
-      return model.state.reason ?? "clean";
     },
     [
       "clean",
@@ -551,6 +832,9 @@ test(
       "header-pair-bound",
       "header-bound",
       "invalid-lifecycle",
+      "frame-delivered",
+      "hung",
+      "late",
     ],
   ),
 );

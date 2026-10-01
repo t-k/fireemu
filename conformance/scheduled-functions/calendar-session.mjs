@@ -5,6 +5,7 @@ import { mkdir, mkdtemp, readFile, writeFile, chmod } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { join, isAbsolute } from "node:path";
 import { calendarFixture } from "./calendar-local.mjs";
+import { controlFixture } from "./calendar-controls.mjs";
 
 const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
 export async function prepareCalendarSession({
@@ -17,6 +18,8 @@ export async function prepareCalendarSession({
   anchor,
   input,
   childPath,
+  // A negative-control run only (launch accounting design v4 section 7); never a certificate.
+  control,
 }) {
   if (
     ![root, binary, runner, childPath].every(isAbsolute) ||
@@ -43,12 +46,27 @@ export async function prepareCalendarSession({
   await chmod(directory, 0o700);
   const fixturePath = join(directory, "fixture");
   await mkdir(fixturePath, { mode: 0o700 });
-  const fixture = calendarFixture(input),
-    config = JSON.stringify({
-      schemaVersion: 1,
-      profile: "strict",
-      daemon: { clockStart: anchor },
+  const readyPath = join(directory, "control-ready.json");
+  let fixture = calendarFixture(input),
+    controls;
+  if (control) {
+    const generated = controlFixture(input, {
+      mode: control.mode,
+      helperPath: control.helperPath,
+      readyPath,
+      hold: control.hold ?? 60,
+      portFile: join(directory, "port.json"),
+      boundPath: join(directory, "bound.json"),
     });
+    fixture = generated.index;
+    controls = generated.controls;
+    await writeFile(join(fixturePath, "controls.cjs"), controls, { mode: 0o600 });
+  }
+  const config = JSON.stringify({
+    schemaVersion: 1,
+    profile: "strict",
+    daemon: { clockStart: anchor },
+  });
   const configPath = join(directory, "fireemu.json"),
     inputPath = join(directory, "input.json");
   await writeFile(join(fixturePath, "index.cjs"), fixture, { mode: 0o600 });
@@ -68,6 +86,7 @@ export async function prepareCalendarSession({
     proceedPath: join(directory, "proceed.json"),
     outputPath: join(directory, "callback.json"),
     supervisorOutputPath: join(directory, "supervisor-result.json"),
+    readyPath,
   };
   await writeFile(inputPath, JSON.stringify({ input, anchor, ...paths }), { mode: 0o600 });
   return {
@@ -82,6 +101,7 @@ export async function prepareCalendarSession({
       cliVersion: cli.version,
       fixtureSha256: digest(fixture),
       configSha256: digest(config),
+      ...(control ? { controlMode: control.mode, controlsSha256: digest(controls) } : {}),
       anchor,
     },
   };

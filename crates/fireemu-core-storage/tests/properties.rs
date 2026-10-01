@@ -613,12 +613,12 @@ fn deeply_nested_globs_do_not_overflow_the_stack() {
     use fireemu_core_storage::glob::glob_matches;
     for depth in [20_000usize, 100_000, 400_000] {
         let nested = format!("{}x{}", "{a,".repeat(depth), "}".repeat(depth));
-        let matched = finishes_within(60, move || glob_matches(&nested, "x"));
+        let matched = finishes_within(8, move || glob_matches(&nested, "x"));
         assert!(matched, "depth {depth}");
         let unterminated = "{a,".repeat(depth);
         let name = unterminated.clone();
         assert!(
-            finishes_within(60, move || glob_matches(&unterminated, &name)),
+            finishes_within(8, move || glob_matches(&unterminated, &name)),
             "depth {depth}"
         );
     }

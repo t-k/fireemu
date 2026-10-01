@@ -1039,3 +1039,14 @@ test("the follow-up corpus's own SAML sign-ins, with its real names, get through
     sendSignIns(resolve(renamed));
   }
 });
+
+test("tampering a signature changes its first character whatever it was, and nothing else", async () => {
+  const { tamperSignature } = await import("./auth-federation/saml.mjs");
+  const xml = (first) =>
+    `<r><ds:SignatureValue>${first}bcdef==</ds:SignatureValue><ds:Other>Aabc</ds:Other></r>`;
+  assert.equal(tamperSignature(xml("A")), xml("B"));
+  for (const first of ["B", "Q", "z", "0", "+", "/"]) {
+    assert.equal(tamperSignature(xml(first)), xml("A"), first);
+  }
+  assert.throws(() => tamperSignature("<r/>"), /no signature to tamper with/);
+});

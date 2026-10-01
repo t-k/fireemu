@@ -428,6 +428,39 @@ impl Harness {
             .expect("a well-formed response")
     }
 
+    /// A POST whose head is refused at once (two `origin` fields) and whose body arrives only after
+    /// the server has answered: `delay` after the head, `body_len` bytes of it. A write that fails
+    /// because the server already closed is not an error here; what is under test is whether the
+    /// refusal still reaches the client.
+    async fn refused_request_with_a_late_body(
+        &self,
+        delay: std::time::Duration,
+        body_len: usize,
+    ) -> std::io::Result<fireemu_adapter_functions::http::ProxiedResponse> {
+        use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+
+        let head = format!(
+            "POST /{PROJECT}/us-central1/add HTTP/1.1\r\norigin: http://localhost:5173\r\norigin: https://evil.example\r\nhost: {}\r\ncontent-type: application/json\r\ncontent-length: {body_len}\r\nconnection: close\r\n\r\n",
+            self.addr
+        );
+        let mut stream = tokio::net::TcpStream::connect(self.addr).await?;
+        stream.write_all(head.as_bytes()).await?;
+        tokio::time::sleep(delay).await;
+        let body = vec![b'x'; body_len];
+        for chunk in body.chunks(16 * 1024) {
+            if stream.write_all(chunk).await.is_err() {
+                break;
+            }
+        }
+        let _ = stream.flush().await;
+        let mut raw = Vec::new();
+        stream.read_to_end(&mut raw).await?;
+        Ok(
+            fireemu_adapter_functions::http::parse_response(&raw, "POST")
+                .expect("a well-formed response"),
+        )
+    }
+
     async fn guarded_request_with_a_delayed_body(&self) -> std::io::Result<u16> {
         use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 
@@ -1327,6 +1360,27 @@ async fn ordinary_function_requests_keep_the_existing_ambiguous_origin_refusal()
                 )
                 .await;
             assert_eq!(response.status, 403);
+            assert_eq!(response.body, b"forbidden origin");
+        }
+    }
+    h.stop().await;
+}
+
+/// The refusal is answered from the head alone, and the client may still be sending the body. The
+/// answer must reach it either way: closing with unread request bytes would turn into a TCP reset
+/// that discards the response (seen as `ConnectionReset` on macOS CI).
+#[tokio::test]
+async fn a_refusal_before_the_body_is_read_still_reaches_a_client_that_sends_its_body_late() {
+    let h = start(true).await;
+    for body_len in [22, 64 * 1024, 512 * 1024] {
+        for round in 0..20 {
+            let response = h
+                .refused_request_with_a_late_body(std::time::Duration::from_millis(100), body_len)
+                .await
+                .unwrap_or_else(|error| {
+                    panic!("round {round}, a {body_len}-byte body: the response was lost: {error}")
+                });
+            assert_eq!(response.status, 403, "round {round}, {body_len} bytes");
             assert_eq!(response.body, b"forbidden origin");
         }
     }

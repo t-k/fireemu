@@ -22,6 +22,7 @@ export function createRecorder({
   started,
   harnessVersion,
   spawnImpl = spawnProcess,
+  prelude = [],
 }) {
   const fd = openSync(path, "a", 0o600);
   const append = (row) => {
@@ -29,6 +30,7 @@ export function createRecorder({
     fsyncSync(fd);
   };
   append({ type: "header", role, pid, started, harnessVersion });
+  for (const row of prelude) append(row);
   const uid = process.getuid();
   let next = 0;
   const recorder = {
@@ -117,6 +119,18 @@ export function createRecorder({
       clearTimeout(timer);
       return { code, signal, stdout, stderr, timedOut, pid: child.pid, handle: child.recordHandle };
     },
+    /** A process's start time, from a recorded `ps` (what a parent puts in an identity row). */
+    async startedOf(target) {
+      const answer = await recorder.execFile(
+        "ps",
+        ["-o", "lstart=", "-p", String(target)],
+        { env: psEnv() },
+        "start-time",
+      );
+      const value = normaliseStart(answer.stdout);
+      if (answer.code !== 0 || !value) throw new Error(`start time of ${target} is unreadable`);
+      return value;
+    },
     /** The parent's record of a lane-owned child's start time (checked against its header). */
     identity(handle, childPid, childStarted) {
       append({ type: "identity", handle, pid: childPid, started: childStarted });
@@ -138,4 +152,49 @@ export async function readRecords(path) {
     .split("\n")
     .filter((line) => line !== "")
     .map((line) => JSON.parse(line));
+}
+
+/** `ps -o lstart=` text, normalised the way inventories normalise it. */
+const normaliseStart = (text) => text.trim().replace(/\s+/g, " ");
+const psEnv = () => ({ PATH: process.env.PATH ?? "/usr/bin:/bin", LC_ALL: "C" });
+
+/**
+ * A recorder for the calling lane-owned process. Its own start time comes from a `ps` of itself,
+ * recorded after the header as an ordinary birth and exit (handle `<role>:0`).
+ */
+export async function createSelfRecorder({ path, role, harnessVersion, spawnImpl = spawnProcess }) {
+  const args = ["-o", "lstart=", "-p", String(process.pid)];
+  const spawnMonoNs = mono();
+  const probe = spawnImpl("ps", args, { stdio: ["ignore", "pipe", "ignore"], env: psEnv() });
+  let text = "";
+  probe.stdout.setEncoding("utf8");
+  probe.stdout.on("data", (chunk) => (text += chunk));
+  const [code, signal] = await new Promise((resolve, reject) => {
+    probe.once("error", reject);
+    probe.once("close", (exitCode, exitSignal) => resolve([exitCode, exitSignal]));
+  });
+  const started = normaliseStart(text);
+  if (code !== 0 || !started) throw new Error("own start time is unreadable");
+  const handle = `${role}:0`;
+  return createRecorder({
+    path,
+    role,
+    pid: process.pid,
+    started,
+    harnessVersion,
+    spawnImpl,
+    prelude: [
+      {
+        type: "birth",
+        handle,
+        pid: probe.pid,
+        uid: process.getuid(),
+        purpose: "self-start",
+        file: "ps",
+        argvSha256: argvDigest("ps", args),
+        spawnMonoNs,
+      },
+      { type: "exit", handle, code, signal, exitMonoNs: mono() },
+    ],
+  });
 }

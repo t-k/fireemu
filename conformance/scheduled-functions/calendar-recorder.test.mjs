@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createRecorder, readRecords } from "./calendar-recorder.mjs";
+import { createRecorder, createSelfRecorder, readRecords } from "./calendar-recorder.mjs";
 import { validateRecords } from "./calendar-accounting.mjs";
 
 async function scratch(t) {
@@ -101,4 +101,47 @@ test("rows are appended as they happen, so a crash keeps the earlier ones", asyn
   assert.equal(text.trim().split("\n").length, 2, "header and birth are on disk before the exit");
   process.kill(child.pid, "SIGKILL");
   await child.recordExit;
+});
+
+test("a lane-owned process records its own start time with a recorded ps of itself", async (t) => {
+  const path = join(await scratch(t), "outer.jsonl");
+  const recorder = await createSelfRecorder({ path, role: "outer", harnessVersion: "test" });
+  const rows = await readRecords(path);
+  assert.deepEqual(
+    rows.map((row) => row.type),
+    ["header", "birth", "exit"],
+  );
+  assert.equal(rows[0].pid, process.pid);
+  assert.match(rows[0].started, /^\w{3} \w{3} \d{1,2} \d{2}:\d{2}:\d{2} \d{4}$/);
+  assert.equal(rows[1].purpose, "self-start");
+  assert.equal(rows[2].code, 0);
+  // The same normalised start time a parent records in its identity row.
+  assert.equal(await recorder.startedOf(process.pid), rows[0].started);
+  const header = rows[0];
+  const parent = [
+    { type: "header", role: "measure", pid: 1234, started: "x", harnessVersion: "test" },
+    {
+      type: "birth",
+      handle: "measure:1",
+      pid: header.pid,
+      uid: process.getuid(),
+      purpose: "outer",
+      file: "node",
+      argvSha256: "a".repeat(64),
+      spawnMonoNs: "1",
+    },
+    { type: "identity", handle: "measure:1", pid: header.pid, started: header.started },
+    {
+      type: "exit",
+      handle: "measure:1",
+      code: 0,
+      signal: null,
+      exitMonoNs: String(process.hrtime.bigint()),
+    },
+  ];
+  const result = validateRecords({
+    "measure.jsonl": parent,
+    "outer.jsonl": await readRecords(path),
+  });
+  assert.deepEqual(result.problems, []);
 });

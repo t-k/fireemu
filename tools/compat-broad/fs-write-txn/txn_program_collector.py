@@ -88,9 +88,10 @@ def wait_projection(entry, thresholds):
 def wait_entry(step, previous, timing, tokens):
     """What one wait left behind: the idle bounds before the request, and its token's total age bounds."""
     entry = {"site": step["id"], "seconds": step["waitSeconds"], "previousSite": previous["site"], "previousTiming": copy.deepcopy(previous["timing"]), "currentTiming": copy.deepcopy(timing), "idleInterval": interval(previous["timing"], timing)}
-    if step["tokenInput"]:
-        entry["tokenRole"] = step["tokenInput"]
-        entry["totalAgeInterval"] = interval(tokens[step["tokenInput"]]["start"], timing)
+    carried = step["tokenInput"] or step.get("retryOf")   # a retry begin ages the token it names
+    if carried:
+        entry["tokenRole"] = carried
+        entry["totalAgeInterval"] = interval(tokens[carried]["start"], timing)
     if entry["idleInterval"]["lowerSeconds"] < step["waitSeconds"]:
         raise ValueError("a wait did not last as long as declared")
     return entry
@@ -137,6 +138,11 @@ class Ledger:
         for step in plan["steps"]:
             if step["tokenInput"]:
                 self.last_use[step["tokenInput"]] = step["id"]
+            if step.get("retryOf"):
+                # The retry is the named token's last use; the token it issues is released right after it.
+                self.last_use[step["retryOf"]] = step["id"]
+                if step["tokenOutput"]:
+                    self.last_use[step["tokenOutput"]] = step["id"]
         self.tokens = {}
         self.docs = {role: {"status": "unexamined", "state": None, "possible": [], "stamp": None} for role in plan["documents"]}
         self.unknown_starts, self.unknown_rollbacks, self.unknown_commits = set(), set(), set()
@@ -208,7 +214,11 @@ class Ledger:
     def guard(self, method, request, step):
         """Refuse a dispatch the graph forbids; nothing is recorded."""
         if method == "BeginTransaction" or method == "BatchGetDocuments" and "newTransaction" in request:
-            if any(entry["state"] in ("open", "unconfirmed-release") for entry in self.tokens.values()):
+            # A retry begin names the one token it retries, which may still be open (nothing released it before the retry).
+            retried = None
+            if method == "BeginTransaction":
+                retried, _entry = self._token_for(request["options"].get("readWrite", {}).get("retryTransaction"))
+            if any(entry["state"] in ("open", "unconfirmed-release") for role, entry in self.tokens.items() if role != retried):
                 raise ValueError("a prior chain's token is unresolved")
         elif method == "Rollback":
             _role, entry = self._token_for(request["transaction"])

@@ -67,11 +67,18 @@ export function validateCall(spec) {
       keys(request, ['database', 'options']);
       if (request.database !== database) throw new Error('program database differs');
       if (Object.keys(request.options ?? {}).length !== 1) throw new Error('program transaction mode differs');
-      // A fresh transaction, read-write or read-only at its own time; never a retry of another one.
+      // A fresh transaction, read-write or read-only at its own time. A read-write begin over REST may name one earlier token
+      // (`retryTransaction`) as the attempt it retries; a retry over gRPC, with a read-only begin or with any other key is refused.
       const mode = Object.keys(request.options)[0];
       if (!['readWrite', 'readOnly'].includes(mode)) throw new Error('program transaction mode differs');
       keys(request.options, [mode]);
-      if (mode === 'readOnly') { keys(request.options.readOnly, [], ['readTime']); if (request.options.readOnly.readTime !== undefined) timestamp(request.options.readOnly.readTime); } else keys(request.options.readWrite, []);
+      if (mode === 'readOnly') { keys(request.options.readOnly, [], ['readTime']); if (request.options.readOnly.readTime !== undefined) timestamp(request.options.readOnly.readTime); } else {
+        keys(request.options.readWrite, [], ['retryTransaction']);
+        if (request.options.readWrite.retryTransaction !== undefined) {
+          if (spec.transport !== 'rest') throw new Error('program retry is a REST begin only');
+          bytes(request.options.readWrite.retryTransaction);
+        }
+      }
       break;
     }
     case 'GetDocument':

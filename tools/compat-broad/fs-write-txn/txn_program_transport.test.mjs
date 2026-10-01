@@ -45,11 +45,22 @@ for (const transport of ['rest', 'grpc']) {
     assert.throws(() => validateCall(spec('GetDocument', { name: name('a').replace(nonce, 'c'.repeat(32)) }, transport)));
   });
 
-  test(`${transport}: BeginTransaction is fresh and refuses retry or another mode`, async () => {
+  test(`${transport}: BeginTransaction is fresh and refuses another mode, and a retry unless it is a REST read-write begin naming a canonical token`, async () => {
     const { validateCall } = await module();
     validateCall(spec('BeginTransaction', { database, options: { readWrite: {} } }, transport));
     validateCall(spec('BeginTransaction', { database, options: { readOnly: {} } }, transport));
-    for (const options of [{ readWrite: { retryTransaction: token } }, { readOnly: { readTime: '2026-09-30T00:00:00Z' } }, { readWrite: {}, readOnly: {} }, { readWrite: { extra: true } }, { readOnly: { extra: true } }, { other: {} }, {}]) assert.throws(() => validateCall(spec('BeginTransaction', { database, options }, transport)), undefined, JSON.stringify(options));
+    const refused = [{ readOnly: { readTime: '2026-09-30T00:00:00Z' } }, { readWrite: {}, readOnly: {} }, { readWrite: { extra: true } }, { readOnly: { extra: true } }, { other: {} }, {},
+      { readWrite: { retryTransaction: 'not canonical' } }, { readWrite: { retryTransaction: '' } }, { readWrite: { retryTransaction: 5 } }, { readWrite: { retryTransaction: token, extra: true } }, { readOnly: { retryTransaction: token } }];
+    // a retry is accepted only over REST
+    if (transport === 'rest') validateCall(spec('BeginTransaction', { database, options: { readWrite: { retryTransaction: token } } }, transport));
+    else refused.push({ readWrite: { retryTransaction: token } });
+    for (const options of refused) assert.throws(() => validateCall(spec('BeginTransaction', { database, options }, transport)), undefined, JSON.stringify(options));
+  });
+
+  test(`${transport}: a retry begin keeps its transport request body`, async () => {
+    if (transport !== 'rest') return;
+    const { restRequest } = await module();
+    assert.deepEqual(restRequest(spec('BeginTransaction', { database, options: { readWrite: { retryTransaction: token } } }, 'rest')), { method: 'POST', path: `/v1/${database}/documents:beginTransaction`, body: { options: { readWrite: { retryTransaction: token } } } });
   });
 
   test(`${transport}: protocol, project, token, credential and deadline changes are rejected`, async () => {

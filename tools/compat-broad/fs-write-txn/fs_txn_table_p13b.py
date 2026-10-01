@@ -1,8 +1,8 @@
 """FS-TRANSACTION P13b (REST): what a retry (`retryTransaction`) does with an expired or finished token, and when a retry attempt takes its snapshot.
 
 This table grants no send permission. Its target is the project FS-TRANSACTION owns alone, `fireemu-oracle-txn` (free tier). Owned document: `a`, created in setup. Four chains over REST. What is judged (a different answer stops
-the run): the setup and every chain's begin and first read (controls), the retry that follows RT-1's Rollback (a control: recorded as accepted
-for REST in P09 and P10), RT-1's Rollback (0 or 10), RT-1's outside writer (0 or 10) and the final read of `a` (0). Every other answer is
+the run): the setup and every chain's begin and first read (controls), the retry that follows RT-1's Rollback (a control: the REST corpus
+expiry-retry-04 recorded a retry of a rolled-back and of a committed token answering 0), RT-1's Rollback (0 or 10), RT-1's outside writer (0 or 10) and the final read of `a` (0). Every other answer is
 observed and never judged, so no answer that refutes what strict does today can stop the run: it may stop for ownership or cleanup reasons only.
 
 - RT-1 (the retry snapshot): begin T1, read, Rollback T1, a retry of T1 (T1r), an outside writer commits `a`, the first read in T1r (it may show the
@@ -19,10 +19,15 @@ The strict answers are INFERRED today ("Strict answers that go beyond the record
 answer finishes is judged narrowly, with `releaseAfterAgeSeconds` 275 for a token certainly older than that (T4, T4r); an idle-expired token (T2, T3) whose
 release is refused with anything but the expired text stops the run on an unconfirmed release, an ownership stop.
 
-An accepted retry mints a fresh token in every recording there is: the P09 and P10 retries (of a committed, a rolled-back and a get-first token) were
-sent over gRPC and each answered 0 with a transaction value different from the one it named. Over REST an accepted retry is unrecorded, so this table's
-first retry is a control only by analogy, and the ledger requires a fresh token of every issued one: a REST retry that returned the named token's own
+A retry of a finished token is accepted over REST: the REST corpus expiry-retry-04 (E003, two recordings) answered 0 for a retry of a rolled-back
+and of a committed token. Whether that REST retry mints a token different from the one it named is unrecorded: the saved comparison of that corpus carries no
+token value. The P09 and P10 retries (of a committed, a rolled-back and a get-first token) were sent over gRPC and each answered 0 with a transaction
+value different from the one it named. The ledger requires a fresh token of every issued one, so a REST retry that returned the named token's own
 bytes stops the run with its start unknown (pinned by a test in test_fs_txn_retry_of.py).
+
+`maxUnresolvedTokens` (a framework constant, 1) is read here as "at most one unresolved token at each chain boundary": while a retry runs, the token it names and
+the token it issues are both unresolved until the chain-end releases, and neither holds a lock (the named token is expired, or rolled back or refused; the new
+token has read nothing).
 
 REST only: the shared gRPC wire cannot send `retryTransaction`."""
 

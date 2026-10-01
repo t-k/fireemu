@@ -2225,8 +2225,8 @@ impl FirestoreState {
     /// gRPC, two recordings: the first read showed the writer and the commit answered 0), and so
     /// does the official emulator (v1.22.0, measured on both transports), so both profiles do. A
     /// transaction that begins with a read (`newTransaction` on a read) uses
-    /// [`Self::begin_transaction`]; a retry attempt ([`Self::retry_transaction`]) is not recorded
-    /// in production.
+    /// [`Self::begin_transaction`]; a retry attempt ([`Self::retry_transaction`]) reads at its first use
+    /// too (P13b).
     pub fn begin_read_write_transaction(
         &mut self,
         now: LogicalInstant,
@@ -2250,7 +2250,7 @@ impl FirestoreState {
         self.prune_transactions(now);
         let Some(previous_attempt) = self.transactions.get(previous) else {
             return Err(FirestoreError::InvalidArgument(
-                "Invalid retry transaction.".into(),
+                "Invalid transaction.".into(),
             ));
         };
         if previous_attempt.read_only {
@@ -2267,31 +2267,41 @@ impl FirestoreState {
         // Finishing the attempt may have evicted it from the bounded finished lineage.
         let Some(previous_attempt) = self.transactions.get(previous) else {
             return Err(FirestoreError::InvalidArgument(
-                "Invalid retry transaction.".into(),
+                "Invalid transaction.".into(),
             ));
         };
-        if !matches!(
-            previous_attempt.state,
-            TransactionState::RetryableAborted
-                | TransactionState::RolledBack
-                | TransactionState::Committed
-                | TransactionState::CommitRefused
-        ) {
+        // A retry that names an expired token that is still remembered, idle-expired or lifetime-expired, is accepted. Production did so in FS-TRANSACTION
+        // P13b (REST, two recordings: 132 s and 280 to 283 s of token age), and so does the official emulator (firebase-tools 15.28.2, v1.22.0, measured over REST
+        // and native gRPC at 130 s of idle and over REST at 282 s of age). The retry does not consume the named token: the first request on it still answers the
+        // expiry, as it would without the retry.
+        let expired = previous_attempt.state == TransactionState::Finished;
+        if !expired
+            && !matches!(
+                previous_attempt.state,
+                TransactionState::RetryableAborted
+                    | TransactionState::RolledBack
+                    | TransactionState::Committed
+                    | TransactionState::CommitRefused
+            )
+        {
             return Err(FirestoreError::InvalidArgument(
                 "Invalid retry transaction.".into(),
             ));
         }
         self.ensure_transaction_capacity()?;
-        if let Some(previous_attempt) = self.transactions.get_mut(previous) {
-            previous_attempt.state = TransactionState::Retried;
+        if !expired {
+            if let Some(previous_attempt) = self.transactions.get_mut(previous) {
+                previous_attempt.state = TransactionState::Retried;
+            }
         }
+        // An expired token that was retried keeps answering as an expired one (production P13b: the chain-end Rollback of it answered 0 for an idle-expired
+        // token and 10 with the expired text for a lifetime-expired one; the official emulator: its first request answers 3 and a later Rollback 0).
         let read_time = self.read_time(now);
         let id = self.insert_transaction(false, self.version, read_time, now)?;
-        // The official emulator (v1.22.0, REST measured) reads a retried read-write transaction at
-        // its first use, like a plain begin (`begin_read_write_transaction`); production is
-        // unobserved, so strict keeps the begin-time snapshot.
+        // A retry attempt reads at its first use, like a plain read-write begin (`begin_read_write_transaction`): production showed the writer that committed
+        // after the retry's begin to the attempt's first read (P13b, REST, two recordings), and so did the official emulator (v1.22.0, REST measured).
         if let Some(transaction) = self.transactions.get_mut(&id) {
-            transaction.snapshot_pending = self.limit_scope == LimitScope::OfficialEmulator;
+            transaction.snapshot_pending = true;
         }
         Ok(id)
     }

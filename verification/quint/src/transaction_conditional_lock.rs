@@ -253,6 +253,10 @@ impl TransactionConditionalLockDriver {
             .store
             .retry_transaction(&previous, LogicalInstant::UNIX_EPOCH)
             .map_err(|error| firestore_error(&error))?;
+        // A retry attempt reads at its first use (P13b), so the first request on it pins its snapshot, as every read request does.
+        self.store
+            .touch_transaction(&retry, LogicalInstant::UNIX_EPOCH)
+            .map_err(|error| firestore_error(&error))?;
         let observed = self
             .store
             .get_in_transaction(&retry, &lock_path())

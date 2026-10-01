@@ -151,8 +151,9 @@ def _git(*args):
 
 
 def signed_source_commit():
-    if _git('status', '--porcelain') or _git('branch', '--show-current') != 'work/codex-fs-transaction':
-        raise ValueError('program requires its clean isolated branch')
+    dirty, branch = _git('status', '--porcelain'), _git('branch', '--show-current')
+    if dirty or branch != 'work/codex-fs-transaction':
+        raise ValueError(f"program requires a clean checkout on branch work/codex-fs-transaction (this one is on {branch or 'a detached head'}{' and has uncommitted changes' if dirty else ''})")
     commit = _git('rev-parse', 'HEAD')
     if not re.fullmatch(r'[a-f0-9]{40}', commit): raise ValueError('program source commit invalid')
     _git('verify-commit', commit)

@@ -54,9 +54,8 @@ fn reject_loser(driver: &mut TransactionConditionalLockDriver, loser: &str) {
 // The read guard closure returns tonic::Status, which clippy calls a large error.
 #[allow(clippy::result_large_err)]
 #[test]
-fn local_contract_idle_rollback_before_expiry_touch_retains_retry_lineage() {
-    // This pins existing local handler ordering, not a production observation.
-    // P10 must observe first-expired Rollback followed by retry before changing it.
+fn local_contract_idle_expired_lineage_can_retry_with_or_without_a_touch_first() {
+    // Pins the local handler ordering of an idle expiry, a Rollback and a retry; production recorded the retry accepted in both orders (P13b, REST).
     for touch_before_rollback in [false, true] {
         let start = 1_788_004_860;
         let clock = Arc::new(Mutex::new(VirtualClock::new(
@@ -129,22 +128,20 @@ fn local_contract_idle_rollback_before_expiry_touch_retains_retry_lineage() {
             }),
             ..Default::default()
         });
-        if touch_before_rollback {
-            let error = retry.expect_err("expired lineage cannot retry");
-            assert_eq!(error.code(), tonic::Code::InvalidArgument);
-            assert_eq!(error.message(), "Invalid retry transaction.");
-        } else {
-            let next = retry.expect("rollback precedes compaction and retains retry lineage");
-            assert!(!next.is_empty());
-            assert_ne!(next, transaction);
-            backend
-                .rollback(&pb::RollbackRequest {
-                    database: database.to_owned(),
-                    transaction: next,
-                    ..Default::default()
-                })
-                .expect("release local retry transaction");
-        }
+        // Production recorded two orders over REST (P13b, two recordings): no request at all and then the retry (RT-2), and a Rollback and then the retry
+        // (RT-3). The order here with `touch_before_rollback` (a read that noticed the expiry, then the Rollback, then the retry) is not recorded in production
+        // and this test runs over gRPC. The official emulator accepted it over gRPC (firebase-tools 15.28.2: read, Rollback, retry all answered as accepted
+        // or expired and the retry 0), and the gRPC retry of an idle-expired token is a candidate row of the next FS-TRANSACTION packet.
+        let next = retry.expect("an idle-expired lineage can retry");
+        assert!(!next.is_empty());
+        assert_ne!(next, transaction);
+        backend
+            .rollback(&pb::RollbackRequest {
+                database: database.to_owned(),
+                transaction: next,
+                ..Default::default()
+            })
+            .expect("release local retry transaction");
     }
 }
 

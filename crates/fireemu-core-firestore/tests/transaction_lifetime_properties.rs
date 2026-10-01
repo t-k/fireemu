@@ -210,6 +210,60 @@ proptest! {
         }
     }
 
+    /// A retry that names an idle-expired token is accepted while the token is remembered (P13b: 132 s of age) and mints a token of its own that a
+    /// request accepts; the named token still answers a Rollback before 270 s with 0 (P13b: the chain-end Rollback). Past the memory (300 s) the
+    /// named token is unknown and the retry is refused like one never issued.
+    #[test]
+    fn strict_a_retry_of_an_idle_expired_token_follows_the_remembered_window(
+        retry_at in 125i64..=265,
+        forgotten_at in 320i64..=900,
+    ) {
+        let (mut state, transaction) = seeded(LimitScope::Production);
+        let retry = state.retry_transaction(&transaction, t(retry_at));
+        prop_assert!(retry.is_ok(), "retry at {} s: {:?}", retry_at, retry);
+        let retry = retry.unwrap();
+        prop_assert_ne!(&retry, &transaction);
+        prop_assert_eq!(classify(state.touch_transaction(&retry, t(retry_at + 1))), Answer::Accepted);
+        prop_assert!(state.rollback_at(&transaction, t(retry_at + 2)).is_ok(), "the named idle-expired token still rolls back");
+        prop_assert!(state.rollback_at(&retry, t(retry_at + 3)).is_ok());
+        let (mut late, transaction) = seeded(LimitScope::Production);
+        let result = late.retry_transaction(&transaction, t(forgotten_at));
+        prop_assert!(
+            matches!(&result, Err(FirestoreError::InvalidArgument(message)) if message == "Invalid transaction."),
+            "retry at {} s: {:?}", forgotten_at, result
+        );
+    }
+
+    /// A retry that names a lifetime-expired token is accepted while the token is remembered (P13b: 280 to 283 s of age); the named token then answers a
+    /// Rollback with 10 and the expired text, as without the retry; far past the memory the retry is refused.
+    #[test]
+    fn strict_a_retry_of_a_lifetime_expired_token_follows_the_remembered_window(
+        gaps in prop::collection::vec(1i64..=24, 0..14),
+        retry_at in 272i64..=297,
+        forgotten_at in 320i64..=900,
+    ) {
+        let (mut state, transaction) = seeded(LimitScope::Production);
+        for age in keepalive_ages(&gaps, LIFETIME) {
+            prop_assert_eq!(classify(state.touch_transaction(&transaction, t(age))), Answer::Accepted, "keepalive at {}", age);
+        }
+        let mut twin = state.clone();
+        let retry = state.retry_transaction(&transaction, t(retry_at));
+        prop_assert!(retry.is_ok(), "retry at {} s: {:?}", retry_at, retry);
+        let retry = retry.unwrap();
+        prop_assert_eq!(classify(state.touch_transaction(&retry, t(retry_at + 1))), Answer::Accepted);
+        let rolled = state.rollback_at(&transaction, t(retry_at + 2));
+        prop_assert!(
+            matches!(&rolled, Err(FirestoreError::Aborted(message)) if message == GONE),
+            "the named token answers 10 at {} s: {:?}", retry_at + 2, rolled
+        );
+        prop_assert!(state.rollback_at(&retry, t(retry_at + 3)).is_ok());
+        let result = twin.retry_transaction(&transaction, t(forgotten_at));
+        prop_assert!(
+            matches!(&result, Err(FirestoreError::InvalidArgument(message)) if message == "Invalid transaction."),
+            "retry at {} s: {:?}", forgotten_at, result
+        );
+    }
+
     /// The emulator profile answers the order the official emulator was measured in (a read, a Commit, a Rollback after 270 s) as the official
     /// emulator does, at any ages inside its retention, and accepts every request of a live transaction.
     #[test]

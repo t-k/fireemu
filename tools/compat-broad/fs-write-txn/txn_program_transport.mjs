@@ -24,6 +24,10 @@ export const MAX_DEADLINE_MS = 30000;
 export const DEFAULT_DEADLINE_MS = 10000;
 const UNKNOWN_CODES = [1, 2, 4, 13, 14];
 // google.rpc.Code by the `status` name a REST error carries.
+// The HTTP status Google's front ends give each error status (https://cloud.google.com/apis/design/errors#handling_errors). A status name counts only with its own
+// HTTP status; the 4xx ones are definite refusals, the 499 and 5xx ones keep their codes and stay unknown outcomes.
+const CANONICAL_HTTP = { INVALID_ARGUMENT: 400, FAILED_PRECONDITION: 400, OUT_OF_RANGE: 400, UNAUTHENTICATED: 401, PERMISSION_DENIED: 403, NOT_FOUND: 404, ABORTED: 409, ALREADY_EXISTS: 409, RESOURCE_EXHAUSTED: 429,
+  CANCELLED: 499, UNKNOWN: 500, INTERNAL: 500, DATA_LOSS: 500, UNIMPLEMENTED: 501, UNAVAILABLE: 503, DEADLINE_EXCEEDED: 504 };
 const STATUS_CODES = { OK: 0, CANCELLED: 1, UNKNOWN: 2, INVALID_ARGUMENT: 3, DEADLINE_EXCEEDED: 4, NOT_FOUND: 5, ALREADY_EXISTS: 6, PERMISSION_DENIED: 7, RESOURCE_EXHAUSTED: 8, FAILED_PRECONDITION: 9, ABORTED: 10, OUT_OF_RANGE: 11, UNIMPLEMENTED: 12, INTERNAL: 13, UNAVAILABLE: 14, DATA_LOSS: 15, UNAUTHENTICATED: 16 };
 const LABEL = /^[a-z0-9][a-z0-9-]{0,47}$/;
 // The sandbox projects a production call may name: the shared one and the one FS-TRANSACTION owns alone.
@@ -223,8 +227,11 @@ async function runRest(spec, exchange) {
       return plain(body) ? receipt(spec, 0, '', body, answer.status) : receipt(spec, 2, 'REST success is not an object', null, answer.status);
     }
     const status = body?.error?.status;
-    // A non-2xx answer is never OK, whatever its status name says.
-    const code = typeof status === 'string' && Object.hasOwn(STATUS_CODES, status) && STATUS_CODES[status] !== 0 ? STATUS_CODES[status] : 2;
+    // A non-2xx answer is never OK, whatever its status name says, and a status name counts only with the HTTP status Google's front ends give it (every REST
+    // refusal recorded in P01 to P13b is 409 ABORTED, 400 INVALID_ARGUMENT or 404 NOT_FOUND). A 3xx, or a 5xx that names a definitive status such as ABORTED, is an
+    // unknown outcome: a proxy or a front end that wraps a status name never reads as a refusal.
+    const named = typeof status === 'string' && Object.hasOwn(CANONICAL_HTTP, status) && CANONICAL_HTTP[status] === answer.status;
+    const code = named ? STATUS_CODES[status] : 2;
     return receipt(spec, code, body?.error?.message ?? 'REST error without a status', null, answer.status);
   } catch (error) {
     return error?.deadline ? receipt(spec, 4, 'worker deadline exceeded', null) : receipt(spec, 14, 'REST exchange failed', null);

@@ -203,3 +203,13 @@ def test_local_batch_names_are_rebased_for_the_request_and_back_for_the_answer(r
     assert [entry.get('found', {}).get('name') or entry['missing'] for entry in result['response']['responses']] == logical
     assert result['localWireResponse']['responses'][0]['found']['name'] == local[0] and result['localWireResponse']['responses'][1]['missing'] == local[1]
     assert request['documents'] == logical, 'the caller request is not mutated'
+
+
+def test_a_dependency_root_of_another_checkout_names_the_root_the_packet_holds_and_this_checkout_expects(runtime):
+    import copy
+    import txn_program_wire as module
+    changed = copy.deepcopy(runtime)
+    key = sorted(changed['dependencies'])[0]
+    changed['dependencies'][key]['root'] = f"/elsewhere/conformance/node_modules/{key}"
+    with pytest.raises(ValueError, match=r"the packet names /elsewhere/conformance/node_modules/.*this checkout's is .*conformance/node_modules/"):
+        module._verify_runtime_full(changed)

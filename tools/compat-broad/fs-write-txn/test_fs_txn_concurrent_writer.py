@@ -317,3 +317,38 @@ def test_the_projection_refuses_a_writer_row_moved_into_the_cleanup_rows():
     moved["steps"][position], moved["cleanupSteps"][0] = moved["cleanupSteps"][0], moved["steps"][position]
     with pytest.raises(ValueError):
         projection(moved, TABLE)
+
+
+def test_the_projection_orders_the_next_request_after_the_later_of_the_anchors_and_the_writers_answer():
+    # The next request follows the later of the two answers (the collector joins the writer first). The replay holds the same rule: a request that
+    # starts after the anchor's answer but before the writer's is refused, even when the rest of the row agrees with its copy.
+    receipt = recorded()
+    rows = {row["site"]: row for row in receipt["steps"]}
+    anchor, writer = rows["rest/c/commit"]["timing"], rows["rest/c/writer-a"]["timing"]
+    assert writer["responseMonotonic"] > anchor["responseMonotonic"], "the held writer answers after its anchor"
+
+    def starts_between(row):
+        row["timing"] = {**row["timing"], "dispatchMonotonic": (anchor["responseMonotonic"] + writer["responseMonotonic"]) / 2, "dispatchUtc": anchor["responseUtc"]}
+
+    projection(receipt, TABLE)
+    with pytest.raises(ValueError, match="overlap or ran out of order"):
+        projection(tamper_consistently(receipt, "rest/c/read-after-pair", starts_between), TABLE)
+
+
+def test_the_projection_keeps_the_anchors_answer_when_the_writer_answered_first():
+    # A writer that is refused at once answers before its anchor does. The next request still follows the anchor's later answer, so the replay holds
+    # the later of the two, not the writer's (the opposite of the test above).
+    receipt = recorded()
+    rows = {row["site"]: row for row in receipt["steps"]}
+    anchor = rows["rest/c/commit"]["timing"]
+
+    def answers_first(row):
+        row["timing"] = {**row["timing"], "responseMonotonic": anchor["dispatchMonotonic"], "responseUtc": anchor["dispatchUtc"]}
+
+    def starts_before_the_anchor_answered(row):
+        row["timing"] = {**row["timing"], "dispatchMonotonic": (anchor["dispatchMonotonic"] + anchor["responseMonotonic"]) / 2, "dispatchUtc": anchor["responseUtc"]}
+
+    early = tamper_consistently(receipt, "rest/c/writer-a", answers_first)
+    projection(early, TABLE)   # a writer that answers first is a valid recording
+    with pytest.raises(ValueError, match="overlap or ran out of order"):
+        projection(tamper_consistently(early, "rest/c/read-after-pair", starts_before_the_anchor_answered), TABLE)

@@ -11,14 +11,15 @@ from pathlib import Path
 
 WRAPPER = Path(__file__).with_name("nextest-private-tmpdir.sh")
 # CI runs the wrapper with dash as /bin/sh; run it the same way here, not with the login shell.
-SHELL = "/bin/sh"
+# WRAPPER_TEST_SHELL=/bin/dash checks dash on a machine whose /bin/sh is bash.
+SHELL = os.environ.get("WRAPPER_TEST_SHELL", "/bin/sh")
 
 
 class WrapperTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.parent = Path(self.tmp.name)
-        self.root = self.parent / "fireemu-test-tmp"
+        self.root = self.parent / f"fireemu-test-tmp-{os.getuid()}"
 
     def tearDown(self):
         self.tmp.cleanup()
@@ -41,7 +42,8 @@ class WrapperTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         seen = Path(result.stdout)
         self.assertEqual(seen.parent, self.root)
-        self.assertRegex(seen.name, r"^[0-9]+\.[A-Za-z0-9]{6}$")
+        self.assertRegex(seen.name, r"^run-[0-9]+\.[A-Za-z0-9]{6}$")
+        self.assertEqual(self.root.stat().st_mode & 0o777, 0o700, "the root is private")
         self.assertTrue(result.stdout.endswith("/"))
         self.assertEqual(self.private_dirs(), [], "the private directory is removed")
 
@@ -86,29 +88,35 @@ class WrapperTest(unittest.TestCase):
             timeout=30,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertTrue(result.stdout.startswith("/tmp/fireemu-test-tmp/"), result.stdout)
+        self.assertTrue(result.stdout.startswith(f"/tmp/fireemu-test-tmp-{os.getuid()}/run-"), result.stdout)
 
     def test_a_dead_wrappers_directory_is_reclaimed_and_a_live_ones_is_kept(self):
-        self.root.mkdir()
+        self.root.mkdir(mode=0o700)
         dead = subprocess.Popen(["true"])
         dead.wait()
-        stale = self.root / f"{dead.pid}.AAAAAA"
+        stale = self.root / f"run-{dead.pid}.AAAAAA"
         (stale / "inner").mkdir(parents=True)
-        live = self.root / f"{os.getpid()}.BBBBBB"
+        live = self.root / f"run-{os.getpid()}.BBBBBB"
         live.mkdir()
+        unprefixed = self.root / f"{dead.pid}.DDDDDD"
+        unprefixed.mkdir()
+        long_suffix = self.root / f"run-{dead.pid}.keepme1"
+        long_suffix.mkdir()
         foreign = self.root / "not-a-wrapper-dir"
         foreign.mkdir()
         bare_pid = self.root / str(dead.pid)
         bare_pid.mkdir()
         outside = self.parent / "outside"
         (outside / "kept").mkdir(parents=True)
-        link = self.root / f"{dead.pid}.CCCCCC"
+        link = self.root / f"run-{dead.pid}.CCCCCC"
         link.symlink_to(outside)
         self.assertEqual(self.run_wrapped("exit 0").returncode, 0)
         self.assertFalse(stale.exists(), "the killed wrapper's directory is removed")
         self.assertTrue(live.exists(), "a running wrapper's directory is kept")
         self.assertTrue(foreign.exists(), "a name the wrapper did not make is left alone")
         self.assertTrue(bare_pid.exists(), "a bare number is not a name the wrapper makes")
+        self.assertTrue(unprefixed.exists(), "nor is a pid without the run- prefix")
+        self.assertTrue(long_suffix.exists(), "nor a suffix mktemp does not make")
         self.assertTrue(link.is_symlink(), "a symbolic link is left alone")
         self.assertTrue((outside / "kept").is_dir(), "and so is what it points to")
 
@@ -127,7 +135,7 @@ class WrapperTest(unittest.TestCase):
         self.assertTrue(self.private_dirs(), "the test started")
         os.killpg(process.pid, signal.SIGTERM)
         process.wait(timeout=10)
-        self.assertNotEqual(process.returncode, 0)
+        self.assertEqual(process.returncode, -signal.SIGTERM, "the signal is re-raised after cleanup")
         self.assertEqual(self.private_dirs(), [])
 
     def test_a_test_that_exits_0_after_a_terminating_signal_still_reports_the_signal(self):
@@ -144,8 +152,71 @@ class WrapperTest(unittest.TestCase):
             time.sleep(0.05)
         os.killpg(process.pid, signal.SIGTERM)
         process.wait(timeout=10)
-        self.assertEqual(process.returncode, 143)
+        self.assertEqual(process.returncode, -signal.SIGTERM)
         self.assertEqual([d for d in self.private_dirs() if d.name != "started"], [])
+
+    def test_a_test_killed_by_a_signal_is_reported_killed_by_that_signal(self):
+        for number in (signal.SIGABRT, signal.SIGSEGV):
+            result = self.run_wrapped(f'mkdir "$TMPDIR/left"; kill -{int(number)} $$')
+            self.assertEqual(result.returncode, -number, result.stderr)
+            self.assertEqual(self.private_dirs(), [])
+
+    def test_a_leftover_in_an_unreadable_tmpdir_is_still_found(self):
+        result = self.run_wrapped(': > "$TMPDIR/hidden-file"; chmod 000 "$TMPDIR"')
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("hidden-file", result.stderr)
+        self.assertEqual(self.private_dirs(), [])
+
+    def refused(self, result):
+        self.assertEqual(result.returncode, 70, result.stderr)
+        self.assertIn("refusing", result.stderr)
+
+    def victim(self):
+        victim = self.parent / "victim"
+        dead = subprocess.Popen(["true"])
+        dead.wait()
+        for name in (f"run-{dead.pid}.AAAAAA", f"{dead.pid}.keepme"):
+            (victim / name / "data").mkdir(parents=True)
+        return victim
+
+    def assert_untouched(self, victim):
+        for entry in victim.iterdir():
+            self.assertTrue((entry / "data").is_dir(), entry)
+
+    def test_a_symlinked_root_is_refused_and_nothing_behind_it_is_deleted(self):
+        victim = self.victim()
+        victim.chmod(0o700)
+        self.root.symlink_to(victim)
+        self.refused(self.run_wrapped("exit 0"))
+        self.assertEqual(len(list(victim.iterdir())), 2)
+        self.assert_untouched(victim)
+
+    def test_a_root_others_can_write_is_refused(self):
+        for mode in (0o777, 0o770, 0o755):
+            with self.subTest(mode=oct(mode)):
+                victim = self.victim()
+                victim.chmod(mode)
+                result = self.run_wrapped("exit 0", env={"FIREEMU_TEST_TMP_ROOT": str(victim)})
+                self.refused(result)
+                self.assertEqual(len(list(victim.iterdir())), 2)
+                self.assert_untouched(victim)
+                for entry in victim.iterdir():
+                    subprocess.run(["rm", "-rf", str(entry)], check=True)
+                victim.rmdir()
+
+    def test_an_inherited_root_that_is_a_symlink_is_refused(self):
+        victim = self.victim()
+        victim.chmod(0o700)
+        link = self.parent / "link-root"
+        link.symlink_to(victim)
+        self.refused(self.run_wrapped("exit 0", env={"FIREEMU_TEST_TMP_ROOT": str(link)}))
+        self.assertEqual(len(list(victim.iterdir())), 2)
+
+    def test_a_root_that_is_a_file_is_refused(self):
+        self.root.write_text("not a directory")
+        result = self.run_wrapped("exit 0")
+        self.assertEqual(result.returncode, 70)
+        self.assertEqual(self.root.read_text(), "not a directory")
 
 
 if __name__ == "__main__":

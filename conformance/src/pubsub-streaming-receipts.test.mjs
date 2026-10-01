@@ -60,6 +60,52 @@ async function settleOrFallback(work) {
     clearTimeout(fallback);
   }
 }
+// The two child-process screening tests come first: a screening loop that never returns would
+// freeze any later in-process test, and the second child test gives the runner a turn to report
+// the first one before that can happen.
+test("screening a long binary value of padding stays linear in its length", async () => {
+  // Runs in a child process: a quadratic padding trim takes tens of seconds on this value, and a
+  // busy loop cannot be interrupted in-process.
+  const script = `const [target] = process.argv.slice(1);
+    const { createStreamingReceiptQueue } = await import(target);
+    const q = createStreamingReceiptQueue({
+      maxFrameBytes: 64, maxTotalBytes: 512, maxFrames: 8, maxChunks: 16, maxHeaderBytes: 300000,
+      maxHeaderEvents: 4, maxHeaderPairs: 16, maxEvents: 24, wallMs: 60000,
+      credential: "SYNTHETIC-SECRET",
+      persist: async () => {}, onFrame: async () => {}, stopOwned: async () => {},
+    });
+    const accepted = q.headers("trailers", ["details-bin", "=".repeat(262144) + "x"], 0);
+    const result = await q.done();
+    process.stdout.write(JSON.stringify({ accepted, reason: result.reason }));`;
+  let outcome;
+  try {
+    const { stdout } = await promisify(execFile)(
+      process.execPath,
+      ["--input-type=module", "--eval", script, target.href],
+      { timeout: 8000, killSignal: "SIGKILL" },
+    );
+    outcome = JSON.parse(stdout);
+  } catch (error) {
+    outcome = error.killed ? "screening did not return" : `screening failed: ${error.stderr}`;
+  }
+  assert.deepEqual(outcome, { accepted: false, reason: "invalid-headers" });
+});
+test("credential screening visits each metadata pair once, decodes only binary values and refuses reflection", async () => {
+  const credential = "SYNTHETIC-SECRET";
+  const encoded = Buffer.from(credential).toString("base64");
+  const accepted = { accepted: true, reason: null, saved: 1 };
+  const refused = { accepted: false, reason: "credential-reflection", saved: 0 };
+  assert.deepEqual(
+    await screenInChild(credential, [
+      [":status", "200"],
+      ["details", encoded],
+      ["other-bin", Buffer.from("harmless").toString("base64")],
+      [":status", "200", "details-bin", encoded],
+      ["details", credential],
+    ]),
+    [accepted, accepted, accepted, refused, refused],
+  );
+});
 test("a persist that never settles just short of the deadline is bounded by the drain's own waits before a fallback timer", async () => {
   let now = 5000;
   const clock = mock.method(performance, "now", () => now);
@@ -724,22 +770,6 @@ async function screenInChild(credential, cases) {
     return error.killed ? "screening did not return" : `screening failed: ${error.stderr}`;
   }
 }
-test("credential screening visits each metadata pair once, decodes only binary values and refuses reflection", async () => {
-  const credential = "SYNTHETIC-SECRET";
-  const encoded = Buffer.from(credential).toString("base64");
-  const accepted = { accepted: true, reason: null, saved: 1 };
-  const refused = { accepted: false, reason: "credential-reflection", saved: 0 };
-  assert.deepEqual(
-    await screenInChild(credential, [
-      [":status", "200"],
-      ["details", encoded],
-      ["other-bin", Buffer.from("harmless").toString("base64")],
-      [":status", "200", "details-bin", encoded],
-      ["details", credential],
-    ]),
-    [accepted, accepted, accepted, refused, refused],
-  );
-});
 test("an owned stop that never acknowledges stays named among pending callbacks", async () => {
   const { q } = await queue({ wallMs: 30, stopOwned: () => new Promise(() => {}) });
   q.lifecycle("end");
@@ -835,6 +865,7 @@ test("a binary metadata value that is not canonical base64 is refused, so decodi
     `AA==${encoded}`,
     `${encoded}!`,
     Buffer.from("~~~~").toString("base64url"),
+    "-AAA",
     "AA=A",
   ]) {
     const { q, saved } = await queue({ credential });
@@ -848,36 +879,10 @@ test("a binary metadata value that is not canonical base64 is refused, so decodi
   const harmless = Buffer.from("harmless").toString("base64");
   assert.equal(q.headers("trailers", ["details-bin", harmless], 0), true);
   assert.equal(q.headers("trailers", ["details-bin", harmless.replace(/=+$/, "")], 0), true);
-  assert.equal(q.headers("trailers", ["details-bin", `${harmless}, AAAA`], 0), true);
+  // A value of padding alone decodes to nothing and cannot hide bytes.
+  assert.equal(q.headers("trailers", ["details-bin", `${harmless}, AAAA, ==`], 0), true);
   assert.equal(q.headers("trailers", ["details-bin", ""], 0), true);
   const result = await q.done();
   assert.equal(result.reason, undefined);
   assert.equal(saved.length, 4);
-});
-test("screening a long binary value of padding stays linear in its length", async () => {
-  // Runs in a child process: a quadratic padding trim takes tens of seconds on this value, and a
-  // busy loop cannot be interrupted in-process.
-  const script = `const [target] = process.argv.slice(1);
-    const { createStreamingReceiptQueue } = await import(target);
-    const q = createStreamingReceiptQueue({
-      maxFrameBytes: 64, maxTotalBytes: 512, maxFrames: 8, maxChunks: 16, maxHeaderBytes: 300000,
-      maxHeaderEvents: 4, maxHeaderPairs: 16, maxEvents: 24, wallMs: 60000,
-      credential: "SYNTHETIC-SECRET",
-      persist: async () => {}, onFrame: async () => {}, stopOwned: async () => {},
-    });
-    const accepted = q.headers("trailers", ["details-bin", "=".repeat(262144) + "x"], 0);
-    const result = await q.done();
-    process.stdout.write(JSON.stringify({ accepted, reason: result.reason }));`;
-  let outcome;
-  try {
-    const { stdout } = await promisify(execFile)(
-      process.execPath,
-      ["--input-type=module", "--eval", script, target.href],
-      { timeout: 8000, killSignal: "SIGKILL" },
-    );
-    outcome = JSON.parse(stdout);
-  } catch (error) {
-    outcome = error.killed ? "screening did not return" : `screening failed: ${error.stderr}`;
-  }
-  assert.deepEqual(outcome, { accepted: false, reason: "invalid-headers" });
 });

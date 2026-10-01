@@ -40,3 +40,4 @@ workspace = true
 
 [dev-dependencies]
 fireemu-core-rules = { path = "../fireemu-core-rules" }
+proptest.workspace = true

@@ -185,7 +185,10 @@ export async function collectCalendar({
   };
   const take = (id) => capture(requests.get(id));
   // Closure proofs are judged on the persisted raw bytes against the recorded layouts of
-  // calendar-5a73ba99b7014cfd: job absence 97 B (seq 30), topic absence 152 B, empty lists 3 B.
+  // calendar-5a73ba99b7014cfd: job absence 97 B (seq 30), topic absence 152 B (seq 21, before the
+  // topic CREATE), empty lists 3 B (seq 15, 18, 156). The post-DELETE topic absence (152 B
+  // `read-topic-after`) and the empty topic list (3 B) were recorded in the recovery runs
+  // calendar-recovery-96f34e030642e9ca and calendar-recovery-894572e2d854a511.
   // A re-serialized body is an unrecorded shape and proves nothing.
   const recordedBytes = (id, answer) => {
     const row = persisted.get(id);

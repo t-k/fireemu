@@ -12,7 +12,8 @@ const projectNumber = "123456789012";
 const instant = Date.parse("2026-09-30T09:00:00Z");
 
 // The recorded layout of calendar-5a73ba99b7014cfd bodies: pretty JSON with a trailing newline
-// (job absence 97 B, topic absence 152 B, empty lists 3 B).
+// (job absence 97 B, topic absence 152 B, empty lists 3 B). The post-DELETE topic absence and
+// empty topic list are from the recovery runs calendar-recovery-96f34e030642e9ca and -894572e2d854a511.
 const recorded = (json) => JSON.stringify(json, null, 2) + "\n";
 
 function environment() {

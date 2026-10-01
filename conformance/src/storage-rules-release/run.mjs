@@ -1,12 +1,13 @@
 import { createHash } from "node:crypto";
 import { STOP_CODES, stopCodeOf, tagged } from "../storage-rules/stop-codes.mjs";
-import { BUCKETLESS_RELEASE_NAME, classifyRelease, classifyRuleset, isEmptyOk, makeSaved, parseSaved } from "./release.mjs";
+import { BUCKETLESS_RELEASE_NAME, classifyRelease, classifyRuleset, isEmptyOk, makeSaved, matchesBaselineRelease, matchesBaselineRuleset, parseSaved } from "./release.mjs";
 import { IDS } from "./plan.mjs";
 
 // The two release runs, through the dispatch gate (each request admitted, journalled before it is sent and counted).
 //
-// `pre`: the owner's token and identity, then three reads that must all say what the packet says: the bucket release points at the
-// expected ruleset, the bucketless release is absent, the ruleset exists. The release is saved (durably, before anything is deleted),
+// `pre`: the owner's token and identity, then three reads that must all say what the packet says: the bucket release is the baseline
+// release (its times and the digest of its body, and it points at the expected ruleset), the ruleset is the baseline ruleset (its
+// creation time and the digest of its source), the bucketless release is absent. The release is saved (durably, before anything is deleted),
 // deleted, and both releases are read back as absent. If the deletion's result is wrong or unknown, the recovery reads the bucket release:
 // unchanged means nothing to undo, absent means it is published again from the saved record and read back, anything else is left alone.
 //
@@ -67,8 +68,11 @@ async function afterAttempt({ error, gate, recover }) {
 export async function runReleasePre({ gate, cache, targets, local, capture, runId, saveSaved }) {
   const ids = IDS.pre;
   await gate.start({ runId });
+  // The release and the ruleset must be the baseline the approval pinned, to the time and the digest, before anything is saved or deleted:
+  // a release that changed since the baseline was read is someone else's state, and the run stops with nothing written.
   const found = await preflight({ gate, cache, targets, local, capture, ids, rulesetName: local.expectedRulesetName,
-    judgeRuleset: () => true, judgeBucket: (read) => read.state === "present" && read.release.rulesetName === local.expectedRulesetName });
+    judgeRuleset: (ruleset) => matchesBaselineRuleset(ruleset, local.baseline),
+    judgeBucket: (read) => read.state === "present" && matchesBaselineRelease(read.release, local.baseline, local.expectedRulesetName) });
   await releaseFacts(ids.bucket, capture, "rules-release-read", "present", found.bucket.release);
   await releaseFacts(ids.bucketless, capture, "rules-release-read", "absent", null);
   const saved = makeSaved({ bucket: local.bucket, release: found.bucket.release, ruleset: found.ruleset });

@@ -25,3 +25,11 @@ fake `https.request` only.
 
 The lock is taken for a run and released at its clean end; the time between `pre` and `post` is held by the owner ledger (no lane records on the
 query project between them except the STORAGE-RULES chain), not by a lock. A lost attempt keeps the lock even when the recovery proves the state.
+
+## Reclaim use by STORAGE-OBJECT (branch `work/storage-object-reclaim`)
+
+The same `pre` run is the release reclaim of the STORAGE-OBJECT lane (owner ledger 535, decision "STORAGE-OBJECT release reclaim end state"): after the production recordings, the bucket release is read, saved and deleted, and both releases are read back as absent; the ruleset it points at is never deleted, and the recovery publishes the saved release again. Three things differ from the stage 2c use:
+
+- The approval is for `taskId` `STORAGE-OBJECT` and a packet name that starts with `reclaim-pre-` (or `reclaim-post-`); the ledger subject is `STORAGE-OBJECT reclaim-pre-<version>`. Run directories and the usage ledger are `storage-object-reclaim-*`.
+- `pre` confirms the baseline before it saves or deletes anything: the release's `createTime`, `updateTime` and the digest of its whole body, and the ruleset's `createTime` and the digest of its source, must equal the `expectedBaseline` record of the local inputs file. The baseline is part of the corpus the approval pins (`manifestSha256`), so a local file with another baseline is refused as a pin mismatch, and a production state that differs from it ends the run at its preflight with nothing written (the project lock stays until the journal has been read, like every other preflight stop).
+- `post` has no baseline and is unchanged.

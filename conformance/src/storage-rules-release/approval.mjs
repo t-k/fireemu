@@ -3,7 +3,7 @@ import { DELEGATION_SUBJECTS, scanRevocations } from "../storage-rules/ledger-re
 // The approval for a stage 2c release run: the same ledger rules as the stage 3 approval (an owner decision or a
 // delegated envelope followed by a matching version line, with every revocation spelling stopping it), but for one
 // recording on the query project alone with a US$0.5 reserve: at most 11 requests for `pre` and 8 for `post`, and a packet name that
-// names its mode (`stage2c-pre-…` or `stage2c-post-…`), so an approval of one run cannot authorize the other. The check is copied rather
+// names its mode (`reclaim-pre-…` or `reclaim-post-…`), so an approval of one run cannot authorize the other. The check is copied rather
 // than shared so the stage 3 approval module, which is reviewed and pinned, stays untouched.
 const PINS = ["packetSha256", "sourceCommit", "runnerSha256", "manifestSha256", "fixtureSchemaSha256"];
 const COORDINATOR = "Claude（委任。枠の内の承認し直し）";
@@ -81,7 +81,7 @@ export function validateReleaseApproval(options) {
   if (typeof ledgerText !== "string" || ledgerText.includes("\0")) throw new Error("invalid approval options data");
   closedRecord(packet, ["taskId", "packetName", ...PINS, "projects", "maxRequests", "reserveUsd"], "packet");
   if (
-    packet.taskId !== "STORAGE-RULES" || typeof packet.packetName !== "string" || !/^[a-z0-9][a-z0-9.-]{0,63}$/.test(packet.packetName) || !packet.packetName.startsWith(`stage2c-${mode}-`) ||
+    packet.taskId !== "STORAGE-OBJECT" || typeof packet.packetName !== "string" || !/^[a-z0-9][a-z0-9.-]{0,63}$/.test(packet.packetName) || !packet.packetName.startsWith(`reclaim-${mode}-`) ||
     PINS.some((key) => typeof packet[key] !== "string" || !(key === "sourceCommit" ? /^[a-f0-9]{40}$/ : /^[a-f0-9]{64}$/).test(packet[key]))
   ) throw new Error("invalid packet data");
   dataArray(packet.projects, "packet project");

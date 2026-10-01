@@ -110,7 +110,12 @@ export function fakeRequestImpl(answer, log) {
   };
 }
 
-export const preLocal = (adcPath) => ({ schemaVersion: 1, adcPath, ownerEmailSha256: ownerDigest, bucket: BUCKET, expectedRulesetName: RULESET });
+// The baseline the `pre` run confirms before it writes: the release and the ruleset of the fake world, as a recorded read leaves them.
+export const BASELINE = Object.freeze({
+  release: Object.freeze({ createTime: "2026-09-25T10:30:00.123456Z", updateTime: "2026-09-25T10:30:01.654321Z", bodySha256: canonicalDigest({ name: RELEASE_NAME, rulesetName: RULESET, createTime: "2026-09-25T10:30:00.123456Z", updateTime: "2026-09-25T10:30:01.654321Z" }) }),
+  ruleset: Object.freeze({ createTime: "2026-09-25T10:29:00.111111Z", sourceSha256: SOURCE_SHA }),
+});
+export const preLocal = (adcPath, baseline = BASELINE) => ({ schemaVersion: 1, adcPath, ownerEmailSha256: ownerDigest, bucket: BUCKET, expectedRulesetName: RULESET, expectedBaseline: baseline });
 export const postLocal = (adcPath, savedPath) => ({ schemaVersion: 1, adcPath, ownerEmailSha256: ownerDigest, savedPath });
 export const cleanup = (path) => rmSync(path, { recursive: true, force: true });
 export { ADC, OWNER_TOKEN };

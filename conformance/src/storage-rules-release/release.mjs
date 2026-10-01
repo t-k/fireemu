@@ -75,5 +75,29 @@ export function parseSaved(value) {
   return Object.freeze(Object.fromEntries(SAVED_KEYS.map((key) => [key, value[key]])));
 }
 
+const BASELINE_KEYS = ["release", "ruleset"];
+const BASELINE_RELEASE_KEYS = ["createTime", "updateTime", "bodySha256"];
+const BASELINE_RULESET_KEYS = ["createTime", "sourceSha256"];
+const exactKeys = (value, keys) => isObject(value) && Object.getPrototypeOf(value) === Object.prototype && Reflect.ownKeys(value).length === keys.length && keys.every((key) => Object.hasOwn(value, key));
+
+/**
+ * The baseline a reclaim run confirms before it writes anything: the release and the ruleset exactly as a recorded read left them (the
+ * times the service gave, and the digests this module computes). The operator pins it through the corpus digest of the approval.
+ */
+export function parseBaseline(value) {
+  if (!exactKeys(value, BASELINE_KEYS) || !exactKeys(value.release, BASELINE_RELEASE_KEYS) || !exactKeys(value.ruleset, BASELINE_RULESET_KEYS)) refuse("invalid baseline");
+  const { release, ruleset } = value;
+  if (!isTimestamp(release.createTime) || !isTimestamp(release.updateTime) || !HEX64.test(release.bodySha256) || !isTimestamp(ruleset.createTime) || !HEX64.test(ruleset.sourceSha256)) refuse("invalid baseline");
+  return Object.freeze({
+    release: Object.freeze({ createTime: release.createTime, updateTime: release.updateTime, bodySha256: release.bodySha256 }),
+    ruleset: Object.freeze({ createTime: ruleset.createTime, sourceSha256: ruleset.sourceSha256 }),
+  });
+}
+
+/** Whether a release read is the baseline's release (and points at the expected ruleset): the times and the digest of the whole body. */
+export const matchesBaselineRelease = (release, baseline, rulesetName) => release.rulesetName === rulesetName && release.createTime === baseline.release.createTime && release.updateTime === baseline.release.updateTime && release.bodySha256 === baseline.release.bodySha256;
+/** Whether a ruleset read is the baseline's ruleset: its creation time and the digest of its source. */
+export const matchesBaselineRuleset = (ruleset, baseline) => ruleset.createTime === baseline.ruleset.createTime && ruleset.sourceSha256 === baseline.ruleset.sourceSha256;
+
 /** The digest the second run's approval pins for the saved record. */
 export const savedSha256 = (saved) => canonicalDigest(parseSaved(saved));

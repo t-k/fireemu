@@ -16,7 +16,7 @@ import { createReservationJournal } from "../storage-rules/reservation-journal.m
 import { createReleaseAdmission } from "./admission.mjs";
 import { ALL_IDS, MODES, PREFLIGHT_IDS, releaseCorpus } from "./plan.mjs";
 import { releaseCodeDigests } from "./pins.mjs";
-import { isBucket, isRulesetName, PROJECT_ID, parseSaved, savedSha256 } from "./release.mjs";
+import { isBucket, isRulesetName, parseBaseline, PROJECT_ID, parseSaved, savedSha256 } from "./release.mjs";
 import { runReleasePost, runReleasePre } from "./run.mjs";
 import { createReleaseTargets } from "./targets.mjs";
 import { createReleaseHttpsTransport } from "./transport.mjs";
@@ -40,7 +40,7 @@ const refuse = (message) => { throw new Error(message); };
 /** The paths of a stage 2c run: the stage 3 paths, a usage ledger and run directory of its own. */
 export function releasePaths(root) {
   const base = pinnedPaths(root);
-  return Object.freeze({ ...base, usagePath: join(base.runsDir, "storage-rules-release-usage.jsonl"), runDirectory: (runId) => join(base.runsDir, `storage-rules-release-${runId}`) });
+  return Object.freeze({ ...base, usagePath: join(base.runsDir, "storage-object-reclaim-usage.jsonl"), runDirectory: (runId) => join(base.runsDir, `storage-object-reclaim-${runId}`) });
 }
 
 async function readOwnerLedger(path) {
@@ -64,20 +64,21 @@ async function readPrivateJson(path, limit) {
 
 /**
  * The operator's own values: a private, closed JSON file of this user. `pre`: the ADC path, the digest of the owner's address, the bucket
- * and the ruleset the bucket release must point at. `post`: the ADC path, the digest of the owner's address and the path of the saved record
+ * and the ruleset the bucket release must point at, and the baseline (times and digests) of that release and ruleset, which the run
+ * confirms before it writes. `post`: the ADC path, the digest of the owner's address and the path of the saved record
  * a `pre` run wrote.
  */
 export async function readLocalInputs(path, mode) {
   try {
     if (!MODES.includes(mode)) throw new Error();
     const value = await readPrivateJson(path, MAX_LOCAL_BYTES);
-    const keys = mode === "pre" ? ["schemaVersion", "adcPath", "ownerEmailSha256", "bucket", "expectedRulesetName"] : ["schemaVersion", "adcPath", "ownerEmailSha256", "savedPath"];
+    const keys = mode === "pre" ? ["schemaVersion", "adcPath", "ownerEmailSha256", "bucket", "expectedRulesetName", "expectedBaseline"] : ["schemaVersion", "adcPath", "ownerEmailSha256", "savedPath"];
     if (!closed(value, keys) || value.schemaVersion !== 1) throw new Error();
     const ok = (text, pattern) => typeof text === "string" && pattern.test(text);
     if (!ok(value.adcPath, /^\/[^\0\r\n]{1,1023}$/) || !ok(value.ownerEmailSha256, HEX64)) throw new Error();
     if (mode === "pre") {
       if (!isBucket(value.bucket) || !isRulesetName(value.expectedRulesetName)) throw new Error();
-      return Object.freeze({ mode, adcPath: value.adcPath, ownerEmailSha256: value.ownerEmailSha256, bucket: value.bucket, expectedRulesetName: value.expectedRulesetName });
+      return Object.freeze({ mode, adcPath: value.adcPath, ownerEmailSha256: value.ownerEmailSha256, bucket: value.bucket, expectedRulesetName: value.expectedRulesetName, baseline: parseBaseline(value.expectedBaseline) });
     }
     if (!ok(value.savedPath, /^\/[^\0\r\n]{1,1023}$/)) throw new Error();
     const saved = parseSaved(await readPrivateJson(value.savedPath, 16 * 1024));
@@ -88,7 +89,7 @@ export async function readLocalInputs(path, mode) {
 /** The corpus of a run, from its local inputs. */
 export function corpusOf(local) {
   return local.mode === "pre"
-    ? releaseCorpus({ mode: "pre", bucket: local.bucket, rulesetName: local.expectedRulesetName, ownerEmailSha256: local.ownerEmailSha256 })
+    ? releaseCorpus({ mode: "pre", bucket: local.bucket, rulesetName: local.expectedRulesetName, ownerEmailSha256: local.ownerEmailSha256, baseline: local.baseline })
     : releaseCorpus({ mode: "post", bucket: local.bucket, rulesetName: local.saved.rulesetName, ownerEmailSha256: local.ownerEmailSha256, savedSha256: local.savedSha256 });
 }
 

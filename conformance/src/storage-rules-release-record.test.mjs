@@ -10,10 +10,10 @@ import { runReleasePrintPins } from "./storage-rules-release/print-pins.mjs";
 import { corpusOf, readLocalInputs } from "./storage-rules-release/release-entry.mjs";
 import { releaseCodeDigests } from "./storage-rules-release/pins.mjs";
 import { canonicalDigest, makeSaved } from "./storage-rules-release/release.mjs";
-import { BUCKET, SOURCE_SHA, ownerDigest, postLocal, preLocal, releaseBody, scratchCode } from "./storage-rules-release-support.mjs";
+import { BASELINE, BUCKET, SOURCE_SHA, ownerDigest, postLocal, preLocal, releaseBody, scratchCode } from "./storage-rules-release-support.mjs";
 
 const commit = "a".repeat(40);
-const approval = { packet: { taskId: "STORAGE-RULES", sourceCommit: commit, packetName: "stage2c-pre-v9" }, review: { verdict: "APPROVE" } };
+const approval = { packet: { taskId: "STORAGE-OBJECT", sourceCommit: commit, packetName: "reclaim-pre-v9" }, review: { verdict: "APPROVE" } };
 
 async function scratch(t, { text = JSON.stringify(approval), mode = 0o600 } = {}) {
   const root = await mkdtemp("/private/tmp/storage-rules-release-record-");
@@ -143,7 +143,7 @@ test("the approval file must be a small, single-link, valid UTF-8 file", async (
   linkSync(path, link);
   const big = await scratch(t, { text: JSON.stringify({ ...approval, pad: "x".repeat(64 * 1024) }) });
   const bytes = await scratch(t, { text: "" });
-  await writeFile(bytes.path, Buffer.concat([Buffer.from(JSON.stringify({ packet: { ...approval.packet, packetName: "stage2c-pre-v9" }, review: { note: "" } }).replace('"note":""', '"note":"')), Buffer.from([0xff]), Buffer.from('"}}')]), { mode: 0o600 });
+  await writeFile(bytes.path, Buffer.concat([Buffer.from(JSON.stringify({ packet: { ...approval.packet, packetName: "reclaim-pre-v9" }, review: { note: "" } }).replace('"note":""', '"note":"')), Buffer.from([0xff]), Buffer.from('"}}')]), { mode: 0o600 });
   for (const file of [link, big.path, bytes.path]) {
     const h = harness(async () => ({}));
     const result = await h.run(["pre", "/x/l.json", file, "ok-run"]);
@@ -167,6 +167,15 @@ test("the local inputs reader knows only the two modes, and each mode reads only
   await writeFile(postPath, JSON.stringify(postLocal("/x/adc.json", savedPath)), { mode: 0o600 });
   assert.equal((await readLocalInputs(prePath, "pre")).mode, "pre");
   assert.equal((await readLocalInputs(postPath, "post")).mode, "post");
+  // `pre` reads its baseline too, as a closed record: no baseline, an extra key or a malformed value refuses the file.
+  const baselineVariants = { "no baseline": (value) => { delete value.expectedBaseline; return value; }, "an extra key": (value) => ({ ...value, expectedBaseline: { ...value.expectedBaseline, extra: 1 } }), "a bad time": (value) => ({ ...value, expectedBaseline: { ...value.expectedBaseline, release: { ...value.expectedBaseline.release, createTime: "x" } } }), "a bad digest": (value) => ({ ...value, expectedBaseline: { ...value.expectedBaseline, ruleset: { ...value.expectedBaseline.ruleset, sourceSha256: "abc" } } }), "a baseline in the post file": (value) => ({ ...value, expectedBaseline: BASELINE }) };
+  for (const [name, change] of Object.entries(baselineVariants)) {
+    const path = join(dir, `variant-${name.replaceAll(" ", "-")}.json`);
+    const post = name === "a baseline in the post file";
+    await writeFile(path, JSON.stringify(post ? change(postLocal("/x/adc.json", savedPath)) : change(preLocal("/x/adc.json"))), { mode: 0o600 });
+    await assert.rejects(readLocalInputs(path, post ? "post" : "pre"), /local inputs file refused/, name);
+  }
+  assert.deepEqual((await readLocalInputs(prePath, "pre")).baseline, BASELINE);
   for (const [path, mode] of [[prePath, "post"], [postPath, "pre"], [prePath, "both"], [postPath, "both"], [postPath, undefined], [prePath, ""], [postPath, "toString"]]) {
     await assert.rejects(readLocalInputs(path, mode), /local inputs file refused/, `${path} ${mode}`);
   }

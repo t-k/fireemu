@@ -5,13 +5,13 @@ import { createReleaseAdmission } from "./storage-rules-release/admission.mjs";
 import { PIN_KEYS } from "./storage-rules-release-support.mjs";
 
 const pins = { packetSha256: "1".repeat(64), sourceCommit: "a".repeat(40), runnerSha256: "2".repeat(64), manifestSha256: "3".repeat(64), fixtureSchemaSha256: "4".repeat(64) };
-const packetOf = (mode, delta = {}) => ({ taskId: "STORAGE-RULES", packetName: `stage2c-${mode}-v1`, ...pins, projects: ["fireemu-oracle-query"], maxRequests: RELEASE_APPROVAL_LIMITS[mode].maxRequests, reserveUsd: 0.5, ...delta });
+const packetOf = (mode, delta = {}) => ({ taskId: "STORAGE-OBJECT", packetName: `reclaim-${mode}-v1`, ...pins, projects: ["fireemu-oracle-query"], maxRequests: RELEASE_APPROVAL_LIMITS[mode].maxRequests, reserveUsd: 0.5, ...delta });
 const reviewOf = (packet, delta = {}) => ({ verdict: "APPROVE", must: [], should: [], ...Object.fromEntries(PIN_KEYS.map((key) => [key, packet[key]])), envelopeId: "E-1", withinEnvelope: true, ...delta });
 const DELEGATIONS = ["- 2026-09-28 | 調整役への委任（本番の送信） | decision=APPROVE; x | オーナー（ローカル試験） | p.md", "- 2026-09-28 | 調整役への委任（枠の承認） | decision=APPROVE; x | オーナー（ローカル試験） | p.md"];
 const ledgerOf = (packet, { max = packet.maxRequests, reserve = 0.5, project = "fireemu-oracle-query", decision = "APPROVE" } = {}) => [
   ...DELEGATIONS,
-  `- 2026-09-29 | STORAGE-RULES ${packet.packetName} envelope | envelopeId=E-1; project=${project}; maxRequests=${max}; reserveUsd=${reserve}; writes=x; iamConfig=none; retries=none; 根拠=2026-09-28 調整役への委任（本番の送信） | Claude（委任。オーナーの裁量の委任 2026-09-28） | p.md`,
-  `- 2026-09-29 | STORAGE-RULES ${packet.packetName} | decision=${decision}; ${PIN_KEYS.map((key) => `${key}=${packet[key]}`).join("; ")}; envelopeId=E-1 | Claude（委任。枠の内の承認し直し） | p.md`,
+  `- 2026-09-29 | STORAGE-OBJECT ${packet.packetName} envelope | envelopeId=E-1; project=${project}; maxRequests=${max}; reserveUsd=${reserve}; writes=x; iamConfig=none; retries=none; 根拠=2026-09-28 調整役への委任（本番の送信） | Claude（委任。オーナーの裁量の委任 2026-09-28） | p.md`,
+  `- 2026-09-29 | STORAGE-OBJECT ${packet.packetName} | decision=${decision}; ${PIN_KEYS.map((key) => `${key}=${packet[key]}`).join("; ")}; envelopeId=E-1 | Claude（委任。枠の内の承認し直し） | p.md`,
 ].join("\n");
 const check = (mode, { packet = packetOf(mode), review, ledger, ...rest } = {}) => validateReleaseApproval({ ledgerText: ledger ?? ledgerOf(packet, rest), packet, review: review ?? reviewOf(packet), mode });
 
@@ -34,7 +34,7 @@ test("an approval of a mode is valid for that mode alone", () => {
   assert.throws(() => validateReleaseApproval({ ledgerText: ledgerOf(post), packet: post, review: reviewOf(post), mode: "pre" }), /invalid packet data/);
   for (const mode of ["both", undefined, "", "toString", "__proto__"]) assert.throws(() => validateReleaseApproval({ ledgerText: "", packet: pre, review: reviewOf(pre), mode }), /invalid approval options data/);
   assert.throws(() => validateReleaseApproval({ ledgerText: "", packet: pre, review: reviewOf(pre) }), /invalid approval options data/);
-  for (const name of ["stage2c-pre", "stage2c-prev1", "stage2b-v1", "xstage2c-pre-v1"]) {
+  for (const name of ["reclaim-pre", "reclaim-prev1", "stage2b-v1", "xreclaim-pre-v1"]) {
     const packet = packetOf("pre", { packetName: name });
     assert.throws(() => check("pre", { packet }), /invalid packet data/, name);
   }
@@ -59,7 +59,7 @@ test("the review must be a clean APPROVE with the packet's pins, and a revoked o
   }
   assert.throws(() => check("pre", { decision: "REVOKED" }), /approval revoked/);
   assert.throws(() => check("pre", { ledger: "" }), /matching owner approval required/);
-  assert.throws(() => check("pre", { ledger: `${ledgerOf(packet)}\n- 2026-09-29 | STORAGE-RULES stage2c-pre-v1 | decision=REVOKED | Claude | p.md` }), /approval revoked/);
+  assert.throws(() => check("pre", { ledger: `${ledgerOf(packet)}\n- 2026-09-29 | STORAGE-OBJECT reclaim-pre-v1 | decision=REVOKED | Claude | p.md` }), /approval revoked/);
   assert.throws(() => check("pre", { ledger: ledgerOf(packet).replace(`runnerSha256=${pins.runnerSha256}`, `runnerSha256=${"8".repeat(64)}`) }), /decision pin mismatch/);
   assert.throws(() => check("pre", { ledger: ledgerOf(packet).split("\n").slice(1).join("\n") }), /delegated envelope authority required/);
 });
@@ -74,7 +74,7 @@ test("the admission needs its mode and the closed options", () => {
 });
 
 test("the packet's identity and the envelope's bounds are checked before the approval is granted", () => {
-  for (const delta of [{ taskId: "OTHER" }, { taskId: 5 }, { packetName: 5 }, { packetName: null }, { packetName: "Stage2c-pre-v1" }, { packetName: `stage2c-pre-${"a".repeat(60)}` }, { sourceCommit: "abc" }, { runnerSha256: "abc" }, { manifestSha256: 5 }]) {
+  for (const delta of [{ taskId: "STORAGE-RULES" }, { packetName: "stage2c-pre-v1" }, { packetName: "reclaim-post-v1" }, { taskId: "OTHER" }, { taskId: 5 }, { packetName: 5 }, { packetName: null }, { packetName: "Reclaim-pre-v1" }, { packetName: `reclaim-pre-${"a".repeat(60)}` }, { sourceCommit: "abc" }, { runnerSha256: "abc" }, { manifestSha256: 5 }]) {
     const packet = packetOf("pre", delta);
     assert.throws(() => validateReleaseApproval({ ledgerText: ledgerOf(packetOf("pre")), packet, review: reviewOf(packet), mode: "pre" }), /invalid packet data/, JSON.stringify(delta));
   }

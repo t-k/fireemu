@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { ALL_IDS, IDS, MAX_REQUESTS, MODES, PREFLIGHT_IDS, releaseCorpus } from "./storage-rules-release/plan.mjs";
-import { BUCKETLESS_RELEASE_NAME, bucketReleaseName, canonicalDigest, classifyRelease, classifyRuleset, isBucket, isEmptyOk, isRulesetName, makeSaved, parseSaved, savedSha256 } from "./storage-rules-release/release.mjs";
+import { BUCKETLESS_RELEASE_NAME, bucketReleaseName, canonicalDigest, classifyRelease, classifyRuleset, isBucket, isEmptyOk, isRulesetName, makeSaved, matchesBaselineRelease, matchesBaselineRuleset, parseBaseline, parseSaved, savedSha256 } from "./storage-rules-release/release.mjs";
 import { createReleaseTargets } from "./storage-rules-release/targets.mjs";
-import { BUCKET, OTHER_RULESET, RELEASE_NAME, RULESET, RULESET_SOURCE, SOURCE_SHA, ownerDigest, releaseBody } from "./storage-rules-release-support.mjs";
+import { BASELINE, BUCKET, OTHER_RULESET, RELEASE_NAME, RULESET, RULESET_SOURCE, SOURCE_SHA, ownerDigest, releaseBody } from "./storage-rules-release-support.mjs";
 
 const raw = (body, status = 200, type = "application/json; charset=UTF-8") => ({ status, rawHeaders: ["Content-Type", type], bytes: Buffer.from(typeof body === "string" ? body : JSON.stringify(body)) });
 const notFound = { error: { code: 404, message: "Requested entity was not found.", status: "NOT_FOUND" } };
@@ -104,7 +104,7 @@ test("the plan: eleven requests at most for pre, eight for post, five preflight 
 
 test("the corpus lists every request with its method, URL and body, and its digest moves with every input", () => {
   const base = { bucket: BUCKET, rulesetName: RULESET, ownerEmailSha256: ownerDigest };
-  const pre = releaseCorpus({ mode: "pre", ...base });
+  const pre = releaseCorpus({ mode: "pre", ...base, baseline: BASELINE });
   const post = releaseCorpus({ mode: "post", ...base, savedSha256: "5".repeat(64) });
   assert.deepEqual(pre.list.map((entry) => entry.id), ALL_IDS.pre);
   assert.deepEqual(post.list.map((entry) => entry.id), ALL_IDS.post);
@@ -120,14 +120,23 @@ test("the corpus lists every request with its method, URL and body, and its dige
   for (const id of [IDS.pre.current, IDS.pre.restored, IDS.pre.absence, IDS.pre.bucket]) assert.deepEqual(at(pre, id), { id, method: "GET", url: releaseUrl });
   const digests = new Set([pre.sha256, post.sha256]);
   for (const changed of [{ bucket: "other-bucket.appspot.com" }, { rulesetName: OTHER_RULESET }, { ownerEmailSha256: "f".repeat(64) }]) {
-    digests.add(releaseCorpus({ mode: "pre", ...base, ...changed }).sha256);
+    digests.add(releaseCorpus({ mode: "pre", ...base, baseline: BASELINE, ...changed }).sha256);
     digests.add(releaseCorpus({ mode: "post", ...base, ...changed, savedSha256: "5".repeat(64) }).sha256);
   }
   digests.add(releaseCorpus({ mode: "post", ...base, savedSha256: "6".repeat(64) }).sha256);
-  assert.equal(digests.size, 9);
-  assert.equal(releaseCorpus({ mode: "pre", ...base }).sha256, pre.sha256);
-  for (const spoiled of [{ mode: "both", ...base }, { mode: "pre", ...base, bucket: "Bad" }, { mode: "pre", ...base, rulesetName: "x" }, { mode: "pre", ...base, ownerEmailSha256: "abc" }, { mode: "pre", ...base, savedSha256: "5".repeat(64) }, { mode: "post", ...base }, { mode: "post", ...base, savedSha256: "abc" }]) {
-    assert.throws(() => releaseCorpus(spoiled), /invalid corpus input/);
+  // The baseline is pinned too: each of its five values moves the digest.
+  const moved = (release, ruleset) => releaseCorpus({ mode: "pre", ...base, baseline: { release: { ...BASELINE.release, ...release }, ruleset: { ...BASELINE.ruleset, ...ruleset } } }).sha256;
+  for (const sha of [moved({ createTime: "2026-09-25T10:30:00.123457Z" }), moved({ updateTime: "2026-09-25T10:30:01.654322Z" }), moved({ bodySha256: "e".repeat(64) }), moved({}, { createTime: "2026-09-25T10:29:00.111112Z" }), moved({}, { sourceSha256: "d".repeat(64) })]) digests.add(sha);
+  assert.equal(digests.size, 14);
+  assert.equal(releaseCorpus({ mode: "pre", ...base, baseline: BASELINE }).sha256, pre.sha256);
+  const withBaseline = { ...base, baseline: BASELINE };
+  for (const spoiled of [{ mode: "both", ...withBaseline }, { mode: "pre", ...withBaseline, bucket: "Bad" }, { mode: "pre", ...withBaseline, rulesetName: "x" }, { mode: "pre", ...withBaseline, ownerEmailSha256: "abc" }, { mode: "pre", ...withBaseline, savedSha256: "5".repeat(64) }, { mode: "post", ...base }, { mode: "post", ...base, savedSha256: "abc" },
+    // `pre` needs its baseline and `post` has none; a baseline is a closed record of exact values.
+    { mode: "pre", ...base }, { mode: "post", ...withBaseline, savedSha256: "5".repeat(64) }, { mode: "pre", ...base, baseline: { release: BASELINE.release } },
+    { mode: "pre", ...base, baseline: { ...BASELINE, extra: 1 } }, { mode: "pre", ...base, baseline: { ...BASELINE, release: { ...BASELINE.release, extra: 1 } } },
+    { mode: "pre", ...base, baseline: { ...BASELINE, release: { ...BASELINE.release, createTime: "x" } } }, { mode: "pre", ...base, baseline: { ...BASELINE, release: { ...BASELINE.release, bodySha256: "abc" } } },
+    { mode: "pre", ...base, baseline: { ...BASELINE, ruleset: { ...BASELINE.ruleset, sourceSha256: "G".repeat(64) } } }, { mode: "pre", ...base, baseline: { ...BASELINE, ruleset: { ...BASELINE.ruleset, createTime: 5 } } }, { mode: "pre", ...base, baseline: "text" }]) {
+    assert.throws(() => releaseCorpus(spoiled), /invalid (corpus input|baseline)/);
   }
 });
 
@@ -166,4 +175,24 @@ test("targets are built from exact sources: reads name a fixed resource, the del
   assert.equal(JSON.stringify(read).includes("\"spec\""), false);
   assert.equal(Object.getOwnPropertyDescriptor(read, "spec").enumerable, false);
   assert.equal(read.redacted, `GET https://firebaserules.googleapis.com/v1/${RELEASE_NAME}`);
+});
+
+test("the baseline is a closed record of exact times and digests, and a release or ruleset matches it only when every value is equal", () => {
+  assert.deepEqual(parseBaseline(BASELINE), BASELINE);
+  assert.equal(Object.isFrozen(parseBaseline(BASELINE)) && Object.isFrozen(parseBaseline(BASELINE).release) && Object.isFrozen(parseBaseline(BASELINE).ruleset), true);
+  for (const spoiled of [null, [], "x", {}, { release: BASELINE.release }, { ...BASELINE, extra: 1 }, { release: { ...BASELINE.release, extra: 1 }, ruleset: BASELINE.ruleset }, { release: { createTime: BASELINE.release.createTime, updateTime: BASELINE.release.updateTime }, ruleset: BASELINE.ruleset },
+    { ...BASELINE, release: { ...BASELINE.release, createTime: "2026-09-25" } }, { ...BASELINE, release: { ...BASELINE.release, updateTime: 5 } }, { ...BASELINE, release: { ...BASELINE.release, bodySha256: "A".repeat(64) } }, { ...BASELINE, ruleset: { ...BASELINE.ruleset, createTime: "x" } }, { ...BASELINE, ruleset: { ...BASELINE.ruleset, sourceSha256: "abc" } }, Object.create({ ...BASELINE }), Object.assign(Object.create(null), BASELINE)]) {
+    assert.throws(() => parseBaseline(spoiled), /invalid baseline/, JSON.stringify(spoiled));
+  }
+  const release = { name: RELEASE_NAME, rulesetName: RULESET, ...BASELINE.release };
+  assert.equal(matchesBaselineRelease(release, BASELINE, RULESET), true);
+  for (const changed of [{ rulesetName: OTHER_RULESET }, { createTime: "2026-09-25T10:30:00.123457Z" }, { updateTime: "2026-09-25T10:30:01.654322Z" }, { bodySha256: "e".repeat(64) }]) assert.equal(matchesBaselineRelease({ ...release, ...changed }, BASELINE, RULESET), false, JSON.stringify(changed));
+  assert.equal(matchesBaselineRelease(release, BASELINE, OTHER_RULESET), false);
+  const ruleset = { name: RULESET, ...BASELINE.ruleset };
+  assert.equal(matchesBaselineRuleset(ruleset, BASELINE), true);
+  for (const changed of [{ createTime: "2026-09-25T10:29:00.111112Z" }, { sourceSha256: "d".repeat(64) }]) assert.equal(matchesBaselineRuleset({ ...ruleset, ...changed }, BASELINE), false, JSON.stringify(changed));
+  // The default baseline of the fake world is what its release and ruleset read as.
+  const read = classifyRelease(raw(releaseBody()), RELEASE_NAME);
+  assert.equal(matchesBaselineRelease(read.release, BASELINE, RULESET), true);
+  assert.equal(matchesBaselineRuleset(classifyRuleset(raw(rulesetBody), RULESET).ruleset, BASELINE), true);
 });

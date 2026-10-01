@@ -7,7 +7,7 @@ import { bindReleaseEntry, SAVED_FILE } from "./storage-rules-release/release-en
 import { releaseCorpus } from "./storage-rules-release/plan.mjs";
 import { releaseCodeDigests } from "./storage-rules-release/pins.mjs";
 import { canonicalDigest, makeSaved, savedSha256 } from "./storage-rules-release/release.mjs";
-import { ADC, BUCKET, OTHER_RULESET, OWNER_TOKEN, PIN_KEYS, RELEASE_NAME, RULESET, SOURCE_COMMIT, SOURCE_SHA, cleanup, createReleaseWorld, fakeRequestImpl, ownerDigest, postLocal, preLocal, releaseBody, scratchCode } from "./storage-rules-release-support.mjs";
+import { ADC, BASELINE, BUCKET, OTHER_RULESET, OWNER_TOKEN, PIN_KEYS, RELEASE_NAME, RULESET, SOURCE_COMMIT, SOURCE_SHA, cleanup, createReleaseWorld, fakeRequestImpl, ownerDigest, postLocal, preLocal, releaseBody, scratchCode } from "./storage-rules-release-support.mjs";
 
 // The stage 2c entry against a scratch main checkout and a fake Firebase Rules world: what it reads, writes and leaves, and when it stops or recovers.
 const codeRoot = scratchCode();
@@ -18,23 +18,23 @@ const clock = { nowSeconds: () => 1_800_000_000, waitUntilSeconds: async () => {
 const runId = "release-test-run";
 const savedRecord = () => makeSaved({ bucket: BUCKET, release: { ...releaseBody(), bodySha256: canonicalDigest(releaseBody()) }, ruleset: { sourceSha256: SOURCE_SHA } });
 
-const packetFor = (mode, saved) => {
+const packetFor = (mode, saved, baseline = BASELINE) => {
   const corpus = mode === "pre"
-    ? releaseCorpus({ mode, bucket: BUCKET, rulesetName: RULESET, ownerEmailSha256: ownerDigest })
+    ? releaseCorpus({ mode, bucket: BUCKET, rulesetName: RULESET, ownerEmailSha256: ownerDigest, baseline })
     : releaseCorpus({ mode, bucket: BUCKET, rulesetName: saved.rulesetName, ownerEmailSha256: ownerDigest, savedSha256: savedSha256(saved) });
-  return { taskId: "STORAGE-RULES", packetName: `stage2c-${mode}-v1`, packetSha256: (mode === "pre" ? "1" : "2").repeat(64), sourceCommit: SOURCE_COMMIT, runnerSha256: digests.runnerSha256, manifestSha256: corpus.sha256, fixtureSchemaSha256: digests.fixtureSchemaSha256, projects: ["fireemu-oracle-query"], maxRequests: LIMITS[mode], reserveUsd: 0.5 };
+  return { taskId: "STORAGE-OBJECT", packetName: `reclaim-${mode}-v1`, packetSha256: (mode === "pre" ? "1" : "2").repeat(64), sourceCommit: SOURCE_COMMIT, runnerSha256: digests.runnerSha256, manifestSha256: corpus.sha256, fixtureSchemaSha256: digests.fixtureSchemaSha256, projects: ["fireemu-oracle-query"], maxRequests: LIMITS[mode], reserveUsd: 0.5 };
 };
 const ledgerFor = (mode, packet) => {
-  const envelopeId = `STORAGE-RULES-stage2c-${mode}-v1-001`;
+  const envelopeId = `STORAGE-OBJECT-reclaim-${mode}-v1-001`;
   return [
     "- 2026-09-28 | 調整役への委任（本番の送信） | decision=APPROVE; local fixture | オーナー（ローカル試験） | private.md",
     "- 2026-09-28 | 調整役への委任（枠の承認） | decision=APPROVE; local fixture | オーナー（ローカル試験） | private.md",
-    `- 2026-09-29 | STORAGE-RULES ${packet.packetName} envelope | envelopeId=${envelopeId}; project=fireemu-oracle-query; maxRequests=${LIMITS[mode]}; reserveUsd=0.5; writes=the query bucket release; iamConfig=none; retries=none; onStop=locks-held; 根拠=2026-09-28 調整役への委任（本番の送信） | Claude（委任。オーナーの裁量の委任 2026-09-28） | private.md`,
-    `- 2026-09-29 | STORAGE-RULES ${packet.packetName} | decision=APPROVE; ${PIN_KEYS.map((key) => `${key}=${packet[key]}`).join("; ")}; envelopeId=${envelopeId} | Claude（委任。枠の内の承認し直し） | private.md`,
+    `- 2026-09-29 | STORAGE-OBJECT ${packet.packetName} envelope | envelopeId=${envelopeId}; project=fireemu-oracle-query; maxRequests=${LIMITS[mode]}; reserveUsd=0.5; writes=the query bucket release; iamConfig=none; retries=none; onStop=locks-held; 根拠=2026-09-28 調整役への委任（本番の送信） | Claude（委任。オーナーの裁量の委任 2026-09-28） | private.md`,
+    `- 2026-09-29 | STORAGE-OBJECT ${packet.packetName} | decision=APPROVE; ${PIN_KEYS.map((key) => `${key}=${packet[key]}`).join("; ")}; envelopeId=${envelopeId} | Claude（委任。枠の内の承認し直し） | private.md`,
   ].join("\n");
 };
 
-async function checkout(t, { mode = "pre", world = createReleaseWorld(), gitHead = SOURCE_COMMIT, gitStatus = "", gitExtra = "", gitExtraRelease = "", gitThrows = false, usage = [], saved = savedRecord(), mutatePacket = (packet) => packet, ledgerText } = {}) {
+async function checkout(t, { mode = "pre", world = createReleaseWorld(), gitHead = SOURCE_COMMIT, gitStatus = "", gitExtra = "", gitExtraRelease = "", gitThrows = false, usage = [], saved = savedRecord(), mutatePacket = (packet) => packet, ledgerText, baseline = BASELINE, pinnedBaseline = baseline } = {}) {
   const root = await mkdtemp("/private/tmp/storage-rules-release-");
   t.after(() => rm(root, { recursive: true, force: true }));
   await mkdir(join(root, ".git"));
@@ -44,16 +44,16 @@ async function checkout(t, { mode = "pre", world = createReleaseWorld(), gitHead
   await chmod(runs, 0o700);
   await mkdir(join(runs, "sandbox-locks"), { mode: 0o700 });
   await chmod(join(runs, "sandbox-locks"), 0o700);
-  const packet = mutatePacket(packetFor(mode, saved));
-  const review = { verdict: "APPROVE", must: [], should: [], ...Object.fromEntries(PIN_KEYS.map((key) => [key, packet[key]])), envelopeId: `STORAGE-RULES-stage2c-${mode}-v1-001`, withinEnvelope: true };
-  await writeFile(join(root, "docs.local", "instructions", "owner-decisions.md"), ledgerText ?? ledgerFor(mode, packetFor(mode, saved)), { mode: 0o644 });
-  if (usage.length > 0) await writeFile(join(runs, "storage-rules-release-usage.jsonl"), usage.map((id) => `${JSON.stringify({ packetSha256: packet.packetSha256, runId: id })}\n`).join(""), { mode: 0o600 });
+  const packet = mutatePacket(packetFor(mode, saved, pinnedBaseline));
+  const review = { verdict: "APPROVE", must: [], should: [], ...Object.fromEntries(PIN_KEYS.map((key) => [key, packet[key]])), envelopeId: `STORAGE-OBJECT-reclaim-${mode}-v1-001`, withinEnvelope: true };
+  await writeFile(join(root, "docs.local", "instructions", "owner-decisions.md"), ledgerText ?? ledgerFor(mode, packetFor(mode, saved, pinnedBaseline)), { mode: 0o644 });
+  if (usage.length > 0) await writeFile(join(runs, "storage-object-reclaim-usage.jsonl"), usage.map((id) => `${JSON.stringify({ packetSha256: packet.packetSha256, runId: id })}\n`).join(""), { mode: 0o600 });
   const adcPath = join(root, "adc.json");
   await writeFile(adcPath, JSON.stringify(ADC), { mode: 0o600 });
   const savedPath = join(root, "saved.json");
   await writeFile(savedPath, JSON.stringify(saved), { mode: 0o600 });
   const localPath = join(root, "local.json");
-  await writeFile(localPath, JSON.stringify(mode === "pre" ? preLocal(adcPath) : postLocal(adcPath, savedPath)), { mode: 0o600 });
+  await writeFile(localPath, JSON.stringify(mode === "pre" ? preLocal(adcPath, baseline) : postLocal(adcPath, savedPath)), { mode: 0o600 });
   const wire = [];
   const gitCalls = [];
   const git = async (where, args) => { gitCalls.push([where, ...args]); if (gitThrows) throw new Error("git failed"); if (args[0] === "rev-parse") return `${gitHead}\n`; if (args.includes("--ignored")) return args.includes("conformance/src/storage-rules-release") ? gitExtraRelease : gitExtra; return gitStatus; };
@@ -61,7 +61,7 @@ async function checkout(t, { mode = "pre", world = createReleaseWorld(), gitHead
   const options = { mode, localPath, runId, sourceCommit: SOURCE_COMMIT, packet: structuredClone(packet), review: structuredClone(review) };
   return { root, runs, entry, options, wire, world, gitCalls, localPath, savedPath, saved, adcPath, lockFiles: async () => (await readdir(join(runs, "sandbox-locks"))).sort() };
 }
-const runDir = (f) => join(f.runs, `storage-rules-release-${runId}`);
+const runDir = (f) => join(f.runs, `storage-object-reclaim-${runId}`);
 const journalText = async (f) => (await Promise.all((await walk(runDir(f))).map((path) => readFile(path, "utf8").catch(() => "")))).join("\n");
 async function walk(directory) {
   const out = [];
@@ -128,6 +128,11 @@ test("pre: what the packet does not describe stops the run before anything is de
     "the owner is unverified": (world) => { world.hook.identity = { id: "1", email: "owner@example.test", verified_email: false }; },
     "the release answer has an extra field": (world) => { world.hook.read = (w, which) => (which === "bucket" ? w.json({ ...releaseBody(), extra: 1 }) : undefined); },
     "the release answer names another release": (world) => { world.hook.read = (w, which) => (which === "bucket" ? w.json({ ...releaseBody(), name: "projects/fireemu-oracle-query/releases/firebase.storage/other.appspot.com" }) : undefined); },
+    "the release was created at another time since the baseline": (world) => { world.release = releaseBody(RULESET, { createTime: "2026-09-25T10:30:00.123457Z", updateTime: "2026-09-25T10:30:01.654321Z" }); },
+    "the release was updated at another time since the baseline": (world) => { world.release = releaseBody(RULESET, { createTime: "2026-09-25T10:30:00.123456Z", updateTime: "2026-09-25T10:30:01.654322Z" }); },
+    "the release was created again with the same times to the microsecond but another form": (world) => { world.release = releaseBody(RULESET, { createTime: "2026-09-25T10:30:00.123456Z", updateTime: "2026-09-25T10:30:01.654321Z" }); world.hook.read = (w, which) => (which === "bucket" ? w.json({ ...w.release, createTime: "2026-09-25T10:30:00.1234560Z" }) : undefined); },
+    "the ruleset was created at another time": (world) => { world.ruleset = { ...world.ruleset, createTime: "2026-09-25T10:29:00.111112Z" }; },
+    "the ruleset has another source": (world) => { world.ruleset = { ...world.ruleset, source: { files: [{ name: "storage.rules", content: "rules_version = '2';\nservice firebase.storage { }\n", fingerprint: "zzz" }] } }; },
     "the release read is a server error": (world) => { world.hook.read = (w, which) => (which === "bucket" ? w.json({ error: { code: 500, message: "boom", status: "INTERNAL" } }, 500) : undefined); },
   };
   for (const [name, arrange] of Object.entries(cases)) {
@@ -139,6 +144,44 @@ test("pre: what the packet does not describe stops the run before anything is de
     assert.deepEqual(f.world.posts, [], name);
     assert.deepEqual(f.world.release, before, name);
     assert.equal(urls(f).some((line) => line.startsWith("DELETE")), false, name);
+  }
+});
+
+test("pre: a release or ruleset that is not the pinned baseline stops the run before anything is saved or deleted, whichever of the five values differs", async (t) => {
+  const variants = {
+    "the release's creation time": { release: { ...BASELINE.release, createTime: "2026-09-25T10:30:00.123457Z" } },
+    "the release's update time": { release: { ...BASELINE.release, updateTime: "2026-09-25T10:30:01.654322Z" } },
+    "the digest of the release's body": { release: { ...BASELINE.release, bodySha256: "e".repeat(64) } },
+    "the ruleset's creation time": { ruleset: { ...BASELINE.ruleset, createTime: "2026-09-25T10:29:00.111112Z" } },
+    "the digest of the ruleset's source": { ruleset: { ...BASELINE.ruleset, sourceSha256: "d".repeat(64) } },
+  };
+  for (const [name, change] of Object.entries(variants)) {
+    // The approval pins this (other) baseline, so the pins agree and only the production state disagrees.
+    const baseline = { ...BASELINE, ...change };
+    const f = await checkout(t, { baseline });
+    const before = structuredClone(f.world.release);
+    await assert.rejects(f.entry(f.options), /preflight|release state|accept|refused/i, name);
+    assert.equal(f.world.deletes, 0, name);
+    assert.deepEqual(f.world.posts, [], name);
+    assert.deepEqual(f.world.release, before, name);
+    assert.equal(urls(f).some((line) => line.startsWith("DELETE") || line.startsWith("POST /v1")), false, name);
+    // No saved record; the run ended at its preflight with nothing written, and the project lock stays until the operator has read the journal (the same as every other preflight stop).
+    await assert.rejects(readFile(join(runDir(f), SAVED_FILE)), /ENOENT/, name);
+    assert.equal(await terminalOf(f), "preflight-failed", name);
+    assert.deepEqual(await f.lockFiles(), lockedOnce, name);
+  }
+  // The release and the ruleset the packet describes are accepted: the control of the cases above.
+  const control = await checkout(t);
+  assert.equal((await control.entry(control.options)).status, "finished");
+});
+
+test("pre: the baseline is bound by the approval: a local file with another baseline than the pinned manifest is refused before anything is created", async (t) => {
+  for (const change of [{ release: { ...BASELINE.release, createTime: "2026-09-25T10:30:00.123457Z" } }, { release: { ...BASELINE.release, bodySha256: "e".repeat(64) } }, { ruleset: { ...BASELINE.ruleset, sourceSha256: "d".repeat(64) } }]) {
+    const f = await checkout(t, { baseline: { ...BASELINE, ...change }, pinnedBaseline: BASELINE });
+    await assert.rejects(f.entry(f.options), /pin mismatch: manifestSha256/);
+    assert.deepEqual(f.wire, []);
+    assert.deepEqual(await f.lockFiles(), []);
+    await assert.rejects(readFile(join(runDir(f), SAVED_FILE)), /ENOENT/);
   }
 });
 
@@ -272,7 +315,7 @@ test("post: a publication that fails is recovered by one read: the saved release
 
 test("the approval binds the run to its mode, its pins and its saved record", async (t) => {
   // A packet of the other mode, with the same pins otherwise, is not an approval of this run.
-  const wrongName = await checkout(t, { mode: "post", world: createReleaseWorld({ release: null }), mutatePacket: (packet) => ({ ...packet, packetName: "stage2c-pre-v1" }) });
+  const wrongName = await checkout(t, { mode: "post", world: createReleaseWorld({ release: null }), mutatePacket: (packet) => ({ ...packet, packetName: "reclaim-pre-v1" }) });
   await assert.rejects(wrongName.entry(wrongName.options));
   assert.equal(wrongName.wire.length, 0);
   // Limits of the other mode are refused (post cannot use pre's 11 requests, nor the other way).
@@ -339,7 +382,7 @@ test("the local inputs and the saved record are private, closed, and checked bef
 });
 
 test("an approval that is revoked, missing or already used refuses the run", async (t) => {
-  const revoked = await checkout(t, { ledgerText: `${ledgerFor("pre", packetFor("pre", savedRecord()))}\n- 2026-09-29 | STORAGE-RULES stage2c-pre-v1 | decision=REVOKED; reason=test | Claude | private.md` });
+  const revoked = await checkout(t, { ledgerText: `${ledgerFor("pre", packetFor("pre", savedRecord()))}\n- 2026-09-29 | STORAGE-OBJECT reclaim-pre-v1 | decision=REVOKED; reason=test | Claude | private.md` });
   await assert.rejects(revoked.entry(revoked.options));
   assert.equal(revoked.wire.length, 0);
   const missing = await checkout(t, { ledgerText: "" });
@@ -355,7 +398,7 @@ test("a revocation written while the run is going stops the very next request", 
   const f = await checkout(t);
   const ledgerPath = join(f.root, "docs.local", "instructions", "owner-decisions.md");
   f.world.hook.delete = (world) => { throw new Error("unused"); };
-  f.world.hook.ruleset = () => { writeFile(ledgerPath, `${ledgerFor("pre", packetFor("pre", f.saved))}\n- 2026-09-29 | STORAGE-RULES stage2c-pre-v1 | decision=REVOKED | Claude | private.md`, { mode: 0o644 }).catch(() => {}); return undefined; };
+  f.world.hook.ruleset = () => { writeFile(ledgerPath, `${ledgerFor("pre", packetFor("pre", f.saved))}\n- 2026-09-29 | STORAGE-OBJECT reclaim-pre-v1 | decision=REVOKED | Claude | private.md`, { mode: 0o644 }).catch(() => {}); return undefined; };
   const before = structuredClone(f.world.release);
   await assert.rejects(f.entry(f.options));
   await new Promise((resolve) => setTimeout(resolve, 10));
@@ -420,7 +463,7 @@ test("pre: each way the recovery cannot finish ends the run for the reason it na
 test("pre: a revocation written after the deletion was attempted stops the run without a single recovery request, and keeps the lock", async (t) => {
   const f = await checkout(t);
   const ledgerPath = join(f.root, "docs.local", "instructions", "owner-decisions.md");
-  f.world.hook.delete = (world) => { world.release = null; writeFileSync(ledgerPath, `${ledgerFor("pre", packetFor("pre", f.saved))}\n- 2026-09-29 | STORAGE-RULES stage2c-pre-v1 | decision=REVOKED | Claude | private.md`); return world.json({}); };
+  f.world.hook.delete = (world) => { world.release = null; writeFileSync(ledgerPath, `${ledgerFor("pre", packetFor("pre", f.saved))}\n- 2026-09-29 | STORAGE-OBJECT reclaim-pre-v1 | decision=REVOKED | Claude | private.md`); return world.json({}); };
   await assert.rejects(f.entry(f.options), /admission refused/);
   assert.equal(f.world.deletes, 1);
   assert.deepEqual(f.world.posts, []);
@@ -488,7 +531,7 @@ test("the owner ledger, the local inputs and the runs directory must be private 
     "the lock directory is open to others": async (f) => { await chmod(join(f.runs, "sandbox-locks"), 0o755); return /lock directory refused/; },
     "the lock directory is missing": async (f) => { await rm(join(f.runs, "sandbox-locks"), { recursive: true }); return /lock directory missing/; },
     "the runs directory is a symlink": async (f) => { await rename(f.runs, `${f.runs}-real`); await symlink(`${f.runs}-real`, f.runs); return /runs directory refused/; },
-    "the run directory exists": async (f) => { await mkdir(join(f.runs, `storage-rules-release-${runId}`), { mode: 0o700 }); return /run directory exists/; },
+    "the run directory exists": async (f) => { await mkdir(join(f.runs, `storage-object-reclaim-${runId}`), { mode: 0o700 }); return /run directory exists/; },
     "the run directory cannot be created": async (f) => { await chmod(f.runs, 0o500); return /run directory refused/; },
   };
   for (const [name, spoil] of Object.entries(cases)) {

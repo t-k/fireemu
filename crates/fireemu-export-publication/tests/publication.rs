@@ -438,6 +438,111 @@ fn an_inherited_deny_delete_does_not_break_the_stage_or_its_publication() {
     assert!(leftovers.is_empty(), "{leftovers:?}");
 }
 
+/// An exFAT disk image mounted below `dir` (a stand-in for a USB stick or an SD card), detached on drop.
+/// exFAT cannot hold an ACL: `setfacl` there fails with ENOTSUP, and nothing can be inherited.
+#[cfg(target_os = "macos")]
+struct ExfatVolume {
+    mount: PathBuf,
+}
+
+#[cfg(target_os = "macos")]
+impl ExfatVolume {
+    /// `None` when `hdiutil` cannot be run at all (the test then says so and passes vacuously).
+    fn attach(dir: &Path) -> Option<Self> {
+        use std::process::Command;
+
+        let image = dir.join("volume.dmg");
+        let mount = dir.join("volume");
+        let created = match Command::new("hdiutil")
+            .args([
+                "create", "-size", "16m", "-fs", "ExFAT", "-volname", "FIREEMU",
+            ])
+            .arg(&image)
+            .output()
+        {
+            Ok(output) => output,
+            Err(error) => {
+                eprintln!("SKIPPED: hdiutil cannot be run ({error}); the exFAT case is not tested");
+                return None;
+            }
+        };
+        assert!(
+            created.status.success(),
+            "hdiutil create: {}",
+            String::from_utf8_lossy(&created.stderr)
+        );
+        create_private_dir(&mount);
+        let attached = Command::new("hdiutil")
+            .args(["attach", "-nobrowse", "-mountpoint"])
+            .arg(&mount)
+            .arg(&image)
+            .output()
+            .expect("run hdiutil attach");
+        assert!(
+            attached.status.success(),
+            "hdiutil attach: {}",
+            String::from_utf8_lossy(&attached.stderr)
+        );
+        Some(Self { mount })
+    }
+}
+
+#[cfg(target_os = "macos")]
+impl Drop for ExfatVolume {
+    fn drop(&mut self) {
+        let _ = std::process::Command::new("hdiutil")
+            .args(["detach", "-force"])
+            .arg(&self.mount)
+            .output();
+    }
+}
+
+/// A volume without ACL support (a USB stick, an SD card) must not be refused over the ACL: `setfacl`
+/// fails there with ENOTSUP, but the stage is checked afterwards and holds no ACL, so nothing was
+/// inherited and the stage is made. (exFAT has no atomic rename either, so publication there still
+/// fails with its own, older refusal: the ACL check must not be what stops it.)
+#[cfg(target_os = "macos")]
+#[test]
+fn a_volume_without_acl_support_is_not_refused_over_its_acl() {
+    let root = TestRoot::new("acl-exfat");
+    let Some(volume) = ExfatVolume::attach(&root.0) else {
+        return;
+    };
+    let parent = volume.mount.join("private-parent");
+    create_private_dir(&parent);
+    // The premise: this volume cannot clear an ACL, so an unconditional clear failed here.
+    let premise = exacl::setfacl(&[&parent], &[], None).expect_err("exFAT refuses setfacl");
+    assert!(
+        premise.to_string().contains("not supported"),
+        "the premise: {premise}"
+    );
+    let target = parent.join("export");
+    let stage = PublicationStage::create(&target, |_| Ok(())).expect("an ACL-less volume works");
+    assert_eq!(
+        exacl::getfacl(stage.root(), None).unwrap_or_default(),
+        Vec::new(),
+        "the stage holds no ACL"
+    );
+    write(stage.root(), "marker", "exported");
+    let error = stage.complete().publish().unwrap_err();
+    assert!(
+        error.contains("atomic export publication is unavailable or failed"),
+        "{error}"
+    );
+    assert!(!error.contains("ACL"), "{error}");
+    let leftovers: Vec<_> = std::fs::read_dir(&parent)
+        .unwrap()
+        .flatten()
+        .filter(|entry| {
+            entry
+                .file_name()
+                .to_string_lossy()
+                .contains("fireemu-stage")
+        })
+        .collect();
+    assert!(leftovers.is_empty(), "{leftovers:?}");
+}
+
 /// The owner and root hold their rights anyway: their entries, named by the system's user database,
 /// are accepted.
 #[cfg(target_os = "macos")]

@@ -139,14 +139,34 @@ pub(crate) fn check(
 /// it is empty: an inherited `allow` entry would make the export readable by others, and an
 /// inherited `deny delete` would stop the rename and the cleanup.
 pub(crate) fn clear_stage_acl(stage: &Path) -> Result<(), String> {
-    exacl::setfacl(&[stage], &[], None)
-        .map_err(|error| format!("cannot clear the ACL of the export stage: {error}"))?;
-    let left = exacl::getfacl(stage, None)
-        .map_err(|error| format!("cannot inspect the ACL of the export stage: {error}"))?;
-    if left.is_empty() {
-        Ok(())
-    } else {
-        Err("the export stage still has an ACL after it was cleared".to_owned())
+    let cleared = exacl::setfacl(&[stage], &[], None).map_err(|error| error.to_string());
+    let left = exacl::getfacl(stage, None).map_err(|error| error.to_string());
+    settle_stage_acl(cleared, left)
+}
+
+/// Decides from what the stage holds *after* the clear, never from the clear alone: a volume without
+/// ACL support (exFAT, FAT: a USB stick, an SD card) fails `setfacl` with ENOTSUP, but nothing can be
+/// inherited there, so a stage that reads back empty is safe. A stage that still has an entry, or
+/// whose ACL cannot be read, is refused (a network filesystem may accept the call and keep the entry).
+fn settle_stage_acl(
+    cleared: Result<(), String>,
+    left: Result<Vec<AclEntry>, String>,
+) -> Result<(), String> {
+    let clearing = cleared.err();
+    match left {
+        Ok(entries) if entries.is_empty() => Ok(()),
+        Ok(_) => Err(match clearing {
+            None => "the export stage still has an ACL after it was cleared".to_owned(),
+            Some(error) => {
+                format!("the export stage still has an ACL, and it could not be cleared: {error}")
+            }
+        }),
+        Err(read) => Err(match clearing {
+            None => format!("cannot inspect the ACL of the export stage: {read}"),
+            Some(error) => format!(
+                "cannot clear the ACL of the export stage ({error}) nor inspect it ({read})"
+            ),
+        }),
     }
 }
 
@@ -174,6 +194,102 @@ mod tests {
 
     fn allow_user(name: &str, perms: Perm) -> AclEntry {
         AclEntry::allow_user(name, perms, None)
+    }
+
+    #[test]
+    fn a_stage_that_reads_back_empty_is_settled_whether_or_not_the_clear_worked() {
+        let unsupported = || Err("Operation not supported (os error 45)".to_owned());
+        assert_eq!(settle_stage_acl(Ok(()), Ok(Vec::new())), Ok(()));
+        assert_eq!(settle_stage_acl(unsupported(), Ok(Vec::new())), Ok(()));
+    }
+
+    #[test]
+    fn a_stage_that_still_has_an_entry_is_refused_with_the_clear_error_attached() {
+        let entry = || vec![AclEntry::deny_group("everyone", Perm::DELETE, None)];
+        let plain = settle_stage_acl(Ok(()), Ok(entry())).unwrap_err();
+        assert!(
+            plain.contains("still has an ACL after it was cleared"),
+            "{plain}"
+        );
+        let failed =
+            settle_stage_acl(Err("Operation not supported".to_owned()), Ok(entry())).unwrap_err();
+        assert!(failed.contains("could not be cleared"), "{failed}");
+        assert!(failed.contains("Operation not supported"), "{failed}");
+    }
+
+    #[test]
+    fn a_stage_whose_acl_cannot_be_read_is_refused_with_both_errors() {
+        let only_read = settle_stage_acl(Ok(()), Err("EIO".to_owned())).unwrap_err();
+        assert!(only_read.contains("cannot inspect the ACL"), "{only_read}");
+        assert!(only_read.contains("EIO"), "{only_read}");
+        let both = settle_stage_acl(Err("ENOTSUP".to_owned()), Err("EIO".to_owned())).unwrap_err();
+        assert!(both.contains("ENOTSUP") && both.contains("EIO"), "{both}");
+    }
+
+    /// A directory that holds a real ACL entry and cannot be changed (`chflags uchg`), so `setfacl`
+    /// fails while the entry stays: the case a network filesystem presents. Restored on drop.
+    struct ImmutableWithAcl(std::path::PathBuf);
+
+    impl ImmutableWithAcl {
+        fn new() -> Self {
+            let path = std::env::temp_dir().join(format!(
+                "fireemu-acl-immutable-{}-{:?}",
+                std::process::id(),
+                std::thread::current().id()
+            ));
+            let _ = std::fs::remove_dir(&path);
+            std::fs::create_dir(&path).expect("create the directory");
+            let guard = Self(path);
+            for args in [
+                vec![
+                    "chmod".to_owned(),
+                    "+a".to_owned(),
+                    "everyone deny delete".to_owned(),
+                ],
+                vec!["chflags".to_owned(), "uchg".to_owned()],
+            ] {
+                let status = std::process::Command::new(&args[0])
+                    .args(&args[1..])
+                    .arg(&guard.0)
+                    .status()
+                    .expect("run the tool");
+                assert!(status.success(), "{args:?}");
+            }
+            guard
+        }
+    }
+
+    impl Drop for ImmutableWithAcl {
+        fn drop(&mut self) {
+            let _ = std::process::Command::new("chflags")
+                .arg("nouchg")
+                .arg(&self.0)
+                .status();
+            let _ = std::process::Command::new("chmod")
+                .arg("-N")
+                .arg(&self.0)
+                .status();
+            let _ = std::fs::remove_dir(&self.0);
+        }
+    }
+
+    #[test]
+    fn a_stage_whose_acl_cannot_be_cleared_and_stays_is_refused_with_the_clear_error() {
+        let stage = ImmutableWithAcl::new();
+        let error = clear_stage_acl(&stage.0).unwrap_err();
+        assert!(error.contains("still has an ACL"), "{error}");
+        assert!(error.contains("could not be cleared"), "{error}");
+    }
+
+    #[test]
+    fn a_stage_that_can_be_neither_cleared_nor_read_is_refused_with_both_errors() {
+        let missing = std::env::temp_dir().join(format!(
+            "fireemu-acl-missing-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let error = clear_stage_acl(&missing).unwrap_err();
+        assert!(error.contains("nor inspect it"), "{error}");
     }
 
     #[test]
@@ -426,6 +542,31 @@ mod tests {
 
         fn decide(list: &[AclEntry]) -> Result<(), String> {
             check(Path::new("/ancestor"), &trusted(), &|_| Ok(list.to_vec()))
+        }
+
+        proptest! {
+            /// The stage is settled if and only if it reads back empty, whatever the clear reported;
+            /// every refusal names each error it was given.
+            #[test]
+            fn the_stage_is_settled_exactly_when_it_reads_back_empty(
+                cleared in prop_oneof![Just(Ok(())), "[A-Za-z0-9 ]{1,12}".prop_map(Err)],
+                left in prop_oneof![
+                    entries().prop_map(Ok),
+                    "[A-Za-z0-9 ]{1,12}".prop_map(Err),
+                ],
+            ) {
+                let empty = matches!(&left, Ok(list) if list.is_empty());
+                let verdict = settle_stage_acl(cleared.clone(), left.clone());
+                prop_assert_eq!(verdict.is_ok(), empty);
+                if let Err(message) = verdict {
+                    if let Err(error) = &cleared {
+                        prop_assert!(message.contains(error.as_str()), "{message}");
+                    }
+                    if let Err(error) = &left {
+                        prop_assert!(message.contains(error.as_str()), "{message}");
+                    }
+                }
+            }
         }
 
         proptest! {

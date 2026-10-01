@@ -161,7 +161,7 @@ parity: 17 &middot; documented-divergence: 16
 
 ## json-api
 
-parity: 32 &middot; documented-divergence: 43
+parity: 35 &middot; documented-divergence: 40
 
 | program | step | status |
 | --- | --- | --- |
@@ -220,10 +220,10 @@ parity: 32 &middot; documented-divergence: 43
 | `gcs-preconditions` | `insert-if-generation-match-current` | documented-divergence |
 | `gcs-preconditions` | `patch-if-metageneration-mismatch` | documented-divergence |
 | `gcs-preconditions` | `get-if-generation-not-match-current` | documented-divergence |
-| `gcs-preconditions` | `delete-if-generation-mismatch` | documented-divergence |
-| `gcs-preconditions` | `malformed-precondition` | documented-divergence |
+| `gcs-preconditions` | `delete-if-generation-mismatch` | parity |
+| `gcs-preconditions` | `malformed-precondition` | parity |
 | `gcs-preconditions` | `get-selected-generation-missing` | parity |
-| `gcs-preconditions` | `object-still-present` | documented-divergence |
+| `gcs-preconditions` | `object-still-present` | parity |
 | `gcs-checksums` | `matching-md5` | documented-divergence |
 | `gcs-checksums` | `mismatching-md5` | documented-divergence |
 | `gcs-checksums` | `mismatching-md5-not-published` | documented-divergence |

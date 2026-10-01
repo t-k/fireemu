@@ -2412,60 +2412,6 @@
         "approvalRecord": "README.md, \"Storage\"; capability manifest ST-OBJ-1 (crates/fireemu/src/capabilities.json)"
       }
     },
-    "storage-probe/gcs-preconditions#delete-if-generation-mismatch": {
-      "documents": "README.md, \"Storage\"; capability manifest ST-OBJ-1 (crates/fireemu/src/capabilities.json)",
-      "reason": "A delete guarded by a stale ifGenerationMatch is 412 under fireemu; the official emulator ignores the guard and was measured to delete the object.",
-      "authority": {
-        "kind": "production-spec",
-        "sourceUrls": [
-          "https://cloud.google.com/storage/docs/request-preconditions",
-          "https://github.com/firebase/firebase-tools/tree/v15.28.2"
-        ],
-        "checkedOn": "2026-09-05",
-        "officialBaseline": {
-          "package": "firebase-tools",
-          "version": "15.28.2"
-        },
-        "fixture": "conformance/storage-matrix.json#gcs-preconditions#delete-if-generation-mismatch",
-        "approvalRecord": "README.md, \"Storage\"; capability manifest ST-OBJ-1 (crates/fireemu/src/capabilities.json)"
-      }
-    },
-    "storage-probe/gcs-preconditions#malformed-precondition": {
-      "documents": "README.md, \"Storage\"; capability manifest ST-OBJ-1 (crates/fireemu/src/capabilities.json)",
-      "reason": "A malformed precondition value is 400 under fireemu; the official emulator does not read the parameter (and, this late in the program, had already deleted the object the guarded delete should have kept).",
-      "authority": {
-        "kind": "production-spec",
-        "sourceUrls": [
-          "https://cloud.google.com/storage/docs/request-preconditions",
-          "https://github.com/firebase/firebase-tools/tree/v15.28.2"
-        ],
-        "checkedOn": "2026-09-05",
-        "officialBaseline": {
-          "package": "firebase-tools",
-          "version": "15.28.2"
-        },
-        "fixture": "conformance/storage-matrix.json#gcs-preconditions#malformed-precondition",
-        "approvalRecord": "README.md, \"Storage\"; capability manifest ST-OBJ-1 (crates/fireemu/src/capabilities.json)"
-      }
-    },
-    "storage-probe/gcs-preconditions#object-still-present": {
-      "documents": "README.md, \"Storage\"; capability manifest ST-OBJ-1 (crates/fireemu/src/capabilities.json)",
-      "reason": "The consequence of the guard: the object survives under fireemu and is gone under the official emulator.",
-      "authority": {
-        "kind": "production-spec",
-        "sourceUrls": [
-          "https://cloud.google.com/storage/docs/request-preconditions",
-          "https://github.com/firebase/firebase-tools/tree/v15.28.2"
-        ],
-        "checkedOn": "2026-09-05",
-        "officialBaseline": {
-          "package": "firebase-tools",
-          "version": "15.28.2"
-        },
-        "fixture": "conformance/storage-matrix.json#gcs-preconditions#object-still-present",
-        "approvalRecord": "README.md, \"Storage\"; capability manifest ST-OBJ-1 (crates/fireemu/src/capabilities.json)"
-      }
-    },
     "storage-probe/gcs-checksums#mismatching-md5": {
       "documents": "README.md, \"Storage\"; capability manifest ST-OBJ-1 (crates/fireemu/src/capabilities.json)",
       "reason": "A declared md5Hash / X-Goog-Hash is verified against the received bytes before the commit, as production verifies it; a mismatch is 400 and nothing is published. The official emulator ignores declared checksums and was measured to store the corrupt payload.",

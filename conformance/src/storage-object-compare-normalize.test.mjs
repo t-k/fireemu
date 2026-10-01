@@ -697,9 +697,33 @@ test("a JSON document sent as text is compared in its compact form and its layou
     production.layout,
   );
   // Text that is not a JSON object or array, and non-text types, are left as they are.
-  for (const text of ["No such object", "5", '"quoted"', "null", "{broken"])
+  // (the spaces and the "1.0" would change if a scalar were re-serialized)
+  for (const text of ["No such object", " 5 ", "1.0", '"quoted" ', " null ", "{broken"])
     assert.equal(row(text, text.length).body.value, text);
   assert.equal(row("No such object", 14).layout, 0);
+  // Only text types: JSON-looking text of an XML type is left as it is.
+  const xml = normalizeBody(Buffer.from(pretty), "application/xml", ctx());
+  assert.equal(xml.value, pretty);
+  assert.equal(
+    layoutOverhead({
+      headers: { "content-type": "application/xml" },
+      body: Buffer.from(pretty),
+      bodyBytes: pretty.length,
+    }),
+    0,
+  );
+  // The compact length is in bytes, not characters.
+  const accented = '{"message":"é"}';
+  const accentedPretty = JSON.stringify(JSON.parse(accented), null, 2);
+  const accentedLength = Buffer.byteLength(accentedPretty);
+  assert.equal(
+    layoutOverhead({
+      headers: { "content-type": "text/html" },
+      body: Buffer.from(accented),
+      bodyBytes: accentedLength,
+    }),
+    accentedLength - Buffer.byteLength(accented),
+  );
   const plain = normalizeExchange(
     {
       method: "GET",

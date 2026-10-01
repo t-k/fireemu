@@ -239,6 +239,14 @@ class MergeTest(unittest.TestCase):
             code = summary.main(["--expected-shards", "2", str(self.root), str(self.out)])
         self.assertEqual((code, stderr.getvalue()), (0, ""))
 
+    def test_a_run_that_cannot_be_trusted_does_not_claim_that_no_mutant_was_generated(self):
+        write_empty_shard(self.root, 0)
+        merged = summary.merge(self.root, 2)  # shard 1 left no artifact
+        self.assertEqual(merged["total"], 0)
+        self.assertEqual(len(merged["problems"]), 1)
+        self.assertNotIn("No mutant was generated", summary.markdown(merged))
+        self.assertIn("cannot be trusted", summary.markdown(merged))
+
 
 if __name__ == "__main__":
     unittest.main()

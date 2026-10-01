@@ -141,4 +141,8 @@ class HeavyVerificationContractTest < Minitest::Test
     assert_violation(REAL.sub("          exit \"$code\"\n", ""), "keep the script's status")
     assert_violation(REAL.sub(" || code=$?", ""), "keep the script's status")
   end
+
+  def test_a_summary_merge_that_does_not_show_the_summary_is_refused
+    assert_violation(REAL.sub("cat summary/summary.md >> \"$GITHUB_STEP_SUMMARY\"", "true"), "append summary/summary.md")
+  end
 end

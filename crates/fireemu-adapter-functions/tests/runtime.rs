@@ -2724,6 +2724,24 @@ fn a_storage_finalize_event_matches_the_recorded_production_delivery() {
     for key in ["type", "subject", "source", "specversion"] {
         assert_eq!(event[key], gen2[key], "{key}");
     }
+    // The CloudEvent carries the recorded members: the framework adds `context` and `object` on
+    // the way to a handler. Two known divergences: the delivery's `traceparent` (the runtime
+    // sends none) and `datacontenttype` (the runtime sets `application/json`; production's
+    // Storage event carries none, as the recorded `eventKeys` and the null member show).
+    let mut recorded_keys: Vec<String> = gen2["eventKeys"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|key| key.as_str().unwrap().to_owned())
+        .filter(|key| !["context", "object", "traceparent"].contains(&key.as_str()))
+        .collect();
+    recorded_keys.push("datacontenttype".to_owned());
+    recorded_keys.sort();
+    let mut local_keys: Vec<String> = event.as_object().unwrap().keys().cloned().collect();
+    local_keys.sort();
+    assert_eq!(local_keys, recorded_keys);
+    assert!(gen2["datacontenttype"].is_null());
+    assert_eq!(event["datacontenttype"], "application/json");
     assert_eq!(event["bucket"], gen2["extensionAttributes"]["bucket"]);
     // The event time is the object's creation instant with the microseconds production prints,
     // not the moment the runtime admitted the event.
@@ -2784,6 +2802,59 @@ fn a_storage_finalize_event_matches_the_recorded_production_delivery() {
     // the metageneration (`CLuI7vG3mJcDEAE=`); the local one is the quoted `<generation>-<n>`.
     assert_eq!(recorded["etag"], "CLuI7vG3mJcDEAE=");
     assert_eq!(local["etag"], format!("\"{}-1\"", meta.generation));
+}
+
+/// A Storage delivery's runner frame carries the instant the runtime admitted the event as
+/// `admittedAt`, apart from the event's own `time` (a finalize event's `time` is the object's
+/// creation instant). A 1st gen handler's `context.timestamp` is cut from `admittedAt`.
+#[tokio::test]
+async fn a_storage_delivery_frame_carries_the_admission_instant_apart_from_the_event_time() {
+    let dir = std::env::temp_dir().join(format!("fireemu-storage-frame-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let log = dir.join("frames");
+    let (runtime, _clock) = start_with_runtime_options_and_env(
+        fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
+        fireemu_adapter_functions::runtime::CatchUpPolicy::All,
+        4,
+        true,
+        vec![(
+            "FIREEMU_FAKE_FRAME_LOG".to_owned(),
+            log.display().to_string(),
+        )],
+        |_| {},
+    )
+    .await;
+    wait_for_runner(&runtime).await;
+    // The object was created 5.000123 s before the runtime admits its finalize event.
+    let created = LogicalInstant::from_nanos(START.as_nanos() - 5_000_123_000);
+    let mut store = StorageState::new(1);
+    let meta = store
+        .put(
+            &BucketName::try_new("demo-app.appspot.com").unwrap(),
+            &ObjectName::try_new("a.txt").unwrap(),
+            b"x".to_vec(),
+            NewMetadata::default(),
+            Precondition::default(),
+            created,
+        )
+        .unwrap();
+    runtime.on_storage_event(&StorageEvent::Finalized(meta));
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    let frame = loop {
+        let text = std::fs::read_to_string(&log).unwrap_or_default();
+        if let Some(line) = text.lines().find(|line| line.contains("\"slow\"")) {
+            break serde_json::from_str::<serde_json::Value>(line).unwrap();
+        }
+        assert!(std::time::Instant::now() < deadline, "no frame: {text}");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    };
+    let parse = |value: &serde_json::Value| LogicalInstant::parse_rfc3339(value.as_str().unwrap());
+    assert_eq!(parse(&frame["admittedAt"]).unwrap(), START);
+    assert_eq!(parse(&frame["event"]["time"]).unwrap(), created);
+    assert!(parse(&frame["admittedAt"]).unwrap() > parse(&frame["event"]["time"]).unwrap());
+    runtime.shutdown().await;
+    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]

@@ -1,6 +1,7 @@
 //! `CloudEvents` JSON for Firestore document changes, Storage object events and scheduled
 //! runs, in the shapes the `firebase-functions` v2 SDK decodes with
-//! `datacontenttype: application/json`.
+//! `datacontenttype: application/json` (the SDK's Firestore JSON path requires it and removes
+//! it before a handler runs; a production Storage event carries none, a known divergence).
 
 use fireemu_adapter_grpc::encode::encode_document;
 use fireemu_adapter_grpc::rest::json::{document_to_json, shorten_fraction};
@@ -45,7 +46,11 @@ fn storage_time(kind: ObjectEvent, object: &ObjectMetadata, admitted: LogicalIns
         _ => admitted,
     };
     let nanos = instant.as_nanos();
-    firestore_time(LogicalInstant::from_nanos(nanos - nanos.rem_euclid(1_000)))
+    // An instant the logical clock cannot print stays as it is and takes `rfc3339`'s fallback.
+    let cut = nanos
+        .checked_sub(nanos.rem_euclid(1_000))
+        .map_or(instant, LogicalInstant::from_nanos);
+    firestore_time(cut)
 }
 
 /// A Firestore event's time as protobuf JSON prints a `Timestamp`: a fraction of zero, three,
@@ -75,16 +80,39 @@ fn seeded_stream(seed: &str) -> impl FnMut() -> u64 {
     }
 }
 
+/// The first seventeen-digit decimal number and the count of them: a Storage event id lies in
+/// `FIRST..FIRST + ID_SPAN`.
+const ID_FIRST: u64 = 10_000_000_000_000_000;
+const ID_SPAN: u64 = 90_000_000_000_000_000;
+/// The step between the ids of consecutive events of one session. `ID_SPAN` is `2^16 * 3^2 *
+/// 5^16`, so any odd step that is neither a multiple of 3 nor of 5 is coprime to it and the
+/// ids of `ID_SPAN` consecutive events are all different.
+const ID_STEP: u64 = 61_803_398_874_989_483;
+
 /// A Storage event id as production prints it: a decimal string of seventeen digits (observed
 /// 2026-10-01 for a 1st gen `context.eventId` and a 2nd gen `CloudEvent` `id` of one object create;
-/// the two are unrelated numbers). Derived deterministically from `seed` so a recorded local run
-/// replays with the same ids. Other lengths were not recorded.
+/// the two are unrelated numbers). Other lengths were not recorded.
+///
+/// The runtime passes `<session>-<n>` as the seed, with `n` counting the events of the session.
+/// For that form the id is `ID_FIRST + (offset(session) + n * ID_STEP) mod ID_SPAN`: a fixed
+/// function of the seed, so a recorded run replays with the same ids, and, because the step is
+/// coprime to the span, the ids of two different events of one session never collide (for fewer
+/// than `ID_SPAN` events). The ids of different sessions can collide, as the sessions' offsets
+/// are hashes. Any other seed is hashed and may collide.
 #[must_use]
 pub fn storage_event_id(seed: &str) -> String {
-    const FIRST: u64 = 10_000_000_000_000_000;
-    const SPAN: u64 = 90_000_000_000_000_000;
-    let mut next = seeded_stream(seed);
-    (FIRST + next() % SPAN).to_string()
+    let counted = seed
+        .rsplit_once('-')
+        .and_then(|(session, n)| Some((session, n.parse::<u64>().ok()?)));
+    let offset_and_count = |session: &str, n: u64| {
+        let offset = u128::from(seeded_stream(session)() % ID_SPAN);
+        (offset + u128::from(n % ID_SPAN) * u128::from(ID_STEP)) % u128::from(ID_SPAN)
+    };
+    let position = match counted {
+        Some((session, n)) => offset_and_count(session, n),
+        None => u128::from(seeded_stream(seed)() % ID_SPAN),
+    };
+    (u128::from(ID_FIRST) + position).to_string()
 }
 
 /// A UUID-shaped (version 4, variant 1) event id derived from `seed`. Production's Firestore
@@ -257,7 +285,8 @@ fn percent_encode(s: &str) -> String {
 }
 
 /// A Storage object event. `id` seeds the event's seventeen-digit decimal `id`
-/// ([`storage_event_id`]); `time` is when the runtime admitted the event.
+/// ([`storage_event_id`]); `time` is when the runtime admitted the event (a finalize event's
+/// own `time` is the object's creation instant, see [`storage_time`]).
 #[must_use]
 pub fn storage_event(
     id: &str,
@@ -538,12 +567,60 @@ mod tests {
         // Golden values: a recorded local run must replay with the same ids in every build.
         // Cross-checked against an independent implementation of the same stream.
         for (seed, expected) in [
-            ("42-1", "43358924905190503"),
-            ("42-2", "68188927818470329"),
+            ("42-1", "72615684452749472"),
+            ("42-2", "44419083327738955"),
+            ("42-3", "16222482202728438"),
+            ("7-1", "11411248863046627"),
+            ("abc-0", "15885848759147634"),
             ("", "57677454934409008"),
             ("a", "75141593866473567"),
+            ("a-b", "64542345540733686"),
         ] {
             assert_eq!(storage_event_id(seed), expected, "seed {seed:?}");
+        }
+    }
+
+    fn gcd(a: u64, b: u64) -> u64 {
+        if b == 0 {
+            a
+        } else {
+            gcd(b, a % b)
+        }
+    }
+
+    #[test]
+    fn the_id_step_is_coprime_to_the_span_so_one_sessions_ids_cannot_collide() {
+        // `n * ID_STEP mod ID_SPAN` is a bijection on `0..ID_SPAN` exactly when the step and the
+        // span share no factor; the span is `2^16 * 3^2 * 5^16`.
+        assert_eq!(gcd(super::ID_STEP, super::ID_SPAN), 1);
+        assert_eq!(super::ID_SPAN, (1_u64 << 16) * 9 * 5_u64.pow(16));
+        const { assert!(super::ID_STEP < super::ID_SPAN) };
+    }
+
+    #[test]
+    fn consecutive_events_of_a_session_get_ids_a_whole_step_apart() {
+        let id = |n: u64| storage_event_id(&format!("42-{n}")).parse::<u64>().unwrap();
+        for n in [0_u64, 1, 2, 1_000, 89_999_999_999_999_998] {
+            let (a, b) = (id(n) - super::ID_FIRST, id(n + 1) - super::ID_FIRST);
+            let step = (u128::from(b) + u128::from(super::ID_SPAN) - u128::from(a))
+                % u128::from(super::ID_SPAN);
+            assert_eq!(step, u128::from(super::ID_STEP), "n {n}");
+        }
+    }
+
+    #[test]
+    fn a_seed_without_a_counter_is_hashed_and_still_has_seventeen_digits() {
+        for seed in [
+            "",
+            "a",
+            "a-b",
+            "-",
+            "42-",
+            "42--1",
+            "42-18446744073709551616",
+        ] {
+            let id = storage_event_id(seed);
+            assert_eq!(id.len(), 17, "{seed:?} {id}");
         }
     }
 
@@ -561,6 +638,88 @@ mod tests {
     }
 
     const SECOND: i128 = 1_790_844_566 * 1_000_000_000;
+
+    #[test]
+    fn storage_times_cut_at_the_boundaries_of_the_calendar_and_the_epoch() {
+        // (instant in nanoseconds since the epoch, finalize CloudEvent time, object resource time)
+        let second = 1_000_000_000_i128;
+        let cases: [(i128, &str, &str); 9] = [
+            // Before the epoch the cut still discards the low digits and never rounds up.
+            (
+                -1,
+                "1969-12-31T23:59:59.999999Z",
+                "1969-12-31T23:59:59.999Z",
+            ),
+            (
+                -1_000,
+                "1969-12-31T23:59:59.999999Z",
+                "1969-12-31T23:59:59.999Z",
+            ),
+            (
+                -1_001,
+                "1969-12-31T23:59:59.999998Z",
+                "1969-12-31T23:59:59.999Z",
+            ),
+            // The microsecond and the millisecond edges.
+            (999, "1970-01-01T00:00:00Z", "1970-01-01T00:00:00.000Z"),
+            (
+                1_000,
+                "1970-01-01T00:00:00.000001Z",
+                "1970-01-01T00:00:00.000Z",
+            ),
+            (
+                1_000_000,
+                "1970-01-01T00:00:00.001Z",
+                "1970-01-01T00:00:00.001Z",
+            ),
+            // A leap day and a second rollover.
+            (
+                1_709_251_199 * second + 999_999_999,
+                "2024-02-29T23:59:59.999999Z",
+                "2024-02-29T23:59:59.999Z",
+            ),
+            (
+                1_709_251_200 * second,
+                "2024-03-01T00:00:00Z",
+                "2024-03-01T00:00:00.000Z",
+            ),
+            (
+                1_709_251_200 * second + 1,
+                "2024-03-01T00:00:00Z",
+                "2024-03-01T00:00:00.000Z",
+            ),
+        ];
+        for (nanos, finalize_time, resource_time) in cases {
+            let object = object_created_at(nanos);
+            assert_eq!(
+                storage_time(
+                    ObjectEvent::Finalized,
+                    &object,
+                    LogicalInstant::from_nanos(0)
+                ),
+                finalize_time,
+                "finalize time at {nanos}"
+            );
+            let json = object_json(&object);
+            for key in ["timeCreated", "updated", "timeStorageClassUpdated"] {
+                assert_eq!(json[key], resource_time, "{key} at {nanos}");
+            }
+        }
+    }
+
+    #[test]
+    fn an_instant_the_clock_cannot_print_takes_the_fallback_and_never_panics() {
+        // `LogicalInstant::MIN` is the case an unchecked subtraction underflows on.
+        let object = object_created_at(SECOND);
+        for admitted in [LogicalInstant::MIN, LogicalInstant::MAX] {
+            for kind in [ObjectEvent::Deleted, ObjectEvent::MetadataUpdated] {
+                assert_eq!(
+                    storage_time(kind, &object, admitted),
+                    "1970-01-01T00:00:00Z"
+                );
+            }
+        }
+    }
 
     #[test]
     fn object_resource_times_have_exactly_three_fraction_digits_cut_not_rounded() {
@@ -628,7 +787,16 @@ mod tests {
             }
 
             #[test]
-            fn object_resource_times_always_have_three_digits_and_are_cut_not_rounded(nanos in 0_i128..4_000_000_000_000_000_000) {
+            fn two_events_of_one_session_never_share_an_id(session in 0_u64..1_000_000, n in 0_u64..90_000_000_000_000_000, m in 0_u64..90_000_000_000_000_000) {
+                prop_assume!(n != m);
+                prop_assert_ne!(
+                    storage_event_id(&format!("{session}-{n}")),
+                    storage_event_id(&format!("{session}-{m}"))
+                );
+            }
+
+            #[test]
+            fn object_resource_times_always_have_three_digits_and_are_cut_not_rounded(nanos in -4_000_000_000_000_000_000_i128..4_000_000_000_000_000_000) {
                 let created = SECOND + nanos;
                 let json = object_json(&object_created_at(created));
                 for key in ["timeCreated", "updated", "timeStorageClassUpdated"] {
@@ -641,7 +809,7 @@ mod tests {
             }
 
             #[test]
-            fn a_finalize_time_is_the_creation_instant_cut_to_the_microsecond(nanos in 0_i128..4_000_000_000_000_000_000, admitted in 0_i128..4_000_000_000_000_000_000) {
+            fn a_finalize_time_is_the_creation_instant_cut_to_the_microsecond(nanos in -4_000_000_000_000_000_000_i128..4_000_000_000_000_000_000, admitted in -4_000_000_000_000_000_000_i128..4_000_000_000_000_000_000) {
                 let created = SECOND + nanos;
                 let object = object_created_at(created);
                 let time = storage_time(ObjectEvent::Finalized, &object, LogicalInstant::from_nanos(SECOND + admitted));
@@ -651,7 +819,7 @@ mod tests {
             }
 
             #[test]
-            fn the_other_kinds_use_the_admission_instant_to_the_microsecond(nanos in 0_i128..4_000_000_000_000_000_000, admitted in 0_i128..4_000_000_000_000_000_000) {
+            fn the_other_kinds_use_the_admission_instant_to_the_microsecond(nanos in -4_000_000_000_000_000_000_i128..4_000_000_000_000_000_000, admitted in -4_000_000_000_000_000_000_i128..4_000_000_000_000_000_000) {
                 let object = object_created_at(SECOND + nanos);
                 let at = SECOND + admitted;
                 for kind in [ObjectEvent::Deleted, ObjectEvent::MetadataUpdated] {

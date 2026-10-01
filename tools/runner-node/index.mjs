@@ -1094,9 +1094,11 @@ function v1Context(msg) {
       return {
         eventId: event.id,
         // Production hands a 1st gen Storage handler a timestamp with exactly three fractional
-        // digits (observed 2026-10-01: `2026-10-01T08:49:26.577Z`), where the CloudEvent time
-        // carries the microseconds.
-        timestamp: millisecondTimestamp(event.time),
+        // digits (observed 2026-10-01: `2026-10-01T08:49:26.577Z`, after the object's
+        // `timeCreated` of `.486Z`). The runtime admits the event later than it creates the
+        // object, so the timestamp is cut from the admission instant the frame carries; the
+        // CloudEvent time of a finalize event is the creation instant.
+        timestamp: millisecondTimestamp(msg.admittedAt ?? event.time),
         eventType: {
           "google.cloud.storage.object.v1.finalized": "google.storage.object.finalize",
           "google.cloud.storage.object.v1.deleted": "google.storage.object.delete",

@@ -42,7 +42,7 @@ use fireemu_core_storage::name::{BucketName, ObjectName};
 use fireemu_core_storage::store::{
     CustomMetadataPatch, MetadataPatch, NewMetadata, ObjectMetadata, Precondition, PreparedObject,
     StorageError, StorageEvent, StorageState as ObjectStore, UploadAdmission, UploadId,
-    UploadOptions, UploadPhase,
+    UploadOptions, UploadPhase, DEFAULT_LIST_PAGE_SIZE,
 };
 use fireemu_core_types::determinism::Clock;
 use fireemu_core_types::ids::ProjectId;
@@ -2869,14 +2869,44 @@ fn fb_list(
         None,
         RulesValue::Null,
     )?;
+    // Production refuses `maxResults=0` with this body (recorded, lean-v4 and lean-v5: 400,
+    // compact JSON); the official emulator answers 200 with an empty page, which the emulator
+    // profile keeps because it never refuses what the official emulator admits.
+    if max_results == Some(0) && state.is_strict() {
+        return Err(fb_json_error(
+            400,
+            "Expect maxResults to be a positive number.",
+        ));
+    }
     let store = state.store()?;
-    let page = store.list(
-        &b,
-        &prefix,
-        Some(delimiter.as_str()),
-        page_token.as_deref(),
-        max_results,
-    );
+    let page = if max_results == Some(0) {
+        // Only the emulator profile reaches here (strict refused above): the official emulator's
+        // empty page.
+        store.list(
+            &b,
+            &prefix,
+            Some(delimiter.as_str()),
+            page_token.as_deref(),
+            max_results,
+        )
+    } else {
+        // Paging as production answers it (recorded, lean-v5): `maxResults` counts items and
+        // prefixes together in one merged name order, and the page token is the standard
+        // base64, padding kept, of the full name of the last entry returned.
+        let max = max_results
+            .unwrap_or(DEFAULT_LIST_PAGE_SIZE)
+            .min(DEFAULT_LIST_PAGE_SIZE);
+        let after = page_token
+            .as_deref()
+            .and_then(|token| base64_decode(token).ok())
+            .and_then(|bytes| String::from_utf8(bytes).ok());
+        let mut page =
+            store.list_after(&b, &prefix, Some(delimiter.as_str()), after.as_deref(), max);
+        page.next_page_token = page
+            .next_page_token
+            .map(|last| fireemu_core_storage::hash::base64(last.as_bytes()));
+        page
+    };
     // The official Firebase list filters malformed names out of the answer.
     let is_valid = |name: &str| !name.is_empty() && name.split('/').all(|s| !s.is_empty());
     let mut body = json!({

@@ -1245,6 +1245,56 @@ fn an_empty_page_treats_only_an_unfolded_entry_under_the_prefix_as_a_token() {
 }
 
 #[test]
+fn list_after_pages_one_merged_order_and_names_the_last_entry_returned() {
+    let mut s = StorageState::new(1);
+    let b = bucket();
+    for n in [
+        "p/a.txt",
+        "p/b.txt",
+        "p/dir/x.txt",
+        "p/dir/y.txt",
+        "p/dir2/z.txt",
+        "p/zz.txt",
+        "q/other",
+    ] {
+        s.put(
+            &b,
+            &name(n),
+            b"x".to_vec(),
+            NewMetadata::default(),
+            Precondition::default(),
+            t(1),
+        )
+        .unwrap();
+    }
+    let page = |after: Option<&str>| s.list_after(&b, "p/", Some("/"), after, 2);
+    let first = page(None);
+    let names: Vec<&str> = first.items.iter().map(|m| m.name.as_str()).collect();
+    assert_eq!(names, ["p/a.txt", "p/b.txt"]);
+    assert!(first.prefixes.is_empty());
+    assert_eq!(first.next_page_token.as_deref(), Some("p/b.txt"));
+    // The second page holds only prefixes, each once, and names the last of them.
+    let second = page(first.next_page_token.as_deref());
+    assert!(second.items.is_empty());
+    assert_eq!(second.prefixes, ["p/dir/", "p/dir2/"]);
+    assert_eq!(second.next_page_token.as_deref(), Some("p/dir2/"));
+    let third = page(second.next_page_token.as_deref());
+    let names: Vec<&str> = third.items.iter().map(|m| m.name.as_str()).collect();
+    assert_eq!(names, ["p/zz.txt"]);
+    assert!(third.prefixes.is_empty());
+    assert_eq!(third.next_page_token, None);
+    // A point that names no entry skips everything up to it; one past the end is an empty page.
+    let skipped = page(Some("p/c"));
+    assert_eq!(skipped.prefixes, ["p/dir/", "p/dir2/"]);
+    assert!(page(Some("p/zzz")).items.is_empty());
+    // Without a delimiter every object is an entry, and one page can hold them all.
+    let flat = s.list_after(&b, "p/", None, None, 10);
+    assert_eq!(flat.items.len(), 6);
+    assert!(flat.prefixes.is_empty());
+    assert_eq!(flat.next_page_token, None);
+}
+
+#[test]
 fn absent_objects_satisfy_only_if_generation_match_zero() {
     let mut s = StorageState::new(1);
     let b = bucket();

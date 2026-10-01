@@ -2250,6 +2250,24 @@
         "approvalRecord": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)"
       }
     },
+    "storage-probe/fb-list#page-token-shape": {
+      "documents": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)",
+      "reason": "In fireemu, the Firebase list's page token is the standard base64, padding kept, of the full name of the last entry returned (items and prefixes in one merged name order), as production answers it (recorded in the STORAGE-OBJECT lean-v5 recording, 2026-09-30, and pinned by the crate tests), where the official emulator's token is the raw name of the first object of the next page.",
+      "authority": {
+        "kind": "production-spec",
+        "sourceUrls": [
+          "https://firebase.google.com/docs/storage/web/list-files",
+          "https://github.com/firebase/firebase-tools/tree/v15.28.2"
+        ],
+        "checkedOn": "2026-10-01",
+        "officialBaseline": {
+          "package": "firebase-tools",
+          "version": "15.28.2"
+        },
+        "fixture": "conformance/storage-matrix.json#fb-list#page-token-shape",
+        "approvalRecord": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)"
+      }
+    },
     "storage-probe/rules-request-model#cache-control-visible-to-rules": {
       "documents": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)",
       "reason": "resource.cacheControl is a production rules field. fireemu passes it; the official emulator's rules resource omits it, so reading it raises and the read was measured to deny.",

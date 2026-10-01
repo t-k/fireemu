@@ -371,19 +371,36 @@ fn firebase_and_json_api_list_pages_share_the_combined_entry_budget() {
         }
     }
 
-    for route in [
-        format!("/v0/b/{BUCKET}/o"),
-        format!("/storage/v1/b/{BUCKET}/o"),
+    // The Firebase route pages as production does (recorded, lean-v5): the token is the standard
+    // base64, padding kept, of the last entry returned; the JSON API route names the first entry
+    // of the next page.
+    for (route, tokens) in [
+        (
+            format!("/v0/b/{BUCKET}/o"),
+            [Some("Yg=="), Some("ZGlyMi8="), None],
+        ),
+        (
+            format!("/storage/v1/b/{BUCKET}/o"),
+            [Some("dir/"), Some("zz"), None],
+        ),
     ] {
         let mut token: Option<String> = None;
-        for (expected_items, expected_prefixes, expected_token) in [
-            (vec!["a", "b"], vec![], Some("dir/")),
-            (vec![], vec!["dir/", "dir2/"], Some("zz")),
-            (vec!["zz"], vec![], None),
-        ] {
+        for ((expected_items, expected_prefixes), expected_token) in [
+            (vec!["a", "b"], vec![]),
+            (vec![], vec!["dir/", "dir2/"]),
+            (vec!["zz"], vec![]),
+        ]
+        .into_iter()
+        .zip(tokens)
+        {
             let query = token.as_ref().map_or_else(
                 || "delimiter=%2F&maxResults=2".to_owned(),
-                |value| format!("delimiter=%2F&maxResults=2&pageToken={value}"),
+                |value| {
+                    format!(
+                        "delimiter=%2F&maxResults=2&pageToken={}",
+                        value.replace('=', "%3D")
+                    )
+                },
             );
             let response = handle(
                 &storage,
@@ -2960,6 +2977,37 @@ fn json_api_routing_and_range_edges() {
             assert_eq!(beyond.status, 200);
             assert_eq!(beyond.body.as_ref(), b"hello");
         }
+    }
+}
+
+/// The Firebase list answers `maxResults=0` with production's 400 under strict (recorded, lean-v4
+/// and lean-v5: compact `{"error":{"code":400,"message":"Expect maxResults to be a positive
+/// number."}}`, `application/json; charset=UTF-8`); the emulator profile keeps the official
+/// emulator's 200 (measured, firebase-tools 15.28.2: an empty page), since it never refuses what
+/// the official emulator admits. An empty list is `{"prefixes":[],"items":[]}` with both keys.
+#[test]
+fn the_firebase_list_refuses_max_results_zero_only_under_strict_and_keeps_its_key_set() {
+    let route = format!("/v0/b/{BUCKET}/o?maxResults=0");
+    let strict = state_with(Some(ALLOW_ALL_RULES), TokenAcceptance::Verified);
+    let refused = handle(&strict, req("GET", &route, &[], b""));
+    assert_eq!(refused.status, 400);
+    assert_eq!(
+        String::from_utf8_lossy(&refused.body),
+        r#"{"error":{"code":400,"message":"Expect maxResults to be a positive number."}}"#
+    );
+    assert_eq!(
+        header(&refused, "content-type"),
+        Some("application/json; charset=UTF-8")
+    );
+    let emulator = state_with(Some(ALLOW_ALL_RULES), TokenAcceptance::EmulatorMock);
+    assert_eq!(handle(&emulator, req("GET", &route, &[], b"")).status, 200);
+    for state in [&strict, &emulator] {
+        let empty = handle(
+            state,
+            req("GET", &format!("/v0/b/{BUCKET}/o?maxResults=2"), &[], b""),
+        );
+        assert_eq!(empty.status, 200);
+        assert_eq!(json_body(&empty), json!({"prefixes": [], "items": []}));
     }
 }
 

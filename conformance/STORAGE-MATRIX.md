@@ -12,7 +12,7 @@ nothing until they are ruled on (they fail no claim while excluded by name).
 
 ## firebase-protocol
 
-parity: 57 &middot; documented-divergence: 45
+parity: 56 &middot; documented-divergence: 46
 
 | program | step | status |
 | --- | --- | --- |
@@ -109,7 +109,7 @@ parity: 57 &middot; documented-divergence: 45
 | `fb-list` | `subdirectory` | parity |
 | `fb-list` | `empty-prefix` | parity |
 | `fb-list` | `paged` | documented-divergence |
-| `fb-list` | `page-token-shape` | parity |
+| `fb-list` | `page-token-shape` | documented-divergence |
 | `fb-list` | `list-closed-prefix` | parity |
 | `fb-list` | `list-listable-prefix-anonymous` | parity |
 | `fb-list` | `get-in-listable-prefix-anonymous` | parity |

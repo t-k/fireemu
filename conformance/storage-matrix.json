@@ -6,8 +6,8 @@
   },
   "project": "demo-storage-probe",
   "summary": {
-    "parity": 109,
-    "documented-divergence": 110,
+    "parity": 108,
+    "documented-divergence": 111,
     "debt": 0
   },
   "programs": [
@@ -2688,14 +2688,23 @@
         },
         {
           "id": "page-token-shape",
-          "status": "parity",
-          "value": {
+          "status": "documented-divergence",
+          "oracle": {
             "items": [
               "open/lst/a.txt",
               "open/lst/b.txt"
             ],
             "nextPageToken": "open/lst/dir/c.txt"
-          }
+          },
+          "fireemu": {
+            "items": [
+              "open/lst/a.txt",
+              "open/lst/b.txt"
+            ],
+            "nextPageToken": "b3Blbi9sc3QvYi50eHQ="
+          },
+          "documents": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)",
+          "reason": "In fireemu, the Firebase list's page token is the standard base64, padding kept, of the full name of the last entry returned (items and prefixes in one merged name order), as production answers it (recorded in the STORAGE-OBJECT lean-v5 recording, 2026-09-30, and pinned by the crate tests), where the official emulator's token is the raw name of the first object of the next page."
         },
         {
           "id": "list-closed-prefix",

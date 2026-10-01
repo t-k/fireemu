@@ -810,14 +810,15 @@ struct ListingTrieDocument {
 }
 
 impl ListingTrie {
-    fn insert_retained(&mut self, path: &DocumentPath) {
-        Self::insert_retained_pairs(self, path.pairs(), Arc::new(path.clone()));
+    /// Indexes `path` under every prefix, holding the caller's allocation rather than a copy.
+    fn insert_retained(&mut self, path: &Arc<DocumentPath>) {
+        Self::insert_retained_pairs(self, path.pairs(), path);
     }
 
     fn insert_retained_pairs(
         trie: &mut Self,
         pairs: &[(CollectionId, DocumentId)],
-        path: Arc<DocumentPath>,
+        path: &Arc<DocumentPath>,
     ) {
         let Some(((collection, document), rest)) = pairs.split_first() else {
             return;
@@ -830,9 +831,12 @@ impl ListingTrie {
             .entry(document.clone())
             .or_default();
         node.retained_subtree_paths += 1;
-        node.representative.get_or_insert_with(|| Arc::clone(&path));
+        // A representative only names this prefix, which every path below it shares, so the
+        // newest path serves. Taking it also frees a representative that outlived its own
+        // path once that path returns with a new allocation.
+        node.representative = Some(Arc::clone(path));
         if rest.is_empty() {
-            node.retained_here = Some(path);
+            node.retained_here = Some(Arc::clone(path));
         } else {
             Self::insert_retained_pairs(&mut node.children, rest, path);
         }
@@ -1493,21 +1497,35 @@ impl FirestoreState {
             .and_then(|(_, d)| d.as_deref())
     }
 
+    /// Indexes a newly retained path. This is the path's one shared index allocation: the
+    /// live indexes and the listing trie hold the same `Arc`, never a copy of their own (the
+    /// `history` key is a separate copy).
     fn insert_scope_path(&mut self, path: &DocumentPath) {
         let shared = Arc::new(path.clone());
         self.direct_collection_paths
             .entry((path.parent_document(), path.collection_id().clone()))
             .or_default()
             .insert(Arc::clone(&shared));
-        self.listing_trie.insert_retained(path);
+        self.listing_trie.insert_retained(&shared);
         self.collection_group_paths
             .entry(path.collection_id().clone())
             .or_default()
             .insert(shared);
     }
 
+    /// The shared allocation of a retained path. A live path is always retained first, so
+    /// the fallback copy only guards that invariant.
+    fn retained_scope_path(&self, path: &DocumentPath) -> Arc<DocumentPath> {
+        let retained = self
+            .collection_group_paths
+            .get(path.collection_id())
+            .and_then(|paths| paths.get(path));
+        debug_assert!(retained.is_some(), "live paths must first be retained");
+        retained.map_or_else(|| Arc::new(path.clone()), Arc::clone)
+    }
+
     fn insert_live_scope_path(&mut self, path: &DocumentPath) {
-        let shared = Arc::new(path.clone());
+        let shared = self.retained_scope_path(path);
         self.live_direct_collection_paths
             .entry((path.parent_document(), path.collection_id().clone()))
             .or_default()
@@ -1587,7 +1605,7 @@ impl FirestoreState {
                 .entry((path.parent_document(), path.collection_id().clone()))
                 .or_insert_with(BTreeSet::new)
                 .insert(Arc::clone(&shared));
-            listing_trie.insert_retained(path);
+            listing_trie.insert_retained(&shared);
             groups
                 .entry(path.collection_id().clone())
                 .or_insert_with(BTreeSet::new)
@@ -6564,6 +6582,303 @@ mod scope_index_tests {
         assert_eq!(actual_live_paths, live_paths);
 
         assert_trie_projection(state, &state.listing_trie, &mut Vec::new());
+        assert_eq!(scope_path_sharing_violations(state), Vec::<String>::new());
+    }
+
+    fn collect_trie_paths<'a>(
+        trie: &'a ListingTrie,
+        retained_here: &mut Vec<&'a Arc<DocumentPath>>,
+        representatives: &mut Vec<&'a Arc<DocumentPath>>,
+    ) {
+        for collection in trie.collections.values() {
+            for node in collection.documents.values() {
+                retained_here.extend(&node.retained_here);
+                representatives.extend(&node.representative);
+                collect_trie_paths(&node.children, retained_here, representatives);
+            }
+        }
+    }
+
+    /// Every retained path is one allocation that all scope indexes and the listing trie
+    /// share, so the indexes cost one path per retained document rather than one per index
+    /// family. The canonical allocation is the retained collection-group entry. A trie
+    /// representative may outlive its own path (it only names an ancestor prefix), so only
+    /// a representative that is still retained must be the canonical allocation.
+    fn scope_path_sharing_violations(state: &FirestoreState) -> Vec<String> {
+        let canonical = state
+            .collection_group_paths
+            .values()
+            .flatten()
+            .map(|path| (path.as_ref(), Arc::as_ptr(path)))
+            .collect::<BTreeMap<_, _>>();
+        let mut violations = Vec::new();
+        let mut held = BTreeSet::new();
+        let mut check = |family: &str, path: &Arc<DocumentPath>, held: &mut BTreeSet<usize>| {
+            held.insert(Arc::as_ptr(path) as usize);
+            if canonical.get(path.as_ref()) != Some(&Arc::as_ptr(path)) {
+                violations.push(format!("{family} holds its own allocation of {path:?}"));
+            }
+        };
+        for (family, scope) in [
+            ("direct", &state.direct_collection_paths),
+            ("live direct", &state.live_direct_collection_paths),
+        ] {
+            for path in scope.values().flatten() {
+                check(family, path, &mut held);
+            }
+        }
+        for path in state.live_collection_group_paths.values().flatten() {
+            check("live group", path, &mut held);
+        }
+        for path in &state.live_paths {
+            check("live paths", path, &mut held);
+        }
+        let mut retained_here = Vec::new();
+        let mut representatives = Vec::new();
+        collect_trie_paths(
+            &state.listing_trie,
+            &mut retained_here,
+            &mut representatives,
+        );
+        for path in retained_here {
+            check("trie", path, &mut held);
+        }
+        for path in representatives {
+            if canonical.contains_key(path.as_ref()) {
+                check("trie representative", path, &mut held);
+            }
+        }
+        held.extend(canonical.values().map(|pointer| *pointer as usize));
+        if held.len() != state.history.len() {
+            violations.push(format!(
+                "{} path allocations for {} retained paths",
+                held.len(),
+                state.history.len()
+            ));
+        }
+        violations
+    }
+
+    #[test]
+    fn scope_indexes_share_one_path_allocation_per_retained_path() {
+        let mut state = FirestoreState::new();
+        state
+            .commit(
+                &[set("root/a"), set("root/a/children/x"), set("root/b")],
+                None,
+                LogicalInstant::UNIX_EPOCH,
+            )
+            .expect("create indexed paths");
+        state
+            .commit(
+                &[delete("root/b")],
+                None,
+                LogicalInstant::from_unix_seconds(1),
+            )
+            .expect("delete keeps the retained path");
+        assert_eq!(scope_path_sharing_violations(&state), Vec::<String>::new());
+        assert_eq!(
+            scope_path_sharing_violations(&state.visible_snapshot()),
+            Vec::<String>::new()
+        );
+    }
+
+    #[test]
+    fn a_returning_representative_path_takes_its_new_allocation() {
+        // Both creation orders, so the returning path is the first and then the last one
+        // the root/a prefix saw before it left.
+        for (first, second) in [
+            ("root/a/children/x", "root/a/children/y"),
+            ("root/a/children/y", "root/a/children/x"),
+        ] {
+            let mut state = FirestoreState::new();
+            state
+                .commit(&[set(first)], None, LogicalInstant::UNIX_EPOCH)
+                .expect("create the first path under root/a");
+            state
+                .commit(&[set(second)], None, LogicalInstant::from_unix_seconds(1))
+                .expect("create the second path under root/a");
+            state
+                .commit(
+                    &[delete("root/a/children/x")],
+                    None,
+                    LogicalInstant::from_unix_seconds(2),
+                )
+                .expect("delete x");
+            state.compact(LogicalInstant::from_unix_seconds(
+                READ_TIME_RETENTION_SECONDS + 3,
+            ));
+            assert!(!state.history.contains_key(&path("root/a/children/x")));
+            state
+                .commit(
+                    &[set("root/a/children/x")],
+                    None,
+                    LogicalInstant::from_unix_seconds(READ_TIME_RETENTION_SECONDS + 4),
+                )
+                .expect("x returns as a new allocation");
+            assert_eq!(
+                scope_path_sharing_violations(&state),
+                Vec::<String>::new(),
+                "{first} created first"
+            );
+        }
+    }
+
+    #[test]
+    fn a_stale_representative_still_names_its_missing_parent() {
+        // In the second order the root/a node's representative is x, which the compaction
+        // removes while y keeps the node alive.
+        for (first, second) in [
+            ("root/a/children/x", "root/a/children/y"),
+            ("root/a/children/y", "root/a/children/x"),
+        ] {
+            let mut state = FirestoreState::new();
+            state
+                .commit(&[set(first)], None, LogicalInstant::UNIX_EPOCH)
+                .expect("create the first path under root/a");
+            state
+                .commit(&[set(second)], None, LogicalInstant::from_unix_seconds(1))
+                .expect("create the second path under root/a");
+            state
+                .commit(
+                    &[delete("root/a/children/x")],
+                    None,
+                    LogicalInstant::from_unix_seconds(2),
+                )
+                .expect("delete x");
+            state.compact(LogicalInstant::from_unix_seconds(
+                READ_TIME_RETENTION_SECONDS + 3,
+            ));
+            assert!(!state.history.contains_key(&path("root/a/children/x")));
+            for version in [None, Some(state.current_version())] {
+                assert_eq!(
+                    state.list_missing_parents_at(None, "root", version),
+                    vec![path("root/a")],
+                    "{first} created first, at {version:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn scope_path_sharing_check_rejects_a_second_allocation() {
+        let mut state = FirestoreState::new();
+        state
+            .commit(&[set("root/a")], None, LogicalInstant::UNIX_EPOCH)
+            .expect("create an indexed path");
+        assert_eq!(scope_path_sharing_violations(&state), Vec::<String>::new());
+        // Control: give one live index a fresh, equal allocation of the same path.
+        let duplicate = Arc::new(path("root/a"));
+        assert!(state.live_paths.replace(duplicate).is_some());
+        assert_eq!(
+            scope_path_sharing_violations(&state),
+            vec![
+                format!(
+                    "live paths holds its own allocation of {:?}",
+                    path("root/a")
+                ),
+                "2 path allocations for 1 retained paths".to_owned(),
+            ]
+        );
+    }
+
+    proptest::proptest! {
+        #![proptest_config(proptest::test_runner::Config::with_cases(64))]
+        #[test]
+        fn shared_scope_paths_preserve_modelled_transitions(
+            operations in proptest::collection::vec(
+                (0_u8..6, 0_u8..12, 0_u8..3, -256_i64..256), 1..65,
+            ),
+        ) {
+            let mut state = FirestoreState::new();
+            let mut model = BTreeMap::<DocumentPath, BTreeMap<String, Value>>::new();
+            let mut seconds = 0_i64;
+            for (operation, id, depth, value) in operations {
+                seconds += 1;
+                let relative = match depth {
+                    0 => format!("root/{id}"),
+                    1 => format!("root/a/children/{id}"),
+                    _ => format!("root/a/children/x/leaves/{id}"),
+                };
+                let document_path = path(&relative);
+                let fields = BTreeMap::from([("v".into(), Value::Integer(value))]);
+                let now = LogicalInstant::from_unix_seconds(seconds);
+                match operation {
+                    0 | 4 => {
+                        let transaction = if operation == 4 {
+                            Some(state.begin_transaction(false, now).unwrap())
+                        } else {
+                            None
+                        };
+                        state.commit(&[Write {
+                            op: WriteOp::Set {
+                                path: document_path.clone(), fields: fields.clone(), update_mask: None,
+                            },
+                            precondition: None, transforms: Vec::new(),
+                        }], transaction.as_ref(), now).unwrap();
+                        model.insert(document_path, fields);
+                    }
+                    1 => {
+                        state.commit(&[delete(&relative)], None, now).unwrap();
+                        model.remove(&document_path);
+                    }
+                    2 => state = state.visible_snapshot(),
+                    3 => {
+                        state.import_documents(vec![ImportedDocument {
+                            path: document_path.clone(), fields: fields.clone(),
+                            create_time: None, update_time: None,
+                        }], now).unwrap();
+                        model.insert(document_path, fields);
+                    }
+                    _ => {
+                        seconds += READ_TIME_RETENTION_SECONDS + 1;
+                        state.compact(LogicalInstant::from_unix_seconds(seconds));
+                    }
+                }
+                assert_scope_projection(&state);
+                let actual: BTreeMap<_, _> = state.documents().into_iter()
+                    .map(|document| (document.path, document.fields)).collect();
+                proptest::prop_assert_eq!(&actual, &model);
+                let expected_bytes = model.iter().map(|(path, fields)|
+                    document_size_bytes(path, fields).unwrap()).sum::<u64>();
+                proptest::prop_assert_eq!(state.visible_bytes(), expected_bytes);
+                for (parent, collection) in [
+                    (None, "root"),
+                    (Some(path("root/a")), "children"),
+                    (Some(path("root/a/children/x")), "leaves"),
+                ] {
+                    let expected: Vec<_> = model.keys().filter(|path|
+                        path.parent_document() == parent && path.collection_id().as_str() == collection
+                    ).cloned().collect();
+                    let latest: Vec<_> = state.list_documents(parent.as_ref(), collection)
+                        .into_iter().map(|document| document.path).collect();
+                    let historical: Vec<_> = state.list_documents_at(
+                        parent.as_ref(), collection, Some(state.current_version()),
+                    ).into_iter().map(|document| document.path).collect();
+                    proptest::prop_assert_eq!(&latest, &expected);
+                    proptest::prop_assert_eq!(&historical, &expected);
+                    // Missing parents are the only reader of a trie node's representative,
+                    // which may have outlived its own path after a compaction.
+                    let depth = parent.as_ref().map_or(1, |path| path.pairs().len() + 1);
+                    let expected_missing: Vec<_> = model.keys()
+                        .filter_map(|path| path.ancestor(depth))
+                        .filter(|ancestor| ancestor.parent_document() == parent
+                            && ancestor.collection_id().as_str() == collection
+                            && !model.contains_key(ancestor))
+                        .collect::<BTreeSet<_>>().into_iter().collect();
+                    proptest::prop_assert_eq!(
+                        &state.list_missing_parents_at(parent.as_ref(), collection, None),
+                        &expected_missing
+                    );
+                    proptest::prop_assert_eq!(
+                        &state.list_missing_parents_at(
+                            parent.as_ref(), collection, Some(state.current_version()),
+                        ),
+                        &expected_missing
+                    );
+                }
+            }
+        }
     }
 
     #[test]

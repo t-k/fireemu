@@ -17,8 +17,10 @@ That is only believed when the shards agree with the sharding: the run is checke
 cargo-mutants 27.1.0's default `Slice` sharding (shard k of n holds chunk = ceil(M / n) consecutive
 mutants of the M listed in all), so a shard that is empty while an earlier one is not, or a run in
 which every shard is empty, is a problem (with `--in-diff` an empty run writes no output at all).
-The workflow must therefore not pass `--sharding`. A shard whose `outcomes.json` covers fewer mutants
-than its `mutants.json` lists, or has no `end_time`, was stopped and fails; so does any other shard
+The workflow pins it with `--sharding slice` (the command line wins over the `sharding` of a ref's
+`.cargo/mutants.toml`). A shard whose `outcomes.json` has no `end_time`, covers fewer mutants than its
+`mutants.json` lists, or names other mutants than it lists (compared as multisets of names) was stopped or
+is inconsistent and fails, and a shard with any problem adds nothing to the totals; so does any other shard
 without `outcomes.json` (nothing written, an unreadable list, a list that names mutants). A shard
 number beyond --expected-shards is reported and not counted. `--mutants-result` passes the result of
 the shard job: anything but success is a problem.
@@ -29,6 +31,7 @@ import json
 import re
 import sys
 import unicodedata
+from collections import Counter
 from pathlib import Path
 
 CAUGHT, MISSED, UNVIABLE, TIMEOUT = "CaughtMutant", "MissedMutant", "Unviable", "Timeout"
@@ -85,8 +88,9 @@ def read_listed(directory: Path):
 def read_shard(directory: Path):
     """What one shard left: `(outcomes, listed, reason)`.
 
-    `outcomes` is the shard's outcomes (empty for a shard that held no mutant), `listed` the number of
-    mutants it was given, `reason` why the shard cannot be trusted (then `outcomes` is None).
+    `outcomes` is the shard's outcomes (empty for a shard that held no mutant), `listed` the list of
+    mutants it was given (`mutants.json`), `reason` why the shard cannot be trusted (then `outcomes`
+    is None).
 
     cargo-mutants writes `mutants.json` first and rewrites `outcomes.json` after every mutant, and
     sets `end_time` only when it finishes. A shard that was stopped (the job timed out, the tool
@@ -101,10 +105,10 @@ def read_shard(directory: Path):
                 return None, None, "outcomes.json and mutants.json are missing: the shard wrote nothing"
             return None, None, f"outcomes.json is missing and {listed_reason}"
         if listed:
-            return None, len(listed), (
+            return None, listed, (
                 f"outcomes.json is missing but mutants.json lists {len(listed)} mutants: the shard did not finish"
             )
-        return [], 0, None
+        return [], listed, None
     try:
         document = json.loads(path.read_text())
     except (OSError, ValueError) as error:
@@ -115,8 +119,42 @@ def read_shard(directory: Path):
     if listed is None:
         return None, None, f"{path.name} exists but {listed_reason}"
     if document.get("end_time") in (None, ""):
-        return None, len(listed), f"{path.name} has no end_time: the shard did not finish"
-    return outcomes, len(listed), None
+        return None, listed, f"{path.name} has no end_time: the shard did not finish"
+    return outcomes, listed, None
+
+
+def reconcile(shard: int, listed, outcome_names: Counter):
+    """The problems of one shard's outcomes against the mutants it was given: the number of outcomes
+    must equal the number of listed mutants, and the names must be the same multiset."""
+    problems = []
+    listed_names = Counter()
+    unnamed = 0
+    for entry in listed:
+        if isinstance(entry, dict) and isinstance(entry.get("name"), str):
+            listed_names[entry["name"]] += 1
+        else:
+            unnamed += 1
+    if unnamed:
+        problems.append(f"shard {shard}: mutants.json has {unnamed} entries without a name")
+        return problems
+    covered = sum(outcome_names.values())
+    if covered != len(listed):
+        problems.append(
+            f"shard {shard}: outcomes.json covers {covered} of {len(listed)} listed mutants: the shard did not finish"
+        )
+    elif outcome_names != listed_names:
+        absent = sorted((listed_names - outcome_names).elements())
+        extra = sorted((outcome_names - listed_names).elements())
+        problems.append(
+            f"shard {shard}: the outcomes and mutants.json do not match: "
+            f"listed but without an outcome: {names_text(absent)}; outcome of a mutant that was not listed: {names_text(extra)}"
+        )
+    return problems
+
+
+def names_text(names, shown=5):
+    text = ", ".join(clean(name, 80) for name in names[:shown])
+    return text + (f", … ({len(names)} in all)" if len(names) > shown else "") if names else "none"
 
 
 def merge(shards_dir: Path, expected, mutants_result=None):
@@ -143,47 +181,59 @@ def merge(shards_dir: Path, expected, mutants_result=None):
     for shard, directory in sorted(found.items()):
         outcomes, listed, reason = read_shard(directory)
         if listed is not None:
-            listed_sizes[shard] = listed
+            listed_sizes[shard] = len(listed)
         if outcomes is None:
             problems.append(f"shard {shard}: {reason}")
             continue
-        if listed == 0:
+        if not listed:
             empty_shards.append(shard)
+        # What this shard adds is kept apart: a shard with any problem adds nothing to the totals.
+        shard_problems = []
+        shard_counts = {CAUGHT: 0, MISSED: 0, UNVIABLE: 0, TIMEOUT: 0}
+        shard_other = {}
+        shard_missed, shard_timed_out = [], []
+        outcome_names = Counter()
         baseline_failed = False
-        covered = 0
         for outcome in outcomes:
             if not isinstance(outcome, dict):
-                problems.append(f"shard {shard}: an outcome is not an object")
+                shard_problems.append(f"shard {shard}: an outcome is not an object")
                 continue
             summary = outcome.get("summary")
             scenario = outcome.get("scenario")
             if scenario == "Baseline":
                 if summary != "Success":
                     baseline_failed = True
-                    problems.append(f"shard {shard}: the baseline did not succeed ({clean(summary, 40)})")
+                    shard_problems.append(f"shard {shard}: the baseline did not succeed ({clean(summary, 40)})")
                 continue
             mutant = scenario.get("Mutant") if isinstance(scenario, dict) else None
             if not isinstance(mutant, dict) or not isinstance(mutant.get("name"), str):
-                problems.append(f"shard {shard}: an outcome has no mutant name")
+                shard_problems.append(f"shard {shard}: an outcome has no mutant name")
                 continue
             name = clean(mutant["name"])
             if not isinstance(summary, str):
-                problems.append(f"shard {shard}: the outcome of {name} has no summary")
+                shard_problems.append(f"shard {shard}: the outcome of {name} has no summary")
                 continue
-            covered += 1
-            if summary in counts:
-                counts[summary] += 1
+            outcome_names[mutant["name"]] += 1
+            if summary in shard_counts:
+                shard_counts[summary] += 1
             else:
                 key = clean(summary, 40)
-                other[key] = other.get(key, 0) + 1
+                shard_other[key] = shard_other.get(key, 0) + 1
             if summary == MISSED:
-                missed.append(name)
+                shard_missed.append(name)
             elif summary == TIMEOUT:
-                timed_out.append(name)
-        if not baseline_failed and covered != listed:
-            problems.append(
-                f"shard {shard}: outcomes.json covers {covered} of {listed} listed mutants: the shard did not finish"
-            )
+                shard_timed_out.append(name)
+        if not baseline_failed:
+            shard_problems.extend(reconcile(shard, listed, outcome_names))
+        problems.extend(shard_problems)
+        if shard_problems:
+            continue
+        for key, value in shard_counts.items():
+            counts[key] += value
+        for key, value in shard_other.items():
+            other[key] = other.get(key, 0) + value
+        missed.extend(shard_missed)
+        timed_out.extend(shard_timed_out)
     mutants_listed = sum(listed_sizes.values())
     complete = bool(found) and all(k in listed_sizes for k in found) and not missing
     if complete and mutants_listed == 0:

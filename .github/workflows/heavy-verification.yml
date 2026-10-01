@@ -202,7 +202,7 @@ jobs:
           fi
           set +e
           cargo mutants --test-tool nextest --cargo-arg=--locked --in-diff "$RUNNER_TEMP/changes.diff" \
-            --shard "$SHARD/$TOTAL" --output "mutants-out-$SHARD" "${args[@]}"
+            --shard "$SHARD/$TOTAL" --sharding slice --output "mutants-out-$SHARD" "${args[@]}"
           code=$?
           set -e
           # 0: every mutant caught. 2: some missed. 3: some timed out. The summary job reports

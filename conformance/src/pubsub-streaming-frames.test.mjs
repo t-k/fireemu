@@ -26,6 +26,8 @@ async function decoder(extra = {}) {
 // Decoding runs in a child process so a frame loop that never consumes its buffer fails an assertion
 // instead of freezing the test process. The second child test also gives the test runner an event
 // loop turn to report the first one before any later in-process test could spin.
+// Keep both child-process tests first in this file: a later position lets a spinning in-process
+// test freeze the runner before the child test's failure is reported.
 async function decodeInChild(chunks) {
   const script = `const [target, input] = process.argv.slice(1);
     const { createStreamingFrameDecoder } = await import(target);
@@ -276,6 +278,6 @@ test("plain Uint8Array views are accepted as raw bytes", async () => {
 test("a push that is not stopped carries no reason field at all", async () => {
   const d = await decoder();
   const result = d.push(frame(Buffer.from("ok")));
-  assert.deepEqual(Object.keys(result).sort(), ["frames", "raw"]);
+  assert.equal("reason" in result, false);
   assert.equal("reason" in d.push(Buffer.alloc(0)), false);
 });

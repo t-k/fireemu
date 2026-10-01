@@ -292,7 +292,9 @@ const FAILURES = [
   "persist-before",
   "guard-after",
   "live-false",
+  "live-promise",
   "issue-throws",
+  "issue-promise",
   "persist-issued",
 ];
 // Reference write gate for awaited, sequential actions: synchronous refusals change nothing,
@@ -307,6 +309,8 @@ function modelGate({ maxFrames, maxFrameBytes, maxOutgoingBytes, maxActions }) {
     outgoing: 0,
     direction: "NEW",
     origin: undefined,
+    contractBroken: false,
+    seen: new Set(),
   };
   const stop = (origin) => {
     state.origin ??= ORIGINS.includes(origin) ? origin : "uncertain";
@@ -320,14 +324,23 @@ function modelGate({ maxFrames, maxFrameBytes, maxOutgoingBytes, maxActions }) {
       if (kind !== "open" && state.direction === "NEW") return "throws";
       if ((kind === "frame" || kind === "half-close") && state.direction !== "OPEN")
         return "throws";
-      if (
-        state.attempted >= maxActions ||
-        (kind === "frame" &&
-          (length > maxFrameBytes ||
-            state.frames >= maxFrames ||
-            length + 5 > maxOutgoingBytes - state.outgoing))
-      )
+      const cap =
+        state.attempted >= maxActions
+          ? "actions"
+          : kind !== "frame"
+            ? undefined
+            : length > maxFrameBytes
+              ? "frame-bytes"
+              : state.frames >= maxFrames
+                ? "frames"
+                : length + 5 > maxOutgoingBytes - state.outgoing
+                  ? "outgoing"
+                  : undefined;
+      if (cap) {
+        state.seen.add(`cap:${cap}`);
         return "throws";
+      }
+      if (failure) state.seen.add(`fail:${failure}`);
       state.attempted++;
       if (kind === "open") state.openings++;
       if (kind === "frame") {
@@ -340,6 +353,12 @@ function modelGate({ maxFrames, maxFrameBytes, maxOutgoingBytes, maxActions }) {
       }
       if (failure === "live-false") {
         stop("revocation");
+        return "rejects";
+      }
+      // A Promise from a synchronous interface breaks the contract: the work may still run.
+      if (failure === "live-promise" || failure === "issue-promise") {
+        state.contractBroken = true;
+        stop("uncertain");
         return "rejects";
       }
       state.issued++;
@@ -369,6 +388,7 @@ test(
         maxActions: r.int(1, 6),
       };
       const model = modelGate(bounds);
+      const containmentFails = r.chance(0.1);
       let failure,
         guardCalls = 0,
         contained = 0;
@@ -381,16 +401,21 @@ test(
           if (failure === (guardCalls === 1 ? "guard-before" : "guard-after"))
             throw new Error("authority lost");
         },
-        liveCheck: () => failure !== "live-false",
+        liveCheck: () =>
+          failure === "live-promise" ? Promise.resolve(true) : failure !== "live-false",
         persist: async (row) => {
           if (failure === (row.state === "before-send" ? "persist-before" : "persist-issued"))
             throw new Error("lost acknowledgement");
         },
         issue: (intent, bytes) => {
           if (failure === "issue-throws") throw new Error("native write failed");
+          if (failure === "issue-promise") return Promise.resolve();
           issued.push([intent.kind, bytes]);
         },
-        contain: async () => contained++,
+        contain: async () => {
+          contained++;
+          if (containmentFails) throw new Error("containment failed");
+        },
       });
       const outcomes = new Set();
       for (let step = r.int(1, 10); step > 0; step--) {
@@ -400,9 +425,14 @@ test(
           model.stop(origin);
           continue;
         }
-        const kind = r.pick(["open", "frame", "frame", "half-close", "client-cancel"]);
+        // Open most sequences early so frame caps and failure points are reached, not only the
+        // refusals of an unopened gate.
+        const kind =
+          model.state.direction === "NEW" && r.chance(0.6)
+            ? "open"
+            : r.pick(["open", "frame", "frame", "frame", "half-close", "client-cancel"]);
         const length = r.int(0, 14);
-        failure = r.chance(0.15) ? r.pick(FAILURES) : undefined;
+        failure = r.chance(0.2) ? r.pick(FAILURES) : undefined;
         guardCalls = 0;
         const expected = model.action(kind, length, failure);
         const call = {
@@ -452,15 +482,20 @@ test(
           direction: state.direction,
           stopOrigin: state.origin,
           pendingCallbacks: [],
-          terminationRequired: false,
+          terminationRequired: state.contractBroken || containmentFails,
         },
       );
       assert.equal(contained, 1);
       assert.equal(issued.length, state.issued);
-      return [state.origin, ...outcomes];
+      return [state.origin, ...outcomes, ...state.seen];
     },
     [
       ...ORIGINS.filter((origin) => !["abort", "deadline"].includes(origin)),
+      "cap:actions",
+      "cap:frame-bytes",
+      "cap:frames",
+      "cap:outgoing",
+      ...FAILURES.map((failure) => `fail:${failure}`),
       "open:throws",
       "frame:throws",
       "frame:resolves",
@@ -502,6 +537,10 @@ function modelJournal({ maxEntries, maxEntryBytes, maxTotalBytes }, hungAt) {
       state.totalBytes += length;
       return "admitted";
     },
+    expire() {
+      for (const { index } of queued.splice(0)) outcomes[index] = "rejected";
+      state.blocked = false;
+    },
     flush() {
       while (queued.length && !state.blocked) {
         const { index, fail } = queued.shift();
@@ -522,17 +561,32 @@ function modelJournal({ maxEntries, maxEntryBytes, maxTotalBytes }, hungAt) {
 }
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 // Drives a promise to settlement while setTimeout is mocked: every turn advances mocked timers by
-// one millisecond, which fires the helper's overdue cutoffs without any real wait.
-async function settleWithMockedTimers(promise) {
+// one millisecond, which fires the helper's overdue cutoffs without any real wait. A helper that
+// never settles fails here by assertion instead of spinning.
+async function settleWithMockedTimers(promise, maxTurns = 1000) {
   let finished = false;
   const settled = promise.finally(() => {
     finished = true;
   });
-  while (!finished) {
+  for (let turn = 0; !finished && turn < maxTurns; turn++) {
     mock.timers.tick(1);
     await tick();
   }
+  assert.ok(finished, `did not settle within ${maxTurns} mocked milliseconds`);
   return settled;
+}
+// Moves the mocked monotonic clock and the mocked timers past the deadline together, so every
+// timer the helper armed for its deadline fires exactly as it would in real time.
+async function passDeadline(setNow, deadlineAt, startedAt) {
+  setNow(deadlineAt + 1);
+  mock.timers.tick(deadlineAt + 1 - startedAt);
+  await tick();
+}
+// End-of-case drain mode: done before the deadline, done after it, or (with a hung callback)
+// done started before the deadline that then passes while done is waiting.
+function drainMode(r, blocked) {
+  if (blocked) return r.chance(0.5) ? "hung-late" : "hung-waiting";
+  return r.chance(0.2) ? "late" : "clean";
 }
 
 test(
@@ -587,16 +641,29 @@ test(
         }
         await tick();
         model.flush();
-        const late = model.state.blocked || r.chance(0.2);
-        if (late) now = deadlineAt + 1;
-        const result = await settleWithMockedTimers(j.done());
+        const blocked = model.state.blocked;
+        const mode = drainMode(r, blocked);
+        const late = mode !== "clean";
+        let result;
+        if (mode === "hung-waiting") {
+          const draining = j.done();
+          await tick();
+          await passDeadline((value) => (now = value), deadlineAt, 1000);
+          result = await settleWithMockedTimers(draining);
+        } else {
+          if (late) await passDeadline((value) => (now = value), deadlineAt, 1000);
+          result = await settleWithMockedTimers(j.done());
+        }
+        // Past the deadline the hung write's own cutoff rejects it and the halted chain rejects
+        // every entry queued behind it.
+        if (late) model.expire();
         const reason = late ? (model.state.reason ?? "deadline") : model.state.reason;
         assert.equal(result.entries, model.state.entries);
         assert.equal(result.totalBytes, model.state.totalBytes);
         assert.equal(result.acknowledgedEntries, model.state.acknowledged);
         assert.equal(result.unknownEntries, model.state.entries - model.state.acknowledged);
         assert.equal(result.reason, reason);
-        assert.deepEqual(result.pendingCallbacks, model.state.blocked ? [`write:${hungAt}`] : []);
+        assert.deepEqual(result.pendingCallbacks, blocked ? [`write:${hungAt}`] : []);
         assert.equal(result.terminationRequired, late);
         assert.equal(stops, 1);
         for (const { ticket, bytes } of tickets) {
@@ -608,8 +675,7 @@ test(
             ),
             tick().then(() => "unsettled"),
           ]);
-          if (outcome === undefined) assert.equal(settled, "unsettled");
-          else if (outcome === "rejected") assert.equal(settled, "rejected");
+          if (outcome === "rejected") assert.equal(settled, "rejected");
           else
             assert.deepEqual(settled, {
               index: ticket.index,
@@ -623,11 +689,7 @@ test(
             .map(({ ticket }) => ticket.index)
             .filter((i) => model.outcomes[i] === "committed"),
         );
-        return [
-          model.state.reason ?? "clean",
-          ...(model.state.blocked ? ["hung"] : []),
-          ...(late ? ["late"] : []),
-        ];
+        return [model.state.reason ?? "clean", mode];
       } finally {
         mock.timers.reset();
         clock.mock.restore();
@@ -635,13 +697,14 @@ test(
     },
     [
       "clean",
+      "late",
+      "hung-late",
+      "hung-waiting",
       "invalid-record",
       "entry-bound",
       "entry-byte-bound",
       "total-byte-bound",
       "persistence",
-      "hung",
-      "late",
     ],
   ),
 );
@@ -785,14 +848,24 @@ test(
         }
         await tick();
         model.flush();
-        const late = model.state.blocked || r.chance(0.2);
-        if (late) now += 60001;
-        const result = await settleWithMockedTimers(q.done());
+        const mode = drainMode(r, model.state.blocked);
+        const late = mode !== "clean";
+        let result;
+        if (mode === "hung-waiting") {
+          const draining = q.done();
+          await tick();
+          await passDeadline((value) => (now = value), 61000, 1000);
+          result = await settleWithMockedTimers(draining);
+        } else {
+          if (late) await passDeadline((value) => (now = value), 61000, 1000);
+          result = await settleWithMockedTimers(q.done());
+        }
         const kinds = model.state.kinds;
         assert.equal(result.events, kinds.length);
         assert.equal(result.persistedEvents, model.state.persisted);
         assert.equal(result.unknownEvents, kinds.length - model.state.persisted);
-        assert.equal(result.reason, model.state.reason);
+        // The queue's own deadline timer records the deadline stop once the clock passes it.
+        assert.equal(result.reason, late ? (model.state.reason ?? "deadline") : model.state.reason);
         assert.equal(result.headerBytes, model.state.headerBytes);
         assert.equal(result.headerEvents, model.state.headerEvents);
         assert.equal(result.frameAttempts, model.state.payloads.length);
@@ -815,9 +888,8 @@ test(
         }
         return [
           model.state.reason ?? "clean",
+          mode,
           ...(observed.length ? ["frame-delivered"] : []),
-          ...(model.state.blocked ? ["hung"] : []),
-          ...(late ? ["late"] : []),
         ];
       } finally {
         mock.timers.reset();
@@ -833,8 +905,9 @@ test(
       "header-bound",
       "invalid-lifecycle",
       "frame-delivered",
-      "hung",
       "late",
+      "hung-late",
+      "hung-waiting",
     ],
   ),
 );

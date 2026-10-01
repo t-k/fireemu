@@ -19,13 +19,32 @@ import { createTargetBuilder } from "./storage-rules/target.mjs";
 import { createSimulator } from "./storage-rules-simulator.mjs";
 import { ownerHeadersFor } from "./storage-rules-owner-headers.mjs";
 
-const closure = JSON.parse(readFileSync(new URL("../../spec/compatibility/closure/STORAGE-RULES.json", import.meta.url)));
-const options = { runId: "local-run", sourceCommit: "a".repeat(40), queryProjectNumber: "1".repeat(12), idpProjectNumber: "2".repeat(12), queryApiKeyId: "00000000-0000-4000-8000-000000000001", idpApiKeyId: "00000000-0000-4000-8000-000000000002" };
-const binding = { bucket: "synthetic-rules-bucket", prefix: "STORAGE-RULES/local-run/", uidA: "storage-rules-local-run-user-a", uidB: "storage-rules-local-run-user-b" };
+const closure = JSON.parse(
+  readFileSync(new URL("../../spec/compatibility/closure/STORAGE-RULES.json", import.meta.url)),
+);
+const options = {
+  runId: "local-run",
+  sourceCommit: "a".repeat(40),
+  queryProjectNumber: "1".repeat(12),
+  idpProjectNumber: "2".repeat(12),
+  queryApiKeyId: "00000000-0000-4000-8000-000000000001",
+  idpApiKeyId: "00000000-0000-4000-8000-000000000002",
+};
+const binding = {
+  bucket: "synthetic-rules-bucket",
+  prefix: "STORAGE-RULES/local-run/",
+  uidA: "storage-rules-local-run-user-a",
+  uidB: "storage-rules-local-run-user-b",
+};
 const manifest = buildFullRequestManifest(buildCorpus(binding), closure, options);
 const salt = "8".repeat(64);
 const BEARER = "SIM-BEARER-CANARY-0123456789abcdef";
-const invalidContent = manifest.rows.find((r) => r.family === "compile" && r.stage === "test" && r === manifest.rows.filter((x) => x.family === "compile" && x.stage === "test").at(-1)).request.body.json.source.files[0].content;
+const invalidContent = manifest.rows.find(
+  (r) =>
+    r.family === "compile" &&
+    r.stage === "test" &&
+    r === manifest.rows.filter((x) => x.family === "compile" && x.stage === "test").at(-1),
+).request.body.json.source.files[0].content;
 const delegated = (row) => ["auth", "credential-cache"].includes(row.family);
 const counted = manifest.rows.filter((r) => !delegated(r));
 const preflightIds = manifest.preflightIds.filter((id) => !id.startsWith("preflight/auth/"));
@@ -34,29 +53,100 @@ function memoryCapture() {
   const events = [];
   return {
     events,
-    writeIntent: async (r) => { events.push(["intent", r.operationId]); }, writeResponse: async (r) => { events.push(["response", r.operationId]); }, writeFacts: async (r) => { events.push(["facts", r.operationId, r.verdict]); },
-    writeProof: async (r) => { events.push(["proof", r.type]); }, writeNote: async (r) => { events.push(["note", r.text]); }, writeDelegatedTarget: async () => {}, snapshot: () => ({ uncertain: false }),
+    writeIntent: async (r) => {
+      events.push(["intent", r.operationId]);
+    },
+    writeResponse: async (r) => {
+      events.push(["response", r.operationId]);
+    },
+    writeFacts: async (r) => {
+      events.push(["facts", r.operationId, r.verdict]);
+    },
+    writeProof: async (r) => {
+      events.push(["proof", r.type]);
+    },
+    writeNote: async (r) => {
+      events.push(["note", r.text]);
+    },
+    writeDelegatedTarget: async () => {},
+    snapshot: () => ({ uncertain: false }),
   };
 }
 
 // `adjust` receives the controller options the harness built and returns the options the controller gets, so a test can
 // replace one collaborator (a gate or ledger wrapper, another recovery schedule) while the harness keeps the originals.
-async function harness({ capture = memoryCapture(), simulatorOptions = {}, credentialsFresh = () => true, ensure, waits = [], delegates = {}, judge, adjust = (built) => built } = {}) {
+async function harness({
+  capture = memoryCapture(),
+  simulatorOptions = {},
+  credentialsFresh = () => true,
+  ensure,
+  waits = [],
+  delegates = {},
+  judge,
+  adjust = (built) => built,
+} = {}) {
   const simulator = createSimulator({ manifest, options: { invalidContent, ...simulatorOptions } });
   const targets = createTargetBuilder({ manifest, digestSalt: salt });
   const tables = buildRefTables(manifest);
-  const refs = createRuntimeRefStore({ tables, runId: options.runId, digestSalt: salt, writeProof: (proof) => capture.writeProof(proof) });
+  const refs = createRuntimeRefStore({
+    tables,
+    runId: options.runId,
+    digestSalt: salt,
+    writeProof: (proof) => capture.writeProof(proof),
+  });
   const objects = createResourceLedger({ manifest });
   const run = createRunLedger({ manifest, objects });
   const trace = [];
-  const reservations = { onStarted: async () => { trace.push("started"); }, onReserve: async (r) => { trace.push(r.operationId); }, onTerminal: async (r) => { trace.push(`terminal:${r.outcome}`); } };
-  const gate = createDispatchGate({ reservations: harnessReservations ?? reservations, capture, transport: simulator, targets, credentials: { headersFor: ownerHeadersFor(BEARER) }, preflightIds, admission: { check: async () => ({ admitted: true }), begin: async () => ({ admitted: true }) } });
+  const reservations = {
+    onStarted: async () => {
+      trace.push("started");
+    },
+    onReserve: async (r) => {
+      trace.push(r.operationId);
+    },
+    onTerminal: async (r) => {
+      trace.push(`terminal:${r.outcome}`);
+    },
+  };
+  const gate = createDispatchGate({
+    reservations: harnessReservations ?? reservations,
+    capture,
+    transport: simulator,
+    targets,
+    credentials: { headersFor: ownerHeadersFor(BEARER) },
+    preflightIds,
+    admission: { check: async () => ({ admitted: true }), begin: async () => ({ admitted: true }) },
+  });
   const noop = async () => {};
-  const controller = createController(adjust({
-    manifest, schedule: buildSchedule(manifest), recoverySchedule: buildRecoverySchedule(manifest), gate, targets, refs, tables, objects, run, capture,
-    delegates: { "preflight-cache": noop, "credential-cache": noop, "prepare-query": noop, "foreign-signup": noop, "foreign-cleanup": noop, "cleanup-query": noop, "recover-accounts": noop, ...delegates },
-    wait: async (ms) => { waits.push(ms); }, credentials: { fresh: credentialsFresh, ...(ensure ? { ensure } : {}) }, judgePreflight: judge ?? ((row, outcome) => outcome.verdict !== "unexpected"),
-  }));
+  const controller = createController(
+    adjust({
+      manifest,
+      schedule: buildSchedule(manifest),
+      recoverySchedule: buildRecoverySchedule(manifest),
+      gate,
+      targets,
+      refs,
+      tables,
+      objects,
+      run,
+      capture,
+      delegates: {
+        "preflight-cache": noop,
+        "credential-cache": noop,
+        "prepare-query": noop,
+        "foreign-signup": noop,
+        "foreign-cleanup": noop,
+        "cleanup-query": noop,
+        "recover-accounts": noop,
+        ...delegates,
+      },
+      wait: async (ms) => {
+        waits.push(ms);
+      },
+      credentials: { fresh: credentialsFresh, ...(ensure ? { ensure } : {}) },
+      judgePreflight: judge ?? ((row, outcome) => outcome.verdict !== "unexpected"),
+    }),
+  );
   return { controller, simulator, gate, objects, run, refs, capture, trace, waits };
 }
 let harnessReservations = null;
@@ -66,14 +156,24 @@ test("a whole recording runs against the simulator, cleans up everything it crea
   const result = await h.controller.run();
   assert.equal(result.status, "finished", JSON.stringify(result));
   const state = h.simulator.state();
-  assert.deepEqual({ objects: state.objects, rulesets: state.rulesets, release: state.release, documents: state.documents }, { objects: 0, rulesets: 0, release: null, documents: 0 });
+  assert.deepEqual(
+    {
+      objects: state.objects,
+      rulesets: state.rulesets,
+      release: state.release,
+      documents: state.documents,
+    },
+    { objects: 0, rulesets: 0, release: null, documents: 0 },
+  );
   // The recording never creates, reads or deletes the rulesets production already holds: the listed ones stay untouched.
   assert.deepEqual(h.simulator.touchedEntryRulesets(), []);
   assert.ok(state.sessions.every((s) => s === "final" || s === "cancelled"));
   assert.deepEqual([...h.objects.residual()], []);
   assert.equal(h.gate.snapshot().mode, "closed");
   assert.ok(h.trace.at(-1) === "terminal:finished");
-  const sent = h.trace.filter((entry) => !["started"].includes(entry) && !entry.startsWith("terminal"));
+  const sent = h.trace.filter(
+    (entry) => !["started"].includes(entry) && !entry.startsWith("terminal"),
+  );
   assert.equal(new Set(sent).size, sent.length);
   assert.equal(result.requests, sent.length);
   assert.ok(sent.length > 4000 && sent.length <= 4638 + 0);
@@ -81,7 +181,10 @@ test("a whole recording runs against the simulator, cleans up everything it crea
   assert.ok(h.waits.length > 0 && h.waits.every((ms) => ms === manifest.restoration.intervalMs));
   assert.ok(sent.every((id) => counted.some((r) => r.id === id)));
   // Every classified response leaves its durable facts, in the order the requests left.
-  assert.deepEqual(h.capture.events.filter((event) => event[0] === "facts").map((event) => event[1]), sent);
+  assert.deepEqual(
+    h.capture.events.filter((event) => event[0] === "facts").map((event) => event[1]),
+    sent,
+  );
 });
 
 // The number (1-based) of the first simulator call whose log line matches, from a completed dry run.
@@ -92,28 +195,85 @@ async function firstCall(pattern, from = 0) {
   assert.ok(index >= 0, String(pattern));
   return index + 1;
 }
-const response = (status, body = {}) => ({ status, rawHeaders: ["Content-Type", "application/json"], bytes: Buffer.from(JSON.stringify(body)), startedAtMs: 1, finishedAtMs: 2 });
+const response = (status, body = {}) => ({
+  status,
+  rawHeaders: ["Content-Type", "application/json"],
+  bytes: Buffer.from(JSON.stringify(body)),
+  startedAtMs: 1,
+  finishedAtMs: 2,
+});
 
 test("stale credentials stop the first row that needs a fresh user token, and the writes already made keep the counter open", async () => {
   const h = await harness({ credentialsFresh: () => false });
   const result = await h.controller.run();
-  const firstCase = manifest.rows.find((r) => r.family === "declared" && r.programId === manifest.publication.v1[0] && r.requires.includes("canonical-program-state-and-fresh-credential"));
-  assert.deepEqual([result.status, result.reason, result.detail.rowId], ["stopped", "guard failed", firstCase.id]);
+  const firstCase = manifest.rows.find(
+    (r) =>
+      r.family === "declared" &&
+      r.programId === manifest.publication.v1[0] &&
+      r.requires.includes("canonical-program-state-and-fresh-credential"),
+  );
+  assert.deepEqual(
+    [result.status, result.reason, result.detail.rowId],
+    ["stopped", "guard failed", firstCase.id],
+  );
   assert.deepEqual(result.detail.tokens, ["canonical-program-state-and-fresh-credential"]);
   assert.equal(result.needsRecovery, true);
   assert.equal(h.gate.snapshot().mode, "normal");
-  assert.equal(h.trace.some((id) => id.startsWith("terminal")), false);
+  assert.equal(
+    h.trace.some((id) => id.startsWith("terminal")),
+    false,
+  );
   assert.equal(h.simulator.state().rulesets, 4);
 });
 
 test("the Rulesets baseline is enforced on the run itself: a wrong entry list stops before admission, and a final list that is not the entry list stops at the end", async () => {
-  for (const entryRulesets of [[], [{ id: "22b746af-a48a-458d-ab5c-7853473bc8c8", createTime: "2026-09-25T11:08:54.358767Z", services: ["firebase.storage"] }], [{ id: "22b746af-a48a-458d-ab5c-7853473bc8c8", createTime: "2026-09-25T11:08:54.358767Z", services: ["firebase.storage"] }, { id: "d0abf7c6-b0b6-4163-8488-7c8a48ac5dd1", createTime: "2026-09-23T23:02:05.839536Z", services: ["cloud.firestore"] }, { id: "bbbbbbbb-0000-4000-8000-000000000000", createTime: "2026-09-23T23:02:05.839536Z", services: ["cloud.firestore"] }]]) {
+  for (const entryRulesets of [
+    [],
+    [
+      {
+        id: "22b746af-a48a-458d-ab5c-7853473bc8c8",
+        createTime: "2026-09-25T11:08:54.358767Z",
+        services: ["firebase.storage"],
+      },
+    ],
+    [
+      {
+        id: "22b746af-a48a-458d-ab5c-7853473bc8c8",
+        createTime: "2026-09-25T11:08:54.358767Z",
+        services: ["firebase.storage"],
+      },
+      {
+        id: "d0abf7c6-b0b6-4163-8488-7c8a48ac5dd1",
+        createTime: "2026-09-23T23:02:05.839536Z",
+        services: ["cloud.firestore"],
+      },
+      {
+        id: "bbbbbbbb-0000-4000-8000-000000000000",
+        createTime: "2026-09-23T23:02:05.839536Z",
+        services: ["cloud.firestore"],
+      },
+    ],
+  ]) {
     const wrongEntry = await harness({ simulatorOptions: { entryRulesets } });
     const stopped = await wrongEntry.controller.run();
-    assert.deepEqual([stopped.status, stopped.reason, stopped.detail.rowId], ["stopped", "check failed", "preflight/rulesets-list/entry/1"], JSON.stringify(entryRulesets.length));
-    assert.equal(wrongEntry.trace.at(-1), "preflight/rulesets-list/entry/1", "the run went no further than the list");
+    assert.deepEqual(
+      [stopped.status, stopped.reason, stopped.detail.rowId],
+      ["stopped", "check failed", "preflight/rulesets-list/entry/1"],
+      JSON.stringify(entryRulesets.length),
+    );
+    assert.equal(
+      wrongEntry.trace.at(-1),
+      "preflight/rulesets-list/entry/1",
+      "the run went no further than the list",
+    );
     assert.equal(wrongEntry.simulator.state().calls > 0, true);
-    assert.equal(wrongEntry.simulator.state().objects + wrongEntry.simulator.state().rulesets + wrongEntry.simulator.state().documents, 0, "nothing was written");
+    assert.equal(
+      wrongEntry.simulator.state().objects +
+        wrongEntry.simulator.state().rulesets +
+        wrongEntry.simulator.state().documents,
+      0,
+      "nothing was written",
+    );
   }
   const stranger = await harness({ simulatorOptions: { strangerAfterEntry: true } });
   const result = await stranger.controller.run();
@@ -121,21 +281,56 @@ test("the Rulesets baseline is enforced on the run itself: a wrong entry list st
   assert.match(result.detail?.rowId ?? "", /^rulesets-list\/final\/1$/);
   // Everything the run created was already cleaned when the final list showed the stranger, and the two known rulesets were never touched.
   const state = stranger.simulator.state();
-  assert.deepEqual({ objects: state.objects, rulesets: state.rulesets, release: state.release, documents: state.documents }, { objects: 0, rulesets: 0, release: null, documents: 0 });
+  assert.deepEqual(
+    {
+      objects: state.objects,
+      rulesets: state.rulesets,
+      release: state.release,
+      documents: state.documents,
+    },
+    { objects: 0, rulesets: 0, release: null, documents: 0 },
+  );
   assert.deepEqual(stranger.simulator.touchedEntryRulesets(), []);
 });
 
 test("a refused preflight, a foreign entry release or a malformed answer stops before admission", async () => {
   const refused = await harness({ judge: (row) => row.id !== "preflight/query/project" });
   const one = await refused.controller.run();
-  assert.deepEqual([one.status, one.reason, one.detail.rowId], ["stopped", "preflight refused", "preflight/query/project"]);
+  assert.deepEqual(
+    [one.status, one.reason, one.detail.rowId],
+    ["stopped", "preflight refused", "preflight/query/project"],
+  );
   assert.equal(refused.trace.at(-1), "terminal:preflight-failed");
-  const releaseCall = await firstCall(/GET firebaserules\.googleapis\.com\/v1\/projects\/fireemu-oracle-query\/releases\/firebase\.storage\/synthetic-rules-bucket/);
-  const foreign = await harness({ simulatorOptions: { failures: new Map([[releaseCall, () => response(200, { name: "projects/fireemu-oracle-query/releases/firebase.storage/synthetic-rules-bucket", rulesetName: "projects/fireemu-oracle-query/rulesets/x", createTime: "2026-09-29T10:00:00Z", updateTime: "2026-09-29T10:00:00Z" })]]) } });
+  const releaseCall = await firstCall(
+    /GET firebaserules\.googleapis\.com\/v1\/projects\/fireemu-oracle-query\/releases\/firebase\.storage\/synthetic-rules-bucket/,
+  );
+  const foreign = await harness({
+    simulatorOptions: {
+      failures: new Map([
+        [
+          releaseCall,
+          () =>
+            response(200, {
+              name: "projects/fireemu-oracle-query/releases/firebase.storage/synthetic-rules-bucket",
+              rulesetName: "projects/fireemu-oracle-query/rulesets/x",
+              createTime: "2026-09-29T10:00:00Z",
+              updateTime: "2026-09-29T10:00:00Z",
+            }),
+        ],
+      ]),
+    },
+  });
   const two = await foreign.controller.run();
-  assert.deepEqual([two.status, two.reason, two.detail.rowId], ["stopped", "preflight refused", "preflight/release/entry/bucket"]);
+  assert.deepEqual(
+    [two.status, two.reason, two.detail.rowId],
+    ["stopped", "preflight refused", "preflight/release/entry/bucket"],
+  );
   assert.equal(foreign.trace.at(-1), "terminal:preflight-failed");
-  const malformed = await harness({ simulatorOptions: { failures: new Map([[1, () => ({ status: 200, rawHeaders: ["a"], bytes: Buffer.alloc(0) })]]) } });
+  const malformed = await harness({
+    simulatorOptions: {
+      failures: new Map([[1, () => ({ status: 200, rawHeaders: ["a"], bytes: Buffer.alloc(0) })]]),
+    },
+  });
   const three = await malformed.controller.run();
   assert.equal(three.status, "stopped");
   assert.equal(three.reason, "preflight refused");
@@ -146,7 +341,10 @@ test("a dirty namespace is refused: an object that exists before the run stops i
   const controls = manifest.resources.controls;
   const h = await harness({ simulatorOptions: { preexisting: [controls[0]] } });
   const result = await h.controller.run();
-  assert.deepEqual([result.status, result.reason, result.detail.rowId], ["stopped", "unexpected verdict", "management/control-0/baseline-metadata"]);
+  assert.deepEqual(
+    [result.status, result.reason, result.detail.rowId],
+    ["stopped", "unexpected verdict", "management/control-0/baseline-metadata"],
+  );
   assert.equal(result.needsRecovery, false);
   assert.equal(h.objects.object(controls[0]).owned, false);
   // Nothing was written, so the controller closes the counter itself.
@@ -156,14 +354,23 @@ test("a dirty namespace is refused: an object that exists before the run stops i
 
 test("an unexpected seed answer stops the run, leaves the counter open and the object unowned", async () => {
   const call = await firstCall(/^POST storage\.googleapis\.com\/upload/);
-  const h = await harness({ simulatorOptions: { failures: new Map([[call, () => response(412, { error: { code: 412, message: "Precondition Failed" } })]]) } });
+  const h = await harness({
+    simulatorOptions: {
+      failures: new Map([
+        [call, () => response(412, { error: { code: 412, message: "Precondition Failed" } })],
+      ]),
+    },
+  });
   const result = await h.controller.run();
   assert.deepEqual([result.status, result.reason], ["stopped", "unexpected verdict"]);
   assert.equal(result.needsRecovery, true);
   assert.equal(h.gate.snapshot().mode, "normal");
   const seed = h.objects.object(manifest.resources.controls[0]);
   assert.equal(seed.owned, false);
-  assert.equal(h.trace.some((id) => id.startsWith("terminal")), false);
+  assert.equal(
+    h.trace.some((id) => id.startsWith("terminal")),
+    false,
+  );
 });
 
 test("a lost connection on a write leaves the outcome uncertain and moves the counter to recovery, without a second attempt", async () => {
@@ -182,7 +389,10 @@ test("a publication that never settles ends the wait after thirty cycles and sto
   const waits = [];
   const h = await harness({ simulatorOptions: { lag: 1000 }, waits });
   const result = await h.controller.run();
-  assert.deepEqual([result.status, result.reason, result.detail.name], ["stopped", "settle exhausted", "v1"]);
+  assert.deepEqual(
+    [result.status, result.reason, result.detail.name],
+    ["stopped", "settle exhausted", "v1"],
+  );
   assert.equal(waits.length, 29);
   assert.equal(result.needsRecovery, true);
   assert.equal(h.run.snapshot().settled.v1, "exhausted");
@@ -193,22 +403,36 @@ test("a valid source the service rejects, or the invalid one it accepts, stops t
   const validContent = tests[0].request.body.json.source.files[0].content;
   const rejectedValid = await harness({ simulatorOptions: { invalidContent: validContent } });
   const one = await rejectedValid.controller.run();
-  assert.deepEqual([one.status, one.reason, one.detail.rowId], ["stopped", "unexpected verdict", tests[0].id]);
-  const acceptedInvalid = await harness({ simulatorOptions: { invalidContent: "never matches anything" } });
+  assert.deepEqual(
+    [one.status, one.reason, one.detail.rowId],
+    ["stopped", "unexpected verdict", tests[0].id],
+  );
+  const acceptedInvalid = await harness({
+    simulatorOptions: { invalidContent: "never matches anything" },
+  });
   const two = await acceptedInvalid.controller.run();
-  assert.deepEqual([two.status, two.reason, two.detail.rowId], ["stopped", "unexpected verdict", tests.at(-1).id]);
+  assert.deepEqual(
+    [two.status, two.reason, two.detail.rowId],
+    ["stopped", "unexpected verdict", tests.at(-1).id],
+  );
 });
 
 test("a capture failure after a send stops the run and no further request leaves", async () => {
   const capture = memoryCapture();
   let responses = 0;
   const original = capture.writeResponse;
-  capture.writeResponse = async (r) => { if (++responses === 25) throw new Error("disk full"); return original(r); };
+  capture.writeResponse = async (r) => {
+    if (++responses === 25) throw new Error("disk full");
+    return original(r);
+  };
   const h = await harness({ capture });
   const result = await h.controller.run();
   assert.deepEqual([result.status, result.reason], ["stopped", "capture failed"]);
   assert.equal(h.gate.snapshot().poisoned, true);
-  assert.equal(h.trace.filter((id) => !["started"].includes(id) && !id.startsWith("terminal")).length, 25);
+  assert.equal(
+    h.trace.filter((id) => !["started"].includes(id) && !id.startsWith("terminal")).length,
+    25,
+  );
 });
 
 test("a gate failure is mapped to its stop reason by the stop code it carries, never by its message", async () => {
@@ -226,28 +450,70 @@ test("a gate failure is mapped to its stop reason by the stop code it carries, n
     [Object.assign(new Error("x"), { stopCode: "admission-refused-typo" }), "not sent"],
   ];
   for (const [error, reason] of cases) {
-    const h = await harness({ adjust: (built) => ({ ...built, gate: { ...built.gate, send: async () => { throw error; } } }) });
+    const h = await harness({
+      adjust: (built) => ({
+        ...built,
+        gate: {
+          ...built.gate,
+          send: async () => {
+            throw error;
+          },
+        },
+      }),
+    });
     const result = await h.controller.run();
-    assert.deepEqual([result.status, result.reason], ["stopped", reason], `${error.message} ${error.stopCode}`);
+    assert.deepEqual(
+      [result.status, result.reason],
+      ["stopped", reason],
+      `${error.message} ${error.stopCode}`,
+    );
   }
   // The gate's start is mapped the same way: a coded refusal is a stop, and the same words without the code are not swallowed.
   const refused = tagged(STOP_CODES.admissionRefused, "refused");
-  const h = await harness({ adjust: (built) => ({ ...built, gate: { ...built.gate, start: async () => { throw refused; } } }) });
+  const h = await harness({
+    adjust: (built) => ({
+      ...built,
+      gate: {
+        ...built.gate,
+        start: async () => {
+          throw refused;
+        },
+      },
+    }),
+  });
   const result = await h.controller.run();
   assert.deepEqual([result.status, result.reason], ["stopped", "admission refused"]);
   const plain = new Error("admission refused: by message only");
-  const g = await harness({ adjust: (built) => ({ ...built, gate: { ...built.gate, start: async () => { throw plain; } } }) });
+  const g = await harness({
+    adjust: (built) => ({
+      ...built,
+      gate: {
+        ...built.gate,
+        start: async () => {
+          throw plain;
+        },
+      },
+    }),
+  });
   await assert.rejects(g.controller.run(), (thrown) => thrown === plain);
 });
 
 test("a schedule step without its delegate stops the run, and the options are a closed record", async () => {
   const h = await harness({ delegates: { "prepare-query": undefined } });
   const result = await h.controller.run();
-  assert.deepEqual([result.status, result.reason, result.detail.op], ["stopped", "delegate missing", "prepare-query"]);
+  assert.deepEqual(
+    [result.status, result.reason, result.detail.op],
+    ["stopped", "delegate missing", "prepare-query"],
+  );
   const mod = await import("./storage-rules/controller.mjs");
-  for (const bad of [null, {}, { manifest }, { ...(await harness()).controller }]) assert.throws(() => mod.createController(bad), /invalid controller options/);
+  for (const bad of [null, {}, { manifest }, { ...(await harness()).controller }])
+    assert.throws(() => mod.createController(bad), /invalid controller options/);
   // Only the non-sending draft manifest may be driven.
-  for (const sendAuthorized of [true, undefined]) await assert.rejects(harness({ adjust: (built) => ({ ...built, manifest: { ...manifest, sendAuthorized } }) }), /invalid controller options/);
+  for (const sendAuthorized of [true, undefined])
+    await assert.rejects(
+      harness({ adjust: (built) => ({ ...built, manifest: { ...manifest, sendAuthorized } }) }),
+      /invalid controller options/,
+    );
 });
 
 test("every request the controller sends is one the schedule names, exactly once", async () => {
@@ -255,18 +521,32 @@ test("every request the controller sends is one the schedule names, exactly once
   const result = await h.controller.run();
   assert.equal(result.status, "finished");
   const schedule = buildSchedule(manifest);
-  const scheduled = new Set([...schedule.preflight, ...schedule.steps.flatMap((step) => (step.type === "row" ? [step.id] : step.rowIds))]);
+  const scheduled = new Set([
+    ...schedule.preflight,
+    ...schedule.steps.flatMap((step) => (step.type === "row" ? [step.id] : step.rowIds)),
+  ]);
   const sent = h.trace.filter((id) => !["started"].includes(id) && !id.startsWith("terminal"));
   assert.ok(sent.every((id) => scheduled.has(id)));
   assert.equal(new Set(sent).size, sent.length);
-  assert.equal(sent.some((id) => id.startsWith("recovery/")), false);
+  assert.equal(
+    sent.some((id) => id.startsWith("recovery/")),
+    false,
+  );
   const skippedAndSent = result.skipped.filter((id) => sent.includes(id));
   assert.deepEqual(skippedAndSent, []);
 });
 
 test("a credential provider's ensure hook runs before the freshness check of every row and a failure stops the run", async () => {
   const order = [];
-  const h = await harness({ ensure: async (row) => { order.push(["ensure", row.id]); }, credentialsFresh: (row) => { order.push(["fresh", row.id]); return true; } });
+  const h = await harness({
+    ensure: async (row) => {
+      order.push(["ensure", row.id]);
+    },
+    credentialsFresh: (row) => {
+      order.push(["fresh", row.id]);
+      return true;
+    },
+  });
   const result = await h.controller.run();
   assert.equal(result.status, "finished");
   assert.ok(order.length > 4000);
@@ -275,7 +555,11 @@ test("a credential provider's ensure hook runs before the freshness check of eve
     assert.deepEqual([order[index + 1][0], order[index + 1][1]], ["fresh", order[index][1]]);
   }
   let calls = 0;
-  const failing = await harness({ ensure: async () => { if (++calls === 30) throw new Error("refresh failed"); } });
+  const failing = await harness({
+    ensure: async () => {
+      if (++calls === 30) throw new Error("refresh failed");
+    },
+  });
   const stopped = await failing.controller.run();
   assert.deepEqual([stopped.status, stopped.reason], ["stopped", "credential refresh failed"]);
   assert.equal(failing.trace.filter((id) => id !== "started").length <= 40, true);
@@ -283,14 +567,26 @@ test("a credential provider's ensure hook runs before the freshness check of eve
 
 // Recovery: the same controller, ledgers and gate finish what a stopped run left behind, using only the declared recovery rows.
 const clean = { objects: 0, rulesets: 0, release: null, documents: 0 };
-const cleanOf = (h) => { const state = h.simulator.state(); return { objects: state.objects, rulesets: state.rulesets, release: state.release, documents: state.documents }; };
+const cleanOf = (h) => {
+  const state = h.simulator.state();
+  return {
+    objects: state.objects,
+    rulesets: state.rulesets,
+    release: state.release,
+    documents: state.documents,
+  };
+};
 const sentIds = (h) => h.trace.filter((id) => id !== "started" && !id.startsWith("terminal"));
 
 test("after a stop with the release published, recovery removes everything the run made and closes as recovered", async () => {
   const h = await harness({ credentialsFresh: () => false });
   const stopped = await h.controller.run();
   assert.equal(stopped.needsRecovery, true);
-  assert.ok(h.simulator.state().rulesets > 0 && h.simulator.state().objects > 0 && h.simulator.state().release !== null);
+  assert.ok(
+    h.simulator.state().rulesets > 0 &&
+      h.simulator.state().objects > 0 &&
+      h.simulator.state().release !== null,
+  );
   const before = sentIds(h).length;
   const result = await h.controller.recover();
   assert.equal(result.status, "recovered", JSON.stringify(result));
@@ -310,7 +606,7 @@ test("recovery never sends a second delete for a resource whatever ID carries it
   const h = await harness({ credentialsFresh: () => false });
   await h.controller.run();
   await h.controller.recover();
-  const deletes = h.simulator.state().log.filter((line) => /^DELETE /.test(line));
+  const deletes = h.simulator.state().log.filter((line) => line.startsWith("DELETE "));
   assert.equal(new Set(deletes).size, deletes.length);
 });
 
@@ -333,14 +629,26 @@ test("a recovery step that meets a surprise stops recovery and closes as needs-r
   await h.controller.run();
   const calls = h.simulator.state().calls;
   // The recovery's first request fails with a server error: nothing recovery may assume, so it stops.
-  const failing = await harness({ credentialsFresh: () => false, simulatorOptions: { failures: new Map([[calls + 1, () => response(500, { error: { code: 500, message: "boom" } })]]) } });
+  const failing = await harness({
+    credentialsFresh: () => false,
+    simulatorOptions: {
+      failures: new Map([
+        [calls + 1, () => response(500, { error: { code: 500, message: "boom" } })],
+      ]),
+    },
+  });
   await failing.controller.run();
   const before = sentIds(failing).length;
   const result = await failing.controller.recover();
   assert.equal(result.status, "stopped");
   // The request count covers this recovery only, not the run before it.
   assert.equal(result.requests, sentIds(failing).length - before);
-  assert.ok(["unexpected verdict", "check failed", "guard failed", "unclassifiable response"].includes(result.reason), result.reason);
+  assert.ok(
+    ["unexpected verdict", "check failed", "guard failed", "unclassifiable response"].includes(
+      result.reason,
+    ),
+    result.reason,
+  );
   assert.equal(failing.trace.at(-1), "terminal:needs-recovery");
   assert.equal(failing.gate.snapshot().mode, "closed");
   assert.equal((await failing.controller.recover()).status, "refused");
@@ -354,7 +662,9 @@ async function callAfter(predicate, offset = 1) {
   assert.ok(index >= 0);
   return index + offset + 1;
 }
-const failWith500 = (call) => ({ failures: new Map([[call, () => response(500, { error: { code: 500, message: "boom" } })]]) });
+const failWith500 = (call) => ({
+  failures: new Map([[call, () => response(500, { error: { code: 500, message: "boom" } })]]),
+});
 
 test("a stop before any release was written skips the release group but still restores the witnesses before deleting them", async () => {
   const h = await harness({ simulatorOptions: { invalidContent: "never matches anything" } });
@@ -366,15 +676,31 @@ test("a stop before any release was written skips the release group but still re
   assert.equal(result.status, "recovered", JSON.stringify(result));
   assert.deepEqual(cleanOf(h), clean);
   const recoverySent = sentIds(h).slice(before);
-  assert.equal(recoverySent.some((id) => id.startsWith("recovery/release/")), false);
+  assert.equal(
+    recoverySent.some((id) => id.startsWith("recovery/release/")),
+    false,
+  );
   // The disabled group is reported as skipped, row by row.
-  for (const stage of ["owner-before-delete", "delete", "bucket-absence", "bucketless-absence"]) assert.ok(result.skipped.includes(`recovery/release/restore/${stage}`), stage);
+  for (const stage of ["owner-before-delete", "delete", "bucket-absence", "bucketless-absence"])
+    assert.ok(result.skipped.includes(`recovery/release/restore/${stage}`), stage);
   // The witness deletion is guarded by the four owner readbacks, which follow the restore settle.
-  assert.equal(recoverySent.filter((id) => id.startsWith("recovery/management/restore-owner-media/")).length, 4);
+  assert.equal(
+    recoverySent.filter((id) => id.startsWith("recovery/management/restore-owner-media/")).length,
+    4,
+  );
   assert.ok(recoverySent.some((id) => id.startsWith("recovery/settle/restore/")));
-  assert.ok(recoverySent.findIndex((id) => id.startsWith("recovery/settle/")) < recoverySent.findIndex((id) => id.startsWith("recovery/management/restore-owner-media/")));
-  assert.ok(recoverySent.findIndex((id) => id.startsWith("recovery/management/restore-owner-media/3")) < recoverySent.findIndex((id) => id.startsWith("recovery/object-")));
-  assert.equal(recoverySent.some((id) => id.startsWith("recovery/object-")), true);
+  assert.ok(
+    recoverySent.findIndex((id) => id.startsWith("recovery/settle/")) <
+      recoverySent.findIndex((id) => id.startsWith("recovery/management/restore-owner-media/")),
+  );
+  assert.ok(
+    recoverySent.findIndex((id) => id.startsWith("recovery/management/restore-owner-media/3")) <
+      recoverySent.findIndex((id) => id.startsWith("recovery/object-")),
+  );
+  assert.equal(
+    recoverySent.some((id) => id.startsWith("recovery/object-")),
+    true,
+  );
   assert.equal(h.trace.at(-1), "terminal:recovered");
 });
 
@@ -384,17 +710,23 @@ test("a stop after an open upload session cancels it once and verifies it", asyn
   const h = await harness({ simulatorOptions: failWith500(call) });
   const stopped = await h.controller.run();
   assert.equal(stopped.status, "stopped");
-  assert.ok(h.simulator.state().sessions.some((state) => state === "active"), JSON.stringify(h.simulator.state().sessions));
+  assert.ok(
+    h.simulator.state().sessions.some((state) => state === "active"),
+    JSON.stringify(h.simulator.state().sessions),
+  );
   const result = await h.controller.recover();
   assert.equal(result.status, "recovered", JSON.stringify(result));
-  assert.ok(h.simulator.state().sessions.every((state) => state === "final" || state === "cancelled"));
+  assert.ok(
+    h.simulator.state().sessions.every((state) => state === "final" || state === "cancelled"),
+  );
   assert.deepEqual(cleanOf(h), clean);
   const cancels = sentIds(h).filter((id) => /^recovery\/session\/.*\/cancel$/.test(id));
   assert.equal(cancels.length, 1);
 });
 
 test("a stop after a document write recovers the document", async () => {
-  const write = (r) => r.service === "firestore" && ["PATCH", "POST", "PUT"].includes(r.request.method);
+  const write = (r) =>
+    r.service === "firestore" && ["PATCH", "POST", "PUT"].includes(r.request.method);
   const call = await callAfter(write, 1);
   const h = await harness({ simulatorOptions: failWith500(call) });
   const stopped = await h.controller.run();
@@ -406,14 +738,19 @@ test("a stop after a document write recovers the document", async () => {
 });
 
 test("a release delete that failed is never retried, and recovery reports the release it cannot prove gone", async () => {
-  const call = await firstCall(/^DELETE firebaserules\.googleapis\.com\/v1\/projects\/fireemu-oracle-query\/releases\/firebase\.storage\/synthetic-rules-bucket/);
+  const call = await firstCall(
+    /^DELETE firebaserules\.googleapis\.com\/v1\/projects\/fireemu-oracle-query\/releases\/firebase\.storage\/synthetic-rules-bucket/,
+  );
   const h = await harness({ simulatorOptions: failWith500(call) });
   const stopped = await h.controller.run();
   assert.equal(stopped.status, "stopped");
   const result = await h.controller.recover();
   assert.equal(result.status, "stopped");
   assert.equal(h.trace.at(-1), "terminal:needs-recovery");
-  assert.equal(sentIds(h).some((id) => id === "recovery/release/restore/delete"), false);
+  assert.equal(
+    sentIds(h).some((id) => id === "recovery/release/restore/delete"),
+    false,
+  );
   assert.notEqual(h.simulator.state().release, null);
 });
 
@@ -443,22 +780,65 @@ test("recovery is enabled by ledger facts: a run stopped before any write recove
 // its position here plus one.
 let dryRunSent = null;
 async function dryRun() {
-  if (dryRunSent === null) { const h = await harness(); await h.controller.run(); dryRunSent = sentIds(h); }
+  if (dryRunSent === null) {
+    const h = await harness();
+    await h.controller.run();
+    dryRunSent = sentIds(h);
+  }
   return dryRunSent;
 }
-async function callOf(id) { const index = (await dryRun()).indexOf(id); assert.ok(index >= 0, id); return index + 1; }
+async function callOf(id) {
+  const index = (await dryRun()).indexOf(id);
+  assert.ok(index >= 0, id);
+  return index + 1;
+}
 const rowOf = (id) => manifest.rows.find((r) => r.id === id);
-async function firstSent(predicate) { const id = (await dryRun()).find((sent) => predicate(rowOf(sent))); assert.ok(id); return id; }
+async function firstSent(predicate) {
+  const id = (await dryRun()).find((sent) => predicate(rowOf(sent)));
+  assert.ok(id);
+  return id;
+}
 const answerAt = (call, answer) => ({ failures: new Map([[call, answer]]) });
-const objectPresent = (row) => response(200, { kind: "storage#object", bucket: binding.bucket, name: row.request.objectName, generation: "1700000000000999", metageneration: "1", size: "4" });
-const mediaPresent = () => ({ status: 200, rawHeaders: ["Content-Type", "text/plain"], bytes: Buffer.from("seed"), startedAtMs: 1, finishedAtMs: 2 });
-const rpcNotFound = () => response(404, { error: { code: 404, message: "Requested entity was not found.", status: "NOT_FOUND" } });
-const rulesetPresent = () => response(200, { name: "projects/fireemu-oracle-query/rulesets/foreign", createTime: "2026-09-29T10:00:00.000000Z", source: { files: [{ name: "storage.rules", content: "x" }] } });
+const objectPresent = (row) =>
+  response(200, {
+    kind: "storage#object",
+    bucket: binding.bucket,
+    name: row.request.objectName,
+    generation: "1700000000000999",
+    metageneration: "1",
+    size: "4",
+  });
+const mediaPresent = () => ({
+  status: 200,
+  rawHeaders: ["Content-Type", "text/plain"],
+  bytes: Buffer.from("seed"),
+  startedAtMs: 1,
+  finishedAtMs: 2,
+});
+const rpcNotFound = () =>
+  response(404, {
+    error: { code: 404, message: "Requested entity was not found.", status: "NOT_FOUND" },
+  });
+const rulesetPresent = () =>
+  response(200, {
+    name: "projects/fireemu-oracle-query/rulesets/foreign",
+    createTime: "2026-09-29T10:00:00.000000Z",
+    source: { files: [{ name: "storage.rules", content: "x" }] },
+  });
 const serverError = () => response(500, { error: { code: 500, message: "boom" } });
 
 test("each row kind stops the run on a verdict its step must not accept", async () => {
-  const baseline = await firstSent((r) => r.family === "declared" && r.stage === "baseline" && r.request.operation === "get-metadata");
-  const cleanupAbsence = await firstSent((r) => r.family === "declared" && r.stage === "cleanup" && /absence/.test(r.id) && r.request.operation === "get-metadata");
+  const baseline = await firstSent(
+    (r) =>
+      r.family === "declared" && r.stage === "baseline" && r.request.operation === "get-metadata",
+  );
+  const cleanupAbsence = await firstSent(
+    (r) =>
+      r.family === "declared" &&
+      r.stage === "cleanup" &&
+      /absence/.test(r.id) &&
+      r.request.operation === "get-metadata",
+  );
   const cases = [
     // Reads that must find nothing: a case baseline, a control's baseline media, a case cleanup and a control's final absence.
     [baseline, objectPresent],
@@ -472,13 +852,25 @@ test("each row kind stops the run on a verdict its step must not accept", async 
     ["release/restore/owner-before-delete", rpcNotFound],
   ];
   for (const [id, answer] of cases) {
-    const h = await harness({ simulatorOptions: answerAt(await callOf(id), () => answer(rowOf(id))) });
+    const h = await harness({
+      simulatorOptions: answerAt(await callOf(id), () => answer(rowOf(id))),
+    });
     const result = await h.controller.run();
-    assert.deepEqual([result.status, result.reason, result.detail.rowId], ["stopped", "unexpected verdict", id], id);
+    assert.deepEqual(
+      [result.status, result.reason, result.detail.rowId],
+      ["stopped", "unexpected verdict", id],
+      id,
+    );
   }
 });
 
-const sessionActive = () => ({ status: 200, rawHeaders: ["X-Goog-Upload-Status", "active", "X-Goog-Upload-Size-Received", "0"], bytes: Buffer.alloc(0), startedAtMs: 1, finishedAtMs: 2 });
+const sessionActive = () => ({
+  status: 200,
+  rawHeaders: ["X-Goog-Upload-Status", "active", "X-Goog-Upload-Size-Received", "0"],
+  bytes: Buffer.alloc(0),
+  startedAtMs: 1,
+  finishedAtMs: 2,
+});
 
 test("a session that still answers active after its cancel is recorded and the run goes on (the v0 answers are record-only)", async () => {
   const verify = await firstSent((r) => r.family === "session-verify");
@@ -506,7 +898,14 @@ test("recovery records a session that still answers active after its cancel and 
   const terminal = sentIds(dry).find((id) => /^recovery\/session\/.*\/terminal$/.test(id));
   if (terminal === undefined) return;
   const terminalCall = sentIds(dry).indexOf(terminal) + 1;
-  const h = await harness({ simulatorOptions: { failures: new Map([[call, () => response(500, { error: { code: 500, message: "boom" } })], [terminalCall, sessionActive]]) } });
+  const h = await harness({
+    simulatorOptions: {
+      failures: new Map([
+        [call, () => response(500, { error: { code: 500, message: "boom" } })],
+        [terminalCall, sessionActive],
+      ]),
+    },
+  });
   const stopped = await h.controller.run();
   const result = await h.controller.recover();
   assert.notEqual(result.status, "refused", JSON.stringify(stopped));
@@ -517,10 +916,16 @@ test("an untouched run whose first read failed leaves the counter open, says so,
   const id = "management/control-0/baseline-metadata";
   const h = await harness({ simulatorOptions: answerAt(await callOf(id), "throw") });
   const result = await h.controller.run();
-  assert.deepEqual([result.status, result.reason, result.detail.rowId], ["stopped", "outcome uncertain", id]);
+  assert.deepEqual(
+    [result.status, result.reason, result.detail.rowId],
+    ["stopped", "outcome uncertain", id],
+  );
   // Nothing was written, but the counter flipped to recovery and no terminal row was written: the run is not closed.
   assert.equal(h.gate.snapshot().mode, "recovery");
-  assert.equal(h.trace.some((entry) => entry.startsWith("terminal:")), false);
+  assert.equal(
+    h.trace.some((entry) => entry.startsWith("terminal:")),
+    false,
+  );
   assert.equal(result.needsRecovery, true);
   // The result counts every reservation the counter made, the uncertain read included.
   assert.equal(result.requests, sentIds(h).length);
@@ -533,7 +938,11 @@ test("an untouched run whose first read failed leaves the counter open, says so,
 
 test("a result never claims a recovery is unneeded while the counter is open", async () => {
   // A read that fails after a write: the writes make the recovery needed; a run stopped before admission is closed and needs none.
-  const write = await harness({ simulatorOptions: failWith500(await callAfter((r) => r.request.method === "PATCH" || r.request.operation === "seed", 1)) });
+  const write = await harness({
+    simulatorOptions: failWith500(
+      await callAfter((r) => r.request.method === "PATCH" || r.request.operation === "seed", 1),
+    ),
+  });
   assert.equal((await write.controller.run()).needsRecovery, true);
   const refused = await harness({ judge: (row) => row.id !== "preflight/query/project" });
   const one = await refused.controller.run();
@@ -542,14 +951,31 @@ test("a result never claims a recovery is unneeded while the counter is open", a
 });
 
 test("a settle read that is neither allowed nor denied stops the run at once, in a publication settle and in a restore settle, in a run and in recovery", async () => {
-  const publication = await firstSent((r) => r.family === "settle" && r.phase === "normal" && r.programId === "v1");
-  for (const answer of [serverError, () => response(404, { error: { code: 404, message: "Not Found." } }), () => response(429, { error: { code: 429, message: "quota" } }), () => response(401, { error: { code: 401, message: "auth" } }), () => ({ status: 200, rawHeaders: ["Content-Type", "text/plain"], bytes: Buffer.from("not the seed") })]) {
+  const publication = await firstSent(
+    (r) => r.family === "settle" && r.phase === "normal" && r.programId === "v1",
+  );
+  for (const answer of [
+    serverError,
+    () => response(404, { error: { code: 404, message: "Not Found." } }),
+    () => response(429, { error: { code: 429, message: "quota" } }),
+    () => response(401, { error: { code: 401, message: "auth" } }),
+    () => ({
+      status: 200,
+      rawHeaders: ["Content-Type", "text/plain"],
+      bytes: Buffer.from("not the seed"),
+    }),
+  ]) {
     const h = await harness({ simulatorOptions: answerAt(await callOf(publication), answer) });
     const result = await h.controller.run();
-    assert.deepEqual([result.status, result.reason, result.detail.rowId], ["stopped", "unexpected verdict", publication]);
+    assert.deepEqual(
+      [result.status, result.reason, result.detail.rowId],
+      ["stopped", "unexpected verdict", publication],
+    );
     assert.equal(sentIds(h).at(-1), publication);
   }
-  const restore = await firstSent((r) => r.family === "settle" && r.phase === "normal" && r.programId === "restore");
+  const restore = await firstSent(
+    (r) => r.family === "settle" && r.phase === "normal" && r.programId === "restore",
+  );
   const h = await harness({ simulatorOptions: answerAt(await callOf(restore), serverError) });
   const stopped = await h.controller.run();
   assert.deepEqual([stopped.reason, stopped.detail.rowId], ["unexpected verdict", restore]);
@@ -560,37 +986,88 @@ test("a settle read that is neither allowed nor denied stops the run at once, in
   const recoverySettle = sentIds(dry).find((id) => id.startsWith("recovery/settle/restore/"));
   assert.ok(recoverySettle);
   const recoveryCall = sentIds(dry).indexOf(recoverySettle) + 1;
-  const stale = await harness({ credentialsFresh: () => false, simulatorOptions: answerAt(recoveryCall, serverError) });
+  const stale = await harness({
+    credentialsFresh: () => false,
+    simulatorOptions: answerAt(recoveryCall, serverError),
+  });
   await stale.controller.run();
   const recovered = await stale.controller.recover();
-  assert.deepEqual([recovered.status, recovered.reason, recovered.detail.rowId], ["stopped", "unexpected verdict", recoverySettle]);
+  assert.deepEqual(
+    [recovered.status, recovered.reason, recovered.detail.rowId],
+    ["stopped", "unexpected verdict", recoverySettle],
+  );
 });
 
 test("a response that fails its post-response check stops the run as a failed check", async () => {
   // A publication's after-read must name the Ruleset the run created; a missing release fails that check.
-  const after = await harness({ simulatorOptions: answerAt(await callOf("release/v1/after"), rpcNotFound) });
+  const after = await harness({
+    simulatorOptions: answerAt(await callOf("release/v1/after"), rpcNotFound),
+  });
   const one = await after.controller.run();
-  assert.deepEqual([one.status, one.reason, one.detail.rowId, one.detail.tokens], ["stopped", "check failed", "release/v1/after", ["release-name-and-created-ruleset-match"]]);
+  assert.deepEqual(
+    [one.status, one.reason, one.detail.rowId, one.detail.tokens],
+    ["stopped", "check failed", "release/v1/after", ["release-name-and-created-ruleset-match"]],
+  );
   // The entry Ruleset list must be a single page.
-  const entry = await harness({ simulatorOptions: answerAt(await callOf("preflight/rulesets-list/entry/1"), () => response(200, { nextPageToken: "next" })) });
+  const entry = await harness({
+    simulatorOptions: answerAt(await callOf("preflight/rulesets-list/entry/1"), () =>
+      response(200, { nextPageToken: "next" }),
+    ),
+  });
   const two = await entry.controller.run();
-  assert.deepEqual([two.status, two.reason, two.detail.rowId, two.detail.tokens], ["stopped", "check failed", "preflight/rulesets-list/entry/1", ["approved-ruleset-count-and-cleanup-baseline", "entry-page-has-no-next-token"]]);
+  assert.deepEqual(
+    [two.status, two.reason, two.detail.rowId, two.detail.tokens],
+    [
+      "stopped",
+      "check failed",
+      "preflight/rulesets-list/entry/1",
+      ["approved-ruleset-count-and-cleanup-baseline", "entry-page-has-no-next-token"],
+    ],
+  );
 });
 
 test("a response the classifier cannot read stops the run as unclassifiable", async () => {
   const id = "management/control-0/baseline-metadata";
-  const h = await harness({ simulatorOptions: answerAt(await callOf(id), () => ({ status: 200, rawHeaders: ["a"], bytes: Buffer.alloc(0) })) });
+  const h = await harness({
+    simulatorOptions: answerAt(await callOf(id), () => ({
+      status: 200,
+      rawHeaders: ["a"],
+      bytes: Buffer.alloc(0),
+    })),
+  });
   const result = await h.controller.run();
-  assert.deepEqual([result.status, result.reason, result.detail.rowId], ["stopped", "unclassifiable response", id]);
+  assert.deepEqual(
+    [result.status, result.reason, result.detail.rowId],
+    ["stopped", "unclassifiable response", id],
+  );
 });
 
 test("a created download token that comes back as a list of tokens is not bound: the rows that would use it are skipped, and the run goes on", async () => {
   const id = await firstSent((r) => r.request.operation === "create-token");
   const row = rowOf(id);
-  const h = await harness({ simulatorOptions: answerAt(await callOf(id), () => response(200, { name: row.request.objectName, bucket: binding.bucket, generation: "1700000000000999", metageneration: "1", size: "4", contentType: "text/plain", downloadTokens: "token-one,token-two" })) });
+  const h = await harness({
+    simulatorOptions: answerAt(await callOf(id), () =>
+      response(200, {
+        name: row.request.objectName,
+        bucket: binding.bucket,
+        generation: "1700000000000999",
+        metageneration: "1",
+        size: "4",
+        contentType: "text/plain",
+        downloadTokens: "token-one,token-two",
+      }),
+    ),
+  });
   const result = await h.controller.run();
   assert.equal(result.status, "finished", JSON.stringify(result));
-  const users = manifest.rows.filter((r) => Object.values(r.request.query ?? {}).some((value) => value?.kind === "firebase-download-token") && r.request.objectName === row.request.objectName).map((r) => r.id);
+  const users = manifest.rows
+    .filter(
+      (r) =>
+        Object.values(r.request.query ?? {}).some(
+          (value) => value?.kind === "firebase-download-token",
+        ) && r.request.objectName === row.request.objectName,
+    )
+    .map((r) => r.id);
   assert.ok(users.length > 0, "a row that uses the token exists");
   for (const user of users) assert.ok(result.skipped.includes(user), user);
 });
@@ -598,14 +1075,36 @@ test("a created download token that comes back as a list of tokens is not bound:
 test("the final Ruleset list follows each page token to the next page and stops after ten pages", async () => {
   const first = await callOf("rulesets-list/final/1");
   const tokens = [];
-  const failures = new Map(Array.from({ length: 10 }, (_, index) => [first + index, (spec) => { tokens.push(new URL(spec.url).searchParams.get("pageToken")); return response(200, { nextPageToken: `page-${index + 2}` }); }]));
+  const failures = new Map(
+    Array.from({ length: 10 }, (_, index) => [
+      first + index,
+      (spec) => {
+        tokens.push(new URL(spec.url).searchParams.get("pageToken"));
+        return response(200, { nextPageToken: `page-${index + 2}` });
+      },
+    ]),
+  );
   // The Rulesets baseline (a single page holding exactly the two known rulesets) would stop the first page; this test is about following tokens, so the ledger's answer to that one check is set aside.
-  const setBaselineAside = (run) => ({ check: (row, outcome) => { const seen = run.check(row, outcome); return seen.ok || !seen.failed.every((token) => token === "approved-ruleset-count-and-cleanup-baseline") ? seen : Object.freeze({ ok: true, failed: Object.freeze([]) }); } });
-  const h = await harness({ simulatorOptions: { failures }, adjust: (built) => ({ ...built, run: ledgerAnswering(built, setBaselineAside) }) });
+  const setBaselineAside = (run) => ({
+    check: (row, outcome) => {
+      const seen = run.check(row, outcome);
+      return seen.ok ||
+        !seen.failed.every((token) => token === "approved-ruleset-count-and-cleanup-baseline")
+        ? seen
+        : Object.freeze({ ok: true, failed: Object.freeze([]) });
+    },
+  });
+  const h = await harness({
+    simulatorOptions: { failures },
+    adjust: (built) => ({ ...built, run: ledgerAnswering(built, setBaselineAside) }),
+  });
   const result = await h.controller.run();
   assert.deepEqual([result.status, result.reason], ["stopped", "more than ten Ruleset pages"]);
   assert.deepEqual(tokens, [null, ...Array.from({ length: 9 }, (_, index) => `page-${index + 2}`)]);
-  assert.deepEqual(sentIds(h).slice(-10), Array.from({ length: 10 }, (_, index) => `rulesets-list/final/${index + 1}`));
+  assert.deepEqual(
+    sentIds(h).slice(-10),
+    Array.from({ length: 10 }, (_, index) => `rulesets-list/final/${index + 1}`),
+  );
 });
 
 // Seams: the ledgers and the recovery schedule are the controller's collaborators, so a test can make one answer what
@@ -613,35 +1112,84 @@ test("the final Ruleset list follows each page token to the next page and stops 
 const ledgerAnswering = (built, answer) => Object.freeze({ ...built.run, ...answer(built.run) });
 
 test("a settle read the ledgers would skip stops the run instead of counting as a cycle", async () => {
-  const skipSettle = (run) => ({ evaluate: (row, tokens) => { const seen = run.evaluate(row, tokens); return row.family === "settle" ? Object.freeze({ ...seen, decision: "skip", failed: Object.freeze([Object.freeze({ token: "all-four-controls-confirmed-and-retained", outcome: "skip" })]) }) : seen; } });
-  const h = await harness({ adjust: (built) => ({ ...built, run: ledgerAnswering(built, skipSettle) }) });
+  const skipSettle = (run) => ({
+    evaluate: (row, tokens) => {
+      const seen = run.evaluate(row, tokens);
+      return row.family === "settle"
+        ? Object.freeze({
+            ...seen,
+            decision: "skip",
+            failed: Object.freeze([
+              Object.freeze({ token: "all-four-controls-confirmed-and-retained", outcome: "skip" }),
+            ]),
+          })
+        : seen;
+    },
+  });
+  const h = await harness({
+    adjust: (built) => ({ ...built, run: ledgerAnswering(built, skipSettle) }),
+  });
   const result = await h.controller.run();
-  assert.deepEqual([result.status, result.reason, result.detail.rowId], ["stopped", "settle read skipped", "settle/v1/1/0"]);
+  assert.deepEqual(
+    [result.status, result.reason, result.detail.rowId],
+    ["stopped", "settle read skipped", "settle/v1/1/0"],
+  );
 });
 
 test("a write the run ledger recorded keeps the counter open even when no object was written", async () => {
-  const oneWrite = (run) => ({ snapshot: () => Object.freeze({ ...run.snapshot(), mutations: 1 }) });
-  const h = await harness({ simulatorOptions: { preexisting: [manifest.resources.controls[0]] }, adjust: (built) => ({ ...built, run: ledgerAnswering(built, oneWrite) }) });
+  const oneWrite = (run) => ({
+    snapshot: () => Object.freeze({ ...run.snapshot(), mutations: 1 }),
+  });
+  const h = await harness({
+    simulatorOptions: { preexisting: [manifest.resources.controls[0]] },
+    adjust: (built) => ({ ...built, run: ledgerAnswering(built, oneWrite) }),
+  });
   const result = await h.controller.run();
-  assert.deepEqual([result.status, result.reason, result.needsRecovery], ["stopped", "unexpected verdict", true]);
+  assert.deepEqual(
+    [result.status, result.reason, result.needsRecovery],
+    ["stopped", "unexpected verdict", true],
+  );
   assert.equal(h.gate.snapshot().mode, "normal");
-  assert.equal(h.trace.some((id) => id.startsWith("terminal")), false);
+  assert.equal(
+    h.trace.some((id) => id.startsWith("terminal")),
+    false,
+  );
 });
 
 test("an update time is bound with the run ledger's own deletable answer, so a document it does not call deletable is never deleted", async () => {
   // Today a document read is deletable whenever a delete's guards pass; a ledger that says otherwise must still be obeyed.
-  const neverDeletable = (run) => ({ document: (name) => Object.freeze({ ...run.document(name), deletable: false }) });
-  const h = await harness({ adjust: (built) => ({ ...built, run: ledgerAnswering(built, neverDeletable) }) });
+  const neverDeletable = (run) => ({
+    document: (name) => Object.freeze({ ...run.document(name), deletable: false }),
+  });
+  const h = await harness({
+    adjust: (built) => ({ ...built, run: ledgerAnswering(built, neverDeletable) }),
+  });
   const result = await h.controller.run();
   const del = await firstSent((r) => r.service === "firestore" && r.request.method === "DELETE");
-  assert.deepEqual([result.status, result.reason, result.detail.rowId, result.detail.cause], ["stopped", "target unavailable", del, "reference is not deletable"]);
+  assert.deepEqual(
+    [result.status, result.reason, result.detail.rowId, result.detail.cause],
+    ["stopped", "target unavailable", del, "reference is not deletable"],
+  );
   assert.equal(sentIds(h).includes(del), false);
 });
 
 test("recovery runs once: after a recovery whose close failed, a second call is refused and sends nothing", async () => {
   let failFinish = false;
-  const flaky = (gate) => Object.freeze({ ...gate, finish: async (outcome) => { if (failFinish) { failFinish = false; throw new Error("journal unavailable"); } return gate.finish(outcome); } });
-  const h = await harness({ credentialsFresh: () => false, adjust: (built) => ({ ...built, gate: flaky(built.gate) }) });
+  const flaky = (gate) =>
+    Object.freeze({
+      ...gate,
+      finish: async (outcome) => {
+        if (failFinish) {
+          failFinish = false;
+          throw new Error("journal unavailable");
+        }
+        return gate.finish(outcome);
+      },
+    });
+  const h = await harness({
+    credentialsFresh: () => false,
+    adjust: (built) => ({ ...built, gate: flaky(built.gate) }),
+  });
   await h.controller.run();
   failFinish = true;
   await assert.rejects(h.controller.recover(), /journal unavailable/);
@@ -656,51 +1204,100 @@ test("an error that is not a stop escapes recovery and leaves the counter open",
   const capture = memoryCapture();
   let failFacts = false;
   const original = capture.writeFacts;
-  capture.writeFacts = async (r) => { if (failFacts) throw new Error("facts journal unavailable"); return original(r); };
+  capture.writeFacts = async (r) => {
+    if (failFacts) throw new Error("facts journal unavailable");
+    return original(r);
+  };
   const h = await harness({ capture, credentialsFresh: () => false });
   await h.controller.run();
   failFacts = true;
   await assert.rejects(h.controller.recover(), /facts journal unavailable/);
   assert.equal(h.gate.snapshot().mode, "recovery");
-  assert.equal(h.trace.some((id) => id.startsWith("terminal")), false);
+  assert.equal(
+    h.trace.some((id) => id.startsWith("terminal")),
+    false,
+  );
 });
 
 test("a recovery whose final owned-prefix check was skipped closes as needs-recovery, not recovered", async () => {
   // The reviewed schedule never gates the final check; one that did would skip it after a run that wrote no release.
   const reviewed = buildRecoverySchedule(manifest);
-  const gated = Object.freeze({ steps: Object.freeze([...reviewed.steps.slice(0, -1), Object.freeze({ ...reviewed.steps.at(-1), enabledBy: "release-written" })]) });
-  const h = await harness({ simulatorOptions: { invalidContent: "never matches anything" }, adjust: (built) => ({ ...built, recoverySchedule: gated }) });
+  const gated = Object.freeze({
+    steps: Object.freeze([
+      ...reviewed.steps.slice(0, -1),
+      Object.freeze({ ...reviewed.steps.at(-1), enabledBy: "release-written" }),
+    ]),
+  });
+  const h = await harness({
+    simulatorOptions: { invalidContent: "never matches anything" },
+    adjust: (built) => ({ ...built, recoverySchedule: gated }),
+  });
   await h.controller.run();
   const result = await h.controller.recover();
-  assert.deepEqual([result.status, result.reason, result.needsRecovery], ["stopped", "owned-prefix check skipped", true]);
+  assert.deepEqual(
+    [result.status, result.reason, result.needsRecovery],
+    ["stopped", "owned-prefix check skipped", true],
+  );
   assert.ok(result.skipped.includes("recovery/management/prefix-empty"));
   assert.equal(sentIds(h).includes("recovery/management/prefix-empty"), false);
   assert.equal(h.trace.at(-1), "terminal:needs-recovery");
 });
 
 test("a release read whose outcome is uncertain enables the release absence reads in recovery, whose guard then stops it", async () => {
-  const h = await harness({ simulatorOptions: answerAt(await callOf("compile/release/before"), "throw") });
+  const h = await harness({
+    simulatorOptions: answerAt(await callOf("compile/release/before"), "throw"),
+  });
   const stopped = await h.controller.run();
-  assert.deepEqual([stopped.reason, stopped.detail.rowId], ["outcome uncertain", "compile/release/before"]);
+  assert.deepEqual(
+    [stopped.reason, stopped.detail.rowId],
+    ["outcome uncertain", "compile/release/before"],
+  );
   const result = await h.controller.recover();
   // No release write was attempted, so only the absence group is enabled; the uncertain release refuses its first read.
-  assert.deepEqual([result.status, result.reason, result.detail.rowId, result.detail.tokens, result.requests], ["stopped", "guard failed", "recovery/release/restore/bucket-absence", ["restore-without-unowned-release-change"], 0]);
-  assert.deepEqual(result.skipped, ["recovery/release/restore/owner-before-delete", "recovery/release/restore/delete"]);
+  assert.deepEqual(
+    [result.status, result.reason, result.detail.rowId, result.detail.tokens, result.requests],
+    [
+      "stopped",
+      "guard failed",
+      "recovery/release/restore/bucket-absence",
+      ["restore-without-unowned-release-change"],
+      0,
+    ],
+  );
+  assert.deepEqual(result.skipped, [
+    "recovery/release/restore/owner-before-delete",
+    "recovery/release/restore/delete",
+  ]);
   assert.equal(h.trace.at(-1), "terminal:needs-recovery");
 });
 
 test("owner readbacks count per witness, so a recovery that repeats two of them still reads all four before deleting the witnesses", async () => {
   // The run stops before the third owner readback is sent, so the witnesses stay confirmed.
-  const h = await harness({ ensure: async (row) => { if (row.id === "management/restore-owner-media/2") throw new Error("refresh failed"); } });
+  const h = await harness({
+    ensure: async (row) => {
+      if (row.id === "management/restore-owner-media/2") throw new Error("refresh failed");
+    },
+  });
   const stopped = await h.controller.run();
-  assert.deepEqual([stopped.reason, stopped.detail.rowId], ["credential refresh failed", "management/restore-owner-media/2"]);
+  assert.deepEqual(
+    [stopped.reason, stopped.detail.rowId],
+    ["credential refresh failed", "management/restore-owner-media/2"],
+  );
   assert.equal(h.run.snapshot().ownerMedia, 2);
   const result = await h.controller.recover();
   assert.equal(result.status, "recovered", JSON.stringify(result));
   // Repeating the first two readbacks does not stand in for the other two: all four are read before any witness goes.
-  const readbacks = sentIds(h).filter((id) => id.startsWith("recovery/management/restore-owner-media/"));
-  assert.deepEqual(readbacks, [0, 1, 2, 3].map((index) => `recovery/management/restore-owner-media/${index}`));
-  assert.ok(sentIds(h).indexOf(readbacks.at(-1)) < sentIds(h).findIndex((id) => /^recovery\/object-\d+\/delete$/.test(id)));
+  const readbacks = sentIds(h).filter((id) =>
+    id.startsWith("recovery/management/restore-owner-media/"),
+  );
+  assert.deepEqual(
+    readbacks,
+    [0, 1, 2, 3].map((index) => `recovery/management/restore-owner-media/${index}`),
+  );
+  assert.ok(
+    sentIds(h).indexOf(readbacks.at(-1)) <
+      sentIds(h).findIndex((id) => /^recovery\/object-\d+\/delete$/.test(id)),
+  );
   assert.deepEqual(cleanOf(h), clean);
 });
 
@@ -722,8 +1319,13 @@ test("a generation read after an uncertain metadata patch never feeds the recove
   const stopped = await h.controller.run();
   assert.deepEqual([stopped.reason, stopped.detail.rowId], ["outcome uncertain", id]);
   const result = await h.controller.recover();
-  const del = manifest.rows.find((r) => r.family === "recovery-object" && r.stage === "delete" && r.request.objectName === name);
-  assert.deepEqual([result.status, result.reason, result.detail.rowId, result.detail.cause], ["stopped", "target unavailable", del.id, "reference is not deletable"]);
+  const del = manifest.rows.find(
+    (r) => r.family === "recovery-object" && r.stage === "delete" && r.request.objectName === name,
+  );
+  assert.deepEqual(
+    [result.status, result.reason, result.detail.rowId, result.detail.cause],
+    ["stopped", "target unavailable", del.id, "reference is not deletable"],
+  );
   assert.ok(h.simulator.objects().includes(name));
 });
 
@@ -732,57 +1334,126 @@ async function walk(directory) {
   const out = [];
   for (const name of await readdir(directory)) {
     const path = `${directory}/${name}`;
-    if ((await lstat(path)).isDirectory()) out.push(...await walk(path)); else out.push(path);
+    if ((await lstat(path)).isDirectory()) out.push(...(await walk(path)));
+    else out.push(path);
   }
   return out;
 }
 
 // Every row syncs several files, so this run takes over a minute; run it with STORAGE_RULES_SLOW_TESTS=1.
-test("a whole recording with the real journals leaves no bearer value anywhere in the run directory", { skip: !process.env.STORAGE_RULES_SLOW_TESTS && "set STORAGE_RULES_SLOW_TESTS=1" }, async (t) => {
-  const directory = await mkdtemp(join(tmpdir(), "storage-rules-controller-"));
-  t.after(() => rm(directory, { recursive: true, force: true }));
-  const requestIds = counted.map((r) => r.id);
-  const reservations = await createReservationJournal({ directory, runId: options.runId, sourceCommit: options.sourceCommit, manifestDigest: manifest.sha256, requestIds, preflightIds, io: { open, lstat } });
-  const capture = await createCaptureJournal({ directory, runId: options.runId, sourceCommit: options.sourceCommit, manifestDigest: manifest.sha256, digestSalt: salt, requestIds, io: { open, lstat, mkdir } });
-  harnessReservations = { onStarted: reservations.onStarted, onReserve: reservations.onReserve, onTerminal: reservations.onTerminal };
-  try {
-    const h = await harness({ capture });
-    const result = await h.controller.run();
-    assert.equal(result.status, "finished", JSON.stringify(result));
-    await capture.close(); await reservations.close();
-    const secrets = [BEARER, ...h.simulator.secrets()];
-    assert.ok(secrets.length > 10);
-    const files = await walk(directory);
-    assert.ok(files.some((f) => f.endsWith("reservations.jsonl")) && files.some((f) => f.endsWith("captures.jsonl")) && files.filter((f) => f.includes("/blobs/")).length > 100);
-    for (const file of files) {
-      const text = (await (await import("node:fs/promises")).readFile(file)).toString("latin1");
-      for (const secret of secrets) for (const form of [secret, encodeURIComponent(secret), Buffer.from(secret).toString("base64")]) assert.equal(text.includes(form), false, `${secret.slice(0, 12)} in ${file.slice(directory.length)}`);
-      assert.equal((await lstat(file)).mode & 0o077, 0, file);
+test(
+  "a whole recording with the real journals leaves no bearer value anywhere in the run directory",
+  { skip: !process.env.STORAGE_RULES_SLOW_TESTS && "set STORAGE_RULES_SLOW_TESTS=1" },
+  async (t) => {
+    const directory = await mkdtemp(join(tmpdir(), "storage-rules-controller-"));
+    t.after(() => rm(directory, { recursive: true, force: true }));
+    const requestIds = counted.map((r) => r.id);
+    const reservations = await createReservationJournal({
+      directory,
+      runId: options.runId,
+      sourceCommit: options.sourceCommit,
+      manifestDigest: manifest.sha256,
+      requestIds,
+      preflightIds,
+      io: { open, lstat },
+    });
+    const capture = await createCaptureJournal({
+      directory,
+      runId: options.runId,
+      sourceCommit: options.sourceCommit,
+      manifestDigest: manifest.sha256,
+      digestSalt: salt,
+      requestIds,
+      io: { open, lstat, mkdir },
+    });
+    harnessReservations = {
+      onStarted: reservations.onStarted,
+      onReserve: reservations.onReserve,
+      onTerminal: reservations.onTerminal,
+    };
+    try {
+      const h = await harness({ capture });
+      const result = await h.controller.run();
+      assert.equal(result.status, "finished", JSON.stringify(result));
+      await capture.close();
+      await reservations.close();
+      const secrets = [BEARER, ...h.simulator.secrets()];
+      assert.ok(secrets.length > 10);
+      const files = await walk(directory);
+      assert.ok(
+        files.some((f) => f.endsWith("reservations.jsonl")) &&
+          files.some((f) => f.endsWith("captures.jsonl")) &&
+          files.filter((f) => f.includes("/blobs/")).length > 100,
+      );
+      for (const file of files) {
+        const text = (await (await import("node:fs/promises")).readFile(file)).toString("latin1");
+        for (const secret of secrets)
+          for (const form of [
+            secret,
+            encodeURIComponent(secret),
+            Buffer.from(secret).toString("base64"),
+          ])
+            assert.equal(
+              text.includes(form),
+              false,
+              `${secret.slice(0, 12)} in ${file.slice(directory.length)}`,
+            );
+        assert.equal((await lstat(file)).mode & 0o077, 0, file);
+      }
+      const rows = (
+        await (await import("node:fs/promises")).readFile(`${directory}/captures.jsonl`, "utf8")
+      )
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => JSON.parse(line));
+      assert.ok(rows.filter((row) => row.event === "response").length > 4000);
+      assert.ok(
+        rows.some((row) => row.event === "proof") && rows.some((row) => row.event === "facts"),
+      );
+    } finally {
+      harnessReservations = null;
     }
-    const rows = (await (await import("node:fs/promises")).readFile(`${directory}/captures.jsonl`, "utf8")).split("\n").filter(Boolean).map((line) => JSON.parse(line));
-    assert.ok(rows.filter((row) => row.event === "response").length > 4000);
-    assert.ok(rows.some((row) => row.event === "proof") && rows.some((row) => row.event === "facts"));
-  } finally { harnessReservations = null; }
-});
+  },
+);
 
 test("a subject delete that the rules deny is one attempt, not the owner's delete: the cleanup delete of the same object is sent and the recording finishes", async () => {
   const h = await harness();
   const result = await h.controller.run();
   assert.equal(result.status, "finished", JSON.stringify(result));
   const sent = new Set(h.trace);
-  for (const id of ["case/method-read-delete-present/subject/subject", "case/method-read-delete-present/cleanup/cleanup-delete", "case/denial-delete-present/subject/subject", "case/denial-delete-present/cleanup/cleanup-delete"]) assert.ok(sent.has(id), id);
+  for (const id of [
+    "case/method-read-delete-present/subject/subject",
+    "case/method-read-delete-present/cleanup/cleanup-delete",
+    "case/denial-delete-present/subject/subject",
+    "case/denial-delete-present/cleanup/cleanup-delete",
+  ])
+    assert.ok(sent.has(id), id);
   assert.equal(h.simulator.state().objects, 0);
   assert.deepEqual([...h.objects.residual()], []);
 });
 
 // The Firebase v0 capabilities are record-only. Each odd answer below is one production could give; whatever it is, the recording goes on, every object it created is read back through the admin API and deleted, and the prefix ends empty.
-for (const [name, odd] of [["a session that finalizes an object the rules deny", "finalize-anyway"], ["a token request that answers a list", "two-tokens"], ["a session start that fails", "start-denied"], ["a cancel that answers 400", "odd-cancel"]]) {
+for (const [name, odd] of [
+  ["a session that finalizes an object the rules deny", "finalize-anyway"],
+  ["a token request that answers a list", "two-tokens"],
+  ["a session start that fails", "start-denied"],
+  ["a cancel that answers 400", "odd-cancel"],
+]) {
   test(`${name} is recorded and never stops the run or leaves an object behind`, async () => {
     const h = await harness({ simulatorOptions: { oddV0: [odd] } });
     const result = await h.controller.run();
     assert.equal(result.status, "finished", `${odd}: ${JSON.stringify(result)}`);
     const state = h.simulator.state();
-    assert.deepEqual({ objects: state.objects, rulesets: state.rulesets, release: state.release, documents: state.documents }, { objects: 0, rulesets: 0, release: null, documents: 0 }, odd);
+    assert.deepEqual(
+      {
+        objects: state.objects,
+        rulesets: state.rulesets,
+        release: state.release,
+        documents: state.documents,
+      },
+      { objects: 0, rulesets: 0, release: null, documents: 0 },
+      odd,
+    );
     assert.deepEqual([...h.objects.residual()], [], odd);
     assert.equal(h.gate.snapshot().mode, "closed");
   });
@@ -800,13 +1471,18 @@ test("a release removal that the serving plane reflects late (stale answers firs
   const stopAt = "case/method-read-get-metadata-present/before/before-metadata";
   const call = sentIds(h).indexOf(stopAt) + 1;
   assert.ok(call > 0);
-  const failing = await harness({ simulatorOptions: { lag: 9, failures: new Map([[call, () => serverError()]]) } });
+  const failing = await harness({
+    simulatorOptions: { lag: 9, failures: new Map([[call, () => serverError()]]) },
+  });
   const stopped = await failing.controller.run();
   assert.equal(stopped.status, "stopped");
   assert.equal(stopped.reason, "unexpected verdict");
   const recovered = await failing.controller.recover();
   assert.equal(recovered.status, "recovered", JSON.stringify(recovered));
-  assert.ok(failing.trace.filter((id) => /^recovery\/settle\/restore\/\d+\/0$/.test(id)).length >= 3, "the recovery settle read three cycles or more");
+  assert.ok(
+    failing.trace.filter((id) => /^recovery\/settle\/restore\/\d+\/0$/.test(id)).length >= 3,
+    "the recovery settle read three cycles or more",
+  );
   assert.deepEqual([...failing.objects.residual()], []);
 });
 
@@ -836,7 +1512,12 @@ test("a stop after an unexpected token answer is recovered, and so is a stop who
   await dry.controller.run();
   const stopCall = sentIds(dry).indexOf(stopAt) + 1;
   assert.ok(stopCall > 0);
-  const odd = await harness({ simulatorOptions: { oddV0: ["token-403"], failures: new Map([[stopCall, () => serverError()]]) } });
+  const odd = await harness({
+    simulatorOptions: {
+      oddV0: ["token-403"],
+      failures: new Map([[stopCall, () => serverError()]]),
+    },
+  });
   assert.equal((await odd.controller.run()).status, "stopped");
   const recovered = await odd.controller.recover();
   assert.equal(recovered.status, "recovered", JSON.stringify(recovered));
@@ -846,7 +1527,10 @@ test("a stop after an unexpected token answer is recovered, and so is a stop who
   const tokenCall = sentIds(dry).indexOf(TOKEN_ROW) + 1;
   const lost = await harness({ simulatorOptions: { failures: new Map([[tokenCall, "throw"]]) } });
   const stopped = await lost.controller.run();
-  assert.deepEqual([stopped.status, stopped.reason, stopped.detail.rowId], ["stopped", "outcome uncertain", TOKEN_ROW]);
+  assert.deepEqual(
+    [stopped.status, stopped.reason, stopped.detail.rowId],
+    ["stopped", "outcome uncertain", TOKEN_ROW],
+  );
   const after = await lost.controller.recover();
   assert.equal(after.status, "recovered", JSON.stringify(after));
   assert.equal(lost.simulator.state().objects, 0);

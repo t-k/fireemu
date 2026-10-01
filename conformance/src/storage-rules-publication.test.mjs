@@ -13,7 +13,13 @@ const binding = {
 test("publication bundles preserve every isolated case body under its Rules version", () => {
   const corpus = buildCorpus(binding);
   const bundles = buildPublicationSources(corpus, binding);
-  assert.deepEqual(bundles.map((bundle) => [bundle.version, bundle.caseIds.length]), [[1, 7], [2, 329]]);
+  assert.deepEqual(
+    bundles.map((bundle) => [bundle.version, bundle.caseIds.length]),
+    [
+      [1, 7],
+      [2, 329],
+    ],
+  );
   const expectedIds = [...corpus.cases, ...corpus.firestorePrograms].map((entry) => entry.id);
   assert.deepEqual(new Set(bundles.flatMap((bundle) => bundle.caseIds)), new Set(expectedIds));
   assert.equal(bundles.flatMap((bundle) => bundle.caseIds).length, expectedIds.length);
@@ -31,11 +37,17 @@ test("publication bundles preserve every isolated case body under its Rules vers
 
 test("publication refuses overlapping owned paths and a changed match prefix", () => {
   const corpus = buildCorpus(binding);
-  corpus.cases[1].rulesSource = corpus.cases[1].rulesSource.replace(corpus.cases[1].casePrefix, corpus.cases[0].casePrefix);
+  corpus.cases[1].rulesSource = corpus.cases[1].rulesSource.replace(
+    corpus.cases[1].casePrefix,
+    corpus.cases[0].casePrefix,
+  );
   corpus.cases[1].casePrefix = corpus.cases[0].casePrefix;
   assert.throws(() => buildPublicationSources(corpus, binding), /case prefix|overlap|duplicate/);
   const changed = buildCorpus(binding);
-  changed.cases[0].rulesSource = changed.cases[0].rulesSource.replace(changed.cases[0].casePrefix, `${binding.prefix}other/`);
+  changed.cases[0].rulesSource = changed.cases[0].rulesSource.replace(
+    changed.cases[0].casePrefix,
+    `${binding.prefix}other/`,
+  );
   assert.throws(() => buildPublicationSources(changed, binding), /match prefix/);
 });
 
@@ -43,7 +55,10 @@ test("publication refuses a case match outside the owned run prefix", () => {
   const corpus = buildCorpus(binding);
   const original = corpus.cases[0].casePrefix;
   corpus.cases[0].casePrefix = `unowned/${corpus.cases[0].id}/`;
-  corpus.cases[0].rulesSource = corpus.cases[0].rulesSource.replace(original, corpus.cases[0].casePrefix);
+  corpus.cases[0].rulesSource = corpus.cases[0].rulesSource.replace(
+    original,
+    corpus.cases[0].casePrefix,
+  );
   assert.throws(() => buildPublicationSources(corpus, binding), /owned prefix|case prefix/);
 });
 

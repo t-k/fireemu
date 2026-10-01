@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
-import { fileURLToPath } from "node:url";
 
 const root = new URL("../../", import.meta.url);
 const closurePath = new URL("spec/compatibility/closure/STORAGE-OBJECT.json", root);
@@ -67,13 +66,16 @@ test("STORAGE-OBJECT inventory fixes the production closure obligations", () => 
     if (row.status === "VERIFIED") {
       assert.ok(closure.inventoryState === "FROZEN", row.conditionId);
       assert.equal(row.evidence?.productionRecordings?.length, 2, row.conditionId);
-      assert.ok(row.evidence.productionRecordings.every((run) => run.project === "fireemu-oracle-query"));
+      assert.ok(
+        row.evidence.productionRecordings.every((run) => run.project === "fireemu-oracle-query"),
+      );
       assert.match(row.evidence.finalArtifactSha256, /^[0-9a-f]{64}$/, row.conditionId);
       const comparison = JSON.parse(
         readFileSync(new URL(row.evidence.comparisonPath, root), "utf8"),
       );
       assert.equal(comparison.artifactSha256, row.evidence.finalArtifactSha256, row.conditionId);
-      const isGate = row.conditionId === "STORAGE-OBJECT/final-artifact-regression" ||
+      const isGate =
+        row.conditionId === "STORAGE-OBJECT/final-artifact-regression" ||
         row.conditionId === "STORAGE-OBJECT/closure-review";
       const compared = isGate
         ? comparison.rows
@@ -81,7 +83,10 @@ test("STORAGE-OBJECT inventory fixes the production closure obligations", () => 
             row.recipeIds.some((recipe) => key.split("#")[0] === recipe),
           );
       assert.ok(compared.length > 0, `${row.conditionId}: no compared rows`);
-      assert.ok(compared.every(({ status }) => status === "MATCH"), row.conditionId);
+      assert.ok(
+        compared.every(({ status }) => status === "MATCH"),
+        row.conditionId,
+      );
       if (row.conditionId === "STORAGE-OBJECT/closure-review") {
         assert.equal(closure.closureReview.decision, "APPROVED");
         assert.equal(closure.closureReview.finalArtifactSha256, row.evidence.finalArtifactSha256);
@@ -120,9 +125,9 @@ test("frozen scope cites the owner decision and discloses the large-object limit
   const contract = JSON.parse(
     readFileSync(new URL("spec/compatibility/contract.json", root), "utf8"),
   );
-  const objects = contract.surfaces.find(({ id }) => id === "storage")?.claims.find(
-    ({ id }) => id === "ST-CLAIM-OBJECTS",
-  );
+  const objects = contract.surfaces
+    .find(({ id }) => id === "storage")
+    ?.claims.find(({ id }) => id === "ST-CLAIM-OBJECTS");
   assert.ok(
     objects.fireemuOnly.some(({ behaviour }) =>
       /STORAGE-OBJECT S6.*known limitation.*256 MiB/.test(behaviour),

@@ -66,23 +66,41 @@ test("STORAGE-RULES freeze retains all behavioral obligations", () => {
 
 test("scope decisions cite the recorded owner or delegated decisions", () => {
   const closure = load();
-  assert.deepEqual(new Set(closure.scopeDecisions.map(({ id }) => id)), new Set(["S1", "S2", "S3", "S4", "S5", "S6", "S7"]));
+  assert.deepEqual(
+    new Set(closure.scopeDecisions.map(({ id }) => id)),
+    new Set(["S1", "S2", "S3", "S4", "S5", "S6", "S7"]),
+  );
   for (const row of closure.scopeDecisions) {
     assert.equal(row.status, "APPROVED", row.id);
     assert.equal(row.decidedOn, row.id === "S7" ? "2026-09-27" : "2026-09-25", row.id);
     assert.match(row.decisionRef, /owner-decisions\.md.*STORAGE-RULES/, row.id);
-    assert.equal(row.decidedBy, ["S2", "S4", "S5", "S7"].includes(row.id) ? "owner" : "coordinator (delegated)", row.id);
+    assert.equal(
+      row.decidedBy,
+      ["S2", "S4", "S5", "S7"].includes(row.id) ? "owner" : "coordinator (delegated)",
+      row.id,
+    );
   }
   const narrowed = closure.scopeDecisions.find(({ id }) => id === "S7");
   assert.match(narrowed.decision, /IAM.*outside.*expired.*outside/i);
   assert.match(narrowed.decision, /130 minutes/);
-  assert.match(closure.conditions.find(({ conditionId }) => conditionId === "STORAGE-RULES/token-refusal").checks.join(" "), /^Missing, malformed, foreign-project, revoked and valid same-project tokens/);
-  assert.doesNotMatch(closure.conditions.find(({ conditionId }) => conditionId === "STORAGE-RULES/gcs-admin-boundary").checks.join(" "), /permission-error/i);
+  assert.match(
+    closure.conditions
+      .find(({ conditionId }) => conditionId === "STORAGE-RULES/token-refusal")
+      .checks.join(" "),
+    /^Missing, malformed, foreign-project, revoked and valid same-project tokens/,
+  );
+  assert.doesNotMatch(
+    closure.conditions
+      .find(({ conditionId }) => conditionId === "STORAGE-RULES/gcs-admin-boundary")
+      .checks.join(" "),
+    /permission-error/i,
+  );
 });
 
 test("COMPAT_VERIFIED requires every condition and independent closure review", () => {
   const closure = load();
-  const eligible = closure.inventoryState === "FROZEN" &&
+  const eligible =
+    closure.inventoryState === "FROZEN" &&
     closure.scopeDecisions.every(({ status }) => status === "APPROVED") &&
     closure.conditions.every(({ status }) => status === "VERIFIED") &&
     closure.closureReview.decision === "APPROVED";

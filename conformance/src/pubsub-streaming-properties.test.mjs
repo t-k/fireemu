@@ -310,6 +310,7 @@ function modelGate({ maxFrames, maxFrameBytes, maxOutgoingBytes, maxActions }) {
     direction: "NEW",
     origin: undefined,
     contractBroken: false,
+    issueFailed: false,
     seen: new Set(),
   };
   const stop = (origin) => {
@@ -347,7 +348,14 @@ function modelGate({ maxFrames, maxFrameBytes, maxOutgoingBytes, maxActions }) {
         state.frames++;
         state.outgoing += length + 5;
       }
-      if (["guard-before", "persist-before", "guard-after", "issue-throws"].includes(failure)) {
+      if (["guard-before", "persist-before", "guard-after"].includes(failure)) {
+        stop("uncertain");
+        return "rejects";
+      }
+      // issue was invoked: a throw may follow sent bytes, so like a Promise return it leaves the
+      // outcome to supervised termination.
+      if (failure === "issue-throws") {
+        state.issueFailed = true;
         stop("uncertain");
         return "rejects";
       }
@@ -482,7 +490,7 @@ test(
           direction: state.direction,
           stopOrigin: state.origin,
           pendingCallbacks: [],
-          terminationRequired: state.contractBroken || containmentFails,
+          terminationRequired: state.contractBroken || state.issueFailed || containmentFails,
         },
       );
       assert.equal(contained, 1);

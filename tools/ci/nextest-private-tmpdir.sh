@@ -63,11 +63,13 @@ for stale in "$root"/run-*; do
     pid=${name#run-}
     pid=${pid%.*}
     case $pid in '' | *[!0-9]*) continue ;; esac
+    # Reclaim only when the pid is certainly gone: success prints nothing, and EPERM or any
+    # other answer keeps the directory.
     answer=$(
         LC_ALL=C
         export LC_ALL
         kill -0 "$pid" 2>&1
-    ) && continue
+    )
     case $answer in
     *'o such process'*) ;;
     *) continue ;;

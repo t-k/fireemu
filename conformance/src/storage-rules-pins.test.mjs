@@ -1,3 +1,4 @@
+import { heldPaths } from "./test-held-paths.mjs";
 import { tmpdir } from "node:os";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
@@ -130,7 +131,7 @@ test("the real git reader reads a scratch repository and refuses a directory tha
   await assert.rejects(gitOutput(plain, ["rev-parse", "HEAD"]), /git refused/);
 });
 
-const held = (path) => execFileSync("lsof", ["-p", String(process.pid), "-Fn"], { encoding: "utf8" }).split("\n").filter((line) => line.startsWith("n") && line.includes(path));
+const held = (path) => heldPaths(path);
 
 test("the closure spec must be a plain file that is not a link, every file handle is closed, and a special file with a module name is ignored", async (t) => {
   const base = await tree(t);

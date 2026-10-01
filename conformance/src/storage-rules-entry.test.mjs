@@ -1,3 +1,4 @@
+import { heldPaths } from "./test-held-paths.mjs";
 import { tmpdir } from "node:os";
 import assert from "node:assert/strict";
 import { mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile, chmod, open } from "node:fs/promises";
@@ -263,7 +264,7 @@ test("a legacy shared lock at the pinned path stops the run, and nothing is left
   assert.equal(f.wire.length, 0);
 });
 
-const held = (path) => execFileSync("lsof", ["-p", String(process.pid), "-Fn"], { encoding: "utf8" }).split("\n").filter((line) => line.startsWith("n") && line.includes(path));
+const held = (path) => heldPaths(path);
 
 test("an owner ledger that is over its size limit, is not valid UTF-8, or is another user's is refused, and the handle is closed each time", async (t) => {
   const path = (f) => join(f.root, "docs.local", "instructions", "owner-decisions.md");

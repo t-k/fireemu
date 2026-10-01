@@ -1,9 +1,9 @@
+import { heldPaths } from "./test-held-paths.mjs";
 import { tmpdir } from "node:os";
 import assert from "node:assert/strict";
 import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { readFileSync } from "node:fs";
 import { createHmac } from "node:crypto";
-import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import test from "node:test";
 import { withAssembledRun } from "./storage-rules/assemble-run.mjs";
@@ -200,7 +200,7 @@ test("a run that stops at its first sign-in is wired to the manifest, the keys, 
 
 test("the caller's value comes back, and the journals are closed once it ends", async (t) => {
   const f = await fixture(t);
-  const held = () => execFileSync("lsof", ["-p", String(process.pid), "-Fn"], { encoding: "utf8" }).split("\n").filter((line) => line.startsWith("n") && line.includes(f.directory));
+  const held = () => heldPaths(f.directory);
   let open;
   const value = await withAssembledRun(f.options, async () => {
     open = held().length;
@@ -213,7 +213,7 @@ test("the caller's value comes back, and the journals are closed once it ends", 
 
 test("a capture journal that cannot open closes the reservation journal that was opened first", async (t) => {
   const f = await fixture(t);
-  const held = () => execFileSync("lsof", ["-p", String(process.pid), "-Fn"], { encoding: "utf8" }).split("\n").filter((line) => line.startsWith("n") && line.includes(f.directory));
+  const held = () => heldPaths(f.directory);
   await mkdir(join(f.directory, "captures.jsonl"));
   await assert.rejects(withAssembledRun(f.options, async () => assert.fail("must not run")));
   assert.deepEqual(held(), []);

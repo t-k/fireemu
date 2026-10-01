@@ -954,3 +954,13 @@ test("fragments split across metadata pairs, events and binary elements are join
         assert.equal(view.includes(credential.slice(at, at + 8)), false, name);
   }
 });
+test("a credential window inside the base64 text of a binary value is refused, whatever it decodes to", async () => {
+  const credential = "SYNTHETICSECRETX";
+  // Canonical base64 text (24 characters, no padding) whose decoded bytes hold no window.
+  const text = "AAAASYNTHETICSECRETXAAAA";
+  assert.equal(Buffer.from(text, "base64").toString("base64"), text);
+  const { q, saved } = await queue({ credential });
+  assert.equal(q.headers("trailers", ["details-bin", text], 0), false);
+  assert.equal((await q.done()).reason, "credential-reflection");
+  assert.equal(saved.length, 0);
+});

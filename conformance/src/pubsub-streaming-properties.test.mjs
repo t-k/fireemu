@@ -150,8 +150,8 @@ function randomStream(r, secret, inserted) {
   if (r.chance(0.15)) stream = Buffer.concat([stream, r.bytes(r.int(1, 7))]);
   if (secret && r.chance(0.8)) {
     // Often near the start, so that the total cap rarely clips the longer encoded forms.
-    const at = r.chance(0.5) ? r.int(0, Math.min(stream.length, 6)) : r.int(0, stream.length);
-    const length = r.pick([7, 8, 8, r.int(1, secret.length)]);
+    const at = r.chance(0.6) ? 0 : r.int(0, stream.length);
+    const length = r.pick([7, 8, 8, 8, r.int(1, secret.length)]);
     const start = r.int(0, secret.length - length);
     inserted.encoding = r.pick(ENCODINGS);
     inserted.length = length;
@@ -160,6 +160,7 @@ function randomStream(r, secret, inserted) {
       inserted.encoding,
       r.int(0, 2),
     );
+    inserted.urlMapped = /[-_]/.test(fragment.toString("latin1"));
     stream = Buffer.concat([stream.subarray(0, at), fragment, stream.subarray(at)]);
   }
   return stream;
@@ -177,8 +178,11 @@ test(
         maxFrames: r.int(1, 8),
         maxChunks: r.int(1, 24),
       };
+      // Runs of "~" and "?" encode to "+" and "/" (URL-safe "-" and "_") in base64.
       const credential = r.chance(0.5)
-        ? `secret-${r.int(0, 99)}${"x".repeat(r.int(0, 6))}`
+        ? r.chance(0.3)
+          ? `${"~".repeat(r.int(4, 8))}${"?".repeat(r.int(4, 8))}`
+          : `secret-${r.int(0, 99)}${"x".repeat(r.int(0, 6))}`
         : undefined;
       const secret = credential && Buffer.from(credential);
       const inserted = {};
@@ -236,7 +240,13 @@ test(
         )
           return [expected.reason ?? "complete", "near-miss-kept"];
         if (inserted.length >= 8 && expected.reason === "credential-reflection")
-          return [expected.reason, `refused:${inserted.encoding}`];
+          return [
+            expected.reason,
+            `refused:${inserted.encoding}`,
+            ...(inserted.encoding === "base64url" && inserted.urlMapped
+              ? ["refused:base64url-mapped"]
+              : []),
+          ];
       }
       return expected.reason ?? "complete";
     },
@@ -246,6 +256,7 @@ test(
       "credential-reflection",
       "near-miss-kept",
       ...ENCODINGS.map((encoding) => `refused:${encoding}`),
+      "refused:base64url-mapped",
       "total-bound",
       "compression",
       "frame-bound",

@@ -395,3 +395,35 @@ test("a compressed frame is stored raw before the compression refusal, so the br
   assert.ok(result.raw);
   assert.equal(result.frames.length, 0);
 });
+test("every screened form of a window is refused when split at any offset across two chunks", async () => {
+  const window = Buffer.from("SYNTHETI");
+  const pairs = window.toString("hex");
+  const forms = {
+    literal: "SYNTHETI",
+    hex: pairs,
+    percent: pairs.replace(/../g, "%$&"),
+    base64: window.toString("base64").slice(0, 10),
+  };
+  for (const [name, text] of Object.entries(forms)) {
+    const wire = frame(Buffer.from(text));
+    for (let cut = 6; cut < wire.length; cut++) {
+      const d = await decoder({ credential: CREDENTIAL });
+      assert.equal(d.push(wire.subarray(0, cut)).reason, undefined, `${name} ${cut}`);
+      assert.equal(d.push(wire.subarray(cut)).reason, "credential-reflection", `${name} ${cut}`);
+    }
+  }
+});
+test("the URL-safe base64 alphabet is mapped before matching at every alignment", async () => {
+  // Windows of this credential encode to "+" and "/" in standard base64, "-" and "_" in URL-safe.
+  const credential = `${"~".repeat(12)}${"?".repeat(12)}`;
+  const forms = [];
+  for (let at = 0; at + 8 <= credential.length; at++)
+    for (const lead of ["", "x", "xy"])
+      forms.push(Buffer.from(lead + credential.slice(at, at + 8)).toString("base64url"));
+  assert.ok(forms.some((form) => form.includes("-")));
+  assert.ok(forms.some((form) => form.includes("_")));
+  for (const form of forms) {
+    const d = await decoder({ credential });
+    assert.equal(d.push(frame(Buffer.from(form))).reason, "credential-reflection", form);
+  }
+});

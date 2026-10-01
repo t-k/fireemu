@@ -3105,6 +3105,7 @@ fn json_api_object_guards_and_put_answer_as_recorded() {
                 "GET",
                 format!("ifGenerationMatch={generation}&ifMetagenerationMatch=abc"),
             ),
+            ("GET", "ifGenerationMatch=999999".to_owned()),
         ] {
             let r = call(method, &q, body);
             assert_eq!(r.status, 412, "{acceptance:?} {method} {q}");

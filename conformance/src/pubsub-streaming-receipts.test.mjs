@@ -827,3 +827,30 @@ test("after a failed persist, rows already queued behind it are never persisted 
   assert.equal(frames.length, 0);
   assert.equal(result.terminationRequired, false);
 });
+test("a binary metadata value that is not canonical base64 is refused, so decoding cannot stop early and hide a credential", async () => {
+  const credential = "SYNTHETIC-SECRET";
+  const encoded = Buffer.from(credential).toString("base64");
+  // Padding in the middle, a foreign character, the URL-safe alphabet and a stray padding character.
+  for (const value of [
+    `AA==${encoded}`,
+    `${encoded}!`,
+    Buffer.from("~~~~").toString("base64url"),
+    "AA=A",
+  ]) {
+    const { q, saved } = await queue({ credential });
+    assert.equal(q.headers("trailers", ["details-bin", value], 0), false, value);
+    const result = await q.done();
+    assert.equal(result.reason, "invalid-headers", value);
+    assert.equal(saved.length, 0, value);
+  }
+  // Padded and unpadded canonical values, and comma-separated lists of them, are kept.
+  const { q, saved } = await queue({ credential });
+  const harmless = Buffer.from("harmless").toString("base64");
+  assert.equal(q.headers("trailers", ["details-bin", harmless], 0), true);
+  assert.equal(q.headers("trailers", ["details-bin", harmless.replace(/=+$/, "")], 0), true);
+  assert.equal(q.headers("trailers", ["details-bin", `${harmless}, AAAA`], 0), true);
+  assert.equal(q.headers("trailers", ["details-bin", ""], 0), true);
+  const result = await q.done();
+  assert.equal(result.reason, undefined);
+  assert.equal(saved.length, 4);
+});

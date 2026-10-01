@@ -210,11 +210,20 @@ export function createStreamingReceiptQueue({
     if (secret)
       for (let index = 0; index < raw.length; index += 2)
         if (raw[index].endsWith("-bin"))
-          for (const part of raw[index + 1].split(","))
-            if (Buffer.from(part.trim(), "base64").includes(secret)) {
+          for (const part of raw[index + 1].split(",")) {
+            const text = part.trim(),
+              decoded = Buffer.from(text, "base64");
+            // Node's decoder stops at the first padding and skips foreign characters, so only a
+            // canonical value is screened reliably; anything else is refused unstored.
+            if (decoded.toString("base64").replace(/=+$/, "") !== text.replace(/=+$/, "")) {
+              stop("invalid-headers");
+              return false;
+            }
+            if (decoded.includes(secret)) {
               stop("credential-reflection");
               return false;
             }
+          }
     headerBytes += size;
     headerEvents++;
     enqueue({ kind, flags, rawHeaders: Object.freeze(raw.slice()) });

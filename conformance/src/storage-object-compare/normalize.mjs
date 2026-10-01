@@ -59,7 +59,7 @@ export const NORMALIZATIONS = Object.freeze([
     id: "ORIGIN",
     mask: "<ORIGIN>",
     reason:
-      "the selfLink and mediaLink members point at the server that answered: production at www.googleapis.com (selfLink) and storage.googleapis.com (mediaLink), a local run at its own address (the origin of the request), by design. Only that expected origin is masked, so a swap of the two production hosts still shows; the path and the query are compared exactly",
+      "the selfLink and mediaLink members point at the server that answered: production at www.googleapis.com (selfLink) and storage.googleapis.com (mediaLink), a local run at its own loopback address, by design. Only those expected origins are masked, so a swap of the two production hosts still shows; the path and the query are compared exactly",
   },
   {
     id: "PAGE_TOKEN",
@@ -125,7 +125,6 @@ export function createContext({ runId, bucket, project, contentCarriesRun = fals
     bucket,
     project,
     contentCarriesRun,
-    requestOrigin: null,
     generations: new Map(),
     tokens: new Map(),
     etags: new Map(),
@@ -212,12 +211,14 @@ const EPOCH_MEMBERS = new Set([
   "expirationTime",
 ]);
 const DIGEST_MEMBERS = new Set(["md5Hash", "crc32c"]);
-// The origin each link member has in production. A local run points at its own origin, the one the
-// request was sent to; any other origin (a swap of the two production hosts, say) is kept and shows.
+// The origin each link member has in production. A local run points at its own loopback address
+// (the journal records the logical production URL of a request, so the address cannot be taken from
+// it); any other origin (a swap of the two production hosts, say) is kept and shows.
 const PRODUCTION_ORIGINS = new Map([
   ["selfLink", "https://www.googleapis.com"],
   ["mediaLink", "https://storage.googleapis.com"],
 ]);
+const LOOPBACK_ORIGIN = /^http:\/\/(?:127\.0\.0\.1|localhost|\[::1\]):\d+$/;
 const ORIGIN_PREFIX = /^[a-z][a-z0-9+.-]*:\/\/[^/?#]*/i;
 
 function maskJson(value, ctx, key = "", parent = "") {
@@ -243,7 +244,7 @@ function maskJson(value, ctx, key = "", parent = "") {
     if (PRODUCTION_ORIGINS.has(key)) {
       const masked = maskText(value, ctx);
       const origin = ORIGIN_PREFIX.exec(masked)?.[0];
-      const expected = origin === PRODUCTION_ORIGINS.get(key) || origin === ctx.requestOrigin;
+      const expected = origin === PRODUCTION_ORIGINS.get(key) || LOOPBACK_ORIGIN.test(origin ?? "");
       return expected ? `<ORIGIN>${masked.slice(origin.length)}` : masked;
     }
     if (key === "etag")
@@ -324,7 +325,6 @@ export function layoutOverhead(exchange) {
  */
 export function normalizeExchange(exchange, ctx) {
   const url = new URL(exchange.url);
-  ctx.requestOrigin = url.origin;
   const pathname = maskText(decodeURIComponent(url.pathname), ctx);
   const queryValue = (key, value) => {
     if (key === "pageToken") return "<PAGE_TOKEN>";

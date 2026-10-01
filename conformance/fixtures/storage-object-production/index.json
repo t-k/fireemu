@@ -50,7 +50,7 @@
     {
       "id": "ORIGIN",
       "mask": "<ORIGIN>",
-      "reason": "the selfLink and mediaLink members point at the server that answered: production at www.googleapis.com (selfLink) and storage.googleapis.com (mediaLink), a local run at its own address (the origin of the request), by design. Only that expected origin is masked, so a swap of the two production hosts still shows; the path and the query are compared exactly"
+      "reason": "the selfLink and mediaLink members point at the server that answered: production at www.googleapis.com (selfLink) and storage.googleapis.com (mediaLink), a local run at its own loopback address, by design. Only those expected origins are masked, so a swap of the two production hosts still shows; the path and the query are compared exactly"
     },
     {
       "id": "PAGE_TOKEN",

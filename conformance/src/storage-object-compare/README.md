@@ -39,7 +39,7 @@ format**: the run ID, the bucket and project; generations and download tokens an
 order of first appearance, so equal and different values stay distinguishable; a local value that is
 not 16 digits, such as a counter, is not masked and is a difference); timestamps (with their number of
 fractional digits: `<TIME:3>` is not `<TIME:9>`); epoch times (with their JSON type and digit count);
-HTTP dates (only when they are one); the origin (`scheme://host:port`) of the `selfLink` and `mediaLink` members, which point at the server that answered, by design (the path and the query stay exact, so a different path is still a difference); upload IDs, page tokens, credentials, account ids, the copied
+HTTP dates (only when they are one); the origin (`scheme://host:port`) of the `selfLink` and `mediaLink` members, which point at the server that answered, by design: only production's own host for that member (`www.googleapis.com` for `selfLink`, `storage.googleapis.com` for `mediaLink`) and a loopback address are masked, so a swap of the two hosts is a difference, and the path and the query stay exact; upload IDs, page tokens, credentials, account ids, the copied
 object's `owner.entity`; and, in a recipe whose objects' bytes carry the run ID, the digests of those
 bytes. Deterministic values (sizes, `md5Hash`, `crc32c`, `metageneration`, error messages, object
 bytes, a quoted md5 etag) are compared exactly.

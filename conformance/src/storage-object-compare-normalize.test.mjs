@@ -542,15 +542,22 @@ test("the query is sorted by name, then by value, so repeated names keep a stabl
 });
 
 test("the origin of selfLink and mediaLink is masked, the path and the query are not", () => {
+  // Production's mediaLink is on another host than its selfLink.
+  const mediaOrigin = (origin) =>
+    origin === "https://www.googleapis.com" ? "https://storage.googleapis.com" : origin;
   const link = (origin, path) =>
     normalizeBody(
       json({
         selfLink: `${origin}/storage/v1/b/${BUCKET}/o/${path}`,
-        nested: [{ mediaLink: `${origin}/download/storage/v1/b/${BUCKET}/o/${path}?alt=media` }],
+        nested: [
+          {
+            mediaLink: `${mediaOrigin(origin)}/download/storage/v1/b/${BUCKET}/o/${path}?alt=media`,
+          },
+        ],
         other: `${origin}/kept`,
       }),
       "application/json",
-      Object.assign(ctx(), { requestOrigin: origin }),
+      ctx(),
     ).value;
   const production = link("https://www.googleapis.com", "a.bin");
   assert.equal(production.selfLink, "<ORIGIN>/storage/v1/b/<BUCKET>/o/a.bin");
@@ -592,7 +599,7 @@ test("the layout of a body with a member the recorder hashed is not judged", () 
   assert.equal(row.layout, null);
 });
 
-test("the origin of a link is masked only when it is the expected one: the production host of that member or the host the request went to", () => {
+test("the origin of a link is masked only when it is the expected one: the production host of that member or a loopback address", () => {
   const exchange = (url, self, media) => {
     const c = ctx();
     return normalizeExchange(
@@ -630,7 +637,18 @@ test("the origin of a link is masked only when it is the expected one: the produ
     "https://www.googleapis.com",
   );
   assert.notDeepEqual(swapped, production);
-  // The production hosts are expected per member even when the request went to a third host.
+  // Only a loopback address stands for the local emulator: another host or scheme is kept.
+  for (const other of ["http://example.com:9199", "https://127.0.0.1:9199", "http://127.0.0.1"])
+    assert.notDeepEqual(
+      exchange(`http://127.0.0.1:9199/storage/v1/b/${BUCKET}/o/a.bin`, other, other),
+      local,
+      other,
+    );
+  assert.deepEqual(
+    exchange(`http://127.0.0.1:9199/x`, "http://localhost:19199", "http://[::1]:9199"),
+    local,
+  );
+  // The production hosts are expected per member whatever host the request names.
   const viaThird = exchange(
     `https://firebasestorage.googleapis.com/v0/b/${BUCKET}/o/a.bin`,
     "https://www.googleapis.com",

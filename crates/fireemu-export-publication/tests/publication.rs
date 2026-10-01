@@ -392,14 +392,20 @@ fn each_raw_generic_allow_ace_is_refused_and_a_raw_generic_deny_is_accepted() {
 #[test]
 fn an_inherited_deny_delete_does_not_break_the_stage_or_its_publication() {
     let root = TestRoot::new("acl-inherited-deny");
-    let parent = root.0.join("private-parent");
-    create_private_dir(&parent);
     let _acl = Acl::install(
         &root.0,
         "everyone deny delete,file_inherit,directory_inherit",
     );
-    // The parent inherits the entry too.
+    // The directories made below inherit the entry, the export parent among them.
+    let parent = root.0.join("private-parent");
+    create_private_dir(&parent);
     create_private_dir(&parent.join("inner"));
+    assert!(
+        !exacl::getfacl(parent.join("inner"), None)
+            .expect("read the parent ACL")
+            .is_empty(),
+        "the premise: the export parent inherited the entry"
+    );
     let target = parent.join("inner").join("export");
     let stage = PublicationStage::create(&target, |_| Ok(())).expect("an inherited deny is safe");
     assert_eq!(

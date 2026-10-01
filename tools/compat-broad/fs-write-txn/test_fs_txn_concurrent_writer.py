@@ -290,3 +290,18 @@ def test_the_projection_derives_the_states_whether_the_holder_commit_and_the_wri
     receipt = Collector(value, TABLE, RequestBudget(value, TABLE), service, "owner", save=lambda _state: None, monotonic=clock.now, utc=clock.utc, sleep=clock.sleep).run()
     assert receipt["complete"] is True, receipt.get("failureType")
     assert projection(receipt, TABLE)["expectedStates"] == states
+
+
+def test_the_projection_refuses_a_receipt_whose_step_list_is_not_in_sequence_order_at_the_writer():
+    # The writer row is compared with the next row of the receipt's own step list, not only by its site: a list whose order differs from the
+    # native sequence is refused wherever the writer's row has been moved to (Codex M3 follow-up, 2026-10-01).
+    receipt = recorded()
+    sites = [row["site"] for row in receipt["steps"]]
+    position = sites.index("rest/c/writer-a")
+    for other in range(len(sites)):
+        if other == position:
+            continue
+        moved = copy.deepcopy(receipt)
+        moved["steps"][position], moved["steps"][other] = moved["steps"][other], moved["steps"][position]
+        with pytest.raises(ValueError):
+            projection(moved, TABLE)

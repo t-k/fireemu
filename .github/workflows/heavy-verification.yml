@@ -1,0 +1,274 @@
+name: heavy-verification
+
+run-name: heavy-verification ${{ inputs.job }} ${{ inputs.tag }}
+
+# Heavy verification (mutation testing, the whole nextest suite, Linux measurements) on GitHub's
+# standard runners instead of a developer machine. The repository is public, so they cost nothing.
+#
+# Security (public repository):
+# - Manual dispatch only. No pull_request_target, no other trigger.
+# - `permissions: contents: read` and nothing else. No secrets are used anywhere, and no write token.
+# - No production credentials, and no network call to Google or Firebase: the suites run against the
+#   local emulators only, and the jobs fetch nothing but the repository, the pinned actions, the
+#   Rust toolchain and the crates the lockfile names.
+# - Inputs are never interpolated into a script. They reach `run:` only through `env:` and are
+#   validated there first (the `plan` job). A validated value is the only thing the other jobs use.
+# - Every action is pinned by its full commit SHA, and every job has a timeout.
+#
+# Use tools/ci/heavy-run.sh to dispatch it, wait, and download the artifacts.
+
+on:
+  workflow_dispatch:
+    inputs:
+      job:
+        description: what to run
+        type: choice
+        required: true
+        options:
+          - mutants
+          - nextest
+          - linux-measure
+      ref:
+        description: branch name or full commit SHA to verify
+        type: string
+        required: true
+      package:
+        description: "mutants: workspace package to mutate (empty for the whole diff)"
+        type: string
+        default: ""
+      base:
+        description: "mutants: ref the diff is taken against (--in-diff)"
+        type: string
+        default: main
+      shards:
+        description: "mutants: number of shards, 1 to 16"
+        type: string
+        default: "8"
+      script:
+        description: "linux-measure: path of the script to run, below scripts/ or tools/"
+        type: string
+        default: ""
+      tag:
+        description: a label the dispatcher chooses, shown in the run's title so it can find its run
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: heavy-verification-${{ inputs.job }}-${{ inputs.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      ref: ${{ steps.validate.outputs.ref }}
+      base: ${{ steps.validate.outputs.base }}
+      package: ${{ steps.validate.outputs.package }}
+      script: ${{ steps.validate.outputs.script }}
+      shards: ${{ steps.validate.outputs.total }}
+      matrix: ${{ steps.validate.outputs.matrix }}
+    steps:
+      - name: validate the inputs
+        id: validate
+        env:
+          INPUT_JOB: ${{ inputs.job }}
+          INPUT_REF: ${{ inputs.ref }}
+          INPUT_PACKAGE: ${{ inputs.package }}
+          INPUT_BASE: ${{ inputs.base }}
+          INPUT_SHARDS: ${{ inputs.shards }}
+          INPUT_SCRIPT: ${{ inputs.script }}
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          fail() { echo "::error::$1"; exit 1; }
+          # A branch name or a full commit SHA: no leading dash, no "..", no "//", no trailing slash.
+          ref_ok() {
+            local value=$1
+            [[ $value =~ ^[0-9a-f]{40}$ ]] && return 0
+            [[ $value =~ ^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$ ]] || return 1
+            [[ $value != *..* && $value != *//* && $value != */ && $value != *.lock ]]
+          }
+          case "$INPUT_JOB" in
+            mutants | nextest | linux-measure) ;;
+            *) fail "job must be mutants, nextest or linux-measure" ;;
+          esac
+          ref_ok "$INPUT_REF" || fail "ref must be a branch name or a full commit SHA"
+          ref_ok "$INPUT_BASE" || fail "base must be a branch name or a full commit SHA"
+          [[ $INPUT_SHARDS =~ ^[0-9]{1,2}$ ]] || fail "shards must be an integer"
+          shards=$((10#$INPUT_SHARDS))
+          (( shards >= 1 && shards <= 16 )) || fail "shards must be from 1 to 16"
+          [[ $INPUT_TAG =~ ^[A-Za-z0-9._-]{0,64}$ ]] || fail "tag must be letters, digits, dot, dash and underscore"
+          if [[ -n $INPUT_PACKAGE ]]; then
+            [[ $INPUT_PACKAGE =~ ^[A-Za-z0-9_-]{1,64}$ ]] || fail "package must be a workspace package name"
+          fi
+          if [[ $INPUT_JOB == linux-measure ]]; then
+            [[ $INPUT_SCRIPT =~ ^(scripts|tools)/[A-Za-z0-9._/-]{1,200}$ ]] || fail "script must be a path below scripts/ or tools/"
+            [[ $INPUT_SCRIPT != *..* && $INPUT_SCRIPT != *//* ]] || fail "script must be a plain path"
+          elif [[ -n $INPUT_SCRIPT ]]; then
+            fail "script is only for linux-measure"
+          fi
+          matrix=$(seq 0 $((shards - 1)) | paste -sd, -)
+          {
+            echo "ref=$INPUT_REF"
+            echo "base=$INPUT_BASE"
+            echo "package=$INPUT_PACKAGE"
+            echo "script=$INPUT_SCRIPT"
+            echo "total=$shards"
+            echo "matrix=[$matrix]"
+          } >> "$GITHUB_OUTPUT"
+
+  mutants:
+    needs: plan
+    if: inputs.job == 'mutants'
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.plan.outputs.ref }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+        with:
+          toolchain: 1.94.0
+      - name: the pinned toolchain is the one in use
+        run: rustc --version | tee /dev/stderr | grep -q "$(sed -n 's/^channel = "\(.*\)"/\1/p' rust-toolchain.toml)"
+      - uses: taiki-e/install-action@7b8d4719ee4aaa279bdf55df38dacb9ebfe12a6c
+        with:
+          tool: cargo-mutants,cargo-nextest
+      - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c
+        with:
+          key: heavy-mutants
+          save-if: "false"
+      - name: mutate this shard of the diff
+        env:
+          BASE: ${{ needs.plan.outputs.base }}
+          PACKAGE: ${{ needs.plan.outputs.package }}
+          SHARD: ${{ matrix.shard }}
+          TOTAL: ${{ needs.plan.outputs.shards }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin "$BASE"
+          git diff -U0 FETCH_HEAD...HEAD > "$RUNNER_TEMP/changes.diff"
+          args=()
+          if [[ -n $PACKAGE ]]; then
+            args+=(-p "$PACKAGE")
+          fi
+          set +e
+          cargo mutants --test-tool nextest --in-diff "$RUNNER_TEMP/changes.diff" \
+            --shard "$SHARD/$TOTAL" --output "mutants-out-$SHARD" "${args[@]}"
+          code=$?
+          set -e
+          # 0: every mutant caught. 2: some missed. 3: some timed out. The summary job reports
+          # those; any other status (a usage error, a failing baseline) fails this shard.
+          case $code in
+            0 | 2 | 3) exit 0 ;;
+            *) exit "$code" ;;
+          esac
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: mutants-shard-${{ matrix.shard }}
+          path: mutants-out-${{ matrix.shard }}/mutants.out
+          if-no-files-found: warn
+
+  mutants-summary:
+    needs: [plan, mutants]
+    if: always() && inputs.job == 'mutants' && needs.plan.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      # The workflow's own commit: the merge script is not taken from the verified ref.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          pattern: mutants-shard-*
+          path: shards
+      - name: merge the shards
+        env:
+          TOTAL: ${{ needs.plan.outputs.shards }}
+        run: |
+          set -euo pipefail
+          mkdir summary
+          python3 tools/ci/mutants-summary.py --expected-shards "$TOTAL" shards summary
+          cat summary/summary.md >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: mutants-summary
+          path: summary
+
+  nextest:
+    needs: plan
+    if: inputs.job == 'nextest'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.plan.outputs.ref }}
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+        with:
+          toolchain: 1.94.0
+      - name: the pinned toolchain is the one in use
+        run: rustc --version | tee /dev/stderr | grep -q "$(sed -n 's/^channel = "\(.*\)"/\1/p' rust-toolchain.toml)"
+      - uses: taiki-e/install-action@7b8d4719ee4aaa279bdf55df38dacb9ebfe12a6c
+        with:
+          tool: cargo-nextest
+      - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c
+        with:
+          key: heavy-nextest-${{ matrix.os }}
+          save-if: "false"
+      - name: the whole suite (profile pr)
+        run: cargo nextest run --workspace --profile pr
+
+  linux-measure:
+    needs: plan
+    if: inputs.job == 'linux-measure'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.plan.outputs.ref }}
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+        with:
+          toolchain: 1.94.0
+      - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c
+        with:
+          key: heavy-measure
+          save-if: "false"
+      - name: run the script
+        env:
+          SCRIPT: ${{ needs.plan.outputs.script }}
+          HEAVY_OUT: ${{ runner.temp }}/heavy-out
+        run: |
+          set -euo pipefail
+          [[ -f $SCRIPT ]] || { echo "::error::$SCRIPT is not a file of the ref"; exit 1; }
+          mkdir -p "$HEAVY_OUT"
+          # The script writes everything it wants kept below $HEAVY_OUT.
+          bash "$SCRIPT"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: linux-measure-output
+          path: ${{ runner.temp }}/heavy-out
+          if-no-files-found: warn

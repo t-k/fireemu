@@ -46,7 +46,7 @@ flunk() {
 # validate JOB REF PACKAGE BASE SHARDS SCRIPT TAG
 validate() {
   : > "$work/output"
-  GITHUB_REF=${GITHUB_REF_UNDER_TEST-refs/heads/ci/heavy} DEFAULT_BRANCH=main REPO_URL="file://$work/origin.git" \
+  GITHUB_REF=${GITHUB_REF_UNDER_TEST-refs/heads/ci/heavy} DEFAULT_BRANCH=${DEFAULT_BRANCH_UNDER_TEST-main} REPO_URL="file://$work/origin.git" \
     RUNNER_TEMP="$work/tmp" INPUT_JOB=$1 INPUT_REF=$2 INPUT_PACKAGE=$3 INPUT_BASE=$4 INPUT_SHARDS=$5 INPUT_SCRIPT=$6 \
     INPUT_TAG=${7-} GITHUB_OUTPUT="$work/output" bash "$work/validate.sh" > "$work/log" 2>&1
   local status=$?
@@ -103,6 +103,10 @@ for locale in C.UTF-8 en_US.UTF-8; do
   # The run must not belong to the default branch, a tag or anything but a branch.
   for scope in refs/heads/main refs/tags/v1.0.0 refs/pull/1/merge HEAD ""; do
     GITHUB_REF_UNDER_TEST=$scope refuses mutants work/my-branch "" main 8 "" ""
+  done
+  # An unreadable default branch must not turn the guard off.
+  for scope in refs/heads/main refs/heads/work/my-branch; do
+    DEFAULT_BRANCH_UNDER_TEST="" GITHUB_REF_UNDER_TEST=$scope EXPECT="cannot read the repository's default branch" refuses mutants work/my-branch "" main 8 "" ""
   done
   GITHUB_REF_UNDER_TEST=refs/heads/work/my-branch accepts mutants work/my-branch "" main 8 "" ""
 

@@ -128,7 +128,8 @@ if [[ -f $out/summary.json ]]; then
   jq -r '.timeout_mutants[]? | "timeout: " + (tostring | gsub("[^ -~]"; "?") | .[0:300])' "$out/summary.json" | show 100
   jq -r '.problems[]? | "problem: " + (tostring | gsub("[^ -~]"; "?") | .[0:300])' "$out/summary.json" | show 100
 elif [[ $job == linux-measure ]]; then
-  (cd "$out" && find . -type f | sort) | show 200
+  # File names are untrusted: a newline or control character in one must not start a line of its own.
+  (cd "$out" && find . -type f -print0 | LC_ALL=C tr '\001-\037\177' '?' | LC_ALL=C tr '\000' '\n' | LC_ALL=C sort) | show 200
 fi
 gh run view "$run_id" --json conclusion,url --jq '"conclusion: \(.conclusion) \(.url)"' | show 2
 exit "$status"

@@ -96,6 +96,7 @@ jobs:
           fail() { echo "::error::$1"; exit 1; }
           # The cache is scoped by the ref this run belongs to. Never run from the default branch or a
           # tag: code under test would share a cache scope with ci.yml and release.yml.
+          [[ -n $DEFAULT_BRANCH ]] || fail "cannot read the repository's default branch"
           case "$GITHUB_REF" in
             "refs/heads/$DEFAULT_BRANCH" | refs/tags/*) fail "dispatch from the branch under test or a dedicated branch, not $GITHUB_REF" ;;
             refs/heads/*) ;;

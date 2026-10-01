@@ -37,6 +37,14 @@ jobs:
           tool: cargo-deny
       - name: CI workflow topology and cache ownership
         run: ruby scripts/ci-workflow-contract.rb
+      - name: heavy-verification workflow contract and helpers
+        run: |
+          ruby scripts/heavy-verification-contract.rb
+          ruby scripts/heavy-verification-contract.test.rb
+          python3 -m unittest discover -s tools/ci -p 'test_*.py'
+          shellcheck tools/ci/heavy-run.sh tools/ci/heavy-run.test.sh scripts/heavy-verification-plan.test.sh
+          tools/ci/heavy-run.test.sh
+          scripts/heavy-verification-plan.test.sh
       - name: fmt
         run: cargo fmt --all --check
       - name: clippy

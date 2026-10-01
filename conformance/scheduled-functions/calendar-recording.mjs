@@ -73,7 +73,10 @@ export function recordedCalendarInputs({ packetBytes, journalBytes, corpusBytes,
     if (row.state === "before-send") {
       if (active || groups.has(row.id)) fail("recorded calendar journal request ordering differs");
       let id = row.id;
-      if (/^c0[1-8]-read-before-pause$/.test(id)) {
+      if (/^read-topic-poll-[1-3]$/.test(id)) {
+        id = "read-topic";
+        extras++;
+      } else if (/^c0[1-8]-read-before-pause$/.test(id)) {
         id = id.slice(0, 3) + "-read-paused";
         extras++;
       } else if (/^c0[1-8]-delete-retry-[1-3]$/.test(id)) {
@@ -85,6 +88,7 @@ export function recordedCalendarInputs({ packetBytes, journalBytes, corpusBytes,
         !spec ||
         row.method !== spec.method ||
         row.url !== spec.url ||
+        (row.timeoutMs !== undefined && row.timeoutMs !== (spec.timeoutMs ?? 10000)) ||
         JSON.stringify(row.json ?? null) !== JSON.stringify(spec.json ?? null) ||
         typeof row.dispatchAt !== "string"
       )

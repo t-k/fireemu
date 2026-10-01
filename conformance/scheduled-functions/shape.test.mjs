@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { collectShape, ownedResources, shapeRequests } from "./shape.mjs";
+import { collectShape, ownedResources, shapeRequests, createRequestCapture } from "./shape.mjs";
 
 const runId = "a1".repeat(8);
 const projectNumber = "123456789012";
@@ -407,4 +407,66 @@ test("a refused enable poll stops before all product reads", async () => {
   await collectShape(deps);
   assert.deepEqual(waits, [8000]);
   assert.ok(!sends.some(({ id }) => id.startsWith("before-")));
+});
+
+test("calendar topic mutations use30second abort deadlines and reads keep10seconds", async (t) => {
+  const deadlines = [],
+    rows = [];
+  t.mock.method(AbortSignal, "timeout", (ms) => {
+    deadlines.push(ms);
+    return new AbortController().signal;
+  });
+  const { capture } = createRequestCapture({
+    accessToken: "offline-deadline-token",
+    save: async (r) => rows.push(r),
+    send: async () => new Response("{}", { status: 200 }),
+  });
+  const url =
+    "https://pubsub.googleapis.com/v1/projects/fireemu-oracle-sbx/topics/fe-scheduled-calendar-" +
+    runId;
+  await capture({ id: "create-topic", method: "PUT", url, json: {}, timeoutMs: 30000 });
+  await capture({ id: "read-topic", method: "GET", url });
+  await capture({ id: "delete-topic", method: "DELETE", url, timeoutMs: 30000 });
+  assert.deepEqual(deadlines, [30000, 10000, 30000]);
+  assert.deepEqual(
+    rows.filter((r) => r.state === "before-send").map((r) => r.timeoutMs),
+    deadlines,
+  );
+});
+
+test("invalid or non-topic deadline override refuses before persistence or dispatch", async () => {
+  for (const override of [
+    { timeoutMs: 0 },
+    { timeoutMs: 30001 },
+    { timeoutMs: "30000" },
+    { timeoutMs: 20000 },
+    { timeoutMs: 30000, method: "GET" },
+    { timeoutMs: 30000, url: "https://example.invalid/foreign" },
+  ]) {
+    let saves = 0,
+      sends = 0;
+    const { capture } = createRequestCapture({
+      accessToken: "offline-deadline-token",
+      save: async () => {
+        saves++;
+      },
+      send: async () => {
+        sends++;
+        return new Response("{}", { status: 200 });
+      },
+    });
+    await assert.rejects(
+      capture({
+        id: "create-topic",
+        method: "PUT",
+        url:
+          "https://pubsub.googleapis.com/v1/projects/fireemu-oracle-sbx/topics/fe-scheduled-calendar-" +
+          runId,
+        ...override,
+      }),
+      /timeout|deadline/,
+    );
+    assert.equal(saves, 0);
+    assert.equal(sends, 0);
+  }
 });

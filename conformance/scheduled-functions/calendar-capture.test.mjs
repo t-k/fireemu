@@ -526,3 +526,146 @@ test("calendar recovery binds journals that continue after one or two400 CREATE 
     assert.equal(result.cleanupVerified, false);
   }
 });
+
+test("unsupported recovery scope or scope on a seed refuses before credentials", async (t) => {
+  for (const kind of ["seed", "recovery"]) {
+    const f = kind === "seed" ? await fixture(t) : await recoveryFixture(t);
+    await f.reset(
+      { recoveryScope: kind === "seed" ? "topic-only" : "unknown" },
+      kind === "seed"
+        ? "SCHEDULED-FUNCTIONS calendar seed packet"
+        : "SCHEDULED-FUNCTIONS calendar recovery packet",
+    );
+    await assert.rejects(
+      kind === "seed" ? captureCalendar(f.options) : captureCalendarRecovery(f.options),
+      /scope/,
+    );
+    assert.equal(f.counts().tokens, 0);
+  }
+});
+
+async function setTopicOnlyOriginal(f, jobMutation) {
+  const specs = calendarRequests(
+    f.plan.originalRunId,
+    f.plan.projectNumber,
+    Date.parse("2026-09-30T08:00:00Z"),
+  );
+  const sent = specs.filter((r) =>
+    ["identity", "create-topic", ...(jobMutation ? [jobMutation] : [])].includes(r.id),
+  );
+  const journal =
+    sent
+      .flatMap((r) => [
+        { ...r, state: "before-send", dispatchAt: "2026-09-30T08:00:00Z" },
+        ...(r.id === "c01-create" ? [{ id: r.id, state: "response-persisted", status: 400 }] : []),
+      ])
+      .map(JSON.stringify)
+      .join("\n") + "\n";
+  const row = JSON.parse((await readFile(f.ledger, "utf8")).trim());
+  row.requests = sent.length;
+  const line = JSON.stringify(row);
+  await writeFile(join(f.lane, "calendar-" + f.plan.originalRunId, "requests.jsonl"), journal);
+  await writeFile(f.ledger, line + "\n");
+  await f.reset(
+    {
+      recoveryScope: "topic-only",
+      originalRequests: sent.length,
+      originalJournalSha256: sha256(journal),
+      originalLedgerRowSha256: sha256(line),
+    },
+    "SCHEDULED-FUNCTIONS calendar recovery packet",
+  );
+  f.options.sleep = async () => {};
+}
+
+test("topic-only recovery rejects any dispatched original job mutation even if refused400", async (t) => {
+  for (const id of ["c01-create", "c01-pause", "c01-delete"]) {
+    const f = await recoveryFixture(t);
+    await setTopicOnlyOriginal(f, id);
+    await assert.rejects(captureCalendarRecovery(f.options), /topic.only|scope|original.*mutation/);
+    assert.equal(f.counts().tokens, 0);
+    assert.equal(f.options.sendCount, undefined);
+  }
+});
+
+test("topic-only recovery admits a hash-bound topic intent with zero original job writes", async (t) => {
+  const f = await recoveryFixture(t);
+  await setTopicOnlyOriginal(f);
+  const result = await captureCalendarRecovery(f.options);
+  assert.equal(f.counts().tokens, 1);
+  assert.ok(result.attempted <= 9);
+  assert.equal(result.cleanupVerified, false);
+});
+
+async function rebindOriginalJournal(f, rows) {
+  const journal = rows.map(JSON.stringify).join("\n") + "\n";
+  const row = JSON.parse((await readFile(f.ledger, "utf8")).trim());
+  row.requests = rows.filter((r) => r.state === "before-send").length;
+  const line = JSON.stringify(row);
+  await writeFile(join(f.lane, "calendar-" + f.plan.originalRunId, "requests.jsonl"), journal);
+  await writeFile(f.ledger, line + "\n");
+  await f.reset(
+    {
+      originalRequests: row.requests,
+      originalJournalSha256: sha256(journal),
+      originalLedgerRowSha256: sha256(line),
+    },
+    "SCHEDULED-FUNCTIONS calendar recovery packet",
+  );
+}
+
+test("topic-only admission binds new poll routes and deadline metadata with a shared three-extra cap", async (t) => {
+  for (const fault of [null, "fourth-extra", "wrong-poll-route", "wrong-deadline"]) {
+    const f = await recoveryFixture(t);
+    await setTopicOnlyOriginal(f);
+    const rows = (
+      await readFile(join(f.lane, "calendar-" + f.plan.originalRunId, "requests.jsonl"), "utf8")
+    )
+      .trim()
+      .split("\n")
+      .map(JSON.parse);
+    const templates = calendarRequests(
+      f.plan.originalRunId,
+      f.plan.projectNumber,
+      Date.parse("2026-09-30T08:00:00Z"),
+    );
+    const topicRead = templates.find((r) => r.id === "read-topic");
+    for (let n = 1; n <= 3; n++)
+      rows.push({
+        ...topicRead,
+        id: "read-topic-poll-" + n,
+        timeoutMs: 10000,
+        state: "before-send",
+        dispatchAt: "2026-09-30T08:00:00Z",
+      });
+    if (fault === "fourth-extra")
+      rows.push({
+        ...templates.find((r) => r.id === "c01-read-paused"),
+        id: "c01-read-before-pause",
+        state: "before-send",
+        dispatchAt: "2026-09-30T08:00:00Z",
+      });
+    if (fault === "wrong-poll-route") rows.at(-1).url += "-foreign";
+    if (fault === "wrong-deadline") rows.find((r) => r.id === "create-topic").timeoutMs = 10000;
+    await rebindOriginalJournal(f, rows);
+    if (fault) {
+      await assert.rejects(captureCalendarRecovery(f.options), /journal.*(binding|budget)/);
+      assert.equal(f.counts().tokens, 0);
+      assert.equal(f.options.sendCount, undefined);
+    } else {
+      const result = await captureCalendarRecovery(f.options);
+      assert.equal(f.counts().tokens, 1);
+      assert.ok(result.attempted <= 9);
+      assert.equal(result.cleanupVerified, false);
+    }
+  }
+});
+
+test("topic-only admission refuses an original with no topic PUT intent", async (t) => {
+  const f = await recoveryFixture(t);
+  f.options.sleep = async () => {};
+  await f.reset({ recoveryScope: "topic-only" }, "SCHEDULED-FUNCTIONS calendar recovery packet");
+  await assert.rejects(captureCalendarRecovery(f.options), /topic.only.*scope/);
+  assert.equal(f.counts().tokens, 0);
+  assert.equal(f.options.sendCount, undefined);
+});

@@ -38,7 +38,13 @@ export function calendarRequests(runId, projectNumber, now = Date.now()) {
   const jobs = scheduler + "projects/" + PROJECT + "/locations/us-central1/jobs";
   const topics = pubsub + "projects/" + PROJECT + "/topics";
   const get = (id, url) => ({ id, method: "GET", url });
-  const mutate = (id, method, url, json) => ({ id, method, url, ...(json ? { json } : {}) });
+  const mutate = (id, method, url, json) => ({
+    id,
+    method,
+    url,
+    ...(json ? { json } : {}),
+    ...(["create-topic", "delete-topic"].includes(id) ? { timeoutMs: 30000 } : {}),
+  });
   return [
     get(
       "identity",
@@ -177,13 +183,28 @@ export async function collectCalendar({
   );
   const topicIntent =
     !identityContradiction && !(createdTopic?.status >= 400 && createdTopic.status < 500);
-  const topicRead = await take("read-topic");
+  let extraRequestsLeft = 3;
+  let topicRead = await take("read-topic");
+  let topicPoll = 0;
+  if (topicIntent && !identityContradiction && !recordedTopicOwned(createdTopic, own)) {
+    while (
+      extraRequestsLeft > 0 &&
+      (!topicRead || topicRead.bodyUnknown || recordedTopicAbsent(topicRead, own))
+    ) {
+      await sleep(10000);
+      extraRequestsLeft--;
+      topicPoll++;
+      topicRead = await capture({
+        ...requests.get("read-topic"),
+        id: "read-topic-poll-" + topicPoll,
+      });
+    }
+  }
   let stopped = !recordedTopicOwned(createdTopic, own) || !recordedTopicOwned(topicRead, own);
   const attemptedCases = new Set(),
     intents = new Set(),
     eligible = new Set(),
     absentBeforeDelete = new Set();
-  let extraRequestsLeft = 3;
   for (const { id } of CALENDAR_CASES) {
     if (stopped) break;
     if (!recordedAbsent(await take(id + "-before"))) break;

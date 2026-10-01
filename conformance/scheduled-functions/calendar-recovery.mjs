@@ -13,11 +13,31 @@ import {
 export const CALENDAR_RECOVERY_MAX_REQUESTS = 64;
 export const CALENDAR_RECOVERY_DELETE_ATTEMPTS = 3;
 
-export function calendarRecoveryRequests(originalRunId) {
+export function calendarRecoveryRequests(originalRunId, recoveryScope = "jobs-and-topic") {
+  if (!["jobs-and-topic", "topic-only"].includes(recoveryScope))
+    throw new Error("invalid recovery scope");
   const own = calendarResources(originalRunId);
   const scheduler = "https://cloudscheduler.googleapis.com/v1/",
     pubsub = "https://pubsub.googleapis.com/v1/";
   const get = (id, url) => ({ id, method: "GET", url });
+  if (recoveryScope === "topic-only")
+    return [
+      get(
+        "before-list-jobs",
+        scheduler + "projects/" + PROJECT + "/locations/us-central1/jobs?pageSize=500",
+      ),
+      get("read-topic-before", pubsub + own.topic),
+      { id: "delete-topic", method: "DELETE", url: pubsub + own.topic, timeoutMs: 30000 },
+      get("read-topic-after", pubsub + own.topic),
+      ...Array.from({ length: 3 }, (_, index) =>
+        get("read-topic-poll-" + (index + 1), pubsub + own.topic),
+      ),
+      get(
+        "final-list-jobs",
+        scheduler + "projects/" + PROJECT + "/locations/us-central1/jobs?pageSize=500",
+      ),
+      get("final-list-topics", pubsub + "projects/" + PROJECT + "/topics?pageSize=1000"),
+    ];
   return [
     get("read-topic-before", pubsub + own.topic),
     ...CALENDAR_CASES.flatMap(({ id }) => [
@@ -44,6 +64,7 @@ export function calendarRecoveryRequests(originalRunId) {
 export async function collectCalendarRecovery({
   originalRunId,
   runId,
+  recoveryScope = "jobs-and-topic",
   accessToken,
   save,
   send,
@@ -54,16 +75,55 @@ export async function collectCalendarRecovery({
   calendarResources(runId);
   if (runId === originalRunId) throw new Error("recovery needs a distinct attempt ID");
   const requests = new Map(
-    calendarRecoveryRequests(originalRunId).map((request) => [request.id, request]),
+    calendarRecoveryRequests(originalRunId, recoveryScope).map((request) => [request.id, request]),
   );
   const { capture, counts } = createRequestCapture({
     accessToken,
     save,
     send,
     clock,
-    maxRequests: CALENDAR_RECOVERY_MAX_REQUESTS,
+    maxRequests: recoveryScope === "topic-only" ? 9 : CALENDAR_RECOVERY_MAX_REQUESTS,
   });
   const take = (id) => capture(requests.get(id));
+  if (recoveryScope === "topic-only") {
+    const summary = (closureReady) => ({
+      outcome: "calendar-recovery-needs-review",
+      ...counts(),
+      cleanupVerified: false,
+      closureReady,
+    });
+    if (!recordedEmptyList(await take("before-list-jobs"))) return summary(false);
+    let polls = 0;
+    const pollTopic = async (answer, afterDelete) => {
+      while (
+        polls < 3 &&
+        (!answer ||
+          answer.bodyUnknown ||
+          (afterDelete ? recordedTopicOwned(answer, own) : recordedTopicAbsent(answer, own)))
+      ) {
+        await sleep(10000);
+        polls++;
+        answer = await take("read-topic-poll-" + polls);
+      }
+      return answer;
+    };
+    const before = await pollTopic(await take("read-topic-before"), false);
+    let topicSettled = false;
+    if (recordedTopicOwned(before, own)) {
+      const answer = await take("delete-topic");
+      // A complete404 is only a candidate; separate absence and list proofs are mandatory.
+      topicSettled = recordedEmptyList(answer) || (answer?.status === 404 && !answer.bodyUnknown);
+    }
+    const after = await pollTopic(await take("read-topic-after"), true);
+    const jobs = await take("final-list-jobs"),
+      topics = await take("final-list-topics");
+    return summary(
+      topicSettled &&
+        recordedTopicAbsent(after, own) &&
+        recordedEmptyList(jobs) &&
+        recordedEmptyList(topics),
+    );
+  }
   const topicBefore = await take("read-topic-before"),
     eligible = new Set(),
     absent = new Set();

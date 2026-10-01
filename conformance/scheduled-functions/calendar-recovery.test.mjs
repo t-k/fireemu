@@ -257,3 +257,194 @@ test("recovery cannot reuse the original run ID and rejects before any send", as
   await assert.rejects(collectCalendarRecovery(e.deps), /distinct attempt/);
   assert.equal(e.sends.length, 0);
 });
+
+test("topic-only recovery inventory has9templates and exactly one fixed original topic DELETE", () => {
+  const requests = calendarRecoveryRequests(originalRunId, "topic-only");
+  assert.equal(requests.length, 9);
+  const writes = requests.filter((r) => r.method !== "GET");
+  assert.equal(writes.length, 1);
+  assert.equal(writes[0].id, "delete-topic");
+  assert.equal(
+    writes[0].url,
+    "https://pubsub.googleapis.com/v1/" + calendarResources(originalRunId).topic,
+  );
+  assert.equal(writes[0].timeoutMs, 30000);
+  assert.ok(!requests.some((r) => /:pause|\/jobs\//.test(r.url)));
+  assert.throws(() => calendarRecoveryRequests(originalRunId, "unknown"), /scope/);
+});
+
+test("topic-only recovery deletes the proven topic without any job mutation", async () => {
+  const e = environment("ABSENT");
+  const result = await collectCalendarRecovery({ ...e.deps, recoveryScope: "topic-only" });
+  assert.equal(result.attempted, 6);
+  assert.equal(e.sends.filter((r) => r.method !== "GET").length, 1);
+  assert.ok(e.sends.some((r) => r.id === "before-list-jobs"));
+  assert.ok(
+    e.rows.some(
+      (r) => r.id === "delete-topic" && r.state === "before-send" && r.timeoutMs === 30000,
+    ),
+  );
+  assert.equal(result.closureReady, true);
+  assert.equal(result.cleanupVerified, false);
+});
+
+test("topic-only recovery stops before mutation if any job exists or jobs preflight is unknown", async () => {
+  for (const kind of ["job", "unknown", "malformed"]) {
+    const e = environment(kind === "job" ? "ENABLED" : "ABSENT"),
+      original = e.deps.send;
+    e.deps.send = async (request) => {
+      if (request.id === "before-list-jobs") {
+        if (kind === "unknown") {
+          e.sends.push(request);
+          throw new Error("unknown initial jobs list");
+        }
+        if (kind === "malformed") {
+          e.sends.push(request);
+          return new Response("null", { status: 200 });
+        }
+        return original({ ...request, id: "final-list-jobs" });
+      }
+      return original(request);
+    };
+    const result = await collectCalendarRecovery({ ...e.deps, recoveryScope: "topic-only" });
+    assert.equal(result.closureReady, false);
+    assert.ok(e.sends.every((r) => r.method === "GET"));
+  }
+});
+
+test("topic-only initial404 and unknown CREATE debt stay open after bounded absent polls", async () => {
+  const e = environment("ABSENT"),
+    original = e.deps.send;
+  e.deps.send = async (request) => {
+    if (request.id.startsWith("read-topic-")) {
+      e.sends.push(request);
+      return new Response(
+        JSON.stringify({
+          error: {
+            code: 404,
+            status: "NOT_FOUND",
+            message: "Resource not found (resource=" + e.own.prefix + ").",
+          },
+        }),
+        { status: 404 },
+      );
+    }
+    if (request.id === "final-list-topics") {
+      e.sends.push(request);
+      return new Response("{}", { status: 200 });
+    }
+    return original(request);
+  };
+  const result = await collectCalendarRecovery({ ...e.deps, recoveryScope: "topic-only" });
+  assert.ok(e.sends.every((r) => r.method === "GET"));
+  assert.deepEqual(e.waits, [10000, 10000, 10000]);
+  assert.equal(result.closureReady, false);
+  assert.ok(result.attempted <= 9);
+});
+
+test("topic-only DELETE404 settles only with exact separate absence and final empty lists", async () => {
+  for (const visibleAfter of [false, true]) {
+    const e = environment("ABSENT"),
+      original = e.deps.send;
+    e.deps.send = async (request) => {
+      if (request.id === "delete-topic") {
+        if (!visibleAfter) await original(request);
+        else e.sends.push(request);
+        return new Response(
+          JSON.stringify({
+            error: {
+              code: 404,
+              status: "NOT_FOUND",
+              message: "Resource not found (resource=" + e.own.prefix + ").",
+            },
+          }),
+          { status: 404 },
+        );
+      }
+      if (/^read-topic-poll-[1-3]$/.test(request.id))
+        return original({ ...request, id: "read-topic-after" });
+      return original(request);
+    };
+    const result = await collectCalendarRecovery({ ...e.deps, recoveryScope: "topic-only" });
+    assert.equal(result.closureReady, !visibleAfter);
+    assert.equal(result.cleanupVerified, false);
+    assert.equal(e.sends.filter((r) => r.method === "DELETE").length, 1);
+    assert.ok(result.attempted <= 9);
+  }
+});
+
+test("topic-only unknown DELETE never settles even when readbacks show404", async () => {
+  for (const kind of ["transport", "body"]) {
+    const e = environment("ABSENT"),
+      original = e.deps.send;
+    e.deps.send = async (request) => {
+      const response = await original(request);
+      if (request.id !== "delete-topic") return response;
+      if (kind === "transport") throw new Error("DELETE accepted but answer lost");
+      return new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.error(new Error("DELETE body lost"));
+          },
+        }),
+        { status: 404 },
+      );
+    };
+    const result = await collectCalendarRecovery({ ...e.deps, recoveryScope: "topic-only" });
+    assert.equal(result.unknown, 1);
+    assert.equal(result.closureReady, false);
+    assert.equal(e.sends.filter((r) => r.method === "DELETE").length, 1);
+  }
+});
+
+test("topic-only polling shares3extras before and after one DELETE", async () => {
+  const e = environment("ABSENT"),
+    original = e.deps.send;
+  let polls = 0;
+  e.deps.send = async (request) => {
+    if (
+      request.id === "read-topic-before" ||
+      (/^read-topic-poll-[1-3]$/.test(request.id) && ++polls < 3)
+    ) {
+      e.sends.push(request);
+      return new Response(
+        JSON.stringify({
+          error: {
+            code: 404,
+            status: "NOT_FOUND",
+            message: "Resource not found (resource=" + e.own.prefix + ").",
+          },
+        }),
+        { status: 404 },
+      );
+    }
+    if (request.id === "read-topic-after") {
+      e.sends.push(request);
+      return new Response(JSON.stringify({ name: e.own.topic }), { status: 200 });
+    }
+    if (/^read-topic-poll-[1-3]$/.test(request.id))
+      return original({ ...request, id: "read-topic-before" });
+    return original(request);
+  };
+  const result = await collectCalendarRecovery({ ...e.deps, recoveryScope: "topic-only" });
+  assert.equal(polls, 3);
+  assert.equal(result.attempted, 9);
+  assert.equal(result.closureReady, false);
+  assert.deepEqual(e.waits, [10000, 10000, 10000]);
+  assert.equal(e.sends.filter((r) => r.method === "DELETE").length, 1);
+});
+
+test("topic-only foreign or malformed complete ownership read cannot authorize DELETE", async () => {
+  for (const body of [{ name: "projects/foreign/topics/foreign" }, null, {}]) {
+    const e = environment("ABSENT"),
+      original = e.deps.send;
+    e.deps.send = async (request) => {
+      if (request.id !== "read-topic-before") return original(request);
+      e.sends.push(request);
+      return new Response(JSON.stringify(body), { status: 200 });
+    };
+    const result = await collectCalendarRecovery({ ...e.deps, recoveryScope: "topic-only" });
+    assert.equal(result.closureReady, false);
+    assert.ok(e.sends.every((r) => r.method === "GET"));
+  }
+});

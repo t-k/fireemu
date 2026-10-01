@@ -163,6 +163,18 @@ export function createRequestCapture({
     completed = 0;
   async function capture(spec) {
     if (attempted >= maxRequests) throw new Error("request cap exceeded");
+    const timeoutMs = spec.timeoutMs ?? 10000;
+    if (
+      timeoutMs !== 10000 &&
+      !(
+        timeoutMs === 30000 &&
+        ["PUT", "DELETE"].includes(spec.method) &&
+        /^https:\/\/pubsub\.googleapis\.com\/v1\/projects\/fireemu-oracle-sbx\/topics\/fe-scheduled-calendar-[a-f0-9]{16}$/.test(
+          spec.url,
+        )
+      )
+    )
+      throw new Error("invalid request timeout override");
     const dispatchAt = new Date(clock()).toISOString();
     try {
       await save({
@@ -172,6 +184,7 @@ export function createRequestCapture({
         url: spec.url,
         ...(spec.json ? { json: spec.json } : {}),
         dispatchAt,
+        timeoutMs,
       });
     } catch {
       throw new Error("private persistence failed before dispatch");
@@ -182,7 +195,7 @@ export function createRequestCapture({
       response = await send({
         ...spec,
         redirect: "manual",
-        signal: AbortSignal.timeout(10000),
+        signal: AbortSignal.timeout(timeoutMs),
         headers: {
           authorization: `Bearer ${accessToken}`,
           "x-goog-user-project": PROJECT,

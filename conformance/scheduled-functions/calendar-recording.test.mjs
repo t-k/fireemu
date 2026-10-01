@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { calendarRequests } from "./calendar.mjs";
+import { calendarRequests, calendarResources, collectCalendar } from "./calendar.mjs";
 import { mkdtemp, mkdir, writeFile, rm, symlink, chmod } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -180,4 +180,127 @@ test("unusable complete native200 retains its raw proof and independently usable
   assert.match(result.cases[0].reason, /calendar/);
   assert.equal(result.cases[0].bodySha256, sha(bytes));
   assert.equal(result.cases[6].classification, "observed-refusal");
+});
+
+async function lateTopicCapture(visible) {
+  const f = fixture(),
+    packet = JSON.parse(f.packetBytes),
+    own = calendarResources(packet.runId);
+  const rows = [],
+    waits = [];
+  let now = Date.parse("2026-09-30T16:00:01Z"),
+    topicPresent = visible;
+  const result = await collectCalendar({
+    runId: packet.runId,
+    projectNumber: packet.projectNumber,
+    accessToken: "offline-recording-token",
+    clock: () => now++,
+    save: async (row) => rows.push(row),
+    sleep: async (ms) => {
+      waits.push(ms);
+      now += ms;
+    },
+    send: async (request) => {
+      if (request.id === "create-topic") throw new Error("unknown topic PUT outcome");
+      if (request.id === "identity")
+        return new Response(
+          JSON.stringify({
+            name: "projects/fireemu-oracle-sbx/releases/cloud.firestore",
+            rulesetName: "projects/fireemu-oracle-sbx/rulesets/offline",
+          }),
+        );
+      if (request.id.startsWith("service-"))
+        return new Response(JSON.stringify({ state: "ENABLED" }));
+      if (request.id === "appengine-location")
+        return new Response(JSON.stringify({ error: { code: 404, status: "NOT_FOUND" } }), {
+          status: 404,
+        });
+      if (request.id === "delete-topic") {
+        topicPresent = false;
+        return new Response("{}");
+      }
+      if (
+        ["before-topic", "read-topic", "read-deleted-topic"].includes(request.id) ||
+        /^read-topic-poll-[1-3]$/.test(request.id)
+      ) {
+        if (topicPresent && request.id !== "before-topic" && request.id !== "read-topic")
+          return new Response(JSON.stringify({ name: own.topic }));
+        return new Response(
+          JSON.stringify({
+            error: {
+              code: 404,
+              status: "NOT_FOUND",
+              message: "Resource not found (resource=" + own.prefix + ").",
+            },
+          }),
+          { status: 404 },
+        );
+      }
+      return new Response("{}");
+    },
+  });
+  f.journalBytes = Buffer.from(rows.map(JSON.stringify).join("\n") + "\n");
+  f.pins.journalSha256 = sha(f.journalBytes);
+  return { f, rows, waits, result, packet };
+}
+
+test("genuine late-topic collector journals admit polls while leaving all job cases unrecorded", async () => {
+  for (const visible of [true, false]) {
+    const { f, rows, result, waits } = await lateTopicCapture(visible);
+    assert.equal(result.unknown, 1);
+    assert.equal(result.cleanupVerified, false);
+    assert.equal(result.closureReady, visible);
+    assert.deepEqual(waits, visible ? [10000] : [10000, 10000, 10000]);
+    assert.equal(
+      rows.filter((r) => r.id === "create-topic" && r.state === "before-send").length,
+      1,
+    );
+    assert.ok(!rows.some((r) => /^c[0-9]{2}-create$/.test(r.id)));
+    const admitted = recordedCalendarInputs(f);
+    assert.equal(admitted.productionParity, false);
+    assert.ok(admitted.cases.every((c) => c.classification === "unrecorded"));
+  }
+});
+
+test("recorded topic polls bind route, deadline, response ordering and shared three-extra budget", async () => {
+  for (const fault of ["foreign-route", "wrong-deadline", "wrong-order", "fourth-extra"]) {
+    const { f, rows, packet } = await lateTopicCapture(false);
+    const pollIndex = rows.findIndex(
+      (r) => r.id === "read-topic-poll-1" && r.state === "before-send",
+    );
+    if (fault === "foreign-route") rows[pollIndex].url += "-foreign";
+    if (fault === "wrong-deadline") rows[pollIndex].timeoutMs = 30000;
+    if (fault === "wrong-order")
+      [rows[pollIndex], rows[pollIndex + 1]] = [rows[pollIndex + 1], rows[pollIndex]];
+    if (fault === "fourth-extra") {
+      const spec = calendarRequests(
+        packet.runId,
+        packet.projectNumber,
+        Date.parse("2026-09-30T16:00:01Z"),
+      ).find((r) => r.id === "c01-read-paused");
+      rows.push(
+        {
+          ...spec,
+          id: "c01-read-before-pause",
+          state: "before-send",
+          dispatchAt: "2026-09-30T17:00:00Z",
+        },
+        {
+          id: "c01-read-before-pause",
+          state: "transport-unknown",
+          responseAt: "2026-09-30T17:00:01Z",
+        },
+      );
+    }
+    f.journalBytes = Buffer.from(rows.map(JSON.stringify).join("\n") + "\n");
+    f.pins.journalSha256 = sha(f.journalBytes);
+    assert.throws(
+      () => recordedCalendarInputs(f),
+      fault === "fourth-extra"
+        ? /extra bound/
+        : fault === "wrong-order"
+          ? /ordering/
+          : /request binding/,
+    );
+  }
 });

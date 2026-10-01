@@ -647,3 +647,86 @@ test("one or two400 refusals plus ambiguous CREATE and busy cleanup share exactl
     assert.ok(!e.sends.some(({ id }) => id === "delete-topic"));
   }
 });
+
+test("late topic CREATE visibility after timeout and initial404 is polled before own cleanup", async () => {
+  const e = environment(),
+    original = e.deps.send;
+  e.deps.send = async (request) => {
+    if (request.id === "create-topic") {
+      await original(request);
+      throw new Error("topic PUT accepted with delayed visibility after timeout");
+    }
+    if (request.id === "read-topic") {
+      e.sends.push(request);
+      return new Response(
+        JSON.stringify({
+          error: {
+            code: 404,
+            status: "NOT_FOUND",
+            message: "Resource not found (resource=" + e.owned.prefix + ").",
+          },
+        }),
+        { status: 404 },
+      );
+    }
+    if (/^read-topic-poll-[1-3]$/.test(request.id))
+      return original({ ...request, id: "read-topic" });
+    return original(request);
+  };
+  const result = await collectCalendar(e.deps);
+  assert.ok(e.rows.some((r) => r.id === "read-topic-poll-1" && r.state === "before-send"));
+  assert.ok(e.sends.some(({ id }) => id === "delete-topic"));
+  assert.equal(e.sends.filter(({ id }) => id === "create-topic").length, 1);
+  assert.ok(!e.sends.some(({ id }) => /^c[0-9]{2}-create$/.test(id)));
+  assert.equal(result.attempted, 14);
+  assert.equal(result.unknown, 1);
+  assert.equal(result.closureReady, true);
+  assert.equal(result.cleanupVerified, false);
+  assert.deepEqual(e.waits, [10000]);
+});
+
+test("unknown topic CREATE with bounded still404 polls never earns absence settlement", async () => {
+  const e = environment(),
+    original = e.deps.send;
+  e.deps.send = async (request) => {
+    if (request.id === "create-topic") {
+      e.sends.push(request);
+      throw new Error("unknown create outcome");
+    }
+    if (request.id === "read-topic" || /^read-topic-poll-[1-3]$/.test(request.id)) {
+      e.sends.push(request);
+      return new Response(
+        JSON.stringify({
+          error: {
+            code: 404,
+            status: "NOT_FOUND",
+            message: "Resource not found (resource=" + e.owned.prefix + ").",
+          },
+        }),
+        { status: 404 },
+      );
+    }
+    return original(request);
+  };
+  const result = await collectCalendar(e.deps);
+  assert.equal(
+    e.rows.filter((r) => /^read-topic-poll-[1-3]$/.test(r.id) && r.state === "before-send").length,
+    3,
+  );
+  assert.deepEqual(e.waits, [10000, 10000, 10000]);
+  assert.equal(e.sends.filter(({ id }) => id === "create-topic").length, 1);
+  assert.ok(!e.sends.some(({ id }) => id === "delete-topic" || /^c[0-9]{2}-create$/.test(id)));
+  assert.equal(result.closureReady, false);
+  assert.equal(result.attempted, 15);
+});
+
+test("seed topic PUT and DELETE advertise30second deadlines without extending read or job deadlines", () => {
+  const requests = calendarRequests(runId, projectNumber, instant);
+  assert.equal(requests.find((r) => r.id === "create-topic").timeoutMs, 30000);
+  assert.equal(requests.find((r) => r.id === "delete-topic").timeoutMs, 30000);
+  assert.ok(
+    requests
+      .filter((r) => !["create-topic", "delete-topic"].includes(r.id))
+      .every((r) => r.timeoutMs === undefined),
+  );
+});

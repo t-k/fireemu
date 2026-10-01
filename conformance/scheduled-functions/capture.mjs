@@ -279,7 +279,10 @@ async function recoveryAdmission({ plan, rows, ledgerText, lane, now, mode = "jo
       }
       sent.add(row.id);
       let id = row.id;
-      if (/^c0[1-8]-read-before-pause$/.test(id)) {
+      if (/^read-topic-poll-[1-3]$/.test(id)) {
+        id = "read-topic";
+        extras++;
+      } else if (/^c0[1-8]-read-before-pause$/.test(id)) {
         id = id.slice(0, 3) + "-read-paused";
         extras++;
       } else if (/^c0[1-8]-delete-retry-[1-3]$/.test(id)) {
@@ -291,12 +294,21 @@ async function recoveryAdmission({ plan, rows, ledgerText, lane, now, mode = "jo
         !spec ||
         row.method !== spec.method ||
         row.url !== spec.url ||
+        (row.timeoutMs !== undefined && row.timeoutMs !== (spec.timeoutMs ?? 10000)) ||
         !Number.isFinite(Date.parse(row.dispatchAt)) ||
         JSON.stringify(row.json ?? null) !== JSON.stringify(spec.json ?? null)
       )
         throw new Error("original recovery journal request binding differs");
     }
     if (extras > 3) throw new Error("original recovery journal extra-request budget differs");
+    if (
+      plan.recoveryScope === "topic-only" &&
+      (!before.some((r) => r.id === "create-topic") ||
+        before.some(
+          (r) => r.method !== "GET" && r.id !== "create-topic" && r.id !== "delete-topic",
+        ))
+    )
+      throw new Error("topic-only original scope has no topic intent or a job mutation");
   }
   return projectAdmissionProblems(
     rows.filter((row) => !target(row)),
@@ -368,6 +380,11 @@ async function captureAttempt(
       (mode === "calendar-recovery" && plan.maxDeleteAttemptsPerJob !== 3))
   )
     throw new Error("calendar corpus or packet binding differs");
+  if (
+    plan.recoveryScope !== undefined &&
+    (mode !== "calendar-recovery" || plan.recoveryScope !== "topic-only")
+  )
+    throw new Error("invalid calendar recovery scope");
   if (recovery) {
     ownedResources(plan.originalRunId);
     ownedResources(plan.runId);

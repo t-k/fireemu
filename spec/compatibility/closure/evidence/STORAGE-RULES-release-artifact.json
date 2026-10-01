@@ -19,5 +19,5 @@
   "buildPath": ".worktree/storage-rules-closure (a git worktree of the repository; the absolute path is embedded in the binary's linker UUID, so a rebuild in another directory differs by those 48 bytes only)",
   "uiDist": "absent: ui/dist was not built, so the embedded UI is empty in this binary; no Storage or Auth route reads it",
   "productionRequests": 0,
-  "note": "One release binary built from the clean source commit; the strict production comparison (status, content type and error bytes), the storage probe check and the Storage conformance scenarios ran on this exact copy. The commits that follow change only spec, evidence and tests (one clippy fix in a test file); no source compiled into the binary changes."
+  "note": "One release binary built from the clean source commit; the strict production comparison (status, content type and error bytes), the storage probe check and the Storage conformance scenarios ran on this exact copy. The one commit that follows the source commit (the rebind of this evidence) changes only spec and evidence; no source compiled into the binary changes."
 }

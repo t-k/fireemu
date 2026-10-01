@@ -5,7 +5,15 @@
   "oracleTrack": "disposable-sandbox",
   "inventoryState": "FROZEN",
   "closureReview": {
-    "decision": "PENDING_REVIEW"
+    "decision": "APPROVED",
+    "decidedOn": "2026-10-01",
+    "reviewer": "independent clean-context closure review of the merged code and closure (REVISE, then three delta reviews: 284ecbd79 CHANGES REQUIRED, 85dc8890f APPROVE, fba79bd2d APPROVE)",
+    "reviewedCommit": "fba79bd2d25125554067e639d13907f09bf1aa16",
+    "finalArtifactSha256": "3c96b1432a966c16eac8f193b47d9c6b4bdfcb5b6ba8dd43f01f096d55ee8cb0",
+    "sourceCommit": "b0fc2485d5596439b515f4fd12f6c3ce68d4af91",
+    "reviewRecord": "docs.local/reviews/2026-10-01-storage-rules-closure-review.md and the sections \"Delta 85dc8890f\" and \"Delta fba79bd2d\" of docs.local/reviews/2026-10-01-storage-rules-closure-delta-review.md",
+    "ownerRulings": "owner ledger \"STORAGE-RULES local parity: per-profile rulings\" (line 707), \"Rules emulator-profile signed-token verification\" and \"STORAGE-RULES media 404 content type\" (line 721)",
+    "note": "The reviewer re-derived all 3641 strict rows against the recording, rebuilt the binding to the release binary and checked the 388 Quint digests. Approval does not promote the parent: storage-service-compile, release-switch and no-release stay PRODUCTION_RECORDED because no local row comparison covers the management programs, so parentStatus stays IMPLEMENTING."
   },
   "observationContract": {
     "project": "fireemu-oracle-query",
@@ -809,7 +817,30 @@
       "checks": [
         "An independent reviewer approves every condition, scope decision, two production recordings, cleanup and final-artifact binding before COMPAT_VERIFIED."
       ],
-      "status": "PENDING_REVIEW"
+      "status": "VERIFIED",
+      "note": "Independent closure review approved fba79bd2d (see closureReview): every condition, the scope decisions, the two production recordings, the cleanup and the final-artifact binding were checked. The parent is not promoted while three conditions are PRODUCTION_RECORDED.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-30T10:58:15.000Z",
+            "gitSha": "5c48b355f7f13b2136697086dcf2a5f5c269329d",
+            "runId": "stage3-20260930c",
+            "project": "fireemu-oracle-query"
+          },
+          {
+            "recordedAt": "2026-09-30T12:05:55.000Z",
+            "gitSha": "5c48b355f7f13b2136697086dcf2a5f5c269329d",
+            "runId": "stage3-20260930d",
+            "project": "fireemu-oracle-query"
+          }
+        ],
+        "finalArtifactSha256": "3c96b1432a966c16eac8f193b47d9c6b4bdfcb5b6ba8dd43f01f096d55ee8cb0",
+        "sourceCommit": "b0fc2485d5596439b515f4fd12f6c3ce68d4af91",
+        "comparisonPath": "spec/compatibility/closure/evidence/STORAGE-RULES-comparison.json",
+        "rows": {
+          "REVIEWED_ROWS": 3641
+        }
+      }
     }
   ]
 }

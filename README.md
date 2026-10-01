@@ -389,6 +389,10 @@ The `strict` and `emulator` profiles differ in some behaviors to serve their res
 
 Check support for the specific APIs and conditions your application uses, rather than relying on product names alone. The [compatibility contract](spec/compatibility/contract.json) records scope and known differences. The [compatibility documentation](docs/compatibility-contract.md) explains the verification process and how to interpret its records. 
 
+### Network exposure of the Storage port
+
+Like the official emulator, the Storage port reflects the requested object name in the HTML body of its 404 for a missing media read (`text/html`, as production answers). A web page opened on the developer's machine could therefore run script on that origin. Keep the emulator bound to localhost, which is the default, and do not expose the Storage port to other hosts or networks.
+
 ### Changes between versions
 
 Configuration and behavior may change between releases. See the [CHANGELOG](CHANGELOG.md) for release changes.

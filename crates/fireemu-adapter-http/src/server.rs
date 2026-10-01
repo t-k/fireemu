@@ -110,6 +110,7 @@ async fn respond(
             .and_then(|v| v.to_str().ok())
             .map(str::to_owned)
     };
+    let accept_encoding = header("accept-encoding");
     let headers = RequestHeaders {
         authorization: header("authorization"),
         origin: header("origin"),
@@ -282,6 +283,18 @@ async fn respond(
                 b"<!DOCTYPE html><html lang=en><title>Error 404 (Not Found)</title><p>Not Found</p></html>",
             )))
             .unwrap_or_else(|_| Response::new(Full::new(Bytes::new()))));
+    }
+    // The strict profile frames the answers the STORAGE-OBJECT recordings cover as production does
+    // (headers, member order, layout, gzip); every other answer keeps the official emulator's.
+    if !state.stateless_refresh_tokens
+        && status == 200
+        && crate::identity_framing::is_recorded_route(&method, &path)
+    {
+        return Ok(crate::identity_framing::respond(
+            &body,
+            origin.as_deref(),
+            accept_encoding.as_deref(),
+        ));
     }
     // Privileged App Check observations must never be cached (spec 15).
     Ok(finish(

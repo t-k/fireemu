@@ -230,3 +230,16 @@ def test_the_guard_exemption_covers_only_an_open_token_not_one_in_unconfirmed_re
         ledger.guard("BeginTransaction", request, None)
     ledger.tokens["t1"]["state"] = "open"
     ledger.guard("BeginTransaction", request, None)
+
+
+def test_the_token_a_retry_issued_is_released_before_the_next_chain_begins():
+    # RT-2 first, then RT-1: the retry's own token (t3r) stays open until its release, which must precede the next chain's begin
+    clock = Clock()
+    service = Service(clock, expiry=True, lifetime=270, idle=120, rpc_seconds=2.0)
+    run, tbl = collector(service, clock, SETUP + RT2 + RT1)
+    receipt = run.run()
+    assert receipt["complete"] is True, (receipt["failureType"], receipt["openTokens"])
+    order = [row["site"] for row in sorted(receipt["steps"] + receipt["cleanupSteps"], key=lambda row: row["sequence"])]
+    release = order.index("cleanup/token/t3r")
+    assert release < order.index("rest/t1/begin"), "the retry's token is released before the next chain begins"
+    assert receipt["tokens"]["t3r"]["state"] in ("rolled-back", "released-refused", "released-expired")

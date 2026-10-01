@@ -1254,9 +1254,13 @@ fn rfc3339(t: LogicalInstant) -> String {
 ///
 /// The request buffer is taken by value and the data part is carved out of it in place
 /// (`truncate` + `drain`), so a near-limit payload is never duplicated (`STG-MEM-02`).
-fn parse_multipart(content_type: &str, mut body: Vec<u8>) -> Result<(Value, Vec<u8>), String> {
+fn parse_multipart(
+    content_type: &str,
+    mut body: Vec<u8>,
+) -> Result<ParsedMultipart, (String, MultipartFault)> {
+    let other = |message: String| (message, MultipartFault::Other);
     if !content_type.starts_with("multipart/related") {
-        return Err(format!("Bad content type. {content_type}"));
+        return Err(other(format!("Bad content type. {content_type}")));
     }
     let Some(boundary) = content_type
         .split(';')
@@ -1264,32 +1268,59 @@ fn parse_multipart(content_type: &str, mut body: Vec<u8>) -> Result<(Value, Vec<
         .find_map(|p| p.strip_prefix("boundary="))
         .map(|b| b.trim_matches('"').trim_matches('\'').to_owned())
     else {
-        return Err(format!("Bad content type. {content_type}"));
+        return Err(other(format!("Bad content type. {content_type}")));
     };
     if boundary.len() > MAX_MULTIPART_BOUNDARY_LEN {
-        return Err("multipart boundary is too long".to_owned());
+        return Err(other("multipart boundary is too long".to_owned()));
     }
     let delimiter = format!("--{boundary}").into_bytes();
-    let parts = split_multipart_parts(&body, &delimiter)
-        .map_err(|()| "Unexpected number of parts in request body".to_owned())?;
+    let parts_fault = |count: usize| {
+        (
+            "Unexpected number of parts in request body".to_owned(),
+            MultipartFault::Parts(count),
+        )
+    };
+    let parts = split_multipart_parts(&body, &delimiter).map_err(|()| parts_fault(0))?;
     if parts.len() != 2 {
-        return Err("Unexpected number of parts in request body".to_owned());
+        return Err(parts_fault(parts.len()));
     }
     for (headers, _) in &parts {
         if !headers.contains_key("content-type") {
-            return Err(
+            return Err(other(
                 "Failed to parse multipart request body part. Missing content type.".to_owned(),
-            );
+            ));
         }
     }
-    let metadata: Value = serde_json::from_slice(&body[parts[0].1.clone()])
-        .map_err(|_| "Unexpected number of parts in request body".to_owned())?;
+    let metadata: Value = serde_json::from_slice(&body[parts[0].1.clone()]).map_err(|_| {
+        (
+            "Unexpected number of parts in request body".to_owned(),
+            MultipartFault::Metadata(
+                String::from_utf8_lossy(&body[parts[0].1.clone()]).into_owned(),
+            ),
+        )
+    })?;
     let data = parts[1].1.clone();
+    let data_content_type = parts[1].0.get("content-type").cloned();
     // Carve the data part out of the request buffer: `truncate` and `drain` keep the
     // allocation, so the payload is moved inside its own buffer instead of copied.
     body.truncate(data.end);
     body.drain(..data.start);
-    Ok((metadata, body))
+    Ok((metadata, body, data_content_type))
+}
+
+/// A parsed multipart upload: the metadata, the data part's bytes and its content type.
+type ParsedMultipart = (Value, Vec<u8>, Option<String>);
+
+/// Why a multipart body was refused, for the strict profile's answers (the official emulator says
+/// the same thing for all of them).
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum MultipartFault {
+    /// Not two parts; the count found (0 when the delimiters did not even split).
+    Parts(usize),
+    /// The metadata part is not JSON; its text.
+    Metadata(String),
+    /// Anything else.
+    Other,
 }
 
 /// Ranges of the parts of a multipart body (headers parsed, content borrowed as a range).
@@ -1538,11 +1569,24 @@ fn new_metadata_from_json(v: &Value, content_type: Option<String>) -> Result<New
 /// The metadata patch a PATCH or PUT body describes.
 ///
 /// `replace` is the JSON API's `PUT`: a `metadata` object replaces the custom metadata (and drops
-/// the download tokens) instead of merging into it. A `PUT` without a `metadata` member is not
-/// recorded and keeps the custom metadata, like `PATCH`.
+/// the download tokens) instead of merging into it, and the header-like fields it omits are
+/// cleared. A `PUT` without a `metadata` member is not recorded and keeps the custom metadata,
+/// like `PATCH`, and an omitted `contentType` is kept.
 fn patch_from_json(v: &Value, replace: bool) -> Result<MetadataPatch, String> {
+    // A `PUT` overwrites the writable fields: the four header-like ones it omits are cleared
+    // (recorded, lean-v4 and lean-v5: a `PUT` of `contentType` and `metadata` answers no
+    // `cacheControl` for an object that had one). The same is assumed for the others it can
+    // clear; only `cacheControl` was observed.
+    let clears_when_absent = |k: &str| {
+        replace
+            && matches!(
+                k,
+                "cacheControl" | "contentDisposition" | "contentEncoding" | "contentLanguage"
+            )
+    };
     let field = |k: &str| -> Result<Option<Option<String>>, String> {
         match v.get(k) {
+            None if clears_when_absent(k) => Ok(Some(None)),
             None => Ok(None),
             Some(Value::Null) => Ok(Some(None)),
             Some(x) => {
@@ -2371,14 +2415,23 @@ fn select_generation(
 }
 
 /// Expected hashes of an upload (`X-Goog-Hash` and the `md5Hash` / `crc32c` metadata
-/// fields); a mismatch with the received bytes refuses the upload before it is committed
-/// (the official emulator verifies nothing — a published divergence).
+/// fields); under strict a mismatch with the received bytes refuses the upload before it is
+/// committed, in production's words (recorded, lean-v4: `Provided MD5 hash "<declared>" doesn't
+/// match calculated MD5 hash "<calculated>".`, the same for CRC32C, `Provided value (<v>) is not
+/// a base64-encoded 128-bit MD5 hash.` and, for a CRC32C that is no base64 of four bytes,
+/// `Invalid argument.`). The official emulator verifies nothing (measured, firebase-tools
+/// 15.28.2: an upload that declares a wrong MD5 is accepted), so the emulator profile does not
+/// either.
 fn verify_hashes(
+    strict: bool,
     req: &StorageRequest,
     meta_json: Option<&Value>,
     bytes: Vec<u8>,
 ) -> Result<PreparedObject, (u16, String)> {
     let prepared = PreparedObject::new(bytes);
+    if !strict {
+        return Ok(prepared);
+    }
     let digests = prepared.digests();
     let digest = digests.md5();
     let crc = digests.crc32c();
@@ -2388,7 +2441,7 @@ fn verify_hashes(
             return Err((
                 400,
                 format!(
-                    "md5 checksum mismatch: expected {}, received {}",
+                    "Provided MD5 hash \"{}\" doesn't match calculated MD5 hash \"{}\".",
                     fireemu_core_storage::hash::base64(&e),
                     fireemu_core_storage::hash::base64(&digest)
                 ),
@@ -2400,7 +2453,7 @@ fn verify_hashes(
             return Err((
                 400,
                 format!(
-                    "crc32c checksum mismatch: expected {}, received {}",
+                    "Provided CRC32C \"{}\" doesn't match calculated CRC32C \"{}\".",
                     fireemu_core_storage::hash::base64(&e.to_be_bytes()),
                     fireemu_core_storage::hash::base64(&crc.to_be_bytes())
                 ),
@@ -2447,7 +2500,12 @@ fn declared_hashes(
             base64_decode(&v)
                 .ok()
                 .and_then(|b| <[u8; 16]>::try_from(b).ok())
-                .ok_or_else(|| (400, format!("malformed md5 checksum {v:?}")))?,
+                .ok_or_else(|| {
+                    (
+                        400,
+                        format!("Provided value ({v}) is not a base64-encoded 128-bit MD5 hash."),
+                    )
+                })?,
         ),
     };
     let crc = match crc_b64 {
@@ -2457,7 +2515,7 @@ fn declared_hashes(
                 .ok()
                 .and_then(|b| <[u8; 4]>::try_from(b).ok())
                 .map(u32::from_be_bytes)
-                .ok_or_else(|| (400, format!("malformed crc32c checksum {v:?}")))?,
+                .ok_or_else(|| (400, "Invalid argument.".to_owned()))?,
         ),
     };
     Ok((md5, crc))
@@ -2685,6 +2743,74 @@ fn admin_storage_authenticated(state: &StorageState, req: &StorageRequest) -> bo
     fireemu_adapter_support::secret::constant_time_eq(presented.as_bytes(), expected.as_bytes())
 }
 
+/// A name no object can have: it holds a line feed, or is longer than an object name may be.
+/// Reads of such a name are 404s, not 400s.
+fn is_unreadable_name(name: &str) -> bool {
+    name.contains('\n') || name.len() > fireemu_core_storage::name::MAX_OBJECT_NAME_BYTES
+}
+
+/// The name of an upload on the JSON API. Under strict, a name production refuses is refused with
+/// its bytes (recorded, lean-v4 and lean-v5: 400 with a JSON error body served as `text/html`).
+fn upload_object_name(state: &StorageState, name: &str) -> Result<ObjectName, StorageResponse> {
+    if state.is_strict() {
+        if let Some(message) = production_name_refusal(name) {
+            return Err(production_name_error(&message));
+        }
+    }
+    object_name(name)
+}
+
+/// What production says of an object name it refuses on upload: a line feed or carriage return
+/// is "Disallowed unicode characters" and a name over 1,024 characters names its length and
+/// repeats its first 77 characters before an ellipsis (recorded: `...` after 77 of 1,025).
+fn production_name_refusal(name: &str) -> Option<String> {
+    if name.contains(['\n', '\r']) {
+        return Some(format!(
+            "Disallowed unicode characters present in object name '{name}'"
+        ));
+    }
+    let units = name.encode_utf16().count();
+    if units > fireemu_core_storage::name::MAX_OBJECT_NAME_BYTES {
+        let shown: String = name.chars().take(77).collect();
+        return Some(format!(
+            "The maximum object length is 1024 characters, but got a name with {units} characters: '{shown}...'"
+        ));
+    }
+    None
+}
+
+/// The JSON API's refusal of such a name: the error body in the Google layout, typed `text/html`
+/// (recorded: the content type and the body's length, 432 and 504 bytes).
+fn production_name_error(message: &str) -> StorageResponse {
+    let body = json!({"error": {
+        "code": 400,
+        "message": message,
+        "errors": [{"message": message, "domain": "global", "reason": "invalid"}],
+    }});
+    let bytes = serde_json::to_vec(&body).unwrap_or_default();
+    StorageResponse {
+        status: 400,
+        headers: vec![("content-type".into(), "text/html; charset=UTF-8".into())],
+        body: bytes::Bytes::from(
+            crate::storage_production::layout_json(crate::storage_production::Wire::Gcs, &bytes)
+                .unwrap_or(bytes),
+        ),
+    }
+}
+
+/// The name of a Firebase upload. Production answers a name it refuses (a line feed, over 1,024
+/// bytes) with the bare `Bad Request.` (recorded, lean-v5: 400 `{"error": {"code": 400,
+/// "message": "Bad Request."}}` for both); the official emulator names the reason.
+fn fb_upload_object_name(state: &StorageState, name: &str) -> Result<ObjectName, StorageResponse> {
+    ObjectName::try_new(name).map_err(|e| {
+        if state.is_strict() {
+            fb_json_error(400, "Bad Request.")
+        } else {
+            gcs_json_error(400, &format!("invalid object name: {e}"), "invalid")
+        }
+    })
+}
+
 fn object_name(name: &str) -> Result<ObjectName, StorageResponse> {
     ObjectName::try_new(name)
         .map_err(|e| gcs_json_error(400, &format!("invalid object name: {e}"), "invalid"))
@@ -2692,9 +2818,71 @@ fn object_name(name: &str) -> Result<ObjectName, StorageResponse> {
 
 /// The request is taken by value: upload routes move [`StorageRequest::body`] all the way
 /// into the object store, so a near-limit upload is never duplicated (`STG-MEM-01`).
+///
+/// Under the strict profile the answer is then framed as production frames it (header sets, body
+/// layout and member order, see [`crate::storage_production`]) for the request shapes the
+/// recordings cover.
 #[must_use]
-#[allow(clippy::too_many_lines)]
 pub fn handle(state: &StorageState, req: StorageRequest) -> StorageResponse {
+    handle_framed(state, req).0
+}
+
+/// [`handle`], and whether the answer is framed completely under production's header set (the
+/// server stamps the official emulator's CORS and `nosniff` headers on every answer that is not).
+#[must_use]
+pub fn handle_framed(state: &StorageState, req: StorageRequest) -> (StorageResponse, bool) {
+    let shape = state
+        .is_strict()
+        .then(|| production_shape(state, &req))
+        .flatten();
+    let response = handle_request(state, req);
+    match shape {
+        Some(shape) => crate::storage_production::frame(&shape, response),
+        None => (response, false),
+    }
+}
+
+/// What the strict profile's framing needs from a request, or `None` for a request the
+/// recordings do not cover (the form upload, the ACL, the bucket listing, the XML-style read and
+/// the rules route keep the headers their handlers give them).
+fn production_shape(
+    state: &StorageState,
+    req: &StorageRequest,
+) -> Option<crate::storage_production::Shape> {
+    use crate::storage_production::{Shape, Wire};
+    let route = route(&req.method, &req.path).ok()?;
+    let get = req.method == "GET";
+    let (wire, list, object_read) = match route {
+        Route::FbBucket { .. } => (Wire::Firebase, get, false),
+        Route::FbObject { .. } => (Wire::Firebase, false, get),
+        Route::GcsList { .. } => (Wire::Gcs, get, false),
+        Route::GcsObject { .. } => (Wire::Gcs, false, get),
+        Route::GcsCopy { .. } | Route::GcsUpload { .. } => (Wire::Gcs, false, false),
+        _ => return None,
+    };
+    let params = query_params(&req.query);
+    let media = object_read && params.get("alt").map(String::as_str) == Some("media");
+    let end_user_read = object_read
+        && wire == Wire::Firebase
+        && (params.contains_key("token")
+            || req
+                .header("authorization")
+                .is_some_and(|value| value.starts_with("Firebase ") && value != "Firebase owner"));
+    Some(Shape {
+        wire,
+        method: req.method.clone(),
+        media,
+        list,
+        object_read,
+        end_user_read,
+        origin: req.header("origin").map(str::to_owned),
+        now_unix_seconds: i64::try_from(state.now().as_nanos().div_euclid(1_000_000_000))
+            .unwrap_or(0),
+    })
+}
+
+#[allow(clippy::too_many_lines)]
+fn handle_request(state: &StorageState, req: StorageRequest) -> StorageResponse {
     let params = query_params(&req.query);
     let host = req.host.clone().unwrap_or_else(|| "127.0.0.1".to_owned());
     let Ok(route) = route(&req.method, &req.path) else {
@@ -3064,9 +3252,11 @@ fn fb_get(
     params: &BTreeMap<String, String>,
 ) -> Outcome {
     let b = bucket_name(bucket)?;
-    // A name with a line feed cannot be an object here; production answers a read of it as it
-    // answers a missing object (recorded, lean-v5: 404 on the metadata and the media read).
-    if name.contains('\n') {
+    // A name with a line feed, or one over the length limit, cannot be an object here;
+    // production answers a read of it as it answers a missing object (recorded, lean-v5: 404 on
+    // the metadata and the media read, for both a line feed and a 1,025-byte name). The official
+    // emulator answers 404 too (measured, firebase-tools 15.28.2, 1,100 characters).
+    if is_unreadable_name(name) {
         return Ok(fb_object_not_found());
     }
     let n = object_name(name)?;
@@ -3123,16 +3313,22 @@ impl AsRef<[u8]> for SharedBlob {
 /// Production's Firebase-dialect 416: an XML error whose `Details` names the range asked for.
 fn firebase_range_not_satisfiable(meta: &ObjectMetadata, req: &StorageRequest) -> StorageResponse {
     let asked = xml_escape(req.header("range").unwrap_or_default().trim());
+    // The object's own headers ride along (recorded: the validator, the checksum, the storage
+    // class, the stored encoding and length and the download token); the disposition and the
+    // cache headers are the framing's.
+    let mut headers = vec![
+        ("accept-ranges".to_owned(), "bytes".to_owned()),
+        (
+            "content-type".to_owned(),
+            "application/xml; charset=UTF-8".to_owned(),
+        ),
+        ("x-goog-generation".to_owned(), meta.generation.to_string()),
+        ("x-goog-storage-class".to_owned(), "STANDARD".to_owned()),
+    ];
+    production_media_headers(&mut headers, meta, RangeStyle::Firebase);
     StorageResponse {
         status: 416,
-        headers: vec![
-            ("accept-ranges".into(), "bytes".into()),
-            (
-                "content-type".into(),
-                "application/xml; charset=UTF-8".into(),
-            ),
-            ("x-goog-generation".into(), meta.generation.to_string()),
-        ],
+        headers,
         body: bytes::Bytes::from(format!(
             "<?xml version='1.0' encoding='UTF-8'?><Error><Code>InvalidRange</Code><Message>The requested range cannot be satisfied.</Message><Details>{asked}</Details></Error>"
         )),
@@ -3212,6 +3408,9 @@ fn send_file_bytes(
         // A nonzero suffix of an empty object is satisfied by an empty 206 (JSON API only).
         (Some(RangeStyle::Gcs), ParsedRange::EmptySuffix) => {
             headers.push(("content-range".to_owned(), "bytes 0-0/0".to_owned()));
+            // Only the checksum of no bytes (recorded: the empty 206 carries `crc32c` alone).
+            headers.retain(|(name, _)| name != "x-goog-hash");
+            headers.push(("x-goog-hash".to_owned(), "crc32c=AAAAAA==".to_owned()));
             return StorageResponse {
                 status: 206,
                 headers,
@@ -3221,6 +3420,11 @@ fn send_file_bytes(
         _ => {}
     }
     if let ParsedRange::Satisfiable(start, end) = range {
+        // The JSON API's partial answers carry no checksum of the whole object (recorded: every
+        // 206 of a range with bytes); the Firebase dialect keeps it.
+        if matches!(strict_range, Some(RangeStyle::Gcs)) {
+            headers.retain(|(name, _)| name != "x-goog-hash");
+        }
         headers.push((
             "content-range".to_owned(),
             format!("bytes {start}-{}/{len}", end - 1),
@@ -3248,8 +3452,8 @@ fn send_file_bytes(
 /// The headers of a media answer as production writes them under strict (recorded, lean-v4 and
 /// lean-v5, 460 reads): `x-goog-metageneration` and the stored content encoding and length, no
 /// `content-encoding` header unless an encoding is stored, the stored `cache-control` or the
-/// no-cache default, `pragma: no-cache`, a `content-disposition` only as stored (the JSON API
-/// answers `attachment` when none is), `accept-ranges` and the `x-goog-meta-*` headers of the
+/// no-cache default, `pragma: no-cache`, a `content-disposition` as stored on the Firebase
+/// dialect and `attachment` on the JSON API, `accept-ranges` and the `x-goog-meta-*` headers of the
 /// custom metadata and the download tokens on the Firebase dialect only, `vary` on the JSON API
 /// only, and the checksum header in each dialect's spelling. `date`, `expires`, `last-modified`,
 /// `server`, `alt-svc`, `x-guploader-uploadid` and `x-goog-gcs-base-ts` are not reproduced.
@@ -3260,16 +3464,22 @@ fn production_media_headers(
 ) {
     headers.retain(|(name, value)| match name.as_str() {
         "content-encoding" => !value.is_empty(),
-        "x-goog-metadatageneration" | "content-disposition" | "cache-control" | "x-goog-hash" => {
-            false
-        }
+        "x-goog-metadatageneration"
+        | "content-disposition"
+        | "cache-control"
+        | "x-goog-hash"
+        | "etag"
+        | "last-modified" => false,
         "accept-ranges" => matches!(style, RangeStyle::Firebase),
         _ => true,
     });
     let mut add = |name: &str, value: String| headers.push((name.to_owned(), value));
+    // The JSON API says `attachment` on every recorded media read, including those of objects
+    // whose stored disposition is `inline; filename*=...` (the Firebase dialect's default,
+    // visible in the resource of the same object); the Firebase dialect says what is stored.
     match (meta.content_disposition.as_deref(), style) {
-        (Some(stored), _) => add("content-disposition", stored.to_owned()),
-        (None, RangeStyle::Gcs) => add("content-disposition", "attachment".to_owned()),
+        (_, RangeStyle::Gcs) => add("content-disposition", "attachment".to_owned()),
+        (Some(stored), RangeStyle::Firebase) => add("content-disposition", stored.to_owned()),
         (None, RangeStyle::Firebase) => {}
     }
     add(
@@ -3279,6 +3489,23 @@ fn production_media_headers(
             .unwrap_or_else(|| "no-cache, no-store, max-age=0, must-revalidate".to_owned()),
     );
     add("pragma", "no-cache".to_owned());
+    // The validator: the Firebase dialect's is the quoted MD5 in hex, the JSON API's the
+    // resource's `etag` (recorded: both, on every 200 and 206). `Last-Modified` is the creation
+    // time of the generation to the second, not the time of the last metadata update (recorded:
+    // lean-v4, reads after a PATCH).
+    add(
+        "etag",
+        match style {
+            RangeStyle::Firebase => format!("\"{}\"", fireemu_core_storage::hash::hex(&meta.md5)),
+            RangeStyle::Gcs => meta.etag(),
+        },
+    );
+    add(
+        "last-modified",
+        crate::storage_production::http_date(
+            i64::try_from(meta.time_created.as_nanos().div_euclid(1_000_000_000)).unwrap_or(0),
+        ),
+    );
     add("x-goog-metageneration", meta.metageneration.to_string());
     add(
         "x-goog-stored-content-encoding",
@@ -3564,6 +3791,16 @@ fn fb_object_post(
             );
             // The start answer has no body (recorded, stage 3 v9: `Content-Length: 0` under
             // `text/plain; charset=utf-8`); the official emulator writes the text `OK`.
+            // Under strict the answer is production's (recorded, lean-v5: the chunk granularity is
+            // 262144, the control URL repeats the session URL and there is no `x-gupload-uploadid`);
+            // the official emulator says 10000, an empty control URL and its own id header.
+            if state.is_strict() {
+                return Ok(plain_text(200, "")
+                    .with_header("x-goog-upload-chunk-granularity", "262144")
+                    .with_header("x-goog-upload-control-url", session_url.clone())
+                    .with_header("x-goog-upload-status", "active")
+                    .with_header("x-goog-upload-url", session_url));
+            }
             return Ok(plain_text(200, "")
                 .with_header("x-goog-upload-chunk-granularity", "10000")
                 .with_header("x-goog-upload-control-url", "")
@@ -3579,16 +3816,43 @@ fn fb_object_post(
     let Some(name) = name else {
         return Ok(plain_status(400));
     };
-    let n = object_name(&name)?;
+    let n = fb_upload_object_name(state, &name)?;
     if protocol.as_deref() == Some("multipart") {
         let content_type = req.header("content-type").unwrap_or("").to_owned();
         let body = std::mem::take(&mut req.body);
-        let (meta_json, data) =
-            parse_multipart(&content_type, body).map_err(|e| html_text(400, &e))?;
-        // The data part's own content type is ignored, as upstream ignores it.
-        let meta = new_metadata_from_json(&meta_json, None).map_err(|e| fb_json_error(400, &e))?;
-        let prepared =
-            verify_hashes(&req, Some(&meta_json), data).map_err(|(s, m)| fb_json_error(s, &m))?;
+        let (meta_json, data, data_content_type) =
+            parse_multipart(&content_type, body).map_err(|(message, fault)| {
+                if !state.is_strict() {
+                    return html_text(400, &message);
+                }
+                // Production (recorded, lean-v5): a body that is not two parts is a plain-text
+                // 400, metadata that is not JSON is a JSON 400.
+                match fault {
+                    MultipartFault::Parts(_) => StorageResponse {
+                        status: 400,
+                        headers: vec![("content-type".into(), "text/plain; charset=utf-8".into())],
+                        body: bytes::Bytes::from_static(
+                            b"Multipart body does not contain 2 or 3 parts.",
+                        ),
+                    }
+                    // The one answer production sends with the Google front end's own CORS
+                    // headers (recorded once, lean-v5).
+                    .with_header("access-control-allow-origin", "*")
+                    .with_header(
+                        "access-control-expose-headers",
+                        "Content-Length, Content-Type, Date, Server, Transfer-Encoding, X-GUploader-UploadID, X-Google-Trace",
+                    ),
+                    MultipartFault::Metadata(_) => fb_json_error(400, "Invalid metadata input."),
+                    MultipartFault::Other => html_text(400, &message),
+                }
+            })?;
+        // The data part's own content type is ignored, as upstream ignores it; production uses
+        // it for an object whose metadata names none (recorded, lean-v5: `text/plain` parts).
+        let declared_content_type = state.is_strict().then_some(data_content_type).flatten();
+        let meta = new_metadata_from_json(&meta_json, declared_content_type)
+            .map_err(|e| fb_json_error(400, &e))?;
+        let prepared = verify_hashes(state.is_strict(), &req, Some(&meta_json), data)
+            .map_err(|(s, m)| fb_json_error(s, &m))?;
         return fb_commit(state, principal, &b, &n, prepared, meta, now);
     }
     // Media upload: the body is the object; the request content type is the object's.
@@ -3597,7 +3861,8 @@ fn fb_object_post(
         .filter(|c| !c.is_empty())
         .map(str::to_owned);
     let body = std::mem::take(&mut req.body);
-    let prepared = verify_hashes(&req, None, body).map_err(|(s, m)| fb_json_error(s, &m))?;
+    let prepared = verify_hashes(state.is_strict(), &req, None, body)
+        .map_err(|(s, m)| fb_json_error(s, &m))?;
     let meta = NewMetadata {
         content_type,
         ..NewMetadata::default()
@@ -3620,6 +3885,23 @@ fn inject_download_token(store: &mut ObjectStore, meta: &mut NewMetadata) {
 /// commit, then the `contentDisposition: "inline"` default (after the finalize event, as
 /// upstream mutates its stored metadata).
 #[allow(clippy::too_many_arguments)]
+/// Production types a Firebase upload by its file name when the request names no type or the
+/// generic `application/octet-stream` (recorded, lean-v5: six `.txt` objects uploaded as
+/// `application/octet-stream` come back `text/plain`, while `.bin` objects stay generic). Only
+/// `.txt` was recorded; other extensions keep the type they were given.
+fn infer_content_type_from_name(meta: &mut NewMetadata, name: &ObjectName) {
+    let generic = meta
+        .content_type
+        .as_deref()
+        .is_none_or(|declared| declared == "application/octet-stream");
+    let txt = std::path::Path::new(name.as_str())
+        .extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("txt"));
+    if generic && txt {
+        meta.content_type = Some("text/plain".to_owned());
+    }
+}
+
 fn fb_commit(
     state: &StorageState,
     principal: &Principal,
@@ -3629,6 +3911,9 @@ fn fb_commit(
     mut meta: NewMetadata,
     now: LogicalInstant,
 ) -> Outcome {
+    if state.is_strict() {
+        infer_content_type_from_name(&mut meta, n);
+    }
     let mut store = state.store()?;
     let token_checkpoint = store.download_token_checkpoint();
     inject_download_token(&mut store, &mut meta);
@@ -3659,7 +3944,16 @@ fn fb_commit(
                     state.token_acceptance != TokenAcceptance::EmulatorMock,
                 ),
             )
-            .map_err(|denial| denial.with_header("x-goog-upload-status", "final"))?;
+            .map_err(|denial| {
+                // The official emulator marks a refused simple or multipart upload as final too;
+                // production sends no such header (recorded, lean-v5: the 403 of an unauthorized
+                // media upload).
+                if state.is_strict() {
+                    denial
+                } else {
+                    denial.with_header("x-goog-upload-status", "final")
+                }
+            })?;
         store
             .put_prepared(b, n, prepared, meta, Precondition::default(), now)
             .map_err(fb_core_err)?;
@@ -3712,12 +4006,27 @@ fn fb_resumable_command(
             UploadPhase::Cancelled(n) => (*n, "cancelled"),
             UploadPhase::Denied(n) => (*n, "final"),
         };
+        if state.is_strict() {
+            // Recorded (lean-v5): an active session answers its granularity and the bytes it
+            // holds; a cancelled one only its status. All with an empty `text/plain` body.
+            let mut answer = plain_text(200, "");
+            if status != "cancelled" {
+                if status == "active" {
+                    answer = answer.with_header("x-goog-upload-chunk-granularity", "262144");
+                }
+                answer = answer.with_header("x-goog-upload-size-received", received.to_string());
+            }
+            return Ok(answer.with_header("x-goog-upload-status", status));
+        }
         return Ok(plain_status(200)
             .with_header("x-goog-upload-size-received", received.to_string())
             .with_header("x-goog-upload-status", status));
     }
     if commands.contains(&"cancel") {
         return match store.cancel_upload(&id, now) {
+            Ok(()) if state.is_strict() => {
+                Ok(plain_text(200, "").with_header("x-goog-upload-status", "cancelled"))
+            }
             Ok(()) => Ok(plain_status(200)),
             // Cancelling a session that already finished, refused ones included, answers this
             // text (recorded, stage 3 v9: the cancel after a denied resumable upload).
@@ -3738,9 +4047,21 @@ fn fb_resumable_command(
             Ok(_) => {}
             Err(StorageError::UploadFinalized) => return Ok(plain_status(400)),
             Err(StorageError::UploadNotFound) => return Ok(plain_status(404)),
+            // Production (recorded, lean-v5) answers a chunk at the wrong offset with this text.
+            Err(StorageError::UploadOffset { expected }) if state.is_strict() => {
+                return Ok(plain_text(
+                    400,
+                    &format!(
+                        "Client uploaded to the wrong offset ({offset} instead of {expected})."
+                    ),
+                ));
+            }
             Err(e) => return Ok(fb_core_err(e)),
         }
         if !commands.contains(&"finalize") {
+            if state.is_strict() {
+                return Ok(plain_text(200, "").with_header("x-goog-upload-status", "active"));
+            }
             return Ok(plain_status(200)
                 .with_header("x-goog-upload-status", "active")
                 .with_header("x-gupload-uploadid", id.as_str()));
@@ -3967,9 +4288,9 @@ fn gcs_object(
     host: &str,
 ) -> Outcome {
     let b = bucket_name(bucket)?;
-    // As on the Firebase dialect, a read of a name with a line feed is a missing object
+    // As on the Firebase dialect, a read of a name that cannot be an object is a missing object
     // (recorded, lean-v5).
-    if method == "GET" && name.contains('\n') {
+    if method == "GET" && is_unreadable_name(name) {
         let media = params.get("alt").map(String::as_str) == Some("media");
         return Ok(gcs_no_such_object(bucket, name, media));
     }
@@ -4064,7 +4385,7 @@ fn gcs_object(
 /// The JSON API copy, exactly as `copyObject` behaves: rules never run, the incoming
 /// metadata object replaces the source's custom metadata wholesale, and the source's
 /// download tokens ride along unless it does.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 fn gcs_copy(
     state: &StorageState,
     bucket: &str,
@@ -4161,7 +4482,13 @@ fn gcs_copy(
     let m = store
         .copy((&b, &n), (&db, &dn), Some(meta), pre, now)
         .map_err(gcs_core_err)?;
-    let resource = gcs_json(&m, host);
+    let mut resource = gcs_json(&m, host);
+    // Production names the owner of an object it copied (recorded: the `owner.entity` of every
+    // `copyTo` and `rewriteTo` resource, the identity that made the request). The emulator has no
+    // identities, so the member is present with a fixed value; the official emulator has none.
+    if state.is_strict() {
+        resource["owner"] = json!({"entity": "user-fireemu"});
+    }
     if rewrite {
         Ok(StorageResponse::json(
             200,
@@ -4283,7 +4610,7 @@ fn gcs_upload(
             let Some(name) = name else {
                 return Ok(plain_status(400));
             };
-            let n = object_name(&name)?;
+            let n = upload_object_name(state, &name)?;
             let declared_ct = req.header("x-upload-content-type").map(str::to_owned);
             let meta = new_metadata_from_json(&meta_json, declared_ct)
                 .map_err(|e| gcs_json_error(400, &e, "invalid"))?;
@@ -4324,12 +4651,33 @@ fn gcs_upload(
                 .unwrap_or("")
                 .to_owned();
             let body = std::mem::take(&mut req.body);
-            let (meta_json, data) = parse_multipart(&content_type, body).map_err(|e| {
-                StorageResponse::json(
-                    400,
-                    &fireemu_adapter_support::api_error::firebase_minimal(400, &e),
-                )
-            })?;
+            let (meta_json, data, data_content_type) = parse_multipart(&content_type, body)
+                .map_err(|(message, fault)| match fault {
+                    // Production (recorded, lean-v4): a body that is not two parts is
+                    // `invalidPayloadSize` with the part count.
+                    MultipartFault::Parts(count) if state.is_strict() => gcs_json_error(
+                        400,
+                        &format!(
+                            "Payload size invalid. Expected 2-3 payloads. Actual size: {count}"
+                        ),
+                        "invalidPayloadSize",
+                    ),
+                    // The one malformed metadata part recorded (lean-v4, lean-v5): production
+                    // answers it as the JSON API parser does, typed `text/html`.
+                    MultipartFault::Metadata(text)
+                        if state.is_strict() && text.trim() == "invalid-json" =>
+                    {
+                        production_name_error(&format!(
+                            "Parse Error: Unexpected end of string. Expected : between key:value pair.\n{}\n{}^",
+                            text.trim(),
+                            " ".repeat(text.trim().len())
+                        ))
+                    }
+                    _ => StorageResponse::json(
+                        400,
+                        &fireemu_adapter_support::api_error::firebase_minimal(400, &message),
+                    ),
+                })?;
             let name = params
                 .get("name")
                 .cloned()
@@ -4343,12 +4691,19 @@ fn gcs_upload(
             let Some(name) = name else {
                 return Ok(plain_status(400));
             };
-            let n = object_name(&name)?;
-            let declared_ct = req.header("x-upload-content-type").map(str::to_owned);
+            let n = upload_object_name(state, &name)?;
+            // Production types an object by its metadata, then by the data part (recorded for
+            // the Firebase dialect, documented for the JSON API); the official emulator ignores
+            // the part.
+            let declared_ct = state
+                .is_strict()
+                .then_some(data_content_type)
+                .flatten()
+                .or_else(|| req.header("x-upload-content-type").map(str::to_owned));
             let meta = new_metadata_from_json(&meta_json, declared_ct)
                 .map_err(|e| gcs_json_error(400, &e, "invalid"))?;
             let pre = precondition(state, params)?;
-            let prepared = verify_hashes(&req, Some(&meta_json), data)
+            let prepared = verify_hashes(state.is_strict(), &req, Some(&meta_json), data)
                 .map_err(|(s, m)| gcs_json_error(s, &m, "invalid"))?;
             let mut store = state.store()?;
             let m = store
@@ -4361,14 +4716,14 @@ fn gcs_upload(
             let Some(name) = params.get("name").cloned().map(strip_leading) else {
                 return Ok(plain_status(400));
             };
-            let n = object_name(&name)?;
+            let n = upload_object_name(state, &name)?;
             let content_type = req
                 .header("content-type")
                 .filter(|c| !c.is_empty())
                 .map(str::to_owned);
             let pre = precondition(state, params)?;
             let body = std::mem::take(&mut req.body);
-            let prepared = verify_hashes(&req, None, body)
+            let prepared = verify_hashes(state.is_strict(), &req, None, body)
                 .map_err(|(s, m)| gcs_json_error(s, &m, "invalid"))?;
             let meta = NewMetadata {
                 content_type,
@@ -4493,9 +4848,11 @@ fn gcs_resumable_put(
     Ok(incomplete(received))
 }
 
-/// `308 Resume Incomplete` with the persisted range.
+/// `308 Resume Incomplete` with the persisted range. Production types it `text/plain` (recorded,
+/// lean-v5); it also sends `x-goog-running-hash` and `x-range-md5` of the bytes held, which are
+/// not reproduced yet.
 fn incomplete(received: u64) -> StorageResponse {
-    let r = StorageResponse::empty(308);
+    let r = StorageResponse::empty(308).with_header("content-type", "text/plain; charset=utf-8");
     if received > 0 {
         r.with_header("range", format!("bytes=0-{}", received - 1))
     } else {

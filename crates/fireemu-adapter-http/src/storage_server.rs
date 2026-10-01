@@ -15,7 +15,7 @@ use tokio::net::TcpListener;
 use tokio::sync::Semaphore;
 
 use crate::identity_toolkit::origin_is_local;
-use crate::storage::{handle, StorageRequest, StorageState};
+use crate::storage::{handle_framed, StorageRequest, StorageState};
 
 /// Maximum accepted upload body (object limit plus multipart overhead).
 pub const MAX_STORAGE_BODY_BYTES: usize = 260 * 1024 * 1024;
@@ -406,7 +406,7 @@ async fn respond(
     let response = tokio::task::spawn_blocking(move || {
         let _permit = permit;
         let body = buffer.take();
-        handle(
+        handle_framed(
             &state,
             StorageRequest {
                 method,
@@ -420,7 +420,7 @@ async fn respond(
         )
     })
     .await;
-    let Ok(response) = response else {
+    let Ok((response, framed)) = response else {
         return Ok(handler_error_response(
             StatusCode::INTERNAL_SERVER_ERROR,
             b"storage handler failed",
@@ -447,18 +447,20 @@ async fn respond(
         // A `dropConnection` fault: the connection closes without a response.
         return Err(std::io::Error::other("fault plan: connection dropped"));
     }
-    let mut builder = cors(
-        Response::builder()
-            .status(
-                StatusCode::from_u16(response.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
-            )
+    // A response the strict profile framed carries production's own header set; every other
+    // response gets the official emulator's CORS and `nosniff` stamps.
+    let mut builder = Response::builder()
+        .status(StatusCode::from_u16(response.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR));
+    if !framed {
+        builder = cors(
             // Defence in depth: a body typed text/plain that happens to look like markup is
             // never sniffed as HTML on this origin. It does not change how an explicit
             // text/html content-type renders, so it is not a substitute for typing
             // caller-influenced bodies as text/plain -- see storage::gcs_no_such_object.
-            .header("x-content-type-options", "nosniff"),
-        origin.as_deref(),
-    );
+            builder.header("x-content-type-options", "nosniff"),
+            origin.as_deref(),
+        );
+    }
     for (k, v) in response.headers {
         builder = builder.header(k, v);
     }

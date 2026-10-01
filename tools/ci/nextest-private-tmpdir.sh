@@ -40,8 +40,9 @@ esac
 
 for stale in "$root"/run-*; do
     [ -L "$stale" ] && continue
+    [ -d "$stale" ] || continue
     # shellcheck disable=SC3067
-    [ -d "$stale" ] && [ -O "$stale" ] || continue
+    [ -O "$stale" ] || continue
     name=${stale##*/}
     case $name in
     run-*.[A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9]) ;;

@@ -8,10 +8,12 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createRecorder, createSelfRecorder, readRecords } from "./calendar-recorder.mjs";
 import {
+  REFUSAL_FORMATS,
   controlOutcome,
   interpretLsof,
   judgeInventory,
   parseInventory,
+  refusalLineCheck,
   refusalVerdict,
   validateRecords,
 } from "./calendar-accounting.mjs";
@@ -169,6 +171,29 @@ export function claimArguments({ script, database, cwd, service }) {
     "--format",
     "json",
   ];
+}
+
+/** Condition (A): the pinned refusal line against the format strings at the pinned source. */
+export async function checkPinnedRefusalLine(recorder, { sourceRepo, sourceCommit, line, input }) {
+  if (typeof sourceRepo !== "string" || resolve(sourceRepo) !== sourceRepo)
+    throw new Error("explicit absolute source repository required");
+  if (!/^[a-f0-9]{40}$/.test(sourceCommit ?? ""))
+    throw new Error("full pinned source commit required");
+  const sources = {};
+  for (const { path } of Object.values(REFUSAL_FORMATS)) {
+    const answer = await recorder.execFile(
+      "git",
+      ["-C", sourceRepo, "show", `${sourceCommit}:${path}`],
+      { env: cleanEnv(), timeoutMs: 20000 },
+      "pinned-source",
+    );
+    if (answer.code === 0) sources[path] = answer.stdout;
+  }
+  return refusalLineCheck(line, {
+    functionName: "calendarProbe",
+    timeZone: input?.timeZone,
+    sources,
+  });
 }
 
 const identityOf = (row) => ({ pid: row.pid, uid: row.uid, started: row.started });
@@ -350,6 +375,18 @@ export async function measure(planPath) {
     harnessVersion: version,
   });
   const portctlSha256 = digest(await readFile(plan.portctl));
+  const refusalCheck = await checkPinnedRefusalLine(recorder, {
+    sourceRepo: plan.sourceRepo,
+    sourceCommit: plan.pins?.sourceCommit,
+    line: plan.pins?.refusalLine,
+    input: plan.session.input,
+  });
+  // Checked before the launch: a certificate whose pinned line the source does not explain is
+  // never run.
+  if (certificate && !refusalCheck.ok) {
+    recorder.close();
+    throw new Error("the pinned refusal line is not explained by the pinned source");
+  }
   await privateJson(join(accDir, "plan.json"), { ...plan, escalation, harnessVersion: version });
   const launchTime = Math.floor(Date.now() / 1000) * 1000;
   const rootRows = await snapshotWith(recorder);
@@ -408,6 +445,7 @@ export async function measure(planPath) {
     escalation,
     pins: plan.pins,
     identity: outerResult?.identity ? { ...outerResult.identity, portctlSha256 } : undefined,
+    refusalCheck,
     daemon: inner
       ? {
           exitCode: inner.exitCode,

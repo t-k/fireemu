@@ -7,6 +7,9 @@ import {
   refusalVerdict,
   parseInventory,
   controlOutcome,
+  REFUSAL_FORMATS,
+  rustDebugString,
+  refusalLineCheck,
 } from "./calendar-accounting.mjs";
 
 function generated(seed) {
@@ -432,13 +435,14 @@ function verdictInput() {
     portctlSha256: "f".repeat(64),
     exitCode: 1,
     refusalLine:
-      'manifest: function "calendarProbe": time zone: unknown time zone "Invalid/CalendarZone"',
+      'error: manifest: function "calendarProbe": time zone: unknown time zone "Invalid/CalendarZone"',
   };
   return {
     certificate: true,
     escalation: "on",
     pins,
     identity: { ...pins, exitCode: undefined, refusalLine: undefined },
+    refusalCheck: { ok: true, problems: [] },
     daemon: {
       exitCode: 1,
       diagnostics: ["functions loaded: none", pins.refusalLine],
@@ -459,6 +463,11 @@ const breaks = {
   "portctl hash differs": [(v) => (v.identity.portctlSha256 = "0".repeat(64)), "fail", "A"],
   "exit status differs": [(v) => (v.daemon.exitCode = 0), "fail", "A"],
   "refusal line differs": [(v) => (v.daemon.diagnostics = ["unknown time zone"]), "fail", "A"],
+  "pinned line unexplained by the pinned source": [
+    (v) => (v.refusalCheck = { ok: false, problems: ["x"] }),
+    "fail",
+    "A",
+  ],
   "outer not a session leader": [(v) => (v.chain.outerSid = 50), "fail", "B"],
   "no daemon birth": [(v) => (v.records.births.inner = ["ps"]), "fail", "B"],
   "records incomplete": [
@@ -474,14 +483,17 @@ const breaks = {
     "fail",
     "E",
   ],
+  // Breaks compose: one that touches a field another may have broken keeps that break.
   "inventory inconclusive": [
-    (v) => (v.inventory = { outcome: "inconclusive", survivors: [] }),
+    (v) => {
+      if (v.inventory.outcome === "clean") v.inventory = { outcome: "inconclusive", survivors: [] };
+    },
     "inconclusive",
     "E",
   ],
   "claim kept": [(v) => (v.ports.claims = [{ port: 12345 }]), "fail", "F"],
-  listener: [(v) => (v.ports.lsof = [{ result: "listener", pids: [9] }]), "fail", "F"],
-  "lsof inconclusive": [(v) => (v.ports.lsof = [{ result: "inconclusive" }]), "inconclusive", "F"],
+  listener: [(v) => v.ports.lsof.push({ result: "listener", pids: [9] }), "fail", "F"],
+  "lsof inconclusive": [(v) => v.ports.lsof.push({ result: "inconclusive" }), "inconclusive", "F"],
   "escalation off in a certificate": [(v) => (v.escalation = "off"), "fail", "G"],
 };
 
@@ -509,6 +521,7 @@ test("a control run may turn escalation off, and a missing input is never a pass
   for (const key of [
     "pins",
     "identity",
+    "refusalCheck",
     "daemon",
     "chain",
     "records",
@@ -640,4 +653,58 @@ test("the positive control passes B-F, including D, and observes the runner and 
     ).counts,
     false,
   );
+});
+
+// Condition (A): the pinned refusal line is explained by the format strings at the pinned source,
+// so its expected value is not taken only from the harness's own output (review S-d).
+const pinnedSources = () =>
+  Object.fromEntries(
+    Object.values(REFUSAL_FORMATS).map(({ path, text }) => [path, `fn x() {\n    ${text}\n}\n`]),
+  );
+const fixture = { functionName: "calendarProbe", timeZone: "Invalid/CalendarZone" };
+const core =
+  'manifest: function "calendarProbe": time zone: unknown time zone "Invalid/CalendarZone"';
+
+test("rustDebugString quotes as Rust's Debug for str does, and refuses what it does not model", () => {
+  assert.equal(rustDebugString("Invalid/CalendarZone"), '"Invalid/CalendarZone"');
+  assert.equal(rustDebugString('a"b\\c'), '"a\\"b\\\\c"');
+  assert.equal(rustDebugString("a'b"), '"a\'b"');
+  assert.equal(rustDebugString("\n\r\t\0"), '"\\n\\r\\t\\0"');
+  assert.equal(rustDebugString("\x01\x1f\x7f"), '"\\u{1}\\u{1f}\\u{7f}"');
+  assert.equal(rustDebugString(" ~"), '" ~"');
+  for (const value of ["\u00e9", "\u200d", 7, null]) assert.equal(rustDebugString(value), null);
+});
+
+test("the pinned refusal line is explained by the format strings at the pinned source", () => {
+  assert.deepEqual(refusalLineCheck("error: " + core, { ...fixture, sources: pinnedSources() }), {
+    ok: true,
+    problems: [],
+  });
+  const wrapped = 'error: the Functions codebase "default": ' + core;
+  assert.equal(refusalLineCheck(wrapped, { ...fixture, sources: pinnedSources() }).ok, true);
+  for (const [name, line] of [
+    ["no error prefix", core],
+    ["unexplained wrapper", "error: functions[default]: " + core],
+    ["another zone", "error: " + core.replace("Invalid/CalendarZone", "Invalid/Other")],
+    ["another function", "error: " + core.replace("calendarProbe", "calendarReceipt")],
+    ["trailing text", "error: " + core + " "],
+    ["not a string", undefined],
+  ])
+    assert.equal(refusalLineCheck(line, { ...fixture, sources: pinnedSources() }).ok, false, name);
+  for (const { path } of Object.values(REFUSAL_FORMATS)) {
+    const sources = pinnedSources();
+    sources[path] = sources[path].replace("format!", "format !").replace("eprintln!", "println!");
+    const result = refusalLineCheck("error: " + core, { ...fixture, sources });
+    assert.equal(result.ok, false, path);
+    assert.ok(
+      result.problems.some((problem) => problem.includes(path)),
+      path,
+    );
+  }
+  const unmodelled = refusalLineCheck("error: " + core, {
+    ...fixture,
+    timeZone: "Zone\u00e9",
+    sources: pinnedSources(),
+  });
+  assert.equal(unmodelled.ok, false);
 });

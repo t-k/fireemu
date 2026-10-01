@@ -251,6 +251,78 @@ export function interpretLsof({ code, stdout, stderr, timedOut }) {
   return pids.length ? { result: "listener", pids } : { result: "inconclusive" };
 }
 
+/**
+ * The format strings that produce the refusal line at the pinned source (design v4 section 3):
+ * the zone error, the manifest wrapper, the codebase-label wrapper and the CLI's failure line.
+ */
+export const REFUSAL_FORMATS = Object.freeze({
+  zone: Object.freeze({
+    path: "crates/fireemu-adapter-functions/src/zone.rs",
+    text: 'format!("unknown time zone {name:?}")',
+  }),
+  manifest: Object.freeze({
+    path: "crates/fireemu-adapter-functions/src/manifest_json.rs",
+    text: 'format!("manifest: function {name:?}: time zone: {e}")',
+  }),
+  label: Object.freeze({
+    path: "crates/fireemu/src/functions.rs",
+    text: 'format!("the Functions codebase {label:?}: {e}")',
+  }),
+  fail: Object.freeze({
+    path: "crates/fireemu/src/main.rs",
+    text: 'eprintln!("error: {}", e.message)',
+  }),
+});
+
+const DEBUG_ESCAPES = {
+  '"': '\\"',
+  "\\": "\\\\",
+  "\n": "\\n",
+  "\r": "\\r",
+  "\t": "\\t",
+  "\0": "\\0",
+};
+
+/**
+ * `{value:?}` for a Rust `&str`, for printable ASCII and control characters only; anything else
+ * (where Rust's escaping depends on Unicode tables) is not modelled and gives null.
+ */
+export function rustDebugString(value) {
+  if (typeof value !== "string") return null;
+  let out = '"';
+  for (const char of value) {
+    const code = char.codePointAt(0);
+    if (Object.hasOwn(DEBUG_ESCAPES, char)) out += DEBUG_ESCAPES[char];
+    else if (code < 0x20 || code === 0x7f) out += `\\u{${code.toString(16)}}`;
+    else if (code < 0x7f) out += char;
+    else return null;
+  }
+  return out + '"';
+}
+
+/**
+ * Whether `line` is exactly what the pinned source prints for the fixture's refusal: the CLI's
+ * `error: ` prefix, any number of codebase-label wrappers, then the manifest and zone errors.
+ * `sources` maps each REFUSAL_FORMATS path to its text at the pinned commit.
+ */
+export function refusalLineCheck(line, { functionName, timeZone, sources }) {
+  const problems = [];
+  for (const { path, text } of Object.values(REFUSAL_FORMATS))
+    if (typeof sources?.[path] !== "string" || !sources[path].includes(text))
+      problems.push(`format string missing at the pinned source: ${path}`);
+  const name = rustDebugString(functionName),
+    zone = rustDebugString(timeZone);
+  if (name === null || zone === null) problems.push("the fixture's names are not modelled");
+  else if (typeof line !== "string") problems.push("no pinned refusal line");
+  else {
+    const core = `manifest: function ${name}: time zone: unknown time zone ${zone}`;
+    const wrappers = /^error: (?:the Functions codebase "(?:[^"\\]|\\.)*": )*$/;
+    if (!line.endsWith(core) || !wrappers.test(line.slice(0, line.length - core.length)))
+      problems.push("the pinned refusal line is not explained by the pinned format strings");
+  }
+  return { ok: problems.length === 0, problems };
+}
+
 const PINNED = [
   "sourceCommit",
   "binarySha256",
@@ -281,7 +353,9 @@ export function refusalVerdict(run) {
       reasons: [...reasons, ...unknown],
     };
   };
-  check("A", ["pins", "identity", "daemon"], (fail) => {
+  check("A", ["pins", "identity", "refusalCheck", "daemon"], (fail) => {
+    if (run.refusalCheck.ok !== true)
+      fail.push(...(run.refusalCheck.problems?.length ? run.refusalCheck.problems : ["unchecked"]));
     for (const key of PINNED)
       if (run.identity[key] !== run.pins[key]) fail.push(`${key} differs from its pin`);
     if (run.daemon.exitCode !== run.pins.exitCode)

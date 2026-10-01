@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createHash } from "node:crypto";
-import { access, chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { access, chmod, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -16,6 +16,9 @@ const here = (name) => fileURLToPath(new URL("./" + name, import.meta.url));
 const portctl =
   process.env.FIREEMU_TEST_PORTCTL ??
   join(process.env.HOME ?? "/", ".agents/skills/port-registry/scripts/portctl.py");
+const sourceRepo = fileURLToPath(new URL("../..", import.meta.url)).replace(/\/$/, "");
+// The pinned build's source (stage3), whose format strings explain the refusal line.
+const PINNED_SOURCE = "33970bf501ac85e62fd8aee488d16a9405a8a019";
 const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const anchor = "2026-10-02T00:00:00Z";
 const REFUSAL_ZONE = "Invalid/CalendarZone";
@@ -67,13 +70,14 @@ async function planFor(t, { timeZone, control, positive }) {
       runner,
       binarySha256: digest(await readFile(binary)),
       runnerSha256: digest(await readFile(runner)),
-      sourceCommit: "a".repeat(40),
+      sourceCommit: PINNED_SOURCE,
       anchor,
       input,
     },
     portctl,
+    sourceRepo,
     pins: {
-      sourceCommit: "a".repeat(40),
+      sourceCommit: PINNED_SOURCE,
       binarySha256: digest(await readFile(binary)),
       runnerSha256: digest(await readFile(runner)),
       fixtureSha256: digest(calendarFixture(input)),
@@ -127,6 +131,32 @@ test("a plan names one run kind, and each control runs on its own fixture varian
     planKind({ ...session(REFUSAL_ZONE), control: { mode: "orphan" }, positive: true }),
   );
 });
+
+test(
+  "a certificate whose pinned line the pinned source does not explain is never launched",
+  { skip },
+  async (t) => {
+    const { path, plan } = await planFor(t, { timeZone: REFUSAL_ZONE });
+    for (const line of [
+      refusalLine.replace("error: ", "fatal: "),
+      refusalLine + ".",
+      'error: functions[default]: manifest: function "calendarProbe": time zone: unknown time zone "Invalid/CalendarZone"',
+    ]) {
+      await writeFile(path, JSON.stringify({ ...plan, pins: { ...plan.pins, refusalLine: line } }));
+      await assert.rejects(measure(path), /not explained by the pinned source/, line);
+    }
+    await writeFile(
+      path,
+      JSON.stringify({ ...plan, pins: { ...plan.pins, sourceCommit: "a".repeat(40) } }),
+    );
+    await assert.rejects(measure(path), /not explained by the pinned source/);
+    const runs = join(plan.session.root, "conformance/.runs");
+    for (const name of await readdir(runs)) {
+      const records = await readRecords(join(runs, name, "records/measure.jsonl"));
+      assert.ok(!records.some((row) => row.type === "birth" && row.purpose === "outer"), name);
+    }
+  },
+);
 
 test(
   "the refusal run passes (A)-(G) end to end against the stand-in daemon",

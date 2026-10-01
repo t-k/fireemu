@@ -367,7 +367,7 @@ This is a local fixed-window simulation. It does not reproduce Firebase’s full
 
 ### Configure execution time
 
-Set the emulator’s starting time with `daemon.clockStart`. Configure the clock, time zone, and other scheduling behavior in the `scheduler` section. This lets you test scheduled functions independently of the actual time.
+Set the emulator’s starting time with `daemon.clockStart`. Configure the clock, time zone, and other scheduling behavior in the `scheduler` section. This lets you test scheduled functions independently of the actual time. Moving the clock backwards (`clock:set` with `"allowBackwards": true`, or **Allow moving backwards** on the Runtime page) makes ID tokens issued after the new time fail verification until the clock reaches their issue time again, so sign in again after a rewind.
 
 See the [configuration schema](spec/config/fireemu.schema.json) for available settings and values. 
 

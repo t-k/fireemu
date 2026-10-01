@@ -41,6 +41,9 @@ argon2 = { version = "0.5", default-features = false, features = ["alloc"] }
 bcrypt = "0.16"
 roxmltree = "0.21.1"
 
+[dev-dependencies]
+proptest.workspace = true
+
 [lints]
 workspace = true
 

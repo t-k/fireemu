@@ -5,7 +5,7 @@
 //! GET  /health/ready
 //! GET  /v1/capabilities
 //! GET  /v1/sessions/{session}                 -> { "clock": "<rfc3339>" }
-//! POST /v1/sessions/{session}/clock:set       { "instant": "<rfc3339>" }
+//! POST /v1/sessions/{session}/clock:set       { "instant": "<rfc3339>", "allowBackwards": bool? }
 //! POST /v1/sessions/{session}/clock:advance   { "seconds": n } | { "millis": n }
 //! POST /v1/sessions/{session}/clock:advanceTo { "instant": "<rfc3339>" }
 //! POST /v1/sessions/{session}:awaitIdle       { "timeoutSeconds": n }
@@ -13,6 +13,10 @@
 //! POST /v1/sessions/{session}/functions/{name}:run
 //! GET  /v1/sessions/{session}/rules/requests
 //! ```
+//!
+//! `clock:set` moves backwards only with `"allowBackwards": true`. Such a rewind makes ID tokens
+//! whose `iat` or `auth_time` is later than the new instant fail verification as malformed (their
+//! claims are in the future) until the clock reaches them again.
 //!
 //! The daemon currently runs one implicit session; every session name maps to it. Sessions,
 //! snapshots and `await-idle` arrive with the session runtime.

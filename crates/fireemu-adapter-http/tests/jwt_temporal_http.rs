@@ -1,15 +1,16 @@
 //! Time-claim validation through the Auth adapter using the existing public test RSA key.
 //! These tests invoke the real HTTP handler in-process, not a listening server or Google.
 
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock, RwLock};
 
+use fireemu_adapter_http::control::{self, ControlState};
 use fireemu_adapter_http::identity_toolkit::{
     handle, handle_with, AuthState, RequestHeaders, OWNER_CREDENTIAL,
 };
 use fireemu_adapter_http::signing::RsaSigner;
 use fireemu_core_auth::jwt::{
     base64url_decode, base64url_encode, decode_token, encode_payload_with, verify_rules_token,
-    JwtError, TokenAcceptance,
+    JwtError, TokenAcceptance, IDENTITY_TOOLKIT_EXPIRY_LEEWAY_SECONDS,
 };
 use fireemu_core_auth::mfa::TotpPolicy;
 use fireemu_core_auth::store::AuthStore;
@@ -228,5 +229,124 @@ fn session_cookie_creation_refuses_future_time_claims_and_accepts_the_original()
         );
         assert_eq!(rejected.status, 400);
         assert!(rejected.body.get("sessionCookie").is_none());
+    }
+}
+
+/// The control API over the Auth adapter's clock, as the daemon shares one clock between them.
+fn control_over(clock: Arc<Mutex<VirtualClock>>) -> ControlState {
+    ControlState {
+        clock,
+        require_demo_prefix: true,
+        edition: fireemu_core_types::edition::FirestoreEdition::Standard,
+        capabilities: json!({"schemaVersion": 1}).into(),
+        rules: Arc::new(fireemu_core_rules::runtime::RulesetSlot::default()),
+        storage_rules: Arc::new(fireemu_adapter_http::storage::StorageRulesRegistry::default()),
+        reset_hooks: Vec::new(),
+        functions: None,
+        control_token: "test-token".to_owned(),
+        app_check: None,
+        barrier: None,
+        snapshot_hooks: Vec::new(),
+        snapshots: Mutex::new(std::collections::BTreeMap::new()),
+        faults: None,
+        text_indexes: Arc::new(Mutex::new(
+            fireemu_core_firestore::text_index::TextIndexCatalog::default(),
+        )),
+        default_project: "demo-app".to_owned(),
+        tenancy: Arc::new(RwLock::new(fireemu_core_session::tenancy::Tenancy::new(
+            "demo-app",
+        ))),
+        sessions: Mutex::new(std::collections::BTreeMap::from([(
+            "default".to_owned(),
+            "demo-app".to_owned(),
+        )])),
+        project_hooks: None,
+        resource_hooks: Vec::new(),
+    }
+}
+
+/// `POST clock:set` on the default session; returns the control API's status.
+fn set_clock(control: &ControlState, at: LogicalInstant, allow_backwards: bool) -> u16 {
+    let instant = at.to_rfc3339().unwrap();
+    let body = if allow_backwards {
+        json!({"instant": instant, "allowBackwards": true})
+    } else {
+        json!({"instant": instant})
+    };
+    control::handle(control, "POST", "/v1/sessions/default/clock:set", &body).status
+}
+
+fn lookup_status(state: &AuthState, token: &str) -> u16 {
+    handle(state, "POST", LOOKUP, &json!({"idToken": token})).status
+}
+
+/// `clock:set {"allowBackwards": true}` below a held token's `iat`/`auth_time` refuses the
+/// token as malformed (its claims are now in the future) until the clock reaches them again.
+/// This is deliberate: production clocks never rewind, so no production shape justifies an
+/// allowance, and the refusal is fail-closed. A rewind inside the issuance second, and a
+/// forward-only `clock:set`, keep the token usable.
+#[test]
+fn a_clock_rewind_below_issuance_refuses_a_held_token_until_the_clock_catches_up() {
+    let (state, _, token, _) = setup();
+    let control = control_over(state.clock.clone());
+    assert_eq!(set_clock(&control, at_offset(30_000_000_000), false), 200);
+    assert_eq!(lookup_status(&state, &token), 200, "positive control");
+    // A plain clock:set never moves backwards: it is refused and the token stays usable.
+    assert_eq!(set_clock(&control, at_offset(-1), false), 400);
+    assert_eq!(lookup_status(&state, &token), 200);
+    // Back into the issuance second: the whole-second claims are not in the future.
+    assert_eq!(set_clock(&control, AT, true), 200);
+    assert_eq!(lookup_status(&state, &token), 200);
+    // One nanosecond before the issuance second: refused, and the account cannot change.
+    assert_eq!(set_clock(&control, at_offset(-1), true), 200);
+    let refused = handle(&state, "POST", LOOKUP, &json!({"idToken": token}));
+    assert_eq!(refused.status, 400);
+    assert_eq!(refused.body["error"]["message"], "INVALID_ID_TOKEN");
+    let update = handle(
+        &state,
+        "POST",
+        UPDATE,
+        &json!({"idToken": token, "displayName": "must-not-be-committed"}),
+    );
+    assert_eq!(update.status, 400);
+    // The clock catching up again restores the token: nothing was revoked.
+    assert_eq!(set_clock(&control, AT, false), 200);
+    let restored = handle(&state, "POST", LOOKUP, &json!({"idToken": token}));
+    assert_eq!(restored.status, 200);
+    assert!(restored.body["users"][0].get("displayName").is_none());
+}
+
+fn at_offset(nanos: i128) -> LogicalInstant {
+    LogicalInstant::from_nanos(AT.as_nanos() + nanos)
+}
+
+proptest::proptest! {
+    #![proptest_config(proptest::test_runner::Config {
+        cases: 48,
+        ..proptest::test_runner::Config::default()
+    })]
+
+    /// Model: after any opt-in rewind (or forward set) to `AT + offset`, a token issued at
+    /// `AT` with a one-hour lifetime verifies exactly when `0 <= offset < 3600 s + leeway`:
+    /// whole-second claims make the issuance second usable, earlier instants put `iat` and
+    /// `auth_time` in the future, and `exp` plus Identity Toolkit's recorded allowance closes
+    /// the window.
+    #[test]
+    fn a_held_token_verifies_exactly_inside_its_issuance_window_after_any_clock_set(
+        offset in proptest::prop_oneof![
+            -7_200_000_000_000i128..=7_200_000_000_000i128,
+            -2_000_000_000i128..=2_000_000_000i128,
+            3_898_000_000_000i128..=3_902_000_000_000i128,
+        ],
+        detour in 0i128..=7_200_000_000_000i128,
+    ) {
+        let (state, _, token, _) = setup();
+        let control = control_over(state.clock.clone());
+        // Reach the target from a later instant, as a rewind in a replayed scenario would.
+        proptest::prop_assert_eq!(set_clock(&control, at_offset(detour), false), 200);
+        proptest::prop_assert_eq!(set_clock(&control, at_offset(offset), true), 200);
+        let lifetime = i128::from(3_600 + IDENTITY_TOOLKIT_EXPIRY_LEEWAY_SECONDS) * 1_000_000_000;
+        let expected = (0..lifetime).contains(&offset);
+        proptest::prop_assert_eq!(lookup_status(&state, &token) == 200, expected);
     }
 }

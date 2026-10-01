@@ -15,10 +15,35 @@ import argparse
 import json
 import re
 import sys
+import unicodedata
 from pathlib import Path
 
 CAUGHT, MISSED, UNVIABLE, TIMEOUT = "CaughtMutant", "MissedMutant", "Unviable", "Timeout"
 SHARD_DIRECTORY = re.compile(r"^mutants-shard-(\d+)$")
+
+
+MAX_NAME = 300
+
+
+def clean(value, limit=MAX_NAME):
+    """A string taken from a shard, made safe to print and to put in Markdown.
+
+    The shard's code can write anything into its outcomes: control characters, newlines (which would
+    forge headings), bidirectional overrides, backticks. Each such character becomes a visible
+    `\\uXXXX` escape, backticks become apostrophes, and the text is cut at `limit` characters.
+    """
+    text = value if isinstance(value, str) else repr(value)
+    out = []
+    for char in text:
+        category = unicodedata.category(char)
+        if char == "`":
+            out.append("'")
+        elif category in ("Cc", "Cf", "Cs", "Co", "Cn", "Zl", "Zp") or (category == "Zs" and char != " "):
+            out.append(f"\\u{ord(char):04x}" if ord(char) <= 0xFFFF else f"\\U{ord(char):08x}")
+        else:
+            out.append(char)
+    cleaned = "".join(out)
+    return cleaned if len(cleaned) <= limit else cleaned[: limit - 1] + "…"
 
 
 def read_shard(directory: Path):
@@ -27,7 +52,7 @@ def read_shard(directory: Path):
     try:
         document = json.loads(path.read_text())
     except (OSError, ValueError) as error:
-        return None, f"{path.name} is unreadable: {error}"
+        return None, f"{path.name} is unreadable: {clean(str(error), 120)}"
     outcomes = document.get("outcomes") if isinstance(document, dict) else None
     if not isinstance(outcomes, list):
         return None, f"{path.name} has no outcomes list"
@@ -53,17 +78,28 @@ def merge(shards_dir: Path, expected):
             problems.append(f"shard {shard}: {reason}")
             continue
         for outcome in outcomes:
+            if not isinstance(outcome, dict):
+                problems.append(f"shard {shard}: an outcome is not an object")
+                continue
             summary = outcome.get("summary")
             scenario = outcome.get("scenario")
             if scenario == "Baseline":
                 if summary != "Success":
-                    problems.append(f"shard {shard}: the baseline did not succeed ({summary})")
+                    problems.append(f"shard {shard}: the baseline did not succeed ({clean(summary, 40)})")
                 continue
-            name = scenario["Mutant"]["name"] if isinstance(scenario, dict) else str(scenario)
+            mutant = scenario.get("Mutant") if isinstance(scenario, dict) else None
+            if not isinstance(mutant, dict) or not isinstance(mutant.get("name"), str):
+                problems.append(f"shard {shard}: an outcome has no mutant name")
+                continue
+            name = clean(mutant["name"])
+            if not isinstance(summary, str):
+                problems.append(f"shard {shard}: the outcome of {name} has no summary")
+                continue
             if summary in counts:
                 counts[summary] += 1
             else:
-                other[summary] = other.get(summary, 0) + 1
+                key = clean(summary, 40)
+                other[key] = other.get(key, 0) + 1
             if summary == MISSED:
                 missed.append(name)
             elif summary == TIMEOUT:

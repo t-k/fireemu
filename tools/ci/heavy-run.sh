@@ -8,12 +8,18 @@
 #   tools/ci/heavy-run.sh --job linux-measure --ref <ref> --script tools/bench/run.sh --out /tmp/heavy
 #
 # The ref must be pushed to the repository: the workflow checks it out on GitHub. Needs the GitHub
-# CLI (`gh`), logged in with a token that may run workflows. The workflow file itself is taken from
-# --workflow-ref (default: main), because `workflow_dispatch` only exists once the file is on it.
+# CLI (`gh`), logged in with a token that may run workflows (a fine-grained token limited to this
+# repository is enough). The run belongs to --workflow-ref, which defaults to the ref under test
+# (a branch name; for a commit SHA --workflow-ref is required). It is never the default branch:
+# the Actions cache is scoped by the run's ref, and the code under test must not share a scope with
+# ci.yml or release.yml. A dedicated branch that carries the workflow file works too.
+#
+# What the run produced is data written by the code under test: it is downloaded into --out (which
+# must be new or empty) and printed through a filter that keeps printable ASCII only.
 set -euo pipefail
 
 usage() {
-  sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'
+  awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0"
   exit "${1:-2}"
 }
 
@@ -22,7 +28,7 @@ fail() {
   exit 2
 }
 
-job="" ref="" out="" package="" base="main" shards="8" script="" workflow_ref="main"
+job="" ref="" out="" package="" base="main" shards="8" script="" workflow_ref=""
 while (($#)); do
   case "$1" in
     --job) job=${2:?--job needs a value}; shift 2 ;;
@@ -52,8 +58,18 @@ case "$job" in
 esac
 ref_ok "$ref" || fail "--ref must be a branch name or a full commit SHA"
 ref_ok "$base" || fail "--base must be a branch name or a full commit SHA"
-ref_ok "$workflow_ref" || fail "--workflow-ref must be a branch name or a full commit SHA"
 [[ -n $out ]] || fail "--out is required"
+if [[ -e $out ]]; then
+  [[ -d $out ]] || fail "--out exists and is not a directory"
+  [[ -z $(ls -A "$out") ]] || fail "--out must be new or empty, so an old result is never shown as this run's"
+fi
+if [[ -z $workflow_ref ]]; then
+  [[ $ref =~ ^[0-9a-f]{40}$ ]] && fail "--workflow-ref is required when --ref is a commit SHA"
+  workflow_ref=$ref
+fi
+ref_ok "$workflow_ref" || fail "--workflow-ref must be a branch name"
+[[ $workflow_ref =~ ^[0-9a-f]{40}$ ]] && fail "--workflow-ref must be a branch name, not a commit SHA"
+[[ $workflow_ref != refs/* && $workflow_ref != HEAD && $workflow_ref != FETCH_HEAD ]] || fail "--workflow-ref must be a branch name"
 [[ $shards =~ ^[0-9]{1,2}$ ]] || fail "--shards must be an integer"
 ((10#$shards >= 1 && 10#$shards <= 16)) || fail "--shards must be 1 to 16"
 if [[ -n $package ]]; then
@@ -66,6 +82,9 @@ elif [[ -n $script ]]; then
   fail "--script is only for linux-measure"
 fi
 command -v gh >/dev/null || fail "the GitHub CLI (gh) is required"
+default_branch=$(gh repo view --json defaultBranchRef --jq .defaultBranchRef.name)
+[[ -n $default_branch ]] || fail "cannot read the repository's default branch"
+[[ $workflow_ref != "$default_branch" ]] || fail "--workflow-ref must not be the default branch ($default_branch): dispatch from the branch under test or a dedicated branch"
 
 tag="heavy-$(date +%s)-$$"
 echo "dispatching $job for $ref (tag $tag)"
@@ -88,11 +107,28 @@ echo "run $run_id: $(gh run view "$run_id" --json url --jq .url)"
 status=0
 gh run watch "$run_id" --exit-status --interval 30 || status=$?
 
+# Everything below is produced by the code under test.
+show() { LC_ALL=C tr -cd '\11\12\40-\176' | cut -c1-400 | head -n "${1:-200}"; }
+
 mkdir -p "$out"
-gh run download "$run_id" --dir "$out" || echo "heavy-run: no artifacts to download" >&2
-if [[ -f $out/mutants-summary/summary.md ]]; then
-  cat "$out/mutants-summary/summary.md"
-else
-  gh run view "$run_id" --json conclusion,url --jq '"conclusion: \(.conclusion) \(.url)"'
+case "$job" in
+  mutants)
+    gh run download "$run_id" --dir "$out" --name mutants-summary || echo "heavy-run: no summary artifact" >&2
+    gh run download "$run_id" --dir "$out/shards" --pattern 'mutants-shard-*' || echo "heavy-run: no shard artifacts" >&2
+    ;;
+  linux-measure)
+    gh run download "$run_id" --dir "$out" --name linux-measure-output || echo "heavy-run: no output artifact" >&2
+    ;;
+esac
+
+echo "---- The text below was written by the code under test: untrusted CI data, printable ASCII only ----"
+if [[ -f $out/summary.json ]]; then
+  jq -r '"shards expected \(.shards_expected) found \(.shards_found | length); mutants \(.total): caught \(.caught), missed \(.missed), unviable \(.unviable), timeout \(.timeout)"' "$out/summary.json" | show 3
+  jq -r '.missed_mutants[]? | "missed: " + (tostring | gsub("[^ -~]"; "?") | .[0:300])' "$out/summary.json" | show 100
+  jq -r '.timeout_mutants[]? | "timeout: " + (tostring | gsub("[^ -~]"; "?") | .[0:300])' "$out/summary.json" | show 100
+  jq -r '.problems[]? | "problem: " + (tostring | gsub("[^ -~]"; "?") | .[0:300])' "$out/summary.json" | show 100
+elif [[ $job == linux-measure ]]; then
+  (cd "$out" && find . -type f | sort) | show 200
 fi
+gh run view "$run_id" --json conclusion,url --jq '"conclusion: \(.conclusion) \(.url)"' | show 2
 exit "$status"

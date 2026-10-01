@@ -70,4 +70,47 @@ class HeavyVerificationContractTest < Minitest::Test
   def test_a_different_toolchain_is_refused
     assert_violation(REAL.sub("toolchain: 1.94.0", "toolchain: stable"), "the toolchain must be")
   end
+
+  def test_a_cache_that_saves_is_refused
+    assert_violation(REAL.gsub('save-if: "false"', 'save-if: "true"'), "must not save")
+    assert_violation(REAL.gsub('save-if: "false"', "save-if: ${{ github.ref == 'refs/heads/main' }}"), "must not save")
+    cache = "      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830\n        with:\n          path: target\n          key: k\n"
+    assert_violation(REAL.sub("      - uses: Swatinem/rust-cache", cache + "      - uses: Swatinem/rust-cache"), "actions/cache")
+  end
+
+  def test_persisted_checkout_credentials_are_refused
+    assert_violation(REAL.sub("persist-credentials: false", "persist-credentials: true"), "persist credentials")
+    assert_violation(REAL.sub("          persist-credentials: false\n", ""), "persist credentials")
+  end
+
+  def test_an_action_outside_the_table_is_refused
+    script = "      - uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea\n        with:\n          script: console.log('${{ inputs.base }}')\n"
+    assert_violation(REAL.sub("      - uses: Swatinem/rust-cache", script + "      - uses: Swatinem/rust-cache"), "not in the table")
+  end
+
+  def test_an_expression_in_another_step_field_is_refused
+    assert_violation(REAL.sub("    steps:\n", "    steps:\n      - working-directory: ${{ inputs.base }}\n        run: \"true\"\n"), "working-directory")
+    assert_violation(REAL.sub("name: mutants-shard-${{ matrix.shard }}", "name: mutants-${{ inputs.base }}"), "with.name")
+  end
+
+  def test_an_unsafe_runner_switch_is_refused
+    assert_violation(REAL.sub("  CARGO_TERM_COLOR: always\n", "  CARGO_TERM_COLOR: always\n  ACTIONS_ALLOW_UNSECURE_COMMANDS: \"true\"\n"), "runner switch")
+    assert_violation(REAL.sub("  CARGO_TERM_COLOR: always\n", "  CARGO_TERM_COLOR: always\n  ACTIONS_STEP_DEBUG: \"true\"\n"), "runner switch")
+  end
+
+  def test_a_job_level_or_workflow_level_expression_env_is_refused
+    assert_violation(REAL.sub("    timeout-minutes: 5\n", "    timeout-minutes: 5\n    env:\n      X: ${{ inputs.base }}\n"), "env X")
+    assert_violation(REAL.sub("  CARGO_TERM_COLOR: always\n", "  CARGO_TERM_COLOR: always\n  Y: ${{ inputs.base }}\n"), "env Y")
+  end
+
+  def test_an_expression_hidden_beside_an_allowed_one_is_refused
+    assert_violation(REAL.sub("SHARD: ${{ matrix.shard }}", "SHARD: ${{ matrix.shard }}-${{ inputs.base }}"), "unknown context")
+    assert_violation(REAL.sub("SHARD: ${{ matrix.shard }}", "SHARD: x${{ github.event.head_commit.message }}"), "unknown context")
+    assert_violation(REAL.sub("HEAVY_OUT: ${{ runner.temp }}/heavy-out", "HEAVY_OUT: ${{ runner.temp }}/${{ inputs.script }}"), "unknown context")
+  end
+
+  def test_a_release_job_that_restores_a_cache_is_refused_by_the_ci_contract
+    source = File.read(File.join(ROOT, "scripts", "ci-workflow-contract.rb"))
+    assert_includes source, "must not restore a cache"
+  end
 end

@@ -4330,6 +4330,7 @@ fn a_rest_rollback_as_the_first_request_after_the_total_lifetime_is_answered_per
 /// without the retry (a Rollback of the idle-expired one 0, of the lifetime-expired one 409 `ABORTED` "no longer valid"). The emulator profile accepts it
 /// too, as the official emulator does (measured with firebase-tools 15.28.2).
 #[test]
+#[allow(clippy::too_many_lines)]
 fn a_rest_retry_that_names_an_expired_token_is_answered_per_profile() {
     const GONE: &str = "The referenced transaction has expired or is no longer valid.";
     for strict in [true, false] {

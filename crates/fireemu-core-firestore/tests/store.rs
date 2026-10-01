@@ -3719,6 +3719,19 @@ fn a_rollback_of_an_idle_expired_token_before_the_lifetime_is_accepted() {
     noticed.rollback_at(&transaction, t(132)).unwrap();
 }
 
+// The 270 s edge of that rule: an idle-expired token's Rollback is accepted up to 269 s and answered 10 from 270 s (the total lifetime).
+#[test]
+fn the_past_lifetime_rollback_rule_starts_exactly_at_270_s() {
+    let mut finished = FirestoreState::with_limit_scope(LimitScope::Production);
+    let transaction = finished.begin_transaction(false, t(0)).unwrap();
+    aborted_no_longer_valid(finished.touch_transaction(&transaction, t(131)));
+    finished.rollback_at(&transaction, t(269)).unwrap();
+    let mut at_edge = FirestoreState::with_limit_scope(LimitScope::Production);
+    let transaction = at_edge.begin_transaction(false, t(0)).unwrap();
+    aborted_no_longer_valid(at_edge.touch_transaction(&transaction, t(131)));
+    aborted_no_longer_valid(at_edge.rollback_at(&transaction, t(270)));
+}
+
 // INFERRED, not recorded: an idle-expired token that no request noticed also answers a Rollback past 270 s with 10 (P13a recorded it only
 // after reads that answered 10), and a lifetime-expired token does so as its first request (P12, P13a).
 #[test]

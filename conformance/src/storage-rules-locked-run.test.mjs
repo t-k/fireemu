@@ -1,6 +1,7 @@
+import { replaceFile } from "./test-replace-file.mjs";
 import { tmpdir } from "node:os";
 import assert from "node:assert/strict";
-import { lstat, mkdir, mkdtemp, readdir, readFile, rm, unlink, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, readdir, readFile, rm, unlink } from "node:fs/promises";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
@@ -114,8 +115,7 @@ test("a lock file replaced in the middle of a run stops the very next request an
         swapped = true;
         const path = join(dirs.lockDir, "fireemu-oracle-query.lock");
         const body = await readFile(path, "utf8");
-        await unlink(path);
-        await writeFile(path, body, { mode: 0o600 });
+        await replaceFile(path, body, { mode: 0o600 });
       }
     } });
     outcome = await h.controller.run();

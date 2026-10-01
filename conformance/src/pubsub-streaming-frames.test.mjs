@@ -194,20 +194,47 @@ test("finish detects every incomplete frame prefix and makes clean closure final
   assert.equal(d.finish().outcome, "complete-framing");
   assert.throws(() => d.push(Buffer.alloc(0)), /stopped/);
 });
-test("a reflected credential completing across any chunk boundary never enters emitted receipts", async () => {
+test("no emitted receipt holds the credential's first eight bytes, across any two or three chunks", async () => {
+  // Screening matches the first eight bytes of the credential, so a chunk that ends partway into a
+  // reflected credential cannot persist more than seven of its bytes.
   const credential = "SYNTHETIC-SECRET";
+  const prefix = Buffer.from(credential).subarray(0, 8);
   const wire = frame(Buffer.from(credential));
-  for (let split = 0; split < wire.length; split++) {
+  const splits = [];
+  for (let first = 0; first <= wire.length; first++)
+    for (let second = first; second <= wire.length; second++) splits.push([first, second]);
+  for (const [first, second] of splits) {
     const d = await decoder({ credential });
-    const first = d.push(wire.subarray(0, split));
-    const second = d.push(wire.subarray(split));
-    assert.equal(second.reason, "credential-reflection");
-    assert.equal(second.raw, undefined);
-    assert.equal(second.frames.length, 0);
-    const recorded = Buffer.from(first.raw.bodyBase64, "base64");
-    assert.equal(recorded.includes(Buffer.from(credential)), false);
+    const parts = [wire.subarray(0, first), wire.subarray(first, second), wire.subarray(second)];
+    const emitted = [];
+    let refused;
+    for (const part of parts) {
+      const result = d.push(part);
+      if (result.raw) emitted.push(Buffer.from(result.raw.bodyBase64, "base64"));
+      assert.equal(result.frames.length, 0, `${first}/${second}`);
+      if (result.reason) {
+        refused = result;
+        break;
+      }
+    }
+    assert.equal(refused?.reason, "credential-reflection", `${first}/${second}`);
+    assert.equal(refused.raw, undefined, `${first}/${second}`);
+    assert.equal(Buffer.concat(emitted).includes(prefix), false, `${first}/${second}`);
+    assert.ok(Buffer.concat(emitted).length <= 5 + 7, `${first}/${second}`);
     assert.equal(d.finish().outcome, "inconclusive-framing");
   }
+});
+test("the credential's eight-byte prefix alone is refused, while seven bytes of it are kept as data", async () => {
+  const credential = "SYNTHETIC-SECRET";
+  const refused = await decoder({ credential });
+  const truncated = refused.push(frame(Buffer.from("SYNTHETI")));
+  assert.equal(truncated.reason, "credential-reflection");
+  assert.equal(truncated.raw, undefined);
+  const kept = await decoder({ credential });
+  const nearMiss = kept.push(frame(Buffer.from("SYNTHETX-SYNTHET")));
+  assert.equal(nearMiss.reason, undefined);
+  assert.equal(nearMiss.frames.length, 1);
+  assert.equal(kept.finish().outcome, "complete-framing");
 });
 test("invalid or unbounded decoder inputs are refused before framing", async () => {
   for (const bound of [0, -1, Infinity, 1.5, Number.MAX_SAFE_INTEGER + 1]) {

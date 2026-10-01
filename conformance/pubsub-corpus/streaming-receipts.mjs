@@ -1,5 +1,5 @@
 // Bounded durable inbound candidates only; peer terminal and owned process proofs belong to the collector.
-import { createStreamingFrameDecoder } from "./streaming-frames.mjs";
+import { createStreamingFrameDecoder, credentialPrefix } from "./streaming-frames.mjs";
 
 export function createStreamingReceiptQueue({
   maxFrameBytes,
@@ -35,7 +35,7 @@ export function createStreamingReceiptQueue({
     maxChunks,
     credential,
   });
-  const secret = credential === undefined ? undefined : Buffer.from(credential);
+  const secret = credential === undefined ? undefined : credentialPrefix(credential);
   const controller = new AbortController(),
     pending = new Map();
   let events = 0,
@@ -198,7 +198,7 @@ export function createStreamingReceiptQueue({
         stop("header-bound");
         return false;
       }
-      if (credential && value.includes(credential)) {
+      if (secret && Buffer.from(value).includes(secret)) {
         stop("credential-reflection");
         return false;
       }

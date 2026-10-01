@@ -945,3 +945,17 @@ test("once issue is entered, any later unknown outcome requires termination, eve
   assert.equal(result.unknownActions, 1);
   assert.equal(result.terminationRequired, true);
 });
+test("an outbound frame holding the credential's first eight bytes is refused before any receipt", async () => {
+  const credential = "SYNTHETIC-SECRET";
+  const { g, events, issued } = await gate({ credential });
+  await g.open();
+  assert.throws(() => g.write(Buffer.from("x SYNTHETI")), /credential/);
+  await g.write(Buffer.from("x SYNTHET"));
+  const result = await g.done();
+  assert.equal(result.frameReservations, 1);
+  assert.deepEqual(
+    issued.map(([kind]) => kind),
+    ["open", "frame"],
+  );
+  assert.equal(events.filter((event) => event.startsWith("before-send")).length, 2);
+});

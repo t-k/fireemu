@@ -765,3 +765,43 @@ test("metadata flags and cumulative header bytes are accepted exactly at their l
   assert.equal(over.q.headers("response", [":status", "200", "a", "bc"], 0), false);
   assert.equal((await over.q.done()).reason, "header-bound");
 });
+test("no stored row holds the credential's first eight bytes in data or metadata", async () => {
+  const credential = "SYNTHETIC-SECRET";
+  const prefix = Buffer.from(credential).subarray(0, 8);
+  const wire = frame(Buffer.from(credential));
+  const cases = {
+    "three-chunk data": (q) => [
+      q.data(wire.subarray(0, 9)),
+      q.data(wire.subarray(9, 11)),
+      q.data(wire.subarray(11)),
+    ],
+    "truncated text value": (q) => [q.headers("trailers", ["details", "token SYNTHETI..."], 0)],
+    "truncated binary value": (q) => [
+      q.headers("trailers", ["details-bin", Buffer.from("xSYNTHETIx").toString("base64")], 0),
+    ],
+  };
+  for (const [name, feed] of Object.entries(cases)) {
+    const { q, saved, frames } = await queue({ credential });
+    assert.equal(feed(q).at(-1), false, name);
+    const result = await q.done();
+    assert.equal(result.reason, "credential-reflection", name);
+    assert.equal(frames.length, 0, name);
+    for (const row of saved) {
+      const stored = row.raw
+        ? Buffer.from(row.raw.bodyBase64, "base64")
+        : Buffer.from(JSON.stringify(row));
+      assert.equal(stored.includes(prefix), false, name);
+    }
+  }
+  // Seven bytes of the prefix are ordinary data and metadata.
+  const { q, saved } = await queue({ credential });
+  assert.equal(q.data(frame(Buffer.from("SYNTHET"))), true);
+  assert.equal(q.headers("trailers", ["details", "SYNTHET"], 0), true);
+  assert.equal(
+    q.headers("trailers", ["details-bin", Buffer.from("SYNTHET").toString("base64")], 0),
+    true,
+  );
+  const result = await q.done();
+  assert.equal(result.reason, undefined);
+  assert.equal(saved.length, 3);
+});

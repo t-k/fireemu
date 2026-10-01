@@ -1,6 +1,11 @@
 // Pure framing candidates only. A guarded caller must persist raw bytes before using messages as evidence.
 import { createHash } from "node:crypto";
 
+// Screens match the credential's first eight bytes (all of it when shorter), so a chunk that ends
+// partway into a reflected credential keeps at most seven of its bytes.
+export function credentialPrefix(credential) {
+  return Buffer.from(credential).subarray(0, 8);
+}
 function receipt(bytes) {
   return {
     bodyBase64: bytes.toString("base64"),
@@ -23,7 +28,7 @@ export function createStreamingFrameDecoder({
     (typeof credential !== "string" || !credential || Buffer.byteLength(credential) > 16384)
   )
     throw new Error("bounded credential required");
-  const secret = credential === undefined ? undefined : Buffer.from(credential);
+  const secret = credential === undefined ? undefined : credentialPrefix(credential);
   let pending = Buffer.alloc(0),
     tail = Buffer.alloc(0),
     frames = 0,

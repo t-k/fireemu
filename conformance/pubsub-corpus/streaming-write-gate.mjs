@@ -1,5 +1,6 @@
 // Injected outbound admission only; no connection, peer status or process-quiescence proof.
 import { createHash } from "node:crypto";
+import { credentialPrefix } from "./streaming-frames.mjs";
 const typedArrayPrototype = Object.getPrototypeOf(Uint8Array.prototype);
 const byteLengthOf = Object.getOwnPropertyDescriptor(typedArrayPrototype, "byteLength").get;
 const byteOffsetOf = Object.getOwnPropertyDescriptor(typedArrayPrototype, "byteOffset").get;
@@ -33,7 +34,7 @@ export function createStreamingWriteGate({
     (typeof credential !== "string" || !credential || Buffer.byteLength(credential) > 16384)
   )
     throw new Error("bounded credential required");
-  const secret = credential === undefined ? undefined : Buffer.from(credential);
+  const secret = credential === undefined ? undefined : credentialPrefix(credential);
   const startedAt = performance.now(),
     deadline = deadlineAt === undefined ? startedAt + wallMs : deadlineAt;
   if (!Number.isFinite(deadline) || deadline <= startedAt || deadline > startedAt + wallMs)

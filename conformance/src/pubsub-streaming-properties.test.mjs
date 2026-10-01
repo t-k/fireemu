@@ -64,8 +64,10 @@ function partition(r, stream, maxParts) {
 }
 
 // Reference decoder: works over the whole accepted byte string with a read cursor instead of the
-// helper's retained buffer and rolling credential tail.
+// helper's retained buffer and rolling credential tail. Screening matches the credential's first
+// eight bytes (the whole credential when shorter).
 function modelFrames(chunks, { maxFrameBytes, maxTotalBytes, maxFrames, maxChunks }, secret) {
+  const needle = secret && secret.subarray(0, 8);
   let accepted = Buffer.alloc(0),
     cursor = 0,
     reason;
@@ -77,7 +79,7 @@ function modelFrames(chunks, { maxFrameBytes, maxTotalBytes, maxFrames, maxChunk
       break;
     }
     const take = chunk.subarray(0, maxTotalBytes - accepted.length);
-    if (secret && Buffer.concat([accepted, take]).includes(secret)) {
+    if (needle && Buffer.concat([accepted, take]).includes(needle)) {
       reason = "credential-reflection";
       break;
     }
@@ -102,6 +104,8 @@ function modelFrames(chunks, { maxFrameBytes, maxTotalBytes, maxFrames, maxChunk
   if (!reason && cursor < accepted.length) reason = "truncated-frame";
   return { raws, frames, reason, bytes: accepted.length };
 }
+// Inserts the credential, or a prefix of it of random length, so near misses below eight bytes are
+// generated next to refusals.
 function randomStream(r, secret) {
   const messages = Array.from({ length: r.int(0, 6) }, () => r.bytes(r.int(0, 24)));
   let stream = Buffer.concat(messages.map(envelope));
@@ -113,7 +117,9 @@ function randomStream(r, secret) {
   if (r.chance(0.15)) stream = Buffer.concat([stream, r.bytes(r.int(1, 7))]);
   if (secret && r.chance(0.5)) {
     const at = r.int(0, stream.length);
-    stream = Buffer.concat([stream.subarray(0, at), secret, stream.subarray(at)]);
+    const cut = r.pick([7, 8, r.int(1, secret.length)]);
+    const fragment = r.chance(0.4) ? secret : secret.subarray(0, Math.min(cut, secret.length));
+    stream = Buffer.concat([stream.subarray(0, at), fragment, stream.subarray(at)]);
   }
   return stream;
 }
@@ -130,7 +136,9 @@ test(
         maxFrames: r.int(1, 8),
         maxChunks: r.int(1, 24),
       };
-      const credential = r.chance(0.3) ? `secret-${r.int(0, 999)}` : undefined;
+      const credential = r.chance(0.4)
+        ? `${r.chance(0.4) ? "s-" : "secret-"}${r.int(0, 99)}${"x".repeat(r.int(0, 6))}`
+        : undefined;
       const secret = credential && Buffer.from(credential);
       const chunks = partition(r, randomStream(r, secret), 30);
       const expected = modelFrames(chunks, caps, secret);
@@ -175,14 +183,24 @@ test(
       assert.equal(summary.frames, expected.frames.length);
       assert.equal(summary.bytes, expected.bytes);
       assert.equal(summary.chunks, expected.raws.length);
-      if (secret)
-        assert.ok(!Buffer.concat(expected.raws.map(({ bytes }) => bytes)).includes(secret));
+      if (secret) {
+        const kept = Buffer.concat(raws.map(({ bodyBase64 }) => Buffer.from(bodyBase64, "base64")));
+        assert.equal(kept.indexOf(secret.subarray(0, 8)), -1);
+        // A credential shorter than eight bytes is screened whole; a kept fragment of seven bytes
+        // shows that near misses are not refused.
+        if (secret.length > 8 && kept.indexOf(secret.subarray(0, 7)) >= 0)
+          return [expected.reason ?? "complete", "near-miss-kept"];
+        if (secret.length < 8 && expected.reason === "credential-reflection")
+          return [expected.reason, "short-credential-refused"];
+      }
       return expected.reason ?? "complete";
     },
     [
       "complete",
       "chunk-count",
       "credential-reflection",
+      "near-miss-kept",
+      "short-credential-refused",
       "total-bound",
       "compression",
       "frame-bound",

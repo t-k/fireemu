@@ -211,6 +211,17 @@ test('production is the sandbox project alone, and a local target must be a demo
   assert.throws(() => validateCall({ ...spec('GetDocument', { name: name('a') }), bearer: 'not-owner' }));
 });
 
+test('production admits the two sandbox projects only, each with its own documents', async () => {
+  const { validateCall, SANDBOX_PROJECTS } = await module();
+  assert.deepEqual([...SANDBOX_PROJECTS], ['fireemu-oracle-sbx', 'fireemu-oracle-txn']);
+  const production = (projectId, documentProject = projectId, transport = 'rest') => ({ ...spec('GetDocument', { name: `projects/${documentProject}/databases/(default)/documents/oracle/${nonce}/txn-toy/a` }, transport), target: { kind: 'production' }, projectId, bearer: 'ya29.token-value_1' });
+  for (const transport of ['rest', 'grpc']) for (const projectId of SANDBOX_PROJECTS) validateCall(production(projectId, projectId, transport));
+  for (const projectId of ['fireemu-oracle-idp', 'fireemu-oracle-query', 'fireemu-35fe6', 'demo-toy', 'fireemu-oracle-txn2', '']) assert.throws(() => validateCall(production(projectId)), undefined, projectId);
+  // a call for one project cannot name the other's documents
+  assert.throws(() => validateCall(production('fireemu-oracle-txn', 'fireemu-oracle-sbx')));
+  assert.throws(() => validateCall(production('fireemu-oracle-sbx', 'fireemu-oracle-txn')));
+});
+
 test('a native version delete is admitted over gRPC only', async () => {
   const { validateCall } = await module();
   const request = { name: name('a'), currentDocument: { updateTime: { seconds: '1788004860', nanos: 123 } } };
@@ -290,8 +301,10 @@ test('injection is a local-target convenience only', async () => {
 test('REST headers carry the credential, and the user project only in production', async () => {
   const { restHeaders } = await module();
   assert.deepEqual(restHeaders(spec('GetDocument', { name: name('a') }, 'rest')), { authorization: 'Bearer owner', accept: 'application/json' });
-  const production = { ...spec('GetDocument', { name: name('a') }, 'rest'), target: { kind: 'production' }, bearer: 'ya29.token' };
-  assert.deepEqual(restHeaders(production), { authorization: 'Bearer ya29.token', accept: 'application/json', 'x-goog-user-project': 'fireemu-oracle-sbx' });
+  for (const projectId of ['fireemu-oracle-sbx', 'fireemu-oracle-txn']) {
+    const production = { ...spec('GetDocument', { name: name('a') }, 'rest'), target: { kind: 'production' }, projectId, bearer: 'ya29.token' };
+    assert.deepEqual(restHeaders(production), { authorization: 'Bearer ya29.token', accept: 'application/json', 'x-goog-user-project': projectId });
+  }
 });
 
 test('the real REST exchange refuses an answer over the size cap', async () => {

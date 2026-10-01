@@ -26,6 +26,8 @@ const UNKNOWN_CODES = [1, 2, 4, 13, 14];
 // google.rpc.Code by the `status` name a REST error carries.
 const STATUS_CODES = { OK: 0, CANCELLED: 1, UNKNOWN: 2, INVALID_ARGUMENT: 3, DEADLINE_EXCEEDED: 4, NOT_FOUND: 5, ALREADY_EXISTS: 6, PERMISSION_DENIED: 7, RESOURCE_EXHAUSTED: 8, FAILED_PRECONDITION: 9, ABORTED: 10, OUT_OF_RANGE: 11, UNIMPLEMENTED: 12, INTERNAL: 13, UNAVAILABLE: 14, DATA_LOSS: 15, UNAUTHENTICATED: 16 };
 const LABEL = /^[a-z0-9][a-z0-9-]{0,47}$/;
+// The sandbox projects a production call may name: the shared one and the one FS-TRANSACTION owns alone.
+export const SANDBOX_PROJECTS = Object.freeze(['fireemu-oracle-sbx', 'fireemu-oracle-txn']);
 
 const plain = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 function keys(value, required, optional = []) {
@@ -51,7 +53,7 @@ export function validateCall(spec) {
   if (!Number.isInteger(spec.deadlineMs) || spec.deadlineMs < 1 || spec.deadlineMs > (writer ? MAX_DEADLINE_MS : DEFAULT_DEADLINE_MS) || typeof spec.bearer !== 'string' || !/^[A-Za-z0-9._~+\/-]{1,8192}$/.test(spec.bearer)) throw new Error('program deadline or bearer differs');
   if (spec.target?.kind === 'production') {
     keys(spec.target, ['kind']);
-    if (spec.projectId !== 'fireemu-oracle-sbx') throw new Error('program production project differs');
+    if (!SANDBOX_PROJECTS.includes(spec.projectId)) throw new Error('program production project differs');
   } else {
     keys(spec.target, ['kind', 'host', 'port']);
     if (spec.target.kind !== 'local' || spec.target.host !== '127.0.0.1' || !Number.isInteger(spec.target.port) || spec.target.port < 1 || spec.target.port > 65535 || !/^demo-[a-z0-9-]{1,48}$/.test(spec.projectId) || spec.bearer !== 'owner') throw new Error('program local target differs');
@@ -176,7 +178,7 @@ export function restRequest(spec) {
 /** The real REST exchange: one connection, one request, a bounded answer; the caller times it out. */
 export function restHeaders(spec) {
   const headers = { authorization: `Bearer ${spec.bearer}`, accept: 'application/json' };
-  if (spec.target.kind === 'production') headers['x-goog-user-project'] = 'fireemu-oracle-sbx';
+  if (spec.target.kind === 'production') headers['x-goog-user-project'] = spec.projectId;
   return headers;
 }
 
@@ -235,7 +237,7 @@ async function runGrpc(spec, createClientOverride) {
   const client = createClient(production ? 'firestore.googleapis.com:443' : `${spec.target.host}:${spec.target.port}`, production ? grpc.credentials.createSsl() : grpc.credentials.createInsecure(), CHANNEL_OPTIONS);
   const metadata = new grpc.Metadata();
   metadata.set('authorization', `Bearer ${spec.bearer}`);
-  if (production) metadata.set('x-goog-user-project', 'fireemu-oracle-sbx');
+  if (production) metadata.set('x-goog-user-project', spec.projectId);
   const routing = spec.request.database ? 'database' : 'name';
   metadata.set('x-goog-request-params', `${routing}=${encodeURIComponent(spec.request[routing])}`);
   let call;

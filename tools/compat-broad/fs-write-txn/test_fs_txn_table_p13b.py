@@ -42,8 +42,8 @@ def test_the_table_is_registered_and_bound():
 def test_the_requests_tokens_and_waits_stay_inside_their_clock():
     value = plan()
     assert len(value["steps"]) == 30 and len(value["cases"]) == 8
-    assert value["caps"] == {"observation": 30, "tokenCleanup": 8, "documentCleanup": 7, "management": 7, "credential": 2}
-    assert value["maxRequests"] == 54 and value["maxTokens"] == 8
+    assert value["caps"] == {"observation": 30, "tokenCleanup": 8, "documentCleanup": 7, "management": 6, "credential": 2}
+    assert value["maxRequests"] == 53 and value["maxTokens"] == 8 and value["project"] == "fireemu-oracle-txn"
     assert sum(value["waits"].values()) == 130 + 130 + 9 * 24 + 12 + 32 == 520
     assert value["thresholds"] == {"totalAgeSeconds": 270, "releaseAfterAgeSeconds": 275}
     assert TABLE["envelopeId"] == "FS-TRANSACTION-p13b-retry-answers-001"
@@ -113,7 +113,7 @@ def test_every_state_label_is_declared_and_used():
 
 def test_the_digest_binds_the_table():
     assert corpus_digest(TABLE) == plan()["corpusDigest"]
-    assert corpus_digest(TABLE) == "db3cfff855372702f73d70946e2e2fd2858a11d944b3e79f2fe6a1d787b652dd"
+    assert corpus_digest(TABLE) == "3c91e4695ace7cccb5089f3c8fc88425f1393ee40a13c28f97bf15ac05a63751"
 
 
 def refusing(service, only_expired=False):

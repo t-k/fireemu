@@ -1,0 +1,344 @@
+"""The sandbox project a program table targets: fireemu-oracle-sbx by default (every earlier digest unchanged), fireemu-oracle-txn on request, any other refused."""
+
+import pytest
+
+import fs_txn_table_p13a as p13a
+from txn_program_program import PROJECT, compile_plan, corpus_digest, request_for_step
+
+NONCE, OWNER = "a" * 32, "b" * 32
+TXN = "fireemu-oracle-txn"
+
+
+def with_project(table, project):
+    return {**table, "project": project}
+
+
+def test_the_default_project_is_unchanged_and_its_digest_does_not_move():
+    plan = compile_plan(p13a.TABLE, NONCE, OWNER)
+    assert plan["project"] == PROJECT == "fireemu-oracle-sbx"
+    assert plan["database"] == "projects/fireemu-oracle-sbx/databases/(default)"
+    # naming the default explicitly is the same table: the key is only bound into the digest when it differs
+    assert corpus_digest(with_project(p13a.TABLE, PROJECT)) == corpus_digest(p13a.TABLE) == "8ef5cfc17df36c81844790b92d1439654d12e084f8b9323342eec3a6273be77e"
+
+
+def test_the_txn_project_changes_the_plan_the_documents_and_the_digest():
+    table = with_project(p13a.TABLE, TXN)
+    plan = compile_plan(table, NONCE, OWNER)
+    assert plan["project"] == TXN
+    assert plan["database"] == f"projects/{TXN}/databases/(default)"
+    assert all(name.startswith(f"projects/{TXN}/databases/(default)/documents/oracle/") for name in plan["documents"].values())
+    assert corpus_digest(table) != corpus_digest(p13a.TABLE)
+    # a request names the project's documents
+    read = next(step for step in plan["steps"] if step["id"] == "rest/uc/read-a")
+    request = request_for_step(plan, read, {"rest-uc": "aXNzdWVk"}, table)
+    assert request["name"].startswith(f"projects/{TXN}/")
+
+
+@pytest.mark.parametrize("project", ["fireemu-oracle-idp", "fireemu-oracle-query", "fireemu-35fe6", "demo-program", "", None, 7, "fireemu-oracle-txn ", "FIREEMU-ORACLE-TXN"])
+def test_any_other_project_is_refused(project):
+    with pytest.raises(ValueError, match="txn-program table"):
+        compile_plan(with_project(p13a.TABLE, project), NONCE, OWNER)
+
+
+# --- the metadata session of the txn project: no Rules release, and the baseline's "no Rules release" is checked, not assumed ---
+
+import json
+from pathlib import Path
+
+import txn_program_http as http_module
+import txn_program_management as management
+import txn_sandbox_management as shared_management
+
+TOKEN = "test-access-token"
+TXN_BASELINE = {
+    "projectNumber": "123456789012",
+    "databaseExpected": {"name": f"projects/{TXN}/databases/(default)", "type": "FIRESTORE_NATIVE", "databaseEdition": "STANDARD", "locationId": "us-central1", "concurrencyMode": "PESSIMISTIC"},
+    "credentialPrincipal": {"clientId": "client-a", "subject": "owner@example.com", "requiredScopes": ["https://www.googleapis.com/auth/cloud-platform"]},
+}
+
+
+class Budget:
+    def __init__(self):
+        self.management = 0
+
+    def charge(self, phase):
+        assert phase == "management"
+        self.management += 1
+
+
+def txn_answer(slot, rules=404):
+    bodies = {
+        "oauth-tokeninfo": {"issued_to": "client-a", "user_id": "owner@example.com", "scope": "https://www.googleapis.com/auth/cloud-platform", "expires_in": 3600},
+        "project": {"projectId": TXN, "projectNumber": "123456789012"},
+        "database": {**TXN_BASELINE["databaseExpected"], "uid": "synthetic-database-uid"},
+    }
+    if slot == "rules-release":
+        return {"complete": rules == 200, "workerReaped": True, "status": rules, "body": {"name": f"projects/{TXN}/releases/cloud.firestore", "rulesetName": f"projects/{TXN}/rulesets/r"} if rules == 200 else None}
+    return {"complete": True, "workerReaped": True, "status": 200, "body": bodies[slot]}
+
+
+def session(monkeypatch, *, baseline=None, request=None):
+    monkeypatch.setattr(management.preflight, "verify_token", lambda *args, **kwargs: object())
+    seen = []
+    def default(slot, token, resource=None):
+        seen.append((slot, resource))
+        return txn_answer(slot)
+    budget = Budget()
+    return management.MetadataSession(TOKEN, baseline or TXN_BASELINE, budget, request_fn=request or default, project=TXN), seen, budget
+
+
+def test_the_txn_project_session_uses_five_slots_and_proves_there_is_no_rules_release(monkeypatch):
+    monkeypatch.setattr(management.preflight, "verify_token", lambda *args, **kwargs: object())
+    seen = []
+    budget = Budget()
+    def request(slot, token, resource=None):
+        seen.append((slot, resource))
+        return txn_answer(slot)
+    run = management.MetadataSession(TOKEN, TXN_BASELINE, budget, request_fn=request, project=TXN)
+    first, second = run.preflight(), run.postflight()
+    # tokeninfo, project, database and the Rules-release absence before; project and database after: six charged slots
+    assert seen == [("oauth-tokeninfo", None), ("project", None), ("database", None), ("rules-release", None), ("project", None), ("database", None)]
+    assert budget.management == 6
+    assert first["rules-absent"] == "absent" and "rulesSourceSha256" not in first and "rulesetName" not in first
+    assert set(second) == {"project", "database"}
+    assert TOKEN not in repr(first) + repr(second)
+
+
+def test_a_rules_release_that_appears_refuses_the_run(monkeypatch):
+    run, _seen, _budget = session(monkeypatch, request=lambda slot, token, resource=None: txn_answer(slot, rules=200))
+    with pytest.raises(ValueError, match="Rules release exists"):
+        run.preflight()
+
+
+@pytest.mark.parametrize("status", [401, 403, 500, 429, 200])
+def test_anything_but_a_clean_404_for_the_rules_release_refuses_the_run(monkeypatch, status):
+    run, _seen, _budget = session(monkeypatch, request=lambda slot, token, resource=None: txn_answer(slot, rules=status))
+    with pytest.raises(ValueError):
+        run.preflight()
+
+
+def test_a_project_or_database_that_differs_refuses_the_txn_session(monkeypatch):
+    def wrong_project(slot, token, resource=None):
+        answer = txn_answer(slot)
+        if slot == "project":
+            answer["body"] = {"projectId": "fireemu-oracle-sbx", "projectNumber": "123456789012"}
+        return answer
+    run, _s, _b = session(monkeypatch, request=wrong_project)
+    with pytest.raises(ValueError, match="project identity differs"):
+        run.preflight()
+    def wrong_number(slot, token, resource=None):
+        answer = txn_answer(slot)
+        if slot == "project":
+            answer["body"] = {"projectId": TXN, "projectNumber": "210987654321"}
+        return answer
+    run, _s, _b = session(monkeypatch, request=wrong_number)
+    with pytest.raises(ValueError, match="project identity differs"):
+        run.preflight()
+    def wrong_database(slot, token, resource=None):
+        answer = txn_answer(slot)
+        if slot == "database":
+            answer["body"] = {**answer["body"], "concurrencyMode": "OPTIMISTIC"}
+        return answer
+    run, _s, _b = session(monkeypatch, request=wrong_database)
+    with pytest.raises(ValueError, match="PESSIMISTIC"):
+        run.preflight()
+
+
+def test_the_txn_baseline_has_exactly_its_keys_and_names_its_own_database(monkeypatch):
+    with pytest.raises(ValueError):
+        session(monkeypatch, baseline={**TXN_BASELINE, "rulesSourceSha256": "a" * 64})
+    with pytest.raises(ValueError):
+        session(monkeypatch, baseline={key: value for key, value in TXN_BASELINE.items() if key != "projectNumber"})
+    other = {**TXN_BASELINE, "databaseExpected": {**TXN_BASELINE["databaseExpected"], "name": "projects/fireemu-oracle-sbx/databases/(default)"}}
+    with pytest.raises(ValueError):
+        session(monkeypatch, baseline=other)
+    with pytest.raises(ValueError, match="project differs"):
+        management.MetadataSession(TOKEN, TXN_BASELINE, Budget(), request_fn=lambda *a, **k: {}, project="fireemu-oracle-idp")
+
+
+def test_the_shared_project_session_still_takes_its_rules_slots_and_a_baseline_with_a_rules_hash(monkeypatch):
+    monkeypatch.setattr(management.preflight, "verify_token", lambda *args, **kwargs: object())
+    with pytest.raises(ValueError):
+        management.MetadataSession(TOKEN, TXN_BASELINE, Budget(), request_fn=lambda *a, **k: {})   # no rulesSourceSha256, and the wrong database name
+    sbx = {**TXN_BASELINE, "databaseExpected": shared_management.EXPECTED_DATABASE, "rulesSourceSha256": "a" * 64}
+    management.MetadataSession(TOKEN, sbx, Budget(), request_fn=lambda *a, **k: {})
+
+
+# --- the fixed REST worker names the project it is given, and only the two sandbox projects ---
+
+def capture_worker(monkeypatch, project=None, slot="database", resource=None):
+    events = []
+
+    class Response:
+        status = 404
+        def read(self, limit):
+            return b""
+        def getheader(self, name):
+            return "application/json"
+
+    class Connection:
+        def __init__(self, host, timeout):
+            events.append(("host", host))
+        def request(self, method, path, body=None, headers=None):
+            events.append(("request", method, path, headers))
+        def getresponse(self):
+            return Response()
+        def close(self):
+            pass
+
+    monkeypatch.setattr(http_module.http.client, "HTTPSConnection", Connection)
+    call = {"slot": slot, "secret": "ya29.token-value", "resource": resource, **({"project": project} if project else {})}
+    http_module.worker_call(call)
+    return events
+
+
+@pytest.mark.parametrize("project,expected", [(None, "fireemu-oracle-sbx"), ("fireemu-oracle-sbx", "fireemu-oracle-sbx"), ("fireemu-oracle-txn", "fireemu-oracle-txn")])
+def test_the_rest_worker_names_the_project_in_its_paths_and_user_project_header(monkeypatch, project, expected):
+    for slot, path in (("project", f"/v1/projects/{expected}"), ("database", f"/v1/projects/{expected}/databases/(default)"), ("rules-release", f"/v1/projects/{expected}/releases/cloud.firestore")):
+        events = capture_worker(monkeypatch, project, slot)
+        request = next(event for event in events if event[0] == "request")
+        assert request[2] == path and request[3]["x-goog-user-project"] == expected
+
+
+def test_the_rest_worker_refuses_any_other_project_and_a_ruleset_of_another_project(monkeypatch):
+    for project in ("fireemu-oracle-idp", "fireemu-35fe6", "", "fireemu-oracle-txn2", None.__class__):
+        with pytest.raises(ValueError):
+            http_module.worker_call({"slot": "database", "secret": "ya29.token-value", "resource": None, "project": project})
+    with pytest.raises(ValueError):
+        http_module.request_once("database", "ya29.token-value", None, project="fireemu-oracle-idp")
+    with pytest.raises(ValueError):
+        capture_worker(monkeypatch, "fireemu-oracle-txn", "ruleset-source", "projects/fireemu-oracle-sbx/rulesets/a")
+
+
+def test_the_request_payload_carries_the_project_only_when_it_is_not_the_shared_one(monkeypatch):
+    sent = []
+    class Pipe:
+        closed = True
+        def close(self): pass
+
+    class Worker:
+        returncode = 0
+        stdin = stdout = Pipe()
+        def communicate(self, payload, timeout):
+            sent.append(json.loads(payload))
+            return (json.dumps({"complete": True, "status": 200, "body": {}}).encode(), None)
+        def kill(self): pass
+        def wait(self, *a, **k): return 0
+        def poll(self): return 0
+    monkeypatch.setattr(http_module.subprocess, "Popen", lambda *a, **k: Worker())
+    http_module.request_once("project", "ya29.token-value")
+    http_module.request_once("project", "ya29.token-value", project="fireemu-oracle-txn")
+    assert "project" not in sent[0] and sent[1]["project"] == "fireemu-oracle-txn"
+
+
+# --- authority, packet and budget follow the packet's project ---
+
+import datetime as dt
+
+import txn_program_authority as authority
+import txn_program_cli as cli
+import txn_program_runner as runner
+from test_txn_program_authority import AUTHORITY, ENVELOPE_ID, NAME, NOW, PINS, SCOPE, approve_row, envelope_row
+
+TXN_SCOPE = {**SCOPE, "project": f"{TXN}/(default)"}
+TXN_PINS = {**PINS, "project": TXN, "estimatedUsdPerRecording": 0.0, "scope": TXN_SCOPE}
+TXN_DECISIONS = AUTHORITY + envelope_row(scope=TXN_SCOPE, reserveUsd="0") + approve_row()
+SBX_ROW = {"ts": "2026-09-28T04:50:00Z", "project": "fireemu-oracle-sbx", "taskId": "FS-TRANSACTION-SANDBOX", "attemptId": "sbx-recent", "outcome": "recorded", "estimatedUsd": 0.05}
+TXN_ROW = {**SBX_ROW, "project": TXN, "attemptId": "txn-recent", "estimatedUsd": 0.0}
+
+
+def test_the_envelope_scope_names_the_tables_project():
+    assert authority.envelope_scope({**__import__("txn_program_support_for_tests").TABLE, "project": TXN})["project"] == f"{TXN}/(default)"
+    assert authority.envelope_scope(__import__("txn_program_support_for_tests").TABLE)["project"] == "fireemu-oracle-sbx/(default)"
+
+
+def test_a_free_tier_envelope_reserves_nothing_and_a_shared_project_envelope_still_reserves_four_cents():
+    assert authority.authorize(TXN_DECISIONS, TXN_PINS)[1] == 0.0
+    with pytest.raises(ValueError):
+        authority.authorize(AUTHORITY + envelope_row(scope=TXN_SCOPE) + approve_row(), TXN_PINS)           # reserveUsd 0.04 on the free-tier project
+    with pytest.raises(ValueError):
+        authority.authorize(AUTHORITY + envelope_row(reserveUsd="0") + approve_row(), PINS)                  # reserveUsd 0 on the shared project
+    with pytest.raises(ValueError):
+        authority.authorize(TXN_DECISIONS, {**TXN_PINS, "estimatedUsdPerRecording": 0.01})                    # the estimate must be the project's
+    with pytest.raises(ValueError):
+        authority.authorize(AUTHORITY + envelope_row() + approve_row(), {**PINS, "project": TXN})            # the sbx scope does not authorize the txn project
+
+
+def test_the_30_minute_spacing_and_open_attempts_are_per_project():
+    # a recent shared-project attempt does not delay the txn project, and the other way round
+    assert authority.verify_initial_gates([SBX_ROW], NOW, TXN_DECISIONS, TXN_PINS) is None
+    assert authority.verify_initial_gates([TXN_ROW], NOW, AUTHORITY + envelope_row() + approve_row(), PINS) is None
+    with pytest.raises(ValueError, match="fireemu-oracle-txn needs 30 minutes"):
+        authority.verify_initial_gates([TXN_ROW], NOW, TXN_DECISIONS, TXN_PINS)
+    quiet = NOW + dt.timedelta(minutes=31)
+    assert authority.verify_initial_gates([TXN_ROW], quiet, TXN_DECISIONS, TXN_PINS) == TXN_ROW["ts"]
+    opened = {**TXN_ROW, "attemptId": "open", "outcome": "reserved"}
+    with pytest.raises(ValueError, match="fireemu-oracle-txn has an open attempt"):
+        authority.verify_initial_gates([opened], quiet, TXN_DECISIONS, TXN_PINS)
+    sbx_open = {**SBX_ROW, "attemptId": "open", "outcome": "reserved"}
+    assert authority.verify_initial_gates([sbx_open], quiet, TXN_DECISIONS, TXN_PINS) is None
+
+
+def test_a_row_the_runner_writes_names_the_packets_project_and_its_estimate():
+    for pins, project in ((TXN_PINS, TXN), (PINS, "fireemu-oracle-sbx")):
+        row = runner._row({**pins, "requestsPerRecording": 10, "envelopeId": ENVELOPE_ID, "packetId": "p", "sourceCommit": "b" * 40, "runnerSha256": "c" * 64}, "attempt", Path("/tmp/x"), "n" * 32, "reserved", None, dt.datetime(2026, 9, 28, tzinfo=dt.timezone.utc))
+        assert row["project"] == project
+
+
+def test_the_packet_is_built_for_the_tables_project_with_its_budget():
+    import fs_txn_table_p13a as p13a
+    runtime = {"reviewed": True}
+    baseline = envelope = "0" * 64
+    for table, project, estimate, reserve in ((p13a.TABLE, "fireemu-oracle-sbx", 0.01, 0.04), (with_project(p13a.TABLE, TXN), TXN, 0.0, 0.0)):
+        value = cli.packet_value(table=table, source_commit="b" * 40, runtime=runtime, baseline_sha256=baseline, envelope_sha256=envelope, packet_id="fs-transaction-p13a-inferred-answers-a001", envelope_relative="docs.local/reviews/x.md")
+        assert (value["project"], value["estimatedUsdPerRecording"], value["reserveUsd"]) == (project, estimate, reserve)
+        assert value["scope"]["project"] == f"{project}/(default)"
+    assert cli.packet_value(table=p13a.TABLE, source_commit="b" * 40, runtime=runtime, baseline_sha256=baseline, envelope_sha256=envelope, packet_id="fs-transaction-p13a-inferred-answers-a001", envelope_relative="docs.local/reviews/x.md")["corpusDigest"] == "8ef5cfc17df36c81844790b92d1439654d12e084f8b9323342eec3a6273be77e"
+
+
+def test_the_wire_names_the_project_it_was_built_for_and_refuses_another(monkeypatch):
+    import txn_program_wire as wire
+    monkeypatch.setattr(wire, "verify_runtime", lambda _runtime: None)
+    for project in ("fireemu-oracle-sbx", TXN):
+        instance = wire.NodeWire({}, {"slug": "txn-x", "documents": ["a"], "states": ["created"]}, project=project)
+        assert instance.project == project
+    with pytest.raises(ValueError, match="project differs"):
+        wire.NodeWire({}, {"slug": "txn-x", "documents": ["a"], "states": ["created"]}, project="fireemu-oracle-idp")
+    assert wire.NodeWire({}, {"slug": "txn-x", "documents": ["a"], "states": ["created"]}).project == "fireemu-oracle-sbx"
+
+
+def test_the_runner_hands_the_tables_project_to_the_metadata_session_the_request_function_and_the_wire(tmp_path, monkeypatch):
+    import txn_program_support_for_tests as support
+    from test_txn_program_collector import Clock, Service
+    seen = {}
+    clock = Clock()
+    monkeypatch.setattr(runner.time, "monotonic", clock.now)
+    class Metadata:
+        def __init__(self, _bearer, _baseline, budget, **kwargs):
+            seen["metadata"] = kwargs
+            self.budget = budget
+        def preflight(self):
+            for _ in range(4):
+                self.budget.charge("management")
+            return {"rules-absent": "absent"}
+        def postflight(self):
+            for _ in range(2):
+                self.budget.charge("management")
+            return {}
+    monkeypatch.setattr(runner, "MetadataSession", Metadata)
+    monkeypatch.setattr(runner, "refresh", lambda *_args, **_kwargs: "owner")
+    def wire(_runtime, _scope, **kwargs):
+        seen["wire"] = kwargs
+        return Service(clock)
+    monkeypatch.setattr(runner, "NodeWire", wire)
+    collector = runner.Collector
+    monkeypatch.setattr(runner, "Collector", lambda *args, **kwargs: collector(*args, **kwargs, monotonic=clock.now, utc=clock.utc))
+    table = {**support.TABLE, "project": TXN, "envelopeId": support.TABLE["envelopeId"]}
+    runner.run_once(0, table, "a" * 32, "b" * 32, tmp_path, baseline={}, runtime={}, check=lambda: None)
+    assert seen["metadata"]["project"] == TXN and seen["wire"] == {"project": TXN}
+    assert seen["metadata"]["request_fn"].keywords == {"project": TXN}
+    # the shared project's call is exactly as it was: no extra argument anywhere
+    seen.clear()
+    (tmp_path / "sbx").mkdir()
+    runner.run_once(0, support.TABLE, "a" * 32, "b" * 32, tmp_path / "sbx", baseline={}, runtime={}, check=lambda: None)
+    assert "project" not in seen["metadata"] and seen["wire"] == {} and seen["metadata"]["request_fn"] is runner.request_once

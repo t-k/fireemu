@@ -1,6 +1,6 @@
 """FS-TRANSACTION P13b (REST): what a retry (`retryTransaction`) does with an expired or finished token, and when a retry attempt takes its snapshot.
 
-This table grants no send permission. Owned document: `a`, created in setup. Four chains over REST. What is judged (a different answer stops
+This table grants no send permission. Its target is the project FS-TRANSACTION owns alone, `fireemu-oracle-txn` (free tier). Owned document: `a`, created in setup. Four chains over REST. What is judged (a different answer stops
 the run): the setup and every chain's begin and first read (controls), the retry that follows RT-1's Rollback (a control: recorded as accepted
 for REST in P09 and P10), RT-1's Rollback (0 or 10), RT-1's outside writer (0 or 10) and the final read of `a` (0). Every other answer is
 observed and never judged, so no answer that refutes what strict does today can stop the run: it may stop for ownership or cleanup reasons only.
@@ -98,6 +98,9 @@ STEPS = tuple(_SETUP + _retry_snapshot() + _retry_idle() + _retry_after_rollback
 
 TABLE = {
     "name": "p13b-retry-answers",
+    # The project FS-TRANSACTION owns alone (free tier, no Rules release): its envelope spends nothing, and its management set is the metadata session's
+    # six slots (tokeninfo, project, database and the Rules-release absence before; project and database after).
+    "project": "fireemu-oracle-txn",
     "program": "FS-TRANSACTION-P13B-RETRY-ANSWERS",
     "envelopeId": "FS-TRANSACTION-p13b-retry-answers-001",
     "slug": "txn-p13b",
@@ -106,7 +109,7 @@ TABLE = {
     "steps": STEPS,
     "thresholds": {"totalAgeSeconds": 270, "releaseAfterAgeSeconds": 275},
     # Observation is one request per step; cleanup reserves 7 per owned document and a release per token.
-    "caps": {"observation": len(STEPS), "tokenCleanup": 8, "documentCleanup": 7, "management": 7, "credential": 2},
+    "caps": {"observation": len(STEPS), "tokenCleanup": 8, "documentCleanup": 7, "management": 6, "credential": 2},
     # Four chains: about 10 s, 135 s, 270 s and 285 s of waits and requests, 520 s of waits in all, and the admission re-check before every request.
     "observationSeconds": 780,
     "recoverySeconds": 180,

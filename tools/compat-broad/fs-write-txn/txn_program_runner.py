@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import datetime as dt
+import functools
 import hashlib
 import math
 import secrets
@@ -11,13 +12,13 @@ import time
 from pathlib import Path
 
 import txn_sandbox_admission as shared
-from txn_idle_grpc_http import refresh, request_once
+from txn_program_http import refresh, request_once
 from txn_idle_grpc_runner import save_private
 from txn_program_authority import TASK_ID, authorize, remaining_task_budget, verify_initial_gates
 from txn_program_collector import Collector, projection
-from txn_program_program import RequestBudget, compile_plan
+from txn_program_program import PROJECT, RequestBudget, compile_plan
 from txn_program_wire import NodeWire
-from txn_sandbox_management import MetadataSession
+from txn_program_management import MetadataSession
 
 
 def wire_scope(table):
@@ -85,10 +86,13 @@ def run_once(index, table, nonce, owner_id, directory, *, baseline, runtime, che
     metadata = None
     try:
         check()
+        project = table.get('project', PROJECT)
         bearer = refresh(baseline, budget, before_send=check)
-        metadata = MetadataSession(bearer, baseline, budget, request_fn=request_once)
+        # the shared project keeps the call exactly as it was; another project's name rides along
+        extra = {} if project == PROJECT else {'project': project}
+        metadata = MetadataSession(bearer, baseline, budget, request_fn=request_once if project == PROJECT else functools.partial(request_once, project=project), **extra)
         preflight = metadata.preflight()
-        wire = NodeWire(runtime, wire_scope(table))
+        wire = NodeWire(runtime, wire_scope(table), **({} if project == PROJECT else {'project': project}))
         collector = Collector(plan, table, budget, wire, bearer, save=journal, before_send=check, observation_deadline=budget.observation_deadline)
         receipt = collector.run()
         receipt['metadata'] = preflight
@@ -111,13 +115,13 @@ def run_once(index, table, nonce, owner_id, directory, *, baseline, runtime, che
 def _row(pins, attempt, directory, nonce, outcome, requests, now):
     if requests is not None and (type(requests) is not int or not 0 <= requests <= pins['requestsPerRecording']):
         raise ValueError('program charged request count escaped its cap')
-    return {'ts': now.isoformat().replace('+00:00', 'Z'), 'project': 'fireemu-oracle-sbx', 'database': '(default)', 'taskId': TASK_ID, 'envelopeId': pins['envelopeId'], 'packetId': pins['packetId'], 'gitSha': pins['sourceCommit'], 'runnerSha256': pins['runnerSha256'], 'attemptId': attempt, 'runDir': str(directory), 'nonce': nonce, 'outcome': outcome, 'requests': requests, 'estimatedUsd': 0.01, 'pythonVersion': '3.12.13'}
+    return {'ts': now.isoformat().replace('+00:00', 'Z'), 'project': pins.get('project', PROJECT), 'database': '(default)', 'taskId': TASK_ID, 'envelopeId': pins['envelopeId'], 'packetId': pins['packetId'], 'gitSha': pins['sourceCommit'], 'runnerSha256': pins['runnerSha256'], 'attemptId': attempt, 'runDir': str(directory), 'nonce': nonce, 'outcome': outcome, 'requests': requests, 'estimatedUsd': 0.01, 'pythonVersion': '3.12.13'}
 
 
 def record_twice(*, table, ledger_path, private_dir, pins, decisions, now, record_once, admission_check):
     ledger_path, private_dir = Path(ledger_path), Path(private_dir)
     verify_initial_gates(shared.read_ledger(ledger_path), now(), decisions(), pins)
-    held = shared.acquire_project_locks(private_dir, ['fireemu-oracle-sbx'], task_id=TASK_ID, packet_id=pins['packetId'], source_commit=pins['sourceCommit'])
+    held = shared.acquire_project_locks(private_dir, [pins.get('project', PROJECT)], task_id=TASK_ID, packet_id=pins['packetId'], source_commit=pins['sourceCommit'])
     release = False
     reserved = False
     attempt = nonce = directory = None
@@ -129,7 +133,7 @@ def record_twice(*, table, ledger_path, private_dir, pins, decisions, now, recor
         receipts = []
         for index in range(2):
             admission_check(); authorize(decisions(), pins)
-            remaining_task_budget(shared.read_ledger(ledger_path), 0.01)
+            remaining_task_budget(shared.read_ledger(ledger_path), pins.get('estimatedUsdPerRecording', 0.01))
             attempt, nonce, owner_id = secrets.token_hex(16), secrets.token_hex(16), secrets.token_hex(16)
             shared.append_ledger(ledger_path, _row(pins, attempt, directory, nonce, 'reserved', None, now()))
             reserved = True

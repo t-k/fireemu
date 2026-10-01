@@ -12,6 +12,7 @@ import sys
 import time
 from pathlib import Path
 
+from txn_program_program import PROJECT, PROJECTS
 from txn_sandbox_runtime import PYTHON_VERSION, require_packet_runtime
 
 HERE = Path(__file__).resolve().parent
@@ -176,8 +177,11 @@ def _verify_runtime_full(value):
 class NodeWire:
     """No send retries; a transport failure preserves an unknown outcome."""
 
-    def __init__(self, runtime, scope, *, target=None):
+    def __init__(self, runtime, scope, *, target=None, project=PROJECT):
         verify_runtime(runtime)
+        if project not in PROJECTS:
+            raise ValueError('program project differs')
+        self.project = project
         self.runtime = copy.deepcopy(runtime)
         if not isinstance(scope, dict) or set(scope) != {'slug', 'documents', 'states'}:
             raise ValueError('program scope differs')
@@ -257,12 +261,12 @@ class NodeWire:
         writer = method == 'Commit' and 'transaction' not in request
         if transport not in ('rest', 'grpc') or type(deadline_ms) is not int or not 1 <= deadline_ms <= (30000 if writer else 10000):
             raise ValueError('program transport or deadline differs')
-        project = 'fireemu-oracle-sbx'
+        project = self.project
         body = copy.deepcopy(request)
         if self.target.get('kind') == 'local':
             project = 'demo-program'
             # Rebase only the declared database and document fields for local proof.
-            production = 'projects/fireemu-oracle-sbx/databases/(default)'
+            production = f'projects/{self.project}/databases/(default)'
             local = f'projects/{project}/databases/(default)'
             for key in ['database', 'name']:
                 if key in body:
@@ -290,7 +294,7 @@ class NodeWire:
         if self.target.get('kind') == 'local' and method == 'BatchGetDocuments' and result['code'] == 0 and isinstance(result['response'], dict):
             # Entries name their documents as the local wire did; the plan names them as production would.
             local = 'projects/demo-program/databases/(default)'
-            production = 'projects/fireemu-oracle-sbx/databases/(default)'
+            production = f'projects/{self.project}/databases/(default)'
             result['localWireResponse'] = copy.deepcopy(result['response'])
             for entry in result['response'].get('responses', []):
                 if isinstance(entry.get('found'), dict) and isinstance(entry['found'].get('name'), str):

@@ -14,6 +14,14 @@ import re
 from pathlib import Path
 
 PROJECT = "fireemu-oracle-sbx"
+# The sandbox projects a table may target: the shared one, and the one FS-TRANSACTION owns alone (free tier: no billing account, so no spend).
+PROJECTS = (PROJECT, "fireemu-oracle-txn")
+FREE_TIER_PROJECTS = ("fireemu-oracle-txn",)
+
+
+def budget_for(project):
+    """(estimated US$ per recording, reserve US$) an envelope for this project carries: the free-tier project spends nothing."""
+    return (0.0, 0.0) if project in FREE_TIER_PROJECTS else (0.01, 0.04)
 DATABASE = "(default)"
 TRANSPORTS = ("rest", "grpc")
 RPCS = ("GetDocument", "BatchGetDocuments", "BeginTransaction", "Commit", "Rollback")
@@ -96,6 +104,8 @@ def _validate_table(table):
         _bad("name, program or slug is malformed")
     if not isinstance(table.get("envelopeId"), str) or not re.fullmatch(rf"FS-TRANSACTION-{re.escape(table['name'])}-[0-9]{{3}}", table["envelopeId"]):
         _bad("the envelope id is not this program's next numbered one")
+    if "project" in table and (not isinstance(table["project"], str) or table["project"] not in PROJECTS):
+        _bad("the table names a project that is not one of the sandbox projects")
     documents, states = tuple(table["documents"]), tuple(table["states"])
     if not documents or len(documents) > MAX_DOCUMENTS or len(set(documents)) != len(documents) or any(not isinstance(role, str) or not _LABEL.fullmatch(role) for role in documents):
         _bad("owned document roles are malformed")
@@ -264,6 +274,8 @@ def corpus_digest(table):
     }
     if table.get("thresholds"):
         body["thresholds"] = dict(table["thresholds"])
+    if table.get("project", PROJECT) != PROJECT:
+        body["project"] = table["project"]   # bound only when it differs, so every table that targets the shared project keeps its digest
     return hashlib.sha256(_canonical(body).encode()).hexdigest()
 
 
@@ -271,13 +283,14 @@ def compile_plan(table, nonce, owner_id):
     _identity(nonce, "nonce")
     _identity(owner_id, "owner")
     steps = _validate_table(table)
-    database = f"projects/{PROJECT}/databases/{DATABASE}"
+    project = table.get("project", PROJECT)
+    database = f"projects/{project}/databases/{DATABASE}"
     caps = dict(table["caps"])
     plan = {
         "kind": "txn-program-plan-v1",
         "program": table["program"],
         "packetName": table["name"],
-        "project": PROJECT,
+        "project": project,
         "database": database,
         "nonce": nonce,
         "ownerId": owner_id,

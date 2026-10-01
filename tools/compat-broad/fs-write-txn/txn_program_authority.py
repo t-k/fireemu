@@ -7,7 +7,7 @@ import re
 from decimal import Decimal, InvalidOperation
 
 import txn_sandbox_admission as shared
-from txn_program_program import compile_plan
+from txn_program_program import PROJECT, budget_for, compile_plan
 
 TASK_ID = 'FS-TRANSACTION-SANDBOX'
 _PACKET_NAME = re.compile(r'[a-z][a-z0-9]*(-[a-z0-9]+){1,5}\Z')
@@ -19,7 +19,7 @@ def envelope_scope(table):
     """The resource scope an envelope must state, derived from the table alone."""
     plan = compile_plan(table, 'a' * 32, 'b' * 32)
     writer = any(step['role'] == 'outside-writer' for step in plan['steps'])
-    return {'project': 'fireemu-oracle-sbx/(default)', 'writes': f"owned-{len(plan['documents'])}-documents", 'iamConfig': 'none', 'retries': 'none', 'onStop': 'needs-recovery-lock-held', 'observationSeconds': str(plan['observationSeconds']), 'recoverySeconds': str(plan['recoverySeconds']), 'maxTokens': str(plan['maxTokens']), 'maxUnresolvedTokens': str(plan['maxUnresolvedTokens']), 'releasePolicy': plan['releasePolicy'], 'timing': plan['timing'], 'timingSource': 'parent-wire-envelope', 'transports': '+'.join(sorted({step['transport'] for step in plan['steps']})), 'writerDeadlineSeconds': '30' if writer else 'none'}
+    return {'project': f"{plan['project']}/(default)", 'writes': f"owned-{len(plan['documents'])}-documents", 'iamConfig': 'none', 'retries': 'none', 'onStop': 'needs-recovery-lock-held', 'observationSeconds': str(plan['observationSeconds']), 'recoverySeconds': str(plan['recoverySeconds']), 'maxTokens': str(plan['maxTokens']), 'maxUnresolvedTokens': str(plan['maxUnresolvedTokens']), 'releasePolicy': plan['releasePolicy'], 'timing': plan['timing'], 'timingSource': 'parent-wire-envelope', 'transports': '+'.join(sorted({step['transport'] for step in plan['steps']})), 'writerDeadlineSeconds': '30' if writer else 'none'}
 
 
 def _values(columns):
@@ -38,7 +38,7 @@ def _check_scope(pins):
     name = pins.get('packetName')
     requests = pins.get('requestsPerRecording')
     envelope = pins.get('envelopeId')
-    if not isinstance(name, str) or not _PACKET_NAME.fullmatch(name) or name in _TAKEN_NAMES or type(requests) is not int or requests <= 0 or pins.get('estimatedUsdPerRecording') != 0.01 or not isinstance(pins.get('scope'), dict) or set(pins['scope']) != set(SCOPE_KEYS) or any(not isinstance(value, str) or not value for value in pins['scope'].values()) or not isinstance(envelope, str) or not envelope.startswith(f'FS-TRANSACTION-{name}-'):
+    if not isinstance(name, str) or not _PACKET_NAME.fullmatch(name) or name in _TAKEN_NAMES or type(requests) is not int or requests <= 0 or pins.get('estimatedUsdPerRecording') != budget_for(pins.get('project', PROJECT))[0] or not isinstance(pins.get('scope'), dict) or set(pins['scope']) != set(SCOPE_KEYS) or any(not isinstance(value, str) or not value for value in pins['scope'].values()) or not isinstance(envelope, str) or not envelope.startswith(f'FS-TRANSACTION-{name}-'):
         raise ValueError('fresh program authority scope required')
     return name, requests
 
@@ -86,7 +86,7 @@ def authorize(decisions, pins):
         reserve = Decimal(values[shared.normalize_authority('reserveUsd')])
     except (KeyError, ValueError, InvalidOperation):
         raise ValueError('program envelope bound is invalid') from None
-    if str(count) != values[shared.normalize_authority('maxRequests')] or count != 2 * requests or not reserve.is_finite() or reserve != Decimal('0.04'):
+    if str(count) != values[shared.normalize_authority('maxRequests')] or count != 2 * requests or not reserve.is_finite() or reserve != Decimal(str(budget_for(pins.get('project', PROJECT))[1])):
         raise ValueError('program envelope does not cover the graph within task limits')
     return count, float(reserve)
 
@@ -114,25 +114,26 @@ def remaining_task_budget(rows, reservation=0.02):
 
 
 def verify_initial_gates(rows, now, decisions, pins):
-    """Apply the shared sbx history rules before reservation or any credential read."""
+    """Apply the sandbox history rules of the packet's project before reservation or any credential read."""
     authorize(decisions, pins)
     if not isinstance(now, dt.datetime) or now.tzinfo is None:
         raise ValueError('timezone-aware program admission time required')
     if any(row.get('envelopeId') == pins['envelopeId'] for row in rows) or any(row.get('packetId') == pins['packetId'] and row.get('outcome') == 'reserved' for row in rows):
         raise ValueError('program packet or envelope already consumed')
-    sandbox = [row for row in rows if row.get('project') == shared.PROJECT]
+    project = pins.get('project', PROJECT)
+    sandbox = [row for row in rows if row.get('project') == project]
     for index, row in enumerate(sandbox):
         shared._instant(row.get('ts'))
         if row.get('outcome') == 'reserved' or row.get('event') == 'started':
             key = next((name for name in ('attemptId', 'runId', 'runDir') if row.get(name)), None)
             if key is None or not shared._closed_attempt(row, key, sandbox[index + 1:]):
-                raise ValueError('sbx has an open attempt')
+                raise ValueError(f'{project} has an open attempt')
     task = [row for row in sandbox if row.get('taskId') == TASK_ID]
     if task and not shared._terminal(max(reversed(task), key=lambda row: shared._instant(row['ts']))):
         raise ValueError('FS-TRANSACTION requires recovery')
     activity = [row for row in sandbox if row.get('event') not in ('note', 'started') and not str(row.get('outcome', '')).startswith('reserved') and row.get('outcome') != 'historical-unknown-hold']
     latest = max(activity, key=lambda row: shared._instant(row['ts'])) if activity else None
     if latest and now - shared._instant(latest['ts']) < shared.IDLE_GAP:
-        raise ValueError('sbx needs 30 minutes since last activity')
-    remaining_task_budget(rows, 0.04)
+        raise ValueError(f'{project} needs 30 minutes since last activity')
+    remaining_task_budget(rows, budget_for(project)[1])
     return latest['ts'] if latest else None

@@ -13,6 +13,7 @@ rustix = { version = "1", features = ["fs", "process"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 exacl = "0.13"
+nix = { version = "0.30", default-features = false, features = ["user"] }
 
 [lints]
 workspace = true

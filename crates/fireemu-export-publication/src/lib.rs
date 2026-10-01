@@ -6,12 +6,17 @@
 //! they created.
 //!
 //! Unix cleanup requires every canonical namespace ancestor to be root/current-user owned and
-//! not group/world writable; macOS extended ACLs are refused. Staged export publication is
+//! not group/world writable; on macOS an ACL entry that lets another principal change an ancestor
+//! (an `allow` entry with a mutating right for anyone but the owner or root) is refused, and a `deny` or
+//! read-only entry is accepted. Staged export publication is
 //! unavailable on Windows and fails before creating or modifying any export path.
 
 use std::path::{Path, PathBuf};
 #[cfg(unix)]
 use std::sync::atomic::{AtomicU64, Ordering};
+
+#[cfg(target_os = "macos")]
+mod acl;
 
 #[cfg(unix)]
 static NEXT_STAGE_ID: AtomicU64 = AtomicU64::new(1);
@@ -256,27 +261,15 @@ fn trusted_canonical_parent(parent: &Path) -> Result<PathBuf, String> {
             ));
         }
         #[cfg(target_os = "macos")]
-        reject_extended_acl(ancestor)?;
+        acl::reject_unsafe_acl(
+            ancestor,
+            acl::Trusted {
+                owner: metadata.uid(),
+                effective: effective_uid,
+            },
+        )?;
     }
     Ok(parent)
-}
-
-#[cfg(target_os = "macos")]
-fn reject_extended_acl(path: &Path) -> Result<(), String> {
-    let entries = exacl::getfacl(path, None).map_err(|error| {
-        format!(
-            "cannot inspect the ACL on export namespace ancestor {}: {error}",
-            path.display()
-        )
-    })?;
-    if entries.is_empty() {
-        Ok(())
-    } else {
-        Err(format!(
-            "export namespace ancestor {} has an extended ACL, so staged cleanup cannot be made safe",
-            path.display()
-        ))
-    }
 }
 
 #[cfg(unix)]

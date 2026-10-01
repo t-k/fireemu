@@ -209,26 +209,146 @@ fn other_user_writable_namespace_ancestor_is_refused() {
         .expect("restore private mode");
 }
 
+/// A real macOS ACL entry on a directory (`chmod +a`), removed again on drop.
+#[cfg(target_os = "macos")]
+struct Acl<'a>(&'a Path);
+
+#[cfg(target_os = "macos")]
+impl<'a> Acl<'a> {
+    fn install(dir: &'a Path, entry: &str) -> Self {
+        let status = std::process::Command::new("chmod")
+            .args(["+a", entry])
+            .arg(dir)
+            .status()
+            .expect("run chmod");
+        assert!(status.success(), "install test ACL {entry:?}");
+        Self(dir)
+    }
+}
+
+#[cfg(target_os = "macos")]
+impl Drop for Acl<'_> {
+    fn drop(&mut self) {
+        let _ = std::process::Command::new("chmod")
+            .arg("-N")
+            .arg(self.0)
+            .status();
+    }
+}
+
+/// Creates a stage under `root` while `entry` is the ACL of `root` (an ancestor of the export).
+#[cfg(target_os = "macos")]
+fn create_stage_under_acl(label: &str, entry: &str) -> Result<(), String> {
+    let root = TestRoot::new(label);
+    let parent = root.0.join("private-parent");
+    create_private_dir(&parent);
+    let _acl = Acl::install(&root.0, entry);
+    PublicationStage::create(&parent.join("export"), |_| Ok(())).map(|_| ())
+}
+
 #[cfg(target_os = "macos")]
 #[test]
 fn extended_acl_namespace_ancestor_is_refused() {
-    let root = TestRoot::new("acl-ancestor");
-    let parent = root.0.join("private-parent");
-    create_private_dir(&parent);
-    let status = std::process::Command::new("chmod")
-        .args(["+a", "everyone allow add_file,delete_child"])
-        .arg(&root.0)
-        .status()
-        .expect("run chmod");
-    assert!(status.success(), "install test ACL");
-
-    let error = PublicationStage::create(&parent.join("export"), |_| Ok(())).unwrap_err();
+    let error =
+        create_stage_under_acl("acl-ancestor", "everyone allow add_file,delete_child").unwrap_err();
 
     assert!(error.contains("extended ACL"), "{error}");
-    let _ = std::process::Command::new("chmod")
-        .arg("-N")
-        .arg(&root.0)
-        .status();
+    // The diagnostic names the entry and a way out.
+    assert!(error.contains("everyone"), "{error}");
+    assert!(error.contains("add_file"), "{error}");
+    assert!(error.contains("delete_child"), "{error}");
+    assert!(error.contains("TMPDIR"), "{error}");
+}
+
+/// The reproduction of the macOS home directory: `group:everyone deny delete` only removes rights.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_deny_only_acl_on_an_ancestor_is_accepted() {
+    create_stage_under_acl("acl-deny-delete", "everyone deny delete")
+        .expect("a deny entry is safe");
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn a_deny_entry_of_every_permission_is_accepted() {
+    create_stage_under_acl(
+        "acl-deny-everything",
+        "everyone deny write,append,delete,delete_child,add_file,add_subdirectory,writeattr,writeextattr,writesecurity,chown",
+    )
+    .expect("a deny entry is safe");
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn another_users_write_allow_on_an_ancestor_is_refused() {
+    let error =
+        create_stage_under_acl("acl-other-write", "nobody allow write,add_file").unwrap_err();
+
+    assert!(error.contains("extended ACL"), "{error}");
+    assert!(error.contains("nobody"), "{error}");
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn a_read_only_allow_on_an_ancestor_is_accepted() {
+    create_stage_under_acl(
+        "acl-read-only",
+        "everyone allow list,search,readattr,readextattr,readsecurity",
+    )
+    .expect("a read-only allow is safe");
+}
+
+/// The owner and root hold their rights anyway: their entries, resolved through the system's user
+/// database, are accepted.
+#[cfg(target_os = "macos")]
+#[test]
+fn the_current_users_and_roots_mutating_allow_on_an_ancestor_is_accepted() {
+    let output = std::process::Command::new("id")
+        .arg("-un")
+        .output()
+        .expect("run id");
+    let me = String::from_utf8(output.stdout).expect("user name");
+    let me = me.trim();
+    create_stage_under_acl(
+        "acl-me-write",
+        &format!("{me} allow write,add_file,delete_child"),
+    )
+    .expect("the current user may be given rights");
+    create_stage_under_acl("acl-root-write", "root allow write,add_file,delete_child")
+        .expect("root may be given rights");
+}
+
+/// A mutating right a group holds is a right other users may hold.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_group_write_allow_on_an_ancestor_is_refused() {
+    let error =
+        create_stage_under_acl("acl-group-write", "group:staff allow delete_child").unwrap_err();
+
+    assert!(error.contains("staff"), "{error}");
+}
+
+/// Every mutating right is refused, one at a time, so a right dropped from the classification is
+/// seen.
+#[cfg(target_os = "macos")]
+#[test]
+fn each_mutating_right_on_an_everyone_allow_is_refused() {
+    for right in [
+        "write",
+        "append",
+        "delete",
+        "delete_child",
+        "add_file",
+        "add_subdirectory",
+        "writeattr",
+        "writeextattr",
+        "writesecurity",
+        "chown",
+    ] {
+        let error = create_stage_under_acl("acl-each-right", &format!("everyone allow {right}"))
+            .unwrap_err();
+        assert!(error.contains("extended ACL"), "{right}: {error}");
+    }
 }
 
 #[cfg(unix)]

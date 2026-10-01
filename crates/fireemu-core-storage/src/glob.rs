@@ -342,7 +342,8 @@ fn compile(raw: &[Raw]) -> Vec<Inst> {
             Raw::Class(ranges, negated) => program.push(Inst::Class(ranges.clone(), *negated)),
             Raw::Open if paired[index] => {
                 let split = program.len();
-                program.push(Inst::Split(split + 1, split + 1));
+                // Replaced by a split when the pair has a second alternative.
+                program.push(Inst::Jump(split + 1));
                 groups.push(Group {
                     split,
                     exits: Vec::new(),
@@ -355,7 +356,7 @@ fn compile(raw: &[Raw]) -> Vec<Inst> {
                 program.push(Inst::Jump(here));
                 let next_split = program.len();
                 program[group.split] = Inst::Split(group.split + 1, next_split);
-                program.push(Inst::Split(next_split + 1, next_split + 1));
+                program.push(Inst::Jump(next_split + 1));
                 group.split = next_split;
             }
             Raw::Close if paired[index] => {

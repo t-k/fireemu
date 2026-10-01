@@ -528,13 +528,11 @@ fn glob_constructs_match_as_documented() {
     }
 }
 
-/// Runs `work` on a thread with the 2 MiB stack of a tokio blocking-pool thread and fails the test
-/// when it has not finished within `seconds` (a pattern that takes exponential time) or when it
-/// panics. A stack overflow aborts the whole test process, which fails the test as well.
-fn finishes_within<T: Send + 'static>(
-    seconds: u64,
+/// Runs `work` on a thread with the 2 MiB stack of a tokio blocking-pool thread. A stack overflow
+/// aborts the whole test process, which fails the test.
+fn on_a_pool_sized_stack<T: Send + 'static>(
     work: impl FnOnce() -> T + Send + 'static,
-) -> T {
+) -> std::sync::mpsc::Receiver<T> {
     let (sender, receiver) = std::sync::mpsc::channel();
     std::thread::Builder::new()
         .stack_size(2 * 1024 * 1024)
@@ -543,6 +541,13 @@ fn finishes_within<T: Send + 'static>(
         })
         .unwrap();
     receiver
+}
+
+fn finishes_within<T: Send + 'static>(
+    seconds: u64,
+    work: impl FnOnce() -> T + Send + 'static,
+) -> T {
+    on_a_pool_sized_stack(work)
         .recv_timeout(std::time::Duration::from_secs(seconds))
         .expect("the glob did not finish in time")
 }
@@ -550,7 +555,8 @@ fn finishes_within<T: Send + 'static>(
 /// The patterns that were exponential or recursion-deep (measured on the first matcher: braces
 /// that never close re-parse the rest after every rewind, empty alternatives retry the rest, and
 /// runs of `**` followed by `*a` backtrack). Each must finish in a time that grows with the
-/// pattern times the name, whatever its shape.
+/// pattern times the name, whatever its shape. All of them run at once under one deadline, so a
+/// matcher that hangs ends the test after the deadline and not after one deadline per pattern.
 #[test]
 fn hostile_globs_finish_in_bounded_time() {
     use fireemu_core_storage::glob::glob_matches;
@@ -572,11 +578,22 @@ fn hostile_globs_finish_in_bounded_time() {
         ("{a,b".repeat(2_000), "a".to_owned()),
         ("{[}],".repeat(2_000), "a".to_owned()),
     ];
-    for (pattern, name) in cases {
-        let shown: String = pattern.chars().take(24).collect();
-        let started = std::time::Instant::now();
-        finishes_within(10, move || glob_matches(&pattern, &name));
-        assert!(started.elapsed().as_secs() < 10, "{shown}");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(8);
+    let running: Vec<_> = cases
+        .into_iter()
+        .map(|(pattern, name)| {
+            let shown: String = pattern.chars().take(24).collect();
+            (
+                shown,
+                on_a_pool_sized_stack(move || glob_matches(&pattern, &name)),
+            )
+        })
+        .collect();
+    for (shown, receiver) in running {
+        let left = deadline.saturating_duration_since(std::time::Instant::now());
+        receiver
+            .recv_timeout(left)
+            .unwrap_or_else(|_| panic!("the glob {shown:?} did not finish in time"));
     }
 }
 
@@ -1066,5 +1083,65 @@ proptest! {
             expected.reverse();
         }
         prop_assert_eq!(listed, expected);
+    }
+}
+
+/// The names under a prefix, in name order, of one bucket only (a name of another bucket that
+/// starts with the prefix is not listed).
+#[test]
+fn object_names_with_prefix_lists_one_bucket_in_name_order() {
+    let mut store = StorageState::new(7);
+    let other = BucketName::try_new("other-app.appspot.com").unwrap();
+    for (target, name) in [
+        (&bucket(), "dir/b"),
+        (&bucket(), "dir/a"),
+        (&bucket(), "dir2/x"),
+        (&bucket(), "elsewhere"),
+        (&other, "dir/other"),
+        (&other, "dir/zzz"),
+    ] {
+        store
+            .put(
+                target,
+                &object(name),
+                vec![1],
+                NewMetadata::default(),
+                Precondition::default(),
+                at(1),
+            )
+            .unwrap();
+    }
+    assert_eq!(
+        store.object_names_with_prefix(&bucket(), "dir/"),
+        ["dir/a", "dir/b"]
+    );
+    assert_eq!(
+        store.object_names_with_prefix(&bucket(), "dir"),
+        ["dir/a", "dir/b", "dir2/x"]
+    );
+    assert_eq!(
+        store.object_names_with_prefix(&bucket(), "absent"),
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        store.object_names_with_prefix(&other, "dir/"),
+        ["dir/other", "dir/zzz"]
+    );
+    assert_eq!(store.object_names_with_prefix(&bucket(), "").len(), 4);
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(256))]
+
+    /// The snapshot of names under a prefix equals the reference filter of the stored names.
+    #[test]
+    fn object_names_with_prefix_equals_the_reference_filter(
+        names in names(),
+        prefix in proptest::collection::vec(proptest::sample::select(SEGMENTS), 0..=2)
+            .prop_map(|segments| segments.join("/"))
+    ) {
+        let store = store_with(&names);
+        let expected: Vec<String> = names.iter().filter(|name| name.starts_with(&prefix)).cloned().collect();
+        prop_assert_eq!(store.object_names_with_prefix(&bucket(), &prefix), expected);
     }
 }

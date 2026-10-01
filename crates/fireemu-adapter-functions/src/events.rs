@@ -287,7 +287,7 @@ fn percent_encode(s: &str) -> String {
 
 /// A Storage object event. `id` seeds the event's seventeen-digit decimal `id`
 /// ([`storage_event_id`]); `time` is when the runtime admitted the event (a finalize event's
-/// own `time` is the object's creation instant, see [`storage_time`]).
+/// own `time` is the object's creation instant, see `storage_time`).
 #[must_use]
 pub fn storage_event(
     id: &str,

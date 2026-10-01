@@ -49,16 +49,16 @@ fn strict() -> FirestoreState {
     FirestoreState::with_limit_scope(LimitScope::Production)
 }
 
-fn invalid_retry(result: Result<TransactionId, FirestoreError>) {
+fn invalid_retry(result: &Result<TransactionId, FirestoreError>) {
     assert!(
-        matches!(&result, Err(FirestoreError::InvalidArgument(message)) if message == "Invalid retry transaction."),
+        matches!(result, Err(FirestoreError::InvalidArgument(message)) if message == "Invalid retry transaction."),
         "{result:?}"
     );
 }
 
-fn aborted(result: Result<(), FirestoreError>) {
+fn aborted(result: &Result<(), FirestoreError>) {
     assert!(
-        matches!(&result, Err(FirestoreError::Aborted(message)) if message == "The referenced transaction has expired or is no longer valid."),
+        matches!(result, Err(FirestoreError::Aborted(message)) if message == "The referenced transaction has expired or is no longer valid."),
         "{result:?}"
     );
 }
@@ -106,7 +106,7 @@ fn strict_accepts_a_retry_that_names_a_lifetime_expired_token_and_the_named_toke
     let retry = state.retry_transaction(&token, t(281)).unwrap();
     assert_ne!(retry, token);
     state.touch_transaction(&retry, t(282)).unwrap();
-    aborted(state.rollback_at(&token, t(284)));
+    aborted(&state.rollback_at(&token, t(284)));
     state.rollback_at(&retry, t(285)).unwrap();
 }
 
@@ -115,8 +115,8 @@ fn strict_refuses_a_retry_that_names_a_token_it_has_forgotten() {
     let mut state = strict();
     let token = read_token(&mut state, 0);
     // The expired token is remembered until about 300 s of token age; far past that it is unknown, like a token never issued.
-    invalid_retry(state.retry_transaction(&token, t(400)));
-    invalid_retry(state.retry_transaction(&TransactionId::from_value(u64::MAX), t(1)));
+    invalid_retry(&state.retry_transaction(&token, t(400)));
+    invalid_retry(&state.retry_transaction(&TransactionId::from_value(u64::MAX), t(1)));
 }
 
 #[test]
@@ -147,5 +147,5 @@ fn the_emulator_profile_still_refuses_a_retry_that_names_an_expired_token() {
     let mut state = FirestoreState::with_limit_scope(LimitScope::OfficialEmulator);
     let token = read_token(&mut state, 0);
     // The official emulator is not recorded for this shape; the emulator profile never refuses less or more than it did before this change.
-    invalid_retry(state.retry_transaction(&token, t(125)));
+    invalid_retry(&state.retry_transaction(&token, t(125)));
 }

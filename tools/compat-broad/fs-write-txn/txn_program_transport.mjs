@@ -231,15 +231,21 @@ async function runRest(spec, exchange) {
   } finally { clearTimeout(timer); }
 }
 
+/** The gRPC call metadata: the credential, the user project in production only, and the routing parameter. */
+export function grpcMetadata(spec) {
+  const metadata = new grpc.Metadata();
+  metadata.set('authorization', `Bearer ${spec.bearer}`);
+  if (spec.target.kind === 'production') metadata.set('x-goog-user-project', spec.projectId);
+  const routing = spec.request.database ? 'database' : 'name';
+  metadata.set('x-goog-request-params', `${routing}=${encodeURIComponent(spec.request[routing])}`);
+  return metadata;
+}
+
 async function runGrpc(spec, createClientOverride) {
   const production = spec.target.kind === 'production';
   const createClient = createClientOverride ?? ((endpoint, credentials, options) => new grpc.Client(endpoint, credentials, options));
   const client = createClient(production ? 'firestore.googleapis.com:443' : `${spec.target.host}:${spec.target.port}`, production ? grpc.credentials.createSsl() : grpc.credentials.createInsecure(), CHANNEL_OPTIONS);
-  const metadata = new grpc.Metadata();
-  metadata.set('authorization', `Bearer ${spec.bearer}`);
-  if (production) metadata.set('x-goog-user-project', spec.projectId);
-  const routing = spec.request.database ? 'database' : 'name';
-  metadata.set('x-goog-request-params', `${routing}=${encodeURIComponent(spec.request[routing])}`);
+  const metadata = grpcMetadata(spec);
   let call;
   let timer;
   try {

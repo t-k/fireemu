@@ -307,6 +307,20 @@ test('REST headers carry the credential, and the user project only in production
   }
 });
 
+test('gRPC metadata carries the credential, and the user project only in production', async () => {
+  const { grpcMetadata } = await module();
+  const local = grpcMetadata(spec('GetDocument', { name: name('a') }, 'grpc'));
+  assert.deepEqual(local.get('authorization'), ['Bearer owner']);
+  assert.deepEqual(local.get('x-goog-user-project'), []);
+  for (const projectId of ['fireemu-oracle-sbx', 'fireemu-oracle-txn']) {
+    const production = { ...spec('GetDocument', { name: name('a') }, 'grpc'), target: { kind: 'production' }, projectId, bearer: 'ya29.token' };
+    const metadata = grpcMetadata(production);
+    assert.deepEqual(metadata.get('authorization'), ['Bearer ya29.token']);
+    assert.deepEqual(metadata.get('x-goog-user-project'), [projectId]);
+    assert.deepEqual(metadata.get('x-goog-request-params'), [`name=${encodeURIComponent(production.request.name)}`]);
+  }
+});
+
 test('the real REST exchange refuses an answer over the size cap', async () => {
   const { httpExchange, restRequest } = await module();
   const http = await import('node:http');

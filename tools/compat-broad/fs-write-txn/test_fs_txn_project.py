@@ -342,3 +342,56 @@ def test_the_runner_hands_the_tables_project_to_the_metadata_session_the_request
     (tmp_path / "sbx").mkdir()
     runner.run_once(0, support.TABLE, "a" * 32, "b" * 32, tmp_path / "sbx", baseline={}, runtime={}, check=lambda: None)
     assert "project" not in seen["metadata"] and seen["wire"] == {} and seen["metadata"]["request_fn"] is runner.request_once
+
+
+def test_the_whole_task_limit_reserves_what_the_projects_budget_says():
+    # 9.99 spent: the free-tier project reserves nothing and still fits; the shared project's four cents do not
+    spent = {**SBX_ROW, "ts": "2026-09-20T04:50:00Z", "taskId": authority.TASK_ID, "attemptId": "old", "estimatedUsd": 9.99}
+    assert authority.verify_initial_gates([spent], NOW, TXN_DECISIONS, TXN_PINS) is None
+    with pytest.raises(ValueError, match="US\\$10 limit"):
+        authority.verify_initial_gates([spent], NOW, AUTHORITY + envelope_row() + approve_row(), PINS)
+
+
+def test_a_loaded_packet_hands_back_its_project_and_reserve(tmp_path, monkeypatch):
+    import fs_txn_table_p13a as p13a
+    monkeypatch.setattr(cli, "verify_runtime", lambda _runtime: None)
+    baseline = tmp_path / "baseline.json"; baseline.write_text("{}\n")
+    envelope = tmp_path / "envelope.md"; envelope.write_text("scope proposal\n")
+    for table, project, reserve in ((p13a.TABLE, "fireemu-oracle-sbx", 0.04), (with_project(p13a.TABLE, TXN), TXN, 0.0)):
+        value = cli.packet_value(table=table, source_commit="b" * 40, runtime={"reviewed": True}, baseline_sha256=cli.sha(baseline.read_bytes()), envelope_sha256=cli.sha(envelope.read_bytes()),
+                                 packet_id="fs-transaction-p13a-inferred-answers-a001", envelope_relative="docs.local/reviews/x.md")
+        path = tmp_path / f"{project}.json"
+        path.write_text(json.dumps(value, sort_keys=True) + "\n")
+        loaded = cli.load_packet(path, cli.sha(path.read_bytes()), baseline, envelope, table=table, source_commit="b" * 40, packet_relative="docs.local/reviews/p.json", envelope_relative="docs.local/reviews/x.md")
+        assert (loaded["project"], loaded["reserveUsd"]) == (project, reserve)
+
+
+def test_the_session_lock_is_the_packets_projects(tmp_path, monkeypatch):
+    import test_txn_program_runner as runner_tests
+    tmp_path.chmod(0o700)
+    ledger = tmp_path / "sandbox-ledger.jsonl"
+    ledger.write_text(json.dumps(SBX_ROW) + "\n"); ledger.chmod(0o600)
+    asked = []
+    def lock(_directory, projects, **_kwargs):
+        asked.append(list(projects))
+        raise RuntimeError("stop after the lock request")
+    monkeypatch.setattr(runner.shared, "acquire_project_locks", lock)
+    for pins, decisions, project in ((TXN_PINS, TXN_DECISIONS, TXN), (PINS, AUTHORITY + envelope_row() + approve_row(), "fireemu-oracle-sbx")):
+        with pytest.raises(RuntimeError, match="stop after the lock request"):
+            runner.record_twice(table=runner_tests.TABLE, ledger_path=ledger, private_dir=tmp_path, pins=pins, decisions=lambda: decisions, now=lambda: NOW + dt.timedelta(days=1), record_once=None, admission_check=lambda: None)
+        assert asked[-1] == [project]
+
+
+def test_a_call_names_the_wires_project_in_its_spec(monkeypatch):
+    import txn_program_wire as wire
+    monkeypatch.setattr(wire, "verify_runtime", lambda _runtime: None)
+    for project in ("fireemu-oracle-sbx", TXN):
+        instance = wire.NodeWire({}, {"slug": "txn-x", "documents": ["a"], "states": ["created"]}, project=project)
+        seen = []
+        def child(spec, _timeout):
+            seen.append(spec)
+            raise RuntimeError("stop after the spec")
+        monkeypatch.setattr(instance, "_child", child)
+        with pytest.raises(RuntimeError, match="stop after the spec"):
+            instance.send("rest", "GetDocument", {"name": f"projects/{project}/databases/(default)/documents/x/a"}, nonce="n" * 32, owner_id="o" * 32, bearer="b")
+        assert seen[0]["projectId"] == project

@@ -280,3 +280,22 @@ def test_a_rest_retry_answered_with_the_named_tokens_own_bytes_stops_as_an_unkno
         ledger.after("rest/t3r/retry-idle", "rest", "BeginTransaction", request, retry, same, timing)
     assert "rest/t3r/retry-idle" in ledger.unknown_starts
     assert "t3r" not in ledger.tokens
+
+
+def test_an_accepted_retry_of_an_idle_expired_token_followed_by_a_release_that_answers_invalid_transaction_stays_unconfirmed():
+    # The release of a token that no refusal named as gone is settled only by 0, by the expired text, or (for a table with `releaseAfterAgeSeconds`) by a
+    # definite refusal of a token certainly older than that. "Invalid transaction." alone does not settle it: the recording stops on an unconfirmed
+    # release, so any later widening of this rule is a deliberate change (presend review N4).
+    from txn_program_collector import INVALID_DETAILS
+    plan, ledger, retry, request, timing = _retry_ledger()
+    ledger.tokens["t3"]["start"] = {"dispatchMonotonic": 0.0, "responseMonotonic": 0.5, "dispatchUtc": "2026-09-30T00:00:00.000000Z", "responseUtc": "2026-09-30T00:00:00.500000Z"}   # begun 3 s earlier: far younger than the release age
+    accepted = {"kind": "txn-program-receipt-v1", "transport": "rest", "complete": True, "code": 0, "details": "", "response": {"transaction": "bmV3dG9rZW4z"}, "http": 200, "dispatchedRequests": 1, "childReaped": True}
+    ledger.before("rest/t3r/retry-idle", "rest", "BeginTransaction", request, retry)
+    ledger.after("rest/t3r/retry-idle", "rest", "BeginTransaction", request, retry, accepted, timing)
+    assert ledger.tokens["t3"]["state"] == "open" and ledger.tokens["t3r"]["state"] == "open"
+    release = {"database": plan["database"], "transaction": "dG9rZW4z"}
+    ledger.before("cleanup/token/t3", "rest", "Rollback", release, None)
+    later = {**timing, "dispatchMonotonic": 3.0, "responseMonotonic": 4.0, "dispatchUtc": "2026-09-30T00:00:03.000000Z", "responseUtc": "2026-09-30T00:00:04.000000Z"}
+    forgotten = {"kind": "txn-program-receipt-v1", "transport": "rest", "complete": True, "code": 3, "details": INVALID_DETAILS, "response": None, "http": 400, "dispatchedRequests": 1, "childReaped": True}
+    ledger.after("cleanup/token/t3", "rest", "Rollback", release, None, forgotten, later)
+    assert ledger.tokens["t3"]["state"] == "unconfirmed-release", "a bare Invalid transaction answer does not release the token"

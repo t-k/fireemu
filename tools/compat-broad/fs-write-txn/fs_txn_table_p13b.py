@@ -25,6 +25,10 @@ token value. The P09 and P10 retries (of a committed, a rolled-back and a get-fi
 value different from the one it named. The ledger requires a fresh token of every issued one, so a REST retry that returned the named token's own
 bytes stops the run with its start unknown (pinned by a test in test_fs_txn_retry_of.py).
 
+`maxUnresolvedTokens` (a framework constant, 1) is read here as "at most one unresolved token at each chain boundary": while a retry runs, the token it names and
+the token it issues are both unresolved until the chain-end releases, and neither holds a lock (the named token is expired, or rolled back or refused; the new
+token has read nothing).
+
 REST only: the shared gRPC wire cannot send `retryTransaction`."""
 
 from pathlib import Path

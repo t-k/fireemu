@@ -115,6 +115,22 @@ test('REST: a batch answer that is not a bounded list of entries is an unknown o
   assert.equal(plainError.code, 5);
 });
 
+test('REST: a refusal is definite only when its HTTP status is the one its error status maps to; a 3xx or 5xx, or a disagreeing pair, is an unknown outcome', async () => {
+  const { runUnary } = await module();
+  const call = spec('Commit', commit([write('a', 'held')]), 'rest');
+  const answer = async (status, name) => runUnary(call, exchange([{ status, text: JSON.stringify({ error: { message: 'm', status: name } }) }]).run);
+  // the pairs production recorded (409 ABORTED, 400 INVALID_ARGUMENT, 404 NOT_FOUND) and the other canonical ones stay definite
+  for (const [status, name, code] of [[409, 'ABORTED', 10], [400, 'INVALID_ARGUMENT', 3], [404, 'NOT_FOUND', 5], [400, 'FAILED_PRECONDITION', 9], [409, 'ALREADY_EXISTS', 6], [403, 'PERMISSION_DENIED', 7], [429, 'RESOURCE_EXHAUSTED', 8], [401, 'UNAUTHENTICATED', 16]]) {
+    const result = await answer(status, name);
+    assert.deepEqual([result.code, result.complete, result.http], [code, true, status], `${status} ${name}`);
+  }
+  // a 5xx or 3xx that names a definitive status, and a 4xx whose status names another code, are not a refusal
+  for (const [status, name] of [[503, 'ABORTED'], [500, 'FAILED_PRECONDITION'], [504, 'NOT_FOUND'], [302, 'ABORTED'], [301, 'INVALID_ARGUMENT'], [409, 'NOT_FOUND'], [404, 'ABORTED'], [400, 'ABORTED'], [429, 'ABORTED']]) {
+    const result = await answer(status, name);
+    assert.deepEqual([result.code, result.complete, result.http], [2, false, status], `${status} ${name}`);
+  }
+});
+
 function streamClient(events) {
   const handlers = {};
   const call = { on(name, handler) { handlers[name] = handler; return call; }, cancel() { call.cancelled = true; } };

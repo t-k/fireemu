@@ -145,6 +145,7 @@ def violations(source, toolchain_channel: nil)
     script = validate["run"].to_s
     errors << "plan must refuse a run from the default branch and from a tag" unless script.include?("$GITHUB_REF") && script.include?("refs/heads/$DEFAULT_BRANCH") && script.include?("refs/tags/")
     errors << "plan must resolve the ref and the base inside this repository" unless script.include?("for-each-ref --contains") && script.include?("refs/heads/$value")
+    errors << "plan must pin the locale (export LC_ALL=C) before it matches a pattern" unless script.include?("export LC_ALL=C")
     errors << "plan must refuse an unreadable default branch" unless script.include?('[[ -n $DEFAULT_BRANCH ]]')
     errors << "plan must refuse refs/, HEAD and FETCH_HEAD" unless script.include?("refs/*") && script.include?("FETCH_HEAD")
   end

@@ -573,12 +573,74 @@ mod tests {
         );
         let mut byte = [0_u8; 1];
         assert_eq!(
-            wrapped.read(&mut byte).await.expect("a read sees the end"),
+            timeout(GUARD, wrapped.read(&mut byte))
+                .await
+                .expect("a read after the shutdown ends at once")
+                .expect("a read sees the end"),
             0
         );
         wrapped
             .flush()
             .await
             .expect("a flush after shutdown is harmless");
+    }
+
+    // ---- properties ----
+
+    use proptest::prelude::*;
+
+    proptest! {
+        /// The bounds of a listener always cover its largest body with the framing margin, never
+        /// fall below the floor, never exceed what the margin and the floor say, and grow with the
+        /// body.
+        #[test]
+        fn the_limit_covers_the_body_with_its_margin_and_never_the_floor_less(
+            largest in 0_usize..=usize::MAX,
+            more in 0_usize..1_000_000,
+        ) {
+            let bounds = DrainBounds::for_largest_body(largest);
+            prop_assert!(bounds.limit_bytes >= MIN_DRAIN_BYTES);
+            prop_assert!(bounds.limit_bytes >= largest);
+            prop_assert!(bounds.limit_bytes >= largest.saturating_add(largest / 8).min(usize::MAX));
+            let ceiling = largest.saturating_add(largest / 8).max(MIN_DRAIN_BYTES);
+            prop_assert_eq!(bounds.limit_bytes, ceiling);
+            prop_assert!(
+                DrainBounds::for_largest_body(largest.saturating_add(more)).limit_bytes
+                    >= bounds.limit_bytes
+            );
+            prop_assert_eq!(bounds.idle, DRAIN_IDLE);
+            prop_assert_eq!(bounds.total, DRAIN_TOTAL);
+        }
+
+        /// Model of the drain: a client that sends `total` bytes and closes has all of them read
+        /// when they fit the limit, and otherwise is read up to the limit and not much past it (one
+        /// read of 16 KiB); the connection is always shut down first and the drain always ends.
+        #[test]
+        fn the_drain_reads_the_whole_body_within_the_limit_and_stops_at_the_limit_otherwise(
+            total in 0_usize..400_000,
+            limit in 1_usize..400_000,
+        ) {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_time()
+                .build()
+                .expect("a runtime");
+            runtime.block_on(async {
+                let (server, mut client) = tokio::io::duplex(1024 * 1024);
+                client.write_all(&vec![7_u8; total]).await.expect("written");
+                drop(client);
+                let (mut probe, counters) = Probe::new(server);
+                closing(&mut probe, limit).await;
+                let read = counters.bytes.load(Ordering::SeqCst);
+                prop_assert!(counters.shut_down.load(Ordering::SeqCst));
+                if total < limit {
+                    prop_assert_eq!(read, total);
+                } else {
+                    prop_assert!(read >= limit, "read {read} of a limit of {limit}");
+                    prop_assert!(read < limit + 16 * 1024, "read {read} of a limit of {limit}");
+                    prop_assert!(read <= total);
+                }
+                Ok(())
+            })?;
+        }
     }
 }

@@ -630,5 +630,19 @@ test("the origin of a link is masked only when it is the expected one: the produ
     "https://www.googleapis.com",
   );
   assert.notDeepEqual(swapped, production);
+  // The production hosts are expected per member even when the request went to a third host.
+  const viaThird = exchange(
+    `https://firebasestorage.googleapis.com/v0/b/${BUCKET}/o/a.bin`,
+    "https://www.googleapis.com",
+    "https://storage.googleapis.com",
+  );
+  assert.deepEqual(viaThird, production);
+  const mediaOnWww = exchange(
+    `https://firebasestorage.googleapis.com/v0/b/${BUCKET}/o/a.bin`,
+    "https://www.googleapis.com",
+    "https://www.googleapis.com",
+  );
+  assert.equal(mediaOnWww.selfLink, production.selfLink);
+  assert.notEqual(mediaOnWww.mediaLink, production.mediaLink);
   assert.equal(swapped.selfLink, `https://storage.googleapis.com/storage/v1/b/<BUCKET>/o/a.bin`);
 });

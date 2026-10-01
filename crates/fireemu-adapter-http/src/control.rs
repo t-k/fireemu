@@ -14,9 +14,13 @@
 //! GET  /v1/sessions/{session}/rules/requests
 //! ```
 //!
-//! `clock:set` moves backwards only with `"allowBackwards": true`. Such a rewind makes ID tokens
-//! whose `iat` or `auth_time` is later than the new instant fail verification as malformed (their
-//! claims are in the future) until the clock reaches them again.
+//! `clock:set` moves backwards only with `"allowBackwards": true`. What a rewind does to an ID
+//! token whose `iat` or `auth_time` is now in the future depends on the profile (owner decision
+//! ledger 781). The `emulator` profile accepts it on every surface, as firebase-tools 15.28.2
+//! does. `strict` refuses it until the clock reaches those claims again: Identity Toolkit answers
+//! `INVALID_ID_TOKEN`, and Firestore and Storage Rules do not admit it. Expiry still applies in
+//! both profiles. A rewind below an account's creation or revocation time makes even a new
+//! sign-in's token count as revoked.
 //!
 //! The daemon currently runs one implicit session; every session name maps to it. Sessions,
 //! snapshots and `await-idle` arrive with the session runtime.

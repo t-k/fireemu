@@ -1286,6 +1286,10 @@ pub struct AuthStore {
     /// Whether second factors follow production's project rules (the strict profile): the
     /// project's `mfa` config decides whether a sign-in asks for one.
     production_mfa: bool,
+    /// Whether an ID token with a future `iat` or `auth_time` is refused (strict) or accepted
+    /// (the emulator profile), for the verifiers that do not take the profile from a
+    /// [`crate::jwt::TokenAcceptance`].
+    future_id_token_claims: crate::jwt::FutureClaims,
     oob_codes: Arc<BTreeMap<String, OobCode>>,
     verification_codes: Arc<BTreeMap<String, VerificationCode>>,
     /// Outstanding phone `temporaryProof`s: proof to the verified number and its issue time.
@@ -1653,6 +1657,7 @@ impl AuthStore {
             legacy_tokens_issued: false,
             production_oob_lifetimes: false,
             production_mfa: false,
+            future_id_token_claims: crate::jwt::FutureClaims::Refuse,
             oob_codes: Arc::new(BTreeMap::new()),
             verification_codes: Arc::new(BTreeMap::new()),
             temporary_proofs: BTreeMap::new(),
@@ -3553,6 +3558,18 @@ impl AuthStore {
     /// Switches second factors to production's project rules (see `production_mfa`).
     pub fn set_production_mfa(&mut self, production: bool) {
         self.production_mfa = production;
+    }
+
+    /// Sets the profile's policy for ID tokens with a future `iat` or `auth_time`.
+    pub fn set_future_id_token_claims(&mut self, future: crate::jwt::FutureClaims) {
+        self.future_id_token_claims = future;
+    }
+
+    /// The profile's policy for ID tokens with a future `iat` or `auth_time` (strict refuses
+    /// them until set otherwise).
+    #[must_use]
+    pub const fn future_id_token_claims(&self) -> crate::jwt::FutureClaims {
+        self.future_id_token_claims
     }
 
     /// Whether a sign-in of `uid`, an account with enrolled factors, must ask for one: always

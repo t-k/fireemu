@@ -5,9 +5,9 @@
 
 use fireemu_core_auth::claims::{ClaimValue, IdTokenClaims};
 use fireemu_core_auth::jwt::{
-    decode_unsigned, encode_payload_with, encode_unsigned, verify_id_token,
-    verify_id_token_decoded, verify_rules_token, verify_rules_token_for_project, JwtError,
-    TokenAcceptance,
+    decode_unsigned, encode_payload_with, encode_unsigned, verify_firestore_rules_token,
+    verify_firestore_token, verify_id_token, verify_id_token_decoded, verify_rules_token,
+    verify_rules_token_for_project, FutureClaims, JwtError, TokenAcceptance,
 };
 use fireemu_core_auth::mfa::TotpPolicy;
 use fireemu_core_auth::store::{AuthStore, LocalId, NewUser};
@@ -306,5 +306,91 @@ fn very_large_time_claims_do_not_require_duration_arithmetic() {
     assert_eq!(
         verify_id_token(&encode_unsigned(&claims), &store, at(NOW)),
         Err(JwtError::Malformed)
+    );
+}
+
+/// Ledger 781: a store set to the emulator profile's policy accepts future `iat` and
+/// `auth_time` on the Identity Toolkit and Firestore verifiers; a new store refuses them
+/// (strict is the default). The claims must still be integers and `exp` still applies.
+#[test]
+fn the_store_policy_decides_future_claims_and_strict_is_the_default() {
+    let (mut store, mut claims, _) = fixture();
+    assert_eq!(store.future_id_token_claims(), FutureClaims::Refuse);
+    claims.iat = NOW + 600;
+    claims.auth_time = NOW + 600;
+    claims.exp = NOW + 3600;
+    let future = encode_unsigned(&claims);
+    assert_eq!(
+        verify_id_token(&future, &store, at(NOW)),
+        Err(JwtError::Malformed)
+    );
+    assert_eq!(
+        verify_firestore_token(&future, &store, at(NOW)).map(|_| ()),
+        Err(JwtError::Malformed)
+    );
+    store.set_future_id_token_claims(FutureClaims::Accept);
+    assert!(verify_id_token(&future, &store, at(NOW)).is_ok());
+    assert!(verify_firestore_token(&future, &store, at(NOW)).is_ok());
+    for (key, raw) in [("iat", Some("\"1788005460\"")), ("auth_time", None)] {
+        let bad = with_json_claim(&claims, key, raw);
+        assert_eq!(
+            verify_id_token(&bad, &store, at(NOW)),
+            Err(JwtError::Malformed),
+            "{key}"
+        );
+    }
+    claims.exp = NOW;
+    assert_eq!(
+        verify_id_token(&encode_unsigned(&claims), &store, at(NOW)),
+        Err(JwtError::Expired)
+    );
+}
+
+/// The Rules entry points take the policy from the profile's token acceptance, never from
+/// the store: `Verified` (strict) refuses a future-dated token even on a store set to accept,
+/// and the verified path of `EmulatorMock` accepts it on a store left at the strict default.
+#[test]
+fn rules_entry_points_take_future_claims_from_the_acceptance_not_the_store() {
+    let (mut store, mut claims, _) = fixture();
+    claims.iat = NOW + 600;
+    claims.auth_time = NOW + 600;
+    let future = encode_unsigned(&claims);
+    for policy in [FutureClaims::Refuse, FutureClaims::Accept] {
+        store.set_future_id_token_claims(policy);
+        assert_eq!(
+            verify_rules_token(&future, &store, at(NOW), TokenAcceptance::Verified).map(|_| ()),
+            Err(JwtError::Malformed),
+            "{policy:?}"
+        );
+        assert_eq!(
+            verify_firestore_rules_token(&future, &store, at(NOW), TokenAcceptance::Verified, None)
+                .map(|_| ()),
+            Err(JwtError::Malformed),
+            "{policy:?}"
+        );
+        for verified in [
+            verify_rules_token(&future, &store, at(NOW), TokenAcceptance::EmulatorMock),
+            verify_firestore_rules_token(
+                &future,
+                &store,
+                at(NOW),
+                TokenAcceptance::EmulatorMock,
+                None,
+            ),
+        ] {
+            assert_eq!(
+                verified.unwrap().sub(),
+                Some(claims.sub.as_str()),
+                "{policy:?}"
+            );
+        }
+    }
+    assert_eq!(
+        TokenAcceptance::Verified.future_claims(),
+        FutureClaims::Refuse
+    );
+    assert_eq!(
+        TokenAcceptance::EmulatorMock.future_claims(),
+        FutureClaims::Accept
     );
 }

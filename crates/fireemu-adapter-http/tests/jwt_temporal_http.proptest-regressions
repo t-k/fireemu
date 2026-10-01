@@ -5,3 +5,4 @@
 # It is recommended to check this file in to source control so that
 # everyone who runs the test benefits from these saved cases.
 cc 73e12ec8b08050564ed39e5f6bbc224b546a4f206e91c2f3860ab030fe8e469e # shrinks to offset = 3600000000000, detour = 0
+cc 2c08f3dd361eb1372cf8513c084ec887878dfcf009f70cc71d91e2de9c9ea5eb # shrinks to offset = -1, detour = 0, emulator = true

@@ -4929,6 +4929,13 @@ fn handle_with_policy_inner(
     // code lives an hour and is then refused as expired (sandbox recording 2026-09-24).
     store.set_production_oob_lifetimes(!state.stateless_refresh_tokens);
     store.set_production_mfa(!state.stateless_refresh_tokens);
+    // Strict refuses an ID token with a future `iat` or `auth_time` (inferred); the emulator
+    // profile accepts it as firebase-tools 15.28.2 does (owner decision ledger 781).
+    store.set_future_id_token_claims(if state.stateless_refresh_tokens {
+        fireemu_core_auth::jwt::FutureClaims::Accept
+    } else {
+        fireemu_core_auth::jwt::FutureClaims::Refuse
+    });
     // Expired transient credentials are swept before every request is served, so nothing
     // past its lifetime is observable (`AUTH-TRANSIENT-01`, `-02`).
     store.sweep_transient_credentials(at);

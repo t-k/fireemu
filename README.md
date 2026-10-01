@@ -367,7 +367,7 @@ This is a local fixed-window simulation. It does not reproduce Firebase’s full
 
 ### Configure execution time
 
-Set the emulator’s starting time with `daemon.clockStart`. Configure the clock, time zone, and other scheduling behavior in the `scheduler` section. This lets you test scheduled functions independently of the actual time. Moving the clock backwards (`clock:set` with `"allowBackwards": true`, or **Allow moving backwards** on the Runtime page) makes ID tokens issued after the new time fail verification until the clock reaches their issue time again, so sign in again after a rewind.
+Set the emulator’s starting time with `daemon.clockStart`. Configure the clock, time zone, and other scheduling behavior in the `scheduler` section. This lets you test scheduled functions independently of the actual time. The clock can also move backwards (`clock:set` with `"allowBackwards": true`, or **Allow moving backwards** on the Runtime page). In the `emulator` profile, ID tokens stay usable after a rewind, as with the official emulator, which does not check their issue time. In the `strict` profile, Authentication (`INVALID_ID_TOKEN`), Cloud Firestore and Cloud Storage refuse an ID token issued after the new time until the clock reaches its issue time again. In both profiles an expired token is still refused. A rewind to before an account was created, or before its tokens were revoked, makes even a new sign-in's token count as revoked; move the clock forward again or reset the session instead.
 
 See the [configuration schema](spec/config/fireemu.schema.json) for available settings and values. 
 

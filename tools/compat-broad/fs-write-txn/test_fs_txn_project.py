@@ -242,7 +242,7 @@ from test_txn_program_authority import AUTHORITY, ENVELOPE_ID, NAME, NOW, PINS, 
 
 TXN_SCOPE = {**SCOPE, "project": f"{TXN}/(default)"}
 TXN_PINS = {**PINS, "project": TXN, "estimatedUsdPerRecording": 0.0, "scope": TXN_SCOPE}
-TXN_DECISIONS = AUTHORITY + envelope_row(scope=TXN_SCOPE, reserveUsd="0") + approve_row()
+TXN_DECISIONS = AUTHORITY + envelope_row(scope=TXN_SCOPE, reserveUsd="0") + approve_row(estimatedUsdPerRecording="0")
 SBX_ROW = {"ts": "2026-09-28T04:50:00Z", "project": "fireemu-oracle-sbx", "taskId": "FS-TRANSACTION-SANDBOX", "attemptId": "sbx-recent", "outcome": "recorded", "estimatedUsd": 0.05}
 TXN_ROW = {**SBX_ROW, "project": TXN, "attemptId": "txn-recent", "estimatedUsd": 0.0}
 
@@ -395,3 +395,75 @@ def test_a_call_names_the_wires_project_in_its_spec(monkeypatch):
         with pytest.raises(RuntimeError, match="stop after the spec"):
             instance.send("rest", "GetDocument", {"name": f"projects/{project}/databases/(default)/documents/x/a"}, nonce="n" * 32, owner_id="o" * 32, bearer="b")
         assert seen[0]["projectId"] == project
+
+
+TXN_LOCK = "sandbox-locks/fireemu-oracle-txn.lock"
+
+
+def txn_record(table):
+    """One recording of the txn project as the runner produces it: the metadata is the session's preflight, which has no Rules release."""
+    from test_txn_program_collector import Clock, Service
+    from txn_program_collector import Collector
+    from txn_program_program import RequestBudget
+
+    def record(_index, nonce, owner, _directory):
+        plan = compile_plan(table, nonce, owner)
+        clock = Clock()
+        receipt = Collector(plan, table, RequestBudget(plan, table), Service(clock), "owner", save=lambda _state: None, monotonic=clock.now, utc=clock.utc).run()
+        receipt["metadata"] = {"oauth-tokeninfo": {"verified": True, "requiredSeconds": 1600}, "project": "a" * 64, "database": "b" * 64, "rules-absent": "absent"}
+        return receipt
+    return record
+
+
+def txn_session(tmp_path):
+    import test_txn_program_runner as runner_tests
+    tmp_path.chmod(0o700)
+    ledger = tmp_path / "sandbox-ledger.jsonl"
+    ledger.write_text(json.dumps(SBX_ROW) + "\n"); ledger.chmod(0o600)
+    table = with_project(runner_tests.TABLE, TXN)
+    kwargs = {"table": table, "ledger_path": ledger, "private_dir": tmp_path, "pins": TXN_PINS, "decisions": lambda: TXN_DECISIONS, "now": lambda: NOW + dt.timedelta(days=1),
+              "record_once": txn_record(table), "admission_check": lambda: None}
+    return ledger, kwargs
+
+
+def test_two_recordings_of_the_txn_project_freeze_and_release_its_lock(tmp_path):
+    ledger, kwargs = txn_session(tmp_path)
+    result = runner.record_twice(**kwargs)
+    frozen = json.loads((result["freezePath"]).read_text())
+    assert frozen["kind"] == "txn-program-freeze-v1" and frozen["rules"] == {"rulesRelease": "absent"}
+    assert not (tmp_path / TXN_LOCK).exists()
+    rows = [json.loads(line) for line in ledger.read_text().splitlines()]
+    assert [row["outcome"] for row in rows[1:]] == ["reserved", "recorded", "reserved", "recorded"]
+    assert all(row["project"] == TXN for row in rows[1:])
+
+
+def test_a_txn_recording_that_shows_a_rules_release_does_not_freeze_and_keeps_the_lock(tmp_path):
+    ledger, kwargs = txn_session(tmp_path)
+    inner = kwargs["record_once"]
+    def once(index, nonce, owner, directory):
+        receipt = inner(index, nonce, owner, directory)
+        if index == 1:
+            receipt["metadata"]["rules-absent"] = "present"
+        return receipt
+    kwargs["record_once"] = once
+    with pytest.raises(ValueError, match="differ"):
+        runner.record_twice(**kwargs)
+    assert (tmp_path / TXN_LOCK).exists()
+    assert json.loads(ledger.read_text().splitlines()[-1])["outcome"] == "stopped-needs-review"
+
+
+def test_the_approval_line_carries_the_projects_own_estimate():
+    # the free-tier project's estimate is zero: an approval that still says 0.01 is not the packet's version, and the other way round
+    for estimate in ("0", "0.0", "0.00"):
+        assert authority.authorize(AUTHORITY + envelope_row(scope=TXN_SCOPE, reserveUsd="0") + approve_row(estimatedUsdPerRecording=estimate), TXN_PINS)[1] == 0.0
+    with pytest.raises(ValueError, match="APPROVE"):
+        authority.authorize(AUTHORITY + envelope_row(scope=TXN_SCOPE, reserveUsd="0") + approve_row(estimatedUsdPerRecording="0.01"), TXN_PINS)
+    assert authority.authorize(AUTHORITY + envelope_row() + approve_row(), PINS)[1] == 0.04
+    with pytest.raises(ValueError, match="APPROVE"):
+        authority.authorize(AUTHORITY + envelope_row() + approve_row(estimatedUsdPerRecording="0"), PINS)
+
+
+def test_a_ledger_row_records_the_projects_own_estimate():
+    for pins, expected in ((TXN_PINS, 0.0), (PINS, 0.01)):
+        row = runner._row({**pins, "requestsPerRecording": 10, "envelopeId": ENVELOPE_ID, "packetId": "p", "sourceCommit": "b" * 40, "runnerSha256": "c" * 64}, "attempt", Path("/tmp/x"), "n" * 32, "reserved", None, dt.datetime(2026, 9, 28, 5, tzinfo=dt.timezone.utc))
+        assert row["estimatedUsd"] == expected

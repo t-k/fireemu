@@ -115,7 +115,7 @@ def run_once(index, table, nonce, owner_id, directory, *, baseline, runtime, che
 def _row(pins, attempt, directory, nonce, outcome, requests, now):
     if requests is not None and (type(requests) is not int or not 0 <= requests <= pins['requestsPerRecording']):
         raise ValueError('program charged request count escaped its cap')
-    return {'ts': now.isoformat().replace('+00:00', 'Z'), 'project': pins.get('project', PROJECT), 'database': '(default)', 'taskId': TASK_ID, 'envelopeId': pins['envelopeId'], 'packetId': pins['packetId'], 'gitSha': pins['sourceCommit'], 'runnerSha256': pins['runnerSha256'], 'attemptId': attempt, 'runDir': str(directory), 'nonce': nonce, 'outcome': outcome, 'requests': requests, 'estimatedUsd': 0.01, 'pythonVersion': '3.12.13'}
+    return {'ts': now.isoformat().replace('+00:00', 'Z'), 'project': pins.get('project', PROJECT), 'database': '(default)', 'taskId': TASK_ID, 'envelopeId': pins['envelopeId'], 'packetId': pins['packetId'], 'gitSha': pins['sourceCommit'], 'runnerSha256': pins['runnerSha256'], 'attemptId': attempt, 'runDir': str(directory), 'nonce': nonce, 'outcome': outcome, 'requests': requests, 'estimatedUsd': pins.get('estimatedUsdPerRecording', 0.01), 'pythonVersion': '3.12.13'}
 
 
 def record_twice(*, table, ledger_path, private_dir, pins, decisions, now, record_once, admission_check):
@@ -148,8 +148,14 @@ def record_twice(*, table, ledger_path, private_dir, pins, decisions, now, recor
             receipts.append(receipt)
         admission_check(); authorize(decisions(), pins)
         first, second = (projection(receipt, table) for receipt in receipts)
-        metadata = [{key: receipt.get('metadata', {}).get(key) for key in ['rulesetName', 'rulesSourceSha256']} for receipt in receipts]
-        if first != second or metadata[0] != metadata[1] or any(not value for value in metadata[0].values()):
+        if pins.get('project', PROJECT) == PROJECT:
+            metadata = [{key: receipt.get('metadata', {}).get(key) for key in ['rulesetName', 'rulesSourceSha256']} for receipt in receipts]
+            rules_ok = all(metadata[0].values())
+        else:
+            # A project with no Rules release: the session proved the absence before each recording (the rules-absent slot).
+            metadata = [{'rulesRelease': receipt.get('metadata', {}).get('rules-absent')} for receipt in receipts]
+            rules_ok = metadata[0] == {'rulesRelease': 'absent'}
+        if first != second or metadata[0] != metadata[1] or not rules_ok:
             save_private(directory / 'freeze-differences.json', {'first': first, 'second': second, 'metadata': metadata})
             raise ValueError('program independent recordings differ; shared lock retained')
         frozen = {'kind': 'txn-program-freeze-v1', 'packetSha256': pins['packetSha256'], 'sourceCommit': pins['sourceCommit'], 'projection': first, 'rules': metadata[0], 'recordingSha256': [hashlib.sha256((directory / f'recording-{index + 1}.json').read_bytes()).hexdigest() for index in range(2)], 'authorizesProduction': False}

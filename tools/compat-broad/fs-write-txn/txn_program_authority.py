@@ -34,6 +34,14 @@ def _values(columns):
     return values
 
 
+def _same_amount(text, amount):
+    """The APPROVE line states the packet's own estimate, compared as an amount (0, 0.0 and 0.00 are the same US$0)."""
+    try:
+        return Decimal(str(text)) == Decimal(str(amount))
+    except (InvalidOperation, TypeError, ValueError):
+        return False
+
+
 def _check_scope(pins):
     name = pins.get('packetName')
     requests = pins.get('requestsPerRecording')
@@ -53,7 +61,7 @@ def authorize(decisions, pins):
     for columns, _tokens in entries:
         if shared.normalize_authority(columns[1]) in scope and shared._revoked_packet(columns[2], pins['packetSha256'], pins['envelopeId']):
             raise ValueError('program packet or envelope is REVOKED')
-    expected = {'decision': 'APPROVE', 'envelopeId': pins['envelopeId'], 'packetSha256': pins['packetSha256'], 'sourceCommit': pins['sourceCommit'], 'runnerSha256': pins['runnerSha256'], 'requestsPerRecording': str(requests), 'estimatedUsdPerRecording': '0.01', 'recordings': '2'}
+    expected = {'decision': 'APPROVE', 'envelopeId': pins['envelopeId'], 'packetSha256': pins['packetSha256'], 'sourceCommit': pins['sourceCommit'], 'runnerSha256': pins['runnerSha256'], 'requestsPerRecording': str(requests), 'recordings': '2'}
     exact = []
     for columns, _tokens in entries:
         if shared.normalize_authority(columns[1]) not in {shared.normalize_authority(value) for value in ('FS-TRANSACTION', name)} or columns[4] != pins['packetPath']:
@@ -61,7 +69,7 @@ def authorize(decisions, pins):
         values = _values(columns)
         actor = columns[3]
         delegated = shared._delegated_actor(actor, entries, decisions, allow_within_envelope=True)
-        if all(values.get(shared.normalize_authority(key)) == shared.normalize_authority(value) for key, value in expected.items()) and (shared.normalize_authority(actor).startswith(shared.normalize_authority('オーナー')) or delegated):
+        if all(values.get(shared.normalize_authority(key)) == shared.normalize_authority(value) for key, value in expected.items()) and _same_amount(values.get(shared.normalize_authority('estimatedUsdPerRecording')), pins['estimatedUsdPerRecording']) and (shared.normalize_authority(actor).startswith(shared.normalize_authority('オーナー')) or delegated):
             exact.append(columns)
     if len(exact) != 1:
         raise ValueError('one explicit exact-version program APPROVE row required')

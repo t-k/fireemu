@@ -1839,10 +1839,10 @@ fn storage_state(
         .map_err(|e| format!("database id: {e}"))?,
         document: None,
     };
-    let mut store = fireemu_core_storage::store::StorageState::new(cfg.seed ^ 0x57);
-    store.set_stored_bytes_limit(cfg.storage_max_stored_bytes);
-    Ok(Arc::new(fireemu_adapter_http::storage::StorageState {
-        store: Mutex::new(store),
+    let state = Arc::new(fireemu_adapter_http::storage::StorageState {
+        store: Mutex::new(fireemu_core_storage::store::StorageState::new(
+            cfg.seed ^ 0x57,
+        )),
         clock: clock.clone(),
         auth: registry.clone(),
         tenancy: Some(tenancy.clone()),
@@ -1860,7 +1860,13 @@ fn storage_state(
         admin_capability: Some(admin_capability),
         token_acceptance: cfg.token_acceptance,
         control_token: Some(control_token),
-    }))
+    });
+    state
+        .store
+        .lock()
+        .map_err(|_| "the Storage store lock is poisoned".to_owned())?
+        .set_stored_bytes_limit(cfg.storage_max_stored_bytes);
+    Ok(state)
 }
 
 /// The listeners `--only` asked for.

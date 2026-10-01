@@ -197,6 +197,43 @@ async fn start_with_runtime_options_and_env(
     env: Vec<(String, String)>,
     configure: impl FnOnce(&mut fireemu_core_functions::manifest::FunctionManifest),
 ) -> (Arc<FunctionsRuntime>, Arc<Mutex<VirtualClock>>) {
+    start_runtime(
+        overlap,
+        catch_up,
+        max_running,
+        respawnable,
+        env,
+        1000,
+        configure,
+    )
+    .await
+}
+
+/// The default runtime with a catch-up cap of `max_catch_up_runs` (`all` policy).
+async fn start_with_catch_up_cap(
+    max_catch_up_runs: usize,
+) -> (Arc<FunctionsRuntime>, Arc<Mutex<VirtualClock>>) {
+    start_runtime(
+        fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
+        fireemu_adapter_functions::runtime::CatchUpPolicy::All,
+        4,
+        true,
+        Vec::new(),
+        max_catch_up_runs,
+        |_| {},
+    )
+    .await
+}
+
+async fn start_runtime(
+    overlap: fireemu_adapter_functions::runtime::OverlapPolicy,
+    catch_up: fireemu_adapter_functions::runtime::CatchUpPolicy,
+    max_running: usize,
+    respawnable: bool,
+    env: Vec<(String, String)>,
+    max_catch_up_runs: usize,
+    configure: impl FnOnce(&mut fireemu_core_functions::manifest::FunctionManifest),
+) -> (Arc<FunctionsRuntime>, Arc<Mutex<VirtualClock>>) {
     let script = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fake_runner.py");
     let spec = SpawnSpec {
         command: vec!["python3".to_owned(), script.to_owned()],
@@ -218,7 +255,7 @@ async fn start_with_runtime_options_and_env(
             max_running,
             debug_mode: false,
             retry_attempts: 4,
-            max_catch_up_runs: 1000,
+            max_catch_up_runs,
             runner_secret: "s".into(),
             overlap,
             catch_up,
@@ -3349,6 +3386,169 @@ async fn scheduled_runs_obey_delivery_faults_and_delays_keep_their_outcome() {
         "the duplicate ran: {:?}",
         runtime.history()
     );
+}
+
+fn advance(clock: &Mutex<VirtualClock>, seconds: i64) {
+    clock
+        .lock()
+        .unwrap()
+        .advance(LogicalDuration::from_seconds(seconds))
+        .unwrap();
+}
+
+fn count_function(runtime: &FunctionsRuntime, function: &str) -> usize {
+    runtime
+        .history()
+        .iter()
+        .filter(|r| r.function == function && r.outcome == "ok")
+        .count()
+}
+
+#[tokio::test]
+async fn full_catch_up_cap_still_releases_due_retries() {
+    // Cap 1: the retry-waiting `fail` event fills the catch-up room, so the 10-minute jump
+    // keeps one `tick` run pending. Due retries must still be released on every clock
+    // change, and the pending run must follow once the room frees.
+    let (runtime, clock) = start_with_catch_up_cap(1).await;
+    runtime.on_commit(&commit(vec![DocumentChange {
+        path: doc("items/a", 1).path,
+        before: None,
+        after: Some(doc("items/a", 1).into()),
+    }]));
+    let _ = runtime.await_idle(Duration::from_millis(300)).await;
+    advance(&clock, 10 * 60);
+    runtime.on_clock_changed();
+    let _ = runtime.await_idle(Duration::from_millis(300)).await;
+    for _ in 0..3 {
+        advance(&clock, 60);
+        runtime.on_clock_changed();
+        let _ = runtime.await_idle(Duration::from_millis(300)).await;
+    }
+    assert!(
+        runtime.await_idle(Duration::from_secs(3)).await.is_ok(),
+        "{}",
+        runtime.status()
+    );
+    let dead = runtime.dead_letters();
+    assert_eq!(dead.len(), 1, "{dead:?}");
+    assert_eq!((dead[0].function.as_str(), dead[0].attempt), ("fail", 4));
+    // `every 5 minutes` runs on the five-minute marks: 12:05 and 12:10 by 12:14.
+    assert_eq!(
+        count_function(&runtime, "tick"),
+        2,
+        "{:?}",
+        runtime.history()
+    );
+}
+
+#[tokio::test]
+async fn full_catch_up_cap_still_wakes_delayed_events() {
+    use fireemu_core_session::fault::{FaultAction, FaultMatch, FaultPlan, FaultRule, FaultState};
+    // Cap 1: the first `tick` run is held by an hour-long `delay` fault while the rest of
+    // the 10-minute jump stays pending. Passing the hold must wake the dispatcher.
+    let (runtime, clock) = start_with_catch_up_cap(1).await;
+    let faults = Arc::new(Mutex::new(FaultState::default()));
+    faults.lock().unwrap().install(FaultPlan {
+        seed: 1,
+        rules: vec![FaultRule {
+            matches: FaultMatch {
+                operation: "functions.invoke".into(),
+                nth: Some(1),
+                function: Some("tick".into()),
+                event_type: None,
+            },
+            action: FaultAction::Delay { seconds: 3600 },
+        }],
+    });
+    runtime.set_faults(faults);
+    advance(&clock, 10 * 60);
+    runtime.on_clock_changed();
+    assert!(
+        runtime
+            .await_idle(Duration::from_millis(300))
+            .await
+            .is_err(),
+        "held by the delay"
+    );
+    assert_eq!(count_function(&runtime, "tick"), 0);
+    advance(&clock, 60 * 60);
+    runtime.on_clock_changed();
+    assert!(
+        runtime.await_idle(Duration::from_secs(5)).await.is_ok(),
+        "{}",
+        runtime.status()
+    );
+    // 12:01 plus 70 minutes: the five-minute marks from 12:05 to 13:10.
+    assert_eq!(
+        count_function(&runtime, "tick"),
+        14,
+        "{:?}",
+        runtime.history()
+    );
+}
+
+proptest::proptest! {
+    #![proptest_config(proptest::test_runner::Config {
+        cases: 24,
+        ..proptest::test_runner::Config::default()
+    })]
+
+    /// Model: with the `all` policy every `tick` occurrence in `(START, end]` runs exactly
+    /// once (the five-minute marks; START is 60 s past one), and every failing event reaches
+    /// its last attempt, whatever the catch-up cap and the sequence of clock jumps.
+    #[test]
+    fn catch_up_conserves_schedule_runs_and_releases_retries(
+        cap in 1usize..=3,
+        failing in 0usize..=2,
+        jumps in proptest::collection::vec(
+            proptest::prop_oneof![
+                proptest::strategy::Just(30i64),
+                proptest::strategy::Just(60),
+                proptest::strategy::Just(300),
+                proptest::strategy::Just(600),
+            ],
+            1..5,
+        ),
+    ) {
+        let tokio = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        tokio.block_on(async {
+            let (runtime, clock) = start_with_catch_up_cap(cap).await;
+            for i in 0..failing {
+                let path = format!("items/p{i}");
+                runtime.on_commit(&commit(vec![DocumentChange {
+                    path: doc(&path, 1).path,
+                    before: None,
+                    after: Some(doc(&path, 1).into()),
+                }]));
+            }
+            let _ = runtime.await_idle(Duration::from_millis(150)).await;
+            let mut elapsed = 0i64;
+            // The jumps under test, then four minutes to drain the 10/20/40 s backoffs.
+            for seconds in jumps.iter().copied().chain([60, 60, 60, 60]) {
+                advance(&clock, seconds);
+                elapsed += seconds;
+                runtime.on_clock_changed();
+                let _ = runtime.await_idle(Duration::from_millis(150)).await;
+            }
+            let idle = runtime.await_idle(Duration::from_secs(5)).await;
+            let status = runtime.status();
+            let ticks = count_function(&runtime, "tick");
+            let oks = count_function(&runtime, "ok");
+            let dead: Vec<(String, u32)> = runtime
+                .dead_letters()
+                .iter()
+                .map(|d| (d.function.clone(), d.attempt))
+                .collect();
+            runtime.shutdown().await;
+            assert!(idle.is_ok(), "{status}");
+            assert_eq!(ticks, usize::try_from((60 + elapsed) / 300).unwrap());
+            assert_eq!(oks, failing);
+            assert_eq!(dead, vec![("fail".to_owned(), 4); failing]);
+        });
+    }
 }
 
 /// A finalized object event for the `slow` function (the fake runner never answers it).

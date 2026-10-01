@@ -351,3 +351,343 @@ test("a clean journal drained again after its absolute deadline cannot erase dea
     clock.mock.restore();
   }
 });
+test("journal deadlines are refused at the construction instant and past the native timer bound", async () => {
+  let now = 1000;
+  const clock = mock.method(performance, "now", () => now);
+  try {
+    await assert.rejects(journal({ deadlineAt: 1000 }), /deadline/);
+    await assert.rejects(journal({ deadlineAt: 1000 + 2147483648 }), /deadline/);
+    const { j } = await journal({ deadlineAt: 1000 + 2147483647 });
+    // Drain shortly before the far deadline so no drain wait can hold the process for days.
+    now = 1000 + 2147483647 - 10;
+    const result = await j.done();
+    assert.equal(result.deadlineAt, 1000 + 2147483647);
+    assert.equal(result.terminationRequired, false);
+  } finally {
+    clock.mock.restore();
+  }
+});
+test("a refusal leaves admitted storage running until a stop acknowledgment at the deadline halts and aborts it", async () => {
+  let now = 0,
+    releaseStop,
+    releaseWrite;
+  const clock = mock.method(performance, "now", () => now);
+  const stopHeld = new Promise((resolve) => {
+      releaseStop = resolve;
+    }),
+    writeHeld = new Promise((resolve) => {
+      releaseWrite = resolve;
+    });
+  const signals = [],
+    stopped = [];
+  let j;
+  try {
+    ({ j } = await journal({
+      maxEntries: 1,
+      deadlineAt: 1000,
+      write: (row, { signal }) => {
+        signals.push(signal);
+        return writeHeld;
+      },
+      stopOwned: ({ reason }) => {
+        stopped.push(reason);
+        return stopHeld;
+      },
+    }));
+    const admitted = j.append(Buffer.from("a"));
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(signals.length, 1);
+    assert.ok(signals[0] instanceof AbortSignal);
+    assert.throws(() => j.append(Buffer.from("b")), /stopped/);
+    assert.deepEqual(stopped, ["entry-bound"]);
+    assert.equal(signals[0].aborted, false);
+    now = 1000;
+    releaseStop();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(signals[0].aborted, true);
+    releaseWrite();
+    await assert.rejects(admitted.committed, /stopped/);
+    const result = await j.done();
+    assert.equal(result.reason, "entry-bound");
+    assert.equal(result.acknowledgedEntries, 0);
+    assert.equal(result.terminationRequired, true);
+  } finally {
+    releaseStop();
+    releaseWrite();
+    await j?.done();
+    clock.mock.restore();
+  }
+});
+test("a drain whose owned stop is acknowledged at the deadline reports the deadline reason", async () => {
+  let now = 0,
+    release;
+  const clock = mock.method(performance, "now", () => now);
+  const held = new Promise((resolve) => {
+    release = resolve;
+  });
+  let j;
+  try {
+    ({ j } = await journal({ deadlineAt: 1000, stopOwned: () => held }));
+    const draining = j.done();
+    now = 1000;
+    release();
+    const result = await draining;
+    assert.equal(result.reason, "deadline");
+    assert.equal(result.terminationRequired, true);
+  } finally {
+    release();
+    await j?.done();
+    clock.mock.restore();
+  }
+});
+test(
+  "an idle deadline timer halts and aborts before it requests owned stop",
+  { timeout: 500 },
+  async () => {
+    const clock = mock.method(performance, "now", () => 0);
+    let called;
+    const requested = new Promise((resolve) => {
+      called = resolve;
+    });
+    const seen = [];
+    let j;
+    try {
+      ({ j } = await journal({
+        deadlineAt: 20,
+        stopOwned: ({ reason, signal }) => {
+          seen.push([reason, signal.aborted]);
+          called();
+        },
+      }));
+      await requested;
+      assert.deepEqual(seen, [["deadline", true]]);
+      assert.throws(() => j.append(Buffer.alloc(0)), /stopped/);
+    } finally {
+      await j?.done();
+      clock.mock.restore();
+    }
+  },
+);
+test("monotonic time at the deadline refuses appends and storage acknowledgments before overdue timers fire", async () => {
+  let now = 0;
+  const clock = mock.method(performance, "now", () => now);
+  const seen = [];
+  let j;
+  try {
+    ({ j } = await journal({
+      deadlineAt: 1000,
+      stopOwned: ({ reason, signal }) => {
+        seen.push([reason, signal.aborted]);
+      },
+    }));
+    now = 1000;
+    assert.throws(() => j.append(Buffer.alloc(0)), /stopped/);
+    assert.deepEqual(seen, [["deadline", true]]);
+    const result = await j.done();
+    assert.equal(result.entries, 0);
+    assert.equal(result.reason, "deadline");
+  } finally {
+    await j?.done();
+    clock.mock.restore();
+  }
+  now = 0;
+  const lateClock = mock.method(performance, "now", () => now);
+  let release, late;
+  const held = new Promise((resolve) => {
+    release = resolve;
+  });
+  try {
+    ({ j: late } = await journal({ deadlineAt: 1000, write: () => held }));
+    const ticket = late.append(Buffer.from("late"));
+    await new Promise((resolve) => setImmediate(resolve));
+    now = 1000;
+    release();
+    await assert.rejects(ticket.committed, /stopped/);
+    const result = await late.done();
+    assert.equal(result.acknowledgedEntries, 0);
+    assert.equal(result.unknownEntries, 1);
+    assert.equal(result.reason, "deadline");
+  } finally {
+    release();
+    await late?.done();
+    lateClock.mock.restore();
+  }
+});
+test(
+  "a hung write's own cutoff rejects its ticket at the deadline and halts with the deadline reason",
+  { timeout: 500 },
+  async () => {
+    let now = 0,
+      release;
+    const clock = mock.method(performance, "now", () => now);
+    const held = new Promise((resolve) => {
+      release = resolve;
+    });
+    const seen = [];
+    let j;
+    try {
+      ({ j } = await journal({
+        deadlineAt: 200,
+        write: () => held,
+        stopOwned: ({ reason, signal }) => {
+          seen.push([reason, signal.aborted]);
+        },
+      }));
+      const ticket = j.append(Buffer.alloc(0));
+      now = 190;
+      let fallback;
+      const outcome = await Promise.race([
+        ticket.committed.then(
+          () => "acknowledged",
+          () => "rejected",
+        ),
+        new Promise((resolve) => {
+          fallback = setTimeout(resolve, 80, "still pending");
+        }),
+      ]);
+      clearTimeout(fallback);
+      assert.equal(outcome, "rejected");
+      assert.deepEqual(seen, [["deadline", true]]);
+    } finally {
+      release();
+      await j?.done();
+      clock.mock.restore();
+    }
+  },
+);
+test("pending callbacks name a hung write and a hung owned stop", { timeout: 500 }, async () => {
+  const clock = mock.method(performance, "now", () => 0);
+  let release;
+  const held = new Promise((resolve) => {
+    release = resolve;
+  });
+  let j;
+  try {
+    ({ j } = await journal({ deadlineAt: 20, write: () => held, stopOwned: () => held }));
+    j.append(Buffer.alloc(0)).committed.catch(() => {});
+    const result = await j.done();
+    assert.deepEqual(result.pendingCallbacks.toSorted(), ["owned-stop", "write:0"]);
+    assert.equal(result.terminationRequired, true);
+  } finally {
+    release();
+    await j?.done();
+    clock.mock.restore();
+  }
+});
+test(
+  "a drained journal leaves no timer that can later stop, abort or hold the process open",
+  { timeout: 500 },
+  async () => {
+    const { createStreamingJournal } = await import(target.href);
+    const nativeSetTimeout = globalThis.setTimeout;
+    const timers = [];
+    const clock = mock.method(performance, "now", () => 0);
+    const nativeClearTimeout = globalThis.clearTimeout;
+    const cleared = new Set();
+    const spy = mock.method(globalThis, "setTimeout", (...args) => {
+      const timer = nativeSetTimeout(...args);
+      timers.push(timer);
+      return timer;
+    });
+    const clearSpy = mock.method(globalThis, "clearTimeout", (timer) => {
+      cleared.add(timer);
+      return nativeClearTimeout(timer);
+    });
+    const holding = () => timers.filter((timer) => timer.hasRef() && !cleared.has(timer));
+    const signals = [],
+      stopped = [];
+    let j;
+    try {
+      j = createStreamingJournal({
+        maxEntries: 8,
+        maxEntryBytes: 64,
+        maxTotalBytes: 256,
+        deadlineAt: 20,
+        write: async (row, { signal }) => {
+          signals.push(signal);
+        },
+        stopOwned: ({ reason }) => {
+          stopped.push(reason);
+        },
+      });
+      assert.equal(timers.length, 1);
+      assert.equal(timers[0].hasRef(), false);
+      await j.append(Buffer.from("kept")).committed;
+      assert.ok(timers.length > 1);
+      assert.deepEqual(holding(), []);
+      const first = await j.done();
+      assert.equal(Object.hasOwn(first, "reason"), false);
+      assert.equal(first.terminationRequired, false);
+      assert.deepEqual(holding(), []);
+      spy.mock.restore();
+      clearSpy.mock.restore();
+      await new Promise((resolve) => setTimeout(resolve, 40));
+      assert.equal(signals[0].aborted, false);
+      assert.deepEqual(stopped, ["local-close"]);
+      const second = await j.done();
+      assert.equal(Object.hasOwn(second, "reason"), false);
+      assert.equal(second.terminationRequired, false);
+    } finally {
+      spy.mock.restore();
+      clearSpy.mock.restore();
+      await j?.done();
+      clock.mock.restore();
+    }
+  },
+);
+test("a drain at exactly the absolute deadline halts storage and reports deadline uncertainty", async () => {
+  let now = 0;
+  const clock = mock.method(performance, "now", () => now);
+  const signals = [];
+  let j;
+  try {
+    ({ j } = await journal({
+      deadlineAt: 1000,
+      stopOwned: ({ signal }) => {
+        signals.push(signal);
+      },
+    }));
+    const first = await j.done();
+    assert.equal(first.terminationRequired, false);
+    assert.equal(signals[0].aborted, false);
+    now = 1000;
+    const later = await j.done();
+    assert.equal(later.reason, "deadline");
+    assert.equal(later.terminationRequired, true);
+    assert.equal(signals[0].aborted, true);
+  } finally {
+    await j?.done();
+    clock.mock.restore();
+  }
+});
+test("byte views other than live Uint8Array records are refused as invalid records", async () => {
+  for (const view of [
+    new Int16Array([1]),
+    new Float64Array([1]),
+    new DataView(new ArrayBuffer(2)),
+  ]) {
+    const { j, rows, stopped } = await journal();
+    assert.throws(() => j.append(view), /stopped/);
+    assert.deepEqual(stopped, ["invalid-record"]);
+    const result = await j.done();
+    assert.equal(result.entries, 0);
+    assert.equal(rows.length, 0);
+  }
+  const buffer = new ArrayBuffer(4),
+    detached = new Uint8Array(buffer);
+  buffer.transfer();
+  const seen = [];
+  const { j, rows } = await journal({
+    stopOwned: ({ reason, signal }) => {
+      seen.push([reason, signal.aborted]);
+    },
+  });
+  assert.throws(() => j.append(detached), /stopped/);
+  assert.deepEqual(seen, [["invalid-record", true]]);
+  assert.throws(() => j.append(Buffer.alloc(0)), /stopped/);
+  const result = await j.done();
+  assert.equal(result.reason, "invalid-record");
+  assert.equal(result.acknowledgedEntries, 0);
+  assert.equal(result.terminationRequired, true);
+  assert.equal(rows.length, 0);
+});

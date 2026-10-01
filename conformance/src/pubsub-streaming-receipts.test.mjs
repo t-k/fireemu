@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
-import { test } from "node:test";
+import { mock, test } from "node:test";
+import { promisify } from "node:util";
 
 const target = new URL("../pubsub-corpus/streaming-receipts.mjs", import.meta.url);
 const frame = (bytes) => {
@@ -8,6 +10,7 @@ const frame = (bytes) => {
   head.writeUInt32BE(bytes.length, 1);
   return Buffer.concat([head, bytes]);
 };
+const tick = () => new Promise((resolve) => setImmediate(resolve));
 async function queue(extra = {}) {
   assert.ok(existsSync(target), "bounded durable streaming receipt queue is missing");
   const { createStreamingReceiptQueue } = await import(target.href);
@@ -383,4 +386,316 @@ test("late receipt stop acknowledgment cannot beat an overdue absolute deadline 
       }),
   });
   assert.equal((await q.done()).terminationRequired, true);
+});
+test("construction accepts the largest native timer bound and refuses missing callbacks or a zero-width deadline", async () => {
+  // Fake timers keep a maximal deadline from holding the process if a cutoff is ever left behind.
+  mock.timers.enable({ apis: ["setTimeout"] });
+  try {
+    const { q } = await queue({ wallMs: 2147483647 });
+    assert.equal((await q.done()).terminationRequired, false);
+  } finally {
+    mock.timers.reset();
+  }
+  for (const key of ["persist", "onFrame", "stopOwned"])
+    await assert.rejects(queue({ [key]: undefined }), /owned receipt callbacks required/);
+  const now = performance.now();
+  const clock = mock.method(performance, "now", () => now);
+  try {
+    await assert.rejects(queue({ deadlineAt: now }), /live bounded monotonic deadline/);
+  } finally {
+    clock.mock.restore();
+  }
+});
+test("throwing or rejecting owned callbacks settle as refusals instead of escaping or staying pending", async () => {
+  const fail = () => {
+    throw new Error("synthetic callback failure");
+  };
+  for (const failing of [fail, async () => fail()]) {
+    const { q: stored, frames } = await queue({ wallMs: 100, persist: failing });
+    stored.data(frame(Buffer.from("m")));
+    const persisted = await stored.done();
+    assert.equal(persisted.reason, "persistence");
+    assert.equal(frames.length, 0);
+    assert.deepEqual(persisted.pendingCallbacks, []);
+    assert.equal(persisted.terminationRequired, false);
+    const { q: observed } = await queue({ wallMs: 100, onFrame: failing });
+    observed.data(frame(Buffer.from("m")));
+    const delivered = await observed.done();
+    assert.equal(delivered.reason, "observer");
+    assert.equal(delivered.frameAttempts, 1);
+    assert.equal(delivered.acknowledgedFrames, 0);
+    assert.deepEqual(delivered.pendingCallbacks, []);
+    assert.equal(delivered.terminationRequired, false);
+    const { q: owned } = await queue({ wallMs: 100, stopOwned: failing });
+    assert.equal(owned.lifecycle("unknown"), false);
+    const stopped = await owned.done();
+    assert.equal(stopped.reason, "invalid-lifecycle");
+    assert.deepEqual(stopped.pendingCallbacks, []);
+    assert.equal(stopped.terminationRequired, true);
+  }
+});
+test("receipt and frame callbacks share the owned stop signal, which the first stop aborts and names", async () => {
+  const callbackSignals = [];
+  let stopSignal, stopReason, abortedAtStop;
+  const { q } = await queue({
+    persist: async (_row, { signal }) => {
+      callbackSignals.push(signal);
+    },
+    onFrame: async (_row, { signal }) => {
+      callbackSignals.push(signal);
+    },
+    stopOwned: ({ signal, reason }) => {
+      stopSignal = signal;
+      stopReason = reason;
+      abortedAtStop = signal.aborted;
+    },
+  });
+  q.data(frame(Buffer.from("m")));
+  await tick();
+  assert.equal(callbackSignals.length, 2);
+  for (const signal of callbackSignals) {
+    assert.ok(signal instanceof AbortSignal);
+    assert.equal(signal.aborted, false);
+  }
+  q.data(Buffer.from([0, 0]));
+  assert.equal(q.lifecycle("unknown"), false);
+  assert.equal(stopReason, "invalid-lifecycle");
+  assert.equal(abortedAtStop, true);
+  for (const signal of callbackSignals) assert.equal(signal, stopSignal);
+  const result = await q.done();
+  assert.equal(result.framing.reason, "truncated-frame");
+  assert.equal(result.reason, "invalid-lifecycle");
+});
+test("an operator signal that is already aborted stops the queue before any receipt is admitted", async () => {
+  const reasons = [];
+  const { q, saved } = await queue({
+    signal: AbortSignal.abort(),
+    stopOwned: async ({ reason }) => reasons.push(reason),
+  });
+  assert.deepEqual(reasons, ["abort"]);
+  assert.equal(q.data(frame(Buffer.alloc(0))), false);
+  assert.equal(q.lifecycle("end"), false);
+  const result = await q.done();
+  assert.equal(result.reason, "abort");
+  assert.equal(result.events, 0);
+  assert.equal(saved.length, 0);
+});
+test("non-byte data input stops the queue as invalid data without storing a receipt", async () => {
+  const { q, saved } = await queue();
+  assert.equal(q.data("not bytes"), false);
+  assert.equal(q.lifecycle("end"), false);
+  const result = await q.done();
+  assert.equal(result.reason, "invalid-data");
+  assert.equal(result.events, 0);
+  assert.equal(saved.length, 0);
+});
+test("at the exact absolute deadline admission, queued persistence and frame delivery all stop", async () => {
+  const start = performance.now();
+  let now = start;
+  const clock = mock.method(performance, "now", () => now);
+  try {
+    let release;
+    const gate = new Promise((resolve) => {
+      release = resolve;
+    });
+    const persisted = [],
+      visible = [],
+      reasons = [];
+    const { q } = await queue({
+      wallMs: 1000,
+      persist: async (row) => {
+        persisted.push(row.index);
+        if (row.index === 0) await gate;
+      },
+      onFrame: async (row) => visible.push(row.index),
+      stopOwned: async ({ reason }) => reasons.push(reason),
+    });
+    assert.equal(q.data(frame(Buffer.from("m"))), true);
+    assert.equal(q.lifecycle("end"), true);
+    await tick();
+    assert.deepEqual(persisted, [0]);
+    now = start + 1000;
+    release();
+    await tick();
+    assert.deepEqual(persisted, [0]);
+    assert.deepEqual(visible, []);
+    assert.deepEqual(reasons, ["deadline"]);
+    const result = await q.done();
+    assert.equal(result.reason, "deadline");
+    assert.equal(result.persistedEvents, 1);
+    assert.equal(result.unknownEvents, 1);
+    assert.equal(result.frameAttempts, 0);
+    assert.equal(result.terminationRequired, true);
+
+    now = start;
+    const admitted = [];
+    const { q: late, saved } = await queue({
+      wallMs: 1000,
+      stopOwned: async ({ reason }) => admitted.push(reason),
+    });
+    now = start + 1000;
+    assert.equal(late.lifecycle("end"), false);
+    assert.deepEqual(admitted, ["deadline"]);
+    const lateResult = await late.done();
+    assert.equal(lateResult.reason, "deadline");
+    assert.equal(lateResult.events, 0);
+    assert.equal(saved.length, 0);
+  } finally {
+    clock.mock.restore();
+  }
+});
+test("a drain that completes exactly at the deadline requires termination even after an earlier stop acknowledgment", async () => {
+  const start = performance.now();
+  let now = start;
+  const clock = mock.method(performance, "now", () => now);
+  try {
+    for (const [offset, terminationRequired] of [
+      [999, false],
+      [1000, true],
+    ]) {
+      now = start;
+      const { q } = await queue({ wallMs: 1000 });
+      assert.equal(q.lifecycle("unknown"), false);
+      await tick();
+      now = start + offset;
+      const result = await q.done();
+      assert.equal(result.reason, "invalid-lifecycle");
+      assert.deepEqual(result.pendingCallbacks, []);
+      assert.equal(result.terminationRequired, terminationRequired);
+    }
+  } finally {
+    clock.mock.restore();
+  }
+});
+test("a clean close drains admitted receipts before requesting owned stop, then refuses every later input", async () => {
+  let release;
+  const gate = new Promise((resolve) => {
+    release = resolve;
+  });
+  const order = [];
+  const { q } = await queue({
+    persist: async (row) => {
+      order.push(`persist:${row.index}`);
+      await gate;
+    },
+    stopOwned: async ({ signal, reason }) => order.push(`stop:${signal.aborted}:${reason}`),
+  });
+  q.data(frame(Buffer.from("m")));
+  const closing = q.done();
+  await tick();
+  assert.deepEqual(order, ["persist:0"]);
+  release();
+  const result = await closing;
+  assert.deepEqual(order, ["persist:0", "stop:false:undefined"]);
+  assert.equal(Object.hasOwn(result, "reason"), false);
+  assert.equal(result.acknowledgedFrames, 1);
+  assert.equal(result.terminationRequired, false);
+  assert.equal(q.lifecycle("end"), false);
+  assert.equal(q.headers("trailers", [], 0), false);
+  assert.equal(q.data(Buffer.alloc(0)), false);
+});
+test("a finished queue detaches its deadline timer and operator signal from callback signals", async () => {
+  mock.timers.enable({ apis: ["setTimeout"] });
+  try {
+    const operator = new AbortController();
+    let callbackSignal;
+    const { q } = await queue({
+      signal: operator.signal,
+      persist: async (_row, { signal }) => {
+        callbackSignal = signal;
+      },
+    });
+    q.lifecycle("end");
+    assert.equal((await q.done()).terminationRequired, false);
+    operator.abort();
+    mock.timers.tick(2000);
+    assert.equal(callbackSignal.aborted, false);
+  } finally {
+    mock.timers.reset();
+  }
+});
+test("receipt timers never keep the process alive beyond a finished drain", async () => {
+  const { createStreamingReceiptQueue } = await import(target.href);
+  const live = () => process.getActiveResourcesInfo().filter((name) => name === "Timeout").length;
+  const before = live();
+  const q = createStreamingReceiptQueue({
+    maxFrameBytes: 64,
+    maxTotalBytes: 512,
+    maxFrames: 8,
+    maxChunks: 16,
+    maxHeaderBytes: 256,
+    maxHeaderEvents: 4,
+    maxHeaderPairs: 16,
+    maxEvents: 24,
+    wallMs: 1000,
+    persist: async () => {},
+    onFrame: async () => {},
+    stopOwned: async () => {},
+  });
+  assert.equal(live(), before);
+  q.lifecycle("end");
+  await q.done();
+  assert.ok(live() <= before);
+});
+test("metadata without a credential keeps default flags and binary values without decoding them", async () => {
+  const { q, saved } = await queue();
+  assert.equal(q.headers("response", ["x-note", "undefined", "details-bin", "AAAA"]), true);
+  const result = await q.done();
+  assert.equal(result.reason, undefined);
+  assert.equal(saved[0].flags, 0);
+});
+// Screening runs in a child process so a screening loop that never returns fails an assertion
+// instead of freezing the test process; a busy worker thread cannot be reliably terminated.
+async function screenInChild(credential, cases) {
+  const script = `const [target, input] = process.argv.slice(1);
+    const { credential, cases } = JSON.parse(input);
+    const { createStreamingReceiptQueue } = await import(target);
+    const outcomes = [];
+    for (const raw of cases) {
+      const saved = [];
+      const q = createStreamingReceiptQueue({
+        maxFrameBytes: 64, maxTotalBytes: 512, maxFrames: 8, maxChunks: 16, maxHeaderBytes: 256,
+        maxHeaderEvents: 4, maxHeaderPairs: 16, maxEvents: 24, wallMs: 1000, credential,
+        persist: async (row) => { saved.push(row); },
+        onFrame: async () => {},
+        stopOwned: async () => {},
+      });
+      const accepted = q.headers("trailers", raw, 0);
+      const result = await q.done();
+      outcomes.push({ accepted, reason: result.reason ?? null, saved: saved.length });
+    }
+    process.stdout.write(JSON.stringify(outcomes));`;
+  try {
+    const { stdout } = await promisify(execFile)(
+      process.execPath,
+      ["--input-type=module", "--eval", script, target.href, JSON.stringify({ credential, cases })],
+      { timeout: 2000, killSignal: "SIGKILL" },
+    );
+    return JSON.parse(stdout);
+  } catch (error) {
+    return error.killed ? "screening did not return" : `screening failed: ${error.stderr}`;
+  }
+}
+test("credential screening visits each metadata pair once, decodes only binary values and refuses reflection", async () => {
+  const credential = "SYNTHETIC-SECRET";
+  const encoded = Buffer.from(credential).toString("base64");
+  const accepted = { accepted: true, reason: null, saved: 1 };
+  const refused = { accepted: false, reason: "credential-reflection", saved: 0 };
+  assert.deepEqual(
+    await screenInChild(credential, [
+      [":status", "200"],
+      ["details", encoded],
+      ["other-bin", Buffer.from("harmless").toString("base64")],
+      [":status", "200", "details-bin", encoded],
+      ["details", credential],
+    ]),
+    [accepted, accepted, accepted, refused, refused],
+  );
+});
+test("an owned stop that never acknowledges stays named among pending callbacks", async () => {
+  const { q } = await queue({ wallMs: 30, stopOwned: () => new Promise(() => {}) });
+  q.lifecycle("end");
+  const result = await q.done();
+  assert.deepEqual(result.pendingCallbacks, ["owned-stop"]);
+  assert.equal(result.terminationRequired, true);
 });

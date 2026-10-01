@@ -1427,3 +1427,50 @@ test("certificate problems are exact, and a missing day never throws", () => {
     ["control orphan ran on another day"],
   );
 });
+
+// Mutation round 2 survivors that a test can tell apart.
+test("an array-like record file is refused, and a born handle is born only once", () => {
+  const set = recordSet();
+  set["inner.jsonl"] = { 0: set["inner.jsonl"][0], length: 1 };
+  assert.deepEqual(validateRecords(set).problems, [
+    "inner.jsonl: the first row is not a header",
+    "missing inner record file",
+  ]);
+  const twice = recordSet();
+  twice["measure.jsonl"].push({ ...twice["measure.jsonl"][1], pid: 4242 });
+  assert.deepEqual(validateRecords(twice).problems, [
+    "measure.jsonl: handle measure:1 is born twice",
+  ]);
+});
+
+test("a listener on another PID never counts, even when the helper bound in time", () => {
+  assert.equal(
+    controlOutcome(
+      { mode: "listener", injected: { pid: 777 }, bound: { beforeInventory: true } },
+      { ports: { lsof: [{ result: "listener", pids: [9] }] } },
+    ).counts,
+    false,
+  );
+});
+
+test("validator controls run only on valid base records, and drop the first exit row", () => {
+  const broken = recordSet();
+  broken["inner.jsonl"].push({ type: "note" });
+  assert.deepEqual(validatorControls(broken), {
+    ok: false,
+    controls: [],
+    reason: "the base records do not validate",
+  });
+  // With short children after the outer launcher's exit, the first exit is not the last row.
+  const set = recordSet(() => 1);
+  const dropped = validatorControls(set).controls.find((c) => c.name === "dropped exit row");
+  assert.deepEqual(
+    [dropped.rowsChanged, dropped.problems],
+    [
+      -1,
+      [
+        `measure.jsonl: ${set["measure.jsonl"].find((row) => row.type === "exit").handle} has no exit`,
+      ],
+    ],
+  );
+});

@@ -320,3 +320,72 @@ test("a self recorder refuses an unreadable own start time and a ps that cannot 
   assert.equal(rows.at(-2).file, "ps");
   assert.equal(rows.at(-3).started, "Fri Oct 2 06:00:00 2026");
 });
+
+// Mutation round 2 survivors that a test can tell apart.
+test("execFile decodes a character split across reads, and waits for the pipes to close", async (t) => {
+  const recorder = createRecorder({ path: join(await scratch(t), "measure.jsonl"), ...header });
+  const split = await recorder.execFile(
+    "/bin/sh",
+    [
+      "-c",
+      "printf '\\342\\202'; printf '\\342\\202' >&2; sleep 0.2; printf '\\254'; printf '\\254' >&2",
+    ],
+    {},
+    "probe",
+  );
+  assert.deepEqual([split.stdout, split.stderr], ["€", "€"]);
+  const late = await recorder.execFile(
+    "/bin/sh",
+    ["-c", "(sleep 0.3; printf late) & printf early"],
+    {},
+    "probe",
+  );
+  assert.equal(late.stdout, "earlylate");
+});
+
+test("startedOf refuses an empty answer even when ps exits 0", async (t) => {
+  const recorder = createRecorder({
+    path: join(await scratch(t), "measure.jsonl"),
+    ...header,
+    spawnImpl: () => {
+      const child = new EventEmitter();
+      child.pid = 4242;
+      child.stdout = new EventEmitter();
+      child.stderr = new EventEmitter();
+      child.stdout.setEncoding = child.stderr.setEncoding = () => {};
+      process.nextTick(() => {
+        child.emit("exit", 0, null);
+        child.emit("close", 0, null);
+      });
+      return child;
+    },
+  });
+  await assert.rejects(recorder.startedOf(4242), /unreadable/);
+});
+
+test("ps falls back to the system PATH, and the self-start row digests the ps argv", async (t) => {
+  const saved = process.env.PATH;
+  delete process.env.PATH;
+  try {
+    assert.equal(psEnv().PATH, "/usr/bin:/bin");
+  } finally {
+    process.env.PATH = saved;
+  }
+  const directory = await scratch(t);
+  const self = await createSelfRecorder({
+    path: join(directory, "o.jsonl"),
+    role: "outer",
+    harnessVersion: "t",
+  });
+  self.close();
+  const plain = createRecorder({ path: join(directory, "m.jsonl"), ...header });
+  await plain.execFile("ps", ["-o", "lstart=", "-p", String(process.pid)], {}, "probe");
+  plain.close();
+  const [selfBirth] = (await readRecords(join(directory, "o.jsonl"))).filter(
+    (row) => row.type === "birth",
+  );
+  const [plainBirth] = (await readRecords(join(directory, "m.jsonl"))).filter(
+    (row) => row.type === "birth",
+  );
+  assert.equal(selfBirth.argvSha256, plainBirth.argvSha256);
+});

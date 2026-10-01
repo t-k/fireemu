@@ -1,0 +1,261 @@
+// Coordinator-only calendar recovery. Import never obtains credentials or sends requests.
+import { createRequestCapture, PROJECT } from "./shape.mjs";
+import {
+  recordedRecoveryJobAbsent,
+  recordedRecoveryTopicOwned,
+  recordedRecoveryTopicAbsent,
+  recordedRecoveryEmpty,
+} from "./calendar-settled-topic.mjs";
+import { recordedAbsent, recordedPaused, recordedMutationBusy } from "./recovery.mjs";
+import {
+  CALENDAR_CASES,
+  calendarResources,
+  recordedEmptyList,
+  recordedTopicAbsent,
+  recordedTopicOwned,
+  recordedEnabled,
+} from "./calendar.mjs";
+
+export const CALENDAR_RECOVERY_MAX_REQUESTS = 64;
+export const CALENDAR_RECOVERY_DELETE_ATTEMPTS = 3;
+
+export function calendarRecoveryRequests(originalRunId, recoveryScope = "jobs-and-topic") {
+  if (!["jobs-and-topic", "topic-only", "settled-jobs-topic-only"].includes(recoveryScope))
+    throw new Error("invalid recovery scope");
+  const own = calendarResources(originalRunId);
+  const scheduler = "https://cloudscheduler.googleapis.com/v1/",
+    pubsub = "https://pubsub.googleapis.com/v1/";
+  const get = (id, url) => ({ id, method: "GET", url });
+  if (["topic-only", "settled-jobs-topic-only"].includes(recoveryScope))
+    return [
+      ...(recoveryScope === "settled-jobs-topic-only"
+        ? [get("c07-before", scheduler + own.jobs.c07), get("c08-before", scheduler + own.jobs.c08)]
+        : []),
+      get(
+        "before-list-jobs",
+        scheduler + "projects/" + PROJECT + "/locations/us-central1/jobs?pageSize=500",
+      ),
+      get("read-topic-before", pubsub + own.topic),
+      { id: "delete-topic", method: "DELETE", url: pubsub + own.topic, timeoutMs: 30000 },
+      get("read-topic-after", pubsub + own.topic),
+      ...Array.from({ length: 3 }, (_, index) =>
+        get("read-topic-poll-" + (index + 1), pubsub + own.topic),
+      ),
+      get(
+        "final-list-jobs",
+        scheduler + "projects/" + PROJECT + "/locations/us-central1/jobs?pageSize=500",
+      ),
+      get("final-list-topics", pubsub + "projects/" + PROJECT + "/topics?pageSize=1000"),
+    ];
+  return [
+    get("read-topic-before", pubsub + own.topic),
+    ...CALENDAR_CASES.flatMap(({ id }) => [
+      get(id + "-before", scheduler + own.jobs[id]),
+      { id: id + "-pause", method: "POST", url: scheduler + own.jobs[id] + ":pause", json: {} },
+      get(id + "-read-paused", scheduler + own.jobs[id]),
+      ...Array.from({ length: CALENDAR_RECOVERY_DELETE_ATTEMPTS }, (_, index) => ({
+        id: id + "-delete-" + (index + 1),
+        method: "DELETE",
+        url: scheduler + own.jobs[id],
+      })),
+      get(id + "-after", scheduler + own.jobs[id]),
+    ]),
+    get(
+      "final-list-jobs",
+      scheduler + "projects/" + PROJECT + "/locations/us-central1/jobs?pageSize=500",
+    ),
+    { id: "delete-topic", method: "DELETE", url: pubsub + own.topic },
+    get("read-topic-after", pubsub + own.topic),
+    get("final-list-topics", pubsub + "projects/" + PROJECT + "/topics?pageSize=1000"),
+  ];
+}
+
+export async function collectCalendarRecovery({
+  originalRunId,
+  runId,
+  recoveryScope = "jobs-and-topic",
+  accessToken,
+  save,
+  send,
+  clock = Date.now,
+  sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+}) {
+  const own = calendarResources(originalRunId);
+  calendarResources(runId);
+  if (runId === originalRunId) throw new Error("recovery needs a distinct attempt ID");
+  const requests = new Map(
+    calendarRecoveryRequests(originalRunId, recoveryScope).map((request) => [request.id, request]),
+  );
+  const layouts = new Map();
+  const { capture, counts } = createRequestCapture({
+    accessToken,
+    save: async (row) => {
+      await save(row);
+      if (row.state === "response-persisted") layouts.set(row.id, row);
+    },
+    send,
+    clock,
+    maxRequests:
+      recoveryScope === "topic-only"
+        ? 9
+        : recoveryScope === "settled-jobs-topic-only"
+          ? 11
+          : CALENDAR_RECOVERY_MAX_REQUESTS,
+  });
+  // A complete status below 200, a 3xx or a 5xx is as unknown as a lost answer: closure needs
+  // none of either.
+  let ambiguous = 0;
+  const settled = (known) => known.unknown === 0 && ambiguous === 0;
+  const take = async (id) => {
+    const answer = await capture(requests.get(id)),
+      row = layouts.get(id);
+    if (
+      answer &&
+      !answer.bodyUnknown &&
+      (answer.status < 200 || (answer.status >= 300 && answer.status < 400) || answer.status >= 500)
+    )
+      ambiguous++;
+    return answer && row
+      ? { ...answer, bodyBytes: row.bodyBytes, rawBytes: Buffer.from(row.bodyBase64, "base64") }
+      : answer;
+  };
+  if (recoveryScope === "settled-jobs-topic-only") {
+    // Any unknown answer, even a read, needs the separate later read-back before closure.
+    const summary = (closureReady) => {
+      const known = counts();
+      return {
+        outcome: "calendar-recovery-needs-review",
+        ...known,
+        cleanupVerified: false,
+        closureReady: closureReady && settled(known),
+      };
+    };
+    for (const id of ["c07", "c08"])
+      if (!recordedRecoveryJobAbsent(await take(id + "-before"), own.jobs[id]))
+        return summary(false);
+    if (!recordedRecoveryEmpty(await take("before-list-jobs"))) return summary(false);
+    let polls = 0;
+    const poll = async (answer, afterDelete) => {
+      while (
+        polls < 3 &&
+        (!answer ||
+          answer.bodyUnknown ||
+          (afterDelete
+            ? recordedRecoveryTopicOwned(answer, own)
+            : recordedRecoveryTopicAbsent(answer, own)))
+      ) {
+        await sleep(10000);
+        polls++;
+        answer = await take("read-topic-poll-" + polls);
+      }
+      return answer;
+    };
+    const before = await poll(await take("read-topic-before"), false);
+    if (!recordedRecoveryTopicOwned(before, own)) return summary(false);
+    const deleted = await take("delete-topic");
+    const after = await poll(await take("read-topic-after"), true);
+    const jobs = await take("final-list-jobs"),
+      topics = await take("final-list-topics");
+    return summary(
+      recordedRecoveryEmpty(deleted) &&
+        recordedRecoveryTopicAbsent(after, own) &&
+        recordedRecoveryEmpty(jobs) &&
+        recordedRecoveryEmpty(topics),
+    );
+  }
+  if (recoveryScope === "topic-only") {
+    // Any unknown answer, even a read, needs the separate later read-back before closure.
+    const summary = (closureReady) => {
+      const known = counts();
+      return {
+        outcome: "calendar-recovery-needs-review",
+        ...known,
+        cleanupVerified: false,
+        closureReady: closureReady && settled(known),
+      };
+    };
+    if (!recordedEmptyList(await take("before-list-jobs"))) return summary(false);
+    let polls = 0;
+    const pollTopic = async (answer, afterDelete) => {
+      while (
+        polls < 3 &&
+        (!answer ||
+          answer.bodyUnknown ||
+          (afterDelete ? recordedTopicOwned(answer, own) : recordedTopicAbsent(answer, own)))
+      ) {
+        await sleep(10000);
+        polls++;
+        answer = await take("read-topic-poll-" + polls);
+      }
+      return answer;
+    };
+    const before = await pollTopic(await take("read-topic-before"), false);
+    let topicSettled = false;
+    if (recordedTopicOwned(before, own)) {
+      const answer = await take("delete-topic");
+      // A complete404 is only a candidate; separate absence and list proofs are mandatory.
+      topicSettled = recordedEmptyList(answer) || (answer?.status === 404 && !answer.bodyUnknown);
+    }
+    const after = await pollTopic(await take("read-topic-after"), true);
+    const jobs = await take("final-list-jobs"),
+      topics = await take("final-list-topics");
+    return summary(
+      topicSettled &&
+        recordedTopicAbsent(after, own) &&
+        recordedEmptyList(jobs) &&
+        recordedEmptyList(topics),
+    );
+  }
+  const topicBefore = await take("read-topic-before"),
+    eligible = new Set(),
+    absent = new Set();
+  for (const { id } of CALENDAR_CASES) {
+    const before = await take(id + "-before"),
+      target = { job: own.jobs[id], topic: own.topic };
+    if (recordedAbsent(before)) absent.add(id);
+    else if (recordedPaused(before, target)) eligible.add(id);
+    else if (recordedEnabled(before, target)) {
+      await take(id + "-pause");
+      if (recordedPaused(await take(id + "-read-paused"), target)) eligible.add(id);
+    }
+  }
+  if (eligible.size) await sleep(60000); // All containment pause attempts precede settlement.
+  let jobsAbsent = true;
+  for (const { id } of CALENDAR_CASES) {
+    let settled = absent.has(id);
+    if (eligible.has(id)) {
+      for (let attempt = 1; attempt <= CALENDAR_RECOVERY_DELETE_ATTEMPTS; attempt++) {
+        if (attempt > 1) await sleep(60000);
+        const answer = await take(id + "-delete-" + attempt);
+        if (answer && !answer.bodyUnknown && answer.status >= 200 && answer.status < 300) {
+          settled = true; // Captured acknowledgment is not independently an absence proof.
+          break;
+        }
+        if (!recordedMutationBusy(answer, { job: own.jobs[id] })) break;
+      }
+    }
+    const after = await take(id + "-after");
+    jobsAbsent = jobsAbsent && settled && recordedAbsent(after);
+  }
+  const jobProof = recordedEmptyList(await take("final-list-jobs")) && jobsAbsent;
+  let topicSettled = recordedTopicAbsent(topicBefore, own);
+  if (jobProof && recordedTopicOwned(topicBefore, own)) {
+    const answer = await take("delete-topic");
+    topicSettled = !!(answer && !answer.bodyUnknown && answer.status >= 200 && answer.status < 300);
+  }
+  const topicAfter = await take("read-topic-after"),
+    topics = await take("final-list-topics");
+  const known = counts();
+  return {
+    outcome: "calendar-recovery-needs-review",
+    ...known,
+    cleanupVerified: false,
+    // Any unknown answer, even a read, needs the separate later read-back before closure.
+    closureReady:
+      settled(known) &&
+      jobProof &&
+      topicSettled &&
+      recordedTopicAbsent(topicAfter, own) &&
+      recordedEmptyList(topics),
+  };
+}

@@ -1,0 +1,58 @@
+[
+  {
+    "id": "c01",
+    "schedule": "* * * * *",
+    "timeZone": "UTC",
+    "conditionId": "SCHEDULED-FUNCTIONS/cron-grammar",
+    "case": "wildcard"
+  },
+  {
+    "id": "c02",
+    "schedule": "0 9 * JAN MON",
+    "timeZone": "UTC",
+    "conditionId": "SCHEDULED-FUNCTIONS/cron-grammar",
+    "case": "named-month-weekday"
+  },
+  {
+    "id": "c03",
+    "schedule": "every 5 minutes",
+    "timeZone": "UTC",
+    "conditionId": "SCHEDULED-FUNCTIONS/groc-grammar",
+    "case": "every-N-minutes"
+  },
+  {
+    "id": "c04",
+    "schedule": "1st friday of quarter 9:00",
+    "timeZone": "UTC",
+    "conditionId": "SCHEDULED-FUNCTIONS/groc-grammar",
+    "case": "ordinal-weekday"
+  },
+  {
+    "id": "c05",
+    "schedule": "30 2 14 3 *",
+    "timeZone": "America/New_York",
+    "conditionId": "SCHEDULED-FUNCTIONS/dst-calendar",
+    "case": "spring-gap-next-time"
+  },
+  {
+    "id": "c06",
+    "schedule": "30 1 1 11 *",
+    "timeZone": "America/New_York",
+    "conditionId": "SCHEDULED-FUNCTIONS/dst-calendar",
+    "case": "fall-fold-next-time"
+  },
+  {
+    "id": "c07",
+    "schedule": "0 0 1 4 *",
+    "timeZone": "Invalid/Unknown",
+    "conditionId": "SCHEDULED-FUNCTIONS/timezone-validation-defaults",
+    "case": "invalid-zone"
+  },
+  {
+    "id": "c08",
+    "schedule": "0 0 0 1 4 *",
+    "timeZone": "UTC",
+    "conditionId": "SCHEDULED-FUNCTIONS/cron-grammar",
+    "case": "wrong-field-count"
+  }
+]

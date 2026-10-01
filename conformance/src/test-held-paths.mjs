@@ -6,9 +6,14 @@
 import { execFileSync } from "node:child_process";
 import { readdirSync, readlinkSync } from "node:fs";
 
-const system = { platform: process.platform, readdir: readdirSync, readlink: readlinkSync };
+const system = {
+  platform: process.platform,
+  readdir: readdirSync,
+  readlink: readlinkSync,
+  lsof: execFileSync,
+};
 
-export function heldPaths(fragment, { platform, readdir, readlink } = system) {
+export function heldPaths(fragment, { platform, readdir, readlink, lsof } = system) {
   if (platform === "linux") {
     const held = [];
     for (const fd of readdir("/proc/self/fd")) {
@@ -23,7 +28,7 @@ export function heldPaths(fragment, { platform, readdir, readlink } = system) {
     }
     return held;
   }
-  return execFileSync("lsof", ["-p", String(process.pid), "-Fn"], { encoding: "utf8" })
+  return lsof("lsof", ["-p", String(process.pid), "-Fn"], { encoding: "utf8" })
     .split("\n")
     .filter((line) => line.startsWith("n") && line.includes(fragment));
 }

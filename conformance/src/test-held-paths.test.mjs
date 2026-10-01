@@ -9,6 +9,7 @@ import { heldPaths } from "./test-held-paths.mjs";
 
 const errno = (code) => Object.assign(new Error(`${code}: simulated`), { code });
 const linux = (readdir, readlink) => ({ platform: "linux", readdir, readlink });
+const macos = (lsof) => ({ platform: "darwin", lsof });
 
 test("an open file is reported while it is held, and not after it is closed", () => {
   const directory = mkdtempSync(join(tmpdir(), "held-paths-"));
@@ -110,5 +111,50 @@ test("a failing listing of the descriptors is thrown", () => {
         ),
       ),
     (error) => error.code === "EACCES",
+  );
+});
+
+test("the fragment may sit anywhere in the path", () => {
+  const held = heldPaths(
+    "/run/held",
+    linux(
+      () => ["3"],
+      () => "/work/run/held.json",
+    ),
+  );
+  assert.deepEqual(held, ["/work/run/held.json"]);
+});
+
+test("on macOS lsof is asked for the names of this process's files and only name lines match", () => {
+  const calls = [];
+  const lsof = (command, args, options) => {
+    calls.push({ command, args, options });
+    return [
+      "p4242",
+      "fcwd",
+      "n/work/run",
+      "f3",
+      "n/work/run/held.json",
+      "f4",
+      "n/elsewhere/other.json",
+      "f/work/run/in-a-field-that-is-not-a-name",
+      "",
+    ].join("\n");
+  };
+  const held = heldPaths("/work/run", macos(lsof));
+  assert.deepEqual(held, ["n/work/run", "n/work/run/held.json"]);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].command, "lsof");
+  assert.deepEqual(calls[0].args, ["-p", String(process.pid), "-Fn"]);
+  assert.equal(calls[0].options.encoding, "utf8");
+});
+
+test("an error of lsof is thrown", () => {
+  const lsof = () => {
+    throw errno("ENOENT");
+  };
+  assert.throws(
+    () => heldPaths("/work/run", macos(lsof)),
+    (error) => error.code === "ENOENT",
   );
 });

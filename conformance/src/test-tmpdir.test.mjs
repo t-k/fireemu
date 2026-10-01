@@ -194,9 +194,10 @@ fs.rmSync(path, { recursive: true }); fs.writeFileSync(path, "not a directory");
   }
 });
 
-test("a forwarded signal fails the run even when the command handles it and exits 0", async () => {
+test("a forwarded signal fails the run even when the command handles it and exits 0", async (t) => {
   const dir = emptyDir("wrapper-signal");
   const ready = join(root, "signal-ready");
+  // The wrapper and its command form their own process group, killed whatever the test's outcome.
   const wrapper = spawn(
     process.execPath,
     [
@@ -207,15 +208,29 @@ test("a forwarded signal fails the run even when the command handles it and exit
 require("node:fs").writeFileSync(${JSON.stringify(ready)}, "");
 setInterval(() => {}, 1000);`,
     ],
-    { env: { ...process.env, TMPDIR: dir }, stdio: "ignore" },
+    { env: { ...process.env, TMPDIR: dir }, stdio: "ignore", detached: true },
   );
+  const exited = new Promise((resolve) => wrapper.on("exit", (...outcome) => resolve(outcome)));
+  t.after(async () => {
+    if (wrapper.exitCode !== null || wrapper.signalCode !== null) return;
+    try {
+      process.kill(-wrapper.pid, "SIGKILL");
+    } catch {
+      // The group is already gone.
+    }
+    await exited;
+  });
   const deadline = Date.now() + 10_000;
   while (!existsSync(ready) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 20));
   assert.ok(existsSync(ready), "the command started");
   wrapper.kill("SIGTERM");
-  const [code] = await new Promise((resolve) =>
-    wrapper.on("exit", (...outcome) => resolve(outcome)),
-  );
+  let timer;
+  const [code] = await Promise.race([
+    exited,
+    new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error("the wrapper did not exit within 10 s")), 10_000);
+    }),
+  ]).finally(() => clearTimeout(timer));
   assert.equal(code, 143);
   assert.deepEqual(readdirSync(dir), []);
 });

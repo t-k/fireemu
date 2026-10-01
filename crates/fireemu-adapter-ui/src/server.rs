@@ -4,6 +4,7 @@ use std::convert::Infallible;
 use std::sync::Arc;
 
 use bytes::Bytes;
+use fireemu_adapter_support::connection::{DrainBounds, GracefulClose};
 use http_body_util::combinators::BoxBody;
 use http_body_util::{BodyExt, Full, StreamBody};
 use hyper::body::{Frame, Incoming};
@@ -30,6 +31,10 @@ const FORWARDED_HEADERS: &[&str] = &[
     "x-upload-content-type",
     "accept",
 ];
+
+/// The largest body any UI route accepts (the storage routes), which is what is read and discarded after
+/// a refusal, whichever route it was.
+const UI_DRAIN_BODY_BYTES: usize = fireemu_adapter_http::storage_server::MAX_STORAGE_BODY_BYTES;
 
 fn body_limit(path: &str) -> usize {
     if path.starts_with("/ui/api/storage/") {
@@ -110,7 +115,10 @@ pub async fn serve_ui(listener: TcpListener, state: Arc<UiState>) -> std::io::Re
         let (stream, _) = listener.accept().await?;
         let state = state.clone();
         tokio::spawn(async move {
-            let io = TokioIo::new(stream);
+            let io = TokioIo::new(GracefulClose::new(
+                stream,
+                DrainBounds::for_largest_body(UI_DRAIN_BODY_BYTES),
+            ));
             let svc = service_fn(move |req| respond(state.clone(), req));
             let _ = http1::Builder::new().serve_connection(io, svc).await;
         });

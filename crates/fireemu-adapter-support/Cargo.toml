@@ -15,9 +15,11 @@ http-body = "1"
 http-body-util = "0.1"
 serde_json.workspace = true
 subtle = "2"
+tokio = { version = "1", features = ["io-util", "time"] }
 
 [dev-dependencies]
 http = "1"
+proptest.workspace = true
 tokio = { version = "1", features = ["macros", "rt"] }
 tokio-stream = "0.1"
 

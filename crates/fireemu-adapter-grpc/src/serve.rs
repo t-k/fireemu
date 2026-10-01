@@ -7,6 +7,7 @@ use std::convert::Infallible;
 use std::sync::{Arc, OnceLock};
 
 use bytes::{Bytes, BytesMut};
+use fireemu_adapter_support::connection::{DrainBounds, GracefulClose};
 use http_body_util::combinators::UnsyncBoxBody;
 use http_body_util::{BodyExt, Full, StreamBody};
 use hyper::body::{Body, Frame, Incoming};
@@ -869,7 +870,10 @@ where
         let rest = rest.clone();
         let hub = hub.clone();
         tokio::spawn(async move {
-            let io = TokioIo::new(stream);
+            let io = TokioIo::new(GracefulClose::new(
+                stream,
+                DrainBounds::for_largest_body(MAX_REST_BODY_BYTES),
+            ));
             let svc = service_fn(move |req: Request<Incoming>| {
                 let mut grpc = grpc.clone();
                 let rest = rest.clone();

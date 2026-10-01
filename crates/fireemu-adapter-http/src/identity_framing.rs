@@ -351,6 +351,16 @@ mod tests {
         );
     }
 
+    #[test]
+    fn empty_objects_and_arrays_stay_on_one_line() {
+        let body = json!({"kind": "k", "users": [{"localId": "u", "providerUserInfo": []}], "extra": {}, "list": []});
+        let text = String::from_utf8(layout(&body)).unwrap();
+        assert_eq!(
+            text,
+            "{\n  \"kind\": \"k\",\n  \"users\": [\n    {\n      \"localId\": \"u\",\n      \"providerUserInfo\": []\n    }\n  ],\n  \"extra\": {},\n  \"list\": []\n}\n"
+        );
+    }
+
     fn hex(bytes: &[u8]) -> String {
         fireemu_core_storage::hash::hex(bytes)
     }

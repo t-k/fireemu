@@ -11,6 +11,8 @@ import {
   harnessDigest,
 } from "./capture.mjs";
 
+import { calendarRequests } from "./calendar.mjs";
+
 const sha256 = (value) => createHash("sha256").update(value).digest("hex");
 const sourceCommit = "a".repeat(40);
 const clock = () => new Date("2026-09-30T09:00:00Z");
@@ -477,4 +479,50 @@ test("calendar recovery rejects changed rawpacket bytes even when parsed metadat
   await assert.rejects(captureCalendarRecovery(f.options), /original recovery packet differs/);
   assert.equal(f.counts().tokens, 0);
   assert.equal(f.options.sendCount, undefined);
+});
+
+test("calendar recovery binds journals that continue after one or two400 CREATE refusals", async (t) => {
+  for (const refused of [["c07"], ["c04", "c07"]]) {
+    const f = await recoveryFixture(t);
+    const templates = calendarRequests(
+      f.plan.originalRunId,
+      f.plan.projectNumber,
+      Date.parse("2026-09-30T08:00:00Z"),
+    );
+    const dispatched = templates.filter(
+      (r) =>
+        !refused.some((id) => [id + "-pause", id + "-read-paused", id + "-delete"].includes(r.id)),
+    );
+    const journal =
+      dispatched
+        .flatMap((r) => {
+          const rows = [{ ...r, state: "before-send", dispatchAt: "2026-09-30T08:00:00Z" }];
+          if (refused.some((id) => r.id === id + "-create"))
+            rows.push({ id: r.id, state: "response-persisted", status: 400 });
+          return rows;
+        })
+        .map(JSON.stringify)
+        .join("\n") + "\n";
+    const row = JSON.parse((await readFile(f.ledger, "utf8")).trim());
+    row.requests = dispatched.length;
+    const line = JSON.stringify(row);
+    await writeFile(join(f.lane, "calendar-" + f.plan.originalRunId, "requests.jsonl"), journal, {
+      mode: 0o600,
+    });
+    await writeFile(f.ledger, line + "\n");
+    await f.reset(
+      {
+        originalRequests: dispatched.length,
+        originalJournalSha256: sha256(journal),
+        originalLedgerRowSha256: sha256(line),
+      },
+      "SCHEDULED-FUNCTIONS calendar recovery packet",
+    );
+    const result = await captureCalendarRecovery(f.options);
+    assert.equal(f.counts().tokens, 1);
+    assert.equal(dispatched.length, 61 - 3 * refused.length);
+    assert.ok(dispatched.some((r) => r.id === "c08-create"));
+    assert.equal(result.outcome, "calendar-recovery-needs-review");
+    assert.equal(result.cleanupVerified, false);
+  }
 });

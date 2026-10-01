@@ -476,3 +476,174 @@ test("lost CREATE proves exact own identity before PAUSE and shares its read wit
   assert.ok(result.attempted <= 64);
   assert.equal(result.closureReady, false);
 });
+
+for (const refusals of [["c04"], ["c07"], ["c04", "c07"]])
+  test(
+    "complete400 refusals " +
+      refusals.join(",") +
+      " retain later corpus observations without mutation",
+    async () => {
+      const e = environment(),
+        original = e.deps.send;
+      e.deps.send = async (request) => {
+        if (!refusals.some((id) => request.id === id + "-create")) return original(request);
+        e.sends.push(request);
+        return new Response(JSON.stringify({ error: { code: 400, status: "INVALID_ARGUMENT" } }), {
+          status: 400,
+        });
+      };
+      const result = await collectCalendar(e.deps);
+      assert.equal(e.sends.filter(({ id }) => id.endsWith("-create")).length, 8);
+      assert.ok(e.sends.some(({ id }) => id === "c08-create"));
+      for (const id of refusals) {
+        assert.ok(!e.sends.some((r) => r.id === id + "-pause" || r.id === id + "-delete"));
+        assert.ok(
+          e.rows.some(
+            (r) => r.id === id + "-create" && r.state === "response-persisted" && r.status === 400,
+          ),
+        );
+      }
+      assert.equal(result.attempted, 61 - 3 * refusals.length);
+      assert.equal(result.closureReady, true);
+      assert.equal(result.cleanupVerified, false);
+    },
+  );
+
+test("non400 client refusals stop later creates and never acquire the refused job", async () => {
+  for (const status of [401, 403, 404, 409, 422, 429]) {
+    const e = environment(),
+      original = e.deps.send;
+    e.deps.send = async (request) => {
+      if (request.id !== "c04-create") return original(request);
+      e.sends.push(request);
+      return new Response(JSON.stringify({ error: { code: status } }), { status });
+    };
+    await collectCalendar(e.deps);
+    assert.ok(
+      !e.sends.some(({ id }) => id === "c05-create" || id === "c04-pause" || id === "c04-delete"),
+    );
+  }
+});
+
+test("400 with an unreadable body stops later creates and retains raw-response debt", async () => {
+  const e = environment(),
+    original = e.deps.send;
+  e.deps.send = async (request) => {
+    if (request.id !== "c04-create") return original(request);
+    e.sends.push(request);
+    return new Response(
+      new ReadableStream({
+        start(controller) {
+          controller.error(new Error("lost400body"));
+        },
+      }),
+      { status: 400 },
+    );
+  };
+  const result = await collectCalendar(e.deps);
+  assert.equal(result.unknown, 1);
+  assert.ok(
+    !e.sends.some(({ id }) => id === "c05-create" || id === "c04-pause" || id === "c04-delete"),
+  );
+  assert.ok(
+    e.rows.some((r) => r.id === "c04-create" && r.state === "body-unknown" && r.status === 400),
+  );
+  assert.equal(result.cleanupVerified, false);
+});
+
+test("failed pause with exact own ENABLED readback gets a settled DELETE and bounded busy retry", async () => {
+  for (const outcome of ["success", "busy", "unsettled"]) {
+    const e = environment(),
+      original = e.deps.send;
+    let deletes = 0;
+    e.deps.send = async (request) => {
+      if (request.id === "c01-pause") {
+        e.sends.push(request);
+        return new Response(JSON.stringify({ error: { code: 503 } }), { status: 503 });
+      }
+      if (/^c01-delete(?:-retry-[0-9]+)?$/.test(request.id)) {
+        deletes++;
+        if (outcome === "unsettled" || (outcome === "busy" && deletes === 1)) {
+          e.sends.push(request);
+          return outcome === "busy" ? busy(e.owned.jobs.c01) : new Response("{}", { status: 503 });
+        }
+        if (request.id !== "c01-delete") return original({ ...request, id: "c01-delete" });
+      }
+      return original(request);
+    };
+    const result = await collectCalendar(e.deps);
+    const read = e.rows.find((r) => r.id === "c01-read-paused" && r.state === "response-persisted");
+    const deletion = e.rows.find((r) => r.id === "c01-delete" && r.state === "before-send");
+    assert.ok(deletion);
+    assert.ok(Date.parse(deletion.dispatchAt) - Date.parse(read.responseAt) >= 60000);
+    assert.equal(deletes, outcome === "busy" ? 2 : 1);
+    assert.deepEqual(e.waits, outcome === "busy" ? [60000, 60000] : [60000]);
+    assert.ok(!e.sends.some(({ id }) => id === "c02-create"));
+    assert.equal(
+      e.sends.some(({ id }) => id === "delete-topic"),
+      outcome !== "unsettled",
+    );
+    assert.equal(result.closureReady, outcome !== "unsettled");
+    assert.equal(result.cleanupVerified, false);
+  }
+});
+
+test("failed pause cannot delete a foreign or unreadable ENABLED readback", async () => {
+  for (const kind of ["name", "topic", "state", "body", "transport"]) {
+    const e = environment(),
+      original = e.deps.send;
+    e.deps.send = async (request) => {
+      if (request.id === "c01-pause") {
+        e.sends.push(request);
+        return new Response("{}", { status: 503 });
+      }
+      if (request.id !== "c01-read-paused") return original(request);
+      e.sends.push(request);
+      if (kind === "body") return lostBody();
+      if (kind === "transport") throw new Error("unknown readback");
+      const body = {
+        name: e.owned.jobs.c01,
+        state: "ENABLED",
+        pubsubTarget: { topicName: e.owned.topic },
+      };
+      if (kind === "name") body.name += "-foreign";
+      if (kind === "topic") body.pubsubTarget.topicName += "-foreign";
+      if (kind === "state") body.state = "UNKNOWN";
+      return new Response(JSON.stringify(body), { status: 200 });
+    };
+    const result = await collectCalendar(e.deps);
+    assert.ok(
+      !e.sends.some(
+        ({ id }) => id === "c01-delete" || id === "delete-topic" || id === "c02-create",
+      ),
+    );
+    assert.equal(result.closureReady, false);
+  }
+});
+
+test("one or two400 refusals plus ambiguous CREATE and busy cleanup share exactly three extras", async () => {
+  for (const refusals of [["c04"], ["c04", "c07"]]) {
+    const e = environment(),
+      original = e.deps.send;
+    e.deps.send = async (request) => {
+      if (refusals.some((id) => request.id === id + "-create")) {
+        e.sends.push(request);
+        return new Response("{}", { status: 400 });
+      }
+      if (/^c01-delete(?:-retry-[0-9]+)?$/.test(request.id)) {
+        e.sends.push(request);
+        return busy(e.owned.jobs.c01);
+      }
+      const response = await original(request);
+      if (request.id === "c08-create") throw new Error("accepted CREATE response lost");
+      return response;
+    };
+    const result = await collectCalendar(e.deps);
+    assert.ok(e.sends.some(({ id }) => id === "c08-read-before-pause"));
+    assert.equal(e.sends.filter(({ id }) => /^c01-delete(?:-retry-[0-9]+)?$/.test(id)).length, 3);
+    assert.equal(result.attempted, 63 - 3 * refusals.length);
+    assert.ok(result.attempted <= 64);
+    assert.equal(result.closureReady, false);
+    assert.ok(!e.sends.some(({ id }) => id === "delete-topic"));
+  }
+});

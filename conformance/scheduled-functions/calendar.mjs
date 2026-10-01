@@ -192,7 +192,7 @@ export async function collectCalendar({
     const answer = await take(id + "-create");
     if (answer?.status >= 400 && answer.status < 500) {
       intents.delete(id); // A definitive client refusal never owns a raced resource.
-      stopped = true;
+      stopped = answer.status !== 400 || answer.bodyUnknown;
       continue;
     }
     const target = { job: own.jobs[id], topic: own.topic };
@@ -224,7 +224,10 @@ export async function collectCalendar({
     const paused = await take(id + "-read-paused");
     if (recordedPaused(paused, { job: own.jobs[id], topic: own.topic })) eligible.add(id);
     else if (recordedAbsent(paused)) absentBeforeDelete.add(id);
-    else stopped = true;
+    else {
+      if (recordedEnabled(paused, target)) eligible.add(id);
+      stopped = true;
+    }
   }
   if (intents.size) await sleep(60000); // Every pause attempt has completed before this wait.
   let jobsAbsent = true;

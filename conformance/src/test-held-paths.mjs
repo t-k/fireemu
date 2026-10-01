@@ -1,18 +1,25 @@
 // The files this process holds open whose path contains `fragment`, for tests that prove a handle was
 // closed. Linux lists them under /proc (no `lsof` is installed on every Linux machine); macOS asks `lsof`.
+//
+// A helper that proves an absence must not turn an error into one: only a descriptor that was closed
+// between the listing and the read (ENOENT) is skipped; any other failure is thrown.
 import { execFileSync } from "node:child_process";
 import { readdirSync, readlinkSync } from "node:fs";
 
-export function heldPaths(fragment) {
-  if (process.platform === "linux") {
+const system = { platform: process.platform, readdir: readdirSync, readlink: readlinkSync };
+
+export function heldPaths(fragment, { platform, readdir, readlink } = system) {
+  if (platform === "linux") {
     const held = [];
-    for (const fd of readdirSync("/proc/self/fd")) {
+    for (const fd of readdir("/proc/self/fd")) {
+      let path;
       try {
-        const path = readlinkSync(`/proc/self/fd/${fd}`);
-        if (path.includes(fragment)) held.push(path);
-      } catch {
-        // The descriptor of the directory listing itself, or one closed meanwhile.
+        path = readlink(`/proc/self/fd/${fd}`);
+      } catch (error) {
+        if (error?.code === "ENOENT") continue;
+        throw error;
       }
+      if (path.includes(fragment)) held.push(path);
     }
     return held;
   }

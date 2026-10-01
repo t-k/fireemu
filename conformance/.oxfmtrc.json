@@ -45,6 +45,7 @@
     "src/storage-rules/corpus.mjs",
     "src/storage-rules/credential-cache.mjs",
     "src/storage-rules/credential-session.mjs",
+    "src/storage-rules/cross_service.mjs",
     "src/storage-rules/delegates.mjs",
     "src/storage-rules/dispatch-gate.mjs",
     "src/storage-rules/enforcement.mjs",
@@ -58,6 +59,7 @@
     "src/storage-rules/local-smoke.mjs",
     "src/storage-rules/locked-run.mjs",
     "src/storage-rules/management_programs.mjs",
+    "src/storage-rules/manifest.mjs",
     "src/storage-rules/pins.mjs",
     "src/storage-rules/predicates.mjs",
     "src/storage-rules/preflight-judge.mjs",
@@ -73,11 +75,13 @@
     "src/storage-rules/reservation-journal.mjs",
     "src/storage-rules/resource-ledger.mjs",
     "src/storage-rules/results.mjs",
+    "src/storage-rules/rulesets.mjs",
     "src/storage-rules/run-ledger.mjs",
     "src/storage-rules/run-manifest.mjs",
     "src/storage-rules/runtime-refs.mjs",
     "src/storage-rules/schedule.mjs",
     "src/storage-rules/settle.mjs",
+    "src/storage-rules/stop-codes.mjs",
     "src/storage-rules/target.mjs"
   ]
 }

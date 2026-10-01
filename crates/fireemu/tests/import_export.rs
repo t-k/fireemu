@@ -630,6 +630,55 @@ curl -s -w '\nwrite %{{http_code}}\n' -X PATCH -H 'Authorization: Bearer owner' 
     );
 }
 
+/// An export of a run that wrote nothing still has the default database's section, with no
+/// entity, stamped with the time of the export (as the official CLI writes it).
+#[test]
+fn an_empty_export_still_writes_a_default_section_stamped_with_the_export_time() {
+    let dir = scratch("empty-firestore-section");
+    let out = dir.join("out");
+    let before = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_micros();
+    let output = exec()
+        .args(["--only", "firestore", "--export-on-exit"])
+        .arg(&out)
+        .args(["--", "true"])
+        .output()
+        .unwrap();
+    let after = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_micros();
+    let log = text(&output);
+    assert!(output.status.success(), "{log}");
+
+    let section = out.join("firestore_export");
+    let overall = OverallMetadata::parse(
+        &std::fs::read(section.join("firestore_export.overall_export_metadata")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(overall.entity_count, 0);
+    let partition = PartitionMetadata::parse(
+        &std::fs::read(
+            section.join("all_namespaces/all_kinds/all_namespaces_all_kinds.export_metadata"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let stamped = u128::from(partition.start_micros);
+    assert!(
+        before <= stamped && stamped <= after,
+        "{before} <= {stamped} <= {after}"
+    );
+    assert_eq!(partition.end_micros, partition.start_micros);
+    assert!(read_output(
+        &std::fs::read(section.join("all_namespaces/all_kinds/output-0")).unwrap()
+    )
+    .unwrap()
+    .is_empty());
+}
+
 #[test]
 fn all_firestore_partitions_import_and_preserve_every_document() {
     let dir = scratch("firestore-partitions");

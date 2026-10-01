@@ -3580,6 +3580,15 @@ impl FirestoreState {
             } else {
                 self.forget_elapsed_finished_transactions(now);
             }
+            // Past the total lifetime a remembered token answers a Rollback 10, whatever finished it: P13a (REST, two recordings) an
+            // idle-expired token whose reads had answered 10 answered a Rollback at 286 to 289 s with 10. Before the lifetime an
+            // idle-expired token's first request, a Rollback at about 121 s, answered 0 (E003), and rollback() keeps that.
+            if self.transactions.get(id).is_some_and(|transaction| {
+                transaction.state == TransactionState::Finished
+                    && now >= transaction_lineage_deadline(transaction)
+            }) {
+                return Err(FirestoreError::Aborted(TRANSACTION_NO_LONGER_VALID.into()));
+            }
         }
         self.rollback(id)
     }

@@ -4325,6 +4325,93 @@ fn a_rest_rollback_as_the_first_request_after_the_total_lifetime_is_answered_per
     }
 }
 
+/// P13a (REST, two recordings, strict): an idle-expired token is remembered like a lifetime-expired one. Reads at about 132 s and 232 s
+/// answer 409 `ABORTED` "no longer valid", and so does a Rollback at about 287 s; a read at about 310 s on another such token answers 400
+/// `INVALID_ARGUMENT` "Invalid transaction." (forgotten at about 300 s).
+#[test]
+#[allow(clippy::too_many_lines)]
+fn a_rest_idle_expired_transaction_is_remembered_until_about_300_seconds() {
+    const GONE: &str = "The referenced transaction has expired or is no longer valid.";
+    let gateway = Gateway {
+        enforce_limits: true,
+        ctx: PlanningContext {
+            edition: FirestoreEdition::Standard,
+            api_mode: FirestoreApiMode::Native,
+            policy: IndexValidationPolicy::Production,
+        },
+        indexes: IndexSet::default(),
+    };
+    let (s, clock) = state_with_gateway(gateway, None, TokenAcceptance::Verified);
+    let (status, seeded) = call(
+        &s,
+        "PATCH",
+        &format!("{DOCS}/lifetime/idle-memory"),
+        json!({"fields": {"v": {"integerValue": "1"}}}),
+    );
+    assert_eq!(status, 200, "{seeded}");
+    let advance =
+        |seconds: i64| {
+            let _ = clock.lock().unwrap().advance(
+                fireemu_core_types::time::LogicalDuration::from_seconds(seconds),
+            );
+        };
+    let begin = |s: &RestState| {
+        let (status, begun) = call(
+            s,
+            "POST",
+            &format!("{DOCS}:beginTransaction"),
+            json!({"options": {"readWrite": {}}}),
+        );
+        assert_eq!(status, 200, "{begun}");
+        begun["transaction"].as_str().unwrap().to_owned()
+    };
+    let read = |s: &RestState, transaction: &str| {
+        call(
+            s,
+            "GET",
+            &format!("{DOCS}/lifetime/idle-memory?transaction={transaction}"),
+            Value::Null,
+        )
+    };
+    // I-1: idle 130 s, a read, 100 s, a read, 53 s, a Rollback
+    let first = begin(&s);
+    let (status, body) = read(&s, &first);
+    assert_eq!(status, 200, "{body}");
+    advance(130);
+    for wait in [0, 100] {
+        advance(wait);
+        let (status, body) = read(&s, &first);
+        assert_eq!(
+            (status, body["error"]["status"].as_str()),
+            (409, Some("ABORTED")),
+            "{body}"
+        );
+        assert_eq!(body["error"]["message"], GONE, "{body}");
+    }
+    advance(53);
+    let (status, rolled) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}:rollback"),
+        json!({"transaction": first}),
+    );
+    assert_eq!(status, 409, "{rolled}");
+    assert_eq!(rolled["error"]["message"], GONE, "{rolled}");
+    // I-2: idle 130 s, a read, 175 s, a read
+    let second = begin(&s);
+    advance(130);
+    let (status, body) = read(&s, &second);
+    assert_eq!(status, 409, "{body}");
+    advance(175);
+    let (status, body) = read(&s, &second);
+    assert_eq!(
+        (status, body["error"]["status"].as_str()),
+        (400, Some("INVALID_ARGUMENT")),
+        "{body}"
+    );
+    assert_eq!(body["error"]["message"], "Invalid transaction.", "{body}");
+}
+
 #[test]
 fn an_idle_rest_transaction_expires_and_releases_its_document_lock() {
     let (s, clock) = state_with_clock(None, TokenAcceptance::Verified);

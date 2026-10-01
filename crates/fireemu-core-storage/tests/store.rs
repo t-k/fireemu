@@ -1255,6 +1255,7 @@ fn list_after_pages_one_merged_order_and_names_the_last_entry_returned() {
         "p/dir/y.txt",
         "p/dir2/z.txt",
         "p/zz.txt",
+        "m/before",
         "q/other",
     ] {
         s.put(
@@ -1289,8 +1290,10 @@ fn list_after_pages_one_merged_order_and_names_the_last_entry_returned() {
     assert!(page(Some("p/zzz")).items.is_empty());
     // The scan seeks to `after`: a point below the prefix lists from its start, a point inside a
     // folded directory skips the rest of that directory, a point outside the prefix is empty.
+    // A name sits between the point and the prefix: the scan must not stop there.
     let from_start = page(Some("a"));
     assert_eq!(from_start.items.len(), 2);
+    assert_eq!(page(Some("m/before")).items.len(), 2);
     let inside = page(Some("p/dir/x.txt"));
     assert_eq!(inside.prefixes, ["p/dir2/"]);
     assert_eq!(inside.items.len(), 1);
@@ -1302,6 +1305,67 @@ fn list_after_pages_one_merged_order_and_names_the_last_entry_returned() {
     assert_eq!(flat.items.len(), 6);
     assert!(flat.prefixes.is_empty());
     assert_eq!(flat.next_page_token, None);
+}
+
+/// `CustomMetadataPatch::Replace` (the JSON API `PUT`) swaps the whole custom map, drops the
+/// download tokens and leaves the map undefined when nothing is left.
+#[test]
+fn a_replace_patch_swaps_the_custom_map_and_drops_the_download_tokens() {
+    use fireemu_core_storage::store::CustomMetadataPatch;
+    let mut s = StorageState::new(1);
+    let b = bucket();
+    let n = name("replace");
+    let custom = BTreeMap::from([
+        ("keep".to_owned(), "1".to_owned()),
+        (
+            "firebaseStorageDownloadTokens".to_owned(),
+            "tok-a".to_owned(),
+        ),
+    ]);
+    s.put(
+        &b,
+        &n,
+        b"x".to_vec(),
+        NewMetadata {
+            custom: Some(custom),
+            ..NewMetadata::default()
+        },
+        Precondition::default(),
+        t(1),
+    )
+    .unwrap();
+    let before = s.get(&b, &n).unwrap().clone();
+    assert_eq!(before.download_tokens, ["tok-a"]);
+    let replace = |entries: &[(&str, &str)]| MetadataPatch {
+        custom: Some(CustomMetadataPatch::Replace(
+            entries
+                .iter()
+                .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+                .collect(),
+        )),
+        ..MetadataPatch::default()
+    };
+    let swapped = s
+        .update_metadata(
+            &b,
+            &n,
+            &replace(&[("only", "2")]),
+            Precondition::default(),
+            t(2),
+        )
+        .unwrap();
+    assert_eq!(
+        swapped.custom,
+        BTreeMap::from([("only".to_owned(), "2".to_owned())])
+    );
+    assert!(swapped.download_tokens.is_empty());
+    assert!(swapped.custom_defined);
+    assert_eq!(swapped.metageneration, before.metageneration + 1);
+    let emptied = s
+        .update_metadata(&b, &n, &replace(&[]), Precondition::default(), t(3))
+        .unwrap();
+    assert!(emptied.custom.is_empty());
+    assert!(!emptied.custom_defined);
 }
 
 #[test]

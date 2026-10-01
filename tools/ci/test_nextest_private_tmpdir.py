@@ -38,6 +38,29 @@ class WrapperTest(unittest.TestCase):
             timeout=30,
         )
 
+    def start_wrapped(self, script):
+        """A wrapped long-running test in its own process group, killed at the end of the test
+        whatever happens, so a failing assertion never leaves it running."""
+        environment = dict(os.environ, TMPDIR=str(self.parent) + "/")
+        process = subprocess.Popen(
+            [SHELL, str(WRAPPER), SHELL, "-c", script],
+            env=environment,
+            start_new_session=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+
+        def reap():
+            if process.poll() is None:
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                process.wait()
+
+        self.addCleanup(reap)
+        return process
+
     def private_dirs(self):
         return sorted(self.root.iterdir()) if self.root.exists() else []
 
@@ -128,14 +151,7 @@ class WrapperTest(unittest.TestCase):
         self.assertTrue((outside / "kept").is_dir(), "and so is what it points to")
 
     def test_a_terminated_run_still_removes_the_private_directory(self):
-        environment = dict(os.environ, TMPDIR=str(self.parent) + "/")
-        process = subprocess.Popen(
-            [SHELL, str(WRAPPER), SHELL, "-c", 'mkdir "$TMPDIR/x"; trap "exit 143" TERM; while :; do sleep 0.1; done'],
-            env=environment,
-            start_new_session=True,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
+        process = self.start_wrapped('mkdir "$TMPDIR/x"; trap "exit 143" TERM; while :; do sleep 0.1; done')
         deadline = time.monotonic() + 10
         while time.monotonic() < deadline and not any(d.joinpath("x").exists() for d in self.private_dirs()):
             time.sleep(0.05)
@@ -146,14 +162,7 @@ class WrapperTest(unittest.TestCase):
         self.assertEqual(self.private_dirs(), [])
 
     def test_a_test_that_exits_0_after_a_terminating_signal_still_reports_the_signal(self):
-        environment = dict(os.environ, TMPDIR=str(self.parent) + "/")
-        process = subprocess.Popen(
-            [SHELL, str(WRAPPER), SHELL, "-c", ': > "$TMPDIR/../started"; trap "exit 0" TERM; while :; do sleep 0.1; done'],
-            env=environment,
-            start_new_session=True,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
+        process = self.start_wrapped(': > "$TMPDIR/../started"; trap "exit 0" TERM; while :; do sleep 0.1; done')
         deadline = time.monotonic() + 10
         while time.monotonic() < deadline and not (self.root / "started").exists():
             time.sleep(0.05)

@@ -6585,6 +6585,122 @@ fn declared_checksums_are_verified_only_under_strict() {
     }
 }
 
+/// Declared checksums on resumable uploads, in both dialects: strict refuses a wrong or a
+/// malformed one in production's words; the emulator profile completes the upload as the official
+/// emulator does (firebase-tools 15.28.2 compares no declared checksum on any path).
+#[test]
+fn resumable_uploads_verify_declared_checksums_only_under_strict() {
+    const WRONG: &str = "AAAAAAAAAAAAAAAAAAAAAA==";
+    for (acceptance, _) in seeded_pair() {
+        let strict = acceptance == TokenAcceptance::Verified;
+        // Firebase dialect: a wrong md5Hash in the start metadata is found at finalize.
+        let s = state_with(Some(ALLOW_ALL_RULES), acceptance);
+        let owner = [
+            ("authorization", "Bearer owner"),
+            ("x-goog-upload-protocol", "resumable"),
+        ];
+        let v0_start = |name: &str, metadata: &str| {
+            handle(
+                &s,
+                req(
+                    "POST",
+                    &format!("/v0/b/{BUCKET}/o?name={name}"),
+                    &[
+                        owner[0],
+                        owner[1],
+                        ("x-goog-upload-command", "start"),
+                        ("content-type", "application/json"),
+                    ],
+                    metadata.as_bytes(),
+                ),
+            )
+        };
+        let wrong = v0_start(
+            "w.bin",
+            &format!(r#"{{"name":"w.bin","md5Hash":"{WRONG}"}}"#),
+        );
+        assert_eq!(wrong.status, 200, "{acceptance:?} start");
+        let url = header(&wrong, "x-goog-upload-url").unwrap().to_owned();
+        let session = url
+            .split_once("/v0/")
+            .map(|(_, rest)| format!("/v0/{rest}"))
+            .unwrap();
+        let finalize = handle(
+            &s,
+            req(
+                "POST",
+                &session,
+                &[
+                    owner[0],
+                    owner[1],
+                    ("x-goog-upload-command", "upload, finalize"),
+                    ("x-goog-upload-offset", "0"),
+                ],
+                b"hello",
+            ),
+        );
+        assert_eq!(
+            finalize.status,
+            if strict { 400 } else { 200 },
+            "{acceptance:?} finalize"
+        );
+        let crc = v0_start("c.bin", r#"{"name":"c.bin","crc32c":"AAA"}"#);
+        assert_eq!(
+            crc.status,
+            if strict { 400 } else { 200 },
+            "{acceptance:?} malformed crc32c"
+        );
+        let md5 = v0_start("m.bin", r#"{"name":"m.bin","md5Hash":"!not-base64!"}"#);
+        assert_eq!(
+            md5.status,
+            if strict { 400 } else { 200 },
+            "{acceptance:?} malformed md5Hash"
+        );
+
+        // JSON API: the same declarations in the start metadata, found at the last chunk.
+        let start = |metadata: &str| {
+            handle(
+                &s,
+                req(
+                    "POST",
+                    &format!("/upload/storage/v1/b/{BUCKET}/o?uploadType=resumable&name=j.bin"),
+                    &[
+                        ("authorization", "Bearer owner"),
+                        ("content-type", "application/json"),
+                    ],
+                    metadata.as_bytes(),
+                ),
+            )
+        };
+        let started = start(&format!(r#"{{"md5Hash":"{WRONG}"}}"#));
+        assert_eq!(started.status, 200, "{acceptance:?} JSON API start");
+        let location = header(&started, "location")
+            .unwrap()
+            .strip_prefix("http://127.0.0.1:9199")
+            .unwrap()
+            .to_owned();
+        let put = handle(
+            &s,
+            req(
+                "PUT",
+                &location,
+                &[("authorization", "Bearer owner")],
+                b"hello",
+            ),
+        );
+        assert_eq!(
+            put.status,
+            if strict { 400 } else { 200 },
+            "{acceptance:?} JSON API put"
+        );
+        assert_eq!(
+            start(r#"{"crc32c":"AAA"}"#).status,
+            if strict { 400 } else { 200 },
+            "{acceptance:?} JSON API malformed crc32c"
+        );
+    }
+}
+
 /// The Firebase resumable protocol under strict (recorded, lean-v5): granularity 262144, a control
 /// URL equal to the session URL, no `x-gupload-uploadid`, empty bodies, a cancel that says
 /// `cancelled` and the wrong-offset text.

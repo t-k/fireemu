@@ -2466,6 +2466,23 @@ fn verify_hashes(
     Ok(prepared)
 }
 
+/// The checksums a resumable upload is held to: the declared ones under strict, none otherwise
+/// (the official emulator, firebase-tools 15.28.2, compares no declared checksum on any path, so
+/// the emulator profile neither refuses a malformed declaration nor ends a session on a
+/// mismatch).
+#[allow(clippy::type_complexity)]
+fn resumable_declared_hashes(
+    state: &StorageState,
+    req: &StorageRequest,
+    meta_json: Option<&Value>,
+) -> Result<(Option<[u8; 16]>, Option<u32>), (u16, String)> {
+    if state.is_strict() {
+        declared_hashes(req, meta_json)
+    } else {
+        Ok((None, None))
+    }
+}
+
 /// Checksums the client declared for the whole object: `X-Goog-Hash`, `Content-MD5` and the
 /// `md5Hash` / `crc32c` metadata fields. Malformed values are errors.
 #[allow(clippy::type_complexity)]
@@ -3782,7 +3799,8 @@ fn fb_object_post(
             let mut meta =
                 new_metadata_from_json(&meta_json, None).map_err(|e| fb_json_error(400, &e))?;
             let (expected_md5, expected_crc32c) =
-                declared_hashes(&req, Some(&meta_json)).map_err(|(s, m)| fb_json_error(s, &m))?;
+                resumable_declared_hashes(state, &req, Some(&meta_json))
+                    .map_err(|(s, m)| fb_json_error(s, &m))?;
             // Rules run at finalization against the received bytes (as the official
             // emulator does). The session keeps the credentials it was started with.
             let authorization = match principal {
@@ -4150,11 +4168,13 @@ fn finalize_resumable(
 ) -> Result<ObjectMetadata, FinalizeError> {
     // Checksums declared on the finalizing request are verified by the store when it
     // commits (a mismatch ends the session).
-    let (md5_declared, crc_declared) = declared_hashes(req, None)
+    let (md5_declared, crc_declared) = resumable_declared_hashes(state, req, None)
         .map_err(|(_, m)| FinalizeError::Store(StorageError::ChecksumMismatch(m)))?;
-    store
-        .set_upload_hashes(id, md5_declared, crc_declared, now)
-        .map_err(FinalizeError::Store)?;
+    if state.is_strict() {
+        store
+            .set_upload_hashes(id, md5_declared, crc_declared, now)
+            .map_err(FinalizeError::Store)?;
+    }
     let (b, n, meta, size, hashes, authorization) = {
         let pending = store
             .pending_upload(id, now)
@@ -4658,8 +4678,9 @@ fn gcs_upload(
             let meta = new_metadata_from_json(&meta_json, declared_ct)
                 .map_err(|e| gcs_json_error(400, &e, "invalid"))?;
             let pre = precondition(state, params)?;
-            let (expected_md5, expected_crc32c) = declared_hashes(&req, Some(&meta_json))
-                .map_err(|(s, m)| gcs_json_error(s, &m, "invalid"))?;
+            let (expected_md5, expected_crc32c) =
+                resumable_declared_hashes(state, &req, Some(&meta_json))
+                    .map_err(|(s, m)| gcs_json_error(s, &m, "invalid"))?;
             let id = state
                 .store()?
                 .begin_upload_with(

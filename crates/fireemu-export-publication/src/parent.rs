@@ -368,6 +368,37 @@ mod tests {
     }
 
     #[test]
+    fn a_component_swapped_for_a_file_before_the_restriction_is_refused() {
+        let root = TrustedTempDir::new("parent-swap-file");
+        let existing = std::fs::canonicalize(root.path()).unwrap();
+        let error = prepare_and_validate_parent_with(&existing.join("x/y"), &accept, &|made| {
+            if made.ends_with("x") {
+                std::fs::remove_dir(made).unwrap();
+                std::fs::write(made, b"not a directory").unwrap();
+            }
+        })
+        .unwrap_err();
+        assert!(
+            error.contains("not the directory that was just made"),
+            "{error}"
+        );
+        assert_ne!(
+            mode_of(&existing.join("x")),
+            0o700,
+            "the file was not restricted like a directory"
+        );
+    }
+
+    #[test]
+    fn a_canonical_path_that_is_not_a_directory_is_refused() {
+        let root = TrustedTempDir::new("parent-not-a-directory");
+        let existing = std::fs::canonicalize(root.path()).unwrap();
+        std::fs::write(existing.join("file"), b"x").unwrap();
+        let error = trusted_ancestors(&existing.join("file"), &accept).unwrap_err();
+        assert_eq!(error, "the export parent is not a directory");
+    }
+
+    #[test]
     fn a_component_that_already_exists_is_refused() {
         let root = TrustedTempDir::new("parent-exists");
         let existing = std::fs::canonicalize(root.path()).unwrap();

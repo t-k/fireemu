@@ -54,7 +54,7 @@ export function createStreamingWriteGate({
     containmentFailed = false,
     unsettledObserved = false,
     synchronousContractFailed = false,
-    issueEntered = false;
+    issueOutstanding = false;
   const origins = new Set([
     "peer-terminal",
     "client-cancel",
@@ -190,7 +190,6 @@ export function createStreamingWriteGate({
     }
     active = true;
     return (async () => {
-      let entered = false;
       try {
         await bounded(`${intent.index}:guard-before`, () =>
           guard(intent, { signal: controller.signal }),
@@ -211,7 +210,10 @@ export function createStreamingWriteGate({
           check();
         }
         check();
-        entered = true;
+        // Set before issue and cleared only by an acknowledged issued receipt, so any drain that
+        // reports while this action is unresolved, even one started from inside a callback,
+        // requires termination.
+        issueOutstanding = true;
         const result = issue(intent, wire ? Buffer.from(wire) : undefined);
         rejectAsync(`${intent.index}:async-issue`, result);
         issuedActions++;
@@ -221,11 +223,9 @@ export function createStreamingWriteGate({
           persist(Object.freeze({ ...intent, state: "issued" }), { signal: controller.signal }),
         );
         completedActions++;
+        issueOutstanding = false;
         if (kind === "client-cancel") stop("client-cancel");
       } catch {
-        // Once issue is entered, bytes may have left: a throw, a Promise or a lost issued
-        // acknowledgement all leave the outcome to supervised termination.
-        if (entered) issueEntered = true;
         stop("uncertain");
         throw new Error("streaming admission stopped");
       } finally {
@@ -262,7 +262,7 @@ export function createStreamingWriteGate({
       terminationRequired:
         unsettledObserved ||
         synchronousContractFailed ||
-        issueEntered ||
+        issueOutstanding ||
         containmentFailed ||
         !containmentSettled,
     };

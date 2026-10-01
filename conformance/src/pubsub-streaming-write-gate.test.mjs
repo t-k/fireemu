@@ -997,3 +997,36 @@ test("an issue result whose then lookup throws is an unknown outcome that requir
   assert.deepEqual(result.pendingCallbacks, []);
   assert.equal(result.terminationRequired, true);
 });
+test("a drain started inside the issued acknowledgement reports the unacknowledged send as requiring termination", async () => {
+  let drain;
+  const { g, issued } = await gate({
+    persist: async (row) => {
+      if (row.state !== "issued") return;
+      // Reentrant: the drain starts before this callback fails, so it can settle before the
+      // action's own failure handling runs.
+      drain = g.done();
+      throw new Error("issued acknowledgement lost");
+    },
+  });
+  await assert.rejects(g.open(), /stopped/);
+  const first = await drain;
+  assert.equal(issued.length, 1);
+  assert.equal(first.issuedActions, 1);
+  assert.equal(first.unknownActions, 1);
+  assert.equal(first.terminationRequired, true);
+  assert.equal((await g.done()).terminationRequired, true);
+});
+test("an issue callback that stops the gate and returns normally still requires termination", async () => {
+  let g;
+  ({ g } = await gate({
+    issue: () => {
+      g.stop("peer-terminal");
+    },
+  }));
+  await assert.rejects(g.open(), /stopped/);
+  const result = await g.done();
+  assert.equal(result.stopOrigin, "peer-terminal");
+  assert.equal(result.issuedActions, 1);
+  assert.equal(result.completedActions, 0);
+  assert.equal(result.terminationRequired, true);
+});

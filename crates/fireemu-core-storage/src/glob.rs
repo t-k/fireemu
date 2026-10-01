@@ -157,7 +157,10 @@ fn scan(chars: &[char]) -> Vec<Raw> {
     let members = Members::of(chars);
     let mut raw = Vec::new();
     let mut at = 0;
-    while let Some(&c) = chars.get(at) {
+    // Every pass consumes at least one character, so `chars.len()` passes are the most there can
+    // be; the bound keeps a cursor that stopped advancing from growing `raw` without end.
+    for _ in 0..=chars.len() {
+        let Some(&c) = chars.get(at) else { break };
         match c {
             '\\' => {
                 if let Some(&escaped) = chars.get(at + 1) {
@@ -171,10 +174,7 @@ fn scan(chars: &[char]) -> Vec<Raw> {
             '*' => {
                 if chars.get(at + 1) == Some(&'*') {
                     raw.push(Raw::Any);
-                    at += 2;
-                    while chars.get(at) == Some(&'*') {
-                        at += 1;
-                    }
+                    at += 2 + chars[at + 2..].iter().take_while(|&&c| c == '*').count();
                 } else {
                     raw.push(Raw::Segment);
                     at += 1;
@@ -261,7 +261,8 @@ impl Members {
         let mut ranges = Vec::new();
         let mut member = at;
         let mut first = true;
-        loop {
+        // As in `scan`, each pass consumes a character, so the pattern's length bounds the passes.
+        for _ in 0..=chars.len() {
             if chars[member] == ']' && !first {
                 return Some((Raw::Class(ranges, negated), end));
             }
@@ -270,6 +271,7 @@ impl Members {
             ranges.push(range);
             member = after;
         }
+        None
     }
 }
 

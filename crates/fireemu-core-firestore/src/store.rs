@@ -1497,8 +1497,9 @@ impl FirestoreState {
             .and_then(|(_, d)| d.as_deref())
     }
 
-    /// Indexes a newly retained path. This is the path's one shared allocation: the live
-    /// indexes and the listing trie hold the same `Arc`, never a copy of their own.
+    /// Indexes a newly retained path. This is the path's one shared index allocation: the
+    /// live indexes and the listing trie hold the same `Arc`, never a copy of their own (the
+    /// `history` key is a separate copy).
     fn insert_scope_path(&mut self, path: &DocumentPath) {
         let shared = Arc::new(path.clone());
         self.direct_collection_paths
@@ -6724,6 +6725,42 @@ mod scope_index_tests {
     }
 
     #[test]
+    fn a_stale_representative_still_names_its_missing_parent() {
+        // In the second order the root/a node's representative is x, which the compaction
+        // removes while y keeps the node alive.
+        for (first, second) in [
+            ("root/a/children/x", "root/a/children/y"),
+            ("root/a/children/y", "root/a/children/x"),
+        ] {
+            let mut state = FirestoreState::new();
+            state
+                .commit(&[set(first)], None, LogicalInstant::UNIX_EPOCH)
+                .expect("create the first path under root/a");
+            state
+                .commit(&[set(second)], None, LogicalInstant::from_unix_seconds(1))
+                .expect("create the second path under root/a");
+            state
+                .commit(
+                    &[delete("root/a/children/x")],
+                    None,
+                    LogicalInstant::from_unix_seconds(2),
+                )
+                .expect("delete x");
+            state.compact(LogicalInstant::from_unix_seconds(
+                READ_TIME_RETENTION_SECONDS + 3,
+            ));
+            assert!(!state.history.contains_key(&path("root/a/children/x")));
+            for version in [None, Some(state.current_version())] {
+                assert_eq!(
+                    state.list_missing_parents_at(None, "root", version),
+                    vec![path("root/a")],
+                    "{first} created first, at {version:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn scope_path_sharing_check_rejects_a_second_allocation() {
         let mut state = FirestoreState::new();
         state
@@ -6820,6 +6857,25 @@ mod scope_index_tests {
                     ).into_iter().map(|document| document.path).collect();
                     proptest::prop_assert_eq!(&latest, &expected);
                     proptest::prop_assert_eq!(&historical, &expected);
+                    // Missing parents are the only reader of a trie node's representative,
+                    // which may have outlived its own path after a compaction.
+                    let depth = parent.as_ref().map_or(1, |path| path.pairs().len() + 1);
+                    let expected_missing: Vec<_> = model.keys()
+                        .filter_map(|path| path.ancestor(depth))
+                        .filter(|ancestor| ancestor.parent_document() == parent
+                            && ancestor.collection_id().as_str() == collection
+                            && !model.contains_key(ancestor))
+                        .collect::<BTreeSet<_>>().into_iter().collect();
+                    proptest::prop_assert_eq!(
+                        &state.list_missing_parents_at(parent.as_ref(), collection, None),
+                        &expected_missing
+                    );
+                    proptest::prop_assert_eq!(
+                        &state.list_missing_parents_at(
+                            parent.as_ref(), collection, Some(state.current_version()),
+                        ),
+                        &expected_missing
+                    );
                 }
             }
         }

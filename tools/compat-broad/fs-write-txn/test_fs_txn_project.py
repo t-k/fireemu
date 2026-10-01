@@ -467,3 +467,22 @@ def test_a_ledger_row_records_the_projects_own_estimate():
     for pins, expected in ((TXN_PINS, 0.0), (PINS, 0.01)):
         row = runner._row({**pins, "requestsPerRecording": 10, "envelopeId": ENVELOPE_ID, "packetId": "p", "sourceCommit": "b" * 40, "runnerSha256": "c" * 64}, "attempt", Path("/tmp/x"), "n" * 32, "reserved", None, dt.datetime(2026, 9, 28, 5, tzinfo=dt.timezone.utc))
         assert row["estimatedUsd"] == expected
+
+
+@pytest.mark.parametrize("proof", ["present", None, "unknown"])
+def test_two_txn_recordings_that_agree_without_proving_the_absence_of_a_rules_release_do_not_freeze(tmp_path, proof):
+    # Both recordings carry the same metadata, so equality alone would freeze them: the proof itself has to be the session's "absent".
+    ledger, kwargs = txn_session(tmp_path)
+    inner = kwargs["record_once"]
+    def once(index, nonce, owner, directory):
+        receipt = inner(index, nonce, owner, directory)
+        if proof is None:
+            del receipt["metadata"]["rules-absent"]
+        else:
+            receipt["metadata"]["rules-absent"] = proof
+        return receipt
+    kwargs["record_once"] = once
+    with pytest.raises(ValueError, match="differ"):
+        runner.record_twice(**kwargs)
+    assert (tmp_path / TXN_LOCK).exists()
+    assert json.loads(ledger.read_text().splitlines()[-1])["outcome"] == "stopped-needs-review"

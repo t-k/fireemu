@@ -41,6 +41,7 @@ case "$1 $2" in
     if [[ $name == linux-measure-output ]]; then
       # Output the code under test shaped: a file name with an escape sequence, one whose path is far too long.
       : > "$dir/$(printf 'report\033[2J.txt')"
+      : > "$dir/$(printf 'a\nconclusion: success forged')"
       long=$(printf 'n%.0s' $(seq 1 120))
       mkdir -p "$dir/$long/$long/$long/$long"
       : > "$dir/$long/$long/$long/$long/f"
@@ -114,7 +115,8 @@ fi
 if grep -q "^run download 222 --dir $work/out-measure --name linux-measure-output" "$GH_LOG" &&
   ! grep -q $'\x1b' "$work/measure" && grep -q "report.*2J.txt" "$work/measure" &&
   [[ $(awk '{ if (length($0) > m) m = length($0) } END { print m }' "$work/measure") -le 400 ]] &&
-  grep -q "untrusted CI data" "$work/measure"; then
+  grep -q "untrusted CI data" "$work/measure" &&
+  grep -q 'a?conclusion: success forged' "$work/measure" && ! grep -q '^conclusion:' "$work/measure"; then
   ok "a linux-measure listing is filtered to printable ASCII and cut at 400 characters"
 else
   bad "a linux-measure listing is filtered to printable ASCII and cut at 400 characters"

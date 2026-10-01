@@ -113,4 +113,14 @@ class HeavyVerificationContractTest < Minitest::Test
     source = File.read(File.join(ROOT, "scripts", "ci-workflow-contract.rb"))
     assert_includes source, "must not restore a cache"
   end
+
+  def test_a_guard_that_fails_open_on_an_empty_default_branch_is_refused
+    assert_violation(REAL.sub(/ *\[\[ -n \$DEFAULT_BRANCH \]\] \|\| fail[^\n]*\n/, ""), "unreadable default branch")
+  end
+
+  def test_an_input_in_a_job_level_field_is_refused
+    assert_violation(REAL.sub("runs-on: ${{ matrix.os }}", "runs-on: ${{ inputs.base }}"), "runs-on uses an unknown expression")
+    assert_violation(REAL.sub("    timeout-minutes: 5\n", "    timeout-minutes: 5\n    container: ${{ inputs.base }}\n"), "container uses an unknown expression")
+    assert_violation(REAL.sub("shard: ${{ fromJSON(needs.plan.outputs.matrix) }}", "shard: ${{ fromJSON(inputs.base) }}"), "strategy uses an unknown expression")
+  end
 end

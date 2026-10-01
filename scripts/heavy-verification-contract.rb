@@ -26,7 +26,7 @@ PINS = {
 # Expressions (the text inside `${{ }}`) a step may use outside a script: the plan's validated
 # outputs, the matrix, a step's own output, and the runner's temp directory. The plan's own env may also
 # read the inputs, the default branch and the repository URL parts; no other job may read an input.
-STEP_EXPRESSION = /\A(needs\.plan\.outputs\.[a-z_]+|matrix\.[a-z_]+|steps\.[a-z_]+\.outputs\.[a-z_]+|runner\.temp)\z/
+STEP_EXPRESSION = /\A(fromJSON\(needs\.plan\.outputs\.[a-z_]+\)|needs\.plan\.outputs\.[a-z_]+|matrix\.[a-z_]+|steps\.[a-z_]+\.outputs\.[a-z_]+|runner\.temp)\z/
 PLAN_EXPRESSION = /\A(inputs\.[a-z_]+|github\.event\.repository\.default_branch|github\.server_url|github\.repository)\z/
 FORBIDDEN_ENV = /\bACTIONS_(ALLOW_UNSECURE_COMMANDS|RUNNER_DEBUG|STEP_DEBUG)\b/
 
@@ -69,6 +69,16 @@ def violations(source, toolchain_channel: nil)
     errors << "#{name}: a timeout-minutes is required" unless job["timeout-minutes"].is_a?(Integer)
     errors << "#{name}: a job must not widen the permissions" if job.key?("permissions")
     errors << "#{name}: an if condition may only test the job input" if job["if"] && job["if"].gsub(/inputs\.job\s*==\s*'[a-z-]+'/, "").match?(/inputs\.|github\.event/)
+    # Job-level fields that take an expression (where the job runs, its container, its matrix): the same
+    # allow-list as a step, so an input can never choose a runner or an image.
+    %w[runs-on container services strategy environment name].each do |key|
+      next unless job.key?(key)
+      strings_in(job[key]).each do |text|
+        unknown_expressions(text, STEP_EXPRESSION).each do |expression|
+          errors << "#{name}: #{key} uses an unknown expression: #{expression}"
+        end
+      end
+    end
     Array(job["steps"]).each_with_index do |step, index|
       label = "#{name} step #{index + 1}"
       action = nil
@@ -135,6 +145,7 @@ def violations(source, toolchain_channel: nil)
     script = validate["run"].to_s
     errors << "plan must refuse a run from the default branch and from a tag" unless script.include?("$GITHUB_REF") && script.include?("refs/heads/$DEFAULT_BRANCH") && script.include?("refs/tags/")
     errors << "plan must resolve the ref and the base inside this repository" unless script.include?("for-each-ref --contains") && script.include?("refs/heads/$value")
+    errors << "plan must refuse an unreadable default branch" unless script.include?('[[ -n $DEFAULT_BRANCH ]]')
     errors << "plan must refuse refs/, HEAD and FETCH_HEAD" unless script.include?("refs/*") && script.include?("FETCH_HEAD")
   end
   workflow.fetch("jobs").each do |name, job|

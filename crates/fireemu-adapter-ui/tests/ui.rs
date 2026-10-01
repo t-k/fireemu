@@ -803,10 +803,12 @@ while True:
 /// The UI state with a real Functions port bound in front of an HTTP-capable runner, so the
 /// invoke and enqueue fronts can be driven end to end. Returns the state, the runtime, and
 /// the path the task handler records dispatched tasks to.
+/// The probe comes first so a `let (probe, state, runtime)` binding drops it last, after the
+/// runtime and its runner: teardown writes cannot race the directory's removal.
 async fn state_with_http_functions() -> (
+    TaskProbe,
     Arc<UiState>,
     Arc<fireemu_adapter_functions::runtime::FunctionsRuntime>,
-    TaskProbe,
 ) {
     use fireemu_adapter_functions::runner::{Runner, SpawnSpec};
     use fireemu_adapter_functions::runtime::{CatchUpPolicy, FunctionsConfig, OverlapPolicy};
@@ -890,7 +892,7 @@ async fn state_with_http_functions() -> (
         .expect("the state is unshared");
     state.info.functions_addr = Some(addr);
     state.functions = Some(runtime.clone());
-    (Arc::new(state), runtime, probe)
+    (probe, Arc::new(state), runtime)
 }
 
 /// The file the task handler records dispatched tasks to. Its directory is removed when the
@@ -935,7 +937,7 @@ async fn wait_for_probe(probe: &std::path::Path, expected: usize) -> Vec<String>
 
 #[tokio::test]
 async fn invoking_an_on_request_function_forwards_through_the_port_and_returns_its_response() {
-    let (s, runtime, _probe) = state_with_http_functions().await;
+    let (_probe, s, runtime) = state_with_http_functions().await;
     let (status, body) = call(
         &s,
         browser(
@@ -961,7 +963,7 @@ async fn invoking_an_on_request_function_forwards_through_the_port_and_returns_i
 
 #[tokio::test]
 async fn invoking_refuses_a_non_http_function_an_unknown_name_and_a_bad_method() {
-    let (s, runtime, _probe) = state_with_http_functions().await;
+    let (_probe, s, runtime) = state_with_http_functions().await;
     // A Firestore trigger is not HTTP-invokable.
     let (status, _) = call(
         &s,
@@ -1001,7 +1003,7 @@ async fn invoking_refuses_a_non_http_function_an_unknown_name_and_a_bad_method()
 
 #[tokio::test]
 async fn enqueuing_a_task_dispatches_it_to_the_queue_handler() {
-    let (s, runtime, probe) = state_with_http_functions().await;
+    let (probe, s, runtime) = state_with_http_functions().await;
     let (status, body) = call(
         &s,
         browser(
@@ -1033,7 +1035,7 @@ async fn enqueuing_a_task_dispatches_it_to_the_queue_handler() {
 
 #[tokio::test]
 async fn enqueuing_refuses_a_non_task_function_and_a_bad_id() {
-    let (s, runtime, _probe) = state_with_http_functions().await;
+    let (_probe, s, runtime) = state_with_http_functions().await;
     let (status, _) = call(
         &s,
         browser(
@@ -1087,7 +1089,7 @@ async fn the_invoke_and_enqueue_fronts_require_the_control_token() {
 async fn invoking_forwards_a_question_mark_inside_the_query_to_the_function() {
     // Cross-layer: the front keeps a "?" that is query data, and the backend forwards it
     // unchanged rather than rejecting it. Testing each layer alone would miss the contract gap.
-    let (s, runtime, _probe) = state_with_http_functions().await;
+    let (_probe, s, runtime) = state_with_http_functions().await;
     let (status, body) = call(
         &s,
         browser(
@@ -1126,7 +1128,7 @@ async fn invoking_forwards_a_question_mark_inside_the_query_to_the_function() {
 
 #[tokio::test]
 async fn enqueuing_refuses_a_task_over_the_tasks_port_size_limit() {
-    let (s, runtime, _probe) = state_with_http_functions().await;
+    let (_probe, s, runtime) = state_with_http_functions().await;
     // A payload whose base64-encoded task request exceeds the 100 KiB Tasks-port limit is
     // refused here, exactly as it would be at the Tasks port -- the UI's 256 KiB JSON limit
     // does not become a way to enqueue an oversize task.
@@ -1163,7 +1165,7 @@ async fn enqueuing_refuses_a_task_over_the_tasks_port_size_limit() {
 
 #[tokio::test]
 async fn invoking_refuses_a_header_that_could_be_smuggled() {
-    let (s, runtime, _probe) = state_with_http_functions().await;
+    let (_probe, s, runtime) = state_with_http_functions().await;
     // A CR/LF in a header value is refused at the boundary (400), not forwarded.
     let (status, _) = call(
         &s,

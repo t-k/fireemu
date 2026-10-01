@@ -249,7 +249,9 @@ test("genuine late-topic collector journals admit polls while leaving all job ca
     const { f, rows, result, waits } = await lateTopicCapture(visible);
     assert.equal(result.unknown, 1);
     assert.equal(result.cleanupVerified, false);
-    assert.equal(result.closureReady, visible);
+    // The lost topic CREATE answer is unknown, so closure waits for the later read-back even
+    // when the topic is visible and cleaned up.
+    assert.equal(result.closureReady, false);
     assert.deepEqual(waits, visible ? [10000] : [10000, 10000, 10000]);
     assert.equal(
       rows.filter((r) => r.id === "create-topic" && r.state === "before-send").length,

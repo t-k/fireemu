@@ -2,7 +2,11 @@
 import { readFileSync } from "node:fs";
 import { createRequestCapture, ownedResources, PROJECT } from "./shape.mjs";
 import { recordedAbsent, recordedPaused, recordedMutationBusy } from "./recovery.mjs";
-import { recordedRecoveryJobAbsent } from "./calendar-settled-topic.mjs";
+import {
+  recordedRecoveryEmpty,
+  recordedRecoveryJobAbsent,
+  recordedRecoveryTopicAbsent,
+} from "./calendar-settled-topic.mjs";
 
 export const CALENDAR_CASES = Object.freeze(
   JSON.parse(readFileSync(new URL("./calendar-cases.json", import.meta.url), "utf8")).map(
@@ -146,7 +150,8 @@ export async function collectCalendar({
     maxRequests: 64,
   });
   const unsettledCreates = new Set();
-  let unknownDelete = false;
+  let unknownDelete = false,
+    ambiguous = 0;
   const capture = async (spec) => {
     const answer = await captureAnswer(spec);
     if (
@@ -156,6 +161,8 @@ export async function collectCalendar({
       (answer.status >= 300 && answer.status < 400) ||
       answer.status >= 500
     ) {
+      // A complete status below 200, a 3xx or a 5xx is as unknown as a lost answer.
+      if (answer && !answer.bodyUnknown) ambiguous++;
       if (spec.id === "create-topic" || /^c0[1-8]-create$/.test(spec.id))
         unsettledCreates.add(spec.id);
       if (spec.method === "DELETE") unknownDelete = true;
@@ -177,26 +184,36 @@ export async function collectCalendar({
     return answer;
   };
   const take = (id) => capture(requests.get(id));
+  // Closure proofs are judged on the persisted raw bytes against the recorded layouts of
+  // calendar-5a73ba99b7014cfd: job absence 97 B (seq 30), topic absence 152 B, empty lists 3 B.
+  // A re-serialized body is an unrecorded shape and proves nothing.
+  const recordedBytes = (id, answer) => {
+    const row = persisted.get(id);
+    return row && answer
+      ? { ...answer, bodyBytes: row.bodyBytes, rawBytes: Buffer.from(row.bodyBase64, "base64") }
+      : undefined;
+  };
   // After a 400-refused CREATE the job read answered the detailed 433-byte absence
-  // (calendar-5a73ba99b7014cfd seq 150/153); it is judged on the persisted raw bytes.
-  const refusedAbsent = (id, answer) => {
-    const row = persisted.get(id + "-read-deleted");
-    return (
-      refused.has(id) &&
-      !!row &&
+  // (seq 150/153); after an acknowledged DELETE only the plain 97-byte absence counts.
+  const jobAbsent = (id, answer) =>
+    recordedRecoveryJobAbsent(recordedBytes(id + "-read-deleted", answer), own.jobs[id], "plain") ||
+    (refused.has(id) &&
       recordedRecoveryJobAbsent(
-        { ...answer, bodyBytes: row.bodyBytes, rawBytes: Buffer.from(row.bodyBase64, "base64") },
+        recordedBytes(id + "-read-deleted", answer),
         own.jobs[id],
         "detailed",
-      )
-    );
+      ));
+  // Any unknown or ambiguous answer, even a read, needs the separate later read-back before
+  // closure.
+  const summary = (closureReady) => {
+    const known = counts();
+    return {
+      outcome: "calendar-needs-review",
+      ...known,
+      closureReady: closureReady && known.unknown === 0 && ambiguous === 0,
+      cleanupVerified: false,
+    };
   };
-  const summary = (closureReady) => ({
-    outcome: "calendar-needs-review",
-    ...counts(),
-    closureReady,
-    cleanupVerified: false,
-  });
   for (const id of [
     "identity",
     "service-cloudscheduler.googleapis.com",
@@ -327,11 +344,14 @@ export async function collectCalendar({
       }
     }
     const after = await take(id + "-read-deleted");
-    jobsAbsent = jobsAbsent && settled && (recordedAbsent(after) || refusedAbsent(id, after));
+    jobsAbsent = jobsAbsent && settled && jobAbsent(id, after);
   }
   const jobsList = await take("final-list-jobs");
   const jobProof =
-    jobsAbsent && recordedEmptyList(jobsList) && unsettledCreates.size === 0 && !unknownDelete;
+    jobsAbsent &&
+    recordedRecoveryEmpty(recordedBytes("final-list-jobs", jobsList)) &&
+    unsettledCreates.size === 0 &&
+    !unknownDelete;
   let topicSettled = !topicIntent && !identityContradiction;
   if (topicIntent && recordedTopicOwned(topicRead, own) && jobProof) {
     const answer = await take("delete-topic");
@@ -345,7 +365,7 @@ export async function collectCalendar({
       !unknownDelete &&
       topicSettled &&
       jobProof &&
-      recordedTopicAbsent(topicAfter, own) &&
-      recordedEmptyList(topicsList),
+      recordedRecoveryTopicAbsent(recordedBytes("read-deleted-topic", topicAfter), own) &&
+      recordedRecoveryEmpty(recordedBytes("final-list-topics", topicsList)),
   );
 }

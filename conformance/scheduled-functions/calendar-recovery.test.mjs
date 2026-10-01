@@ -448,3 +448,35 @@ test("topic-only foreign or malformed complete ownership read cannot authorize D
     assert.ok(e.sends.every((r) => r.method === "GET"));
   }
 });
+
+// Review S-B1: as in the settled-topic scope, an unknown answer in the topic-only and the
+// jobs-and-topic scopes needs the separate later read-back, so neither is closure-ready with
+// unknown > 0 even when every later proof is positive.
+test("topic-only and jobs-and-topic recovery withhold closure after any unknown answer", async () => {
+  for (const [scope, state, id] of [
+    ["topic-only", "ABSENT", "read-topic-before"],
+    [undefined, "ENABLED", "c01-pause"],
+  ]) {
+    const control = environment(state);
+    const clean = await collectCalendarRecovery({ ...control.deps, recoveryScope: scope });
+    assert.equal(clean.unknown, 0, String(scope));
+    assert.equal(clean.closureReady, true, `${scope}: positive control`);
+    const e = environment(state),
+      original = e.deps.send;
+    let lost = false;
+    e.deps.send = async (request) => {
+      // A poll reads the same topic as the first read.
+      if (/^read-topic-poll-[1-3]$/.test(request.id))
+        return original({ ...request, id: "read-topic-before" });
+      if (request.id !== id || lost) return original(request);
+      lost = true;
+      // The pause is applied and only its answer is lost; the topic read is lost outright.
+      if (id === "c01-pause") await original(request);
+      else e.sends.push(request);
+      throw new Error("offline lost answer");
+    };
+    const result = await collectCalendarRecovery({ ...e.deps, recoveryScope: scope });
+    assert.equal(result.unknown, 1, String(scope));
+    assert.equal(result.closureReady, false, String(scope));
+  }
+});

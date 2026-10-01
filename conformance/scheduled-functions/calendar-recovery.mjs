@@ -102,9 +102,19 @@ export async function collectCalendarRecovery({
           ? 11
           : CALENDAR_RECOVERY_MAX_REQUESTS,
   });
+  // A complete status below 200, a 3xx or a 5xx is as unknown as a lost answer: closure needs
+  // none of either.
+  let ambiguous = 0;
+  const settled = (known) => known.unknown === 0 && ambiguous === 0;
   const take = async (id) => {
     const answer = await capture(requests.get(id)),
       row = layouts.get(id);
+    if (
+      answer &&
+      !answer.bodyUnknown &&
+      (answer.status < 200 || (answer.status >= 300 && answer.status < 400) || answer.status >= 500)
+    )
+      ambiguous++;
     return answer && row
       ? { ...answer, bodyBytes: row.bodyBytes, rawBytes: Buffer.from(row.bodyBase64, "base64") }
       : answer;
@@ -117,7 +127,7 @@ export async function collectCalendarRecovery({
         outcome: "calendar-recovery-needs-review",
         ...known,
         cleanupVerified: false,
-        closureReady: closureReady && known.unknown === 0,
+        closureReady: closureReady && settled(known),
       };
     };
     for (const id of ["c07", "c08"])
@@ -154,12 +164,16 @@ export async function collectCalendarRecovery({
     );
   }
   if (recoveryScope === "topic-only") {
-    const summary = (closureReady) => ({
-      outcome: "calendar-recovery-needs-review",
-      ...counts(),
-      cleanupVerified: false,
-      closureReady,
-    });
+    // Any unknown answer, even a read, needs the separate later read-back before closure.
+    const summary = (closureReady) => {
+      const known = counts();
+      return {
+        outcome: "calendar-recovery-needs-review",
+        ...known,
+        cleanupVerified: false,
+        closureReady: closureReady && settled(known),
+      };
+    };
     if (!recordedEmptyList(await take("before-list-jobs"))) return summary(false);
     let polls = 0;
     const pollTopic = async (answer, afterDelete) => {
@@ -231,11 +245,17 @@ export async function collectCalendarRecovery({
   }
   const topicAfter = await take("read-topic-after"),
     topics = await take("final-list-topics");
+  const known = counts();
   return {
     outcome: "calendar-recovery-needs-review",
-    ...counts(),
+    ...known,
     cleanupVerified: false,
+    // Any unknown answer, even a read, needs the separate later read-back before closure.
     closureReady:
-      jobProof && topicSettled && recordedTopicAbsent(topicAfter, own) && recordedEmptyList(topics),
+      settled(known) &&
+      jobProof &&
+      topicSettled &&
+      recordedTopicAbsent(topicAfter, own) &&
+      recordedEmptyList(topics),
   };
 }

@@ -11,6 +11,10 @@ const runId = "c1".repeat(8);
 const projectNumber = "123456789012";
 const instant = Date.parse("2026-09-30T09:00:00Z");
 
+// The recorded layout of calendar-5a73ba99b7014cfd bodies: pretty JSON with a trailing newline
+// (job absence 97 B, topic absence 152 B, empty lists 3 B).
+const recorded = (json) => JSON.stringify(json, null, 2) + "\n";
+
 function environment() {
   const owned = calendarResources(runId);
   const rows = [],
@@ -32,7 +36,8 @@ function environment() {
     send: async (request) => {
       sends.push(request);
       let status = 200,
-        body = {};
+        body = {},
+        raw;
       const match =
         /^(c[0-9]{2})-(before|create|pause|read-paused|read-before-pause|delete|read-deleted)$/.exec(
           request.id,
@@ -50,21 +55,24 @@ function environment() {
         if (topicPresent) body = { name: owned.topic };
         else {
           status = 404;
-          body = {
+          raw = recorded({
             error: {
               code: 404,
-              status: "NOT_FOUND",
               message: "Resource not found (resource=" + owned.prefix + ").",
+              status: "NOT_FOUND",
             },
-          };
+          });
         }
       } else if (request.id === "create-topic") {
         topicPresent = true;
         body = { name: owned.topic };
       } else if (request.id === "read-topic") body = { name: owned.topic };
       else if (request.id === "delete-topic") topicPresent = false;
-      else if (request.id === "final-list-jobs")
-        body = jobs.size ? { jobs: [...jobs.values()] } : {};
+      else if (request.id === "final-list-jobs") {
+        if (jobs.size) body = { jobs: [...jobs.values()] };
+        else raw = "{}\n";
+      } else if (/^(before-list-jobs|before-list-topics|final-list-topics)$/.test(request.id))
+        raw = "{}\n";
       else if (match) {
         const [, id, action] = match;
         const target = owned.jobs[id];
@@ -86,10 +94,10 @@ function environment() {
         else if (jobs.has(id)) body = jobs.get(id);
         else {
           status = 404;
-          body = { error: { code: 404, status: "NOT_FOUND", message: "Job not found." } };
+          raw = recorded({ error: { code: 404, message: "Job not found.", status: "NOT_FOUND" } });
         }
       }
-      return new Response(JSON.stringify(body), { status });
+      return new Response(raw ?? JSON.stringify(body), { status });
     },
   };
   return { deps, owned, rows, sends, waits };
@@ -583,7 +591,9 @@ test("failed pause with exact own ENABLED readback gets a settled DELETE and bou
       e.sends.some(({ id }) => id === "delete-topic"),
       outcome !== "unsettled",
     );
-    assert.equal(result.closureReady, outcome !== "unsettled");
+    // The complete 503 pause answer is ambiguous: cleanup proceeds, closure waits for the
+    // separate later read-back.
+    assert.equal(result.closureReady, false);
     assert.equal(result.cleanupVerified, false);
   }
 });
@@ -648,7 +658,7 @@ test("one or two400 refusals plus ambiguous CREATE and busy cleanup share exactl
   }
 });
 
-test("late topic CREATE visibility after timeout and initial404 is polled before own cleanup", async () => {
+test("late topic CREATE visibility after timeout and initial404 is polled before own cleanup, and closure waits", async () => {
   const e = environment(),
     original = e.deps.send;
   e.deps.send = async (request) => {
@@ -680,7 +690,8 @@ test("late topic CREATE visibility after timeout and initial404 is polled before
   assert.ok(!e.sends.some(({ id }) => /^c[0-9]{2}-create$/.test(id)));
   assert.equal(result.attempted, 14);
   assert.equal(result.unknown, 1);
-  assert.equal(result.closureReady, true);
+  // The lost topic CREATE answer is unknown: cleanup proceeds, closure waits for the read-back.
+  assert.equal(result.closureReady, false);
   assert.equal(result.cleanupVerified, false);
   assert.deepEqual(e.waits, [10000]);
 });
@@ -773,7 +784,7 @@ test("unknown job CREATE retains debt and topic through all404 readbacks or late
   }
 });
 
-test("unknown job CREATE settles only after an exact own positive read and normal acknowledged cleanup", async () => {
+test("unknown job CREATE is cleaned up only after an exact own positive read, and closure waits for the read-back", async () => {
   const e = environment(),
     original = e.deps.send;
   e.deps.send = async (request) => {
@@ -784,7 +795,7 @@ test("unknown job CREATE settles only after an exact own positive read and norma
     return original(request);
   };
   const result = await collectCalendar(e.deps);
-  assert.equal(result.closureReady, true);
+  assert.equal(result.closureReady, false, "the unknown CREATE needs the later read-back");
   assert.equal(result.cleanupVerified, false);
   assert.equal(result.unknown, 1);
   assert.ok(e.sends.some((r) => r.id === "c01-read-before-pause"));
@@ -879,7 +890,7 @@ for (const status of [199, 302, 307, 500, 503, 504]) {
     assert.ok(result.attempted <= 64);
   });
 
-  test(`complete ambiguous job CREATE status${status} settles only after own positive containment and acknowledged cleanup`, async () => {
+  test(`complete ambiguous job CREATE status${status} is cleaned up only after own positive containment, and closure waits for the read-back`, async () => {
     const e = environment(),
       original = e.deps.send;
     e.deps.send = async (request) => {
@@ -892,7 +903,7 @@ for (const status of [199, 302, 307, 500, 503, 504]) {
       return original(request);
     };
     const result = await collectCalendar(e.deps);
-    assert.equal(result.closureReady, true);
+    assert.equal(result.closureReady, false, "an ambiguous CREATE needs the later read-back");
     assert.equal(result.cleanupVerified, false);
     assert.equal(result.unknown, 0);
     assert.ok(
@@ -996,7 +1007,8 @@ test("a refused CREATE settles on the recorded detailed absence and the topic cl
 });
 
 // Generated refusals against an independent model of the settlement rules. A refused job settles
-// on the plain recorded absence ("Job not found."), and after a complete 400 also on the recorded
+// on the plain recorded absence ("Job not found.", the recorded 97-byte layout; its compact
+// re-serialization proves nothing), and after a complete 400 also on the recorded
 // detailed absence for the run's own job (calendar-5a73ba99b7014cfd seq 150/153). Any other
 // refusal stops the run after that job's cleanup read, and an unreadable 400 leaves the create
 // unsettled. The run is closure-ready, and deletes its topic, only when every attempted job settled.
@@ -1017,8 +1029,9 @@ test("generated refusals settle the detailed absence only after a complete 400 a
     compact: (id, owned) => JSON.stringify(JSON.parse(detailedAbsence(owned.jobs[id]))),
     foreign: (id, owned) => detailedAbsence(owned.jobs[id === "c01" ? "c02" : "c01"]),
     padded: (id, owned) => detailedAbsence(owned.jobs[id]) + " ",
-    plain: () =>
-      JSON.stringify({ error: { code: 404, status: "NOT_FOUND", message: "Job not found." } }),
+    plain: () => recorded({ error: { code: 404, message: "Job not found.", status: "NOT_FOUND" } }),
+    plainCompact: () =>
+      JSON.stringify({ error: { code: 404, message: "Job not found.", status: "NOT_FOUND" } }),
   };
   const bodyNames = Object.keys(bodies);
   for (let i = 0; i < 64; i++) {
@@ -1063,5 +1076,58 @@ test("generated refusals settle the detailed absence only after a complete 400 a
       expected,
       label,
     );
+  }
+});
+
+// Review S-B1 and the Codex second review: any unknown answer, read or write, needs the separate
+// later read-back, so the seed is never closure-ready with unknown > 0, even after its own
+// positive containment and an acknowledged cleanup.
+test("an unknown answer anywhere in the seed withholds closure even when cleanup is proven", async () => {
+  const control = environment();
+  const clean = await collectCalendar(control.deps);
+  assert.equal(clean.unknown, 0);
+  assert.equal(clean.closureReady, true, "positive control");
+  for (const [id, applied] of [
+    ["create-topic", true],
+    ["c01-create", true],
+    ["c01-before", false],
+    ["appengine-location", false],
+  ]) {
+    const e = environment(),
+      original = e.deps.send;
+    e.deps.send = async (request) => {
+      if (request.id !== id) return original(request);
+      if (applied) await original(request);
+      else e.sends.push(request);
+      throw new Error("offline lost answer");
+    };
+    const result = await collectCalendar(e.deps);
+    assert.ok(result.unknown >= 1, id);
+    assert.equal(result.closureReady, false, id);
+  }
+});
+
+// The Codex second review: closure proofs compare the persisted raw bytes with the recorded
+// layout (calendar-5a73ba99b7014cfd): job absence 97 B, topic absence 152 B, empty lists 3 B.
+// A re-serialized compact body is an unrecorded shape and never proves cleanup.
+test("seed closure proofs accept only the recorded byte layouts", async () => {
+  const compact = (text) => JSON.stringify(JSON.parse(text));
+  for (const id of [
+    "c01-read-deleted",
+    "final-list-jobs",
+    "read-deleted-topic",
+    "final-list-topics",
+  ]) {
+    const e = environment(),
+      original = e.deps.send;
+    e.deps.send = async (request) => {
+      const response = await original(request);
+      if (request.id !== id) return response;
+      const text = await response.text();
+      return new Response(compact(text), { status: response.status });
+    };
+    const result = await collectCalendar(e.deps);
+    assert.equal(result.unknown, 0, id);
+    assert.equal(result.closureReady, false, id);
   }
 });

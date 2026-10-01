@@ -1,5 +1,7 @@
 // Negative-control fixtures for the stage3 launch-accounting harness (design v4 section 7). They
-// are generated text run by the Functions runner during discovery; nothing here starts a process.
+// are generated text run by the Functions runner during discovery; nothing here starts a process,
+// and the preamble's source is a data file, outside the harness's import closure.
+import { readFileSync } from "node:fs";
 import { calendarFixture } from "./calendar-local.mjs";
 
 /** Which fixture variant, escalation setting and named rule each negative control uses. */
@@ -24,19 +26,9 @@ export function controlPreamble({ mode, helperPath, readyPath, hold, portFile, b
     mode === "listener"
       ? [mode, readyPath, portFile, boundPath, String(hold)]
       : [mode, readyPath, String(hold)];
-  return `"use strict";
-const { spawn } = require("node:child_process");
-const { existsSync } = require("node:fs");
-const helper = spawn("python3", ${JSON.stringify([helperPath, ...args])}, { stdio: "ignore" });
-helper.unref();
-const pause = new Int32Array(new SharedArrayBuffer(4));
-const until = Date.now() + 10000;
-while (!existsSync(${JSON.stringify(readyPath)})) {
-  if (Date.now() > until) throw new Error("control helper did not become ready");
-  Atomics.wait(pause, 0, 0, 20);
-}
-Atomics.wait(pause, 0, 0, 1000);
-`;
+  return readFileSync(new URL("./calendar-control-preamble.cjs.txt", import.meta.url), "utf8")
+    .replace("__ARGS__", JSON.stringify([helperPath, ...args]))
+    .replace("__READY__", JSON.stringify(readyPath));
 }
 
 /** A control fixture: the refusal or valid fixture, with the control preamble required first. */

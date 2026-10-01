@@ -54,9 +54,10 @@ const REQUEST_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs
 /// refusal is sent from the request head alone, and the client may still be writing its body.
 /// Closing with unread request bytes makes the kernel answer them with a reset that can discard the
 /// response, so the write side is shut down first and the rest is read and thrown away, within
-/// these bounds (the official emulator's Node server discards what a client sends after a
-/// refusal as well, as far as the socket stays open).
-const CLOSE_DRAIN_LIMIT_BYTES: usize = 8 * 1024 * 1024;
+/// these bounds: the byte limit is the largest body the functions port accepts at all, so a client
+/// that sends a legitimate body is never reset; the time bounds keep a stalled or hostile client from
+/// holding the connection for long.
+const CLOSE_DRAIN_LIMIT_BYTES: usize = MAX_FUNCTION_BODY_BYTES;
 const CLOSE_DRAIN_IDLE: std::time::Duration = std::time::Duration::from_millis(500);
 const CLOSE_DRAIN_TOTAL: std::time::Duration = std::time::Duration::from_secs(2);
 
@@ -2115,6 +2116,21 @@ mod close_tests {
     use std::task::{Context, Poll};
     use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
     use tokio::time::{Duration, Instant};
+
+    #[test]
+    fn the_production_bounds_cover_a_legitimate_body_and_stay_short() {
+        use super::{
+            CLOSE_DRAIN_IDLE, CLOSE_DRAIN_LIMIT_BYTES, CLOSE_DRAIN_TOTAL, MAX_FUNCTION_BODY_BYTES,
+        };
+        use std::hint::black_box;
+        // Everything the port accepts can be discarded without a reset...
+        assert_eq!(black_box(CLOSE_DRAIN_LIMIT_BYTES), MAX_FUNCTION_BODY_BYTES);
+        // ...a quiet client does not hold the connection beyond the idle time, and nobody beyond the total.
+        assert!(black_box(CLOSE_DRAIN_IDLE) >= Duration::from_millis(100));
+        assert!(black_box(CLOSE_DRAIN_IDLE) < black_box(CLOSE_DRAIN_TOTAL));
+        assert!(black_box(CLOSE_DRAIN_TOTAL) >= Duration::from_secs(1));
+        assert!(black_box(CLOSE_DRAIN_TOTAL) <= Duration::from_secs(5));
+    }
 
     const IDLE: Duration = Duration::from_millis(60);
     const TOTAL: Duration = Duration::from_millis(400);

@@ -43,7 +43,9 @@ export function calendarRequests(runId, projectNumber, now = Date.now()) {
     method,
     url,
     ...(json ? { json } : {}),
-    ...(["create-topic", "delete-topic"].includes(id) ? { timeoutMs: 30000 } : {}),
+    ...(["create-topic", "delete-topic"].includes(id) || /^c0[1-8]-create$/.test(id)
+      ? { timeoutMs: 30000 }
+      : {}),
   });
   return [
     get(
@@ -131,13 +133,38 @@ export async function collectCalendar({
 }) {
   const own = calendarResources(runId);
   const requests = new Map(calendarRequests(runId, projectNumber, clock()).map((r) => [r.id, r]));
-  const { capture, counts } = createRequestCapture({
+  const { capture: captureAnswer, counts } = createRequestCapture({
     accessToken,
     save,
     send,
     clock,
     maxRequests: 64,
   });
+  const unsettledCreates = new Set();
+  let unknownDelete = false;
+  const capture = async (spec) => {
+    const answer = await captureAnswer(spec);
+    if (!answer || answer.bodyUnknown) {
+      if (spec.id === "create-topic" || /^c0[1-8]-create$/.test(spec.id))
+        unsettledCreates.add(spec.id);
+      if (spec.method === "DELETE") unknownDelete = true;
+    } else if (spec.method === "GET") {
+      if (
+        spec.url === "https://pubsub.googleapis.com/v1/" + own.topic &&
+        recordedTopicOwned(answer, own)
+      )
+        unsettledCreates.delete("create-topic");
+      for (const { id } of CALENDAR_CASES) {
+        const target = { job: own.jobs[id], topic: own.topic };
+        if (
+          spec.url === "https://cloudscheduler.googleapis.com/v1/" + target.job &&
+          (recordedEnabled(answer, target) || recordedPaused(answer, target))
+        )
+          unsettledCreates.delete(id + "-create");
+      }
+    }
+    return answer;
+  };
   const take = (id) => capture(requests.get(id));
   const summary = (closureReady) => ({
     outcome: "calendar-needs-review",
@@ -276,7 +303,8 @@ export async function collectCalendar({
     jobsAbsent = jobsAbsent && settled && recordedAbsent(after);
   }
   const jobsList = await take("final-list-jobs");
-  const jobProof = jobsAbsent && recordedEmptyList(jobsList);
+  const jobProof =
+    jobsAbsent && recordedEmptyList(jobsList) && unsettledCreates.size === 0 && !unknownDelete;
   let topicSettled = !topicIntent && !identityContradiction;
   if (topicIntent && recordedTopicOwned(topicRead, own) && jobProof) {
     const answer = await take("delete-topic");
@@ -286,6 +314,8 @@ export async function collectCalendar({
   const topicsList = await take("final-list-topics");
   return summary(
     !identityContradiction &&
+      unsettledCreates.size === 0 &&
+      !unknownDelete &&
       topicSettled &&
       jobProof &&
       recordedTopicAbsent(topicAfter, own) &&

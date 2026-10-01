@@ -470,3 +470,66 @@ test("invalid or non-topic deadline override refuses before persistence or dispa
     assert.equal(sends, 0);
   }
 });
+
+test("only the exact Scheduler job-create POST permits30seconds and captures virtual9to25second answers", async (t) => {
+  const deadlines = [];
+  t.mock.method(AbortSignal, "timeout", (ms) => {
+    deadlines.push(ms);
+    return new AbortController().signal;
+  });
+  const url =
+    "https://cloudscheduler.googleapis.com/v1/projects/fireemu-oracle-sbx/locations/us-central1/jobs";
+  for (const latency of [9000, 25000]) {
+    const rows = [];
+    let now = Date.parse("2026-09-30T09:00:00Z");
+    const { capture, counts } = createRequestCapture({
+      accessToken: "offline-job-deadline-token",
+      clock: () => now,
+      save: async (r) => rows.push(r),
+      send: async () => {
+        now += latency;
+        return new Response("{}");
+      },
+    });
+    let answer;
+    await assert.doesNotReject(async () => {
+      answer = await capture({
+        id: "c01-create",
+        method: "POST",
+        url,
+        json: {},
+        timeoutMs: 30000,
+      });
+    });
+    assert.equal(answer.status, 200);
+    assert.equal(counts().completed, 1);
+    assert.equal(counts().unknown, 0);
+    assert.equal(rows[0].timeoutMs, 30000);
+    assert.equal(Date.parse(rows.at(-1).responseAt) - Date.parse(rows[0].dispatchAt), latency);
+  }
+  assert.deepEqual(deadlines, [30000, 30000]);
+  for (const request of [
+    { method: "GET", url },
+    { method: "DELETE", url },
+    { method: "PUT", url },
+    { method: "POST", url: url + "?pageSize=500" },
+    { method: "POST", url: url + "/fe-scheduled-calendar-" + runId + "-c01:pause" },
+    { method: "POST", url: url.replace("fireemu-oracle-sbx", "foreign") },
+  ]) {
+    let sends = 0,
+      saves = 0;
+    const { capture } = createRequestCapture({
+      accessToken: "offline-job-deadline-token",
+      save: async () => {
+        saves++;
+      },
+      send: async () => {
+        sends++;
+        return new Response("{}");
+      },
+    });
+    await assert.rejects(capture({ id: "c01-create", timeoutMs: 30000, ...request }), /timeout/);
+    assert.equal(sends, 0);
+    assert.equal(saves, 0);
+  }
+});

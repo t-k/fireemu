@@ -304,3 +304,34 @@ test("recorded topic polls bind route, deadline, response ordering and shared th
     );
   }
 });
+
+test("recorded-calendar admission binds30second job CREATE deadline and keeps read deadlines at10seconds", () => {
+  const f = fixture();
+  const rows = f.journalBytes.toString().trim().split("\n").map(JSON.parse);
+  assert.equal(rows[0].timeoutMs, 30000);
+  assert.equal(recordedCalendarInputs(f).cases[0].classification, "accepted");
+  for (const fault of ["create10", "read30"]) {
+    const g = fixture(),
+      altered = g.journalBytes.toString().trim().split("\n").map(JSON.parse);
+    if (fault === "create10") altered[0].timeoutMs = 10000;
+    else {
+      const packet = JSON.parse(g.packetBytes),
+        spec = calendarRequests(
+          packet.runId,
+          packet.projectNumber,
+          Date.parse(altered[0].dispatchAt),
+        ).find((r) => r.id === "c01-read-paused");
+      altered[0] = {
+        ...spec,
+        timeoutMs: 30000,
+        state: "before-send",
+        dispatchAt: altered[0].dispatchAt,
+      };
+      altered[1].id = spec.id;
+      altered[2].id = spec.id;
+    }
+    g.journalBytes = Buffer.from(altered.map(JSON.stringify).join("\n") + "\n");
+    g.pins.journalSha256 = sha(g.journalBytes);
+    assert.throws(() => recordedCalendarInputs(g), /request binding/);
+  }
+});

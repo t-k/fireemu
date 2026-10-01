@@ -669,3 +669,35 @@ test("topic-only admission refuses an original with no topic PUT intent", async 
   assert.equal(f.counts().tokens, 0);
   assert.equal(f.options.sendCount, undefined);
 });
+
+test("recovery journal admission accepts30second job CREATE metadata and rejects it on another route", async (t) => {
+  for (const fault of [null, "create10", "read30"]) {
+    const f = await recoveryFixture(t);
+    const specs = calendarRequests(
+      f.plan.originalRunId,
+      f.plan.projectNumber,
+      Date.parse("2026-09-30T08:00:00Z"),
+    );
+    const spec = specs.find(
+      (r) => r.id === (fault === "read30" ? "c01-read-paused" : "c01-create"),
+    );
+    const rows = [
+      {
+        ...spec,
+        timeoutMs: fault === "create10" ? 10000 : 30000,
+        state: "before-send",
+        dispatchAt: "2026-09-30T08:00:00Z",
+      },
+    ];
+    await rebindOriginalJournal(f, rows);
+    if (fault) {
+      await assert.rejects(captureCalendarRecovery(f.options), /journal request binding/);
+      assert.equal(f.counts().tokens, 0);
+      assert.equal(f.options.sendCount, undefined);
+    } else {
+      const result = await captureCalendarRecovery(f.options);
+      assert.equal(f.counts().tokens, 1);
+      assert.equal(result.cleanupVerified, false);
+    }
+  }
+});

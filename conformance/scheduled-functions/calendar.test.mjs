@@ -720,13 +720,132 @@ test("unknown topic CREATE with bounded still404 polls never earns absence settl
   assert.equal(result.attempted, 15);
 });
 
-test("seed topic PUT and DELETE advertise30second deadlines without extending read or job deadlines", () => {
+test("seed topic PUT and DELETE and job CREATE advertise30second deadlines while other requests remain10seconds", () => {
   const requests = calendarRequests(runId, projectNumber, instant);
   assert.equal(requests.find((r) => r.id === "create-topic").timeoutMs, 30000);
   assert.equal(requests.find((r) => r.id === "delete-topic").timeoutMs, 30000);
+  assert.equal(
+    requests.filter((r) => /^c0[1-8]-create$/.test(r.id) && r.timeoutMs === 30000).length,
+    8,
+  );
   assert.ok(
     requests
-      .filter((r) => !["create-topic", "delete-topic"].includes(r.id))
+      .filter(
+        (r) => !["create-topic", "delete-topic"].includes(r.id) && !/^c0[1-8]-create$/.test(r.id),
+      )
       .every((r) => r.timeoutMs === undefined),
   );
+});
+
+test("unknown job CREATE retains debt and topic through all404 readbacks or late200 visibility", async () => {
+  for (const late of [false, true]) {
+    const e = environment(),
+      original = e.deps.send;
+    e.deps.send = async (request) => {
+      if (request.id === "c01-create") {
+        e.sends.push(request);
+        throw new Error("unknown job CREATE outcome");
+      }
+      if (request.id === "c01-read-before-pause" || request.id === "c01-read-deleted") {
+        e.sends.push(request);
+        if (late && request.id === "c01-read-deleted")
+          return new Response(
+            JSON.stringify({
+              name: e.owned.jobs.c01,
+              state: "ENABLED",
+              pubsubTarget: { topicName: e.owned.topic },
+            }),
+          );
+        return new Response(
+          JSON.stringify({ error: { code: 404, status: "NOT_FOUND", message: "Job not found." } }),
+          { status: 404 },
+        );
+      }
+      return original(request);
+    };
+    const result = await collectCalendar(e.deps);
+    assert.equal(result.closureReady, false);
+    assert.equal(result.cleanupVerified, false);
+    assert.ok(!e.sends.some((r) => r.id === "delete-topic"));
+    assert.equal(e.sends.filter((r) => /^c0[1-8]-create$/.test(r.id)).length, 1);
+    assert.equal(result.unknown, 1);
+    assert.ok(result.attempted <= 64);
+  }
+});
+
+test("unknown job CREATE settles only after an exact own positive read and normal acknowledged cleanup", async () => {
+  const e = environment(),
+    original = e.deps.send;
+  e.deps.send = async (request) => {
+    if (request.id === "c01-create") {
+      await original(request);
+      throw new Error("created job response lost");
+    }
+    return original(request);
+  };
+  const result = await collectCalendar(e.deps);
+  assert.equal(result.closureReady, true);
+  assert.equal(result.cleanupVerified, false);
+  assert.equal(result.unknown, 1);
+  assert.ok(e.sends.some((r) => r.id === "c01-read-before-pause"));
+  assert.ok(e.sends.some((r) => r.id === "c01-pause"));
+  assert.ok(e.sends.some((r) => r.id === "c01-delete"));
+  assert.ok(e.sends.some((r) => r.id === "delete-topic"));
+  assert.equal(e.sends.filter((r) => /^c0[1-8]-create$/.test(r.id)).length, 1);
+});
+
+test("unknown job or topic DELETE cannot settle through later exact absent reads and empty lists", async () => {
+  for (const id of ["c01-delete", "delete-topic"])
+    for (const unreadable of [false, true]) {
+      const e = environment(),
+        original = e.deps.send;
+      e.deps.send = async (request) => {
+        if (request.id === id) {
+          await original(request);
+          if (!unreadable) throw new Error("DELETE outcome unknown");
+          return new Response(
+            new ReadableStream({
+              start(c) {
+                c.error(new Error("DELETE body unreadable"));
+              },
+            }),
+            { status: 200 },
+          );
+        }
+        return original(request);
+      };
+      const result = await collectCalendar(e.deps);
+      assert.equal(result.closureReady, false);
+      assert.equal(result.cleanupVerified, false);
+      assert.equal(result.unknown, 1);
+      assert.equal(e.sends.filter((r) => r.id === id).length, 1);
+      if (id === "c01-delete") assert.ok(!e.sends.some((r) => r.id === "delete-topic"));
+    }
+});
+
+test("unreadable job CREATE body remains debt even with400 headers and all later reads absent", async () => {
+  for (const status of [200, 400]) {
+    const e = environment(),
+      original = e.deps.send;
+    e.deps.send = async (request) => {
+      if (request.id === "c01-create") {
+        e.sends.push(request);
+        return new Response(
+          new ReadableStream({
+            start(c) {
+              c.error(new Error("CREATE body interrupted"));
+            },
+          }),
+          { status },
+        );
+      }
+      return original(request);
+    };
+    const result = await collectCalendar(e.deps);
+    assert.equal(result.closureReady, false);
+    assert.equal(result.cleanupVerified, false);
+    assert.equal(result.unknown, 1);
+    assert.ok(!e.sends.some((r) => r.id === "delete-topic"));
+    assert.equal(e.sends.filter((r) => /^c0[1-8]-create$/.test(r.id)).length, 1);
+  }
 });

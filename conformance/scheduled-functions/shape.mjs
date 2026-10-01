@@ -168,10 +168,13 @@ export function createRequestCapture({
       timeoutMs !== 10000 &&
       !(
         timeoutMs === 30000 &&
-        ["PUT", "DELETE"].includes(spec.method) &&
-        /^https:\/\/pubsub\.googleapis\.com\/v1\/projects\/fireemu-oracle-sbx\/topics\/fe-scheduled-calendar-[a-f0-9]{16}$/.test(
-          spec.url,
-        )
+        ((["PUT", "DELETE"].includes(spec.method) &&
+          /^https:\/\/pubsub\.googleapis\.com\/v1\/projects\/fireemu-oracle-sbx\/topics\/fe-scheduled-calendar-[a-f0-9]{16}$/.test(
+            spec.url,
+          )) ||
+          (spec.method === "POST" &&
+            spec.url ===
+              "https://cloudscheduler.googleapis.com/v1/projects/fireemu-oracle-sbx/locations/us-central1/jobs"))
       )
     )
       throw new Error("invalid request timeout override");

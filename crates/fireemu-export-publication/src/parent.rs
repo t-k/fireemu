@@ -6,6 +6,20 @@
 //! descriptor opened the same way, so no path is resolved again between the creation and the
 //! restriction: a local user who swaps the new component for a symlink gets a refusal, never a
 //! `chmod` of the link target. The whole chain is validated again once the components exist.
+//!
+//! Threat model, stated plainly. This protects against other local users and against volumes that
+//! ignore ownership: every ancestor must be owned by root or the exporting user, not writable by
+//! anyone else, free of ACL entries for anyone else, and on a volume that enforces ownership. It
+//! does not defend against the exporting user's own processes, or root, changing the namespace
+//! concurrently: such a process can rename a directory away and put another directory of the same
+//! owner in its place (the descriptor reopen accepts any directory that user owns), and the
+//! rollback of a failed creation removes directories by path. The export directory is as safe as
+//! the account that runs the export.
+//!
+//! Needs: a missing component is made through a read-opened descriptor, so the directory it is made
+//! in must be readable by the exporting user, and the process umask must leave the owner's read
+//! permission on new directories (a umask such as 0477 does not). Both cases are refused with a
+//! message that says so; an existing parent needs no read permission.
 
 use std::ffi::OsString;
 use std::os::unix::fs::MetadataExt as _;
@@ -57,8 +71,14 @@ pub(crate) fn prepare_and_validate_parent_with(
         return Ok(existing);
     }
     let mut created = Vec::new();
-    let result = create_missing(&existing, &missing, between_mkdir_and_chmod, &mut created)
-        .and_then(|made| trusted_ancestors(&made, volume_check));
+    let result = create_missing(
+        &existing,
+        &missing,
+        between_mkdir_and_chmod,
+        &mut created,
+        rustix::process::geteuid().as_raw(),
+    )
+    .and_then(|made| trusted_ancestors(&made, volume_check));
     if result.is_err() {
         // Only directories this call made, deepest first; `remove_dir` never follows a link.
         for directory in created.iter().rev() {
@@ -101,17 +121,24 @@ fn create_missing(
     missing: &[OsString],
     between_mkdir_and_chmod: &dyn Fn(&Path),
     created: &mut Vec<PathBuf>,
+    expected_uid: u32,
 ) -> Result<PathBuf, String> {
     let flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
     let mut path = base.to_path_buf();
     let mut current =
         rustix::fs::openat(rustix::fs::CWD, &path, flags, Mode::empty()).map_err(|error| {
-            format!(
-                "cannot open export namespace ancestor {}: {error}",
-                path.display()
-            )
+            if error == rustix::io::Errno::ACCESS {
+                format!(
+                    "cannot create the missing export parent below {}: the directory must be readable by you for a component to be made in it safely ({error}); make it readable, or choose an existing destination",
+                    path.display()
+                )
+            } else {
+                format!(
+                    "cannot open export namespace ancestor {}: {error}",
+                    path.display()
+                )
+            }
         })?;
-    let effective_uid = rustix::process::geteuid().as_raw();
     for name in missing {
         path.push(name);
         rustix::fs::mkdirat(&current, name, Mode::from_raw_mode(0o700)).map_err(|error| {
@@ -123,14 +150,21 @@ fn create_missing(
         created.push(path.clone());
         between_mkdir_and_chmod(&path);
         let made = rustix::fs::openat(&current, name, flags, Mode::empty()).map_err(|error| {
-            format!(
-                "the export parent component {} is not the directory that was just made: {error}",
-                path.display()
-            )
+            if error == rustix::io::Errno::ACCESS {
+                format!(
+                    "cannot open the export parent component {} that was just made ({error}): the umask of this process removes the owner's read permission from new directories; use a umask such as 022 and run the export again",
+                    path.display()
+                )
+            } else {
+                format!(
+                    "the export parent component {} is not the directory that was just made: {error}",
+                    path.display()
+                )
+            }
         })?;
         let stat = rustix::fs::fstat(&made)
             .map_err(|error| format!("cannot inspect export parent {}: {error}", path.display()))?;
-        if stat.st_uid != effective_uid {
+        if stat.st_uid != expected_uid {
             return Err(format!(
                 "the export parent component {} is not owned by the current user",
                 path.display()
@@ -399,13 +433,95 @@ mod tests {
     }
 
     #[test]
+    fn an_existing_parent_that_the_owner_cannot_read_is_accepted() {
+        // Write and search only (0300): nothing is made in it through a read-opened descriptor.
+        let root = TrustedTempDir::new("parent-0300");
+        let existing = std::fs::canonicalize(root.path()).unwrap();
+        let parent = existing.join("search-only");
+        std::fs::create_dir(&parent).unwrap();
+        std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o300)).unwrap();
+        let made = prepare_and_validate_parent_with(&parent, &accept, &|_| {});
+        std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert_eq!(made.unwrap(), parent);
+    }
+
+    #[test]
+    fn a_missing_component_below_an_unreadable_parent_is_refused_with_the_reason() {
+        if rustix::process::geteuid().is_root() {
+            eprintln!("SKIPPED: root reads any directory, so the refusal cannot be observed");
+            return;
+        }
+        let root = TrustedTempDir::new("parent-0300-missing");
+        let existing = std::fs::canonicalize(root.path()).unwrap();
+        let parent = existing.join("search-only");
+        std::fs::create_dir(&parent).unwrap();
+        std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o300)).unwrap();
+        let error =
+            prepare_and_validate_parent_with(&parent.join("x"), &accept, &|_| {}).unwrap_err();
+        std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(error.contains("must be readable by you"), "{error}");
+        assert!(!parent.join("x").exists(), "nothing was made");
+    }
+
+    #[test]
+    fn a_umask_that_removes_the_owners_read_permission_is_refused_with_the_reason() {
+        if rustix::process::geteuid().is_root() {
+            eprintln!("SKIPPED: root reads any directory, so the refusal cannot be observed");
+            return;
+        }
+        let root = TrustedTempDir::new("parent-umask-0477");
+        let existing = std::fs::canonicalize(root.path()).unwrap();
+        let before = rustix::process::umask(Mode::from_raw_mode(0o477));
+        let error = prepare_and_validate_parent_with(&existing.join("x/y"), &accept, &|_| {});
+        rustix::process::umask(before);
+        let error = error.unwrap_err();
+        assert!(error.contains("umask"), "{error}");
+        assert!(error.contains("022"), "{error}");
+        assert!(
+            !existing.join("x").exists(),
+            "the directory made was removed"
+        );
+    }
+
+    #[test]
+    fn a_new_directory_owned_by_someone_else_is_refused() {
+        let root = TrustedTempDir::new("parent-owner");
+        let existing = std::fs::canonicalize(root.path()).unwrap();
+        let mut created = Vec::new();
+        let someone_else = rustix::process::geteuid().as_raw() + 1;
+        let error = create_missing(
+            &existing,
+            &[OsString::from("x")],
+            &|_| {},
+            &mut created,
+            someone_else,
+        )
+        .unwrap_err();
+        assert!(
+            error.contains("is not owned by the current user"),
+            "{error}"
+        );
+        assert_eq!(
+            created,
+            [existing.join("x")],
+            "the caller removes what was made"
+        );
+    }
+
+    #[test]
     fn a_component_that_already_exists_is_refused() {
         let root = TrustedTempDir::new("parent-exists");
         let existing = std::fs::canonicalize(root.path()).unwrap();
         std::fs::create_dir(existing.join("x")).unwrap();
         let mut created = Vec::new();
-        let error =
-            create_missing(&existing, &[OsString::from("x")], &|_| {}, &mut created).unwrap_err();
+        let error = create_missing(
+            &existing,
+            &[OsString::from("x")],
+            &|_| {},
+            &mut created,
+            rustix::process::geteuid().as_raw(),
+        )
+        .unwrap_err();
         assert!(
             error.contains("cannot create private export parent"),
             "{error}"

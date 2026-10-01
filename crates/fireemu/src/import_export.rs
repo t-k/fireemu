@@ -4432,6 +4432,312 @@ mod tests {
         assert_eq!(legacy["(default)"].len(), 4);
     }
 
+    /// A declared named database that was only read has a section of its own with no entity,
+    /// in the streamed export as in the snapshot path.
+    #[test]
+    fn a_declared_database_that_was_only_read_gets_an_empty_section() {
+        use std::sync::{Arc, Mutex};
+
+        use fireemu_adapter_grpc::gateway::Gateway;
+        use fireemu_adapter_grpc::local::LocalBackend;
+        use fireemu_core_firestore::index::{IndexSet, IndexValidationPolicy, PlanningContext};
+        use fireemu_core_session::clock::VirtualClock;
+        use fireemu_core_types::edition::{FirestoreApiMode, FirestoreEdition};
+        use fireemu_proto_firestore::google::firestore::v1 as pb;
+
+        let backend = LocalBackend::new(
+            Gateway {
+                enforce_limits: true,
+                ctx: PlanningContext {
+                    edition: FirestoreEdition::Standard,
+                    api_mode: FirestoreApiMode::Native,
+                    policy: IndexValidationPolicy::Production,
+                },
+                indexes: IndexSet::default(),
+            },
+            Arc::new(Mutex::new(VirtualClock::new(
+                LogicalInstant::from_unix_seconds(1_788_004_860),
+            ))),
+            7,
+        )
+        .with_declared_databases(["quiet".to_owned()]);
+        let missing = backend.get_document(
+            &pb::GetDocumentRequest {
+                name: "projects/demo-export-a/databases/quiet/documents/items/none".to_owned(),
+                ..Default::default()
+            },
+            &fireemu_adapter_grpc::rules::allow_all_reads,
+        );
+        assert!(
+            missing.is_err(),
+            "nothing was written to the quiet database"
+        );
+
+        let (legacy, streamed) = legacy_and_streamed_sections(&backend);
+        assert_eq!(legacy.get("quiet").map(|(count, _)| *count), Some(0));
+        assert_eq!(streamed.get("quiet"), legacy.get("quiet"));
+        assert_eq!(streamed, legacy);
+    }
+
+    /// Every database section as the export used to build it (a visible snapshot, owned rows
+    /// per database, `write_output_to`) and as it streams it now, each as (entity count,
+    /// bytes).
+    #[allow(clippy::type_complexity)]
+    fn legacy_and_streamed_sections(
+        backend: &fireemu_adapter_grpc::local::LocalBackend,
+    ) -> (
+        std::collections::BTreeMap<String, (u64, Vec<u8>)>,
+        std::collections::BTreeMap<String, (u64, Vec<u8>)>,
+    ) {
+        use std::collections::{BTreeMap, BTreeSet};
+
+        use fireemu_core_export::firestore::{write_output_to, ExportDocument};
+        use fireemu_core_session::tenancy::Scope;
+
+        let snapshot = backend.snapshot_scope(&Scope::AllExcept(BTreeSet::new()));
+        let mut rows: BTreeMap<String, Vec<ExportDocument>> = BTreeMap::new();
+        for ((project, database), state) in snapshot.databases {
+            rows.entry(database)
+                .or_default()
+                .extend(state.into_documents().into_iter().map(|d| {
+                    ExportDocument {
+                        project: project.clone(),
+                        path: d
+                            .path
+                            .pairs()
+                            .iter()
+                            .map(|(c, id)| (c.as_str().to_owned(), id.as_str().to_owned()))
+                            .collect(),
+                        fields: d.fields,
+                    }
+                }));
+        }
+        let legacy = rows
+            .into_iter()
+            .map(|(database, rows)| {
+                let mut bytes = Vec::new();
+                write_output_to(&rows, &mut bytes).unwrap();
+                (database, (rows.len() as u64, bytes))
+            })
+            .collect();
+        let streamed = super::firestore_export_sections(backend)
+            .into_iter()
+            .map(|(database, section)| {
+                let mut bytes = Vec::new();
+                let (count, written) =
+                    super::write_firestore_section(&section, &mut bytes).unwrap();
+                assert_eq!(written, bytes.len() as u64);
+                (database, (count, bytes))
+            })
+            .collect();
+        (legacy, streamed)
+    }
+
+    /// One generated step of a store's history.
+    #[derive(Debug, Clone)]
+    enum ExportStep {
+        Set {
+            project: usize,
+            database: usize,
+            path: usize,
+            value: usize,
+        },
+        Delete {
+            project: usize,
+            database: usize,
+            path: usize,
+        },
+        /// A read of a database that may never be written, which brings it into being.
+        Touch { project: usize, database: usize },
+        /// The virtual clock passes the one-hour read-time window and a commit compacts.
+        Compact,
+    }
+
+    const EXPORT_PROJECTS: [&str; 3] = ["demo-export-a", "demo-export-b", "demo-export-c"];
+    const EXPORT_DATABASES: [&str; 3] = ["(default)", "analytics", "never-written"];
+
+    fn export_paths() -> Vec<String> {
+        let long = "x".repeat(1500);
+        vec![
+            "items/a".to_owned(),
+            "items/é".to_owned(),
+            "items/日本".to_owned(),
+            "items/a%2Fb".to_owned(),
+            "items/ ".to_owned(),
+            format!("items/{long}"),
+            "items/a/sub/b".to_owned(),
+            "items/日本/sub/x/deep/z".to_owned(),
+            "z-last/0".to_owned(),
+        ]
+    }
+
+    fn export_value(
+        project: &str,
+        index: usize,
+    ) -> fireemu_proto_firestore::google::firestore::v1::Value {
+        use fireemu_proto_firestore::google::firestore::v1 as pb;
+        use pb::value::ValueType;
+        let value = |value_type| pb::Value {
+            value_type: Some(value_type),
+        };
+        let map = |fields: Vec<(&str, pb::Value)>| {
+            value(ValueType::MapValue(pb::MapValue {
+                fields: fields.into_iter().map(|(k, v)| (k.to_owned(), v)).collect(),
+            }))
+        };
+        let array =
+            |values: Vec<pb::Value>| value(ValueType::ArrayValue(pb::ArrayValue { values }));
+        match index % 8 {
+            0 => map(Vec::new()),
+            1 => array(Vec::new()),
+            2 => array(vec![
+                map(vec![("inner", array(vec![value(ValueType::NullValue(0))]))]),
+                value(ValueType::BooleanValue(true)),
+            ]),
+            3 => value(ValueType::BytesValue(vec![0, 255, 7])),
+            4 => value(ValueType::ReferenceValue(format!(
+                "projects/{project}/databases/(default)/documents/items/a"
+            ))),
+            5 => value(ValueType::StringValue("é日本 ".repeat(5_000))),
+            6 => value(ValueType::DoubleValue(-0.0)),
+            _ => map(vec![
+                ("n", value(ValueType::IntegerValue(-7))),
+                ("s", value(ValueType::StringValue(String::new()))),
+            ]),
+        }
+    }
+
+    fn export_step() -> impl proptest::strategy::Strategy<Value = ExportStep> {
+        use proptest::prelude::*;
+        prop_oneof![
+            6 => (0_usize..3, 0_usize..2, 0_usize..9, 0_usize..8).prop_map(
+                |(project, database, path, value)| ExportStep::Set { project, database, path, value }
+            ),
+            2 => (0_usize..3, 0_usize..2, 0_usize..9)
+                .prop_map(|(project, database, path)| ExportStep::Delete { project, database, path }),
+            1 => (0_usize..3, 0_usize..3)
+                .prop_map(|(project, database)| ExportStep::Touch { project, database }),
+            1 => Just(ExportStep::Compact),
+        ]
+    }
+
+    proptest::proptest! {
+        #![proptest_config(proptest::test_runner::Config::with_cases(64))]
+
+        /// For any history (commits across projects and databases, unicode and edge ids,
+        /// empty and nested values, deletes, re-creates, compaction, a declared database that
+        /// is only read), the streamed export gives every database exactly the bytes and entity
+        /// count of the rows the snapshot path built, and the same set of databases.
+        #[test]
+        fn streamed_export_sections_match_the_snapshot_rows_for_any_history(
+            steps in proptest::collection::vec(export_step(), 1..40),
+        ) {
+            use std::sync::{Arc, Mutex};
+
+            use fireemu_adapter_grpc::gateway::Gateway;
+            use fireemu_adapter_grpc::local::LocalBackend;
+            use fireemu_core_firestore::index::{IndexSet, IndexValidationPolicy, PlanningContext};
+            use fireemu_core_session::clock::VirtualClock;
+            use fireemu_core_types::edition::{FirestoreApiMode, FirestoreEdition};
+            use fireemu_core_types::time::LogicalDuration;
+            use fireemu_proto_firestore::google::firestore::v1 as pb;
+
+            let clock = Arc::new(Mutex::new(VirtualClock::new(
+                LogicalInstant::from_unix_seconds(1_788_004_860),
+            )));
+            let backend = LocalBackend::new(
+                Gateway {
+                    enforce_limits: true,
+                    ctx: PlanningContext {
+                        edition: FirestoreEdition::Standard,
+                        api_mode: FirestoreApiMode::Native,
+                        policy: IndexValidationPolicy::Production,
+                    },
+                    indexes: IndexSet::default(),
+                },
+                Arc::clone(&clock),
+                7,
+            )
+            .with_declared_databases(["analytics".to_owned(), "never-written".to_owned()]);
+            let paths = export_paths();
+            let commit = |project: &str, database: &str, operation: pb::write::Operation| {
+                backend
+                    .commit_with(
+                        &pb::CommitRequest {
+                            database: format!("projects/{project}/databases/{database}"),
+                            writes: vec![pb::Write {
+                                operation: Some(operation),
+                                ..Default::default()
+                            }],
+                            ..Default::default()
+                        },
+                        &fireemu_adapter_grpc::rules::allow_all,
+                    )
+                    .unwrap();
+            };
+            for step in &steps {
+                clock.lock().unwrap().advance(LogicalDuration::from_seconds(1)).unwrap();
+                match *step {
+                    ExportStep::Set { project, database, path, value } => {
+                        let project = EXPORT_PROJECTS[project];
+                        let database = EXPORT_DATABASES[database];
+                        commit(project, database, pb::write::Operation::Update(pb::Document {
+                            name: format!(
+                                "projects/{project}/databases/{database}/documents/{}",
+                                paths[path]
+                            ),
+                            fields: [("v".to_owned(), export_value(project, value))]
+                                .into_iter()
+                                .collect(),
+                            ..Default::default()
+                        }));
+                    }
+                    ExportStep::Delete { project, database, path } => {
+                        let project = EXPORT_PROJECTS[project];
+                        let database = EXPORT_DATABASES[database];
+                        commit(project, database, pb::write::Operation::Delete(format!(
+                            "projects/{project}/databases/{database}/documents/{}",
+                            paths[path]
+                        )));
+                    }
+                    ExportStep::Touch { project, database } => {
+                        let project = EXPORT_PROJECTS[project];
+                        let database = EXPORT_DATABASES[database];
+                        let _ = backend.get_document(
+                            &pb::GetDocumentRequest {
+                                name: format!(
+                                    "projects/{project}/databases/{database}/documents/items/none"
+                                ),
+                                ..Default::default()
+                            },
+                            &fireemu_adapter_grpc::rules::allow_all_reads,
+                        );
+                    }
+                    ExportStep::Compact => {
+                        clock
+                            .lock()
+                            .unwrap()
+                            .advance(LogicalDuration::from_seconds(3_601))
+                            .unwrap();
+                        commit(EXPORT_PROJECTS[0], "(default)", pb::write::Operation::Delete(
+                            format!("projects/{}/databases/(default)/documents/items/none", EXPORT_PROJECTS[0]),
+                        ));
+                    }
+                }
+            }
+            let (legacy, streamed) = legacy_and_streamed_sections(&backend);
+            proptest::prop_assert_eq!(
+                legacy.keys().collect::<Vec<_>>(),
+                streamed.keys().collect::<Vec<_>>()
+            );
+            for (database, expected) in &legacy {
+                let actual = &streamed[database];
+                proptest::prop_assert_eq!(actual.0, expected.0, "{} entity count", database);
+                proptest::prop_assert!(actual.1 == expected.1, "{} bytes differ", database);
+            }
+        }
+    }
+
     #[cfg(unix)]
     fn budget_dir(name: &str) -> TrustedTempDir {
         TrustedTempDir::new(&format!("import-budget-{name}"))

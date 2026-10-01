@@ -6419,3 +6419,56 @@ fn a_refused_finalizing_chunk_leaves_the_json_api_resumable_session_where_it_was
     assert_eq!(done.status, 200, "{}", String::from_utf8_lossy(&done.body));
     assert_eq!(json_body(&done)["size"], "4");
 }
+
+/// A copy, a rewrite and an XML-style form upload past the bound answer the same 507, with
+/// nothing stored.
+#[test]
+fn copies_rewrites_and_form_uploads_past_the_stored_byte_limit_are_507() {
+    let s = bounded_state_holding_five_bytes();
+    let owner = [("authorization", "Bearer owner")];
+    for verb in ["copyTo", "rewriteTo"] {
+        let refused = handle(
+            &s,
+            req(
+                "POST",
+                &format!("/storage/v1/b/{BUCKET}/o/a.bin/{verb}/b/{BUCKET}/o/{verb}.bin"),
+                &owner,
+                b"",
+            ),
+        );
+        assert_eq!(
+            refused.status,
+            507,
+            "{verb}: {}",
+            String::from_utf8_lossy(&refused.body)
+        );
+        assert_eq!(
+            json_body(&refused)["error"]["errors"][0]["reason"],
+            "storageCapacityExceeded"
+        );
+    }
+    let boundary = "stored-byte-limit";
+    let body = format!(
+        "--{boundary}\r\nContent-Disposition: form-data; name=\"key\"\r\n\r\nform.bin\r\n--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"form.bin\"\r\nContent-Type: application/octet-stream\r\n\r\n6789\r\n--{boundary}--\r\n"
+    );
+    let refused = handle(
+        &s,
+        req(
+            "POST",
+            &format!("/{BUCKET}"),
+            &[(
+                "content-type",
+                &format!("multipart/form-data; boundary={boundary}"),
+            )],
+            body.as_bytes(),
+        ),
+    );
+    assert_eq!(
+        refused.status,
+        507,
+        "{}",
+        String::from_utf8_lossy(&refused.body)
+    );
+    let store = s.store.lock().unwrap();
+    assert_eq!(store.retained_blob_bytes(), 5);
+}

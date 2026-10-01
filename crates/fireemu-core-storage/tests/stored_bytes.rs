@@ -195,6 +195,26 @@ fn a_refused_finalize_keeps_the_session_cancellable() {
     );
 }
 
+/// A store can be over its bound (an import, a restore, a lowered configuration). A write
+/// that does not grow the total still passes then; only one that grows it is refused.
+#[test]
+fn over_the_limit_only_a_write_that_grows_the_total_is_refused() {
+    let mut s = StorageState::new(1);
+    put(&mut s, "a", 6).unwrap();
+    put(&mut s, "b", 4).unwrap();
+    s.set_stored_bytes_limit(Some(8));
+    assert_eq!(s.retained_blob_bytes(), 10);
+
+    put(&mut s, "a", 5).unwrap();
+    assert_eq!(s.retained_blob_bytes(), 9, "a shrinking replacement passes");
+    put(&mut s, "a", 5).unwrap();
+    assert_eq!(s.retained_blob_bytes(), 9, "an equal replacement passes");
+    put(&mut s, "c", 0).unwrap();
+    assert_eq!(put(&mut s, "a", 6), Err(StorageError::StoredBytesLimit));
+    assert_eq!(put(&mut s, "d", 1), Err(StorageError::StoredBytesLimit));
+    assert_eq!(s.retained_blob_bytes(), 9);
+}
+
 #[test]
 fn the_objects_bytes_gauge_reports_the_limit() {
     let mut s = StorageState::new(1);
@@ -219,6 +239,9 @@ enum Op {
     Upload(u8, usize, usize),
     RemoveBucket,
     ClearAndRestore,
+    /// The bound changes under a store that may already hold more (as after an import, a
+    /// restore or a lowered configuration).
+    SetLimit(Option<u64>),
 }
 
 fn op() -> impl Strategy<Value = Op> {
@@ -229,23 +252,37 @@ fn op() -> impl Strategy<Value = Op> {
         2 => (0_u8..4, 0_usize..8, 0_usize..8).prop_map(|(o, a, b)| Op::Upload(o, a, b)),
         1 => Just(Op::RemoveBucket),
         1 => Just(Op::ClearAndRestore),
+        1 => proptest::option::of(0_u64..24).prop_map(Op::SetLimit),
     ]
 }
 
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(256))]
 
-    /// Against the object metadata: the running byte count never drifts, never passes a
-    /// limit set from the start, and every refusal is a write that would have passed it.
+    /// Against the object metadata: the running byte count never drifts; an accepted write
+    /// never grows the total past the bound; and every refusal was needed, a write that would
+    /// have grown the total and taken it past the bound.
     #[test]
     fn the_stored_byte_count_matches_the_objects_and_respects_the_limit(
         limit in proptest::option::of(0_u64..24),
         ops in proptest::collection::vec(op(), 1..40),
     ) {
         let mut s = StorageState::new(1);
+        let mut limit = limit;
         s.set_stored_bytes_limit(limit);
         for (step, op) in (0_i64..).zip(ops) {
             let before = observable(&s);
+            let before_bytes = s.retained_blob_bytes();
+            let size_of = |s: &StorageState, object: u8| {
+                s.get(&bucket(), &name(&format!("o{object}"))).map_or(0, |meta| meta.size)
+            };
+            // What the write would add and what it would replace.
+            let (size, replaced) = match &op {
+                Op::Put(o, n) => (*n as u64, size_of(&s, *o)),
+                Op::Copy(a, b) => (size_of(&s, *a), size_of(&s, *b)),
+                Op::Upload(o, first, last) => ((*first + *last) as u64, size_of(&s, *o)),
+                _ => (0, 0),
+            };
             let refused = match &op {
                 Op::Put(o, n) => put(&mut s, &format!("o{o}"), *n).err(),
                 Op::Copy(a, b) => s
@@ -289,6 +326,11 @@ proptest! {
                     None
                 }
                 // A session snapshot and its restore keep the count with the objects.
+                Op::SetLimit(new) => {
+                    limit = *new;
+                    s.set_stored_bytes_limit(limit);
+                    None
+                }
                 Op::ClearAndRestore => {
                     let captured = s.capture_buckets(|_| true);
                     prop_assert_eq!(captured.retained_blob_bytes(), recount(&captured));
@@ -301,13 +343,20 @@ proptest! {
             };
             prop_assert_eq!(s.retained_blob_bytes(), recount(&s), "after {:?}", op);
             if let Some(limit) = limit {
-                prop_assert!(s.retained_blob_bytes() <= limit, "after {:?}", op);
+                if s.retained_blob_bytes() > before_bytes {
+                    prop_assert!(s.retained_blob_bytes() <= limit, "after {:?}", op);
+                }
             }
             match refused {
                 None => {}
                 Some(StorageError::NotFound) => prop_assert_eq!(observable(&s), before),
                 Some(StorageError::StoredBytesLimit) => {
-                    prop_assert!(limit.is_some());
+                    let limit = limit.expect("only a bound refuses");
+                    prop_assert!(size > replaced, "a refused write would have grown: {:?}", op);
+                    prop_assert!(
+                        before_bytes - replaced + size > limit,
+                        "a refused write would have crossed {}: {:?}", limit, op
+                    );
                     prop_assert_eq!(observable(&s), before);
                 }
                 Some(other) => prop_assert!(false, "unexpected {:?} for {:?}", other, op),

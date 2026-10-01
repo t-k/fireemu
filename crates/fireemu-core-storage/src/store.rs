@@ -985,6 +985,10 @@ impl StorageState {
         self.stored_bytes = self.stored_bytes.saturating_add(bytes.len() as u64);
         let replaced = self.blobs.insert(blob, bytes);
         debug_assert!(replaced.is_none(), "blob identities are never reused");
+        // Kept even so: a reused identity must not leave the count too high in a release build.
+        if let Some(old) = replaced {
+            self.stored_bytes = self.stored_bytes.saturating_sub(old.len() as u64);
+        }
     }
 
     fn remove_blob(&mut self, blob: BlobId) {
@@ -994,8 +998,10 @@ impl StorageState {
     }
 
     /// Refuses a write of `size` bytes that replaces `replaced` (the current object at the
-    /// destination, if any) when it would take the retained object data past
-    /// `storage.maxStoredBytes`. A replacement is charged only its difference.
+    /// destination, if any) when it would grow the retained object data past
+    /// `storage.maxStoredBytes`. A replacement is charged only its difference, and a write
+    /// that does not grow the total always passes, even while the store is over the bound
+    /// (after an import, a restore or a lowered configuration).
     fn check_stored_bytes(
         &self,
         replaced: Option<&ObjectMetadata>,
@@ -1007,7 +1013,7 @@ impl StorageState {
         let freed = replaced
             .and_then(|old| self.blobs.get(&old.blob))
             .map_or(0, |bytes| bytes.len() as u64);
-        if self.stored_bytes.saturating_sub(freed).saturating_add(size) > limit {
+        if size > freed && self.stored_bytes.saturating_sub(freed).saturating_add(size) > limit {
             return Err(StorageError::StoredBytesLimit);
         }
         Ok(())

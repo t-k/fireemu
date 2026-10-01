@@ -2,6 +2,7 @@
 its own row after the anchor's, and replayed by the projection in the order the ledger took the two on."""
 
 import copy
+import datetime as dt
 import threading
 import time
 
@@ -152,9 +153,11 @@ def test_the_projection_refuses_a_writer_row_that_differs_from_the_graph_even_wh
 def test_the_projection_refuses_a_writer_that_started_before_the_request_that_precedes_its_anchor_even_when_its_copy_agrees():
     receipt = recorded()
     before = next(row for row in receipt["steps"] if row["site"] == "rest/c/read-a")
+    early_utc = (dt.datetime.fromisoformat(before["timing"]["responseUtc"]) - dt.timedelta(seconds=5)).isoformat().replace("+00:00", "Z")
     def early(row):
-        row["timing"] = {**row["timing"], "dispatchMonotonic": before["timing"]["responseMonotonic"] - 5.0}
-    with pytest.raises(ValueError):
+        # both clocks move together, so the timing itself stays well formed and only the order against the earlier answer is wrong
+        row["timing"] = {**row["timing"], "dispatchMonotonic": before["timing"]["responseMonotonic"] - 5.0, "dispatchUtc": early_utc}
+    with pytest.raises(ValueError, match="starts before the request that precedes its anchor"):
         projection(tamper_consistently(receipt, "rest/c/writer-a", early), TABLE)
 
 

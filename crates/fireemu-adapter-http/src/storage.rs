@@ -4290,13 +4290,13 @@ fn gcs_list(
     }
     let start_offset = strict.then(|| params.get("startOffset").cloned()).flatten();
     let end_offset = strict.then(|| params.get("endOffset").cloned()).flatten();
-    let glob = strict.then(|| params.get("matchGlob").cloned()).flatten();
-    let name_filter = |name: &str| {
+    let glob = strict
+        .then(|| params.get("matchGlob"))
+        .flatten()
+        .map(|pattern| fireemu_core_storage::glob::Glob::new(pattern));
+    let in_offsets = |name: &str| {
         start_offset.as_deref().is_none_or(|start| name >= start)
             && end_offset.as_deref().is_none_or(|end| name < end)
-            && glob
-                .as_deref()
-                .is_none_or(|pattern| fireemu_core_storage::glob::glob_matches(pattern, name))
     };
     let b = bucket_name(bucket)?;
     let prefix = params.get("prefix").cloned().unwrap_or_default();
@@ -4318,6 +4318,24 @@ fn gcs_list(
             body: bytes::Bytes::from_static(b"{\n  \"kind\": \"storage#objects\"\n}\n"),
         });
     }
+    // The glob is the one filter that costs more than a comparison: it is run over the names after
+    // a snapshot of them, outside the store lock, so that no pattern can hold up another request.
+    let globbed: Option<std::collections::HashSet<String>> = match &glob {
+        Some(glob) => {
+            let names = state.store()?.object_names_with_prefix(&b, &prefix);
+            Some(
+                names
+                    .into_iter()
+                    .filter(|name| in_offsets(name) && glob.matches(name))
+                    .collect(),
+            )
+        }
+        None => None,
+    };
+    let name_filter = |name: &str| match &globbed {
+        Some(matched) => matched.contains(name),
+        None => in_offsets(name),
+    };
     let store = state.store()?;
     let page = store.list_matching(
         &b,

@@ -6589,6 +6589,7 @@ fn declared_checksums_are_verified_only_under_strict() {
 /// malformed one in production's words; the emulator profile completes the upload as the official
 /// emulator does (firebase-tools 15.28.2 compares no declared checksum on any path).
 #[test]
+#[allow(clippy::too_many_lines)]
 fn resumable_uploads_verify_declared_checksums_only_under_strict() {
     const WRONG: &str = "AAAAAAAAAAAAAAAAAAAAAA==";
     for (acceptance, _) in seeded_pair() {
@@ -7129,6 +7130,79 @@ mod list_properties {
             prop_assert!(false, "the walk did not end");
         }
     }
+}
+
+/// An unauthenticated list can carry any `matchGlob`: a pathological one is answered on a thread
+/// with a blocking-pool sized stack, and a second request is not held up while it is evaluated.
+#[test]
+fn a_pathological_match_glob_neither_overflows_the_stack_nor_blocks_other_requests() {
+    let s = state_with(Some(ALLOW_ALL_RULES), TokenAcceptance::Verified);
+    for name in ["a.txt", "b.txt", "dir/c.txt"] {
+        let uploaded = handle(
+            &s,
+            req(
+                "POST",
+                &format!(
+                    "/upload/storage/v1/b/{BUCKET}/o?uploadType=media&name={}",
+                    name.replace('/', "%2F")
+                ),
+                &[("authorization", "Bearer owner")],
+                b"x",
+            ),
+        );
+        assert_eq!(uploaded.status, 200);
+    }
+    let encode = |pattern: &str| -> String {
+        pattern.bytes().fold(String::new(), |mut out, byte| {
+            use std::fmt::Write as _;
+            let _ = write!(out, "%{byte:02X}");
+            out
+        })
+    };
+    let patterns = [
+        "{".repeat(40),
+        format!("{}z", "{,}".repeat(2_000)),
+        format!("**{}", "*a".repeat(2_000)),
+        "{a,".repeat(30_000),
+        format!("{}x{}", "{a,".repeat(30_000), "}".repeat(30_000)),
+        "[".repeat(30_000),
+    ];
+    let listing = |pattern: &str| {
+        handle(
+            &s,
+            req(
+                "GET",
+                &format!("/storage/v1/b/{BUCKET}/o?matchGlob={}", encode(pattern)),
+                &[("authorization", "Bearer owner")],
+                b"",
+            ),
+        )
+    };
+    std::thread::scope(|scope| {
+        let hostile = std::thread::Builder::new()
+            .stack_size(2 * 1024 * 1024)
+            .spawn_scoped(scope, || {
+                for pattern in &patterns {
+                    assert_eq!(listing(pattern).status, 200);
+                }
+            })
+            .unwrap();
+        while !hostile.is_finished() {
+            let started = std::time::Instant::now();
+            let read = handle(
+                &s,
+                req(
+                    "GET",
+                    &format!("/storage/v1/b/{BUCKET}/o/a.txt"),
+                    &[("authorization", "Bearer owner")],
+                    b"",
+                ),
+            );
+            assert_eq!(read.status, 200);
+            assert!(started.elapsed() < std::time::Duration::from_secs(2));
+        }
+        hostile.join().unwrap();
+    });
 }
 
 /// The three list filters under strict, as lean-v5 recorded them (`startOffset=b.txt` with

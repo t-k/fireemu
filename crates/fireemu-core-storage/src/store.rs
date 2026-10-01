@@ -1516,6 +1516,20 @@ impl StorageState {
         })
     }
 
+    /// The names of the objects under `prefix`, in name order. A caller that has to run a costly
+    /// test over every name takes this snapshot under the lock and tests the names after it is
+    /// released.
+    #[must_use]
+    pub fn object_names_with_prefix(&self, bucket: &BucketName, prefix: &str) -> Vec<String> {
+        self.objects
+            .range((bucket.clone(), ObjectName::range_start(prefix))..)
+            .take_while(|((candidate_bucket, name), _)| {
+                candidate_bucket == bucket && name.as_str().starts_with(prefix)
+            })
+            .map(|((_, name), _)| name.as_str().to_owned())
+            .collect()
+    }
+
     /// [`Self::list`] over the objects whose names `matches` accepts (the JSON API's
     /// `startOffset`, `endOffset` and `matchGlob` filters): the filter applies to object names
     /// before they are folded at the delimiter, so a prefix appears exactly when a matching

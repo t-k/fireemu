@@ -253,6 +253,7 @@ function recoveryEnvironment({
   detailed = true,
   unknownDelete = false,
   createVisible = true,
+  answers = {},
 } = {}) {
   const sends = [],
     waits = [];
@@ -267,6 +268,7 @@ function recoveryEnvironment({
     sleep: async (ms) => waits.push(ms),
     send: async (request) => {
       sends.push(request);
+      if (Object.hasOwn(answers, request.id)) return answers[request.id]();
       let status = 200,
         json = {};
       if (["c07-before", "c08-before"].includes(request.id)) {
@@ -308,6 +310,35 @@ test("settled-topic unknown DELETE and initial404 cannot be closed by later abse
     assert.ok(answer.attempted <= 11);
     assert.equal(e.sends.filter((r) => r.method !== "GET").length, options.unknownDelete ? 1 : 0);
     assert.ok(e.waits.length <= 3);
+  }
+});
+
+test("settled-topic closure needs every answer known and both final lists empty", async () => {
+  const unknown = () => {
+    throw new Error("read outcome unknown");
+  };
+  const cases = {
+    // An unknown read before the owned poll still sends the one DELETE, but stays open.
+    "unknown-read-before": { "read-topic-before": unknown },
+    "unknown-final-jobs": { "final-list-jobs": unknown },
+    "foreign-final-topic": {
+      "final-list-topics": () =>
+        new Response(wire({ topics: [{ name: "projects/fireemu-oracle-sbx/topics/foreign" }] })),
+    },
+    "nonempty-final-jobs": {
+      "final-list-jobs": () => new Response(wire({ jobs: [{ name: own.jobs.c01 }] })),
+    },
+    "compact-after-404": {
+      "read-topic-after": () => new Response(JSON.stringify(topicAbsent()), { status: 404 }),
+    },
+  };
+  for (const [name, answers] of Object.entries(cases)) {
+    const e = recoveryEnvironment({ answers });
+    const answer = await collectCalendarRecovery(e.deps);
+    assert.equal(answer.closureReady, false, name);
+    assert.equal(answer.cleanupVerified, false, name);
+    assert.equal(e.sends.filter((r) => r.method !== "GET").length, 1, name);
+    assert.ok(answer.attempted <= 11, name);
   }
 });
 

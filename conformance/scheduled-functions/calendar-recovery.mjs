@@ -110,12 +110,16 @@ export async function collectCalendarRecovery({
       : answer;
   };
   if (recoveryScope === "settled-jobs-topic-only") {
-    const summary = (closureReady) => ({
-      outcome: "calendar-recovery-needs-review",
-      ...counts(),
-      cleanupVerified: false,
-      closureReady,
-    });
+    // Any unknown answer, even a read, needs the separate later read-back before closure.
+    const summary = (closureReady) => {
+      const known = counts();
+      return {
+        outcome: "calendar-recovery-needs-review",
+        ...known,
+        cleanupVerified: false,
+        closureReady: closureReady && known.unknown === 0,
+      };
+    };
     for (const id of ["c07", "c08"])
       if (!recordedRecoveryJobAbsent(await take(id + "-before"), own.jobs[id]))
         return summary(false);

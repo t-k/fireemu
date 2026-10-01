@@ -6702,6 +6702,174 @@ fn resumable_uploads_verify_declared_checksums_only_under_strict() {
     }
 }
 
+/// A browser sends an `Origin`, and every recording was made without one. Under strict an answer to
+/// such a request keeps production's headers and adds what a browser needs to read it: the origin
+/// reflected and the official emulator's list of exposed headers (which names the `X-Goog-Upload-*`
+/// headers the Firebase SDK reads). Without an `Origin` the recorded sets stay exactly as recorded.
+#[test]
+#[allow(clippy::too_many_lines)]
+fn strict_answers_to_a_browser_origin_carry_the_reflection_and_the_exposed_headers() {
+    const ORIGIN: &str = "http://localhost:5173";
+    let s = state_with(Some(ALLOW_ALL_RULES), TokenAcceptance::Verified);
+    let call = |origin: bool, method: &str, path: &str, extra: &[(&str, &str)], body: &[u8]| {
+        let mut headers = vec![("authorization", "Bearer owner")];
+        if origin {
+            headers.push(("origin", ORIGIN));
+        }
+        headers.extend_from_slice(extra);
+        handle(&s, req(method, path, &headers, body))
+    };
+    let reflected = |response: &fireemu_adapter_http::storage::StorageResponse, what: &str| {
+        assert_eq!(
+            header(response, "access-control-allow-origin"),
+            Some(ORIGIN),
+            "{what}"
+        );
+        let exposed = header(response, "access-control-expose-headers")
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        for name in [
+            "x-goog-upload-status",
+            "x-goog-upload-url",
+            "x-goog-upload-size-received",
+            "x-goog-upload-chunk-granularity",
+        ] {
+            assert!(exposed.contains(name), "{what}: {name} in {exposed}");
+        }
+        let vary: Vec<_> = response
+            .headers
+            .iter()
+            .filter(|(name, _)| name == "vary")
+            .collect();
+        assert!(!vary.is_empty(), "{what}: the reflection varies on Origin");
+    };
+    let v0_headers = |command: &'static str| -> Vec<(&'static str, &'static str)> {
+        vec![
+            ("x-goog-upload-protocol", "resumable"),
+            ("x-goog-upload-command", command),
+            ("content-type", "application/json"),
+        ]
+    };
+    for origin in [true, false] {
+        let start = call(
+            origin,
+            "POST",
+            &format!("/v0/b/{BUCKET}/o?name=cors.bin"),
+            &v0_headers("start"),
+            br#"{"name":"cors.bin","contentType":"application/octet-stream"}"#,
+        );
+        assert_eq!(start.status, 200);
+        let url = header(&start, "x-goog-upload-url").unwrap().to_owned();
+        let session = url
+            .split_once("/v0/")
+            .map(|(_, rest)| format!("/v0/{rest}"))
+            .unwrap();
+        let query = call(origin, "POST", &session, &v0_headers("query"), b"");
+        let chunk = call(
+            origin,
+            "POST",
+            &session,
+            &[
+                ("x-goog-upload-protocol", "resumable"),
+                ("x-goog-upload-command", "upload"),
+                ("x-goog-upload-offset", "0"),
+            ],
+            b"ab",
+        );
+        assert_eq!(chunk.status, 200);
+        let finalize = call(
+            origin,
+            "POST",
+            &session,
+            &[
+                ("x-goog-upload-protocol", "resumable"),
+                ("x-goog-upload-command", "upload, finalize"),
+                ("x-goog-upload-offset", "2"),
+            ],
+            b"",
+        );
+        assert_eq!(
+            finalize.status,
+            200,
+            "{}",
+            String::from_utf8_lossy(&finalize.body)
+        );
+        let download = call(
+            origin,
+            "GET",
+            &format!("/v0/b/{BUCKET}/o/cors.bin?alt=media"),
+            &[],
+            b"",
+        );
+        assert_eq!(download.status, 200);
+        let metadata = call(
+            origin,
+            "GET",
+            &format!("/v0/b/{BUCKET}/o/cors.bin"),
+            &[],
+            b"",
+        );
+        let json_start = call(
+            origin,
+            "POST",
+            &format!("/upload/storage/v1/b/{BUCKET}/o?uploadType=resumable&name=j.bin"),
+            &[("content-type", "application/json")],
+            b"{}",
+        );
+        let location = header(&json_start, "location")
+            .unwrap()
+            .strip_prefix("http://127.0.0.1:9199")
+            .unwrap()
+            .to_owned();
+        let incomplete = call(
+            origin,
+            "PUT",
+            &location,
+            &[("content-range", "bytes 0-2/6")],
+            b"abc",
+        );
+        assert_eq!(incomplete.status, 308);
+        let json_api = call(
+            origin,
+            "GET",
+            &format!("/storage/v1/b/{BUCKET}/o/cors.bin"),
+            &[],
+            b"",
+        );
+        let answers = [
+            ("v0 start", &start),
+            ("v0 query", &query),
+            ("v0 upload chunk", &chunk),
+            ("v0 finalize", &finalize),
+            ("v0 media", &download),
+            ("v0 metadata", &metadata),
+            ("JSON API resumable start", &json_start),
+            ("JSON API 308", &incomplete),
+            ("JSON API metadata", &json_api),
+        ];
+        for (what, response) in answers {
+            if origin {
+                reflected(response, what);
+            } else {
+                // The recorded sets: the text answers carry no CORS, the v0 JSON answers carry
+                // the wildcard and the two exposed headers of the recording.
+                let wildcard = header(response, "access-control-allow-origin");
+                match what {
+                    "v0 finalize" | "v0 metadata" => {
+                        assert_eq!(wildcard, Some("*"), "{what}");
+                        assert_eq!(
+                            header(response, "access-control-expose-headers"),
+                            Some("Content-Range, X-Firebase-Storage-XSRF"),
+                            "{what}"
+                        );
+                    }
+                    _ => assert_eq!(wildcard, None, "{what}"),
+                }
+            }
+        }
+    }
+}
+
 /// The Firebase resumable protocol under strict (recorded, lean-v5): granularity 262144, a control
 /// URL equal to the session URL, no `x-gupload-uploadid`, empty bodies, a cancel that says
 /// `cancelled` and the wrong-offset text.
@@ -6877,11 +7045,11 @@ async fn the_strict_server_sends_production_headers_on_framed_answers() {
         Arc::new(state(None)),
         &BUDGET,
     ));
-    let get = |path: &'static str| async move {
+    let get_with = |path: &'static str, origin: &'static str| async move {
         let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
         stream
             .write_all(
-                format!("GET {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nOrigin: http://localhost:5173\r\nAuthorization: Bearer owner\r\nConnection: close\r\n\r\n").as_bytes(),
+                format!("GET {path} HTTP/1.1\r\nHost: 127.0.0.1\r\n{origin}Authorization: Bearer owner\r\nConnection: close\r\n\r\n").as_bytes(),
             )
             .await
             .unwrap();
@@ -6889,6 +7057,7 @@ async fn the_strict_server_sends_production_headers_on_framed_answers() {
         stream.read_to_end(&mut raw).await.unwrap();
         String::from_utf8_lossy(&raw).to_lowercase()
     };
+    let get = |path: &'static str| get_with(path, "Origin: http://localhost:5173\r\n");
     let json_api = get("/storage/v1/b/demo-app.appspot.com/o/absent.bin").await;
     assert!(json_api.starts_with("http/1.1 404"), "{json_api}");
     assert!(
@@ -6900,18 +7069,41 @@ async fn the_strict_server_sends_production_headers_on_framed_answers() {
         "{json_api}"
     );
     assert!(!json_api.contains("x-content-type-options"), "{json_api}");
+    // A browser's request is answered with what it needs to read the answer (the origin reflected,
+    // the official emulator's exposed headers), on both dialects; the recorded wildcard of the
+    // v0 JSON answers is for requests without an `Origin`.
     assert!(
-        !json_api.contains("access-control-expose-headers"),
+        json_api.contains("access-control-expose-headers: content-type,x-firebase-storage-version"),
         "{json_api}"
     );
     let firebase = get("/v0/b/demo-app.appspot.com/o/absent.bin").await;
     assert!(
-        firebase.contains("access-control-allow-origin: *"),
+        firebase.contains("access-control-allow-origin: http://localhost:5173"),
+        "{firebase}"
+    );
+    assert!(
+        firebase.contains("access-control-expose-headers: content-type,x-firebase-storage-version"),
         "{firebase}"
     );
     assert!(
         firebase.contains("x-content-type-options: nosniff"),
         "{firebase}"
+    );
+    // Without an `Origin` the recorded set stays: the wildcard and its two exposed headers on the
+    // v0 JSON answer, no CORS on the JSON API.
+    let recorded = get_with("/v0/b/demo-app.appspot.com/o/absent.bin", "").await;
+    assert!(
+        recorded.contains("access-control-allow-origin: *"),
+        "{recorded}"
+    );
+    assert!(
+        recorded.contains("access-control-expose-headers: content-range, x-firebase-storage-xsrf"),
+        "{recorded}"
+    );
+    let recorded_json = get_with("/storage/v1/b/demo-app.appspot.com/o/absent.bin", "").await;
+    assert!(
+        !recorded_json.contains("access-control-"),
+        "{recorded_json}"
     );
     // A shape the recordings do not cover keeps the official emulator's stamps.
     let unframed = get("/b").await;

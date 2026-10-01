@@ -200,6 +200,7 @@ pub fn frame(shape: &Shape, mut response: StorageResponse) -> (StorageResponse, 
     // A shape the plan adds nothing to (the resumable protocol's text answers, the 308) is still
     // framed: production sends it without CORS, `Vary` or `nosniff`, so the server stamps none.
     if plan.cache.is_none() && !plan.firebase_cors && !plan.vary {
+        reflect_origin(shape, &mut response);
         return (response, true);
     }
     let media_answer = shape.media && matches!(response.status, 200 | 206);
@@ -240,14 +241,40 @@ pub fn frame(shape: &Shape, mut response: StorageResponse) -> (StorageResponse, 
     if plan.nosniff {
         add("x-content-type-options", "nosniff");
     }
-    // An `Origin` makes the JSON API reflect it, as the Google front end does for a browser; the
-    // recordings sent none, so this is the one header here that is not recorded.
-    if shape.wire == Wire::Gcs {
-        if let Some(origin) = &shape.origin {
-            add("access-control-allow-origin", origin);
-        }
-    }
+    reflect_origin(shape, &mut response);
     (response, true)
+}
+
+/// What a browser needs to read an answer: the request's `Origin` reflected and the official
+/// emulator's list of exposed headers (which names the `X-Goog-Upload-*` headers the Firebase SDK
+/// reads), on every answer, both dialects, every status. Every recording was made without an
+/// `Origin`, so what production sends to one is not recorded; this follows the official emulator
+/// and replaces the recorded CORS headers of the plan (the wildcard of the v0 JSON answers and
+/// its two exposed headers would hide the upload headers from a browser). A request without an
+/// `Origin` keeps the recorded set untouched.
+fn reflect_origin(shape: &Shape, response: &mut StorageResponse) {
+    let Some(origin) = &shape.origin else {
+        return;
+    };
+    response
+        .headers
+        .retain(|(name, _)| !name.to_ascii_lowercase().starts_with("access-control-"));
+    response
+        .headers
+        .push(("access-control-allow-origin".to_owned(), origin.clone()));
+    response.headers.push((
+        "access-control-expose-headers".to_owned(),
+        crate::storage_server::EXPOSED_HEADERS.to_owned(),
+    ));
+    if !response
+        .headers
+        .iter()
+        .any(|(name, _)| name.eq_ignore_ascii_case("vary"))
+    {
+        response
+            .headers
+            .push(("vary".to_owned(), "Origin".to_owned()));
+    }
 }
 
 /// An object's `etag` as production writes it: the standard base64 of a protobuf message with the

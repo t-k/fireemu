@@ -240,7 +240,7 @@ const FORWARDED_HEADERS: &[&str] = &[
 ];
 
 /// The header set the official emulator's `cors` middleware exposes, verbatim.
-const EXPOSED_HEADERS: &str = "content-type,x-firebase-storage-version,X-Goog-Upload-Size-Received,x-goog-upload-url,x-goog-upload-command,x-gupload-uploadid,x-goog-upload-header-content-length,x-goog-upload-header-content-type,x-goog-upload-protocol,x-goog-upload-status,x-goog-upload-chunk-granularity,x-goog-upload-control-url";
+pub(crate) const EXPOSED_HEADERS: &str = "content-type,x-firebase-storage-version,X-Goog-Upload-Size-Received,x-goog-upload-url,x-goog-upload-command,x-gupload-uploadid,x-goog-upload-header-content-length,x-goog-upload-header-content-type,x-goog-upload-protocol,x-goog-upload-status,x-goog-upload-chunk-granularity,x-goog-upload-control-url";
 
 /// The CORS headers of an ordinary (non-preflight) response, as the official emulator's
 /// `cors({origin: true, exposedHeaders})` middleware stamps them: the origin reflected when

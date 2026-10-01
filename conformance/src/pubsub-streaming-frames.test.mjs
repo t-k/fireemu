@@ -182,3 +182,28 @@ test("exact message-size and every other cap boundary is accepted while the next
   const tooLarge = await decoder();
   assert.equal(tooLarge.push(frame(Buffer.alloc(65))).reason, "frame-bound");
 });
+test("credential screening settings are validated and bounded before framing", async () => {
+  for (const credential of ["", 5, null, Buffer.from("x"), "x".repeat(16385)])
+    await assert.rejects(decoder({ credential }), /bounded credential/);
+  const longest = await decoder({ credential: "y".repeat(16384) });
+  assert.equal(longest.push(frame(Buffer.from("payload"))).frames.length, 1);
+  const multibyte = "é".repeat(8193);
+  await assert.rejects(decoder({ credential: multibyte }), /bounded credential/);
+});
+test("credential screening never matches bytes that were not received", async () => {
+  // The stream opens with four zero bytes (flag and high length bytes); a fifth would be invented.
+  const d = await decoder({ credential: "\u0000".repeat(5) });
+  const result = d.push(frame(Buffer.from("payload")));
+  assert.equal(result.reason, undefined);
+  assert.equal(result.frames.length, 1);
+  assert.equal(d.finish().outcome, "complete-framing");
+});
+test("plain Uint8Array views are accepted as raw bytes", async () => {
+  const d = await decoder();
+  const wire = frame(Buffer.from("view"));
+  const backing = new Uint8Array(wire.length + 4);
+  backing.set(wire, 2);
+  const result = d.push(new Uint8Array(backing.buffer, 2, wire.length));
+  assert.equal(Buffer.from(result.frames[0].bodyBase64, "base64").toString(), "view");
+  assert.equal(result.raw.bodyBytes, wire.length);
+});

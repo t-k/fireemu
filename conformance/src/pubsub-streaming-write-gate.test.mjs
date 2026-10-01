@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { test } from "node:test";
+import { mock, test } from "node:test";
 
 const target = new URL("../pubsub-corpus/streaming-write-gate.mjs", import.meta.url);
 async function gate(extra = {}) {
@@ -434,5 +434,31 @@ test("overridden outgoing byte-view properties cannot reenter finite frame admis
     assert.deepEqual(issued[1][1], Buffer.from([0, 0, 0, 0, 1, 9]));
   } finally {
     await g.done();
+  }
+});
+test("timer and wire bounds are accepted at their exact native limits and refused one past them", async () => {
+  const atLimit = await gate({ wallMs: 2147483647, maxFrameBytes: 4294967295 });
+  await atLimit.g.done();
+  await assert.rejects(gate({ wallMs: 2147483648 }), /timer\/wire/);
+  await assert.rejects(gate({ maxFrameBytes: 4294967296 }), /timer\/wire/);
+});
+test("credential screening settings are validated and bounded before admission", async () => {
+  for (const credential of ["", 5, null, Buffer.from("x"), "x".repeat(16385), "é".repeat(8193)])
+    await assert.rejects(gate({ credential }), /bounded credential/);
+  const longest = await gate({ credential: "y".repeat(16384) });
+  await longest.g.open();
+  await longest.g.write(Buffer.from("payload"));
+  assert.equal(longest.issued.length, 2);
+  await longest.g.done();
+});
+test("an absolute deadline equal to now is refused and one exactly wallMs ahead is accepted", async () => {
+  const clock = mock.method(performance, "now", () => 5000);
+  try {
+    await assert.rejects(gate({ deadlineAt: 5000 }), /deadline/);
+    await assert.rejects(gate({ deadlineAt: 6000.5 }), /deadline/);
+    const edge = await gate({ deadlineAt: 6000 });
+    assert.equal(edge.g.stop("local-close"), undefined);
+  } finally {
+    clock.mock.restore();
   }
 });

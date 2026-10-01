@@ -18,7 +18,7 @@ export function validateRecords(files) {
     signals = [],
     byRole = new Map();
   if (!files || typeof files !== "object")
-    return { ok: false, problems: ["no record files"], signals, roles: [] };
+    return { ok: false, problems: ["no record files"], signals, roles: [], births: {} };
   for (const [name, rows] of Object.entries(files)) {
     const header = Array.isArray(rows) ? rows[0] : undefined;
     if (header?.type !== "header") {
@@ -37,8 +37,9 @@ export function validateRecords(files) {
     if (byRole.has(header.role)) problems.push(`${name}: a second ${header.role} record file`);
     else byRole.set(header.role, { name, header, rows });
   }
-  const lanes = new Map();
-  for (const { name, rows } of byRole.values()) {
+  const lanes = new Map(),
+    purposes = {};
+  for (const [fileRole, { name, rows }] of byRole) {
     const births = new Map(),
       exits = new Map(),
       identities = new Map();
@@ -91,6 +92,9 @@ export function validateRecords(files) {
           problems.push(`${name}: unexpected row ${JSON.stringify(row?.type ?? row)}`);
       }
     }
+    purposes[fileRole] = [...births.values()]
+      .filter((birth) => !birth.failed)
+      .map((birth) => birth.purpose);
     for (const [handle, birth] of births) {
       const exit = exits.get(handle);
       if (birth.failed) {
@@ -143,7 +147,7 @@ export function validateRecords(files) {
   }
   for (const [role, file] of byRole)
     if (!reached.has(role)) problems.push(`${file.name}: record file no parent accounts for`);
-  return { ok: problems.length === 0, problems, signals, roles };
+  return { ok: problems.length === 0, problems, signals, roles, births: purposes };
 }
 
 /** One inventory pass (condition (E)); rows carry `sid` as a number, "ESRCH" or another error. */
@@ -247,6 +251,94 @@ export function interpretLsof({ code, stdout, stderr, timedOut }) {
   return pids.length ? { result: "listener", pids } : { result: "inconclusive" };
 }
 
-export const refusalVerdict = () => {
-  throw new Error("not implemented");
-};
+const PINNED = [
+  "sourceCommit",
+  "binarySha256",
+  "runnerSha256",
+  "fixtureSha256",
+  "configSha256",
+  "portctlSha256",
+];
+
+/**
+ * The verdict of one run under owner ledger 786: conditions (A)-(G). Any failed condition fails
+ * the run; otherwise any unanswered one makes it inconclusive; only all seven pass a run.
+ */
+export function refusalVerdict(run) {
+  const conditions = {};
+  const check = (letter, inputs, judge) => {
+    const missing = inputs.filter((key) => run?.[key] === undefined || run[key] === null);
+    if (missing.length) {
+      conditions[letter] = { ok: false, outcome: "inconclusive", reasons: [`missing ${missing}`] };
+      return;
+    }
+    const reasons = [],
+      unknown = [];
+    judge(reasons, unknown);
+    conditions[letter] = {
+      ok: reasons.length === 0 && unknown.length === 0,
+      outcome: reasons.length ? "fail" : unknown.length ? "inconclusive" : "pass",
+      reasons: [...reasons, ...unknown],
+    };
+  };
+  check("A", ["pins", "identity", "daemon"], (fail) => {
+    for (const key of PINNED)
+      if (run.identity[key] !== run.pins[key]) fail.push(`${key} differs from its pin`);
+    if (run.daemon.exitCode !== run.pins.exitCode)
+      fail.push("the daemon's exit status differs from its pin");
+    if (
+      !Array.isArray(run.daemon.diagnostics) ||
+      !run.daemon.diagnostics.includes(run.pins.refusalLine)
+    )
+      fail.push("the pinned refusal line was not printed");
+  });
+  check("B", ["chain", "records"], (fail) => {
+    const { rootSid, outerPid, outerSid } = run.chain;
+    if (outerSid !== outerPid || outerSid === rootSid)
+      fail.push("the outer launcher is not the leader of its own session");
+    const births = run.records.births ?? {};
+    if (!(births.measure ?? []).includes("outer"))
+      fail.push("the measuring entry did not start the outer launcher");
+    for (const purpose of ["claim", "inner"])
+      if (!(births.outer ?? []).includes(purpose))
+        fail.push(`the outer launcher has no ${purpose} child`);
+    if (!(births.inner ?? []).includes("daemon"))
+      fail.push("the inner supervisor did not start the daemon");
+  });
+  check("C", ["records"], (fail) => {
+    if (run.records.ok !== true)
+      fail.push(...(run.records.problems?.length ? run.records.problems : ["records invalid"]));
+  });
+  check("D", ["records", "daemon", "settle"], (fail) => {
+    if ((run.records.signals ?? []).length)
+      fail.push(`${run.records.signals.length} harness signal(s)`);
+    if (run.daemon.timedOut || run.daemon.cancelled) fail.push("the daemon did not exit by itself");
+    if (run.settle.inner !== true || run.settle.outer !== true)
+      fail.push("a settle phase did not empty without escalation");
+  });
+  check("E", ["inventory"], (fail, unknown) => {
+    if (run.inventory.outcome === "survivors")
+      fail.push(`${run.inventory.survivors.length} survivor(s)`);
+    else if (run.inventory.outcome !== "clean") unknown.push(`inventory ${run.inventory.outcome}`);
+  });
+  check("F", ["ports"], (fail, unknown) => {
+    if (!Array.isArray(run.ports.claims) || run.ports.claims.length)
+      fail.push("the private registry still holds a claim");
+    const lsof = Array.isArray(run.ports.lsof) ? run.ports.lsof : [];
+    if (!lsof.length) unknown.push("no lsof answer");
+    if (lsof.some((answer) => answer.result === "listener")) fail.push("a TCP listener is held");
+    else if (lsof.some((answer) => answer.result !== "none"))
+      unknown.push("an lsof answer is inconclusive");
+  });
+  check("G", ["escalation"], (fail) => {
+    if (run.certificate !== false && run.escalation !== "on")
+      fail.push("escalation off is for control runs only");
+  });
+  const outcomes = Object.values(conditions).map((condition) => condition.outcome);
+  const verdict = outcomes.includes("fail")
+    ? "fail"
+    : outcomes.includes("inconclusive")
+      ? "inconclusive"
+      : "pass";
+  return { verdict, conditions };
+}

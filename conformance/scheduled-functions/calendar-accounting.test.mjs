@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { validateRecords, judgeInventory, interpretLsof } from "./calendar-accounting.mjs";
+import {
+  validateRecords,
+  judgeInventory,
+  interpretLsof,
+  refusalVerdict,
+} from "./calendar-accounting.mjs";
 
 function generated(seed) {
   let state = seed >>> 0 || 1;
@@ -412,4 +417,122 @@ test("lsof answers are none only for a silent exit 1", () => {
     { code: null, stdout: "", stderr: "", timedOut: true },
   ])
     assert.equal(interpretLsof(answer).result, "inconclusive", JSON.stringify(answer));
+});
+
+// refusalVerdict combines the conditions (A)-(G) of owner ledger 786.
+function verdictInput() {
+  const pins = {
+    sourceCommit: "a".repeat(40),
+    binarySha256: "b".repeat(64),
+    runnerSha256: "c".repeat(64),
+    fixtureSha256: "d".repeat(64),
+    configSha256: "e".repeat(64),
+    portctlSha256: "f".repeat(64),
+    exitCode: 1,
+    refusalLine:
+      'manifest: function "calendarProbe": time zone: unknown time zone "Invalid/CalendarZone"',
+  };
+  return {
+    certificate: true,
+    escalation: "on",
+    pins,
+    identity: { ...pins, exitCode: undefined, refusalLine: undefined },
+    daemon: {
+      exitCode: 1,
+      diagnostics: ["functions loaded: none", pins.refusalLine],
+      timedOut: false,
+      cancelled: false,
+    },
+    chain: { rootSid: 50, outerPid: 200, outerSid: 200 },
+    records: validateRecords(recordSet()),
+    settle: { inner: true, outer: true },
+    inventory: { outcome: "clean", survivors: [] },
+    ports: { claims: [], lsof: [{ result: "none" }, { result: "none" }] },
+  };
+}
+
+const breaks = {
+  "binary hash differs": [(v) => (v.identity.binarySha256 = "0".repeat(64)), "fail", "A"],
+  "fixture hash differs": [(v) => (v.identity.fixtureSha256 = "0".repeat(64)), "fail", "A"],
+  "portctl hash differs": [(v) => (v.identity.portctlSha256 = "0".repeat(64)), "fail", "A"],
+  "exit status differs": [(v) => (v.daemon.exitCode = 0), "fail", "A"],
+  "refusal line differs": [(v) => (v.daemon.diagnostics = ["unknown time zone"]), "fail", "A"],
+  "outer not a session leader": [(v) => (v.chain.outerSid = 50), "fail", "B"],
+  "no daemon birth": [(v) => (v.records.births.inner = ["ps"]), "fail", "B"],
+  "records incomplete": [
+    (v) => (v.records = { ...v.records, ok: false, problems: ["x"] }),
+    "fail",
+    "C",
+  ],
+  "harness signal": [(v) => (v.records.signals = [{ kind: "SIGTERM" }]), "fail", "D"],
+  "daemon timed out": [(v) => (v.daemon.timedOut = true), "fail", "D"],
+  "settle escalated": [(v) => (v.settle.inner = false), "fail", "D"],
+  survivor: [
+    (v) => (v.inventory = { outcome: "survivors", survivors: [{ rules: ["session"] }] }),
+    "fail",
+    "E",
+  ],
+  "inventory inconclusive": [
+    (v) => (v.inventory = { outcome: "inconclusive", survivors: [] }),
+    "inconclusive",
+    "E",
+  ],
+  "claim kept": [(v) => (v.ports.claims = [{ port: 12345 }]), "fail", "F"],
+  listener: [(v) => (v.ports.lsof = [{ result: "listener", pids: [9] }]), "fail", "F"],
+  "lsof inconclusive": [(v) => (v.ports.lsof = [{ result: "inconclusive" }]), "inconclusive", "F"],
+  "escalation off in a certificate": [(v) => (v.escalation = "off"), "fail", "G"],
+};
+
+test("a complete refusal run passes every condition", () => {
+  const verdict = refusalVerdict(verdictInput());
+  assert.equal(verdict.verdict, "pass", JSON.stringify(verdict.conditions));
+  assert.deepEqual(Object.keys(verdict.conditions), ["A", "B", "C", "D", "E", "F", "G"]);
+});
+
+test("each broken condition is reported under its letter", () => {
+  for (const [name, [apply, expected, letter]] of Object.entries(breaks)) {
+    const input = verdictInput();
+    apply(input);
+    const verdict = refusalVerdict(input);
+    assert.equal(verdict.verdict, expected, name);
+    assert.equal(verdict.conditions[letter].ok, false, name);
+  }
+});
+
+test("a control run may turn escalation off, and a missing input is never a pass", () => {
+  const control = verdictInput();
+  control.certificate = false;
+  control.escalation = "off";
+  assert.equal(refusalVerdict(control).conditions.G.ok, true);
+  for (const key of [
+    "pins",
+    "identity",
+    "daemon",
+    "chain",
+    "records",
+    "settle",
+    "inventory",
+    "ports",
+  ]) {
+    const input = verdictInput();
+    delete input[key];
+    assert.notEqual(refusalVerdict(input).verdict, "pass", key);
+  }
+});
+
+test("generated combinations of breaks: any failure fails, else any unknown is inconclusive", () => {
+  const random = generated(0xd786);
+  const names = Object.keys(breaks);
+  for (let i = 0; i < 300; i++) {
+    const input = verdictInput();
+    const chosen = names.filter(() => random() % 6 === 0);
+    for (const name of chosen) breaks[name][0](input);
+    const outcomes = chosen.map((name) => breaks[name][1]);
+    const model = outcomes.includes("fail")
+      ? "fail"
+      : outcomes.includes("inconclusive")
+        ? "inconclusive"
+        : "pass";
+    assert.equal(refusalVerdict(input).verdict, model, `seedd786/${i}/${chosen}`);
+  }
 });

@@ -979,11 +979,12 @@ impl StorageState {
         self.stored_bytes
     }
 
+    /// Adds a blob under an identity no blob holds: identities are allocated once and a
+    /// restore removes the buckets it replaces first.
     fn insert_blob(&mut self, blob: BlobId, bytes: Arc<Vec<u8>>) {
         self.stored_bytes = self.stored_bytes.saturating_add(bytes.len() as u64);
-        if let Some(old) = self.blobs.insert(blob, bytes) {
-            self.stored_bytes = self.stored_bytes.saturating_sub(old.len() as u64);
-        }
+        let replaced = self.blobs.insert(blob, bytes);
+        debug_assert!(replaced.is_none(), "blob identities are never reused");
     }
 
     fn remove_blob(&mut self, blob: BlobId) {
@@ -2293,13 +2294,12 @@ impl StorageState {
     }
 
     /// Takes a receiving session back to `checkpoint`: the bytes appended since are dropped
-    /// and the running digests restored. A session that left the receiving state, or that
-    /// holds fewer bytes than the checkpoint, is left as it is.
+    /// and the running digests restored. A session that left the receiving state is left as
+    /// it is.
     pub fn rollback_upload(&mut self, id: &UploadId, checkpoint: UploadCheckpoint) {
         if let Some(upload) = self.uploads.get_mut(id) {
-            if matches!(upload.state, UploadState::Receiving)
-                && upload.received.len() >= checkpoint.received
-            {
+            // Appending only grows a receiving session, so the checkpoint is a prefix of it.
+            if matches!(upload.state, UploadState::Receiving) {
                 upload.received.truncate(checkpoint.received);
                 upload.md5 = checkpoint.md5;
                 upload.crc32c = checkpoint.crc32c;

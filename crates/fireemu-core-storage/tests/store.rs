@@ -1287,6 +1287,16 @@ fn list_after_pages_one_merged_order_and_names_the_last_entry_returned() {
     let skipped = page(Some("p/c"));
     assert_eq!(skipped.prefixes, ["p/dir/", "p/dir2/"]);
     assert!(page(Some("p/zzz")).items.is_empty());
+    // The scan seeks to `after`: a point below the prefix lists from its start, a point inside a
+    // folded directory skips the rest of that directory, a point outside the prefix is empty.
+    let from_start = page(Some("a"));
+    assert_eq!(from_start.items.len(), 2);
+    let inside = page(Some("p/dir/x.txt"));
+    assert_eq!(inside.prefixes, ["p/dir2/"]);
+    assert_eq!(inside.items.len(), 1);
+    assert_eq!(inside.next_page_token, None);
+    let outside = page(Some("q"));
+    assert!(outside.items.is_empty() && outside.prefixes.is_empty());
     // Without a delimiter every object is an entry, and one page can hold them all.
     let flat = s.list_after(&b, "p/", None, None, 10);
     assert_eq!(flat.items.len(), 6);

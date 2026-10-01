@@ -91,6 +91,10 @@ pub enum CustomMetadataPatch {
     Clear,
     /// Merge: keys mapped to `None` are removed, others inserted.
     Merge(BTreeMap<String, Option<String>>),
+    /// The JSON API's `PUT` (`objects.update`): the map replaces every custom key and every
+    /// download token the object had (recorded, lean-v4: a `PUT` naming one key leaves that key
+    /// alone and drops the earlier key and the token).
+    Replace(BTreeMap<String, String>),
 }
 
 /// Metadata patch: `Some(None)` clears a field, `None` keeps it.
@@ -2222,7 +2226,11 @@ impl StorageState {
         max: usize,
     ) -> ListPage {
         let delimiter = delimiter.filter(|delimiter| !delimiter.is_empty());
-        let lower = (bucket.clone(), ObjectName::range_start(prefix));
+        // A name below `after` can only fold to an entry that is also at most `after`, so the scan
+        // starts at the later of the prefix and `after` instead of walking the prefix from its
+        // first name on every page.
+        let start = after.filter(|after| *after > prefix).unwrap_or(prefix);
+        let lower = (bucket.clone(), ObjectName::range_start(start));
         let mut items = Vec::new();
         let mut prefixes: Vec<String> = Vec::new();
         let mut last: Option<String> = None;
@@ -2347,6 +2355,11 @@ impl MetadataPatch {
                     }
                 }
                 // Upstream drops the map entirely when the merge leaves no keys.
+                next.custom_defined = !next.custom.is_empty();
+            }
+            Some(CustomMetadataPatch::Replace(entries)) => {
+                next.custom.clone_from(entries);
+                next.download_tokens.clear();
                 next.custom_defined = !next.custom.is_empty();
             }
         }

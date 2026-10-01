@@ -1535,7 +1535,12 @@ fn new_metadata_from_json(v: &Value, content_type: Option<String>) -> Result<New
     Ok(meta)
 }
 
-fn patch_from_json(v: &Value) -> Result<MetadataPatch, String> {
+/// The metadata patch a PATCH or PUT body describes.
+///
+/// `replace` is the JSON API's `PUT`: a `metadata` object replaces the custom metadata (and drops
+/// the download tokens) instead of merging into it. A `PUT` without a `metadata` member is not
+/// recorded and keeps the custom metadata, like `PATCH`.
+fn patch_from_json(v: &Value, replace: bool) -> Result<MetadataPatch, String> {
     let field = |k: &str| -> Result<Option<Option<String>>, String> {
         match v.get(k) {
             None => Ok(None),
@@ -1561,7 +1566,13 @@ fn patch_from_json(v: &Value) -> Result<MetadataPatch, String> {
                 }
                 out.insert(k.clone(), sv);
             }
-            Some(CustomMetadataPatch::Merge(out))
+            if replace {
+                Some(CustomMetadataPatch::Replace(
+                    out.into_iter().filter_map(|(k, v)| Some((k, v?))).collect(),
+                ))
+            } else {
+                Some(CustomMetadataPatch::Merge(out))
+            }
         }
         _ => None,
     };
@@ -2231,6 +2242,66 @@ fn fallthrough(method: &str, segments: &[&str]) -> Result<Route, String> {
     }
 }
 
+/// A guard value that is no number production reads as a Java `long`: 400 with the parameter
+/// named (recorded, lean-v4 and lean-v5: `1.5`, `not-a-number` and an empty value, for the match
+/// and the not-match guards of PATCH, PUT and DELETE; the recorded lengths 311, 314, 317, 320, 335
+/// and 338 are these bytes). Built directly, because the Google layout of `production_framing`
+/// keeps no `locationType` and `location`.
+fn production_invalid_long(key: &str, value: &str) -> StorageResponse {
+    let message = format!("Invalid long value: '{value}'.");
+    let quoted = |text: &str| serde_json::to_string(text).unwrap_or_default();
+    let (message, key) = (quoted(&message), quoted(key));
+    let body = format!(
+        "{{\n  \"error\": {{\n    \"code\": 400,\n    \"message\": {message},\n    \"errors\": [\n      {{\n        \"message\": {message},\n        \"domain\": \"global\",\n        \"reason\": \"invalidParameter\",\n        \"locationType\": \"parameter\",\n        \"location\": {key}\n      }}\n    ]\n  }}\n}}\n"
+    );
+    StorageResponse {
+        status: 400,
+        headers: vec![(
+            "content-type".into(),
+            "application/json; charset=UTF-8".into(),
+        )],
+        body: bytes::Bytes::from(body),
+    }
+}
+
+/// A guard value as production parses it: a signed 64-bit integer, or the 400 above. A negative
+/// value is a number that no generation equals; it is returned as `None` inside `Ok` so the
+/// caller can tell it from an absent guard.
+fn parse_guard_long(
+    params: &BTreeMap<String, String>,
+    key: &str,
+) -> Result<Option<i64>, StorageResponse> {
+    match params.get(key) {
+        None => Ok(None),
+        Some(raw) => raw
+            .parse::<i64>()
+            .map(Some)
+            .map_err(|_| production_invalid_long(key, raw)),
+    }
+}
+
+/// A generation no object has: what a negative match guard compares against, so the guard
+/// fails like production's (recorded, lean-v4: `ifMetagenerationMatch=-1` is a 412).
+const NEVER_A_GENERATION: u64 = u64::MAX;
+
+/// A match guard: a negative value is a guard that does not hold.
+fn match_guard(
+    params: &BTreeMap<String, String>,
+    key: &str,
+) -> Result<Option<u64>, StorageResponse> {
+    Ok(parse_guard_long(params, key)?
+        .map(|value| u64::try_from(value).unwrap_or(NEVER_A_GENERATION)))
+}
+
+/// A not-match guard: a negative value names no generation, so the guard holds and is dropped
+/// (recorded, lean-v4: `ifMetagenerationNotMatch=-1` is accepted, 200 or 204).
+fn not_match_guard(
+    params: &BTreeMap<String, String>,
+    key: &str,
+) -> Result<Option<u64>, StorageResponse> {
+    Ok(parse_guard_long(params, key)?.and_then(|value| u64::try_from(value).ok()))
+}
+
 /// The write and read preconditions of a JSON API request, parsed as production reads them under
 /// strict (the official emulator ignores them, and so does the emulator profile; see
 /// `precondition_named`).
@@ -2253,24 +2324,14 @@ fn precondition_named(
     if !state.is_strict() {
         return Ok(Precondition::default());
     }
-    // Production reads a match guard whose value is not a generation number as one that does not
-    // hold (412) and a not-match guard like that as one that holds, so the request goes ahead
-    // (recorded, lean-v4: `ifMetagenerationMatch=-1` 412, `ifMetagenerationNotMatch=-1` 200/204).
-    let match_value = |key: &str| -> Result<Option<u64>, StorageResponse> {
-        match params.get(key) {
-            None => Ok(None),
-            Some(v) => v
-                .parse::<u64>()
-                .map(Some)
-                .map_err(|_| production_precondition_failed()),
-        }
-    };
-    let not_match_value = |key: &str| params.get(key).and_then(|v| v.parse::<u64>().ok());
     let pre = Precondition {
-        if_generation_match: match_value(&format!("{prefix}GenerationMatch"))?,
-        if_metageneration_match: match_value(&format!("{prefix}MetagenerationMatch"))?,
-        if_generation_not_match: not_match_value(&format!("{prefix}GenerationNotMatch")),
-        if_metageneration_not_match: not_match_value(&format!("{prefix}MetagenerationNotMatch")),
+        if_generation_match: match_guard(params, &format!("{prefix}GenerationMatch"))?,
+        if_metageneration_match: match_guard(params, &format!("{prefix}MetagenerationMatch"))?,
+        if_generation_not_match: not_match_guard(params, &format!("{prefix}GenerationNotMatch"))?,
+        if_metageneration_not_match: not_match_guard(
+            params,
+            &format!("{prefix}MetagenerationNotMatch"),
+        )?,
     };
     if (pre.if_generation_match.is_some() && pre.if_generation_not_match.is_some())
         || (pre.if_metageneration_match.is_some() && pre.if_metageneration_not_match.is_some())
@@ -2933,10 +2994,11 @@ fn fb_list(
         RulesValue::Null,
     )?;
     // Production refuses `maxResults=0` with this body (recorded, lean-v4 and lean-v5: 400,
-    // compact JSON); the official emulator answers 200 with an empty page, which the emulator
-    // profile keeps because it never refuses what the official emulator admits.
+    // `content-length: 97`, the two-space layout without a final line feed that
+    // `production_error` writes); the official emulator answers 200 with an empty page, which
+    // the emulator profile keeps because it never refuses what the official emulator admits.
     if max_results == Some(0) && state.is_strict() {
-        return Err(fb_json_error(
+        return Err(production_error(
             400,
             "Expect maxResults to be a positive number.",
         ));
@@ -3341,7 +3403,7 @@ fn fb_patch(
         // 3 v9: the body `{` on an absent and on a present object, both credentials).
         serde_json::from_slice(&req.body).map_err(|_| production_error(400, "Parser Error"))?
     };
-    let patch = patch_from_json(&body).map_err(|e| fb_json_error(400, &e))?;
+    let patch = patch_from_json(&body, false).map_err(|e| fb_json_error(400, &e))?;
     let mut store = state.store()?;
     let existing = store.get(&b, &n).cloned();
     // A metadata update of an object that is not there is refused with 403, whatever the rules
@@ -3960,10 +4022,12 @@ fn gcs_object(
                 Ok(StorageResponse::json(200, &gcs_json(&meta, host)))
             }
         }
-        // `PUT` updates the object's metadata like `PATCH` (recorded, probe-v4: an accepted
-        // `PUT` with `contentType` and `metadata` answers 200 with the object resource, the
-        // metageneration one higher). What a `PUT` that omits a field does to it was not
-        // recorded, so only the fields given are applied.
+        // `PUT` updates the object's metadata (recorded, probe-v4: an accepted `PUT` with
+        // `contentType` and `metadata` answers 200 with the object resource, the metageneration
+        // one higher) and, unlike `PATCH`, replaces the custom metadata and drops the download
+        // tokens (recorded, lean-v4 1344 to 1349: the earlier key and the token are gone). What a
+        // `PUT` does to the other writable fields it omits, or to custom metadata it omits, was
+        // not recorded: they stay as `PATCH` leaves them.
         "PATCH" | "PUT" => {
             let body: Value = if req.body.is_empty() {
                 Value::Object(Map::new())
@@ -3975,7 +4039,8 @@ fn gcs_object(
             if store.get(&b, &n).is_none() {
                 return Ok(gcs_no_such_object(bucket, name, false));
             }
-            let patch = patch_from_json(&body).map_err(|e| gcs_json_error(400, &e, "invalid"))?;
+            let patch = patch_from_json(&body, method == "PUT")
+                .map_err(|e| gcs_json_error(400, &e, "invalid"))?;
             let m = store
                 .update_metadata(&b, &n, &patch, pre, now)
                 .map_err(gcs_core_err)?;
@@ -4583,12 +4648,9 @@ fn xml_style_get(
     };
     let bytes = store.shared_bytes(&meta);
     drop(store);
-    Ok(send_file_bytes(
-        bytes,
-        &meta,
-        req,
-        state.strict_range_style(RangeStyle::Gcs),
-    ))
+    // The XML API's answers were not recorded, so both profiles keep the official emulator's
+    // (no strict range style, no strict media headers).
+    Ok(send_file_bytes(bytes, &meta, req, None))
 }
 
 #[cfg(test)]

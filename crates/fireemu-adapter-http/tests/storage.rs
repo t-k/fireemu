@@ -2974,20 +2974,16 @@ fn json_api_routing_and_range_edges() {
         assert_eq!(reversed.status, 200, "{acceptance:?}");
         assert_eq!(reversed.body.as_ref(), b"hello");
         let xml = format!("/{BUCKET}/f.txt");
+        // The XML API's answers were not recorded: both profiles keep the official emulator's.
         let beyond = get(&xml, "bytes=50-60");
-        if acceptance == TokenAcceptance::Verified {
-            assert_eq!(beyond.status, 416);
-            assert_eq!(header(&beyond, "content-range"), Some("bytes */5"));
-        } else {
-            assert_eq!(beyond.status, 200);
-            assert_eq!(beyond.body.as_ref(), b"hello");
-        }
+        assert_eq!(beyond.status, 200, "{acceptance:?}");
+        assert_eq!(beyond.body.as_ref(), b"hello");
     }
 }
 
 /// The Firebase list answers `maxResults=0` with production's 400 under strict (recorded, lean-v4
-/// and lean-v5: compact `{"error":{"code":400,"message":"Expect maxResults to be a positive
-/// number."}}`, `application/json; charset=UTF-8`); the emulator profile keeps the official
+/// and lean-v5: `content-length: 97`, the two-space layout without a final line feed,
+/// `application/json; charset=UTF-8`); the emulator profile keeps the official
 /// emulator's 200 (measured, firebase-tools 15.28.2: an empty page), since it never refuses what
 /// the official emulator admits. An empty list is `{"prefixes":[],"items":[]}` with both keys.
 #[test]
@@ -2996,9 +2992,10 @@ fn the_firebase_list_refuses_max_results_zero_only_under_strict_and_keeps_its_ke
     let strict = state_with(Some(ALLOW_ALL_RULES), TokenAcceptance::Verified);
     let refused = handle(&strict, req("GET", &route, &[], b""));
     assert_eq!(refused.status, 400);
+    assert_eq!(refused.body.len(), 97);
     assert_eq!(
         String::from_utf8_lossy(&refused.body),
-        r#"{"error":{"code":400,"message":"Expect maxResults to be a positive number."}}"#
+        "{\n  \"error\": {\n    \"code\": 400,\n    \"message\": \"Expect maxResults to be a positive number.\"\n  }\n}"
     );
     assert_eq!(
         header(&refused, "content-type"),
@@ -3022,9 +3019,10 @@ const PRODUCTION_412_BODY: &str = "{\n  \"error\": {\n    \"code\": 412,\n    \"
 /// lean-v4 and lean-v5; the official emulator reads no preconditions, so the emulator profile
 /// ignores them, see the next test): a
 /// not-match guard that names the current value is a 304 without a body on PATCH, PUT, DELETE,
-/// upload and the reads; a match guard that does not hold, or whose value is not a number, is the
-/// 412 body; a not-match guard whose value is not a number is accepted. `PUT` updates the metadata
-/// like `PATCH` and answers the object resource with the metageneration one higher.
+/// upload and the reads; a match guard that does not hold, or whose value is the negative number
+/// `-1`, is the 412 body; a not-match guard of `-1` is accepted (a value that is no number at all
+/// is the 400 of the next test). `PUT` updates the metadata and answers the object resource with
+/// the metageneration one higher.
 #[test]
 #[allow(clippy::too_many_lines)]
 fn json_api_object_guards_and_put_answer_as_recorded() {
@@ -3109,7 +3107,7 @@ fn json_api_object_guards_and_put_answer_as_recorded() {
             ),
             (
                 "GET",
-                format!("ifGenerationMatch={generation}&ifMetagenerationMatch=abc"),
+                format!("ifGenerationMatch={generation}&ifMetagenerationMatch=-1"),
             ),
             ("GET", "ifGenerationMatch=999999".to_owned()),
         ] {
@@ -3154,6 +3152,195 @@ fn json_api_object_guards_and_put_answer_as_recorded() {
         );
         assert_eq!(r.status, 204);
         assert_eq!(call("GET", "", b"").status, 404);
+    }
+}
+
+/// The 400 production answers to a guard value that is no `long` (recorded, lean-v4 and lean-v5:
+/// `1.5`, `not-a-number` and an empty value, for the match and the not-match metageneration
+/// guards of PATCH, PUT and DELETE; the recorded lengths are 311, 314, 317, 320, 335 and 338).
+/// A refused DELETE keeps the object.
+#[test]
+fn strict_guard_values_that_are_no_long_answer_the_recorded_400() {
+    let s = state_with(Some(ALLOW_ALL_RULES), TokenAcceptance::Verified);
+    let object = format!("/storage/v1/b/{BUCKET}/o/l.bin");
+    let seeded = handle(
+        &s,
+        req(
+            "POST",
+            &format!("/upload/storage/v1/b/{BUCKET}/o?uploadType=media&name=l.bin"),
+            &[
+                ("authorization", "Bearer owner"),
+                ("content-type", "application/octet-stream"),
+            ],
+            b"hello",
+        ),
+    );
+    let generation = json_body(&seeded)["generation"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let call = |method: &str, q: &str| {
+        handle(
+            &s,
+            req(
+                method,
+                &format!("{object}?{q}"),
+                &[
+                    ("authorization", "Bearer owner"),
+                    ("content-type", "application/json"),
+                ],
+                br#"{"metadata":{"k":"v"}}"#,
+            ),
+        )
+    };
+    let expected = |value: &str, key: &str| {
+        let message = format!("Invalid long value: '{value}'.");
+        format!(
+            "{{\n  \"error\": {{\n    \"code\": 400,\n    \"message\": \"{message}\",\n    \"errors\": [\n      {{\n        \"message\": \"{message}\",\n        \"domain\": \"global\",\n        \"reason\": \"invalidParameter\",\n        \"locationType\": \"parameter\",\n        \"location\": \"{key}\"\n      }}\n    ]\n  }}\n}}\n"
+        )
+    };
+    let lengths = [
+        ("", "ifMetagenerationMatch", 311),
+        ("", "ifMetagenerationNotMatch", 314),
+        ("1.5", "ifMetagenerationMatch", 317),
+        ("1.5", "ifMetagenerationNotMatch", 320),
+        ("not-a-number", "ifMetagenerationMatch", 335),
+        ("not-a-number", "ifMetagenerationNotMatch", 338),
+    ];
+    for method in ["PATCH", "PUT", "DELETE"] {
+        for (value, key, length) in lengths {
+            let q = format!("ifGenerationMatch={generation}&{key}={value}");
+            let r = call(method, &q);
+            assert_eq!(r.status, 400, "{method} {q}");
+            assert_eq!(r.body.len(), length, "{method} {q}");
+            assert_eq!(String::from_utf8_lossy(&r.body), expected(value, key));
+            assert_eq!(
+                header(&r, "content-type"),
+                Some("application/json; charset=UTF-8")
+            );
+        }
+        // A generation guard is read by the same parser.
+        let r = call(method, "ifGenerationNotMatch=abc");
+        assert_eq!(r.status, 400, "{method}");
+        assert_eq!(
+            String::from_utf8_lossy(&r.body),
+            expected("abc", "ifGenerationNotMatch")
+        );
+        // The refused write changed nothing.
+        let read = call("GET", "");
+        assert_eq!(read.status, 200, "{method}");
+        assert_eq!(json_body(&read)["metageneration"], "1", "{method}");
+    }
+    // A negative value is a number: it fails a match guard and holds a not-match guard.
+    assert_eq!(call("PATCH", "ifMetagenerationMatch=-1").status, 412);
+    assert_eq!(call("PATCH", "ifMetagenerationNotMatch=-1").status, 200);
+    assert_eq!(call("DELETE", "ifMetagenerationNotMatch=-1").status, 204);
+    assert_eq!(call("GET", "").status, 404);
+}
+
+/// `PUT` on the JSON API object replaces the custom metadata and drops the download tokens
+/// (recorded, lean-v4 1344 to 1349); `PATCH` merges and keeps the token. The metageneration rises
+/// by one either way. The official emulator answers 501, so both profiles serve production's
+/// answer.
+#[test]
+fn a_put_replaces_the_custom_metadata_and_the_download_tokens() {
+    for acceptance in BOTH_PROFILES {
+        let s = state_with(Some(ALLOW_ALL_RULES), acceptance);
+        let owner = [
+            ("authorization", "Bearer owner"),
+            ("content-type", "application/json"),
+        ];
+        let object = format!("/storage/v1/b/{BUCKET}/o/r.bin");
+        let seeded = handle(
+            &s,
+            req(
+                "POST",
+                &format!("/upload/storage/v1/b/{BUCKET}/o?uploadType=media&name=r.bin"),
+                &[
+                    ("authorization", "Bearer owner"),
+                    ("content-type", "application/octet-stream"),
+                ],
+                b"hello",
+            ),
+        );
+        assert_eq!(seeded.status, 200, "{acceptance:?}");
+        let minted = handle(
+            &s,
+            req(
+                "POST",
+                &format!("/v0/b/{BUCKET}/o/r.bin?create_token=true"),
+                &owner,
+                b"",
+            ),
+        );
+        assert_eq!(minted.status, 200, "{acceptance:?}");
+        let token = json_body(&minted)["downloadTokens"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let patch = handle(
+            &s,
+            req(
+                "PATCH",
+                &object,
+                &owner,
+                br#"{"metadata":{"marker":"advanced","keep":"1"}}"#,
+            ),
+        );
+        let patched = json_body(&patch);
+        assert_eq!(
+            patched["metadata"]["firebaseStorageDownloadTokens"], token,
+            "{acceptance:?}: a PATCH keeps the token"
+        );
+        assert_eq!(patched["metadata"]["keep"], "1");
+        let before = patched["metageneration"]
+            .as_str()
+            .unwrap()
+            .parse::<u64>()
+            .unwrap();
+        let put = handle(
+            &s,
+            req(
+                "PUT",
+                &object,
+                &owner,
+                br#"{"metadata":{"marker":"subject-update"}}"#,
+            ),
+        );
+        assert_eq!(put.status, 200, "{acceptance:?}");
+        let put = json_body(&put);
+        assert_eq!(
+            put["metadata"],
+            json!({"marker": "subject-update"}),
+            "{acceptance:?}: the earlier key and the token are gone"
+        );
+        assert_eq!(
+            put["metageneration"]
+                .as_str()
+                .unwrap()
+                .parse::<u64>()
+                .unwrap(),
+            before + 1
+        );
+        let read = handle(&s, req("GET", &object, &owner, b""));
+        assert_eq!(
+            json_body(&read)["metadata"],
+            json!({"marker": "subject-update"})
+        );
+        // The old token is dead: the next Firebase metadata read mints another (recorded, lean-v4
+        // 1352), so a download URL made before the PUT stops working.
+        let v0 = handle(
+            &s,
+            req("GET", &format!("/v0/b/{BUCKET}/o/r.bin"), &owner, b""),
+        );
+        let reminted = json_body(&v0)["downloadTokens"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        assert_ne!(reminted, token, "{acceptance:?}");
+        // An empty `metadata` object replaces everything with nothing.
+        let cleared = handle(&s, req("PUT", &object, &owner, br#"{"metadata":{}}"#));
+        assert_eq!(json_body(&cleared).get("metadata"), None, "{acceptance:?}");
     }
 }
 
@@ -3518,8 +3705,8 @@ fn json_api_patch_on_the_storage_v1_spelling_updates_metadata_as_production_does
     );
     assert_eq!(json_body(&r)["metadata"]["owner"], "new");
     assert_eq!(json_body(&r)["metageneration"], "3");
-    // An object that is not there is the JSON 404, a malformed match guard is the 412 and a
-    // malformed body is a 400.
+    // An object that is not there is the JSON 404, a match guard that is no number is the 400
+    // of production and a malformed body is a 400.
     let r = handle(
         &s,
         req(
@@ -3535,7 +3722,12 @@ fn json_api_patch_on_the_storage_v1_spelling_updates_metadata_as_production_does
         format!("No such object: {BUCKET}/missing.bin")
     );
     assert_eq!(json_body(&r)["error"]["errors"][0]["reason"], "notFound");
-    assert_eq!(patch("?ifGenerationMatch=garbage", b"{}").status, 412);
+    let refused = patch("?ifGenerationMatch=garbage", b"{}");
+    assert_eq!(refused.status, 400);
+    assert_eq!(
+        json_body(&refused)["error"]["message"],
+        "Invalid long value: 'garbage'."
+    );
     assert_eq!(patch("", b"{not json").status, 400);
     // The download spelling stays GET-only, and the short spelling is unchanged.
     let r = handle(
@@ -3582,8 +3774,8 @@ fn json_api_preconditions_generations_and_ranges_are_strict() {
     assert_eq!(r.status, 200, "{}", String::from_utf8_lossy(&r.body));
     let generation = json_body(&r)["generation"].as_str().unwrap().to_owned();
     let object = format!("/storage/v1/b/{BUCKET}/o/g.bin");
-    // A malformed match guard is the 412 production answers, not an error of its own (recorded,
-    // lean-v4); a malformed not-match guard is accepted (see the guards test).
+    // A match guard that is no number is the 400 production answers (recorded, lean-v4; the
+    // exact bytes are in the guards test) and the object stays.
     let r = handle(
         &s,
         req(
@@ -3593,10 +3785,10 @@ fn json_api_preconditions_generations_and_ranges_are_strict() {
             b"",
         ),
     );
-    assert_eq!(r.status, 412);
+    assert_eq!(r.status, 400);
     assert_eq!(
         json_body(&r)["error"]["errors"][0]["reason"],
-        "conditionNotMet"
+        "invalidParameter"
     );
     // A stale generation selector never targets the live object.
     let r = handle(

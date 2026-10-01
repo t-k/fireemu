@@ -2270,7 +2270,7 @@
     },
     "storage-probe/gcs-update-list-delete#put-update": {
       "documents": "README.md, \"Storage\"; capability manifest ST-OBJ-1 (crates/fireemu/src/capabilities.json)",
-      "reason": "PUT on the JSON API object (update) updates the object's metadata in fireemu and answers the object resource with the metageneration one higher, as production does (recorded, STORAGE-OBJECT probe-v4, 2026-09-30); the official emulator registers no PUT route and answers 501. What a PUT that omits a field does to it was not recorded, so only the fields given are applied.",
+      "reason": "PUT on the JSON API object (update) updates the object's metadata in fireemu and answers the object resource with the metageneration one higher, as production does (recorded, STORAGE-OBJECT probe-v4, 2026-09-30); the official emulator registers no PUT route and answers 501. Unlike PATCH, a PUT whose body carries metadata replaces the custom metadata and drops the download tokens (recorded, lean-v4). What it does to omitted fields was not recorded: they stay as a PATCH leaves them.",
       "authority": {
         "kind": "production-spec",
         "sourceUrls": [

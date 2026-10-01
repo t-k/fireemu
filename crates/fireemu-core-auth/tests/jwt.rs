@@ -358,3 +358,75 @@ fn the_tenant_claim_is_read_without_checking_the_algorithm_or_the_signature() {
         assert_eq!(unverified_tenant_claim(&bad), None, "{name}");
     }
 }
+
+/// A signer that signs by reversing the input: enough to make the stores verify signatures,
+/// so the unsigned mock fallback is not offered.
+struct ReversingSigner;
+
+impl fireemu_core_auth::jwt::IdTokenSigner for ReversingSigner {
+    fn alg(&self) -> &'static str {
+        "RS256"
+    }
+    fn kid(&self) -> &'static str {
+        "test"
+    }
+    fn sign(&self, signing_input: &[u8]) -> Vec<u8> {
+        signing_input.iter().rev().copied().collect()
+    }
+    fn verify(&self, signing_input: &[u8], signature: &[u8]) -> bool {
+        self.sign(signing_input) == signature
+    }
+    fn public_jwk_json(&self) -> String {
+        "{}".to_owned()
+    }
+}
+
+/// Ledger 781 on the removed-tenant Firestore path: a signed tenant token whose `iat` and
+/// `auth_time` are in the future is refused under `Verified` (strict) and admitted on the
+/// verified path under `EmulatorMock` (the emulator profile), with its signature checked.
+#[test]
+fn a_removed_tenants_future_dated_token_follows_the_acceptance() {
+    let signer: Arc<dyn fireemu_core_auth::jwt::IdTokenSigner> = Arc::new(ReversingSigner);
+    let project = Arc::new(Mutex::new(AuthStore::new(
+        "demo-app",
+        SplitMix64::new(5),
+        TotpPolicy::default(),
+    )));
+    project.lock().unwrap().set_signer(signer.clone());
+    let registry = AuthRegistry::new("demo-app", project.clone());
+    let tenant = registry.ensure_tenant("demo-app", "tenant-a").unwrap();
+    let token = {
+        let mut store = tenant.lock().unwrap();
+        store.set_signer(signer.clone());
+        let uid = store
+            .create_user(NewUser::email("t@example.com"), t0())
+            .unwrap();
+        let mut claims = store.id_token_claims(&uid, None, t0()).unwrap();
+        claims.iat += 600;
+        claims.auth_time += 600;
+        fireemu_core_auth::jwt::encode_with(&claims, Some(signer.as_ref()))
+    };
+    let check = |acceptance| {
+        verify_firestore_rules_token_of_removed_tenant(
+            &token,
+            &project.lock().unwrap(),
+            t0(),
+            acceptance,
+            None,
+            None,
+        )
+    };
+    assert_eq!(
+        check(TokenAcceptance::Verified).map(|_| ()),
+        Err(JwtError::Malformed)
+    );
+    let decoded = check(TokenAcceptance::EmulatorMock).unwrap();
+    assert_eq!(
+        decoded
+            .payload
+            .get("firebase")
+            .and_then(|f| f.get("tenant"))
+            .and_then(|t| t.as_str()),
+        Some("tenant-a")
+    );
+}

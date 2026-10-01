@@ -12,7 +12,7 @@ cat > "$work/bin/gh" <<'STUB'
 #!/usr/bin/env bash
 echo "$*" >> "$GH_LOG"
 case "$1 $2" in
-  "repo view") echo main ;;
+  "repo view") echo "${GH_DEFAULT_BRANCH-main}" ;;
   "run list")
     # The filter heavy-run.sh passes is applied to two runs: the tag's own, and a decoy whose tag
     # only begins with it.
@@ -36,6 +36,13 @@ case "$1 $2" in
       shift
     done
     mkdir -p "$dir"
+    if [[ $name == linux-measure-output ]]; then
+      # Output the code under test shaped: a file name with an escape sequence, one whose path is far too long.
+      : > "$dir/$(printf 'report\033[2J.txt')"
+      long=$(printf 'n%.0s' $(seq 1 120))
+      mkdir -p "$dir/$long/$long/$long/$long"
+      : > "$dir/$long/$long/$long/$long/f"
+    fi
     if [[ $name == mutants-summary ]]; then
       # A summary the code under test shaped: escape sequences, a forged heading, a bidi override.
       jq -n '{shards_expected: 2, shards_found: [0, 1], total: 3, caught: 1, missed: 2, unviable: 0, timeout: 0, problems: [],
@@ -61,6 +68,7 @@ if "$here/heavy-run.sh" --job mutants --ref work/x --package fireemu-core-auth -
   grep -q "^workflow run heavy-verification.yml --ref work/x -f job=mutants -f ref=work/x -f package=fireemu-core-auth -f base=main -f shards=4 -f script= -f tag=heavy-" "$GH_LOG" &&
   grep -q "^run watch 222 --exit-status" "$GH_LOG" &&
   grep -q "^run download 222 --dir $work/out --name mutants-summary" "$GH_LOG" &&
+  grep -q "^run download 222 --dir $work/out/shards --pattern mutants-shard-\\*" "$GH_LOG" &&
   grep -q "mutants 3: caught 1, missed 2" "$work/stdout"; then
   ok "a mutants run dispatches with every input, watches, downloads and prints the summary"
 else
@@ -98,6 +106,18 @@ else
   bad "hostile summary text is filtered to printable ASCII under an untrusted header"
 fi
 
+# A linux-measure run prints what it produced under the same filter: no escape byte, no long line.
+: > "$GH_LOG"
+"$here/heavy-run.sh" --job linux-measure --ref work/x --script tools/bench/run.sh --out "$work/out-measure" > "$work/measure" 2>&1
+if grep -q "^run download 222 --dir $work/out-measure --name linux-measure-output" "$GH_LOG" &&
+  ! grep -q $'\x1b' "$work/measure" && grep -q "report.*2J.txt" "$work/measure" &&
+  [[ $(awk '{ if (length($0) > m) m = length($0) } END { print m }' "$work/measure") -le 400 ]] &&
+  grep -q "untrusted CI data" "$work/measure"; then
+  ok "a linux-measure listing is filtered to printable ASCII and cut at 400 characters"
+else
+  bad "a linux-measure listing is filtered to printable ASCII and cut at 400 characters"
+fi
+
 # The run never belongs to the default branch.
 : > "$GH_LOG"
 "$here/heavy-run.sh" --job nextest --ref work/y --out "$work/out-y" > /dev/null 2>&1
@@ -117,13 +137,15 @@ else
   ok "a non-empty --out is refused"
 fi
 
-# Bad arguments are refused before anything is dispatched.
+# Bad arguments are refused before anything is dispatched, by the check meant for them ($EXPECT, when set).
 refuse() {
   : > "$GH_LOG"
-  if "$here/heavy-run.sh" "$@" > /dev/null 2>&1; then
+  if "$here/heavy-run.sh" "$@" > "$work/refusal" 2>&1; then
     bad "refused: $*"
   elif grep -q "workflow run" "$GH_LOG"; then
     bad "refused without dispatching: $*"
+  elif [[ -n ${EXPECT-} ]] && ! grep -qF -- "$EXPECT" "$work/refusal"; then
+    bad "refused for another reason: $* (wanted '$EXPECT', got: $(head -c 300 "$work/refusal"))"
   else
     ok "refused: $*"
   fi
@@ -146,8 +168,11 @@ refuse --job linux-measure --ref x --out o --script scripts/../x.sh
 refuse --job linux-measure --ref x --out o
 refuse --job nextest --ref x
 refuse --job nextest --ref x --out o --unknown 1
-refuse --job nextest --ref 0123456789abcdef0123456789abcdef01234567 --out o
-refuse --job nextest --ref x --out o --workflow-ref main
-refuse --job nextest --ref x --out o --workflow-ref refs/pull/1/head
-refuse --job nextest --ref x --out o --workflow-ref HEAD
+EXPECT="--workflow-ref is required" refuse --job nextest --ref 0123456789abcdef0123456789abcdef01234567 --out o
+EXPECT="must not be the default branch" refuse --job nextest --ref x --out o --workflow-ref main
+EXPECT="must be a branch name" refuse --job nextest --ref x --out o --workflow-ref refs/pull/1/head
+EXPECT="must be a branch name" refuse --job nextest --ref x --out o --workflow-ref HEAD
+EXPECT="must be a branch name" refuse --job nextest --ref x --out o --workflow-ref FETCH_HEAD
+EXPECT="not a commit SHA" refuse --job nextest --ref x --out o --workflow-ref 0123456789abcdef0123456789abcdef01234567
+GH_DEFAULT_BRANCH="" EXPECT="cannot read the repository's default branch" refuse --job nextest --ref x --out o
 exit "$failures"

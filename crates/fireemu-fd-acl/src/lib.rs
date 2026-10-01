@@ -8,7 +8,7 @@
 //!
 //! This crate is the only place in the workspace where unsafe code is allowed. The unsafe
 //! code is three calls into the C library (`acl_get_fd_np`, `acl_get_entry` and `acl_free`)
-//! in one private module. The public API is the safe [`fd_has_extended_acl`] on macOS. On
+//! in one private module. The public API is the safe `fd_has_extended_acl` on macOS. On
 //! other platforms the crate is empty.
 
 #[cfg(target_os = "macos")]

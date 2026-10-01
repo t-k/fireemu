@@ -8,6 +8,8 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-10-01
+
 ### Added
 
 - `auth.mfa` in the canonical configuration (Fireemu-only): the project's initial multi-factor configuration, in the Identity Platform `Config.mfa` shape, so TOTP can be enabled from the config file under the strict profile (where `auth.totp` alone enables nothing, as in production) instead of through the Admin API in every session. It is validated as the Admin API validates an update of `mfa`, is the project's configuration at start in both profiles and that of every project created later, and is what `POST /v1/sessions/{s}/reset` returns to; without it a reset leaves an Admin-set configuration alone, as before. An Admin update still replaces it and disabling refuses TOTP as production does; the emulator profile keeps `auth.totp`. Strict with `auth.totp` and no enabling `auth.mfa` prints a start-up warning naming the key.
@@ -39,6 +41,10 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 ### Fixed
 
 - The npm launcher registers its SIGTERM and SIGINT handlers before it starts the daemon. A signal that reached it in the instant between the two could kill the launcher and leave the daemon running.
+
+### Known issues
+
+- Release gate: the release job's strict comparison still does not rerun AUTH-FS-CROSS stage 2. Its local window follows production's timeline in real time (about 61 minutes) and drives a browser client, which the 45-minute release job does not allow. Stage 2 was last compared on the 0.9.0 final artifact and is not rerun for this release; stage 1 (R18) is rerun by the release job.
 
 ## [0.9.0] - 2026-09-29
 
@@ -411,7 +417,8 @@ Security Rules (FS-RULES): behavior below was measured against a real Firestore 
 - The `strict` and `firebase` compatibility profiles, the Capability Manifest, and the Compatibility Contract pinned to firebase-tools 15.28.2.
 - `fireemu init`, `up`, `exec`, `emulators:export`, `doctor`, and `capabilities` commands, with the official `emulators:start` and `emulators:exec` spellings as aliases.
 
-[Unreleased]: https://github.com/t-k/fireemu/compare/v0.9.0...HEAD
+[Unreleased]: https://github.com/t-k/fireemu/compare/v0.10.0...HEAD
+[0.10.0]: https://github.com/t-k/fireemu/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/t-k/fireemu/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/t-k/fireemu/compare/v0.7.1...v0.8.0
 [0.7.1]: https://github.com/t-k/fireemu/compare/v0.7.0...v0.7.1

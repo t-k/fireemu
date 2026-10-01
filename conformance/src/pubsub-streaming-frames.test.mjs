@@ -273,3 +273,9 @@ test("plain Uint8Array views are accepted as raw bytes", async () => {
   assert.equal(Buffer.from(result.frames[0].bodyBase64, "base64").toString(), "view");
   assert.equal(result.raw.bodyBytes, wire.length);
 });
+test("a push that is not stopped carries no reason field at all", async () => {
+  const d = await decoder();
+  const result = d.push(frame(Buffer.from("ok")));
+  assert.deepEqual(Object.keys(result).sort(), ["frames", "raw"]);
+  assert.equal("reason" in d.push(Buffer.alloc(0)), false);
+});

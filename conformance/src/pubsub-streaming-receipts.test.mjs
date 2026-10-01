@@ -747,3 +747,21 @@ test("an owned stop that never acknowledges stays named among pending callbacks"
   assert.deepEqual(result.pendingCallbacks, ["owned-stop"]);
   assert.equal(result.terminationRequired, true);
 });
+test("metadata flags and cumulative header bytes are accepted exactly at their limits", async () => {
+  const { q, saved } = await queue({ maxHeaderBytes: 12, maxHeaderPairs: 1 });
+  assert.equal(q.headers("response", [":status", "200"], 255), true);
+  assert.equal(q.headers("trailers", ["a", "b"], 0), true);
+  const result = await q.done();
+  assert.equal(result.reason, undefined);
+  assert.equal(result.headerBytes, 12);
+  assert.deepEqual(
+    saved.map((row) => [row.kind, row.flags]),
+    [
+      ["response", 255],
+      ["trailers", 0],
+    ],
+  );
+  const over = await queue({ maxHeaderBytes: 11 });
+  assert.equal(over.q.headers("response", [":status", "200", "a", "bc"], 0), false);
+  assert.equal((await over.q.done()).reason, "header-bound");
+});

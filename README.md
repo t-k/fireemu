@@ -371,6 +371,37 @@ Set the emulator’s starting time with `daemon.clockStart`. Configure the clock
 
 See the [configuration schema](spec/config/fireemu.schema.json) for available settings and values. 
 
+### Firestore history limits
+
+Like production, Fireemu keeps every version of a document written in the last hour, so a `read_time` read, a read-only transaction or a resumed listener can see it. A test that updates the same documents many times therefore holds many versions in memory. These limits are local; production has none of them:
+
+- Each database retains at most 1 GiB of logical history bytes and 1,000,000 versions, each session 1 GiB and 1,000,000 versions, and the daemon 4 GiB and 4,000,000 versions. Logical bytes follow Firestore's storage size model and are not the process's memory, which can be several times larger.
+- On a pinned clock (`daemon.clockStart`), time does not pass on its own, so a document keeps at most 1,024 versions.
+- A commit that would cross a limit is refused whole with `RESOURCE_EXHAUSTED` and the message `Firestore retained history capacity is exhausted`.
+
+Versions older than an hour are released by the next commit after the clock passes them. To use less memory, lower the limits in the `firestore.history` section:
+
+```json
+{
+  "schemaVersion": 1,
+  "firestore": {
+    "edition": "standard",
+    "apiMode": "native",
+    "history": {
+      "maxVersionsPerPath": 16,
+      "maxBytes": 268435456
+    }
+  }
+}
+```
+
+- `maxVersionsPerPath` (1 to 1,000,000) sets the most versions of one document a database keeps, on either clock, in place of the defaults above. A `read_time` read or transaction older than the oldest version kept is refused with `FAILED_PRECONDITION` (`The requested 'read_time' is no longer retained by this database.`), and a listener resuming from there is reset and sent the full result again.
+- `maxBytes` (1 MiB to 1 GiB) lowers the logical history bytes one database retains.
+
+Without these keys the defaults apply.
+
+To see how much history a running daemon holds, run `fireemu doctor --connect <control URL>`. Its `history.*` lines report the retained versions and logical bytes against the session and daemon limits, and how many bytes the next compaction would release.
+
 ## Compatibility and limitations
 
 ### Differences from production Firebase

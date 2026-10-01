@@ -1511,6 +1511,21 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
         .with_ttl_sweep_interval(cfg.ttl_sweep_interval)
         .with_created_at(created_at)
         .with_implicit_database_creation(cfg.implicit_database_creation);
+        // `firestore.history` lowers local bounds production does not have. It comes after the
+        // wall-clock switch, which lifts the per-path cap.
+        let backend = match cfg.history_max_versions_per_path {
+            Some(versions) => backend.with_history_version_limit(versions),
+            None => backend,
+        };
+        let backend = match cfg.history_max_bytes {
+            Some(max_bytes) => {
+                backend.with_history_limits(fireemu_core_firestore::store::HistoryLimits {
+                    max_bytes,
+                    ..fireemu_core_firestore::store::HistoryLimits::default()
+                })
+            }
+            None => backend,
+        };
         // Scope decision C11: under the strict profile, projects.unknownProjects = "refuse"
         // makes the daemon's project the only one that exists.
         if let Some(seconds) = cfg.deleted_database_id_cooldown {

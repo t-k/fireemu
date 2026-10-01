@@ -587,3 +587,53 @@ fn compaction_is_deterministic() {
     assert_eq!(floor, s.compaction_floor());
     assert_eq!(s.retained_versions(), before);
 }
+
+proptest::proptest! {
+    #![proptest_config(proptest::test_runner::Config::with_cases(128))]
+
+    /// The per-path cap (`firestore.history.maxVersionsPerPath`) against an uncapped
+    /// reference store fed the same commits: every path keeps at most `cap` versions, live
+    /// reads never change, and every version the capped store still calls retained reads
+    /// exactly what the reference reads there.
+    #[test]
+    fn the_per_path_cap_keeps_exact_snapshots_of_what_it_retains(
+        cap in 1_usize..6,
+        writes in proptest::collection::vec((0_u8..3, proptest::option::of(0_i64..1_000)), 1..48),
+    ) {
+        let mut capped = FirestoreState::with_history_version_limit(cap);
+        let mut reference = FirestoreState::with_history_version_limit(usize::MAX);
+        let mut versions = Vec::new();
+        let mut touched = std::collections::BTreeSet::new();
+        let mut floor = capped.compaction_floor();
+        for (second, (document, value)) in (0_i64..).zip(writes) {
+            let p = format!("docs/{document}");
+            let write = match value {
+                Some(value) => set(&p, &[("v", Value::Integer(value))]),
+                None => delete(&p),
+            };
+            let at = t(second);
+            let committed = capped.commit(std::slice::from_ref(&write), None, at).unwrap();
+            let expected = reference.commit(&[write], None, at).unwrap();
+            proptest::prop_assert_eq!(committed.version, expected.version);
+            versions.push(committed.version);
+            touched.insert(p);
+
+            proptest::prop_assert!(capped.compaction_floor() >= floor, "the floor never moves back");
+            floor = capped.compaction_floor();
+            proptest::prop_assert!(capped.retained_versions() <= cap * touched.len());
+            for p in &touched {
+                proptest::prop_assert_eq!(capped.get(&path(p)), reference.get(&path(p)));
+                for version in &versions {
+                    if capped.is_retained(*version) {
+                        proptest::prop_assert_eq!(
+                            capped.get_at(&path(p), *version),
+                            reference.get_at(&path(p), *version),
+                            "{} at {:?}", p, version
+                        );
+                    }
+                }
+            }
+            proptest::prop_assert!(capped.is_retained(committed.version));
+        }
+    }
+}

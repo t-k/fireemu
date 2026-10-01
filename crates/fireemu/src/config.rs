@@ -333,6 +333,9 @@ pub const DEFAULT_UI_PORT: u16 = 4000;
 /// The Logging emulator's official default port (`firebase-tools` `Constants.getDefaultPort`).
 pub const DEFAULT_LOGGING_PORT: u16 = 4500;
 
+/// The smallest `firestore.history.maxBytes`: one document of the largest size still fits.
+const MIN_HISTORY_BYTES: u64 = 1 << 20;
+
 const LIMIT_KEYS: [&str; 9] = [
     "catalog",
     "queryCatalog",
@@ -1000,6 +1003,13 @@ pub struct RuntimeConfig {
     /// `firestore.deletedDatabaseIdCooldownSeconds`: how long a deleted database id stays
     /// unavailable. `None` keeps production's 300 seconds.
     pub deleted_database_id_cooldown: Option<i64>,
+    /// `firestore.history.maxVersionsPerPath`: how many versions of one document a database
+    /// retains. `None` keeps the default: bounded only by the one-hour `read_time` window on
+    /// the wall clock, 1,024 on a pinned clock.
+    pub history_max_versions_per_path: Option<usize>,
+    /// `firestore.history.maxBytes`: the logical history bytes one database retains. `None`
+    /// keeps the default of 1 GiB.
+    pub history_max_bytes: Option<u64>,
     /// When the daemon's databases were created (`firestore.databaseCreateTime`): the
     /// `createTime` they report and the instant before which a `read_time` is refused. Unset,
     /// it is the daemon's start; a run compared with a production database names that
@@ -1357,6 +1367,8 @@ impl Default for RuntimeConfig {
             listen_stream_lifetime: profile.listen_stream_lifetime(),
             ttl_sweep_interval: fireemu_core_firestore::ttl::DEFAULT_SWEEP_INTERVAL,
             deleted_database_id_cooldown: None,
+            history_max_versions_per_path: None,
+            history_max_bytes: None,
             database_create_time: None,
             require_demo_prefix: true,
             refuse_unknown_projects: false,
@@ -2126,6 +2138,52 @@ impl RuntimeConfig {
             return Err(ConfigError(format!(
                 "limits.firestorePlan.{key} is not implemented; use null"
             )));
+        }
+        Ok(())
+    }
+
+    /// `firestore.history`: local bounds on retained MVCC history that production does not
+    /// have. `maxVersionsPerPath` replaces the per-document cap on either clock, from 1 to the
+    /// database's version limit; `maxBytes` may only lower the database's byte limit, down to
+    /// 1 MiB (one document of the largest size still fits).
+    fn parse_firestore_history(history: &Value, cfg: &mut Self) -> Result<(), ConfigError> {
+        let history = history
+            .as_object()
+            .ok_or_else(|| ConfigError("firestore.history must be an object".to_owned()))?;
+        for key in history.keys() {
+            if !matches!(key.as_str(), "maxVersionsPerPath" | "maxBytes") {
+                return Err(ConfigError(format!(
+                    "unknown config key firestore.history.{key}"
+                )));
+            }
+        }
+        let defaults = fireemu_core_firestore::store::HistoryLimits::default();
+        if let Some(value) = history.get("maxVersionsPerPath") {
+            let maximum = defaults.max_versions;
+            let versions = value
+                .as_u64()
+                .filter(|versions| (1..=maximum).contains(versions))
+                .and_then(|versions| usize::try_from(versions).ok())
+                .ok_or_else(|| {
+                    ConfigError(format!(
+                        "firestore.history.maxVersionsPerPath must be a whole number from 1 \
+                         to {maximum}"
+                    ))
+                })?;
+            cfg.history_max_versions_per_path = Some(versions);
+        }
+        if let Some(value) = history.get("maxBytes") {
+            let maximum = defaults.max_bytes;
+            let bytes = value
+                .as_u64()
+                .filter(|bytes| (MIN_HISTORY_BYTES..=maximum).contains(bytes))
+                .ok_or_else(|| {
+                    ConfigError(format!(
+                        "firestore.history.maxBytes must be a whole number of bytes from \
+                         {MIN_HISTORY_BYTES} to {maximum}"
+                    ))
+                })?;
+            cfg.history_max_bytes = Some(bytes);
         }
         Ok(())
     }
@@ -3470,6 +3528,9 @@ impl RuntimeConfig {
                 })?;
                 cfg.deleted_database_id_cooldown = i64::try_from(seconds).ok();
             }
+            if let Some(history) = fs.get("history") {
+                Self::parse_firestore_history(history, &mut cfg)?;
+            }
             if let Some(value) = fs.get("ttlSweepIntervalSeconds") {
                 let seconds = value.as_u64().ok_or_else(|| {
                     ConfigError(
@@ -3923,6 +3984,92 @@ mod tests {
                 error.0.contains("deletedDatabaseIdCooldownSeconds"),
                 "{error}"
             );
+        }
+    }
+
+    #[test]
+    fn firestore_history_limits_keep_their_defaults_unless_configured() {
+        let parse = |firestore: Value| {
+            RuntimeConfig::from_json(&json!({"schemaVersion": 1, "firestore": firestore}))
+        };
+        let unset = parse(json!({})).unwrap();
+        assert_eq!(unset.history_max_versions_per_path, None);
+        assert_eq!(unset.history_max_bytes, None);
+        let empty = parse(json!({"history": {}})).unwrap();
+        assert_eq!(empty.history_max_versions_per_path, None);
+        assert_eq!(empty.history_max_bytes, None);
+        let set =
+            parse(json!({"history": {"maxVersionsPerPath": 16, "maxBytes": 268_435_456}})).unwrap();
+        assert_eq!(set.history_max_versions_per_path, Some(16));
+        assert_eq!(set.history_max_bytes, Some(268_435_456));
+        for (bad, names) in [
+            (
+                json!({"history": []}),
+                "firestore.history must be an object",
+            ),
+            (
+                json!({"history": {"maxVersions": 5}}),
+                "firestore.history.maxVersions",
+            ),
+            (
+                json!({"history": {"maxVersionsPerPath": 0}}),
+                "maxVersionsPerPath",
+            ),
+            (
+                json!({"history": {"maxVersionsPerPath": 1_000_001}}),
+                "maxVersionsPerPath",
+            ),
+            (
+                json!({"history": {"maxVersionsPerPath": 1.5}}),
+                "maxVersionsPerPath",
+            ),
+            (
+                json!({"history": {"maxVersionsPerPath": "16"}}),
+                "maxVersionsPerPath",
+            ),
+            (json!({"history": {"maxBytes": 1_048_575}}), "maxBytes"),
+            (json!({"history": {"maxBytes": 1_073_741_825}}), "maxBytes"),
+            (json!({"history": {"maxBytes": -1}}), "maxBytes"),
+        ] {
+            let error = parse(bad.clone()).unwrap_err();
+            assert!(error.0.contains(names), "{bad}: {error}");
+        }
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn firestore_history_limits_accept_exactly_their_ranges(
+            value in proptest::prop_oneof![
+                -4_i64..=4,
+                999_990_i64..=1_000_010,
+                1_048_566_i64..=1_048_586,
+                1_073_741_814_i64..=1_073_741_834,
+                proptest::num::i64::ANY,
+            ],
+        ) {
+            let parse = |key: &str| {
+                RuntimeConfig::from_json(
+                    &json!({"schemaVersion": 1, "firestore": {"history": {key: value}}}),
+                )
+            };
+            let versions = parse("maxVersionsPerPath");
+            if (1..=1_000_000).contains(&value) {
+                proptest::prop_assert_eq!(
+                    versions.unwrap().history_max_versions_per_path,
+                    usize::try_from(value).ok()
+                );
+            } else {
+                proptest::prop_assert!(versions.is_err());
+            }
+            let bytes = parse("maxBytes");
+            if (1_048_576..=1_073_741_824).contains(&value) {
+                proptest::prop_assert_eq!(
+                    bytes.unwrap().history_max_bytes,
+                    u64::try_from(value).ok()
+                );
+            } else {
+                proptest::prop_assert!(bytes.is_err());
+            }
         }
     }
 

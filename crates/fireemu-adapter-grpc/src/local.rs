@@ -314,6 +314,7 @@ pub struct LocalBackend {
     /// Capacity retention root for databases created by this backend. Pinned-clock runs use
     /// the bounded default; wall-clock parity runs rely on the one-hour time root alone.
     history_version_limit: usize,
+    history_limits: fireemu_core_firestore::store::HistoryLimits,
     /// Aggregate retained-history admission shared by every database.
     history_budget: Arc<Mutex<HistoryBudgetLedger>>,
     /// Resolves registered projects to their session budget owner.
@@ -1761,6 +1762,7 @@ impl LocalBackend {
             project_boundary: None,
             history_version_limit:
                 fireemu_core_firestore::store::DEFAULT_MAX_RETAINED_VERSIONS_PER_PATH,
+            history_limits: fireemu_core_firestore::store::HistoryLimits::default(),
             history_budget: Arc::new(Mutex::new(HistoryBudgetLedger::new(
                 HistoryBudgetLimits::default(),
             ))),
@@ -1844,6 +1846,17 @@ impl LocalBackend {
         } else {
             max_versions_per_path
         };
+        self
+    }
+
+    /// Lowers or raises the whole-database history limits every database of this backend
+    /// starts with (`firestore.history.maxBytes`), including a database a snapshot restores.
+    #[must_use]
+    pub const fn with_history_limits(
+        mut self,
+        limits: fireemu_core_firestore::store::HistoryLimits,
+    ) -> Self {
+        self.history_limits = limits;
         self
     }
 
@@ -2499,7 +2512,8 @@ impl LocalBackend {
                         k.clone(),
                         Arc::new(DatabaseEntry::restored(
                             v.clone()
-                                .with_retained_version_limit(self.history_version_limit),
+                                .with_retained_version_limit(self.history_version_limit)
+                                .with_retained_history_limits(self.history_limits),
                             self.database_incarnations
                                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst),
                         )),
@@ -3930,6 +3944,7 @@ impl LocalBackend {
                     Arc::new(DatabaseEntry::restored(
                         FirestoreState::with_limit_scope(scope)
                             .with_retained_version_limit(self.history_version_limit)
+                            .with_retained_history_limits(self.history_limits)
                             .with_transaction_id_offset(offset),
                         self.database_incarnations
                             .fetch_add(1, std::sync::atomic::Ordering::SeqCst),

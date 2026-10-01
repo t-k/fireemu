@@ -98,10 +98,19 @@ class WrapperTest(unittest.TestCase):
         live.mkdir()
         foreign = self.root / "not-a-wrapper-dir"
         foreign.mkdir()
+        bare_pid = self.root / str(dead.pid)
+        bare_pid.mkdir()
+        outside = self.parent / "outside"
+        (outside / "kept").mkdir(parents=True)
+        link = self.root / f"{dead.pid}.CCCCCC"
+        link.symlink_to(outside)
         self.assertEqual(self.run_wrapped("exit 0").returncode, 0)
         self.assertFalse(stale.exists(), "the killed wrapper's directory is removed")
         self.assertTrue(live.exists(), "a running wrapper's directory is kept")
         self.assertTrue(foreign.exists(), "a name the wrapper did not make is left alone")
+        self.assertTrue(bare_pid.exists(), "a bare number is not a name the wrapper makes")
+        self.assertTrue(link.is_symlink(), "a symbolic link is left alone")
+        self.assertTrue((outside / "kept").is_dir(), "and so is what it points to")
 
     def test_a_terminated_run_still_removes_the_private_directory(self):
         environment = dict(os.environ, TMPDIR=str(self.parent) + "/")

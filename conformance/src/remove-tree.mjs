@@ -19,7 +19,8 @@ export function removeTree(path) {
   rmSync(path, { recursive: true, force: true });
 }
 
-function makeOwnerWritable(path) {
+/** Gives the owner rwx on `path` and every directory under it; symbolic links are not followed. */
+export function makeOwnerWritable(path) {
   let stat;
   try {
     stat = lstatSync(path);

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, readdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import test from "node:test";
@@ -133,16 +133,89 @@ test("leftovers ignores only the tool caches, and the run status keeps the comma
     "b",
     "node-compile-cache-x",
   ]);
-  for (const [code, signal, left, expected] of [
-    [0, null, [], 0],
-    [0, null, ["x"], 1],
-    [3, null, [], 3],
-    [3, null, ["x"], 3],
-    [null, "SIGTERM", [], 143],
-    [null, "SIGINT", ["x"], 130],
-    [null, "SIGHUP", [], 129],
-    [null, "SIGKILL", [], 137],
+  for (const [code, signal, left, received, cleanupFailed, expected] of [
+    [0, null, [], null, false, 0],
+    [0, null, ["x"], null, false, 1],
+    [0, null, [], null, true, 1],
+    [3, null, [], null, false, 3],
+    [3, null, ["x"], null, true, 3],
+    [null, "SIGTERM", [], null, false, 143],
+    [null, "SIGINT", ["x"], null, false, 130],
+    [null, "SIGHUP", [], null, false, 129],
+    [null, "SIGKILL", [], null, false, 137],
+    [0, null, [], "SIGTERM", false, 143],
+    [0, null, ["x"], "SIGINT", false, 130],
+    [5, null, [], "SIGTERM", false, 5],
+    [null, "SIGKILL", [], "SIGTERM", false, 137],
   ]) {
-    assert.equal(runStatus(code, signal, left), expected, `${code} ${signal} ${left}`);
+    assert.equal(
+      runStatus(code, signal, left, received, cleanupFailed),
+      expected,
+      `${code} ${signal} ${left} ${received} ${cleanupFailed}`,
+    );
   }
+});
+
+/** Runs the selftest wrapper on `node -e script` with TMPDIR pointed at `dir`. */
+function wrapNode(dir, script) {
+  return spawnSync(process.execPath, [SELFTEST_TMPDIR, process.execPath, "-e", script], {
+    env: { ...process.env, TMPDIR: dir },
+    encoding: "utf8",
+  });
+}
+
+test("a run that hides a leftover by removing the directory's permissions still fails", () => {
+  const dir = emptyDir("wrapper-unreadable");
+  const result = wrapNode(
+    dir,
+    `const fs = require("node:fs"); const os = require("node:os");
+fs.writeFileSync(require("node:path").join(os.tmpdir(), "hidden"), "");
+fs.chmodSync(os.tmpdir(), 0);`,
+  );
+  assert.equal(result.status, 1, result.stderr);
+  assert.match(result.stderr, /hidden/);
+  assert.deepEqual(readdirSync(dir), []);
+});
+
+test("an inspection failure keeps the command's own failure and the directory is still removed", () => {
+  for (const [exit, expected] of [
+    [7, 7],
+    [0, 1],
+  ]) {
+    const dir = emptyDir(`wrapper-replaced-${exit}`);
+    const result = wrapNode(
+      dir,
+      `const fs = require("node:fs"); const path = require("node:os").tmpdir().replace(/\\/$/, "");
+fs.rmSync(path, { recursive: true }); fs.writeFileSync(path, "not a directory"); process.exit(${exit});`,
+    );
+    assert.equal(result.status, expected, result.stderr);
+    assert.match(result.stderr, /could not list/);
+    assert.deepEqual(readdirSync(dir), []);
+  }
+});
+
+test("a forwarded signal fails the run even when the command handles it and exits 0", async () => {
+  const dir = emptyDir("wrapper-signal");
+  const ready = join(root, "signal-ready");
+  const wrapper = spawn(
+    process.execPath,
+    [
+      SELFTEST_TMPDIR,
+      process.execPath,
+      "-e",
+      `process.on("SIGTERM", () => process.exit(0));
+require("node:fs").writeFileSync(${JSON.stringify(ready)}, "");
+setInterval(() => {}, 1000);`,
+    ],
+    { env: { ...process.env, TMPDIR: dir }, stdio: "ignore" },
+  );
+  const deadline = Date.now() + 10_000;
+  while (!existsSync(ready) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 20));
+  assert.ok(existsSync(ready), "the command started");
+  wrapper.kill("SIGTERM");
+  const [code] = await new Promise((resolve) =>
+    wrapper.on("exit", (...outcome) => resolve(outcome)),
+  );
+  assert.equal(code, 143);
+  assert.deepEqual(readdirSync(dir), []);
 });

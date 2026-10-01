@@ -61,7 +61,6 @@ export function normalizeCommand(options, log = console.log) {
   const scan = {
     forbiddenFileUsed: Boolean(options["forbidden-file"]),
     forbiddenEntries: forbidden.length,
-    forbiddenListSha256: createHash("sha256").update(forbidden.toSorted().join("\n")).digest("hex"),
   };
   forbidden.push(options.bucket, options.project);
   const recordings = options.run.map((directory) => readProductionRecording(resolve(directory)));

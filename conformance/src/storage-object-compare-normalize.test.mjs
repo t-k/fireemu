@@ -550,7 +550,7 @@ test("the origin of selfLink and mediaLink is masked, the path and the query are
         other: `${origin}/kept`,
       }),
       "application/json",
-      ctx(),
+      Object.assign(ctx(), { requestOrigin: origin }),
     ).value;
   const production = link("https://www.googleapis.com", "a.bin");
   assert.equal(production.selfLink, "<ORIGIN>/storage/v1/b/<BUCKET>/o/a.bin");
@@ -566,4 +566,69 @@ test("the origin of selfLink and mediaLink is masked, the path and the query are
   assert.ok(
     NORMALIZATIONS.some((row) => row.id === "ORIGIN" && /path and the query/.test(row.reason)),
   );
+});
+
+test("the layout of a body with a member the recorder hashed is not judged", () => {
+  const hashed = `sha256:${"a".repeat(64)}`;
+  const stored = Buffer.from(`{"refreshToken":"${hashed}","idToken":"x"}`);
+  // 71 characters of hash stand for a longer or shorter token: the difference is not whitespace.
+  assert.equal(layoutOverhead({ bodyBytes: stored.length + 202, body: stored }), null);
+  assert.equal(layoutOverhead({ bodyBytes: stored.length - 26, body: stored }), null);
+  // One digit short is not that form; a plain body keeps its figure.
+  const near = Buffer.from(`{"refreshToken":"sha256:${"a".repeat(63)}"}`);
+  assert.equal(layoutOverhead({ bodyBytes: near.length + 5, body: near }), 5);
+  assert.equal(layoutOverhead({ bodyBytes: 12, body: Buffer.from("{}") }), 10);
+  const row = normalizeExchange(
+    {
+      method: "POST",
+      url: `https://x.example/v1/accounts:signUp`,
+      status: 200,
+      headers: { "content-type": "application/json" },
+      body: stored,
+      bodyBytes: stored.length + 202,
+    },
+    ctx(),
+  );
+  assert.equal(row.layout, null);
+});
+
+test("the origin of a link is masked only when it is the expected one: the production host of that member or the host the request went to", () => {
+  const exchange = (url, self, media) => {
+    const c = ctx();
+    return normalizeExchange(
+      {
+        method: "GET",
+        url,
+        status: 200,
+        headers: { "content-type": "application/json" },
+        body: Buffer.from(
+          JSON.stringify({
+            selfLink: `${self}/storage/v1/b/${BUCKET}/o/a.bin`,
+            mediaLink: `${media}/download/storage/v1/b/${BUCKET}/o/a.bin?alt=media`,
+          }),
+        ),
+      },
+      c,
+    ).body.value;
+  };
+  const production = exchange(
+    `https://storage.googleapis.com/storage/v1/b/${BUCKET}/o/a.bin`,
+    "https://www.googleapis.com",
+    "https://storage.googleapis.com",
+  );
+  const local = exchange(
+    `http://127.0.0.1:9199/storage/v1/b/${BUCKET}/o/a.bin`,
+    "http://127.0.0.1:9199",
+    "http://127.0.0.1:9199",
+  );
+  assert.deepEqual(local, production);
+  assert.match(production.selfLink, /^<ORIGIN>\/storage/);
+  // fireemu swapping production's two hosts is not hidden.
+  const swapped = exchange(
+    `http://127.0.0.1:9199/storage/v1/b/${BUCKET}/o/a.bin`,
+    "https://storage.googleapis.com",
+    "https://www.googleapis.com",
+  );
+  assert.notDeepEqual(swapped, production);
+  assert.equal(swapped.selfLink, `https://storage.googleapis.com/storage/v1/b/<BUCKET>/o/a.bin`);
 });

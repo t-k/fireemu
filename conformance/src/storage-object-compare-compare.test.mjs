@@ -393,3 +393,38 @@ test("a later stand-in answer after the taint stays LOCAL_UNIMPLEMENTED", () => 
     "LOCAL_UNIMPLEMENTED",
   ]);
 });
+
+test("a stand-in answer whose body disagrees with production in an object's state taints the rest; a difference in a server's own format does not", () => {
+  const stand = {
+    "content-type": "application/json; charset=UTF-8",
+    "cache-control": "private",
+    [STANDIN_HEADER]: "1",
+  };
+  const object = (extra) => ({
+    type: "json",
+    value: { name: "x", metageneration: "2", metadata: { a: "1" }, ...extra },
+  });
+  const run = (production, local) =>
+    outcomes(
+      compareRecipe({
+        production: [row(1, { body: production }), row(2)],
+        local: [row(1, { body: local, headers: stand }), row(2)],
+      }),
+    );
+  const base = object({ generation: "<GEN:1>", etag: "<ETAG:1>" });
+  // Formats of the server that answered: the object is in the state production had.
+  assert.deepEqual(run(base, object({ generation: "1", etag: '"1-1"' })), [
+    "LOCAL_UNIMPLEMENTED",
+    "MATCH",
+  ]);
+  for (const state of [
+    { metageneration: "3" },
+    { metadata: { a: "2" } },
+    { contentType: "text/plain" },
+    { size: "9" },
+  ])
+    assert.deepEqual(run(base, object({ generation: "<GEN:1>", etag: "<ETAG:1>", ...state })), [
+      "LOCAL_UNIMPLEMENTED",
+      "TAINTED",
+    ]);
+});

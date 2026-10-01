@@ -616,7 +616,7 @@ test("an argument without a value, or without --, is refused with its name", () 
   assert.match(cli("unknown").stderr, /usage/);
 });
 
-test("the index records what the scan was given: whether a private list was used, how many entries, and its digest", () => {
+test("the index records what the scan was given: whether a private list was used and how many entries (no digest: a hash of a small list can be guessed)", () => {
   const file = join(mkdtempSync(join(tmpdir(), "compare-forbidden-")), "forbidden.txt");
   writeFileSync(file, "ALPHA\nBETA\n\n  GAMMA  \n");
   const used = options([productionDirectory(RUN1)], { "forbidden-file": file });
@@ -624,7 +624,6 @@ test("the index records what the scan was given: whether a private list was used
   assert.deepEqual(index.scan, {
     forbiddenFileUsed: true,
     forbiddenEntries: 3,
-    forbiddenListSha256: createHash("sha256").update("ALPHA\nBETA\nGAMMA").digest("hex"),
   });
   assert.deepEqual(JSON.parse(readFileSync(join(used.out, "index.json"), "utf8")).scan, index.scan);
   assert.equal(
@@ -636,7 +635,6 @@ test("the index records what the scan was given: whether a private list was used
   assert.deepEqual(none.scan, {
     forbiddenFileUsed: false,
     forbiddenEntries: 0,
-    forbiddenListSha256: createHash("sha256").update("").digest("hex"),
   });
 });
 

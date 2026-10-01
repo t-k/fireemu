@@ -50,7 +50,7 @@
     {
       "id": "ORIGIN",
       "mask": "<ORIGIN>",
-      "reason": "the selfLink and mediaLink members point at the server that answered: production at www.googleapis.com and storage.googleapis.com, a local run at its own address, by design. Only scheme://host:port is masked; the path and the query are compared exactly"
+      "reason": "the selfLink and mediaLink members point at the server that answered: production at www.googleapis.com (selfLink) and storage.googleapis.com (mediaLink), a local run at its own address (the origin of the request), by design. Only that expected origin is masked, so a swap of the two production hosts still shows; the path and the query are compared exactly"
     },
     {
       "id": "PAGE_TOKEN",
@@ -320,8 +320,8 @@
       "file": "errors--authorization.json",
       "rows": 165,
       "digests": {
-        "056c7ca3a8c6daa38e0a": "c7df9d67adf5ed3b2205e6b7f8007bb9a1e03d5c0a6b250d0ffdd9669f75b1b2",
-        "202dd40ac90863add783": "c7df9d67adf5ed3b2205e6b7f8007bb9a1e03d5c0a6b250d0ffdd9669f75b1b2"
+        "056c7ca3a8c6daa38e0a": "bcb0cdcca051881c397e385d254d3783965fc9e17dc1c0e5363ad6e276b03247",
+        "202dd40ac90863add783": "bcb0cdcca051881c397e385d254d3783965fc9e17dc1c0e5363ad6e276b03247"
       }
     },
     {
@@ -329,15 +329,14 @@
       "file": "auth--firebase-id-token.json",
       "rows": 91,
       "digests": {
-        "056c7ca3a8c6daa38e0a": "cafc50e835883f06dbdf0be1027db5a800caa1a85c9df8994b6d764f7d48ca8f",
-        "202dd40ac90863add783": "cafc50e835883f06dbdf0be1027db5a800caa1a85c9df8994b6d764f7d48ca8f"
+        "056c7ca3a8c6daa38e0a": "2423fbc5622d8b315b6a75d768d77af77aa404829a02b14ede7e496e66823e85",
+        "202dd40ac90863add783": "2423fbc5622d8b315b6a75d768d77af77aa404829a02b14ede7e496e66823e85"
       }
     }
   ],
   "equivalentRecordings": true,
   "scan": {
     "forbiddenFileUsed": true,
-    "forbiddenEntries": 11,
-    "forbiddenListSha256": "c1daf0dfbd6d56dd056f67e19969e71cc9a75f8129526ca6389528f95ee6b97d"
+    "forbiddenEntries": 11
   }
 }

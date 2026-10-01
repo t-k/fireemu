@@ -47,8 +47,8 @@ bytes, a quoted md5 etag) are compared exactly.
 The fixture is built from private run directories that are never committed. `scan.mjs` refuses to
 write anything that carries a credential, a project number, an unmasked run value, an email outside
 `example.com`, or an identifier from the private list given with `--forbidden-file` (inline base64
-bodies are decoded and scanned too). The index records that the list was used, its entry count and
-its digest, not the path or the entries.
+bodies are decoded and scanned too). The index records that the list was used, its entry count (not a
+digest of it: a hash of a short list can be guessed), not the path or the entries.
 
 ## Commands
 

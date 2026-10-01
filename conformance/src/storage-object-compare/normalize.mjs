@@ -59,7 +59,7 @@ export const NORMALIZATIONS = Object.freeze([
     id: "ORIGIN",
     mask: "<ORIGIN>",
     reason:
-      "the selfLink and mediaLink members point at the server that answered: production at www.googleapis.com and storage.googleapis.com, a local run at its own address, by design. Only scheme://host:port is masked; the path and the query are compared exactly",
+      "the selfLink and mediaLink members point at the server that answered: production at www.googleapis.com (selfLink) and storage.googleapis.com (mediaLink), a local run at its own address (the origin of the request), by design. Only that expected origin is masked, so a swap of the two production hosts still shows; the path and the query are compared exactly",
   },
   {
     id: "PAGE_TOKEN",
@@ -125,6 +125,7 @@ export function createContext({ runId, bucket, project, contentCarriesRun = fals
     bucket,
     project,
     contentCarriesRun,
+    requestOrigin: null,
     generations: new Map(),
     tokens: new Map(),
     etags: new Map(),
@@ -211,7 +212,12 @@ const EPOCH_MEMBERS = new Set([
   "expirationTime",
 ]);
 const DIGEST_MEMBERS = new Set(["md5Hash", "crc32c"]);
-const ORIGIN_MEMBERS = new Set(["selfLink", "mediaLink"]);
+// The origin each link member has in production. A local run points at its own origin, the one the
+// request was sent to; any other origin (a swap of the two production hosts, say) is kept and shows.
+const PRODUCTION_ORIGINS = new Map([
+  ["selfLink", "https://www.googleapis.com"],
+  ["mediaLink", "https://storage.googleapis.com"],
+]);
 const ORIGIN_PREFIX = /^[a-z][a-z0-9+.-]*:\/\/[^/?#]*/i;
 
 function maskJson(value, ctx, key = "", parent = "") {
@@ -234,7 +240,12 @@ function maskJson(value, ctx, key = "", parent = "") {
   if (typeof value === "string") {
     if (SECRET_MEMBERS.has(key)) return SECRET_MEMBERS.get(key);
     if (ctx.contentCarriesRun && DIGEST_MEMBERS.has(key)) return "<DIGEST>";
-    if (ORIGIN_MEMBERS.has(key)) return maskText(value, ctx).replace(ORIGIN_PREFIX, "<ORIGIN>");
+    if (PRODUCTION_ORIGINS.has(key)) {
+      const masked = maskText(value, ctx);
+      const origin = ORIGIN_PREFIX.exec(masked)?.[0];
+      const expected = origin === PRODUCTION_ORIGINS.get(key) || origin === ctx.requestOrigin;
+      return expected ? `<ORIGIN>${masked.slice(origin.length)}` : masked;
+    }
     if (key === "etag")
       return OPAQUE_ETAG.test(value) ? maskEtag(value, ctx) : maskText(value, ctx);
     return maskText(value, ctx);
@@ -290,13 +301,19 @@ export function routeOf(method, pathname) {
   return `${method} ${path.replace(/^(\/(?:storage\/v1|v0)\/b\/<BUCKET>\/o)\/.+$/, "$1/<NAME>")}`;
 }
 
+const HASHED_MEMBER = /sha256:[0-9a-f]{64}/;
+
 /**
  * The bytes of the body as sent, beyond the stored form: the recorder stores a JSON body re-serialized
  * compactly, and keeps the length it received in `bodyBytes`. The difference is the layout
- * (whitespace) production used; it is null when the length is not known.
+ * (whitespace) production used; it is null when the length is not known or the stored body holds a value the recorder hashed.
  */
 export function layoutOverhead(exchange) {
   if (!Number.isSafeInteger(exchange.bodyBytes)) return null;
+  // The recorder replaces some members (refresh and access tokens) with `sha256:` and 64 hex digits
+  // before it stores the body, so the stored length is not the compact length of what was sent and
+  // the difference is not whitespace: the layout of such a row cannot be judged.
+  if (HASHED_MEMBER.test(exchange.body?.toString("latin1") ?? "")) return null;
   return exchange.bodyBytes - (exchange.body?.length ?? 0);
 }
 
@@ -307,6 +324,7 @@ export function layoutOverhead(exchange) {
  */
 export function normalizeExchange(exchange, ctx) {
   const url = new URL(exchange.url);
+  ctx.requestOrigin = url.origin;
   const pathname = maskText(decodeURIComponent(url.pathname), ctx);
   const queryValue = (key, value) => {
     if (key === "pageToken") return "<PAGE_TOKEN>";

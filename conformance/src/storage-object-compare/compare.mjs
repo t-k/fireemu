@@ -131,6 +131,19 @@ export function differences(production, local) {
 
 export const STANDIN_HEADER = "x-compare-standin";
 
+// The members of an object resource that an update changes. A stand-in answer that differs from
+// production in one of them (or in the status) has left the object in another state. The generation,
+// the etag, the id and the links are formats of the server that answered, not state.
+const STATE_MEMBERS =
+  /^\$\.(metageneration|metadata|contentType|contentEncoding|contentDisposition|contentLanguage|cacheControl|size|crc32c|md5Hash)(?!\w)/;
+
+function standInDisagrees(production, local) {
+  if (local.status !== production.status) return true;
+  return differences(production, local).some(
+    (diff) => diff.kind === "body" && STATE_MEMBERS.test(diff.path ?? ""),
+  );
+}
+
 /**
  * Compare one recipe. `production` and `local` are lists of normalized exchanges. An exchange the
  * local side answered 501 to (and production did not), or that the rehearsal's stand-in answered,
@@ -157,7 +170,7 @@ export function compareRecipe({ production, local }) {
         };
         // A stand-in answer that disagrees with production leaves the object in another state: what
         // follows in this recipe says nothing about fireemu.
-        if (standIn && local[j].status !== production[i].status) tainted = true;
+        if (standIn && standInDisagrees(production[i], local[j])) tainted = true;
         results.push(result);
         continue;
       }

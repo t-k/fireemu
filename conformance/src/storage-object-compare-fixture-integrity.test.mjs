@@ -177,13 +177,20 @@ test("times keep their format: millisecond fractions in every recorded time, and
   assert.ok(/"passwordUpdatedAt":"<EPOCH:number:13>"/.test(text));
 });
 
-test("the index records the scan: a private list was used, with its entry count and digest, and no path", () => {
+test("the index records the scan: a private list was used, with its entry count only, no digest and no path", () => {
   assert.equal(fixture.index.scan.forbiddenFileUsed, true);
   assert.ok(fixture.index.scan.forbiddenEntries >= 1);
-  assert.match(fixture.index.scan.forbiddenListSha256, /^[0-9a-f]{64}$/);
   assert.deepEqual(Object.keys(fixture.index.scan).toSorted(), [
     "forbiddenEntries",
     "forbiddenFileUsed",
-    "forbiddenListSha256",
   ]);
+});
+
+test("exactly the four rows whose stored body holds a recorder-hashed member have no layout", () => {
+  const unjudged = [];
+  for (const [recipeId, rows] of fixture.recipes)
+    for (const row of rows) if (row.layout === null) unjudged.push(`${recipeId}#${row.n}`);
+  assert.equal(unjudged.length, 4, unjudged.join(" "));
+  for (const entry of unjudged)
+    assert.match(entry, /^storage-object\/(auth\/firebase-id-token|errors\/authorization)#/);
 });

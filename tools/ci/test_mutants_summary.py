@@ -434,7 +434,8 @@ class MergeTest(unittest.TestCase):
     def test_a_listed_mutant_without_a_name_is_a_problem(self):
         write_shard(self.root, 0, [mutant("a", "CaughtMutant")], listed=[{"nom": "a"}])
         merged = summary.merge(self.root, 1)
-        self.assertTrue(any("without a name" in problem for problem in merged["problems"]), merged["problems"])
+        (problem,) = merged["problems"]
+        self.assertIn("1 entries without a name", problem)
 
     def test_the_names_are_compared_as_a_multiset_so_a_repeated_mutant_must_repeat(self):
         write_shard(
@@ -446,12 +447,13 @@ class MergeTest(unittest.TestCase):
         self.assertEqual((merged["total"], merged["caught"], merged["missed"]), (2, 1, 1))
 
     def test_a_long_list_of_differences_is_cut_and_every_name_is_cleaned(self):
-        outcomes = [mutant(f"x{i}\x1b[2J", "CaughtMutant") for i in range(30)]
-        write_shard(self.root, 0, outcomes, listed=[{"name": f"y{i}"} for i in range(30)])
+        outcomes = [mutant(f"x{i}\x1b[2J" + "p" * 70, "CaughtMutant") for i in range(30)]
+        write_shard(self.root, 0, outcomes, listed=[{"name": f"y{i}" + "q" * 70} for i in range(30)])
         merged = summary.merge(self.root, 1)
         (problem,) = merged["problems"]
         self.assertNotIn("\x1b", problem)
-        self.assertLess(len(problem), 900)
+        self.assertIn("(30 in all)", problem)
+        self.assertLess(len(problem), 1500)
 
     def test_a_shard_with_an_end_time_but_too_few_outcomes_adds_nothing_to_the_totals(self):
         write_shard(
@@ -469,6 +471,16 @@ class MergeTest(unittest.TestCase):
         self.assertEqual(len(merged["problems"]), 1)
         self.assertEqual((merged["total"], merged["caught"], merged["missed"]), (2, 1, 1))
         self.assertEqual(merged["other"], {})
+
+    def test_equal_sets_of_names_with_different_repeats_do_not_match(self):
+        write_shard(
+            self.root, 0,
+            [mutant("a", "CaughtMutant"), mutant("b", "CaughtMutant"), mutant("b", "CaughtMutant")],
+            listed=[{"name": "a"}, {"name": "a"}, {"name": "b"}],
+        )
+        merged = summary.merge(self.root, 1)
+        (problem,) = merged["problems"]
+        self.assertIn("do not match", problem)
 
 
 if __name__ == "__main__":

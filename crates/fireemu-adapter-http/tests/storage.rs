@@ -6123,7 +6123,9 @@ async fn the_preflight_of_the_privileged_rules_route_never_admits_put() {
 
 /// SETR-2, streaming half: the 256 KiB bound holds for a body that declares no length. The
 /// refusal has to arrive while the body is still being written, so the Storage port never
-/// buffers a rules body up to the object limit just because the client withheld a length.
+/// buffers a rules body up to the object limit just because the client withheld a length. What
+/// the client keeps sending after the refusal is read and thrown away (so that the answer is
+/// not lost to a reset), never kept.
 #[tokio::test]
 async fn an_undeclared_set_rules_body_is_cut_off_at_the_control_port_limit() {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -6175,31 +6177,60 @@ async fn an_undeclared_set_rules_body_is_cut_off_at_the_control_port_limit() {
         )
         .await
         .unwrap();
+    let (mut reader, mut writer) = stream.into_split();
+    // The answer is read while the body is still being written: the refusal must not wait for
+    // the end of the body.
+    let (status_tx, status_rx) = tokio::sync::oneshot::channel::<String>();
+    let reading = tokio::spawn(async move {
+        let mut answer = Vec::new();
+        let mut status_tx = Some(status_tx);
+        let mut buf = [0_u8; 4096];
+        loop {
+            match reader.read(&mut buf).await {
+                Ok(n) if n > 0 => answer.extend_from_slice(&buf[..n]),
+                _ => break,
+            }
+            if answer.len() >= 12 {
+                if let Some(tx) = status_tx.take() {
+                    let _ = tx.send(String::from_utf8_lossy(&answer).into_owned());
+                }
+            }
+        }
+        String::from_utf8_lossy(&answer).into_owned()
+    });
     let chunk = vec![b' '; 16 * 1024];
     let header = format!("{:x}\r\n", chunk.len());
-    let mut written = 0usize;
-    for _ in 0..CHUNKS {
-        if stream.write_all(header.as_bytes()).await.is_err()
-            || stream.write_all(&chunk).await.is_err()
-            || stream.write_all(b"\r\n").await.is_err()
-        {
-            break;
+    async fn write_chunks(
+        writer: &mut tokio::net::tcp::OwnedWriteHalf,
+        header: &str,
+        chunk: &[u8],
+        count: usize,
+    ) {
+        for _ in 0..count {
+            writer.write_all(header.as_bytes()).await.unwrap();
+            writer.write_all(chunk).await.unwrap();
+            writer.write_all(b"\r\n").await.unwrap();
         }
-        written += 1;
     }
-    let _ = stream.write_all(b"0\r\n\r\n").await;
-    // The refusal closes the connection with the request body still arriving, so the client
-    // may see the response or a reset; what must hold is that the server stopped reading.
-    let mut answer = Vec::new();
-    let _ = stream.read_to_end(&mut answer).await;
-    let answer = String::from_utf8_lossy(&answer).into_owned();
+    // 128 chunks are 2 MiB: eight times the bound, a quarter of what the client is willing to send.
+    write_chunks(&mut writer, &header, &chunk, 128).await;
+    let early = tokio::time::timeout(std::time::Duration::from_secs(10), status_rx)
+        .await
+        .expect("the refusal arrives while the body is still being sent")
+        .expect("the answer is read");
     assert!(
-        answer.is_empty() || answer.starts_with("HTTP/1.1 413"),
-        "an undeclared oversized rules body must be refused: {answer}"
+        early.starts_with("HTTP/1.1 413"),
+        "an undeclared oversized rules body must be refused: {early}"
     );
+    // The rest of the body is read and thrown away, never buffered: the client can finish it, and
+    // the connection then ends cleanly.
+    write_chunks(&mut writer, &header, &chunk, CHUNKS - 128).await;
+    let _ = writer.write_all(b"0\r\n\r\n").await;
+    let _ = writer.shutdown().await;
+    let answer = reading.await.unwrap();
     assert!(
-        written < 128,
-        "the refusal must arrive while the body is still arriving, not after 8 MiB was buffered (wrote {written} of {CHUNKS} chunks)"
+        answer.starts_with("HTTP/1.1 413"),
+        "an undeclared oversized rules body must be refused: {answer}"
     );
     assert_eq!(
         anonymous_multipart_upload(&shared, "chunked.txt").status,

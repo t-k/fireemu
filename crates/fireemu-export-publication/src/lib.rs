@@ -17,6 +17,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 #[cfg(target_os = "macos")]
 mod acl;
+#[cfg(target_os = "macos")]
+mod volume;
 
 #[cfg(unix)]
 static NEXT_STAGE_ID: AtomicU64 = AtomicU64::new(1);
@@ -247,6 +249,9 @@ fn trusted_canonical_parent(parent: &Path) -> Result<PathBuf, String> {
                 ancestor.display()
             )
         })?;
+        // Before the owner and the mode are trusted: on a volume that ignores ownership they mean nothing.
+        #[cfg(target_os = "macos")]
+        volume::require_ownership(ancestor, &volume::mount_of)?;
         let mode = metadata.mode();
         if metadata.uid() != 0 && metadata.uid() != effective_uid {
             return Err(format!(
@@ -367,12 +372,53 @@ fn atomic_publish(
         rustix::fs::RenameFlags::NOREPLACE
     };
     rustix::fs::renameat_with(rustix::fs::CWD, stage, rustix::fs::CWD, target, flags)
-        .map_err(|error| format!("atomic export publication is unavailable or failed: {error}"))
+        .map_err(publication_error)
+}
+
+/// The message of a refused atomic rename. A volume that lacks the rename flags (exFAT, FAT, some
+/// network filesystems) answers `ENOTSUP`; the message then says why and what to do.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn publication_error(error: rustix::io::Errno) -> String {
+    if error == rustix::io::Errno::NOTSUP || error == rustix::io::Errno::OPNOTSUPP {
+        format!(
+            "atomic export publication is unavailable or failed: {error}; this volume does not support atomic directory rename, so export to a directory on an APFS volume (macOS) or on a local filesystem that supports it"
+        )
+    } else {
+        format!("atomic export publication is unavailable or failed: {error}")
+    }
 }
 
 #[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
 mod tests {
-    use super::{atomic_publish, target_identity, verify_displaced_target_or_rollback};
+    use super::{
+        atomic_publish, publication_error, target_identity, verify_displaced_target_or_rollback,
+    };
+
+    #[test]
+    fn an_unsupported_rename_names_the_volume_and_the_way_out() {
+        for error in [rustix::io::Errno::NOTSUP, rustix::io::Errno::OPNOTSUPP] {
+            let message = publication_error(error);
+            assert!(
+                message.contains("does not support atomic directory rename"),
+                "{message}"
+            );
+            assert!(message.contains("APFS"), "{message}");
+            assert!(
+                message.starts_with("atomic export publication is unavailable or failed"),
+                "{message}"
+            );
+        }
+    }
+
+    #[test]
+    fn any_other_rename_failure_keeps_the_plain_message() {
+        let message = publication_error(rustix::io::Errno::EXIST);
+        assert!(
+            message.starts_with("atomic export publication is unavailable or failed"),
+            "{message}"
+        );
+        assert!(!message.contains("does not support"), "{message}");
+    }
 
     #[test]
     fn a_post_check_identity_race_is_atomically_rolled_back() {

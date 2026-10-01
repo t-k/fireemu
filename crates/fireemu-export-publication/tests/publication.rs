@@ -438,31 +438,30 @@ fn an_inherited_deny_delete_does_not_break_the_stage_or_its_publication() {
     assert!(leftovers.is_empty(), "{leftovers:?}");
 }
 
-/// An exFAT disk image mounted below `dir` (a stand-in for a USB stick or an SD card), detached on drop.
-/// exFAT cannot hold an ACL: `setfacl` there fails with ENOTSUP, and nothing can be inherited.
+/// A disk image mounted below `dir` (a stand-in for a USB stick, an SD card or an external drive),
+/// detached on drop. `owners` is `hdiutil attach -owners`: off mounts the volume with ownership
+/// ignored (`MNT_IGNORE_OWNERSHIP`), which is what exFAT and a "no ownership" external APFS volume are.
 #[cfg(target_os = "macos")]
-struct ExfatVolume {
+struct Volume {
     mount: PathBuf,
 }
 
 #[cfg(target_os = "macos")]
-impl ExfatVolume {
+impl Volume {
     /// `None` when `hdiutil` cannot be run at all (the test then says so and passes vacuously).
-    fn attach(dir: &Path) -> Option<Self> {
+    fn attach(dir: &Path, fs: &str, owners: bool) -> Option<Self> {
         use std::process::Command;
 
         let image = dir.join("volume.dmg");
         let mount = dir.join("volume");
         let created = match Command::new("hdiutil")
-            .args([
-                "create", "-size", "16m", "-fs", "ExFAT", "-volname", "FIREEMU",
-            ])
+            .args(["create", "-size", "16m", "-fs", fs, "-volname", "FIREEMU"])
             .arg(&image)
             .output()
         {
             Ok(output) => output,
             Err(error) => {
-                eprintln!("SKIPPED: hdiutil cannot be run ({error}); the exFAT case is not tested");
+                eprintln!("SKIPPED: hdiutil cannot be run ({error}); the {fs} case is not tested");
                 return None;
             }
         };
@@ -473,7 +472,13 @@ impl ExfatVolume {
         );
         create_private_dir(&mount);
         let attached = Command::new("hdiutil")
-            .args(["attach", "-nobrowse", "-mountpoint"])
+            .args([
+                "attach",
+                "-nobrowse",
+                "-owners",
+                if owners { "on" } else { "off" },
+            ])
+            .arg("-mountpoint")
             .arg(&mount)
             .arg(&image)
             .output()
@@ -488,7 +493,7 @@ impl ExfatVolume {
 }
 
 #[cfg(target_os = "macos")]
-impl Drop for ExfatVolume {
+impl Drop for Volume {
     fn drop(&mut self) {
         let _ = std::process::Command::new("hdiutil")
             .args(["detach", "-force"])
@@ -497,50 +502,65 @@ impl Drop for ExfatVolume {
     }
 }
 
-/// A volume without ACL support (a USB stick, an SD card) must not be refused over the ACL: `setfacl`
-/// fails there with ENOTSUP, but the stage is checked afterwards and holds no ACL, so nothing was
-/// inherited and the stage is made. (exFAT has no atomic rename either, so publication there still
-/// fails with its own, older refusal: the ACL check must not be what stops it.)
+/// An export onto a volume that ignores ownership is refused before anything is written: the owner
+/// and the mode of its directories say nothing about who can change them.
 #[cfg(target_os = "macos")]
-#[test]
-fn a_volume_without_acl_support_is_not_refused_over_its_acl() {
-    let root = TestRoot::new("acl-exfat");
-    let Some(volume) = ExfatVolume::attach(&root.0) else {
+fn assert_refused_for_ignoring_ownership(fs: &str) {
+    let root = TestRoot::new("ownership-ignored");
+    let Some(volume) = Volume::attach(&root.0, fs, false) else {
         return;
     };
     let parent = volume.mount.join("private-parent");
     create_private_dir(&parent);
-    // The premise: this volume cannot clear an ACL, so an unconditional clear failed here.
-    let premise = exacl::setfacl(&[&parent], &[], None).expect_err("exFAT refuses setfacl");
+    let error = PublicationStage::create(&parent.join("export"), |_| Ok(())).unwrap_err();
+    assert!(error.contains("ignores ownership"), "{error}");
     assert!(
-        premise.to_string().contains("not supported"),
-        "the premise: {premise}"
-    );
-    let target = parent.join("export");
-    let stage = PublicationStage::create(&target, |_| Ok(())).expect("an ACL-less volume works");
-    assert_eq!(
-        exacl::getfacl(stage.root(), None).unwrap_or_default(),
-        Vec::new(),
-        "the stage holds no ACL"
-    );
-    write(stage.root(), "marker", "exported");
-    let error = stage.complete().publish().unwrap_err();
-    assert!(
-        error.contains("atomic export publication is unavailable or failed"),
+        error.contains("choose a destination on a volume that enforces it"),
         "{error}"
     );
-    assert!(!error.contains("ACL"), "{error}");
-    let leftovers: Vec<_> = std::fs::read_dir(&parent)
-        .unwrap()
-        .flatten()
-        .filter(|entry| {
-            entry
-                .file_name()
-                .to_string_lossy()
-                .contains("fireemu-stage")
-        })
-        .collect();
-    assert!(leftovers.is_empty(), "{leftovers:?}");
+    let mount_point = std::fs::canonicalize(&volume.mount).expect("resolve the mount point");
+    assert!(
+        error.contains(&mount_point.display().to_string()),
+        "{error}"
+    );
+    let leftovers: Vec<_> = std::fs::read_dir(&parent).unwrap().flatten().collect();
+    assert!(leftovers.is_empty(), "nothing is created: {leftovers:?}");
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn an_apfs_volume_that_ignores_ownership_is_refused() {
+    assert_refused_for_ignoring_ownership("APFS");
+}
+
+/// exFAT cannot hold an ACL and has no atomic rename, and is always mounted without ownership: it is
+/// refused at the first ancestor, before either matters. (Mounted with `-owners on` its root belongs to
+/// an unknown uid, which an unprivileged test cannot write to, so the ACL-less case is covered by the
+/// `acl` unit tests that pass the system calls in.)
+#[cfg(target_os = "macos")]
+#[test]
+fn an_exfat_volume_mounted_without_ownership_is_refused() {
+    assert_refused_for_ignoring_ownership("ExFAT");
+}
+
+/// An APFS volume that enforces ownership takes an export and publishes it.
+#[cfg(target_os = "macos")]
+#[test]
+fn an_apfs_volume_that_enforces_ownership_takes_an_export() {
+    let root = TestRoot::new("ownership-enforced");
+    let Some(volume) = Volume::attach(&root.0, "APFS", true) else {
+        return;
+    };
+    let parent = volume.mount.join("private-parent");
+    create_private_dir(&parent);
+    let target = parent.join("export");
+    let stage = PublicationStage::create(&target, |_| Ok(())).expect("ownership is enforced here");
+    write(stage.root(), "marker", "exported");
+    stage.complete().publish().expect("the stage is published");
+    assert_eq!(
+        std::fs::read_to_string(target.join("marker")).unwrap(),
+        "exported"
+    );
 }
 
 /// The owner and root hold their rights anyway: their entries, named by the system's user database,

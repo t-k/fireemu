@@ -831,12 +831,10 @@ impl ListingTrie {
             .entry(document.clone())
             .or_default();
         node.retained_subtree_paths += 1;
-        // A representative outlives the removal of its own path. When that path returns,
-        // take the new allocation so the old one is freed; the value is the same.
-        match &node.representative {
-            Some(representative) if representative.as_ref() != path.as_ref() => {}
-            _ => node.representative = Some(Arc::clone(path)),
-        }
+        // A representative only names this prefix, which every path below it shares, so the
+        // newest path serves. Taking it also frees a representative that outlived its own
+        // path once that path returns with a new allocation.
+        node.representative = Some(Arc::clone(path));
         if rest.is_empty() {
             node.retained_here = Some(Arc::clone(path));
         } else {
@@ -6674,6 +6672,47 @@ mod scope_index_tests {
             scope_path_sharing_violations(&state.visible_snapshot()),
             Vec::<String>::new()
         );
+    }
+
+    #[test]
+    fn a_returning_representative_path_takes_its_new_allocation() {
+        // Both creation orders, so the returning path is the first and then the last one
+        // the root/a prefix saw before it left.
+        for (first, second) in [
+            ("root/a/children/x", "root/a/children/y"),
+            ("root/a/children/y", "root/a/children/x"),
+        ] {
+            let mut state = FirestoreState::new();
+            state
+                .commit(&[set(first)], None, LogicalInstant::UNIX_EPOCH)
+                .expect("create the first path under root/a");
+            state
+                .commit(&[set(second)], None, LogicalInstant::from_unix_seconds(1))
+                .expect("create the second path under root/a");
+            state
+                .commit(
+                    &[delete("root/a/children/x")],
+                    None,
+                    LogicalInstant::from_unix_seconds(2),
+                )
+                .expect("delete x");
+            state.compact(LogicalInstant::from_unix_seconds(
+                READ_TIME_RETENTION_SECONDS + 3,
+            ));
+            assert!(!state.history.contains_key(&path("root/a/children/x")));
+            state
+                .commit(
+                    &[set("root/a/children/x")],
+                    None,
+                    LogicalInstant::from_unix_seconds(READ_TIME_RETENTION_SECONDS + 4),
+                )
+                .expect("x returns as a new allocation");
+            assert_eq!(
+                scope_path_sharing_violations(&state),
+                Vec::<String>::new(),
+                "{first} created first"
+            );
+        }
     }
 
     #[test]

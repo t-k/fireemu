@@ -216,8 +216,8 @@ mod reference_glob {
                         let mut out = Vec::new();
                         for alternative in alternatives {
                             let mut joined = pattern[..i].to_vec();
-                            joined.extend(alternative);
-                            joined.extend_from_slice(&pattern[end..]);
+                            glue(&mut joined, &alternative);
+                            glue(&mut joined, &pattern[end..]);
                             out.extend(expand(&joined));
                         }
                         return out;
@@ -233,6 +233,15 @@ mod reference_glob {
             }
         }
         vec![pattern.to_vec()]
+    }
+
+    /// Appends `right` to `left`. Two stars that come from different syntactic places stay two
+    /// segment stars: a marker keeps them from reading as one `**` (`*{x,}*` is not `**`).
+    fn glue(left: &mut Vec<char>, right: &[char]) {
+        if left.last() == Some(&'*') && right.first() == Some(&'*') {
+            left.push('\u{1}');
+        }
+        left.extend_from_slice(right);
     }
 
     fn set_end(pattern: &[char], start: usize) -> Option<usize> {
@@ -311,6 +320,7 @@ mod reference_glob {
                     out.push(Element::One);
                     i += 1;
                 }
+                '\u{1}' => i += 1,
                 '[' => match set_end(pattern, i) {
                     Some(end) => {
                         let mut at = i + 1;
@@ -452,6 +462,11 @@ fn glob_constructs_match_as_documented() {
         ("abcd**e", "abcdX", false),
         ("a**b**c", "a/x/b/y/c", true),
         ("a***b", "a/b", true),
+        ("*{x,}*", "/", false),
+        ("*{x,}*", "x", true),
+        ("*{x,}*", "", true),
+        ("{a,}*", "/", false),
+        ("*{,a}", "/", false),
         ("[a-c]", "b", true),
         ("[a-c]", "d", false),
         ("[a-c0-9]", "5", true),

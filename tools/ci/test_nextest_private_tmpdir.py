@@ -105,6 +105,8 @@ class WrapperTest(unittest.TestCase):
         unprefixed.mkdir()
         long_suffix = self.root / f"run-{dead.pid}.keepme1"
         long_suffix.mkdir()
+        not_a_pid = self.root / "run-notapid.AAAAAA"
+        not_a_pid.mkdir()
         foreign = self.root / "not-a-wrapper-dir"
         foreign.mkdir()
         bare_pid = self.root / str(dead.pid)
@@ -120,6 +122,7 @@ class WrapperTest(unittest.TestCase):
         self.assertTrue(bare_pid.exists(), "a bare number is not a name the wrapper makes")
         self.assertTrue(unprefixed.exists(), "nor is a pid without the run- prefix")
         self.assertTrue(long_suffix.exists(), "nor a suffix mktemp does not make")
+        self.assertTrue(not_a_pid.exists(), "nor a name without a pid")
         self.assertTrue(link.is_symlink(), "a symbolic link is left alone")
         self.assertTrue((outside / "kept").is_dir(), "and so is what it points to")
 

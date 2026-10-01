@@ -21,6 +21,33 @@ fn rfc3339(t: LogicalInstant) -> String {
         .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_owned())
 }
 
+/// An object timestamp as production writes it: RFC 3339 UTC with exactly three fractional
+/// digits, the extra ones cut and not rounded (recorded in the object resource of the Storage
+/// REST API and again in the object a finalize event carries, 2026-10-01:
+/// `2026-10-01T08:49:26.486Z`). The Storage REST writer applies the same rule.
+fn object_time(t: LogicalInstant) -> String {
+    let full = rfc3339(t);
+    let Some(seconds) = full.strip_suffix('Z') else {
+        return full;
+    };
+    let (whole, fraction) = seconds.split_once('.').unwrap_or((seconds, ""));
+    format!("{whole}.{fraction:0<3.3}Z")
+}
+
+/// The `time` of a Storage CloudEvent. Production's finalize event carries the object's
+/// creation instant with the microseconds it knows (`2026-10-01T08:49:26.486927Z`, while the
+/// object's own `timeCreated` shows `.486Z`), printed as protobuf JSON prints a `Timestamp`.
+/// The other kinds were not recorded; they keep the instant the runtime admitted the event, in
+/// the same form.
+fn storage_time(kind: ObjectEvent, object: &ObjectMetadata, admitted: LogicalInstant) -> String {
+    let instant = match kind {
+        ObjectEvent::Finalized => object.time_created,
+        _ => admitted,
+    };
+    let nanos = instant.as_nanos();
+    firestore_time(LogicalInstant::from_nanos(nanos - nanos.rem_euclid(1_000)))
+}
+
 /// A Firestore event's time as protobuf JSON prints a `Timestamp`: a fraction of zero, three,
 /// six or nine digits, whichever is the shortest that is exact (the rule `document_to_json`
 /// applies to a document's `createTime`). Production's Firestore create event carries its time
@@ -31,23 +58,42 @@ pub fn firestore_time(t: LogicalInstant) -> String {
     shorten_fraction(&rfc3339(t))
 }
 
+/// A deterministic stream of well-mixed 64-bit values derived from `seed` (FNV-1a over the seed
+/// bytes, then a splitmix64 step per value). Not cryptographic: the ids built from it only have
+/// to look like, and behave as, opaque unique identifiers.
+fn seeded_stream(seed: &str) -> impl FnMut() -> u64 {
+    let mut state = seed.bytes().fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| {
+        (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3)
+    });
+    state ^= (seed.len() as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15);
+    move || {
+        state = state.wrapping_add(0x9e37_79b9_7f4a_7c15);
+        let mut z = state;
+        z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+        z ^ (z >> 31)
+    }
+}
+
+/// A Storage event id as production prints it: a decimal string of seventeen digits (observed
+/// 2026-10-01 for a 1st gen `context.eventId` and a 2nd gen CloudEvent `id` of one object create;
+/// the two are unrelated numbers). Derived deterministically from `seed` so a recorded local run
+/// replays with the same ids. Other lengths were not recorded.
+#[must_use]
+pub fn storage_event_id(seed: &str) -> String {
+    const FIRST: u64 = 10_000_000_000_000_000;
+    const SPAN: u64 = 90_000_000_000_000_000;
+    let mut next = seeded_stream(seed);
+    (FIRST + next() % SPAN).to_string()
+}
+
 /// A UUID-shaped (version 4, variant 1) event id derived from `seed`. Production's Firestore
 /// events carry random UUIDs; the local ones must stay replayable, so the id is a fixed function
 /// of the session and the event counter that the runtime passes as the seed. The mixing is not
 /// cryptographic: the id only has to look like, and behave as, an opaque unique identifier.
 #[must_use]
 pub fn event_id_uuid(seed: &str) -> String {
-    let mut state = seed.bytes().fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| {
-        (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3)
-    });
-    state ^= (seed.len() as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15);
-    let mut next = || {
-        state = state.wrapping_add(0x9e37_79b9_7f4a_7c15);
-        let mut z = state;
-        z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
-        z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
-        z ^ (z >> 31)
-    };
+    let mut next = seeded_stream(seed);
     let mut bytes = [next().to_be_bytes(), next().to_be_bytes()].concat();
     bytes[6] = (bytes[6] & 0x0f) | 0x40;
     bytes[8] = (bytes[8] & 0x3f) | 0x80;
@@ -168,9 +214,9 @@ pub fn object_json(m: &ObjectMetadata) -> Value {
         "md5Hash": m.md5_base64(),
         "crc32c": m.crc32c_base64(),
         "etag": m.etag(),
-        "timeCreated": rfc3339(m.time_created),
-        "updated": rfc3339(m.updated),
-        "timeStorageClassUpdated": rfc3339(m.time_created),
+        "timeCreated": object_time(m.time_created),
+        "updated": object_time(m.updated),
+        "timeStorageClassUpdated": object_time(m.time_created),
     });
     // Download tokens ride inside `metadata.firebaseStorageDownloadTokens`, and the member
     // is dropped when there is nothing to carry, exactly as the object resource is served.
@@ -210,7 +256,8 @@ fn percent_encode(s: &str) -> String {
     out
 }
 
-/// A Storage object event.
+/// A Storage object event. `id` seeds the event's seventeen-digit decimal `id`
+/// ([`storage_event_id`]); `time` is when the runtime admitted the event.
 #[must_use]
 pub fn storage_event(
     id: &str,
@@ -221,11 +268,11 @@ pub fn storage_event(
     let attrs = storage_attributes(object.bucket.as_str(), object.name.as_str(), kind);
     let mut event = json!({
         "specversion": "1.0",
-        "id": id,
+        "id": storage_event_id(id),
         "source": attrs.source,
         "subject": attrs.subject,
         "type": attrs.event_type,
-        "time": rfc3339(time),
+        "time": storage_time(kind, object, time),
         "datacontenttype": "application/json",
         "data": object_json(object),
     });
@@ -349,7 +396,10 @@ pub fn schedule_event(
 
 #[cfg(test)]
 mod tests {
-    use super::{event_id_uuid, firestore_time};
+    use super::{event_id_uuid, firestore_time, object_json, storage_event_id, storage_time};
+    use fireemu_core_functions::manifest::ObjectEvent;
+    use fireemu_core_storage::name::{BucketName, ObjectName};
+    use fireemu_core_storage::store::{NewMetadata, ObjectMetadata, Precondition, StorageState};
     use fireemu_core_types::time::LogicalInstant;
 
     fn at(seconds: i64, nanos: i128) -> LogicalInstant {
@@ -460,5 +510,104 @@ mod tests {
         let (a, b) = (event_id_uuid("7-1"), event_id_uuid("7-2"));
         let shared = a.chars().zip(b.chars()).take_while(|(x, y)| x == y).count();
         assert!(shared < 6, "{a} {b}");
+    }
+    #[test]
+    fn storage_event_id_is_a_seventeen_digit_decimal_string() {
+        for n in 1..=500 {
+            let id = storage_event_id(&format!("42-{n}"));
+            assert_eq!(id.len(), 17, "{id}");
+            assert!(id.bytes().all(|b| b.is_ascii_digit()), "{id}");
+            assert!(!id.starts_with('0'), "{id}");
+        }
+    }
+
+    #[test]
+    fn storage_event_id_is_deterministic_and_separates_neighbouring_seeds() {
+        assert_eq!(storage_event_id("42-1"), storage_event_id("42-1"));
+        let ids: Vec<String> = (1..=500)
+            .map(|n| storage_event_id(&format!("42-{n}")))
+            .collect();
+        let distinct: std::collections::BTreeSet<&String> = ids.iter().collect();
+        assert_eq!(distinct.len(), ids.len());
+        assert_ne!(storage_event_id("42-1"), storage_event_id("43-1"));
+        assert_ne!(storage_event_id("a-b"), storage_event_id("ab-"));
+    }
+
+    #[test]
+    fn storage_event_id_is_a_stable_function_of_the_seed() {
+        // Golden values: a recorded local run must replay with the same ids in every build.
+        // Cross-checked against an independent implementation of the same stream.
+        for (seed, expected) in [
+            ("42-1", "43358924905190503"),
+            ("42-2", "68188927818470329"),
+            ("", "57677454934409008"),
+            ("a", "75141593866473567"),
+        ] {
+            assert_eq!(storage_event_id(seed), expected, "seed {seed:?}");
+        }
+    }
+
+    fn object_created_at(nanos: i128) -> ObjectMetadata {
+        StorageState::new(1)
+            .put(
+                &BucketName::try_new("demo-app.appspot.com").unwrap(),
+                &ObjectName::try_new("a.txt").unwrap(),
+                b"abc".to_vec(),
+                NewMetadata::default(),
+                Precondition::default(),
+                LogicalInstant::from_nanos(nanos),
+            )
+            .unwrap()
+    }
+
+    const SECOND: i128 = 1_790_844_566 * 1_000_000_000;
+
+    #[test]
+    fn object_resource_times_have_exactly_three_fraction_digits_cut_not_rounded() {
+        // Production: `timeCreated` is `2026-10-01T08:49:26.486Z` for a creation at
+        // `...26.486927Z`.
+        for (nanos, expected) in [
+            (486_927_999, "2026-10-01T08:49:26.486Z"),
+            (486_000_000, "2026-10-01T08:49:26.486Z"),
+            (999_999_999, "2026-10-01T08:49:26.999Z"),
+            (5_000_000, "2026-10-01T08:49:26.005Z"),
+            (0, "2026-10-01T08:49:26.000Z"),
+        ] {
+            let json = object_json(&object_created_at(SECOND + nanos));
+            for key in ["timeCreated", "updated", "timeStorageClassUpdated"] {
+                assert_eq!(json[key], expected, "{key} at {nanos}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_finalize_event_time_is_the_creation_instant_to_the_microsecond() {
+        let admitted = LogicalInstant::from_nanos(SECOND + 577_000_000);
+        for (nanos, expected) in [
+            (486_927_000, "2026-10-01T08:49:26.486927Z"),
+            // The sub-microsecond digits are not known to the service and are cut.
+            (486_927_999, "2026-10-01T08:49:26.486927Z"),
+            (486_000_000, "2026-10-01T08:49:26.486Z"),
+            (0, "2026-10-01T08:49:26Z"),
+        ] {
+            let object = object_created_at(SECOND + nanos);
+            assert_eq!(
+                storage_time(ObjectEvent::Finalized, &object, admitted),
+                expected,
+                "{nanos}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_other_storage_kinds_keep_the_admission_instant_in_the_same_form() {
+        let object = object_created_at(SECOND + 486_927_000);
+        let admitted = LogicalInstant::from_nanos(SECOND + 577_123_456);
+        for kind in [ObjectEvent::Deleted, ObjectEvent::MetadataUpdated] {
+            assert_eq!(
+                storage_time(kind, &object, admitted),
+                "2026-10-01T08:49:26.577123Z"
+            );
+        }
     }
 }

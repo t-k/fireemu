@@ -2689,6 +2689,103 @@ fn a_firestore_create_event_matches_the_recorded_production_delivery() {
     );
 }
 
+/// The frames a production 1st and 2nd gen Cloud Storage onFinalize handler printed for one object
+/// create (recorded 2026-10-01). Each field of the `CloudEvent` the runtime builds for an object
+/// with the same bytes, name and times is compared with the recorded one; the `etag` and the
+/// `generation` forms are known divergences of the Storage surface, pinned here.
+#[test]
+fn a_storage_finalize_event_matches_the_recorded_production_delivery() {
+    let fixture: serde_json::Value = serde_json::from_str(include_str!(
+        "fixtures/production-storage-finalize-frames.json"
+    ))
+    .unwrap();
+    let gen2 = &fixture["gen2"];
+    let recorded = &gen2["data"];
+    let created = LogicalInstant::parse_rfc3339(gen2["time"].as_str().unwrap()).unwrap();
+    let delivered =
+        LogicalInstant::parse_rfc3339(fixture["gen1"]["context"]["timestamp"].as_str().unwrap())
+            .unwrap();
+    let mut store = StorageState::new(1);
+    let meta = store
+        .put(
+            &BucketName::try_new(recorded["bucket"].as_str().unwrap()).unwrap(),
+            &ObjectName::try_new(recorded["name"].as_str().unwrap()).unwrap(),
+            br#"{"probe":"fe-012-storage-probe"}"#.to_vec(),
+            NewMetadata {
+                content_type: Some("application/json".to_owned()),
+                ..NewMetadata::default()
+            },
+            Precondition::default(),
+            created,
+        )
+        .unwrap();
+    let event = storage_event("42-1", ObjectEvent::Finalized, &meta, delivered);
+    // The attributes production and the runtime agree on, the bucket extension included.
+    for key in ["type", "subject", "source", "specversion"] {
+        assert_eq!(event[key], gen2[key], "{key}");
+    }
+    assert_eq!(event["bucket"], gen2["extensionAttributes"]["bucket"]);
+    // The event time is the object's creation instant with the microseconds production prints,
+    // not the moment the runtime admitted the event.
+    assert_eq!(event["time"], gen2["time"]);
+    // Production ids are decimal strings of seventeen digits, a 1st gen one and a 2nd gen one
+    // unrelated to each other; they are neither UUIDs nor `<session>-<n>`.
+    let id = event["id"].as_str().unwrap();
+    for production in [
+        gen2["id"].as_str().unwrap(),
+        fixture["gen1"]["context"]["eventId"].as_str().unwrap(),
+    ] {
+        assert_eq!(production.len(), 17, "{production}");
+        assert!(
+            production.bytes().all(|b| b.is_ascii_digit()),
+            "{production}"
+        );
+    }
+    assert_eq!(id.len(), 17, "{id}");
+    assert!(id.bytes().all(|b| b.is_ascii_digit()), "{id}");
+    // The object resource: the same members; the bytes-derived values are the recorded ones.
+    let local = &event["data"];
+    let keys = |value: &serde_json::Value| -> Vec<String> {
+        value.as_object().unwrap().keys().cloned().collect()
+    };
+    assert_eq!(keys(local), keys(recorded));
+    for key in [
+        "bucket",
+        "contentType",
+        "crc32c",
+        "kind",
+        "md5Hash",
+        "name",
+        "size",
+        "storageClass",
+        "timeCreated",
+        "timeStorageClassUpdated",
+        "updated",
+        "selfLink",
+    ] {
+        assert_eq!(local[key], recorded[key], "{key}");
+    }
+    // The resource id and the media link carry the generation; production's generation is a
+    // microsecond timestamp, the local one a counter (known divergence of the Storage surface).
+    assert_eq!(
+        local["id"],
+        format!(
+            "{}/{}/{}",
+            recorded["bucket"].as_str().unwrap(),
+            recorded["name"].as_str().unwrap(),
+            meta.generation
+        )
+    );
+    assert!(local["mediaLink"]
+        .as_str()
+        .unwrap()
+        .contains(&format!("generation={}", meta.generation)));
+    // Known divergence: production's etag is the base64 of the protobuf of the generation and
+    // the metageneration (`CLuI7vG3mJcDEAE=`); the local one is the quoted `<generation>-<n>`.
+    assert_eq!(recorded["etag"], "CLuI7vG3mJcDEAE=");
+    assert_eq!(local["etag"], format!("\"{}-1\"", meta.generation));
+}
+
 #[test]
 fn cloudevents_carry_the_shapes_the_sdk_decodes() {
     let before = doc("todos/t1", 1);

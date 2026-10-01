@@ -204,7 +204,24 @@ for (const form of ['endpoint', 'legacy']) {
     const calls = await f.calls();
     assert.deepEqual(calls.map(call => call.name), events.map(([name]) => name));
     assert.deepEqual(calls.map(call => call.context.eventId), events.map(() => id));
-    assert.deepEqual(calls.map(call => call.context.timestamp), events.map(() => time));
+    // Storage prints its legacy timestamp with exactly three fraction digits (observed 2026-10-01).
+    assert.deepEqual(calls.map(call => call.context.timestamp), ['2026-09-30T12:03:18.846Z', time, time]);
+  });
+
+  test(`v1 ${form}: a Storage legacy context carries the production event id, millisecond timestamp and resource`, { timeout: 10000 }, async t => {
+    // Production (observed 2026-10-01): eventId is a seventeen-digit decimal string without a suffix, the
+    // timestamp has exactly three fraction digits, the resource has no generation suffix and a `type`.
+    const f = await start(t, [stEntry('onFinalize', 'projects/_/buckets/assets.example', form)]);
+    const event = { id: '22201766561849599', type: 'google.cloud.storage.object.v1.finalized', time: '2026-10-01T08:49:26.486927Z', source: '//storage.googleapis.com/projects/_/buckets/assets.example', data: { bucket: 'assets.example', name: 'fe012probe0001' } };
+    assert.equal((await f.invoke('onFinalize', 'storage', event)).ok, true);
+    const [call] = await f.calls();
+    assert.deepEqual(call.context, {
+      eventId: '22201766561849599',
+      timestamp: '2026-10-01T08:49:26.486Z',
+      eventType: 'google.storage.object.finalize',
+      resource: { service: 'storage.googleapis.com', name: 'projects/_/buckets/assets.example/objects/fe012probe0001', type: 'storage#object' },
+      params: {},
+    });
   });
 
   test(`v1 ${form}: Storage bucket selection does not consume the project named buckets`, { timeout: 10000 }, async t => {

@@ -81,8 +81,8 @@
     "spec/compatibility/closure/evidence/FS-RULES-comparison.json": "e492410720a2c1c626a422e0c6f4852af0a54c530d514fe5f4c7fc6e4525125a",
     "spec/compatibility/closure/evidence/FS-RULES-fs-query-index-regression.json": "5220c029a10cedf0fea5e7789f778110ac2293c2dab20f1532d23a054558c5a2",
     "spec/compatibility/closure/evidence/FUNCTIONS-HTTP-comparison.json": "659186bb0bcf4e0a1bb655fcf7cf9b32309c5a76d52cd9a76e6269e5504169d2",
-    "spec/compatibility/closure/evidence/STORAGE-RULES-comparison.json": "643ac94984a363f318d0e0a7563577ddbe9fda6ef47bcd47bd5420e047483ea8",
-    "spec/compatibility/closure/evidence/STORAGE-RULES-official-regression.json": "d377288336c61bebd1e88730bb64ad2ed4e31e0d303bb1b5c76afee35bbe5d2a",
+    "spec/compatibility/closure/evidence/STORAGE-RULES-comparison.json": "37a7e97f1db3ddad0309ea760ece22ed395fe74996da018526e6e7a4c16b2e51",
+    "spec/compatibility/closure/evidence/STORAGE-RULES-official-regression.json": "4764c830b6abfd43732a301ed071933ed22d344a59f144dc5d682b781e0b4e40",
     "spec/compatibility/closure/evidence/integration-v0.8.0/AUTH-ACCOUNT-comparison.json": "00455bf3da54088e3cc9498fb9717d5f5221e20ec03af4e62ef19cf8ee963603",
     "spec/compatibility/closure/evidence/integration-v0.8.0/AUTH-ACTION-comparison.json": "28a7dd84c79bb85df5e0aacafa2a1f2203df8297067fa27ea269782332ab8e74",
     "spec/compatibility/closure/evidence/integration-v0.8.0/AUTH-CONFIG-SDK-comparison.json": "eecebaa075cb9ea991cca74e35476f79f4eacae74d9551dd00dabf51333e9416",
@@ -96,7 +96,7 @@
     "spec/compatibility/closure/evidence/integration-v0.8.0/FUNCTIONS-HTTP-comparison.json": "73215bfc9eff6bf583d7ef41a0179a8791dd0c2e0f15ba68a2d4f5a7b701a701",
     "spec/compatibility/closure/evidence/integration-v0.8.0/release-artifact.json": "439d1f55b447d2621661077fc8c130df1fba8f38d996b0a952adef0d4d8bcd1c",
     "spec/compatibility/closure/evidence/integration-v0.9.0/release-artifact.json": "5de64ae72ddab9c30a3544f3957d95dbb1d3708c390f0319e09ddf97f29e6e3f",
-    "spec/compatibility/contract.json": "c4043335ee83d32ec4c405d00befc35fedb84c178eccac32b60cacd12f06429f",
+    "spec/compatibility/contract.json": "7002933586a0f2d7fa6d62e2e8cad680b7ed5197511e2a0647a034826ad513fe",
     "spec/compatibility/gaps.json": "bc22d5f813b12d99682a2a05bd3e2a47d930767c79be57f35d1f481e42b46a7e",
     "spec/limits/firestore-standard-2026-08-25.json": "8f2a4c383aa17a838d1e87ca8c404595d6bb7f55c683e1cbe1c77cee2a2be48f"
   }

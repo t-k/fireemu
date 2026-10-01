@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "kind": "storage-rules-release-artifact",
-  "sourceCommit": "42f62ee44581ce64eb387fecbdca1104c65f2037",
+  "sourceCommit": "b0fc2485d5596439b515f4fd12f6c3ce68d4af91",
   "command": [
     "cargo",
     "build",
@@ -11,7 +11,7 @@
     "fireemu"
   ],
   "binaryPath": "target/release/fireemu",
-  "binarySha256": "d55d608c3111b147cb1d9eeeba00593928f8b38fbc89b0681a4a3e124ff30ab0",
+  "binarySha256": "3c96b1432a966c16eac8f193b47d9c6b4bdfcb5b6ba8dd43f01f096d55ee8cb0",
   "version": "fireemu 0.9.0",
   "rustc": "rustc 1.94.0 (4a4ef493e 2026-03-02)",
   "platform": "Darwin arm64",

@@ -108,6 +108,29 @@ async function superviseSession(path) {
   let diagnostic = "",
     observed = false,
     parentLost = false;
+  // A control run records its injected helper's first sighting and whether the tracker acquired
+  // it (design v4 F2).
+  const injected = prepared.identity.controlMode ? { pid: null } : null;
+  const started = performance.now();
+  const sight = async (rows, owned) => {
+    if (!injected) return;
+    if (injected.pid === null) {
+      try {
+        injected.pid = JSON.parse(await readFile(prepared.readyPath, "utf8")).pid;
+      } catch {
+        return;
+      }
+    }
+    const row = rows.find((value) => value.pid === injected.pid);
+    if (row && !injected.firstSighting)
+      injected.firstSighting = {
+        afterMs: Math.round(performance.now() - started),
+        ppid: row.ppid,
+        pgid: row.pgid,
+        started: row.started,
+      };
+    injected.acquired ||= owned.some((value) => value.pid === injected.pid);
+  };
   const collect = (chunk) => {
     if (diagnostic.length < 262144)
       diagnostic += chunk.toString().slice(0, 262144 - diagnostic.length);
@@ -127,7 +150,8 @@ async function superviseSession(path) {
     escalate: plan.escalation !== "off",
     stopping: () => stopped || parentLost,
     ownershipComplete: () => observed,
-    onObserved: async (owned, rows) => {
+    onObserved: async (owned, rows, acquired) => {
+      await sight(rows, acquired);
       parentLost ||= !sameIdentity(
         parent,
         rows.find((row) => row.pid === parent.pid),
@@ -141,6 +165,7 @@ async function superviseSession(path) {
   });
   await daemon.recordExit;
   result.observationHandshake = observed;
+  if (injected) result.injected = { acquired: false, firstSighting: null, ...injected };
   result.parentLost = parentLost;
   result.loadedExports = ["calendarProbe", "calendarReceipt"].every((name) =>
     diagnostic.includes(name),

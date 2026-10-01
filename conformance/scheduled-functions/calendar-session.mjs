@@ -54,7 +54,9 @@ export async function prepareCalendarSession({
       mode: control.mode,
       helperPath: control.helperPath,
       readyPath,
-      hold: control.hold ?? 60,
+      // Longer than the slowest run (170 s deadline plus 30 s grace), so a helper is still there
+      // for the final inventory; the measuring entry stops it after the verdict.
+      hold: control.hold ?? 240,
       portFile: join(directory, "port.json"),
       boundPath: join(directory, "bound.json"),
     });

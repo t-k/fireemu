@@ -42,6 +42,10 @@ export const HARNESS_FILES = [
   "calendar-control-preamble.cjs.txt",
   "calendar-control-helper.py",
   "calendar-local.mjs",
+  "calendar.mjs",
+  "calendar-settled-topic.mjs",
+  "recovery.mjs",
+  "shape.mjs",
 ];
 export async function harnessVersion() {
   const hash = createHash("sha256");
@@ -168,6 +172,37 @@ export function claimArguments({ script, database, cwd, service }) {
 }
 
 const identityOf = (row) => ({ pid: row.pid, uid: row.uid, started: row.started });
+
+const zoneIsValid = (timeZone) => {
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone });
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+/**
+ * Which run a plan asks for: the certificate (refusal fixture, escalation on), the positive
+ * control (valid fixture) or a negative control on its own fixture variant (design v4 section 7).
+ */
+export function planKind(plan) {
+  const fixture = zoneIsValid(plan?.session?.input?.timeZone) ? "valid" : "refusal";
+  if (plan?.control && plan?.positive) throw new Error("a run is one control at most");
+  if (plan?.control) {
+    if (!Object.hasOwn(CONTROL_VARIANTS, plan.control.mode ?? ""))
+      throw new Error("unknown control mode");
+    const variant = CONTROL_VARIANTS[plan.control.mode];
+    if (variant.fixture !== fixture) throw new Error("control fixture variant differs");
+    return { kind: "control", escalation: variant.escalation, certificate: false };
+  }
+  if (plan?.positive) {
+    if (fixture !== "valid") throw new Error("the positive control needs a valid time zone");
+    return { kind: "positive", escalation: "on", certificate: false };
+  }
+  if (fixture !== "refusal") throw new Error("the certificate run needs the refusal fixture");
+  return { kind: "certificate", escalation: "on", certificate: true };
+}
 
 /** The outer launcher: prepares the run, claims the port, starts and waits for the inner supervisor. */
 export async function accountingOuter(accDir) {
@@ -302,6 +337,7 @@ async function recordFiles(directory) {
  */
 export async function measure(planPath) {
   const plan = JSON.parse(await readFile(planPath, "utf8"));
+  const { escalation, certificate } = planKind(plan);
   const version = await harnessVersion();
   const base = join(plan.session.root, "conformance/.runs");
   await mkdir(base, { recursive: true, mode: 0o700 });
@@ -314,9 +350,6 @@ export async function measure(planPath) {
     harnessVersion: version,
   });
   const portctlSha256 = digest(await readFile(plan.portctl));
-  if (plan.control && !Object.hasOwn(CONTROL_VARIANTS, plan.control.mode))
-    throw new Error("unknown control mode");
-  const escalation = plan.control ? CONTROL_VARIANTS[plan.control.mode].escalation : "on";
   await privateJson(join(accDir, "plan.json"), { ...plan, escalation, harnessVersion: version });
   const launchTime = Math.floor(Date.now() / 1000) * 1000;
   const rootRows = await snapshotWith(recorder);
@@ -371,7 +404,7 @@ export async function measure(planPath) {
   recorder.close();
   const records = validateRecords(await recordFiles(join(accDir, "records")));
   const verdict = refusalVerdict({
-    certificate: !plan.control && !plan.positive,
+    certificate,
     escalation,
     pins: plan.pins,
     identity: outerResult?.identity ? { ...outerResult.identity, portctlSha256 } : undefined,
@@ -403,20 +436,23 @@ export async function measure(planPath) {
     } catch {
       injected = undefined;
     }
-    control = controlOutcome(
-      plan.positive ? { mode: "positive" } : { mode: plan.control.mode, injected },
-      {
-        ...verdict,
-        inventory,
-        ports: { lsof },
-        records,
-        observation: {
-          runner: inner?.observationHandshake === true,
-          child: inner?.observationHandshake === true,
-          matched: outerResult?.callback?.matched === true,
+    control = {
+      injected: inner?.injected ?? null,
+      ...controlOutcome(
+        plan.positive ? { mode: "positive" } : { mode: plan.control.mode, injected },
+        {
+          ...verdict,
+          inventory,
+          ports: { lsof },
+          records,
+          observation: {
+            runner: inner?.observationHandshake === true,
+            child: inner?.observationHandshake === true,
+            matched: outerResult?.callback?.matched === true,
+          },
         },
-      },
-    );
+      ),
+    };
   }
   const report = {
     harnessVersion: version,
@@ -432,6 +468,13 @@ export async function measure(planPath) {
       survivors: inventory.survivors,
     },
     lsof,
+    // Design v4 section 6: the per-PID query runs only when a recorded identity is alive.
+    lsofByPid: alive.length ? "ran" : "skipped: no recorded identity alive",
+    // Condition (D): what each settle phase saw end by itself.
+    selfEnded: {
+      inner: inner?.selfEnded ?? null,
+      outer: outerResult?.supervision?.selfEnded ?? null,
+    },
     claims,
     records: { ok: records.ok, problems: records.problems, signals: records.signals.length },
     accountingDirectory: accDir,
@@ -448,15 +491,21 @@ export async function measure(planPath) {
       harnessVersion: version,
     });
     const current = await snapshotWith(post);
-    for (const entry of inventory.survivors) {
-      const live = current.find(
-        (row) => row.pid === entry.row.pid && row.started === entry.row.started,
-      );
-      if (live)
-        await post.signal(identityOf(live), "SIGKILL", async () =>
-          process.kill(live.pid, "SIGKILL"),
-        );
-    }
+    const targets = inventory.survivors
+      .map((entry) =>
+        current.find((row) => row.pid === entry.row.pid && row.started === entry.row.started),
+      )
+      .filter(Boolean);
+    // The injected helper, too, when it is not a survivor (it may hold the port from outside S).
+    const helper = current.find(
+      (row) =>
+        row.pid === control?.injected?.pid &&
+        typeof prepared === "string" &&
+        row.args.includes(prepared + "/"),
+    );
+    if (helper && !targets.some((row) => row.pid === helper.pid)) targets.push(helper);
+    for (const live of targets)
+      await post.signal(identityOf(live), "SIGKILL", async () => process.kill(live.pid, "SIGKILL"));
     post.close();
   }
   return report;

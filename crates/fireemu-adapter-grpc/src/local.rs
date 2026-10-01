@@ -2425,6 +2425,25 @@ impl LocalBackend {
             .collect()
     }
 
+    /// The live documents of every database `scope` owns, each database read under its own
+    /// lock, as the allocations the stores hold: what an export writes, without the copy of
+    /// every index and document a snapshot makes. Detached and poisoned databases are skipped,
+    /// as [`Self::snapshot_scope`] skips them.
+    #[must_use]
+    pub fn live_document_handles(
+        &self,
+        scope: &fireemu_core_session::tenancy::Scope,
+    ) -> BTreeMap<(String, String), Vec<Arc<fireemu_core_firestore::store::Document>>> {
+        self.handles_of(scope)
+            .into_iter()
+            .filter_map(|(key, handle)| {
+                handle
+                    .read(FirestoreState::live_document_handles)
+                    .map(|documents| (key, documents))
+            })
+            .collect()
+    }
+
     /// The databases `scope` owns, plus the auto-ID generator for the default scope (it
     /// is shared by every project, so only the default session snapshots it).
     #[must_use]

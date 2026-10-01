@@ -1984,6 +1984,16 @@ impl FirestoreState {
         self.live_documents(None).cloned().collect()
     }
 
+    /// Every live document (latest versions), in path order, as the allocations the store
+    /// holds: an export can write them without copying a path or a field.
+    #[must_use]
+    pub fn live_document_handles(&self) -> Vec<Arc<Document>> {
+        self.history
+            .values()
+            .filter_map(|versions| versions.last()?.1.clone())
+            .collect()
+    }
+
     /// Consumes a detached state and returns its live documents without cloning them.
     ///
     /// Export owns the visible-only state returned by `snapshot_scope`, so moving documents

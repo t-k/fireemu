@@ -102,6 +102,8 @@ export async function superviseCalendarProcess({
   graceMs = 25000,
   killGraceMs = 1000,
   pollMs = 250,
+  // Control runs only (launch accounting design v4): observe leftovers, never signal them.
+  escalate = true,
 }) {
   let acceptsInitial = Boolean(initial);
   const tracker = ownedProcessTracker(root, {
@@ -132,19 +134,14 @@ export async function superviseCalendarProcess({
     }
     throw new Error("owned process inventory remains unreadable");
   };
+  let signalled = false;
   const verifiedSignal = async (pid, kind) => {
-    if (
-      (await live()).some(
-        (row) =>
-          row.pid === pid &&
-          sameProcessIdentity(
-            tracker.owned().find((owned) => owned.pid === pid),
-            row,
-          ),
-      )
-    ) {
+    if (!escalate) return;
+    const owned = tracker.owned().find((value) => value.pid === pid);
+    if ((await live()).some((row) => row.pid === pid && sameProcessIdentity(owned, row))) {
+      signalled = true;
       try {
-        await signal(pid, kind);
+        await signal(pid, kind, owned);
       } catch {
         signalFailures++;
       }
@@ -168,6 +165,8 @@ export async function superviseCalendarProcess({
       /* Fresh identity remains required. */
     }
   }
+  // Processes a settle saw that later ended with no signal from this supervisor.
+  const seenInSettle = new Map();
   const settle = async (milliseconds) => {
     const until = clock() + milliseconds;
     let empty = 0;
@@ -178,6 +177,7 @@ export async function superviseCalendarProcess({
       } catch {
         return false;
       }
+      for (const row of remaining) if (!seenInSettle.has(row.pid)) seenInSettle.set(row.pid, row);
       if (!remaining.length) {
         if (++empty >= 2) return true;
       } else empty = 0;
@@ -186,6 +186,8 @@ export async function superviseCalendarProcess({
     return false;
   };
   let cleanupVerified = await settle(graceMs);
+  const settledWithoutEscalation = cleanupVerified && !signalled;
+  const selfEnded = settledWithoutEscalation ? [...seenInSettle.values()] : [];
   for (const kind of ["SIGTERM", "SIGKILL"]) {
     if (cleanupVerified) break;
     let survivors;
@@ -209,6 +211,9 @@ export async function superviseCalendarProcess({
     exitCode: child.state().code,
     timedOut,
     cancelled,
+    escalate,
+    settledWithoutEscalation,
+    selfEnded,
     inventoryFailures,
     signalFailures,
     trackedAbsenceVerified: cleanupVerified,

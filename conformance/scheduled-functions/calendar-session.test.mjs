@@ -431,3 +431,53 @@ test("calendar port acquisition and own query require one explicit private datab
     /private database/,
   );
 });
+
+// Launch accounting (design v4 section 4): a refusal run passes (D) only when the settle phase
+// empties by itself; a control run may turn escalation off so a leftover reaches the inventory.
+test("a settle that empties without signals reports it and lists what ended by itself", async () => {
+  const f = lifecycle();
+  let polls = 0;
+  const original = f.snapshot;
+  f.snapshot = async () => {
+    // The runner the daemon killed is still listed for two polls, then gone.
+    const rows = await original();
+    return ++polls > 2 ? rows.filter((value) => value.pid !== 300) : rows;
+  };
+  const result = await superviseCalendarProcess({ ...f, graceMs: 1000 });
+  assert.deepEqual(f.signals, []);
+  assert.equal(result.settledWithoutEscalation, true);
+  assert.deepEqual(
+    result.selfEnded.map((row) => row.pid),
+    [300],
+  );
+});
+
+test("escalation off observes a leftover and never signals it", async () => {
+  const f = lifecycle();
+  const result = await superviseCalendarProcess({ ...f, escalate: false });
+  assert.deepEqual(f.signals, []);
+  assert.equal(result.settledWithoutEscalation, false);
+  assert.equal(result.cleanupVerified, false);
+  assert.equal(result.escalate, false);
+});
+
+test("every harness signal reaches the caller with the target's owned identity", async () => {
+  const f = lifecycle();
+  const seen = [];
+  const original = f.signal;
+  const result = await superviseCalendarProcess({
+    ...f,
+    signal: async (pid, kind, identity) => {
+      seen.push({
+        pid,
+        kind,
+        identity: identity && { pid: identity.pid, started: identity.started },
+      });
+      await original(pid, kind);
+    },
+  });
+  assert.equal(result.settledWithoutEscalation, false);
+  assert.deepEqual(seen, [
+    { pid: 300, kind: "SIGTERM", identity: { pid: 300, started: "Thu Oct 1 00:00:00 2026" } },
+  ]);
+});

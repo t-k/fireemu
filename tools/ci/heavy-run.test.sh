@@ -155,6 +155,9 @@ refuse() {
   fi
 }
 refuse --job other --ref x --out o
+# A letter outside ASCII must not satisfy a bracket range, whatever locale the caller runs in.
+LC_ALL=en_US.UTF-8 EXPECT="--ref must be a branch name" refuse --job nextest --ref "$(printf 'a\303\251')" --out o
+LC_ALL=C.UTF-8 EXPECT="--ref must be a branch name" refuse --job nextest --ref "$(printf 'a\303\251')" --out o
 refuse --job nextest --ref -rf --out o
 refuse --job nextest --ref a..b --out o
 refuse --job nextest --ref a//b --out o

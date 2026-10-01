@@ -123,4 +123,8 @@ class HeavyVerificationContractTest < Minitest::Test
     assert_violation(REAL.sub("    timeout-minutes: 5\n", "    timeout-minutes: 5\n    container: ${{ inputs.base }}\n"), "container uses an unknown expression")
     assert_violation(REAL.sub("shard: ${{ fromJSON(needs.plan.outputs.matrix) }}", "shard: ${{ fromJSON(inputs.base) }}"), "strategy uses an unknown expression")
   end
+
+  def test_a_plan_that_does_not_pin_the_locale_is_refused
+    assert_violation(REAL.sub(/ *export LC_ALL=C\n/, ""), "pin the locale")
+  end
 end

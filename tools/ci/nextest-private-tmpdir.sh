@@ -30,12 +30,12 @@ parent=${parent%/}
 root=${FIREEMU_TEST_TMP_ROOT:-$parent/fireemu-test-tmp-$(id -u)}
 (umask 077 && mkdir -p "$root") 2>/dev/null || refuse "cannot create $root"
 [ -L "$root" ] && refuse "$root is a symbolic link"
-[ -d "$root" ] || refuse "$root is not a directory"
 # shellcheck disable=SC3067 # test -O is in dash, bash and busybox; without it the root is refused.
 [ -O "$root" ] || refuse "$root is not owned by this user"
+# `ls -ld` does not follow the root, so this also requires a directory.
 case $(ls -ld "$root") in
 drwx------*) ;;
-*) refuse "$root must have mode 0700" ;;
+*) refuse "$root must be a directory with mode 0700" ;;
 esac
 
 for stale in "$root"/run-*; do

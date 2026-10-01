@@ -3,6 +3,7 @@ private TMPDIR, removes it afterwards and fails a test that left anything in it.
 
 import os
 import signal
+import stat
 import sys
 import subprocess
 import tempfile
@@ -184,9 +185,10 @@ class WrapperTest(unittest.TestCase):
         self.assertEqual(result.returncode, 1)
         self.assertIn("could not be removed", result.stderr)
 
-    def refused(self, result):
+    def refused(self, result, reason):
         self.assertEqual(result.returncode, 70, result.stderr)
         self.assertIn("refusing", result.stderr)
+        self.assertIn(reason, result.stderr)
 
     def victim(self):
         victim = self.parent / "victim"
@@ -204,7 +206,7 @@ class WrapperTest(unittest.TestCase):
         victim = self.victim()
         victim.chmod(0o700)
         self.root.symlink_to(victim)
-        self.refused(self.run_wrapped("exit 0"))
+        self.refused(self.run_wrapped("exit 0"), "is a symbolic link")
         self.assertEqual(len(list(victim.iterdir())), 2)
         self.assert_untouched(victim)
 
@@ -214,7 +216,7 @@ class WrapperTest(unittest.TestCase):
                 victim = self.victim()
                 victim.chmod(mode)
                 result = self.run_wrapped("exit 0", env={"FIREEMU_TEST_TMP_ROOT": str(victim)})
-                self.refused(result)
+                self.refused(result, "mode 0700")
                 self.assertEqual(len(list(victim.iterdir())), 2)
                 self.assert_untouched(victim)
                 for entry in victim.iterdir():
@@ -226,8 +228,23 @@ class WrapperTest(unittest.TestCase):
         victim.chmod(0o700)
         link = self.parent / "link-root"
         link.symlink_to(victim)
-        self.refused(self.run_wrapped("exit 0", env={"FIREEMU_TEST_TMP_ROOT": str(link)}))
+        self.refused(
+            self.run_wrapped("exit 0", env={"FIREEMU_TEST_TMP_ROOT": str(link)}), "is a symbolic link"
+        )
         self.assertEqual(len(list(victim.iterdir())), 2)
+
+    def test_a_root_owned_by_another_user_is_refused(self):
+        # A private (0700) directory of another user: /root on Linux, /var/audit on macOS.
+        for candidate in ("/root", "/var/audit"):
+            try:
+                info = os.lstat(candidate)
+            except OSError:
+                continue
+            if stat.S_ISDIR(info.st_mode) and stat.S_IMODE(info.st_mode) == 0o700 and info.st_uid != os.getuid():
+                break
+        else:
+            self.skipTest("no private directory of another user to point the root at")
+        self.refused(self.run_wrapped("exit 0", env={"FIREEMU_TEST_TMP_ROOT": candidate}), "not owned")
 
     def test_a_root_that_is_a_file_is_refused(self):
         self.root.write_text("not a directory")

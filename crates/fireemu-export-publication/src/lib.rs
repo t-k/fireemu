@@ -366,13 +366,24 @@ fn atomic_publish(
     target_present: bool,
     _owned_stage: &TargetIdentity,
 ) -> Result<(), String> {
+    rename_for(target_present, |flags| {
+        rustix::fs::renameat_with(rustix::fs::CWD, stage, rustix::fs::CWD, target, flags)
+    })
+}
+
+/// Picks the rename flags (exchange an existing target, never replace a missing one) and words a refusal.
+/// `rename` is the system call, passed in so the refusal path can be exercised on any volume.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn rename_for(
+    target_present: bool,
+    rename: impl FnOnce(rustix::fs::RenameFlags) -> rustix::io::Result<()>,
+) -> Result<(), String> {
     let flags = if target_present {
         rustix::fs::RenameFlags::EXCHANGE
     } else {
         rustix::fs::RenameFlags::NOREPLACE
     };
-    rustix::fs::renameat_with(rustix::fs::CWD, stage, rustix::fs::CWD, target, flags)
-        .map_err(publication_error)
+    rename(flags).map_err(publication_error)
 }
 
 /// The message of a refused atomic rename. A volume that lacks the rename flags (exFAT, FAT, some
@@ -391,7 +402,8 @@ fn publication_error(error: rustix::io::Errno) -> String {
 #[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
 mod tests {
     use super::{
-        atomic_publish, publication_error, target_identity, verify_displaced_target_or_rollback,
+        atomic_publish, publication_error, rename_for, target_identity,
+        verify_displaced_target_or_rollback,
     };
 
     #[test]
@@ -408,6 +420,33 @@ mod tests {
                 "{message}"
             );
         }
+    }
+
+    #[test]
+    fn a_refused_rename_is_worded_by_publication_error_and_the_flags_follow_the_target() {
+        let seen = std::cell::RefCell::new(Vec::new());
+        let refuse = |flags| {
+            seen.borrow_mut().push(flags);
+            Err(rustix::io::Errno::NOTSUP)
+        };
+        let message = rename_for(true, refuse).unwrap_err();
+        assert!(
+            message.contains("does not support atomic directory rename"),
+            "{message}"
+        );
+        let message = rename_for(false, refuse).unwrap_err();
+        assert!(
+            message.contains("does not support atomic directory rename"),
+            "{message}"
+        );
+        assert_eq!(
+            *seen.borrow(),
+            [
+                rustix::fs::RenameFlags::EXCHANGE,
+                rustix::fs::RenameFlags::NOREPLACE
+            ]
+        );
+        assert_eq!(rename_for(true, |_| Ok(())), Ok(()));
     }
 
     #[test]

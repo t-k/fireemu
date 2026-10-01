@@ -38,6 +38,7 @@
     "spec/compatibility/closure/AUTH-MFA.json": "a1e72883bbb1974cdaa26013013c46487eb99ba11d6625916b9a4e5f33a59da7",
     "spec/compatibility/closure/FS-QUERY-INDEX.json": "8d1b27fa081c77aeedce616a8194c5e85118cc1549a031aeccea35478db38736",
     "spec/compatibility/closure/FUNCTIONS-HTTP.json": "3f38facca11152463a4b272120681eb630eb4c290737127a156e0c82c6a69e96",
+    "spec/compatibility/closure/STORAGE-OBJECT.json": "0857ad38cdbd7655d1d46a8f72a233994dc38da20774ae4b339909279c8c162e",
     "spec/compatibility/closure/evidence/AUTH-ACCOUNT-comparison.json": "e0488696cb231c64066b43b674364dcac6b9ec3916a3153a7c0ec03d95489747",
     "spec/compatibility/closure/evidence/AUTH-ACCOUNT-saved-replay.json": "82229878d36b84be3b54f651f5051a1c09dfc5bca28a1e6fbd26579a9f9e522a",
     "spec/compatibility/closure/evidence/AUTH-ACTION-account-regression.json": "5af73b3363a0b41e53d4059ffcf3c5d7cd93a5317fa744efd3fc91fdc08c9d6f",
@@ -86,6 +87,8 @@
     "spec/compatibility/closure/evidence/FS-RULES-comparison.json": "e492410720a2c1c626a422e0c6f4852af0a54c530d514fe5f4c7fc6e4525125a",
     "spec/compatibility/closure/evidence/FS-RULES-fs-query-index-regression.json": "5220c029a10cedf0fea5e7789f778110ac2293c2dab20f1532d23a054558c5a2",
     "spec/compatibility/closure/evidence/FUNCTIONS-HTTP-comparison.json": "659186bb0bcf4e0a1bb655fcf7cf9b32309c5a76d52cd9a76e6269e5504169d2",
+    "spec/compatibility/closure/evidence/STORAGE-RULES-comparison.json": "37a7e97f1db3ddad0309ea760ece22ed395fe74996da018526e6e7a4c16b2e51",
+    "spec/compatibility/closure/evidence/STORAGE-RULES-official-regression.json": "4764c830b6abfd43732a301ed071933ed22d344a59f144dc5d682b781e0b4e40",
     "spec/compatibility/closure/evidence/integration-v0.8.0/AUTH-ACCOUNT-comparison.json": "00455bf3da54088e3cc9498fb9717d5f5221e20ec03af4e62ef19cf8ee963603",
     "spec/compatibility/closure/evidence/integration-v0.8.0/AUTH-ACTION-comparison.json": "28a7dd84c79bb85df5e0aacafa2a1f2203df8297067fa27ea269782332ab8e74",
     "spec/compatibility/closure/evidence/integration-v0.8.0/AUTH-CONFIG-SDK-comparison.json": "eecebaa075cb9ea991cca74e35476f79f4eacae74d9551dd00dabf51333e9416",
@@ -99,7 +102,7 @@
     "spec/compatibility/closure/evidence/integration-v0.8.0/FUNCTIONS-HTTP-comparison.json": "73215bfc9eff6bf583d7ef41a0179a8791dd0c2e0f15ba68a2d4f5a7b701a701",
     "spec/compatibility/closure/evidence/integration-v0.8.0/release-artifact.json": "439d1f55b447d2621661077fc8c130df1fba8f38d996b0a952adef0d4d8bcd1c",
     "spec/compatibility/closure/evidence/integration-v0.9.0/release-artifact.json": "5de64ae72ddab9c30a3544f3957d95dbb1d3708c390f0319e09ddf97f29e6e3f",
-    "spec/compatibility/contract.json": "4fa5e0fc618e08f9d3d17dca668fe5d8e8cbdb0b9eb16b3d714e78f48d9ceab3",
+    "spec/compatibility/contract.json": "04d4094d64775e8e936073047d23e3204562a1af26ebc5f4a0efa6c808440122",
     "spec/compatibility/gaps.json": "bc22d5f813b12d99682a2a05bd3e2a47d930767c79be57f35d1f481e42b46a7e",
     "spec/limits/firestore-standard-2026-08-25.json": "a5c9da71bd74c7341da1cb3d25542db3aecb935b2387d4a61c8cb43857055fa4"
   }

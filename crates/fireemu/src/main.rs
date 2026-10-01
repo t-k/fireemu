@@ -2098,11 +2098,22 @@ fn print_banner(
                 "  storage (HTTP):   {a}   FIREBASE_STORAGE_EMULATOR_HOST={a}   STORAGE_EMULATOR_HOST=http://{a}"
             );
             // A run with no ruleset denies every end-user request, as production's default
-            // rules do; say so, because the configuration that reaches it is an omission.
+            // rules do, except that the emulator profile gives a `demo-*` project the official
+            // emulator's default open rules; say so, because the configuration that reaches it
+            // is an omission. The banner names the default project's state: a bucket owned by
+            // another registered project is decided per request by that project's name.
             if cfg.storage_rules_file.is_none() && cfg.storage_rules_by_target.is_empty() {
-                println!(
-                    "  storage rules:    none loaded, so every end-user request is denied; set storage.rules in firebase.json (the owner credential and the JSON API are unaffected)"
-                );
+                if cfg.profile == config::CompatibilityProfile::Emulator
+                    && cfg.auth_project.starts_with("demo-")
+                {
+                    println!(
+                        "  storage rules:    none loaded, so the official emulator's open rules apply to this demo project and every request is allowed; set storage.rules in firebase.json to enforce rules"
+                    );
+                } else {
+                    println!(
+                        "  storage rules:    none loaded, so every end-user request is denied; set storage.rules in firebase.json (the owner credential and the JSON API are unaffected)"
+                    );
+                }
             }
         }
         None => println!("  storage:          not selected by --only (nothing is bound)"),

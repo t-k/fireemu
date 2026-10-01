@@ -1,0 +1,26 @@
+{
+  "kind": "storage-rules-official-regression-v1",
+  "artifactSha256": "3c96b1432a966c16eac8f193b47d9c6b4bdfcb5b6ba8dd43f01f096d55ee8cb0",
+  "sourceCommit": "b0fc2485d5596439b515f4fd12f6c3ce68d4af91",
+  "storageProbe": {
+    "command": "node conformance/src/storage-probe/run.mjs check",
+    "programs": 18,
+    "gatedSteps": 219,
+    "result": "ok"
+  },
+  "conformanceScenarios": [
+    {
+      "id": "storage/admin-upload-download-metadata",
+      "gatedSteps": 6,
+      "result": "ok"
+    },
+    {
+      "id": "storage/client-protocol-and-rules",
+      "gatedSteps": 9,
+      "result": "ok"
+    }
+  ],
+  "summary": {
+    "GATED_STEPS_PASSED": 234
+  }
+}

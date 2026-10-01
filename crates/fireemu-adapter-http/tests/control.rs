@@ -2139,3 +2139,59 @@ fn a_reset_hook_that_cannot_finish_refuses_the_reset_instead_of_panicking() {
     let r = handle(&s, "POST", "/v1/sessions/default/reset", &json!({}));
     assert_eq!(r.status, 200, "{}", r.body);
 }
+
+const STORAGE_VALID: &str = "rules_version = '2'; service firebase.storage { match /b/{bucket}/o { match /{path=**} { allow read: if true; } } }";
+
+/// The control route has no counterpart in production or in the official emulator. The
+/// analogous official `PUT /internal/setRules` answers 400 for every source that does not
+/// compile, and Firebase Rules `rulesets.create` reports the first error of an invalid
+/// source; both are client errors, so the extension answers 400 in either profile and keeps
+/// the active generation.
+#[test]
+fn storage_rules_control_answers_400_for_every_invalid_source_and_keeps_the_active_one() {
+    let s = state(Arc::new(AtomicUsize::new(0)));
+    assert_eq!(
+        handle(
+            &s,
+            "PUT",
+            "/v1/storage/rules",
+            &json!({"source": STORAGE_VALID})
+        )
+        .status,
+        200
+    );
+    let invalid_sources = [
+        "rules_version = '2'; service firebase.storage { match /b/{bucket}/o { match /{path=**} { allow get: if ; } } }",
+        "rules_version = '2'; service firebase.storage { match /b/{bucket}/o { match /{path=**} { allow get: if f(); } function f() { return f(); } } }",
+        "not rules at all",
+        "",
+    ];
+    for source in invalid_sources {
+        let response = handle(&s, "PUT", "/v1/storage/rules", &json!({"source": source}));
+        assert_eq!(response.status, 400, "{source}: {}", response.body);
+        assert!(
+            response.body["error"]["message"]
+                .as_str()
+                .or_else(|| response.body["message"].as_str())
+                .is_some_and(|message| message.starts_with("INVALID_ARGUMENT : rules do not parse")),
+            "{source}: {}",
+            response.body
+        );
+        let readback = handle(&s, "GET", "/v1/storage/rules", &json!({}));
+        assert_eq!(readback.status, 200);
+        assert_eq!(readback.body["source"], STORAGE_VALID, "{source}");
+    }
+}
+
+#[test]
+fn storage_rules_control_still_requires_a_string_source() {
+    let s = state(Arc::new(AtomicUsize::new(0)));
+    assert_eq!(
+        handle(&s, "PUT", "/v1/storage/rules", &json!({})).status,
+        400
+    );
+    assert_eq!(
+        handle(&s, "PUT", "/v1/storage/rules", &json!({"source": 7})).status,
+        400
+    );
+}

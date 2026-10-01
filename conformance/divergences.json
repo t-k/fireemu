@@ -629,6 +629,43 @@
         "approvalRecord": "Google Cloud Pub/Sub replay overview, 'Replay and purge messages with seek'; capability manifest PUBSUB-WIRE-1 (crates/fireemu/src/capabilities.json)"
       }
     },
+    "storage-probe/fb-list#paged": {
+      "documents": "README.md, \"Storage\"; capability manifest ST-OBJ-1 (crates/fireemu/src/capabilities.json); spec/compatibility/contract.json",
+      "reason": "The Firebase list API counts items and folded prefixes together toward maxResults and limits a page to 1000 entries. fireemu places each prefix on only one page, an inference from paging the combined ordered entries rather than an explicit statement in the reference. The official emulator pages items alone and repeats every folded prefix on every page.",
+      "authority": {
+        "kind": "production-spec",
+        "sourceUrls": [
+          "https://firebase.google.com/docs/reference/js/storage.listoptions",
+          "https://cloud.google.com/storage/docs/json_api/v1/objects/list",
+          "https://github.com/firebase/firebase-tools/tree/v15.28.2"
+        ],
+        "checkedOn": "2026-09-25",
+        "officialBaseline": {
+          "package": "firebase-tools",
+          "version": "15.28.2"
+        },
+        "fixture": "conformance/storage-matrix.json#fb-list#paged",
+        "approvalRecord": "README.md, \"Storage\"; capability manifest ST-OBJ-1 (crates/fireemu/src/capabilities.json); spec/compatibility/contract.json"
+      }
+    },
+    "storage-probe/gcs-update-list-delete#list-paged": {
+      "documents": "README.md, \"Storage\"; capability manifest ST-OBJ-1 (crates/fireemu/src/capabilities.json); spec/compatibility/contract.json",
+      "reason": "The Cloud Storage JSON API counts items and folded prefixes together toward maxResults. fireemu places each prefix on only one page, an inference from paging the combined ordered entries rather than an explicit statement in the reference; the official emulator pages items alone and repeats every folded prefix.",
+      "authority": {
+        "kind": "production-spec",
+        "sourceUrls": [
+          "https://cloud.google.com/storage/docs/json_api/v1/objects/list",
+          "https://github.com/firebase/firebase-tools/tree/v15.28.2"
+        ],
+        "checkedOn": "2026-09-25",
+        "officialBaseline": {
+          "package": "firebase-tools",
+          "version": "15.28.2"
+        },
+        "fixture": "conformance/storage-matrix.json#gcs-update-list-delete#list-paged",
+        "approvalRecord": "README.md, \"Storage\"; capability manifest ST-OBJ-1 (crates/fireemu/src/capabilities.json); spec/compatibility/contract.json"
+      }
+    },
     "storage-probe/fb-resumable-upload#upload-with-wrong-offset": {
       "documents": "README.md, \"Storage\"; capability manifest ST-OBJ-1 (crates/fireemu/src/capabilities.json)",
       "reason": "fireemu checks X-Goog-Upload-Offset against the bytes already received and refuses a mismatch with 400, as production does. The official emulator never reads the offset: it appends whatever arrives, so a chunk sent with a wrong offset was measured to commit a corrupt object.",
@@ -665,21 +702,1551 @@
         "approvalRecord": "README.md, \"Storage\"; capability manifest ST-OBJ-1 (crates/fireemu/src/capabilities.json)"
       }
     },
-    "storage-probe/rules-request-model#overwrite-locked-is-an-update": {
-      "documents": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)",
-      "reason": "An upload over an existing object evaluates the rules `update` method in fireemu, as production evaluates it. The official emulator evaluates every upload as `create` (its uploadObject hard-codes the CREATE method), so a rule that guards update was measured to admit an anonymous overwrite.",
+    "storage/admin-upload-download-metadata#metadata-shape": {
+      "documents": "README.md, \"Storage\"; capability manifest ST-OBJ-1 (crates/fireemu/src/capabilities.json)",
+      "reason": "The JSON API object resource carries timeFinalized in fireemu, as production writes it (recorded in stage 3 v9, 2026-09-30); the official emulator omits it.",
       "authority": {
         "kind": "production-spec",
         "sourceUrls": [
-          "https://firebase.google.com/docs/storage/security/core-syntax",
+          "https://cloud.google.com/storage/docs/json_api/v1/objects",
           "https://github.com/firebase/firebase-tools/tree/v15.28.2"
         ],
-        "checkedOn": "2026-09-05",
+        "checkedOn": "2026-09-30",
+        "officialBaseline": {
+          "package": "firebase-tools",
+          "version": "15.28.2"
+        },
+        "fixture": "conformance/fixtures/storage/admin-upload-download-metadata.json#metadata-shape",
+        "approvalRecord": "README.md, \"Storage\"; capability manifest ST-OBJ-1 (crates/fireemu/src/capabilities.json)"
+      }
+    },
+    "storage-probe/gcs-update-list-delete#patch-storage-v1-spelling": {
+      "documents": "README.md, \"Storage\"; capability manifest ST-OBJ-1 (crates/fireemu/src/capabilities.json)",
+      "reason": "PATCH /storage/v1/b/<bucket>/o/<object> updates the object's metadata in fireemu, as the Cloud Storage JSON API does in production (recorded: a 200 with the storage#object resource, and the 404 `No such object` JSON error for an absent object). The official emulator registers PATCH only on the short /b/... spelling and answers this one with its 501 catch-all.",
+      "authority": {
+        "kind": "production-spec",
+        "sourceUrls": [
+          "https://cloud.google.com/storage/docs/json_api/v1/objects/patch",
+          "https://github.com/firebase/firebase-tools/tree/v15.28.2"
+        ],
+        "checkedOn": "2026-09-30",
+        "officialBaseline": {
+          "package": "firebase-tools",
+          "version": "15.28.2"
+        },
+        "fixture": "conformance/storage-matrix.json#gcs-update-list-delete#patch-storage-v1-spelling",
+        "approvalRecord": "README.md, \"Storage\"; capability manifest ST-OBJ-1 (crates/fireemu/src/capabilities.json)"
+      }
+    },
+    "storage-probe/fb-metadata-update#patch-missing": {
+      "documents": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)",
+      "reason": "A Firebase v0 metadata PATCH of an absent object is refused as a write with 403 in fireemu, for every caller, as production answers it (recorded 2026-09-30, stage 3 v9: method-update, method-write and stored-null patch-absent rows and the owner's boundary-firebase-admin-patch-absent row). The official emulator lets the rules allow it and then answers a plain 404.",
+      "authority": {
+        "kind": "production-spec",
+        "sourceUrls": [
+          "https://cloud.google.com/storage/docs/json_api/v1/objects/patch",
+          "https://github.com/firebase/firebase-tools/tree/v15.28.2"
+        ],
+        "checkedOn": "2026-09-30",
+        "officialBaseline": {
+          "package": "firebase-tools",
+          "version": "15.28.2"
+        },
+        "fixture": "conformance/storage-matrix.json#fb-metadata-update#patch-missing",
+        "approvalRecord": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)"
+      }
+    },
+    "storage-probe/gcs-preconditions#patch-if-metageneration-mismatch": {
+      "documents": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)",
+      "reason": "PATCH /storage/v1/b/<bucket>/o/<object> honours ifMetagenerationMatch in fireemu and answers 412 on a mismatch, as production does. The official emulator registers PATCH on the short spelling only and answers this spelling with 501 (see patch-storage-v1-spelling).",
+      "authority": {
+        "kind": "production-spec",
+        "sourceUrls": [
+          "https://cloud.google.com/storage/docs/json_api/v1/objects/patch",
+          "https://github.com/firebase/firebase-tools/tree/v15.28.2"
+        ],
+        "checkedOn": "2026-09-30",
+        "officialBaseline": {
+          "package": "firebase-tools",
+          "version": "15.28.2"
+        },
+        "fixture": "conformance/storage-matrix.json#gcs-preconditions#patch-if-metageneration-mismatch",
+        "approvalRecord": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)"
+      }
+    },
+    "storage-probe/fb-media-upload#upload": {
+      "documents": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)",
+      "reason": "In fireemu, the Firebase dialect spells crc32c in base64, as production does, where the official emulator writes the decimal spelling; a Firebase upload with no contentDisposition stores `inline; filename*=utf-8''<file name>`, as production does, where the official emulator stores a bare `inline`; the Firebase dialect omits an empty custom metadata map and an absent download token, as production does, where the official emulator writes `metadata: {}` and `downloadTokens: \"\"`. Recorded against production in stage 3 v9 (2026-09-30) and pinned by the crate tests.",
+      "authority": {
+        "kind": "production-spec",
+        "sourceUrls": [
+          "https://cloud.google.com/storage/docs/json_api/v1/objects",
+          "https://github.com/firebase/firebase-tools/tree/v15.28.2"
+        ],
+        "checkedOn": "2026-09-30",
+        "officialBaseline": {
+          "package": "firebase-tools",
+          "version": "15.28.2"
+        },
+        "fixture": "conformance/storage-matrix.json#fb-media-upload#upload",
+        "approvalRecord": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)"
+      }
+    },
+    "storage-probe/fb-media-upload#metadata": {
+      "documents": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)",
+      "reason": "In fireemu, the Firebase dialect spells crc32c in base64, as production does, where the official emulator writes the decimal spelling; a Firebase upload with no contentDisposition stores `inline; filename*=utf-8''<file name>`, as production does, where the official emulator stores a bare `inline`; the Firebase dialect omits an empty custom metadata map and an absent download token, as production does, where the official emulator writes `metadata: {}` and `downloadTokens: \"\"`. Recorded against production in stage 3 v9 (2026-09-30) and pinned by the crate tests.",
+      "authority": {
+        "kind": "production-spec",
+        "sourceUrls": [
+          "https://cloud.google.com/storage/docs/json_api/v1/objects",
+          "https://github.com/firebase/firebase-tools/tree/v15.28.2"
+        ],
+        "checkedOn": "2026-09-30",
+        "officialBaseline": {
+          "package": "firebase-tools",
+          "version": "15.28.2"
+        },
+        "fixture": "conformance/storage-matrix.json#fb-media-upload#metadata",
+        "approvalRecord": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)"
+      }
+    },
+    "storage-probe/fb-media-upload#upload-without-content-type": {
+      "documents": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)",
+      "reason": "In fireemu, the Firebase dialect spells crc32c in base64, as production does, where the official emulator writes the decimal spelling; a Firebase upload with no contentDisposition stores `inline; filename*=utf-8''<file name>`, as production does, where the official emulator stores a bare `inline`; the Firebase dialect omits an empty custom metadata map and an absent download token, as production does, where the official emulator writes `metadata: {}` and `downloadTokens: \"\"`. Recorded against production in stage 3 v9 (2026-09-30) and pinned by the crate tests.",
+      "authority": {
+        "kind": "production-spec",
+        "sourceUrls": [
+          "https://cloud.google.com/storage/docs/json_api/v1/objects",
+          "https://github.com/firebase/firebase-tools/tree/v15.28.2"
+        ],
+        "checkedOn": "2026-09-30",
+        "officialBaseline": {
+          "package": "firebase-tools",
+          "version": "15.28.2"
+        },
+        "fixture": "conformance/storage-matrix.json#fb-media-upload#upload-without-content-type",
+        "approvalRecord": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)"
+      }
+    },
+    "storage-probe/fb-media-upload#upload-with-firebase-owner-credential": {
+      "documents": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)",
+      "reason": "In fireemu, the Firebase dialect spells crc32c in base64, as production does, where the official emulator writes the decimal spelling; a Firebase upload with no contentDisposition stores `inline; filename*=utf-8''<file name>`, as production does, where the official emulator stores a bare `inline`; the Firebase dialect omits an empty custom metadata map and an absent download token, as production does, where the official emulator writes `metadata: {}` and `downloadTokens: \"\"`. Recorded against production in stage 3 v9 (2026-09-30) and pinned by the crate tests.",
+      "authority": {
+        "kind": "production-spec",
+        "sourceUrls": [
+          "https://cloud.google.com/storage/docs/json_api/v1/objects",
+          "https://github.com/firebase/firebase-tools/tree/v15.28.2"
+        ],
+        "checkedOn": "2026-09-30",
+        "officialBaseline": {
+          "package": "firebase-tools",
+          "version": "15.28.2"
+        },
+        "fixture": "conformance/storage-matrix.json#fb-media-upload#upload-with-firebase-owner-credential",
+        "approvalRecord": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)"
+      }
+    },
+    "storage-probe/fb-media-upload#upload-to-object-url": {
+      "documents": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)",
+      "reason": "In fireemu, the Firebase dialect spells crc32c in base64, as production does, where the official emulator writes the decimal spelling; a Firebase upload with no contentDisposition stores `inline; filename*=utf-8''<file name>`, as production does, where the official emulator stores a bare `inline`; the Firebase dialect omits an empty custom metadata map and an absent download token, as production does, where the official emulator writes `metadata: {}` and `downloadTokens: \"\"`. Recorded against production in stage 3 v9 (2026-09-30) and pinned by the crate tests.",
+      "authority": {
+        "kind": "production-spec",
+        "sourceUrls": [
+          "https://cloud.google.com/storage/docs/json_api/v1/objects",
+          "https://github.com/firebase/firebase-tools/tree/v15.28.2"
+        ],
+        "checkedOn": "2026-09-30",
+        "officialBaseline": {
+          "package": "firebase-tools",
+          "version": "15.28.2"
+        },
+        "fixture": "conformance/storage-matrix.json#fb-media-upload#upload-to-object-url",
+        "approvalRecord": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)"
+      }
+    },
+    "storage-probe/fb-media-upload#unicode-name-round-trip": {
+      "documents": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)",
+      "reason": "In fireemu, the Firebase dialect spells crc32c in base64, as production does, where the official emulator writes the decimal spelling; a Firebase upload with no contentDisposition stores `inline; filename*=utf-8''<file name>`, as production does, where the official emulator stores a bare `inline`; the Firebase dialect omits an empty custom metadata map and an absent download token, as production does, where the official emulator writes `metadata: {}` and `downloadTokens: \"\"`. Recorded against production in stage 3 v9 (2026-09-30) and pinned by the crate tests.",
+      "authority": {
+        "kind": "production-spec",
+        "sourceUrls": [
+          "https://cloud.google.com/storage/docs/json_api/v1/objects",
+          "https://github.com/firebase/firebase-tools/tree/v15.28.2"
+        ],
+        "checkedOn": "2026-09-30",
+        "officialBaseline": {
+          "package": "firebase-tools",
+          "version": "15.28.2"
+        },
+        "fixture": "conformance/storage-matrix.json#fb-media-upload#unicode-name-round-trip",
+        "approvalRecord": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)"
+      }
+    },
+    "storage-probe/fb-multipart-upload#upload": {
+      "documents": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)",
+      "reason": "In fireemu, the Firebase dialect spells crc32c in base64, as production does, where the official emulator writes the decimal spelling. Recorded against production in stage 3 v9 (2026-09-30) and pinned by the crate tests.",
+      "authority": {
+        "kind": "production-spec",
+        "sourceUrls": [
+          "https://cloud.google.com/storage/docs/json_api/v1/objects",
+          "https://github.com/firebase/firebase-tools/tree/v15.28.2"
+        ],
+        "checkedOn": "2026-09-30",
+        "officialBaseline": {
+          "package": "firebase-tools",
+          "version": "15.28.2"
+        },
+        "fixture": "conformance/storage-matrix.json#fb-multipart-upload#upload",
+        "approvalRecord": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)"
+      }
+    },
+    "storage-probe/fb-resumable-upload#start": {
+      "documents": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)",
+      "reason": "In fireemu, the resumable start answers no body, as production does, where the official emulator writes the text `OK`. Recorded against production in stage 3 v9 (2026-09-30) and pinned by the crate tests.",
+      "authority": {
+        "kind": "production-spec",
+        "sourceUrls": [
+          "https://cloud.google.com/storage/docs/json_api/v1/objects",
+          "https://github.com/firebase/firebase-tools/tree/v15.28.2"
+        ],
+        "checkedOn": "2026-09-30",
+        "officialBaseline": {
+          "package": "firebase-tools",
+          "version": "15.28.2"
+        },
+        "fixture": "conformance/storage-matrix.json#fb-resumable-upload#start",
+        "approvalRecord": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)"
+      }
+    },
+    "storage-probe/fb-resumable-upload#upload-and-finalize": {
+      "documents": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)",
+      "reason": "In fireemu, the Firebase dialect spells crc32c in base64, as production does, where the official emulator writes the decimal spelling; a Firebase upload with no contentDisposition stores `inline; filename*=utf-8''<file name>`, as production does, where the official emulator stores a bare `inline`. Recorded against production in stage 3 v9 (2026-09-30) and pinned by the crate tests.",
+      "authority": {
+        "kind": "production-spec",
+        "sourceUrls": [
+          "https://cloud.google.com/storage/docs/json_api/v1/objects",
+          "https://github.com/firebase/firebase-tools/tree/v15.28.2"
+        ],
+        "checkedOn": "2026-09-30",
+        "officialBaseline": {
+          "package": "firebase-tools",
+          "version": "15.28.2"
+        },
+        "fixture": "conformance/storage-matrix.json#fb-resumable-upload#upload-and-finalize",
+        "approvalRecord": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)"
+      }
+    },
+    "storage-probe/fb-resumable-upload#cancel-finalized": {
+      "documents": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)",
+      "reason": "In fireemu, cancelling a finished resumable session answers `Upload has already been finalized.`, as production does, where the official emulator answers `Bad Request`. Recorded against production in stage 3 v9 (2026-09-30) and pinned by the crate tests.",
+      "authority": {
+        "kind": "production-spec",
+        "sourceUrls": [
+          "https://cloud.google.com/storage/docs/json_api/v1/objects",
+          "https://github.com/firebase/firebase-tools/tree/v15.28.2"
+        ],
+        "checkedOn": "2026-09-30",
+        "officialBaseline": {
+          "package": "firebase-tools",
+          "version": "15.28.2"
+        },
+        "fixture": "conformance/storage-matrix.json#fb-resumable-upload#cancel-finalized",
+        "approvalRecord": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)"
+      }
+    },
+    "storage-probe/fb-resumable-upload#committed-object": {
+      "documents": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)",
+      "reason": "In fireemu, the Firebase dialect spells crc32c in base64, as production does, where the official emulator writes the decimal spelling; a Firebase upload with no contentDisposition stores `inline; filename*=utf-8''<file name>`, as production does, where the official emulator stores a bare `inline`. Recorded against production in stage 3 v9 (2026-09-30) and pinned by the crate tests.",
+      "authority": {
+        "kind": "production-spec",
+        "sourceUrls": [
+          "https://cloud.google.com/storage/docs/json_api/v1/objects",
+          "https://github.com/firebase/firebase-tools/tree/v15.28.2"
+        ],
+        "checkedOn": "2026-09-30",
+        "officialBaseline": {
+          "package": "firebase-tools",
+          "version": "15.28.2"
+        },
+        "fixture": "conformance/storage-matrix.json#fb-resumable-upload#committed-object",
+        "approvalRecord": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)"
+      }
+    },
+    "storage-probe/fb-resumable-upload#start-second": {
+      "documents": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)",
+      "reason": "In fireemu, the resumable start answers no body, as production does, where the official emulator writes the text `OK`. Recorded against production in stage 3 v9 (2026-09-30) and pinned by the crate tests.",
+      "authority": {
+        "kind": "production-spec",
+        "sourceUrls": [
+          "https://cloud.google.com/storage/docs/json_api/v1/objects",
+          "https://github.com/firebase/firebase-tools/tree/v15.28.2"
+        ],
+        "checkedOn": "2026-09-30",
+        "officialBaseline": {
+          "package": "firebase-tools",
+          "version": "15.28.2"
+        },
+        "fixture": "conformance/storage-matrix.json#fb-resumable-upload#start-second",
+        "approvalRecord": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)"
+      }
+    },
+    "storage-probe/fb-resumable-upload#cancelled-object-absent": {
+      "documents": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)",
+      "reason": "In fireemu, an absent Firebase object answers the JSON body `Not Found.` under `application/json; charset=UTF-8`, as production does, where the official emulator writes the bare text `Not Found`. Recorded against production in stage 3 v9 (2026-09-30) and pinned by the crate tests.",
+      "authority": {
+        "kind": "production-spec",
+        "sourceUrls": [
+          "https://cloud.google.com/storage/docs/json_api/v1/objects",
+          "https://github.com/firebase/firebase-tools/tree/v15.28.2"
+        ],
+        "checkedOn": "2026-09-30",
+        "officialBaseline": {
+          "package": "firebase-tools",
+          "version": "15.28.2"
+        },
+        "fixture": "conformance/storage-matrix.json#fb-resumable-upload#cancelled-object-absent",
+        "approvalRecord": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)"
+      }
+    },
+    "storage-probe/fb-resumable-upload#start-third": {
+      "documents": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)",
+      "reason": "In fireemu, the resumable start answers no body, as production does, where the official emulator writes the text `OK`. Recorded against production in stage 3 v9 (2026-09-30) and pinned by the crate tests.",
+      "authority": {
+        "kind": "production-spec",
+        "sourceUrls": [
+          "https://cloud.google.com/storage/docs/json_api/v1/objects",
+          "https://github.com/firebase/firebase-tools/tree/v15.28.2"
+        ],
+        "checkedOn": "2026-09-30",
+        "officialBaseline": {
+          "package": "firebase-tools",
+          "version": "15.28.2"
+        },
+        "fixture": "conformance/storage-matrix.json#fb-resumable-upload#start-third",
+        "approvalRecord": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)"
+      }
+    },
+    "storage-probe/fb-download-tokens#upload": {
+      "documents": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)",
+      "reason": "In fireemu, the Firebase dialect spells crc32c in base64, as production does, where the official emulator writes the decimal spelling; a Firebase upload with no contentDisposition stores `inline; filename*=utf-8''<file name>`, as production does, where the official emulator stores a bare `inline`; the Firebase dialect omits an empty custom metadata map and an absent download token, as production does, where the official emulator writes `metadata: {}` and `downloadTokens: \"\"`. Recorded against production in stage 3 v9 (2026-09-30) and pinned by the crate tests.",
+      "authority": {
+        "kind": "production-spec",
+        "sourceUrls": [
+          "https://cloud.google.com/storage/docs/json_api/v1/objects",
+          "https://github.com/firebase/firebase-tools/tree/v15.28.2"
+        ],
+        "checkedOn": "2026-09-30",
+        "officialBaseline": {
+          "package": "firebase-tools",
+          "version": "15.28.2"
+        },
+        "fixture": "conformance/storage-matrix.json#fb-download-tokens#upload",
+        "approvalRecord": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)"
+      }
+    },
+    "storage-probe/fb-download-tokens#metadata-with-token-no-credentials": {
+      "documents": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)",
+      "reason": "In fireemu, the Firebase dialect spells crc32c in base64, as production does, where the official emulator writes the decimal spelling; a Firebase upload with no contentDisposition stores `inline; filename*=utf-8''<file name>`, as production does, where the official emulator stores a bare `inline`; the Firebase dialect omits an empty custom metadata map and an absent download token, as production does, where the official emulator writes `metadata: {}` and `downloadTokens: \"\"`. Recorded against production in stage 3 v9 (2026-09-30) and pinned by the crate tests.",
+      "authority": {
+        "kind": "production-spec",
+        "sourceUrls": [
+          "https://cloud.google.com/storage/docs/json_api/v1/objects",
+          "https://github.com/firebase/firebase-tools/tree/v15.28.2"
+        ],
+        "checkedOn": "2026-09-30",
+        "officialBaseline": {
+          "package": "firebase-tools",
+          "version": "15.28.2"
+        },
+        "fixture": "conformance/storage-matrix.json#fb-download-tokens#metadata-with-token-no-credentials",
+        "approvalRecord": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)"
+      }
+    },
+    "storage-probe/fb-download-tokens#owner-uploads-closed-object": {
+      "documents": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)",
+      "reason": "In fireemu, the Firebase dialect spells crc32c in base64, as production does, where the official emulator writes the decimal spelling; a Firebase upload with no contentDisposition stores `inline; filename*=utf-8''<file name>`, as production does, where the official emulator stores a bare `inline`; the Firebase dialect omits an empty custom metadata map and an absent download token, as production does, where the official emulator writes `metadata: {}` and `downloadTokens: \"\"`. Recorded against production in stage 3 v9 (2026-09-30) and pinned by the crate tests.",
+      "authority": {
+        "kind": "production-spec",
+        "sourceUrls": [
+          "https://cloud.google.com/storage/docs/json_api/v1/objects",
+          "https://github.com/firebase/firebase-tools/tree/v15.28.2"
+        ],
+        "checkedOn": "2026-09-30",
+        "officialBaseline": {
+          "package": "firebase-tools",
+          "version": "15.28.2"
+        },
+        "fixture": "conformance/storage-matrix.json#fb-download-tokens#owner-uploads-closed-object",
+        "approvalRecord": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)"
+      }
+    },
+    "storage-probe/fb-download-tokens#create-token": {
+      "documents": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)",
+      "reason": "In fireemu, the Firebase dialect spells crc32c in base64, as production does, where the official emulator writes the decimal spelling; a Firebase upload with no contentDisposition stores `inline; filename*=utf-8''<file name>`, as production does, where the official emulator stores a bare `inline`; the Firebase dialect omits an empty custom metadata map and an absent download token, as production does, where the official emulator writes `metadata: {}` and `downloadTokens: \"\"`. Recorded against production in stage 3 v9 (2026-09-30) and pinned by the crate tests.",
+      "authority": {
+        "kind": "production-spec",
+        "sourceUrls": [
+          "https://cloud.google.com/storage/docs/json_api/v1/objects",
+          "https://github.com/firebase/firebase-tools/tree/v15.28.2"
+        ],
+        "checkedOn": "2026-09-30",
+        "officialBaseline": {
+          "package": "firebase-tools",
+          "version": "15.28.2"
+        },
+        "fixture": "conformance/storage-matrix.json#fb-download-tokens#create-token",
+        "approvalRecord": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)"
+      }
+    },
+    "storage-probe/fb-download-tokens#delete-token": {
+      "documents": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)",
+      "reason": "In fireemu, the Firebase dialect spells crc32c in base64, as production does, where the official emulator writes the decimal spelling; a Firebase upload with no contentDisposition stores `inline; filename*=utf-8''<file name>`, as production does, where the official emulator stores a bare `inline`; the Firebase dialect omits an empty custom metadata map and an absent download token, as production does, where the official emulator writes `metadata: {}` and `downloadTokens: \"\"`. Recorded against production in stage 3 v9 (2026-09-30) and pinned by the crate tests.",
+      "authority": {
+        "kind": "production-spec",
+        "sourceUrls": [
+          "https://cloud.google.com/storage/docs/json_api/v1/objects",
+          "https://github.com/firebase/firebase-tools/tree/v15.28.2"
+        ],
+        "checkedOn": "2026-09-30",
+        "officialBaseline": {
+          "package": "firebase-tools",
+          "version": "15.28.2"
+        },
+        "fixture": "conformance/storage-matrix.json#fb-download-tokens#delete-token",
+        "approvalRecord": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)"
+      }
+    },
+    "storage-probe/fb-download-tokens#firebase-get-mints-a-token": {
+      "documents": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)",
+      "reason": "In fireemu, the Firebase dialect spells crc32c in base64, as production does, where the official emulator writes the decimal spelling. Recorded against production in stage 3 v9 (2026-09-30) and pinned by the crate tests.",
+      "authority": {
+        "kind": "production-spec",
+        "sourceUrls": [
+          "https://cloud.google.com/storage/docs/json_api/v1/objects",
+          "https://github.com/firebase/firebase-tools/tree/v15.28.2"
+        ],
+        "checkedOn": "2026-09-30",
+        "officialBaseline": {
+          "package": "firebase-tools",
+          "version": "15.28.2"
+        },
+        "fixture": "conformance/storage-matrix.json#fb-download-tokens#firebase-get-mints-a-token",
+        "approvalRecord": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)"
+      }
+    },
+    "storage-probe/fb-download-tokens#firebase-get-again-keeps-it": {
+      "documents": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)",
+      "reason": "In fireemu, the Firebase dialect spells crc32c in base64, as production does, where the official emulator writes the decimal spelling. Recorded against production in stage 3 v9 (2026-09-30) and pinned by the crate tests.",
+      "authority": {
+        "kind": "production-spec",
+        "sourceUrls": [
+          "https://cloud.google.com/storage/docs/json_api/v1/objects",
+          "https://github.com/firebase/firebase-tools/tree/v15.28.2"
+        ],
+        "checkedOn": "2026-09-30",
+        "officialBaseline": {
+          "package": "firebase-tools",
+          "version": "15.28.2"
+        },
+        "fixture": "conformance/storage-matrix.json#fb-download-tokens#firebase-get-again-keeps-it",
+        "approvalRecord": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)"
+      }
+    },
+    "storage-probe/fb-download-tokens#upload-with-client-supplied-token": {
+      "documents": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)",
+      "reason": "In fireemu, the Firebase dialect omits an empty custom metadata map and an absent download token, as production does, where the official emulator writes `metadata: {}` and `downloadTokens: \"\"`. Recorded against production in stage 3 v9 (2026-09-30) and pinned by the crate tests.",
+      "authority": {
+        "kind": "production-spec",
+        "sourceUrls": [
+          "https://cloud.google.com/storage/docs/json_api/v1/objects",
+          "https://github.com/firebase/firebase-tools/tree/v15.28.2"
+        ],
+        "checkedOn": "2026-09-30",
+        "officialBaseline": {
+          "package": "firebase-tools",
+          "version": "15.28.2"
+        },
+        "fixture": "conformance/storage-matrix.json#fb-download-tokens#upload-with-client-supplied-token",
+        "approvalRecord": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)"
+      }
+    },
+    "storage-probe/fb-metadata-update#upload": {
+      "documents": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)",
+      "reason": "In fireemu, the Firebase dialect spells crc32c in base64, as production does, where the official emulator writes the decimal spelling. Recorded against production in stage 3 v9 (2026-09-30) and pinned by the crate tests.",
+      "authority": {
+        "kind": "production-spec",
+        "sourceUrls": [
+          "https://cloud.google.com/storage/docs/json_api/v1/objects",
+          "https://github.com/firebase/firebase-tools/tree/v15.28.2"
+        ],
+        "checkedOn": "2026-09-30",
+        "officialBaseline": {
+          "package": "firebase-tools",
+          "version": "15.28.2"
+        },
+        "fixture": "conformance/storage-matrix.json#fb-metadata-update#upload",
+        "approvalRecord": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)"
+      }
+    },
+    "storage-probe/fb-metadata-update#patch": {
+      "documents": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)",
+      "reason": "In fireemu, the Firebase dialect spells crc32c in base64, as production does, where the official emulator writes the decimal spelling. Recorded against production in stage 3 v9 (2026-09-30) and pinned by the crate tests.",
+      "authority": {
+        "kind": "production-spec",
+        "sourceUrls": [
+          "https://cloud.google.com/storage/docs/json_api/v1/objects",
+          "https://github.com/firebase/firebase-tools/tree/v15.28.2"
+        ],
+        "checkedOn": "2026-09-30",
+        "officialBaseline": {
+          "package": "firebase-tools",
+          "version": "15.28.2"
+        },
+        "fixture": "conformance/storage-matrix.json#fb-metadata-update#patch",
+        "approvalRecord": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)"
+      }
+    },
+    "storage-probe/fb-metadata-update#put-with-method-override": {
+      "documents": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)",
+      "reason": "In fireemu, the Firebase dialect spells crc32c in base64, as production does, where the official emulator writes the decimal spelling. Recorded against production in stage 3 v9 (2026-09-30) and pinned by the crate tests.",
+      "authority": {
+        "kind": "production-spec",
+        "sourceUrls": [
+          "https://cloud.google.com/storage/docs/json_api/v1/objects",
+          "https://github.com/firebase/firebase-tools/tree/v15.28.2"
+        ],
+        "checkedOn": "2026-09-30",
+        "officialBaseline": {
+          "package": "firebase-tools",
+          "version": "15.28.2"
+        },
+        "fixture": "conformance/storage-matrix.json#fb-metadata-update#put-with-method-override",
+        "approvalRecord": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)"
+      }
+    },
+    "storage-probe/fb-metadata-update#clear-all-custom-metadata": {
+      "documents": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)",
+      "reason": "In fireemu, the Firebase dialect spells crc32c in base64, as production does, where the official emulator writes the decimal spelling. Recorded against production in stage 3 v9 (2026-09-30) and pinned by the crate tests.",
+      "authority": {
+        "kind": "production-spec",
+        "sourceUrls": [
+          "https://cloud.google.com/storage/docs/json_api/v1/objects",
+          "https://github.com/firebase/firebase-tools/tree/v15.28.2"
+        ],
+        "checkedOn": "2026-09-30",
+        "officialBaseline": {
+          "package": "firebase-tools",
+          "version": "15.28.2"
+        },
+        "fixture": "conformance/storage-matrix.json#fb-metadata-update#clear-all-custom-metadata",
+        "approvalRecord": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)"
+      }
+    },
+    "storage-probe/fb-metadata-update#non-string-custom-value": {
+      "documents": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)",
+      "reason": "In fireemu, the Firebase dialect spells crc32c in base64, as production does, where the official emulator writes the decimal spelling. Recorded against production in stage 3 v9 (2026-09-30) and pinned by the crate tests.",
+      "authority": {
+        "kind": "production-spec",
+        "sourceUrls": [
+          "https://cloud.google.com/storage/docs/json_api/v1/objects",
+          "https://github.com/firebase/firebase-tools/tree/v15.28.2"
+        ],
+        "checkedOn": "2026-09-30",
+        "officialBaseline": {
+          "package": "firebase-tools",
+          "version": "15.28.2"
+        },
+        "fixture": "conformance/storage-matrix.json#fb-metadata-update#non-string-custom-value",
+        "approvalRecord": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)"
+      }
+    },
+    "storage-probe/fb-metadata-update#empty-patch-bumps-metageneration": {
+      "documents": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)",
+      "reason": "In fireemu, the Firebase dialect spells crc32c in base64, as production does, where the official emulator writes the decimal spelling. Recorded against production in stage 3 v9 (2026-09-30) and pinned by the crate tests.",
+      "authority": {
+        "kind": "production-spec",
+        "sourceUrls": [
+          "https://cloud.google.com/storage/docs/json_api/v1/objects",
+          "https://github.com/firebase/firebase-tools/tree/v15.28.2"
+        ],
+        "checkedOn": "2026-09-30",
+        "officialBaseline": {
+          "package": "firebase-tools",
+          "version": "15.28.2"
+        },
+        "fixture": "conformance/storage-matrix.json#fb-metadata-update#empty-patch-bumps-metageneration",
+        "approvalRecord": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)"
+      }
+    },
+    "storage-probe/fb-delete#delete-again": {
+      "documents": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)",
+      "reason": "In fireemu, an absent Firebase object answers the JSON body `Not Found.` under `application/json; charset=UTF-8`, as production does, where the official emulator writes the bare text `Not Found`. Recorded against production in stage 3 v9 (2026-09-30) and pinned by the crate tests.",
+      "authority": {
+        "kind": "production-spec",
+        "sourceUrls": [
+          "https://cloud.google.com/storage/docs/json_api/v1/objects",
+          "https://github.com/firebase/firebase-tools/tree/v15.28.2"
+        ],
+        "checkedOn": "2026-09-30",
+        "officialBaseline": {
+          "package": "firebase-tools",
+          "version": "15.28.2"
+        },
+        "fixture": "conformance/storage-matrix.json#fb-delete#delete-again",
+        "approvalRecord": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)"
+      }
+    },
+    "storage-probe/fb-delete#get-after-delete": {
+      "documents": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)",
+      "reason": "In fireemu, an absent Firebase object answers the JSON body `Not Found.` under `application/json; charset=UTF-8`, as production does, where the official emulator writes the bare text `Not Found`. Recorded against production in stage 3 v9 (2026-09-30) and pinned by the crate tests.",
+      "authority": {
+        "kind": "production-spec",
+        "sourceUrls": [
+          "https://cloud.google.com/storage/docs/json_api/v1/objects",
+          "https://github.com/firebase/firebase-tools/tree/v15.28.2"
+        ],
+        "checkedOn": "2026-09-30",
+        "officialBaseline": {
+          "package": "firebase-tools",
+          "version": "15.28.2"
+        },
+        "fixture": "conformance/storage-matrix.json#fb-delete#get-after-delete",
+        "approvalRecord": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)"
+      }
+    },
+    "storage-probe/fb-delete#download-after-delete": {
+      "documents": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)",
+      "reason": "In fireemu, an absent Firebase object answers the JSON body `Not Found.` under `application/json; charset=UTF-8`, as production does, where the official emulator writes the bare text `Not Found`. Recorded against production in stage 3 v9 (2026-09-30) and pinned by the crate tests.",
+      "authority": {
+        "kind": "production-spec",
+        "sourceUrls": [
+          "https://cloud.google.com/storage/docs/json_api/v1/objects",
+          "https://github.com/firebase/firebase-tools/tree/v15.28.2"
+        ],
+        "checkedOn": "2026-09-30",
+        "officialBaseline": {
+          "package": "firebase-tools",
+          "version": "15.28.2"
+        },
+        "fixture": "conformance/storage-matrix.json#fb-delete#download-after-delete",
+        "approvalRecord": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)"
+      }
+    },
+    "storage-probe/fb-delete#delete-open-and-missing": {
+      "documents": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)",
+      "reason": "In fireemu, an absent Firebase object answers the JSON body `Not Found.` under `application/json; charset=UTF-8`, as production does, where the official emulator writes the bare text `Not Found`. Recorded against production in stage 3 v9 (2026-09-30) and pinned by the crate tests.",
+      "authority": {
+        "kind": "production-spec",
+        "sourceUrls": [
+          "https://cloud.google.com/storage/docs/json_api/v1/objects",
+          "https://github.com/firebase/firebase-tools/tree/v15.28.2"
+        ],
+        "checkedOn": "2026-09-30",
+        "officialBaseline": {
+          "package": "firebase-tools",
+          "version": "15.28.2"
+        },
+        "fixture": "conformance/storage-matrix.json#fb-delete#delete-open-and-missing",
+        "approvalRecord": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)"
+      }
+    },
+    "storage-probe/fb-errors#get-missing-metadata": {
+      "documents": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)",
+      "reason": "In fireemu, an absent Firebase object answers the JSON body `Not Found.` under `application/json; charset=UTF-8`, as production does, where the official emulator writes the bare text `Not Found`. Recorded against production in stage 3 v9 (2026-09-30) and pinned by the crate tests.",
+      "authority": {
+        "kind": "production-spec",
+        "sourceUrls": [
+          "https://cloud.google.com/storage/docs/json_api/v1/objects",
+          "https://github.com/firebase/firebase-tools/tree/v15.28.2"
+        ],
+        "checkedOn": "2026-09-30",
+        "officialBaseline": {
+          "package": "firebase-tools",
+          "version": "15.28.2"
+        },
+        "fixture": "conformance/storage-matrix.json#fb-errors#get-missing-metadata",
+        "approvalRecord": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)"
+      }
+    },
+    "storage-probe/fb-errors#get-missing-media": {
+      "documents": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)",
+      "reason": "In fireemu, an absent Firebase object answers the JSON body `Not Found.` under `application/json; charset=UTF-8`, as production does, where the official emulator writes the bare text `Not Found`. Recorded against production in stage 3 v9 (2026-09-30) and pinned by the crate tests.",
+      "authority": {
+        "kind": "production-spec",
+        "sourceUrls": [
+          "https://cloud.google.com/storage/docs/json_api/v1/objects",
+          "https://github.com/firebase/firebase-tools/tree/v15.28.2"
+        ],
+        "checkedOn": "2026-09-30",
+        "officialBaseline": {
+          "package": "firebase-tools",
+          "version": "15.28.2"
+        },
+        "fixture": "conformance/storage-matrix.json#fb-errors#get-missing-media",
+        "approvalRecord": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)"
+      }
+    },
+    "storage-probe/fb-errors#get-missing-anonymous": {
+      "documents": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)",
+      "reason": "In fireemu, an absent Firebase object answers the JSON body `Not Found.` under `application/json; charset=UTF-8`, as production does, where the official emulator writes the bare text `Not Found`. Recorded against production in stage 3 v9 (2026-09-30) and pinned by the crate tests.",
+      "authority": {
+        "kind": "production-spec",
+        "sourceUrls": [
+          "https://cloud.google.com/storage/docs/json_api/v1/objects",
+          "https://github.com/firebase/firebase-tools/tree/v15.28.2"
+        ],
+        "checkedOn": "2026-09-30",
+        "officialBaseline": {
+          "package": "firebase-tools",
+          "version": "15.28.2"
+        },
+        "fixture": "conformance/storage-matrix.json#fb-errors#get-missing-anonymous",
+        "approvalRecord": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)"
+      }
+    },
+    "storage-probe/fb-errors#malformed-bearer": {
+      "documents": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)",
+      "reason": "In fireemu, an absent Firebase object answers the JSON body `Not Found.` under `application/json; charset=UTF-8`, as production does, where the official emulator writes the bare text `Not Found`. Recorded against production in stage 3 v9 (2026-09-30) and pinned by the crate tests.",
+      "authority": {
+        "kind": "production-spec",
+        "sourceUrls": [
+          "https://cloud.google.com/storage/docs/json_api/v1/objects",
+          "https://github.com/firebase/firebase-tools/tree/v15.28.2"
+        ],
+        "checkedOn": "2026-09-30",
+        "officialBaseline": {
+          "package": "firebase-tools",
+          "version": "15.28.2"
+        },
+        "fixture": "conformance/storage-matrix.json#fb-errors#malformed-bearer",
+        "approvalRecord": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)"
+      }
+    },
+    "storage-probe/fb-errors#cors-actual-request": {
+      "documents": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)",
+      "reason": "In fireemu, an absent Firebase object answers the JSON body `Not Found.` under `application/json; charset=UTF-8`, as production does, where the official emulator writes the bare text `Not Found`. Recorded against production in stage 3 v9 (2026-09-30) and pinned by the crate tests.",
+      "authority": {
+        "kind": "production-spec",
+        "sourceUrls": [
+          "https://cloud.google.com/storage/docs/json_api/v1/objects",
+          "https://github.com/firebase/firebase-tools/tree/v15.28.2"
+        ],
+        "checkedOn": "2026-09-30",
+        "officialBaseline": {
+          "package": "firebase-tools",
+          "version": "15.28.2"
+        },
+        "fixture": "conformance/storage-matrix.json#fb-errors#cors-actual-request",
+        "approvalRecord": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)"
+      }
+    },
+    "storage-probe/fb-overwrite#first": {
+      "documents": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)",
+      "reason": "In fireemu, the Firebase dialect spells crc32c in base64, as production does, where the official emulator writes the decimal spelling; a Firebase upload with no contentDisposition stores `inline; filename*=utf-8''<file name>`, as production does, where the official emulator stores a bare `inline`; the Firebase dialect omits an empty custom metadata map and an absent download token, as production does, where the official emulator writes `metadata: {}` and `downloadTokens: \"\"`. Recorded against production in stage 3 v9 (2026-09-30) and pinned by the crate tests.",
+      "authority": {
+        "kind": "production-spec",
+        "sourceUrls": [
+          "https://cloud.google.com/storage/docs/json_api/v1/objects",
+          "https://github.com/firebase/firebase-tools/tree/v15.28.2"
+        ],
+        "checkedOn": "2026-09-30",
+        "officialBaseline": {
+          "package": "firebase-tools",
+          "version": "15.28.2"
+        },
+        "fixture": "conformance/storage-matrix.json#fb-overwrite#first",
+        "approvalRecord": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)"
+      }
+    },
+    "storage-probe/fb-overwrite#second": {
+      "documents": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)",
+      "reason": "In fireemu, the Firebase dialect spells crc32c in base64, as production does, where the official emulator writes the decimal spelling; a Firebase upload with no contentDisposition stores `inline; filename*=utf-8''<file name>`, as production does, where the official emulator stores a bare `inline`; the Firebase dialect omits an empty custom metadata map and an absent download token, as production does, where the official emulator writes `metadata: {}` and `downloadTokens: \"\"`. Recorded against production in stage 3 v9 (2026-09-30) and pinned by the crate tests.",
+      "authority": {
+        "kind": "production-spec",
+        "sourceUrls": [
+          "https://cloud.google.com/storage/docs/json_api/v1/objects",
+          "https://github.com/firebase/firebase-tools/tree/v15.28.2"
+        ],
+        "checkedOn": "2026-09-30",
+        "officialBaseline": {
+          "package": "firebase-tools",
+          "version": "15.28.2"
+        },
+        "fixture": "conformance/storage-matrix.json#fb-overwrite#second",
+        "approvalRecord": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)"
+      }
+    },
+    "storage-probe/fb-overwrite#generation-changed": {
+      "documents": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)",
+      "reason": "In fireemu, the Firebase dialect omits an empty custom metadata map and an absent download token, as production does, where the official emulator writes `metadata: {}` and `downloadTokens: \"\"`. Recorded against production in stage 3 v9 (2026-09-30) and pinned by the crate tests.",
+      "authority": {
+        "kind": "production-spec",
+        "sourceUrls": [
+          "https://cloud.google.com/storage/docs/json_api/v1/objects",
+          "https://github.com/firebase/firebase-tools/tree/v15.28.2"
+        ],
+        "checkedOn": "2026-09-30",
+        "officialBaseline": {
+          "package": "firebase-tools",
+          "version": "15.28.2"
+        },
+        "fixture": "conformance/storage-matrix.json#fb-overwrite#generation-changed",
+        "approvalRecord": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)"
+      }
+    },
+    "storage-probe/fb-overwrite#old-generation-not-served": {
+      "documents": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)",
+      "reason": "In fireemu, the Firebase dialect spells crc32c in base64, as production does, where the official emulator writes the decimal spelling; a Firebase upload with no contentDisposition stores `inline; filename*=utf-8''<file name>`, as production does, where the official emulator stores a bare `inline`; the Firebase dialect omits an empty custom metadata map and an absent download token, as production does, where the official emulator writes `metadata: {}` and `downloadTokens: \"\"`. Recorded against production in stage 3 v9 (2026-09-30) and pinned by the crate tests.",
+      "authority": {
+        "kind": "production-spec",
+        "sourceUrls": [
+          "https://cloud.google.com/storage/docs/json_api/v1/objects",
+          "https://github.com/firebase/firebase-tools/tree/v15.28.2"
+        ],
+        "checkedOn": "2026-09-30",
+        "officialBaseline": {
+          "package": "firebase-tools",
+          "version": "15.28.2"
+        },
+        "fixture": "conformance/storage-matrix.json#fb-overwrite#old-generation-not-served",
+        "approvalRecord": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)"
+      }
+    },
+    "storage-probe/rules-request-model#size-under-limit": {
+      "documents": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)",
+      "reason": "In fireemu, the Firebase dialect spells crc32c in base64, as production does, where the official emulator writes the decimal spelling; a Firebase upload with no contentDisposition stores `inline; filename*=utf-8''<file name>`, as production does, where the official emulator stores a bare `inline`; the Firebase dialect omits an empty custom metadata map and an absent download token, as production does, where the official emulator writes `metadata: {}` and `downloadTokens: \"\"`. Recorded against production in stage 3 v9 (2026-09-30) and pinned by the crate tests.",
+      "authority": {
+        "kind": "production-spec",
+        "sourceUrls": [
+          "https://cloud.google.com/storage/docs/json_api/v1/objects",
+          "https://github.com/firebase/firebase-tools/tree/v15.28.2"
+        ],
+        "checkedOn": "2026-09-30",
+        "officialBaseline": {
+          "package": "firebase-tools",
+          "version": "15.28.2"
+        },
+        "fixture": "conformance/storage-matrix.json#rules-request-model#size-under-limit",
+        "approvalRecord": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)"
+      }
+    },
+    "storage-probe/rules-request-model#size-over-limit-not-published": {
+      "documents": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)",
+      "reason": "In fireemu, an absent Firebase object answers the JSON body `Not Found.` under `application/json; charset=UTF-8`, as production does, where the official emulator writes the bare text `Not Found`. Recorded against production in stage 3 v9 (2026-09-30) and pinned by the crate tests.",
+      "authority": {
+        "kind": "production-spec",
+        "sourceUrls": [
+          "https://cloud.google.com/storage/docs/json_api/v1/objects",
+          "https://github.com/firebase/firebase-tools/tree/v15.28.2"
+        ],
+        "checkedOn": "2026-09-30",
+        "officialBaseline": {
+          "package": "firebase-tools",
+          "version": "15.28.2"
+        },
+        "fixture": "conformance/storage-matrix.json#rules-request-model#size-over-limit-not-published",
+        "approvalRecord": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)"
+      }
+    },
+    "storage-probe/rules-request-model#type-image": {
+      "documents": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)",
+      "reason": "In fireemu, the Firebase dialect spells crc32c in base64, as production does, where the official emulator writes the decimal spelling; a Firebase upload with no contentDisposition stores `inline; filename*=utf-8''<file name>`, as production does, where the official emulator stores a bare `inline`; the Firebase dialect omits an empty custom metadata map and an absent download token, as production does, where the official emulator writes `metadata: {}` and `downloadTokens: \"\"`. Recorded against production in stage 3 v9 (2026-09-30) and pinned by the crate tests.",
+      "authority": {
+        "kind": "production-spec",
+        "sourceUrls": [
+          "https://cloud.google.com/storage/docs/json_api/v1/objects",
+          "https://github.com/firebase/firebase-tools/tree/v15.28.2"
+        ],
+        "checkedOn": "2026-09-30",
+        "officialBaseline": {
+          "package": "firebase-tools",
+          "version": "15.28.2"
+        },
+        "fixture": "conformance/storage-matrix.json#rules-request-model#type-image",
+        "approvalRecord": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)"
+      }
+    },
+    "storage-probe/rules-request-model#type-from-metadata-part-wins": {
+      "documents": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)",
+      "reason": "In fireemu, the Firebase dialect spells crc32c in base64, as production does, where the official emulator writes the decimal spelling; a Firebase upload with no contentDisposition stores `inline; filename*=utf-8''<file name>`, as production does, where the official emulator stores a bare `inline`; the Firebase dialect omits an empty custom metadata map and an absent download token, as production does, where the official emulator writes `metadata: {}` and `downloadTokens: \"\"`. Recorded against production in stage 3 v9 (2026-09-30) and pinned by the crate tests.",
+      "authority": {
+        "kind": "production-spec",
+        "sourceUrls": [
+          "https://cloud.google.com/storage/docs/json_api/v1/objects",
+          "https://github.com/firebase/firebase-tools/tree/v15.28.2"
+        ],
+        "checkedOn": "2026-09-30",
+        "officialBaseline": {
+          "package": "firebase-tools",
+          "version": "15.28.2"
+        },
+        "fixture": "conformance/storage-matrix.json#rules-request-model#type-from-metadata-part-wins",
+        "approvalRecord": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)"
+      }
+    },
+    "storage-probe/rules-request-model#custom-metadata-owner": {
+      "documents": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)",
+      "reason": "In fireemu, the Firebase dialect spells crc32c in base64, as production does, where the official emulator writes the decimal spelling; a Firebase upload with no contentDisposition stores `inline; filename*=utf-8''<file name>`, as production does, where the official emulator stores a bare `inline`. Recorded against production in stage 3 v9 (2026-09-30) and pinned by the crate tests.",
+      "authority": {
+        "kind": "production-spec",
+        "sourceUrls": [
+          "https://cloud.google.com/storage/docs/json_api/v1/objects",
+          "https://github.com/firebase/firebase-tools/tree/v15.28.2"
+        ],
+        "checkedOn": "2026-09-30",
+        "officialBaseline": {
+          "package": "firebase-tools",
+          "version": "15.28.2"
+        },
+        "fixture": "conformance/storage-matrix.json#rules-request-model#custom-metadata-owner",
+        "approvalRecord": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)"
+      }
+    },
+    "storage-probe/rules-request-model#update-unlocked": {
+      "documents": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)",
+      "reason": "In fireemu, the Firebase dialect spells crc32c in base64, as production does, where the official emulator writes the decimal spelling; a Firebase upload with no contentDisposition stores `inline; filename*=utf-8''<file name>`, as production does, where the official emulator stores a bare `inline`. Recorded against production in stage 3 v9 (2026-09-30) and pinned by the crate tests.",
+      "authority": {
+        "kind": "production-spec",
+        "sourceUrls": [
+          "https://cloud.google.com/storage/docs/json_api/v1/objects",
+          "https://github.com/firebase/firebase-tools/tree/v15.28.2"
+        ],
+        "checkedOn": "2026-09-30",
+        "officialBaseline": {
+          "package": "firebase-tools",
+          "version": "15.28.2"
+        },
+        "fixture": "conformance/storage-matrix.json#rules-request-model#update-unlocked",
+        "approvalRecord": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)"
+      }
+    },
+    "storage-probe/rules-request-model#overwrite-locked-is-an-update": {
+      "documents": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)",
+      "reason": "In fireemu, the Firebase dialect spells crc32c in base64, as production does, where the official emulator writes the decimal spelling; a Firebase upload with no contentDisposition stores `inline; filename*=utf-8''<file name>`, as production does, where the official emulator stores a bare `inline`; the Firebase dialect omits an empty custom metadata map and an absent download token, as production does, where the official emulator writes `metadata: {}` and `downloadTokens: \"\"`. Recorded against production in stage 3 v9 (2026-09-30) and pinned by the crate tests.",
+      "authority": {
+        "kind": "production-spec",
+        "sourceUrls": [
+          "https://cloud.google.com/storage/docs/json_api/v1/objects",
+          "https://github.com/firebase/firebase-tools/tree/v15.28.2"
+        ],
+        "checkedOn": "2026-09-30",
         "officialBaseline": {
           "package": "firebase-tools",
           "version": "15.28.2"
         },
         "fixture": "conformance/storage-matrix.json#rules-request-model#overwrite-locked-is-an-update",
+        "approvalRecord": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)"
+      }
+    },
+    "storage-probe/rules-request-model#fields-create": {
+      "documents": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)",
+      "reason": "In fireemu, the Firebase dialect spells crc32c in base64, as production does, where the official emulator writes the decimal spelling; a Firebase upload with no contentDisposition stores `inline; filename*=utf-8''<file name>`, as production does, where the official emulator stores a bare `inline`; the Firebase dialect omits an empty custom metadata map and an absent download token, as production does, where the official emulator writes `metadata: {}` and `downloadTokens: \"\"`. Recorded against production in stage 3 v9 (2026-09-30) and pinned by the crate tests.",
+      "authority": {
+        "kind": "production-spec",
+        "sourceUrls": [
+          "https://cloud.google.com/storage/docs/json_api/v1/objects",
+          "https://github.com/firebase/firebase-tools/tree/v15.28.2"
+        ],
+        "checkedOn": "2026-09-30",
+        "officialBaseline": {
+          "package": "firebase-tools",
+          "version": "15.28.2"
+        },
+        "fixture": "conformance/storage-matrix.json#rules-request-model#fields-create",
+        "approvalRecord": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)"
+      }
+    },
+    "storage-probe/rules-request-model#fields-read": {
+      "documents": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)",
+      "reason": "In fireemu, the Firebase dialect spells crc32c in base64, as production does, where the official emulator writes the decimal spelling; a Firebase upload with no contentDisposition stores `inline; filename*=utf-8''<file name>`, as production does, where the official emulator stores a bare `inline`; the Firebase dialect omits an empty custom metadata map and an absent download token, as production does, where the official emulator writes `metadata: {}` and `downloadTokens: \"\"`. Recorded against production in stage 3 v9 (2026-09-30) and pinned by the crate tests.",
+      "authority": {
+        "kind": "production-spec",
+        "sourceUrls": [
+          "https://cloud.google.com/storage/docs/json_api/v1/objects",
+          "https://github.com/firebase/firebase-tools/tree/v15.28.2"
+        ],
+        "checkedOn": "2026-09-30",
+        "officialBaseline": {
+          "package": "firebase-tools",
+          "version": "15.28.2"
+        },
+        "fixture": "conformance/storage-matrix.json#rules-request-model#fields-read",
+        "approvalRecord": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)"
+      }
+    },
+    "storage-probe/rules-request-model#own-prefix": {
+      "documents": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)",
+      "reason": "In fireemu, the Firebase dialect spells crc32c in base64, as production does, where the official emulator writes the decimal spelling; a Firebase upload with no contentDisposition stores `inline; filename*=utf-8''<file name>`, as production does, where the official emulator stores a bare `inline`; the Firebase dialect omits an empty custom metadata map and an absent download token, as production does, where the official emulator writes `metadata: {}` and `downloadTokens: \"\"`. Recorded against production in stage 3 v9 (2026-09-30) and pinned by the crate tests.",
+      "authority": {
+        "kind": "production-spec",
+        "sourceUrls": [
+          "https://cloud.google.com/storage/docs/json_api/v1/objects",
+          "https://github.com/firebase/firebase-tools/tree/v15.28.2"
+        ],
+        "checkedOn": "2026-09-30",
+        "officialBaseline": {
+          "package": "firebase-tools",
+          "version": "15.28.2"
+        },
+        "fixture": "conformance/storage-matrix.json#rules-request-model#own-prefix",
+        "approvalRecord": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)"
+      }
+    },
+    "storage-probe/rules-request-model#bearer-scheme-user-token": {
+      "documents": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)",
+      "reason": "In fireemu, an absent Firebase object answers the JSON body `Not Found.` under `application/json; charset=UTF-8`, as production does, where the official emulator writes the bare text `Not Found`. Recorded against production in stage 3 v9 (2026-09-30) and pinned by the crate tests.",
+      "authority": {
+        "kind": "production-spec",
+        "sourceUrls": [
+          "https://cloud.google.com/storage/docs/json_api/v1/objects",
+          "https://github.com/firebase/firebase-tools/tree/v15.28.2"
+        ],
+        "checkedOn": "2026-09-30",
+        "officialBaseline": {
+          "package": "firebase-tools",
+          "version": "15.28.2"
+        },
+        "fixture": "conformance/storage-matrix.json#rules-request-model#bearer-scheme-user-token",
+        "approvalRecord": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)"
+      }
+    },
+    "storage-probe/rules-request-model#token-claims": {
+      "documents": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)",
+      "reason": "In fireemu, the Firebase dialect spells crc32c in base64, as production does, where the official emulator writes the decimal spelling; a Firebase upload with no contentDisposition stores `inline; filename*=utf-8''<file name>`, as production does, where the official emulator stores a bare `inline`; the Firebase dialect omits an empty custom metadata map and an absent download token, as production does, where the official emulator writes `metadata: {}` and `downloadTokens: \"\"`. Recorded against production in stage 3 v9 (2026-09-30) and pinned by the crate tests.",
+      "authority": {
+        "kind": "production-spec",
+        "sourceUrls": [
+          "https://cloud.google.com/storage/docs/json_api/v1/objects",
+          "https://github.com/firebase/firebase-tools/tree/v15.28.2"
+        ],
+        "checkedOn": "2026-09-30",
+        "officialBaseline": {
+          "package": "firebase-tools",
+          "version": "15.28.2"
+        },
+        "fixture": "conformance/storage-matrix.json#rules-request-model#token-claims",
+        "approvalRecord": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)"
+      }
+    },
+    "storage-probe/rules-request-model#firestore-get-allows": {
+      "documents": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)",
+      "reason": "In fireemu, the Firebase dialect spells crc32c in base64, as production does, where the official emulator writes the decimal spelling; a Firebase upload with no contentDisposition stores `inline; filename*=utf-8''<file name>`, as production does, where the official emulator stores a bare `inline`; the Firebase dialect omits an empty custom metadata map and an absent download token, as production does, where the official emulator writes `metadata: {}` and `downloadTokens: \"\"`. Recorded against production in stage 3 v9 (2026-09-30) and pinned by the crate tests.",
+      "authority": {
+        "kind": "production-spec",
+        "sourceUrls": [
+          "https://cloud.google.com/storage/docs/json_api/v1/objects",
+          "https://github.com/firebase/firebase-tools/tree/v15.28.2"
+        ],
+        "checkedOn": "2026-09-30",
+        "officialBaseline": {
+          "package": "firebase-tools",
+          "version": "15.28.2"
+        },
+        "fixture": "conformance/storage-matrix.json#rules-request-model#firestore-get-allows",
+        "approvalRecord": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)"
+      }
+    },
+    "storage-probe/rules-request-model#firestore-exists-allows": {
+      "documents": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)",
+      "reason": "In fireemu, the Firebase dialect spells crc32c in base64, as production does, where the official emulator writes the decimal spelling; a Firebase upload with no contentDisposition stores `inline; filename*=utf-8''<file name>`, as production does, where the official emulator stores a bare `inline`; the Firebase dialect omits an empty custom metadata map and an absent download token, as production does, where the official emulator writes `metadata: {}` and `downloadTokens: \"\"`. Recorded against production in stage 3 v9 (2026-09-30) and pinned by the crate tests.",
+      "authority": {
+        "kind": "production-spec",
+        "sourceUrls": [
+          "https://cloud.google.com/storage/docs/json_api/v1/objects",
+          "https://github.com/firebase/firebase-tools/tree/v15.28.2"
+        ],
+        "checkedOn": "2026-09-30",
+        "officialBaseline": {
+          "package": "firebase-tools",
+          "version": "15.28.2"
+        },
+        "fixture": "conformance/storage-matrix.json#rules-request-model#firestore-exists-allows",
+        "approvalRecord": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)"
+      }
+    },
+    "storage-probe/gcs-insert-and-get#media-insert": {
+      "documents": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)",
+      "reason": "In fireemu, the JSON API object resource carries timeFinalized, as production writes it (equal to timeCreated in all 735 recorded resources). Recorded against production in stage 3 v9 (2026-09-30) and pinned by the crate tests.",
+      "authority": {
+        "kind": "production-spec",
+        "sourceUrls": [
+          "https://cloud.google.com/storage/docs/json_api/v1/objects",
+          "https://github.com/firebase/firebase-tools/tree/v15.28.2"
+        ],
+        "checkedOn": "2026-09-30",
+        "officialBaseline": {
+          "package": "firebase-tools",
+          "version": "15.28.2"
+        },
+        "fixture": "conformance/storage-matrix.json#gcs-insert-and-get#media-insert",
+        "approvalRecord": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)"
+      }
+    },
+    "storage-probe/gcs-insert-and-get#get-metadata": {
+      "documents": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)",
+      "reason": "In fireemu, the JSON API object resource carries timeFinalized, as production writes it (equal to timeCreated in all 735 recorded resources). Recorded against production in stage 3 v9 (2026-09-30) and pinned by the crate tests.",
+      "authority": {
+        "kind": "production-spec",
+        "sourceUrls": [
+          "https://cloud.google.com/storage/docs/json_api/v1/objects",
+          "https://github.com/firebase/firebase-tools/tree/v15.28.2"
+        ],
+        "checkedOn": "2026-09-30",
+        "officialBaseline": {
+          "package": "firebase-tools",
+          "version": "15.28.2"
+        },
+        "fixture": "conformance/storage-matrix.json#gcs-insert-and-get#get-metadata",
+        "approvalRecord": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)"
+      }
+    },
+    "storage-probe/gcs-insert-and-get#short-route-metadata": {
+      "documents": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)",
+      "reason": "In fireemu, the JSON API object resource carries timeFinalized, as production writes it (equal to timeCreated in all 735 recorded resources). Recorded against production in stage 3 v9 (2026-09-30) and pinned by the crate tests.",
+      "authority": {
+        "kind": "production-spec",
+        "sourceUrls": [
+          "https://cloud.google.com/storage/docs/json_api/v1/objects",
+          "https://github.com/firebase/firebase-tools/tree/v15.28.2"
+        ],
+        "checkedOn": "2026-09-30",
+        "officialBaseline": {
+          "package": "firebase-tools",
+          "version": "15.28.2"
+        },
+        "fixture": "conformance/storage-matrix.json#gcs-insert-and-get#short-route-metadata",
+        "approvalRecord": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)"
+      }
+    },
+    "storage-probe/gcs-insert-and-get#multipart-insert": {
+      "documents": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)",
+      "reason": "In fireemu, the JSON API object resource carries timeFinalized, as production writes it (equal to timeCreated in all 735 recorded resources). Recorded against production in stage 3 v9 (2026-09-30) and pinned by the crate tests.",
+      "authority": {
+        "kind": "production-spec",
+        "sourceUrls": [
+          "https://cloud.google.com/storage/docs/json_api/v1/objects",
+          "https://github.com/firebase/firebase-tools/tree/v15.28.2"
+        ],
+        "checkedOn": "2026-09-30",
+        "officialBaseline": {
+          "package": "firebase-tools",
+          "version": "15.28.2"
+        },
+        "fixture": "conformance/storage-matrix.json#gcs-insert-and-get#multipart-insert",
+        "approvalRecord": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)"
+      }
+    },
+    "storage-probe/gcs-insert-and-get#multipart-name-with-leading-slash": {
+      "documents": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)",
+      "reason": "In fireemu, the JSON API object resource carries timeFinalized, as production writes it (equal to timeCreated in all 735 recorded resources). Recorded against production in stage 3 v9 (2026-09-30) and pinned by the crate tests.",
+      "authority": {
+        "kind": "production-spec",
+        "sourceUrls": [
+          "https://cloud.google.com/storage/docs/json_api/v1/objects",
+          "https://github.com/firebase/firebase-tools/tree/v15.28.2"
+        ],
+        "checkedOn": "2026-09-30",
+        "officialBaseline": {
+          "package": "firebase-tools",
+          "version": "15.28.2"
+        },
+        "fixture": "conformance/storage-matrix.json#gcs-insert-and-get#multipart-name-with-leading-slash",
+        "approvalRecord": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)"
+      }
+    },
+    "storage-probe/gcs-insert-and-get#multipart-content-type-from-header": {
+      "documents": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)",
+      "reason": "In fireemu, the JSON API object resource carries timeFinalized, as production writes it (equal to timeCreated in all 735 recorded resources). Recorded against production in stage 3 v9 (2026-09-30) and pinned by the crate tests.",
+      "authority": {
+        "kind": "production-spec",
+        "sourceUrls": [
+          "https://cloud.google.com/storage/docs/json_api/v1/objects",
+          "https://github.com/firebase/firebase-tools/tree/v15.28.2"
+        ],
+        "checkedOn": "2026-09-30",
+        "officialBaseline": {
+          "package": "firebase-tools",
+          "version": "15.28.2"
+        },
+        "fixture": "conformance/storage-matrix.json#gcs-insert-and-get#multipart-content-type-from-header",
+        "approvalRecord": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)"
+      }
+    },
+    "storage-probe/gcs-insert-and-get#insert-without-credentials": {
+      "documents": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)",
+      "reason": "In fireemu, the JSON API object resource carries timeFinalized, as production writes it (equal to timeCreated in all 735 recorded resources). Recorded against production in stage 3 v9 (2026-09-30) and pinned by the crate tests.",
+      "authority": {
+        "kind": "production-spec",
+        "sourceUrls": [
+          "https://cloud.google.com/storage/docs/json_api/v1/objects",
+          "https://github.com/firebase/firebase-tools/tree/v15.28.2"
+        ],
+        "checkedOn": "2026-09-30",
+        "officialBaseline": {
+          "package": "firebase-tools",
+          "version": "15.28.2"
+        },
+        "fixture": "conformance/storage-matrix.json#gcs-insert-and-get#insert-without-credentials",
+        "approvalRecord": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)"
+      }
+    },
+    "storage-probe/gcs-insert-and-get#insert-with-user-token-bypasses-rules": {
+      "documents": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)",
+      "reason": "In fireemu, the JSON API object resource carries timeFinalized, as production writes it (equal to timeCreated in all 735 recorded resources). Recorded against production in stage 3 v9 (2026-09-30) and pinned by the crate tests.",
+      "authority": {
+        "kind": "production-spec",
+        "sourceUrls": [
+          "https://cloud.google.com/storage/docs/json_api/v1/objects",
+          "https://github.com/firebase/firebase-tools/tree/v15.28.2"
+        ],
+        "checkedOn": "2026-09-30",
+        "officialBaseline": {
+          "package": "firebase-tools",
+          "version": "15.28.2"
+        },
+        "fixture": "conformance/storage-matrix.json#gcs-insert-and-get#insert-with-user-token-bypasses-rules",
+        "approvalRecord": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)"
+      }
+    },
+    "storage-probe/gcs-insert-and-get#get-closed-with-user-token": {
+      "documents": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)",
+      "reason": "In fireemu, the JSON API object resource carries timeFinalized, as production writes it (equal to timeCreated in all 735 recorded resources). Recorded against production in stage 3 v9 (2026-09-30) and pinned by the crate tests.",
+      "authority": {
+        "kind": "production-spec",
+        "sourceUrls": [
+          "https://cloud.google.com/storage/docs/json_api/v1/objects",
+          "https://github.com/firebase/firebase-tools/tree/v15.28.2"
+        ],
+        "checkedOn": "2026-09-30",
+        "officialBaseline": {
+          "package": "firebase-tools",
+          "version": "15.28.2"
+        },
+        "fixture": "conformance/storage-matrix.json#gcs-insert-and-get#get-closed-with-user-token",
+        "approvalRecord": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)"
+      }
+    },
+    "storage-probe/gcs-insert-and-get#get-with-garbage-bearer": {
+      "documents": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)",
+      "reason": "In fireemu, the JSON API object resource carries timeFinalized, as production writes it (equal to timeCreated in all 735 recorded resources). Recorded against production in stage 3 v9 (2026-09-30) and pinned by the crate tests.",
+      "authority": {
+        "kind": "production-spec",
+        "sourceUrls": [
+          "https://cloud.google.com/storage/docs/json_api/v1/objects",
+          "https://github.com/firebase/firebase-tools/tree/v15.28.2"
+        ],
+        "checkedOn": "2026-09-30",
+        "officialBaseline": {
+          "package": "firebase-tools",
+          "version": "15.28.2"
+        },
+        "fixture": "conformance/storage-matrix.json#gcs-insert-and-get#get-with-garbage-bearer",
+        "approvalRecord": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)"
+      }
+    },
+    "storage-probe/gcs-resumable-upload#put-whole-body": {
+      "documents": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)",
+      "reason": "In fireemu, the JSON API object resource carries timeFinalized, as production writes it (equal to timeCreated in all 735 recorded resources). Recorded against production in stage 3 v9 (2026-09-30) and pinned by the crate tests.",
+      "authority": {
+        "kind": "production-spec",
+        "sourceUrls": [
+          "https://cloud.google.com/storage/docs/json_api/v1/objects",
+          "https://github.com/firebase/firebase-tools/tree/v15.28.2"
+        ],
+        "checkedOn": "2026-09-30",
+        "officialBaseline": {
+          "package": "firebase-tools",
+          "version": "15.28.2"
+        },
+        "fixture": "conformance/storage-matrix.json#gcs-resumable-upload#put-whole-body",
+        "approvalRecord": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)"
+      }
+    },
+    "storage-probe/gcs-update-list-delete#patch": {
+      "documents": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)",
+      "reason": "In fireemu, the JSON API object resource carries timeFinalized, as production writes it (equal to timeCreated in all 735 recorded resources). Recorded against production in stage 3 v9 (2026-09-30) and pinned by the crate tests.",
+      "authority": {
+        "kind": "production-spec",
+        "sourceUrls": [
+          "https://cloud.google.com/storage/docs/json_api/v1/objects",
+          "https://github.com/firebase/firebase-tools/tree/v15.28.2"
+        ],
+        "checkedOn": "2026-09-30",
+        "officialBaseline": {
+          "package": "firebase-tools",
+          "version": "15.28.2"
+        },
+        "fixture": "conformance/storage-matrix.json#gcs-update-list-delete#patch",
+        "approvalRecord": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)"
+      }
+    },
+    "storage-probe/gcs-update-list-delete#patch-remove-custom-key": {
+      "documents": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)",
+      "reason": "In fireemu, the JSON API object resource carries timeFinalized, as production writes it (equal to timeCreated in all 735 recorded resources). Recorded against production in stage 3 v9 (2026-09-30) and pinned by the crate tests.",
+      "authority": {
+        "kind": "production-spec",
+        "sourceUrls": [
+          "https://cloud.google.com/storage/docs/json_api/v1/objects",
+          "https://github.com/firebase/firebase-tools/tree/v15.28.2"
+        ],
+        "checkedOn": "2026-09-30",
+        "officialBaseline": {
+          "package": "firebase-tools",
+          "version": "15.28.2"
+        },
+        "fixture": "conformance/storage-matrix.json#gcs-update-list-delete#patch-remove-custom-key",
+        "approvalRecord": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)"
+      }
+    },
+    "storage-probe/gcs-update-list-delete#list-delimited": {
+      "documents": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)",
+      "reason": "In fireemu, the JSON API object resource carries timeFinalized, as production writes it (equal to timeCreated in all 735 recorded resources). Recorded against production in stage 3 v9 (2026-09-30) and pinned by the crate tests.",
+      "authority": {
+        "kind": "production-spec",
+        "sourceUrls": [
+          "https://cloud.google.com/storage/docs/json_api/v1/objects",
+          "https://github.com/firebase/firebase-tools/tree/v15.28.2"
+        ],
+        "checkedOn": "2026-09-30",
+        "officialBaseline": {
+          "package": "firebase-tools",
+          "version": "15.28.2"
+        },
+        "fixture": "conformance/storage-matrix.json#gcs-update-list-delete#list-delimited",
+        "approvalRecord": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)"
+      }
+    },
+    "storage-probe/gcs-update-list-delete#list-without-credentials": {
+      "documents": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)",
+      "reason": "In fireemu, the JSON API object resource carries timeFinalized, as production writes it (equal to timeCreated in all 735 recorded resources); a Firebase upload with no contentDisposition stores `inline; filename*=utf-8''<file name>`, as production does, where the official emulator stores a bare `inline`. Recorded against production in stage 3 v9 (2026-09-30) and pinned by the crate tests.",
+      "authority": {
+        "kind": "production-spec",
+        "sourceUrls": [
+          "https://cloud.google.com/storage/docs/json_api/v1/objects",
+          "https://github.com/firebase/firebase-tools/tree/v15.28.2"
+        ],
+        "checkedOn": "2026-09-30",
+        "officialBaseline": {
+          "package": "firebase-tools",
+          "version": "15.28.2"
+        },
+        "fixture": "conformance/storage-matrix.json#gcs-update-list-delete#list-without-credentials",
+        "approvalRecord": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)"
+      }
+    },
+    "storage-probe/gcs-copy-rewrite#source": {
+      "documents": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)",
+      "reason": "In fireemu, the JSON API object resource carries timeFinalized, as production writes it (equal to timeCreated in all 735 recorded resources). Recorded against production in stage 3 v9 (2026-09-30) and pinned by the crate tests.",
+      "authority": {
+        "kind": "production-spec",
+        "sourceUrls": [
+          "https://cloud.google.com/storage/docs/json_api/v1/objects",
+          "https://github.com/firebase/firebase-tools/tree/v15.28.2"
+        ],
+        "checkedOn": "2026-09-30",
+        "officialBaseline": {
+          "package": "firebase-tools",
+          "version": "15.28.2"
+        },
+        "fixture": "conformance/storage-matrix.json#gcs-copy-rewrite#source",
+        "approvalRecord": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)"
+      }
+    },
+    "storage-probe/gcs-copy-rewrite#copy-to": {
+      "documents": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)",
+      "reason": "In fireemu, the JSON API object resource carries timeFinalized, as production writes it (equal to timeCreated in all 735 recorded resources). Recorded against production in stage 3 v9 (2026-09-30) and pinned by the crate tests.",
+      "authority": {
+        "kind": "production-spec",
+        "sourceUrls": [
+          "https://cloud.google.com/storage/docs/json_api/v1/objects",
+          "https://github.com/firebase/firebase-tools/tree/v15.28.2"
+        ],
+        "checkedOn": "2026-09-30",
+        "officialBaseline": {
+          "package": "firebase-tools",
+          "version": "15.28.2"
+        },
+        "fixture": "conformance/storage-matrix.json#gcs-copy-rewrite#copy-to",
+        "approvalRecord": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)"
+      }
+    },
+    "storage-probe/gcs-copy-rewrite#rewrite-to": {
+      "documents": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)",
+      "reason": "In fireemu, the JSON API object resource carries timeFinalized, as production writes it (equal to timeCreated in all 735 recorded resources). Recorded against production in stage 3 v9 (2026-09-30) and pinned by the crate tests.",
+      "authority": {
+        "kind": "production-spec",
+        "sourceUrls": [
+          "https://cloud.google.com/storage/docs/json_api/v1/objects",
+          "https://github.com/firebase/firebase-tools/tree/v15.28.2"
+        ],
+        "checkedOn": "2026-09-30",
+        "officialBaseline": {
+          "package": "firebase-tools",
+          "version": "15.28.2"
+        },
+        "fixture": "conformance/storage-matrix.json#gcs-copy-rewrite#rewrite-to",
+        "approvalRecord": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)"
+      }
+    },
+    "storage-probe/gcs-copy-rewrite#rewrite-with-metadata-override": {
+      "documents": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)",
+      "reason": "In fireemu, the JSON API object resource carries timeFinalized, as production writes it (equal to timeCreated in all 735 recorded resources). Recorded against production in stage 3 v9 (2026-09-30) and pinned by the crate tests.",
+      "authority": {
+        "kind": "production-spec",
+        "sourceUrls": [
+          "https://cloud.google.com/storage/docs/json_api/v1/objects",
+          "https://github.com/firebase/firebase-tools/tree/v15.28.2"
+        ],
+        "checkedOn": "2026-09-30",
+        "officialBaseline": {
+          "package": "firebase-tools",
+          "version": "15.28.2"
+        },
+        "fixture": "conformance/storage-matrix.json#gcs-copy-rewrite#rewrite-with-metadata-override",
+        "approvalRecord": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)"
+      }
+    },
+    "storage-probe/gcs-copy-rewrite#copy-into-closed-path": {
+      "documents": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)",
+      "reason": "In fireemu, the JSON API object resource carries timeFinalized, as production writes it (equal to timeCreated in all 735 recorded resources). Recorded against production in stage 3 v9 (2026-09-30) and pinned by the crate tests.",
+      "authority": {
+        "kind": "production-spec",
+        "sourceUrls": [
+          "https://cloud.google.com/storage/docs/json_api/v1/objects",
+          "https://github.com/firebase/firebase-tools/tree/v15.28.2"
+        ],
+        "checkedOn": "2026-09-30",
+        "officialBaseline": {
+          "package": "firebase-tools",
+          "version": "15.28.2"
+        },
+        "fixture": "conformance/storage-matrix.json#gcs-copy-rewrite#copy-into-closed-path",
+        "approvalRecord": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)"
+      }
+    },
+    "storage-probe/gcs-copy-rewrite#copy-without-credentials": {
+      "documents": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)",
+      "reason": "In fireemu, the JSON API object resource carries timeFinalized, as production writes it (equal to timeCreated in all 735 recorded resources). Recorded against production in stage 3 v9 (2026-09-30) and pinned by the crate tests.",
+      "authority": {
+        "kind": "production-spec",
+        "sourceUrls": [
+          "https://cloud.google.com/storage/docs/json_api/v1/objects",
+          "https://github.com/firebase/firebase-tools/tree/v15.28.2"
+        ],
+        "checkedOn": "2026-09-30",
+        "officialBaseline": {
+          "package": "firebase-tools",
+          "version": "15.28.2"
+        },
+        "fixture": "conformance/storage-matrix.json#gcs-copy-rewrite#copy-without-credentials",
+        "approvalRecord": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)"
+      }
+    },
+    "storage-probe/gcs-copy-rewrite#copy-onto-itself": {
+      "documents": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)",
+      "reason": "In fireemu, the JSON API object resource carries timeFinalized, as production writes it (equal to timeCreated in all 735 recorded resources). Recorded against production in stage 3 v9 (2026-09-30) and pinned by the crate tests.",
+      "authority": {
+        "kind": "production-spec",
+        "sourceUrls": [
+          "https://cloud.google.com/storage/docs/json_api/v1/objects",
+          "https://github.com/firebase/firebase-tools/tree/v15.28.2"
+        ],
+        "checkedOn": "2026-09-30",
+        "officialBaseline": {
+          "package": "firebase-tools",
+          "version": "15.28.2"
+        },
+        "fixture": "conformance/storage-matrix.json#gcs-copy-rewrite#copy-onto-itself",
+        "approvalRecord": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)"
+      }
+    },
+    "storage-probe/gcs-preconditions#insert-if-generation-match-current": {
+      "documents": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)",
+      "reason": "In fireemu, the JSON API object resource carries timeFinalized, as production writes it (equal to timeCreated in all 735 recorded resources). Recorded against production in stage 3 v9 (2026-09-30) and pinned by the crate tests.",
+      "authority": {
+        "kind": "production-spec",
+        "sourceUrls": [
+          "https://cloud.google.com/storage/docs/json_api/v1/objects",
+          "https://github.com/firebase/firebase-tools/tree/v15.28.2"
+        ],
+        "checkedOn": "2026-09-30",
+        "officialBaseline": {
+          "package": "firebase-tools",
+          "version": "15.28.2"
+        },
+        "fixture": "conformance/storage-matrix.json#gcs-preconditions#insert-if-generation-match-current",
+        "approvalRecord": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)"
+      }
+    },
+    "storage-probe/gcs-checksums#matching-md5": {
+      "documents": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)",
+      "reason": "In fireemu, the JSON API object resource carries timeFinalized, as production writes it (equal to timeCreated in all 735 recorded resources). Recorded against production in stage 3 v9 (2026-09-30) and pinned by the crate tests.",
+      "authority": {
+        "kind": "production-spec",
+        "sourceUrls": [
+          "https://cloud.google.com/storage/docs/json_api/v1/objects",
+          "https://github.com/firebase/firebase-tools/tree/v15.28.2"
+        ],
+        "checkedOn": "2026-09-30",
+        "officialBaseline": {
+          "package": "firebase-tools",
+          "version": "15.28.2"
+        },
+        "fixture": "conformance/storage-matrix.json#gcs-checksums#matching-md5",
+        "approvalRecord": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)"
+      }
+    },
+    "storage-probe/gcs-resumable-upload#start": {
+      "documents": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)",
+      "reason": "In fireemu, the JSON API resumable start answers no body and a session URL that repeats the start request's query and adds upload_id (recorded, STORAGE-OBJECT probe-v2, 2026-09-30), as production does, where the official emulator writes the text `OK` and rebuilds the query from the object name. Recorded against production in stage 3 v9 (2026-09-30) and pinned by the crate tests.",
+      "authority": {
+        "kind": "production-spec",
+        "sourceUrls": [
+          "https://cloud.google.com/storage/docs/json_api/v1/objects",
+          "https://github.com/firebase/firebase-tools/tree/v15.28.2"
+        ],
+        "checkedOn": "2026-09-30",
+        "officialBaseline": {
+          "package": "firebase-tools",
+          "version": "15.28.2"
+        },
+        "fixture": "conformance/storage-matrix.json#gcs-resumable-upload#start",
+        "approvalRecord": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)"
+      }
+    },
+    "storage-probe/gcs-resumable-upload#start-name-in-query": {
+      "documents": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)",
+      "reason": "In fireemu, the JSON API resumable start answers no body and a session URL that repeats the start request's query and adds upload_id (recorded, STORAGE-OBJECT probe-v2, 2026-09-30), as production does, where the official emulator writes the text `OK` and rebuilds the query from the object name. Recorded against production in stage 3 v9 (2026-09-30) and pinned by the crate tests.",
+      "authority": {
+        "kind": "production-spec",
+        "sourceUrls": [
+          "https://cloud.google.com/storage/docs/json_api/v1/objects",
+          "https://github.com/firebase/firebase-tools/tree/v15.28.2"
+        ],
+        "checkedOn": "2026-09-30",
+        "officialBaseline": {
+          "package": "firebase-tools",
+          "version": "15.28.2"
+        },
+        "fixture": "conformance/storage-matrix.json#gcs-resumable-upload#start-name-in-query",
+        "approvalRecord": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)"
+      }
+    },
+    "storage-probe/gcs-resumable-upload#start-chunked": {
+      "documents": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)",
+      "reason": "In fireemu, the JSON API resumable start answers no body and a session URL that repeats the start request's query and adds upload_id (recorded, STORAGE-OBJECT probe-v2, 2026-09-30), as production does, where the official emulator writes the text `OK` and rebuilds the query from the object name. Recorded against production in stage 3 v9 (2026-09-30) and pinned by the crate tests.",
+      "authority": {
+        "kind": "production-spec",
+        "sourceUrls": [
+          "https://cloud.google.com/storage/docs/json_api/v1/objects",
+          "https://github.com/firebase/firebase-tools/tree/v15.28.2"
+        ],
+        "checkedOn": "2026-09-30",
+        "officialBaseline": {
+          "package": "firebase-tools",
+          "version": "15.28.2"
+        },
+        "fixture": "conformance/storage-matrix.json#gcs-resumable-upload#start-chunked",
         "approvalRecord": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)"
       }
     },
@@ -1025,22 +2592,45 @@
         "approvalRecord": "README.md, \"Storage\"; capability manifest FN-EVT-1 (crates/fireemu/src/capabilities.json)"
       }
     },
-    "storage-probe/gcs-update-list-delete#get-missing-media": {
-      "documents": "README.md, \"Storage\"; capability manifest ST-OBJ-1 (crates/fireemu/src/capabilities.json); conformance/storage-matrix.json",
-      "reason": "The official emulator types the missing-object media body text/html, which reflects the decoded object name; that route is a top-level GET reachable with no Origin (so the loopback guard never fires), making the reflection a reflected-XSS vector on the emulator origin, and the JSON API dialect is unauthenticated and rules-free. fireemu answers the identical 404 status and body bytes as text/plain, which no browser executes. Security fix M-1 of the storage parity review.",
+    "storage-probe/gcs-update-list-delete#patch-storage-v1-spelling": {
+      "documents": "spec/compatibility/contract.json ST-CLAIM-OBJECTS; CHANGELOG.md [Unreleased]",
+      "reason": "The official emulator answers 501 on the /storage/v1 PATCH spelling. Cloud Storage documents this production route, so fireemu applies the metadata patch in both profiles.",
       "authority": {
-        "kind": "intentional-local-policy",
+        "kind": "production-spec",
+        "sourceUrls": ["https://cloud.google.com/storage/docs/json_api/v1/objects/patch"],
+        "checkedOn": "2026-09-25",
+        "officialBaseline": {"package": "firebase-tools", "version": "15.28.2"},
+        "fixture": "conformance/storage-matrix.json#gcs-update-list-delete#patch-storage-v1-spelling",
+        "approvalRecord": "spec/compatibility/contract.json ST-CLAIM-OBJECTS; CHANGELOG.md [Unreleased]"
+      }
+    },
+    "storage-probe/gcs-preconditions#patch-if-metageneration-mismatch": {
+      "documents": "spec/compatibility/contract.json ST-CLAIM-OBJECTS; CHANGELOG.md [Unreleased]",
+      "reason": "The official emulator answers 501 before checking a precondition on /storage/v1 PATCH. Cloud Storage documents the route, and fireemu checks the supplied metageneration before applying the patch.",
+      "authority": {
+        "kind": "production-spec",
+        "sourceUrls": ["https://cloud.google.com/storage/docs/json_api/v1/objects/patch"],
+        "checkedOn": "2026-09-25",
+        "officialBaseline": {"package": "firebase-tools", "version": "15.28.2"},
+        "fixture": "conformance/storage-matrix.json#gcs-preconditions#patch-if-metageneration-mismatch",
+        "approvalRecord": "spec/compatibility/contract.json ST-CLAIM-OBJECTS; CHANGELOG.md [Unreleased]"
+      }
+    },
+    "storage-probe/gcs-copy-rewrite#copy-storage-v1-spelling": {
+      "documents": "spec/compatibility/contract.json ST-CLAIM-OBJECTS; CHANGELOG.md [Unreleased]",
+      "reason": "The official emulator answers 501 on the /storage/v1 copyTo spelling. Cloud Storage documents this production route, so fireemu performs the copy in both profiles.",
+      "authority": {
+        "kind": "production-spec",
         "sourceUrls": [
-          "https://cloud.google.com/storage/docs/json_api/v1/objects/get",
-          "https://github.com/firebase/firebase-tools/tree/v15.28.2"
+          "https://cloud.google.com/storage/docs/json_api/v1/objects/copy"
         ],
-        "checkedOn": "2026-09-05",
+        "checkedOn": "2026-09-25",
         "officialBaseline": {
           "package": "firebase-tools",
           "version": "15.28.2"
         },
-        "fixture": "conformance/storage-matrix.json#gcs-update-list-delete#get-missing-media",
-        "approvalRecord": "README.md, \"Storage\"; capability manifest ST-OBJ-1 (crates/fireemu/src/capabilities.json); conformance/storage-matrix.json"
+        "fixture": "conformance/storage-matrix.json#gcs-copy-rewrite#copy-storage-v1-spelling",
+        "approvalRecord": "spec/compatibility/contract.json ST-CLAIM-OBJECTS; CHANGELOG.md [Unreleased]"
       }
     },
     "storage-probe/triggers#json-api-resumable-finalize": {

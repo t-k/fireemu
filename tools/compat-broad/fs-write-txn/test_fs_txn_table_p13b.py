@@ -19,6 +19,7 @@ RECORDED_PACE = 2.0   # seconds per step in the stand-in
 # recording 1: a request still answered 10 at 298.7 s.
 STEP_OVERHEAD = (1.85, 2.23)
 REMEMBERED_UNTIL, IDLE_REFUSED = 298.7, 122.97
+P13A_FIRST_REQUEST_AGE = (280.4, 284.5)   # P13a, run 2 recordings: the token age of the first request after 260 s of waits
 
 
 def plan():
@@ -91,6 +92,9 @@ def test_the_timing_is_tied_to_the_recorded_idle_and_lifetime_values():
     assert 275 < low and high < REMEMBERED_UNTIL
     # the release rule's age holds at the chain-end release (the retried token is certainly older than 275 s)
     assert age("rt4", "retry-lifetime")[0] > 275 + 1
+    # the window equals what P13a recorded for the same waits (the first request after 260 s of waits came at 280.4 to 284.5 s of token age): the
+    # earlier model (an overhead of 2.26 to 2.6 s and one more request) put it at 287.1 to 291.2 s and no longer matches the recordings
+    assert abs(low - P13A_FIRST_REQUEST_AGE[0]) <= 0.5 and abs(high - P13A_FIRST_REQUEST_AGE[1]) <= 0.5, (low, high)
 
 
 def test_every_answer_after_a_wait_may_be_anything_and_the_controls_are_strict():

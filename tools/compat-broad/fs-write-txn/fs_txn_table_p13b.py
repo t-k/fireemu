@@ -19,8 +19,10 @@ The strict answers are INFERRED today ("Strict answers that go beyond the record
 answer finishes is judged narrowly, with `releaseAfterAgeSeconds` 275 for a token certainly older than that (T4, T4r); an idle-expired token (T2, T3) whose
 release is refused with anything but the expired text stops the run on an unconfirmed release, an ownership stop.
 
-An accepted retry mints a fresh token (the P09 and P10 recordings: a retry of a committed, a rolled-back and a get-first token each answered 0 with a
-transaction value different from the one it named), which is what the ledger requires of every issued token.
+An accepted retry mints a fresh token in every recording there is: the P09 and P10 retries (of a committed, a rolled-back and a get-first token) were
+sent over gRPC and each answered 0 with a transaction value different from the one it named. Over REST an accepted retry is unrecorded, so this table's
+first retry is a control only by analogy, and the ledger requires a fresh token of every issued one: a REST retry that returned the named token's own
+bytes stops the run with its start unknown (pinned by a test in test_fs_txn_retry_of.py).
 
 REST only: the shared gRPC wire cannot send `retryTransaction`."""
 

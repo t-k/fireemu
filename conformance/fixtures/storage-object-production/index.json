@@ -1,0 +1,328 @@
+{
+  "schemaVersion": 1,
+  "normalizationVersion": 1,
+  "normalizations": [
+    {
+      "id": "RUN",
+      "mask": "<RUN>",
+      "reason": "the run's 20-hex ID is chosen at random for each run and is in every object name"
+    },
+    {
+      "id": "BUCKET",
+      "mask": "<BUCKET>",
+      "reason": "the bucket differs between the production project and a local run"
+    },
+    {
+      "id": "PROJECT",
+      "mask": "<PROJECT>",
+      "reason": "the project differs between the production project and a local run"
+    },
+    {
+      "id": "GEN",
+      "mask": "<GEN:n>",
+      "reason": "a generation is a time in production and a counter locally; n is the order of first appearance in the recipe, so equal and different generations stay distinguishable"
+    },
+    {
+      "id": "TIME",
+      "mask": "<TIME>",
+      "reason": "timestamps (RFC 3339) are the time of the run"
+    },
+    {
+      "id": "HTTPDATE",
+      "mask": "<HTTPDATE>",
+      "reason": "HTTP dates (Last-Modified, Expires when relative to now) are the time of the run"
+    },
+    {
+      "id": "ETAG",
+      "mask": "<ETAG>",
+      "reason": "an opaque etag is derived from the generation; a quoted md5 etag is content-derived and is kept"
+    },
+    {
+      "id": "TOKEN",
+      "mask": "<TOKEN:n>",
+      "reason": "download tokens (UUIDs) are random; n is the order of first appearance in the recipe, so reuse and replacement stay distinguishable"
+    },
+    {
+      "id": "UPLOAD_ID",
+      "mask": "<UPLOAD_ID>",
+      "reason": "resumable session IDs are opaque and random"
+    },
+    {
+      "id": "PAGE_TOKEN",
+      "mask": "<PAGE_TOKEN>",
+      "reason": "a page token is opaque by contract (production's is the base64 of the last entry's name, which carries the run ID)"
+    },
+    {
+      "id": "JWT",
+      "mask": "<JWT>",
+      "reason": "ID tokens are credentials and carry times and identifiers"
+    },
+    {
+      "id": "API_KEY",
+      "mask": "<API_KEY>",
+      "reason": "an API key is a credential"
+    },
+    {
+      "id": "UID",
+      "mask": "<UID>",
+      "reason": "identity ids and refresh tokens are random credentials"
+    },
+    {
+      "id": "OWNER",
+      "mask": "<OWNER>",
+      "reason": "a copied object's owner.entity names the requesting principal (an account email)"
+    },
+    {
+      "id": "EPOCH",
+      "mask": "<EPOCH>",
+      "reason": "account creation, sign-in and validity times (createdAt, lastLoginAt, validSince and the like) are the time of the run"
+    },
+    {
+      "id": "DIGEST",
+      "mask": "<DIGEST>",
+      "reason": "md5Hash, crc32c and the headers that repeat them, in a recipe whose objects' bytes carry the run ID: the digest of bytes that differ for each run differs for each run"
+    }
+  ],
+  "source": "STORAGE-OBJECT production recordings (private run directories, not committed)",
+  "runIds": [
+    "056c7ca3a8c6daa38e0a",
+    "202dd40ac90863add783"
+  ],
+  "recipes": [
+    {
+      "recipeId": "storage-object/firebase/simple-upload",
+      "file": "firebase--simple-upload.json",
+      "rows": 12,
+      "digests": {
+        "056c7ca3a8c6daa38e0a": "283901fe6f7eacc214c7f2d4f0ada73560aa4fd1210b0b5ee3c1c2e306fe6435",
+        "202dd40ac90863add783": "283901fe6f7eacc214c7f2d4f0ada73560aa4fd1210b0b5ee3c1c2e306fe6435"
+      }
+    },
+    {
+      "recipeId": "storage-object/cross-dialect/state",
+      "file": "cross-dialect--state.json",
+      "rows": 17,
+      "digests": {
+        "056c7ca3a8c6daa38e0a": "e4d57979338ad94dc21a0dba1c1bb34e5582bc60b069e0c19948821c5ff566f6",
+        "202dd40ac90863add783": "e4d57979338ad94dc21a0dba1c1bb34e5582bc60b069e0c19948821c5ff566f6"
+      }
+    },
+    {
+      "recipeId": "storage-object/firebase/download",
+      "file": "firebase--download.json",
+      "rows": 17,
+      "digests": {
+        "056c7ca3a8c6daa38e0a": "ecb5be905d689433949865e63890b15d2d86cbbea21a338c81ba93205c6ef4e1",
+        "202dd40ac90863add783": "ecb5be905d689433949865e63890b15d2d86cbbea21a338c81ba93205c6ef4e1"
+      }
+    },
+    {
+      "recipeId": "storage-object/firebase/metadata",
+      "file": "firebase--metadata.json",
+      "rows": 18,
+      "digests": {
+        "056c7ca3a8c6daa38e0a": "fd2cb50ae9d93df83a9757719301a6ea720c21e81e3f6c41f8c3fbb6241766c2",
+        "202dd40ac90863add783": "fd2cb50ae9d93df83a9757719301a6ea720c21e81e3f6c41f8c3fbb6241766c2"
+      }
+    },
+    {
+      "recipeId": "storage-object/firebase/delete",
+      "file": "firebase--delete.json",
+      "rows": 17,
+      "digests": {
+        "056c7ca3a8c6daa38e0a": "c301dd2be8a3e1567f480a0b754688400d2caa7f9c7290aaf36e7051770d0599",
+        "202dd40ac90863add783": "c301dd2be8a3e1567f480a0b754688400d2caa7f9c7290aaf36e7051770d0599"
+      }
+    },
+    {
+      "recipeId": "storage-object/firebase/overwrite",
+      "file": "firebase--overwrite.json",
+      "rows": 18,
+      "digests": {
+        "056c7ca3a8c6daa38e0a": "924d67ade91cca3edee6b3ccce10090c07430e25d5aac8846fca61af6845016e",
+        "202dd40ac90863add783": "924d67ade91cca3edee6b3ccce10090c07430e25d5aac8846fca61af6845016e"
+      }
+    },
+    {
+      "recipeId": "storage-object/gcs/download",
+      "file": "gcs--download.json",
+      "rows": 26,
+      "digests": {
+        "056c7ca3a8c6daa38e0a": "02e400e156115526f50452c4dd78c77b7faeac9d904c37de7c2e34aef79355ab",
+        "202dd40ac90863add783": "02e400e156115526f50452c4dd78c77b7faeac9d904c37de7c2e34aef79355ab"
+      }
+    },
+    {
+      "recipeId": "storage-object/gcs/metadata",
+      "file": "gcs--metadata.json",
+      "rows": 18,
+      "digests": {
+        "056c7ca3a8c6daa38e0a": "2a5066ca44679cb9556f784977d860c1df3155b259ec230931f18fd9001ab2ef",
+        "202dd40ac90863add783": "2a5066ca44679cb9556f784977d860c1df3155b259ec230931f18fd9001ab2ef"
+      }
+    },
+    {
+      "recipeId": "storage-object/gcs/delete",
+      "file": "gcs--delete.json",
+      "rows": 17,
+      "digests": {
+        "056c7ca3a8c6daa38e0a": "bffbcf5828b9f8cfe6b4a373fb15350411903fb9d2caa4e4bebcee5a9531c8d8",
+        "202dd40ac90863add783": "bffbcf5828b9f8cfe6b4a373fb15350411903fb9d2caa4e4bebcee5a9531c8d8"
+      }
+    },
+    {
+      "recipeId": "storage-object/errors/missing",
+      "file": "errors--missing.json",
+      "rows": 26,
+      "digests": {
+        "056c7ca3a8c6daa38e0a": "5550d724e86d9f92ea8a1ff3504f7bffac837855472af7cdb45b2ee2433afdcc",
+        "202dd40ac90863add783": "5550d724e86d9f92ea8a1ff3504f7bffac837855472af7cdb45b2ee2433afdcc"
+      }
+    },
+    {
+      "recipeId": "storage-object/errors/object-name",
+      "file": "errors--object-name.json",
+      "rows": 60,
+      "digests": {
+        "056c7ca3a8c6daa38e0a": "4429d174ccb44e82ecdb874102e117037aabebde19d99d38bce1d8188471c42d",
+        "202dd40ac90863add783": "4429d174ccb44e82ecdb874102e117037aabebde19d99d38bce1d8188471c42d"
+      }
+    },
+    {
+      "recipeId": "storage-object/errors/range",
+      "file": "errors--range.json",
+      "rows": 57,
+      "digests": {
+        "056c7ca3a8c6daa38e0a": "bfa1dc617d19b055f48f998fa87c89356b70bbfe37e2f2954d23d5d74d61756c",
+        "202dd40ac90863add783": "bfa1dc617d19b055f48f998fa87c89356b70bbfe37e2f2954d23d5d74d61756c"
+      }
+    },
+    {
+      "recipeId": "storage-object/firebase/multipart-upload",
+      "file": "firebase--multipart-upload.json",
+      "rows": 34,
+      "digests": {
+        "056c7ca3a8c6daa38e0a": "ce5ea0e4882ff3038b34309dc0ae82408ed8cb0a6209c903bb27b44d73ac4d43",
+        "202dd40ac90863add783": "ce5ea0e4882ff3038b34309dc0ae82408ed8cb0a6209c903bb27b44d73ac4d43"
+      }
+    },
+    {
+      "recipeId": "storage-object/gcs/simple-multipart-upload",
+      "file": "gcs--simple-multipart-upload.json",
+      "rows": 46,
+      "digests": {
+        "056c7ca3a8c6daa38e0a": "172801c070a2dacbfa69edc76ae0cfef9df51cbb46ad7fec06edc96aa683c139",
+        "202dd40ac90863add783": "172801c070a2dacbfa69edc76ae0cfef9df51cbb46ad7fec06edc96aa683c139"
+      }
+    },
+    {
+      "recipeId": "storage-object/gcs/checksums",
+      "file": "gcs--checksums.json",
+      "rows": 78,
+      "digests": {
+        "056c7ca3a8c6daa38e0a": "8f944a04402fca97f87ca7173322ed5c2a6a2c88404618f68bbeb36747fce32d",
+        "202dd40ac90863add783": "8f944a04402fca97f87ca7173322ed5c2a6a2c88404618f68bbeb36747fce32d"
+      }
+    },
+    {
+      "recipeId": "storage-object/gcs/generation-preconditions",
+      "file": "gcs--generation-preconditions.json",
+      "rows": 598,
+      "digests": {
+        "056c7ca3a8c6daa38e0a": "ec3275689822b81e4559e1b8958e62ad545b8214b325cdd19ae6915637088f0c",
+        "202dd40ac90863add783": "ec3275689822b81e4559e1b8958e62ad545b8214b325cdd19ae6915637088f0c"
+      }
+    },
+    {
+      "recipeId": "storage-object/gcs/metageneration-preconditions",
+      "file": "gcs--metageneration-preconditions.json",
+      "rows": 704,
+      "digests": {
+        "056c7ca3a8c6daa38e0a": "2d1be71f8fc9429f0de09280a050fbc46164edc3e58338ac9f13ac592d4827fa",
+        "202dd40ac90863add783": "2d1be71f8fc9429f0de09280a050fbc46164edc3e58338ac9f13ac592d4827fa"
+      }
+    },
+    {
+      "recipeId": "storage-object/firebase/list",
+      "file": "firebase--list.json",
+      "rows": 72,
+      "digests": {
+        "056c7ca3a8c6daa38e0a": "34350cc4a5ea697ed1130a0b8cb41d3301cf7f1f97129188dbcdf051972d0532",
+        "202dd40ac90863add783": "34350cc4a5ea697ed1130a0b8cb41d3301cf7f1f97129188dbcdf051972d0532"
+      }
+    },
+    {
+      "recipeId": "storage-object/gcs/list",
+      "file": "gcs--list.json",
+      "rows": 73,
+      "digests": {
+        "056c7ca3a8c6daa38e0a": "7c0b0790f14083455d9fd605659e7b2378cc2af841a77871653baf790b1e6e90",
+        "202dd40ac90863add783": "7c0b0790f14083455d9fd605659e7b2378cc2af841a77871653baf790b1e6e90"
+      }
+    },
+    {
+      "recipeId": "storage-object/gcs/copy-rewrite",
+      "file": "gcs--copy-rewrite.json",
+      "rows": 144,
+      "digests": {
+        "056c7ca3a8c6daa38e0a": "dd678b9bf85bcce018c6c894e1e45bfa68f4a2733e1ce9ed56969984ca201dd0",
+        "202dd40ac90863add783": "dd678b9bf85bcce018c6c894e1e45bfa68f4a2733e1ce9ed56969984ca201dd0"
+      }
+    },
+    {
+      "recipeId": "storage-object/auth/admin",
+      "file": "auth--admin.json",
+      "rows": 32,
+      "digests": {
+        "056c7ca3a8c6daa38e0a": "72723d2f0733631fdaf7799b67a77305e0c45b61320e37681a9f840c754f7063",
+        "202dd40ac90863add783": "72723d2f0733631fdaf7799b67a77305e0c45b61320e37681a9f840c754f7063"
+      }
+    },
+    {
+      "recipeId": "storage-object/firebase/download-tokens",
+      "file": "firebase--download-tokens.json",
+      "rows": 26,
+      "digests": {
+        "056c7ca3a8c6daa38e0a": "20359fae02173924fd3017b2589cc4454c969e4e67cf26797069894f5d4cbec6",
+        "202dd40ac90863add783": "20359fae02173924fd3017b2589cc4454c969e4e67cf26797069894f5d4cbec6"
+      }
+    },
+    {
+      "recipeId": "storage-object/firebase/resumable-upload",
+      "file": "firebase--resumable-upload.json",
+      "rows": 51,
+      "digests": {
+        "056c7ca3a8c6daa38e0a": "f9edecfd1c6c891c2e1e1a70566608f87a15219835b1f5971f2edd2d42947f56",
+        "202dd40ac90863add783": "f9edecfd1c6c891c2e1e1a70566608f87a15219835b1f5971f2edd2d42947f56"
+      }
+    },
+    {
+      "recipeId": "storage-object/gcs/resumable-upload",
+      "file": "gcs--resumable-upload.json",
+      "rows": 19,
+      "digests": {
+        "056c7ca3a8c6daa38e0a": "9fafc75f46631bf77a5cee0131459483e5b759f1344da556185bed4219a04637",
+        "202dd40ac90863add783": "9fafc75f46631bf77a5cee0131459483e5b759f1344da556185bed4219a04637"
+      }
+    },
+    {
+      "recipeId": "storage-object/errors/authorization",
+      "file": "errors--authorization.json",
+      "rows": 165,
+      "digests": {
+        "056c7ca3a8c6daa38e0a": "e5c11e11b6d41e9b4dcbc74b550a4b332d49f7f09979e56ec458645dc6fa9137",
+        "202dd40ac90863add783": "e5c11e11b6d41e9b4dcbc74b550a4b332d49f7f09979e56ec458645dc6fa9137"
+      }
+    },
+    {
+      "recipeId": "storage-object/auth/firebase-id-token",
+      "file": "auth--firebase-id-token.json",
+      "rows": 91,
+      "digests": {
+        "056c7ca3a8c6daa38e0a": "459e998f12afb3a821345fc56f910465fe4e1b8b3484a1c8f5d2ed3223fcdd94",
+        "202dd40ac90863add783": "459e998f12afb3a821345fc56f910465fe4e1b8b3484a1c8f5d2ed3223fcdd94"
+      }
+    }
+  ],
+  "equivalentRecordings": true
+}

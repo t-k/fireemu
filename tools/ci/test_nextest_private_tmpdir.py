@@ -130,6 +130,23 @@ class WrapperTest(unittest.TestCase):
         self.assertNotEqual(process.returncode, 0)
         self.assertEqual(self.private_dirs(), [])
 
+    def test_a_test_that_exits_0_after_a_terminating_signal_still_reports_the_signal(self):
+        environment = dict(os.environ, TMPDIR=str(self.parent) + "/")
+        process = subprocess.Popen(
+            [SHELL, str(WRAPPER), SHELL, "-c", ': > "$TMPDIR/../started"; trap "exit 0" TERM; while :; do sleep 0.1; done'],
+            env=environment,
+            start_new_session=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline and not (self.root / "started").exists():
+            time.sleep(0.05)
+        os.killpg(process.pid, signal.SIGTERM)
+        process.wait(timeout=10)
+        self.assertEqual(process.returncode, 143)
+        self.assertEqual([d for d in self.private_dirs() if d.name != "started"], [])
+
 
 if __name__ == "__main__":
     unittest.main()

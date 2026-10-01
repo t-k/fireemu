@@ -669,3 +669,48 @@ test("the origin of a link is masked only when it is the expected one: the produ
   assert.notEqual(mediaOnWww.mediaLink, production.mediaLink);
   assert.equal(swapped.selfLink, `https://storage.googleapis.com/storage/v1/b/<BUCKET>/o/a.bin`);
 });
+
+test("a JSON document sent as text is compared in its compact form and its layout is the whitespace around it", () => {
+  const compact = '{"error":{"code":400,"message":"bad"}}';
+  const pretty = JSON.stringify(JSON.parse(compact), null, 2);
+  const row = (body, bodyBytes) =>
+    normalizeExchange(
+      {
+        method: "POST",
+        url: "https://x.example/upload",
+        status: 400,
+        headers: { "content-type": "text/html; charset=UTF-8" },
+        body: Buffer.from(body),
+        bodyBytes,
+      },
+      ctx(),
+    );
+  // Production's recorder stored the compact form and kept the real length; a local run stored the text as sent.
+  const production = row(compact, pretty.length);
+  const local = row(pretty, pretty.length);
+  assert.deepEqual(local.body, production.body);
+  assert.equal(production.layout, pretty.length - compact.length);
+  assert.equal(local.layout, production.layout);
+  // The same text with less whitespace has another layout.
+  assert.notEqual(
+    row(JSON.stringify(JSON.parse(compact), null, 4), pretty.length + 30).layout,
+    production.layout,
+  );
+  // Text that is not a JSON object or array, and non-text types, are left as they are.
+  for (const text of ["No such object", "5", '"quoted"', "null", "{broken"])
+    assert.equal(row(text, text.length).body.value, text);
+  assert.equal(row("No such object", 14).layout, 0);
+  const plain = normalizeExchange(
+    {
+      method: "GET",
+      url: "https://x.example/x",
+      status: 200,
+      headers: { "content-type": "application/octet-stream" },
+      body: Buffer.from(pretty),
+      bodyBytes: pretty.length,
+    },
+    ctx(),
+  );
+  assert.equal(plain.body.type, "bytes");
+  assert.equal(plain.layout, 0);
+});

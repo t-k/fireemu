@@ -256,13 +256,26 @@ function maskJson(value, ctx, key = "", parent = "") {
 
 const INLINE_BYTES = 4096;
 
-/** The response body as a comparable value: parsed JSON, text, bytes (inline or by digest) or empty. */
-export function normalizeBody(bytes, contentType, ctx) {
-  if (!bytes || bytes.length === 0) return { type: "empty" };
-  const type = String(contentType ?? "")
+const mediaType = (contentType) =>
+  String(contentType ?? "")
     .split(";")[0]
     .trim()
     .toLowerCase();
+
+/** The compact form of a JSON object or array, or null when the text is anything else. */
+function compactJson(text) {
+  try {
+    const value = JSON.parse(text);
+    return value !== null && typeof value === "object" ? JSON.stringify(value) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** The response body as a comparable value: parsed JSON, text, bytes (inline or by digest) or empty. */
+export function normalizeBody(bytes, contentType, ctx) {
+  if (!bytes || bytes.length === 0) return { type: "empty" };
+  const type = mediaType(contentType);
   if (type === "application/json" || type.endsWith("+json")) {
     try {
       return { type: "json", value: maskJson(JSON.parse(bytes.toString("utf8")), ctx) };
@@ -272,7 +285,11 @@ export function normalizeBody(bytes, contentType, ctx) {
   }
   if (type.startsWith("text/") || type.includes("xml") || type === "application/json") {
     const text = bytes.toString("utf8");
-    if (!text.includes("\uFFFD")) return { type: "text", value: maskText(text, ctx) };
+    // A JSON document sent as text (production answers some errors as text/html) is stored compact
+    // by the recorder on the production side only: compare it in the compact form, its layout is
+    // judged on its own.
+    const compact = type.startsWith("text/") ? compactJson(text) : null;
+    if (!text.includes("\uFFFD")) return { type: "text", value: maskText(compact ?? text, ctx) };
   }
   // Bytes that carry the run ID, the bucket or the project are compared with them masked.
   const masked = Buffer.from(
@@ -315,7 +332,12 @@ export function layoutOverhead(exchange) {
   // before it stores the body, so the stored length is not the compact length of what was sent and
   // the difference is not whitespace: the layout of such a row cannot be judged.
   if (HASHED_MEMBER.test(exchange.body?.toString("latin1") ?? "")) return null;
-  return exchange.bodyBytes - (exchange.body?.length ?? 0);
+  const body = exchange.body ?? Buffer.alloc(0);
+  // The recorder's production lean wire also compacts a JSON document that came as text.
+  const compact = mediaType(exchange.headers?.["content-type"]).startsWith("text/")
+    ? compactJson(body.toString("utf8"))
+    : null;
+  return exchange.bodyBytes - (compact === null ? body.length : Buffer.byteLength(compact));
 }
 
 /**

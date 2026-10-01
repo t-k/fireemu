@@ -1,7 +1,9 @@
 """FS-TRANSACTION P13b (REST): what a retry (`retryTransaction`) does with an expired or finished token, and when a retry attempt takes its snapshot.
 
-This table grants no send permission. Owned document: `a`, created in setup. Four chains over REST. Every answer except the retry that follows a
-Rollback in RT-1 (recorded as accepted for REST before) is observed and never judged: the run may stop for ownership or cleanup reasons only.
+This table grants no send permission. Owned document: `a`, created in setup. Four chains over REST. What is judged (a different answer stops
+the run): the setup and every chain's begin and first read (controls), the retry that follows RT-1's Rollback (a control: recorded as accepted
+for REST in P09 and P10), RT-1's Rollback (0 or 10), RT-1's outside writer (0 or 10) and the final read of `a` (0). Every other answer is
+observed and never judged, so no answer that refutes what strict does today can stop the run: it may stop for ownership or cleanup reasons only.
 
 - RT-1 (the retry snapshot): begin T1, read, Rollback T1, a retry of T1 (T1r), an outside writer commits `a`, the first read in T1r (it may show the
   writer, as the official emulator's read-write transactions do at first use, or not), a Commit in T1r. Strict reads a retry attempt at
@@ -10,12 +12,15 @@ Rollback in RT-1 (recorded as accepted for REST before) is observed and never ju
   ("Invalid retry transaction.") because nothing finished T2 as rolled back.
 - RT-3 (a retry naming an idle-expired token after its Rollback): begin T3, read, an idle wait of 130 s, a Rollback of T3, a retry of T3.
 - RT-4 (a retry naming a lifetime-expired token): begin T4, read, 9 keepalive reads 24 s apart, a read after 12 s, then after 32 s a retry of T4
-  (the token is then about 283 to 288 s old, past the 270 s lifetime and inside the remembered window).
+  (the token is then about 280 to 285 s old, past the 270 s lifetime and inside the remembered window: P13a recorded 280.4 to 284.5 s for the same waits).
 
 The retry of RT-2 to RT-4 ends its chain, so a refusal (no token issued) strands no step; an accepted retry issues a token that the cleanup releases.
 The strict answers are INFERRED today ("Strict answers that go beyond the recordings"); this table records them. The release of a token that no accepted
 answer finishes is judged narrowly, with `releaseAfterAgeSeconds` 275 for a token certainly older than that (T4, T4r); an idle-expired token (T2, T3) whose
 release is refused with anything but the expired text stops the run on an unconfirmed release, an ownership stop.
+
+An accepted retry mints a fresh token (the P09 and P10 recordings: a retry of a committed, a rolled-back and a get-first token each answered 0 with a
+transaction value different from the one it named), which is what the ledger requires of every issued token.
 
 REST only: the shared gRPC wire cannot send `retryTransaction`."""
 

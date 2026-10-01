@@ -13,9 +13,12 @@ from test_txn_program_collector import Clock, Service
 
 TABLE = p13b.TABLE
 NONCE, OWNER = "a" * 32, "b" * 32
-RECORDED_PACE = 2.0   # seconds per step in the stand-in; P11 v4 recorded about 2.26 to 2.6 s a step including the wait overhead
-STEP_OVERHEAD = (2.26, 2.6)
-REMEMBERED_UNTIL, IDLE_REFUSED = 298.7, 120.54
+RECORDED_PACE = 2.0   # seconds per step in the stand-in
+# P13a (REST, two recordings): the first request after the same waits (260 s over 11 requests) landed at a token age of 280.4 to 284.5 s, so each
+# request cost 1.85 to 2.23 s beyond its wait; an idle of 130 s was past the idle limit (P10-C and later: refused from 122.97 s); P11 REST
+# recording 1: a request still answered 10 at 298.7 s.
+STEP_OVERHEAD = (1.85, 2.23)
+REMEMBERED_UNTIL, IDLE_REFUSED = 298.7, 122.97
 
 
 def plan():
@@ -70,14 +73,16 @@ def test_every_retry_names_the_right_token_and_only_the_first_is_a_control():
 
 
 def age(chain, step_name):
+    """The token age at a step's dispatch: the waits up to and including it, plus the overhead of each request between the begin and it (the begin's
+    own answer starts the age, so a step at position n follows n - 1 requests)."""
     chain_steps = [step for step in plan()["steps"] if step["id"].startswith(f"rest/{chain}/")]
     index = next(i for i, step in enumerate(chain_steps) if step["id"].endswith("/" + step_name))
     waits = sum(step.get("waitSeconds", 0) for step in chain_steps[: index + 1])
-    return tuple(waits + index * overhead for overhead in STEP_OVERHEAD)
+    return tuple(waits + (index - 1) * overhead for overhead in STEP_OVERHEAD)
 
 
 def test_the_timing_is_tied_to_the_recorded_idle_and_lifetime_values():
-    assert p13b.IDLE_WAIT >= IDLE_REFUSED + 5
+    assert p13b.IDLE_WAIT >= IDLE_REFUSED + 5   # 130 s against 122.97 s
     # the idle chains reach their retry well before the lifetime
     for chain, name in (("rt2", "retry-idle"), ("rt3", "rollback-idle")):
         assert age(chain, name)[1] < 270

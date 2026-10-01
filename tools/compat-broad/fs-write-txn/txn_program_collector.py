@@ -217,7 +217,9 @@ class Ledger:
             # A retry begin names the one token it retries, which may still be open (nothing released it before the retry).
             retried = None
             if method == "BeginTransaction":
-                retried, _entry = self._token_for(request["options"].get("readWrite", {}).get("retryTransaction"))
+                named, entry = self._token_for(request["options"].get("readWrite", {}).get("retryTransaction"))
+                if entry is not None and entry["state"] == "open":
+                    retried = named   # only an open token may stay open beside a retry; one in unconfirmed-release may not
             if any(entry["state"] in ("open", "unconfirmed-release") for role, entry in self.tokens.items() if role != retried):
                 raise ValueError("a prior chain's token is unresolved")
         elif method == "Rollback":
@@ -278,7 +280,9 @@ class Ledger:
 
     def _apply(self, site, transport, method, request, step, result, timing, code):
         if code == GONE_CODE and result["details"] == GONE_DETAILS:
-            gone_role, _entry = self._token_for(request.get("transaction"))
+            # The token a request names, or the one a retry begin names: either was refused as expired, so a later "Invalid transaction." is its release.
+            named = request.get("transaction") or (request.get("options") or {}).get("readWrite", {}).get("retryTransaction")
+            gone_role, _entry = self._token_for(named)
             if gone_role is not None:
                 self.gone_seen.add(gone_role)
         if method == "BeginTransaction":

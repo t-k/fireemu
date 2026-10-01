@@ -67,26 +67,50 @@ def test_the_toy_table_compiles_and_the_key_is_bound_into_the_digest():
     assert corpus_digest(base) != corpus_digest(table(plain))
 
 
-@pytest.mark.parametrize("changes,why", [
-    ({"rpc": "Commit", "writes": (), "tokenInput": "t1"}, "not a begin"),
-    ({"transport": "grpc"}, "gRPC"),
-    ({"mode": "readOnly"}, "read-only"),
-    ({"retryOf": "nothing"}, "unknown role"),
-    ({"retryOf": "t2"}, "its own token"),
-    ({"retryOf": 7}, "not a string"),
+SHAPE = "retries on something other than a REST read-write begin"
+TARGET = "retries a token that is not an earlier read-write token of this table over REST"
+
+
+def refused_with(steps, message, **changes):
+    # no release age here: a table that declares one is refused for any gRPC transaction step first, which would mask the retry checks
+    changes.setdefault("thresholds", {"totalAgeSeconds": 270})
+    with pytest.raises(ValueError, match=message):
+        compile_plan(table(steps, **changes), NONCE, OWNER)
+
+
+@pytest.mark.parametrize("changes,message", [
+    ({"transport": "grpc"}, SHAPE),
+    ({"mode": "readOnly"}, SHAPE),
+    ({"readAt": {"document": "a", "commit": "setup/create-a"}}, SHAPE),
+    ({"retryOf": "nothing"}, TARGET),
+    ({"retryOf": "t2"}, TARGET),
+    ({"retryOf": 7}, TARGET),
 ])
-def test_a_retry_that_is_not_a_rest_read_write_begin_of_an_earlier_token_never_compiles(changes, why):
-    refused(replace(SETUP + RT1 + RT2, "rest/t2/retry-begin", **changes))
+def test_a_retry_that_is_not_a_rest_read_write_begin_of_an_earlier_token_never_compiles(changes, message):
+    refused_with(replace(SETUP + RT1 + RT2, "rest/t2/retry-begin", **changes), message)
 
 
 def test_a_retry_cannot_name_a_token_issued_later_or_over_grpc_or_read_only():
     steps = SETUP + RT1 + RT2
-    # the retry of t3 placed before t3 begins
-    reordered = replace(steps, "rest/t2/retry-begin", retryOf="t3")
-    refused(reordered)
-    # a read-only token is not retried
-    readonly = replace(steps, "rest/t1/begin", mode="readOnly")
-    refused(readonly)
+    refused_with(replace(steps, "rest/t2/retry-begin", retryOf="t3"), TARGET)   # t3 is issued after the retry
+    refused_with(replace(steps, "rest/t1/begin", mode="readOnly"), TARGET)      # a read-only token is not retried
+    # a token issued over gRPC is not retried over REST
+    grpc_first = replace(steps, "rest/t1/begin", transport="grpc")
+    grpc_first = replace(grpc_first, "rest/t1/read-a", transport="grpc")
+    grpc_first = replace(grpc_first, "rest/t1/rollback", transport="grpc")
+    refused_with(grpc_first, TARGET)
+
+
+def test_a_retry_of_an_earlier_chain_after_another_chain_began_never_compiles():
+    # t1's chain, then a new chain (t3), then a retry that names t1: the retry would be t1's last use after another chain began
+    steps = SETUP + RT1[:3] + RT2[:2] + [step("rest/t1b/retry-late", "rest", "BeginTransaction", "observation", token_out="t1r", retry_of="t1", case="rest/t1b-retry", allow=ANY)]
+    refused_with(steps, "begins while an earlier chain still uses its token", maxTokens=3)
+
+
+def test_only_a_retry_may_wait_on_a_begin():
+    steps = SETUP + RT1 + RT2
+    refused_with(replace(steps, "rest/t1/begin", waitSeconds=5), "waits outside a transaction")
+    refused_with(replace(steps, "rest/t3/begin", waitSeconds=5), "waits outside a transaction")
 
 
 def test_a_retry_key_on_a_step_that_is_not_a_begin_never_compiles():
@@ -181,3 +205,28 @@ def test_a_retry_begin_may_name_the_one_open_token_but_no_other_open_token_may_r
     plain = {"database": plan["database"], "options": {"readWrite": {}}}
     with pytest.raises(ValueError, match="unresolved"):
         ledger.guard("BeginTransaction", plain, None)
+
+
+def test_a_retry_refused_as_expired_marks_the_named_token_gone_so_its_release_may_answer_invalid_transaction():
+    from txn_program_collector import GONE_CODE, GONE_DETAILS
+    plan = compile_plan(table(), NONCE, OWNER)
+    ledger = Ledger(plan)
+    ledger.tokens["t3"] = {"value": "dG9rZW4z", "state": "open", "transport": "rest", "start": {}, "lastUse": {}}
+    retry = next(row for row in plan["steps"] if row["id"] == "rest/t3r/retry-idle")
+    request = {"database": plan["database"], "options": {"readWrite": {"retryTransaction": "dG9rZW4z"}}}
+    timing = {"dispatchMonotonic": 1.0, "responseMonotonic": 2.0, "dispatchUtc": "2026-09-30T00:00:01.000000Z", "responseUtc": "2026-09-30T00:00:02.000000Z"}
+    refusal = {"kind": "txn-program-receipt-v1", "transport": "rest", "complete": True, "code": GONE_CODE, "details": GONE_DETAILS, "response": None, "http": 409, "dispatchedRequests": 1, "childReaped": True}
+    ledger.before("rest/t3r/retry-idle", "rest", "BeginTransaction", request, retry)
+    ledger.after("rest/t3r/retry-idle", "rest", "BeginTransaction", request, retry, refusal, timing)
+    assert "t3" in ledger.gone_seen
+
+
+def test_the_guard_exemption_covers_only_an_open_token_not_one_in_unconfirmed_release():
+    plan = compile_plan(table(), NONCE, OWNER)
+    ledger = Ledger(plan)
+    ledger.tokens["t1"] = {"value": "dG9rZW4x", "state": "unconfirmed-release", "transport": "rest", "start": {}, "lastUse": {}}
+    request = {"database": plan["database"], "options": {"readWrite": {"retryTransaction": "dG9rZW4x"}}}
+    with pytest.raises(ValueError, match="unresolved"):
+        ledger.guard("BeginTransaction", request, None)
+    ledger.tokens["t1"]["state"] = "open"
+    ledger.guard("BeginTransaction", request, None)

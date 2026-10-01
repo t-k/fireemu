@@ -224,6 +224,16 @@ for (const form of ['endpoint', 'legacy']) {
     });
   });
 
+  test(`v1 ${form}: a Storage legacy timestamp keeps a value that is not a time as it is, and cuts the fraction of one that is`, { timeout: 10000 }, async t => {
+    const f = await start(t, [stEntry('onFinalize', 'projects/_/buckets/assets.example', form)]);
+    const times = ['2026-10-01T08:49:26Z', '2026-10-01T08:49:26.5Z', '2026-10-01T08:49:26.123456789Z', 'not a time'];
+    for (const time of times) {
+      const event = { id: '1', type: 'google.cloud.storage.object.v1.finalized', time, source: '//storage.googleapis.com/projects/_/buckets/assets.example', data: { bucket: 'assets.example', name: 'a.txt' } };
+      assert.equal((await f.invoke('onFinalize', 'storage', event)).ok, true);
+    }
+    assert.deepEqual((await f.calls()).map(call => call.context.timestamp), ['2026-10-01T08:49:26.000Z', '2026-10-01T08:49:26.500Z', '2026-10-01T08:49:26.123Z', 'not a time']);
+  });
+
   test(`v1 ${form}: Storage bucket selection does not consume the project named buckets`, { timeout: 10000 }, async t => {
     const definitions = [];
     for (const project of ['_', 'demo-resource', 'buckets']) {

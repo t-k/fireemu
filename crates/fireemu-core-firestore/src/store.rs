@@ -6634,7 +6634,11 @@ mod scope_index_tests {
         }
         let mut retained_here = Vec::new();
         let mut representatives = Vec::new();
-        collect_trie_paths(&state.listing_trie, &mut retained_here, &mut representatives);
+        collect_trie_paths(
+            &state.listing_trie,
+            &mut retained_here,
+            &mut representatives,
+        );
         for path in retained_here {
             check("trie", path, &mut held);
         }
@@ -6665,7 +6669,11 @@ mod scope_index_tests {
             )
             .expect("create indexed paths");
         state
-            .commit(&[delete("root/b")], None, LogicalInstant::from_unix_seconds(1))
+            .commit(
+                &[delete("root/b")],
+                None,
+                LogicalInstant::from_unix_seconds(1),
+            )
             .expect("delete keeps the retained path");
         assert_eq!(scope_path_sharing_violations(&state), Vec::<String>::new());
         assert_eq!(
@@ -6728,7 +6736,10 @@ mod scope_index_tests {
         assert_eq!(
             scope_path_sharing_violations(&state),
             vec![
-                format!("live paths holds its own allocation of {:?}", path("root/a")),
+                format!(
+                    "live paths holds its own allocation of {:?}",
+                    path("root/a")
+                ),
                 "2 path allocations for 1 retained paths".to_owned(),
             ]
         );

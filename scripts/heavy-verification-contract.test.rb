@@ -159,7 +159,10 @@ class HeavyVerificationContractTest < Minitest::Test
     assert_violation(REAL.sub("          if-no-files-found: error\n", ""), "no summary")
   end
 
-  def test_a_sharding_option_is_refused
-    assert_violation(REAL.sub("--shard \"$SHARD/$TOTAL\"", "--shard \"$SHARD/$TOTAL\" --sharding round-robin"), "no --sharding")
+  def test_the_sharding_must_be_slice_on_the_command_line
+    assert_violation(REAL.sub(" --sharding slice", ""), "--sharding slice")
+    assert_violation(REAL.sub("--sharding slice", "--sharding round-robin"), "--sharding slice")
+    assert_violation(REAL.sub("--sharding slice", "--sharding slice --sharding round-robin"), "--sharding slice")
+    assert_violation(REAL.sub("--shard \"$SHARD/$TOTAL\"", "--shard \"$SHARD/$TOTAL\" --sharding=round-robin"), "--sharding slice")
   end
 end

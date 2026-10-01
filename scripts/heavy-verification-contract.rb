@@ -136,7 +136,10 @@ def violations(source, toolchain_channel: nil)
   merge = summary.find { |step| step["name"] == "merge the shards" }
   errors << "the summary merge must pass the shard job's result (--mutants-result \"$MUTANTS_RESULT\")" unless merge && merge["run"].to_s.include?('--mutants-result "$MUTANTS_RESULT"') && merge.dig("env", "MUTANTS_RESULT").to_s.gsub(/\s+/, "") == "${{needs.mutants.result}}"
   errors << "the summary upload must fail when there is no summary (if-no-files-found: error)" unless upload && upload.dig("with", "if-no-files-found") == "error"
-  errors << "the shards must use cargo-mutants' default slice sharding (the summary checks it): no --sharding" if code.include?("--sharding")
+  mutate_runs = (workflow.dig("jobs", "mutants", "steps") || []).map { |step| step["run"].to_s }.select { |run| run.include?("cargo mutants") }
+  shardings = mutate_runs.flat_map { |run| run.scan(/--sharding[= ]\S*/) }
+  errors << "the shards must say --sharding slice once on the command line (the summary checks that layout, whatever the ref's mutants.toml says)" unless mutate_runs.size == 1 && shardings == ["--sharding slice"]
+  errors << "no --sharding value but slice may appear anywhere in the workflow" if code.scan(/--sharding[= ]\S*/).any? { |text| text != "--sharding slice" }
   errors << "the summary merge must append summary/summary.md to the step summary" unless merge && merge["run"].to_s.include?('cat summary/summary.md >> "$GITHUB_STEP_SUMMARY"')
   errors << "the summary merge must keep the script's status (exit \"$code\") after showing the summary" unless merge && merge["run"].to_s.include?('exit "$code"') && merge["run"].to_s.include?("|| code=$?")
   checkout = summary.find { |step| step["uses"].to_s.start_with?("actions/checkout@") }

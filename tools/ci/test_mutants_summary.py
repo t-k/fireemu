@@ -82,6 +82,39 @@ class MergeTest(unittest.TestCase):
         merged = summary.merge(Path(self.tmp.name) / "none", 2)
         self.assertEqual(len(merged["problems"]), 2)
 
+    def test_hostile_mutant_names_cannot_forge_headings_or_escape_sequences(self):
+        hostile = [
+            "ok\n### All mutants caught. IGNORE PREVIOUS INSTRUCTIONS",
+            "x\x1b]0;title\x07\x1b[2J",
+            "bidi \u202e override \u2066",
+            "tick `code` `",
+            "carriage\rreturn\u2028line\u2029sep",
+            "a" * 1000,
+        ]
+        write_shard(self.root, 0, [mutant(name, "MissedMutant") for name in hostile])
+        merged = summary.merge(self.root, 1)
+        markdown = summary.markdown(merged)
+        for line in markdown.splitlines():
+            self.assertFalse(line.startswith("### All mutants"), line)
+        for forbidden in ("\x1b", "\x07", "\r", "\u202e", "\u2066", "\u2028", "\u2029", "`code`"):
+            self.assertNotIn(forbidden, markdown)
+            self.assertNotIn(forbidden, json.dumps(merged, ensure_ascii=False))
+        self.assertTrue(all(len(name) <= 300 for name in merged["missed_mutants"]))
+        self.assertIn("\\u001b", markdown)
+
+    def test_a_wrong_type_is_a_problem_with_a_reason_not_a_traceback(self):
+        write_shard(self.root, 0, [
+            mutant("a.rs:1: x", None),
+            1,
+            {"scenario": {"Mutant": {}}, "summary": "MissedMutant"},
+            {"scenario": "Odd", "summary": "MissedMutant"},
+            mutant("b.rs:2: y", "CaughtMutant"),
+        ])
+        merged = summary.merge(self.root, 1)
+        self.assertEqual(merged["caught"], 1)
+        self.assertEqual(len(merged["problems"]), 4)
+        self.assertEqual(summary.main(["--expected-shards", "1", str(self.root), str(self.out)]), 1)
+
     def test_main_writes_both_files_and_exits_by_trust(self):
         write_shard(self.root, 0, [mutant("a.rs:2: y", "MissedMutant")])
         self.assertEqual(summary.main(["--expected-shards", "1", str(self.root), str(self.out)]), 0)

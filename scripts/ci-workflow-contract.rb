@@ -63,6 +63,12 @@ end
 release.dig("jobs", "build", "steps").select { |step| step["uses"]&.start_with?("dtolnay/rust-toolchain@") }.each do |step|
   assert(step.dig("with", "toolchain") == toolchain_channel, "release build must install targets for #{toolchain_channel}")
 end
+# The published binary is built and tested from a clean target: no job that feeds it restores a cache
+# another run may have written.
+%w[test build].each do |job|
+  cached = release.dig("jobs", job, "steps").select { |step| step["uses"].to_s.match?(%r{\A(Swatinem/rust-cache|actions/cache)(/|@)}) }
+  assert(cached.empty?, "release #{job} must not restore a cache")
+end
 release_build = release.dig("jobs", "build")
 release_build_runs = release_build.fetch("steps").map { |step| step["run"] }.compact.join("\n")
 assert(!release_build_runs.include?("cargo nextest"), "release platform builds must not duplicate the workspace test suite")

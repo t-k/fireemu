@@ -14,6 +14,10 @@ run-name: heavy-verification ${{ inputs.job }} ${{ inputs.tag }}
 # - Inputs are never interpolated into a script. They reach `run:` only through `env:` and are
 #   validated there first (the `plan` job). A validated value is the only thing the other jobs use.
 # - Every action is pinned by its full commit SHA, and every job has a timeout.
+# - It refuses to run from the default branch or a tag: the Actions cache is scoped by the ref the
+#   run belongs to, and the code under test must never share a cache scope with ci.yml or
+#   release.yml. Dispatch it from the branch under test (or a dedicated branch); no job saves a
+#   cache either (`save-if: "false"`).
 #
 # Use tools/ci/heavy-run.sh to dispatch it, wait, and download the artifacts.
 
@@ -78,6 +82,8 @@ jobs:
       - name: validate the inputs
         id: validate
         env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          REPO_URL: ${{ github.server_url }}/${{ github.repository }}
           INPUT_JOB: ${{ inputs.job }}
           INPUT_REF: ${{ inputs.ref }}
           INPUT_PACKAGE: ${{ inputs.package }}
@@ -88,12 +94,21 @@ jobs:
         run: |
           set -euo pipefail
           fail() { echo "::error::$1"; exit 1; }
-          # A branch name or a full commit SHA: no leading dash, no "..", no "//", no trailing slash.
+          # The cache is scoped by the ref this run belongs to. Never run from the default branch or a
+          # tag: code under test would share a cache scope with ci.yml and release.yml.
+          case "$GITHUB_REF" in
+            "refs/heads/$DEFAULT_BRANCH" | refs/tags/*) fail "dispatch from the branch under test or a dedicated branch, not $GITHUB_REF" ;;
+            refs/heads/*) ;;
+            *) fail "dispatch from a branch of this repository" ;;
+          esac
+          # A branch name or a full commit SHA: no leading dash, no "..", no "//", no trailing slash,
+          # and nothing that names a ref outside refs/heads (refs/..., HEAD, FETCH_HEAD).
           ref_ok() {
             local value=$1
             [[ $value =~ ^[0-9a-f]{40}$ ]] && return 0
             [[ $value =~ ^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$ ]] || return 1
-            [[ $value != *..* && $value != *//* && $value != */ && $value != *.lock ]]
+            [[ $value != *..* && $value != *//* && $value != */ && $value != *.lock ]] || return 1
+            [[ $value != refs/* && $value != HEAD && $value != FETCH_HEAD && $value != ORIG_HEAD ]]
           }
           case "$INPUT_JOB" in
             mutants | nextest | linux-measure) ;;
@@ -114,10 +129,26 @@ jobs:
           elif [[ -n $INPUT_SCRIPT ]]; then
             fail "script is only for linux-measure"
           fi
+          # The ref and the base must belong to this repository: a branch of it, or a commit that one of
+          # its branches contains (a bare 40-hex SHA can also name a commit of a fork).
+          git clone --quiet --bare --filter=blob:none "$REPO_URL" "$RUNNER_TEMP/repo.git"
+          resolve() {
+            local value=$1 commit
+            if [[ $value =~ ^[0-9a-f]{40}$ ]]; then
+              git -C "$RUNNER_TEMP/repo.git" cat-file -e "$value^{commit}" 2> /dev/null || return 1
+              [[ -n $(git -C "$RUNNER_TEMP/repo.git" for-each-ref --contains "$value" refs/heads) ]] || return 1
+              echo "$value"
+            else
+              commit=$(git -C "$RUNNER_TEMP/repo.git" rev-parse --verify --quiet "refs/heads/$value^{commit}") || return 1
+              echo "$commit"
+            fi
+          }
+          ref_sha=$(resolve "$INPUT_REF") || fail "ref is not a branch of this repository, nor a commit of one"
+          base_sha=$(resolve "$INPUT_BASE") || fail "base is not a branch of this repository, nor a commit of one"
           matrix=$(seq 0 $((shards - 1)) | paste -sd, -)
           {
-            echo "ref=$INPUT_REF"
-            echo "base=$INPUT_BASE"
+            echo "ref=$ref_sha"
+            echo "base=$base_sha"
             echo "package=$INPUT_PACKAGE"
             echo "script=$INPUT_SCRIPT"
             echo "total=$shards"
@@ -146,8 +177,8 @@ jobs:
         run: rustc --version | tee /dev/stderr | grep -q "$(sed -n 's/^channel = "\(.*\)"/\1/p' rust-toolchain.toml)"
       - uses: taiki-e/install-action@7b8d4719ee4aaa279bdf55df38dacb9ebfe12a6c
         with:
-          tool: cargo-mutants,cargo-nextest
-      - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c
+          tool: cargo-mutants@27.1.0,cargo-nextest@0.9.143
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           key: heavy-mutants
           save-if: "false"
@@ -166,7 +197,7 @@ jobs:
             args+=(-p "$PACKAGE")
           fi
           set +e
-          cargo mutants --test-tool nextest --in-diff "$RUNNER_TEMP/changes.diff" \
+          cargo mutants --test-tool nextest --cargo-arg=--locked --in-diff "$RUNNER_TEMP/changes.diff" \
             --shard "$SHARD/$TOTAL" --output "mutants-out-$SHARD" "${args[@]}"
           code=$?
           set -e
@@ -209,6 +240,9 @@ jobs:
         with:
           name: mutants-summary
           path: summary
+          # A shard (untrusted code) may have created an artifact of this name before this job
+          # runs: this job's upload replaces it.
+          overwrite: true
 
   nextest:
     needs: plan
@@ -231,13 +265,13 @@ jobs:
         run: rustc --version | tee /dev/stderr | grep -q "$(sed -n 's/^channel = "\(.*\)"/\1/p' rust-toolchain.toml)"
       - uses: taiki-e/install-action@7b8d4719ee4aaa279bdf55df38dacb9ebfe12a6c
         with:
-          tool: cargo-nextest
-      - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c
+          tool: cargo-nextest@0.9.143
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           key: heavy-nextest-${{ matrix.os }}
           save-if: "false"
       - name: the whole suite (profile pr)
-        run: cargo nextest run --workspace --profile pr
+        run: cargo nextest run --workspace --profile pr --locked
 
   linux-measure:
     needs: plan
@@ -252,7 +286,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
         with:
           toolchain: 1.94.0
-      - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           key: heavy-measure
           save-if: "false"

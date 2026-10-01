@@ -85,6 +85,13 @@ test("the packet's identity and the envelope's bounds are checked before the app
   for (const good of ["0.5", "0.500000", "1", "10", "3.25"]) assert.doesNotThrow(() => check("pre", { reserve: good }), `reserve ${good}`);
 });
 
+test("a packet name is at most 64 characters, and names its mode", () => {
+  const name = (length) => "reclaim-pre-".padEnd(length, "a");
+  assert.doesNotThrow(() => check("pre", { packet: packetOf("pre", { packetName: name(64) }) }));
+  assert.throws(() => check("pre", { packet: packetOf("pre", { packetName: name(65) }) }), /invalid packet data/);
+  assert.doesNotThrow(() => check("pre", { packet: packetOf("pre", { packetName: "reclaim-pre-" }) }));
+});
+
 test("the admission refuses each option that is missing or of the wrong kind", () => {
   const options = () => ({ readLedger: async () => "", packet: packetOf("pre"), review: reviewOf(packetOf("pre")), locks: { verify: async () => true }, runId: "run-1", usage: { startedRunIds: async () => [], markStarted: async () => {} }, mode: "pre" });
   const spoiled = [

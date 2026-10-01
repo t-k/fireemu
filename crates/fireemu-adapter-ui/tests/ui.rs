@@ -803,8 +803,9 @@ while True:
 /// The UI state with a real Functions port bound in front of an HTTP-capable runner, so the
 /// invoke and enqueue fronts can be driven end to end. Returns the state, the runtime, and
 /// the path the task handler records dispatched tasks to.
-/// The probe comes first so a `let (probe, state, runtime)` binding drops it last, after the
-/// runtime and its runner: teardown writes cannot race the directory's removal.
+/// The probe comes first so a `let (probe, state, runtime)` binding drops it last. A test that
+/// panics skips its runner shutdown, so the directory can go while the runner is alive; the runner
+/// only appends to the file, so a late write fails rather than recreating it.
 async fn state_with_http_functions() -> (
     TaskProbe,
     Arc<UiState>,
@@ -933,6 +934,34 @@ async fn wait_for_probe(probe: &std::path::Path, expected: usize) -> Vec<String>
     })
     .await
     .expect("the probe reached the expected number of dispatches")
+}
+
+#[tokio::test]
+async fn a_test_that_panics_with_the_runner_still_running_leaves_no_task_probe_directory() {
+    // A panic skips the explicit runner shutdown, so the probe directory is removed while the
+    // runner (which holds the probe path) is still alive. The runner appends to the file and
+    // never creates the directory, so a late write cannot bring it back.
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    let outcome = tokio::spawn(async move {
+        let (probe, _s, runtime) = state_with_http_functions().await;
+        let _ = sender.send((probe.to_path_buf(), runtime.clone()));
+        panic!("the test failed with the runner still running");
+    })
+    .await;
+    assert!(outcome.unwrap_err().is_panic());
+    let (file, runtime) = receiver.await.unwrap();
+    let dir = file.parent().unwrap();
+    assert!(!dir.exists(), "the probe directory is removed by the panic");
+    assert!(
+        std::fs::OpenOptions::new()
+            .append(true)
+            .create(true)
+            .open(&file)
+            .is_err(),
+        "a late append cannot recreate it"
+    );
+    assert!(!dir.exists());
+    runtime.runner().shutdown().await;
 }
 
 #[tokio::test]

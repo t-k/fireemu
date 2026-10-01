@@ -34,7 +34,7 @@ fn object_time(t: LogicalInstant) -> String {
     format!("{whole}.{fraction:0<3.3}Z")
 }
 
-/// The `time` of a Storage CloudEvent. Production's finalize event carries the object's
+/// The `time` of a Storage `CloudEvent`. Production's finalize event carries the object's
 /// creation instant with the microseconds it knows (`2026-10-01T08:49:26.486927Z`, while the
 /// object's own `timeCreated` shows `.486Z`), printed as protobuf JSON prints a `Timestamp`.
 /// The other kinds were not recorded; they keep the instant the runtime admitted the event, in
@@ -76,7 +76,7 @@ fn seeded_stream(seed: &str) -> impl FnMut() -> u64 {
 }
 
 /// A Storage event id as production prints it: a decimal string of seventeen digits (observed
-/// 2026-10-01 for a 1st gen `context.eventId` and a 2nd gen CloudEvent `id` of one object create;
+/// 2026-10-01 for a 1st gen `context.eventId` and a 2nd gen `CloudEvent` `id` of one object create;
 /// the two are unrelated numbers). Derived deterministically from `seed` so a recorded local run
 /// replays with the same ids. Other lengths were not recorded.
 #[must_use]

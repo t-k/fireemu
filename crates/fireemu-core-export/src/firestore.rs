@@ -483,11 +483,69 @@ pub fn write_output_to(
     documents: &[ExportDocument],
     output: impl std::io::Write,
 ) -> Result<u64, FirestoreExportError> {
-    let mut writer = LogWriter::new(output);
-    for document in documents {
-        writer.push(&write_entity(document)?)?;
+    write_entities_to(documents.iter().map(EntityView::from), output).map(|(_, bytes)| bytes)
+}
+
+/// A document as the export encodes it, borrowed from wherever it lives: a store document
+/// needs no owned copy of its path or fields to be written.
+#[derive(Debug, Clone)]
+pub struct EntityView<'a> {
+    /// The project the entity's application id names.
+    pub project: &'a str,
+    /// The alternating collection / document identifiers of the document path.
+    pub path: Vec<(&'a str, &'a str)>,
+    /// The document's fields.
+    pub fields: &'a BTreeMap<String, Value>,
+}
+
+impl<'a> EntityView<'a> {
+    /// The view of a document at `path` in `project` holding `fields`.
+    #[must_use]
+    pub fn of(
+        project: &'a str,
+        path: &'a DocumentPath,
+        fields: &'a BTreeMap<String, Value>,
+    ) -> Self {
+        Self {
+            project,
+            path: path
+                .pairs()
+                .iter()
+                .map(|(collection, document)| (collection.as_str(), document.as_str()))
+                .collect(),
+            fields,
+        }
     }
-    Ok(writer.finish().1)
+}
+
+impl<'a> From<&'a ExportDocument> for EntityView<'a> {
+    fn from(document: &'a ExportDocument) -> Self {
+        Self {
+            project: &document.project,
+            path: document
+                .path
+                .iter()
+                .map(|(collection, id)| (collection.as_str(), id.as_str()))
+                .collect(),
+            fields: &document.fields,
+        }
+    }
+}
+
+/// Encodes entities one record at a time into a single `output-*` file (one framing writer for
+/// the whole file, so the bytes do not depend on how the caller produced the entities) and
+/// returns how many entities and bytes it wrote.
+pub fn write_entities_to<'a>(
+    entities: impl IntoIterator<Item = EntityView<'a>>,
+    output: impl std::io::Write,
+) -> Result<(u64, u64), FirestoreExportError> {
+    let mut writer = LogWriter::new(output);
+    let mut count = 0_u64;
+    for entity in entities {
+        writer.push(&write_entity_styled(&entity, EntityStyle::Emulator)?)?;
+        count += 1;
+    }
+    Ok((count, writer.finish().1))
 }
 
 /// How an entity names its application and database: the emulator's `dev~` application with a
@@ -511,7 +569,7 @@ impl EntityStyle<'_> {
 
 /// Encodes one document as an `EntityProto` record.
 pub fn write_entity(document: &ExportDocument) -> Result<Vec<u8>, FirestoreExportError> {
-    write_entity_styled(document, EntityStyle::Emulator)
+    write_entity_styled(&EntityView::from(document), EntityStyle::Emulator)
 }
 
 /// Encodes one document of `database` as production's managed export writes it.
@@ -519,11 +577,14 @@ pub fn write_managed_entity(
     document: &ExportDocument,
     database: &str,
 ) -> Result<Vec<u8>, FirestoreExportError> {
-    write_entity_styled(document, EntityStyle::Managed { database })
+    write_entity_styled(
+        &EntityView::from(document),
+        EntityStyle::Managed { database },
+    )
 }
 
 fn write_entity_styled(
-    document: &ExportDocument,
+    document: &EntityView<'_>,
     style: EntityStyle<'_>,
 ) -> Result<Vec<u8>, FirestoreExportError> {
     if document
@@ -540,7 +601,7 @@ fn write_entity_styled(
     }
     let mut w = Writer::new();
     w.write_message(ENTITY_KEY, |key| {
-        key.write_string(REFERENCE_APP, &style.app(&document.project));
+        key.write_string(REFERENCE_APP, &style.app(document.project));
         key.write_message(REFERENCE_PATH, |path| write_path(path, &document.path));
         if let EntityStyle::Managed { database } = style {
             if database != DatabaseId::DEFAULT {
@@ -549,7 +610,7 @@ fn write_entity_styled(
         }
     });
     // Only an empty list is written as an indexed property, exactly as the jar does.
-    for (name, value) in &document.fields {
+    for (name, value) in document.fields {
         if matches!(value, Value::Array(items) if items.is_empty()) {
             w.write_message(ENTITY_PROPERTY, |p| {
                 p.write_varint(PROPERTY_MEANING, MEANING_EMPTY_LIST);
@@ -559,7 +620,7 @@ fn write_entity_styled(
             });
         }
     }
-    for (name, value) in &document.fields {
+    for (name, value) in document.fields {
         match value {
             Value::Array(items) if items.is_empty() => {}
             Value::Array(items) => {
@@ -596,7 +657,7 @@ fn validate_references(value: &Value) -> Result<(), FirestoreExportError> {
     Ok(())
 }
 
-fn write_path(w: &mut Writer, path: &[(String, String)]) {
+fn write_path(w: &mut Writer, path: &[(&str, &str)]) {
     for (collection, document) in path {
         w.write_group(PATH_ELEMENT, |e| {
             e.write_string(ELEMENT_TYPE, collection);
@@ -1117,9 +1178,9 @@ fn as_vector(fields: &BTreeMap<String, Value>) -> Option<Value> {
 #[cfg(test)]
 mod tests {
     use super::{
-        read_entity, read_output, read_output_from, write_entity, write_output, write_output_to,
-        ExportDocument, OverallMetadata, PartitionMetadata, Value, MAX_PARTITION_ENTRIES,
-        OVERALL_PREFIX_RECORD,
+        read_entity, read_output, read_output_from, write_entities_to, write_entity, write_output,
+        write_output_to, EntityView, ExportDocument, OverallMetadata, PartitionMetadata, Value,
+        MAX_PARTITION_ENTRIES, OVERALL_PREFIX_RECORD,
     };
     use crate::leveldb::read_log;
     use fireemu_core_firestore::value::{GeoPoint, Timestamp};
@@ -1383,6 +1444,70 @@ mod tests {
         );
     }
 
+    /// The streaming writer encodes a store document through a borrowed view, with no
+    /// `ExportDocument` copy of its path or fields, to exactly the bytes the owned rows give.
+    #[test]
+    fn entity_views_of_store_paths_encode_exactly_like_export_documents() {
+        use fireemu_core_firestore::path::DocumentPath;
+        use fireemu_core_types::ids::{DatabaseId, ProjectId};
+
+        let rows = [
+            ("demo-a", "cities/SF", field("small", Value::Integer(1))),
+            (
+                "demo-a",
+                "cities/SF/landmarks/golden-gate",
+                field("large", Value::String("x".repeat(70_000))),
+            ),
+            ("demo-b", "empty/doc", BTreeMap::new()),
+            (
+                "demo-b",
+                "lists/l",
+                field(
+                    "items",
+                    Value::Array(vec![Value::Null, Value::Boolean(true)]),
+                ),
+            ),
+        ];
+        let paths: Vec<DocumentPath> = rows
+            .iter()
+            .map(|(project, path, _)| {
+                DocumentPath::parse(
+                    &ProjectId::try_new(*project).unwrap(),
+                    &DatabaseId::default_database(),
+                    path,
+                )
+                .unwrap()
+            })
+            .collect();
+        let owned: Vec<ExportDocument> = rows
+            .iter()
+            .zip(&paths)
+            .map(|((project, _, fields), path)| ExportDocument {
+                project: (*project).to_owned(),
+                path: path
+                    .pairs()
+                    .iter()
+                    .map(|(c, d)| (c.as_str().to_owned(), d.as_str().to_owned()))
+                    .collect(),
+                fields: fields.clone(),
+            })
+            .collect();
+        let expected = write_output(&owned).unwrap();
+
+        let mut streamed = Vec::new();
+        let (count, bytes) = write_entities_to(
+            rows.iter()
+                .zip(&paths)
+                .map(|((project, _, fields), path)| EntityView::of(project, path, fields)),
+            &mut streamed,
+        )
+        .unwrap();
+
+        assert_eq!(count, 4);
+        assert_eq!(bytes, streamed.len() as u64);
+        assert_eq!(streamed, expected);
+    }
+
     #[test]
     fn one_hundred_thousand_documents_stream_without_retaining_the_artifact() {
         let docs: Vec<_> = (0..100_000)
@@ -1606,7 +1731,7 @@ mod tests {
             writer.write_message(super::ENTITY_KEY, |key| {
                 key.write_string(super::REFERENCE_APP, &format!("{prefix}demo-export"));
                 key.write_message(super::REFERENCE_PATH, |path| {
-                    super::write_path(path, &document.path);
+                    super::write_path(path, &super::EntityView::from(&document).path);
                 });
             });
             let encoded = writer.finish();
@@ -1620,7 +1745,7 @@ mod tests {
         writer.write_message(super::ENTITY_KEY, |key| {
             key.write_string(super::REFERENCE_APP, "x~demo-export");
             key.write_message(super::REFERENCE_PATH, |path| {
-                super::write_path(path, &[("cities".to_owned(), "SF".to_owned())]);
+                super::write_path(path, &[("cities", "SF")]);
             });
         });
         let decoded = read_entity(&writer.finish()).expect("the entity shape is readable");

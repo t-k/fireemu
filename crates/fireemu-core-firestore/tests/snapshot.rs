@@ -106,3 +106,37 @@ fn a_restored_snapshot_refuses_history_it_does_not_carry_and_keeps_committing() 
     assert!(result.version > early);
     assert!(result.commit_time.as_nanos() > early_time.as_nanos());
 }
+
+/// An export reads the live documents through the store's own allocations: the newest version
+/// of every path that is not a tombstone, in path order, each the `Arc` the store holds.
+#[test]
+fn live_document_handles_share_the_stored_documents_in_path_order() {
+    let mut state = FirestoreState::new();
+    let at = LogicalInstant::from_unix_seconds(1_788_000_000);
+    state
+        .commit(&[set("b/2", 1), set("a/1", 1), set("c/3", 1)], None, at)
+        .unwrap();
+    state
+        .commit(&[set("a/1", 2), delete("c/3")], None, at)
+        .unwrap();
+
+    let handles = state.live_document_handles();
+    let expected = state.documents();
+    assert_eq!(
+        handles
+            .iter()
+            .map(|d| d.as_ref().clone())
+            .collect::<Vec<_>>(),
+        expected
+    );
+    assert_eq!(
+        handles.iter().map(|d| d.path.clone()).collect::<Vec<_>>(),
+        vec![path("a/1"), path("b/2")]
+    );
+    for handle in &handles {
+        assert!(
+            std::sync::Arc::strong_count(handle) >= 2,
+            "the store and the handle share one allocation"
+        );
+    }
+}

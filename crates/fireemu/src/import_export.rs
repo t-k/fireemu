@@ -48,8 +48,8 @@ use fireemu_core_export::auth::{
     ACCOUNTS_FILE, AUTH_SETTINGS_FILE, CONFIG_FILE, PASSWORD_POLICIES_FILE,
 };
 use fireemu_core_export::firestore::{
-    for_each_output, write_output_to, ExportDocument, OverallMetadata, PartitionMetadata,
-    EXPORT_NAME, OUTPUT_FILE, PARTITION_DIR, PARTITION_METADATA,
+    for_each_output, write_entities_to, EntityView, ExportDocument, OverallMetadata,
+    PartitionMetadata, EXPORT_NAME, OUTPUT_FILE, PARTITION_DIR, PARTITION_METADATA,
 };
 use fireemu_core_export::metadata::{
     ExportMetadata, Product, Section, AUTH_PATH, FIRESTORE_OVERALL_METADATA, FIRESTORE_PATH,
@@ -3161,34 +3161,15 @@ fn export_firestore(
     endpoints: &Endpoints,
     manifest: &mut ExportMetadata,
 ) -> Result<(), ArtifactError> {
-    let scope = fireemu_core_session::tenancy::Scope::AllExcept(BTreeSet::new());
-    let snapshot = endpoints.backend.snapshot_scope(&scope);
+    let mut sections = firestore_export_sections(endpoints.backend);
     let now = endpoints.now();
     let micros = u64::try_from(now.as_nanos() / 1_000).unwrap_or(0);
-    let mut by_database: BTreeMap<String, Vec<ExportDocument>> = BTreeMap::new();
-    for ((project, database), state) in snapshot.databases {
-        let documents: Vec<ExportDocument> = state
-            .into_documents()
-            .into_iter()
-            .map(|d| ExportDocument {
-                project: project.clone(),
-                path: d
-                    .path
-                    .pairs()
-                    .iter()
-                    .map(|(c, id)| (c.as_str().to_owned(), id.as_str().to_owned()))
-                    .collect(),
-                fields: d.fields,
-            })
-            .collect();
-        by_database.entry(database).or_default().extend(documents);
-    }
     // The default database always gets a section, even when it is empty: the official CLI
     // writes one whenever the Firestore emulator runs, and an absent section reads as "this
     // export never covered Firestore".
-    by_database.entry(DEFAULT_DATABASE.to_owned()).or_default();
+    sections.entry(DEFAULT_DATABASE.to_owned()).or_default();
 
-    for (database, documents) in &by_database {
+    for (database, section) in &sections {
         let path = if database == DEFAULT_DATABASE {
             FIRESTORE_PATH.to_owned()
         } else {
@@ -3204,7 +3185,7 @@ fn export_firestore(
             create_private_file(&output_path)
                 .map_err(|e| ArtifactError::new("firestore", &output_path, e))?,
         );
-        let output_bytes = write_output_to(documents, &mut output)
+        let (entity_count, output_bytes) = write_firestore_section(section, &mut output)
             .map_err(|e| ArtifactError::new("firestore", &output_path, e.to_string()))?;
         std::io::Write::flush(&mut output)
             .map_err(|e| ArtifactError::new("firestore", &output_path, e.to_string()))?;
@@ -3221,7 +3202,7 @@ fn export_firestore(
 
         let overall = OverallMetadata {
             metadata_file: format!("{PARTITION_DIR}/{PARTITION_METADATA}"),
-            entity_count: documents.len() as u64,
+            entity_count,
             byte_count: output_bytes,
         };
         let overall_path = section_dir.join(FIRESTORE_OVERALL_METADATA);
@@ -3248,6 +3229,41 @@ fn export_firestore(
             .map_err(|e| ArtifactError::new("firestore", &path, e))?;
     }
     Ok(())
+}
+
+/// One database's export section: each project with its live documents.
+type FirestoreExportSection = Vec<(String, Vec<Arc<fireemu_core_firestore::store::Document>>)>;
+
+/// The live documents an export writes, grouped by database id: inside each database the
+/// projects ascend and inside each project the paths ascend, the order the official artifact
+/// and earlier fireemu exports use. The documents are the allocations the stores hold, read
+/// one database at a time under its own lock, so capturing them copies no path, field or index.
+fn firestore_export_sections(backend: &LocalBackend) -> BTreeMap<String, FirestoreExportSection> {
+    let scope = fireemu_core_session::tenancy::Scope::AllExcept(BTreeSet::new());
+    let mut sections: BTreeMap<String, Vec<_>> = BTreeMap::new();
+    for ((project, database), documents) in backend.live_document_handles(&scope) {
+        sections
+            .entry(database)
+            .or_default()
+            .push((project, documents));
+    }
+    sections
+}
+
+/// Writes one database's section as a single `output-*` file, one record at a time, and
+/// returns how many entities and bytes it wrote.
+fn write_firestore_section(
+    section: &FirestoreExportSection,
+    output: impl std::io::Write,
+) -> Result<(u64, u64), fireemu_core_export::firestore::FirestoreExportError> {
+    write_entities_to(
+        section.iter().flat_map(|(project, documents)| {
+            documents
+                .iter()
+                .map(move |document| EntityView::of(project, &document.path, &document.fields))
+        }),
+        output,
+    )
 }
 
 /// A database id as a directory-name fragment. Firestore database ids are already limited to
@@ -4288,6 +4304,132 @@ mod tests {
             "{error}"
         );
         assert!(!root.exists());
+    }
+
+    /// Documents in two projects and two databases, with a subcollection, a large value and a
+    /// deleted document.
+    fn backend_with_mixed_firestore_documents() -> fireemu_adapter_grpc::local::LocalBackend {
+        use std::sync::{Arc, Mutex};
+
+        use fireemu_adapter_grpc::gateway::Gateway;
+        use fireemu_adapter_grpc::local::LocalBackend;
+        use fireemu_core_firestore::index::{IndexSet, IndexValidationPolicy, PlanningContext};
+        use fireemu_core_session::clock::VirtualClock;
+        use fireemu_core_types::edition::{FirestoreApiMode, FirestoreEdition};
+        use fireemu_proto_firestore::google::firestore::v1 as pb;
+
+        let backend = LocalBackend::new(
+            Gateway {
+                enforce_limits: true,
+                ctx: PlanningContext {
+                    edition: FirestoreEdition::Standard,
+                    api_mode: FirestoreApiMode::Native,
+                    policy: IndexValidationPolicy::Production,
+                },
+                indexes: IndexSet::default(),
+            },
+            Arc::new(Mutex::new(VirtualClock::new(
+                LogicalInstant::from_unix_seconds(1_788_004_860),
+            ))),
+            7,
+        )
+        .with_declared_databases(["analytics".to_owned()]);
+        let write = |project: &str, database: &str, document: &str, value: Option<&str>| {
+            let name = format!("projects/{project}/databases/{database}/documents/{document}");
+            let operation = match value {
+                Some(value) => pb::write::Operation::Update(pb::Document {
+                    name,
+                    fields: [(
+                        "v".to_owned(),
+                        pb::Value {
+                            value_type: Some(pb::value::ValueType::StringValue(value.to_owned())),
+                        },
+                    )]
+                    .into_iter()
+                    .collect(),
+                    ..Default::default()
+                }),
+                None => pb::write::Operation::Delete(name),
+            };
+            backend
+                .commit_with(
+                    &pb::CommitRequest {
+                        database: format!("projects/{project}/databases/{database}"),
+                        writes: vec![pb::Write {
+                            operation: Some(operation),
+                            ..Default::default()
+                        }],
+                        ..Default::default()
+                    },
+                    &fireemu_adapter_grpc::rules::allow_all,
+                )
+                .unwrap();
+        };
+        let large = "x".repeat(70_000);
+        for (project, database, document, value) in [
+            ("demo-b", "(default)", "items/2", Some("b")),
+            ("demo-a", "(default)", "items/1", Some(large.as_str())),
+            ("demo-a", "(default)", "items/1/sub/deep", Some("deep")),
+            ("demo-a", "(default)", "items/0", Some("first")),
+            ("demo-a", "analytics", "events/e", Some("e")),
+            ("demo-b", "analytics", "events/f", Some("f")),
+            ("demo-a", "(default)", "items/gone", Some("gone")),
+            ("demo-a", "(default)", "items/gone", None),
+        ] {
+            write(project, database, document, value);
+        }
+        backend
+    }
+
+    /// The export streams each database's live documents through one writer straight from
+    /// the store's allocations. The bytes and the entity count are exactly those of the rows
+    /// the export used to build from a visible snapshot: projects ascending inside each
+    /// database, paths ascending inside each project, tombstones left out.
+    #[test]
+    fn a_streamed_firestore_section_is_byte_identical_to_the_snapshot_rows() {
+        use std::collections::{BTreeMap, BTreeSet};
+
+        use fireemu_core_export::firestore::{write_output_to, ExportDocument};
+        use fireemu_core_session::tenancy::Scope;
+
+        let backend = backend_with_mixed_firestore_documents();
+        // The rows the export built before: a visible snapshot, owned documents per database.
+        let snapshot = backend.snapshot_scope(&Scope::AllExcept(BTreeSet::new()));
+        let mut legacy: BTreeMap<String, Vec<ExportDocument>> = BTreeMap::new();
+        for ((project, database), state) in snapshot.databases {
+            legacy
+                .entry(database)
+                .or_default()
+                .extend(state.into_documents().into_iter().map(|d| {
+                    ExportDocument {
+                        project: project.clone(),
+                        path: d
+                            .path
+                            .pairs()
+                            .iter()
+                            .map(|(c, id)| (c.as_str().to_owned(), id.as_str().to_owned()))
+                            .collect(),
+                        fields: d.fields,
+                    }
+                }));
+        }
+
+        let sections = super::firestore_export_sections(&backend);
+        assert_eq!(
+            sections.keys().collect::<Vec<_>>(),
+            legacy.keys().collect::<Vec<_>>()
+        );
+        for (database, rows) in &legacy {
+            let mut expected = Vec::new();
+            let expected_bytes = write_output_to(rows, &mut expected).unwrap();
+            let mut streamed = Vec::new();
+            let (count, bytes) =
+                super::write_firestore_section(&sections[database], &mut streamed).unwrap();
+            assert_eq!(count, rows.len() as u64, "{database}");
+            assert_eq!(bytes, expected_bytes, "{database}");
+            assert_eq!(streamed, expected, "{database}");
+        }
+        assert_eq!(legacy["(default)"].len(), 4);
     }
 
     #[cfg(unix)]

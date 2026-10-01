@@ -2,6 +2,7 @@
 import { readFileSync } from "node:fs";
 import { createRequestCapture, ownedResources, PROJECT } from "./shape.mjs";
 import { recordedAbsent, recordedPaused, recordedMutationBusy } from "./recovery.mjs";
+import { recordedRecoveryJobAbsent } from "./calendar-settled-topic.mjs";
 
 export const CALENDAR_CASES = Object.freeze(
   JSON.parse(readFileSync(new URL("./calendar-cases.json", import.meta.url), "utf8")).map(
@@ -133,9 +134,13 @@ export async function collectCalendar({
 }) {
   const own = calendarResources(runId);
   const requests = new Map(calendarRequests(runId, projectNumber, clock()).map((r) => [r.id, r]));
+  const persisted = new Map();
   const { capture: captureAnswer, counts } = createRequestCapture({
     accessToken,
-    save,
+    save: async (row) => {
+      await save(row);
+      if (row.state === "response-persisted") persisted.set(row.id, row);
+    },
     send,
     clock,
     maxRequests: 64,
@@ -172,6 +177,20 @@ export async function collectCalendar({
     return answer;
   };
   const take = (id) => capture(requests.get(id));
+  // After a 400-refused CREATE the job read answered the detailed 433-byte absence
+  // (calendar-5a73ba99b7014cfd seq 150/153); it is judged on the persisted raw bytes.
+  const refusedAbsent = (id, answer) => {
+    const row = persisted.get(id + "-read-deleted");
+    return (
+      refused.has(id) &&
+      !!row &&
+      recordedRecoveryJobAbsent(
+        { ...answer, bodyBytes: row.bodyBytes, rawBytes: Buffer.from(row.bodyBase64, "base64") },
+        own.jobs[id],
+        "detailed",
+      )
+    );
+  };
   const summary = (closureReady) => ({
     outcome: "calendar-needs-review",
     ...counts(),
@@ -237,6 +256,7 @@ export async function collectCalendar({
   const attemptedCases = new Set(),
     intents = new Set(),
     eligible = new Set(),
+    refused = new Set(),
     absentBeforeDelete = new Set();
   for (const { id } of CALENDAR_CASES) {
     if (stopped) break;
@@ -247,6 +267,7 @@ export async function collectCalendar({
     if (answer?.status >= 400 && answer.status < 500) {
       intents.delete(id); // A definitive client refusal never owns a raced resource.
       stopped = answer.status !== 400 || answer.bodyUnknown;
+      if (!stopped) refused.add(id);
       continue;
     }
     const target = { job: own.jobs[id], topic: own.topic };
@@ -306,7 +327,7 @@ export async function collectCalendar({
       }
     }
     const after = await take(id + "-read-deleted");
-    jobsAbsent = jobsAbsent && settled && recordedAbsent(after);
+    jobsAbsent = jobsAbsent && settled && (recordedAbsent(after) || refusedAbsent(id, after));
   }
   const jobsList = await take("final-list-jobs");
   const jobProof =

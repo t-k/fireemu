@@ -909,3 +909,64 @@ for (const status of [199, 302, 307, 500, 503, 504]) {
     assert.ok(result.attempted <= 64);
   });
 }
+
+// Native calendar-5a73ba99b7014cfd seq 150/153: after a 400-refused CREATE, the job read
+// answered the detailed 433-byte ResourceInfo absence (pretty JSON, trailing newline).
+function detailedAbsence(job) {
+  const json = {
+    error: {
+      code: 404,
+      message: "Resource '" + job + "' was not found",
+      status: "NOT_FOUND",
+      details: [{ "@type": "type.googleapis.com/google.rpc.ResourceInfo", resourceName: job }],
+    },
+  };
+  return JSON.stringify(json, null, 2) + "\n";
+}
+
+test("a refused CREATE settles on the recorded detailed absence and the topic cleanup proceeds", async () => {
+  const refused = new Set(["c07", "c08"]);
+  const cases = {
+    recorded: (id, owned) => detailedAbsence(owned.jobs[id]),
+    compact: (id, owned) => JSON.stringify(JSON.parse(detailedAbsence(owned.jobs[id]))),
+    foreign: (id, owned) => detailedAbsence(owned.jobs[id === "c07" ? "c08" : "c07"]),
+  };
+  for (const [name, body] of Object.entries(cases)) {
+    const e = environment(),
+      original = e.deps.send;
+    e.deps.send = async (request) => {
+      const id = request.id.slice(0, 3);
+      if (refused.has(id) && request.id.endsWith("-create")) {
+        e.sends.push(request);
+        return new Response("{}", { status: 400 });
+      }
+      if (refused.has(id) && request.id.endsWith("-read-deleted")) {
+        e.sends.push(request);
+        return new Response(body(id, e.owned), { status: 404 });
+      }
+      return original(request);
+    };
+    const result = await collectCalendar(e.deps);
+    assert.equal(result.unknown, 0, name);
+    assert.equal(result.closureReady, name === "recorded", name);
+    assert.equal(
+      e.sends.some(({ id }) => id === "delete-topic"),
+      name === "recorded",
+      name,
+    );
+  }
+  // The detailed layout is recorded only after a refusal: after an acknowledged DELETE the
+  // recorded absence is the plain 97-byte body, so the detailed one leaves the run open.
+  const e = environment(),
+    original = e.deps.send;
+  e.deps.send = async (request) => {
+    if (request.id === "c01-read-deleted") {
+      e.sends.push(request);
+      return new Response(detailedAbsence(e.owned.jobs.c01), { status: 404 });
+    }
+    return original(request);
+  };
+  const result = await collectCalendar(e.deps);
+  assert.equal(result.closureReady, false);
+  assert.ok(!e.sends.some(({ id }) => id === "delete-topic"));
+});

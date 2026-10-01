@@ -275,20 +275,25 @@ mod tests {
     where
         S: AsyncRead + AsyncWrite + Unpin,
     {
-        let started = Instant::now();
-        timeout(
-            GUARD,
-            close_gracefully(
-                stream,
-                DrainBounds {
-                    limit_bytes: limit,
-                    idle: IDLE,
-                    total: TOTAL,
-                },
-            ),
+        closing_with(
+            stream,
+            DrainBounds {
+                limit_bytes: limit,
+                idle: IDLE,
+                total: TOTAL,
+            },
         )
         .await
-        .expect("the close ends");
+    }
+
+    async fn closing_with<S>(stream: &mut S, bounds: DrainBounds) -> Duration
+    where
+        S: AsyncRead + AsyncWrite + Unpin,
+    {
+        let started = Instant::now();
+        timeout(GUARD, close_gracefully(stream, bounds))
+            .await
+            .expect("the close ends");
         started.elapsed()
     }
 
@@ -414,16 +419,28 @@ mod tests {
 
     #[tokio::test]
     async fn a_client_that_keeps_trickling_is_cut_off_at_the_total_time() {
+        // The idle time is a hundred times the trickle interval, so a writer that is late (a loaded
+        // machine) cannot end the drain by silence before the total time does.
+        const TRICKLE: Duration = Duration::from_millis(10);
+        const TRICKLE_TOTAL: Duration = Duration::from_millis(500);
         let (server, mut client) = tokio::io::duplex(1024 * 1024);
         let (mut probe, _) = Probe::new(server);
         let trickle = tokio::spawn(async move {
             while client.write_all(b"x").await.is_ok() {
-                tokio::time::sleep(Duration::from_millis(10)).await;
+                tokio::time::sleep(TRICKLE).await;
             }
         });
-        let elapsed = closing(&mut probe, LIMIT).await;
-        assert!(elapsed >= TOTAL, "{elapsed:?}");
-        assert!(elapsed < TOTAL + SLACK, "{elapsed:?}");
+        let elapsed = closing_with(
+            &mut probe,
+            DrainBounds {
+                limit_bytes: LIMIT,
+                idle: TRICKLE * 100,
+                total: TRICKLE_TOTAL,
+            },
+        )
+        .await;
+        assert!(elapsed >= TRICKLE_TOTAL, "{elapsed:?}");
+        assert!(elapsed < TRICKLE_TOTAL + SLACK, "{elapsed:?}");
         trickle.abort();
     }
 

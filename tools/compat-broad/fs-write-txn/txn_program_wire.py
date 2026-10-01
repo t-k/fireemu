@@ -144,7 +144,7 @@ def _verify_runtime_full(value):
             raise ValueError('program dependency receipt differs')
         root = modules / key
         if not isinstance(key, str) or '..' in Path(key).parts or Path(key).is_absolute() or row['root'] != str(root) or not root.is_dir() or not root.resolve().is_relative_to(modules.resolve()):
-            raise ValueError('program dependency comes from another checkout')
+            raise ValueError(f"program dependency comes from another checkout (the packet names {row['root']}, this checkout's is {root})")
         package = json.loads((root / 'package.json').read_text())
         count, digest = _tree(root)
         if package['name'] != row['name'] or package['version'] != row['version'] or type(row['fileCount']) is not int or count != row['fileCount'] or digest != row['treeSha256']:

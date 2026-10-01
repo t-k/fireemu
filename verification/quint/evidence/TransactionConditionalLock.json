@@ -59,7 +59,7 @@
     "conformance/functions/index.js": "72ae82eb08f58affa6fa756ab7daca6687fa2de3880938a8ef88b8e4fe8e66b7",
     "conformance/src/corpus/firestore.mjs": "f079f9cb0ccbc7412b7f83f3a02c068428557aa6ea1aece01df35de47e0d12ee",
     "conformance/src/corpus/functions.mjs": "4a05876e3edf238c3825f4bb58db96bdfffac90f0cbba9d92eb4c415182da147",
-    "crates/fireemu-core-firestore/src/store.rs": "4b6398f3fb927dbb50c60497f179f9a568ba6cf607293877ab2aae7bff3329c7",
+    "crates/fireemu-core-firestore/src/store.rs": "1554392449dd653ad34d295cad9fb38ddbc25c4f29560a10fed9e1426c6ecb0c",
     "crates/fireemu-core-firestore/src/value.rs": "f8630eacab922b0c90467fe37b44dc4e80af30cfb0e942e21b6e05abce0b2c07",
     "rust-toolchain.toml": "689fafb1dd9b80ee9a2a9b5e2bbb31e8f7ea4adad403717777689b35d4f861b2",
     "verification/quint/apalache.lock.json": "16cff85b68117df35e66c575244c297215a7c442bfde6e64ecb97822062c7ad3",
@@ -82,8 +82,8 @@
     "verification/quint/src/process.rs": "56fbdc380eb60993a038366f050f45c030b22f5dc7048971aa451f54883dbb5f",
     "verification/quint/src/publication.rs": "e4b57348c74d51585609b9f114ad56366309f90fa6e2297639546f42922e53a8",
     "verification/quint/src/server.rs": "b0d10768918bf0449419d9e6384a574e14db01f651264e6037856c3367e05c0a",
-    "verification/quint/src/transaction_conditional_lock.rs": "21e0f289770e9e208626c6dd549333de23e84f07cbea26ff572b24dd6de88209",
-    "verification/quint/tests/transaction_conditional_lock_connect.rs": "e3ea626dac10a9bf7276c150fadbfea51b0e8d8207f2c27f6c5877d9a2459583"
+    "verification/quint/src/transaction_conditional_lock.rs": "6de4f50ac004de8bb41797f8eecbbbd5378abc3e4239f18554458903f6efc9d8",
+    "verification/quint/tests/transaction_conditional_lock_connect.rs": "dc2583296e799c8f5b60a0bc1dd789e99ff1a0016e0fe5577330487f9aa89135"
   },
   "invariants": [
     "TypeOK",

@@ -318,3 +318,17 @@ def test_the_interpreter_running_the_builder_is_refused_when_it_is_a_virtualenv(
     monkeypatch.setattr(sys, "prefix", "/base")
     if not any((base / "pyvenv.cfg").exists() for base in (Path(sys.executable).parent, Path(sys.executable).parent.parent)):
         cli.refuse_virtualenv({"pythonExecutable": sys.executable})
+
+
+def test_a_wrong_branch_or_a_dirty_tree_is_refused_with_the_branch_it_needs(monkeypatch):
+    def git(answers):
+        return lambda *args: answers.get(args, "")
+    monkeypatch.setattr(cli, "_git", git({("status", "--porcelain"): "", ("branch", "--show-current"): "work/fs-txn-p13b-packet"}))
+    with pytest.raises(ValueError, match=r"branch work/codex-fs-transaction \(this one is on work/fs-txn-p13b-packet\)"):
+        cli.signed_source_commit()
+    monkeypatch.setattr(cli, "_git", git({("status", "--porcelain"): " M x", ("branch", "--show-current"): "work/codex-fs-transaction"}))
+    with pytest.raises(ValueError, match="and has uncommitted changes"):
+        cli.signed_source_commit()
+    monkeypatch.setattr(cli, "_git", git({("status", "--porcelain"): "", ("branch", "--show-current"): ""}))
+    with pytest.raises(ValueError, match="a detached head"):
+        cli.signed_source_commit()

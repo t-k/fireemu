@@ -481,6 +481,15 @@ fn glob_constructs_match_as_documented() {
         ("[\\]x]", "]", true),
         ("[\\]x]", "\\", false),
         ("[a-\\z]", "m", true),
+        // A pair of braces with one alternative or none.
+        ("{a}", "a", true),
+        ("{a}", "b", false),
+        ("x{ab}y", "xaby", true),
+        ("x{ab}y", "xay", false),
+        ("{}", "", true),
+        ("{}a", "a", true),
+        ("{a}{b}", "ab", true),
+        ("{{a}}", "a", true),
         // An escaped upper bound ends the range and nothing else: the cursor moves past it once.
         ("[Z-\\]]x", "[x", true),
         ("[Z-\\]]x", "]x", true),
@@ -639,7 +648,10 @@ fn the_recorded_globs_match_as_production_listed_them() {
 }
 
 proptest! {
-    #![proptest_config(ProptestConfig::with_cases(4000))]
+    // A failure ends the case at once: shrinking a counterexample to the end can take minutes when
+    // the matcher is broken everywhere (as a mutant of it is), and the first failing input names
+    // the pattern and the name already.
+    #![proptest_config(ProptestConfig { cases: 4000, max_shrink_iters: 32, ..ProptestConfig::default() })]
 
     /// The implementation agrees with the reference matcher on random patterns and names.
     #[test]

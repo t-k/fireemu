@@ -2753,3 +2753,71 @@ fn written_config_members_and_the_tenant_switch_survive_the_round_trip() {
         "the restored tenant is reachable under strict: {log}"
     );
 }
+
+/// A real macOS ACL entry on a directory (`chmod +a`), removed again on drop.
+#[cfg(target_os = "macos")]
+struct Acl<'a>(&'a Path);
+
+#[cfg(target_os = "macos")]
+impl<'a> Acl<'a> {
+    fn install(dir: &'a Path, entry: &str) -> Self {
+        let status = Command::new("chmod")
+            .args(["+a", entry])
+            .arg(dir)
+            .status()
+            .unwrap();
+        assert!(status.success(), "install test ACL {entry:?}");
+        Self(dir)
+    }
+}
+
+#[cfg(target_os = "macos")]
+impl Drop for Acl<'_> {
+    fn drop(&mut self) {
+        let _ = Command::new("chmod").arg("-N").arg(self.0).status();
+    }
+}
+
+/// A standard macOS home directory carries `group:everyone deny delete`: `--export-on-exit`
+/// reaches the same publication path as `emulators:export`, and writes below it.
+#[cfg(target_os = "macos")]
+#[test]
+fn export_on_exit_below_an_ancestor_with_a_deny_only_acl_succeeds() {
+    let dir = scratch("export-deny-acl");
+    let _acl = Acl::install(&dir, "everyone deny delete");
+    let out = dir.join("out");
+
+    let output = exec()
+        .arg("--export-on-exit")
+        .arg(&out)
+        .args(["--", "true"])
+        .output()
+        .unwrap();
+    let log = text(&output);
+
+    assert!(output.status.success(), "{log}");
+    assert!(log.contains("exported to"), "{log}");
+    assert!(out.join("firebase-export-metadata.json").is_file(), "{log}");
+}
+
+/// An `allow` entry that lets another user change the ancestor still stops the export, and names
+/// the entry.
+#[cfg(target_os = "macos")]
+#[test]
+fn export_on_exit_below_an_ancestor_another_user_may_change_is_refused() {
+    let dir = scratch("export-allow-acl");
+    let _acl = Acl::install(&dir, "nobody allow write,add_file");
+    let out = dir.join("out");
+
+    let output = exec()
+        .arg("--export-on-exit")
+        .arg(&out)
+        .args(["--", "true"])
+        .output()
+        .unwrap();
+    let log = text(&output);
+
+    assert!(log.contains("extended ACL"), "{log}");
+    assert!(log.contains("user:nobody allow"), "{log}");
+    assert!(!out.exists(), "{log}");
+}

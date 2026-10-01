@@ -137,9 +137,8 @@ jobs:
       - uses: taiki-e/install-action@7b8d4719ee4aaa279bdf55df38dacb9ebfe12a6c
         with:
           tool: cargo-nextest
-      - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c
-        with:
-          key: release-test
+      # No cache restore here or in `build`: the published binary is built from a clean target, so a
+      # cache entry written by any other run cannot reach it.
       - run: cargo nextest run --workspace --profile pr -E 'not binary(leak_fixture)'
       - run: cargo nextest run -p fireemu --test leak_fixture --profile pr
 
@@ -167,9 +166,6 @@ jobs:
         with:
           toolchain: 1.94.0
           targets: ${{ matrix.platform.target }}
-      - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c
-        with:
-          key: ${{ matrix.platform.target }}
 
       # musl needs its own C toolchain for the linkers Rust invokes.
       - name: musl toolchain

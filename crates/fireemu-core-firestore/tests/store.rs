@@ -1079,10 +1079,11 @@ fn finished_retry_lineage_expires_at_the_original_total_deadline() {
         let mut expired = FirestoreState::new();
         let original = expired.begin_transaction(false, t(0)).unwrap();
         expired.rollback(&original).unwrap();
+        // The forgotten token answers the text production recorded for a token it never issued (E003 REST, P09 gRPC).
         assert!(matches!(
             expired.retry_transaction(&original, t(elapsed)),
             Err(FirestoreError::InvalidArgument(message))
-                if message == "Invalid retry transaction."
+                if message == "Invalid transaction."
         ));
     }
 }

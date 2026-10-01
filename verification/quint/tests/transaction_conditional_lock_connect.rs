@@ -128,8 +128,10 @@ fn local_contract_idle_expired_lineage_can_retry_with_or_without_a_touch_first()
             }),
             ..Default::default()
         });
-        // Either order retains the retry lineage: production accepted a retry that names an idle-expired token whether or not a Rollback came first
-        // (P13b, REST, two recordings), so a request that noticed the expiry does not end it.
+        // Production recorded two orders over REST (P13b, two recordings): no request at all and then the retry (RT-2), and a Rollback and then the retry
+        // (RT-3). The order here with `touch_before_rollback` (a read that noticed the expiry, then the Rollback, then the retry) is not recorded in production
+        // and this test runs over gRPC. The official emulator accepted it over gRPC (firebase-tools 15.28.2: read, Rollback, retry all answered as accepted
+        // or expired and the retry 0), and the gRPC retry of an idle-expired token is a candidate row of the next FS-TRANSACTION packet.
         let next = retry.expect("an idle-expired lineage can retry");
         assert!(!next.is_empty());
         assert_ne!(next, transaction);

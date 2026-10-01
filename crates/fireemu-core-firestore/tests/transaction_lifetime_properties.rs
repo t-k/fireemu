@@ -229,7 +229,7 @@ proptest! {
         let (mut late, transaction) = seeded(LimitScope::Production);
         let result = late.retry_transaction(&transaction, t(forgotten_at));
         prop_assert!(
-            matches!(&result, Err(FirestoreError::InvalidArgument(message)) if message == "Invalid retry transaction."),
+            matches!(&result, Err(FirestoreError::InvalidArgument(message)) if message == "Invalid transaction."),
             "retry at {} s: {:?}", forgotten_at, result
         );
     }
@@ -259,7 +259,7 @@ proptest! {
         prop_assert!(state.rollback_at(&retry, t(retry_at + 3)).is_ok());
         let result = twin.retry_transaction(&transaction, t(forgotten_at));
         prop_assert!(
-            matches!(&result, Err(FirestoreError::InvalidArgument(message)) if message == "Invalid retry transaction."),
+            matches!(&result, Err(FirestoreError::InvalidArgument(message)) if message == "Invalid transaction."),
             "retry at {} s: {:?}", forgotten_at, result
         );
     }

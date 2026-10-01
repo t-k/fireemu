@@ -4327,8 +4327,8 @@ fn a_rest_rollback_as_the_first_request_after_the_total_lifetime_is_answered_per
 
 /// P13b (REST, two recordings, strict, `fireemu-oracle-txn`): a retry that names an expired token is accepted and mints a token of its own, for an
 /// idle-expired token (132 s of age, no Rollback first) and for a lifetime-expired one (280 to 283 s); the named token then answers as it would
-/// without the retry (a Rollback of the idle-expired one 0, of the lifetime-expired one 409 `ABORTED` "no longer valid"). The emulator profile
-/// keeps refusing a retry of an expired token (the official emulator is not recorded for it).
+/// without the retry (a Rollback of the idle-expired one 0, of the lifetime-expired one 409 `ABORTED` "no longer valid"). The emulator profile accepts it
+/// too, as the official emulator does (measured with firebase-tools 15.28.2).
 #[test]
 fn a_rest_retry_that_names_an_expired_token_is_answered_per_profile() {
     const GONE: &str = "The referenced transaction has expired or is no longer valid.";
@@ -4422,11 +4422,18 @@ fn a_rest_retry_that_names_an_expired_token_is_answered_per_profile() {
                 );
                 assert_eq!(status, 200, "{label}: {released}");
             } else {
-                assert_eq!(status, 400, "{label}");
-                assert_eq!(
-                    retried["error"]["message"], "Invalid retry transaction.",
-                    "{label}"
+                // the official emulator (firebase-tools 15.28.2, v1.22.0) accepts it too, at 130 s of idle and at 282 s of age
+                assert_eq!(status, 200, "{label}");
+                let fresh = retried["transaction"].as_str().unwrap().to_owned();
+                assert_ne!(fresh, named, "{label}");
+                assert_eq!(read(&fresh).0, 200, "{label}");
+                let (status, released) = call(
+                    &s,
+                    "POST",
+                    &format!("{DOCS}:rollback"),
+                    json!({"transaction": fresh}),
                 );
+                assert_eq!(status, 200, "{label}: {released}");
             }
         }
     }

@@ -2222,7 +2222,7 @@ impl FirestoreState {
         self.prune_transactions(now);
         let Some(previous_attempt) = self.transactions.get(previous) else {
             return Err(FirestoreError::InvalidArgument(
-                "Invalid retry transaction.".into(),
+                "Invalid transaction.".into(),
             ));
         };
         if previous_attempt.read_only {
@@ -2239,14 +2239,14 @@ impl FirestoreState {
         // Finishing the attempt may have evicted it from the bounded finished lineage.
         let Some(previous_attempt) = self.transactions.get(previous) else {
             return Err(FirestoreError::InvalidArgument(
-                "Invalid retry transaction.".into(),
+                "Invalid transaction.".into(),
             ));
         };
-        // Production accepts a retry that names a token it has expired and still remembers, an idle-expired one and a lifetime-expired one alike (FS-TRANSACTION
-        // P13b, REST, two recordings: accepted at 132 s and at 280 to 283 s of token age). The emulator profile keeps refusing it: the official emulator is
-        // not recorded for that shape.
-        let expired = self.limit_scope == LimitScope::Production
-            && previous_attempt.state == TransactionState::Finished;
+        // A retry that names an expired token that is still remembered, idle-expired or lifetime-expired, is accepted. Production did so in FS-TRANSACTION
+        // P13b (REST, two recordings: 132 s and 280 to 283 s of token age), and so does the official emulator (firebase-tools 15.28.2, v1.22.0, measured over REST
+        // and native gRPC at 130 s of idle and over REST at 282 s of age). The retry does not consume the named token: the first request on it still answers the
+        // expiry, as it would without the retry.
+        let expired = previous_attempt.state == TransactionState::Finished;
         if !expired
             && !matches!(
                 previous_attempt.state,
@@ -2266,8 +2266,8 @@ impl FirestoreState {
                 previous_attempt.state = TransactionState::Retried;
             }
         }
-        // An expired token that was retried keeps answering as an expired one: P13b's chain-end Rollback of it answered 0 for an idle-expired token and 10
-        // with the expired text for a lifetime-expired one, as without the retry.
+        // An expired token that was retried keeps answering as an expired one (production P13b: the chain-end Rollback of it answered 0 for an idle-expired
+        // token and 10 with the expired text for a lifetime-expired one; the official emulator: its first request answers 3 and a later Rollback 0).
         let read_time = self.read_time(now);
         let id = self.insert_transaction(false, self.version, read_time, now)?;
         // A retry attempt reads at its first use, like a plain read-write begin (`begin_read_write_transaction`): production showed the writer that committed

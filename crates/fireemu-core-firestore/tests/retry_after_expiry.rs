@@ -51,7 +51,7 @@ fn strict() -> FirestoreState {
 
 fn invalid_retry(result: &Result<TransactionId, FirestoreError>) {
     assert!(
-        matches!(result, Err(FirestoreError::InvalidArgument(message)) if message == "Invalid retry transaction."),
+        matches!(result, Err(FirestoreError::InvalidArgument(message)) if message == "Invalid transaction."),
         "{result:?}"
     );
 }
@@ -143,9 +143,33 @@ fn a_retry_attempt_reads_at_its_first_use_in_strict_and_in_the_emulator_profile(
 }
 
 #[test]
-fn the_emulator_profile_still_refuses_a_retry_that_names_an_expired_token() {
+fn the_emulator_profile_accepts_a_retry_that_names_an_expired_token_like_the_official_emulator() {
+    // firebase-tools 15.28.2 (emulator v1.22.0), measured over REST and native gRPC: a retry that names a token idle for 130 s, or kept alive past its 270 s
+    // lifetime (282 s of age), answers 0 with a new token, and the new token's Rollback answers 0. The named token stays expired: its first request answers
+    // the expiry, a Rollback after that 0.
+    for lifetime in [false, true] {
+        let mut state = FirestoreState::with_limit_scope(LimitScope::OfficialEmulator);
+        let token = state.begin_read_write_transaction(t(0)).unwrap();
+        state.touch_transaction(&token, t(1)).unwrap();
+        let at = if lifetime {
+            for second in (25..=265).step_by(24) {
+                state.touch_transaction(&token, t(second)).unwrap();
+            }
+            282
+        } else {
+            132
+        };
+        let retry = state.retry_transaction(&token, t(at));
+        assert!(retry.is_ok(), "lifetime={lifetime}: {retry:?}");
+        let retry = retry.unwrap();
+        assert_ne!(retry, token);
+        state.touch_transaction(&retry, t(at + 1)).unwrap();
+        state.rollback(&retry).unwrap();
+        // the named token still answers as an expired one (the retry did not consume it)
+        assert!(state.touch_transaction(&token, t(at + 2)).is_err());
+        state.rollback(&token).unwrap();
+    }
+    // a token it never issued answers the text the official emulator gives (gRPC and REST)
     let mut state = FirestoreState::with_limit_scope(LimitScope::OfficialEmulator);
-    let token = read_token(&mut state, 0);
-    // The official emulator is not recorded for this shape; the emulator profile never refuses less or more than it did before this change.
-    invalid_retry(&state.retry_transaction(&token, t(125)));
+    invalid_retry(&state.retry_transaction(&TransactionId::from_value(u64::MAX), t(1)));
 }

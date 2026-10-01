@@ -663,28 +663,28 @@ fn the_deadline_index_has_one_entry_for_each_active_transaction() {
         let mut state = FirestoreState::with_limit_scope(scope);
         state.commit(&[set("docs/a", &[])], None, t(0)).unwrap();
         let check = |state: &FirestoreState| {
-            let stats = state.transaction_bookkeeping_stats();
-            assert_eq!(stats.deadlines, stats.active, "{scope:?}: {stats:?}");
+            let counts = state.transaction_bookkeeping_stats();
+            assert_eq!(counts.deadlines, counts.active, "{scope:?}: {counts:?}");
         };
-        let a = state.begin_read_write_transaction(t(0)).unwrap();
-        let b = state.begin_read_only_transaction(t(0)).unwrap();
-        let c = state.begin_transaction(false, t(0)).unwrap();
+        let first_writer = state.begin_read_write_transaction(t(0)).unwrap();
+        let snapshot_reader = state.begin_read_only_transaction(t(0)).unwrap();
+        let eager = state.begin_transaction(false, t(0)).unwrap();
         check(&state);
-        state.touch_transaction(&a, t(10)).unwrap();
-        state.touch_transaction(&b, t(20)).unwrap();
+        state.touch_transaction(&first_writer, t(10)).unwrap();
+        state.touch_transaction(&snapshot_reader, t(20)).unwrap();
         check(&state);
-        state.rollback(&c).unwrap();
+        state.rollback(&eager).unwrap();
         check(&state);
-        state.commit(&[], Some(&a), t(30)).unwrap();
+        state.commit(&[], Some(&first_writer), t(30)).unwrap();
         check(&state);
-        // b idles out; a request at a later time finishes it
-        let d = state.begin_read_write_transaction(t(200)).unwrap();
-        state.touch_transaction(&d, t(201)).unwrap();
+        // the read-only transaction idles out; a request at a later time finishes it
+        let later_rw = state.begin_read_write_transaction(t(200)).unwrap();
+        state.touch_transaction(&later_rw, t(201)).unwrap();
         check(&state);
-        let e = state.begin_transaction(false, t(300)).unwrap();
-        state.rollback(&d).unwrap();
+        let later_eager = state.begin_transaction(false, t(300)).unwrap();
+        state.rollback(&later_rw).unwrap();
         check(&state);
-        state.rollback(&e).unwrap();
+        state.rollback(&later_eager).unwrap();
         check(&state);
         assert_eq!(state.transaction_bookkeeping_stats().active, 0);
     }
@@ -694,7 +694,10 @@ fn the_deadline_index_has_one_entry_for_each_active_transaction() {
 /// the version it read, one a second earlier still does (the default profile is the strict one).
 #[test]
 fn a_transaction_at_its_exact_deadline_no_longer_pins_its_version() {
-    for (commit_second, pinned) in [(READ_TIME_RETENTION_SECONDS + 118, true), (READ_TIME_RETENTION_SECONDS + 119, false)] {
+    for (commit_second, pinned) in [
+        (READ_TIME_RETENTION_SECONDS + 118, true),
+        (READ_TIME_RETENTION_SECONDS + 119, false),
+    ] {
         let mut state = FirestoreState::with_history_limits(HistoryLimits {
             max_bytes: u64::MAX,
             max_versions: 2,
@@ -711,7 +714,10 @@ fn a_transaction_at_its_exact_deadline_no_longer_pins_its_version() {
             .unwrap();
         let result = state.commit(&[set("docs/b", &[])], None, t(commit_second));
         if pinned {
-            assert!(matches!(result, Err(FirestoreError::HistoryCapacity(_))), "{result:?}");
+            assert!(
+                matches!(result, Err(FirestoreError::HistoryCapacity(_))),
+                "{result:?}"
+            );
         } else {
             result.expect("the transaction ended at the commit's own time");
         }

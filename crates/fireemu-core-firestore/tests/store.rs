@@ -3971,21 +3971,34 @@ fn every_transaction_query_entry_point_returns_its_page_and_records_it() {
     let txn = s.begin_transaction(false, t(1)).unwrap();
     let execution = QueryExecutionId::from_value(7);
     let (docs, _) = s
-        .run_query_in_transaction_with_stats_as_with_execution(&txn, &query, &query, execution, false)
+        .run_query_in_transaction_with_stats_as_with_execution(
+            &txn, &query, &query, execution, false,
+        )
         .unwrap();
     assert_eq!(ids(&docs), ["a", "b", "c"]);
     let (docs, _) = s
-        .run_query_in_transaction_continuation_with_stats_as_with_execution(&txn, &query, &query, execution, false)
+        .run_query_in_transaction_continuation_with_stats_as_with_execution(
+            &txn, &query, &query, execution, false,
+        )
         .unwrap();
     assert_eq!(ids(&docs), ["a", "b", "c"]);
     let paths = [path("pg/b"), path("pg/c")];
     let (docs, stats) = s
-        .run_query_in_transaction_from_paths_with_stats_as_with_execution(&txn, &query, &query, &paths, execution, true, false)
+        .run_query_in_transaction_from_paths_with_stats_as_with_execution(
+            &txn, &query, &query, &paths, execution, true, false,
+        )
         .unwrap();
     assert_eq!(ids(&docs), ["b", "c"]);
     assert_eq!(stats.matched, 2);
     let (docs, _) = s
-        .run_query_in_transaction_after_document_with_stats_as_with_execution(&txn, &query, &query, &path("pg/a"), execution, false)
+        .run_query_in_transaction_after_document_with_stats_as_with_execution(
+            &txn,
+            &query,
+            &query,
+            &path("pg/a"),
+            execution,
+            false,
+        )
         .unwrap();
     assert_eq!(ids(&docs), ["b", "c"]);
     let (docs, _) = s
@@ -3993,5 +4006,6 @@ fn every_transaction_query_entry_point_returns_its_page_and_records_it() {
         .unwrap();
     assert_eq!(ids(&docs), ["c"]);
     // The execution is still unfinished (the pages said "not complete"); finishing it succeeds.
-    s.finish_transaction_query_execution(&txn, execution).unwrap();
+    s.finish_transaction_query_execution(&txn, execution)
+        .unwrap();
 }

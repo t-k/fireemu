@@ -849,3 +849,63 @@ test("unreadable job CREATE body remains debt even with400 headers and all later
     assert.equal(e.sends.filter((r) => /^c0[1-8]-create$/.test(r.id)).length, 1);
   }
 });
+
+for (const status of [199, 302, 307, 500, 503, 504]) {
+  test(`complete ambiguous job CREATE status${status} cannot settle from only404 readbacks`, async () => {
+    const e = environment(),
+      original = e.deps.send;
+    e.deps.send = async (request) => {
+      if (request.id === "c01-create") {
+        e.sends.push(request);
+        const response = new Response(JSON.stringify({ error: { code: status } }));
+        Object.defineProperty(response, "status", { value: status });
+        return response;
+      }
+      return original(request);
+    };
+    const result = await collectCalendar(e.deps);
+    assert.equal(result.closureReady, false);
+    assert.equal(result.cleanupVerified, false);
+    assert.equal(result.unknown, 0);
+    assert.ok(
+      e.rows.some(
+        (r) => r.id === "c01-create" && r.state === "response-persisted" && r.status === status,
+      ),
+    );
+    assert.ok(e.sends.some((r) => r.id === "c01-read-before-pause"));
+    assert.ok(e.sends.some((r) => r.id === "c01-read-deleted"));
+    assert.ok(!e.sends.some((r) => r.id === "c01-delete" || r.id === "delete-topic"));
+    assert.equal(e.sends.filter((r) => /^c0[1-8]-create$/.test(r.id)).length, 1);
+    assert.ok(result.attempted <= 64);
+  });
+
+  test(`complete ambiguous job CREATE status${status} settles only after own positive containment and acknowledged cleanup`, async () => {
+    const e = environment(),
+      original = e.deps.send;
+    e.deps.send = async (request) => {
+      if (request.id === "c01-create") {
+        await original(request);
+        const response = new Response(JSON.stringify({ error: { code: status } }));
+        Object.defineProperty(response, "status", { value: status });
+        return response;
+      }
+      return original(request);
+    };
+    const result = await collectCalendar(e.deps);
+    assert.equal(result.closureReady, true);
+    assert.equal(result.cleanupVerified, false);
+    assert.equal(result.unknown, 0);
+    assert.ok(
+      e.rows.some(
+        (r) => r.id === "c01-create" && r.state === "response-persisted" && r.status === status,
+      ),
+    );
+    assert.ok(e.sends.some((r) => r.id === "c01-read-before-pause"));
+    assert.ok(e.sends.some((r) => r.id === "c01-pause"));
+    assert.ok(e.sends.some((r) => r.id === "c01-delete"));
+    assert.ok(e.sends.some((r) => r.id === "delete-topic"));
+    assert.equal(e.sends.filter((r) => /^c0[1-8]-create$/.test(r.id)).length, 1);
+    assert.deepEqual(e.waits, [60000]);
+    assert.ok(result.attempted <= 64);
+  });
+}

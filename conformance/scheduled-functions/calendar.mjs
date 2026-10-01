@@ -144,7 +144,13 @@ export async function collectCalendar({
   let unknownDelete = false;
   const capture = async (spec) => {
     const answer = await captureAnswer(spec);
-    if (!answer || answer.bodyUnknown) {
+    if (
+      !answer ||
+      answer.bodyUnknown ||
+      answer.status < 200 ||
+      (answer.status >= 300 && answer.status < 400) ||
+      answer.status >= 500
+    ) {
       if (spec.id === "create-topic" || /^c0[1-8]-create$/.test(spec.id))
         unsettledCreates.add(spec.id);
       if (spec.method === "DELETE") unknownDelete = true;

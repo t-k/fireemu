@@ -9,7 +9,7 @@ never because an answer refutes what strict does today.
   about 283 to 288 s (the P11 v4 timing). Strict answers 10 with the expired text, as P11 v4 recorded for a read and then a Commit.
 - U-R (a Rollback as the first request in 270 to 300 s): the same, with a Rollback as the first request, then a read.
 - I-1 (an idle-expired token): begin, read, an idle wait of 130 s (past the idle limit: P10-C accepted 110 s and refused 120 s), a read,
-  a wait of 100 s, a read, a wait of 50 s, a Rollback at a token age of about 285 s, then a read. Strict answers the first read 10, the second
+  a wait of 100 s, a read, a wait of 50 s, a Rollback at a token age of about 285 s, then a read. Strict (before the P13a recording) answered the first read 10, the second
   read 10 (an idle-expired token is remembered until about 300 s of token age), the Rollback 0 (the idle expiry, not the lifetime, finished it)
   and the last read 10.
 - I-2 (an idle-expired token past 300 s): begin, read, an idle wait of 130 s, a read, a wait of 175 s, a read at a token age of about 310 s.
@@ -20,6 +20,10 @@ beyond the recordings"); this table records them. The release of a token that no
 expired text, or the age rule below): `releaseAfterAgeSeconds` 275 releases a token on any definitive refusal of a Rollback once the token is
 certainly older than 275 s (state `released-expired`), which P11 v4 grounds (an expired token holds no lock: the outside writer answered 0).
 Without that rule a recording in which the forgotten token answers 3 would stop on an unconfirmed release.
+
+Recorded (2026-10-01, two agreeing recordings): U-C and U-R answered 10 with the expired text at token ages of 280.4 to 284.5 s (and the read after the
+Rollback 10); I-1 answered the reads at 132 s and 232 s 10, the Rollback at 286 to 289 s 10 (strict had answered 0: refuted, strict fixed) and the read after it
+10; I-2 answered the first read 10 and the read at 309 to 312 s 3 "Invalid transaction.".
 
 The table is REST only. gRPC lifetime answers were identical to REST in P11 v4; the gRPC forms of these four rows are not recorded."""
 

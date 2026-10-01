@@ -2670,15 +2670,20 @@ impl FunctionsRuntime {
         let policy = self.config.catch_up;
         let cap = self.config.max_catch_up_runs.max(1);
         let room = cap.saturating_sub(inner.payloads.len());
-        if policy == CatchUpPolicy::All && room == 0 && inner.catch_up_pending {
-            return;
-        }
+        // A full catch-up room holds back only the schedule backlog. Held events and due
+        // retries below are released on every clock change, whatever the room.
+        let backlog_held = policy == CatchUpPolicy::All && room == 0 && inner.catch_up_pending;
         let chunk = room.max(1);
         let mut pending = false;
         let mut steps = 0u64;
         let mut runs: Vec<(String, String, LogicalInstant)> = Vec::new();
         let mut skipped: Vec<(String, RunCount)> = Vec::new();
-        for job in &mut inner.jobs {
+        let jobs: &mut [_] = if backlog_held {
+            &mut []
+        } else {
+            &mut inner.jobs
+        };
+        for job in jobs {
             match policy {
                 CatchUpPolicy::All => {
                     let due = job.schedule.runs_between_in(
@@ -2733,7 +2738,9 @@ impl FunctionsRuntime {
                 }
             }
         }
-        inner.catch_up_pending = pending;
+        if !backlog_held {
+            inner.catch_up_pending = pending;
+        }
         inner.catch_up_steps = inner.catch_up_steps.saturating_add(steps);
         let label = match policy {
             CatchUpPolicy::Latest => "latest",

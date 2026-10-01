@@ -294,8 +294,12 @@ fn set_production_etags(value: &mut Value) {
                     );
                 }
             }
-            for member in map.values_mut() {
-                set_production_etags(member);
+            // The custom `metadata` map and the `owner` are the user's and the owner's data, not
+            // object resources: a key named `etag` there is theirs.
+            for (key, member) in map.iter_mut() {
+                if key != "metadata" && key != "owner" {
+                    set_production_etags(member);
+                }
             }
         }
         Value::Array(items) => items.iter_mut().for_each(set_production_etags),
@@ -1263,6 +1267,13 @@ mod tests {
         for (generation, metageneration, expected) in [
             (127, 128, "CH8QgAE="),
             (16_383, 16_384, "CP9/EICAAQ=="),
+            // One more byte at each power of 128: lengths 4 to 9 of the generation.
+            (1_u64 << 21, 1, "CICAgAEQAQ=="),
+            (1_u64 << 28, 1, "CICAgIABEAE="),
+            (1_u64 << 35, 1, "CICAgICAARAB"),
+            (1_u64 << 42, 1, "CICAgICAgAEQAQ=="),
+            (1_u64 << 49, 1, "CICAgICAgIABEAE="),
+            (1_u64 << 56, 1, "CICAgICAgICAARAB"),
             (1_u64 << 63, 2, "CICAgICAgICAgAEQAg=="),
             (u64::MAX, 1, "CP///////////wEQAQ=="),
             (1, u64::MAX, "CAEQ////////////AQ=="),
@@ -1287,6 +1298,19 @@ mod tests {
         );
         let value: Value = serde_json::from_slice(&answered.body).unwrap();
         assert_eq!(value["items"][0]["etag"], "CNGTm8DplpcDEAI=");
+    }
+
+    #[test]
+    fn custom_metadata_that_looks_like_an_object_resource_keeps_its_own_etag() {
+        let body = br#"{"kind":"storage#object","generation":"1790789164648913","metageneration":"2","etag":"1-2","name":"a","bucket":"b","metadata":{"generation":"7","metageneration":"8","etag":"mine"},"owner":{"generation":"7","metageneration":"8","etag":"mine"}}"#;
+        let answered = frame(
+            &shape(Wire::Gcs, "GET"),
+            response(200, JSON, std::str::from_utf8(body).unwrap(), &[]),
+        );
+        let value: Value = serde_json::from_slice(&answered.body).unwrap();
+        assert_eq!(value["etag"], "CNGTm8DplpcDEAI=");
+        assert_eq!(value["metadata"]["etag"], "mine");
+        assert_eq!(value["owner"]["etag"], "mine");
     }
 
     #[test]

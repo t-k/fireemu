@@ -701,3 +701,92 @@ test("recovery journal admission accepts30second job CREATE metadata and rejects
     }
   }
 });
+
+async function settledRecoveryFixture(t, alter = () => {}) {
+  const { fixture: journalFixture, recoveryEnvironment } =
+    await import("./calendar-settled-topic.test.mjs");
+  const f = await recoveryFixture(t),
+    folder = join(f.lane, "calendar-" + f.plan.originalRunId);
+  const rows = journalFixture();
+  alter(rows);
+  const journal = rows.map(JSON.stringify).join("\n") + "\n";
+  await writeFile(join(folder, "requests.jsonl"), journal, { mode: 0o600 });
+  const originalRow = JSON.parse((await readFile(f.ledger, "utf8")).trim());
+  originalRow.requests = rows.filter((r) => r.state === "before-send").length;
+  originalRow.ts = "2026-10-01T05:01:01.000Z";
+  const line = JSON.stringify(originalRow);
+  await writeFile(f.ledger, line + "\n");
+  await f.reset(
+    {
+      recoveryScope: "settled-jobs-topic-only",
+      originalRequests: originalRow.requests,
+      originalJournalSha256: sha256(journal),
+      originalLedgerRowSha256: sha256(line),
+    },
+    "SCHEDULED-FUNCTIONS calendar recovery packet",
+  );
+  const environment = recoveryEnvironment();
+  f.options.clock = () => new Date("2026-10-01T06:00:00.000Z");
+  f.options.send = environment.deps.send;
+  f.options.sleep = environment.deps.sleep;
+  return { ...f, environment };
+}
+test("settled-topic actual-group admission completes before credentials and retains both debts after one topic write", async (t) => {
+  const f = await settledRecoveryFixture(t);
+  const summary = await captureCalendarRecovery(f.options);
+  assert.equal(summary.closureReady, true);
+  assert.equal(summary.cleanupVerified, false);
+  assert.equal(summary.attempted, 8);
+  assert.equal(f.counts().tokens, 1);
+  assert.equal(f.environment.sends.filter((r) => r.method !== "GET").length, 1);
+  const rows = (await readFile(f.ledger, "utf8")).trim().split("\n").map(JSON.parse);
+  assert.equal(rows.length, 3);
+  assert.equal(rows.at(-1).event, "needs-recovery");
+  assert.equal(rows[0].sandboxAtBaseline, false);
+});
+test("settled-topic admission refuses each incompletely settled or ambiguous original before reservation and credentials", async (t) => {
+  for (const kind of [
+    "missing",
+    "body-unknown",
+    "duplicate",
+    "foreign-body",
+    "sub200",
+    "redirect",
+    "server-error",
+    "bad-deadline",
+    "end-time",
+  ]) {
+    const f = await settledRecoveryFixture(t, (rows) => {
+      const index = rows.findIndex((r) => r.id === "c01-create" && r.state === "before-send");
+      if (kind === "missing") rows.splice(index + 2, 1);
+      else if (kind === "body-unknown") rows[index + 2].state = "body-unknown";
+      else if (kind === "duplicate") rows.splice(index + 1, 0, { ...rows[index + 1] });
+      else if (kind === "foreign-body") {
+        const body = Buffer.from(rows[index + 2].bodyBase64, "base64")
+          .toString()
+          .replace(/-c01/g, "-c02");
+        rows[index + 2].bodyBase64 = Buffer.from(body).toString("base64");
+      } else if (kind === "bad-deadline") rows[index].timeoutMs = 10000;
+      else if (kind === "end-time") rows.at(-1).responseAt = "2026-10-01T05:02:00.000Z";
+      else {
+        rows[index + 1].status = rows[index + 2].status = {
+          sub200: 199,
+          redirect: 302,
+          "server-error": 503,
+        }[kind];
+      }
+    });
+    const before = await readFile(f.ledger, "utf8");
+    await assert.rejects(captureCalendarRecovery(f.options), /proof differs|binding|time differs/);
+    assert.equal(f.counts().tokens, 0);
+    assert.equal(f.environment.sends.length, 0);
+    assert.equal(await readFile(f.ledger, "utf8"), before);
+  }
+});
+test("old topic-only scope remains unable to admit settled journal with any original job mutation", async (t) => {
+  const f = await settledRecoveryFixture(t);
+  await f.reset({ recoveryScope: "topic-only" }, "SCHEDULED-FUNCTIONS calendar recovery packet");
+  await assert.rejects(captureCalendarRecovery(f.options), /topic-only original scope/);
+  assert.equal(f.counts().tokens, 0);
+  assert.equal(f.environment.sends.length, 0);
+});

@@ -370,7 +370,7 @@
       "coverageStatus": "debt",
       "evidence": null,
       "obligation": "Fireemu configuration contract, not a production wall-clock implementation claim",
-      "source": "spec/compatibility/contract.json#FN-CLAIM-SCHEDULE; crates/fireemu-adapter-functions/src/runtime.rs; crates/fireemu-core-session/src/clock.rs"
+      "source": "spec/compatibility/contract.json#FN-CLAIM-SCHEDULE and crates/fireemu-adapter-functions/src/runtime.rs and crates/fireemu-core-session/src/clock.rs"
     },
     {
       "conditionId": "SCHEDULED-FUNCTIONS/clock-forward-boundaries",
@@ -388,7 +388,7 @@
       "coverageStatus": "debt",
       "evidence": null,
       "obligation": "Logical clock operations produce documented schedule occurrences",
-      "source": "spec/compatibility/contract.json#FN-CLAIM-SCHEDULE; crates/fireemu-adapter-functions/src/runtime.rs; crates/fireemu-core-session/src/clock.rs"
+      "source": "spec/compatibility/contract.json#FN-CLAIM-SCHEDULE and crates/fireemu-adapter-functions/src/runtime.rs and crates/fireemu-core-session/src/clock.rs"
     },
     {
       "conditionId": "SCHEDULED-FUNCTIONS/catch-up-policy",
@@ -408,7 +408,7 @@
       "coverageStatus": "debt",
       "evidence": null,
       "obligation": "Explicit policy and bounded occurrence admission",
-      "source": "spec/compatibility/contract.json#FN-CLAIM-SCHEDULE; crates/fireemu-adapter-functions/src/runtime.rs; crates/fireemu-core-session/src/clock.rs"
+      "source": "spec/compatibility/contract.json#FN-CLAIM-SCHEDULE and crates/fireemu-adapter-functions/src/runtime.rs and crates/fireemu-core-session/src/clock.rs"
     },
     {
       "conditionId": "SCHEDULED-FUNCTIONS/overlap-policy",
@@ -419,7 +419,7 @@
       "coverageStatus": "debt",
       "evidence": null,
       "obligation": "Document local suppression/queuing; distinguish overlapping functions from Scheduler attempts",
-      "source": "spec/compatibility/contract.json#FN-CLAIM-SCHEDULE; crates/fireemu-adapter-functions/src/runtime.rs; crates/fireemu-core-session/src/clock.rs"
+      "source": "spec/compatibility/contract.json#FN-CLAIM-SCHEDULE and crates/fireemu-adapter-functions/src/runtime.rs and crates/fireemu-core-session/src/clock.rs"
     },
     {
       "conditionId": "SCHEDULED-FUNCTIONS/retry-delay-fairness",
@@ -435,7 +435,7 @@
       "coverageStatus": "debt",
       "evidence": null,
       "obligation": "Regression for catch-up early-return starvation",
-      "source": "spec/compatibility/contract.json#FN-CLAIM-SCHEDULE; crates/fireemu-adapter-functions/src/runtime.rs; crates/fireemu-core-session/src/clock.rs"
+      "source": "spec/compatibility/contract.json#FN-CLAIM-SCHEDULE and crates/fireemu-adapter-functions/src/runtime.rs and crates/fireemu-core-session/src/clock.rs"
     },
     {
       "conditionId": "SCHEDULED-FUNCTIONS/capacity-cursor",
@@ -451,7 +451,7 @@
       "coverageStatus": "debt",
       "evidence": null,
       "obligation": "No silent schedule loss on admission refusal; only schedule/manual ownership",
-      "source": "spec/compatibility/contract.json#FN-CLAIM-SCHEDULE; crates/fireemu-adapter-functions/src/runtime.rs; crates/fireemu-core-session/src/clock.rs"
+      "source": "spec/compatibility/contract.json#FN-CLAIM-SCHEDULE and crates/fireemu-adapter-functions/src/runtime.rs and crates/fireemu-core-session/src/clock.rs"
     },
     {
       "conditionId": "SCHEDULED-FUNCTIONS/rewind-and-token-policy",
@@ -468,7 +468,7 @@
       "coverageStatus": "debt",
       "evidence": null,
       "obligation": "Explicit rewind policy and fail-closed future-claim behavior",
-      "source": "spec/compatibility/contract.json#FN-CLAIM-SCHEDULE; crates/fireemu-adapter-functions/src/runtime.rs; crates/fireemu-core-session/src/clock.rs"
+      "source": "spec/compatibility/contract.json#FN-CLAIM-SCHEDULE and crates/fireemu-adapter-functions/src/runtime.rs and crates/fireemu-core-session/src/clock.rs"
     },
     {
       "conditionId": "SCHEDULED-FUNCTIONS/manual-schedule",
@@ -485,7 +485,7 @@
       "coverageStatus": "debt",
       "evidence": null,
       "obligation": "Fireemu manual control semantics independently documented",
-      "source": "spec/compatibility/contract.json#FN-CLAIM-SCHEDULE; crates/fireemu-adapter-functions/src/runtime.rs; crates/fireemu-core-session/src/clock.rs"
+      "source": "spec/compatibility/contract.json#FN-CLAIM-SCHEDULE and crates/fireemu-adapter-functions/src/runtime.rs and crates/fireemu-core-session/src/clock.rs"
     },
     {
       "conditionId": "SCHEDULED-FUNCTIONS/state-lifecycle",
@@ -496,7 +496,7 @@
       "coverageStatus": "debt",
       "evidence": null,
       "obligation": "Scheduled cursor/outbox consistency across supported lifecycle boundaries",
-      "source": "spec/compatibility/contract.json#FN-CLAIM-SCHEDULE; crates/fireemu-adapter-functions/src/runtime.rs; crates/fireemu-core-session/src/clock.rs"
+      "source": "spec/compatibility/contract.json#FN-CLAIM-SCHEDULE and crates/fireemu-adapter-functions/src/runtime.rs and crates/fireemu-core-session/src/clock.rs"
     },
     {
       "conditionId": "SCHEDULED-FUNCTIONS/final-artifact-regression",

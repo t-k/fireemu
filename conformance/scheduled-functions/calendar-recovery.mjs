@@ -1,5 +1,11 @@
 // Coordinator-only calendar recovery. Import never obtains credentials or sends requests.
 import { createRequestCapture, PROJECT } from "./shape.mjs";
+import {
+  recordedRecoveryJobAbsent,
+  recordedRecoveryTopicOwned,
+  recordedRecoveryTopicAbsent,
+  recordedRecoveryEmpty,
+} from "./calendar-settled-topic.mjs";
 import { recordedAbsent, recordedPaused, recordedMutationBusy } from "./recovery.mjs";
 import {
   CALENDAR_CASES,
@@ -14,14 +20,17 @@ export const CALENDAR_RECOVERY_MAX_REQUESTS = 64;
 export const CALENDAR_RECOVERY_DELETE_ATTEMPTS = 3;
 
 export function calendarRecoveryRequests(originalRunId, recoveryScope = "jobs-and-topic") {
-  if (!["jobs-and-topic", "topic-only"].includes(recoveryScope))
+  if (!["jobs-and-topic", "topic-only", "settled-jobs-topic-only"].includes(recoveryScope))
     throw new Error("invalid recovery scope");
   const own = calendarResources(originalRunId);
   const scheduler = "https://cloudscheduler.googleapis.com/v1/",
     pubsub = "https://pubsub.googleapis.com/v1/";
   const get = (id, url) => ({ id, method: "GET", url });
-  if (recoveryScope === "topic-only")
+  if (["topic-only", "settled-jobs-topic-only"].includes(recoveryScope))
     return [
+      ...(recoveryScope === "settled-jobs-topic-only"
+        ? [get("c07-before", scheduler + own.jobs.c07), get("c08-before", scheduler + own.jobs.c08)]
+        : []),
       get(
         "before-list-jobs",
         scheduler + "projects/" + PROJECT + "/locations/us-central1/jobs?pageSize=500",
@@ -77,14 +86,69 @@ export async function collectCalendarRecovery({
   const requests = new Map(
     calendarRecoveryRequests(originalRunId, recoveryScope).map((request) => [request.id, request]),
   );
+  const layouts = new Map();
   const { capture, counts } = createRequestCapture({
     accessToken,
-    save,
+    save: async (row) => {
+      await save(row);
+      if (row.state === "response-persisted") layouts.set(row.id, row);
+    },
     send,
     clock,
-    maxRequests: recoveryScope === "topic-only" ? 9 : CALENDAR_RECOVERY_MAX_REQUESTS,
+    maxRequests:
+      recoveryScope === "topic-only"
+        ? 9
+        : recoveryScope === "settled-jobs-topic-only"
+          ? 11
+          : CALENDAR_RECOVERY_MAX_REQUESTS,
   });
-  const take = (id) => capture(requests.get(id));
+  const take = async (id) => {
+    const answer = await capture(requests.get(id)),
+      row = layouts.get(id);
+    return answer && row
+      ? { ...answer, bodyBytes: row.bodyBytes, rawBytes: Buffer.from(row.bodyBase64, "base64") }
+      : answer;
+  };
+  if (recoveryScope === "settled-jobs-topic-only") {
+    const summary = (closureReady) => ({
+      outcome: "calendar-recovery-needs-review",
+      ...counts(),
+      cleanupVerified: false,
+      closureReady,
+    });
+    for (const id of ["c07", "c08"])
+      if (!recordedRecoveryJobAbsent(await take(id + "-before"), own.jobs[id]))
+        return summary(false);
+    if (!recordedRecoveryEmpty(await take("before-list-jobs"))) return summary(false);
+    let polls = 0;
+    const poll = async (answer, afterDelete) => {
+      while (
+        polls < 3 &&
+        (!answer ||
+          answer.bodyUnknown ||
+          (afterDelete
+            ? recordedRecoveryTopicOwned(answer, own)
+            : recordedRecoveryTopicAbsent(answer, own)))
+      ) {
+        await sleep(10000);
+        polls++;
+        answer = await take("read-topic-poll-" + polls);
+      }
+      return answer;
+    };
+    const before = await poll(await take("read-topic-before"), false);
+    if (!recordedRecoveryTopicOwned(before, own)) return summary(false);
+    const deleted = await take("delete-topic");
+    const after = await poll(await take("read-topic-after"), true);
+    const jobs = await take("final-list-jobs"),
+      topics = await take("final-list-topics");
+    return summary(
+      recordedRecoveryEmpty(deleted) &&
+        recordedRecoveryTopicAbsent(after, own) &&
+        recordedRecoveryEmpty(jobs) &&
+        recordedRecoveryEmpty(topics),
+    );
+  }
   if (recoveryScope === "topic-only") {
     const summary = (closureReady) => ({
       outcome: "calendar-recovery-needs-review",

@@ -73,6 +73,7 @@ export async function harnessDigest(mode = "shape") {
         "conformance/scheduled-functions/calendar.mjs",
         "conformance/scheduled-functions/calendar-recovery.mjs",
         "conformance/scheduled-functions/calendar-cases.json",
+        "conformance/scheduled-functions/calendar-settled-topic.mjs",
       ]
     : SOURCES;
   for (const path of sources)
@@ -301,6 +302,14 @@ async function recoveryAdmission({ plan, rows, ledgerText, lane, now, mode = "jo
         throw new Error("original recovery journal request binding differs");
     }
     if (extras > 3) throw new Error("original recovery journal extra-request budget differs");
+    if (plan.recoveryScope === "settled-jobs-topic-only") {
+      (await import("./calendar-settled-topic.mjs")).proveSettledCalendarJobs(
+        journalRows,
+        originalPacket,
+      );
+      if (Date.parse(journalRows.at(-1).responseAt) > then)
+        throw new Error("original recovery end-row time differs");
+    }
     if (
       plan.recoveryScope === "topic-only" &&
       (!before.some((r) => r.id === "create-topic") ||
@@ -382,7 +391,8 @@ async function captureAttempt(
     throw new Error("calendar corpus or packet binding differs");
   if (
     plan.recoveryScope !== undefined &&
-    (mode !== "calendar-recovery" || plan.recoveryScope !== "topic-only")
+    (mode !== "calendar-recovery" ||
+      !["topic-only", "settled-jobs-topic-only"].includes(plan.recoveryScope))
   )
     throw new Error("invalid calendar recovery scope");
   if (recovery) {

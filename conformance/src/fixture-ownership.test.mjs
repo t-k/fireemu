@@ -55,6 +55,18 @@ test("a fixture of a listed dataset with its own comparer is not a local orphan"
   );
 });
 
+test("with several datasets, a fixture of any one of them is owned", () => {
+  const datasets = [
+    { directory: "first-dataset", comparer: "src/first/run.mjs" },
+    { directory: "second-dataset", comparer: "src/second/run.mjs" },
+  ];
+  const fixtures = new Map([fixture("second-dataset/a"), fixture("third-dataset/a")]);
+
+  assert.deepEqual(fixtureOwnershipFailures(fixtures, [], { datasets, exists: present }), [
+    "third-dataset/a: a fixture exists but the corpus no longer declares the scenario",
+  ]);
+});
+
 test("a directory that is not on the list is still checked, whatever its name resembles", () => {
   const fixtures = new Map([
     fixture("own-dataset-production-copy/a"),

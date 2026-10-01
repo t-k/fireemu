@@ -305,3 +305,15 @@ def test_the_projection_refuses_a_receipt_whose_step_list_is_not_in_sequence_ord
         moved["steps"][position], moved["steps"][other] = moved["steps"][other], moved["steps"][position]
         with pytest.raises(ValueError):
             projection(moved, TABLE)
+
+
+def test_the_projection_refuses_a_writer_row_moved_into_the_cleanup_rows():
+    # The writer row and a cleanup row change places between the two lists with their sequence numbers kept: the replay reads the observation
+    # list by position (`wait_entry` and the graph comparison), so the receipt is refused.
+    receipt = recorded()
+    assert receipt["cleanupSteps"], "the recording releases its tokens in the cleanup rows"
+    position = [row["site"] for row in receipt["steps"]].index("rest/c/writer-a")
+    moved = copy.deepcopy(receipt)
+    moved["steps"][position], moved["cleanupSteps"][0] = moved["cleanupSteps"][0], moved["steps"][position]
+    with pytest.raises(ValueError):
+        projection(moved, TABLE)

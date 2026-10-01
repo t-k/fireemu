@@ -461,6 +461,48 @@ impl Harness {
         )
     }
 
+    /// Like `refused_request_with_a_late_body`, with a chunked body of `body_len` bytes in chunks of
+    /// `chunk_len`: the bytes on the wire are more than the body (the framing of each chunk).
+    async fn refused_chunked_request_with_a_late_body(
+        &self,
+        delay: std::time::Duration,
+        body_len: usize,
+        chunk_len: usize,
+    ) -> std::io::Result<fireemu_adapter_functions::http::ProxiedResponse> {
+        use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+
+        let head = format!(
+            "POST /{PROJECT}/us-central1/add HTTP/1.1\r\norigin: http://localhost:5173\r\norigin: https://evil.example\r\nhost: {}\r\ncontent-type: application/json\r\ntransfer-encoding: chunked\r\nconnection: close\r\n\r\n",
+            self.addr
+        );
+        let mut framed = Vec::with_capacity(body_len + body_len / chunk_len * 12 + 16);
+        let data = vec![b'x'; chunk_len];
+        let mut left = body_len;
+        while left > 0 {
+            let len = left.min(chunk_len);
+            framed.extend_from_slice(format!("{len:x}\r\n").as_bytes());
+            framed.extend_from_slice(&data[..len]);
+            framed.extend_from_slice(b"\r\n");
+            left -= len;
+        }
+        framed.extend_from_slice(b"0\r\n\r\n");
+        let mut stream = tokio::net::TcpStream::connect(self.addr).await?;
+        stream.write_all(head.as_bytes()).await?;
+        tokio::time::sleep(delay).await;
+        for piece in framed.chunks(64 * 1024) {
+            if stream.write_all(piece).await.is_err() {
+                break;
+            }
+        }
+        let _ = stream.flush().await;
+        let mut raw = Vec::new();
+        stream.read_to_end(&mut raw).await?;
+        Ok(
+            fireemu_adapter_functions::http::parse_response(&raw, "POST")
+                .expect("a well-formed response"),
+        )
+    }
+
     async fn guarded_request_with_a_delayed_body(&self) -> std::io::Result<u16> {
         use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 
@@ -1381,6 +1423,30 @@ async fn a_refusal_before_the_body_is_read_still_reaches_a_client_that_sends_its
                     panic!("round {round}, a {body_len}-byte body: the response was lost: {error}")
                 });
             assert_eq!(response.status, 403, "round {round}, {body_len} bytes");
+            assert_eq!(response.body, b"forbidden origin");
+        }
+    }
+    h.stop().await;
+}
+
+/// The largest body the port accepts, framed as a chunked body (the framing is extra wire bytes), is
+/// refused from its head and still answered: the byte limit of the close leaves room for the framing.
+#[tokio::test]
+async fn a_refused_chunked_body_of_the_largest_accepted_size_still_gets_its_answer() {
+    let h = start(true).await;
+    for chunk_len in [16 * 1024, 128] {
+        for round in 0..2 {
+            let response = h
+                .refused_chunked_request_with_a_late_body(
+                    std::time::Duration::from_millis(100),
+                    fireemu_adapter_functions::http::MAX_FUNCTION_BODY_BYTES,
+                    chunk_len,
+                )
+                .await
+                .unwrap_or_else(|error| {
+                    panic!("round {round}, chunks of {chunk_len}: the response was lost: {error}")
+                });
+            assert_eq!(response.status, 403, "round {round}, chunks of {chunk_len}");
             assert_eq!(response.body, b"forbidden origin");
         }
     }

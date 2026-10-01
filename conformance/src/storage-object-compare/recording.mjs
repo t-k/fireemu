@@ -30,6 +30,8 @@ export function exchangeOf(row) {
       ]),
     ),
     body: Buffer.from(response.bodyBase64 ?? "", "base64"),
+    // The length the recorder received; the stored body of a JSON answer is re-serialized compactly.
+    bodyBytes: Number.isSafeInteger(response.bodyBytes) ? response.bodyBytes : null,
   };
 }
 

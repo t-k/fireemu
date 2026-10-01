@@ -4,7 +4,7 @@
 
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -70,14 +70,14 @@ function fixtureDirectory({ withPut = true } = {}) {
 }
 
 /** A fake fireemu: one object, GET and PATCH (short spelling only unless `longPatch`), PUT is 501 unless `servePut`. */
-function fakeFireemu({ longPatch = false, servePut = false } = {}) {
+function fakeFireemu({ longPatch = false, servePut = false, metageneration = "1" } = {}) {
   const log = [];
   let object = {
     kind: "storage#object",
     bucket: "b",
     name: "o/a.bin",
     generation: "1000",
-    metageneration: "1",
+    metageneration,
     contentType: "application/octet-stream",
     storageClass: "STANDARD",
     size: "5",
@@ -243,20 +243,26 @@ test("the guards are evaluated as production does: 304 for not-match naming the 
       ["PUT", `${PUT_URL}?ifGenerationMatch=999`, { metadata: {} }],
       ["PUT", `${PUT_URL}?ifMetagenerationMatch=7`, { metadata: {} }],
       ["PUT", `${PUT_URL}?ifMetagenerationMatch=-1`, { metadata: {} }],
+      ["PUT", `${PUT_URL}?ifMetagenerationNotMatch=-1`, { metadata: {} }],
+      ["PUT", `${PUT_URL}?ifMetagenerationMatch=`, { metadata: {} }],
+      ["PUT", `${PUT_URL}?ifMetagenerationMatch=1.5`, { metadata: {} }],
       ["PUT", `${PUT_URL}?ifMetagenerationNotMatch=abc`, { metadata: {} }],
       ["PUT", `${PUT_URL}?ifGenerationNotMatch=999`, { metadata: {} }],
     ],
   });
   assert.deepEqual(
     results.map((row) => row.status),
-    [304, 304, 412, 412, 400, 400, 200],
+    [304, 304, 412, 412, 412, 200, 400, 400, 400, 200],
   );
   for (const row of results) assert.equal(row.standin, "1");
   assert.equal(results[0].text, "");
   assert.equal(JSON.parse(results[2].text).error.errors[0].reason, "conditionNotMet");
-  assert.equal(JSON.parse(results[4].text).error.errors[0].reason, "invalid");
-  // Only the accepted one changed the object.
-  assert.equal(JSON.parse(results[6].text).metageneration, "2");
+  assert.equal(JSON.parse(results[4].text).error.errors[0].reason, "conditionNotMet");
+  assert.equal(JSON.parse(results[6].text).error.errors[0].reason, "invalid");
+  // Only the accepted ones changed the object: -1 is a number that matches nothing, so the not-match
+  // guard holds and the update is applied; the last request then applies a second one.
+  assert.equal(JSON.parse(results[5].text).metageneration, "2");
+  assert.equal(JSON.parse(results[9].text).metageneration, "3");
 });
 
 test("a PUT to an object that does not exist is the 404 fireemu gives, marked", async () => {
@@ -350,4 +356,67 @@ test("the stand-in takes a URL object or a Request as well as a string", async (
   const [urlStatus, urlMarked] = JSON.parse(stdout.trim().split("\n").at(-1));
   assert.equal(urlStatus, 200);
   assert.equal(urlMarked, "1");
+});
+
+// ---- the stand-in against production's own rows ---------------------------------------------------
+
+test("for every PUT the fixture records in gcs/metageneration-preconditions, the stand-in answers the recorded status", async () => {
+  const rows = JSON.parse(
+    readFileSync(
+      fileURLToPath(
+        new URL(
+          "../fixtures/storage-object-production/gcs--metageneration-preconditions.json",
+          import.meta.url,
+        ),
+      ),
+      "utf8",
+    ),
+  ).exchanges.filter(
+    (row) =>
+      row.method === "PUT" &&
+      row.query.some(
+        ([key]) => key === "ifMetagenerationMatch" || key === "ifMetagenerationNotMatch",
+      ),
+  );
+  assert.ok(rows.length >= 12);
+  const cases = [];
+  for (const row of rows) {
+    const [key, value] = row.query.find(
+      ([name]) => name === "ifMetagenerationMatch" || name === "ifMetagenerationNotMatch",
+    );
+    // The object's metageneration that makes the guard behave as production's recorded status says.
+    const holds =
+      (key === "ifMetagenerationMatch" && row.status === 200) ||
+      (key === "ifMetagenerationNotMatch" && row.status === 304);
+    const current = holds ? value : value === "5" ? "6" : "5";
+    cases.push({ row, key, value, current });
+  }
+  for (const { row, key, value, current } of cases) {
+    const fireemu = fakeFireemu({ metageneration: current });
+    const { results } = await run({
+      fireemu,
+      fixture: fixtureDirectory(),
+      requests: [
+        [
+          "PUT",
+          `${PUT_URL}?ifGenerationMatch=1000&${key}=${encodeURIComponent(value)}`,
+          { metadata: { x: "1" } },
+        ],
+      ],
+    });
+    assert.equal(results[0].status, row.status, `#${row.n} ${key}=${JSON.stringify(value)}`);
+  }
+  // The two the review named.
+  assert.ok(
+    cases.some(
+      ({ row, key, value }) =>
+        row.status === 412 && key === "ifMetagenerationMatch" && value === "-1",
+    ),
+  );
+  assert.ok(
+    cases.some(
+      ({ row, key, value }) =>
+        row.status === 200 && key === "ifMetagenerationNotMatch" && value === "-1",
+    ),
+  );
 });

@@ -6,11 +6,13 @@
 //     Normalize production recordings into the committed fixture and scan it. With several
 //     --run, they must normalize to the same rows. Refuses to write anything that fails the scan.
 //
-//   node src/storage-object-compare/run.mjs compare --fixture <fixture dir> --journal <aggregate-events.jsonl>
-//        [--receipt <receipt.json>] [--report <file>]
+//   node src/storage-object-compare/run.mjs compare --fixture <fixture dir>
+//        --journal <journal.jsonl> --receipt <receipt.json> [--report <file>] [--allow-incomplete yes]
 //     Compare a local rehearsal's journal with the fixture and report MATCH, DIVERGENCE,
-//     LOCAL_UNIMPLEMENTED (fireemu answered 501, or the stand-in did) and the exchanges without a
-//     counterpart. The receipt binds the comparison to the fireemu commit and binary digest.
+//     LOCAL_UNIMPLEMENTED (fireemu answered 501, or the stand-in did), TAINTED, the exchanges without
+//     a counterpart and the rows of recipes that did not run. The receipt is required and enforced: it
+//     must describe this journal and this fixture and the current stand-in, bind a fireemu commit and
+//     binary digest and a clean recorder commit, and describe a finished rehearsal.
 //
 //   node src/storage-object-compare/run.mjs rehearse --fireemu <binary> --fireemu-commit <sha>
 //        --recorder <recorder checkout> --rules <fixed rules file> --fixture <fixture dir> --out <dir>
@@ -21,9 +23,15 @@ import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { compareRecipe, summarize } from "./compare.mjs";
-import { buildFixture, indexText, normalizeRecipe, recipeFileText } from "./fixture.mjs";
+import {
+  buildFixture,
+  digestRows,
+  indexText,
+  normalizeRecipe,
+  recipeFileText,
+} from "./fixture.mjs";
 import { readLocalJournal, readProductionRecording } from "./recording.mjs";
-import { rehearse } from "./rehearse.mjs";
+import { rehearse, standinSha256 } from "./rehearse.mjs";
 import { scanFixtureText } from "./scan.mjs";
 
 function parseArguments(argv) {
@@ -49,6 +57,12 @@ export function normalizeCommand(options, log = console.log) {
         .map((line) => line.trim())
         .filter(Boolean)
     : [];
+  // What the scan was given, recorded in the index (not the path, not the entries themselves).
+  const scan = {
+    forbiddenFileUsed: Boolean(options["forbidden-file"]),
+    forbiddenEntries: forbidden.length,
+    forbiddenListSha256: createHash("sha256").update(forbidden.toSorted().join("\n")).digest("hex"),
+  };
   forbidden.push(options.bucket, options.project);
   const recordings = options.run.map((directory) => readProductionRecording(resolve(directory)));
   for (const recording of recordings)
@@ -62,6 +76,7 @@ export function normalizeCommand(options, log = console.log) {
   });
   if (!fixture.index.equivalentRecordings && options["allow-different"] !== "yes")
     throw new Error("the recordings do not normalize to the same rows");
+  fixture.index.scan = scan;
   const files = [
     ["index.json", indexText(fixture.index)],
     ...fixture.recipes.map((recipe) => [
@@ -90,9 +105,19 @@ export function loadFixture(directory) {
     const file = JSON.parse(readFileSync(join(directory, entry.file), "utf8"));
     if (file.recipeId !== entry.recipeId || file.exchanges.length !== entry.rows)
       throw new Error(`${entry.file} does not match the index`);
+    // A hand edit that keeps the row count must not pass.
+    const digest = digestRows(file.exchanges);
+    if (!Object.values(entry.digests ?? {}).every((value) => value === digest))
+      throw new Error(`${entry.file} does not match the index digests`);
     recipes.set(entry.recipeId, file.exchanges);
   }
-  return { index, recipes };
+  return {
+    index,
+    recipes,
+    indexSha256: createHash("sha256")
+      .update(readFileSync(join(directory, "index.json")))
+      .digest("hex"),
+  };
 }
 
 /** A short description of one difference, for counting: the kind, the header or path, the values. */
@@ -104,17 +129,38 @@ export function differenceKey(diff) {
   if (diff.kind === "missingHeader" || diff.kind === "extraHeader")
     return `${diff.kind} ${diff.header}`;
   if (diff.kind === "body") return `body ${diff.path ?? ""}`;
+  if (diff.kind === "memberOrder") return `memberOrder ${diff.path ?? ""}`;
+  if (diff.kind === "bodyLayout") return "bodyLayout";
   return diff.kind;
 }
+
+const OUTCOMES = {
+  MATCH: 0,
+  DIVERGENCE: 0,
+  LOCAL_UNIMPLEMENTED: 0,
+  TAINTED: 0,
+  ONLY_PRODUCTION: 0,
+  ONLY_LOCAL: 0,
+  NOT_RUN: 0,
+};
 
 /** Compare a local journal with a fixture. Returns the report object. */
 export function compareReport({ fixture, journal, localBucket, localProject, receipt }) {
   const local = readLocalJournal(journal);
   const recipes = [];
+  const total = { ...OUTCOMES };
+  let layoutUnjudged = 0;
   for (const [recipeId, production] of fixture.recipes) {
     const localRecipe = local.recipes.find((candidate) => candidate.recipeId === recipeId);
     if (!localRecipe) {
-      recipes.push({ recipeId, ran: false, counts: null, results: [] });
+      // A recipe that did not run is not a pass: its production rows are counted as not run.
+      recipes.push({
+        recipeId,
+        ran: false,
+        counts: { ...OUTCOMES, NOT_RUN: production.length },
+        results: [],
+      });
+      total.NOT_RUN += production.length;
       continue;
     }
     const rows = normalizeRecipe(localRecipe, {
@@ -123,17 +169,11 @@ export function compareReport({ fixture, journal, localBucket, localProject, rec
       project: localProject,
     });
     const results = compareRecipe({ production, local: rows });
-    recipes.push({ recipeId, ran: true, counts: summarize(results), results });
+    const counts = { ...OUTCOMES, ...summarize(results) };
+    recipes.push({ recipeId, ran: true, counts, results });
+    for (const [name, count] of Object.entries(counts)) total[name] += count;
+    layoutUnjudged += production.filter((row) => !Number.isSafeInteger(row.layout)).length;
   }
-  const total = {
-    MATCH: 0,
-    DIVERGENCE: 0,
-    LOCAL_UNIMPLEMENTED: 0,
-    ONLY_PRODUCTION: 0,
-    ONLY_LOCAL: 0,
-  };
-  for (const recipe of recipes)
-    for (const [name, count] of Object.entries(recipe.counts ?? {})) total[name] += count;
   const kinds = {};
   const byDifference = {};
   for (const recipe of recipes)
@@ -145,10 +185,12 @@ export function compareReport({ fixture, journal, localBucket, localProject, rec
       }
   return {
     fixtureRunIds: fixture.index.runIds,
+    fixtureIndexSha256: fixture.indexSha256,
     fireemu: receipt.fireemu,
     recorder: receipt.recorder,
     rehearsalResult: receipt.result,
     total,
+    layoutUnjudgedProductionRows: layoutUnjudged,
     differenceKinds: kinds,
     byDifference: Object.fromEntries(
       Object.entries(byDifference).toSorted(([, a], [, b]) => b - a),
@@ -163,6 +205,7 @@ export function reportText(report) {
     `fireemu ${report.fireemu.version} commit ${report.fireemu.commit} binary sha256 ${report.fireemu.binarySha256}`,
     `recorder commit ${report.recorder.commit}; rehearsal ${JSON.stringify(report.rehearsalResult)}`,
     `total: ${JSON.stringify(report.total)}`,
+    `production rows whose body layout cannot be judged: ${report.layoutUnjudgedProductionRows}`,
     `difference kinds: ${JSON.stringify(report.differenceKinds)}`,
     "most frequent differences:",
     ...Object.entries(report.byDifference)
@@ -174,7 +217,7 @@ export function reportText(report) {
     lines.push(
       recipe.ran
         ? `${recipe.recipeId}: ${JSON.stringify(recipe.counts)}`
-        : `${recipe.recipeId}: NOT RUN`,
+        : `${recipe.recipeId}: NOT RUN (${recipe.counts.NOT_RUN} rows)`,
     );
     for (const result of recipe.results.filter((row) => row.outcome === "DIVERGENCE").slice(0, 5))
       lines.push(
@@ -196,31 +239,47 @@ export function reportText(report) {
   return `${lines.join("\n")}\n`;
 }
 
-/** Check the receipt against the journal it names; a comparison without a matching receipt is refused. */
-export function readReceipt(path, journal) {
+/**
+ * Check the receipt against what it claims to describe. A comparison without a matching receipt is
+ * refused: the receipt must describe this journal and this fixture, the current stand-in and a
+ * finished rehearsal, and bind a fireemu commit and binary digest and a clean recorder commit.
+ */
+export function readReceipt(path, journal, { fixtureIndexSha256, allowIncomplete = false } = {}) {
   const receipt = JSON.parse(readFileSync(path, "utf8"));
+  const hex = (value, length) => new RegExp(`^[0-9a-f]{${length}}$`).test(value ?? "");
   const digest = createHash("sha256").update(readFileSync(journal)).digest("hex");
   if (receipt.journalSha256 !== digest)
     throw new Error("the receipt does not describe this journal");
-  if (
-    !/^[0-9a-f]{64}$/.test(receipt.fireemu?.binarySha256 ?? "") ||
-    !/^[0-9a-f]{40}$/.test(receipt.fireemu?.commit ?? "")
-  )
+  if (!hex(receipt.fireemu?.binarySha256, 64) || !hex(receipt.fireemu?.commit, 40))
     throw new Error("the receipt does not bind a fireemu commit and binary digest");
-  if (receipt.recorder?.clean !== true)
-    throw new Error("the receipt's recorder checkout was not clean");
+  if (!hex(receipt.recorder?.commit, 40) || receipt.recorder?.clean !== true)
+    throw new Error("the receipt does not bind a clean recorder commit");
+  if (receipt.standinSha256 !== standinSha256())
+    throw new Error("the receipt was made with another stand-in");
+  if (!hex(fixtureIndexSha256, 64) || receipt.fixtureIndexSha256 !== fixtureIndexSha256)
+    throw new Error("the receipt was made with another fixture");
+  if (!hex(receipt.rulesSha256, 64)) throw new Error("the receipt does not bind the Rules file");
+  if (
+    !allowIncomplete &&
+    (receipt.result?.status !== "LOCAL_COMPLETE" || receipt.result?.exitCode !== 0)
+  )
+    throw new Error("the receipt describes a rehearsal that did not finish");
   return receipt;
 }
 
 export function compareCommand(options, log = console.log) {
   for (const name of ["fixture", "journal", "receipt"])
     if (!options[name]) throw new Error(`--${name} is required`);
+  const fixture = loadFixture(resolve(options.fixture));
   const report = compareReport({
-    fixture: loadFixture(resolve(options.fixture)),
+    fixture,
     journal: resolve(options.journal),
     localBucket: options["local-bucket"] ?? "example.appspot.com",
     localProject: options["local-project"] ?? "example-project",
-    receipt: readReceipt(resolve(options.receipt), resolve(options.journal)),
+    receipt: readReceipt(resolve(options.receipt), resolve(options.journal), {
+      fixtureIndexSha256: fixture.indexSha256,
+      allowIncomplete: options["allow-incomplete"] === "yes",
+    }),
   });
   if (options.report)
     writeFileSync(resolve(options.report), `${JSON.stringify(report, null, 1)}\n`);
@@ -228,7 +287,7 @@ export function compareCommand(options, log = console.log) {
   return report;
 }
 
-export async function rehearseCommand(options) {
+export async function rehearseCommand(options, log = console.log) {
   const receipt = await rehearse({
     fireemuBinary: options.fireemu,
     fireemuCommit: options["fireemu-commit"],
@@ -237,7 +296,7 @@ export async function rehearseCommand(options) {
     fixtureDir: options.fixture,
     outDir: options.out,
   });
-  console.log(JSON.stringify(receipt, null, 2));
+  log(JSON.stringify(receipt, null, 2));
   return receipt;
 }
 
@@ -248,7 +307,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     if (command === "normalize") normalizeCommand(options);
     else if (command === "compare") compareCommand(options);
     else if (command === "rehearse") await rehearseCommand(options);
-    else throw new Error("usage: run.mjs normalize|compare");
+    else throw new Error("usage: run.mjs normalize|rehearse|compare");
   } catch (error) {
     process.stderr.write(`${error.message}\n`);
     process.exitCode = 2;

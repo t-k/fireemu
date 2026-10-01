@@ -34,6 +34,12 @@ test("a capture line is an exchange with lower-cased headers and a body buffer",
   assert.equal(exchange.method, "GET");
   assert.deepEqual(exchange.headers, { "content-type": "application/json" });
   assert.deepEqual(exchange.body, Buffer.from("{}"));
+  assert.equal(exchange.bodyBytes, null);
+  assert.equal(exchangeOf(capture(5, { response: { status: 200, bodyBytes: 74 } })).bodyBytes, 74);
+  assert.equal(
+    exchangeOf(capture(5, { response: { status: 200, bodyBytes: "74" } })).bodyBytes,
+    null,
+  );
   assert.deepEqual(exchangeOf(capture(5, { response: { status: 204 } })).body, Buffer.alloc(0));
 });
 
@@ -166,4 +172,15 @@ test("a local journal gives its run ID from the first recipe's prefix, and its c
   assert.throws(() => readLocalJournal(path), /no recipe-begin/);
   writeFileSync(path, lines([{ type: "recipe-begin", prefix: "elsewhere/x/" }]));
   assert.throws(() => readLocalJournal(path), /no recipe-begin/);
+});
+
+test("a recipe's exchanges are in sequence order whatever order the captures were written in", () => {
+  const [recipe] = splitRecipes({
+    captureRows: [capture(4), capture(2), capture(3), capture(5)],
+    eventRows: [finish("storage-object/a", 2, 5)],
+  });
+  assert.deepEqual(
+    recipe.exchanges.map((exchange) => exchange.sequence),
+    [2, 3, 4, 5],
+  );
 });

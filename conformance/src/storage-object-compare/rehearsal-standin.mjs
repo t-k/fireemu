@@ -7,7 +7,8 @@
 // The shape is the recorded production answer to an accepted PUT (the key set of the 200 body of
 // the first PUT in the fixture), with the guards evaluated against fireemu's current metadata: 304
 // for a not-match guard that names the current value, 412 for a match guard that does not hold,
-// 400 for a value that is not a number. The update is applied to fireemu as a PATCH that nulls the
+// 400 for a value that is not a signed integer (production answered -1 as a number: 412 for a match
+// guard, applied for a not-match guard). The update is applied to fireemu as a PATCH that nulls the
 // metadata keys the PUT body does not carry.
 
 import { readFileSync } from "node:fs";
@@ -61,8 +62,11 @@ async function standIn(url, init) {
   for (const [key, field, negated] of GUARDS) {
     if (!url.searchParams.has(key)) continue;
     const value = url.searchParams.get(key);
-    if (!/^[0-9]+$/.test(value)) return marked(failure(400, `Invalid value for ${key}`, "invalid"));
-    const equal = value === String(object[field]);
+    // Production reads a guard as a signed long: -1 is a number that matches nothing (a match guard
+    // fails with 412, a not-match guard holds), while an empty value, a fraction or text is 400.
+    if (!/^-?[0-9]+$/.test(value))
+      return marked(failure(400, `Invalid value for ${key}`, "invalid"));
+    const equal = BigInt(value) === BigInt(object[field]);
     if (negated ? equal : !equal)
       return marked(
         negated

@@ -35,7 +35,7 @@ test("run-specific values that the masks should have removed are refused", () =>
   refuses("2026-09-30T23:14:41.570Z", /timestamp/);
   refuses("Wed, 30 Sep 2026 23:14:40 GMT", /HTTP date/);
   refuses("generation 1790810081541764", /generation/);
-  refuses("project 592603257417 here", /12-digit number/);
+  refuses("project 444455556666 here", /12-digit number/);
   refuses("a 056c7ca3a8c6daa38e0a b", /run ID/, { runIds: ["056c7ca3a8c6daa38e0a"] });
   refuses("the real prod-bucket here", /private or unmasked/, { forbidden: ["prod-bucket"] });
   scanFixtureText("nothing private", { forbidden: ["", undefined] });
@@ -64,4 +64,43 @@ test("a SHA-256 or an inline base64 body is not mistaken for a number or an ID",
     '"a1b2c3d4e5f60718293a": "123456789012a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c"',
   );
   refuses('"x":"123456789012"', /12-digit/);
+});
+
+test("an inline base64 body is scanned decoded, so a binary body cannot carry what the masks should have removed", () => {
+  const body = (text) =>
+    `{"type":"bytes","length":${text.length},"sha256":"${"0".repeat(64)}","base64":"${Buffer.from(text).toString("base64")}"}`;
+  scanFixtureText(body("test bytes 123456789"));
+  refuses(body("in prod-bucket now"), /private or unmasked/, { forbidden: ["prod-bucket"] });
+  refuses(body("key AIzaSyD-synthetic-web-api-key-value-000000"), /API key/);
+  refuses(body("token 995cff2a-95bf-4bb5-90f8-0c0176c17e1f"), /UUID/);
+  refuses(body("at 2026-09-30T23:14:41.570Z"), /timestamp/);
+  refuses(body("run 056c7ca3a8c6daa38e0a"), /run ID/, { runIds: ["056c7ca3a8c6daa38e0a"] });
+  refuses(body("mail person@company.co.jp"), /email outside/);
+  refuses(body("number 444455556666 here"), /12-digit/);
+  // With whitespace after the colon, and with several bodies in one file.
+  refuses(
+    `{"base64": "${Buffer.from("x AIzaSyD-synthetic-web-api-key-value-000000").toString("base64")}"}`,
+    /API key/,
+  );
+  refuses(`${body("fine")}\n${body("eyJhbGciOiJSUzI1NiJ9.x.y")}`, /JWT/);
+});
+
+test("credential shapes are refused at their shortest length and with every character class", () => {
+  // Each case is refused for its own reason, not for another pattern that happens to match too.
+  const refused = (text, reason) =>
+    assert.throws(
+      () => scanFixtureText(`x ${text} y`),
+      (error) => reason.test(error.message),
+      text,
+    );
+  refused("eyJabcde", /JWT/);
+  refused(`AIza${"0".repeat(20)}`, /API key/);
+  refused(`AP6rU${"0".repeat(10)}`, /upload ID/);
+  refused("0000000a-000a-000a-000a-00000000000a", /UUID/);
+  refused(`key=sha256:${"a".repeat(16)}`, /hashed secret/);
+  // One short of each minimum is not that shape.
+  scanFixtureText("x eyJabcd y");
+  scanFixtureText(`x AIza${"0".repeat(19)} y`);
+  scanFixtureText(`x AP6rU${"0".repeat(9)} y`);
+  scanFixtureText(`x key=sha256:${"a".repeat(15)} y`);
 });

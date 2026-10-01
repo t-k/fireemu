@@ -15,7 +15,11 @@ import {
   readReceipt,
   reportText,
 } from "./storage-object-compare/run.mjs";
-import { LOOPBACK_PROFILE, rehearsalPlan } from "./storage-object-compare/rehearse.mjs";
+import {
+  LOOPBACK_PROFILE,
+  rehearsalPlan,
+  standinSha256,
+} from "./storage-object-compare/rehearse.mjs";
 
 const RUN_JS = fileURLToPath(new URL("./storage-object-compare/run.mjs", import.meta.url));
 const BUCKET = "prod-bucket.firebasestorage.app";
@@ -214,10 +218,15 @@ const localRows = (run, over = {}) => [
     body: '{"error":{"code":404,"message":"Not Found."}}',
   }),
 ];
-function receiptFor(journal, over = {}) {
+function receiptFor(journal, fixture, over = {}) {
   const receipt = {
     fireemu: { binarySha256: "a".repeat(64), version: "fireemu 0.9.0", commit: "b".repeat(40) },
     recorder: { commit: "c".repeat(40), clean: true },
+    standinSha256: standinSha256(),
+    fixtureIndexSha256: createHash("sha256")
+      .update(readFileSync(join(fixture, "index.json")))
+      .digest("hex"),
+    rulesSha256: "d".repeat(64),
     journalSha256: createHash("sha256").update(readFileSync(journal)).digest("hex"),
     result: { status: "LOCAL_COMPLETE", completedRecipes: [1, 0], requests: 2, exitCode: 0 },
     ...over,
@@ -236,15 +245,18 @@ test("compare reports a MATCH for identical exchanges (the content type, headers
   const fixture = fixtureDirectory();
   const journal = localJournal("aaaabbbbccccdddd0001", localRows("aaaabbbbccccdddd0001"));
   const messages = [];
-  const report = compareCommand({ fixture, journal, receipt: receiptFor(journal) }, (text) =>
-    messages.push(text),
+  const report = compareCommand(
+    { fixture, journal, receipt: receiptFor(journal, fixture) },
+    (text) => messages.push(text),
   );
   assert.deepEqual(report.total, {
     MATCH: 2,
     DIVERGENCE: 0,
     LOCAL_UNIMPLEMENTED: 0,
+    TAINTED: 0,
     ONLY_PRODUCTION: 0,
     ONLY_LOCAL: 0,
+    NOT_RUN: 0,
   });
   assert.deepEqual(report.fireemu, {
     binarySha256: "a".repeat(64),
@@ -265,7 +277,7 @@ test("compare reports DIVERGENCE with its kinds, the most frequent differences, 
   );
   const reportPath = join(mkdtempSync(join(tmpdir(), "compare-report-")), "report.json");
   const report = compareCommand(
-    { fixture, journal, receipt: receiptFor(journal), report: reportPath },
+    { fixture, journal, receipt: receiptFor(journal, fixture), report: reportPath },
     quiet,
   );
   assert.equal(report.total.DIVERGENCE, 1);
@@ -291,7 +303,7 @@ test("compare reports DIVERGENCE with its kinds, the most frequent differences, 
     journal,
     localBucket: LOCAL_BUCKET,
     localProject: LOCAL_PROJECT,
-    receipt: JSON.parse(readFileSync(receiptFor(journal), "utf8")),
+    receipt: JSON.parse(readFileSync(receiptFor(journal, fixture), "utf8")),
   });
   assert.equal(missing.recipes.at(-1).ran, false);
   assert.match(reportText(missing), /storage-object\/gcs\/missing: NOT RUN/);
@@ -305,45 +317,73 @@ test("compare needs a fixture, a journal and a receipt", () => {
   }
 });
 
-test("the receipt must describe the journal, bind a fireemu commit and binary digest, and a clean recorder", () => {
+test("a receipt that does not describe this journal, this fixture and the current stand-in is refused, field by field", () => {
+  const fixture = fixtureDirectory();
   const journal = localJournal("aaaabbbbccccdddd0001", localRows("aaaabbbbccccdddd0001"));
-  assert.equal(readReceipt(receiptFor(journal), journal).fireemu.commit, "b".repeat(40));
-  assert.throws(
-    () => readReceipt(receiptFor(journal, { journalSha256: "0".repeat(64) }), journal),
-    /does not describe this journal/,
-  );
+  const indexSha256 = loadFixture(fixture).indexSha256;
+  const read = (over, extra = {}) =>
+    readReceipt(receiptFor(journal, fixture, over), journal, {
+      fixtureIndexSha256: indexSha256,
+      ...extra,
+    });
+  assert.equal(read({}).fireemu.commit, "b".repeat(40));
+  assert.throws(() => read({ journalSha256: "0".repeat(64) }), /does not describe this journal/);
+  assert.throws(() => read({ journalSha256: undefined }), /does not describe this journal/);
+  const fireemuCases = [
+    { binarySha256: "a".repeat(64), commit: "short" },
+    { binarySha256: "a".repeat(64), commit: "B".repeat(40) },
+    { binarySha256: "a", commit: "b".repeat(40) },
+    { binarySha256: "A".repeat(64), commit: "b".repeat(40) },
+    { commit: "b".repeat(40) },
+    undefined,
+  ];
+  for (const fireemu of fireemuCases)
+    assert.throws(() => read({ fireemu }), /does not bind a fireemu commit/);
+  const recorderCases = [
+    { commit: "", clean: true },
+    { commit: "short", clean: true },
+    { commit: "c".repeat(40), clean: false },
+    { commit: "c".repeat(40) },
+    { commit: "C".repeat(40), clean: true },
+    undefined,
+  ];
+  for (const recorder of recorderCases)
+    assert.throws(() => read({ recorder }), /does not bind a clean recorder commit/);
+  assert.throws(() => read({ standinSha256: "0".repeat(64) }), /another stand-in/);
+  assert.throws(() => read({ standinSha256: undefined }), /another stand-in/);
+  assert.throws(() => read({ fixtureIndexSha256: "0".repeat(64) }), /another fixture/);
+  assert.throws(() => read({ fixtureIndexSha256: undefined }), /another fixture/);
   assert.throws(
     () =>
-      readReceipt(
-        receiptFor(journal, { fireemu: { binarySha256: "a".repeat(64), commit: "short" } }),
-        journal,
-      ),
-    /does not bind a fireemu commit/,
+      readReceipt(receiptFor(journal, fixture), journal, { fixtureIndexSha256: "0".repeat(64) }),
+    /another fixture/,
   );
-  assert.throws(
-    () =>
-      readReceipt(
-        receiptFor(journal, { fireemu: { binarySha256: "a", commit: "b".repeat(40) } }),
-        journal,
-      ),
-    /does not bind a fireemu commit/,
-  );
-  assert.throws(
-    () => readReceipt(receiptFor(journal, { fireemu: undefined }), journal),
-    /does not bind a fireemu commit/,
-  );
-  assert.throws(
-    () =>
-      readReceipt(
-        receiptFor(journal, { recorder: { commit: "c".repeat(40), clean: false } }),
-        journal,
-      ),
-    /not clean/,
-  );
-  assert.throws(
-    () => readReceipt(receiptFor(journal, { recorder: undefined }), journal),
-    /not clean/,
-  );
+  assert.throws(() => readReceipt(receiptFor(journal, fixture), journal), /another fixture/);
+  for (const rulesSha256 of [undefined, "short", "D".repeat(64)])
+    assert.throws(() => read({ rulesSha256 }), /does not bind the Rules file/);
+});
+
+test("a receipt of a rehearsal that did not finish is refused, unless an incomplete rehearsal is allowed", () => {
+  const fixture = fixtureDirectory();
+  const journal = localJournal("aaaabbbbccccdddd0001", localRows("aaaabbbbccccdddd0001"));
+  const indexSha256 = loadFixture(fixture).indexSha256;
+  for (const result of [
+    { status: "LOCAL_BLOCKED", exitCode: 0 },
+    { status: "LOCAL_COMPLETE", exitCode: 2 },
+    { status: "LOCAL_COMPLETE" },
+    { exitCode: 0 },
+    undefined,
+  ]) {
+    const path = receiptFor(journal, fixture, { result });
+    assert.throws(
+      () => readReceipt(path, journal, { fixtureIndexSha256: indexSha256 }),
+      /did not finish/,
+    );
+    assert.deepEqual(
+      readReceipt(path, journal, { fixtureIndexSha256: indexSha256, allowIncomplete: true }).result,
+      result,
+    );
+  }
 });
 
 test("the rehearsal runs the recorder's local aggregate in the strict profile against the bound binary", () => {
@@ -494,7 +534,7 @@ test("the command line normalizes with several --run, and compares with a receip
     "--journal",
     journal,
     "--receipt",
-    receiptFor(journal),
+    receiptFor(journal, out),
     "--report",
     report,
   );
@@ -508,10 +548,29 @@ test("the command line normalizes with several --run, and compares with a receip
     "--journal",
     journal,
     "--receipt",
-    receiptFor(journal, { journalSha256: "0".repeat(64) }),
+    receiptFor(journal, out, { journalSha256: "0".repeat(64) }),
   );
   assert.equal(bad.status, 2);
   assert.match(bad.stderr, /does not describe this journal/);
+  const incomplete = receiptFor(journal, out, { result: { status: "LOCAL_BLOCKED", exitCode: 0 } });
+  assert.equal(
+    cli("compare", "--fixture", out, "--journal", journal, "--receipt", incomplete).status,
+    2,
+  );
+  assert.equal(
+    cli(
+      "compare",
+      "--fixture",
+      out,
+      "--journal",
+      journal,
+      "--receipt",
+      incomplete,
+      "--allow-incomplete",
+      "yes",
+    ).status,
+    0,
+  );
 });
 
 test("the command line passes every option of rehearse through", () => {
@@ -555,4 +614,160 @@ test("an argument without a value, or without --, is refused with its name", () 
   const bare = cli("normalize", "bucket", "b");
   assert.match(bare.stderr, /bad argument: bucket/);
   assert.match(cli("unknown").stderr, /usage/);
+});
+
+test("the index records what the scan was given: whether a private list was used, how many entries, and its digest", () => {
+  const file = join(mkdtempSync(join(tmpdir(), "compare-forbidden-")), "forbidden.txt");
+  writeFileSync(file, "ALPHA\nBETA\n\n  GAMMA  \n");
+  const used = options([productionDirectory(RUN1)], { "forbidden-file": file });
+  const index = normalizeCommand(used, quiet);
+  assert.deepEqual(index.scan, {
+    forbiddenFileUsed: true,
+    forbiddenEntries: 3,
+    forbiddenListSha256: createHash("sha256").update("ALPHA\nBETA\nGAMMA").digest("hex"),
+  });
+  assert.deepEqual(JSON.parse(readFileSync(join(used.out, "index.json"), "utf8")).scan, index.scan);
+  assert.equal(
+    readFileSync(join(used.out, "index.json"), "utf8").includes(file),
+    false,
+    "the path is not recorded",
+  );
+  const none = normalizeCommand(options([productionDirectory(RUN1)]), quiet);
+  assert.deepEqual(none.scan, {
+    forbiddenFileUsed: false,
+    forbiddenEntries: 0,
+    forbiddenListSha256: createHash("sha256").update("").digest("hex"),
+  });
+});
+
+test("normalize refuses what the real bucket or project leaves behind, wherever a mask does not reach", () => {
+  for (const url of [
+    `https://x.example/storage/v1/b/${BUCKET}/o?${BUCKET}=1`,
+    `https://x.example/storage/v1/b/${BUCKET}/o?${PROJECT}=1`,
+  ]) {
+    const directory = productionDirectory(RUN1);
+    writeFileSync(
+      join(directory, "captures.jsonl"),
+      lines([capture(2, RUN1, { url }), capture(3, RUN1)]),
+    );
+    const opts = options([directory]);
+    assert.throws(() => normalizeCommand(opts, quiet), /private or unmasked identifier/);
+    assert.equal(existsSync(opts.out), false);
+  }
+});
+
+test("a fixture whose rows were edited without changing their number is refused by the digests", () => {
+  const opts = options([productionDirectory(RUN1)]);
+  normalizeCommand(opts, quiet);
+  const file = join(opts.out, "gcs--a.json");
+  const parsed = JSON.parse(readFileSync(file, "utf8"));
+  parsed.exchanges[0].status = 500;
+  writeFileSync(file, JSON.stringify(parsed));
+  assert.throws(() => loadFixture(opts.out), /does not match the index digests/);
+  // An index without digests for a recipe is refused too.
+  const second = options([productionDirectory(RUN1)]);
+  normalizeCommand(second, quiet);
+  const index = JSON.parse(readFileSync(join(second.out, "index.json"), "utf8"));
+  index.recipes[0].digests = { [RUN1]: "0".repeat(64) };
+  writeFileSync(join(second.out, "index.json"), JSON.stringify(index));
+  assert.throws(() => loadFixture(second.out), /does not match the index digests/);
+});
+
+test("a recipe that did not run is counted by its rows, and an incomplete comparison is never clean", () => {
+  const fixture = fixtureDirectory();
+  const journal = localJournal("aaaabbbbccccdddd0001", localRows("aaaabbbbccccdddd0001"));
+  const fixtureObject = loadFixture(fixture);
+  const rows = fixtureObject.recipes.get("storage-object/gcs/a");
+  fixtureObject.recipes.set("storage-object/gcs/missing", rows);
+  fixtureObject.recipes.set("storage-object/gcs/missing-too", rows.slice(0, 1));
+  const report = compareReport({
+    fixture: fixtureObject,
+    journal,
+    localBucket: LOCAL_BUCKET,
+    localProject: LOCAL_PROJECT,
+    receipt: JSON.parse(readFileSync(receiptFor(journal, fixture), "utf8")),
+  });
+  assert.equal(report.total.NOT_RUN, 3);
+  assert.equal(report.total.MATCH, 2);
+  assert.equal(
+    report.recipes.find((recipe) => recipe.recipeId.endsWith("missing")).counts.NOT_RUN,
+    2,
+  );
+  assert.match(reportText(report), /storage-object\/gcs\/missing: NOT RUN \(2 rows\)/);
+  assert.equal(report.fixtureIndexSha256, fixtureObject.indexSha256);
+});
+
+test("the report says how many production rows have a body layout that cannot be judged, and the layout is judged where known", () => {
+  const fixture = fixtureDirectory();
+  const journal = localJournal("aaaabbbbccccdddd0001", localRows("aaaabbbbccccdddd0001"));
+  const report = compareReport({
+    fixture: loadFixture(fixture),
+    journal,
+    localBucket: LOCAL_BUCKET,
+    localProject: LOCAL_PROJECT,
+    receipt: JSON.parse(readFileSync(receiptFor(journal, fixture), "utf8")),
+  });
+  // The synthetic recording carries no byte count, so no layout is known.
+  assert.equal(report.layoutUnjudgedProductionRows, 2);
+  assert.match(reportText(report), /body layout cannot be judged: 2/);
+  const known = loadFixture(fixture);
+  known.recipes.get("storage-object/gcs/a").forEach((row) => (row.layout = 74));
+  const judged = compareReport({
+    fixture: known,
+    journal,
+    localBucket: LOCAL_BUCKET,
+    localProject: LOCAL_PROJECT,
+    receipt: JSON.parse(readFileSync(receiptFor(journal, fixture), "utf8")),
+  });
+  assert.equal(judged.layoutUnjudgedProductionRows, 0);
+});
+
+test("the report text lists at most 30 frequent differences, 5 divergences per recipe and 4 differences per divergence, with values cut short", () => {
+  const long = "v".repeat(60);
+  const diffs = Array.from({ length: 5 }, (_, i) => ({
+    kind: "headerValue",
+    header: `h${i}`,
+    production: long,
+    local: long,
+  }));
+  const report = {
+    fixtureRunIds: ["r1", "r2"],
+    fireemu: { version: "v", commit: "c", binarySha256: "s" },
+    recorder: { commit: "rc" },
+    rehearsalResult: { status: "LOCAL_COMPLETE" },
+    total: {},
+    layoutUnjudgedProductionRows: 0,
+    differenceKinds: {},
+    byDifference: Object.fromEntries(Array.from({ length: 35 }, (_, i) => [`key${i}`, 100 - i])),
+    recipes: [
+      {
+        recipeId: "storage-object/gcs/a",
+        ran: true,
+        counts: { DIVERGENCE: 6 },
+        results: Array.from({ length: 6 }, (_, i) => ({
+          n: i + 1,
+          outcome: "DIVERGENCE",
+          route: "GET /x",
+          differences: diffs,
+        })),
+      },
+    ],
+  };
+  const text = reportText(report);
+  assert.equal(text.split("\n").filter((line) => /^ {2}\d+ {2}key/.test(line)).length, 30);
+  assert.match(text, /key29/);
+  assert.doesNotMatch(text, /key30/);
+  const shown = text.split("\n").filter((line) => line.startsWith("  #"));
+  assert.equal(shown.length, 5);
+  for (const line of shown) {
+    const parts = line.split(" | ");
+    assert.equal(parts.length, 4);
+    assert.match(parts[0], /headerValue h0 "v{39} "v{39}$/);
+    assert.doesNotMatch(line, /v{41}/);
+  }
+});
+
+test("a difference key keeps the first 48 characters of each value", () => {
+  const key = differenceKey({ kind: "status", production: "p".repeat(80), local: "l".repeat(80) });
+  assert.equal(key, `status "${"p".repeat(47)} -> "${"l".repeat(47)}`);
 });

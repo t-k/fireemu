@@ -5,6 +5,7 @@ import {
   INFRASTRUCTURE_HEADERS,
   maskText,
   NORMALIZATIONS,
+  layoutOverhead,
   normalizeBody,
   normalizeExchange,
   normalizeHeaders,
@@ -29,10 +30,10 @@ test("the context needs a run ID, a bucket and a project", () => {
 });
 
 test("every mask has an ID, a mask and a reason", () => {
-  assert.ok(NORMALIZATIONS.length >= 14);
+  assert.ok(NORMALIZATIONS.length >= 16);
   for (const row of NORMALIZATIONS) {
     assert.match(row.id, /^[A-Z_]+$/);
-    assert.match(row.mask, /^<[A-Z_]+(:n)?>$/);
+    assert.match(row.mask, /^(<[A-Z_]+(:[a-zA-Z:]+)?>|\(keys sorted\))$/);
     assert.ok(row.reason.length > 20, row.id);
   }
   assert.equal(new Set(NORMALIZATIONS.map((row) => row.id)).size, NORMALIZATIONS.length);
@@ -40,6 +41,12 @@ test("every mask has an ID, a mask and a reason", () => {
     assert.equal(name, name.toLowerCase());
     assert.ok(reason.length > 5);
   }
+  // A mask never hides a format: the generation reason says a local counter is a difference.
+  assert.match(
+    NORMALIZATIONS.find((row) => row.id === "GEN").reason,
+    /not masked and is a difference/,
+  );
+  assert.match(INFRASTRUCTURE_HEADERS["content-length"], /layout is judged separately/);
 });
 
 test("the run ID, the bucket and the project are masked, the bucket before the project it contains", () => {
@@ -71,11 +78,17 @@ test("download tokens are masked to their order of first appearance", () => {
   assert.equal(maskText(`${a},${b},${a}`, ctx()), "<TOKEN:1>,<TOKEN:2>,<TOKEN:1>");
 });
 
-test("times, upload IDs, page tokens, API keys and JWTs are masked", () => {
+test("times keep their number of fractional digits; upload IDs, page tokens, API keys and JWTs are masked", () => {
   const c = ctx();
   assert.equal(
     maskText("2026-09-30T23:14:41.570Z and 2026-09-30T23:14:41Z", c),
-    "<TIME> and <TIME>",
+    "<TIME:3> and <TIME:0>",
+  );
+  assert.equal(maskText("2026-10-01T01:24:29.241904125Z", c), "<TIME:9>");
+  assert.equal(maskText("2026-10-01T01:24:29.241904Z", c), "<TIME:6>");
+  assert.notEqual(
+    maskText("2026-10-01T01:24:29.241Z", c),
+    maskText("2026-10-01T01:24:29.241904125Z", c),
   );
   assert.equal(maskText("Wed, 30 Sep 2026 23:14:40 GMT", c), "<HTTPDATE>");
   assert.equal(maskText("Mon, 01 Jan 1990 00:00:00 GMT", c), "Mon, 01 Jan 1990 00:00:00 GMT");
@@ -87,6 +100,10 @@ test("times, upload IDs, page tokens, API keys and JWTs are masked", () => {
     "o?name=x&upload_id=<UPLOAD_ID>&upload_protocol=resumable",
   );
   assert.equal(maskText("AP6rU81BlvOGz-fcTGYWUv7Mij3H11bxS9bQ", c), "<UPLOAD_ID>");
+  assert.equal(
+    maskText("o?upload_id=f1&upload_protocol=resumable", c),
+    "o?upload_id=<UPLOAD_ID>&upload_protocol=resumable",
+  );
   assert.equal(maskText("?pageToken=c3RvcmFnZS1v==&x=1", c), "?pageToken=<PAGE_TOKEN>&x=1");
   assert.equal(maskText("?key=sha256:abc&x=1", c), "?key=<API_KEY>&x=1");
   assert.equal(maskText("a.eyJhbGciOiJSUzI1NiJ9.eyJpc3MiOiJ4In0.c2ln b", c), "a.<JWT> b");
@@ -101,6 +118,8 @@ test("response headers: infrastructure ones are left out, the rest is lower-case
     "x-goog-gcs-base-ts": "1a0f",
     "Content-Length": "5",
     "Transfer-Encoding": "chunked",
+    Connection: "keep-alive",
+    "Keep-Alive": "timeout=5",
     "Content-Type": "application/json; charset=UTF-8",
     "Cache-Control": "private, max-age=0",
     Expires: "Wed, 30 Sep 2026 23:14:40 GMT",
@@ -111,18 +130,52 @@ test("response headers: infrastructure ones are left out, the rest is lower-case
   assert.deepEqual(normalizeHeaders(headers, ctx()), {
     "cache-control": "private, max-age=0",
     "content-type": "application/json; charset=UTF-8",
-    etag: "<ETAG>",
+    etag: "<ETAG:1>",
     expires: "<HTTPDATE>",
     "last-modified": "<HTTPDATE>",
     "x-goog-generation": "<GEN:1>",
   });
 });
 
+test("an opaque etag is masked to its order of first appearance; any other form is kept, so that a different etag stays a difference", () => {
+  const c = ctx();
+  assert.equal(normalizeHeaders({ etag: "CKOZ3bi3l5cDEAE=" }, c).etag, "<ETAG:1>");
+  assert.equal(normalizeHeaders({ etag: "CKOZ3bi3l5cDEAM=" }, c).etag, "<ETAG:2>");
+  assert.equal(normalizeHeaders({ etag: "CKOZ3bi3l5cDEAE=" }, c).etag, "<ETAG:1>");
+  assert.equal(normalizeHeaders({ etag: '"1-1"' }, ctx()).etag, '"1-1"');
+  assert.equal(normalizeHeaders({ etag: 'W/"abc"' }, ctx()).etag, 'W/"abc"');
+  // The body's etag member shares the ordinals.
+  assert.equal(
+    normalizeBody(json({ etag: "CKOZ3bi3l5cDEAM=" }), "application/json", c).value.etag,
+    "<ETAG:2>",
+  );
+  assert.equal(
+    normalizeBody(json({ etag: '"1-1"' }), "application/json", ctx()).value.etag,
+    '"1-1"',
+  );
+});
+
+test("last-modified is masked only when it is an HTTP date", () => {
+  assert.equal(
+    normalizeHeaders({ "last-modified": "Wed, 30 Sep 2026 23:14:41 GMT" }, ctx())["last-modified"],
+    "<HTTPDATE>",
+  );
+  assert.equal(
+    normalizeHeaders({ "last-modified": "2026-09-30" }, ctx())["last-modified"],
+    "2026-09-30",
+  );
+  assert.equal(
+    normalizeHeaders({ "last-modified": "Wed, 30 Sep 2026 23:14:41 GMT extra" }, ctx())[
+      "last-modified"
+    ],
+    "<HTTPDATE> extra",
+  );
+});
+
 test("a quoted md5 etag is content-derived and kept, unless the recipe's bytes carry the run ID", () => {
   const etag = '"feea43e9b76fc31c34bcec403dcc4bf8"';
   assert.equal(normalizeHeaders({ etag }, ctx()).etag, etag);
   assert.equal(normalizeHeaders({ etag }, ctx({ contentCarriesRun: true })).etag, "<DIGEST>");
-  assert.equal(normalizeHeaders({ etag: "CKOZ3bi3l5cDEAE=" }, ctx()).etag, "<ETAG>");
   const hash = {
     "x-goog-hash": "crc32c=1Kspzg==, md5=/upD6bdvwxw0vOxAPcxL+A==",
     "x-range-md5": "fc47",
@@ -133,8 +186,9 @@ test("a quoted md5 etag is content-derived and kept, unless the recipe's bytes c
     assert.equal(value, "<DIGEST>");
 });
 
-test("a JSON body is parsed, its members sorted, and only the run-specific members masked", () => {
+test("a JSON body is parsed, its members keep production's order, and only the run-specific members are masked", () => {
   const body = json({
+    kind: "storage#object",
     name: `storage-object/${RUN}/a.bin`,
     bucket: BUCKET,
     generation: "1790810081541764",
@@ -152,35 +206,53 @@ test("a JSON body is parsed, its members sorted, and only the run-specific membe
   const out = normalizeBody(body, "application/json; charset=UTF-8", ctx());
   assert.equal(out.type, "json");
   assert.deepEqual(Object.keys(out.value), [
-    "bucket",
-    "crc32c",
-    "downloadTokens",
-    "etag",
-    "generation",
-    "items",
-    "md5Hash",
-    "metageneration",
+    "kind",
     "name",
+    "bucket",
+    "generation",
+    "metageneration",
+    "size",
+    "md5Hash",
+    "crc32c",
+    "etag",
+    "timeCreated",
+    "downloadTokens",
     "nextPageToken",
     "owner",
-    "size",
-    "timeCreated",
+    "items",
   ]);
   assert.deepEqual(out.value, {
-    bucket: "<BUCKET>",
-    crc32c: "1Kspzg==",
-    downloadTokens: "<TOKEN:1>",
-    etag: "<ETAG>",
-    generation: "<GEN:1>",
-    items: [{ name: "storage-object/<RUN>/b.bin" }],
-    md5Hash: "/upD6bdvwxw0vOxAPcxL+A==",
-    metageneration: "2",
+    kind: "storage#object",
     name: "storage-object/<RUN>/a.bin",
+    bucket: "<BUCKET>",
+    generation: "<GEN:1>",
+    metageneration: "2",
+    size: "5",
+    md5Hash: "/upD6bdvwxw0vOxAPcxL+A==",
+    crc32c: "1Kspzg==",
+    etag: "<ETAG:1>",
+    timeCreated: "<TIME:3>",
+    downloadTokens: "<TOKEN:1>",
     nextPageToken: "<PAGE_TOKEN>",
     owner: { entity: "<OWNER>" },
-    size: "5",
-    timeCreated: "<TIME>",
+    items: [{ name: "storage-object/<RUN>/b.bin" }],
   });
+});
+
+test("the user metadata map is the one object whose members are sorted; every other object keeps its order", () => {
+  const out = normalizeBody(
+    json({ z: 1, a: 2, metadata: { remove: "present", marker: "first" }, nested: { b: 1, a: 2 } }),
+    "application/json",
+    ctx(),
+  );
+  assert.deepEqual(Object.keys(out.value), ["z", "a", "metadata", "nested"]);
+  assert.deepEqual(Object.keys(out.value.metadata), ["marker", "remove"]);
+  assert.deepEqual(Object.keys(out.value.nested), ["b", "a"]);
+});
+
+test("a member name that carries the run, bucket or project is masked too", () => {
+  const out = normalizeBody(json({ [`k-${RUN}`]: 1, [PROJECT]: 2 }), "application/json", ctx());
+  assert.deepEqual(Object.keys(out.value), ["k-<RUN>", "<PROJECT>"]);
 });
 
 test("md5Hash and crc32c are masked only in a recipe whose bytes carry the run ID", () => {
@@ -211,25 +283,50 @@ test("owner.entity is masked only under owner", () => {
   );
 });
 
-test("identity members are masked: tokens, ids and times", () => {
+test("identity members are masked: tokens, ids, and times in their own format", () => {
   const body = json({
     idToken: "eyJhbGciOiJSUzI1NiJ9.x.y",
     refreshToken: "AMf-secret",
+    accessToken: "ya29.secret",
+    access_token: "ya29.other",
     localId: "SADGoN9u",
     email: "storage-object@example.com",
     createdAt: "1790810782675",
-    lastLoginAt: 1790810782675,
+    lastLoginAt: "1790810782675",
+    passwordUpdatedAt: 1790810782675,
     validSince: "1790810782",
+    lastRefreshAt: "2026-10-01T01:24:29.241Z",
   });
   assert.deepEqual(normalizeBody(body, "application/json; charset=UTF-8", ctx()).value, {
-    createdAt: "<EPOCH>",
-    email: "storage-object@example.com",
     idToken: "<JWT>",
-    lastLoginAt: "<EPOCH>",
-    localId: "<UID>",
     refreshToken: "<UID>",
-    validSince: "<EPOCH>",
+    accessToken: "<JWT>",
+    access_token: "<JWT>",
+    localId: "<UID>",
+    email: "storage-object@example.com",
+    createdAt: "<EPOCH:string:13>",
+    lastLoginAt: "<EPOCH:string:13>",
+    passwordUpdatedAt: "<EPOCH:number:13>",
+    validSince: "<EPOCH:string:10>",
+    lastRefreshAt: "<TIME:3>",
   });
+});
+
+test("a time in epoch form keeps its type and its digits, so another format is a difference", () => {
+  const mask = (value) =>
+    normalizeBody(json({ createdAt: value }), "application/json", ctx()).value.createdAt;
+  assert.notEqual(mask("1790810782675"), mask(1790810782675));
+  assert.notEqual(mask("1790810782675"), mask("1790810782"));
+  assert.equal(mask("not digits"), "not digits");
+  assert.notEqual(
+    normalizeBody(json({ lastRefreshAt: "2026-10-01T01:24:29.241Z" }), "application/json", ctx())
+      .value.lastRefreshAt,
+    normalizeBody(
+      json({ lastRefreshAt: "2026-10-01T01:24:29.241904125Z" }),
+      "application/json",
+      ctx(),
+    ).value.lastRefreshAt,
+  );
 });
 
 test("an error body keeps its code and message, with the names masked", () => {
@@ -377,4 +474,96 @@ test("routes are classed by method and path with the names removed", () => {
     "POST /storage/v1/b/<BUCKET>/o/<NAME>/copyTo/b/<BUCKET>/o/<NAME>",
   );
   assert.equal(route("POST", "/v1/accounts:signUp"), "POST /v1/accounts:signUp");
+});
+
+test("object bytes carrying the bucket or the project are masked too", () => {
+  const out = normalizeBody(
+    Buffer.from(`in ${BUCKET} of ${PROJECT}`, "latin1"),
+    "application/octet-stream",
+    ctx(),
+  );
+  assert.equal(Buffer.from(out.base64, "base64").toString("latin1"), "in <BUCKET> of <PROJECT>");
+});
+
+test("the layout is the bytes the answer had beyond the stored form, and unknown without a length", () => {
+  const stored = Buffer.from('{"a":1}');
+  assert.equal(layoutOverhead({ bodyBytes: 20, body: stored }), 13);
+  assert.equal(layoutOverhead({ bodyBytes: 7, body: stored }), 0);
+  assert.equal(layoutOverhead({ bodyBytes: 7, body: undefined }), 7);
+  for (const bodyBytes of [null, undefined, "7", 1.5, NaN])
+    assert.equal(layoutOverhead({ bodyBytes, body: stored }), null);
+  const exchange = {
+    method: "GET",
+    url: `https://x.example/storage/v1/b/${BUCKET}/o`,
+    status: 200,
+    headers: {},
+    body: stored,
+    bodyBytes: 20,
+  };
+  assert.equal(normalizeExchange(exchange, ctx()).layout, 13);
+  assert.equal(normalizeExchange({ ...exchange, bodyBytes: null }, ctx()).layout, null);
+});
+
+test("the fixed 1990 date is kept everywhere except where last-modified would be a run-specific date", () => {
+  const fixed = "Mon, 01 Jan 1990 00:00:00 GMT";
+  assert.equal(normalizeHeaders({ expires: fixed }, ctx()).expires, fixed);
+  assert.equal(normalizeHeaders({ "last-modified": fixed }, ctx())["last-modified"], "<HTTPDATE>");
+  assert.equal(
+    normalizeHeaders({ expires: "Wed, 30 Sep 2026 23:14:41 GMT" }, ctx()).expires,
+    "<HTTPDATE>",
+  );
+});
+
+test("headers come out sorted by name", () => {
+  assert.deepEqual(
+    Object.keys(normalizeHeaders({ b: "1", a: "1", c: "1", Aa: "1", B: "2" }, ctx())),
+    ["a", "aa", "b", "c"],
+  );
+});
+
+test("the query is sorted by name, then by value, so repeated names keep a stable order", () => {
+  const row = normalizeExchange(
+    {
+      method: "GET",
+      url: `https://storage.googleapis.com/storage/v1/b/${BUCKET}/o?b=1&a=2&a=1&c=0&b=0`,
+      status: 200,
+      headers: {},
+      body: Buffer.alloc(0),
+    },
+    ctx(),
+  );
+  assert.deepEqual(row.query, [
+    ["a", "1"],
+    ["a", "2"],
+    ["b", "0"],
+    ["b", "1"],
+    ["c", "0"],
+  ]);
+});
+
+test("the origin of selfLink and mediaLink is masked, the path and the query are not", () => {
+  const link = (origin, path) =>
+    normalizeBody(
+      json({
+        selfLink: `${origin}/storage/v1/b/${BUCKET}/o/${path}`,
+        nested: [{ mediaLink: `${origin}/download/storage/v1/b/${BUCKET}/o/${path}?alt=media` }],
+        other: `${origin}/kept`,
+      }),
+      "application/json",
+      ctx(),
+    ).value;
+  const production = link("https://www.googleapis.com", "a.bin");
+  assert.equal(production.selfLink, "<ORIGIN>/storage/v1/b/<BUCKET>/o/a.bin");
+  assert.equal(
+    production.nested[0].mediaLink,
+    "<ORIGIN>/download/storage/v1/b/<BUCKET>/o/a.bin?alt=media",
+  );
+  // The same links from a local run have the same masked form; another path does not.
+  assert.deepEqual(link("http://127.0.0.1:9199", "a.bin").selfLink, production.selfLink);
+  assert.notEqual(link("http://127.0.0.1:9199", "b.bin").selfLink, production.selfLink);
+  // Only these two members are masked.
+  assert.equal(production.other, "https://www.googleapis.com/kept");
+  assert.ok(
+    NORMALIZATIONS.some((row) => row.id === "ORIGIN" && /path and the query/.test(row.reason)),
+  );
 });

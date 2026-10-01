@@ -201,3 +201,24 @@ test("a recipe file has one row per line, and the index lists the masks", () => 
   assert.ok(index.normalizations.length >= 14);
   assert.equal(index.normalizationVersion, 1);
 });
+
+test("only a successful media read decides that an object's bytes carry the run ID", () => {
+  const rowsFor = (status) =>
+    normalizeRecipe(
+      {
+        recipeId: "storage-object/gcs/a",
+        exchanges: [
+          exchange(1, RUN1, {
+            status,
+            body: Buffer.from(`payload ${RUN1}`),
+            headers: { "content-type": "application/octet-stream", etag: `"${"a".repeat(32)}"` },
+          }),
+        ],
+      },
+      { runId: RUN1, bucket: BUCKET, project: PROJECT },
+    )[0];
+  assert.equal(rowsFor(206).headers.etag, "<DIGEST>");
+  assert.equal(rowsFor(200).headers.etag, "<DIGEST>");
+  assert.equal(rowsFor(207).headers.etag, `"${"a".repeat(32)}"`);
+  assert.equal(rowsFor(404).headers.etag, `"${"a".repeat(32)}"`);
+});

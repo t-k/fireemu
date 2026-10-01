@@ -114,6 +114,13 @@ test("JSON differences name the path, include absent members, and stop at the li
   assert.deepEqual(jsonDifferences(1, "1"), [{ path: "$", production: 1, local: "1" }]);
   const many = Object.fromEntries(Array.from({ length: 20 }, (_, i) => [`k${i}`, i]));
   assert.equal(jsonDifferences(many, {}).length, 8);
+  // The member order is judged only while there is room: a full list is not extended.
+  const swapped = jsonDifferences({ a: 1, b: 2 }, { b: 2, a: 1 });
+  assert.equal(swapped.length, 1);
+  assert.equal(swapped[0].memberOrder, true);
+  const full = jsonDifferences({ a: 1, b: 2 }, { b: 3, a: 1 }, "$", 1);
+  assert.deepEqual(full, [{ path: "$.b", production: 2, local: 3 }]);
+  assert.equal(jsonDifferences({ a: 1, b: 2 }, { b: 3, a: 1 }, "$", 2).length, 2);
 });
 
 test("identical exchanges have no differences", () => {
@@ -215,6 +222,7 @@ test("a recipe is compared pair by pair: MATCH, DIVERGENCE with the differences,
     MATCH: 2,
     DIVERGENCE: 1,
     LOCAL_UNIMPLEMENTED: 0,
+    TAINTED: 0,
     ONLY_PRODUCTION: 1,
     ONLY_LOCAL: 1,
   });
@@ -274,7 +282,114 @@ test("an empty comparison has nothing", () => {
     MATCH: 0,
     DIVERGENCE: 0,
     LOCAL_UNIMPLEMENTED: 0,
+    TAINTED: 0,
     ONLY_PRODUCTION: 0,
     ONLY_LOCAL: 0,
   });
+});
+
+test("the same members in another order are a difference of their own, at any depth", () => {
+  const order = (a, b) => jsonDifferences(a, b);
+  assert.deepEqual(order({ a: 1, b: 2 }, { b: 2, a: 1 }), [
+    { path: "$", memberOrder: true, production: ["a", "b"], local: ["b", "a"] },
+  ]);
+  assert.deepEqual(order({ o: { a: 1, b: 2 } }, { o: { b: 2, a: 1 } }), [
+    { path: "$.o", memberOrder: true, production: ["a", "b"], local: ["b", "a"] },
+  ]);
+  assert.deepEqual(order({ a: 1, b: 2 }, { a: 1, b: 2 }), []);
+  // Another set of members is a difference of members, not of order.
+  assert.deepEqual(
+    order({ a: 1, b: 2 }, { b: 2, c: 3 }).map((diff) => diff.memberOrder ?? false),
+    [false, false],
+  );
+  const rows = (keys) =>
+    row(1, { body: { type: "json", value: Object.fromEntries(keys.map((key) => [key, 1])) } });
+  assert.deepEqual(
+    differences(rows(["a", "b"]), rows(["b", "a"])).map((diff) => diff.kind),
+    ["memberOrder"],
+  );
+});
+
+test("the body layout is compared where both sides know it, and only then", () => {
+  const layout = (value) => row(1, { layout: value });
+  assert.deepEqual(differences(layout(74), layout(74)), []);
+  assert.deepEqual(differences(layout(74), layout(0)), [
+    { kind: "bodyLayout", production: 74, local: 0 },
+  ]);
+  assert.deepEqual(differences(layout(0), layout(74)), [
+    { kind: "bodyLayout", production: 0, local: 74 },
+  ]);
+  assert.deepEqual(differences(layout(74), layout(null)), []);
+  assert.deepEqual(differences(layout(null), layout(0)), []);
+  assert.deepEqual(differences(layout(74), row(1)), []);
+  // The layout is judged even when the parsed body is equal.
+  assert.deepEqual(
+    differences(layout(74), layout(0)).map((diff) => diff.kind),
+    ["bodyLayout"],
+  );
+});
+
+test("after a stand-in answer that disagrees with production, the rest of the recipe is TAINTED, never MATCH or DIVERGENCE", () => {
+  const stand = {
+    "content-type": "application/json; charset=UTF-8",
+    "cache-control": "private",
+    [STANDIN_HEADER]: "1",
+  };
+  const production = [row(1), row(2, { status: 412 }), row(3), row(4), row(5)];
+  const local = same(production);
+  local[1] = { ...local[1], status: 400, headers: stand };
+  local[2].status = 404;
+  local.splice(3, 1);
+  local.push(row(9, { path: "/storage/v1/b/<BUCKET>/o/storage-object/<RUN>/extra.bin" }));
+  const results = compareRecipe({ production, local });
+  assert.deepEqual(outcomes(results), [
+    "MATCH",
+    "LOCAL_UNIMPLEMENTED",
+    "TAINTED",
+    "TAINTED",
+    "TAINTED",
+    "TAINTED",
+  ]);
+  assert.deepEqual(results[2], {
+    outcome: "TAINTED",
+    n: 3,
+    route: production[2].route,
+    was: "DIVERGENCE",
+  });
+  assert.equal(results[3].was, "ONLY_PRODUCTION");
+  assert.equal(results.at(-1).was, "ONLY_LOCAL");
+  assert.equal(results.at(-1).n, null);
+  assert.deepEqual(summarize(results).TAINTED, results.length - 2);
+});
+
+test("a stand-in answer that agrees with production taints nothing", () => {
+  const stand = {
+    "content-type": "application/json; charset=UTF-8",
+    "cache-control": "private",
+    [STANDIN_HEADER]: "1",
+  };
+  const production = [row(1, { status: 412 }), row(2)];
+  const local = same(production);
+  local[0].headers = stand;
+  assert.deepEqual(outcomes(compareRecipe({ production, local })), [
+    "LOCAL_UNIMPLEMENTED",
+    "MATCH",
+  ]);
+});
+
+test("a later stand-in answer after the taint stays LOCAL_UNIMPLEMENTED", () => {
+  const stand = {
+    "content-type": "application/json; charset=UTF-8",
+    "cache-control": "private",
+    [STANDIN_HEADER]: "1",
+  };
+  const production = [row(1, { status: 412 }), row(2), row(3)];
+  const local = same(production);
+  local[0] = { ...local[0], status: 400, headers: stand };
+  local[2].headers = stand;
+  assert.deepEqual(outcomes(compareRecipe({ production, local })), [
+    "LOCAL_UNIMPLEMENTED",
+    "TAINTED",
+    "LOCAL_UNIMPLEMENTED",
+  ]);
 });

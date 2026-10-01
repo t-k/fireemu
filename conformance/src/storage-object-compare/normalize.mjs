@@ -29,9 +29,14 @@ export const NORMALIZATIONS = Object.freeze([
     id: "GEN",
     mask: "<GEN:n>",
     reason:
-      "a generation is a time in production and a counter locally; n is the order of first appearance in the recipe, so equal and different generations stay distinguishable",
+      "a generation in production is a 16-digit time in microseconds, which differs for each run; n is the order of first appearance in the recipe, so equal and different generations stay distinguishable. A local value that is not 16 digits (a counter) is not masked and is a difference",
   },
-  { id: "TIME", mask: "<TIME>", reason: "timestamps (RFC 3339) are the time of the run" },
+  {
+    id: "TIME",
+    mask: "<TIME:d>",
+    reason:
+      "timestamps (RFC 3339) are the time of the run; d is the number of fractional digits, which is part of the format and is compared",
+  },
   {
     id: "HTTPDATE",
     mask: "<HTTPDATE>",
@@ -39,9 +44,9 @@ export const NORMALIZATIONS = Object.freeze([
   },
   {
     id: "ETAG",
-    mask: "<ETAG>",
+    mask: "<ETAG:n>",
     reason:
-      "an opaque etag is derived from the generation; a quoted md5 etag is content-derived and is kept",
+      "an opaque etag (base64 shape) is derived from the generation and the metageneration; n is the order of first appearance in the recipe, so a changed etag stays visible. A quoted md5 etag is content-derived and is kept; any other form is not masked",
   },
   {
     id: "TOKEN",
@@ -50,6 +55,12 @@ export const NORMALIZATIONS = Object.freeze([
       "download tokens (UUIDs) are random; n is the order of first appearance in the recipe, so reuse and replacement stay distinguishable",
   },
   { id: "UPLOAD_ID", mask: "<UPLOAD_ID>", reason: "resumable session IDs are opaque and random" },
+  {
+    id: "ORIGIN",
+    mask: "<ORIGIN>",
+    reason:
+      "the selfLink and mediaLink members point at the server that answered: production at www.googleapis.com and storage.googleapis.com, a local run at its own address, by design. Only scheme://host:port is masked; the path and the query are compared exactly",
+  },
   {
     id: "PAGE_TOKEN",
     mask: "<PAGE_TOKEN>",
@@ -60,15 +71,21 @@ export const NORMALIZATIONS = Object.freeze([
   { id: "API_KEY", mask: "<API_KEY>", reason: "an API key is a credential" },
   { id: "UID", mask: "<UID>", reason: "identity ids and refresh tokens are random credentials" },
   {
+    id: "METADATA_ORDER",
+    mask: "(keys sorted)",
+    reason:
+      "the order of the members of a user metadata map is not stable in production (the two recordings sent the same keys in opposite orders), so that map's keys are sorted; the order of every other object's members is kept",
+  },
+  {
     id: "OWNER",
     mask: "<OWNER>",
     reason: "a copied object's owner.entity names the requesting principal (an account email)",
   },
   {
     id: "EPOCH",
-    mask: "<EPOCH>",
+    mask: "<EPOCH:type:digits>",
     reason:
-      "account creation, sign-in and validity times (createdAt, lastLoginAt, validSince and the like) are the time of the run",
+      "account creation, sign-in and validity times given as epoch numbers (createdAt, lastLoginAt, validSince and the like) are the time of the run; the JSON type (string or number) and the number of digits are part of the format and are compared",
   },
   {
     id: "DIGEST",
@@ -85,7 +102,8 @@ export const INFRASTRUCTURE_HEADERS = Object.freeze({
   "alt-svc": "HTTP/3 advertisement of the Google front end",
   "x-guploader-uploadid": "a random identifier of the serving upload server",
   "x-goog-gcs-base-ts": "an internal serving timestamp",
-  "content-length": "derived from the body, which is compared",
+  "content-length":
+    "depends on the bucket, project and run names that are masked, and is absent on compressed and chunked responses; the body's layout is judged separately (bodyBytes beyond the compact form)",
   "transfer-encoding": "transport framing",
   connection: "transport",
   "keep-alive": "transport",
@@ -102,7 +120,15 @@ const GENERATION = /(?<![\d])\d{16}(?![\d])/g;
 export function createContext({ runId, bucket, project, contentCarriesRun = false }) {
   for (const [name, value] of Object.entries({ runId, bucket, project }))
     if (typeof value !== "string" || value === "") throw new Error(`context needs ${name}`);
-  return { runId, bucket, project, contentCarriesRun, generations: new Map(), tokens: new Map() };
+  return {
+    runId,
+    bucket,
+    project,
+    contentCarriesRun,
+    generations: new Map(),
+    tokens: new Map(),
+    etags: new Map(),
+  };
 }
 
 const ordinal = (map, value) => {
@@ -124,7 +150,7 @@ export function maskText(text, ctx) {
     head.endsWith("key=") ? `${head}<API_KEY>` : `${head}<PAGE_TOKEN>`,
   );
   out = out.replace(UUID, (value) => `<TOKEN:${ordinal(ctx.tokens, value)}>`);
-  out = out.replace(ISO, "<TIME>");
+  out = out.replace(ISO, (value) => `<TIME:${(/\.(\d+)Z$/.exec(value)?.[1] ?? "").length}>`);
   out = out.replace(HTTPDATE, (value) => (value === STATIC_HTTPDATE ? value : "<HTTPDATE>"));
   out = out.replace(GENERATION, (value) => `<GEN:${ordinal(ctx.generations, value)}>`);
   return out;
@@ -134,11 +160,23 @@ const OPAQUE_ETAG = /^[A-Za-z0-9+/_-]+=*$/;
 
 const DIGEST_HEADERS = new Set(["x-goog-hash", "x-range-md5", "x-goog-running-hash"]);
 
+const HTTPDATE_WHOLE = new RegExp(`^${HTTPDATE.source}$`);
+const QUOTED_MD5 = /^"[0-9a-f]{32}"$/;
+
+/** An opaque etag is masked to its order of first appearance, so that a change of etag stays visible. */
+function maskEtag(value, ctx) {
+  if (!ctx.etags.has(value)) ctx.etags.set(value, ctx.etags.size + 1);
+  return `<ETAG:${ctx.etags.get(value)}>`;
+}
+
 function maskHeaderValue(name, value, ctx) {
   if (ctx.contentCarriesRun && DIGEST_HEADERS.has(name)) return "<DIGEST>";
-  if (name === "etag")
-    return /^"[0-9a-f]{32}"$/.test(value) ? (ctx.contentCarriesRun ? "<DIGEST>" : value) : "<ETAG>";
-  if (name === "last-modified") return "<HTTPDATE>";
+  if (name === "etag") {
+    // Only the opaque shape is masked: a quoted md5 is content-derived, any other form is a difference.
+    if (QUOTED_MD5.test(value)) return ctx.contentCarriesRun ? "<DIGEST>" : value;
+    return OPAQUE_ETAG.test(value) ? maskEtag(value, ctx) : maskText(value, ctx);
+  }
+  if (name === "last-modified" && HTTPDATE_WHOLE.test(value)) return "<HTTPDATE>";
   return maskText(value, ctx);
 }
 
@@ -167,29 +205,38 @@ const SECRET_MEMBERS = new Map([
 const EPOCH_MEMBERS = new Set([
   "createdAt",
   "lastLoginAt",
-  "lastRefreshAt",
   "validSince",
   "passwordUpdatedAt",
   "expiresAt",
   "expirationTime",
 ]);
 const DIGEST_MEMBERS = new Set(["md5Hash", "crc32c"]);
+const ORIGIN_MEMBERS = new Set(["selfLink", "mediaLink"]);
+const ORIGIN_PREFIX = /^[a-z][a-z0-9+.-]*:\/\/[^/?#]*/i;
 
 function maskJson(value, ctx, key = "", parent = "") {
   if (Array.isArray(value)) return value.map((item) => maskJson(item, ctx, key, parent));
   if (value && typeof value === "object") {
+    // The members keep the order production sent them in: the order is part of the answer. The one
+    // exception is the user metadata map, whose order production does not keep stable (the two
+    // recordings sent the same two keys in opposite orders).
     const out = {};
-    for (const name of Object.keys(value).toSorted())
-      out[name] = maskJson(value[name], ctx, name, key);
+    const names = key === "metadata" ? Object.keys(value).toSorted() : Object.keys(value);
+    for (const name of names) out[maskText(name, ctx)] = maskJson(value[name], ctx, name, key);
     return out;
   }
   if (typeof value === "string" && parent === "owner" && key === "entity") return "<OWNER>";
-  if ((typeof value === "string" || typeof value === "number") && EPOCH_MEMBERS.has(key))
-    return "<EPOCH>";
+  if ((typeof value === "string" || typeof value === "number") && EPOCH_MEMBERS.has(key)) {
+    // A time in epoch form keeps its type and its number of digits.
+    const text = String(value);
+    if (/^\d+$/.test(text)) return `<EPOCH:${typeof value}:${text.length}>`;
+  }
   if (typeof value === "string") {
     if (SECRET_MEMBERS.has(key)) return SECRET_MEMBERS.get(key);
     if (ctx.contentCarriesRun && DIGEST_MEMBERS.has(key)) return "<DIGEST>";
-    if (key === "etag") return OPAQUE_ETAG.test(value) ? "<ETAG>" : maskText(value, ctx);
+    if (ORIGIN_MEMBERS.has(key)) return maskText(value, ctx).replace(ORIGIN_PREFIX, "<ORIGIN>");
+    if (key === "etag")
+      return OPAQUE_ETAG.test(value) ? maskEtag(value, ctx) : maskText(value, ctx);
     return maskText(value, ctx);
   }
   return value;
@@ -215,8 +262,18 @@ export function normalizeBody(bytes, contentType, ctx) {
     const text = bytes.toString("utf8");
     if (!text.includes("\uFFFD")) return { type: "text", value: maskText(text, ctx) };
   }
-  // Bytes that carry the run ID are compared with the ID masked.
-  const masked = Buffer.from(bytes.toString("latin1").split(ctx.runId).join("<RUN>"), "latin1");
+  // Bytes that carry the run ID, the bucket or the project are compared with them masked.
+  const masked = Buffer.from(
+    bytes
+      .toString("latin1")
+      .split(ctx.bucket)
+      .join("<BUCKET>")
+      .split(ctx.project)
+      .join("<PROJECT>")
+      .split(ctx.runId)
+      .join("<RUN>"),
+    "latin1",
+  );
   const sha256 = createHash("sha256").update(masked).digest("hex");
   if (masked.length <= INLINE_BYTES)
     return { type: "bytes", length: masked.length, sha256, base64: masked.toString("base64") };
@@ -231,6 +288,16 @@ export function routeOf(method, pathname) {
   if (transfer)
     return `${method} /storage/v1/b/<BUCKET>/o/<NAME>/${transfer[1]}/b/<BUCKET>/o/<NAME>`;
   return `${method} ${path.replace(/^(\/(?:storage\/v1|v0)\/b\/<BUCKET>\/o)\/.+$/, "$1/<NAME>")}`;
+}
+
+/**
+ * The bytes of the body as sent, beyond the stored form: the recorder stores a JSON body re-serialized
+ * compactly, and keeps the length it received in `bodyBytes`. The difference is the layout
+ * (whitespace) production used; it is null when the length is not known.
+ */
+export function layoutOverhead(exchange) {
+  if (!Number.isSafeInteger(exchange.bodyBytes)) return null;
+  return exchange.bodyBytes - (exchange.body?.length ?? 0);
 }
 
 /**
@@ -260,6 +327,7 @@ export function normalizeExchange(exchange, ctx) {
     status: exchange.status,
     contentType: exchange.headers?.["content-type"] ?? null,
     headers,
+    layout: layoutOverhead(exchange),
     body: normalizeBody(exchange.body, exchange.headers?.["content-type"], ctx),
   };
 }

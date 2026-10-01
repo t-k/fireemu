@@ -12,8 +12,16 @@ import { fileURLToPath } from "node:url";
 const STANDIN = join(dirname(fileURLToPath(import.meta.url)), "rehearsal-standin.mjs");
 const sha256File = (path) => createHash("sha256").update(readFileSync(path)).digest("hex");
 
-const git = (directory, ...args) =>
-  spawnSync("git", ["-C", directory, ...args], { encoding: "utf8" }).stdout.trim();
+/** The SHA-256 of the stand-in a rehearsal runs with; a receipt must name the one in this tree. */
+export const standinSha256 = () => sha256File(STANDIN);
+
+/** Run git in `directory`; a failure (not a repository, no git) is an error, never empty output. */
+function git(directory, ...args) {
+  const result = spawnSync("git", ["-C", directory, ...args], { encoding: "utf8" });
+  if (result.error || result.status !== 0)
+    throw new Error(`git ${args[0]} failed in ${directory}: not a usable git checkout`);
+  return result.stdout.trim();
+}
 
 /** The sandbox profile that allows loopback and nothing else outbound (macOS). */
 export const LOOPBACK_PROFILE =
@@ -112,6 +120,8 @@ export async function rehearse({
   for (const [name, path] of Object.entries({ fireemuBinary, recorderDir, rulesFile, fixtureDir }))
     if (!path || !existsSync(path)) throw new Error(`${name} does not exist`);
   const recorderCommit = git(recorderDir, "rev-parse", "HEAD");
+  if (!/^[0-9a-f]{40}$/.test(recorderCommit))
+    throw new Error("the recorder checkout has no commit");
   if (git(recorderDir, "status", "--porcelain") !== "")
     throw new Error("the recorder checkout is not clean");
   mkdirSync(outDir, { recursive: true });
@@ -131,7 +141,9 @@ export async function rehearse({
     .findLast((line) => line.startsWith("{"));
   const parsed = summary ? JSON.parse(summary) : null;
   if (!parsed?.eventDirectory)
-    throw new Error(`the rehearsal did not report its journal (exit ${result.code})`);
+    throw new Error(
+      `the rehearsal did not report its journal (exit ${result.code}); stderr tail: ${JSON.stringify(result.stderr.slice(-300))}`,
+    );
   const journal = join(resolve(outDir), "journal.jsonl");
   copyFileSync(join(parsed.eventDirectory, "aggregate-events.jsonl"), journal);
   const receipt = {
@@ -141,7 +153,9 @@ export async function rehearse({
       commit: fireemuCommit,
     },
     recorder: { commit: recorderCommit, clean: true },
-    standinSha256: sha256File(STANDIN),
+    standinSha256: standinSha256(),
+    fixtureIndexSha256: sha256File(join(resolve(fixtureDir), "index.json")),
+    rulesSha256: sha256File(rulesFile),
     journalSha256: sha256File(journal),
     result: {
       status: parsed.status,

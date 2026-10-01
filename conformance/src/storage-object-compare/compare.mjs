@@ -9,6 +9,8 @@
 //   LOCAL_UNIMPLEMENTED   fireemu answered 501 (it does not serve the route), or the rehearsal's
 //                         stand-in answered in its place (it marks its answer with
 //                         `x-compare-standin`): neither a match nor a divergence;
+//   TAINTED               an exchange after a stand-in answer that disagrees with production in the
+//                         same recipe: the object's state is no longer fireemu's, so it is neither;
 //   ONLY_PRODUCTION / ONLY_LOCAL   an exchange the other side has no counterpart for.
 
 const queryNames = (row) => [...new Set(row.query.map(([name]) => name))].toSorted().join(",");
@@ -44,9 +46,9 @@ export function jsonDifferences(production, local, path = "$", limit = 8, out = 
   if (same(production, local)) return out;
   const isObject = (value) => value && typeof value === "object" && !Array.isArray(value);
   if (isObject(production) && isObject(local)) {
-    for (const key of [
-      ...new Set([...Object.keys(production), ...Object.keys(local)]),
-    ].toSorted()) {
+    const productionKeys = Object.keys(production);
+    const localKeys = Object.keys(local);
+    for (const key of [...new Set([...productionKeys, ...localKeys])].toSorted()) {
       if (!(key in local))
         out.push({ path: `${path}.${key}`, production: production[key], local: "<absent>" });
       else if (!(key in production))
@@ -54,6 +56,14 @@ export function jsonDifferences(production, local, path = "$", limit = 8, out = 
       else jsonDifferences(production[key], local[key], `${path}.${key}`, limit, out);
       if (out.length >= limit) break;
     }
+    // The same members in another order are a difference: the order is part of the answer.
+    if (
+      out.length < limit &&
+      productionKeys.length === localKeys.length &&
+      productionKeys.every((key) => key in local) &&
+      productionKeys.join("\u0000") !== localKeys.join("\u0000")
+    )
+      out.push({ path, memberOrder: true, production: productionKeys, local: localKeys });
   } else if (
     Array.isArray(production) &&
     Array.isArray(local) &&
@@ -94,8 +104,8 @@ export function differences(production, local) {
   if (production.body.type !== local.body.type)
     found.push({ kind: "bodyType", production: production.body.type, local: local.body.type });
   else if (production.body.type === "json") {
-    for (const diff of jsonDifferences(production.body.value, local.body.value))
-      found.push({ kind: "body", ...diff });
+    for (const { memberOrder, ...diff } of jsonDifferences(production.body.value, local.body.value))
+      found.push({ kind: memberOrder ? "memberOrder" : "body", ...diff });
   } else if (!same(production.body, local.body)) {
     found.push({
       kind: "body",
@@ -106,6 +116,13 @@ export function differences(production, local) {
       local: local.body.value ?? { length: local.body.length, sha256: local.body.sha256 },
     });
   }
+  // The bytes beyond the compact form (whitespace): only where both sides know their length.
+  if (
+    Number.isSafeInteger(production.layout) &&
+    Number.isSafeInteger(local.layout) &&
+    production.layout !== local.layout
+  )
+    found.push({ kind: "bodyLayout", production: production.layout, local: local.layout });
   const requestQuery = same(production.query, local.query)
     ? []
     : [{ kind: "requestQuery", production: production.query, local: local.query }];
@@ -121,37 +138,49 @@ export const STANDIN_HEADER = "x-compare-standin";
  */
 export function compareRecipe({ production, local }) {
   const results = [];
+  let tainted = false;
   for (const [i, j] of align(production, local, alignmentKey)) {
-    if (i === null) {
-      results.push({ outcome: "ONLY_LOCAL", local: local[j] });
-      continue;
+    let result;
+    if (i === null) result = { outcome: "ONLY_LOCAL", local: local[j] };
+    else if (j === null)
+      result = { outcome: "ONLY_PRODUCTION", n: production[i].n, production: production[i] };
+    else {
+      const standIn = STANDIN_HEADER in local[j].headers;
+      if (standIn || (local[j].status === 501 && production[i].status !== 501)) {
+        result = {
+          outcome: "LOCAL_UNIMPLEMENTED",
+          n: production[i].n,
+          route: production[i].route,
+          reason: standIn ? "answered by the rehearsal stand-in" : "fireemu answered 501",
+          productionStatus: production[i].status,
+          localStatus: local[j].status,
+        };
+        // A stand-in answer that disagrees with production leaves the object in another state: what
+        // follows in this recipe says nothing about fireemu.
+        if (standIn && local[j].status !== production[i].status) tainted = true;
+        results.push(result);
+        continue;
+      }
+      const found = differences(production[i], local[j]);
+      result =
+        found.length === 0
+          ? { outcome: "MATCH", n: production[i].n }
+          : {
+              outcome: "DIVERGENCE",
+              n: production[i].n,
+              route: production[i].route,
+              differences: found,
+            };
     }
-    if (j === null) {
-      results.push({ outcome: "ONLY_PRODUCTION", n: production[i].n, production: production[i] });
-      continue;
-    }
-    const standIn = STANDIN_HEADER in local[j].headers;
-    if (standIn || (local[j].status === 501 && production[i].status !== 501)) {
-      results.push({
-        outcome: "LOCAL_UNIMPLEMENTED",
-        n: production[i].n,
-        route: production[i].route,
-        reason: standIn ? "answered by the rehearsal stand-in" : "fireemu answered 501",
-        productionStatus: production[i].status,
-        localStatus: local[j].status,
-      });
-      continue;
-    }
-    const found = differences(production[i], local[j]);
     results.push(
-      found.length === 0
-        ? { outcome: "MATCH", n: production[i].n }
-        : {
-            outcome: "DIVERGENCE",
-            n: production[i].n,
-            route: production[i].route,
-            differences: found,
-          },
+      tainted
+        ? {
+            outcome: "TAINTED",
+            n: result.n ?? null,
+            route: result.route ?? result.local?.route ?? null,
+            was: result.outcome,
+          }
+        : result,
     );
   }
   return results;
@@ -162,6 +191,7 @@ export function summarize(results) {
     MATCH: 0,
     DIVERGENCE: 0,
     LOCAL_UNIMPLEMENTED: 0,
+    TAINTED: 0,
     ONLY_PRODUCTION: 0,
     ONLY_LOCAL: 0,
   };

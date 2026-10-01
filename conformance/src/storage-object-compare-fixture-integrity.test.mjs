@@ -6,13 +6,14 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import { digestRows, FIXTURE_SCHEMA_VERSION } from "./storage-object-compare/fixture.mjs";
 import { loadFixture } from "./storage-object-compare/run.mjs";
 import { scanFixtureText } from "./storage-object-compare/scan.mjs";
 
 const DIRECTORY = fileURLToPath(new URL("../fixtures/storage-object-production/", import.meta.url));
 const fixture = loadFixture(DIRECTORY);
 const MASKS =
-  /<(RUN|BUCKET|PROJECT|GEN:\d+|TIME|HTTPDATE|ETAG|TOKEN:\d+|UPLOAD_ID|PAGE_TOKEN|JWT|API_KEY|UID|EPOCH|OWNER|DIGEST)>/g;
+  /<(RUN|BUCKET|PROJECT|GEN:\d+|TIME|HTTPDATE|ETAG|TOKEN:\d+|UPLOAD_ID|ORIGIN|PAGE_TOKEN|JWT|API_KEY|UID|EPOCH|OWNER|DIGEST)>/g;
 
 test("the index names two recordings that normalize to the same rows", () => {
   assert.equal(fixture.index.runIds.length, 2);
@@ -22,6 +23,11 @@ test("the index names two recordings that normalize to the same rows", () => {
     assert.deepEqual(Object.keys(entry.digests).toSorted(), fixture.index.runIds.toSorted());
     assert.equal(new Set(Object.values(entry.digests)).size, 1, entry.recipeId);
   }
+});
+
+test("the committed index has the schema version the tool writes", () => {
+  assert.equal(fixture.index.schemaVersion, FIXTURE_SCHEMA_VERSION);
+  assert.equal(FIXTURE_SCHEMA_VERSION, 1);
 });
 
 test("there are 26 recipes and 2,436 exchanges, and every file is listed in the index", () => {
@@ -128,4 +134,56 @@ test("the recorded production shapes the closure depends on are present", () => 
     (row) => row.method === "PUT" && row.status === 200,
   );
   assert.equal(put.body.value.kind, "storage#object");
+});
+
+test("every recipe file matches the digests the index states for it", () => {
+  for (const entry of fixture.index.recipes) {
+    const digest = digestRows(fixture.recipes.get(entry.recipeId));
+    for (const [run, expected] of Object.entries(entry.digests))
+      assert.equal(digest, expected, `${entry.recipeId} (${run})`);
+  }
+});
+
+test("the layout and the order of production's members are in the fixture", () => {
+  // Production pretty-prints its JSON: the pretty-printing is bytes beyond the compact form.
+  const rows = [...fixture.recipes.values()].flat();
+  const jsonRows = rows.filter((row) => row.body.type === "json");
+  assert.ok(jsonRows.length > 1500);
+  assert.ok(jsonRows.filter((row) => row.layout > 0).length > 1500);
+  assert.ok(rows.every((row) => row.layout === null || Number.isSafeInteger(row.layout)));
+  // An object resource has production's member order, not alphabetical order.
+  const resource = fixture.recipes
+    .get("storage-object/gcs/download")
+    .find((row) => row.body.type === "json" && row.body.value.kind === "storage#object");
+  assert.deepEqual(Object.keys(resource.body.value).slice(0, 6), [
+    "kind",
+    "id",
+    "selfLink",
+    "mediaLink",
+    "name",
+    "bucket",
+  ]);
+});
+
+test("times keep their format: millisecond fractions in every recorded time, and no epoch hides a time of another format", () => {
+  const text = readdirSync(DIRECTORY)
+    .filter((name) => name !== "index.json")
+    .map((name) => readFileSync(join(DIRECTORY, name), "utf8"))
+    .join("\n");
+  const times = new Set([...text.matchAll(/<TIME:(\d+)>/g)].map(([, digits]) => digits));
+  assert.deepEqual([...times], ["3"]);
+  assert.ok(/"lastRefreshAt":"<TIME:3>"/.test(text));
+  assert.ok(/"createdAt":"<EPOCH:string:13>"/.test(text));
+  assert.ok(/"passwordUpdatedAt":"<EPOCH:number:13>"/.test(text));
+});
+
+test("the index records the scan: a private list was used, with its entry count and digest, and no path", () => {
+  assert.equal(fixture.index.scan.forbiddenFileUsed, true);
+  assert.ok(fixture.index.scan.forbiddenEntries >= 1);
+  assert.match(fixture.index.scan.forbiddenListSha256, /^[0-9a-f]{64}$/);
+  assert.deepEqual(Object.keys(fixture.index.scan).toSorted(), [
+    "forbiddenEntries",
+    "forbiddenFileUsed",
+    "forbiddenListSha256",
+  ]);
 });

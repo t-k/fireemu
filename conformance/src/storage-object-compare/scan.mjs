@@ -24,7 +24,9 @@ const PATTERNS = [
  * A 1990 `Expires` date is the one HTTP date production sends as a constant.
  */
 export function scanFixtureText(text, { runIds = [], forbidden = [] } = {}) {
-  // A SHA-256 or an inline base64 body is digits and letters by chance: it is not a number or an ID.
+  // An inline base64 body is scanned decoded; a SHA-256 is digits and letters by chance.
+  for (const [, encoded] of text.matchAll(/"base64":\s*"([A-Za-z0-9+/=]+)"/g))
+    scanFixtureText(Buffer.from(encoded, "base64").toString("latin1"), { runIds, forbidden });
   const checked = text
     .replaceAll("Mon, 01 Jan 1990 00:00:00 GMT", "<static>")
     .replace(/"(sha256|base64)":"[A-Za-z0-9+/=]+"/g, '"$1":"<data>"')

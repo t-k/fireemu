@@ -3928,3 +3928,70 @@ fn a_precondition_refused_commit_outside_a_transaction_leaves_every_transaction_
             .is_ok());
     }
 }
+
+/// A request whose clock is behind the last commit time reads at that commit time (the snapshot never precedes a commit it
+/// can already see): the pending snapshot and the first-read time both take the later of the two.
+#[test]
+fn a_first_use_behind_the_last_commit_time_reads_at_the_commit_time() {
+    let mut s = FirestoreState::new();
+    s.commit(&[set("ahead/a", &[])], None, t(5)).unwrap();
+    let txn = s.begin_read_write_transaction(t(2)).unwrap();
+    s.touch_transaction(&txn, t(3)).unwrap();
+    assert_eq!(s.transaction_read_time(&txn).unwrap(), t(5));
+    // The empty commit of a transaction that has read answers the time of its first read.
+    let committed = s.commit(&[], Some(&txn), t(4)).unwrap();
+    assert_eq!(committed.commit_time, t(5));
+}
+
+/// Every transaction query entry point of the store returns the page it ran and records it in the read set, so a
+/// document the page returned cannot be created or changed out of band while the transaction is active.
+#[test]
+fn every_transaction_query_entry_point_returns_its_page_and_records_it() {
+    use fireemu_core_firestore::query::{Query, QueryScope};
+    use fireemu_core_firestore::store::QueryExecutionId;
+    use fireemu_core_types::ids::CollectionId;
+    let ids = |docs: &[fireemu_core_firestore::store::Document]| -> Vec<String> {
+        docs.iter()
+            .map(|d| d.path.document_id().as_str().to_owned())
+            .collect()
+    };
+    let mut s = FirestoreState::new();
+    s.commit(
+        &[set("pg/a", &[]), set("pg/b", &[]), set("pg/c", &[])],
+        None,
+        t(0),
+    )
+    .unwrap();
+    let query = Query::new(QueryScope::collection(
+        None,
+        CollectionId::try_new("pg").unwrap(),
+    ))
+    .canonicalize()
+    .unwrap();
+    let txn = s.begin_transaction(false, t(1)).unwrap();
+    let execution = QueryExecutionId::from_value(7);
+    let (docs, _) = s
+        .run_query_in_transaction_with_stats_as_with_execution(&txn, &query, &query, execution, false)
+        .unwrap();
+    assert_eq!(ids(&docs), ["a", "b", "c"]);
+    let (docs, _) = s
+        .run_query_in_transaction_continuation_with_stats_as_with_execution(&txn, &query, &query, execution, false)
+        .unwrap();
+    assert_eq!(ids(&docs), ["a", "b", "c"]);
+    let paths = [path("pg/b"), path("pg/c")];
+    let (docs, stats) = s
+        .run_query_in_transaction_from_paths_with_stats_as_with_execution(&txn, &query, &query, &paths, execution, true, false)
+        .unwrap();
+    assert_eq!(ids(&docs), ["b", "c"]);
+    assert_eq!(stats.matched, 2);
+    let (docs, _) = s
+        .run_query_in_transaction_after_document_with_stats_as_with_execution(&txn, &query, &query, &path("pg/a"), execution, false)
+        .unwrap();
+    assert_eq!(ids(&docs), ["b", "c"]);
+    let (docs, _) = s
+        .run_query_in_transaction_after_document_with_stats(&txn, &query, &path("pg/b"))
+        .unwrap();
+    assert_eq!(ids(&docs), ["c"]);
+    // The execution is still unfinished (the pages said "not complete"); finishing it succeeds.
+    s.finish_transaction_query_execution(&txn, execution).unwrap();
+}

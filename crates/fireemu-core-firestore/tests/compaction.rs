@@ -6,8 +6,8 @@ use std::collections::BTreeMap;
 
 use fireemu_core_firestore::path::DocumentPath;
 use fireemu_core_firestore::store::{
-    CommitVersion, FirestoreError, FirestoreState, HistoryLimits, Precondition, Write, WriteOp,
-    READ_TIME_RETENTION_SECONDS,
+    CommitVersion, FirestoreError, FirestoreState, HistoryLimits, LimitScope, Precondition, Write,
+    WriteOp, READ_TIME_RETENTION_SECONDS,
 };
 use fireemu_core_firestore::value::Value;
 use fireemu_core_types::ids::{DatabaseId, ProjectId};
@@ -586,4 +586,106 @@ fn compaction_is_deterministic() {
     let floor = s.compact(t(89 * 60));
     assert_eq!(floor, s.compaction_floor());
     assert_eq!(s.retained_versions(), before);
+}
+
+/// A read version pins the history it needs only while its transaction is active: a finished
+/// transaction releases it, so the version it read can be reclaimed and the commit is admitted.
+#[test]
+fn an_active_transaction_pins_the_version_it_reads_and_a_finished_one_does_not() {
+    for finished in [false, true] {
+        let mut state = FirestoreState::with_history_limits(HistoryLimits {
+            max_bytes: u64::MAX,
+            max_versions: 2,
+        });
+        state
+            .commit(&[set("docs/a", &[("v", Value::Integer(1))])], None, t(0))
+            .unwrap();
+        state
+            .commit(&[set("docs/a", &[("v", Value::Integer(2))])], None, t(1))
+            .unwrap();
+        // A snapshot at the first version, begun just inside the retention window.
+        let transaction = state
+            .begin_transaction_at(t(0), t(READ_TIME_RETENTION_SECONDS - 1))
+            .unwrap();
+        if finished {
+            state.rollback(&transaction).unwrap();
+        }
+        let result = state.commit(
+            &[set("docs/b", &[])],
+            None,
+            t(READ_TIME_RETENTION_SECONDS + 1),
+        );
+        if finished {
+            result.expect("the version a finished transaction read can be reclaimed");
+        } else {
+            assert!(
+                matches!(result, Err(FirestoreError::HistoryCapacity(_))),
+                "the pinned first version cannot be reclaimed: {result:?}"
+            );
+        }
+    }
+}
+
+/// A request that finds another transaction past its deadline finishes it and compacts: the history that transaction
+/// pinned is reclaimed by that request, not only by the next commit.
+#[test]
+fn a_request_that_finds_an_expired_transaction_reclaims_the_history_it_pinned() {
+    let mut state = FirestoreState::with_limit_scope(LimitScope::Production);
+    state
+        .commit(&[set("docs/a", &[("v", Value::Integer(1))])], None, t(0))
+        .unwrap();
+    state
+        .commit(&[set("docs/a", &[("v", Value::Integer(2))])], None, t(1))
+        .unwrap();
+    // The pinning snapshot idles out 120 s after its begin (60 s idle limit plus the strict allowance).
+    let _pinning = state
+        .begin_transaction_at(t(0), t(READ_TIME_RETENTION_SECONDS - 1))
+        .unwrap();
+    let live = state
+        .begin_read_write_transaction(t(READ_TIME_RETENTION_SECONDS + 100))
+        .unwrap();
+    assert_eq!(state.retained_versions(), 2);
+    state
+        .touch_transaction(&live, t(READ_TIME_RETENTION_SECONDS + 120))
+        .unwrap();
+    assert_eq!(
+        state.retained_versions(),
+        1,
+        "the first version is reclaimed once its pinning transaction is gone"
+    );
+}
+
+/// The deadline index holds exactly one entry for each active transaction, however it began, was used or ended: the
+/// pruning loop's guard against a stale entry (`state != Active || deadline != current`) never fires.
+#[test]
+fn the_deadline_index_has_one_entry_for_each_active_transaction() {
+    for scope in [LimitScope::Production, LimitScope::OfficialEmulator] {
+        let mut state = FirestoreState::with_limit_scope(scope);
+        state.commit(&[set("docs/a", &[])], None, t(0)).unwrap();
+        let check = |state: &FirestoreState| {
+            let stats = state.transaction_bookkeeping_stats();
+            assert_eq!(stats.deadlines, stats.active, "{scope:?}: {stats:?}");
+        };
+        let a = state.begin_read_write_transaction(t(0)).unwrap();
+        let b = state.begin_read_only_transaction(t(0)).unwrap();
+        let c = state.begin_transaction(false, t(0)).unwrap();
+        check(&state);
+        state.touch_transaction(&a, t(10)).unwrap();
+        state.touch_transaction(&b, t(20)).unwrap();
+        check(&state);
+        state.rollback(&c).unwrap();
+        check(&state);
+        state.commit(&[], Some(&a), t(30)).unwrap();
+        check(&state);
+        // b idles out; a request at a later time finishes it
+        let d = state.begin_read_write_transaction(t(200)).unwrap();
+        state.touch_transaction(&d, t(201)).unwrap();
+        check(&state);
+        let e = state.begin_transaction(false, t(300)).unwrap();
+        state.rollback(&d).unwrap();
+        check(&state);
+        state.rollback(&e).unwrap();
+        check(&state);
+        assert_eq!(state.transaction_bookkeeping_stats().active, 0);
+    }
 }

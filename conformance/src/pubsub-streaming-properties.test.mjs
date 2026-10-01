@@ -63,11 +63,44 @@ function partition(r, stream, maxParts) {
   return parts;
 }
 
-// Reference decoder: works over the whole accepted byte string with a read cursor instead of the
-// helper's retained buffer and rolling credential tail. Screening matches the credential's first
-// eight bytes (the whole credential when shorter).
+// Reference credential screen over the whole accepted byte string (the helper keeps a rolling tail
+// and window sets): any 8-byte window of the credential, literally, as hex or %XX in either case,
+// or as base64 (standard or URL alphabet) at any of the three alignments.
+const ENCODINGS = ["literal", "hex", "HEX", "percent", "PERCENT", "base64", "base64url"];
+function encodeFragment(bytes, encoding, lead = 0) {
+  const pairs = bytes.toString("hex");
+  const shifted = Buffer.concat([Buffer.alloc(lead, 0x41), bytes]);
+  return Buffer.from(
+    {
+      literal: () => bytes.toString("latin1"),
+      hex: () => pairs,
+      HEX: () => pairs.toUpperCase(),
+      percent: () => pairs.replace(/../g, "%$&"),
+      PERCENT: () => pairs.replace(/../g, "%$&").toUpperCase(),
+      base64: () => shifted.toString("base64"),
+      base64url: () => shifted.toString("base64url"),
+    }[encoding](),
+    "latin1",
+  );
+}
+function screenRefuses(bytes, secret) {
+  const text = bytes.toString("latin1");
+  const lower = text.toLowerCase();
+  const standard = text.replaceAll("-", "+").replaceAll("_", "/");
+  for (let at = 0; at + 8 <= secret.length; at++) {
+    const window = secret.subarray(at, at + 8);
+    const pairs = window.toString("hex");
+    if (text.includes(window.toString("latin1"))) return true;
+    if (lower.includes(pairs) || lower.includes(pairs.replace(/../g, "%$&"))) return true;
+    for (const lead of [0, 1, 2]) {
+      const encoded = Buffer.concat([Buffer.alloc(lead), window]).toString("base64");
+      const from = [0, 2, 3][lead];
+      if (standard.includes(encoded.slice(from, from + 10))) return true;
+    }
+  }
+  return false;
+}
 function modelFrames(chunks, { maxFrameBytes, maxTotalBytes, maxFrames, maxChunks }, secret) {
-  const needle = secret && secret.subarray(0, 8);
   let accepted = Buffer.alloc(0),
     cursor = 0,
     reason;
@@ -79,7 +112,7 @@ function modelFrames(chunks, { maxFrameBytes, maxTotalBytes, maxFrames, maxChunk
       break;
     }
     const take = chunk.subarray(0, maxTotalBytes - accepted.length);
-    if (needle && Buffer.concat([accepted, take]).includes(needle)) {
+    if (secret && screenRefuses(Buffer.concat([accepted, take]), secret)) {
       reason = "credential-reflection";
       break;
     }
@@ -104,9 +137,9 @@ function modelFrames(chunks, { maxFrameBytes, maxTotalBytes, maxFrames, maxChunk
   if (!reason && cursor < accepted.length) reason = "truncated-frame";
   return { raws, frames, reason, bytes: accepted.length };
 }
-// Inserts the credential, or a prefix of it of random length, so near misses below eight bytes are
-// generated next to refusals.
-function randomStream(r, secret) {
+// Inserts a random fragment of the credential (biased to seven and eight bytes) in a random
+// encoding, so near misses below eight bytes are generated next to refusals.
+function randomStream(r, secret, inserted) {
   const messages = Array.from({ length: r.int(0, 6) }, () => r.bytes(r.int(0, 24)));
   let stream = Buffer.concat(messages.map(envelope));
   if (stream.length && r.chance(0.15)) {
@@ -115,10 +148,18 @@ function randomStream(r, secret) {
     stream[at] = r.int(1, 255);
   }
   if (r.chance(0.15)) stream = Buffer.concat([stream, r.bytes(r.int(1, 7))]);
-  if (secret && r.chance(0.5)) {
-    const at = r.int(0, stream.length);
-    const cut = r.pick([7, 8, r.int(1, secret.length)]);
-    const fragment = r.chance(0.4) ? secret : secret.subarray(0, Math.min(cut, secret.length));
+  if (secret && r.chance(0.8)) {
+    // Often near the start, so that the total cap rarely clips the longer encoded forms.
+    const at = r.chance(0.5) ? r.int(0, Math.min(stream.length, 6)) : r.int(0, stream.length);
+    const length = r.pick([7, 8, 8, r.int(1, secret.length)]);
+    const start = r.int(0, secret.length - length);
+    inserted.encoding = r.pick(ENCODINGS);
+    inserted.length = length;
+    const fragment = encodeFragment(
+      secret.subarray(start, start + length),
+      inserted.encoding,
+      r.int(0, 2),
+    );
     stream = Buffer.concat([stream.subarray(0, at), fragment, stream.subarray(at)]);
   }
   return stream;
@@ -136,11 +177,12 @@ test(
         maxFrames: r.int(1, 8),
         maxChunks: r.int(1, 24),
       };
-      const credential = r.chance(0.4)
-        ? `${r.chance(0.4) ? "s-" : "secret-"}${r.int(0, 99)}${"x".repeat(r.int(0, 6))}`
+      const credential = r.chance(0.5)
+        ? `secret-${r.int(0, 99)}${"x".repeat(r.int(0, 6))}`
         : undefined;
       const secret = credential && Buffer.from(credential);
-      const chunks = partition(r, randomStream(r, secret), 30);
+      const inserted = {};
+      const chunks = partition(r, randomStream(r, secret, inserted), 30);
       const expected = modelFrames(chunks, caps, secret);
       const d = createStreamingFrameDecoder({ ...caps, credential });
       const raws = [],
@@ -185,13 +227,16 @@ test(
       assert.equal(summary.chunks, expected.raws.length);
       if (secret) {
         const kept = Buffer.concat(raws.map(({ bodyBase64 }) => Buffer.from(bodyBase64, "base64")));
-        assert.equal(kept.indexOf(secret.subarray(0, 8)), -1);
-        // A credential shorter than eight bytes is screened whole; a kept fragment of seven bytes
-        // shows that near misses are not refused.
-        if (secret.length > 8 && kept.indexOf(secret.subarray(0, 7)) >= 0)
+        assert.equal(screenRefuses(kept, secret), false);
+        // A kept literal fragment of seven bytes shows that near misses are not refused.
+        if (
+          inserted.encoding === "literal" &&
+          inserted.length === 7 &&
+          expected.reason !== "credential-reflection"
+        )
           return [expected.reason ?? "complete", "near-miss-kept"];
-        if (secret.length < 8 && expected.reason === "credential-reflection")
-          return [expected.reason, "short-credential-refused"];
+        if (inserted.length >= 8 && expected.reason === "credential-reflection")
+          return [expected.reason, `refused:${inserted.encoding}`];
       }
       return expected.reason ?? "complete";
     },
@@ -200,7 +245,7 @@ test(
       "chunk-count",
       "credential-reflection",
       "near-miss-kept",
-      "short-credential-refused",
+      ...ENCODINGS.map((encoding) => `refused:${encoding}`),
       "total-bound",
       "compression",
       "frame-bound",

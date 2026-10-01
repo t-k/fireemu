@@ -90,7 +90,7 @@ test("screening a long binary value of padding stays linear in its length", asyn
   }
   assert.deepEqual(outcome, { accepted: false, reason: "invalid-headers" });
 });
-test("credential screening visits each metadata pair once, decodes only binary values and refuses reflection", async () => {
+test("credential screening visits each metadata pair once, decodes binary values and refuses literal and encoded reflection", async () => {
   const credential = "SYNTHETIC-SECRET";
   const encoded = Buffer.from(credential).toString("base64");
   const accepted = { accepted: true, reason: null, saved: 1 };
@@ -103,7 +103,7 @@ test("credential screening visits each metadata pair once, decodes only binary v
       [":status", "200", "details-bin", encoded],
       ["details", credential],
     ]),
-    [accepted, accepted, accepted, refused, refused],
+    [accepted, refused, accepted, refused, refused],
   );
 });
 test("a persist that never settles just short of the deadline is bounded by the drain's own waits before a fallback timer", async () => {
@@ -885,4 +885,72 @@ test("a binary metadata value that is not canonical base64 is refused, so decodi
   const result = await q.done();
   assert.equal(result.reason, undefined);
   assert.equal(saved.length, 4);
+});
+// Every screened form of the whole credential, with base64 at all three alignments.
+function encodedForms(value) {
+  const bytes = Buffer.from(value);
+  const pairs = bytes.toString("hex");
+  return {
+    literal: value,
+    hex: pairs,
+    HEX: pairs.toUpperCase(),
+    percent: pairs.replace(/../g, "%$&"),
+    PERCENT: pairs.replace(/../g, "%$&").toUpperCase(),
+    base64: bytes.toString("base64"),
+    "base64+1": Buffer.concat([Buffer.from("x"), bytes]).toString("base64"),
+    "base64+2": Buffer.concat([Buffer.from("xy"), bytes]).toString("base64"),
+    base64url: Buffer.concat([Buffer.from("~"), bytes]).toString("base64url"),
+  };
+}
+test("encoded reflections in trailers and in data split across three chunks never reach storage", async () => {
+  const credential = "SYNTHETIC-SECRET";
+  for (const [name, text] of Object.entries(encodedForms(credential))) {
+    const trailer = await queue({ credential });
+    assert.equal(trailer.q.headers("trailers", ["grpc-message", `denied ${text}`], 0), false, name);
+    assert.equal((await trailer.q.done()).reason, "credential-reflection", name);
+    assert.equal(trailer.saved.length, 0, name);
+    const wire = frame(Buffer.from(text));
+    const third = Math.floor(wire.length / 3);
+    const data = await queue({ credential });
+    const accepted = [
+      data.q.data(wire.subarray(0, third)),
+      data.q.data(wire.subarray(third, 2 * third)),
+      data.q.data(wire.subarray(2 * third)),
+    ];
+    assert.equal(accepted.includes(false), true, name);
+    const result = await data.q.done();
+    assert.equal(result.reason, "credential-reflection", name);
+    assert.equal(data.frames.length, 0, name);
+    const stored = Buffer.concat(
+      data.saved.map((row) => Buffer.from(row.raw.bodyBase64, "base64")),
+    ).toString("latin1");
+    assert.equal(stored.includes(text), false, name);
+  }
+});
+test("fragments split across metadata pairs, events and binary elements are joined before screening", async () => {
+  const credential = "SYNTHETIC-SECRET";
+  const b64 = (text) => Buffer.from(text).toString("base64");
+  const cases = {
+    "pairs SYNTHET + IC-SECRET": [[["a", "SYNTHET", "b", "IC-SECRET"]]],
+    "events SYNTHET + IC-SECRET": [[["a", "SYNTHET"]], [["b", "IC-SECRET"]]],
+    "pairs of seven": [[["a", "SYNTHE", "b", "TIC-SE", "c", "CRET"]]],
+    "events of seven": [[["a", "SYNTHE"]], [["b", "TIC-SE"]], [["c", "CRET"]]],
+    "binary elements": [[["x-bin", `${b64("SYNTHE")},${b64("TIC-SE")}`]]],
+    "binary events": [[["x-bin", b64("SYNTHE")]], [["x-bin", b64("TIC-SE")]]],
+    "text then binary": [[["a", "SYNTHE"]], [["x-bin", b64("TIC-SE")]]],
+    "names of seven": [[["SYNTHE", "v", "TIC-SE", "w"]]],
+  };
+  for (const [name, events] of Object.entries(cases)) {
+    const { q, saved } = await queue({ credential });
+    const accepted = events.map(([raw]) => q.headers("trailers", raw, 0));
+    assert.equal(accepted.at(-1), false, name);
+    assert.equal((await q.done()).reason, "credential-reflection", name);
+    const stored = saved.flatMap((row) => row.rawHeaders ?? []);
+    const decoded = stored.map((value) =>
+      /^[A-Za-z0-9+/=,]+$/.test(value) ? Buffer.from(value, "base64").toString("latin1") : "",
+    );
+    for (const view of [stored.join(""), decoded.join("")])
+      for (let at = 0; at + 8 <= credential.length; at++)
+        assert.equal(view.includes(credential.slice(at, at + 8)), false, name);
+  }
 });

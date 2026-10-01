@@ -1,6 +1,6 @@
 // Injected outbound admission only; no connection, peer status or process-quiescence proof.
 import { createHash } from "node:crypto";
-import { credentialPrefix } from "./streaming-frames.mjs";
+import { createCredentialScreen } from "./streaming-frames.mjs";
 const typedArrayPrototype = Object.getPrototypeOf(Uint8Array.prototype);
 const byteLengthOf = Object.getOwnPropertyDescriptor(typedArrayPrototype, "byteLength").get;
 const byteOffsetOf = Object.getOwnPropertyDescriptor(typedArrayPrototype, "byteOffset").get;
@@ -29,12 +29,8 @@ export function createStreamingWriteGate({
   for (const callback of [guard, liveCheck, persist, issue, contain])
     if (typeof callback !== "function")
       throw new Error("reviewed synchronous issue/live check and owned callbacks required");
-  if (
-    credential !== undefined &&
-    (typeof credential !== "string" || !credential || Buffer.byteLength(credential) > 16384)
-  )
-    throw new Error("bounded credential required");
-  const secret = credential === undefined ? undefined : credentialPrefix(credential);
+  // One screen across every admitted outbound frame, in admission order.
+  const screen = credential === undefined ? undefined : createCredentialScreen(credential);
   const startedAt = performance.now(),
     deadline = deadlineAt === undefined ? startedAt + wallMs : deadlineAt;
   if (!Number.isFinite(deadline) || deadline <= startedAt || deadline > startedAt + wallMs)
@@ -171,7 +167,7 @@ export function createStreamingWriteGate({
         new Uint8Array(bufferOf.call(input), byteOffsetOf.call(input), payloadLength),
       ).copy(wire, 5);
     }
-    if (secret && wire?.includes(secret)) throw new Error("credential reflection refused");
+    if (wire && screen?.refuses([wire])) throw new Error("credential reflection refused");
     const intent = Object.freeze({
       index: attemptedActions++,
       kind,

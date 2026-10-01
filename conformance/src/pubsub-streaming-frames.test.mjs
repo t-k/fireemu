@@ -278,17 +278,35 @@ test("exact message-size and every other cap boundary is accepted while the next
   assert.equal(tooLarge.push(frame(Buffer.alloc(65))).reason, "frame-bound");
 });
 test("credential screening settings are validated and bounded before framing", async () => {
-  for (const credential of ["", 5, null, Buffer.from("x"), "x".repeat(16385)])
+  // A bare token of 8 to 16384 printable ASCII bytes: "Bearer <token>", whitespace, control and
+  // non-ASCII characters and tokens shorter than one screening window are refused.
+  for (const credential of [
+    "",
+    5,
+    null,
+    Buffer.from("x"),
+    "x".repeat(16385),
+    "Bearer abcdefgh",
+    "tok en12345",
+    "tökenabc",
+    "a\tbcdefgh",
+    "abcdefg",
+    "abcdefg\u0000",
+  ])
     await assert.rejects(decoder({ credential }), /bounded credential/);
+  assert.equal(
+    (await decoder({ credential: "abcdefgh" })).push(frame(Buffer.from("x"))).frames.length,
+    1,
+  );
   const longest = await decoder({ credential: "y".repeat(16384) });
   assert.equal(longest.push(frame(Buffer.from("payload"))).frames.length, 1);
   const multibyte = "é".repeat(8193);
   await assert.rejects(decoder({ credential: multibyte }), /bounded credential/);
 });
 test("credential screening never matches bytes that were not received", async () => {
-  // The stream opens with four zero bytes (flag and high length bytes); a fifth would be invented.
-  const d = await decoder({ credential: "\u0000".repeat(5) });
-  const result = d.push(frame(Buffer.from("payload")));
+  // Seven of eight bytes arrive; an eighth would have to be invented from the empty tail.
+  const d = await decoder({ credential: "!!!!!!!!" });
+  const result = d.push(frame(Buffer.from("!!!!!!!")));
   assert.equal(result.reason, undefined);
   assert.equal(result.frames.length, 1);
   assert.equal(d.finish().outcome, "complete-framing");
@@ -307,4 +325,73 @@ test("a push that is not stopped carries no reason field at all", async () => {
   const result = d.push(frame(Buffer.from("ok")));
   assert.equal("reason" in result, false);
   assert.equal("reason" in d.push(Buffer.alloc(0)), false);
+});
+const CREDENTIAL = "SYNTHETIC-SECRET";
+// Every screened form of the whole credential, with base64 at all three alignments.
+function encodedForms(value = CREDENTIAL) {
+  const bytes = Buffer.from(value);
+  const pairs = bytes.toString("hex");
+  return {
+    hex: pairs,
+    HEX: pairs.toUpperCase(),
+    percent: pairs.replace(/../g, "%$&"),
+    PERCENT: pairs.replace(/../g, "%$&").toUpperCase(),
+    base64: bytes.toString("base64"),
+    "base64+1": Buffer.concat([Buffer.from("x"), bytes]).toString("base64"),
+    "base64+2": Buffer.concat([Buffer.from("xy"), bytes]).toString("base64"),
+    base64url: Buffer.concat([Buffer.from("~"), bytes]).toString("base64url"),
+  };
+}
+test("encoded reflections of the credential are refused across any three-chunk split", async () => {
+  for (const [name, text] of Object.entries(encodedForms())) {
+    const wire = frame(Buffer.from(text));
+    for (const [first, second] of [
+      [0, 0],
+      [5, 9],
+      [7, wire.length - 3],
+      [wire.length - 1, wire.length],
+    ]) {
+      const d = await decoder({ credential: CREDENTIAL });
+      const emitted = [];
+      let refused;
+      for (const part of [
+        wire.subarray(0, first),
+        wire.subarray(first, second),
+        wire.subarray(second),
+      ]) {
+        const result = d.push(part);
+        if (result.raw) emitted.push(Buffer.from(result.raw.bodyBase64, "base64"));
+        if (result.reason) {
+          refused = result.reason;
+          break;
+        }
+      }
+      assert.equal(refused, "credential-reflection", `${name} ${first}/${second}`);
+      assert.ok(Buffer.concat(emitted).length < wire.length, `${name} ${first}/${second}`);
+    }
+  }
+});
+test("any eight-byte window of the credential is refused, while seven-byte fragments are data", async () => {
+  for (const window of ["IC-SECRET", "C-SECRET", "THETIC-S", "NTHETIC-"]) {
+    const d = await decoder({ credential: CREDENTIAL });
+    assert.equal(d.push(frame(Buffer.from(`x${window}x`))).reason, "credential-reflection", window);
+  }
+  // Fragments of seven bytes split by other bytes never form a window.
+  const kept = await decoder({ credential: CREDENTIAL });
+  const result = kept.push(frame(Buffer.from("SYNTHET IC-SECR ET")));
+  assert.equal(result.reason, undefined);
+  assert.equal(result.frames.length, 1);
+});
+test("a compressed frame is stored raw before the compression refusal, so the bridge must require identity encoding", async () => {
+  // Documented limit: the screen sees only the bytes as received. gzip content is not inflated.
+  const { gzipSync } = await import("node:zlib");
+  const payload = gzipSync(Buffer.from(CREDENTIAL));
+  const header = Buffer.alloc(5);
+  header[0] = 1;
+  header.writeUInt32BE(payload.length, 1);
+  const d = await decoder({ credential: CREDENTIAL });
+  const result = d.push(Buffer.concat([header, payload]));
+  assert.equal(result.reason, "compression");
+  assert.ok(result.raw);
+  assert.equal(result.frames.length, 0);
 });

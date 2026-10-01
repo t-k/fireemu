@@ -1,5 +1,5 @@
 // Bounded durable inbound candidates only; peer terminal and owned process proofs belong to the collector.
-import { createStreamingFrameDecoder, credentialPrefix } from "./streaming-frames.mjs";
+import { createCredentialScreen, createStreamingFrameDecoder } from "./streaming-frames.mjs";
 
 // Linear in the value length: a regular expression anchored at the end is quadratic on a long run of
 // padding followed by another character, and metadata values are peer-controlled.
@@ -42,7 +42,12 @@ export function createStreamingReceiptQueue({
     maxChunks,
     credential,
   });
-  const secret = credential === undefined ? undefined : credentialPrefix(credential);
+  // Metadata is screened as three streams in arrival order across all events: values (a binary
+  // value contributes its decoded elements), names, and the base64 text of binary values. Keeping
+  // them apart lets fragments split across values, events or binary elements join, since names
+  // and encoded text never sit between them.
+  const [valueScreen, nameScreen, binaryTextScreen] =
+    credential === undefined ? [] : [0, 1, 2].map(() => createCredentialScreen(credential));
   const controller = new AbortController(),
     pending = new Map();
   let events = 0,
@@ -209,14 +214,16 @@ export function createStreamingReceiptQueue({
         stop("header-bound");
         return false;
       }
-      if (secret && Buffer.from(value).includes(secret)) {
-        stop("credential-reflection");
-        return false;
-      }
     }
-    if (secret)
-      for (let index = 0; index < raw.length; index += 2)
-        if (raw[index].endsWith("-bin"))
+    if (valueScreen) {
+      const names = [],
+        values = [],
+        binaryText = [];
+      for (let index = 0; index < raw.length; index += 2) {
+        names.push(raw[index]);
+        if (!raw[index].endsWith("-bin")) values.push(raw[index + 1]);
+        else {
+          binaryText.push(raw[index + 1]);
           for (const part of raw[index + 1].split(",")) {
             const text = part.trim(),
               decoded = Buffer.from(text, "base64");
@@ -226,11 +233,19 @@ export function createStreamingReceiptQueue({
               stop("invalid-headers");
               return false;
             }
-            if (decoded.includes(secret)) {
-              stop("credential-reflection");
-              return false;
-            }
+            values.push(decoded);
           }
+        }
+      }
+      if (
+        valueScreen.refuses(values) ||
+        nameScreen.refuses(names) ||
+        binaryTextScreen.refuses(binaryText)
+      ) {
+        stop("credential-reflection");
+        return false;
+      }
+    }
     headerBytes += size;
     headerEvents++;
     enqueue({ kind, flags, rawHeaders: Object.freeze(raw.slice()) });

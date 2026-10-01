@@ -1030,3 +1030,27 @@ test("an issue callback that stops the gate and returns normally still requires 
   assert.equal(result.completedActions, 0);
   assert.equal(result.terminationRequired, true);
 });
+test("encoded reflections and inner windows of the credential are refused in outbound frames before any receipt", async () => {
+  const credential = "SYNTHETIC-SECRET";
+  const bytes = Buffer.from(credential);
+  const pairs = bytes.toString("hex");
+  const forms = [
+    "IC-SECRET",
+    pairs,
+    pairs.toUpperCase(),
+    pairs.replace(/../g, "%$&"),
+    bytes.toString("base64"),
+    Buffer.concat([Buffer.from("x"), bytes]).toString("base64"),
+    Buffer.concat([Buffer.from("xy"), bytes]).toString("base64url"),
+  ];
+  for (const form of forms) {
+    const { g, events } = await gate({ credential, maxFrameBytes: 64 });
+    await g.open();
+    assert.throws(() => g.write(Buffer.from(form)), /credential/, form);
+    const result = await g.done();
+    assert.equal(result.frameReservations, 0, form);
+    assert.equal(events.filter((event) => event.startsWith("before-send")).length, 1, form);
+  }
+  for (const credentialValue of ["Bearer abcdefgh", "short", "tökenabc"])
+    await assert.rejects(gate({ credential: credentialValue }), /bounded credential/);
+});

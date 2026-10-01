@@ -1,10 +1,69 @@
 // Pure framing candidates only. A guarded caller must persist raw bytes before using messages as evidence.
 import { createHash } from "node:crypto";
 
-// Screens match the credential's first eight bytes (all of it when shorter), so a chunk that ends
-// partway into a reflected credential keeps at most seven of its bytes.
-export function credentialPrefix(credential) {
-  return Buffer.from(credential).subarray(0, 8);
+// Credential screening. A credential is a bare token of 8 to 16384 printable ASCII bytes without
+// whitespace ("Bearer <token>" is refused), so every screened form has a fixed length. A screen
+// refuses any 8-byte window of the credential, literally, as hex (either case), as %XX escapes
+// (either case) and as base64 (standard or URL alphabet, all three alignments), across every
+// earlier byte it accepted: a refused stream never stores 8 contiguous credential bytes in any of
+// these forms.
+const WINDOW = 8;
+export function validateCredential(credential) {
+  if (credential === undefined) return undefined;
+  if (
+    typeof credential !== "string" ||
+    credential.length < WINDOW ||
+    credential.length > 16384 ||
+    !/^[\x21-\x7e]+$/.test(credential)
+  )
+    throw new Error("bounded credential required");
+  return credential;
+}
+export function createCredentialScreen(credential) {
+  const secret = Buffer.from(validateCredential(credential), "latin1");
+  const literal = new Set(),
+    hex = new Set(),
+    percent = new Set(),
+    base64 = new Set();
+  for (let at = 0; at + WINDOW <= secret.length; at++) {
+    const window = secret.subarray(at, at + WINDOW);
+    literal.add(window.toString("latin1"));
+    const pairs = window.toString("hex");
+    hex.add(pairs);
+    percent.add(pairs.replace(/../g, "%$&"));
+    // Only the characters that depend on the window's bytes alone: 10 at every alignment.
+    for (const [lead, from] of [
+      [0, 0],
+      [1, 2],
+      [2, 3],
+    ])
+      base64.add(
+        Buffer.concat([Buffer.alloc(lead), window])
+          .toString("base64")
+          .slice(from, from + 10),
+      );
+  }
+  const forms = [
+    [literal, WINDOW, (text) => text],
+    [hex, 16, (text) => text.toLowerCase()],
+    [percent, 24, (text) => text.toLowerCase()],
+    [base64, 10, (text) => text.replaceAll("-", "+").replaceAll("_", "/")],
+  ];
+  const keep = 24 - 1;
+  let tail = "";
+  // Scans the earlier tail followed by the given parts. On a match the tail is unchanged and the
+  // caller must refuse the parts unstored; otherwise the parts are accepted into the tail.
+  function refuses(parts) {
+    const text = tail + parts.map((part) => Buffer.from(part).toString("latin1")).join("");
+    for (const [needles, length, normalize] of forms) {
+      const view = normalize(text);
+      for (let at = 0; at + length <= view.length; at++)
+        if (needles.has(view.slice(at, at + length))) return true;
+    }
+    tail = text.slice(Math.max(0, text.length - keep));
+    return false;
+  }
+  return { refuses };
 }
 function receipt(bytes) {
   return {
@@ -23,14 +82,8 @@ export function createStreamingFrameDecoder({
   for (const bound of [maxFrameBytes, maxTotalBytes, maxFrames, maxChunks])
     if (!Number.isSafeInteger(bound) || bound <= 0)
       throw new Error("finite positive framing bounds required");
-  if (
-    credential !== undefined &&
-    (typeof credential !== "string" || !credential || Buffer.byteLength(credential) > 16384)
-  )
-    throw new Error("bounded credential required");
-  const secret = credential === undefined ? undefined : credentialPrefix(credential);
+  const screen = credential === undefined ? undefined : createCredentialScreen(credential);
   let pending = Buffer.alloc(0),
-    tail = Buffer.alloc(0),
     frames = 0,
     bytes = 0,
     chunks = 0,
@@ -45,13 +98,9 @@ export function createStreamingFrameDecoder({
       return { frames: [], reason };
     }
     const chunk = Buffer.from(input.subarray(0, maxTotalBytes - bytes));
-    if (secret) {
-      const joined = Buffer.concat([tail, chunk]);
-      if (joined.includes(secret)) {
-        reason = "credential-reflection";
-        return { frames: [], reason };
-      }
-      tail = Buffer.from(joined.subarray(Math.max(0, joined.length - secret.length + 1)));
+    if (screen?.refuses([chunk])) {
+      reason = "credential-reflection";
+      return { frames: [], reason };
     }
     bytes += chunk.length;
     chunks++;

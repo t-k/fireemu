@@ -26,7 +26,7 @@ PINS = {
 # Expressions (the text inside `${{ }}`) a step may use outside a script: the plan's validated
 # outputs, the matrix, a step's own output, and the runner's temp directory. The plan's own env may also
 # read the inputs, the default branch and the repository URL parts; no other job may read an input.
-STEP_EXPRESSION = /\A(fromJSON\(needs\.plan\.outputs\.[a-z_]+\)|needs\.plan\.outputs\.[a-z_]+|matrix\.[a-z_]+|steps\.[a-z_]+\.outputs\.[a-z_]+|runner\.temp)\z/
+STEP_EXPRESSION = /\A(fromJSON\(needs\.plan\.outputs\.[a-z_]+\)|needs\.plan\.outputs\.[a-z_]+|needs\.mutants\.result|matrix\.[a-z_]+|steps\.[a-z_]+\.outputs\.[a-z_]+|runner\.temp)\z/
 PLAN_EXPRESSION = /\A(inputs\.[a-z_]+|github\.event\.repository\.default_branch|github\.server_url|github\.repository)\z/
 FORBIDDEN_ENV = /\bACTIONS_(ALLOW_UNSECURE_COMMANDS|RUNNER_DEBUG|STEP_DEBUG)\b/
 
@@ -134,6 +134,9 @@ def violations(source, toolchain_channel: nil)
   errors << "the summary upload must overwrite an artifact of its name" unless upload && upload.dig("with", "overwrite") == true
   errors << "the summary upload must run even when the merge failed (if: always())" unless upload && upload["if"].to_s.strip == "always()"
   merge = summary.find { |step| step["name"] == "merge the shards" }
+  errors << "the summary merge must pass the shard job's result (--mutants-result \"$MUTANTS_RESULT\")" unless merge && merge["run"].to_s.include?('--mutants-result "$MUTANTS_RESULT"') && merge.dig("env", "MUTANTS_RESULT").to_s.gsub(/\s+/, "") == "${{needs.mutants.result}}"
+  errors << "the summary upload must fail when there is no summary (if-no-files-found: error)" unless upload && upload.dig("with", "if-no-files-found") == "error"
+  errors << "the shards must use cargo-mutants' default slice sharding (the summary checks it): no --sharding" if code.include?("--sharding")
   errors << "the summary merge must append summary/summary.md to the step summary" unless merge && merge["run"].to_s.include?('cat summary/summary.md >> "$GITHUB_STEP_SUMMARY"')
   errors << "the summary merge must keep the script's status (exit \"$code\") after showing the summary" unless merge && merge["run"].to_s.include?('exit "$code"') && merge["run"].to_s.include?("|| code=$?")
   checkout = summary.find { |step| step["uses"].to_s.start_with?("actions/checkout@") }

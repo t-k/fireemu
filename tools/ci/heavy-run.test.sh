@@ -12,7 +12,18 @@ cat > "$work/bin/gh" <<'STUB'
 #!/usr/bin/env bash
 echo "$*" >> "$GH_LOG"
 case "$1 $2" in
-  "run list") echo 222 ;;
+  "run list")
+    # The filter heavy-run.sh passes is applied to two runs: the tag's own, and a decoy whose tag
+    # only begins with it.
+    tag=$(sed -n 's/.* -f tag=\([^ ]*\)$/\1/p' "$GH_LOG" | tail -1)
+    filter=""
+    while (($#)); do
+      [[ $1 == --jq ]] && filter=$2
+      shift
+    done
+    printf '[{"databaseId":111,"displayTitle":"heavy-verification mutants %s9"},{"databaseId":222,"displayTitle":"heavy-verification mutants %s"},{"databaseId":333,"displayTitle":"ci"}]' "$tag" "$tag" |
+      jq -r "$filter"
+    ;;
   "run view") echo "https://example.invalid/run/222" ;;
   "run watch") exit "${GH_WATCH_STATUS:-0}" ;;
   "run download")
@@ -69,12 +80,6 @@ if grep -q "^workflow run heavy-verification.yml --ref work/ci -f job=linux-meas
 else
   bad "the workflow ref and the script reach the dispatch"
 fi
-
-# The run is found by the tag in its title: the filter picks only the run that ends with the tag.
-tag="heavy-1-2"
-picked=$(printf '[{"databaseId":111,"displayTitle":"heavy-verification mutants heavy-1-22"},{"databaseId":222,"displayTitle":"heavy-verification mutants heavy-1-2"}]' |
-  jq -r "map(select(.displayTitle | endswith(\" $tag\"))) | .[0].databaseId // empty")
-if [[ $picked == 222 ]]; then ok "the run is found by the tag, not by a longer one"; else bad "the run is found by the tag, not by a longer one ($picked)"; fi
 
 # Bad arguments are refused before anything is dispatched.
 refuse() {

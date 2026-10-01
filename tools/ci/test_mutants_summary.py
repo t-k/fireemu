@@ -74,7 +74,8 @@ class MergeTest(unittest.TestCase):
 
     def test_directories_that_are_not_shards_are_ignored(self):
         write_shard(self.root, 0, [])
-        (self.root / "something-else").mkdir()
+        for name in ("something-else", "not-a-shard-7", "mutants-shard-x9", "old-mutants-shard-3"):
+            (self.root / name).mkdir()
         self.assertEqual(summary.merge(self.root, 1)["shards_found"], [0])
 
     def test_a_missing_directory_is_every_shard_missing(self):

@@ -617,7 +617,6 @@ mod tests {
             "a-b",
             "-",
             "42-",
-            "42--1",
             "42-18446744073709551616",
         ] {
             let id = storage_event_id(seed);

@@ -2814,6 +2814,17 @@ fn fb_upload_object_name(state: &StorageState, name: &str) -> Result<ObjectName,
     })
 }
 
+/// `invalid-json` for the metadata text `{invalid-json`: what follows an opening brace when it is
+/// a bare, unquoted word.
+fn bare_word_after_brace(text: &str) -> Option<&str> {
+    let rest = text.trim().strip_prefix('{')?;
+    (!rest.is_empty()
+        && rest
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'))
+    .then_some(rest)
+}
+
 fn object_name(name: &str) -> Result<ObjectName, StorageResponse> {
     ObjectName::try_new(name)
         .map_err(|e| gcs_json_error(400, &format!("invalid object name: {e}"), "invalid"))
@@ -4678,15 +4689,17 @@ fn gcs_upload(
                         ),
                         "invalidPayloadSize",
                     ),
-                    // The one malformed metadata part recorded (lean-v4, lean-v5): production
-                    // answers it as the JSON API parser does, typed `text/html`.
+                    // The one malformed metadata part recorded (lean-v4, lean-v5: `{invalid-json`):
+                    // production answers it as the JSON API parser does, typed `text/html`, with
+                    // the text after the brace and a caret under its end. Only a brace followed by
+                    // a bare word was recorded.
                     MultipartFault::Metadata(text)
-                        if state.is_strict() && text.trim() == "invalid-json" =>
+                        if state.is_strict() && bare_word_after_brace(&text).is_some() =>
                     {
+                        let rest = bare_word_after_brace(&text).unwrap_or_default();
                         production_name_error(&format!(
-                            "Parse Error: Unexpected end of string. Expected : between key:value pair.\n{}\n{}^",
-                            text.trim(),
-                            " ".repeat(text.trim().len())
+                            "Parse Error: Unexpected end of string. Expected : between key:value pair.\n{rest}\n{}^",
+                            " ".repeat(rest.len())
                         ))
                     }
                     _ => StorageResponse::json(

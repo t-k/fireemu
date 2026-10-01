@@ -6887,7 +6887,7 @@ fn strict_answers_that_follow_single_recorded_rows() {
             let boundary = "b";
             let mut body = Vec::new();
             body.extend_from_slice(
-                format!("--{boundary}\r\nContent-Type: application/json\r\n\r\ninvalid-json\r\n--{boundary}\r\nContent-Type: text/plain\r\n\r\nhello\r\n--{boundary}--").as_bytes(),
+                format!("--{boundary}\r\nContent-Type: application/json\r\n\r\n{{invalid-json\r\n--{boundary}\r\nContent-Type: text/plain\r\n\r\nhello\r\n--{boundary}--").as_bytes(),
             );
             (format!("multipart/related; boundary={boundary}"), body)
         };

@@ -243,3 +243,40 @@ def test_the_token_a_retry_issued_is_released_before_the_next_chain_begins():
     release = order.index("cleanup/token/t3r")
     assert release < order.index("rest/t1/begin"), "the retry's token is released before the next chain begins"
     assert receipt["tokens"]["t3r"]["state"] in ("rolled-back", "released-refused", "released-expired")
+
+
+def _retry_ledger():
+    plan = compile_plan(table(), NONCE, OWNER)
+    ledger = Ledger(plan)
+    ledger.tokens["t3"] = {"value": "dG9rZW4z", "state": "open", "transport": "rest", "start": {}, "lastUse": {}}
+    retry = next(row for row in plan["steps"] if row["id"] == "rest/t3r/retry-idle")
+    request = {"database": plan["database"], "options": {"readWrite": {"retryTransaction": "dG9rZW4z"}}}
+    timing = {"dispatchMonotonic": 1.0, "responseMonotonic": 2.0, "dispatchUtc": "2026-09-30T00:00:01.000000Z", "responseUtc": "2026-09-30T00:00:02.000000Z"}
+    return plan, ledger, retry, request, timing
+
+
+def test_a_retry_refused_as_expired_lets_the_later_invalid_transaction_release_count_as_released_and_the_recording_finish():
+    from txn_program_collector import GONE_CODE, GONE_DETAILS, INVALID_DETAILS
+    plan, ledger, retry, request, timing = _retry_ledger()
+    refusal = {"kind": "txn-program-receipt-v1", "transport": "rest", "complete": True, "code": GONE_CODE, "details": GONE_DETAILS, "response": None, "http": 409, "dispatchedRequests": 1, "childReaped": True}
+    ledger.before("rest/t3r/retry-idle", "rest", "BeginTransaction", request, retry)
+    ledger.after("rest/t3r/retry-idle", "rest", "BeginTransaction", request, retry, refusal, timing)
+    release = {"database": plan["database"], "transaction": "dG9rZW4z"}
+    ledger.before("cleanup/token/t3", "rest", "Rollback", release, None)
+    later = {**timing, "dispatchMonotonic": 3.0, "responseMonotonic": 4.0, "dispatchUtc": "2026-09-30T00:00:03.000000Z", "responseUtc": "2026-09-30T00:00:04.000000Z"}
+    forgotten = {"kind": "txn-program-receipt-v1", "transport": "rest", "complete": True, "code": 3, "details": INVALID_DETAILS, "response": None, "http": 400, "dispatchedRequests": 1, "childReaped": True}
+    ledger.after("cleanup/token/t3", "rest", "Rollback", release, None, forgotten, later)
+    assert ledger.tokens["t3"]["state"] == "released-refused"
+    assert not ledger.unknown_rollbacks
+
+
+def test_a_rest_retry_answered_with_the_named_tokens_own_bytes_stops_as_an_unknown_start():
+    # Every recorded accepted retry minted a different token, over gRPC (P09, P10); a REST retry that returned the named token's own bytes is
+    # unrecorded, so the ledger refuses it and keeps the start unknown for the recovery rather than guessing which token the service means.
+    plan, ledger, retry, request, timing = _retry_ledger()
+    same = {"kind": "txn-program-receipt-v1", "transport": "rest", "complete": True, "code": 0, "details": "", "response": {"transaction": "dG9rZW4z"}, "http": 200, "dispatchedRequests": 1, "childReaped": True}
+    ledger.before("rest/t3r/retry-idle", "rest", "BeginTransaction", request, retry)
+    with pytest.raises(ValueError, match="not fresh"):
+        ledger.after("rest/t3r/retry-idle", "rest", "BeginTransaction", request, retry, same, timing)
+    assert "rest/t3r/retry-idle" in ledger.unknown_starts
+    assert "t3r" not in ledger.tokens

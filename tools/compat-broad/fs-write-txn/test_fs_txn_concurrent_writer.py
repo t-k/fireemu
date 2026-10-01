@@ -277,3 +277,43 @@ def test_a_refused_holder_commit_that_keeps_its_lock_is_released_before_the_writ
     assert order[commit + 1].startswith("cleanup/token/"), "the holder is released right after its anchor"
     assert order.index("rest/c/writer-a") > commit + 1
     projection(receipt, TABLE)
+
+
+@pytest.mark.parametrize("holder_code, writer_code, states", [(0, 0, {"a": "grpc-r-after", "b": "grpc-c-unrelated"}), (10, 0, {"a": "grpc-r-after", "b": "grpc-c-unrelated"}),
+                                                              (0, 10, {"a": "grpc-c-commit", "b": "created"}), (10, 10, {"a": "created", "b": "created"})])
+def test_the_projection_derives_the_states_whether_the_holder_commit_and_the_writer_are_accepted_or_refused(holder_code, writer_code, states):
+    # The projection takes the writer on before its anchor, as the collector did: a refused writer then returns the state the anchor left, and the
+    # completion claims derive from the native rows. (Dropping that step made every refused-writer recording unprojectable: Codex M3, 2026-10-01.)
+    clock = Clock()
+    value = compile_plan(TABLE, NONCE, OWNER)
+    service = Service(clock, locks=True, hold_writers=True, rw_commit_code=holder_code, writer_code=writer_code)
+    receipt = Collector(value, TABLE, RequestBudget(value, TABLE), service, "owner", save=lambda _state: None, monotonic=clock.now, utc=clock.utc, sleep=clock.sleep).run()
+    assert receipt["complete"] is True, receipt.get("failureType")
+    assert projection(receipt, TABLE)["expectedStates"] == states
+
+
+def test_the_projection_refuses_a_receipt_whose_step_list_is_not_in_sequence_order_at_the_writer():
+    # The writer row is compared with the next row of the receipt's own step list, not only by its site: a list whose order differs from the
+    # native sequence is refused wherever the writer's row has been moved to (Codex M3 follow-up, 2026-10-01).
+    receipt = recorded()
+    sites = [row["site"] for row in receipt["steps"]]
+    position = sites.index("rest/c/writer-a")
+    for other in range(len(sites)):
+        if other == position:
+            continue
+        moved = copy.deepcopy(receipt)
+        moved["steps"][position], moved["steps"][other] = moved["steps"][other], moved["steps"][position]
+        with pytest.raises(ValueError):
+            projection(moved, TABLE)
+
+
+def test_the_projection_refuses_a_writer_row_moved_into_the_cleanup_rows():
+    # The writer row and a cleanup row change places between the two lists with their sequence numbers kept: the replay reads the observation
+    # list by position (`wait_entry` and the graph comparison), so the receipt is refused.
+    receipt = recorded()
+    assert receipt["cleanupSteps"], "the recording releases its tokens in the cleanup rows"
+    position = [row["site"] for row in receipt["steps"]].index("rest/c/writer-a")
+    moved = copy.deepcopy(receipt)
+    moved["steps"][position], moved["cleanupSteps"][0] = moved["cleanupSteps"][0], moved["steps"][position]
+    with pytest.raises(ValueError):
+        projection(moved, TABLE)

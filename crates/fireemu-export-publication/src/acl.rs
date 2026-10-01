@@ -139,8 +139,22 @@ pub(crate) fn check(
 /// it is empty: an inherited `allow` entry would make the export readable by others, and an
 /// inherited `deny delete` would stop the rename and the cleanup.
 pub(crate) fn clear_stage_acl(stage: &Path) -> Result<(), String> {
-    let cleared = exacl::setfacl(&[stage], &[], None).map_err(|error| error.to_string());
-    let left = exacl::getfacl(stage, None).map_err(|error| error.to_string());
+    clear_stage_acl_with(
+        stage,
+        &|path| exacl::setfacl(&[path], &[], None).map_err(|error| error.to_string()),
+        &|path| exacl::getfacl(path, None).map_err(|error| error.to_string()),
+    )
+}
+
+/// [`clear_stage_acl`] with the two system calls passed in, so a volume that cannot hold an ACL
+/// (exFAT: `setfacl` fails with ENOTSUP, `getfacl` reads nothing) can be reproduced without one.
+fn clear_stage_acl_with(
+    stage: &Path,
+    clear: &dyn Fn(&Path) -> Result<(), String>,
+    read: &dyn Fn(&Path) -> Result<Vec<AclEntry>, String>,
+) -> Result<(), String> {
+    let cleared = clear(stage);
+    let left = read(stage);
     settle_stage_acl(cleared, left)
 }
 
@@ -279,6 +293,33 @@ mod tests {
         let error = clear_stage_acl(&stage.0).unwrap_err();
         assert!(error.contains("still has an ACL"), "{error}");
         assert!(error.contains("could not be cleared"), "{error}");
+    }
+
+    #[test]
+    fn a_volume_that_cannot_hold_an_acl_settles_the_stage() {
+        // exFAT: the clear fails with ENOTSUP and the read finds nothing.
+        let unsupported = |_: &Path| Err("Operation not supported (os error 45)".to_owned());
+        let nothing = |_: &Path| Ok(Vec::new());
+        assert_eq!(
+            clear_stage_acl_with(Path::new("/stage"), &unsupported, &nothing),
+            Ok(())
+        );
+        // The same failed clear on a volume that kept an entry is refused, with the clear error.
+        let entry = |_: &Path| Ok(vec![AclEntry::deny_group("everyone", Perm::DELETE, None)]);
+        let error = clear_stage_acl_with(Path::new("/stage"), &unsupported, &entry).unwrap_err();
+        assert!(error.contains("Operation not supported"), "{error}");
+        // The calls are made on the stage, clear before read.
+        let order = std::cell::RefCell::new(Vec::new());
+        let clear = |path: &Path| {
+            order.borrow_mut().push(format!("clear {}", path.display()));
+            Ok(())
+        };
+        let read = |path: &Path| {
+            order.borrow_mut().push(format!("read {}", path.display()));
+            Ok(Vec::new())
+        };
+        clear_stage_acl_with(Path::new("/stage"), &clear, &read).unwrap();
+        assert_eq!(*order.borrow(), ["clear /stage", "read /stage"]);
     }
 
     #[test]

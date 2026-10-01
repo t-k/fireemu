@@ -9,11 +9,11 @@
     "decidedOn": "2026-10-01",
     "reviewer": "independent clean-context closure review of the merged code and closure (REVISE, then three delta reviews: 284ecbd79 CHANGES REQUIRED, 85dc8890f APPROVE, fba79bd2d APPROVE)",
     "reviewedCommit": "fba79bd2d25125554067e639d13907f09bf1aa16",
-    "finalArtifactSha256": "3c96b1432a966c16eac8f193b47d9c6b4bdfcb5b6ba8dd43f01f096d55ee8cb0",
-    "sourceCommit": "b0fc2485d5596439b515f4fd12f6c3ce68d4af91",
+    "finalArtifactSha256": "075593e8e7f528b2f318fd121f67bf539b4a1f7cf039b3fb9e980b49c9a936f7",
+    "sourceCommit": "7adbae1a274dd4d2ed1446876be8e8efdae42d27",
     "reviewRecord": "docs.local/reviews/2026-10-01-storage-rules-closure-review.md and the sections \"Delta 85dc8890f\" and \"Delta fba79bd2d\" of docs.local/reviews/2026-10-01-storage-rules-closure-delta-review.md",
     "ownerRulings": "owner ledger \"STORAGE-RULES local parity: per-profile rulings\" (line 707), \"Rules emulator-profile signed-token verification\" and \"STORAGE-RULES media 404 content type\" (line 721)",
-    "note": "The reviewer re-derived all 3641 strict rows against the recording, rebuilt the binding to the release binary and checked the 388 Quint digests. Approval does not promote the parent: storage-service-compile, release-switch and no-release stay PRODUCTION_RECORDED because no local row comparison covers the management programs, so parentStatus stays IMPLEMENTING."
+    "note": "The reviewer re-derived all 3641 strict rows against the recording, rebuilt the binding to the release binary and checked the 388 Quint digests. Approval does not promote the parent: storage-service-compile, release-switch and no-release stay PRODUCTION_RECORDED because no local row comparison covers the management programs, so parentStatus stays IMPLEMENTING. Rebound 2026-10-01 to the release binary built from the merge of work/storage-rules-closure and work/storage-rules-recorded-shapes over integration f52e30f61 (the recorded-shapes branch has its own static review, docs.local/reviews/2026-10-01-storage-rules-recorded-shapes-review.md, approved at 64b39a09d with a wording-only follow-up): the 3641-row strict comparison and the 8 decided emulator-profile rows are unchanged, so the review's approval stands."
   },
   "observationContract": {
     "project": "fireemu-oracle-query",
@@ -115,8 +115,8 @@
             "project": "fireemu-oracle-query"
           }
         ],
-        "finalArtifactSha256": "3c96b1432a966c16eac8f193b47d9c6b4bdfcb5b6ba8dd43f01f096d55ee8cb0",
-        "sourceCommit": "b0fc2485d5596439b515f4fd12f6c3ce68d4af91",
+        "finalArtifactSha256": "075593e8e7f528b2f318fd121f67bf539b4a1f7cf039b3fb9e980b49c9a936f7",
+        "sourceCommit": "7adbae1a274dd4d2ed1446876be8e8efdae42d27",
         "comparisonPath": "spec/compatibility/closure/evidence/STORAGE-RULES-comparison.json",
         "rows": {
           "MATCH": 882
@@ -149,8 +149,8 @@
             "project": "fireemu-oracle-query"
           }
         ],
-        "finalArtifactSha256": "3c96b1432a966c16eac8f193b47d9c6b4bdfcb5b6ba8dd43f01f096d55ee8cb0",
-        "sourceCommit": "b0fc2485d5596439b515f4fd12f6c3ce68d4af91",
+        "finalArtifactSha256": "075593e8e7f528b2f318fd121f67bf539b4a1f7cf039b3fb9e980b49c9a936f7",
+        "sourceCommit": "7adbae1a274dd4d2ed1446876be8e8efdae42d27",
         "comparisonPath": "spec/compatibility/closure/evidence/STORAGE-RULES-comparison.json",
         "rows": {
           "MATCH": 168
@@ -183,8 +183,8 @@
             "project": "fireemu-oracle-query"
           }
         ],
-        "finalArtifactSha256": "3c96b1432a966c16eac8f193b47d9c6b4bdfcb5b6ba8dd43f01f096d55ee8cb0",
-        "sourceCommit": "b0fc2485d5596439b515f4fd12f6c3ce68d4af91",
+        "finalArtifactSha256": "075593e8e7f528b2f318fd121f67bf539b4a1f7cf039b3fb9e980b49c9a936f7",
+        "sourceCommit": "7adbae1a274dd4d2ed1446876be8e8efdae42d27",
         "comparisonPath": "spec/compatibility/closure/evidence/STORAGE-RULES-comparison.json",
         "rows": {
           "MATCH": 164
@@ -217,8 +217,8 @@
             "project": "fireemu-oracle-query"
           }
         ],
-        "finalArtifactSha256": "3c96b1432a966c16eac8f193b47d9c6b4bdfcb5b6ba8dd43f01f096d55ee8cb0",
-        "sourceCommit": "b0fc2485d5596439b515f4fd12f6c3ce68d4af91",
+        "finalArtifactSha256": "075593e8e7f528b2f318fd121f67bf539b4a1f7cf039b3fb9e980b49c9a936f7",
+        "sourceCommit": "7adbae1a274dd4d2ed1446876be8e8efdae42d27",
         "comparisonPath": "spec/compatibility/closure/evidence/STORAGE-RULES-comparison.json",
         "rows": {
           "MATCH": 193
@@ -251,8 +251,8 @@
             "project": "fireemu-oracle-query"
           }
         ],
-        "finalArtifactSha256": "3c96b1432a966c16eac8f193b47d9c6b4bdfcb5b6ba8dd43f01f096d55ee8cb0",
-        "sourceCommit": "b0fc2485d5596439b515f4fd12f6c3ce68d4af91",
+        "finalArtifactSha256": "075593e8e7f528b2f318fd121f67bf539b4a1f7cf039b3fb9e980b49c9a936f7",
+        "sourceCommit": "7adbae1a274dd4d2ed1446876be8e8efdae42d27",
         "comparisonPath": "spec/compatibility/closure/evidence/STORAGE-RULES-comparison.json",
         "rows": {
           "MATCH": 60
@@ -285,8 +285,8 @@
             "project": "fireemu-oracle-query"
           }
         ],
-        "finalArtifactSha256": "3c96b1432a966c16eac8f193b47d9c6b4bdfcb5b6ba8dd43f01f096d55ee8cb0",
-        "sourceCommit": "b0fc2485d5596439b515f4fd12f6c3ce68d4af91",
+        "finalArtifactSha256": "075593e8e7f528b2f318fd121f67bf539b4a1f7cf039b3fb9e980b49c9a936f7",
+        "sourceCommit": "7adbae1a274dd4d2ed1446876be8e8efdae42d27",
         "comparisonPath": "spec/compatibility/closure/evidence/STORAGE-RULES-comparison.json",
         "rows": {
           "MATCH": 239
@@ -319,8 +319,8 @@
             "project": "fireemu-oracle-query"
           }
         ],
-        "finalArtifactSha256": "3c96b1432a966c16eac8f193b47d9c6b4bdfcb5b6ba8dd43f01f096d55ee8cb0",
-        "sourceCommit": "b0fc2485d5596439b515f4fd12f6c3ce68d4af91",
+        "finalArtifactSha256": "075593e8e7f528b2f318fd121f67bf539b4a1f7cf039b3fb9e980b49c9a936f7",
+        "sourceCommit": "7adbae1a274dd4d2ed1446876be8e8efdae42d27",
         "comparisonPath": "spec/compatibility/closure/evidence/STORAGE-RULES-comparison.json",
         "rows": {
           "MATCH": 96
@@ -353,8 +353,8 @@
             "project": "fireemu-oracle-query"
           }
         ],
-        "finalArtifactSha256": "3c96b1432a966c16eac8f193b47d9c6b4bdfcb5b6ba8dd43f01f096d55ee8cb0",
-        "sourceCommit": "b0fc2485d5596439b515f4fd12f6c3ce68d4af91",
+        "finalArtifactSha256": "075593e8e7f528b2f318fd121f67bf539b4a1f7cf039b3fb9e980b49c9a936f7",
+        "sourceCommit": "7adbae1a274dd4d2ed1446876be8e8efdae42d27",
         "comparisonPath": "spec/compatibility/closure/evidence/STORAGE-RULES-comparison.json",
         "rows": {
           "MATCH": 668
@@ -387,8 +387,8 @@
             "project": "fireemu-oracle-query"
           }
         ],
-        "finalArtifactSha256": "3c96b1432a966c16eac8f193b47d9c6b4bdfcb5b6ba8dd43f01f096d55ee8cb0",
-        "sourceCommit": "b0fc2485d5596439b515f4fd12f6c3ce68d4af91",
+        "finalArtifactSha256": "075593e8e7f528b2f318fd121f67bf539b4a1f7cf039b3fb9e980b49c9a936f7",
+        "sourceCommit": "7adbae1a274dd4d2ed1446876be8e8efdae42d27",
         "comparisonPath": "spec/compatibility/closure/evidence/STORAGE-RULES-comparison.json",
         "rows": {
           "MATCH": 84
@@ -421,8 +421,8 @@
             "project": "fireemu-oracle-query"
           }
         ],
-        "finalArtifactSha256": "3c96b1432a966c16eac8f193b47d9c6b4bdfcb5b6ba8dd43f01f096d55ee8cb0",
-        "sourceCommit": "b0fc2485d5596439b515f4fd12f6c3ce68d4af91",
+        "finalArtifactSha256": "075593e8e7f528b2f318fd121f67bf539b4a1f7cf039b3fb9e980b49c9a936f7",
+        "sourceCommit": "7adbae1a274dd4d2ed1446876be8e8efdae42d27",
         "comparisonPath": "spec/compatibility/closure/evidence/STORAGE-RULES-comparison.json",
         "rows": {
           "MATCH": 43
@@ -455,8 +455,8 @@
             "project": "fireemu-oracle-query"
           }
         ],
-        "finalArtifactSha256": "3c96b1432a966c16eac8f193b47d9c6b4bdfcb5b6ba8dd43f01f096d55ee8cb0",
-        "sourceCommit": "b0fc2485d5596439b515f4fd12f6c3ce68d4af91",
+        "finalArtifactSha256": "075593e8e7f528b2f318fd121f67bf539b4a1f7cf039b3fb9e980b49c9a936f7",
+        "sourceCommit": "7adbae1a274dd4d2ed1446876be8e8efdae42d27",
         "comparisonPath": "spec/compatibility/closure/evidence/STORAGE-RULES-comparison.json",
         "rows": {
           "MATCH": 67
@@ -489,8 +489,8 @@
             "project": "fireemu-oracle-query"
           }
         ],
-        "finalArtifactSha256": "3c96b1432a966c16eac8f193b47d9c6b4bdfcb5b6ba8dd43f01f096d55ee8cb0",
-        "sourceCommit": "b0fc2485d5596439b515f4fd12f6c3ce68d4af91",
+        "finalArtifactSha256": "075593e8e7f528b2f318fd121f67bf539b4a1f7cf039b3fb9e980b49c9a936f7",
+        "sourceCommit": "7adbae1a274dd4d2ed1446876be8e8efdae42d27",
         "comparisonPath": "spec/compatibility/closure/evidence/STORAGE-RULES-comparison.json",
         "rows": {
           "MATCH": 72
@@ -535,8 +535,8 @@
             "project": "fireemu-oracle-query"
           }
         ],
-        "finalArtifactSha256": "3c96b1432a966c16eac8f193b47d9c6b4bdfcb5b6ba8dd43f01f096d55ee8cb0",
-        "sourceCommit": "b0fc2485d5596439b515f4fd12f6c3ce68d4af91",
+        "finalArtifactSha256": "075593e8e7f528b2f318fd121f67bf539b4a1f7cf039b3fb9e980b49c9a936f7",
+        "sourceCommit": "7adbae1a274dd4d2ed1446876be8e8efdae42d27",
         "comparisonPath": "spec/compatibility/closure/evidence/STORAGE-RULES-comparison.json",
         "rows": {
           "RECORDED_DIVERGENCE": 9,
@@ -570,8 +570,8 @@
             "project": "fireemu-oracle-query"
           }
         ],
-        "finalArtifactSha256": "3c96b1432a966c16eac8f193b47d9c6b4bdfcb5b6ba8dd43f01f096d55ee8cb0",
-        "sourceCommit": "b0fc2485d5596439b515f4fd12f6c3ce68d4af91",
+        "finalArtifactSha256": "075593e8e7f528b2f318fd121f67bf539b4a1f7cf039b3fb9e980b49c9a936f7",
+        "sourceCommit": "7adbae1a274dd4d2ed1446876be8e8efdae42d27",
         "comparisonPath": "spec/compatibility/closure/evidence/STORAGE-RULES-comparison.json",
         "rows": {
           "RECORDED_DIVERGENCE": 7,
@@ -605,8 +605,8 @@
             "project": "fireemu-oracle-query"
           }
         ],
-        "finalArtifactSha256": "3c96b1432a966c16eac8f193b47d9c6b4bdfcb5b6ba8dd43f01f096d55ee8cb0",
-        "sourceCommit": "b0fc2485d5596439b515f4fd12f6c3ce68d4af91",
+        "finalArtifactSha256": "075593e8e7f528b2f318fd121f67bf539b4a1f7cf039b3fb9e980b49c9a936f7",
+        "sourceCommit": "7adbae1a274dd4d2ed1446876be8e8efdae42d27",
         "comparisonPath": "spec/compatibility/closure/evidence/STORAGE-RULES-comparison.json",
         "rows": {
           "RECORDED_DIVERGENCE": 42,
@@ -640,8 +640,8 @@
             "project": "fireemu-oracle-query"
           }
         ],
-        "finalArtifactSha256": "3c96b1432a966c16eac8f193b47d9c6b4bdfcb5b6ba8dd43f01f096d55ee8cb0",
-        "sourceCommit": "b0fc2485d5596439b515f4fd12f6c3ce68d4af91",
+        "finalArtifactSha256": "075593e8e7f528b2f318fd121f67bf539b4a1f7cf039b3fb9e980b49c9a936f7",
+        "sourceCommit": "7adbae1a274dd4d2ed1446876be8e8efdae42d27",
         "comparisonPath": "spec/compatibility/closure/evidence/STORAGE-RULES-comparison.json",
         "rows": {
           "MATCH": 126
@@ -674,8 +674,8 @@
             "project": "fireemu-oracle-query"
           }
         ],
-        "finalArtifactSha256": "3c96b1432a966c16eac8f193b47d9c6b4bdfcb5b6ba8dd43f01f096d55ee8cb0",
-        "sourceCommit": "b0fc2485d5596439b515f4fd12f6c3ce68d4af91",
+        "finalArtifactSha256": "075593e8e7f528b2f318fd121f67bf539b4a1f7cf039b3fb9e980b49c9a936f7",
+        "sourceCommit": "7adbae1a274dd4d2ed1446876be8e8efdae42d27",
         "comparisonPath": "spec/compatibility/closure/evidence/STORAGE-RULES-comparison.json",
         "rows": {
           "MATCH": 252
@@ -708,8 +708,8 @@
             "project": "fireemu-oracle-query"
           }
         ],
-        "finalArtifactSha256": "3c96b1432a966c16eac8f193b47d9c6b4bdfcb5b6ba8dd43f01f096d55ee8cb0",
-        "sourceCommit": "b0fc2485d5596439b515f4fd12f6c3ce68d4af91",
+        "finalArtifactSha256": "075593e8e7f528b2f318fd121f67bf539b4a1f7cf039b3fb9e980b49c9a936f7",
+        "sourceCommit": "7adbae1a274dd4d2ed1446876be8e8efdae42d27",
         "comparisonPath": "spec/compatibility/closure/evidence/STORAGE-RULES-comparison.json",
         "rows": {
           "MATCH": 378
@@ -742,8 +742,8 @@
             "project": "fireemu-oracle-query"
           }
         ],
-        "finalArtifactSha256": "3c96b1432a966c16eac8f193b47d9c6b4bdfcb5b6ba8dd43f01f096d55ee8cb0",
-        "sourceCommit": "b0fc2485d5596439b515f4fd12f6c3ce68d4af91",
+        "finalArtifactSha256": "075593e8e7f528b2f318fd121f67bf539b4a1f7cf039b3fb9e980b49c9a936f7",
+        "sourceCommit": "7adbae1a274dd4d2ed1446876be8e8efdae42d27",
         "comparisonPath": "spec/compatibility/closure/evidence/STORAGE-RULES-comparison.json",
         "rows": {
           "MATCH": 15
@@ -800,8 +800,8 @@
             "project": "fireemu-oracle-query"
           }
         ],
-        "finalArtifactSha256": "3c96b1432a966c16eac8f193b47d9c6b4bdfcb5b6ba8dd43f01f096d55ee8cb0",
-        "sourceCommit": "b0fc2485d5596439b515f4fd12f6c3ce68d4af91",
+        "finalArtifactSha256": "075593e8e7f528b2f318fd121f67bf539b4a1f7cf039b3fb9e980b49c9a936f7",
+        "sourceCommit": "7adbae1a274dd4d2ed1446876be8e8efdae42d27",
         "comparisonPath": "spec/compatibility/closure/evidence/STORAGE-RULES-official-regression.json",
         "rows": {
           "GATED_STEPS_PASSED": 234
@@ -834,8 +834,8 @@
             "project": "fireemu-oracle-query"
           }
         ],
-        "finalArtifactSha256": "3c96b1432a966c16eac8f193b47d9c6b4bdfcb5b6ba8dd43f01f096d55ee8cb0",
-        "sourceCommit": "b0fc2485d5596439b515f4fd12f6c3ce68d4af91",
+        "finalArtifactSha256": "075593e8e7f528b2f318fd121f67bf539b4a1f7cf039b3fb9e980b49c9a936f7",
+        "sourceCommit": "7adbae1a274dd4d2ed1446876be8e8efdae42d27",
         "comparisonPath": "spec/compatibility/closure/evidence/STORAGE-RULES-comparison.json",
         "rows": {
           "REVIEWED_ROWS": 3641

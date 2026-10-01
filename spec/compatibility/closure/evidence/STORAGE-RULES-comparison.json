@@ -3,7 +3,7 @@
  "divergenceClasses": {
   "firestore-adapter-content-type": "Firestore program rows read the Firestore adapter, whose JSON content type is outside the Storage framing"
  },
- "artifactSha256": "3c96b1432a966c16eac8f193b47d9c6b4bdfcb5b6ba8dd43f01f096d55ee8cb0",
+ "artifactSha256": "075593e8e7f528b2f318fd121f67bf539b4a1f7cf039b3fb9e980b49c9a936f7",
  "fixtureSha256": "0ef2d20dfcfa90df183db90c107f74af0bd25cefe14a24256fbe3e3213d235b4",
  "summary": {
   "MATCH": 3583,

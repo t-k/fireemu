@@ -833,3 +833,30 @@ test("the CLI meter directory exists only while metered calls are in flight", as
     else process.env.TMPDIR = saved;
   }
 });
+
+test("a meter directory that cannot be created fails that call only", async () => {
+  const scratch = tempDir("atb-meter-failed-");
+  const saved = process.env.TMPDIR;
+  try {
+    const run = async () => ({ stdout: "15.0.0", stderr: "" });
+    const deployer = createDeployer({
+      project: PROJECT,
+      number: NUMBER,
+      token: async () => "token",
+      run,
+      charge: () => {},
+    });
+    process.env.TMPDIR = join(scratch, "missing");
+    assert.equal(await deployer.cliVersion(), "unknown", "no directory, so the call fails");
+    process.env.TMPDIR = scratch;
+    assert.equal(await deployer.cliVersion(), "15.0.0", "the next call creates one again");
+    assert.deepEqual(
+      readdirSync(scratch).filter((name) => name.startsWith("atb-cli-meter-")),
+      [],
+      "and removes it, so the failed call left no count behind",
+    );
+  } finally {
+    if (saved === undefined) delete process.env.TMPDIR;
+    else process.env.TMPDIR = saved;
+  }
+});

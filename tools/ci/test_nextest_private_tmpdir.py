@@ -3,6 +3,7 @@ private TMPDIR, removes it afterwards and fails a test that left anything in it.
 
 import os
 import signal
+import sys
 import subprocess
 import tempfile
 import time
@@ -22,6 +23,8 @@ class WrapperTest(unittest.TestCase):
         self.root = self.parent / f"fireemu-test-tmp-{os.getuid()}"
 
     def tearDown(self):
+        if sys.platform == "darwin":
+            subprocess.run(["chflags", "-R", "nouchg", self.tmp.name], check=False)
         self.tmp.cleanup()
 
     def run_wrapped(self, script, env=None):
@@ -166,6 +169,17 @@ class WrapperTest(unittest.TestCase):
         self.assertEqual(result.returncode, 1)
         self.assertIn("hidden-file", result.stderr)
         self.assertEqual(self.private_dirs(), [])
+
+    def test_a_test_that_removes_its_tmpdir_fails(self):
+        result = self.run_wrapped('rm -rf "$TMPDIR"')
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("could not be listed", result.stderr)
+
+    @unittest.skipUnless(sys.platform == "darwin", "an undeletable file needs chflags (macOS)")
+    def test_a_leftover_that_cannot_be_removed_fails_the_test(self):
+        result = self.run_wrapped(': > "$TMPDIR/locked"; chflags uchg "$TMPDIR/locked"')
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("could not be removed", result.stderr)
 
     def refused(self, result):
         self.assertEqual(result.returncode, 70, result.stderr)

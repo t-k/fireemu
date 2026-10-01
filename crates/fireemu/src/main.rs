@@ -2621,12 +2621,35 @@ mod config_reload_tests {
     const INDEXES_ONE: &str = r#"{"indexes":[{"collectionGroup":"items","queryScope":"COLLECTION","fields":[{"fieldPath":"a","order":"ASCENDING"},{"fieldPath":"b","order":"DESCENDING"}]}],"fieldOverrides":[]}"#;
     const INDEXES_TWO: &str = r#"{"indexes":[{"collectionGroup":"other","queryScope":"COLLECTION","fields":[{"fieldPath":"c","order":"ASCENDING"},{"fieldPath":"d","order":"DESCENDING"}]}],"fieldOverrides":[]}"#;
 
-    fn scratch(name: &str) -> std::path::PathBuf {
+    /// A scratch directory removed when the test ends, also when an assertion fails first.
+    struct Scratch(std::path::PathBuf);
+
+    impl std::ops::Deref for Scratch {
+        type Target = std::path::Path;
+
+        fn deref(&self) -> &std::path::Path {
+            &self.0
+        }
+    }
+
+    impl AsRef<std::path::Path> for Scratch {
+        fn as_ref(&self) -> &std::path::Path {
+            &self.0
+        }
+    }
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn scratch(name: &str) -> Scratch {
         let dir =
             std::env::temp_dir().join(format!("fireemu-reload-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        dir
+        Scratch(dir)
     }
 
     fn write_rules_generation(

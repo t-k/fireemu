@@ -1,5 +1,7 @@
 //! Auth and Firestore expose exact readiness roots to process-level pollers.
 
+mod scratch;
+
 use std::io::{Read as _, Write as _};
 use std::net::TcpStream;
 use std::process::{Child, Command, Stdio};
@@ -169,12 +171,14 @@ fn start_large_queries(firestore: u16) -> LargeQueries {
     LargeQueries { readers, completed }
 }
 
-struct Daemon(Child);
+/// A daemon and the project its Hub locator is named after.
+struct Daemon(Child, &'static str);
 
 impl Drop for Daemon {
     fn drop(&mut self) {
         let _ = self.0.kill();
         let _ = self.0.wait();
+        scratch::remove_killed_daemon_locator(self.1, self.0.id());
     }
 }
 
@@ -210,7 +214,7 @@ fn auth_and_firestore_roots_are_ready_without_widening_routes() {
         .stderr(Stdio::null())
         .spawn()
         .unwrap();
-    let _daemon = Daemon(child);
+    let _daemon = Daemon(child, "demo-readiness");
 
     let emulators = discover(hub_port);
     let auth = u16::try_from(emulators["auth"]["port"].as_u64().unwrap()).unwrap();
@@ -264,7 +268,7 @@ fn large_firestore_queries_do_not_stall_auth_or_another_database() {
         .stderr(Stdio::null())
         .spawn()
         .unwrap();
-    let _daemon = Daemon(child);
+    let _daemon = Daemon(child, "demo-saturation");
     let emulators = discover(hub_port);
     let auth = u16::try_from(emulators["auth"]["port"].as_u64().unwrap()).unwrap();
     let firestore = u16::try_from(emulators["firestore"]["port"].as_u64().unwrap()).unwrap();

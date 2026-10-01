@@ -2,9 +2,12 @@
 //! from `fieldOverrides[].ttl`: a daemon started with such a file has the policies in force,
 //! and Admin `fields.get` reports them the way it reports a `fields.patch` policy.
 
+mod scratch;
+
+use scratch::Scratch;
+
 use std::io::{BufRead as _, BufReader, Read as _, Write as _};
 use std::net::TcpStream;
-use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::time::Duration;
 
@@ -15,11 +18,8 @@ fn free_port() -> u16 {
     port
 }
 
-fn scratch(name: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("fireemu-ttl-file-{name}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    dir
+fn scratch(name: &str) -> Scratch {
+    Scratch::new("ttl-file", name)
 }
 
 fn http_as_owner(port: u16, method: &str, path: &str) -> (u16, serde_json::Value) {
@@ -55,7 +55,8 @@ enum Layout {
 }
 
 /// The `fireemu up` command of a daemon whose Firestore reads `indexes` from a file.
-fn command(name: &str, layout: &Layout, indexes: &str) -> (Command, u16) {
+/// The returned directory holds the configuration; keep it until the daemon is done.
+fn command(name: &str, layout: &Layout, indexes: &str) -> (Command, u16, Scratch) {
     let dir = scratch(name);
     let indexes_path = dir.join("firestore.indexes.json");
     std::fs::write(&indexes_path, indexes).unwrap();
@@ -101,17 +102,19 @@ fn command(name: &str, layout: &Layout, indexes: &str) -> (Command, u16) {
         .args(["--logging-port", "0", "--ui-port", "0", "--hub-port"])
         .arg(hub_port.to_string())
         .stdin(Stdio::null());
-    (command, hub_port)
+    (command, hub_port, dir)
 }
 
 struct Daemon {
     child: Child,
     hub_port: u16,
+    /// The daemon's configuration directory, removed after the daemon is stopped.
+    _dir: Scratch,
 }
 
 impl Daemon {
     fn start(name: &str, layout: &Layout, indexes: &str) -> Self {
-        let (mut command, hub_port) = command(name, layout, indexes);
+        let (mut command, hub_port, dir) = command(name, layout, indexes);
         let mut child = command
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
@@ -136,7 +139,11 @@ impl Daemon {
         });
         rx.recv_timeout(Duration::from_secs(60))
             .expect("the daemon became ready");
-        Self { child, hub_port }
+        Self {
+            child,
+            hub_port,
+            _dir: dir,
+        }
     }
 
     fn field(&self, collection: &str, field: &str) -> (u16, serde_json::Value) {
@@ -159,6 +166,7 @@ impl Drop for Daemon {
     fn drop(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
+        scratch::remove_killed_daemon_locator("demo-ttl", self.child.id());
     }
 }
 
@@ -197,7 +205,7 @@ fn a_ttl_declared_in_the_indexes_file_is_reported_like_a_patched_one() {
 
 #[test]
 fn two_ttl_fields_in_one_collection_group_stop_the_daemon_with_a_message() {
-    let (mut command, _hub) = command(
+    let (mut command, _hub, _dir) = command(
         "conflict",
         &Layout::DefaultDatabase,
         r#"{"indexes":[],"fieldOverrides":[

@@ -806,7 +806,7 @@ while True:
 async fn state_with_http_functions() -> (
     Arc<UiState>,
     Arc<fireemu_adapter_functions::runtime::FunctionsRuntime>,
-    std::path::PathBuf,
+    TaskProbe,
 ) {
     use fireemu_adapter_functions::runner::{Runner, SpawnSpec};
     use fireemu_adapter_functions::runtime::{CatchUpPolicy, FunctionsConfig, OverlapPolicy};
@@ -819,8 +819,11 @@ async fn state_with_http_functions() -> (
     let seq = PROBE_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let dir = std::env::temp_dir().join(format!("fireemu-ui-invoke-{}-{seq}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
-    let probe = dir.join("tasks");
-    let _ = std::fs::remove_file(&probe);
+    let probe = TaskProbe {
+        file: dir.join("tasks"),
+        dir,
+    };
+    let _ = std::fs::remove_file(&*probe);
 
     let spec = SpawnSpec {
         command: vec![
@@ -888,6 +891,27 @@ async fn state_with_http_functions() -> (
     state.info.functions_addr = Some(addr);
     state.functions = Some(runtime.clone());
     (Arc::new(state), runtime, probe)
+}
+
+/// The file the task handler records dispatched tasks to. Its directory is removed when the
+/// test ends, also when it panics.
+struct TaskProbe {
+    dir: std::path::PathBuf,
+    file: std::path::PathBuf,
+}
+
+impl std::ops::Deref for TaskProbe {
+    type Target = std::path::Path;
+
+    fn deref(&self) -> &std::path::Path {
+        &self.file
+    }
+}
+
+impl Drop for TaskProbe {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.dir);
+    }
 }
 
 /// Waits for the task probe to hold at least `expected` recorded dispatches.

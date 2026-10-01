@@ -8,9 +8,12 @@
 //! and only `strict` may refuse it, with the `firestore.indexes.json` fragment production
 //! would need.
 
+mod scratch;
+
+use scratch::Scratch;
+
 use std::io::{BufRead as _, BufReader, Read as _, Write as _};
 use std::net::TcpStream;
-use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -23,11 +26,8 @@ fn free_port() -> u16 {
     port
 }
 
-fn scratch(name: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("fireemu-profiles-{name}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    dir
+fn scratch(name: &str) -> Scratch {
+    Scratch::new("profiles", name)
 }
 
 /// One HTTP request, written by hand: the binary's test suite has no HTTP client dependency
@@ -78,6 +78,8 @@ struct Daemon {
     child: Child,
     banner: Arc<Mutex<String>>,
     hub_port: u16,
+    /// The daemon's configuration directory, removed after the daemon is stopped.
+    _dir: Scratch,
 }
 
 impl Daemon {
@@ -88,17 +90,18 @@ impl Daemon {
     /// A daemon whose `firestore` configuration carries `firestore_extra` (`"key": value, `
     /// pairs) besides the edition and the API mode.
     fn start_with(name: &str, profile: &str, firestore_extra: &str) -> Self {
-        let (mut command, hub_port) = Self::command(name, profile, firestore_extra);
+        let (mut command, hub_port, dir) = Self::command(name, profile, firestore_extra);
         let mut child = command
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
             .unwrap();
-        Self::ready(child.stdout.take().unwrap(), child, hub_port)
+        Self::ready(child.stdout.take().unwrap(), child, hub_port, dir)
     }
 
-    /// The `fireemu up` command of a daemon, and the Hub port it will listen on.
-    fn command(name: &str, profile: &str, firestore_extra: &str) -> (Command, u16) {
+    /// The `fireemu up` command of a daemon, the Hub port it will listen on, and the directory
+    /// holding its configuration (keep it until the daemon is done).
+    fn command(name: &str, profile: &str, firestore_extra: &str) -> (Command, u16, Scratch) {
         let dir = scratch(name);
         let config = dir.join("fireemu.json");
         std::fs::write(
@@ -131,10 +134,10 @@ impl Daemon {
             ])
             .arg(hub_port.to_string())
             .stdin(Stdio::null());
-        (command, hub_port)
+        (command, hub_port, dir)
     }
 
-    fn ready(stdout: std::process::ChildStdout, child: Child, hub_port: u16) -> Self {
+    fn ready(stdout: std::process::ChildStdout, child: Child, hub_port: u16, dir: Scratch) -> Self {
         // The banner's control-API line is printed once every listener is bound; the pipe
         // keeps being drained afterwards so the daemon never hits a broken pipe mid-run, and
         // every line it ever prints stays readable, whatever order the banner puts them in.
@@ -163,6 +166,7 @@ impl Daemon {
             child,
             banner,
             hub_port,
+            _dir: dir,
         }
     }
 
@@ -329,7 +333,7 @@ fn a_configured_database_creation_time_bounds_read_times() {
     );
     daemon.stop();
 
-    let (mut command, _) = Daemon::command(
+    let (mut command, _, _dir) = Daemon::command(
         "created-later",
         "strict",
         r#""databaseCreateTime": "2999-01-01T00:00:00Z", "#,

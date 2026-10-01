@@ -132,19 +132,33 @@ fn member_order(path: &[&str]) -> Option<&'static [&'static str]> {
 /// Whether the request's `Accept-Encoding` admits gzip (`gzip` or `*` with a non-zero quality).
 #[must_use]
 pub fn accepts_gzip(accept_encoding: Option<&str>) -> bool {
-    accept_encoding.is_some_and(|value| {
-        value.split(',').any(|item| {
-            let mut parts = item.split(';');
-            let coding = parts.next().unwrap_or_default().trim().to_ascii_lowercase();
-            let refused = parts.any(|parameter| {
+    let Some(value) = accept_encoding else {
+        return false;
+    };
+    // The best quality offered for gzip itself, and for `*`. An entry for gzip decides whatever
+    // the wildcard says and wherever it stands (RFC 9110, section 12.5.3); `*` only speaks for
+    // codings the header does not name.
+    let (mut gzip, mut wildcard): (Option<f64>, Option<f64>) = (None, None);
+    for item in value.split(',') {
+        let mut parts = item.split(';');
+        let coding = parts.next().unwrap_or_default().trim().to_ascii_lowercase();
+        let quality = parts
+            .filter_map(|parameter| {
+                let parameter = parameter.trim().to_ascii_lowercase();
                 parameter
-                    .trim()
                     .strip_prefix("q=")
-                    .is_some_and(|quality| quality.trim().parse::<f64>().is_ok_and(|q| q <= 0.0))
-            });
-            (coding == "gzip" || coding == "*") && !refused
-        })
-    })
+                    .and_then(|quality| quality.trim().parse::<f64>().ok())
+            })
+            .next_back()
+            .unwrap_or(1.0);
+        let slot = match coding.as_str() {
+            "gzip" => &mut gzip,
+            "*" => &mut wildcard,
+            _ => continue,
+        };
+        *slot = Some(slot.map_or(quality, |best| best.max(quality)));
+    }
+    gzip.or(wildcard).is_some_and(|quality| quality > 0.0)
 }
 
 /// `data` as a gzip stream of stored (uncompressed) deflate blocks: any gzip decoder reads it, and
@@ -391,6 +405,17 @@ mod tests {
             (Some("gzip;q=0"), false),
             (Some("*"), true),
             (Some("br, deflate"), false),
+            // An explicit entry for gzip decides, whatever the wildcard says and wherever it sits
+            // (RFC 9110, section 12.5.3).
+            (Some("gzip;q=0, *;q=1"), false),
+            (Some("*;q=1, gzip;q=0"), false),
+            (Some("gzip;q=0.000, *"), false),
+            (Some("GZIP;Q=0, *"), false),
+            (Some("gzip;q=0, gzip;q=1"), true),
+            (Some("identity, *;q=0"), false),
+            (Some("*;q=0, gzip"), true),
+            (Some("*;q=0.1"), true),
+            (Some("*;q=0, deflate"), false),
         ] {
             assert_eq!(accepts_gzip(header), expected, "{header:?}");
         }

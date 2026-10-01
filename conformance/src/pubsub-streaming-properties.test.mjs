@@ -507,7 +507,8 @@ test(
 );
 
 // Reference journal: sequential bookkeeping with the drain applied at explicit flush points. A
-// hung write blocks the chain: it and every later entry stay unsettled.
+// hung write blocks the chain until the deadline; past it, the write's own cutoff rejects it and
+// every entry queued behind it.
 function modelJournal({ maxEntries, maxEntryBytes, maxTotalBytes }, hungAt) {
   const state = {
       entries: 0,

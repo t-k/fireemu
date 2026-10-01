@@ -277,3 +277,16 @@ def test_a_refused_holder_commit_that_keeps_its_lock_is_released_before_the_writ
     assert order[commit + 1].startswith("cleanup/token/"), "the holder is released right after its anchor"
     assert order.index("rest/c/writer-a") > commit + 1
     projection(receipt, TABLE)
+
+
+@pytest.mark.parametrize("holder_code, writer_code, states", [(0, 0, {"a": "grpc-r-after", "b": "grpc-c-unrelated"}), (10, 0, {"a": "grpc-r-after", "b": "grpc-c-unrelated"}),
+                                                              (0, 10, {"a": "grpc-c-commit", "b": "created"}), (10, 10, {"a": "created", "b": "created"})])
+def test_the_projection_derives_the_states_whether_the_holder_commit_and_the_writer_are_accepted_or_refused(holder_code, writer_code, states):
+    # The projection takes the writer on before its anchor, as the collector did: a refused writer then returns the state the anchor left, and the
+    # completion claims derive from the native rows. (Dropping that step made every refused-writer recording unprojectable: Codex M3, 2026-10-01.)
+    clock = Clock()
+    value = compile_plan(TABLE, NONCE, OWNER)
+    service = Service(clock, locks=True, hold_writers=True, rw_commit_code=holder_code, writer_code=writer_code)
+    receipt = Collector(value, TABLE, RequestBudget(value, TABLE), service, "owner", save=lambda _state: None, monotonic=clock.now, utc=clock.utc, sleep=clock.sleep).run()
+    assert receipt["complete"] is True, receipt.get("failureType")
+    assert projection(receipt, TABLE)["expectedStates"] == states

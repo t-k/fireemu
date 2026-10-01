@@ -3471,7 +3471,14 @@ async fn full_catch_up_cap_still_wakes_delayed_events() {
         "held by the delay"
     );
     assert_eq!(count_function(&runtime, "tick"), 0);
-    advance(&clock, 60 * 60);
+    // While the held run fills the room, a clock change inside the hold enqueues nothing
+    // more: the backlog stays pending instead of exceeding the cap.
+    advance(&clock, 60);
+    runtime.on_clock_changed();
+    let _ = runtime.await_idle(Duration::from_millis(300)).await;
+    assert_eq!(count_function(&runtime, "tick"), 0, "{}", runtime.status());
+    assert_eq!(runtime.status()["catchUpPending"], true);
+    advance(&clock, 59 * 60);
     runtime.on_clock_changed();
     assert!(
         runtime.await_idle(Duration::from_secs(5)).await.is_ok(),

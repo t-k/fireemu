@@ -245,7 +245,7 @@ fn walk(root: &Path, at: &Path, out: &mut Vec<String>) {
     }
 }
 
-#[cfg(all(target_os = "macos", not(debug_assertions)))]
+#[cfg(unix)]
 fn write_document_artifact(root: &Path, count: usize, payload_len: usize) -> u64 {
     use std::collections::BTreeMap;
     use std::io::Write as _;
@@ -562,6 +562,72 @@ fn a_named_firestore_database_and_a_second_bucket_survive_the_round_trip() {
         "{log}"
     );
     assert!(log.contains("storage: 4 object(s) in 2 bucket(s)"), "{log}");
+}
+
+/// An import is not held to a lowered `firestore.history.maxBytes`: a database is built from
+/// the artifact first and takes the configured limit afterwards, so an import above the limit
+/// starts, and every later write that would grow the history is refused with
+/// `RESOURCE_EXHAUSTED`. This pins the current behaviour, which the README documents;
+/// whether an import should be refused instead is an open question.
+#[cfg(unix)]
+#[test]
+fn an_import_above_a_lowered_history_byte_limit_starts_and_later_growth_is_refused() {
+    let dir = scratch("history-bytes-import");
+    let export = dir.join("export");
+    // 24 documents of 64 KiB: about 1.5 MiB of history against a 1 MiB limit.
+    write_document_artifact(&export, 24, 64 * 1024);
+    let config = dir.join("fireemu.json");
+    std::fs::write(
+        &config,
+        r#"{"schemaVersion": 1, "profile": "emulator", "firestore": {"edition": "standard", "apiMode": "native", "history": {"maxBytes": 1048576}}}"#,
+    )
+    .unwrap();
+    let documents =
+        "http://$FIRESTORE_EMULATOR_HOST/v1/projects/demo-import-rss/databases/(default)/documents";
+    let probe = format!(
+        r#"curl -s -o /dev/null -w 'read %{{http_code}}\n' -H 'Authorization: Bearer owner' "{documents}/payloads/doc-000000"
+curl -s -w '\nwrite %{{http_code}}\n' -X PATCH -H 'Authorization: Bearer owner' -H 'Content-Type: application/json' "{documents}/payloads/extra" -d '{{"fields": {{"v": {{"stringValue": "x"}}}}}}'"#
+    );
+    let output = Command::new(env!("CARGO_BIN_EXE_fireemu"))
+        .args(["exec", "--config"])
+        .arg(&config)
+        .args([
+            "--only",
+            "firestore",
+            "--firestore-port",
+            "0",
+            "--http-port",
+            "0",
+            "--storage-port",
+            "0",
+            "--logging-port",
+            "0",
+            "--ui-port",
+            "0",
+            "--hub-port",
+            "0",
+            "--project",
+            "demo-import-rss",
+            "--import",
+        ])
+        .arg(&export)
+        .args(["--", "/bin/sh", "-c"])
+        .arg(&probe)
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    let log = text(&output);
+    assert!(output.status.success(), "{log}");
+    assert!(
+        log.contains("firestore: 24 document(s) in 1 database(s)"),
+        "{log}"
+    );
+    assert!(log.contains("read 200"), "{log}");
+    assert!(log.contains("write 429"), "{log}");
+    assert!(
+        log.contains("Firestore retained history capacity is exhausted"),
+        "{log}"
+    );
 }
 
 #[test]

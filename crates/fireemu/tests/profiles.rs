@@ -344,6 +344,106 @@ fn a_configured_database_creation_time_bounds_read_times() {
     );
 }
 
+/// `firestore.history.maxVersionsPerPath` bounds a document's retained versions on the
+/// wall clock, where the default keeps every version of the last hour as production does.
+#[test]
+fn a_configured_per_path_history_cap_refuses_an_evicted_read_time() {
+    for (name, history) in [
+        ("history-default", ""),
+        (
+            "history-capped",
+            r#""history": {"maxVersionsPerPath": 2}, "#,
+        ),
+    ] {
+        let daemon = Daemon::start_with(name, "emulator", history);
+        let port = daemon.firestore_port();
+        let document =
+            format!("/v1/projects/demo-profile-{name}/databases/(default)/documents/notes/n1");
+        let mut first_update_time = None;
+        for round in 0..4 {
+            let (status, body) = http_as_owner(
+                port,
+                "PATCH",
+                &document,
+                Some(&format!(
+                    r#"{{"fields": {{"v": {{"integerValue": "{round}"}}}}}}"#
+                )),
+            );
+            assert_eq!(status, 200, "{body}");
+            let written: serde_json::Value = serde_json::from_str(&body).unwrap();
+            first_update_time
+                .get_or_insert_with(|| written["updateTime"].as_str().unwrap().to_owned());
+        }
+        let read_time = first_update_time.unwrap();
+        let (status, body) = http_as_owner(
+            port,
+            "GET",
+            &format!("{document}?readTime={read_time}"),
+            None,
+        );
+        if history.is_empty() {
+            assert_eq!(status, 200, "{body}");
+            assert!(body.contains(r#""integerValue":"0""#), "{body}");
+        } else {
+            assert_eq!(status, 400, "{body}");
+            assert!(
+                body.contains("The requested 'read_time' is no longer retained by this database."),
+                "{body}"
+            );
+        }
+        let (status, body) = http_as_owner(port, "GET", &document, None);
+        assert_eq!(status, 200, "{body}");
+        assert!(body.contains(r#""integerValue":"3""#), "{body}");
+        daemon.stop();
+    }
+}
+
+/// `firestore.history.maxBytes` lowers the logical history one database retains; a write that
+/// would cross it is refused whole with `RESOURCE_EXHAUSTED`.
+#[test]
+fn a_configured_history_byte_limit_refuses_growth() {
+    let daemon = Daemon::start_with(
+        "history-bytes",
+        "emulator",
+        r#""history": {"maxBytes": 1048576}, "#,
+    );
+    let port = daemon.firestore_port();
+    let document = "/v1/projects/demo-profile-history-bytes/databases/(default)/documents/notes/n1";
+    let payload = "x".repeat(64 * 1024);
+    let mut accepted = 0;
+    let (status, body) = loop {
+        let (status, body) = http_as_owner(
+            port,
+            "PATCH",
+            document,
+            Some(&format!(
+                r#"{{"fields": {{"v": {{"stringValue": "{accepted} {payload}"}}}}}}"#
+            )),
+        );
+        if status != 200 {
+            break (status, body);
+        }
+        accepted += 1;
+        assert!(
+            accepted < 64,
+            "1 MiB of history holds fewer than 64 versions of 64 KiB"
+        );
+    };
+    assert_eq!(status, 429, "{body}");
+    assert!(
+        body.contains("Firestore retained history capacity is exhausted"),
+        "{body}"
+    );
+    assert!(accepted > 0);
+    let (status, body) = http_as_owner(port, "GET", document, None);
+    assert_eq!(status, 200, "{body}");
+    assert!(
+        body.contains(&format!(r#""stringValue":"{} x"#, accepted - 1)),
+        "the refused write left the document as it was"
+    );
+    daemon.stop();
+}
+
 /// The resident memory of a process in KiB, from `ps`.
 fn resident_kib(pid: u32) -> u64 {
     sampled_resident_kib(pid).unwrap()

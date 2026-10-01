@@ -49,5 +49,8 @@ fireemu-fd-acl = { path = "../fireemu-fd-acl" }
 [target.'cfg(windows)'.dependencies]
 process-wrap = { version = "8.2.1", default-features = false, features = ["job-object", "kill-on-drop", "tokio1"] }
 
+[dev-dependencies]
+proptest.workspace = true
+
 [lints]
 workspace = true

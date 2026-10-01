@@ -101,6 +101,26 @@
           "default": 86400,
           "description": "How long a document whose time-to-live field has expired stays readable before the expiry sweep deletes it. Production deletes an expired document typically within 24 hours and within 72 hours at worst, so the default is 86400 and the maximum is the documented outer bound of 259200."
         },
+        "history": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Local bounds on retained MVCC history, which production does not have. Unset, a database retains at most 1 GiB of logical history bytes and 1,000,000 versions; a document keeps every version of the last hour on the wall clock, and on a pinned clock (daemon.clockStart) at most 1,024, a cap that works like maxVersionsPerPath. A commit that would cross a limit is refused whole with RESOURCE_EXHAUSTED. Unset keys keep the defaults.",
+          "properties": {
+            "maxVersionsPerPath": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000000,
+              "description": "How many versions of one document a database retains, on either clock, in place of the defaults. The effect reaches the whole database: once any document has more versions than the cap, no snapshot older than that document's oldest kept version is retained for any document. A read_time read or a new read-only transaction older than that is refused with FAILED_PRECONDITION, a transaction already open on an older snapshot is ABORTED (The referenced transaction has expired or is no longer valid.), and a Listen resume from there is reset. SDKs retry ABORTED, so one busy document under a very small cap can keep aborting unrelated transactions."
+            },
+            "maxBytes": {
+              "type": "integer",
+              "minimum": 1048576,
+              "maximum": 1073741824,
+              "default": 1073741824,
+              "description": "The logical history bytes one database retains (Firestore's storage size model plus fixed metadata charges, not process memory)."
+            }
+          }
+        },
         "explain": { "type": "boolean" },
         "pipeline": {
           "type": "object",

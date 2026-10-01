@@ -723,3 +723,82 @@ fn a_transaction_at_its_exact_deadline_no_longer_pins_its_version() {
         }
     }
 }
+
+proptest::proptest! {
+    #![proptest_config(proptest::test_runner::Config::with_cases(128))]
+
+    /// The per-path cap (`firestore.history.maxVersionsPerPath`) against an uncapped
+    /// reference store fed the same commits: every path keeps at most `cap` versions, live
+    /// reads never change, and every version the capped store still calls retained reads
+    /// exactly what the reference reads there. The retention point is database-wide: a
+    /// version is retained exactly when it is not older than the oldest version the cap keeps
+    /// of whichever path has gone furthest past it.
+    #[test]
+    fn the_per_path_cap_keeps_exact_snapshots_of_what_it_retains(
+        cap in 1_usize..6,
+        writes in proptest::collection::vec((0_u8..3, proptest::option::of(0_i64..1_000)), 1..48),
+    ) {
+        let mut capped = FirestoreState::with_history_version_limit(cap);
+        let mut reference = FirestoreState::with_history_version_limit(usize::MAX);
+        let mut versions = Vec::new();
+        let mut touched = std::collections::BTreeSet::new();
+        let mut floor = capped.compaction_floor();
+        let mut changes: BTreeMap<String, Vec<CommitVersion>> = BTreeMap::new();
+        let mut retention_point = CommitVersion::default();
+        for (second, (document, value)) in (0_i64..).zip(writes) {
+            let p = format!("docs/{document}");
+            let write = match value {
+                Some(value) => set(&p, &[("v", Value::Integer(value))]),
+                None => delete(&p),
+            };
+            let at = t(second);
+            let before = reference.get(&path(&p)).cloned();
+            let committed = capped.commit(std::slice::from_ref(&write), None, at).unwrap();
+            let expected = reference.commit(&[write], None, at).unwrap();
+            proptest::prop_assert_eq!(committed.version, expected.version);
+            versions.push(committed.version);
+            if reference.get(&path(&p)).cloned() != before {
+                changes.entry(p.clone()).or_default().push(committed.version);
+            }
+            touched.insert(p);
+            retention_point = changes
+                .values()
+                .filter(|changed| changed.len() > cap)
+                .map(|changed| changed[changed.len() - cap])
+                .fold(retention_point, CommitVersion::max);
+            // A path whose newest version is a tombstone at or below the retention point is
+            // dropped entirely, so its versions no longer count against the cap.
+            for (p, changed) in &mut changes {
+                if reference.get(&path(p)).is_none()
+                    && changed.last().is_some_and(|last| *last <= retention_point)
+                {
+                    changed.clear();
+                }
+            }
+            for version in &versions {
+                proptest::prop_assert_eq!(
+                    capped.is_retained(*version),
+                    *version >= retention_point,
+                    "{:?} against the retention point {:?}", version, retention_point
+                );
+            }
+
+            proptest::prop_assert!(capped.compaction_floor() >= floor, "the floor never moves back");
+            floor = capped.compaction_floor();
+            proptest::prop_assert!(capped.retained_versions() <= cap * touched.len());
+            for p in &touched {
+                proptest::prop_assert_eq!(capped.get(&path(p)), reference.get(&path(p)));
+                for version in &versions {
+                    if capped.is_retained(*version) {
+                        proptest::prop_assert_eq!(
+                            capped.get_at(&path(p), *version),
+                            reference.get_at(&path(p), *version),
+                            "{} at {:?}", p, version
+                        );
+                    }
+                }
+            }
+            proptest::prop_assert!(capped.is_retained(committed.version));
+        }
+    }
+}

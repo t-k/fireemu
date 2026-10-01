@@ -371,6 +371,45 @@ Set the emulator’s starting time with `daemon.clockStart`. Configure the clock
 
 See the [configuration schema](spec/config/fireemu.schema.json) for available settings and values. 
 
+### Firestore history limits
+
+Like production, Fireemu keeps every version of a document written in the last hour, so a `read_time` read, a read-only transaction or a resumed listener can see it. A test that updates the same documents many times therefore holds many versions in memory. These limits are local; production has none of them:
+
+- Each database retains at most 1 GiB of logical history bytes and 1,000,000 versions, each session 1 GiB and 1,000,000 versions, and the daemon 4 GiB and 4,000,000 versions. Logical bytes follow Firestore's storage size model and are not the process's memory, which can be several times larger.
+- On a pinned clock (`daemon.clockStart`), time does not pass on its own, so a database keeps at most 1,024 versions of any one document. This limit works like `maxVersionsPerPath` below: once a document goes past it, older snapshots are released for the whole database.
+- A commit that would cross a limit is refused whole with `RESOURCE_EXHAUSTED` and the message `Firestore retained history capacity is exhausted`.
+
+Versions older than an hour are released by the next commit after the clock passes them. To use less memory, lower the limits in the `firestore.history` section:
+
+```json
+{
+  "schemaVersion": 1,
+  "firestore": {
+    "edition": "standard",
+    "apiMode": "native",
+    "history": {
+      "maxVersionsPerPath": 16,
+      "maxBytes": 268435456
+    }
+  }
+}
+```
+
+- `maxVersionsPerPath` (1 to 1,000,000) sets the most versions of one document a database keeps, on either clock, in place of the defaults above.
+- `maxBytes` (1 MiB to 1 GiB) lowers the logical history bytes one database retains. An import (`--import`) is not checked against it: a larger import starts, and every later write that would grow the history is refused with `RESOURCE_EXHAUSTED`.
+
+Without these keys the defaults apply.
+
+The version cap applies to each document separately, but its effect reaches the whole database. Snapshots stay exact for every document, so once any document has more versions than the cap, the database keeps no snapshot older than that document's oldest kept version. After that:
+
+- A `read_time` read older than that point is refused with `FAILED_PRECONDITION` (`The requested 'read_time' is no longer retained by this database.`). So is a new read-only transaction at such a `read_time` (`read_time is no longer retained by this database`).
+- A transaction already open on an older snapshot fails its next read or commit with `ABORTED` (`The referenced transaction has expired or is no longer valid.`), even if it only touches other documents.
+- A listener resuming from an older point is reset and sent the full result again.
+
+Client SDKs retry `ABORTED` transactions. One frequently updated document under a small cap can therefore keep aborting unrelated transactions. Avoid very small caps: choose a cap above the number of times any document is updated while your longest transaction is open.
+
+To see how much history a running daemon holds, run `fireemu doctor --connect <control URL>`. Its `history.*` lines report the retained versions and logical bytes against the session and daemon limits, and how many bytes the next compaction would release.
+
 ## Compatibility and limitations
 
 ### Differences from production Firebase

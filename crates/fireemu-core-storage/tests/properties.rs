@@ -440,6 +440,67 @@ fn glob_names() -> impl Strategy<Value = String> {
     "[abcx/.]{0,10}"
 }
 
+/// Constructs the random patterns reach only rarely: a `**` after a long literal, escapes and
+/// ranges inside sets, a leading `]`, a trailing dash and several ranges.
+#[test]
+fn glob_constructs_match_as_documented() {
+    use fireemu_core_storage::glob::glob_matches;
+    for (pattern, name, expected) in [
+        ("abc**d", "abcxx/yd", true),
+        ("abc**d", "abcxx/y", false),
+        ("abcd**e", "abcdXe", true),
+        ("abcd**e", "abcdX", false),
+        ("a**b**c", "a/x/b/y/c", true),
+        ("a***b", "a/b", true),
+        ("[a-c]", "b", true),
+        ("[a-c]", "d", false),
+        ("[a-c0-9]", "5", true),
+        ("[a-c0-9]", "e", false),
+        ("[a\\-c]", "-", true),
+        ("[a\\-c]", "b", false),
+        ("[]a]", "]", true),
+        ("[]a]", "a", true),
+        ("[]a]", "b", false),
+        ("[a-]", "-", true),
+        ("[a-]", "b", false),
+        ("[\\]x]", "]", true),
+        ("[\\]x]", "\\", false),
+        ("[a-\\z]", "m", true),
+        ("[!a-c]", "d", true),
+        ("[!a-c]", "b", false),
+        ("[^x]", "y", true),
+        ("[^x]", "x", false),
+        ("[a-c]", "/", false),
+        ("[!a]", "/", false),
+        ("{a,bc}d", "bcd", true),
+        ("{a,bc}d", "ad", true),
+        ("{a,bc}d", "bd", false),
+        ("x{a,{b,c}}y", "xcy", true),
+        ("{a", "{a", true),
+        ("a}", "a}", true),
+        ("a,b", "a,b", true),
+        ("a\\", "a\\", true),
+        ("\\a", "a", true),
+        ("?", "/", false),
+        ("?*", "a/b", false),
+        ("*", "", true),
+        ("**", "", true),
+        ("*/*", "a/b", true),
+        ("*/*", "a/b/c", false),
+    ] {
+        assert_eq!(
+            glob_matches(pattern, name),
+            expected,
+            "{pattern:?} against {name:?}"
+        );
+        assert_eq!(
+            reference_glob::matches(pattern, name),
+            expected,
+            "reference {pattern:?} against {name:?}"
+        );
+    }
+}
+
 #[test]
 fn the_recorded_globs_match_as_production_listed_them() {
     use fireemu_core_storage::glob::glob_matches;
@@ -464,6 +525,8 @@ fn the_recorded_globs_match_as_production_listed_them() {
 }
 
 proptest! {
+    #![proptest_config(ProptestConfig::with_cases(4000))]
+
     /// The implementation agrees with the reference matcher on random patterns and names.
     #[test]
     fn glob_matching_agrees_with_the_reference(pattern in glob_fragments(), name in glob_names()) {

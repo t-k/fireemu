@@ -25,6 +25,10 @@
 //! issued later on the timeline (accepted at once in `emulator`, once the clock catches up in
 //! `strict`).
 //!
+//! `functions/{name}:run` answers 400 `INVALID_ARGUMENT` for an unknown or unscheduled function
+//! or a run its overlap policy refuses, and 429 `RESOURCE_EXHAUSTED` when the functions event
+//! queue is at capacity; neither enqueues anything.
+//!
 //! The daemon currently runs one implicit session; every session name maps to it. Sessions,
 //! snapshots and `await-idle` arrive with the session runtime.
 
@@ -45,13 +49,22 @@ use serde_json::{json, Value};
 
 use crate::identity_toolkit::{JsonResponse, RequestHeaders};
 
+/// Why the functions runtime did not enqueue a manual schedule run.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RunScheduleError {
+    /// The function is unknown or not scheduled, or its overlap policy refuses the run.
+    Refused(String),
+    /// The runtime's event admission is at capacity; nothing was enqueued.
+    Capacity(String),
+}
+
 /// The functions runtime as the control API sees it (spec 10.5 `await-idle`, 11.2 clock
 /// operations, manual schedule runs).
 pub trait FunctionsHook: Send + Sync {
     /// The virtual clock moved: enqueue due schedules and release due retries.
     fn on_clock_changed(&self);
     /// Runs a scheduled function now.
-    fn run_schedule(&self, function: &str) -> Result<(), String>;
+    fn run_schedule(&self, function: &str) -> Result<(), RunScheduleError>;
     /// Whether no event is pending, leased, running or retry-waiting.
     fn is_idle(&self) -> bool;
     /// Notified whenever work completes.
@@ -2335,7 +2348,12 @@ fn functions_route(state: &ControlState, method: &str, rest: &str) -> JsonRespon
         ("POST", r) => match r.strip_prefix('/').and_then(|r| r.strip_suffix(":run")) {
             Some(name) if !name.is_empty() => match functions.run_schedule(name) {
                 Ok(()) => ok(json!({"function": name, "enqueued": true})),
-                Err(e) => error(400, &format!("INVALID_ARGUMENT : {e}")),
+                Err(RunScheduleError::Refused(e)) => error(400, &format!("INVALID_ARGUMENT : {e}")),
+                // The request is valid; the local event queue is full, as with the other
+                // local capacity refusals (snapshot budgets, Eventarc publish).
+                Err(RunScheduleError::Capacity(e)) => {
+                    error(429, &format!("RESOURCE_EXHAUSTED : {e}"))
+                }
             },
             _ => error(404, "NOT_FOUND"),
         },

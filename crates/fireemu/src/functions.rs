@@ -4833,6 +4833,19 @@ impl fireemu_adapter_http::identity_toolkit::AuthBlockingHook for BlockingAuthBr
     }
 }
 
+/// The control API's view of a refused manual schedule run: a capacity refusal stays one, so
+/// the route can answer 429 instead of 400.
+fn run_schedule_error(
+    error: fireemu_adapter_functions::runtime::ScheduleRunError,
+) -> fireemu_adapter_http::control::RunScheduleError {
+    use fireemu_adapter_functions::runtime::ScheduleRunError;
+    use fireemu_adapter_http::control::RunScheduleError;
+    match error {
+        ScheduleRunError::Refused(message) => RunScheduleError::Refused(message),
+        ScheduleRunError::Capacity(message) => RunScheduleError::Capacity(message),
+    }
+}
+
 /// The runtime as the control API's hook.
 pub struct Hook(pub Arc<FunctionsRuntime>);
 
@@ -4841,8 +4854,11 @@ impl FunctionsHook for Hook {
         self.0.on_clock_changed();
     }
 
-    fn run_schedule(&self, function: &str) -> Result<(), String> {
-        self.0.run_schedule(function)
+    fn run_schedule(
+        &self,
+        function: &str,
+    ) -> Result<(), fireemu_adapter_http::control::RunScheduleError> {
+        self.0.run_schedule(function).map_err(run_schedule_error)
     }
 
     fn is_idle(&self) -> bool {
@@ -9181,5 +9197,19 @@ mod tests {
             Some(root.join("tools/runner-node/index.mjs").as_path()),
         );
         std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn a_capacity_refusal_reaches_the_control_api_as_one() {
+        use fireemu_adapter_functions::runtime::ScheduleRunError;
+        use fireemu_adapter_http::control::RunScheduleError;
+        assert_eq!(
+            super::run_schedule_error(ScheduleRunError::Capacity("full".to_owned())),
+            RunScheduleError::Capacity("full".to_owned())
+        );
+        assert_eq!(
+            super::run_schedule_error(ScheduleRunError::Refused("busy".to_owned())),
+            RunScheduleError::Refused("busy".to_owned())
+        );
     }
 }

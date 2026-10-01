@@ -147,7 +147,9 @@ impl Daemon {
 }
 
 /// What a client that sends its head, waits, then sends `body_len` bytes of body sees: the status
-/// line of the answer, or why there was none.
+/// line of the answer and whether the connection then ended cleanly (a reset after the answer is what
+/// discards it on a client that has not read it yet, and ends a client that reads on in an error), or
+/// why there was no answer.
 fn late_body_exchange(port: u16, path: &str, extra_headers: &str, body_len: usize) -> String {
     let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("the daemon accepts");
     stream
@@ -161,7 +163,8 @@ fn late_body_exchange(port: u16, path: &str, extra_headers: &str, body_len: usiz
     }
     std::thread::sleep(LATE_BODY_DELAY);
     // A reset can arrive while the body is being sent; the client then still reads whatever
-    // arrived before it, which is what a real client does.
+    // arrived before it, which is what a real client does, and the way the connection ends is part
+    // of what it sees.
     let chunk = vec![b'x'; 16 * 1024];
     let mut sent = 0;
     while sent < body_len {
@@ -174,32 +177,35 @@ fn late_body_exchange(port: u16, path: &str, extra_headers: &str, body_len: usiz
     let mut raw = Vec::new();
     let read = stream.read_to_end(&mut raw);
     let text = String::from_utf8_lossy(&raw);
-    match text.lines().next() {
-        Some(status) if !status.is_empty() => status.to_owned(),
-        _ => format!("no answer ({read:?})"),
+    let Some(status) = text.lines().next().filter(|line| !line.is_empty()) else {
+        return format!("no answer ({read:?})");
+    };
+    match read {
+        Ok(_) => format!("{status} (clean end)"),
+        Err(error) => format!("{status} + {:?} after it", error.kind()),
     }
 }
 
-fn assert_refusal_survives_a_late_body(
+/// What went wrong for `listener`, if anything: the rounds whose refusal did not reach the client.
+fn refusal_losses(
     listener: &str,
     port: u16,
     path: &str,
     extra_headers: &str,
     body_len: usize,
-    expected_status_line: &str,
-) {
-    let outcomes: Vec<String> = (0..ROUNDS)
+    expected_status: &str,
+) -> Option<String> {
+    let expected = format!("{expected_status} (clean end)");
+    let lost: Vec<String> = (0..ROUNDS)
         .map(|_| late_body_exchange(port, path, extra_headers, body_len))
+        .filter(|outcome| *outcome != expected)
         .collect();
-    let lost: Vec<&String> = outcomes
-        .iter()
-        .filter(|outcome| outcome.as_str() != expected_status_line)
-        .collect();
-    assert!(
-        lost.is_empty(),
-        "{listener}: {} of {ROUNDS} refusals did not reach a client that sends {body_len} body bytes late (expected {expected_status_line:?}): {lost:?}",
-        lost.len()
-    );
+    (!lost.is_empty()).then(|| {
+        format!(
+            "{listener}: {} of {ROUNDS} refusals did not reach a client that sends {body_len} body bytes late (expected {expected:?}): {lost:?}",
+            lost.len()
+        )
+    })
 }
 
 const OTHER_SITE: &str = "Origin: https://other-site.example\r\n";
@@ -208,49 +214,45 @@ const OTHER_SITE: &str = "Origin: https://other-site.example\r\n";
 fn every_keep_alive_listener_delivers_its_refusal_to_a_client_that_sends_its_body_late() {
     let daemon = Daemon::start();
     let ports = &daemon.ports;
+    let mut losses = Vec::new();
     // A page on another site is refused from the head alone; the bodies are both below and well
-    // above what the listener reads for a legitimate request.
+    // above what a listener reads for a legitimate request.
     for body_len in [64 * 1024, 512 * 1024] {
-        assert_refusal_survives_a_late_body(
-            "auth (http)",
-            ports.http,
-            "/identitytoolkit.googleapis.com/v1/accounts:signUp?key=x",
-            OTHER_SITE,
-            body_len,
-            "HTTP/1.1 403 Forbidden",
-        );
-        assert_refusal_survives_a_late_body(
-            "firestore REST (grpc listener)",
-            ports.firestore,
-            "/v1/projects/demo-refused-body/databases/(default)/documents/things",
-            OTHER_SITE,
-            body_len,
-            "HTTP/1.1 403 Forbidden",
-        );
-        assert_refusal_survives_a_late_body(
-            "storage",
-            ports.storage,
-            "/v0/b/demo-refused-body.appspot.com/o",
-            OTHER_SITE,
-            body_len,
-            "HTTP/1.1 403 Forbidden",
-        );
-        assert_refusal_survives_a_late_body(
-            "hub",
-            ports.hub,
-            "/emulators",
-            OTHER_SITE,
-            body_len,
-            "HTTP/1.1 404 Not Found",
-        );
+        let cases = [
+            (
+                "auth (http)",
+                ports.http,
+                "/identitytoolkit.googleapis.com/v1/accounts:signUp?key=x",
+                "HTTP/1.1 403 Forbidden",
+            ),
+            (
+                "firestore REST (grpc listener)",
+                ports.firestore,
+                "/v1/projects/demo-refused-body/databases/(default)/documents/things",
+                "HTTP/1.1 403 Forbidden",
+            ),
+            (
+                "storage",
+                ports.storage,
+                "/v0/b/demo-refused-body.appspot.com/o",
+                "HTTP/1.1 403 Forbidden",
+            ),
+            ("hub", ports.hub, "/emulators", "HTTP/1.1 404 Not Found"),
+        ];
+        for (listener, port, path, status) in cases {
+            losses.extend(refusal_losses(
+                listener, port, path, OTHER_SITE, body_len, status,
+            ));
+        }
     }
     // The UI refuses a body over its limit before reading it.
-    assert_refusal_survives_a_late_body(
+    losses.extend(refusal_losses(
         "ui",
         ports.ui,
         "/api/anything",
         OTHER_SITE,
         512 * 1024,
         "HTTP/1.1 413 Payload Too Large",
-    );
+    ));
+    assert!(losses.is_empty(), "{}", losses.join("\n"));
 }

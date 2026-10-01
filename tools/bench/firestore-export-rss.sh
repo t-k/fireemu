@@ -7,7 +7,8 @@ out=${HEAVY_OUT:?HEAVY_OUT names the directory the job keeps}
 cargo build --release --locked -p fireemu --bin fireemu
 binary=$PWD/target/release/fireemu
 for documents in 100000 300000; do
-  work=$(mktemp -d)
+  # An export refuses a destination below a directory other users can write (such as /tmp).
+  work=$(mktemp -d -p "${RUNNER_TEMP:-$PWD/target}")
   python3 tools/bench/firestore_export_rss.py "$binary" "$work" "$documents" 1024 |
     tee -a "$out/firestore-export-rss.jsonl"
   rm -rf "$work"

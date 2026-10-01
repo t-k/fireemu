@@ -792,7 +792,10 @@ test("a sender wired through journalPersist issues only after the intent row is 
   const opening = g.open();
   // Release one storage step at a time; issue must not run before the directory fsync of row 0.
   for (let turn = 0; turn < 6; turn++) {
-    while (!released.length) await new Promise((resolve) => setImmediate(resolve));
+    for (let wait = 0; !released.length; wait++) {
+      assert.ok(wait < 100, `storage step ${turn} was never requested; steps: ${steps}`);
+      await new Promise((resolve) => setImmediate(resolve));
+    }
     const next = released.shift();
     if (next.name === "fsync-directory:0") assert.deepEqual(steps, ["write:0", "fsync-file:0"]);
     next.resolve();
@@ -846,4 +849,50 @@ test("journalPersist refuses a non-journal and a missing encoder before any writ
   assert.throws(() => journalPersist({}, (record) => record), /journal/);
   const { j } = await journal();
   assert.throws(() => journalPersist(j), /encoder/);
+});
+test("a receipt queue wired through journalPersist stores nothing after a failed fsync and never shows a frame", async () => {
+  const { createStreamingReceiptQueue } = await import(
+    new URL("../pubsub-corpus/streaming-receipts.mjs", import.meta.url).href
+  );
+  const { journalPersist } = await import(target.href);
+  const deadlineAt = performance.now() + 1000,
+    writes = [];
+  const { j } = await journal({
+    maxEntryBytes: 1024,
+    maxTotalBytes: 4096,
+    deadlineAt,
+    write: async (row) => {
+      writes.push(row.index);
+      if (row.index === 1) throw new Error("file fsync failed");
+    },
+  });
+  const frames = [];
+  const q = createStreamingReceiptQueue({
+    maxFrameBytes: 64,
+    maxTotalBytes: 512,
+    maxFrames: 8,
+    maxChunks: 16,
+    maxHeaderBytes: 256,
+    maxHeaderEvents: 4,
+    maxHeaderPairs: 16,
+    maxEvents: 24,
+    wallMs: 1000,
+    deadlineAt,
+    persist: journalPersist(j, (row) => Buffer.from(JSON.stringify(row))),
+    onFrame: async (frame) => frames.push(frame),
+    stopOwned: async () => {},
+  });
+  const message = Buffer.from([0, 0, 0, 0, 1, 120]);
+  assert.equal(q.headers("response", [":status", "200"], 4), true);
+  assert.equal(q.data(message), true);
+  assert.equal(q.data(message), true);
+  const result = await q.done();
+  assert.deepEqual(writes, [0, 1]);
+  assert.equal(result.reason, "persistence");
+  assert.equal(result.persistedEvents, 1);
+  assert.equal(result.unknownEvents, 2);
+  assert.equal(frames.length, 0);
+  const journalResult = await j.done();
+  assert.equal(journalResult.reason, "persistence");
+  assert.equal(journalResult.acknowledgedEntries, 1);
 });

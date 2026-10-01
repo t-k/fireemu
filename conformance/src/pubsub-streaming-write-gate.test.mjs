@@ -959,3 +959,41 @@ test("an outbound frame holding the credential's first eight bytes is refused be
   );
   assert.equal(events.filter((event) => event.startsWith("before-send")).length, 2);
 });
+test("a stop that lands inside a passing live check keeps issue from being entered, so containment alone decides termination", async () => {
+  const controller = new AbortController();
+  const { g, issued } = await gate({
+    signal: controller.signal,
+    liveCheck: () => {
+      controller.abort();
+      return true;
+    },
+  });
+  await assert.rejects(g.open(), /stopped/);
+  const result = await g.done();
+  assert.equal(issued.length, 0);
+  assert.equal(result.stopOrigin, "abort");
+  assert.equal(result.issuedActions, 0);
+  assert.equal(result.unknownActions, 1);
+  assert.equal(result.terminationRequired, false);
+});
+test("an issue result whose then lookup throws is an unknown outcome that requires termination", async () => {
+  const { g } = await gate({
+    issue: () =>
+      new Proxy(
+        {},
+        {
+          get(object, key) {
+            if (key === "then") throw new Error("hostile result");
+            return Reflect.get(object, key);
+          },
+        },
+      ),
+  });
+  await assert.rejects(g.open(), /stopped/);
+  const result = await g.done();
+  assert.equal(result.issuedActions, 0);
+  assert.equal(result.unknownActions, 1);
+  assert.equal(result.direction, "NEW");
+  assert.deepEqual(result.pendingCallbacks, []);
+  assert.equal(result.terminationRequired, true);
+});

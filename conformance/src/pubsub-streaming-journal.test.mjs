@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { test } from "node:test";
+import { mock, test } from "node:test";
 
 const target = new URL("../pubsub-corpus/streaming-journal.mjs", import.meta.url);
 async function journal(extra = {}) {
@@ -294,4 +294,60 @@ test("late stop acknowledgment before overdue timers cannot claim clean deadline
   });
   assert.equal((await j.done()).terminationRequired, true);
   assert.equal((await j.done()).terminationRequired, true);
+});
+test(
+  "an early relative timer followed by a predeadline stop acknowledgment preserves observed uncertainty",
+  { timeout: 500 },
+  async () => {
+    let now = 0,
+      release;
+    const clock = mock.method(performance, "now", () => now);
+    const held = new Promise((resolve) => {
+      release = resolve;
+    });
+    let acknowledgedAt;
+    const advance = setTimeout(() => {
+      now = 30.25;
+    }, 5);
+    let j;
+    try {
+      ({ j } = await journal({
+        deadlineAt: 30.75,
+        stopOwned: () =>
+          held.then(() => {
+            acknowledgedAt = now;
+          }),
+      }));
+      const first = await j.done();
+      assert.equal(first.terminationRequired, true);
+      assert.ok(now < first.deadlineAt);
+      release();
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.equal(acknowledgedAt, 30.25);
+      assert.equal((await j.done()).terminationRequired, true);
+    } finally {
+      clearTimeout(advance);
+      release();
+      await j?.done();
+      clock.mock.restore();
+    }
+  },
+);
+test("a clean journal drained again after its absolute deadline cannot erase deadline uncertainty", async () => {
+  let now = 0;
+  const clock = mock.method(performance, "now", () => now);
+  let j;
+  try {
+    ({ j } = await journal({ deadlineAt: 30 }));
+    assert.equal((await j.done()).terminationRequired, false);
+    now = 31;
+    const later = await j.done();
+    assert.deepEqual(later.pendingCallbacks, []);
+    assert.equal(later.unknownEntries, 0);
+    assert.equal(later.reason, "deadline");
+    assert.equal(later.terminationRequired, true);
+  } finally {
+    await j?.done();
+    clock.mock.restore();
+  }
 });

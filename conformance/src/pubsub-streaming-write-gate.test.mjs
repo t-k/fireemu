@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import { execFile } from "node:child_process";
 import { getEventListeners } from "node:events";
 import { existsSync } from "node:fs";
 import { mock, test } from "node:test";
+import { promisify } from "node:util";
 
 const target = new URL("../pubsub-corpus/streaming-write-gate.mjs", import.meta.url);
 async function gate(extra = {}) {
@@ -28,6 +30,78 @@ async function gate(extra = {}) {
   });
   return { g: instance, events, issued };
 }
+// A test-local real timer that loses the race to any module cutoff working as intended. If a cutoff
+// never fires, the test fails this assertion instead of hanging until the per-test timeout.
+const FALLBACK_MS = 3000;
+async function settleOrFallback(work) {
+  let fallback;
+  const late = new Promise((resolve) => {
+    fallback = setTimeout(resolve, FALLBACK_MS, { state: "still pending" });
+  });
+  try {
+    return await Promise.race([
+      work.then(
+        (value) => ({ state: "fulfilled", value }),
+        (error) => ({ state: "rejected", error }),
+      ),
+      late,
+    ]);
+  } finally {
+    clearTimeout(fallback);
+  }
+}
+test("a guard that never settles just short of the deadline is cut off by the gate and reported by done before a fallback timer", async () => {
+  let now = 5000;
+  const clock = mock.method(performance, "now", () => now);
+  try {
+    const origins = [];
+    const { g, issued } = await gate({
+      wallMs: 60000,
+      guard: () => new Promise(() => {}),
+      contain: async ({ origin }) => origins.push(origin),
+    });
+    now = 64999;
+    const opened = await settleOrFallback(g.open());
+    assert.equal(opened.state, "rejected", "open() must be settled by the gate's own cutoff");
+    assert.match(opened.error.message, /streaming admission stopped/);
+    assert.deepEqual(origins, ["deadline"]);
+    const reported = await settleOrFallback(g.done());
+    assert.equal(reported.state, "fulfilled", "done() must be settled by its own deadline wait");
+    assert.equal(reported.value.stopOrigin, "deadline");
+    assert.deepEqual(reported.value.pendingCallbacks, ["0:guard-before"]);
+    assert.equal(reported.value.unknownActions, 1);
+    assert.equal(reported.value.terminationRequired, true);
+    assert.equal(issued.length, 0);
+  } finally {
+    clock.mock.restore();
+  }
+});
+test("an abandoned gate never holds the process open", async () => {
+  // The child opens a gate, completes one action and exits without stop() or done(); only an
+  // unreferenced deadline timer lets it exit before the cutoff.
+  const script = `const [target] = process.argv.slice(1);
+    const { createStreamingWriteGate } = await import(target);
+    let contained = 0, issued = 0;
+    const g = createStreamingWriteGate({
+      maxFrames: 1, maxFrameBytes: 8, maxOutgoingBytes: 64, maxActions: 2, wallMs: 60000,
+      guard: () => {}, liveCheck: () => true, persist: () => {},
+      issue: () => { issued++; }, contain: () => { contained++; },
+    });
+    await g.open();
+    process.stdout.write(JSON.stringify({ issued, contained }));`;
+  let outcome;
+  try {
+    const { stdout } = await promisify(execFile)(
+      process.execPath,
+      ["--input-type=module", "--eval", script, target.href],
+      { timeout: 8000, killSignal: "SIGKILL" },
+    );
+    outcome = JSON.parse(stdout);
+  } catch (error) {
+    outcome = error.killed ? "the abandoned gate kept the process alive" : `${error.stderr}`;
+  }
+  assert.deepEqual(outcome, { issued: 1, contained: 0 });
+});
 test("opening frames half-close and explicit cancel have durable intents and finite distinct reservations", async () => {
   const { g, events, issued } = await gate();
   await g.open();
@@ -575,33 +649,40 @@ test("only a Uint8Array view is admitted as frame bytes; other inputs are refuse
   assert.equal(issued.length, 2);
 });
 test("synchronously throwing or rejecting callbacks settle as refusals without leaving pending work", async () => {
-  for (const guard of [
-    () => {
-      throw new Error("sync refusal");
-    },
-    async () => {
-      throw new Error("async refusal");
-    },
-  ]) {
-    const { g, issued } = await gate({ wallMs: 50, guard });
-    await assert.rejects(g.open(), /stopped/);
+  // A frozen clock keeps the clean outcome independent of scheduling delays; the short wallMs still
+  // bounds every real cutoff timer.
+  const clock = mock.method(performance, "now", () => 5000);
+  try {
+    for (const guard of [
+      () => {
+        throw new Error("sync refusal");
+      },
+      async () => {
+        throw new Error("async refusal");
+      },
+    ]) {
+      const { g, issued } = await gate({ wallMs: 50, guard });
+      await assert.rejects(g.open(), /stopped/);
+      const result = await g.done();
+      assert.equal(issued.length, 0);
+      assert.equal(result.stopOrigin, "uncertain");
+      assert.deepEqual(result.pendingCallbacks, []);
+      assert.equal(result.terminationRequired, false);
+    }
+    const { g } = await gate({
+      wallMs: 50,
+      contain: () => {
+        throw new Error("sync containment failure");
+      },
+    });
+    assert.doesNotThrow(() => g.stop("abort"));
     const result = await g.done();
-    assert.equal(issued.length, 0);
-    assert.equal(result.stopOrigin, "uncertain");
     assert.deepEqual(result.pendingCallbacks, []);
-    assert.equal(result.terminationRequired, false);
+    assert.equal(result.terminationRequired, true);
+    assert.equal(result.stopOrigin, "abort");
+  } finally {
+    clock.mock.restore();
   }
-  const { g } = await gate({
-    wallMs: 50,
-    contain: () => {
-      throw new Error("sync containment failure");
-    },
-  });
-  assert.doesNotThrow(() => g.stop("abort"));
-  const result = await g.done();
-  assert.deepEqual(result.pendingCallbacks, []);
-  assert.equal(result.terminationRequired, true);
-  assert.equal(result.stopOrigin, "abort");
 });
 test("never-settling containment is reported by its own pending callback name", async () => {
   let release;

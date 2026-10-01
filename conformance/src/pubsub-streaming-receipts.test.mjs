@@ -40,6 +40,47 @@ async function queue(extra = {}) {
   });
   return { q, saved, frames, order };
 }
+// A test-local real timer that loses the race to any module cutoff working as intended. If a cutoff
+// never fires, the test fails this assertion instead of hanging until the per-test timeout.
+const FALLBACK_MS = 3000;
+async function settleOrFallback(work) {
+  let fallback;
+  const late = new Promise((resolve) => {
+    fallback = setTimeout(resolve, FALLBACK_MS, { state: "still pending" });
+  });
+  try {
+    return await Promise.race([
+      work.then(
+        (value) => ({ state: "fulfilled", value }),
+        (error) => ({ state: "rejected", error }),
+      ),
+      late,
+    ]);
+  } finally {
+    clearTimeout(fallback);
+  }
+}
+test("a persist that never settles just short of the deadline is bounded by the drain's own waits before a fallback timer", async () => {
+  let now = 5000;
+  const clock = mock.method(performance, "now", () => now);
+  try {
+    const { q, order } = await queue({ wallMs: 60000, persist: () => new Promise(() => {}) });
+    now = 64999;
+    assert.equal(q.data(frame(Buffer.from("m"))), true);
+    const reported = await settleOrFallback(q.done());
+    assert.equal(reported.state, "fulfilled", "done() must be settled by its own deadline waits");
+    assert.deepEqual(reported.value.pendingCallbacks, ["receipt:0"]);
+    assert.equal(reported.value.events, 1);
+    assert.equal(reported.value.persistedEvents, 0);
+    assert.equal(reported.value.unknownEvents, 1);
+    assert.equal(reported.value.frameAttempts, 0);
+    assert.equal(Object.hasOwn(reported.value, "reason"), false);
+    assert.equal(reported.value.terminationRequired, true);
+    assert.deepEqual(order, ["stop"]);
+  } finally {
+    clock.mock.restore();
+  }
+});
 test("split frame candidates become visible only after every contributing raw chunk is durable", async () => {
   let release;
   const stall = new Promise((resolve) => {
@@ -410,28 +451,35 @@ test("throwing or rejecting owned callbacks settle as refusals instead of escapi
   const fail = () => {
     throw new Error("synthetic callback failure");
   };
-  for (const failing of [fail, async () => fail()]) {
-    const { q: stored, frames } = await queue({ wallMs: 100, persist: failing });
-    stored.data(frame(Buffer.from("m")));
-    const persisted = await stored.done();
-    assert.equal(persisted.reason, "persistence");
-    assert.equal(frames.length, 0);
-    assert.deepEqual(persisted.pendingCallbacks, []);
-    assert.equal(persisted.terminationRequired, false);
-    const { q: observed } = await queue({ wallMs: 100, onFrame: failing });
-    observed.data(frame(Buffer.from("m")));
-    const delivered = await observed.done();
-    assert.equal(delivered.reason, "observer");
-    assert.equal(delivered.frameAttempts, 1);
-    assert.equal(delivered.acknowledgedFrames, 0);
-    assert.deepEqual(delivered.pendingCallbacks, []);
-    assert.equal(delivered.terminationRequired, false);
-    const { q: owned } = await queue({ wallMs: 100, stopOwned: failing });
-    assert.equal(owned.lifecycle("unknown"), false);
-    const stopped = await owned.done();
-    assert.equal(stopped.reason, "invalid-lifecycle");
-    assert.deepEqual(stopped.pendingCallbacks, []);
-    assert.equal(stopped.terminationRequired, true);
+  // A frozen clock keeps the clean outcomes independent of scheduling delays; the short wallMs still
+  // bounds every real drain timer.
+  const clock = mock.method(performance, "now", () => 5000);
+  try {
+    for (const failing of [fail, async () => fail()]) {
+      const { q: stored, frames } = await queue({ wallMs: 100, persist: failing });
+      stored.data(frame(Buffer.from("m")));
+      const persisted = await stored.done();
+      assert.equal(persisted.reason, "persistence");
+      assert.equal(frames.length, 0);
+      assert.deepEqual(persisted.pendingCallbacks, []);
+      assert.equal(persisted.terminationRequired, false);
+      const { q: observed } = await queue({ wallMs: 100, onFrame: failing });
+      observed.data(frame(Buffer.from("m")));
+      const delivered = await observed.done();
+      assert.equal(delivered.reason, "observer");
+      assert.equal(delivered.frameAttempts, 1);
+      assert.equal(delivered.acknowledgedFrames, 0);
+      assert.deepEqual(delivered.pendingCallbacks, []);
+      assert.equal(delivered.terminationRequired, false);
+      const { q: owned } = await queue({ wallMs: 100, stopOwned: failing });
+      assert.equal(owned.lifecycle("unknown"), false);
+      const stopped = await owned.done();
+      assert.equal(stopped.reason, "invalid-lifecycle");
+      assert.deepEqual(stopped.pendingCallbacks, []);
+      assert.equal(stopped.terminationRequired, true);
+    }
+  } finally {
+    clock.mock.restore();
   }
 });
 test("receipt and frame callbacks share the owned stop signal, which the first stop aborts and names", async () => {
@@ -669,7 +717,7 @@ async function screenInChild(credential, cases) {
     const { stdout } = await promisify(execFile)(
       process.execPath,
       ["--input-type=module", "--eval", script, target.href, JSON.stringify({ credential, cases })],
-      { timeout: 2000, killSignal: "SIGKILL" },
+      { timeout: 8000, killSignal: "SIGKILL" },
     );
     return JSON.parse(stdout);
   } catch (error) {

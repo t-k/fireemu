@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
 import { test } from "node:test";
+import { promisify } from "node:util";
 
 const target = new URL("../pubsub-corpus/streaming-frames.mjs", import.meta.url);
 const sha = (bytes) => createHash("sha256").update(bytes).digest("hex");
@@ -21,6 +23,70 @@ async function decoder(extra = {}) {
     ...extra,
   });
 }
+// Decoding runs in a child process so a frame loop that never consumes its buffer fails an assertion
+// instead of freezing the test process. The second child test also gives the test runner an event
+// loop turn to report the first one before any later in-process test could spin.
+async function decodeInChild(chunks) {
+  const script = `const [target, input] = process.argv.slice(1);
+    const { createStreamingFrameDecoder } = await import(target);
+    const d = createStreamingFrameDecoder({ maxFrameBytes: 64, maxTotalBytes: 1024, maxFrames: 16, maxChunks: 64 });
+    const pushed = JSON.parse(input).map((hex) => {
+      const result = d.push(Buffer.from(hex, "hex"));
+      return { frames: result.frames.map((f) => [f.index, f.bodyBytes]), reason: result.reason ?? null };
+    });
+    process.stdout.write(JSON.stringify({ pushed, finish: d.finish() }));`;
+  try {
+    const { stdout } = await promisify(execFile)(
+      process.execPath,
+      [
+        "--input-type=module",
+        "--eval",
+        script,
+        target.href,
+        JSON.stringify(chunks.map((chunk) => chunk.toString("hex"))),
+      ],
+      { timeout: 8000, killSignal: "SIGKILL" },
+    );
+    return JSON.parse(stdout);
+  } catch (error) {
+    return error.killed ? "decoding did not return" : `decoding failed: ${error.stderr}`;
+  }
+}
+test("pushing complete frames returns their candidates instead of spinning on the buffered bytes", async () => {
+  const wire = Buffer.concat([
+    frame(Buffer.from("a")),
+    frame(Buffer.alloc(0)),
+    Buffer.from([0, 0]),
+  ]);
+  assert.deepEqual(await decodeInChild([wire]), {
+    pushed: [
+      {
+        frames: [
+          [0, 1],
+          [1, 0],
+        ],
+        reason: null,
+      },
+    ],
+    finish: {
+      outcome: "inconclusive-framing",
+      frames: 2,
+      bytes: 13,
+      chunks: 1,
+      reason: "truncated-frame",
+    },
+  });
+});
+test("a frame completed by a later push is returned once the buffered prefix is consumed", async () => {
+  const wire = frame(Buffer.from("split"));
+  assert.deepEqual(await decodeInChild([wire.subarray(0, 3), wire.subarray(3)]), {
+    pushed: [
+      { frames: [], reason: null },
+      { frames: [[0, 5]], reason: null },
+    ],
+    finish: { outcome: "complete-framing", frames: 1, bytes: 10, chunks: 2 },
+  });
+});
 test("every two-part split preserves the exact raw bytes and candidate message order", async () => {
   const payloads = [Buffer.from([10, 3, 0, 255, 128]), Buffer.alloc(0), Buffer.from("tail")];
   const wire = Buffer.concat(payloads.map(frame));

@@ -20,6 +20,68 @@ async function journal(extra = {}) {
   });
   return { j, rows, stopped };
 }
+// A test-local real timer that loses the race to any module cutoff or commit working as intended.
+// If one never settles, the test fails this assertion instead of hanging until the per-test timeout.
+const FALLBACK_MS = 3000;
+async function settleOrFallback(work) {
+  let fallback;
+  const late = new Promise((resolve) => {
+    fallback = setTimeout(resolve, FALLBACK_MS, { state: "still pending" });
+  });
+  try {
+    return await Promise.race([
+      work.then(
+        (value) => ({ state: "fulfilled", value }),
+        (error) => ({ state: "rejected", error }),
+      ),
+      late,
+    ]);
+  } finally {
+    clearTimeout(fallback);
+  }
+}
+test("a clean write's ticket commits its frozen receipt before a fallback timer", async () => {
+  const { j, rows } = await journal({ deadlineAt: performance.now() + 60000 });
+  const committed = await settleOrFallback(j.append(Buffer.from("kept")).committed);
+  assert.equal(committed.state, "fulfilled", "a clean write must commit its ticket");
+  assert.deepEqual(committed.value, {
+    index: 0,
+    sha256: createHash("sha256").update("kept").digest("hex"),
+    bodyBytes: 4,
+  });
+  assert.ok(Object.isFrozen(committed.value));
+  assert.equal(rows.length, 1);
+  const result = await j.done();
+  assert.equal(result.acknowledgedEntries, 1);
+  assert.equal(result.unknownEntries, 0);
+});
+test("a write that never settles just short of the deadline is bounded by the drain's own wait before a fallback timer", async () => {
+  let now = 5000;
+  const clock = mock.method(performance, "now", () => now);
+  const seen = [];
+  try {
+    const { j } = await journal({
+      deadlineAt: 65000,
+      write: () => new Promise(() => {}),
+      stopOwned: ({ reason, signal }) => {
+        seen.push([reason, signal.aborted]);
+      },
+    });
+    now = 64999;
+    const ticket = await settleOrFallback(j.append(Buffer.alloc(0)).committed);
+    assert.equal(ticket.state, "rejected", "the write's own cutoff must reject its ticket");
+    assert.deepEqual(seen, [["deadline", true]]);
+    const reported = await settleOrFallback(j.done());
+    assert.equal(reported.state, "fulfilled", "done() must be settled by its own deadline wait");
+    assert.equal(reported.value.reason, "deadline");
+    assert.deepEqual(reported.value.pendingCallbacks, ["write:0"]);
+    assert.equal(reported.value.acknowledgedEntries, 0);
+    assert.equal(reported.value.unknownEntries, 1);
+    assert.equal(reported.value.terminationRequired, true);
+  } finally {
+    clock.mock.restore();
+  }
+});
 test("journal sequence and acknowledgment bind immutable exact byte snapshots", async () => {
   let release;
   const held = new Promise((resolve) => {
@@ -515,7 +577,7 @@ test("monotonic time at the deadline refuses appends and storage acknowledgments
 });
 test(
   "a hung write's own cutoff rejects its ticket at the deadline and halts with the deadline reason",
-  { timeout: 500 },
+  { timeout: 8000 },
   async () => {
     let now = 0,
       release;
@@ -527,26 +589,17 @@ test(
     let j;
     try {
       ({ j } = await journal({
-        deadlineAt: 200,
+        deadlineAt: 65000,
         write: () => held,
         stopOwned: ({ reason, signal }) => {
           seen.push([reason, signal.aborted]);
         },
       }));
       const ticket = j.append(Buffer.alloc(0));
-      now = 190;
-      let fallback;
-      const outcome = await Promise.race([
-        ticket.committed.then(
-          () => "acknowledged",
-          () => "rejected",
-        ),
-        new Promise((resolve) => {
-          fallback = setTimeout(resolve, 80, "still pending");
-        }),
-      ]);
-      clearTimeout(fallback);
-      assert.equal(outcome, "rejected");
+      // 10 ms of real time remain; any cutoff measured from the wrong origin is far past the fallback.
+      now = 64990;
+      const outcome = await settleOrFallback(ticket.committed);
+      assert.equal(outcome.state, "rejected");
       assert.deepEqual(seen, [["deadline", true]]);
     } finally {
       release();

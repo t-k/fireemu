@@ -969,4 +969,28 @@ test("a refused CREATE settles on the recorded detailed absence and the topic cl
   const result = await collectCalendar(e.deps);
   assert.equal(result.closureReady, false);
   assert.ok(!e.sends.some(({ id }) => id === "delete-topic"));
+  // Only a complete 400 is a recorded refusal. Another client error stops the run, and the
+  // detailed absence that follows it is not a recorded settlement.
+  for (const refusal of [409, 400]) {
+    const f = environment(),
+      send = f.deps.send;
+    f.deps.send = async (request) => {
+      if (request.id === "c07-create") {
+        f.sends.push(request);
+        return refusal === 400
+          ? new Response(new ReadableStream({ pull: (c) => c.error(new Error("lost")) }), {
+              status: 400,
+            })
+          : new Response("{}", { status: refusal });
+      }
+      if (request.id === "c07-read-deleted") {
+        f.sends.push(request);
+        return new Response(detailedAbsence(f.owned.jobs.c07), { status: 404 });
+      }
+      return send(request);
+    };
+    const stopped = await collectCalendar(f.deps);
+    assert.equal(stopped.closureReady, false, String(refusal));
+    assert.ok(!f.sends.some(({ id }) => id === "delete-topic"), String(refusal));
+  }
 });

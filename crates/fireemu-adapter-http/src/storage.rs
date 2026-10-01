@@ -2856,6 +2856,22 @@ pub fn handle_framed(state: &StorageState, req: StorageRequest) -> (StorageRespo
     }
 }
 
+/// A read the recordings show production serving to an end user rather than to the owner (4 of the
+/// 179 recorded v0 media reads: the ID-token and download-token reads): a Firebase object read
+/// that carries a download token or a `Firebase <ID token>` credential other than the owner's.
+fn is_end_user_read(
+    firebase: bool,
+    object_read: bool,
+    has_token_param: bool,
+    authorization: Option<&str>,
+) -> bool {
+    object_read
+        && firebase
+        && (has_token_param
+            || authorization
+                .is_some_and(|value| value.starts_with("Firebase ") && value != "Firebase owner"))
+}
+
 /// What the strict profile's framing needs from a request, or `None` for a request the
 /// recordings do not cover (the form upload, the ACL, the bucket listing, the XML-style read and
 /// the rules route keep the headers their handlers give them).
@@ -2876,12 +2892,12 @@ fn production_shape(
     };
     let params = query_params(&req.query);
     let media = object_read && params.get("alt").map(String::as_str) == Some("media");
-    let end_user_read = object_read
-        && wire == Wire::Firebase
-        && (params.contains_key("token")
-            || req
-                .header("authorization")
-                .is_some_and(|value| value.starts_with("Firebase ") && value != "Firebase owner"));
+    let end_user_read = is_end_user_read(
+        wire == Wire::Firebase,
+        object_read,
+        params.contains_key("token"),
+        req.header("authorization"),
+    );
     Some(Shape {
         wire,
         method: req.method.clone(),
@@ -5164,5 +5180,26 @@ mod storage_rules_registry_tests {
             )),
             (500, "invalid".to_owned(), "internalError")
         );
+    }
+}
+
+#[cfg(test)]
+mod end_user_read_tests {
+    use super::is_end_user_read;
+
+    #[test]
+    fn only_a_firebase_object_read_with_a_token_or_an_id_token_is_an_end_user_read() {
+        // A download token or an ID token on a Firebase object read.
+        assert!(is_end_user_read(true, true, true, None));
+        assert!(is_end_user_read(true, true, false, Some("Firebase a.b.c")));
+        assert!(is_end_user_read(true, true, true, Some("Bearer owner")));
+        // The owner's credentials and an absent one are not.
+        assert!(!is_end_user_read(true, true, false, Some("Firebase owner")));
+        assert!(!is_end_user_read(true, true, false, Some("Bearer owner")));
+        assert!(!is_end_user_read(true, true, false, Some("Bearer a.b.c")));
+        assert!(!is_end_user_read(true, true, false, None));
+        // Not a Firebase read, or not an object read.
+        assert!(!is_end_user_read(false, true, true, Some("Firebase a.b.c")));
+        assert!(!is_end_user_read(true, false, true, Some("Firebase a.b.c")));
     }
 }

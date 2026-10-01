@@ -7259,3 +7259,397 @@ fn production_etag_text(generation: u64, metageneration: u64) -> String {
     bytes.push(u8::try_from(metageneration).unwrap());
     fireemu_core_storage::hash::base64(&bytes)
 }
+
+// ------------------------------------------------------------------------------------------
+// the rows mutation testing showed the first tests did not pin
+// ------------------------------------------------------------------------------------------
+
+/// Reads that production serves to an end user are private; the owner's are not; lists carry their
+/// own header sets (recorded, lean-v5).
+#[test]
+fn strict_header_sets_follow_the_kind_of_read() {
+    let (_, strict) = &seeded_pair()[0];
+    let owner = [("authorization", "Bearer owner")];
+    // A JSON API list and a Firebase list.
+    let list = handle(
+        strict,
+        req("GET", &format!("/storage/v1/b/{BUCKET}/o"), &owner, b""),
+    );
+    assert_eq!(
+        header_names(&list),
+        ["cache-control", "content-type", "expires", "vary"]
+    );
+    assert_eq!(
+        header(&list, "cache-control"),
+        Some("private, max-age=0, must-revalidate, no-transform")
+    );
+    let v0_list = handle(
+        strict,
+        req("GET", &format!("/v0/b/{BUCKET}/o"), &owner, b""),
+    );
+    assert_eq!(
+        header(&v0_list, "cache-control"),
+        Some("private, max-age=0")
+    );
+    assert_eq!(header(&v0_list, "access-control-allow-origin"), Some("*"));
+    // A v0 media read: the owner's is no-cache, a download-token read is private.
+    let object = format!("/v0/b/{BUCKET}/o/g.bin");
+    let meta = json_body(&handle(strict, req("GET", &object, &owner, b"")));
+    let token = meta["downloadTokens"].as_str().unwrap().to_owned();
+    let by_owner = handle(
+        strict,
+        req("GET", &format!("{object}?alt=media"), &owner, b""),
+    );
+    assert_eq!(
+        header(&by_owner, "cache-control"),
+        Some("no-cache, no-store, max-age=0, must-revalidate")
+    );
+    assert!(header(&by_owner, "pragma").is_some());
+    let by_token = handle(
+        strict,
+        req(
+            "GET",
+            &format!("{object}?alt=media&token={token}"),
+            &[],
+            b"",
+        ),
+    );
+    assert_eq!(by_token.status, 200);
+    assert_eq!(
+        header(&by_token, "cache-control"),
+        Some("private, max-age=0")
+    );
+    assert_eq!(header(&by_token, "pragma"), None);
+    // A media read of an absent v0 object is a JSON 404 with CORS and a private cache.
+    let absent = handle(
+        strict,
+        req(
+            "GET",
+            &format!("/v0/b/{BUCKET}/o/absent.bin?alt=media"),
+            &owner,
+            b"",
+        ),
+    );
+    assert_eq!(absent.status, 404);
+    assert_eq!(header(&absent, "access-control-allow-origin"), Some("*"));
+    assert_eq!(header(&absent, "cache-control"), Some("private, max-age=0"));
+}
+
+/// Partial JSON API answers carry no checksum of the whole object, the empty one the checksum of
+/// no bytes alone, and the Firebase dialect keeps its checksum (recorded, lean-v5).
+#[test]
+fn strict_partial_answers_carry_the_recorded_checksums() {
+    let (_, strict) = &seeded_pair()[0];
+    let owner = [("authorization", "Bearer owner")];
+    let partial = handle(
+        strict,
+        req(
+            "GET",
+            &format!("/storage/v1/b/{BUCKET}/o/g.bin?alt=media"),
+            &[owner[0], ("range", "bytes=0-2")],
+            b"",
+        ),
+    );
+    assert_eq!(partial.status, 206);
+    assert_eq!(header(&partial, "content-range"), Some("bytes 0-2/5"));
+    assert_eq!(header(&partial, "x-goog-hash"), None);
+    let v0 = handle(
+        strict,
+        req(
+            "GET",
+            &format!("/v0/b/{BUCKET}/o/g.bin?alt=media"),
+            &[owner[0], ("range", "bytes=0-2")],
+            b"",
+        ),
+    );
+    assert_eq!(v0.status, 206);
+    assert!(header(&v0, "x-goog-hash").unwrap().contains(", md5="));
+    // The empty object and a nonzero suffix.
+    let empty = handle(
+        strict,
+        req(
+            "POST",
+            &format!("/upload/storage/v1/b/{BUCKET}/o?uploadType=media&name=e.bin"),
+            &owner,
+            b"",
+        ),
+    );
+    assert_eq!(empty.status, 200);
+    let suffix = handle(
+        strict,
+        req(
+            "GET",
+            &format!("/storage/v1/b/{BUCKET}/o/e.bin?alt=media"),
+            &[owner[0], ("range", "bytes=-2")],
+            b"",
+        ),
+    );
+    assert_eq!(suffix.status, 206);
+    assert_eq!(header(&suffix, "x-goog-hash"), Some("crc32c=AAAAAA=="));
+}
+
+/// The name length limit is 1,024 bytes: such a name uploads and reads back on every route and in
+/// both profiles; one byte more is refused on upload (strict: production's words) and a 404 on read.
+#[test]
+fn a_name_of_exactly_the_limit_is_an_ordinary_object() {
+    let name = "n".repeat(1024);
+    for (acceptance, s) in seeded_pair() {
+        let owner = [("authorization", "Bearer owner")];
+        let uploaded = handle(
+            &s,
+            req(
+                "POST",
+                &format!("/upload/storage/v1/b/{BUCKET}/o?uploadType=media&name={name}"),
+                &owner,
+                b"x",
+            ),
+        );
+        assert_eq!(uploaded.status, 200, "{acceptance:?}");
+        for path in [
+            format!("/storage/v1/b/{BUCKET}/o/{name}"),
+            format!("/storage/v1/b/{BUCKET}/o/{name}?alt=media"),
+            format!("/v0/b/{BUCKET}/o/{name}"),
+            format!("/v0/b/{BUCKET}/o/{name}?alt=media"),
+        ] {
+            let read = handle(&s, req("GET", &path, &owner, b""));
+            assert_eq!(
+                read.status,
+                200,
+                "{acceptance:?} {}",
+                &path[path.len() - 20..]
+            );
+        }
+        let too_long = format!("{name}n");
+        let refused = handle(
+            &s,
+            req(
+                "POST",
+                &format!("/upload/storage/v1/b/{BUCKET}/o?uploadType=media&name={too_long}"),
+                &owner,
+                b"x",
+            ),
+        );
+        assert_eq!(refused.status, 400, "{acceptance:?}");
+    }
+}
+
+/// A multipart boundary of 70 characters is accepted and one of 71 refused, on both dialects.
+#[test]
+fn a_multipart_boundary_is_limited_to_seventy_characters() {
+    for (acceptance, s) in seeded_pair() {
+        let owner = [("authorization", "Bearer owner")];
+        let send = |boundary: &str, route: String, protocol: Option<&str>| {
+            let body = format!(
+                "--{boundary}\r\nContent-Type: application/json\r\n\r\n{{}}\r\n--{boundary}\r\nContent-Type: text/plain\r\n\r\nhello\r\n--{boundary}--"
+            );
+            let content_type = format!("multipart/related; boundary={boundary}");
+            let mut headers = vec![owner[0], ("content-type", content_type.as_str())];
+            if let Some(protocol) = protocol {
+                headers.push(("x-goog-upload-protocol", protocol));
+            }
+            handle(&s, req("POST", &route, &headers, body.as_bytes())).status
+        };
+        let ok = "b".repeat(70);
+        let long = "b".repeat(71);
+        for (route, protocol) in [
+            (
+                format!("/v0/b/{BUCKET}/o?name=m70.txt&uploadType=multipart"),
+                Some("multipart"),
+            ),
+            (
+                format!("/upload/storage/v1/b/{BUCKET}/o?uploadType=multipart&name=m70.txt"),
+                None,
+            ),
+        ] {
+            assert_eq!(
+                send(&ok, route.clone(), protocol),
+                200,
+                "{acceptance:?} {route}"
+            );
+            assert_eq!(
+                send(&long, route.clone(), protocol),
+                400,
+                "{acceptance:?} {route}"
+            );
+        }
+    }
+}
+
+/// The JSON API's refusals of a multipart body: strict says `invalidPayloadSize` with the part
+/// count, and the one recorded malformed metadata part has its parser message; the emulator
+/// profile answers the official emulator's own JSON for both.
+#[test]
+fn json_api_multipart_refusals_differ_between_the_profiles() {
+    for (acceptance, s) in seeded_pair() {
+        let strict = acceptance == TokenAcceptance::Verified;
+        let owner = [("authorization", "Bearer owner")];
+        let route = format!("/upload/storage/v1/b/{BUCKET}/o?uploadType=multipart&name=m.bin");
+        let send = |metadata: &str| {
+            let body = format!(
+                "--b\r\nContent-Type: application/json\r\n\r\n{metadata}\r\n--b\r\nContent-Type: text/plain\r\n\r\nhello\r\n--b--"
+            );
+            handle(
+                &s,
+                req(
+                    "POST",
+                    &route,
+                    &[owner[0], ("content-type", "multipart/related; boundary=b")],
+                    body.as_bytes(),
+                ),
+            )
+        };
+        // One part only.
+        let one_part = handle(
+            &s,
+            req(
+                "POST",
+                &route,
+                &[owner[0], ("content-type", "multipart/related; boundary=b")],
+                b"--b\r\nContent-Type: application/json\r\n\r\n{}\r\n--b--",
+            ),
+        );
+        assert_eq!(one_part.status, 400, "{acceptance:?}");
+        let message = json_body(&one_part)["error"]["message"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        if strict {
+            assert_eq!(
+                message,
+                "Payload size invalid. Expected 2-3 payloads. Actual size: 1"
+            );
+            assert_eq!(
+                json_body(&one_part)["error"]["errors"][0]["reason"],
+                "invalidPayloadSize"
+            );
+        } else {
+            assert_eq!(message, "Unexpected number of parts in request body");
+        }
+        // The recorded malformed metadata part.
+        let recorded = send("{invalid-json");
+        assert_eq!(recorded.status, 400);
+        assert_eq!(
+            header(&recorded, "content-type") == Some("text/html; charset=UTF-8"),
+            strict,
+            "{acceptance:?}"
+        );
+        // Shapes that were not recorded keep the generic answer in both profiles.
+        for other in ["{", "{a b", "{\"a\":", "{a\"b", "[1"] {
+            let generic = send(other);
+            assert_eq!(generic.status, 400);
+            assert!(
+                !String::from_utf8_lossy(&generic.body).contains("between key:value pair"),
+                "{acceptance:?} {other}"
+            );
+        }
+        // A word with an underscore and digits is a bare word too (strict only).
+        let wordy = send("{a_b-1");
+        assert_eq!(
+            String::from_utf8_lossy(&wordy.body).contains(r"a_b-1\n"),
+            strict,
+            "{acceptance:?}"
+        );
+    }
+}
+
+/// A chunk at the wrong offset: strict says production's text, the emulator profile the official
+/// emulator's JSON error; the 308 of a JSON API session names its running checksums only under
+/// strict and only once a byte is held.
+#[test]
+fn resumable_offsets_and_308_checksums_differ_between_the_profiles() {
+    for (acceptance, s) in seeded_pair() {
+        let strict = acceptance == TokenAcceptance::Verified;
+        let owner = [("authorization", "Bearer owner")];
+        // Firebase dialect: a chunk at offset 1 of an empty session.
+        let start = handle(
+            &s,
+            req(
+                "POST",
+                &format!("/v0/b/{BUCKET}/o?name=o.bin"),
+                &[
+                    owner[0],
+                    ("x-goog-upload-protocol", "resumable"),
+                    ("x-goog-upload-command", "start"),
+                    ("content-type", "application/json"),
+                ],
+                br#"{"name":"o.bin"}"#,
+            ),
+        );
+        let url = header(&start, "x-goog-upload-url").unwrap().to_owned();
+        let session = url
+            .split_once("/v0/")
+            .map(|(_, rest)| format!("/v0/{rest}"))
+            .unwrap();
+        let wrong = handle(
+            &s,
+            req(
+                "POST",
+                &session,
+                &[
+                    owner[0],
+                    ("x-goog-upload-protocol", "resumable"),
+                    ("x-goog-upload-command", "upload"),
+                    ("x-goog-upload-offset", "1"),
+                ],
+                b"x",
+            ),
+        );
+        assert_eq!(wrong.status, 400);
+        assert_eq!(
+            header(&wrong, "content-type") == Some("text/plain; charset=utf-8"),
+            strict,
+            "{acceptance:?}"
+        );
+        // JSON API session: a status query before any chunk, then after one.
+        let gstart = handle(
+            &s,
+            req(
+                "POST",
+                &format!("/upload/storage/v1/b/{BUCKET}/o?uploadType=resumable&name=q.bin"),
+                &[owner[0], ("content-type", "application/json")],
+                b"{}",
+            ),
+        );
+        let gsession = header(&gstart, "location")
+            .unwrap()
+            .strip_prefix("http://127.0.0.1:9199")
+            .unwrap()
+            .to_owned();
+        let before = handle(
+            &s,
+            req(
+                "PUT",
+                &gsession,
+                &[owner[0], ("content-range", "bytes */10")],
+                b"",
+            ),
+        );
+        assert_eq!(before.status, 308);
+        assert_eq!(
+            header(&before, "x-range-md5"),
+            None,
+            "{acceptance:?}: nothing is held yet"
+        );
+        assert_eq!(header(&before, "range"), None);
+        let chunk = handle(
+            &s,
+            req(
+                "PUT",
+                &gsession,
+                &[owner[0], ("content-range", "bytes 0-4/10")],
+                b"hello",
+            ),
+        );
+        assert_eq!(chunk.status, 308);
+        assert_eq!(
+            header(&chunk, "x-range-md5").is_some(),
+            strict,
+            "{acceptance:?}"
+        );
+        assert_eq!(
+            header(&chunk, "x-goog-running-hash").is_some(),
+            strict,
+            "{acceptance:?}"
+        );
+    }
+}

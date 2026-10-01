@@ -1265,6 +1265,203 @@ mod tests {
         assert_eq!(value["items"][0]["etag"], "CNGTm8DplpcDEAI=");
     }
 
+    #[test]
+    fn disposition_encoding_and_language_stay_only_on_media_answers() {
+        let extras = [
+            ("content-disposition", "attachment"),
+            ("content-encoding", "gzip"),
+            ("content-language", "en"),
+        ];
+        let mut media = shape(Wire::Gcs, "GET");
+        media.object_read = true;
+        media.media = true;
+        for (status, kept) in [
+            (200, true),
+            (206, true),
+            (404, false),
+            (412, false),
+            (416, false),
+        ] {
+            let answered = frame(
+                &media,
+                response(status, "application/octet-stream", "x", &extras),
+            );
+            for name in [
+                "content-disposition",
+                "content-encoding",
+                "content-language",
+            ] {
+                assert_eq!(header(&answered, name).is_some(), kept, "{status} {name}");
+            }
+        }
+        // A metadata read, even a 200, drops them: only a media answer carries them.
+        let mut read = media.clone();
+        read.media = false;
+        let answered = frame(&read, response(200, JSON, OBJECT, &extras));
+        for name in [
+            "content-disposition",
+            "content-encoding",
+            "content-language",
+        ] {
+            assert_eq!(header(&answered, name), None, "{name}");
+        }
+    }
+
+    #[test]
+    fn the_etag_header_needs_a_200_object_resource_on_the_json_api() {
+        let mut read = shape(Wire::Gcs, "GET");
+        read.object_read = true;
+        let with_etag = r#"{"kind":"storage#objects","etag":"abc"}"#;
+        assert_eq!(
+            header(&frame(&read, response(200, JSON, with_etag, &[])), "etag"),
+            None
+        );
+        let object = r#"{"kind":"storage#object","etag":"abc"}"#;
+        assert_eq!(
+            header(&frame(&read, response(201, JSON, object, &[])), "etag"),
+            None
+        );
+        assert!(header(&frame(&read, response(200, JSON, object, &[])), "etag").is_some());
+        // The Firebase dialect carries no etag header on a JSON answer.
+        let mut firebase = shape(Wire::Firebase, "GET");
+        firebase.object_read = true;
+        assert_eq!(
+            header(&frame(&firebase, response(200, JSON, object, &[])), "etag"),
+            None
+        );
+    }
+
+    #[test]
+    fn json_api_cache_style_follows_the_status_and_the_kind_of_read() {
+        let mut list = shape(Wire::Gcs, "GET");
+        list.list = true;
+        let mut read = shape(Wire::Gcs, "GET");
+        read.object_read = true;
+        let plain_get = shape(Wire::Gcs, "GET");
+        for (shape, status, style) in [
+            (&list, 200, READ_CACHE),
+            (&list, 304, READ_CACHE),
+            (&list, 400, NO_CACHE),
+            (&read, 200, READ_CACHE),
+            (&read, 304, READ_CACHE),
+            (&read, 404, NO_CACHE),
+            (&read, 412, NO_CACHE),
+            (&plain_get, 200, NO_CACHE),
+        ] {
+            let answered = frame(
+                shape,
+                response(status, JSON, r#"{"kind":"storage#objects"}"#, &[]),
+            );
+            assert_eq!(header(&answered, "cache-control"), Some(style), "{status}");
+        }
+    }
+
+    #[test]
+    fn a_firebase_media_error_is_json_with_cors_and_a_private_cache() {
+        let mut media = shape(Wire::Firebase, "GET");
+        media.object_read = true;
+        media.media = true;
+        for status in [403, 404] {
+            let answered = frame(
+                &media,
+                response(status, JSON, r#"{"error":{"code":404}}"#, &[]),
+            );
+            assert_eq!(
+                header(&answered, "access-control-allow-origin"),
+                Some("*"),
+                "{status}"
+            );
+            assert_eq!(
+                header(&answered, "x-content-type-options"),
+                Some("nosniff"),
+                "{status}"
+            );
+            assert_eq!(
+                header(&answered, "cache-control"),
+                Some(PRIVATE),
+                "{status}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_firebase_answer_without_a_content_type_gets_no_cors() {
+        let post = shape(Wire::Firebase, "POST");
+        let mut bare = response(200, JSON, "", &[]);
+        bare.headers.retain(|(name, _)| name != "content-type");
+        let answered = frame(&post, bare);
+        // Nothing was added or replaced: the handler's own headers are all there is.
+        assert_eq!(
+            header(&answered, "access-control-allow-origin"),
+            Some("http://x")
+        );
+        assert_eq!(header(&answered, "access-control-expose-headers"), None);
+        assert_eq!(header(&answered, "x-content-type-options"), None);
+        assert_eq!(header(&answered, "cache-control"), Some("public"));
+    }
+
+    #[test]
+    fn empty_objects_and_arrays_keep_their_compact_spelling() {
+        let laid_out = layout_json(
+            Wire::Firebase,
+            br#"{"prefixes":[],"items":[],"metadata":{}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            String::from_utf8(laid_out).unwrap(),
+            "{\n  \"metadata\": {},\n  \"prefixes\": [],\n  \"items\": []\n}"
+        );
+    }
+
+    mod calendar {
+        use super::super::http_date;
+        use proptest::prelude::*;
+
+        const DAYS: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+        const MONTHS: [&str; 12] = [
+            "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+        ];
+
+        /// The weekday of a civil date by Zeller's congruence (an independent method).
+        fn weekday(year: i64, month: i64, day: i64) -> usize {
+            let (adjusted_year, adjusted_month) = if month < 3 {
+                (year - 1, month + 12)
+            } else {
+                (year, month)
+            };
+            let (in_century, century) = (adjusted_year % 100, adjusted_year / 100);
+            let h = (day
+                + 13 * (adjusted_month + 1) / 5
+                + in_century
+                + in_century / 4
+                + century / 4
+                + 5 * century)
+                % 7;
+            // h: 0 = Saturday.
+            usize::try_from((h + 6) % 7).unwrap()
+        }
+
+        proptest! {
+            /// An HTTP date is the calendar's date and time of the instant, with the right weekday
+            /// and month name: the clock fields come from the RFC 3339 spelling of the same instant.
+            #[test]
+            fn http_dates_follow_the_calendar(seconds in 0i64..4_102_444_800) {
+                let rfc = fireemu_core_types::time::LogicalInstant::from_unix_seconds(seconds)
+                    .to_rfc3339()
+                    .unwrap();
+                let (date, time) = rfc.trim_end_matches('Z').split_once('T').unwrap();
+                let parts: Vec<i64> = date.split('-').map(|p| p.parse().unwrap()).collect();
+                let (year, month, day) = (parts[0], parts[1], parts[2]);
+                let expected = format!(
+                    "{}, {day:02} {} {year:04} {time} GMT",
+                    DAYS[weekday(year, month, day)],
+                    MONTHS[usize::try_from(month - 1).unwrap()]
+                );
+                prop_assert_eq!(http_date(seconds), expected);
+            }
+        }
+    }
+
     mod properties {
         use super::super::*;
         use proptest::prelude::*;

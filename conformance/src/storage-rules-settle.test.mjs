@@ -5,16 +5,40 @@ import { buildCorpus } from "./storage-rules/corpus.mjs";
 import { buildFullRequestManifest } from "./storage-rules/full-manifest.mjs";
 
 const load = async () => {
-  const module = await import("./storage-rules/settle.mjs").catch((error) => { if (error.code === "ERR_MODULE_NOT_FOUND") return {}; throw error; });
+  const module = await import("./storage-rules/settle.mjs").catch((error) => {
+    if (error.code === "ERR_MODULE_NOT_FOUND") return {};
+    throw error;
+  });
   assert.equal(typeof module.createSettleState, "function");
   return module;
 };
-const publication = (overrides = {}) => ({ kind: "publication", name: "v1", maxCycles: 30, requiredConsecutive: 2, witnesses: [{ objectName: "STORAGE-RULES/r/allow.bin", expect: "allowed" }, { objectName: "STORAGE-RULES/r/deny.bin", expect: "denied" }], ...overrides });
-const restoration = (overrides = {}) => ({ kind: "restoration", name: "restore", maxCycles: 15, requiredConsecutive: 2, witnesses: ["a", "b", "c", "d"].map((n) => ({ objectName: `STORAGE-RULES/r/${n}.bin`, expect: "no-release" })), ...overrides });
+const publication = (overrides = {}) => ({
+  kind: "publication",
+  name: "v1",
+  maxCycles: 30,
+  requiredConsecutive: 2,
+  witnesses: [
+    { objectName: "STORAGE-RULES/r/allow.bin", expect: "allowed" },
+    { objectName: "STORAGE-RULES/r/deny.bin", expect: "denied" },
+  ],
+  ...overrides,
+});
+const restoration = (overrides = {}) => ({
+  kind: "restoration",
+  name: "restore",
+  maxCycles: 15,
+  requiredConsecutive: 2,
+  witnesses: ["a", "b", "c", "d"].map((n) => ({
+    objectName: `STORAGE-RULES/r/${n}.bin`,
+    expect: "no-release",
+  })),
+  ...overrides,
+});
 
 // A reference model written independently of the reducer: read the verdicts cycle by cycle, count consecutive complete matches.
 function reference(config, verdicts) {
-  let consecutive = 0; let reads = 0;
+  let consecutive = 0;
+  let reads = 0;
   for (let cycle = 1; cycle <= config.maxCycles; cycle++) {
     let match = true;
     for (let index = 0; index < config.witnesses.length; index++) {
@@ -38,7 +62,10 @@ async function run(config, verdicts) {
   }
   return { state, reads };
 }
-const prng = (seed) => () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 2 ** 32; };
+const prng = (seed) => () => {
+  seed = (seed * 1664525 + 1013904223) >>> 0;
+  return seed / 2 ** 32;
+};
 
 test("two consecutive complete matching cycles settle a publication after four reads", async () => {
   const { state, reads } = await run(publication(), ["allowed", "denied", "allowed", "denied"]);
@@ -49,7 +76,13 @@ test("two consecutive complete matching cycles settle a publication after four r
 
 test("a mismatch or an unexpected verdict resets the count", async () => {
   const good = ["allowed", "denied"];
-  const cases = [["allowed", "allowed", ...good, ...good], ["denied", "denied", ...good, ...good], ["other", "denied", ...good, ...good], ["allowed", "other", ...good, ...good], [...good, "denied", "denied", ...good, ...good]];
+  const cases = [
+    ["allowed", "allowed", ...good, ...good],
+    ["denied", "denied", ...good, ...good],
+    ["other", "denied", ...good, ...good],
+    ["allowed", "other", ...good, ...good],
+    [...good, "denied", "denied", ...good, ...good],
+  ];
   for (const verdicts of cases) {
     const { state, reads } = await run(publication(), verdicts);
     assert.equal(state.status, "settled", JSON.stringify(verdicts));
@@ -62,7 +95,18 @@ test("a mismatch or an unexpected verdict resets the count", async () => {
 test("a mid-cycle stop can never settle, whatever the reads so far were", async () => {
   const { state } = await run(publication(), ["allowed", "denied", "allowed"]);
   assert.equal(state.status, "running");
-  assert.deepEqual(await (async () => { const { nextRead } = await load(); return nextRead(state); })(), { cycle: 2, index: 1, witness: { objectName: "STORAGE-RULES/r/deny.bin", expect: "denied" }, rowId: "settle/v1/2/1" });
+  assert.deepEqual(
+    await (async () => {
+      const { nextRead } = await load();
+      return nextRead(state);
+    })(),
+    {
+      cycle: 2,
+      index: 1,
+      witness: { objectName: "STORAGE-RULES/r/deny.bin", expect: "denied" },
+      rowId: "settle/v1/2/1",
+    },
+  );
 });
 
 test("exhausting the cycle limit ends the wait without settling", async () => {
@@ -71,13 +115,21 @@ test("exhausting the cycle limit ends the wait without settling", async () => {
   assert.equal(state.status, "exhausted");
   assert.equal(reads, 60);
   const almost = [];
-  for (let cycle = 1; cycle <= 30; cycle++) almost.push("allowed", cycle % 2 ? "denied" : "allowed");
+  for (let cycle = 1; cycle <= 30; cycle++)
+    almost.push("allowed", cycle % 2 ? "denied" : "allowed");
   assert.equal((await run(publication(), almost)).state.status, "exhausted");
 });
 
 test("a restoration counts a cycle only when all four witnesses answer as a bucket with no release does; allowed, denied and other answers never count", async () => {
   const deniedCycle = Array(4).fill("no-release");
-  for (const broken of [["no-release", "no-release", "no-release", "allowed"], ["no-release", "no-release", "no-release", "denied"], ["no-release", "no-release", "no-release", "other"], ["other", "other", "other", "other"], ["allowed", "allowed", "allowed", "allowed"], ["denied", "denied", "denied", "denied"]]) {
+  for (const broken of [
+    ["no-release", "no-release", "no-release", "allowed"],
+    ["no-release", "no-release", "no-release", "denied"],
+    ["no-release", "no-release", "no-release", "other"],
+    ["other", "other", "other", "other"],
+    ["allowed", "allowed", "allowed", "allowed"],
+    ["denied", "denied", "denied", "denied"],
+  ]) {
     const { state, reads } = await run(restoration(), [...deniedCycle, ...broken, ...deniedCycle]);
     assert.equal(state.status, "running", JSON.stringify(broken));
     assert.equal(reads, 12);
@@ -96,23 +148,51 @@ test("a restoration settles on the sequence production gave after a release was 
   assert.equal(state.status, "settled");
   assert.equal(reads, 16);
   // One 400 cycle is not enough, and a stale cycle in between starts the count again.
-  assert.equal((await run(restoration(), [...stale, ...settled, ...stale, ...settled])).state.status, "running");
+  assert.equal(
+    (await run(restoration(), [...stale, ...settled, ...stale, ...settled])).state.status,
+    "running",
+  );
 });
 
 test("the reducer agrees with the reference model on random verdict sequences and never reads past its bound", async () => {
   const random = prng(20260929);
-  const pick = (weights) => { const roll = random(); let sum = 0; for (const [verdict, weight] of weights) { sum += weight; if (roll < sum) return verdict; } return "other"; };
-  for (const config of [publication(), publication({ maxCycles: 5 }), publication({ requiredConsecutive: 3 }), restoration(), restoration({ maxCycles: 4 })]) {
+  const pick = (weights) => {
+    const roll = random();
+    let sum = 0;
+    for (const [verdict, weight] of weights) {
+      sum += weight;
+      if (roll < sum) return verdict;
+    }
+    return "other";
+  };
+  for (const config of [
+    publication(),
+    publication({ maxCycles: 5 }),
+    publication({ requiredConsecutive: 3 }),
+    restoration(),
+    restoration({ maxCycles: 4 }),
+  ]) {
     for (let trial = 0; trial < 300; trial++) {
       const positive = random();
-      const verdicts = Array.from({ length: config.maxCycles * config.witnesses.length + 3 }, (_, index) => {
-        const expect = config.witnesses[index % config.witnesses.length].expect;
-        return random() < positive ? expect : pick([["allowed", 0.2], ["denied", 0.2], ["no-release", 0.1], ["other", 0.5]]);
-      });
+      const verdicts = Array.from(
+        { length: config.maxCycles * config.witnesses.length + 3 },
+        (_, index) => {
+          const expect = config.witnesses[index % config.witnesses.length].expect;
+          return random() < positive
+            ? expect
+            : pick([
+                ["allowed", 0.2],
+                ["denied", 0.2],
+                ["no-release", 0.1],
+                ["other", 0.5],
+              ]);
+        },
+      );
       const { state, reads } = await run(config, verdicts);
       const expected = reference(config, verdicts);
       assert.equal(state.status, expected.status, `${config.kind} trial ${trial}`);
-      if (expected.status !== "running") assert.equal(reads, expected.reads, `${config.kind} trial ${trial}`);
+      if (expected.status !== "running")
+        assert.equal(reads, expected.reads, `${config.kind} trial ${trial}`);
       assert.ok(reads <= config.maxCycles * config.witnesses.length);
     }
   }
@@ -121,10 +201,14 @@ test("the reducer agrees with the reference model on random verdict sequences an
 test("row IDs follow the manifest's naming and no read is offered after the end", async () => {
   const { createSettleState, nextRead, applyVerdict, settleRowId } = await load();
   assert.equal(settleRowId({ ...publication(), phase: "normal" }, 3, 1), "settle/v1/3/1");
-  assert.equal(settleRowId({ ...restoration(), phase: "recovery" }, 2, 3), "recovery/settle/restore/2/3");
+  assert.equal(
+    settleRowId({ ...restoration(), phase: "recovery" }, 2, 3),
+    "recovery/settle/restore/2/3",
+  );
   assert.equal(settleRowId({ ...restoration(), phase: "normal" }, 2, 3), "settle/restore/2/3");
   let state = createSettleState(publication());
-  for (const verdict of ["allowed", "denied", "allowed", "denied"]) state = applyVerdict(state, verdict);
+  for (const verdict of ["allowed", "denied", "allowed", "denied"])
+    state = applyVerdict(state, verdict);
   assert.equal(nextRead(state), null);
   assert.throws(() => applyVerdict(state, "allowed"), /settle is over/);
   let over = createSettleState(publication({ maxCycles: 1, requiredConsecutive: 1 }));
@@ -136,16 +220,57 @@ test("row IDs follow the manifest's naming and no read is offered after the end"
 test("the configuration and every verdict are closed", async () => {
   const { createSettleState, applyVerdict } = await load();
   const bad = [
-    null, {}, { ...publication(), extra: 1 }, publication({ kind: "other" }), publication({ name: "" }), publication({ maxCycles: 0 }), publication({ maxCycles: 31 }), publication({ maxCycles: 1.5 }),
-    publication({ requiredConsecutive: 0 }), publication({ requiredConsecutive: 5, maxCycles: 4 }), publication({ witnesses: [] }), publication({ witnesses: [{ objectName: "x", expect: "allowed" }] }),
-    publication({ witnesses: [{ objectName: "x", expect: "maybe" }, { objectName: "y", expect: "denied" }] }), publication({ witnesses: [{ objectName: "x", expect: "allowed" }, { objectName: "x", expect: "denied" }] }),
-    publication({ witnesses: [{ objectName: "x", expect: "allowed" }, { objectName: "y", expect: "allowed" }] }), restoration({ witnesses: restoration().witnesses.slice(0, 3) }),
-    restoration({ witnesses: restoration().witnesses.map((w, i) => (i === 0 ? { ...w, expect: "allowed" } : w)) }), restoration({ maxCycles: 16 }),
+    null,
+    {},
+    { ...publication(), extra: 1 },
+    publication({ kind: "other" }),
+    publication({ name: "" }),
+    publication({ maxCycles: 0 }),
+    publication({ maxCycles: 31 }),
+    publication({ maxCycles: 1.5 }),
+    publication({ requiredConsecutive: 0 }),
+    publication({ requiredConsecutive: 5, maxCycles: 4 }),
+    publication({ witnesses: [] }),
+    publication({ witnesses: [{ objectName: "x", expect: "allowed" }] }),
+    publication({
+      witnesses: [
+        { objectName: "x", expect: "maybe" },
+        { objectName: "y", expect: "denied" },
+      ],
+    }),
+    publication({
+      witnesses: [
+        { objectName: "x", expect: "allowed" },
+        { objectName: "x", expect: "denied" },
+      ],
+    }),
+    publication({
+      witnesses: [
+        { objectName: "x", expect: "allowed" },
+        { objectName: "y", expect: "allowed" },
+      ],
+    }),
+    restoration({ witnesses: restoration().witnesses.slice(0, 3) }),
+    restoration({
+      witnesses: restoration().witnesses.map((w, i) => (i === 0 ? { ...w, expect: "allowed" } : w)),
+    }),
+    restoration({ maxCycles: 16 }),
   ];
-  for (const config of bad) assert.throws(() => createSettleState(config), /invalid settle configuration/, JSON.stringify(config)?.slice(0, 80));
+  for (const config of bad)
+    assert.throws(
+      () => createSettleState(config),
+      /invalid settle configuration/,
+      JSON.stringify(config)?.slice(0, 80),
+    );
   const state = createSettleState(publication());
-  for (const verdict of ["Allowed", "ok", "", null, undefined, 403, {}]) assert.throws(() => applyVerdict(state, verdict), /invalid settle verdict/);
-  const accessor = Object.defineProperty({ ...publication() }, "name", { enumerable: true, get() { return "v1"; } });
+  for (const verdict of ["Allowed", "ok", "", null, undefined, 403, {}])
+    assert.throws(() => applyVerdict(state, verdict), /invalid settle verdict/);
+  const accessor = Object.defineProperty({ ...publication() }, "name", {
+    enumerable: true,
+    get() {
+      return "v1";
+    },
+  });
   assert.throws(() => createSettleState(accessor), /invalid settle configuration/);
 });
 
@@ -160,9 +285,23 @@ test("states are immutable and applying a verdict does not change the old state"
 });
 
 test("every read the reducer offers is a declared settle row for the same witness, and the manifest's numbers fit the limits", async () => {
-  const closure = JSON.parse(readFileSync(new URL("../../spec/compatibility/closure/STORAGE-RULES.json", import.meta.url)));
-  const options = { runId: "local-run", sourceCommit: "a".repeat(40), queryProjectNumber: "1".repeat(12), idpProjectNumber: "2".repeat(12), queryApiKeyId: "00000000-0000-4000-8000-000000000001", idpApiKeyId: "00000000-0000-4000-8000-000000000002" };
-  const binding = { bucket: "synthetic-rules-bucket", prefix: "STORAGE-RULES/local-run/", uidA: "storage-rules-local-run-user-a", uidB: "storage-rules-local-run-user-b" };
+  const closure = JSON.parse(
+    readFileSync(new URL("../../spec/compatibility/closure/STORAGE-RULES.json", import.meta.url)),
+  );
+  const options = {
+    runId: "local-run",
+    sourceCommit: "a".repeat(40),
+    queryProjectNumber: "1".repeat(12),
+    idpProjectNumber: "2".repeat(12),
+    queryApiKeyId: "00000000-0000-4000-8000-000000000001",
+    idpApiKeyId: "00000000-0000-4000-8000-000000000002",
+  };
+  const binding = {
+    bucket: "synthetic-rules-bucket",
+    prefix: "STORAGE-RULES/local-run/",
+    uidA: "storage-rules-local-run-user-a",
+    uidB: "storage-rules-local-run-user-b",
+  };
   const manifest = buildFullRequestManifest(buildCorpus(binding), closure, options);
   const byId = new Map(manifest.rows.map((r) => [r.id, r]));
   const { createSettleState, nextRead, applyVerdict } = await load();
@@ -170,12 +309,35 @@ test("every read the reducer offers is a declared settle row for the same witnes
   assert.equal(manifest.restoration.consecutiveCompleteCycles, 2);
   const plans = [];
   for (const name of ["v1", "v2", "A", "B"]) {
-    const rows = manifest.rows.filter((r) => r.family === "settle" && r.phase === "normal" && r.programId === name);
-    plans.push({ kind: "publication", name, phase: "normal", maxCycles: 30, requiredConsecutive: 2, witnesses: [rows[0], rows[1]].map((r, i) => ({ objectName: r.request.objectName, expect: i === 0 ? "allowed" : "denied" })) });
+    const rows = manifest.rows.filter(
+      (r) => r.family === "settle" && r.phase === "normal" && r.programId === name,
+    );
+    plans.push({
+      kind: "publication",
+      name,
+      phase: "normal",
+      maxCycles: 30,
+      requiredConsecutive: 2,
+      witnesses: [rows[0], rows[1]].map((r, i) => ({
+        objectName: r.request.objectName,
+        expect: i === 0 ? "allowed" : "denied",
+      })),
+    });
   }
   for (const phase of ["normal", "recovery"]) {
-    const rows = manifest.rows.filter((r) => r.family === "settle" && r.phase === phase && r.programId === "restore");
-    plans.push({ kind: "restoration", name: "restore", phase, maxCycles: manifest.restoration.maxCycles, requiredConsecutive: manifest.restoration.consecutiveCompleteCycles, witnesses: rows.slice(0, 4).map((r) => ({ objectName: r.request.objectName, expect: "no-release" })) });
+    const rows = manifest.rows.filter(
+      (r) => r.family === "settle" && r.phase === phase && r.programId === "restore",
+    );
+    plans.push({
+      kind: "restoration",
+      name: "restore",
+      phase,
+      maxCycles: manifest.restoration.maxCycles,
+      requiredConsecutive: manifest.restoration.consecutiveCompleteCycles,
+      witnesses: rows
+        .slice(0, 4)
+        .map((r) => ({ objectName: r.request.objectName, expect: "no-release" })),
+    });
   }
   for (const plan of plans) {
     let state = createSettleState(plan);
@@ -190,7 +352,12 @@ test("every read the reducer offers is a declared settle row for the same witnes
     }
     assert.equal(state.status, "exhausted");
     assert.equal(seen.size, plan.maxCycles * plan.witnesses.length);
-    assert.equal(manifest.rows.filter((r) => r.family === "settle" && r.phase === plan.phase && r.programId === plan.name).length, seen.size);
+    assert.equal(
+      manifest.rows.filter(
+        (r) => r.family === "settle" && r.phase === plan.phase && r.programId === plan.name,
+      ).length,
+      seen.size,
+    );
   }
 });
 
@@ -200,9 +367,25 @@ test("each configuration rule holds on its own with well-formed witness names", 
   const w = (name, expect) => ({ objectName: `STORAGE-RULES/r/${name}.bin`, expect });
   const bad = [
     publication({ witnesses: [w("same", "allowed"), w("same", "denied")] }),
-    restoration({ witnesses: [w("a", "no-release"), w("b", "no-release"), w("c", "no-release"), w("a", "no-release")] }),
-    restoration({ witnesses: [w("a", "denied"), w("b", "denied"), w("c", "denied"), w("d", "denied")] }),
-    restoration({ witnesses: [w("a", "no-release"), w("b", "no-release"), w("c", "allowed"), w("d", "no-release")] }),
+    restoration({
+      witnesses: [
+        w("a", "no-release"),
+        w("b", "no-release"),
+        w("c", "no-release"),
+        w("a", "no-release"),
+      ],
+    }),
+    restoration({
+      witnesses: [w("a", "denied"), w("b", "denied"), w("c", "denied"), w("d", "denied")],
+    }),
+    restoration({
+      witnesses: [
+        w("a", "no-release"),
+        w("b", "no-release"),
+        w("c", "allowed"),
+        w("d", "no-release"),
+      ],
+    }),
     publication({ witnesses: [w("allow", "allowed"), w("deny", "no-release")] }),
     publication({ witnesses: [w("allow", "allowed")] }),
     publication({ witnesses: [w("allow", "allowed"), w("deny", "denied"), w("more", "denied")] }),
@@ -211,15 +394,46 @@ test("each configuration rule holds on its own with well-formed witness names", 
     publication({ witnesses: [w("a", "denied"), w("b", "denied")] }),
     publication({ phase: "recovery" }),
   ];
-  for (const config of bad) assert.throws(() => createSettleState(config), /invalid settle configuration/, JSON.stringify(config));
-  for (const config of [publication({ phase: "normal" }), restoration({ phase: "recovery" }), restoration({ phase: "normal" })]) assert.equal(createSettleState(config).status, "running");
+  for (const config of bad)
+    assert.throws(
+      () => createSettleState(config),
+      /invalid settle configuration/,
+      JSON.stringify(config),
+    );
+  for (const config of [
+    publication({ phase: "normal" }),
+    restoration({ phase: "recovery" }),
+    restoration({ phase: "normal" }),
+  ])
+    assert.equal(createSettleState(config).status, "running");
 });
 
 test("a witness name must be a well-formed name under STORAGE-RULES/", async () => {
   const { createSettleState } = await load();
-  const withName = (objectName) => publication({ witnesses: [{ objectName, expect: "allowed" }, { objectName: "STORAGE-RULES/r/deny.bin", expect: "denied" }] });
-  for (const objectName of ["x", "STORAGE-RULES/", "other/r/allow.bin", "storage-rules/r/allow.bin", " STORAGE-RULES/r/allow.bin", "STORAGE-RULES/r/a b.bin", "STORAGE-RULES/r/a\n", "STORAGE-RULES/r/a?b", `STORAGE-RULES/${"a".repeat(901)}`, 7]) {
-    assert.throws(() => createSettleState(withName(objectName)), /invalid settle configuration/, String(objectName).slice(0, 40));
+  const withName = (objectName) =>
+    publication({
+      witnesses: [
+        { objectName, expect: "allowed" },
+        { objectName: "STORAGE-RULES/r/deny.bin", expect: "denied" },
+      ],
+    });
+  for (const objectName of [
+    "x",
+    "STORAGE-RULES/",
+    "other/r/allow.bin",
+    "storage-rules/r/allow.bin",
+    " STORAGE-RULES/r/allow.bin",
+    "STORAGE-RULES/r/a b.bin",
+    "STORAGE-RULES/r/a\n",
+    "STORAGE-RULES/r/a?b",
+    `STORAGE-RULES/${"a".repeat(901)}`,
+    7,
+  ]) {
+    assert.throws(
+      () => createSettleState(withName(objectName)),
+      /invalid settle configuration/,
+      String(objectName).slice(0, 40),
+    );
   }
   assert.equal(createSettleState(withName(`STORAGE-RULES/${"a".repeat(900)}`)).status, "running");
   assert.equal(createSettleState(withName("STORAGE-RULES/r/a-b_c.d/e.bin")).status, "running");

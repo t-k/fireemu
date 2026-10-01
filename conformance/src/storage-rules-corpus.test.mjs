@@ -43,22 +43,30 @@ test("Storage compile declaration retains every distinct Rules source and the in
   assert.equal(program.recipeId, "storage-rules/storage-service-compile");
   assert.equal(program.sendAuthorized, false);
   assert.equal(program.observationStatus, "PENDING_PRODUCTION");
-  assert.equal(program.releaseName, `projects/fireemu-oracle-query/releases/firebase.storage/${input.bucket}`);
+  assert.equal(
+    program.releaseName,
+    `projects/fireemu-oracle-query/releases/firebase.storage/${input.bucket}`,
+  );
   const referenced = [
     ...[...corpus.cases, ...corpus.firestorePrograms].map((entry) => entry.rulesSource),
     switched.sourceA,
     switched.sourceB,
   ];
   assert.equal(program.validSources.length, referenced.length);
-  assert.deepEqual(new Set(program.validSources.map((entry) => entry.content)), new Set(referenced));
+  assert.deepEqual(
+    new Set(program.validSources.map((entry) => entry.content)),
+    new Set(referenced),
+  );
   assert.equal(new Set(program.validSources.map((entry) => entry.sha256)).size, referenced.length);
-  assert.ok(program.validSources.every((entry) => entry.content.includes("service firebase.storage")));
+  assert.ok(
+    program.validSources.every((entry) => entry.content.includes("service firebase.storage")),
+  );
   assert.ok(program.invalidSource.content.includes("allow get: if ;"));
   assert.ok(!referenced.includes(program.invalidSource.content));
-  assert.deepEqual(program.validSequence.map((step) => step.id), [
-    "release-before",
-    "test-valid-source",
-  ]);
+  assert.deepEqual(
+    program.validSequence.map((step) => step.id),
+    ["release-before", "test-valid-source"],
+  );
   assert.ok(program.validSequence.every((step) => step.service === "firebase-rules"));
   assert.equal(program.validSequence[0].repeatFor, undefined);
   assert.equal(program.validSequence[1].method, "POST");
@@ -67,7 +75,10 @@ test("Storage compile declaration retains every distinct Rules source and the in
   assert.deepEqual(program.validSequence[1].body, {
     source: { files: [{ name: "storage.rules", contentRef: "validSources[].content" }] },
   });
-  assert.deepEqual(program.invalidSequence.map((step) => step.id), ["test-invalid-source", "release-after-invalid"]);
+  assert.deepEqual(
+    program.invalidSequence.map((step) => step.id),
+    ["test-invalid-source", "release-after-invalid"],
+  );
   assert.equal(program.invalidSequence.at(-1).id, "release-after-invalid");
   assert.equal(program.invalidSequence[0].method, "POST");
   assert.equal(program.invalidSequence[0].path, "/v1/projects/fireemu-oracle-query:test");
@@ -97,7 +108,14 @@ test("release switch declares two opposite decisions and verified absence restor
     { release: "B", object: "A", role: "old-no-longer-allow" },
     { release: "B", object: "B", role: "new-allow" },
   ]);
-  assert.deepEqual(program.restore, ["delete-owned-release", "confirm-release-absent", "confirm-bucketless-absent", "delete-unreferenced-rulesets", "confirm-rulesets-absent", "owned-object-cleanup"]);
+  assert.deepEqual(program.restore, [
+    "delete-owned-release",
+    "confirm-release-absent",
+    "confirm-bucketless-absent",
+    "delete-unreferenced-rulesets",
+    "confirm-rulesets-absent",
+    "owned-object-cleanup",
+  ]);
   assert.equal(program.sendAuthorized, false);
   assert.equal(Object.hasOwn(program, "expectedStatus"), false);
 });
@@ -126,7 +144,9 @@ test("management declarations reject missing sources or changed restoration clai
   const mutations = [
     (corpus) => corpus.managementPrograms[0].validSources.pop(),
     (corpus) => (corpus.managementPrograms[0].invalidSource.content = "allow get: if true;"),
-    (corpus) => (corpus.managementPrograms[0].validSequence[1].path = "/v1/projects/fireemu-oracle-query/rulesets"),
+    (corpus) =>
+      (corpus.managementPrograms[0].validSequence[1].path =
+        "/v1/projects/fireemu-oracle-query/rulesets"),
     (corpus) => (corpus.managementPrograms[0].validSequence[1].body.testSuite = { testCases: [] }),
     (corpus) => (corpus.managementPrograms[1].restore[1] = "skip-readback"),
     (corpus) => (corpus.managementPrograms[2].stepOrder[4] = "admin-get"),
@@ -1119,7 +1139,10 @@ test("absent resources retain direct controls without out-of-scope IAM mutation"
   for (const row of nullRows)
     assert.ok(row.rulesSource.includes(`if resource ${row.rule.matches ? "==" : "!="} null;`));
   assert.equal(Object.hasOwn(corpus.principals, "iam-denied"), false);
-  assert.equal(rows(corpus, "gcs-admin-boundary").some((row) => row.principal === "iam-denied"), false);
+  assert.equal(
+    rows(corpus, "gcs-admin-boundary").some((row) => row.principal === "iam-denied"),
+    false,
+  );
 });
 
 test("owner-excluded credentials cannot return through an added fixture or case", () => {

@@ -74,7 +74,10 @@ test("the version probe preserves the harness PATH's symlink and parent-director
   const { join } = await import("node:path");
   const dir = await mkdtemp(join(tmpdir(), "fireemu-openssl-path-"));
   try {
-    for (const [folder, version] of [["a/bin", "3.6.4"], ["b/bin", "3.0.22"]]) {
+    for (const [folder, version] of [
+      ["a/bin", "3.6.4"],
+      ["b/bin", "3.0.22"],
+    ]) {
       await mkdir(join(dir, folder), { recursive: true });
       const tool = join(dir, folder, "openssl");
       await writeFile(tool, `#!/bin/sh\necho "OpenSSL ${version}"\n`);
@@ -84,8 +87,14 @@ test("the version probe preserves the harness PATH's symlink and parent-director
     await symlink(join(dir, "b/deep"), join(dir, "a/link"));
     const directory = `${dir}/a/link/../bin`;
     const env = { PATH: `${directory}:/usr/bin:/bin`, FIREEMU_FEDERATION_OPENSSL_DIR: directory };
-    assert.match(execFileSync("openssl", ["version"], { env, encoding: "utf8" }), /OpenSSL 3\.0\.22/);
-    assert.throws(() => federationEnvironment("R15", env), /R15 requires OpenSSL >= 3\.4.*3\.0\.22/);
+    assert.match(
+      execFileSync("openssl", ["version"], { env, encoding: "utf8" }),
+      /OpenSSL 3\.0\.22/,
+    );
+    assert.throws(
+      () => federationEnvironment("R15", env),
+      /R15 requires OpenSSL >= 3\.4.*3\.0\.22/,
+    );
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

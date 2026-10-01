@@ -17,6 +17,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 #[cfg(target_os = "macos")]
 mod acl;
+#[cfg(unix)]
+mod parent;
+#[cfg(target_os = "macos")]
+mod volume;
 
 #[cfg(unix)]
 static NEXT_STAGE_ID: AtomicU64 = AtomicU64::new(1);
@@ -60,13 +64,17 @@ impl PublicationStage {
         let parent = target
             .parent()
             .ok_or_else(|| "the export path has no parent directory".to_owned())?;
-        prepare_parent(parent)?;
-        let parent = trusted_canonical_parent(parent)?;
+        let parent = parent::prepare_and_validate_parent(parent)?;
         let target_name = target
             .file_name()
             .ok_or_else(|| "the export path has no directory name".to_owned())?;
         let target = parent.join(target_name);
         let expected_target = target_identity(&target)?;
+        // An existing destination can itself be a mount point (a volume mounted at the export path).
+        #[cfg(target_os = "macos")]
+        if expected_target.present {
+            parent::system_volume_check(&target)?;
+        }
         validate_target(&target)?;
         if !identity_matches_path(&target, &expected_target)? {
             return Err(
@@ -219,57 +227,6 @@ fn stage_identity(path: &Path) -> Result<TargetIdentity, String> {
 }
 
 #[cfg(unix)]
-fn prepare_parent(parent: &Path) -> Result<(), String> {
-    match std::fs::symlink_metadata(parent) {
-        Ok(metadata) if metadata.file_type().is_symlink() => {
-            Err("the export parent is a symlink, which an export never follows".to_owned())
-        }
-        Ok(metadata) if !metadata.file_type().is_dir() => {
-            Err("the export parent is not a directory".to_owned())
-        }
-        Ok(_) => Ok(()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => create_private_dir(parent),
-        Err(error) => Err(format!("cannot inspect the export parent: {error}")),
-    }
-}
-
-#[cfg(unix)]
-fn trusted_canonical_parent(parent: &Path) -> Result<PathBuf, String> {
-    use std::os::unix::fs::MetadataExt as _;
-
-    let parent = std::fs::canonicalize(parent)
-        .map_err(|error| format!("cannot resolve the export parent: {error}"))?;
-    let effective_uid = rustix::process::geteuid().as_raw();
-    for ancestor in parent.ancestors() {
-        let metadata = std::fs::symlink_metadata(ancestor).map_err(|error| {
-            format!(
-                "cannot inspect export namespace ancestor {}: {error}",
-                ancestor.display()
-            )
-        })?;
-        let mode = metadata.mode();
-        if metadata.uid() != 0 && metadata.uid() != effective_uid {
-            return Err(format!(
-                "export namespace ancestor {} is not owned by the current user or root",
-                ancestor.display()
-            ));
-        }
-        if mode & 0o022 != 0 {
-            return Err(format!(
-                "export namespace ancestor {} is writable by other users, so staged cleanup cannot be made safe",
-                ancestor.display()
-            ));
-        }
-        #[cfg(target_os = "macos")]
-        acl::reject_unsafe_acl(
-            ancestor,
-            &acl::Trusted::of_uids(metadata.uid(), effective_uid, &acl::user_name),
-        )?;
-    }
-    Ok(parent)
-}
-
-#[cfg(unix)]
 fn create_stage_sibling(target: &Path, parent: &Path) -> Result<PathBuf, String> {
     let name = target
         .file_name()
@@ -298,18 +255,6 @@ fn create_stage_sibling(target: &Path, parent: &Path) -> Result<PathBuf, String>
 fn create_private_stage(path: &Path) -> std::io::Result<()> {
     use std::os::unix::fs::DirBuilderExt as _;
     std::fs::DirBuilder::new().mode(0o700).create(path)
-}
-
-#[cfg(unix)]
-fn create_private_dir(path: &Path) -> Result<(), String> {
-    use std::os::unix::fs::{DirBuilderExt as _, PermissionsExt as _};
-    std::fs::DirBuilder::new()
-        .recursive(true)
-        .mode(0o700)
-        .create(path)
-        .map_err(|error| format!("cannot create private export parent: {error}"))?;
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))
-        .map_err(|error| format!("cannot restrict export parent permissions: {error}"))
 }
 
 #[cfg(unix)]
@@ -361,18 +306,98 @@ fn atomic_publish(
     target_present: bool,
     _owned_stage: &TargetIdentity,
 ) -> Result<(), String> {
+    rename_for(target_present, |flags| {
+        rustix::fs::renameat_with(rustix::fs::CWD, stage, rustix::fs::CWD, target, flags)
+    })
+}
+
+/// Picks the rename flags (exchange an existing target, never replace a missing one) and words a refusal.
+/// `rename` is the system call, passed in so the refusal path can be exercised on any volume.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn rename_for(
+    target_present: bool,
+    rename: impl FnOnce(rustix::fs::RenameFlags) -> rustix::io::Result<()>,
+) -> Result<(), String> {
     let flags = if target_present {
         rustix::fs::RenameFlags::EXCHANGE
     } else {
         rustix::fs::RenameFlags::NOREPLACE
     };
-    rustix::fs::renameat_with(rustix::fs::CWD, stage, rustix::fs::CWD, target, flags)
-        .map_err(|error| format!("atomic export publication is unavailable or failed: {error}"))
+    rename(flags).map_err(publication_error)
+}
+
+/// The message of a refused atomic rename. A volume that lacks the rename flags (exFAT, FAT, some
+/// network filesystems) answers `ENOTSUP`; the message then says why and what to do.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn publication_error(error: rustix::io::Errno) -> String {
+    if error == rustix::io::Errno::NOTSUP || error == rustix::io::Errno::OPNOTSUPP {
+        format!(
+            "atomic export publication is unavailable or failed: {error}; this volume does not support atomic directory rename, so export to a directory on an APFS volume (macOS) or on a local filesystem that supports it"
+        )
+    } else {
+        format!("atomic export publication is unavailable or failed: {error}")
+    }
 }
 
 #[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
 mod tests {
-    use super::{atomic_publish, target_identity, verify_displaced_target_or_rollback};
+    use super::{
+        atomic_publish, publication_error, rename_for, target_identity,
+        verify_displaced_target_or_rollback,
+    };
+
+    #[test]
+    fn an_unsupported_rename_names_the_volume_and_the_way_out() {
+        for error in [rustix::io::Errno::NOTSUP, rustix::io::Errno::OPNOTSUPP] {
+            let message = publication_error(error);
+            assert!(
+                message.contains("does not support atomic directory rename"),
+                "{message}"
+            );
+            assert!(message.contains("APFS"), "{message}");
+            assert!(
+                message.starts_with("atomic export publication is unavailable or failed"),
+                "{message}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_refused_rename_is_worded_by_publication_error_and_the_flags_follow_the_target() {
+        let seen = std::cell::RefCell::new(Vec::new());
+        let refuse = |flags| {
+            seen.borrow_mut().push(flags);
+            Err(rustix::io::Errno::NOTSUP)
+        };
+        let message = rename_for(true, refuse).unwrap_err();
+        assert!(
+            message.contains("does not support atomic directory rename"),
+            "{message}"
+        );
+        let message = rename_for(false, refuse).unwrap_err();
+        assert!(
+            message.contains("does not support atomic directory rename"),
+            "{message}"
+        );
+        assert_eq!(
+            *seen.borrow(),
+            [
+                rustix::fs::RenameFlags::EXCHANGE,
+                rustix::fs::RenameFlags::NOREPLACE
+            ]
+        );
+        assert_eq!(rename_for(true, |_| Ok(())), Ok(()));
+    }
+
+    #[test]
+    fn any_other_rename_failure_keeps_the_plain_message() {
+        let message = publication_error(rustix::io::Errno::EXIST);
+        assert!(
+            message.starts_with("atomic export publication is unavailable or failed"),
+            "{message}"
+        );
+        assert!(!message.contains("does not support"), "{message}");
+    }
 
     #[test]
     fn a_post_check_identity_race_is_atomically_rolled_back() {

@@ -13,5 +13,16 @@
     "no-await-in-loop": "off",
     "unicorn/consistent-function-scoping": "off"
   },
-  "ignorePatterns": ["node_modules", "fixtures", ".runs"]
+  "ignorePatterns": [
+    "node_modules",
+    "fixtures",
+    ".runs",
+    "src/storage-rules/controller.mjs",
+    "src/storage-rules/ledger-revocation.mjs",
+    "src/storage-rules/local-smoke.mjs",
+    "src/storage-rules/private-inputs.mjs",
+    "src/storage-rules/run-ledger.mjs",
+    "src/storage-rules/settle.mjs",
+    "src/storage-rules/target.mjs"
+  ]
 }

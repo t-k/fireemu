@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { replaceFile } from "./test-replace-file.mjs";
 import { test } from "node:test";
 
 import {
@@ -323,8 +324,7 @@ test("the legacy shared lock stops a run, and a lock that changed is left in pla
     });
     await writeFile(lock.path, '{"taskId":"someone-else"}');
     await assert.rejects(releaseProjectLock(lock), /rewritten; left in place/);
-    await rm(lock.path);
-    await writeFile(lock.path, JSON.stringify(body));
+    await replaceFile(lock.path, JSON.stringify(body));
     await assert.rejects(releaseProjectLock(lock), /replaced; left in place/);
     assert.deepEqual(await readdir(lockDir), ["a-project.lock"]);
   } finally {

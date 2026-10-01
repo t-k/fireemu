@@ -1056,6 +1056,13 @@ function describe(name, fn, instrumentation) {
 
 // v1 functions are called as (data, context) with the legacy event shapes.
 
+// An RFC 3339 time with exactly three fractional digits (the extra digits are cut), or the input
+// unchanged when it is not a time.
+function millisecondTimestamp(time) {
+  const parsed = new Date(time);
+  return Number.isNaN(parsed.getTime()) ? time : parsed.toISOString();
+}
+
 function v1Context(msg) {
   const event = msg.event;
   switch (msg.trigger) {
@@ -1086,7 +1093,12 @@ function v1Context(msg) {
       const o = event.data;
       return {
         eventId: event.id,
-        timestamp: event.time,
+        // Production hands a 1st gen Storage handler a timestamp with exactly three fractional
+        // digits (observed 2026-10-01: `2026-10-01T08:49:26.577Z`, after the object's
+        // `timeCreated` of `.486Z`). The runtime admits the event later than it creates the
+        // object, so the timestamp is cut from the admission instant the frame carries; the
+        // CloudEvent time of a finalize event is the creation instant.
+        timestamp: millisecondTimestamp(msg.admittedAt ?? event.time),
         eventType: {
           "google.cloud.storage.object.v1.finalized": "google.storage.object.finalize",
           "google.cloud.storage.object.v1.deleted": "google.storage.object.delete",

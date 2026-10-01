@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { lstat, mkdtemp, mkdir, readFile, rename, rm, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
+import { replaceFile } from "./test-replace-file.mjs";
 import { join } from "node:path";
 import test from "node:test";
 
@@ -34,7 +35,13 @@ test("an existing lock for the same project prevents entry without changing its 
     const module = await import("./storage-rules/project-locks.mjs").catch(() => ({}));
     assert.equal(typeof module.withProjectLocks, "function");
     let entered = false;
-    await assert.rejects(() => module.withProjectLocks(options, async () => { entered = true; }), /project lock exists/);
+    await assert.rejects(
+      () =>
+        module.withProjectLocks(options, async () => {
+          entered = true;
+        }),
+      /project lock exists/,
+    );
     assert.equal(entered, false);
     assert.equal(await readFile(path, "utf8"), foreign);
   });
@@ -49,7 +56,13 @@ test("another project's lock permits an owned mode-600 lock and normal release",
     const { withProjectLocks } = await import("./storage-rules/project-locks.mjs");
     const result = await withProjectLocks(options, async () => {
       const lock = JSON.parse(await readFile(own, "utf8"));
-      assert.deepEqual(Object.keys(lock).sort(), ["acquiredAt", "packetId", "pid", "sourceCommit", "taskId"]);
+      assert.deepEqual(Object.keys(lock).sort(), [
+        "acquiredAt",
+        "packetId",
+        "pid",
+        "sourceCommit",
+        "taskId",
+      ]);
       assert.equal(lock.taskId, options.taskId);
       assert.equal((await lstat(own)).mode & 0o777, 0o600);
       assert.equal((await lstat(lockDir)).mode & 0o777, 0o700);
@@ -66,7 +79,13 @@ test("a legacy shared lock prevents acquisition before any project lock is creat
     await writeFile(legacyLockPath, "legacy\n", { mode: 0o600 });
     const { withProjectLocks } = await import("./storage-rules/project-locks.mjs");
     let entered = false;
-    await assert.rejects(() => withProjectLocks(options, async () => { entered = true; }), /legacy shared lock exists/);
+    await assert.rejects(
+      () =>
+        withProjectLocks(options, async () => {
+          entered = true;
+        }),
+      /legacy shared lock exists/,
+    );
     assert.equal(entered, false);
     await assert.rejects(lstat(join(lockDir, "fireemu-oracle-query.lock")), { code: "ENOENT" });
   });
@@ -77,9 +96,16 @@ test("a legacy lock appearing after project acquisition releases only the new lo
     const { withProjectLocks } = await import("./storage-rules/project-locks.mjs");
     let entered = false;
     await assert.rejects(
-      () => withProjectLocks(options, async () => { entered = true; }, {
-        afterAcquire: async () => writeFile(legacyLockPath, "legacy\n", { mode: 0o600 }),
-      }),
+      () =>
+        withProjectLocks(
+          options,
+          async () => {
+            entered = true;
+          },
+          {
+            afterAcquire: async () => writeFile(legacyLockPath, "legacy\n", { mode: 0o600 }),
+          },
+        ),
       /legacy shared lock exists/,
     );
     assert.equal(entered, false);
@@ -99,9 +125,18 @@ test("multi-project acquisition is sorted and rolls back owned locks on a later 
     const { withProjectLocks } = await import("./storage-rules/project-locks.mjs");
     let entered = false;
     await assert.rejects(
-      () => withProjectLocks({ ...options, projects: ["fireemu-oracle-query", "fireemu-oracle-idp"] }, async () => { entered = true; }, {
-        onLockCreated: async (project) => { seen.push(project); },
-      }),
+      () =>
+        withProjectLocks(
+          { ...options, projects: ["fireemu-oracle-query", "fireemu-oracle-idp"] },
+          async () => {
+            entered = true;
+          },
+          {
+            onLockCreated: async (project) => {
+              seen.push(project);
+            },
+          },
+        ),
       /project lock exists/,
     );
     assert.deepEqual(seen, ["fireemu-oracle-idp"]);
@@ -116,9 +151,12 @@ test("a failed outbound attempt keeps every acquired project lock", async () => 
     const { withProjectLocks } = await import("./storage-rules/project-locks.mjs");
     const projects = ["fireemu-oracle-idp", "fireemu-oracle-query"];
     await assert.rejects(
-      () => withProjectLocks({ ...options, projects }, async (lease) => {
-        await lease.dispatch(async () => { throw new Error("outbound result unknown"); });
-      }),
+      () =>
+        withProjectLocks({ ...options, projects }, async (lease) => {
+          await lease.dispatch(async () => {
+            throw new Error("outbound result unknown");
+          });
+        }),
       /outbound result unknown/,
     );
     for (const project of projects) {
@@ -132,13 +170,22 @@ test("catching a transport failure cannot turn the run into a normal lock releas
   await fixture(async ({ lockDir, options }) => {
     const { withProjectLocks } = await import("./storage-rules/project-locks.mjs");
     await assert.rejects(
-      () => withProjectLocks(options, async (lease) => {
-        await assert.rejects(lease.dispatch(async () => { throw new Error("uncertain send"); }), /uncertain send/);
-        return "incorrect-success";
-      }),
+      () =>
+        withProjectLocks(options, async (lease) => {
+          await assert.rejects(
+            lease.dispatch(async () => {
+              throw new Error("uncertain send");
+            }),
+            /uncertain send/,
+          );
+          return "incorrect-success";
+        }),
       /outbound attempt failed/,
     );
-    assert.equal(JSON.parse(await readFile(join(lockDir, "fireemu-oracle-query.lock"), "utf8")).taskId, "STORAGE-RULES");
+    assert.equal(
+      JSON.parse(await readFile(join(lockDir, "fireemu-oracle-query.lock"), "utf8")).taskId,
+      "STORAGE-RULES",
+    );
   });
 });
 
@@ -146,13 +193,17 @@ test("an application failure after a successful dispatch retains the project loc
   await fixture(async ({ lockDir, options }) => {
     const { withProjectLocks } = await import("./storage-rules/project-locks.mjs");
     await assert.rejects(
-      () => withProjectLocks(options, async (lease) => {
-        await lease.dispatch(async () => ({ status: 403 }));
-        throw new Error("response or cleanup rejected");
-      }),
+      () =>
+        withProjectLocks(options, async (lease) => {
+          await lease.dispatch(async () => ({ status: 403 }));
+          throw new Error("response or cleanup rejected");
+        }),
       /response or cleanup rejected/,
     );
-    assert.equal(JSON.parse(await readFile(join(lockDir, "fireemu-oracle-query.lock"), "utf8")).taskId, "STORAGE-RULES");
+    assert.equal(
+      JSON.parse(await readFile(join(lockDir, "fireemu-oracle-query.lock"), "utf8")).taskId,
+      "STORAGE-RULES",
+    );
   });
 });
 
@@ -160,10 +211,14 @@ test("a sent run cannot release its lock without explicit closure confirmation",
   await fixture(async ({ lockDir, options }) => {
     const { withProjectLocks } = await import("./storage-rules/project-locks.mjs");
     await assert.rejects(
-      () => withProjectLocks(options, async (lease) => lease.dispatch(async () => ({ status: 200 }))),
+      () =>
+        withProjectLocks(options, async (lease) => lease.dispatch(async () => ({ status: 200 }))),
       /closure not confirmed/,
     );
-    assert.equal(JSON.parse(await readFile(join(lockDir, "fireemu-oracle-query.lock"), "utf8")).taskId, "STORAGE-RULES");
+    assert.equal(
+      JSON.parse(await readFile(join(lockDir, "fireemu-oracle-query.lock"), "utf8")).taskId,
+      "STORAGE-RULES",
+    );
   });
 });
 
@@ -184,24 +239,33 @@ test("closure is rejected while an outbound dispatch remains pending", async () 
   await fixture(async ({ lockDir, options }) => {
     const { withProjectLocks } = await import("./storage-rules/project-locks.mjs");
     let finish;
-    const pending = new Promise((resolve) => { finish = resolve; });
+    const pending = new Promise((resolve) => {
+      finish = resolve;
+    });
     await assert.rejects(
-      () => withProjectLocks(options, async (lease) => {
-        const dispatch = lease.dispatch(async () => pending);
-        assert.throws(() => lease.confirmClosed(), /dispatch still pending/);
-        finish({ status: 200 });
-        await dispatch;
-      }),
+      () =>
+        withProjectLocks(options, async (lease) => {
+          const dispatch = lease.dispatch(async () => pending);
+          assert.throws(() => lease.confirmClosed(), /dispatch still pending/);
+          finish({ status: 200 });
+          await dispatch;
+        }),
       /closure not confirmed/,
     );
-    assert.equal(JSON.parse(await readFile(join(lockDir, "fireemu-oracle-query.lock"), "utf8")).taskId, "STORAGE-RULES");
+    assert.equal(
+      JSON.parse(await readFile(join(lockDir, "fireemu-oracle-query.lock"), "utf8")).taskId,
+      "STORAGE-RULES",
+    );
   });
 });
 
 test("incomplete lock metadata is rejected before acquisition", async () => {
   await fixture(async ({ lockDir, options }) => {
     const { withProjectLocks } = await import("./storage-rules/project-locks.mjs");
-    await assert.rejects(() => withProjectLocks({ ...options, packetId: undefined }, async () => {}), /invalid lock metadata/);
+    await assert.rejects(
+      () => withProjectLocks({ ...options, packetId: undefined }, async () => {}),
+      /invalid lock metadata/,
+    );
     await assert.rejects(lstat(join(lockDir, "fireemu-oracle-query.lock")), { code: "ENOENT" });
   });
 });
@@ -213,12 +277,13 @@ test("release refuses a same-body lock replaced by another inode", async () => {
     const { withProjectLocks } = await import("./storage-rules/project-locks.mjs");
     let body;
     await assert.rejects(
-      () => withProjectLocks(options, async () => {
-        body = await readFile(own, "utf8");
-        await writeFile(replacement, body, { mode: 0o600 });
-        await unlink(own);
-        await rename(replacement, own);
-      }),
+      () =>
+        withProjectLocks(options, async () => {
+          body = await readFile(own, "utf8");
+          await writeFile(replacement, body, { mode: 0o600 });
+          await unlink(own);
+          await rename(replacement, own);
+        }),
       /project lock ownership changed/,
     );
     assert.equal(await readFile(own, "utf8"), body);
@@ -230,7 +295,10 @@ test("a project ID cannot escape the lock directory", async () => {
     const { withProjectLocks } = await import("./storage-rules/project-locks.mjs");
     let entered = false;
     await assert.rejects(
-      () => withProjectLocks({ ...options, projects: ["../foreign"] }, async () => { entered = true; }),
+      () =>
+        withProjectLocks({ ...options, projects: ["../foreign"] }, async () => {
+          entered = true;
+        }),
       /invalid project ID/,
     );
     assert.equal(entered, false);
@@ -246,11 +314,15 @@ test("one replaced lock prevents releasing any lock in the multi-project set", a
     const replacement = join(lockDir, "replacement.tmp");
     const { withProjectLocks } = await import("./storage-rules/project-locks.mjs");
     await assert.rejects(
-      () => withProjectLocks({ ...options, projects: ["fireemu-oracle-idp", "fireemu-oracle-query"] }, async () => {
-        await writeFile(replacement, await readFile(idp), { mode: 0o600 });
-        await unlink(idp);
-        await rename(replacement, idp);
-      }),
+      () =>
+        withProjectLocks(
+          { ...options, projects: ["fireemu-oracle-idp", "fireemu-oracle-query"] },
+          async () => {
+            await writeFile(replacement, await readFile(idp), { mode: 0o600 });
+            await unlink(idp);
+            await rename(replacement, idp);
+          },
+        ),
       /project lock ownership changed/,
     );
     assert.equal(JSON.parse(await readFile(idp, "utf8")).taskId, "STORAGE-RULES");
@@ -265,15 +337,21 @@ test("verifyHeld proves each owned lock is still this run's and refuses once one
     const own = (project) => join(lockDir, `${project}.lock`);
     // The run body records what it proved; an inner failure leaves a proof missing, so the counts are checked outside.
     const proven = [];
-    const inRun = (opts, body) => assert.rejects(() => withProjectLocks(opts, async (lease) => { await body(lease); }), Error);
+    const inRun = (opts, body) =>
+      assert.rejects(
+        () =>
+          withProjectLocks(opts, async (lease) => {
+            await body(lease);
+          }),
+        Error,
+      );
     await inRun({ ...options, projects }, async (lease) => {
       assert.equal(typeof lease.verifyHeld, "function");
       assert.equal(await lease.verifyHeld(), true);
       proven.push("held");
       // A replaced file (same body, different inode) is not this run's lock.
       const body = await readFile(own(projects[1]), "utf8");
-      await unlink(own(projects[1]));
-      await writeFile(own(projects[1]), body, { mode: 0o600 });
+      await replaceFile(own(projects[1]), body, { mode: 0o600 });
       await assert.rejects(() => lease.verifyHeld(), /ownership changed/);
       proven.push("replaced");
       await unlink(own(projects[1]));

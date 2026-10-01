@@ -814,12 +814,32 @@ test("the follow-up corpus sends a tampered and an unsigned response of the run'
     nameId: "user@example.com",
   };
   const decode = (value) => Buffer.from(value, "base64").toString("utf8");
-  const signed = decode(materialize({ $saml: spec }, raw, {}, saml));
-  const tampered = decode(materialize({ $saml: { ...spec, tamper: true } }, raw, {}, saml));
+  // The two responses are made from the same inputs, so the same bytes: the response and assertion IDs
+  // come from `randomBytes`, which is fixed here, and the clock is already fixed. RSA PKCS#1 v1.5 is
+  // deterministic, so the signatures are equal until the tamper changes one. (Compared with a response
+  // signed under other random IDs, the first character of the two signatures collides one time in 64.)
+  const { createRequire, syncBuiltinESMExports } = await import("node:module");
+  const crypto = createRequire(import.meta.url)("node:crypto");
+  const realRandomBytes = crypto.randomBytes;
+  crypto.randomBytes = (size) => Buffer.alloc(size, 7);
+  syncBuiltinESMExports();
+  let signed;
+  let tampered;
+  try {
+    signed = decode(materialize({ $saml: spec }, raw, {}, saml));
+    tampered = decode(materialize({ $saml: { ...spec, tamper: true } }, raw, {}, saml));
+  } finally {
+    crypto.randomBytes = realRandomBytes;
+    syncBuiltinESMExports();
+  }
   const signature = (xml) => xml.match(/<ds:SignatureValue>([^<]*)</)[1];
-  // Only the first character of the signature differs from a signed response's form.
+  // Only the first character of the signature differs from the signed response of the same inputs.
   assert.notEqual(signature(tampered)[0], signature(signed)[0]);
-  assert.equal(signature(tampered).length, signature(signed).length);
+  assert.equal(signature(tampered).slice(1), signature(signed).slice(1));
+  assert.equal(
+    tampered,
+    signed.replace(/<ds:SignatureValue>./, `<ds:SignatureValue>${signature(tampered)[0]}`),
+  );
   const unsigned = decode(materialize({ $saml: { ...spec, sign: "none" } }, raw, {}, saml));
   assert.ok(!unsigned.includes("Signature") && !unsigned.includes("X509Certificate"), unsigned);
   assert.ok(unsigned.includes('InResponseTo="_req7"'), unsigned);
@@ -1018,4 +1038,15 @@ test("the follow-up corpus's own SAML sign-ins, with its real names, get through
     }));
     sendSignIns(resolve(renamed));
   }
+});
+
+test("tampering a signature changes its first character whatever it was, and nothing else", async () => {
+  const { tamperSignature } = await import("./auth-federation/saml.mjs");
+  const xml = (first) =>
+    `<r><ds:SignatureValue>${first}bcdef==</ds:SignatureValue><ds:Other>Aabc</ds:Other></r>`;
+  assert.equal(tamperSignature(xml("A")), xml("B"));
+  for (const first of ["B", "Q", "z", "0", "+", "/"]) {
+    assert.equal(tamperSignature(xml(first)), xml("A"), first);
+  }
+  assert.throws(() => tamperSignature("<r/>"), /no signature to tamper with/);
 });

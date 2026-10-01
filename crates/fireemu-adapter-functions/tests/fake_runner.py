@@ -190,6 +190,10 @@ while True:
         break
     if msg.get("type") != "invoke":
         continue
+    frame_log = os.environ.get("FIREEMU_FAKE_FRAME_LOG")
+    if frame_log:
+        with open(frame_log, "a", encoding="utf-8") as frames:
+            frames.write(json.dumps(msg) + "\n")
     name = msg["function"]
     if name == "crashOnce":
         marker = pathlib.Path(os.environ["FIREEMU_FAKE_CRASH_ONCE_MARKER"])

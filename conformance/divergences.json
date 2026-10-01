@@ -2468,7 +2468,7 @@
     },
     "storage-probe/triggers#finalize-on-firebase-media-upload": {
       "documents": "README.md, \"Storage\"; capability manifest FN-EVT-1 (crates/fireemu/src/capabilities.json)",
-      "reason": "fireemu's Storage events carry the production CloudEvent envelope (source names the bucket, subject names the object, the bucket extension attribute and datacontenttype are set) and the production selfLink / mediaLink hosts inside the object payload. The official emulator writes the object path into source, sets no subject, no bucket attribute and no datacontenttype, and links to its own emulator host. The object payload is otherwise identical field for field.",
+      "reason": "fireemu's Storage events carry the production CloudEvent envelope (source names the bucket, subject names the object, the bucket extension attribute is set; datacontenttype is set too, where production's 2nd gen frame of 2026-10-01 and the official emulator carry none) and the production selfLink / mediaLink hosts inside the object payload. The official emulator writes the object path into source, sets no subject, no bucket attribute and no datacontenttype, and links to its own emulator host. The object payload is otherwise identical field for field.",
       "authority": {
         "kind": "production-spec",
         "sourceUrls": [
@@ -2581,7 +2581,7 @@
         "kind": "production-spec",
         "sourceUrls": ["https://cloud.google.com/storage/docs/json_api/v1/objects/patch"],
         "checkedOn": "2026-09-25",
-        "officialBaseline": {"package": "firebase-tools", "version": "15.28.2"},
+        "officialBaseline": { "package": "firebase-tools", "version": "15.28.2" },
         "fixture": "conformance/storage-matrix.json#gcs-update-list-delete#patch-storage-v1-spelling",
         "approvalRecord": "spec/compatibility/contract.json ST-CLAIM-OBJECTS; CHANGELOG.md [Unreleased]"
       }
@@ -2593,7 +2593,7 @@
         "kind": "production-spec",
         "sourceUrls": ["https://cloud.google.com/storage/docs/json_api/v1/objects/patch"],
         "checkedOn": "2026-09-25",
-        "officialBaseline": {"package": "firebase-tools", "version": "15.28.2"},
+        "officialBaseline": { "package": "firebase-tools", "version": "15.28.2" },
         "fixture": "conformance/storage-matrix.json#gcs-preconditions#patch-if-metageneration-mismatch",
         "approvalRecord": "spec/compatibility/contract.json ST-CLAIM-OBJECTS; CHANGELOG.md [Unreleased]"
       }
@@ -2603,9 +2603,7 @@
       "reason": "The official emulator answers 501 on the /storage/v1 copyTo spelling. Cloud Storage documents this production route, so fireemu performs the copy in both profiles.",
       "authority": {
         "kind": "production-spec",
-        "sourceUrls": [
-          "https://cloud.google.com/storage/docs/json_api/v1/objects/copy"
-        ],
+        "sourceUrls": ["https://cloud.google.com/storage/docs/json_api/v1/objects/copy"],
         "checkedOn": "2026-09-25",
         "officialBaseline": {
           "package": "firebase-tools",

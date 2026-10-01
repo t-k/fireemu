@@ -1,0 +1,126 @@
+{
+  "_comment": "Frames a production 1st and 2nd gen Cloud Storage onFinalize handler printed for one object create, recorded 2026-10-01 through Cloud Logging (stdout of each handler; each was delivered exactly once, 0.855 s and 0.811 s after the object was created). Project, bucket and trace values are the recorded ones with the sandbox project id replaced by demo-project. `gen1` is the legacy context and the object; `gen2` is the CloudEvent as the handler saw it. eventKeys lists every member of the CloudEvent the framework handed over (context and object are added by the SDK, not on the wire). Exploratory capture, not a conformance row.",
+  "objectCreateTime": "2026-10-01T08:49:26.486Z",
+  "gen1": {
+    "context": {
+      "authId": null,
+      "authType": null,
+      "contextExtras": {},
+      "contextKeys": [
+        "eventId",
+        "eventType",
+        "params",
+        "resource",
+        "timestamp"
+      ],
+      "eventId": "22201766561849599",
+      "eventType": "google.storage.object.finalize",
+      "params": {},
+      "resource": {
+        "name": "projects/_/buckets/demo-project.firebasestorage.app/objects/fe012probe0001",
+        "service": "storage.googleapis.com",
+        "type": "storage#object"
+      },
+      "timestamp": "2026-10-01T08:49:26.577Z"
+    },
+    "data": {
+      "bucket": "demo-project.firebasestorage.app",
+      "contentType": "application/json",
+      "crc32c": "o9gONg==",
+      "etag": "CLuI7vG3mJcDEAE=",
+      "generation": "1790844566471739",
+      "id": "demo-project.firebasestorage.app/fe012probe0001/1790844566471739",
+      "kind": "storage#object",
+      "md5Hash": "soAmA8oqSAPUUU+rU+RDCQ==",
+      "mediaLink": "https://storage.googleapis.com/download/storage/v1/b/demo-project.firebasestorage.app/o/fe012probe0001?generation=1790844566471739&alt=media",
+      "metageneration": "1",
+      "name": "fe012probe0001",
+      "selfLink": "https://www.googleapis.com/storage/v1/b/demo-project.firebasestorage.app/o/fe012probe0001",
+      "size": "32",
+      "storageClass": "STANDARD",
+      "timeCreated": "2026-10-01T08:49:26.486Z",
+      "timeStorageClassUpdated": "2026-10-01T08:49:26.486Z",
+      "updated": "2026-10-01T08:49:26.486Z"
+    }
+  },
+  "gen2": {
+    "authId": null,
+    "authType": null,
+    "data": {
+      "bucket": "demo-project.firebasestorage.app",
+      "contentType": "application/json",
+      "crc32c": "o9gONg==",
+      "etag": "CLuI7vG3mJcDEAE=",
+      "generation": "1790844566471739",
+      "id": "demo-project.firebasestorage.app/fe012probe0001/1790844566471739",
+      "kind": "storage#object",
+      "md5Hash": "soAmA8oqSAPUUU+rU+RDCQ==",
+      "mediaLink": "https://storage.googleapis.com/download/storage/v1/b/demo-project.firebasestorage.app/o/fe012probe0001?generation=1790844566471739&alt=media",
+      "metageneration": "1",
+      "name": "fe012probe0001",
+      "selfLink": "https://www.googleapis.com/storage/v1/b/demo-project.firebasestorage.app/o/fe012probe0001",
+      "size": "32",
+      "storageClass": "STANDARD",
+      "timeCreated": "2026-10-01T08:49:26.486Z",
+      "timeStorageClassUpdated": "2026-10-01T08:49:26.486Z",
+      "updated": "2026-10-01T08:49:26.486Z"
+    },
+    "datacontenttype": null,
+    "eventKeys": [
+      "bucket",
+      "context",
+      "data",
+      "id",
+      "object",
+      "source",
+      "specversion",
+      "subject",
+      "time",
+      "traceparent",
+      "type"
+    ],
+    "extensionAttributes": {
+      "bucket": "demo-project.firebasestorage.app",
+      "context": {
+        "keys": [
+          "eventId",
+          "eventType",
+          "params",
+          "resource",
+          "timestamp"
+        ],
+        "type": "object"
+      },
+      "object": {
+        "keys": [
+          "bucket",
+          "contentType",
+          "crc32c",
+          "etag",
+          "generation",
+          "id",
+          "kind",
+          "md5Hash",
+          "mediaLink",
+          "metageneration",
+          "name",
+          "selfLink",
+          "size",
+          "storageClass",
+          "timeCreated",
+          "timeStorageClassUpdated",
+          "updated"
+        ],
+        "type": "object"
+      },
+      "traceparent": "00-4747926f6edd89b2ba4462bbac3cda8c-fed944ec53272119-01"
+    },
+    "id": "21296886365413333",
+    "params": null,
+    "source": "//storage.googleapis.com/projects/_/buckets/demo-project.firebasestorage.app",
+    "specversion": "1.0",
+    "subject": "objects/fe012probe0001",
+    "time": "2026-10-01T08:49:26.486927Z",
+    "type": "google.cloud.storage.object.v1.finalized"
+  }
+}

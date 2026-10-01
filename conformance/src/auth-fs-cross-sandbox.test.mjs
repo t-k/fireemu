@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { replaceFileSync } from "./test-replace-file.mjs";
 import { join } from "node:path";
 import { test } from "node:test";
 
@@ -172,8 +173,7 @@ test("the lock is exclusive and released only while it is this run's", async () 
     await assert.rejects(acquireLock(path, "b".repeat(40)), /is held; not starting/);
     writeFileSync(lock.path, "{}");
     await assert.rejects(releaseLock(lock), /rewritten; left in place/);
-    rmSync(lock.path);
-    writeFileSync(lock.path, JSON.stringify({ taskId: "OTHER" }));
+    replaceFileSync(lock.path, JSON.stringify({ taskId: "OTHER" }));
     await assert.rejects(releaseLock(lock), /replaced; left in place/);
     rmSync(lock.path);
     const own = await acquireLock(path, "c".repeat(40));

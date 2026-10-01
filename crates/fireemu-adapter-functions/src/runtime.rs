@@ -597,6 +597,10 @@ struct QueuedPayload {
     payload: Arc<Value>,
     retained_bytes: usize,
     source: EventSource,
+    /// When the runtime admitted the event. The runner frame carries it as `admittedAt`: it is
+    /// not the `CloudEvent`'s `time` (a Storage finalize event's `time` is the object's creation
+    /// instant), and a 1st gen Storage handler's `context.timestamp` is cut from it.
+    admitted_at: LogicalInstant,
 }
 
 struct PlannedDelivery {
@@ -1644,6 +1648,7 @@ impl FunctionsRuntime {
                     payload: Arc::new(payload.clone()),
                     retained_bytes,
                     source,
+                    admitted_at: time,
                 },
             );
             inner.active_event_bytes += retained_bytes;
@@ -1787,6 +1792,7 @@ impl FunctionsRuntime {
                     payload: draft.payload,
                     retained_bytes,
                     source,
+                    admitted_at: draft.time,
                 },
                 parent: draft.parent,
             });
@@ -4514,7 +4520,14 @@ impl FunctionsRuntime {
             let Some(queued) = inner.payloads.get(&id) else {
                 continue;
             };
-            let request = self.invoke_request(id, spec, attempt, epoch, &queued.payload);
+            let request = self.invoke_request(
+                id,
+                spec,
+                attempt,
+                epoch,
+                &queued.payload,
+                queued.admitted_at,
+            );
             let key = format!("{}-{attempt}", id.value());
             inner.running.insert(key.clone(), function_name.clone());
             let runtime = self.clone();
@@ -4581,6 +4594,7 @@ impl FunctionsRuntime {
         attempt: u32,
         epoch: Epoch,
         event: &Value,
+        admitted_at: LogicalInstant,
     ) -> Value {
         let now = self.now();
         let deadline = now
@@ -4605,6 +4619,7 @@ impl FunctionsRuntime {
             "entryPoint": spec.entry_point,
             "trigger": trigger,
             "event": event,
+            "admittedAt": admitted_at.to_rfc3339().unwrap_or_default(),
             "deadline": deadline.to_rfc3339().unwrap_or_default(),
             "attempt": attempt,
             "session": self.config.session.value().to_string(),

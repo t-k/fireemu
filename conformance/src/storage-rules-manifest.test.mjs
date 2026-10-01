@@ -23,10 +23,15 @@ test("declared request manifest gives every object and Firestore step one stable
   assert.deepEqual(manifest.counts, { storage: 3739, firestore: 60 });
   assert.equal(new Set(manifest.rows.map((row) => row.id)).size, manifest.rows.length);
   assert.equal(manifest.rows.filter((row) => row.stage === "subject").length, 331);
-  assert.equal(manifest.rows.some((row) => row.id.includes("token-expired") || row.id.includes("iam-denied")), false);
+  assert.equal(
+    manifest.rows.some((row) => row.id.includes("token-expired") || row.id.includes("iam-denied")),
+    false,
+  );
   assert.equal(manifest.rows.filter((row) => row.stage === "comparison").length, 1);
   assert.deepEqual(
-    new Set(manifest.rows.filter((row) => row.family === "firestore-program").map((row) => row.programId)),
+    new Set(
+      manifest.rows.filter((row) => row.family === "firestore-program").map((row) => row.programId),
+    ),
     new Set(corpus.firestorePrograms.map((program) => program.id)),
   );
   assert.ok(manifest.rows.every((row) => row.request.capture.body === "raw-bytes"));
@@ -36,7 +41,10 @@ test("declared request manifest gives every object and Firestore step one stable
 test("manifest rejects a changed declaration and does not alias mutable inputs", () => {
   const changed = buildCorpus(binding);
   changed.cases[0].subject.path = "/storage/v1/b/unowned/o";
-  assert.throws(() => buildDeclaredRequestManifest(changed, closure), /request|corpus|route|declaration/);
+  assert.throws(
+    () => buildDeclaredRequestManifest(changed, closure),
+    /request|corpus|route|declaration/,
+  );
 
   const corpus = buildCorpus(binding);
   const manifest = buildDeclaredRequestManifest(corpus, closure);

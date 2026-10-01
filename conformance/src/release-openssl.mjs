@@ -5,10 +5,17 @@ import { delimiter, isAbsolute, sep } from "node:path";
 export function federationEnvironment(id, env, execute = execFileSync) {
   if (!["R15", "R16", "R17"].includes(id)) return env;
   const directory = env.FIREEMU_FEDERATION_OPENSSL_DIR;
-  if (directory !== undefined && (!directory || !isAbsolute(directory) || directory.includes(delimiter))) {
-    throw new Error("FIREEMU_FEDERATION_OPENSSL_DIR must be an absolute directory without PATH delimiters");
+  if (
+    directory !== undefined &&
+    (!directory || !isAbsolute(directory) || directory.includes(delimiter))
+  ) {
+    throw new Error(
+      "FIREEMU_FEDERATION_OPENSSL_DIR must be an absolute directory without PATH delimiters",
+    );
   }
-  const selected = directory ? { ...env, PATH: `${directory}${env.PATH ? delimiter + env.PATH : ""}` } : env;
+  const selected = directory
+    ? { ...env, PATH: `${directory}${env.PATH ? delimiter + env.PATH : ""}` }
+    : env;
   const requirement = `${id} requires OpenSSL >= 3.4 for the frozen federation certificate fixture`;
   let version;
   try {

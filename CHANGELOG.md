@@ -8,6 +8,10 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ## [Unreleased]
 
+### Changed
+
+- Firestore holds each retained document path once instead of three times: the retained and live scope indexes and the listing trie now share one allocation. 300,000 small documents take about 591 MiB instead of 711 MiB (macOS arm64, release build). Results are unchanged.
+
 ## [0.10.0] - 2026-10-01
 
 ### Added

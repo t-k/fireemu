@@ -1,6 +1,8 @@
 """Tests of tools/ci/mutants-summary.py, on shard directories built the way the workflow lays them out."""
 
+import contextlib
 import importlib.util
+import io
 import json
 import tempfile
 import unittest
@@ -23,6 +25,17 @@ def write_shard(root, number, outcomes, baseline="Success"):
     directory.mkdir(parents=True)
     document = {"outcomes": [{"scenario": "Baseline", "summary": baseline}] + outcomes}
     (directory / "outcomes.json").write_text(json.dumps(document))
+
+
+def write_empty_shard(root, number):
+    """What cargo-mutants leaves when its `--shard` holds no mutant (observed with cargo-mutants 27.1.0):
+    no outcomes.json at all, an empty mutants.json, and empty result lists."""
+    directory = root / f"mutants-shard-{number}"
+    directory.mkdir(parents=True)
+    (directory / "mutants.json").write_text("[]")
+    (directory / "lock.json").write_text('{"cargo_mutants_version": "27.1.0"}')
+    for name in ("missed.txt", "caught.txt", "timeout.txt", "unviable.txt"):
+        (directory / name).write_text("")
 
 
 class MergeTest(unittest.TestCase):
@@ -141,6 +154,90 @@ class MergeTest(unittest.TestCase):
         self.assertNotIn("\n", key)
         self.assertNotIn("\x1b", key)
         self.assertLessEqual(len(key), 40)
+
+    def test_a_shard_that_held_no_mutant_is_zero_mutants_not_a_failure(self):
+        write_shard(self.root, 0, [mutant("a.rs:1: x", "CaughtMutant"), mutant("a.rs:2: y", "MissedMutant")])
+        write_empty_shard(self.root, 1)
+        write_empty_shard(self.root, 2)
+        merged = summary.merge(self.root, 3)
+        self.assertEqual(merged["problems"], [])
+        self.assertEqual((merged["total"], merged["caught"], merged["missed"]), (2, 1, 1))
+        self.assertEqual(merged["shards_empty"], [1, 2])
+        self.assertEqual(merged["shards_found"], [0, 1, 2])
+        self.assertIn("Empty shards (no mutants): 1, 2", summary.markdown(merged))
+        self.assertEqual(summary.main(["--expected-shards", "3", str(self.root), str(self.out)]), 0)
+
+    def test_a_run_whose_every_shard_is_empty_is_zero_mutants(self):
+        for number in range(3):
+            write_empty_shard(self.root, number)
+        merged = summary.merge(self.root, 3)
+        self.assertEqual((merged["problems"], merged["total"], merged["shards_empty"]), ([], 0, [0, 1, 2]))
+        self.assertIn("No mutant was generated", summary.markdown(merged))
+
+    def test_an_empty_artifact_directory_is_a_failure_that_names_the_shard(self):
+        write_shard(self.root, 0, [mutant("a.rs:1: x", "CaughtMutant")])
+        (self.root / "mutants-shard-1").mkdir()
+        merged = summary.merge(self.root, 2)
+        self.assertEqual(merged["shards_empty"], [])
+        (problem,) = merged["problems"]
+        self.assertTrue(problem.startswith("shard 1: "), problem)
+        self.assertIn("wrote nothing", problem)
+
+    def test_a_shard_that_listed_mutants_but_has_no_outcomes_did_not_finish(self):
+        directory = self.root / "mutants-shard-0"
+        directory.mkdir(parents=True)
+        (directory / "mutants.json").write_text(json.dumps([{"name": "a.rs:1: x"}, {"name": "a.rs:2: y"}]))
+        merged = summary.merge(self.root, 1)
+        self.assertEqual(merged["shards_empty"], [])
+        (problem,) = merged["problems"]
+        self.assertIn("shard 0", problem)
+        self.assertIn("2 mutants", problem)
+        self.assertIn("did not finish", problem)
+
+    def test_a_malformed_mutants_list_or_outcomes_file_is_a_failure_with_the_shard_and_the_reason(self):
+        for number, files in enumerate(
+            [
+                {"mutants.json": "{not json"},
+                {"mutants.json": '{"a": 1}'},
+                {"mutants.json": "[]", "outcomes.json": "{not json"},
+                {"outcomes.json": '{"outcomes": "no"}'},
+            ]
+        ):
+            directory = self.root / f"mutants-shard-{number}"
+            directory.mkdir(parents=True)
+            for name, text in files.items():
+                (directory / name).write_text(text)
+        merged = summary.merge(self.root, 4)
+        self.assertEqual(merged["shards_empty"], [])
+        self.assertEqual(len(merged["problems"]), 4, merged["problems"])
+        for number, problem in enumerate(merged["problems"]):
+            self.assertTrue(problem.startswith(f"shard {number}: "), problem)
+
+    def test_an_outcomes_file_wins_over_an_empty_mutants_list(self):
+        write_shard(self.root, 0, [mutant("a.rs:1: x", "CaughtMutant")])
+        (self.root / "mutants-shard-0" / "mutants.json").write_text("[]")
+        merged = summary.merge(self.root, 1)
+        self.assertEqual((merged["total"], merged["shards_empty"], merged["problems"]), (1, [], []))
+
+    def test_the_command_says_what_failed_on_stderr_and_exits_non_zero(self):
+        write_shard(self.root, 0, [mutant("a.rs:1: x", "CaughtMutant")])
+        (self.root / "mutants-shard-1").mkdir()
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            code = summary.main(["--expected-shards", "3", str(self.root), str(self.out)])
+        self.assertEqual(code, 1)
+        text = stderr.getvalue()
+        self.assertIn("mutants-summary: shard 1: ", text)
+        self.assertIn("mutants-summary: shard 2 left no artifact", text)
+        self.assertIn("cannot be trusted", text)
+
+    def test_the_command_is_quiet_on_stderr_when_the_run_can_be_trusted(self):
+        write_shard(self.root, 0, [mutant("a.rs:1: x", "CaughtMutant")])
+        write_empty_shard(self.root, 1)
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            code = summary.main(["--expected-shards", "2", str(self.root), str(self.out)])
+        self.assertEqual((code, stderr.getvalue()), (0, ""))
 
 
 if __name__ == "__main__":

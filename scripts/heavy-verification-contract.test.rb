@@ -131,4 +131,14 @@ class HeavyVerificationContractTest < Minitest::Test
   def test_a_nextest_job_without_the_locked_fetch_is_refused
     assert_violation(REAL.sub("        run: cargo fetch --locked\n", "        run: \"true\"\n"), "must fetch the locked graph")
   end
+
+  def test_a_summary_upload_that_skips_a_failed_merge_is_refused
+    source = REAL.sub("        if: always()\n        with:\n          name: mutants-summary", "        with:\n          name: mutants-summary")
+    assert_violation(source, "even when the merge failed")
+  end
+
+  def test_a_summary_merge_that_loses_the_scripts_status_is_refused
+    assert_violation(REAL.sub("          exit \"$code\"\n", ""), "keep the script's status")
+    assert_violation(REAL.sub(" || code=$?", ""), "keep the script's status")
+  end
 end

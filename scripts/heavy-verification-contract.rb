@@ -132,6 +132,9 @@ def violations(source, toolchain_channel: nil)
   summary = workflow.dig("jobs", "mutants-summary", "steps") || []
   upload = summary.find { |step| step["uses"].to_s.start_with?("actions/upload-artifact@") }
   errors << "the summary upload must overwrite an artifact of its name" unless upload && upload.dig("with", "overwrite") == true
+  errors << "the summary upload must run even when the merge failed (if: always())" unless upload && upload["if"].to_s.strip == "always()"
+  merge = summary.find { |step| step["name"] == "merge the shards" }
+  errors << "the summary merge must keep the script's status (exit \"$code\") after showing the summary" unless merge && merge["run"].to_s.include?('exit "$code"') && merge["run"].to_s.include?("|| code=$?")
   checkout = summary.find { |step| step["uses"].to_s.start_with?("actions/checkout@") }
   errors << "the summary job must check out the workflow's own commit, not the verified ref" if checkout && checkout.dig("with", "ref")
   nextest_runs = (workflow.dig("jobs", "nextest", "steps") || []).map { |step| step["run"].to_s }

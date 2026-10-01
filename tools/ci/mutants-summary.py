@@ -8,7 +8,13 @@ the shard's `outcomes.json`. The summary counts the mutants by outcome (caught, 
 timeout) and names every missed and every timed-out mutant. It writes `summary.json` and
 `summary.md` to <out-dir>, and exits 1 when the run cannot be trusted: an expected shard is
 missing, a shard has no readable outcomes, or a baseline did not succeed (a baseline that fails
-makes every mutant look caught, so no result of that run is a result).
+makes every mutant look caught, so no result of that run is a result). Every reason is also printed
+on stderr, naming the shard.
+
+A shard that held no mutant (more shards than mutants) is not a failure: cargo-mutants then writes
+no `outcomes.json` at all, only an empty `mutants.json` list, and the shard counts as zero mutants.
+A shard with no `outcomes.json` and anything else (nothing written, an unreadable list, a list that
+names mutants) did not finish and fails.
 """
 
 import argparse
@@ -47,16 +53,37 @@ def clean(value, limit=MAX_NAME):
 
 
 def read_shard(directory: Path):
-    """The outcomes of one shard, or the reason they cannot be read."""
+    """The outcomes of one shard, or the reason they cannot be read.
+
+    Returns `(outcomes, reason, empty)`: `empty` is true for a shard that held no mutant.
+    """
     path = directory / "outcomes.json"
+    if not path.exists():
+        return read_missing_outcomes(directory)
     try:
         document = json.loads(path.read_text())
     except (OSError, ValueError) as error:
-        return None, f"{path.name} is unreadable: {clean(str(error), 120)}"
+        return None, f"{path.name} is unreadable: {clean(str(error), 120)}", False
     outcomes = document.get("outcomes") if isinstance(document, dict) else None
     if not isinstance(outcomes, list):
-        return None, f"{path.name} has no outcomes list"
-    return outcomes, None
+        return None, f"{path.name} has no outcomes list", False
+    return outcomes, None, False
+
+
+def read_missing_outcomes(directory: Path):
+    """A shard without `outcomes.json`: zero mutants if its list of mutants is empty, else a failure."""
+    path = directory / "mutants.json"
+    if not path.exists():
+        return None, "outcomes.json and mutants.json are missing: the shard wrote nothing", False
+    try:
+        listed = json.loads(path.read_text())
+    except (OSError, ValueError) as error:
+        return None, f"outcomes.json is missing and {path.name} is unreadable: {clean(str(error), 120)}", False
+    if not isinstance(listed, list):
+        return None, f"outcomes.json is missing and {path.name} is not a list", False
+    if listed:
+        return None, f"outcomes.json is missing but {path.name} lists {len(listed)} mutants: the shard did not finish", False
+    return [], None, True
 
 
 def merge(shards_dir: Path, expected):
@@ -72,11 +99,14 @@ def merge(shards_dir: Path, expected):
     counts = {CAUGHT: 0, MISSED: 0, UNVIABLE: 0, TIMEOUT: 0}
     other = {}
     missed, timed_out = [], []
+    empty_shards = []
     for shard, directory in sorted(found.items()):
-        outcomes, reason = read_shard(directory)
+        outcomes, reason, empty = read_shard(directory)
         if outcomes is None:
             problems.append(f"shard {shard}: {reason}")
             continue
+        if empty:
+            empty_shards.append(shard)
         for outcome in outcomes:
             if not isinstance(outcome, dict):
                 problems.append(f"shard {shard}: an outcome is not an object")
@@ -108,6 +138,7 @@ def merge(shards_dir: Path, expected):
     return {
         "shards_expected": expected,
         "shards_found": sorted(found),
+        "shards_empty": empty_shards,
         "total": total,
         "caught": counts[CAUGHT],
         "missed": counts[MISSED],
@@ -132,6 +163,10 @@ def markdown(summary):
         f"Shards found: {len(summary['shards_found'])}"
         + ("" if summary["shards_expected"] is None else f" of {summary['shards_expected']}"),
     ]
+    if summary["shards_empty"]:
+        lines += ["", "Empty shards (no mutants): " + ", ".join(str(k) for k in summary["shards_empty"])]
+    if summary["total"] == 0 and not summary["problems"]:
+        lines += ["", "No mutant was generated for this diff."]
     if summary["other"]:
         lines += ["", f"Other outcomes: {json.dumps(summary['other'], sort_keys=True)}"]
     for title, key in (("Missed mutants", "missed_mutants"), ("Timed-out mutants", "timeout_mutants")):
@@ -152,6 +187,13 @@ def main(argv):
     args.out_dir.mkdir(parents=True, exist_ok=True)
     (args.out_dir / "summary.json").write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n")
     (args.out_dir / "summary.md").write_text(markdown(summary))
+    for problem in summary["problems"]:
+        print(f"mutants-summary: {problem}", file=sys.stderr)
+    if summary["problems"]:
+        print(
+            f"mutants-summary: the run cannot be trusted ({len(summary['problems'])} problems)",
+            file=sys.stderr,
+        )
     return 1 if summary["problems"] else 0
 
 

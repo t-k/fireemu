@@ -238,9 +238,15 @@ jobs:
         run: |
           set -euo pipefail
           mkdir summary
-          python3 tools/ci/mutants-summary.py --expected-shards "$TOTAL" shards summary
-          cat summary/summary.md >> "$GITHUB_STEP_SUMMARY"
+          code=0
+          python3 tools/ci/mutants-summary.py --expected-shards "$TOTAL" shards summary || code=$?
+          # The summary is shown and uploaded whether or not the run can be trusted; the step still fails with the script's status.
+          if [[ -f summary/summary.md ]]; then
+            cat summary/summary.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+          exit "$code"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
         with:
           name: mutants-summary
           path: summary

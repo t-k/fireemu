@@ -638,7 +638,12 @@ test("the origin of a link is masked only when it is the expected one: the produ
   );
   assert.notDeepEqual(swapped, production);
   // Only a loopback address stands for the local emulator: another host or scheme is kept.
-  for (const other of ["http://example.com:9199", "https://127.0.0.1:9199", "http://127.0.0.1"])
+  for (const other of [
+    "http://example.com:9199",
+    "https://127.0.0.1:9199",
+    "http://127.0.0.1",
+    "http://127.0.0.1:",
+  ])
     assert.notDeepEqual(
       exchange(`http://127.0.0.1:9199/storage/v1/b/${BUCKET}/o/a.bin`, other, other),
       local,

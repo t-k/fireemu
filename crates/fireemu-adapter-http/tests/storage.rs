@@ -6209,12 +6209,12 @@ async fn an_undeclared_set_rules_body_is_cut_off_at_the_control_port_limit() {
     server.abort();
 }
 
-/// `storage.maxStoredBytes` (owner ledger 759): a write past the bound answers 507 without
+/// `storage.maxStoredBytes` (owner ledgers 759 and 788): a write past the bound answers 402 without
 /// Retry-After, `storage.maxStoredBytes limit exceeded`, in the Firebase dialect's minimal
 /// envelope and the JSON API's errors array with reason `storageCapacityExceeded`. Nothing is
 /// stored, and the same in both profiles' token modes.
 #[test]
-fn a_write_past_the_stored_byte_limit_is_507_in_both_dialects() {
+fn a_write_past_the_stored_byte_limit_is_402_in_both_dialects() {
     for token_acceptance in [TokenAcceptance::Verified, TokenAcceptance::EmulatorMock] {
         let s = state_with(Some(ALLOW_ALL_RULES), token_acceptance);
         s.store.lock().unwrap().set_stored_bytes_limit(Some(8));
@@ -6234,14 +6234,14 @@ fn a_write_past_the_stored_byte_limit_is_507_in_both_dialects() {
         let refused = firebase("b.bin", b"6789");
         assert_eq!(
             refused.status,
-            507,
+            402,
             "{}",
             String::from_utf8_lossy(&refused.body)
         );
         assert_eq!(header(&refused, "retry-after"), None);
         assert_eq!(
             json_body(&refused),
-            json!({"error": {"code": 507, "message": "storage.maxStoredBytes limit exceeded"}})
+            json!({"error": {"code": 402, "message": "storage.maxStoredBytes limit exceeded"}})
         );
 
         let refused = handle(
@@ -6255,13 +6255,13 @@ fn a_write_past_the_stored_byte_limit_is_507_in_both_dialects() {
         );
         assert_eq!(
             refused.status,
-            507,
+            402,
             "{}",
             String::from_utf8_lossy(&refused.body)
         );
         assert_eq!(header(&refused, "retry-after"), None);
         let error = &json_body(&refused)["error"];
-        assert_eq!(error["code"], 507);
+        assert_eq!(error["code"], 402);
         assert_eq!(error["message"], "storage.maxStoredBytes limit exceeded");
         assert_eq!(error["errors"][0]["reason"], "storageCapacityExceeded");
         assert_eq!(
@@ -6352,10 +6352,11 @@ fn a_refused_finalizing_chunk_leaves_the_firebase_resumable_session_where_it_was
     let refused = chunk("upload, finalize", "2", b"cd");
     assert_eq!(
         refused.status,
-        507,
+        402,
         "{}",
         String::from_utf8_lossy(&refused.body)
     );
+    assert_eq!(header(&refused, "retry-after"), None);
     let status = chunk("query", "0", b"");
     assert_eq!(header(&status, "x-goog-upload-size-received"), Some("2"));
     assert_eq!(header(&status, "x-goog-upload-status"), Some("active"));
@@ -6402,10 +6403,11 @@ fn a_refused_finalizing_chunk_leaves_the_json_api_resumable_session_where_it_was
     let refused = put("bytes 2-3/4", b"cd");
     assert_eq!(
         refused.status,
-        507,
+        402,
         "{}",
         String::from_utf8_lossy(&refused.body)
     );
+    assert_eq!(header(&refused, "retry-after"), None);
     assert_eq!(
         json_body(&refused)["error"]["errors"][0]["reason"],
         "storageCapacityExceeded"
@@ -6420,10 +6422,10 @@ fn a_refused_finalizing_chunk_leaves_the_json_api_resumable_session_where_it_was
     assert_eq!(json_body(&done)["size"], "4");
 }
 
-/// A copy, a rewrite and an XML-style form upload past the bound answer the same 507, with
+/// A copy, a rewrite and an XML-style form upload past the bound answer the same 402, with
 /// nothing stored.
 #[test]
-fn copies_rewrites_and_form_uploads_past_the_stored_byte_limit_are_507() {
+fn copies_rewrites_and_form_uploads_past_the_stored_byte_limit_are_402() {
     let s = bounded_state_holding_five_bytes();
     let owner = [("authorization", "Bearer owner")];
     for verb in ["copyTo", "rewriteTo"] {
@@ -6438,10 +6440,11 @@ fn copies_rewrites_and_form_uploads_past_the_stored_byte_limit_are_507() {
         );
         assert_eq!(
             refused.status,
-            507,
+            402,
             "{verb}: {}",
             String::from_utf8_lossy(&refused.body)
         );
+        assert_eq!(header(&refused, "retry-after"), None);
         assert_eq!(
             json_body(&refused)["error"]["errors"][0]["reason"],
             "storageCapacityExceeded"
@@ -6465,10 +6468,11 @@ fn copies_rewrites_and_form_uploads_past_the_stored_byte_limit_are_507() {
     );
     assert_eq!(
         refused.status,
-        507,
+        402,
         "{}",
         String::from_utf8_lossy(&refused.body)
     );
+    assert_eq!(header(&refused, "retry-after"), None);
     let store = s.store.lock().unwrap();
     assert_eq!(store.retained_blob_bytes(), 5);
 }

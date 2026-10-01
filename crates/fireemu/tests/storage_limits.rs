@@ -1,5 +1,5 @@
 //! `storage.maxStoredBytes` in the canonical configuration reaches the daemon's Storage
-//! emulator: a write past it answers 507 (owner ledger 759), and without it nothing is bounded.
+//! emulator: a write past it answers 402 (owner ledgers 759 and 788), and without it nothing is bounded.
 
 #![cfg(unix)]
 
@@ -66,7 +66,7 @@ done"#;
 fn a_configured_stored_byte_limit_refuses_the_write_that_crosses_it() {
     let log = run("bounded", r#""maxStoredBytes": 10"#);
     assert!(log.contains("a 200"), "{log}");
-    assert!(log.contains("b 507"), "{log}");
+    assert!(log.contains("b 402"), "{log}");
 
     let log = run("unbounded", "");
     assert!(log.contains("a 200"), "{log}");

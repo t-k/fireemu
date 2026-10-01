@@ -1073,10 +1073,11 @@ fn core_err(e: StorageError) -> (u16, String, &'static str) {
             "invalid",
         ),
         StorageError::UploadFinalized => (400, "upload already finalized".to_owned(), "invalid"),
-        // A local bound production does not have (owner ledger 759): 507 without Retry-After,
-        // the same in both profiles and dialects.
+        // A local bound production does not have (owner ledgers 759 and 788): 402 without
+        // Retry-After, the same in both profiles and dialects. The Firebase client SDKs retry
+        // every 5xx for up to ten minutes but report a 402 at once as storage/quota-exceeded.
         StorageError::StoredBytesLimit => (
-            507,
+            402,
             "storage.maxStoredBytes limit exceeded".to_owned(),
             "storageCapacityExceeded",
         ),

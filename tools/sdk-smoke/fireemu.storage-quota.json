@@ -1,0 +1,6 @@
+{
+  "schemaVersion": 1,
+  "profile": "emulator",
+  "firestore": { "edition": "standard", "apiMode": "native" },
+  "storage": { "maxStoredBytes": 1024 }
+}

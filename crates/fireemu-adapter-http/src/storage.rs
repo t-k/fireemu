@@ -13,13 +13,13 @@
 //!
 //! - the JSON API dialect is a privileged surface: Security Rules never run on it,
 //!   whatever credential is presented;
-//! - the JSON API registers object update (PATCH) and copy only on the short `/b/...`
-//!   spelling; the `/storage/v1/...` spelling of those falls through to the 501 catch-all;
 //! - an unknown GET with a bucket-shaped path serves object bytes (the XML-ish
 //!   `/{bucket}/{object}` route) and answers `No such object: ...` otherwise;
 //! - the Firebase dialect answers plain-text statuses where the official emulator's
 //!   express `sendStatus` does, and the exact `Permission denied. No READ|WRITE|LIST
 //!   permission.` rules-denial envelopes.
+//!
+//! Production also registers PATCH and copy routes on the `/storage/v1/...` spelling.
 //!
 //! Object names are percent-decoded exactly once from the URL segment and never
 //! interpreted as paths. Only loopback origins reach either surface.
@@ -42,7 +42,7 @@ use fireemu_core_storage::name::{BucketName, ObjectName};
 use fireemu_core_storage::store::{
     CustomMetadataPatch, MetadataPatch, NewMetadata, ObjectMetadata, Precondition, PreparedObject,
     StorageError, StorageEvent, StorageState as ObjectStore, UploadAdmission, UploadId,
-    UploadOptions, UploadPhase,
+    UploadOptions, UploadPhase, DEFAULT_LIST_PAGE_SIZE,
 };
 use fireemu_core_types::determinism::Clock;
 use fireemu_core_types::ids::ProjectId;
@@ -91,6 +91,15 @@ impl StorageEventPublication for NoopStorageEventPublication {
 enum StorageRulesMode {
     Global(Arc<RulesetSlot>),
     PerBucket(BTreeMap<String, Arc<RulesetSlot>>),
+}
+
+/// Why [`StorageRulesRegistry::replace_source`] refused a source.
+#[derive(Debug)]
+pub enum StorageRulesSourceError {
+    /// The source does not compile: a client error, and the active generation is unchanged.
+    Invalid(fireemu_core_rules::parse::ParseError),
+    /// A compiled source could not be installed: an internal failure.
+    Internal(String),
 }
 
 /// Storage Rules registry shared by the Firebase SDK surface, the control API and snapshots.
@@ -177,9 +186,15 @@ impl StorageRulesRegistry {
     }
 
     /// Parses and installs one global rules source.
-    pub fn replace_source(&self, source: &str) -> Result<(), String> {
-        let loaded = LoadedRules::from_source(source).map_err(|error| error.to_string())?;
+    ///
+    /// # Errors
+    /// [`StorageRulesSourceError::Invalid`] when the source does not compile, which leaves the
+    /// active generation unchanged; [`StorageRulesSourceError::Internal`] when a compiled
+    /// source cannot be installed.
+    pub fn replace_source(&self, source: &str) -> Result<(), StorageRulesSourceError> {
+        let loaded = LoadedRules::from_source(source).map_err(StorageRulesSourceError::Invalid)?;
         self.replace_loaded(loaded)
+            .map_err(StorageRulesSourceError::Internal)
     }
 
     /// Installs the explicit no-rules global generation used by the control extension.
@@ -806,9 +821,116 @@ fn fb_json_error(status: u16, message: &str) -> StorageResponse {
     )
 }
 
+/// A Google-fronted error as production serves it (recorded, stage 3 v9): two-space pretty JSON
+/// and `application/json; charset=UTF-8`. The strict profile answers rules refusals with these
+/// exact bytes; the emulator profile keeps the official emulator's own framing and wording.
+fn production_error(status: u16, message: &str) -> StorageResponse {
+    let body = json!({"error": {"code": status, "message": message}});
+    StorageResponse {
+        status,
+        headers: vec![(
+            "content-type".into(),
+            "application/json; charset=UTF-8".into(),
+        )],
+        body: bytes::Bytes::from(serde_json::to_vec_pretty(&body).unwrap_or_default()),
+    }
+}
+
+/// The Google-fronted JSON API (unlike the Firebase dialect's Express answers) ends its error
+/// bodies with a line feed (recorded, stage 3 v9: 285 bytes for the 401, 318 for the parse error).
+///
+/// Production's answer to a Cloud Storage JSON API request whose `Bearer` credential is not a
+/// valid OAuth access token (recorded, stage 3 v9: the four `precedence-*-gcs-malformed-*` rows,
+/// status, content type, `Vary`, `Cache-Control`, `Expires` and the body bytes). The recording
+/// redacted the values of `WWW-Authenticate`, `Pragma` and `X-GUploader-UploadID`, so they are
+/// not reproduced.
+fn production_invalid_credentials() -> StorageResponse {
+    // The recorded bytes; the key order is production's, which a serialized map would not keep.
+    const BODY: &str = "{\n  \"error\": {\n    \"code\": 401,\n    \"message\": \"Invalid Credentials\",\n    \"errors\": [\n      {\n        \"message\": \"Invalid Credentials\",\n        \"domain\": \"global\",\n        \"reason\": \"authError\",\n        \"locationType\": \"header\",\n        \"location\": \"Authorization\"\n      }\n    ]\n  }\n}\n";
+    StorageResponse {
+        status: 401,
+        headers: vec![
+            (
+                "content-type".into(),
+                "application/json; charset=UTF-8".into(),
+            ),
+            ("vary".into(), "Origin".into()),
+            ("vary".into(), "X-Origin".into()),
+            (
+                "cache-control".into(),
+                "no-cache, no-store, max-age=0, must-revalidate".into(),
+            ),
+            ("expires".into(), "Mon, 01 Jan 1990 00:00:00 GMT".into()),
+        ],
+        body: bytes::Bytes::from_static(BODY.as_bytes()),
+    }
+}
+
+/// The Firebase dialect's answer for an absent object on a read or a delete: production's
+/// `Not Found.` JSON (recorded, stage 3 v9: metadata read, media read and delete of an absent
+/// object, 15 rows, one body), where the official emulator's `sendStatus` writes the bare text
+/// `Not Found`.
+fn fb_object_not_found() -> StorageResponse {
+    production_error(404, "Not Found.")
+}
+
+/// Production's answer to a request on a cancelled JSON API resumable session (recorded,
+/// probe-v2, 2026-09-30: the `DELETE` that cancels and the status query after it, 499,
+/// `application/json; charset=UTF-8`, 224 bytes, ending in a line feed like every Google-fronted
+/// body).
+fn production_client_closed_request() -> StorageResponse {
+    const BODY: &str = "{\n  \"error\": {\n    \"code\": 499,\n    \"message\": \"clientClosedRequest\",\n    \"errors\": [\n      {\n        \"message\": \"clientClosedRequest\",\n        \"domain\": \"global\",\n        \"reason\": \"clientClosedRequest\"\n      }\n    ]\n  }\n}\n";
+    StorageResponse {
+        status: 499,
+        headers: vec![(
+            "content-type".into(),
+            "application/json; charset=UTF-8".into(),
+        )],
+        body: bytes::Bytes::from_static(BODY.as_bytes()),
+    }
+}
+
+/// The JSON API's answer to a request body that is not JSON. Production's parser words it
+/// (`Parse Error: Unexpected end of string. Expected an object key or }.` for the recorded body
+/// `{`, stage 3 v9, both objects and both credentials), with the error repeated in `errors`, and
+/// the recorded key order. Other malformed bodies keep the parser-neutral message until they are
+/// recorded.
+fn gcs_parse_error(body: &[u8], e: &serde_json::Error) -> StorageResponse {
+    let message = if body.trim_ascii() == b"{" {
+        "Parse Error: Unexpected end of string. Expected an object key or }.\n\n^".to_owned()
+    } else {
+        format!("metadata JSON: {e}")
+    };
+    let quoted = serde_json::to_string(&message).unwrap_or_default();
+    let text = format!(
+        "{{\n  \"error\": {{\n    \"code\": 400,\n    \"message\": {quoted},\n    \"errors\": [\n      {{\n        \"message\": {quoted},\n        \"domain\": \"global\",\n        \"reason\": \"invalid\"\n      }}\n    ]\n  }}\n}}\n"
+    );
+    StorageResponse {
+        status: 400,
+        headers: vec![(
+            "content-type".into(),
+            "application/json; charset=UTF-8".into(),
+        )],
+        body: bytes::Bytes::from(text),
+    }
+}
+
+/// The answer to a caller [`StorageState::principal`] refused: production's bytes for the 403 of a
+/// foreign-project token under strict, the ordinary error envelope otherwise.
+fn principal_refusal_response(dialect: Dialect, status: u16, message: &str) -> StorageResponse {
+    if status == 403 {
+        production_error(403, message)
+    } else {
+        error_response(dialect, status, message)
+    }
+}
+
 /// The Firebase dialect's rules denial, worded per operation as the official emulator words
 /// it. The detailed rules trace is a control-API diagnostic, not an API body.
-fn fb_denied(method: Method) -> StorageResponse {
+fn fb_denied(strict: bool, method: Method) -> StorageResponse {
+    if strict {
+        return production_error(403, "Permission denied.");
+    }
     let verb = match method {
         Method::Get => "READ",
         Method::List => "LIST",
@@ -904,27 +1026,25 @@ fn gcs_json_error(status: u16, message: &str, reason: &str) -> StorageResponse {
     )
 }
 
-/// The JSON API's missing-object answer: a plain sentence for a media request, the JSON
-/// envelope otherwise.
+/// The JSON API's missing-object answer: a plain sentence typed `text/html` for a media request
+/// (as production and the official emulator both answer, measured on the four routes that reach
+/// it), the JSON envelope otherwise.
 ///
-/// The media branch is a **documented divergence** from the official emulator, which types
-/// this body `text/html`: the message reflects the decoded object name, and the route is a
-/// top-level `GET` reachable with no `Origin` (so the loopback CORS guard never fires), so a
-/// `text/html` reflection is a stored-data-stealing reflected-XSS vector on the emulator's
-/// own origin (the JSON API dialect is unauthenticated and rules-free). fireemu answers the
-/// identical status and body bytes as `text/plain`, which no browser executes. The
-/// divergence is pinned in `conformance/storage-matrix.json`.
+/// fireemu once typed the media body `text/plain` because the message reflects the decoded
+/// object name, which a browser would run as HTML on the emulator's own origin. The owner ruled
+/// (ledger "STORAGE-RULES media 404 content type", 2026-10-01) that matching production takes
+/// priority for a tool that runs locally, so both profiles now answer `text/html`; strict adds
+/// production's uppercase charset in `production_framing`.
 fn gcs_no_such_object(bucket: &str, name: &str, media: bool) -> StorageResponse {
     let message = format!("No such object: {bucket}/{name}");
     if media {
-        plain_text(404, &message)
+        html_text(404, &message)
     } else {
         gcs_json_error(404, &message, "notFound")
     }
 }
 
-/// A `text/plain; charset=utf-8` body of arbitrary text (used where the official emulator
-/// reflects caller-influenced text that must never be typed as HTML).
+/// A `text/plain; charset=utf-8` body of arbitrary text (the resumable start and cancel answers).
 fn plain_text(status: u16, text: &str) -> StorageResponse {
     StorageResponse {
         status,
@@ -986,8 +1106,37 @@ fn core_err(e: StorageError) -> (u16, String, &'static str) {
 }
 
 fn gcs_core_err(e: StorageError) -> StorageResponse {
-    let (status, message, reason) = core_err(e);
-    gcs_json_error(status, &message, reason)
+    match e {
+        // A not-match guard that names the current value is a 304 without a body (recorded,
+        // probe-v4 and lean-v4/v5: PATCH, PUT, upload and DELETE).
+        StorageError::NotModified(_) => {
+            StorageResponse::empty(304).with_header("content-type", "application/json")
+        }
+        StorageError::PreconditionFailed(_) => production_precondition_failed(),
+        other => {
+            let (status, message, reason) = core_err(other);
+            gcs_json_error(status, &message, reason)
+        }
+    }
+}
+
+/// The JSON API's refusal of a match guard that did not hold (recorded, lean-v4 and lean-v5: the
+/// same 412 body on PATCH, PUT, DELETE, upload and a metadata read; Google-fronted layout with a
+/// final line feed). The official emulator reads no preconditions, so there is no answer of its
+/// own to follow.
+fn production_precondition_failed() -> StorageResponse {
+    const MESSAGE: &str = "At least one of the pre-conditions you specified did not hold.";
+    let body = format!(
+        "{{\n  \"error\": {{\n    \"code\": 412,\n    \"message\": \"{MESSAGE}\",\n    \"errors\": [\n      {{\n        \"message\": \"{MESSAGE}\",\n        \"domain\": \"global\",\n        \"reason\": \"conditionNotMet\",\n        \"locationType\": \"header\",\n        \"location\": \"If-Match\"\n      }}\n    ]\n  }}\n}}\n"
+    );
+    StorageResponse {
+        status: 412,
+        headers: vec![(
+            "content-type".into(),
+            "application/json; charset=UTF-8".into(),
+        )],
+        body: bytes::Bytes::from(body),
+    }
 }
 
 fn fb_core_err(e: StorageError) -> StorageResponse {
@@ -1057,6 +1206,15 @@ fn encode_segment(s: &str) -> String {
 
 /// The official emulator's `encodeRFC5987`: `encodeURIComponent`, with `'`, `(`, `)` and
 /// `*` escaped and `|`, `` ` `` and `^` kept literal.
+/// The `contentDisposition` a Firebase-protocol upload gets when it names none: `inline` with the
+/// object's last path segment as its file name (recorded, stage 3 v9:
+/// `inline; filename*=utf-8''object.bin` in the upload answer and on every later read; the
+/// official emulator stores a bare `inline`).
+fn default_content_disposition(name: &ObjectName) -> String {
+    let file = name.as_str().rsplit('/').next().unwrap_or(name.as_str());
+    format!("inline; filename*=utf-8''{}", rfc5987_encode(file))
+}
+
 fn rfc5987_encode(s: &str) -> String {
     use std::fmt::Write as _;
     let mut out = String::with_capacity(s.len());
@@ -1070,9 +1228,19 @@ fn rfc5987_encode(s: &str) -> String {
     out
 }
 
+/// An object timestamp as production writes it: RFC 3339 UTC with exactly three fractional
+/// digits (recorded, stage 3 v9: every `timeCreated`, `updated` and `timeFinalized` of both
+/// dialects, `2026-09-30T10:58:30.639Z`). The logical clock keeps nanoseconds; the extra digits
+/// are cut, not rounded, as a millisecond clock would never have produced them.
 fn rfc3339(t: LogicalInstant) -> String {
-    t.to_rfc3339()
-        .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_owned())
+    let full = t
+        .to_rfc3339()
+        .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_owned());
+    let Some(seconds) = full.strip_suffix('Z') else {
+        return full;
+    };
+    let (whole, fraction) = seconds.split_once('.').unwrap_or((seconds, ""));
+    format!("{whole}.{fraction:0<3.3}Z")
 }
 
 // ------------------------------------------------------------------------------------------
@@ -1367,7 +1535,12 @@ fn new_metadata_from_json(v: &Value, content_type: Option<String>) -> Result<New
     Ok(meta)
 }
 
-fn patch_from_json(v: &Value) -> Result<MetadataPatch, String> {
+/// The metadata patch a PATCH or PUT body describes.
+///
+/// `replace` is the JSON API's `PUT`: a `metadata` object replaces the custom metadata (and drops
+/// the download tokens) instead of merging into it. A `PUT` without a `metadata` member is not
+/// recorded and keeps the custom metadata, like `PATCH`.
+fn patch_from_json(v: &Value, replace: bool) -> Result<MetadataPatch, String> {
     let field = |k: &str| -> Result<Option<Option<String>>, String> {
         match v.get(k) {
             None => Ok(None),
@@ -1393,7 +1566,13 @@ fn patch_from_json(v: &Value) -> Result<MetadataPatch, String> {
                 }
                 out.insert(k.clone(), sv);
             }
-            Some(CustomMetadataPatch::Merge(out))
+            if replace {
+                Some(CustomMetadataPatch::Replace(
+                    out.into_iter().filter_map(|(k, v)| Some((k, v?))).collect(),
+                ))
+            } else {
+                Some(CustomMetadataPatch::Merge(out))
+            }
         }
         _ => None,
     };
@@ -1408,8 +1587,10 @@ fn patch_from_json(v: &Value) -> Result<MetadataPatch, String> {
 }
 
 /// The Firebase dialect's metadata document (`OutgoingFirebaseMetadata`): `crc32c` is the
-/// decimal spelling, `contentEncoding` defaults to `identity` in the response, and the
-/// `metadata` member exists exactly when custom metadata is defined, even when empty.
+/// base64 spelling production answers (recorded, stage 3 v9: `12ox+Q==`; the official emulator
+/// writes the decimal one, which only the rules' `request.resource.crc32c` keeps),
+/// `contentEncoding` defaults to `identity` in the response, `downloadTokens` exists exactly
+/// when the object has a token and `metadata` exactly when a custom key is set.
 fn firebase_json(m: &ObjectMetadata) -> Value {
     let mut v = json!({
         "name": m.name.as_str(),
@@ -1422,12 +1603,17 @@ fn firebase_json(m: &ObjectMetadata) -> Value {
         "storageClass": "STANDARD",
         "size": m.size.to_string(),
         "md5Hash": m.md5_base64(),
-        "crc32c": m.crc32c.to_string(),
+        "crc32c": m.crc32c_base64(),
         "etag": m.etag(),
-        "downloadTokens": m.download_tokens.join(","),
         "contentEncoding": m.content_encoding.as_deref().unwrap_or("identity"),
     });
-    if m.custom_defined {
+    // Production writes `downloadTokens` only for an object that has one (stage 3 v9: a v0
+    // PATCH answer of an object that was never read carries none) and `metadata` only when a
+    // key is set (an upload with no custom metadata answers without it).
+    if !m.download_tokens.is_empty() {
+        v["downloadTokens"] = Value::String(m.download_tokens.join(","));
+    }
+    if !m.custom.is_empty() {
         v["metadata"] = json!(m.custom);
     }
     for (k, val) in [
@@ -1465,6 +1651,9 @@ fn gcs_json(m: &ObjectMetadata, host: &str) -> Value {
         "timeCreated": rfc3339(m.time_created),
         "updated": rfc3339(m.updated),
         "timeStorageClassUpdated": rfc3339(m.time_created),
+        // Production sets it with the upload and never moves it here: equal to `timeCreated` in
+        // all 735 recorded object resources (stage 3 v9).
+        "timeFinalized": rfc3339(m.time_created),
     });
     let mut metadata = m.custom.clone();
     if !m.download_tokens.is_empty() {
@@ -1568,6 +1757,12 @@ fn storage_rules_value(m: &ObjectMetadata) -> RulesValue {
 /// The `request.resource` of an upload: the whole prospective object, exactly as the
 /// official emulator builds it before its rules run — generation and timestamps included.
 /// The `firebaseStorageDownloadTokens` key never reaches `request.resource.metadata`.
+///
+/// `null_empty_metadata` is production's shape for an upload that carries no custom
+/// metadata: `request.resource.metadata` is `null`, so a rule that reads it (`"owner" in
+/// request.resource.metadata`) fails and denies (stage 3 v9, `incoming-upload-simple-metadata-true`).
+/// The official emulator builds an empty map there and the rule passes, which the emulator
+/// profile keeps.
 #[allow(clippy::too_many_arguments)]
 fn incoming_rules_value(
     bucket: &BucketName,
@@ -1577,6 +1772,7 @@ fn incoming_rules_value(
     hashes: ([u8; 16], u32),
     generation: u64,
     now: LogicalInstant,
+    null_empty_metadata: bool,
 ) -> RulesValue {
     let mut map = BTreeMap::new();
     let s = |v: &str| RulesValue::String(v.to_owned());
@@ -1614,18 +1810,36 @@ fn incoming_rules_value(
     ] {
         map.insert(k.into(), val.as_deref().map_or(RulesValue::Null, s));
     }
+    let custom: BTreeMap<String, RulesValue> = meta
+        .custom
+        .iter()
+        .flatten()
+        .filter(|(k, _)| k.as_str() != TOKENS_KEY)
+        .map(|(k, v)| (k.clone(), s(v)))
+        .collect();
     map.insert(
         "metadata".into(),
-        RulesValue::Map(
-            meta.custom
-                .iter()
-                .flatten()
-                .filter(|(k, _)| k.as_str() != TOKENS_KEY)
-                .map(|(k, v)| (k.clone(), s(v)))
-                .collect(),
-        ),
+        if null_empty_metadata && custom.is_empty() {
+            RulesValue::Null
+        } else {
+            RulesValue::Map(custom)
+        },
     );
     RulesValue::Map(map)
+}
+
+/// Why [`StorageState::principal`] refused a caller.
+enum PrincipalRefusal {
+    /// The credential is not a usable token: 401 with the reason.
+    Unauthenticated(String),
+    /// A token minted for another project, which production answers as any other denial.
+    ForeignAudience,
+}
+
+impl From<String> for PrincipalRefusal {
+    fn from(message: String) -> Self {
+        Self::Unauthenticated(message)
+    }
 }
 
 impl StorageState {
@@ -1641,6 +1855,51 @@ impl StorageState {
         })
     }
 
+    /// The decision for an end-user request while no ruleset is loaded. The emulator profile
+    /// admits it for a `demo-*` project, as the official emulator does (it loads its default open
+    /// rules there) and refuses it otherwise (fireemu's own fail-closed choice: the official
+    /// emulator refuses to start a non-demo project without a rules file); strict refuses as
+    /// production does.
+    fn no_release_decision(&self, bucket: &BucketName) -> Result<(), StorageResponse> {
+        if !self.is_strict() && self.project_of_bucket(bucket.as_str()).starts_with("demo-") {
+            return Ok(());
+        }
+        Err(self.no_release_refusal(bucket))
+    }
+
+    /// The refusal of an end-user request while no ruleset is loaded. Production answers a bucket
+    /// without a release with 400 and this message (recorded, stage 3 v9: both recordings, the
+    /// `no-release` entry row); the strict profile answers those bytes for the bucket's project,
+    /// the emulator profile keeps its own 403 for a project that is not a `demo-*` one.
+    fn no_release_refusal(&self, bucket: &BucketName) -> StorageResponse {
+        if self.is_strict() {
+            let project = self.project_of_bucket(bucket.as_str());
+            production_error(
+                400,
+                &format!(
+                    "Your bucket has not been set up properly for Firebase Storage. Please visit 'https://console.firebase.google.com/project/{project}/storage/rules' to set up security rules."
+                ),
+            )
+        } else {
+            error_response(
+                Dialect::Firebase,
+                403,
+                "Permission denied. Storage Emulator has no loaded ruleset.",
+            )
+        }
+    }
+
+    /// The way an unsatisfiable range is answered: production's under strict, the official
+    /// emulator's whole object (`None`) otherwise.
+    fn strict_range_style(&self, style: RangeStyle) -> Option<RangeStyle> {
+        self.is_strict().then_some(style)
+    }
+
+    /// Whether this is the strict profile, which answers as production does.
+    fn is_strict(&self) -> bool {
+        self.token_acceptance != TokenAcceptance::EmulatorMock
+    }
+
     fn now(&self) -> LogicalInstant {
         self.clock
             .lock()
@@ -1652,15 +1911,35 @@ impl StorageState {
     /// bucket owner's store. The Firebase profile also admits a mock audience for an
     /// eligible default-owned bare project bucket without changing that ownership.
     ///
-    /// Under the `emulator` profile a value that does not even decode as a JWT is an
-    /// anonymous caller, as the official emulator's `jwt.decode` answers; a token that
-    /// decodes but names another project's audience, or carries a signature that does not
-    /// verify, is still refused — the published divergence from the official emulator's
-    /// verify-nothing behaviour.
-    fn principal(&self, authorization: Option<&str>, bucket: &str) -> Result<Principal, String> {
+    /// A value that does not even decode as a JWT is an anonymous caller in both profiles, as the
+    /// official emulator's `jwt.decode` answers and production was recorded answering. Under the
+    /// `emulator` profile an unsigned
+    /// token minted for another project is admitted as the official emulator admits it
+    /// (firebase-tools 15.28.2 never reads `aud`); a token that carries a signature that
+    /// does not verify is still refused — the published divergence from the official
+    /// emulator's verify-nothing behaviour. The `strict` profile answers a foreign audience
+    /// as production does: 403, not an authentication failure.
+    fn principal(
+        &self,
+        authorization: Option<&str>,
+        bucket: &str,
+    ) -> Result<Principal, (u16, String)> {
+        self.principal_or_message(authorization, bucket)
+            .map_err(|refusal| match refusal {
+                PrincipalRefusal::Unauthenticated(message) => (401, message),
+                PrincipalRefusal::ForeignAudience => (403, "Permission denied.".to_owned()),
+            })
+    }
+
+    fn principal_or_message(
+        &self,
+        authorization: Option<&str>,
+        bucket: &str,
+    ) -> Result<Principal, PrincipalRefusal> {
         let Some(value) = authorization else {
             return Ok(Principal::Anonymous);
         };
+        let firebase_scheme = value.starts_with("Firebase ");
         let token = value
             .strip_prefix("Bearer ")
             .or_else(|| value.strip_prefix("Firebase "))
@@ -1681,12 +1960,26 @@ impl StorageState {
         // The audience is checked before the signature so a token of another session
         // says so, instead of failing as an unknown user of this one.
         let decoded = fireemu_core_auth::jwt::decode_token(token, parent.signer());
-        let Ok(decoded_token) = decoded else {
-            return if self.token_acceptance == TokenAcceptance::EmulatorMock {
-                Ok(Principal::Anonymous)
-            } else {
-                Err("invalid ID token: not a decodable JWT".to_owned())
-            };
+        // Under strict only the recorded shape is an anonymous caller: `Firebase ` followed by a
+        // non-empty value without a dot (stage 3 v9, `token-malformed`: the recorded value is 32
+        // base64url characters, answered exactly as no credential is, 403 from the rules and the
+        // body parser's 400 first on a malformed PATCH body). Every other value that fails to
+        // decode is refused with 401: an empty value (not recorded), a two- or four-segment
+        // value, a `Bearer` value on the Firebase dialect, a three-segment value with a tampered
+        // signature, an unknown `kid` or an unsupported algorithm. The emulator profile keeps its earlier mapping of every decode
+        // failure to an anonymous caller (the official emulator's `jwt.decode` treats a value
+        // without a dot, with two or with four segments as unauthenticated, but admits a
+        // decodable three-segment value as its user, which this profile has never done; a
+        // published divergence of the compatibility contract).
+        let decoded_token = match decoded {
+            Ok(decoded_token) => decoded_token,
+            Err(error) => {
+                let recorded_shape = firebase_scheme && !token.is_empty() && !token.contains('.');
+                if !recorded_shape && self.token_acceptance != TokenAcceptance::EmulatorMock {
+                    return Err(format!("invalid ID token: {error}").into());
+                }
+                return Ok(Principal::Anonymous);
+            }
         };
         let aud = decoded_token
             .payload
@@ -1694,11 +1987,15 @@ impl StorageState {
             .and_then(fireemu_core_types::json::JsonValue::as_str)
             .unwrap_or_default()
             .to_owned();
-        if aud != expected_rules_project {
-            return Err(format!(
-                "invalid ID token: audience {aud:?} does not match the bucket's rules project {expected_rules_project:?}"
-            ));
+        // Production answers a token minted for another project with a plain 403 (stage 3
+        // v9, `token-foreign-project`); the emulator profile admits it like firebase-tools
+        // 15.28.2, which never reads `aud`, and lets the mock-token check below bind the
+        // token to its own audience.
+        let foreign = aud != expected_rules_project;
+        if foreign && self.token_acceptance != TokenAcceptance::EmulatorMock {
+            return Err(PrincipalRefusal::ForeignAudience);
         }
+        let expected_rules_project = if foreign { aud } else { expected_rules_project };
         let tenant = decoded_token
             .payload
             .get("firebase")
@@ -1707,7 +2004,11 @@ impl StorageState {
             .map(str::to_owned);
         drop(parent);
         if tenant.is_some() && expected_rules_project != owner_project {
-            return Err("invalid ID token: tenant claims require a registered project".to_owned());
+            return Err(
+                "invalid ID token: tenant claims require a registered project"
+                    .to_owned()
+                    .into(),
+            );
         }
         let store_arc = match tenant {
             Some(tenant) => self
@@ -1719,14 +2020,20 @@ impl StorageState {
         let store = store_arc
             .lock()
             .map_err(|_| "auth store poisoned".to_owned())?;
-        let decoded = verify_rules_token_for_project(
+        let decoded = match verify_rules_token_for_project(
             token,
             &store,
             self.now(),
             self.token_acceptance,
             &expected_rules_project,
-        )
-        .map_err(|e| format!("invalid ID token: {e}"))?;
+        ) {
+            Ok(decoded) => decoded,
+            // Storage honours an ID token whose refresh tokens were revoked (production, stage 3
+            // v9, `token-revoked`: the read is allowed). Revocation is the last check of the
+            // verification, so the signature, expiry, audience and account have all passed.
+            Err(fireemu_core_auth::jwt::JwtError::Revoked) => decoded_token,
+            Err(e) => return Err(format!("invalid ID token: {e}").into()),
+        };
         drop(store);
         let ctx = AuthContext::from_id_token_json(&decoded.payload_json)
             .map_err(|e| format!("invalid ID token claims: {e}"))?;
@@ -1753,11 +2060,7 @@ impl StorageState {
             .slot_for_bucket(bucket.as_str())
             .map_err(|_| error_response(Dialect::Firebase, 500, "rules poisoned"))?;
         let Some(slot) = selected else {
-            return Err(error_response(
-                Dialect::Firebase,
-                403,
-                "Permission denied. Storage Emulator has no loaded ruleset.",
-            ));
+            return self.no_release_decision(bucket);
         };
         let rules = slot
             .snapshot()
@@ -1767,18 +2070,22 @@ impl StorageState {
             // whose rules the control API explicitly dropped. Production has no such state,
             // and the rules a project is created with admit no anonymous access, so the
             // end-user surface fails closed here rather than publishing every object; the
-            // owner credential returned above keeps its documented bypass. The official
-            // emulator refuses an SDK request with no loaded ruleset in the same way.
-            return Err(error_response(
-                Dialect::Firebase,
-                403,
-                "Permission denied. Storage Emulator has no loaded ruleset.",
-            ));
+            // owner credential returned above keeps its documented bypass. The official emulator
+            // has no such state (measured, firebase-tools 15.28.2): it refuses to start a
+            // non-demo project without a rules file and loads open rules (`allow read, write`)
+            // for a demo project, which `no_release_decision` follows in the emulator profile.
+            return self.no_release_decision(bucket);
         };
         if method == Method::List && ruleset.version.as_deref() != Some("2") {
             // Storage list requests exist only under rules_version = '2'; a v1 `read` never
-            // grants them.
-            return Err(fb_denied(Method::List));
+            // grants them. Production answers 400 with this message (stage 3 v9,
+            // `list-v1-read-list-present`), not the 403 of a denied rule.
+            const MESSAGE: &str = "Listing objects in a bucket is disallowed for rules_version = \"1\".\nPlease update storage security rules to rules_version = \"2\" to use list.";
+            return Err(if self.is_strict() {
+                production_error(400, MESSAGE)
+            } else {
+                fb_json_error(400, MESSAGE)
+            });
         }
         let path = if object_path.is_empty() {
             format!("/b/{}/o", bucket.as_str())
@@ -1802,7 +2109,7 @@ impl StorageState {
         let access = self.firestore.as_deref().map(|a| a as &dyn DocumentAccess);
         match evaluate_request_with(ruleset, &ctx, access).decision {
             Decision::Allow => Ok(()),
-            Decision::Deny(_) => Err(fb_denied(method)),
+            Decision::Deny(_) => Err(fb_denied(self.is_strict(), method)),
         }
     }
 }
@@ -1810,18 +2117,6 @@ impl StorageState {
 // ------------------------------------------------------------------------------------------
 // routing
 // ------------------------------------------------------------------------------------------
-
-/// Which `/storage/v1`-family spelling addressed an object.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum GcsSpelling {
-    /// `/b/{bucket}/o/{name}` — the only spelling the official emulator registers for
-    /// PATCH and copy.
-    Short,
-    /// `/storage/v1/b/{bucket}/o/{name}` — GET and DELETE only upstream.
-    StorageV1,
-    /// `/download/storage/v1/b/{bucket}/o/{name}` — GET only.
-    Download,
-}
 
 /// Parsed target of a request, method already taken into account the way the official
 /// emulator's express routers register their handlers.
@@ -1839,12 +2134,8 @@ enum Route {
     /// `GET /b/{bucket}/o` or `GET /storage/v1/b/{bucket}/o`.
     GcsList { bucket: String },
     /// One object on the JSON API.
-    GcsObject {
-        bucket: String,
-        name: String,
-        spelling: GcsSpelling,
-    },
-    /// `POST /b/{b}/o/{n}/(copyTo|rewriteTo)/b/{db}/o/{dn}` (short spelling only).
+    GcsObject { bucket: String, name: String },
+    /// `POST /[storage/v1/]b/{b}/o/{n}/(copyTo|rewriteTo)/b/{db}/o/{dn}`.
     GcsCopy {
         bucket: String,
         name: String,
@@ -1896,37 +2187,32 @@ fn route(method: &str, path: &str) -> Result<Route, String> {
         ("GET", ["b", b, "o"] | ["storage", "v1", "b", b, "o"]) => {
             Ok(Route::GcsList { bucket: d(b)? })
         }
-        ("GET" | "PATCH" | "DELETE", ["b", b, "o", n]) => Ok(Route::GcsObject {
+        // PATCH is served on `/storage/v1` as production serves it; the official emulator
+        // registers it on the short spelling only. The download spelling is GET only.
+        (
+            "GET" | "PATCH" | "PUT" | "DELETE",
+            ["b", b, "o", n] | ["storage", "v1", "b", b, "o", n],
+        )
+        | ("GET", ["download", "storage", "v1", "b", b, "o", n]) => Ok(Route::GcsObject {
             bucket: d(b)?,
             name: d(n)?,
-            spelling: GcsSpelling::Short,
-        }),
-        ("GET" | "DELETE", ["storage", "v1", "b", b, "o", n]) => Ok(Route::GcsObject {
-            bucket: d(b)?,
-            name: d(n)?,
-            spelling: GcsSpelling::StorageV1,
-        }),
-        ("GET", ["download", "storage", "v1", "b", b, "o", n]) => Ok(Route::GcsObject {
-            bucket: d(b)?,
-            name: d(n)?,
-            spelling: GcsSpelling::Download,
         }),
         ("POST", ["b", b, "o", n, "acl"]) => Ok(Route::GcsAcl {
             bucket: d(b)?,
             name: d(n)?,
         }),
-        ("POST", ["b", b, "o", n, verb, "b", db, "o", dn])
-            if *verb == "copyTo" || *verb == "rewriteTo" =>
-        {
-            Ok(Route::GcsCopy {
-                bucket: d(b)?,
-                name: d(n)?,
-                rewrite: *verb == "rewriteTo",
-                dst_bucket: d(db)?,
-                dst_name: d(dn)?,
-            })
-        }
-        ("POST" | "PUT", ["upload", "storage", "v1", "b", b, "o"]) => {
+        (
+            "POST",
+            ["b", b, "o", n, verb, "b", db, "o", dn]
+            | ["storage", "v1", "b", b, "o", n, verb, "b", db, "o", dn],
+        ) if *verb == "copyTo" || *verb == "rewriteTo" => Ok(Route::GcsCopy {
+            bucket: d(b)?,
+            name: d(n)?,
+            rewrite: *verb == "rewriteTo",
+            dst_bucket: d(db)?,
+            dst_name: d(dn)?,
+        }),
+        ("POST" | "PUT" | "DELETE", ["upload", "storage", "v1", "b", b, "o"]) => {
             Ok(Route::GcsUpload { bucket: d(b)? })
         }
         _ => fallthrough(method, &segments),
@@ -1956,21 +2242,96 @@ fn fallthrough(method: &str, segments: &[&str]) -> Result<Route, String> {
     }
 }
 
-/// Strictly parsed write preconditions (JSON API only; the official emulator ignores them,
-/// fireemu honours them as production does — a published divergence).
-fn precondition(params: &BTreeMap<String, String>) -> Result<Precondition, StorageResponse> {
-    precondition_named(params, "if")
+/// A guard value that is no number production reads as a Java `long`: 400 with the parameter
+/// named (recorded, lean-v4 and lean-v5: `1.5`, `not-a-number` and an empty value, for the match
+/// and the not-match guards of PATCH, PUT and DELETE; the recorded lengths 311, 314, 317, 320, 335
+/// and 338 are these bytes). Built directly, because the Google layout of `production_framing`
+/// keeps no `locationType` and `location`.
+fn production_invalid_long(key: &str, value: &str) -> StorageResponse {
+    let message = format!("Invalid long value: '{value}'.");
+    let quoted = |text: &str| serde_json::to_string(text).unwrap_or_default();
+    let (message, key) = (quoted(&message), quoted(key));
+    let body = format!(
+        "{{\n  \"error\": {{\n    \"code\": 400,\n    \"message\": {message},\n    \"errors\": [\n      {{\n        \"message\": {message},\n        \"domain\": \"global\",\n        \"reason\": \"invalidParameter\",\n        \"locationType\": \"parameter\",\n        \"location\": {key}\n      }}\n    ]\n  }}\n}}\n"
+    );
+    StorageResponse {
+        status: 400,
+        headers: vec![(
+            "content-type".into(),
+            "application/json; charset=UTF-8".into(),
+        )],
+        body: bytes::Bytes::from(body),
+    }
 }
 
+/// A guard value as production parses it: a signed 64-bit integer, or the 400 above. A negative
+/// value is a number that no generation equals; it is returned as `None` inside `Ok` so the
+/// caller can tell it from an absent guard.
+fn parse_guard_long(
+    params: &BTreeMap<String, String>,
+    key: &str,
+) -> Result<Option<i64>, StorageResponse> {
+    match params.get(key) {
+        None => Ok(None),
+        Some(raw) => raw
+            .parse::<i64>()
+            .map(Some)
+            .map_err(|_| production_invalid_long(key, raw)),
+    }
+}
+
+/// A generation no object has: what a negative match guard compares against, so the guard
+/// fails like production's (recorded, lean-v4: `ifMetagenerationMatch=-1` is a 412).
+const NEVER_A_GENERATION: u64 = u64::MAX;
+
+/// A match guard: a negative value is a guard that does not hold.
+fn match_guard(
+    params: &BTreeMap<String, String>,
+    key: &str,
+) -> Result<Option<u64>, StorageResponse> {
+    Ok(parse_guard_long(params, key)?
+        .map(|value| u64::try_from(value).unwrap_or(NEVER_A_GENERATION)))
+}
+
+/// A not-match guard: a negative value names no generation, so the guard holds and is dropped
+/// (recorded, lean-v4: `ifMetagenerationNotMatch=-1` is accepted, 200 or 204).
+fn not_match_guard(
+    params: &BTreeMap<String, String>,
+    key: &str,
+) -> Result<Option<u64>, StorageResponse> {
+    Ok(parse_guard_long(params, key)?.and_then(|value| u64::try_from(value).ok()))
+}
+
+/// The write and read preconditions of a JSON API request, parsed as production reads them under
+/// strict (the official emulator ignores them, and so does the emulator profile; see
+/// `precondition_named`).
+fn precondition(
+    state: &StorageState,
+    params: &BTreeMap<String, String>,
+) -> Result<Precondition, StorageResponse> {
+    precondition_named(state, params, "if")
+}
+
+/// The preconditions of a JSON API request. The official emulator reads none of them (measured,
+/// firebase-tools 15.28.2: PATCH, DELETE and the reads complete whatever the guards say, a
+/// malformed value included), so the emulator profile ignores them too and only the strict
+/// profile answers as production does.
 fn precondition_named(
+    state: &StorageState,
     params: &BTreeMap<String, String>,
     prefix: &str,
 ) -> Result<Precondition, StorageResponse> {
+    if !state.is_strict() {
+        return Ok(Precondition::default());
+    }
     let pre = Precondition {
-        if_generation_match: u64_param(params, &format!("{prefix}GenerationMatch"))?,
-        if_metageneration_match: u64_param(params, &format!("{prefix}MetagenerationMatch"))?,
-        if_generation_not_match: u64_param(params, &format!("{prefix}GenerationNotMatch"))?,
-        if_metageneration_not_match: u64_param(params, &format!("{prefix}MetagenerationNotMatch"))?,
+        if_generation_match: match_guard(params, &format!("{prefix}GenerationMatch"))?,
+        if_metageneration_match: match_guard(params, &format!("{prefix}MetagenerationMatch"))?,
+        if_generation_not_match: not_match_guard(params, &format!("{prefix}GenerationNotMatch"))?,
+        if_metageneration_not_match: not_match_guard(
+            params,
+            &format!("{prefix}MetagenerationNotMatch"),
+        )?,
     };
     if (pre.if_generation_match.is_some() && pre.if_generation_not_match.is_some())
         || (pre.if_metageneration_match.is_some() && pre.if_metageneration_not_match.is_some())
@@ -2400,6 +2761,20 @@ pub fn handle(state: &StorageState, req: StorageRequest) -> StorageResponse {
     let json_api_authenticated = dialect == Dialect::Gcs
         && (authorization == Some(crate::identity_toolkit::OWNER_CREDENTIAL)
             || admin_storage_authenticated(state, &req));
+    // The strict profile refuses a `Bearer` credential that is not the emulator's owner
+    // credential on the one JSON API route production was recorded refusing it on (the
+    // `PATCH /storage/v1/b/<bucket>/o/<object>` of the precedence rows), before anything else
+    // about the request is read; the emulator profile ignores the credential, as the official
+    // emulator does. An absent credential and the other JSON API routes were not recorded.
+    if state.is_strict()
+        && !json_api_authenticated
+        && req.method == "PATCH"
+        && matches!(route, Route::GcsObject { .. })
+        && req.path.starts_with("/storage/v1/")
+        && authorization.is_some_and(|value| value.starts_with("Bearer "))
+    {
+        return production_invalid_credentials();
+    }
     // App Check, before the fault plan, the Auth credential, the rules and every mutation.
     let admitted = if state.app_check_policy.is_some() {
         // The bypass classification reads the object store for a download-token URL, so it
@@ -2427,7 +2802,9 @@ pub fn handle(state: &StorageState, req: StorageRequest) -> StorageResponse {
         Dialect::Gcs => Principal::Owner,
         Dialect::Firebase => match state.principal(authorization, &bucket_of_route) {
             Ok(p) => p,
-            Err(e) => return error_response(dialect, 401, &e),
+            Err((status, message)) => {
+                return principal_refusal_response(dialect, status, &message);
+            }
         },
     };
     let method = req.method.clone();
@@ -2495,13 +2872,9 @@ pub fn handle(state: &StorageState, req: StorageRequest) -> StorageResponse {
         },
         Route::GcsListBuckets => gcs_list_buckets(state, &host),
         Route::GcsList { bucket } => gcs_list(state, &bucket, &params, &host),
-        Route::GcsObject {
-            bucket,
-            name,
-            spelling,
-        } => gcs_object(
-            state, &bucket, &name, spelling, &method, &req, &params, &host,
-        ),
+        Route::GcsObject { bucket, name } => {
+            gcs_object(state, &bucket, &name, &method, &req, &params, &host)
+        }
         Route::GcsCopy {
             bucket,
             name,
@@ -2521,11 +2894,72 @@ pub fn handle(state: &StorageState, req: StorageRequest) -> StorageResponse {
         ),
         Route::GcsAcl { bucket, name } => gcs_acl(state, &bucket, &name, &req, &host),
         Route::GcsUpload { bucket } => gcs_upload(state, &bucket, req, &params, &host, &admitted),
-        Route::FormUpload { bucket } => form_upload(state, &bucket, &req),
+        Route::FormUpload { bucket } => form_upload(state, &bucket, req),
         Route::XmlStyle { bucket, name } => xml_style_get(state, &bucket, &name, &req, &params),
         Route::NotImplemented => Ok(plain_status(501)),
     };
-    respond(outcome)
+    let response = respond(outcome);
+    if state.is_strict() {
+        production_framing(dialect, response)
+    } else {
+        response
+    }
+}
+
+/// The strict profile's framing of a JSON or HTML answer, compared with production's headers and bytes
+/// (stage 3 v9, both dialects): `application/json; charset=UTF-8` where the official emulator
+/// writes a lowercase charset, the Google-fronted JSON API's error bodies in its pretty layout
+/// (key order code, message, errors[message, domain, reason]; a final line feed), and a bare
+/// `application/json` content type on the JSON API's 204. The emulator profile keeps the
+/// official emulator's framing. The JSON API's media 404 is `text/html` in both profiles, as
+/// production and the official emulator answer it (see `gcs_no_such_object`); strict only
+/// upper-cases its charset.
+fn production_framing(dialect: Dialect, mut response: StorageResponse) -> StorageResponse {
+    const JSON_LOWER: &str = "application/json; charset=utf-8";
+    const JSON_UPPER: &str = "application/json; charset=UTF-8";
+    let content_type = response
+        .headers
+        .iter_mut()
+        .find(|(name, _)| name.eq_ignore_ascii_case("content-type"));
+    let has_content_type = content_type.is_some();
+    if let Some((_, value)) = content_type {
+        if value.as_str() == JSON_LOWER {
+            JSON_UPPER.clone_into(value);
+        } else if value.as_str() == "text/html; charset=utf-8" {
+            "text/html; charset=UTF-8".clone_into(value);
+        }
+    }
+    if dialect != Dialect::Gcs {
+        return response;
+    }
+    if response.status == 204 && !has_content_type {
+        response
+            .headers
+            .push(("content-type".into(), "application/json".into()));
+    }
+    // Only an error body in the JSON API's shape (an `error` object with an `errors` entry)
+    // is rewritten; every other body, successful or not, is left as it is.
+    if !response.body.starts_with(b"{\n") {
+        if let Some(text) = google_error_layout(&response.body) {
+            response.body = bytes::Bytes::from(text);
+        }
+    }
+    response
+}
+
+/// `{"error": {"code", "message", "errors": [{"message", "domain", "reason"}]}}` in the layout
+/// the Google-fronted JSON API writes, or `None` for a body of another shape.
+fn google_error_layout(body: &[u8]) -> Option<String> {
+    let value: Value = serde_json::from_slice(body).ok()?;
+    let error = value.get("error")?;
+    let entry = error.get("errors")?.as_array()?.first()?;
+    let quote = |v: &Value| serde_json::to_string(v.as_str()?).ok();
+    let (message, inner_message) = (quote(error.get("message")?)?, quote(entry.get("message")?)?);
+    let (domain, reason) = (quote(entry.get("domain")?)?, quote(entry.get("reason")?)?);
+    let code = error.get("code")?.as_u64()?;
+    Some(format!(
+        "{{\n  \"error\": {{\n    \"code\": {code},\n    \"message\": {message},\n    \"errors\": [\n      {{\n        \"message\": {inner_message},\n        \"domain\": {domain},\n        \"reason\": {reason}\n      }}\n    ]\n  }}\n}}\n"
+    ))
 }
 
 // ------------------------------------------------------------------------------------------
@@ -2559,14 +2993,45 @@ fn fb_list(
         None,
         RulesValue::Null,
     )?;
+    // Production refuses `maxResults=0` with this body (recorded, lean-v4 and lean-v5: 400,
+    // `content-length: 97`, the two-space layout without a final line feed that
+    // `production_error` writes); the official emulator answers 200 with an empty page, which
+    // the emulator profile keeps because it never refuses what the official emulator admits.
+    if max_results == Some(0) && state.is_strict() {
+        return Err(production_error(
+            400,
+            "Expect maxResults to be a positive number.",
+        ));
+    }
     let store = state.store()?;
-    let page = store.list(
-        &b,
-        &prefix,
-        Some(delimiter.as_str()),
-        page_token.as_deref(),
-        max_results,
-    );
+    let page = if max_results == Some(0) {
+        // Only the emulator profile reaches here (strict refused above): the official emulator's
+        // empty page.
+        store.list(
+            &b,
+            &prefix,
+            Some(delimiter.as_str()),
+            page_token.as_deref(),
+            max_results,
+        )
+    } else {
+        // Paging as production answers it (recorded, lean-v5): `maxResults` counts items and
+        // prefixes together in one merged name order, and the page token is the standard
+        // base64, padding kept, of the full name of the last entry returned.
+        let max = max_results
+            .unwrap_or(DEFAULT_LIST_PAGE_SIZE)
+            .min(DEFAULT_LIST_PAGE_SIZE);
+        let after = page_token
+            .as_deref()
+            .and_then(|token| base64_decode(token).ok())
+            .and_then(|bytes| String::from_utf8(bytes).ok());
+        let mut page =
+            store.list_after(&b, &prefix, Some(delimiter.as_str()), after.as_deref(), max);
+        page.next_page_token = page
+            .next_page_token
+            .map(|last| fireemu_core_storage::hash::base64(last.as_bytes()));
+        page
+    };
     // The official Firebase list filters malformed names out of the answer.
     let is_valid = |name: &str| !name.is_empty() && name.split('/').all(|s| !s.is_empty());
     let mut body = json!({
@@ -2589,7 +3054,7 @@ fn fb_list(
 }
 
 /// `GET /v0/b/{bucket}/o/{name}`: metadata or bytes, with the download-token bypass, and
-/// the official emulator's quirk of minting a download token on first read.
+/// production's minting of a download token on the first metadata read.
 fn fb_get(
     state: &StorageState,
     principal: &Principal,
@@ -2599,6 +3064,11 @@ fn fb_get(
     params: &BTreeMap<String, String>,
 ) -> Outcome {
     let b = bucket_name(bucket)?;
+    // A name with a line feed cannot be an object here; production answers a read of it as it
+    // answers a missing object (recorded, lean-v5: 404 on the metadata and the media read).
+    if name.contains('\n') {
+        return Ok(fb_object_not_found());
+    }
     let n = object_name(name)?;
     let now = state.now();
     let mut store = state.store()?;
@@ -2615,19 +3085,28 @@ fn fb_get(
         )?;
     }
     let Some(mut meta) = meta else {
-        return Ok(plain_status(404));
+        return Ok(fb_object_not_found());
     };
-    // The official emulator mints a download token the first time the Firebase dialect
-    // reads an object that has none; that is a metadata update, event included.
-    if meta.download_tokens.is_empty() {
-        meta = store.add_download_token(&b, &n, now).map_err(fb_core_err)?;
-    }
     let media = params.get("alt").map(String::as_str) == Some("media");
     if media {
+        // A media read leaves the object as it is (production, stage 3 v9: the metadata read
+        // after `get-media` still has its metageneration and no token).
         let bytes = store.shared_bytes(&meta);
         drop(store);
-        Ok(send_file_bytes(bytes, &meta, req))
+        Ok(send_file_bytes(
+            bytes,
+            &meta,
+            req,
+            state.strict_range_style(RangeStyle::Firebase),
+        ))
     } else {
+        // Production mints a download token the first time the Firebase dialect reads the
+        // metadata of an object that has none (stage 3 v9: `get-metadata-present` answers
+        // a token and the metageneration one higher); that is a metadata update, event
+        // included. The official emulator mints on media reads too.
+        if meta.download_tokens.is_empty() {
+            meta = store.add_download_token(&b, &n, now).map_err(fb_core_err)?;
+        }
         Ok(StorageResponse::json(200, &firebase_json(&meta)))
     }
 }
@@ -2641,10 +3120,30 @@ impl AsRef<[u8]> for SharedBlob {
     }
 }
 
+/// Production's Firebase-dialect 416: an XML error whose `Details` names the range asked for.
+fn firebase_range_not_satisfiable(meta: &ObjectMetadata, req: &StorageRequest) -> StorageResponse {
+    let asked = xml_escape(req.header("range").unwrap_or_default().trim());
+    StorageResponse {
+        status: 416,
+        headers: vec![
+            ("accept-ranges".into(), "bytes".into()),
+            (
+                "content-type".into(),
+                "application/xml; charset=UTF-8".into(),
+            ),
+            ("x-goog-generation".into(), meta.generation.to_string()),
+        ],
+        body: bytes::Bytes::from(format!(
+            "<?xml version='1.0' encoding='UTF-8'?><Error><Code>InvalidRange</Code><Message>The requested range cannot be satisfied.</Message><Details>{asked}</Details></Error>"
+        )),
+    }
+}
+
 fn send_file_bytes(
     shared: Arc<Vec<u8>>,
     meta: &ObjectMetadata,
     req: &StorageRequest,
+    strict_range: Option<RangeStyle>,
 ) -> StorageResponse {
     let bytes = bytes::Bytes::from_owner(SharedBlob(shared));
     let filename = meta
@@ -2658,9 +3157,16 @@ fn send_file_bytes(
         ("content-type".to_owned(), meta.content_type.clone()),
         (
             "content-disposition".to_owned(),
+            // The disposition type, then the file name the official emulator appends; a stored
+            // value that already names the file (the Firebase upload default) contributes only
+            // its type, so the header keeps the official shape and carries one `filename*`.
             format!(
                 "{}; filename*={}",
-                meta.content_disposition.as_deref().unwrap_or("attachment"),
+                meta.content_disposition
+                    .as_deref()
+                    .map_or("attachment", |stored| stored
+                        .split_once("; filename*=")
+                        .map_or(stored, |(kind, _)| kind)),
                 rfc5987_encode(filename)
             ),
         ),
@@ -2684,10 +3190,37 @@ fn send_file_bytes(
             format!("crc32c={},md5={}", meta.crc32c_base64(), meta.md5_base64()),
         ),
     ];
+    if let Some(style) = strict_range {
+        production_media_headers(&mut headers, meta, style);
+    }
     let len = bytes.len() as u64;
-    // An unsatisfiable or malformed range is ignored (the official emulator's `req.range`
-    // answers -1 and the handler falls through to the whole object).
-    if let Some((start, end)) = parse_range(req.header("range"), len) {
+    // https://cloud.google.com/storage/docs/json_api/v1/status-codes
+    // https://www.rfc-editor.org/rfc/rfc9110.html#section-14.4
+    // Emulator mode preserves the official emulator's whole-object fallback; strict answers as
+    // production does (recorded, lean-v4 and lean-v5, both dialects).
+    let range = parse_range(req.header("range"), len);
+    match (strict_range, &range) {
+        // The JSON API: the sentence as `text/html` and the unsatisfied range of the object.
+        (Some(RangeStyle::Gcs), ParsedRange::Unsatisfiable) => {
+            return html_text(416, "Request range not satisfiable")
+                .with_header("content-range", format!("bytes */{len}"));
+        }
+        // The Firebase dialect: an XML error naming the range that was asked for.
+        (Some(RangeStyle::Firebase), ParsedRange::Unsatisfiable) => {
+            return firebase_range_not_satisfiable(meta, req);
+        }
+        // A nonzero suffix of an empty object is satisfied by an empty 206 (JSON API only).
+        (Some(RangeStyle::Gcs), ParsedRange::EmptySuffix) => {
+            headers.push(("content-range".to_owned(), "bytes 0-0/0".to_owned()));
+            return StorageResponse {
+                status: 206,
+                headers,
+                body: bytes::Bytes::new(),
+            };
+        }
+        _ => {}
+    }
+    if let ParsedRange::Satisfiable(start, end) = range {
         headers.push((
             "content-range".to_owned(),
             format!("bytes {start}-{}/{len}", end - 1),
@@ -2712,36 +3245,145 @@ fn send_file_bytes(
     }
 }
 
-/// One satisfiable byte range of a `Range: bytes=...` header; anything else is ignored.
-fn parse_range(header: Option<&str>, len: u64) -> Option<(u64, u64)> {
-    let spec = header?.trim().strip_prefix("bytes=")?;
-    if spec.contains(',') {
-        return None;
+/// The headers of a media answer as production writes them under strict (recorded, lean-v4 and
+/// lean-v5, 460 reads): `x-goog-metageneration` and the stored content encoding and length, no
+/// `content-encoding` header unless an encoding is stored, the stored `cache-control` or the
+/// no-cache default, `pragma: no-cache`, a `content-disposition` only as stored (the JSON API
+/// answers `attachment` when none is), `accept-ranges` and the `x-goog-meta-*` headers of the
+/// custom metadata and the download tokens on the Firebase dialect only, `vary` on the JSON API
+/// only, and the checksum header in each dialect's spelling. `date`, `expires`, `last-modified`,
+/// `server`, `alt-svc`, `x-guploader-uploadid` and `x-goog-gcs-base-ts` are not reproduced.
+fn production_media_headers(
+    headers: &mut Vec<(String, String)>,
+    meta: &ObjectMetadata,
+    style: RangeStyle,
+) {
+    headers.retain(|(name, value)| match name.as_str() {
+        "content-encoding" => !value.is_empty(),
+        "x-goog-metadatageneration" | "content-disposition" | "cache-control" | "x-goog-hash" => {
+            false
+        }
+        "accept-ranges" => matches!(style, RangeStyle::Firebase),
+        _ => true,
+    });
+    let mut add = |name: &str, value: String| headers.push((name.to_owned(), value));
+    match (meta.content_disposition.as_deref(), style) {
+        (Some(stored), _) => add("content-disposition", stored.to_owned()),
+        (None, RangeStyle::Gcs) => add("content-disposition", "attachment".to_owned()),
+        (None, RangeStyle::Firebase) => {}
     }
-    let (first, last) = spec.split_once('-')?;
+    add(
+        "cache-control",
+        meta.cache_control
+            .clone()
+            .unwrap_or_else(|| "no-cache, no-store, max-age=0, must-revalidate".to_owned()),
+    );
+    add("pragma", "no-cache".to_owned());
+    add("x-goog-metageneration", meta.metageneration.to_string());
+    add(
+        "x-goog-stored-content-encoding",
+        meta.content_encoding
+            .clone()
+            .unwrap_or_else(|| "identity".to_owned()),
+    );
+    add("x-goog-stored-content-length", meta.size.to_string());
+    let separator = match style {
+        RangeStyle::Firebase => ", ",
+        RangeStyle::Gcs => ",",
+    };
+    add(
+        "x-goog-hash",
+        format!(
+            "crc32c={}{separator}md5={}",
+            meta.crc32c_base64(),
+            meta.md5_base64()
+        ),
+    );
+    if matches!(style, RangeStyle::Gcs) {
+        add("vary", "Origin, X-Origin".to_owned());
+    } else {
+        if !meta.download_tokens.is_empty() {
+            add(
+                "x-goog-meta-firebasestoragedownloadtokens",
+                meta.download_tokens.join(","),
+            );
+        }
+        for (key, value) in &meta.custom {
+            add(&format!("x-goog-meta-{key}"), value.clone());
+        }
+    }
+}
+
+/// Classification of a single requested byte range.
+enum ParsedRange {
+    Ignored,
+    Unsatisfiable,
+    /// A nonzero suffix (`bytes=-N`) of an empty object.
+    EmptySuffix,
+    Satisfiable(u64, u64),
+}
+
+/// How the strict profile words an unsatisfiable range: the JSON API and the Firebase dialect
+/// answer differently (see `send_file_bytes`).
+#[derive(Clone, Copy)]
+enum RangeStyle {
+    Gcs,
+    Firebase,
+}
+
+/// The characters XML text cannot carry as they are.
+fn xml_escape(text: &str) -> String {
+    text.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
+fn parse_range(header: Option<&str>, len: u64) -> ParsedRange {
+    let Some(spec) = header.and_then(|value| value.trim().strip_prefix("bytes=")) else {
+        return ParsedRange::Ignored;
+    };
+    if spec.contains(',') {
+        return ParsedRange::Ignored;
+    }
+    let Some((first, last)) = spec.split_once('-') else {
+        return ParsedRange::Ignored;
+    };
     let (first, last) = (first.trim(), last.trim());
     if first.is_empty() {
         // Suffix range: the final N bytes.
-        let suffix = last.parse::<u64>().ok()?;
-        if suffix == 0 || len == 0 {
-            return None;
+        let Ok(suffix) = last.parse::<u64>() else {
+            return ParsedRange::Ignored;
+        };
+        if suffix == 0 {
+            return ParsedRange::Unsatisfiable;
         }
-        return Some((len.saturating_sub(suffix), len));
+        // RFC 9110 section 14.1.1 calls a nonzero suffix satisfiable even for an empty
+        // representation. The emulator profile serves the empty body as 200; strict answers
+        // what production answered on the JSON API (an empty 206).
+        // https://www.rfc-editor.org/rfc/rfc9110.html#section-14.1.1
+        if len == 0 {
+            return ParsedRange::EmptySuffix;
+        }
+        return ParsedRange::Satisfiable(len.saturating_sub(suffix), len);
     }
-    let start = first.parse::<u64>().ok()?;
+    let Ok(start) = first.parse::<u64>() else {
+        return ParsedRange::Ignored;
+    };
     let end = if last.is_empty() {
         len
     } else {
-        let e = last.parse::<u64>().ok()?;
+        let Ok(e) = last.parse::<u64>() else {
+            return ParsedRange::Ignored;
+        };
         if e < start {
-            return None;
+            return ParsedRange::Ignored;
         }
         e.saturating_add(1).min(len)
     };
     if start >= len {
-        return None;
+        return ParsedRange::Unsatisfiable;
     }
-    Some((start, end))
+    ParsedRange::Satisfiable(start, end)
 }
 
 fn fb_patch(
@@ -2757,12 +3399,20 @@ fn fb_patch(
     let body: Value = if req.body.is_empty() {
         Value::Object(Map::new())
     } else {
-        serde_json::from_slice(&req.body)
-            .map_err(|e| fb_json_error(400, &format!("metadata JSON: {e}")))?
+        // Production answers a body that is not JSON with this fixed message (recorded, stage
+        // 3 v9: the body `{` on an absent and on a present object, both credentials).
+        serde_json::from_slice(&req.body).map_err(|_| production_error(400, "Parser Error"))?
     };
-    let patch = patch_from_json(&body).map_err(|e| fb_json_error(400, &e))?;
+    let patch = patch_from_json(&body, false).map_err(|e| fb_json_error(400, &e))?;
     let mut store = state.store()?;
     let existing = store.get(&b, &n).cloned();
+    // A metadata update of an object that is not there is refused with 403, whatever the rules
+    // say and whichever credential is presented (production, stage 3 v9: `method-write-patch-absent`
+    // under `allow write: if true` and `boundary-firebase-admin-patch-absent` with the owner's
+    // token both answered 403; the official emulator answers 404 after the rules allowed it).
+    if existing.is_none() {
+        return Ok(fb_denied(state.is_strict(), Method::Update));
+    }
     // Rules run before existence is revealed, as the official emulator orders them.
     let request_resource = existing.as_ref().map_or(RulesValue::Null, |m| {
         let mut preview = patch.apply(m);
@@ -2778,9 +3428,6 @@ fn fb_patch(
         existing.as_ref().map(storage_rules_value),
         request_resource,
     )?;
-    if existing.is_none() {
-        return Ok(plain_status(404));
-    }
     let m = store
         .update_metadata(&b, &n, &patch, Precondition::default(), now)
         .map_err(fb_core_err)?;
@@ -2804,7 +3451,7 @@ fn fb_delete(state: &StorageState, principal: &Principal, bucket: &str, name: &s
         RulesValue::Null,
     )?;
     if existing.is_none() {
-        return Ok(plain_status(404));
+        return Ok(fb_object_not_found());
     }
     store
         .delete(&b, &n, Precondition::default())
@@ -2915,7 +3562,9 @@ fn fb_object_post(
                 encode_segment(n.as_str()),
                 id.as_str()
             );
-            return Ok(plain_status(200)
+            // The start answer has no body (recorded, stage 3 v9: `Content-Length: 0` under
+            // `text/plain; charset=utf-8`); the official emulator writes the text `OK`.
+            return Ok(plain_text(200, "")
                 .with_header("x-goog-upload-chunk-granularity", "10000")
                 .with_header("x-goog-upload-control-url", "")
                 .with_header("x-goog-upload-status", "active")
@@ -2985,11 +3634,11 @@ fn fb_commit(
     inject_download_token(&mut store, &mut meta);
     let result = (|| {
         let existing = store.get(b, n).cloned();
-        let method = if existing.is_some() {
-            Method::Update
-        } else {
-            Method::Create
-        };
+        // An upload is a `create` for the rules whether or not the object exists: production
+        // was measured (stage 3 v9, `method-create-upload-present` 200 and
+        // `method-update-upload-present` 403), and so is the official emulator, whose
+        // uploadObject hard-codes the create method.
+        let method = Method::Create;
         let next_generation = store.next_generation_preview().map_err(fb_core_err)?;
         let hashes = prepared.digests();
         state
@@ -3007,6 +3656,7 @@ fn fb_commit(
                     hashes.values(),
                     next_generation,
                     now,
+                    state.token_acceptance != TokenAcceptance::EmulatorMock,
                 ),
             )
             .map_err(|denial| denial.with_header("x-goog-upload-status", "final"))?;
@@ -3014,7 +3664,7 @@ fn fb_commit(
             .put_prepared(b, n, prepared, meta, Precondition::default(), now)
             .map_err(fb_core_err)?;
         let m = store
-            .default_content_disposition_inline(b, n)
+            .default_content_disposition(b, n, &default_content_disposition(n))
             .map_err(fb_core_err)?;
         Ok(StorageResponse::json(200, &firebase_json(&m)))
     })();
@@ -3069,7 +3719,11 @@ fn fb_resumable_command(
     if commands.contains(&"cancel") {
         return match store.cancel_upload(&id, now) {
             Ok(()) => Ok(plain_status(200)),
-            Err(StorageError::UploadFinalized) => Ok(plain_status(400)),
+            // Cancelling a session that already finished, refused ones included, answers this
+            // text (recorded, stage 3 v9: the cancel after a denied resumable upload).
+            Err(StorageError::UploadFinalized) => {
+                Ok(plain_text(400, "Upload has already been finalized."))
+            }
             Err(e) => Ok(fb_core_err(e)),
         };
     }
@@ -3110,11 +3764,13 @@ fn fb_resumable_command(
             FinalizeError::Denied(denial) => denial.with_header("x-goog-upload-status", "final"),
             FinalizeError::Store(StorageError::UploadNotFound) => plain_status(404),
             FinalizeError::Store(err) => fb_core_err(err),
-            FinalizeError::Auth(message) => error_response(Dialect::Firebase, 401, &message),
+            FinalizeError::Auth((status, message)) => {
+                principal_refusal_response(Dialect::Firebase, status, &message)
+            }
         })?;
         let (b, n) = (m.bucket.clone(), m.name.clone());
         let m = store
-            .default_content_disposition_inline(&b, &n)
+            .default_content_disposition(&b, &n, &default_content_disposition(&n))
             .map_err(fb_core_err)?;
         return Ok(StorageResponse::json(200, &firebase_json(&m))
             .with_header("x-goog-upload-status", "final"));
@@ -3126,7 +3782,7 @@ fn fb_resumable_command(
 enum FinalizeError {
     Denied(StorageResponse),
     Store(StorageError),
-    Auth(String),
+    Auth((u16, String)),
 }
 
 /// Authorizes and commits a resumable upload against the bytes actually received (the
@@ -3165,11 +3821,8 @@ fn finalize_resumable(
         .principal(authorization.as_deref(), b.as_str())
         .map_err(FinalizeError::Auth)?;
     let existing = store.get(&b, &n).cloned();
-    let method = if existing.is_some() {
-        Method::Update
-    } else {
-        Method::Create
-    };
+    // Also a `create` over an existing object (see `fb_commit`).
+    let method = Method::Create;
     let next_generation = store
         .next_generation_preview()
         .map_err(FinalizeError::Store)?;
@@ -3179,7 +3832,16 @@ fn finalize_resumable(
         &b,
         n.as_str(),
         existing.as_ref().map(storage_rules_value),
-        incoming_rules_value(&b, &n, &meta, size, hashes, next_generation, now),
+        incoming_rules_value(
+            &b,
+            &n,
+            &meta,
+            size,
+            hashes,
+            next_generation,
+            now,
+            state.token_acceptance != TokenAcceptance::EmulatorMock,
+        ),
     ) {
         let _ = store.mark_upload_denied(id, now);
         return Err(FinalizeError::Denied(denial));
@@ -3232,6 +3894,27 @@ fn gcs_list(
     params: &BTreeMap<String, String>,
     host: &str,
 ) -> Outcome {
+    // These production filters change the answer and cannot be silently ignored in strict
+    // mode. This store has no archived generations, so `versions=true` has the same result
+    // as `versions=false`. Explicit `false` is the default for includeTrailingDelimiter.
+    // https://cloud.google.com/storage/docs/json_api/v1/objects/list
+    if state.token_acceptance == TokenAcceptance::Verified {
+        let unsupported = ["matchGlob", "startOffset", "endOffset"]
+            .into_iter()
+            .find(|name| params.contains_key(*name))
+            .or_else(|| {
+                ["includeTrailingDelimiter"]
+                    .into_iter()
+                    .find(|name| params.get(*name).is_some_and(|value| value != "false"))
+            });
+        if let Some(name) = unsupported {
+            return Err(gcs_json_error(
+                400,
+                &format!("unsupported JSON API list parameter: {name}"),
+                "invalid",
+            ));
+        }
+    }
     let b = bucket_name(bucket)?;
     let prefix = params.get("prefix").cloned().unwrap_or_default();
     let delimiter = params.get("delimiter").cloned().unwrap_or_default();
@@ -3239,6 +3922,19 @@ fn gcs_list(
     let max_results = params
         .get("maxResults")
         .and_then(|v| v.parse::<usize>().ok());
+    // Production answers `maxResults=0` with the bare kind (recorded, lean-v4: 200, 32 bytes,
+    // Google-fronted layout); the official emulator adds a next-page token naming the first
+    // object, which the emulator profile keeps.
+    if max_results == Some(0) && state.is_strict() {
+        return Ok(StorageResponse {
+            status: 200,
+            headers: vec![(
+                "content-type".into(),
+                "application/json; charset=UTF-8".into(),
+            )],
+            body: bytes::Bytes::from_static(b"{\n  \"kind\": \"storage#objects\"\n}\n"),
+        });
+    }
     let store = state.store()?;
     let page = store.list(
         &b,
@@ -3265,13 +3961,18 @@ fn gcs_object(
     state: &StorageState,
     bucket: &str,
     name: &str,
-    spelling: GcsSpelling,
     method: &str,
     req: &StorageRequest,
     params: &BTreeMap<String, String>,
     host: &str,
 ) -> Outcome {
     let b = bucket_name(bucket)?;
+    // As on the Firebase dialect, a read of a name with a line feed is a missing object
+    // (recorded, lean-v5).
+    if method == "GET" && name.contains('\n') {
+        let media = params.get("alt").map(String::as_str) == Some("media");
+        return Ok(gcs_no_such_object(bucket, name, media));
+    }
     let n = object_name(name)?;
     let now = state.now();
     match method {
@@ -3284,41 +3985,69 @@ fn gcs_object(
             };
             // Conditional reads: a not-match predicate naming the current value is 304
             // (production semantics; the official emulator reads no preconditions at all).
-            match precondition(params)?.check(Some(&meta)) {
+            match precondition(state, params)?.check(Some(&meta)) {
                 Ok(()) => {}
+                // The 304 has no body and the content type of the answer it stands for (recorded,
+                // lean-v4: `application/json` for a metadata read, `application/octet-stream` for
+                // a media read); a media read that fails a match guard answers the bare sentence
+                // as `text/html`, a metadata read the JSON 412.
                 Err(StorageError::NotModified(_)) => {
-                    return Ok(StorageResponse::empty(304).with_header("etag", meta.etag()))
+                    return Ok(StorageResponse::empty(304).with_header(
+                        "content-type",
+                        if media {
+                            "application/octet-stream"
+                        } else {
+                            "application/json"
+                        },
+                    ))
+                }
+                Err(StorageError::PreconditionFailed(_)) if media => {
+                    return Ok(html_text(
+                        412,
+                        "At least one of the pre-conditions you specified did not hold.",
+                    ))
                 }
                 Err(e) => return Ok(gcs_core_err(e)),
             }
             if media {
                 let bytes = store.shared_bytes(&meta);
                 drop(store);
-                Ok(send_file_bytes(bytes, &meta, req))
+                Ok(send_file_bytes(
+                    bytes,
+                    &meta,
+                    req,
+                    state.strict_range_style(RangeStyle::Gcs),
+                ))
             } else {
                 Ok(StorageResponse::json(200, &gcs_json(&meta, host)))
             }
         }
-        "PATCH" if spelling == GcsSpelling::Short => {
+        // `PUT` updates the object's metadata (recorded, probe-v4: an accepted `PUT` with
+        // `contentType` and `metadata` answers 200 with the object resource, the metageneration
+        // one higher) and, unlike `PATCH`, replaces the custom metadata and drops the download
+        // tokens (recorded, lean-v4 1344 to 1349: the earlier key and the token are gone). What a
+        // `PUT` does to the other writable fields it omits, or to custom metadata it omits, was
+        // not recorded: they stay as `PATCH` leaves them.
+        "PATCH" | "PUT" => {
             let body: Value = if req.body.is_empty() {
                 Value::Object(Map::new())
             } else {
-                serde_json::from_slice(&req.body)
-                    .map_err(|e| gcs_json_error(400, &format!("metadata JSON: {e}"), "invalid"))?
+                serde_json::from_slice(&req.body).map_err(|e| gcs_parse_error(&req.body, &e))?
             };
-            let pre = precondition(params)?;
+            let pre = precondition(state, params)?;
             let mut store = state.store()?;
             if store.get(&b, &n).is_none() {
                 return Ok(gcs_no_such_object(bucket, name, false));
             }
-            let patch = patch_from_json(&body).map_err(|e| gcs_json_error(400, &e, "invalid"))?;
+            let patch = patch_from_json(&body, method == "PUT")
+                .map_err(|e| gcs_json_error(400, &e, "invalid"))?;
             let m = store
                 .update_metadata(&b, &n, &patch, pre, now)
                 .map_err(gcs_core_err)?;
             Ok(StorageResponse::json(200, &gcs_json(&m, host)))
         }
         "DELETE" => {
-            let pre = precondition(params)?;
+            let pre = precondition(state, params)?;
             let mut store = state.store()?;
             // The generation selector is honoured as production honours it (the official
             // emulator reads neither it nor the preconditions — a published divergence).
@@ -3328,7 +4057,6 @@ fn gcs_object(
             store.delete(&b, &n, pre).map_err(gcs_core_err)?;
             Ok(StorageResponse::empty(204))
         }
-        // PATCH on the /storage/v1 spelling falls into the official catch-all.
         _ => Ok(plain_status(501)),
     }
 }
@@ -3361,8 +4089,8 @@ fn gcs_copy(
             .filter(|v| v.as_object().is_some_and(|o| !o.is_empty()))
     };
     let mut store = state.store()?;
-    let source_pre = precondition_named(params, "ifSource")?;
-    let pre = precondition(params)?;
+    let source_pre = precondition_named(state, params, "ifSource")?;
+    let pre = precondition(state, params)?;
     let selected = select_generation(store.get(&b, &n).cloned(), params, "sourceGeneration")?;
     let Some(src) = selected else {
         return Ok(gcs_no_such_object(bucket, name, false));
@@ -3505,6 +4233,23 @@ fn gcs_upload(
 ) -> Outcome {
     let b = bucket_name(bucket)?;
     let now = state.now();
+    if req.method == "DELETE" {
+        // Cancelling a resumable session: production answers 499 (recorded, probe-v2), where
+        // the official emulator has no such route and answers 501.
+        let Some(upload_id) = params.get("upload_id") else {
+            return Ok(plain_status(400));
+        };
+        let id = UploadId::from_str_unchecked(upload_id);
+        let mut store = state.store()?;
+        if store.upload_bucket(&id, now).is_ok_and(|owner| *owner != b) {
+            return Ok(plain_status(404));
+        }
+        return match store.cancel_upload(&id, now) {
+            Ok(()) => Ok(production_client_closed_request()),
+            Err(StorageError::UploadNotFound) => Ok(plain_status(404)),
+            Err(e) => Ok(gcs_core_err(e)),
+        };
+    }
     if req.method == "PUT" {
         // The PUT continuation of a resumable session.
         let Some(upload_id) = params.get("upload_id") else {
@@ -3542,7 +4287,7 @@ fn gcs_upload(
             let declared_ct = req.header("x-upload-content-type").map(str::to_owned);
             let meta = new_metadata_from_json(&meta_json, declared_ct)
                 .map_err(|e| gcs_json_error(400, &e, "invalid"))?;
-            let pre = precondition(params)?;
+            let pre = precondition(state, params)?;
             let (expected_md5, expected_crc32c) = declared_hashes(&req, Some(&meta_json))
                 .map_err(|(s, m)| gcs_json_error(s, &m, "invalid"))?;
             let id = state
@@ -3562,13 +4307,15 @@ fn gcs_upload(
                     now,
                 )
                 .map_err(gcs_core_err)?;
+            // The session URL repeats the start request's query and adds `upload_id` (recorded,
+            // probe-v2: `…&ifGenerationMatch=0&upload_id=…`); the start has no body.
             let session_url = format!(
-                "http://{host}/upload/storage/v1/b/{}/o?name={}&uploadType=resumable&upload_id={}",
+                "http://{host}/upload/storage/v1/b/{}/o?{}&upload_id={}",
                 encode_segment(b.as_str()),
-                encode_segment(n.as_str()),
+                req.query,
                 id.as_str()
             );
-            Ok(plain_status(200).with_header("location", session_url))
+            Ok(plain_text(200, "").with_header("location", session_url))
         }
         Some("multipart") => {
             let content_type = req
@@ -3600,7 +4347,7 @@ fn gcs_upload(
             let declared_ct = req.header("x-upload-content-type").map(str::to_owned);
             let meta = new_metadata_from_json(&meta_json, declared_ct)
                 .map_err(|e| gcs_json_error(400, &e, "invalid"))?;
-            let pre = precondition(params)?;
+            let pre = precondition(state, params)?;
             let prepared = verify_hashes(&req, Some(&meta_json), data)
                 .map_err(|(s, m)| gcs_json_error(s, &m, "invalid"))?;
             let mut store = state.store()?;
@@ -3619,7 +4366,7 @@ fn gcs_upload(
                 .header("content-type")
                 .filter(|c| !c.is_empty())
                 .map(str::to_owned);
-            let pre = precondition(params)?;
+            let pre = precondition(state, params)?;
             let body = std::mem::take(&mut req.body);
             let prepared = verify_hashes(&req, None, body)
                 .map_err(|(s, m)| gcs_json_error(s, &m, "invalid"))?;
@@ -3677,7 +4424,9 @@ fn gcs_resumable_put(
         // Only a finalized session has an object to report; a refused or cancelled session
         // never published one, and a chunk sent into any terminal session is still a 400.
         Ok(UploadPhase::Finalized(_)) if status_check => {}
-        Ok(UploadPhase::Finalized(_) | UploadPhase::Denied(_) | UploadPhase::Cancelled(_)) => {
+        // A cancelled session answers 499 to a status query and to a chunk alike (recorded).
+        Ok(UploadPhase::Cancelled(_)) => return Ok(production_client_closed_request()),
+        Ok(UploadPhase::Finalized(_) | UploadPhase::Denied(_)) => {
             return Ok(plain_status(400));
         }
         Ok(UploadPhase::Active(_)) => {}
@@ -3734,7 +4483,9 @@ fn gcs_resumable_put(
             // The JSON API dialect runs no rules, so a denial cannot happen here.
             FinalizeError::Denied(denial) => denial,
             FinalizeError::Store(err) => gcs_core_err(err),
-            FinalizeError::Auth(message) => error_response(Dialect::Gcs, 401, &message),
+            FinalizeError::Auth((status, message)) => {
+                principal_refusal_response(Dialect::Gcs, status, &message)
+            }
         })?;
         return Ok(StorageResponse::json(200, &gcs_json(&m, host)));
     }
@@ -3798,7 +4549,7 @@ fn parse_content_range(cr: &str) -> Option<ContentRange> {
 /// The XML-ish `POST /{bucket}` form-data upload: a `key` field names the object, a file
 /// part carries the bytes, and header-named fields set the metadata. Rules never run (the
 /// gcloud router is the privileged dialect) and the answer is a bare 204.
-fn form_upload(state: &StorageState, bucket: &str, req: &StorageRequest) -> Outcome {
+fn form_upload(state: &StorageState, bucket: &str, mut req: StorageRequest) -> Outcome {
     let content_type = req.header("content-type").unwrap_or("");
     if !content_type.starts_with("multipart/form-data") {
         return Ok(html_text(400, "Content-Type must be multipart/form-data"));
@@ -3866,9 +4617,11 @@ fn form_upload(state: &StorageState, bucket: &str, req: &StorageRequest) -> Outc
         header_safe(&format!("metadata key {k:?}"), k).map_err(|e| html_text(400, &e))?;
         header_safe(&format!("metadata.{k}"), v).map_err(|e| html_text(400, &e))?;
     }
-    // The digests are computed before the store lock is taken: hashing a near-limit body is
-    // the expensive part of this route and it holds nothing back for every other bucket.
-    let prepared = PreparedObject::new(req.body[data].to_vec());
+    // Reuse the request allocation for the file part and hash it before taking the store
+    // lock, as the JSON API multipart route does.
+    req.body.copy_within(data.clone(), 0);
+    req.body.truncate(data.len());
+    let prepared = PreparedObject::new(req.body);
     let mut store = state.store()?;
     store
         .put_prepared(&b, &n, prepared, meta, Precondition::default(), now)
@@ -3895,7 +4648,9 @@ fn xml_style_get(
     };
     let bytes = store.shared_bytes(&meta);
     drop(store);
-    Ok(send_file_bytes(bytes, &meta, req))
+    // The XML API's answers were not recorded, so both profiles keep the official emulator's
+    // (no strict range style, no strict media headers).
+    Ok(send_file_bytes(bytes, &meta, req, None))
 }
 
 #[cfg(test)]

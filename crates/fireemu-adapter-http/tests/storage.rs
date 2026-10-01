@@ -18,8 +18,8 @@ use fireemu_core_auth::store::{AuthStore, NewUser};
 use fireemu_core_rules::runtime::{LoadedRules, RulesetSlot};
 use fireemu_core_session::clock::VirtualClock;
 use fireemu_core_storage::name::{BucketName, ObjectName};
-use fireemu_core_storage::store::StorageEvent;
 use fireemu_core_storage::store::StorageState as ObjectStore;
+use fireemu_core_storage::store::{NewMetadata, Precondition, StorageEvent};
 use fireemu_core_types::determinism::SplitMix64;
 use fireemu_core_types::time::LogicalInstant;
 use serde_json::{json, Value};
@@ -197,7 +197,8 @@ fn targeted_storage_rules_are_isolated_by_bucket_and_unknown_buckets_fail_closed
     );
     assert_eq!(
         anonymous_multipart_upload_to(&s, "unknown.example.test", "unknown.txt").status,
-        403
+        // A bucket with no release: production's 400 under strict (see the no-ruleset test).
+        400
     );
     let (owner_content_type, owner_body) = multipart(&json!({}), "text/plain", b"owner");
     assert_eq!(
@@ -344,9 +345,97 @@ fn firebase_protocol_upload_download_list_update_delete() {
         &s,
         req("GET", &format!("/v0/b/{BUCKET}/o/{enc}"), &owner, b""),
     );
-    // The official Firebase dialect answers a missing object with a bare status text.
+    // Production answers a missing object with the `Not Found.` JSON, where the official
+    // Firebase dialect writes a bare status text (see the dedicated test).
     assert_eq!(r.status, 404);
-    assert_eq!(r.body.as_ref(), b"Not Found");
+    assert_eq!(json_body(&r)["error"]["message"], "Not Found.");
+}
+
+#[test]
+fn firebase_and_json_api_list_pages_share_the_combined_entry_budget() {
+    let storage = state(None);
+    {
+        let mut store = storage.store.lock().unwrap();
+        let bucket = BucketName::try_new(BUCKET).unwrap();
+        for object_name in ["a", "b", "dir/x", "dir2/x", "zz"] {
+            store
+                .put(
+                    &bucket,
+                    &ObjectName::try_new(object_name).unwrap(),
+                    Vec::new(),
+                    NewMetadata::default(),
+                    Precondition::default(),
+                    START,
+                )
+                .unwrap();
+        }
+    }
+
+    // The Firebase route pages as production does (recorded, lean-v5): the token is the standard
+    // base64, padding kept, of the last entry returned; the JSON API route names the first entry
+    // of the next page.
+    for (route, tokens) in [
+        (
+            format!("/v0/b/{BUCKET}/o"),
+            [Some("Yg=="), Some("ZGlyMi8="), None],
+        ),
+        (
+            format!("/storage/v1/b/{BUCKET}/o"),
+            [Some("dir/"), Some("zz"), None],
+        ),
+    ] {
+        let mut token: Option<String> = None;
+        for ((expected_items, expected_prefixes), expected_token) in [
+            (vec!["a", "b"], vec![]),
+            (vec![], vec!["dir/", "dir2/"]),
+            (vec!["zz"], vec![]),
+        ]
+        .into_iter()
+        .zip(tokens)
+        {
+            let query = token.as_ref().map_or_else(
+                || "delimiter=%2F&maxResults=2".to_owned(),
+                |value| {
+                    format!(
+                        "delimiter=%2F&maxResults=2&pageToken={}",
+                        value.replace('=', "%3D")
+                    )
+                },
+            );
+            let response = handle(
+                &storage,
+                req(
+                    "GET",
+                    &format!("{route}?{query}"),
+                    &[("authorization", "Bearer owner")],
+                    b"",
+                ),
+            );
+            assert_eq!(
+                response.status,
+                200,
+                "{route}: {}",
+                String::from_utf8_lossy(&response.body)
+            );
+            let body = json_body(&response);
+            let items: Vec<&str> = body["items"].as_array().map_or_else(Vec::new, |values| {
+                values
+                    .iter()
+                    .map(|item| item["name"].as_str().unwrap())
+                    .collect()
+            });
+            let prefixes: Vec<&str> = body["prefixes"].as_array().map_or_else(Vec::new, |values| {
+                values
+                    .iter()
+                    .map(|prefix| prefix.as_str().unwrap())
+                    .collect()
+            });
+            assert_eq!(items, expected_items, "{route}");
+            assert_eq!(prefixes, expected_prefixes, "{route}");
+            assert_eq!(body["nextPageToken"].as_str(), expected_token, "{route}");
+            token = expected_token.map(str::to_owned);
+        }
+    }
 }
 
 #[test]
@@ -421,10 +510,15 @@ fn event_admission_refusal_returns_429_without_publishing_the_object() {
 #[test]
 #[allow(clippy::too_many_lines)]
 fn upload_digests_seen_by_rules_match_the_committed_bytes_on_every_firebase_path() {
+    // The rules read the official emulator's decimal crc32c; the answers carry production's
+    // base64 one (`.2`).
     let expected = |bytes: &[u8]| {
         (
             fireemu_core_storage::hash::base64(&fireemu_core_storage::hash::md5(bytes)),
             fireemu_core_storage::hash::crc32c(bytes).to_string(),
+            fireemu_core_storage::hash::base64(
+                &fireemu_core_storage::hash::crc32c(bytes).to_be_bytes(),
+            ),
         )
     };
     let abc = expected(b"abc");
@@ -458,7 +552,7 @@ service firebase.storage {{
         String::from_utf8_lossy(&media.body)
     );
     assert_eq!(json_body(&media)["md5Hash"], abc.0);
-    assert_eq!(json_body(&media)["crc32c"], abc.1);
+    assert_eq!(json_body(&media)["crc32c"], abc.2);
 
     let (content_type, body) = multipart(&json!({}), "application/octet-stream", b"abc");
     let multipart_response = handle(
@@ -480,7 +574,7 @@ service firebase.storage {{
         String::from_utf8_lossy(&multipart_response.body)
     );
     assert_eq!(json_body(&multipart_response)["md5Hash"], abc.0);
-    assert_eq!(json_body(&multipart_response)["crc32c"], abc.1);
+    assert_eq!(json_body(&multipart_response)["crc32c"], abc.2);
 
     let start = handle(
         &state,
@@ -533,7 +627,7 @@ service firebase.storage {{
         String::from_utf8_lossy(&finalized.body)
     );
     assert_eq!(json_body(&finalized)["md5Hash"], overlap.0);
-    assert_eq!(json_body(&finalized)["crc32c"], overlap.1);
+    assert_eq!(json_body(&finalized)["crc32c"], overlap.2);
 
     for (name, bytes) in [
         ("media.bin", &b"abc"[..]),
@@ -781,21 +875,46 @@ fn json_api_dialect_for_the_admin_sdk() {
     let listed = json_body(&r);
     assert_eq!(listed["kind"], "storage#objects");
     assert_eq!(listed["items"][0]["name"], "a/b.txt");
-    // Copy routes exist only on the short /b/... spelling, as the official emulator
-    // registers them; the /storage/v1 spelling is its 501 catch-all.
-    assert_eq!(
-        handle(
-            &s,
-            req(
-                "POST",
-                &format!("/storage/v1/b/{BUCKET}/o/a%2Fb.txt/rewriteTo/b/{BUCKET}/o/copy.txt"),
-                &owner,
-                b"",
-            ),
-        )
-        .status,
-        501
+    // Production JSON API routes also accept the /storage/v1 spelling.
+    // https://cloud.google.com/storage/docs/json_api/v1/objects/patch
+    // https://cloud.google.com/storage/docs/json_api/v1/objects/rewrite
+    // https://cloud.google.com/storage/docs/json_api/v1/objects/copy
+    let patched = handle(
+        &s,
+        req(
+            "PATCH",
+            &format!("/storage/v1/b/{BUCKET}/o/a%2Fb.txt"),
+            &owner,
+            br#"{"cacheControl":"no-cache"}"#,
+        ),
     );
+    assert_eq!(patched.status, 200);
+    assert_eq!(json_body(&patched)["cacheControl"], "no-cache");
+    let rewritten_long = handle(
+        &s,
+        req(
+            "POST",
+            &format!("/storage/v1/b/{BUCKET}/o/a%2Fb.txt/rewriteTo/b/{BUCKET}/o/long-copy.txt"),
+            &owner,
+            b"",
+        ),
+    );
+    assert_eq!(rewritten_long.status, 200);
+    assert_eq!(
+        json_body(&rewritten_long)["resource"]["name"],
+        "long-copy.txt"
+    );
+    let copied_long = handle(
+        &s,
+        req(
+            "POST",
+            &format!("/storage/v1/b/{BUCKET}/o/a%2Fb.txt/copyTo/b/{BUCKET}/o/long-copied.txt"),
+            &owner,
+            b"",
+        ),
+    );
+    assert_eq!(copied_long.status, 200);
+    assert_eq!(json_body(&copied_long)["name"], "long-copied.txt");
     let r = handle(
         &s,
         req(
@@ -840,6 +959,57 @@ fn json_api_dialect_for_the_admin_sdk() {
     );
     assert_eq!(r.status, 404);
     assert!(json_body(&r)["error"]["errors"].is_array());
+}
+
+#[test]
+fn strict_json_list_rejects_filters_it_cannot_apply() {
+    // https://cloud.google.com/storage/docs/json_api/v1/objects/list
+    let strict = state(None);
+    let emulator = state_with(None, TokenAcceptance::EmulatorMock);
+    let uploaded = handle(
+        &strict,
+        req(
+            "POST",
+            &format!("/upload/storage/v1/b/{BUCKET}/o?uploadType=media&name=current.txt"),
+            &[],
+            b"current",
+        ),
+    );
+    assert_eq!(uploaded.status, 200);
+    for filter in [
+        "matchGlob=*.txt",
+        "startOffset=b",
+        "endOffset=z",
+        "includeTrailingDelimiter=true",
+    ] {
+        let path = format!("/storage/v1/b/{BUCKET}/o?{filter}");
+        let rejected = handle(&strict, req("GET", &path, &[], b""));
+        assert_eq!(rejected.status, 400, "{filter}");
+        let compatible = handle(&emulator, req("GET", &path, &[], b""));
+        assert_eq!(compatible.status, 200, "{filter}");
+    }
+    for filter in [
+        "versions=false",
+        "versions=true",
+        "includeTrailingDelimiter=false",
+    ] {
+        let path = format!("/storage/v1/b/{BUCKET}/o?{filter}");
+        assert_eq!(handle(&strict, req("GET", &path, &[], b"")).status, 200);
+    }
+    let listed = |versions: &str| {
+        handle(
+            &strict,
+            req(
+                "GET",
+                &format!("/storage/v1/b/{BUCKET}/o?versions={versions}"),
+                &[],
+                b"",
+            ),
+        )
+    };
+    let current_only = listed("false");
+    assert_eq!(listed("true").body, current_only.body);
+    assert_eq!(json_body(&current_only)["items"][0]["name"], "current.txt");
 }
 
 #[test]
@@ -1065,11 +1235,9 @@ service firebase.storage {
         ),
     );
     assert_eq!(r.status, 403);
-    // The denial body is the official emulator's fixed envelope.
-    assert_eq!(
-        json_body(&r)["error"]["message"],
-        "Permission denied. No WRITE permission."
-    );
+    // The strict profile's denial body is production's (the emulator profile keeps the
+    // official emulator's `Permission denied. No WRITE permission.`).
+    assert_eq!(json_body(&r)["error"]["message"], "Permission denied.");
     let r = handle(
         &s,
         req(
@@ -1170,7 +1338,8 @@ service firebase.storage {
         .status,
         403
     );
-    // Admin credentials bypass the rules; a forged token is unauthenticated.
+    // Admin credentials bypass the rules; a value that is not a token at all is an anonymous
+    // caller, so the rules refuse it (production, stage 3 v9: `token-malformed` answers 403).
     assert_eq!(
         handle(
             &s,
@@ -1195,7 +1364,7 @@ service firebase.storage {
             )
         )
         .status,
-        401
+        403
     );
 }
 
@@ -1542,6 +1711,2048 @@ service firebase.storage {
     assert_eq!(json_body(&r)["cacheControl"], "no-cache");
 }
 
+/// Both profiles: a media upload with no custom metadata and no `Authorization` header.
+fn anonymous_media_upload(s: &StorageState, path: &str) -> u16 {
+    handle(
+        s,
+        req(
+            "POST",
+            &format!(
+                "/v0/b/{BUCKET}/o?name={}&uploadType=media",
+                path.replace('/', "%2F")
+            ),
+            &[("content-type", "text/plain")],
+            b"hello",
+        ),
+    )
+    .status
+}
+
+const BOTH_PROFILES: [TokenAcceptance; 2] =
+    [TokenAcceptance::Verified, TokenAcceptance::EmulatorMock];
+
+/// An upload over an existing object is the rules method `create`, in both profiles: production
+/// was measured (stage 3 v9, `method-create-upload-present` 200 and `method-update-upload-present`
+/// 403; `state-upload-create-present` and `state-upload-update-present` agree), and so is the
+/// official emulator, whose upload path hard-codes the create method.
+#[test]
+fn an_upload_over_an_existing_object_is_a_create_for_the_rules_in_both_profiles() {
+    for acceptance in BOTH_PROFILES {
+        let create_only = state_with(
+            Some(
+                "rules_version = '2'; service firebase.storage { match /b/{bucket}/o { match /{path=**} { allow read, create: if true; allow update: if false; } } }",
+            ),
+            acceptance,
+        );
+        assert_eq!(
+            anonymous_media_upload(&create_only, "o.txt"),
+            200,
+            "{acceptance:?}"
+        );
+        assert_eq!(
+            anonymous_media_upload(&create_only, "o.txt"),
+            200,
+            "{acceptance:?}: the second upload is a create as well"
+        );
+
+        let update_only = state_with(
+            Some(
+                "rules_version = '2'; service firebase.storage { match /b/{bucket}/o { match /{path=**} { allow read, update: if true; allow create: if false; } } }",
+            ),
+            acceptance,
+        );
+        assert_eq!(
+            upload_as(&update_only, "o.txt", "Bearer owner"),
+            200,
+            "{acceptance:?}: the owner bypasses the rules and seeds the object"
+        );
+        assert_eq!(
+            anonymous_media_upload(&update_only, "o.txt"),
+            403,
+            "{acceptance:?}: an overwrite is not an update"
+        );
+    }
+}
+
+/// A Firebase v0 `PATCH` of an absent object is refused as a write, never reported as
+/// missing, for every caller: production answered 403 to the anonymous caller
+/// (`method-update-patch-absent`, `method-write-patch-absent`, `stored-null-true-patch-absent`,
+/// `precedence-control-absent-firebase-valid`) and to the owner
+/// (`boundary-firebase-admin-patch-absent`).
+#[test]
+fn a_v0_patch_of_an_absent_object_answers_403_in_both_profiles() {
+    for acceptance in BOTH_PROFILES {
+        let s = state_with(Some(ALLOW_ALL_RULES), acceptance);
+        for authorization in [None, Some("Bearer owner")] {
+            let mut headers = vec![("content-type", "application/json")];
+            if let Some(value) = authorization {
+                headers.push(("authorization", value));
+            }
+            let r = handle(
+                &s,
+                req(
+                    "PATCH",
+                    &format!("/v0/b/{BUCKET}/o/absent.txt"),
+                    &headers,
+                    br#"{"cacheControl": "no-cache"}"#,
+                ),
+            );
+            assert_eq!(
+                r.status,
+                403,
+                "{acceptance:?} {authorization:?}: {}",
+                String::from_utf8_lossy(&r.body)
+            );
+        }
+    }
+}
+
+/// Production evaluates an upload that carries no custom metadata against
+/// `request.resource.metadata == null`, so a rule that reads the map (`"owner" in
+/// request.resource.metadata`) fails and denies (stage 3 v9, `incoming-upload-simple-metadata-true`:
+/// 403, and the object stays absent). The official emulator builds an empty map and the rule
+/// passes; the emulator profile keeps that answer (a published divergence).
+#[test]
+fn an_upload_without_custom_metadata_has_null_request_metadata_only_in_the_strict_profile() {
+    const RULES: &str = "rules_version = '2'; service firebase.storage { match /b/{bucket}/o { match /{path=**} { allow read; allow create: if request.resource != null && !(\"owner\" in request.resource.metadata); } } }";
+    let strict = state_with(Some(RULES), TokenAcceptance::Verified);
+    assert_eq!(anonymous_media_upload(&strict, "plain.txt"), 403);
+    assert_eq!(
+        handle(
+            &strict,
+            req(
+                "GET",
+                &format!("/v0/b/{BUCKET}/o/plain.txt"),
+                &[("authorization", "Bearer owner")],
+                b"",
+            ),
+        )
+        .status,
+        404,
+        "the denied upload leaves nothing behind"
+    );
+
+    let emulator = state_with(Some(RULES), TokenAcceptance::EmulatorMock);
+    assert_eq!(anonymous_media_upload(&emulator, "plain.txt"), 200);
+
+    // Custom metadata makes `request.resource.metadata` a map in both profiles.
+    let (ct, body) = multipart(
+        &json!({"contentType": "text/plain", "metadata": {"other": "x"}}),
+        "text/plain",
+        b"hi",
+    );
+    for (state, name) in [(&strict, "custom.txt"), (&emulator, "custom.txt")] {
+        let r = handle(
+            state,
+            req(
+                "POST",
+                &format!("/v0/b/{BUCKET}/o?name={name}&uploadType=multipart"),
+                &[
+                    ("content-type", &ct),
+                    ("x-goog-upload-protocol", "multipart"),
+                ],
+                &body,
+            ),
+        );
+        assert_eq!(r.status, 200, "{}", String::from_utf8_lossy(&r.body));
+    }
+}
+
+/// Production's recorded refusal bytes (stage 3 v9, every `Permission denied.` subject row of
+/// recordings c and d: 192 rows, one body): two-space pretty JSON, `application/json; charset=UTF-8`.
+const PRODUCTION_DENIED_BODY: &str =
+    "{\n  \"error\": {\n    \"code\": 403,\n    \"message\": \"Permission denied.\"\n  }\n}";
+const PRODUCTION_LIST_V1_BODY: &str = "{\n  \"error\": {\n    \"code\": 400,\n    \"message\": \"Listing objects in a bucket is disallowed for rules_version = \\\"1\\\".\\nPlease update storage security rules to rules_version = \\\"2\\\" to use list.\"\n  }\n}";
+
+/// Strict answers a rules refusal with production's exact status, content type and body; the
+/// emulator profile keeps the official emulator's wording (`Permission denied. No WRITE
+/// permission.`), a published body divergence.
+#[test]
+fn strict_refusals_carry_production_bytes_and_the_emulator_profile_the_official_wording() {
+    const DENY: &str = "rules_version = '2'; service firebase.storage { match /b/{bucket}/o { match /{path=**} { allow read, write: if false; } } }";
+    const V1_LIST: &str =
+        "service firebase.storage { match /b/{bucket}/o { match /{allPaths=**} { allow read; } } }";
+    let denied = |acceptance, authorization: Option<&str>| {
+        let s = state_with(Some(DENY), acceptance);
+        let mut headers = vec![("content-type", "text/plain")];
+        if let Some(value) = authorization {
+            headers.push(("authorization", value));
+        }
+        handle(
+            &s,
+            req(
+                "POST",
+                &format!("/v0/b/{BUCKET}/o?name=o.txt&uploadType=media"),
+                &headers,
+                b"hello",
+            ),
+        )
+    };
+    let strict = denied(TokenAcceptance::Verified, None);
+    assert_eq!(strict.status, 403);
+    assert_eq!(
+        header(&strict, "content-type"),
+        Some("application/json; charset=UTF-8")
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&strict.body),
+        PRODUCTION_DENIED_BODY
+    );
+
+    let emulator = denied(TokenAcceptance::EmulatorMock, None);
+    assert_eq!(emulator.status, 403);
+    assert_eq!(
+        json_body(&emulator)["error"]["message"],
+        "Permission denied. No WRITE permission."
+    );
+
+    // A token of another project under strict carries the same bytes.
+    let foreign = format!("Firebase {}", mock_user_token("alice", "demo-other"));
+    let foreign = denied(TokenAcceptance::Verified, Some(&foreign));
+    assert_eq!(foreign.status, 403);
+    assert_eq!(
+        header(&foreign, "content-type"),
+        Some("application/json; charset=UTF-8")
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&foreign.body),
+        PRODUCTION_DENIED_BODY
+    );
+
+    // So does a metadata PATCH of an absent object, and a list under rules_version 1.
+    let strict_state = state_with(Some(ALLOW_ALL_RULES), TokenAcceptance::Verified);
+    let patch = handle(
+        &strict_state,
+        req(
+            "PATCH",
+            &format!("/v0/b/{BUCKET}/o/absent.txt"),
+            &[("content-type", "application/json")],
+            b"{}",
+        ),
+    );
+    assert_eq!(patch.status, 403);
+    assert_eq!(String::from_utf8_lossy(&patch.body), PRODUCTION_DENIED_BODY);
+    for (acceptance, exact) in [
+        (TokenAcceptance::Verified, true),
+        (TokenAcceptance::EmulatorMock, false),
+    ] {
+        let s = state_with(Some(V1_LIST), acceptance);
+        let list = handle(&s, req("GET", &format!("/v0/b/{BUCKET}/o"), &[], b""));
+        assert_eq!(list.status, 400);
+        if exact {
+            assert_eq!(
+                header(&list, "content-type"),
+                Some("application/json; charset=UTF-8")
+            );
+            assert_eq!(String::from_utf8_lossy(&list.body), PRODUCTION_LIST_V1_BODY);
+        } else {
+            assert_eq!(
+                json_body(&list),
+                serde_json::from_str::<Value>(PRODUCTION_LIST_V1_BODY).unwrap()
+            );
+        }
+    }
+}
+
+/// The recorded production body of the four `precedence-*-gcs-malformed-*` rows (stage 3 v9).
+const PRODUCTION_INVALID_CREDENTIALS_BODY: &str = "{\n  \"error\": {\n    \"code\": 401,\n    \"message\": \"Invalid Credentials\",\n    \"errors\": [\n      {\n        \"message\": \"Invalid Credentials\",\n        \"domain\": \"global\",\n        \"reason\": \"authError\",\n        \"locationType\": \"header\",\n        \"location\": \"Authorization\"\n      }\n    ]\n  }\n}\n";
+
+/// Strict refuses a malformed `Bearer` credential on the Cloud Storage JSON API PATCH with
+/// production's recorded 401 (status, content type, headers that were not redacted, body), before
+/// the body or the object is read; the emulator profile ignores the credential as the official
+/// emulator does, and so does every route production was not recorded refusing it on.
+#[test]
+fn strict_refuses_a_malformed_bearer_on_the_json_api_patch_as_production_does() {
+    assert_eq!(
+        PRODUCTION_INVALID_CREDENTIALS_BODY.len(),
+        285,
+        "the recorded Content-Length, a final line feed included"
+    );
+    let patch = |s: &StorageState, path: &str, authorization: Option<&str>, body: &[u8]| {
+        let mut headers = vec![("content-type", "application/json")];
+        if let Some(value) = authorization {
+            headers.push(("authorization", value));
+        }
+        handle(s, req("PATCH", path, &headers, body))
+    };
+    let malformed = "Bearer ya29.abcdefghijklmnopqrstuvwx";
+    let strict = state_with(Some(ALLOW_ALL_RULES), TokenAcceptance::Verified);
+    assert_eq!(
+        anonymous_media_upload(&strict, "present.txt"),
+        200,
+        "the object the present rows patch"
+    );
+    let gcs = |name: &str| format!("/storage/v1/b/{BUCKET}/o/{name}");
+    for (name, body) in [
+        ("present.txt", br#"{"cacheControl": "no-store"}"# as &[u8]),
+        ("present.txt", b"{not json"),
+        ("absent.txt", br#"{"cacheControl": "no-store"}"#),
+        ("absent.txt", b"{not json"),
+    ] {
+        let r = patch(&strict, &gcs(name), Some(malformed), body);
+        assert_eq!(r.status, 401, "{name} {}", String::from_utf8_lossy(body));
+        assert_eq!(
+            String::from_utf8_lossy(&r.body),
+            PRODUCTION_INVALID_CREDENTIALS_BODY
+        );
+        assert_eq!(
+            header(&r, "content-type"),
+            Some("application/json; charset=UTF-8")
+        );
+        assert_eq!(
+            header(&r, "cache-control"),
+            Some("no-cache, no-store, max-age=0, must-revalidate")
+        );
+        assert_eq!(header(&r, "expires"), Some("Mon, 01 Jan 1990 00:00:00 GMT"));
+        let vary: Vec<&str> = r
+            .headers
+            .iter()
+            .filter(|(k, _)| k == "vary")
+            .map(|(_, v)| v.as_str())
+            .collect();
+        assert_eq!(vary, ["Origin", "X-Origin"]);
+    }
+    // The emulator's owner credential is the valid one; the object was not touched above.
+    let r = patch(
+        &strict,
+        &gcs("present.txt"),
+        Some("Bearer owner"),
+        br#"{"cacheControl": "no-store"}"#,
+    );
+    assert_eq!(r.status, 200, "{}", String::from_utf8_lossy(&r.body));
+    assert_eq!(json_body(&r)["cacheControl"], "no-store");
+    // Not recorded, so not refused: no credential, the short spelling and another method.
+    assert_ne!(patch(&strict, &gcs("present.txt"), None, b"{}").status, 401);
+    assert_ne!(
+        patch(
+            &strict,
+            &format!("/b/{BUCKET}/o/present.txt"),
+            Some(malformed),
+            b"{}"
+        )
+        .status,
+        401
+    );
+    let get = handle(
+        &strict,
+        req(
+            "GET",
+            &gcs("present.txt"),
+            &[("authorization", malformed)],
+            b"",
+        ),
+    );
+    assert_ne!(get.status, 401);
+    // The emulator profile ignores the credential, as the official emulator does.
+    let emulator = state_with(Some(ALLOW_ALL_RULES), TokenAcceptance::EmulatorMock);
+    assert_eq!(anonymous_media_upload(&emulator, "present.txt"), 200);
+    let r = patch(
+        &emulator,
+        &gcs("present.txt"),
+        Some(malformed),
+        br#"{"cacheControl": "no-store"}"#,
+    );
+    assert_eq!(r.status, 200, "{}", String::from_utf8_lossy(&r.body));
+}
+
+/// Object timestamps carry exactly three fractional digits in both dialects, cut (not rounded)
+/// from the logical clock's nanoseconds, as production writes them (recorded, stage 3 v9:
+/// `2026-09-30T10:58:30.639Z` on every `timeCreated`, `updated` and `timeFinalized`).
+#[test]
+fn object_timestamps_have_millisecond_precision_in_both_dialects() {
+    for acceptance in BOTH_PROFILES {
+        let s = state_with(Some(ALLOW_ALL_RULES), acceptance);
+        s.clock
+            .lock()
+            .unwrap()
+            .set(LogicalInstant::from_nanos(START.as_nanos() + 987_654_321))
+            .unwrap();
+        assert_eq!(anonymous_media_upload(&s, "t.txt"), 200);
+        let shape = |value: &Value| {
+            let text = value.as_str().unwrap().to_owned();
+            assert_eq!(text.len(), 24, "{text}");
+            assert_eq!(&text[19..20], ".", "{text}");
+            assert_eq!(&text[19..], ".987Z", "{acceptance:?}: {text}");
+        };
+        let firebase = handle(&s, req("GET", &format!("/v0/b/{BUCKET}/o/t.txt"), &[], b""));
+        let firebase = json_body(&firebase);
+        shape(&firebase["timeCreated"]);
+        shape(&firebase["updated"]);
+        let gcs = handle(
+            &s,
+            req(
+                "GET",
+                &format!("/storage/v1/b/{BUCKET}/o/t.txt"),
+                &[("authorization", "Bearer owner")],
+                b"",
+            ),
+        );
+        let gcs = json_body(&gcs);
+        shape(&gcs["timeCreated"]);
+        shape(&gcs["updated"]);
+        shape(&gcs["timeStorageClassUpdated"]);
+        shape(&gcs["timeFinalized"]);
+        assert_eq!(gcs["timeFinalized"], gcs["timeCreated"]);
+        assert!(
+            firebase.get("timeFinalized").is_none(),
+            "the Firebase dialect never carried it"
+        );
+    }
+}
+
+/// The Firebase dialect spells `crc32c` in base64, as production answers it (recorded, stage 3 v9:
+/// `12ox+Q==` and `jxTouw==` for the recorder's four-byte objects), on uploads, metadata reads and
+/// updates; the official emulator's decimal spelling stays in the rules.
+#[test]
+fn the_firebase_dialect_spells_crc32c_in_base64_on_every_answer() {
+    for acceptance in BOTH_PROFILES {
+        let s = state_with(Some(ALLOW_ALL_RULES), acceptance);
+        let upload = handle(
+            &s,
+            req(
+                "POST",
+                &format!("/v0/b/{BUCKET}/o?name=c.txt&uploadType=media"),
+                &[("content-type", "text/plain")],
+                b"abc",
+            ),
+        );
+        assert_eq!(json_body(&upload)["crc32c"], "Nks/tw==");
+        let read = handle(&s, req("GET", &format!("/v0/b/{BUCKET}/o/c.txt"), &[], b""));
+        assert_eq!(json_body(&read)["crc32c"], "Nks/tw==");
+        let patch = handle(
+            &s,
+            req(
+                "PATCH",
+                &format!("/v0/b/{BUCKET}/o/c.txt"),
+                &[("content-type", "application/json")],
+                br#"{"cacheControl": "no-cache"}"#,
+            ),
+        );
+        assert_eq!(json_body(&patch)["crc32c"], "Nks/tw==");
+    }
+}
+
+/// The Firebase dialect mints a download token on the first metadata read of an object that has
+/// none, never on a media read (recorded, stage 3 v9: after `get-media` the object keeps
+/// metageneration 2 and no token; after `get-metadata` it has a token and metageneration 3). The
+/// official emulator mints on both.
+#[test]
+fn only_a_metadata_read_mints_the_first_download_token() {
+    for acceptance in BOTH_PROFILES {
+        let s = state_with(Some(ALLOW_ALL_RULES), acceptance);
+        let seeded = handle(
+            &s,
+            req(
+                "POST",
+                &format!("/upload/storage/v1/b/{BUCKET}/o?name=m.txt&uploadType=media"),
+                &[
+                    ("authorization", "Bearer owner"),
+                    ("content-type", "text/plain"),
+                ],
+                b"hello",
+            ),
+        );
+        assert_eq!(
+            seeded.status,
+            200,
+            "{}",
+            String::from_utf8_lossy(&seeded.body)
+        );
+        let gcs_meta = || {
+            json_body(&handle(
+                &s,
+                req(
+                    "GET",
+                    &format!("/storage/v1/b/{BUCKET}/o/m.txt"),
+                    &[("authorization", "Bearer owner")],
+                    b"",
+                ),
+            ))
+        };
+        assert_eq!(gcs_meta()["metageneration"], "1");
+        let media = handle(
+            &s,
+            req(
+                "GET",
+                &format!("/v0/b/{BUCKET}/o/m.txt?alt=media"),
+                &[],
+                b"",
+            ),
+        );
+        assert_eq!(media.status, 200);
+        let after_media = gcs_meta();
+        assert_eq!(after_media["metageneration"], "1", "{acceptance:?}");
+        assert!(after_media.get("metadata").is_none(), "no token minted");
+        let metadata = handle(&s, req("GET", &format!("/v0/b/{BUCKET}/o/m.txt"), &[], b""));
+        let metadata = json_body(&metadata);
+        assert_eq!(metadata["metageneration"], "2");
+        assert!(!metadata["downloadTokens"].as_str().unwrap().is_empty());
+        assert_eq!(gcs_meta()["metageneration"], "2");
+    }
+}
+
+/// The Firebase dialect writes `downloadTokens` only for an object that has a token and
+/// `metadata` only when a custom key is set (recorded, stage 3 v9: a v0 upload with no custom
+/// metadata answers a token and no `metadata`; a v0 PATCH of an object that was never read
+/// answers no `downloadTokens`; an empty map is never written).
+#[test]
+fn the_firebase_dialect_omits_empty_metadata_and_absent_tokens() {
+    for acceptance in BOTH_PROFILES {
+        let s = state_with(Some(ALLOW_ALL_RULES), acceptance);
+        let uploaded = json_body(&handle(
+            &s,
+            req(
+                "POST",
+                &format!("/v0/b/{BUCKET}/o?name=e.txt&uploadType=media"),
+                &[("content-type", "text/plain")],
+                b"hello",
+            ),
+        ));
+        assert!(!uploaded["downloadTokens"].as_str().unwrap().is_empty());
+        assert!(
+            uploaded.get("metadata").is_none(),
+            "{acceptance:?}: {uploaded}"
+        );
+
+        let seeded = handle(
+            &s,
+            req(
+                "POST",
+                &format!("/upload/storage/v1/b/{BUCKET}/o?name=g.txt&uploadType=media"),
+                &[
+                    ("authorization", "Bearer owner"),
+                    ("content-type", "text/plain"),
+                ],
+                b"hello",
+            ),
+        );
+        assert_eq!(seeded.status, 200);
+        let patch = |name: &str, body: &[u8]| {
+            json_body(&handle(
+                &s,
+                req(
+                    "PATCH",
+                    &format!("/v0/b/{BUCKET}/o/{name}"),
+                    &[("content-type", "application/json")],
+                    body,
+                ),
+            ))
+        };
+        let with_key = patch("g.txt", br#"{"metadata": {"owner": "new"}}"#);
+        assert!(with_key.get("downloadTokens").is_none(), "{with_key}");
+        assert_eq!(with_key["metadata"], json!({"owner": "new"}));
+        let cleared = patch("g.txt", br#"{"metadata": null}"#);
+        assert!(cleared.get("metadata").is_none(), "{cleared}");
+        let empty = patch("g.txt", br#"{"metadata": {}}"#);
+        assert!(empty.get("metadata").is_none(), "{empty}");
+    }
+}
+
+/// An absent object answers the recorded `Not Found.` JSON on a Firebase read or delete in both
+/// profiles (stage 3 v9: 15 rows, `application/json; charset=UTF-8`).
+#[test]
+fn an_absent_firebase_object_answers_the_recorded_json_not_found() {
+    const NOT_FOUND: &str =
+        "{\n  \"error\": {\n    \"code\": 404,\n    \"message\": \"Not Found.\"\n  }\n}";
+    for acceptance in BOTH_PROFILES {
+        let s = state_with(Some(ALLOW_ALL_RULES), acceptance);
+        for (method, path) in [
+            ("GET", format!("/v0/b/{BUCKET}/o/absent.txt")),
+            ("GET", format!("/v0/b/{BUCKET}/o/absent.txt?alt=media")),
+            ("DELETE", format!("/v0/b/{BUCKET}/o/absent.txt")),
+        ] {
+            let r = handle(&s, req(method, &path, &[], b""));
+            assert_eq!(r.status, 404, "{acceptance:?} {method} {path}");
+            assert_eq!(String::from_utf8_lossy(&r.body), NOT_FOUND);
+            assert_eq!(
+                header(&r, "content-type"),
+                Some("application/json; charset=UTF-8")
+            );
+        }
+    }
+}
+
+/// A PATCH body that is not JSON is refused with production's recorded bytes (stage 3 v9, the body
+/// `{` on an absent and a present object): `Parser Error` on the Firebase dialect, the parser's
+/// `Parse Error: ...` with the repeated `errors` entry on the JSON API, in both profiles.
+#[test]
+fn a_malformed_patch_body_answers_the_recorded_parser_errors() {
+    const FIREBASE: &str =
+        "{\n  \"error\": {\n    \"code\": 400,\n    \"message\": \"Parser Error\"\n  }\n}";
+    const GCS: &str = "{\n  \"error\": {\n    \"code\": 400,\n    \"message\": \"Parse Error: Unexpected end of string. Expected an object key or }.\\n\\n^\",\n    \"errors\": [\n      {\n        \"message\": \"Parse Error: Unexpected end of string. Expected an object key or }.\\n\\n^\",\n        \"domain\": \"global\",\n        \"reason\": \"invalid\"\n      }\n    ]\n  }\n}\n";
+    // Recorded: 67 bytes for the Express answer, 318 for the Google-fronted one (a final line feed).
+    assert_eq!((FIREBASE.len(), GCS.len()), (67, 318));
+    for acceptance in BOTH_PROFILES {
+        let s = state_with(Some(ALLOW_ALL_RULES), acceptance);
+        assert_eq!(anonymous_media_upload(&s, "p.txt"), 200);
+        for (path, authorization, expected) in [
+            (format!("/v0/b/{BUCKET}/o/p.txt"), "Bearer owner", FIREBASE),
+            (
+                format!("/v0/b/{BUCKET}/o/absent.txt"),
+                "Bearer owner",
+                FIREBASE,
+            ),
+            (
+                format!("/storage/v1/b/{BUCKET}/o/p.txt"),
+                "Bearer owner",
+                GCS,
+            ),
+            (
+                format!("/storage/v1/b/{BUCKET}/o/absent.txt"),
+                "Bearer owner",
+                GCS,
+            ),
+        ] {
+            let r = handle(
+                &s,
+                req(
+                    "PATCH",
+                    &path,
+                    &[
+                        ("authorization", authorization),
+                        ("content-type", "application/json"),
+                    ],
+                    b"{",
+                ),
+            );
+            assert_eq!(r.status, 400, "{acceptance:?} {path}");
+            assert_eq!(String::from_utf8_lossy(&r.body), expected, "{path}");
+            assert_eq!(
+                header(&r, "content-type"),
+                Some("application/json; charset=UTF-8")
+            );
+        }
+    }
+}
+
+/// The resumable start answers no body, and cancelling a finished session answers the recorded
+/// text (stage 3 v9: `Content-Length: 0` for every start, `Upload has already been finalized.`
+/// for the four cancels after a denied session), in both profiles.
+#[test]
+fn resumable_start_has_no_body_and_a_late_cancel_says_why() {
+    const DENY: &str = "rules_version = '2'; service firebase.storage { match /b/{bucket}/o { match /{path=**} { allow read, write: if false; } } }";
+    for acceptance in BOTH_PROFILES {
+        let s = state_with(Some(DENY), acceptance);
+        let start = handle(
+            &s,
+            req(
+                "POST",
+                &format!("/v0/b/{BUCKET}/o?name=r.txt"),
+                &[
+                    ("authorization", "Bearer owner"),
+                    ("x-goog-upload-protocol", "resumable"),
+                    ("x-goog-upload-command", "start"),
+                ],
+                b"{}",
+            ),
+        );
+        assert_eq!(start.status, 200);
+        assert!(start.body.is_empty(), "{acceptance:?}");
+        assert_eq!(
+            header(&start, "content-type"),
+            Some("text/plain; charset=utf-8")
+        );
+        let session = header(&start, "x-goog-upload-url")
+            .unwrap()
+            .strip_prefix("http://127.0.0.1:9199")
+            .unwrap()
+            .to_owned();
+        // An anonymous caller is refused at finalization, which ends the session.
+        let anonymous = format!("/v0/b/{BUCKET}/o?name=a.txt");
+        let start = handle(
+            &s,
+            req(
+                "POST",
+                &anonymous,
+                &[
+                    ("x-goog-upload-protocol", "resumable"),
+                    ("x-goog-upload-command", "start"),
+                ],
+                b"{}",
+            ),
+        );
+        let denied_session = header(&start, "x-goog-upload-url")
+            .unwrap()
+            .strip_prefix("http://127.0.0.1:9199")
+            .unwrap()
+            .to_owned();
+        let finalize = handle(
+            &s,
+            req(
+                "POST",
+                &denied_session,
+                &[
+                    ("x-goog-upload-command", "upload, finalize"),
+                    ("x-goog-upload-offset", "0"),
+                ],
+                b"hello",
+            ),
+        );
+        assert_eq!(finalize.status, 403);
+        let cancel = handle(
+            &s,
+            req(
+                "POST",
+                &denied_session,
+                &[("x-goog-upload-command", "cancel")],
+                b"",
+            ),
+        );
+        assert_eq!(cancel.status, 400);
+        assert_eq!(
+            String::from_utf8_lossy(&cancel.body),
+            "Upload has already been finalized."
+        );
+        assert_eq!(
+            header(&cancel, "content-type"),
+            Some("text/plain; charset=utf-8")
+        );
+        // An active session still cancels cleanly.
+        let cancel = handle(
+            &s,
+            req(
+                "POST",
+                &session,
+                &[("x-goog-upload-command", "cancel")],
+                b"",
+            ),
+        );
+        assert_eq!(cancel.status, 200);
+    }
+}
+
+/// A Firebase-protocol upload that names no `contentDisposition` gets `inline` with the object's
+/// last path segment as its file name, in the answer and on later reads of both dialects
+/// (recorded, stage 3 v9: `inline; filename*=utf-8''object.bin`); one it names is kept.
+#[test]
+fn a_firebase_upload_defaults_the_content_disposition_to_inline_with_the_file_name() {
+    for acceptance in BOTH_PROFILES {
+        let s = state_with(Some(ALLOW_ALL_RULES), acceptance);
+        let upload = |name: &str| {
+            json_body(&handle(
+                &s,
+                req(
+                    "POST",
+                    &format!("/v0/b/{BUCKET}/o?name={name}&uploadType=media"),
+                    &[("content-type", "text/plain")],
+                    b"hello",
+                ),
+            ))
+        };
+        assert_eq!(
+            upload("object.bin")["contentDisposition"],
+            "inline; filename*=utf-8''object.bin"
+        );
+        assert_eq!(
+            upload("dir%2Fsub%20dir%2Fb%20c.txt")["contentDisposition"],
+            "inline; filename*=utf-8''b%20c.txt"
+        );
+        let gcs = json_body(&handle(
+            &s,
+            req(
+                "GET",
+                &format!("/storage/v1/b/{BUCKET}/o/object.bin"),
+                &[("authorization", "Bearer owner")],
+                b"",
+            ),
+        ));
+        assert_eq!(
+            gcs["contentDisposition"],
+            "inline; filename*=utf-8''object.bin"
+        );
+        let (ct, body) = multipart(
+            &json!({"contentType": "text/plain", "contentDisposition": "attachment"}),
+            "text/plain",
+            b"hi",
+        );
+        let named = handle(
+            &s,
+            req(
+                "POST",
+                &format!("/v0/b/{BUCKET}/o?name=named.txt&uploadType=multipart"),
+                &[
+                    ("content-type", &ct),
+                    ("x-goog-upload-protocol", "multipart"),
+                ],
+                &body,
+            ),
+        );
+        assert_eq!(json_body(&named)["contentDisposition"], "attachment");
+        // The download header: strict sends the stored value as production does (recorded), the
+        // emulator profile keeps the official shape and names the file once.
+        let media = handle(
+            &s,
+            req(
+                "GET",
+                &format!("/v0/b/{BUCKET}/o/object.bin?alt=media"),
+                &[],
+                b"",
+            ),
+        );
+        assert_eq!(
+            header(&media, "content-disposition"),
+            Some(if acceptance == TokenAcceptance::Verified {
+                "inline; filename*=utf-8''object.bin"
+            } else {
+                "inline; filename*=object.bin"
+            })
+        );
+    }
+}
+
+/// In both profiles a value that is no JWT is an anonymous caller (production, stage 3 v9: the rules'
+/// 403, and the parser's 400 first for a malformed PATCH body), and an ID token whose refresh tokens
+/// were revoked is still honoured on Storage (`token-revoked`: allowed).
+#[test]
+fn an_undecodable_bearer_is_anonymous_and_a_revoked_id_token_is_honoured() {
+    const AUTH_ONLY: &str = "rules_version = '2'; service firebase.storage { match /b/{bucket}/o { match /{path=**} { allow read, write: if request.auth != null; } } }";
+    for acceptance in BOTH_PROFILES {
+        let s = state_with(Some(AUTH_ONLY), acceptance);
+        assert_eq!(
+            upload_as(&s, "garbage.txt", "Firebase not-a-token"),
+            403,
+            "{acceptance:?}: anonymous, so the rule refuses"
+        );
+        let malformed = handle(
+            &s,
+            req(
+                "PATCH",
+                &format!("/v0/b/{BUCKET}/o/absent.txt"),
+                &[
+                    ("authorization", "Firebase not-a-token"),
+                    ("content-type", "application/json"),
+                ],
+                b"{",
+            ),
+        );
+        assert_eq!(malformed.status, 400, "{acceptance:?}");
+        assert_eq!(json_body(&malformed)["error"]["message"], "Parser Error");
+
+        let store = s.auth.default_store();
+        let (uid, token) = {
+            let mut store = store.lock().unwrap();
+            let uid = store
+                .create_user(NewUser::email("revoked@example.com"), START)
+                .unwrap();
+            let claims = store.id_token_claims(&uid, None, START).unwrap();
+            let token = format!(
+                "Firebase {}",
+                fireemu_core_auth::jwt::encode_unsigned(&claims)
+            );
+            (uid, token)
+        };
+        assert_eq!(upload_as(&s, "live.txt", &token), 200, "{acceptance:?}");
+        {
+            let revoked_at = LogicalInstant::from_nanos(START.as_nanos() + 10_000_000_000);
+            s.clock.lock().unwrap().set(revoked_at).unwrap();
+            store
+                .lock()
+                .unwrap()
+                .revoke_tokens(&uid, revoked_at)
+                .unwrap();
+        }
+        assert_eq!(
+            upload_as(&s, "revoked.txt", &token),
+            200,
+            "{acceptance:?}: Storage does not check revocation"
+        );
+    }
+}
+
+/// The resumable path evaluates `request.resource.metadata` the same way at finalization: null
+/// for a session that carries no custom metadata under strict, the official empty map under the
+/// emulator profile, and a map in both once a key is set.
+#[test]
+fn a_resumable_upload_without_custom_metadata_has_null_request_metadata_only_in_strict() {
+    const RULES: &str = "rules_version = '2'; service firebase.storage { match /b/{bucket}/o { match /{path=**} { allow read; allow create: if request.resource != null && !(\"owner\" in request.resource.metadata); } } }";
+    let finalize = |acceptance: TokenAcceptance, name: &str, start_body: &[u8]| {
+        let s = state_with(Some(RULES), acceptance);
+        let start = handle(
+            &s,
+            req(
+                "POST",
+                &format!("/v0/b/{BUCKET}/o?name={name}"),
+                &[
+                    ("x-goog-upload-protocol", "resumable"),
+                    ("x-goog-upload-command", "start"),
+                ],
+                start_body,
+            ),
+        );
+        let session = header(&start, "x-goog-upload-url")
+            .unwrap()
+            .strip_prefix("http://127.0.0.1:9199")
+            .unwrap()
+            .to_owned();
+        handle(
+            &s,
+            req(
+                "POST",
+                &session,
+                &[
+                    ("x-goog-upload-command", "upload, finalize"),
+                    ("x-goog-upload-offset", "0"),
+                ],
+                b"hello",
+            ),
+        )
+        .status
+    };
+    assert_eq!(finalize(TokenAcceptance::Verified, "r.txt", b"{}"), 403);
+    assert_eq!(finalize(TokenAcceptance::EmulatorMock, "r.txt", b"{}"), 200);
+    let with_key = br#"{"metadata": {"other": "x"}}"#;
+    assert_eq!(finalize(TokenAcceptance::Verified, "k.txt", with_key), 200);
+    assert_eq!(
+        finalize(TokenAcceptance::EmulatorMock, "k.txt", with_key),
+        200
+    );
+}
+
+/// The JSON API resumable session: the start has no body and repeats its query in the session URL,
+/// a status query before any byte is a 308 without `Range`, the cancel (`DELETE` on the session
+/// URL) answers 499 and so does a status query after it (recorded, STORAGE-OBJECT probe-v2,
+/// 2026-09-30: 224-byte `clientClosedRequest` body, `application/json; charset=UTF-8`), in both
+/// profiles.
+#[test]
+fn a_json_api_session_cancel_answers_the_recorded_499() {
+    const BODY: &str = "{\n  \"error\": {\n    \"code\": 499,\n    \"message\": \"clientClosedRequest\",\n    \"errors\": [\n      {\n        \"message\": \"clientClosedRequest\",\n        \"domain\": \"global\",\n        \"reason\": \"clientClosedRequest\"\n      }\n    ]\n  }\n}\n";
+    assert_eq!(BODY.len(), 224);
+    for acceptance in BOTH_PROFILES {
+        let s = state_with(Some(ALLOW_ALL_RULES), acceptance);
+        let owner = [("authorization", "Bearer owner")];
+        let start = handle(
+            &s,
+            req(
+                "POST",
+                &format!("/upload/storage/v1/b/{BUCKET}/o?uploadType=resumable&name=c.bin&ifGenerationMatch=0"),
+                &owner,
+                b"",
+            ),
+        );
+        assert_eq!(start.status, 200);
+        assert!(start.body.is_empty());
+        assert_eq!(
+            header(&start, "content-type"),
+            Some("text/plain; charset=utf-8")
+        );
+        let location = header(&start, "location").unwrap();
+        assert!(
+            location.contains("?uploadType=resumable&name=c.bin&ifGenerationMatch=0&upload_id="),
+            "{location}"
+        );
+        let session = location
+            .strip_prefix("http://127.0.0.1:9199")
+            .unwrap()
+            .to_owned();
+        let probe = |method: &str| {
+            handle(
+                &s,
+                req(
+                    method,
+                    &session,
+                    &[
+                        ("authorization", "Bearer owner"),
+                        ("content-range", "bytes */4"),
+                        ("content-length", "0"),
+                    ],
+                    b"",
+                ),
+            )
+        };
+        let before = probe("PUT");
+        assert_eq!(before.status, 308);
+        assert!(header(&before, "range").is_none());
+        assert!(before.body.is_empty());
+        for response in [
+            handle(&s, req("DELETE", &session, &owner, b"")),
+            probe("PUT"),
+        ] {
+            assert_eq!(response.status, 499, "{acceptance:?}");
+            assert_eq!(String::from_utf8_lossy(&response.body), BODY);
+            assert_eq!(
+                header(&response, "content-type"),
+                Some("application/json; charset=UTF-8")
+            );
+        }
+        // Nothing was published, and an unknown session is not found.
+        let absent = handle(
+            &s,
+            req(
+                "GET",
+                &format!("/storage/v1/b/{BUCKET}/o/c.bin"),
+                &owner,
+                b"",
+            ),
+        );
+        assert_eq!(absent.status, 404);
+        let unknown = handle(
+            &s,
+            req(
+                "DELETE",
+                &format!("/upload/storage/v1/b/{BUCKET}/o?uploadType=resumable&upload_id=nope"),
+                &owner,
+                b"",
+            ),
+        );
+        assert_eq!(unknown.status, 404);
+    }
+}
+
+/// A finalized JSON API session answers a status query with the committed object (the recovery
+/// path of a lost final response) but refuses a chunk sent into it.
+#[test]
+fn a_finalized_json_api_session_answers_status_queries_and_refuses_chunks() {
+    for acceptance in BOTH_PROFILES {
+        let s = state_with(Some(ALLOW_ALL_RULES), acceptance);
+        let owner = [("authorization", "Bearer owner")];
+        let start = handle(
+            &s,
+            req(
+                "POST",
+                &format!("/upload/storage/v1/b/{BUCKET}/o?uploadType=resumable&name=f.bin"),
+                &owner,
+                b"",
+            ),
+        );
+        let session = header(&start, "location")
+            .unwrap()
+            .strip_prefix("http://127.0.0.1:9199")
+            .unwrap()
+            .to_owned();
+        let put = |range: &str, body: &[u8]| {
+            handle(
+                &s,
+                req(
+                    "PUT",
+                    &session,
+                    &[("authorization", "Bearer owner"), ("content-range", range)],
+                    body,
+                ),
+            )
+        };
+        assert_eq!(put("bytes 0-3/4", b"abcd").status, 200);
+        let status = put("bytes */4", b"");
+        assert_eq!(status.status, 200, "{acceptance:?}");
+        assert_eq!(json_body(&status)["name"], "f.bin");
+        let refused = put("bytes 0-3/4", b"zzzz");
+        assert_eq!(refused.status, 400, "{acceptance:?}");
+        // Refused by the phase check, before any chunk is appended: the bare status text, not the
+        // store's JSON `upload already finalized`.
+        assert_eq!(String::from_utf8_lossy(&refused.body), "Bad Request");
+        assert_eq!(
+            header(&refused, "content-type"),
+            Some("text/plain; charset=utf-8")
+        );
+        // The phase check also comes before the bucket check: a chunk under another bucket's
+        // session URL is the same 400, not a 404.
+        let other = session.replace(BUCKET, "demo-other.appspot.com");
+        let elsewhere = handle(
+            &s,
+            req(
+                "PUT",
+                &other,
+                &[
+                    ("authorization", "Bearer owner"),
+                    ("content-range", "bytes 0-3/4"),
+                ],
+                b"zzzz",
+            ),
+        );
+        assert_eq!(elsewhere.status, 400, "{acceptance:?}");
+        assert_eq!(String::from_utf8_lossy(&elsewhere.body), "Bad Request");
+    }
+}
+
+/// Under strict only the recorded shape is an anonymous caller: `Firebase ` followed by a value
+/// without a dot (stage 3 v9: the recorded value is 32 base64url characters; production answered it
+/// as it answers no credential; the official emulator, measured with firebase-tools 15.28.2, also
+/// treats no dots, two and four segments as unauthenticated). Every other value that fails to
+/// decode stays a refusal under strict: two or four segments, `Bearer` on the Firebase dialect, a
+/// three-segment value with a tampered signature, an unknown key id or an unsupported algorithm,
+/// so none of them becomes a public caller. The emulator profile maps every decode failure to an
+/// anonymous caller (never to the claimed user), as before.
+#[test]
+fn strict_makes_only_the_recorded_shape_anonymous() {
+    const PUBLIC: &str = "rules_version = '2'; service firebase.storage { match /b/{bucket}/o { match /{path=**} { allow read, write: if true; } } }";
+    const AUTHED: &str = "rules_version = '2'; service firebase.storage { match /b/{bucket}/o { match /{path=**} { allow read, write: if request.auth != null; } } }";
+    let b64 = |text: &str| base64url_encode(text.as_bytes());
+    let payload = b64(
+        r#"{"iss":"https://securetoken.google.com/demo-app","aud":"demo-app","iat":0,"exp":3600,"sub":"u1","user_id":"u1"}"#,
+    );
+    let rs256 = b64(r#"{"alg":"RS256","kid":"unknown"}"#);
+    let none = b64(r#"{"alg":"none"}"#);
+    let dot_free = "abcdefghijklmnopqrstuvwxyz012345";
+    // (authorization, anonymous under strict)
+    let values: Vec<(String, bool)> = vec![
+        (format!("Firebase {dot_free}"), true),
+        ("Firebase x".to_owned(), true),
+        // Not recorded, so not loosened: `Firebase ` with nothing after it.
+        ("Firebase ".to_owned(), false),
+        (format!("Bearer {dot_free}"), false),
+        (format!("Firebase {none}.{payload}"), false),
+        (format!("Firebase {none}.{payload}..x"), false),
+        ("Firebase a.b".to_owned(), false),
+        ("Firebase a.b.c.d".to_owned(), false),
+        ("Firebase a.b.c".to_owned(), false),
+        (format!("Firebase {rs256}.{payload}.AAAAAAAAAAAA"), false),
+        (format!("Firebase {rs256}.{payload}."), false),
+        (format!("Firebase {none}.{}.", b64("not json")), false),
+    ];
+    for (authorization, anonymous) in &values {
+        for acceptance in BOTH_PROFILES {
+            let strict = acceptance == TokenAcceptance::Verified;
+            let expect_anonymous = *anonymous || !strict;
+            let public = state_with(Some(PUBLIC), acceptance);
+            let authed = state_with(Some(AUTHED), acceptance);
+            let (public_status, authed_status) = (
+                upload_as(&public, "p.txt", authorization),
+                upload_as(&authed, "p.txt", authorization),
+            );
+            if expect_anonymous {
+                assert_eq!(
+                    (public_status, authed_status),
+                    (200, 403),
+                    "{acceptance:?} {authorization}"
+                );
+            } else {
+                assert_eq!(
+                    (public_status, authed_status),
+                    (401, 401),
+                    "{acceptance:?} {authorization}"
+                );
+            }
+        }
+    }
+}
+
+/// Strict frames JSON answers as production does (stage 3 v9, compared headers and bytes): an
+/// uppercase charset on both dialects, the Google-fronted JSON API's error in its pretty layout
+/// with a final line feed, a bare `application/json` on its 204. The emulator profile keeps the
+/// official emulator's framing.
+#[test]
+fn strict_frames_json_answers_as_production_does_and_the_emulator_profile_as_the_official_one() {
+    let owner = [("authorization", "Bearer owner")];
+    let probe = |acceptance: TokenAcceptance| {
+        let s = state_with(Some(ALLOW_ALL_RULES), acceptance);
+        assert_eq!(anonymous_media_upload(&s, "f.txt"), 200);
+        let absent = handle(
+            &s,
+            req(
+                "GET",
+                &format!("/storage/v1/b/{BUCKET}/o/absent.txt"),
+                &owner,
+                b"",
+            ),
+        );
+        let present = handle(
+            &s,
+            req(
+                "GET",
+                &format!("/storage/v1/b/{BUCKET}/o/f.txt"),
+                &owner,
+                b"",
+            ),
+        );
+        let firebase = handle(&s, req("GET", &format!("/v0/b/{BUCKET}/o/f.txt"), &[], b""));
+        let deleted = handle(
+            &s,
+            req(
+                "DELETE",
+                &format!("/storage/v1/b/{BUCKET}/o/f.txt"),
+                &owner,
+                b"",
+            ),
+        );
+        (absent, present, firebase, deleted)
+    };
+    let (absent, present, firebase, deleted) = probe(TokenAcceptance::Verified);
+    assert_eq!(absent.status, 404);
+    assert_eq!(
+        String::from_utf8_lossy(&absent.body),
+        format!(
+            "{{\n  \"error\": {{\n    \"code\": 404,\n    \"message\": \"No such object: {BUCKET}/absent.txt\",\n    \"errors\": [\n      {{\n        \"message\": \"No such object: {BUCKET}/absent.txt\",\n        \"domain\": \"global\",\n        \"reason\": \"notFound\"\n      }}\n    ]\n  }}\n}}\n"
+        )
+    );
+    for response in [&absent, &present, &firebase] {
+        assert_eq!(
+            header(response, "content-type"),
+            Some("application/json; charset=UTF-8")
+        );
+    }
+    assert_eq!(deleted.status, 204);
+    assert_eq!(header(&deleted, "content-type"), Some("application/json"));
+    // Only the 204 gains a content type: a status query answers 308 without one, and a non-error
+    // JSON body is not rewritten.
+    let strict = state_with(Some(ALLOW_ALL_RULES), TokenAcceptance::Verified);
+    let start = handle(
+        &strict,
+        req(
+            "POST",
+            &format!("/upload/storage/v1/b/{BUCKET}/o?uploadType=resumable&name=r.bin"),
+            &owner,
+            b"",
+        ),
+    );
+    let session = header(&start, "location")
+        .unwrap()
+        .strip_prefix("http://127.0.0.1:9199")
+        .unwrap()
+        .to_owned();
+    let status = handle(
+        &strict,
+        req(
+            "PUT",
+            &session,
+            &[
+                ("authorization", "Bearer owner"),
+                ("content-range", "bytes */4"),
+            ],
+            b"",
+        ),
+    );
+    assert_eq!(status.status, 308);
+    assert!(header(&status, "content-type").is_none());
+    assert!(present.body.starts_with(b"{"));
+    assert!(
+        !present.body.starts_with(b"{\n"),
+        "an object resource is not an error layout"
+    );
+
+    let (absent, present, firebase, deleted) = probe(TokenAcceptance::EmulatorMock);
+    for response in [&absent, &present, &firebase] {
+        assert_eq!(
+            header(response, "content-type"),
+            Some("application/json; charset=utf-8")
+        );
+    }
+    assert!(
+        absent.body.len() < 200,
+        "the official emulator's compact body"
+    );
+    assert!(header(&deleted, "content-type").is_none());
+}
+
+/// Routing edges the JSON API keeps from the official router: the ACL stub answers, an unknown
+/// verb after an object is not a copy, and a single-byte range is served while a reversed one is
+/// ignored (whole object); strict answers an unsatisfiable range 416 on the XML-style route as on
+/// the others, the emulator profile serves the whole object.
+#[test]
+fn json_api_routing_and_range_edges() {
+    for acceptance in BOTH_PROFILES {
+        let s = state_with(Some(ALLOW_ALL_RULES), acceptance);
+        let owner = [("authorization", "Bearer owner")];
+        assert_eq!(anonymous_media_upload(&s, "f.txt"), 200);
+        let acl = handle(
+            &s,
+            req(
+                "POST",
+                &format!("/b/{BUCKET}/o/f.txt/acl"),
+                &owner,
+                br#"{"entity":"allUsers","role":"READER"}"#,
+            ),
+        );
+        assert_eq!(acl.status, 200, "{acceptance:?}");
+        assert_eq!(json_body(&acl)["kind"], "storage#objectAccessControl");
+        // `copyTo` and `rewriteTo` are the only verbs: anything else falls through to 501.
+        let other = handle(
+            &s,
+            req(
+                "POST",
+                &format!("/b/{BUCKET}/o/f.txt/moveTo/b/{BUCKET}/o/g.txt"),
+                &owner,
+                b"",
+            ),
+        );
+        assert_eq!(other.status, 501, "{acceptance:?}");
+        let get = |path: &str, range: &str| handle(&s, req("GET", path, &[("range", range)], b""));
+        let media = format!("/v0/b/{BUCKET}/o/f.txt?alt=media");
+        let one = get(&media, "bytes=2-2");
+        assert_eq!(one.status, 206, "{acceptance:?}");
+        assert_eq!(one.body.as_ref(), b"l");
+        assert_eq!(header(&one, "content-range"), Some("bytes 2-2/5"));
+        let reversed = get(&media, "bytes=3-1");
+        assert_eq!(reversed.status, 200, "{acceptance:?}");
+        assert_eq!(reversed.body.as_ref(), b"hello");
+        let xml = format!("/{BUCKET}/f.txt");
+        // The XML API's answers were not recorded: both profiles keep the official emulator's.
+        let beyond = get(&xml, "bytes=50-60");
+        assert_eq!(beyond.status, 200, "{acceptance:?}");
+        assert_eq!(beyond.body.as_ref(), b"hello");
+    }
+}
+
+/// The Firebase list answers `maxResults=0` with production's 400 under strict (recorded, lean-v4
+/// and lean-v5: `content-length: 97`, the two-space layout without a final line feed,
+/// `application/json; charset=UTF-8`); the emulator profile keeps the official
+/// emulator's 200 (measured, firebase-tools 15.28.2: an empty page), since it never refuses what
+/// the official emulator admits. An empty list is `{"prefixes":[],"items":[]}` with both keys.
+#[test]
+fn the_firebase_list_refuses_max_results_zero_only_under_strict_and_keeps_its_key_set() {
+    let route = format!("/v0/b/{BUCKET}/o?maxResults=0");
+    let strict = state_with(Some(ALLOW_ALL_RULES), TokenAcceptance::Verified);
+    let refused = handle(&strict, req("GET", &route, &[], b""));
+    assert_eq!(refused.status, 400);
+    assert_eq!(refused.body.len(), 97);
+    assert_eq!(
+        String::from_utf8_lossy(&refused.body),
+        "{\n  \"error\": {\n    \"code\": 400,\n    \"message\": \"Expect maxResults to be a positive number.\"\n  }\n}"
+    );
+    assert_eq!(
+        header(&refused, "content-type"),
+        Some("application/json; charset=UTF-8")
+    );
+    let emulator = state_with(Some(ALLOW_ALL_RULES), TokenAcceptance::EmulatorMock);
+    assert_eq!(handle(&emulator, req("GET", &route, &[], b"")).status, 200);
+    for state in [&strict, &emulator] {
+        let empty = handle(
+            state,
+            req("GET", &format!("/v0/b/{BUCKET}/o?maxResults=2"), &[], b""),
+        );
+        assert_eq!(empty.status, 200);
+        assert_eq!(json_body(&empty), json!({"prefixes": [], "items": []}));
+    }
+}
+
+const PRODUCTION_412_BODY: &str = "{\n  \"error\": {\n    \"code\": 412,\n    \"message\": \"At least one of the pre-conditions you specified did not hold.\",\n    \"errors\": [\n      {\n        \"message\": \"At least one of the pre-conditions you specified did not hold.\",\n        \"domain\": \"global\",\n        \"reason\": \"conditionNotMet\",\n        \"locationType\": \"header\",\n        \"location\": \"If-Match\"\n      }\n    ]\n  }\n}\n";
+
+/// The JSON API object guards as production answers them under strict (recorded, probe-v4,
+/// lean-v4 and lean-v5; the official emulator reads no preconditions, so the emulator profile
+/// ignores them, see the next test): a
+/// not-match guard that names the current value is a 304 without a body on PATCH, PUT, DELETE,
+/// upload and the reads; a match guard that does not hold, or whose value is the negative number
+/// `-1`, is the 412 body; a not-match guard of `-1` is accepted (a value that is no number at all
+/// is the 400 of the next test). `PUT` updates the metadata and answers the object resource with
+/// the metageneration one higher.
+#[test]
+#[allow(clippy::too_many_lines)]
+fn json_api_object_guards_and_put_answer_as_recorded() {
+    for acceptance in [TokenAcceptance::Verified] {
+        let s = state_with(Some(ALLOW_ALL_RULES), acceptance);
+        let object = format!("/storage/v1/b/{BUCKET}/o/g.bin");
+        let upload = |q: &str| {
+            handle(
+                &s,
+                req(
+                    "POST",
+                    &format!("/upload/storage/v1/b/{BUCKET}/o?uploadType=media&name=g.bin{q}"),
+                    &[
+                        ("authorization", "Bearer owner"),
+                        ("content-type", "application/octet-stream"),
+                    ],
+                    b"hello",
+                ),
+            )
+        };
+        let seeded = upload("&ifGenerationMatch=0");
+        assert_eq!(seeded.status, 200, "{acceptance:?}");
+        let generation = json_body(&seeded)["generation"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let call = |method: &str, q: &str, body: &[u8]| {
+            handle(
+                &s,
+                req(
+                    method,
+                    &format!("{object}?{q}"),
+                    &[
+                        ("authorization", "Bearer owner"),
+                        ("content-type", "application/json"),
+                    ],
+                    body,
+                ),
+            )
+        };
+        let body =
+            br#"{"contentType":"application/octet-stream","metadata":{"marker":"subject-update"}}"#;
+        // 304: no body, `application/json`, on every method; media reads say octet-stream.
+        for method in ["PATCH", "PUT"] {
+            let r = call(method, &format!("ifGenerationNotMatch={generation}"), body);
+            assert_eq!(r.status, 304, "{acceptance:?} {method}");
+            assert!(r.body.is_empty());
+            assert_eq!(header(&r, "content-type"), Some("application/json"));
+            let r = call(
+                method,
+                &format!("ifGenerationMatch={generation}&ifMetagenerationNotMatch=1"),
+                body,
+            );
+            assert_eq!(r.status, 304, "{acceptance:?} {method}");
+        }
+        let r = upload(&format!("&ifGenerationNotMatch={generation}"));
+        assert_eq!((r.status, r.body.len()), (304, 0), "{acceptance:?} upload");
+        assert_eq!(header(&r, "content-type"), Some("application/json"));
+        let r = call("DELETE", &format!("ifGenerationNotMatch={generation}"), b"");
+        assert_eq!((r.status, r.body.len()), (304, 0), "{acceptance:?} delete");
+        assert_eq!(header(&r, "content-type"), Some("application/json"));
+        let r = call("GET", &format!("ifGenerationNotMatch={generation}"), b"");
+        assert_eq!(r.status, 304);
+        assert_eq!(header(&r, "content-type"), Some("application/json"));
+        let r = call(
+            "GET",
+            &format!("alt=media&ifGenerationNotMatch={generation}"),
+            b"",
+        );
+        assert_eq!(r.status, 304);
+        assert_eq!(header(&r, "content-type"), Some("application/octet-stream"));
+        // 412: the recorded body for a match guard that does not hold or is not a number.
+        for (method, q) in [
+            ("PATCH", "ifGenerationMatch=999999".to_owned()),
+            (
+                "PUT",
+                format!("ifGenerationMatch={generation}&ifMetagenerationMatch=-1"),
+            ),
+            (
+                "DELETE",
+                format!("ifGenerationMatch={generation}&ifMetagenerationMatch=-1"),
+            ),
+            (
+                "GET",
+                format!("ifGenerationMatch={generation}&ifMetagenerationMatch=-1"),
+            ),
+            ("GET", "ifGenerationMatch=999999".to_owned()),
+        ] {
+            let r = call(method, &q, body);
+            assert_eq!(r.status, 412, "{acceptance:?} {method} {q}");
+            assert_eq!(String::from_utf8_lossy(&r.body), PRODUCTION_412_BODY);
+            assert_eq!(
+                header(&r, "content-type"),
+                Some("application/json; charset=UTF-8")
+            );
+        }
+        let r = call("GET", "alt=media&ifGenerationMatch=999999", b"");
+        assert_eq!(r.status, 412);
+        assert_eq!(
+            String::from_utf8_lossy(&r.body),
+            "At least one of the pre-conditions you specified did not hold."
+        );
+        assert!(header(&r, "content-type").unwrap().starts_with("text/html"));
+        // A not-match guard that is not a number is accepted: PUT updates, the metageneration moves.
+        let r = call(
+            "PUT",
+            &format!("ifGenerationMatch={generation}&ifMetagenerationNotMatch=-1"),
+            body,
+        );
+        assert_eq!(
+            r.status,
+            200,
+            "{acceptance:?}: {}",
+            String::from_utf8_lossy(&r.body)
+        );
+        let put = json_body(&r);
+        assert_eq!(put["kind"], "storage#object");
+        assert_eq!(put["metageneration"], "2");
+        assert_eq!(put["metadata"], json!({"marker": "subject-update"}));
+        assert_eq!(put["contentType"], "application/octet-stream");
+        assert_eq!(put["generation"], generation);
+        // The same guard on DELETE goes ahead and deletes.
+        let r = call(
+            "DELETE",
+            &format!("ifGenerationMatch={generation}&ifMetagenerationNotMatch=-1"),
+            b"",
+        );
+        assert_eq!(r.status, 204);
+        assert_eq!(call("GET", "", b"").status, 404);
+    }
+}
+
+/// The 400 production answers to a guard value that is no `long` (recorded, lean-v4 and lean-v5:
+/// `1.5`, `not-a-number` and an empty value, for the match and the not-match metageneration
+/// guards of PATCH, PUT and DELETE; the recorded lengths are 311, 314, 317, 320, 335 and 338).
+/// A refused DELETE keeps the object.
+#[test]
+fn strict_guard_values_that_are_no_long_answer_the_recorded_400() {
+    let s = state_with(Some(ALLOW_ALL_RULES), TokenAcceptance::Verified);
+    let object = format!("/storage/v1/b/{BUCKET}/o/l.bin");
+    let seeded = handle(
+        &s,
+        req(
+            "POST",
+            &format!("/upload/storage/v1/b/{BUCKET}/o?uploadType=media&name=l.bin"),
+            &[
+                ("authorization", "Bearer owner"),
+                ("content-type", "application/octet-stream"),
+            ],
+            b"hello",
+        ),
+    );
+    let generation = json_body(&seeded)["generation"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let call = |method: &str, q: &str| {
+        handle(
+            &s,
+            req(
+                method,
+                &format!("{object}?{q}"),
+                &[
+                    ("authorization", "Bearer owner"),
+                    ("content-type", "application/json"),
+                ],
+                br#"{"metadata":{"k":"v"}}"#,
+            ),
+        )
+    };
+    let expected = |value: &str, key: &str| {
+        let message = format!("Invalid long value: '{value}'.");
+        format!(
+            "{{\n  \"error\": {{\n    \"code\": 400,\n    \"message\": \"{message}\",\n    \"errors\": [\n      {{\n        \"message\": \"{message}\",\n        \"domain\": \"global\",\n        \"reason\": \"invalidParameter\",\n        \"locationType\": \"parameter\",\n        \"location\": \"{key}\"\n      }}\n    ]\n  }}\n}}\n"
+        )
+    };
+    let lengths = [
+        ("", "ifMetagenerationMatch", 311),
+        ("", "ifMetagenerationNotMatch", 314),
+        ("1.5", "ifMetagenerationMatch", 317),
+        ("1.5", "ifMetagenerationNotMatch", 320),
+        ("not-a-number", "ifMetagenerationMatch", 335),
+        ("not-a-number", "ifMetagenerationNotMatch", 338),
+    ];
+    for method in ["PATCH", "PUT", "DELETE"] {
+        for (value, key, length) in lengths {
+            let q = format!("ifGenerationMatch={generation}&{key}={value}");
+            let r = call(method, &q);
+            assert_eq!(r.status, 400, "{method} {q}");
+            assert_eq!(r.body.len(), length, "{method} {q}");
+            assert_eq!(String::from_utf8_lossy(&r.body), expected(value, key));
+            assert_eq!(
+                header(&r, "content-type"),
+                Some("application/json; charset=UTF-8")
+            );
+        }
+        // A generation guard is read by the same parser.
+        let r = call(method, "ifGenerationNotMatch=abc");
+        assert_eq!(r.status, 400, "{method}");
+        assert_eq!(
+            String::from_utf8_lossy(&r.body),
+            expected("abc", "ifGenerationNotMatch")
+        );
+        // The refused write changed nothing.
+        let read = call("GET", "");
+        assert_eq!(read.status, 200, "{method}");
+        assert_eq!(json_body(&read)["metageneration"], "1", "{method}");
+    }
+    // A negative value is a number: it fails a match guard and holds a not-match guard.
+    assert_eq!(call("PATCH", "ifMetagenerationMatch=-1").status, 412);
+    assert_eq!(call("PATCH", "ifMetagenerationNotMatch=-1").status, 200);
+    assert_eq!(call("DELETE", "ifMetagenerationNotMatch=-1").status, 204);
+    assert_eq!(call("GET", "").status, 404);
+}
+
+/// `PUT` on the JSON API object replaces the custom metadata and drops the download tokens
+/// (recorded, lean-v4 1344 to 1349); `PATCH` merges and keeps the token. The metageneration rises
+/// by one either way. The official emulator answers 501, so both profiles serve production's
+/// answer.
+#[test]
+fn a_put_replaces_the_custom_metadata_and_the_download_tokens() {
+    for acceptance in BOTH_PROFILES {
+        let s = state_with(Some(ALLOW_ALL_RULES), acceptance);
+        let owner = [
+            ("authorization", "Bearer owner"),
+            ("content-type", "application/json"),
+        ];
+        let object = format!("/storage/v1/b/{BUCKET}/o/r.bin");
+        let seeded = handle(
+            &s,
+            req(
+                "POST",
+                &format!("/upload/storage/v1/b/{BUCKET}/o?uploadType=media&name=r.bin"),
+                &[
+                    ("authorization", "Bearer owner"),
+                    ("content-type", "application/octet-stream"),
+                ],
+                b"hello",
+            ),
+        );
+        assert_eq!(seeded.status, 200, "{acceptance:?}");
+        let minted = handle(
+            &s,
+            req(
+                "POST",
+                &format!("/v0/b/{BUCKET}/o/r.bin?create_token=true"),
+                &owner,
+                b"",
+            ),
+        );
+        assert_eq!(minted.status, 200, "{acceptance:?}");
+        let token = json_body(&minted)["downloadTokens"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let patch = handle(
+            &s,
+            req(
+                "PATCH",
+                &object,
+                &owner,
+                br#"{"metadata":{"marker":"advanced","keep":"1"}}"#,
+            ),
+        );
+        let patched = json_body(&patch);
+        assert_eq!(
+            patched["metadata"]["firebaseStorageDownloadTokens"], token,
+            "{acceptance:?}: a PATCH keeps the token"
+        );
+        assert_eq!(patched["metadata"]["keep"], "1");
+        let before = patched["metageneration"]
+            .as_str()
+            .unwrap()
+            .parse::<u64>()
+            .unwrap();
+        let put = handle(
+            &s,
+            req(
+                "PUT",
+                &object,
+                &owner,
+                br#"{"metadata":{"marker":"subject-update"}}"#,
+            ),
+        );
+        assert_eq!(put.status, 200, "{acceptance:?}");
+        let put = json_body(&put);
+        assert_eq!(
+            put["metadata"],
+            json!({"marker": "subject-update"}),
+            "{acceptance:?}: the earlier key and the token are gone"
+        );
+        assert_eq!(
+            put["metageneration"]
+                .as_str()
+                .unwrap()
+                .parse::<u64>()
+                .unwrap(),
+            before + 1
+        );
+        let read = handle(&s, req("GET", &object, &owner, b""));
+        assert_eq!(
+            json_body(&read)["metadata"],
+            json!({"marker": "subject-update"})
+        );
+        // The old token is dead: the next Firebase metadata read mints another (recorded, lean-v4
+        // 1352), so a download URL made before the PUT stops working.
+        let v0 = handle(
+            &s,
+            req("GET", &format!("/v0/b/{BUCKET}/o/r.bin"), &owner, b""),
+        );
+        let reminted = json_body(&v0)["downloadTokens"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        assert_ne!(reminted, token, "{acceptance:?}");
+        // An empty `metadata` object replaces everything with nothing.
+        let cleared = handle(&s, req("PUT", &object, &owner, br#"{"metadata":{}}"#));
+        assert_eq!(json_body(&cleared).get("metadata"), None, "{acceptance:?}");
+    }
+}
+
+/// A read of an object name with a line feed is a missing object on both dialects (recorded,
+/// lean-v5: 404 on the metadata and the media read of the Firebase dialect and the JSON API),
+/// not a 400 from the name check.
+#[test]
+fn a_read_of_a_name_with_a_line_feed_is_not_found() {
+    for acceptance in BOTH_PROFILES {
+        let s = state_with(Some(ALLOW_ALL_RULES), acceptance);
+        let owner = [("authorization", "Bearer owner")];
+        for (path, expect_json) in [
+            (format!("/v0/b/{BUCKET}/o/a%0Ab.txt"), true),
+            (format!("/v0/b/{BUCKET}/o/a%0Ab.txt?alt=media"), true),
+            (format!("/storage/v1/b/{BUCKET}/o/a%0Ab.txt"), true),
+            (
+                format!("/storage/v1/b/{BUCKET}/o/a%0Ab.txt?alt=media"),
+                false,
+            ),
+        ] {
+            let r = handle(&s, req("GET", &path, &owner, b""));
+            assert_eq!(r.status, 404, "{acceptance:?} {path}");
+            let json = header(&r, "content-type")
+                .unwrap()
+                .starts_with("application/json");
+            let v0 = path.starts_with("/v0/");
+            assert_eq!(json, expect_json || v0, "{acceptance:?} {path}");
+            if !v0 && json {
+                assert!(String::from_utf8_lossy(&r.body).contains("No such object"));
+            }
+        }
+    }
+}
+
+/// The emulator profile does what the official emulator does with every guard (measured,
+/// firebase-tools 15.28.2): it reads none, so a not-match guard that names the current value, a
+/// match guard that does not hold and a value that is not a number all let the request complete,
+/// on PATCH, PUT, DELETE, upload, copy and the reads. It never refuses what the official emulator
+/// completes.
+#[test]
+fn the_emulator_profile_ignores_every_json_api_guard() {
+    let s = state_with(Some(ALLOW_ALL_RULES), TokenAcceptance::EmulatorMock);
+    let owner = [
+        ("authorization", "Bearer owner"),
+        ("content-type", "application/json"),
+    ];
+    let upload = |q: &str| {
+        handle(
+            &s,
+            req(
+                "POST",
+                &format!("/upload/storage/v1/b/{BUCKET}/o?uploadType=media&name=i.bin{q}"),
+                &[
+                    ("authorization", "Bearer owner"),
+                    ("content-type", "application/octet-stream"),
+                ],
+                b"hello",
+            ),
+        )
+    };
+    let seeded = upload("");
+    assert_eq!(seeded.status, 200);
+    let generation = json_body(&seeded)["generation"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let object = format!("/storage/v1/b/{BUCKET}/o/i.bin");
+    let call = |method: &str, q: &str| {
+        handle(
+            &s,
+            req(
+                method,
+                &format!("{object}?{q}"),
+                &owner,
+                br#"{"contentType":"application/octet-stream","metadata":{"m":"1"}}"#,
+            ),
+        )
+        .status
+    };
+    // Reads: a not-match guard naming the current value, and a match guard that fails.
+    assert_eq!(
+        call("GET", &format!("ifGenerationNotMatch={generation}")),
+        200
+    );
+    assert_eq!(
+        call(
+            "GET",
+            "alt=media&ifGenerationNotMatch=999999&ifMetagenerationMatch=abc"
+        ),
+        200
+    );
+    assert_eq!(call("GET", "ifGenerationMatch=999999"), 200);
+    // Updates: not-match naming the current value, a failing and a malformed match guard.
+    for method in ["PATCH", "PUT"] {
+        assert_eq!(
+            call(method, &format!("ifGenerationNotMatch={generation}")),
+            200,
+            "{method}"
+        );
+        assert_eq!(call(method, "ifGenerationMatch=999999"), 200, "{method}");
+        assert_eq!(call(method, "ifMetagenerationMatch=-1"), 200, "{method}");
+    }
+    // An upload over an existing object ignores `ifGenerationMatch=0` and a not-match guard.
+    assert_eq!(upload("&ifGenerationMatch=0").status, 200);
+    let current = json_body(&upload(""))
+        .get("generation")
+        .unwrap()
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_eq!(
+        upload(&format!("&ifGenerationNotMatch={current}")).status,
+        200
+    );
+    // Copy source guards.
+    let copy = handle(
+        &s,
+        req(
+            "POST",
+            &format!("/storage/v1/b/{BUCKET}/o/i.bin/copyTo/b/{BUCKET}/o/j.bin?ifSourceGenerationMatch=999999"),
+            &owner,
+            b"{}",
+        ),
+    );
+    assert_eq!(copy.status, 200, "{}", String::from_utf8_lossy(&copy.body));
+    // Deletes.
+    assert_eq!(
+        call(
+            "DELETE",
+            "ifGenerationNotMatch=999999&ifGenerationMatch=abc"
+        ),
+        204
+    );
+    assert_eq!(call("GET", ""), 404);
+}
+
+/// The JSON API list with `maxResults=0` is the bare kind under strict (recorded, lean-v4: 200, the
+/// 32 bytes `{ "kind": "storage#objects" }` in the Google-fronted layout); the official emulator
+/// answers a next-page token naming the first object (measured, firebase-tools 15.28.2), which the
+/// emulator profile keeps.
+#[test]
+fn the_json_api_list_with_max_results_zero_is_the_bare_kind_only_under_strict() {
+    let route = format!("/storage/v1/b/{BUCKET}/o?maxResults=0");
+    let owner = [("authorization", "Bearer owner")];
+    let strict = state_with(Some(ALLOW_ALL_RULES), TokenAcceptance::Verified);
+    assert_eq!(anonymous_media_upload(&strict, "l.txt"), 200);
+    let r = handle(&strict, req("GET", &route, &owner, b""));
+    assert_eq!(r.status, 200);
+    assert_eq!(
+        String::from_utf8_lossy(&r.body),
+        "{\n  \"kind\": \"storage#objects\"\n}\n"
+    );
+    assert_eq!(r.body.len(), 32);
+    assert_eq!(
+        header(&r, "content-type"),
+        Some("application/json; charset=UTF-8")
+    );
+    let emulator = state_with(Some(ALLOW_ALL_RULES), TokenAcceptance::EmulatorMock);
+    assert_eq!(anonymous_media_upload(&emulator, "l.txt"), 200);
+    let r = handle(&emulator, req("GET", &route, &owner, b""));
+    assert_eq!(r.status, 200);
+    assert_eq!(json_body(&r)["nextPageToken"], "l.txt");
+}
+
+/// The headers of a media answer under strict follow what production sent (recorded, lean-v4 and
+/// lean-v5): the stored content encoding and length and `x-goog-metageneration`, no empty
+/// `content-encoding`, the JSON API without `accept-ranges` but with `vary` and an `attachment`
+/// disposition, the Firebase dialect with `accept-ranges`, the custom metadata and the download
+/// token as `x-goog-meta-*` headers and no disposition when none is stored. The emulator profile
+/// keeps the official emulator's headers (measured, firebase-tools 15.28.2).
+#[test]
+#[allow(clippy::too_many_lines)]
+fn media_headers_follow_production_only_under_strict() {
+    let owner = [("authorization", "Bearer owner")];
+    let (ct, body) = multipart(
+        &json!({"contentType": "text/plain", "metadata": {"color": "red"}}),
+        "text/plain",
+        b"hello",
+    );
+    for acceptance in BOTH_PROFILES {
+        let strict = acceptance == TokenAcceptance::Verified;
+        let s = state_with(Some(ALLOW_ALL_RULES), acceptance);
+        let fb = handle(
+            &s,
+            req(
+                "POST",
+                &format!("/v0/b/{BUCKET}/o?name=fb.txt&uploadType=multipart"),
+                &[
+                    ("content-type", &ct),
+                    ("x-goog-upload-protocol", "multipart"),
+                ],
+                &body,
+            ),
+        );
+        assert_eq!(fb.status, 200);
+        let token = json_body(&fb)["downloadTokens"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let seeded = handle(
+            &s,
+            req(
+                "POST",
+                &format!("/upload/storage/v1/b/{BUCKET}/o?uploadType=media&name=g.txt"),
+                &[
+                    ("authorization", "Bearer owner"),
+                    ("content-type", "text/plain"),
+                ],
+                b"hello",
+            ),
+        );
+        assert_eq!(seeded.status, 200);
+        let v0 = handle(
+            &s,
+            req(
+                "GET",
+                &format!("/v0/b/{BUCKET}/o/fb.txt?alt=media"),
+                &[],
+                b"",
+            ),
+        );
+        let gcs = handle(
+            &s,
+            req(
+                "GET",
+                &format!("/storage/v1/b/{BUCKET}/o/g.txt?alt=media"),
+                &owner,
+                b"",
+            ),
+        );
+        assert_eq!((v0.status, gcs.status), (200, 200));
+        if strict {
+            assert_eq!(header(&v0, "x-goog-metageneration"), Some("1"));
+            assert_eq!(
+                header(&v0, "x-goog-stored-content-encoding"),
+                Some("identity")
+            );
+            assert_eq!(header(&v0, "x-goog-stored-content-length"), Some("5"));
+            assert_eq!(header(&v0, "x-goog-meta-color"), Some("red"));
+            assert_eq!(
+                header(&v0, "x-goog-meta-firebasestoragedownloadtokens"),
+                Some(token.as_str())
+            );
+            assert_eq!(header(&v0, "accept-ranges"), Some("bytes"));
+            assert_eq!(header(&v0, "pragma"), Some("no-cache"));
+            assert!(header(&v0, "content-encoding").is_none());
+            assert!(header(&v0, "x-goog-metadatageneration").is_none());
+            assert!(header(&v0, "vary").is_none());
+            assert_eq!(
+                header(&v0, "content-disposition"),
+                Some("inline; filename*=utf-8''fb.txt")
+            );
+            assert_eq!(
+                header(&v0, "x-goog-hash"),
+                Some("crc32c=mnG7TA==, md5=XUFAKrxLKna5cZ2REBfFkg==")
+            );
+            assert_eq!(header(&gcs, "content-disposition"), Some("attachment"));
+            assert_eq!(header(&gcs, "vary"), Some("Origin, X-Origin"));
+            assert!(header(&gcs, "accept-ranges").is_none());
+            assert_eq!(
+                header(&gcs, "x-goog-hash"),
+                Some("crc32c=mnG7TA==,md5=XUFAKrxLKna5cZ2REBfFkg==")
+            );
+            assert_eq!(
+                header(&gcs, "cache-control"),
+                Some("no-cache, no-store, max-age=0, must-revalidate")
+            );
+            assert!(header(&gcs, "x-goog-meta-color").is_none());
+        } else {
+            assert_eq!(header(&v0, "x-goog-metadatageneration"), Some("1"));
+            assert_eq!(header(&v0, "content-encoding"), Some(""));
+            assert!(header(&v0, "x-goog-meta-color").is_none());
+            assert_eq!(header(&gcs, "accept-ranges"), Some("bytes"));
+            assert!(header(&gcs, "x-goog-stored-content-length").is_none());
+        }
+    }
+}
+
+/// `PATCH /storage/v1/b/{bucket}/o/{object}` updates object metadata, as the Cloud Storage
+/// JSON API does in production (recorded: stage 3 v9, `setup/seed-metadata` and
+/// `boundary-gcs-admin-patch-present`, a 200 with the `storage#object` resource; an absent
+/// object answers the 404 `No such object` JSON error). The official emulator registers PATCH
+/// only on the short `/b/...` spelling and answers 501 here; fireemu implements it (a published
+/// divergence), honouring `ifGenerationMatch` and `ifMetagenerationMatch` as production does.
+#[test]
+#[allow(clippy::too_many_lines)]
+fn json_api_patch_on_the_storage_v1_spelling_updates_metadata_as_production_does() {
+    let s = state(None);
+    let (ct, body) = multipart(
+        &json!({"name": "p.bin", "metadata": {"owner": "old"}}),
+        "text/plain",
+        b"base",
+    );
+    let r = handle(
+        &s,
+        req(
+            "POST",
+            &format!("/upload/storage/v1/b/{BUCKET}/o?uploadType=multipart"),
+            &[("content-type", &ct)],
+            &body,
+        ),
+    );
+    assert_eq!(r.status, 200, "{}", String::from_utf8_lossy(&r.body));
+    let first = json_body(&r);
+    let generation = first["generation"].as_str().unwrap().to_owned();
+    assert_eq!(first["metageneration"], "1");
+    let patch = |query: &str, body: &[u8]| {
+        handle(
+            &s,
+            req(
+                "PATCH",
+                &format!("/storage/v1/b/{BUCKET}/o/p.bin{query}"),
+                &[
+                    ("authorization", "Bearer owner"),
+                    ("content-type", "application/json"),
+                ],
+                body,
+            ),
+        )
+    };
+    // The metadata update answers the object resource with the metageneration advanced.
+    let r = patch(
+        &format!("?ifGenerationMatch={generation}&ifMetagenerationMatch=1"),
+        br#"{"metadata": {"owner": "new", "extra": "x"}}"#,
+    );
+    assert_eq!(r.status, 200, "{}", String::from_utf8_lossy(&r.body));
+    let patched = json_body(&r);
+    assert_eq!(patched["kind"], "storage#object");
+    assert_eq!(patched["name"], "p.bin");
+    assert_eq!(patched["generation"].as_str(), Some(generation.as_str()));
+    assert_eq!(patched["metageneration"], "2");
+    assert_eq!(patched["metadata"]["owner"], "new");
+    assert_eq!(patched["metadata"]["extra"], "x");
+    // The object read back shows the update, and a null value removes a key.
+    let r = patch("", br#"{"metadata": {"extra": null}}"#);
+    assert_eq!(r.status, 200);
+    assert_eq!(json_body(&r)["metageneration"], "3");
+    assert!(json_body(&r)["metadata"].get("extra").is_none());
+    // A stale precondition is refused without changing the object.
+    let r = patch(
+        "?ifMetagenerationMatch=1",
+        br#"{"metadata": {"owner": "stale"}}"#,
+    );
+    assert_eq!(r.status, 412);
+    assert_eq!(
+        json_body(&r)["error"]["errors"][0]["reason"],
+        "conditionNotMet"
+    );
+    let r = patch(
+        "?ifGenerationMatch=99999",
+        br#"{"metadata": {"owner": "stale"}}"#,
+    );
+    assert_eq!(r.status, 412);
+    let r = handle(
+        &s,
+        req(
+            "GET",
+            &format!("/storage/v1/b/{BUCKET}/o/p.bin"),
+            &[("authorization", "Bearer owner")],
+            b"",
+        ),
+    );
+    assert_eq!(json_body(&r)["metadata"]["owner"], "new");
+    assert_eq!(json_body(&r)["metageneration"], "3");
+    // An object that is not there is the JSON 404, a match guard that is no number is the 400
+    // of production and a malformed body is a 400.
+    let r = handle(
+        &s,
+        req(
+            "PATCH",
+            &format!("/storage/v1/b/{BUCKET}/o/missing.bin"),
+            &[("content-type", "application/json")],
+            br#"{"metadata": {"a": "b"}}"#,
+        ),
+    );
+    assert_eq!(r.status, 404);
+    assert_eq!(
+        json_body(&r)["error"]["message"],
+        format!("No such object: {BUCKET}/missing.bin")
+    );
+    assert_eq!(json_body(&r)["error"]["errors"][0]["reason"], "notFound");
+    let refused = patch("?ifGenerationMatch=garbage", b"{}");
+    assert_eq!(refused.status, 400);
+    assert_eq!(
+        json_body(&refused)["error"]["message"],
+        "Invalid long value: 'garbage'."
+    );
+    assert_eq!(patch("", b"{not json").status, 400);
+    // The download spelling stays GET-only, and the short spelling is unchanged.
+    let r = handle(
+        &s,
+        req(
+            "PATCH",
+            &format!("/download/storage/v1/b/{BUCKET}/o/p.bin"),
+            &[("content-type", "application/json")],
+            b"{}",
+        ),
+    );
+    assert_eq!(r.status, 501);
+    let r = handle(
+        &s,
+        req(
+            "PATCH",
+            &format!("/b/{BUCKET}/o/p.bin"),
+            &[("content-type", "application/json")],
+            br#"{"metadata": {"short": "spelling"}}"#,
+        ),
+    );
+    assert_eq!(r.status, 200);
+    assert_eq!(json_body(&r)["metageneration"], "4");
+}
+
 #[test]
 #[allow(clippy::too_many_lines)]
 fn json_api_preconditions_generations_and_ranges_are_strict() {
@@ -1563,7 +3774,8 @@ fn json_api_preconditions_generations_and_ranges_are_strict() {
     assert_eq!(r.status, 200, "{}", String::from_utf8_lossy(&r.body));
     let generation = json_body(&r)["generation"].as_str().unwrap().to_owned();
     let object = format!("/storage/v1/b/{BUCKET}/o/g.bin");
-    // Malformed preconditions are errors, not ignored.
+    // A match guard that is no number is the 400 production answers (recorded, lean-v4; the
+    // exact bytes are in the guards test) and the object stays.
     let r = handle(
         &s,
         req(
@@ -1574,7 +3786,10 @@ fn json_api_preconditions_generations_and_ranges_are_strict() {
         ),
     );
     assert_eq!(r.status, 400);
-    assert_eq!(json_body(&r)["error"]["errors"][0]["reason"], "invalid");
+    assert_eq!(
+        json_body(&r)["error"]["errors"][0]["reason"],
+        "invalidParameter"
+    );
     // A stale generation selector never targets the live object.
     let r = handle(
         &s,
@@ -1613,13 +3828,9 @@ fn json_api_preconditions_generations_and_ranges_are_strict() {
             b"",
         ),
     );
-    assert_eq!(r.status, 412, "{}", String::from_utf8_lossy(&r.body));
-    let err = json_body(&r);
-    assert_eq!(err["error"]["errors"][0]["reason"], "conditionNotMet");
-    assert!(err["error"]["message"]
-        .as_str()
-        .unwrap()
-        .starts_with("ifGenerationNotMatch"));
+    // A not-match guard that names the current value is the bodiless 304 (recorded, lean-v4).
+    assert_eq!(r.status, 304, "{}", String::from_utf8_lossy(&r.body));
+    assert!(r.body.is_empty());
     // Ranges: suffix, open end, unsatisfiable.
     let get = |range: &str| {
         handle(
@@ -1639,9 +3850,59 @@ fn json_api_preconditions_generations_and_ranges_are_strict() {
     assert_eq!((r.status, r.body.as_ref()), (206, &b"89"[..]));
     let r = get("bytes=2-4");
     assert_eq!((r.status, r.body.as_ref()), (206, &b"234"[..]));
-    // An unsatisfiable range is ignored and the whole object served, as the official
-    // emulator (express `req.range` answering -1) serves it.
+    // Production rejects a valid but unsatisfiable range, while emulator mode keeps the
+    // official emulator's whole-object fallback.
+    // https://cloud.google.com/storage/docs/json_api/v1/status-codes
+    // https://www.rfc-editor.org/rfc/rfc9110.html#section-14.4
+    // The recorded answers (lean-v4/v5): the JSON API says it in a sentence typed `text/html`,
+    // the Firebase dialect in an XML error that names the range asked for.
     let r = get("bytes=10-");
+    assert_eq!(r.status, 416);
+    assert_eq!(header(&r, "content-range"), Some("bytes */10"));
+    assert_eq!(
+        String::from_utf8_lossy(&r.body),
+        "Request range not satisfiable"
+    );
+    assert_eq!(header(&r, "content-type"), Some("text/html; charset=UTF-8"));
+    let r = handle(
+        &s,
+        req(
+            "GET",
+            &format!("/v0/b/{BUCKET}/o/g.bin?alt=media"),
+            &[("authorization", "Bearer owner"), ("range", "bytes=10-")],
+            b"",
+        ),
+    );
+    assert_eq!(r.status, 416);
+    assert!(header(&r, "content-range").is_none());
+    assert_eq!(
+        String::from_utf8_lossy(&r.body),
+        "<?xml version='1.0' encoding='UTF-8'?><Error><Code>InvalidRange</Code><Message>The requested range cannot be satisfied.</Message><Details>bytes=10-</Details></Error>"
+    );
+    assert_eq!(
+        header(&r, "content-type"),
+        Some("application/xml; charset=UTF-8")
+    );
+    let compatible = state_with(None, TokenAcceptance::EmulatorMock);
+    let uploaded = handle(
+        &compatible,
+        req(
+            "POST",
+            &format!("/upload/storage/v1/b/{BUCKET}/o?uploadType=multipart"),
+            &[("content-type", &ct)],
+            &body,
+        ),
+    );
+    assert_eq!(uploaded.status, 200);
+    let r = handle(
+        &compatible,
+        req(
+            "GET",
+            &format!("{object}?alt=media"),
+            &[("range", "bytes=10-")],
+            b"",
+        ),
+    );
     assert_eq!((r.status, r.body.as_ref()), (200, &b"0123456789"[..]));
     // Resumable JSON API: the declared span must match the body and the total.
     let r = handle(
@@ -1687,6 +3948,65 @@ fn json_api_preconditions_generations_and_ranges_are_strict() {
 }
 
 #[test]
+fn an_empty_object_with_a_nonzero_suffix_range_is_an_empty_206_only_under_strict() {
+    // Recorded on the JSON API (lean-v4): `bytes=-1` of an empty object answers 206 with
+    // `Content-Range: bytes 0-0/0` and no body; the emulator profile keeps the official
+    // emulator's whole-object 200.
+    for (acceptance, status) in [
+        (TokenAcceptance::Verified, 206),
+        (TokenAcceptance::EmulatorMock, 200),
+    ] {
+        let s = state_with(None, acceptance);
+        let object = format!("/storage/v1/b/{BUCKET}/o/empty.bin");
+        let uploaded = handle(
+            &s,
+            req(
+                "POST",
+                &format!("/upload/storage/v1/b/{BUCKET}/o?uploadType=media&name=empty.bin"),
+                &[],
+                b"",
+            ),
+        );
+        assert_eq!(uploaded.status, 200);
+        let response = handle(
+            &s,
+            req(
+                "GET",
+                &format!("{object}?alt=media"),
+                &[("range", "bytes=-5")],
+                b"",
+            ),
+        );
+        assert_eq!(response.status, status, "{acceptance:?}");
+        assert!(response.body.is_empty());
+        if acceptance == TokenAcceptance::Verified {
+            assert_eq!(header(&response, "content-range"), Some("bytes 0-0/0"));
+        }
+        // `bytes=0-` and `bytes=-0` of an empty object are unsatisfiable under strict.
+        for range in ["bytes=0-", "bytes=0-0", "bytes=-0"] {
+            let r = handle(
+                &s,
+                req(
+                    "GET",
+                    &format!("{object}?alt=media"),
+                    &[("range", range)],
+                    b"",
+                ),
+            );
+            assert_eq!(
+                r.status,
+                if acceptance == TokenAcceptance::Verified {
+                    416
+                } else {
+                    200
+                },
+                "{acceptance:?} {range}"
+            );
+        }
+    }
+}
+
+#[test]
 fn v1_rulesets_never_grant_lists() {
     let s = state(Some(
         "service firebase.storage {
@@ -1719,7 +4039,13 @@ fn v1_rulesets_never_grant_lists() {
             b"",
         ),
     );
-    assert_eq!(r.status, 403, "{}", String::from_utf8_lossy(&r.body));
+    // Production refuses the list itself, before any rule is read (stage 3 v9,
+    // `list-v1-read-list-present` and `-absent`): 400 with this message.
+    assert_eq!(r.status, 400, "{}", String::from_utf8_lossy(&r.body));
+    assert_eq!(
+        json_body(&r)["error"]["message"],
+        "Listing objects in a bucket is disallowed for rules_version = \"1\".\nPlease update storage security rules to rules_version = \"2\" to use list."
+    );
 }
 
 #[test]
@@ -1744,8 +4070,7 @@ service firebase.storage {
     );
     assert_eq!(r.status, 200);
     let generation = json_body(&r)["generation"].as_str().unwrap().to_owned();
-    // The JSON API is the privileged dialect: rules never run on it, and the copy routes
-    // exist only on the short /b/... spelling (the long one is the official 501 catch-all).
+    // The JSON API is the privileged dialect: rules never run on either spelling.
     let r = handle(
         &s,
         req(
@@ -1755,7 +4080,8 @@ service firebase.storage {
             b"",
         ),
     );
-    assert_eq!(r.status, 501);
+    assert_eq!(r.status, 200);
+    assert_eq!(json_body(&r)["resource"]["name"], "open/dst");
     let r = handle(&s, req(
             "POST",
             &format!("/b/{BUCKET}/o/closed%2Fmissing/rewriteTo/b/{BUCKET}/o/open%2Fdst?ifSourceGenerationMatch=1"),
@@ -2061,7 +4387,8 @@ fn storage_tokens_are_bound_to_the_buckets_project() {
     let (ct, body) = multipart(&json!({"contentType": "text/plain"}), "text/plain", b"x");
     let upload = |bucket: &str| format!("/v0/b/{bucket}/o?name=f.txt&uploadType=multipart");
     // A demo-b user on demo-app's bucket, and a demo-app user on demo-b's: refused before
-    // any rule runs.
+    // any rule runs, with production's answer to a token of another project (stage 3 v9,
+    // `token-foreign-project`: 403 "Permission denied.", not an authentication failure).
     for (bucket, token) in [(BUCKET, &token_b), ("demo-b.appspot.com", &token_a)] {
         let r = handle(
             &s,
@@ -2072,8 +4399,8 @@ fn storage_tokens_are_bound_to_the_buckets_project() {
                 &body,
             ),
         );
-        assert_eq!(r.status, 401, "{}", String::from_utf8_lossy(&r.body));
-        assert!(String::from_utf8_lossy(&r.body).contains("audience"));
+        assert_eq!(r.status, 403, "{}", String::from_utf8_lossy(&r.body));
+        assert!(String::from_utf8_lossy(&r.body).contains("Permission denied."));
     }
     // Each user on their own project's bucket.
     for (bucket, token) in [(BUCKET, &token_a), ("demo-b.appspot.com", &token_b)] {
@@ -2309,6 +4636,34 @@ fn a_multipart_upload_carves_the_data_part_out_of_its_request_buffer() {
 }
 
 #[test]
+fn a_form_upload_carves_the_file_part_out_of_its_request_buffer() {
+    let s = state(None);
+    let data = payload();
+    let boundary = "form-storage-buffer";
+    let mut body = format!(
+        "--{boundary}\r\nContent-Disposition: form-data; name=\"key\"\r\n\r\nform.bin\r\n--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"form.bin\"\r\nContent-Type: application/octet-stream\r\n\r\n"
+    )
+    .into_bytes();
+    body.extend_from_slice(&data);
+    body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
+    let arrived_at = body.as_ptr();
+    let r = handle(
+        &s,
+        owned_req(
+            "POST",
+            &format!("/{BUCKET}"),
+            &[(
+                "content-type",
+                &format!("multipart/form-data; boundary={boundary}"),
+            )],
+            body,
+        ),
+    );
+    assert_eq!(r.status, 204, "{}", String::from_utf8_lossy(&r.body));
+    assert_eq!(stored_buffer(&s, "form.bin"), (arrived_at, data.len()));
+}
+
+#[test]
 fn a_resumable_upload_adopts_the_request_buffer_of_its_only_chunk() {
     let s = state(None);
     let start = handle(
@@ -2411,6 +4766,152 @@ async fn read_response(stream: &mut tokio::net::TcpStream) -> String {
     let mut response = Vec::new();
     stream.read_to_end(&mut response).await.unwrap();
     String::from_utf8_lossy(&response).into_owned()
+}
+
+#[test]
+fn four_large_uploads_leave_tokio_workers_available() {
+    use std::io::{Read, Write};
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    static BUDGET: BodyBudget = BodyBudget::new(64 * 1024 * 1024);
+    const BODY_BYTES: usize = 8 * 1024 * 1024;
+
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .unwrap();
+    let shared = Arc::new(state(None));
+    let listener = runtime
+        .block_on(tokio::net::TcpListener::bind("127.0.0.1:0"))
+        .unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = runtime.spawn(serve_storage_with_budget(listener, shared.clone(), &BUDGET));
+
+    // Holding the store lock makes all admitted handlers wait at the same synchronous
+    // boundary. Each 8 MiB write exceeds the socket buffer, so completed writes show
+    // that at least two handlers have drained most of their request bodies.
+    let store_guard = shared.store.lock().unwrap();
+    let payload = Arc::new(vec![7u8; BODY_BYTES]);
+    let (written_tx, written_rx) = mpsc::channel();
+    let clients: Vec<_> = (0..4)
+        .map(|index| {
+            let payload = payload.clone();
+            let written_tx = written_tx.clone();
+            std::thread::spawn(move || {
+                let mut stream = std::net::TcpStream::connect(address).unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(120)))
+                    .unwrap();
+                stream
+                    .set_write_timeout(Some(Duration::from_secs(30)))
+                    .unwrap();
+                stream
+                    .write_all(upload_head(&format!("worker-{index}.bin"), BODY_BYTES).as_bytes())
+                    .unwrap();
+                stream.write_all(&payload).unwrap();
+                written_tx.send(()).unwrap();
+                let mut response = [0u8; 4096];
+                let received = stream.read(&mut response).unwrap();
+                String::from_utf8_lossy(&response[..received]).into_owned()
+            })
+        })
+        .collect();
+    drop(written_tx);
+    let handlers_reached_lock =
+        (0..2).all(|_| written_rx.recv_timeout(Duration::from_secs(10)).is_ok());
+    std::thread::sleep(Duration::from_millis(20));
+
+    let (heartbeat_tx, heartbeat_rx) = mpsc::channel();
+    runtime.spawn(async move {
+        let _ = heartbeat_tx.send(());
+    });
+    let heartbeat_responded = heartbeat_rx
+        .recv_timeout(Duration::from_millis(500))
+        .is_ok();
+
+    drop(store_guard);
+    for client in clients {
+        let response = client.join().unwrap();
+        assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+    }
+    server.abort();
+    runtime.block_on(async {
+        let _ = server.await;
+    });
+    assert!(
+        handlers_reached_lock,
+        "two upload bodies did not reach the handler"
+    );
+    assert!(
+        heartbeat_responded,
+        "Storage handlers blocked both Tokio workers"
+    );
+    assert_eq!(BUDGET.in_flight(), 0);
+}
+
+#[test]
+fn more_than_sixteen_storage_handlers_wait_instead_of_rejecting() {
+    use std::io::{Read, Write};
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    static BUDGET: BodyBudget = BodyBudget::new(32 * 1024 * 1024);
+    const REQUESTS: usize = 17;
+    const BODY_BYTES: usize = 1024;
+
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .unwrap();
+    let shared = Arc::new(state(None));
+    let listener = runtime
+        .block_on(tokio::net::TcpListener::bind("127.0.0.1:0"))
+        .unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = runtime.spawn(serve_storage_with_budget(listener, shared.clone(), &BUDGET));
+
+    let store_guard = shared.store.lock().unwrap();
+    let (written_tx, written_rx) = mpsc::channel();
+    let clients: Vec<_> = (0..REQUESTS)
+        .map(|index| {
+            let written_tx = written_tx.clone();
+            std::thread::spawn(move || {
+                let mut stream = std::net::TcpStream::connect(address).unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(60)))
+                    .unwrap();
+                stream
+                    .write_all(upload_head(&format!("queued-{index}.bin"), BODY_BYTES).as_bytes())
+                    .unwrap();
+                stream.write_all(&[7u8; BODY_BYTES]).unwrap();
+                written_tx.send(()).unwrap();
+                let mut response = [0u8; 4096];
+                let received = stream.read(&mut response).unwrap();
+                String::from_utf8_lossy(&response[..received]).into_owned()
+            })
+        })
+        .collect();
+    drop(written_tx);
+    for _ in 0..REQUESTS {
+        written_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    }
+    // Give the server time to admit each buffered body while all handlers wait on the lock.
+    std::thread::sleep(Duration::from_millis(200));
+    let buffered = BUDGET.in_flight();
+    drop(store_guard);
+    for client in clients {
+        let response = client.join().unwrap();
+        assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+    }
+    server.abort();
+    runtime.block_on(async {
+        let _ = server.await;
+    });
+    assert_eq!(buffered, REQUESTS * CHUNK);
+    assert_eq!(BUDGET.in_flight(), 0);
 }
 
 #[tokio::test]
@@ -2675,10 +5176,11 @@ fn the_profile_decides_whether_storage_rules_admit_a_mock_token() {
         403,
         "and the rule, not the token, is what refuses another subject's prefix"
     );
-    // The audience binding survives the profile: a token minted for another project is not
-    // an identity here even though the official emulator would accept it.
+    // The emulator profile never reads the audience, as firebase-tools 15.28.2 does not: a
+    // token minted for another project is the identity it names, and the rule still decides.
     let foreign = format!("Firebase {}", mock_user_token("alice", "demo-other"));
-    assert_eq!(upload_as(&firebase, "owned/alice/y.txt", &foreign), 401);
+    assert_eq!(upload_as(&firebase, "owned/alice/y.txt", &foreign), 200);
+    assert_eq!(upload_as(&firebase, "owned/bob/y.txt", &foreign), 403);
 
     let strict = state_with(Some(OWNED_STORAGE_RULES), TokenAcceptance::Verified);
     assert_eq!(
@@ -2686,6 +5188,8 @@ fn the_profile_decides_whether_storage_rules_admit_a_mock_token() {
         401,
         "under strict the token names no user of the Auth store, so the caller is refused"
     );
+    // Strict keeps the audience check and answers as production does: 403, whatever the rule.
+    assert_eq!(upload_as(&strict, "owned/alice/y.txt", &foreign), 403);
 }
 
 #[test]
@@ -2705,10 +5209,12 @@ fn storage_rules_bind_mock_tokens_to_default_owned_bare_project_buckets() {
         upload_to_bucket_as(&firebase, worker_0, "owned/bob/x.txt", &token_0),
         403
     );
+    // The audience is not read in the emulator profile (firebase-tools 15.28.2 never reads it):
+    // a mock token of another worker project is the identity it names.
     for (bucket, token) in [(worker_0, &token_1), (worker_1, &token_0)] {
         assert_eq!(
             upload_to_bucket_as(&firebase, bucket, "owned/alice/x.txt", token),
-            401
+            200
         );
     }
     let tenant = format!(
@@ -2724,7 +5230,8 @@ fn storage_rules_bind_mock_tokens_to_default_owned_bare_project_buckets() {
     let strict = state_with(Some(OWNED_STORAGE_RULES), TokenAcceptance::Verified);
     assert_eq!(
         upload_to_bucket_as(&strict, worker_0, "owned/alice/x.txt", &token_0),
-        401
+        403,
+        "strict answers a token of another project as production does"
     );
 
     let mut scoped = state_with(Some(OWNED_STORAGE_RULES), TokenAcceptance::EmulatorMock);
@@ -2767,7 +5274,8 @@ fn storage_rules_bind_mock_tokens_to_default_owned_bare_project_buckets() {
     );
     assert_eq!(
         upload_to_bucket_as(&scoped, "demo-team", "owned/alice/x.txt", &team_token,),
-        401
+        200,
+        "the audience is not read in the emulator profile"
     );
     assert_eq!(
         upload_to_bucket_as(
@@ -2776,7 +5284,8 @@ fn storage_rules_bind_mock_tokens_to_default_owned_bare_project_buckets() {
             "owned/alice/x.txt",
             &guest_token,
         ),
-        401
+        200,
+        "a token of an unregistered project is admitted, and admitting it creates no project"
     );
     assert_eq!(scoped.auth.projects(), scoped_projects_before);
     assert_eq!(
@@ -2792,6 +5301,7 @@ fn storage_rules_bind_mock_tokens_to_default_owned_bare_project_buckets() {
 }
 
 #[test]
+#[allow(clippy::too_many_lines)]
 fn worker_project_resumable_uploads_reverify_the_same_mock_audience() {
     let bucket = "demo-app-w0";
     let matching = format!("Firebase {}", mock_user_token("alice", bucket));
@@ -2854,13 +5364,49 @@ fn worker_project_resumable_uploads_reverify_the_same_mock_audience() {
             b"{}",
         ),
     );
-    assert_eq!(foreign_start.status, 401);
+    // The emulator profile admits the other project's token, as the official emulator does.
+    assert_eq!(foreign_start.status, 200);
+    let foreign_session = header(&foreign_start, "x-goog-upload-url")
+        .unwrap()
+        .strip_prefix("http://127.0.0.1:9199")
+        .unwrap()
+        .to_owned();
+    let foreign_finalized = handle(
+        &firebase,
+        req(
+            "POST",
+            &foreign_session,
+            &[
+                ("x-goog-upload-command", "upload, finalize"),
+                ("x-goog-upload-offset", "0"),
+            ],
+            b"hello",
+        ),
+    );
+    assert_eq!(foreign_finalized.status, 200);
+
+    // Strict answers it as production does, before the session exists.
+    let strict = state_with(Some(OWNED_STORAGE_RULES), TokenAcceptance::Verified);
+    let strict_start = handle(
+        &strict,
+        req(
+            "POST",
+            &format!("/v0/b/{bucket}/o?name=owned%2Falice%2Fstrict.txt"),
+            &[
+                ("authorization", &foreign),
+                ("x-goog-upload-protocol", "resumable"),
+                ("x-goog-upload-command", "start"),
+            ],
+            b"{}",
+        ),
+    );
+    assert_eq!(strict_start.status, 403);
     assert_eq!(
         handle(
             &firebase,
             req(
                 "GET",
-                &format!("/v0/b/{bucket}/o/owned%2Falice%2Fforeign.txt"),
+                &format!("/v0/b/{bucket}/o/owned%2Falice%2Fstrict.txt"),
                 &[("authorization", "Bearer owner")],
                 b"",
             ),
@@ -2872,45 +5418,49 @@ fn worker_project_resumable_uploads_reverify_the_same_mock_audience() {
 
 // ---- Security regressions (storage parity review) ------------------------------------
 
-/// M-1: a missing object served through a media route must never be typed `text/html`, or
-/// the reflected object name is a stored-data-stealing reflected-XSS vector on the emulator
-/// origin (a top-level GET carries no Origin, so the loopback guard never fires). The body
-/// still reflects the name, as the official emulator's does -- only the content-type differs.
+/// A missing object served through a media route answers `text/html` with the plain sentence
+/// naming it, as production and the official emulator do (measured with firebase-tools 15.28.2 on
+/// the short, `/storage/v1`, `/download/storage/v1` and XML-style routes; recorded in production,
+/// stage 3 v9: 994 rows). Strict writes production's uppercase charset, the emulator profile the
+/// official emulator's lowercase one. The owner ruled (ledger "STORAGE-RULES media 404 content
+/// type", 2026-10-01) that matching production takes priority over the reflected-HTML concern of a
+/// tool that runs locally, which had made fireemu type this body `text/plain` until then.
 #[test]
-fn a_missing_media_object_never_answers_with_html() {
-    let s = state(None);
-    let evil = "a%3Cscript%3Ealert(1)%3C%2Fscript%3E.txt";
-    // JSON API media read of a missing object.
-    let r = handle(
-        &s,
-        req(
-            "GET",
-            &format!("/b/{BUCKET}/o/{evil}?alt=media"),
-            &[("authorization", "Bearer owner")],
-            b"",
-        ),
-    );
-    assert_eq!(r.status, 404);
-    assert!(
-        !header(&r, "content-type")
-            .unwrap_or("")
-            .contains("text/html"),
-        "media 404 must not be text/html: {:?}",
-        header(&r, "content-type")
-    );
-    // The XML-style GET fallback reaches the same answer.
-    let r = handle(
-        &s,
-        req("GET", &format!("/{BUCKET}/{evil}?alt=media"), &[], b""),
-    );
-    assert_eq!(r.status, 404);
-    assert!(
-        !header(&r, "content-type")
-            .unwrap_or("")
-            .contains("text/html"),
-        "xml-style 404 must not be text/html: {:?}",
-        header(&r, "content-type")
-    );
+fn a_missing_media_object_answers_text_html_as_production_does() {
+    for (acceptance, charset) in [
+        (TokenAcceptance::Verified, "text/html; charset=UTF-8"),
+        (TokenAcceptance::EmulatorMock, "text/html; charset=utf-8"),
+    ] {
+        let s = state_with(None, acceptance);
+        for (path, headers) in [
+            (format!("/b/{BUCKET}/o/absent.txt?alt=media"), true),
+            (
+                format!("/storage/v1/b/{BUCKET}/o/absent.txt?alt=media"),
+                true,
+            ),
+            (
+                format!("/download/storage/v1/b/{BUCKET}/o/absent.txt?alt=media"),
+                true,
+            ),
+            (format!("/{BUCKET}/absent.txt?alt=media"), false),
+        ] {
+            let owner = [("authorization", "Bearer owner")];
+            let r = handle(
+                &s,
+                req("GET", &path, if headers { &owner } else { &[] }, b""),
+            );
+            assert_eq!(r.status, 404, "{acceptance:?} {path}");
+            assert_eq!(
+                header(&r, "content-type"),
+                Some(charset),
+                "{acceptance:?} {path}"
+            );
+            assert_eq!(
+                String::from_utf8_lossy(&r.body),
+                format!("No such object: {BUCKET}/absent.txt")
+            );
+        }
+    }
 }
 
 /// S-4: metadata strings that carry a control character are refused at the input boundary,
@@ -3352,13 +5902,32 @@ fn a_status_check_of_a_finalized_resumable_upload_answers_the_committed_object()
 }
 
 /// SNORULE-1: a run with no loaded Storage ruleset denies every end-user request instead of
-/// admitting it. Production has no rules-absent state and its default rules admit no
-/// anonymous access, and the official emulator refuses an SDK request with no loaded ruleset
-/// as well, so the open default was the one configuration where forgetting `storage.rules`
-/// silently published every object. The owner credential keeps its documented Rules bypass.
+/// admitting it, so forgetting `storage.rules` never silently publishes every object. Strict
+/// answers as production answers a bucket without a release (recorded, stage 3 v9, both
+/// recordings: 400 with the "Your bucket has not been set up properly" body). The emulator profile
+/// keeps its own fail-closed 403 for a project that is not a `demo-*` one, where the official
+/// emulator refuses to start without a rules file (measured, firebase-tools 15.28.2); for a
+/// `demo-*` project it admits every request, as the official emulator does with its default open
+/// rules (see the next test). The owner credential keeps its documented Rules bypass.
 #[test]
 fn a_run_with_no_loaded_ruleset_denies_every_end_user_request() {
-    let s = state(None);
+    for acceptance in BOTH_PROFILES {
+        no_loaded_ruleset_denies_every_end_user_request(acceptance);
+    }
+}
+
+fn no_loaded_ruleset_denies_every_end_user_request(acceptance: TokenAcceptance) {
+    let refused = if acceptance == TokenAcceptance::Verified {
+        400
+    } else {
+        403
+    };
+    let mut s = state_with(None, acceptance);
+    if acceptance == TokenAcceptance::EmulatorMock {
+        // A project that is not a `demo-*` one: the official emulator refuses to start there
+        // without a rules file, so fireemu keeps its own fail-closed 403.
+        "real-app".clone_into(&mut s.project);
+    }
 
     // Seed an object through the privileged JSON API, on which rules never run.
     let seeded = handle(
@@ -3380,14 +5949,14 @@ fn a_run_with_no_loaded_ruleset_denies_every_end_user_request() {
         String::from_utf8_lossy(&seeded.body)
     );
 
-    assert_eq!(anonymous_multipart_upload(&s, "anon.txt").status, 403);
+    assert_eq!(anonymous_multipart_upload(&s, "anon.txt").status, refused);
     assert_eq!(
         handle(
             &s,
             req("GET", &format!("/v0/b/{BUCKET}/o/seeded.txt"), &[], b"")
         )
         .status,
-        403
+        refused
     );
     assert_eq!(
         handle(
@@ -3400,11 +5969,11 @@ fn a_run_with_no_loaded_ruleset_denies_every_end_user_request() {
             ),
         )
         .status,
-        403
+        refused
     );
     assert_eq!(
         handle(&s, req("GET", &format!("/v0/b/{BUCKET}/o"), &[], b"")).status,
-        403
+        refused
     );
     assert_eq!(
         handle(
@@ -3412,8 +5981,20 @@ fn a_run_with_no_loaded_ruleset_denies_every_end_user_request() {
             req("DELETE", &format!("/v0/b/{BUCKET}/o/seeded.txt"), &[], b""),
         )
         .status,
-        403
+        refused
     );
+
+    if acceptance == TokenAcceptance::Verified {
+        let denied = anonymous_multipart_upload(&s, "anon.txt");
+        assert_eq!(
+            String::from_utf8_lossy(&denied.body),
+            "{\n  \"error\": {\n    \"code\": 400,\n    \"message\": \"Your bucket has not been set up properly for Firebase Storage. Please visit 'https://console.firebase.google.com/project/demo-app/storage/rules' to set up security rules.\"\n  }\n}"
+        );
+        assert_eq!(
+            header(&denied, "content-type"),
+            Some("application/json; charset=UTF-8")
+        );
+    }
 
     // The owner credential is unaffected on the Firebase dialect.
     for (method, path) in [
@@ -3443,6 +6024,31 @@ fn a_run_with_no_loaded_ruleset_denies_every_end_user_request() {
         ),
     );
     assert_eq!(r.status, 200);
+}
+
+/// A `demo-*` project with no Storage rules gets the official emulator's default open rules in
+/// the emulator profile (measured, firebase-tools 15.28.2: `allow read, write` for every path), so
+/// nothing is refused that the official emulator admits; strict still answers production's 400.
+#[test]
+fn the_emulator_profile_opens_a_demo_project_without_storage_rules() {
+    let s = state_with(None, TokenAcceptance::EmulatorMock);
+    assert_eq!(s.project, "demo-app");
+    assert_eq!(anonymous_media_upload(&s, "open.txt"), 200);
+    for (method, path) in [
+        ("GET", format!("/v0/b/{BUCKET}/o/open.txt")),
+        ("GET", format!("/v0/b/{BUCKET}/o/open.txt?alt=media")),
+        ("GET", format!("/v0/b/{BUCKET}/o")),
+        ("DELETE", format!("/v0/b/{BUCKET}/o/open.txt")),
+    ] {
+        let r = handle(&s, req(method, &path, &[], b""));
+        assert!(
+            r.status == 200 || r.status == 204,
+            "{method} {path}: {}",
+            r.status
+        );
+    }
+    let strict = state_with(None, TokenAcceptance::Verified);
+    assert_eq!(anonymous_media_upload(&strict, "open.txt"), 400);
 }
 
 /// The browser-metadata set must not hinge on one header an old or unusual browser may omit:

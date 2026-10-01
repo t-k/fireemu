@@ -141,6 +141,8 @@ On Windows, `emulators:export` and `--export-on-exit` are not currently availabl
 
 On Unix-like systems, the destination and its ancestor directories are subject to ownership and permission restrictions. Use a dedicated, non-shared directory rather than `/tmp` or a shared directory. 
 
+On macOS, an ancestor directory with an ACL is refused when the ACL has an `allow` entry for anyone but the owner, root or the user running the export, whatever permissions the entry shows (the kernel grants rights that `ls -le` does not list). `deny` entries are accepted, so a standard home directory (which carries `group:everyone deny delete`) and the folders below it work. When an export is refused for an ACL, the message names the entry; remove it (`chmod -a`) or export to another directory, for example one under `$TMPDIR`. Check an ancestor with `/bin/ls -led <directory>`. A destination on a volume that ignores ownership (exFAT and FAT sticks and cards, or an external APFS volume with "Ignore ownership on this volume" turned on) is refused, because the owner and the mode of its directories do not show who can change them; export to a volume that enforces ownership. A volume without atomic directory rename (exFAT, FAT, some network filesystems) cannot publish an export either: use a directory on an APFS volume.
+
 ### Troubleshooting
 
 For startup or installation problems, inspect the environment and bundled files with:
@@ -388,6 +390,10 @@ Fireemu is compatible with the listed Local Emulator Suite products as shipped b
 The `strict` and `emulator` profiles differ in some behaviors to serve their respective purposes. Where the official emulator and production Firebase disagree, Fireemu also adopts production behavior in some cases and records the difference.
 
 Check support for the specific APIs and conditions your application uses, rather than relying on product names alone. The [compatibility contract](spec/compatibility/contract.json) records scope and known differences. The [compatibility documentation](docs/compatibility-contract.md) explains the verification process and how to interpret its records. 
+
+### Network exposure of the Storage port
+
+Like the official emulator, the Storage port reflects the requested object name in the HTML body of its 404 for a missing media read (`text/html`, as production answers). A web page opened on the developer's machine could therefore run script on that origin. Keep the emulator bound to localhost, which is the default, and do not expose the Storage port to other hosts or networks.
 
 ### Changes between versions
 

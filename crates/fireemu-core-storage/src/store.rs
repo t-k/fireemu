@@ -91,6 +91,10 @@ pub enum CustomMetadataPatch {
     Clear,
     /// Merge: keys mapped to `None` are removed, others inserted.
     Merge(BTreeMap<String, Option<String>>),
+    /// The JSON API's `PUT` (`objects.update`): the map replaces every custom key and every
+    /// download token the object had (recorded, lean-v4: a `PUT` naming one key leaves that key
+    /// alone and drops the earlier key and the token).
+    Replace(BTreeMap<String, String>),
 }
 
 /// Metadata patch: `Some(None)` clears a field, `None` keeps it.
@@ -1461,12 +1465,15 @@ impl StorageState {
         Ok((meta, reservation))
     }
 
-    /// Lists objects of `bucket` under `prefix`, bytewise by name, the way the official
-    /// emulator lists them: every folded prefix is returned on every page, only items are
-    /// paged, the page token is the name of the first item of the next page (the token
-    /// item is included), and a token that names no item restarts from the beginning.
-    /// `max_results` caps the items only (`None` is the official default of 1000;
-    /// `Some(0)` is an empty page whose token names the first item).
+    /// Lists objects and folded prefixes in bytewise name order. Both kinds of entry count
+    /// toward a positive `max_results`, as specified by the Firebase and Cloud Storage list APIs:
+    /// <https://firebase.google.com/docs/reference/js/storage.listoptions>
+    /// <https://cloud.google.com/storage/docs/json_api/v1/objects/list>
+    /// Returning each folded prefix once across pages is inferred from treating prefixes
+    /// and items as one ordered page of entries; those references do not state it explicitly.
+    /// The token names the first entry of the next page, which that page includes. An
+    /// unknown token restarts the listing. Production handling of `max_results=0` is
+    /// unobserved, so that input retains its existing empty-page behavior.
     #[must_use]
     pub fn list(
         &self,
@@ -1476,40 +1483,77 @@ impl StorageState {
         page_token: Option<&str>,
         max_results: Option<usize>,
     ) -> ListPage {
-        let max = max_results.unwrap_or(DEFAULT_LIST_PAGE_SIZE);
+        let max = max_results
+            .unwrap_or(DEFAULT_LIST_PAGE_SIZE)
+            .min(DEFAULT_LIST_PAGE_SIZE);
         let delimiter = delimiter.filter(|delimiter| !delimiter.is_empty());
-        let token_is_item = page_token.is_some_and(|token| {
+        let lower = (bucket.clone(), ObjectName::range_start(prefix));
+        let fold = |name: &str| {
+            let rest = &name[prefix.len()..];
+            delimiter.and_then(|d| rest.find(d).map(|i| format!("{prefix}{}{d}", &rest[..i])))
+        };
+        if max == 0 {
+            let token_is_item = page_token.is_some_and(|token| {
+                self.objects
+                    .get(&(bucket.clone(), ObjectName::range_start(token)))
+                    .is_some_and(|metadata| {
+                        let name = metadata.name.as_str();
+                        name.starts_with(prefix) && fold(name).is_none()
+                    })
+            });
+            let item_start = page_token.filter(|_| token_is_item).unwrap_or(prefix);
+            let mut prefixes = Vec::new();
+            let mut next_page_token = None;
+            for ((candidate_bucket, name), _) in self.objects.range(lower..) {
+                if candidate_bucket != bucket || !name.as_str().starts_with(prefix) {
+                    break;
+                }
+                if let Some(folded) = fold(name.as_str()) {
+                    if prefixes.last() != Some(&folded) {
+                        prefixes.push(folded);
+                    }
+                } else if name.as_str() >= item_start && next_page_token.is_none() {
+                    next_page_token = Some(name.as_str().to_owned());
+                }
+            }
+            return ListPage {
+                items: Vec::new(),
+                prefixes,
+                next_page_token,
+            };
+        }
+        let token_is_entry = page_token.is_some_and(|token| {
             self.objects
-                .get(&(bucket.clone(), ObjectName::range_start(token)))
-                .is_some_and(|metadata| {
-                    let name = metadata.name.as_str();
-                    name.starts_with(prefix)
-                        && delimiter
-                            .is_none_or(|delimiter| !name[prefix.len()..].contains(delimiter))
+                .range(lower.clone()..)
+                .take_while(|((candidate_bucket, name), _)| {
+                    candidate_bucket == bucket && name.as_str().starts_with(prefix)
+                })
+                .any(|((_, name), _)| {
+                    let folded = fold(name.as_str());
+                    folded.as_deref().unwrap_or(name.as_str()) == token
                 })
         });
-        let item_start = page_token.filter(|_| token_is_item).unwrap_or(prefix);
-        let lower = (bucket.clone(), ObjectName::range_start(prefix));
-        let mut items = Vec::with_capacity(max.min(DEFAULT_LIST_PAGE_SIZE));
+        let start = page_token.filter(|_| token_is_entry).unwrap_or(prefix);
+        let mut items = Vec::with_capacity(max);
         let mut prefixes: Vec<String> = Vec::new();
         let mut next_page_token = None;
         for ((candidate_bucket, name), meta) in self.objects.range(lower..) {
             if candidate_bucket != bucket || !name.as_str().starts_with(prefix) {
                 break;
             }
-            let rest = &name.as_str()[prefix.len()..];
-            let folded =
-                delimiter.and_then(|d| rest.find(d).map(|i| format!("{prefix}{}{d}", &rest[..i])));
+            let folded = fold(name.as_str());
+            let entry_name = folded.as_deref().unwrap_or(name.as_str());
+            if entry_name < start || folded.as_ref().is_some_and(|p| prefixes.last() == Some(p)) {
+                continue;
+            }
+            if items.len() + prefixes.len() == max {
+                next_page_token = Some(entry_name.to_owned());
+                break;
+            }
             if let Some(p) = folded {
-                // Names sharing a folded prefix are contiguous in name order, so a
-                // duplicate is always adjacent.
-                if prefixes.last() != Some(&p) {
-                    prefixes.push(p);
-                }
-            } else if name.as_str() >= item_start && items.len() < max {
+                prefixes.push(p);
+            } else {
                 items.push(meta.clone());
-            } else if name.as_str() >= item_start && next_page_token.is_none() {
-                next_page_token = Some(name.as_str().to_owned());
             }
         }
         ListPage {
@@ -2166,21 +2210,77 @@ impl StorageState {
         result
     }
 
-    /// Applies the Firebase dialect's post-commit `contentDisposition: "inline"` default to
-    /// a stored object, exactly as the official emulator mutates the stored metadata after
-    /// its rules ran and after the finalize event was built: no metageneration bump and no
-    /// event. Returns the updated metadata.
-    pub fn default_content_disposition_inline(
+    /// Lists the entries (objects, and common prefixes when a delimiter is given) that sort after
+    /// `after`, at most `max` of them in one merged name order, and names the last entry returned
+    /// as the continuation point when more entries follow. This is the paging of the Firebase
+    /// dialect as production answers it (recorded, lean-v5: the page token is the encoded full name
+    /// of the last entry returned), where [`Self::list`] names the first entry of the next page.
+    /// `max` must be positive; an `after` that names no entry still skips every entry up to it.
+    #[must_use]
+    pub fn list_after(
+        &self,
+        bucket: &BucketName,
+        prefix: &str,
+        delimiter: Option<&str>,
+        after: Option<&str>,
+        max: usize,
+    ) -> ListPage {
+        let delimiter = delimiter.filter(|delimiter| !delimiter.is_empty());
+        // A name below `after` can only fold to an entry that is also at most `after`, so the scan
+        // starts at the later of the prefix and `after` instead of walking the prefix from its
+        // first name on every page.
+        let start = after.filter(|after| *after > prefix).unwrap_or(prefix);
+        let lower = (bucket.clone(), ObjectName::range_start(start));
+        let mut items = Vec::new();
+        let mut prefixes: Vec<String> = Vec::new();
+        let mut last: Option<String> = None;
+        let mut more = false;
+        for ((candidate_bucket, name), meta) in self.objects.range(lower..) {
+            if candidate_bucket != bucket || !name.as_str().starts_with(prefix) {
+                break;
+            }
+            let rest = &name.as_str()[prefix.len()..];
+            let folded =
+                delimiter.and_then(|d| rest.find(d).map(|i| format!("{prefix}{}{d}", &rest[..i])));
+            let entry = folded.clone().unwrap_or_else(|| name.as_str().to_owned());
+            if after.is_some_and(|after| entry.as_str() <= after)
+                || last.as_deref() == Some(entry.as_str())
+            {
+                continue;
+            }
+            if items.len() + prefixes.len() == max {
+                more = true;
+                break;
+            }
+            match folded {
+                Some(prefix_entry) => prefixes.push(prefix_entry),
+                None => items.push(meta.clone()),
+            }
+            last = Some(entry);
+        }
+        ListPage {
+            items,
+            prefixes,
+            next_page_token: if more { last } else { None },
+        }
+    }
+
+    /// Applies the Firebase dialect's post-commit `contentDisposition` default (`value`) to a
+    /// stored object that has none, exactly as the official emulator mutates the stored
+    /// metadata after its rules ran and after the finalize event was built: no metageneration
+    /// bump and no event. Returns the updated metadata.
+    pub fn default_content_disposition(
         &mut self,
         bucket: &BucketName,
         name: &ObjectName,
+        value: &str,
     ) -> Result<ObjectMetadata, StorageError> {
         let meta = self
             .objects
             .get_mut(&(bucket.clone(), name.clone()))
             .ok_or(StorageError::NotFound)?;
         if meta.content_disposition.is_none() {
-            meta.content_disposition = Some("inline".to_owned());
+            meta.content_disposition = Some(value.to_owned());
         }
         Ok(meta.clone())
     }
@@ -2255,6 +2355,11 @@ impl MetadataPatch {
                     }
                 }
                 // Upstream drops the map entirely when the merge leaves no keys.
+                next.custom_defined = !next.custom.is_empty();
+            }
+            Some(CustomMetadataPatch::Replace(entries)) => {
+                next.custom.clone_from(entries);
+                next.download_tokens.clear();
                 next.custom_defined = !next.custom.is_empty();
             }
         }

@@ -88,9 +88,9 @@ for (const {name, ...metadata} of ${JSON.stringify(definitions)}) {
   let sequence = 0;
   return {
     manifest: hello.manifest,
-    async invoke(name, trigger, event) {
+    async invoke(name, trigger, event, extra = {}) {
       const invocationId = `resource-${++sequence}`;
-      child.stdin.write(frame({ type: 'invoke', invocationId, function: name, entryPoint: name, trigger, event }));
+      child.stdin.write(frame({ type: 'invoke', invocationId, function: name, entryPoint: name, trigger, event, ...extra }));
       return wait(() => frames.find(x => x.type === 'result' && x.invocationId === invocationId));
     },
     async calls() {
@@ -204,7 +204,50 @@ for (const form of ['endpoint', 'legacy']) {
     const calls = await f.calls();
     assert.deepEqual(calls.map(call => call.name), events.map(([name]) => name));
     assert.deepEqual(calls.map(call => call.context.eventId), events.map(() => id));
-    assert.deepEqual(calls.map(call => call.context.timestamp), events.map(() => time));
+    // Storage prints its legacy timestamp with exactly three fraction digits (observed 2026-10-01).
+    assert.deepEqual(calls.map(call => call.context.timestamp), ['2026-09-30T12:03:18.846Z', time, time]);
+  });
+
+  test(`v1 ${form}: a Storage legacy context has the members and forms of the recorded production context`, { timeout: 10000 }, async t => {
+    // Production (observed 2026-10-01, crates/fireemu-adapter-functions/tests/fixtures/production-storage-finalize-frames.json):
+    // eventId is a seventeen-digit decimal string without a suffix, the timestamp has exactly three fraction digits and
+    // is later than the object's timeCreated (91 ms in the recording), the resource has no generation suffix and a `type`.
+    const recorded = JSON.parse(await readFile(new URL('../../crates/fireemu-adapter-functions/tests/fixtures/production-storage-finalize-frames.json', import.meta.url), 'utf8'));
+    const context = recorded.gen1.context;
+    const bucket = recorded.gen1.data.bucket;
+    const f = await start(t, [stEntry('onFinalize', `projects/_/buckets/${bucket}`, form)]);
+    const admitted = '2026-10-01T08:49:26.577123456Z';
+    const event = { id: '22201766561849599', type: 'google.cloud.storage.object.v1.finalized', time: recorded.gen2.time, source: recorded.gen2.source, data: recorded.gen1.data };
+    assert.equal((await f.invoke('onFinalize', 'storage', event, { admittedAt: admitted })).ok, true);
+    const [call] = await f.calls();
+    // The recorded context's own members (`contextKeys` in the frame) are the ones the handler receives.
+    assert.deepEqual(Object.keys(call.context).sort(), [...context.contextKeys].sort());
+    assert.equal(call.context.eventType, context.eventType);
+    assert.deepEqual(call.context.resource, context.resource);
+    assert.deepEqual(call.context.params, context.params);
+    assert.match(call.context.eventId, /^[0-9]{17}$/);
+    assert.match(context.eventId, /^[0-9]{17}$/);
+    assert.match(call.context.timestamp, /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/);
+    assert.match(context.timestamp, /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/);
+    // Both are later than the object's creation, and the local one is the admission instant cut to the millisecond.
+    assert.ok(Date.parse(call.context.timestamp) >= Date.parse(recorded.gen1.data.timeCreated));
+    assert.ok(Date.parse(context.timestamp) >= Date.parse(recorded.gen1.data.timeCreated));
+    assert.equal(call.context.timestamp, '2026-10-01T08:49:26.577Z');
+  });
+
+  test(`v1 ${form}: a Storage legacy timestamp keeps a value that is not a time as it is, and cuts the fraction of one that is`, { timeout: 10000 }, async t => {
+    const f = await start(t, [stEntry('onFinalize', 'projects/_/buckets/assets.example', form)]);
+    const times = ['2026-10-01T08:49:26Z', '2026-10-01T08:49:26.5Z', '2026-10-01T08:49:26.123456789Z', 'not a time'];
+    for (const time of times) {
+      const event = { id: '1', type: 'google.cloud.storage.object.v1.finalized', time, source: '//storage.googleapis.com/projects/_/buckets/assets.example', data: { bucket: 'assets.example', name: 'a.txt' } };
+      assert.equal((await f.invoke('onFinalize', 'storage', event)).ok, true);
+    }
+    assert.deepEqual((await f.calls()).map(call => call.context.timestamp), ['2026-10-01T08:49:26.000Z', '2026-10-01T08:49:26.500Z', '2026-10-01T08:49:26.123Z', 'not a time']);
+    // The admission instant the frame carries wins over the event's own time, and one that is not a time passes through unchanged.
+    const base = { id: '1', type: 'google.cloud.storage.object.v1.finalized', source: '//storage.googleapis.com/projects/_/buckets/assets.example', data: { bucket: 'assets.example', name: 'a.txt' } };
+    assert.equal((await f.invoke('onFinalize', 'storage', { ...base, time: '2026-10-01T08:49:26.486927Z' }, { admittedAt: '2026-10-01T08:49:26.577999999Z' })).ok, true);
+    assert.equal((await f.invoke('onFinalize', 'storage', { ...base, time: '2026-10-01T08:49:26.486927Z' }, { admittedAt: 'not a time' })).ok, true);
+    assert.deepEqual((await f.calls()).slice(4).map(call => call.context.timestamp), ['2026-10-01T08:49:26.577Z', 'not a time']);
   });
 
   test(`v1 ${form}: Storage bucket selection does not consume the project named buckets`, { timeout: 10000 }, async t => {

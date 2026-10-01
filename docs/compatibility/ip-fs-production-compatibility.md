@@ -151,6 +151,14 @@ The owner added `FUNCTIONS-HTTP` to the production-compatibility parents on 2026
 | --- | --- | --- | --- | --- |
 | FUNCTIONS-HTTP | 2nd gen HTTP and callable request and response behavior, errors, Auth context, timeout and streaming in one Node.js region | The copied final artifact matches both production recordings in all 68 cases. Workspace regression passed 3,521 tests with 99 skips; the Node runner passed 747 with two skips. The emulator profile adds no new refusal. Both profiles admit external and LAN callable Origins under the owner's 2026-09-28 decision. Callable preflights delegate to the SDK CORS wrapper for every Origin before Auth or App Check admission; `cors: false`, single and multiple Origin lists, loopback cross-site requests, requested GET and arbitrary requested headers are checked in 224 local requests on the final binary. The owner also accepted the pre-existing 401 JSON callable Bearer refusals as a production-first exception (B7), while the official emulator returns 200. | `COMPAT_VERIFIED` | Closure approved on 2026-09-28 for the frozen 19 conditions. |
 
+## Storage object production closure
+
+The owner added STORAGE-OBJECT to the parent inventory on 2026-09-25. The resulting target is 16 parents; historical `0 / 14` checkpoints above describe the earlier inventory. The [frozen closure inventory](../../spec/compatibility/closure/STORAGE-OBJECT.json) separates object behavior from Storage Security Rules and Functions events. The owner approved its seven scope decisions on 2026-09-25. S6 limits this closure's parity claim to objects no larger than 256 MiB; the fireemu cap is a disclosed limitation and tracked separately.
+
+| Parent | Required conditions | Current evidence | Parent state | Remaining completion work |
+| --- | --- | --- | --- | --- |
+| STORAGE-OBJECT | Firebase and GCS JSON object upload, download, metadata, delete, list and paging; current-object generation and metageneration preconditions; checksums; error shapes; owner and Firebase Auth ID-token access; cross-dialect state | Local Storage tests and the official-emulator `storage-probe` matrix exist. No production Storage object recording is counted for this parent. | `IMPLEMENTING` | Prepare the sandbox, record the reviewed corpus twice, repair mismatches, compare both Storage suites on one final artifact and obtain an independent closure review. |
+
 ## Existing evidence boundaries
 
 - First46 retains its original 35 matches/11 mismatches and corrected 46/46 saved-reference comparison.

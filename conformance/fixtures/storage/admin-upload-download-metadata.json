@@ -24,8 +24,8 @@
     },
     {
       "id": "metadata-shape",
-      "status": "parity",
-      "value": {
+      "status": "documented-divergence",
+      "oracle": {
         "bucket": "demo-conformance.appspot.com",
         "contentType": "text/plain",
         "custom": {
@@ -53,7 +53,39 @@
         ],
         "name": "conf_public/hello.txt",
         "size": "17"
-      }
+      },
+      "testd": {
+        "bucket": "demo-conformance.appspot.com",
+        "contentType": "text/plain",
+        "custom": {
+          "origin": "conformance"
+        },
+        "keys": [
+          "bucket",
+          "contentType",
+          "crc32c",
+          "etag",
+          "generation",
+          "id",
+          "kind",
+          "md5Hash",
+          "mediaLink",
+          "metadata",
+          "metageneration",
+          "name",
+          "selfLink",
+          "size",
+          "storageClass",
+          "timeCreated",
+          "timeFinalized",
+          "timeStorageClassUpdated",
+          "updated"
+        ],
+        "name": "conf_public/hello.txt",
+        "size": "17"
+      },
+      "documents": "README.md, \"Storage\"; capability manifest ST-OBJ-1 (crates/fireemu/src/capabilities.json)",
+      "reason": "The JSON API object resource carries timeFinalized in fireemu, as production writes it (recorded in stage 3 v9, 2026-09-30); the official emulator omits it."
     },
     {
       "id": "resumable-save",

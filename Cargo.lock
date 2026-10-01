@@ -637,6 +637,7 @@ dependencies = [
  "hyper",
  "hyper-util",
  "process-wrap",
+ "proptest",
  "rustix",
  "serde_json",
  "tokio",
@@ -880,6 +881,8 @@ name = "fireemu-export-publication"
 version = "0.10.0"
 dependencies = [
  "exacl",
+ "nix",
+ "proptest",
  "rustix",
 ]
 

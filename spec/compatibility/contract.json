@@ -223,7 +223,7 @@
         },
         {
           "key": "rules.idTokenVerification",
-          "profileValue": "unsigned mock tokens are admitted, with the audience still bound to the routed Firestore resource project or Storage bucket project and a signed token still verified",
+          "profileValue": "unsigned mock tokens are admitted, with the audience bound to the routed Firestore resource project (Storage admits a token of another project, as the official emulator does); a token that fails verification is never admitted as its claimed user (Firestore refuses it, Storage treats the caller as anonymous)",
           "emulatorValue": "no verification at all: the token is decoded and request.auth is built from whatever it carries",
           "authority": {
             "kind": "intentional-local-policy",
@@ -236,9 +236,9 @@
               "package": "firebase-tools",
               "version": "15.28.2"
             },
-            "approvalRecord": "README.md#security-rules"
+            "approvalRecord": "docs.local/instructions/owner-decisions.md (2026-10-01, \"Rules emulator-profile signed-token verification\"); README.md#comparison-with-the-official-emulator"
           },
-          "note": "Measured against the pinned suite on 2026-08-31 with an unsigned token whose sub names no user: the Firestore emulator admitted it, admitted an exp of 3600 seconds after the epoch, admitted a token with no exp and no iss, admitted one whose aud named another project, and admitted one whose RS256 signature was garbage; the Storage emulator behaves the same way by construction (firebase-tools/lib/emulator/storage/rules/runtime.js calls jwt.decode). The emulator profile reproduces the part @firebase/rules-unit-testing depends on -- an unsigned token for an unknown subject with an expiry nobody reads -- and keeps two checks the official emulators skip: the audience must name the routed Firestore resource project or Storage bucket project, so a token cannot cross a session or project boundary, and a signed token must still verify, so a forged RS256 token never becomes an identity. An unregistered Firestore project owned by the default session is a valid routed namespace and is not replaced by the configured Auth project for this comparison. Both checks are refusals of requests the official emulator admits, which is why they are recorded here rather than left implicit."
+          "note": "Measured against the pinned suite on 2026-08-31 with an unsigned token whose sub names no user: the Firestore emulator admitted it, admitted an exp of 3600 seconds after the epoch, admitted a token with no exp and no iss, admitted one whose aud named another project, and admitted one whose RS256 signature was garbage; the Storage emulator behaves the same way by construction (firebase-tools/lib/emulator/storage/rules/runtime.js calls jwt.decode). The emulator profile reproduces the part @firebase/rules-unit-testing depends on -- an unsigned token for an unknown subject with an expiry nobody reads -- and keeps two differences from the official emulators: on Firestore the audience must name the routed resource project, so a token cannot cross a session or project boundary, and a token that fails verification is never admitted as its claimed user, so a forged RS256 token never becomes an identity (Firestore refuses it; Storage treats the caller as anonymous). On Storage the audience is not bound in the emulator profile: a token of another project is admitted, as the official emulator admits it. An unregistered Firestore project owned by the default session is a valid routed namespace and is not replaced by the configured Auth project for this comparison. Both differences refuse (or downgrade to anonymous) requests the official emulator admits, which is why they are recorded here rather than left implicit."
         },
         {
           "key": "auth.transientCredentialLifecycle",
@@ -1574,16 +1574,29 @@
             "the official Storage emulator implements no object versioning, no ACLs (its POST acl stub answers success without effect), no signed URLs, no compose and no notifications",
             "the official Storage emulator parses no generation or metageneration precondition and verifies no declared checksum: it was measured to overwrite an object guarded by ifGenerationMatch=0, delete through a stale guard, and store a payload whose declared md5 did not match the bytes",
             "the official Storage emulator ignores resumable offsets and the JSON API Content-Range chunk protocol: it appends whatever arrives and finalizes every PUT, so a two-chunk upload was measured to commit its first chunk as the whole object",
-            "the official Storage emulator registers JSON API object update (PATCH) and copy only on the short /b/... spelling: the /storage/v1/... spelling of those answers its 501 catch-all, and a bucket GET answers the 404 missing-object envelope; fireemu reproduces that route table exactly",
+            "the official Storage emulator registers JSON API object update (PATCH) and copy only on the short /b/... spelling: the /storage/v1/... spelling of those answers its 501 catch-all, and a bucket GET answers the 404 missing-object envelope",
+            "the official Storage emulator pages items alone and repeats every folded prefix on every page; fireemu uses the combined items-and-prefixes maxResults budget documented by the Firebase and Cloud Storage list APIs",
             "a JSON API media insert without a name crashes the pinned official CLI outright (an unhandled TypeError after its own 400 exits firebase emulators:exec with code 2); fireemu answers a plain 400, and the row is recorded here because no fixture can record a crash"
           ],
           "fireemuOnly": [
             {
-              "behaviour": "a 256 MiB object cap, a 260 MiB body cap and a process-wide 1 GiB buffered-body budget answered with 503 and Retry-After",
+              "behaviour": "STORAGE-OBJECT S6 known limitation: fireemu has a 256 MiB object cap, a 260 MiB body cap and a process-wide 1 GiB buffered-body budget answered with 503 and Retry-After. The STORAGE-OBJECT production closure does not claim parity for objects larger than 256 MiB; the cap is tracked as a separate issue.",
               "precision": "conservative"
             },
             {
               "behaviour": "generation / metageneration preconditions, declared checksums, resumable offsets and the Content-Range chunk protocol are honoured as production honours them, refusing requests the official emulator admits (and corrupts state on); every such step is pinned as a documented divergence in conformance/storage-matrix.json",
+              "precision": "conservative"
+            },
+            {
+              "behaviour": "both Storage dialects count items and folded prefixes together toward maxResults, return each prefix on one page only and cap the page at 1000; conformance/storage-matrix.json pins the official emulator's different pagination",
+              "precision": "conservative"
+            },
+            {
+              "behaviour": "both profiles accept the production /storage/v1 object PATCH, copyTo and rewriteTo routes that the official emulator answers with 501; https://cloud.google.com/storage/docs/json_api/v1/objects/patch, https://cloud.google.com/storage/docs/json_api/v1/objects/copy, https://cloud.google.com/storage/docs/json_api/v1/objects/rewrite",
+              "precision": "documented-divergence"
+            },
+            {
+              "behaviour": "the strict profile refuses list filters it cannot apply (matchGlob, startOffset, endOffset and includeTrailingDelimiter=true) with 400, returns current generations for versions=true because archived generations are unavailable, and refuses unsatisfiable media ranges with 416 and Content-Range; a nonzero suffix on an empty object is accepted as RFC 9110 section 14.1.1 specifies; the emulator profile retains the official emulator's behavior; https://cloud.google.com/storage/docs/json_api/v1/objects/list, https://cloud.google.com/storage/docs/json_api/v1/status-codes, https://www.rfc-editor.org/rfc/rfc9110.html#section-14.1.1",
               "precision": "conservative"
             }
           ],
@@ -1771,11 +1784,20 @@
             {
               "behaviour": "a 2nd gen Firestore event's `source` is the document resource name (projects/P/databases/D/documents/C/ID) where production's is the database resource name (//firestore.googleapis.com/projects/P/databases/D), observed on a create on 2026-09-30. With firebase-functions 7.3.2 the JSON path reads `source` only for a snapshot side the data does not carry (the `written` event of a create or a delete) and the 1st gen resource the runner builds reads it too, so created, updated and deleted 2nd gen deliveries could carry production's value today; only `written` deliveries of a create or a delete need protobuf binary-mode delivery, which this runtime does not offer. A handler that reads `event.source` sees the difference, one that reads `event.document`, `event.params` or the snapshot does not",
               "precision": "conservative"
+            },
+            {
+              "behaviour": "a Storage event's object resource carries the local `etag` (the quoted `\"<generation>-<metageneration>\"`) and a counter `generation`, where production's `etag` is the base64 of the protobuf of the generation and the metageneration (`CLuI7vG3mJcDEAE=` for generation 1790844566471739, metageneration 1) and its generation is a microsecond timestamp; observed on one onFinalize delivery on 2026-10-01. The Storage JSON API answers the same local forms, so the divergence is that of the Storage surface and not of the event. A handler that reads `etag` or `generation` sees the difference, one that reads the name, bucket, size, hashes, content type and times does not",
+              "precision": "conservative"
+            },
+            {
+              "behaviour": "a 2nd gen Storage handler's CloudEvent carries `datacontenttype: application/json` where the production frame of 2026-10-01 had none (the recorded `eventKeys` lack it) and the official emulator sends none (firebase-tools 15.28.2, `createCloudEventRequestBody`); firebase-functions 7.3.2's Storage handlers never read it, so only a handler that reads `event.datacontenttype` sees the difference. This is Storage only: the SDK's Firestore JSON path takes the JSON route only when `datacontenttype` includes `application/json` (it throws `Cannot parse event payload` otherwise) and removes the member before the handler runs, so a Firestore handler never sees it, in production or here, and dropping it would break every 2nd gen Firestore handler",
+              "precision": "conservative"
             }
           ],
           "productionOnly": [
             "Cloud Tasks applies maxDispatchesPerSecond to every first or retry attempt; fireemu follows that production contract while the pinned Tasks emulator only consumes a token for the first attempt",
-            "Observed in one production Firestore create delivery on 2026-09-30: a 2nd gen event's id is a UUID, its time carries a six-digit fraction (the microsecond commit time), and a 1st gen handler's context.eventId is that id followed by -0. Inferred, not observed: the zero, three and nine digit fractions (the protobuf JSON Timestamp mapping prints the shortest of 0, 3, 6 or 9 digits) and the same id, time and -0 forms for updated, deleted and written events. fireemu follows both, with the UUID derived from the session and the event counter so that a run replays"
+            "Observed in one production Firestore create delivery on 2026-09-30: a 2nd gen event's id is a UUID, its time carries a six-digit fraction (the microsecond commit time), and a 1st gen handler's context.eventId is that id followed by -0. Inferred, not observed: the zero, three and nine digit fractions (the protobuf JSON Timestamp mapping prints the shortest of 0, 3, 6 or 9 digits) and the same id, time and -0 forms for updated, deleted and written events. fireemu follows both, with the UUID derived from the session and the event counter so that a run replays",
+            "One production Storage onFinalize delivery on 2026-10-01 (a 1st gen and a 2nd gen handler, one object create) showed: both event ids are decimal strings of seventeen digits (unrelated between the generations, without a suffix); a 2nd gen event's time with a six-digit fraction (`2026-10-01T08:49:26.486927Z`) whose millisecond prefix equals the object's `timeCreated` (`.486Z`), which makes it the creation instant to the microsecond and shows that the object times are cut, not rounded; object resource times with exactly three fraction digits; and a 1st gen context.timestamp with three fraction digits, 91 ms after `timeCreated` (read here as the notification instant; the delay is not modelled). Inferred, not observed: the zero and three digit time forms (carried over from the protobuf JSON Timestamp rule; only six digits were seen), the time of a deleted or metadata-updated event (it keeps the instant the runtime admitted the event, in the same form) and ids of other lengths. fireemu follows these in both profiles. The id is derived from the session and the event counter so that a run replays; two events of one session whose counters are fewer than 9·10^16 apart never share an id, while a seed that is not of the session form is hashed and may collide; a 1st gen timestamp is the admission instant cut to the millisecond, where production's is later than the creation by a delay the runtime does not model"
           ],
           "preview": []
         },

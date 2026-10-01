@@ -1563,6 +1563,8 @@
             "integration": [
               "crates/fireemu-adapter-http/tests/storage.rs",
               "crates/fireemu-core-storage/tests/store.rs",
+              "crates/fireemu-core-storage/tests/stored_bytes.rs",
+              "crates/fireemu/tests/storage_limits.rs",
               "conformance/storage-matrix.json"
             ],
             "conformance": [
@@ -1582,6 +1584,10 @@
             {
               "behaviour": "STORAGE-OBJECT S6 known limitation: fireemu has a 256 MiB object cap, a 260 MiB body cap and a process-wide 1 GiB buffered-body budget answered with 503 and Retry-After. The STORAGE-OBJECT production closure does not claim parity for objects larger than 256 MiB; the cap is tracked as a separate issue.",
               "precision": "conservative"
+            },
+            {
+              "behaviour": "storage.maxStoredBytes (unset by default, then nothing is bounded) is a local bound production does not have, in both profiles: it caps the object data the Storage emulator retains, each object's bytes counted once per object (a copy counts again; a replacement counts only its difference). A write that would cross it (upload, resumable finalize, copy or rewrite) answers 507 without Retry-After and the message storage.maxStoredBytes limit exceeded: the Firebase dialect as {\"error\":{\"code\":507,\"message\":...}}, the JSON API with errors[0].reason storageCapacityExceeded. A refusal changes no object, generation, event or byte count; a resumable session stays open and cancellable, and a refused finalizing chunk does not advance its offset. Import and snapshot restore are not checked against it. The objects.bytes resource gauge reports it as its limit (owner ledger 759).",
+              "precision": "resource-safety-divergence"
             },
             {
               "behaviour": "generation / metageneration preconditions, declared checksums, resumable offsets and the Content-Range chunk protocol are honoured as production honours them, refusing requests the official emulator admits (and corrupts state on); every such step is pinned as a documented divergence in conformance/storage-matrix.json",

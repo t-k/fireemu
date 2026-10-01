@@ -8,6 +8,10 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ## [Unreleased]
 
+### Added
+
+- `storage.maxStoredBytes` in the canonical configuration (Fireemu-only, unset by default): a bound on the object data the Storage emulator keeps in memory. A write past it is refused with HTTP 507 `storage.maxStoredBytes limit exceeded` (reason `storageCapacityExceeded` in the JSON API), changes nothing, and leaves a resumable upload open at the same offset. The `objects.bytes` resource gauge reports the bound.
+
 ## [0.10.0] - 2026-10-01
 
 ### Added

@@ -1000,6 +1000,9 @@ pub struct RuntimeConfig {
     /// `firestore.deletedDatabaseIdCooldownSeconds`: how long a deleted database id stays
     /// unavailable. `None` keeps production's 300 seconds.
     pub deleted_database_id_cooldown: Option<i64>,
+    /// `storage.maxStoredBytes`: the object data the Storage emulator retains, a local bound
+    /// production does not have (owner ledger 759). `None` bounds nothing.
+    pub storage_max_stored_bytes: Option<u64>,
     /// When the daemon's databases were created (`firestore.databaseCreateTime`): the
     /// `createTime` they report and the instant before which a `read_time` is refused. Unset,
     /// it is the daemon's start; a run compared with a production database names that
@@ -1357,6 +1360,7 @@ impl Default for RuntimeConfig {
             listen_stream_lifetime: profile.listen_stream_lifetime(),
             ttl_sweep_interval: fireemu_core_firestore::ttl::DEFAULT_SWEEP_INTERVAL,
             deleted_database_id_cooldown: None,
+            storage_max_stored_bytes: None,
             database_create_time: None,
             require_demo_prefix: true,
             refuse_unknown_projects: false,
@@ -3525,6 +3529,15 @@ impl RuntimeConfig {
             if let Some(source) = storage.get("rules").and_then(Value::as_str) {
                 cfg.storage_rules_file = Some(source.to_owned());
             }
+            if let Some(value) = storage.get("maxStoredBytes") {
+                let bytes = value.as_u64().filter(|bytes| *bytes >= 1).ok_or_else(|| {
+                    ConfigError(
+                        "storage.maxStoredBytes must be a whole number of bytes, at least 1"
+                            .to_owned(),
+                    )
+                })?;
+                cfg.storage_max_stored_bytes = Some(bytes);
+            }
         }
         if let Some(functions) = obj.get("functions").and_then(Value::as_object) {
             Self::parse_functions(functions, &mut cfg)?;
@@ -3923,6 +3936,43 @@ mod tests {
                 error.0.contains("deletedDatabaseIdCooldownSeconds"),
                 "{error}"
             );
+        }
+    }
+
+    #[test]
+    fn storage_max_stored_bytes_bounds_nothing_unless_configured() {
+        let parse = |storage: Value| {
+            RuntimeConfig::from_json(&json!({"schemaVersion": 1, "storage": storage}))
+        };
+        assert_eq!(parse(json!({})).unwrap().storage_max_stored_bytes, None);
+        assert_eq!(
+            parse(json!({"maxStoredBytes": 1_073_741_824}))
+                .unwrap()
+                .storage_max_stored_bytes,
+            Some(1_073_741_824)
+        );
+        for bad in [json!(0), json!(-1), json!(1.5), json!("1024"), json!(null)] {
+            let error = parse(json!({"maxStoredBytes": bad})).unwrap_err();
+            assert!(error.0.contains("storage.maxStoredBytes"), "{error}");
+        }
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn storage_max_stored_bytes_accepts_exactly_the_positive_integers(
+            value in proptest::prop_oneof![-4_i64..=4, proptest::num::i64::ANY],
+        ) {
+            let parsed = RuntimeConfig::from_json(
+                &json!({"schemaVersion": 1, "storage": {"maxStoredBytes": value}}),
+            );
+            if value >= 1 {
+                proptest::prop_assert_eq!(
+                    parsed.unwrap().storage_max_stored_bytes,
+                    u64::try_from(value).ok()
+                );
+            } else {
+                proptest::prop_assert!(parsed.is_err());
+            }
         }
     }
 

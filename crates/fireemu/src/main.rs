@@ -1839,10 +1839,10 @@ fn storage_state(
         .map_err(|e| format!("database id: {e}"))?,
         document: None,
     };
+    let mut store = fireemu_core_storage::store::StorageState::new(cfg.seed ^ 0x57);
+    store.set_stored_bytes_limit(cfg.storage_max_stored_bytes);
     Ok(Arc::new(fireemu_adapter_http::storage::StorageState {
-        store: Mutex::new(fireemu_core_storage::store::StorageState::new(
-            cfg.seed ^ 0x57,
-        )),
+        store: Mutex::new(store),
         clock: clock.clone(),
         auth: registry.clone(),
         tenancy: Some(tenancy.clone()),

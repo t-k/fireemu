@@ -6208,3 +6208,214 @@ async fn an_undeclared_set_rules_body_is_cut_off_at_the_control_port_limit() {
     );
     server.abort();
 }
+
+/// `storage.maxStoredBytes` (owner ledger 759): a write past the bound answers 507 without
+/// Retry-After, `storage.maxStoredBytes limit exceeded`, in the Firebase dialect's minimal
+/// envelope and the JSON API's errors array with reason `storageCapacityExceeded`. Nothing is
+/// stored, and the same in both profiles' token modes.
+#[test]
+fn a_write_past_the_stored_byte_limit_is_507_in_both_dialects() {
+    for token_acceptance in [TokenAcceptance::Verified, TokenAcceptance::EmulatorMock] {
+        let s = state_with(Some(ALLOW_ALL_RULES), token_acceptance);
+        s.store.lock().unwrap().set_stored_bytes_limit(Some(8));
+        let owner = [("authorization", "Bearer owner")];
+        let firebase = |name: &str, body: &[u8]| {
+            handle(
+                &s,
+                req(
+                    "POST",
+                    &format!("/v0/b/{BUCKET}/o?name={name}"),
+                    &owner,
+                    body,
+                ),
+            )
+        };
+        assert_eq!(firebase("a.bin", b"12345").status, 200);
+        let refused = firebase("b.bin", b"6789");
+        assert_eq!(
+            refused.status,
+            507,
+            "{}",
+            String::from_utf8_lossy(&refused.body)
+        );
+        assert_eq!(header(&refused, "retry-after"), None);
+        assert_eq!(
+            json_body(&refused),
+            json!({"error": {"code": 507, "message": "storage.maxStoredBytes limit exceeded"}})
+        );
+
+        let refused = handle(
+            &s,
+            req(
+                "POST",
+                &format!("/upload/storage/v1/b/{BUCKET}/o?uploadType=media&name=c.bin"),
+                &owner,
+                b"6789",
+            ),
+        );
+        assert_eq!(
+            refused.status,
+            507,
+            "{}",
+            String::from_utf8_lossy(&refused.body)
+        );
+        assert_eq!(header(&refused, "retry-after"), None);
+        let error = &json_body(&refused)["error"];
+        assert_eq!(error["code"], 507);
+        assert_eq!(error["message"], "storage.maxStoredBytes limit exceeded");
+        assert_eq!(error["errors"][0]["reason"], "storageCapacityExceeded");
+        assert_eq!(
+            error["errors"][0]["message"],
+            "storage.maxStoredBytes limit exceeded"
+        );
+
+        let store = s.store.lock().unwrap();
+        assert_eq!(store.retained_blob_bytes(), 5);
+        assert!(store
+            .get(
+                &BucketName::try_new(BUCKET).unwrap(),
+                &ObjectName::try_new("b.bin").unwrap()
+            )
+            .is_none());
+    }
+}
+
+/// A store bounded at 8 bytes that already holds a 5-byte `a.bin`.
+fn bounded_state_holding_five_bytes() -> StorageState {
+    let s = state(Some(ALLOW_ALL_RULES));
+    s.store.lock().unwrap().set_stored_bytes_limit(Some(8));
+    let stored = handle(
+        &s,
+        req(
+            "POST",
+            &format!("/v0/b/{BUCKET}/o?name=a.bin"),
+            &[("authorization", "Bearer owner")],
+            b"12345",
+        ),
+    );
+    assert_eq!(stored.status, 200);
+    s
+}
+
+fn delete_a(s: &StorageState) {
+    let deleted = handle(
+        s,
+        req(
+            "DELETE",
+            &format!("/v0/b/{BUCKET}/o/a.bin"),
+            &[("authorization", "Bearer owner")],
+            b"",
+        ),
+    );
+    assert_eq!(deleted.status, 204);
+}
+
+/// A finalizing chunk the bound refuses does not advance the session: the status query still
+/// reports the bytes before it, and the same chunk finishes the upload once there is room.
+#[test]
+fn a_refused_finalizing_chunk_leaves_the_firebase_resumable_session_where_it_was() {
+    let s = bounded_state_holding_five_bytes();
+    let start = handle(
+        &s,
+        req(
+            "POST",
+            &format!("/v0/b/{BUCKET}/o?name=f.bin"),
+            &[
+                ("authorization", "Bearer owner"),
+                ("x-goog-upload-protocol", "resumable"),
+                ("x-goog-upload-command", "start"),
+            ],
+            b"{}",
+        ),
+    );
+    let session = header(&start, "x-goog-upload-url")
+        .unwrap()
+        .strip_prefix("http://127.0.0.1:9199")
+        .unwrap()
+        .to_owned();
+    let chunk = |command: &str, offset: &str, body: &[u8]| {
+        handle(
+            &s,
+            req(
+                "POST",
+                &session,
+                &[
+                    ("authorization", "Bearer owner"),
+                    ("x-goog-upload-command", command),
+                    ("x-goog-upload-offset", offset),
+                ],
+                body,
+            ),
+        )
+    };
+    assert_eq!(chunk("upload", "0", b"ab").status, 200);
+    let refused = chunk("upload, finalize", "2", b"cd");
+    assert_eq!(
+        refused.status,
+        507,
+        "{}",
+        String::from_utf8_lossy(&refused.body)
+    );
+    let status = chunk("query", "0", b"");
+    assert_eq!(header(&status, "x-goog-upload-size-received"), Some("2"));
+    assert_eq!(header(&status, "x-goog-upload-status"), Some("active"));
+
+    delete_a(&s);
+    let done = chunk("upload, finalize", "2", b"cd");
+    assert_eq!(done.status, 200, "{}", String::from_utf8_lossy(&done.body));
+    assert_eq!(json_body(&done)["size"], "4");
+}
+
+/// The JSON API dialect's resumable session behaves the same way.
+#[test]
+fn a_refused_finalizing_chunk_leaves_the_json_api_resumable_session_where_it_was() {
+    let s = bounded_state_holding_five_bytes();
+    let r = handle(
+        &s,
+        req(
+            "POST",
+            &format!("/upload/storage/v1/b/{BUCKET}/o?uploadType=resumable&name=g.bin"),
+            &[
+                ("authorization", "Bearer owner"),
+                ("content-type", "application/json"),
+            ],
+            b"{}",
+        ),
+    );
+    let location = header(&r, "location")
+        .unwrap()
+        .strip_prefix("http://127.0.0.1:9199")
+        .unwrap()
+        .to_owned();
+    let put = |range: &str, body: &[u8]| {
+        handle(
+            &s,
+            req(
+                "PUT",
+                &location,
+                &[("authorization", "Bearer owner"), ("content-range", range)],
+                body,
+            ),
+        )
+    };
+    assert_eq!(put("bytes 0-1/*", b"ab").status, 308);
+    let refused = put("bytes 2-3/4", b"cd");
+    assert_eq!(
+        refused.status,
+        507,
+        "{}",
+        String::from_utf8_lossy(&refused.body)
+    );
+    assert_eq!(
+        json_body(&refused)["error"]["errors"][0]["reason"],
+        "storageCapacityExceeded"
+    );
+    let status = put("bytes */*", b"");
+    assert_eq!(status.status, 308);
+    assert_eq!(header(&status, "range"), Some("bytes=0-1"));
+
+    delete_a(&s);
+    let done = put("bytes 2-3/4", b"cd");
+    assert_eq!(done.status, 200, "{}", String::from_utf8_lossy(&done.body));
+    assert_eq!(json_body(&done)["size"], "4");
+}

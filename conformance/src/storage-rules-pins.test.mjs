@@ -1,3 +1,4 @@
+import { tmpdir } from "node:os";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { execFileSync, spawnSync } from "node:child_process";
@@ -17,7 +18,7 @@ const CLOSURE = "spec/compatibility/closure/STORAGE-RULES.json";
 const DIR = "conformance/src/storage-rules";
 
 async function tree(t, extra = {}) {
-  const root = await mkdtemp("/private/tmp/storage-rules-pins-");
+  const root = await mkdtemp(join(tmpdir(), "storage-rules-pins-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   await mkdir(join(root, DIR, "nested"), { recursive: true });
   await mkdir(join(root, "spec", "compatibility", "closure"), { recursive: true });
@@ -56,7 +57,7 @@ test("a symbolic link, a missing module directory, a missing fixture file and an
   const dirLink = await tree(t);
   await symlink(join(dirLink.root, DIR, "nested"), join(dirLink.root, DIR, "nested-link"));
   await assert.rejects(codeDigests(dirLink.root), /pin source refused/);
-  const empty = await mkdtemp("/private/tmp/storage-rules-pins-empty-");
+  const empty = await mkdtemp(join(tmpdir(), "storage-rules-pins-empty-"));
   t.after(() => rm(empty, { recursive: true, force: true }));
   await mkdir(join(empty, DIR), { recursive: true });
   await assert.rejects(codeDigests(empty), /pin source refused/);
@@ -92,7 +93,7 @@ test("the checkout must be at the pinned commit with no change to a tracked file
 });
 
 test("the real git reader reads a scratch repository and refuses a directory that is not one", async (t) => {
-  const root = await mkdtemp("/private/tmp/storage-rules-pins-git-");
+  const root = await mkdtemp(join(tmpdir(), "storage-rules-pins-git-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   // A scratch repository with no global or system configuration, so it has no signing setup to override.
   const env = { PATH: process.env.PATH, HOME: root, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_SYSTEM: "/dev/null", GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@example.test", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@example.test" };
@@ -124,7 +125,7 @@ test("the real git reader reads a scratch repository and refuses a directory tha
   await writeFile(join(root, "a.txt"), "two");
   assert.deepEqual(await checkoutMatches({ root, sourceCommit: head }), { ok: false, reason: "working tree not clean" });
   assert.equal((await gitOutput(root, ["rev-parse", "HEAD"])).trim(), head);
-  const plain = await mkdtemp("/private/tmp/storage-rules-pins-nogit-");
+  const plain = await mkdtemp(join(tmpdir(), "storage-rules-pins-nogit-"));
   t.after(() => rm(plain, { recursive: true, force: true }));
   await assert.rejects(gitOutput(plain, ["rev-parse", "HEAD"]), /git refused/);
 });
@@ -152,7 +153,7 @@ test("the closure spec must be a plain file that is not a link, every file handl
 });
 
 test("git is run with a fixed environment and the root it was given", async (t) => {
-  const bin = await mkdtemp("/private/tmp/storage-rules-pins-bin-");
+  const bin = await mkdtemp(join(tmpdir(), "storage-rules-pins-bin-"));
   t.after(() => rm(bin, { recursive: true, force: true }));
   const out = join(bin, "seen.txt");
   await writeFile(join(bin, "git"), `#!/bin/sh\nprintf '%s\n' "$LC_ALL" "$GIT_OPTIONAL_LOCKS" "$FIREEMU_SECRET" "$#" "$1" "$2" "$3" > "${out}"\nprintf 'value'\n`);
@@ -173,7 +174,7 @@ const realRoot = fileURLToPath(new URL("../..", import.meta.url));
 const realClosure = JSON.parse(readFileSync(join(realRoot, CLOSURE_SPEC)));
 
 async function inputsFile(t, mutate = (packet) => packet) {
-  const root = await mkdtemp("/private/tmp/storage-rules-pins-inputs-");
+  const root = await mkdtemp(join(tmpdir(), "storage-rules-pins-inputs-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   const adcPath = join(root, "adc.json");
   await writeFile(adcPath, JSON.stringify(ADC), { mode: 0o600 });

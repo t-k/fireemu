@@ -1,3 +1,5 @@
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import assert from "node:assert/strict";
 import { lstat, mkdir, mkdtemp, open, rm } from "node:fs/promises";
 import { readFileSync } from "node:fs";
@@ -737,7 +739,7 @@ async function walk(directory) {
 
 // Every row syncs several files, so this run takes over a minute; run it with STORAGE_RULES_SLOW_TESTS=1.
 test("a whole recording with the real journals leaves no bearer value anywhere in the run directory", { skip: !process.env.STORAGE_RULES_SLOW_TESTS && "set STORAGE_RULES_SLOW_TESTS=1" }, async (t) => {
-  const directory = await mkdtemp("/private/tmp/storage-rules-controller-");
+  const directory = await mkdtemp(join(tmpdir(), "storage-rules-controller-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const requestIds = counted.map((r) => r.id);
   const reservations = await createReservationJournal({ directory, runId: options.runId, sourceCommit: options.sourceCommit, manifestDigest: manifest.sha256, requestIds, preflightIds, io: { open, lstat } });

@@ -1,3 +1,4 @@
+import { tmpdir } from "node:os";
 import assert from "node:assert/strict";
 import { chmod, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
@@ -15,7 +16,7 @@ const commit = "a".repeat(40);
 const approval = { packet: { taskId: "STORAGE-RULES", sourceCommit: commit, packetName: "stage3-v9" }, review: { verdict: "APPROVE" } };
 
 async function scratch(t, { text = JSON.stringify(approval), mode = 0o600 } = {}) {
-  const root = await mkdtemp("/private/tmp/storage-rules-record-");
+  const root = await mkdtemp(join(tmpdir(), "storage-rules-record-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   const path = join(root, "approval.json");
   await writeFile(path, text, { mode });

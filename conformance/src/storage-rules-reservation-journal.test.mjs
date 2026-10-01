@@ -1,3 +1,4 @@
+import { tmpdir } from "node:os";
 import assert from "node:assert/strict";
 import { constants } from "node:fs";
 import { chmod, link, lstat, mkdtemp, open, readFile, rename, rm, symlink, writeFile } from "node:fs/promises";
@@ -15,7 +16,7 @@ const reserve = (attempt = 1, operationId = preflightIds[0], phase = "preflight"
 const terminal = (outcome = "preflight-failed", requests = 0, normal = 0, recovery = 0) => ({ outcome, requests, normal, recovery, maxRequests: 6648 });
 
 async function fixture(t, { delta = {}, hooks = {}, before = null } = {}) {
-  const directory = await mkdtemp("/private/tmp/storage-rules-journal-");
+  const directory = await mkdtemp(join(tmpdir(), "storage-rules-journal-"));
   const path = join(directory, "reservations.jsonl");
   const trace = [];
   const handles = [];

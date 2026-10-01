@@ -1,3 +1,4 @@
+import { tmpdir } from "node:os";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { appendFile, chmod, link, lstat, mkdir, mkdtemp, open, readFile, readdir, rename, rm, symlink, writeFile } from "node:fs/promises";
@@ -21,7 +22,7 @@ const intent = (operationId = requestIds[1], delta = {}) => ({ operationId, phas
 const response = (delta = {}) => ({ status: 200, rawHeaders: ["Content-Type", "application/json", "X-Goog-Upload-URL", SESSION], bytes: Buffer.from(JSON.stringify({ name: "n", downloadTokens: TOKEN, idToken: JWT })), ...delta });
 
 async function fixture(t, { hooks = {}, before = null, delta = {} } = {}) {
-  const directory = await mkdtemp("/private/tmp/storage-rules-capture-");
+  const directory = await mkdtemp(join(tmpdir(), "storage-rules-capture-"));
   const trace = [];
   const handles = [];
   let journal;
@@ -62,7 +63,7 @@ test("creation makes a private journal and blob directory and records the declar
 
 for (const [label, before] of [
   ["an existing journal file", async ({ directory }) => writeFile(join(directory, "captures.jsonl"), "old\n", { mode: 0o600 })],
-  ["a symlinked journal", async ({ directory }) => symlink("/private/tmp/never-used", join(directory, "captures.jsonl"))],
+  ["a symlinked journal", async ({ directory }) => symlink(join(tmpdir(), "never-used"), join(directory, "captures.jsonl"))],
   ["an existing blob directory", async ({ directory }) => mkdir(join(directory, "blobs"), { mode: 0o700 })],
   ["a group-readable run directory", async ({ directory }) => chmod(directory, 0o750)],
 ]) {

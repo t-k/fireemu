@@ -1,3 +1,5 @@
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import assert from "node:assert/strict";
 import { createHmac, generateKeyPairSync, sign } from "node:crypto";
 import { readFileSync } from "node:fs";
@@ -254,7 +256,7 @@ test("the delegate options are a closed record and the credential provider refus
 test("ownership and cleanup receipts reach the real journal as digests, and no file of it holds a secret", async (t) => {
   const { mkdtemp, open, lstat, mkdir, readFile, rm } = await import("node:fs/promises");
   const { createCaptureJournal } = await import("./storage-rules/capture-journal.mjs");
-  const directory = await mkdtemp("/private/tmp/storage-rules-delegates-");
+  const directory = await mkdtemp(join(tmpdir(), "storage-rules-delegates-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const journal = await createCaptureJournal({ directory, runId: options.runId, sourceCommit: options.sourceCommit, manifestDigest: manifest.sha256, digestSalt: salt, requestIds: manifest.rows.map((r) => r.id), io: { open, lstat, mkdir } });
   const h = await assemble({ evidence: journal });
@@ -522,7 +524,7 @@ test("a whole recording with real delegates and real journals leaves no secret a
   const { mkdtemp, open, lstat, mkdir, readFile, rm } = await import("node:fs/promises");
   const { createCaptureJournal } = await import("./storage-rules/capture-journal.mjs");
   const { createReservationJournal } = await import("./storage-rules/reservation-journal.mjs");
-  const directory = await mkdtemp("/private/tmp/storage-rules-sweep-");
+  const directory = await mkdtemp(join(tmpdir(), "storage-rules-sweep-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const requestIds = manifest.rows.map((r) => r.id);
   const io = { open, lstat, mkdir };

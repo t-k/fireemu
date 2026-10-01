@@ -1,3 +1,4 @@
+import { tmpdir } from "node:os";
 import assert from "node:assert/strict";
 import { lstat, mkdtemp, open, readFile, readdir, rm, mkdir } from "node:fs/promises";
 import { readFileSync } from "node:fs";
@@ -46,7 +47,7 @@ async function walk(directory) {
 }
 
 async function scenario(t, mutate = {}) {
-  const directory = await mkdtemp("/private/tmp/storage-rules-run-");
+  const directory = await mkdtemp(join(tmpdir(), "storage-rules-run-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const io = { open, lstat, mkdir };
   const requestIds = manifest.rows.map((r) => r.id);

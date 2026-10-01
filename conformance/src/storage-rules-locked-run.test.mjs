@@ -1,3 +1,4 @@
+import { tmpdir } from "node:os";
 import assert from "node:assert/strict";
 import { lstat, mkdir, mkdtemp, readdir, readFile, rm, unlink, writeFile } from "node:fs/promises";
 import { readFileSync } from "node:fs";
@@ -45,7 +46,7 @@ const load = async () => {
 };
 
 async function scratch(t) {
-  const root = await mkdtemp("/private/tmp/storage-rules-locked-");
+  const root = await mkdtemp(join(tmpdir(), "storage-rules-locked-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   return { root, lockDir: join(root, "sandbox-locks"), legacyLockPath: join(root, "sandbox-ledger.jsonl.lock") };
 }

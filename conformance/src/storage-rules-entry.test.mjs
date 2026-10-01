@@ -1,3 +1,4 @@
+import { tmpdir } from "node:os";
 import assert from "node:assert/strict";
 import { mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile, chmod, open } from "node:fs/promises";
 import { execFileSync, spawn } from "node:child_process";
@@ -16,7 +17,7 @@ const closure = JSON.parse(readFileSync(new URL("../../spec/compatibility/closur
 const sourceCommit = "a".repeat(40);
 const pins = ["packetSha256", "sourceCommit", "runnerSha256", "manifestSha256", "fixtureSchemaSha256"];
 // A scratch code tree the entry hashes for its runner and fixture-schema pins (the same layout as the real checkout).
-const codeRoot = mkdtempSync("/private/tmp/storage-rules-entry-code-");
+const codeRoot = mkdtempSync(join(tmpdir(), "storage-rules-entry-code-"));
 process.on("exit", () => rmSync(codeRoot, { recursive: true, force: true }));
 mkdirSync(join(codeRoot, "conformance", "src", "storage-rules", "nested"), { recursive: true });
 mkdirSync(join(codeRoot, "spec", "compatibility", "closure"), { recursive: true });
@@ -38,7 +39,7 @@ const ledger = [
 const clock = { nowSeconds: () => 1_800_000_000, waitUntilSeconds: async () => {}, sleep: async () => {} };
 
 async function checkout(t, { ledgerText = ledger, ledgerMode = 0o644, usage = [], gitHead = sourceCommit, gitStatus = "", gitExtra = "" } = {}) {
-  const root = await mkdtemp("/private/tmp/storage-rules-entry-");
+  const root = await mkdtemp(join(tmpdir(), "storage-rules-entry-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   await mkdir(join(root, ".git"));
   await mkdir(join(root, "docs.local", "instructions"), { recursive: true });
@@ -73,7 +74,7 @@ test("the paths are constants under the main checkout root", () => {
 });
 
 test("the main checkout is found above a linked worktree, whose .git is a file", async (t) => {
-  const root = await mkdtemp("/private/tmp/storage-rules-entry-root-");
+  const root = await mkdtemp(join(tmpdir(), "storage-rules-entry-root-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   await mkdir(join(root, ".git"));
   const worktree = join(root, ".worktree", "feature");
@@ -81,7 +82,7 @@ test("the main checkout is found above a linked worktree, whose .git is a file",
   await writeFile(join(worktree, ".git"), "gitdir: elsewhere\n");
   assert.equal(mainRepositoryRoot(join(worktree, "conformance", "src", "storage-rules")), root);
   assert.equal(mainRepositoryRoot(root), root);
-  await assert.rejects(async () => mainRepositoryRoot("/private/tmp/storage-rules-no-such-root-anywhere"), /main repository root not found/);
+  await assert.rejects(async () => mainRepositoryRoot(join(tmpdir(), "storage-rules-no-such-root-anywhere")), /main repository root not found/);
 });
 
 test("the real binding of this file resolves to a main checkout that has the runs directory the recordings use", async () => {
@@ -101,7 +102,7 @@ test("the real binding of this file resolves to a main checkout that has the run
 });
 
 test("the entry root comes from the file's location, not from the working directory", async (t) => {
-  const elsewhere = await mkdtemp("/private/tmp/storage-rules-entry-cwd-");
+  const elsewhere = await mkdtemp(join(tmpdir(), "storage-rules-entry-cwd-"));
   t.after(() => rm(elsewhere, { recursive: true, force: true }));
   const previous = process.cwd();
   process.chdir(elsewhere);
@@ -125,7 +126,7 @@ test("the system clock reads real time, waits until its target and sleeps for th
 });
 
 test("finding the main checkout does not swallow a filesystem error other than a missing .git", async (t) => {
-  const root = await mkdtemp("/private/tmp/storage-rules-entry-eacces-");
+  const root = await mkdtemp(join(tmpdir(), "storage-rules-entry-eacces-"));
   t.after(async () => { await chmod(join(root, "closed"), 0o700).catch(() => {}); await rm(root, { recursive: true, force: true }); });
   await mkdir(join(root, ".git"));
   await mkdir(join(root, "closed", "inner"), { recursive: true });
@@ -333,7 +334,7 @@ test("the run is refused, before anything is created, unless the code, the fixtu
     assert.equal(f.wire.length, 0, name);
   }
   const unreadable = await checkout(t);
-  const emptyCode = await mkdtemp("/private/tmp/storage-rules-entry-empty-code-");
+  const emptyCode = await mkdtemp(join(tmpdir(), "storage-rules-entry-empty-code-"));
   t.after(() => rm(emptyCode, { recursive: true, force: true }));
   unreadable.entry = bindStorageRulesEntry({ root: unreadable.root, codeRoot: emptyCode, requestImpl() {}, clock, git: async () => "" });
   await assert.rejects(unreadable.entry(unreadable.options, async () => assert.fail("must not run")), /pin source refused/);

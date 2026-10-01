@@ -1,3 +1,4 @@
+import { tmpdir } from "node:os";
 import assert from "node:assert/strict";
 import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { readFileSync } from "node:fs";
@@ -30,7 +31,7 @@ const manifest = manifestFor();
 const invalidContent = manifest.rows.filter((r) => r.family === "compile" && r.stage === "test").at(-1).request.body.json.source.files[0].content;
 
 async function fixture(t, { packetMode = 0o600, ledgerText = ledger, usageRuns = [], bad = {}, hook } = {}) {
-  const root = await mkdtemp("/private/tmp/storage-rules-runner-");
+  const root = await mkdtemp(join(tmpdir(), "storage-rules-runner-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   const adcPath = join(root, "adc.json");
   await writeFile(adcPath, JSON.stringify(ADC), { mode: 0o600 });

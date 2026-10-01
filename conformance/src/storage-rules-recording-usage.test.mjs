@@ -1,3 +1,4 @@
+import { tmpdir } from "node:os";
 import assert from "node:assert/strict";
 import { chmod, link, mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -11,7 +12,7 @@ const load = async () => {
   return module;
 };
 async function scratch(t) {
-  const directory = await mkdtemp("/private/tmp/storage-rules-usage-");
+  const directory = await mkdtemp(join(tmpdir(), "storage-rules-usage-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   return { directory, path: join(directory, "usage.jsonl") };
 }

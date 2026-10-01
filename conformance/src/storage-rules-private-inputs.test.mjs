@@ -1,3 +1,4 @@
+import { tmpdir } from "node:os";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -108,7 +109,7 @@ test("only plain data is accepted: foreign prototypes, hidden expected fields, a
 });
 
 async function fixture(t, { mode = 0o600, body = JSON.stringify(good()), prepare } = {}) {
-  const directory = await mkdtemp("/private/tmp/storage-rules-inputs-");
+  const directory = await mkdtemp(join(tmpdir(), "storage-rules-inputs-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const path = join(directory, "inputs.json");
   await writeFile(path, body, { mode });

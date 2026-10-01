@@ -17,6 +17,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 #[cfg(target_os = "macos")]
 mod acl;
+#[cfg(unix)]
+mod parent;
 #[cfg(target_os = "macos")]
 mod volume;
 
@@ -62,13 +64,17 @@ impl PublicationStage {
         let parent = target
             .parent()
             .ok_or_else(|| "the export path has no parent directory".to_owned())?;
-        prepare_parent(parent)?;
-        let parent = trusted_canonical_parent(parent)?;
+        let parent = parent::prepare_and_validate_parent(parent)?;
         let target_name = target
             .file_name()
             .ok_or_else(|| "the export path has no directory name".to_owned())?;
         let target = parent.join(target_name);
         let expected_target = target_identity(&target)?;
+        // An existing destination can itself be a mount point (a volume mounted at the export path).
+        #[cfg(target_os = "macos")]
+        if expected_target.present {
+            parent::system_volume_check(&target)?;
+        }
         validate_target(&target)?;
         if !identity_matches_path(&target, &expected_target)? {
             return Err(
@@ -221,60 +227,6 @@ fn stage_identity(path: &Path) -> Result<TargetIdentity, String> {
 }
 
 #[cfg(unix)]
-fn prepare_parent(parent: &Path) -> Result<(), String> {
-    match std::fs::symlink_metadata(parent) {
-        Ok(metadata) if metadata.file_type().is_symlink() => {
-            Err("the export parent is a symlink, which an export never follows".to_owned())
-        }
-        Ok(metadata) if !metadata.file_type().is_dir() => {
-            Err("the export parent is not a directory".to_owned())
-        }
-        Ok(_) => Ok(()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => create_private_dir(parent),
-        Err(error) => Err(format!("cannot inspect the export parent: {error}")),
-    }
-}
-
-#[cfg(unix)]
-fn trusted_canonical_parent(parent: &Path) -> Result<PathBuf, String> {
-    use std::os::unix::fs::MetadataExt as _;
-
-    let parent = std::fs::canonicalize(parent)
-        .map_err(|error| format!("cannot resolve the export parent: {error}"))?;
-    let effective_uid = rustix::process::geteuid().as_raw();
-    for ancestor in parent.ancestors() {
-        let metadata = std::fs::symlink_metadata(ancestor).map_err(|error| {
-            format!(
-                "cannot inspect export namespace ancestor {}: {error}",
-                ancestor.display()
-            )
-        })?;
-        // Before the owner and the mode are trusted: on a volume that ignores ownership they mean nothing.
-        #[cfg(target_os = "macos")]
-        volume::require_ownership(ancestor, &volume::mount_of)?;
-        let mode = metadata.mode();
-        if metadata.uid() != 0 && metadata.uid() != effective_uid {
-            return Err(format!(
-                "export namespace ancestor {} is not owned by the current user or root",
-                ancestor.display()
-            ));
-        }
-        if mode & 0o022 != 0 {
-            return Err(format!(
-                "export namespace ancestor {} is writable by other users, so staged cleanup cannot be made safe",
-                ancestor.display()
-            ));
-        }
-        #[cfg(target_os = "macos")]
-        acl::reject_unsafe_acl(
-            ancestor,
-            &acl::Trusted::of_uids(metadata.uid(), effective_uid, &acl::user_name),
-        )?;
-    }
-    Ok(parent)
-}
-
-#[cfg(unix)]
 fn create_stage_sibling(target: &Path, parent: &Path) -> Result<PathBuf, String> {
     let name = target
         .file_name()
@@ -303,18 +255,6 @@ fn create_stage_sibling(target: &Path, parent: &Path) -> Result<PathBuf, String>
 fn create_private_stage(path: &Path) -> std::io::Result<()> {
     use std::os::unix::fs::DirBuilderExt as _;
     std::fs::DirBuilder::new().mode(0o700).create(path)
-}
-
-#[cfg(unix)]
-fn create_private_dir(path: &Path) -> Result<(), String> {
-    use std::os::unix::fs::{DirBuilderExt as _, PermissionsExt as _};
-    std::fs::DirBuilder::new()
-        .recursive(true)
-        .mode(0o700)
-        .create(path)
-        .map_err(|error| format!("cannot create private export parent: {error}"))?;
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))
-        .map_err(|error| format!("cannot restrict export parent permissions: {error}"))
 }
 
 #[cfg(unix)]

@@ -533,6 +533,73 @@ fn an_apfs_volume_that_ignores_ownership_is_refused() {
     assert_refused_for_ignoring_ownership("APFS");
 }
 
+/// A missing parent below a volume that ignores ownership is refused before anything is created there:
+/// the chain is validated first, the directories are made afterwards.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_missing_parent_on_a_volume_that_ignores_ownership_creates_nothing() {
+    let root = TestRoot::new("ownership-missing-parent");
+    let Some(volume) = Volume::attach(&root.0, "APFS", false) else {
+        return;
+    };
+    let error =
+        PublicationStage::create(&volume.mount.join("a").join("b").join("export"), |_| Ok(()))
+            .unwrap_err();
+    assert!(error.contains("ignores ownership"), "{error}");
+    let leftovers: Vec<_> = std::fs::read_dir(&volume.mount)
+        .unwrap()
+        .flatten()
+        .filter(|entry| !entry.file_name().to_string_lossy().starts_with('.'))
+        .collect();
+    assert!(leftovers.is_empty(), "nothing is created: {leftovers:?}");
+}
+
+/// On a volume that enforces ownership a missing parent is made, private, and the export publishes.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_missing_parent_on_a_volume_that_enforces_ownership_is_made_private() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let root = TestRoot::new("ownership-make-parent");
+    let Some(volume) = Volume::attach(&root.0, "APFS", true) else {
+        return;
+    };
+    let target = volume.mount.join("a").join("b").join("export");
+    let stage = PublicationStage::create(&target, |_| Ok(())).expect("the parent is made");
+    for directory in ["a", "a/b"] {
+        let mode = std::fs::metadata(volume.mount.join(directory))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o7777, 0o700, "{directory}");
+    }
+    write(stage.root(), "marker", "exported");
+    stage.complete().publish().expect("the stage is published");
+    assert_eq!(
+        std::fs::read_to_string(target.join("marker")).unwrap(),
+        "exported"
+    );
+}
+
+/// An existing destination that is itself a mount point of a volume that ignores ownership is refused,
+/// although its parent is a trusted directory.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_destination_that_is_a_mount_point_of_such_a_volume_is_refused() {
+    let root = TestRoot::new("ownership-destination");
+    let Some(volume) = Volume::attach(&root.0, "APFS", false) else {
+        return;
+    };
+    // The mount point is the destination: its parent (the test root) is trusted.
+    let error = PublicationStage::create(&volume.mount, |_| Ok(())).unwrap_err();
+    assert!(error.contains("ignores ownership"), "{error}");
+    let mount_point = std::fs::canonicalize(&volume.mount).expect("resolve the mount point");
+    assert!(
+        error.contains(&mount_point.display().to_string()),
+        "{error}"
+    );
+}
+
 /// exFAT cannot hold an ACL and has no atomic rename, and is always mounted without ownership: it is
 /// refused at the first ancestor, before either matters. (Mounted with `-owners on` its root belongs to
 /// an unknown uid, which an unprivileged test cannot write to, so the ACL-less case is covered by the

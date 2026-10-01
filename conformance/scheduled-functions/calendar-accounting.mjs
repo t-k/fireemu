@@ -506,16 +506,22 @@ const LANE_FILES = ["outer.jsonl", "inner.jsonl"];
  * file (control (v)), a dropped exit row and a failed spawn with a PID are refused, and PID reuse
  * across two short children is paired by handle.
  */
-export function validatorControls(files) {
+export function validatorControls(files, validate = validateRecords) {
   const controls = [];
-  if (!files || typeof files !== "object" || validateRecords(files).ok !== true)
+  if (!files || typeof files !== "object" || validate(files).ok !== true)
     return { ok: false, controls, reason: "the base records do not validate" };
-  const copy = () => structuredClone(files);
+  const size = (set) => Object.values(set).reduce((total, rows) => total + rows.length, 0);
   const probe = (name, expected, change) => {
-    const set = copy();
+    const set = structuredClone(files);
     change(set);
-    const observed = validateRecords(set).ok ? "accepted" : "refused";
-    controls.push({ name, expected, observed });
+    const result = validate(set);
+    controls.push({
+      name,
+      expected,
+      observed: result.ok ? "accepted" : "refused",
+      rowsChanged: size(set) - size(files),
+      problems: result.problems ?? [],
+    });
   };
   for (const name of LANE_FILES) probe(`${name} removed`, "refused", (set) => delete set[name]);
   probe("dropped exit row", "refused", (set) => {
@@ -526,18 +532,14 @@ export function validatorControls(files) {
     );
   });
   const extra = (set, rows) => set["measure.jsonl"].push(...rows);
-  const last = (set) =>
-    set["measure.jsonl"]
-      .filter((row) => /^\d+$/.test(row.spawnMonoNs ?? row.exitMonoNs ?? ""))
-      .map((row) => BigInt(row.spawnMonoNs ?? row.exitMonoNs))
-      .reduce((a, b) => (a > b ? a : b), 0n);
   probe("spawn-failed with a PID", "refused", (set) =>
     extra(set, [
       { type: "spawn-failed", handle: "measure:control-failed", pid: 4242, purpose: "ps" },
     ]),
   );
   probe("PID reuse across two short children", "accepted", (set) => {
-    let mono = last(set);
+    // Monotonic times past any real one; pairing needs only exit >= birth per handle.
+    let mono = 10n ** 30n;
     const child = (handle) => [
       {
         type: "birth",

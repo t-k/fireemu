@@ -940,3 +940,490 @@ test("a certificate needs the refusal run and every control, same harness versio
     assert.ok(result.problems.length > 0, name);
   }
 });
+
+// Mutation round 1 (validator mutation of harness H): each judge's exact answer, so a mutant that
+// only changes which reason refuses a record set, or drops one of two redundant reasons, is
+// still seen.
+const birthRow = (overrides) => ({
+  type: "birth",
+  handle: "measure:9",
+  pid: 9000,
+  uid: 501,
+  purpose: "ps",
+  file: "ps",
+  argvSha256: "a".repeat(64),
+  spawnMonoNs: "5000",
+  ...overrides,
+});
+const exactCorruptions = {
+  "inner rows are not a list": [
+    (set) => (set["inner.jsonl"] = {}),
+    ["inner.jsonl: the first row is not a header", "missing inner record file"],
+  ],
+  ...Object.fromEntries(
+    [
+      ["role", "x"],
+      ["pid", 1],
+      ["pid", 2.5],
+      ["started", ""],
+      ["harnessVersion", ""],
+    ].map(([key, value]) => [
+      `header ${key} ${JSON.stringify(value)}`,
+      [
+        (set) => (set["inner.jsonl"][0] = { ...set["inner.jsonl"][0], [key]: value }),
+        ["inner.jsonl: malformed header", "missing inner record file"],
+      ],
+    ]),
+  ),
+  "a second inner file": [
+    (set) =>
+      (set["stray.jsonl"] = [
+        { type: "header", role: "inner", pid: 999, started: "x", harnessVersion: "h" },
+      ]),
+    ["stray.jsonl: a second inner record file"],
+  ],
+  ...Object.fromEntries(
+    [
+      ["handle", ""],
+      ["pid", 1],
+      ["pid", "9000"],
+      ["uid", "501"],
+      ["purpose", ""],
+      ["file", ""],
+      ["argvSha256", "abc"],
+      ["spawnMonoNs", "1.5"],
+    ].map(([key, value]) => [
+      `birth ${key} ${JSON.stringify(value)}`,
+      [
+        (set) => set["measure.jsonl"].push(birthRow({ [key]: value })),
+        ["measure.jsonl: malformed birth row"],
+      ],
+    ]),
+  ),
+  "a birth with PID 2 is well formed (it only lacks its exit)": [
+    (set) => set["measure.jsonl"].push(birthRow({ pid: 2 })),
+    ["measure.jsonl: measure:9 has no exit"],
+  ],
+  ...Object.fromEntries(
+    [
+      ["handle", ""],
+      ["pid", 0],
+      ["started", ""],
+    ].map(([key, value]) => [
+      `identity ${key} ${JSON.stringify(value)}`,
+      [
+        (set) =>
+          set["outer.jsonl"].push({
+            type: "identity",
+            handle: "outer:1",
+            pid: 201,
+            started: "s",
+            [key]: value,
+          }),
+        ["outer.jsonl: malformed identity row"],
+      ],
+    ]),
+  ),
+  "exit without a handle": [
+    (set) => set["outer.jsonl"].push({ type: "exit", handle: "", exitMonoNs: "5" }),
+    ["outer.jsonl: malformed exit row"],
+  ],
+  "exit with an unreadable time": [
+    (set) => set["outer.jsonl"].push({ type: "exit", handle: "outer:77", exitMonoNs: "x" }),
+    ["outer.jsonl: malformed exit row"],
+  ],
+  ...Object.fromEntries(
+    [
+      ["target", { pid: 1, started: "s" }],
+      ["target", { pid: 400, started: "" }],
+      ["kind", "SIGINT"],
+    ].map(([key, value]) => [
+      `signal ${key} ${JSON.stringify(value)}`,
+      [
+        (set) =>
+          set["inner.jsonl"].push({
+            type: "signal",
+            target: { pid: 400, started: "s" },
+            kind: "SIGTERM",
+            [key]: value,
+          }),
+        ["inner.jsonl: malformed signal row"],
+      ],
+    ]),
+  ),
+  "a failed spawn reuses a born handle": [
+    (set) => set["measure.jsonl"].push({ type: "spawn-failed", handle: "measure:1", pid: null }),
+    ["measure.jsonl: handle measure:1 is born twice"],
+  ],
+  "a failed spawn without a handle": [
+    (set) => set["measure.jsonl"].push({ type: "spawn-failed", handle: "", pid: null }),
+    ["measure.jsonl: a failed spawn carries a PID or no handle"],
+  ],
+  "a failed spawn with an exit": [
+    (set) =>
+      set["measure.jsonl"].push(
+        { type: "spawn-failed", handle: "measure:8", pid: null },
+        { type: "exit", handle: "measure:8", exitMonoNs: "9999" },
+      ),
+    ["measure.jsonl: failed spawn measure:8 has an exit"],
+  ],
+  "an exit at its birth's own time is accepted": [
+    (set) => {
+      const rows = set["outer.jsonl"];
+      rows.find((row) => row.handle === "outer:1" && row.type === "exit").exitMonoNs = rows.find(
+        (row) => row.handle === "outer:1" && row.type === "birth",
+      ).spawnMonoNs;
+    },
+    [],
+  ],
+  "exit before birth": [
+    (set) =>
+      (set["inner.jsonl"].find(
+        (row) => row.type === "exit" && row.handle === "inner:1",
+      ).exitMonoNs = "1"),
+    ["inner.jsonl: inner:1 exits before it was born"],
+  ],
+  "an identity row names another PID": [
+    (set) => (set["outer.jsonl"].find((row) => row.type === "identity").pid = 301),
+    ["outer.jsonl: identity row outer:2 names no matching birth"],
+  ],
+  "a lane-owned child without identity": [
+    (set) => {
+      const rows = set["outer.jsonl"];
+      rows.splice(
+        rows.findIndex((row) => row.type === "identity"),
+        1,
+      );
+    },
+    [
+      "outer.jsonl: lane-owned child outer:2 has no identity row",
+      "inner.jsonl: header identity differs from its parent's birth record",
+      "inner.jsonl: record file no parent accounts for",
+    ],
+  ],
+  "two outer children": [
+    (set) =>
+      set["measure.jsonl"].push(
+        birthRow({ handle: "measure:5", pid: 250, purpose: "outer" }),
+        { type: "identity", handle: "measure:5", pid: 250, started: "s" },
+        { type: "exit", handle: "measure:5", exitMonoNs: "6000" },
+      ),
+    [
+      "measure.jsonl: more than one outer child",
+      "measure.jsonl: more than one outer child",
+      "outer.jsonl: record file no parent accounts for",
+      "inner.jsonl: record file no parent accounts for",
+    ],
+  ],
+  "no measuring-entry file": [
+    (set) => delete set["measure.jsonl"],
+    [
+      "no measuring-entry record file",
+      "outer.jsonl: record file no parent accounts for",
+      "inner.jsonl: record file no parent accounts for",
+    ],
+  ],
+  "an outer header with another PID": [
+    (set) => (set["outer.jsonl"][0] = { ...set["outer.jsonl"][0], pid: 201 }),
+    [
+      "outer.jsonl: header identity differs from its parent's birth record",
+      "outer.jsonl: record file no parent accounts for",
+      "inner.jsonl: record file no parent accounts for",
+    ],
+  ],
+  "an unexpected row type": [
+    (set) => set["inner.jsonl"].push({ type: "note", text: "x" }),
+    ['inner.jsonl: unexpected row "note"'],
+  ],
+};
+
+test("each record corruption gives exactly its expected problems", () => {
+  for (const [name, [corrupt, expected]] of Object.entries(exactCorruptions)) {
+    const set = recordSet();
+    corrupt(set);
+    const result = validateRecords(set);
+    assert.deepEqual(result.problems, expected, name);
+    assert.equal(result.ok, expected.length === 0, name);
+  }
+  for (const files of [undefined, null, "records"])
+    assert.deepEqual(validateRecords(files), {
+      ok: false,
+      problems: ["no record files"],
+      signals: [],
+      roles: [],
+      births: {},
+    });
+});
+
+test("a harness signal row is reported with the file it came from", () => {
+  const set = recordSet();
+  const signal = {
+    type: "signal",
+    target: { pid: 400, started: "s" },
+    kind: "SIGKILL",
+    monoNs: "7",
+  };
+  set["inner.jsonl"].push(signal);
+  assert.deepEqual(validateRecords(set).signals, [{ file: "inner.jsonl", ...signal }]);
+  assert.deepEqual(validateRecords(recordSet()).births, {
+    measure: ["outer"],
+    outer: ["claim", "inner"],
+    inner: ["daemon"],
+  });
+});
+
+test("inventory reasons, the launch-time boundary, ignored rows and the pass bound are exact", () => {
+  const judge = (rows) => judgeInventory([rows, rows], ctx);
+  assert.equal(judge([row({ sid: "EPERM" })]).reason, "session query failed");
+  assert.equal(
+    judge([row({ started: "Fri Foo 2 05:59:59 2026" })]).reason,
+    "unreadable start time",
+  );
+  assert.equal(
+    judge([row({ ppid: 6001, stat: "Z", sid: "ESRCH" })]).reason,
+    "zombie with an unknown parent",
+  );
+  const atLaunch = row({ started: "Fri Oct 2 06:00:00 2026", args: "x /private/run-1/y" });
+  assert.deepEqual(judge([atLaunch]).survivors[0].rules, ["path"]);
+  const zombie = row({ pid: 5000, ppid: 400, stat: "Z", sid: "ESRCH" });
+  assert.deepEqual(judge([zombie]).survivors[0].rules, ["zombie"]);
+  const unrelated = row({ pid: 5000, ppid: 6000, sid: "ESRCH" });
+  const result = judge([unrelated, parentRow]);
+  assert.equal(result.outcome, "clean");
+  assert.deepEqual(result.passes[0].ignored, [unrelated]);
+  const clean = [row({ pid: 5001 })];
+  assert.deepEqual(judgeInventory([], ctx), {
+    passes: [],
+    outcome: "inconclusive",
+    reason: "an inventory has one to five passes",
+    survivors: [],
+  });
+  const esrch = [row({ pid: 5000, ppid: 1, sid: "ESRCH" })];
+  assert.equal(judgeInventory([clean, esrch, esrch, clean, clean], ctx).outcome, "clean");
+  assert.equal(
+    judgeInventory([clean, esrch, esrch, esrch, clean], ctx).reason,
+    "no two consecutive clean passes",
+  );
+});
+
+test("lsof answers: every shape other than a silent exit 1 or a readable listener is inconclusive", () => {
+  const inconclusive = { result: "inconclusive" };
+  for (const answer of [
+    { code: 1, stdout: "", stderr: "", timedOut: true },
+    { code: 0, stdout: "p12\n", stderr: "warning", timedOut: false },
+    { code: 2, stdout: "", stderr: "", timedOut: false },
+    { code: 0, stdout: "", stderr: "", timedOut: false },
+    { code: 0, stdout: "p12\nx\n", stderr: "", timedOut: false },
+    { code: 0, stdout: "f3\nn*:1\n", stderr: "", timedOut: false },
+  ])
+    assert.deepEqual(interpretLsof(answer), inconclusive, JSON.stringify(answer));
+  assert.deepEqual(
+    interpretLsof({ code: 0, stdout: "p12\ncnode\nf3\nn*:1\np13\n", stderr: "", timedOut: false }),
+    { result: "listener", pids: [12, 13] },
+  );
+});
+
+test("the refusal format strings are the ones at the pinned source", () => {
+  assert.deepEqual(JSON.parse(JSON.stringify(REFUSAL_FORMATS)), {
+    zone: {
+      path: "crates/fireemu-adapter-functions/src/zone.rs",
+      text: 'format!("unknown time zone {name:?}")',
+    },
+    manifest: {
+      path: "crates/fireemu-adapter-functions/src/manifest_json.rs",
+      text: 'format!("manifest: function {name:?}: time zone: {e}")',
+    },
+    label: {
+      path: "crates/fireemu/src/functions.rs",
+      text: 'format!("the Functions codebase {label:?}: {e}")',
+    },
+    fail: { path: "crates/fireemu/src/main.rs", text: 'eprintln!("error: {}", e.message)' },
+  });
+});
+
+test("refusal line problems are exact", () => {
+  const sources = pinnedSources();
+  assert.deepEqual(
+    refusalLineCheck("error: " + core, { ...fixture, timeZone: "Zoneé", sources }).problems,
+    ["the fixture's names are not modelled"],
+  );
+  assert.deepEqual(
+    refusalLineCheck("error: " + core, { ...fixture, functionName: "fé", sources }).problems,
+    ["the fixture's names are not modelled"],
+  );
+  assert.deepEqual(refusalLineCheck(undefined, { ...fixture, sources }).problems, [
+    "no pinned refusal line",
+  ]);
+  assert.deepEqual(refusalLineCheck("error: x", { ...fixture, sources }).problems, [
+    "the pinned refusal line is not explained by the pinned format strings",
+  ]);
+});
+
+test("each condition's reasons are exact", () => {
+  const reasons = (apply, letter) => {
+    const input = verdictInput();
+    apply(input);
+    return refusalVerdict(input).conditions[letter].reasons;
+  };
+  const complete = refusalVerdict(verdictInput());
+  for (const condition of Object.values(complete.conditions))
+    assert.deepEqual(condition, { ok: true, outcome: "pass", reasons: [] });
+  for (const key of [
+    "sourceCommit",
+    "harnessVersion",
+    "binarySha256",
+    "runnerSha256",
+    "fixtureSha256",
+    "configSha256",
+    "portctlSha256",
+  ])
+    assert.deepEqual(
+      reasons((v) => (v.identity[key] = "0"), "A"),
+      [`${key} differs from its pin`],
+    );
+  for (const [apply, letter, expected] of [
+    [
+      (v) => (v.identity.controlMode = "orphan"),
+      "A",
+      ["the run's identity names a control fixture"],
+    ],
+    [(v) => (v.refusalCheck = { ok: false, problems: [] }), "A", ["unchecked"]],
+    [(v) => (v.refusalCheck = { ok: false }), "A", ["unchecked"]],
+    [(v) => (v.refusalCheck = { ok: false, problems: ["p"] }), "A", ["p"]],
+    [(v) => (v.daemon.exitCode = 0), "A", ["the daemon's exit status differs from its pin"]],
+    [(v) => (v.daemon.diagnostics = []), "A", ["the pinned refusal line was not printed"]],
+    [
+      (v) => (v.chain = { rootSid: 200, outerPid: 200, outerSid: 200 }),
+      "B",
+      ["the outer launcher is not the leader of its own session"],
+    ],
+    [
+      (v) => (v.records.births.measure = []),
+      "B",
+      ["the measuring entry did not start the outer launcher"],
+    ],
+    [(v) => (v.records.births.outer = ["inner"]), "B", ["the outer launcher has no claim child"]],
+    [(v) => (v.records.births.inner = []), "B", ["the inner supervisor did not start the daemon"]],
+    [(v) => (v.records = { ...v.records, ok: false, problems: [] }), "C", ["records invalid"]],
+    [(v) => (v.records = { ...v.records, ok: false }), "C", ["records invalid"]],
+    [(v) => (v.records = { ...v.records, ok: false, problems: ["q"] }), "C", ["q"]],
+    [(v) => (v.daemon.cancelled = true), "D", ["the daemon did not exit by itself"]],
+    [(v) => (v.settle.outer = false), "D", ["a settle phase did not empty without escalation"]],
+    [(v) => (v.ports.claims = [{}]), "F", ["the private registry still holds a claim"]],
+    [(v) => (v.ports.lsof = "none"), "F", ["no lsof answer"]],
+    [(v) => (v.ports.lsof = []), "F", ["no lsof answer"]],
+    [(v) => v.ports.lsof.push({ result: "listener", pids: [1] }), "F", ["a TCP listener is held"]],
+    [(v) => v.ports.lsof.push({ result: "?" }), "F", ["an lsof answer is inconclusive"]],
+    [(v) => (v.escalation = "off"), "G", ["escalation off is for control runs only"]],
+    [(v) => (v.validatorControls = { ok: false }), "G", ["a validator control did not hold"]],
+  ])
+    assert.deepEqual(reasons(apply, letter), expected, String(apply));
+  const missing = verdictInput();
+  delete missing.inventory;
+  assert.deepEqual(refusalVerdict(missing).conditions.E, {
+    ok: false,
+    outcome: "inconclusive",
+    reasons: ["missing inventory"],
+  });
+});
+
+test("an unreadable inventory row names itself", () => {
+  assert.throws(() => parseInventory("garbage\n"), /^Error: unreadable inventory row$/);
+});
+
+test("a negative control's fired rules are exact: no port rule without a listener", () => {
+  const injected = { pid: 777 };
+  assert.deepEqual(
+    controlOutcome(
+      { mode: "orphan", injected },
+      {
+        inventory: { survivors: [{ row: { pid: 777 }, rules: ["session"] }] },
+        ports: { lsof: [] },
+      },
+    ).rulesFired,
+    ["session"],
+  );
+  assert.deepEqual(
+    controlOutcome(
+      { mode: "orphan", injected },
+      { ports: { lsof: [{ result: "listener", pids: [777] }] } },
+    ).rulesFired,
+    ["port"],
+  );
+});
+
+test("the validator controls report what each one changed and why it was refused", () => {
+  const result = validatorControls(recordSet());
+  assert.deepEqual(
+    result.controls.map(({ name, rowsChanged, problems }) => [name, rowsChanged, problems]),
+    [
+      [
+        "outer.jsonl removed",
+        -recordSet()["outer.jsonl"].length,
+        ["missing outer record file", "inner.jsonl: record file no parent accounts for"],
+      ],
+      ["inner.jsonl removed", -recordSet()["inner.jsonl"].length, ["missing inner record file"]],
+      ["dropped exit row", -1, ["measure.jsonl: measure:1 has no exit"]],
+      ["spawn-failed with a PID", 1, ["measure.jsonl: a failed spawn carries a PID or no handle"]],
+      ["PID reuse across two short children", 4, []],
+    ],
+  );
+  assert.deepEqual(validatorControls("records"), {
+    ok: false,
+    controls: [],
+    reason: "the base records do not validate",
+  });
+  // One control that does not hold fails the set, whatever the others did.
+  let calls = 0;
+  const lenient = (files) => (calls++ === 0 ? validateRecords(files) : { ok: true, problems: [] });
+  assert.equal(validatorControls(recordSet(), lenient).ok, false);
+});
+
+test("certificate problems are exact, and a missing day never throws", () => {
+  const controls = () =>
+    ["positive", "orphan", "escaper", "listener", "leftover"].map((mode) =>
+      report(mode === "positive" ? "positive" : "control", {
+        control: { mode, counts: true },
+      }),
+    );
+  assert.deepEqual(certificateVerdict({ refusal: report("certificate"), controls: controls() }), {
+    verdict: "pass",
+    problems: [],
+  });
+  assert.deepEqual(
+    certificateVerdict({
+      refusal: report("certificate", { launchTime: undefined }),
+      controls: [],
+    }).problems.slice(0, 1),
+    ["the refusal run names no harness version or day"],
+  );
+  assert.deepEqual(
+    certificateVerdict({
+      refusal: report("certificate", { harnessVersion: undefined }),
+      controls: controls(),
+    }).problems[0],
+    "the refusal run names no harness version or day",
+  );
+  assert.deepEqual(
+    certificateVerdict({
+      refusal: report("positive", {
+        verdict: { verdict: "fail" },
+        validatorControls: { ok: false },
+      }),
+      controls: controls(),
+    }).problems.slice(0, 3),
+    [
+      "the refusal report is not a certificate run",
+      "the refusal run did not pass",
+      "the refusal run's validator controls did not hold",
+    ],
+  );
+  // The day is the full UTC date: a year a millennium apart is another day.
+  const later = controls().map((r) =>
+    r.control.mode === "orphan" ? { ...r, launchTime: Date.parse("3026-10-02T03:00:00Z") } : r,
+  );
+  assert.deepEqual(
+    certificateVerdict({ refusal: report("certificate"), controls: later }).problems,
+    ["control orphan ran on another day"],
+  );
+});

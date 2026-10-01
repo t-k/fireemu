@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { EventEmitter } from "node:events";
@@ -175,4 +175,148 @@ test("only the measuring entry may start a session, and only for the outer launc
 
 test("every ps the harness runs reads start times in UTC", () => {
   assert.deepEqual(psEnv(), { PATH: process.env.PATH ?? "/usr/bin:/bin", LC_ALL: "C", TZ: "UTC" });
+});
+
+// Mutation round 1 (validator mutation of harness H): the recorder's observable contract.
+test("record files are private, handles count from one, and the child carries its handle", async (t) => {
+  const path = join(await scratch(t), "measure.jsonl");
+  const recorder = createRecorder({ path, ...header });
+  const first = recorder.spawn("/usr/bin/true", [], {}, "probe");
+  const second = recorder.spawn("/usr/bin/true", [], {}, "probe");
+  await Promise.all([first.recordExit, second.recordExit]);
+  assert.equal((await stat(path)).mode & 0o777, 0o600);
+  assert.deepEqual([first.recordHandle, second.recordHandle], ["measure:1", "measure:2"]);
+  const births = (await readRecords(path)).filter((row) => row.type === "birth");
+  assert.deepEqual(
+    births.map((row) => row.handle),
+    ["measure:1", "measure:2"],
+  );
+});
+
+test("a failed spawn answers with no code, no signal, no timeout and its error code", async (t) => {
+  const path = join(await scratch(t), "measure.jsonl");
+  const recorder = createRecorder({ path, ...header });
+  const child = recorder.spawn("/nonexistent/calendar-binary", [], {}, "probe");
+  assert.deepEqual(await child.recordExit, { code: null, signal: null, spawnFailed: true });
+  const answer = await recorder.execFile("/nonexistent/calendar-binary", [], {}, "probe");
+  assert.deepEqual(answer, {
+    code: null,
+    signal: null,
+    stdout: "",
+    stderr: "",
+    timedOut: false,
+    spawnFailed: true,
+  });
+  const failed = (await readRecords(path)).filter((row) => row.type === "spawn-failed");
+  assert.deepEqual(
+    failed.map((row) => row.error),
+    ["ENOENT", "ENOENT"],
+  );
+  // A spawn error without a code is still recorded, as "error".
+  const codedPath = join(await scratch(t), "m.jsonl");
+  const coded = createRecorder({
+    path: codedPath,
+    ...header,
+    spawnImpl: () => {
+      const child = new EventEmitter();
+      process.nextTick(() => child.emit("error", new Error("no code")));
+      return child;
+    },
+  });
+  await coded.spawn("x", [], {}, "probe").recordExit;
+  coded.close();
+  assert.equal((await readRecords(codedPath))[1].error, "error");
+});
+
+test("execFile collects both streams in full, within maxBuffer, and reports no timeout", async (t) => {
+  const path = join(await scratch(t), "measure.jsonl");
+  const recorder = createRecorder({ path, ...header });
+  const answer = await recorder.execFile(
+    "/bin/sh",
+    ["-c", "printf out; printf err >&2; sleep 0.3"],
+    {},
+    "probe",
+  );
+  assert.deepEqual(
+    [answer.code, answer.stdout, answer.stderr, answer.timedOut],
+    [0, "out", "err", false],
+    "a 0.3 s child is not killed by the default timeout",
+  );
+  assert.equal(answer.handle, "measure:1");
+  const large = await recorder.execFile(
+    "/bin/sh",
+    ["-c", "head -c 1048576 /dev/zero | tr '\\0' a"],
+    {},
+    "probe",
+  );
+  assert.equal(large.stdout.length, 1048576, "output is read until the pipes close");
+  const bounded = await recorder.execFile(
+    "/bin/sh",
+    ["-c", "printf a; printf c >&2; sleep 0.2; printf b; printf d >&2"],
+    { maxBuffer: 1 },
+    "probe",
+  );
+  assert.deepEqual([bounded.stdout, bounded.stderr], ["a", "c"]);
+});
+
+test("a finished child's timer is cleared, so no late signal row appears", async (t) => {
+  const path = join(await scratch(t), "measure.jsonl");
+  const recorder = createRecorder({ path, ...header });
+  await recorder.execFile("/usr/bin/true", [], { timeoutMs: 150 }, "probe");
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  assert.ok(!(await readRecords(path)).some((row) => row.type === "signal"));
+});
+
+test("startedOf refuses a process it cannot read, and signal propagates a failed send", async (t) => {
+  const path = join(await scratch(t), "measure.jsonl");
+  const recorder = createRecorder({ path, ...header });
+  await assert.rejects(recorder.startedOf(2 ** 22 + 12345), /start time of \d+ is unreadable/);
+  await assert.rejects(
+    recorder.signal({ pid: 2, uid: 0, started: "x" }, "SIGTERM", async () => {
+      throw new Error("send failed");
+    }),
+    /send failed/,
+  );
+});
+
+test("close is idempotent, and a closed recorder writes nothing more", async (t) => {
+  const path = join(await scratch(t), "measure.jsonl");
+  const recorder = createRecorder({ path, ...header });
+  recorder.close();
+  recorder.close();
+  assert.throws(() => recorder.identity("measure:1", 4242, "x"));
+  assert.equal((await readRecords(path)).length, 1);
+});
+
+test("a self recorder refuses an unreadable own start time and a ps that cannot start", async (t) => {
+  const directory = await scratch(t);
+  const fake =
+    ({ code = 0, text = "", error } = {}) =>
+    () => {
+      const child = new EventEmitter();
+      child.pid = 4242;
+      child.stdout = new EventEmitter();
+      child.stdout.setEncoding = () => {};
+      process.nextTick(() => {
+        if (error) return child.emit("error", error);
+        if (text) child.stdout.emit("data", text);
+        child.emit("close", code, null);
+      });
+      return child;
+    };
+  const make = (spawnImpl) =>
+    createSelfRecorder({
+      path: join(directory, "o.jsonl"),
+      role: "outer",
+      harnessVersion: "t",
+      spawnImpl,
+    });
+  await assert.rejects(make(fake({ code: 1, text: "Fri Oct 2 06:00:00 2026\n" })), /unreadable/);
+  await assert.rejects(make(fake({ code: 0, text: "  \n" })), /unreadable/);
+  await assert.rejects(make(fake({ error: new Error("spawn ps ENOENT") })), /ENOENT/);
+  const ok = await make(fake({ text: "Fri Oct  2 06:00:00 2026\n" }));
+  ok.close();
+  const rows = await readRecords(join(directory, "o.jsonl"));
+  assert.equal(rows.at(-2).file, "ps");
+  assert.equal(rows.at(-3).started, "Fri Oct 2 06:00:00 2026");
 });

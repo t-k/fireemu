@@ -3,14 +3,13 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { statSync } from "node:fs";
-import { mkdtemp } from "node:fs/promises";
 import { createServer } from "node:http";
 import { createRequire } from "node:module";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 
 import { CLI_METER } from "./auth-tenant-blocking/deploy.mjs";
+import { tempDir } from "./test-tmpdir.mjs";
 
 const { isExternal } = createRequire(import.meta.url)(CLI_METER);
 
@@ -29,7 +28,7 @@ test("only requests that leave the machine are external", () => {
 
 /** Runs `script` under the meter against a local server; the loopback counts for the test. */
 async function metered(script, limit, file) {
-  file ??= join(await mkdtemp(join(tmpdir(), "atb-meter-")), "requests");
+  file ??= join(tempDir("atb-meter-"), "requests");
   let served = 0;
   const server = createServer((request, response) => {
     served += 1;
@@ -112,7 +111,7 @@ test("the processes a metered process spawns count into the same allowance", asy
 });
 
 test("a meter that cannot record sends nothing", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "atb-meter-"));
+  const dir = tempDir("atb-meter-");
   const run = await metered(FETCH_AND_HTTP, 10, join(dir, "missing", "requests"));
   assert.equal(run.error?.signal, "SIGKILL");
   assert.equal(run.stdout, "");

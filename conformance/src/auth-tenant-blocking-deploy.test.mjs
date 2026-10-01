@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
-import { appendFile, mkdtemp } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { appendFile } from "node:fs/promises";
 import { join } from "node:path";
 import { test } from "node:test";
 
@@ -26,6 +25,7 @@ import {
   isFixtureTrigger,
 } from "./auth-tenant-blocking/deploy.mjs";
 import { validateTenantCorpus } from "./auth-tenant-blocking/guard.mjs";
+import { tempDir } from "./test-tmpdir.mjs";
 
 const PROJECT = "fireemu-oracle-idp";
 const NUMBER = "637500000000";
@@ -197,7 +197,7 @@ function fakeCloud({
   return { state, calls, runs, runOptions, deployer };
 }
 
-const buildDir = async () => join(await mkdtemp(join(tmpdir(), "atb-deploy-")), "build");
+const buildDir = async () => join(tempDir("atb-deploy-"), "build");
 const source = new URL("./auth-tenant-blocking/function", import.meta.url).pathname;
 
 test("the deployer refuses another project", () => {
@@ -420,7 +420,7 @@ test("a restore removal works without a build copy (confirmation SF-C1)", async 
     },
   });
   deployer.adoptLeftovers(new Date(0));
-  const dir = join(await mkdtemp(join(tmpdir(), "atb-restore-")), "missing", "build");
+  const dir = join(tempDir("atb-restore-"), "missing", "build");
   await deployer.remove(dir);
   assert.deepEqual(state.functions, []);
   assert.deepEqual(state.blocking, {});
@@ -431,7 +431,7 @@ test(
   { timeout: 15_000 },
   async () => {
     const { deployer, state } = fakeCloud();
-    const dir = join(await mkdtemp(join(tmpdir(), "atb-hang-")), "build");
+    const dir = join(tempDir("atb-hang-"), "build");
     await deployer.preflight();
     await deployer.deploy(source, dir);
     // From here every REST request hangs until its signal aborts it.
@@ -459,7 +459,7 @@ test(
 test("functions:delete gets at most the time left until the public deadline (review S4)", async () => {
   let clock = Date.parse("2026-09-27T12:00:00Z");
   const { deployer, runs, runOptions } = fakeCloud({ now: () => clock });
-  const dir = join(await mkdtemp(join(tmpdir(), "atb-deadline-")), "build");
+  const dir = join(tempDir("atb-deadline-"), "build");
   await deployer.preflight();
   await deployer.deploy(source, dir);
   clock += 45 * 60_000;

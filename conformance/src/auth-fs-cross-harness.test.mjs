@@ -11,6 +11,7 @@ import {
   harnessDigest as fsRulesHarness,
   programDigest as fsRulesProgram,
 } from "./fs-rules/run.mjs";
+import { tempDir } from "./test-tmpdir.mjs";
 
 const read = (path) => readFileSync(fileURLToPath(new URL(path, import.meta.url)), "utf8");
 const sha256 = (text) => createHash("sha256").update(text).digest("hex");
@@ -107,11 +108,10 @@ test("the lane's ruleset carries its own marker and tells tenants apart", () => 
 });
 
 test("the other project's key file must be private and name the other project", async () => {
-  const { mkdtempSync, writeFileSync, chmodSync } = await import("node:fs");
-  const { tmpdir } = await import("node:os");
+  const { writeFileSync, chmodSync } = await import("node:fs");
   const { join } = await import("node:path");
   const { foreignWebConfig, FOREIGN_PROJECT } = await import("./auth-fs-cross/run.mjs");
-  const dir = mkdtempSync(join(tmpdir(), "afc-foreign-"));
+  const dir = tempDir("afc-foreign-");
   const project = join(dir, "project.json");
   const key = join(dir, "key.json");
   const write = (path, value, mode = 0o600) => {

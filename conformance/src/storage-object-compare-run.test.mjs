@@ -1,8 +1,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
@@ -20,6 +19,7 @@ import {
   rehearsalPlan,
   standinSha256,
 } from "./storage-object-compare/rehearse.mjs";
+import { tempDir } from "./test-tmpdir.mjs";
 
 const RUN_JS = fileURLToPath(new URL("./storage-object-compare/run.mjs", import.meta.url));
 const BUCKET = "prod-bucket.firebasestorage.app";
@@ -50,7 +50,7 @@ const capture = (
 const lines = (rows) => `${rows.map((row) => JSON.stringify(row)).join("\n")}\n`;
 
 function productionDirectory(run, { outcome = "recorded", failedRecipes = [], bodies } = {}) {
-  const directory = mkdtempSync(join(tmpdir(), "compare-run-"));
+  const directory = tempDir("compare-run-");
   writeFileSync(
     join(directory, "meta.json"),
     JSON.stringify({ runId: run, outcome, failedRecipes }),
@@ -85,7 +85,7 @@ const options = (runs, extra = {}) => ({
   run: runs,
   bucket: BUCKET,
   project: PROJECT,
-  out: join(mkdtempSync(join(tmpdir(), "compare-out-")), "fx"),
+  out: join(tempDir("compare-out-"), "fx"),
   ...extra,
 });
 
@@ -147,7 +147,7 @@ test("normalize writes nothing when the scan refuses something", () => {
   const opts = options([leaking]);
   assert.throws(() => normalizeCommand(opts, quiet), /email outside example\.com/);
   assert.equal(existsSync(opts.out), false);
-  const forbiddenFile = join(mkdtempSync(join(tmpdir(), "compare-forbidden-")), "forbidden.txt");
+  const forbiddenFile = join(tempDir("compare-forbidden-"), "forbidden.txt");
   writeFileSync(forbiddenFile, "SECRETWORD\n\n");
   const named = options([productionDirectory(RUN1, { bodies: ['{"kind":"SECRETWORD"}'] })], {
     "forbidden-file": forbiddenFile,
@@ -185,7 +185,7 @@ test("a fixture whose files do not match its index is refused", () => {
 const LOCAL_BUCKET = "example.appspot.com";
 const LOCAL_PROJECT = "example-project";
 function localJournal(run, rows) {
-  const directory = mkdtempSync(join(tmpdir(), "compare-local-"));
+  const directory = tempDir("compare-local-");
   const path = join(directory, "journal.jsonl");
   writeFileSync(
     path,
@@ -275,7 +275,7 @@ test("compare reports DIVERGENCE with its kinds, the most frequent differences, 
       headers: { "content-type": "application/json; charset=utf-8" },
     }),
   );
-  const reportPath = join(mkdtempSync(join(tmpdir(), "compare-report-")), "report.json");
+  const reportPath = join(tempDir("compare-report-"), "report.json");
   const report = compareCommand(
     { fixture, journal, receipt: receiptFor(journal, fixture), report: reportPath },
     quiet,
@@ -459,12 +459,11 @@ test("the command line refuses a bad command or argument with a message and exit
     assert.equal(result.status, 2, args.join(" "));
     assert.ok(result.stderr.length > 0);
   }
-  mkdirSync(join(tmpdir(), "compare-cli"), { recursive: true });
 });
 
 test("normalize creates the output directory and its missing parents", () => {
   const opts = options([productionDirectory(RUN1)]);
-  opts.out = join(mkdtempSync(join(tmpdir(), "compare-nested-")), "a", "b", "fx");
+  opts.out = join(tempDir("compare-nested-"), "a", "b", "fx");
   normalizeCommand(opts, quiet);
   assert.ok(existsSync(join(opts.out, "index.json")));
 });
@@ -508,7 +507,7 @@ test("a difference is described by its kind and what identifies it, so that equa
 const cli = (...args) => spawnSync(process.execPath, [RUN_JS, ...args], { encoding: "utf8" });
 
 test("the command line normalizes with several --run, and compares with a receipt and a report", () => {
-  const out = join(mkdtempSync(join(tmpdir(), "compare-cli-")), "fx");
+  const out = join(tempDir("compare-cli-"), "fx");
   const normalized = cli(
     "normalize",
     "--run",
@@ -617,7 +616,7 @@ test("an argument without a value, or without --, is refused with its name", () 
 });
 
 test("the index records what the scan was given: whether a private list was used and how many entries (no digest: a hash of a small list can be guessed)", () => {
-  const file = join(mkdtempSync(join(tmpdir(), "compare-forbidden-")), "forbidden.txt");
+  const file = join(tempDir("compare-forbidden-"), "forbidden.txt");
   writeFileSync(file, "ALPHA\nBETA\n\n  GAMMA  \n");
   const used = options([productionDirectory(RUN1)], { "forbidden-file": file });
   const index = normalizeCommand(used, quiet);

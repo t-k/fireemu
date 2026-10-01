@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
-import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { readFile, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { test } from "node:test";
@@ -12,6 +11,7 @@ import {
   takeProjectLocks,
   withProjectLocks,
 } from "./auth-federation/project-locks.mjs";
+import { tempDir } from "./test-tmpdir.mjs";
 
 const HOLDER = {
   taskId: "AUTH-FEDERATION-SANDBOX",
@@ -21,7 +21,7 @@ const HOLDER = {
 };
 
 async function ledgerDir() {
-  const dir = await mkdtemp(join(tmpdir(), "fed-plock-"));
+  const dir = tempDir("fed-plock-");
   return join(dir, "sandbox-ledger.jsonl");
 }
 

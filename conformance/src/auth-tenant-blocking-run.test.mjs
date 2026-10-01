@@ -22,6 +22,7 @@ import {
   TASK_ID,
 } from "./auth-tenant-blocking/run.mjs";
 import { createRequestBudget, installBudget } from "./auth-tenant-blocking/budget.mjs";
+import { tempDir } from "./test-tmpdir.mjs";
 
 async function admitLocal(rows, suite = "tenant", budget = "1800") {
   const dir = await mkdtemp(join(tmpdir(), "atb-admission-"));
@@ -830,7 +831,7 @@ test("a signal stops the signJwt wait before the next attempt (review-2 Should-3
 
 test("the budget wiring notes only a runner that stopped before its started line (review-2 Should-2)", async () => {
   const { appendStartedLine, underCampaignBudget } = await import("./auth-tenant-blocking/run.mjs");
-  const dir = await mkdtemp(join(tmpdir(), "atb-wiring-"));
+  const dir = tempDir("atb-wiring-");
   const ledger = join(dir, "ledger.jsonl");
   await writeFile(ledger, "");
   const target = { fetch: async () => new Response("{}") };

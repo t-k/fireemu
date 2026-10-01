@@ -1,19 +1,12 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import {
-  chmodSync,
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  writeFileSync,
-} from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
 import { rehearse, standinSha256 } from "./storage-object-compare/rehearse.mjs";
 import { rehearseCommand } from "./storage-object-compare/run.mjs";
+import { tempDir } from "./test-tmpdir.mjs";
 
 const sha256 = (text) => createHash("sha256").update(text).digest("hex");
 const COMMIT = "b0fc2485d5596439b515f4fd12f6c3ce68d4af91";
@@ -30,7 +23,7 @@ const gitEnv = {
 const git = (cwd, ...args) => spawnSync("git", args, { cwd, env: gitEnv, encoding: "utf8" });
 
 function setup({ clean = true, script } = {}) {
-  const root = mkdtempSync(join(tmpdir(), "compare-rehearse-"));
+  const root = tempDir("compare-rehearse-");
   const recorder = join(root, "recorder");
   mkdirSync(join(recorder, "conformance"), { recursive: true });
   writeFileSync(join(recorder, "conformance", "file.txt"), "x");
@@ -164,7 +157,7 @@ test("the sandbox is on by default on macOS only, and the out directory's missin
 });
 
 test("a timed-out rehearsal takes its whole process group with it", async () => {
-  const marker = join(mkdtempSync(join(tmpdir(), "compare-group-")), "pid");
+  const marker = join(tempDir("compare-group-"), "pid");
   const s = setup({ script: `#!/bin/sh\nsleep 30 &\necho $! > ${marker}\nwait\n` });
   await assert.rejects(rehearse(input(s, { timeoutMs: 600 })), /timed out/);
   const pid = Number(readFileSync(marker, "utf8"));

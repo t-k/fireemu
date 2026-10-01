@@ -8,6 +8,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { sendDeleteAfterWriteAhead, writePrivateJsonDurably } from "./sandbox-session.mjs";
 import { promisify } from "node:util";
+import { tempDir } from "../test-tmpdir.mjs";
 
 const execFileAsync = promisify(execFile);
 const prefix = "projects/fireemu-oracle-sbx/databases/(default)/documents/";
@@ -180,7 +181,7 @@ async function observeCollector({
   scopeNames = scopeNames.map(runtimeName);
   extraNames = extraNames.map(runtimeName);
   visibleNames = visibleNames.map(runtimeName);
-  const directory = await mkdtemp(join(tmpdir(), "fireemu-array-shrink-"));
+  const directory = tempDir("fireemu-array-shrink-");
   const input = join(directory, "programs.json");
   const output = join(directory, "results.json");
   const meta = join(directory, "meta.json");

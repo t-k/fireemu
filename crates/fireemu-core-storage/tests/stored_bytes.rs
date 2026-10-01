@@ -79,6 +79,7 @@ fn an_unset_limit_bounds_nothing() {
 fn a_write_past_the_limit_is_refused_whole() {
     let mut s = StorageState::new(1);
     s.set_stored_bytes_limit(Some(10));
+    assert_eq!(s.stored_bytes_limit(), Some(10));
     put(&mut s, "a", 6).unwrap();
     put(&mut s, "b", 4).unwrap();
     assert_eq!(
@@ -217,6 +218,7 @@ enum Op {
     Delete(u8),
     Upload(u8, usize, usize),
     RemoveBucket,
+    ClearAndRestore,
 }
 
 fn op() -> impl Strategy<Value = Op> {
@@ -226,6 +228,7 @@ fn op() -> impl Strategy<Value = Op> {
         2 => (0_u8..4).prop_map(Op::Delete),
         2 => (0_u8..4, 0_usize..8, 0_usize..8).prop_map(|(o, a, b)| Op::Upload(o, a, b)),
         1 => Just(Op::RemoveBucket),
+        1 => Just(Op::ClearAndRestore),
     ]
 }
 
@@ -281,7 +284,18 @@ proptest! {
                     refused
                 }
                 Op::RemoveBucket => {
-                    s.remove_bucket(&bucket());
+                    let held = s.objects(&bucket()).len();
+                    prop_assert_eq!(s.remove_bucket(&bucket()), held);
+                    None
+                }
+                // A session snapshot and its restore keep the count with the objects.
+                Op::ClearAndRestore => {
+                    let captured = s.capture_buckets(|_| true);
+                    prop_assert_eq!(captured.retained_blob_bytes(), recount(&captured));
+                    s.clear();
+                    prop_assert_eq!(s.retained_blob_bytes(), 0);
+                    s.restore_buckets(|_| true, &captured);
+                    prop_assert_eq!(observable(&s), before.clone());
                     None
                 }
             };

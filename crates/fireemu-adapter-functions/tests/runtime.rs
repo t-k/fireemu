@@ -4403,3 +4403,18 @@ async fn refused_source_admissions_are_counted_by_category_until_a_reset() {
     assert_eq!(refusals(&runtime).get("admission.capacity"), None);
     runtime.shutdown().await;
 }
+
+/// A manual run's refusal reads as its message, whichever kind it is (the control API and logs
+/// show it as is).
+#[test]
+fn a_schedule_run_refusal_displays_its_message() {
+    use fireemu_adapter_functions::runtime::ScheduleRunError;
+    assert_eq!(
+        ScheduleRunError::Capacity("the queue is full".to_owned()).to_string(),
+        "the queue is full"
+    );
+    assert_eq!(
+        ScheduleRunError::Refused("function \"ok\" is not scheduled".to_owned()).to_string(),
+        "function \"ok\" is not scheduled"
+    );
+}

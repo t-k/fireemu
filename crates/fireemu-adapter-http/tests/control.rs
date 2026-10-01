@@ -412,8 +412,20 @@ struct FakeFunctions(Mutex<Vec<(String, Vec<Value>)>>);
 
 impl fireemu_adapter_http::control::FunctionsHook for FakeFunctions {
     fn on_clock_changed(&self) {}
-    fn run_schedule(&self, _: &str) -> Result<(), String> {
-        Ok(())
+    fn run_schedule(
+        &self,
+        function: &str,
+    ) -> Result<(), fireemu_adapter_http::control::RunScheduleError> {
+        use fireemu_adapter_http::control::RunScheduleError;
+        match function {
+            "full" => Err(RunScheduleError::Capacity(
+                "the functions event queue is at capacity".to_owned(),
+            )),
+            "busy" => Err(RunScheduleError::Refused(
+                "a run is already queued".to_owned(),
+            )),
+            _ => Ok(()),
+        }
     }
     fn is_idle(&self) -> bool {
         true
@@ -2194,4 +2206,39 @@ fn storage_rules_control_still_requires_a_string_source() {
         handle(&s, "PUT", "/v1/storage/rules", &json!({"source": 7})).status,
         400
     );
+}
+
+/// A manual schedule run refused because the event queue is full answers 429
+/// `RESOURCE_EXHAUSTED`, as the other local capacity refusals do, and claims nothing was
+/// enqueued; a run the function or its overlap policy refuses stays 400 `INVALID_ARGUMENT`.
+#[test]
+fn a_manual_run_refused_for_capacity_answers_resource_exhausted() {
+    let mut s = state(Arc::new(AtomicUsize::new(0)));
+    s.functions = Some(Arc::new(FakeFunctions(Mutex::new(Vec::new()))));
+    let run = |name: &str| {
+        handle(
+            &s,
+            "POST",
+            &format!("/v1/sessions/default/functions/{name}:run"),
+            &json!({}),
+        )
+    };
+    let full = run("full");
+    assert_eq!(full.status, 429, "{}", full.body);
+    assert!(
+        full.body.to_string().contains("RESOURCE_EXHAUSTED"),
+        "{}",
+        full.body
+    );
+    assert!(full.body.get("enqueued").is_none());
+    let busy = run("busy");
+    assert_eq!(busy.status, 400, "{}", busy.body);
+    assert!(
+        busy.body.to_string().contains("INVALID_ARGUMENT"),
+        "{}",
+        busy.body
+    );
+    let ok = run("tick");
+    assert_eq!(ok.status, 200);
+    assert_eq!(ok.body["enqueued"], true);
 }

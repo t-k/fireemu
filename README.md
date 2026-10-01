@@ -367,7 +367,7 @@ This is a local fixed-window simulation. It does not reproduce Firebase’s full
 
 ### Configure execution time
 
-Set the emulator’s starting time with `daemon.clockStart`. Configure the clock, time zone, and other scheduling behavior in the `scheduler` section. This lets you test scheduled functions independently of the actual time.
+Set the emulator’s starting time with `daemon.clockStart`. Configure the clock, time zone, and other scheduling behavior in the `scheduler` section. This lets you test scheduled functions independently of the actual time. If the Functions event queue is full (4,096 active events or 64 MiB), a scheduled run that comes due stays due and runs once room frees, and a manual run answers `429 RESOURCE_EXHAUSTED` without being queued.
 
 See the [configuration schema](spec/config/fireemu.schema.json) for available settings and values. 
 

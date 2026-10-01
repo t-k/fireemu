@@ -371,19 +371,36 @@ fn firebase_and_json_api_list_pages_share_the_combined_entry_budget() {
         }
     }
 
-    for route in [
-        format!("/v0/b/{BUCKET}/o"),
-        format!("/storage/v1/b/{BUCKET}/o"),
+    // The Firebase route pages as production does (recorded, lean-v5): the token is the standard
+    // base64, padding kept, of the last entry returned; the JSON API route names the first entry
+    // of the next page.
+    for (route, tokens) in [
+        (
+            format!("/v0/b/{BUCKET}/o"),
+            [Some("Yg=="), Some("ZGlyMi8="), None],
+        ),
+        (
+            format!("/storage/v1/b/{BUCKET}/o"),
+            [Some("dir/"), Some("zz"), None],
+        ),
     ] {
         let mut token: Option<String> = None;
-        for (expected_items, expected_prefixes, expected_token) in [
-            (vec!["a", "b"], vec![], Some("dir/")),
-            (vec![], vec!["dir/", "dir2/"], Some("zz")),
-            (vec!["zz"], vec![], None),
-        ] {
+        for ((expected_items, expected_prefixes), expected_token) in [
+            (vec!["a", "b"], vec![]),
+            (vec![], vec!["dir/", "dir2/"]),
+            (vec!["zz"], vec![]),
+        ]
+        .into_iter()
+        .zip(tokens)
+        {
             let query = token.as_ref().map_or_else(
                 || "delimiter=%2F&maxResults=2".to_owned(),
-                |value| format!("delimiter=%2F&maxResults=2&pageToken={value}"),
+                |value| {
+                    format!(
+                        "delimiter=%2F&maxResults=2&pageToken={}",
+                        value.replace('=', "%3D")
+                    )
+                },
             );
             let response = handle(
                 &storage,
@@ -2461,7 +2478,8 @@ fn a_firebase_upload_defaults_the_content_disposition_to_inline_with_the_file_na
             ),
         );
         assert_eq!(json_body(&named)["contentDisposition"], "attachment");
-        // The download header keeps the official shape and names the file once.
+        // The download header: strict sends the stored value as production does (recorded), the
+        // emulator profile keeps the official shape and names the file once.
         let media = handle(
             &s,
             req(
@@ -2473,7 +2491,11 @@ fn a_firebase_upload_defaults_the_content_disposition_to_inline_with_the_file_na
         );
         assert_eq!(
             header(&media, "content-disposition"),
-            Some("inline; filename*=object.bin")
+            Some(if acceptance == TokenAcceptance::Verified {
+                "inline; filename*=utf-8''object.bin"
+            } else {
+                "inline; filename*=object.bin"
+            })
         );
     }
 }
@@ -2952,13 +2974,647 @@ fn json_api_routing_and_range_edges() {
         assert_eq!(reversed.status, 200, "{acceptance:?}");
         assert_eq!(reversed.body.as_ref(), b"hello");
         let xml = format!("/{BUCKET}/f.txt");
+        // The XML API's answers were not recorded: both profiles keep the official emulator's.
         let beyond = get(&xml, "bytes=50-60");
-        if acceptance == TokenAcceptance::Verified {
-            assert_eq!(beyond.status, 416);
-            assert_eq!(header(&beyond, "content-range"), Some("bytes */5"));
+        assert_eq!(beyond.status, 200, "{acceptance:?}");
+        assert_eq!(beyond.body.as_ref(), b"hello");
+    }
+}
+
+/// The Firebase list answers `maxResults=0` with production's 400 under strict (recorded, lean-v4
+/// and lean-v5: `content-length: 97`, the two-space layout without a final line feed,
+/// `application/json; charset=UTF-8`); the emulator profile keeps the official
+/// emulator's 200 (measured, firebase-tools 15.28.2: an empty page), since it never refuses what
+/// the official emulator admits. An empty list is `{"prefixes":[],"items":[]}` with both keys.
+#[test]
+fn the_firebase_list_refuses_max_results_zero_only_under_strict_and_keeps_its_key_set() {
+    let route = format!("/v0/b/{BUCKET}/o?maxResults=0");
+    let strict = state_with(Some(ALLOW_ALL_RULES), TokenAcceptance::Verified);
+    let refused = handle(&strict, req("GET", &route, &[], b""));
+    assert_eq!(refused.status, 400);
+    assert_eq!(refused.body.len(), 97);
+    assert_eq!(
+        String::from_utf8_lossy(&refused.body),
+        "{\n  \"error\": {\n    \"code\": 400,\n    \"message\": \"Expect maxResults to be a positive number.\"\n  }\n}"
+    );
+    assert_eq!(
+        header(&refused, "content-type"),
+        Some("application/json; charset=UTF-8")
+    );
+    let emulator = state_with(Some(ALLOW_ALL_RULES), TokenAcceptance::EmulatorMock);
+    assert_eq!(handle(&emulator, req("GET", &route, &[], b"")).status, 200);
+    for state in [&strict, &emulator] {
+        let empty = handle(
+            state,
+            req("GET", &format!("/v0/b/{BUCKET}/o?maxResults=2"), &[], b""),
+        );
+        assert_eq!(empty.status, 200);
+        assert_eq!(json_body(&empty), json!({"prefixes": [], "items": []}));
+    }
+}
+
+const PRODUCTION_412_BODY: &str = "{\n  \"error\": {\n    \"code\": 412,\n    \"message\": \"At least one of the pre-conditions you specified did not hold.\",\n    \"errors\": [\n      {\n        \"message\": \"At least one of the pre-conditions you specified did not hold.\",\n        \"domain\": \"global\",\n        \"reason\": \"conditionNotMet\",\n        \"locationType\": \"header\",\n        \"location\": \"If-Match\"\n      }\n    ]\n  }\n}\n";
+
+/// The JSON API object guards as production answers them under strict (recorded, probe-v4,
+/// lean-v4 and lean-v5; the official emulator reads no preconditions, so the emulator profile
+/// ignores them, see the next test): a
+/// not-match guard that names the current value is a 304 without a body on PATCH, PUT, DELETE,
+/// upload and the reads; a match guard that does not hold, or whose value is the negative number
+/// `-1`, is the 412 body; a not-match guard of `-1` is accepted (a value that is no number at all
+/// is the 400 of the next test). `PUT` updates the metadata and answers the object resource with
+/// the metageneration one higher.
+#[test]
+#[allow(clippy::too_many_lines)]
+fn json_api_object_guards_and_put_answer_as_recorded() {
+    for acceptance in [TokenAcceptance::Verified] {
+        let s = state_with(Some(ALLOW_ALL_RULES), acceptance);
+        let object = format!("/storage/v1/b/{BUCKET}/o/g.bin");
+        let upload = |q: &str| {
+            handle(
+                &s,
+                req(
+                    "POST",
+                    &format!("/upload/storage/v1/b/{BUCKET}/o?uploadType=media&name=g.bin{q}"),
+                    &[
+                        ("authorization", "Bearer owner"),
+                        ("content-type", "application/octet-stream"),
+                    ],
+                    b"hello",
+                ),
+            )
+        };
+        let seeded = upload("&ifGenerationMatch=0");
+        assert_eq!(seeded.status, 200, "{acceptance:?}");
+        let generation = json_body(&seeded)["generation"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let call = |method: &str, q: &str, body: &[u8]| {
+            handle(
+                &s,
+                req(
+                    method,
+                    &format!("{object}?{q}"),
+                    &[
+                        ("authorization", "Bearer owner"),
+                        ("content-type", "application/json"),
+                    ],
+                    body,
+                ),
+            )
+        };
+        let body =
+            br#"{"contentType":"application/octet-stream","metadata":{"marker":"subject-update"}}"#;
+        // 304: no body, `application/json`, on every method; media reads say octet-stream.
+        for method in ["PATCH", "PUT"] {
+            let r = call(method, &format!("ifGenerationNotMatch={generation}"), body);
+            assert_eq!(r.status, 304, "{acceptance:?} {method}");
+            assert!(r.body.is_empty());
+            assert_eq!(header(&r, "content-type"), Some("application/json"));
+            let r = call(
+                method,
+                &format!("ifGenerationMatch={generation}&ifMetagenerationNotMatch=1"),
+                body,
+            );
+            assert_eq!(r.status, 304, "{acceptance:?} {method}");
+        }
+        let r = upload(&format!("&ifGenerationNotMatch={generation}"));
+        assert_eq!((r.status, r.body.len()), (304, 0), "{acceptance:?} upload");
+        assert_eq!(header(&r, "content-type"), Some("application/json"));
+        let r = call("DELETE", &format!("ifGenerationNotMatch={generation}"), b"");
+        assert_eq!((r.status, r.body.len()), (304, 0), "{acceptance:?} delete");
+        assert_eq!(header(&r, "content-type"), Some("application/json"));
+        let r = call("GET", &format!("ifGenerationNotMatch={generation}"), b"");
+        assert_eq!(r.status, 304);
+        assert_eq!(header(&r, "content-type"), Some("application/json"));
+        let r = call(
+            "GET",
+            &format!("alt=media&ifGenerationNotMatch={generation}"),
+            b"",
+        );
+        assert_eq!(r.status, 304);
+        assert_eq!(header(&r, "content-type"), Some("application/octet-stream"));
+        // 412: the recorded body for a match guard that does not hold or is not a number.
+        for (method, q) in [
+            ("PATCH", "ifGenerationMatch=999999".to_owned()),
+            (
+                "PUT",
+                format!("ifGenerationMatch={generation}&ifMetagenerationMatch=-1"),
+            ),
+            (
+                "DELETE",
+                format!("ifGenerationMatch={generation}&ifMetagenerationMatch=-1"),
+            ),
+            (
+                "GET",
+                format!("ifGenerationMatch={generation}&ifMetagenerationMatch=-1"),
+            ),
+            ("GET", "ifGenerationMatch=999999".to_owned()),
+        ] {
+            let r = call(method, &q, body);
+            assert_eq!(r.status, 412, "{acceptance:?} {method} {q}");
+            assert_eq!(String::from_utf8_lossy(&r.body), PRODUCTION_412_BODY);
+            assert_eq!(
+                header(&r, "content-type"),
+                Some("application/json; charset=UTF-8")
+            );
+        }
+        let r = call("GET", "alt=media&ifGenerationMatch=999999", b"");
+        assert_eq!(r.status, 412);
+        assert_eq!(
+            String::from_utf8_lossy(&r.body),
+            "At least one of the pre-conditions you specified did not hold."
+        );
+        assert!(header(&r, "content-type").unwrap().starts_with("text/html"));
+        // A not-match guard that is not a number is accepted: PUT updates, the metageneration moves.
+        let r = call(
+            "PUT",
+            &format!("ifGenerationMatch={generation}&ifMetagenerationNotMatch=-1"),
+            body,
+        );
+        assert_eq!(
+            r.status,
+            200,
+            "{acceptance:?}: {}",
+            String::from_utf8_lossy(&r.body)
+        );
+        let put = json_body(&r);
+        assert_eq!(put["kind"], "storage#object");
+        assert_eq!(put["metageneration"], "2");
+        assert_eq!(put["metadata"], json!({"marker": "subject-update"}));
+        assert_eq!(put["contentType"], "application/octet-stream");
+        assert_eq!(put["generation"], generation);
+        // The same guard on DELETE goes ahead and deletes.
+        let r = call(
+            "DELETE",
+            &format!("ifGenerationMatch={generation}&ifMetagenerationNotMatch=-1"),
+            b"",
+        );
+        assert_eq!(r.status, 204);
+        assert_eq!(call("GET", "", b"").status, 404);
+    }
+}
+
+/// The 400 production answers to a guard value that is no `long` (recorded, lean-v4 and lean-v5:
+/// `1.5`, `not-a-number` and an empty value, for the match and the not-match metageneration
+/// guards of PATCH, PUT and DELETE; the recorded lengths are 311, 314, 317, 320, 335 and 338).
+/// A refused DELETE keeps the object.
+#[test]
+fn strict_guard_values_that_are_no_long_answer_the_recorded_400() {
+    let s = state_with(Some(ALLOW_ALL_RULES), TokenAcceptance::Verified);
+    let object = format!("/storage/v1/b/{BUCKET}/o/l.bin");
+    let seeded = handle(
+        &s,
+        req(
+            "POST",
+            &format!("/upload/storage/v1/b/{BUCKET}/o?uploadType=media&name=l.bin"),
+            &[
+                ("authorization", "Bearer owner"),
+                ("content-type", "application/octet-stream"),
+            ],
+            b"hello",
+        ),
+    );
+    let generation = json_body(&seeded)["generation"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let call = |method: &str, q: &str| {
+        handle(
+            &s,
+            req(
+                method,
+                &format!("{object}?{q}"),
+                &[
+                    ("authorization", "Bearer owner"),
+                    ("content-type", "application/json"),
+                ],
+                br#"{"metadata":{"k":"v"}}"#,
+            ),
+        )
+    };
+    let expected = |value: &str, key: &str| {
+        let message = format!("Invalid long value: '{value}'.");
+        format!(
+            "{{\n  \"error\": {{\n    \"code\": 400,\n    \"message\": \"{message}\",\n    \"errors\": [\n      {{\n        \"message\": \"{message}\",\n        \"domain\": \"global\",\n        \"reason\": \"invalidParameter\",\n        \"locationType\": \"parameter\",\n        \"location\": \"{key}\"\n      }}\n    ]\n  }}\n}}\n"
+        )
+    };
+    let lengths = [
+        ("", "ifMetagenerationMatch", 311),
+        ("", "ifMetagenerationNotMatch", 314),
+        ("1.5", "ifMetagenerationMatch", 317),
+        ("1.5", "ifMetagenerationNotMatch", 320),
+        ("not-a-number", "ifMetagenerationMatch", 335),
+        ("not-a-number", "ifMetagenerationNotMatch", 338),
+    ];
+    for method in ["PATCH", "PUT", "DELETE"] {
+        for (value, key, length) in lengths {
+            let q = format!("ifGenerationMatch={generation}&{key}={value}");
+            let r = call(method, &q);
+            assert_eq!(r.status, 400, "{method} {q}");
+            assert_eq!(r.body.len(), length, "{method} {q}");
+            assert_eq!(String::from_utf8_lossy(&r.body), expected(value, key));
+            assert_eq!(
+                header(&r, "content-type"),
+                Some("application/json; charset=UTF-8")
+            );
+        }
+        // A generation guard is read by the same parser.
+        let r = call(method, "ifGenerationNotMatch=abc");
+        assert_eq!(r.status, 400, "{method}");
+        assert_eq!(
+            String::from_utf8_lossy(&r.body),
+            expected("abc", "ifGenerationNotMatch")
+        );
+        // The refused write changed nothing.
+        let read = call("GET", "");
+        assert_eq!(read.status, 200, "{method}");
+        assert_eq!(json_body(&read)["metageneration"], "1", "{method}");
+    }
+    // A negative value is a number: it fails a match guard and holds a not-match guard.
+    assert_eq!(call("PATCH", "ifMetagenerationMatch=-1").status, 412);
+    assert_eq!(call("PATCH", "ifMetagenerationNotMatch=-1").status, 200);
+    assert_eq!(call("DELETE", "ifMetagenerationNotMatch=-1").status, 204);
+    assert_eq!(call("GET", "").status, 404);
+}
+
+/// `PUT` on the JSON API object replaces the custom metadata and drops the download tokens
+/// (recorded, lean-v4 1344 to 1349); `PATCH` merges and keeps the token. The metageneration rises
+/// by one either way. The official emulator answers 501, so both profiles serve production's
+/// answer.
+#[test]
+fn a_put_replaces_the_custom_metadata_and_the_download_tokens() {
+    for acceptance in BOTH_PROFILES {
+        let s = state_with(Some(ALLOW_ALL_RULES), acceptance);
+        let owner = [
+            ("authorization", "Bearer owner"),
+            ("content-type", "application/json"),
+        ];
+        let object = format!("/storage/v1/b/{BUCKET}/o/r.bin");
+        let seeded = handle(
+            &s,
+            req(
+                "POST",
+                &format!("/upload/storage/v1/b/{BUCKET}/o?uploadType=media&name=r.bin"),
+                &[
+                    ("authorization", "Bearer owner"),
+                    ("content-type", "application/octet-stream"),
+                ],
+                b"hello",
+            ),
+        );
+        assert_eq!(seeded.status, 200, "{acceptance:?}");
+        let minted = handle(
+            &s,
+            req(
+                "POST",
+                &format!("/v0/b/{BUCKET}/o/r.bin?create_token=true"),
+                &owner,
+                b"",
+            ),
+        );
+        assert_eq!(minted.status, 200, "{acceptance:?}");
+        let token = json_body(&minted)["downloadTokens"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let patch = handle(
+            &s,
+            req(
+                "PATCH",
+                &object,
+                &owner,
+                br#"{"metadata":{"marker":"advanced","keep":"1"}}"#,
+            ),
+        );
+        let patched = json_body(&patch);
+        assert_eq!(
+            patched["metadata"]["firebaseStorageDownloadTokens"], token,
+            "{acceptance:?}: a PATCH keeps the token"
+        );
+        assert_eq!(patched["metadata"]["keep"], "1");
+        let before = patched["metageneration"]
+            .as_str()
+            .unwrap()
+            .parse::<u64>()
+            .unwrap();
+        let put = handle(
+            &s,
+            req(
+                "PUT",
+                &object,
+                &owner,
+                br#"{"metadata":{"marker":"subject-update"}}"#,
+            ),
+        );
+        assert_eq!(put.status, 200, "{acceptance:?}");
+        let put = json_body(&put);
+        assert_eq!(
+            put["metadata"],
+            json!({"marker": "subject-update"}),
+            "{acceptance:?}: the earlier key and the token are gone"
+        );
+        assert_eq!(
+            put["metageneration"]
+                .as_str()
+                .unwrap()
+                .parse::<u64>()
+                .unwrap(),
+            before + 1
+        );
+        let read = handle(&s, req("GET", &object, &owner, b""));
+        assert_eq!(
+            json_body(&read)["metadata"],
+            json!({"marker": "subject-update"})
+        );
+        // The old token is dead: the next Firebase metadata read mints another (recorded, lean-v4
+        // 1352), so a download URL made before the PUT stops working.
+        let v0 = handle(
+            &s,
+            req("GET", &format!("/v0/b/{BUCKET}/o/r.bin"), &owner, b""),
+        );
+        let reminted = json_body(&v0)["downloadTokens"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        assert_ne!(reminted, token, "{acceptance:?}");
+        // An empty `metadata` object replaces everything with nothing.
+        let cleared = handle(&s, req("PUT", &object, &owner, br#"{"metadata":{}}"#));
+        assert_eq!(json_body(&cleared).get("metadata"), None, "{acceptance:?}");
+    }
+}
+
+/// A read of an object name with a line feed is a missing object on both dialects (recorded,
+/// lean-v5: 404 on the metadata and the media read of the Firebase dialect and the JSON API),
+/// not a 400 from the name check.
+#[test]
+fn a_read_of_a_name_with_a_line_feed_is_not_found() {
+    for acceptance in BOTH_PROFILES {
+        let s = state_with(Some(ALLOW_ALL_RULES), acceptance);
+        let owner = [("authorization", "Bearer owner")];
+        for (path, expect_json) in [
+            (format!("/v0/b/{BUCKET}/o/a%0Ab.txt"), true),
+            (format!("/v0/b/{BUCKET}/o/a%0Ab.txt?alt=media"), true),
+            (format!("/storage/v1/b/{BUCKET}/o/a%0Ab.txt"), true),
+            (
+                format!("/storage/v1/b/{BUCKET}/o/a%0Ab.txt?alt=media"),
+                false,
+            ),
+        ] {
+            let r = handle(&s, req("GET", &path, &owner, b""));
+            assert_eq!(r.status, 404, "{acceptance:?} {path}");
+            let json = header(&r, "content-type")
+                .unwrap()
+                .starts_with("application/json");
+            let v0 = path.starts_with("/v0/");
+            assert_eq!(json, expect_json || v0, "{acceptance:?} {path}");
+            if !v0 && json {
+                assert!(String::from_utf8_lossy(&r.body).contains("No such object"));
+            }
+        }
+    }
+}
+
+/// The emulator profile does what the official emulator does with every guard (measured,
+/// firebase-tools 15.28.2): it reads none, so a not-match guard that names the current value, a
+/// match guard that does not hold and a value that is not a number all let the request complete,
+/// on PATCH, PUT, DELETE, upload, copy and the reads. It never refuses what the official emulator
+/// completes.
+#[test]
+fn the_emulator_profile_ignores_every_json_api_guard() {
+    let s = state_with(Some(ALLOW_ALL_RULES), TokenAcceptance::EmulatorMock);
+    let owner = [
+        ("authorization", "Bearer owner"),
+        ("content-type", "application/json"),
+    ];
+    let upload = |q: &str| {
+        handle(
+            &s,
+            req(
+                "POST",
+                &format!("/upload/storage/v1/b/{BUCKET}/o?uploadType=media&name=i.bin{q}"),
+                &[
+                    ("authorization", "Bearer owner"),
+                    ("content-type", "application/octet-stream"),
+                ],
+                b"hello",
+            ),
+        )
+    };
+    let seeded = upload("");
+    assert_eq!(seeded.status, 200);
+    let generation = json_body(&seeded)["generation"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let object = format!("/storage/v1/b/{BUCKET}/o/i.bin");
+    let call = |method: &str, q: &str| {
+        handle(
+            &s,
+            req(
+                method,
+                &format!("{object}?{q}"),
+                &owner,
+                br#"{"contentType":"application/octet-stream","metadata":{"m":"1"}}"#,
+            ),
+        )
+        .status
+    };
+    // Reads: a not-match guard naming the current value, and a match guard that fails.
+    assert_eq!(
+        call("GET", &format!("ifGenerationNotMatch={generation}")),
+        200
+    );
+    assert_eq!(
+        call(
+            "GET",
+            "alt=media&ifGenerationNotMatch=999999&ifMetagenerationMatch=abc"
+        ),
+        200
+    );
+    assert_eq!(call("GET", "ifGenerationMatch=999999"), 200);
+    // Updates: not-match naming the current value, a failing and a malformed match guard.
+    for method in ["PATCH", "PUT"] {
+        assert_eq!(
+            call(method, &format!("ifGenerationNotMatch={generation}")),
+            200,
+            "{method}"
+        );
+        assert_eq!(call(method, "ifGenerationMatch=999999"), 200, "{method}");
+        assert_eq!(call(method, "ifMetagenerationMatch=-1"), 200, "{method}");
+    }
+    // An upload over an existing object ignores `ifGenerationMatch=0` and a not-match guard.
+    assert_eq!(upload("&ifGenerationMatch=0").status, 200);
+    let current = json_body(&upload(""))
+        .get("generation")
+        .unwrap()
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_eq!(
+        upload(&format!("&ifGenerationNotMatch={current}")).status,
+        200
+    );
+    // Copy source guards.
+    let copy = handle(
+        &s,
+        req(
+            "POST",
+            &format!("/storage/v1/b/{BUCKET}/o/i.bin/copyTo/b/{BUCKET}/o/j.bin?ifSourceGenerationMatch=999999"),
+            &owner,
+            b"{}",
+        ),
+    );
+    assert_eq!(copy.status, 200, "{}", String::from_utf8_lossy(&copy.body));
+    // Deletes.
+    assert_eq!(
+        call(
+            "DELETE",
+            "ifGenerationNotMatch=999999&ifGenerationMatch=abc"
+        ),
+        204
+    );
+    assert_eq!(call("GET", ""), 404);
+}
+
+/// The JSON API list with `maxResults=0` is the bare kind under strict (recorded, lean-v4: 200, the
+/// 32 bytes `{ "kind": "storage#objects" }` in the Google-fronted layout); the official emulator
+/// answers a next-page token naming the first object (measured, firebase-tools 15.28.2), which the
+/// emulator profile keeps.
+#[test]
+fn the_json_api_list_with_max_results_zero_is_the_bare_kind_only_under_strict() {
+    let route = format!("/storage/v1/b/{BUCKET}/o?maxResults=0");
+    let owner = [("authorization", "Bearer owner")];
+    let strict = state_with(Some(ALLOW_ALL_RULES), TokenAcceptance::Verified);
+    assert_eq!(anonymous_media_upload(&strict, "l.txt"), 200);
+    let r = handle(&strict, req("GET", &route, &owner, b""));
+    assert_eq!(r.status, 200);
+    assert_eq!(
+        String::from_utf8_lossy(&r.body),
+        "{\n  \"kind\": \"storage#objects\"\n}\n"
+    );
+    assert_eq!(r.body.len(), 32);
+    assert_eq!(
+        header(&r, "content-type"),
+        Some("application/json; charset=UTF-8")
+    );
+    let emulator = state_with(Some(ALLOW_ALL_RULES), TokenAcceptance::EmulatorMock);
+    assert_eq!(anonymous_media_upload(&emulator, "l.txt"), 200);
+    let r = handle(&emulator, req("GET", &route, &owner, b""));
+    assert_eq!(r.status, 200);
+    assert_eq!(json_body(&r)["nextPageToken"], "l.txt");
+}
+
+/// The headers of a media answer under strict follow what production sent (recorded, lean-v4 and
+/// lean-v5): the stored content encoding and length and `x-goog-metageneration`, no empty
+/// `content-encoding`, the JSON API without `accept-ranges` but with `vary` and an `attachment`
+/// disposition, the Firebase dialect with `accept-ranges`, the custom metadata and the download
+/// token as `x-goog-meta-*` headers and no disposition when none is stored. The emulator profile
+/// keeps the official emulator's headers (measured, firebase-tools 15.28.2).
+#[test]
+#[allow(clippy::too_many_lines)]
+fn media_headers_follow_production_only_under_strict() {
+    let owner = [("authorization", "Bearer owner")];
+    let (ct, body) = multipart(
+        &json!({"contentType": "text/plain", "metadata": {"color": "red"}}),
+        "text/plain",
+        b"hello",
+    );
+    for acceptance in BOTH_PROFILES {
+        let strict = acceptance == TokenAcceptance::Verified;
+        let s = state_with(Some(ALLOW_ALL_RULES), acceptance);
+        let fb = handle(
+            &s,
+            req(
+                "POST",
+                &format!("/v0/b/{BUCKET}/o?name=fb.txt&uploadType=multipart"),
+                &[
+                    ("content-type", &ct),
+                    ("x-goog-upload-protocol", "multipart"),
+                ],
+                &body,
+            ),
+        );
+        assert_eq!(fb.status, 200);
+        let token = json_body(&fb)["downloadTokens"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let seeded = handle(
+            &s,
+            req(
+                "POST",
+                &format!("/upload/storage/v1/b/{BUCKET}/o?uploadType=media&name=g.txt"),
+                &[
+                    ("authorization", "Bearer owner"),
+                    ("content-type", "text/plain"),
+                ],
+                b"hello",
+            ),
+        );
+        assert_eq!(seeded.status, 200);
+        let v0 = handle(
+            &s,
+            req(
+                "GET",
+                &format!("/v0/b/{BUCKET}/o/fb.txt?alt=media"),
+                &[],
+                b"",
+            ),
+        );
+        let gcs = handle(
+            &s,
+            req(
+                "GET",
+                &format!("/storage/v1/b/{BUCKET}/o/g.txt?alt=media"),
+                &owner,
+                b"",
+            ),
+        );
+        assert_eq!((v0.status, gcs.status), (200, 200));
+        if strict {
+            assert_eq!(header(&v0, "x-goog-metageneration"), Some("1"));
+            assert_eq!(
+                header(&v0, "x-goog-stored-content-encoding"),
+                Some("identity")
+            );
+            assert_eq!(header(&v0, "x-goog-stored-content-length"), Some("5"));
+            assert_eq!(header(&v0, "x-goog-meta-color"), Some("red"));
+            assert_eq!(
+                header(&v0, "x-goog-meta-firebasestoragedownloadtokens"),
+                Some(token.as_str())
+            );
+            assert_eq!(header(&v0, "accept-ranges"), Some("bytes"));
+            assert_eq!(header(&v0, "pragma"), Some("no-cache"));
+            assert!(header(&v0, "content-encoding").is_none());
+            assert!(header(&v0, "x-goog-metadatageneration").is_none());
+            assert!(header(&v0, "vary").is_none());
+            assert_eq!(
+                header(&v0, "content-disposition"),
+                Some("inline; filename*=utf-8''fb.txt")
+            );
+            assert_eq!(
+                header(&v0, "x-goog-hash"),
+                Some("crc32c=mnG7TA==, md5=XUFAKrxLKna5cZ2REBfFkg==")
+            );
+            assert_eq!(header(&gcs, "content-disposition"), Some("attachment"));
+            assert_eq!(header(&gcs, "vary"), Some("Origin, X-Origin"));
+            assert!(header(&gcs, "accept-ranges").is_none());
+            assert_eq!(
+                header(&gcs, "x-goog-hash"),
+                Some("crc32c=mnG7TA==,md5=XUFAKrxLKna5cZ2REBfFkg==")
+            );
+            assert_eq!(
+                header(&gcs, "cache-control"),
+                Some("no-cache, no-store, max-age=0, must-revalidate")
+            );
+            assert!(header(&gcs, "x-goog-meta-color").is_none());
         } else {
-            assert_eq!(beyond.status, 200);
-            assert_eq!(beyond.body.as_ref(), b"hello");
+            assert_eq!(header(&v0, "x-goog-metadatageneration"), Some("1"));
+            assert_eq!(header(&v0, "content-encoding"), Some(""));
+            assert!(header(&v0, "x-goog-meta-color").is_none());
+            assert_eq!(header(&gcs, "accept-ranges"), Some("bytes"));
+            assert!(header(&gcs, "x-goog-stored-content-length").is_none());
         }
     }
 }
@@ -3049,7 +3705,8 @@ fn json_api_patch_on_the_storage_v1_spelling_updates_metadata_as_production_does
     );
     assert_eq!(json_body(&r)["metadata"]["owner"], "new");
     assert_eq!(json_body(&r)["metageneration"], "3");
-    // An object that is not there is the JSON 404, and malformed preconditions and bodies are 400.
+    // An object that is not there is the JSON 404, a match guard that is no number is the 400
+    // of production and a malformed body is a 400.
     let r = handle(
         &s,
         req(
@@ -3065,7 +3722,12 @@ fn json_api_patch_on_the_storage_v1_spelling_updates_metadata_as_production_does
         format!("No such object: {BUCKET}/missing.bin")
     );
     assert_eq!(json_body(&r)["error"]["errors"][0]["reason"], "notFound");
-    assert_eq!(patch("?ifGenerationMatch=garbage", b"{}").status, 400);
+    let refused = patch("?ifGenerationMatch=garbage", b"{}");
+    assert_eq!(refused.status, 400);
+    assert_eq!(
+        json_body(&refused)["error"]["message"],
+        "Invalid long value: 'garbage'."
+    );
     assert_eq!(patch("", b"{not json").status, 400);
     // The download spelling stays GET-only, and the short spelling is unchanged.
     let r = handle(
@@ -3112,7 +3774,8 @@ fn json_api_preconditions_generations_and_ranges_are_strict() {
     assert_eq!(r.status, 200, "{}", String::from_utf8_lossy(&r.body));
     let generation = json_body(&r)["generation"].as_str().unwrap().to_owned();
     let object = format!("/storage/v1/b/{BUCKET}/o/g.bin");
-    // Malformed preconditions are errors, not ignored.
+    // A match guard that is no number is the 400 production answers (recorded, lean-v4; the
+    // exact bytes are in the guards test) and the object stays.
     let r = handle(
         &s,
         req(
@@ -3123,7 +3786,10 @@ fn json_api_preconditions_generations_and_ranges_are_strict() {
         ),
     );
     assert_eq!(r.status, 400);
-    assert_eq!(json_body(&r)["error"]["errors"][0]["reason"], "invalid");
+    assert_eq!(
+        json_body(&r)["error"]["errors"][0]["reason"],
+        "invalidParameter"
+    );
     // A stale generation selector never targets the live object.
     let r = handle(
         &s,
@@ -3162,13 +3828,9 @@ fn json_api_preconditions_generations_and_ranges_are_strict() {
             b"",
         ),
     );
-    assert_eq!(r.status, 412, "{}", String::from_utf8_lossy(&r.body));
-    let err = json_body(&r);
-    assert_eq!(err["error"]["errors"][0]["reason"], "conditionNotMet");
-    assert!(err["error"]["message"]
-        .as_str()
-        .unwrap()
-        .starts_with("ifGenerationNotMatch"));
+    // A not-match guard that names the current value is the bodiless 304 (recorded, lean-v4).
+    assert_eq!(r.status, 304, "{}", String::from_utf8_lossy(&r.body));
+    assert!(r.body.is_empty());
     // Ranges: suffix, open end, unsatisfiable.
     let get = |range: &str| {
         handle(
@@ -3192,9 +3854,16 @@ fn json_api_preconditions_generations_and_ranges_are_strict() {
     // official emulator's whole-object fallback.
     // https://cloud.google.com/storage/docs/json_api/v1/status-codes
     // https://www.rfc-editor.org/rfc/rfc9110.html#section-14.4
+    // The recorded answers (lean-v4/v5): the JSON API says it in a sentence typed `text/html`,
+    // the Firebase dialect in an XML error that names the range asked for.
     let r = get("bytes=10-");
     assert_eq!(r.status, 416);
     assert_eq!(header(&r, "content-range"), Some("bytes */10"));
+    assert_eq!(
+        String::from_utf8_lossy(&r.body),
+        "Request range not satisfiable"
+    );
+    assert_eq!(header(&r, "content-type"), Some("text/html; charset=UTF-8"));
     let r = handle(
         &s,
         req(
@@ -3205,7 +3874,15 @@ fn json_api_preconditions_generations_and_ranges_are_strict() {
         ),
     );
     assert_eq!(r.status, 416);
-    assert_eq!(header(&r, "content-range"), Some("bytes */10"));
+    assert!(header(&r, "content-range").is_none());
+    assert_eq!(
+        String::from_utf8_lossy(&r.body),
+        "<?xml version='1.0' encoding='UTF-8'?><Error><Code>InvalidRange</Code><Message>The requested range cannot be satisfied.</Message><Details>bytes=10-</Details></Error>"
+    );
+    assert_eq!(
+        header(&r, "content-type"),
+        Some("application/xml; charset=UTF-8")
+    );
     let compatible = state_with(None, TokenAcceptance::EmulatorMock);
     let uploaded = handle(
         &compatible,
@@ -3271,32 +3948,62 @@ fn json_api_preconditions_generations_and_ranges_are_strict() {
 }
 
 #[test]
-fn strict_empty_object_accepts_nonzero_suffix_range() {
-    // RFC 9110 section 14.1.1 allows a nonzero suffix on a zero-length representation.
-    // https://www.rfc-editor.org/rfc/rfc9110.html#section-14.1.1
-    let s = state(None);
-    let object = format!("/storage/v1/b/{BUCKET}/o/empty.bin");
-    let uploaded = handle(
-        &s,
-        req(
-            "POST",
-            &format!("/upload/storage/v1/b/{BUCKET}/o?uploadType=media&name=empty.bin"),
-            &[],
-            b"",
-        ),
-    );
-    assert_eq!(uploaded.status, 200);
-    let response = handle(
-        &s,
-        req(
-            "GET",
-            &format!("{object}?alt=media"),
-            &[("range", "bytes=-5")],
-            b"",
-        ),
-    );
-    assert_eq!(response.status, 200);
-    assert!(response.body.is_empty());
+fn an_empty_object_with_a_nonzero_suffix_range_is_an_empty_206_only_under_strict() {
+    // Recorded on the JSON API (lean-v4): `bytes=-1` of an empty object answers 206 with
+    // `Content-Range: bytes 0-0/0` and no body; the emulator profile keeps the official
+    // emulator's whole-object 200.
+    for (acceptance, status) in [
+        (TokenAcceptance::Verified, 206),
+        (TokenAcceptance::EmulatorMock, 200),
+    ] {
+        let s = state_with(None, acceptance);
+        let object = format!("/storage/v1/b/{BUCKET}/o/empty.bin");
+        let uploaded = handle(
+            &s,
+            req(
+                "POST",
+                &format!("/upload/storage/v1/b/{BUCKET}/o?uploadType=media&name=empty.bin"),
+                &[],
+                b"",
+            ),
+        );
+        assert_eq!(uploaded.status, 200);
+        let response = handle(
+            &s,
+            req(
+                "GET",
+                &format!("{object}?alt=media"),
+                &[("range", "bytes=-5")],
+                b"",
+            ),
+        );
+        assert_eq!(response.status, status, "{acceptance:?}");
+        assert!(response.body.is_empty());
+        if acceptance == TokenAcceptance::Verified {
+            assert_eq!(header(&response, "content-range"), Some("bytes 0-0/0"));
+        }
+        // `bytes=0-` and `bytes=-0` of an empty object are unsatisfiable under strict.
+        for range in ["bytes=0-", "bytes=0-0", "bytes=-0"] {
+            let r = handle(
+                &s,
+                req(
+                    "GET",
+                    &format!("{object}?alt=media"),
+                    &[("range", range)],
+                    b"",
+                ),
+            );
+            assert_eq!(
+                r.status,
+                if acceptance == TokenAcceptance::Verified {
+                    416
+                } else {
+                    200
+                },
+                "{acceptance:?} {range}"
+            );
+        }
+    }
 }
 
 #[test]

@@ -12,7 +12,7 @@ nothing until they are ruled on (they fail no claim while excluded by name).
 
 ## firebase-protocol
 
-parity: 57 &middot; documented-divergence: 45
+parity: 56 &middot; documented-divergence: 46
 
 | program | step | status |
 | --- | --- | --- |
@@ -109,7 +109,7 @@ parity: 57 &middot; documented-divergence: 45
 | `fb-list` | `subdirectory` | parity |
 | `fb-list` | `empty-prefix` | parity |
 | `fb-list` | `paged` | documented-divergence |
-| `fb-list` | `page-token-shape` | parity |
+| `fb-list` | `page-token-shape` | documented-divergence |
 | `fb-list` | `list-closed-prefix` | parity |
 | `fb-list` | `list-listable-prefix-anonymous` | parity |
 | `fb-list` | `get-in-listable-prefix-anonymous` | parity |
@@ -161,7 +161,7 @@ parity: 17 &middot; documented-divergence: 16
 
 ## json-api
 
-parity: 33 &middot; documented-divergence: 42
+parity: 35 &middot; documented-divergence: 40
 
 | program | step | status |
 | --- | --- | --- |
@@ -194,7 +194,7 @@ parity: 33 &middot; documented-divergence: 42
 | `gcs-update-list-delete` | `patch-remove-custom-key` | documented-divergence |
 | `gcs-update-list-delete` | `patch-missing` | parity |
 | `gcs-update-list-delete` | `patch-storage-v1-spelling` | documented-divergence |
-| `gcs-update-list-delete` | `put-update` | parity |
+| `gcs-update-list-delete` | `put-update` | documented-divergence |
 | `gcs-update-list-delete` | `list-delimited` | documented-divergence |
 | `gcs-update-list-delete` | `list-flat-names` | parity |
 | `gcs-update-list-delete` | `list-empty` | parity |
@@ -220,10 +220,10 @@ parity: 33 &middot; documented-divergence: 42
 | `gcs-preconditions` | `insert-if-generation-match-current` | documented-divergence |
 | `gcs-preconditions` | `patch-if-metageneration-mismatch` | documented-divergence |
 | `gcs-preconditions` | `get-if-generation-not-match-current` | documented-divergence |
-| `gcs-preconditions` | `delete-if-generation-mismatch` | documented-divergence |
-| `gcs-preconditions` | `malformed-precondition` | documented-divergence |
+| `gcs-preconditions` | `delete-if-generation-mismatch` | parity |
+| `gcs-preconditions` | `malformed-precondition` | parity |
 | `gcs-preconditions` | `get-selected-generation-missing` | parity |
-| `gcs-preconditions` | `object-still-present` | documented-divergence |
+| `gcs-preconditions` | `object-still-present` | parity |
 | `gcs-checksums` | `matching-md5` | documented-divergence |
 | `gcs-checksums` | `mismatching-md5` | documented-divergence |
 | `gcs-checksums` | `mismatching-md5-not-published` | documented-divergence |

@@ -1245,6 +1245,130 @@ fn an_empty_page_treats_only_an_unfolded_entry_under_the_prefix_as_a_token() {
 }
 
 #[test]
+fn list_after_pages_one_merged_order_and_names_the_last_entry_returned() {
+    let mut s = StorageState::new(1);
+    let b = bucket();
+    for n in [
+        "p/a.txt",
+        "p/b.txt",
+        "p/dir/x.txt",
+        "p/dir/y.txt",
+        "p/dir2/z.txt",
+        "p/zz.txt",
+        "m/before",
+        "q/other",
+    ] {
+        s.put(
+            &b,
+            &name(n),
+            b"x".to_vec(),
+            NewMetadata::default(),
+            Precondition::default(),
+            t(1),
+        )
+        .unwrap();
+    }
+    let page = |after: Option<&str>| s.list_after(&b, "p/", Some("/"), after, 2);
+    let first = page(None);
+    let names: Vec<&str> = first.items.iter().map(|m| m.name.as_str()).collect();
+    assert_eq!(names, ["p/a.txt", "p/b.txt"]);
+    assert!(first.prefixes.is_empty());
+    assert_eq!(first.next_page_token.as_deref(), Some("p/b.txt"));
+    // The second page holds only prefixes, each once, and names the last of them.
+    let second = page(first.next_page_token.as_deref());
+    assert!(second.items.is_empty());
+    assert_eq!(second.prefixes, ["p/dir/", "p/dir2/"]);
+    assert_eq!(second.next_page_token.as_deref(), Some("p/dir2/"));
+    let third = page(second.next_page_token.as_deref());
+    let names: Vec<&str> = third.items.iter().map(|m| m.name.as_str()).collect();
+    assert_eq!(names, ["p/zz.txt"]);
+    assert!(third.prefixes.is_empty());
+    assert_eq!(third.next_page_token, None);
+    // A point that names no entry skips everything up to it; one past the end is an empty page.
+    let skipped = page(Some("p/c"));
+    assert_eq!(skipped.prefixes, ["p/dir/", "p/dir2/"]);
+    assert!(page(Some("p/zzz")).items.is_empty());
+    // The scan seeks to `after`: a point below the prefix lists from its start, a point inside a
+    // folded directory skips the rest of that directory, a point outside the prefix is empty.
+    // A name sits between the point and the prefix: the scan must not stop there.
+    let from_start = page(Some("a"));
+    assert_eq!(from_start.items.len(), 2);
+    assert_eq!(page(Some("m/before")).items.len(), 2);
+    let inside = page(Some("p/dir/x.txt"));
+    assert_eq!(inside.prefixes, ["p/dir2/"]);
+    assert_eq!(inside.items.len(), 1);
+    assert_eq!(inside.next_page_token, None);
+    let outside = page(Some("q"));
+    assert!(outside.items.is_empty() && outside.prefixes.is_empty());
+    // Without a delimiter every object is an entry, and one page can hold them all.
+    let flat = s.list_after(&b, "p/", None, None, 10);
+    assert_eq!(flat.items.len(), 6);
+    assert!(flat.prefixes.is_empty());
+    assert_eq!(flat.next_page_token, None);
+}
+
+/// `CustomMetadataPatch::Replace` (the JSON API `PUT`) swaps the whole custom map, drops the
+/// download tokens and leaves the map undefined when nothing is left.
+#[test]
+fn a_replace_patch_swaps_the_custom_map_and_drops_the_download_tokens() {
+    use fireemu_core_storage::store::CustomMetadataPatch;
+    let mut s = StorageState::new(1);
+    let b = bucket();
+    let n = name("replace");
+    let custom = BTreeMap::from([
+        ("keep".to_owned(), "1".to_owned()),
+        (
+            "firebaseStorageDownloadTokens".to_owned(),
+            "tok-a".to_owned(),
+        ),
+    ]);
+    s.put(
+        &b,
+        &n,
+        b"x".to_vec(),
+        NewMetadata {
+            custom: Some(custom),
+            ..NewMetadata::default()
+        },
+        Precondition::default(),
+        t(1),
+    )
+    .unwrap();
+    let before = s.get(&b, &n).unwrap().clone();
+    assert_eq!(before.download_tokens, ["tok-a"]);
+    let replace = |entries: &[(&str, &str)]| MetadataPatch {
+        custom: Some(CustomMetadataPatch::Replace(
+            entries
+                .iter()
+                .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+                .collect(),
+        )),
+        ..MetadataPatch::default()
+    };
+    let swapped = s
+        .update_metadata(
+            &b,
+            &n,
+            &replace(&[("only", "2")]),
+            Precondition::default(),
+            t(2),
+        )
+        .unwrap();
+    assert_eq!(
+        swapped.custom,
+        BTreeMap::from([("only".to_owned(), "2".to_owned())])
+    );
+    assert!(swapped.download_tokens.is_empty());
+    assert!(swapped.custom_defined);
+    assert_eq!(swapped.metageneration, before.metageneration + 1);
+    let emptied = s
+        .update_metadata(&b, &n, &replace(&[]), Precondition::default(), t(3))
+        .unwrap();
+    assert!(emptied.custom.is_empty());
+    assert!(!emptied.custom_defined);
+}
+
+#[test]
 fn absent_objects_satisfy_only_if_generation_match_zero() {
     let mut s = StorageState::new(1);
     let b = bucket();

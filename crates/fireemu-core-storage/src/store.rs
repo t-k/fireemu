@@ -91,6 +91,10 @@ pub enum CustomMetadataPatch {
     Clear,
     /// Merge: keys mapped to `None` are removed, others inserted.
     Merge(BTreeMap<String, Option<String>>),
+    /// The JSON API's `PUT` (`objects.update`): the map replaces every custom key and every
+    /// download token the object had (recorded, lean-v4: a `PUT` naming one key leaves that key
+    /// alone and drops the earlier key and the token).
+    Replace(BTreeMap<String, String>),
 }
 
 /// Metadata patch: `Some(None)` clears a field, `None` keeps it.
@@ -2206,6 +2210,61 @@ impl StorageState {
         result
     }
 
+    /// Lists the entries (objects, and common prefixes when a delimiter is given) that sort after
+    /// `after`, at most `max` of them in one merged name order, and names the last entry returned
+    /// as the continuation point when more entries follow. This is the paging of the Firebase
+    /// dialect as production answers it (recorded, lean-v5: the page token is the encoded full name
+    /// of the last entry returned), where [`Self::list`] names the first entry of the next page.
+    /// `max` must be positive; an `after` that names no entry still skips every entry up to it.
+    #[must_use]
+    pub fn list_after(
+        &self,
+        bucket: &BucketName,
+        prefix: &str,
+        delimiter: Option<&str>,
+        after: Option<&str>,
+        max: usize,
+    ) -> ListPage {
+        let delimiter = delimiter.filter(|delimiter| !delimiter.is_empty());
+        // A name below `after` can only fold to an entry that is also at most `after`, so the scan
+        // starts at the later of the prefix and `after` instead of walking the prefix from its
+        // first name on every page.
+        let start = after.filter(|after| *after > prefix).unwrap_or(prefix);
+        let lower = (bucket.clone(), ObjectName::range_start(start));
+        let mut items = Vec::new();
+        let mut prefixes: Vec<String> = Vec::new();
+        let mut last: Option<String> = None;
+        let mut more = false;
+        for ((candidate_bucket, name), meta) in self.objects.range(lower..) {
+            if candidate_bucket != bucket || !name.as_str().starts_with(prefix) {
+                break;
+            }
+            let rest = &name.as_str()[prefix.len()..];
+            let folded =
+                delimiter.and_then(|d| rest.find(d).map(|i| format!("{prefix}{}{d}", &rest[..i])));
+            let entry = folded.clone().unwrap_or_else(|| name.as_str().to_owned());
+            if after.is_some_and(|after| entry.as_str() <= after)
+                || last.as_deref() == Some(entry.as_str())
+            {
+                continue;
+            }
+            if items.len() + prefixes.len() == max {
+                more = true;
+                break;
+            }
+            match folded {
+                Some(prefix_entry) => prefixes.push(prefix_entry),
+                None => items.push(meta.clone()),
+            }
+            last = Some(entry);
+        }
+        ListPage {
+            items,
+            prefixes,
+            next_page_token: if more { last } else { None },
+        }
+    }
+
     /// Applies the Firebase dialect's post-commit `contentDisposition` default (`value`) to a
     /// stored object that has none, exactly as the official emulator mutates the stored
     /// metadata after its rules ran and after the finalize event was built: no metageneration
@@ -2296,6 +2355,11 @@ impl MetadataPatch {
                     }
                 }
                 // Upstream drops the map entirely when the merge leaves no keys.
+                next.custom_defined = !next.custom.is_empty();
+            }
+            Some(CustomMetadataPatch::Replace(entries)) => {
+                next.custom.clone_from(entries);
+                next.download_tokens.clear();
                 next.custom_defined = !next.custom.is_empty();
             }
         }

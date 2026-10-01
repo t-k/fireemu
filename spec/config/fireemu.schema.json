@@ -692,6 +692,11 @@
         "rules": { "type": "string", "description": "Path of the Storage Security Rules file (service firebase.storage)." },
         "mode": { "enum": ["native"] },
         "objectNameNormalization": { "enum": ["preserve"] },
+        "maxStoredBytes": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "The object data the Storage emulator retains, in bytes, a local bound production does not have. Unset, nothing is bounded. A write that would cross it (upload, resumable finalize, copy) is refused with 507 and the message storage.maxStoredBytes limit exceeded, and changes nothing; a resumable session stays open. Each object counts its bytes once (a copy counts again). Import and snapshot restore are not checked against it."
+        },
         "persistence": { "enum": ["memory", "snapshot-files", "redb"] }
       }
     },

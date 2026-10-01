@@ -11,6 +11,7 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 ### Added
 
 - `firestore.history` in the canonical configuration (Fireemu-only): `maxVersionsPerPath` sets how many versions of one document a database keeps, on the wall clock as well as on a pinned clock, and `maxBytes` lowers the logical history bytes one database keeps (1 MiB to the default 1 GiB). The cap reaches the whole database: once any document has more versions than the cap, older snapshots are released for every document, so an older `read_time` read is refused with `FAILED_PRECONDITION` and a transaction already open on an older snapshot fails with `ABORTED`. SDKs retry `ABORTED`, so avoid very small caps. The pinned-clock limit of 1,024 versions already worked this way. An import is not checked against `maxBytes`. Unset, nothing changes. The README now documents the history limits and their `RESOURCE_EXHAUSTED` refusal.
+- `storage.maxStoredBytes` in the canonical configuration (Fireemu-only, unset by default): a bound on the object data the Storage emulator keeps in memory. A write past it is refused with HTTP 507 `storage.maxStoredBytes limit exceeded` (reason `storageCapacityExceeded` in the JSON API), changes nothing, and leaves a resumable upload open at the same offset. The `objects.bytes` resource gauge reports the bound.
 
 ### Changed
 

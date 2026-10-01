@@ -732,6 +732,7 @@
     "notes": [
       "Storage object triggers are not part of this entry: FN-EVT-1 delivers object finalized / deleted / metadataUpdated events, and this entry owns the object surface only",
       "objects are at most 256 MiB and request bodies at most 260 MiB (413 beyond that)",
+      "storage.maxStoredBytes (unset by default) bounds the object data the store retains; a write past it answers 507 storage.maxStoredBytes limit exceeded (reason storageCapacityExceeded on the JSON API) and changes nothing, and the objects.bytes resource gauge reports the bound",
       "upload bytes are moved into the object store, never copied: one payload-sized buffer per upload",
       "request bodies buffered at the same time are admitted against a process-wide 1 GiB budget; an upload that does not fit is refused with 503 and Retry-After: 1",
       "download tokens are UUID-shaped, ride in the firebaseStorageDownloadTokens custom-metadata key, die with their generation, and every token change is a metadata update with its event, as measured against the pinned suite",

@@ -1073,6 +1073,13 @@ fn core_err(e: StorageError) -> (u16, String, &'static str) {
             "invalid",
         ),
         StorageError::UploadFinalized => (400, "upload already finalized".to_owned(), "invalid"),
+        // A local bound production does not have (owner ledger 759): 507 without Retry-After,
+        // the same in both profiles and dialects.
+        StorageError::StoredBytesLimit => (
+            507,
+            "storage.maxStoredBytes limit exceeded".to_owned(),
+            "storageCapacityExceeded",
+        ),
         StorageError::UploadSizeMismatch => (400, "upload size mismatch".to_owned(), "invalid"),
         StorageError::TooManyUploads => (
             429,
@@ -3727,6 +3734,7 @@ fn fb_resumable_command(
             Err(e) => Ok(fb_core_err(e)),
         };
     }
+    let mut checkpoint = None;
     if commands.contains(&"upload") {
         let offset: u64 = match req.header("x-goog-upload-offset") {
             None => 0,
@@ -3734,6 +3742,11 @@ fn fb_resumable_command(
                 .parse()
                 .map_err(|_| fb_json_error(400, &format!("invalid X-Goog-Upload-Offset {v:?}")))?,
         };
+        // A finalizing chunk the stored-byte bound refuses is taken back, so the offset does
+        // not advance and the client can resend it once there is room.
+        if commands.contains(&"finalize") {
+            checkpoint = store.upload_checkpoint(&id);
+        }
         match store.append_upload_owned(&id, offset, chunk, now) {
             Ok(_) => {}
             Err(StorageError::UploadFinalized) => return Ok(plain_status(400)),
@@ -3760,7 +3773,13 @@ fn fb_resumable_command(
             Ok(UploadPhase::Active(_)) => {}
             Err(e) => return Ok(fb_core_err(e)),
         }
-        let m = finalize_resumable(state, &mut store, &id, &req, now).map_err(|e| match e {
+        let finalized = finalize_resumable(state, &mut store, &id, &req, now);
+        if let (Err(FinalizeError::Store(StorageError::StoredBytesLimit)), Some(checkpoint)) =
+            (&finalized, checkpoint)
+        {
+            store.rollback_upload(&id, checkpoint);
+        }
+        let m = finalized.map_err(|e| match e {
             FinalizeError::Denied(denial) => denial.with_header("x-goog-upload-status", "final"),
             FinalizeError::Store(StorageError::UploadNotFound) => plain_status(404),
             FinalizeError::Store(err) => fb_core_err(err),
@@ -4468,9 +4487,6 @@ fn gcs_resumable_put(
     if let Some(t) = total {
         store.set_upload_total(&id, t, now).map_err(gcs_core_err)?;
     }
-    store
-        .append_upload_owned(&id, start, chunk, now)
-        .map_err(gcs_core_err)?;
     // A known total finishes when reached; an open-ended range (`START-*/*`, or no
     // Content-Range at all) carries the rest of the object in this request.
     let finalize = match (end, total) {
@@ -4478,8 +4494,20 @@ fn gcs_resumable_put(
         (Some(_), None) => false,
         (None, _) => true,
     };
+    // A finalizing chunk the stored-byte bound refuses is taken back (see the Firebase
+    // dialect's upload command).
+    let checkpoint = finalize.then(|| store.upload_checkpoint(&id)).flatten();
+    store
+        .append_upload_owned(&id, start, chunk, now)
+        .map_err(gcs_core_err)?;
     if finalize {
-        let m = finalize_resumable(state, &mut store, &id, &req, now).map_err(|e| match e {
+        let finalized = finalize_resumable(state, &mut store, &id, &req, now);
+        if let (Err(FinalizeError::Store(StorageError::StoredBytesLimit)), Some(checkpoint)) =
+            (&finalized, checkpoint)
+        {
+            store.rollback_upload(&id, checkpoint);
+        }
+        let m = finalized.map_err(|e| match e {
             // The JSON API dialect runs no rules, so a denial cannot happen here.
             FinalizeError::Denied(denial) => denial,
             FinalizeError::Store(err) => gcs_core_err(err),
